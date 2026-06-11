@@ -46,7 +46,6 @@ public static class TerrainAlgorithms {
         int maxGX = centerGX + (int)Math.Ceiling(gridRadius);
         int minGY = centerGY - (int)Math.Ceiling(gridRadius);
         int maxGY = centerGY + (int)Math.Ceiling(gridRadius);
-        int mapSize = (int)MapSize;
 
         for (int gx = minGX; gx <= maxGX; gx++) {
             for (int gy = minGY; gy <= maxGY; gy++) {
@@ -57,7 +56,7 @@ public static class TerrainAlgorithms {
 
                 int lbX = gx / 8;
                 int lbY = gy / 8;
-                if (lbX >= mapSize || lbY >= mapSize) continue;
+                if (lbX > 254 || lbY > 254) continue;
 
                 int localVX = gx - lbX * 8;
                 int localVY = gy - lbY * 8;
@@ -70,7 +69,7 @@ public static class TerrainAlgorithms {
                 affected.Add((lbId, vertexIndex, vertPos));
 
                 // Edge neighbor syncing
-                AddEdgeNeighbors(affected, lbX, lbY, localVX, localVY, vertPos, mapSize);
+                AddEdgeNeighbors(affected, lbX, lbY, localVX, localVY, vertPos);
             }
         }
 
@@ -89,7 +88,6 @@ public static class TerrainAlgorithms {
         float minX, float minY, float maxX, float maxY, Func<float, float, float>? heightLookup = null) {
 
         var affected = new List<(ushort, int, Vector3)>();
-        int mapSize = (int)MapSize;
 
         int minGX = (int)Math.Floor(minX / CellSize);
         int maxGX = (int)Math.Ceiling(maxX / CellSize);
@@ -102,7 +100,7 @@ public static class TerrainAlgorithms {
 
                 int lbX = gx / 8;
                 int lbY = gy / 8;
-                if (lbX >= mapSize || lbY >= mapSize) continue;
+                if (lbX > 254 || lbY > 254) continue;
 
                 int localVX = gx - lbX * 8;
                 int localVY = gy - lbY * 8;
@@ -115,7 +113,7 @@ public static class TerrainAlgorithms {
                 Vector3 vertPos = new(vert2D.X, vert2D.Y, z);
                 affected.Add((lbId, vertexIndex, vertPos));
 
-                AddEdgeNeighbors(affected, lbX, lbY, localVX, localVY, vertPos, mapSize);
+                AddEdgeNeighbors(affected, lbX, lbY, localVX, localVY, vertPos);
             }
         }
 
@@ -390,10 +388,13 @@ public static class TerrainAlgorithms {
     public static float GetHeightAtWorldPosition(float worldX, float worldY,
         Func<ushort, TerrainEntry[]?> terrainLookup, float[] heightTable) {
 
+        // Negative world coords would cast to 0 (or wrap) below and sample LB 0.
+        if (worldX < 0 || worldY < 0) return 0f;
+
         uint landblockX = (uint)Math.Floor(worldX / LandblockLength);
         uint landblockY = (uint)Math.Floor(worldY / LandblockLength);
 
-        if (landblockX >= MapSize || landblockY >= MapSize) return 0f;
+        if (landblockX > 254 || landblockY > 254) return 0f;
 
         ushort lbId = (ushort)((landblockX << 8) | landblockY);
         var data = terrainLookup(lbId);
@@ -457,6 +458,11 @@ public static class TerrainAlgorithms {
     /// Converts a world position to landblock key + local vertex index.
     /// </summary>
     public static (ushort LandblockId, int VertexIndex)? WorldToVertex(float worldX, float worldY) {
+        // Reject negatives before truncating: (int) truncates toward zero, so a
+        // worldX in (−192, 0) would yield lbX=0 and slip past the `lbX < 0` guard,
+        // stamping onto landblock 0's column 0 instead of being rejected.
+        if (worldX < 0 || worldY < 0) return null;
+
         int lbX = (int)(worldX / LandblockLength);
         int lbY = (int)(worldY / LandblockLength);
 
@@ -496,31 +502,31 @@ public static class TerrainAlgorithms {
 
     private static void AddEdgeNeighbors(
         List<(ushort, int, Vector3)> affected,
-        int lbX, int lbY, int localVX, int localVY, Vector3 vertPos, int mapSize) {
+        int lbX, int lbY, int localVX, int localVY, Vector3 vertPos) {
 
         if (localVX == 0 && lbX > 0)
             affected.Add(((ushort)(((lbX - 1) << 8) | lbY), 8 * 9 + localVY, vertPos));
 
-        if (localVX == 8 && lbX < mapSize - 1)
+        if (localVX == 8 && lbX < 254)
             affected.Add(((ushort)(((lbX + 1) << 8) | lbY), 0 * 9 + localVY, vertPos));
 
         if (localVY == 0 && lbY > 0)
             affected.Add(((ushort)((lbX << 8) | (lbY - 1)), localVX * 9 + 8, vertPos));
 
-        if (localVY == 8 && lbY < mapSize - 1)
+        if (localVY == 8 && lbY < 254)
             affected.Add(((ushort)((lbX << 8) | (lbY + 1)), localVX * 9 + 0, vertPos));
 
         // Diagonal corners
         if (localVX == 0 && localVY == 0 && lbX > 0 && lbY > 0)
             affected.Add(((ushort)(((lbX - 1) << 8) | (lbY - 1)), 8 * 9 + 8, vertPos));
 
-        if (localVX == 8 && localVY == 0 && lbX < mapSize - 1 && lbY > 0)
+        if (localVX == 8 && localVY == 0 && lbX < 254 && lbY > 0)
             affected.Add(((ushort)(((lbX + 1) << 8) | (lbY - 1)), 0 * 9 + 8, vertPos));
 
-        if (localVX == 0 && localVY == 8 && lbX > 0 && lbY < mapSize - 1)
+        if (localVX == 0 && localVY == 8 && lbX > 0 && lbY < 254)
             affected.Add(((ushort)(((lbX - 1) << 8) | (lbY + 1)), 8 * 9 + 0, vertPos));
 
-        if (localVX == 8 && localVY == 8 && lbX < mapSize - 1 && lbY < mapSize - 1)
+        if (localVX == 8 && localVY == 8 && lbX < 254 && lbY < 254)
             affected.Add(((ushort)(((lbX + 1) << 8) | (lbY + 1)), 0 * 9 + 0, vertPos));
     }
 

@@ -53,6 +53,11 @@ internal sealed class TransactDiffEngine {
         }
         var entry = lookup.Entry!;
 
+        if (render && !IsValidRenderMode(renderMode)) {
+            return Failure(txId, "TXDIFF-BAD-RENDERMODE",
+                $"Unknown renderMode '{renderMode}' — expected overlay, side-by-side, or after-only-with-diff.");
+        }
+
         var touchedLbKeys = ExtractLandblockKeys(entry);
         bool terrainTouched = entry.PreState.ContainsKey("terrain")
             || entry.PostState.ContainsKey("terrain")
@@ -129,6 +134,11 @@ internal sealed class TransactDiffEngine {
             TerrainSummary: terrainSummary,
             Visual: visual);
     }
+
+    private static bool IsValidRenderMode(string mode) =>
+        string.Equals(mode, "overlay", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(mode, "side-by-side", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(mode, "after-only-with-diff", StringComparison.OrdinalIgnoreCase);
 
     private static TransactDiffResult Failure(Guid txId, string errorCode, string error) =>
         new(Success: false, TxId: txId, ErrorCode: errorCode, Error: error,
@@ -405,10 +415,23 @@ internal sealed class TransactDiffEngine {
             return (added, cleared);
         }
 
+        // F223: validate the RETAINED post-state, not the current live world. For an
+        // older retained tx the live docs may carry later transactions' edits, which
+        // would mis-attribute their regressions/fixes to this txId. Swap the live doc
+        // to this tx's post-bytes (LB + terrain), validate, then restore current-live —
+        // the same mechanism the pre report uses, so both halves are tx-scoped.
+        bool terrainPostAvailable = entry.PostState.ContainsKey("terrain");
+        byte[]? postTerrainBytes = terrainPostAvailable ? entry.PostState["terrain"] : null;
         ValidationReport? postReport = null;
-        try { postReport = _cmd.ValidateAll(lbX, lbY); }
-        catch (Exception ex) {
-            Console.Error.WriteLine($"[TransactDiff] Post-validate failed for 0x{lbKey:X4}: {ex.Message}");
+        if (postLbBytes != null || postTerrainBytes != null) {
+            postReport = ValidateViaSwap(lbKey, lbX, lbY, postLbBytes, postTerrainBytes);
+        }
+        // If neither post doc is retained (e.g. doc removed on commit), fall back to live.
+        if (postReport == null) {
+            try { postReport = _cmd.ValidateAll(lbX, lbY); }
+            catch (Exception ex) {
+                Console.Error.WriteLine($"[TransactDiff] Post-validate failed for 0x{lbKey:X4}: {ex.Message}");
+            }
         }
 
         ValidationReport? preReport = null;
@@ -417,7 +440,7 @@ internal sealed class TransactDiffEngine {
             // definition, so every post diagnostic is "added".
         } else {
             byte[]? preTerrainBytes = terrainPreAvailable ? entry.PreState["terrain"] : null;
-            preReport = ValidatePreStateViaSwap(lbKey, lbX, lbY, preLbBytes, preTerrainBytes);
+            preReport = ValidateViaSwap(lbKey, lbX, lbY, preLbBytes, preTerrainBytes);
         }
 
         var preDiags = preReport?.Diagnostics
@@ -440,11 +463,12 @@ internal sealed class TransactDiffEngine {
         return (added, cleared);
     }
 
-    // Swap LB and (optionally) terrain to pre-state, run ValidateAll, restore.
-    // preLbBytes==null is allowed — happens when the LB doc itself wasn't
-    // touched but terrain was; only the terrain doc gets swapped in that case.
-    private ValidationReport? ValidatePreStateViaSwap(ushort lbKey, uint lbX, uint lbY,
-            byte[]? preLbBytes, byte[]? preTerrainBytes) {
+    // Swap LB and (optionally) terrain to the supplied target bytes (pre- OR
+    // post-state), run ValidateAll, restore current-live. targetLbBytes==null is
+    // allowed — happens when the LB doc itself wasn't touched but terrain was;
+    // only the terrain doc gets swapped in that case.
+    private ValidationReport? ValidateViaSwap(ushort lbKey, uint lbX, uint lbY,
+            byte[]? targetLbBytes, byte[]? targetTerrainBytes) {
         var dm = _cmd.ProjectManager.CurrentProject?.DocumentManager;
         if (dm == null) return null;
         string lbDocId = $"landblock_{lbKey:X4}";
@@ -455,28 +479,28 @@ internal sealed class TransactDiffEngine {
         // historical post-snapshot.
         BaseDocument? liveLb = null;
         byte[]? currentLiveLb = null;
-        if (preLbBytes != null && dm.ActiveDocs.TryGetValue(lbDocId, out var lbDoc)) {
+        if (targetLbBytes != null && dm.ActiveDocs.TryGetValue(lbDocId, out var lbDoc)) {
             liveLb = lbDoc;
             currentLiveLb = lbDoc.SaveToProjection();
         }
 
         BaseDocument? liveTerrain = null;
         byte[]? currentLiveTerrain = null;
-        if (preTerrainBytes != null && dm.ActiveDocs.TryGetValue("terrain", out var terrainDoc)) {
+        if (targetTerrainBytes != null && dm.ActiveDocs.TryGetValue("terrain", out var terrainDoc)) {
             liveTerrain = terrainDoc;
             currentLiveTerrain = terrainDoc.SaveToProjection();
         }
 
         // Bail if we can't actually do the swap — ValidateAll would report
-        // post-state, which is misleading as a "pre" report.
+        // current live, which is misleading as a tx-scoped report.
         if (liveLb == null && liveTerrain == null) return null;
 
         try {
-            if (liveLb != null) liveLb.LoadFromProjection(preLbBytes!);
-            if (liveTerrain != null) liveTerrain.LoadFromProjection(preTerrainBytes!);
+            if (liveLb != null) liveLb.LoadFromProjection(targetLbBytes!);
+            if (liveTerrain != null) liveTerrain.LoadFromProjection(targetTerrainBytes!);
             return _cmd.ValidateAll(lbX, lbY);
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[TransactDiff] Pre-validate swap failed for 0x{lbKey:X4}: {ex.Message}");
+            Console.Error.WriteLine($"[TransactDiff] Validate swap failed for 0x{lbKey:X4}: {ex.Message}");
             return null;
         } finally {
             // Always restore — even if validation threw mid-swap. ForceSave
@@ -546,7 +570,7 @@ internal sealed class TransactDiffEngine {
         if (terrainTouched && touchedLbKeys.Count == 0) {
             return new TransactDiffVisual(
                 Mode: mode, PngBytes: null, Width: 0, Height: 0,
-                Note: "terrain-only batch — no landblocks specified; visual diff omitted",
+                Note: "terrain-only batch — no in-scope landblocks to render; visual diff omitted",
                 OutPath: null);
         }
         if (perLb.Count == 0) {
@@ -565,6 +589,16 @@ internal sealed class TransactDiffEngine {
         uint centerLbY = (uint)((minY + maxY) / 2);
         int radius = Math.Max(1, Math.Max(maxX - (int)centerLbX, maxY - (int)centerLbY) + 1);
         radius = Math.Min(16, radius);
+
+        var croppedLbs = perLb
+            .Where(p => Math.Abs((int)p.LbX - (int)centerLbX) > radius
+                || Math.Abs((int)p.LbY - (int)centerLbY) > radius)
+            .Select(p => $"{p.LbX:X2}{p.LbY:X2}")
+            .OrderBy(s => s)
+            .ToList();
+        string? cropNote = croppedLbs.Count == 0 ? null
+            : $"render window clamped to 33×33 (radius {radius}); {croppedLbs.Count} touched landblock(s) outside the window were not drawn: {string.Join(", ", croppedLbs)}";
+
         int gridSize = 2 * radius + 1;
         int lbPx = Math.Max(8, resolution / gridSize);
         int finalRes = lbPx * gridSize;
@@ -610,7 +644,7 @@ internal sealed class TransactDiffEngine {
 
         return new TransactDiffVisual(
             Mode: mode, PngBytes: finalPng, Width: outW, Height: outH,
-            Note: null, OutPath: outPath);
+            Note: cropNote, OutPath: outPath);
     }
 
     private RenderPreviewRenderer.Input BuildRendererInput(
@@ -861,7 +895,11 @@ internal sealed class TransactDiffEngine {
     // ─────────────────────────────────────────────────────────────────────
 
     private static HashSet<ushort> ExtractLandblockKeys(TransactSnapshotEntry entry) {
-        var result = new HashSet<ushort>();
+        // F222: seed from the transaction's recorded touched-LB set so terrain-only
+        // batches (which snapshot only the singleton terrain doc, leaving no
+        // landblock_* doc id to derive keys from) still expose the LBs they mutated
+        // and the caller's `lbs` filter can be honored per-LB.
+        var result = new HashSet<ushort>(entry.TouchedLbKeys);
         foreach (var id in entry.PreState.Keys.Concat(entry.PostState.Keys).Concat(entry.DocumentsCreated)) {
             if (TryParseLbKeyFromDocId(id, out var key)) result.Add(key);
         }

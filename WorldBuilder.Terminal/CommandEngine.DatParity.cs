@@ -27,7 +27,7 @@ namespace WorldBuilder.Terminal;
 ///     file, optionally filtered by DBObjType (which is what the high-byte
 ///     prefix discriminates per <c>reference_ac_dat_file_types</c>). Returns
 ///     the DAT's SHA-256 (computed once + cached per file path) plus a list
-///     of <c>(idHex, type, compressedSize)</c> tuples. Drives the validator's
+///     of <c>(idHex, type, sizeBytes)</c> tuples. Drives the validator's
 ///     deterministic sampling step.
 ///
 ///   - <c>chorizite-parse-dat-record</c> — parse one record via the
@@ -60,13 +60,18 @@ public partial class CommandEngine {
         string DatSha256,
         int RecordCount,
         IReadOnlyList<DatRecordSummary> Records,
+        IReadOnlyList<DatEnumerationError> EnumerationErrors,
         string Source);
+
+    public sealed record DatEnumerationError(
+        string TypeName,
+        string Error);
 
     public sealed record DatRecordSummary(
         string IdHex,
         uint Id,
         string TypeName,
-        int CompressedSize);
+        int? SizeBytes);
 
     public sealed record DatRecordParseResult(
         string IdHex,
@@ -192,7 +197,15 @@ public partial class CommandEngine {
             foreach (var r in GetPrefixTable()) if (r.Name == "Iteration") return r.ClrType;
             return null;
         }
-        // Cell-DAT discrimination by suffix.
+        // Range-based lookup FIRST (HasRangeData=true portal-DAT types).
+        // Portal IDs whose low 16 bits happen to be 0xFFFF/0xFFFE must NOT
+        // be misrouted to the cell-DAT LandBlock/LandBlockInfo suffix tests.
+        foreach (var r in GetPrefixTable()) {
+            if (!r.HasRangeData) continue;
+            if (id >= r.FirstId && id <= r.LastId) return r.ClrType;
+        }
+        // Cell-DAT discrimination by suffix — only for IDs matching no
+        // portal range above.
         var suffix = id & 0xFFFFu;
         if (suffix == 0xFFFFu) {
             foreach (var r in GetPrefixTable()) if (r.Name == "LandBlock") return r.ClrType;
@@ -201,11 +214,6 @@ public partial class CommandEngine {
         if (suffix == 0xFFFEu) {
             foreach (var r in GetPrefixTable()) if (r.Name == "LandBlockInfo") return r.ClrType;
             return null;
-        }
-        // Range-based lookup (HasRangeData=true types).
-        foreach (var r in GetPrefixTable()) {
-            if (!r.HasRangeData) continue;
-            if (id >= r.FirstId && id <= r.LastId) return r.ClrType;
         }
         // EnvCell catch-all for any remaining 0x__XXXX in the Cell DAT
         // suffix range (0x0001-0xFFFD), since EnvCell has mask=0 and
@@ -298,35 +306,42 @@ public partial class CommandEngine {
         });
 
         var summaries = new List<DatRecordSummary>();
+        var enumerationErrors = new List<(string TypeName, string Error)>();
         if (filterType != null) {
             var ids = EnumerateIdsForType(dat, filterType).ToList();
             foreach (var id in ids) {
-                int size = TryGetCompressedSize(dat, id);
+                int? size = TryGetRecordSizeBytes(dat, id);
                 summaries.Add(new DatRecordSummary(
                     IdHex: $"0x{id:X8}",
                     Id: id,
                     TypeName: filterType.Name,
-                    CompressedSize: size));
+                    SizeBytes: size));
             }
         } else {
             // Walk every type in the chosen DAT → flatten. Slower; only used
             // when caller wants a global enumeration (rarely; the validator
             // pivots per-type).
-            foreach (var row in GetPrefixTable()) {
-                if (!DatMatches(resolved, row.DatFile)) continue;
+            var matchedRows = GetPrefixTable().Where(row => DatMatches(resolved, row.DatFile)).ToList();
+            if (matchedRows.Count == 0) {
+                throw new ArgumentException(
+                    $"Cannot infer DAT family from filename '{Path.GetFileName(resolved)}'; " +
+                    $"pass typeName to select the records to enumerate.");
+            }
+            foreach (var row in matchedRows) {
                 IEnumerable<uint> ids;
                 try {
-                    ids = EnumerateIdsForType(dat, row.ClrType);
-                } catch {
+                    ids = EnumerateIdsForType(dat, row.ClrType).ToList();
+                } catch (Exception ex) {
+                    enumerationErrors.Add((row.Name, ex.Message));
                     continue;
                 }
                 foreach (var id in ids) {
-                    int size = TryGetCompressedSize(dat, id);
+                    int? size = TryGetRecordSizeBytes(dat, id);
                     summaries.Add(new DatRecordSummary(
                         IdHex: $"0x{id:X8}",
                         Id: id,
                         TypeName: row.Name,
-                        CompressedSize: size));
+                        SizeBytes: size));
                 }
             }
         }
@@ -339,6 +354,8 @@ public partial class CommandEngine {
             DatSha256: sha,
             RecordCount: summaries.Count,
             Records: summaries,
+            EnumerationErrors: enumerationErrors
+                .Select(e => new DatEnumerationError(e.TypeName, e.Error)).ToList(),
             Source: $"DatReaderWriter.DatDatabase.GetAllIdsOfType<{filterType?.Name ?? "*"}> on {resolved}");
     }
 
@@ -412,32 +429,33 @@ public partial class CommandEngine {
         };
     }
 
-    private static int TryGetCompressedSize(DRW.DatDatabase dat, uint id) {
-        // The BTree file entry carries the compressed size; the public
-        // surface doesn't expose it directly per id, but TryGetFile on the
-        // tree returns a DatBTreeFile with .Size. Use reflection to access
-        // the Tree field (public per DatDatabase.cs:40).
+    private static int? TryGetRecordSizeBytes(DRW.DatDatabase dat, uint id) {
+        // The BTree file entry carries the record's stored byte length
+        // (DatBTreeFile.Size). AC DATs store records uncompressed, so this
+        // is the plain record size — not a compressed size. Returns null on
+        // lookup failure (distinct from a genuine zero-byte record). Use
+        // reflection to access the Tree field (public per DatDatabase.cs:40).
         try {
             var treeField = typeof(DRW.DatDatabase)
                 .GetField("Tree", BindingFlags.Public | BindingFlags.Instance);
-            if (treeField == null) return 0;
+            if (treeField == null) return null;
             var tree = treeField.GetValue(dat);
-            if (tree == null) return 0;
+            if (tree == null) return null;
             var tryGetFile = tree.GetType()
                 .GetMethods()
                 .FirstOrDefault(m => m.Name == "TryGetFile" && m.GetParameters().Length == 2);
-            if (tryGetFile == null) return 0;
+            if (tryGetFile == null) return null;
             var args = new object?[] { id, null };
             var ok = (bool)(tryGetFile.Invoke(tree, args) ?? false);
-            if (!ok) return 0;
+            if (!ok) return null;
             var fileEntry = args[1]!;
             var fi = fileEntry.GetType().GetField("Size");
             if (fi != null) return Convert.ToInt32(fi.GetValue(fileEntry) ?? 0);
             var pi = fileEntry.GetType().GetProperty("Size");
             if (pi != null) return Convert.ToInt32(pi.GetValue(fileEntry) ?? 0);
-            return 0;
+            return null;
         } catch {
-            return 0;
+            return null;
         }
     }
 
@@ -485,11 +503,20 @@ public partial class CommandEngine {
         var resolved = ResolveDatPathForType(datPath, dbType);
 
         // Per [[feedback_base_dats_only_for_bake]] pre-flight: refuse to
-        // parse from a non-base DAT bundle. The check happens here (vs at
-        // list time) because parse is the hot path the validator drives.
-        // Singleton record (one record only) — skip the modder check; the
-        // signature ID 0xFFFF0001 is the iteration metadata which we
-        // explicitly carve out below.
+        // parse IDs in the 0x__FFxxxx modder range (the well-known
+        // 0xFFFFxxxx iteration metadata is exempt). The validator runs
+        // against base DATs only.
+        var modder = FindModderIdAmongIds(new[] { id });
+        if (modder != null) {
+            return new DatRecordParseResult(
+                IdHex: $"0x{id:X8}",
+                Id: id,
+                TypeName: dbType.Name,
+                Fields: null,
+                ErrorMessage: $"ID 0x{modder:X8} is in the 0x__FFxxxx modder range. " +
+                    $"Validator runs against base DATs only.",
+                Source: "ChoriziteParseDatRecord");
+        }
 
         using var dat = new DRW.DatDatabase(o => {
             o.FilePath = resolved;

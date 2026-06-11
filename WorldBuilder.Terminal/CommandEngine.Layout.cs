@@ -28,12 +28,13 @@ public partial class CommandEngine {
 
         IEnumerable<uint> ids;
         if (overlayOnly) {
-            // Reflection-free reach via TryGetLayout: probe each id we have stored.
-            // The doc's _data.Entries is private, but HasStoredLayout gives us the predicate.
-            // For a list we go through dats and filter.
-            ids = dats.Dats.GetAllIdsOfType<LayoutDesc>().Where(doc.HasStoredLayout);
+            // The overlay's stored ids are authoritative here — including ids
+            // absent from the local DAT.
+            ids = doc.StoredLayoutIds.Distinct();
         } else {
-            ids = dats.Dats.GetAllIdsOfType<LayoutDesc>();
+            // Union the DAT-enumerated ids with the overlay's stored ids so an
+            // overlay saved under an id absent from the DAT is still listed.
+            ids = dats.Dats.GetAllIdsOfType<LayoutDesc>().Union(doc.StoredLayoutIds);
         }
 
         var rows = ids
@@ -65,10 +66,17 @@ public partial class CommandEngine {
 
     public LayoutSaveResult LayoutSave(uint layoutId, string jsonPath) {
         RequireProject();
-        if (!File.Exists(jsonPath))
-            throw new FileNotFoundException($"JSON file not found: {jsonPath}", jsonPath);
 
-        var json = File.ReadAllText(jsonPath);
+        // fromJson may be either inline JSON (starts with '{') or a file path.
+        string json;
+        var trimmed = jsonPath?.TrimStart() ?? "";
+        if (trimmed.StartsWith("{")) {
+            json = jsonPath!;
+        } else {
+            if (!File.Exists(jsonPath))
+                throw new FileNotFoundException($"JSON file not found: {jsonPath}", jsonPath);
+            json = File.ReadAllText(jsonPath);
+        }
         var layout = JsonSerializer.Deserialize<LayoutDesc>(json, JsonOpts.CaseInsensitive)
             ?? throw new InvalidOperationException("Failed to deserialize LayoutDesc from JSON.");
 

@@ -17,7 +17,7 @@ public partial class CommandEngine {
     public async Task<WeenieSaveScalarsResult> WeenieSaveScalarsAsync(uint classId, string? jsonPath, bool force = false) {
         RequireProject();
         if (string.IsNullOrEmpty(jsonPath))
-            throw new ArgumentException("--from-json <path> is required for weenie save.");
+            throw new ArgumentException("Missing 'fromJson' field (path to AceWeenieSnapshot JSON)");
         if (!File.Exists(jsonPath))
             throw new FileNotFoundException($"JSON file not found: {jsonPath}", jsonPath);
 
@@ -55,7 +55,7 @@ public partial class CommandEngine {
         if (string.IsNullOrWhiteSpace(className))
             throw new ArgumentException("className is required.", nameof(className));
         if (string.IsNullOrEmpty(jsonPath))
-            throw new ArgumentException("--from-json <path> is required.");
+            throw new ArgumentException("Missing 'fromJson' field (path to AceWeenieSnapshot JSON)");
         if (!File.Exists(jsonPath))
             throw new FileNotFoundException($"JSON file not found: {jsonPath}", jsonPath);
 

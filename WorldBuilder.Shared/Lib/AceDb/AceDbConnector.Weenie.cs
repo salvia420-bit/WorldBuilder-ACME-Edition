@@ -415,6 +415,20 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
 
+                // Check the weenie row exists FIRST: return early with no mutation when absent,
+                // otherwise the property deletes would wipe + commit orphan rows for a class
+                // that has no parent weenie. (F236)
+                await using (var exists = new MySqlCommand(
+                    "SELECT 1 FROM `weenie` WHERE `class_Id` = @id LIMIT 1", conn, (MySqlTransaction)tx)) {
+                    exists.Parameters.AddWithValue("@id", classId);
+                    if (await exists.ExecuteScalarAsync(ct) is null) {
+                        await tx.RollbackAsync(ct);
+                        return false;
+                    }
+                }
+
+                // emote_action keys on emote_Id, not object_Id; it has no object_Id column and
+                // is removed via the weenie_properties_emote cascade, so it is NOT in this list. (F236)
                 string[] propTables = {
                     "weenie_properties_int", "weenie_properties_int64",
                     "weenie_properties_bool", "weenie_properties_float",
@@ -423,7 +437,7 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                     "weenie_properties_attribute", "weenie_properties_attribute_2nd",
                     "weenie_properties_skill", "weenie_properties_spell_book",
                     "weenie_properties_create_list", "weenie_properties_emote",
-                    "weenie_properties_emote_action", "weenie_properties_book",
+                    "weenie_properties_book",
                     "weenie_properties_book_page_data", "weenie_properties_palette",
                     "weenie_properties_texture_map", "weenie_properties_anim_part",
                     "weenie_properties_body_part", "weenie_properties_event_filter",
@@ -434,7 +448,12 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                         $"DELETE FROM `{t}` WHERE `object_Id` = @id", conn, (MySqlTransaction)tx);
                     del.Parameters.AddWithValue("@id", classId);
                     try { await del.ExecuteNonQueryAsync(ct); }
-                    catch (MySqlException) { /* table may not exist on older schemas */ }
+                    catch (MySqlException ex) when (
+                        ex.ErrorCode == MySqlErrorCode.NoSuchTable ||
+                        ex.ErrorCode == MySqlErrorCode.BadFieldError) {
+                        // Table absent (1146) or column absent (1054) on older schemas — skip.
+                        // Anything else (lock-wait timeout, permissions) propagates and rolls back. (F236)
+                    }
                 }
 
                 int deleted;

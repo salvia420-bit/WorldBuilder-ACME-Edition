@@ -51,14 +51,15 @@ namespace WorldBuilder.Terminal;
 /// </list>
 ///
 /// <para>
-/// **Sha-keyed cache contract** (mirrors W4.A/B):
-/// Each record's per-chunk JSON entry is keyed by sha256 of the raw DAT
-/// bytes for that record. Cache root is
-/// <c>/mnt/wbterminal1/holtburger-validator-fixtures/wave4/mesh/&lt;sha&gt;.json</c>.
-/// Re-runs only re-parse records whose bytes changed — and base DATs are
-/// immutable per [[feedback_base_dats_only_for_bake]], so steady-state runs
-/// are O(0). This makes the diag-run-all integration cheap even at full
-/// scale.
+/// **Chunk-resume contract** (mirrors W4.A/B):
+/// Each chunk writes one per-chunk <c>progress-&lt;chunkLabel&gt;.json</c>
+/// under the cache root, keyed by the DAT sha256 + chunk record count.
+/// A re-run whose DAT sha + chunk record count match the sealed
+/// progress.json short-circuits the whole chunk (all-or-nothing resume,
+/// reported as <c>resumedRecordCount</c>); there is NO per-record
+/// <c>&lt;sha&gt;.json</c> cache. Base DATs are immutable per
+/// [[feedback_base_dats_only_for_bake]], so steady-state diag-run-all
+/// repeats skip the entire chunk parse.
 /// </para>
 ///
 /// <para>
@@ -208,18 +209,21 @@ public partial class CommandEngine {
     /// <para>
     /// <paramref name="cacheRoot"/> defaults to
     /// <c>/mnt/wbterminal1/holtburger-validator-fixtures/wave4/mesh</c>
-    /// per [[feedback_use_external_drives_for_scratch]]. Passing an empty
-    /// string disables the cache (parse-every-record mode — useful for
-    /// debugging or fresh re-runs).
+    /// per [[feedback_use_external_drives_for_scratch]]. A null or empty/
+    /// whitespace string is coerced to that default root — the cache (the
+    /// per-chunk <c>progress-*.json</c> resume file) is always enabled; it
+    /// cannot be disabled via this parameter.
     /// </para>
     ///
     /// <para>
     /// <paramref name="fastMode"/> selects the Holtburg subset: the
     /// validator hands us the 81-model Holtburg subset (from
-    /// <c>fetch_landblock_objects(0xA9B4)</c>) instead of the
-    /// whole-range walk. When fastMode is true, the range bounds are
-    /// ignored and only the Holtburg subset is walked. This is the
-    /// per-commit CI gate per §6 W4 architecture.
+    /// <c>fetch_landblock_objects(0xA9B4)</c>) via
+    /// <paramref name="fastModeIds"/> instead of the whole-range walk.
+    /// fastMode only takes effect when <paramref name="fastModeIds"/> is
+    /// non-empty; when fastMode is true but no ids are supplied the code
+    /// falls back to the full <c>[startId, endId)</c> BTree walk. This is
+    /// the per-commit CI gate per §6 W4 architecture.
     /// </para>
     /// </summary>
     public MeshChunkResult MeshVsObjExportChunk(
@@ -268,10 +272,15 @@ public partial class CommandEngine {
 
         // Per-chunk resume: if a progress.json already exists for this
         // chunk + DAT sha, return the cached roll-up without re-parsing.
-        // This is the cheap path for diag-run-all repeats. The full
-        // per-record cache (sha-keyed) lives next to progress.json for
-        // future cross-port diff use.
-        var chunkLabel = $"mesh-{startId:X8}-{endId:X8}{(fastMode ? "-fast" : "")}";
+        // This is the cheap path for diag-run-all repeats. Resume is
+        // all-or-nothing at the chunk level; there is no per-record cache.
+        // Fast-mode resume key must depend on the actual id SET, not just
+        // its count — a different set of the same count must never collide
+        // with a prior run's cached results (F70).
+        var fastSig = (fastMode && fastModeIds != null && fastModeIds.Count > 0)
+            ? $"-ids{ComputeFastModeIdsHash(ids)}"
+            : "";
+        var chunkLabel = $"mesh-{startId:X8}-{endId:X8}{(fastMode ? "-fast" : "")}{fastSig}";
         var progressPath = hasCache
             ? Path.Combine(effCacheRoot, $"progress-{chunkLabel}.json")
             : "";
@@ -308,8 +317,23 @@ public partial class CommandEngine {
             MeshRecordResult rec;
             try {
                 rec = ParseMeshRecord(dat, id, recordSha);
-                if (rec.Status == "ok") pass++;
-                else { parseErr++; failures.Add(rec); }
+                switch (rec.Status) {
+                    case "ok":
+                        pass++;
+                        break;
+                    case "parse-error":
+                        parseErr++;
+                        failures.Add(rec);
+                        break;
+                    case "missing":
+                        fail++;
+                        failures.Add(rec);
+                        break;
+                    default:
+                        fail++;
+                        failures.Add(rec);
+                        break;
+                }
             } catch (Exception ex) {
                 rec = MakeParseErrorRecord(id, recordSha, ex.Message);
                 parseErr++;
@@ -335,7 +359,7 @@ public partial class CommandEngine {
             RecordCount: ids.Count,
             PassCount: pass,
             FailCount: fail + parseErr,
-            CachedCount: 0,    // cached path is the resume-from-progress short-circuit (handled above)
+            CachedCount: 0,    // resumed-record count: 0 on a live parse; whole-chunk on resume (handled above). No per-record cache exists.
             ParseErrorCount: parseErr,
             CacheRoot: effCacheRoot,
             ProgressJsonPath: progressPath,
@@ -405,7 +429,13 @@ public partial class CommandEngine {
                 $"Modder-range ID detected: 0x{modderId.Value:X8}. Refusing to parse from non-base DAT bundle.");
         }
 
-        var chunkLabel = $"envcell-{startId:X8}-{endId:X8}{(fastMode ? "-fast" : "")}";
+        // Fast-mode resume key must depend on the actual id SET, not just
+        // its count — a different set of the same count must never collide
+        // with a prior run's cached results (F70).
+        var fastSig = (fastMode && fastModeIds != null && fastModeIds.Count > 0)
+            ? $"-ids{ComputeFastModeIdsHash(ids)}"
+            : "";
+        var chunkLabel = $"envcell-{startId:X8}-{endId:X8}{(fastMode ? "-fast" : "")}{fastSig}";
         var progressPath = hasCache
             ? Path.Combine(effCacheRoot, $"progress-{chunkLabel}.json")
             : "";
@@ -413,8 +443,8 @@ public partial class CommandEngine {
         // Resume-from-progress: if the same chunk + DAT sha was sealed
         // by a previous run, return the rolled-up counts without
         // re-parsing. The progress.json is the source of truth for
-        // resumability; the per-record sha-cache is the source of
-        // truth for cross-port diffs (W4 follow-on).
+        // resumability; resume is all-or-nothing at the chunk level
+        // (there is no per-record sha-cache).
         if (!string.IsNullOrEmpty(progressPath) && File.Exists(progressPath)) {
             var resumeOpt = TryResumeEnvCellChunk(progressPath, sha, ids.Count);
             if (resumeOpt is EnvCellChunkResult resumed) {
@@ -448,8 +478,23 @@ public partial class CommandEngine {
             MeshRecordResult rec;
             try {
                 rec = ParseEnvCellRecord(dat, id, recordSha);
-                if (rec.Status == "ok") pass++;
-                else { parseErr++; failures.Add(rec); }
+                switch (rec.Status) {
+                    case "ok":
+                        pass++;
+                        break;
+                    case "parse-error":
+                        parseErr++;
+                        failures.Add(rec);
+                        break;
+                    case "missing":
+                        fail++;
+                        failures.Add(rec);
+                        break;
+                    default:
+                        fail++;
+                        failures.Add(rec);
+                        break;
+                }
                 if (KnownEnvCellDriftIds.Contains(id)) drift++;
             } catch (Exception ex) {
                 rec = MakeParseErrorRecord(id, recordSha, ex.Message);
@@ -472,7 +517,7 @@ public partial class CommandEngine {
             RecordCount: ids.Count,
             PassCount: pass,
             FailCount: fail + parseErr,
-            CachedCount: 0,    // cached path is the resume-from-progress short-circuit (handled above)
+            CachedCount: 0,    // resumed-record count: 0 on a live parse; whole-chunk on resume (handled above). No per-record cache exists.
             ParseErrorCount: parseErr,
             KnownDriftCount: drift,
             CacheRoot: effCacheRoot,
@@ -693,13 +738,19 @@ public partial class CommandEngine {
     /// </summary>
     private static IEnumerable<uint> EnumerateIdsInRange(DRW.DatDatabase dat, uint start, uint end) {
         var treeField = typeof(DRW.DatDatabase).GetField("Tree",
-            BindingFlags.Public | BindingFlags.Instance);
-        if (treeField == null) yield break;
-        var tree = treeField.GetValue(dat);
-        if (tree == null) yield break;
+            BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException(
+                "Reflection probe failed: DRW.DatDatabase.Tree field not found — DRW API drift. " +
+                "Refusing to degrade to an empty id sweep.");
+        var tree = treeField.GetValue(dat)
+            ?? throw new InvalidOperationException(
+                "Reflection probe failed: DRW.DatDatabase.Tree is null. " +
+                "Refusing to degrade to an empty id sweep.");
         var getFilesInRange = tree.GetType().GetMethods()
-            .FirstOrDefault(m => m.Name == "GetFilesInRange" && m.GetParameters().Length == 2);
-        if (getFilesInRange == null) yield break;
+            .FirstOrDefault(m => m.Name == "GetFilesInRange" && m.GetParameters().Length == 2)
+            ?? throw new InvalidOperationException(
+                $"Reflection probe failed: {tree.GetType().FullName}.GetFilesInRange(2-arg) not found — DRW API drift. " +
+                "Refusing to degrade to an empty id sweep.");
         // GetFilesInRange is inclusive on both ends; our caller's
         // semantics are half-open [start, end). Pass end-1 to mirror.
         uint inclusiveEnd = end == 0 ? 0 : (end - 1);
@@ -730,8 +781,10 @@ public partial class CommandEngine {
             .FirstOrDefault(m => m.Name == "TryGetFileBytes"
                 && m.GetParameters().Length == 3
                 && m.GetParameters()[1].ParameterType.IsByRef
-                && m.GetParameters()[1].ParameterType.GetElementType() == typeof(byte[]));
-        if (mi == null) return null;
+                && m.GetParameters()[1].ParameterType.GetElementType() == typeof(byte[]))
+            ?? throw new InvalidOperationException(
+                "Reflection probe failed: DRW.DatDatabase.TryGetFileBytes(uint, out byte[], bool) not found — DRW API drift. " +
+                "Refusing to degrade to an all-missing sweep.");
         var args = new object?[] { id, null, true };
         bool ok;
         try {
@@ -743,13 +796,26 @@ public partial class CommandEngine {
         return args[1] as byte[];
     }
 
+    /// <summary>
+    /// 12-char hex digest over the SORTED, distinct fast-mode id set. Folded
+    /// into the chunk label so a fast-mode resume key never collides with a
+    /// prior run that passed a DIFFERENT id set of the same COUNT (F70).
+    /// </summary>
+    private static string ComputeFastModeIdsHash(IReadOnlyList<uint> ids) {
+        var sorted = ids.Distinct().OrderBy(x => x).ToList();
+        var buf = new byte[sorted.Count * 4];
+        for (int i = 0; i < sorted.Count; i++)
+            BitConverter.GetBytes(sorted[i]).CopyTo(buf, i * 4);
+        using var sha = SHA256.Create();
+        var hash = sha.ComputeHash(buf);
+        return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant()[..12];
+    }
+
     private static string ComputeRecordSha256(byte[] bytes) {
         using var sha = SHA256.Create();
         var hash = sha.ComputeHash(bytes);
-        // Short hex — 16 chars is sufficient to disambiguate across the
-        // ~21k GfxObj/Setup + ~735k EnvCell range; collision rate is
-        // negligible at that scale. Cache files use the full hex though
-        // (defensive) — this is just the in-payload identifier.
+        // Full 64-char lowercase hex of the sha256 over the record's
+        // decompressed bytes — the in-payload per-record identifier.
         return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
     }
 
@@ -944,9 +1010,8 @@ public partial class CommandEngine {
     /// a status-histogram + the ≤32-entry failure sample. We do NOT
     /// emit per-record entries here: at full-DAT scale (734,976
     /// EnvCells × ~600 bytes/entry ≈ 432 MB) the file blows out the
-    /// resume code's working set. The per-record sha-cache is the
-    /// canonical source of truth for the cross-port diff; the chunk
-    /// progress.json is the resume-skip predicate.
+    /// resume code's working set. The chunk progress.json is the
+    /// resume-skip predicate; there is no per-record sha-cache.
     ///
     /// Written atomically (write-to-tmp, rename) so a SIGKILL
     /// mid-write doesn't corrupt the resume cache.

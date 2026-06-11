@@ -61,7 +61,8 @@ public class OntologyService : IOntologyService {
         if (!string.IsNullOrWhiteSpace(keyword)) {
             var kw = keyword.ToLowerInvariant();
             results = results.Where(e =>
-                e.Tags.Any(t => t.Contains(kw, StringComparison.OrdinalIgnoreCase)));
+                e.Tags.Any(t => t.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                || (e.Name?.Contains(kw, StringComparison.OrdinalIgnoreCase) ?? false));
         }
 
         return results.OrderBy(e => e.ObjectId).Take(limit);
@@ -681,7 +682,9 @@ public class OntologyService : IOntologyService {
     /// Enriches existing ontology entries with thumbnail paths, vertex counts,
     /// and surface IDs from the rendered catalog.
     /// </summary>
-    public int ImportCatalog(string indexJsonPath) {
+    public int ImportCatalog(string indexJsonPath) => ImportCatalog(indexJsonPath, out _);
+
+    public int ImportCatalog(string indexJsonPath, out int failed) {
         if (!File.Exists(indexJsonPath))
             throw new FileNotFoundException($"Catalog index not found: {indexJsonPath}");
 
@@ -689,8 +692,10 @@ public class OntologyService : IOntologyService {
         using var doc = System.Text.Json.JsonDocument.Parse(json);
 
         int enriched = 0;
+        failed = 0;
 
         foreach (var element in doc.RootElement.EnumerateArray()) {
+          try {
             // Parse the FileId hex string → uint
             var fileIdStr = element.GetProperty("FileId").GetString();
             if (string.IsNullOrEmpty(fileIdStr)) continue;
@@ -746,9 +751,13 @@ public class OntologyService : IOntologyService {
             }
 
             enriched++;
+          } catch (Exception ex) {
+            failed++;
+            Console.Error.WriteLine($"[Ontology] Skipped malformed catalog entry: {ex.Message}");
+          }
         }
 
-        Console.Error.WriteLine($"[Ontology] Imported catalog: {enriched} entries enriched from {indexJsonPath}");
+        Console.Error.WriteLine($"[Ontology] Imported catalog: {enriched} entries enriched, {failed} failed from {indexJsonPath}");
         return enriched;
     }
 
@@ -1253,29 +1262,37 @@ public class OntologyService : IOntologyService {
             // Name (fill if missing)
             if (el.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == System.Text.Json.JsonValueKind.String) {
                 var name = nameEl.GetString();
-                if (!string.IsNullOrEmpty(name) && string.IsNullOrEmpty(entry.Name))
+                if (!string.IsNullOrEmpty(name) && string.IsNullOrEmpty(entry.Name)) {
                     entry.Name = name;
+                    changed = true;
+                }
             }
 
             // Level
             if (el.TryGetProperty("level", out var lvlEl) && lvlEl.ValueKind == System.Text.Json.JsonValueKind.Number) {
                 entry.Level = lvlEl.GetInt32();
+                changed = true;
             }
 
             // WeenieClassId
             if (el.TryGetProperty("wcid", out var wcidEl) && wcidEl.ValueKind == System.Text.Json.JsonValueKind.Number) {
                 entry.WeenieClassId = wcidEl.GetInt32();
+                changed = true;
             }
 
             // Merge tags from canonical into existing tags
             if (el.TryGetProperty("tags", out var tagsEl) && tagsEl.ValueKind == System.Text.Json.JsonValueKind.Array) {
                 var existingTags = new List<string>(entry.Tags ?? Array.Empty<string>());
+                int beforeCount = existingTags.Count;
                 foreach (var tagEl in tagsEl.EnumerateArray()) {
                     var tag = tagEl.GetString();
                     if (!string.IsNullOrEmpty(tag) && !existingTags.Contains(tag))
                         existingTags.Add(tag);
                 }
-                entry.Tags = existingTags.Distinct().ToArray();
+                if (existingTags.Count != beforeCount) {
+                    entry.Tags = existingTags.Distinct().ToArray();
+                    changed = true;
+                }
             }
 
             if (changed) enriched++;
@@ -1639,12 +1656,15 @@ public class OntologyService : IOntologyService {
         _isScanned = false;
     }
 
-    public int LoadFromCache(string inputPath) {
+    public int LoadFromCache(string inputPath) => LoadFromCache(inputPath, out _);
+
+    public int LoadFromCache(string inputPath, out int skipped) {
         if (!File.Exists(inputPath))
             throw new FileNotFoundException($"Ontology cache file not found: {inputPath}");
 
         var loaded = new ConcurrentDictionary<uint, Lib.OntologyEntry>();
         int count = 0;
+        skipped = 0;
         foreach (var line in File.ReadLines(inputPath)) {
             var trimmed = line.Trim();
             if (string.IsNullOrEmpty(trimmed)) continue;
@@ -1689,6 +1709,7 @@ public class OntologyService : IOntologyService {
                 loaded[entry.ObjectId] = entry;
                 count++;
             } catch (Exception ex) {
+                skipped++;
                 Console.Error.WriteLine($"[Ontology] Skipping malformed cache line: {ex.Message}");
             }
         }
@@ -1696,7 +1717,7 @@ public class OntologyService : IOntologyService {
         _entries.Clear();
         foreach (var kv in loaded) _entries[kv.Key] = kv.Value;
         _isScanned = true;
-        Console.Error.WriteLine($"[Ontology] Loaded {count:N0} entries from cache <- {inputPath}");
+        Console.Error.WriteLine($"[Ontology] Loaded {count:N0} entries ({skipped:N0} skipped) from cache <- {inputPath}");
         return count;
     }
 

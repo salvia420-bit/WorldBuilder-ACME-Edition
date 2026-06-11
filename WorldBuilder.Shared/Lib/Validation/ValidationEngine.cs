@@ -78,8 +78,12 @@ public static class ValidationEngine {
         var target = $"dungeon_{dungeon.LandblockKey:X4}";
 
         // ── Empty dungeon ──
+        // A landblock with no interior cells is a surface (outdoor) landblock,
+        // not a malformed dungeon — report DNG001 as Info (not-applicable) so
+        // validating an outdoor region doesn't raise thousands of false errors.
         if (dungeon.Cells.Count == 0) {
-            diagnostics.Add(new(ValidationSeverity.Error, "DNG001", "Dungeon has no cells."));
+            diagnostics.Add(new(ValidationSeverity.Info, "DNG001",
+                "Landblock has no interior cells (surface landblock — not a dungeon)."));
             return BuildReport("dungeon", target, diagnostics);
         }
 
@@ -832,9 +836,19 @@ public static class ValidationEngine {
         var target = $"all_{lbKey:X4}";
 
         // ── Dungeon ──
-        if (dungeonDoc != null && dungeonDoc.Cells.Count > 0) {
+        // F226: run the dungeon validator even on an empty dungeon doc so its
+        // DNG001 Info (surface landblock — not a dungeon) appears here too,
+        // keeping validate-all consistent with standalone validate-dungeon.
+        if (dungeonDoc != null) {
             var r = ValidateDungeon(dungeonDoc, dats);
             allDiagnostics.AddRange(r.Diagnostics);
+        } else {
+            // F225/F226: caller passes null for a virgin/surface LB (no phantom
+            // dungeon doc was created). Still emit the DNG001 Info so validate-all
+            // stays consistent with standalone validate-dungeon on such LBs.
+            allDiagnostics.Add(new(ValidationSeverity.Info, "DNG001",
+                "Landblock has no interior cells (surface landblock — not a dungeon).",
+                $"dungeon_{lbKey:X4}"));
         }
 
         // ── Landblock objects ──
@@ -883,6 +897,20 @@ public static class ValidationEngine {
             InfoCount: infos,
             Diagnostics: diagnostics);
     }
+
+    /// <summary>
+    /// Builds a clean (no-error) report carrying a single Info diagnostic, for
+    /// the "nothing to validate" case — e.g. a virgin landblock with no doc.
+    /// Callers use this instead of lazily creating+persisting a phantom doc just
+    /// to feed an empty validator pass. Read-only validators must not mutate
+    /// storage.
+    /// </summary>
+    public static ValidationReport NotApplicableReport(
+        string checkType, string target, string code, string message) =>
+        BuildReport(checkType, target,
+            new List<ValidationDiagnostic> {
+                new(ValidationSeverity.Info, code, message, target)
+            });
 
     private static float HeightAtIndex(byte heightIndex, float[] heightTable) {
         return heightIndex < heightTable.Length ? heightTable[heightIndex] : heightIndex * 2f;

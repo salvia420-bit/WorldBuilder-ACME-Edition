@@ -6,6 +6,15 @@ using WorldBuilder.Shared.Models;
 
 namespace WorldBuilder.Shared.Lib.AceDb {
     /// <summary>
+    /// F209 — a real ACE DB failure (dead connection, bad credentials, missing table) on a spell
+    /// get/save/copy path. Carries the underlying <see cref="MySqlException"/> message so a DB outage
+    /// is surfaced as an error rather than masquerading as "spell not found" / "not saved".
+    /// </summary>
+    public sealed class AceDbException : Exception {
+        public AceDbException(string message, Exception inner) : base(message, inner) { }
+    }
+
+    /// <summary>
     /// Thin wrapper around MySqlConnector for reading/writing the ACE
     /// ace_world.landblock_instance table.
     /// </summary>
@@ -501,8 +510,9 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                     DotDuration = GetDouble("dot_Duration")
                 };
             }
-            catch (MySqlException) {
-                return null;
+            catch (MySqlException ex) {
+                throw new AceDbException(
+                    $"ACE DB error reading spell 0x{id:X8}: {ex.Message}", ex);
             }
         }
 
@@ -743,8 +753,9 @@ namespace WorldBuilder.Shared.Lib.AceDb {
 
                 return await cmd.ExecuteNonQueryAsync(ct) > 0;
             }
-            catch (MySqlException) {
-                return false;
+            catch (MySqlException ex) {
+                throw new AceDbException(
+                    $"ACE DB error saving spell 0x{spell.Id:X8}: {ex.Message}", ex);
             }
         }
 

@@ -254,6 +254,8 @@ public class JsonCommandProcessor {
             ["placement-remove"] = CmdPlacementRemove,
             ["placement-set-scope"] = CmdPlacementSetScope,
             ["placement-export-sql"] = CmdPlacementExportSql,
+            ["ace-db-connect"] = CmdAceDbConnect,
+            ["ace-db-status"] = CmdAceDbStatus,
             ["ace-shard-db-connect"] = CmdAceShardDbConnect,
             ["ace-shard-db-status"] = CmdAceShardDbStatus,
             ["fresh-start"] = CmdFreshStart,
@@ -378,12 +380,13 @@ public class JsonCommandProcessor {
 
     private string CmdChoriziteDumpEnumValues(System.Text.Json.Nodes.JsonNode node) {
         string? enumName = node["enumName"]?.GetValue<string>();
-        var dumps = _engine.ChoriziteDumpEnumValues(enumName);
+        var dumps = _engine.ChoriziteDumpEnumValues(enumName, out var missing);
         return Serialize(new {
             success = true,
             command = "chorizite-dump-enum-values",
             requestedEnum = enumName,
             count = dumps.Count,
+            missing = missing.ToArray(),
             enums = dumps.Select(d => new {
                 name = d.EnumName,
                 underlyingType = d.UnderlyingType,
@@ -595,6 +598,7 @@ public class JsonCommandProcessor {
             outDir = r.OutDir,
             datPath = r.DatPath,
             requestedCount = r.RequestedCount,
+            distinctCount = r.DistinctCount,
             pngCount = r.PngCount,
             failCount = r.FailCount,
             indexJson = r.IndexJsonPath,
@@ -711,6 +715,7 @@ public class JsonCommandProcessor {
             success = true,
             command = "enum-parity-report",
             choriziteSourceRoot = report.ChoriziteSourceRoot,
+            choriziteAssembly = report.ChoriziteAssembly,
             rustCrateRoot = report.RustCrateRoot,
             checkedEnums = report.CheckedEnums,
             passEnums = report.PassEnums,
@@ -754,7 +759,11 @@ public class JsonCommandProcessor {
                 idHex = s.IdHex,
                 id = s.Id,
                 typeName = s.TypeName,
-                compressedSize = s.CompressedSize,
+                sizeBytes = s.SizeBytes,
+            }),
+            enumerationErrors = r.EnumerationErrors.Select(e => new {
+                typeName = e.TypeName,
+                error = e.Error,
             })
         });
     }
@@ -863,7 +872,9 @@ public class JsonCommandProcessor {
         return Serialize(new {
             success = true,
             command = "physics-replay-trace",
-            tickCount = r.TickCount,
+            comparedTickCount = r.TickCount,
+            traceRowCount = r.TraceRowCount,
+            skippedComparisons = r.SkippedComparisons,
             maxPositionDriftTick = r.MaxPositionDriftTick,
             maxPositionDriftMeters = r.MaxPositionDriftMeters,
             meanDriftMeters = r.MeanDriftMeters,
@@ -895,7 +906,7 @@ public class JsonCommandProcessor {
         string? datPath = node["datPath"]?.GetValue<string>();
         var r = _engine.MotionClassifySwing(motionTableId, stance, attackHeight, datPath);
         return Serialize(new {
-            success = true,
+            success = r.FailureReason == null,
             command = "motion-classify-swing",
             motionTableId = $"0x{r.MotionTableId:X8}",
             stance = $"0x{r.Stance:X8}",
@@ -950,6 +961,20 @@ public class JsonCommandProcessor {
                 : Convert.ToUInt32(s);
         }
         return v.GetValue<uint>();
+    }
+
+    // F24: 'id' DID fields accept either a 0x-hex string or a JSON number,
+    // matching the numeric tolerance of ParseUIntField / ParseLbIdScalar.
+    private static string ParseIdFieldToHex(System.Text.Json.Nodes.JsonNode? idNode, string name = "id") {
+        if (idNode == null)
+            throw new ArgumentException($"Missing '{name}' field");
+        if (idNode.GetValueKind() == System.Text.Json.JsonValueKind.String)
+            return idNode.GetValue<string>();
+        try {
+            return $"0x{(uint)idNode.GetValue<long>():X8}";
+        } catch (Exception) {
+            throw new ArgumentException($"'{name}' must be a hex string like \"0x02000306\" or a non-negative integer");
+        }
     }
 
     private string CmdEmitStaticSite(System.Text.Json.Nodes.JsonNode node) {
@@ -1050,6 +1075,11 @@ public class JsonCommandProcessor {
             indexPath = r.IndexPath,
             manifestPath = r.ManifestPath,
             picks = r.Picks,
+            failures = r.Failures?.Select(f => new {
+                slug = f.Slug,
+                lbHex = f.LbHex,
+                error = f.Error,
+            }),
         });
     }
 
@@ -1080,7 +1110,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdDescribeFloor(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         int floor = node["floor"]?.GetValue<int>() ?? 0;
         var r = _engine.DescribeFloor(lbX, lbY, floor);
         return Serialize(new {
@@ -1115,7 +1145,7 @@ public class JsonCommandProcessor {
         var r = _engine.EmitTilePyramid(lbFilter, outDir, maxZoom, minZoom,
             dirtyOnly, emitObject, emitFloor, throttleMs);
         return Serialize(new {
-            success = true,
+            success = r.FailedLandblocks == 0,
             command = "emit-tile-pyramid",
             maxZoom = r.MaxZoom,
             minZoom = r.MinZoom,
@@ -1124,12 +1154,17 @@ public class JsonCommandProcessor {
             objectTilesAtMaxZoom = r.ObjectTilesAtMaxZoom,
             floorTilesWritten = r.FloorTilesWritten,
             downsampledTiles = r.DownsampledTiles,
+            failedLandblocks = r.FailedLandblocks,
+            firstFailures = (r.FirstFailures ?? new List<(ushort, string)>())
+                .Select(f => new { landblock = $"0x{f.lbKey:X4}", message = f.message }).ToArray(),
+            dirtyTrackingInitialized = r.DirtyTrackingInitialized,
+            dirtyTilesRemaining = r.DirtyTilesRemaining,
             outDir = r.OutDir,
         });
     }
 
     private string CmdRenderDungeon(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         int? floor = node["floor"]?.GetValue<int>();
         int resolution = node["resolution"]?.GetValue<int>() ?? 1024;
         bool includePng = node["includePng"]?.GetValue<bool>() ?? false;
@@ -1202,13 +1237,18 @@ public class JsonCommandProcessor {
             if (item is null) continue;
             // Accept "0xA9B4", "A9B4", or numeric.
             if (item.GetValueKind() == System.Text.Json.JsonValueKind.String) {
-                var s = item.GetValue<string>().Trim();
+                var raw = item.GetValue<string>().Trim();
+                var s = raw;
                 if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) s = s.Substring(2);
-                if (ushort.TryParse(s, System.Globalization.NumberStyles.HexNumber,
+                if (!ushort.TryParse(s, System.Globalization.NumberStyles.HexNumber,
                         System.Globalization.CultureInfo.InvariantCulture, out var k))
-                    result.Add(k);
+                    throw new ArgumentException($"lbFilter entry \"{raw}\" is not a valid landblock id.");
+                result.Add(k);
             } else {
-                result.Add((ushort)item.GetValue<int>());
+                var v = item.GetValue<long>();
+                if (v < 0 || v > 0xFFFF)
+                    throw new ArgumentException($"lbFilter entry {v} is out of range (0..0xFFFF).");
+                result.Add((ushort)v);
             }
         }
         return result;
@@ -1280,6 +1320,7 @@ public class JsonCommandProcessor {
             lbPixelSize = r.LbPixelSize,
             landblockCount = r.LandblockCount,
             objectCount = r.ObjectCount,
+            glyphCount = r.GlyphCount,
             cliffCount = r.CliffCount,
             overlayApplied = r.OverlayApplied,
             outputPath = r.OutputPath,
@@ -1415,6 +1456,8 @@ public class JsonCommandProcessor {
     private string CmdPaint(System.Text.Json.Nodes.JsonNode node) {
         float x = F(node, "x"), y = F(node, "y"), radius = F(node, "radius");
         byte terrainType = ByteInRange(node, "type");
+        if (terrainType > 32)
+            throw new ArgumentException($"'type' must be 0..32 (the region table's defined terrain types); got {terrainType}");
         var r = _engine.ApplyTerrainEdit(new PaintEdit(x, y, radius, terrainType));
         return Serialize(new { success = r.Success, command = "paint",
             verticesModified = r.VerticesModified, terrainType,
@@ -1442,6 +1485,8 @@ public class JsonCommandProcessor {
     private string CmdRoad(System.Text.Json.Nodes.JsonNode node) {
         float x1 = F(node, "x1"), y1 = F(node, "y1"), x2 = F(node, "x2"), y2 = F(node, "y2");
         byte roadValue = node["value"] is null ? (byte)1 : ByteInRange(node, "value");
+        if (roadValue > 3)
+            throw new ArgumentException($"'value' must be 0..3 (only 2 road bits survive DAT export); got {roadValue}");
         var r = _engine.DrawRoad(x1, y1, x2, y2, roadValue);
         return Serialize(new { success = r.VerticesModified > 0, command = "road",
             waypoints = r.Waypoints, verticesModified = r.VerticesModified,
@@ -1668,7 +1713,9 @@ public class JsonCommandProcessor {
             System.IO.Path.Combine(eventsDir, $"{lbHex16}.events.jsonl"),
             bakeWarnings);
 
-        return Serialize(new {
+        bool outWritten = false;
+        string? outError = null;
+        var payload = new {
             success = true,
             command = "dump-lb-expectations",
             landblockId = $"0x{lbKey32:X8}",
@@ -1722,7 +1769,40 @@ public class JsonCommandProcessor {
                 events = events.Count,
                 envCells = r.Body.Interior?.CellCount ?? 0,
             },
-        }, outPath);
+        };
+
+        // Write the oracle file (if requested) and thread the outcome into the
+        // response so a bad dir / permissions / full disk is visible.
+        if (!string.IsNullOrEmpty(outPath)) {
+            try {
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(outPath) ?? ".");
+                System.IO.File.WriteAllText(outPath, Serialize(payload));
+                outWritten = true;
+            } catch (Exception ex) {
+                outError = ex.Message;
+                Console.Error.WriteLine($"[dump-lb-expectations] out write failed ({outPath}): {ex.Message}");
+            }
+        }
+
+        return Serialize(new {
+            payload.success,
+            payload.command,
+            payload.landblockId,
+            payload.lbX,
+            payload.lbY,
+            payload.timestamp,
+            payload.npcs,
+            payload.buildings,
+            payload.sceneryCount,
+            payload.bakedScenery,
+            payload.events,
+            payload.bakeWarnings,
+            payload.interior,
+            payload.counts,
+            outPath = string.IsNullOrEmpty(outPath) ? null : outPath,
+            outWritten,
+            outError,
+        });
     }
 
     // Read scenery.jsonl as one JsonNode per line. Tolerates missing file
@@ -2070,6 +2150,8 @@ public class JsonCommandProcessor {
             totalCellsAnalyzed = r.TotalCellsAnalyzed,
             classificationCounts = r.ClassificationCounts.OrderByDescending(kv => kv.Value)
                 .Select(kv => new { classification = kv.Key, count = kv.Value }).ToArray(),
+            errors = r.Errors,
+            buildingInteriorLandblocks = r.BuildingInteriorLandblocks,
             outputPath = r.OutputPath });
     }
 
@@ -2122,7 +2204,7 @@ public class JsonCommandProcessor {
 
     private string CmdValidateTerrain(System.Text.Json.Nodes.JsonNode node) {
         var (lbX, lbY) = Lb(node);
-        float threshold = node["cliffThreshold"]?.GetValue<float>() ?? ValidationEngine.DefaultCliffThreshold;
+        float threshold = PositiveFiniteFloat(node, "cliffThreshold", ValidationEngine.DefaultCliffThreshold);
         return FormatValidation("validate-terrain", lbX, lbY, _engine.ValidateTerrain(lbX, lbY, threshold));
     }
 
@@ -2138,7 +2220,7 @@ public class JsonCommandProcessor {
 
     private string CmdValidateAll(System.Text.Json.Nodes.JsonNode node) {
         var (lbX, lbY) = Lb(node);
-        float threshold = node["cliffThreshold"]?.GetValue<float>() ?? ValidationEngine.DefaultCliffThreshold;
+        float threshold = PositiveFiniteFloat(node, "cliffThreshold", ValidationEngine.DefaultCliffThreshold);
         return FormatValidation("validate-all", lbX, lbY, _engine.ValidateAll(lbX, lbY, threshold));
     }
 
@@ -2201,6 +2283,14 @@ public class JsonCommandProcessor {
         return Serialize(new { success = true, command = "scan-ontology",
             totalSetups = rpt.TotalSetups, totalGfxObjs = rpt.TotalGfxObjs,
             totalEntries = rpt.TotalEntries, scanTimeMs = Math.Round(rpt.ScanTimeMs, 0),
+            classifiedAsBuilding = rpt.ClassifiedAsBuilding,
+            classifiedAsScenery = rpt.ClassifiedAsScenery,
+            classifiedAsFurniture = rpt.ClassifiedAsFurniture,
+            classifiedAsProp = rpt.ClassifiedAsProp,
+            classifiedAsUnknown = rpt.ClassifiedAsUnknown,
+            failedCount = rpt.FailedEntries.Count,
+            failures = rpt.FailedEntries.Take(20)
+                .Select(f => new { id = $"0x{f.Id:X8}", reason = f.Reason }).ToArray(),
             categories = rpt.CategoryCounts.OrderByDescending(kv => kv.Value)
                 .Select(kv => new { category = kv.Key, count = kv.Value }).ToArray(),
             scales = rpt.ScaleCounts.OrderByDescending(kv => kv.Value)
@@ -2226,6 +2316,9 @@ public class JsonCommandProcessor {
                 objectId = $"0x{e.ObjectId:X8}", datType = e.DatType,
                 category = e.Category, scale = e.Scale,
                 source = e.ClassificationSource,
+                name = e.Name,
+                weenieClassId = e.WeenieClassId,
+                level = e.Level,
                 maxDimension = Math.Round(e.MaxDimension, 2),
                 aspectRatio = Math.Round(e.AspectRatio, 2),
                 partCount = e.PartCount, polyCount = e.PolyCount,
@@ -2263,14 +2356,19 @@ public class JsonCommandProcessor {
         bool blendEdges = node["blendEdges"]?.GetValue<bool>() ?? true;
         float zOffset = node["zOffset"]?.GetValue<float>() ?? 0f;
         var r = _engine.PasteStamp(srcMinX, srcMinY, srcMaxX, srcMaxY, destX, destY, includeObjects, blendEdges, zOffset);
-        return Serialize(new { success = true, command = "paste-stamp",
+        return Serialize(new { success = r.TerrainChanges > 0 || r.ObjectsPlaced > 0, command = "paste-stamp",
             terrainChanges = r.TerrainChanges, objectsPlaced = r.ObjectsPlaced,
+            objectsSkipped = r.ObjectsSkipped, skipMessages = r.SkipMessages,
             landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
 
     private string CmdGetBulkHeightmap(System.Text.Json.Nodes.JsonNode node) {
         uint minX = U(node, "minX"), minY = U(node, "minY");
         uint maxX = U(node, "maxX"), maxY = U(node, "maxY");
+        ValidateLbCoord("minX", minX); ValidateLbCoord("minY", minY);
+        ValidateLbCoord("maxX", maxX); ValidateLbCoord("maxY", maxY);
+        if (minX > maxX) throw new ArgumentException($"'minX' ({minX}) must be <= 'maxX' ({maxX})");
+        if (minY > maxY) throw new ArgumentException($"'minY' ({minY}) must be <= 'maxY' ({maxY})");
         var r = _engine.GetBulkHeightmap(minX, minY, maxX, maxY);
         return Serialize(new { success = true, command = "get-bulk-heightmap",
             totalLandblocks = r.TotalLandblocks, foundLandblocks = r.FoundLandblocks,
@@ -2300,12 +2398,16 @@ public class JsonCommandProcessor {
     }
 
     private string CmdDiffTerrain(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         var r = _engine.DiffTerrain(lbX, lbY);
         if (!r.Found) return Serialize(new { success = true, command = "diff-terrain",
             landblock = $"0x{r.LbKey:X4}", found = false });
+        if (!r.BaseFound) return Serialize(new { success = true, command = "diff-terrain",
+            landblock = $"0x{r.LbKey:X4}", found = true, baseFound = false,
+            hasChanges = false, totalVertices = r.TotalVertices,
+            note = $"No base-DAT terrain for 0x{r.LbKey:X4}; cannot diff — change counters are not meaningful." });
         return Serialize(new { success = true, command = "diff-terrain",
-            landblock = $"0x{r.LbKey:X4}", found = true,
+            landblock = $"0x{r.LbKey:X4}", found = true, baseFound = true,
             hasChanges = r.HasChanges, totalVertices = r.TotalVertices,
             changedVertices = r.ChangedVertices,
             heightChanges = r.HeightChanges, terrainTypeChanges = r.TerrainTypeChanges,
@@ -2319,13 +2421,10 @@ public class JsonCommandProcessor {
     }
 
     private string CmdSnapPortal(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
-        var targetCellStr = node["targetCellNumber"]?.GetValue<string>() ?? throw new ArgumentException("Missing 'targetCellNumber'");
-        ushort targetCellNum = ushort.Parse(targetCellStr.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-        var targetPolyStr = node["targetPortalPolyId"]?.GetValue<string>() ?? throw new ArgumentException("Missing 'targetPortalPolyId'");
-        ushort targetPolyId = ushort.Parse(targetPolyStr.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
-        var sourceEnvStr = node["sourceEnvId"]?.GetValue<string>() ?? throw new ArgumentException("Missing 'sourceEnvId'");
-        ushort sourceEnvId = ushort.Parse(sourceEnvStr.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+        var (lbX, lbY) = Lb(node);
+        ushort targetCellNum = HexOrDecU16(node, "targetCellNumber");
+        ushort targetPolyId = HexOrDecU16(node, "targetPortalPolyId");
+        ushort sourceEnvId = HexOrDecU16(node, "sourceEnvId");
         ushort sourceCellStruct = node["sourceCellStruct"]?.GetValue<ushort>() ?? 0;
 
         // Optional explicit surface list; when omitted the new cell inherits the
@@ -2364,7 +2463,7 @@ public class JsonCommandProcessor {
             new { name = "smooth",           args = "x, y, radius, strength?",               description = "Smooth terrain" },
             new { name = "raise",            args = "x, y, radius, delta?",                  description = "Raise terrain" },
             new { name = "lower",            args = "x, y, radius, delta?",                  description = "Lower terrain" },
-            new { name = "set-height",       args = "x, y, radius, height",                  description = "Set terrain height" },
+            new { name = "set-height",       args = "x, y, radius, heightIndex (height = deprecated alias)", description = "Set terrain height index (0..255, an index into the LandHeightTable, ~Z/2 m)" },
             new { name = "paint",            args = "x, y, radius, type",                    description = "Paint terrain texture" },
             new { name = "fill",             args = "x, y, type",                            description = "Flood-fill terrain" },
             new { name = "road",             args = "x1, y1, x2, y2, value?",                description = "Draw road path" },
@@ -2373,7 +2472,7 @@ public class JsonCommandProcessor {
             new { name = "get-heightmap",    args = "lbX, lbY",                              description = "Full 9×9 heightmap grid" },
             new { name = "get-terrain-data", args = "lbX, lbY",                              description = "All vertex data" },
             new { name = "list-objects",     args = "lbX, lbY",                              description = "List static objects" },
-            new { name = "add-object",       args = "lbX, lbY, modelId, x, y, z, qw?, qx?, qy?, qz?, scale?", description = "Place object" },
+            new { name = "add-object",       args = "lbX, lbY, modelId, x, y, z, qw?+qx?+qy?+qz? (all or none), scale?|scaleX?+scaleY?+scaleZ?, snap?", description = "Place object" },
             new { name = "remove-object",    args = "lbX, lbY, index",                       description = "Remove object by index" },
             new { name = "clear-objects",    args = "lbX, lbY | all=true",                   description = "Clear all objects from one landblock or whole world" },
             new { name = "move-object",      args = "lbX, lbY, index, x, y, z",              description = "Move object" },
@@ -2396,7 +2495,7 @@ public class JsonCommandProcessor {
             new { name = "query-ontology",   args = "category?, scale?, keyword?, objectId?, limit?", description = "Query the ontology index" },
             new { name = "ontology-stats",   args = "",                                      description = "Ontology category/scale breakdown" },
             new { name = "paste-stamp",      args = "srcMinX, srcMinY, srcMaxX, srcMaxY, destX, destY, includeObjects?, blendEdges?, zOffset?", description = "Copy & paste terrain" },
-            new { name = "snap-portal",      args = "lbX, lbY, targetCellNumber, targetPortalPolyId, sourceEnvId, sourceCellStruct, surfaces?", description = "Snap dungeon cell to portal" },
+            new { name = "snap-portal",      args = "lbX, lbY, targetCellNumber, targetPortalPolyId, sourceEnvId, sourceCellStruct?, surfaces?", description = "Snap dungeon cell to portal" },
             new { name = "get-bulk-heightmap", args = "minX, minY, maxX, maxY",               description = "Multi-landblock heightmaps in one call" },
             new { name = "get-object-detail", args = "objectId",                              description = "DAT model geometry & ontology info" },
             new { name = "diff-terrain",     args = "lbX, lbY",                              description = "Compare current terrain vs base DAT" },
@@ -2430,19 +2529,19 @@ public class JsonCommandProcessor {
             new { name = "ace-db-ingest-housing",   args = "out?",                              description = "Pull housing portal roster from ACE DB → housing_gazetteer.json" },
             new { name = "ace-db-ingest-spawns",    args = "out?",                              description = "Pull every landblock_instance row → ace_spawn_records.jsonl (SpawnRecord shape)" },
             new { name = "ace-db-ingest-weenie-index", args = "out?",                           description = "Pull canonical wcid → identity (setup, name, type) → weenie_index.jsonl" },
-            new { name = "compare-creatures-to-retail", args = "",                              description = "Jaccard similarity of project's spawn gazetteer vs. ACE creature/NPC/housing rosters" },
+            new { name = "compare-creatures-to-retail", args = "",                              description = "Jaccard similarity of project's spawn gazetteer vs. ACE creature/NPC rosters (global wcid sets; housing = counts only, jaccard not computed; novelWcids/missingWcids capped at 50 with novelTotal/missingTotal pre-truncation counts)" },
             new { name = "benchmark",        args = "",                                         description = "Run speed test suite (terrain, objects, validation, bulk). Non-destructive: snapshots the first 50 populated landblocks and restores them afterward (landblocksRestored). Reports failedObjectPlacements (excluded from opsPerSec)." },
             new { name = "set-landblock-heightmap", args = "lbX, lbY, heights",                  description = "Set all 81 heights in one call" },
             new { name = "set-landblock-terrain", args = "lbX, lbY, types",                      description = "Set all 81 terrain types in one call" },
-            new { name = "import-heightmap", args = "imagePath, startLbX, startLbY, lbCountX, lbCountY, apply?", description = "Import grayscale+colormap PNG; height from luminance, type from nearest texture color" },
+            new { name = "import-heightmap", args = "imagePath, startLbX? (default 0), startLbY? (default 0), lbCountX, lbCountY, apply?", description = "Import grayscale+colormap PNG; height from luminance, type from nearest texture color" },
             new { name = "import-render-surface", args = "imagePath, renderSurfaceId, ui?, name?", description = "Import a PNG to replace a RenderSurface (default: register in CustomTextureStore; --ui: deferred portal write)" },
             new { name = "open-log-folder", args = "",                                            description = "Returns the active --log-file path so the agent can ingest it (no folder-opening side effects)" },
             new { name = "creature-get", args = "objectId",                                       description = "Loads ACE-DB creature visual overrides (texture map, anim part, palette)" },
-            new { name = "creature-save", args = "objectId, fromJson?",                           description = "Replaces texture-map + anim-part rows for the given object_Id (transactional)" },
+            new { name = "creature-save", args = "objectId, fromJson",                            description = "Replaces texture-map + anim-part rows for the given object_Id (transactional)" },
             new { name = "creature-export-sql", args = "objectId, out?",                          description = "Generates idempotent DELETE+INSERT SQL for the creature's overrides" },
             new { name = "layout-list",         args = "overlayOnly?",                            description = "Lists every LayoutDesc id from the local DAT (or only ones with a project overlay)" },
             new { name = "layout-get",          args = "layoutId",                                description = "Returns a LayoutDesc as JSON; preferred from project overlay if present" },
-            new { name = "layout-save",         args = "layoutId, fromJson",                      description = "Saves a JSON LayoutDesc into the project's LayoutDatDocument overlay" },
+            new { name = "layout-save",         args = "layoutId, fromJson",                      description = "Saves a LayoutDesc into the project's LayoutDatDocument overlay (fromJson = inline JSON if it starts with '{', else a JSON file path)" },
             new { name = "layout-delete-overlay", args = "layoutId",                              description = "Removes the project overlay for a LayoutDesc id (DAT original is untouched)" },
             new { name = "spell-list",          args = "limit?, source?",                          description = "Lists newest spell ids by source (\"dat\" default, \"db\" for ace-db); annotates rows that have a project overlay" },
             new { name = "spell-get",           args = "id",                                       description = "Returns a SpellRecord JSON; project overlay wins, falls back to ace-db" },
@@ -2454,16 +2553,18 @@ public class JsonCommandProcessor {
             new { name = "weenie-delete",       args = "classId",                                  description = "Deletes a weenie + every weenie_properties_* row that points at its class_Id" },
             new { name = "weenie-list-property-keys", args = "family",                             description = "Enumerates AcePropertyXxx names by family (int|int64|bool|float|string|did|iid)" },
             new { name = "placement-list",      args = "lbX?, lbY?, kind?",                        description = "Lists outdoor/dungeon instance placements (filtered by lb + kind)" },
-            new { name = "placement-add-outdoor", args = "lbX, lbY, wcid, cellNumber?, originX, originY, originZ, anglesW?, anglesX?, anglesY?, anglesZ?", description = "Appends an outdoor instance placement to Project.OutdoorInstancePlacements" },
-            new { name = "placement-add-dungeon", args = "lbX, lbY, wcid, cellNumber?, originX, originY, originZ, anglesW?, anglesX?, anglesY?, anglesZ?", description = "Appends a dungeon instance placement to the dungeon document for the given lb" },
+            new { name = "placement-add-outdoor", args = "lbX, lbY, wcid, cellNumber? (1..64), originX?, originY?, originZ? (default 0), anglesW?, anglesX?, anglesY?, anglesZ?", description = "Appends an outdoor instance placement to Project.OutdoorInstancePlacements" },
+            new { name = "placement-add-dungeon", args = "lbX, lbY, wcid, cellNumber? (0x100..0xFFFD), originX?, originY?, originZ? (default 0), anglesW?, anglesX?, anglesY?, anglesZ?", description = "Appends a dungeon instance placement to the dungeon document for the given lb" },
             new { name = "placement-remove",    args = "kind, index",                              description = "Removes an outdoor or dungeon placement by index in its respective list" },
             new { name = "placement-set-scope", args = "kind, index, scope",                       description = "Sets a placement's enrichment scope: classDefault (Option A, world weenie_properties_*) or placementOverride (Option B, shard biota_properties_*)" },
-            new { name = "ace-shard-db-connect", args = "host, port?, database?, user?, password?",  description = "Tests + saves the ACE SHARD DB connection (separate from world ace-db); db defaults to ace_shard; rejects a target matching the world DB" },
+            new { name = "ace-db-connect",       args = "host, port?, database?, user?, password?",  description = "Tests + saves the ACE WORLD DB connection; database defaults to ace_world" },
+            new { name = "ace-db-status",        args = "",                                         description = "Shows the ACE WORLD DB connection settings + tests connectivity" },
+            new { name = "ace-shard-db-connect", args = "host, port?, database? (alias db), user?, password? (alias pass)",  description = "Tests + saves the ACE SHARD DB connection (separate from world ace-db); db defaults to ace_shard; rejects a target matching the world DB (host aliases localhost/127.0.0.1/::1 + DNS resolution normalized)" },
             new { name = "ace-shard-db-status",  args = "",                                         description = "Shows the ACE SHARD DB connection settings + tests connectivity" },
             new { name = "placement-export-sql", args = "out?, apply?, dryRun?, force?, validate?",   description = "Writes landblock_instances.sql + dungeon_instances.sql + per-class weenie_properties_*.sql (world) + per-placement biota_properties_*.sql (shard) + validation_report.jsonl; E6 validation gate blocks on errors unless force; apply writes world to ace-db + biota to ace-shard-db; dryRun emits files only (no DB)" },
-            new { name = "fresh-start",         args = "confirm",                                  description = "Wipes all terrain to deep sea + deletes all dungeon documents (requires confirm:true)" },
+            new { name = "fresh-start",         args = "confirm",                                  description = "Clears terrain (to deep sea), dungeon, AND landblock (static-object) documents — all staged placements are discarded (requires confirm:true)" },
             new { name = "generate-world",      args = "params?, apply?, exportTownsCsv?",         description = "GUI-parity world generation: ResetWorldDocs → terrain → buildings → decorations; optional CSV emit" },
-            new { name = "export-towns-csv",    args = "fromResult, out",                          description = "Renders the GUI's towns CSV from a worldgen result JSON written by generate-world" },
+            new { name = "export-towns-csv",    args = "fromResult, out",                          description = "Renders the GUI's towns CSV from a worldgen result JSON written by 'worldgen-analyze-buildings' (or 'worldgen' with outputPath)" },
             new { name = "bulk-place-objects", args = "lbX, lbY, objects[]",                      description = "Place multiple objects in one call" },
             new { name = "generate-terrain", args = "seed, octaves?, lacunarity?, persistence?, amplitude?, coastline?", description = "Generate full-world procedural terrain" },
             new { name = "generate-dungeon", args = "lbX, lbY, depth?, branching?, seed?, minRooms?, maxRooms?, theme?", description = "Generate procedural dungeon from graph grammar" },
@@ -2475,22 +2576,22 @@ public class JsonCommandProcessor {
             new { name = "export-raw-world-facts", args = "minX?, minY?, maxX?, maxY?, outputPath?, includeAceDb?, includeLinks?", description = "Export raw DAT/SQL/spawn facts as JSONL" },
             new { name = "export-envcell-components", args = "minX?, minY?, maxX?, maxY?, outputPath?", description = "Export linked surface-anchor and EnvCell components as JSONL" },
             new { name = "generate-settlement", args = "template, centerX, centerY, seed?", description = "Generate constraint-based settlement from template" },
-            new { name = "extract-retail-heightmaps", args = "outputPath?", description = "Dump all 255×255 landblock heightmaps as JSONL" },
-            new { name = "compute-vanilla-baseline", args = "outputPath?", description = "Compute retail quality baseline metrics (density, terrain dist, etc.)" },
+            new { name = "extract-retail-heightmaps", args = "outputPath?", description = "Dump all 255×255 landblock heightmaps as JSONL (source = live project terrain, reflects in-session edits — see 'source' field; not raw retail DAT)" },
+            new { name = "compute-vanilla-baseline", args = "outputPath?", description = "Compute retail quality baseline metrics (density, terrain dist, etc.) — computes from the loaded project; run against an unmodified vanilla project for a true retail baseline." },
             new { name = "render-preview",   args = "lbX, lbY, radius?, resolution?, overlay?, includePng?, outputPath?", description = "Top-down PNG of an N×N landblock region (terrain + objects + cliff/pairing overlays). Returns base64 PNG." },
             new { name = "compare-to-retail", args = "generated, retailBaseline?, topK?, anomalyMinModel?, perLandblock?, cacheDir?", description = "Subprocess the Python comparator; score generated world vs retail with per-LB drilldown and class-space ratio. Caches retail snapshot for tight tuning loops." },
             new { name = "transact",         args = "ops[] | opsFile, rollback_on_fail?, validate?, diff?", description = "Stage N mutating ops, validate the staged delta, atomically commit or rollback. Allow-list: terrain edits, object placement, generate-dungeon. validate=auto|all|none|{landblocks:[...]}. diff=true|\"structured\"|\"visual\"|\"both\" inlines the transact-diff response." },
             new { name = "transact-diff",    args = "txId, render?, renderMode?, lbs?, resolution?, out?",        description = "Structured before/after report for a committed transaction. renderMode=overlay|side-by-side|after-only-with-diff. Returns TXDIFF-EXPIRED or TXDIFF-ROLLED-BACK if the snapshot is unavailable." },
             new { name = "describe-landblock", args = "lbX, lbY",                            description = "Living Atlas: verbal + deeply structured per-LB description (terrain, structures, spawns, POIs, validation). Composes ontology + region/town gazetteer + Acpedia + LSD spawnMap." },
             new { name = "dump-lb-expectations", args = "lbX, lbY",                          description = "Compact landblock oracle for holtburger-web wire-agent diagnostic layer — npcs (wcid+name+pos) + buildings (modelId+origin) + scenery count + interior cells. Consumer: window.__diag.setExpected(json); window.__diag.diff(0xLLLL0000)." },
-            new { name = "get-tile",         args = "zoom, lbX?, lbY?, region?, includeBase64?", description = "Tile pyramid (sourced from render-preview). zoom=lb (LB-keyed), region (region name), or world. Returns path + size + optional base64 PNG." },
+            new { name = "get-tile",         args = "zoom? (default \"lb\"), lbX?, lbY?, region?, includeBase64?", description = "Tile pyramid (sourced from render-preview). zoom=lb (LB-keyed), region (region name), or world. Returns path + size + optional base64 PNG." },
             new { name = "tile-stats",       args = "",                                      description = "Tile-cache totals, dirty counts, disk used vs. budget" },
-            new { name = "regenerate-dirty-tiles", args = "",                                description = "Rebuild every tile flagged dirty (e.g. by transact-journal invalidation) and clear dirty bits." },
+            new { name = "regenerate-dirty-tiles", args = "",                                description = "Rebuild every dirty LB tile and clear only the LBs that succeeded (failed LBs stay dirty for retry; success=false when any LB failed). World/region composite tiles are NOT rebuilt here — they regenerate lazily on next request." },
             new { name = "list-dirty-tiles", args = "",                                      description = "Enumerate LBs whose tiles need regeneration." },
             new { name = "mark-tiles-clean", args = "",                                      description = "Force-clear all dirty bits without regenerating." },
             new { name = "prune-tiles",      args = "keepNewest?, olderThan?",               description = "LRU-prune the LB-tile layer; region+world tiles are pinned." },
             new { name = "generate-atlas-tiles", args = "mode, lbList?",                     description = "Bulk-generate tiles. mode=lbs|regions|world|all. mode=lbs requires lbList[{lbX,lbY}]; mode=all sweeps every LB and may take many minutes." },
-            new { name = "emit-render-gallery", args = "outDir, autoTowns?, autoZones?, autoDungeons?, autoRegions?, radius?, resolution?, useSprites?, overlay?, lbFilter?", description = "Curate N landblocks (5 towns + 5 creature zones + 5 dungeons + 5 region anchors by default), render-preview + describe-landblock per pick, bundle into a Tailwind gallery dir." },
+            new { name = "emit-render-gallery", args = "outDir, autoTowns?, autoZones?, autoDungeons?, autoRegions?, radius?, resolution?, useSprites?, overlay?, lbFilter?", description = "Curate N landblocks (5 towns + 5 creature zones + 5 dungeons + 5 region anchors by default), render-preview + describe-landblock per pick, bundle into a Tailwind gallery dir. Per-pick render faults are reported in 'failures':[{slug,lbHex,error}]." },
             new { name = "serve-render-gallery",       args = "outDir, port?, bind?",                  description = "Serve a gallery (or any) directory over HTTP via a built-in C# HttpListener. Detects Tailscale IPs and reports a tailnet-reachable URL when one is available." },
             new { name = "region-export-json", args = "out?, parts?, datPath?",              description = "Export Region 0x13000000 (LandDefs/GameTime/Sky/Sound/Scene/Terrain/Misc) as a stable JSON document. parts filters to sky|sound|scene|terrain|misc (comma list). Prefers staged PortalDatDocument edits, then project DATs, then base portal DAT." },
             new { name = "region-import-json", args = "path, apply?",                        description = "Validate a region JSON document, rebuild the Region DBObj, verify pack/unpack self-parity; apply:true stages it into PortalDatDocument so 'export' writes it to the export DATs." },
@@ -2501,7 +2602,7 @@ public class JsonCommandProcessor {
             new { name = "scene-export-json",  args = "sceneId|all, out?, datPath?",         description = "Dump Scene 0x12 ObjectDescs (full retail field set incl. freq/displace/scale/slope/align/orient) as JSON; all:true sweeps every scene to 'out'." },
             new { name = "scene-diff",         args = "sceneId, otherDat, maxRows?",         description = "Per-object field diff of a Scene vs a second DAT (dat-open alias or path)." },
             new { name = "scene-where-used",   args = "sceneId",                             description = "Reverse map via Region 0x13: which SceneDesc scene-type indices carry this scene and which TerrainTypes reference them." },
-            new { name = "scene-edit",         args = "sceneId, index, fields, apply?",      description = "Mutate one ObjectDesc (objectId/origin/orientation/frequency/displace/scale/rotation/slope/align/orient/weenieObj) and stage the Scene for export (apply:true)." },
+            new { name = "scene-edit",         args = "sceneId, index, fields, apply?",      description = "Mutate one ObjectDesc (fields: objectId, origin, orientation, frequency, displaceX, displaceY, minScale, maxScale, maxRotation, minSlope, maxSlope, align, orient, weenieObj) and stage the Scene for export (apply:true)." },
             new { name = "asset-refs",         args = "id, datPath?",                        description = "Forward asset-chain edges for a DID: Scene→placed objects, Setup→GfxObj parts, GfxObj→Surfaces, Surface→SurfaceTexture/Palette, SurfaceTexture→RenderSurfaces." },
             new { name = "asset-used-by",      args = "id, transitive?, datPath?",           description = "Reverse lookup: who references this DID. First call builds a session-cached portal-DAT reverse index; transitive:true walks the closure up to Setups/Scenes ('which models show this surface')." },
             new { name = "surface-fingerprint", args = "id?, match?, datPath?",              description = "Fingerprint a Surface (Type, OrigTexture/Palette, ColorValue, Translucency, Luminosity, Diffuse) and find all surfaces sharing it, or query by partial match spec — locates the same material under different IDs." },
@@ -2510,6 +2611,25 @@ public class JsonCommandProcessor {
             new { name = "remove-building",    args = "lbX, lbY, buildingIndex",             description = "Remove a building's shell from the staged landblock; export drops the BuildingInfo and decrements NumCells (interior cells orphaned)." },
             new { name = "bulk-paint-replace", args = "lbList|minLbX..maxLbY, fromType?, toType", description = "Bulk terrain-type substitution across many LBs (melt bucket-fill): replace fromType with toType, or repaint all 81 vertices when fromType omitted." },
             new { name = "melt-reference",     args = "topic?",                              description = "Agent briefing for DEFERRED melt functionality (not implemented): topics dm-textures, id-migration, cache-converters, acedb-recipes. No topic = list; topic = full markdown section with melt file:line pointers. Read-only knowledge surface." },
+            new { name = "compare-render-corners", args = "lbX, lbY, toleranceMetres?, includeAll?", description = "Compares full-quat vs yaw-only building corner placement for a landblock; failures[] when divergence > tolerance (default 0.05m); buildings[] null unless includeAll" },
+            new { name = "obj-export",         args = "datId, outputPath",                     description = "Exports a GfxObj/Setup (datId accepts 0x hex or decimal) to a Wavefront .obj" },
+            new { name = "obj-import",         args = "objPath, surfaceDid, gfxObjId?, setupId?", description = "Imports a Wavefront .obj as a GfxObj/Setup (ids accept 0x hex or decimal)" },
+            new { name = "physics-jump-formula", args = "(jump inputs)",                        description = "Diagnostic: evaluates the jump-height formula for given inputs" },
+            new { name = "physics-jump-formula-sweep", args = "caseCount?",                     description = "Diagnostic: sweeps the jump-height formula across caseCount cases (default 1000)" },
+            new { name = "physics-replay-trace", args = "traceSubjectPath, probeScenarioPath, maxDriftOverride?", description = "Diagnostic: replays a recorded physics trace against a probe scenario and reports drift" },
+            new { name = "pvs-visibility-snapshot", args = "cellId, bfsDepth?, datPath?, out?", description = "Diagnostic: PVS oracle — BFS visible-cell set from a cell (see docs/cell-portal-method.md)" },
+            new { name = "region-skybox-snapshot", args = "gameTimeSec, datPath?",              description = "Diagnostic: skybox state at a game time (see docs/skybox-parity-method.md)" },
+            new { name = "region-day-night-curve", args = "hours?, datPath?",                   description = "Diagnostic: day/night light curve sampled over hours (default 24)" },
+            new { name = "weenie-snapshot",    args = "(weenie ids)",                           description = "Snapshots weenie definitions to a bundle" },
+            new { name = "weenie-template-list", args = "bundlePath",                            description = "Lists templates in a weenie bundle" },
+            new { name = "weenie-template-apply", args = "bundlePath, templateId, classId",      description = "Applies a weenie template (classId accepts 0x hex or decimal) to the world DB" },
+            new { name = "worldgen",           args = "seed?, fullWorld?, startX?, startY?, …, outputPath?", description = "Runs the world generator (WorldGeneratorParams fields); writes a result JSON consumed by export-towns-csv/worldgen-analyze-buildings" },
+            new { name = "worldgen-analyze-buildings", args = "(worldgen inputs), outputPath?",  description = "Analyzes building placements from a worldgen pass; its outputPath feeds export-towns-csv" },
+            new { name = "worldgen-scan-retail-towns", args = "(scan roots)",                    description = "Scans retail town layouts for worldgen reference data" },
+            new { name = "wave4-status",       args = "",                                      description = "Reports the cached wave4 parity sweep status (no run); cache root under /mnt/wbterminal1" },
+            new { name = "wave4-sweep",        args = "mode?, target?, concurrency?, reset?",  description = "Runs the wave4 parity sweep driver (WORLDBUILDER_WAVE4_SWEEP/WORLDBUILDER_NODE env overrides; 6h timeout; report/cache roots under /mnt/wbterminal1). success requires exitCode 0 + no failed/infra chunks" },
+            new { name = "diag-run-all",       args = "wave4Mode?, reportDir?, skipSurfaces?, parallel?", description = "Runs the full diagnostics driver (WORLDBUILDER_DIAG_DRIVER/WORLDBUILDER_NODE env overrides; 2h timeout); success gated on required-failures" },
+            new { name = "diag-status",        args = "",                                      description = "Reports the last diagnostics run status (no run)" },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",
@@ -2521,7 +2641,7 @@ public class JsonCommandProcessor {
     // ════════════════════════════════════════════════════
 
     private string CmdGetTerrainLayers(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         var r = _engine.GetTerrainLayers(lbX, lbY);
         return Serialize(new { success = true, command = "get-terrain-layers",
             landblock = $"0x{r.LbKey:X4}",
@@ -2539,16 +2659,19 @@ public class JsonCommandProcessor {
     private string CmdExportTextures(System.Text.Json.Nodes.JsonNode node) {
         var outputDir = node["outputDir"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'outputDir' field");
-        uint? minId = node["minId"]?.GetValue<uint>();
-        uint? maxId = node["maxId"]?.GetValue<uint>();
+        uint? minId = node["minId"] != null ? ParseUintField(node, "minId") : null;
+        uint? maxId = node["maxId"] != null ? ParseUintField(node, "maxId") : null;
         var r = _engine.ExportTextures(outputDir, minId, maxId);
         return Serialize(new { success = r.Success, command = "export-textures",
             exported = r.Exported, failed = r.Failed,
-            outputDirectory = r.OutputDirectory, errors = r.Errors });
+            outputDirectory = r.OutputDirectory,
+            errors = (r.Errors ?? new List<string>()).Take(20).ToArray(),
+            totalErrors = r.Failed,
+            truncated = r.Failed > 20 });
     }
 
     private string CmdImportTexture(System.Text.Json.Nodes.JsonNode node) {
-        uint textureId = U(node, "textureId");
+        uint textureId = ParseUintField(node, "textureId");
         var imagePath = node["imagePath"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'imagePath' field");
         var r = _engine.ImportTexture(textureId, imagePath);
@@ -2573,7 +2696,8 @@ public class JsonCommandProcessor {
         var r = _engine.DefragmentDat(datType, outputPath);
         return Serialize(new { success = r.Success, command = "defragment-dat",
             datType = r.DatType, outputPath = r.OutputPath,
-            bytesFreed = r.BytesFreed, error = r.Error });
+            bytesFreed = r.BytesFreed, filesSkipped = r.FilesSkipped,
+            warning = r.Warning, error = r.Error });
     }
 
     // ════════════════════════════════════════════════════
@@ -2595,6 +2719,7 @@ public class JsonCommandProcessor {
         return Serialize(new {
             success = r.Success, command = "export-setup-parts",
             setupsScanned = r.SetupsScanned, setupsExported = r.SetupsExported,
+            setupsFailed = r.SetupsFailed, failedSample = r.FailedSample,
             totalParts = r.TotalParts, uniqueParts = r.UniqueParts,
             outputPath = r.OutputPath, error = r.Error
         });
@@ -2619,7 +2744,9 @@ public class JsonCommandProcessor {
         var filter = node["filter"]?.GetValue<string>();
         var r = _engine.MineStrings(outputPath, filter);
         return Serialize(new { success = r.Success, command = "mine-strings",
-            tablesScanned = r.TablesScanned, totalStrings = r.TotalStrings,
+            tablesScanned = r.TablesScanned, tablesSkipped = r.TablesSkipped,
+            errorCount = r.TablesSkipped,
+            totalStrings = r.TotalStrings,
             outputPath = r.OutputPath,
             error = r.Error,
             strings = r.Strings.Take(100).Select(s => new {
@@ -2640,7 +2767,8 @@ public class JsonCommandProcessor {
             ?? throw new ArgumentException("Missing 'indexPath' field");
         var r = _engine.ImportCatalog(indexPath);
         return Serialize(new { success = r.Success, command = "import-catalog",
-            entriesEnriched = r.EntriesEnriched, totalEntries = r.TotalEntries,
+            entriesEnriched = r.EntriesEnriched, entriesFailed = r.EntriesFailed,
+            totalEntries = r.TotalEntries,
             indexPath = r.IndexPath, error = r.Error });
     }
 
@@ -2670,7 +2798,7 @@ public class JsonCommandProcessor {
         return Serialize(new { success = r.Success, command = "ingest-weenies",
             totalProcessed = r.TotalProcessed, creatureCount = r.CreatureCount,
             npcCount = r.NpcCount, itemCount = r.ItemCount, otherCount = r.OtherCount,
-            withSetupDid = r.WithSetupDid, outputPath = r.OutputPath,
+            withSetupDid = r.WithSetupDid, errorCount = r.ErrorCount, outputPath = r.OutputPath,
             error = r.Error });
     }
 
@@ -2699,7 +2827,8 @@ public class JsonCommandProcessor {
         var r = _engine.LoadOntologyCache(inputPath);
         return Serialize(new {
             success = r.Success, command = "load-ontology-cache",
-            entriesLoaded = r.EntriesLoaded, inputPath = r.InputPath, error = r.Error,
+            entriesLoaded = r.EntriesLoaded, linesSkipped = r.LinesSkipped,
+            inputPath = r.InputPath, error = r.Error,
         });
     }
 
@@ -2770,7 +2899,7 @@ public class JsonCommandProcessor {
         return Serialize(new { success = r.Success, command = "ingest-spawn-maps",
             totalProcessed = r.TotalProcessed, totalWeenies = r.TotalWeenies,
             totalLinks = r.TotalLinks, uniqueWcids = r.UniqueWcids,
-            outputPath = r.OutputPath, error = r.Error });
+            errorCount = r.ErrorCount, outputPath = r.OutputPath, error = r.Error });
     }
 
     private string CmdIngestSpells(System.Text.Json.Nodes.JsonNode node) {
@@ -2782,7 +2911,7 @@ public class JsonCommandProcessor {
             totalProcessed = r.TotalProcessed,
             schools = r.SchoolCounts.OrderBy(kv => kv.Key)
                 .Select(kv => new { school = kv.Key, count = kv.Value }).ToArray(),
-            outputPath = r.OutputPath, error = r.Error });
+            errorCount = r.ErrorCount, outputPath = r.OutputPath, error = r.Error });
     }
 
     private string CmdAceDbIngestCreatures(System.Text.Json.Nodes.JsonNode node) {
@@ -2796,7 +2925,7 @@ public class JsonCommandProcessor {
         var outPath = node["out"]?.GetValue<string>();
         var r = _engine.IngestNpcRosterAsync(outPath).GetAwaiter().GetResult();
         return Serialize(new { success = r.Success, command = "ace-db-ingest-npcs",
-            totalProcessed = r.TotalProcessed, vendorCount = r.VendorCount, talkerCount = r.TalkerCount,
+            totalProcessed = r.TotalProcessed, vendorCount = r.VendorCount, otherNpcCount = r.OtherNpcCount,
             outputPath = r.OutputPath, error = r.Error });
     }
 
@@ -2830,7 +2959,11 @@ public class JsonCommandProcessor {
         var r = _engine.CompareCreaturesToRetail();
         static object Dim(CompareCategoryDimension d) => new {
             generated = d.GeneratedCount, retail = d.RetailCount,
-            jaccard = d.Jaccard, novelInLb = d.NovelInLb, missingInLb = d.MissingInLb,
+            jaccard = d.JaccardComputed ? (double?)d.Jaccard : null,
+            jaccardNote = d.JaccardComputed ? null : "counts only — jaccard not implemented",
+            retailSource = d.RetailSource,
+            novelWcids = d.NovelInLb, missingWcids = d.MissingInLb,
+            novelTotal = d.NovelTotal, missingTotal = d.MissingTotal,
         };
         return Serialize(new {
             success = r.Success, command = "compare-creatures-to-retail",
@@ -2851,7 +2984,7 @@ public class JsonCommandProcessor {
             uniqueSourceWcids = r.UniqueSourceWcids, uniqueResultWcids = r.UniqueResultWcids,
             skills = r.SkillCounts.OrderBy(kv => kv.Key)
                 .Select(kv => new { skill = kv.Key, count = kv.Value }).ToArray(),
-            outputPath = r.OutputPath, error = r.Error });
+            errorCount = r.ErrorCount, outputPath = r.OutputPath, error = r.Error });
     }
 
     // ════════════════════════════════════════════════════
@@ -2989,7 +3122,10 @@ public class JsonCommandProcessor {
     private string CmdPlacementAddOutdoor(System.Text.Json.Nodes.JsonNode node) {
         var (lbXu, lbYu) = Lb(node);   // required + range-checked 0..254 (F162)
         uint wcid = ParseUintField(node, "wcid");
-        ushort cellNumber = (ushort)(node["cellNumber"]?.GetValue<int>() ?? 1);
+        int cellNumberRaw = node["cellNumber"]?.GetValue<int>() ?? 1;
+        if (cellNumberRaw < 1 || cellNumberRaw > 64)
+            throw new ArgumentException($"outdoor 'cellNumber' must be in 1..64; got {cellNumberRaw}");
+        ushort cellNumber = (ushort)cellNumberRaw;
         float ox = node["originX"]?.GetValue<float>() ?? 0f;
         float oy = node["originY"]?.GetValue<float>() ?? 0f;
         float oz = node["originZ"]?.GetValue<float>() ?? 0f;
@@ -3003,7 +3139,10 @@ public class JsonCommandProcessor {
     private string CmdPlacementAddDungeon(System.Text.Json.Nodes.JsonNode node) {
         var (lbXu, lbYu) = Lb(node);   // required + range-checked 0..254 (F162)
         uint wcid = ParseUintField(node, "wcid");
-        ushort cellNumber = (ushort)(node["cellNumber"]?.GetValue<int>() ?? 0x100);
+        int cellNumberRaw = node["cellNumber"]?.GetValue<int>() ?? 0x100;
+        if (cellNumberRaw < 0x100 || cellNumberRaw > 0xFFFD)
+            throw new ArgumentException($"dungeon 'cellNumber' must be in 0x100..0xFFFD; got {cellNumberRaw}");
+        ushort cellNumber = (ushort)cellNumberRaw;
         float ox = node["originX"]?.GetValue<float>() ?? 0f;
         float oy = node["originY"]?.GetValue<float>() ?? 0f;
         float oz = node["originZ"]?.GetValue<float>() ?? 0f;
@@ -3054,6 +3193,25 @@ public class JsonCommandProcessor {
         var r = _engine.PlacementSetScope(kind, index, scope);
         return Serialize(new { success = r.Success, command = "placement-set-scope",
             kind = r.Kind, index = r.Index, scope = r.Scope });
+    }
+
+    private string CmdAceDbConnect(System.Text.Json.Nodes.JsonNode node) {
+        string host = node["host"]?.GetValue<string>() ?? throw new ArgumentException("Missing 'host'");
+        int port = node["port"]?.GetValue<int>() ?? 3306;
+        string database = node["database"]?.GetValue<string>() ?? "ace_world";
+        string user = node["user"]?.GetValue<string>() ?? "root";
+        string password = node["password"]?.GetValue<string>() ?? "";
+        var r = _engine.AceDbConnectAsync(host, port, database, user, password).GetAwaiter().GetResult();
+        return Serialize(new { success = r.Success, command = "ace-db-connect",
+            host = r.Host, port = r.Port, database = r.Database, user = r.User,
+            settingsSaved = r.SettingsSaved, error = r.Error });
+    }
+
+    private string CmdAceDbStatus(System.Text.Json.Nodes.JsonNode node) {
+        var r = _engine.AceDbStatusAsync().GetAwaiter().GetResult();
+        return Serialize(new { success = true, command = "ace-db-status",
+            hasSettings = r.HasSettings, host = r.Host, port = r.Port,
+            database = r.Database, user = r.User, connectionOk = r.ConnectionOk, error = r.Error });
     }
 
     private string CmdAceShardDbConnect(System.Text.Json.Nodes.JsonNode node) {
@@ -3274,7 +3432,8 @@ public class JsonCommandProcessor {
             success = r.Success, command = "creature-save",
             objectId = $"0x{r.ObjectId:X8}",
             textureMapRows = r.TextureMapRows,
-            animPartRows = r.AnimPartRows
+            animPartRows = r.AnimPartRows,
+            error = r.Error
         });
     }
 
@@ -3414,13 +3573,15 @@ public class JsonCommandProcessor {
 
         List<(float X, float Y)>? coastline = null;
         var coastlineNode = node["coastline"];
-        if (coastlineNode is System.Text.Json.Nodes.JsonArray coastArr && coastArr.Count >= 3) {
+        if (coastlineNode is System.Text.Json.Nodes.JsonArray coastArr) {
             coastline = new List<(float, float)>();
             foreach (var pt in coastArr) {
-                if (pt is System.Text.Json.Nodes.JsonArray pair && pair.Count >= 2) {
-                    coastline.Add((pair[0]!.GetValue<float>(), pair[1]!.GetValue<float>()));
-                }
+                if (pt is not System.Text.Json.Nodes.JsonArray pair || pair.Count < 2)
+                    throw new ArgumentException("Each coastline entry must be a 2+-element numeric array [x, y].");
+                coastline.Add((pair[0]!.GetValue<float>(), pair[1]!.GetValue<float>()));
             }
+            if (coastline.Count < 3)
+                throw new ArgumentException("coastline requires at least 3 valid points.");
         }
 
         var r = _engine.GenerateTerrain(seed, octaves, lacunarity, persistence, amplitude, coastline, autoPaint);
@@ -3475,10 +3636,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdAnalyzeLandblockPatterns(System.Text.Json.Nodes.JsonNode node) {
-        uint minX = node["minX"]?.GetValue<uint>() ?? 0;
-        uint minY = node["minY"]?.GetValue<uint>() ?? 0;
-        uint maxX = node["maxX"]?.GetValue<uint>() ?? 254;
-        uint maxY = node["maxY"]?.GetValue<uint>() ?? 254;
+        var (minX, minY, maxX, maxY) = LbWindow(node);
         string? outputPath = node["outputPath"]?.GetValue<string>();
 
         var r = _engine.AnalyzeLandblockPatterns(minX, minY, maxX, maxY, outputPath);
@@ -3536,10 +3694,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdExportTrainingData(System.Text.Json.Nodes.JsonNode node) {
-        uint minX = node["minX"]?.GetValue<uint>() ?? 0;
-        uint minY = node["minY"]?.GetValue<uint>() ?? 0;
-        uint maxX = node["maxX"]?.GetValue<uint>() ?? 254;
-        uint maxY = node["maxY"]?.GetValue<uint>() ?? 254;
+        var (minX, minY, maxX, maxY) = LbWindow(node);
         string? outputPath = node["outputPath"]?.GetValue<string>();
         int nearbyLimit = node["nearbyLimit"]?.GetValue<int>() ?? 5;
 
@@ -3554,10 +3709,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdExportRawWorldFacts(System.Text.Json.Nodes.JsonNode node) {
-        uint minX = node["minX"]?.GetValue<uint>() ?? 0;
-        uint minY = node["minY"]?.GetValue<uint>() ?? 0;
-        uint maxX = node["maxX"]?.GetValue<uint>() ?? 254;
-        uint maxY = node["maxY"]?.GetValue<uint>() ?? 254;
+        var (minX, minY, maxX, maxY) = LbWindow(node);
         string? outputPath = node["outputPath"]?.GetValue<string>();
         bool includeAceDb = node["includeAceDb"]?.GetValue<bool>() ?? false;
         bool includeLinks = node["includeLinks"]?.GetValue<bool>() ?? false;
@@ -3581,10 +3733,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdExportEnvCellComponents(System.Text.Json.Nodes.JsonNode node) {
-        uint minX = node["minX"]?.GetValue<uint>() ?? 0;
-        uint minY = node["minY"]?.GetValue<uint>() ?? 0;
-        uint maxX = node["maxX"]?.GetValue<uint>() ?? 254;
-        uint maxY = node["maxY"]?.GetValue<uint>() ?? 254;
+        var (minX, minY, maxX, maxY) = LbWindow(node);
         string? outputPath = node["outputPath"]?.GetValue<string>();
 
         var r = _engine.ExportEnvCellComponents(minX, minY, maxX, maxY, outputPath);
@@ -3634,6 +3783,7 @@ public class JsonCommandProcessor {
             populatedLandblocks = r.PopulatedLandblocks,
             elapsedMs = r.ElapsedMs,
             outputPath = r.OutputPath,
+            source = r.Source,
             error = r.Error });
     }
 
@@ -3702,6 +3852,15 @@ public class JsonCommandProcessor {
     private static int OptionalInt(System.Text.Json.Nodes.JsonNode node, string field, int fallback) =>
         node[field]?.GetValue<int>() ?? fallback;
 
+    // Reads an optional float that must be a positive finite number when present.
+    private static float PositiveFiniteFloat(System.Text.Json.Nodes.JsonNode node, string field, float fallback) {
+        var raw = node[field]?.GetValue<float>();
+        if (raw is null) return fallback;
+        if (!float.IsFinite(raw.Value) || raw.Value <= 0f)
+            throw new ArgumentException($"'{field}' must be a positive finite number; got {raw}");
+        return raw.Value;
+    }
+
     /// <summary>Reads a required int field; matches the F-helper "Missing 'field' field" convention.</summary>
     private static int RequiredInt(System.Text.Json.Nodes.JsonNode node, string field) =>
         node[field]?.GetValue<int>() ?? throw new ArgumentException($"Missing '{field}' field");
@@ -3712,6 +3871,25 @@ public class JsonCommandProcessor {
         if (lbX > 254) throw new ArgumentException($"'lbX' must be 0..254; got {lbX}");
         if (lbY > 254) throw new ArgumentException($"'lbY' must be 0..254; got {lbY}");
         return (lbX, lbY);
+    }
+
+    /// <summary>Validates a single landblock coordinate field is in 0..254 (rejects ushort LbKey wrap).</summary>
+    private static void ValidateLbCoord(string field, uint value) {
+        if (value > 254) throw new ArgumentException($"'{field}' must be 0..254; got {value}");
+    }
+
+    /// <summary>Reads + validates a minX/minY/maxX/maxY landblock window (each 0..254, min &lt;= max).</summary>
+    private static (uint minX, uint minY, uint maxX, uint maxY) LbWindow(
+        System.Text.Json.Nodes.JsonNode node, uint defMinX = 0, uint defMinY = 0, uint defMaxX = 254, uint defMaxY = 254) {
+        uint minX = node["minX"]?.GetValue<uint>() ?? defMinX;
+        uint minY = node["minY"]?.GetValue<uint>() ?? defMinY;
+        uint maxX = node["maxX"]?.GetValue<uint>() ?? defMaxX;
+        uint maxY = node["maxY"]?.GetValue<uint>() ?? defMaxY;
+        ValidateLbCoord("minX", minX); ValidateLbCoord("minY", minY);
+        ValidateLbCoord("maxX", maxX); ValidateLbCoord("maxY", maxY);
+        if (minX > maxX) throw new ArgumentException($"'minX' ({minX}) must be <= 'maxX' ({maxX})");
+        if (minY > maxY) throw new ArgumentException($"'minY' ({minY}) must be <= 'maxY' ({maxY})");
+        return (minX, minY, maxX, maxY);
     }
 
     /// <summary>Reads a 32-bit hex field, accepting case-insensitive 0x prefix and trimming whitespace.</summary>
@@ -3728,6 +3906,29 @@ public class JsonCommandProcessor {
         if (!uint.TryParse(trimmed, System.Globalization.NumberStyles.HexNumber,
                 System.Globalization.CultureInfo.InvariantCulture, out var v))
             throw new ArgumentException($"'{field}' is not a valid 32-bit hex value; got \"{raw}\"");
+        return v;
+    }
+
+    /// <summary>Reads a ushort field: 0x-prefixed string is hex, plain string is decimal, JSON number is decimal. Names the field on error.</summary>
+    private static ushort HexOrDecU16(System.Text.Json.Nodes.JsonNode node, string field) {
+        var jv = node[field] ?? throw new ArgumentException($"Missing '{field}' field");
+        if (jv.GetValueKind() == System.Text.Json.JsonValueKind.Number) {
+            var n = jv.GetValue<long>();
+            if (n < 0 || n > 0xFFFF)
+                throw new ArgumentException($"'{field}' must be in 0..0xFFFF; got {n}");
+            return (ushort)n;
+        }
+        string raw;
+        try { raw = jv.GetValue<string>(); }
+        catch (InvalidOperationException) {
+            throw new ArgumentException($"'{field}' must be a number or hex string like \"0x0100\"");
+        }
+        var trimmed = raw.Trim();
+        bool hex = trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase);
+        var body = hex ? trimmed.Substring(2) : trimmed;
+        var style = hex ? System.Globalization.NumberStyles.HexNumber : System.Globalization.NumberStyles.Integer;
+        if (!ushort.TryParse(body, style, System.Globalization.CultureInfo.InvariantCulture, out var v))
+            throw new ArgumentException($"'{field}' is not a valid 16-bit value; got \"{raw}\"");
         return v;
     }
 
@@ -3856,7 +4057,7 @@ public class JsonCommandProcessor {
             totalDecorationsPlaced = r.TotalDecorationsPlaced,
             totalRoadVertices = r.TotalRoadVertices,
             towns = r.Towns,
-            outputPath = r.OutputPath, error = r.Error });
+            outputPath = r.OutputPath, error = r.Error, warnings = r.Warnings });
     }
 
     private string CmdWorldGenAnalyzeBuildings(System.Text.Json.Nodes.JsonNode node) {
@@ -3880,7 +4081,7 @@ public class JsonCommandProcessor {
     // ════════════════════════════════════════════════════
 
     private string CmdWeenieSnapshot(System.Text.Json.Nodes.JsonNode node) {
-        uint classId = U(node, "classId");
+        uint classId = ParseUintField(node, "classId");
         bool full = node["full"]?.GetValue<bool>() ?? false;
         var r = _engine.WeenieSnapshotAsync(classId).GetAwaiter().GetResult();
         if (!r.Success)
@@ -3912,6 +4113,7 @@ public class JsonCommandProcessor {
                 counts = new { ints = t.IntCount, int64s = t.Int64Count, bools = t.BoolCount,
                     floats = t.FloatCount, strings = t.StringCount,
                     dataIds = t.DataIdCount, instanceIds = t.InstanceIdCount } }).ToArray(),
+            warnings = r.Warnings,
             error = r.Error });
     }
 
@@ -3920,12 +4122,13 @@ public class JsonCommandProcessor {
             ?? throw new ArgumentException("Missing 'bundlePath' field");
         var templateId = node["templateId"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'templateId' field");
-        uint classId = U(node, "classId");
+        uint classId = ParseUintField(node, "classId");
         var r = _engine.WeenieTemplateApplyAsync(bundlePath, templateId, classId).GetAwaiter().GetResult();
         return Serialize(new { success = r.Success, command = "weenie-template-apply",
             bundlePath = r.BundlePath, templateId = r.TemplateId, classId = r.ClassId,
             scalarsApplied = r.ScalarsApplied,
             merged = r.Merged, totalScalarsAfter = r.TotalScalarsAfter, weenieTypeChanged = r.WeenieTypeChanged,
+            warnings = r.Warnings,
             error = r.Error });
     }
 
@@ -3934,7 +4137,7 @@ public class JsonCommandProcessor {
     // ════════════════════════════════════════════════════
 
     private string CmdObjExport(System.Text.Json.Nodes.JsonNode node) {
-        uint datId = U(node, "datId");
+        uint datId = ParseUintField(node, "datId");
         var outputPath = node["outputPath"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'outputPath' field");
         var r = _engine.ObjExport(datId, outputPath);
@@ -3947,9 +4150,9 @@ public class JsonCommandProcessor {
     private string CmdObjImport(System.Text.Json.Nodes.JsonNode node) {
         var objPath = node["objPath"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'objPath' field");
-        uint surfaceDid = U(node, "surfaceDid");
-        uint gfxObjId = node["gfxObjId"] != null ? U(node, "gfxObjId") : 0;
-        uint setupId = node["setupId"] != null ? U(node, "setupId") : 0;
+        uint surfaceDid = ParseUintField(node, "surfaceDid");
+        uint gfxObjId = node["gfxObjId"] != null ? ParseUintField(node, "gfxObjId") : 0;
+        uint setupId = node["setupId"] != null ? ParseUintField(node, "setupId") : 0;
         var r = _engine.ObjImport(objPath, surfaceDid, gfxObjId, setupId);
         return Serialize(new { success = r.Success, command = "obj-import",
             gfxObjId = $"0x{r.GfxObjId:X8}", setupId = $"0x{r.SetupId:X8}",
@@ -4029,7 +4232,14 @@ public class JsonCommandProcessor {
         // Touched-only is not enough — a batch that creates a new dungeon doc
         // (no pre-snapshot, so it lands in DocumentsCreated, not DocumentsTouched)
         // would otherwise leave that LB's tile stale.
-        if (result.Success && result.Status == "committed") {
+        // F219: gate on Status=="committed" && OpsApplied>0, NOT result.Success.
+        // With rollback_on_fail:false, a batch that fails partway leaves Status
+        // "committed" / Success false while the ops that ran before the failure ARE
+        // permanently applied (and their diffs retained). Keying off Success skipped
+        // tile invalidation for those real mutations, so get-tile served stale,
+        // pre-edit imagery. Any committed batch that actually applied ops must dirty
+        // its tiles.
+        if (result.Status == "committed" && result.Journal.OpsApplied > 0) {
             try {
                 var dirtyDocs = result.Journal.DocumentsTouched
                     .Concat(result.Journal.DocumentsCreated)
@@ -4434,14 +4644,14 @@ public class JsonCommandProcessor {
         var zoom = node["zoom"]?.GetValue<string>() ?? "lb";
         bool includeBase64 = node["includeBase64"]?.GetValue<bool>() ?? false;
         TileEntry entry;
-        if (zoom == "lb") {
-            uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        if (string.Equals(zoom, "lb", StringComparison.OrdinalIgnoreCase)) {
+            var (lbX, lbY) = Lb(node);
             entry = _engine.GetLbTile(lbX, lbY);
-        } else if (zoom == "region") {
+        } else if (string.Equals(zoom, "region", StringComparison.OrdinalIgnoreCase)) {
             var region = node["region"]?.GetValue<string>()
                 ?? throw new ArgumentException("Missing 'region' field for zoom=region");
             entry = _engine.GetRegionTile(region);
-        } else if (zoom == "world") {
+        } else if (string.Equals(zoom, "world", StringComparison.OrdinalIgnoreCase)) {
             entry = _engine.GetWorldTile();
         } else {
             return Serialize(new { success = false, command = "get-tile",
@@ -4472,7 +4682,7 @@ public class JsonCommandProcessor {
     private string CmdRegenerateDirtyTiles() {
         var (n, bytes, errors) = _engine.RegenerateDirtyTiles();
         return Serialize(new {
-            success = true, command = "regenerate-dirty-tiles",
+            success = errors.Count == 0, command = "regenerate-dirty-tiles",
             regenerated = n, bytesWritten = bytes,
             errorCount = errors.Count, errors = errors.Take(10).ToArray(),
         });
@@ -4496,10 +4706,17 @@ public class JsonCommandProcessor {
         int? keepNewest = node["keepNewest"]?.GetValue<int>();
         DateTime? olderThan = null;
         var olderStr = node["olderThan"]?.GetValue<string>();
-        if (!string.IsNullOrEmpty(olderStr) && DateTime.TryParse(olderStr, out var dt)) olderThan = dt;
+        if (!string.IsNullOrEmpty(olderStr)) {
+            if (!DateTime.TryParse(olderStr, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                    out var dt))
+                throw new ArgumentException("olderThan must be an ISO-8601 timestamp");
+            olderThan = dt;
+        }
         var r = _engine.PruneTiles(keepNewest, olderThan);
         return Serialize(new {
             success = true, command = "prune-tiles",
+            olderThanResolved = olderThan?.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
             evicted = r.Evicted, bytesFreed = r.BytesFreed,
             remainingCount = r.RemainingCount, remainingBytes = r.RemainingBytes,
         });
@@ -4510,6 +4727,8 @@ public class JsonCommandProcessor {
         //        all (everything). Defaults to listed LBs only — eager full-world generation
         //        is opt-in to avoid surprise disk usage.
         var mode = node["mode"]?.GetValue<string>() ?? "lbs";
+        if (mode != "lbs" && mode != "regions" && mode != "world" && mode != "all")
+            throw new ArgumentException($"'mode' must be one of lbs, regions, world, all; got '{mode}'");
         int generated = 0, skipped = 0;
         long bytes = 0;
         var errors = new List<string>();
@@ -4530,9 +4749,16 @@ public class JsonCommandProcessor {
             var lbList = node["lbList"] as System.Text.Json.Nodes.JsonArray;
             List<(uint, uint)> lbs;
             if (lbList != null) {
-                lbs = lbList.Where(e => e is System.Text.Json.Nodes.JsonObject)
-                    .Select(e => ((uint)e!["lbX"]!.GetValue<int>(), (uint)e["lbY"]!.GetValue<int>()))
-                    .ToList();
+                lbs = new List<(uint, uint)>(lbList.Count);
+                for (int i = 0; i < lbList.Count; i++) {
+                    if (lbList[i] is not System.Text.Json.Nodes.JsonObject obj)
+                        throw new ArgumentException($"'lbList[{i}]' must be an object with lbX/lbY");
+                    int lx = obj["lbX"]?.GetValue<int>() ?? throw new ArgumentException($"'lbList[{i}].lbX' is required");
+                    int ly = obj["lbY"]?.GetValue<int>() ?? throw new ArgumentException($"'lbList[{i}].lbY' is required");
+                    if (lx < 0 || lx > 254) throw new ArgumentException($"'lbList[{i}].lbX' must be 0..254; got {lx}");
+                    if (ly < 0 || ly > 254) throw new ArgumentException($"'lbList[{i}].lbY' must be 0..254; got {ly}");
+                    lbs.Add(((uint)lx, (uint)ly));
+                }
             } else if (mode == "all") {
                 lbs = new List<(uint, uint)>();
                 for (uint x = 0; x < 256; x++) for (uint y = 0; y < 256; y++) lbs.Add((x, y));
@@ -4580,8 +4806,13 @@ public class JsonCommandProcessor {
         if (lbIds.Count == 0)
             throw new ArgumentException("Missing 'lbIds' (array) or 'lbId' (scalar)");
         var r = _engine.CellPortalGraphSweep(datPath, lbIds);
+        // `success` = the sweep RAN to completion (a reflection/DRW-drift
+        // failure throws and is reported via the error envelope). `clean` =
+        // the graph has no orphans / asymmetric / unresolved findings, so
+        // callers can distinguish "command worked" from "content is clean".
         return Serialize(new {
-            success = r.OrphanedCellCount == 0 && r.AsymmetricPortalCount == 0,
+            success = true,
+            clean = r.OrphanedCellCount == 0 && r.AsymmetricPortalCount == 0 && r.UnresolvedTargetCount == 0,
             command = "cell-portal-graph-sweep",
             datPath = r.DatPath,
             datSha256 = r.DatSha256,
@@ -4590,6 +4821,7 @@ public class JsonCommandProcessor {
             portalCount = r.PortalCount,
             orphanedCellCount = r.OrphanedCellCount,
             asymmetricPortalCount = r.AsymmetricPortalCount,
+            unresolvedTargetCount = r.UnresolvedTargetCount,
             source = r.Source,
             perLb = r.PerLb.Select(lb => new {
                 lbHex = lb.LbHex,
@@ -4597,6 +4829,7 @@ public class JsonCommandProcessor {
                 portalCount = lb.PortalCount,
                 orphanedCellCount = lb.OrphanedCellCount,
                 asymmetricPortalCount = lb.AsymmetricPortalCount,
+                unresolvedTargetCount = lb.UnresolvedTargetCount,
                 orphanedCells = lb.OrphanedCells,
                 asymmetricPortals = lb.AsymmetricPortals.Select(a => new {
                     fromCellHex = a.FromCellHex,
@@ -4612,7 +4845,7 @@ public class JsonCommandProcessor {
     private string CmdPvsVisibilitySnapshot(System.Text.Json.Nodes.JsonNode node) {
         string? datPath = node["datPath"]?.GetValue<string>();
         var cellNode = node["cellId"] ?? throw new ArgumentException("Missing 'cellId'");
-        uint cellId = ParseLbIdScalar(cellNode);
+        uint cellId = ParseCellIdScalarStrict(cellNode);
         int bfsDepth = node["bfsDepth"]?.GetValue<int>() ?? 1;
         // Wave-5.A — optional `out` writes the oracle JSON to disk for
         // the wire-agent's __diag.pvs.diff() consumption. Convention:
@@ -4620,8 +4853,21 @@ public class JsonCommandProcessor {
         // as dump-lb-expectations.
         string outPath = node["out"]?.GetValue<string>() ?? "";
         var r = _engine.PvsVisibilitySnapshot(datPath, cellId, bfsDepth);
+        if (!r.Found) {
+            return Serialize(new {
+                success = false,
+                found = false,
+                command = "pvs-visibility-snapshot",
+                cellHex = r.CellHex,
+                cellId = r.CellId,
+                bfsDepth = r.BfsDepth,
+                error = $"cell {r.CellHex} not found in cell DAT; the BFS root is absent (a typo'd or short-form cellId would land here)",
+                source = r.Source,
+            });
+        }
         return Serialize(new {
             success = true,
+            found = true,
             command = "pvs-visibility-snapshot",
             cellHex = r.CellHex,
             cellId = r.CellId,
@@ -4637,20 +4883,71 @@ public class JsonCommandProcessor {
     }
 
     /// <summary>
-    /// Permissively parse an LB or cell ID from a JSON scalar. Accepts
-    /// "0xA9B40000" hex strings (full), "0xa9b4" short LB hex (widened by &lt;&lt;16),
-    /// or decimal numbers. Used by Wave-5.A dispatch wrappers.
+    /// Permissively parse an LB-high ID from a JSON scalar. Accepts
+    /// "0xA9B40000" hex strings (full), "0xa9b4" short LB hex, the
+    /// zero-padded "0x0000A9B4" form, and decimal numbers (e.g. 43444).
+    /// Any value with <c>0 &lt; v &lt;= 0xFFFF</c> is treated as a short
+    /// LB-high word and widened by &lt;&lt;16, regardless of how it was
+    /// spelled; values &gt; 0xFFFF are already full IDs. Used for the
+    /// <c>cell-portal-graph-sweep</c> lbIds and the chunk-command ranges.
+    /// NOTE: per F173 the pvs <c>cellId</c> argument does NOT use this
+    /// widening — see <see cref="ParseCellIdScalarStrict"/>.
     /// </summary>
     private static uint ParseLbIdScalar(System.Text.Json.Nodes.JsonNode entry) {
+        uint v = ParseUInt32Scalar(entry);
+        if (v != 0u && v <= 0xFFFFu) v <<= 16;
+        return v;
+    }
+
+    /// <summary>
+    /// Parse a full 32-bit cell ID from a JSON scalar WITHOUT the short-form
+    /// &lt;&lt;16 widening (F173). The pvs snapshot needs a precise cell ID:
+    /// a typo'd or short-form value must fail loudly rather than silently
+    /// widen into a bogus LB id. Rejects ≤4-digit hex strings, negative
+    /// numerics, and any value whose low word is 0x0000/0xFFFE/0xFFFF
+    /// (LandBlock/LandBlockInfo/landblock suffixes, never an EnvCell).
+    /// </summary>
+    private static uint ParseCellIdScalarStrict(System.Text.Json.Nodes.JsonNode entry) {
         var kind = entry.GetValueKind();
         if (kind == System.Text.Json.JsonValueKind.String) {
             var s = entry.GetValue<string>().Trim();
             if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {
                 var hex = s.Substring(2);
-                var v = Convert.ToUInt32(hex, 16);
-                if (v <= 0xFFFFu && hex.Length <= 4) v <<= 16;
-                return v;
+                if (hex.Length <= 4)
+                    throw new ArgumentException($"cellId '{s}' is a short-form hex word; supply a full 32-bit cell ID (e.g. 0xA9B40100)");
+                var hv = Convert.ToUInt32(hex, 16);
+                ValidateCellLowWord(hv);
+                return hv;
             }
+            long parsed = long.Parse(s);
+            if (parsed < 0) throw new ArgumentException($"cellId '{s}' must be non-negative");
+            uint dv = checked((uint)parsed);
+            ValidateCellLowWord(dv);
+            return dv;
+        }
+        long lv = entry.GetValue<long>();
+        if (lv < 0) throw new ArgumentException("cellId must be non-negative");
+        uint v = checked((uint)lv);
+        ValidateCellLowWord(v);
+        return v;
+    }
+
+    private static void ValidateCellLowWord(uint cellId) {
+        ushort low = (ushort)(cellId & 0xFFFFu);
+        if (low == 0x0000 || low == 0xFFFE || low == 0xFFFF)
+            throw new ArgumentException($"cellId 0x{cellId:X8} has low word 0x{low:X4}, which is a LandBlock/LandBlockInfo suffix, never an EnvCell; supply a full cell ID (suffix 0x0100..0xFFFD)");
+    }
+
+    /// <summary>
+    /// Parse a uint32 from a JSON scalar (hex string, decimal string, or
+    /// numeric) with no LB widening. Shared by <see cref="ParseLbIdScalar"/>.
+    /// </summary>
+    private static uint ParseUInt32Scalar(System.Text.Json.Nodes.JsonNode entry) {
+        var kind = entry.GetValueKind();
+        if (kind == System.Text.Json.JsonValueKind.String) {
+            var s = entry.GetValue<string>().Trim();
+            if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                return Convert.ToUInt32(s.Substring(2), 16);
             return uint.Parse(s);
         }
         return (uint)entry.GetValue<long>();
@@ -4964,8 +5261,7 @@ public class JsonCommandProcessor {
     // ─────────────────────────────────────────────────────────────────
 
     private string CmdAssetRefs(System.Text.Json.Nodes.JsonNode node) {
-        string id = node["id"]?.GetValue<string>()
-            ?? throw new ArgumentException("Missing 'id' field");
+        string id = ParseIdFieldToHex(node["id"]);
         string? datPath = node["datPath"]?.GetValue<string>();
         var r = _engine.AssetRefs(id, datPath);
         return Serialize(new {
@@ -4980,8 +5276,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdAssetUsedBy(System.Text.Json.Nodes.JsonNode node) {
-        string id = node["id"]?.GetValue<string>()
-            ?? throw new ArgumentException("Missing 'id' field");
+        string id = ParseIdFieldToHex(node["id"]);
         bool transitive = node["transitive"]?.GetValue<bool>() ?? false;
         string? datPath = node["datPath"]?.GetValue<string>();
         var r = _engine.AssetUsedBy(id, transitive, datPath);
@@ -5007,7 +5302,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdSurfaceFingerprint(System.Text.Json.Nodes.JsonNode node) {
-        string? id = node["id"]?.GetValue<string>();
+        string? id = node["id"] != null ? ParseIdFieldToHex(node["id"]) : null;
         Dictionary<string, string>? match = null;
         if (node["match"] is System.Text.Json.Nodes.JsonObject matchObj) {
             match = new Dictionary<string, string>();
@@ -5094,14 +5389,7 @@ public class JsonCommandProcessor {
         float x = node["x"]?.GetValue<float>() ?? throw new ArgumentException("Missing 'x'");
         float y = node["y"]?.GetValue<float>() ?? throw new ArgumentException("Missing 'y'");
         float z = node["z"]?.GetValue<float>() ?? throw new ArgumentException("Missing 'z'");
-        System.Numerics.Quaternion? orientation = null;
-        if (node["qw"] != null) {
-            orientation = new System.Numerics.Quaternion(
-                node["qx"]?.GetValue<float>() ?? 0f,
-                node["qy"]?.GetValue<float>() ?? 0f,
-                node["qz"]?.GetValue<float>() ?? 0f,
-                node["qw"]!.GetValue<float>());
-        }
+        var orientation = ParseQuaternion(node);
         var r = _engine.CopyBuilding(fromDat, srcLbX, srcLbY, buildingIndex, dstLbX, dstLbY, x, y, z, orientation);
         return Serialize(new {
             success = true,
@@ -5232,6 +5520,14 @@ public class JsonCommandProcessor {
     private string CmdDiagStatus() {
         try {
             var r = _engine.DiagStatus();
+            if (!string.IsNullOrEmpty(r.DriverError)) {
+                return Serialize(new {
+                    success = false,
+                    command = "diag-status",
+                    aggregateJsonPath = r.AggregateJsonPath,
+                    error = r.DriverError,
+                });
+            }
             return Serialize(new {
                 success = true,
                 command = "diag-status",
@@ -5275,10 +5571,10 @@ public class JsonCommandProcessor {
     // ─────────────────────────────────────────────────────────────────
 
     private string CmdMeshVsObjExportChunk(System.Text.Json.Nodes.JsonNode node) {
-        uint startId = ParseLbIdScalar(node["startId"]
-            ?? throw new ArgumentException("Missing 'startId' field"));
-        uint endId = ParseLbIdScalar(node["endId"]
-            ?? throw new ArgumentException("Missing 'endId' field"));
+        // F136: startId/endId are FILE ids (0x01/0x02 prefixes), not landblock
+        // keys — parse without the ParseLbIdScalar <<16 short-form widening.
+        uint startId = ParseUIntField(node, "startId");
+        uint endId = ParseUIntField(node, "endId");
         string? datPath = node["datPath"]?.GetValue<string>();
         string? cacheRoot = node["cacheRoot"]?.GetValue<string>();
         bool fastMode = node["fastMode"]?.GetValue<bool>() ?? false;
@@ -5288,7 +5584,7 @@ public class JsonCommandProcessor {
             fastIds = new System.Collections.Generic.List<uint>(idsArr.Count);
             foreach (var entry in idsArr) {
                 if (entry == null) continue;
-                fastIds.Add(ParseLbIdScalar(entry));
+                fastIds.Add(ParseUInt32Scalar(entry));
             }
         }
         var r = _engine.MeshVsObjExportChunk(startId, endId, datPath, cacheRoot, fastMode, fastIds);
@@ -5370,9 +5666,11 @@ public class JsonCommandProcessor {
         string? datPath = node["datPath"]?.GetValue<string>();
         var r = _engine.MotionTableAnimHooks(motionTableId, datPath);
         return Serialize(new {
-            success = true,
+            success = r.Found,
             command = "motion-table-anim-hooks",
             motionTableId = $"0x{r.MotionTableId:X8}",
+            found = r.Found,
+            failureReason = r.FailureReason,
             cycleCount = r.CycleCount,
             modifierCount = r.ModifierCount,
             linkCount = r.LinkCount,
@@ -5472,6 +5770,7 @@ public class JsonCommandProcessor {
                 chunkCount = r.ChunkCount,
                 completedChunks = r.CompletedChunks,
                 inFlightChunks = r.InFlightChunks,
+                unreadableChunks = r.UnreadableChunks,
                 failedChunks = r.FailedChunks,
                 cacheHitCount = r.CacheHitCount,
                 cacheMissCount = r.CacheMissCount,
@@ -5497,7 +5796,8 @@ public class JsonCommandProcessor {
         bool reset = node["reset"]?.GetValue<bool>() ?? false;
         var r = _engine.Wave4Sweep(mode, target, concurrency, reset);
         return Serialize(new {
-            success = string.IsNullOrEmpty(r.DriverError) && r.FailedChunks == 0,
+            success = string.IsNullOrEmpty(r.DriverError) && r.ExitCode == 0
+                && r.FailedChunks == 0 && r.InfraChunks == 0,
             command = "wave4-sweep",
             sweepReportJsonPath = r.SweepReportJsonPath,
             summaryMarkdownPath = r.SummaryMarkdownPath,

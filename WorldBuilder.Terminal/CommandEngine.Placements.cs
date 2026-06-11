@@ -34,6 +34,22 @@ public partial class CommandEngine {
             .ToList();
     }
 
+    /// <summary>
+    /// F165 — load EVERY persisted dungeon_ document into ActiveDocs so a dungeon placement persisted in
+    /// an earlier session (and never re-opened this session) is visible to placement-list / -export-sql.
+    /// Enumerating only ActiveDocs silently OMITS those rows. Unions storage ids with ActiveDocs via
+    /// GetOrCreateDocumentAsync (which is a no-op for already-loaded docs).
+    /// </summary>
+    private void EnsureAllDungeonDocsLoaded(WorldBuilder.Shared.Models.Project project) {
+        var ids = project.DocumentManager.DocumentStorageService
+            .ListDocumentIdsAsync("dungeon_").GetAwaiter().GetResult();
+        foreach (var id in ids) {
+            project.DocumentManager
+                .GetOrCreateDocumentAsync<DungeonDocument>(id)
+                .GetAwaiter().GetResult();
+        }
+    }
+
     public PlacementListResult PlacementList(int? lbX, int? lbY, string kindFilter) {
         RequireProject();
         var project = _projectManager.CurrentProject!;
@@ -61,6 +77,8 @@ public partial class CommandEngine {
 
         var dungeon = new List<PlacementListRow>();
         if (wantsDungeon) {
+            // F165: pull in dungeon docs persisted in earlier sessions so none are silently omitted.
+            EnsureAllDungeonDocsLoaded(project);
             // F164: report a FLATTENED GLOBAL index over the deterministically-ordered doc sequence
             // (the same order placement-remove / -set-scope address), so the index the caller sees is
             // the index they can act on — even with the landblock filter applied (the global counter
@@ -230,6 +248,10 @@ public partial class CommandEngine {
         // placement model (PR3); ClassDefault → world weenie_properties_*, PlacementOverride → shard
         // biota_properties_*. Keep a back-reference to the source model so a MINTED guid can be
         // written back onto it (stable addressable key across sessions/round-trips).
+        // F165: load EVERY persisted dungeon_ doc before building the source-of-truth set, else a
+        // dungeon placement persisted in an earlier session is silently OMITTED from the SQL export.
+        EnsureAllDungeonDocsLoaded(project);
+
         var enriched = new List<EnrichedPlacement>();
         var sourceOutdoor = new Dictionary<EnrichedPlacement, OutdoorInstancePlacement>();
         var sourceDungeon = new Dictionary<EnrichedPlacement, DungeonInstancePlacement>();
@@ -309,7 +331,12 @@ public partial class CommandEngine {
         // every landblock_instance row idempotent (static guid ⇒ GenerateInsertSql emits DELETE+INSERT)
         // and stable across re-exports. Seeds `used` from already-minted project guids and, on --apply,
         // from the live DB's existing landblock_instance guids for each touched landblock.
-        await MintStaticGuidsForAllPlacementsAsync(project, enriched, sourceOutdoor, sourceDungeon, apply);
+        // F169: on dryRun, mint into the in-memory EnrichedPlacement copies ONLY — pass empty source
+        // maps so NO minted guid is written back onto the project models and the project is NOT saved.
+        // A preview must never permanently mutate the project JSON.
+        var mintOutdoor = dryRun ? new Dictionary<EnrichedPlacement, OutdoorInstancePlacement>() : sourceOutdoor;
+        var mintDungeon = dryRun ? new Dictionary<EnrichedPlacement, DungeonInstancePlacement>() : sourceDungeon;
+        await MintStaticGuidsForAllPlacementsAsync(project, enriched, mintOutdoor, mintDungeon, apply);
 
         // E1 (wave-2) PR3: MINT/THREAD the per-placement (Option B) static guids — Build writes each
         // resolved guid back onto its source EnrichedPlacement.Guid. Option-B placements already carry
@@ -326,13 +353,16 @@ public partial class CommandEngine {
 
         // Propagate the minted/threaded guids back onto the live placement models so the editor
         // session keeps the stable addressable key (and a project Save persists it).
+        // F169: skip the write-back + Save entirely on dryRun (a preview must not persist minted guids).
         bool anyMinted = false;
-        foreach (var e in enriched) {
-            if (e.Guid is not { } g) continue;
-            if (sourceOutdoor.TryGetValue(e, out var op) && op.Guid != g) { op.Guid = g; anyMinted = true; }
-            if (sourceDungeon.TryGetValue(e, out var dp) && dp.Guid != g) { dp.Guid = g; anyMinted = true; }
+        if (!dryRun) {
+            foreach (var e in enriched) {
+                if (e.Guid is not { } g) continue;
+                if (sourceOutdoor.TryGetValue(e, out var op) && op.Guid != g) { op.Guid = g; anyMinted = true; }
+                if (sourceDungeon.TryGetValue(e, out var dp) && dp.Guid != g) { dp.Guid = g; anyMinted = true; }
+            }
+            if (anyMinted) project.Save();
         }
-        if (anyMinted) project.Save();
 
         // Now write the world placement directives — they carry the threaded guids (PR3) — and the
         // JSONL (which records the minted guids). The JSONL is written AFTER minting so the recorded
@@ -508,8 +538,11 @@ public partial class CommandEngine {
     /// </summary>
     private (int OutdoorCount, string OutdoorSql, string DungeonSql, int DungeonCount) WritePlacementDirectives(
         WorldBuilder.Shared.Models.Project project, string outdoorPath, string dungeonPath) {
+        // F168: target the CONFIGURED world DB, not the hardcoded literal `ace_world`, so the
+        // landblock_instance INSERTs and the enrichment SQL hit the SAME database.
+        string db = project.AceDb?.Database is { Length: > 0 } d ? d : "ace_world";
         var outdoorRecords = AceDbConnector.ToLandblockInstanceRecordsFromOutdoor(project.OutdoorInstancePlacements);
-        var outdoorSql = AceDbConnector.GenerateInsertSqlBatch(outdoorRecords);
+        var outdoorSql = AceDbConnector.GenerateInsertSqlBatch(outdoorRecords, db);
         File.WriteAllText(outdoorPath, outdoorSql);
 
         int dungeonCount = 0;
@@ -521,7 +554,7 @@ public partial class CommandEngine {
             if (dng.InstancePlacements.Count == 0) continue;
             var records = AceDbConnector.ToLandblockInstanceRecords(dng.LandblockKey, dng.InstancePlacements);
             dungeonSqlBuilder.AppendLine($"-- Landblock 0x{dng.LandblockKey:X4} ({records.Count} placements)");
-            dungeonSqlBuilder.AppendLine(AceDbConnector.GenerateInsertSqlBatch(records));
+            dungeonSqlBuilder.AppendLine(AceDbConnector.GenerateInsertSqlBatch(records, db));
             dungeonCount += records.Count;
         }
         var dungeonSql = dungeonSqlBuilder.ToString();

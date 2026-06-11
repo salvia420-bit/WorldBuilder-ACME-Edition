@@ -28,8 +28,13 @@ public partial class CommandEngine {
 
     public async Task<SpellListResult> SpellListAsync(int limit, string source) {
         RequireProject();
-        var rows = new List<SpellListRow>();
+        if (limit < 1)
+            throw new ArgumentException($"limit must be >= 1 (got {limit}).");
         bool fromDb = source.Equals("db", StringComparison.OrdinalIgnoreCase);
+        bool fromDat = source.Equals("dat", StringComparison.OrdinalIgnoreCase);
+        if (!fromDb && !fromDat)
+            throw new ArgumentException($"source must be 'dat' or 'db' (got '{source}').");
+        var rows = new List<SpellListRow>();
 
         if (fromDb) {
             var settings = _projectManager.CurrentProject!.AceDb;
@@ -39,7 +44,7 @@ public partial class CommandEngine {
             await using var conn = new MySqlConnection(settings.ConnectionString);
             await conn.OpenAsync();
             await using var cmd = new MySqlCommand(
-                $"SELECT id, name FROM spell ORDER BY id DESC LIMIT {Math.Max(1, limit)}", conn);
+                $"SELECT id, name FROM spell ORDER BY id DESC LIMIT {limit}", conn);
             await using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync()) {
                 uint sid = reader.GetUInt32(0);
@@ -64,7 +69,7 @@ public partial class CommandEngine {
 
             var doc = GetSpellDbDoc();
             rows = table.Spells.OrderByDescending(kv => kv.Key)
-                .Take(Math.Max(1, limit))
+                .Take(limit)
                 .Select(kv => new SpellListRow(
                     SpellId: $"0x{kv.Key:X8}",
                     Name: kv.Value?.Name,
@@ -118,7 +123,7 @@ public partial class CommandEngine {
     public async Task<SpellSaveResult> SpellSaveAsync(uint id, string? jsonPath) {
         RequireProject();
         if (string.IsNullOrEmpty(jsonPath))
-            throw new ArgumentException("--from-json <path> is required for spell save.");
+            throw new ArgumentException("Missing 'fromJson' field (path to a SpellRecord JSON file).");
         if (!File.Exists(jsonPath))
             throw new FileNotFoundException($"JSON file not found: {jsonPath}", jsonPath);
 
@@ -196,6 +201,10 @@ public partial class CommandEngine {
     public async Task<SpellDeleteResult> SpellDeleteAsync(uint id) {
         RequireProject();
         var doc = GetSpellDbDoc();
+
+        // F208(a): report whether an overlay entry actually existed and was removed, so the caller can
+        // tell a real removal from a no-op (Remove is idempotent and silent on a missing id).
+        bool removedFromOverlay = doc.TryGet(id, out _);
         doc.Remove(id);
 
         bool deletedFromDb = false;
@@ -206,12 +215,16 @@ public partial class CommandEngine {
                 var rows = await connector.ExecuteSqlAsync($"DELETE FROM spell WHERE id = {id}");
                 deletedFromDb = rows > 0;
             }
-            catch (MySqlException) {
-                deletedFromDb = false;
+            catch (MySqlException ex) {
+                // F208(b): a DB error (dead connection, permissions) must not collapse into
+                // deletedFromDb:false — which strictly means "no matching row". Surface it as an error
+                // so the agent can tell a failure from an absent row.
+                throw new AceDbException(
+                    $"ACE DB error deleting spell 0x{id:X8}: {ex.Message}", ex);
             }
         }
 
-        return new SpellDeleteResult(true, $"0x{id:X8}", true, deletedFromDb);
+        return new SpellDeleteResult(true, $"0x{id:X8}", removedFromOverlay, deletedFromDb);
     }
 
     private async Task<uint> AllocateNextSpellIdAsync() {

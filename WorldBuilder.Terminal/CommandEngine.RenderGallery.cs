@@ -77,6 +77,13 @@ public partial class CommandEngine {
             int radius = 1, int resolution = 1536,
             bool useSprites = true, bool overlay = true) {
         RequireProject();
+        // Validate the per-pick render arguments up front so a bad radius /
+        // resolution fails the whole command instead of silently making every
+        // pick throw (mirrors the RenderPreview bounds).
+        if (radius < 0) throw new ArgumentException("radius must be >= 0");
+        if (radius > 16) throw new ArgumentException("radius must be <= 16 (33x33 LBs)");
+        if (resolution < 64 || resolution > 8192)
+            throw new ArgumentException("resolution must be in [64, 8192]");
         try {
             Directory.CreateDirectory(outDir);
             var rendersDir = Path.Combine(outDir, "renders");
@@ -101,6 +108,7 @@ public partial class CommandEngine {
             }
 
             var picksInfo = new List<RenderGalleryPickInfo>();
+            var failures = new List<RenderGalleryFailure>();
             int totalSpawnCount = 0;
             var coveredLbs = new HashSet<ushort>();
 
@@ -122,6 +130,7 @@ public partial class CommandEngine {
                     renderedCount = renderResult.ObjectCount;
                 } catch (Exception ex) {
                     Console.Error.WriteLine($"[RenderGallery] Render failed for {slug}: {ex.Message}");
+                    failures.Add(new RenderGalleryFailure(slug, $"0x{pick.LbKey:X4}", ex.Message));
                     // Skip describe too if render fails — the pick is unusable.
                     continue;
                 }
@@ -187,7 +196,9 @@ public partial class CommandEngine {
                 OutDir: outDir,
                 IndexPath: indexPath,
                 ManifestPath: manifestPath,
-                Picks: picksInfo);
+                Picks: picksInfo,
+                Error: null,
+                Failures: failures.Count > 0 ? failures : null);
         } catch (Exception ex) {
             return new RenderGalleryResult(false, 0, 0, 0, outDir, "", "", new(), ex.Message);
         }
@@ -358,7 +369,11 @@ public partial class CommandEngine {
         // traversal even when the OS strips redundant separators.
         var rel = urlPath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
         var resolved = Path.GetFullPath(Path.Combine(rootFull, rel));
-        if (!resolved.StartsWith(rootFull, StringComparison.Ordinal)) {
+        var rootPrefix = rootFull.EndsWith(Path.DirectorySeparatorChar)
+            ? rootFull
+            : rootFull + Path.DirectorySeparatorChar;
+        if (!resolved.StartsWith(rootPrefix, StringComparison.Ordinal) &&
+            !string.Equals(resolved, rootFull, StringComparison.Ordinal)) {
             ctx.Response.StatusCode = 403;
             return;
         }

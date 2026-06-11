@@ -270,7 +270,8 @@ public record RenderPreviewResult(
     int LandblockCount, int ObjectCount, int CliffCount,
     bool OverlayApplied,
     byte[] PngBytes,
-    string? OutputPath);
+    string? OutputPath,
+    int GlyphCount = 0);
 
 // ── Spatial Queries ────────────────────────────────────────
 public record FoundObject(
@@ -332,7 +333,9 @@ public record OntologyStatsResult(
 public record PasteStampResult(
     int TerrainChanges,
     int ObjectsPlaced,
-    HashSet<ushort> ModifiedLandblocks);
+    HashSet<ushort> ModifiedLandblocks,
+    int ObjectsSkipped = 0,
+    List<string>? SkipMessages = null);
 
 // ── Portal Snap ───────────────────────────────────────────
 public record SnapPortalResult(
@@ -374,7 +377,11 @@ public record TerrainDiffResult(
     int HeightChanges = 0,
     int TerrainTypeChanges = 0,
     int RoadChanges = 0,
-    List<TerrainDiffEntry>? Changes = null);
+    List<TerrainDiffEntry>? Changes = null,
+    // F48: distinguishes "no base-DAT terrain to compare" (BaseFound=false, change
+    // counters meaningless) from a genuinely pristine landblock (BaseFound=true,
+    // HasChanges=false). Defaults true so the normal/found paths need no change.
+    bool BaseFound = true);
 
 // ── Terrain Layers ────────────────────────────────────────
 public record TerrainLayerInfo(
@@ -403,7 +410,11 @@ public record CloneDatResult(
 
 public record DefragmentDatResult(
     bool Success, string DatType, string OutputPath,
-    int BytesFreed = 0, string? Error = null);
+    int BytesFreed = 0, string? Error = null,
+    // F55: count of source entries dropped because their bytes could not be read.
+    // > 0 means the output DAT is missing files relative to the source and BytesFreed
+    // includes the dropped-file bytes — Warning carries the human-readable caveat.
+    int FilesSkipped = 0, string? Warning = null);
 
 // ── Ontology Export ───────────────────────────────────────
 public record ExportOntologyResult(
@@ -413,7 +424,9 @@ public record ExportOntologyResult(
 public record ExportSetupPartsResult(
     bool Success, int SetupsScanned, int SetupsExported,
     int TotalParts, int UniqueParts, string OutputPath,
-    string? Error = null);
+    string? Error = null,
+    int SetupsFailed = 0,
+    IReadOnlyList<string>? FailedSample = null);
 
 // ── Classification Signals Export ────────────────────────
 public record ExportClassificationSignalsResult(
@@ -432,7 +445,8 @@ public record MineStringsResult(
     bool Success, int TablesScanned, int TotalStrings,
     List<StringTableEntry> Strings,
     string? OutputPath = null,
-    string? Error = null);
+    string? Error = null,
+    int TablesSkipped = 0);
 
 // ── Ontology Enrichment ──────────────────────────────────
 public record EnrichOntologyResult(
@@ -443,7 +457,8 @@ public record EnrichOntologyResult(
 public record ImportCatalogResult(
     bool Success, int EntriesEnriched, int TotalEntries,
     string IndexPath,
-    string? Error = null);
+    string? Error = null,
+    int EntriesFailed = 0);
 
 // ── LLM Classification (String-table) ────────────────────
 public record ClassifyOntologyResult(
@@ -537,7 +552,7 @@ public record AutoPaintResult(
 public record IngestWeeniesResult(
     bool Success, int TotalProcessed, int CreatureCount, int NpcCount,
     int ItemCount, int OtherCount, int WithSetupDid, string? OutputPath,
-    string? Error = null);
+    string? Error = null, int ErrorCount = 0);
 
 public record EnrichWeeniesResult(
     bool Success, int EntriesEnriched, int TotalEntries,
@@ -559,7 +574,8 @@ public record CacheOntologyResult(
 
 public record LoadOntologyCacheResult(
     bool Success, int EntriesLoaded, string InputPath,
-    string? Error = null);
+    string? Error = null,
+    int LinesSkipped = 0);
 
 public record ScanBuildingPlacementsResult(
     bool Success, int TotalBuildings, int UniqueSetupIds,
@@ -580,17 +596,17 @@ public record ApplyPopulationResult(
 
 public record IngestSpawnMapsResult(
     bool Success, int TotalProcessed, int TotalWeenies, int TotalLinks,
-    int UniqueWcids, string? OutputPath, string? Error = null);
+    int UniqueWcids, string? OutputPath, string? Error = null, int ErrorCount = 0);
 
 public record IngestSpellsResult(
     bool Success, int TotalProcessed, Dictionary<int, int> SchoolCounts,
-    string? OutputPath, string? Error = null);
+    string? OutputPath, string? Error = null, int ErrorCount = 0);
 
 public record IngestRecipesResult(
     bool Success, int TotalProcessed, int WithPrecursors,
     int UniqueSourceWcids, int UniqueResultWcids,
     Dictionary<int, int> SkillCounts,
-    string? OutputPath, string? Error = null);
+    string? OutputPath, string? Error = null, int ErrorCount = 0);
 
 // ═══════════════════════════════════════════════════════
 //  Phase 9 — Dungeon Catalog
@@ -614,7 +630,9 @@ public record AnalyzeDungeonTopologyResult(
     int TotalDungeonsAnalyzed,
     int TotalCellsAnalyzed,
     Dictionary<string, int> ClassificationCounts,
-    string? OutputPath, string? Error = null);
+    string? OutputPath, string? Error = null,
+    int Errors = 0,
+    int BuildingInteriorLandblocks = 0);
 
 // ═══════════════════════════════════════════════════════
 //  Phase 9 — Generate Dungeon
@@ -747,7 +765,11 @@ public record ExtractHeightmapsResult(
     int PopulatedLandblocks,
     double ElapsedMs,
     string? OutputPath = null,
-    string? Error = null);
+    string? Error = null,
+    // F78: heights come from the live, editable project terrain document — NOT the
+    // base/retail cell DAT. After any terrain edit the output reflects those edits,
+    // so the source is labelled explicitly rather than implied "retail" by the name.
+    string Source = "project-terrain");
 
 // ═══════════════════════════════════════════════════════
 //  Phase 10.5a — Compute Vanilla Baseline
@@ -1081,7 +1103,8 @@ public record WorldGenResult(
     List<TownSummary> Towns,
     string? OutputPath = null,
     bool Applied = false,
-    string? Error = null);
+    string? Error = null,
+    IReadOnlyList<string>? Warnings = null);
 
 public record BuildingProfileSummary(
     uint ModelId, string HexId, uint NumLeaves,
@@ -1133,7 +1156,10 @@ public record WeenieTemplateListResult(
     bool Success, string? BundlePath,
     int TemplateCount,
     List<WeenieTemplateInfo> Templates,
-    string? Error = null);
+    string? Error = null,
+    // F238: per-template / per-row skip reasons collected during bundle parse so a typo'd
+    // bundle no longer reports success with quietly smaller counts.
+    IReadOnlyList<string>? Warnings = null);
 
 public record WeenieTemplateApplyResult(
     bool Success, string? BundlePath,
@@ -1145,7 +1171,9 @@ public record WeenieTemplateApplyResult(
     // ScalarsApplied counts only the rows the template wrote/overwrote, TotalScalarsAfter is the union.
     bool Merged = false,
     int TotalScalarsAfter = 0,
-    bool WeenieTypeChanged = false);
+    bool WeenieTypeChanged = false,
+    // F238: bundle-parse skip reasons (see WeenieTemplateListResult.Warnings).
+    IReadOnlyList<string>? Warnings = null);
 
 // ── Mesh / BSP (slice 1 of f26345e) ────────────────────────
 public record ObjExportResult(
@@ -1406,7 +1434,8 @@ public record CreatureSaveResult(
     bool Success,
     uint ObjectId,
     int TextureMapRows,
-    int AnimPartRows);
+    int AnimPartRows,
+    string? Error = null);
 
 public record CreatureExportSqlResult(
     bool Success,
@@ -1435,7 +1464,7 @@ public record IngestNpcRosterResult(
     bool Success,
     int TotalProcessed,
     int VendorCount,
-    int TalkerCount,
+    int OtherNpcCount,
     string? OutputPath,
     string? Error = null);
 
@@ -1467,7 +1496,11 @@ public record CompareCategoryDimension(
     int RetailCount,
     double Jaccard,
     List<int> NovelInLb,
-    List<int> MissingInLb);
+    List<int> MissingInLb,
+    int NovelTotal = 0,
+    int MissingTotal = 0,
+    string RetailSource = "ok",
+    bool JaccardComputed = true);
 
 public record CompareCreaturesResult(
     bool Success,
@@ -1490,6 +1523,11 @@ public record RenderGalleryPickInfo(
     int RenderObjectCount,
     string Note);
 
+public record RenderGalleryFailure(
+    string Slug,
+    string LbHex,
+    string Error);
+
 public record RenderGalleryResult(
     bool Success,
     int PicksRendered,
@@ -1499,7 +1537,8 @@ public record RenderGalleryResult(
     string IndexPath,
     string ManifestPath,
     List<RenderGalleryPickInfo> Picks,
-    string? Error = null);
+    string? Error = null,
+    List<RenderGalleryFailure>? Failures = null);
 
 public record ServeRenderGalleryResult(
     bool Success,

@@ -217,8 +217,21 @@ namespace WorldBuilder.Shared.Models {
 
             var writer = new DefaultDatReaderWriter(exportDirectory, DatAccessType.ReadWrite);
 
-            if (portalIteration == DatReaderWriter.Dats.Portal.Iteration.CurrentIteration) {
-                portalIteration = 0;
+            // F59: previously, an iteration equal to the base DAT's current
+            // iteration was silently rewritten to 0 — which stamps every written
+            // entry LOWER than every existing entry (DRW's per-write hook only
+            // bumps the iteration record when entry.Iteration > CurrentIteration),
+            // corrupting the iteration ordering with no warning while the response
+            // still echoed the requested value. Reject the no-op/regressive case
+            // explicitly instead of silently corrupting.
+            var baseIteration = DatReaderWriter.Dats.Portal.Iteration.CurrentIteration;
+            if (portalIteration <= baseIteration) {
+                throw new ArgumentException(
+                    $"iteration {portalIteration} is not greater than the base DAT's current " +
+                    $"iteration {baseIteration}; exported entries would be stamped with a stale " +
+                    $"(<= current) iteration. Pass an iteration > {baseIteration}, or omit it to use " +
+                    $"{baseIteration + 1}.",
+                    nameof(portalIteration));
             }
 
             var terrainDoc = DocumentManager.GetOrCreateDocumentAsync<TerrainDocument>("terrain").Result;
@@ -559,8 +572,11 @@ namespace WorldBuilder.Shared.Models {
                 Console.Error.WriteLine($"[Export] Error writing custom textures: {ex.Message}");
             }
 
-            // TODO: all other dat iterations
-            writer.Dats.Portal.Iteration.CurrentIteration = portalIteration;
+            // F59: removed the dead `writer.Dats.Portal.Iteration.CurrentIteration =
+            // portalIteration;` in-memory assignment that ran immediately before
+            // Dispose() — it never reached disk. The on-disk iteration record is
+            // updated by DRW's per-write hook (entry.Iteration > CurrentIteration).
+            // TODO: explicitly manage the cell DAT's own iteration record.
 
             writer.Dispose();
 
@@ -615,7 +631,8 @@ namespace WorldBuilder.Shared.Models {
                 TerrainWritten: terrainWritten,
                 TerrainSaveFailures: terrainSaveFailures,
                 DocsSaved: docsSaved,
-                DocSaveFailures: docSaveFailures);
+                DocSaveFailures: docSaveFailures,
+                EffectiveIteration: portalIteration);
         }
 
         private void CollectExportLayers(IEnumerable<TerrainLayerBase> items, List<TerrainLayer> result) {
@@ -647,11 +664,16 @@ namespace WorldBuilder.Shared.Models {
     /// <param name="TerrainSaveFailures">Number of LandBlock/LBI terrain writes that returned failure.</param>
     /// <param name="DocsSaved">Number of documents (landblock/dungeon/portal/layout) whose SaveToDats succeeded.</param>
     /// <param name="DocSaveFailures">Number of documents whose SaveToDats returned false.</param>
+    /// <param name="EffectiveIteration">The portal iteration actually stamped onto written
+    /// entries — equals the requested iteration, or current+1 when the caller omitted it.
+    /// F59: callers must surface this so an agent can learn the real iteration instead of
+    /// echoing the (possibly null) request arg.</param>
     public record ExportDatsResult(
         bool Success,
         int TerrainWritten,
         int TerrainSaveFailures,
         int DocsSaved,
-        int DocSaveFailures);
+        int DocSaveFailures,
+        int EffectiveIteration);
 }
 

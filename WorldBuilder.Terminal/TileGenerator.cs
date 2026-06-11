@@ -165,6 +165,7 @@ public class TileGenerator {
         int n = 0;
         long bytes = 0;
         var errors = new List<string>();
+        var succeeded = new List<ushort>();
         foreach (var (lbKey, hex) in _cache.ListDirty()) {
             try {
                 uint lbX = (uint)((lbKey >> 8) & 0xFF);
@@ -173,11 +174,14 @@ public class TileGenerator {
                 StoreLbTile(lbKey, bytes_);
                 n++;
                 bytes += bytes_.Length;
+                succeeded.Add(lbKey);
             } catch (Exception ex) {
                 errors.Add($"0x{hex}: {ex.Message}");
             }
         }
-        _cache.ClearDirty();
+        // Only clear the LBs that actually regenerated, so failed LBs stay in
+        // the dirty index and can be retried.
+        _cache.ClearDirtyForLbs(succeeded);
         _cache.SaveManifest();
         return (n, bytes, errors);
     }

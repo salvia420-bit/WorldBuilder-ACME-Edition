@@ -18,8 +18,8 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
             var noise = new SimplexNoise(rng.Next());
             var heightTable = region.LandDefs.LandHeightTable;
 
-            int regionW = p.FullWorld ? 254 : p.Width;
-            int regionH = p.FullWorld ? 254 : p.Height;
+            int regionW = p.FullWorld ? 255 : p.Width;
+            int regionH = p.FullWorld ? 255 : p.Height;
             int startX = p.FullWorld ? 0 : p.StartX;
             int startY = p.FullWorld ? 0 : p.StartY;
 

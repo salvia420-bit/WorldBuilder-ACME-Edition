@@ -45,6 +45,11 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         /// <summary>RegenLocationType valid-flag mask (OnTop..Treasure = 0x7F).</summary>
         public const uint RegenLocationTypeMask = 0x7Fu;
 
+        /// <summary>Outdoor landblock edge length (metres); 8×8 cells of 24m each (F170 coherence check).</summary>
+        public const float LandblockSizeMeters = 192f;
+        /// <summary>Outdoor cell edge length (metres) — LandblockSizeMeters / 8 (F170 coherence check).</summary>
+        public const float OutdoorCellSizeMeters = 24f;
+
         public enum Severity { Error, Warning }
 
         public sealed class Finding {
@@ -142,6 +147,27 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                         $"PlacementOverride guid 0x{og:X8} is outside landblock 0x{p.Landblock:X4}'s static range " +
                         $"(0x{StaticGuidAllocator.FirstStaticGuid(p.Landblock):X8}..0x{StaticGuidAllocator.MaxStaticGuid(p.Landblock):X8}); " +
                         "the server would not read this biota override.");
+                }
+
+                // F170: cell/origin coherence (outdoor only). The obj_Cell_Id low word is derived from
+                // the origin: cellX = floor(originX / 24), cellY = floor(originY / 24), each in [0,7], so
+                // cell = (cellX * 8 + cellY) + 1 must equal the supplied CellNumber. A defaulted
+                // CellNumber:1 against an origin like (150,150) emits an inconsistent obj_Cell_Id and ACE
+                // spawns at a cell/origin pair that disagree.
+                if (p.Kind.Equals("outdoor", StringComparison.OrdinalIgnoreCase)
+                    && p.CellNumber >= 1 && p.CellNumber <= 64
+                    && float.IsFinite(p.OriginX) && float.IsFinite(p.OriginY)
+                    && p.OriginX >= 0f && p.OriginX < LandblockSizeMeters
+                    && p.OriginY >= 0f && p.OriginY < LandblockSizeMeters) {
+                    int cellX = (int)(p.OriginX / OutdoorCellSizeMeters);
+                    int cellY = (int)(p.OriginY / OutdoorCellSizeMeters);
+                    int derivedCell = (cellX * 8 + cellY) + 1;
+                    if (derivedCell != p.CellNumber) {
+                        Add(Severity.Error, "cell_origin_incoherent",
+                            $"CellNumber {p.CellNumber} disagrees with the origin-derived cell {derivedCell} " +
+                            $"(origin ({p.OriginX.ToString(CultureInfo.InvariantCulture)}, {p.OriginY.ToString(CultureInfo.InvariantCulture)}) " +
+                            $"→ cellX {cellX}, cellY {cellY}); the emitted obj_Cell_Id would be inconsistent.");
+                    }
                 }
 
                 // 3. Dye addressability.

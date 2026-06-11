@@ -42,7 +42,9 @@ public static class DungeonTopologyAnalyzer {
         int TotalDungeonsAnalyzed,
         int TotalCellsAnalyzed,
         Dictionary<string, int> ClassificationCounts,
-        List<DungeonTopology> Dungeons);
+        List<DungeonTopology> Dungeons,
+        int Errors = 0,
+        int BuildingInteriorLandblocks = 0);
 
     // ════════════════════════════════════════════════════
     //  Main extraction method
@@ -63,11 +65,19 @@ public static class DungeonTopologyAnalyzer {
         int totalCells = 0;
         int processed = 0;
         int errors = 0;
+        int buildingInteriorLandblocks = 0;
 
         Console.Error.WriteLine($"[DungeonTopology] Scanning {lbiIds.Length} landblock info entries for dungeons...");
 
         foreach (var lbiId in lbiIds) {
             if (!dats.TryGet<LandBlockInfo>(lbiId, out var lbi) || lbi.NumCells == 0) continue;
+
+            // Outdoor towns implement cottage/shop interiors as EnvCells attached to outdoor Buildings;
+            // those are not dungeons. Pure dungeons have cells but no outdoor buildings.
+            if (lbi.Buildings != null && lbi.Buildings.Count > 0) {
+                buildingInteriorLandblocks++;
+                continue;
+            }
 
             uint lbId = lbiId >> 16;
             ushort lbKey = (ushort)(lbId & 0xFFFF);
@@ -103,7 +113,9 @@ public static class DungeonTopologyAnalyzer {
             dungeons.Count,
             totalCells,
             classificationCounts,
-            dungeons);
+            dungeons,
+            errors,
+            buildingInteriorLandblocks);
     }
 
     // ════════════════════════════════════════════════════

@@ -112,7 +112,7 @@ public static class StampAlgorithms {
 
                 // Blend edges if requested
                 if (blendEdges && IsEdgeVertex(vx, vy, stamp.WidthInVertices, stamp.HeightInVertices)) {
-                    height = BlendHeight(height, data[vertexIndex].Height);
+                    height = BlendHeight(height, data[vertexIndex].Height, heightTable);
                 }
 
                 var newEntry = new TerrainEntry(road, scenery, type, height);
@@ -161,8 +161,11 @@ public static class StampAlgorithms {
         return vx == 0 || vx == width - 1 || vy == 0 || vy == height - 1;
     }
 
-    private static byte BlendHeight(byte stampHeight, byte existingHeight) {
-        return (byte)((stampHeight + existingHeight) / 2);
+    private static byte BlendHeight(byte stampHeight, byte existingHeight, float[]? heightTable) {
+        if (heightTable == null)
+            return (byte)((stampHeight + existingHeight) / 2);
+        float blended = (heightTable[stampHeight] + heightTable[existingHeight]) / 2f;
+        return FindNearestHeightIndex(blended, heightTable);
     }
 
     /// <summary>

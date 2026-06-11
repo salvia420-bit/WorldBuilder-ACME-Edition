@@ -127,12 +127,13 @@ public partial class CommandEngine {
         var oursNode = JsonSerializer.SerializeToNode(SceneToJsonDoc(ours, sceneId), opts)!;
         var theirsNode = JsonSerializer.SerializeToNode(SceneToJsonDoc(theirs, sceneId), opts)!;
         var rows = new List<RegionDiffRow>();
-        DiffJsonNodes("", oursNode, theirsNode, rows, maxRows);
+        bool overflowed = false;
+        DiffJsonNodes("", oursNode, theirsNode, rows, maxRows, ref overflowed);
 
         return new SceneDiffResult(
             SceneId: $"0x{sceneId:X8}",
             OursSource: oursSource, TheirsSource: theirsSource,
-            DiffCount: rows.Count, Truncated: rows.Count >= maxRows, Rows: rows);
+            DiffCount: rows.Count, Truncated: overflowed, Rows: rows);
     }
 
     public SceneWhereUsedResult SceneWhereUsed(string sceneIdHex) {

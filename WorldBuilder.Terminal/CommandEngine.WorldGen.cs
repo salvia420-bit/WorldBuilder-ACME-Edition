@@ -47,9 +47,12 @@ public partial class CommandEngine {
 
         doc.ApplyBulkImport(allChanges);
 
-        project.DocumentManager.SkipDatStatics = true;
-        await project.DocumentManager.ResetWorldDocumentsAsync();
-        project.DocumentManager.SkipDatStatics = false;
+        try {
+            project.DocumentManager.SkipDatStatics = true;
+            await project.DocumentManager.ResetWorldDocumentsAsync();
+        } finally {
+            project.DocumentManager.SkipDatStatics = false;
+        }
 
         return new FreshStartResult(true, allChanges.Count,
             allChanges.Values.Sum(v => v.Count));
@@ -74,10 +77,13 @@ public partial class CommandEngine {
 
         bool applied = false;
         if (apply) {
-            project.DocumentManager.SkipDatStatics = true;
-            await project.DocumentManager.ResetWorldDocumentsAsync();
-            ApplyWorldGenResult(result);
-            project.DocumentManager.SkipDatStatics = false;
+            try {
+                project.DocumentManager.SkipDatStatics = true;
+                await project.DocumentManager.ResetWorldDocumentsAsync();
+                ApplyWorldGenResult(result);
+            } finally {
+                project.DocumentManager.SkipDatStatics = false;
+            }
             applied = true;
         }
 
@@ -98,14 +104,16 @@ public partial class CommandEngine {
             BuildingsPlaced: result.TotalBuildingsPlaced,
             DecorationsPlaced: result.TotalDecorationsPlaced,
             RoadVertices: result.TotalRoadVertices,
-            TownsCsvPath: csvRows > 0 ? exportTownsCsvPath : null,
+            TownsCsvPath: !string.IsNullOrEmpty(exportTownsCsvPath) ? exportTownsCsvPath : null,
             TownsCsvRows: csvRows,
             TownSummaries: BuildTownSummaries(result));
     }
 
     public ExportTownsCsvResult ExportTownsCsv(string fromResultJson, string outPath) {
         if (string.IsNullOrEmpty(fromResultJson) || !File.Exists(fromResultJson))
-            throw new FileNotFoundException("--from-result <path> JSON file not found.", fromResultJson);
+            throw new FileNotFoundException(
+                $"Worldgen result JSON not found: '{fromResultJson}'. Run 'worldgen-analyze-buildings' (or 'worldgen' with outputPath) first, then pass its outputPath as 'fromResult'.",
+                fromResultJson);
 
         // The JSON written by `worldgen --output` has towns + buildingPlacements; rebuild
         // the minimal WorldGeneratorResult shape TownsExporter needs.

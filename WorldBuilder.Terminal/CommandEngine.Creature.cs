@@ -15,7 +15,7 @@ public partial class CommandEngine {
     private AceDbConnector RequireAceDbConnector() {
         var settings = _projectManager.CurrentProject?.AceDb;
         if (settings == null || string.IsNullOrEmpty(settings.Host))
-            throw new InvalidOperationException("ACE DB is not configured. Run 'ace-db connect' first.");
+            throw new InvalidOperationException("ACE world DB is not configured. Run 'ace-db-connect' (JSON) or 'ace-db connect' (REPL) first.");
         return new AceDbConnector(settings);
     }
 
@@ -41,12 +41,16 @@ public partial class CommandEngine {
         }
 
         if (overrides == null)
-            throw new ArgumentException("--from-json <path> is required.");
+            throw new ArgumentException("'fromJson' (path to an AceCreatureOverrides JSON file) is required.");
 
         overrides.ObjectId = objectId;
+        if (objectId == 0)
+            return new CreatureSaveResult(false, objectId, 0, 0, "objectId must be non-zero.");
         using var connector = RequireAceDbConnector();
         var ok = await connector.SaveCreatureOverridesAsync(overrides);
-        return new CreatureSaveResult(ok, objectId, overrides.TextureMap.Count, overrides.AnimParts.Count);
+        return new CreatureSaveResult(ok, objectId,
+            ok ? overrides.TextureMap.Count : 0, ok ? overrides.AnimParts.Count : 0,
+            ok ? null : "Database write failed (connection or SQL error); no rows were written.");
     }
 
     public CreatureExportSqlResult CreatureExportSql(uint objectId, string? outPath, AceCreatureOverrides? overrides = null) {

@@ -141,6 +141,7 @@ public static class RenderPreviewRenderer {
         public byte[] PngBytes = Array.Empty<byte>();
         public int CliffCount;
         public int RenderedObjectCount;
+        public int GlyphCount;
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -902,7 +903,10 @@ public static class RenderPreviewRenderer {
                 canvas.DrawCircle(g.pxX, g.pxY, g.sizePx + 2.5f, ringPaint);
             }
         }
-        output.RenderedObjectCount = glyphs.Count;
+        // RenderedObjectCount = actual placed static objects only (objId != 0);
+        // spawn-gazetteer glyphs (objId == 0) are reported separately as GlyphCount.
+        output.RenderedObjectCount = glyphs.Count(g => g.objId != 0);
+        output.GlyphCount = glyphs.Count(g => g.objId == 0);
 
         // Sign-label pass — draws PropertyString.Inscription text below
         // each sign-bearing spawn. Italic + outlined for legibility over
@@ -1000,6 +1004,30 @@ public static class RenderPreviewRenderer {
                     canvas.DrawLine(0, y, W, y, gridPaint);
                 }
             }
+        }
+
+        // CliffCount must reflect the terrain regardless of whether the cliff
+        // overlay was drawn — when overlay is off the block above is skipped,
+        // so compute the count here from the same height/threshold criterion.
+        if (drawTerrain && !input.Overlay) {
+            ReadOnlySpan<(int du, int dv)> cliffDirs =
+                stackalloc (int, int)[] { (1, 0), (0, 1), (1, 1), (-1, 1) };
+            int cliffCount = 0;
+            for (int vv = 0; vv < VH; vv++) {
+                for (int vu = 0; vu < VW; vu++) {
+                    int idx = vu + vv * VW;
+                    if (!hasData[idx]) continue;
+                    foreach (var (du, dv) in cliffDirs) {
+                        int nu = vu + du, nv = vv + dv;
+                        if (nu < 0 || nu >= VW || nv < 0 || nv >= VH) continue;
+                        int nIdx = nu + nv * VW;
+                        if (!hasData[nIdx]) continue;
+                        if (Math.Abs(heights[nIdx] - heights[idx]) > input.CliffThreshold)
+                            cliffCount++;
+                    }
+                }
+            }
+            output.CliffCount = cliffCount;
         }
 
         // Encode.

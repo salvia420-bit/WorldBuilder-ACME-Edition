@@ -442,9 +442,11 @@ namespace WorldBuilder.Shared.Documents {
             // to fail portal lookups, resulting in walk-through walls.
             var (oldCellX, oldCellY) = PositionToOutdoorCell(oldBuildingOrigin);
             var (newCellX, newCellY) = PositionToOutdoorCell(newBuildingOrigin);
-            int cellDeltaX = newCellX - oldCellX;
-            int cellDeltaY = newCellY - oldCellY;
-            bool needsLandCellFixup = cellDeltaX != 0 || cellDeltaY != 0;
+            // LandCell offsets rotate with the building, so a yaw change also requires fixup even
+            // when the origin cell is unchanged.
+            int yawQuadrant = YawQuadrantDelta(oldBuildingRotation, newBuildingRotation);
+            bool needsLandCellFixup = oldCellX != newCellX || oldCellY != newCellY || yawQuadrant != 0;
+            int droppedVisibleCells = 0;
 
             foreach (var cellNum in cellIds) {
                 uint fullCellId = (lbId << 16) | cellNum;
@@ -489,17 +491,29 @@ namespace WorldBuilder.Shared.Documents {
                 // Fix up LandCell references in VisibleCells when building crosses outdoor cell boundaries.
                 // This matches the same fixup that InstantiateBlueprint performs for new buildings.
                 if (needsLandCellFixup) {
-                    for (int v = 0; v < envCell.VisibleCells.Count; v++) {
+                    for (int v = envCell.VisibleCells.Count - 1; v >= 0; v--) {
                         var vc = envCell.VisibleCells[v];
                         if (vc >= 0x0001 && vc <= 0x0040) {
                             var (vcCellX, vcCellY) = LandCellToXY(vc);
-                            int fixedX = Math.Clamp(vcCellX + cellDeltaX, 0, 7);
-                            int fixedY = Math.Clamp(vcCellY + cellDeltaY, 0, 7);
-                            ushort fixedLandCell = XYToLandCell(fixedX, fixedY);
+                            var (rotDx, rotDy) = RotateCellOffset(vcCellX - oldCellX, vcCellY - oldCellY, yawQuadrant);
+                            int fixedX = newCellX + rotDx;
+                            int fixedY = newCellY + rotDy;
 
+                            // References outside 0..7 live in an adjacent landblock and cannot be
+                            // expressed as a 0x0001-0x0040 local ID; drop them (safe — only reduces
+                            // PVS) rather than clamping to a wrong same-LB cell.
+                            if (fixedX < 0 || fixedX > 7 || fixedY < 0 || fixedY > 7) {
+                                _logger.LogInformation("[LBDoc]     VisibleCell LandCell dropped (out of LB grid): 0x{Old:X4} -> ({FX},{FY}) (building moved from cell ({OX},{OY}) to ({NX},{NY}), quadrant {Q})",
+                                    vc, fixedX, fixedY, oldCellX, oldCellY, newCellX, newCellY, yawQuadrant);
+                                envCell.VisibleCells.RemoveAt(v);
+                                droppedVisibleCells++;
+                                continue;
+                            }
+
+                            ushort fixedLandCell = XYToLandCell(fixedX, fixedY);
                             if (vc != fixedLandCell) {
-                                _logger.LogInformation("[LBDoc]     VisibleCell LandCell fixup: 0x{Old:X4} -> 0x{New:X4} (building moved from cell ({OX},{OY}) to ({NX},{NY}))",
-                                    vc, fixedLandCell, oldCellX, oldCellY, newCellX, newCellY);
+                                _logger.LogInformation("[LBDoc]     VisibleCell LandCell fixup: 0x{Old:X4} -> 0x{New:X4} (building moved from cell ({OX},{OY}) to ({NX},{NY}), quadrant {Q})",
+                                    vc, fixedLandCell, oldCellX, oldCellY, newCellX, newCellY, yawQuadrant);
                             }
                             envCell.VisibleCells[v] = fixedLandCell;
                         }
@@ -513,6 +527,11 @@ namespace WorldBuilder.Shared.Documents {
                     _logger.LogInformation("[LBDoc]     Moved EnvCell 0x{CellId:X8} to ({X:F1},{Y:F1},{Z:F1})",
                         fullCellId, envCell.Position.Origin.X, envCell.Position.Origin.Y, envCell.Position.Origin.Z);
                 }
+            }
+
+            if (droppedVisibleCells > 0) {
+                _logger.LogInformation("[LBDoc] Dropped {Count} VisibleCell LandCell reference(s) that fell outside the landblock grid for the moved building (edge placement lost some outdoor visibility).",
+                    droppedVisibleCells);
             }
         }
 
@@ -540,6 +559,29 @@ namespace WorldBuilder.Shared.Documents {
         /// </summary>
         private static ushort XYToLandCell(int cellX, int cellY) {
             return (ushort)(cellX * 8 + cellY + 1);
+        }
+
+        /// <summary>
+        /// Quantizes the yaw difference between two orientations to the nearest 90° quadrant
+        /// (0/1/2/3 counter-clockwise turns). Only 90° multiples map cell offsets onto the
+        /// integer outdoor cell grid.
+        /// </summary>
+        private static int YawQuadrantDelta(Quaternion oldOrientation, Quaternion newOrientation) {
+            var delta = Quaternion.Normalize(newOrientation * Quaternion.Inverse(oldOrientation));
+            double yaw = Math.Atan2(2.0 * (delta.W * delta.Z + delta.X * delta.Y),
+                                    1.0 - 2.0 * (delta.Y * delta.Y + delta.Z * delta.Z));
+            int quadrant = (int)Math.Round(yaw / (Math.PI / 2.0));
+            return ((quadrant % 4) + 4) % 4;
+        }
+
+        /// <summary>
+        /// Rotates a 2D cell-grid offset by a quantized yaw quadrant (90° counter-clockwise steps).
+        /// </summary>
+        private static (int dx, int dy) RotateCellOffset(int dx, int dy, int quadrant) {
+            for (int i = 0; i < quadrant; i++) {
+                (dx, dy) = (-dy, dx);
+            }
+            return (dx, dy);
         }
 
         public bool Apply(BaseDocumentEvent evt) {

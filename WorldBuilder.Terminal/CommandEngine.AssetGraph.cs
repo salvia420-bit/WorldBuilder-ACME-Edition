@@ -252,6 +252,8 @@ public partial class CommandEngine {
         string? idHex, Dictionary<string, string>? match, string? datPath) {
         if (string.IsNullOrWhiteSpace(idHex) && (match == null || match.Count == 0))
             throw new ArgumentException("Provide id (a Surface 0x08......) or a match spec.");
+        if (!string.IsNullOrWhiteSpace(idHex) && match != null && match.Count > 0)
+            throw new ArgumentException("Provide either id or match, not both.");
 
         var idx = GetAssetIndex(datPath);
         SurfaceFingerprintRow? probe = null;
@@ -275,13 +277,13 @@ public partial class CommandEngine {
             foreach (var (k, v) in match!) {
                 bool ok = k switch {
                     "type" => string.Equals(row.Type, v, StringComparison.OrdinalIgnoreCase)
-                              || (uint.TryParse(v, out var tv) && row.TypeValue == tv),
+                              || (TryParseTypeValue(v, out var tv) && row.TypeValue == tv),
                     "origTextureId" => row.OrigTextureId.Equals(NormalizeHex(v), StringComparison.OrdinalIgnoreCase),
                     "origPaletteId" => row.OrigPaletteId.Equals(NormalizeHex(v), StringComparison.OrdinalIgnoreCase),
                     "colorValue" => string.Equals(row.ColorValue, v, StringComparison.OrdinalIgnoreCase),
-                    "translucency" => float.TryParse(v, out var t) && row.Translucency.Equals(t),
-                    "luminosity" => float.TryParse(v, out var l) && row.Luminosity.Equals(l),
-                    "diffuse" => float.TryParse(v, out var df) && row.Diffuse.Equals(df),
+                    "translucency" => float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t) && row.Translucency.Equals(t),
+                    "luminosity" => float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var l) && row.Luminosity.Equals(l),
+                    "diffuse" => float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var df) && row.Diffuse.Equals(df),
                     _ => throw new ArgumentException($"Unknown match key '{k}'."),
                 };
                 if (!ok) return false;
@@ -304,6 +306,15 @@ public partial class CommandEngine {
     // ─────────────────────────────────────────────────────────────────
     //  Helpers
     // ─────────────────────────────────────────────────────────────────
+
+    private static bool TryParseTypeValue(string v, out uint value) {
+        var s = v.Trim();
+        if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            return uint.TryParse(s.Substring(2), System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out value);
+        return uint.TryParse(s, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out value);
+    }
 
     private static IEnumerable<uint> DirectParents(AssetReverseIndex idx, uint id) {
         IEnumerable<uint> result = Enumerable.Empty<uint>();

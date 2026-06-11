@@ -91,21 +91,18 @@ public class BuildingPairings {
 
     /// <summary>
     /// Loads pairings from a JSON file produced by <c>extract-building-pairings</c>.
-    /// Returns the loaded instance. If the file is missing or malformed the
-    /// registry is empty (callers degrade gracefully — placement falls back
-    /// to per-building corner sampling).
+    /// Returns the loaded instance. A MISSING file yields an empty registry
+    /// (callers degrade gracefully — placement falls back to per-building corner
+    /// sampling). An EXISTING but unreadable/malformed file throws so a corrupt
+    /// <c>building_pairings.json</c> is never silently swallowed into zero pairings.
     /// </summary>
     public static BuildingPairings LoadFromJsonFile(string path) {
         var inst = new BuildingPairings();
         if (!File.Exists(path)) return inst;
-        try {
-            var doc = JsonSerializer.Deserialize<PairingsJson>(File.ReadAllText(path));
-            if (doc?.Pairs == null) return inst;
-            foreach (var pair in doc.Pairs) {
-                if (pair.Length >= 2) inst.AddPair(pair[0], pair[1]);
-            }
-        } catch {
-            // Treat as empty; caller can warn via a higher layer.
+        var doc = JsonSerializer.Deserialize<PairingsJson>(File.ReadAllText(path));
+        if (doc?.Pairs == null) return inst;
+        foreach (var pair in doc.Pairs) {
+            if (pair.Length >= 2) inst.AddPair(pair[0], pair[1]);
         }
         return inst;
     }

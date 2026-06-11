@@ -79,8 +79,10 @@ namespace WorldBuilder.Shared.Lib {
 
         /// <summary>
         /// Triangulates all renderable faces from a GfxObj, grouped by surface DID.
-        /// Skips <see cref="StipplingType.NoPos"/> (portal openings); all other polygons
-        /// export using PosSurface / PosUVIndices. This matches the renderer behaviour.
+        /// Skips <see cref="StipplingType.NoPos"/> (portal openings). Positive-surface faces
+        /// export using PosSurface / PosUVIndices; polygons that also carry a NegSurface
+        /// (double-sided geometry) get a second reversed pass grouped under the NegSurface DID,
+        /// using NegUVIndices, so round-tripping does not silently drop the back face. (F145)
         /// </summary>
         static void TriangulateFaces(GfxObj gfx, Matrix4x4 transform,
             out List<Vector3> positions, out List<Vector3> normals, out List<Vector2> uvs) {
@@ -100,24 +102,31 @@ namespace WorldBuilder.Shared.Lib {
             rot.M41 = rot.M42 = rot.M43 = 0f;
             rot.M44 = 1f;
 
-            var polysBySurface = new Dictionary<uint, List<Polygon>>();
+            // (Polygon, useNegPass) grouped by the surface DID it should export under.
+            var polysBySurface = new Dictionary<uint, List<(Polygon Poly, bool NegPass)>>();
+            void Add(uint did, Polygon poly, bool negPass) {
+                if (!polysBySurface.TryGetValue(did, out var list)) {
+                    list = new List<(Polygon, bool)>();
+                    polysBySurface[did] = list;
+                }
+                list.Add((poly, negPass));
+            }
+
             foreach (var poly in gfx.Polygons.Values) {
                 if (poly.VertexIds.Count < 3) continue;
                 if (poly.Stippling == StipplingType.NoPos) continue;
-                if (poly.PosSurface < 0 || poly.PosSurface >= gfx.Surfaces.Count) continue;
 
-                uint surfaceDid = gfx.Surfaces[poly.PosSurface];
-                if (!polysBySurface.TryGetValue(surfaceDid, out var list)) {
-                    list = new List<Polygon>();
-                    polysBySurface[surfaceDid] = list;
-                }
-                list.Add(poly);
+                if (poly.PosSurface >= 0 && poly.PosSurface < gfx.Surfaces.Count)
+                    Add(gfx.Surfaces[poly.PosSurface], poly, negPass: false);
+
+                if (poly.NegSurface >= 0 && poly.NegSurface < gfx.Surfaces.Count)
+                    Add(gfx.Surfaces[poly.NegSurface], poly, negPass: true);
             }
 
             foreach (var (surfaceDid, polys) in polysBySurface) {
                 int triStart = positions.Count / 3;
-                foreach (var poly in polys)
-                    EmitFace(poly, gfx, transform, rot, reversed: false, useNegUVs: false, positions, normals, uvs);
+                foreach (var (poly, negPass) in polys)
+                    EmitFace(poly, gfx, transform, rot, reversed: negPass, useNegUVs: negPass, positions, normals, uvs);
                 int triCount = positions.Count / 3 - triStart;
                 if (triCount > 0)
                     surfaceRanges.Add((surfaceDid, triStart, triCount));

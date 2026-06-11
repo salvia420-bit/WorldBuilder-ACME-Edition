@@ -66,7 +66,7 @@ namespace WorldBuilder.Shared.Lib {
             gfxObj.PhysicsPolygons = new Dictionary<ushort, Polygon>(polys);
 
             int leafIdx = 0;
-            gfxObj.PhysicsBSP  = new PhysicsBSPTree  { Root = BuildPhysics(keys, planes, polys, verts, ref leafIdx, 0) };
+            gfxObj.PhysicsBSP  = new PhysicsBSPTree  { Root = BuildPhysics(keys, planes, polys, verts, ref leafIdx, 0, solidSide: false) };
             leafIdx = 0;
             gfxObj.DrawingBSP  = new DrawingBSPTree  { Root = BuildDrawing(keys, planes, polys, verts, ref leafIdx, 0) };
             gfxObj.Flags |= GfxObjFlags.HasPhysics | GfxObjFlags.HasDrawing;
@@ -82,14 +82,17 @@ namespace WorldBuilder.Shared.Lib {
             Dictionary<ushort, Polygon> polys,
             Dictionary<ushort, SWVertex> verts,
             ref int leafIdx,
-            int depth) {
+            int depth,
+            bool solidSide) {
 
+            // A leaf reached via the negative half-space of every enclosing splitting plane
+            // represents solid space (F152 — matches the header's "negative half-space … solid").
             if (keys.Count == 0 || depth >= MaxDepth)
-                return PhysicsLeaf(keys, polys, verts, leafIdx++, solid: false);
+                return PhysicsLeaf(keys, polys, verts, leafIdx++, solid: solidSide);
 
             int si = ChooseSplitter(keys, planes, polys, verts);
             if (si < 0)
-                return PhysicsLeaf(keys, polys, verts, leafIdx++, solid: false);
+                return PhysicsLeaf(keys, polys, verts, leafIdx++, solid: solidSide);
 
             Plane splitPlane = planes[keys[si]];
 
@@ -104,7 +107,7 @@ namespace WorldBuilder.Shared.Lib {
 
             // Guard: if all polygons land on the same side we have a degenerate split → leaf
             if (front.Count == 0 || back.Count == 0)
-                return PhysicsLeaf(keys, polys, verts, leafIdx++, solid: false);
+                return PhysicsLeaf(keys, polys, verts, leafIdx++, solid: solidSide);
 
             return new PhysicsBSPNode {
                 Type           = BSPNodeType.BPIN,
@@ -112,8 +115,8 @@ namespace WorldBuilder.Shared.Lib {
                 LeafIndex      = -1,
                 BoundingSphere = BoundingSphere(keys, polys, verts),
                 Polygons       = new List<ushort>(),
-                PosNode        = BuildPhysics(front, planes, polys, verts, ref leafIdx, depth + 1),
-                NegNode        = BuildPhysics(back,  planes, polys, verts, ref leafIdx, depth + 1),
+                PosNode        = BuildPhysics(front, planes, polys, verts, ref leafIdx, depth + 1, solidSide: false),
+                NegNode        = BuildPhysics(back,  planes, polys, verts, ref leafIdx, depth + 1, solidSide: true),
             };
         }
 
@@ -306,7 +309,12 @@ namespace WorldBuilder.Shared.Lib {
             ?? typeof(PhysicsBSPNode).GetField("solid",             BindingFlags.NonPublic | BindingFlags.Instance)
             ?? typeof(PhysicsBSPNode).GetField("<Solid>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        static void SetSolid(PhysicsBSPNode node, int value) =>
-            _solidField?.SetValue(node, value);
+        static void SetSolid(PhysicsBSPNode node, int value) {
+            if (_solidField == null)
+                throw new InvalidOperationException(
+                    "BspGenerator: could not locate the PhysicsBSPNode.Solid backing field via reflection; " +
+                    "the Solid flag cannot be set and physics leaves would be silently wrong (F152).");
+            _solidField.SetValue(node, value);
+        }
     }
 }

@@ -203,12 +203,12 @@ internal static class TilePyramidEmitter {
         // transparent.
         var pixels = bmp.GetPixelSpan();
         if (pixels.Length < 4) return true;
-        // Sample alpha across the full tile rather than the first scanline. A
-        // 32-pixel stride gives us ~256 samples on a 256×256 RGBA tile — enough
-        // to catch any non-blank quadrant without paying for a full byte sweep.
+        // Scan every pixel's alpha byte. A stride sample drops sub-stride
+        // content (a few-pixel object glyph at low LB zooms), silently erasing
+        // it from the map. A full 256 KB span scan is negligible next to PNG
+        // encode.
         const int bytesPerPixel = 4;
-        int stride = bytesPerPixel * 32;
-        for (int i = 3; i < pixels.Length; i += stride) {
+        for (int i = 3; i < pixels.Length; i += bytesPerPixel) {
             if (pixels[i] != 0) return false;
         }
         return true;

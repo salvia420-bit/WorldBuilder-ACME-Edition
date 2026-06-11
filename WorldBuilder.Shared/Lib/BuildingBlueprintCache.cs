@@ -481,6 +481,10 @@ namespace WorldBuilder.Shared.Lib {
             var (newCellX, newCellY) = PositionToOutdoorCell(newOrigin);
             int cellDeltaX = newCellX - donorCellX;
             int cellDeltaY = newCellY - donorCellY;
+            // Quadrant the building was rotated by relative to its donor; LandCell offsets rotate
+            // with the building, so the donor->cell offset must be rotated by this before translating.
+            int yawQuadrant = YawQuadrantDelta(blueprint.DonorOrientation, newOrientation);
+            int droppedVisibleCells = 0;
 
             // Create and save each new EnvCell
             // Apply the new building's orientation to transform local-space offsets to world-space
@@ -537,20 +541,32 @@ namespace WorldBuilder.Shared.Lib {
                 // different position than the donor, these stale references cause ACE's
                 // find_transit_cells to fail portal lookups — especially for buildings near
                 // outdoor cell boundaries, resulting in one-sided walk-through walls.
-                // We apply a 2D cell-coordinate delta (donor → new) to each LandCell reference
-                // to preserve the spatial relationship (e.g. "the cell one step north").
-                for (int v = 0; v < envCell.VisibleCells.Count; v++) {
+                // We rotate the donor->cell offset by the yaw quadrant the building turned, then
+                // apply the translation delta, preserving the spatial relationship (e.g. "the cell
+                // one step north" rotates with the building). References that land outside the
+                // landblock's 0..7 grid live in an adjacent landblock that is not representable as a
+                // 0x0001-0x0040 local ID; we drop those (safe — only reduces PVS) rather than
+                // clamping to a wrong same-LB cell, which would recreate the walk-through-wall bug.
+                for (int v = envCell.VisibleCells.Count - 1; v >= 0; v--) {
                     var vc = envCell.VisibleCells[v];
                     if (vc >= 0x0001 && vc <= 0x0040) {
-                        // Decompose donor LandCell ID → (cellX, cellY), apply delta, recompose
                         var (vcCellX, vcCellY) = LandCellToXY(vc);
-                        int fixedX = Math.Clamp(vcCellX + cellDeltaX, 0, 7);
-                        int fixedY = Math.Clamp(vcCellY + cellDeltaY, 0, 7);
-                        ushort fixedLandCell = XYToLandCell(fixedX, fixedY);
+                        var (rotDx, rotDy) = RotateCellOffset(vcCellX - donorCellX, vcCellY - donorCellY, yawQuadrant);
+                        int fixedX = newCellX + rotDx;
+                        int fixedY = newCellY + rotDy;
 
+                        if (fixedX < 0 || fixedX > 7 || fixedY < 0 || fixedY > 7) {
+                            logger?.LogInformation("[Blueprint]     VisibleCell LandCell dropped (out of LB grid): 0x{Old:X4} -> ({FX},{FY}) (donor cell ({DX},{DY}) -> new cell ({NX},{NY}), quadrant {Q})",
+                                vc, fixedX, fixedY, donorCellX, donorCellY, newCellX, newCellY, yawQuadrant);
+                            envCell.VisibleCells.RemoveAt(v);
+                            droppedVisibleCells++;
+                            continue;
+                        }
+
+                        ushort fixedLandCell = XYToLandCell(fixedX, fixedY);
                         if (vc != fixedLandCell) {
-                            logger?.LogInformation("[Blueprint]     VisibleCell LandCell fixup: 0x{Old:X4} -> 0x{New:X4} (donor cell ({DX},{DY}) -> new cell ({NX},{NY}), delta ({DDX},{DDY}))",
-                                vc, fixedLandCell, donorCellX, donorCellY, newCellX, newCellY, cellDeltaX, cellDeltaY);
+                            logger?.LogInformation("[Blueprint]     VisibleCell LandCell fixup: 0x{Old:X4} -> 0x{New:X4} (donor cell ({DX},{DY}) -> new cell ({NX},{NY}), quadrant {Q})",
+                                vc, fixedLandCell, donorCellX, donorCellY, newCellX, newCellY, yawQuadrant);
                         }
                         envCell.VisibleCells[v] = fixedLandCell;
                     }
@@ -620,6 +636,11 @@ namespace WorldBuilder.Shared.Lib {
 
             logger?.LogInformation("[Blueprint] Instantiated building 0x{ModelId:X8} with {CellCount} cells",
                 blueprint.ModelId, blueprint.Cells.Count);
+
+            if (droppedVisibleCells > 0) {
+                logger?.LogInformation("[Blueprint] Dropped {Count} VisibleCell LandCell reference(s) that fell outside the destination landblock grid for building 0x{ModelId:X8} (edge placement lost some outdoor visibility).",
+                    droppedVisibleCells, blueprint.ModelId);
+            }
 
             return (buildingInfo, blueprint.Cells.Count);
         }
@@ -732,6 +753,29 @@ namespace WorldBuilder.Shared.Lib {
         /// </summary>
         private static ushort XYToLandCell(int cellX, int cellY) {
             return (ushort)(cellX * 8 + cellY + 1);
+        }
+
+        /// <summary>
+        /// Quantizes the yaw difference between a donor and destination orientation to the nearest
+        /// 90° quadrant (0/1/2/3 counter-clockwise turns). The outdoor cell grid is square and
+        /// axis-aligned, so only 90° multiples map cell offsets onto integer grid coordinates.
+        /// </summary>
+        private static int YawQuadrantDelta(Quaternion donorOrientation, Quaternion newOrientation) {
+            var delta = Quaternion.Normalize(newOrientation * Quaternion.Inverse(donorOrientation));
+            double yaw = Math.Atan2(2.0 * (delta.W * delta.Z + delta.X * delta.Y),
+                                    1.0 - 2.0 * (delta.Y * delta.Y + delta.Z * delta.Z));
+            int quadrant = (int)Math.Round(yaw / (Math.PI / 2.0));
+            return ((quadrant % 4) + 4) % 4;
+        }
+
+        /// <summary>
+        /// Rotates a 2D cell-grid offset by a quantized yaw quadrant (90° counter-clockwise steps).
+        /// </summary>
+        private static (int dx, int dy) RotateCellOffset(int dx, int dy, int quadrant) {
+            for (int i = 0; i < quadrant; i++) {
+                (dx, dy) = (-dy, dx);
+            }
+            return (dx, dy);
         }
 
         /// <summary>

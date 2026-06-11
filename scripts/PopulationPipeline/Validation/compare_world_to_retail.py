@@ -84,9 +84,14 @@ def load_generated(path):
     surface = 0
     interior = 0
     total = 0
+    skipped = 0
     region = set()
     for row in stream_jsonl(path):
-        lb = (int(row["lb_x"]), int(row["lb_y"]))
+        try:
+            lb = (int(row["lb_x"]), int(row["lb_y"]))
+        except (KeyError, TypeError, ValueError):
+            skipped += 1
+            continue
         wcid = row.get("wcid")
         if not isinstance(wcid, int) or wcid < 0:
             continue
@@ -99,6 +104,9 @@ def load_generated(path):
             surface += 1
         total += 1
         region.add(lb)
+    if skipped:
+        print(f"  generated rows skipped (missing/invalid lb_x/lb_y): {skipped:,}",
+              file=sys.stderr)
     return per_lb, wcid_counts, wcid_by_lb, surface, interior, total, region
 
 
@@ -527,6 +535,9 @@ def main():
     log(f"[1/3] Loading generated: {args.generated}")
     m_per_lb, m_wcid, m_wcid_by_lb, m_surf, m_int, m_total, region = load_generated(args.generated)
     log(f"  generated rows: {m_total:,}  unique wcids: {len(m_wcid):,}  region: {len(region):,} LBs")
+
+    if m_total == 0:
+        raise SystemExit("generated JSONL contained no valid placements")
 
     log(f"[2/3] Streaming retail (region-filtered): {args.retail}")
     retail_result, retail_cache_hit = load_retail_cached(

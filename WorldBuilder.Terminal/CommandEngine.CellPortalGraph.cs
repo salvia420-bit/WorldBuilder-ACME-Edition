@@ -62,6 +62,7 @@ public partial class CommandEngine {
         int PortalCount,
         int OrphanedCellCount,
         int AsymmetricPortalCount,
+        int UnresolvedTargetCount,
         IReadOnlyList<CellPortalLbReport> PerLb,
         string Source);
 
@@ -72,6 +73,7 @@ public partial class CommandEngine {
         int PortalCount,
         int OrphanedCellCount,
         int AsymmetricPortalCount,
+        int UnresolvedTargetCount,
         IReadOnlyList<string> OrphanedCells,
         IReadOnlyList<AsymmetricEdgeReport> AsymmetricPortals);
 
@@ -83,6 +85,7 @@ public partial class CommandEngine {
         string Reason);
 
     public sealed record PvsSnapshotResult(
+        bool Found,
         string CellHex,
         uint CellId,
         int BfsDepth,
@@ -147,14 +150,15 @@ public partial class CommandEngine {
         });
 
         var lbReports = new List<CellPortalLbReport>();
-        int totalCells = 0, totalPortals = 0, totalOrphans = 0, totalAsym = 0;
+        int totalCells = 0, totalPortals = 0, totalOrphans = 0, totalAsym = 0, totalUnresolved = 0;
 
         foreach (var rawLb in lbIds) {
             uint lbHigh = rawLb & 0xFFFF_0000u;
             ushort lbWord = (ushort)(lbHigh >> 16);
 
-            // Walk all EnvCells in this LB. EnvCells live in
-            // [lbHigh | 0x0100, lbHigh | 0xFFFD] per the AC convention.
+            // Walk all EnvCells in this LB. We scan the wide range
+            // [lbHigh | 0x0001, lbHigh | 0xFFFD] and let the enumerator's
+            // suffix filter keep only EnvCell IDs (suffix 0x0100..0xFFFD).
             // LandBlockInfo is at lbHigh | 0xFFFE; LandBlock at lbHigh | 0xFFFF.
             var cells = new Dictionary<uint, DRW.DBObjs.EnvCell>();
             uint rangeStart = lbHigh | 0x0001u;
@@ -167,6 +171,7 @@ public partial class CommandEngine {
 
             int lbPortalCount = 0;
             int lbAsymCount = 0;
+            int lbUnresolved = 0;
             var orphans = new List<string>();
             var asym = new List<AsymmetricEdgeReport>();
             var refCount = new Dictionary<uint, int>();
@@ -218,9 +223,19 @@ public partial class CommandEngine {
                     uint otherCellId = lbHigh | (uint)otherCellWord;
                     if (otherCellId == cellId) continue;
                     if (!cells.TryGetValue(otherCellId, out var otherCell)) {
-                        // Cross-LB portal: target is in another landblock.
-                        // Common in outdoor LB stitching; do NOT count as
-                        // asymmetric for the within-LB sweep.
+                        // Target widens (via the LB high word) to a cell ID
+                        // inside THIS landblock that has no EnvCell record —
+                        // a dangling within-LB reference, not a legitimate
+                        // cross-LB stitch (those never appear here because the
+                        // target always shares lbHigh by construction). Count
+                        // it as a finding rather than silently skipping.
+                        asym.Add(new AsymmetricEdgeReport(
+                            FromCellHex: $"0x{cellId:X8}",
+                            ToCellHex: $"0x{otherCellId:X8}",
+                            PolyId: polyId,
+                            OtherPortalId: otherPortalId,
+                            Reason: "unresolved target: no EnvCell record for OtherCellId in this LB"));
+                        lbUnresolved++;
                         continue;
                     }
                     var otherPortals = GetPortalsList(otherCell);
@@ -279,6 +294,7 @@ public partial class CommandEngine {
                 PortalCount: lbPortalCount,
                 OrphanedCellCount: lbOrphans,
                 AsymmetricPortalCount: lbAsymCount,
+                UnresolvedTargetCount: lbUnresolved,
                 OrphanedCells: orphans,
                 AsymmetricPortals: asym));
 
@@ -286,6 +302,7 @@ public partial class CommandEngine {
             totalPortals += lbPortalCount;
             totalOrphans += lbOrphans;
             totalAsym += lbAsymCount;
+            totalUnresolved += lbUnresolved;
         }
 
         return new CellPortalSweepResult(
@@ -296,6 +313,7 @@ public partial class CommandEngine {
             PortalCount: totalPortals,
             OrphanedCellCount: totalOrphans,
             AsymmetricPortalCount: totalAsym,
+            UnresolvedTargetCount: totalUnresolved,
             PerLb: lbReports,
             Source: $"CellPortalGraphSweep via DatReaderWriter on {Path.GetFileName(resolved)} (sha {sha[..12]}…); contract per acclient.c:362347-362403");
     }
@@ -311,14 +329,18 @@ public partial class CommandEngine {
     private static IEnumerable<uint> EnumerateEnvCellIdsInRange(DRW.DatDatabase dat, uint rangeStart, uint rangeEnd) {
         var treeField = typeof(DRW.DatDatabase).GetField("Tree",
             BindingFlags.Public | BindingFlags.Instance);
-        if (treeField == null) yield break;
+        if (treeField == null)
+            throw new InvalidOperationException("DRW API drift: DatDatabase.Tree field missing — cannot enumerate EnvCells (a silent yield-break would falsely report a clean sweep with 0 cells).");
         var tree = treeField.GetValue(dat);
-        if (tree == null) yield break;
+        if (tree == null)
+            throw new InvalidOperationException("DRW API drift: DatDatabase.Tree is null — cannot enumerate EnvCells.");
         var getFilesInRange = tree.GetType().GetMethods()
             .FirstOrDefault(m => m.Name == "GetFilesInRange" && m.GetParameters().Length == 2);
-        if (getFilesInRange == null) yield break;
+        if (getFilesInRange == null)
+            throw new InvalidOperationException("DRW API drift: Tree.GetFilesInRange(uint,uint) missing — cannot enumerate EnvCells.");
         var entries = getFilesInRange.Invoke(tree, new object[] { rangeStart, rangeEnd });
-        if (entries == null) yield break;
+        if (entries == null)
+            throw new InvalidOperationException("DRW API drift: GetFilesInRange returned null — cannot enumerate EnvCells.");
         PropertyInfo? idProp = null;
         foreach (var entry in (IEnumerable)entries) {
             idProp ??= entry.GetType().GetProperty("Id") ?? throw new InvalidOperationException(
@@ -449,6 +471,7 @@ public partial class CommandEngine {
 
         if (!dat.TryGet<DRW.DBObjs.EnvCell>(cellId, out var rootCell) || rootCell == null) {
             return new PvsSnapshotResult(
+                Found: false,
                 CellHex: $"0x{cellId:X8}",
                 CellId: cellId,
                 BfsDepth: bfsDepth,
@@ -506,6 +529,7 @@ public partial class CommandEngine {
         var onlyInDat  = datVisible.Except(live).OrderBy(x => x).Select(x => $"0x{x:X8}").ToList();
 
         return new PvsSnapshotResult(
+            Found: true,
             CellHex: $"0x{cellId:X8}",
             CellId: cellId,
             BfsDepth: bfsDepth,

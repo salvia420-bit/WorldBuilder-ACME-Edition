@@ -68,6 +68,7 @@ public partial class CommandEngine {
         public RegionSceneDescJson? SceneInfo { get; set; }
         public RegionTerrainDescJson TerrainInfo { get; set; } = new();
         public RegionMiscJson? RegionMisc { get; set; }
+        public bool? Partial { get; set; }
     }
 
     public sealed class RegionLandDefsJson {
@@ -263,7 +264,7 @@ public partial class CommandEngine {
             DatPath: resolvedPath,
             DatSha256: sha,
             OutPath: written,
-            PartsMask: $"0x{(uint)region.PartsMask:X8}",
+            PartsMask: $"0x{doc.PartsMask:X8}",
             DayGroups: doc.SkyInfo?.DayGroups.Count ?? 0,
             SoundStbs: doc.SoundInfo?.StbDesc.Count ?? 0,
             SceneTypes: doc.SceneInfo?.SceneTypes.Count ?? 0,
@@ -327,6 +328,8 @@ public partial class CommandEngine {
     public RegionDiffResult RegionDiff(string? otherDat, string? otherJson, int maxRows) {
         if (string.IsNullOrWhiteSpace(otherDat) && string.IsNullOrWhiteSpace(otherJson))
             throw new ArgumentException("Provide otherDat (a DAT path/alias) or otherJson (a region-export-json file).");
+        if (!string.IsNullOrWhiteSpace(otherDat) && !string.IsNullOrWhiteSpace(otherJson))
+            throw new ArgumentException("Provide otherDat OR otherJson, not both");
         if (maxRows <= 0) maxRows = 500;
 
         var (ours, oursSource, _, _) = LoadRegionForCommands(null);
@@ -353,13 +356,14 @@ public partial class CommandEngine {
         var theirsNode = JsonSerializer.SerializeToNode(theirsDoc, opts)!;
 
         var rows = new List<RegionDiffRow>();
-        DiffJsonNodes("", oursNode, theirsNode, rows, maxRows);
+        bool overflowed = false;
+        DiffJsonNodes("", oursNode, theirsNode, rows, maxRows, ref overflowed);
 
         return new RegionDiffResult(
             OursSource: oursSource,
             TheirsSource: theirsSource,
             DiffCount: rows.Count,
-            Truncated: rows.Count >= maxRows,
+            Truncated: overflowed,
             Rows: rows);
     }
 
@@ -738,6 +742,12 @@ public partial class CommandEngine {
     internal static List<string> ValidateRegionJsonDoc(RegionJsonDoc doc) {
         var problems = new List<string>();
 
+        uint id;
+        try { id = ParseRegionHexU32(doc.Id); }
+        catch { id = 0xFFFFFFFF; problems.Add($"id: failed to parse '{doc.Id}' as a hex u32."); }
+        if (id != RegionFileId)
+            problems.Add($"id must be 0x{RegionFileId:X8} (got {doc.Id}).");
+
         if (doc.LandDefs.LandHeightTable.Count != 256)
             problems.Add($"landDefs.landHeightTable must have exactly 256 entries (got {doc.LandDefs.LandHeightTable.Count}).");
 
@@ -759,44 +769,75 @@ public partial class CommandEngine {
             }
         }
 
-        if (doc.TerrainInfo.TerrainTypes.Count == 0)
+        if (doc.Partial != true && doc.TerrainInfo.TerrainTypes.Count == 0)
             problems.Add("terrainInfo.terrainTypes must not be empty.");
 
-        // Hex fields must parse; surface the first few failures with paths.
-        try { _ = JsonDocToRegionHexProbe(doc); }
-        catch (Exception ex) { problems.Add($"hex/enum field parse failure: {ex.Message}"); }
+        // Hex fields must parse; surface every failure with its JSON path.
+        JsonDocToRegionHexProbe(doc, problems);
 
         return problems;
     }
 
-    /// <summary>Cheap pre-parse of every hex/enum field so validation reports
-    /// them as problems instead of import throwing mid-build.</summary>
-    private static int JsonDocToRegionHexProbe(RegionJsonDoc doc) {
-        int n = 0;
-        foreach (var g in doc.SkyInfo?.DayGroups ?? new()) {
-            foreach (var o in g.SkyObjects) {
-                _ = ParseRegionHexU32(o.DefaultGfxObjectId); _ = ParseRegionHexU32(o.DefaultPesObjectId);
-                _ = ParseRegionHexU32(o.Properties); n += 3;
+    /// <summary>Pre-parse every hex/enum field, appending one problem per
+    /// failure (with its JSON path) so validation reports them all instead of
+    /// import throwing on the first.</summary>
+    private static void JsonDocToRegionHexProbe(RegionJsonDoc doc, List<string> problems) {
+        void Try(string jsonPath, Action probe) {
+            try { probe(); }
+            catch (Exception ex) { problems.Add($"{jsonPath}: {ex.Message}"); }
+        }
+
+        var skyGroups = doc.SkyInfo?.DayGroups ?? new();
+        for (int gi = 0; gi < skyGroups.Count; gi++) {
+            var g = skyGroups[gi];
+            for (int oi = 0; oi < g.SkyObjects.Count; oi++) {
+                var o = g.SkyObjects[oi];
+                string p = $"skyInfo.dayGroups[{gi}].skyObjects[{oi}]";
+                Try($"{p}.defaultGfxObjectId", () => ParseRegionHexU32(o.DefaultGfxObjectId));
+                Try($"{p}.defaultPesObjectId", () => ParseRegionHexU32(o.DefaultPesObjectId));
+                Try($"{p}.properties", () => ParseRegionHexU32(o.Properties));
             }
-            foreach (var t in g.SkyTime) {
-                _ = ColorFromHex(t.DirColor); _ = ColorFromHex(t.AmbColor); _ = ColorFromHex(t.WorldFogColor);
-                foreach (var sr in t.SkyObjReplace) { _ = ParseRegionHexU32(sr.GfxObjId); n++; }
-                n += 3;
+            for (int ti = 0; ti < g.SkyTime.Count; ti++) {
+                var t = g.SkyTime[ti];
+                string p = $"skyInfo.dayGroups[{gi}].skyTime[{ti}]";
+                Try($"{p}.dirColor", () => ColorFromHex(t.DirColor));
+                Try($"{p}.ambColor", () => ColorFromHex(t.AmbColor));
+                Try($"{p}.worldFogColor", () => ColorFromHex(t.WorldFogColor));
+                for (int si = 0; si < t.SkyObjReplace.Count; si++) {
+                    var sr = t.SkyObjReplace[si];
+                    Try($"{p}.skyObjReplace[{si}].gfxObjId", () => ParseRegionHexU32(sr.GfxObjId));
+                }
             }
         }
-        foreach (var s in doc.SoundInfo?.StbDesc ?? new()) {
-            _ = ParseRegionHexU32(s.StbId); n++;
-            foreach (var a in s.AmbientSounds) { _ = Enum.Parse<Sound>(a.SType, true); n++; }
+        var stbs = doc.SoundInfo?.StbDesc ?? new();
+        for (int si = 0; si < stbs.Count; si++) {
+            var s = stbs[si];
+            Try($"soundInfo.stbDesc[{si}].stbId", () => ParseRegionHexU32(s.StbId));
+            for (int ai = 0; ai < s.AmbientSounds.Count; ai++) {
+                var a = s.AmbientSounds[ai];
+                Try($"soundInfo.stbDesc[{si}].ambientSounds[{ai}].sType", () => Enum.Parse<Sound>(a.SType, true));
+            }
         }
-        foreach (var s in doc.SceneInfo?.SceneTypes ?? new())
-            foreach (var id in s.Scenes) { _ = ParseRegionHexU32(id); n++; }
-        foreach (var t in doc.TerrainInfo.TerrainTypes) { _ = ColorFromHex(t.TerrainColor); n++; }
-        foreach (var d in doc.TerrainInfo.LandSurfaces.TexMerge.TerrainDesc) {
-            _ = Enum.Parse<TerrainTextureType>(d.TerrainType, true);
-            _ = ParseRegionHexU32(d.TerrainTex.TextureId); _ = ParseRegionHexU32(d.TerrainTex.DetailTextureId);
-            n += 3;
+        var scenes = doc.SceneInfo?.SceneTypes ?? new();
+        for (int si = 0; si < scenes.Count; si++) {
+            var s = scenes[si];
+            for (int ii = 0; ii < s.Scenes.Count; ii++) {
+                var id = s.Scenes[ii];
+                Try($"sceneInfo.sceneTypes[{si}].scenes[{ii}]", () => ParseRegionHexU32(id));
+            }
         }
-        return n;
+        for (int ti = 0; ti < doc.TerrainInfo.TerrainTypes.Count; ti++) {
+            var t = doc.TerrainInfo.TerrainTypes[ti];
+            Try($"terrainInfo.terrainTypes[{ti}].terrainColor", () => ColorFromHex(t.TerrainColor));
+        }
+        var descs = doc.TerrainInfo.LandSurfaces.TexMerge.TerrainDesc;
+        for (int di = 0; di < descs.Count; di++) {
+            var d = descs[di];
+            string p = $"terrainInfo.landSurfaces.texMerge.terrainDesc[{di}]";
+            Try($"{p}.terrainType", () => Enum.Parse<TerrainTextureType>(d.TerrainType, true));
+            Try($"{p}.terrainTex.textureId", () => ParseRegionHexU32(d.TerrainTex.TextureId));
+            Try($"{p}.terrainTex.detailTextureId", () => ParseRegionHexU32(d.TerrainTex.DetailTextureId));
+        }
     }
 
     private static void CheckPart(List<string> problems, uint mask, uint bit, bool present, string name) {
@@ -815,37 +856,46 @@ public partial class CommandEngine {
         var unknown = keep.Where(k => !known.Contains(k)).ToList();
         if (unknown.Count > 0)
             throw new ArgumentException($"Unknown parts filter value(s): {string.Join(", ", unknown)}. Valid: sky, sound, scene, terrain, misc.");
-        if (!keep.Contains("sky")) doc.SkyInfo = null;
-        if (!keep.Contains("sound")) doc.SoundInfo = null;
-        if (!keep.Contains("scene")) doc.SceneInfo = null;
-        if (!keep.Contains("terrain")) doc.TerrainInfo = new RegionTerrainDescJson();
-        if (!keep.Contains("misc")) doc.RegionMisc = null;
+        bool filtered = false;
+        if (!keep.Contains("sky")) { doc.SkyInfo = null; doc.PartsMask &= ~(uint)PartsMask.HasSkyInfo; filtered = true; }
+        if (!keep.Contains("sound")) { doc.SoundInfo = null; doc.PartsMask &= ~(uint)PartsMask.HasSoundInfo; filtered = true; }
+        if (!keep.Contains("scene")) { doc.SceneInfo = null; doc.PartsMask &= ~(uint)PartsMask.HasSceneInfo; filtered = true; }
+        if (!keep.Contains("terrain")) { doc.TerrainInfo = new RegionTerrainDescJson(); filtered = true; }
+        if (!keep.Contains("misc")) { doc.RegionMisc = null; doc.PartsMask &= ~(uint)PartsMask.HasRegionMisc; filtered = true; }
+        if (filtered) doc.Partial = true;
     }
 
     /// <summary>Recursive JSON-tree diff. Paths are dotted with [i] array
     /// indices, e.g. <c>skyInfo.dayGroups[3].skyTime[0].dirColor</c>.</summary>
     private static void DiffJsonNodes(string path, JsonNode? ours, JsonNode? theirs, List<RegionDiffRow> rows, int maxRows) {
-        if (rows.Count >= maxRows) return;
+        bool overflowed = false;
+        DiffJsonNodes(path, ours, theirs, rows, maxRows, ref overflowed);
+    }
 
+    private static void AddDiffRow(List<RegionDiffRow> rows, int maxRows, ref bool overflowed, RegionDiffRow row) {
+        if (rows.Count >= maxRows) { overflowed = true; return; }
+        rows.Add(row);
+    }
+
+    private static void DiffJsonNodes(string path, JsonNode? ours, JsonNode? theirs, List<RegionDiffRow> rows, int maxRows, ref bool overflowed) {
         if (ours is JsonObject oursObj && theirs is JsonObject theirsObj) {
             var keys = oursObj.Select(kv => kv.Key).Union(theirsObj.Select(kv => kv.Key));
             foreach (var key in keys) {
-                if (rows.Count >= maxRows) return;
                 oursObj.TryGetPropertyValue(key, out var a);
                 theirsObj.TryGetPropertyValue(key, out var b);
-                DiffJsonNodes(path.Length == 0 ? key : $"{path}.{key}", a, b, rows, maxRows);
+                DiffJsonNodes(path.Length == 0 ? key : $"{path}.{key}", a, b, rows, maxRows, ref overflowed);
             }
             return;
         }
 
         if (ours is JsonArray oursArr && theirs is JsonArray theirsArr) {
             if (oursArr.Count != theirsArr.Count) {
-                rows.Add(new RegionDiffRow($"{path}.length", oursArr.Count.ToString(), theirsArr.Count.ToString()));
+                AddDiffRow(rows, maxRows, ref overflowed,
+                    new RegionDiffRow($"{path}.length", oursArr.Count.ToString(), theirsArr.Count.ToString()));
             }
             int n = Math.Min(oursArr.Count, theirsArr.Count);
             for (int i = 0; i < n; i++) {
-                if (rows.Count >= maxRows) return;
-                DiffJsonNodes($"{path}[{i}]", oursArr[i], theirsArr[i], rows, maxRows);
+                DiffJsonNodes($"{path}[{i}]", oursArr[i], theirsArr[i], rows, maxRows, ref overflowed);
             }
             return;
         }
@@ -853,7 +903,8 @@ public partial class CommandEngine {
         var oursJson = ours?.ToJsonString();
         var theirsJson = theirs?.ToJsonString();
         if (oursJson != theirsJson) {
-            rows.Add(new RegionDiffRow(path, oursJson ?? "(absent)", theirsJson ?? "(absent)"));
+            AddDiffRow(rows, maxRows, ref overflowed,
+                new RegionDiffRow(path, oursJson ?? "(absent)", theirsJson ?? "(absent)"));
         }
     }
 

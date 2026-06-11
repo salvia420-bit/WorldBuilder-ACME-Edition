@@ -194,7 +194,8 @@ public partial class CommandEngine {
     /// <c>k = 0..hours-1</c>. <paramref name="hours"/> must be ≥ 1.
     /// </summary>
     public SkyboxDayNightCurveResult RegionDayNightCurve(int hours, string? datPath) {
-        if (hours < 1) hours = 24;
+        if (hours < 1)
+            throw new ArgumentOutOfRangeException(nameof(hours), hours, "hours must be >= 1.");
         var (region, regionType, resolvedPath, sha) = LoadRegion(datPath);
         var gameTime = GetFieldValue(region, regionType, "GameTime")
             ?? throw new InvalidOperationException("Region.GameTime is null");
@@ -226,38 +227,10 @@ public partial class CommandEngine {
     /// matches the convention in <c>CommandEngine.DatParity.cs</c>.
     /// </summary>
     private (object Region, Type RegionType, string ResolvedPath, string Sha256) LoadRegion(string? datPath) {
-        var idx = GetDBObjTypeIndex();
-        if (!idx.TryGetValue("Region", out var regionType)) {
-            throw new InvalidOperationException(
-                "Could not locate DatReaderWriter.DBObjs.Region in vendored assembly.");
-        }
-        var resolved = ResolveDatPathForType(datPath, regionType);
-        var sha = ComputeDatSha256(resolved);
-        var dat = new DRW.DatDatabase(o => {
-            o.FilePath = resolved;
-            o.AccessType = DRW.Options.DatAccessType.Read;
-            o.IndexCachingStrategy = DRW.Options.IndexCachingStrategy.Never;
-        });
-        try {
-            var tryGet = typeof(DRW.DatDatabase)
-                .GetMethods()
-                .FirstOrDefault(m => m.Name == "TryGet"
-                    && m.IsGenericMethodDefinition
-                    && m.GetParameters().Length == 2)
-                ?? throw new InvalidOperationException(
-                    "DatDatabase.TryGet<T>(id, out T) not found on vendored assembly.");
-            var tryGetGeneric = tryGet.MakeGenericMethod(regionType);
-            var args = new object?[] { SkyboxDerethRegionId, null };
-            bool ok = (bool)(tryGetGeneric.Invoke(dat, args) ?? false);
-            if (!ok || args[1] == null) {
-                throw new InvalidOperationException(
-                    $"DatDatabase.TryGet<Region>(0x{SkyboxDerethRegionId:X8}, out region) returned false. " +
-                    $"Verify {resolved} is the canonical base DAT.");
-            }
-            return (args[1]!, regionType, resolved, sha);
-        } finally {
-            dat.Dispose();
-        }
+        // Route through the staged-aware loader so region-import-json edits
+        // (apply:true) are reflected here; falls back to the DAT otherwise.
+        var (region, source, resolvedPath, sha) = LoadRegionForCommands(datPath);
+        return (region, region.GetType(), resolvedPath ?? source, sha ?? "");
     }
 
     /// <summary>

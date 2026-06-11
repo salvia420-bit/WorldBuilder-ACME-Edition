@@ -145,6 +145,7 @@ public partial class CommandEngine {
         string OutDir,
         string DatPath,
         int RequestedCount,
+        int DistinctCount,
         int PngCount,
         int FailCount,
         IReadOnlyList<UiTextureRecord> Records,
@@ -307,7 +308,7 @@ public partial class CommandEngine {
 
         if (element.States != null) {
             foreach (var kvp in element.States) {
-                var name = kvp.Key.ToString() ?? $"0x{(uint)kvp.Key:X8}";
+                var name = Enum.IsDefined(kvp.Key) ? kvp.Key.ToString() : $"0x{(uint)kvp.Key:X8}";
                 var rec = BuildStateDescRecord(
                     stateDesc: kvp.Value,
                     elementRectFallback: element,
@@ -341,7 +342,7 @@ public partial class CommandEngine {
             ReadOrder: element.ReadOrder,
             Type: element.Type,
             ParentElementIdHex: parentId.HasValue ? $"0x{parentId.Value:X8}" : null,
-            DefaultState: element.DefaultState.ToString() ?? $"0x{(uint)element.DefaultState:X8}",
+            DefaultState: Enum.IsDefined(element.DefaultState) ? element.DefaultState.ToString() : $"0x{(uint)element.DefaultState:X8}",
             StateDesc: defaultStateRecord,
             States: allStateRecords,
             ImageDids: elementImageDids.Select(d => $"0x{d:X8}").ToList(),
@@ -793,7 +794,8 @@ public partial class CommandEngine {
         return new UiTextureExtractResult(
             OutDir: outDir,
             DatPath: resolvedPortal,
-            RequestedCount: records.Count,
+            RequestedCount: dids.Count,
+            DistinctCount: records.Count,
             PngCount: pass,
             FailCount: fail,
             Records: records,

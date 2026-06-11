@@ -44,15 +44,16 @@ namespace WorldBuilder.Terminal;
 ///
 /// Header-mode contract (CRITICAL for matching Rust holtburger-protocol):
 ///
-///   <c>headerMode = "payload"</c> (default) — emit only the field-level
-///   payload bytes. For an ACGameAction subclass that means {sequence,
-///   actionType, payload}; for a top-level ACS2CMessage/ACC2SMessage that
-///   means {opcode, fields}. This matches what a wire trace shows after
-///   network framing is stripped.
+///   <c>headerMode = "payload"</c> (default) — emit only the subclass
+///   payload bytes. For an Ordered_GameAction subclass that strips the
+///   base header (sequence + actionType); for an Ordered_GameEvent subclass
+///   that strips the base header (objectId + sequence + eventType); for a
+///   top-level ACS2CMessage/ACC2SMessage that means the bare
+///   <c>instance.Write</c> output with NO opcode prefix. This matches what
+///   a wire trace shows after network framing is stripped.
 ///
 ///   <c>headerMode = "full"</c> — emit the full Chorizite-side bytes
-///   exactly. For ACGameAction adds the <c>0xF7B1</c> Ordered_GameAction
-///   outer opcode header.
+///   exactly, adding the opcode + the base envelope.
 ///
 /// Why this exists: Wave 1's whole job is to surface byte-level
 /// divergences between Chorizite (the canonical pack/unpack oracle) and
@@ -321,10 +322,7 @@ public partial class CommandEngine {
     /// Approach: use a scratch <see cref="MemoryStream"/>, invoke the
     /// full <c>Write</c>, then strip the known-length prefix bytes
     /// (8 bytes for Ordered_GameAction header — sequence + actionType;
-    /// 16 bytes for Ordered_GameEvent header — objectId + sequence + eventType,
-    /// then base.Read of Ordered_GameEvent also rewinds 12 bytes during
-    /// ProcessS2CMessage so the on-wire footprint is opcode + objectId +
-    /// sequence + eventType + payload).
+    /// 12 bytes for Ordered_GameEvent header — objectId + sequence + eventType).
     ///
     /// This is reflection-free but tightly coupled to Chorizite's
     /// generated code — if the upstream template changes, this needs to
@@ -546,7 +544,14 @@ public partial class CommandEngine {
             }
         }
         foreach (var kv in node.AsObject()) {
-            if (!fieldsByLower.TryGetValue(kv.Key, out var field)) continue;
+            if (!fieldsByLower.TryGetValue(kv.Key, out var field)) {
+                var valid = string.Join(", ", fieldsByLower.Values
+                    .Select(f => f.Name)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(n => n, StringComparer.Ordinal));
+                throw new ArgumentException(
+                    $"Unknown field '{kv.Key}' for {instance.GetType().Name}. Valid: {valid}");
+            }
             if (kv.Value == null) continue;
             object? converted = ConvertJsonToType(kv.Value, field.FieldType);
             if (converted != null) field.SetValue(instance, converted);
@@ -567,15 +572,16 @@ public partial class CommandEngine {
             }
             return Enum.ToObject(target, node.GetValue<long>());
         }
-        // Primitive numeric / bool / string.
-        if (target == typeof(uint))   return (uint)UInt32Parse(node);
-        if (target == typeof(int))    return (int)Int32Parse(node);
-        if (target == typeof(ushort)) return (ushort)UInt32Parse(node);
-        if (target == typeof(short))  return (short)Int32Parse(node);
-        if (target == typeof(byte))   return (byte)UInt32Parse(node);
-        if (target == typeof(sbyte))  return (sbyte)Int32Parse(node);
-        if (target == typeof(ulong))  return (ulong)UInt64Parse(node);
-        if (target == typeof(long))   return (long)Int64Parse(node);
+        // Primitive numeric / bool / string. Range-checked narrowing so an
+        // out-of-range JSON value FAILs instead of silently wrapping.
+        if (target == typeof(uint))   return (uint)CheckUnsignedRange(node, uint.MaxValue, "uint");
+        if (target == typeof(int))    { var v = ReadAsInt64(node); RequireInRange(node, v, int.MinValue, int.MaxValue, "int"); return (int)v; }
+        if (target == typeof(ushort)) return (ushort)CheckUnsignedRange(node, ushort.MaxValue, "ushort");
+        if (target == typeof(short))  { var v = ReadAsInt64(node); RequireInRange(node, v, short.MinValue, short.MaxValue, "short"); return (short)v; }
+        if (target == typeof(byte))   return (byte)CheckUnsignedRange(node, byte.MaxValue, "byte");
+        if (target == typeof(sbyte))  { var v = ReadAsInt64(node); RequireInRange(node, v, sbyte.MinValue, sbyte.MaxValue, "sbyte"); return (sbyte)v; }
+        if (target == typeof(ulong))  return CheckUnsignedRange(node, ulong.MaxValue, "ulong");
+        if (target == typeof(long))   return ReadAsInt64(node);
         if (target == typeof(float))  return (float)ReadAsDouble(node);
         if (target == typeof(double)) return ReadAsDouble(node);
         if (target == typeof(bool))   return node.GetValue<bool>();
@@ -687,10 +693,40 @@ public partial class CommandEngine {
         throw new InvalidOperationException($"Cannot read number from JsonNode kind={node.GetValueKind()}");
     }
 
-    private static long UInt32Parse(JsonNode node) => (long)ReadAsUInt64(node);
-    private static int Int32Parse(JsonNode node) => (int)ReadAsInt64(node);
-    private static ulong UInt64Parse(JsonNode node) => ReadAsUInt64(node);
-    private static long Int64Parse(JsonNode node) => ReadAsInt64(node);
+    private static void RequireInRange(JsonNode node, long value, long min, long max, string typeName) {
+        if (value < min || value > max) {
+            throw new ArgumentException(
+                $"'{node.GetValueKind()}' value {value} out of range for {typeName}");
+        }
+    }
+
+    // Read a non-negative integer and verify it fits the unsigned target.
+    // Negative JSON inputs (which would wrap) are rejected; values up to
+    // ulong.MaxValue are read without going through the signed path.
+    private static ulong CheckUnsignedRange(JsonNode node, ulong max, string typeName) {
+        if (IsNegativeNumeric(node)) {
+            throw new ArgumentException(
+                $"'{node.GetValueKind()}' value {ReadAsInt64(node)} out of range for {typeName}");
+        }
+        var value = ReadAsUInt64(node);
+        if (value > max) {
+            throw new ArgumentException(
+                $"'{node.GetValueKind()}' value {value} out of range for {typeName}");
+        }
+        return value;
+    }
+
+    private static bool IsNegativeNumeric(JsonNode node) {
+        if (node.GetValueKind() == JsonValueKind.String) {
+            var s = node.GetValue<string>().Trim();
+            return s.StartsWith("-", StringComparison.Ordinal);
+        }
+        if (node is JsonValue jv) {
+            if (jv.TryGetValue<long>(out var l))   return l < 0;
+            if (jv.TryGetValue<double>(out var d)) return d < 0;
+        }
+        return false;
+    }
 
     private static readonly JsonSerializerOptions WireConformanceJsonOpts = new() {
         WriteIndented = false,

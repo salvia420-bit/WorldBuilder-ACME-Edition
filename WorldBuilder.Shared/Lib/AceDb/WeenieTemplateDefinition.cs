@@ -24,7 +24,17 @@ namespace WorldBuilder.Shared.Lib.AceDb {
 
     public static class WeenieTemplateJson {
         /// <summary>Parses a JSON array of templates, or a single template object.</summary>
-        public static IReadOnlyList<WeenieTemplateDefinition> ParseBundle(string json) {
+        public static IReadOnlyList<WeenieTemplateDefinition> ParseBundle(string json)
+            => ParseBundle(json, out _);
+
+        /// <summary>
+        /// Parses a JSON array of templates, or a single template object, collecting a
+        /// per-template / per-row diagnostic for every element or row that was skipped or
+        /// rejected so callers can surface them instead of silently dropping data. (F238)
+        /// </summary>
+        public static IReadOnlyList<WeenieTemplateDefinition> ParseBundle(string json, out IReadOnlyList<string> warnings) {
+            var warn = new List<string>();
+            warnings = warn;
             json = json.Trim();
             if (string.IsNullOrEmpty(json)) return Array.Empty<WeenieTemplateDefinition>();
 
@@ -33,36 +43,50 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             var list = new List<WeenieTemplateDefinition>();
 
             if (root.ValueKind == JsonValueKind.Array) {
+                int idx = 0;
                 foreach (var el in root.EnumerateArray()) {
-                    if (TryParseOne(el, out var d) && d != null)
+                    if (TryParseOne(el, $"template[{idx}]", warn, out var d) && d != null)
                         list.Add(d);
+                    idx++;
                 }
             }
             else if (root.ValueKind == JsonValueKind.Object) {
-                if (TryParseOne(root, out var d) && d != null)
+                if (TryParseOne(root, "template[0]", warn, out var d) && d != null)
                     list.Add(d);
             }
 
             return list;
         }
 
-        static bool TryParseOne(JsonElement el, out WeenieTemplateDefinition? def) {
+        static bool TryParseOne(JsonElement el, string ctx, List<string> warn, out WeenieTemplateDefinition? def) {
             def = null;
-            if (el.ValueKind != JsonValueKind.Object) return false;
+            if (el.ValueKind != JsonValueKind.Object) {
+                warn.Add($"{ctx}: not a JSON object");
+                return false;
+            }
 
             var id = GetString(el, "id");
             var title = GetString(el, "title");
-            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(title)) return false;
+            if (string.IsNullOrWhiteSpace(id)) { warn.Add($"{ctx}: missing id"); return false; }
+            if (string.IsNullOrWhiteSpace(title)) { warn.Add($"{ctx}: missing title"); return false; }
 
             var desc = GetString(el, "description");
             if (string.IsNullOrWhiteSpace(desc)) desc = null;
 
-            // Pre-declare with the default (1) so definite-assignment holds even
-            // when the `&&` short-circuits (TryGetProperty false skips the `out`).
+            // weenieType: absent → default 1; present-but-unparseable → reject the template
+            // (do NOT silently fall back to 1, which would corrupt the weenie's type). (F238)
             uint weenieType = 1;
-            bool weenieTypeExplicit = el.TryGetProperty("weenieType", out var wtEl) && wtEl.TryGetUInt32(out weenieType);
-            if (!weenieTypeExplicit)
-                weenieType = 1;
+            bool weenieTypePresent = el.TryGetProperty("weenieType", out var wtEl);
+            bool weenieTypeExplicit = false;
+            if (weenieTypePresent) {
+                if (wtEl.ValueKind == JsonValueKind.Number && wtEl.TryGetUInt32(out weenieType)) {
+                    weenieTypeExplicit = true;
+                }
+                else {
+                    warn.Add($"{ctx}: weenieType present but not a uint32");
+                    return false;
+                }
+            }
 
             def = new WeenieTemplateDefinition {
                 Id = id.Trim(),
@@ -70,13 +94,13 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 Description = desc?.Trim(),
                 WeenieType = weenieType,
                 WeenieTypeExplicit = weenieTypeExplicit,
-                Ints = ReadIntProps(el, "ints"),
-                Int64s = ReadInt64Props(el, "int64s"),
-                Bools = ReadBoolProps(el, "bools"),
-                Floats = ReadFloatProps(el, "floats"),
-                Strings = ReadStringProps(el, "strings"),
-                DataIds = ReadUintProps(el, "dataIds"),
-                InstanceIds = ReadUlongProps(el, "instanceIds"),
+                Ints = ReadIntProps(el, "ints", ctx, warn),
+                Int64s = ReadInt64Props(el, "int64s", ctx, warn),
+                Bools = ReadBoolProps(el, "bools", ctx, warn),
+                Floats = ReadFloatProps(el, "floats", ctx, warn),
+                Strings = ReadStringProps(el, "strings", ctx, warn),
+                DataIds = ReadUintProps(el, "dataIds", ctx, warn),
+                InstanceIds = ReadUlongProps(el, "instanceIds", ctx, warn),
             };
             return true;
         }
@@ -86,81 +110,96 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             return p.ValueKind == JsonValueKind.String ? p.GetString() : null;
         }
 
-        static List<(ushort, int)> ReadIntProps(JsonElement parent, string arrayName) {
+        static List<(ushort, int)> ReadIntProps(JsonElement parent, string arrayName, string ctx, List<string> warn) {
             var list = new List<(ushort, int)>();
             if (!parent.TryGetProperty(arrayName, out var arr) || arr.ValueKind != JsonValueKind.Array) return list;
+            int i = 0;
             foreach (var item in arr.EnumerateArray()) {
-                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) continue;
-                if (item.TryGetProperty("value", out var v) && v.TryGetInt32(out var value))
-                    list.Add((type, value));
+                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) { warn.Add($"{ctx}: {arrayName}[{i}] type not a uint16"); i++; continue; }
+                if (item.TryGetProperty("value", out var v) && v.TryGetInt32(out var value)) list.Add((type, value));
+                else warn.Add($"{ctx}: {arrayName}[{i}] value not an int32");
+                i++;
             }
             return list;
         }
 
-        static List<(ushort, long)> ReadInt64Props(JsonElement parent, string arrayName) {
+        static List<(ushort, long)> ReadInt64Props(JsonElement parent, string arrayName, string ctx, List<string> warn) {
             var list = new List<(ushort, long)>();
             if (!parent.TryGetProperty(arrayName, out var arr) || arr.ValueKind != JsonValueKind.Array) return list;
+            int i = 0;
             foreach (var item in arr.EnumerateArray()) {
-                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) continue;
-                if (item.TryGetProperty("value", out var v) && v.TryGetInt64(out var value))
-                    list.Add((type, value));
+                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) { warn.Add($"{ctx}: {arrayName}[{i}] type not a uint16"); i++; continue; }
+                if (item.TryGetProperty("value", out var v) && v.TryGetInt64(out var value)) list.Add((type, value));
+                else warn.Add($"{ctx}: {arrayName}[{i}] value not an int64");
+                i++;
             }
             return list;
         }
 
-        static List<(ushort, bool)> ReadBoolProps(JsonElement parent, string arrayName) {
+        static List<(ushort, bool)> ReadBoolProps(JsonElement parent, string arrayName, string ctx, List<string> warn) {
             var list = new List<(ushort, bool)>();
             if (!parent.TryGetProperty(arrayName, out var arr) || arr.ValueKind != JsonValueKind.Array) return list;
+            int i = 0;
             foreach (var item in arr.EnumerateArray()) {
-                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) continue;
-                if (item.TryGetProperty("value", out var v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False))
-                    list.Add((type, v.GetBoolean()));
+                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) { warn.Add($"{ctx}: {arrayName}[{i}] type not a uint16"); i++; continue; }
+                if (item.TryGetProperty("value", out var v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)) list.Add((type, v.GetBoolean()));
+                else warn.Add($"{ctx}: {arrayName}[{i}] value not a bool");
+                i++;
             }
             return list;
         }
 
-        static List<(ushort, double)> ReadFloatProps(JsonElement parent, string arrayName) {
+        static List<(ushort, double)> ReadFloatProps(JsonElement parent, string arrayName, string ctx, List<string> warn) {
             var list = new List<(ushort, double)>();
             if (!parent.TryGetProperty(arrayName, out var arr) || arr.ValueKind != JsonValueKind.Array) return list;
+            int i = 0;
             foreach (var item in arr.EnumerateArray()) {
-                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) continue;
-                if (item.TryGetProperty("value", out var v) && v.TryGetDouble(out var value))
-                    list.Add((type, value));
+                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) { warn.Add($"{ctx}: {arrayName}[{i}] type not a uint16"); i++; continue; }
+                if (item.TryGetProperty("value", out var v) && v.TryGetDouble(out var value)) list.Add((type, value));
+                else warn.Add($"{ctx}: {arrayName}[{i}] value not a double");
+                i++;
             }
             return list;
         }
 
-        static List<(ushort, string)> ReadStringProps(JsonElement parent, string arrayName) {
+        static List<(ushort, string)> ReadStringProps(JsonElement parent, string arrayName, string ctx, List<string> warn) {
             var list = new List<(ushort, string)>();
             if (!parent.TryGetProperty(arrayName, out var arr) || arr.ValueKind != JsonValueKind.Array) return list;
+            int i = 0;
             foreach (var item in arr.EnumerateArray()) {
-                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) continue;
+                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) { warn.Add($"{ctx}: {arrayName}[{i}] type not a uint16"); i++; continue; }
                 if (item.TryGetProperty("value", out var v)) {
                     var s = v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : v.ToString();
                     list.Add((type, s));
                 }
+                else warn.Add($"{ctx}: {arrayName}[{i}] missing value");
+                i++;
             }
             return list;
         }
 
-        static List<(ushort, uint)> ReadUintProps(JsonElement parent, string arrayName) {
+        static List<(ushort, uint)> ReadUintProps(JsonElement parent, string arrayName, string ctx, List<string> warn) {
             var list = new List<(ushort, uint)>();
             if (!parent.TryGetProperty(arrayName, out var arr) || arr.ValueKind != JsonValueKind.Array) return list;
+            int i = 0;
             foreach (var item in arr.EnumerateArray()) {
-                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) continue;
-                if (item.TryGetProperty("value", out var v) && TryGetUInt32(v, out var value))
-                    list.Add((type, value));
+                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) { warn.Add($"{ctx}: {arrayName}[{i}] type not a uint16"); i++; continue; }
+                if (item.TryGetProperty("value", out var v) && TryGetUInt32(v, out var value)) list.Add((type, value));
+                else warn.Add($"{ctx}: {arrayName}[{i}] value not a uint32");
+                i++;
             }
             return list;
         }
 
-        static List<(ushort, ulong)> ReadUlongProps(JsonElement parent, string arrayName) {
+        static List<(ushort, ulong)> ReadUlongProps(JsonElement parent, string arrayName, string ctx, List<string> warn) {
             var list = new List<(ushort, ulong)>();
             if (!parent.TryGetProperty(arrayName, out var arr) || arr.ValueKind != JsonValueKind.Array) return list;
+            int i = 0;
             foreach (var item in arr.EnumerateArray()) {
-                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) continue;
-                if (item.TryGetProperty("value", out var v) && TryGetUInt64(v, out var value))
-                    list.Add((type, value));
+                if (!item.TryGetProperty("type", out var t) || !TryGetUInt16(t, out var type)) { warn.Add($"{ctx}: {arrayName}[{i}] type not a uint16"); i++; continue; }
+                if (item.TryGetProperty("value", out var v) && TryGetUInt64(v, out var value)) list.Add((type, value));
+                else warn.Add($"{ctx}: {arrayName}[{i}] value not a uint64");
+                i++;
             }
             return list;
         }

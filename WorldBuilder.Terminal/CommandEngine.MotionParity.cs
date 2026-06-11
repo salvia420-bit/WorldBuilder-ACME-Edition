@@ -58,15 +58,13 @@ public partial class CommandEngine {
 
     /// <summary>
     /// Compact identifier for the resolved swing class — High / Medium /
-    /// Low for melee; Cast for magic; Aim for the missile stances; Unknown
-    /// for everything else.
+    /// Low for melee; Cast for magic; Unknown for everything else.
     /// </summary>
     public enum SwingLinkClass {
         Melee_High,
         Melee_Medium,
         Melee_Low,
         Magic_Cast,
-        Aim,
         Unknown,
     }
 
@@ -470,11 +468,13 @@ public partial class CommandEngine {
     /// </summary>
     public sealed record MotionAnimHooksResult(
         uint MotionTableId,
+        bool Found,
         int CycleCount,
         int ModifierCount,
         int LinkCount,
         int AnimationCount,
-        IReadOnlyList<AnimHookJs> Hooks);
+        IReadOnlyList<AnimHookJs> Hooks,
+        string? FailureReason);
 
     /// <summary>
     /// Walk a MotionTable's cycles/modifiers/links, dedupe the set of
@@ -511,11 +511,13 @@ public partial class CommandEngine {
         if (!dat.TryGet<MotionTable>(motionTableId, out var mt) || mt == null) {
             return new MotionAnimHooksResult(
                 MotionTableId: motionTableId,
+                Found: false,
                 CycleCount: 0,
                 ModifierCount: 0,
                 LinkCount: 0,
                 AnimationCount: 0,
-                Hooks: Array.Empty<AnimHookJs>());
+                Hooks: Array.Empty<AnimHookJs>(),
+                FailureReason: $"motion-table-not-in-dat ({resolvedDatPath} has no 0x{motionTableId:X8})");
         }
 
         int cycleCount = mt.Cycles?.Count ?? 0;
@@ -577,11 +579,13 @@ public partial class CommandEngine {
 
         return new MotionAnimHooksResult(
             MotionTableId: motionTableId,
+            Found: true,
             CycleCount: cycleCount,
             ModifierCount: modifierCount,
             LinkCount: linkCount,
             AnimationCount: animationCount,
-            Hooks: hooks);
+            Hooks: hooks,
+            FailureReason: null);
     }
 
     /// <summary>
@@ -628,7 +632,15 @@ public partial class CommandEngine {
     /// </summary>
     private static AnimHookJs BuildAnimHookEntry(
         uint animDid, int frameIdx, AnimationHook rawHook) {
-        string typeName = rawHook.GetType().Name;
+        // Emit the dats.xml AnimationHookType enum name (e.g. "Sound",
+        // "CreateParticle", "CallPES") rather than the DRW class name
+        // (e.g. "SoundHook"): strip the trailing "Hook" suffix from the
+        // subtype name so validators can filter on the documented enum
+        // names per dats.xml:233-263.
+        string rawTypeName = rawHook.GetType().Name;
+        string typeName = rawTypeName.EndsWith("Hook", StringComparison.Ordinal)
+            ? rawTypeName.Substring(0, rawTypeName.Length - "Hook".Length)
+            : rawTypeName;
         uint? soundDid = null;
         uint? emitterDid = null;
         uint? emitterId = null;

@@ -148,8 +148,8 @@ namespace WorldBuilder.Shared.Lib {
                     Normal = Vector3.Normalize(n),
                     UVs = new List<Vec2Duv> { new() { U = t.X, V = t.Y } }
                 };
-                if (nextId == ushort.MaxValue)
-                    throw new InvalidOperationException("Too many unique vertices (ushort overflow).");
+                if (nextId == short.MaxValue)
+                    throw new InvalidOperationException("Too many unique vertices (the Polygon.VertexIds short cast overflows past 32767).");
                 verts[nextId] = nv;
                 return nextId++;
             }

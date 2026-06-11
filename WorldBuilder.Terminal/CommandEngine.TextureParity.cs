@@ -32,12 +32,12 @@ namespace WorldBuilder.Terminal;
 ///     per record processed in the range.
 ///
 ///   - <c>chorizite-decode-texture-chain-chunk &lt;startId&gt; &lt;endId&gt;</c>
-///     — same iterator, but additionally records the resolved chain shape
-///     (solid vs textured, Palette branch vs ClipMap branch, MIP-level
-///     selection). Compares the mean RGBA against the in-chunk fast path
-///     output (no-op when both sides decode through the same Chorizite
-///     extension — drift here surfaces as a parser bug per the W2.D
-///     contract from <c>project_emit_dynamic_site</c> Surface chain notes).
+///     — same iterator and same decode path as decode-surface-chunk; the
+///     only difference is the echoed <c>command</c> string and a distinct
+///     <c>texchain_</c> progress-sidecar prefix so the two commands do not
+///     clobber each other's progress.json. The per-record chain shape
+///     (solid vs textured, Palette branch vs ClipMap branch) is emitted by
+///     both commands via <see cref="TextureRecordResult.ChainKind"/>.
 ///
 /// Contract (per <c>docs/texture-parity-method.md</c>):
 ///   For every Surface in the portal DAT (~6,152 records), the Chorizite
@@ -144,12 +144,11 @@ public partial class CommandEngine {
     // ─────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Same scan as <see cref="ChoriziteDecodeSurfaceChunk"/> but records
-    /// the full chain shape per record (solid vs textured, palette branch
-    /// vs clipmap branch, MIP level selection). Used by W4.B to surface
-    /// chain-graph mismatches between our Rust port and the Chorizite
-    /// oracle — when both produce the same RGBA, the chain shape is what
-    /// confirms they walked the same path.
+    /// Alias of <see cref="ChoriziteDecodeSurfaceChunk"/> over the identical
+    /// decode path; differs only in the echoed command string and a distinct
+    /// <c>texchain_</c> progress-sidecar prefix. The per-record chain shape
+    /// (solid vs textured, palette branch vs clipmap branch) is emitted by
+    /// both via <see cref="TextureRecordResult.ChainKind"/>.
     /// </summary>
     public TextureChunkResult ChoriziteDecodeTextureChainChunk(
         uint startId, uint endId,
@@ -167,29 +166,9 @@ public partial class CommandEngine {
     private const uint SurfaceFirstId = 0x08000000u;
     private const uint SurfaceLastIdExclusive = 0x08010000u;
 
-    /// <summary>
-    /// Holtburg fast-mode subset. Sourced from the 50-sample deterministic
-    /// seeds in <c>apps/holtburger-web/fixtures/dat/seeds.json</c> (the
-    /// W2.B sampler). Spec says "Holtburg 81-model subset" — until a real
-    /// per-Holtburg Surface index lands (Wave 4 follow-on), we approximate
-    /// with the 50 deterministic Surface DIDs we already sample for DAT
-    /// parity (sub-second feedback, deterministic seed).
-    /// </summary>
-    private static readonly uint[] FastModeSubset = new uint[] {
-        // 50 deterministic Surface samples from seeds.json (sha-mod-50).
-        // Re-derivable at any time by reading
-        //   apps/holtburger-web/fixtures/dat/seeds.json → samples.Surface
-        // and parsing the hex strings.
-        0x08000219u, 0x08000DCBu, // From RenderSurface EOR test fixtures
-        // The rest are filled in at first-call time by sampling the
-        // available Surface IDs in 6,152 records — picked deterministic
-        // by (id % stride). 50 entries total = sub-second decode.
-    };
-
     private static IReadOnlyList<uint> ResolveFastModeIds(DRW.DatDatabase dat) {
-        // Walk the portal DAT for every Surface ID and sample 50 evenly.
+        // Walk the portal DAT for every Surface ID and sample 81 evenly by stride.
         var allIds = new List<uint>();
-        using var dat2 = dat;
         var idx = GetDBObjTypeIndex();
         if (!idx.TryGetValue("Surface", out var surfaceType)) {
             return Array.Empty<uint>();
@@ -289,7 +268,8 @@ public partial class CommandEngine {
         }
 
         // Persist progress sidecar.
-        var chunkLabel = $"surface_{startId:X8}_{endId:X8}" + (fastMode ? "_fast" : "");
+        var labelPrefix = recordChainDetails ? "texchain" : "surface";
+        var chunkLabel = $"{labelPrefix}_{startId:X8}_{endId:X8}" + (fastMode ? "_fast" : "");
         var progressDir = Path.Combine(resolvedCache, "progress");
         Directory.CreateDirectory(progressDir);
         var progressPath = Path.Combine(progressDir, chunkLabel + ".json");
@@ -388,12 +368,14 @@ public partial class CommandEngine {
             };
             var pixelSha = Sha256Hex(argbPixel);
             if (emitPng) EmitPng(cacheRoot, surfaceSha, argbPixel, 1, 1);
+            bool isEmpty = (c?.Red ?? 0) == 0 && (c?.Green ?? 0) == 0
+                && (c?.Blue ?? 0) == 0 && (c?.Alpha ?? 0) == 0;
             var solid = new TextureRecordResult(
                 IdHex: idHex, Id: id,
                 SurfaceSha256: surfaceSha,
                 PixelSha256: pixelSha,
                 Width: 1, Height: 1,
-                Status: "PASS",
+                Status: isEmpty ? "EMPTY" : "PASS",
                 MeanRgba: new[] { r, g, b, a },
                 ChainKind: "solid",
                 SurfaceTextureId: null,
@@ -644,7 +626,7 @@ public partial class CommandEngine {
                 for (int x = 0; x < width; x++) {
                     int s = (y * width + x) * 2;
                     int d = (y * width + x) * 4;
-                    int palIndex = BinaryPrimitives.ReadInt16LittleEndian(
+                    int palIndex = BinaryPrimitives.ReadUInt16LittleEndian(
                         src.AsSpan(s, 2));
                     var c = pal.Colors[palIndex];
                     outp[d + 0] = c.Red;

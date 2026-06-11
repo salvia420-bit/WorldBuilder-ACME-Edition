@@ -178,7 +178,11 @@ public partial class CommandEngine {
     /// pulls from <c>Chorizite.Common.Enums</c>; <c>ObjectDescriptionFlag</c>
     /// is regex-parsed from the vendored ACProtocol .generated.cs source.
     /// </summary>
-    public IReadOnlyList<ChoriziteEnumDump> ChoriziteDumpEnumValues(string? enumName) {
+    public IReadOnlyList<ChoriziteEnumDump> ChoriziteDumpEnumValues(string? enumName) =>
+        ChoriziteDumpEnumValues(enumName, out _);
+
+    public IReadOnlyList<ChoriziteEnumDump> ChoriziteDumpEnumValues(
+        string? enumName, out IReadOnlyList<string> missing) {
         // Find all public enums in the Chorizite.Common assembly.
         var assembly = typeof(ChorCommon.AttackHeight).Assembly;
         var allEnums = assembly.GetTypes()
@@ -196,8 +200,18 @@ public partial class CommandEngine {
             if (!targetNames.Any() && allEnums.ContainsKey(enumName!)) {
                 targetNames = new[] { allEnums[enumName!].Name };
             }
+            if (!targetNames.Any()
+                && !string.Equals(enumName, "ObjectDescriptionFlag", StringComparison.OrdinalIgnoreCase)) {
+                var known = string.Join(", ", CuratedEnumAllowlist
+                    .Concat(allEnums.Keys)
+                    .Concat(new[] { "ObjectDescriptionFlag" })
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
+                throw new ArgumentException($"Unknown enum '{enumName}'. Known: {known}");
+            }
         }
 
+        var missingList = new List<string>();
         var result = new List<ChoriziteEnumDump>();
         foreach (var name in targetNames) {
             if (allEnums.TryGetValue(name, out var t)) {
@@ -216,8 +230,12 @@ public partial class CommandEngine {
                     enumName: "ObjectDescriptionFlag",
                     relativeSourcePath: Path.Combine("Chorizite.ACProtocol", "Chorizite.ACProtocol", "Enums", "ObjectDescriptionFlag.generated.cs"));
                 if (dump != null) result.Add(dump);
+                else missingList.Add(name);
+            } else {
+                missingList.Add(name);
             }
         }
+        missing = missingList;
         return result;
     }
 

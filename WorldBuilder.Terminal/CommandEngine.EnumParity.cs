@@ -50,6 +50,7 @@ public partial class CommandEngine {
 
     public sealed record EnumParityReport(
         string ChoriziteSourceRoot,
+        string ChoriziteAssembly,
         string RustCrateRoot,
         int CheckedEnums,
         int PassEnums,
@@ -327,12 +328,22 @@ public partial class CommandEngine {
     /// <summary>
     /// Entry point — runs the parity audit and returns a structured report.
     /// </summary>
-    /// <param name="sourceRoot">Chorizite source root. Default = walk-up to
-    /// <c>external/chorizite/</c>.</param>
+    /// <param name="sourceRoot">Chorizite source root for the ACProtocol
+    /// regex fallback. Must be empty or equal to
+    /// <see cref="DefaultChoriziteSourceRoot"/>: the curated enum dump
+    /// reflects over the COMPILED <c>Chorizite.Common</c> assembly, so a
+    /// different checkout cannot be honored — supplying one is an error.</param>
     /// <param name="rustCrateRoot">Rust crates root. Default = walk-up to
     /// <c>external/holtburger/crates/</c>.</param>
     public EnumParityReport EnumParityReportCommand(string? sourceRoot, string? rustCrateRoot) {
-        var chorRoot = string.IsNullOrWhiteSpace(sourceRoot) ? DefaultChoriziteSourceRoot : sourceRoot;
+        var chorRoot = DefaultChoriziteSourceRoot;
+        if (!string.IsNullOrWhiteSpace(sourceRoot)
+            && !string.Equals(Path.GetFullPath(sourceRoot), Path.GetFullPath(chorRoot), StringComparison.Ordinal)) {
+            throw new ArgumentException(
+                $"sourceRoot '{sourceRoot}' is not honored: the enum dump reflects over the " +
+                $"compiled Chorizite.Common assembly ({typeof(ChorCommon.AttackHeight).Assembly.GetName().FullName}) " +
+                $"and the default source root '{chorRoot}'. Omit sourceRoot or pass the default.");
+        }
         var rustRoot = string.IsNullOrWhiteSpace(rustCrateRoot) ? DefaultHoltburgerCratesRoot : rustCrateRoot;
 
         // Build the canonical Chorizite enum dump first (reuse existing engine
@@ -356,6 +367,7 @@ public partial class CommandEngine {
 
         return new EnumParityReport(
             ChoriziteSourceRoot: chorRoot,
+            ChoriziteAssembly: typeof(ChorCommon.AttackHeight).Assembly.GetName().FullName ?? "unknown",
             RustCrateRoot: rustRoot,
             CheckedEnums: rows.Count,
             PassEnums: passCount,

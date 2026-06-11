@@ -18,11 +18,28 @@ public static class DatDatabaseExtensions {
     /// <param name="outputPath">The path to write the new defragmented dat file to</param>
     /// <param name="progress">Optional progress callback (0.0 to 1.0)</param>
     /// <returns>The number of bytes freed.</returns>
-    public static int Defragment(this DatDatabase db, string outputPath, Action<float>? progress = null) {
+    public static int Defragment(this DatDatabase db, string outputPath, Action<float>? progress = null)
+        => Defragment(db, outputPath, out _, progress);
+
+    /// <summary>
+    /// Defragments the dat database by rewriting it to a new file with sequential blocks.
+    /// </summary>
+    /// <param name="db">The source database</param>
+    /// <param name="outputPath">The path to write the new defragmented dat file to</param>
+    /// <param name="skippedEntries">
+    /// Number of source entries whose bytes could not be read and were therefore
+    /// DROPPED from the output. A non-zero value means the defragmented DAT is
+    /// missing files relative to the source — callers must surface this, since the
+    /// dropped-file bytes also inflate the returned bytes-freed figure.
+    /// </param>
+    /// <param name="progress">Optional progress callback (0.0 to 1.0)</param>
+    /// <returns>The number of bytes freed.</returns>
+    public static int Defragment(this DatDatabase db, string outputPath, out int skippedEntries, Action<float>? progress = null) {
         if (string.IsNullOrEmpty(outputPath)) {
             throw new ArgumentNullException(nameof(outputPath));
         }
 
+        skippedEntries = 0;
         using var newDb = db.CloneEmpty(outputPath);
         newDb.CopyHeaderFrom(db);
 
@@ -49,6 +66,11 @@ public static class DatDatabaseExtensions {
 
                 // Insert into new tree
                 newDb.Tree.Insert(newEntry);
+            } else {
+                // Unreadable/corrupt source entry — it is silently absent from the
+                // output. Count it so the caller never mistakes a lossy rewrite for
+                // a complete copy.
+                skippedEntries++;
             }
 
             processed++;

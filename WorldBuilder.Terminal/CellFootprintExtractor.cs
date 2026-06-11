@@ -62,9 +62,10 @@ internal static class CellFootprintExtractor {
         var flattened = new List<Vector3>(local.Count);
         foreach (var v in local) flattened.Add(new Vector3(v.X, v.Y, 0f));
         var fp = FootprintExtractor.FromVertices(flattened);
-        var polygon = fp.Corners.Length >= 3
-            ? fp.Corners
-            : SyntheticPolygonAroundOrigin(cell.Origin);
+        bool degenerateHull = fp.Corners.Length < 3;
+        var polygon = degenerateHull
+            ? SyntheticPolygonAroundOrigin(cell.Origin)
+            : fp.Corners;
 
         var portals = new List<PortalSpan>(cell.CellPortals.Count);
         foreach (var portal in cell.CellPortals) {
@@ -89,7 +90,7 @@ internal static class CellFootprintExtractor {
         }
 
         return new CellFootprint(fullCellId, envCellId, cell.CellStructure,
-            polygon, zMin, zMax, portals, Synthetic: false);
+            polygon, zMin, zMax, portals, Synthetic: degenerateHull);
     }
 
     private static CellFootprint SyntheticFallback(uint fullCellId, ushort envCellId, DungeonCellData cell) {

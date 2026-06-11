@@ -252,7 +252,8 @@ Exports modified DAT files to a directory.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `directory` | string | ✅ | — | Output directory for DAT files |
-| `iteration` | int | ❌ | current + 1 | Portal iteration number |
+| `iteration` | int | ❌ | current + 1 | Portal iteration number. The `iteration` field in the response reports the EFFECTIVE iteration actually written. |
+| `reposition` | bool | ❌ | false | After exporting terrain, recompute ACE-DB `landblock_instance` heights so placed objects track the exported terrain. Adds `exportSuccess`, `repositionAttempted`, and related fields to the response. |
 
 **Response:**
 ```json
@@ -305,7 +306,7 @@ Returns metadata about the currently loaded project,  or `loaded: false` if none
 
 ### smooth
 
-Smooths terrain heights within a radius by averaging neighboring vertices.
+Blends each vertex in the radius toward the average height of all vertices in the brush (strength 1.0 = flatten to that average).
 
 **Request:**
 ```json
@@ -466,7 +467,7 @@ Flood-fills contiguous terrain of the same type, starting from a seed point.
 
 ### road
 
-Draws a road path between two world positions. The path follows terrain-aware routing.
+Draws a road path between two world positions via a greedy grid march toward the target. The routing is NOT terrain-aware — it may cross cliffs or water. `value` must be 0..3 (only 2 road bits survive DAT export). Re-drawing the same road is idempotent: it reports success with a cell count even when no new cells change.
 
 **Request:**
 ```json
@@ -1197,7 +1198,7 @@ Validates building portal links — building→EnvCell existence, reciprocal out
 
 ### validate-all
 
-Runs **all four validators** in a single call and returns a combined report. This is the recommended validation command for agents.
+Runs **all five validator families** (terrain, dungeon, landblock, building-shells, and placement) in a single call and returns a combined report, preserving every family's findings. This is the recommended validation command for agents.
 
 **Request:**
 ```json
@@ -1792,7 +1793,7 @@ The process exits after sending this response.
 
 | Code | Severity | Description |
 |------|----------|-------------|
-| `DNG001` | Error | Dungeon has no cells |
+| `DNG001` | Info | Landblock has no interior cells (surface landblock — not a dungeon) |
 | `DNG002` | Error | Duplicate cell number |
 | `DNG003` | Error | Portal references non-existent cell |
 | `DNG004` | Warning | Portal has no return (asymmetric link) |
@@ -1878,7 +1879,7 @@ These commands close the headless-parity debt opened by the 2026-04-26 → 2026-
 **Request:** `{"command":"import-render-surface","imagePath":"…","renderSurfaceId":"0x06000123","ui":false,"name":"…"}`
 **Response:** `{success, command, renderSurfaceId, name, mode, deferred, error?}`
 
-Default mode (`ui=false`) registers the image in the project's `CustomTextureStore`; the next `export` writes it to the DAT via `RenderSurfaceImporter.WriteCustomTexturesToDats`. `ui=true` uses the deferred portal-doc path so the original DAT stays untouched until export. Both modes require the source image to match the target RenderSurface dimensions and `PFID_A8R8G8B8` format.
+Default mode (`ui=false`) registers the image in the project's `CustomTextureStore`; the next `export` writes it to the DAT via `RenderSurfaceImporter.WriteCustomTexturesToDats`. `ui=true` uses the deferred portal-doc path so the original DAT stays untouched until export. The source image is automatically resized to the target RenderSurface dimensions (aspect ratio is not preserved); it is converted to `PFID_A8R8G8B8` format.
 
 #### `import-heightmap`
 
@@ -1930,10 +1931,10 @@ Insert + save mirror `AceDbConnector.Weenie.cs:262/163`; delete uses the new tra
 
 - `{"command":"layout-list","overlayOnly":false}` — annotates rows with `hasOverlay`
 - `{"command":"layout-get","layoutId":"0x16000010"}`
-- `{"command":"layout-save","layoutId":"0x16000010","fromJson":"…"}`
+- `{"command":"layout-save","layoutId":"0x16000010","fromJson":"/path/to/layout.json"}`
 - `{"command":"layout-delete-overlay","layoutId":"0x16000010"}`
 
-Reads the local DAT's `LayoutDesc` enumeration; prefers the project overlay (`LayoutDatDocument`) when present. Save accepts a JSON `LayoutDesc` and stores it in the overlay; the next `export` packs it back into the local DAT.
+Reads the local DAT's `LayoutDesc` enumeration unioned with the overlay's stored ids; prefers the project overlay (`LayoutDatDocument`) when present. `fromJson` is either inline JSON (when the trimmed value starts with `{`) or a path to a JSON file holding a `LayoutDesc`. Save stores it in the overlay; the next `export` packs it back into the local DAT.
 
 ### FreshStart + GenerateWorld + Towns CSV
 
@@ -2006,7 +2007,7 @@ The frontend's `assertCoordSystem()` runs after meta loads and before any tile l
 **Request:** `{"command":"ace-db-ingest-weenie-index","out":"…/weenie_index.jsonl"}` (out optional; defaults to project dir)
 **Response:** `{success, command, totalEntries, withSetupDid, serverManaged, outputPath, error?}`
 
-Bulk-reads every row in `weenie` joined to its property side-tables (Name, Title, Setup DID, Icon DID, PaletteBase DID, CreatureType, Level) plus side queries that stamp `isServerManaged` (has at least one `landblock_instance` row) and `isTalker` (has emote category 5 or 6). Writes JSONL of `WeenieIndexEntry` keyed by wcid.
+Bulk-reads every row in `weenie` joined to its property side-tables (Name, Title, Inscription, Setup/Icon/PaletteBase/ClothingBase DIDs, CreatureType, Level, PaletteTemplate) plus side queries that stamp `isServerManaged` (DISTINCT `weenie_Class_Id` in `landblock_instance`) and `isNpc` (RadarBlipColor=Yellow(8) ∪ NpcLooksLikeObject(bool 83) ∪ NpcInteractsSilently(bool 90), plus WeenieType=Vendor(12) applied at row-build time). Writes JSONL of `WeenieIndexEntry` keyed by wcid.
 
 This is the canonical wcid → identity map that gates the static-site renderer's setup-DID resolver, the spawn-glyph dispatcher's scale lookup, and the per-roster gazetteer projections (`ingest-creatures`, `ingest-npcs` auto-ingest WeenieIndex on first call). Auto-restored at project load from `weenie_index.jsonl` when present.
 
@@ -2020,11 +2021,9 @@ Projects WeenieIndex `WhereType(Creature=10)` into a JSON array of `CreatureReco
 #### `ace-db-ingest-npcs`
 
 **Request:** `{"command":"ace-db-ingest-npcs","out":"…/npc_gazetteer.json"}`
-**Response:** `{success, command, totalProcessed, vendorCount, talkerCount, outputPath, error?}`
+**Response:** `{success, command, totalProcessed, vendorCount, otherNpcCount, outputPath, error?}`
 
-Projects WeenieIndex `WhereType(Vendor=12) ∪ Where(Type=10 ∧ IsTalker)` into a JSON array of `NpcRecord` (wcid, className, displayName, weenieType, title). Auto-runs `ace-db-ingest-weenie-index` first if the in-memory index is empty.
-
-The legacy implementation (pre-2026-05) used wrong WeenieType constants (Vendor=20 was actually Chest, Talker=4 was actually Missile) and silently wrote a roster of bowls, chests, and throwing weapons. The current projection uses canonical `AceWeenieType` values + the `IsTalker` flag stamped during WeenieIndex ingest.
+Projects every WeenieIndex entry with `isNpc` true into a JSON array of `NpcRecord` (wcid, className, displayName, weenieType, title), where isNpc = WeenieType 12 (Vendor) OR RadarBlipColor=8 (Yellow) OR NpcLooksLikeObject OR NpcInteractsSilently. `vendorCount` = entries with WeenieType 12; `otherNpcCount` = the rest. Auto-runs `ace-db-ingest-weenie-index` first if the in-memory index is empty.
 
 #### `ace-db-ingest-housing`
 
@@ -2283,3 +2282,82 @@ Melt `replaceLandblockSpecificTexture` (with `fromType`) / `landblockBucketFill`
 Read-only **informational resource**: the agent briefing for melt functionality the integration plan deliberately deferred (`docs/melt-integration-plan-2026-06-10.md` §7) — none of it is implemented. Topics: `dm-textures` (pre-ToD/Dark-Majesty texture containers 0x04/0x10/0x11, per-era pixel format codes, the 41-entry DM→ToD landscape ID table), `id-migration` (melt's positional cross-era texture/object ID pairing + Surface fingerprint matching, and how it relates to the implemented `surface-fingerprint`), `cache-converters` (PhatAC `000N.raw` cache dump formats — archaeology only), `acedb-recipes` (catalog of ~50 live-MySQL vendor/item/XP/loot rebalancing recipes + the 8-tier loot mutation-script generator).
 
 Content is parsed at call time from `docs/melt-deferred-reference.md` (stable `## N. Title` anchors) — editing that doc updates the command output without a rebuild. Licensing reminder embedded in every response: melt is research-reference-only; never link or copy its code.
+
+## Command Reference Appendix (audit batch 2026-06-11)
+
+Concise request/response contracts for commands that were previously discoverable only from `help` or source. Coordinate args `lbX/lbY/minX/minY/maxX/maxY` are validated 0..254 (out-of-range now errors instead of wrapping through the ushort landblock key). DAT-id args accept either a decimal JSON number or a `"0x…"` hex string.
+
+### ACE DB / shard
+
+- `ace-db-connect` — args `host, port?(3306), database?(ace_world), user?(root), password?`. Response `{success, command, host, port, database, user, settingsSaved, error?}`. Tests + saves the WORLD ACE DB connection (the one all `ace-db-ingest-*` and creature-* commands require). REPL equivalent: `ace-db connect`.
+- `ace-db-status` — args none. Response `{success, command, hasSettings, host, port, database, user, connectionOk, error?}`.
+- `ace-shard-db-connect` — args `host, port?(3306), database?(ace_shard; alias db), user?(root), password?(alias pass)`. Response same shape as `ace-db-connect`. Rejects a target that resolves to the same Server+Port+Database as the world DB; host comparison normalizes `localhost`/`127.0.0.1`/`::1` and falls back to DNS address-set comparison.
+- `ace-shard-db-status` — args none. Response same shape as `ace-db-status`.
+
+### Dungeon / landblock analyzers
+
+- `analyze-dungeon-catalog` — args `outputPath?`. Response `{success, totalLandblocksScanned, totalCellsScanned, uniqueRoomTemplates, errors, classificationCounts[], outputPath}`.
+- `analyze-dungeon-topology` — args `outputPath?`. Response `{success, totalDungeonsAnalyzed, totalCellsAnalyzed, classificationCounts[{classification,count}], errors, buildingInteriorLandblocks, outputPath}`. Landblocks whose `LandBlockInfo.Buildings.Count > 0` are outdoor building interiors and are counted under `buildingInteriorLandblocks`, not as dungeons. `errors` = per-LB analysis failures.
+- `analyze-landblock-patterns` — args `minX?/minY?/maxX?/maxY?`(0..254, default 0..254), `outputPath?`. Response `{success, landblocksAnalyzed, totalObjectsAnalyzed, elapsedMs, slopeDistribution, orientationBias, clusterSummary, topAdjacencyPairs[≤50], outputPath}`.
+
+### BSP / mesh / texture
+
+- `bsp-build` — args `gfxObjId`(hex/dec). Response `{success, gfxObjId, found, built, polygonCount, error?}`. Returns `built:false` (and does NOT stage the GfxObj) when the object has no polygons/vertices or produced no BSP.
+- `obj-export` — args `datId`(hex/dec), `outputPath`. Response `{success, datId, datType, found, outputPath, partCount, triangleCount, error?}`.
+- `obj-import` — args `objPath, surfaceDid`(hex/dec)`, gfxObjId?`(hex/dec)`, setupId?`(hex/dec). Response `{success, gfxObjId, setupId, …, error?}`.
+- `export-textures` — args `outputDir, minId?`(hex/dec)`, maxId?`(hex/dec). Response `{success, exported, failed, outputDirectory, errors[≤20], totalErrors, truncated}`. `success` is false if any texture failed.
+- `import-texture` — args `textureId`(hex/dec)`, imagePath`. IMMEDIATE in-place write to the base client_portal.dat.
+- `import-render-surface` — see its own section; the source image is auto-resized to the target dimensions.
+
+### Export / ingest / generators
+
+- `export-towns-csv` — args `fromResult, out`. `fromResult` is the worldgen result JSON written by `worldgen-analyze-buildings` (or `worldgen` with outputPath). Response `{success, command, outputPath, rows, error?}`.
+- `export-ontology` / `export-setup-parts` / `export-training-data` / `export-raw-world-facts` / `export-envcell-components` — window commands take `minX/minY/maxX/maxY`(0..254) + `outputPath?`. `export-raw-world-facts` additionally takes `includeAceDb?`, `includeLinks?`; its DAT scan and ACE-DB SQL predicate consume the same validated coordinates.
+- `extract-building-pairings` — args `minCount5?(3), outputPath?`. Writes `building_pairings.json`.
+- `extract-retail-heightmaps` — exports terrain heightmaps to `pipeline_data/heightmaps/` (reflects the current terrain document; edits are included).
+- `generate-atlas-tiles` — args `mode?`(lbs|regions|world|all; default lbs), `lbList?[{lbX,lbY}]`(each 0..254). Unknown mode and missing/out-of-range lbList entries error. Response `{success, mode, generated, skipped, bytesWritten, errorCount, errors[≤10]}`.
+- `generate-dungeon` / `generate-settlement` / `generate-terrain` — see help; respond with placement/edit counts.
+- `get-bulk-heightmap` — args `minX/minY/maxX/maxY`(0..254, min ≤ max). Response `{success, totalLandblocks, foundLandblocks, heightmaps[]}`.
+- `get-object-detail` — see help.
+- `ingest-weenies` — args `lsdPath, outputPath?`. Response includes `errorCount` (per-file parse failures).
+- `ingest-spawn-maps` / `ingest-spells` / `ingest-recipes` — args `lsdPath, outputPath?`. Each response includes `errorCount`.
+- `mine-strings` — response includes `tablesSkipped`/`errorCount` for string tables that failed to load.
+
+### Tiles / terrain layers
+
+- `get-terrain-layers` — args `lbX, lbY`(0..254). Response `{success, landblock, found, totalVertices, …}`.
+- `get-tile` — args `zoom?("lb")`, `lbX?/lbY?`(0..254 for zoom=lb), `region?`(zoom=region), `includeBase64?`. Standalone terrain edits invalidate the tile cache.
+- `import-heightmap` — args `imagePath, startLbX?(0), startLbY?(0), lbCountX, lbCountY, apply?`.
+- `emit-tile-pyramid` — `dirtyOnly:true` requires an initialized tile pipeline (else errors / renders nothing) and clears the emitted LBs from the dirty set on success; response carries `dirtyTrackingInitialized`, `failedLandblocks`, `firstFailures[≤5]`, `dirtyTilesRemaining`.
+- `list-dirty-tiles` / `prune-tiles` / `regenerate-dirty-tiles` / `tile-stats` — see help.
+
+### Render / validation / diagnostics
+
+- `render-preview` — response `objectCount` counts placed static objects only; spawn-gazetteer markers are reported as `glyphCount`; `cliffCount` is computed regardless of `overlay`.
+- `render-dungeon` — args `lbX, lbY`(0..254), `floor?`(0..floorCount-1; out-of-range errors), `resolution?`, `includePng?`, `outputPath?`.
+- `compare-render-corners` — args `lbX, lbY, toleranceMetres?(0.05), includeAll?(false)`. Response `{failures[], buildings[](null unless includeAll)}`.
+- `validate-building-shells` — args `lbX, lbY`. Emits the BSH validation-code family (e.g. BSH009 group-Z divergence). `validate-all` runs all five validator families and preserves each family's findings.
+- `physics-jump-formula` / `physics-jump-formula-sweep`(caseCount?) / `physics-replay-trace`(traceSubjectPath, probeScenarioPath, maxDriftOverride?) — diagnostics.
+- `pvs-visibility-snapshot`(cellId, bfsDepth?, datPath?, out?) / `region-skybox-snapshot`(gameTimeSec, datPath?) / `region-day-night-curve`(hours?, datPath?) — diagnostic snapshots; see `docs/cell-portal-method.md` / `docs/skybox-parity-method.md`.
+- `diag-run-all`(wave4Mode?, reportDir?, skipSurfaces?[], parallel?) / `diag-status` — diagnostics driver (env `WORLDBUILDER_DIAG_DRIVER`/`WORLDBUILDER_NODE`; 2h timeout; success gated on required-failures).
+- `wave4-status` / `wave4-sweep`(mode?, target?, concurrency?, reset?) — parity sweep (env `WORLDBUILDER_WAVE4_SWEEP`/`WORLDBUILDER_NODE`; 6h timeout; report/cache roots under `/mnt/wbterminal1`). `wave4-sweep` `success` requires exitCode 0 and zero failed AND infra chunks (exit code 0=PASS, 1=FAIL, 2=INFRA).
+
+### Chorizite parity surface (internal; not in `help`)
+
+The `chorizite-*` commands are an internal parity surface. Arg coercion: ids accept decimal or `"0x…"` hex; DAT aliases resolve to `~/ac_base_dats`. Commands: `chorizite-decode-texture-chain-chunk` (writes cache/progress files under `/mnt/wbterminal1` by default), `chorizite-dump-enum-values`(enumName), `chorizite-dump-layout-tree`(layoutId default 0x21000000, resolveSymbols?), `chorizite-dump-opcodes` (writes a JSON file even without outputPath), `chorizite-dump-skill-table`(skillTableId default 0x0E000004), `chorizite-dump-world-object-taxonomy`, `chorizite-extract-ui-textures`(dids, outDir, emitPng?), `chorizite-hash-string`(input), `chorizite-list-dat-records`(startId, endId, cacheRoot?, fastMode?), `chorizite-list-dat-types`(datPath), `chorizite-parse-dat-record`(datPath, idHex), `chorizite-resolve-sound`(soundTableDid/sound/datPath).
+
+### Misc
+
+- `apply-population`(planPath; alias path) — plan JSON: `{placements:[{lbX, lbY, objects:[{category, setupId, localX, localY}]}]}`.
+- `auto-paint`, `benchmark`, `bulk-place-objects`(objects:[{modelId(hex), x, y, z}]), `cache-ontology`(path?; default `<projectDir>/ontology_cache.jsonl`; requires a prior scan), `classify-ontology`(requires scan-ontology), `clear-objects`(lbX/lbY | all:true), `clone-dat`(outputPath; portal-only), `compare-to-retail`, `compute-vanilla-baseline`, `difficulty-gradient`(gradientPath; alias path), `query-ontology`, `scan-ontology`, `scan-building-placements`, `placement-set-scope`, `paste-stamp`, `set-landblock-heightmap`, `set-landblock-terrain`, `snap-portal`(lbX/lbY 0..254) — see `help` for full arg lists.
+- `defragment-dat` — defragments the project's BASE dat (read-only source) into outputPath; staged project edits are NOT included (export first if you need them).
+- `diff-terrain` — when `baseFound=false` the change counters are meaningless (the landblock has no base-DAT terrain to diff against).
+- `describe-landblock` — optional `includeFootprints` gates `footprintWorld` polygons.
+- `dump-lb-expectations` — optional `out`, `sceneryBakeDir`, `eventsBakeDir` (default `/mnt/wbterminal1/holtburger-dist-v2/{scenery,events}/`).
+- `export` — optional `reposition:true` repositions ACE-DB instances after terrain export; extended response fields `exportSuccess`, `repositionAttempted`, etc. The effective portal iteration is reported in `iteration`.
+- `fresh-start` — clears terrain, dungeon, AND landblock (static-object) documents; all staged placements are discarded.
+- `load` — response includes an `autoRestore` block reporting which side-data sets were rehydrated (`ace_spawn_records.json`, `building_pairings.json`, `ontology_cache.json`, `poi_gazetteer.json`, `region_gazetteer.json`, `spawn_gazetteer.json`, `town_gazetteer.json`, `wcid_acpedia_join.json`, `weenie_index.json`); missing artifacts are silently skipped.
+- `load-ontology-cache`, `load-building-pairings` — a corrupt (existing) JSON file reports `success:false`; a missing file yields an empty set.
+- `set-height` — request arg is `heightIndex` (0..255); `height` is a deprecated alias. There is no `targetHeight` response field.
+- `transact` — accepted op set includes `import-heightmap` and the three `placement-*` ops (the placement ops commit independently of rollback — they are not atomic with the rest of the batch). Committed mutations dirty their tiles even with `rollback_on_fail:false`.
+- `weenie-snapshot`, `weenie-template-list`(bundlePath), `weenie-template-apply`(bundlePath, templateId, classId), `worldgen`, `worldgen-analyze-buildings`, `worldgen-scan-retail-towns` — see `help`.

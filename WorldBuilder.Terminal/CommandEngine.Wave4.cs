@@ -75,8 +75,9 @@ public partial class CommandEngine {
     /// </summary>
     /// <param name="CacheRoot">Sha-keyed result cache root.</param>
     /// <param name="ChunkCount">Total chunk dirs currently under the cache root.</param>
-    /// <param name="CompletedChunks">Chunks with status != INFLIGHT in progress.json.</param>
+    /// <param name="CompletedChunks">Chunks with a readable progress.json whose status != INFLIGHT.</param>
     /// <param name="InFlightChunks">Chunks whose progress.json marks status=INFLIGHT.</param>
+    /// <param name="UnreadableChunks">Chunks whose progress.json could not be read or parsed; counted in ChunkCount but in neither CompletedChunks nor InFlightChunks.</param>
     /// <param name="FailedChunks">Chunks with status=FAIL in progress.json.</param>
     /// <param name="CacheHitCount">Sum of cacheHit counters across chunk progress.json files.</param>
     /// <param name="CacheMissCount">Sum of cacheMiss counters across chunk progress.json files.</param>
@@ -90,6 +91,7 @@ public partial class CommandEngine {
         int ChunkCount,
         int CompletedChunks,
         int InFlightChunks,
+        int UnreadableChunks,
         int FailedChunks,
         long CacheHitCount,
         long CacheMissCount,
@@ -169,12 +171,14 @@ public partial class CommandEngine {
         int chunkCount = 0;
         int completedChunks = 0;
         int inFlightChunks = 0;
+        int unreadableChunks = 0;
         int failedChunks = 0;
         long cacheHits = 0;
         long cacheMisses = 0;
         string? lastFailLabel = null;
         string? lastFailMessage = null;
         DateTime? lastFailWhen = null;
+        bool sawAnyFail = false;
 
         if (Directory.Exists(Wave4CacheRoot)) {
             foreach (var targetDir in Directory.EnumerateDirectories(Wave4CacheRoot)) {
@@ -186,12 +190,14 @@ public partial class CommandEngine {
                     try {
                         raw = File.ReadAllText(progressPath);
                     } catch {
+                        unreadableChunks++;
                         continue;
                     }
                     JsonDocument doc;
                     try {
                         doc = JsonDocument.Parse(raw);
                     } catch {
+                        unreadableChunks++;
                         continue;
                     }
                     using var _doc = doc;
@@ -219,11 +225,23 @@ public partial class CommandEngine {
                                 finishedAt = when;
                             }
                         }
-                        if (lastFailWhen == null || (finishedAt != null && finishedAt > lastFailWhen)) {
+                        bool take;
+                        if (finishedAt != null) {
+                            // Timestamped failures always beat untimestamped ones,
+                            // and otherwise win by recency.
+                            take = lastFailWhen == null || finishedAt > lastFailWhen;
+                        } else {
+                            // No timestamp: only adopt while we have never seen a
+                            // failure at all, so enumeration order is a last resort
+                            // and a later timestamped failure can still override.
+                            take = !sawAnyFail;
+                        }
+                        if (take) {
                             lastFailLabel = label;
                             lastFailMessage = msg;
                             lastFailWhen = finishedAt;
                         }
+                        sawAnyFail = true;
                     }
                     if (root.TryGetProperty("cacheHit", out var ch) && ch.ValueKind == JsonValueKind.Number) {
                         cacheHits += ch.GetInt64();
@@ -267,6 +285,7 @@ public partial class CommandEngine {
             ChunkCount: chunkCount,
             CompletedChunks: completedChunks,
             InFlightChunks: inFlightChunks,
+            UnreadableChunks: unreadableChunks,
             FailedChunks: failedChunks,
             CacheHitCount: cacheHits,
             CacheMissCount: cacheMisses,

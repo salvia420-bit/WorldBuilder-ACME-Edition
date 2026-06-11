@@ -212,14 +212,14 @@ public partial class CommandEngine {
         string Branch);
 
     /// <summary>
-    /// Drive a deterministic 1000-tuple sweep across all 5 branches.
+    /// Drive a deterministic 1000-tuple sweep across all 4 base branches.
     /// Pattern: extent stepped linearly across [0.0, 1.5] (1000 steps),
     /// weenieFallback cycled through {null, 0.0, 0.5, 1.0, NaN}.
     ///
     /// <para>
     /// Returns the full case list (so a validator can replay it) plus a
-    /// histogram of which branch each case fell into. All 5 branch types
-    /// MUST appear in the histogram or the sweep is broken.
+    /// histogram of which branch each case fell into. All 4 base branch
+    /// types MUST appear in the histogram or the sweep is broken.
     /// </para>
     /// </summary>
     public JumpFormulaSweepReport PhysicsJumpFormulaSweep(int caseCount = 1000) {
@@ -244,9 +244,11 @@ public partial class CommandEngine {
                 ? r.Branch.Substring("clamped+".Length)
                 : r.Branch;
             hist[key] = hist.GetValueOrDefault(key) + 1;
-            hist[r.Branch] = hist.GetValueOrDefault(r.Branch) + 1; // also keep the full token
+            if (key != r.Branch) {
+                hist[r.Branch] = hist.GetValueOrDefault(r.Branch) + 1; // also keep the full clamped token
+            }
         }
-        // Sanity-check: all 5 base branches must appear.
+        // Sanity-check: all 4 base branches must appear.
         var requiredBranches = new[] { "zero", "no-weenie", "weenie-success", "weenie-fail" };
         var missing = requiredBranches.Where(b => !hist.ContainsKey(b)).ToList();
         string notes = missing.Count == 0
@@ -369,7 +371,9 @@ public partial class CommandEngine {
         // gate can refuse a "prediction" PASS that secretly ran on
         // pose data.
         string SubjectSignal = "pose",
-        int PredictionRowCount = 0);
+        int PredictionRowCount = 0,
+        int TraceRowCount = 0,
+        int SkippedComparisons = 0);
 
     /// <summary>
     /// Replay the captured subject trace through a minimal C# port of the
@@ -826,7 +830,9 @@ public partial class CommandEngine {
             Passed: passed,
             Notes: notes,
             SubjectSignal: subjectSignal,
-            PredictionRowCount: predictionRowCount);
+            PredictionRowCount: predictionRowCount,
+            TraceRowCount: subject.Count,
+            SkippedComparisons: wrapSkipCount);
     }
 
     /// <summary>

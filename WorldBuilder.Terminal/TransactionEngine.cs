@@ -253,7 +253,7 @@ internal sealed class TransactionEngine {
             // then promote the pre-snapshots to the retention LRU alongside fresh
             // post-snapshots so transact-diff can reconstruct the change later.
             documentsCreated.AddRange(createdNow);
-            CapturePostStateAndRetain(txId, snapshots, createdNow, dm);
+            CapturePostStateAndRetain(txId, snapshots, createdNow, dm, touchedLbKeys);
         }
 
         var finishedAt = DateTime.UtcNow;
@@ -318,8 +318,22 @@ internal sealed class TransactionEngine {
             return $"'validate' mode '{s}' is not recognized (expected: auto, all, none, or {{landblocks:[...]}})";
         }
         if (validateNode is JsonObject obj) {
-            if (obj["landblocks"] is JsonArray) return null;
-            return "'validate' object must contain a 'landblocks' array of hex LB ids";
+            if (obj["landblocks"] is not JsonArray lbArr)
+                return "'validate' object must contain a 'landblocks' array of hex LB ids";
+            // F218: a non-string or unparseable entry (e.g. a typo'd numeric LB id) would be
+            // silently skipped at validation time, turning the explicit gate into a no-op.
+            // Reject the batch up-front so the agent learns the entry is malformed.
+            for (int i = 0; i < lbArr.Count; i++) {
+                var n = lbArr[i];
+                if (n == null || n.GetValueKind() != System.Text.Json.JsonValueKind.String)
+                    return $"'validate' landblocks[{i}] must be a hex LB id string";
+                string entry;
+                try { entry = n.GetValue<string>(); }
+                catch { return $"'validate' landblocks[{i}] could not be read as a string"; }
+                if (!TryParseHexLbKey(entry, out _))
+                    return $"'validate' landblocks[{i}] '{entry}' is not a parseable hex LB id";
+            }
+            return null;
         }
         return "'validate' must be a string (auto|all|none) or object {landblocks:[...]}";
     }
@@ -443,11 +457,19 @@ internal sealed class TransactionEngine {
         }
 
         if (mode.Equals("all", StringComparison.OrdinalIgnoreCase)) {
+            // F218: "all" is the UNION of currently-loaded landblock docs AND the batch's
+            // touched LBs — a terrain-only batch mutates LBs that may not have a landblock_*
+            // doc in ActiveDocs, so relying on ActiveDocs alone makes "all" strictly weaker
+            // than "auto" and load-order-dependent.
+            var allKeys = new HashSet<ushort>(touchedLbKeys);
             foreach (var (id, _) in dm.ActiveDocs) {
                 if (!id.StartsWith("landblock_", StringComparison.Ordinal)) continue;
                 if (!ushort.TryParse(id.Substring("landblock_".Length),
                     System.Globalization.NumberStyles.HexNumber,
                     System.Globalization.CultureInfo.InvariantCulture, out var lbKey)) continue;
+                allKeys.Add(lbKey);
+            }
+            foreach (var lbKey in allKeys) {
                 uint lbX = (uint)((lbKey >> 8) & 0xFF);
                 uint lbY = (uint)(lbKey & 0xFF);
                 reports.Add(engine.ValidateAll(lbX, lbY));
@@ -552,7 +574,18 @@ internal sealed class TransactionEngine {
     private static bool ResponseSaysSuccess(string responseJson) {
         try {
             var n = JsonNode.Parse(responseJson);
-            return n?["success"]?.GetValue<bool>() ?? false;
+            bool envelopeOk = n?["success"]?.GetValue<bool>() ?? false;
+            if (!envelopeOk) return false;
+            // F220: a sub-op (e.g. bulk-place-objects) can report success=true on the
+            // envelope while having placed only some of its items. Treat any non-zero
+            // `errors` count as a failure for transact so partial failures trip
+            // rollback_on_fail and surface in `reason` instead of committing silently.
+            var errorsNode = n?["errors"];
+            if (errorsNode != null && errorsNode.GetValueKind() == System.Text.Json.JsonValueKind.Number) {
+                try { if (errorsNode.GetValue<long>() != 0) return false; }
+                catch { }
+            }
+            return true;
         } catch {
             return false;
         }
@@ -612,7 +645,7 @@ internal sealed class TransactionEngine {
     // ─────────────────────────────────────────────────────────────────────
 
     private void CapturePostStateAndRetain(Guid txId, Dictionary<string, byte[]> preSnapshots,
-            List<string> createdNow, DocumentManager dm) {
+            List<string> createdNow, DocumentManager dm, HashSet<ushort> touchedLbKeys) {
         var preState = new Dictionary<string, byte[]>(preSnapshots, StringComparer.Ordinal);
 
         // Post-state covers every doc that had a pre-state plus any docs the batch
@@ -642,7 +675,8 @@ internal sealed class TransactionEngine {
             PreState: preState,
             PostState: postState,
             DocumentsCreated: new HashSet<string>(createdNow, StringComparer.Ordinal),
-            ApproxBytes: bytes);
+            ApproxBytes: bytes,
+            TouchedLbKeys: new HashSet<ushort>(touchedLbKeys));
 
         // Replace any existing entry with the same txId (txId is a fresh GUID per
         // Run() so collisions are theoretical, but the index must stay consistent).
@@ -729,4 +763,5 @@ internal sealed record TransactSnapshotEntry(
     Dictionary<string, byte[]> PreState,
     Dictionary<string, byte[]> PostState,
     HashSet<string> DocumentsCreated,
-    long ApproxBytes);
+    long ApproxBytes,
+    HashSet<ushort> TouchedLbKeys);

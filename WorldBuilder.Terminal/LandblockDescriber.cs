@@ -198,12 +198,16 @@ public static class LandblockDescriber {
         // Top-down ordering matches the prompt's frontend convention (floor
         // selector is a vertical strip with top at the top).
         var bands = bandsAsc.OrderByDescending(b => b.Min).ToList();
-        if (bands.Count == 0 || floorIndex < 0 || floorIndex >= bands.Count) {
-            return new FloorDescriptionResult(
-                $"0x{lbKey:X4}", floorIndex, bands.Count,
-                0f, 0f, 0, 0, 0, new List<NamedObject>(),
-                "Empty floor.");
-        }
+        // F49: split the conflated guard. A floor of a real dungeon is never empty
+        // (a floor is defined AS a Z-cluster of cells), so the only ways into the
+        // old "Empty floor." branch were two distinct error conditions — surface the
+        // difference so an agent can tell "wrong command target" from "bad floor index".
+        if (bands.Count == 0)
+            throw new InvalidOperationException(
+                $"Landblock 0x{lbKey:X4} has no interior cells — describe-floor applies to dungeon/interior landblocks.");
+        if (floorIndex < 0 || floorIndex >= bands.Count)
+            throw new ArgumentException(
+                $"'floor' must be 0..{bands.Count - 1} for 0x{lbKey:X4}; got {floorIndex}");
         var band = bands[floorIndex];
 
         var cellsOnFloor = dungeonDoc.Cells

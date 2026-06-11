@@ -156,25 +156,26 @@ public partial class CommandEngine {
             }
 
             // Retail side: read the ACE-DB-ingested gazetteer JSON files.
-            // Missing files → empty sets (creators surface as novelInLb).
+            // Missing files → empty sets (creators surface as novelWcids);
+            // an EXISTING but unparseable file → "unparseable" status (not silently empty).
             var retailCreatures = LoadWcidSetFromGazetteer(
-                Path.Combine(projectDir, "creature_gazetteer.json"));
+                Path.Combine(projectDir, "creature_gazetteer.json"), out var creaturesSource);
             var retailNpcs = LoadWcidSetFromGazetteer(
-                Path.Combine(projectDir, "npc_gazetteer.json"));
+                Path.Combine(projectDir, "npc_gazetteer.json"), out var npcsSource);
 
-            // Housing isn't a wcid set; we report the raw counts and a
-            // zero-Jaccard placeholder. Future wave can decide on a
-            // sensible per-LB housing comparison.
+            // Housing isn't a wcid set; we report the raw counts only —
+            // jaccard is not implemented (reported as not computed).
             var housingPath = Path.Combine(projectDir, "housing_gazetteer.json");
             int housingRetail = File.Exists(housingPath)
                 ? CountTopLevelArray(housingPath) : 0;
 
             return new CompareCreaturesResult(
                 Success: true,
-                Creatures: BuildDimension(genCreatures, retailCreatures),
-                Npcs: BuildDimension(genNpcs, retailNpcs),
+                Creatures: BuildDimension(genCreatures, retailCreatures, creaturesSource),
+                Npcs: BuildDimension(genNpcs, retailNpcs, npcsSource),
                 Housing: new CompareCategoryDimension(0, housingRetail, 0.0,
-                    new List<int>(), new List<int>()));
+                    new List<int>(), new List<int>(),
+                    JaccardComputed: false));
         } catch (Exception ex) {
             return new CompareCreaturesResult(false,
                 new CompareCategoryDimension(0, 0, 0, new(), new()),
@@ -184,33 +185,42 @@ public partial class CommandEngine {
         }
     }
 
-    private static CompareCategoryDimension BuildDimension(HashSet<int> generated, HashSet<int> retail) {
+    private static CompareCategoryDimension BuildDimension(HashSet<int> generated, HashSet<int> retail, string retailSource = "ok") {
         if (generated.Count == 0 && retail.Count == 0) {
-            return new CompareCategoryDimension(0, 0, 0, new(), new());
+            return new CompareCategoryDimension(0, 0, 0, new(), new(), 0, 0, retailSource);
         }
         var union = new HashSet<int>(generated);
         union.UnionWith(retail);
         var intersection = new HashSet<int>(generated);
         intersection.IntersectWith(retail);
         double jaccard = union.Count == 0 ? 0 : (double)intersection.Count / union.Count;
-        var novel = generated.Where(w => !retail.Contains(w)).OrderBy(w => w).Take(50).ToList();
-        var missing = retail.Where(w => !generated.Contains(w)).OrderBy(w => w).Take(50).ToList();
-        return new CompareCategoryDimension(generated.Count, retail.Count, jaccard, novel, missing);
+        var novelAll = generated.Where(w => !retail.Contains(w)).OrderBy(w => w).ToList();
+        var missingAll = retail.Where(w => !generated.Contains(w)).OrderBy(w => w).ToList();
+        return new CompareCategoryDimension(generated.Count, retail.Count, jaccard,
+            novelAll.Take(50).ToList(), missingAll.Take(50).ToList(),
+            novelAll.Count, missingAll.Count, retailSource);
     }
 
-    private static HashSet<int> LoadWcidSetFromGazetteer(string path) {
+    private static HashSet<int> LoadWcidSetFromGazetteer(string path, out string source) {
         var result = new HashSet<int>();
-        if (!File.Exists(path)) return result;
+        if (!File.Exists(path)) { source = "missing"; return result; }
         try {
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) return result;
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) { source = "unparseable"; return result; }
             foreach (var item in doc.RootElement.EnumerateArray()) {
                 if (item.TryGetProperty("wcid", out var wEl)
                         && wEl.ValueKind == JsonValueKind.Number) {
                     result.Add(wEl.GetInt32());
                 }
             }
-        } catch { /* malformed → empty set */ }
+            source = "ok";
+        } catch (JsonException) {
+            result.Clear();
+            source = "unparseable";
+        } catch (IOException) {
+            result.Clear();
+            source = "unparseable";
+        }
         return result;
     }
 

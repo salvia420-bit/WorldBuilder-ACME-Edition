@@ -45,28 +45,31 @@ namespace WorldBuilder.Shared.Documents {
 
         public void SetLayout(uint layoutId, LayoutDesc layout) {
             layout.Id = layoutId;
-            _objectCache[layoutId] = layout;
 
+            byte[] packed;
             try {
                 var buffer = new byte[PackBufferSize];
                 var writer = new DatBinWriter(buffer.AsMemory());
                 ((IPackable)layout).Pack(writer);
-                _data.Entries[layoutId] = new LayoutDatEntry {
-                    TypeName = nameof(LayoutDesc),
-                    Data = buffer[..writer.Offset]
-                };
+                packed = buffer[..writer.Offset];
             }
             catch (Exception ex) {
                 _logger.LogError(ex, "[LayoutDatDoc] Failed to pack layout 0x{Id:X8}", layoutId);
-                _data.Entries[layoutId] = new LayoutDatEntry {
-                    TypeName = nameof(LayoutDesc),
-                    Data = Array.Empty<byte>()
-                };
+                throw new InvalidOperationException($"Failed to pack LayoutDesc 0x{layoutId:X8}: {ex.Message}", ex);
             }
+
+            _objectCache[layoutId] = layout;
+            _data.Entries[layoutId] = new LayoutDatEntry {
+                TypeName = nameof(LayoutDesc),
+                Data = packed
+            };
 
             MarkDirty();
             OnUpdate(new BaseDocumentEvent());
         }
+
+        /// <summary>The ids of every overlay-stored layout (independent of the local DAT).</summary>
+        public IEnumerable<uint> StoredLayoutIds => _data.Entries.Keys;
 
         public bool TryGetLayout(uint layoutId, out LayoutDesc? layout) {
             if (_objectCache.TryGetValue(layoutId, out var cached) && cached is LayoutDesc typed) {

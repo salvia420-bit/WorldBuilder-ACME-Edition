@@ -66,6 +66,12 @@ public interface IOntologyService {
     int ImportCatalog(string indexJsonPath);
 
     /// <summary>
+    /// Same as <see cref="ImportCatalog(string)"/>, but also reports the number
+    /// of catalog entries that failed to import via <paramref name="failed"/>.
+    /// </summary>
+    int ImportCatalog(string indexJsonPath, out int failed);
+
+    /// <summary>
     /// Cross-references string table entries with ontology entries to assign
     /// human-readable names and keyword-based category/tag assignments.
     /// Returns the number of entries enriched.
@@ -115,6 +121,12 @@ public interface IOntologyService {
     /// in-memory index and sets IsScanned=true. Returns entries loaded.
     /// </summary>
     int LoadFromCache(string inputPath);
+
+    /// <summary>
+    /// Same as <see cref="LoadFromCache(string)"/>, but also reports the number
+    /// of cache lines skipped (malformed/unparseable) via <paramref name="skipped"/>.
+    /// </summary>
+    int LoadFromCache(string inputPath, out int skipped);
 
     /// <summary>
     /// Discards the in-memory ontology index. Used by project-load to ensure

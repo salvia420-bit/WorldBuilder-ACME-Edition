@@ -4363,7 +4363,7 @@ public class TerminalRepl {
         Console.WriteLine("Pulling NPC roster from ACE DB...");
         var r = _engine.IngestNpcRosterAsync(outPath).GetAwaiter().GetResult();
         if (r.Success) {
-            Console.WriteLine($"  ✓ {r.TotalProcessed} NPCs ({r.VendorCount} vendors, {r.TalkerCount} talkers) → {r.OutputPath}");
+            Console.WriteLine($"  ✓ {r.TotalProcessed} NPCs ({r.VendorCount} vendors, {r.OtherNpcCount} other) → {r.OutputPath}");
         } else {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"  ✗ {r.Error}");
