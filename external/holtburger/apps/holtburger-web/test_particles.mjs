@@ -1046,6 +1046,152 @@ check(
   );
 }
 
+// ============================================================
+// Test 21: A11-S0(a) — explicit-id re-create destroys the OLD emitter
+// ------------------------------------------------------------
+// Survey A11 §3 row 5: a bare `particleTable.delete()` on the explicit-id
+// replace path orphaned the old emitter's slot meshes in the scene and
+// leaked its per-slot cloned materials. The fix routes the replace through
+// destroyParticleEmitter (scene-removal + material disposal). Assert that
+// re-adding the SAME explicit emitter id disposes the first emitter's
+// per-slot materials and that the table holds the NEW emitter object.
+// ============================================================
+{
+  mockTime = 0;
+  mockRngVal = 0.5;
+  const scene = new THREE.Scene();
+  const mgr = new ParticleManager({
+    scene,
+    geometryFactory: async (_) => new THREE.BufferGeometry(),
+    materialFactory: async (_) => new THREE.MeshBasicMaterial({ transparent: true }),
+  });
+  const FIXED_ID = 0x12345678 >>> 0;
+  const baseReq = () => ({
+    emitterInfo: makeBaseInfo({
+      particleType: ParticleType.Still,
+      maxParticles: 2, totalParticles: 0, totalSeconds: 100,
+    }),
+    parent: { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() },
+    partIndex: -1,
+    emitterId: FIXED_ID,
+  });
+  const id1 = await mgr.addEmitter(baseReq());
+  const firstEmitter = mgr.particleTable.get(FIXED_ID);
+  check(
+    "A11-S0(a): first explicit-id addEmitter returns the supplied id",
+    id1 === FIXED_ID && firstEmitter != null,
+    `id1=${id1}`
+  );
+  // The per-slot meshes hold CLONED materials (addEmitter's meshFactory
+  // tags them __disposable + !__cacheOwned). Instrument each first-emitter
+  // slot material's dispose() directly so we can prove the replace path
+  // actually frees them (the bare-`delete` bug did NOT) — clone() yields
+  // fresh instances, so we patch the already-built clones here, AFTER the
+  // first emitter exists but BEFORE the replace.
+  const firstSlotMats = (firstEmitter.partStorage || [])
+    .map((m) => m && m.material)
+    .filter(Boolean);
+  for (const m of firstSlotMats) {
+    m.__disposeCount = 0;
+    const orig = m.dispose.bind(m);
+    m.dispose = () => { m.__disposeCount += 1; orig(); };
+  }
+  // Capture the old slot meshes so we can confirm they are detached.
+  const firstSlotMeshes = (firstEmitter.partStorage || []).filter(Boolean);
+  // Re-add with the SAME explicit id → must destroy the first emitter.
+  const id2 = await mgr.addEmitter(baseReq());
+  const secondEmitter = mgr.particleTable.get(FIXED_ID);
+  check(
+    "A11-S0(a): re-create with same id keeps table size at 1 (no orphan slot)",
+    id2 === FIXED_ID && mgr.getNumEmitters() === 1,
+    `id2=${id2} count=${mgr.getNumEmitters()}`
+  );
+  check(
+    "A11-S0(a): table now holds the NEW emitter object (old one replaced)",
+    secondEmitter != null && secondEmitter !== firstEmitter,
+    `same=${secondEmitter === firstEmitter}`
+  );
+  // destroyParticleEmitter → _disposeMaterialIfOwned disposes every
+  // __disposable per-slot clone. The bare-`delete` bug left these alive.
+  const disposedCount = firstSlotMats.filter((m) => (m.__disposeCount | 0) >= 1).length;
+  check(
+    "A11-S0(a): old emitter's per-slot materials disposed on replace (no leak)",
+    firstSlotMats.length > 0 && disposedCount === firstSlotMats.length,
+    `firstSlotMats=${firstSlotMats.length} disposed=${disposedCount}`
+  );
+  // And the old slot meshes must be detached from any scene parent (the
+  // bug orphaned them in the scene graph).
+  const detached = firstSlotMeshes.every((m) => m.parent == null);
+  check(
+    "A11-S0(a): old emitter's slot meshes detached from the scene graph",
+    detached,
+    `slotMeshes=${firstSlotMeshes.length} stillParented=${firstSlotMeshes.filter((m) => m.parent != null).length}`
+  );
+}
+
+// ============================================================
+// Test 22: A11-S0(b) — blocking create returns 0 if id already live
+// ------------------------------------------------------------
+// Survey A11 §3 row 6: retail `CreateBlockingParticleEmitter`
+// (acclient.c:329528-329565) returns 0 and does NOT replace when the
+// emitter id is already live — the opposite of the non-blocking replace
+// path. Assert blocking:true over a live id returns 0 + leaves the
+// existing emitter object untouched; and that blocking over a FREE id
+// still installs normally.
+// ============================================================
+{
+  mockTime = 0;
+  mockRngVal = 0.5;
+  const scene = new THREE.Scene();
+  const mgr = new ParticleManager({
+    scene,
+    geometryFactory: async (_) => new THREE.BufferGeometry(),
+    materialFactory: async (_) => new THREE.MeshBasicMaterial({ transparent: true }),
+  });
+  const FIXED_ID = 0x0badf00d >>> 0;
+  const req = (extra) => Object.assign({
+    emitterInfo: makeBaseInfo({
+      particleType: ParticleType.Still,
+      maxParticles: 1, totalParticles: 0, totalSeconds: 100,
+    }),
+    parent: { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() },
+    partIndex: -1,
+    emitterId: FIXED_ID,
+  }, extra || {});
+
+  // Blocking over a FREE id installs (returns the id).
+  const idBlockFree = await mgr.addEmitter(req({ blocking: true }));
+  const installedEmitter = mgr.particleTable.get(FIXED_ID);
+  check(
+    "A11-S0(b): blocking create over a FREE id installs (returns id)",
+    idBlockFree === FIXED_ID && installedEmitter != null,
+    `id=${idBlockFree}`
+  );
+
+  // Blocking over the now-LIVE id returns 0 and does NOT replace.
+  const idBlockLive = await mgr.addEmitter(req({ blocking: true }));
+  check(
+    "A11-S0(b): blocking create over a LIVE id returns 0 (no replace)",
+    idBlockLive === 0,
+    `id=${idBlockLive}`
+  );
+  check(
+    "A11-S0(b): the original emitter object survives the blocking no-replace",
+    mgr.particleTable.get(FIXED_ID) === installedEmitter && mgr.getNumEmitters() === 1,
+    `same=${mgr.particleTable.get(FIXED_ID) === installedEmitter} count=${mgr.getNumEmitters()}`
+  );
+
+  // Control: NON-blocking over the live id DOES replace (legacy off-path).
+  const idReplace = await mgr.addEmitter(req({ blocking: false }));
+  check(
+    "A11-S0(b): non-blocking (default) over a LIVE id still replaces (legacy off-path)",
+    idReplace === FIXED_ID
+      && mgr.particleTable.get(FIXED_ID) !== installedEmitter
+      && mgr.getNumEmitters() === 1,
+    `id=${idReplace} replaced=${mgr.particleTable.get(FIXED_ID) !== installedEmitter}`
+  );
+}
+
 // ---- Summary --------------------------------------------------------
 console.log("=========================");
 if (failed === 0) {

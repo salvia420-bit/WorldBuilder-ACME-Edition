@@ -555,6 +555,25 @@ const PROJECTILE_GRAVITY_ON = (() => {
   }
 })();
 const PROJECTILE_GRAVITY_Z = -9.8; // m/s^2, AC frame (z up)
+// Survey A11-S0 (2026-06-11): retail `CreateBlockingParticleEmitter`
+// (acclient.c:329528-329565) returns 0 and does NOT replace when the
+// emitter id is already live — the opposite of the non-blocking
+// `CreateParticleEmitter` replace path. Our walkers route hook type 26
+// (CreateBlockingParticle) identically to 13 (CreateParticle) into the
+// replace-semantics addEmitter, which restarts persistent effects retail
+// would leave running. Behind a default-off flag so the legacy (replace)
+// behavior is the off-path; on => hook 26 uses retail blocking semantics.
+const BLOCKING_PARTICLE_PARITY_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("blockingParticleParity")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
 // Coarse timer cadence (ms) — how often the per-entity idle-fidget bookkeeping
 // runs in tick(). The whole IDLE_FIDGET feature is inert when the flag is off,
 // and even when on this only walks the entity map ~3x/sec (no per-frame cost on
@@ -8120,6 +8139,9 @@ export class EntityManager {
         partIndex,
         parentOffset: offset,
         emitterId: (e.createParticleEmitterInstanceId >>> 0),
+        // A11-S0: hook 26 = CreateBlockingParticle. With the parity flag on,
+        // route it with retail blocking semantics (no-replace if id live).
+        blocking: ((e.hookType | 0) === 26) && BLOCKING_PARTICLE_PARITY_ON,
       })
         .then((id) => {
           if (id !== 0) {
@@ -9766,7 +9788,10 @@ export class EntityManager {
       // (acclient.c:343026); we treat both the same — three.js has no
       // frame-gating mechanism the hook could pause, and the visual
       // result is the same.
-      this._fireCreateParticleHook(inst, hook).catch((err) => {
+      // A11-S0: hook 26 = CreateBlockingParticle. With the parity flag on,
+      // route it with blocking semantics (no-replace if id already live).
+      const isBlocking = (hookType === 26) && BLOCKING_PARTICLE_PARITY_ON;
+      this._fireCreateParticleHook(inst, hook, isBlocking).catch((err) => {
         // eslint-disable-next-line no-console
         console.warn(
           `[entities/hook-13] createParticle on 0x${inst.guid.toString(16)} failed:`,
@@ -10643,7 +10668,7 @@ export class EntityManager {
    * reject if `_ensureWorldParticleManager` or `fetchParticleEmitter`
    * throws.
    */
-  async _fireCreateParticleHook(inst, hook) {
+  async _fireCreateParticleHook(inst, hook, blocking = false) {
     const emitterInfoId = hook.emitterInfoId >>> 0;
     if (emitterInfoId === 0) return;
     if (!inst.root) return; // entity released between hook arm + fire
@@ -10686,6 +10711,7 @@ export class EntityManager {
         partIndex,
         parentOffset,
         emitterId: emitterIdSeed,
+        blocking,
       });
     } catch (e) {
       // eslint-disable-next-line no-console

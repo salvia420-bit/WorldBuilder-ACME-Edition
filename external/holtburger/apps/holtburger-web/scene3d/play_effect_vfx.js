@@ -1395,6 +1395,10 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
       ? -1
       : (e.createParticlePartIndex | 0);
 
+    // A11-S0: hook 26 = CreateBlockingParticle. Captured before the
+    // setTimeout closure so the flag/hook decision is fixed at walk time.
+    const blockingHook = ((e.hookType | 0) === 26) && BLOCKING_PARTICLE_PARITY_ON;
+
     // StartTime-driven schedule (entities.js:~6649/~6738 pattern).
     const startDelayMs = Math.max(0, (+e.startTime || 0) * 1000);
     if (startDelayMs > maxStartTimeMs) maxStartTimeMs = startDelayMs;
@@ -1415,6 +1419,7 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
         parent: inst.root,
         partIndex,
         parentOffset: offset,
+        blocking: blockingHook,
       })
         .then((emitterId) => {
           if (emitterId !== 0) {
@@ -1608,6 +1613,24 @@ const CAST_VFX_DEDUP_ON = (() => {
   }
 })();
 const _CAST_VFX_DEDUP_MS = 2000;
+// Survey A11-S0 (2026-06-11): default-off `?blockingParticleParity=on`.
+// Mirrors entities.js BLOCKING_PARTICLE_PARITY_ON. When on, hook 26
+// (CreateBlockingParticle) takes retail blocking semantics
+// (acclient.c:329528-329565: no-replace if emitter id already live).
+// This walker auto-assigns emitter ids (no explicit `emitterId` passed),
+// so blocking is observationally inert here today; routed for cross-walker
+// consistency.
+const BLOCKING_PARTICLE_PARITY_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("blockingParticleParity")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
 // Map<`${guid}:${scriptId}`, lastDispatchMs>. Pruned lazily in _onPlayEffect.
 const _recentPlayEffects = new Map();
 

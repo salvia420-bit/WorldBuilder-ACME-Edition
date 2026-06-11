@@ -299,7 +299,14 @@ export class ParticleManager {
    *        Optional offset frame (default origin + identity rotation).
    * @param {number} [req.emitterId] Caller-supplied ID. If 0/undefined,
    *        the manager assigns one from `nextEmitterId`.
-   * @returns {Promise<number>} The emitter ID. 0 on failure (hwGfxObjId==0).
+   * @param {boolean} [req.blocking] Retail `CreateBlockingParticleEmitter`
+   *        semantics (acclient.c:329528-329565): if `emitterId` is already
+   *        live, return 0 and DO NOT replace — the opposite of the
+   *        non-blocking replace path. Default false (non-blocking). Gated by
+   *        the caller behind `?blockingParticleParity=on`; with the flag off
+   *        callers pass `blocking:false` and the legacy replace path runs.
+   * @returns {Promise<number>} The emitter ID. 0 on failure (hwGfxObjId==0)
+   *        or, when `blocking`, when the id is already live.
    */
   async addEmitter(req) {
     const {
@@ -308,7 +315,17 @@ export class ParticleManager {
       partIndex = -1,
       parentOffset = null,
       emitterId = 0,
+      blocking = false,
     } = req;
+
+    // Retail `CreateBlockingParticleEmitter` (acclient.c:329528-329565):
+    // a blocking create over an already-live emitter id returns 0 and
+    // leaves the existing emitter running — the opposite of the
+    // non-blocking replace path below. Check BEFORE any await so we never
+    // build geometry/materials we're about to throw away.
+    if (blocking && emitterId !== 0 && this.particleTable.has(emitterId)) {
+      return 0;
+    }
 
     // C5 (async liveness): snapshot the offset frame BY VALUE at entry,
     // BEFORE any await below. `parentOffset` is often a shared/scratch
@@ -337,10 +354,18 @@ export class ParticleManager {
         : new THREE.Quaternion(),
     };
 
-    // ACE: if emitterID is non-zero and already in table, REMOVE old
-    // entry first (CreateParticleEmitter, line 28-29).
+    // ACE / retail `CreateParticleEmitter` (acclient.c:329383-329393): if
+    // emitterID is non-zero and already in the table, the OLD emitter is
+    // both REMOVED and DESTRUCTED (parts pulled from the scene, per-slot
+    // cloned materials freed) before the new one is built. A bare
+    // `particleTable.delete()` dropped only the tracking entry, orphaning
+    // the old emitter's slot meshes in the scene and leaking its per-slot
+    // cloned materials (survey A11 §3 row 5). Route through
+    // destroyParticleEmitter so the replace path matches the natural-
+    // teardown path (this.destroyParticleEmitter :601-631). Pure leak fix,
+    // no behavior change for the surviving (new) emitter — unflagged.
     if (emitterId !== 0 && this.particleTable.has(emitterId)) {
-      this.particleTable.delete(emitterId);
+      this.destroyParticleEmitter(emitterId);
     }
 
     const info = (emitterInfo instanceof ParticleEmitterInfo)

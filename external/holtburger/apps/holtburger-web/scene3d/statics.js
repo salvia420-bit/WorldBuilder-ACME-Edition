@@ -2619,6 +2619,26 @@ const STATIC_SCRIPT_FLAG = "staticScripts"; // ?staticScripts=off disables V1.
 const STATIC_HOOK_CREATE_PARTICLE = 13;
 const STATIC_HOOK_CREATE_BLOCKING_PARTICLE = 26;
 
+// Survey A11-S0 (2026-06-11): default-off `?blockingParticleParity=on`.
+// When on, hook 26 (CreateBlockingParticle) takes retail blocking
+// semantics (acclient.c:329528-329565: no-replace if emitter id already
+// live). Mirrors entities.js BLOCKING_PARTICLE_PARITY_ON. Note: the
+// statics walker auto-assigns emitter ids (it never passes an explicit
+// `emitterId`), so blocking is observationally inert here today; routed
+// for cross-walker consistency so a future explicit-id static can't
+// silently take replace semantics.
+function _blockingParticleParityOn() {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      return (
+        new URLSearchParams(globalThis.location.search)
+          .get("blockingParticleParity")?.toLowerCase() === "on"
+      );
+    }
+  } catch (_) {}
+  return false;
+}
+
 function _staticScriptsEnabled() {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
@@ -2787,6 +2807,9 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports) {
           position: _staticOffsetVec3,
           quaternion: _staticOffsetQuat,
         },
+        blocking:
+          ((e.hookType | 0) === STATIC_HOOK_CREATE_BLOCKING_PARTICLE) &&
+          _blockingParticleParityOn(),
       });
       if (id !== 0) attached += 1;
     } catch (err) {
