@@ -75,9 +75,10 @@ pub fn run_rate_from_skill_and_burden(run_skill: f32, burden: f32) -> f32 {
 
 /// Provenance of the `run_skill` value fed into `run_rate_from_skill_and_burden`
 /// for the local player. ACE `Creature.GetRunRate` always uses
-/// `GetCreatureSkill(Skill.Run).Current`; our [`WorldContextExt::player_run_rate`]
-/// falls back to Quickness when the wire hasn't populated the Run skill yet, so a
-/// live capture must report WHICH source it used to diff against ACE.
+/// `GetCreatureSkill(Skill.Run).Current`; since unified-pipeline STAGE 1
+/// (2026-06-11) [`WorldContextExt::player_run_rate`] matches that exactly
+/// (wire Run skill or `None` — the Quickness fallback is retired), and a
+/// live capture still reports WHICH source was used to diff against ACE.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RunSkillSource {
     /// Neither the Run skill nor Quickness is loaded yet — `player_run_rate()`
@@ -86,8 +87,12 @@ pub enum RunSkillSource {
     Unavailable,
     /// The wire-supplied Run skill `current` was used (matches ACE).
     WireRunSkill,
-    /// Run skill absent → fell back to the Quickness attribute `current`
-    /// (no ACE equivalent — a prime suspect for run-rate over-run).
+    /// HISTORICAL (retired by unified-pipeline STAGE 1, 2026-06-11): Run
+    /// skill absent → fell back to the Quickness attribute `current`. No
+    /// ACE equivalent — confirmed snapback root (DESIGN.md §2 defect 1)
+    /// and removed from `player_run_rate()`; the variant is kept so old
+    /// 1070 capture JSON (`"quickness_fallback"`) still diffs cleanly,
+    /// but the probe can no longer produce it.
     QuicknessFallback,
 }
 
@@ -309,18 +314,20 @@ pub trait WorldContextExt: WorldContext {
     }
 
     fn player_run_rate(&self) -> Option<f32> {
-        // Run is ALWAYS trained and derived from Quickness: a fresh trained
-        // character's Run skill == Quickness (specializing adds +10; ranks
-        // accrue from xp). If the wire hasn't populated the Run skill yet,
-        // derive the trained baseline (Run = Quickness) instead of letting the
-        // caller fall back to the flat run-rate cap (FALLBACK_RUN_RATE_SCALAR
-        // = 4.5), which masked low-Quickness characters as full speed. Returns
-        // None only when Quickness is also unknown (stats not loaded yet), in
-        // which case the caller's cap fallback still applies.
-        let run_skill = match self.get_player_skill_current(SkillType::Run) {
-            Some(v) => v,
-            None => self.get_player_attribute_current(AttributeType::QuicknessAttr)?,
-        } as f32;
+        // STAGE 1 unified-movement-pipeline (2026-06-11, DESIGN.md §2
+        // defect 1): the run-rate input must be the wire Run skill
+        // `Current` EXACTLY as ACE composes it (`Creature.GetRunRate` →
+        // `GetCreatureSkill(Skill.Run).Current`; retail's Inq-failure
+        // fallback is `my_run_rate`, acclient.c:343452-343455) — the
+        // former Quickness synthesis here had NO ACE equivalent, so
+        // whenever it disagreed with ACE's value every grounded tick
+        // diverged position by 4.0×|Δrun_rate| m/s and ACE's
+        // authoritative echoes pulled us back (the 1-2 m snapback).
+        // Returns None when the wire Run skill hasn't populated; callers
+        // degrade to my_run_rate / the run_rate_scalar=1.0 capability
+        // override (under-prediction → lag, self-correcting) — NEVER a
+        // skill-synthesized rate ACE doesn't hold.
+        let run_skill = self.get_player_skill_current(SkillType::Run)? as f32;
         let burden = self.player_burden().unwrap_or(3.0);
         Some(run_rate_from_skill_and_burden(run_skill, burden))
     }
@@ -341,12 +348,12 @@ pub trait WorldContextExt: WorldContext {
             .unwrap_or(0)
             .max(0);
 
+        // STAGE 1 (2026-06-11): mirrors the fallback-free `player_run_rate()`
+        // above — wire Run skill or nothing (Quickness is still REPORTED for
+        // the capture diff, but never consumed).
         let (run_skill_used, run_skill_source) = match run_skill_wire {
             Some(v) => (Some(v as f32), RunSkillSource::WireRunSkill),
-            None => match quickness {
-                Some(v) => (Some(v as f32), RunSkillSource::QuicknessFallback),
-                None => (None, RunSkillSource::Unavailable),
-            },
+            None => (None, RunSkillSource::Unavailable),
         };
 
         let burden = self.player_burden().unwrap_or(3.0);
@@ -918,12 +925,14 @@ mod tests {
         assert!((r_heavy - 1.0).abs() < 1e-6, "r_heavy = {r_heavy}");
     }
 
-    /// Snapback probe (2026-06-06): `player_run_rate_inputs()` must (a) report
-    /// the wire Run skill when present, (b) fall back to Quickness with the
-    /// fallback source flagged, (c) report `Unavailable` + `None` run_rate when
-    /// neither is loaded, and in every case its `run_rate` must equal
-    /// `player_run_rate()` so the probe measures exactly what the velScale path
-    /// consumed. The Quickness-fallback source is the prime snapback suspect.
+    /// Snapback probe (2026-06-06), updated for unified-pipeline STAGE 1
+    /// (2026-06-11): `player_run_rate_inputs()` must (a) report the wire Run
+    /// skill when present, (b) report `Unavailable` + `None` run_rate when the
+    /// wire Run skill is absent EVEN IF Quickness is loaded — the Quickness
+    /// fallback (confirmed snapback root, DESIGN.md §2 defect 1) is retired
+    /// and must never resurface, (c) same when neither is loaded, and in
+    /// every case its `run_rate` must equal `player_run_rate()` so the probe
+    /// measures exactly what the movement/velScale paths consumed.
     #[test]
     fn player_run_rate_inputs_reports_skill_source_and_matches_run_rate() {
         let player_guid = Guid(0x5000_0001);
@@ -948,17 +957,23 @@ mod tests {
         assert_eq!(i.run_rate, wire.player_run_rate());
         assert!(i.to_json().contains("\"run_skill_source\":\"wire_run_skill\""));
 
-        // (b) no wire Run skill → Quickness fallback (no ACE equivalent).
+        // (b) no wire Run skill → Unavailable, EVEN with Quickness loaded.
+        // STAGE 1 retired the Quickness synthesis: ACE has no such fallback
+        // (retail's Inq-failure fallback is my_run_rate, acclient.c:343452-
+        // 343455), so emitting one guaranteed a run-rate ACE doesn't hold.
         let mut fb = base();
         fb.player_attributes.insert(AttributeType::QuicknessAttr, 180);
         let i = fb.player_run_rate_inputs();
-        assert_eq!(i.run_skill_source, RunSkillSource::QuicknessFallback);
-        assert_eq!(i.run_skill_used, Some(180.0));
+        assert_eq!(i.run_skill_source, RunSkillSource::Unavailable);
+        assert_eq!(i.run_skill_used, None);
         assert_eq!(i.run_skill_wire, None);
-        assert_eq!(i.run_rate, fb.player_run_rate());
-        assert!(i.to_json().contains("\"run_skill_source\":\"quickness_fallback\""));
+        assert_eq!(i.quickness, Some(180), "Quickness still REPORTED for diffs");
+        assert_eq!(i.run_rate, None);
+        assert_eq!(fb.player_run_rate(), None);
+        assert!(i.to_json().contains("\"run_skill_source\":\"unavailable\""));
 
-        // (c) neither loaded → Unavailable + None run_rate (caller applies cap).
+        // (c) neither loaded → Unavailable + None run_rate (caller applies
+        // the my_run_rate/1.0 degrade, never a synthesized rate).
         let mut none = TestWorld {
             player_guid: Some(player_guid),
             ..Default::default()

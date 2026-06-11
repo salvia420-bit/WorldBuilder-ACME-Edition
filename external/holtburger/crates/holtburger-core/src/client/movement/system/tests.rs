@@ -1918,6 +1918,15 @@ fn advance_local_pose_for_manual_drive_applies_velocity_times_dt_once() {
 ///     to ~`PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ * dt`.
 #[test]
 fn advance_local_pose_for_manual_drive_ramps_velocity_through_zero_on_direction_change() {
+    if USE_INTERPRETED_VELOCITY {
+        // STAGE 1 (2026-06-11): the interpreted-velocity pipeline
+        // DIRECT-SETS the grounded planar velocity (retail
+        // apply_raw_movement — no accel-cap ramp through zero); this
+        // test pins the LEGACY friction+cap behaviour only. The ON-path
+        // contract is pinned by
+        // `high_run_target_speed_reaches_retail_max_only_with_direct_velocity`.
+        return;
+    }
     let mut world = WorldState::synthetic();
     let player_guid = Guid(0x5000_0AAA);
     world.player.guid = player_guid;
@@ -2012,6 +2021,12 @@ fn advance_local_pose_for_manual_drive_ramps_velocity_through_zero_on_direction_
 /// threshold (0.25 m/s) and is zeroed.
 #[test]
 fn advance_local_pose_for_manual_drive_decays_velocity_when_input_released() {
+    if USE_INTERPRETED_VELOCITY {
+        // STAGE 1 (2026-06-11): direct-set stops THIS tick via the
+        // small-velocity snap (retail: no release skid for self-powered
+        // locomotion) — the multi-frame decay here is the LEGACY path.
+        return;
+    }
     let mut world = WorldState::synthetic();
     let player_guid = Guid(0x5000_0BBB);
     world.player.guid = player_guid;
@@ -2955,10 +2970,12 @@ fn indoor_step_down_beyond_step_height_falls_off_ledge() {
 // F1-1 (bughunt 2026-06-09) — grounded run-speed ceiling. The legacy
 // friction(0.5)+accel-cap(8) tug has a closed-form steady-state ceiling
 // `v* = 8·q/(1−0.5^q) ≈ 11.7–12 m/s`, so a high-Run character's 18 m/s run
-// target is unreachable. `USE_DIRECT_GROUND_VELOCITY` (retail apply_raw_movement
-// direct-set) reaches the target instantly. This test pins BOTH configurations
-// so it protects whichever way the flag is set and auto-validates the retail
-// path the moment the flag is flipped on (after the 1070 gait eye-test).
+// target is unreachable. `USE_INTERPRETED_VELOCITY` (STAGE 1 2026-06-11,
+// absorbing the retired `USE_DIRECT_GROUND_VELOCITY`: interpreted-state
+// derivation + retail apply_raw_movement direct-set) reaches the target
+// instantly. This test pins BOTH configurations so it protects whichever way
+// the flag is set and auto-validates the retail path the moment the flag is
+// flipped on (after the 1070 gait eye-test).
 // ---------------------------------------------------------------------------
 
 /// Run a grounded forward-run for `ticks` 100 ms slices and return the final
@@ -3001,7 +3018,7 @@ fn run_grounded_run_speed(guid: Guid, run_rate: f32, base_run: f32, ticks: u32) 
 #[test]
 fn high_run_target_speed_reaches_retail_max_only_with_direct_velocity() {
     let steady = run_grounded_run_speed(Guid(0x5000_0F11), 4.5, 4.0, 120);
-    if USE_DIRECT_GROUND_VELOCITY {
+    if USE_INTERPRETED_VELOCITY {
         assert!(
             (steady - 18.0).abs() < 0.2,
             "direct-set must reach the 18 m/s run target, got {steady:.3}"

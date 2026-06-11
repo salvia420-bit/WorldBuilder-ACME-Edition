@@ -7,6 +7,7 @@ use super::common::{
     local_velocity_for_state, normalize_heading, raw_motion_state_with_motion_style,
     signed_heading_delta,
 };
+use super::motion_interp::interpreted_velocity_for_state;
 use crate::client::movement_types::{
     AutonomousDriveIntent, ForwardLocomotion, MotionState, MotionStyle, MovementPacketMetadata,
     PlayerDriveIntent, Turn,
@@ -225,41 +226,48 @@ const SERVER_PROJECTION_LANDBLOCK_TOLERANCE: u32 = 1;
 /// low-risk fidelity without touching the contested knob.
 const USE_RETAIL_GROUND_FRICTION: bool = false;
 
-/// F1-1 (bughunt 2026-06-09) — grounded velocity model: retail direct-set
-/// vs the hand-tuned friction + accel-cap tug.
+/// Unified movement pipeline STAGE 1 (2026-06-11) — interpreted-state
+/// velocity derivation + retail direct-set grounded velocity model.
+/// Design: `apps/holtburger-web/docs/2026-06-11-unified-movement-pipeline/DESIGN.md`
+/// (§2 THE VELOCITY CONTRACT, §3 Stage 1). ABSORBS AND RETIRES the
+/// 2026-06-09 `USE_DIRECT_GROUND_VELOCITY` (F1-1) gate: its ON path
+/// ("direct-set grounded planar velocity to the interpreted-state
+/// target") IS this pipeline's grounded behaviour — it must not survive
+/// as a second competing speed source.
 ///
-/// `false` (DEFAULT): the legacy path — each grounded slice friction-decays
-/// the stored planar velocity ([`super::common::PLAYER_GROUND_FRICTION_PER_SEC`]
+/// `false` (DEFAULT): the legacy path, byte-identical pre-stage-1
+/// behaviour — `target_velocity` comes from `local_velocity_for_state`
+/// (`common.rs:686-734`) and each grounded slice friction-decays the
+/// stored planar velocity ([`super::common::PLAYER_GROUND_FRICTION_PER_SEC`]
 /// `0.5`) then moves it toward the target clamped to
 /// [`super::common::PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ`] (`8.0`)
 /// per axis. That interaction has a closed-form steady-state ceiling
 /// `v* = 8·q/(1−0.5^q) ≈ 11.7 m/s` (q∈[1/30,0.1]), so any run target above
 /// ~11.7 (run_rate > ~2.92, effective Run skill ≳ 460) is UNREACHABLE — the
 /// player tops out ~20–35 % below retail's 18 m/s max run, with a 1.5–4 s
-/// ice-skating ramp and a ~5 m stop-skid. The accel-cap doc even calibrates
-/// `8` against "~4.5 m/s" — a 4× misread of the dimensionless run_rate scalar
-/// as m/s. Kept for A/B.
+/// ice-skating ramp and a ~5 m stop-skid (the F1-1 finding). Kept for A/B.
 ///
-/// `true`: retail behaviour — set the grounded planar velocity DIRECTLY to
-/// the interpreted-state target each tick (ACE `MotionInterp.apply_raw_movement`
-/// copies raw→interpreted and `get_state_velocity` yields `RunAnimSpeed(4.0)
-/// × ForwardSpeed` reached INSTANTLY; retail's `calc_friction` acts on the
-/// physics velocity, which self-powered walking never fights — see
-/// `MotionInterp.cs:506-523,678-699` and the acclient pseudo-C
-/// `get_state_velocity` @ `0x00527D50`). No accel-cap ramp, no skid; the
-/// existing small-velocity snap still gives an instant stop on input release.
-/// This also removes the anim foot-slide (velScale reads the same target
-/// speed the body now actually reaches) and the observer rubber-band (wire
-/// forward_speed = run_rate now matches local). The contact-plane projection
-/// /SLEDDING fidelity in the friction path is a no-op on flat ground and only
-/// matters on ramps; direct-set leaves Z to the floor-Z snap below exactly as
-/// the planar store already does, so dropping it for grounded locomotion is
-/// faithful. DEFAULT-OFF pending a 1070 gait eye-test (the ramp/stop feel
-/// change wants live eyes, same rationale as `USE_RETAIL_GROUND_FRICTION` and
-/// the velScale flip). A documented sub-option, NOT implemented here, is a
-/// short ≤0.2 s blend on direction reversal if the instant turn reads too
-/// abrupt on the 1070.
-const USE_DIRECT_GROUND_VELOCITY: bool = false;
+/// `true`: the retail-shaped ONE pipeline — `target_velocity` is derived
+/// through the `CMotionInterp` port
+/// ([`super::motion_interp::interpreted_velocity_for_state`]):
+/// input → `RawMotionState` → `apply_raw_movement` (3× `adjust_motion` +
+/// `apply_run_to_command`, `acclient.c:343746-343803`/`:343439-343483`)
+/// → `InterpretedMotionState`, ground velocity = AUTHORED MotionData
+/// cycle base speed (run 4.000 / walk 2.602) × interpreted speed_mod
+/// (already run-rate-multiplied) per `add_motion`
+/// (`acclient.c:337431-337474`) + `CSequence::apply_physics`
+/// (`acclient.c:339860-339890`); and the grounded planar velocity is set
+/// DIRECTLY to that target each slice (retail self-powered locomotion
+/// never fights `calc_friction` — `MotionInterp.cs:506-523,678-699`).
+/// No accel-cap ramp, no skid; the small-velocity snap still stops
+/// instantly on release. Same speed_mod will drive the rig in stage 2 —
+/// the anti-ice-skating contract (`acclient.c:337465`). DEFAULT-OFF
+/// pending the 1070 gait eye-test (DESIGN.md §3 stage-1 eye-test plan:
+/// integrator speed == 4.0×run_rate, raw ACE UpdatePosition deltas
+/// agree, zero force-position sequence advances / no snapback); on PASS
+/// integrate always-on + mark DONE in url-flags.md per the passed-flag
+/// policy.
+const USE_INTERPRETED_VELOCITY: bool = true;
 
 /// F4-2 (bughunt 2026-06-09) — outdoor walkable-slope gate.
 ///
@@ -311,6 +319,25 @@ const USE_TERRAIN_WALKABLE_GATE: bool = false;
 /// EntirelyWater are rare in AC outdoor terrain (water = open ocean/lake) and
 /// the outdoor solver already snaps grounded Z to the lakebed there.
 const USE_WATER_COLLISION: bool = false;
+
+/// FU-1 (eye-test 2026-06-11) — exclude wielded/parented child objects
+/// from the player-vs-entity collision pass.
+///
+/// Retail removes a child from the world the moment it is parented:
+/// `CPhysicsObj::set_parent` → `unset_parent` + `leave_world`
+/// (`acclient.c:322965`), so a wielded weapon is never a collision
+/// candidate. ACE mirrors this (`PhysicsObj.set_parent` →
+/// `leave_world()`, `PhysicsObj.cs:3827`) and additionally
+/// short-circuits collision for any `Parent != null` object
+/// (`PhysicsObj.cs:2187`). Wielded weenies carry neither `ETHEREAL`
+/// nor `IGNORE_COLLISIONS`, so `is_collidable()` alone admits them;
+/// our entities keep their `world.entities` membership after a
+/// ParentEvent (`handlers/inventory.rs` sets `physics_parent_id`),
+/// leaving a just-equipped weapon as a collider centred on the player
+/// — which zeroes the lateral delta and pins the player in place.
+/// `true`: skip any entity with `physics_parent_id` set, mirroring the
+/// retail `Parent != null` exclusion.
+const SKIP_PARENTED_ENTITY_COLLISION: bool = true;
 
 /// 2026-06-02 indoor floor-pop fix — gate the ramped/multi-level
 /// floor-Z resolution in the `else` arm of
@@ -1243,7 +1270,19 @@ impl MovementSystem {
             Ok(c) => c,
             Err(_) => return,
         };
-        let target_velocity = local_velocity_for_state(heading, state, &capabilities);
+        // STAGE 1 (2026-06-11) velocity-source swap: under the gate the
+        // planar target comes from the CMotionInterp port (raw →
+        // interpreted → authored-cycle-base × speed_mod, DESIGN.md §2);
+        // the legacy axis helpers stay the default path and the gate-OFF
+        // identity is pinned by the motion_interp identity test. ONLY
+        // where this number comes from changes — the 30 Hz slicing,
+        // step-up/down, edge-slide, ground-snap and collision paths below
+        // consume it unchanged.
+        let target_velocity = if USE_INTERPRETED_VELOCITY {
+            interpreted_velocity_for_state(heading, state, &capabilities)
+        } else {
+            local_velocity_for_state(heading, state, &capabilities)
+        };
         // Phase 2 (Cohere-D, 2026-05-12): also compute angular velocity
         // from the manual drive state so we can apply local rotation
         // prediction below. Prior to this, the manual integrator only
@@ -1306,18 +1345,21 @@ impl MovementSystem {
             // is applied to position below WITHOUT re-rotating by the
             // in-flight heading.
             world.player.current_planar_velocity
-        } else if USE_DIRECT_GROUND_VELOCITY {
-            // F1-1 (bughunt 2026-06-09) — retail direct-set. ACE's
+        } else if USE_INTERPRETED_VELOCITY {
+            // STAGE 1 (2026-06-11) — retail direct-set, absorbed from the
+            // F1-1 `USE_DIRECT_GROUND_VELOCITY` gate. Retail's
             // `apply_raw_movement` sets the motion velocity straight from the
-            // interpreted state every tick and `get_state_velocity` returns
-            // `RunAnimSpeed(4.0) × ForwardSpeed` reached INSTANTLY (no friction
-            // /accel-cap ramp for self-powered locomotion). Setting the planar
-            // store to the target here removes the legacy ~11.7 m/s steady-
-            // state ceiling (so high-Run characters reach retail's 18 m/s),
-            // the 1.5–4 s ice-skating ramp, and the ~5 m stop-skid. The target
-            // is already planar (X/Y from `local_velocity_for_state`); Z stays
-            // owned by the jump/fall arc + floor-Z snap below, so we zero it in
-            // the store exactly as the friction path did.
+            // interpreted state every tick and on-ground translation is the
+            // authored cycle velocity × speed_mod reached INSTANTLY (no
+            // friction/accel-cap ramp for self-powered locomotion —
+            // `add_motion` acclient.c:337431-337474). `target_velocity`
+            // above is the interpreted-pipeline derivation; setting the
+            // planar store to it removes the legacy ~11.7 m/s steady-state
+            // ceiling (so high-Run characters reach retail's 18 m/s), the
+            // 1.5–4 s ice-skating ramp, and the ~5 m stop-skid. The target
+            // is already planar; Z stays owned by the jump/fall arc +
+            // floor-Z snap below, so we zero it in the store exactly as the
+            // friction path did.
             let mut v = target_velocity;
             v.z = 0.0;
             // Retail small-velocity snap (`PhysicsObj` `small_velocity`): when
@@ -1918,7 +1960,12 @@ impl MovementSystem {
             let colliders: Vec<_> = world
                 .entities
                 .iter()
-                .filter(|e| e.guid != self_guid && e.is_collidable())
+                .filter(|e| {
+                    e.guid != self_guid
+                        && e.is_collidable()
+                        && !(SKIP_PARENTED_ENTITY_COLLISION
+                            && e.physics_parent_id.is_some())
+                })
                 .filter_map(|e| {
                     let g = e.position.global_coords();
                     let dx = g.x - player_global.x;
