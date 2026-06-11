@@ -106,6 +106,24 @@ fn parse_unified_tick_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "unifiedTick=on")
 }
 
+/// A8-M2 (2026-06-11, unification survey): parse `?maintPrune=on`
+/// (or `&maintPrune=on`). Same shape as `parse_unified_tick_flag`.
+/// When on (AND `?unifiedTick=on` — the maint sweep only runs inside
+/// the unified spine), the despawn guids the canonical `world.tick()`
+/// eviction sweep reports (explicit-delete marks + expired 25 s
+/// out-of-visibility prune deadlines, `liveness.rs`
+/// `ACE_DESTRUCTION_TIMEOUT_SECS` ↔ retail `AddObjectToBeDestroyed`
+/// +25.0 s, acclient.c:310666, drained by `CObjectMaint::UseTime`
+/// acclient.c:310246–310278) are translated into KIND_REMOVE rig
+/// events — closing survey A8 §3 row 2: rigs for entities that left
+/// the visible set no longer persist for the whole session. Default
+/// OFF = despawn events stay dropped, byte-identical to before.
+#[cfg(target_arch = "wasm32")]
+fn parse_maint_prune_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "maintPrune=on")
+}
+
 /// A1-O2 (2026-06-11, unification survey): parse
 /// `?posePublishPostTick=on` (or `&posePublishPostTick=on`). Same shape
 /// as `parse_unified_tick_flag`. When on, the TickMovement arm publishes
@@ -22018,11 +22036,13 @@ mod tests_player_enchantment_snapshot_shape {
 /// helpers are skipped (bridge-local index maintenance still runs;
 /// see `maintain_bridge_indexes_on_routed_create`). NOTE: canonical
 /// ObjectDelete defers eviction to `mark_entity_explicit_delete` +
-/// the `world.tick()` sweep (`liveness.rs`), which does not run on
-/// wasm until A8-M2 lands — so the flag stays default-off until M2
-/// completes the pair. Rig events (KIND_SPAWN / KIND_REMOVE) are
-/// emitted by the wire-data arms either way; consolidating those onto
-/// `WorldEvent::EntitySpawned/EntityDespawned` is the M2/M3 follow-on.
+/// the `world.tick()` sweep (`liveness.rs`) — A8-M2 (LANDED
+/// 2026-06-11) runs that sweep on wasm under `?unifiedTick=on` and,
+/// with `?maintPrune=on`, forwards its despawns to the JS rig layer
+/// as KIND_REMOVE, completing the pair. Rig events (KIND_SPAWN /
+/// KIND_REMOVE) are otherwise emitted by the wire-data arms either
+/// way; full consolidation onto
+/// `WorldEvent::EntitySpawned/EntityDespawned` is the M3 follow-on.
 ///
 /// `GameEvent` IS routed because PlayerDescription drives the load-
 /// bearing first kind=8 event via login::handle_event +
@@ -30500,6 +30520,14 @@ async fn recv_loop(
     // instead of bare `movement.tick`. Default OFF; see
     // `parse_unified_tick_flag` and the arm below.
     let unified_tick_on: bool = parse_unified_tick_flag(&js_location_search());
+    // A8-M2 (2026-06-11): `?maintPrune=on` — forward the unified
+    // spine's despawn reports (25 s out-of-visibility prune + swept
+    // explicit deletes, liveness.rs ↔ acclient.c:310666) to the JS rig
+    // layer as KIND_REMOVE. Requires `?unifiedTick=on` (the sweep only
+    // runs inside the unified spine) — inert without it. Default OFF;
+    // see `parse_maint_prune_flag` and the TickMovement arm.
+    let maint_prune_on: bool =
+        unified_tick_on && parse_maint_prune_flag(&js_location_search());
     // A1-O2 (2026-06-11): `?posePublishPostTick=on` — publish the
     // pose/can-jump/cell-scene shadows AFTER the integrator tick
     // (retail post-update callback order, acclient.c:311375). Default
@@ -39370,14 +39398,22 @@ async fn recv_loop(
                         // skipped on-path — the local player advances
                         // through the cli-canonical solver instead.
                         // Spine-emitted WorldEvents feed the same solver
-                        // body-tracking law as native and are otherwise
-                        // dropped, matching this arm's existing
-                        // `Ok(_events)` discard; forwarding
-                        // EntityDespawned to the JS rig layer is A8-M2.
+                        // body-tracking law as native; the spine REPORTS
+                        // the frame's EntityDespawned guids (A8-M2) and
+                        // drops the rest, matching this arm's existing
+                        // `Ok(_events)` discard. Under `?maintPrune=on`
+                        // the reports become KIND_REMOVE rig events
+                        // below; otherwise they are dropped too —
+                        // byte-identical to pre-M2.
+                        let mut spine_despawned: Vec<holtburger_common::Guid> =
+                            Vec::new();
                         let tick_result: anyhow::Result<()> = if unified_tick_on {
                             tick_spine
                                 .tick_frame(now, w, &mut movement, &mut session)
                                 .await
+                                .map(|despawned| {
+                                    spine_despawned = despawned;
+                                })
                         } else {
                             movement
                                 .tick(now, w, &mut session)
@@ -39386,6 +39422,74 @@ async fn recv_loop(
                         };
                         match tick_result {
                             Ok(()) => {
+                                // A8-M2 (2026-06-11, unification survey):
+                                // translate the maint sweep's despawns
+                                // into KIND_REMOVE — retail's 25 s
+                                // out-of-visibility destruction
+                                // (`AddObjectToBeDestroyed` +25.0 s,
+                                // acclient.c:310651-310672, drained by
+                                // `CObjectMaint::UseTime`
+                                // acclient.c:310246-310278) finally
+                                // reaches the web renderer (survey A8 §3
+                                // row 2: rigs persisted all session). The
+                                // live-rig ledger gates the emission:
+                                // `js_spawned_guids.remove` is true only
+                                // for guids whose KIND_SPAWN went out and
+                                // whose KIND_REMOVE hasn't — so sweeps of
+                                // rig-less entities (inventory hydrates)
+                                // emit nothing, and explicit deletes
+                                // already removed by the wire-data
+                                // ObjectDelete/PickupEvent arms aren't
+                                // double-removed. Re-entry pop-in is
+                                // retail-correct: the server re-sends
+                                // ObjectCreate when the object comes back
+                                // into range (fresh KIND_SPAWN), same as
+                                // retail re-creating a destroyed object.
+                                if maint_prune_on {
+                                    for guid in &spine_despawned {
+                                        let guid_u32 = u32::from(*guid);
+                                        if !js_spawned_guids.remove(&guid_u32) {
+                                            continue;
+                                        }
+                                        entity_updates.borrow_mut().push(EntityUpdate {
+                                            kind: ENTITY_UPDATE_KIND_REMOVE,
+                                            guid: guid_u32,
+                                            model_id: 0,
+                                            landblock_id: 0,
+                                            x: 0.0,
+                                            y: 0.0,
+                                            z: 0.0,
+                                            qw: 1.0,
+                                            qx: 0.0,
+                                            qy: 0.0,
+                                            qz: 0.0,
+                                            wcid: 0,
+                                            item_type: 0,
+                                            name: String::new(),
+                                            obj_scale: 1.0,
+                                            icon_id: 0,
+                                            palette_id: 0,
+                                            mtable_id: 0,
+                                            model_changes: Vec::new(),
+                                            texture_changes: Vec::new(),
+                                            sub_palettes: Vec::new(),
+                                            portal_destination: String::new(),
+                                            vx: 0.0,
+                                            vy: 0.0,
+                                            vz: 0.0,
+                                            omega_z: 0.0,
+                                            motion_command: 0,
+                                            motion_stance: 0,
+                                            physics_script_did: 0,
+                                            sound_table_did: 0,
+                                            obj_desc_flags: 0,
+                                            weenie_flags: 0,
+                                            motion_speed: 1.0,
+                                            physics_translucency: 0.0,
+                                            is_autonomous: false,
+                                        });
+                                    }
+                                }
                                 // A1-O2 (2026-06-11, unification survey):
                                 // post-tick shadow publish — the retail
                                 // callback order. acclient.c:311371-311378:

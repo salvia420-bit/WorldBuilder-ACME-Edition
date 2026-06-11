@@ -28,6 +28,7 @@
 use super::movement::{MovementSystem, MovementSystemHandle};
 use super::simulation::ClientSimulationSystem;
 use anyhow::Result;
+use holtburger_common::Guid;
 use holtburger_session::Session;
 use holtburger_world::{SpatialBodyId, WorldEvent, WorldState};
 use std::time::Duration;
@@ -162,9 +163,18 @@ pub(super) fn observe_world_event_for_body_tracking(
 /// - tick-emitted events feed the same solver body-tracking observation
 ///   the native runtime applies ([`observe_world_event_for_body_tracking`]).
 ///
-/// Events are otherwise dropped, matching the wasm arm's existing
-/// `Ok(_events)` discard; forwarding `EntityDespawned` to the JS rig
-/// layer is the A8-M2 follow-on.
+/// A8-M2 (2026-06-11): `tick_frame` RETURNS the guids of every
+/// [`WorldEvent::EntityDespawned`] the frame emitted (in practice the
+/// World phase's eviction sweep — `liveness.rs` explicit-delete marks +
+/// expired 25 s out-of-visibility prune deadlines,
+/// `ACE_DESTRUCTION_TIMEOUT_SECS` ↔ retail's destruction timer,
+/// acclient.c:310666; the per-frame destruction-queue drain this sweep
+/// mirrors is `CObjectMaint::UseTime` acclient.c:310246–310278). The
+/// wasm recv loop translates these into KIND_REMOVE rig events under
+/// `?maintPrune=on`. All other events are dropped after the body-
+/// tracking observation, matching the wasm arm's existing `Ok(_events)`
+/// discard; full KIND_SPAWN/KIND_REMOVE consolidation onto WorldEvents
+/// is the A8-M3 follow-on.
 pub struct TickSpineHandle {
     simulation: ClientSimulationSystem,
     last_tick_at: Option<Instant>,
@@ -184,13 +194,16 @@ impl TickSpineHandle {
     /// at MAX_QUANTUM / drops > HUGE_QUANTUM hitches, so rAF stalls
     /// cannot over-integrate (retail per-object clock,
     /// acclient.c:323120–323159).
+    ///
+    /// Returns the guids despawned this frame (A8-M2 — see the struct
+    /// doc); empty for the overwhelming majority of frames.
     pub async fn tick_frame(
         &mut self,
         now: Instant,
         world: &mut WorldState,
         movement: &mut MovementSystemHandle,
         session: &mut Session,
-    ) -> Result<()> {
+    ) -> Result<Vec<Guid>> {
         let dt = match self.last_tick_at {
             Some(prev) => now.saturating_duration_since(prev),
             None => Duration::from_millis(16),
@@ -201,6 +214,12 @@ impl TickSpineHandle {
         // local-pose pre-integration.
         movement.note_unified_tick(now);
 
+        // A8-M2 (2026-06-11): collect despawn guids for the caller —
+        // retail's CObjectMaint::UseTime destroys expired-timer objects
+        // inside the same maintenance pass (acclient.c:310246–310278);
+        // our caller-side KIND_REMOVE translation is the renderer-facing
+        // half of that destroy.
+        let mut despawned: Vec<Guid> = Vec::new();
         tick_frame(
             now,
             dt,
@@ -210,9 +229,13 @@ impl TickSpineHandle {
             session,
             |_phase, event, world, simulation| {
                 observe_world_event_for_body_tracking(world, simulation, event);
+                if let WorldEvent::EntityDespawned(guid) = event {
+                    despawned.push(*guid);
+                }
             },
         )
-        .await
+        .await?;
+        Ok(despawned)
     }
 }
 
@@ -352,6 +375,82 @@ mod tests {
             movement.tick_count(),
             2,
             "unified ticks must keep the handle's tick_count advancing"
+        );
+    }
+
+    /// A8-M2 acceptance (Lane A, survey A8 §4 Stage M2): an entity that
+    /// leaves the conservative visible set (landblock adjacency ∪ 384 m,
+    /// `liveness.rs::current_visible_world_guids`) gets the 25 s prune
+    /// deadline stamped by the World phase
+    /// (`maintain_visibility_prune_deadlines`) and, once the deadline
+    /// expires in sim-time, is SWEPT — and the handle REPORTS the
+    /// despawn guid so the wasm caller can translate it into a
+    /// KIND_REMOVE rig event. Retail: cell-less objects go on the
+    /// +25.0 s destruction timer (`AddObjectToBeDestroyed`,
+    /// acclient.c:310651–310672, constant at :310666; scheduled from
+    /// the no-cell branch acclient.c:146087–146101) and are destroyed
+    /// by `CObjectMaint::UseTime`'s queue drain
+    /// (acclient.c:310246–310278).
+    #[tokio::test]
+    async fn tick_spine_handle_reports_out_of_visibility_prune_despawn() {
+        let (mut world, _player_guid) = seeded_world();
+        let mut movement = MovementSystemHandle::new();
+        let mut session = Session::new_test();
+        let mut spine = TickSpineHandle::new();
+
+        // Far entity: non-adjacent landblock, far beyond the 384 m
+        // conservative radius (lb 0x7F7F vs the player's 0x1234).
+        let far_guid = Guid(0x5000_0777);
+        world.add_entity(Entity::new(
+            far_guid,
+            "FarAway".to_string(),
+            WorldPosition {
+                landblock_id: Guid(0x7F7F_0000),
+                coords: Vector3::new(50.0, 50.0, 0.0),
+                rotation: Quaternion::identity(),
+            },
+        ));
+
+        // Pin server time so the 25 s deadline is deterministic.
+        let _ = world.set_server_time_sync(1_000.0, Instant::now());
+
+        // Tick 1: entity is out of visibility → World phase stamps
+        // `prune_deadline = now + 25 s`; nothing despawns yet.
+        let start = Instant::now();
+        let despawned = spine
+            .tick_frame(start, &mut world, &mut movement, &mut session)
+            .await
+            .expect("tick 1 should succeed");
+        assert!(
+            despawned.is_empty(),
+            "no despawn may fire before the 25 s deadline; got {despawned:?}"
+        );
+        assert!(
+            world.entities.get(far_guid).is_some(),
+            "entity must survive the deadline-stamping tick"
+        );
+
+        // Advance sim-time past ACE_DESTRUCTION_TIMEOUT_SECS by
+        // re-anchoring the server-time sync (+30 s).
+        let _ = world.set_server_time_sync(1_030.0, Instant::now());
+
+        // Tick 2: the sweep evicts and the handle reports the guid.
+        let despawned = spine
+            .tick_frame(
+                start + Duration::from_millis(32),
+                &mut world,
+                &mut movement,
+                &mut session,
+            )
+            .await
+            .expect("tick 2 should succeed");
+        assert!(
+            despawned.contains(&far_guid),
+            "expired 25 s prune must surface the despawned guid; got {despawned:?}"
+        );
+        assert!(
+            world.entities.get(far_guid).is_none(),
+            "swept entity must be evicted from world.entities"
         );
     }
 }
