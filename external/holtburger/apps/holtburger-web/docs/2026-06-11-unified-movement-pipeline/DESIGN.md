@@ -77,6 +77,34 @@ movement/
                                   — stamp compare 344398-344408, local-autonomy gate 344410
                                 StopCompletely            (343597-343638)
                                 DoMotion / set_hold_run   (344600-344666 / 344492-344523)
+                              STAGE 2 AMENDMENT (A3-D1, 2026-06-11) additionally owns:
+                                pending_motions queue / add_to_queue (343406-343437)
+                                motion_done(success)      (343641-343676)
+                                motions_pending / HandleExitWorld (343735 / 343679)
+                                enter_default_state       (344560-344598)
+                                PerformMovement dispatch  (344670-344720)
+                                HitGround / LeaveGround   (344429-344455 / 344457-344490)
+                                ReportExhaustion          (344318-344332)
+                                jump cluster: jump_is_allowed / charge_jump /
+                                  contact_allows_move / get_jump_v_z / jump
+                                  (343295-343404, 343845-343974, 344224-344256)
+                              (ACE 1:1 port = Physics/Animation/MotionInterp.cs:
+                                PendingMotions :24, MotionDone :210, HitGround :175,
+                                LeaveGround :192, ReportExhaustion :264, AddToQueue :390)
+  motion_table_manager.rs STAGE 2 (A4-Q1 fold, 2026-06-11) — retail
+                              MotionTableManager queue: AnimNode{motion,num_anims},
+                              animation_counter, pending_animations,
+                              add_to_queue/remove_redundant_links/
+                              truncate_animation_list (acclient.c:330149/330079/
+                              329842), animation_done (329873),
+                              check_for_completed_motions (329960),
+                              HandleEnterWorld/HandleExitWorld (329949/329940),
+                              initialize_state Ready node (330172-330200).
+                              ACE = Physics/Managers/MotionTableManager.cs
+                              (PendingAnimations :13, AnimationDone :28,
+                              CheckForCompletedMotions :63). Implementation is
+                              A4-Q1/Q2's item; SPECCED HERE ONLY (see §3 Stage 2
+                              completion-layer amendment) — never spec it twice.
   motion_sequence.rs   STAGE 2 — minimal GetObjectSequence-shaped output: given
                               (style, substate, speed_mod) emit "play cycle X at
                               framerate*speed_mod, sequence velocity = authored
@@ -352,6 +380,143 @@ be simplified per the passed-flag policy); WALK_FORWARD_SPEED=1.0 / RUN_SPEED=4.
 constants (index.html:7940, :10693-10717; camera.js:1122); velScale's local-player
 EMA. Subsumes: local locomotion anim gap.
 
+### STAGE 2 AMENDMENT (2026-06-11, survey A3-D1, folding A4-Q1/Q2) — the
+### completion layer: pending queues, MotionDone, and the event fan-out
+
+**Contradiction resolved (ROADMAP §7.3).** The original Stage 2 text scope-gated the
+queue/completion machinery OUT while `interp_state.rs:31` shipped saying the action
+FIFO is "drained by stage 2's PerformMovement". RULING: **Stage 2 owns the completion
+layer.** The code comment stands as written; this amendment is the spec it was
+pointing at. The original scope-gate survives only for the SELECTION algorithms
+(motion_sequence.rs stays a minimal GetObjectSequence subset per T9) — selection is
+scope-gated, completion is not. Without this layer one-shot actions never complete
+pipeline-side: stuck action state, jump allowed while motions retail would refuse,
+sticky never auto-released on action end (survey A3 §3 row 1, A4 §3 row 2).
+
+**Two queues, one completion chain (this is ONE spec — A4-Q1/Q2 implement the
+MotionTableManager half and the renderer wiring; they do NOT re-spec it):**
+
+```
+renderer clip end (three.js `finished` / LoopOnce overlay)
+  -> [A4-Q2] notifyAnimationDone(guid, success) wasm export      (?mtQueue= flag)
+  -> [A4-Q1] motion_table_manager.animation_done(success)
+       pops AnimNodes with num_anims <= animation_counter        (acclient.c:329873)
+       0x10000000 action bit -> MotionState::remove_action_head  (329892-329893)
+  -> MotionDone(motion, success) fan-out                          (317097 -> 339349)
+  -> [A3-D1] motion_interp.motion_done(success)                   (343641-343676)
+       pops pending_motions head; if one-shot action (0x10000000):
+       unstick_from_object hook + InterpretedState::remove_action
+       + RawState::remove_action                                  (343652-343671)
+zero-anim motions: check_for_completed_motions                    (329960)
+  per-frame (UseTime tailcall, BN pseudo-C :290845-290850) AND
+  synchronously after EVERY PerformMovement arm                   (344684-344704)
+```
+
+Seam contract (ROADMAP §2): **A4 owns WHO fires completion** (the
+MotionTableManager queue, num_anims accounting, AnimationDone wiring from the
+renderer, spam coalescing via remove_redundant_links/truncate_animation_list);
+**A3 owns what completion DOES** (the CMotionInterp pending_motions pop and its
+movement-state side effects). Execution order: A4-Q1 (queue core) → A3-D1
+(MotionDone consumer) → A5-P1 (hook drain decides where `finished` fires) →
+A4-Q2 (AnimationDone wiring).
+
+**pending_motions semantics (motion_interp.rs, the A3-D1 half):**
+- `pending_motions: VecDeque<PendingMotion { context_id: u32, motion: u32,
+  jump_error_code: u32 }>` — retail `add_to_queue(context_id, motion,
+  jump_error_code)` (acclient.c:343406-343437; ACE MotionInterp.cs:390).
+- EVERY accepted `DoInterpretedMotion` enqueues a node (343993-344010); every
+  `StopInterpretedMotion` enqueues a Ready (0x41000003) node (344056-344060) — stop
+  completion is observable, not display-only.
+- `motion_done(success)` pops the head; if the completed node is a one-shot action
+  (`motion & 0x10000000`): unstick callback (A2 owns the sticky object itself — D1
+  exposes a hook, does not own stick state) + `RemoveAction` on BOTH
+  InterpretedState (interp_state.rs actions FIFO — THE drain that makes
+  interp_state.rs:31 true) and RawState (raw_state.rs:184-225 arms exist).
+- `motions_pending()` = head non-null (343735). `handle_exit_world` drains the
+  queue through the same pop path with success=0 (343679; ACE :162-171) — pending
+  one-shots are cancelled, not played, across teleport/portal (A4-Q3 wires the JS
+  trigger).
+- `enter_default_state` (344560-344598): reset both states,
+  InitializeMotionTables-equivalent, **seed the queue with one Ready (0x41000003)
+  node**, set initted, call LeaveGround — the construction semantics for every
+  per-entity MotionInterp instance (Stage 3 needs this; ACE MotionInterp.cs:610-615).
+- **6-action FIFO cap**: `DoMotion` refuses with error 69 when the action FIFO
+  already holds 6 (344600-344666 `GetNumActions >= 6`) — the existing uncapped
+  `InterpretedState.actions` VecDeque gets the cap here.
+
+**Jump charge path (queue-coupled — why D1 must precede it):**
+- Each queue node carries `jump_error_code` derived from
+  `motion_allows_jump(motion)` at enqueue time (343993-344010, 343295-343316).
+- `jump_is_allowed` (343922-343974) consults, in order: `contact_allows_move`
+  (343882 — LogOut/Dead/LifestoneRecall-class motions exempt), IsFullyConstrained,
+  **the pending-queue HEAD's jump_error_code** (ACE MotionInterp.cs:753-754), then
+  `jump_charge_is_allowed` (343318-343341: weenie stamina vfptr → error 73;
+  forward-command gate → 72) and `motion_allows_jump(forward_command)`.
+- `charge_jump` (343845) sets `standing_longjump` only when on-ground + Ready + no
+  sidestep/turn; `jump` (344224) cancels moveto, stamps `jump_extent`,
+  `set_on_walkable(false)`; `get_jump_v_z` (343343): extent clamp 1.0, weenie
+  scale, default 10.0. Our shipped gates (lib.rs:38260-38392, types.rs:64-72,
+  :1710) already cover the non-queue terms (survey A3 §3 row 9 PARITY); the queue
+  head's error code is the missing input this amendment adds. Charge-time stamina
+  error 73 stays UNRESOLVED (ACE gates at release only — survey A3 §6); do not
+  add a speculative charge-time gate.
+
+**StopCompletely / PerformMovement dispatch:** `PerformMovement` (344670-344720)
+dispatches DoMotion / StopMotion / DoInterpretedMotion / StopInterpretedMotion /
+StopCompletely and calls `CheckForCompletedMotions` after EACH arm — a no-anim
+motion completes inside the same call it was issued (ACE
+MotionTableManager.cs:160). StopCompletely (343597-343638, already ported stage 1)
+gains its queue interaction here: the stops it issues enqueue Ready nodes like any
+other stop. The system.rs tick calls `check_for_completed_motions` after drive
+ingestion, mirroring retail's per-frame UseTime pump (A4-Q1 file plan).
+
+**HitGround / LeaveGround fan-out (motion_interp half; MovementManager fan-out to
+MoveToManager is Stage 3):**
+- `HitGround` (344429-344455): gravity-state check, RemoveLinkAnimations,
+  `apply_current_movement` (re-derive on landing). NOTE: our per-tick re-derive
+  (system.rs:1316) may behaviorally subsume this; do NOT add an event-driven
+  HitGround unless A1's ordering audit shows a late-by-one-frame landing artifact
+  (survey A3 §6) — spec'd here so the omission is a decision, not a hole.
+- `LeaveGround` (344457-344490): stamp launch velocity =
+  `get_leave_ground_velocity` (343806-343843) = `get_state_velocity` (closed-form,
+  **clamped run_rate×4.0**) + `get_jump_v_z` z, falling back to the transformed
+  physics velocity when ~zero; clear `standing_longjump`/`jump_extent`;
+  RemoveLinkAnimations; `apply_current_movement`. This REPLACES our walk-off-ledge
+  freeze of the unclamped `current_planar_velocity` (system.rs:1390-1398), which
+  can exceed retail's clamp on diagonal run+strafe launches (survey A3 §3 row 6).
+  Charged-jump departures already use interpreted intent (lib.rs:38441-38460) —
+  unchanged.
+
+**ReportExhaustion (survey A3-D2; (a) is a Stage-1 point fix, (b) lands with this
+layer):** retail re-runs `apply_raw_movement`/`apply_interpreted_movement` on the
+stamina-exhaustion event so run promotion re-resolves at the exhausted rate
+(acclient.c:339421-339434, 344318-344332; ACE MotionInterp.cs:264, server side
+stamina==0 → runskill 0 → GetRunRate 1.0 — the §2 chain this doc already pins).
+(a) `player_run_rate()` (context.rs:317-334) gains the stamina input: wire Stamina
+current == 0 → exhausted rate 1.0, behind
+`const USE_EXHAUSTION_RUN_RATE: bool = false` (const-gate pattern,
+url-flags.md:245-273) — without it the exhausted player keeps predicting full run
+speed and the snapback class Stage 1 fixed returns exactly at stamina 0. (b) the
+`report_exhaustion()` event re-derive on the 0-crossing, fanning to MoveToManager
+once Stage 3 exists (ACE MovementManager.cs:159-162). Add the "stamina 0→1.0"
+unit test the Stage-1 test list already promises but never shipped.
+
+**Flags / rebuild / rollback:** Rust queue core behind
+`const USE_MOTION_TABLE_QUEUE: bool = false` (A4-Q1); motion_interp consumption
+rides Stage 2's `?interpRig=`; renderer wiring behind `?mtQueue=` + the
+`notifyAnimationDone` export bumps `WASM_EXPORT_MANIFEST_VERSION` (F18-2; JS
+consumer updated together). All default-off; rollback = flags off (queue inert,
+current paths untouched). Wasm-rebuild batch R2 (queue core) + R4 (export).
+
+**Tests (headless-now):** queue FIFO order; num_anims pop + counter reset;
+redundant-substate truncation; zero-anim immediate completion;
+Stop/StopCompletely enqueue Ready 0x41000003; enter_default_state Ready seed;
+action pop removes raw+interp + fires unstick hook; 6-cap error 69;
+jump_is_allowed refuses on head jump_error_code; exhaustion 0→1.0 re-derive.
+1070-gated: one-shot completes → sticky release + jump allowed; spam-click
+truncation (no crossfade churn); emote completes then gait resumes; no swing
+carried through a portal; run to stamina 0 → no snapback.
+
 ### STAGE 3 — MoveToManager + server-motion unification (sticky / FU-3)
 
 Gate: per-feature Rust consts default OFF.
@@ -379,6 +544,48 @@ swing/cast clips (fullBodyOneShot eye-test pending from 2026-06-11 session).
 Supersedes: setSwingPose canned poses (behind cmtStanceMask), fixed-K turn easing.
 MULTI-ACTION queue drain stays CAPTURE-GATED — build it only after a ≥2-action
 UpdateMotion is observed on the wire (RESEARCH-REPORT.md:111-117).
+
+### STAGE 3 AMENDMENT (2026-06-11, survey A3-D3) — unpack_movement completeness,
+### MovementManager facade, enter_default_state
+
+Stage 3's "route server UpdateMotion through move_to_interpreted_state for ALL
+entities" must additionally spec (we DECODE all of this today; the semantics are
+dropped — survey A3 §3 row 4; decode sites motion.rs:23-117, :163-176, :197-228):
+
+- **Per-unpack preamble**: `cancel_moveto` + `unstick_from_object` before every
+  UpdateMovement apply (acclient.c:339516-339518).
+- **Style-change DoMotion**: when the unpacked style != `InqStyle()`, route a
+  `DoMotion(style)` through the D1 lattice BEFORE the payload dispatch
+  (339540-339546) — server style changes re-style the rig through one path.
+  (Requires the Stage 2 amendment's DoMotion validation lattice: style-gated
+  errors 63-66, 6-cap error 69, RawState::ApplyMotion on success,
+  acclient.c:344600-344666 — hence D1 before D3.)
+- **standing_longjump from the wire**: `standing_longjump = flags & 0x200`
+  (339568) — our decoded `motion_flags` bit 0x02 (motion.rs:65-67, entity.rs:265)
+  currently has ZERO consumers; this completes G-7/F1-6 wire-side.
+- **TurnToObject fallback**: case 8 with a missing object falls back to
+  `MoveToManager::TurnToHeading` with the packed heading (339595-339612).
+- **MoveTo trailing `my_run_rate` float CONSUMED** into the per-entity minterp
+  (339577-339589) — decoded-but-unconsumed today (motion.rs:197-228); preserves
+  F3-5 per-creature gait tempo.
+- **MovementManager facade shape** (339175-339250): one owner fanning
+  HitGround/LeaveGround/ReportExhaustion into BOTH minterp and MoveToManager,
+  UseTime → MoveToManager only, HandleUpdateTarget → MoveToManager only,
+  MotionDone/EnterDefaultState → minterp only (ACE
+  Physics/Managers/MovementManager.cs:38-178). Replaces the scattered entry
+  points (recv arm lib.rs:38377-38417 + JS setMotion allow-lists, survey A3 §3
+  row 7) so the completion pump runs synchronously after motion entry.
+- **enter_default_state on every per-entity MotionInterp creation** (lazy-create
+  + default-state first, 339192-339199; semantics in the Stage 2 amendment:
+  Ready queue seed + LeaveGround). Per-entity instances, per-entity my_run_rate —
+  no globals (§5 remote/local bleed risk).
+- **Non-charged leave-ground velocity** switches to the clamped
+  `get_state_velocity` form (Stage 2 amendment, HitGround/LeaveGround block).
+
+Flags: per-feature Rust consts default OFF (this stage's existing pattern).
+Tests (headless-now): unpack fixture matrix incl. the 0x200 bit, TurnTo fallback,
+default-state seed; 1070-gated: remote MoveTo tempo, sticky release on action end
+(F3-4 must not regress). Serialize with A13 on the recv arm (ROADMAP §3).
 
 ---
 
