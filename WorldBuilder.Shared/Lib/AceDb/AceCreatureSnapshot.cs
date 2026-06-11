@@ -48,5 +48,15 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         public float Shade { get; set; } = 1f;
         /// <summary>Explicit sub-palette overrides from <c>weenie_properties_palette</c>.</summary>
         public List<AcePaletteRow> PaletteOverrides { get; } = new();
+
+        /// <summary>
+        /// Set when the DB load failed (MySQL down, connection dropped mid-load, etc.). When non-null,
+        /// the override collections above are unreliable (possibly empty or partial) and MUST NOT be
+        /// treated as the authoritative "no overrides defined" state.
+        /// </summary>
+        public string? LoadError { get; set; }
+
+        /// <summary>True when <see cref="LoadError"/> is set — i.e. the load did not complete successfully.</summary>
+        public bool LoadFailed => LoadError != null;
     }
 }

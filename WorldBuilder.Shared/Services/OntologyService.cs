@@ -939,24 +939,14 @@ public class OntologyService : IOntologyService {
     // ════════════════════════════════════════════════════
 
     /// <summary>
-    /// Scans surface/texture IDs for each ontology entry and classifies materials
-    /// using texture ID heuristics and RenderSurface metadata from the DAT.
+    /// Tags every ontology entry that references one or more Surface (0x08) records
+    /// with the "textured" marker. This is a presence-only signal derived from the
+    /// model's surface table; it does NOT classify the underlying material (no
+    /// texture-name mining or palette analysis is performed). The returned count is
+    /// therefore "entries with any parseable surface data", not "entries with a
+    /// resolved material".
     /// </summary>
     public int EnrichMaterials(IDatReaderWriter dats) {
-        // Build material keyword map based on known AC texture naming patterns
-        var materialKeywords = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase) {
-            { "stone",    new[] { "stone", "rock", "mineral" } },
-            { "wood",     new[] { "wood", "timber", "plank" } },
-            { "metal",    new[] { "metal", "iron", "steel", "bronze", "copper" } },
-            { "fire",     new[] { "fire", "flame", "lava", "ember" } },
-            { "water",    new[] { "water", "liquid", "ice", "frost" } },
-            { "cloth",    new[] { "cloth", "fabric", "leather", "hide" } },
-            { "crystal",  new[] { "crystal", "gem", "glass" } },
-            { "bone",     new[] { "bone", "skull", "skeleton" } },
-            { "moss",     new[] { "moss", "lichen", "fungus" } },
-            { "bark",     new[] { "bark", "tree", "leaf" } },
-        };
-
         int enriched = 0;
 
         foreach (var entry in _entries.Values) {
@@ -969,7 +959,7 @@ public class OntologyService : IOntologyService {
                     continue;
             }
 
-            // Classify materials based on texture ID distribution
+            // Tag entries that carry at least one valid Surface (0x08) record.
             var materialTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var sidStr in entry.SurfaceIds) {
@@ -978,26 +968,14 @@ public class OntologyService : IOntologyService {
                         System.Globalization.NumberStyles.HexNumber, null, out var surfaceId))
                     continue;
 
-                // Try to load the Surface (0x08) to get texture references
-                try {
-                    if (dats.TryGet<DatReaderWriter.DBObjs.Surface>(surfaceId, out var surface)) {
-                        // Surface contains OrigTextureId and OrigPaletteId
-                        // Classify by texture ID ranges (known AC texture patterns)
-                        var texId = surface.OrigTextureId;
-                        ClassifyTextureById(texId, materialTags);
-                    }
-                } catch {
-                    // Skip surfaces that fail to load — texture may not exist
-                }
-
-                // Also classify by surface ID range patterns
+                // Presence-based signal: a parseable 0x08 surface id yields "textured".
                 ClassifySurfaceByRange(surfaceId, materialTags);
             }
 
             if (materialTags.Count > 0) {
                 entry.MaterialTags = materialTags.ToArray();
 
-                // Also add material tags to the main tags array
+                // Also add the tags to the main tags array
                 var allTags = new List<string>(entry.Tags ?? Array.Empty<string>());
                 foreach (var mt in materialTags) {
                     if (!allTags.Contains(mt))
@@ -1009,7 +987,7 @@ public class OntologyService : IOntologyService {
             }
         }
 
-        Console.Error.WriteLine($"[Ontology] Material enrichment: {enriched} entries tagged with materials");
+        Console.Error.WriteLine($"[Ontology] Material enrichment: {enriched} entries tagged 'textured' (entries with surface data)");
         return enriched;
     }
 
@@ -1039,37 +1017,15 @@ public class OntologyService : IOntologyService {
     }
 
     /// <summary>
-    /// Classify texture by known AC texture ID patterns.
-    /// </summary>
-    private static void ClassifyTextureById(uint texId, HashSet<string> materials) {
-        // Textures in the 0x05xxxxxx range are SurfaceTexture entries
-        // Textures in the 0x06xxxxxx range are RenderSurface (raw images)
-        // Classification is based on empirical observation of AC texture organization
-
-        // High-level range-based heuristics for common material types
-        // These ranges are approximate and based on retail AC DAT analysis
-        var texHighByte = (texId >> 16) & 0xFF;
-
-        // General classifications by common texture ranges
-        // (this is a best-effort heuristic without access to full retail names)
-        if (texHighByte >= 0x00 && texHighByte <= 0x05) {
-            // Lower range textures are often terrain/natural
-        }
-    }
-
-    /// <summary>
-    /// Classify surface by ID range and distribution patterns.
+    /// Tags a model that references a valid Surface (0x08) record with "textured".
+    /// This is a presence-only signal: it confirms the model carries surface data,
+    /// not what material that surface depicts.
     /// </summary>
     private static void ClassifySurfaceByRange(uint surfaceId, HashSet<string> materials) {
-        // Surface IDs (0x08xxxxxx) have known groupings in AC retail data
-        // Classification based on surface count and distribution patterns
         var prefix = (surfaceId >> 24);
         if (prefix != 0x08) return;
 
-        // Models using many surfaces are likely textured/detailed
-        // Models with few surfaces are likely simple/monochrome
-        // This is a presence-based signal — the actual enrichment comes from
-        // having ANY surface data at all, which we propagate as a "textured" tag
+        // Presence-based signal — propagated only when the model has any 0x08 surface.
         materials.Add("textured");
     }
 

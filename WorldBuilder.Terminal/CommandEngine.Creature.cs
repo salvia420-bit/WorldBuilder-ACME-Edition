@@ -23,7 +23,10 @@ public partial class CommandEngine {
         RequireProject();
         using var connector = RequireAceDbConnector();
         var overrides = await connector.LoadCreatureOverridesAsync(objectId);
-        return new CreatureGetResult(true, objectId, overrides);
+        // Distinguish "no overrides defined" (success, empty collections) from a DB failure that
+        // returned an empty/partial result. Propagating success=false here is what stops an agent's
+        // get->edit->save during a DB blip from silently DELETEing all real rows on save.
+        return new CreatureGetResult(!overrides.LoadFailed, objectId, overrides, overrides.LoadError);
     }
 
     public async Task<CreatureSaveResult> CreatureSaveAsync(uint objectId, string? jsonPath) {
@@ -52,6 +55,11 @@ public partial class CommandEngine {
             using var connector = RequireAceDbConnector();
             overrides = connector.LoadCreatureOverridesAsync(objectId).GetAwaiter().GetResult();
         }
+        // If the load failed, the overrides are empty/partial — refuse to write a misleading
+        // "-- No overrides defined." file (or a partial export) and surface the error instead.
+        if (overrides.LoadFailed)
+            return new CreatureExportSqlResult(false, objectId, "", outPath, overrides.LoadError);
+
         var sql = AceDbConnector.GenerateCreatureOverridesSql(overrides);
         if (!string.IsNullOrEmpty(outPath)) {
             File.WriteAllText(outPath, sql);

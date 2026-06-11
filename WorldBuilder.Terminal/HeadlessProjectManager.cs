@@ -114,7 +114,7 @@ public sealed class HeadlessProjectManager : IDisposable {
     /// <summary>
     /// Exports DATs for the currently loaded project.
     /// </summary>
-    public bool ExportDats(string exportDirectory, int? iteration = null) {
+    public ExportDatsResult ExportDats(string exportDirectory, int? iteration = null) {
         if (CurrentProject == null) {
             throw new InvalidOperationException("No project is loaded. Use 'load' first.");
         }
@@ -127,10 +127,12 @@ public sealed class HeadlessProjectManager : IDisposable {
 
         var result = CurrentProject.ExportDats(exportDirectory, portalIteration);
 
-        if (result) {
+        if (result.Success) {
             _logger.LogInformation("Export completed successfully.");
         } else {
-            _logger.LogError("Export returned failure.");
+            _logger.LogError(
+                "Export returned failure: {TerrainFailures} terrain + {DocFailures} document write(s) failed (DAT is PARTIAL).",
+                result.TerrainSaveFailures, result.DocSaveFailures);
         }
 
         return result;

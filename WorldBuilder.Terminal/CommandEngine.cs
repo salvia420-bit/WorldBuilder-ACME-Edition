@@ -306,19 +306,21 @@ public partial class CommandEngine {
 
     public ExportResult Export(string directory, int? iteration) {
         RequireProject();
-        var success = _projectManager.ExportDats(directory, iteration);
-        return new ExportResult(success, directory, iteration);
+        var result = _projectManager.ExportDats(directory, iteration);
+        return new ExportResult(result.Success, directory, iteration,
+            result.TerrainWritten, result.TerrainSaveFailures, result.DocsSaved, result.DocSaveFailures);
     }
 
     public async Task<ExportWithRepositionResult> ExportWithRepositionAsync(
         string directory, int? iteration) {
         RequireProject();
         var project = _projectManager.CurrentProject!;
-        var success = _projectManager.ExportDats(directory, iteration);
+        var exportResult = _projectManager.ExportDats(directory, iteration);
 
-        if (!success) {
+        if (!exportResult.Success) {
             return new ExportWithRepositionResult(false, directory, iteration,
-                false, false, 0, 0, 0, "DAT export failed");
+                false, false, 0, 0, 0,
+                $"DAT export failed: {exportResult.TerrainSaveFailures} terrain + {exportResult.DocSaveFailures} document write(s) failed");
         }
 
         // Check if ace-db settings exist
@@ -540,6 +542,16 @@ public partial class CommandEngine {
         RequireProject();
         var (doc, tl, _) = GetTerrainHelpers();
 
+        // World bounds: landblock X/Y indices are 0..254, each 192 units wide, so
+        // valid world coordinates are [0, 255*192). A negative or over-range seed
+        // wraps when cast to uint and seeds the flood-fill into a landblock the
+        // caller never named, mutating and persisting unrelated terrain.
+        const float worldMax = 255f * 192f; // 48960
+        if (x < 0f || x >= worldMax)
+            throw new ArgumentException($"'x' must be within [0, {worldMax}); got {x}", nameof(x));
+        if (y < 0f || y >= worldMax)
+            throw new ArgumentException($"'y' must be within [0, {worldMax}); got {y}", nameof(y));
+
         uint lbX = (uint)Math.Floor(x / 192f);
         uint lbY = (uint)Math.Floor(y / 192f);
         float localX = x - lbX * 192f;
@@ -584,23 +596,60 @@ public partial class CommandEngine {
         var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>(estimatedLandblocks);
         var terrainCache = new Dictionary<ushort, TerrainEntry[]?>(estimatedLandblocks);
         int changeCount = 0;
-        foreach (var wp in path) {
-            var vi = _terrainService.WorldToVertex(wp.X, wp.Y);
-            if (!vi.HasValue) continue;
-            var (lbId, vIndex) = vi.Value;
+
+        // Writes roadValue to a single (landblock, vertex) cell, batching the change.
+        // Returns true if it actually changed the cell. Used both for the primary
+        // vertex and for the duplicated seam vertices of edge/corner neighbors.
+        bool WriteRoad(ushort lbId, int vIndex) {
             if (!terrainCache.TryGetValue(lbId, out var data)) {
                 data = tl(lbId);
                 terrainCache[lbId] = data;
             }
-
-            if (data == null || data[vIndex].Road == roadValue) continue;
+            if (data == null || vIndex < 0 || vIndex >= data.Length) return false;
+            if (data[vIndex].Road == roadValue) return false;
             if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
                 lbChanges = new Dictionary<byte, uint>(16);
                 batchChanges[lbId] = lbChanges;
             }
             var current = data[vIndex];
             lbChanges[(byte)vIndex] = (current with { Road = roadValue }).ToUInt();
-            changeCount++;
+            return true;
+        }
+
+        const int mapSize = (int)TerrainAlgorithms.MapSize; // 254 — last valid LB index
+        foreach (var wp in path) {
+            var vi = _terrainService.WorldToVertex(wp.X, wp.Y);
+            if (!vi.HasValue) continue;
+            var (lbId, vIndex) = vi.Value;
+
+            if (WriteRoad(lbId, vIndex)) changeCount++;
+
+            // AC terrain duplicates each landblock-edge vertex onto the neighbor's
+            // mirrored row/column (col/row 8 of LB N == col/row 0 of LB N+1). A road
+            // crossing an LB boundary must set the same Road byte on every duplicate,
+            // else the exported DATs disagree across the seam and the client renders a
+            // gap. Mirror exactly as TerrainAlgorithms.AddEdgeNeighbors does.
+            int lbX = lbId >> 8, lbY = lbId & 0xFF;
+            int localVX = vIndex / 9, localVY = vIndex % 9;
+
+            if (localVX == 0 && lbX > 0)
+                WriteRoad((ushort)(((lbX - 1) << 8) | lbY), 8 * 9 + localVY);
+            if (localVX == 8 && lbX < mapSize - 1)
+                WriteRoad((ushort)(((lbX + 1) << 8) | lbY), 0 * 9 + localVY);
+            if (localVY == 0 && lbY > 0)
+                WriteRoad((ushort)((lbX << 8) | (lbY - 1)), localVX * 9 + 8);
+            if (localVY == 8 && lbY < mapSize - 1)
+                WriteRoad((ushort)((lbX << 8) | (lbY + 1)), localVX * 9 + 0);
+
+            // Corners are shared by four landblocks: mirror onto the diagonal too.
+            if (localVX == 0 && localVY == 0 && lbX > 0 && lbY > 0)
+                WriteRoad((ushort)(((lbX - 1) << 8) | (lbY - 1)), 8 * 9 + 8);
+            if (localVX == 8 && localVY == 0 && lbX < mapSize - 1 && lbY > 0)
+                WriteRoad((ushort)(((lbX + 1) << 8) | (lbY - 1)), 0 * 9 + 8);
+            if (localVX == 0 && localVY == 8 && lbX > 0 && lbY < mapSize - 1)
+                WriteRoad((ushort)(((lbX - 1) << 8) | (lbY + 1)), 8 * 9 + 0);
+            if (localVX == 8 && localVY == 8 && lbX < mapSize - 1 && lbY < mapSize - 1)
+                WriteRoad((ushort)(((lbX + 1) << 8) | (lbY + 1)), 0 * 9 + 0);
         }
 
         if (changeCount == 0) return new RoadResult(path.Count, 0, roadValue, new HashSet<ushort>());
@@ -2099,6 +2148,27 @@ public partial class CommandEngine {
         var (doc, tl, _) = GetTerrainHelpers();
         var ht = GetHeightTable();
 
+        // Validate world coordinates before capture/paste. Landblocks are 192 units
+        // wide and lbX/lbY are bytes (0..254 are valid; 0xFF is sentinel), so the
+        // valid world range is [0, 254*192 + 192) = [0, 49152). Out-of-range values
+        // would otherwise wrap through the (ushort)((lbX<<8)|lbY) cast and silently
+        // rewrite terrain/objects in landblocks the caller never named.
+        const float MaxWorldCoord = 254f * 192f + 192f; // exclusive upper bound
+        static void ValidateCoord(float v, string name) {
+            if (v < 0f || v >= MaxWorldCoord)
+                throw new ArgumentOutOfRangeException(name,
+                    $"{name}={v} is out of range; must be in [0, {MaxWorldCoord}).");
+        }
+        ValidateCoord(srcMinX, nameof(srcMinX));
+        ValidateCoord(srcMinY, nameof(srcMinY));
+        ValidateCoord(srcMaxX, nameof(srcMaxX));
+        ValidateCoord(srcMaxY, nameof(srcMaxY));
+        ValidateCoord(destX, nameof(destX));
+        ValidateCoord(destY, nameof(destY));
+        if (srcMinX > srcMaxX || srcMinY > srcMaxY)
+            throw new ArgumentException(
+                $"Source minimum must not exceed source maximum (got min=({srcMinX},{srcMinY}), max=({srcMaxX},{srcMaxY})).");
+
         // Step 1: Capture source terrain into a stamp
         Func<ushort, IEnumerable<StaticObject>>? objLookup = null;
         if (includeObjects) {
@@ -2146,7 +2216,8 @@ public partial class CommandEngine {
 
     public SnapPortalResult SnapPortal(
         uint lbX, uint lbY, ushort targetCellNumber, ushort targetPortalPolyId,
-        ushort sourceEnvId, ushort sourceCellStruct) {
+        ushort sourceEnvId, ushort sourceCellStruct,
+        List<ushort>? surfaceOverride = null) {
 
         RequireProject();
         ushort lbKey = LbKey(lbX, lbY);
@@ -2198,11 +2269,15 @@ public partial class CommandEngine {
         var (newOrigin, newOrientation) = PortalSnapAlgorithms.ComputeSnapTransform(
             targetCentroidWorld, targetNormalWorld, sourceLocalGeom);
 
-        // Get surfaces from source environment  
-        var surfaces = new List<ushort>();
-        if (sourceEnv.Cells != null && sourceEnv.Cells.ContainsKey(sourceCellStruct)) {
-            // Use empty surfaces â€” they'll be populated from the environment
-        }
+        // Inherit the target cell's surface list so the snapped cell shares the
+        // neighboring material set. An Environment(0x0D) defines geometry, not a
+        // surface list, so nothing populates surfaces "from the environment" — a
+        // cell created with zero surfaces is invisible in-game (and is flagged by
+        // validate-dungeon). The optional surfaceOverride lets the caller supply an
+        // explicit list instead.
+        var surfaces = (surfaceOverride != null && surfaceOverride.Count > 0)
+            ? new List<ushort>(surfaceOverride)
+            : new List<ushort>(targetCell.Surfaces);
 
         // Add the new cell to the dungeon
         var newCellNum = dungeonDoc.AddCell(sourceEnvId, sourceCellStruct, newOrigin, newOrientation, surfaces);
@@ -2214,10 +2289,14 @@ public partial class CommandEngine {
         var newCell = dungeonDoc.GetCell(newCellNum);
         if (newCell != null) totalPortals = newCell.CellPortals.Count;
 
+        string? warning = surfaces.Count == 0
+            ? "cell created with 0 surfaces — assign surfaces before export or it will be invisible in-game"
+            : null;
+
         return new SnapPortalResult(
             lbKey, targetCellNumber, targetPortalPolyId,
             sourceEnvId, sourceCellStruct, newCellNum,
-            newOrigin, newOrientation, totalPortals);
+            newOrigin, newOrientation, totalPortals, surfaces.Count, warning);
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -2517,11 +2596,20 @@ public partial class CommandEngine {
             return new ImportTextureResult(false, textureId, imageFilePath, "File not found");
 
         try {
-            var datDir = _projectManager.CurrentProject!.BaseDatDirectory;
-            using var writer = new DatReaderWriter.Extensions.DatEasyWriter(datDir);
-            var result = writer.UpdateRenderSurface(textureId, imageFilePath, shouldResize: true);
-            if (result.Success)
+            var project = _projectManager.CurrentProject!;
+            var datDir = project.BaseDatDirectory;
+            DatReaderWriter.Lib.Result<bool, string> result;
+            // NOTE: import-texture writes the BASE client_portal.dat in place — the change is
+            // immediate and permanent, unlike import-render-surface which defers via CustomTextureStore
+            // until export. Dispose the short-lived ReadWrite handle before refreshing the project's
+            // read handles so the readers don't observe a torn/stale surface.
+            using (var writer = new DatReaderWriter.Extensions.DatEasyWriter(datDir)) {
+                result = writer.UpdateRenderSurface(textureId, imageFilePath, shouldResize: true);
+            }
+            if (result.Success) {
+                project.ReloadDatReadersAfterExternalWrite();
                 return new ImportTextureResult(true, textureId, imageFilePath);
+            }
             return new ImportTextureResult(false, textureId, imageFilePath, result.Error);
         } catch (Exception ex) {
             return new ImportTextureResult(false, textureId, imageFilePath, ex.Message);
@@ -2930,94 +3018,146 @@ public partial class CommandEngine {
             using var doc = System.Text.Json.JsonDocument.Parse(schemaJson);
             var root = doc.RootElement;
 
-            // Extract creature_family entries from the schema
+            // Build a WeenieClassId -> entries lookup. Ontology entries are keyed by DAT
+            // ObjectId, but each may carry an optional WeenieClassId (populated by
+            // enrich-weenies / import-catalog). The shipped schema matches game-logic
+            // wcids, not Setup IDs, so this index is the join key.
+            var byWeenie = new Dictionary<int, List<OntologyEntry>>();
+            foreach (var ontEntry in _ontologyService.GetAllEntries()) {
+                if (ontEntry.WeenieClassId is int wcid) {
+                    if (!byWeenie.TryGetValue(wcid, out var list))
+                        byWeenie[wcid] = list = new List<OntologyEntry>();
+                    list.Add(ontEntry);
+                }
+            }
+
+            // Local helper: add a lowercase tag to an entry if not already present.
+            static bool AddTag(OntologyEntry e, string tag) {
+                var t = tag.ToLowerInvariant();
+                var tags = e.Tags ?? Array.Empty<string>();
+                if (Array.IndexOf(tags, t) >= 0) return false;
+                var newTags = new List<string>(tags) { t };
+                e.Tags = newTags.Distinct().ToArray();
+                return true;
+            }
+
+            // Extract entries from the schema
             if (root.TryGetProperty("entries", out var entries)) {
                 foreach (var entry in entries.EnumerateArray()) {
                     // Skip comment entries
                     if (entry.TryGetProperty("_comment", out _)) continue;
 
-                    // Get creature_family if present
-                    string? creatureFamily = null;
                     string? name = null;
                     string? entryType = null;
 
                     if (entry.TryGetProperty("name", out var nameEl))
                         name = nameEl.GetString();
 
+                    // creature_family lives at the top level on family entries.
+                    string? creatureFamily = null;
+                    if (entry.TryGetProperty("creature_family", out var cfTop))
+                        creatureFamily = cfTop.GetString();
+
+                    // tags.type carries the functional taxonomy on weenie entries.
                     if (entry.TryGetProperty("tags", out var tags)) {
-                        if (tags.TryGetProperty("creature_family", out var cf))
+                        if (creatureFamily == null && tags.TryGetProperty("creature_family", out var cf))
                             creatureFamily = cf.GetString();
                         if (tags.TryGetProperty("type", out var typeEl))
                             entryType = typeEl.GetString();
                     }
 
-                    // Try to enrich by weenieClassId ranges (creature families have wcid_pool ranges)
-                    if (entry.TryGetProperty("wcid_pool", out var wcidPool)) {
-                        // This is a creature family entry
-                        var familyName = name ?? creatureFamily ?? "Unknown";
+                    // ── Creature-family entry: match each wcid in wcid_pool[] against
+                    //    ontology entries carrying that WeenieClassId.
+                    if (entry.TryGetProperty("wcid_pool", out var wcidPool)
+                            && wcidPool.ValueKind == System.Text.Json.JsonValueKind.Array) {
+                        var familyName = creatureFamily ?? name ?? "Unknown";
+                        string? behavior = entry.TryGetProperty("behavior", out var behEl)
+                            ? behEl.GetString() : null;
 
-                        // Extract model_prefix for DAT ID matching
-                        if (entry.TryGetProperty("model_prefix", out var modelPrefix)) {
-                            var prefix = modelPrefix.GetString();
-                            if (prefix != null) {
-                                // Try to parse as hex prefix (e.g., "0x0200" matches 0x020000xx)
-                                if (prefix.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {
-                                    if (uint.TryParse(prefix.AsSpan(2),
-                                            System.Globalization.NumberStyles.HexNumber,
-                                            null, out var prefixVal)) {
-                                        // Enrich matching entries with creature family tag
-                                        foreach (var ontEntry in _ontologyService.GetAllEntries()) {
-                                            if ((ontEntry.ObjectId >> 16) == (prefixVal >> 16)) {
-                                                var newTags = new List<string>(ontEntry.Tags ?? Array.Empty<string>());
-                                                if (!newTags.Contains(familyName.ToLowerInvariant()))
-                                                    newTags.Add(familyName.ToLowerInvariant());
-                                                if (!newTags.Contains("creature"))
-                                                    newTags.Add("creature");
-                                                ontEntry.Tags = newTags.Distinct().ToArray();
-                                                enriched++;
-                                            }
-                                        }
-                                    }
+                        foreach (var pooled in wcidPool.EnumerateArray()) {
+                            if (!pooled.TryGetProperty("wcid", out var wEl)
+                                    || wEl.ValueKind != System.Text.Json.JsonValueKind.Number)
+                                continue;
+                            if (!byWeenie.TryGetValue(wEl.GetInt32(), out var matches))
+                                continue;
+
+                            foreach (var ontEntry in matches) {
+                                bool changed = false;
+                                changed |= AddTag(ontEntry, familyName);
+                                changed |= AddTag(ontEntry, "creature");
+                                if (behavior != null) changed |= AddTag(ontEntry, behavior);
+
+                                if (string.IsNullOrEmpty(ontEntry.CreatureFamilyName)) {
+                                    ontEntry.CreatureFamilyName = familyName;
+                                    changed = true;
                                 }
+                                if (behavior != null && string.IsNullOrEmpty(ontEntry.Behavior)) {
+                                    ontEntry.Behavior = behavior;
+                                    changed = true;
+                                }
+                                if (changed) enriched++;
                             }
                         }
                     }
 
-                    // For weenie-based entries with Setup IDs, try to enrich the ontology
-                    if (entry.TryGetProperty("setupId", out var setupEl)) {
-                        uint setupId = 0;
-                        var setupStr = setupEl.GetString();
-                        if (setupStr != null && setupStr.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {
-                            uint.TryParse(setupStr.AsSpan(2),
-                                System.Globalization.NumberStyles.HexNumber, null, out setupId);
-                        } else if (setupEl.ValueKind == System.Text.Json.JsonValueKind.Number) {
-                            setupId = setupEl.GetUInt32();
-                        }
+                    // ── Regular weenie entry: match the top-level weenieClassId against
+                    //    ontology entries carrying that WeenieClassId.
+                    if (entry.TryGetProperty("weenieClassId", out var wcidEl)
+                            && wcidEl.ValueKind == System.Text.Json.JsonValueKind.Number
+                            && byWeenie.TryGetValue(wcidEl.GetInt32(), out var weenieMatches)) {
+                        foreach (var ontEntry in weenieMatches) {
+                            bool changed = false;
+                            if (name != null) changed |= AddTag(ontEntry, name);
+                            if (entryType != null) changed |= AddTag(ontEntry, entryType);
+                            if (creatureFamily != null) changed |= AddTag(ontEntry, creatureFamily);
 
-                        if (setupId != 0) {
-                            var ontEntry = _ontologyService.GetEntry(setupId);
-                            if (ontEntry != null && name != null) {
-                                var newTags = new List<string>(ontEntry.Tags ?? Array.Empty<string>());
-                                if (!newTags.Contains(name.ToLowerInvariant()))
-                                    newTags.Add(name.ToLowerInvariant());
-                                if (entryType != null && !newTags.Contains(entryType.ToLowerInvariant()))
-                                    newTags.Add(entryType.ToLowerInvariant());
-                                if (creatureFamily != null && !newTags.Contains(creatureFamily.ToLowerInvariant()))
-                                    newTags.Add(creatureFamily.ToLowerInvariant());
-                                ontEntry.Tags = newTags.Distinct().ToArray();
-
-                                // Override category from curated data if it's more specific
-                                if (entryType != null) {
-                                    var topLevel = entryType.Split('_')[0];
-                                    if (topLevel != ontEntry.Category)
-                                        ontEntry.ClassificationSource = "Schema";
+                            // Override category from curated data when it differs.
+                            if (entryType != null) {
+                                var topLevel = entryType.Split('_')[0];
+                                if (topLevel != ontEntry.Category) {
+                                    ontEntry.Category = topLevel;
+                                    ontEntry.ClassificationSource = "Schema";
+                                    changed = true;
                                 }
-                                enriched++;
+                            }
+                            if (changed) enriched++;
+                        }
+                    }
+
+                    // ── Optional model_prefix path (not in the current shipped schema,
+                    //    kept for forward compatibility). A prefix with <=4 hex digits
+                    //    selects on the high 16 bits; a full 8-digit prefix is exact.
+                    if (entry.TryGetProperty("model_prefix", out var modelPrefix)) {
+                        var prefix = modelPrefix.GetString();
+                        if (prefix != null
+                                && prefix.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {
+                            var prefixHex = prefix.AsSpan(2);
+                            if (uint.TryParse(prefixHex,
+                                    System.Globalization.NumberStyles.HexNumber,
+                                    null, out var prefixVal)) {
+                                var familyName = creatureFamily ?? name ?? "Unknown";
+                                bool shortPrefix = prefixHex.Length <= 4;
+                                foreach (var ontEntry in _ontologyService.GetAllEntries()) {
+                                    bool match = shortPrefix
+                                        ? (ontEntry.ObjectId >> 16) == prefixVal
+                                        : ontEntry.ObjectId == prefixVal;
+                                    if (!match) continue;
+                                    bool changed = false;
+                                    changed |= AddTag(ontEntry, familyName);
+                                    changed |= AddTag(ontEntry, "creature");
+                                    if (changed) enriched++;
+                                }
                             }
                         }
                     }
                 }
             }
+
+            if (enriched == 0)
+                return new EnrichOntologyResult(false, 0, _ontologyService.Count,
+                    "No ontology entries matched the schema. Run 'enrich-weenies' or "
+                    + "'import-catalog' first so entries carry WeenieClassIds for the "
+                    + "schema's wcid/weenieClassId join to hit.");
 
             return new EnrichOntologyResult(true, enriched, _ontologyService.Count);
         } catch (Exception ex) {
@@ -3125,7 +3265,7 @@ public partial class CommandEngine {
         int processed = 0, creatures = 0, npcs = 0, items = 0, other = 0, withSetup = 0;
         int errors = 0;
 
-        Console.WriteLine($"[IngestWeenies] Found {total} weenie files in {weeniesDir}");
+        Console.Error.WriteLine($"[IngestWeenies] Found {total} weenie files in {weeniesDir}");
 
         try {
             using var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
@@ -3218,13 +3358,13 @@ public partial class CommandEngine {
                 }
 
                 if ((processed + errors) % 1000 == 0)
-                    Console.WriteLine($"[IngestWeenies] ...{processed + errors}/{total} files processed ({errors} errors)");
+                    Console.Error.WriteLine($"[IngestWeenies] ...{processed + errors}/{total} files processed ({errors} errors)");
             }
 
-            Console.WriteLine($"[IngestWeenies] Complete: {processed}/{total} files processed, {errors} errors");
-            Console.WriteLine($"[IngestWeenies]   Creatures: {creatures}, NPCs: {npcs}, Items: {items}, Other: {other}");
-            Console.WriteLine($"[IngestWeenies]   With SetupDID: {withSetup} ({(total > 0 ? 100.0 * withSetup / total : 0):F1}%)");
-            Console.WriteLine($"[IngestWeenies]   Output: {outputPath}");
+            Console.Error.WriteLine($"[IngestWeenies] Complete: {processed}/{total} files processed, {errors} errors");
+            Console.Error.WriteLine($"[IngestWeenies]   Creatures: {creatures}, NPCs: {npcs}, Items: {items}, Other: {other}");
+            Console.Error.WriteLine($"[IngestWeenies]   With SetupDID: {withSetup} ({(total > 0 ? 100.0 * withSetup / total : 0):F1}%)");
+            Console.Error.WriteLine($"[IngestWeenies]   Output: {outputPath}");
 
             return new IngestWeeniesResult(true, processed, creatures, npcs, items, other, withSetup, outputPath);
         } catch (Exception ex) {
@@ -3351,12 +3491,12 @@ public partial class CommandEngine {
                 }
 
                 if ((x + 1) % 50 == 0)
-                    Console.WriteLine($"[ScanBuildings] ...{x + 1}/255 rows scanned, {totalBuildings} buildings found");
+                    Console.Error.WriteLine($"[ScanBuildings] ...{x + 1}/255 rows scanned, {totalBuildings} buildings found");
             }
 
             sw.Stop();
-            Console.WriteLine($"[ScanBuildings] Complete: {totalBuildings} buildings, {uniqueSetupIds.Count} unique models, {landblocksWithBuildings} landblocks");
-            Console.WriteLine($"[ScanBuildings] Output: {outputPath}");
+            Console.Error.WriteLine($"[ScanBuildings] Complete: {totalBuildings} buildings, {uniqueSetupIds.Count} unique models, {landblocksWithBuildings} landblocks");
+            Console.Error.WriteLine($"[ScanBuildings] Output: {outputPath}");
 
             return new ScanBuildingPlacementsResult(true, totalBuildings, uniqueSetupIds.Count,
                 landblocksWithBuildings, sw.Elapsed.TotalMilliseconds, outputPath);
@@ -3406,6 +3546,16 @@ public partial class CommandEngine {
     }
 
     /// <summary>
+    /// World-space origin (in metres) of a landblock's south-west corner, used to
+    /// convert population-plan LB-local coordinates to the world-frame coordinates
+    /// stored in <see cref="StaticObject.Origin"/>. Each landblock is 192m square.
+    /// Exposed (internal) so the apply-population coordinate invariant is unit-testable
+    /// without a fully loaded project.
+    /// </summary>
+    internal static (float worldOffsetX, float worldOffsetY) PopulationWorldOffset(int lbX, int lbY)
+        => (lbX * 192f, lbY * 192f);
+
+    /// <summary>
     /// Applies a population plan (produced by build_population_plan.py) to the current world.
     /// Places static objects (scenery, structures) into landblock documents.
     /// Creatures are logged but not placed as static objects â€” they need server-side
@@ -3443,8 +3593,7 @@ public partial class CommandEngine {
                 uint lbId = (uint)((lbX << 8) | lbY);
 
                 // World-space offset for this landblock
-                float worldOffsetX = lbX * 192f;
-                float worldOffsetY = lbY * 192f;
+                var (worldOffsetX, worldOffsetY) = PopulationWorldOffset(lbX, lbY);
 
                 if (!placement.TryGetProperty("objects", out var objects))
                     continue;
@@ -3472,11 +3621,14 @@ public partial class CommandEngine {
                     float localY = obj.TryGetProperty("localY", out var lyEl) ? lyEl.GetSingle() : 96f;
                     float localZ = 0f;
 
-                    // Height-snap: convert local to world coords, sample terrain
+                    // Convert local to world coords (the doc model / exporter treat
+                    // StaticObject.Origin as world-space and reverse via ReverseOffset).
+                    float worldX = worldOffsetX + localX;
+                    float worldY = worldOffsetY + localY;
+
+                    // Height-snap: sample terrain at the world position.
                     if (heightLookup != null) {
                         try {
-                            float worldX = worldOffsetX + localX;
-                            float worldY = worldOffsetY + localY;
                             localZ = heightLookup(worldX, worldY);
                         } catch {
                             // Height lookup can fail at edges or ocean â€” fall back to 0
@@ -3491,7 +3643,8 @@ public partial class CommandEngine {
                         var staticObj = new StaticObject {
                             Id = setupId,
                             IsSetup = isSetup,
-                            Origin = new System.Numerics.Vector3(localX, localY, localZ),
+                            // Mirror AddObject: store world-space coordinates.
+                            Origin = new System.Numerics.Vector3(worldX, worldY, localZ),
                             Orientation = System.Numerics.Quaternion.Identity,
                             Scale = System.Numerics.Vector3.One,
                         };
@@ -3542,7 +3695,7 @@ public partial class CommandEngine {
         var allWcids = new HashSet<int>();
         int errors = 0;
 
-        Console.WriteLine($"[IngestSpawnMaps] Found {total} spawn map files in {mapsDir}");
+        Console.Error.WriteLine($"[IngestSpawnMaps] Found {total} spawn map files in {mapsDir}");
 
         try {
             using var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
@@ -3600,11 +3753,11 @@ public partial class CommandEngine {
                 }
 
                 if ((processed + errors) % 200 == 0)
-                    Console.WriteLine($"[IngestSpawnMaps] ...{processed + errors}/{total} files processed ({errors} errors)");
+                    Console.Error.WriteLine($"[IngestSpawnMaps] ...{processed + errors}/{total} files processed ({errors} errors)");
             }
 
-            Console.WriteLine($"[IngestSpawnMaps] Complete: {processed}/{total} files, {totalWeenies} weenies, {totalLinks} links, {allWcids.Count} unique WCIDs");
-            Console.WriteLine($"[IngestSpawnMaps]   Output: {outputPath}");
+            Console.Error.WriteLine($"[IngestSpawnMaps] Complete: {processed}/{total} files, {totalWeenies} weenies, {totalLinks} links, {allWcids.Count} unique WCIDs");
+            Console.Error.WriteLine($"[IngestSpawnMaps]   Output: {outputPath}");
 
             return new IngestSpawnMapsResult(true, processed, totalWeenies, totalLinks, allWcids.Count, outputPath);
         } catch (Exception ex) {
@@ -3629,7 +3782,7 @@ public partial class CommandEngine {
         var schoolCounts = new Dictionary<int, int>();
         int errors = 0;
 
-        Console.WriteLine($"[IngestSpells] Reading spells from: {spellsFile}");
+        Console.Error.WriteLine($"[IngestSpells] Reading spells from: {spellsFile}");
 
         try {
             var json = File.ReadAllText(spellsFile);
@@ -3650,7 +3803,7 @@ public partial class CommandEngine {
             }
 
             int total = spellArray.GetArrayLength();
-            Console.WriteLine($"[IngestSpells] Found {total} spell entries");
+            Console.Error.WriteLine($"[IngestSpells] Found {total} spell entries");
 
             using var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
 
@@ -3690,12 +3843,12 @@ public partial class CommandEngine {
                 }
 
                 if ((processed + errors) % 1000 == 0)
-                    Console.WriteLine($"[IngestSpells] ...{processed + errors}/{total} entries processed ({errors} errors)");
+                    Console.Error.WriteLine($"[IngestSpells] ...{processed + errors}/{total} entries processed ({errors} errors)");
             }
 
-            Console.WriteLine($"[IngestSpells] Complete: {processed} spells processed, {errors} errors");
-            Console.WriteLine($"[IngestSpells]   Schools: {string.Join(", ", schoolCounts.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"))}");
-            Console.WriteLine($"[IngestSpells]   Output: {outputPath}");
+            Console.Error.WriteLine($"[IngestSpells] Complete: {processed} spells processed, {errors} errors");
+            Console.Error.WriteLine($"[IngestSpells]   Schools: {string.Join(", ", schoolCounts.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"))}");
+            Console.Error.WriteLine($"[IngestSpells]   Output: {outputPath}");
 
             return new IngestSpellsResult(true, processed, schoolCounts, outputPath);
         } catch (Exception ex) {
@@ -3723,7 +3876,7 @@ public partial class CommandEngine {
         var sourceWcids = new HashSet<int>();
         var resultWcids = new HashSet<int>();
 
-        Console.WriteLine($"[IngestRecipes] Found {total} recipe files in: {recipesDir}");
+        Console.Error.WriteLine($"[IngestRecipes] Found {total} recipe files in: {recipesDir}");
 
         try {
             using var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
@@ -3794,15 +3947,15 @@ public partial class CommandEngine {
                 }
 
                 if ((processed + errors) % 1000 == 0)
-                    Console.WriteLine($"[IngestRecipes] ...{processed + errors}/{total} files processed ({errors} errors)");
+                    Console.Error.WriteLine($"[IngestRecipes] ...{processed + errors}/{total} files processed ({errors} errors)");
             }
 
-            Console.WriteLine($"[IngestRecipes] Complete: {processed} recipes processed, {errors} errors");
-            Console.WriteLine($"[IngestRecipes]   Skills: {string.Join(", ", skillCounts.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"))}");
-            Console.WriteLine($"[IngestRecipes]   With precursors: {withPrecursors}");
-            Console.WriteLine($"[IngestRecipes]   Unique source WCIDs (tools+targets): {sourceWcids.Count}");
-            Console.WriteLine($"[IngestRecipes]   Unique result WCIDs: {resultWcids.Count}");
-            Console.WriteLine($"[IngestRecipes]   Output: {outputPath}");
+            Console.Error.WriteLine($"[IngestRecipes] Complete: {processed} recipes processed, {errors} errors");
+            Console.Error.WriteLine($"[IngestRecipes]   Skills: {string.Join(", ", skillCounts.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"))}");
+            Console.Error.WriteLine($"[IngestRecipes]   With precursors: {withPrecursors}");
+            Console.Error.WriteLine($"[IngestRecipes]   Unique source WCIDs (tools+targets): {sourceWcids.Count}");
+            Console.Error.WriteLine($"[IngestRecipes]   Unique result WCIDs: {resultWcids.Count}");
+            Console.Error.WriteLine($"[IngestRecipes]   Output: {outputPath}");
 
             return new IngestRecipesResult(true, processed, withPrecursors,
                 sourceWcids.Count, resultWcids.Count, skillCounts, outputPath);
@@ -3812,6 +3965,21 @@ public partial class CommandEngine {
         }
     }
 
+
+    /// <summary>
+    /// Maps a heightmap byte to a retail <c>TerrainTextureType</c> index using the same
+    /// height bands shared by <see cref="GenerateTerrain"/> and <see cref="AutoPaintTerrain"/>.
+    /// Uses the retail enum values (matching the BiomeMapper worldgen convention) so both
+    /// generators produce semantically identical worlds.
+    /// </summary>
+    private static byte PaintBandTerrainType(byte height,
+        ref int waterVerts, ref int sandVerts, ref int grassVerts, ref int rockVerts, ref int snowVerts) {
+        if (height < 10)       { waterVerts++; return 0x14; } // WaterDeepSea
+        else if (height < 25)  { sandVerts++;  return 0x0A; } // SandYellow
+        else if (height < 80)  { grassVerts++; return 0x01; } // Grassland
+        else if (height < 180) { rockVerts++;  return 0x00; } // BarrenRock
+        else                   { snowVerts++;  return 0x0F; } // Snow
+    }
 
     /// <summary>
     /// Generates procedural terrain for all 255Ã—255 landblocks using Simplex fBm noise.
@@ -3871,14 +4039,9 @@ public partial class CommandEngine {
                             heights[idx] = heightByte;
 
                             if (autoPaint) {
-                                // Assign terrain type based on height bands
-                                byte terrainType;
-                                if (heightByte < 10)       { terrainType = 0; waterVerts++; }   // Water
-                                else if (heightByte < 25)  { terrainType = 3; sandVerts++; }    // Sand/Dirt
-                                else if (heightByte < 80)  { terrainType = 1; grassVerts++; }   // Grass
-                                else if (heightByte < 180) { terrainType = 2; rockVerts++; }    // Rock
-                                else                       { terrainType = 8; snowVerts++; }    // Snow
-                                types[idx] = terrainType;
+                                // Assign retail TerrainTextureType based on height bands.
+                                types[idx] = PaintBandTerrainType(heightByte,
+                                    ref waterVerts, ref sandVerts, ref grassVerts, ref rockVerts, ref snowVerts);
                             }
                         }
                     }
@@ -3898,7 +4061,7 @@ public partial class CommandEngine {
                                 if (vy < 8 && Math.Abs(h - heights[vx * 9 + (vy + 1)]) > 3) steep = true;
 
                                 if (steep && heights[idx] >= 10) { // Don't override water
-                                    types[idx] = 2; // Rocky/cliff
+                                    types[idx] = 0x00; // BarrenRock (cliff/rocky)
                                     cliffOverrides++;
                                 }
                             }
@@ -3970,16 +4133,10 @@ public partial class CommandEngine {
                     // Read current heights
                     for (int i = 0; i < 81; i++) heights[i] = data[i].Height;
 
-                    // Assign terrain types based on height bands
+                    // Assign retail TerrainTextureType based on height bands.
                     for (int i = 0; i < 81; i++) {
-                        byte h = heights[i];
-                        byte terrainType;
-                        if (h < 10)       { terrainType = 0; waterVerts++; }
-                        else if (h < 25)  { terrainType = 3; sandVerts++; }
-                        else if (h < 80)  { terrainType = 1; grassVerts++; }
-                        else if (h < 180) { terrainType = 2; rockVerts++; }
-                        else              { terrainType = 8; snowVerts++; }
-                        types[i] = terrainType;
+                        types[i] = PaintBandTerrainType(heights[i],
+                            ref waterVerts, ref sandVerts, ref grassVerts, ref rockVerts, ref snowVerts);
                     }
 
                     // Slope-based cliff overrides
@@ -3993,7 +4150,7 @@ public partial class CommandEngine {
                             if (vy > 0 && Math.Abs(h - heights[vx * 9 + (vy - 1)]) > 3) steep = true;
                             if (vy < 8 && Math.Abs(h - heights[vx * 9 + (vy + 1)]) > 3) steep = true;
                             if (steep && heights[idx] >= 10) {
-                                types[idx] = 2; // Rocky/cliff
+                                types[idx] = 0x00; // BarrenRock (cliff/rocky)
                                 cliffOverrides++;
                             }
                         }
@@ -4050,6 +4207,13 @@ public partial class CommandEngine {
         var terrainDoc = GetTerrainDoc();
         terrainDoc.BenchmarkMode = true; // Suppress per-edit logging & persistence queue
 
+        // Snapshots of the touched landblocks so the benchmark is non-destructive.
+        // Declared outside the try so the finally can always restore them, even if
+        // the run throws midway through after mutating some landblocks.
+        var terrainSnapshots = new Dictionary<ushort, TerrainEntry[]>();
+        var staticObjSnapshots = new Dictionary<ushort, List<StaticObject>>();
+        bool restored = false;
+
         try {
 
         var populatedLbs = new List<(uint x, uint y, ushort key)>();
@@ -4063,6 +4227,19 @@ public partial class CommandEngine {
 
         if (populatedLbs.Count == 0)
             throw new InvalidOperationException("No populated landblocks found to benchmark against.");
+
+        // â”€â”€â”€ Snapshot the touched landblocks so the benchmark is non-destructive â”€â”€â”€
+        // The benchmark mutates terrain heights/types and appends static objects to
+        // every populated landblock it touches. Snapshot that state here and restore
+        // it in the finally so the speed test leaves the project unchanged.
+        foreach (var lb in populatedLbs) {
+            var entries = terrainDoc.GetLandblockInternal(lb.key); // returns a copy
+            if (entries != null)
+                terrainSnapshots[lb.key] = entries;
+            // Snapshot the static-object list so appended benchmark objects can be removed.
+            var lbDoc = GetLandblockDoc(lb.key);
+            staticObjSnapshots[lb.key] = lbDoc.GetStaticObjects().ToList();
+        }
 
         // â”€â”€â”€ Test 1: Terrain edit throughput (2000 set-height calls) â”€â”€â”€
         const int TERRAIN_OPS = 2000;
@@ -4110,6 +4287,7 @@ public partial class CommandEngine {
 
         // â”€â”€â”€ Test 2: Object placement throughput (2000 add-object calls) â”€â”€â”€
         const int OBJECT_OPS = 2000;
+        int objFailures = 0;
         segmentTimes.Clear();
         segmentStart = 0;
 
@@ -4122,7 +4300,7 @@ public partial class CommandEngine {
             float oy = lb.y * 192f + ((i / 180) % 180) + 6f;
             try {
                 AddObject(lb.x, lb.y, 0x020000A7, ox, oy, 0f);
-            } catch { /* ignore placement errors */ }
+            } catch { objFailures++; /* count, don't credit toward throughput */ }
 
             if ((i + 1 - segmentStart) >= SEGMENT_SIZE) {
                 segmentSw.Stop();
@@ -4133,15 +4311,18 @@ public partial class CommandEngine {
         }
         sw.Stop();
 
+        // Exclude failed placements from the throughput denominator so opsPerSec
+        // reflects successful work, not swallowed exceptions.
+        int objSuccesses = OBJECT_OPS - objFailures;
         double objElapsed = sw.Elapsed.TotalMilliseconds;
-        double objOpsPerSec = OBJECT_OPS / (objElapsed / 1000.0);
+        double objOpsPerSec = objSuccesses / (objElapsed / 1000.0);
         double? objFirstSeg = segmentTimes.Count > 0 ? SEGMENT_SIZE / (segmentTimes[0] / 1000.0) : null;
         double? objLastSeg = segmentTimes.Count > 1 ? SEGMENT_SIZE / (segmentTimes[^1] / 1000.0) : null;
         double? objDeg = objFirstSeg.HasValue && objLastSeg.HasValue && objFirstSeg.Value > 0
             ? Math.Round(100.0 * (1.0 - objLastSeg.Value / objFirstSeg.Value), 1)
             : null;
 
-        tests.Add(new BenchmarkSubTest("add-object", OBJECT_OPS, Math.Round(objElapsed, 1),
+        tests.Add(new BenchmarkSubTest("add-object", objSuccesses, Math.Round(objElapsed, 1),
             Math.Round(objOpsPerSec, 1),
             objFirstSeg.HasValue ? Math.Round(objFirstSeg.Value, 1) : null,
             objLastSeg.HasValue ? Math.Round(objLastSeg.Value, 1) : null,
@@ -4250,11 +4431,44 @@ public partial class CommandEngine {
             FormatDuration(estObjectSec),
             feasibility);
 
-        return new BenchmarkResult(tests, memory, gcBefore, gcAfter, extrapolation);
+        // â”€â”€â”€ Restore the touched landblocks so the benchmark is non-destructive â”€â”€â”€
+        restored = RestoreBenchmarkSnapshots(terrainDoc, terrainSnapshots, staticObjSnapshots);
+
+        return new BenchmarkResult(tests, memory, gcBefore, gcAfter, extrapolation,
+            FailedObjectPlacements: objFailures, LandblocksRestored: restored);
 
         } finally {
+            // Guarantee restoration even if the run threw after mutating landblocks.
+            if (!restored)
+                RestoreBenchmarkSnapshots(terrainDoc, terrainSnapshots, staticObjSnapshots);
             terrainDoc.BenchmarkMode = false;
         }
+    }
+
+    /// <summary>
+    /// Restores the terrain entries and static-object lists snapshotted before a
+    /// benchmark run, so the speed test leaves the project documents unchanged.
+    /// Returns true if every snapshot was restored without error.
+    /// </summary>
+    private bool RestoreBenchmarkSnapshots(
+        TerrainDocument terrainDoc,
+        Dictionary<ushort, TerrainEntry[]> terrainSnapshots,
+        Dictionary<ushort, List<StaticObject>> staticObjSnapshots) {
+        bool ok = true;
+        foreach (var kv in terrainSnapshots) {
+            try {
+                terrainDoc.UpdateLandblockInternal(kv.Key, kv.Value, out _);
+            } catch { ok = false; }
+        }
+        foreach (var kv in staticObjSnapshots) {
+            try {
+                var lbDoc = GetLandblockDoc(kv.Key);
+                lbDoc.ClearStaticObjects();
+                foreach (var obj in kv.Value)
+                    lbDoc.AddStaticObject(obj);
+            } catch { ok = false; }
+        }
+        return ok;
     }
 
     private static string FormatDuration(double seconds) {
@@ -4322,6 +4536,7 @@ public partial class CommandEngine {
         RequireProject();
         ushort lbKey = LbKey(lbX, lbY);
         var lbDoc = GetLandblockDoc(lbKey);
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
 
         int placed = 0;
         int errors = 0;
@@ -4335,10 +4550,40 @@ public partial class CommandEngine {
                         errorMsgs.Add($"Object 0x{modelId:X8}: non-finite coordinate ({x},{y},{z})");
                     continue;
                 }
+
+                // Validate the model type byte (0x01 = GfxObj, 0x02 = Setup) and that
+                // the model actually exists in the loaded DAT — same contract as add-object.
+                byte typeByte = (byte)((modelId >> 24) & 0xFF);
+                bool isSetup = typeByte == 0x02;
+                if (typeByte != 0x01 && typeByte != 0x02) {
+                    errors++;
+                    if (errorMsgs.Count < 10)
+                        errorMsgs.Add($"Object 0x{modelId:X8}: type byte 0x{typeByte:X2} is not a GfxObj (0x01) or Setup (0x02).");
+                    continue;
+                }
+                bool exists = isSetup
+                    ? dats.TryGet<Setup>(modelId, out _)
+                    : dats.TryGet<GfxObj>(modelId, out _);
+                if (!exists) {
+                    errors++;
+                    if (errorMsgs.Count < 10)
+                        errorMsgs.Add($"Object 0x{modelId:X8} is not a {(isSetup ? "Setup" : "GfxObj")} in the loaded DAT.");
+                    continue;
+                }
+
+                // Validate the (world-frame) x/y are inside this landblock's 192m square.
+                try {
+                    ValidateLbLocalCoord(lbX, lbY, x, y, "bulk-place-objects");
+                } catch (ArgumentException vex) {
+                    errors++;
+                    if (errorMsgs.Count < 10)
+                        errorMsgs.Add(vex.Message);
+                    continue;
+                }
+
                 var obj = new StaticObject {
                     Id = modelId,
-                    // AC type prefix is the high byte (0xPPNNNNNN). 0x02 = Setup.
-                    IsSetup = (modelId & 0xFF000000u) == 0x02000000u,
+                    IsSetup = isSetup,
                     Origin = new Vector3(x, y, z),
                     Orientation = Quaternion.Identity,
                     Scale = Vector3.One
@@ -4351,6 +4596,10 @@ public partial class CommandEngine {
                     errorMsgs.Add($"Object 0x{modelId:X8} at ({x},{y},{z}): {ex.Message}");
             }
         }
+
+        // When messages were truncated at 10, append a marker so callers know.
+        if (errors > 10 && errorMsgs.Count == 10)
+            errorMsgs.Add($"(+{errors - 10} more)");
 
         return new BulkPlaceObjectsResult(lbKey, placed, errors,
             errorMsgs.Count > 0 ? errorMsgs : null);
@@ -4760,8 +5009,10 @@ public partial class CommandEngine {
         var pairCounts = new Dictionary<(uint, uint), int>();
         float r2 = pairRadius * pairRadius;
         foreach (var (bkey, indices) in buckets) {
-            for (int dx = 0; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) {
-                if (dx == 0 && dy < 0) continue;
+            // Iterate the full 3x3 neighborhood and rely on the global j<=i dedup
+            // (matching the cluster-detection pattern). A half-plane offset set
+            // combined with j<=i drops ~half of all cross-bucket adjacencies.
+            for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) {
                 if (!buckets.TryGetValue((bkey.Item1 + dx, bkey.Item2 + dy), out var nbrs)) continue;
                 foreach (int i in indices) foreach (int j in nbrs) {
                     if (j <= i) continue;
@@ -4859,11 +5110,11 @@ public partial class CommandEngine {
             }
 
             if ((lbX - minX) % 50 == 0 && lbX > minX)
-                Console.WriteLine($"[ExportTrainingData] ...row {lbX}/{maxX}, {allObjects.Count} objects so far");
+                Console.Error.WriteLine($"[ExportTrainingData] ...row {lbX}/{maxX}, {allObjects.Count} objects so far");
         }
 
         int totalObjects = allObjects.Count;
-        Console.WriteLine($"[ExportTrainingData] Found {totalObjects} objects across {landblocksProcessed} populated landblocks");
+        Console.Error.WriteLine($"[ExportTrainingData] Found {totalObjects} objects across {landblocksProcessed} populated landblocks");
 
         if (totalObjects == 0) {
             sw.Stop();
@@ -5042,11 +5293,11 @@ public partial class CommandEngine {
                     writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(line, WorldBuilder.Shared.Lib.JsonOpts.CamelCaseCompactIgnoreNull));
                     exported++;
                 } catch (Exception ex) {
-                    Console.WriteLine($"[ExportTrainingData] Warning: skipped object 0x{objectId:X8}: {ex.Message}");
+                    Console.Error.WriteLine($"[ExportTrainingData] Warning: skipped object 0x{objectId:X8}: {ex.Message}");
                 }
 
                 if (exported > 0 && exported % 5000 == 0)
-                    Console.WriteLine($"[ExportTrainingData] ...{exported}/{totalObjects} exported");
+                    Console.Error.WriteLine($"[ExportTrainingData] ...{exported}/{totalObjects} exported");
             }
         } catch (Exception ex) {
             sw.Stop();
@@ -5056,7 +5307,7 @@ public partial class CommandEngine {
 
         sw.Stop();
         double elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
-        Console.WriteLine($"[ExportTrainingData] Complete: {exported} examples exported in {elapsedMs}ms â†’ {outputPath}");
+        Console.Error.WriteLine($"[ExportTrainingData] Complete: {exported} examples exported in {elapsedMs}ms â†’ {outputPath}");
 
         return new ExportTrainingDataResult(true, exported, landblocksProcessed, withOntology,
             elapsedMs, outputPath);
@@ -6335,8 +6586,20 @@ public partial class CommandEngine {
                 $"Unknown template '{templateName}'. Available: {available}");
         }
 
-        Console.WriteLine($"[GenerateSettlement] Template: {template.Name} â€” {template.Description}");
-        Console.WriteLine($"[GenerateSettlement] Center: ({centerX}, {centerY})  Layout: {template.LayoutPattern}");
+        // Reject out-of-world centers up front. The world spans 255 landblocks of
+        // 192m = 48960m; a center beyond the edge would wrap through (uint)(p/192f)
+        // -> ushort LbKey and place the settlement in the WRONG landblock.
+        const float WorldEdge = 255f * 192f; // 48960
+        if (!float.IsFinite(centerX) || !float.IsFinite(centerY) ||
+            centerX < 0f || centerX >= WorldEdge || centerY < 0f || centerY >= WorldEdge) {
+            sw.Stop();
+            return new GenerateSettlementResult(false, template.Name, 0, 0, warnings, placedObjects,
+                Math.Round(sw.Elapsed.TotalMilliseconds, 1),
+                $"Center ({centerX:F1}, {centerY:F1}) is outside the world [0..{WorldEdge:F0}).");
+        }
+
+        Console.Error.WriteLine($"[GenerateSettlement] Template: {template.Name} â€” {template.Description}");
+        Console.Error.WriteLine($"[GenerateSettlement] Center: ({centerX}, {centerY})  Layout: {template.LayoutPattern}");
 
         var rng = seed != 0 ? new Random(seed) : new Random();
 
@@ -6433,7 +6696,7 @@ public partial class CommandEngine {
 
                     int rejected = before - entries.Count;
                     if (rejected > 0) {
-                        Console.WriteLine($"[GenerateSettlement]   Rejected {rejected} objects from {slot.Category} " +
+                        Console.Error.WriteLine($"[GenerateSettlement]   Rejected {rejected} objects from {slot.Category} " +
                                           $"due to biome constraints");
                     }
                 }
@@ -6460,7 +6723,7 @@ public partial class CommandEngine {
         }
 
         // â”€â”€â”€ 5. Compute layout positions â”€â”€â”€
-        Console.WriteLine($"[GenerateSettlement] Computing {template.LayoutPattern} layout positions...");
+        Console.Error.WriteLine($"[GenerateSettlement] Computing {template.LayoutPattern} layout positions...");
 
         // First determine total object count
         int totalToPlace = 0;
@@ -6549,7 +6812,7 @@ public partial class CommandEngine {
         }
 
         // â”€â”€â”€ 6. Place objects with collision detection + Z-snap â”€â”€â”€
-        Console.WriteLine($"[GenerateSettlement] Placing {totalToPlace} objects...");
+        Console.Error.WriteLine($"[GenerateSettlement] Placing {totalToPlace} objects...");
 
         // Check for existing objects in the area using QueryRadius
         var existingObjects = new List<(float x, float y)>();
@@ -6627,6 +6890,14 @@ public partial class CommandEngine {
                 uint objLbX = (uint)(px / 192f);
                 uint objLbY = (uint)(py / 192f);
 
+                // Skip positions that fall outside the world grid (e.g. a collision
+                // nudge pushed them past the edge) so AddObject can't wrap the LbKey.
+                if (objLbX > 254 || objLbY > 254) {
+                    constraintViolations++;
+                    warnings.Add($"Skipped object at ({px:F1}, {py:F1}) â€” outside the world grid.");
+                    continue;
+                }
+
                 // â”€â”€ Place the object â”€â”€
                 try {
                     var r = AddObject(objLbX, objLbY, objectId, px, py, pz,
@@ -6676,7 +6947,7 @@ public partial class CommandEngine {
 
         sw.Stop();
         double totalMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
-        Console.WriteLine($"[GenerateSettlement] Complete: {placedObjects.Count} objects placed, " +
+        Console.Error.WriteLine($"[GenerateSettlement] Complete: {placedObjects.Count} objects placed, " +
                           $"{constraintViolations} violations, {totalMs}ms");
 
         return new GenerateSettlementResult(
@@ -6758,7 +7029,7 @@ public partial class CommandEngine {
                 }
 
                 if (lbX % 50 == 0 && lbX > 0)
-                    Console.WriteLine($"[ExtractRetailHeightmaps] ...row {lbX}/254, {populated} landblocks exported");
+                    Console.Error.WriteLine($"[ExtractRetailHeightmaps] ...row {lbX}/254, {populated} landblocks exported");
             }
         } catch (Exception ex) {
             sw.Stop();
@@ -6768,7 +7039,7 @@ public partial class CommandEngine {
 
         sw.Stop();
         double elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
-        Console.WriteLine($"[ExtractRetailHeightmaps] Complete: {populated} landblocks exported in {elapsedMs}ms â†’ {outputPath}");
+        Console.Error.WriteLine($"[ExtractRetailHeightmaps] Complete: {populated} landblocks exported in {elapsedMs}ms â†’ {outputPath}");
 
         return new ExtractHeightmapsResult(true, totalScanned, populated, elapsedMs, outputPath);
     }
@@ -10236,9 +10507,20 @@ public partial class CommandEngine {
     public void InvalidateCaches() {
         _terrainDocCache = null;
         _heightTableCache = null;
+        // Drop the tile pipeline too: it bakes the project's atlas_tiles dir,
+        // manifest, dirty set, and region anchors in at creation. Loading a
+        // different project must rebuild it lazily against the new directory.
+        _tileCache = null;
+        _tileGenerator = null;
     }
 
-    internal static ushort LbKey(uint lbX, uint lbY) => (ushort)((lbX << 8) | lbY);
+    internal static ushort LbKey(uint lbX, uint lbY) {
+        // Guard against out-of-range coords wrapping through the ushort cast
+        // (lbX=256 -> row 0x00, lbY>255 bleeding into the X byte).
+        if (lbX > 254) throw new ArgumentException($"lbX must be 0..254; got {lbX}");
+        if (lbY > 254) throw new ArgumentException($"lbY must be 0..254; got {lbY}");
+        return (ushort)((lbX << 8) | lbY);
+    }
 
     private TerrainDocument GetTerrainDoc() {
         if (_terrainDocCache != null) return _terrainDocCache;
@@ -10357,6 +10639,11 @@ public partial class CommandEngine {
     }
 
     private static void ValidateLbLocalCoord(uint lbX, uint lbY, float x, float y, string command) {
+        // Reject out-of-range landblock coords first, so a caller passing lbX/lbY>254
+        // with "consistent" world coords can't pass validation and then wrap the LbKey.
+        if (lbX > 254 || lbY > 254)
+            throw new ArgumentException(
+                $"{command}: landblock ({lbX}, {lbY}) is out of range — lbX/lbY must be 0..254.");
         float lbMinX = lbX * (float)WorldBuilder.Shared.Lib.Terrain.TerrainAlgorithms.LandblockLength;
         float lbMinY = lbY * (float)WorldBuilder.Shared.Lib.Terrain.TerrainAlgorithms.LandblockLength;
         float edge = (float)WorldBuilder.Shared.Lib.Terrain.TerrainAlgorithms.LandblockLength;
@@ -10448,7 +10735,10 @@ public partial class CommandEngine {
                     totalBuildingsPlaced = result.TotalBuildingsPlaced,
                     totalDecorationsPlaced = result.TotalDecorationsPlaced,
                     totalRoadVertices = result.TotalRoadVertices,
-                }, WorldBuilder.Shared.Lib.JsonOpts.Indented);
+                    // WorldGenResult opts carry IncludeFields=true so Vector3/Quaternion fields
+                    // (TownSite.WorldCenter, PlannedBuilding.WorldPosition/Orientation) survive the
+                    // round-trip; JsonOpts.Indented would emit {} and lose every position.
+                }, WorldBuilder.Shared.Lib.JsonOpts.WorldGenResult);
                 File.WriteAllText(outputJsonPath, serialized);
             }
             catch (Exception ex) {
@@ -10661,8 +10951,11 @@ public partial class CommandEngine {
     }
 
     /// <summary>
-    /// Applies a template's scalar properties to a weenie classId via SaveWeenieScalarsAsync.
-    /// Existing scalars not in the template are left untouched.
+    /// MERGES a template's scalar properties into a weenie classId. The existing snapshot is loaded,
+    /// the template's rows overlay it by (table, property-type) key (overwriting same-keyed rows,
+    /// adding new ones), and the union is saved. Existing scalars NOT named in the template are left
+    /// untouched. The weenie's existing <c>type</c> is preserved unless the template explicitly sets
+    /// <c>weenieType</c>. (F234)
     /// </summary>
     public async Task<WeenieTemplateApplyResult> WeenieTemplateApplyAsync(string bundlePath, string templateId, uint classId) {
         var settings = _projectManager.CurrentProject?.AceDb;
@@ -10691,29 +10984,79 @@ public partial class CommandEngine {
             return new WeenieTemplateApplyResult(false, bundlePath, templateId, classId, 0, ex.Message);
         }
 
-        // Build snapshot from the template.
-        var snap = new AceWeenieSnapshot { ClassId = classId, WeenieType = def.WeenieType };
-        foreach (var (t, v) in def.Ints)        snap.Ints.Add(new AceWeenieRowInt { Type = t, Value = v });
-        foreach (var (t, v) in def.Int64s)      snap.Int64s.Add(new AceWeenieRowInt64 { Type = t, Value = v });
-        foreach (var (t, v) in def.Bools)       snap.Bools.Add(new AceWeenieRowBool { Type = t, Value = v });
-        foreach (var (t, v) in def.Floats)      snap.Floats.Add(new AceWeenieRowFloat { Type = t, Value = v });
-        foreach (var (t, v) in def.Strings)     snap.Strings.Add(new AceWeenieRowString { Type = t, Value = v });
-        foreach (var (t, v) in def.DataIds)     snap.DataIds.Add(new AceWeenieRowDid { Type = t, Value = v });
-        foreach (var (t, v) in def.InstanceIds) snap.InstanceIds.Add(new AceWeenieRowIid { Type = t, Value = v });
-
-        int scalarCount = snap.Ints.Count + snap.Int64s.Count + snap.Bools.Count
-            + snap.Floats.Count + snap.Strings.Count + snap.DataIds.Count + snap.InstanceIds.Count;
+        // Count of rows the template carries (the rows we'll write/overwrite).
+        int scalarCount = def.Ints.Count + def.Int64s.Count + def.Bools.Count
+            + def.Floats.Count + def.Strings.Count + def.DataIds.Count + def.InstanceIds.Count;
 
         try {
             using var connector = new AceDbConnector(settings);
+
+            // F234: load the EXISTING snapshot so we merge instead of replacing. A null result here
+            // means the weenie row is absent (LoadWeenieSnapshotAsync throws on DB failure, so null is
+            // unambiguous); refuse rather than create a property-less weenie via SaveWeenieScalarsAsync.
+            var snap = await connector.LoadWeenieSnapshotAsync(classId);
+            if (snap == null)
+                return new WeenieTemplateApplyResult(false, bundlePath, templateId, classId, scalarCount,
+                    $"Weenie {classId} not found — cannot apply template to a non-existent weenie.");
+
+            // Preserve the weenie's existing type unless the template explicitly set weenieType.
+            uint originalType = snap.WeenieType;
+            if (def.WeenieTypeExplicit)
+                snap.WeenieType = def.WeenieType;
+            bool typeChanged = snap.WeenieType != originalType;
+
+            // Overlay each template row onto the existing list, keyed by property-type: replace a row
+            // with the same type if present, otherwise add it. Existing rows not named by the template
+            // survive untouched.
+            foreach (var (t, v) in def.Ints)
+                Overlay(snap.Ints, t, () => new AceWeenieRowInt { Type = t, Value = v }, r => r.Value = v);
+            foreach (var (t, v) in def.Int64s)
+                Overlay(snap.Int64s, t, () => new AceWeenieRowInt64 { Type = t, Value = v }, r => r.Value = v);
+            foreach (var (t, v) in def.Bools)
+                Overlay(snap.Bools, t, () => new AceWeenieRowBool { Type = t, Value = v }, r => r.Value = v);
+            foreach (var (t, v) in def.Floats)
+                Overlay(snap.Floats, t, () => new AceWeenieRowFloat { Type = t, Value = v }, r => r.Value = v);
+            foreach (var (t, v) in def.Strings)
+                Overlay(snap.Strings, t, () => new AceWeenieRowString { Type = t, Value = v }, r => r.Value = v);
+            foreach (var (t, v) in def.DataIds)
+                Overlay(snap.DataIds, t, () => new AceWeenieRowDid { Type = t, Value = v }, r => r.Value = v);
+            foreach (var (t, v) in def.InstanceIds)
+                Overlay(snap.InstanceIds, t, () => new AceWeenieRowIid { Type = t, Value = v }, r => r.Value = v);
+
+            int totalAfter = snap.Ints.Count + snap.Int64s.Count + snap.Bools.Count
+                + snap.Floats.Count + snap.Strings.Count + snap.DataIds.Count + snap.InstanceIds.Count;
+
             var ok = await connector.SaveWeenieScalarsAsync(snap);
             return new WeenieTemplateApplyResult(ok, bundlePath, templateId, classId, scalarCount,
-                ok ? null : "SaveWeenieScalarsAsync returned false.");
+                ok ? null : "SaveWeenieScalarsAsync returned false (weenie row vanished mid-apply).",
+                Merged: true, TotalScalarsAfter: totalAfter, WeenieTypeChanged: ok && typeChanged);
         }
         catch (Exception ex) {
             return new WeenieTemplateApplyResult(false, bundlePath, templateId, classId, scalarCount, ex.Message);
         }
     }
+
+    /// <summary>Replaces the row matching <paramref name="type"/> in <paramref name="rows"/> (via
+    /// <paramref name="update"/>), or appends a fresh one (via <paramref name="create"/>). (F234)</summary>
+    static void Overlay<TRow>(List<TRow> rows, ushort type, Func<TRow> create, Action<TRow> update)
+        where TRow : class {
+        for (int i = 0; i < rows.Count; i++) {
+            if (TypeOf(rows[i]) == type) { update(rows[i]); return; }
+        }
+        rows.Add(create());
+    }
+
+    /// <summary>Reads the <c>Type</c> property of any AceWeenieRow* via the shared shape. (F234)</summary>
+    static ushort TypeOf(object row) => row switch {
+        AceWeenieRowInt r => r.Type,
+        AceWeenieRowInt64 r => r.Type,
+        AceWeenieRowBool r => r.Type,
+        AceWeenieRowFloat r => r.Type,
+        AceWeenieRowString r => r.Type,
+        AceWeenieRowDid r => r.Type,
+        AceWeenieRowIid r => r.Type,
+        _ => throw new ArgumentException($"Unsupported weenie row type {row.GetType().Name}", nameof(row)),
+    };
 
     // ═══════════════════════════════════════════════════════════
     //  Mesh I/O & BSP (slice 1 of f26345e port)

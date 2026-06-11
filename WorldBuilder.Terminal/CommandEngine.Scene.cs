@@ -179,11 +179,18 @@ public partial class CommandEngine {
             throw new ArgumentException("fields object is required (any of: objectId, origin, orientation, frequency, displaceX, displaceY, minScale, maxScale, maxRotation, minSlope, maxSlope, align, orient, weenieObj).");
 
         var sceneId = ParseRegionHexU32(sceneIdHex);
-        var (scene, source) = LoadScene(sceneId, null);
-        if (index < 0 || index >= scene.Objects.Count)
+        var (loaded, source) = LoadScene(sceneId, null);
+        if (index < 0 || index >= loaded.Objects.Count)
             throw new ArgumentOutOfRangeException(nameof(index),
-                $"index {index} out of range — scene 0x{sceneId:X8} has {scene.Objects.Count} objects.");
+                $"index {index} out of range — scene 0x{sceneId:X8} has {loaded.Objects.Count} objects.");
 
+        // Deep-copy before mutating. LoadScene can return the staged
+        // PortalDatDocument's cached instance (TryGetEntry hands back the same
+        // object), so mutating it directly — even on a dry-run (apply:false) — would
+        // corrupt the live staged scene that the next save/export packs into the
+        // DATs. Cloning also makes an unknown-field error mid-loop harmless: the
+        // partially mutated copy is discarded.
+        var scene = CloneScene(loaded);
         var obj = scene.Objects[index];
         var changed = new List<string>();
         foreach (var (key, valNode) in fields) {
@@ -287,6 +294,19 @@ public partial class CommandEngine {
         if (!baseDat.TryGet<SceneObj>(sceneId, out var fromBase) || fromBase == null)
             throw new InvalidOperationException($"Scene 0x{sceneId:X8} not found in {basePath}.");
         return (fromBase, $"dat:{basePath}");
+    }
+
+    /// <summary>Deep-copy a Scene by packing then unpacking it, so edits never mutate
+    /// a shared/staged instance returned by LoadScene.</summary>
+    private static SceneObj CloneScene(SceneObj source) {
+        const int CloneBufferSize = 16 * 1024 * 1024;
+        var buffer = new byte[CloneBufferSize];
+        var writer = new DRW.Lib.IO.DatBinWriter(buffer.AsMemory());
+        ((DRW.Lib.IO.IPackable)source).Pack(writer);
+        var copy = new SceneObj();
+        var reader = new DRW.Lib.IO.DatBinReader(buffer[..writer.Offset]);
+        ((DRW.Lib.IO.IUnpackable)copy).Unpack(reader);
+        return copy;
     }
 
     private List<uint> EnumerateSceneIds(string? datPath) {

@@ -62,6 +62,14 @@ public static class StampAlgorithms {
 
                 int lbX = (int)MathF.Floor(worldX / 192f);
                 int lbY = (int)MathF.Floor(worldY / 192f);
+
+                // Skip (do not wrap) vertices that fall outside the valid landblock
+                // grid. Landblock indices are bytes 0..254 (0xFF is a sentinel); a
+                // (ushort) cast of an out-of-range lbX/lbY would silently land the
+                // paste in an unrelated landblock.
+                if (lbX < 0 || lbX > 254 || lbY < 0 || lbY > 254)
+                    continue;
+
                 ushort lbKey = (ushort)((lbX << 8) | lbY);
 
                 float localX = worldX - (lbX * 192f);
@@ -126,6 +134,12 @@ public static class StampAlgorithms {
 
                 int lbX = (int)MathF.Floor(worldX / 192f);
                 int lbY = (int)MathF.Floor(worldY / 192f);
+
+                // Skip objects that fall outside the valid landblock grid (0..254);
+                // see the vertex loop above for rationale.
+                if (lbX < 0 || lbX > 254 || lbY < 0 || lbY > 254)
+                    continue;
+
                 ushort lbKey = (ushort)((lbX << 8) | lbY);
 
                 var worldObj = new StaticObject {

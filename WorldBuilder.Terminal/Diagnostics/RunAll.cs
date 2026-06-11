@@ -213,6 +213,35 @@ public partial class CommandEngine {
             }
         }
 
+        // Bind the aggregate we'll later parse to THIS invocation. Without
+        // this, FindLatestAggregateJson returns the newest aggregate by
+        // mtime regardless of which run wrote it — so a driver that crashes
+        // (OOM, disk-full, killed) before writing aggregate.json leaves last
+        // run's aggregate newest, parses cleanly, and reports stale
+        // surfaces/counts as a fresh success. We snapshot the canonical root's
+        // subdirs (+ launch wall-clock) before launching and accept only an
+        // aggregate in a NEW dir or with mtime ≥ launch. For an explicit
+        // reportDir we record the pre-run aggregate.json mtime and accept
+        // only a strictly-newer file.
+        var aggregateRoot = string.IsNullOrWhiteSpace(reportDir)
+            ? DiagAggregateReportRoot
+            : reportDir!;
+        var launchUtc = DateTime.UtcNow;
+        HashSet<string> preRunDirs;
+        DateTime? explicitReportDirPreMtime = null;
+        if (!string.IsNullOrWhiteSpace(reportDir)) {
+            preRunDirs = new HashSet<string>(StringComparer.Ordinal);
+            var preCandidate = Path.Combine(reportDir!, "aggregate.json");
+            if (File.Exists(preCandidate)) {
+                explicitReportDirPreMtime = File.GetLastWriteTimeUtc(preCandidate);
+            }
+        } else {
+            preRunDirs = Directory.Exists(aggregateRoot)
+                ? new HashSet<string>(
+                    Directory.EnumerateDirectories(aggregateRoot), StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
+        }
+
         // Run the driver as `node <driverScript> ...`.
         string stdoutText;
         string stderrText;
@@ -239,20 +268,26 @@ public partial class CommandEngine {
                 Surfaces: Array.Empty<DiagSurfaceResult>());
         }
 
-        // Find the aggregate.json. Drivers write to either the explicit
-        // reportDir or to the canonical timestamped dir. If the operator
-        // overrode reportDir, use that; otherwise scan for the newest
-        // <ts>/aggregate.json under the canonical root.
-        var aggregateRoot = string.IsNullOrWhiteSpace(reportDir)
-            ? DiagAggregateReportRoot
-            : reportDir!;
+        // Find the aggregate.json written by THIS run. For an explicit
+        // reportDir, accept the aggregate only if it is strictly newer than
+        // the pre-run mtime we recorded (a stale leftover from a prior run
+        // that crashed this time must not be parsed). For the canonical root,
+        // accept only an aggregate in a directory that did not exist
+        // pre-launch, or one whose mtime is ≥ the launch time — anything else
+        // belongs to an earlier run.
         string? aggregateJsonPath;
         if (!string.IsNullOrWhiteSpace(reportDir)) {
             // Caller-provided dir: aggregate.json should land at the root.
             var candidate = Path.Combine(reportDir!, "aggregate.json");
-            aggregateJsonPath = File.Exists(candidate) ? candidate : null;
+            if (File.Exists(candidate) &&
+                (explicitReportDirPreMtime == null ||
+                 File.GetLastWriteTimeUtc(candidate) > explicitReportDirPreMtime.Value)) {
+                aggregateJsonPath = candidate;
+            } else {
+                aggregateJsonPath = null;
+            }
         } else {
-            aggregateJsonPath = FindLatestAggregateJson(aggregateRoot);
+            aggregateJsonPath = FindFreshAggregateJson(aggregateRoot, preRunDirs, launchUtc);
         }
 
         if (aggregateJsonPath == null) {
@@ -278,14 +313,22 @@ public partial class CommandEngine {
                 Surfaces: Array.Empty<DiagSurfaceResult>());
         }
 
-        // Parse it.
+        // Parse it. Merge any DriverError surfaced by the parse (malformed /
+        // unreadable aggregate) with the run-level signals so a non-zero
+        // driver exit or a timeout can never be masked into a success.
         var parsed = ParseAggregateFile(aggregateJsonPath);
+        string? driverError = parsed.DriverError;
+        if (timedOut) {
+            driverError = Append(driverError,
+                "Driver timed out — aggregate may reflect partial state.");
+        } else if (exitCode != 0) {
+            driverError = Append(driverError,
+                $"Driver exited non-zero (exit={exitCode}) — aggregate may be stale or partial.");
+        }
         return parsed with {
             ElapsedMs = sw.ElapsedMilliseconds,
             DriverExitCode = exitCode,
-            DriverError = timedOut
-                ? "Driver timed out — aggregate may reflect partial state."
-                : null,
+            DriverError = driverError,
         };
     }
 
@@ -356,6 +399,34 @@ public partial class CommandEngine {
     }
 
     /// <summary>
+    /// Find the <c>&lt;ts&gt;/aggregate.json</c> written by the run that just
+    /// finished, ignoring leftovers from earlier runs. An aggregate qualifies
+    /// only if its parent directory did not exist before launch
+    /// (<paramref name="preRunDirs"/>) OR the aggregate's mtime is at or after
+    /// <paramref name="launchUtc"/>. Among qualifying aggregates the newest by
+    /// mtime wins. Returns null when no fresh aggregate exists — the signal
+    /// that the driver crashed before writing one.
+    /// </summary>
+    private static string? FindFreshAggregateJson(
+        string root, HashSet<string> preRunDirs, DateTime launchUtc) {
+        if (!Directory.Exists(root)) return null;
+        string? best = null;
+        DateTime bestMtime = DateTime.MinValue;
+        foreach (var dir in Directory.EnumerateDirectories(root)) {
+            var candidate = Path.Combine(dir, "aggregate.json");
+            if (!File.Exists(candidate)) continue;
+            var mt = File.GetLastWriteTimeUtc(candidate);
+            bool fresh = !preRunDirs.Contains(dir) || mt >= launchUtc;
+            if (!fresh) continue;
+            if (mt > bestMtime) {
+                bestMtime = mt;
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    /// <summary>
     /// Parse the aggregate.json into our typed result.
     ///
     /// <para>
@@ -416,15 +487,27 @@ public partial class CommandEngine {
             Path.GetDirectoryName(aggregateJsonPath) ?? "",
             "summary.md");
 
-        var summaryEl = root.GetProperty("summary");
-        int checkedCount = summaryEl.TryGetProperty("checked", out var c) ? c.GetInt32() : 0;
-        int passCount = summaryEl.TryGetProperty("pass", out var p) ? p.GetInt32() : 0;
-        int failCount = summaryEl.TryGetProperty("fail", out var f) ? f.GetInt32() : 0;
-        int skipCount = summaryEl.TryGetProperty("skipped", out var sk) ? sk.GetInt32() : 0;
-        int skipShipCount = summaryEl.TryGetProperty("skippedShip", out var ss) ? ss.GetInt32() : 0;
-        int skipCliCount = summaryEl.TryGetProperty("skippedCli", out var sc) ? sc.GetInt32() : 0;
-        int infraCount = summaryEl.TryGetProperty("infra", out var inf) ? inf.GetInt32() : 0;
-        int reqFailures = summaryEl.TryGetProperty("requiredFailures", out var rf) ? rf.GetInt32() : 0;
+        // A summary-less aggregate must NOT throw (KeyNotFoundException) —
+        // that would crash the whole command on a malformed/truncated file.
+        // Default all counts to 0 and surface a DriverError so the wrapper's
+        // success gate can never read true off a zero-count parse.
+        string? parseError = null;
+        int checkedCount = 0, passCount = 0, failCount = 0, skipCount = 0;
+        int skipShipCount = 0, skipCliCount = 0, infraCount = 0, reqFailures = 0;
+        if (root.TryGetProperty("summary", out var summaryEl) &&
+            summaryEl.ValueKind == JsonValueKind.Object) {
+            checkedCount = summaryEl.TryGetProperty("checked", out var c) ? c.GetInt32() : 0;
+            passCount = summaryEl.TryGetProperty("pass", out var p) ? p.GetInt32() : 0;
+            failCount = summaryEl.TryGetProperty("fail", out var f) ? f.GetInt32() : 0;
+            skipCount = summaryEl.TryGetProperty("skipped", out var sk) ? sk.GetInt32() : 0;
+            skipShipCount = summaryEl.TryGetProperty("skippedShip", out var ss) ? ss.GetInt32() : 0;
+            skipCliCount = summaryEl.TryGetProperty("skippedCli", out var sc) ? sc.GetInt32() : 0;
+            infraCount = summaryEl.TryGetProperty("infra", out var inf) ? inf.GetInt32() : 0;
+            reqFailures = summaryEl.TryGetProperty("requiredFailures", out var rf) ? rf.GetInt32() : 0;
+        } else {
+            parseError =
+                $"Malformed aggregate.json: missing/invalid 'summary' object at {aggregateJsonPath}.";
+        }
 
         string mode = "";
         if (root.TryGetProperty("options", out var opts) &&
@@ -459,7 +542,7 @@ public partial class CommandEngine {
             Wave4Mode: mode,
             ElapsedMs: elapsedMs,
             DriverExitCode: 0, // overwritten by caller in DiagRunAll
-            DriverError: null,
+            DriverError: parseError, // null unless the aggregate was malformed
             Surfaces: surfaces);
     }
 
@@ -558,5 +641,15 @@ public partial class CommandEngine {
     private static string Tail(string s, int maxChars) {
         if (string.IsNullOrEmpty(s)) return "";
         return s.Length <= maxChars ? s : s.Substring(s.Length - maxChars);
+    }
+
+    /// <summary>
+    /// Combine two DriverError fragments without dropping either. When the
+    /// base is null/empty the addition stands alone; otherwise the addition
+    /// is appended on a new line so a parse error and a run-level note both
+    /// survive into the returned result.
+    /// </summary>
+    private static string Append(string? baseError, string addition) {
+        return string.IsNullOrEmpty(baseError) ? addition : $"{baseError}\n{addition}";
     }
 }

@@ -143,6 +143,14 @@ public static class TerrainAlgorithms {
         Func<ushort, TerrainEntry[]?> terrainLookup,
         HashSet<ushort>? allowedLandblocks = null) {
 
+        // Landblock X/Y indices must fit a single byte (0..254). A larger value
+        // would corrupt the packed key below and seed the fill into an unrelated
+        // landblock, so reject it rather than silently mutating wrong terrain.
+        if (startLbX > 254)
+            throw new ArgumentOutOfRangeException(nameof(startLbX), startLbX, "Landblock X must be 0..254.");
+        if (startLbY > 254)
+            throw new ArgumentOutOfRangeException(nameof(startLbY), startLbY, "Landblock Y must be 0..254.");
+
         var result = new List<(ushort, int, byte)>();
         ushort startLbID = (ushort)((startLbX << 8) | startLbY);
 
@@ -452,7 +460,10 @@ public static class TerrainAlgorithms {
         int lbX = (int)(worldX / LandblockLength);
         int lbY = (int)(worldY / LandblockLength);
 
-        if (lbX < 0 || lbY < 0 || lbX >= MapSize || lbY >= MapSize) return null;
+        // Valid landblock indices are 0..254 (MapSize); the old `>= MapSize`
+        // wrongly excluded the world's last row/column (index 254). 254 still
+        // fits the single-byte packed key below, so allow it.
+        if (lbX < 0 || lbY < 0 || lbX > MapSize || lbY > MapSize) return null;
 
         float localX = worldX - lbX * LandblockLength;
         float localY = worldY - lbY * LandblockLength;

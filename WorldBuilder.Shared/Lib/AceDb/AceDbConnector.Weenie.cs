@@ -106,9 +106,14 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             return result;
         }
 
-        /// <summary>Loads scalar weenie properties and row counts for complex tables. Returns null if the weenie row is missing.</summary>
+        /// <summary>
+        /// Loads scalar weenie properties and row counts for complex tables. Returns null ONLY when
+        /// the weenie row is genuinely absent. A DB/infrastructure failure throws <see cref="MySqlException"/>
+        /// (F235) — callers must distinguish "not found" (null) from "could not query" (thrown) so a
+        /// dead connection is never reported as a missing weenie.
+        /// </summary>
         public async Task<AceWeenieSnapshot?> LoadWeenieSnapshotAsync(uint classId, CancellationToken ct = default) {
-            try {
+            {
                 await using var conn = new MySqlConnection(_settings.ConnectionString);
                 await conn.OpenAsync(ct);
 
@@ -151,18 +156,17 @@ namespace WorldBuilder.Shared.Lib.AceDb {
 
                 return snap;
             }
-            catch (MySqlException) {
-                return null;
-            }
         }
 
         /// <summary>
         /// Writes scalar properties only (does not touch spell book, create list, emotes, etc.).
         /// Updates <c>weenie.type</c> and <c>weenie.last_Modified</c>.
+        /// Returns false when the weenie row does not exist (UPDATE matched 0 rows). A DB/infrastructure
+        /// failure throws <see cref="MySqlException"/> (F235) rather than being silently swallowed to false.
         /// </summary>
         public async Task<bool> SaveWeenieScalarsAsync(AceWeenieSnapshot snapshot, CancellationToken ct = default) {
             if (snapshot.ClassId == 0) return false;
-            try {
+            {
                 await using var conn = new MySqlConnection(_settings.ConnectionString);
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
@@ -249,26 +253,27 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 await tx.CommitAsync(ct);
                 return true;
             }
-            catch (MySqlException) {
-                return false;
-            }
         }
 
         /// <summary>
         /// Creates a new weenie (INSERT into ace_world.weenie) and saves all scalar properties.
         /// Auto-assigns the next available class_Id (minimum 100000 for custom content).
-        /// Returns the assigned class_Id, or 0 on failure.
+        /// Returns the assigned class_Id, or 0 when <paramref name="className"/> is blank.
+        /// A DB/infrastructure failure throws <see cref="MySqlException"/> (F235).
         /// </summary>
         public async Task<uint> InsertWeenieAsync(string className, AceWeenieSnapshot snapshot, CancellationToken ct = default) {
             if (string.IsNullOrWhiteSpace(className)) return 0;
-            try {
+            {
                 await using var conn = new MySqlConnection(_settings.ConnectionString);
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
 
+                // F235: allocate the id inside the transaction under a SELECT ... FOR UPDATE so a
+                // concurrent InsertWeenieAsync blocks here instead of reading the same MAX and
+                // minting a duplicate class_Id. The lock is held until this transaction commits.
                 uint newId;
                 await using (var maxCmd = new MySqlCommand(
-                    "SELECT COALESCE(MAX(`class_Id`), 0) FROM `weenie`", conn, (MySqlTransaction)tx)) {
+                    "SELECT COALESCE(MAX(`class_Id`), 0) FROM `weenie` FOR UPDATE", conn, (MySqlTransaction)tx)) {
                     var result = await maxCmd.ExecuteScalarAsync(ct);
                     var maxId = Convert.ToUInt32(result, CultureInfo.InvariantCulture);
                     newId = Math.Max(maxId + 1, 100000);
@@ -320,9 +325,6 @@ namespace WorldBuilder.Shared.Lib.AceDb {
 
                 await tx.CommitAsync(ct);
                 return newId;
-            }
-            catch (MySqlException) {
-                return 0;
             }
         }
 
@@ -403,10 +405,12 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         /// <summary>
         /// Deletes a weenie and every <c>weenie_properties_*</c> row that points at its
         /// <c>class_Id</c>. The wipe runs in a single transaction so a partial failure
-        /// rolls back. Returns true when the weenie row itself existed and was deleted.
+        /// rolls back. Returns true when the weenie row itself existed and was deleted;
+        /// false when no such weenie row existed. A DB/infrastructure failure throws
+        /// <see cref="MySqlException"/> (F235) rather than being swallowed to false.
         /// </summary>
         public async Task<bool> DeleteWeenieAsync(uint classId, CancellationToken ct = default) {
-            try {
+            {
                 await using var conn = new MySqlConnection(_settings.ConnectionString);
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
@@ -442,9 +446,6 @@ namespace WorldBuilder.Shared.Lib.AceDb {
 
                 await tx.CommitAsync(ct);
                 return deleted > 0;
-            }
-            catch (MySqlException) {
-                return false;
             }
         }
 

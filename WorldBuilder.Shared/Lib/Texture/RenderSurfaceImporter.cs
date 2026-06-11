@@ -136,7 +136,8 @@ namespace WorldBuilder.Shared.Lib.Texture {
             entry.Height = existing.Height;
             store.Save();
 
-            Console.WriteLine($"[TextureImport] Imported RenderSurface replacement '{name}' for 0x{renderSurfaceId:X8} ({existing.Width}x{existing.Height}, {existing.Format})");
+            // stderr, not stdout: in stdin JSON mode Console.Out is the one-JSON-object-per-line protocol stream.
+            Console.Error.WriteLine($"[TextureImport] Imported RenderSurface replacement '{name}' for 0x{renderSurfaceId:X8} ({existing.Width}x{existing.Height}, {existing.Format})");
             return true;
         }
 
@@ -191,7 +192,8 @@ namespace WorldBuilder.Shared.Lib.Texture {
                 var rs = RenderSurfaceWithReplacedPixels(existing, bgra);
                 portalDoc.SetEntry<RenderSurface>(renderSurfaceId, rs);
 
-                Console.WriteLine($"[TextureImport] Replace UI texture: stored 0x{renderSurfaceId:X8} ({w}x{h}) — will be written to DAT on export.");
+                // stderr, not stdout: in stdin JSON mode Console.Out is the one-JSON-object-per-line protocol stream.
+                Console.Error.WriteLine($"[TextureImport] Replace UI texture: stored 0x{renderSurfaceId:X8} ({w}x{h}) — will be written to DAT on export.");
                 return true;
             }
             catch (Exception ex) {

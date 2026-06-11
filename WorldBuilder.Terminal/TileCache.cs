@@ -138,6 +138,10 @@ public class TileCache {
 
     public void ClearDirty() {
         _manifest.DirtyLbs.Clear();
+        // Dirty state is dual-tracked: clearing the DirtyLbs index alone leaves
+        // per-tile entry.Dirty flags set (Get/tile-stats would still treat them
+        // as dirty while list-dirty-tiles reports 0). Reset both together.
+        foreach (var entry in _manifest.Tiles.Values) entry.Dirty = false;
     }
 
     /// <summary>

@@ -1519,6 +1519,9 @@ public class TerminalRepl {
         Console.WriteLine($"    Origin: ({r.NewOrigin.X:F1}, {r.NewOrigin.Y:F1}, {r.NewOrigin.Z:F1})");
         Console.WriteLine($"    Orientation: (W={r.NewOrientation.W:F4}, X={r.NewOrientation.X:F4}, Y={r.NewOrientation.Y:F4}, Z={r.NewOrientation.Z:F4})");
         Console.WriteLine($"    Portals: {r.PortalCount}");
+        Console.WriteLine($"    Surfaces: {r.SurfaceCount}");
+        if (r.Warning != null)
+            Console.WriteLine($"    WARNING: {r.Warning}");
         Console.WriteLine();
     }
 
@@ -1868,7 +1871,7 @@ public class TerminalRepl {
         Console.WriteLine("â•â•â• DAT Extensions â•â•â•");
         Console.ResetColor();
         Console.WriteLine("  export-textures <outputDir> [minId] [maxId]    Export textures to PNG");
-        Console.WriteLine("  import-texture <textureId> <imagePath>         Replace texture from file");
+        Console.WriteLine("  import-texture <textureId> <imagePath>         Replace texture from file (immediate, permanent in-place write to base client_portal.dat)");
         Console.WriteLine("  clone-dat <outputPath>                         Clone portal DAT");
         Console.WriteLine("  defragment-dat <portal|cell|local> <outPath>   Defragment a DAT file");
         Console.WriteLine("  obj-export <datId> <output.obj>                Setup/GfxObj → Wavefront .obj");
@@ -3032,7 +3035,7 @@ public class TerminalRepl {
                     uint? newId = null;
                     if (tokens.Length >= 4 && uint.TryParse(tokens[3], out var nid)) newId = nid;
                     var c = _engine.SpellCopyAsync(fromId, newId).GetAwaiter().GetResult();
-                    Console.WriteLine($"Copied {c.FromSpellId} → {c.NewSpellId} (overlay={c.SavedToOverlay}, db={c.SavedToDb}).");
+                    Console.WriteLine($"Copied {c.FromSpellId} → {c.NewSpellId} (overlay={c.SavedToOverlay}, db={c.SavedToDb}, replaced={c.ReplacedExisting}).");
                     break;
                 }
                 case "delete": {

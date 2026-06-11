@@ -295,9 +295,15 @@ public partial class CommandEngine {
             var d = Vector3.Distance(statics[i].Origin, worldPos);
             if (d < bestDist) { bestDist = d; bestIdx = i; }
         }
-        if (bestIdx < 0)
+        // Require the nearest same-model shell to be within tolerance of the building's
+        // expected world position. Without this, a repeat remove of the same index (or a
+        // shell that has moved away) silently deletes an UNRELATED same-model static.
+        const float MatchToleranceMeters = 5.0f;
+        if (bestIdx < 0 || bestDist > MatchToleranceMeters)
             throw new InvalidOperationException(
-                $"No staged static object matches building 0x{building.ModelId:X8} — was it already removed?");
+                $"No staged static object matches building 0x{building.ModelId:X8} within {MatchToleranceMeters:F1}m " +
+                $"of its expected position (nearest same-model shell was {(bestIdx < 0 ? "not found" : $"{bestDist:F1}m away")}) — " +
+                "was it already removed or moved?");
 
         lbDoc.RemoveStaticObject(bestIdx);
 

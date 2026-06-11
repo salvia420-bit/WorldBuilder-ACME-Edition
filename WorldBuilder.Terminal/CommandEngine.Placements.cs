@@ -19,6 +19,21 @@ public partial class CommandEngine {
         return _projectManager.CurrentProject?.ProjectDirectory ?? Directory.GetCurrentDirectory();
     }
 
+    /// <summary>
+    /// F164 — the SINGLE deterministically-ordered DungeonDocument sequence shared by
+    /// placement-list / -remove / -set-scope so the global flattened index they report and address
+    /// is stable. <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey,TValue}"/>
+    /// enumeration order is unspecified, so we sort by LandblockKey (then doc Id as a tiebreaker for
+    /// any zero-key docs) before flattening.
+    /// </summary>
+    private List<DungeonDocument> OrderedDungeonDocs(WorldBuilder.Shared.Models.Project project) {
+        return project.DocumentManager.ActiveDocs.Values
+            .OfType<DungeonDocument>()
+            .OrderBy(d => d.LandblockKey)
+            .ThenBy(d => d.Id, StringComparer.Ordinal)
+            .ToList();
+    }
+
     public PlacementListResult PlacementList(int? lbX, int? lbY, string kindFilter) {
         RequireProject();
         var project = _projectManager.CurrentProject!;
@@ -46,14 +61,18 @@ public partial class CommandEngine {
 
         var dungeon = new List<PlacementListRow>();
         if (wantsDungeon) {
-            foreach (var (_, doc) in project.DocumentManager.ActiveDocs) {
-                if (doc is not DungeonDocument dng) continue;
-                if (lbKey.HasValue && dng.LandblockKey != lbKey.Value) continue;
-                for (int i = 0; i < dng.InstancePlacements.Count; i++) {
+            // F164: report a FLATTENED GLOBAL index over the deterministically-ordered doc sequence
+            // (the same order placement-remove / -set-scope address), so the index the caller sees is
+            // the index they can act on — even with the landblock filter applied (the global counter
+            // advances across skipped docs).
+            int global = 0;
+            foreach (var dng in OrderedDungeonDocs(project)) {
+                for (int i = 0; i < dng.InstancePlacements.Count; i++, global++) {
+                    if (lbKey.HasValue && dng.LandblockKey != lbKey.Value) continue;
                     var p = dng.InstancePlacements[i];
                     dungeon.Add(new PlacementListRow(
                         Kind: "dungeon",
-                        Index: i,
+                        Index: global,
                         Landblock: $"0x{dng.LandblockKey:X4}",
                         Wcid: p.WeenieClassId,
                         CellNumber: p.CellNumber,
@@ -78,8 +97,9 @@ public partial class CommandEngine {
             WeenieClassId = wcid,
             CellNumber = cellNumber,
             OriginX = originX, OriginY = originY, OriginZ = originZ,
-            AnglesW = angW ?? 0f, AnglesX = angX ?? 0f,
-            AnglesY = angY ?? 0f, AnglesZ = angZ ?? 1f,
+            // F166: default orientation is IDENTITY (w=1, z=0), not (w=0, z=1) which is a 180° flip.
+            AnglesW = angW ?? 1f, AnglesX = angX ?? 0f,
+            AnglesY = angY ?? 0f, AnglesZ = angZ ?? 0f,
         };
         project.OutdoorInstancePlacements.Add(p);
         project.Save();
@@ -103,9 +123,15 @@ public partial class CommandEngine {
             WeenieClassId = wcid,
             CellNumber = cellNumber,
             Origin = new Vector3(originX, originY, originZ),
-            Orientation = new Quaternion(angX ?? 0f, angY ?? 0f, angZ ?? 1f, angW ?? 0f),
+            // F166: System.Numerics.Quaternion ctor is (x,y,z,w); default to IDENTITY (w=1),
+            // not (z=1,w=0) which is a 180° flip → object spawns facing backwards in ACE.
+            Orientation = new Quaternion(angX ?? 0f, angY ?? 0f, angZ ?? 0f, angW ?? 1f),
         };
         dng.InstancePlacements.Add(p);
+        // F163: direct List mutation raises NO Update event, so without this the row is lost on
+        // reload (silent data loss of a committed edit). ForceSave marks the doc dirty + raises
+        // Update so the DocumentManager batch-persists it.
+        dng.ForceSave();
         return new PlacementAddResult(true, "dungeon", dng.InstancePlacements.Count - 1, $"0x{lbKey:X4}");
     }
 
@@ -122,9 +148,12 @@ public partial class CommandEngine {
         }
 
         if (kind.Equals("dungeon", StringComparison.OrdinalIgnoreCase)) {
+            // F164: reject a negative global index explicitly (the outdoor path returns
+            // success:false; the dungeon path used to surface a raw ArgumentOutOfRangeException).
+            if (index < 0) return new PlacementRemoveResult(false, kind, index, null);
             int total = 0;
-            foreach (var (_, doc) in project.DocumentManager.ActiveDocs) {
-                if (doc is not DungeonDocument dng) continue;
+            // F164: walk the SAME deterministically-ordered doc sequence placement-list reports.
+            foreach (var dng in OrderedDungeonDocs(project)) {
                 if (index >= total + dng.InstancePlacements.Count) {
                     total += dng.InstancePlacements.Count;
                     continue;
@@ -132,6 +161,8 @@ public partial class CommandEngine {
                 int local = index - total;
                 var lb = $"0x{dng.LandblockKey:X4}";
                 dng.InstancePlacements.RemoveAt(local);
+                // F163: persist the mutation (direct List edit raises no Update event).
+                dng.ForceSave();
                 return new PlacementRemoveResult(true, kind, index, lb);
             }
             return new PlacementRemoveResult(false, kind, index, null);
@@ -164,14 +195,18 @@ public partial class CommandEngine {
         }
 
         if (kind.Equals("dungeon", StringComparison.OrdinalIgnoreCase)) {
+            // F164: reject a negative global index explicitly (parity with the outdoor path).
+            if (index < 0) return new PlacementSetScopeResult(false, kind, index, parsed.ToString());
             int total = 0;
-            foreach (var (_, doc) in project.DocumentManager.ActiveDocs) {
-                if (doc is not DungeonDocument dng) continue;
+            // F164: walk the SAME deterministically-ordered doc sequence placement-list reports.
+            foreach (var dng in OrderedDungeonDocs(project)) {
                 if (index >= total + dng.InstancePlacements.Count) {
                     total += dng.InstancePlacements.Count;
                     continue;
                 }
                 dng.InstancePlacements[index - total].Scope = parsed;
+                // F163: persist the mutation (direct List edit raises no Update event).
+                dng.ForceSave();
                 return new PlacementSetScopeResult(true, kind, index, parsed.ToString());
             }
             return new PlacementSetScopeResult(false, kind, index, parsed.ToString());
@@ -266,12 +301,24 @@ public partial class CommandEngine {
             }
         }
 
-        // E1 (wave-2) PR3: MINT/THREAD the per-placement (Option B) static guids FIRST — Build writes
-        // each resolved guid back onto its source EnrichedPlacement.Guid. This must happen BEFORE the
-        // world landblock_instance SQL + the JSONL are written so (a) landblock_instance.guid ==
-        // biota.id (the world↔shard join ACE uses, WorldObjectFactory.cs:297) and (b) the minted guid
-        // is recorded in placements_enriched.jsonl and is STABLE across re-exports. The WeenieIndex
-        // resolves each override's real WeenieType (an Undef stub would vanish on load).
+        // F167: MINT a STATIC, per-landblock guid for EVERY placement that doesn't already carry one —
+        // not just the Option-B (PlacementOverride) ones. Without this, a ClassDefault placement falls
+        // through GenerateInsertSql's guid==0 branch and gets a FRESH RANDOM guid on every export (no
+        // DELETE prefix), so re-applying duplicates the spawn AND the random guid lands outside the LB
+        // static window (defeating ACE static addressing / Option-B joins). Minting all guids here makes
+        // every landblock_instance row idempotent (static guid ⇒ GenerateInsertSql emits DELETE+INSERT)
+        // and stable across re-exports. Seeds `used` from already-minted project guids and, on --apply,
+        // from the live DB's existing landblock_instance guids for each touched landblock.
+        await MintStaticGuidsForAllPlacementsAsync(project, enriched, sourceOutdoor, sourceDungeon, apply);
+
+        // E1 (wave-2) PR3: MINT/THREAD the per-placement (Option B) static guids — Build writes each
+        // resolved guid back onto its source EnrichedPlacement.Guid. Option-B placements already carry
+        // their static guid from the F167 pass above, so Build threads (not re-allocates) them. This
+        // must happen BEFORE the world landblock_instance SQL + the JSONL are written so (a)
+        // landblock_instance.guid == biota.id (the world↔shard join ACE uses, WorldObjectFactory.cs:297)
+        // and (b) the minted guid is recorded in placements_enriched.jsonl and is STABLE across
+        // re-exports. The WeenieIndex resolves each override's real WeenieType (an Undef stub would
+        // vanish on load).
         var (biotaBundle, biotaPaths, biotaManifestPath) =
             BiotaEnrichmentSqlExporter.WriteFiles(outDir, enriched, WeenieIndex);
         int biotaCount = biotaBundle.Biota?.BiotaCount ?? 0;
@@ -373,6 +420,85 @@ public partial class CommandEngine {
             ValidationWarningCount: validationWarnings,
             ValidationBlocked: validationBlocked,
             ShardRowsAppliedToDb: shardRowsApplied);
+    }
+
+    /// <summary>
+    /// F167 — mint a STATIC, per-landblock guid for every placement that doesn't already carry a valid
+    /// static one, writing the minted guid back onto BOTH the <see cref="EnrichedPlacement"/> and its
+    /// source model so every landblock_instance row is addressable + idempotent (DELETE+INSERT). The
+    /// per-landblock allocator is seeded with already-minted project guids and, on <paramref name="apply"/>,
+    /// with the live DB's existing landblock_instance guids for each touched landblock so a fresh mint
+    /// never collides with a row already in the world DB.
+    /// </summary>
+    private async Task MintStaticGuidsForAllPlacementsAsync(
+        WorldBuilder.Shared.Models.Project project,
+        List<EnrichedPlacement> enriched,
+        Dictionary<EnrichedPlacement, OutdoorInstancePlacement> sourceOutdoor,
+        Dictionary<EnrichedPlacement, DungeonInstancePlacement> sourceDungeon,
+        bool apply) {
+
+        // Per-landblock "used" guid sets, seeded with every placement guid already valid for its LB so
+        // a mint fills the gaps around hand-assigned / previously-minted addressable keys.
+        var usedByLandblock = new Dictionary<ushort, HashSet<uint>>();
+        HashSet<uint> Used(ushort lb) =>
+            usedByLandblock.TryGetValue(lb, out var s) ? s : (usedByLandblock[lb] = new HashSet<uint>());
+
+        foreach (var e in enriched) {
+            if (e.Guid is { } g && StaticGuidAllocator.IsInLandblockStaticRange(e.Landblock, g))
+                Used(e.Landblock).Add(g);
+        }
+
+        // On --apply, also reserve every guid already present in the live world DB for each landblock
+        // we are about to touch, so a re-export against an already-populated DB mints into free slots.
+        if (apply) {
+            var settings = project.AceDb;
+            if (settings != null && !string.IsNullOrEmpty(settings.Host)) {
+                using var connector = new AceDbConnector(settings);
+                foreach (var lb in enriched.Select(e => e.Landblock).Distinct()) {
+                    try {
+                        var existing = await connector.GetInstancesAsync(lb, includeAngles: false);
+                        foreach (var rec in existing)
+                            if (StaticGuidAllocator.IsInLandblockStaticRange(lb, rec.Guid))
+                                Used(lb).Add(rec.Guid);
+                    } catch {
+                        // Best-effort: a query failure (table absent / perms) must not block file emit.
+                    }
+                }
+            }
+        }
+
+        // Mint for any placement lacking a valid static guid; thread the result back to the source model.
+        bool mutatedOutdoor = false;
+        var mutatedDungeonDocs = new HashSet<DungeonDocument>();
+        var dungeonByPlacement = BuildDungeonDocLookup(project);
+        foreach (var e in enriched) {
+            if (e.Guid is { } existing && StaticGuidAllocator.IsInLandblockStaticRange(e.Landblock, existing))
+                continue;
+            uint minted = StaticGuidAllocator.Allocate(e.Landblock, Used(e.Landblock));
+            e.Guid = minted;
+            if (sourceOutdoor.TryGetValue(e, out var op)) { op.Guid = minted; mutatedOutdoor = true; }
+            if (sourceDungeon.TryGetValue(e, out var dp)) {
+                dp.Guid = minted;
+                if (dungeonByPlacement.TryGetValue(dp, out var dng)) mutatedDungeonDocs.Add(dng);
+            }
+        }
+
+        // Persist the minted addressable keys so they're stable across sessions/re-exports: outdoor
+        // placements ride the project JSON (project.Save), dungeon placements ride their document
+        // (ForceSave raises the Update event the DocumentManager batch-persists).
+        if (mutatedOutdoor) project.Save();
+        foreach (var dng in mutatedDungeonDocs) dng.ForceSave();
+    }
+
+    /// <summary>Maps each dungeon InstancePlacement back to its owning DungeonDocument (F167 persistence).</summary>
+    private static Dictionary<DungeonInstancePlacement, DungeonDocument> BuildDungeonDocLookup(
+        WorldBuilder.Shared.Models.Project project) {
+        var map = new Dictionary<DungeonInstancePlacement, DungeonDocument>(ReferenceEqualityComparer.Instance);
+        foreach (var (_, doc) in project.DocumentManager.ActiveDocs) {
+            if (doc is not DungeonDocument dng) continue;
+            foreach (var p in dng.InstancePlacements) map[p] = dng;
+        }
+        return map;
     }
 
     /// <summary>

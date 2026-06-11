@@ -145,6 +145,14 @@ namespace WorldBuilder.Shared.Documents {
             // naturally stays within each building. Using exclusion sets caused incorrect cell
             // omission that led to missing EnvCells and ACE server crashes.
             var survivingBuildings = new List<BuildingInfo>();
+            // EnvCell suffixes (low 16 bits) of buildings the user deleted this session. We do NOT
+            // decrement NumCells inline: ACE/retail enumerate interior cells as the CONTIGUOUS range
+            // 0x0100..0x0100+NumCells-1, so shrinking NumCells is only safe when the deleted cells
+            // are the TOPMOST slots of that range. Decrementing for a non-topmost delete would push
+            // surviving higher cells outside the enumerated range (interior stops loading) and let a
+            // new building reuse live cell IDs (DAT corruption). We resolve this AFTER the survivor
+            // loop, once every surviving building's cells are known. See the topmost check below.
+            var deletedBuildingCellSets = new List<HashSet<ushort>>();
             foreach (var building in lbi.Buildings) {
                 var buildingWorldPos = Offset(building.Frame.Origin, lbId);
 
@@ -205,16 +213,51 @@ namespace WorldBuilder.Shared.Documents {
                     survivingBuildings.Add(building);
                 }
                 else {
-                    // Building was deleted -- count its EnvCells for NumCells adjustment
+                    // Building was deleted -- record its EnvCells; the NumCells adjustment is
+                    // deferred until after the loop so we can verify the deleted cells are topmost.
                     var deletedCellIds = CollectBuildingCellIds(building, datwriter, lbId);
                     if (deletedCellIds.Count > 0) {
-                        _logger.LogInformation("[LBDoc]   Building 0x{Id:X8} DELETED — {CellCount} EnvCells orphaned (will be cleaned up in Phase 2)",
+                        _logger.LogInformation("[LBDoc]   Building 0x{Id:X8} DELETED — {CellCount} EnvCells",
                             building.ModelId, deletedCellIds.Count);
-                        lbi.NumCells -= (uint)deletedCellIds.Count;
+                        deletedBuildingCellSets.Add(deletedCellIds);
                     }
                     else {
                         _logger.LogInformation("[LBDoc]   Building 0x{Id:X8} DELETED (no EnvCells)", building.ModelId);
                     }
+                }
+            }
+
+            // Resolve the NumCells adjustment for deleted buildings. We may ONLY shrink NumCells when
+            // the deleted cells collectively occupy the TOP of the 0x0100..0x0100+NumCells-1 range,
+            // because we do not physically renumber surviving cells. If any surviving building's cell
+            // sits at or above the would-be new ceiling, shrinking would orphan it outside the
+            // enumerated range AND let a later building overwrite a live cell — so we refuse and keep
+            // NumCells unchanged (leaving the deleted records harmlessly inside the range).
+            int totalDeletedCells = 0;
+            foreach (var set in deletedBuildingCellSets) totalDeletedCells += set.Count;
+            if (totalDeletedCells > 0) {
+                // Highest EnvCell suffix still owned by a surviving building.
+                ushort survivingMaxSuffix = 0;
+                bool anySurvivingCell = false;
+                foreach (var surviving in survivingBuildings) {
+                    foreach (var cellNum in CollectBuildingCellIds(surviving, datwriter, lbId)) {
+                        anySurvivingCell = true;
+                        if (cellNum > survivingMaxSuffix) survivingMaxSuffix = cellNum;
+                    }
+                }
+
+                // New ceiling (exclusive top) after dropping totalDeletedCells from the contiguous range.
+                long newCeilingExclusive = 0x0100L + ((long)originalNumCells - totalDeletedCells);
+                bool deletedAreTopmost = !anySurvivingCell || survivingMaxSuffix < newCeilingExclusive;
+
+                if (deletedAreTopmost && newCeilingExclusive >= 0x0100L) {
+                    lbi.NumCells = (uint)(originalNumCells - totalDeletedCells);
+                }
+                else {
+                    // Refuse: keep NumCells so surviving cells stay inside the enumerated range.
+                    _logger.LogWarning(
+                        "[LBDoc]   Refusing to shrink NumCells: deleted building(s) freed {Deleted} cell(s) but a surviving cell (0x{MaxSuffix:X4}) sits at/above the new ceiling 0x{Ceiling:X4} — deleted cells are NOT topmost. Keeping NumCells={NumCells} to avoid orphaning surviving interiors / corrupting live cells. Orphaned deleted cell records remain harmlessly in range.",
+                        totalDeletedCells, survivingMaxSuffix, (ushort)newCeilingExclusive, lbi.NumCells);
                 }
             }
 

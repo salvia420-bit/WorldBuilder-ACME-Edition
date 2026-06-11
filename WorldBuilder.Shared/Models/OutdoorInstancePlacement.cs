@@ -16,10 +16,15 @@ namespace WorldBuilder.Shared.Models {
         public float OriginX { get; set; }
         public float OriginY { get; set; }
         public float OriginZ { get; set; }
-        public float AnglesW { get; set; }
+        // F166: default orientation is the IDENTITY quaternion (w=1, x=y=z=0), NOT (w=0, z=1) which
+        // is a 180° rotation about +Z — that flip spawns every default-angle placement facing
+        // backwards in ACE. JSON-migration note: pre-F166 projects persisted AnglesZ=1/AnglesW=0 for
+        // default-angle placements; those rows will keep their stored (flipped) values on reload —
+        // re-add or re-set the angles to pick up identity.
+        public float AnglesW { get; set; } = 1f;
         public float AnglesX { get; set; }
         public float AnglesY { get; set; }
-        public float AnglesZ { get; set; } = 1f;
+        public float AnglesZ { get; set; }
 
         /// <summary>
         /// E1 (wave-2) PR3 — optional placement guid (the Option B / per-placement addressable key,

@@ -53,10 +53,12 @@ namespace WorldBuilder.Shared.Lib {
             ApplyPlanarUvIfNeeded(flatPos, flatUv, hadAnyVt);
 
             // Propagate per-face surface DIDs through the flattening (faces are 1:1).
-            // If usemtl was present, faceSurfaceDids[i] holds the DID for original face i.
+            // faceSurfaceDids has one entry per emitted triangle; 0 means "use the fallback DID".
             var flatSurfaceDids = new List<uint>(flatFaces.Count);
-            for (int i = 0; i < flatFaces.Count; i++)
-                flatSurfaceDids.Add(i < faceSurfaceDids.Count ? faceSurfaceDids[i] : surfaceDid);
+            for (int i = 0; i < flatFaces.Count; i++) {
+                uint did = i < faceSurfaceDids.Count ? faceSurfaceDids[i] : 0;
+                flatSurfaceDids.Add(did != 0 ? did : surfaceDid);
+            }
 
             try {
                 gfxObj = BuildGfxObj(gfxObjId, surfaceDid, flatPos, flatNorm, flatUv, flatFaces, flatSurfaceDids);
@@ -235,9 +237,22 @@ namespace WorldBuilder.Shared.Lib {
             out bool hadAnyVt,
             out string? error) {
 
-            positions = new List<Vector3>();
-            normals = new List<Vector3>();
-            texCoords = new List<Vector2>();
+            // Declaration buffers hold ONLY v/vn/vt records exactly as declared in the file.
+            // OBJ negative (relative) indices resolve against these declaration counts, so they
+            // must never be polluted with the synthetic per-triangle corner copies below.
+            var declPositions = new List<Vector3>();
+            var declNormals = new List<Vector3>();
+            var declTexCoords = new List<Vector2>();
+
+            // Expansion buffers accumulate the flattened triangle corners. The `triangles` list
+            // indexes into these, and these are what the importer consumes downstream.
+            var expandedPositions = new List<Vector3>();
+            var expandedNormals = new List<Vector3>();
+            var expandedTexCoords = new List<Vector2>();
+
+            positions = expandedPositions;
+            normals = expandedNormals;
+            texCoords = expandedTexCoords;
             triangles = new List<(int, int, int)>();
             faceSurfaceDids = new List<uint>();
             hadAnyVt = false;
@@ -265,20 +280,20 @@ namespace WorldBuilder.Shared.Lib {
                 if (line.StartsWith("v ", StringComparison.Ordinal)) {
                     var p = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
                     if (p.Length < 4) continue;
-                    positions.Add(new Vector3(
+                    declPositions.Add(new Vector3(
                         float.Parse(p[1], inv), float.Parse(p[2], inv), float.Parse(p[3], inv)));
                 }
                 else if (line.StartsWith("vn ", StringComparison.Ordinal)) {
                     var p = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
                     if (p.Length < 4) continue;
-                    normals.Add(Vector3.Normalize(new Vector3(
+                    declNormals.Add(Vector3.Normalize(new Vector3(
                         float.Parse(p[1], inv), float.Parse(p[2], inv), float.Parse(p[3], inv))));
                 }
                 else if (line.StartsWith("vt ", StringComparison.Ordinal)) {
                     var p = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
                     if (p.Length < 3) continue;
                     hadAnyVt = true;
-                    texCoords.Add(new Vector2(float.Parse(p[1], inv), float.Parse(p[2], inv)));
+                    declTexCoords.Add(new Vector2(float.Parse(p[1], inv), float.Parse(p[2], inv)));
                 }
                 else if (line.StartsWith("f ", StringComparison.Ordinal)) {
                     var p = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
@@ -287,50 +302,48 @@ namespace WorldBuilder.Shared.Lib {
                     var corners = new List<(int vi, int vti, int vni)>();
                     for (int i = 1; i < p.Length; i++) {
                         var part = p[i].Split('/');
-                        int vi = ParseObjIndex(part[0], positions.Count);
-                        int vti = part.Length > 1 && part[1].Length > 0 ? ParseObjIndex(part[1], texCoords.Count) : -1;
-                        int vni = part.Length > 2 && part[2].Length > 0 ? ParseObjIndex(part[2], normals.Count) : -1;
+                        int vi = ParseObjIndex(part[0], declPositions.Count);
+                        int vti = part.Length > 1 && part[1].Length > 0 ? ParseObjIndex(part[1], declTexCoords.Count) : -1;
+                        int vni = part.Length > 2 && part[2].Length > 0 ? ParseObjIndex(part[2], declNormals.Count) : -1;
                         corners.Add((vi, vti, vni));
                     }
 
                     if (corners.Count < 3) continue;
 
-                    var expandedPos = new List<Vector3>();
-                    var expandedNorm = new List<Vector3>();
-                    var expandedUv = new List<Vector2>();
+                    var cornerPos = new List<Vector3>();
+                    var cornerNorm = new List<Vector3>();
+                    var cornerUv = new List<Vector2>();
 
                     foreach (var (vi, vti, vni) in corners) {
-                        if (vi < 0 || vi >= positions.Count) {
+                        if (vi < 0 || vi >= declPositions.Count) {
                             error = "Face references invalid vertex index.";
                             return false;
                         }
-                        expandedPos.Add(positions[vi]);
-                        expandedNorm.Add(vni >= 0 && vni < normals.Count ? normals[vni] : Vector3.UnitY);
-                        expandedUv.Add(vti >= 0 && vti < texCoords.Count ? texCoords[vti] : Vector2.Zero);
+                        cornerPos.Add(declPositions[vi]);
+                        cornerNorm.Add(vni >= 0 && vni < declNormals.Count ? declNormals[vni] : Vector3.UnitY);
+                        cornerUv.Add(vti >= 0 && vti < declTexCoords.Count ? declTexCoords[vti] : Vector2.Zero);
                     }
 
-                    for (int k = 2; k < expandedPos.Count; k++) {
-                        int baseIdx = positions.Count;
-                        positions.Add(expandedPos[0]);
-                        positions.Add(expandedPos[k - 1]);
-                        positions.Add(expandedPos[k]);
-                        normals.Add(expandedNorm[0]);
-                        normals.Add(expandedNorm[k - 1]);
-                        normals.Add(expandedNorm[k]);
-                        texCoords.Add(expandedUv[0]);
-                        texCoords.Add(expandedUv[k - 1]);
-                        texCoords.Add(expandedUv[k]);
+                    for (int k = 2; k < cornerPos.Count; k++) {
+                        int baseIdx = expandedPositions.Count;
+                        expandedPositions.Add(cornerPos[0]);
+                        expandedPositions.Add(cornerPos[k - 1]);
+                        expandedPositions.Add(cornerPos[k]);
+                        expandedNormals.Add(cornerNorm[0]);
+                        expandedNormals.Add(cornerNorm[k - 1]);
+                        expandedNormals.Add(cornerNorm[k]);
+                        expandedTexCoords.Add(cornerUv[0]);
+                        expandedTexCoords.Add(cornerUv[k - 1]);
+                        expandedTexCoords.Add(cornerUv[k]);
                         triangles.Add((baseIdx, baseIdx + 1, baseIdx + 2));
-                        if (hasUsemtl)
-                            faceSurfaceDids.Add(currentSurfaceDid);
+                        // Append one entry per emitted triangle unconditionally so list positions
+                        // always correspond 1:1 with triangles; 0 means "use fallback" at consumption.
+                        faceSurfaceDids.Add(hasUsemtl && currentSurfaceDid != 0 ? currentSurfaceDid : 0);
                     }
                 }
             }
 
-            if (!hasUsemtl)
-                faceSurfaceDids.Clear();
-
-            if (positions.Count == 0) {
+            if (expandedPositions.Count == 0) {
                 error = "OBJ has no vertices.";
                 return false;
             }

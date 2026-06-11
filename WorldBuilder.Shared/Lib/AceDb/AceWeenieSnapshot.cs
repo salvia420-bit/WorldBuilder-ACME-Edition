@@ -44,13 +44,22 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         public uint WeenieType { get; set; }
         public DateTime? LastModified { get; set; }
 
-        public List<AceWeenieRowInt> Ints { get; } = new();
-        public List<AceWeenieRowInt64> Int64s { get; } = new();
-        public List<AceWeenieRowBool> Bools { get; } = new();
-        public List<AceWeenieRowFloat> Floats { get; } = new();
-        public List<AceWeenieRowString> Strings { get; } = new();
-        public List<AceWeenieRowDid> DataIds { get; } = new();
-        public List<AceWeenieRowIid> InstanceIds { get; } = new();
+        // NOTE: these MUST have setters. System.Text.Json ignores get-only collection
+        // properties unless JsonObjectCreationHandling.Populate is opted in; without a
+        // setter, weenie-save/weenie-insert would deserialize ZERO scalar rows and then
+        // wipe every scalar of the target weenie. (F233)
+        public List<AceWeenieRowInt> Ints { get; set; } = new();
+        public List<AceWeenieRowInt64> Int64s { get; set; } = new();
+        public List<AceWeenieRowBool> Bools { get; set; } = new();
+        public List<AceWeenieRowFloat> Floats { get; set; } = new();
+        public List<AceWeenieRowString> Strings { get; set; } = new();
+        public List<AceWeenieRowDid> DataIds { get; set; } = new();
+        public List<AceWeenieRowIid> InstanceIds { get; set; } = new();
+
+        /// <summary>True when every scalar list is empty (no int/int64/bool/float/string/did/iid rows).</summary>
+        public bool HasNoScalarRows =>
+            Ints.Count == 0 && Int64s.Count == 0 && Bools.Count == 0 && Floats.Count == 0
+            && Strings.Count == 0 && DataIds.Count == 0 && InstanceIds.Count == 0;
 
         public int SpellBookCount { get; set; }
         public int CreateListCount { get; set; }

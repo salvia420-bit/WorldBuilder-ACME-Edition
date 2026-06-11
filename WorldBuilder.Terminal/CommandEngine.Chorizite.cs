@@ -27,10 +27,13 @@ namespace WorldBuilder.Terminal;
 ///     vendored ACPlugin/API/WorldObjects/*.cs. Emit a JSON of the 24-class
 ///     hierarchy + ItemType/ObjectClass tags. The browser
 ///     plugins/world-objects/* skeleton consumes this directly.
-///   - <c>chorizite-hash-string</c> — the AC string-key hash (4-bit shift-fold,
-///     Windows-1252, 28-bit accumulator). Used as DAT EnumMapper / StringTable
-///     key. NOT the same as the packet checksum (Hash32). See the
-///     DatReaderWriter.Extensions reading guide §5 for why these are distinct.
+///   - <c>chorizite-hash-string</c> — the classic AC string-key PJW hash
+///     (Windows-1252; <c>result = c + (result &lt;&lt; 4)</c> per sbyte with a
+///     conditional high-nibble fold on the 0xF0000000 trigger, masked to
+///     28 bits). Used as the DAT EnumMapper / StringTable key. NOT the same
+///     as the packet checksum (Hash32). See the DatReaderWriter.Extensions
+///     reading guide §5 for why these are distinct, and ChoriziteHashString's
+///     doc-comment for the fold-mask divergence from the vendored extension.
 ///   - <c>chorizite-dump-opcodes</c> — file-system parse the
 ///     <c>Chorizite.ACProtocol/Enums/{C2S,S2C}MessageType.generated.cs</c> and
 ///     <c>{GameAction,GameEvent}Type.generated.cs</c> + <c>GameMessageGroup</c>
@@ -350,11 +353,29 @@ public partial class CommandEngine {
     public sealed record ChoriziteHashResult(string Input, string HashHex, uint HashDecimal);
 
     /// <summary>
-    /// AC string-key hash (per
-    /// <c>Chorizite/DatReaderWriter.Extensions/StringHashExtensions.cs</c>).
-    /// Used as the key for StringTable / EnumMapper / DBObj name lookups.
-    /// Input is treated as Windows-1252; each byte XORs into a 28-bit
-    /// accumulator with a 4-bit rotate-fold.
+    /// AC string-key hash — the classic PJW string hash used as the key for
+    /// StringTable / EnumMapper / DBObj name lookups. Literal port of
+    /// <c>Chorizite/DatReaderWriter.Extensions/StringHashExtensions.cs</c>
+    /// (<c>ComputeHash</c>): long accumulator, input encoded as Windows-1252,
+    /// each <c>sbyte</c> added with <c>result = c + (result &lt;&lt; 4)</c>, with an
+    /// in-loop conditional 4-bit fold, and a final <c>(uint)</c> cast.
+    ///
+    /// DIVERGENCE FROM THE VENDORED SOURCE: the vendored
+    /// <c>StringHashExtensions.ComputeHash</c> triggers its fold on
+    /// <c>(result &amp; 0xF0000) != 0</c> (bit 16). That is an upstream bug — it
+    /// folds far too early and produces hashes that do not match the keys
+    /// stored in the DATs. The canonical AC hash (and DRW's own
+    /// <c>StringBase.GetHashCode</c>, the documented classic AC PJW form,
+    /// complete with the <c>0xFFFFFFFF -&gt; -2</c> guard) triggers on the high
+    /// nibble <c>(hash &amp; 0xF0000000) != 0</c> (bit 28). We use the
+    /// DAT-validated bit-28 trigger here. The two forms agree for any input
+    /// of &lt;= 2 ASCII chars and for typical AC key strings, but diverge once
+    /// the accumulator crosses bit 16 short of bit 28. Verified against the
+    /// known oracle values: "Strength" -&gt; 0x0B8C4B08, "BootSpot" -&gt;
+    /// 0x0669A3F4 (both reproduced by this bit-28 form; the rotate-XOR form
+    /// previously here gave the wrong 0x0343802D / 0x09814680), and against
+    /// real keys in client_local_English.dat StringTable 0x23000001
+    /// (e.g. 0x052BA517 is a 28-bit key, consistent with this fold).
     ///
     /// NOT the same as <c>Hash32::compute</c> in holtburger_protocol::crypto
     /// (that's the packet checksum). See DatReaderWriter.Extensions
@@ -370,13 +391,17 @@ public partial class CommandEngine {
         }
         var encoding = Encoding.GetEncoding(1252);
         var bytes = encoding.GetBytes(input);
-        uint h = 0;
+        // Literal port of StringHashExtensions.ComputeHash, but with the
+        // DAT-validated 0xF0000000 fold trigger (see <summary> divergence note).
+        long result = 0;
         foreach (var b in bytes) {
-            // Sign-extend the byte to int (mirrors the C# `sbyte` cast behavior).
-            int signed = (sbyte)b;
-            h = (uint)(((h << 4) | (h >> 28)) ^ (uint)signed);
+            // Windows-1252 byte added as a signed char (mirrors `foreach (sbyte c in str)`).
+            sbyte c = (sbyte)b;
+            result = c + (result << 4);
+            if ((result & 0xF0000000) != 0)
+                result = (result ^ ((result & 0xF0000000) >> 24)) & 0x0FFFFFFF;
         }
-        h &= 0x0FFFFFFF;
+        uint h = (uint)result;
         return new ChoriziteHashResult(input, $"0x{h:X8}", h);
     }
 

@@ -445,11 +445,34 @@ namespace WorldBuilder.Shared.Lib {
             int iteration,
             ILogger? logger) {
 
-            // Build cell ID remap table: originalCellId -> newCellId
+            // Build cell ID remap table: originalCellId -> newCellId.
+            //
+            // New EnvCell IDs MUST be allocated strictly above every cell already present in the
+            // landblock. Allocating naively from 0x0100 + currentNumCells assumes the existing cells
+            // exactly fill the contiguous range 0x0100..0x0100+NumCells-1. If NumCells ever
+            // understates the true highest occupied suffix (e.g. a non-topmost building was deleted
+            // and NumCells was kept, leaving orphaned records, or a stale/partial DAT), that formula
+            // hands back IDs that OVERWRITE live EnvCells — direct data corruption. So we seed from
+            // 0x0100 + currentNumCells and then skip past any cell ID that is already occupied in the
+            // DAT, guaranteeing we never reuse a live cell, and we hard-cap at the 0xFFFD ceiling
+            // (0xFFFE = LandBlockInfo, 0xFFFF = LandBlock are reserved).
+            const ushort MaxEnvCellSuffix = 0xFFFD;
             var remap = new Dictionary<ushort, ushort>(blueprint.Cells.Count);
-            ushort nextCellId = (ushort)(currentNumCells + 0x0100);
+            uint nextCellId = (uint)(currentNumCells + 0x0100);
             foreach (var cell in blueprint.Cells) {
-                remap[cell.OriginalCellId] = nextCellId;
+                // Advance past any already-occupied cell so we never clobber a live EnvCell.
+                while (nextCellId <= MaxEnvCellSuffix &&
+                       dats.TryGet<EnvCell>((lbId << 16) | nextCellId, out _)) {
+                    nextCellId++;
+                }
+                if (nextCellId > MaxEnvCellSuffix) {
+                    logger?.LogError(
+                        "[Blueprint] Cannot instantiate building 0x{ModelId:X8} in landblock 0x{LbId:X4}: ran out of EnvCell IDs (next 0x{Next:X4} exceeds ceiling 0x{Ceiling:X4}).",
+                        blueprint.ModelId, (ushort)lbId, nextCellId, MaxEnvCellSuffix);
+                    throw new InvalidOperationException(
+                        $"InstantiateBlueprint: EnvCell ID 0x{nextCellId:X4} for building 0x{blueprint.ModelId:X8} in landblock 0x{(ushort)lbId:X4} exceeds the 0x{MaxEnvCellSuffix:X4} ceiling — too many interior cells in this landblock.");
+                }
+                remap[cell.OriginalCellId] = (ushort)nextCellId;
                 nextCellId++;
             }
 

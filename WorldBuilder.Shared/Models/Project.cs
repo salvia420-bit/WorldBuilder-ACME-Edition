@@ -179,7 +179,14 @@ namespace WorldBuilder.Shared.Models {
         [JsonIgnore]
         public Action<string, IReadOnlyList<DungeonDocument>>? OnExportDungeonInstances { get; set; }
 
-        public bool ExportDats(string exportDirectory, int portalIteration, Action<string>? onProgress = null) {
+        public ExportDatsResult ExportDats(string exportDirectory, int portalIteration, Action<string>? onProgress = null) {
+            // Failure counters — every sub-save (terrain TrySave + per-document SaveToDats) is
+            // checked so the caller can distinguish a clean export from a partial one. See
+            // ExportDatsResult; the method returns Success=false when ANY write failed.
+            int terrainSaveFailures = 0;
+            int docSaveFailures = 0;
+            int docsSaved = 0;
+
             if (!Directory.Exists(exportDirectory)) {
                 Directory.CreateDirectory(exportDirectory);
             }
@@ -325,7 +332,9 @@ namespace WorldBuilder.Shared.Models {
                 }
 
                 if (!writer.TrySave(lb, portalIteration)) {
-                    // Log error? Project doesn't store logger directly but could throw or ignore.
+                    // Terrain LandBlock write failed — record it so the export reports partial.
+                    terrainSaveFailures++;
+                    Console.Error.WriteLine($"[Export] FAILED to save LandBlock 0x{lbId:X8} terrain.");
                 }
             }
 
@@ -373,7 +382,10 @@ namespace WorldBuilder.Shared.Models {
                     }
 
                     if (anyMoved) {
-                        writer.TrySave(lbi, portalIteration);
+                        if (!writer.TrySave(lbi, portalIteration)) {
+                            terrainSaveFailures++;
+                            Console.Error.WriteLine($"[Export] FAILED to save repositioned LandBlockInfo 0x{infoId:X8}.");
+                        }
                         repoCount++;
                     }
                 }
@@ -483,7 +495,12 @@ namespace WorldBuilder.Shared.Models {
                     // Streamed-in but unmodified docs must not overwrite the base DAT content
                     // (which may have been repositioned above).
                     if (!lbDoc.IsDirty) continue;
-                    lbDoc.SaveToDats(writer, portalIteration);
+                    if (lbDoc.SaveToDats(writer, portalIteration).GetAwaiter().GetResult())
+                        docsSaved++;
+                    else {
+                        docSaveFailures++;
+                        Console.Error.WriteLine($"[Export] FAILED to save landblock document '{docId}'.");
+                    }
                     lbDocsSaved++;
 
                     // Release the document from cache to free memory
@@ -504,13 +521,28 @@ namespace WorldBuilder.Shared.Models {
             // Process non-landblock documents normally
             foreach (var (docId, doc) in DocumentManager.ActiveDocs) {
                 if (doc is DungeonDocument dungeonDoc) {
-                    dungeonDoc.SaveToDats(writer, portalIteration);
+                    if (dungeonDoc.SaveToDats(writer, portalIteration).GetAwaiter().GetResult())
+                        docsSaved++;
+                    else {
+                        docSaveFailures++;
+                        Console.Error.WriteLine($"[Export] FAILED to save dungeon document '{docId}'.");
+                    }
                 }
                 else if (doc is PortalDatDocument portalDoc) {
-                    portalDoc.SaveToDats(writer, portalIteration);
+                    if (portalDoc.SaveToDats(writer, portalIteration).GetAwaiter().GetResult())
+                        docsSaved++;
+                    else {
+                        docSaveFailures++;
+                        Console.Error.WriteLine($"[Export] FAILED to save portal document '{docId}'.");
+                    }
                 }
                 else if (doc is LayoutDatDocument layoutDoc) {
-                    layoutDoc.SaveToDats(writer, portalIteration);
+                    if (layoutDoc.SaveToDats(writer, portalIteration).GetAwaiter().GetResult())
+                        docsSaved++;
+                    else {
+                        docSaveFailures++;
+                        Console.Error.WriteLine($"[Export] FAILED to save layout document '{docId}'.");
+                    }
                 }
             }
 
@@ -572,7 +604,18 @@ namespace WorldBuilder.Shared.Models {
                 }
             }
 
-            return true;
+            int totalFailures = terrainSaveFailures + docSaveFailures;
+            if (totalFailures > 0) {
+                Console.Error.WriteLine(
+                    $"[Export] Completed with {totalFailures} write failure(s): " +
+                    $"{terrainSaveFailures} terrain, {docSaveFailures} document. Export is PARTIAL.");
+            }
+            return new ExportDatsResult(
+                Success: totalFailures == 0,
+                TerrainWritten: terrainWritten,
+                TerrainSaveFailures: terrainSaveFailures,
+                DocsSaved: docsSaved,
+                DocSaveFailures: docSaveFailures);
         }
 
         private void CollectExportLayers(IEnumerable<TerrainLayerBase> items, List<TerrainLayer> result) {
@@ -592,5 +635,23 @@ namespace WorldBuilder.Shared.Models {
             DatReaderWriter?.Dispose();
         }
     }
+
+    /// <summary>
+    /// Outcome of <see cref="Project.ExportDats(string, int, System.Action{string})"/>. The
+    /// export writes DAT bytes for the highest-stakes command in the tool, so callers MUST be able
+    /// to tell a fully-clean export from one where some terrain/EnvCell/LBI/dungeon/portal write
+    /// silently failed. <see cref="Success"/> is true only when there were zero failures.
+    /// </summary>
+    /// <param name="Success">True iff <see cref="TerrainSaveFailures"/> and <see cref="DocSaveFailures"/> are both zero.</param>
+    /// <param name="TerrainWritten">Number of terrain landblocks processed for writing.</param>
+    /// <param name="TerrainSaveFailures">Number of LandBlock/LBI terrain writes that returned failure.</param>
+    /// <param name="DocsSaved">Number of documents (landblock/dungeon/portal/layout) whose SaveToDats succeeded.</param>
+    /// <param name="DocSaveFailures">Number of documents whose SaveToDats returned false.</param>
+    public record ExportDatsResult(
+        bool Success,
+        int TerrainWritten,
+        int TerrainSaveFailures,
+        int DocsSaved,
+        int DocSaveFailures);
 }
 

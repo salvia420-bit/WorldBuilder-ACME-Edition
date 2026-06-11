@@ -456,15 +456,28 @@ public partial class CommandEngine {
         var aType = a.GetType();
         var bType = b.GetType();
         float Lerp(float x, float y) => x + (y - x) * u;
+        // Shortest-arc heading lerp — verbatim port of the FIXED
+        // sky.rs::lerp_angle_radians (sky.rs:996-1004, fixed 2026-05-20):
+        // normalize the inter-keyframe delta into (-180, 180] before
+        // interpolating so the lerp picks the shorter arc around the unit
+        // circle (period 360 — inputs are degrees). Reduces to plain
+        // linear `a + delta*u` when |b - a| <= 180. Without this, keyframes
+        // straddling the 0/360 wrap (dusk→midnight→dawn DayGroups) sweep
+        // the long way around, up to ~180° off the runtime. DirPitch stays
+        // plain linear (pitches never cross a boundary).
+        float LerpHeading(float aHeading, float bHeading) {
+            float delta = bHeading - aHeading;
+            if (delta > 180f) delta -= 360f;
+            else if (delta < -180f) delta += 360f;
+            return aHeading + delta * u;
+        }
         return new SkyStateRaw(
             DirColorArgb: LerpArgb(ExtractArgb(GetFieldValue(a, aType, "DirColor")),
                                    ExtractArgb(GetFieldValue(b, bType, "DirColor")), u),
             DirBright: Lerp(ToSingle(GetFieldValue(a, aType, "DirBright")),
                             ToSingle(GetFieldValue(b, bType, "DirBright"))),
-            // Linear lerp on heading (NOT shortest-arc) — sky headings
-            // progress monotonically, per sky.rs::lerp_angle_radians doc.
-            DirHeading: Lerp(ToSingle(GetFieldValue(a, aType, "DirHeading")),
-                             ToSingle(GetFieldValue(b, bType, "DirHeading"))),
+            DirHeading: LerpHeading(ToSingle(GetFieldValue(a, aType, "DirHeading")),
+                                    ToSingle(GetFieldValue(b, bType, "DirHeading"))),
             DirPitch: Lerp(ToSingle(GetFieldValue(a, aType, "DirPitch")),
                            ToSingle(GetFieldValue(b, bType, "DirPitch"))),
             AmbColorArgb: LerpArgb(ExtractArgb(GetFieldValue(a, aType, "AmbColor")),

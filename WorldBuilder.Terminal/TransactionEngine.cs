@@ -32,7 +32,14 @@ internal sealed class TransactionEngine {
         "raise", "lower", "smooth", "set-height", "paint", "fill",
         "road", "paste-stamp",
         "generate-dungeon",
-        "placement-add-outdoor", "placement-add-dungeon", "placement-remove",
+        // F215: placement-add-outdoor / -add-dungeon / -remove are NOT transactable. They have no
+        // snapshot-scope coverage (Project.OutdoorInstancePlacements is not a Document, and the
+        // placement-targeted dungeon doc is not snapshotted), AND the outdoor variants call
+        // project.Save() mid-batch — writing the project file to disk immediately — so a later op
+        // failing would report rolled-back while the placement persists in memory AND on disk. Until
+        // they have real commit-or-undo coverage they stay OFF the allow-list to keep the transact
+        // "never half-applied" contract honest. (Re-add here once snapshot coverage + deferred-Save
+        // land — see F215.)
     };
 
     // Ops that mutate the singleton TerrainDocument ("terrain").
@@ -130,6 +137,12 @@ internal sealed class TransactionEngine {
             .Any(o => WideLandblockOps.Contains(GetCommandName(o)));
 
         SnapshotScope(ops, dm, snapshots, maybeCreatedIds, wideLandblockMode);
+
+        // F216: any doc materialized from storage during snapshot (existed-but-unloaded) is now in
+        // ActiveDocs. It must NOT be misclassified as created-by-batch on commit/rollback — every doc
+        // we captured a pre-state snapshot for already existed, so fold the snapshot keys into the
+        // preexisting set (which was captured before SnapshotScope ran).
+        preexistingDocIds.UnionWith(snapshots.Keys);
 
         // ── Run ops sequentially, halting on first failure. ─────────────────
         var outcomes = new List<TransactOpOutcome>(ops.Count);
@@ -334,10 +347,18 @@ internal sealed class TransactionEngine {
             }
         }
 
+        // 'terrain' is the singleton TerrainDocument — always present once a project is loaded, so the
+        // in-memory snapshot is sufficient (no lazy-create case to distinguish).
         if (needsTerrain) TrySnapshot(dm, "terrain", snapshots);
 
+        // F216: a landblock/dungeon doc that the batch targets but that is NOT in ActiveDocs would
+        // otherwise be neither snapshotted (so rollback can't restore it) nor tracked as created (so
+        // rollback can't delete it, and commit never journals it for tile invalidation / transact-diff).
+        // For each such key, pre-materialize the doc and classify it:
+        //   • existed in storage but was unloaded → snapshot it (rollback restores its pre-state)
+        //   • brand new (no storage row) → record in maybeCreatedIds (rollback deletes, commit journals)
         foreach (var k in landblockKeys) {
-            TrySnapshot(dm, $"landblock_{k:X4}", snapshots);
+            SnapshotOrTrackCreate(dm, $"landblock_{k:X4}", snapshots, maybeCreatedIds);
         }
 
         if (wideLandblockMode) {
@@ -351,13 +372,7 @@ internal sealed class TransactionEngine {
         }
 
         foreach (var k in dungeonKeys) {
-            var docId = $"dungeon_{k:X4}";
-            if (dm.ActiveDocs.TryGetValue(docId, out var doc)) {
-                snapshots[docId] = doc.SaveToProjection();
-            } else {
-                // Doc doesn't exist yet — the op will create it. Track for rollback-deletion.
-                maybeCreatedIds.Add(docId);
-            }
+            SnapshotOrTrackCreate(dm, $"dungeon_{k:X4}", snapshots, maybeCreatedIds);
         }
     }
 
@@ -366,11 +381,49 @@ internal sealed class TransactionEngine {
         if (dm.ActiveDocs.TryGetValue(docId, out var doc)) {
             snapshots[docId] = doc.SaveToProjection();
         }
-        // v1 limitation: if a doc isn't yet loaded into ActiveDocs, we don't snapshot it
-        // here. Rollback is best-effort for ops that touch unloaded docs — the realistic
-        // agent loop loads landblocks via inspect/validate before mutating, so this case
-        // is rare. To get strict restore in that case, the caller should pre-touch the
-        // doc (e.g., a list-objects op) before the mutating op.
+    }
+
+    /// <summary>
+    /// F216 — snapshot a targeted doc that may not be in ActiveDocs yet. If it's already active,
+    /// snapshot its live state. Otherwise probe storage: a doc that EXISTS in storage but is unloaded
+    /// is materialized + snapshotted (rollback restores it); a doc with NO storage row is treated as
+    /// created-by-batch (recorded in <paramref name="maybeCreatedIds"/> so rollback deletes it and
+    /// commit lists it in documentsCreated). Either way the journal sees the doc so tile invalidation
+    /// and transact-diff have its pre/post bytes.
+    /// </summary>
+    private static void SnapshotOrTrackCreate(DocumentManager dm, string docId,
+        Dictionary<string, byte[]> snapshots, HashSet<string> maybeCreatedIds) {
+        if (snapshots.ContainsKey(docId) || maybeCreatedIds.Contains(docId)) return;
+
+        if (dm.ActiveDocs.TryGetValue(docId, out var active)) {
+            snapshots[docId] = active.SaveToProjection();
+            return;
+        }
+
+        // Not loaded — does it exist on disk? The dispatch loop is single-threaded so blocking here
+        // is safe. A storage lookup failure is treated as "brand new" (the conservative branch: the op
+        // creates it, rollback deletes it) rather than silently dropping the doc from the journal.
+        bool existsInStorage;
+        try {
+            existsInStorage = dm.DocumentStorageService.GetDocumentAsync(docId).GetAwaiter().GetResult() != null;
+        } catch {
+            existsInStorage = false;
+        }
+
+        if (existsInStorage) {
+            // Existed-but-unloaded: materialize so we can snapshot the real pre-state for restore.
+            var doc = docId.StartsWith("dungeon_", StringComparison.Ordinal)
+                ? (BaseDocument?)dm.GetOrCreateDocumentAsync<DungeonDocument>(docId).GetAwaiter().GetResult()
+                : dm.GetOrCreateDocumentAsync<LandblockDocument>(docId).GetAwaiter().GetResult();
+            if (doc != null) {
+                snapshots[docId] = doc.SaveToProjection();
+                return;
+            }
+            // Materialization failed — fall through and track as created so rollback at least deletes
+            // whatever the op produced rather than leaving an unjournaled mutation.
+        }
+
+        maybeCreatedIds.Add(docId);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -415,7 +468,7 @@ internal sealed class TransactionEngine {
             return reports;
         }
 
-        // Default: "auto" — touched LBs (validate-all) + right/top neighbors (terrain only).
+        // Default: "auto" — touched LBs (validate-all) + LEFT/BOTTOM neighbors (terrain only).
         var validatedKeys = new HashSet<ushort>();
         foreach (var lbKey in touchedLbKeys) {
             uint lbX = (uint)((lbKey >> 8) & 0xFF);
@@ -423,18 +476,22 @@ internal sealed class TransactionEngine {
             reports.Add(engine.ValidateAll(lbX, lbY));
             validatedKeys.Add(lbKey);
         }
-        // Right/top neighbors get terrain-only validation to catch TRN005 edge mismatches
-        // without paying the full validate-all cost on landblocks the batch didn't touch.
-        // LB coords are 0..255 inclusive, so the neighbor exists iff the coord stays ≤ 255.
+        // F217: seam ownership is directional. CheckEdgeStitching only compares a validated LB's OWN
+        // right edge (x=8) vs lbX+1 and top edge (y=8) vs lbY+1. The touched LB's own ValidateAll
+        // already covers its right/top seams, so validating the right/top NEIGHBORS would re-check
+        // seams the batch did not touch (contributing nothing) while MISSING the seam an edit to the
+        // touched LB's x=0/y=0 edge breaks — that seam belongs to the LEFT (lbX-1) / BOTTOM (lbY-1)
+        // neighbor, whose own right/top check covers the seam back to the touched LB. So validate the
+        // LEFT and BOTTOM neighbors (skipping coords that underflow below 0).
         foreach (var lbKey in touchedLbKeys) {
             uint lbX = (uint)((lbKey >> 8) & 0xFF);
             uint lbY = (uint)(lbKey & 0xFF);
-            foreach (var (nx, ny) in new (uint, uint)[] { (lbX + 1, lbY), (lbX, lbY + 1) }) {
-                if (nx > 0xFF || ny > 0xFF) continue;
-                ushort neighborKey = (ushort)((nx << 8) | ny);
+            foreach (var (nx, ny) in new (long, long)[] { (lbX - 1L, (long)lbY), ((long)lbX, lbY - 1L) }) {
+                if (nx < 0 || ny < 0) continue;
+                ushort neighborKey = (ushort)(((uint)nx << 8) | (uint)ny);
                 if (validatedKeys.Contains(neighborKey)) continue;
                 try {
-                    reports.Add(engine.ValidateTerrain(nx, ny));
+                    reports.Add(engine.ValidateTerrain((uint)nx, (uint)ny));
                     // Track so a second touched LB sharing this neighbor doesn't re-validate it.
                     validatedKeys.Add(neighborKey);
                 } catch {

@@ -1328,8 +1328,14 @@ public class JsonCommandProcessor {
 
         if (!reposition) {
             var r = _engine.Export(dir, iteration);
+            // success:false + counts replaces the old unconditional true so a JSON caller (or the
+            // transplant pipeline) can detect a PARTIAL export where some DAT writes failed.
             return Serialize(new { success = r.Success, command = "export",
-                directory = r.Directory, iteration = r.Iteration });
+                directory = r.Directory, iteration = r.Iteration,
+                terrainWritten = r.TerrainWritten,
+                terrainSaveFailures = r.TerrainSaveFailures,
+                docsSaved = r.DocsSaved,
+                docSaveFailures = r.DocSaveFailures });
         }
 
         var rr = _engine.ExportWithRepositionAsync(dir, iteration).GetAwaiter().GetResult();
@@ -1417,6 +1423,15 @@ public class JsonCommandProcessor {
 
     private string CmdFill(System.Text.Json.Nodes.JsonNode node) {
         float x = F(node, "x"), y = F(node, "y");
+        // World bounds: landblock X/Y indices are 0..254, each 192 units wide, so
+        // valid world coordinates are [0, 255*192). Without this guard a negative or
+        // out-of-range seed wraps when cast to uint and lands the flood-fill in an
+        // unrelated landblock (e.g. x=-500 -> uint 4294967293 -> LB row 0xFD).
+        const float worldMax = 255f * 192f; // 48960
+        if (x < 0f || x >= worldMax)
+            throw new ArgumentException($"'x' must be within [0, {worldMax}); got {x}");
+        if (y < 0f || y >= worldMax)
+            throw new ArgumentException($"'y' must be within [0, {worldMax}); got {y}");
         byte newType = ByteInRange(node, "type");
         var r = _engine.Fill(x, y, newType);
         return Serialize(new { success = r.Success, command = "fill",
@@ -2312,7 +2327,17 @@ public class JsonCommandProcessor {
         var sourceEnvStr = node["sourceEnvId"]?.GetValue<string>() ?? throw new ArgumentException("Missing 'sourceEnvId'");
         ushort sourceEnvId = ushort.Parse(sourceEnvStr.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
         ushort sourceCellStruct = node["sourceCellStruct"]?.GetValue<ushort>() ?? 0;
-        var r = _engine.SnapPortal(lbX, lbY, targetCellNum, targetPolyId, sourceEnvId, sourceCellStruct);
+
+        // Optional explicit surface list; when omitted the new cell inherits the
+        // target cell's surfaces (so it is not invisible in-game).
+        List<ushort>? surfaceOverride = null;
+        if (node["surfaces"] is System.Text.Json.Nodes.JsonArray surfArr) {
+            surfaceOverride = new List<ushort>(surfArr.Count);
+            foreach (var s in surfArr)
+                if (s != null) surfaceOverride.Add(s.GetValue<ushort>());
+        }
+
+        var r = _engine.SnapPortal(lbX, lbY, targetCellNum, targetPolyId, sourceEnvId, sourceCellStruct, surfaceOverride);
         return Serialize(new { success = true, command = "snap-portal",
             landblock = $"0x{r.LbKey:X4}",
             targetCellNumber = $"0x{r.TargetCellNumber:X4}",
@@ -2322,7 +2347,9 @@ public class JsonCommandProcessor {
             sourceCellStructure = r.SourceCellStructure,
             newOrigin = new { x = Math.Round(r.NewOrigin.X, 2), y = Math.Round(r.NewOrigin.Y, 2), z = Math.Round(r.NewOrigin.Z, 2) },
             newOrientation = FmtQ(r.NewOrientation),
-            portalCount = r.PortalCount });
+            portalCount = r.PortalCount,
+            surfaceCount = r.SurfaceCount,
+            warning = r.Warning });
     }
 
     // ════════════════════════════════════════════════════
@@ -2369,13 +2396,13 @@ public class JsonCommandProcessor {
             new { name = "query-ontology",   args = "category?, scale?, keyword?, objectId?, limit?", description = "Query the ontology index" },
             new { name = "ontology-stats",   args = "",                                      description = "Ontology category/scale breakdown" },
             new { name = "paste-stamp",      args = "srcMinX, srcMinY, srcMaxX, srcMaxY, destX, destY, includeObjects?, blendEdges?, zOffset?", description = "Copy & paste terrain" },
-            new { name = "snap-portal",      args = "lbX, lbY, targetCellNumber, targetPortalPolyId, sourceEnvId, sourceCellStruct", description = "Snap dungeon cell to portal" },
+            new { name = "snap-portal",      args = "lbX, lbY, targetCellNumber, targetPortalPolyId, sourceEnvId, sourceCellStruct, surfaces?", description = "Snap dungeon cell to portal" },
             new { name = "get-bulk-heightmap", args = "minX, minY, maxX, maxY",               description = "Multi-landblock heightmaps in one call" },
             new { name = "get-object-detail", args = "objectId",                              description = "DAT model geometry & ontology info" },
             new { name = "diff-terrain",     args = "lbX, lbY",                              description = "Compare current terrain vs base DAT" },
             new { name = "get-terrain-layers", args = "lbX, lbY",                              description = "Terrain type distribution per landblock" },
             new { name = "export-textures",  args = "outputDir, minId?, maxId?",               description = "Export RenderSurface textures to PNG" },
-            new { name = "import-texture",   args = "textureId, imagePath",                    description = "Replace a texture from image file" },
+            new { name = "import-texture",   args = "textureId, imagePath",                    description = "Replace a texture from image file (IMMEDIATE + PERMANENT in-place write to the base client_portal.dat; not undoable. Use import-render-surface for a deferred, export-time replacement)" },
             new { name = "clone-dat",        args = "outputPath",                              description = "Clone portal DAT to a new file" },
             new { name = "defragment-dat",   args = "datType, outputPath",                     description = "Defragment DAT (portal/cell/local)" },
             new { name = "export-ontology",  args = "outputPath",                              description = "Export ontology to CSV" },
@@ -2385,7 +2412,7 @@ public class JsonCommandProcessor {
             new { name = "enrich-ontology",  args = "",                                      description = "Enrich ontology with schema names & creature families" },
             new { name = "import-catalog",   args = "indexPath",                                description = "Import ACViewer catalog into ontology" },
             new { name = "classify-ontology", args = "",                                      description = "Auto-tag ontology from StringTable names" },
-            new { name = "enrich-materials", args = "",                                       description = "Tag materials from texture analysis" },
+            new { name = "enrich-materials", args = "",                                       description = "Tag entries that reference Surface (0x08) records with 'textured'" },
             new { name = "ingest-weenies",  args = "lsdPath, outputPath?",                     description = "Batch-extract weenie data to summary file" },
             new { name = "enrich-weenies",  args = "summaryPath",                               description = "Merge weenie data into live ontology" },
             new { name = "enrich-canonical", args = "path",                                      description = "Merge canonical enrichment (architecture, biome, behavior)" },
@@ -2404,7 +2431,7 @@ public class JsonCommandProcessor {
             new { name = "ace-db-ingest-spawns",    args = "out?",                              description = "Pull every landblock_instance row → ace_spawn_records.jsonl (SpawnRecord shape)" },
             new { name = "ace-db-ingest-weenie-index", args = "out?",                           description = "Pull canonical wcid → identity (setup, name, type) → weenie_index.jsonl" },
             new { name = "compare-creatures-to-retail", args = "",                              description = "Jaccard similarity of project's spawn gazetteer vs. ACE creature/NPC/housing rosters" },
-            new { name = "benchmark",        args = "",                                         description = "Run speed test suite (terrain, objects, validation, bulk)" },
+            new { name = "benchmark",        args = "",                                         description = "Run speed test suite (terrain, objects, validation, bulk). Non-destructive: snapshots the first 50 populated landblocks and restores them afterward (landblocksRestored). Reports failedObjectPlacements (excluded from opsPerSec)." },
             new { name = "set-landblock-heightmap", args = "lbX, lbY, heights",                  description = "Set all 81 heights in one call" },
             new { name = "set-landblock-terrain", args = "lbX, lbY, types",                      description = "Set all 81 terrain types in one call" },
             new { name = "import-heightmap", args = "imagePath, startLbX, startLbY, lbCountX, lbCountY, apply?", description = "Import grayscale+colormap PNG; height from luminance, type from nearest texture color" },
@@ -2527,7 +2554,7 @@ public class JsonCommandProcessor {
         var r = _engine.ImportTexture(textureId, imagePath);
         return Serialize(new { success = r.Success, command = "import-texture",
             textureId = $"0x{r.TextureId:X8}", inputFile = r.InputFile,
-            error = r.Error });
+            mode = r.Mode, error = r.Error });
     }
 
     private string CmdCloneDat(System.Text.Json.Nodes.JsonNode node) {
@@ -2864,7 +2891,9 @@ public class JsonCommandProcessor {
                 estimatedObjectPassSeconds = r.Extrapolation.EstimatedObjectPassSeconds,
                 estimatedObjectPassFormatted = r.Extrapolation.EstimatedObjectPassFormatted,
                 feasibility = r.Extrapolation.Feasibility
-            }
+            },
+            failedObjectPlacements = r.FailedObjectPlacements,
+            landblocksRestored = r.LandblocksRestored
         });
     }
 
@@ -2932,8 +2961,17 @@ public class JsonCommandProcessor {
     }
 
     private string CmdPlacementList(System.Text.Json.Nodes.JsonNode node) {
-        int? lbX = node["lbX"]?.GetValue<int>();
-        int? lbY = node["lbY"]?.GetValue<int>();
+        bool hasX = node["lbX"] != null, hasY = node["lbY"] != null;
+        // Filtering by landblock requires BOTH coords; a lone lbX/lbY would otherwise
+        // silently disable the filter (F162). Reject it explicitly.
+        if (hasX != hasY)
+            throw new ArgumentException("placement-list landblock filter needs both 'lbX' and 'lbY' (or neither).");
+        int? lbX = null, lbY = null;
+        if (hasX && hasY) {
+            var (lx, ly) = Lb(node);   // range-checks 0..254 (F162)
+            lbX = (int)lx;
+            lbY = (int)ly;
+        }
         string kind = node["kind"]?.GetValue<string>() ?? "all";
         var r = _engine.PlacementList(lbX, lbY, kind);
         return Serialize(new {
@@ -2949,33 +2987,53 @@ public class JsonCommandProcessor {
     }
 
     private string CmdPlacementAddOutdoor(System.Text.Json.Nodes.JsonNode node) {
-        int lbX = node["lbX"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'lbX'");
-        int lbY = node["lbY"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'lbY'");
+        var (lbXu, lbYu) = Lb(node);   // required + range-checked 0..254 (F162)
         uint wcid = ParseUintField(node, "wcid");
         ushort cellNumber = (ushort)(node["cellNumber"]?.GetValue<int>() ?? 1);
         float ox = node["originX"]?.GetValue<float>() ?? 0f;
         float oy = node["originY"]?.GetValue<float>() ?? 0f;
         float oz = node["originZ"]?.GetValue<float>() ?? 0f;
-        var r = _engine.PlacementAddOutdoor(lbX, lbY, wcid, cellNumber, ox, oy, oz,
-            node["anglesW"]?.GetValue<float>(), node["anglesX"]?.GetValue<float>(),
-            node["anglesY"]?.GetValue<float>(), node["anglesZ"]?.GetValue<float>());
+        var (aw, ax, ay, az) = ReadPlacementAngles(node);   // all-or-none + normalize (F166)
+        var r = _engine.PlacementAddOutdoor((int)lbXu, (int)lbYu, wcid, cellNumber, ox, oy, oz,
+            aw, ax, ay, az);
         return Serialize(new { success = r.Success, command = "placement-add-outdoor",
             kind = r.Kind, index = r.Index, landblock = r.Landblock });
     }
 
     private string CmdPlacementAddDungeon(System.Text.Json.Nodes.JsonNode node) {
-        int lbX = node["lbX"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'lbX'");
-        int lbY = node["lbY"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'lbY'");
+        var (lbXu, lbYu) = Lb(node);   // required + range-checked 0..254 (F162)
         uint wcid = ParseUintField(node, "wcid");
         ushort cellNumber = (ushort)(node["cellNumber"]?.GetValue<int>() ?? 0x100);
         float ox = node["originX"]?.GetValue<float>() ?? 0f;
         float oy = node["originY"]?.GetValue<float>() ?? 0f;
         float oz = node["originZ"]?.GetValue<float>() ?? 0f;
-        var r = _engine.PlacementAddDungeon(lbX, lbY, wcid, cellNumber, ox, oy, oz,
-            node["anglesW"]?.GetValue<float>(), node["anglesX"]?.GetValue<float>(),
-            node["anglesY"]?.GetValue<float>(), node["anglesZ"]?.GetValue<float>());
+        var (aw, ax, ay, az) = ReadPlacementAngles(node);   // all-or-none + normalize (F166)
+        var r = _engine.PlacementAddDungeon((int)lbXu, (int)lbYu, wcid, cellNumber, ox, oy, oz,
+            aw, ax, ay, az);
         return Serialize(new { success = r.Success, command = "placement-add-dungeon",
             kind = r.Kind, index = r.Index, landblock = r.Landblock });
+    }
+
+    /// <summary>
+    /// F166 — read the four optional placement angle fields with all-or-none semantics. Supplying
+    /// SOME (e.g. only anglesW) yields an unnormalized garbage quaternion, so we require either all
+    /// four or none. When all four are supplied they are normalized on input (like add-object). When
+    /// none are supplied we return (null,null,null,null) so the engine applies the identity default
+    /// (w=1, x=y=z=0).
+    /// </summary>
+    private static (float? w, float? x, float? y, float? z) ReadPlacementAngles(
+        System.Text.Json.Nodes.JsonNode node) {
+        var wN = node["anglesW"]; var xN = node["anglesX"];
+        var yN = node["anglesY"]; var zN = node["anglesZ"];
+        int supplied = (wN != null ? 1 : 0) + (xN != null ? 1 : 0)
+                     + (yN != null ? 1 : 0) + (zN != null ? 1 : 0);
+        if (supplied == 0) return (null, null, null, null);
+        if (supplied != 4)
+            throw new ArgumentException(
+                "Placement angles are all-or-none: supply all of anglesW/anglesX/anglesY/anglesZ or none.");
+        var q = System.Numerics.Quaternion.Normalize(new System.Numerics.Quaternion(
+            xN!.GetValue<float>(), yN!.GetValue<float>(), zN!.GetValue<float>(), wN!.GetValue<float>()));
+        return (q.W, q.X, q.Y, q.Z);
     }
 
     private string CmdPlacementRemove(System.Text.Json.Nodes.JsonNode node) {
@@ -3053,12 +3111,14 @@ public class JsonCommandProcessor {
     private string CmdWeenieSave(System.Text.Json.Nodes.JsonNode node) {
         uint classId = ParseUintField(node, "classId");
         string? jsonPath = node["fromJson"]?.GetValue<string>();
-        var r = _engine.WeenieSaveScalarsAsync(classId, jsonPath).GetAwaiter().GetResult();
+        bool force = node["force"]?.GetValue<bool>() ?? false;   // F233: force a row-wiping save
+        var r = _engine.WeenieSaveScalarsAsync(classId, jsonPath, force).GetAwaiter().GetResult();
         return Serialize(new {
             success = r.Success, command = "weenie-save",
             classId = $"0x{r.ClassId:X8}",
             ints = r.IntRows, int64s = r.Int64Rows, bools = r.BoolRows, floats = r.FloatRows,
-            strings = r.StringRows, dataIds = r.DataIdRows, instanceIds = r.InstanceIdRows
+            strings = r.StringRows, dataIds = r.DataIdRows, instanceIds = r.InstanceIdRows,
+            error = r.Error
         });
     }
 
@@ -3071,7 +3131,8 @@ public class JsonCommandProcessor {
             success = r.Success, command = "weenie-insert",
             newClassId = $"0x{r.NewClassId:X8}",
             className = r.ClassName,
-            totalScalarRows = r.TotalScalarRows
+            totalScalarRows = r.TotalScalarRows,
+            error = r.Error
         });
     }
 
@@ -3080,7 +3141,8 @@ public class JsonCommandProcessor {
         var r = _engine.WeenieDeleteAsync(classId).GetAwaiter().GetResult();
         return Serialize(new {
             success = r.Success, command = "weenie-delete",
-            classId = $"0x{r.ClassId:X8}"
+            classId = $"0x{r.ClassId:X8}",
+            error = r.Error
         });
     }
 
@@ -3134,7 +3196,9 @@ public class JsonCommandProcessor {
         return Serialize(new {
             success = r.Success, command = "spell-copy",
             fromSpellId = r.FromSpellId, newSpellId = r.NewSpellId,
-            savedToOverlay = r.SavedToOverlay, savedToDb = r.SavedToDb
+            savedToOverlay = r.SavedToOverlay, savedToDb = r.SavedToDb,
+            // F206: distinguish a fresh insert from an overwrite of a pre-existing destination id.
+            replacedExisting = r.ReplacedExisting
         });
     }
 
@@ -3196,7 +3260,9 @@ public class JsonCommandProcessor {
         var r = _engine.CreatureGetAsync(objectId).GetAwaiter().GetResult();
         return Serialize(new {
             success = r.Success, command = "creature-get",
-            objectId = $"0x{r.ObjectId:X8}", overrides = r.Overrides
+            objectId = $"0x{r.ObjectId:X8}", overrides = r.Overrides,
+            // Set only on DB failure — lets an agent distinguish "no overrides" from "DB down".
+            error = r.Error
         });
     }
 
@@ -3221,7 +3287,9 @@ public class JsonCommandProcessor {
             objectId = $"0x{r.ObjectId:X8}",
             sqlBytes = r.Sql.Length,
             sql = r.Sql,
-            outPath = r.OutPath
+            outPath = r.OutPath,
+            // Set only on DB failure — no file is written and sql is empty in that case.
+            error = r.Error
         });
     }
 
@@ -3327,9 +3395,9 @@ public class JsonCommandProcessor {
             objects.Add((mid, x, y, z));
         }
         var r = _engine.BulkPlaceObjects(lbX, lbY, objects);
-        return Serialize(new { success = true, command = "bulk-place-objects",
+        return Serialize(new { success = r.Errors == 0, command = "bulk-place-objects",
             landblock = $"0x{r.LbKey:X4}", placed = r.Placed, errors = r.Errors,
-            errorMessages = r.ErrorMessages });
+            allPlaced = r.Errors == 0, errorMessages = r.ErrorMessages });
     }
 
     // ════════════════════════════════════════════════════
@@ -3384,7 +3452,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdGenerateDungeon(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         int depth = node["depth"]?.GetValue<int>() ?? 8;
         float branching = node["branching"]?.GetValue<float>() ?? 2.0f;
         int seed = node["seed"]?.GetValue<int>() ?? 0;
@@ -3597,6 +3665,16 @@ public class JsonCommandProcessor {
     private static uint U(System.Text.Json.Nodes.JsonNode node, string field) =>
         node[field]?.GetValue<uint>() ?? throw new ArgumentException($"Missing '{field}'");
 
+    /// <summary>
+    /// Reads a required landblock-coordinate field and rejects values above 254 with a
+    /// field-named error, so out-of-range coords can't wrap through the ushort LbKey cast.
+    /// </summary>
+    private static uint U254(System.Text.Json.Nodes.JsonNode node, string field) {
+        uint v = U(node, field);
+        if (v > 254) throw new ArgumentException($"'{field}' must be 0..254; got {v}");
+        return v;
+    }
+
     // Extracts a 0..max integer field and returns it as a byte. Replaces
     // raw GetValue<byte>() which throws an opaque InvalidOperationException
     // for values outside 0..255 with no mention of the field.
@@ -3666,6 +3744,8 @@ public class JsonCommandProcessor {
         float qy = node["qy"]!.GetValue<float>(), qz = node["qz"]!.GetValue<float>();
         if (!float.IsFinite(qw) || !float.IsFinite(qx) || !float.IsFinite(qy) || !float.IsFinite(qz))
             throw new ArgumentException("Quaternion components must be finite.");
+        if (qw * qw + qx * qx + qy * qy + qz * qz < 1e-12f)
+            throw new ArgumentException("Quaternion magnitude is zero — provide a non-zero quaternion.");
         return Quaternion.Normalize(new Quaternion(qx, qy, qz, qw));
     }
 
@@ -3687,7 +3767,11 @@ public class JsonCommandProcessor {
             if (count == 0) return Array.Empty<byte>();
             var result = new byte[count];
             for (int i = 0; i < count; i++) {
-                result[i] = (byte)(arr[i]?.GetValue<int>() ?? 0);
+                int? v = arr[i]?.GetValue<int>();
+                if (v is null || v < 0 || v > 255)
+                    throw new ArgumentException(
+                        $"'{fieldName}[{i}]' must be 0..255; got {(v.HasValue ? v.Value.ToString() : "null")}");
+                result[i] = (byte)v.Value;
             }
             return result;
         }
@@ -3840,7 +3924,9 @@ public class JsonCommandProcessor {
         var r = _engine.WeenieTemplateApplyAsync(bundlePath, templateId, classId).GetAwaiter().GetResult();
         return Serialize(new { success = r.Success, command = "weenie-template-apply",
             bundlePath = r.BundlePath, templateId = r.TemplateId, classId = r.ClassId,
-            scalarsApplied = r.ScalarsApplied, error = r.Error });
+            scalarsApplied = r.ScalarsApplied,
+            merged = r.Merged, totalScalarsAfter = r.TotalScalarsAfter, weenieTypeChanged = r.WeenieTypeChanged,
+            error = r.Error });
     }
 
     // ════════════════════════════════════════════════════
@@ -4970,9 +5056,9 @@ public class JsonCommandProcessor {
     private string CmdCopyLandblock(System.Text.Json.Nodes.JsonNode node) {
         string fromDat = node["fromDat"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'fromDat' field");
-        uint srcLbX = U(node, "srcLbX"), srcLbY = U(node, "srcLbY");
-        uint? dstLbX = node["dstLbX"] != null ? U(node, "dstLbX") : null;
-        uint? dstLbY = node["dstLbY"] != null ? U(node, "dstLbY") : null;
+        uint srcLbX = U254(node, "srcLbX"), srcLbY = U254(node, "srcLbY");
+        uint? dstLbX = node["dstLbX"] != null ? U254(node, "dstLbX") : null;
+        uint? dstLbY = node["dstLbY"] != null ? U254(node, "dstLbY") : null;
         bool heightmap = node["heightmap"]?.GetValue<bool>() ?? true;
         bool textures = node["textures"]?.GetValue<bool>() ?? true;
         bool objects = node["objects"]?.GetValue<bool>() ?? true;
@@ -5001,10 +5087,10 @@ public class JsonCommandProcessor {
     private string CmdCopyBuilding(System.Text.Json.Nodes.JsonNode node) {
         string fromDat = node["fromDat"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'fromDat' field");
-        uint srcLbX = U(node, "srcLbX"), srcLbY = U(node, "srcLbY");
+        uint srcLbX = U254(node, "srcLbX"), srcLbY = U254(node, "srcLbY");
         int buildingIndex = node["buildingIndex"]?.GetValue<int>()
             ?? throw new ArgumentException("Missing 'buildingIndex' field");
-        uint dstLbX = U(node, "dstLbX"), dstLbY = U(node, "dstLbY");
+        uint dstLbX = U254(node, "dstLbX"), dstLbY = U254(node, "dstLbY");
         float x = node["x"]?.GetValue<float>() ?? throw new ArgumentException("Missing 'x'");
         float y = node["y"]?.GetValue<float>() ?? throw new ArgumentException("Missing 'y'");
         float z = node["z"]?.GetValue<float>() ?? throw new ArgumentException("Missing 'z'");
@@ -5033,7 +5119,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdRemoveBuilding(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         int buildingIndex = node["buildingIndex"]?.GetValue<int>()
             ?? throw new ArgumentException("Missing 'buildingIndex' field");
         var r = _engine.RemoveBuilding(lbX, lbY, buildingIndex);
@@ -5055,14 +5141,25 @@ public class JsonCommandProcessor {
         int? fromType = node["fromType"]?.GetValue<int>();
         var lbs = new List<(uint, uint)>();
         if (node["lbList"] is System.Text.Json.Nodes.JsonArray arr) {
+            int idx = 0;
             foreach (var item in arr) {
-                if (item == null) continue;
-                lbs.Add((U(item, "lbX"), U(item, "lbY")));
+                if (item == null) { idx++; continue; }
+                uint ex = U(item, "lbX"), ey = U(item, "lbY");
+                if (ex > 254) throw new ArgumentException($"'lbList[{idx}].lbX' must be 0..254; got {ex}");
+                if (ey > 254) throw new ArgumentException($"'lbList[{idx}].lbY' must be 0..254; got {ey}");
+                lbs.Add((ex, ey));
+                idx++;
             }
         }
         else if (node["minLbX"] != null) {
             uint minX = U(node, "minLbX"), minY = U(node, "minLbY");
             uint maxX = U(node, "maxLbX"), maxY = U(node, "maxLbY");
+            if (minX > 254) throw new ArgumentException($"'minLbX' must be 0..254; got {minX}");
+            if (minY > 254) throw new ArgumentException($"'minLbY' must be 0..254; got {minY}");
+            if (maxX > 254) throw new ArgumentException($"'maxLbX' must be 0..254; got {maxX}");
+            if (maxY > 254) throw new ArgumentException($"'maxLbY' must be 0..254; got {maxY}");
+            if (minX > maxX) throw new ArgumentException($"'minLbX' ({minX}) must be <= 'maxLbX' ({maxX})");
+            if (minY > maxY) throw new ArgumentException($"'minLbY' ({minY}) must be <= 'maxLbY' ({maxY})");
             for (uint xx = minX; xx <= maxX; xx++)
                 for (uint yy = minY; yy <= maxY; yy++)
                     lbs.Add((xx, yy));

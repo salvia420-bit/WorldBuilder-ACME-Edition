@@ -60,6 +60,13 @@ public class StampService : IStampService {
 
                 int lbX = (int)MathF.Floor(worldX / 192f);
                 int lbY = (int)MathF.Floor(worldY / 192f);
+
+                // Skip (do not wrap) vertices outside the valid landblock grid
+                // (indices are bytes 0..254; 0xFF is a sentinel). Wrapping via the
+                // (ushort) cast would capture from an unrelated landblock.
+                if (lbX < 0 || lbX > 254 || lbY < 0 || lbY > 254)
+                    continue;
+
                 ushort lbKey = (ushort)((lbX << 8) | lbY);
 
                 float localX = worldX - (lbX * 192f);
@@ -97,6 +104,9 @@ public class StampService : IStampService {
 
             for (int bx = lbStartX; bx <= lbEndX; bx++) {
                 for (int by = lbStartY; by <= lbEndY; by++) {
+                    // Skip (do not wrap) landblocks outside the valid grid (0..254).
+                    if (bx < 0 || bx > 254 || by < 0 || by > 254)
+                        continue;
                     ushort lbKey = (ushort)((bx << 8) | by);
                     foreach (var obj in objectLookup(lbKey)) {
                         if (obj.Origin.X >= minX && obj.Origin.X <= maxX &&

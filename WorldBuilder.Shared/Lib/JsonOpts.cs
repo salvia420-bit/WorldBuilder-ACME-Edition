@@ -50,4 +50,22 @@ public static class JsonOpts {
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
         WriteIndented = false,
     };
+
+    /// <summary>
+    /// Indented + <see cref="JsonSerializerOptions.IncludeFields"/> + case-insensitive — the
+    /// canonical options for the WorldGenerator result JSON (<c>worldgen --output</c> producer
+    /// and <c>export-towns-csv --from-result</c> consumer).
+    ///
+    /// CRITICAL: <see cref="System.Numerics.Vector3"/> / <see cref="System.Numerics.Quaternion"/>
+    /// expose their X/Y/Z/W as public FIELDS, not properties. Without
+    /// <see cref="JsonSerializerOptions.IncludeFields"/> = true, System.Text.Json serializes them
+    /// as <c>{}</c> and round-trips every position to (0,0,0). The producer and consumer MUST
+    /// share these exact options so anchors survive the JSON round-trip; serializing with one and
+    /// deserializing with the other silently corrupts every town/building position.
+    /// </summary>
+    public static readonly JsonSerializerOptions WorldGenResult = new() {
+        WriteIndented = true,
+        IncludeFields = true,
+        PropertyNameCaseInsensitive = true,
+    };
 }

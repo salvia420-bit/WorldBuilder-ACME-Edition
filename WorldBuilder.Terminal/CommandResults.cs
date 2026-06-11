@@ -154,7 +154,8 @@ public record LoadAutoRestoreReport(
     LoadAutoRestoreEntry Regions,
     LoadAutoRestoreEntry WeenieIndex);
 
-public record ExportResult(bool Success, string Directory, int? Iteration);
+public record ExportResult(bool Success, string Directory, int? Iteration,
+    int TerrainWritten = 0, int TerrainSaveFailures = 0, int DocsSaved = 0, int DocSaveFailures = 0);
 
 public record ExportWithRepositionResult(
     bool ExportSuccess, string Directory, int? Iteration,
@@ -339,7 +340,7 @@ public record SnapPortalResult(
     ushort SourceEnvironmentId, ushort SourceCellStructure,
     ushort NewCellNumber,
     System.Numerics.Vector3 NewOrigin, System.Numerics.Quaternion NewOrientation,
-    int PortalCount);
+    int PortalCount, int SurfaceCount = 0, string? Warning = null);
 
 // ── Bulk Heightmap ────────────────────────────────────────
 public record BulkHeightmapResult(
@@ -391,7 +392,10 @@ public record ExportTexturesResult(
 
 public record ImportTextureResult(
     bool Success, uint TextureId, string InputFile,
-    string? Error = null);
+    string? Error = null,
+    // "in-place" = write is immediate + permanent to the BASE client_portal.dat
+    // (distinct from import-render-surface, which is deferred until export).
+    string Mode = "in-place");
 
 public record CloneDatResult(
     bool Success, string SourcePath, string DestPath,
@@ -486,7 +490,9 @@ public record BenchmarkResult(
     List<BenchmarkMemorySnapshot> Memory,
     BenchmarkGcCounts GcBefore,
     BenchmarkGcCounts GcAfter,
-    BenchmarkExtrapolation Extrapolation);
+    BenchmarkExtrapolation Extrapolation,
+    int FailedObjectPlacements = 0,
+    bool LandblocksRestored = false);
 
 // ── Bulk Operations ──────────────────────────────────────
 public record SetLandblockHeightmapResult(
@@ -1133,7 +1139,13 @@ public record WeenieTemplateApplyResult(
     bool Success, string? BundlePath,
     string TemplateId, uint ClassId,
     int ScalarsApplied,
-    string? Error = null);
+    string? Error = null,
+    // F234: weenie-template-apply MERGES the template into the existing weenie's scalars rather than
+    // replacing them. Merged=true confirms the merge ran (existing rows not in the template survive);
+    // ScalarsApplied counts only the rows the template wrote/overwrote, TotalScalarsAfter is the union.
+    bool Merged = false,
+    int TotalScalarsAfter = 0,
+    bool WeenieTypeChanged = false);
 
 // ── Mesh / BSP (slice 1 of f26345e) ────────────────────────
 public record ObjExportResult(
@@ -1265,6 +1277,9 @@ public record PlacementExportSqlResult(
     bool Success,
     string OutdoorPath, int OutdoorCount,
     string DungeonPath, int DungeonCount,
+    // F167: AFFECTED rows including the per-row DELETE that precedes each idempotent INSERT — on a
+    // re-apply (rows already present) this counts both the DELETE and the INSERT, so it can exceed the
+    // placement count. It is an affected-row total, NOT an insert count.
     int? RowsAppliedToDb,
     string? EnrichedJsonlPath = null, int EnrichedCount = 0,
     // E1 (wave-2) PR2 — per-class enrichment SQL emission (Option A).
@@ -1314,15 +1329,19 @@ public record WeenieSaveScalarsResult(
     bool Success,
     uint ClassId,
     int IntRows, int Int64Rows, int BoolRows, int FloatRows,
-    int StringRows, int DataIdRows, int InstanceIdRows);
+    int StringRows, int DataIdRows, int InstanceIdRows,
+    // F235: distinguishes a DB/infrastructure failure from a logical no-op so callers can't
+    // mistake a dead connection (Error set) for a successful save with zero rows.
+    string? Error = null);
 
 public record WeenieInsertResult(
     bool Success,
     uint NewClassId,
     string ClassName,
-    int TotalScalarRows);
+    int TotalScalarRows,
+    string? Error = null);   // F235
 
-public record WeenieDeleteResult(bool Success, uint ClassId);
+public record WeenieDeleteResult(bool Success, uint ClassId, string? Error = null);   // F235
 
 public record WeeniePropertyKey(ushort Type, string Name);
 
@@ -1350,7 +1369,10 @@ public record SpellCopyResult(
     string FromSpellId,
     string NewSpellId,
     bool SavedToOverlay,
-    bool SavedToDb);
+    bool SavedToDb,
+    // F206: true when the destination id already existed (overlay or DB) and was REPLACED, rather
+    // than inserted fresh. Only an explicit newId can replace; an auto-allocated id never collides.
+    bool ReplacedExisting = false);
 
 public record SpellDeleteResult(
     bool Success,
@@ -1377,7 +1399,8 @@ public record LayoutDeleteOverlayResult(bool Removed, string LayoutId);
 public record CreatureGetResult(
     bool Success,
     uint ObjectId,
-    WorldBuilder.Shared.Lib.AceDb.AceCreatureOverrides Overrides);
+    WorldBuilder.Shared.Lib.AceDb.AceCreatureOverrides Overrides,
+    string? Error = null);
 
 public record CreatureSaveResult(
     bool Success,
@@ -1389,7 +1412,8 @@ public record CreatureExportSqlResult(
     bool Success,
     uint ObjectId,
     string Sql,
-    string? OutPath);
+    string? OutPath,
+    string? Error = null);
 
 // ── O1: RenderSurface texture import ───────────────────────
 public record ImportRenderSurfaceResult(

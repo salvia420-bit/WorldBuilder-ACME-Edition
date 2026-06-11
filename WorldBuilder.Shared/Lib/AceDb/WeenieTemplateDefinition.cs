@@ -10,6 +10,9 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         public string Title { get; init; } = "";
         public string? Description { get; init; }
         public uint WeenieType { get; init; }
+        /// <summary>True when the bundle explicitly provided <c>weenieType</c> (not the default fallback).
+        /// weenie-template-apply uses this to decide whether to overwrite the weenie's existing type. (F234)</summary>
+        public bool WeenieTypeExplicit { get; init; }
         public IReadOnlyList<(ushort Type, int Value)> Ints { get; init; } = Array.Empty<(ushort, int)>();
         public IReadOnlyList<(ushort Type, long Value)> Int64s { get; init; } = Array.Empty<(ushort, long)>();
         public IReadOnlyList<(ushort Type, bool Value)> Bools { get; init; } = Array.Empty<(ushort, bool)>();
@@ -54,7 +57,11 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             var desc = GetString(el, "description");
             if (string.IsNullOrWhiteSpace(desc)) desc = null;
 
-            if (!el.TryGetProperty("weenieType", out var wtEl) || !wtEl.TryGetUInt32(out var weenieType))
+            // Pre-declare with the default (1) so definite-assignment holds even
+            // when the `&&` short-circuits (TryGetProperty false skips the `out`).
+            uint weenieType = 1;
+            bool weenieTypeExplicit = el.TryGetProperty("weenieType", out var wtEl) && wtEl.TryGetUInt32(out weenieType);
+            if (!weenieTypeExplicit)
                 weenieType = 1;
 
             def = new WeenieTemplateDefinition {
@@ -62,6 +69,7 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 Title = title.Trim(),
                 Description = desc?.Trim(),
                 WeenieType = weenieType,
+                WeenieTypeExplicit = weenieTypeExplicit,
                 Ints = ReadIntProps(el, "ints"),
                 Int64s = ReadInt64Props(el, "int64s"),
                 Bools = ReadBoolProps(el, "bools"),

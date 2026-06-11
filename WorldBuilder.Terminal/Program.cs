@@ -60,9 +60,15 @@ if (cliArgs.IsBatchMode && !cliArgs.StdinMode) {
         batchProjectManager.LoadProject(cliArgs.ProjectPath!);
 
         Console.WriteLine($"[Batch] Exporting to: {cliArgs.ExportDirectory}");
-        var success = batchProjectManager.ExportDats(cliArgs.ExportDirectory!, cliArgs.Iteration);
+        var exportResult = batchProjectManager.ExportDats(cliArgs.ExportDirectory!, cliArgs.Iteration);
 
-        return success ? 0 : 1;
+        if (!exportResult.Success) {
+            Console.Error.WriteLine(
+                $"[Batch] Export PARTIAL: {exportResult.TerrainSaveFailures} terrain + " +
+                $"{exportResult.DocSaveFailures} document write(s) failed.");
+        }
+
+        return exportResult.Success ? 0 : 1;
     } catch (Exception ex) {
         Console.Error.WriteLine($"[Batch] Fatal error: {ex.Message}");
         return 1;

@@ -440,9 +440,14 @@ public partial class CommandEngine {
         string format = rs.Format.ToString();
         uint? paletteIdUsed = null;
         string chainKind = "textured/direct";
+        // Effective (decoded payload) dims — for JPEG these can differ from
+        // rs.Width/rs.Height (header dims), so the PNG and the Width/Height
+        // fields must track the real payload the pixel sha/mean came from.
+        int decodedWidth = rs.Width, decodedHeight = rs.Height;
         try {
             rgba = DecodeRenderSurfaceToRgba8(rs, dat, paletteCache, paletteType,
-                out paletteIdUsed, out chainKind);
+                out paletteIdUsed, out chainKind,
+                out decodedWidth, out decodedHeight);
         } catch (Exception ex) {
             return Fail(idHex, id, surfaceSha,
                 $"DecodeRenderSurfaceToRgba8 {format} {rs.Width}x{rs.Height}: {ex.Message}");
@@ -451,13 +456,13 @@ public partial class CommandEngine {
         var pixelShaT = Sha256Hex(rgba);
         var mean = ComputeMeanRgba(rgba);
 
-        if (emitPng) EmitPng(cacheRoot, surfaceSha, rgba, rs.Width, rs.Height);
+        if (emitPng) EmitPng(cacheRoot, surfaceSha, rgba, decodedWidth, decodedHeight);
 
         var passResult = new TextureRecordResult(
             IdHex: idHex, Id: id,
             SurfaceSha256: surfaceSha,
             PixelSha256: pixelShaT,
-            Width: rs.Width, Height: rs.Height,
+            Width: decodedWidth, Height: decodedHeight,
             Status: "PASS",
             MeanRgba: mean,
             ChainKind: chainKind,
@@ -541,7 +546,8 @@ public partial class CommandEngine {
     private static byte[] DecodeRenderSurfaceToRgba8(
         DRW.DBObjs.RenderSurface rs, DRW.DatDatabase dat,
         Dictionary<uint, DRW.DBObjs.Palette> paletteCache, Type paletteType,
-        out uint? paletteIdUsed, out string chainKind) {
+        out uint? paletteIdUsed, out string chainKind,
+        out int decodedWidth, out int decodedHeight) {
         int width = rs.Width;
         int height = rs.Height;
         byte[] src = rs.SourceData;
@@ -703,6 +709,8 @@ public partial class CommandEngine {
                     $"Unsupported PixelFormat: {rs.Format}");
         }
 
+        decodedWidth = width;
+        decodedHeight = height;
         return outp;
     }
 

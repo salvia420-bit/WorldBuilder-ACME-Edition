@@ -153,14 +153,16 @@ public partial class CommandEngine {
     public sealed record UiTextureRecord(
         string DidHex,
         uint Did,
-        int Width,
+        int Width,                              // effective (decoded payload) dims
         int Height,
         string? Sha256,
         string Status,                          // "PASS" / "FAIL"
         string Source,                          // datPath basename
         string? PngPath,
         string? PixelFormat,
-        string? FailureReason);
+        string? FailureReason,
+        int HeaderWidth = 0,                    // RenderSurface header dims (may differ for JPEG)
+        int HeaderHeight = 0);
 
     // ─────────────────────────────────────────────────────────────────
     //  chorizite-dump-layout-tree
@@ -743,12 +745,15 @@ public partial class CommandEngine {
                         FailureReason: $"RenderSurface 0x{did:X8} not present in {datBasename}");
                 } else {
                     string format = rs.Format.ToString();
-                    byte[] rgba = DecodeUiRenderSurfaceToRgba8(rs, collection.Portal, paletteCache);
-                    EmitPngFile(pngPath, rgba, rs.Width, rs.Height);
+                    byte[] rgba = DecodeUiRenderSurfaceToRgba8(
+                        rs, collection.Portal, paletteCache,
+                        out int decodedWidth, out int decodedHeight);
+                    EmitPngFile(pngPath, rgba, decodedWidth, decodedHeight);
                     var sha = Sha256HexBytes(rgba);
-                    rec = new UiTextureRecord(didHex, did, rs.Width, rs.Height, sha, "PASS",
+                    rec = new UiTextureRecord(didHex, did, decodedWidth, decodedHeight, sha, "PASS",
                         Source: datBasename, PngPath: pngPath, PixelFormat: format,
-                        FailureReason: null);
+                        FailureReason: null,
+                        HeaderWidth: rs.Width, HeaderHeight: rs.Height);
                 }
             } catch (Exception ex) {
                 rec = new UiTextureRecord(didHex, did, 0, 0, null, "FAIL",
@@ -766,6 +771,8 @@ public partial class CommandEngine {
             indexBody[r.DidHex] = new {
                 width = r.Width,
                 height = r.Height,
+                headerWidth = r.HeaderWidth,
+                headerHeight = r.HeaderHeight,
                 sha256 = r.Sha256,
                 source = r.Source,
                 status = r.Status,
@@ -806,7 +813,9 @@ public partial class CommandEngine {
     private static byte[] DecodeUiRenderSurfaceToRgba8(
         DRW.DBObjs.RenderSurface rs,
         DRW.PortalDatabase portal,
-        Dictionary<uint, DRW.DBObjs.Palette> paletteCache) {
+        Dictionary<uint, DRW.DBObjs.Palette> paletteCache,
+        out int decodedWidth,
+        out int decodedHeight) {
         int width = rs.Width;
         int height = rs.Height;
         byte[] src = rs.SourceData;
@@ -959,6 +968,8 @@ public partial class CommandEngine {
                 throw new NotImplementedException(
                     $"Unsupported PixelFormat: {rs.Format}");
         }
+        decodedWidth = width;
+        decodedHeight = height;
         return outp;
     }
 

@@ -347,6 +347,19 @@ public partial class CommandEngine {
         // Each run lives under a fresh timestamped subdir; the orchestrator
         // generates the slug itself, so we just give it the canonical root.
 
+        // Bind the report we'll parse to THIS run. FindLatestSweepReportJson
+        // returns the newest sweep-report.json by mtime regardless of which
+        // run wrote it, so an orchestrator that crashes mid-run after an
+        // earlier successful sweep would otherwise have us parse the OLD
+        // report and (with failed==0) report success on a non-zero exit.
+        // Snapshot the pre-run latest path + its mtime; afterwards accept a
+        // report only if it is a different path or strictly newer.
+        var preRunReport = FindLatestSweepReportJson(Wave4ReportRoot);
+        DateTime preRunReportMtime = DateTime.MinValue;
+        if (preRunReport != null && File.Exists(preRunReport)) {
+            preRunReportMtime = File.GetLastWriteTimeUtc(preRunReport);
+        }
+
         string stdoutText, stderrText;
         int exitCode;
         bool timedOut;
@@ -364,9 +377,16 @@ public partial class CommandEngine {
                 DriverError: $"Failed to launch node: {ex.Message}");
         }
 
-        // Locate the freshest sweep-report.json under the report root.
+        // Locate the sweep-report.json written by THIS run. A report counts
+        // as ours only if it is a different file than the pre-run snapshot or
+        // strictly newer by mtime — otherwise it is a leftover from an earlier
+        // sweep that this orchestrator crashed before overwriting.
         var sweepReport = FindLatestSweepReportJson(Wave4ReportRoot);
-        if (sweepReport == null) {
+        bool freshReport =
+            sweepReport != null &&
+            (!string.Equals(sweepReport, preRunReport, StringComparison.Ordinal) ||
+             File.GetLastWriteTimeUtc(sweepReport) > preRunReportMtime);
+        if (!freshReport) {
             return new Wave4SweepResult(
                 SweepReportJsonPath: "",
                 SummaryMarkdownPath: "",
@@ -376,18 +396,29 @@ public partial class CommandEngine {
                 ElapsedMs: sw.ElapsedMilliseconds,
                 DriverError: timedOut
                     ? $"Sweep exceeded {Wave4SweepTimeout.TotalHours:F0}-hour timeout and was killed."
-                    : $"Driver finished (exit={exitCode}) but no sweep-report.json was found under {Wave4ReportRoot}.\n" +
+                    : $"Driver finished (exit={exitCode}) but no fresh sweep-report.json was found under {Wave4ReportRoot}.\n" +
                       $"stdout (tail): {Tail(stdoutText, 1500)}\n" +
                       $"stderr (tail): {Tail(stderrText, 1500)}");
         }
 
-        var parsed = ParseSweepReport(sweepReport);
+        // Merge — never clobber — DriverError. Keep any parse error surfaced
+        // by ParseSweepReport, then append the timeout note when timed out, or
+        // a non-zero-exit note otherwise. Folding exitCode!=0 into DriverError
+        // makes the wrapper's `success = IsNullOrEmpty(driverError) && failed==0`
+        // gate fail closed on a crashed-but-report-present orchestrator.
+        var parsed = ParseSweepReport(sweepReport!);
+        string? driverError = parsed.DriverError;
+        if (timedOut) {
+            driverError = AppendSweepError(driverError,
+                "Sweep timed out — sweep-report.json may reflect partial state.");
+        } else if (exitCode != 0) {
+            driverError = AppendSweepError(driverError,
+                $"Sweep orchestrator exited non-zero (exit={exitCode}) — sweep-report.json may be stale or partial.");
+        }
         return parsed with {
             ExitCode = exitCode,
             ElapsedMs = sw.ElapsedMilliseconds,
-            DriverError = timedOut
-                ? "Sweep timed out — sweep-report.json may reflect partial state."
-                : null,
+            DriverError = driverError,
         };
     }
 
@@ -474,6 +505,11 @@ public partial class CommandEngine {
         var root = doc.RootElement;
 
         int chunkCount = 0, passed = 0, failed = 0, infra = 0, cached = 0;
+        // A report that parses as JSON but lacks a 'summary' object must NOT
+        // come back as all-zero with a null DriverError — that would let the
+        // wrapper's `failed==0` success gate read true off an unparseable
+        // report. Surface a parseError so the caller's merge keeps it.
+        string? parseError = null;
         if (root.TryGetProperty("summary", out var s) && s.ValueKind == JsonValueKind.Object) {
             if (s.TryGetProperty("chunkCount", out var cc) && cc.ValueKind == JsonValueKind.Number) {
                 chunkCount = cc.GetInt32();
@@ -490,6 +526,9 @@ public partial class CommandEngine {
             if (s.TryGetProperty("cached", out var ca) && ca.ValueKind == JsonValueKind.Number) {
                 cached = ca.GetInt32();
             }
+        } else {
+            parseError =
+                $"Malformed sweep-report.json: missing/invalid 'summary' object at {sweepReportPath}.";
         }
 
         long elapsedMs = 0;
@@ -512,7 +551,7 @@ public partial class CommandEngine {
             InfraChunks: infra,
             CachedChunks: cached,
             ElapsedMs: elapsedMs,
-            DriverError: null);
+            DriverError: parseError); // null unless the report was malformed
     }
 
     /// <summary>
@@ -555,4 +594,14 @@ public partial class CommandEngine {
     // Note: the `Tail` helper used in ParseSweepReport is defined in the
     // sibling partial Diagnostics/RunAll.cs (private static string Tail).
     // Because this is the same partial class, we share it.
+
+    /// <summary>
+    /// Combine two DriverError fragments without dropping either: when the
+    /// base is null/empty the addition stands alone, otherwise the addition is
+    /// appended on a new line. Kept local to this partial so the wave4-sweep
+    /// surface does not depend on a private helper in the RunAll partial.
+    /// </summary>
+    private static string AppendSweepError(string? baseError, string addition) {
+        return string.IsNullOrEmpty(baseError) ? addition : $"{baseError}\n{addition}";
+    }
 }

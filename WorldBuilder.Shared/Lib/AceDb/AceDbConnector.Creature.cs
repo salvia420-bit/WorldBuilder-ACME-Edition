@@ -11,7 +11,9 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         /// Loads all override rows for the given object/weenie ID: texture_map, anim_part,
         /// palette rows, and the scalar palette properties (PaletteBase, ClothingBase,
         /// PaletteTemplate, Shade) needed to build an accurate INDEX16 palette for the preview.
-        /// Returns an empty result (not null) on failure.
+        /// On DB failure the returned result has <see cref="AceCreatureOverrides.LoadError"/> set and its
+        /// override collections are unreliable (possibly empty or partial) — callers MUST check LoadFailed
+        /// before treating an empty result as "no overrides defined".
         /// </summary>
         public async Task<AceCreatureOverrides> LoadCreatureOverridesAsync(uint objectId, CancellationToken ct = default) {
             var result = new AceCreatureOverrides { ObjectId = objectId };
@@ -110,7 +112,12 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                     }
                 }
             }
-            catch (MySqlException) { }
+            catch (MySqlException ex) {
+                // Do NOT silently swallow: an empty/partial result here is indistinguishable from
+                // "no overrides defined" and would let a get->edit->save during a DB blip DELETE all
+                // real rows. Record the failure so callers can refuse to proceed.
+                result.LoadError = ex.Message;
+            }
             return result;
         }
 

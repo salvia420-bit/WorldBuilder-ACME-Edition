@@ -34,6 +34,7 @@
   - [remove-object](#remove-object)
   - [move-object](#move-object)
   - [rotate-object](#rotate-object)
+  - [bulk-place-objects](#bulk-place-objects)
 - [Spatial Queries](#spatial-queries)
   - [query-radius](#query-radius)
 - [Dungeon Tools](#dungeon-tools)
@@ -184,6 +185,7 @@ WorldBuilder.Terminal [options]
 | `remove-object` | Objects | `lbX`, `lbY`, `index` | Remove object by index |
 | `move-object` | Objects | `lbX`, `lbY`, `index`, `x`, `y`, `z` | Move object to new position |
 | `rotate-object` | Objects | `lbX`, `lbY`, `index`, `qw/qx/qy/qz` or `yaw` | Set object orientation |
+| `bulk-place-objects` | Objects | `lbX`, `lbY`, `objects[]` | Place many objects in one call (per-object validation) |
 | `query-radius` | Spatial | `x`, `y`, `radius`, `z?`, `includeZ?` | Find objects within radius |
 | `analyze-dungeons` | Dungeon | `outputPath?` | Scan and catalog dungeon rooms |
 | `get-dungeon-info` | Dungeon | `lbX`, `lbY` | Get dungeon cell layout |
@@ -307,14 +309,14 @@ Smooths terrain heights within a radius by averaging neighboring vertices.
 
 **Request:**
 ```json
-{"command":"smooth","x":1500.0,"y":2000.0,"radius":48.0,"strength":0.7}
+{"command":"smooth","x":1500.0,"y":2000.0,"radius":4.0,"strength":0.7}
 ```
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `x` | float | ✅ | — | World X coordinate (center) |
 | `y` | float | ✅ | — | World Y coordinate (center) |
-| `radius` | float | ✅ | — | Radius in world units |
+| `radius` | float | ✅ | — | Brush units; effective world radius = `radius*12+1` (≈ `radius` half-cells). E.g. `radius:2.0` ≈ a 1-cell (24-unit) brush. |
 | `strength` | float | ❌ | 0.5 | Smoothing strength (0.0–1.0) |
 
 **Response:**
@@ -340,14 +342,14 @@ Raises terrain height by a delta value (height index units, not world units).
 
 **Request:**
 ```json
-{"command":"raise","x":1500.0,"y":2000.0,"radius":48.0,"delta":10}
+{"command":"raise","x":1500.0,"y":2000.0,"radius":4.0,"delta":10}
 ```
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `x` | float | ✅ | — | World X center |
 | `y` | float | ✅ | — | World Y center |
-| `radius` | float | ✅ | — | Radius in world units |
+| `radius` | float | ✅ | — | Brush units; effective world radius = `radius*12+1` (≈ `radius` half-cells). E.g. `radius:2.0` ≈ a 1-cell (24-unit) brush. |
 | `delta` | int | ❌ | 5 | Height index increase (0–255 range, clamped) |
 
 **Response:**
@@ -369,7 +371,7 @@ Lowers terrain height. Parameters identical to `raise`.
 
 **Request:**
 ```json
-{"command":"lower","x":1500.0,"y":2000.0,"radius":48.0,"delta":10}
+{"command":"lower","x":1500.0,"y":2000.0,"radius":4.0,"delta":10}
 ```
 
 **Response:** Same shape as `raise`, with `"command": "lower"`.
@@ -382,14 +384,14 @@ Sets all vertices within a radius to an exact height index.
 
 **Request:**
 ```json
-{"command":"set-height","x":1500.0,"y":2000.0,"radius":48.0,"height":128}
+{"command":"set-height","x":1500.0,"y":2000.0,"radius":4.0,"height":128}
 ```
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `x` | float | ✅ | World X center |
 | `y` | float | ✅ | World Y center |
-| `radius` | float | ✅ | Radius in world units |
+| `radius` | float | ✅ | Brush units; effective world radius = `radius*12+1` (≈ `radius` half-cells). E.g. `radius:2.0` ≈ a 1-cell (24-unit) brush. |
 | `height` | byte | ✅ | Target height index (0–255) |
 
 **Response:**
@@ -411,14 +413,14 @@ Paints terrain texture type within a radius.
 
 **Request:**
 ```json
-{"command":"paint","x":1500.0,"y":2000.0,"radius":48.0,"type":3}
+{"command":"paint","x":1500.0,"y":2000.0,"radius":4.0,"type":3}
 ```
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `x` | float | ✅ | World X center |
 | `y` | float | ✅ | World Y center |
-| `radius` | float | ✅ | Radius in world units |
+| `radius` | float | ✅ | Brush units; effective world radius = `radius*12+1` (≈ `radius` half-cells). E.g. `radius:2.0` ≈ a 1-cell (24-unit) brush. |
 | `type` | byte | ✅ | Terrain type index (use `get-region` to see available types) |
 
 **Response:**
@@ -901,6 +903,62 @@ Sets an object's orientation. Supports either quaternion or yaw shorthand. **Thi
 
 ---
 
+### bulk-place-objects
+
+Places multiple static objects into a single landblock in one call. Each object is validated
+independently and the batch continues past per-object failures (it does **not** abort on the first
+error), so `placed` + `errors` always equals the number of objects supplied.
+
+**Request:**
+```json
+{
+  "command": "bulk-place-objects",
+  "lbX": 169,
+  "lbY": 180,
+  "objects": [
+    {"modelId": "0x020000A7", "x": 32448.5, "y": 34561.0, "z": 120.0},
+    {"modelId": "0x010000C3", "x": 32460.0, "y": 34570.0, "z": 121.5}
+  ]
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `lbX` | uint | ✅ | Landblock grid X (0..254) |
+| `lbY` | uint | ✅ | Landblock grid Y (0..254) |
+| `objects` | array | ✅ | Array of object elements (see below) |
+
+**`objects[]` element shape:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `modelId` | string | ✅ | Hex model ID (e.g. `"0x020000A7"`). High byte selects the type: `0x02` = Setup, `0x01` = GfxObj |
+| `x` | float | ✅ | **World-frame** X position — must fall inside the named landblock's 192m square |
+| `y` | float | ✅ | **World-frame** Y position — must fall inside the named landblock's 192m square |
+| `z` | float | ✅ | World-frame Z position (height) |
+
+Each object is rejected (counted in `errors`) when: a coordinate is non-finite; `modelId`'s type
+byte is not `0x01`/`0x02`; the model does not exist in the loaded DAT; or `x`/`y` fall outside the
+named landblock's world-frame square. Orientation defaults to identity and scale to 1.0.
+
+**Response:**
+```json
+{
+  "success": true,
+  "command": "bulk-place-objects",
+  "landblock": "0x0708",
+  "placed": 2,
+  "errors": 0,
+  "allPlaced": true,
+  "errorMessages": null
+}
+```
+
+> `success` / `allPlaced` are `true` only when `errors == 0`. `errorMessages` is capped at 10 entries;
+> when more errors occur, a final `"(+N more)"` entry indicates how many were truncated.
+
+---
+
 ## Spatial Queries
 
 ### query-radius
@@ -1181,7 +1239,7 @@ Stages N mutating ops as one atomic batch. The engine snapshots affected documen
 | `ops` | object[] | ❌* | — | Inline list of op objects (each shaped as a normal JSON command) |
 | `opsFile` | string | ❌* | — | Path to a JSON file holding either a top-level array or `{"ops": [...]}`. Use when stdin line-buffer would clip a large inline payload |
 | `rollback_on_fail` | bool | ❌ | `true` | Restore pre-state on any failure |
-| `validate` | string \| object | ❌ | `"auto"` | `auto` (touched LBs + right/top neighbors), `all`, `none`, or `{"landblocks": ["0xXXXX"]}` |
+| `validate` | string \| object | ❌ | `"auto"` | `auto` (touched LBs + left/bottom neighbors for seam checks), `all`, `none`, or `{"landblocks": ["0xXXXX"]}` |
 | `diff` | bool \| string | ❌ | `false` | When set, returns the [transact-diff](#transact-diff) response inline. Values: `true \| "structured" \| "visual" \| "both"` |
 | `renderMode` | string | ❌ | `"overlay"` | Visual diff mode when `diff` includes a visual: `overlay \| side-by-side \| after-only-with-diff` |
 | `resolution` | int | ❌ | 1024 | Visual diff resolution in pixels (square) |
@@ -1860,13 +1918,13 @@ Insert + save mirror `AceDbConnector.Weenie.cs:262/163`; delete uses the new tra
 
 ### Outdoor + Dungeon Instance Placements
 
-- `{"command":"placement-list","lbX":169,"lbY":178,"kind":"outdoor"}` — kind ∈ `all|outdoor|dungeon`
-- `{"command":"placement-add-outdoor","lbX":169,"lbY":178,"wcid":7777,"cellNumber":1,"originX":96,"originY":96,"originZ":120,"anglesW":1,"anglesX":0,"anglesY":0,"anglesZ":0}`
-- `{"command":"placement-add-dungeon","lbX":169,"lbY":178,"wcid":7777,"cellNumber":256,…}`
-- `{"command":"placement-remove","kind":"outdoor","index":3}`
+- `{"command":"placement-list","lbX":169,"lbY":178,"kind":"outdoor"}` — kind ∈ `all|outdoor|dungeon`. `lbX`/`lbY` are optional but **both-or-neither** (a lone coord is rejected); each must be `0..254`. Dungeon rows report a **flattened global index** over a deterministically-ordered (by landblock) doc sequence — the same index `placement-remove` / `placement-set-scope` address.
+- `{"command":"placement-add-outdoor","lbX":169,"lbY":178,"wcid":7777,"cellNumber":1,"originX":96,"originY":96,"originZ":120,"anglesW":1,"anglesX":0,"anglesY":0,"anglesZ":0}` — `lbX`/`lbY` required, `0..254`. Angles are **all-or-none**: supply all four (`anglesW/X/Y/Z`, normalized on input) or none. The default when omitted is the **identity** quaternion (`w=1, x=y=z=0`) — NOT a 180° flip.
+- `{"command":"placement-add-dungeon","lbX":169,"lbY":178,"wcid":7777,"cellNumber":256,…}` — same `lbX`/`lbY` + all-or-none angle rules as add-outdoor.
+- `{"command":"placement-remove","kind":"outdoor","index":3}` — for `kind:dungeon`, `index` is the global index from `placement-list`; a negative index returns `success:false`.
 - `{"command":"placement-export-sql","out":"…","apply":false}`
 
-`placement-export-sql` writes `landblock_instances.sql` (outdoor) and `dungeon_instances.sql` (dungeon) into the chosen directory. With `apply:true` and ace-db configured, both files are also executed against the database. `add-outdoor`, `add-dungeon`, and `remove` are allow-listed in `transact`; `export-sql` is excluded as a side-effecting op.
+`placement-export-sql` writes `landblock_instances.sql` (outdoor) and `dungeon_instances.sql` (dungeon) into the chosen directory. Every placement is minted a **static landblock-instance guid** (`0x70000xxx` range) at export time, so each row is emitted as `DELETE`+`INSERT` and re-export/re-apply **replaces** rather than duplicates. With `apply:true` and ace-db configured, both files are also executed against the database; `rowsAppliedToDb` is the **affected-row total including the per-row DELETEs** (it can exceed the placement count on a re-apply). `placement-*` ops are **NOT** allow-listed in `transact` (they lack snapshot coverage and the outdoor variants persist mid-batch, which would break the never-half-applied contract); `export-sql` is excluded as a side-effecting op.
 
 ### Layout Viewer / Overlay (no preview canvas)
 

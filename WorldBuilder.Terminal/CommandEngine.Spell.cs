@@ -93,7 +93,26 @@ public partial class CommandEngine {
                 return new SpellGetResult(true, $"0x{id:X8}", "db", fromDb);
         }
 
-        throw new InvalidOperationException($"Spell 0x{id:X8} not found in project overlay or ACE DB.");
+        // F207: DAT SpellTable fallback so the advertised spell-list → spell-get/-copy workflow works
+        // for a project WITHOUT an ACE DB (spell-list reads the DAT SpellTable by default). The DAT
+        // SpellBase only carries the identity/formula fields (Name, School, Icon, MetaSpell, etc.) — it
+        // does NOT carry the rich ACE `spell` effect columns (StatMod*, EType, projectile geometry, …),
+        // so those stay null. We surface what the DAT CAN supply rather than erroring on a retail id.
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+        if (dats.TryGet<SpellTable>(SpellTableId, out var table) && table != null
+            && table.Spells.TryGetValue(id, out var spellBase) && spellBase != null) {
+            var rec = new SpellRecord {
+                Id = id,
+                Name = spellBase.Name,
+                // The remaining columns are sourced from ACE's cooked `spell` table, not the DAT
+                // SpellBase, so they remain null for a dat-source record.
+            };
+            return new SpellGetResult(true, $"0x{id:X8}", "dat", rec);
+        }
+
+        throw new InvalidOperationException(
+            $"Spell 0x{id:X8} not found in project overlay, ACE DB, or DAT SpellTable. " +
+            "Configure ace-db connect or create an overlay (spell save) first.");
     }
 
     public async Task<SpellSaveResult> SpellSaveAsync(uint id, string? jsonPath) {
@@ -128,11 +147,37 @@ public partial class CommandEngine {
     public async Task<SpellCopyResult> SpellCopyAsync(uint fromId, uint? newId) {
         RequireProject();
 
-        // Source: prefer overlay, fall back to db, fall back to dat-side.
+        // Source: SpellGetAsync resolves overlay → ace-db → DAT SpellTable (F207).
         var get = await SpellGetAsync(fromId);
         var source = get.Spell;
 
-        uint resolvedNewId = newId ?? AllocateNextSpellId();
+        var settings = _projectManager.CurrentProject!.AceDb;
+        bool dbConfigured = settings != null && !string.IsNullOrEmpty(settings.Host);
+
+        // F206: an AUTO-allocated id must not collide with a row already in the DB. AllocateNextSpellId
+        // now also consults SELECT MAX(id) FROM spell when ace-db is configured, but a custom server
+        // could still have gaps/holes, so probe the resolved id and re-allocate on a hit. An EXPLICIT
+        // newId keeps overwrite-by-design semantics (the response reports whether it replaced a row).
+        uint resolvedNewId;
+        bool replacedExisting = false;
+        if (newId is { } explicitId) {
+            resolvedNewId = explicitId;
+            if (dbConfigured) {
+                using var probe = new AceDbConnector(settings!);
+                replacedExisting = await probe.GetSpellAsync(resolvedNewId) != null;
+            }
+            if (!replacedExisting)
+                replacedExisting = GetSpellDbDoc().TryGet(resolvedNewId, out _);
+        } else {
+            resolvedNewId = await AllocateNextSpellIdAsync();
+            // Defend against a DB row the MAX(id)+1 heuristic missed (holes filled above max are fine,
+            // but re-probe so an auto id never silently UPSERT-clobbers an existing custom spell).
+            if (dbConfigured) {
+                using var probe = new AceDbConnector(settings!);
+                while (await probe.GetSpellAsync(resolvedNewId) != null) resolvedNewId++;
+            }
+        }
+
         var clone = source.CloneWithNewId(resolvedNewId);
         clone.LastModified = DateTime.UtcNow;
 
@@ -140,13 +185,12 @@ public partial class CommandEngine {
         doc.Set(resolvedNewId, clone);
 
         bool savedToDb = false;
-        var settings = _projectManager.CurrentProject!.AceDb;
-        if (settings != null && !string.IsNullOrEmpty(settings.Host)) {
-            using var connector = new AceDbConnector(settings);
+        if (dbConfigured) {
+            using var connector = new AceDbConnector(settings!);
             savedToDb = await connector.SaveSpellAsync(clone);
         }
 
-        return new SpellCopyResult(true, $"0x{fromId:X8}", $"0x{resolvedNewId:X8}", true, savedToDb);
+        return new SpellCopyResult(true, $"0x{fromId:X8}", $"0x{resolvedNewId:X8}", true, savedToDb, replacedExisting);
     }
 
     public async Task<SpellDeleteResult> SpellDeleteAsync(uint id) {
@@ -170,7 +214,7 @@ public partial class CommandEngine {
         return new SpellDeleteResult(true, $"0x{id:X8}", true, deletedFromDb);
     }
 
-    private uint AllocateNextSpellId() {
+    private async Task<uint> AllocateNextSpellIdAsync() {
         var doc = GetSpellDbDoc();
         var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
         uint maxFromOverlay = doc.GetIds().DefaultIfEmpty(0u).Max();
@@ -178,6 +222,14 @@ public partial class CommandEngine {
         if (dats.TryGet<SpellTable>(SpellTableId, out var table) && table != null && table.Spells.Count > 0) {
             maxFromDat = table.Spells.Keys.Max();
         }
-        return Math.Max(maxFromOverlay, maxFromDat) + 1;
+        uint maxFromDb = 0;
+        // F206: a modded server's spell table can hold custom rows ABOVE the DAT/overlay max; without
+        // consulting it, an auto-allocated id collides and the UPSERT clobbers that spell's 64 columns.
+        var settings = _projectManager.CurrentProject!.AceDb;
+        if (settings != null && !string.IsNullOrEmpty(settings.Host)) {
+            using var connector = new AceDbConnector(settings);
+            maxFromDb = await connector.GetMaxSpellIdAsync() ?? 0;
+        }
+        return Math.Max(Math.Max(maxFromOverlay, maxFromDat), maxFromDb) + 1;
     }
 }

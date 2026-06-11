@@ -206,7 +206,8 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         /// <summary>
         /// Generates a single INSERT statement for ace_world.landblock_instance.
         /// Use for placing generators/items/portals in dungeons. If Guid is 0, a new guid is generated.
-        /// Angles default to identity quaternion (0, 0, 0, 1) when null.
+        /// Angles default to the identity quaternion w=1, x=y=z=0 when null — a per-component null
+        /// falls back to its identity component (F166): w→1, x→0, y→0, z→0 (NOT z→1, which is a 180° flip).
         /// </summary>
         public static string GenerateInsertSql(LandblockInstanceRecord record, string databaseName = "ace_world") {
             uint guid = record.Guid;
@@ -219,16 +220,12 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             if (guid == 0)
                 guid = (uint)System.Security.Cryptography.RandomNumberGenerator.GetInt32(1, int.MaxValue);
 
-            float w = record.AnglesW ?? 0f;
+            // F166: per-component identity fallback (w→1, x/y/z→0). A null z must NOT default to 1
+            // (that is a 180° flip about +Z); the all-null case is just the union of these.
+            float w = record.AnglesW ?? 1f;
             float x = record.AnglesX ?? 0f;
             float y = record.AnglesY ?? 0f;
-            float z = record.AnglesZ ?? 1f;
-            if (record.AnglesW == null && record.AnglesX == null && record.AnglesY == null && record.AnglesZ == null) {
-                w = 1f;
-                x = 0f;
-                y = 0f;
-                z = 0f;
-            }
+            float z = record.AnglesZ ?? 0f;
 
             string insert = string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 // is_Link_Child is NOT NULL with no default in the ACE landblock_instance schema, so it
@@ -363,6 +360,26 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             catch {
                 await tx.RollbackAsync(ct);
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// F206 — the maximum <c>id</c> currently in the <c>spell</c> table, or null when the table is
+        /// empty / unavailable. Folded into spell-id allocation so a modded server whose spell table
+        /// holds custom rows above the DAT/overlay max never has an auto-allocated id collide with an
+        /// existing row (the UPSERT would otherwise clobber all 64 columns of that spell).
+        /// </summary>
+        public async Task<uint?> GetMaxSpellIdAsync(CancellationToken ct = default) {
+            try {
+                await using var conn = new MySqlConnection(_settings.ConnectionString);
+                await conn.OpenAsync(ct);
+                await using var cmd = new MySqlCommand("SELECT MAX(id) FROM spell", conn);
+                var result = await cmd.ExecuteScalarAsync(ct);
+                if (result == null || result == System.DBNull.Value) return null;
+                return System.Convert.ToUInt32(result);
+            }
+            catch (MySqlException) {
+                return null;
             }
         }
 
