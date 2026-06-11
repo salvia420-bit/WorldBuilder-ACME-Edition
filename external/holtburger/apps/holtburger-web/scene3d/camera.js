@@ -130,6 +130,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { acToThree } from "./adapter.js";
+import { getInputController, readInputFunnelFlag } from "./input.js";
 
 /**
  * Mode-cycle order on `C` press: follow → topDown → orbit → follow.
@@ -449,6 +450,22 @@ export class CameraSwitcher {
 
     this._installKeyListeners();
     this._installModeToggle();
+
+    // A14-I1 (?inputFunnel=on): register THIS camera's per-mode movement
+    // mapping as the shared InputController's policy, so the single funnel
+    // applies orbit-suppress / topDown world-fixed / follow passthrough at
+    // the one dispatch site. Default OFF — when off, the controller is never
+    // consulted and `_dispatchMovement` runs the legacy path unchanged. The
+    // policy receives the raw keystate-derived tristate axes and returns the
+    // mode-mapped axes (null = orbit suppression). It re-reads `this.mode`
+    // each call so a mid-stride `C`-cycle is honoured live.
+    this._inputFunnelOn = readInputFunnelFlag();
+    if (this._inputFunnelOn) {
+      try {
+        const ctrl = getInputController();
+        ctrl.setMovementPolicy((raw) => this._movementPolicy(raw));
+      } catch (_) { /* never break camera init on the funnel wiring */ }
+    }
 
     // Initial mode entry.
     this.switchMode("follow");
@@ -1402,6 +1419,37 @@ export class CameraSwitcher {
    * Q/E always map to turn = -1/+1 in any mode where motion is sent
    * (follow + topDown). Shift = walk modifier (run-by-default).
    */
+  /**
+   * A14-I1 movement policy: map RAW keystate-derived tristate axes through
+   * the current camera mode, for the shared InputController funnel.
+   *
+   *   orbit   → null (free-look; movement suppressed)
+   *   topDown → world-fixed passthrough (forward=+Y, strafe=+X)
+   *   follow  → player-local passthrough
+   *
+   * This is the policy half of `computeMovementFromKeys` extracted so the
+   * single funnel can apply it to a keystate it owns. `computeMovementFromKeys`
+   * (the legacy path) still reads `this.keys` directly; both produce identical
+   * axes for identical input — the only mode that actually transforms is the
+   * (deliberately passthrough today) follow/topDown pair, so this is a pure
+   * suppression gate plus sign-clamp. Kept tiny on purpose for Stage I1.
+   *
+   * @param {{forward:number,strafe:number,turn:number,run:boolean}} raw
+   */
+  _movementPolicy(raw) {
+    if (this.mode === "orbit") return null;
+    // follow + topDown both consume player-local-frame intent directly today
+    // (camera-relative + auto-turn math was removed in the Cohere-D Phase 1
+    // pass; see computeMovementFromKeys). Sign-clamp is applied by the
+    // controller; return the raw axes unchanged.
+    return {
+      forward: raw.forward,
+      strafe: raw.strafe,
+      turn: raw.turn,
+      run: raw.run,
+    };
+  }
+
   computeMovementFromKeys() {
     if (this.mode === "orbit") {
       // Orbit suppresses movement. Caller should NOT call
@@ -1486,17 +1534,39 @@ export class CameraSwitcher {
     this._orbitRigStopped = false;
     const sig = `${m.forward},${m.strafe},${m.turn},${m.run}`;
     if (sig === this.lastInputSig) return;
-    try {
-      handle.setMovementInput(m.forward, m.strafe, m.turn, m.run);
-      this.lastInputSig = sig;
-      this.setMovementInputCount += 1;
-    } catch (e) {
-      // Wasm side rejects pre-EnteredWorld; that's fine, the keystate
-      // change will be retried on the next press.
-      // eslint-disable-next-line no-console
-      if (!this._dispatchWarned) {
-        this._dispatchWarned = true;
-        console.warn("[cameraSwitcher] setMovementInput rejected:", String(e?.message ?? e));
+    if (this._inputFunnelOn) {
+      // A14-I1 (?inputFunnel=on): route the SINGLE `setMovementInput` call
+      // through the shared InputController so the index.html rAF dispatcher
+      // and this camera dispatcher dedupe against ONE shared signature (no
+      // cross-site stomp). The controller already applied this camera's
+      // policy (orbit-suppress handled above via `m === null`), so pass the
+      // resolved axes straight through. The local-rig animation side-effect
+      // below still fires off `sig` — only the wasm boundary moved.
+      try {
+        const ctrl = getInputController();
+        ctrl.dispatch(handle, m);
+        this.lastInputSig = sig;
+        this.setMovementInputCount += 1;
+      } catch (e) {
+        if (!this._dispatchWarned) {
+          this._dispatchWarned = true;
+          // eslint-disable-next-line no-console
+          console.warn("[cameraSwitcher] funnel dispatch rejected:", String(e?.message ?? e));
+        }
+      }
+    } else {
+      try {
+        handle.setMovementInput(m.forward, m.strafe, m.turn, m.run);
+        this.lastInputSig = sig;
+        this.setMovementInputCount += 1;
+      } catch (e) {
+        // Wasm side rejects pre-EnteredWorld; that's fine, the keystate
+        // change will be retried on the next press.
+        // eslint-disable-next-line no-console
+        if (!this._dispatchWarned) {
+          this._dispatchWarned = true;
+          console.warn("[cameraSwitcher] setMovementInput rejected:", String(e?.message ?? e));
+        }
       }
     }
     // 2026-06-03 — drive the LOCAL player rig's locomotion ANIMATION. ACE does

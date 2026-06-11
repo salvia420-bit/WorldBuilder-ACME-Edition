@@ -1304,6 +1304,18 @@
       // Pure function, no DOM/wasm. Wired into the backlog/deferred-spawn
       // clones below behind `?unifiedClone=on` (default-off).
       import { cloneEntityUpdate as __unifiedCloneEntityUpdate } from "./scene3d/entity_update_clone.js";
+      // A14-I1 (2026-06-11 unification survey) — single JS InputController.
+      // `?inputFunnel=on` (default-off) routes this rAF dispatcher AND the
+      // camera dispatcher through ONE shared `setMovementInput` boundary with
+      // a single dedup signature (no cross-site stomp / split-brain). Off =
+      // both legacy paths untouched. Camera registers its movement policy
+      // (orbit-suppress / topDown / follow); index.html registers the input
+      // gate (enteredWorld && !typing) below.
+      import {
+        getInputController as __getInputController,
+        readInputFunnelFlag as __readInputFunnelFlag,
+      } from "./scene3d/input.js";
+      const __inputFunnelOn = __readInputFunnelFlag();
 
       let pluginClient = null;
       let barInstance = null;
@@ -8540,6 +8552,19 @@ void main() {
             return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
           };
 
+          // A14-I1 (?inputFunnel=on): index.html contributes the input GATE
+          // to the shared InputController — the same `enteredWorld && !typing`
+          // condition the legacy dispatch below enforces inline. The funnel
+          // then applies it at the single `setMovementInput` boundary. Default
+          // off → controller never consulted; legacy path runs unchanged.
+          if (__inputFunnelOn) {
+            try {
+              __getInputController().setInputGate(
+                () => enteredWorld && !isTypingInForm()
+              );
+            } catch (_) { /* never break input wiring on the funnel */ }
+          }
+
           // Wave 7.2 (2026-05-26) — jump-charge power meter. Pairs
           // with the variable-power spacebar handler below: keydown
           // calls show(); a rAF loop reads `__jumpKeydownTs` each frame
@@ -10938,7 +10963,17 @@ void main() {
               window.__lastInputSig = sig;
               if (sig !== lastInputSig) {
                 try {
-                  handle.setMovementInput(forward, strafe, turn, run);
+                  if (__inputFunnelOn) {
+                    // A14-I1: route through the shared InputController so this
+                    // dispatcher and the camera dispatcher dedupe against ONE
+                    // signature (no split-brain double-fire / stomp). The
+                    // controller applies the camera policy + the gate we
+                    // registered above; the local-prediction + sidestep/rig
+                    // side-effects below still fire off `sig` change.
+                    __getInputController().dispatch(handle, { forward, strafe, turn, run });
+                  } else {
+                    handle.setMovementInput(forward, strafe, turn, run);
+                  }
                   window.__smiCallCount++;
                   // eslint-disable-next-line no-console
                   console.log(`[step 3] setMovementInput(${forward},${strafe},${turn},${run})`);
