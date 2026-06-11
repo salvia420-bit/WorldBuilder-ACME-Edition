@@ -1584,15 +1584,10 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
 // queued and replayed on spawn. `drainPendingPlayEffects` itself is a
 // cheap no-op when the queue is empty regardless of the flag, so the
 // entities.js wire-site call is always safe to add.
-const PLAY_EFFECT_QUEUE_ON = (() => {
-  try {
-    if (typeof window === "undefined" || !window.location) return false;
-    const v = new URLSearchParams(window.location.search).get("playEffectQueue");
-    return v === "on" || v === "1" || v === "true";
-  } catch (_) {
-    return false;
-  }
-})();
+// INTEGRATED always-on — 1070 eye-test PASSED 2026-06-10 (fresh-spawn caster's
+// cast/buff flash now plays instead of being dropped). JS, live on reload. Was
+// the default-OFF `?playEffectQueue=on` gate.
+const PLAY_EFFECT_QUEUE_ON = true;
 
 // F9-3 (2026-06-09) — `?castVfxDedup=on` (default OFF). The local caster's
 // CasterEffect plays TWICE: playCastSequence emits a synthetic `playEffect`

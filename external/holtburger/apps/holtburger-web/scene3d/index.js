@@ -1850,7 +1850,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // manager when ?renderer=3d is active. Phase 7.5 will fully gate
   // the 2D drainEvents off the 3D path; for now we coexist via the
   // hook.
+  // FU-1 (2026-06-11): wieldHandAttach — default-OFF opt-in that fixes
+  // the in-session-equipped weapon/ammo "drops at the wielder's feet"
+  // bug. When ON, flushWieldedDirty (below) admits MissileAmmo through
+  // the held-item gate and maps it to Quiver(5)/RightHand(1) when the
+  // item carries no ParentLocation, and attachChildToParent retries the
+  // holding-location resolve with Quiver(5)→RightHand(1) for an ammo
+  // child whose ParentEvent location was 0. Default-OFF keeps the exact
+  // current gate / heuristic / root-origin fallback so nothing changes
+  // until the flag is set (pending 1070 eye-test). Read once here.
+  const wieldHandAttach =
+    new URLSearchParams(window.location.search).get("wieldHandAttach")?.toLowerCase() === "on";
   const entityManager = new EntityManager(scene3dForBuilders, wasmExports);
+  // Thread the flag onto the manager so attachChildToParent /
+  // _resolveHoldingLocation can read it without a second URL parse.
+  entityManager._wieldHandAttach = wieldHandAttach;
 
   // Wielded-children pass for the local player rig in the world scene
   // + ALL remote players. The recv loop emits kind=47 EntityDetached
@@ -1876,9 +1890,30 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       for (const it of items) {
         const childGuid = it?.guid >>> 0;
         if (childGuid === 0) continue;
-        // Held items only (Selectable mask) — armor/ammo go via ObjDesc.
-        if (((it.equipMask >>> 0) & 0x3700000) === 0) continue;
-        const loc = (it.parentLocation >>> 0) || 0;
+        // Held items only (Selectable mask) — armor goes via ObjDesc.
+        // FU-1 (2026-06-11): the held-item gate. Default mask 0x3700000 =
+        // Melee|Shield|Missile|Caster|TwoHanded. Behind ?wieldHandAttach=on
+        // widen to 0x3F00000 (+0x800000 MISSILE_AMMO) so the quarrel/arrow
+        // is no longer dropped from the attach pass.
+        const heldMask = wieldHandAttach ? 0x3F00000 : 0x3700000;
+        if (((it.equipMask >>> 0) & heldMask) === 0) continue;
+        let loc = (it.parentLocation >>> 0) || 0;
+        if (loc === 0) {
+          // FU-1 (2026-06-11): ACE usually omits PropertyInt::ParentLocation
+          // (52) on wielded items, so `parent_location` falls through to 0.
+          // With loc=0 the holding-location lookup misses and the weapon mounts
+          // at the wielder's ROOT origin — i.e. it "drops" at the feet instead
+          // of appearing in the hand on login. Implement the equip_mask
+          // heuristic the lib.rs comment promised: Shield→Shield(3); every
+          // main-hand weapon/caster (Melee|Missile|Held|TwoHanded)→RightHand(1).
+          const em = it.equipMask >>> 0;
+          if (em & 0x00200000) loc = 3;
+          else if (em & 0x03500000) loc = 1;
+          // FU-1 (2026-06-11): behind ?wieldHandAttach=on, map MissileAmmo
+          // (0x00800000) → Quiver(5). attachChildToParent falls back to
+          // RightHand(1) when the wielder SetupModel has no Quiver frame.
+          else if (wieldHandAttach && (em & 0x00800000)) loc = 5;
+        }
         const place = (it.placement >>> 0) || 0;
         try {
           entityManager.attachChildToParent(childGuid, wielderGuid >>> 0, loc, place);

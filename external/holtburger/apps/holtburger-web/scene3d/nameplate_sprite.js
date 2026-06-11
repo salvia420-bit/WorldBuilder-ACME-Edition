@@ -132,17 +132,10 @@ const _nameplateCache = new Map();
 // The fuller per-entity PVS-membership cull (hide the name when its OWNING
 // cell is outside the render set) is the better fix but needs the per-entity
 // objcell_id surfaced from wasm position updates; deferred (wasm rebuild).
-const _NAMEPLATE_OCCLUSION_FLAG = (() => {
-  try {
-    if (typeof window === "undefined" || !window.location) return false;
-    return (
-      new URLSearchParams(window.location.search).get("nameplateOcclusion") ===
-      "on"
-    );
-  } catch (_) {
-    return false;
-  }
-})();
+// INTEGRATED always-on — 1070 eye-test PASSED 2026-06-10 (indoor walls occlude
+// other-room nameplates; no X-ray). JS, live on reload. Was the default-OFF
+// `?nameplateOcclusion=on` gate.
+const _NAMEPLATE_OCCLUSION_FLAG = true;
 // Effective depthTest currently applied to all baked + cached nameplate
 // materials. New bakes read this; setNameplateDepthTest flips it on the
 // already-cached materials in place (depthTest is read live by the renderer

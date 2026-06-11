@@ -237,10 +237,15 @@ const PAPERDOLL_SLOTS = [
   //   ShieldReady   (Shield bit 0x00200000) — Wave 12 had Shield at the
   //   same anchor with the old layout-0x21000024 elementId 0x100001E1;
   //   Wave 16 dedupes onto the canonical 0x21000037 element 0x1000044D.
-  //   WeaponReady   (MeleeWeapon bit 0x00100000) — main-hand slot.
+  //   WeaponReady   — main-hand slot. Accepts ANY main-hand weapon type, not
+  //     just melee: MeleeWeapon 0x00100000 | MissileWeapon 0x00400000 | Held
+  //     0x01000000 (casters/wands) | TwoHanded 0x02000000 = 0x03500000. The
+  //     old MeleeWeapon-only mask rejected bows/crossbows/atlatls and casters
+  //     (canEquipInSlot: validLocations & slotMask == 0 → "cannot be worn in
+  //     that slot"). Ammo still has its own slot below; Shield its own.
   //   AmmoReady     (MissileAmmo bit 0x00800000) — quiver/quarrel slot.
   { elemId: "0x1000044D", equipMask: 0x00200000, hintIconDid: 0x06000F6C, x: 8,   y: 172, name: "Shield" },
-  { elemId: "0x1000044B", equipMask: 0x00100000, hintIconDid: 0x06000F66, x: 48,  y: 172, name: "Weapon" },
+  { elemId: "0x1000044B", equipMask: 0x03500000, hintIconDid: 0x06000F66, x: 48,  y: 172, name: "Weapon" },
   { elemId: "0x100005BD", equipMask: 0x00000100, hintIconDid: 0x06006D85, x: 120, y: 172, name: "Boots" },
   { elemId: "0x1000044C", equipMask: 0x00800000, hintIconDid: 0x06000F5E, x: 156, y: 172, name: "Ammo" },
 ];
@@ -1291,12 +1296,23 @@ function doMount(parentEl, _ctx) {
       if (dropVerdict.speculative) {
         try { paperdollToast("Equipping speculatively (item attributes pending).", { speculative: true }); } catch (_) {}
       }
+      // Wield to the item's SPECIFIC location, not the (possibly multi-bit)
+      // slot mask. The main-hand Weapon slot accepts Melee|Missile|Held|
+      // TwoHanded (0x03500000), but ACE stores CurrentWieldedLocation verbatim
+      // and a multi-bit location breaks server-side combat-stance derivation
+      // (the combat toggle flashes then reverts to Peace — the bow/wand bug).
+      // `validLocations & slotMask` collapses to the item's real bit
+      // (crossbow → 0x400000); identical to the old single-bit-slot behavior
+      // for armor, and falls back to the slot mask if validLocations isn't
+      // hydrated yet.
+      const wieldLoc =
+        (((dropItem.validLocations >>> 0) & (s.equipMask >>> 0)) >>> 0) || (s.equipMask >>> 0);
       if (handle?.setWielded) {
         try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
-        try { handle.setWielded(guid, s.equipMask >>> 0); }
+        try { handle.setWielded(guid, wieldLoc); }
         catch (e) { console.warn("[paperdoll] setWielded failed:", e); }
       } else if (handle?.wieldFromPack) {
-        try { handle.wieldFromPack(guid, s.equipMask >>> 0); }
+        try { handle.wieldFromPack(guid, wieldLoc); }
         catch (e) { console.warn("[paperdoll] wieldFromPack failed:", e); }
       }
     });

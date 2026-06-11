@@ -101,12 +101,10 @@ let _mvpMatrixScratch = null;
 // right material per group), so every surface textures correctly. Default
 // OFF pending a 1070 eye-test (changes interior prop textures).
 function readCellStaticMultiSurface() {
-  try {
-    return typeof globalThis !== "undefined" && globalThis.location &&
-      new URLSearchParams(globalThis.location.search).get("cellStaticMultiSurface") === "on";
-  } catch (_) {
-    return false;
-  }
+  // INTEGRATED always-on — 1070 eye-test PASSED 2026-06-10 (interior props
+  // texture correctly per-surface). JS, live on reload. Was the default-OFF
+  // `?cellStaticMultiSurface=on` gate.
+  return true;
 }
 
 // F14-3 — build one fused multi-surface BufferGeometry + parallel materials

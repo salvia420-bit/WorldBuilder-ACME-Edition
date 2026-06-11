@@ -135,16 +135,10 @@ const KIND_TURN = 9;
 // flows through KIND_MOTION_ACTION (which already runs for the local guid),
 // not here — that channel does not yet thread `is_autonomous` per item
 // (movement/types.rs MotionItem.packed_sequence bit 15).
-const FORCE_MOTION_LOCAL_ON = (() => {
-  try {
-    if (typeof window === "undefined" || !window.location) return false;
-    return (
-      new URLSearchParams(window.location.search).get("forceMotionLocal")?.toLowerCase() === "on"
-    );
-  } catch (_) {
-    return false;
-  }
-})();
+// INTEGRATED always-on — 1070 eye-test PASSED 2026-06-10 (`@animation Sitting`
+// forced pose plays on the local avatar; B9 local-gait prediction preserved).
+// Was the default-OFF `?forceMotionLocal=on` gate.
+const FORCE_MOTION_LOCAL_ON = true;
 
 // Predictor-owned LOCOMOTION command low-16 set — the kind=5 commands the
 // B9 local-gait skip MUST keep swallowing so client prediction is never

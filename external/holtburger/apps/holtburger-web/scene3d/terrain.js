@@ -1490,29 +1490,24 @@ void main() {
   //
   // F12-3 — slope-dependent sun shading (?terrainSlopeShading=on, default
   // off). The geometry already carries a per-vertex AC-space normal
-  // (vAcNormal), but the lighting term ignored it: baseN was hardcoded flat
-  // and ndotl stayed 1.0 unless the detail-normal path ran (and even then it
-  // perturbed a FLAT base), so mountains / valley walls / cliff bands read
-  // airbrushed with no light-shade relief — worst at low (dawn/dusk) sun
-  // angles where retail terrain is strongly modelled. When enabled we
-  // (a) re-encode the true geometry normal as the RNM base so the detail
-  // layer perturbs the real surface, and (b) seed a base NdotL from that
-  // normal so terrain gets relief even with the detail layer off. The
-  // default-off path keeps the flat base + ndotl=1.0 (bit-exact prior look).
+  // (vAcNormal), but the lighting term ignored it: mountains / valley walls /
+  // cliff bands read airbrushed with no light-shade relief — worst at low
+  // (dawn/dusk) sun angles where retail terrain is strongly modelled.
+  //
+  // FU-2 — the RNM base ALWAYS stays the flat pre-encoded tangent base
+  // (0.5, 0.5, 1.0), regardless of the flag. The geometry (world-space)
+  // normal must never be routed through the tangent-space RNM decode: that
+  // is a space category error that collapses t toward the zero vector on
+  // sloped facets and produces normalize(0) = NaN → pure-black terrain. The
+  // detail layer perturbs the flat tangent base as it always has. The slope
+  // relief from the real geometry normal is instead applied SEPARATELY as a
+  // world-space NdotL factor on the final ndotl (below, after the detail
+  // path), so flag-off output is bit-exact (ndotl unchanged, no NaN path).
   vec3 geomN = normalize(vAcNormal);
   bool slopeShading = uTerrainSlopeShadingEnabled > 0.5;
-  vec3 baseN = slopeShading
-    ? (geomN * 0.5 + 0.5)             // encode AC normal → [0,1] RNM base
-    : vec3(0.5, 0.5, 1.0);            // flat pre-encoded base [0.5, 0.5, 1]
+  vec3 baseN = vec3(0.5, 0.5, 1.0);    // flat pre-encoded base [0.5, 0.5, 1]
 
   float ndotl = 1.0;
-  if (slopeShading) {
-    // Base slope shading: sun NdotL off the geometry normal, with the same
-    // 0.65 wrap floor the detail path uses so unlit faces don't crush to
-    // black. The detail path below overwrites ndotl when it runs (its RNM
-    // base is now geomN too), so the two never double-apply.
-    ndotl = mix(0.65, 1.0, clamp(dot(geomN, sunDir), 0.0, 1.0));
-  }
   if (uDetailNormalEnabled > 0.5) {
     int slice = uCodeToSlice[clamp(vTerrainCode, 0, 31)];
     if (slice < 5) {
@@ -1575,7 +1570,11 @@ void main() {
       // RNM blend.
       vec3 t = baseN * vec3(2.0, 2.0, 2.0) + vec3(-1.0, -1.0, 0.0);
       vec3 u = detailEncoded * vec3(-2.0, -2.0, 2.0) + vec3(1.0, 1.0, -1.0);
-      vec3 combinedN = normalize(t * dot(t, u) - u * t.z);
+      // FU-2 — guard against the latent normalize(0) NaN: a degenerate detail
+      // sample (e.g. encoded (0.5,0.5,0.5) → u=0) collapses the RNM vector to
+      // zero. Compute it raw, then fall back to the flat tangent normal.
+      vec3 rnmRaw = t * dot(t, u) - u * t.z;
+      vec3 combinedN = (dot(rnmRaw, rnmRaw) > 1e-8) ? normalize(rnmRaw) : vec3(0.0, 0.0, 1.0);
       // Apply combined normal to the sun NdotL.
       ndotl = clamp(dot(combinedN, sunDir), 0.0, 1.0);
       // Wrap-lighting bias so unlit faces don't go pure black — terrain
@@ -1583,6 +1582,19 @@ void main() {
       // much contrast at sunset orientations.
       ndotl = mix(0.65, 1.0, ndotl);
     }
+  }
+
+  // FU-2 — geometry-normal slope relief, applied as a WORLD-space factor on
+  // the resolved ndotl (whichever path ran: flat seed of 1.0 with detail off,
+  // or the floored RNM result with detail on). Only when the flag is on, so
+  // flag-off is a strict no-op. This is the SOLE slope contribution (the old
+  // Path A seed was dropped above) — folding the wrap-floored (0.65) real
+  // geometry NdotL here gives true light/shade relief without ever passing
+  // the world normal through the tangent-space RNM. Combined floor ~0.42
+  // (0.65 * 0.65), never pure black.
+  if (slopeShading) {
+    float slopeNdotL = mix(0.65, 1.0, clamp(dot(geomN, sunDir), 0.0, 1.0));
+    ndotl = mix(ndotl, ndotl * slopeNdotL, 1.0);
   }
 
   // Clouds-L — cloud-shadow modulation. Project world pos into cascade

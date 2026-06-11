@@ -23,12 +23,10 @@ const PEACE_USE_DOUBLE_CLICK_MS = 400;
 // the arrow leaves your character's back when the target is behind/beside
 // you. Default-OFF (touches the motion pipeline → setMovementInput turn);
 // pending 1070 eye-test. (?missileFaceTarget=on)
-const MISSILE_FACE_TARGET = (() => {
-  try {
-    return typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("missileFaceTarget") === "on";
-  } catch { return false; }
-})();
+// INTEGRATED always-on — 1070 eye-test PASSED 2026-06-11 (player turns to face
+// a side/behind target before the missile shot). JS, live on reload. Was the
+// default-OFF `?missileFaceTarget=on` gate.
+const MISSILE_FACE_TARGET = true;
 // Cap the turn-to-face pre-step so a bad bearing can't stall the shot.
 const FACE_TURN_TIMEOUT_MS = 800;
 

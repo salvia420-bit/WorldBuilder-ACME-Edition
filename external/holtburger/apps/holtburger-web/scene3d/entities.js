@@ -560,16 +560,10 @@ const DYN_LOD_INTERVAL_S = 0.5;
 // scale/translucency on the wire), so the everyday equip/dye path never resets
 // a grown/ghosted entity. Default OFF pending a 1070 eye-test (re-scales the
 // rig via despawn+respawn — same path SG-D uses).
-const RUNTIME_OBJSCALE_ON = (() => {
-  try {
-    if (typeof window === "undefined" || !window.location) return false;
-    return (
-      new URLSearchParams(window.location.search).get("runtimeObjScale")?.toLowerCase() === "on"
-    );
-  } catch (_) {
-    return false;
-  }
-})();
+// INTEGRATED always-on — 1070 eye-test PASSED 2026-06-10 (`@objscale` grows/
+// shrinks the rig live). JS, live on reload. Was the default-OFF
+// `?runtimeObjScale=on` gate.
+const RUNTIME_OBJSCALE_ON = true;
 // Render-completeness Waves-2 P3 (2026-05-29) — CallPES (AnimationHook
 // type 19) is a RECURSIVE sub-script invocation: a PhysicsScript can call
 // another PhysicsScript, which can call another, etc. (354 retail scripts
@@ -1988,6 +1982,20 @@ export class EntityManager {
       if (typeof window !== "undefined" && window.location) {
         const flag = new URLSearchParams(window.location.search).get("clothingHotSwap");
         this._hotSwapAppearance = (flag === "1");
+      }
+    } catch (_) {}
+    // FU-1 (2026-06-11): wieldHandAttach — default-OFF opt-in that lets
+    // attachChildToParent retry the holding-location resolve with
+    // Quiver(5)→RightHand(1) for an ammo child whose ParentEvent location
+    // was 0 (instead of mounting it at the wielder root / feet). index.js
+    // overwrites this field after construction from a single URL parse;
+    // initialise here so the field is never undefined when the manager is
+    // built from a path that doesn't set it (e.g. the hello-cube capture).
+    this._wieldHandAttach = false;
+    try {
+      if (typeof window !== "undefined" && window.location) {
+        const flag = new URLSearchParams(window.location.search).get("wieldHandAttach");
+        this._wieldHandAttach = (flag?.toLowerCase() === "on");
       }
     } catch (_) {}
     // === Wave R2.A (2026-05-28) — entity-attached dynamic lights.
@@ -3632,6 +3640,40 @@ export class EntityManager {
       // eslint-disable-next-line no-console
       console.warn("[attach] holding-location resolve failed:", e);
     }
+    // FU-1 (2026-06-11): behind ?wieldHandAttach=on, when the kind=7
+    // ParentEvent attach for ammo carries location=ParentLocation=0 (ACE
+    // ammo weenies usually lack ParentLocation), `_resolveHoldingLocation`
+    // missed and `loc` is null — the quarrel would mount at the wielder
+    // ROOT origin (the feet). Retry the resolve with Quiver(5) then
+    // RightHand(1) so the arrow/bolt lands in the quiver/hand frame.
+    // Only for ammo children (EquipMask MISSILE_AMMO 0x00800000), looked
+    // up from the wielder's wielded-items snapshot. Flag OFF = unchanged.
+    if (this._wieldHandAttach && loc === null && (location >>> 0) === 0) {
+      let childIsAmmo = false;
+      try {
+        const handle = (typeof window !== "undefined") ? window.__sessionHandle : null;
+        if (handle && typeof handle.entityWieldedItems === "function") {
+          const items = handle.entityWieldedItems(pGuid);
+          if (Array.isArray(items)) {
+            const entry = items.find((w) => (w?.guid >>> 0) === cGuid);
+            if (entry && (((entry.equipMask >>> 0) & 0x00800000) !== 0)) {
+              childIsAmmo = true;
+            }
+          }
+        }
+      } catch (_) {}
+      if (childIsAmmo) {
+        for (const altKey of [5, 1]) {
+          try {
+            const alt = await this._resolveHoldingLocation(setupId, altKey);
+            if (alt) {
+              loc = alt;
+              break;
+            }
+          } catch (_) {}
+        }
+      }
+    }
     // Re-check liveness after the await — either rig may have despawned.
     const c = this.entityMap.get(cGuid);
     const p = this.entityMap.get(pGuid);
@@ -5214,7 +5256,13 @@ export class EntityManager {
     action.reset();
     action.play();
     const prior = inst.currentAction;
-    if (prior && prior !== action) {
+    // FU-3 (2026-06-11) — when MOVING, `prior` is the run/walk cycle; the
+    // crossfade-away fades the LEGS OUT instead of overlaying the swing on a
+    // still-running gait. Under ?fullBodyOneShot=on, skip the crossfade so the
+    // local swing OVERLAYS locomotion (legs keep running) — matching retail and
+    // the `_tryPlayLink` server-echo path; the base-cycle suppression below then
+    // ramps that base to 0 for the overlay's duration. Default-off (flag).
+    if (prior && prior !== action && !FULL_BODY_ONE_SHOT) {
       try { action.crossFadeFrom(prior, 0.1, false); } catch (_) {}
     }
     inst._swingTween = null;
@@ -5223,6 +5271,24 @@ export class EntityManager {
     inst._castTween = null;
     inst.currentAction = action;
     inst.currentActionKey = swingKey;
+    // FU-3 (2026-06-11) — make the LOCAL optimistic swing/cast one-shot
+    // full-body, exactly like the server-echo `_tryPlayLink` path. Without
+    // this, with ?fullBodyOneShot=on three.js still normalizes overlay+base
+    // to ~50/50 → the swing plays at half amplitude. No-op when the flag is
+    // off (byte-identical to today).
+    if (FULL_BODY_ONE_SHOT) {
+      if (!inst._locoCycleKey || !inst.actions?.has(inst._locoCycleKey)) {
+        // ensure a base to suppress when velScale is off (it only sets
+        // _locoCycleKey for walk/run): point it at the prior locomotion/Ready
+        // action so its weight is ramped to 0 for the overlay's duration
+        if (prior && prior !== action) {
+          for (const [k, a] of inst.actions) {
+            if (a === prior) { inst._locoCycleKey = k; break; }
+          }
+        }
+      }
+      this._suppressBaseCycleForOverlay(inst, action);
+    }
     if (inst._swingRestoreTimer) clearTimeout(inst._swingRestoreTimer);
     // Wave 4 / Phase 4.2 (2026-05-26) — hold-at-peak windup. Schedule a
     // pause at `dur * 0.5` after play() so the rig holds at the peak
@@ -9141,7 +9207,12 @@ export class EntityManager {
     if (!mtableId) return; // raw GfxObj setup with no MotionTable — no fidgets.
     const stance =
       (inst.currentStance ?? inst.lastStance ?? inst.meta?.motionStance ?? 0) >>> 0;
-    if (!stance) return; // need a resolved stance to key the link lookup.
+    // NOTE: stance may be 0 here (NPCs spawn idle with motionStance 0; only
+    // setMotion/setLocalStance set currentStance/lastStance). We pass it
+    // through unchanged — both the wasm probe (lookupMotionLinkForSwing →
+    // classify_motion_link_for_swing) and the clip fetch (_tryPlayLink →
+    // try_resolve_link_frames) resolve stance 0 → default_style, so a
+    // never-moved entity probes against its real (e.g. NonCombat) link set.
     // Pick a random fidget command; probe up to a few candidates so an MT that
     // happens to lack the first pick still fidgets (most have a handful of the
     // common gestures). Bounded, cheap — at most IDLE_FIDGET_COMMANDS.length

@@ -92,12 +92,11 @@ const HOLTBURG_Y = 0xb4;
 // in AC's z-up frame — the SAME frame the yaw-only `setFromAxisAngle((0,0,1),
 // rotationZ)` uses (both are applied under worldRoot's z-up→y-up transform),
 // so it composes correctly. Pending a 1070 eye-test (e.g. LB 0x7D64).
-const FULL_PLACEMENT_QUAT = (() => {
-  try {
-    return typeof globalThis !== "undefined" && globalThis.location &&
-      new URLSearchParams(globalThis.location.search).get("fullPlacementQuat") === "on";
-  } catch (_) { return false; }
-})();
+// INTEGRATED always-on — 2026-06-10. User-accepted (not individually eye-tested;
+// the tilted-prop A/B at LB 0x7D64 was set up but the user opted to integrate the
+// remaining deferred flags directly). Safe: degrades to yaw-only on a stale pkg or
+// degenerate quat. Was the default-OFF `?fullPlacementQuat=on` gate.
+const FULL_PLACEMENT_QUAT = true;
 
 // F13-4 — apply a placement's orientation to a THREE.Quaternion. Full AC quat
 // when the flag is on AND the record carries finite, non-degenerate quat

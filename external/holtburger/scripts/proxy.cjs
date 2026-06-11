@@ -115,9 +115,14 @@ function proxyUpgrade(clientReq, clientSocket, head) {
 
 const server = http.createServer(proxyHttp);
 server.on("upgrade", proxyUpgrade);
-server.listen(PROXY_PORT, "127.0.0.1", () => {
+// 2026-06-09 — bind all interfaces so the app + /wsbridge are reachable
+// over Tailscale (e.g. http://100.x:7080) directly, without a cloudflared
+// quick-tunnel (which kept resetting long-lived game WebSockets). Tailscale
+// is WireGuard, so this is only reachable by tailnet peers + the LAN; the
+// game UDP bridge it fronts (wsbridge :8080) already binds 0.0.0.0.
+server.listen(PROXY_PORT, "0.0.0.0", () => {
   console.log(
-    `proxy listening on 127.0.0.1:${PROXY_PORT}` +
+    `proxy listening on 0.0.0.0:${PROXY_PORT}` +
       `; HTTP→${HTTP_BACKEND.host}:${HTTP_BACKEND.port}` +
       `; WS /wsbridge→${WS_BACKEND.host}:${WS_BACKEND.port}`
   );

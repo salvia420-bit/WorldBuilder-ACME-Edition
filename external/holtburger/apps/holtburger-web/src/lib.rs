@@ -554,9 +554,12 @@ impl LandblockMesh {
 /// network fetch (no `.await`) — a cache miss just yields the fallback.
 #[cfg(target_arch = "wasm32")]
 fn resolve_region_land_height_table() -> Option<Vec<f32>> {
-    if !js_location_search().contains("regionHeightTable=on") {
-        return None;
-    }
+    // INTEGRATED always-on — 2026-06-10. Safe by construction: a cache miss or
+    // retail data both fall back to `byte * 2.0` (byte-identical to pre-F12-4 on
+    // stock Dereth); only a custom/modded region DAT diverges, and there the
+    // table is the correct decode. Not separately 1070-eye-tested because it is
+    // a verified no-op on the data we render. Was the default-OFF
+    // `?regionHeightTable=on` gate.
     use holtburger_dat::{ResourceKey, ResourceSource};
     let bytes = global_source::global_source()
         .get_file_by_key(ResourceKey::new("eor/portal", 0x1300_0000))
@@ -1445,9 +1448,10 @@ fn resolve_launcher_max_velocity(wcid: Option<u32>, wire: Option<f64>) -> f32 {
     if let Some(v) = wire {
         return v as f32;
     }
-    if !js_location_search().contains("launcherVelocityTable=on") {
-        return 20.0;
-    }
+    // INTEGRATED always-on — 2026-06-10. User-accepted (the per-launcher table is a
+    // static lookup feeding the existing aim math; misses fall back to the 20.0
+    // floor below, so it's safe). Was the default-OFF `?launcherVelocityTable=on`
+    // gate. Wire value still wins (handled above).
     static TABLE: std::sync::OnceLock<std::collections::HashMap<u32, f32>> =
         std::sync::OnceLock::new();
     let table = TABLE.get_or_init(|| {
@@ -5979,10 +5983,20 @@ fn classify_motion_link_for_swing(
     stance: u32,
     command: u32,
 ) -> Option<MotionLinkAnimInner> {
+    // `stance == 0` → the MotionTable's `default_style`, mirroring the sibling
+    // resolvers `motion_cycle_base_speed` / `try_resolve_link_frames`. Without
+    // this, an at-rest entity (stance 0) keys outer 0x00000003 which never
+    // matches a real link (e.g. NonCombat/Ready = 0x003D0003). Pure widening:
+    // non-zero stances are unchanged.
+    let resolved_stance = if stance == 0 {
+        mtable.default_style
+    } else {
+        stance
+    };
     // Outer key: same encoding as `cycle_key` (stance LOW 16 << 16 |
     // from-substate LOW 16). For swings, from-substate is always Ready
     // (LOW 16 = 0x0003).
-    let outer_key = ((stance & 0xFFFF) << 16) | (MOTION_LINK_FROM_READY & 0xFFFF);
+    let outer_key = ((resolved_stance & 0xFFFF) << 16) | (MOTION_LINK_FROM_READY & 0xFFFF);
     let inner_map = mtable.links.get(&outer_key)?;
     // Inner key: the FULL 32-bit command, NOT masked. See module comment
     // above. This is the W3.C load-bearing finding.
@@ -22329,6 +22343,107 @@ fn apply_inventory_object_create(
     }
 }
 
+/// FU-1 (2026-06-11): re-usable wielder-index upsert for the
+/// already-spawned-item case. `apply_inventory_object_create` (above)
+/// only populates `wielder_index` when ACE ships a **fresh**
+/// `ObjectCreate` for the wielded item — but the EQUIPPING player never
+/// gets a fresh CreateObject for their own weapon on an in-session equip
+/// (ACE `Player_Tracking.cs:116 TrackEquippedObject` `return`s when
+/// `wielder == this`). The Wielder / CurrentWieldedLocation transition
+/// instead arrives via `ParentEvent` (0xF749) and `UpdateObject`
+/// (0xF7DB) for an item already in `world.entities`. This reads the
+/// now-current entity record (which the recv-loop has already mutated
+/// via `apply_description` / the routed property-update path) and folds
+/// the same `WieldedWeaponEntry` the ObjectCreate path builds into the
+/// per-wielder list, keyed by the wielder GUID. Pure additive data —
+/// it only makes `entity_wielded_items(wielder)` include the
+/// session-equipped item; no behaviour changes until JS reads it.
+#[cfg(target_arch = "wasm32")]
+fn upsert_wielder_index(
+    world: &holtburger_world::WorldState,
+    item_guid: holtburger_common::Guid,
+    wielder_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
+    >,
+) {
+    use holtburger_common::properties::{
+        PropertyFloat, PropertyInt, WorldObjectExt as _,
+        WorldObjectPropertyAccessors as _,
+    };
+    let Some(entity) = world.entities.get(item_guid) else {
+        return;
+    };
+    let wielder_id = entity.wielder_id();
+    let equip_mask = entity.wield_location();
+    // Mirror the `apply_inventory_object_create` gate: only items
+    // carrying a real wielder + an equip-slot bit make it in.
+    if let Some(w_guid) = wielder_id
+        && !equip_mask.is_empty()
+    {
+        let w_u32 = u32::from(w_guid);
+        // Pull the same classifier fields the ObjectCreate path reads
+        // off the weapon entity, with the identical fallbacks.
+        let attack_type = entity
+            .get_int_prop(PropertyInt::AttackType)
+            .map(|bits| bits as u32)
+            .unwrap_or(0);
+        let maximum_velocity = resolve_launcher_max_velocity(
+            entity.wcid,
+            entity.get_float_prop(PropertyFloat::MaximumVelocity),
+        );
+        let damage_mod = entity
+            .get_float_prop(PropertyFloat::DamageMod)
+            .map(|v| v as f32)
+            .unwrap_or(1.0);
+        let placement = entity
+            .get_int_prop(PropertyInt::Placement)
+            .map(|v| v as u32)
+            .unwrap_or(0);
+        let parent_location = entity
+            .get_int_prop(PropertyInt::ParentLocation)
+            .map(|v| v as u32)
+            .unwrap_or(0);
+        let entry = WieldedWeaponEntry {
+            item_guid: u32::from(item_guid),
+            wcid: entity.wcid.unwrap_or(0),
+            name: entity.name().to_string(),
+            item_type: entity.item_type_int().unwrap_or(0),
+            equip_mask: equip_mask.bits(),
+            attack_type,
+            maximum_velocity,
+            damage_mod,
+            placement,
+            parent_location,
+        };
+        let mut idx = wielder_index.borrow_mut();
+        let list = idx.entry(w_u32).or_default();
+        // De-dupe on item_guid (re-equip of the same item) exactly as
+        // the ObjectCreate path does.
+        list.retain(|e| e.item_guid != entry.item_guid);
+        list.push(entry);
+    }
+}
+
+/// FU-1 (2026-06-11): strip a child item from every wielder bucket.
+/// Mirrors `apply_inventory_object_delete`'s per-list retain (case (a))
+/// but without touching `world.entities` / player inventory — used by
+/// the `ParentEvent` un-equip arm (`parent_guid == NULL`) where the
+/// item still exists, it's just no longer wielded.
+#[cfg(target_arch = "wasm32")]
+fn strip_wielder_index_item(
+    item_guid: holtburger_common::Guid,
+    wielder_index: &std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, Vec<WieldedWeaponEntry>>>,
+    >,
+) {
+    let g_u32 = u32::from(item_guid);
+    let mut idx = wielder_index.borrow_mut();
+    for entries in idx.values_mut() {
+        entries.retain(|e| e.item_guid != g_u32);
+    }
+    idx.retain(|_, entries| !entries.is_empty());
+}
+
 /// Phase 4 step 4 follow-on: spatial-bypass version of
 /// `holtburger_world::handlers::inventory::handle_message`'s
 /// `GameMessage::ObjectDelete` /
@@ -29829,14 +29944,15 @@ async fn recv_loop(
     // `check_sequence_gap` call so production builds with the flag
     // off pay zero cost beyond a single `bool` check.
     let seq_debug: bool = parse_seq_debug_flag(&js_location_search());
-    // "why not both" (2026-06-09): `?spawnMotionState=on` (default OFF). When
-    // ON, the SPAWN EntityUpdate's `motion_command` is seeded from the
-    // ObjectCreate's CURRENT motion state (`movement_data` forward_command)
-    // instead of always defaulting to Ready — so an already-OPEN door (or a
-    // posed creature) entering vision renders in its current pose, not just
-    // when a live UpdateMotion happens to follow. Default OFF pending a 1070
-    // eye-test (it changes the 3D spawn pose, which I can't verify here).
-    let spawn_motion_state_on: bool = js_location_search().contains("spawnMotionState=on");
+    // "why not both" (2026-06-09): seed the SPAWN EntityUpdate's
+    // `motion_command` from the ObjectCreate's CURRENT motion state
+    // (`movement_data` forward_command) instead of always defaulting to Ready —
+    // so an already-OPEN door (or a posed creature) entering vision renders in
+    // its current pose, not just when a live UpdateMotion happens to follow.
+    // INTEGRATED always-on — 1070 eye-test PASSED 2026-06-10 (was the default-OFF
+    // `?spawnMotionState=on` gate; kept as an always-true binding so downstream
+    // call sites are untouched).
+    let spawn_motion_state_on: bool = true;
     // F17-3 (2026-06-09): `?spawnDoorCollision=on` (default OFF). The
     // COLLISION twin of `?spawnMotionState` (which is the RENDER half). When
     // ON, a door that spawns already-OPEN (ObjectDescriptionFlag::DOOR +
@@ -29845,7 +29961,9 @@ async fn recv_loop(
     // building AABB / add the indoor cell-mesh exclusion — so DefaultOpen
     // doors and doors opened before you arrived aren't an invisible wall.
     // Default OFF pending a 1070 eye-test (changes movement collision).
-    let spawn_door_collision_on: bool = js_location_search().contains("spawnDoorCollision=on");
+    // INTEGRATED always-on — 1070 eye-test PASSED 2026-06-10 (was the default-OFF
+    // `?spawnDoorCollision=on` gate; kept as an always-true binding).
+    let spawn_door_collision_on: bool = true;
     // F16-2 (2026-06-09): `?skipContainedSpawn=on` (default OFF). Every
     // ObjectCreate for a contained pack item (full inventory at login, loot,
     // vendor buys) carries no `pos` and no `wielder_id`, yet still emitted a
@@ -29861,8 +29979,12 @@ async fn recv_loop(
     // above), so equip-from-pack still renders the in-hand weapon. Default OFF
     // pending a 1070 eye-test (verify inventory UI + equip-from-pack render +
     // that no genuinely-visible object arrives pos-less).
-    let skip_contained_spawn_on: bool =
-        js_location_search().contains("skipContainedSpawn=on");
+    // INTEGRATED always-on — 1070 eye-test PASSED (functional) 2026-06-10: inventory
+    // UI + equip-from-pack pose work. (Follow-up tracked separately: the in-HAND
+    // weapon MESH does not render on equip — a ParentEvent/0xF749 attach gap, NOT
+    // a regression from this skip. See the eye-test follow-ups list.) Was the
+    // default-OFF `?skipContainedSpawn=on` gate; kept as an always-true binding.
+    let skip_contained_spawn_on: bool = true;
     // F16-5 (bughunt 2026-06-09): `?spawnHiddenState=on` (default OFF).
     // The wasm ObjectCreate arm pushes the KIND_SPAWN rig but never
     // surfaces the spawn-time `PhysicsState` (HIDDEN/NO_DRAW/CLOAKED) to
@@ -29881,8 +30003,9 @@ async fn recv_loop(
     // before the EntityInstance exists — the JS side queues it in
     // `_pendingVisibility` and drains on spawn (mirrors `_pendingAttach`).
     // Default OFF pending a 1070 eye-test (changes what renders at spawn).
-    let spawn_hidden_state_on: bool =
-        js_location_search().contains("spawnHiddenState=on");
+    // INTEGRATED always-on — 1070 eye-test PASSED 2026-06-10 (was the default-OFF
+    // `?spawnHiddenState=on` gate; kept as an always-true binding).
+    let spawn_hidden_state_on: bool = true;
     let seq_tracker: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<(u32, u32), u32>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
@@ -30839,6 +30962,40 @@ async fn recv_loop(
                                         idx.insert(g_u32, new_did);
                                     }
                                 }
+                                // FU-1 (2026-06-11): UpdateObject (0xF7DB) is one
+                                // of the two paths (the other is ParentEvent
+                                // below) that carries a Wielder /
+                                // CurrentWieldedLocation transition for an
+                                // already-spawned item without a fresh
+                                // ObjectCreate — e.g. the equipping player's own
+                                // weapon, since ACE's TrackEquippedObject returns
+                                // for `wielder == this`. `apply_description` just
+                                // refreshed the cached entity above, so re-fold
+                                // it into the per-wielder index. Idempotent: the
+                                // upsert de-dupes on item_guid and no-ops when the
+                                // item carries no wielder + equip-slot bit.
+                                upsert_wielder_index(w, guid, &wielder_index);
+                            }
+                            // FU-1 (2026-06-11): ParentEvent (0xF749) is the
+                            // other in-session equip signal. When a wielded child
+                            // is attached (`parent_guid != NULL`) the equipping
+                            // player gets NO fresh CreateObject for it, so
+                            // `apply_inventory_object_create` never indexed it.
+                            // Fold the now-current entity into the per-wielder
+                            // index here so `entity_wielded_items(wielder)`
+                            // includes the session-equipped item (the JS
+                            // flushWieldedDirty equip_mask→holding-location
+                            // heuristic then attaches it). On detach
+                            // (`parent_guid == NULL`) strip the child from every
+                            // wielder bucket, mirroring
+                            // `apply_inventory_object_delete`'s per-list retain.
+                            GameMessage::ParentEvent(data) => {
+                                if data.parent_guid != holtburger_common::Guid::NULL {
+                                    upsert_wielder_index(w, data.child_guid, &wielder_index);
+                                } else {
+                                    strip_wielder_index_item(data.child_guid, &wielder_index);
+                                }
+                                inventory_changed = true;
                             }
                             _ => {}
                         }
