@@ -1786,6 +1786,9 @@ impl PlayerState {
         self.is_airborne = false;
         self.is_jumping = false;
         self.vertical_velocity = 0.0;
+        // F1-6 / G-7 — touchdown (or teleport, which routes through land)
+        // drops any held standing-long-jump charge, per the field doc.
+        self.standing_long_jump_charge = false;
         // Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — touchdown
         // is a contact reset, so the wall tracked while airborne (if any)
         // is no longer the `LastKnownContactPlane` for the next grounded

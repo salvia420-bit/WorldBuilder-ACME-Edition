@@ -1317,6 +1317,17 @@ impl MovementSystem {
         } else {
             local_velocity_for_state(heading, state, &capabilities)
         };
+        // G-7 / F1-6 — StandingLongJump root: while a standstill jump
+        // charge is held the locomotion target is suppressed (turning
+        // stays allowed via `omega` below), mirroring retail
+        // `DoInterpretedMotion`'s StandingLongJump branch
+        // (MotionInterp.cs:458-476). Inert unless the wasm
+        // `jumpChargeBegin` export set the flag (?longJump=on).
+        let target_velocity = if world.player.standing_long_jump_charge {
+            Vector3::zero()
+        } else {
+            target_velocity
+        };
         // Phase 2 (Cohere-D, 2026-05-12): also compute angular velocity
         // from the manual drive state so we can apply local rotation
         // prediction below. Prior to this, the manual integrator only
@@ -2741,6 +2752,28 @@ impl MovementSystem {
         let _ = world.set_local_player_runtime_pose(pose);
     }
 
+    /// G-7 / F1-6 — the UN-rooted interpreted-intent planar velocity for
+    /// the currently held manual drive state. Used by the Jump arm at a
+    /// standing-long-jump release: while the charge roots the integrator
+    /// (planar store ~0), retail launches with
+    /// `get_leave_ground_velocity = get_state_velocity()` — the velocity
+    /// the held keys WOULD produce (MotionInterp.cs:654-663). Returns
+    /// `None` when no manual intent is active or capabilities are
+    /// unavailable (caller falls back to the integrator store).
+    pub(crate) fn manual_intent_velocity(&self, world: &WorldState) -> Option<Vector3> {
+        let ActiveDriveIntent::Manual(state) = self.active_drive.as_ref()?.intent else {
+            return None;
+        };
+        let pose = world.local_player_runtime_pose()?;
+        let heading = pose.rotation.to_heading();
+        let capabilities = world.resolve_self_movement_capabilities().ok()?;
+        Some(if USE_INTERPRETED_VELOCITY {
+            interpreted_velocity_for_state(heading, state, &capabilities)
+        } else {
+            local_velocity_for_state(heading, state, &capabilities)
+        })
+    }
+
     pub(crate) fn current_local_solve_body_input(
         &self,
         world: &WorldState,
@@ -2762,6 +2795,12 @@ impl MovementSystem {
             Some(ActiveDriveIntent::Manual(state)) => {
                 let heading = pose.rotation.to_heading();
                 match world.resolve_self_movement_capabilities() {
+                    // G-7 / F1-6 — StandingLongJump root mirrors the manual
+                    // slice above: zero locomotion, turning allowed.
+                    Ok(capabilities) if world.player.standing_long_jump_charge => (
+                        Vector3::zero(),
+                        local_omega_for_state(state, &capabilities),
+                    ),
                     Ok(capabilities) => (
                         local_velocity_for_state(heading, state, &capabilities),
                         local_omega_for_state(state, &capabilities),

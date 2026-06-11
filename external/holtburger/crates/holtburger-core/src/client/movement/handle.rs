@@ -62,6 +62,17 @@ impl MovementSystemHandle {
         self.inner.enqueue_transient_motion(command, motion_style);
     }
 
+    /// G-7 / F1-6 — the un-rooted interpreted-intent planar velocity for
+    /// the held manual drive state (see `MovementSystem::
+    /// manual_intent_velocity`). The wasm Jump arm uses this as the
+    /// launch planar velocity for a standing-long-jump release.
+    pub fn charged_jump_launch_velocity(
+        &self,
+        world: &WorldState,
+    ) -> Option<holtburger_common::math::Vector3> {
+        self.inner.manual_intent_velocity(world)
+    }
+
     /// Arm the AutonomousPosition heartbeat schedule. Call once after the
     /// player enters the world (`kind=7 EnteredWorld` in the wasm bundle)
     /// so subsequent ticks emit heartbeats while moving.

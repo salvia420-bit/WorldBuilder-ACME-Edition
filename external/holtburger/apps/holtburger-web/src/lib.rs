@@ -349,9 +349,10 @@ pub fn build_info() -> String {
 /// is a build-pipeline follow-on; this manual-but-reliable version handshake
 /// is the part that needs no build-system changes.
 // v2 (2026-06-11): + `SessionHandle.entityProjectileHasGravity` (G-4
-// projectile gravity arc). index.html's EXPECTED stays at 1 until the
-// `?projectileGravity` flag integrates always-on (the JS consumer is
-// flag-gated + typeof-guarded, so a v1 pkg soft-degrades to flat flight).
+// projectile gravity arc) + `SessionHandle.jumpChargeBegin`/`jumpChargeCancel`
+// (G-7 standing long jump). index.html's EXPECTED stays at 1 until those
+// flags integrate always-on (the JS consumers are flag-gated +
+// typeof-guarded, so a v1 pkg soft-degrades to the prior behavior).
 pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 2;
 
 /// Returns the export-surface manifest version (F18-2). JS asserts this is
@@ -17135,6 +17136,16 @@ enum SessionCommand {
     /// airborne pose. No-op when already airborne (no double-jump,
     /// matching ACE).
     Jump { power: f32 },
+    /// G-7 / F1-6 (?longJump=on) — space-keydown began a jump charge from
+    /// a grounded STANDSTILL (JS verifies no movement keys are held; the
+    /// recv arm re-checks grounded). Sets
+    /// `PlayerState::standing_long_jump_charge`, which roots the manual
+    /// integrator (turn-only) and flips the MoveToState contact byte's
+    /// 0x2 bit until release/cancel/touchdown.
+    JumpChargeBegin,
+    /// G-7 / F1-6 — drop a held jump charge without jumping (movement key
+    /// pressed during the charge, focus blur, or a refused release).
+    JumpChargeCancel,
     /// Phase 4 step 3.6 — JS-driven physics tick. Fired by
     /// `requestAnimationFrame` from `index.html`'s drainEvents loop;
     /// the recv loop pulls the next `now` and calls
@@ -25930,6 +25941,32 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::Jump { power })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("jump: cmd channel closed ({e})"))
+            })
+    }
+
+    /// G-7 / F1-6 (`?longJump=on`) — begin a standing-long-jump charge.
+    /// JS calls this on space-keydown ONLY when the flag is on and no
+    /// movement keys are held; the recv arm re-checks grounded state.
+    /// Soft-guarded in JS (stale pkg/ → flat behavior, manifest v2).
+    #[wasm_bindgen(js_name = jumpChargeBegin)]
+    pub fn jump_charge_begin(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::JumpChargeBegin)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("jumpChargeBegin: cmd channel closed ({e})"))
+            })
+    }
+
+    /// G-7 / F1-6 — cancel a held jump charge without jumping (movement
+    /// keydown during charge, blur, refused release).
+    #[wasm_bindgen(js_name = jumpChargeCancel)]
+    pub fn jump_charge_cancel(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::JumpChargeCancel)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("jumpChargeCancel: cmd channel closed ({e})"))
             })
     }
 
@@ -38220,6 +38257,23 @@ async fn recv_loop(
                             return;
                         }
                     }
+                    Some(SessionCommand::JumpChargeBegin) => {
+                        // G-7 / F1-6 — set the standstill charge. JS already
+                        // verified no movement keys are held; re-check
+                        // grounded so a mid-air space press can't root the
+                        // landing.
+                        if let Some(w) = world.as_mut()
+                            && entity_seeded
+                            && !w.player.is_airborne
+                        {
+                            w.player.standing_long_jump_charge = true;
+                        }
+                    }
+                    Some(SessionCommand::JumpChargeCancel) => {
+                        if let Some(w) = world.as_mut() {
+                            w.player.standing_long_jump_charge = false;
+                        }
+                    }
                     Some(SessionCommand::Jump { power }) => {
                         // Mirror ACE's jump pipeline:
                         //   1. Compute upward velocity via
@@ -38338,6 +38392,10 @@ async fn recv_loop(
                         let vz = holtburger_world::player::PlayerState::compute_jump_velocity_z(
                             power, burden, effective_skill,
                         );
+                        // G-7 / F1-6 — capture the charge BEFORE begin_jump
+                        // consumes it; the launch-velocity choice below keys
+                        // off it.
+                        let charged_long_jump = w.player.standing_long_jump_charge;
                         w.player.begin_jump(vz);
                         // Wave 1 Phase 1.2 (2026-05-26) deleted the
                         // JS-side `kind=18 EntityAirborneChanged`
@@ -38377,10 +38435,28 @@ async fn recv_loop(
                         let server_control_sequence = w.player.server_control_sequence;
                         let teleport_sequence = w.player.teleport_sequence;
                         let force_position_sequence = w.player.force_position_sequence;
-                        let lateral_velocity = w
-                            .local_player_runtime_kinematics()
-                            .map(|(_, v, _)| Vector3::new(v.x, v.y, vz))
-                            .unwrap_or(Vector3::new(0.0, 0.0, vz));
+                        // G-7 / F1-6 — standing long jump: while the charge
+                        // rooted the integrator, the planar store is ~0; the
+                        // retail launch velocity is the interpreted INTENT
+                        // (`get_leave_ground_velocity = get_state_velocity()`)
+                        // — what the held keys at release WOULD produce. Note
+                        // begin_jump (above) already consumed the charge
+                        // flag, so we captured `charged` before it ran; it
+                        // also deliberately leaves current_planar_velocity
+                        // untouched, so install the intent there for the
+                        // airborne trajectory lock.
+                        let lateral_velocity = if charged_long_jump
+                            && let Some(intent_v) =
+                                movement.charged_jump_launch_velocity(w)
+                        {
+                            w.player.current_planar_velocity =
+                                Vector3::new(intent_v.x, intent_v.y, 0.0);
+                            Vector3::new(intent_v.x, intent_v.y, vz)
+                        } else {
+                            w.local_player_runtime_kinematics()
+                                .map(|(_, v, _)| Vector3::new(v.x, v.y, vz))
+                                .unwrap_or(Vector3::new(0.0, 0.0, vz))
+                        };
                         let action = GameAction::Jump(Box::new(JumpActionData {
                             extent: power,
                             velocity: lateral_velocity,

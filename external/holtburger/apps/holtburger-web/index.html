@@ -8490,6 +8490,31 @@ void main() {
           // that retail plays while the bar builds.)
           const JUMP_POWER_FULL_HOLD_MS = 1000;
           const MIN_JUMP_EXTENT = 0.001;
+          // G-7 / F1-6 (2026-06-11) — `?longJump=on` gates the retail
+          // StandingLongJump: a space charge that BEGINS from a grounded
+          // standstill roots the player (turn-only) while held, and the
+          // release launches with the interpreted-intent planar velocity
+          // (hold W during release → full-speed forward long jump from
+          // standing). Default OFF (movement); soft-guarded so a stale
+          // pkg/ (pre-manifest-v2 jumpChargeBegin export) degrades to the
+          // existing flat jump.
+          const LONG_JUMP_ON = (() => {
+            try {
+              return new URLSearchParams(window.location.search)
+                .get("longJump")?.toLowerCase() === "on";
+            } catch (_) { return false; }
+          })();
+          const anyMovementKeyHeld = () => {
+            for (const k of movementKeys) if (keyState[k]) return true;
+            return false;
+          };
+          const jumpChargeCancelSafe = () => {
+            try {
+              if (typeof handle?.jumpChargeCancel === "function") {
+                handle.jumpChargeCancel();
+              }
+            } catch (_) { /* never break input handling */ }
+          };
           const jumpChargeUi = (() => {
             let bar = null;
             let fill = null;
@@ -8539,6 +8564,12 @@ void main() {
             const k = ev.key.toLowerCase();
             if (movementKeys.has(k)) {
               keyState[k] = true;
+              // G-7 (?longJump=on): a movement key pressed DURING a held
+              // space charge converts it to a normal moving jump — drop
+              // the wasm-side standstill root.
+              if (LONG_JUMP_ON && window.__jumpKeydownTs != null) {
+                jumpChargeCancelSafe();
+              }
               ev.preventDefault();
               return;
             }
@@ -8585,6 +8616,17 @@ void main() {
             if (ev.key === " " && handle && !ev.repeat) {
               window.__jumpKeydownTs = performance.now();
               jumpChargeUi.show();
+              // G-7 (?longJump=on): a charge that begins from a grounded
+              // STANDSTILL is a standing-long-jump charge — root the wasm
+              // integrator (turn-only) until release/cancel. The recv arm
+              // re-checks grounded; typeof guard covers a stale pkg/.
+              if (
+                LONG_JUMP_ON &&
+                !anyMovementKeyHeld() &&
+                typeof handle.jumpChargeBegin === "function"
+              ) {
+                try { handle.jumpChargeBegin(); } catch (_) {}
+              }
               ev.preventDefault();
             }
           });
@@ -8621,6 +8663,9 @@ void main() {
                   ? handle.canJumpNow()
                   : true;
               if (!canJump) {
+                // G-7 (?longJump=on): a refused release must not leave the
+                // wasm-side standstill root dangling.
+                if (LONG_JUMP_ON) jumpChargeCancelSafe();
                 return;
               }
               const power = Math.max(
@@ -8721,6 +8766,8 @@ void main() {
             // space at blur shouldn't fire a stale jump when the
             // window regains focus.
             window.__jumpKeydownTs = null;
+            // G-7 (?longJump=on): blur drops the wasm-side charge too.
+            if (LONG_JUMP_ON) jumpChargeCancelSafe();
             // Also tear down the jump-charge bar — its rAF reads
             // __jumpKeydownTs which we just nulled, so the next frame
             // would early-return anyway, but explicit hide() also
