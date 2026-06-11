@@ -458,3 +458,41 @@ Implementation risks:
   wasm-pack this session (lib.rs changes are staged-inert until a buildbox/capped
   rebuild); new load-bearing exports bump WASM_EXPORT_MANIFEST_VERSION; default-OFF
   const gates; on eye-test PASS integrate always-on + mark DONE in url-flags.md.
+
+## 6. Watch-items — pre-hydration fallback capabilities (F1-7 / grind-loop G-3, 2026-06-11)
+
+Audited against the Stage-1 reality (`FALLBACK_RUN_RATE_SCALAR` = 1.0,
+`player_run_rate()` returns `None` pre-hydration — no Quickness fallback —
+and `resolve_self_movement_capabilities()` errors with `RunRateUnavailable`
+so the integrator FREEZES when no override is installed). Verdict: the
+pre-hydration story is already correct and freeze-proof; the values are now
+single-sourced.
+
+**The story (all in `lib.rs`, single-sourced in
+`fallback_self_movement_capabilities()`):**
+1. **Install at construction** — BOTH world-construction paths (eager
+   SelectCharacter arm, lazy PlayerCreate arm) install the fallback caps
+   override immediately, so there is no tick where the integrator can see
+   `Err(RunRateUnavailable)` and freeze.
+2. **Clear + re-test on hydration** — the PlayerDescription arm (and the
+   cached-replay backstops in both construction arms) clears the override
+   and probes `resolve_self_movement_capabilities()`; if the real biota
+   doesn't resolve, the same fallback is re-installed.
+3. **Per-tick watchdog** — the TickMovement arm re-installs the fallback if
+   caps resolution ever regresses to `Err` mid-session (logged at tick%60).
+
+**Value audit:**
+- `run_rate_scalar: 1.0` — references `FALLBACK_RUN_RATE_SCALAR`; matches
+  retail `my_run_rate` initial (CMotionInterp ctor; Inq-failure fallback
+  acclient.c:343452). Pre-stats prediction UNDER-runs and self-corrects —
+  correct by design, do NOT resurrect a synthesized rate (see §5).
+- `base_run_forward_velocity` y=**4.5** — pre-MOTK guess; the human
+  MotionTable RunForward cycle derives **4.0**. With scalar 1.0 a skill-0
+  character could over-run ~12.5% for the (sub-second) pre-hydration
+  window; hydrated characters still under-run (real rate ≥ ~1.9). WATCH:
+  if a 1070 capture ever shows a login-window snap, drop 4.5 → 4.0 behind
+  a default-off gate (it changes default movement behavior); not worth the
+  flag churn on the current evidence.
+- `base_walk_forward_velocity` y=1.0, turn omegas ±1.5 rad/s — same
+  pre-MOTK-guess provenance, same sub-second exposure; real MT values take
+  over on hydration.

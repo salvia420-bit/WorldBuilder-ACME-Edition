@@ -28422,6 +28422,54 @@ const SIDESTEP_ANIM_SPEED: f32 = 1.25;
 #[cfg(target_arch = "wasm32")]
 const FALLBACK_RUN_RATE_SCALAR: f32 = 1.0;
 
+// F1-7 / G-3 (grind-loop, 2026-06-11): THE pre-hydration movement
+// capabilities. Installed as the world's capabilities override at BOTH
+// construction paths (eager SelectCharacter + lazy PlayerCreate), cleared
+// and re-tested when PlayerDescription hydrates real skills, and
+// re-installed by the per-tick caps watchdog if resolution ever regresses
+// — so the Stage-1 integrator freeze (`Err(RunRateUnavailable) -> return`)
+// is unreachable in practice. Values:
+// - `run_rate_scalar: 1.0` = retail `my_run_rate` initial (see
+//   FALLBACK_RUN_RATE_SCALAR above): pre-stats prediction UNDER-runs and
+//   self-corrects instead of over-running and snapping back.
+// - `base_run_forward_velocity` y=4.5 / walk y=1.0 / turn ±1.5 rad/s:
+//   pre-MOTK guesses, only live until the real MotionTable resolves
+//   (human RunForward cycle derives 4.0 — see DESIGN.md §6 watch-items).
+#[cfg(target_arch = "wasm32")]
+fn fallback_self_movement_capabilities() -> holtburger_world::SelfMovementCapabilities {
+    holtburger_world::SelfMovementCapabilities {
+        kinematics: holtburger_world::SelfMovementKinematics {
+            source: holtburger_world::PlayerMotionTableSource::DirectProperty {
+                motion_table_id: 0,
+            },
+            motion_table_id: 0,
+            stance: 0,
+            base_walk_forward_velocity: holtburger_common::Vector3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            base_run_forward_velocity: holtburger_common::Vector3 {
+                x: 0.0,
+                y: 4.5,
+                z: 0.0,
+            },
+            base_turn_left_omega: holtburger_common::Vector3 {
+                x: 0.0,
+                y: 0.0,
+                z: 1.5,
+            },
+            base_turn_right_omega: holtburger_common::Vector3 {
+                x: 0.0,
+                y: 0.0,
+                z: -1.5,
+            },
+        },
+        run_rate_scalar: FALLBACK_RUN_RATE_SCALAR,
+    }
+}
+
+
 // T1 (2026-06-03): single-thread mirror of the latest player run-rate so the JS
 // velScale path can read it as a FREE wasm export (entities.js calls
 // `wasmExports.playerRunRate()`). The per-instance struct getter isn't a member
@@ -31504,33 +31552,7 @@ async fn recv_loop(
                                     holtburger_world::WorldState::new(bootstrap);
                                 new_world.player.guid = data.guid;
                                 let fallback_caps =
-                                    holtburger_world::SelfMovementCapabilities {
-                                        kinematics:
-                                            holtburger_world::SelfMovementKinematics {
-                                                source: holtburger_world::PlayerMotionTableSource::DirectProperty {
-                                                    motion_table_id: 0,
-                                                },
-                                                motion_table_id: 0,
-                                                stance: 0,
-                                                base_walk_forward_velocity:
-                                                    holtburger_common::Vector3 {
-                                                        x: 0.0, y: 1.0, z: 0.0,
-                                                    },
-                                                base_run_forward_velocity:
-                                                    holtburger_common::Vector3 {
-                                                        x: 0.0, y: 4.5, z: 0.0,
-                                                    },
-                                                base_turn_left_omega:
-                                                    holtburger_common::Vector3 {
-                                                        x: 0.0, y: 0.0, z: 1.5,
-                                                    },
-                                                base_turn_right_omega:
-                                                    holtburger_common::Vector3 {
-                                                        x: 0.0, y: 0.0, z: -1.5,
-                                                    },
-                                            },
-                                        run_rate_scalar: 1.0,
-                                    };
+                                    fallback_self_movement_capabilities();
                                 new_world.set_self_movement_capabilities_override(
                                     fallback_caps.clone(),
                                 );
@@ -34424,32 +34446,7 @@ async fn recv_loop(
                                         ));
                                         if !real_caps_ok {
                                             let fallback =
-                                                holtburger_world::SelfMovementCapabilities {
-                                                    kinematics: holtburger_world::SelfMovementKinematics {
-                                                        source: holtburger_world::PlayerMotionTableSource::DirectProperty {
-                                                            motion_table_id: 0,
-                                                        },
-                                                        motion_table_id: 0,
-                                                        stance: 0,
-                                                        base_walk_forward_velocity:
-                                                            holtburger_common::Vector3 {
-                                                                x: 0.0, y: 1.0, z: 0.0,
-                                                            },
-                                                        base_run_forward_velocity:
-                                                            holtburger_common::Vector3 {
-                                                                x: 0.0, y: 4.5, z: 0.0,
-                                                            },
-                                                        base_turn_left_omega:
-                                                            holtburger_common::Vector3 {
-                                                                x: 0.0, y: 0.0, z: 1.5,
-                                                            },
-                                                        base_turn_right_omega:
-                                                            holtburger_common::Vector3 {
-                                                                x: 0.0, y: 0.0, z: -1.5,
-                                                            },
-                                                    },
-                                                    run_rate_scalar: 1.0,
-                                                };
+                                                fallback_self_movement_capabilities();
                                             w.set_self_movement_capabilities_override(
                                                 fallback,
                                             );
@@ -35543,33 +35540,7 @@ async fn recv_loop(
                             // them in step 3.7's recv arm. Real biota
                             // resolution clears the override.
                             let fallback_caps =
-                                holtburger_world::SelfMovementCapabilities {
-                                    kinematics:
-                                        holtburger_world::SelfMovementKinematics {
-                                            source: holtburger_world::PlayerMotionTableSource::DirectProperty {
-                                                motion_table_id: 0,
-                                            },
-                                            motion_table_id: 0,
-                                            stance: 0,
-                                            base_walk_forward_velocity:
-                                                holtburger_common::Vector3 {
-                                                    x: 0.0, y: 1.0, z: 0.0,
-                                                },
-                                            base_run_forward_velocity:
-                                                holtburger_common::Vector3 {
-                                                    x: 0.0, y: 4.5, z: 0.0,
-                                                },
-                                            base_turn_left_omega:
-                                                holtburger_common::Vector3 {
-                                                    x: 0.0, y: 0.0, z: 1.5,
-                                                },
-                                            base_turn_right_omega:
-                                                holtburger_common::Vector3 {
-                                                    x: 0.0, y: 0.0, z: -1.5,
-                                                },
-                                        },
-                                    run_rate_scalar: 1.0,
-                                };
+                                fallback_self_movement_capabilities();
                             new_world.set_self_movement_capabilities_override(
                                 fallback_caps.clone(),
                             );
@@ -38782,28 +38753,7 @@ async fn recv_loop(
                         // PlayerDescription (which clears the override
                         // and re-tests).
                         if w.resolve_self_movement_capabilities().is_err() {
-                            let fallback = holtburger_world::SelfMovementCapabilities {
-                                kinematics: holtburger_world::SelfMovementKinematics {
-                                    source: holtburger_world::PlayerMotionTableSource::DirectProperty {
-                                        motion_table_id: 0,
-                                    },
-                                    motion_table_id: 0,
-                                    stance: 0,
-                                    base_walk_forward_velocity: holtburger_common::Vector3 {
-                                        x: 0.0, y: 1.0, z: 0.0,
-                                    },
-                                    base_run_forward_velocity: holtburger_common::Vector3 {
-                                        x: 0.0, y: 4.5, z: 0.0,
-                                    },
-                                    base_turn_left_omega: holtburger_common::Vector3 {
-                                        x: 0.0, y: 0.0, z: 1.5,
-                                    },
-                                    base_turn_right_omega: holtburger_common::Vector3 {
-                                        x: 0.0, y: 0.0, z: -1.5,
-                                    },
-                                },
-                                run_rate_scalar: 1.0,
-                            };
+                            let fallback = fallback_self_movement_capabilities();
                             w.set_self_movement_capabilities_override(fallback);
                             // One-shot log per regression run — quieted
                             // via a tick-count modulo so a sustained
