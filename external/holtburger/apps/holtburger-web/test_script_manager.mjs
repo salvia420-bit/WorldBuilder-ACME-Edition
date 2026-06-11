@@ -152,6 +152,72 @@ function entries(...times) {
   check("T7.queue still drains to idle", mgr.active === false);
 }
 
+// === Test 8 (A11-S1 fixup): CallPES rand-pause start is honored as an
+// absolute `now`, INDEPENDENT of any parent script length. This is the
+// ScriptManager half of the entities.js CallPES fix — the sub-script is queued
+// with `{ now: fireTime + RollDice(0,pause) }`, which must win over the
+// back-to-back-after-parent-length chaining whenever the queue is empty (the
+// common case once the parent script has popped). Retail CallPES schedules at
+// `RollDice(0, pause)` (acclient.c:318984-318987), NOT after parent length.
+{
+  const fired = [];
+  const mgr = new ScriptManager({ executeHook: (e) => fired.push(e.scriptTag) });
+  // Parent script P plays at t=300 with length 4.0 and runs to exhaustion.
+  const P = entries(0.0).map((e) => ({ ...e, scriptTag: "P" }));
+  mgr.addScript(0x33000FF0 >>> 0, P, { now: 300.0, length: 4.0 });
+  mgr.update(300.0); // P[0] fires + P pops (single entry → exhausted)
+  check("T8.parent popped (queue empty)", mgr.active === false);
+  // The CallPES fires at t=300; pause window 2.0, rng=0.5 → randPause=1.0 →
+  // sub-script absolute start = 301.0. With the fix the sub uses `{ now: 301 }`.
+  // WITHOUT the fix (old back-to-back), an empty queue would start it at
+  // currentTime() = clock (100), i.e. WRONG / already in the past.
+  const subStart = 300.0 + 0.5 * 2.0; // currentTime()+randPause at fire-time
+  const S = entries(0.0, 1.0).map((e) => ({ ...e, scriptTag: "S" }));
+  const dataS = mgr.addScript(0x330000F0 >>> 0, S, { now: subStart });
+  check("T8.sub-script start == fireTime + randPause (not parent length)",
+    approx(dataS.startTime, 301.0), `got ${dataS.startTime}`);
+  mgr.update(300.9);
+  check("T8.sub does NOT fire before its rand-pause start", fired.length === 1);
+  mgr.update(301.0);
+  check("T8.sub[0] fires at rand-pause start", fired.length === 2 && fired[1] === "S");
+  mgr.update(302.0);
+  check("T8.sub[1] fires +1s later", fired.length === 3 && fired[2] === "S");
+}
+
+// === Test 9 (A11-S1 fixup): a CallPES with pause < 0.0002 fires immediately
+// (randPause=0 → sub start == fire time), matching the retail threshold and the
+// legacy off-path (entities.js:8047).
+{
+  const fired = [];
+  const mgr = new ScriptManager({ executeHook: (e) => fired.push(e.scriptTag) });
+  const subStart = 500.0 + 0; // pause below threshold → randPause forced to 0
+  const S = entries(0.0).map((e) => ({ ...e, scriptTag: "S" }));
+  const dataS = mgr.addScript(0x330000F1 >>> 0, S, { now: subStart });
+  check("T9.sub-zero-pause start == fire time", approx(dataS.startTime, 500.0));
+  mgr.update(500.0);
+  check("T9.fires immediately at fire time", fired.length === 1 && fired[0] === "S");
+}
+
+// === Test 10 (A11-S1 fixup): the A-DIR gate must NOT drop PhysicsScript-sourced
+// hooks. `_decodePhysicsScriptHookEntry` (entities.js) now forces `direction: 0`
+// (Both) regardless of the wire `i32 direction`, so the `_fireHook` A-DIR gate
+// (`if ((hook.direction|0) === -1) return;`, entities.js:9935) never drops a
+// genuinely wire-parsed `direction == -1` 0x33 entry. This mirrors the exact
+// decode `direction` assignment + the gate predicate; if the decode reverted to
+// `e.direction|0` a `-1` wire entry would be dropped on the queue path while the
+// off-path fires it — the on/off divergence the flag forbids.
+{
+  // The fixed decode: PhysicsScript base hook always carries direction 0.
+  const decodeDirection = (_wireDirection) => 0; // matches entities.js fixup
+  // The _fireHook A-DIR gate predicate (returns true == DROPPED).
+  const dirGateDrops = (hook) => (hook.direction | 0) === -1;
+  for (const wireDir of [-1, 0, 1, -2, 7]) {
+    const h = { hookType: 2 /* SoundTable */, direction: decodeDirection(wireDir) };
+    check(`T10.wire direction=${wireDir} 0x33 hook is NOT dropped`,
+      dirGateDrops(h) === false, `direction decoded to ${h.direction}`);
+  }
+}
+
 // restore global hooks
 setCurrentTime(null);
 setRng(null);

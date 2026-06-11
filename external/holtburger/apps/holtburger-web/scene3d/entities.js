@@ -668,7 +668,7 @@ import { fetchPhysicsScriptTable } from "../ui/ac_physics_script_table.js";
 // T6: reuse the particle runtime's shared RNG hook so the CallPES delay
 // jitter is the same mockable uniform[0,1) the rest of scene3d/particles
 // draws from (Math.random by default, deterministic under setRng in tests).
-import { rng as timeRng } from "./particles/time_rng.js";
+import { rng as timeRng, currentTime } from "./particles/time_rng.js";
 // A11-S1 (unification survey 2026-06-11) — shared PhysicsScript executor.
 // `?scriptQueue=on` (default OFF) routes the entity chain walker's hooks
 // through a per-owner time-ordered `ScriptManager` that fires them via the
@@ -8328,9 +8328,20 @@ export class EntityManager {
     const u32 = (off) => (dv && off + 4 <= len ? dv.getUint32(off, true) >>> 0 : 0);
     const i32 = (off) => (dv && off + 4 <= len ? dv.getInt32(off, true) : 0);
     const f32 = (off) => (dv && off + 4 <= len ? dv.getFloat32(off, true) : 0);
-    // Base — `direction` is carried so `_fireHook`'s A-DIR gate sees it
-    // (PhysicsScript hooks ARE direction-tagged on the wire).
-    const h = { hookType, time, direction: e.direction | 0 };
+    // Base — A11-S1 fixup (2026-06-11): PhysicsScript-sourced hooks must FIRE
+    // UNCONDITIONALLY through `_fireHook`, exactly like the legacy off-path
+    // walker (which never reads `direction`, entities.js ~:9924-9928 comment)
+    // and retail `ScriptManager::UpdateScripts` (acclient.c:329189-329246), which
+    // calls `hook->Execute` with NO direction gate — the A-DIR gate is a
+    // motion-Sequence (acclient.c segment-playback) concept, not a script-queue
+    // one. We therefore force `direction = 0` (Both) so the A-DIR gate in
+    // `_fireHook` (entities.js:9935, drops `direction === -1`) never drops a
+    // genuinely wire-parsed `i32 direction == -1` 0x33 entry (SoundTable 2 /
+    // NoDraw 16 / TextureVelocity 23/24 / SetLight 25 / etc.). Feeding the raw
+    // on-disk `direction` here re-created the exact on/off-path divergence the
+    // `?scriptQueue` flag's 'byte-identical / no drift' contract forbids. We do
+    // NOT read `e.direction` at all (it stays a property of the wire entry only).
+    const h = { hookType, time, direction: 0 };
     switch (hookType) {
       case 1: // Sound — wave DID @0
         h.soundWaveId = u32(0);
@@ -8415,7 +8426,7 @@ export class EntityManager {
    * @returns {{ok:boolean, hookCount:number}} descriptor (parallels the legacy
    *   walker's return shape enough for callers that only check `ok`).
    */
-  _queuePhysicsScript(guid, rig, pesId, entries, depth = 0, defaultPartIndex = -1) {
+  _queuePhysicsScript(guid, rig, pesId, entries, depth = 0, defaultPartIndex = -1, startNow = undefined) {
     const gKey = guid >>> 0;
     let mgr = this._scriptManagersForGuid.get(gKey);
     if (!mgr) {
@@ -8435,7 +8446,17 @@ export class EntityManager {
     }
     const decoded = [];
     for (const e of entries) decoded.push(this._decodePhysicsScriptHookEntry(e));
-    mgr.addScript(pesId >>> 0, decoded);
+    // A11-S1 fixup: a CallPES sub-script supplies its own absolute t=0
+    // (`startNow` = fire-time + RollDice(0,pause)) so the rand-pause schedule is
+    // honored even if the parent script has already popped (queue empty → the
+    // `now` override is what `addScript` keys off). For top-level scripts
+    // `startNow` is undefined → `addScript` falls back to `currentTime()` /
+    // back-to-back chaining, unchanged.
+    mgr.addScript(
+      pesId >>> 0,
+      decoded,
+      typeof startNow === "number" ? { now: startNow } : undefined,
+    );
     // Descriptor shape parallels the legacy walker's so callers (validators)
     // that read `ok`/`emitterCount`/`soundHookCount` keep working. On the
     // queue path the visual/sound split isn't known until the hooks fire, so
@@ -8482,12 +8503,26 @@ export class EntityManager {
       const callDid = hook.callPesDid >>> 0;
       if (callDid === 0) return;
       if (depth >= MAX_CALL_PES_DEPTH) return;
+      // A11-S1 fixup (2026-06-11): apply the retail CallPES rand-pause that the
+      // legacy off-path uses (entities.js:8046-8048) and the original queue path
+      // dropped. Retail `CPhysicsObj::CallPES` (acclient.c:318973-319005)
+      // schedules the sub-script at `RollDice(0, pause)` on the physics clock
+      // when `pause >= 0.0002`, else fires immediately — `callPesPause` is a MAX
+      // window, not a fixed wait, and it is INDEPENDENT of the parent script's
+      // derived length (so the prior 'serialized after parent length' behavior
+      // was timing drift, not parity). We capture the start time NOW (when the
+      // CallPES hook fires) plus the random pause, and hand it to the sub-script
+      // as its absolute t=0 — robust to the parent script having already popped
+      // by the time the async fetch resolves.
+      const pauseW = +hook.callPesPause || 0;
+      const randPause = pauseW < 0.0002 ? 0 : timeRng() * pauseW;
+      const subStart = currentTime() + randPause;
       this.wasmExports
         .fetchPhysicsScript(callDid)
         .then((sub) => {
           if (!this.entityMap.has(gKey)) return;
           const subEntries = sub.takeEntries();
-          this._queuePhysicsScript(gKey, rig, callDid, subEntries, depth + 1, defaultPartIndex);
+          this._queuePhysicsScript(gKey, rig, callDid, subEntries, depth + 1, defaultPartIndex, subStart);
         })
         .catch(() => {});
       return;
