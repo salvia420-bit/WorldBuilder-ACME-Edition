@@ -343,6 +343,15 @@ impl CellMembership {
     }
 }
 
+// F4-5 (grind-loop G-2, 2026-06-11): the wasm recv-loop snapshots this
+// whole struct into the JS-readable camera-sweep shadow EVERY TickMovement
+// (`*collision_scene.borrow_mut() = w.scene.clone()`). The immutable
+// geometry tables (triangle bags, BSPs, AABB/portal indexes) dominate that
+// clone, so they're `Arc`-wrapped: the per-tick clone is a refcount bump,
+// and the rare load/unload mutations go through `Arc::make_mut` (which
+// deep-clones the one mutated table only while a snapshot still shares it).
+// Per-tick mutable state (entity_poses, body_store, landblock_map, door
+// exclusions) stays plain.
 #[derive(Clone)]
 pub struct SpatialScene {
     landblock_map: HashMap<Guid, HashSet<Guid>>,
@@ -357,7 +366,7 @@ pub struct SpatialScene {
     /// buckets each AABB into the cell its centre falls into.
     /// The integrator's swept-sphere clamp queries this map by the
     /// player's current cell + the cells the swept volume crosses.
-    building_aabb_index: HashMap<u32, Vec<BuildingAabbEntry>>,
+    building_aabb_index: Arc<HashMap<u32, Vec<BuildingAabbEntry>>>,
     /// Phase 6 step D: portal-driven visibility graph. Keyed by full
     /// 32-bit cell id; each entry lists every cell reachable through
     /// a single CellPortal record on the source EnvCell. Populated by
@@ -366,14 +375,14 @@ pub struct SpatialScene {
     /// Stairs are EnvCell-to-EnvCell portal connections — there is no
     /// special-cased stair logic; walking up shifts `current_cell`,
     /// which shifts the BFS frontier, which swaps the visible set.
-    cell_portal_graph: HashMap<u32, Vec<u32>>,
+    cell_portal_graph: Arc<HashMap<u32, Vec<u32>>>,
     /// Phase 6 step D: world-space AABB for each cell, keyed by full
     /// 32-bit cell id. Used by `current_cell` to pick the indoor cell
     /// containing a position when several Z-stacked cells share the
     /// same XY footprint. Outdoor cells aren't stored here — their
     /// containment is computed from the 8x8 grid in O(1) by
     /// `WorldPosition::derived_outdoor_cell_id`.
-    cell_aabbs: HashMap<u32, Aabb>,
+    cell_aabbs: Arc<HashMap<u32, Aabb>>,
     /// 2026-06-04 (Phase 4 ambient-sound gate): per-cell SeenOutside
     /// bit, keyed by full 32-bit cell id. `true` when the EnvCell's
     /// `flags & ENVCELL_FLAG_SEEN_OUTSIDE (0x01)` is set (env_cell.rs:32).
@@ -382,7 +391,7 @@ pub struct SpatialScene {
     /// parallel to `cell_aabbs` (populated by `fetchEnvCellsInLandblock`
     /// via the same pending-pile drain, cleared on landblock unload). The
     /// liveness.rs:137-143 TODO documents this exact lookup.
-    cell_seen_outside: HashMap<u32, bool>,
+    cell_seen_outside: Arc<HashMap<u32, bool>>,
     /// 2026-05-10 indoor collision (Phase 6 step G follow-on):
     /// world-space physics triangles per cell, populated by the
     /// wasm bundle's `populateCellPhysicsForLandblock` from
@@ -392,7 +401,7 @@ pub struct SpatialScene {
     /// EnvCell's `position` frame so the per-tick swept-capsule
     /// kernel doesn't have to redo the cell-frame rotation each
     /// frame. Cleared on landblock unload alongside `cell_aabbs`.
-    cell_physics_index: HashMap<u32, Vec<Triangle>>,
+    cell_physics_index: Arc<HashMap<u32, Vec<Triangle>>>,
     /// BSP collision (PASS 1, 2026-06-02): per-cell physics BSP tree +
     /// resolved physics polygons + cell frame, keyed by full 32-bit
     /// cell id (parallel to `cell_physics_index`). Populated by
@@ -404,7 +413,7 @@ pub struct SpatialScene {
     /// geometry; the query sphere is transformed into the cell frame
     /// (see [`CellPhysicsBsp::world_to_local`]). Cleared on landblock
     /// unload alongside `cell_physics_index`.
-    cell_physics_bsp: HashMap<u32, CellPhysicsBsp>,
+    cell_physics_bsp: Arc<HashMap<u32, CellPhysicsBsp>>,
     /// Terrain→EnvCell entry (2026-06-02): per-cell MEMBERSHIP bsp
     /// (`CellStruct.cell_bsp`) + cell frame, keyed by full 32-bit cell
     /// id (parallel to `cell_physics_bsp`). Populated by
@@ -415,7 +424,7 @@ pub struct SpatialScene {
     /// `check_building_transit` — instead of waiting for the server
     /// `UpdatePosition`. Cleared on landblock unload alongside
     /// `cell_aabbs` / `cell_physics_bsp`.
-    cell_membership: HashMap<u32, CellMembership>,
+    cell_membership: Arc<HashMap<u32, CellMembership>>,
     /// Phase 5 PView port (2026-05-25): per-cell portal polygons in
     /// world space, for screen-space portal-frustum clipping. Keyed by
     /// the EnvCell's full 32-bit cell id; each entry is a list of
@@ -426,7 +435,7 @@ pub struct SpatialScene {
     /// `polygons` map (the same drawing polygons the renderer skips
     /// for portal openings — see env_cell.rs:65 `polygon_id`).
     /// Cleared on landblock unload alongside `cell_aabbs`.
-    cell_portal_polygons: HashMap<u32, Vec<CellPortalPolygon>>,
+    cell_portal_polygons: Arc<HashMap<u32, Vec<CellPortalPolygon>>>,
     /// Phase 6 step E: door GUID → `(building_id, part_index)` lookup.
     /// JS-side door binding is by entity GUID (the ACE-broadcast `Door`
     /// weenie's full guid); the AABB index is keyed by per-part
@@ -458,7 +467,7 @@ pub struct SpatialScene {
     /// Populated alongside the AABB index by
     /// `populateBuildingAabbsForLandblock`; cleared per-landblock by
     /// `clear_building_aabbs_for_landblock`.
-    building_origins: HashMap<BuildingId, (f32, f32)>,
+    building_origins: Arc<HashMap<BuildingId, (f32, f32)>>,
     /// Workstream C (3D camera collision, 2026-05-11): per-landblock
     /// world-space AABB index for non-building outdoor static placements
     /// (signs, props, trees). Keyed by the landblock high word (the
@@ -472,7 +481,7 @@ pub struct SpatialScene {
     /// landblock when the LB unloads. Indoor statics ride through the
     /// existing `EnvCellPlacement.static_objects` path and don't land
     /// here — they're picked up by the cell-mesh sweep.
-    statics_aabb_index: HashMap<u32, Vec<StaticAabbEntry>>,
+    statics_aabb_index: Arc<HashMap<u32, Vec<StaticAabbEntry>>>,
     /// B4 Tier-2 (2026-06-09): per-landblock PRECISE physics BSPs for
     /// outdoor statics, the parallel of `statics_aabb_index`. Keyed by
     /// landblock high word; one [`CellPhysicsBsp`] per physics-bearing
@@ -482,7 +491,7 @@ pub struct SpatialScene {
     /// landblock on unload. Consulted only when `USE_STATIC_BSP` is on, via
     /// [`Self::resolve_static_bsp_pushout`] — the AABB stays the default /
     /// gate-off path, so this is a pure additive runtime switch.
-    statics_physics_bsp: HashMap<u32, Vec<CellPhysicsBsp>>,
+    statics_physics_bsp: Arc<HashMap<u32, Vec<CellPhysicsBsp>>>,
     /// Workstream C (3D camera collision, 2026-05-11): per-landblock
     /// world-space physics triangles for building interiors / basements.
     /// **This is the building-side parallel of `cell_physics_index`.**
@@ -503,7 +512,7 @@ pub struct SpatialScene {
     /// Workstream C to walk each part's GfxObj.physics_polygons in the
     /// same per-part frame transform used for AABBs); cleared per-
     /// landblock alongside the AABB index when the LB unloads.
-    building_physics_index: HashMap<u32, Vec<Triangle>>,
+    building_physics_index: Arc<HashMap<u32, Vec<Triangle>>>,
     /// Workstream Sky-B (parametric skybox, 2026-05-11): the parsed
     /// SkyDesc + GameTime for the active Region. `None` until the
     /// wasm bundle's `populateSkyDescFromRegion` lands; populated once
@@ -542,20 +551,20 @@ impl SpatialScene {
             entity_poses: HashMap::new(),
             body_store: BodySamplingStore::default(),
             physics,
-            building_aabb_index: HashMap::new(),
-            cell_portal_graph: HashMap::new(),
-            cell_aabbs: HashMap::new(),
-            cell_seen_outside: HashMap::new(),
-            cell_physics_index: HashMap::new(),
-            cell_physics_bsp: HashMap::new(),
-            cell_membership: HashMap::new(),
-            cell_portal_polygons: HashMap::new(),
+            building_aabb_index: Arc::new(HashMap::new()),
+            cell_portal_graph: Arc::new(HashMap::new()),
+            cell_aabbs: Arc::new(HashMap::new()),
+            cell_seen_outside: Arc::new(HashMap::new()),
+            cell_physics_index: Arc::new(HashMap::new()),
+            cell_physics_bsp: Arc::new(HashMap::new()),
+            cell_membership: Arc::new(HashMap::new()),
+            cell_portal_polygons: Arc::new(HashMap::new()),
             door_part_index: HashMap::new(),
             open_door_exclusion_aabbs: HashMap::new(),
-            building_origins: HashMap::new(),
-            statics_aabb_index: HashMap::new(),
-            statics_physics_bsp: HashMap::new(),
-            building_physics_index: HashMap::new(),
+            building_origins: Arc::new(HashMap::new()),
+            statics_aabb_index: Arc::new(HashMap::new()),
+            statics_physics_bsp: Arc::new(HashMap::new()),
+            building_physics_index: Arc::new(HashMap::new()),
             sky_desc: None,
         }
     }
@@ -592,7 +601,7 @@ impl SpatialScene {
     /// per-part bake; the wasm bundle wraps it through
     /// `SessionHandle::populate_building_aabb`.
     pub fn insert_building_aabb(&mut self, cell_id: u32, entry: BuildingAabbEntry) {
-        self.building_aabb_index
+        Arc::make_mut(&mut self.building_aabb_index)
             .entry(cell_id)
             .or_default()
             .push(entry);
@@ -604,7 +613,7 @@ impl SpatialScene {
     /// for diagnostic logging.
     pub fn clear_building_aabbs_for_landblock(&mut self, landblock_id: u32) -> usize {
         let mut removed = 0usize;
-        self.building_aabb_index.retain(|_cell, entries| {
+        Arc::make_mut(&mut self.building_aabb_index).retain(|_cell, entries| {
             let before = entries.len();
             entries.retain(|e| e.building_id.landblock_id != landblock_id);
             removed += before - entries.len();
@@ -615,14 +624,14 @@ impl SpatialScene {
         // map. Doors registered from the prior load become orphans (no
         // origin lookup), which is the right semantics — they would
         // re-register on the next ObjectCreate.
-        self.building_origins
+        Arc::make_mut(&mut self.building_origins)
             .retain(|building_id, _| building_id.landblock_id != landblock_id);
         // Workstream C (3D camera collision, 2026-05-11): drop matching
         // per-building-interior triangles so the next load starts from
         // a clean index. Building physics share the AABB lifetime
         // (both are populated by the same `populateBuildingAabbsFor-
         // Landblock` pass), so they get torn down together.
-        self.building_physics_index
+        Arc::make_mut(&mut self.building_physics_index)
             .remove(&(landblock_id & 0xFFFF_0000));
         removed
     }
@@ -781,7 +790,7 @@ impl SpatialScene {
         world_x: f32,
         world_y: f32,
     ) {
-        self.building_origins
+        Arc::make_mut(&mut self.building_origins)
             .insert(building_id, (world_x, world_y));
     }
 
@@ -807,7 +816,7 @@ impl SpatialScene {
         active: bool,
     ) -> usize {
         let mut flipped = 0usize;
-        for entries in self.building_aabb_index.values_mut() {
+        for entries in Arc::make_mut(&mut self.building_aabb_index).values_mut() {
             for entry in entries.iter_mut() {
                 if entry.building_id == building_id && entry.part_index == part_index {
                     entry.active = active;
@@ -825,7 +834,7 @@ impl SpatialScene {
     /// both directions. The graph itself is directed so test fixtures
     /// can synthesize asymmetric topologies if needed.
     pub fn insert_cell_portal(&mut self, from: u32, to: u32) {
-        let entry = self.cell_portal_graph.entry(from).or_default();
+        let entry = Arc::make_mut(&mut self.cell_portal_graph).entry(from).or_default();
         if !entry.contains(&to) {
             entry.push(to);
         }
@@ -838,7 +847,7 @@ impl SpatialScene {
     /// trick Phase B uses for buildings). Outdoor cells are not
     /// stored here — `current_cell` derives them from the 8x8 grid.
     pub fn insert_cell_aabb(&mut self, cell_id: u32, aabb: Aabb) {
-        self.cell_aabbs.insert(cell_id, aabb);
+        Arc::make_mut(&mut self.cell_aabbs).insert(cell_id, aabb);
     }
 
     /// 2026-06-04 (Phase 4 ambient-sound gate): register the SeenOutside
@@ -847,7 +856,7 @@ impl SpatialScene {
     /// pushes the boolean alongside the cell AABB; the recv-loop drain
     /// installs it here. Mirrors `insert_cell_aabb` exactly.
     pub fn insert_cell_seen_outside(&mut self, cell_id: u32, v: bool) {
-        self.cell_seen_outside.insert(cell_id, v);
+        Arc::make_mut(&mut self.cell_seen_outside).insert(cell_id, v);
     }
 
     /// Phase 6 step D: drop every portal edge and AABB whose endpoint
@@ -860,7 +869,7 @@ impl SpatialScene {
     pub fn clear_cells_for_landblock(&mut self, landblock_id: u32) -> (usize, usize) {
         let lb_high = landblock_id & 0xFFFF_0000;
         let mut edges_removed = 0usize;
-        self.cell_portal_graph.retain(|from, edges| {
+        Arc::make_mut(&mut self.cell_portal_graph).retain(|from, edges| {
             if (*from & 0xFFFF_0000) == lb_high {
                 edges_removed += edges.len();
                 return false;
@@ -871,14 +880,14 @@ impl SpatialScene {
             !edges.is_empty()
         });
         let aabbs_before = self.cell_aabbs.len();
-        self.cell_aabbs
+        Arc::make_mut(&mut self.cell_aabbs)
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         let aabbs_removed = aabbs_before - self.cell_aabbs.len();
         // 2026-06-04 (Phase 4 ambient-sound gate): keep
         // `cell_seen_outside` sympathetic with `cell_aabbs` — same
         // EnvCell lifetime, same landblock-high retain. Count rolls
         // into `aabbs_removed` (per-cell flag counts aren't load-bearing).
-        self.cell_seen_outside
+        Arc::make_mut(&mut self.cell_seen_outside)
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         // 2026-05-10 indoor collision: keep `cell_physics_index`
         // sympathetic with `cell_aabbs` — when a landblock unloads,
@@ -886,17 +895,17 @@ impl SpatialScene {
         // the diagnostic log doesn't drift; per-cell triangle counts
         // aren't load-bearing and a future commit can split them
         // out if a gauge is needed.
-        self.cell_physics_index
+        Arc::make_mut(&mut self.cell_physics_index)
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         // BSP collision (PASS 1): same lifetime as cell_physics_index.
-        self.cell_physics_bsp
+        Arc::make_mut(&mut self.cell_physics_bsp)
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         // Terrain→EnvCell entry: cell-membership trees share the
         // EnvCell lifetime like the physics BSP.
-        self.cell_membership
+        Arc::make_mut(&mut self.cell_membership)
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         // Phase 5 PView port: same lifetime as cell_aabbs.
-        self.cell_portal_polygons
+        Arc::make_mut(&mut self.cell_portal_polygons)
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         (edges_removed, aabbs_removed)
     }
@@ -911,7 +920,7 @@ impl SpatialScene {
         cell_id: u32,
         polygon: CellPortalPolygon,
     ) {
-        self.cell_portal_polygons
+        Arc::make_mut(&mut self.cell_portal_polygons)
             .entry(cell_id)
             .or_default()
             .push(polygon);
@@ -996,7 +1005,7 @@ impl SpatialScene {
     /// fan-style for `num_pts > 3`. Stored by full 32-bit cell id
     /// to mirror `cell_aabbs`.
     pub fn insert_cell_triangle(&mut self, cell_id: u32, tri: Triangle) {
-        self.cell_physics_index.entry(cell_id).or_default().push(tri);
+        Arc::make_mut(&mut self.cell_physics_index).entry(cell_id).or_default().push(tri);
     }
 
     /// 2026-05-10 indoor collision: read access to the world-space
@@ -1028,7 +1037,7 @@ impl SpatialScene {
     /// cell-local. Idempotent overwrite per cell (a re-bake after LRU
     /// eviction replaces).
     pub fn insert_cell_physics_bsp(&mut self, cell_id: u32, bsp: CellPhysicsBsp) {
-        self.cell_physics_bsp.insert(cell_id, bsp);
+        Arc::make_mut(&mut self.cell_physics_bsp).insert(cell_id, bsp);
     }
 
     /// BSP collision (PASS 1): read access to the physics BSP for
@@ -1048,7 +1057,7 @@ impl SpatialScene {
     /// the wasm bundle's `CELL_MEMBERSHIP_PENDING` pile each TickMovement,
     /// the same cadence as the physics-BSP drain.
     pub fn insert_cell_membership(&mut self, cell_id: u32, membership: CellMembership) {
-        self.cell_membership.insert(cell_id, membership);
+        Arc::make_mut(&mut self.cell_membership).insert(cell_id, membership);
     }
 
     /// Count of cells with a registered membership tree. Diagnostic only.
@@ -1190,7 +1199,7 @@ impl SpatialScene {
         // not an XY one — the Z component is what disambiguates floors.
         let global = pos.global_coords();
         let lb_high = pos.landblock_id.0 & 0xFFFF_0000;
-        for (&cell_id, aabb) in &self.cell_aabbs {
+        for (&cell_id, aabb) in self.cell_aabbs.iter() {
             if (cell_id & 0xFFFF_0000) != lb_high {
                 continue;
             }
@@ -1240,7 +1249,7 @@ impl SpatialScene {
         }
         let global = pos.global_coords();
         let lb_high = pos.landblock_id.0 & 0xFFFF_0000;
-        for (&cell_id, aabb) in &self.cell_aabbs {
+        for (&cell_id, aabb) in self.cell_aabbs.iter() {
             if (cell_id & 0xFFFF_0000) != lb_high || aabb.is_empty() {
                 continue;
             }
@@ -1541,7 +1550,7 @@ impl SpatialScene {
             // entry in cell_portal_graph at all are excluded (they
             // can't be reached by anything; renderer doesn't need them
             // from outdoor).
-            for (&cell, aabb) in &self.cell_aabbs {
+            for (&cell, aabb) in self.cell_aabbs.iter() {
                 if !frustum.intersects_aabb(aabb) {
                     continue;
                 }
@@ -1668,7 +1677,7 @@ impl SpatialScene {
     /// sweep tolerates duplicates; deduplication would cost more in
     /// HashMap probes than we'd save).
     pub fn insert_static_aabb(&mut self, landblock_high: u32, entry: StaticAabbEntry) {
-        self.statics_aabb_index
+        Arc::make_mut(&mut self.statics_aabb_index)
             .entry(landblock_high)
             .or_default()
             .push(entry);
@@ -1679,7 +1688,7 @@ impl SpatialScene {
     /// `clear_building_aabbs_for_landblock`). Returns the count of
     /// removed entries for diagnostic logging.
     pub fn clear_static_aabbs_for_landblock(&mut self, landblock_high: u32) -> usize {
-        match self.statics_aabb_index.remove(&landblock_high) {
+        match Arc::make_mut(&mut self.statics_aabb_index).remove(&landblock_high) {
             Some(v) => v.len(),
             None => 0,
         }
@@ -1744,7 +1753,7 @@ impl SpatialScene {
     /// cadence as the static-AABB drain. Append-only; the per-landblock
     /// clear on unload keeps it bounded.
     pub fn insert_static_physics_bsp(&mut self, landblock_high: u32, bsp: CellPhysicsBsp) {
-        self.statics_physics_bsp
+        Arc::make_mut(&mut self.statics_physics_bsp)
             .entry(landblock_high)
             .or_default()
             .push(bsp);
@@ -1754,7 +1763,7 @@ impl SpatialScene {
     /// (mirror of `clear_static_aabbs_for_landblock`). Returns the removed
     /// count for diagnostic logging.
     pub fn clear_static_physics_bsps_for_landblock(&mut self, landblock_high: u32) -> usize {
-        match self.statics_physics_bsp.remove(&landblock_high) {
+        match Arc::make_mut(&mut self.statics_physics_bsp).remove(&landblock_high) {
             Some(v) => v.len(),
             None => 0,
         }
@@ -1893,7 +1902,7 @@ impl SpatialScene {
     /// landblock. The camera sweep collects all triangles for the
     /// landblock the player is in.
     pub fn insert_building_triangle(&mut self, landblock_high: u32, tri: Triangle) {
-        self.building_physics_index
+        Arc::make_mut(&mut self.building_physics_index)
             .entry(landblock_high)
             .or_default()
             .push(tri);
