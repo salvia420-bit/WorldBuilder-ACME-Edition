@@ -51,12 +51,19 @@ impl ClientRuntime {
                 self.handle_runtime_world_event(event);
             }
 
+            // A13-W1 (2026-06-11): the self-movement sequence records go
+            // through the SHARED helper (also called by the wasm recv loop
+            // under `?wireStatePacks=stage1`) so the two targets consume
+            // the canonical `WorldEvent::Self*` stream identically. The
+            // per-event match below keeps only the native-runtime-owned
+            // follow-ons (simulation hand-off, F2-3 deferred LoginComplete).
+            self.movement
+                .apply_self_movement_world_events(&pending_events);
+
             let mut follow_up_events = Vec::new();
             for event in pending_events {
                 match event {
                     WorldEvent::SelfServerControlledMotion(data) => {
-                        self.movement
-                            .record_server_control_sequence(data.server_control_sequence);
                         let world_events = {
                             let ClientRuntime {
                                 simulation,
@@ -71,12 +78,9 @@ impl ClientRuntime {
                         };
                         follow_up_events.extend(world_events);
                     }
-                    WorldEvent::SelfUpdatePosition {
-                        force_position_sequence,
-                        ..
-                    } => {
-                        self.movement
-                            .record_force_position_sequence(force_position_sequence);
+                    WorldEvent::SelfUpdatePosition { .. } => {
+                        // Sequence record handled by the shared
+                        // `apply_self_movement_world_events` above (A13-W1).
                         // F2-3: the first local-player UpdatePosition after a
                         // teleport carries the destination pose. Now that the
                         // client is at the destination, send the deferred
@@ -85,17 +89,6 @@ impl ClientRuntime {
                             self.pending_post_teleport_login_complete = false;
                             self.send_login_complete().await?;
                         }
-                    }
-                    WorldEvent::SelfAutonomousPosition {
-                        teleport_sequence,
-                        force_position_sequence,
-                        server_control_sequence,
-                    } => {
-                        self.movement.record_autonomous_position_sequences(
-                            teleport_sequence,
-                            force_position_sequence,
-                            server_control_sequence,
-                        );
                     }
                     _ => {}
                 }

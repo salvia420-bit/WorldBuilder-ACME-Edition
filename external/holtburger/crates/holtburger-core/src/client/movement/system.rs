@@ -2923,6 +2923,72 @@ impl MovementSystem {
             .record_server_control_sequence(server_control_sequence);
     }
 
+    /// A13-W1 (2026-06-11, unification survey): SINGLE consumption site
+    /// for the self-movement sequence `WorldEvent`s the canonical world
+    /// handlers emit (`SelfServerControlledMotion` /
+    /// `SelfUpdatePosition` / `SelfAutonomousPosition`). The native
+    /// runtime (`client/messages.rs::handle_world_events`) and the wasm
+    /// recv loop (`?wireStatePacks=stage1` routed path) both call THIS
+    /// function, so the sequence-diagnostics records can never drift
+    /// between the two targets again (the exact "fix lands in cli,
+    /// regresses in wasm" class the survey's §3 row 3 documents).
+    ///
+    /// Retail analog: both C2S position packs echo the SAME
+    /// `CPhysicsObj::update_times[4/5/6/8]` quartet captured at receive
+    /// time (`CommandInterpreter::SendMovementEvent`
+    /// acclient.c:718175-718187, `SendPositionEvent` :718225-718239).
+    /// Our authoritative quartet copy lives on `world.player` (written
+    /// by `holtburger_world::player::mutations`); these records feed
+    /// the [`MovementSequenceDiagnostics`] observability mirror only.
+    ///
+    /// NOTE: the native runtime's `SelfServerControlledMotion` follow-on
+    /// (`simulation.handle_server_controlled_movement`) and the F2-3
+    /// deferred-LoginComplete trigger stay with their owners — this
+    /// helper owns ONLY the sequence records both targets share.
+    pub(crate) fn apply_self_movement_world_events(
+        &mut self,
+        events: &[holtburger_world::WorldEvent],
+    ) {
+        use holtburger_world::WorldEvent;
+        for event in events {
+            match event {
+                WorldEvent::SelfServerControlledMotion(data) => {
+                    self.record_server_control_sequence(data.server_control_sequence);
+                }
+                WorldEvent::SelfUpdatePosition {
+                    force_position_sequence,
+                    ..
+                } => {
+                    self.record_force_position_sequence(*force_position_sequence);
+                }
+                WorldEvent::SelfAutonomousPosition {
+                    teleport_sequence,
+                    force_position_sequence,
+                    server_control_sequence,
+                } => {
+                    self.record_autonomous_position_sequences(
+                        *teleport_sequence,
+                        *force_position_sequence,
+                        *server_control_sequence,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// A13-W1 test seam: expose the last recorded server-control /
+    /// force-position sequences so unit tests can assert the shared
+    /// consumption helper actually recorded.
+    #[cfg(test)]
+    pub(crate) fn last_diagnostic_sequences(&self) -> (Option<u16>, Option<u16>, Option<u16>) {
+        (
+            self.sequence_diagnostics.last_server_control_sequence,
+            self.sequence_diagnostics.last_force_position_sequence,
+            self.sequence_diagnostics.last_teleport_sequence,
+        )
+    }
+
     fn should_send_stop_pulse(&self) -> bool {
         self.server_motion_active
     }

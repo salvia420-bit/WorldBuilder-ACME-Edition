@@ -3847,3 +3847,61 @@ fn test_terrain_contour_slide_never_into_slope() {
         }
     }
 }
+
+/// A13-W1 (2026-06-11, unification survey): the SHARED self-movement
+/// WorldEvent consumption helper records all three sequence families —
+/// this is the single site both the native runtime
+/// (`client/messages.rs::handle_world_events`) and the wasm recv loop
+/// (`?wireStatePacks=stage1`) call, so a drift here would regress both
+/// targets at once (which is the point — survey A13 §3 rows 3-4).
+#[test]
+fn test_apply_self_movement_world_events_records_all_sequence_families() {
+    use holtburger_protocol::messages::{
+        MovementEventData, MovementInvalid, MovementType, MovementTypeData,
+    };
+    use holtburger_world::WorldEvent;
+
+    let mut movement = MovementSystem::new();
+    assert_eq!(movement.last_diagnostic_sequences(), (None, None, None));
+
+    let motion = MovementEventData {
+        guid: Guid(0x5000_0001),
+        object_instance_sequence: 7,
+        movement_sequence: 20,
+        server_control_sequence: 11,
+        is_autonomous: false,
+        movement_type: MovementType::Invalid,
+        motion_flags: 0,
+        current_style: MotionStance::SwordCombat.interpreted(),
+        data: MovementTypeData::Invalid(MovementInvalid::default()),
+    };
+
+    movement.apply_self_movement_world_events(&[
+        WorldEvent::SelfServerControlledMotion(Box::new(motion)),
+        WorldEvent::SelfUpdatePosition {
+            teleport_sequence: 3,
+            force_position_sequence: 5,
+        },
+    ]);
+    assert_eq!(
+        movement.last_diagnostic_sequences(),
+        (Some(11), Some(5), None)
+    );
+
+    movement.apply_self_movement_world_events(&[WorldEvent::SelfAutonomousPosition {
+        teleport_sequence: 4,
+        force_position_sequence: 6,
+        server_control_sequence: 12,
+    }]);
+    assert_eq!(
+        movement.last_diagnostic_sequences(),
+        (Some(12), Some(6), Some(4))
+    );
+
+    // Unrelated events are ignored.
+    movement.apply_self_movement_world_events(&[WorldEvent::TeleportStarted { sequence: 99 }]);
+    assert_eq!(
+        movement.last_diagnostic_sequences(),
+        (Some(12), Some(6), Some(4))
+    );
+}

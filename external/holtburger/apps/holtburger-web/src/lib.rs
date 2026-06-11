@@ -123,6 +123,30 @@ fn parse_pose_publish_post_tick_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "posePublishPostTick=on")
 }
 
+/// A13-W1 (2026-06-11, unification survey): parse
+/// `?wireStatePacks=stage1` (or `&wireStatePacks=stage1`). Same shape as
+/// `parse_world_lifecycle_flag`. When on, the movement-message family
+/// (`UpdatePosition` / `VectorUpdate` / `UpdateMotion` /
+/// `PlayerTeleport`) is routed through the canonical
+/// `holtburger_world::handlers` dispatcher — the exact path the native
+/// runtime uses (`handlers/player.rs:47-117`) — and the wasm recv arms
+/// STOP hand-mirroring the timestamp-quartet sequences onto
+/// `world.player`. Retail single owner: both C2S position packs are
+/// constructed from the same `CPhysicsObj::update_times[4/5/6/8]` slots
+/// (acclient.c:718175-718187, :718225-718239). On-path gains:
+/// `server_control_sequence` finally advances on non-autonomous
+/// `UpdateMotion` (`apply_self_update_motion`, mutations.rs) so outbound
+/// MoveToState / AutonomousPosition / Jump echo a live value instead of
+/// 0-forever (survey A13 §3 row 4; retail echoes update_times[5],
+/// acclient.c:718176), and position acceptance gets the canonical
+/// `is_newer_u16` sequence gating. Default OFF = legacy hand-mirrors,
+/// byte-identical.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_wire_state_packs_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "wireStatePacks=stage1")
+}
+
 /// Map a `GameEvent` variant back to its `GameEventOpcode` discriminant
 /// (the wire opcode read at `game_event.rs:97`). Used by the
 /// `[seq-gap]` observability hook to bucket sequence trackers per
@@ -21952,10 +21976,14 @@ mod tests_player_enchantment_snapshot_shape {
 /// stays current?
 ///
 /// We selectively route — NOT every message — because position
-/// messages (`UpdatePosition`, etc.) already get manual treatment in
-/// the recv loop's existing arms (sequence tracking, entity_seeded
+/// messages (`UpdatePosition`, etc.) historically got manual treatment
+/// in the recv loop's existing arms (sequence tracking, entity_seeded
 /// gating, MovementSystem heartbeat arming) and double-handling them
-/// risks regressing step 3.6 / 3.5.
+/// risks regressing step 3.6 / 3.5. A13-W1 (2026-06-11) retires that
+/// hand-mirror model for the quartet-bearing movement family
+/// (`UpdatePosition` / `VectorUpdate` / `UpdateMotion` /
+/// `PlayerTeleport`) behind `?wireStatePacks=stage1` — see the gate
+/// block below and `parse_wire_state_packs_flag`.
 ///
 /// **Lifecycle family (`ObjectCreate` / `ObjectDelete` / `ParentEvent`
 /// / `PickupEvent` / `InventoryRemoveObject`): routed ONLY under
@@ -22001,10 +22029,11 @@ mod tests_player_enchantment_snapshot_shape {
 /// player::handle_event, and other GameEvents (UpdateHealth,
 /// ViewContents, IdentifyObjectResponse, WieldObject) all hit
 /// inventory / properties handlers that don't touch the spatial path.
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn should_route_message_to_world(
     message: &holtburger_protocol::messages::GameMessage,
     world_lifecycle_on: bool,
+    wire_state_packs_on: bool,
 ) -> bool {
     use holtburger_protocol::messages::GameMessage;
     // A8-M1 (2026-06-11): canonical lifecycle routing, gated
@@ -22018,6 +22047,31 @@ fn should_route_message_to_world(
                 | GameMessage::InventoryRemoveObject(_)
                 | GameMessage::ParentEvent(_)
                 | GameMessage::PickupEvent(_)
+        )
+    {
+        return true;
+    }
+    // A13-W1 (2026-06-11): canonical movement-message routing, gated
+    // `?wireStatePacks=stage1` (default OFF — see
+    // `parse_wire_state_packs_flag` for the quartet/sequence rationale).
+    // For the local player these land on `handlers/player.rs`
+    // (`apply_position_from_server` / `apply_self_update_motion` /
+    // `set_teleport_sequence` + `suspend_runtime_bodies` /
+    // `record_vector_update_sequences`); remote guids fall through to
+    // `handlers/movement.rs` exactly as on the native runtime. The recv
+    // arms keep their JS-facing EntityUpdate emission either way but
+    // stop mutating `w.player` sequences directly when this is on.
+    // `Private/PublicUpdatePosition` stay un-routed this stage: they
+    // carry no quartet (bare `WorldPosition` + u8 bookkeeping seq) and
+    // their world-side entity mutation is A8-M2/A1-O1 follow-on
+    // territory.
+    if wire_state_packs_on
+        && matches!(
+            message,
+            GameMessage::UpdatePosition(_)
+                | GameMessage::VectorUpdate(_)
+                | GameMessage::UpdateMotion(_)
+                | GameMessage::PlayerTeleport(_)
         )
     {
         return true;
@@ -22103,6 +22157,116 @@ fn should_route_message_to_world(
             // arm in the recv loop's WorldEvent scan absorbs the variant.
             | GameMessage::PlayEffect(_)
     )
+}
+
+/// A13-W1 (2026-06-11): native routed-set asserts for
+/// `should_route_message_to_world` — the headless acceptance lane for
+/// the recv-arm surgery (survey A13 §4 Stage W1 tests). The function is
+/// `cfg(any(wasm32, test))` so these run under
+/// `cargo test -p holtburger-web` without a wasm runtime; the canonical
+/// handler behavior itself (quartet writes, `is_newer_u16` gating,
+/// `SelfServerControlledMotion` emission) is covered by
+/// `holtburger-world`'s state tests and `holtburger-core`'s
+/// `client/messages.rs` tests on the same dispatcher.
+#[cfg(test)]
+mod wire_state_packs_routing_tests {
+    use super::{parse_wire_state_packs_flag, should_route_message_to_world};
+    use holtburger_protocol::messages::*;
+
+    fn movement_family_messages() -> Vec<GameMessage> {
+        use holtburger_protocol::messages::movement::MotionStance;
+        vec![
+            GameMessage::UpdatePosition(Box::new(UpdatePositionData {
+                guid: holtburger_common::Guid(0x5000_0001),
+                pos: PositionPack {
+                    flags: UpdatePositionFlag::empty(),
+                    pos: holtburger_common::position::WorldPosition::default(),
+                    velocity: None,
+                    placement_id: None,
+                    instance_sequence: 1,
+                    position_sequence: 2,
+                    teleport_sequence: 3,
+                    force_position_sequence: 4,
+                },
+            })),
+            GameMessage::VectorUpdate(Box::new(VectorUpdateData {
+                guid: holtburger_common::Guid(0x5000_0001),
+                velocity: holtburger_common::Vector3::zero(),
+                omega: holtburger_common::Vector3::zero(),
+                instance_sequence: 1,
+                vector_sequence: 2,
+            })),
+            GameMessage::UpdateMotion(Box::new(MovementEventData {
+                guid: holtburger_common::Guid(0x5000_0001),
+                object_instance_sequence: 1,
+                movement_sequence: 2,
+                server_control_sequence: 3,
+                is_autonomous: false,
+                movement_type: MovementType::Invalid,
+                motion_flags: 0,
+                current_style: MotionStance::NonCombat.interpreted(),
+                data: MovementTypeData::Invalid(MovementInvalid::default()),
+            })),
+            GameMessage::PlayerTeleport(Box::new(PlayerTeleportData {
+                teleport_sequence: 7,
+            })),
+        ]
+    }
+
+    /// Default-off: the movement family stays excluded (legacy
+    /// hand-mirror arms own it), byte-identical to pre-A13-W1.
+    #[test]
+    fn movement_family_not_routed_by_default() {
+        for message in movement_family_messages() {
+            assert!(
+                !should_route_message_to_world(&message, false, false),
+                "{message:?} must NOT route with wireStatePacks off"
+            );
+        }
+    }
+
+    /// `?wireStatePacks=stage1`: all four quartet-bearing movement
+    /// messages route to the canonical world dispatcher.
+    #[test]
+    fn movement_family_routed_under_stage1() {
+        for message in movement_family_messages() {
+            assert!(
+                should_route_message_to_world(&message, false, true),
+                "{message:?} must route with wireStatePacks=stage1"
+            );
+        }
+    }
+
+    /// `Private/PublicUpdatePosition` carry no quartet and stay
+    /// un-routed this stage regardless of the flag (survey W1 scope
+    /// note in the gate block).
+    #[test]
+    fn bare_position_updates_stay_unrouted() {
+        let private = GameMessage::PrivateUpdatePosition(Box::new(PrivateUpdatePositionData {
+            sequence: 1,
+            position_type: PositionType::Location,
+            pos: holtburger_common::position::WorldPosition::default(),
+        }));
+        let public = GameMessage::PublicUpdatePosition(Box::new(PublicUpdatePositionData {
+            sequence: 1,
+            guid: holtburger_common::Guid(0x5000_0002),
+            position_type: PositionType::Location,
+            pos: holtburger_common::position::WorldPosition::default(),
+        }));
+        for message in [private, public] {
+            assert!(!should_route_message_to_world(&message, true, true));
+        }
+    }
+
+    #[test]
+    fn flag_parses_only_exact_stage1_value() {
+        assert!(parse_wire_state_packs_flag("?wireStatePacks=stage1"));
+        assert!(parse_wire_state_packs_flag(
+            "?renderer=3d&wireStatePacks=stage1"
+        ));
+        assert!(!parse_wire_state_packs_flag("?wireStatePacks=on"));
+        assert!(!parse_wire_state_packs_flag(""));
+    }
 }
 
 /// CMT Wave 16 / Phase 50 (2026-05-26): resolve the entity's
@@ -28933,45 +29097,21 @@ fn build_raw_motion_state_for_input(
     state
 }
 
-/// Phase 4 step 3: minimal local-player state the recv loop tracks
-/// to fill in outbound `MoveToStateActionData`. The cli holds this
-/// inside `WorldState.player`; we reproduce just the fields the
-/// action data carries so the wasm bundle doesn't have to stand up
-/// the full world simulation.
-///
-/// Sequences come from `UpdatePosition.pos` (a `PositionPack` —
-/// the only inbound message that carries all four `u16` sequence
-/// numbers; `PrivateUpdatePosition` and `PublicUpdatePosition`
-/// only carry a single `u8` bookkeeping sequence). Position can
-/// come from any of the three.
-///
-/// `server_control_sequence` is special: the cli updates it from
-/// `UpdateMotion`-style messages, not position updates (see
-/// `crates/holtburger-world/src/entity.rs:344`). We initialise it
-/// to 0 and let it ride; ACE is lenient on stale
-/// `server_control_sequence` for client-driven motion. If this
-/// turns out to be wrong, follow-on work tracks `UpdateMotion`.
-#[cfg(target_arch = "wasm32")]
-struct LocalPlayerSnapshot {
-    position: Option<holtburger_common::position::WorldPosition>,
-    instance_sequence: u16,
-    server_control_sequence: u16,
-    teleport_sequence: u16,
-    force_position_sequence: u16,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl LocalPlayerSnapshot {
-    fn new() -> Self {
-        Self {
-            position: None,
-            instance_sequence: 0,
-            server_control_sequence: 0,
-            teleport_sequence: 0,
-            force_position_sequence: 0,
-        }
-    }
-}
+// A13-W1 (2026-06-11, unification survey): the `LocalPlayerSnapshot`
+// struct that lived here (a "minimal local-player state" quartet copy
+// from Phase 4 step 3, with the self-documented
+// "`server_control_sequence` … initialise it to 0 and let it ride"
+// TODO) was REMOVED. It had become a write-only dead third copy of the
+// timestamp quartet (survey A13 §3 row 7): every outbound
+// MoveToState / AutonomousPosition / Jump builder reads
+// `world.player.*` (the canonical owner, mirroring retail's single
+// `CPhysicsObj::update_times[]` source — acclient.c:718175-718187),
+// and nothing ever read the snapshot back. The `server_control_sequence`
+// "let it ride" gap is closed properly by the `?wireStatePacks=stage1`
+// routing (canonical `apply_self_update_motion` advances
+// `world.player.server_control_sequence` on non-autonomous
+// UpdateMotion — mutations.rs; retail echoes update_times[5],
+// acclient.c:718176).
 
 /// Phase 4 step 4 follow-on (vitals + inventory panels): collapse the
 /// recv loop's `WorldState.player.{vitals,attributes,skills}` HashMaps
@@ -29551,9 +29691,9 @@ fn publish_player_fellowship_snapshot(
 // equals the monarch's guid — self's parent is the patron, vassals'
 // parent is self. We split using the tree-parent topology + own guid.
 //
-// `own_guid`: the local player's GUID. Pulled from
-// `LocalPlayerSnapshot::guid` at the recv-arm. `None` pre-PlayerCreate
-// (won't happen in practice — AllegianceUpdate only fires post-spawn).
+// `own_guid`: the local player's GUID, passed by the recv-arm from its
+// `LoopState::InWorld { player_guid }`. Zero pre-PlayerCreate (won't
+// happen in practice — AllegianceUpdate only fires post-spawn).
 #[cfg(target_arch = "wasm32")]
 fn publish_player_allegiance_snapshot(
     payload: &holtburger_protocol::messages::AllegianceUpdateEventData,
@@ -30168,17 +30308,16 @@ async fn recv_loop(
     use futures::StreamExt;
     use holtburger_protocol::messages::{
         CharacterEnterWorldData, CharacterGenerationVerificationResponse, GameAction, GameMessage,
-        MoveToStateActionData, TalkActionData,
+        TalkActionData,
     };
     use holtburger_protocol::traits::ProtocolUnpack;
     use holtburger_session::SessionEvent;
 
     let mut state = LoopState::Idle;
     let mut account_name = String::new();
-    // Phase 4 step 3: tracked from inbound position messages so the
-    // SetMovementInput cmd can build a complete MoveToStateActionData
-    // without standing up a full WorldState.
-    let mut local_player = LocalPlayerSnapshot::new();
+    // (A13-W1 2026-06-11: the `LocalPlayerSnapshot` quartet copy that
+    // lived here was a write-only dead third copy — removed; see the
+    // tombstone comment at its former struct site.)
     // Phase 4 step 3.6: full `WorldState` driven by the cli's
     // `MovementSystemHandle`. Constructed on EnteredWorld once the
     // parallel-loaded WorldBootstrap is in. The player entity is
@@ -30367,6 +30506,14 @@ async fn recv_loop(
     // OFF; see `parse_pose_publish_post_tick_flag` and the arm below.
     let pose_publish_post_tick_on: bool =
         parse_pose_publish_post_tick_flag(&js_location_search());
+    // A13-W1 (2026-06-11): `?wireStatePacks=stage1` — route the
+    // quartet-bearing movement messages (UpdatePosition / VectorUpdate /
+    // UpdateMotion / PlayerTeleport) through the canonical world
+    // dispatcher and retire the recv arms' hand-mirrored sequence
+    // writes. Default OFF; see `parse_wire_state_packs_flag` and
+    // `should_route_message_to_world`.
+    let wire_state_packs_stage1_on: bool =
+        parse_wire_state_packs_flag(&js_location_search());
     // wieldedSpawn (2026-06-11): live-rig ledger — guids that currently have
     // a JS-side rig (KIND_SPAWN emitted, no KIND_REMOVE since). Maintained
     // unconditionally (cheap set ops at the existing emission sites), but
@@ -30681,8 +30828,11 @@ async fn recv_loop(
                             _ => {}
                         }
                     }
-                    if should_route_message_to_world(&message, world_lifecycle_on)
-                        && let Some(w) = world.as_mut()
+                    if should_route_message_to_world(
+                        &message,
+                        world_lifecycle_on,
+                        wire_state_packs_stage1_on,
+                    ) && let Some(w) = world.as_mut()
                     {
                         let mut world_events: Vec<holtburger_world::WorldEvent> = Vec::new();
                         holtburger_world::handlers::routing::handle_message(
@@ -31256,6 +31406,22 @@ async fn recv_loop(
                                 _ => {}
                             }
                         }
+                        // A13-W1 (2026-06-11): consume the self-movement
+                        // sequence WorldEvents (`SelfServerControlledMotion`
+                        // / `SelfUpdatePosition` / `SelfAutonomousPosition`)
+                        // through the SAME shared helper the native runtime
+                        // calls in `client/messages.rs::handle_world_events`
+                        // — single consumption site for both targets. Only
+                        // reachable when the movement family is routed
+                        // (`?wireStatePacks=stage1`); gated anyway so the
+                        // default path stays byte-identical. The native-only
+                        // follow-ons (simulation hand-off, F2-3 deferred
+                        // LoginComplete) keep their existing wasm owners:
+                        // the UpdateMotion JS arm + the UpdatePosition arm's
+                        // F2-3 block below.
+                        if wire_state_packs_stage1_on {
+                            movement.apply_self_movement_world_events(&world_events);
+                        }
                     }
 
                     // Phase 4 step 4 follow-on: spatial-bypass inventory
@@ -31689,7 +31855,18 @@ async fn recv_loop(
                             // to the destination pose. mode flips to
                             // AuthoritativeOnly; the integrator's next W press
                             // sets it back to SimulatingMotionState.
-                            if let Some(w) = world.as_mut() {
+                            // A13-W1 (2026-06-11): under `?wireStatePacks=stage1`
+                            // the canonical `handlers/player.rs` PlayerTeleport
+                            // arm (routed above via
+                            // `should_route_message_to_world`) already performed
+                            // EXACTLY this pair — `set_teleport_sequence` +
+                            // `suspend_runtime_bodies(TeleportOrWorldReset)` —
+                            // so the hand-mirror below is skipped on-path (the
+                            // duplicated-mirror class this whole workstream
+                            // retires; survey A13 §3 row 3).
+                            if !wire_state_packs_stage1_on
+                                && let Some(w) = world.as_mut()
+                            {
                                 w.player.set_teleport_sequence(data.teleport_sequence);
                                 let _ = w.suspend_runtime_bodies(
                                     holtburger_world::RuntimeBodyResetCause::TeleportOrWorldReset,
@@ -31844,7 +32021,7 @@ async fn recv_loop(
                             // ready yet (rare under normal flow), the
                             // movement system stays disabled until the
                             // next session — log a warning and continue
-                            // (existing LocalPlayerSnapshot path keeps
+                            // (wire-data EntityUpdate arms keep
                             // entities rendering).
                             // Phase 4 step 4 follow-on: WorldState is
                             // typically constructed eagerly at
@@ -31958,11 +32135,13 @@ async fn recv_loop(
                             if let LoopState::InWorld { player_guid } = &state
                                 && data.guid == *player_guid
                             {
-                                local_player.position = Some(data.pos.pos);
-                                local_player.instance_sequence = data.pos.instance_sequence;
-                                local_player.teleport_sequence = data.pos.teleport_sequence;
-                                local_player.force_position_sequence =
-                                    data.pos.force_position_sequence;
+                                // A13-W1 (2026-06-11): the `LocalPlayerSnapshot`
+                                // quartet copy that used to be written here was
+                                // a write-only dead third copy (survey A13 §3
+                                // row 7) — the outbound MoveToState /
+                                // AutonomousPosition / Jump builders all read
+                                // `w.player.*`. Removed outright (no gate:
+                                // deleting dead writes is behavior-identical).
                                 // F2-3: this UpdatePosition is the destination
                                 // pose after a teleport (its sequences were just
                                 // captured above, so the client is now at the
@@ -32008,7 +32187,21 @@ async fn recv_loop(
                                             u32::from(pose.landblock_id),
                                             pose.coords.x, pose.coords.y, pose.coords.z,
                                         ));
-                                    } else {
+                                    } else if !wire_state_packs_stage1_on {
+                                        // A13-W1 (2026-06-11): this whole
+                                        // reconcile branch is the legacy
+                                        // OFF-path. Under
+                                        // `?wireStatePacks=stage1` the routed
+                                        // canonical `handlers/player.rs`
+                                        // UpdatePosition arm already ran
+                                        // `apply_position_from_server` (with
+                                        // `is_newer_u16` acceptance gating the
+                                        // hand-rolled path never had) + the
+                                        // SAME B1/D3-SNAP Reset-vs-Snapshot
+                                        // discriminant +
+                                        // `set_player_position_with_sync` —
+                                        // re-running it here would double-apply.
+                                        //
                                         // Workstream G (3D camera/game-feel
                                         // fix, 2026-05-11): always call
                                         // `set_player_position` for the local
@@ -32166,16 +32359,26 @@ async fn recv_loop(
                                         };
                                         let _ = w.set_player_position_with_sync(pose, sync);
                                     }
-                                    // Mirror the four sequences onto the
+                                    // Mirror the quartet sequences onto the
                                     // WorldState player so outbound
                                     // MoveToState / AutonomousPosition pull
-                                    // current values.
-                                    w.player.instance_sequence =
-                                        data.pos.instance_sequence;
-                                    w.player.teleport_sequence =
-                                        data.pos.teleport_sequence;
-                                    w.player.force_position_sequence =
-                                        data.pos.force_position_sequence;
+                                    // current values. LEGACY OFF-path only:
+                                    // under `?wireStatePacks=stage1` the
+                                    // canonical `apply_position_from_server`
+                                    // (mutations.rs) owns these writes — with
+                                    // sequence-acceptance gating, plus the
+                                    // `position_sequence` slot this mirror
+                                    // always dropped (A13-W1; retail single
+                                    // owner `CPhysicsObj::update_times[4/5/6/8]`,
+                                    // acclient.c:718175-718187).
+                                    if !wire_state_packs_stage1_on {
+                                        w.player.instance_sequence =
+                                            data.pos.instance_sequence;
+                                        w.player.teleport_sequence =
+                                            data.pos.teleport_sequence;
+                                        w.player.force_position_sequence =
+                                            data.pos.force_position_sequence;
+                                    }
                                     if !heartbeat_armed && entity_seeded {
                                         let now = web_time::Instant::now();
                                         movement.arm_heartbeat_schedule(now, w);
@@ -32240,10 +32443,9 @@ async fn recv_loop(
                             };
                             if let Some(guid) = local_guid {
                                 let pos = &data.pos;
-                                // Phase 4 step 3: this packet is
-                                // implicitly the local player; cache
-                                // position for outbound MoveToState.
-                                local_player.position = Some(*pos);
+                                // (A13-W1: the `LocalPlayerSnapshot` position
+                                // cache formerly written here was a write-only
+                                // dead copy — removed.)
                                 // Phase 4 step 3.6: seed the WorldState
                                 // player entity on the first inbound
                                 // position (we now know the spawn pose),
@@ -32366,15 +32568,9 @@ async fn recv_loop(
                         }
                         GameMessage::PublicUpdatePosition(data) => {
                             let pos = &data.pos;
-                            // Phase 4 step 3: when ACE echoes the
-                            // local player's position via the public
-                            // channel (it does, alongside Private),
-                            // refresh the cached snapshot.
-                            if let LoopState::InWorld { player_guid } = &state
-                                && data.guid == *player_guid
-                            {
-                                local_player.position = Some(*pos);
-                            }
+                            // (A13-W1: the `LocalPlayerSnapshot` position
+                            // cache formerly refreshed here on a local-player
+                            // echo was a write-only dead copy — removed.)
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_POSITION,
                                 guid: u32::from(data.guid),

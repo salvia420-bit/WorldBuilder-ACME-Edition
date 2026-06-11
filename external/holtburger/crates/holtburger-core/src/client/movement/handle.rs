@@ -156,6 +156,19 @@ impl MovementSystemHandle {
         self.tick_count = self.tick_count.wrapping_add(1);
     }
 
+    /// A13-W1 (2026-06-11, unification survey): consume the
+    /// self-movement sequence `WorldEvent`s emitted by the canonical
+    /// world handlers, exactly as the native runtime does
+    /// (`client/messages.rs::handle_world_events`). The wasm recv loop
+    /// calls this after routing `UpdatePosition` / `UpdateMotion` /
+    /// `VectorUpdate` / `PlayerTeleport` through
+    /// `holtburger_world::handlers::routing::handle_message` under
+    /// `?wireStatePacks=stage1` — single consumption site, see
+    /// [`MovementSystem::apply_self_movement_world_events`].
+    pub fn apply_self_movement_world_events(&mut self, events: &[WorldEvent]) {
+        self.inner.apply_self_movement_world_events(events);
+    }
+
     /// Phase 4 step 3.6 diagnostics — number of tick() calls since
     /// construction. The wasm bundle's recv loop reads this to throttle
     /// per-frame pose logs (one per ~60 ticks).
