@@ -4896,3 +4896,53 @@ fn is_entirely_water_cell_at_detects_full_water_cells() {
         "short codes are a no-op — grid unchanged"
     );
 }
+
+/// G-8 / F4-4 follow-on (2026-06-11) — wading water depth, mirroring ACE
+/// `get_water_depth` + `calc_water_depth`: NotWater 0.0, EntirelyWater 0.9,
+/// PartiallyWater keyed off the NEAREST cell vertex (12 m rounding) —
+/// water vertex 0.45, land vertex 0.1. Uncached landblock → 0.0.
+#[test]
+fn water_depth_at_mirrors_ace_depth_classes() {
+    let mut state = WorldState::synthetic();
+    let lb = 0u32; // lb (0,0) → world coords [0,192)
+
+    // Uncached landblock → 0.0 (fail-soft).
+    assert_eq!(state.water_depth_at(12.0, 12.0), 0.0);
+
+    // All land → 0.0 everywhere.
+    state.populate_terrain_water(lb, &[0u8; 81]);
+    assert_eq!(state.water_depth_at(12.0, 12.0), 0.0);
+
+    // Whole LB water → EntirelyWater 0.9.
+    state.populate_terrain_water(lb, &[19u8; 81]);
+    assert!((state.water_depth_at(12.0, 12.0) - 0.9).abs() < 1e-6);
+
+    // Synthetic SHORELINE: only the column-0 vertices (x index 0) are
+    // water → cell (0,0) has exactly 2 water corners (vertices (0,0) and
+    // (0,1)) = PartiallyWater; cell (1,0) is all-land.
+    let mut codes = [0u8; 81];
+    for vy in 0..9 {
+        codes[vy] = 19; // vertex (0, vy) — water along the x=0 edge
+    }
+    state.populate_terrain_water(lb, &codes);
+    assert!(
+        !state.is_entirely_water_cell_at(12.0, 12.0),
+        "shoreline cell must not hard-block"
+    );
+    // Near the waterline (x < 12 → nearest vertex column 0 = water): wade
+    // at ACE's 0.45.
+    assert!(
+        (state.water_depth_at(5.0, 5.0) - 0.45).abs() < 1e-6,
+        "near-water-vertex shoreline point must wade at 0.45, got {}",
+        state.water_depth_at(5.0, 5.0)
+    );
+    // Same cell, nearer the dry edge (x >= 12 → nearest vertex column 1 =
+    // land): ACE's residual 0.1.
+    assert!(
+        (state.water_depth_at(18.0, 5.0) - 0.1).abs() < 1e-6,
+        "near-land-vertex shoreline point must wade at 0.1, got {}",
+        state.water_depth_at(18.0, 5.0)
+    );
+    // Fully-dry neighbour cell (x in [24,48)) → 0.0.
+    assert_eq!(state.water_depth_at(30.0, 5.0), 0.0);
+}

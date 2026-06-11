@@ -536,6 +536,67 @@ impl WorldState {
             && water[cx1 * 9 + cy1]
     }
 
+    /// G-8 / F4-4 follow-on (2026-06-11) — the wading water depth at a
+    /// world-frame point, mirroring ACE `ObjCell.get_water_depth` +
+    /// `LandblockStruct.calc_water_depth`:
+    /// - NotWater (no corner vertex water): `0.0`
+    /// - EntirelyWater (all four corners water): `0.9` (callers hard-block
+    ///   walkers before this matters — `is_entirely_water_cell_at`)
+    /// - PartiallyWater (1-3 corners, the shoreline): the NEAREST cell
+    ///   vertex (12 m rounding, exactly ACE's `% 24 >= 12` index bump)
+    ///   decides — water vertex `0.45`, land vertex `0.1`.
+    ///
+    /// The integrator adds this to the terrain contact plane under
+    /// `USE_WATER_COLLISION` (`ObjectInfo.ValidateWalkable`'s
+    /// `+ waterDepth` term) so a shoreline walker wades ON the raised
+    /// plane instead of strolling along the lakebed. Returns `0.0` when
+    /// the landblock's water grid isn't cached (fail-soft, no raise).
+    pub fn water_depth_at(&self, world_x: f32, world_y: f32) -> f32 {
+        const LB_M: f32 = 192.0;
+        const VERT_M: f32 = 24.0;
+        if !world_x.is_finite() || !world_y.is_finite() {
+            return 0.0;
+        }
+        let lb_x = (world_x / LB_M).floor() as i32;
+        let lb_y = (world_y / LB_M).floor() as i32;
+        if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
+            return 0.0;
+        }
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let Some(water) = self.terrain_water.get(&landblock_id) else {
+            return 0.0;
+        };
+        let local_x = world_x - lb_x as f32 * LB_M;
+        let local_y = world_y - lb_y as f32 * LB_M;
+        let cx0 = (local_x / VERT_M).clamp(0.0, 8.0).floor() as usize;
+        let cy0 = (local_y / VERT_M).clamp(0.0, 8.0).floor() as usize;
+        let cx1 = (cx0 + 1).min(8);
+        let cy1 = (cy0 + 1).min(8);
+        let corners = [
+            water[cx0 * 9 + cy0],
+            water[cx1 * 9 + cy0],
+            water[cx0 * 9 + cy1],
+            water[cx1 * 9 + cy1],
+        ];
+        let wet = corners.iter().filter(|&&w| w).count();
+        if wet == 0 {
+            return 0.0;
+        }
+        if wet == 4 {
+            return 0.9;
+        }
+        // PartiallyWater: ACE rounds to the nearest vertex of the cell
+        // (calc_water_depth's `% 24 >= 12` bumps) and keys depth off
+        // whether THAT vertex is water-typed.
+        let nearest_x = if local_x % VERT_M >= 12.0 { cx1 } else { cx0 };
+        let nearest_y = if local_y % VERT_M >= 12.0 { cy1 } else { cy0 };
+        if water[nearest_x * 9 + nearest_y] {
+            0.45
+        } else {
+            0.1
+        }
+    }
+
     /// Cache a SetupModel's collision radius. Called by the wasm
     /// bundle when it loads a `0x02xxxxxx` SetupModel — the first
     /// cyl-sphere's radius, or the SetupModel `.radius` field as a

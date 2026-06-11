@@ -2315,6 +2315,21 @@ impl MovementSystem {
         if !pose.is_indoors() {
             let global = pose.global_coords();
             if let Some(z) = world.terrain_height_at(global.x, global.y) {
+                // G-8 / F4-4 follow-on (2026-06-11) — wading-depth contact-
+                // plane raise, same USE_WATER_COLLISION gate. ACE's
+                // `ObjectInfo.ValidateWalkable` adds `waterDepth` to the
+                // contact-plane distance (LandCell.find_env_collisions →
+                // get_water_depth), so a 1-3-corner shoreline cell carries a
+                // raised floor (nearest vertex water ⇒ +0.45, else +0.1) and
+                // the walker WADES instead of strolling along the lakebed.
+                // EntirelyWater stays hard-blocked by the arm below (+0.9
+                // only matters for the airborne landing plane). `0.0` for dry
+                // cells / uncached water grids ⇒ byte-identical default.
+                let z = if USE_WATER_COLLISION {
+                    z + world.water_depth_at(global.x, global.y)
+                } else {
+                    z
+                };
                 if world.player.is_airborne {
                     // Airborne outdoor: snap only on landing (falling
                     // through the terrain plane). The terrain Z is the
