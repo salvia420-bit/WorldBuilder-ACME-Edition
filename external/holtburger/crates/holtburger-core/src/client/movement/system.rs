@@ -64,6 +64,47 @@ const USE_QUANTUM_SUBDIVIDED_INTEGRATION: bool = true;
 /// for A/B comparison.
 const USE_STEP_UP_DOWN: bool = true;
 
+/// A7-R1 (2026-06-12, survey A7 §3 row 1) — per-setup step heights.
+///
+/// `true`: the step-up/step-down caps come from the player's hydrated
+/// `Setup.step_up/step_down × Scale.Z` values
+/// (`world.player.step_up_height`/`step_down_height`, fallback to the
+/// hardcoded constants while unhydrated) — retail
+/// `CPartArray::GetStepUpHeight`/`GetStepDownHeight`
+/// (`acclient.c:325400-325424`; ACE `PartArray.cs:236-248`, cached per
+/// transition at `ObjectInfo.cs:46-47` / `acclient.c:314128-314129`).
+///
+/// `false` (default): the hardcoded human-body
+/// [`holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT`] (0.6) /
+/// [`holtburger_world::spatial::PLAYER_STEP_DOWN_HEIGHT`] (1.5) stay in
+/// effect — byte-identical for the player (its Setup `0x02000001`
+/// resolves to exactly those values; the flag only matters for scaled /
+/// non-human movers once A6 consumes the entity-side fields).
+const USE_SETUP_STEP_HEIGHTS: bool = false;
+
+/// A7-R1 — the effective step-up cap for the local player (see
+/// [`USE_SETUP_STEP_HEIGHTS`]).
+fn player_step_up_height(world: &WorldState) -> f32 {
+    if USE_SETUP_STEP_HEIGHTS
+        && let Some(height) = world.player.step_up_height
+    {
+        height
+    } else {
+        holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT
+    }
+}
+
+/// A7-R1 — the effective step-down cap for the local player.
+fn player_step_down_height(world: &WorldState) -> f32 {
+    if USE_SETUP_STEP_HEIGHTS
+        && let Some(height) = world.player.step_down_height
+    {
+        height
+    } else {
+        holtburger_world::spatial::PLAYER_STEP_DOWN_HEIGHT
+    }
+}
+
 /// Physics deep-dive 2026-06-01 (gap 3 follow-up) — gate for the
 /// edge_slide tangent-slide in the lateral-clamp + step-up path of
 /// [`MovementSystem::advance_local_pose_for_manual_drive_slice`].
@@ -2158,7 +2199,7 @@ impl MovementSystem {
                     // Cap the floor query a step-up above the feet so a
                     // distant high floor (e.g. an upper landing reached
                     // by a separate ramp) doesn't masquerade as a step.
-                    let ceiling = feet_z + holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT;
+                    let ceiling = feet_z + player_step_up_height(world);
                     if !triangles.is_empty() {
                         holtburger_world::spatial::highest_floor_z_under(
                             triangles,
@@ -2180,7 +2221,7 @@ impl MovementSystem {
                     blocked,
                     feet_z,
                     dest_floor_z,
-                    holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT,
+                    player_step_up_height(world),
                 ) {
                     // Climb: take the full intended lateral move and
                     // raise the feet onto the riser top. The floor-Z
@@ -2559,7 +2600,7 @@ impl MovementSystem {
                         match holtburger_world::spatial::step_down_decision(
                             pose.coords.z,
                             z,
-                            holtburger_world::spatial::PLAYER_STEP_DOWN_HEIGHT,
+                            player_step_down_height(world),
                         ) {
                             holtburger_world::spatial::StepDownOutcome::Snap(snap_z) => {
                                 pose.coords.z = snap_z;
@@ -2692,7 +2733,7 @@ impl MovementSystem {
                         match holtburger_world::spatial::step_down_decision(
                             pose.coords.z,
                             snap_z,
-                            holtburger_world::spatial::PLAYER_STEP_DOWN_HEIGHT,
+                            player_step_down_height(world),
                         ) {
                             holtburger_world::spatial::StepDownOutcome::Snap(z) => {
                                 pose.coords.z = z;

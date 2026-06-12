@@ -106,6 +106,31 @@ pub const PLAYER_CAPSULE_HEIGHT: f32 = 1.8;
 pub const PLAYER_STEP_UP_HEIGHT: f32 = 0.6;
 pub const PLAYER_STEP_DOWN_HEIGHT: f32 = 1.5;
 
+/// `PhysicsGlobals.DefaultStepHeight` — the step-height fallback when an
+/// object has no Setup (ACE `PartArray.cs:236-248`; retail
+/// `CPartArray::GetStepUpHeight`/`GetStepDownHeight`,
+/// `acclient.c:325400-325424`, returns `0.01` when `setup_table == 0`).
+pub const DEFAULT_STEP_HEIGHT: f32 = 0.01;
+
+/// A7-R1 (2026-06-12, survey A7 §3 row 1): the retail per-setup step
+/// heights — `Setup.StepUpHeight × Scale.Z` / `StepDownHeight × Scale.Z`,
+/// each falling back to [`DEFAULT_STEP_HEIGHT`] when the setup carries no
+/// value (`acclient.c:325400-325424`, `:314128-314129` ObjectInfo cache;
+/// ACE `PartArray.cs:236-248`, `ObjectInfo.cs:46-47`). The human-body
+/// player Setup `0x0200_0001` (`step_up = 0.6`, `step_down = 1.5`,
+/// `scale.z = 1.0`) resolves to exactly
+/// ([`PLAYER_STEP_UP_HEIGHT`], [`PLAYER_STEP_DOWN_HEIGHT`]) so the
+/// default player behavior is byte-identical.
+pub fn setup_step_heights(
+    step_up: Option<f32>,
+    step_down: Option<f32>,
+    scale_z: f32,
+) -> (f32, f32) {
+    let up = step_up.map_or(DEFAULT_STEP_HEIGHT, |h| h * scale_z);
+    let down = step_down.map_or(DEFAULT_STEP_HEIGHT, |h| h * scale_z);
+    (up, down)
+}
+
 /// Phase 6 step B: result of a single swept-sphere-vs-AABB query.
 /// `t` is the parametric time of first contact in `[0.0, 1.0]`
 /// (where 0.0 = start, 1.0 = full delta), `normal` is the
@@ -2031,6 +2056,37 @@ mod tests {
     fn floor_normal_under_steep_ramp_is_none() {
         let tris = [ramp_triangle(50.0)]; // cos50 < FloorZ → wall
         assert_eq!(floor_normal_under(&tris, 0.2, 0.1, 100.0), None);
+    }
+
+    // ---- A7-R1 (2026-06-12): per-setup step heights ----
+
+    /// The player's Setup `0x02000001` (`step_up = 0.6`,
+    /// `step_down = 1.5`, `scale.z = 1.0`) resolves to EXACTLY the
+    /// hardcoded player constants — the byte-identity contract that
+    /// makes the per-setup read safe to thread through the player path.
+    #[test]
+    fn player_setup_step_heights_match_hardcoded_constants() {
+        let (up, down) = setup_step_heights(Some(0.6), Some(1.5), 1.0);
+        assert_eq!(up, PLAYER_STEP_UP_HEIGHT);
+        assert_eq!(down, PLAYER_STEP_DOWN_HEIGHT);
+    }
+
+    /// Scaled setups scale their caps by `Scale.Z`
+    /// (`acclient.c:325400-325424`; ACE `PartArray.cs:236-248`).
+    #[test]
+    fn scaled_setup_scales_step_heights() {
+        let (up, down) = setup_step_heights(Some(0.6), Some(1.5), 2.0);
+        assert_eq!(up, 1.2);
+        assert_eq!(down, 3.0);
+    }
+
+    /// Setup-less movers fall back to `DefaultStepHeight = 0.01`,
+    /// UNscaled (ACE `PartArray.cs:236-248` null-Setup arm).
+    #[test]
+    fn missing_setup_fields_fall_back_to_default_step_height() {
+        let (up, down) = setup_step_heights(None, None, 2.0);
+        assert_eq!(up, DEFAULT_STEP_HEIGHT);
+        assert_eq!(down, DEFAULT_STEP_HEIGHT);
     }
 
     // ---- Physics deep-dive 2026-06-01 (gap 3): step-up / step-down ----

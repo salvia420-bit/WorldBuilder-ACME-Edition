@@ -15,8 +15,9 @@ pub use position_manager::{
     InterpolationNode, InterpolationNodeType, PositionManager, USE_POSITION_MANAGER_QUEUE,
 };
 pub use physics::{
-    BasicSpatialPhysics, GenericSweptHit, NoopSpatialPhysics, PLAYER_CAPSULE_HEIGHT,
-    PLAYER_CAPSULE_RADIUS, PLAYER_STEP_DOWN_HEIGHT, PLAYER_STEP_UP_HEIGHT, SpatialPhysics,
+    BasicSpatialPhysics, DEFAULT_STEP_HEIGHT, GenericSweptHit, NoopSpatialPhysics,
+    PLAYER_CAPSULE_HEIGHT, PLAYER_CAPSULE_RADIUS, PLAYER_STEP_DOWN_HEIGHT, PLAYER_STEP_UP_HEIGHT,
+    SpatialPhysics, setup_step_heights,
     StepDownOutcome, SweptSphereHit, USE_SUBSTEP_TRANSITION, advance_body_kinematics,
     cell_wall_substep_count, clamp_delta_against_buildings,
     clamp_delta_against_buildings_with_normal, clamp_delta_against_cell_walls,

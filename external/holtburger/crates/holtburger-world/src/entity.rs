@@ -751,6 +751,19 @@ pub struct Entity {
     /// See `external/holtburger/docs/physicsscript-bridge-research-2026-05-26.md`
     /// §5 for the full lookup picture.
     pub physics_script_table_did: u32,
+
+    /// A7-R1 (2026-06-12, survey A7 §3 row 1): cached per-setup step
+    /// heights — retail `ObjectInfo.StepUpHeight`/`StepDownHeight` =
+    /// `Setup.step_up/step_down × Scale.Z`, fallback
+    /// `DefaultStepHeight = 0.01` (`acclient.c:325400-325424`,
+    /// `:314128-314129`; ACE `PartArray.cs:236-248`,
+    /// `ObjectInfo.cs:46-47`). `None` = not yet hydrated; the wasm-side
+    /// helper resolves them from the Setup DAT alongside
+    /// [`Self::physics_script_table_did`] once `USE_SETUP_STEP_HEIGHTS`
+    /// (movement/system.rs) goes live. Consumed by A6's
+    /// `transitional_insert` for non-player movers.
+    pub step_up_height: Option<f32>,
+    pub step_down_height: Option<f32>,
 }
 
 const OBJECT_POSITION_SEQUENCE_INDEX: usize = 0;
@@ -1064,6 +1077,10 @@ impl Entity {
             // wasm-side helper inspects PhysicsDesc.petable_id or
             // Setup.default_phstable_id (lib.rs has the DAT source).
             physics_script_table_did: 0,
+            // A7-R1: unresolved until the wasm-side Setup hydration
+            // (same chain as physics_script_table_did).
+            step_up_height: None,
+            step_down_height: None,
         }
     }
 }
