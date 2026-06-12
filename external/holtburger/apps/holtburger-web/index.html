@@ -1304,6 +1304,15 @@
       // Pure function, no DOM/wasm. Wired into the backlog/deferred-spawn
       // clones below behind `?unifiedClone=on` (default-off).
       import { cloneEntityUpdate as __unifiedCloneEntityUpdate } from "./scene3d/entity_update_clone.js";
+      // A15-Q4 (2026-06-12 unification survey) — renderer-neutral core
+      // extraction behind `?unifiedDispatch=on` (default-off):
+      // `createWorldStreamer` owns the load-bearing world-streaming block
+      // hoisted out of handlePositionUpdate; `createEntityDispatcher` +
+      // `KIND` are the single EntityUpdate kind table shared with
+      // scene3d/loop.js (retail: the one DispatchSmartBoxEvent funnel,
+      // acclient.c:146313-146318). Pure modules, no DOM/wasm imports.
+      import { createWorldStreamer } from "./scene3d/world_stream.js";
+      import { KIND as ENTITY_KIND, createEntityDispatcher } from "./scene3d/entity_dispatch.js";
       // A14-I1 (2026-06-11 unification survey) — single JS InputController.
       // `?inputFunnel=on` (default-off) routes this rAF dispatcher AND the
       // camera dispatcher through ONE shared `setMovementInput` boundary with
@@ -4503,6 +4512,22 @@ void main() {
             .get("unifiedClientEvent")?.toLowerCase() === "on";
         } catch (_) { return false; }
       })();
+      // A15-Q4 (2026-06-12 unification): `?unifiedDispatch=on` (default-off)
+      // — renderer-neutral core extraction. ON: (1) the load-bearing
+      // world-streaming block (terrain/building/envcell wasm bakes + 3D
+      // mesh-layer loads, hoisted out of handlePositionUpdate) is owned by
+      // the `worldStreamer` (scene3d/world_stream.js) and runs as a NEUTRAL
+      // hook of the entity drain; (2) the drain's per-kind if-chain routes
+      // through the shared `createEntityDispatcher` table
+      // (scene3d/entity_dispatch.js — the same table loop.js's 3D backend
+      // registers into). OFF: legacy paths byte-identical (the streaming
+      // block + if-chain are retained verbatim under the flag; paired
+      // `A15-Q4-SYNC` markers + a headless drift guard keep the two copies
+      // in lockstep until graduation).
+      const __UNIFIED_DISPATCH = (() => {
+        const v = new URLSearchParams(window.location.search).get("unifiedDispatch");
+        return v === "on" || v === "true" || v === "1" || v === "yes";
+      })();
       let __backlogOverflowWarned = false;
       let __deferredSpawnsOverflowWarned = false;
 
@@ -6082,6 +6107,36 @@ void main() {
         }
       }
 
+      // A15-Q4 (2026-06-12): the renderer-neutral world streamer — the
+      // load-bearing streaming block of handlePositionUpdate, extracted to
+      // scene3d/world_stream.js. Instantiated here (after the ensure*
+      // helpers + their idempotency Sets) and invoked, under
+      // `?unifiedDispatch=on`, as the KIND.POSITION NEUTRAL hook of
+      // `__dispatch2d` below — i.e. world streaming is owned by the
+      // neutral layer (retail: CellManager::ChangePosition inside
+      // SmartBox::UseTime), not by the 2D sprite handler. The four
+      // idempotency Sets are passed BY REFERENCE (the ensure* helpers
+      // mutate them internally). Flag-off: never invoked; the legacy
+      // block inside handlePositionUpdate runs verbatim.
+      const worldStreamer = createWorldStreamer({
+        getLocalPlayerGuid: () => localPlayerGuid,
+        emitLandblockChanged: (prevLb, lbId) => {
+          if (window.__pluginClient) {
+            window.__pluginClient.events.emit("landblockChanged", { prevLb, lbId });
+          }
+        },
+        ensureTerrainAroundLandblock,
+        ensureBuildingAabbsAroundLandblock,
+        ensureCellContainersForLandblock,
+        ensureLandblockObjectsForLandblock,
+        getLiveScene3d: () => window.liveScene3d ?? null,
+        terrainPrefetchedLbs,
+        buildingAabbsPopulatedLbs,
+        cellContainersPopulatedLbs,
+        objectsRenderAddedLbs,
+      });
+      window.__worldStreamer = worldStreamer; // headless-test / diag introspection
+
       function handlePositionUpdate(upd) {
         // No meta on Position — reuse what the prior Spawn deposited
         // on this guid's entry. If Position arrives before any Spawn
@@ -6129,6 +6184,19 @@ void main() {
           localPlayerGuid !== null
           && guid === (localPlayerGuid >>> 0)
         ) {
+          if (__UNIFIED_DISPATCH) {
+            // A15-Q4: world streaming is owned by the renderer-NEUTRAL
+            // layer — `__dispatch2d`'s KIND.POSITION neutral hook already
+            // ran `worldStreamer.onPositionUpdate(upd)` BEFORE this 2D
+            // backend handler (entity_dispatch.js runs neutral before
+            // backend). Nothing to do here. The legacy block in the
+            // `else` is the flag-off copy; the headless drift guard
+            // (test_a15_q4_renderer_neutral_core.mjs) enforces
+            // call-sequence parity with world_stream.js via the paired
+            // A15-Q4-SYNC markers until graduation deletes it.
+          } else {
+          // A15-Q4-SYNC: begin streaming sequence (keep in lockstep with
+          // scene3d/world_stream.js#onPositionUpdate).
           const lbId = ((upd.landblockId >>> 16) << 16) >>> 0;
           // Emit `landblockChanged` on the first known LB and on any
           // subsequent LB transition. Plugins subscribe to clear
@@ -6225,6 +6293,8 @@ void main() {
           // builds its own outdoor objects via init3D).
           if (lbId !== 0 && !objectsRenderAddedLbs.has(lbId)) {
             ensureLandblockObjectsForLandblock(lbId);
+          }
+          // A15-Q4-SYNC: end streaming sequence.
           }
         }
         // 2D-only branch below (sprite manipulation, lerp setup,
@@ -6653,6 +6723,105 @@ void main() {
         entry.motionStance = upd.motionStance >>> 0;
         entry.motionUpdatedMs = performance.now();
       }
+
+      // ── A15-Q4 (2026-06-12): named 2D drain pieces ──────────────────
+      // The drainEvents kind-1/kind-2 inline blobs, extracted so BOTH
+      // routes (the legacy flag-off if-chain and the flag-on
+      // `__dispatch2d` table) call the SAME functions — behavior
+      // identical by construction, no second copy.
+      //
+      // dispatch2dSpawn — the QUARANTINED 2D sprite half of KIND_SPAWN:
+      // liveScene-ready spawns go straight to handleEntitySpawn; pre-
+      // liveScene spawns are cloned into the `deferredSpawns` ring
+      // (A15-Q1 cap) unless `?spawnDefer2dOnly` says 3D mode never
+      // drains them.
+      function dispatch2dSpawn(upd) {
+        // Phase 4 step 6 player-fix: ensureEntitySprite returns null
+        // pre-liveScene, which would silently drop the local player's
+        // Spawn (and any other Spawn that races the renderer boot).
+        // Buffer the Spawn payload as a plain-JS clone for replay once
+        // liveScene is ready.
+        if (liveScene) {
+          handleEntitySpawn(upd);
+        } else if (__SPAWN_DEFER_2D_ONLY && __USE_RENDERER_3D) {
+          // A15-Q1: under ?renderer=3d, liveScene is PERMANENTLY null
+          // (the 2D PIXI bring-up is skipped) and the 3D EntityManager
+          // already handled this spawn via em.spawn (loop.js). Without
+          // this gate every KIND_SPAWN clones into deferredSpawns that
+          // nothing ever drains. Skip.
+        } else {
+          // A15-Q1: ring-cap so a long 2D session (or a stuck liveScene
+          // resolve) can't grow deferredSpawns without bound. Keep
+          // latest N — replay drains them once liveScene becomes
+          // non-null.
+          deferredSpawns.push(cloneEntitySpawn(upd));
+          if (deferredSpawns.length > ENTITY_BUFFER_CAP) {
+            deferredSpawns.splice(0, deferredSpawns.length - ENTITY_BUFFER_CAP);
+            if (!__deferredSpawnsOverflowWarned) {
+              __deferredSpawnsOverflowWarned = true;
+              console.warn(
+                `[A15-Q1] deferredSpawns exceeded ${ENTITY_BUFFER_CAP} ` +
+                `before liveScene ready; dropping oldest.`
+              );
+            }
+          }
+        }
+      }
+      // neutralSpawn — the renderer-NEUTRAL Chorizite worldObjectManager
+      // feed (no retail analog; renderer-independent by construction).
+      // Entity-Completeness E.B: feeds the three canonical-classifier
+      // inputs (item_type + obj_desc_flags + weenie_flags); the manager
+      // runs canonicalClassify() — same algorithm as ACPlugin / retail
+      // acclient.exe. Read-only over upd; no .free() or mutation.
+      // Pre-load spawns silently dropped per manager's loaded-guard.
+      function neutralSpawn(upd) {
+        if (worldObjectManager) {
+          worldObjectManager.onObjectCreated({
+            guid: upd.guid >>> 0,
+            classId: upd.wcid >>> 0,
+            itemType: upd.itemType >>> 0,
+            objDescFlags: upd.objDescFlags >>> 0,
+            weenieFlags: upd.weenieFlags >>> 0,
+            name: upd.name || null,
+          });
+        }
+      }
+      function neutralRemove(upd) {
+        if (worldObjectManager) {
+          worldObjectManager.onObjectDeleted({ guid: upd.guid >>> 0 });
+        }
+      }
+      // __dispatch2d — the 2D-host dispatcher over the shared kind table
+      // (scene3d/entity_dispatch.js; retail: the single
+      // DispatchSmartBoxEvent funnel). Invoked from the drainEvents
+      // entity loop ONLY under `?unifiedDispatch=on`; flag-off keeps the
+      // legacy if-chain (which calls the same named pieces above).
+      // NEUTRAL table = world streaming + worldObjectManager feed (runs
+      // exactly once per update, here — the loop.js 3D dispatcher's
+      // neutral table is EMPTY by invariant). BACKEND table = the
+      // QUARANTINED 2D sprite backend, kinds 0-5 only (RULINGS.md item
+      // 2: kinds 6-9 are a documented feature gap of the supported 2D
+      // mode — now surfaced via the dispatcher's one-time accounting
+      // info instead of silence). Never calls upd.free() — the drain
+      // loop owns the wasm-bindgen lifetime.
+      const __dispatch2d = createEntityDispatcher({
+        label: "2d-drain",
+        neutral: {
+          // Q4.1 — world streaming is owned by the NEUTRAL layer.
+          [ENTITY_KIND.POSITION]: (upd) => worldStreamer.onPositionUpdate(upd),
+          [ENTITY_KIND.SPAWN]: neutralSpawn,
+          [ENTITY_KIND.REMOVE]: neutralRemove,
+        },
+        backend: {
+          [ENTITY_KIND.POSITION]: handlePositionUpdate, // streaming-skipping under flag-on (Q4.1)
+          [ENTITY_KIND.SPAWN]: dispatch2dSpawn,
+          [ENTITY_KIND.REMOVE]: handleEntityRemove,
+          [ENTITY_KIND.META_REFRESH]: handleEntityMetaRefresh,
+          [ENTITY_KIND.VELOCITY]: handleEntityVelocity,
+          [ENTITY_KIND.MOTION]: handleEntityMotion,
+        },
+      });
+
       // Phase 6 step D: per-frame cell visibility ticker. Reads the
       // wasm-side snapshot of the player's current cell + depth=1 BFS
       // render set, toggles `.visible` on each cell container that
@@ -10793,7 +10962,8 @@ void main() {
             // `scene3d/loop.js#installSharedDrainHook` after init3D
             // resolves) iterates read-only — it does NOT consume / .free()
             // the wasm-bindgen handles; the for-loop below still owns
-            // the lifecycle and calls upd.free() at line ~6062.
+            // the lifecycle and calls upd.free() unconditionally at its
+            // loop tail (A15-Q4 comment-rot fix: was "line ~6062").
             // A15-Q1 (corrected 2026-06-11): the hook is ALWAYS defined
             // — the module-scope buffering stub (`bufferingHook`,
             // ~L4520) is installed unconditionally, before any renderer
@@ -10804,63 +10974,32 @@ void main() {
             // ENTITY_BUFFER_CAP — see ~L4520) and nothing drains it.
             try { window.__scene3dEntityHook?.(entityUpdates); } catch (e) { console.warn("[7.5] scene3d hook:", e); }
             for (const upd of entityUpdates) {
-              if (upd.kind === 0) handlePositionUpdate(upd);
+              // A15-Q4 (`?unifiedDispatch=on`): route through the single
+              // shared kind table (scene3d/entity_dispatch.js) — neutral
+              // hooks (worldStreamer streaming, worldObjectManager feed)
+              // run before the quarantined 2D sprite backend; kinds with
+              // no 2D backend (6-9) surface as a one-time accounting
+              // info instead of falling through silently. Flag-off: the
+              // legacy if-chain below, now calling the SAME named pieces
+              // (dispatch2dSpawn / neutralSpawn / neutralRemove — no
+              // second copy). `upd.free()` stays unconditional at the
+              // loop tail in BOTH states; the dispatcher never frees.
+              if (__UNIFIED_DISPATCH) {
+                __dispatch2d.dispatch(upd);
+              }
+              else if (upd.kind === 0) handlePositionUpdate(upd);
               else if (upd.kind === 1) {
-                // Phase 4 step 6 player-fix: ensureEntitySprite
-                // returns null pre-liveScene, which would silently
-                // drop the local player's Spawn (and any other
-                // Spawn that races the renderer boot). Buffer the
-                // Spawn payload as a plain-JS clone for replay
-                // once liveScene is ready.
-                if (liveScene) {
-                  handleEntitySpawn(upd);
-                } else if (__SPAWN_DEFER_2D_ONLY && __USE_RENDERER_3D) {
-                  // A15-Q1: under ?renderer=3d, liveScene is PERMANENTLY
-                  // null (the 2D PIXI bring-up is skipped) and the 3D
-                  // EntityManager already handled this spawn via em.spawn
-                  // (loop.js). Without this gate every KIND_SPAWN clones
-                  // into deferredSpawns that nothing ever drains. Skip.
-                } else {
-                  // A15-Q1: ring-cap so a long 2D session (or a stuck
-                  // liveScene resolve) can't grow deferredSpawns without
-                  // bound. Keep latest N — replay drains them once
-                  // liveScene becomes non-null.
-                  deferredSpawns.push(cloneEntitySpawn(upd));
-                  if (deferredSpawns.length > ENTITY_BUFFER_CAP) {
-                    deferredSpawns.splice(0, deferredSpawns.length - ENTITY_BUFFER_CAP);
-                    if (!__deferredSpawnsOverflowWarned) {
-                      __deferredSpawnsOverflowWarned = true;
-                      console.warn(
-                        `[A15-Q1] deferredSpawns exceeded ${ENTITY_BUFFER_CAP} ` +
-                        `before liveScene ready; dropping oldest.`
-                      );
-                    }
-                  }
-                }
-                // Chorizite WorldObjectManager dispatch (rev 3, 2026-05-19).
-                // Entity-Completeness E.B (2026-05-19): now feeds the three
-                // canonical-classifier inputs (item_type + obj_desc_flags +
-                // weenie_flags) per docs/entity-completeness-method.md §3.
-                // The manager runs canonicalClassify() to derive the typed
-                // class — same algorithm as ACPlugin / retail acclient.exe.
-                // Read-only over upd; no .free() or mutation. Pre-load
-                // spawns silently dropped per manager's loaded-guard.
-                if (worldObjectManager) {
-                  worldObjectManager.onObjectCreated({
-                    guid: upd.guid >>> 0,
-                    classId: upd.wcid >>> 0,
-                    itemType: upd.itemType >>> 0,
-                    objDescFlags: upd.objDescFlags >>> 0,
-                    weenieFlags: upd.weenieFlags >>> 0,
-                    name: upd.name || null,
-                  });
-                }
+                // A15-Q4: 2D sprite half (liveScene spawn / deferral
+                // ring) then the renderer-neutral Chorizite
+                // worldObjectManager feed — same inline order as the
+                // pre-Q4 blob; bodies extracted to the named functions
+                // defined after handleEntityMotion.
+                dispatch2dSpawn(upd);
+                neutralSpawn(upd);
               }
               else if (upd.kind === 2) {
                 handleEntityRemove(upd);
-                if (worldObjectManager) {
-                  worldObjectManager.onObjectDeleted({ guid: upd.guid >>> 0 });
-                }
+                neutralRemove(upd);
               }
               // Phase 4 step 6f: kind=3 META_REFRESH carries a
               // delta into an existing entity's metadata (today:

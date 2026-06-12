@@ -73,6 +73,25 @@ const wxUpdateFromDayGroup = () => {};
 // visibility) and installs it in installSharedDrainHook; out of scope for
 // this entity-update parity test (covered by test_a8_m3_kind17_dispatch.mjs).
 const createClientEventDispatcher = () => () => false;
+// A15-Q4: loop.js now imports the shared kind table + dispatcher factory
+// from ./entity_dispatch.js (stripped above). KIND values are LOAD-BEARING
+// (the KIND_* aliases read them); the factory stub mirrors the real
+// routing (neutral-then-backend, never frees) so flag-on paths stay
+// exercisable. Covered in depth by test_a15_q4_renderer_neutral_core.mjs.
+const KIND = Object.freeze({
+  POSITION: 0, SPAWN: 1, REMOVE: 2, META_REFRESH: 3, VELOCITY: 4,
+  MOTION: 5, APPEARANCE: 6, ATTACH: 7, MOTION_ACTION: 8, TURN: 9,
+});
+const createEntityDispatcher = ({ neutral = {}, backend = {} } = {}) => ({
+  dispatch(upd) {
+    if (!upd) return false;
+    const kind = upd.kind | 0;
+    try { neutral[kind]?.(upd); } catch (_) {}
+    const h = backend[kind];
+    if (h) { try { h(upd); } catch (_) {} return true; }
+    return false;
+  },
+});
 `;
 const transformed =
   stubs + stripped +

@@ -76,20 +76,30 @@ setCullers({
 import { weatherForState } from "./daygroup_weather.js";
 import { updateFromDayGroup as wxUpdateFromDayGroup } from "./weather_state.js";
 
-// Entity-update kind constants — mirror the wasm `ENTITY_UPDATE_KIND_*`
-// constants from `crates/holtburger-session/src/lib.rs`. Listed here
-// for readability of `drainEntityEvents3D`'s dispatch.
-const KIND_POSITION = 0;
-const KIND_SPAWN = 1;
-const KIND_REMOVE = 2;
-const KIND_META_REFRESH = 3;
-const KIND_VELOCITY = 4;
-const KIND_MOTION = 5;
-const KIND_APPEARANCE = 6;
+// A15-Q4 (2026-06-12 unification survey) — the renderer-neutral
+// EntityUpdate kind table + per-host dispatcher factory. `KIND` is the
+// single source for the kind constants (mirrors the wasm
+// `ENTITY_UPDATE_KIND_*` from `crates/holtburger-session/src/lib.rs`);
+// the local `KIND_*` aliases below keep the rest of this file
+// diff-free. `createEntityDispatcher` builds the flag-on "3d" backend
+// table inside installSharedDrainHook (`?unifiedDispatch=on`,
+// default-off — read independently here and in index.html).
+import { KIND, createEntityDispatcher } from "./entity_dispatch.js";
+
+// Entity-update kind constants — aliases over the shared KIND table
+// (A15-Q4; pre-Q4 these were file-local literals). Listed here
+// for readability of `dispatchEntityUpdate`'s dispatch.
+const KIND_POSITION = KIND.POSITION;
+const KIND_SPAWN = KIND.SPAWN;
+const KIND_REMOVE = KIND.REMOVE;
+const KIND_META_REFRESH = KIND.META_REFRESH;
+const KIND_VELOCITY = KIND.VELOCITY;
+const KIND_MOTION = KIND.MOTION;
+const KIND_APPEARANCE = KIND.APPEARANCE;
 // Render-completeness audit (2026-05-29) — wielded-item attach/detach.
 // Reuses EntityUpdate fields: model_id = parent (wielder) guid (0 = detach),
 // motionCommand = ParentEvent.location, motionStance = ParentEvent.placement.
-const KIND_ATTACH = 7;
+const KIND_ATTACH = KIND.ATTACH;
 // Wave 2 (2026-06-08) — a one-shot Action-class motion command (creature
 // attack swing B10, local eat/drink B6, emote/gesture) from the UpdateMotion
 // action `commands` list. motionCommand is the FULL 32-bit MotionCommand
@@ -98,12 +108,12 @@ const KIND_ATTACH = 7;
 // em.setMotion → classifyMotionCommand → _tryPlayLink for EVERY guid
 // INCLUDING the local player — it never carries a locomotion command, so the
 // local-gait LOCOMOTION skip in the KIND_MOTION arms stays untouched (B9).
-const KIND_MOTION_ACTION = 8;
+const KIND_MOTION_ACTION = KIND.MOTION_ACTION;
 // F3-3 (bughunt 2026-06-09) — a server TurnToHeading/TurnToObject directive.
 // qw/qx/qy/qz carry the absolute target heading as an AC z-up quaternion;
 // omega_z is the turn-speed hint. Remote-only: em.applyTurnDirective sets the
 // heading-ease target so the rig turns to face it (NPCs / idle turn-in-place).
-const KIND_TURN = 9;
+const KIND_TURN = KIND.TURN;
 
 // FORCE_MOTION_LOCAL (motion B5#2 / C3, backlog 19, 2026-06-09) —
 // `?forceMotionLocal=on` (default OFF). The two KIND_MOTION arms below
@@ -251,6 +261,27 @@ const DISPATCH_PARITY_ON = (() => {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search).get("dispatchParity")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+// A15-Q4 (2026-06-12, S3 spec) — `?unifiedDispatch=on` (default-off):
+// renderer-neutral core extraction. ON: the shared-drain `dispatchOne`
+// delegates to a `createEntityDispatcher` "3d" backend table (built once
+// per installSharedDrainHook call) whose per-kind handlers are the SAME
+// `_arm*` functions the flag-off `dispatchEntityUpdate` if-chain calls —
+// behavior identical by construction, no second copy. The 3d
+// dispatcher's NEUTRAL table is EMPTY by invariant: neutral concerns
+// (world streaming, worldObjectManager feed) run exactly once, at the
+// index.html drain (the hook receives the same array the 2D for-loop
+// iterates). OFF: byte-identical legacy routing.
+const UNIFIED_DISPATCH_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("unifiedDispatch")?.toLowerCase() === "on"
     );
   } catch (_) {
     return false;
@@ -518,7 +549,9 @@ function _nowMs() {
 }
 
 // Cohere-B follow-on (2026-05-12): the 2D path's academy-rubberband
-// fix (`index.html:4191-4214`) explicitly skips syncing the local
+// fix (the `isLocal` branch in `index.html#handlePositionUpdate`'s
+// sprite half — A15-Q4 comment-rot fix, was "index.html:4191-4214",
+// which had drifted) explicitly skips syncing the local
 // sprite to server `PublicUpdatePosition` / `PrivateUpdatePosition`
 // broadcasts — the wasm integrator + JS prediction own the local
 // sprite, and re-syncing on every UpdatePosition produces the visible
@@ -1836,270 +1869,339 @@ function toMeta(upd) {
  *   - NEVER throws (internal try/catch retained).
  *   - Accepts BOTH wasm-bindgen handles and plain-JS clones (the
  *     backlog-replay invariant — both expose the same getters).
+ *
+ * A15-Q4 (2026-06-12, S3 spec) — DELIVERED: the kind table now lives in
+ * `entity_dispatch.js` (`KIND`), the arm bodies in the module-scope
+ * `_arm*` functions below, and under `?unifiedDispatch=on` the
+ * shared-drain hook routes through a `createEntityDispatcher` "3d"
+ * backend table over the SAME arms (see installSharedDrainHook). This
+ * function remains the flag-off route AND the capture-path
+ * (`drainEntityEvents3D`) route in both flag states; the contract above
+ * is unchanged.
  */
+// A15-Q4 (2026-06-12, S3 spec) — D1 __diag wire tap, extracted so both
+// flag states of the 3D route tap identically (the flag-on dispatcher
+// path in installSharedDrainHook and the flag-off if-chain in
+// dispatchEntityUpdate below). Diag-only; also counts backlog replays
+// and capture-path updates (the Q3.2 moved-semantics note).
+function _wireDiagTap(upd) {
+  try { window.__diag?.wire?.onEntityUpdate?.(upd); } catch (_) {}
+}
+
+// A15-Q4 (2026-06-12, S3 spec §3 Q4.2) — the per-kind 3D backend arms,
+// split out of `dispatchEntityUpdate`'s if-chain (which itself was the
+// A15-Q3 hoist of the `dispatchOne` closure). BOTH routes call these
+// same functions — the flag-off if-chain below and the flag-on
+// `createEntityDispatcher` "3d" backend table built in
+// installSharedDrainHook — so behavior is identical by construction
+// (no second copy). Every arm body is the verbatim pre-Q4 arm; each
+// takes (scene3d, em, upd) because everything else it touches is
+// module-scope. None of them ever calls `upd.free()` or throws past
+// its caller's try/catch.
+
+function _armSpawn(scene3d, em, upd) {
+  // Snapshot before async — the wasm-bindgen handle may be
+  // .free()'d by the owner right after dispatch, but the spawn
+  // is async + may await the keyframe fetch. The meta is held
+  // locally for the FU-1 nudge below.
+  const meta = toMeta(upd);
+  em.spawn(meta);
+  // D2 (Q3.2, rides existing ?wieldHandAttach, default-off ⇒ inert):
+  // FU-1 (2026-06-11) — LOGIN-time wielded items never get a kind=49
+  // Wielder-transition event (the wield predates the session), so no
+  // attach is ever requested and the weapon renders "dropped" at the
+  // feet. Nudge the wielder re-sync for every spawned guid: if it
+  // wields anything, flushWieldedDirty enumerates
+  // entityWieldedItems() and requests the attaches
+  // (child-not-yet-spawned ordering is handled by _pendingAttach).
+  // Covers the local player on login AND NPCs spawning pre-armed.
+  // No-op for non-wielders.
+  if (em._wieldHandAttach) {
+    try { em._markWielderDirty?.(meta.guid); } catch (_) {}
+  }
+}
+
+function _armRemove(scene3d, em, upd) {
+  // A4 (2026-05-18): prune __lastEntityWorldPos on despawn to bound Map growth.
+  const g = upd.guid >>> 0;
+  em.remove(g);
+  if (window.__lastEntityWorldPos) window.__lastEntityWorldPos.delete(g);
+  // F18-4: prune the multiAction stamp-dedup so a reused guid (a
+  // respawned creature) isn't silently refused its first action.
+  _actionStamps.delete(g);
+}
+
+function _armPosition(scene3d, em, upd) {
+  const lbId = upd.landblockId >>> 0;
+  const lbX = (lbId >>> 24) & 0xff;
+  const lbY = (lbId >>> 16) & 0xff;
+  const wx = lbX * 192.0 + (upd.x ?? 0);
+  const wy = lbY * 192.0 + (upd.y ?? 0);
+  const wz = upd.z ?? 0;
+  const g = upd.guid >>> 0;
+  // Always stash the latest world-space position per guid, even
+  // when the 3D EntityManager has no rig for this guid yet (the
+  // wasm-side eager-WorldState path suppresses KIND_SPAWN for
+  // the local player on SelectCharacter, so `em.setPose` below
+  // is a no-op for that guid). `getLocalPlayerWorldPos` uses
+  // this as its last-resort fallback so the camera tracks the
+  // server pose regardless of whether a rig ever spawned.
+  //
+  // Workstream B (2026-05-11): `ts` is the rAF wall-clock when
+  // this server-authoritative pose landed. The cameraSwitcher's
+  // client-side prediction reads (x, y, z, ts) on each rAF: a
+  // changed `ts` means a fresh KIND_POSITION arrived from ACE
+  // since the last reconcile, so the prediction can snap-or-lerp
+  // toward the new authoritative pose. Without the timestamp the
+  // prediction would re-reconcile on every rAF and never let the
+  // client-side integration breathe.
+  if (!window.__lastEntityWorldPos) {
+    window.__lastEntityWorldPos = new Map();
+  }
+  // A2: mutate the per-guid slot in place instead of allocating
+  // a fresh `{x,y,z,ts}` literal per KIND_POSITION event.
+  const _posSlot = _getOrCreatePosSlot(window.__lastEntityWorldPos, g);
+  _posSlot.x = wx;
+  _posSlot.y = wy;
+  _posSlot.z = wz;
+  _posSlot.ts = _nowMs();
+  // Cohere-B follow-on (2026-05-12): skip the snap-to-server
+  // for the local player here too — the per-rAF integrator
+  // sync in `applyLocalPlayerPoseFromIntegrator` owns the
+  // local rig's pose. KIND_POSITION still updates
+  // `__lastEntityWorldPos` (above) so the camera's Workstream
+  // B reconciliation gate sees the fresh `ts` and behaves
+  // correctly.
+  if (!isLocalPlayerGuid(g)) {
+    // Visual-vs-collision Z reconcile (same rationale as the
+    // local-player path in applyLocalPlayerPoseFromIntegrator):
+    // server sends bilinear-collision Z; Catmull-Rom render
+    // surface deviates by up to 0.3 m. Raycast lifts the
+    // remote rig to the visible terrain so other players don't
+    // appear partially buried.
+    //
+    // F4-3 (bughunt 2026-06-09): this is OUTDOOR-ONLY. The old
+    // "returns wz when the ray misses indoors" claim was false —
+    // a vertical ray over a dungeon HITS the outdoor land surface
+    // above it (the raycaster ignores `.visible` and terrain is
+    // force-shown indoors), so every indoor mob/player rig was
+    // relocated to the surface dozens of metres up. Gate on the
+    // entity's cell: indoor (landblock low16 >= 0x100) keeps the
+    // server Z untouched; outdoor reconciles but clamps the lift
+    // to the documented 0.3 m delta + margin so a stray far hit
+    // can never teleport the rig.
+    const cellIndoor = ((upd.landblockId >>> 0) & 0xffff) >= 0x100;
+    const renderWz = cellIndoor
+      ? wz
+      : getTerrainVisualZ(scene3d, wx, wy, wz, 0.5);
+    em.setPose(
+      g,
+      wx, wy, renderWz,
+      upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0
+    );
+  }
+}
+
+function _armVelocity(scene3d, em, upd) {
+  // A2: mutate-in-place scratch (shared across both drain paths;
+  // setVelocity copies synchronously and does not retain a ref).
+  _velScratch.guid = upd.guid >>> 0;
+  _velScratch.vx = upd.vx ?? 0;
+  _velScratch.vy = upd.vy ?? 0;
+  _velScratch.vz = upd.vz ?? 0;
+  _velScratch.omegaZ = upd.omegaZ ?? 0;
+  em.setVelocity(_velScratch);
+}
+
+function _armMotion(scene3d, em, upd) {
+  const motionGuid = upd.guid >>> 0;
+  // DIM10/A-2 (2026-06-05): skip the local player — its gait is
+  // client-predicted (W3.1, index.html ~10207); re-dispatching the
+  // server echo fights the predictor and breaks the run loop. See the
+  // FORCE_MOTION_LOCAL block at the top of this module for the full
+  // rationale.
+  const st = (upd.motionStance ?? 0) >>> 0;
+  const motionCmd = (upd.motionCommand ?? 0) >>> 0;
+  // SG-B (2026-06-09): wire `is_autonomous` bit (UpdateMotion 0xF74C).
+  // true = client-predicted gait echo (skip); false = server-forced
+  // pose (apply under FORCE_MOTION_LOCAL). ACE semantics in the
+  // FORCE_MOTION_LOCAL comment block above.
+  const isAuto = !!upd.isAutonomous;
+  // FORCE_MOTION_LOCAL (B5#2 + SG-B): when ON, a server-FORCED
+  // (`!isAuto`) NON-LOCOMOTION pose/action passes through to the
+  // local rig; an autonomous echo OR a locomotion-class command is
+  // still skipped to preserve the B9 client-gait predictor.
+  const forceLocal =
+    FORCE_MOTION_LOCAL_ON &&
+    !isAuto &&
+    !isLocalGaitLocomotionCmd(motionCmd);
+  if (forceLocal || !isLocalPlayerGuid(motionGuid)) {
+    // A1 (2026-05-29): forward UpdateMotion.forward_speed (default 1.0).
+    em.setMotion(
+      motionGuid,
+      motionCmd,
+      st,
+      +(upd.motionSpeed ?? 1.0)
+    );
+  } else if (st !== 0) {
+    // Track B9 (2026-06-08): skip the local LOCOMOTION command but
+    // restore the server-authoritative STANCE half of UpdateMotion
+    // 0xF74C. setLocalStance touches only the Ready/idle base pose
+    // and never the predictor-owned walk/run clip.
+    em.setLocalStance(motionGuid, st);
+  }
+  // F3-4 (bughunt 2026-06-09): sticky-attack target rides on model_id
+  // of KIND_MOTION (0 = none/clear). Remote-only — the local player is
+  // never sticky. While set, EntityManager.tick glues the mob to the
+  // moving target so a kited melee monster tracks the player.
+  if (!isLocalPlayerGuid(motionGuid) && typeof em.setStickyTarget === "function") {
+    em.setStickyTarget(motionGuid, upd.modelId >>> 0);
+  }
+  // F3-5 (bughunt 2026-06-09): per-creature run rate on `vx`. Remote-only.
+  if (!isLocalPlayerGuid(motionGuid) && typeof em.setEntityRunRate === "function") {
+    em.setEntityRunRate(motionGuid, +(upd.vx ?? 0));
+  }
+  // Wave 10 Phase 10.1 (2026-05-26) — the Fallen→setAirborne(false)
+  // coupling was removed; the local arms-up overlay now clears via
+  // `kind=18` recv-side dispatch (lib.rs Wave 10.1 + index.html
+  // kind=18 handler).
+}
+
+function _armMotionAction(scene3d, em, upd) {
+  // Wave 2 (2026-06-08) — one-shot Action-class command (creature
+  // attack swing B10, local eat/drink B6, emote/gesture). The wasm
+  // side already EXPANDED it to the full 32-bit MotionCommand and
+  // applied the 15-bit stamp-dedup, so we just route it through
+  // setMotion → classifyMotionCommand → _tryPlayLink, which plays it
+  // as a LoopOnce OVERLAY on top of the active locomotion cycle.
+  //
+  // Unlike KIND_MOTION, this fires for EVERY guid INCLUDING the local
+  // player: the command is ONLY ever an Action-class one-shot (never
+  // a locomotion command), so playing it does not touch the client-
+  // predicted gait (B9 gait predictor unaffected; C1).
+  const actionGuid = upd.guid >>> 0;
+  const actionCmd = (upd.motionCommand ?? 0) >>> 0;
+  const actionStance = (upd.motionStance ?? 0) >>> 0;
+  // D3 (Q3.2, ?dispatchParity=on, default-off): F6-2 swing-echo
+  // dedup, ported from the dead direct arm where it was inert in
+  // live mode. The note side (picking.js noteLocalSwingPrediction)
+  // fires on the DEFAULT live click path, so this port changes
+  // default-mode combat visuals — hence the gate.
+  if (DISPATCH_PARITY_ON && actionCmd !== 0 &&
+      em.consumeLocalSwingEcho?.(actionGuid, actionCmd)) {
+    // F6-2: optimistic local swing already played (picking.js
+    // noteLocalSwingPrediction); swallow the server echo instead of
+    // double-playing / restarting the same clip ~RTT later. Remote
+    // guids and non-matching commands are unaffected.
+  } else if (actionCmd !== 0 && typeof em.setMotion === "function") {
+    em.setMotion(actionGuid, actionCmd, actionStance, +(upd.motionSpeed ?? 1.0));
+    // D4 (Q3.2, rides existing ?serverSwing, default-off ⇒ inert):
+    // FU-3 (2026-06-11) — under ?serverSwing=on the local rig has no
+    // click-time swing anymore, and setMotion's MT clip doesn't
+    // animate the local rig. Fire the procedural shoulder pose at
+    // this (server-timed, post-MoveTo) moment for attack-class
+    // commands (0x51..0x6E per the swing-classification table;
+    // 0x50 FallDown excluded).
+    if (SERVER_SWING_ON && isLocalPlayerGuid(actionGuid)) {
+      const low = actionCmd & 0xFFFF;
+      if (low >= 0x51 && low <= 0x6E) {
+        try { em.setSwingPose?.(actionGuid); } catch (_) {}
+      }
+    }
+  }
+}
+
+function _armTurn(scene3d, em, upd) {
+  // F3-3 (bughunt 2026-06-09): server TurnTo* directive — turn the
+  // rig to face the absolute target heading (qw/qx/qy/qz).
+  // Remote-only; the local player owns its own facing.
+  const turnGuid = upd.guid >>> 0;
+  if (!isLocalPlayerGuid(turnGuid) && typeof em.applyTurnDirective === "function") {
+    // G-5 (?turnOmega=on): forward the wire MoveToParameters.speed
+    // (surfaced on omega_z) so the slerp can rate-limit to retail.
+    em.applyTurnDirective(turnGuid, upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0, +(upd.omegaZ ?? 0));
+  }
+}
+
+function _armAppearance(scene3d, em, upd) {
+  // SG-D (2026-06-09): mid-game appearance change (equip / dye-commit /
+  // death re-skin) from the wasm `UpdateObject` (0xF7DB) / `ObjDescEvent`
+  // (0xF625) arms (lib.rs ~31978 / ~32058), which pack only the four
+  // substitution-relevant fields and zero the rest. `_sliceFromScratch`
+  // returns a fresh `.slice()` copy so the async `applyAppearance` is
+  // alias-safe.
+  //
+  // Applies to the LOCAL player too (you should see your own gear/dye
+  // change). `applyAppearance` despawn+respawns the rig (or hot-swaps
+  // under `?clothingHotSwap=1`), preserving world pose; the camera +
+  // integrator re-resolve the rig via `entityMap.get(guid)` every frame,
+  // so the respawn doesn't orphan their binding. PENDING 1070 eye-test:
+  // confirm no visible local-rig flicker on equip during normal play
+  // (enable hot-swap if it does).
+  em.applyAppearance?.(upd.guid >>> 0, {
+    modelChanges: _sliceFromScratch(upd.modelChanges, 0),
+    textureChanges: _sliceFromScratch(upd.textureChanges, 1),
+    subPalettes: _sliceFromScratch(upd.subPalettes, 2),
+    paletteId: (upd.paletteId ?? 0) >>> 0,
+    // R7 (?runtimeObjScale=on): runtime scale/translucency (sentinels
+    // 0 / -1 = no change; applyAppearance gates on the flag).
+    objScale: +(upd.objScale ?? 0),
+    physicsTranslucency: +(upd.physicsTranslucency ?? -1),
+  });
+}
+
+function _armAttach(scene3d, em, upd) {
+  // Render-completeness audit (2026-05-29) — wielded item equipped
+  // or unequipped. model_id is the wielder guid (0 = detach back to
+  // world / hide). motionCommand = holding-location key (RightHand=1,
+  // …); motionStance = the child's grip placement key. EntityManager
+  // parents the child rig under the wielder's part node at the
+  // resolved holding-location frame.
+  const childGuid = upd.guid >>> 0;
+  const parentGuid = (upd.modelId ?? 0) >>> 0;
+  em.attachChildToParent?.(
+    childGuid,
+    parentGuid,
+    (upd.motionCommand ?? 0) >>> 0,
+    (upd.motionStance ?? 0) >>> 0
+  );
+}
+
+function _armMetaRefresh(scene3d, em, upd) {
+  // D5 (Q3.2): explicit no-op arm. Not yet consumed — the consumer
+  // stays unowned (portal-destination → nameplate/chip overlays);
+  // see S3 (A15-Q4) OPEN QUESTIONS.
+}
+
 export function dispatchEntityUpdate(scene3d, em, upd) {
   if (!upd) return;
   // D1 (Q3.2, unconditional): __diag wire tap — moved from the legacy
   // direct arm (its sole prior call site, so it never fired in live 3D
-  // sessions). Moved semantics: the tap now ALSO counts backlog replays
-  // and capture-path updates — diag-only, accepted.
-  try { window.__diag?.wire?.onEntityUpdate?.(upd); } catch (_) {}
+  // sessions). Extracted to _wireDiagTap (A15-Q4) so the flag-on
+  // dispatcher route taps identically.
+  _wireDiagTap(upd);
   try {
     const kind = upd.kind | 0;
     if (kind === KIND_SPAWN) {
-      // Snapshot before async — the wasm-bindgen handle may be
-      // .free()'d by the owner right after dispatch, but the spawn
-      // is async + may await the keyframe fetch. The meta is held
-      // locally for the FU-1 nudge below.
-      const meta = toMeta(upd);
-      em.spawn(meta);
-      // D2 (Q3.2, rides existing ?wieldHandAttach, default-off ⇒ inert):
-      // FU-1 (2026-06-11) — LOGIN-time wielded items never get a kind=49
-      // Wielder-transition event (the wield predates the session), so no
-      // attach is ever requested and the weapon renders "dropped" at the
-      // feet. Nudge the wielder re-sync for every spawned guid: if it
-      // wields anything, flushWieldedDirty enumerates
-      // entityWieldedItems() and requests the attaches
-      // (child-not-yet-spawned ordering is handled by _pendingAttach).
-      // Covers the local player on login AND NPCs spawning pre-armed.
-      // No-op for non-wielders.
-      if (em._wieldHandAttach) {
-        try { em._markWielderDirty?.(meta.guid); } catch (_) {}
-      }
+      _armSpawn(scene3d, em, upd);
     } else if (kind === KIND_REMOVE) {
-      // A4 (2026-05-18): prune __lastEntityWorldPos on despawn to bound Map growth.
-      const g = upd.guid >>> 0;
-      em.remove(g);
-      if (window.__lastEntityWorldPos) window.__lastEntityWorldPos.delete(g);
-      // F18-4: prune the multiAction stamp-dedup so a reused guid (a
-      // respawned creature) isn't silently refused its first action.
-      _actionStamps.delete(g);
+      _armRemove(scene3d, em, upd);
     } else if (kind === KIND_POSITION) {
-      const lbId = upd.landblockId >>> 0;
-      const lbX = (lbId >>> 24) & 0xff;
-      const lbY = (lbId >>> 16) & 0xff;
-      const wx = lbX * 192.0 + (upd.x ?? 0);
-      const wy = lbY * 192.0 + (upd.y ?? 0);
-      const wz = upd.z ?? 0;
-      const g = upd.guid >>> 0;
-      // Always stash the latest world-space position per guid, even
-      // when the 3D EntityManager has no rig for this guid yet (the
-      // wasm-side eager-WorldState path suppresses KIND_SPAWN for
-      // the local player on SelectCharacter, so `em.setPose` below
-      // is a no-op for that guid). `getLocalPlayerWorldPos` uses
-      // this as its last-resort fallback so the camera tracks the
-      // server pose regardless of whether a rig ever spawned.
-      //
-      // Workstream B (2026-05-11): `ts` is the rAF wall-clock when
-      // this server-authoritative pose landed. The cameraSwitcher's
-      // client-side prediction reads (x, y, z, ts) on each rAF: a
-      // changed `ts` means a fresh KIND_POSITION arrived from ACE
-      // since the last reconcile, so the prediction can snap-or-lerp
-      // toward the new authoritative pose. Without the timestamp the
-      // prediction would re-reconcile on every rAF and never let the
-      // client-side integration breathe.
-      if (!window.__lastEntityWorldPos) {
-        window.__lastEntityWorldPos = new Map();
-      }
-      // A2: mutate the per-guid slot in place instead of allocating
-      // a fresh `{x,y,z,ts}` literal per KIND_POSITION event.
-      const _posSlot = _getOrCreatePosSlot(window.__lastEntityWorldPos, g);
-      _posSlot.x = wx;
-      _posSlot.y = wy;
-      _posSlot.z = wz;
-      _posSlot.ts = _nowMs();
-      // Cohere-B follow-on (2026-05-12): skip the snap-to-server
-      // for the local player here too — the per-rAF integrator
-      // sync in `applyLocalPlayerPoseFromIntegrator` owns the
-      // local rig's pose. KIND_POSITION still updates
-      // `__lastEntityWorldPos` (above) so the camera's Workstream
-      // B reconciliation gate sees the fresh `ts` and behaves
-      // correctly.
-      if (!isLocalPlayerGuid(g)) {
-        // Visual-vs-collision Z reconcile (same rationale as the
-        // local-player path in applyLocalPlayerPoseFromIntegrator):
-        // server sends bilinear-collision Z; Catmull-Rom render
-        // surface deviates by up to 0.3 m. Raycast lifts the
-        // remote rig to the visible terrain so other players don't
-        // appear partially buried.
-        //
-        // F4-3 (bughunt 2026-06-09): this is OUTDOOR-ONLY. The old
-        // "returns wz when the ray misses indoors" claim was false —
-        // a vertical ray over a dungeon HITS the outdoor land surface
-        // above it (the raycaster ignores `.visible` and terrain is
-        // force-shown indoors), so every indoor mob/player rig was
-        // relocated to the surface dozens of metres up. Gate on the
-        // entity's cell: indoor (landblock low16 >= 0x100) keeps the
-        // server Z untouched; outdoor reconciles but clamps the lift
-        // to the documented 0.3 m delta + margin so a stray far hit
-        // can never teleport the rig.
-        const cellIndoor = ((upd.landblockId >>> 0) & 0xffff) >= 0x100;
-        const renderWz = cellIndoor
-          ? wz
-          : getTerrainVisualZ(scene3d, wx, wy, wz, 0.5);
-        em.setPose(
-          g,
-          wx, wy, renderWz,
-          upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0
-        );
-      }
+      _armPosition(scene3d, em, upd);
     } else if (kind === KIND_VELOCITY) {
-      // A2: mutate-in-place scratch (shared across both drain paths;
-      // setVelocity copies synchronously and does not retain a ref).
-      _velScratch.guid = upd.guid >>> 0;
-      _velScratch.vx = upd.vx ?? 0;
-      _velScratch.vy = upd.vy ?? 0;
-      _velScratch.vz = upd.vz ?? 0;
-      _velScratch.omegaZ = upd.omegaZ ?? 0;
-      em.setVelocity(_velScratch);
+      _armVelocity(scene3d, em, upd);
     } else if (kind === KIND_MOTION) {
-      const motionGuid = upd.guid >>> 0;
-      // DIM10/A-2 (2026-06-05): skip the local player — its gait is
-      // client-predicted (W3.1, index.html ~10207); re-dispatching the
-      // server echo fights the predictor and breaks the run loop. See the
-      // FORCE_MOTION_LOCAL block at the top of this module for the full
-      // rationale.
-      const st = (upd.motionStance ?? 0) >>> 0;
-      const motionCmd = (upd.motionCommand ?? 0) >>> 0;
-      // SG-B (2026-06-09): wire `is_autonomous` bit (UpdateMotion 0xF74C).
-      // true = client-predicted gait echo (skip); false = server-forced
-      // pose (apply under FORCE_MOTION_LOCAL). ACE semantics in the
-      // FORCE_MOTION_LOCAL comment block above.
-      const isAuto = !!upd.isAutonomous;
-      // FORCE_MOTION_LOCAL (B5#2 + SG-B): when ON, a server-FORCED
-      // (`!isAuto`) NON-LOCOMOTION pose/action passes through to the
-      // local rig; an autonomous echo OR a locomotion-class command is
-      // still skipped to preserve the B9 client-gait predictor.
-      const forceLocal =
-        FORCE_MOTION_LOCAL_ON &&
-        !isAuto &&
-        !isLocalGaitLocomotionCmd(motionCmd);
-      if (forceLocal || !isLocalPlayerGuid(motionGuid)) {
-        // A1 (2026-05-29): forward UpdateMotion.forward_speed (default 1.0).
-        em.setMotion(
-          motionGuid,
-          motionCmd,
-          st,
-          +(upd.motionSpeed ?? 1.0)
-        );
-      } else if (st !== 0) {
-        // Track B9 (2026-06-08): skip the local LOCOMOTION command but
-        // restore the server-authoritative STANCE half of UpdateMotion
-        // 0xF74C. setLocalStance touches only the Ready/idle base pose
-        // and never the predictor-owned walk/run clip.
-        em.setLocalStance(motionGuid, st);
-      }
-      // F3-4 (bughunt 2026-06-09): sticky-attack target rides on model_id
-      // of KIND_MOTION (0 = none/clear). Remote-only — the local player is
-      // never sticky. While set, EntityManager.tick glues the mob to the
-      // moving target so a kited melee monster tracks the player.
-      if (!isLocalPlayerGuid(motionGuid) && typeof em.setStickyTarget === "function") {
-        em.setStickyTarget(motionGuid, upd.modelId >>> 0);
-      }
-      // F3-5 (bughunt 2026-06-09): per-creature run rate on `vx`. Remote-only.
-      if (!isLocalPlayerGuid(motionGuid) && typeof em.setEntityRunRate === "function") {
-        em.setEntityRunRate(motionGuid, +(upd.vx ?? 0));
-      }
-      // Wave 10 Phase 10.1 (2026-05-26) — the Fallen→setAirborne(false)
-      // coupling was removed; the local arms-up overlay now clears via
-      // `kind=18` recv-side dispatch (lib.rs Wave 10.1 + index.html
-      // kind=18 handler).
+      _armMotion(scene3d, em, upd);
     } else if (kind === KIND_MOTION_ACTION) {
-      // Wave 2 (2026-06-08) — one-shot Action-class command (creature
-      // attack swing B10, local eat/drink B6, emote/gesture). The wasm
-      // side already EXPANDED it to the full 32-bit MotionCommand and
-      // applied the 15-bit stamp-dedup, so we just route it through
-      // setMotion → classifyMotionCommand → _tryPlayLink, which plays it
-      // as a LoopOnce OVERLAY on top of the active locomotion cycle.
-      //
-      // Unlike KIND_MOTION, this fires for EVERY guid INCLUDING the local
-      // player: the command is ONLY ever an Action-class one-shot (never
-      // a locomotion command), so playing it does not touch the client-
-      // predicted gait (B9 gait predictor unaffected; C1).
-      const actionGuid = upd.guid >>> 0;
-      const actionCmd = (upd.motionCommand ?? 0) >>> 0;
-      const actionStance = (upd.motionStance ?? 0) >>> 0;
-      // D3 (Q3.2, ?dispatchParity=on, default-off): F6-2 swing-echo
-      // dedup, ported from the dead direct arm where it was inert in
-      // live mode. The note side (picking.js noteLocalSwingPrediction)
-      // fires on the DEFAULT live click path, so this port changes
-      // default-mode combat visuals — hence the gate.
-      if (DISPATCH_PARITY_ON && actionCmd !== 0 &&
-          em.consumeLocalSwingEcho?.(actionGuid, actionCmd)) {
-        // F6-2: optimistic local swing already played (picking.js
-        // noteLocalSwingPrediction); swallow the server echo instead of
-        // double-playing / restarting the same clip ~RTT later. Remote
-        // guids and non-matching commands are unaffected.
-      } else if (actionCmd !== 0 && typeof em.setMotion === "function") {
-        em.setMotion(actionGuid, actionCmd, actionStance, +(upd.motionSpeed ?? 1.0));
-        // D4 (Q3.2, rides existing ?serverSwing, default-off ⇒ inert):
-        // FU-3 (2026-06-11) — under ?serverSwing=on the local rig has no
-        // click-time swing anymore, and setMotion's MT clip doesn't
-        // animate the local rig. Fire the procedural shoulder pose at
-        // this (server-timed, post-MoveTo) moment for attack-class
-        // commands (0x51..0x6E per the swing-classification table;
-        // 0x50 FallDown excluded).
-        if (SERVER_SWING_ON && isLocalPlayerGuid(actionGuid)) {
-          const low = actionCmd & 0xFFFF;
-          if (low >= 0x51 && low <= 0x6E) {
-            try { em.setSwingPose?.(actionGuid); } catch (_) {}
-          }
-        }
-      }
+      _armMotionAction(scene3d, em, upd);
     } else if (kind === KIND_TURN) {
-      // F3-3 (bughunt 2026-06-09): server TurnTo* directive — turn the
-      // rig to face the absolute target heading (qw/qx/qy/qz).
-      // Remote-only; the local player owns its own facing.
-      const turnGuid = upd.guid >>> 0;
-      if (!isLocalPlayerGuid(turnGuid) && typeof em.applyTurnDirective === "function") {
-        // G-5 (?turnOmega=on): forward the wire MoveToParameters.speed
-        // (surfaced on omega_z) so the slerp can rate-limit to retail.
-        em.applyTurnDirective(turnGuid, upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0, +(upd.omegaZ ?? 0));
-      }
+      _armTurn(scene3d, em, upd);
     } else if (kind === KIND_APPEARANCE) {
-      // SG-D (2026-06-09): mid-game appearance change (equip / dye-commit /
-      // death re-skin) from the wasm `UpdateObject` (0xF7DB) / `ObjDescEvent`
-      // (0xF625) arms (lib.rs ~31978 / ~32058), which pack only the four
-      // substitution-relevant fields and zero the rest. `_sliceFromScratch`
-      // returns a fresh `.slice()` copy so the async `applyAppearance` is
-      // alias-safe.
-      //
-      // Applies to the LOCAL player too (you should see your own gear/dye
-      // change). `applyAppearance` despawn+respawns the rig (or hot-swaps
-      // under `?clothingHotSwap=1`), preserving world pose; the camera +
-      // integrator re-resolve the rig via `entityMap.get(guid)` every frame,
-      // so the respawn doesn't orphan their binding. PENDING 1070 eye-test:
-      // confirm no visible local-rig flicker on equip during normal play
-      // (enable hot-swap if it does).
-      em.applyAppearance?.(upd.guid >>> 0, {
-        modelChanges: _sliceFromScratch(upd.modelChanges, 0),
-        textureChanges: _sliceFromScratch(upd.textureChanges, 1),
-        subPalettes: _sliceFromScratch(upd.subPalettes, 2),
-        paletteId: (upd.paletteId ?? 0) >>> 0,
-        // R7 (?runtimeObjScale=on): runtime scale/translucency (sentinels
-        // 0 / -1 = no change; applyAppearance gates on the flag).
-        objScale: +(upd.objScale ?? 0),
-        physicsTranslucency: +(upd.physicsTranslucency ?? -1),
-      });
+      _armAppearance(scene3d, em, upd);
     } else if (kind === KIND_ATTACH) {
-      // Render-completeness audit (2026-05-29) — wielded item equipped
-      // or unequipped. model_id is the wielder guid (0 = detach back to
-      // world / hide). motionCommand = holding-location key (RightHand=1,
-      // …); motionStance = the child's grip placement key. EntityManager
-      // parents the child rig under the wielder's part node at the
-      // resolved holding-location frame.
-      const childGuid = upd.guid >>> 0;
-      const parentGuid = (upd.modelId ?? 0) >>> 0;
-      em.attachChildToParent?.(
-        childGuid,
-        parentGuid,
-        (upd.motionCommand ?? 0) >>> 0,
-        (upd.motionStance ?? 0) >>> 0
-      );
+      _armAttach(scene3d, em, upd);
     } else if (kind === KIND_META_REFRESH) {
-      // D5 (Q3.2): explicit no-op arm. Not yet consumed — the consumer
-      // stays unowned (portal-destination → nameplate/chip overlays);
-      // see S3 (A15-Q4) OPEN QUESTIONS.
+      _armMetaRefresh(scene3d, em, upd);
     }
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -2453,7 +2555,9 @@ export function installSharedDrainHook(scene3d) {
   scene3d.useSharedDrain = true;
   // Window-level hook the 2D path can call. Phase 7.5 accepts EITHER
   // a single EntityUpdate OR an array of them — the 2D drainEvents at
-  // index.html:6021 now passes the whole `entityUpdates` array in one
+  // index.html (the `window.__scene3dEntityHook?.(entityUpdates)`
+  // forward in drainEvents — A15-Q4 comment-rot fix, was
+  // "index.html:6021") now passes the whole `entityUpdates` array in one
   // call after pollEntityUpdates() returns, while older capture
   // scripts (capture_phase7_4_entities.cjs mode 2) still call once per
   // event. Both forms are accepted; the array form is more efficient
@@ -2470,7 +2574,42 @@ export function installSharedDrainHook(scene3d) {
     // `getEntityManager: () => scene3d.entityManager` pattern). The local
     // name `dispatchOne` is kept so the `_prewarmFromBatch` / hook /
     // backlog blocks below are textually undisturbed.
-    const dispatchOne = (upd) => dispatchEntityUpdate(scene3d, scene3d.entityManager, upd);
+    //
+    // A15-Q4 (`?unifiedDispatch=on`, default-off): dispatchOne delegates
+    // to a `createEntityDispatcher` "3d" backend table built once per
+    // installSharedDrainHook call. Its handlers are the SAME `_arm*`
+    // functions the flag-off `dispatchEntityUpdate` if-chain calls —
+    // behavior identical by construction. The NEUTRAL table is EMPTY by
+    // invariant (neutral concerns — world streaming, worldObjectManager
+    // feed — run exactly once, at the index.html drain: the hook
+    // receives the same array the 2D for-loop iterates). KIND
+    // .META_REFRESH is deliberately ABSENT from the 3D backend (no 3D
+    // consumer yet — S3 OPEN QUESTION 2); the dispatcher surfaces it as
+    // a one-time accounting info. Neither route ever frees `upd`.
+    const _dispatcher3d = UNIFIED_DISPATCH_ON
+      ? createEntityDispatcher({
+          label: "3d",
+          neutral: {},
+          backend: {
+            [KIND.POSITION]: (upd) => _armPosition(scene3d, scene3d.entityManager, upd),
+            [KIND.SPAWN]: (upd) => _armSpawn(scene3d, scene3d.entityManager, upd),
+            [KIND.REMOVE]: (upd) => _armRemove(scene3d, scene3d.entityManager, upd),
+            [KIND.VELOCITY]: (upd) => _armVelocity(scene3d, scene3d.entityManager, upd),
+            [KIND.MOTION]: (upd) => _armMotion(scene3d, scene3d.entityManager, upd),
+            [KIND.APPEARANCE]: (upd) => _armAppearance(scene3d, scene3d.entityManager, upd),
+            [KIND.ATTACH]: (upd) => _armAttach(scene3d, scene3d.entityManager, upd),
+            [KIND.MOTION_ACTION]: (upd) => _armMotionAction(scene3d, scene3d.entityManager, upd),
+            [KIND.TURN]: (upd) => _armTurn(scene3d, scene3d.entityManager, upd),
+          },
+        })
+      : null;
+    const dispatchOne = _dispatcher3d
+      ? (upd) => {
+          if (!upd) return;
+          _wireDiagTap(upd); // D1 — same tap as the flag-off route
+          _dispatcher3d.dispatch(upd);
+        }
+      : (upd) => dispatchEntityUpdate(scene3d, scene3d.entityManager, upd);
     // 2026-05-28 perf: when an entity batch arrives in one tick, extract
     // every unique setupId (modelId) ahead of dispatching and fire a
     // single AnimationCache.getBatch(...) — this pre-warms the wasm-side
