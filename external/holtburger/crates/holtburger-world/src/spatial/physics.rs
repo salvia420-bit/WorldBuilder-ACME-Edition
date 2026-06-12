@@ -672,13 +672,52 @@ pub fn step_down_decision(feet_z: f32, floor_z_below: f32, step_down_height: f32
     }
 }
 
-/// Result of [`step_down_decision`].
+/// Result of [`step_down_decision`] / [`step_down_resolve`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StepDownOutcome {
     /// Snap the player's feet to this Z, following the surface.
     Snap(f32),
     /// The drop exceeds the step-down height — a real ledge; fall.
     Fall,
+}
+
+/// A7-R2 (2026-06-12, survey A7 §3 rows 2/3): [`step_down_decision`]
+/// plus retail's WALKABLE-landing acceptance — `Transition::StepDown`
+/// succeeds only when `collision_info.contact_plane.N.z >= z_val`
+/// (`acclient.c:312664-312669`; ACE `Transition.cs:855-870`), so a
+/// descent onto a steeper-than-walkable face FALLS instead of snapping.
+/// The ONE resolver both the outdoor (terrain) and indoor (per-poly)
+/// step-down arms consume under `USE_WALKABLE_STEP_DOWN`
+/// (movement/system.rs).
+///
+/// `floor_normal_z` is the destination surface normal's Z
+/// (`terrain_normal_at` outdoors / `floor_normal_under` indoors);
+/// `None` (no normal source) keeps the height-only decision — absence
+/// of data never refuses a step. `allowance` is retail's `z_val`
+/// walkable threshold ([`FLOOR_Z`] for normal movement;
+/// `LANDING_Z` is the airborne-landing variant, A7-R3). The walkable
+/// test gates DESCENTS only (`drop > 0`): the flat-ground/rise snap
+/// folded into [`step_down_decision`] is the caller's pre-existing
+/// floor snap, not retail's StepDown, and stays byte-identical.
+/// `check_walkable`'s re-insert probe (`acclient.c:312475-312524`) is
+/// survey row 3's remaining half — A6's transitional_insert seam.
+pub fn step_down_resolve(
+    feet_z: f32,
+    floor_z_below: f32,
+    floor_normal_z: Option<f32>,
+    step_down_height: f32,
+    allowance: f32,
+) -> StepDownOutcome {
+    match step_down_decision(feet_z, floor_z_below, step_down_height) {
+        StepDownOutcome::Snap(z) => {
+            let descending = feet_z - floor_z_below > 0.0;
+            match floor_normal_z {
+                Some(normal_z) if descending && normal_z < allowance => StepDownOutcome::Fall,
+                _ => StepDownOutcome::Snap(z),
+            }
+        }
+        StepDownOutcome::Fall => StepDownOutcome::Fall,
+    }
 }
 
 /// 2026-05-10 indoor collision: clamp a proposed lateral delta
@@ -2087,6 +2126,47 @@ mod tests {
         let (up, down) = setup_step_heights(None, None, 2.0);
         assert_eq!(up, DEFAULT_STEP_HEIGHT);
         assert_eq!(down, DEFAULT_STEP_HEIGHT);
+    }
+
+    // ---- A7-R2 (2026-06-12): walkable step-down ----
+
+    /// A descent onto a steeper-than-walkable face (N.z < FLOOR_Z)
+    /// FALLS instead of snapping (`acclient.c:312664-312669`).
+    #[test]
+    fn step_down_onto_steep_face_falls() {
+        let feet_z = 10.0;
+        let floor = 9.0; // 1 m drop, within the 1.5 cap
+        // 60° face: N.z = 0.5 < FLOOR_Z (0.664...).
+        assert_eq!(
+            step_down_resolve(feet_z, floor, Some(0.5), PLAYER_STEP_DOWN_HEIGHT, FLOOR_Z),
+            StepDownOutcome::Fall
+        );
+        // Walkable face: snaps exactly as the height-only decision.
+        assert_eq!(
+            step_down_resolve(feet_z, floor, Some(0.9), PLAYER_STEP_DOWN_HEIGHT, FLOOR_Z),
+            StepDownOutcome::Snap(floor)
+        );
+    }
+
+    /// No normal source → height-only decision (absence of data never
+    /// refuses); flat-ground/rise snap is never walkable-gated; a
+    /// too-deep drop still falls regardless of the normal.
+    #[test]
+    fn step_down_resolve_degrades_to_height_only_decision() {
+        assert_eq!(
+            step_down_resolve(10.0, 9.0, None, PLAYER_STEP_DOWN_HEIGHT, FLOOR_Z),
+            StepDownOutcome::Snap(9.0)
+        );
+        // Rise/flat (drop <= 0): the caller's floor snap, not StepDown —
+        // steep normal does NOT gate it.
+        assert_eq!(
+            step_down_resolve(10.0, 10.2, Some(0.5), PLAYER_STEP_DOWN_HEIGHT, FLOOR_Z),
+            StepDownOutcome::Snap(10.2)
+        );
+        assert_eq!(
+            step_down_resolve(10.0, 8.0, Some(0.9), PLAYER_STEP_DOWN_HEIGHT, FLOOR_Z),
+            StepDownOutcome::Fall
+        );
     }
 
     // ---- Physics deep-dive 2026-06-01 (gap 3): step-up / step-down ----

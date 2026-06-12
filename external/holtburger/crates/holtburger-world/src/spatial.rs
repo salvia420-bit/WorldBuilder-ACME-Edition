@@ -27,7 +27,7 @@ pub use physics::{
     clamp_delta_against_cell_walls_with_normal, clamp_delta_to_cell_interior,
     cliff_slide_residual_along_seam, FLOOR_Z, floor_normal_under,
     highest_floor_z_under, project_pose_forward_distance, slide_residual_along_wall_tangent,
-    step_down_decision, step_up_decision, sweep_sphere_against_aabbs,
+    step_down_decision, step_down_resolve, step_up_decision, sweep_sphere_against_aabbs,
     sweep_sphere_against_static_aabbs, sweep_sphere_against_triangles,
 };
 pub use scene::{

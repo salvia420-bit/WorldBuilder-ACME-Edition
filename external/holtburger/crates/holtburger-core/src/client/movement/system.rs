@@ -105,6 +105,23 @@ fn player_step_down_height(world: &WorldState) -> f32 {
     }
 }
 
+/// A7-R2 (2026-06-12, survey A7 §3 rows 2/3) — walkable step-down.
+///
+/// `true`: both step-down arms (outdoor terrain + indoor per-poly,
+/// F4-1) route through
+/// [`holtburger_world::spatial::step_down_resolve`], which adds
+/// retail's walkable-landing acceptance — `Transition::StepDown`
+/// succeeds only when `contact_plane.N.z >= z_val`
+/// (`acclient.c:312664-312669`; ACE `Transition.cs:855-870`) — so a
+/// descent onto a steeper-than-[`holtburger_world::spatial::FLOOR_Z`]
+/// face FALLS instead of snapping onto it (the downhill complement of
+/// F4-2's uphill gate).
+///
+/// `false` (default): the shipped height-only
+/// [`holtburger_world::spatial::step_down_decision`] — byte-identical.
+/// 1070-parked: downhill cliff-face feel check.
+const USE_WALKABLE_STEP_DOWN: bool = false;
+
 /// Physics deep-dive 2026-06-01 (gap 3 follow-up) — gate for the
 /// edge_slide tangent-slide in the lateral-clamp + step-up path of
 /// [`MovementSystem::advance_local_pose_for_manual_drive_slice`].
@@ -2597,11 +2614,27 @@ impl MovementSystem {
                         if USE_PRECIPICE_SLIDE_REENTRY {
                             world.player.backup_pose_for_step_down = Some(pose);
                         }
-                        match holtburger_world::spatial::step_down_decision(
-                            pose.coords.z,
-                            z,
-                            player_step_down_height(world),
-                        ) {
+                        // A7-R2: walkable acceptance — the destination
+                        // terrain normal gates the snap (steep downhill
+                        // face => Fall). Flag off: height-only decision.
+                        let step_down_outcome = if USE_WALKABLE_STEP_DOWN {
+                            holtburger_world::spatial::step_down_resolve(
+                                pose.coords.z,
+                                z,
+                                world
+                                    .terrain_normal_at(global.x, global.y)
+                                    .map(|n| n.z),
+                                player_step_down_height(world),
+                                holtburger_world::spatial::FLOOR_Z,
+                            )
+                        } else {
+                            holtburger_world::spatial::step_down_decision(
+                                pose.coords.z,
+                                z,
+                                player_step_down_height(world),
+                            )
+                        };
+                        match step_down_outcome {
                             holtburger_world::spatial::StepDownOutcome::Snap(snap_z) => {
                                 pose.coords.z = snap_z;
                                 // Walkable step-down resolved — clear the
@@ -2730,11 +2763,30 @@ impl MovementSystem {
                         // indoor landing. Grounded-only: while airborne the
                         // gravity arc owns Z and the snap-UP arm handles
                         // touchdown.
-                        match holtburger_world::spatial::step_down_decision(
-                            pose.coords.z,
-                            snap_z,
-                            player_step_down_height(world),
-                        ) {
+                        // A7-R2: indoor walkable acceptance from the
+                        // per-poly floor normal. Flag off: height-only.
+                        let step_down_outcome = if USE_WALKABLE_STEP_DOWN {
+                            holtburger_world::spatial::step_down_resolve(
+                                pose.coords.z,
+                                snap_z,
+                                holtburger_world::spatial::floor_normal_under(
+                                    triangles,
+                                    global.x,
+                                    global.y,
+                                    ceiling_for_floor_query,
+                                )
+                                .map(|n| n.z),
+                                player_step_down_height(world),
+                                holtburger_world::spatial::FLOOR_Z,
+                            )
+                        } else {
+                            holtburger_world::spatial::step_down_decision(
+                                pose.coords.z,
+                                snap_z,
+                                player_step_down_height(world),
+                            )
+                        };
+                        match step_down_outcome {
                             holtburger_world::spatial::StepDownOutcome::Snap(z) => {
                                 pose.coords.z = z;
                             }
