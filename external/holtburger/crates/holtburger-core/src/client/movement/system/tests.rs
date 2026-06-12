@@ -4869,3 +4869,306 @@ async fn moveto_driver_target_loss_cancels_0x37() {
     assert_eq!(movement.take_moveto_completion(guid), Some(0x37));
     assert!(!movement.moveto_is_active(guid));
 }
+
+// =====================================================================
+// A14-I2 (2026-06-12, W3+ S10) — wasm pursuit / turn-to intents
+// (`PlayerDriveIntent::PursueObject/TurnToObject/TurnToHeading/
+// CancelPursuit`, `?wasmPursuit=on`). The input-lane entry shape over
+// the landed A3-D3 driver: ingest routing + the `last_manual_drive`
+// restore arbitration (the charge-end WASD-stomp fix, retail
+// acclient.c:346123/:339240 channel separation). Exercised through the
+// `_ungated` seams while both consts ship default-off.
+// =====================================================================
+
+/// Drain-and-ingest helper: route an intent through the REAL
+/// `enqueue_drive_intent` mapping + `ingest_drive_command` arms without
+/// running a full tick (tick applies pursuits gated, the `_ungated`
+/// house pattern applies them here).
+fn ingest_intent(movement: &mut MovementSystem, intent: PlayerDriveIntent, now: Instant) {
+    movement.enqueue_drive_intent(intent, now);
+    for command in std::mem::take(&mut movement.queued_drive_commands) {
+        movement.ingest_drive_command(command, now);
+    }
+}
+
+/// Shared fixture: player at (50,50) facing EAST (AC heading 180)
+/// directly at a target 10 m east — the entry turn node pops
+/// immediately so the walk begins on the first driven frame (the
+/// landed driver-test geometry).
+fn pursuit_fixture() -> (WorldState, Guid, Guid) {
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0123);
+    let target_guid = Guid(0x8000_0042);
+    let position = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::from_heading(180.0_f32.to_radians()),
+    };
+    let target_pos = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(60.0, 50.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    world.player.guid = guid;
+    seed_local_player(&mut world, guid, position);
+    world
+        .entities
+        .insert(Entity::new(target_guid, "Drudge".to_string(), target_pos));
+    (world, guid, target_guid)
+}
+
+fn place_player_at_arrival(world: &mut WorldState) {
+    let _ = world.set_local_player_runtime_pose(WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(59.5, 50.0, 0.0),
+        rotation: Quaternion::from_heading(180.0_f32.to_radians()),
+    });
+}
+
+fn pursue_intent(target: Guid) -> PlayerDriveIntent {
+    PlayerDriveIntent::PursueObject {
+        target,
+        object_radius: 0.5,
+        object_height: 1.8,
+        run: true,
+    }
+}
+
+/// S10 test 1 — THE stomp regression: a held W (non-idle ManualSet)
+/// survives the pursuit's end. ManualSet(forward) → PursueObject
+/// (manual stashed off the active slot) → arrival → active_drive is
+/// Manual(forward) again, NO stop edge (retail channel separation,
+/// acclient.c:346123/:339240; the legacy JS fake-WASD path zeroed it).
+#[test]
+fn held_manual_drive_survives_pursuit_end() {
+    let (mut world, guid, target_guid) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    let now = Instant::now();
+
+    let held = MotionState::builder().run().forward().build();
+    ingest_intent(&mut movement, PlayerDriveIntent::ManualHeld(held), now);
+    ingest_intent(&mut movement, pursue_intent(target_guid), now);
+
+    let stop = movement.apply_pending_pursuit_commands_ungated(&mut world);
+    assert!(!stop, "install owes no stop edge");
+    assert!(movement.moveto_is_active(guid));
+    assert!(
+        movement.active_drive.is_none(),
+        "held manual drive is stashed off the active slot during pursuit"
+    );
+
+    // Frame 1: walk steering on the autonomous lane.
+    assert!(!movement.drive_local_moveto(now, &mut world));
+    assert!(matches!(
+        movement.active_drive.map(|active| active.intent),
+        Some(ActiveDriveIntent::Autonomous(_))
+    ));
+
+    // Arrival: restore the held manual drive instead of the stop edge.
+    place_player_at_arrival(&mut world);
+    let stop = movement.drive_local_moveto(now, &mut world);
+    assert!(!stop, "restore replaces the stop edge");
+    assert!(!movement.moveto_is_active(guid));
+    assert!(
+        matches!(
+            movement.active_drive.map(|active| active.intent),
+            Some(ActiveDriveIntent::Manual(state))
+                if state == held
+        ),
+        "held W restored: {:?}",
+        movement.active_drive
+    );
+    // The completion latch is left for the JS poll (status 2, read-clear).
+    assert_eq!(movement.pursuit_status(guid), 2);
+    assert_eq!(movement.pursuit_status(guid), 0, "read-clear");
+}
+
+/// S10 test 2 — all-keys-idle at pursuit end → the stop edge is owed
+/// exactly once (no forward leak, ACE must see the stop).
+#[test]
+fn idle_hands_at_pursuit_end_owe_single_stop_edge() {
+    let (mut world, guid, target_guid) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    let now = Instant::now();
+
+    // Record an IDLE manual state (all keys released before the click).
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(MotionState::default()),
+        now,
+    );
+    ingest_intent(&mut movement, pursue_intent(target_guid), now);
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    assert!(!movement.drive_local_moveto(now, &mut world), "walking");
+
+    place_player_at_arrival(&mut world);
+    let stop = movement.drive_local_moveto(now, &mut world);
+    assert!(stop, "idle hands → arrival owes the stop edge");
+    assert!(movement.active_drive.is_none());
+    assert!(
+        !movement.drive_local_moveto(now, &mut world),
+        "stop edge exactly once"
+    );
+    assert_eq!(movement.pursuit_status(guid), 2);
+}
+
+/// S10 test 3 — a non-idle ManualSet during pursuit cancels it (0x36,
+/// status reads failed) and manual takes over the same tick (retail
+/// apply_raw_movement → cancel_moveto(0x36), acclient.c:317421/:339240).
+#[test]
+fn nonidle_manual_set_cancels_pursuit_and_takes_over() {
+    let (mut world, guid, target_guid) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    let now = Instant::now();
+
+    ingest_intent(&mut movement, pursue_intent(target_guid), now);
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    assert!(!movement.drive_local_moveto(now, &mut world), "walking");
+
+    let held = MotionState::builder().run().forward().build();
+    ingest_intent(&mut movement, PlayerDriveIntent::ManualHeld(held), now);
+    let stop = movement.drive_local_moveto(now, &mut world);
+    assert!(!stop, "manual lane owns the wire — no driver stop edge");
+    assert!(!movement.moveto_is_active(guid), "0x36 cancel ran");
+    assert_eq!(movement.pursuit_status(guid), 3 | (0x36 << 16));
+    assert!(
+        matches!(
+            movement.active_drive.map(|active| active.intent),
+            Some(ActiveDriveIntent::Manual(state)) if state == held
+        ),
+        "manual took over same tick"
+    );
+}
+
+/// S10 test 4 — an explicit `Stop` cancels the pursuit (retail
+/// StopCompletely runs through cancel_moveto, acclient.c:343611) with
+/// NO manual restore and the stop edge owed.
+#[test]
+fn stop_command_cancels_pursuit_without_restore() {
+    let (mut world, guid, target_guid) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    let now = Instant::now();
+
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(MotionState::builder().run().forward().build()),
+        now,
+    );
+    ingest_intent(&mut movement, pursue_intent(target_guid), now);
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    assert!(!movement.drive_local_moveto(now, &mut world), "walking");
+
+    ingest_intent(&mut movement, PlayerDriveIntent::Stop, now);
+    let stop = movement.apply_pending_pursuit_commands_ungated(&mut world);
+    assert!(stop, "explicit Stop owes the stop edge");
+    assert!(!movement.moveto_is_active(guid));
+    assert_eq!(movement.pursuit_status(guid), 3 | (0x36 << 16));
+    assert!(
+        movement.active_drive.is_none(),
+        "no manual restore on explicit Stop"
+    );
+}
+
+/// S10 test 5 — status lifecycle 0 → 1 → 2 with read-clear, through
+/// the REAL intent mapping; `CancelPursuit` (the JS charge-abort)
+/// restores a held manual drive like any other pursuit end.
+#[test]
+fn pursuit_status_lifecycle_and_cancel_restore() {
+    let (mut world, guid, target_guid) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    let now = Instant::now();
+
+    assert_eq!(movement.pursuit_status(guid), 0, "idle before any intent");
+
+    ingest_intent(&mut movement, pursue_intent(target_guid), now);
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    assert_eq!(movement.pursuit_status(guid), 1, "active while pursuing");
+
+    assert!(!movement.drive_local_moveto(now, &mut world));
+    place_player_at_arrival(&mut world);
+    assert!(movement.drive_local_moveto(now, &mut world));
+    assert_eq!(movement.pursuit_status(guid), 2, "arrived");
+    assert_eq!(movement.pursuit_status(guid), 0, "read-clear");
+}
+
+/// S10 test 5b — `CancelPursuit` (the JS charge-abort) restores a held
+/// manual drive like any other pursuit end, with the 0x36 failure
+/// latched for the poll. Fresh system: a SECOND pursuit on the same
+/// manager would defer its entry turn node behind the previous run's
+/// `motions_pending` (num_anims>0 lattice nodes await the staged A4
+/// per-entity AnimationDone feed — the documented A3-D3 staging
+/// limitation, move_to.rs `begin_turn_to_heading` "defers behind
+/// them, retail-shaped").
+#[test]
+fn cancel_pursuit_restores_held_manual_drive() {
+    let (mut world, guid, target_guid) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    let now = Instant::now();
+
+    let held = MotionState::builder().run().forward().build();
+    ingest_intent(&mut movement, PlayerDriveIntent::ManualHeld(held), now);
+    ingest_intent(&mut movement, pursue_intent(target_guid), now);
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    assert!(!movement.drive_local_moveto(now, &mut world), "walking");
+    assert!(movement.moveto_is_active(guid));
+
+    ingest_intent(&mut movement, PlayerDriveIntent::CancelPursuit, now);
+    let stop = movement.apply_pending_pursuit_commands_ungated(&mut world);
+    assert!(!stop, "abort restores the held manual drive, no stop edge");
+    assert!(!movement.moveto_is_active(guid));
+    assert!(matches!(
+        movement.active_drive.map(|active| active.intent),
+        Some(ActiveDriveIntent::Manual(state)) if state == held
+    ));
+    assert_eq!(movement.pursuit_status(guid), 3 | (0x36 << 16));
+}
+
+/// S10 test 6 — no double-drive: while the pursuit steers, the active
+/// drive is the autonomous steering intent, never a manual one (the
+/// Track-B1 suppress pattern); an IDLE ManualSet mid-pursuit (key
+/// release) is recorded but does NOT stomp the steering drive, and the
+/// recorded idle governs the end (stop edge, not a stale-W restore).
+#[test]
+fn pursuit_active_suppresses_manual_double_drive_and_idle_does_not_stomp() {
+    let (mut world, guid, target_guid) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    let now = Instant::now();
+
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(MotionState::builder().run().forward().build()),
+        now,
+    );
+    ingest_intent(&mut movement, pursue_intent(target_guid), now);
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    assert!(!movement.drive_local_moveto(now, &mut world));
+    assert!(
+        matches!(
+            movement.active_drive.map(|active| active.intent),
+            Some(ActiveDriveIntent::Autonomous(_))
+        ),
+        "pursuit steering rides the autonomous lane, no manual double-drive"
+    );
+
+    // Keys released mid-pursuit: recorded, NOT stomped.
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(MotionState::default()),
+        now,
+    );
+    assert!(
+        matches!(
+            movement.active_drive.map(|active| active.intent),
+            Some(ActiveDriveIntent::Autonomous(_))
+        ),
+        "idle ManualSet must not stomp the steering drive"
+    );
+    assert!(!movement.drive_local_moveto(now, &mut world), "still walking");
+    assert!(movement.moveto_is_active(guid));
+
+    // End: the recorded idle governs — stop edge, no stale-W restore.
+    place_player_at_arrival(&mut world);
+    assert!(movement.drive_local_moveto(now, &mut world));
+    assert!(movement.active_drive.is_none());
+    assert_eq!(movement.pursuit_status(guid), 2);
+}

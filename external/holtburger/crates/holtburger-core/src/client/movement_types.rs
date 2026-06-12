@@ -1,5 +1,5 @@
-use holtburger_common::Vector3;
 use holtburger_common::position::WorldPosition;
+use holtburger_common::{Guid, Vector3};
 use holtburger_protocol::messages::movement::MotionStance;
 use std::time::Duration;
 
@@ -195,6 +195,35 @@ pub enum PlayerDriveIntent {
         heading: f32,
     },
     Stop,
+    /// A14-I2 (W3+ S10, `?wasmPursuit=on`) — retail
+    /// `MovementTypes::MoveToObject = 0x6` (acclient.h:2856-2866) via
+    /// the `MoveToManager::PerformMovement` entry
+    /// (acclient.c:346123-346145). ENTRY-POINT ONLY — steering/arrival
+    /// math lives in `movement/move_to.rs` (A3-D3 driver).
+    /// `object_radius`/`object_height` carry the F6-5 cylinder stop
+    /// semantics into retail's native dims args (acclient.c:7145; the
+    /// SD3D §3 contract resolution — `MovementParameters` untouched).
+    /// `run` forces the Run hold key (`bitfield |= 0x10`, ForceRun in
+    /// `get_command`, acclient.c:346213-346215) — today's charge
+    /// behavior exactly.
+    PursueObject {
+        target: Guid,
+        object_radius: f32,
+        object_height: f32,
+        run: bool,
+    },
+    /// A14-I2 — retail `MovementTypes::TurnToObject = 0x8`
+    /// (acclient.c:346137-346139). NOT `SnapFacing` — this is the
+    /// rate-limited MoveToManager turn, not an instantaneous heading
+    /// set.
+    TurnToObject { target: Guid },
+    /// A14-I2 — retail `TurnToHeading = 0x9` (acclient.c:346141-346143).
+    /// `heading` is RADIANS (pose domain); converted to the retail
+    /// degrees domain at the `MovementSystem` ingest boundary.
+    TurnToHeading { heading: f32 },
+    /// A14-I2 — retail `MovementManager::CancelMoveTo(0x36)`
+    /// (acclient.c:339240-339246), the JS charge-abort entry.
+    CancelPursuit,
 }
 
 #[cfg(test)]

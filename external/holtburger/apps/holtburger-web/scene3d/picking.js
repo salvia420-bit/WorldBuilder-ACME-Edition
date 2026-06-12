@@ -7,6 +7,11 @@ import {
 import { getAimLevelForVelocity, getAimLevelForBallisticArc } from "../ui/ac_aim_level_for_velocity.js";
 import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
 import { classifySpell } from "../ui/ac_spell_shape.js";
+import {
+  createPursuitMonitor,
+  createTurnMonitor,
+  readWasmPursuitFlag,
+} from "./pursuit_monitor.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -70,6 +75,27 @@ const SERVER_SWING = (() => {
   try {
     return typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("serverSwing") === "on";
+  } catch { return false; }
+})();
+
+// A14-I2 (W3+ S10) — wasm pursuit / turn-to intents. Default-OFF.
+// When ON (and the wasm exports exist — typeof-guarded, F18-2 spirit),
+// the charge pursuit + turn-to-face steering moves WASM-side
+// (`pursueEntity`/`turnToEntity` → the A3-D3 MoveToManager driver):
+// JS keeps only a status monitor rAF (scene3d/pursuit_monitor.js) and
+// NEVER calls `setMovementInput` on the pursuit path — the (0,0,0)
+// charge-end stomp sites are bypassed and a held WASD drive is
+// restored wasm-side (the charge-end WASD-stomp fix). Arrival still
+// invokes the SAME `charge.fireAttack` closure with the windup release
+// first, identical order to the legacy arrival — F6-6 (live lockout
+// read inside `fireOnce`) preserved verbatim. Requires a wasm build
+// with `USE_MOVETO_DRIVER` flipped (compose rule, docs/url-flags.md);
+// on a driver-off build the intent fast-fails (status 3) and the
+// monitor cancels without firing. (?wasmPursuit=on)
+const WASM_PURSUIT = (() => {
+  try {
+    return typeof window !== "undefined" &&
+      readWasmPursuitFlag(window.location.search);
   } catch { return false; }
 })();
 
@@ -275,17 +301,78 @@ export function setupClickPicking({
     } catch (_) {}
   }
 
+  // A14-I2 — effective-on check for the wasm pursuit path: the URL
+  // flag AND every load-bearing export (a stale pkg/ soft-degrades to
+  // the legacy chargeTick/turnToFaceThenAct, F18-2 spirit).
+  function wasmPursuitReady() {
+    return WASM_PURSUIT &&
+      typeof sessionHandle.pursueEntity === "function" &&
+      typeof sessionHandle.turnToEntity === "function" &&
+      typeof sessionHandle.cancelPursuit === "function" &&
+      typeof sessionHandle.pursuitStatus === "function";
+  }
+
   function cancelCharge() {
     if (!charge) return;
     if (charge.rafId) cancelAnimationFrame(charge.rafId);
-    try {
-      sessionHandle.setMovementInput?.(0, 0, 0, false);
-    } catch {}
+    if (charge.wasmPursuit) {
+      // A14-I2 — abort the wasm-side pursuit instead of the legacy
+      // (0,0,0) stomp; a held WASD drive is restored wasm-side.
+      try { sessionHandle.cancelPursuit?.(); } catch {}
+    } else {
+      try {
+        sessionHandle.setMovementInput?.(0, 0, 0, false);
+      } catch {}
+    }
     // Wave 4 / Phase 4.2 — release the windup if the charge is being
     // cancelled (target died mid-pursuit, stance flip, key abort).
     // Otherwise the held arm pose lingers until the next swing fires.
     _releaseLocalWindupHold();
     charge = null;
+  }
+
+  // A14-I2 — flag-on replacement for the steering chargeTick: the wasm
+  // driver steers; JS only polls `pursuitStatus()` through the pure
+  // monitor (scene3d/pursuit_monitor.js). NO `setMovementInput` calls
+  // anywhere on this path. Arrival handler order is IDENTICAL to the
+  // legacy in-range branch: `_releaseLocalWindupHold()` then
+  // `charge.fireAttack()` then clear — `fireAttack`/`fireOnce` are
+  // untouched, so the F6-6 live lockout read happens inside `fireOnce`
+  // at execution time exactly as today.
+  function pursuitMonitorTick() {
+    if (!charge || !charge.monitor) return;
+    let statusRaw = 0;
+    try { statusRaw = sessionHandle.pursuitStatus() >>> 0; } catch {}
+    const result = charge.monitor({
+      statusRaw,
+      elapsedMs: performance.now() - charge.startMs,
+      inCombatStance: !!(isInMeleeStance?.() || isInRangedStance?.()),
+    });
+    if (result.action === "arrive") {
+      _releaseLocalWindupHold();
+      try { charge.fireAttack(); } catch (e) {
+        console.warn(`[picking] charge attack fire failed: ${e?.message ?? e}`);
+      }
+      charge = null;
+      return;
+    }
+    if (result.action === "cancel") {
+      if (result.reason === "timeout") {
+        console.warn("[picking] wasm pursuit timed out");
+      } else if (result.reason === "failed") {
+        console.warn(
+          `[picking] wasm pursuit failed (werror=0x${(result.werror ?? 0).toString(16)})`,
+        );
+      }
+      // For "failed" the wasm side already ended the pursuit; the
+      // cancelPursuit inside cancelCharge is then a harmless no-op
+      // (CancelMoveTo acts only while a movement is active).
+      cancelCharge();
+      return;
+    }
+    if (result.action === "continue") {
+      charge.rafId = requestAnimationFrame(pursuitMonitorTick);
+    }
   }
 
   function chargeTick() {
@@ -384,7 +471,45 @@ export function setupClickPicking({
   // No-ops to an immediate `act()` when `enabled` is false, the
   // target/pose is unresolvable, or we're already on-bearing.
   function turnToFaceThenAct(targetGuid, act, enabled) {
-    if (!enabled || typeof sessionHandle.setMovementInput !== "function") {
+    if (!enabled) {
+      act();
+      return;
+    }
+    // A14-I2 — wasm-side rate-limited TurnToObject (retail case 8)
+    // instead of the JS bang-bang ±1 turn. Monitor-only: status 2/3
+    // OR the legacy FACE_TURN_TIMEOUT_MS (timeout also cancels the
+    // still-running turn) → act(). An unresolvable target fails
+    // wasm-side (status 3 next poll — retail CancelMoveTo on missing
+    // object), which maps to the same act-anyway fallback as legacy.
+    if (wasmPursuitReady()) {
+      try {
+        sessionHandle.turnToEntity(targetGuid >>> 0);
+      } catch {
+        act();
+        return;
+      }
+      const monitor = createTurnMonitor({ timeoutMs: FACE_TURN_TIMEOUT_MS });
+      const startMs = performance.now();
+      const poll = () => {
+        let statusRaw = 0;
+        try { statusRaw = sessionHandle.pursuitStatus() >>> 0; } catch {}
+        const result = monitor({
+          statusRaw,
+          elapsedMs: performance.now() - startMs,
+        });
+        if (result.action === "act") {
+          if (result.cancel) {
+            try { sessionHandle.cancelPursuit?.(); } catch {}
+          }
+          act();
+          return;
+        }
+        if (result.action === "continue") requestAnimationFrame(poll);
+      };
+      poll();
+      return;
+    }
+    if (typeof sessionHandle.setMovementInput !== "function") {
       act();
       return;
     }
@@ -436,6 +561,7 @@ export function setupClickPicking({
    */
   function startCharge(guid, range, fireAttack, motionForWindup, cylinderReach) {
     cancelCharge();
+    const useWasmPursuit = wasmPursuitReady();
     charge = {
       guid: guid >>> 0,
       range,
@@ -447,6 +573,11 @@ export function setupClickPicking({
       // that started it (else it would over- or under-shoot the stop).
       // Missile charges leave it false → flat horizontal as before.
       cylinderReach: !!cylinderReach,
+      // A14-I2 — wasm-steered pursuit: monitor only, no JS steering.
+      wasmPursuit: useWasmPursuit,
+      monitor: useWasmPursuit
+        ? createPursuitMonitor({ maxDurationMs: MAX_CHARGE_DURATION_MS })
+        : null,
     };
     try {
       const em = liveScene3d?.entityManager;
@@ -458,6 +589,29 @@ export function setupClickPicking({
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[picking] charge windup setSwingMotion failed:", e);
+    }
+    if (useWasmPursuit) {
+      // A14-I2 — hand the steering to the wasm MoveTo driver: range
+      // rides retail's native object_radius arg, the F6-5 vertical
+      // reach rides object_height (0 for the flat metric), run=true
+      // matches today's charge gait. Arrival authority is the wasm
+      // status, not the JS distance math.
+      try {
+        sessionHandle.pursueEntity(
+          charge.guid,
+          range,
+          charge.cylinderReach ? MELEE_VERTICAL_REACH_M : 0,
+          true,
+        );
+      } catch (e) {
+        console.warn("[picking] pursueEntity failed — falling back to legacy charge:", e);
+        charge.wasmPursuit = false;
+        charge.monitor = null;
+        chargeTick();
+        return;
+      }
+      pursuitMonitorTick();
+      return;
     }
     chargeTick();
   }

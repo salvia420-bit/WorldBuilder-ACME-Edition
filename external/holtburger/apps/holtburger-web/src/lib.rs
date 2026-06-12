@@ -17517,6 +17517,33 @@ enum SessionCommand {
     /// A14-I4 — drop a held parity charge without jumping (blur; retail
     /// `ACCmdInterp::FinishJump`, acclient.c:435853-435863).
     JumpChargeAbort,
+    /// A14-I2 (W3+ S10, `?wasmPursuit=on`) — pursue an entity to
+    /// melee/missile range through the wasm MoveTo driver instead of
+    /// the legacy JS fake-WASD `chargeTick` (retail
+    /// `MovementTypes::MoveToObject = 0x6` via
+    /// `MoveToManager::PerformMovement`, acclient.c:346123-346145).
+    /// `object_radius`/`object_height` carry the F6-5 cylinder stop
+    /// semantics (JS passes the charge stop range + vertical reach);
+    /// `run` forces the Run hold key (today's charge gait). The recv
+    /// arm enqueues `PlayerDriveIntent::PursueObject`; steering needs
+    /// a `USE_MOVETO_DRIVER` build (compose rule, url-flags.md) —
+    /// without it the intent fast-fails 0x36 and the JS monitor
+    /// cancels.
+    PursueObject {
+        target_guid: u32,
+        object_radius: f32,
+        object_height: f32,
+        run: bool,
+    },
+    /// A14-I2 — rate-limited turn-to-face an entity (retail
+    /// `TurnToObject = 0x8`, acclient.c:346137-346139). NOT a snap.
+    PursuitTurnToObject { target_guid: u32 },
+    /// A14-I2 — rate-limited turn to an absolute heading (RADIANS;
+    /// retail `TurnToHeading = 0x9`, acclient.c:346141-346143).
+    PursuitTurnToHeading { heading: f32 },
+    /// A14-I2 — abort the in-flight pursuit/turn (retail
+    /// `MovementManager::CancelMoveTo(0x36)`, acclient.c:339240-339246).
+    CancelPursuit,
     /// A4-Q2 (2026-06-12, W3+ S5, `?mtQueue=on`) — the renderer reports a
     /// one-shot overlay clip's end (`success=true`) or a cancellation on
     /// eviction/stop of a tagged, not-yet-completed overlay
@@ -23741,6 +23768,18 @@ pub struct SessionHandle {
     /// (30-60 Hz — the bar may quantize; accepted, spec §5 risk 4).
     /// `0.0` whenever no charge is pending.
     local_player_jump_charge_level: std::rc::Rc<std::cell::RefCell<f32>>,
+    /// A14-I2 (W3+ S10, `?wasmPursuit=on`): JS-readable shadow of the
+    /// movement-crate pursuit status (`MovementSystemHandle::
+    /// pursuit_status` — the poll-shaped analog of retail's
+    /// callback-shaped `CleanUpAndCallWeenie`, acclient.c:345171).
+    /// Encoding: low 16 bits = state `0` idle / `1` active / `2`
+    /// arrived / `3` failed; high 16 bits = the WEENIE error on
+    /// failure (0x36/0x3D/0x37/0x38/8). Published by the recv loop
+    /// each TickMovement (both tick paths); completion states LATCH
+    /// in the cell until [`SessionHandle::pursuit_status`] reads them
+    /// (the getter is read-clear for states ≥ 2, so the JS rAF
+    /// monitor can't miss a one-tick completion).
+    local_player_pursuit_status: std::rc::Rc<std::cell::RefCell<u32>>,
     /// PR-SS 2026-05-23: timestamp of the most-recent
     /// `SessionEvent::Message` from the WS transport — the freshest
     /// server packet of any kind. JS polls `sessionLastRecvAgeMs()`
@@ -25861,6 +25900,26 @@ impl SessionHandle {
         *self.local_player_jump_charge_level.borrow()
     }
 
+    /// A14-I2 (W3+ S10, `?wasmPursuit=on`) — synchronous pursuit-status
+    /// poll for the picking.js monitor loop. Encoding (see the shadow
+    /// field doc): low 16 bits = state `0` idle / `1` active / `2`
+    /// arrived / `3` failed; high 16 bits = the WEENIE error on
+    /// failure (0x36 cancelled, 0x3D fail-distance, 0x37/0x38 target
+    /// lost, 8 unresolvable). READ-CLEAR for completion states (low 16
+    /// ≥ 2): the first read consumes the latch so "arrived"/"failed"
+    /// fire the JS arrival/abort handler exactly once. Additive export
+    /// — **rides manifest v4, no bump** (only non-coercion-safe changes
+    /// to existing load-bearing exports bump; F18-2 policy).
+    #[wasm_bindgen(js_name = pursuitStatus)]
+    pub fn pursuit_status(&self) -> u32 {
+        let mut cell = self.local_player_pursuit_status.borrow_mut();
+        let value = *cell;
+        if value & 0xFFFF >= 2 {
+            *cell = 0;
+        }
+        value
+    }
+
     /// **Wave 3.F (physics-replay parity, 2026-05-19).** Pure-prediction
     /// shadow returned to JS validators that need to compare the
     /// rAF integrator's output against the C# `OracleSim` port of
@@ -26789,6 +26848,89 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::JumpChargeAbort)
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("jumpChargeAbort: cmd channel closed ({e})"))
+            })
+    }
+
+    /// A14-I2 (W3+ S10, `?wasmPursuit=on`) — start a wasm-side pursuit
+    /// of `target_guid` (retail `MoveToObject`, acclient.c:346129).
+    /// `radius_m` = the charge stop range (the legacy `charge.range`),
+    /// `height_m` = the F6-5 vertical reach (0 for the flat metric),
+    /// `run` = pursue at run gait. The JS picking.js monitor polls
+    /// [`Self::pursuit_status`] for arrival(2)/failure(3) instead of
+    /// steering via `setMovementInput` — the (0,0,0) charge-end stomp
+    /// sites are bypassed; a held WASD drive is restored wasm-side
+    /// (S10 A.3). Additive export — rides manifest v4, no bump.
+    /// Typeof-guarded JS-side: a stale pkg/ degrades to the legacy
+    /// chargeTick.
+    #[wasm_bindgen(js_name = pursueEntity)]
+    pub fn pursue_entity(
+        &self,
+        target_guid: u32,
+        radius_m: f32,
+        height_m: f32,
+        run: bool,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        if !radius_m.is_finite() || !height_m.is_finite() {
+            return Err(JsValue::from_str("pursueEntity: dims must be finite"));
+        }
+        self.cmd_tx
+            .unbounded_send(SessionCommand::PursueObject {
+                target_guid,
+                object_radius: radius_m,
+                object_height: height_m,
+                run,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("pursueEntity: cmd channel closed ({e})"))
+            })
+    }
+
+    /// A14-I2 — rate-limited turn-to-face `target_guid` (retail
+    /// `TurnToObject`, acclient.c:346137-346139); the missile/cast
+    /// face-target pre-step under `?wasmPursuit=on`. Poll
+    /// [`Self::pursuit_status`] for 2/3. Additive — rides manifest v4.
+    #[wasm_bindgen(js_name = turnToEntity)]
+    pub fn turn_to_entity(&self, target_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::PursuitTurnToObject { target_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("turnToEntity: cmd channel closed ({e})"))
+            })
+    }
+
+    /// A14-I2 — rate-limited turn to an absolute heading in RADIANS
+    /// (retail `TurnToHeading`, acclient.c:346141-346143; degrees
+    /// conversion happens at the core ingest boundary). Additive —
+    /// rides manifest v4.
+    #[wasm_bindgen(js_name = turnToHeading)]
+    pub fn turn_to_heading(&self, heading_rad: f32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        if !heading_rad.is_finite() {
+            return Err(JsValue::from_str("turnToHeading: heading must be finite"));
+        }
+        self.cmd_tx
+            .unbounded_send(SessionCommand::PursuitTurnToHeading {
+                heading: heading_rad,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("turnToHeading: cmd channel closed ({e})"))
+            })
+    }
+
+    /// A14-I2 — abort the in-flight pursuit/turn (retail
+    /// `CancelMoveTo(0x36)`); the `?wasmPursuit=on` replacement for the
+    /// legacy `setMovementInput(0,0,0,false)` charge-abort stomp. A
+    /// held WASD drive is restored wasm-side. Additive — rides
+    /// manifest v4.
+    #[wasm_bindgen(js_name = cancelPursuit)]
+    pub fn cancel_pursuit(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::CancelPursuit)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("cancelPursuit: cmd channel closed ({e})"))
             })
     }
 
@@ -28888,6 +29030,13 @@ pub async fn start_session(
     // `SessionHandle::jump_charge_level` under `?jumpParity=on`.
     let local_player_jump_charge_level: std::rc::Rc<std::cell::RefCell<f32>> =
         std::rc::Rc::new(std::cell::RefCell::new(0.0));
+    // A14-I2 (W3+ S10): shared u32 shadow of the pursuit status
+    // (low 16 = state 0/1/2/3, high 16 = WEENIE error on failure),
+    // refreshed each TickMovement beside the jump shadows. JS monitor
+    // reads via `SessionHandle::pursuit_status` (read-clear for
+    // completion states) under `?wasmPursuit=on`.
+    let local_player_pursuit_status: std::rc::Rc<std::cell::RefCell<u32>> =
+        std::rc::Rc::new(std::cell::RefCell::new(0));
     // PR-SS 2026-05-23: timestamp of last server packet. Recv loop
     // writes on every SessionEvent::Message; JS-side link-status
     // indicator polls `sessionLastRecvAgeMs()` to tint the icon.
@@ -28954,6 +29103,7 @@ pub async fn start_session(
         let local_player_pose = local_player_pose.clone();
         let local_player_can_jump_inner = local_player_can_jump.clone();
         let local_player_jump_charge_level_inner = local_player_jump_charge_level.clone();
+        let local_player_pursuit_status_inner = local_player_pursuit_status.clone();
         let last_recv_instant_inner = last_recv_instant.clone();
         let last_ping_rtt_ms_inner = last_ping_rtt_ms.clone();
         let collision_scene_inner = collision_scene.clone();
@@ -29000,6 +29150,7 @@ pub async fn start_session(
                 local_player_pose,
                 local_player_can_jump_inner,
                 local_player_jump_charge_level_inner,
+                local_player_pursuit_status_inner,
                 last_recv_instant_inner,
                 last_ping_rtt_ms_inner,
                 collision_scene_inner,
@@ -29101,6 +29252,7 @@ pub async fn start_session(
         local_player_pose,
         local_player_can_jump,
         local_player_jump_charge_level,
+        local_player_pursuit_status,
         last_recv_instant,
         last_ping_rtt_ms,
         last_client_prediction,
@@ -30906,6 +31058,8 @@ async fn recv_loop(
     local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
     local_player_can_jump: std::rc::Rc<std::cell::RefCell<bool>>,
     local_player_jump_charge_level: std::rc::Rc<std::cell::RefCell<f32>>,
+    // A14-I2 (W3+ S10): pursuit-status shadow (see SessionHandle field).
+    local_player_pursuit_status: std::rc::Rc<std::cell::RefCell<u32>>,
     last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>>,
     last_ping_rtt_ms: std::rc::Rc<std::cell::RefCell<Option<u32>>>,
     collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
@@ -39511,6 +39665,84 @@ async fn recv_loop(
                             movement.jump_charge_abort(w);
                         }
                     }
+                    Some(SessionCommand::PursueObject {
+                        target_guid,
+                        object_radius,
+                        object_height,
+                        run,
+                    }) => {
+                        // A14-I2 (W3+ S10, ?wasmPursuit=on) — input-lane
+                        // MoveToObject entry (retail PerformMovement case
+                        // 6, acclient.c:346129-346131). Same WorldState /
+                        // player-seeded guards as SetMovementInput; the
+                        // intent is applied (and the manager preamble
+                        // CancelMoveTo(0x36) runs) on the next
+                        // TickMovement.
+                        if world.is_none() || !entity_seeded {
+                            console_log_str(
+                                "[wasmPursuit] PursueObject before player seeded — dropping",
+                            );
+                            continue;
+                        }
+                        movement.enqueue_drive_intent(
+                            holtburger_core::client::movement_types::PlayerDriveIntent::PursueObject {
+                                target: holtburger_common::Guid(target_guid),
+                                object_radius,
+                                object_height,
+                                run,
+                            },
+                            web_time::Instant::now(),
+                        );
+                        // Optimistic ACTIVE so a JS poll between this arm
+                        // and the next tick's publish can't read a stale
+                        // completion from a previous pursuit.
+                        *local_player_pursuit_status.borrow_mut() = 1;
+                    }
+                    Some(SessionCommand::PursuitTurnToObject { target_guid }) => {
+                        // A14-I2 — TurnToObject (retail case 8,
+                        // acclient.c:346137-346139).
+                        if world.is_none() || !entity_seeded {
+                            console_log_str(
+                                "[wasmPursuit] TurnToObject before player seeded — dropping",
+                            );
+                            continue;
+                        }
+                        movement.enqueue_drive_intent(
+                            holtburger_core::client::movement_types::PlayerDriveIntent::TurnToObject {
+                                target: holtburger_common::Guid(target_guid),
+                            },
+                            web_time::Instant::now(),
+                        );
+                        *local_player_pursuit_status.borrow_mut() = 1;
+                    }
+                    Some(SessionCommand::PursuitTurnToHeading { heading }) => {
+                        // A14-I2 — TurnToHeading (retail case 9,
+                        // acclient.c:346141-346143). RADIANS here;
+                        // degrees at the core ingest boundary.
+                        if world.is_none() || !entity_seeded {
+                            console_log_str(
+                                "[wasmPursuit] TurnToHeading before player seeded — dropping",
+                            );
+                            continue;
+                        }
+                        movement.enqueue_drive_intent(
+                            holtburger_core::client::movement_types::PlayerDriveIntent::TurnToHeading {
+                                heading,
+                            },
+                            web_time::Instant::now(),
+                        );
+                        *local_player_pursuit_status.borrow_mut() = 1;
+                    }
+                    Some(SessionCommand::CancelPursuit) => {
+                        // A14-I2 — abort (retail CancelMoveTo(0x36)).
+                        // The failure latch (3 | 0x36<<16) publishes on
+                        // the next tick; the JS caller initiated the
+                        // cancel and stops polling regardless.
+                        movement.enqueue_drive_intent(
+                            holtburger_core::client::movement_types::PlayerDriveIntent::CancelPursuit,
+                            web_time::Instant::now(),
+                        );
+                    }
                     Some(SessionCommand::AnimationDone { guid, success }) => {
                         // A4-Q2 (W3+ S5) — renderer overlay-completion
                         // signal → the LOCAL player's MotionTableManager
@@ -40348,6 +40580,27 @@ async fn recv_loop(
                                     // sites runs per tick).
                                     *local_player_jump_charge_level.borrow_mut() =
                                         movement.jump_charge_level(now, w);
+                                }
+                                // A14-I2 (W3+ S10): publish the pursuit
+                                // status shadow — UNCONDITIONAL per tick
+                                // (both tick paths, either pose-publish
+                                // site). ACTIVE(1) overwrites; a fresh
+                                // completion (low 16 ≥ 2, consumed from
+                                // the read-clear core latch) LATCHES in
+                                // the cell until the JS getter reads it;
+                                // idle only clears a stale ACTIVE so an
+                                // unread completion survives slow rAF
+                                // polls. Cheap no-op (one HashMap probe)
+                                // without a pursuit.
+                                {
+                                    let status = movement.pursuit_status(w);
+                                    let mut cell =
+                                        local_player_pursuit_status.borrow_mut();
+                                    if status != 0 {
+                                        *cell = status;
+                                    } else if *cell == 1 {
+                                        *cell = 0;
+                                    }
                                 }
                                 // A2-P2 (2026-06-12, W3+ S8): publish the
                                 // remote poses the spine's manager step

@@ -14,7 +14,8 @@ use super::motion_interp::{
 };
 use super::motion_table_manager::{MotionTableEvent, MotionTableManager};
 use super::move_to::{MoveToSteer, MoveToView, USE_MOVETO_DRIVER};
-use super::movement_manager::{MovementManager, USE_UNPACK_MOVEMENT_SEMANTICS};
+use super::movement_manager::{MovementManager, MovementStruct, USE_UNPACK_MOVEMENT_SEMANTICS};
+use super::params::MovementParameters;
 use crate::client::movement_types::{
     AutonomousDriveIntent, ForwardLocomotion, MotionState, MotionStyle, MovementPacketMetadata,
     PlayerDriveIntent, Turn,
@@ -977,6 +978,30 @@ pub(crate) struct MovementSystem {
     /// world/guid access there), consumed by the
     /// [`USE_MOVETO_DRIVER`] shim. Inert without an active directive.
     manual_moveto_cancel_pending: bool,
+    /// A14-I2 (W3+ S10, `?wasmPursuit=on`) — the last `ManualSet`
+    /// motion state ingested, recorded UNGATED (pure bookkeeping, zero
+    /// behavior change without pursuit intents). Restored as the
+    /// active manual drive when a pursuit ends — the charge-end
+    /// WASD-stomp fix: retail keeps manual movement and MoveTo on
+    /// separate manager-arbitrated channels
+    /// (`MoveToManager::PerformMovement` acclient.c:346123 /
+    /// `MovementManager::CancelMoveTo` on raw input acclient.c:339240),
+    /// so a held W survives a MoveTo's end; our legacy JS fake-WASD
+    /// path zeroed it instead.
+    last_manual_drive: Option<MotionState>,
+    /// A14-I2 — pursuit entry commands queued by
+    /// [`Self::ingest_drive_command`] (no world access there) and
+    /// applied by [`Self::apply_pending_pursuit_commands`] inside
+    /// `tick` (which has the world + the `MovementManager` registry).
+    /// Order-preserving within a tick.
+    pending_pursuit_commands: Vec<PendingPursuitCommand>,
+    /// A14-I2 — true while a LOCAL pursuit installed through the S10
+    /// input lane is steering. Used by the `ManualSet` ingest arm so
+    /// an IDLE manual set (all keys released) is recorded but does NOT
+    /// stomp the steering drive (retail: releasing keys does not abort
+    /// a MoveTo — it runs until `CleanUpAndCallWeenie`,
+    /// acclient.c:345171). Cleared on every pursuit end path.
+    local_pursuit_engaged: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -995,6 +1020,45 @@ enum QueuedDriveCommand {
         heading: f32,
     },
     Stop,
+    /// A14-I2 mirror of [`PlayerDriveIntent::PursueObject`].
+    Pursue {
+        target: Guid,
+        object_radius: f32,
+        object_height: f32,
+        run: bool,
+    },
+    /// A14-I2 mirror of [`PlayerDriveIntent::TurnToObject`].
+    PursuitTurnToObject { target: Guid },
+    /// A14-I2 mirror of [`PlayerDriveIntent::TurnToHeading`]
+    /// (`heading` still RADIANS here; degrees conversion at apply).
+    PursuitTurnToHeading { heading: f32 },
+    /// A14-I2 mirror of [`PlayerDriveIntent::CancelPursuit`].
+    CancelPursuit,
+}
+
+/// A14-I2 (W3+ S10) — a pursuit entry queued at ingest (no world
+/// access) and applied through the `MovementManager` facade in `tick`
+/// (`MoveToManager::PerformMovement` analog, acclient.c:346123-346145).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PendingPursuitCommand {
+    Pursue {
+        target: Guid,
+        object_radius: f32,
+        object_height: f32,
+        run: bool,
+    },
+    TurnToObject {
+        target: Guid,
+    },
+    TurnToHeading {
+        heading_rad: f32,
+    },
+    /// `restore_manual`: a JS `CancelPursuit` restores the held manual
+    /// drive (the stomp fix applies to aborts too); an explicit `Stop`
+    /// does not (the player asked for an all-stop).
+    Cancel {
+        restore_manual: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1075,6 +1139,9 @@ impl MovementSystem {
             jump_charge: JumpChargeClock::new(),
             sticky_timeout_pending: std::cell::Cell::new(false),
             manual_moveto_cancel_pending: false,
+            last_manual_drive: None,
+            pending_pursuit_commands: Vec::new(),
+            local_pursuit_engaged: false,
         }
     }
 
@@ -1303,6 +1370,24 @@ impl MovementSystem {
             PlayerDriveIntent::ArriveAtPose { pose } => QueuedDriveCommand::ArriveAtPose { pose },
             PlayerDriveIntent::SnapFacing { heading } => QueuedDriveCommand::SnapFacing { heading },
             PlayerDriveIntent::Stop => QueuedDriveCommand::Stop,
+            PlayerDriveIntent::PursueObject {
+                target,
+                object_radius,
+                object_height,
+                run,
+            } => QueuedDriveCommand::Pursue {
+                target,
+                object_radius,
+                object_height,
+                run,
+            },
+            PlayerDriveIntent::TurnToObject { target } => {
+                QueuedDriveCommand::PursuitTurnToObject { target }
+            }
+            PlayerDriveIntent::TurnToHeading { heading } => {
+                QueuedDriveCommand::PursuitTurnToHeading { heading }
+            }
+            PlayerDriveIntent::CancelPursuit => QueuedDriveCommand::CancelPursuit,
         };
 
         self.queued_drive_commands.push(command);
@@ -1323,14 +1408,25 @@ impl MovementSystem {
     fn ingest_drive_command(&mut self, command: QueuedDriveCommand, now: Instant) {
         match command {
             QueuedDriveCommand::ManualSet(state) => {
+                // A14-I2 (S10 A.3) — record EVERY manual set for the
+                // pursuit-end restore. Pure bookkeeping, ungated.
+                self.last_manual_drive = Some(state);
+                let non_idle = !(state.is_locomotion_idle() && state.turning.is_none());
                 // A3-D3 driver M4.5 — non-idle manual input cancels an
                 // active MoveTo (retail apply_raw_movement →
                 // cancel_moveto(0x36), acclient.c:317421-317427 →
                 // :339240-339246). Flag-consumed by the gated shim.
-                if USE_MOVETO_DRIVER && !(state.is_locomotion_idle() && state.turning.is_none()) {
+                if USE_MOVETO_DRIVER && non_idle {
                     self.manual_moveto_cancel_pending = true;
                 }
-                self.active_drive = Some(ActiveDriveState::manual(state, None));
+                // A14-I2 — while an S10 pursuit steers, an IDLE manual
+                // set (all keys released) is recorded but does NOT
+                // stomp the steering drive (retail: key release does
+                // not abort a MoveTo, acclient.c:345171 CleanUp-only
+                // end). Non-idle still takes over (cancel above).
+                if !(self.local_pursuit_engaged && !non_idle) {
+                    self.active_drive = Some(ActiveDriveState::manual(state, None));
+                }
             }
             QueuedDriveCommand::ManualPulse { state, duration } => {
                 self.active_drive = Some(ActiveDriveState::manual(state, Some(now + duration)));
@@ -1352,6 +1448,45 @@ impl MovementSystem {
                 self.pending_arrival_pose = None;
                 self.pending_snap_facing = None;
                 self.active_drive = None;
+                // A14-I2 — an explicit Stop also cancels any S10
+                // pursuit (retail StopCompletely runs through
+                // cancel_moveto, acclient.c:343611). No manual restore
+                // — the caller asked for an all-stop.
+                self.last_manual_drive = None;
+                self.pending_pursuit_commands
+                    .push(PendingPursuitCommand::Cancel {
+                        restore_manual: false,
+                    });
+            }
+            QueuedDriveCommand::Pursue {
+                target,
+                object_radius,
+                object_height,
+                run,
+            } => {
+                self.pending_pursuit_commands
+                    .push(PendingPursuitCommand::Pursue {
+                        target,
+                        object_radius,
+                        object_height,
+                        run,
+                    });
+            }
+            QueuedDriveCommand::PursuitTurnToObject { target } => {
+                self.pending_pursuit_commands
+                    .push(PendingPursuitCommand::TurnToObject { target });
+            }
+            QueuedDriveCommand::PursuitTurnToHeading { heading } => {
+                self.pending_pursuit_commands
+                    .push(PendingPursuitCommand::TurnToHeading {
+                        heading_rad: heading,
+                    });
+            }
+            QueuedDriveCommand::CancelPursuit => {
+                self.pending_pursuit_commands
+                    .push(PendingPursuitCommand::Cancel {
+                        restore_manual: true,
+                    });
             }
         }
     }
@@ -1538,11 +1673,20 @@ impl MovementSystem {
         // same tick through the EXISTING autonomous-drive lane
         // (`execute_autonomous_drive_intent` — zero new send sites,
         // the A13 boundary; expiry per tick matches the re-supply).
-        let moveto_stop_requested = if USE_MOVETO_DRIVER {
+        // A14-I2 (W3+ S10, `?wasmPursuit=on`) — apply queued pursuit /
+        // turn-to entries through the `MovementManager` facade BEFORE
+        // the driver pump (the `MoveToManager::PerformMovement` analog,
+        // acclient.c:346123-346145). Without the driver const the
+        // entries fast-fail 0x36 (compose rule, url-flags.md): the
+        // input lane needs `USE_MOVETO_DRIVER` to steer.
+        let pursuit_stop_requested =
+            self.apply_pending_pursuit_commands_inner(world, USE_MOVETO_DRIVER);
+
+        let moveto_stop_requested = (if USE_MOVETO_DRIVER {
             self.drive_local_moveto(now, world)
         } else {
             false
-        };
+        }) || pursuit_stop_requested;
 
         let mut events = Vec::new();
         if let Some(pose) = self.pending_arrival_pose.take() {
@@ -1624,6 +1768,204 @@ impl MovementSystem {
         Ok(events)
     }
 
+    /// A14-I2 (W3+ S10) — apply the tick's queued pursuit commands
+    /// through the `MovementManager` facade: the
+    /// `MoveToManager::PerformMovement` analog for the input lane
+    /// (acclient.c:346123-346145 — preamble `CancelMoveTo(0x36)` rides
+    /// `MovementManager::perform_movement`). Returns `true` when a
+    /// cancel left no replacement steering and owes the stop edge.
+    ///
+    /// `driver_enabled` carries [`USE_MOVETO_DRIVER`] (the `_ungated`
+    /// house test seam passes `true`): without the driver the entries
+    /// install-then-fast-fail 0x36 so the JS monitor cancels promptly
+    /// instead of spinning to its wall-clock timeout (compose rule —
+    /// `?wasmPursuit` requires a `USE_MOVETO_DRIVER` build to steer;
+    /// documented in url-flags.md).
+    fn apply_pending_pursuit_commands_inner(
+        &mut self,
+        world: &mut WorldState,
+        driver_enabled: bool,
+    ) -> bool {
+        use holtburger_protocol::messages::movement::messages::motion::Origin;
+
+        if self.pending_pursuit_commands.is_empty() {
+            return false;
+        }
+        let commands = std::mem::take(&mut self.pending_pursuit_commands);
+        let guid = world.player.guid;
+        if guid == Guid::NULL {
+            return false;
+        }
+        let on_contact = !world.player.is_airborne;
+        let mut stop_requested = false;
+        for command in commands {
+            let mut effects = MotionSideEffects::default();
+            match command {
+                PendingPursuitCommand::Cancel { restore_manual } => {
+                    let Some(manager) = self.movement_managers.get_mut(&guid) else {
+                        continue;
+                    };
+                    let was_active = manager.is_moveto_active();
+                    let out = manager.cancel_moveto_with_effects(0x36, on_contact, &mut effects);
+                    self.local_pursuit_engaged = false;
+                    if was_active {
+                        if restore_manual {
+                            stop_requested |=
+                                self.finish_pursuit_with_manual_restore(out.stop_completely);
+                        } else {
+                            stop_requested |= out.stop_completely;
+                        }
+                    }
+                }
+                entry => {
+                    // A14-I2 arbitration: installing a pursuit takes the
+                    // wire over from a HELD manual drive (it stays
+                    // recorded in `last_manual_drive` for the
+                    // pursuit-end restore). A non-idle ManualSet that
+                    // arrived the SAME tick wins instead (retail raw
+                    // input cancels MoveTo, acclient.c:339240) — the
+                    // gated shim consumes `manual_moveto_cancel_pending`
+                    // right after this and cancels the fresh install.
+                    if driver_enabled
+                        && !self.manual_moveto_cancel_pending
+                        && matches!(
+                            self.active_drive,
+                            Some(ActiveDriveState {
+                                intent: ActiveDriveIntent::Manual(_),
+                                ..
+                            })
+                        )
+                    {
+                        self.active_drive = None;
+                    }
+                    // Target origin: resolved entity pose when known;
+                    // `target_exists` stays TRUE either way — a missing
+                    // target deliberately resolves through the driver's
+                    // per-tick lookup → `cancel_moveto(0x37)` next frame
+                    // (acclient.c:346086; the spec-C "let the wasm side
+                    // fail it" path), never the case-6 LABEL_15
+                    // walk-to-stale-origin fallback.
+                    let target_guid = match entry {
+                        PendingPursuitCommand::Pursue { target, .. }
+                        | PendingPursuitCommand::TurnToObject { target } => Some(target),
+                        _ => None,
+                    };
+                    let origin = target_guid
+                        .and_then(|t| world.entities.get(t))
+                        .map(|entity| Origin {
+                            cell_id: entity.position.landblock_id,
+                            position: entity.position.coords,
+                        })
+                        .unwrap_or(Origin {
+                            cell_id: Guid(0),
+                            position: holtburger_common::math::Vector3::new(0.0, 0.0, 0.0),
+                        });
+                    let mvs = match entry {
+                        PendingPursuitCommand::Pursue {
+                            target,
+                            object_radius,
+                            object_height,
+                            run,
+                        } => {
+                            let mut params = MovementParameters::default();
+                            if run {
+                                // ForceRun (`bitfield |= 0x10` →
+                                // hold_key Run in get_command,
+                                // acclient.c:346213-346215) — today's
+                                // `run=true` charge behavior exactly.
+                                params.bitfield |= 0x10;
+                            }
+                            MovementStruct::MoveToObject {
+                                target,
+                                target_exists: true,
+                                origin,
+                                object_radius,
+                                object_height,
+                                params,
+                            }
+                        }
+                        PendingPursuitCommand::TurnToObject { target } => {
+                            MovementStruct::TurnToObject {
+                                target,
+                                target_exists: true,
+                                params: MovementParameters::default(),
+                            }
+                        }
+                        PendingPursuitCommand::TurnToHeading { heading_rad } => {
+                            let mut params = MovementParameters::default();
+                            // RADIANS (pose domain) → the retail
+                            // degrees domain, [0, 360).
+                            params.desired_heading =
+                                heading_rad.to_degrees().rem_euclid(360.0);
+                            MovementStruct::TurnToHeading { params }
+                        }
+                        PendingPursuitCommand::Cancel { .. } => unreachable!("handled above"),
+                    };
+                    let manager = self.movement_managers.entry(guid).or_default();
+                    let _ = manager.perform_movement(&mvs, on_contact, None, &mut effects);
+                    // Drop the preamble/stale completion latch — a
+                    // replaced directive's 0x36 (or an unread prior
+                    // arrival) must not read as THIS pursuit's result
+                    // (S10 A.4 "latch until the next pursuit starts").
+                    let _ = manager.take_moveto_completion();
+                    if driver_enabled {
+                        self.local_pursuit_engaged = true;
+                    } else {
+                        // Compose fast-fail: no driver, nothing will
+                        // ever steer this directive — latch 0x36 now.
+                        let _ =
+                            manager.cancel_moveto_with_effects(0x36, on_contact, &mut effects);
+                        self.local_pursuit_engaged = false;
+                    }
+                }
+            }
+        }
+        stop_requested
+    }
+
+    /// A14-I2 test seam (`_ungated` house pattern) — apply pursuit
+    /// commands as if [`USE_MOVETO_DRIVER`] were on.
+    #[cfg(test)]
+    pub(crate) fn apply_pending_pursuit_commands_ungated(
+        &mut self,
+        world: &mut WorldState,
+    ) -> bool {
+        self.apply_pending_pursuit_commands_inner(world, true)
+    }
+
+    /// A14-I2 (S10 A.3) — THE stomp fix: when a pursuit ends (arrival,
+    /// failure, or JS abort), re-install the last recorded manual
+    /// drive if it is non-idle (retail parity: manual movement and
+    /// MoveTo are separate channels — a held W survives a MoveTo's
+    /// end, acclient.c:346123/:339240 arbitration); otherwise the
+    /// caller owes the existing stop edge (`execute_stop_at` — ACE
+    /// must still see the stop, DESIGN.md wire invariants). Returns
+    /// the stop-edge request.
+    fn finish_pursuit_with_manual_restore(&mut self, stop_completely: bool) -> bool {
+        self.local_pursuit_engaged = false;
+        if let Some(state) = self.last_manual_drive
+            && !(state.is_locomotion_idle() && state.turning.is_none())
+        {
+            self.active_drive = Some(ActiveDriveState::manual(state, None));
+            false
+        } else {
+            // Drop any lingering steering intent so the post-drive
+            // execution can't re-emit one frame of autonomous steer
+            // toward a finished pursuit (per-tick expiry would clear
+            // it next tick anyway — this is the same-tick belt).
+            if matches!(
+                self.active_drive,
+                Some(ActiveDriveState {
+                    intent: ActiveDriveIntent::Autonomous(_),
+                    ..
+                })
+            ) {
+                self.active_drive = None;
+            }
+            stop_completely
+        }
+    }
+
     /// A3-D3 driver (M4.1/M4.2) — one MoveTo driver frame for the
     /// LOCAL player. Returns `true` when a stop edge is owed this tick
     /// (arrival / cancel with no replacement steering). Only reachable
@@ -1650,9 +1992,11 @@ impl MovementSystem {
         }
         let manual_cancel = std::mem::take(&mut self.manual_moveto_cancel_pending);
         let Some(manager) = self.movement_managers.get_mut(&guid) else {
+            self.local_pursuit_engaged = false;
             return false;
         };
         if !manager.is_moveto_active() {
+            self.local_pursuit_engaged = false;
             return false;
         }
         let on_contact = !world.player.is_airborne;
@@ -1668,6 +2012,7 @@ impl MovementSystem {
         );
         if manual_cancel || manual_active {
             let _ = manager.cancel_moveto_with_effects(0x36, on_contact, &mut effects);
+            self.local_pursuit_engaged = false;
             return false;
         }
 
@@ -1683,7 +2028,9 @@ impl MovementSystem {
                 Some(entity) => Some(entity.position),
                 None => {
                     let out = manager.cancel_moveto_with_effects(0x37, on_contact, &mut effects);
-                    return out.stop_completely;
+                    // A14-I2 (S10 A.3) — target loss ends the pursuit:
+                    // restore a held manual drive, else owe the stop.
+                    return self.finish_pursuit_with_manual_restore(out.stop_completely);
                 }
             },
             None => None,
@@ -1700,6 +2047,11 @@ impl MovementSystem {
             now,
         };
         let out = manager.use_time_moveto(&view, &mut effects);
+        // A14-I2 — directive ended THIS frame (arrival Some(0) or a
+        // driver-side failure latch): the restore arbitration below
+        // keys off this, NOT off `out.completion` (which mirrors a
+        // possibly-stale unread latch).
+        let pursuit_ended = !manager.is_moveto_active();
 
         // Output translation (spec M4.2) — every edge rides an EXISTING
         // path; the driver never writes a position and never sends.
@@ -1766,7 +2118,16 @@ impl MovementSystem {
                 }));
                 false
             }
-            None => out.stop_completely,
+            None => {
+                if pursuit_ended {
+                    // A14-I2 (S10 A.3) — THE stomp fix: a held W
+                    // survives the pursuit's end (restore), else the
+                    // arrival/cancel stop edge rides as landed.
+                    self.finish_pursuit_with_manual_restore(out.stop_completely)
+                } else {
+                    out.stop_completely
+                }
+            }
         }
     }
 
@@ -1784,6 +2145,26 @@ impl MovementSystem {
         self.movement_managers
             .get_mut(&guid)
             .and_then(|manager| manager.take_moveto_completion())
+    }
+
+    /// A14-I2 (S10 A.4) — the poll-shaped pursuit status the wasm
+    /// `pursuitStatus()` export publishes (retail is callback-shaped —
+    /// `CleanUpAndCallWeenie`, acclient.c:345171 — the poll getter is
+    /// the bridge-pattern analog, S10 §6.5). Encoding (low 16 bits =
+    /// state, high 16 = WEENIE error on failure):
+    /// - `0` idle (no pursuit, no unread completion);
+    /// - `1` active;
+    /// - `2` arrived (completion `Some(0)` — READ-CLEAR);
+    /// - `3 | (err << 16)` failed (0x36/0x3D/0x37/0x38/8 — READ-CLEAR).
+    pub(crate) fn pursuit_status(&mut self, guid: Guid) -> u32 {
+        if self.moveto_is_active(guid) {
+            return 1;
+        }
+        match self.take_moveto_completion(guid) {
+            Some(0) => 2,
+            Some(err) => 3 | (err << 16),
+            None => 0,
+        }
     }
 
     pub(crate) fn current_local_drive_control(

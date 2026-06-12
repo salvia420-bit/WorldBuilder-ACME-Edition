@@ -200,6 +200,16 @@ impl MovementSystemHandle {
         self.inner.take_moveto_completion(world.player.guid)
     }
 
+    /// A14-I2 (W3+ S10, `?wasmPursuit=on`) — the poll-shaped pursuit
+    /// status for the wasm `pursuitStatus()` export: `0` idle / `1`
+    /// active / `2` arrived / `3 | (werror << 16)` failed. The 2/3
+    /// states CONSUME the read-clear completion latch — the recv
+    /// loop's per-tick shadow publisher is the single consumer (don't
+    /// also call [`Self::take_moveto_completion`] on the same build).
+    pub fn pursuit_status(&mut self, world: &WorldState) -> u32 {
+        self.inner.pursuit_status(world.player.guid)
+    }
+
     /// A6-T1/T2 (2026-06-12, W3+ S7): install the `?unifiedTransition=on`
     /// runtime carrier. The wasm recv-loop init calls this once after
     /// parsing the URL flag; when on (or when the native
