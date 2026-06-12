@@ -8618,6 +8618,34 @@ void main() {
                 .get("longJump")?.toLowerCase() === "on";
             } catch (_) { return false; }
           })();
+          // A14-I4 (W3+ S11, 2026-06-12) — `?jumpParity=on`: the retail jump
+          // charge clock moves wasm-side (movement-crate `JumpChargeClock`,
+          // retail ClientCombatSystem jump_pending/buildStartTime,
+          // acclient.c:407902-407916) and the Jump pack joins the A13
+          // single-builder/single-send boundary. Under the flag: keydown →
+          // jumpChargeCommence() (no `__jumpKeydownTs` stamp; the standstill
+          // long-jump root is decided wasm-side from the active manual
+          // drive, so `?longJump` behavior is implied), bar reads
+          // jumpChargeLevel() (incl. the retail 0.8 s stance divisor),
+          // keyup → jumpChargeRelease() (extent = wasm clock, never
+          // handle.jump(power)), blur → jumpChargeAbort(), refusals print
+          // retail-style chat text via the kind=56 event (silent-drop class
+          // gone). Default OFF (pending 1070 eye-test) — the legacy JS
+          // clock/curve/send path below stays byte-identical.
+          const JUMP_PARITY_ON = (() => {
+            try {
+              return new URLSearchParams(window.location.search)
+                .get("jumpParity")?.toLowerCase() === "on";
+            } catch (_) { return false; }
+          })();
+          // Effective only when all four additive exports exist (rides
+          // manifest v4) — a stale pkg/ degrades to the legacy path.
+          const jumpParityActive = () =>
+            JUMP_PARITY_ON &&
+            typeof handle?.jumpChargeCommence === "function" &&
+            typeof handle?.jumpChargeRelease === "function" &&
+            typeof handle?.jumpChargeAbort === "function" &&
+            typeof handle?.jumpChargeLevel === "function";
           const anyMovementKeyHeld = () => {
             for (const k of movementKeys) if (keyState[k]) return true;
             return false;
@@ -8644,12 +8672,24 @@ void main() {
               fill = bar.querySelector(".hb-jc-fill");
             }
             function frame() {
-              if (!bar || window.__jumpKeydownTs == null) {
+              // A14-I4 (?jumpParity=on): the bar READS the wasm clock
+              // (retail: the UI reads GetJumpPowerLevel, never owns the
+              // clock, acclient.c:402173). `__jumpChargeActive` is the
+              // parity-side "charge held" marker; `__jumpKeydownTs`
+              // stays the legacy clock.
+              const parityCharging =
+                window.__jumpChargeActive === true && jumpParityActive();
+              if (!bar || (window.__jumpKeydownTs == null && !parityCharging)) {
                 rafId = 0;
                 return;
               }
-              const holdMs = performance.now() - window.__jumpKeydownTs;
-              const pct = Math.max(0, Math.min(100, (holdMs / JUMP_POWER_FULL_HOLD_MS) * 100));
+              let pct;
+              if (parityCharging) {
+                pct = Math.max(0, Math.min(100, handle.jumpChargeLevel() * 100));
+              } else {
+                const holdMs = performance.now() - window.__jumpKeydownTs;
+                pct = Math.max(0, Math.min(100, (holdMs / JUMP_POWER_FULL_HOLD_MS) * 100));
+              }
               fill.style.width = pct + "%";
               if (pct >= 100) bar.classList.add("hb-jc-full");
               else bar.classList.remove("hb-jc-full");
@@ -8673,6 +8713,88 @@ void main() {
             };
           })();
 
+          // Wave 1 Phase 1.2 follow-up (2026-05-26): client-side
+          // motion-prediction for the local Jump clip — shared by the
+          // legacy keyup release and the A14-I4 `?jumpParity=on` release
+          // (body moved VERBATIM out of the keyup handler; see the
+          // comments inside).
+          const fireLocalJumpPrediction = () => {
+            // ACE does NOT broadcast `UpdateMotion(Jump)` back to the
+            // jumper for self-jumps — the server response is a
+            // sequence of position updates + airborne state, NOT a
+            // motion-command echo. Without a local trigger the
+            // motion-table Jump clip (0x2500003B) never reaches
+            // EntityManager.setMotion → _tryPlayLink, so the rig sits
+            // frozen at idle while the ballistic z-arc plays.
+            //
+            // Retail does the same thing locally: per acclient.c
+            // `CMotionInterp::DoInterpretedMotion` + `add_to_queue` +
+            // `InterpretedMotionState::ApplyMotion` (acclient.c:
+            // 343975-344031), the client queues the motion locally
+            // the instant the input fires — it does not wait for a
+            // server echo. The wire packet (GameAction::Jump 0xF61B,
+            // already sent by `handle.jump(power)` above) is the
+            // server's validation channel, separate from the visual
+            // prediction.
+            //
+            // setMotion routes 0x2500003B through ATTACK_COMMANDS
+            // (entities.js:182-187) → classifyMotionCommand returns
+            // "attack" → _tryPlayLink fetches the Jump link clip
+            // from `MotionTable.links[(stance, Ready)][Jump]` and
+            // plays it as LoopOnce overlaying the locomotion cycle.
+            //
+            // Idempotency: if a server UpdateMotion(Jump) does land
+            // (unlikely for self-jump, but possible for remote
+            // players via the same setMotion path), the second call
+            // is a no-op — setMotion's nextActionKey guard at
+            // entities.js:541 short-circuits identical (cmd, stance)
+            // pairs.
+            //
+            // Double-jump gate: `handle.jump` is a no-op in wasm
+            // when `is_airborne` (lib.rs:26810). The local clip
+            // trigger is unconditional here; the worst case is a
+            // single ~5ms cancelled clip if the player mashes space
+            // mid-air. Mirroring the wasm guard from JS would
+            // require a wasm getter we don't have yet (cheap
+            // follow-on if telemetry shows it).
+            try {
+              const em = window.liveScene3d?.entityManager;
+              const localGuid =
+                typeof window.getLocalPlayerGuid === "function"
+                  ? window.getLocalPlayerGuid()
+                  : null;
+              if (em && localGuid != null) {
+                const JUMP_MOTION_CMD = 0x2500003B;
+                const NONCOMBAT_STANCE = 0x8000003D;
+                const stance =
+                  (typeof em.getStance === "function"
+                    ? em.getStance(localGuid >>> 0) >>> 0
+                    : 0) || NONCOMBAT_STANCE;
+                em.setMotion(localGuid >>> 0, JUMP_MOTION_CMD, stance);
+                // Wave 1.7 (2026-05-26) — fire the arms-up airborne
+                // overlay locally. The Jump motion-command (0x003B)
+                // is universally ABSENT from all 436 retail motion
+                // tables (Wave 6 data audit), so setMotion's
+                // _tryPlayLink resolves to a null clip and the rig
+                // sits frozen. Joe Trevis's quote confirms retail's
+                // "combined jumping/falling animation" had arms up —
+                // setAirborne IS the visual. Touchdown clear lands
+                // via Wave 10 Phase 10.1's `kind=18
+                // EntityAirborneChanged{local_guid, 0}` emission
+                // from the wasm post-tick diff (lib.rs Wave 10.1
+                // block in the TickMovement arm), routed through
+                // the index.html `kind=18` recv handler which calls
+                // `setAirborne(false)` for both local + remote
+                // guids.
+                em.setAirborne?.(localGuid >>> 0, true);
+              }
+            } catch (e) {
+              console.warn(
+                "[jump] local setMotion(Jump) failed (clip will not play but wire packet is in flight):",
+                e
+              );
+            }
+          };
           document.addEventListener("keydown", (ev) => {
             if (!enteredWorld || isTypingInForm()) return;
             const k = ev.key.toLowerCase();
@@ -8681,7 +8803,16 @@ void main() {
               // G-7 (?longJump=on): a movement key pressed DURING a held
               // space charge converts it to a normal moving jump — drop
               // the wasm-side standstill root.
-              if (LONG_JUMP_ON && window.__jumpKeydownTs != null) {
+              if (
+                (LONG_JUMP_ON && window.__jumpKeydownTs != null) ||
+                (JUMP_PARITY_ON && window.__jumpChargeActive === true)
+              ) {
+                // A14-I4 keeps this as the LEGACY JumpChargeCancel
+                // (root-drop ONLY — the wasm parity clock stays armed, so
+                // the release becomes an un-rooted moving jump). Deliberate
+                // G-7 modernization retained; retail instead REFUSES
+                // forward motions while rooted (acclient.c:343996-344004)
+                // — spec §6 Q4 flags it for a human ruling.
                 jumpChargeCancelSafe();
               }
               ev.preventDefault();
@@ -8728,6 +8859,23 @@ void main() {
             // hold → power 1.0 → full skill-scaled height; a quick tap →
             // ~0.001 (minimal hop). See the JUMP_POWER_FULL_HOLD_MS note.
             if (ev.key === " " && handle && !ev.repeat) {
+              // A14-I4 (?jumpParity=on): press → wasm clock. No
+              // `__jumpKeydownTs` stamp, no JS standstill decision (the
+              // root is decided wasm-side from the active manual drive,
+              // acclient.c:343864-343870 analog). The bar is shown only
+              // when a jump is currently legal — a refused press prints
+              // refusal text (kind=56 event), not a bar.
+              if (jumpParityActive()) {
+                window.__jumpChargeActive = true;
+                try { handle.jumpChargeCommence(); } catch (_) {}
+                const canJump =
+                  typeof handle.canJumpNow === "function"
+                    ? handle.canJumpNow()
+                    : true;
+                if (canJump) jumpChargeUi.show();
+                ev.preventDefault();
+                return;
+              }
               window.__jumpKeydownTs = performance.now();
               jumpChargeUi.show();
               // G-7 (?longJump=on): a charge that begins from a grounded
@@ -8754,6 +8902,29 @@ void main() {
               keyState[k] = false;
             } else if (ev.key === "Shift") {
               keyState.shift = false;
+            } else if (ev.key === " " && handle && window.__jumpChargeActive === true) {
+              // A14-I4 (?jumpParity=on): release → wasm. The extent is
+              // the WASM clock's (retail DoJump reads GetPowerBarLevel,
+              // acclient.c:408168-408173) — never the JS hold-math, and
+              // never handle.jump(power). The wasm side validates
+              // authoritatively (FinishJump-before-validate ordering) and
+              // prints refusal text via the kind=56 event.
+              window.__jumpChargeActive = false;
+              jumpChargeUi.hide();
+              try {
+                handle.jumpChargeRelease();
+              } catch (e) {
+                console.warn("[jumpParity] jumpChargeRelease failed:", e);
+              }
+              // canJumpNow stays ONLY as the local-prediction overlay
+              // gate (its original Wave 10.4 purpose) — the wire send
+              // above is unconditional; wasm is the authoritative
+              // rejector.
+              const canJump =
+                typeof handle.canJumpNow === "function"
+                  ? handle.canJumpNow()
+                  : true;
+              if (canJump) fireLocalJumpPrediction();
             } else if (ev.key === " " && handle && window.__jumpKeydownTs != null) {
               // Variable-power jump release. See keydown handler for
               // the curve rationale. Clear the timestamp regardless
@@ -8791,84 +8962,7 @@ void main() {
               } catch (e) {
                 console.warn("[jump] handle.jump(power) failed:", e);
               }
-              // Wave 1 Phase 1.2 follow-up (2026-05-26): client-side
-              // motion-prediction for the local Jump clip.
-              //
-              // ACE does NOT broadcast `UpdateMotion(Jump)` back to the
-              // jumper for self-jumps — the server response is a
-              // sequence of position updates + airborne state, NOT a
-              // motion-command echo. Without a local trigger the
-              // motion-table Jump clip (0x2500003B) never reaches
-              // EntityManager.setMotion → _tryPlayLink, so the rig sits
-              // frozen at idle while the ballistic z-arc plays.
-              //
-              // Retail does the same thing locally: per acclient.c
-              // `CMotionInterp::DoInterpretedMotion` + `add_to_queue` +
-              // `InterpretedMotionState::ApplyMotion` (acclient.c:
-              // 343975-344031), the client queues the motion locally
-              // the instant the input fires — it does not wait for a
-              // server echo. The wire packet (GameAction::Jump 0xF61B,
-              // already sent by `handle.jump(power)` above) is the
-              // server's validation channel, separate from the visual
-              // prediction.
-              //
-              // setMotion routes 0x2500003B through ATTACK_COMMANDS
-              // (entities.js:182-187) → classifyMotionCommand returns
-              // "attack" → _tryPlayLink fetches the Jump link clip
-              // from `MotionTable.links[(stance, Ready)][Jump]` and
-              // plays it as LoopOnce overlaying the locomotion cycle.
-              //
-              // Idempotency: if a server UpdateMotion(Jump) does land
-              // (unlikely for self-jump, but possible for remote
-              // players via the same setMotion path), the second call
-              // is a no-op — setMotion's nextActionKey guard at
-              // entities.js:541 short-circuits identical (cmd, stance)
-              // pairs.
-              //
-              // Double-jump gate: `handle.jump` is a no-op in wasm
-              // when `is_airborne` (lib.rs:26810). The local clip
-              // trigger is unconditional here; the worst case is a
-              // single ~5ms cancelled clip if the player mashes space
-              // mid-air. Mirroring the wasm guard from JS would
-              // require a wasm getter we don't have yet (cheap
-              // follow-on if telemetry shows it).
-              try {
-                const em = window.liveScene3d?.entityManager;
-                const localGuid =
-                  typeof window.getLocalPlayerGuid === "function"
-                    ? window.getLocalPlayerGuid()
-                    : null;
-                if (em && localGuid != null) {
-                  const JUMP_MOTION_CMD = 0x2500003B;
-                  const NONCOMBAT_STANCE = 0x8000003D;
-                  const stance =
-                    (typeof em.getStance === "function"
-                      ? em.getStance(localGuid >>> 0) >>> 0
-                      : 0) || NONCOMBAT_STANCE;
-                  em.setMotion(localGuid >>> 0, JUMP_MOTION_CMD, stance);
-                  // Wave 1.7 (2026-05-26) — fire the arms-up airborne
-                  // overlay locally. The Jump motion-command (0x003B)
-                  // is universally ABSENT from all 436 retail motion
-                  // tables (Wave 6 data audit), so setMotion's
-                  // _tryPlayLink resolves to a null clip and the rig
-                  // sits frozen. Joe Trevis's quote confirms retail's
-                  // "combined jumping/falling animation" had arms up —
-                  // setAirborne IS the visual. Touchdown clear lands
-                  // via Wave 10 Phase 10.1's `kind=18
-                  // EntityAirborneChanged{local_guid, 0}` emission
-                  // from the wasm post-tick diff (lib.rs Wave 10.1
-                  // block in the TickMovement arm), routed through
-                  // the index.html `kind=18` recv handler which calls
-                  // `setAirborne(false)` for both local + remote
-                  // guids.
-                  em.setAirborne?.(localGuid >>> 0, true);
-                }
-              } catch (e) {
-                console.warn(
-                  "[jump] local setMotion(Jump) failed (clip will not play but wire packet is in flight):",
-                  e
-                );
-              }
+              fireLocalJumpPrediction();
             }
           });
           // Clear keystate if the page loses focus mid-press — Chrome
@@ -8882,6 +8976,17 @@ void main() {
             window.__jumpKeydownTs = null;
             // G-7 (?longJump=on): blur drops the wasm-side charge too.
             if (LONG_JUMP_ON) jumpChargeCancelSafe();
+            // A14-I4 (?jumpParity=on): blur aborts the wasm parity charge
+            // (retail FinishJump analog, acclient.c:435853-435863) — a
+            // held space at blur must not fire a stale jump on refocus.
+            if (window.__jumpChargeActive === true) {
+              window.__jumpChargeActive = false;
+              try {
+                if (typeof handle?.jumpChargeAbort === "function") {
+                  handle.jumpChargeAbort();
+                }
+              } catch (_) { /* never break blur handling */ }
+            }
             // Also tear down the jump-charge bar — its rAF reads
             // __jumpKeydownTs which we just nulled, so the next frame
             // would early-return anyway, but explicit hide() also
@@ -10151,6 +10256,26 @@ void main() {
                     evt.stringPayload || "",
                     isEmote,
                   );
+                }
+              } else if (evt.kind === 56) {
+                // A14-I4 (W3+ S11, ?jumpParity=on) — jump refusal text.
+                // `u32Payload` = the retail refusal code (jump_is_allowed /
+                // jump_charge_is_allowed, acclient.c:343922-343974); retail
+                // prints via ClientSystem::AddTextToScroll(…, 0x1A, …)
+                // (acclient.c:408050-408059 press, :408193-408203 release).
+                // Wording = ACE WeenieError style; the retail string
+                // CONTENTS aren't in the decompile (only the globals
+                // cant_jump_load/position/in_air, acclient.c:56814-56818 —
+                // spec §6 Q3, confirm when the ACE Network tree is
+                // greppable). Replaces the legacy arm's silent drop.
+                const code = evt.u32Payload >>> 0;
+                const text =
+                  code === 73 ? "You are too encumbered to jump!"
+                  : code === 72 ? "You can't jump from this position!"
+                  : code === 36 ? "You're in the air!"
+                  : "You can't jump right now.";
+                if (typeof appendChatLine === "function") {
+                  appendChatLine(text, 10);
                 }
               } else if (evt.kind === 18) {
                 // Wave 1.8 — EntityAirborneChanged for REMOTE players.

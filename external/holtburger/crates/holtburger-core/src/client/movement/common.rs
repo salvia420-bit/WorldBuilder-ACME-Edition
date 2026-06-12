@@ -189,6 +189,31 @@ pub(super) fn build_autonomous_position(
     })
 }
 
+/// A14-I4 (W3+ S11) — single Jump constructor, completing the A13
+/// single-builder shape: after this, every outbound movement pack
+/// (MoveToState ×3 pulse kinds, AutonomousPosition ×2 sites, Jump) is
+/// constructed in this module and dispatched via the one
+/// counter-stamped funnel `Session::send_action`. Mirrors retail's
+/// single `JumpPack` ctor site in `ClientCombatSystem::DoJump`
+/// (acclient.c:408184-408192: `update_times[8]/[5]/[4]/[6]` — the same
+/// quartet slots both position packs read at acclient.c:718175-718178).
+///
+/// ACE trailer kept deliberately: `object_guid` + `spell_id: 0` and the
+/// OMITTED Position are the ACE-sanctioned `JumpPack.cs` shape
+/// (ROADMAP §8 do-not-do; `validate_wire_conformance.cjs` memo).
+pub(super) fn build_jump(world: &WorldState, extent: f32, velocity: Vector3) -> JumpActionData {
+    JumpActionData {
+        extent,
+        velocity,
+        instance_sequence: world.player.instance_sequence,
+        server_control_sequence: world.player.server_control_sequence,
+        teleport_sequence: world.player.teleport_sequence,
+        force_position_sequence: world.player.force_position_sequence,
+        object_guid: world.player.guid,
+        spell_id: 0,
+    }
+}
+
 fn hold_key_for_motion_state(state: MotionState) -> HoldKey {
     match state.gait {
         Gait::Run => HoldKey::Run,

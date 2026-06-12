@@ -1,3 +1,4 @@
+use super::jump_charge::{JumpOutcome, JumpRefusal};
 use super::system::MovementSystem;
 use crate::client::movement_types::{MotionStyle, PlayerDriveIntent};
 use anyhow::Result;
@@ -203,6 +204,48 @@ impl MovementSystemHandle {
     /// queue even then (the :329884 head-null guard).
     pub fn notify_animation_done(&mut self, success: bool) {
         self.inner.notify_animation_done(success);
+    }
+
+    /// A14-I4 (W3+ S11) — press-time half of the retail jump charge
+    /// clock (`ClientCombatSystem::CommenceJump`,
+    /// acclient.c:408033-408078). `Err(JumpRefusal::Position)` mirrors
+    /// retail's press-time 72 refusal (the charge-time 73 gate is
+    /// deliberately absent — DESIGN.md:460-462). The wasm
+    /// `JumpChargeCommence` arm calls this under `?jumpParity=on`.
+    pub fn jump_charge_commence(
+        &mut self,
+        now: Instant,
+        world: &mut WorldState,
+    ) -> std::result::Result<(), JumpRefusal> {
+        self.inner.jump_charge_commence(now, world)
+    }
+
+    /// A14-I4 — the UI read (retail `GetJumpPowerLevel`,
+    /// acclient.c:408081-408104): 0.0 when idle, else the charge level
+    /// floored at MIN_JUMP_EXTENT. Published into the wasm
+    /// `jumpChargeLevel()` shadow each TickMovement.
+    pub fn jump_charge_level(&self, now: Instant, world: &WorldState) -> f32 {
+        self.inner.jump_charge_power(now, world)
+    }
+
+    /// A14-I4 — abort a held charge without jumping (retail
+    /// `FinishJump`, acclient.c:407625-407648; blur analog).
+    pub fn jump_charge_abort(&mut self, world: &mut WorldState) {
+        self.inner.jump_charge_abort(world);
+    }
+
+    /// A14-I4 — release-time half (retail `DoJump`,
+    /// acclient.c:408146-408227): FinishJump-before-validate ordering,
+    /// release gates (36/72 + the A4-Q1 queue-head code), vz/stamina
+    /// math, and the single `build_jump` → `Session::send_action`
+    /// boundary. See `MovementSystem::execute_jump_release`.
+    pub async fn execute_jump_release(
+        &mut self,
+        now: Instant,
+        world: &mut WorldState,
+        session: &mut Session,
+    ) -> Result<JumpOutcome> {
+        self.inner.execute_jump_release(now, world, session).await
     }
 
     /// Phase 4 step 3.6 diagnostics — number of tick() calls since

@@ -2,11 +2,12 @@ use super::common::{
     AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, HUGE_QUANTUM, MAX_QUANTUM, MAX_VELOCITY, MIN_QUANTUM,
     PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_GROUND_FRICTION_RETAIL,
     PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC,
-    build_autonomous_position, build_motion_state_raw_motion_state, build_move_to_state,
-    calc_friction, has_autonomous_position_sync_target, local_omega_for_state,
+    build_autonomous_position, build_jump, build_motion_state_raw_motion_state,
+    build_move_to_state, calc_friction, has_autonomous_position_sync_target, local_omega_for_state,
     local_velocity_for_state, normalize_heading, raw_motion_state_with_motion_style,
     signed_heading_delta,
 };
+use super::jump_charge::{JumpChargeClock, JumpOutcome, JumpRefusal};
 use super::motion_interp::{
     MotionInterp, interpreted_velocity_for_state, leave_ground_velocity_for_state,
 };
@@ -953,6 +954,13 @@ pub(crate) struct MovementSystem {
     /// [`USE_UNIFIED_TRANSITION`] const by
     /// [`Self::unified_transition_enabled`]. Default `false`.
     unified_transition_runtime: bool,
+    /// A14-I4 (W3+ S11, 2026-06-12) — the retail jump charge clock
+    /// (`ClientCombatSystem` `jump_pending` / `buildStartTime`,
+    /// acclient.c:407902-407916). Reached only via the wasm
+    /// `?jumpParity=on` bridge (`jump_charge_commence` /
+    /// `execute_jump_release` / `jump_charge_abort`); the legacy
+    /// JS-clock path never touches it.
+    jump_charge: JumpChargeClock,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1048,6 +1056,7 @@ impl MovementSystem {
             local_motion_interp: MotionInterp::default(),
             movement_managers: HashMap::new(),
             unified_transition_runtime: false,
+            jump_charge: JumpChargeClock::new(),
         }
     }
 
@@ -1055,6 +1064,170 @@ impl MovementSystem {
     /// (see [`USE_UNIFIED_TRANSITION`]).
     pub(crate) fn set_unified_transition(&mut self, on: bool) {
         self.unified_transition_runtime = on;
+    }
+
+    // ------------------------------------------------------------------
+    // A14-I4 (W3+ S11) — charge clock ownership + single send boundary.
+    // Retail shape: `ClientCombatSystem::CommenceJump` (press) →
+    // `GetPowerBarLevel`/`GetJumpPowerLevel` (UI read) → `DoJump`
+    // (release: FinishJump FIRST, then validate, then ONE JumpPack ctor
+    // + counter-stamped send), acclient.c:408033-408227.
+    // ------------------------------------------------------------------
+
+    /// Press-time half — retail `CommenceJump`
+    /// (acclient.c:408033-408078). The standstill-root axes check reads
+    /// the active MANUAL drive (retail: `forward_command == Ready && no
+    /// sidestep && no turn`, acclient.c:343864-343870) — not JS.
+    pub(crate) fn jump_charge_commence(
+        &mut self,
+        now: Instant,
+        world: &mut WorldState,
+    ) -> std::result::Result<(), JumpRefusal> {
+        let manual_axes_idle = match self.active_drive.map(|active| active.intent) {
+            Some(ActiveDriveIntent::Manual(state)) => {
+                state.is_locomotion_idle() && state.turning.is_none()
+            }
+            Some(ActiveDriveIntent::Autonomous(_)) => false,
+            None => true,
+        };
+        self.jump_charge.commence(now, world, manual_axes_idle)
+    }
+
+    /// UI read — retail `GetJumpPowerLevel` (acclient.c:408081-408104):
+    /// `0.0` when no charge is pending, else the bar level floored at
+    /// `MIN_JUMP_EXTENT`. Published to the JS bar via the wasm
+    /// `jumpChargeLevel()` shadow getter each TickMovement.
+    pub(crate) fn jump_charge_power(&self, now: Instant, world: &WorldState) -> f32 {
+        self.jump_charge.power(now, world)
+    }
+
+    /// Abort — retail `ACCmdInterp::FinishJump` shim →
+    /// `ClientCombatSystem::FinishJump` (acclient.c:435853-435863,
+    /// :407625-407648). Clears the charge + standstill root without
+    /// jumping (blur analog).
+    pub(crate) fn jump_charge_abort(&mut self, world: &mut WorldState) {
+        self.jump_charge.finish(world);
+    }
+
+    /// Release-time half — retail `ClientCombatSystem::DoJump`
+    /// autonomous branch (acclient.c:408146-408227). Body = the legacy
+    /// wasm `SessionCommand::Jump` recv-arm logic MOVED (not rewritten)
+    /// into the movement crate, with the pack constructed by
+    /// [`build_jump`] (the A13 single-builder pattern) and dispatched
+    /// via the one counter-stamped funnel `Session::send_action`
+    /// (send.rs `game_action_sequence` ↔ retail OrderHdr
+    /// `GetNextUICounter`). Side effect: the cli gains a jump
+    /// capability for free (A13 §2 — no cli wiring in this item).
+    pub(crate) async fn execute_jump_release(
+        &mut self,
+        now: Instant,
+        world: &mut WorldState,
+        session: &mut Session,
+    ) -> Result<JumpOutcome> {
+        use holtburger_common::stats::SkillType;
+        use holtburger_world::context::WorldContextExt;
+
+        // G-7 / F1-6 — capture the charge root BEFORE release()'s
+        // FinishJump clears it; the launch-velocity choice below keys
+        // off it (retail reads get_leave_ground_velocity AFTER
+        // FinishJump too — the interpreted intent survives the clear).
+        let charged_long_jump = world.player.standing_long_jump_charge;
+
+        // Retail ordering (acclient.c:408164-408179): jump_pending
+        // check → extent read → FinishJump → THEN validate. A refused
+        // release still clears the charge + root.
+        let Some(extent) = self.jump_charge.release(now, world) else {
+            return Ok(JumpOutcome::NotCharging);
+        };
+
+        // Release gates, retail order (`CMotionInterp::jump` →
+        // `jump_is_allowed`, acclient.c:344224-344256,
+        // :343922-343974): in-air → 36; queue-head `jump_error_code`
+        // (A4-Q1 — empty/inert queue yields 0); blocked substate → 72.
+        if world.player.is_airborne {
+            return Ok(JumpOutcome::Refused(JumpRefusal::InAir));
+        }
+        let pending_error = self.local_motion_interp.pending_jump_error();
+        if pending_error != 0 {
+            return Ok(JumpOutcome::Refused(JumpRefusal::from_code(pending_error)));
+        }
+        if !holtburger_world::player::motion_allows_jump(world.player.current_substate) {
+            return Ok(JumpOutcome::Refused(JumpRefusal::Position));
+        }
+
+        // vz / stamina — moved verbatim from the legacy wasm Jump arm.
+        // Burden flows from ACE's `EncumbranceSystem.GetBurden` via
+        // `WorldContextExt::player_burden`; fallback 0.5 keeps
+        // BurdenMod = 1.0 when attributes haven't hydrated yet.
+        let jump_skill = world
+            .player
+            .skills
+            .get(&SkillType::Jump)
+            .map(|s| s.current as u32)
+            .unwrap_or(100);
+        let burden = world.player_burden().unwrap_or(0.5);
+        // Stamina cost (ACE non-PK formula — PK gate needs
+        // `PKTimerActive`, untracked; default non-PK).
+        let cost = holtburger_world::player::PlayerState::jump_stamina_cost(
+            extent, burden, false,
+        );
+        // ACE's active behavior on empty stamina: jumpSkill treated as
+        // 0 in InqJumpVelocity → min-clamp hop, so an exhausted player
+        // still pops a tiny jump.
+        let stamina_current = world
+            .player
+            .vitals
+            .get(&holtburger_common::stats::VitalType::Stamina)
+            .map(|v| v.current)
+            .unwrap_or(0);
+        let exhausted = stamina_current == 0;
+        let effective_skill = if exhausted { 0 } else { jump_skill };
+        let vz = holtburger_world::player::PlayerState::compute_jump_velocity_z(
+            extent,
+            burden,
+            effective_skill,
+        );
+        world.player.begin_jump(vz);
+        // Deduct stamina locally (server is canonical; ACE broadcasts a
+        // vital update soon after).
+        if !exhausted {
+            let new_current = (stamina_current as i32 - cost as i32).max(0) as u32;
+            world.player.update_vital_current(
+                holtburger_common::stats::VitalType::Stamina as u32,
+                new_current,
+                &mut Vec::new(),
+            );
+        }
+
+        // Launch planar velocity: a charged (rooted) release launches
+        // with the interpreted INTENT (`get_leave_ground_velocity` —
+        // what the held keys at release WOULD produce); else the
+        // runtime kinematics fallback. begin_jump deliberately leaves
+        // current_planar_velocity untouched, so install the intent
+        // there for the airborne trajectory lock.
+        let lateral_velocity = if charged_long_jump
+            && let Some(intent_v) = self.manual_intent_velocity(world)
+        {
+            world.player.current_planar_velocity = Vector3::new(intent_v.x, intent_v.y, 0.0);
+            Vector3::new(intent_v.x, intent_v.y, vz)
+        } else {
+            world
+                .local_player_runtime_kinematics()
+                .map(|(_, v, _)| Vector3::new(v.x, v.y, vz))
+                .unwrap_or(Vector3::new(0.0, 0.0, vz))
+        };
+
+        // The single pack ctor + the one counter-stamped funnel
+        // (retail acclient.c:408180-408193).
+        let data = build_jump(world, extent, lateral_velocity);
+        session.send_action(GameAction::Jump(Box::new(data))).await?;
+
+        Ok(JumpOutcome::Jumped {
+            extent,
+            vz,
+            jump_skill,
+            burden,
+        })
     }
 
     /// A6-T1/T2 — the effective transition-pipeline predicate, used at

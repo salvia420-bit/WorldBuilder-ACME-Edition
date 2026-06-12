@@ -17248,6 +17248,18 @@ const CLIENT_EVENT_KIND_ENTITY_HEALTH: u32 = 54;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_OVERHEAD_SPEECH: u32 = 55;
 
+/// A14-I4 (W3+ S11, 2026-06-12, `?jumpParity=on`) — a jump press or
+/// release was refused by the movement-crate charge clock / release
+/// gates. `u32_payload` = the retail refusal code (36 in-air / 71
+/// constrained / 72 position / 73 load — `jump_is_allowed` /
+/// `jump_charge_is_allowed`, acclient.c:343922-343974). JS maps the
+/// code to chat-scroll text (retail `ClientSystem::AddTextToScroll(…,
+/// 0x1A, …)`, acclient.c:408050-408059 press, :408193-408203 release —
+/// the silent-drop class the legacy arm had). ADDITIVE — only the
+/// flag-gated commence/release commands produce it.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_JUMP_REFUSED: u32 = 56;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -17487,6 +17499,24 @@ enum SessionCommand {
     /// G-7 / F1-6 — drop a held jump charge without jumping (movement key
     /// pressed during the charge, focus blur, or a refused release).
     JumpChargeCancel,
+    /// A14-I4 (W3+ S11, `?jumpParity=on`) — space keydown: arm the
+    /// movement-crate charge clock (retail
+    /// `ClientCombatSystem::CommenceJump`, acclient.c:408033-408078).
+    /// The standstill-root decision moves wasm-side (the active manual
+    /// drive's axes, NOT JS key state). A press-time refusal queues a
+    /// [`CLIENT_EVENT_KIND_JUMP_REFUSED`] event. Legacy
+    /// `Jump`/`JumpChargeBegin`/`JumpChargeCancel` arms are untouched —
+    /// flag-off never sends this.
+    JumpChargeCommence,
+    /// A14-I4 — space keyup: release through
+    /// `MovementSystemHandle::execute_jump_release` (retail `DoJump`,
+    /// acclient.c:408146-408227 — FinishJump-before-validate, release
+    /// gates, vz/stamina, single `build_jump` pack via the one
+    /// counter-stamped `Session::send_action` funnel).
+    JumpChargeRelease,
+    /// A14-I4 — drop a held parity charge without jumping (blur; retail
+    /// `ACCmdInterp::FinishJump`, acclient.c:435853-435863).
+    JumpChargeAbort,
     /// A4-Q2 (2026-06-12, W3+ S5, `?mtQueue=on`) — the renderer reports a
     /// one-shot overlay clip's end (`success=true`) or a cancellation on
     /// eviction/stop of a tagged, not-yet-completed overlay
@@ -23703,6 +23733,14 @@ pub struct SessionHandle {
     /// local-prediction arms-up overlay + jump-charge bar when the
     /// wasm-side gate would reject. `false` pre-spawn.
     local_player_can_jump: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// A14-I4 (W3+ S11, `?jumpParity=on`): JS-readable shadow of the
+    /// movement-crate charge clock's power level (retail
+    /// `GetJumpPowerLevel`, acclient.c:408081-408104 — the UI READS the
+    /// clock, never owns it, acclient.c:402173). Refreshed by the
+    /// recv-loop each TickMovement beside [`Self::local_player_can_jump`]
+    /// (30-60 Hz — the bar may quantize; accepted, spec §5 risk 4).
+    /// `0.0` whenever no charge is pending.
+    local_player_jump_charge_level: std::rc::Rc<std::cell::RefCell<f32>>,
     /// PR-SS 2026-05-23: timestamp of the most-recent
     /// `SessionEvent::Message` from the WS transport — the freshest
     /// server packet of any kind. JS polls `sessionLastRecvAgeMs()`
@@ -25798,6 +25836,21 @@ impl SessionHandle {
         *self.local_player_can_jump.borrow()
     }
 
+    /// A14-I4 (W3+ S11, `?jumpParity=on`) — synchronous shadow of the
+    /// movement-crate jump charge clock (retail `GetJumpPowerLevel`,
+    /// acclient.c:408081-408104): `0.0` when no charge is pending, else
+    /// the build level on the retail 1.0 s curve (0.8 s under
+    /// interpreted style raw `0x0046`) floored at `MIN_JUMP_EXTENT =
+    /// 0.001`. The JS charge-bar rAF reads this instead of the legacy
+    /// `__jumpKeydownTs` hold-math so the UI and the extent share ONE
+    /// clock. Same publish cadence/pattern as [`Self::can_jump_now`]
+    /// (TickMovement, both `?unifiedTick` paths). Additive export —
+    /// rides manifest v4.
+    #[wasm_bindgen(js_name = jumpChargeLevel)]
+    pub fn jump_charge_level(&self) -> f32 {
+        *self.local_player_jump_charge_level.borrow()
+    }
+
     /// **Wave 3.F (physics-replay parity, 2026-05-19).** Pure-prediction
     /// shadow returned to JS validators that need to compare the
     /// rAF integrator's output against the C# `OracleSim` port of
@@ -26686,6 +26739,46 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::JumpChargeCancel)
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("jumpChargeCancel: cmd channel closed ({e})"))
+            })
+    }
+
+    /// A14-I4 (W3+ S11, `?jumpParity=on`) — space keydown: arm the
+    /// movement-crate charge clock (retail `CommenceJump`). JS calls
+    /// this INSTEAD of stamping `__jumpKeydownTs` when the flag is on
+    /// and the export exists (typeof guard degrades to the legacy
+    /// path on a stale pkg/). Additive export — rides manifest v4.
+    #[wasm_bindgen(js_name = jumpChargeCommence)]
+    pub fn jump_charge_commence(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::JumpChargeCommence)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("jumpChargeCommence: cmd channel closed ({e})"))
+            })
+    }
+
+    /// A14-I4 — space keyup: release the parity charge (retail
+    /// `DoJump`). Replaces `jump(power)` under `?jumpParity=on` — the
+    /// extent comes from the wasm-side clock, not a JS hold-math curve.
+    #[wasm_bindgen(js_name = jumpChargeRelease)]
+    pub fn jump_charge_release(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::JumpChargeRelease)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("jumpChargeRelease: cmd channel closed ({e})"))
+            })
+    }
+
+    /// A14-I4 — abort a held parity charge without jumping (blur;
+    /// retail `ACCmdInterp::FinishJump`).
+    #[wasm_bindgen(js_name = jumpChargeAbort)]
+    pub fn jump_charge_abort(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::JumpChargeAbort)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("jumpChargeAbort: cmd channel closed ({e})"))
             })
     }
 
@@ -28779,6 +28872,12 @@ pub async fn start_session(
     // first real value (pre-spawn the player can't jump anyway).
     let local_player_can_jump: std::rc::Rc<std::cell::RefCell<bool>> =
         std::rc::Rc::new(std::cell::RefCell::new(false));
+    // A14-I4 (W3+ S11): shared f32 shadow of the movement-crate jump
+    // charge clock (retail GetJumpPowerLevel), refreshed each
+    // TickMovement beside `local_player_can_jump`. JS bar reads via
+    // `SessionHandle::jump_charge_level` under `?jumpParity=on`.
+    let local_player_jump_charge_level: std::rc::Rc<std::cell::RefCell<f32>> =
+        std::rc::Rc::new(std::cell::RefCell::new(0.0));
     // PR-SS 2026-05-23: timestamp of last server packet. Recv loop
     // writes on every SessionEvent::Message; JS-side link-status
     // indicator polls `sessionLastRecvAgeMs()` to tint the icon.
@@ -28844,6 +28943,7 @@ pub async fn start_session(
         let door_part_snapshot = door_part_snapshot.clone();
         let local_player_pose = local_player_pose.clone();
         let local_player_can_jump_inner = local_player_can_jump.clone();
+        let local_player_jump_charge_level_inner = local_player_jump_charge_level.clone();
         let last_recv_instant_inner = last_recv_instant.clone();
         let last_ping_rtt_ms_inner = last_ping_rtt_ms.clone();
         let collision_scene_inner = collision_scene.clone();
@@ -28889,6 +28989,7 @@ pub async fn start_session(
                 door_part_snapshot,
                 local_player_pose,
                 local_player_can_jump_inner,
+                local_player_jump_charge_level_inner,
                 last_recv_instant_inner,
                 last_ping_rtt_ms_inner,
                 collision_scene_inner,
@@ -28989,6 +29090,7 @@ pub async fn start_session(
         door_part_snapshot,
         local_player_pose,
         local_player_can_jump,
+        local_player_jump_charge_level,
         last_recv_instant,
         last_ping_rtt_ms,
         last_client_prediction,
@@ -30782,6 +30884,7 @@ async fn recv_loop(
     >,
     local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
     local_player_can_jump: std::rc::Rc<std::cell::RefCell<bool>>,
+    local_player_jump_charge_level: std::rc::Rc<std::cell::RefCell<f32>>,
     last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>>,
     last_ping_rtt_ms: std::rc::Rc<std::cell::RefCell<Option<u32>>>,
     collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
@@ -39246,6 +39349,101 @@ async fn recv_loop(
                             w.player.standing_long_jump_charge = false;
                         }
                     }
+                    Some(SessionCommand::JumpChargeCommence) => {
+                        // A14-I4 (W3+ S11, ?jumpParity=on) — press-time
+                        // half: arm the movement-crate charge clock
+                        // (retail CommenceJump, acclient.c:408033-408078).
+                        // The standstill root is decided wasm-side from
+                        // the active manual drive's axes. A press-time
+                        // refusal surfaces as chat-scroll text via the
+                        // JUMP_REFUSED event (retail
+                        // acclient.c:408050-408059); the legacy arms
+                        // above stay byte-untouched.
+                        if let Some(w) = world.as_mut()
+                            && entity_seeded
+                            && let Err(code) =
+                                movement.jump_charge_commence(web_time::Instant::now(), w)
+                        {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_JUMP_REFUSED,
+                                string_payload: None,
+                                u32_payload: Some(code as u32),
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                        }
+                    }
+                    Some(SessionCommand::JumpChargeRelease) => {
+                        // A14-I4 — release-time half: the whole legacy
+                        // Jump-arm pipeline (gates → vz/stamina →
+                        // begin_jump → pack → send) MOVED into
+                        // `MovementSystem::execute_jump_release`, with
+                        // the pack built by `movement/common.rs::
+                        // build_jump` (the A13 single-builder boundary).
+                        use holtburger_core::JumpOutcome;
+                        let Some(w) = world.as_mut() else {
+                            console_log_str(
+                                "[jumpParity] release before WorldState ready — dropping",
+                            );
+                            continue;
+                        };
+                        if !entity_seeded {
+                            console_log_str(
+                                "[jumpParity] release before player entity seeded — dropping",
+                            );
+                            continue;
+                        }
+                        match movement
+                            .execute_jump_release(web_time::Instant::now(), w, &mut session)
+                            .await
+                        {
+                            Ok(JumpOutcome::NotCharging) => {}
+                            Ok(JumpOutcome::Refused(code)) => {
+                                // Retail release-time scroll text
+                                // (acclient.c:408193-408203).
+                                queued_events.borrow_mut().push(ClientEvent {
+                                    kind: CLIENT_EVENT_KIND_JUMP_REFUSED,
+                                    string_payload: None,
+                                    u32_payload: Some(code as u32),
+                                    u32_payload_2: None,
+                                    f32_payload: None,
+                                });
+                            }
+                            Ok(JumpOutcome::Jumped {
+                                extent: _,
+                                vz,
+                                jump_skill,
+                                burden,
+                            }) => {
+                                // Keep the legacy `[jump]` console-log
+                                // shape so diagnostics stay greppable.
+                                console_log_str(&format!(
+                                    "[jump] skill={jump_skill} burden={burden:.2} → vz={vz:.2} m/s",
+                                ));
+                            }
+                            Err(e) => {
+                                // Send failure — mirror the legacy Jump
+                                // arm's disconnect handling.
+                                log::warn!("recv_loop: execute_jump_release: {e}");
+                                queued_events.borrow_mut().push(ClientEvent {
+                                    kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                    string_payload: Some(format!("jump: {e}")),
+                                    u32_payload: None,
+                                    u32_payload_2: None,
+                                    f32_payload: None,
+                                });
+                                return;
+                            }
+                        }
+                    }
+                    Some(SessionCommand::JumpChargeAbort) => {
+                        // A14-I4 — blur analog (retail FinishJump,
+                        // acclient.c:435853-435863): drop the charge +
+                        // standstill root without jumping.
+                        if let Some(w) = world.as_mut() {
+                            movement.jump_charge_abort(w);
+                        }
+                    }
                     Some(SessionCommand::AnimationDone { guid, success }) => {
                         // A4-Q2 (W3+ S5) — renderer overlay-completion
                         // signal → the LOCAL player's MotionTableManager
@@ -39754,6 +39952,16 @@ async fn recv_loop(
                             // releases don't flash. Same cadence/justification
                             // as the pose shadow above.
                             publish_local_player_can_jump(w, &local_player_can_jump);
+
+                            // A14-I4 (W3+ S11): refresh the jump-charge
+                            // clock shadow (retail GetJumpPowerLevel —
+                            // the UI reads, never owns,
+                            // acclient.c:402173). Same cadence family
+                            // as the can-jump shadow above; 0.0 when no
+                            // charge is pending, so flag-off it just
+                            // re-writes 0.0.
+                            *local_player_jump_charge_level.borrow_mut() =
+                                movement.jump_charge_level(now, w);
                         }
 
                         // Workstream C (3D camera collision,
@@ -40067,6 +40275,12 @@ async fn recv_loop(
                                         w,
                                         &local_player_can_jump,
                                     );
+                                    // A14-I4: post-tick twin of the
+                                    // jump-charge shadow publish (A1-O2
+                                    // ordering — exactly one of the two
+                                    // sites runs per tick).
+                                    *local_player_jump_charge_level.borrow_mut() =
+                                        movement.jump_charge_level(now, w);
                                 }
                                 // A2-P2 (2026-06-12, W3+ S8): publish the
                                 // remote poses the spine's manager step

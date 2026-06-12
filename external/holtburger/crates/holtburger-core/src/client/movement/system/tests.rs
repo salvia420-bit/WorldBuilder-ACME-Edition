@@ -4409,3 +4409,184 @@ fn simulation_tick_steps_remote_managers_once_per_slice() {
     assert_eq!(advanced_off, 0.0, "flag off: manager never stepped");
     assert_eq!(rows_off, 0, "flag off: ledger stays empty");
 }
+
+// =============================================================================
+// A14-I4 (W3+ S11, 2026-06-12) — charge clock + single send boundary.
+// Clock-curve / divisor / floor / double-press / standstill-root tests live
+// in jump_charge.rs; this block pins the release pipeline (gates + the
+// build_jump pack) per the spec's tests 8-11.
+// =============================================================================
+
+use super::super::common::build_jump;
+use super::super::jump_charge::{JumpOutcome, JumpRefusal};
+use holtburger_protocol::messages::movement::actions::JumpActionData;
+
+fn seed_jump_world() -> WorldState {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_0123),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            coords: Vector3::new(10.0, 20.0, 0.0),
+            rotation: Quaternion::from_heading(0.0),
+        },
+    );
+    world
+}
+
+// Spec test 9 — golden extraction: `build_jump` output for a fixed
+// WorldState snapshot equals the legacy inline `JumpActionData`
+// construction it replaces (the lib.rs `SessionCommand::Jump` recv-arm
+// ctor, moved here verbatim). Pattern = A13-W2 golden test (b5a31b99).
+#[test]
+fn build_jump_matches_legacy_inline_construction() {
+    let mut world = seed_jump_world();
+    world.player.instance_sequence = 0x1111;
+    world.player.server_control_sequence = 0x2222;
+    world.player.teleport_sequence = 0x3333;
+    world.player.force_position_sequence = 0x4444;
+    let extent = 0.75_f32;
+    let velocity = Vector3::new(1.5, -2.5, 5.25);
+
+    // Legacy construction, verbatim shape (lib.rs Jump arm).
+    let legacy = JumpActionData {
+        extent,
+        velocity,
+        instance_sequence: world.player.instance_sequence,
+        server_control_sequence: world.player.server_control_sequence,
+        teleport_sequence: world.player.teleport_sequence,
+        force_position_sequence: world.player.force_position_sequence,
+        object_guid: world.player.guid,
+        spell_id: 0,
+    };
+
+    assert_eq!(build_jump(&world, extent, velocity), legacy);
+}
+
+// Spec test 10 — quartet echo: a sequence stamped on world.player is
+// echoed by the builder (mirror of the A13-W2 echo-chain test).
+#[test]
+fn build_jump_echoes_server_control_sequence() {
+    let mut world = seed_jump_world();
+    world.player.server_control_sequence = 0x00AB;
+    let data = build_jump(&world, 1.0, Vector3::zero());
+    assert_eq!(data.server_control_sequence, 0x00AB);
+}
+
+// Release with no pending charge → NotCharging (acclient.c:408164).
+#[tokio::test]
+async fn execute_jump_release_without_charge_is_not_charging() {
+    let mut world = seed_jump_world();
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let outcome = movement
+        .execute_jump_release(Instant::now(), &mut world, &mut session)
+        .await
+        .expect("release must not error");
+    assert_eq!(outcome, JumpOutcome::NotCharging);
+}
+
+// Spec test 8 (gate half) — FinishJump-before-validate ordering
+// (acclient.c:408168-408179): a release whose substate gate refuses
+// still clears jump_pending + the standstill root.
+#[tokio::test]
+async fn refused_release_still_clears_charge() {
+    let mut world = seed_jump_world();
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let t0 = Instant::now();
+    movement
+        .jump_charge_commence(t0, &mut world)
+        .expect("grounded standstill press commences");
+    assert!(world.player.standing_long_jump_charge, "root set at press");
+
+    // Substate flips to Crouch between press and release.
+    world.player.current_substate = 0x4100_0012;
+    let outcome = movement
+        .execute_jump_release(t0 + Duration::from_millis(500), &mut world, &mut session)
+        .await
+        .expect("release must not error");
+    assert_eq!(outcome, JumpOutcome::Refused(JumpRefusal::Position));
+    assert!(
+        !world.player.standing_long_jump_charge,
+        "FinishJump ran before validation — root cleared"
+    );
+    assert!(!world.player.is_airborne, "refused release must not launch");
+
+    // The charge was consumed: a second release is NotCharging.
+    let outcome = movement
+        .execute_jump_release(t0 + Duration::from_secs(1), &mut world, &mut session)
+        .await
+        .expect("release must not error");
+    assert_eq!(outcome, JumpOutcome::NotCharging);
+}
+
+// In-air release refuses with retail 36 (acclient.c:343944) — gate
+// order puts it before the substate gate.
+#[tokio::test]
+async fn airborne_release_refuses_in_air() {
+    let mut world = seed_jump_world();
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let t0 = Instant::now();
+    movement
+        .jump_charge_commence(t0, &mut world)
+        .expect("grounded press commences");
+    world.player.is_airborne = true;
+    let outcome = movement
+        .execute_jump_release(t0 + Duration::from_millis(200), &mut world, &mut session)
+        .await
+        .expect("release must not error");
+    assert_eq!(outcome, JumpOutcome::Refused(JumpRefusal::InAir));
+}
+
+// Spec test 11 — queue-head `jump_error_code` refusal propagates
+// through execute_jump_release (acclient.c:343946-343948; the A4-Q1
+// pending_motions lane, DESIGN.md:447-454).
+#[tokio::test]
+async fn queue_head_jump_error_refuses_release() {
+    let mut world = seed_jump_world();
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let t0 = Instant::now();
+    movement
+        .jump_charge_commence(t0, &mut world)
+        .expect("press commences");
+    // A pending node carrying the charge-time 72 code blocks the jump.
+    movement.local_motion_interp.add_to_queue(1, 0x4500_0005, 72);
+    let outcome = movement
+        .execute_jump_release(t0 + Duration::from_millis(300), &mut world, &mut session)
+        .await
+        .expect("release must not error");
+    assert_eq!(outcome, JumpOutcome::Refused(JumpRefusal::Position));
+}
+
+// Happy path: charged release launches (begin_jump stamps the airborne
+// ballistic state) and reports the clock-derived extent.
+#[tokio::test]
+async fn successful_release_launches_with_clock_extent() {
+    let mut world = seed_jump_world();
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let t0 = Instant::now();
+    movement
+        .jump_charge_commence(t0, &mut world)
+        .expect("press commences");
+    let outcome = movement
+        .execute_jump_release(t0 + Duration::from_millis(500), &mut world, &mut session)
+        .await
+        .expect("release must not error");
+    match outcome {
+        JumpOutcome::Jumped { extent, vz, .. } => {
+            assert!((extent - 0.5).abs() < 1e-2, "extent tracks the clock, got {extent}");
+            assert!(vz > 0.0, "launch needs a positive vertical velocity");
+        }
+        other => panic!("expected Jumped, got {other:?}"),
+    }
+    assert!(world.player.is_airborne, "begin_jump must stamp airborne");
+    assert!(
+        !world.player.standing_long_jump_charge,
+        "charge root consumed by the release"
+    );
+}

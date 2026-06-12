@@ -612,8 +612,8 @@ impl MotionInterp {
     /// The queue-head jump gate input — `jump_is_allowed` refuses with
     /// the head's `jump_error_code` before consulting the charge gates
     /// (`acclient.c:343946-343948`; ACE `MotionInterp.cs:753-754`).
-    /// `0` = no pending node blocks jumping.
-    #[allow(dead_code)] // staged: lib.rs jump-gate consumer (wasm wave R4)
+    /// `0` = no pending node blocks jumping. Consumed by
+    /// `MovementSystem::execute_jump_release` (A14-I4, W3+ S11).
     pub(crate) fn pending_jump_error(&self) -> u32 {
         self.pending_motions
             .front()
