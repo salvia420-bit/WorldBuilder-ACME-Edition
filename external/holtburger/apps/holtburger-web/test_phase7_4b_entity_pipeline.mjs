@@ -105,9 +105,10 @@ function loadModule(relPath) {
     let src = readFileSync(full, "utf8");
     src = src
         .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
-        // Strip `import { … } from "./X.js"` lines — we splice modules
-        // by hand instead.
-        .replace(/^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/[^"']+["'];?\s*$/gm, "");
+        // Strip `import { … } from "./X.js"` / "../ui/X.js" lines (incl.
+        // multi-line blocks) — we splice modules by hand instead.
+        .replace(/^\s*import\s+\{[^{}]*\}\s+from\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "")
+        .replace(/^\s*import\s+\{[^{}]*\n[\s\S]*?\}\s+from\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "");
     return src;
 }
 
@@ -130,7 +131,24 @@ function stripExports(src) {
         .replace(/^\s*export\s+\{[^}]+\}[\s;]*$/gm, "");
 }
 
-const composite =
+// A9-Stage2 setup_rig.js is a stripped import; force the legacy inline rig
+// paths so module-scope `RIG_MODULE_ON = readRigModuleFlag()` evaluates.
+const RIG_STUBS =
+    "const readRigModuleFlag = () => false;\n" +
+    "const applyRestPoseFrame = () => { throw new Error('rigModule stubbed'); };\n" +
+    "const buildPartSurfaceMeshes = () => { throw new Error('rigModule stubbed'); };\n" +
+    "const createPartFramesProxy = () => { throw new Error('rigModule stubbed'); };\n";
+
+// 82a6102c integrated speechBubbles + the B2 PlayEffect spawn-drain
+// always-on (gates removed), so these stripped-import names are now
+// called unconditionally in _spawnImpl/remove. No-op stubs.
+const UI_STUBS =
+    "const drainPendingPlayEffects = () => {};\n" +
+    "const showSpeechBubbleOnEntity = () => {};\n" +
+    "const removeSpeechBubbleFromEntity = () => {};\n" +
+    "const ensureNameplateForEntity = () => {};\n";
+
+const composite = RIG_STUBS + UI_STUBS +
     "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
     "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
     "// === entities.js ===\n" + stripExports(entitiesSrc) + "\n" +
@@ -451,27 +469,37 @@ check(
 );
 
 // ---- Test 6: kind=5 MOTION = STOP ------------------------------------
+// Waves 1-6 (421f82f2, 2026-05-26): STOP (cmdLow 0x0004) / Invalid (0x0000)
+// is SUBSTITUTED to Ready (0x0003) so the stance-aware idle cycle plays
+// (combat pose survives releasing W) instead of fading to bare rest pose.
+// So currentAction is NOT cleared — it becomes the Ready idle action.
 await em.setMotion(TEST_GUID, STOP_CMD, 0x003d);
-em.tick(0.3); // run the fade-out
+em.tick(0.3); // run the crossfade
 em.tick(0.3);
+const READY_CMD = (STOP_CMD & 0xFFFF0000) | 0x0003;
 check(
-    "setMotion(STOP) clears currentAction",
-    inst.currentAction === null,
-    `currentAction=${inst.currentAction}`
+    "setMotion(STOP) substitutes the stance Ready idle (not a bare fade-out)",
+    inst.currentAction !== null &&
+        inst.currentActionKey === `33554585:150994945:${READY_CMD >>> 0}:61`,
+    `currentAction=${inst.currentAction ? "set" : "null"}, key=${inst.currentActionKey}`
 );
 
 // ---- Test 7: motion → walk → run → stop → walk re-cycles cache ------
+// Motion-link transition clips share the bounded per-instance action cache,
+// so the ORIGINAL walk action may have been LRU-evicted by now; re-entering
+// WALK must still land on the walk cycle and keep currentAction consistent
+// with the cache entry under its key.
 await em.setMotion(TEST_GUID, WALK_CMD, 0x003d);
-const sizeAfterReWalk = inst.actions.size;
+const walkKey = `33554585:150994945:${WALK_CMD >>> 0}:61`;
 check(
-    "re-entering WALK after STOP reuses the cached action (size unchanged)",
-    sizeAfterReWalk === 2,
-    `actions.size=${sizeAfterReWalk}`
+    "re-entering WALK after STOP plays the walk cycle again",
+    inst.currentActionKey === walkKey,
+    `currentActionKey=${inst.currentActionKey}`
 );
 check(
-    "currentAction is the originally-cached walk action",
-    inst.currentAction === walkAction,
-    `currentAction === original walkAction? ${inst.currentAction === walkAction}`
+    "currentAction is the cache entry under the walk key",
+    inst.currentAction === inst.actions.get(walkKey),
+    `currentAction === actions.get(walkKey)? ${inst.currentAction === inst.actions.get(walkKey)}`
 );
 
 // ---- Test 8: kind=2 REMOVE -------------------------------------------

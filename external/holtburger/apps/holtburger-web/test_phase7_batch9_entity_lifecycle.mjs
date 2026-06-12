@@ -122,8 +122,26 @@ const entitiesSrc = loadModule("scene3d/entities.js");
 // `timeRng` is a stripped import (./particles/time_rng.js); supply a
 // deterministic stub so the CallPES arm computes a LARGE delay (timer won't
 // fire during the test → we can assert it is tracked then cancel it).
+// A9-Stage2 setup_rig.js is a stripped import; force the legacy inline rig
+// paths (byte-identical-transform contract) so the module-scope
+// `RIG_MODULE_ON = readRigModuleFlag()` evaluates without the module.
+const RIG_STUBS =
+  "const readRigModuleFlag = () => false;\n" +
+  "const applyRestPoseFrame = () => { throw new Error('rigModule stubbed'); };\n" +
+  "const buildPartSurfaceMeshes = () => { throw new Error('rigModule stubbed'); };\n" +
+  "const createPartFramesProxy = () => { throw new Error('rigModule stubbed'); };\n";
+
+// 82a6102c integrated speechBubbles + the B2 PlayEffect spawn-drain
+// always-on (gates removed), so these stripped-import names are now
+// called unconditionally in _spawnImpl/remove. No-op stubs.
+const UI_STUBS =
+  "const drainPendingPlayEffects = () => {};\n" +
+  "const showSpeechBubbleOnEntity = () => {};\n" +
+  "const removeSpeechBubbleFromEntity = () => {};\n" +
+  "const ensureNameplateForEntity = () => {};\n";
+
 const composite =
-  "const timeRng = () => 0.999;\n" +
+  "const timeRng = () => 0.999;\n" + RIG_STUBS + UI_STUBS +
   "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
   "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
   "// === entities.js ===\n" + stripExports(entitiesSrc) + "\n" +
@@ -256,7 +274,7 @@ function spawnMeta(guid) {
     "const { groups, surfaceDids } = (this.__test_m2gg ? this.__test_m2gg(wasmMesh) : meshToGeometryGroups(wasmMesh));",
   );
   const comp =
-    "const timeRng = () => 0.999;\n" +
+    "const timeRng = () => 0.999;\n" + RIG_STUBS + UI_STUBS +
     "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
     "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
     "// === entities.js ===\n" + stripExports(eSrc) + "\n" +
