@@ -485,6 +485,38 @@ const VEL_SCALE_ON = (() => {
   }
 })();
 
+// A5-P2 (unification survey 2026-06-11) — `?tweenClock=dt` (default OFF).
+// One clock domain for the four hook-side-effect tweens
+// (`_tickSwingTween` / `_tickJumpPoseTween` / `_tickCastTween` /
+// `_tickScaleHookTween`). Retail clocks EVERY animation side effect off the
+// single physics quantum inside the one update pass (acclient.c:340659-340780
+// — frame crossings, hooks and their side effects all consume the same
+// elapsed-time quantum, on the single `Timer::cur_time` static,
+// acclient.c:46992). Ours split-brains two clock domains (A5 divergence #8):
+// the mixer + `_tickHookOmega` + `_tickMaterialHooks` advance on the loop's
+// CLAMPED dt, while these four tweens read `performance.now()` wall clock —
+// so a tab-throttle / DT_RECOVERY freeze (or any dt clamping) advances the
+// tween family 2s of wall time while the mixer advances ~16ms, desyncing pose
+// tweens from the clip state they overlay. ON → the four tickers AND their
+// stamp sites (`startMs`) run off `EntityManager._tweenClockMs`, an
+// accumulated-dt clock advanced at the top of `tick(dt)` by the SAME dt the
+// mixers consume (`_tweenNowMs()` is the single read point); tween phase then
+// freezes/advances in lockstep with mixer time. Seeded from wall now at
+// construction so absolute timestamps stay monotonic across the gate.
+// Deliberately OUT of scope (conservative; stay wall-clock either way):
+// `_castBusyUntilMs` (F8-4 anti-spam debounce, not a pose tween),
+// `_swingHold.startedMs` + its `setTimeout` peak timers (timer-driven, not
+// ticked), `_localSwingEchoes` / `_lastServerSwingMs` (wire-echo dedupe
+// windows), and `actionLastUsedMs` (LRU bookkeeping).
+const TWEEN_CLOCK_DT = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("tweenClock")?.toLowerCase() === "dt";
+  } catch (_) {
+    return false;
+  }
+})();
+
 // F15-2 (2026-06-09) — `?signedMotionSpeed=on` gates REVERSE clip playback
 // for a backstep (negative forward_speed). Default OFF: a backstepping remote
 // otherwise moonwalks (forward walk anim while dead-reckoning backward). When
@@ -2246,6 +2278,14 @@ export class EntityManager {
   constructor(scene3d, wasmExports) {
     this.scene3d = scene3d;
     this.wasmExports = wasmExports;
+    // A5-P2 (`?tweenClock=dt`) — accumulated-dt tween clock (ms). Advanced
+    // at the top of `tick(dt)` by the same dt the mixers consume; read via
+    // `_tweenNowMs()` by the four pose-tween tickers + their stamp sites.
+    // Seeded from wall now so stamps made before the first tick (and any
+    // flag-off → flag-on comparison) stay monotonic. Inert when the flag is
+    // off (`_tweenNowMs()` returns `performance.now()`, the legacy clock).
+    this._tweenClockMs =
+      typeof performance !== "undefined" ? performance.now() : 0;
     // Wave 7.5 (2026-05-24) — opt-in applyAppearance hot-swap. When
     // `?clothingHotSwap=1` URL flag is set, applyAppearance attempts
     // to swap the entity's part-mesh contents in place (preserving
@@ -5151,7 +5191,8 @@ export class EntityManager {
     // frame instead of whatever clip-time happens to be).
     inst._jumpPoseStash = from;
     inst._jumpPoseTween = {
-      startMs: performance.now(),
+      // A5-P2: stamp from the same clock `_tickJumpPoseTween` reads.
+      startMs: this._tweenNowMs(),
       durationMs: 200,
       from,
       to,
@@ -5171,7 +5212,8 @@ export class EntityManager {
       if (p) from.set(partIdx, p.quaternion.clone());
     }
     inst._jumpPoseTween = {
-      startMs: performance.now(),
+      // A5-P2: stamp from the same clock `_tickJumpPoseTween` reads.
+      startMs: this._tweenNowMs(),
       durationMs: 200,
       from,
       to: inst._jumpPoseStash,
@@ -5193,7 +5235,8 @@ export class EntityManager {
       -Math.PI / 15, // ~12°
     );
     inst._jumpPoseTween = {
-      startMs: performance.now(),
+      // A5-P2: stamp from the same clock `_tickJumpPoseTween` reads.
+      startMs: this._tweenNowMs(),
       durationMs: 200,
       fromTilt: new THREE.Quaternion(), // identity
       toTilt: tilt,
@@ -5211,7 +5254,8 @@ export class EntityManager {
     // out. base defaults to 1 → byte-identical to the prior `scale.z`.
     const base = inst._baseScale || 1.0;
     inst._jumpPoseTween = {
-      startMs: performance.now(),
+      // A5-P2: stamp from the same clock `_tickJumpPoseTween` reads.
+      startMs: this._tweenNowMs(),
       durationMs: 200,
       fromTilt: inst.airborneTilt
         ? inst.airborneTilt.clone()
@@ -5272,7 +5316,8 @@ export class EntityManager {
       ),
     );
     inst._swingTween = {
-      startMs: performance.now(),
+      // A5-P2: stamp from the same clock `_tickSwingTween` reads.
+      startMs: this._tweenNowMs(),
       durationMs: 300,
       armIdx,
       baseQ,
@@ -5323,7 +5368,8 @@ export class EntityManager {
     }
     if (armEntries.length === 0) return;
     inst._castTween = {
-      startMs: performance.now(),
+      // A5-P2: stamp from the same clock `_tickCastTween` reads.
+      startMs: this._tweenNowMs(),
       durationMs: 600,
       arms: armEntries,
     };
@@ -5858,6 +5904,21 @@ export class EntityManager {
         " dur=" + (Number.isFinite(dur) ? dur.toFixed(2) : "0.00") + "s",
       );
     }
+  }
+
+  /**
+   * A5-P2 (`?tweenClock=dt`) — the single clock read for the four pose-tween
+   * tickers (`_tickSwingTween` / `_tickJumpPoseTween` / `_tickCastTween` /
+   * `_tickScaleHookTween`) and their `startMs` stamp sites. Flag on →
+   * the accumulated-dt clock advanced in `tick(dt)` (one clock domain with
+   * the mixers, retail's single-quantum contract, acclient.c:340659-340780);
+   * flag off → `performance.now()`, byte-identical to the legacy wall-clock
+   * behavior. Stamp sites MUST use this too: mixing a wall-clock `startMs`
+   * with a dt-clock `nowMs` would corrupt the tween phase.
+   */
+  _tweenNowMs() {
+    if (TWEEN_CLOCK_DT) return this._tweenClockMs;
+    return typeof performance !== "undefined" ? performance.now() : 0;
   }
 
   /**
@@ -9542,6 +9603,13 @@ export class EntityManager {
    */
   tick(dt) {
     if (!(dt > 0)) return;
+    // A5-P2 (`?tweenClock=dt`) — advance the unified tween clock by the SAME
+    // dt every mixer below consumes (retail: one elapsed-time quantum for the
+    // whole update pass, acclient.c:340659-340780). Placed after the dt>0
+    // guard: a skipped frame advances neither mixers nor tweens. When the
+    // flag is off this field is dead (legacy wall clock), so no gate check
+    // is needed on the add itself — `_tweenNowMs()` owns the gate.
+    this._tweenClockMs += dt * 1000;
     // === Wave R3.B (2026-05-29) — resolve the active camera ONCE for the
     // transparent-part sort pass. Same accessor convention as
     // `_shouldTickEntity` (switcher first, fall back to `.camera`). Only when
@@ -9972,7 +10040,7 @@ export class EntityManager {
       // No-op when no tween is active.
       if (inst._jumpPoseTween) {
         try {
-          this._tickJumpPoseTween(inst, performance.now());
+          this._tickJumpPoseTween(inst, this._tweenNowMs());
         } catch (e) {
           // eslint-disable-next-line no-console
           if (!this._jumpTweenWarned) {
@@ -9988,7 +10056,7 @@ export class EntityManager {
       // jump pose so the arm rotation wins for the swing duration.
       if (inst._swingTween) {
         try {
-          this._tickSwingTween(inst, performance.now());
+          this._tickSwingTween(inst, this._tweenNowMs());
         } catch (e) {
           // eslint-disable-next-line no-console
           if (!this._swingTweenWarned) {
@@ -10006,7 +10074,7 @@ export class EntityManager {
       // clip clears `_castTween` in setMotion's `cls === "cast"` branch.
       if (inst._castTween) {
         try {
-          this._tickCastTween(inst, performance.now());
+          this._tickCastTween(inst, this._tweenNowMs());
         } catch (e) {
           // eslint-disable-next-line no-console
           if (!this._castTweenWarned) {
@@ -10024,7 +10092,7 @@ export class EntityManager {
       // `inst._scaleHookTween`) so non-scaling entities pay zero cost.
       if (inst._scaleHookTween) {
         try {
-          this._tickScaleHookTween(inst, performance.now());
+          this._tickScaleHookTween(inst, this._tweenNowMs());
         } catch (e) {
           // eslint-disable-next-line no-console
           if (!this._scaleHookTweenWarned) {
@@ -11003,7 +11071,8 @@ export class EntityManager {
       const toScale = +hook.rampEnd;
       const durationS = +hook.rampTime;
       inst._scaleHookTween = {
-        startMs: performance.now(),
+        // A5-P2: stamp from the same clock `_tickScaleHookTween` reads.
+        startMs: this._tweenNowMs(),
         durationMs: Math.max(0, durationS * 1000),
         fromScale: inst.root?.scale?.x ?? 1.0,
         toScale,
