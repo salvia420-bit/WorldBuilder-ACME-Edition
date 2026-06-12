@@ -281,6 +281,29 @@ export function cycleTimeScale(actualSpeed, baseSpeed) {
 }
 
 /**
+ * A5-P3 (2026-06-12, W3+ S13, `?rootMotionObject=1`) — significance
+ * predicate over a `rootMotionNet` 7-vec `[tx,ty,tz, qw,qx,qy,qz]`
+ * (AC w-first quat order). True when the clip's net rigid root
+ * displacement is worth applying to the entity ANCHOR on overlay
+ * completion: translation magnitude > 1e-4 m OR rotation angle
+ * > 1e-3 rad (`angle = 2*acos(min(1,|qw|))`). `null` / wrong-length /
+ * empty input (no clip resolved, or an older wasm bundle without the
+ * `rootMotionNet` getter) → false, so the consumer is fail-soft.
+ * Pure; exported for tests (`test_a5_p3_root_motion.mjs`).
+ *
+ * @param {Float32Array|number[]|null|undefined} net
+ * @returns {boolean}
+ */
+export function hasRootMotion(net) {
+    if (!net || typeof net.length !== "number" || net.length !== 7) return false;
+    const t = Math.hypot(net[0], net[1], net[2]);
+    if (Number.isFinite(t) && t > 1e-4) return true;
+    const w = Math.abs(net[3]);
+    if (!Number.isFinite(w)) return false;
+    return 2 * Math.acos(Math.min(1, w)) > 1e-3;
+}
+
+/**
  * Cache of built `THREE.AnimationClip`s keyed by
  * `${setupId}:${mtableId}:${motionCommand}:${stance}`. Memoizes the
  * wasm round-trip + the JS-side clip build so a second call for the
@@ -589,6 +612,20 @@ export class AnimationCache {
                     ? animData.posFrames
                     : new Float32Array(0);
 
+            // A5-P3 (2026-06-12, `?rootMotionObject=1`) — net rigid root
+            // displacement of the whole clip, `[tx,ty,tz, qw,qx,qy,qz]`
+            // (AC w-first), model space relative to clip start. Snapshot
+            // BEFORE the wasm handle dies; `null` fail-soft covers older
+            // wasm bundles without the getter AND the "no cycle resolved"
+            // empty vec (both → consumer never arms). Copied into a fresh
+            // Float32Array so the cache entry owns plain data.
+            const rootMotionNet =
+                animData.rootMotionNet &&
+                typeof animData.rootMotionNet.length === "number" &&
+                animData.rootMotionNet.length === 7
+                    ? Float32Array.from(animData.rootMotionNet)
+                    : null;
+
             // Cohere-B (2026-05-12): clone the per-part rest pose
             // alongside partFrames. Cached together because rest pose
             // is a function of (setupId, mtableId, stance) — same
@@ -754,6 +791,10 @@ export class AnimationCache {
                 restOrigins,
                 restOrientations,
                 hooks,
+                // A5-P3: Float32Array(7) net root displacement, or null
+                // ("no clip / unknown / pre-P3 wasm"). Consumed by
+                // entities.js `_tryPlayLink` under `?rootMotionObject=1`.
+                rootMotionNet,
             };
         })();
         this.entries.set(key, promise);

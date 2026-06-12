@@ -123,6 +123,29 @@ function readHeadingEaseK() {
   return HEADING_EASE_DAMP_K_DEFAULT;
 }
 
+// A5-P3 (2026-06-12, W3+ S13) — `?rootMotionObject=1` opt-in, default OFF.
+// On overlay (one-shot link clip) COMPLETION, apply the clip's net rigid
+// root displacement (`rootMotionNet` from the A5-P3 wasm metadata export)
+// to the entity ANCHOR (`inst.root`), so a translating one-shot
+// (lunge / knockback / door swing) ends with the rig where the anim left
+// it instead of popping back to the pre-clip anchor. Retail moves the
+// OBJECT frame per crossed frame (CSequence::update_internal accumulation,
+// acclient.c:340717-340720, composed object-local into the new object frame
+// at acclient.c:320031); ours is the spec-scoped completion-time
+// approximation (A5 §4 P3 — per-frame object root motion deferred). Remote
+// entities only — the local player's anchor is owned by the wasm integrator
+// (stage P3-L deferral, S13 spec §3). Same flag-reader shape as
+// `readDeadReckonFlag`; read once in the constructor into
+// `this._rootMotionObjectOn`.
+function readRootMotionObjectFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search).get("rootMotionObject") === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
 // === Wave R3.B — transparency depth-sort via AC's authored sort center
 // (2026-05-29) ===
 // `?sortCenter=on` opt-in. Default OFF → no `renderOrder` writes on entity
@@ -380,7 +403,7 @@ import {
   acQuatToThree,
   acToThree,
 } from "./adapter.js";
-import { AnimationCache, cycleTimeScale } from "./animation.js";
+import { AnimationCache, cycleTimeScale, hasRootMotion } from "./animation.js";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import {
   materialCanCastShadow,
@@ -2272,6 +2295,11 @@ export class EntityManager {
     // Consumed in `setPose` (stash target / discontinuity-snap) + `tick` (slerp).
     this._headingEaseOn = readHeadingEaseEnabled();
     this._headingEaseK = readHeadingEaseK();
+    // A5-P3 (2026-06-12) — `?rootMotionObject=1` opt-in (default OFF):
+    // apply a one-shot overlay's net root displacement to the entity
+    // anchor on `finished`. Read once HERE; consumed in `_tryPlayLink`
+    // (arm) + `_applyRootMotionToAnchor` (apply) via `this.`.
+    this._rootMotionObjectOn = readRootMotionObjectFlag();
     // === Wave R3.B (2026-05-29) — transparency depth-sort via AC sort center.
     // Read the `?sortCenter=on` opt-in HERE (constructor) so every consumer
     // (`_attachSortCenters` at spawn, the `tick` sort pass) reads
@@ -3732,6 +3760,11 @@ export class EntityManager {
     // clear-on-resumed-position point for both KIND_POSITION drain paths
     // (EntityManager.setPose is only reached from a KIND_POSITION event).
     if (inst._stickyTarget) inst._stickyTarget = null;
+    // A5-P3 (?rootMotionObject=1): a fresh authoritative KIND_POSITION
+    // replaces the anchor wholesale, making the applied-root-motion
+    // ledger moot — clear it (diag-only; the existing dead-reckon
+    // teleport-snap guard already bounds any large residual delta).
+    if (inst._appliedRootMotion) inst._appliedRootMotion = null;
 
     // === A2 Path A (2026-05-29) — remote-entity HEADING ease.
     // Eligible only for a plain remote entity whose rotation isn't already
@@ -7717,6 +7750,22 @@ export class EntityManager {
       }
       action.reset();
       action.play();
+      // A5-P3 (?rootMotionObject=1) — arm the completion-time anchor
+      // apply for a one-shot overlay whose clip carries a significant
+      // net root displacement. Remote entities only (local-player anchor
+      // is the wasm integrator — P3-L deferred). The `finished` listener
+      // fires inside `mixer.update`, i.e. BEFORE this frame's
+      // per-instance hook drain at the end of the tick body — matching
+      // retail's position-resolve-before-process_hooks order
+      // (acclient.c:320031 before :320035) on BOTH ?hookDrain states,
+      // so no second owner is needed at the drain site (S13 §3 step 6).
+      if (
+        this._rootMotionObjectOn &&
+        hasRootMotion(entry.rootMotionNet) &&
+        !this._isLocalPlayerGuid(inst.guid >>> 0)
+      ) {
+        this._armRootMotionOnFinish(inst, action, entry.rootMotionNet);
+      }
       // Audit C1 (CMT remote-swing double-play dedup): a SERVER
       // KIND_MOTION_ACTION swing/cast routes through here (setMotion's
       // `cls === "attack"|"cast"` branch) and raw-plays WITHOUT touching
@@ -7814,6 +7863,115 @@ export class EntityManager {
       };
       mixer.addEventListener("finished", onFinished);
     } catch (_) { /* never block the swing on the weight-ramp */ }
+  }
+
+  // A5-P3 (2026-06-12, W3+ S13, `?rootMotionObject=1`) — register a
+  // one-shot `finished` listener that applies the overlay clip's net root
+  // displacement to the entity anchor when (and only when) the clip runs
+  // to natural completion. Pattern of `_suppressBaseCycleForOverlay`'s
+  // `onFinished`: same-action guard via `inst._pendingRootMotion ===
+  // action` so a spam-replay (reset/play on the reused action) REFRESHES
+  // the captured pose timestamp instead of stacking listeners — one
+  // completed play = at most one apply. `poseTs` is captured at play time
+  // from the per-guid KIND_POSITION stamp (loop.js `__lastEntityWorldPos`
+  // slot `.ts`); the apply-side freshness gate compares it.
+  // An INTERRUPTED overlay (action.stop()/motion swap before completion)
+  // never fires `finished` → applies NOTHING (accepted approximation gap
+  // vs retail's per-crossed-frame partial application,
+  // acclient.c:340713-340727; S13 spec §3 step 5 / §5).
+  _armRootMotionOnFinish(inst, action, net) {
+    try {
+      if (!inst || !action || !inst.mixer) return;
+      const g = inst.guid >>> 0;
+      let poseTs = 0;
+      if (typeof window !== "undefined" && window.__lastEntityWorldPos) {
+        poseTs = window.__lastEntityWorldPos.get(g)?.ts ?? 0;
+      }
+      if (inst._pendingRootMotion === action) {
+        // Re-arm (spam replay): refresh the captured timestamp only —
+        // the existing listener stays registered and applies once.
+        inst._pendingRootMotionPoseTs = poseTs;
+        return;
+      }
+      inst._pendingRootMotion = action;
+      inst._pendingRootMotionPoseTs = poseTs;
+      const mixer = inst.mixer;
+      const onFinished = (e) => {
+        if (e.action !== action) return;
+        try { mixer.removeEventListener("finished", onFinished); } catch (_) {}
+        if (inst._pendingRootMotion === action) inst._pendingRootMotion = null;
+        this._applyRootMotionToAnchor(inst, net, inst._pendingRootMotionPoseTs ?? 0);
+      };
+      mixer.addEventListener("finished", onFinished);
+    } catch (_) { /* never block the play path */ }
+  }
+
+  // A5-P3 — apply a completed overlay's net root displacement
+  // `[tx,ty,tz, qw,qx,qy,qz]` (AC w-first, model space relative to clip
+  // start) to the entity ANCHOR, mirroring retail
+  // CPhysicsObj::UpdatePositionInternal (acclient.c:320014-320031):
+  //   - TRANSLATION is scaled by live m_scale and composed OBJECT-LOCAL
+  //     (`d = R_root·(s·T)`; Frame::combine, acclient.c:320031), but
+  //     SKIPPED when airborne — the JS analog of retail zeroing
+  //     `offset_frame.m_fOrigin` when `!(transient_state &
+  //     ON_WALKABLE_TS)` (acclient.c:320020-320026; acclient.h:3691).
+  //   - ROTATION post-multiplies regardless — retail never zeroes the
+  //     offset quaternion (acclient.c:320014-320026 touches only
+  //     m_fOrigin.x/y/z).
+  // FRESHNESS GATE (double-apply protection): if any server
+  // KIND_POSITION landed mid-clip (per-guid `.ts` stamp changed since
+  // play), SKIP entirely — the authoritative pose already includes
+  // whatever the server thinks the anim did. Dead-reckon / heading-ease
+  // targets are co-moved so `tick()` doesn't pull the rig back; the
+  // `_appliedRootMotion` ledger is diag-only and cleared in `setPose`
+  // (a fresh authoritative pose replaces the anchor wholesale).
+  _applyRootMotionToAnchor(inst, net, poseTsAtPlay) {
+    try {
+      if (!this._rootMotionObjectOn) return;
+      if (!inst || !net || net.length !== 7) return;
+      const g = inst.guid >>> 0;
+      if (!this.entityMap.has(g)) return; // disposed mid-clip
+      let tsNow = 0;
+      if (typeof window !== "undefined" && window.__lastEntityWorldPos) {
+        tsNow = window.__lastEntityWorldPos.get(g)?.ts ?? 0;
+      }
+      if (tsNow !== poseTsAtPlay) return; // server pose landed mid-clip
+      const airborne = !!(inst._isAirborne || inst.airborneTilt);
+      let dx = 0, dy = 0, dz = 0;
+      if (!airborne) {
+        // Live m_scale analog: objScale base (root.scale set at spawn)
+        // as mutated by ScaleHook tweens — retail reads live m_scale
+        // (acclient.c:320016-320019).
+        const s = inst.root.scale.x || 1.0;
+        const d = new THREE.Vector3(net[0], net[1], net[2])
+          .multiplyScalar(s)
+          .applyQuaternion(inst.root.quaternion);
+        inst.root.position.add(d);
+        // Keep the dead-reckon ease target coherent so tick() doesn't
+        // pull the rig back toward the pre-apply server target.
+        if (inst._serverTargetPos) inst._serverTargetPos.add(d);
+        dx = d.x; dy = d.y; dz = d.z;
+      }
+      // Rotation: object-local post-multiply; AC w-first → three.js via
+      // acQuatToThree (pure w-reorder — scene is AC Z-up throughout).
+      const rq = acQuatToThree(net[3], net[4], net[5], net[6]);
+      const angle = 2 * Math.acos(Math.min(1, Math.abs(net[3])));
+      inst.root.quaternion.multiply(rq);
+      if (inst._serverTargetQuat) inst._serverTargetQuat.multiply(rq);
+      // Diag-only ledger — cleared on the next authoritative setPose.
+      const led = inst._appliedRootMotion || (inst._appliedRootMotion = {
+        x: 0, y: 0, z: 0, angle: 0, count: 0,
+      });
+      led.x += dx; led.y += dy; led.z += dz;
+      led.angle += angle; led.count += 1;
+      if (typeof window !== "undefined" && window.__diag?.motion?.onRootMotionApplied) {
+        try {
+          window.__diag.motion.onRootMotionApplied({
+            guid: g, dx, dy, dz, angle, airborne,
+          });
+        } catch (_) { /* diag must never block */ }
+      }
+    } catch (_) { /* never block the finished path */ }
   }
 
   /**

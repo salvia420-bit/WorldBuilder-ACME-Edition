@@ -5192,13 +5192,7 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     mtable_override: Option<u32>,
     stance_override: u32,
     command: u32,
-) -> Option<(
-    Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
-    Vec<f32>,
-    Vec<f32>,
-    f32,
-    u32,
-)> {
+) -> Option<(ConcatenatedMotionBake, u32)> {
     use holtburger_dat::file_type::MotionTable;
     use holtburger_dat::ResourceKey;
 
@@ -5246,9 +5240,8 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // T4 (2026-05-28): concatenate ALL AnimData segments (was `anims.first()`
     // only) with per-segment timing + reverse playback. See
     // `build_concatenated_motion_frames`.
-    let (frames, frame_times, pos_frames, duration) =
-        build_concatenated_motion_frames(source, motion_data)?;
-    Some((frames, frame_times, pos_frames, duration, resolved_stance))
+    let bake = build_concatenated_motion_frames(source, motion_data)?;
+    Some((bake, resolved_stance))
 }
 
 /// T11 (2026-05-28) — authored ground speed of a locomotion cycle:
@@ -5733,13 +5726,7 @@ fn try_resolve_link_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     stance_override: u32,
     from_command: u32,
     to_command: u32,
-) -> Option<(
-    Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
-    Vec<f32>,
-    Vec<f32>,
-    f32,
-    u32,
-)> {
+) -> Option<(ConcatenatedMotionBake, u32)> {
     use holtburger_dat::file_type::MotionTable;
     use holtburger_dat::ResourceKey;
 
@@ -5761,9 +5748,8 @@ fn try_resolve_link_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // timing + reverse playback (was `anims.first()`). Links are commonly
     // multi-segment (windup → strike → recover → settle) and ~22% of retail
     // AnimData are reverse-framerate, which previously produced a null clip.
-    let (frames, frame_times, pos_frames, duration) =
-        build_concatenated_motion_frames(source, motion_data)?;
-    Some((frames, frame_times, pos_frames, duration, resolved_stance))
+    let bake = build_concatenated_motion_frames(source, motion_data)?;
+    Some((bake, resolved_stance))
 }
 
 /// T4 (2026-05-28) — concatenate ALL `AnimData` segments of a `MotionData`
@@ -5863,18 +5849,35 @@ fn fold_root_motion_into_parts(
     }
 }
 
-/// Returns `(frames, frame_times_secs, total_duration_secs)` or `None` when no
-/// segment yields a usable frame (so callers keep their rest-pose fallback).
+/// A5-P3 (2026-06-12) — named result of one whole-MotionData bake. Replaces
+/// the prior 4-tuple `(frames, frame_times, pos_frames, duration)` so the
+/// root-motion metadata addition doesn't tuple-churn every call site again.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) struct ConcatenatedMotionBake {
+    pub frames: Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
+    pub frame_times: Vec<f32>,
+    pub pos_frames: Vec<f32>,
+    pub duration: f32,
+    /// A5-P3: net rigid root displacement of the whole clip — the final
+    /// (pos_accum, ori_accum) pair at end-of-bake. Model-space, relative to
+    /// clip start. Retail equivalent: the sum of per-frame
+    /// `Frame::combine(pos_frame)` offsets a full playthrough feeds
+    /// `CPhysicsObj::UpdatePositionInternal`
+    /// (acclient.c:340717-340720 -> 320014-320031). On the
+    /// `DIM5_2_ROOT_ORIENT` fold path both accumulators are maintained; on
+    /// the legacy path `net_orientation` stays identity (identical to its
+    /// visual semantics — the legacy `pos` channel is translation-only).
+    pub net_translation: [f32; 3],
+    pub net_orientation: holtburger_common::Quaternion,
+}
+
+/// Returns the bake (`ConcatenatedMotionBake`) or `None` when no segment
+/// yields a usable frame (so callers keep their rest-pose fallback).
 #[cfg(any(target_arch = "wasm32", test))]
 fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     motion_data: &holtburger_dat::file_type::motion_table::MotionData,
-) -> Option<(
-    Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
-    Vec<f32>,
-    Vec<f32>,
-    f32,
-)> {
+) -> Option<ConcatenatedMotionBake> {
     use holtburger_dat::file_type::Animation;
     use holtburger_dat::ResourceKey;
 
@@ -6057,7 +6060,16 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // `t` after the final increment == last_frame_time + last_dt == the time
     // the last frame holds until (== clip duration; matches the legacy
     // single-anim `num_frames / framerate`).
-    Some((frames, times, pos, t))
+    Some(ConcatenatedMotionBake {
+        frames,
+        frame_times: times,
+        pos_frames: pos,
+        duration: t,
+        // A5-P3: the end-of-bake accumulators ARE the clip's net rigid root
+        // displacement — previously discarded here.
+        net_translation: pos_accum,
+        net_orientation: ori_accum,
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -14427,10 +14439,10 @@ pub async fn fetch_entity_cycle_frames(
                     MotionTable::WALK_FORWARD_COMMAND,
                     MotionTable::RUN_FORWARD_COMMAND,
                 ] {
-                    if let Some((frames, _, _, _, _)) =
+                    if let Some((bake, _)) =
                         try_resolve_cycle_frames(s, &setup, mt_override, stance, command)
                     {
-                        for f in frames.iter() {
+                        for f in bake.frames.iter() {
                             let _ = triangulate_setup_model_at_frame(
                                 s,
                                 setup_id,
@@ -14463,7 +14475,11 @@ pub async fn fetch_entity_cycle_frames(
     // dispatches stance once at the top).
     let bake_cycle = |command: u32| -> (Vec<ModelMesh>, f32, u32) {
         match try_resolve_cycle_frames(source.as_ref(), &setup, mt_override, stance, command) {
-            Some((frames, _frame_times, _pos_frames, duration, resolved_stance)) => {
+            // A5-P3: 2D path ignores the bake's root-motion metadata (do NOT
+            // extend EntityCycleSet — per the S13 spec scope ruling).
+            Some((bake, resolved_stance)) => {
+                let frames = bake.frames;
+                let duration = bake.duration;
                 let mut out = Vec::with_capacity(frames.len());
                 for f in &frames {
                     let mut tris = Vec::new();
@@ -15151,6 +15167,11 @@ pub struct EntityAnimationData {
     /// adds the value at frame `i` directly — but the value is the accumulated
     /// total at `i`, not a single-frame delta.
     pos_frames: Vec<f32>,
+    /// A5-P3 (2026-06-12) root-motion metadata: net rigid root displacement
+    /// of the whole baked clip, `[tx,ty,tz, qw,qx,qy,qz]` (AC w-first),
+    /// model space relative to clip start. Empty when no cycle resolved;
+    /// identity (`[0,0,0,1,0,0,0]`) for clips without POS_FRAMES.
+    root_motion_net: Vec<f32>,
     /// T4: total clip duration in seconds (== last frame time + its segment dt).
     duration: f32,
     /// **Task E (2026-05-12).** Sorted-by-`time_in_clip_s` list of
@@ -15261,6 +15282,20 @@ impl EntityAnimationData {
         self.pos_frames.clone()
     }
 
+    /// A5-P3 (2026-06-12) root-motion metadata: net rigid root displacement
+    /// of the whole baked clip, `[tx,ty,tz, qw,qx,qy,qz]` (AC w-first quat
+    /// order, same convention as `partFrames`), model space relative to clip
+    /// start. Empty when no cycle resolved ("no clip / unknown"); identity
+    /// (`[0,0,0,1,0,0,0]`) for clips without POS_FRAMES. JS gate
+    /// `?rootMotionObject=1` applies this to the entity ANCHOR on overlay
+    /// completion (retail moves the object frame, not the rig —
+    /// acclient.c:340717-340720 -> 320014-320031). Purely additive export —
+    /// rides manifest v4 (no bump; F18-2 coercion-safe rule).
+    #[wasm_bindgen(getter, js_name = rootMotionNet)]
+    pub fn root_motion_net(&self) -> Vec<f32> {
+        self.root_motion_net.clone()
+    }
+
     /// T4: total clip duration in seconds. `0.0` when no cycle resolved.
     #[wasm_bindgen(getter)]
     pub fn duration(&self) -> f32 {
@@ -15328,6 +15363,9 @@ impl EntityAnimationData {
             part_frames: Vec::new(),
             frame_times: Vec::new(),
             pos_frames: Vec::new(),
+            // A5-P3: no cycle resolved → no root-motion metadata (empty =
+            // "no clip / unknown"; JS `hasRootMotion(null)` is false).
+            root_motion_net: Vec::new(),
             duration: 0.0,
             rest_origins,
             rest_orientations,
@@ -15393,6 +15431,13 @@ pub(crate) struct EntityAnimationKeyframesInner {
     pub pos_frames: Vec<f32>,
     /// T4: total clip duration (seconds) == last frame time + its segment dt.
     pub duration: f32,
+    /// A5-P3 (2026-06-12) root-motion metadata: net rigid root displacement
+    /// of the whole baked clip, layout `[tx, ty, tz, qw, qx, qy, qz]`
+    /// (length 7, AC w-first quat order — same convention as `part_frames`),
+    /// model space relative to clip start. Empty when no cycle/link resolved
+    /// ("no clip / unknown"); a resolved clip with no POS_FRAMES yields the
+    /// identity 7-vec `[0,0,0,1,0,0,0]` naturally from the accumulators.
+    pub root_motion_net: Vec<f32>,
     pub rest_origins: Vec<f32>,
     pub rest_orientations: Vec<f32>,
     pub hooks: Vec<HookDataPlain>,
@@ -15481,6 +15526,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
             frame_times: Vec::new(),
             pos_frames: Vec::new(),
             duration: 0.0,
+            root_motion_net: Vec::new(),
             rest_origins,
             rest_orientations,
             hooks: Vec::new(),
@@ -15534,7 +15580,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
     } else {
         None
     };
-    let (frames, frame_times, pos_frames, duration, resolved_stance) = match link_result {
+    let (bake, resolved_stance) = match link_result {
         Some(t) => t,
         None => match try_resolve_cycle_frames(source, &setup, mt_override, stance, motion_command) {
             Some(t) => t,
@@ -15550,6 +15596,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
                     frame_times: Vec::new(),
                     pos_frames: Vec::new(),
                     duration: 0.0,
+                    root_motion_net: Vec::new(),
                     rest_origins,
                     rest_orientations,
                     hooks: Vec::new(),
@@ -15557,6 +15604,25 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
             }
         },
     };
+    let ConcatenatedMotionBake {
+        frames,
+        frame_times,
+        pos_frames,
+        duration,
+        net_translation,
+        net_orientation,
+    } = bake;
+    // A5-P3: surface the bake's net rigid root displacement as the 7-float
+    // `[tx,ty,tz, qw,qx,qy,qz]` metadata vec (AC w-first quat order).
+    let root_motion_net = vec![
+        net_translation[0],
+        net_translation[1],
+        net_translation[2],
+        net_orientation.w,
+        net_orientation.x,
+        net_orientation.y,
+        net_orientation.z,
+    ];
 
     // Flatten keyframes (num_frames, part_count, 7) row-major in
     // frame-major order — identical layout to `EntityAnimationData
@@ -15613,6 +15679,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
         frame_times,
         pos_frames,
         duration,
+        root_motion_net,
         rest_origins,
         rest_orientations,
         hooks: hooks_out,
@@ -15836,6 +15903,7 @@ fn inner_to_wasm_animation_data(inner: EntityAnimationKeyframesInner) -> EntityA
         part_frames: inner.part_frames,
         frame_times: inner.frame_times,
         pos_frames: inner.pos_frames,
+        root_motion_net: inner.root_motion_net,
         duration: inner.duration,
         rest_origins: inner.rest_origins,
         rest_orientations: inner.rest_orientations,
@@ -42907,7 +42975,7 @@ mod tests_animation_keyframes_batch {
             velocity: None,
             omega: None,
         };
-        let (ff, _t, _p, _d) = build_concatenated_motion_frames(&source, &md_fwd).expect("fwd");
+        let ff = build_concatenated_motion_frames(&source, &md_fwd).expect("fwd").frames;
         let fdirs: Vec<i32> = ff.iter().map(|f| f.hooks[0].direction).collect();
         assert_eq!(fdirs, vec![1, -1, 0], "forward segment keeps authored hook directions");
 
@@ -42920,7 +42988,7 @@ mod tests_animation_keyframes_batch {
             velocity: None,
             omega: None,
         };
-        let (rf, _t, _p, _d) = build_concatenated_motion_frames(&source, &md_rev).expect("rev");
+        let rf = build_concatenated_motion_frames(&source, &md_rev).expect("rev").frames;
         let rdirs: Vec<i32> = rf.iter().map(|f| f.hooks[0].direction).collect();
         assert_eq!(rdirs, vec![0, 1, -1], "reverse segment flips Forward<->Backward, Both unchanged");
     }
@@ -42952,8 +43020,8 @@ mod tests_animation_keyframes_batch {
             velocity: None,
             omega: None,
         };
-        let (frames, times, _pos_frames, duration) =
-            build_concatenated_motion_frames(&source, &md).expect("concatenated frames");
+        let bake = build_concatenated_motion_frames(&source, &md).expect("concatenated frames");
+        let (frames, times, duration) = (bake.frames, bake.frame_times, bake.duration);
         let xs: Vec<f32> = frames.iter().map(|f| f.frames[0].origin.x).collect();
         // Pre-T4 this returned only segment A's 2 frames (anims.first()).
         assert_eq!(xs, vec![0.0, 1.0, 0.0, 1.0, 2.0], "all 5 frames, both segments, in order");
@@ -42982,8 +43050,8 @@ mod tests_animation_keyframes_batch {
             velocity: None,
             omega: None,
         };
-        let (rframes, rtimes, _rpos_frames, rduration) =
-            build_concatenated_motion_frames(&source, &md_rev).expect("reverse frames");
+        let rbake = build_concatenated_motion_frames(&source, &md_rev).expect("reverse frames");
+        let (rframes, rtimes, rduration) = (rbake.frames, rbake.frame_times, rbake.duration);
         let rxs: Vec<f32> = rframes.iter().map(|f| f.frames[0].origin.x).collect();
         assert_eq!(rxs, vec![2.0, 1.0, 0.0], "reverse segment plays frames high→low");
         assert!(
@@ -43378,6 +43446,335 @@ mod tests_animation_keyframes_batch {
             succeeded,
             vec![0, 1, 3, 4],
             "all other setups should succeed"
+        );
+    }
+
+    // =================================================================
+    // A5-P3 (2026-06-12, W3+ S13) — root-motion metadata export tests.
+    //
+    // The bake (`build_concatenated_motion_frames`) already maintained
+    // the (pos_accum, ori_accum) accumulators per frame; P3 returns
+    // them as `ConcatenatedMotionBake.net_translation/net_orientation`
+    // and surfaces them through `EntityAnimationKeyframesInner
+    // .root_motion_net` ([tx,ty,tz, qw,qx,qy,qz], AC w-first). These
+    // tests live in this mod to reuse MockSource + synth_gfx.
+    // =================================================================
+
+    /// Synth a minimal Animation (0x03) WITH `POS_FRAMES` (flags=0x1):
+    /// 1 part, one pos Frame per part frame. `deltas` is
+    /// `[(origin_xyz, quat_wxyz)]` per frame; part frames are identity
+    /// (the part channel is irrelevant to the net metadata).
+    fn synth_animation_with_pos(anim_id: u32, deltas: &[([f32; 3], [f32; 4])]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&anim_id.to_le_bytes());
+        b.extend_from_slice(&1u32.to_le_bytes()); // flags: POS_FRAMES
+        b.extend_from_slice(&1u32.to_le_bytes()); // num_parts
+        b.extend_from_slice(&(deltas.len() as u32).to_le_bytes()); // num_frames
+        // pos_frames: Frame = origin (3 f32) + orientation (w,x,y,z).
+        for (o, q) in deltas {
+            for v in o {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+            for v in q {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        // part frames: identity Frame per part + num_hooks=0.
+        for _ in deltas {
+            for v in [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0] {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+            b.extend_from_slice(&0u32.to_le_bytes()); // num_hooks
+        }
+        b
+    }
+
+    fn md(anims: Vec<holtburger_dat::file_type::motion_table::AnimData>)
+        -> holtburger_dat::file_type::motion_table::MotionData {
+        use holtburger_dat::file_type::motion_table::{MotionData, MotionDataFlags};
+        MotionData { bitfield: 0, flags: MotionDataFlags::empty(), anims, velocity: None, omega: None }
+    }
+
+    fn ad(anim_id: u32, framerate: f32) -> holtburger_dat::file_type::motion_table::AnimData {
+        holtburger_dat::file_type::motion_table::AnimData {
+            anim_id,
+            low_frame: 0,
+            high_frame: -1,
+            framerate,
+        }
+    }
+
+    fn yaw_z(deg: f32) -> [f32; 4] {
+        let h = deg.to_radians() * 0.5;
+        [h.cos(), 0.0, 0.0, h.sin()]
+    }
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-4
+    }
+
+    /// A5-P3 test 1 — translating multi-segment MotionData (identity
+    /// orientations): `net_translation` == sum of raw per-frame deltas
+    /// across ALL segments; `net_orientation` stays identity.
+    #[test]
+    fn a5p3_net_translation_sums_deltas_across_segments() {
+        let id = [1.0f32, 0.0, 0.0, 0.0];
+        let anim_a: u32 = 0x0300_5A01;
+        let anim_b: u32 = 0x0300_5A02;
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(
+            ("eor/portal".into(), anim_a),
+            synth_animation_with_pos(anim_a, &[([1.0, 0.0, 0.0], id), ([0.0, 2.0, 0.0], id)]),
+        );
+        files.insert(
+            ("eor/portal".into(), anim_b),
+            synth_animation_with_pos(anim_b, &[([0.0, 0.0, 3.0], id)]),
+        );
+        let source = MockSource { files };
+        let bake = build_concatenated_motion_frames(
+            &source,
+            &md(vec![ad(anim_a, 10.0), ad(anim_b, 10.0)]),
+        )
+        .expect("bake");
+        let t = bake.net_translation;
+        assert!(
+            close(t[0], 1.0) && close(t[1], 2.0) && close(t[2], 3.0),
+            "net_translation must sum across segments, got {t:?}"
+        );
+        let r = bake.net_orientation;
+        assert!(
+            close(r.w, 1.0) && close(r.x, 0.0) && close(r.y, 0.0) && close(r.z, 0.0),
+            "identity-orientation deltas keep net_orientation identity, got ({},{},{},{})",
+            r.w, r.x, r.y, r.z
+        );
+    }
+
+    /// A5-P3 test 2 — forward-then-reverse of the same anim nets to ~zero
+    /// (reverse-segment de-accumulation; the door open→close cancellation
+    /// the JS consumer relies on). Identity orientations — the only
+    /// retail-reachable reverse case (player/door reverse cycles carry
+    /// identity orientation; see `reverse_identity_orientation_matches_
+    /// legacy_negation` in `dim5_root_motion_tests`).
+    #[test]
+    fn a5p3_forward_then_reverse_nets_to_zero() {
+        let id = [1.0f32, 0.0, 0.0, 0.0];
+        let anim: u32 = 0x0300_5B01;
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(
+            ("eor/portal".into(), anim),
+            synth_animation_with_pos(anim, &[([1.0, 0.5, -0.2], id), ([0.5, 0.0, 0.7], id)]),
+        );
+        let source = MockSource { files };
+        let bake = build_concatenated_motion_frames(
+            &source,
+            &md(vec![ad(anim, 10.0), ad(anim, -10.0)]),
+        )
+        .expect("bake");
+        let t = bake.net_translation;
+        assert!(
+            close(t[0], 0.0) && close(t[1], 0.0) && close(t[2], 0.0),
+            "forward+reverse must cancel, got {t:?}"
+        );
+        let r = bake.net_orientation;
+        assert!(close(r.w, 1.0) && close(r.z, 0.0), "net_orientation identity");
+    }
+
+    /// A5-P3 test 3 — DIM5-2 yaw case: "+X then yaw 90°, +X again" curves
+    /// to (1,1,0)/yaw-180, and on the (shipped-ON) fold path the additive
+    /// `pos` channel is all-zero — proving the metadata SURVIVES the fold
+    /// that zeroes the visual channel.
+    #[test]
+    fn a5p3_yaw_net_survives_fold_that_zeroes_pos_channel() {
+        let anim: u32 = 0x0300_5C01;
+        let q = yaw_z(90.0);
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(
+            ("eor/portal".into(), anim),
+            synth_animation_with_pos(anim, &[([1.0, 0.0, 0.0], q), ([1.0, 0.0, 0.0], q)]),
+        );
+        let source = MockSource { files };
+        let bake = build_concatenated_motion_frames(&source, &md(vec![ad(anim, 10.0)]))
+            .expect("bake");
+        let t = bake.net_translation;
+        assert!(
+            close(t[0], 1.0) && close(t[1], 1.0) && close(t[2], 0.0),
+            "curved net translation (1,1,0), got {t:?}"
+        );
+        let r = bake.net_orientation;
+        assert!(
+            close(r.w, 0.0) && close(r.z.abs(), 1.0),
+            "net_orientation yaw-180, got ({},{},{},{})", r.w, r.x, r.y, r.z
+        );
+        // DIM5_2_ROOT_ORIENT is const-true: the fold zeroes the pos channel.
+        assert!(super::DIM5_2_ROOT_ORIENT, "fold path expected ON");
+        assert!(
+            bake.pos_frames.iter().all(|v| *v == 0.0),
+            "fold path zeroes the additive pos channel"
+        );
+    }
+
+    /// A5-P3 test 4a — a resolved clip with NO pos_frames yields zero
+    /// translation + identity orientation from the untouched accumulators
+    /// (the inner layer then emits the identity 7-vec).
+    #[test]
+    fn a5p3_no_pos_frames_yields_identity_net() {
+        let anim: u32 = 0x0300_5D01;
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), anim), synth_animation(anim, &[0.0, 1.0]));
+        let source = MockSource { files };
+        let bake = build_concatenated_motion_frames(&source, &md(vec![ad(anim, 10.0)]))
+            .expect("bake");
+        let t = bake.net_translation;
+        let r = bake.net_orientation;
+        assert!(close(t[0], 0.0) && close(t[1], 0.0) && close(t[2], 0.0));
+        assert!(close(r.w, 1.0) && close(r.x, 0.0) && close(r.y, 0.0) && close(r.z, 0.0));
+    }
+
+    /// A5-P3 test 4b — no-cycle fallback: `root_motion_net` is EMPTY
+    /// ("no clip / unknown"), distinct from the identity 7-vec.
+    #[test]
+    fn a5p3_no_cycle_fallback_has_empty_root_motion_net() {
+        let (source, setup_ids) = build_k_setup_source(1);
+        let inner = build_entity_animation_data_inner(&source, setup_ids[0], &[], &[], None, 0, 0)
+            .expect("inner");
+        assert_eq!(inner.num_frames, 0, "no cycle resolves (setup has no MT)");
+        assert!(
+            inner.root_motion_net.is_empty(),
+            "no-cycle fallback must carry EMPTY root_motion_net"
+        );
+    }
+
+    /// Synth MotionTable bytes: one cycle `(stance, cycle_cmd) -> cycle_md`
+    /// and one link `(stance, from_cmd) -> to_cmd -> link_md`. Wire layout
+    /// per `MotionTable::read`: id, default_style, style_defaults map,
+    /// cycles map, modifiers map, links nested map. MotionData wire:
+    /// u8 num_anims, u8 bitfield, u8 flags, align-pad to 4, AnimData×N.
+    fn synth_motion_table(
+        mt_id: u32,
+        stance: u32,
+        cycle_cmd: u32,
+        cycle_anim: u32,
+        from_cmd: u32,
+        to_cmd: u32,
+        link_anim: u32,
+    ) -> Vec<u8> {
+        let push_md_one_anim = |b: &mut Vec<u8>, anim_id: u32, framerate: f32| {
+            b.push(1); // num_anims
+            b.push(0); // bitfield
+            b.push(0); // flags (no velocity/omega)
+            b.push(0); // align pad to 4
+            b.extend_from_slice(&anim_id.to_le_bytes());
+            b.extend_from_slice(&0i32.to_le_bytes()); // low_frame
+            b.extend_from_slice(&(-1i32).to_le_bytes()); // high_frame
+            b.extend_from_slice(&framerate.to_le_bytes());
+        };
+        // cycle_key for command high-byte == 0 (ours here): byte-identical
+        // to the on-disk ACE `(style << 16) | (cmd & 0xFFFFFF)` encoding.
+        let key = |cmd: u32| ((stance & 0xFFFF) << 16) | (cmd & 0x00FF_FFFF);
+        let mut b = Vec::new();
+        b.extend_from_slice(&mt_id.to_le_bytes());
+        b.extend_from_slice(&stance.to_le_bytes()); // default_style
+        b.extend_from_slice(&0u32.to_le_bytes()); // style_defaults count
+        b.extend_from_slice(&1u32.to_le_bytes()); // cycles count
+        b.extend_from_slice(&key(cycle_cmd).to_le_bytes());
+        push_md_one_anim(&mut b, cycle_anim, 10.0);
+        b.extend_from_slice(&0u32.to_le_bytes()); // modifiers count
+        b.extend_from_slice(&1u32.to_le_bytes()); // links outer count
+        b.extend_from_slice(&key(from_cmd).to_le_bytes());
+        b.extend_from_slice(&1u32.to_le_bytes()); // inner count
+        b.extend_from_slice(&to_cmd.to_le_bytes()); // inner key = FULL to_cmd
+        push_md_one_anim(&mut b, link_anim, 10.0);
+        b
+    }
+
+    /// A5-P3 test 5 — pass-through: `build_entity_animation_data_inner_v2`
+    /// surfaces the bake's net as the 7-float `root_motion_net` for BOTH a
+    /// cycle resolve (`from_motion_command == 0`) and a link resolve.
+    #[test]
+    fn a5p3_inner_v2_surfaces_root_motion_net_for_cycle_and_link() {
+        use holtburger_dat::file_type::SetupModel;
+        let id = [1.0f32, 0.0, 0.0, 0.0];
+        let setup_id: u32 = 0x0200_5E00;
+        let part_id: u32 = 0x0100_5E00;
+        let mt_id: u32 = 0x0900_5E00;
+        let cycle_anim: u32 = 0x0300_5E01;
+        let link_anim: u32 = 0x0300_5E02;
+        let stance: u32 = 0x8000_003D;
+        let cycle_cmd: u32 = 0x0000_0011;
+        let from_cmd: u32 = 0x0000_0041;
+        let to_cmd: u32 = 0x1000_0042;
+
+        let setup = SetupModel {
+            id: setup_id,
+            flags: 0,
+            parts: vec![part_id],
+            parent_index: vec![],
+            default_scale: vec![],
+            holding_locations: HashMap::new(),
+            connection_points: HashMap::new(),
+            placement_frames: HashMap::new(),
+            cyl_spheres: vec![],
+            spheres: vec![],
+            height: 1.0,
+            radius: 1.0,
+            step_up: 0.1,
+            step_down: 0.1,
+            sorting_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            selection_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            lights: HashMap::new(),
+            default_animation: None,
+            default_script: None,
+            default_motion_table: Some(mt_id),
+            default_sound_table: None,
+            default_script_table: None,
+        };
+        let mut setup_bytes = Vec::new();
+        setup.pack(&mut Cursor::new(&mut setup_bytes)).unwrap();
+
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), setup_id), setup_bytes);
+        files.insert(("eor/portal".into(), part_id), synth_gfx(part_id, 0xAA00_5E00, 0.0));
+        files.insert(
+            ("eor/portal".into(), mt_id),
+            synth_motion_table(mt_id, stance, cycle_cmd, cycle_anim, from_cmd, to_cmd, link_anim),
+        );
+        // Cycle anim translates (1,2,0); link anim translates (0,0,5).
+        files.insert(
+            ("eor/portal".into(), cycle_anim),
+            synth_animation_with_pos(cycle_anim, &[([1.0, 0.0, 0.0], id), ([0.0, 2.0, 0.0], id)]),
+        );
+        files.insert(
+            ("eor/portal".into(), link_anim),
+            synth_animation_with_pos(link_anim, &[([0.0, 0.0, 5.0], id)]),
+        );
+        let source = MockSource { files };
+
+        // Cycle resolve (from_motion_command == 0).
+        let inner = build_entity_animation_data_inner_v2(
+            &source, setup_id, &[], &[], None, cycle_cmd, stance, 0, 0,
+        )
+        .expect("cycle inner");
+        assert_eq!(inner.root_motion_net.len(), 7, "7-float [t3 q4] layout");
+        let n = &inner.root_motion_net;
+        assert!(
+            close(n[0], 1.0) && close(n[1], 2.0) && close(n[2], 0.0),
+            "cycle net translation, got {n:?}"
+        );
+        assert!(
+            close(n[3], 1.0) && close(n[4], 0.0) && close(n[5], 0.0) && close(n[6], 0.0),
+            "cycle net orientation identity (w-first), got {n:?}"
+        );
+
+        // Link resolve (from_motion_command != 0 and a link is registered).
+        let inner = build_entity_animation_data_inner_v2(
+            &source, setup_id, &[], &[], None, to_cmd, stance, from_cmd, 0,
+        )
+        .expect("link inner");
+        let n = &inner.root_motion_net;
+        assert_eq!(n.len(), 7);
+        assert!(
+            close(n[0], 0.0) && close(n[1], 0.0) && close(n[2], 5.0),
+            "link net translation, got {n:?}"
         );
     }
 }
