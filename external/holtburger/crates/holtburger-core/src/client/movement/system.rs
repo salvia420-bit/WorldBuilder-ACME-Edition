@@ -4623,6 +4623,59 @@ impl MovementSystem {
         }
     }
 
+    /// A4-Q3 (2026-06-12, unification survey) — exit-world drain:
+    /// retail cancels (never plays out) every pending one-shot across
+    /// an enter/exit-world transition — `CPhysicsObj::exit_world` →
+    /// `CPartArray::HandleExitWorld` →
+    /// `MotionTableManager::HandleExitWorld` drains the queue with
+    /// `AnimationDone(success=0)` and `MovementManager::HandleExitWorld`
+    /// drains the interp (acclient.c:322215-322220 → :325128-325136 →
+    /// :329940-329947, :339411-339417). Our trigger is `PlayerTeleport`
+    /// (the portal/teleport transit — retail routes a portal through
+    /// object exit-world into portal space; we model the one
+    /// transition), called from BOTH the native recv arm
+    /// (`client/messages.rs`) and the wasm recv arm (`lib.rs`) — the
+    /// F2-3 dual-site pattern; neither runtime routes `PlayerTeleport`
+    /// into the movement world-event pass unconditionally, so the recv
+    /// arms own the trigger.
+    ///
+    /// Routing mirrors [`Self::notify_animation_done_for`] exactly:
+    /// 1. `is_local` → the system-level A4-Q1 queue, gated by the
+    ///    default-off [`USE_MOTION_TABLE_QUEUE`] const (flag-off this
+    ///    half is a compile-time no-op; flag-on the resulting
+    ///    `MotionDone(success=0)` events ride the EXISTING per-tick
+    ///    pump drain in [`Self::tick`] — no second drain site, the
+    ///    A4-Q2 rule).
+    /// 2. ALWAYS → the registry [`MovementManager`] for `guid` (its own
+    ///    queue + interp, full retail order inside
+    ///    `MovementManager::handle_exit_world`). Map-miss is a no-op,
+    ///    so this half needs no const gate: inert by construction
+    ///    unless a default-off lane created the manager (the SA4F
+    ///    precedent). The unstick request is DROPPED: retail's
+    ///    `teleport_hook` calls `PositionManager::UnStick` itself
+    ///    (acclient.c:322250-322252) — a teleport unsticks by
+    ///    construction.
+    ///
+    /// Empty queues no-op on both routes, so a stray/duplicate call
+    /// (e.g. the JS `?mtQueue` cancellation notify landing after this
+    /// drain) is harmless (acclient.c:329884 head-null guard).
+    pub(crate) fn handle_exit_world_for(&mut self, guid: Guid, is_local: bool) {
+        if is_local && USE_MOTION_TABLE_QUEUE {
+            self.handle_exit_world_local_ungated();
+        }
+        if let Some(manager) = self.movement_managers.get_mut(&guid) {
+            let _unstick = manager.handle_exit_world();
+        }
+    }
+
+    /// The gate-free local half of [`Self::handle_exit_world_for`] —
+    /// split out (the A3-D3 `_ungated` house pattern) so the Lane-A
+    /// unit tests can exercise the system-level drain while the const
+    /// ships default-off.
+    pub(crate) fn handle_exit_world_local_ungated(&mut self) {
+        self.motion_table_manager.handle_exit_world();
+    }
+
     /// A4-Q2 test seam: the local player's pending-animation queue.
     #[cfg(test)]
     pub(crate) fn motion_table_manager_mut(&mut self) -> &mut MotionTableManager {

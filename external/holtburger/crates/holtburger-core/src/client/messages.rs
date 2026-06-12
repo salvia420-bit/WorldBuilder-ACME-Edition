@@ -491,6 +491,20 @@ impl ClientRuntime {
                     "Portal transition started (seq: {})",
                     data.teleport_sequence
                 );
+                // A4-Q3 (2026-06-12): exit-world drain — retail cancels
+                // every pending one-shot with `AnimationDone(success=0)`
+                // across the portal/teleport transit
+                // (`CPhysicsObj::exit_world` →
+                // `MotionTableManager::HandleExitWorld` +
+                // `MovementManager::HandleExitWorld`,
+                // acclient.c:322215-322220 → :329940-329947,
+                // :339411-339417). Dual-site with the wasm recv arm
+                // (lib.rs `PlayerTeleport`), the F2-3 pattern. Local
+                // half is `USE_MOTION_TABLE_QUEUE`-gated; registry half
+                // is map-miss-inert — see
+                // `MovementSystem::handle_exit_world_for`.
+                self.movement
+                    .handle_exit_world_for(self.world.player.guid, true);
                 // F2-3: `LoginComplete` clears ACE's `Teleporting` flag
                 // (`GameActionLoginComplete` → `Player.OnTeleportComplete`).
                 // Firing it here — before the destination `UpdatePosition` is

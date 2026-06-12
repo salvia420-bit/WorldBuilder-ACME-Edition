@@ -5337,3 +5337,79 @@ fn notify_animation_done_for_routes_local_gated_and_registry() {
     assert!(movement.movement_manager_for(guid).is_none());
     movement.notify_animation_done_for(guid, false, true);
 }
+
+/// A4-Q3 — `handle_exit_world_for` routing (the `PlayerTeleport`
+/// exit-world drain, retail `CPhysicsObj::exit_world` →
+/// `MotionTableManager::HandleExitWorld` success=0 +
+/// `MovementManager::HandleExitWorld`, acclient.c:322215-322220 →
+/// :329940-329947, :339411-339417): unknown guids no-op; the local
+/// half stays gate-shielded (`USE_MOTION_TABLE_QUEUE` off → the
+/// system-level queue is untouched by the gated route; only the
+/// `_ungated` seam drains it, with `success=false`); the registry half
+/// drains BOTH manager spines so a teleport mid-action cannot wedge
+/// `motions_pending`.
+#[test]
+fn handle_exit_world_for_drains_registry_and_respects_gate() {
+    let (mut world, guid, target_guid) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    let now = Instant::now();
+    const ACTION_X: u32 = 0x1000_0062;
+
+    // Unknown guid, no managers anywhere → no-op (must not panic).
+    movement.handle_exit_world_for(Guid(0xDEAD_BEEF), false);
+
+    // System-level queue: a num_anims=1 node the GATED local route
+    // must NOT drain while USE_MOTION_TABLE_QUEUE is off.
+    movement.motion_table_manager_mut().add_to_queue(ACTION_X, 1);
+
+    // Registry manager via the ?wasmPursuit input lane; enqueue an
+    // action node on BOTH of its spines through the facade.
+    ingest_intent(&mut movement, pursue_intent(target_guid), now);
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    {
+        let manager = movement.movement_manager_for_mut(guid).expect("registry manager");
+        let mut effects = MotionSideEffects::default();
+        let mvs = MovementStruct::Motion(
+            crate::client::movement::motion_interp::MotionMovementStruct::InterpretedCommand {
+                motion: ACTION_X,
+                params: MovementParameters::default(),
+            },
+        );
+        manager
+            .perform_movement(&mvs, true, None, &mut effects)
+            .expect("action dispatch");
+        assert!(manager.moveto_motions_pending(), "action node pending on the registry interp");
+    }
+
+    // One exit-world for the local guid: the registry manager drains
+    // (queue success=0 → MotionDone fan-out, then the minterp drain),
+    // the system-level queue survives the compile-time gate.
+    movement.handle_exit_world_for(guid, true);
+    assert!(
+        !movement
+            .movement_manager_for(guid)
+            .expect("registry manager")
+            .moveto_motions_pending(),
+        "registry spines drained by the exit-world drain"
+    );
+    let _ = movement.motion_table_manager_mut().drain_events();
+    movement.handle_exit_world_local_ungated();
+    assert!(
+        movement
+            .motion_table_manager_mut()
+            .drain_events()
+            .iter()
+            .any(|event| matches!(
+                event,
+                MotionTableEvent::MotionDone { motion: ACTION_X, success: false }
+            )),
+        "system-level node survived the GATED local route and drains success=0 \
+         only through the ungated seam (retail success=0, acclient.c:329940-329947)"
+    );
+
+    // A second drain on the now-empty queues is a no-op (the
+    // acclient.c:329884 head-null guard) — the duplicate-trigger /
+    // JS-notify-after-drain safety A4-Q3 relies on.
+    movement.handle_exit_world_for(guid, true);
+    assert!(movement.motion_table_manager_mut().drain_events().is_empty());
+}

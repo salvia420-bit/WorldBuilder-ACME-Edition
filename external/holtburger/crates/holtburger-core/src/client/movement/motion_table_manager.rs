@@ -407,9 +407,11 @@ impl MotionTableManager {
     /// `MotionTableManager::HandleExitWorld` — drain the queue through
     /// `AnimationDone(success=0)`: pending one-shots are cancelled, not
     /// played, across exit-world (`acclient.c:329940-329947`; ACE
-    /// `MotionTableManager.cs:106-110`).
-    // STAGED: A4-Q3 wires the JS teleport/portal trigger.
-    #[allow(dead_code)]
+    /// `MotionTableManager.cs:106-110`). A4-Q3 (2026-06-12): triggered
+    /// by `PlayerTeleport` via `MovementSystem::handle_exit_world_for`
+    /// (retail trigger: `CPhysicsObj::exit_world` →
+    /// `CPartArray::HandleExitWorld`, acclient.c:322215-322217 →
+    /// :325128-325136).
     pub(crate) fn handle_exit_world(&mut self) {
         while !self.pending_animations.is_empty() {
             self.animation_done(false);
@@ -419,7 +421,12 @@ impl MotionTableManager {
     /// `MotionTableManager::HandleEnterWorld` — additionally drops ALL
     /// sequence link animations first (`acclient.c:329949-329957`; ACE
     /// `MotionTableManager.cs:100-104`).
-    // STAGED: see `handle_exit_world`.
+    // STAGED: still un-triggered after A4-Q3 — our teleport models ONE
+    // transition (`PlayerTeleport` → exit-world drain; the queue is
+    // empty by destination-apply so a second drain is moot), and the
+    // `remove_all_link_animations` enter-world half is realized
+    // renderer-side by the A4-Q3 JS overlay cancellation
+    // (entities.js `_cancelOneShotOverlays`).
     #[allow(dead_code)]
     pub(crate) fn handle_enter_world(&mut self) {
         self.events.push(MotionTableEvent::RemoveAllLinkAnimations);

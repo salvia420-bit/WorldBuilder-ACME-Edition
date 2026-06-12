@@ -3915,6 +3915,11 @@ export class EntityManager {
         const dy = y - cur.y;
         const dz = z - cur.z;
         if (dx * dx + dy * dy + dz * dz > DEAD_RECKON_TELEPORT_SNAP_SQ) {
+          // A4-Q3 (?mtQueue=on): a teleport-class snap is this remote
+          // entity's exit/enter-world signal — cancel its one-shot
+          // overlays (retail HandleExitWorld drain + enter-world link
+          // removal, acclient.c:329940-329957). No-op flag-off.
+          this._cancelOneShotOverlays(inst);
           cur.set(x, y, z);
         }
         tgt.set(x, y, z);
@@ -3967,6 +3972,11 @@ export class EntityManager {
       const dy = y - cur.y;
       const dz = z - cur.z;
       if (dx * dx + dy * dy + dz * dz > DEAD_RECKON_TELEPORT_SNAP_SQ) {
+        // A4-Q3 (?mtQueue=on): a teleport-class snap is this remote
+        // entity's exit/enter-world signal — cancel its one-shot
+        // overlays (retail HandleExitWorld drain + enter-world link
+        // removal, acclient.c:329940-329957). No-op flag-off.
+        this._cancelOneShotOverlays(inst);
         // Snap: move both the rendered position AND the target so tick() has
         // nothing left to drag toward.
         cur.set(x, y, z);
@@ -8137,6 +8147,70 @@ export class EntityManager {
       }
     } catch (_) { /* never block the drain on the weight-restore */ }
     notifyMtQueuedOverlayDone(inst, key, !!finished);
+  }
+
+  /**
+   * A4-Q3 (2026-06-12, unification survey) — exit-world overlay
+   * cancellation: retail drains every pending one-shot with success=0
+   * across an enter/exit-world transition
+   * (`MotionTableManager::HandleExitWorld`, acclient.c:329940-329947)
+   * and enter-world additionally removes ALL sequence link animations
+   * (`HandleEnterWorld` → `CSequence::remove_all_link_animations`,
+   * acclient.c:329949-329957) — an emote/swing/cast must NOT carry
+   * across a teleport/portal transit. This is the renderer half of
+   * that pair: stop every RUNNING `THREE.LoopOnce` overlay action
+   * (one-shot links + transition links — retail removes link anims
+   * wholesale; NEVER the LoopRepeat base locomotion cycle), restore an
+   * F15-1-suppressed base-cycle weight, and cancellation-notify tagged
+   * keys success=false through `_completeOverlay`. The Rust half (the
+   * `PlayerTeleport` recv arms → `MovementSystem::handle_exit_world_for`)
+   * drains the pending queue independently — whichever lands second
+   * no-ops on the empty queue (acclient.c:329884 head-null guard).
+   *
+   * Gated by `?mtQueue=on` (A4 §4 stage Q3 "rollback: same flags") —
+   * default OFF; the portal-cancel visual is the 1070 eye-test
+   * acceptance.
+   */
+  _cancelOneShotOverlays(inst) {
+    if (!MT_QUEUE_ON || !inst || !inst.actions || !inst.mixer) return;
+    for (const [key, action] of inst.actions) {
+      try {
+        if (!action || action.loop !== THREE.LoopOnce) continue;
+        if (typeof action.isRunning === "function" && !action.isRunning()) continue;
+        // Legacy (non-?hookDrain) F15-1 suppression keeps its saved
+        // weight inside the mixer 'finished' closure, which never fires
+        // on stop() — capture before `_completeOverlay` clears the
+        // marker, then restore manually (the listener's own fallback is
+        // 1.0 for a non-positive saved weight, so 1.0 here matches).
+        const legacySuppressed =
+          inst._baseSuppressAction === action && !inst._baseSuppressSaved;
+        // ?hookDrain weight restore + tagged cancellation notify
+        // (success=false — the exit-world drain semantics; a COMPLETED
+        // overlay already cleared its tag, so the notify is a no-op for
+        // it).
+        this._completeOverlay(inst, key, action, false);
+        if (legacySuppressed) {
+          const base = inst.actions.get(inst._locoCycleKey);
+          if (base && base !== action) {
+            try { base.setEffectiveWeight(1.0); } catch (_) {}
+          }
+        }
+        action.stop();
+      } catch (_) { /* never block the teleport on overlay teardown */ }
+    }
+  }
+
+  /**
+   * A4-Q3 — public guid-keyed wrapper for `_cancelOneShotOverlays`;
+   * called from the `index.html` kind=33 `PortalSpaceEntered` drain for
+   * the LOCAL player (the portal-transit hook — the wasm recv arm fires
+   * the matching Rust-side `handle_exit_world_for` from the same
+   * `PlayerTeleport` message). No-op when the guid is unknown or
+   * `?mtQueue` is off.
+   */
+  cancelOneShotOverlaysForGuid(guid) {
+    const inst = this.entityMap?.get(guid >>> 0);
+    if (inst) this._cancelOneShotOverlays(inst);
   }
 
   /**

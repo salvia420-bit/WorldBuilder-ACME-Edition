@@ -32763,6 +32763,33 @@ async fn recv_loop(
                                     data.teleport_sequence,
                                 ));
                             }
+                            // A4-Q3 (2026-06-12): exit-world drain — retail
+                            // cancels every pending one-shot with
+                            // `AnimationDone(success=0)` across the portal/
+                            // teleport transit (`CPhysicsObj::exit_world` →
+                            // `MotionTableManager::HandleExitWorld` +
+                            // `MovementManager::HandleExitWorld`,
+                            // acclient.c:322215-322220 → :329940-329947,
+                            // :339411-339417). Dual-site with the cli recv arm
+                            // (client/messages.rs `PlayerTeleport`), the F2-3
+                            // pattern — `should_route_message_to_world` only
+                            // routes `PlayerTeleport` under
+                            // `?wireStatePacks=stage1` and the movement
+                            // world-event pass ignores `TeleportStarted`, so
+                            // the recv arm owns the trigger on BOTH stage1
+                            // states (no double-fire: nothing else drains).
+                            // Local half is `USE_MOTION_TABLE_QUEUE`-gated;
+                            // registry half is map-miss-inert. The JS
+                            // `?mtQueue` overlay-cancellation notify may land
+                            // before or after this drain — both orders are
+                            // empty-queue no-ops on the loser
+                            // (acclient.c:329884 head-null guard). The renderer
+                            // overlay stop itself is JS-owned (entities.js
+                            // `_cancelOneShotOverlays`, the
+                            // `remove_all_link_animations` analogue).
+                            if let Some(w) = world.as_ref() {
+                                movement.handle_exit_world_for(w.player.guid, true);
+                            }
                             // F2-3 (movement bughunt 2026-06-09): sending
                             // `LoginComplete` here — the instant `PlayerTeleport`
                             // arrives — clears ACE's `Teleporting` flag

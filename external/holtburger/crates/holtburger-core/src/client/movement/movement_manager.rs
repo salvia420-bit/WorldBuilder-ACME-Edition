@@ -525,14 +525,32 @@ impl MovementManager {
         }
     }
 
-    /// `HandleExitWorld` → minterp (acclient.c:339417 area; ACE
-    /// `MovementManager.cs:90-94`). Returns the unstick-hook request.
-    #[allow(dead_code)] // staged: A4-Q3 portal/teleport trigger
+    /// A4-Q3 (2026-06-12) — the motion half of
+    /// `CPhysicsObj::exit_world` (acclient.c:322205-322220), in retail
+    /// order:
+    /// 1. `CPartArray::HandleExitWorld` →
+    ///    `MotionTableManager::HandleExitWorld` FIRST
+    ///    (acclient.c:322217 → :325128-325136 → :329940-329947) —
+    ///    pending-queue drain with `success=0`; its
+    ///    `MotionDone(motion, 0)` callbacks re-enter the interp via
+    ///    [`Self::drain_completions`], mirroring retail's synchronous
+    ///    `CPhysicsObj::MotionDone` fan-out (:317097 → :339349);
+    /// 2. THEN `MovementManager::HandleExitWorld` → minterp
+    ///    (acclient.c:322220 → :339411-339417; ACE
+    ///    `MovementManager.cs:90-94`).
+    /// Returns the OR-ed unstick-hook request — the A4-Q3 teleport
+    /// trigger DROPS it: retail's `teleport_hook` calls
+    /// `PositionManager::UnStick` itself (acclient.c:322250-322252),
+    /// so a teleport unsticks by construction.
     pub(crate) fn handle_exit_world(&mut self) -> bool {
-        self.motion_interp
+        self.motion_table_manager.handle_exit_world();
+        let mut unstick = self.drain_completions();
+        unstick |= self
+            .motion_interp
             .as_mut()
             .map(|interp| interp.handle_exit_world())
-            .unwrap_or(false)
+            .unwrap_or(false);
+        unstick
     }
 
     /// Recorded sticky target (A2-P3 owner input — F3-4's JS pin is NOT

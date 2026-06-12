@@ -245,6 +245,16 @@ impl MovementSystemHandle {
         self.inner.notify_animation_done_for(guid, is_local, success);
     }
 
+    /// A4-Q3 (2026-06-12) — `PlayerTeleport` exit-world drain forward
+    /// (retail `CPhysicsObj::exit_world` → `CPartArray::HandleExitWorld`
+    /// + `MovementManager::HandleExitWorld`, acclient.c:322215-322220;
+    /// queue drain `success=0`, :329940-329947). Same routing rules as
+    /// [`Self::notify_animation_done_for`]: local half
+    /// `USE_MOTION_TABLE_QUEUE`-gated, registry half map-miss-inert.
+    pub fn handle_exit_world_for(&mut self, guid: Guid, is_local: bool) {
+        self.inner.handle_exit_world_for(guid, is_local);
+    }
+
     /// A14-I4 (W3+ S11) — press-time half of the retail jump charge
     /// clock (`ClientCombatSystem::CommenceJump`,
     /// acclient.c:408033-408078). `Err(JumpRefusal::Position)` mirrors

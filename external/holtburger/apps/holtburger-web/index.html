@@ -9883,6 +9883,24 @@ void main() {
                     teleportSeq: (evt.u32Payload ?? 0) >>> 0,
                   });
                 } catch (_) {}
+                // A4-Q3 (2026-06-12, ?mtQueue=on): exit-world overlay
+                // cancellation — stop the LOCAL player's one-shot
+                // overlays on portal transit, so an emote/swing/cast
+                // never carries through a teleport (retail
+                // MotionTableManager::HandleExitWorld success=0 drain +
+                // enter-world link removal, acclient.c:329940-329957).
+                // The Rust pending-queue drain rides the SAME
+                // PlayerTeleport message inside the wasm recv arm
+                // (handle_exit_world_for) — this is only the renderer
+                // half. No-op when ?mtQueue is off (gate lives inside
+                // _cancelOneShotOverlays).
+                try {
+                  const lpg = window.getLocalPlayerGuid?.();
+                  if (lpg !== null && lpg !== undefined) {
+                    window.liveScene3d?.entityManager
+                      ?.cancelOneShotOverlaysForGuid?.(lpg >>> 0);
+                  }
+                } catch (_) {}
                 // Portal-space donut travel visual (2026-06-09). The retail
                 // engine flies the camera through Setup 0x02000306 (a hollow
                 // purplish ring) during portal transit. Gated behind
