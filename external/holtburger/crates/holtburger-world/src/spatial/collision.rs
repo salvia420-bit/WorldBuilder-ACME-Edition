@@ -73,6 +73,9 @@ pub mod physics_globals {
     pub const SMALL_VELOCITY: f32 = 0.25;
     /// Squared small velocity.
     pub const SMALL_VELOCITY_SQ: f32 = SMALL_VELOCITY * SMALL_VELOCITY;
+    // MIN/MAX/HUGE_QUANTUM below: declared-dormant (BSP-M4 placement port);
+    // live quantum law lives in holtburger-core movement/common.rs — see
+    // docs/2026-06-11-unification-survey/DECISIONS-A1-O5-constants.md (c4).
     /// Minimum time step (30 FPS). ACE: 1/30 s
     pub const MIN_QUANTUM: f32 = 1.0 / 30.0;
     /// Maximum stable time step (10 FPS). ACE: 0.1 s

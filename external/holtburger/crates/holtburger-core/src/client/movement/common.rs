@@ -591,6 +591,10 @@ pub(super) fn calc_friction(
 //
 // We intentionally do NOT reach into ACE for these values; they are
 // defined here so the crate is self-contained.
+//
+// Decision record (MAX_QUANTUM 0.1-vs-retail-0.2, MIN_QUANTUM regimes, JS
+// dt-clamp, HitGround omission): apps/holtburger-web/docs/
+// 2026-06-11-unification-survey/DECISIONS-A1-O5-constants.md.
 
 /// Minimum integration slice in seconds. ACE floors the per-frame
 /// remainder at this value and skips integrating a slice smaller than

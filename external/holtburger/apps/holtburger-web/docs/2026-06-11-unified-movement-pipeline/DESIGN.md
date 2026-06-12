@@ -486,6 +486,9 @@ MoveToManager is Stage 3):**
   can exceed retail's clamp on diagonal run+strafe launches (survey A3 §3 row 6).
   Charged-jump departures already use interpreted intent (lib.rs:38441-38460) —
   unchanged.
+- Decision recorded: ../2026-06-11-unification-survey/DECISIONS-A1-O5-constants.md (d)
+  — HitGround omission CONFIRMED; LeaveGround clamp now owned by S6/D3-5
+  `USE_LEAVE_GROUND_VELOCITY` (default-off).
 
 **ReportExhaustion (survey A3-D2; (a) is a Stage-1 point fix, (b) lands with this
 layer):** retail re-runs `apply_raw_movement`/`apply_interpreted_movement` on the

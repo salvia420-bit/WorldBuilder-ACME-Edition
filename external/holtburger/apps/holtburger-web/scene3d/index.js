@@ -1446,6 +1446,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // — was chosen over the ramp variant because it's simpler and
   // strictly conservative: nothing advances during recovery, so we
   // can't introduce stutter from a partially-correct dt ramp.
+  // decision record: docs/2026-06-11-unification-survey/DECISIONS-A1-O5-constants.md (b)
   const DT_RECOVERY_RAW_THRESHOLD_S = 0.5; // ~5+ frames of lost time
   const DT_RECOVERY_FRAMES = 10;
   let dtRecoveryFramesRemaining = 0;
@@ -1563,6 +1564,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // Raw dt (no cap) so we can detect post-unfocus recovery; the
     // Math.min(..., 0.1) cap below is the per-frame safety net and
     // stays in place. See A3 comment above the tick fn.
+    // decision record: DECISIONS-A1-O5-constants.md (b) — this clamp is JS-only
+    // (the Rust spine self-measures dt; independent clocks).
     const rawDt = lastFrameTs === null ? 0.016 : (ts - lastFrameTs) / 1000;
     let dt;
     if (lastFrameTs === null) {

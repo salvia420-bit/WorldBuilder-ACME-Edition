@@ -89,11 +89,11 @@ impl ClientSimulationSystem {
         // sequence of <= MAX_QUANTUM slices so one long frame cannot over-step
         // gravity/collision, and a normal 30ms steady-state frame (<
         // MAX_QUANTUM) passes through as one solve with the real dt ->
-        // byte-identical to before. (Slice = ACE PhysicsGlobals.MaxQuantum
-        // 0.1s; acclient.c MAX_QUANTUM_97 is 0.2s — kept consistent with the
-        // manual-drive path's shipped value. No MIN_QUANTUM accumulator: small
-        // frames pass through rather than floor-to-empty, which would stall
-        // the solver at the 30ms cadence.)
+        // byte-identical to before.
+        // 0.1-vs-0.2: see docs/2026-06-11-unification-survey/DECISIONS-A1-O5-constants.md (a).
+        // No MIN_QUANTUM accumulator: small frames pass through rather than
+        // floor-to-empty, which would stall the solver at the 30ms cadence —
+        // accepted deviation, decision (c2) ibid.
         let dt_secs = dt.as_secs_f32();
         if dt_secs > HUGE_QUANTUM {
             return Vec::new();

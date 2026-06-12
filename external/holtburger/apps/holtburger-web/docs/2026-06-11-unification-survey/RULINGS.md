@@ -19,11 +19,31 @@ Recorded from the user session following the laptop re-grep (see LAPTOP-REGREP.m
    granularity as the live ACE server it syncs against; retail's 0.2 matters only for a
    dead client. A1-O5's deliverable is to collapse the three scattered doc sites into this
    one decision record.
+   *(2026-06-12 update: FINALIZED — the A1-O5 decision record landed as
+   `DECISIONS-A1-O5-constants.md` (S16, this dir); decision (a) is the final sign-off.)*
 
 4. **§7.7 local-player sticky** — RULED (user, authoritative): retail melee sticky DOES
    lock the local player to its attack target (player or creature). Our local-player
    exclusion (loop.js:1855) is therefore a real divergence, not a deliberate
    modernization. A2-P3's design must include the local player; the ACE-side
    single-citation gap is resolved by user testimony.
+   *(2026-06-12 update: code-CONFIRMED on the live server source — ACE self-sticky on
+   melee swing at `Player_Melee.cs:419-427`, the `sendSelf` StickToObject broadcast at
+   `WorldObject_Networking.cs:1418-1431`, and the MovementInvalid swing-echo path at
+   `MovementInvalid.cs:44-46`. The user-testimony gap is closed; A2-P3 shipped as W3/S9
+   commit 08ad6563 (`USE_STICKY_MANAGER`, default-off). NOTE for future server cites:
+   `external/ACE` is a sparse checkout (`blob:none`, no Network tree) — server citations
+   must use `~/ace-server` (same commit a8ff29f).)*
 
-All §7 human rulings are now closed.
+5. **A13-W4 TurnToEvent 0xF649 send gate** — CLOSED: **NO-GO for sending.** Structural
+   proof against the live server source (`~/ace-server`, commit a8ff29f): ACE's inbound
+   [GameAction] dispatch table is reflection-built (`InboundMessageManager.cs:66-87`) and
+   registers 149 handlers — **no handler exists for TurnToEvent 0xF649**;
+   `GameActionType.cs:157` carries the enum value as dead weight only. Sending 0xF649
+   would be silently dropped server-side. Heading instead flows via the already-shipped
+   lanes: `MoveToState` 0xF61C + `AutonomousPosition` 0xF753. Consequence applied in
+   W3/S6 (9568fc0a): `move_to.rs` MoveToManager keeps the TurnToEvent emit as a
+   comment-only hook, no send. (Spec: `w3plus-specs/S15-a13-w4-turntoevent-design-gate.md`.)
+
+All §7 human rulings are now closed; A13-W4 (item 5) is closed NO-GO per the S15
+structural proof.
