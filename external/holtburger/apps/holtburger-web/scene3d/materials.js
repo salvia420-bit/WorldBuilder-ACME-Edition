@@ -1061,6 +1061,13 @@ export function applySurfaceRenderState(mat, state, opts) {
   const isAdditive = (flags & SURFACE_TYPE.Additive) !== 0;
   const isAlpha = (flags & SURFACE_TYPE.Alpha) !== 0;
   const isInvAlpha = (flags & SURFACE_TYPE.InvAlpha) !== 0;
+  // === A10-M3b (2026-06-12) — `?surfaceParityV2=on` parity details =========
+  // Default OFF. The three sub-behaviours (ClipMap alpha-test ref 100/200,
+  // additive fog exemption, true InvAlpha blend) live ONLY inside this
+  // decoder, which is itself only reached when `?surfaceUnified=on` — so
+  // parityV2 is inert without surfaceUnified (documented in url-flags.md;
+  // deliberately no cross-flag enforcement).
+  const parityV2 = readSurfaceParityV2Flag();
   // === FIXUP A10-M1 (2026-06-11) — float-driven lum/diffuse are BIT-INDEPENDENT.
   // The blend-state ladder below IS flag-driven, but luminosity-emissive and
   // diffuse-tint are driven by the FLOATS, not by any surface-type bit (retail
@@ -1083,6 +1090,23 @@ export function applySurfaceRenderState(mat, state, opts) {
     mat.blending = THREE.CustomBlending;
     mat.blendSrc = THREE.SrcAlphaFactor;
     mat.blendDst = THREE.OneFactor;
+    mat.blendEquation = THREE.AddEquation;
+    mat.transparent = true;
+    mat.depthWrite = false;
+  } else if (parityV2 && isInvAlpha && !isAlpha && !isTranslucent) {
+    // A10-M3b (b3) — TRUE inverse-alpha blend (retail acclient.c:454478-454484):
+    // src = BLEND_INVSRCALPHA(6), dst = ADDITIVE? BLEND_ONE(2) : BLEND_SRCALPHA(5).
+    // Retail checks ALPHA first (acclient.c:454470) so Alpha wins when both bits
+    // are set (the `!isAlpha` guard); Translucent (0x10) is evaluated AFTER the
+    // A/IA ladder (acclient.c:454513) and does not override an already-blending
+    // surface, so Translucent+InvAlpha keeps our existing plain alpha-blend arm
+    // (the `!isTranslucent` guard). This arm MUST sit before the pure-`isAdditive`
+    // arm or InvAlpha+Additive would be swallowed by it — retail evaluates
+    // INVALPHA before the pure-ADDITIVE fallthrough (454478 before 454486-454489).
+    // Census-zero in the retail base DAT (A10 §3 row 6) — completeness only.
+    mat.blending = THREE.CustomBlending;
+    mat.blendSrc = THREE.OneMinusSrcAlphaFactor;
+    mat.blendDst = isAdditive ? THREE.OneFactor : THREE.SrcAlphaFactor;
     mat.blendEquation = THREE.AddEquation;
     mat.transparent = true;
     mat.depthWrite = false;
@@ -1110,9 +1134,39 @@ export function applySurfaceRenderState(mat, state, opts) {
     }
   } else if (isClipMap) {
     // Binary alpha mask (foliage, fences) — alphaTest cuts alpha=0 frags.
-    mat.alphaTest = 0.5;
+    // A10-M3b (b2) — under `?surfaceParityV2=on`, use the retail per-texture
+    // alpha-test ref (acclient.c:454499-454511): paletted texture
+    // (curr_texture->m_pPalette non-null, acclient.h:31982) → s_256AlphaTestRef
+    // = 100; DDS / solid / no-texture → s_ddsAlphaTestRef = 200 (constants
+    // acclient.c:45764-45765), compared ALPHATESTFUNC_GREATEREQUAL
+    // (acclient.c:454546). three.js discards `a < alphaTest`, so `ref/255`
+    // preserves the >=-with-equality boundary exactly. FAIL-SOFT (load-bearing):
+    // `state.hasPalette` must be strictly boolean — `undefined` (stale pkg
+    // without the M3a wasm getter, or an unmigrated caller) keeps legacy 0.5
+    // so flipping the flag on a stale pkg can't silently shift foliage to a
+    // wrong 0.784-everywhere.
+    mat.alphaTest =
+      parityV2 && typeof state.hasPalette === "boolean"
+        ? (state.hasPalette ? 100 / 255 : 200 / 255)
+        : 0.5;
     mat.transparent = false;
   }
+  // A10-M3b (b1) — additive surfaces are exempt from fog (retail
+  // acclient.c:454551-454553: ADDITIVE 0x10000 → SetFFFogAlphaDisabled(1),
+  // whose body at acclient.c:460295-460302 is SetRenderState(28 =
+  // D3DRS_FOGENABLE, !value) — i.e. fixed-function fog fully OFF for that
+  // draw; fog-SKIP, not fog-to-black, so per-material `fog: false` is the
+  // exact three.js analogue). Retail's check is on the BIT, evaluated after
+  // the blend ladder — NOT per-branch — so it also covers Translucent+Additive
+  // and InvAlpha+Additive combos. Known residual: `material.fog` only exempts
+  // from `scene.fog` (the wireframe FogExp2 path, index.js:585, and the
+  // `?fogLerp=on` linear-Fog path, index.js:2962); the default 3D path's
+  // Bruneton aerial-perspective post pass is screen-space and cannot honour a
+  // per-material exemption (A10-M3 spec §5/§6 OQ-2). The retail "fog globally
+  // off" half (acclient.c:454551 !GetFFFogEnable) needs no analogue — with no
+  // scene.fog three.js applies no fog anyway. `fog` is program-affecting; the
+  // trailing `needsUpdate = true` below forces the recompile.
+  if (parityV2 && isAdditive) mat.fog = false;
   applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture);
   mat.needsUpdate = true;
 }
@@ -1153,6 +1207,27 @@ export function readSurfaceUnifiedFlag() {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     const v = new URLSearchParams(window.location.search).get("surfaceUnified");
+    if (typeof v !== "string") return false;
+    const lv = v.toLowerCase();
+    return lv === "on" || lv === "1" || lv === "true";
+  } catch (_) {
+    return false;
+  }
+}
+
+// === A10-M3b (2026-06-12) — `?surfaceParityV2=on` opt-in ====================
+// Layered ON TOP of `?surfaceUnified=on`: the parityV2 branches live only
+// inside `applySurfaceRenderState`, which is only invoked when surfaceUnified
+// is on — so this flag is inert by construction without it. Guards the three
+// A10 §3 row-4/5/6 parity details: (b1) additive fog exemption, (b2) ClipMap
+// alpha-test ref 100/255-vs-200/255 by texture palettedness (needs the M3a
+// `hasPalette` wasm getter; stale pkg → legacy 0.5), (b3) true INVALPHA blend.
+// Default OFF (JS-live, reload to toggle). NOT cached — the test harness
+// re-stubs `globalThis.window` per case.
+export function readSurfaceParityV2Flag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("surfaceParityV2");
     if (typeof v !== "string") return false;
     const lv = v.toLowerCase();
     return lv === "on" || lv === "1" || lv === "true";
@@ -2140,7 +2215,14 @@ export class MaterialCache {
     if (useUnifiedDecoder) {
       applySurfaceRenderState(
         mat,
-        { flags, translucency: sfTranslucency, luminosity: sfLuminosity, diffuse: sfDiffuse },
+        {
+          flags,
+          translucency: sfTranslucency,
+          luminosity: sfLuminosity,
+          diffuse: sfDiffuse,
+          // A10-M3 — forwarded boolean-or-undefined (parityV2 ClipMap ref).
+          hasPalette: surfaceFloats?.hasPalette,
+        },
         { texture },
       );
     }
@@ -2371,6 +2453,10 @@ export class MaterialCache {
         translucency: typeof sp.translucency === "number" ? sp.translucency : 0.0,
         luminosity: typeof sp.luminosity === "number" ? sp.luminosity : 0.0,
         diffuse: typeof sp.diffuse === "number" ? sp.diffuse : 0.0,
+        // A10-M3 (2026-06-12) — source-texture palettedness (P8/Index16) for
+        // the parityV2 ClipMap alpha-test ref. STRICT boolean-or-undefined:
+        // missing getter (stale pkg) → undefined → the decoder keeps 0.5.
+        hasPalette: typeof sp.hasPalette === "boolean" ? sp.hasPalette : undefined,
       };
       if (typeof sp.free === "function") sp.free();
       const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides, heightTex, surfaceFloats);
@@ -2747,7 +2833,8 @@ export class MaterialCache {
    */
   _buildEntityOwnedFromPixels(did, sp) {
     if (!sp) return null;
-    let w, h, pixels, surfaceType, sfTranslucency, sfLuminosity, sfDiffuse;
+    let w, h, pixels, surfaceType, sfTranslucency, sfLuminosity, sfDiffuse,
+        sfHasPalette;
     try {
       w = sp.width;
       h = sp.height;
@@ -2769,6 +2856,9 @@ export class MaterialCache {
       sfTranslucency = typeof sp.translucency === "number" ? sp.translucency : 0.0;
       sfLuminosity = typeof sp.luminosity === "number" ? sp.luminosity : 0.0;
       sfDiffuse = typeof sp.diffuse === "number" ? sp.diffuse : 0.0;
+      // A10-M3 — palettedness snapshot BEFORE sp.free() (parityV2 ClipMap
+      // ref). Strict boolean-or-undefined (stale-pkg fail-soft).
+      sfHasPalette = typeof sp.hasPalette === "boolean" ? sp.hasPalette : undefined;
     } catch (_) {
       return null;
     }
@@ -2832,6 +2922,8 @@ export class MaterialCache {
           translucency: sfTranslucency,
           luminosity: sfLuminosity,
           diffuse: sfDiffuse,
+          // A10-M3 — boolean-or-undefined (parityV2 ClipMap alpha-test ref).
+          hasPalette: sfHasPalette,
         },
         { texture: tex },
       );
@@ -2858,7 +2950,7 @@ export class MaterialCache {
     // shared fallback material exactly as for the zero-dim case.
     let w, h, pixels, surfaceType, category, normalPixels, heightPixels,
         roughnessOverride, normalScaleOverride,
-        translucencyF, luminosityF, diffuseF;
+        translucencyF, luminosityF, diffuseF, hasPaletteB;
     try {
       w = sp.width;
       h = sp.height;
@@ -2905,6 +2997,9 @@ export class MaterialCache {
       translucencyF = typeof sp.translucency === "number" ? sp.translucency : 0.0;
       luminosityF = typeof sp.luminosity === "number" ? sp.luminosity : 0.0;
       diffuseF = typeof sp.diffuse === "number" ? sp.diffuse : 0.0;
+      // A10-M3 — palettedness for the parityV2 ClipMap alpha-test ref.
+      // Strict boolean-or-undefined (stale-pkg fail-soft, see get() twin).
+      hasPaletteB = typeof sp.hasPalette === "boolean" ? sp.hasPalette : undefined;
     } catch (_) {
       return this.fallbackMaterial;
     }
@@ -2925,6 +3020,7 @@ export class MaterialCache {
       translucency: translucencyF,
       luminosity: luminosityF,
       diffuse: diffuseF,
+      hasPalette: hasPaletteB,
     };
     const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides, heightTex, surfaceFloats);
     mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;

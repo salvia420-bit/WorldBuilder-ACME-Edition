@@ -6768,6 +6768,17 @@ pub struct SurfacePixels {
     translucency: f32,
     luminosity: f32,
     diffuse: f32,
+    /// A10-M3a (2026-06-12) — whether the source Texture is palette-indexed
+    /// (P8/Index16, i.e. [`holtburger_dat::file_type::SurfacePixelFormat::
+    /// needs_palette`]). Retail analogue: `ImgTex::m_pPalette` non-null
+    /// (acclient.h:31982), the discriminator for the ClipMap alpha-test ref
+    /// 100-vs-200 (acclient.c:454506-454509). `false` for solid 1x1 surfaces
+    /// (retail: no texture → `curr_texture_is_set` false → ddsRef 200,
+    /// acclient.c:454506-454507) and for the empty fallback. Consumed by the
+    /// JS `?surfaceParityV2=on` ClipMap branch (`applySurfaceRenderState`,
+    /// scene3d/materials.js); JS falls back to legacy alphaTest 0.5 when the
+    /// getter is missing (stale pkg) — non-load-bearing, rides manifest v4.
+    has_palette: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -6833,6 +6844,12 @@ impl SurfacePixels {
     /// informational otherwise.
     #[wasm_bindgen(getter)]
     pub fn diffuse(&self) -> f32 { self.diffuse }
+    /// A10-M3a — source-Texture palette-indexedness (P8/Index16). Drives the
+    /// `?surfaceParityV2=on` ClipMap alpha-test ref (100/255 paletted vs
+    /// 200/255 DDS/solid/none) in scene3d/materials.js. Additive,
+    /// non-load-bearing getter — rides manifest v4 (graceful 0.5 fallback).
+    #[wasm_bindgen(getter, js_name = hasPalette)]
+    pub fn has_palette(&self) -> bool { self.has_palette }
 }
 
 /// Phase 1.5 — cache the parsed `data/surface_overrides.json` for the
@@ -6902,6 +6919,8 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         translucency: 0.0,
         luminosity: 0.0,
         diffuse: 0.0,
+        // A10-M3a — empty fallback: no texture → ddsRef-200 class (false).
+        has_palette: false,
     };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
@@ -6944,6 +6963,11 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             translucency: surface.translucency,
             luminosity: surface.luminosity,
             diffuse: surface.diffuse,
+            // A10-M3a — solid 1x1: retail reaches the ref pick with
+            // curr_texture_is_set = (GetTextureMap != 0) (acclient.c:454411)
+            // and !curr_texture_is_set short-circuits to the 200 ref
+            // (acclient.c:454506-454507) → false.
+            has_palette: false,
         };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
@@ -7004,6 +7028,10 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 translucency: surface.translucency,
                 luminosity: surface.luminosity,
                 diffuse: surface.diffuse,
+                // A10-M3a — textured: palette-indexed iff P8/Index16
+                // (retail ImgTex::m_pPalette non-null → 256-ref 100,
+                // acclient.c:454506-454509).
+                has_palette: tex.format().needs_palette(),
             }
         }
         Err(_) => empty,
@@ -8038,6 +8066,8 @@ pub async fn fetch_dye_preview_pixels(
         translucency: 0.0,
         luminosity: 0.0,
         diffuse: 0.0,
+        // A10-M3a — empty fallback: no texture → ddsRef-200 class (false).
+        has_palette: false,
     };
     if sub_palettes.len() % 3 != 0 {
         return Err(JsValue::from_str(
@@ -8131,6 +8161,9 @@ pub async fn fetch_dye_preview_pixels(
                 translucency: 0.0,
                 luminosity: 0.0,
                 diffuse: 0.0,
+                // A10-M3a — dye preview decodes a real Texture; report its
+                // palette-indexedness like the other textured sites.
+                has_palette: tex.format().needs_palette(),
             })
         }
         Err(_) => Ok(empty),
@@ -8338,6 +8371,8 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         translucency: 0.0,
         luminosity: 0.0,
         diffuse: 0.0,
+        // A10-M3a — empty fallback: no texture → ddsRef-200 class (false).
+        has_palette: false,
     };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
@@ -8368,6 +8403,11 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             translucency: surface.translucency,
             luminosity: surface.luminosity,
             diffuse: surface.diffuse,
+            // A10-M3a — solid 1x1: retail reaches the ref pick with
+            // curr_texture_is_set = (GetTextureMap != 0) (acclient.c:454411)
+            // and !curr_texture_is_set short-circuits to the 200 ref
+            // (acclient.c:454506-454507) → false.
+            has_palette: false,
         };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
@@ -8441,6 +8481,10 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 translucency: surface.translucency,
                 luminosity: surface.luminosity,
                 diffuse: surface.diffuse,
+                // A10-M3a — textured: palette-indexed iff P8/Index16
+                // (retail ImgTex::m_pPalette non-null → 256-ref 100,
+                // acclient.c:454506-454509).
+                has_palette: tex.format().needs_palette(),
             }
         }
         Err(_) => empty,
@@ -44194,6 +44238,200 @@ mod tests_soa_parity {
 // The wasm batch wrapper (struct + getters + flat-array unpacking) is
 // a thin shell around `fetch_entity_surface_pixels_impl`; it's exercised
 // at the JS smoke / capture layer.
+// =====================================================================
+// A10-M3a (2026-06-12) — SurfacePixels.has_palette tests.
+// =====================================================================
+//
+// The `?surfaceParityV2=on` ClipMap alpha-test ref (100/255 paletted vs
+// 200/255 DDS/solid/none, retail acclient.c:454506-454509) keys off
+// whether the source Texture is palette-indexed (P8/Index16 ⇔
+// `SurfacePixelFormat::needs_palette`). The struct/impl is
+// `cfg(any(target_arch = "wasm32", test))` so the field is visible to the
+// native test target; the wasm getter itself is exercised at the JS layer
+// (test_f7_8_surface_bitfield.mjs Stage 6 stale-pkg/boolean checks).
+#[cfg(test)]
+mod tests_a10_m3a_has_palette {
+    use super::*;
+    use holtburger_dat::{
+        DatError, FileMetadata, ResourceKey, ResourceSource, Result as DatResult,
+    };
+    use std::collections::HashMap;
+
+    struct MockSource {
+        files: HashMap<(String, u32), Vec<u8>>,
+    }
+
+    impl ResourceSource for MockSource {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.files
+                .get(&(key.namespace.to_string(), key.file_id))
+                .cloned()
+                .ok_or(DatError::NotFound(key.file_id))
+        }
+        fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+            self.files.get(&(key.namespace.to_string(), key.file_id)).map(
+                |data| FileMetadata {
+                    id: key.file_id,
+                    size: data.len() as u32,
+                    is_pruned: false,
+                },
+            )
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            self.files.keys().any(|(ns, _)| ns == namespace)
+        }
+    }
+
+    // Wire-format packers, mirroring tests_entity_surfaces_pixels_batch's
+    // fixtures (test mods can't cross-import private helpers).
+    fn pack_palette(id: u32, colours: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&(colours.len() as i32).to_le_bytes());
+        for &c in colours {
+            buf.extend_from_slice(&c.to_le_bytes());
+        }
+        buf
+    }
+    /// P8 (format 41) 1x1 — palette-indexed, trailing default_palette_id.
+    fn pack_p8_texture_1x1(id: u32, pixel_idx: u8, default_pal_id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&41u32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.push(pixel_idx);
+        buf.extend_from_slice(&default_pal_id.to_le_bytes());
+        buf
+    }
+    /// R8G8B8 (format 20) 1x1 — NOT palette-indexed (BGR byte order in
+    /// the file; content is irrelevant here, only the format class is).
+    fn pack_rgb_texture_1x1(id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&20u32.to_le_bytes());
+        buf.extend_from_slice(&3i32.to_le_bytes());
+        buf.extend_from_slice(&[0x10, 0x20, 0x30]);
+        buf
+    }
+    fn pack_surface_texture(id: u32, mip_chain: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.push(0u8);
+        buf.extend_from_slice(&(mip_chain.len() as i32).to_le_bytes());
+        for &t in mip_chain {
+            buf.extend_from_slice(&t.to_le_bytes());
+        }
+        buf
+    }
+    fn pack_textured_surface(surface_type: u32, tex_id: u32, pal_id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&surface_type.to_le_bytes());
+        buf.extend_from_slice(&tex_id.to_le_bytes());
+        buf.extend_from_slice(&pal_id.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&1.0f32.to_le_bytes());
+        buf
+    }
+    /// Solid-colour surface (no 0x02/0x04 bit → ARGB body, 20 bytes).
+    fn pack_solid_surface(surface_type: u32, argb: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&surface_type.to_le_bytes());
+        buf.extend_from_slice(&argb.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&1.0f32.to_le_bytes());
+        buf
+    }
+
+    const NS: &str = "eor/portal";
+
+    #[test]
+    fn p8_texture_reports_has_palette_true() {
+        // Surface (ClipMap 0x4 — the consuming JS branch) → SurfaceTexture →
+        // P8 Texture + its default Palette.
+        let surface_did = 0x0800_1001u32;
+        let st_did = 0x0500_1001u32;
+        let tex_did = 0x0600_1001u32;
+        let pal_did = 0x0400_1001u32;
+        let mut files = HashMap::new();
+        files.insert((NS.to_string(), surface_did), pack_textured_surface(0x4, st_did, 0));
+        files.insert((NS.to_string(), st_did), pack_surface_texture(st_did, &[tex_did]));
+        files.insert((NS.to_string(), tex_did), pack_p8_texture_1x1(tex_did, 0, pal_did));
+        files.insert((NS.to_string(), pal_did), pack_palette(pal_did, &[0xFF11_2233]));
+        let source = MockSource { files };
+        let sp = fetch_surface_pixels_impl(&source, surface_did);
+        assert_eq!(sp.width, 1, "P8 chain must decode");
+        assert!(sp.has_palette, "P8 (format 41) is palette-indexed → true");
+    }
+
+    #[test]
+    fn non_paletted_texture_reports_has_palette_false() {
+        let surface_did = 0x0800_1002u32;
+        let st_did = 0x0500_1002u32;
+        let tex_did = 0x0600_1002u32;
+        let mut files = HashMap::new();
+        files.insert((NS.to_string(), surface_did), pack_textured_surface(0x4, st_did, 0));
+        files.insert((NS.to_string(), st_did), pack_surface_texture(st_did, &[tex_did]));
+        files.insert((NS.to_string(), tex_did), pack_rgb_texture_1x1(tex_did));
+        let source = MockSource { files };
+        let sp = fetch_surface_pixels_impl(&source, surface_did);
+        assert_eq!(sp.width, 1, "RGB chain must decode");
+        assert!(!sp.has_palette, "R8G8B8 (format 20) is not palette-indexed → false");
+    }
+
+    #[test]
+    fn solid_surface_reports_has_palette_false() {
+        // Retail: no texture → curr_texture_is_set false → ddsRef 200
+        // (acclient.c:454506-454507) ⇔ has_palette false.
+        let surface_did = 0x0800_1003u32;
+        let mut files = HashMap::new();
+        files.insert((NS.to_string(), surface_did), pack_solid_surface(0x1, 0xFFAA_BBCC));
+        let source = MockSource { files };
+        let sp = fetch_surface_pixels_impl(&source, surface_did);
+        assert_eq!((sp.width, sp.height), (1, 1), "solid synthesizes a 1x1");
+        assert!(!sp.has_palette, "solid 1x1 has no texture → false");
+    }
+
+    #[test]
+    fn missing_did_empty_fallback_reports_has_palette_false() {
+        let source = MockSource { files: HashMap::new() };
+        let sp = fetch_surface_pixels_impl(&source, 0x0800_DEAD);
+        assert_eq!((sp.width, sp.height), (0, 0), "empty fallback");
+        assert!(!sp.has_palette, "empty fallback → false");
+    }
+
+    #[test]
+    fn entity_impl_threads_has_palette_too() {
+        // The entity (palette-substitution) decode path sets the same field
+        // from the same discriminator — paletted true / solid false.
+        let surface_did = 0x0800_1004u32;
+        let st_did = 0x0500_1004u32;
+        let tex_did = 0x0600_1004u32;
+        let pal_did = 0x0400_1004u32;
+        let mut files = HashMap::new();
+        files.insert((NS.to_string(), surface_did), pack_textured_surface(0x4, st_did, 0));
+        files.insert((NS.to_string(), st_did), pack_surface_texture(st_did, &[tex_did]));
+        files.insert((NS.to_string(), tex_did), pack_p8_texture_1x1(tex_did, 0, pal_did));
+        files.insert((NS.to_string(), pal_did), pack_palette(pal_did, &[0xFF44_5566]));
+        let solid_did = 0x0800_1005u32;
+        files.insert((NS.to_string(), solid_did), pack_solid_surface(0x1, 0xFF01_0203));
+        let source = MockSource { files };
+        let sp = fetch_entity_surface_pixels_impl(&source, surface_did, 0, &[]);
+        assert_eq!(sp.width, 1);
+        assert!(sp.has_palette, "entity path P8 → true");
+        let sp2 = fetch_entity_surface_pixels_impl(&source, solid_did, 0, &[]);
+        assert!(!sp2.has_palette, "entity path solid → false");
+    }
+}
+
 #[cfg(test)]
 mod tests_entity_surfaces_pixels_batch {
     use super::*;

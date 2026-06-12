@@ -2835,6 +2835,10 @@ export class EntityManager {
               translucency: typeof sp.translucency === "number" ? sp.translucency : 0.0,
               luminosity: typeof sp.luminosity === "number" ? sp.luminosity : 0.0,
               diffuse: typeof sp.diffuse === "number" ? sp.diffuse : 0.0,
+              // A10-M3 (2026-06-12) — source-texture palettedness for the
+              // parityV2 ClipMap alpha-test ref. Strict boolean-or-undefined:
+              // missing getter (stale pkg) → undefined → decoder keeps 0.5.
+              hasPalette: typeof sp.hasPalette === "boolean" ? sp.hasPalette : undefined,
             };
             if (typeof sp.free === "function") sp.free();
             let mat;
@@ -3657,7 +3661,16 @@ export class EntityManager {
     if (readSurfaceUnifiedFlag()) {
       applySurfaceRenderState(
         mat,
-        { flags, translucency: sfTranslucency, luminosity: sfLuminosity, diffuse: sfDiffuse },
+        {
+          flags,
+          translucency: sfTranslucency,
+          luminosity: sfLuminosity,
+          diffuse: sfDiffuse,
+          // A10-M3 — forward palettedness (parityV2 ClipMap alpha-test ref).
+          // NOTE this state object keys the bitfield as `surfaceType` (not
+          // `flags`) — kept asymmetric on purpose; only the new key is added.
+          hasPalette: state.hasPalette,
+        },
         { texture: mat.map ?? null },
       );
       return;
@@ -6967,6 +6980,9 @@ export class EntityManager {
             translucency: typeof sp.translucency === "number" ? sp.translucency : 0.0,
             luminosity: typeof sp.luminosity === "number" ? sp.luminosity : 0.0,
             diffuse: typeof sp.diffuse === "number" ? sp.diffuse : 0.0,
+            // A10-M3 — palettedness for the parityV2 ClipMap alpha-test ref
+            // (strict boolean-or-undefined; see the spawn-path twin).
+            hasPalette: typeof sp.hasPalette === "boolean" ? sp.hasPalette : undefined,
           };
           if (typeof sp.free === "function") sp.free();
           const mat = new THREE.MeshStandardMaterial({

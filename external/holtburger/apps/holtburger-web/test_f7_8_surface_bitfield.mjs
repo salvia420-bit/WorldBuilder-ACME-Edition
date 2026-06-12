@@ -124,9 +124,9 @@ const patched = matSrc
 
 const factory = new Function(
   "THREE",
-  `${patched}\n; return { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag };`,
+  `${patched}\n; return { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag, readSurfaceParityV2Flag };`,
 );
-const { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag } =
+const { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag, readSurfaceParityV2Flag } =
   factory(THREE);
 
 // ---- Stage 1: SURFACE_TYPE bit-value verification -------------------
@@ -850,7 +850,251 @@ for (const [st, fl2] of [
   );
 }
 setUnifiedFlag(false);
-delete globalThis.surfacePixelsToTexture;
+
+// ---- Stage 6: A10-M3b — `?surfaceParityV2=on` parity details -------------
+// Three flag-gated sub-behaviours inside `applySurfaceRenderState` (only ever
+// reached when `?surfaceUnified=on`): (b1) additive fog exemption (retail
+// acclient.c:454551-454553 + 460295-460302 — fog-SKIP, bit-based), (b2)
+// ClipMap alpha-test ref 100/255 paletted vs 200/255 DDS/solid (acclient.c:
+// 454499-454511; needs the M3a `hasPalette` getter, stale pkg → legacy 0.5),
+// (b3) true INVALPHA blend (acclient.c:454478-454484, census-zero).
+function setSearch(s) {
+  globalThis.window = { location: { search: s } };
+}
+const D6_PROPS = [...DECODER_PROPS, "fog"];
+function snap6(mat) {
+  const s = {};
+  for (const k of D6_PROPS) s[k] = mat[k];
+  s.emissive = mat.emissive ? mat.emissive.getHex() : null;
+  s.color = mat.color ? mat.color.getHex() : null;
+  return s;
+}
+function eq6(a, b) {
+  for (const k of Object.keys(a)) {
+    if (a[k] !== b[k]) return { ok: false, k, a: a[k], b: b[k] };
+  }
+  return { ok: true };
+}
+
+// (6.1) Flag reader.
+setSearch("?surfaceParityV2=on");
+check("?surfaceParityV2=on → readSurfaceParityV2Flag() true",
+  readSurfaceParityV2Flag() === true, `got=${readSurfaceParityV2Flag()}`);
+setSearch("");
+check("no flag → readSurfaceParityV2Flag() false (default off)",
+  readSurfaceParityV2Flag() === false, `got=${readSurfaceParityV2Flag()}`);
+setSearch("?surfaceUnified=on&surfaceParityV2=on");
+check("combined ?surfaceUnified=on&surfaceParityV2=on parses both",
+  readSurfaceUnifiedFlag() === true && readSurfaceParityV2Flag() === true,
+  `unified=${readSurfaceUnifiedFlag()}, parityV2=${readSurfaceParityV2Flag()}`);
+
+// (6.2) Regression lens (load-bearing): with surfaceUnified=on and parityV2
+// OFF, the FULL flag×float matrix (plus InvAlpha-only / InvAlpha+Additive,
+// already in FLAG_COMBOS) stays byte-identical to the legacy (flag-off) cache
+// ladder — including `fog` (must remain three's default true) and alphaTest
+// 0.5 even when hasPalette is a boolean. Proves M3b is invisible when off,
+// including the (b3) branch-reorder.
+{
+  const cacheP = new MaterialCache();
+  let pFails = 0;
+  let pCount = 0;
+  for (const flags of FLAG_COMBOS) {
+    for (const floats of FLOAT_COMBOS) {
+      for (const hasPalette of [undefined, true, false]) {
+        pCount += 1;
+        const f2 = floats ? { ...floats, hasPalette } : (hasPalette === undefined ? undefined : { hasPalette });
+        setSearch("");
+        const matLegacy = cacheP._materialFromFlags(
+          flags >>> 0, stubTex, undefined, undefined, undefined, undefined, f2,
+        );
+        setSearch("?surfaceUnified=on&surfaceParityV2=off");
+        const matU = cacheP._materialFromFlags(
+          flags >>> 0, stubTex, undefined, undefined, undefined, undefined, f2,
+        );
+        setSearch("");
+        const cmp = eq6(snap6(matLegacy), snap6(matU));
+        if (!cmp.ok) {
+          pFails += 1;
+          console.log(
+            `  [FAIL] parityV2-off lens flags=0x${(flags >>> 0).toString(16)} floats=${JSON.stringify(f2)}` +
+              ` — prop ${cmp.k}: legacy=${cmp.a} unified=${cmp.b}`,
+          );
+        }
+      }
+    }
+  }
+  check(
+    `A10-M3b regression lens: ${pCount - pFails}/${pCount} combos identical with parityV2 OFF (incl. fog + hasPalette inertness)`,
+    pFails === 0, pFails === 0 ? "" : `${pFails} combo(s) diverged`,
+  );
+}
+
+// Helper: run the unified decoder directly (the paletted-delegate shape).
+function decode6(flags, floats, hasPalette) {
+  const m = new THREE.MeshStandardMaterial({
+    map: stubTex, roughness: 0.9, metalness: 0.0,
+    side: THREE.DoubleSide, transparent: false, alphaTest: 0,
+  });
+  applySurfaceRenderState(
+    m,
+    {
+      flags: flags >>> 0,
+      translucency: floats?.translucency ?? 0,
+      luminosity: floats?.luminosity ?? 0,
+      diffuse: floats?.diffuse ?? 0,
+      hasPalette,
+    },
+    { texture: stubTex },
+  );
+  return m;
+}
+
+setSearch("?surfaceUnified=on&surfaceParityV2=on");
+
+// (6.3) (b2) ClipMap alpha-test ref.
+{
+  const mPal = decode6(F.Base1ClipMap, undefined, true);
+  check("M3b ClipMap + hasPalette=true → alphaTest=100/255 (paletted s_256AlphaTestRef)",
+    Math.abs(mPal.alphaTest - 100 / 255) < 1e-9 && mPal.transparent === false,
+    `alphaTest=${mPal.alphaTest}`);
+  const mDds = decode6(F.Base1ClipMap, undefined, false);
+  check("M3b ClipMap + hasPalette=false → alphaTest=200/255 (DDS s_ddsAlphaTestRef)",
+    Math.abs(mDds.alphaTest - 200 / 255) < 1e-9 && mDds.transparent === false,
+    `alphaTest=${mDds.alphaTest}`);
+  const mStale = decode6(F.Base1ClipMap, undefined, undefined);
+  check("M3b ClipMap + hasPalette=undefined (stale pkg) → legacy alphaTest=0.5",
+    mStale.alphaTest === 0.5, `alphaTest=${mStale.alphaTest}`);
+  // ClipMap+Translucent takes the blend branch — alphaTest stays 0 (parity
+  // with acclient.c:454513-454522, Translucent resets the clipmap state).
+  const mCT = decode6(F.Base1ClipMap | F.Translucent, undefined, true);
+  check("M3b ClipMap+Translucent → blend branch, alphaTest stays 0",
+    mCT.alphaTest === 0 && mCT.transparent === true && mCT.depthWrite === false,
+    `alphaTest=${mCT.alphaTest}, transparent=${mCT.transparent}`);
+}
+
+// (6.4) (b1) additive fog exemption. NOTE: implemented bit-based (retail's
+// check is `flags & ADDITIVE` AFTER the blend ladder, acclient.c:454551), so
+// Translucent+Additive and InvAlpha+Additive are exempt too — a superset of
+// the spec's "both additive branches" placement, matching the cited retail
+// truth exactly.
+{
+  check("M3b Additive-only → fog=false",
+    decode6(F.Additive, undefined, undefined).fog === false, "");
+  check("M3b Alpha+Additive → fog=false",
+    decode6(F.Additive | F.Alpha, undefined, undefined).fog === false, "");
+  check("M3b Translucent+Additive → fog=false (bit-based, retail 454551)",
+    decode6(F.Translucent | F.Additive, undefined, undefined).fog === false, "");
+  check("M3b InvAlpha+Additive → fog=false (bit-based)",
+    decode6(F.InvAlpha | F.Additive, undefined, undefined).fog === false, "");
+  check("M3b Translucent (non-additive) → fog stays true",
+    decode6(F.Translucent, undefined, undefined).fog === true, "");
+  check("M3b ClipMap (non-additive) → fog stays true",
+    decode6(F.Base1ClipMap, undefined, true).fog === true, "");
+  setSearch("?surfaceUnified=on");
+  check("M3b parityV2 off → Additive fog stays true (legacy)",
+    decode6(F.Additive, undefined, undefined).fog === true, "");
+  setSearch("?surfaceUnified=on&surfaceParityV2=on");
+}
+
+// (6.5) (b3) true INVALPHA blend.
+{
+  const mIA = decode6(F.InvAlpha, undefined, undefined);
+  check("M3b InvAlpha-only → CustomBlending INVSRCALPHA/SRCALPHA, transparent, depthWrite off",
+    mIA.blending === THREE.CustomBlending &&
+      mIA.blendSrc === THREE.OneMinusSrcAlphaFactor &&
+      mIA.blendDst === THREE.SrcAlphaFactor &&
+      mIA.blendEquation === THREE.AddEquation &&
+      mIA.transparent === true && mIA.depthWrite === false,
+    `blending=${mIA.blending}, src=${mIA.blendSrc}, dst=${mIA.blendDst}`);
+  const mIAA = decode6(F.InvAlpha | F.Additive, undefined, undefined);
+  check("M3b InvAlpha+Additive → dst=ONE (retail 454481: ADDITIVE? ONE : SRCALPHA)",
+    mIAA.blending === THREE.CustomBlending &&
+      mIAA.blendSrc === THREE.OneMinusSrcAlphaFactor &&
+      mIAA.blendDst === THREE.OneFactor,
+    `blending=${mIAA.blending}, src=${mIAA.blendSrc}, dst=${mIAA.blendDst}`);
+  const mAIA = decode6(F.Alpha | F.InvAlpha, undefined, undefined);
+  check("M3b Alpha+InvAlpha → Alpha precedence (plain alpha-blend, retail checks ALPHA first @454470)",
+    mAIA.blending === THREE.NormalBlending &&
+      mAIA.transparent === true && mAIA.depthWrite === false,
+    `blending=${mAIA.blending}`);
+  const mTIA = decode6(F.Translucent | F.InvAlpha, { translucency: 0.3 }, undefined);
+  check("M3b Translucent+InvAlpha → plain alpha-blend branch (T honoured)",
+    mTIA.blending === THREE.NormalBlending &&
+      mTIA.transparent === true &&
+      Math.abs(mTIA.opacity - 0.7) < 1e-6,
+    `blending=${mTIA.blending}, opacity=${mTIA.opacity}`);
+}
+
+// (6.6) Three-path prop-equality: cache path (`_materialFromFlags`), the
+// paletted-delegate shape (unified fn applied directly — entities.js'
+// `_applyPalettedSurfaceRenderState` forwards `state.hasPalette` into exactly
+// this call), and the entity-owned path (`_buildEntityOwnedFromPixels`).
+{
+  globalThis.surfacePixelsToTexture = (pixels, w, h) => {
+    const t = new THREE.DataTexture(pixels, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+    t.needsUpdate = true;
+    return t;
+  };
+  const cache6 = new MaterialCache();
+  const reps = [
+    { name: "ClipMap+hasPalette:false", flags: F.Base1ClipMap, hasPalette: false },
+    { name: "Additive", flags: F.Additive, hasPalette: undefined },
+    { name: "InvAlpha", flags: F.InvAlpha, hasPalette: undefined },
+  ];
+  for (const r of reps) {
+    const mCache = cache6._materialFromFlags(
+      r.flags, stubTex, undefined, undefined, undefined, undefined,
+      { hasPalette: r.hasPalette },
+    );
+    const mPaletted = decode6(r.flags, undefined, r.hasPalette);
+    const mEntity = cache6._buildEntityOwnedFromPixels(0x09002000 + r.flags, {
+      width: 1, height: 1,
+      pixels: new Uint8Array([128, 128, 128, 255]),
+      surfaceType: r.flags, translucency: 0, luminosity: 0, diffuse: 0,
+      hasPalette: r.hasPalette,
+      free() {},
+    });
+    const a = snap6(mCache);
+    const b = snap6(mPaletted);
+    const c = snap6(mEntity);
+    const cmpAB = eq6(a, b);
+    const cmpAC = eq6(a, c);
+    check(
+      `M3b three-path equality (${r.name}): cache == paletted-delegate == entity-owned`,
+      cmpAB.ok && cmpAC.ok,
+      cmpAB.ok
+        ? (cmpAC.ok ? "" : `entity prop ${cmpAC.k}: ${cmpAC.a} vs ${cmpAC.b}`)
+        : `paletted prop ${cmpAB.k}: ${cmpAB.a} vs ${cmpAB.b}`,
+    );
+  }
+  delete globalThis.surfacePixelsToTexture;
+}
+
+// (6.7) Idempotency / clone-re-apply (A10 §5 hook-ramp clone-on-write seam):
+// running the decoder twice on the same material, and once on a clone, must
+// land identical props.
+{
+  const m1 = decode6(F.Base1ClipMap | F.Additive, undefined, false);
+  const before = snap6(m1);
+  applySurfaceRenderState(
+    m1,
+    { flags: F.Base1ClipMap | F.Additive, translucency: 0, luminosity: 0, diffuse: 0, hasPalette: false },
+    { texture: stubTex },
+  );
+  const cmpTwice = eq6(before, snap6(m1));
+  const mClone = m1.clone();
+  applySurfaceRenderState(
+    mClone,
+    { flags: F.Base1ClipMap | F.Additive, translucency: 0, luminosity: 0, diffuse: 0, hasPalette: false },
+    { texture: stubTex },
+  );
+  const cmpClone = eq6(snap6(m1), snap6(mClone));
+  check("M3b idempotency: decoder twice + clone-re-apply → identical props",
+    cmpTwice.ok && cmpClone.ok,
+    cmpTwice.ok ? (cmpClone.ok ? "" : `clone prop ${cmpClone.k}`) : `twice prop ${cmpTwice.k}`);
+}
+
+setSearch("");
 
 // restore
 if (_prevWindow === undefined) delete globalThis.window;
