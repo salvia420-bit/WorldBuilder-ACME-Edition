@@ -785,10 +785,12 @@ const HOOK_DRAIN_ON = (() => {
 
 // A4-Q2 (2026-06-12, W3+ S5) — `?mtQueue=on` (default OFF) wires one-shot
 // overlay COMPLETION across the wasm boundary: when a tagged
-// (`mtQueued`-played, see `_tryPlayLink`) local-player overlay ends, JS
-// calls `window.__notifyAnimationDone(guid, true)` → the wasm
-// `notifyAnimationDone` export → the local player's `MotionTableManager`
-// queue (retail `AnimDoneHook::Execute` → `Hook_AnimDone` →
+// (`mtQueued`-played, see `_tryPlayLink`) overlay ends, JS calls
+// `window.__notifyAnimationDone(guid, true)` → the wasm
+// `notifyAnimationDone` export → that entity's `MotionTableManager`
+// (A4/SA4F per-guid routing: local player → the A4-Q1 system queue,
+// every guid → its registry MovementManager; retail per-OBJECT chain
+// `AnimDoneHook::Execute` → `Hook_AnimDone` →
 // `CPartArray::AnimationDone` → `MotionTableManager::AnimationDone`,
 // acclient.c:342336 → :317087 → :325080 → :329873; success hard-coded 1
 // on the renderer path, :317093). Eviction/stop of a tagged,
@@ -814,18 +816,21 @@ const MT_QUEUE_ON = (() => {
 })();
 
 // A4-Q2 — the ONE notify gate (shared by the EntityManager completion
-// path and EntityInstance eviction): only tagged keys, only the local
-// player, typeof-guarded bridge (`index.html` installs
-// `window.__notifyAnimationDone` next to the SessionHandle).
+// path and EntityInstance eviction): only tagged keys, typeof-guarded
+// bridge (`index.html` installs `window.__notifyAnimationDone` next to
+// the SessionHandle). A4/SA4F (2026-06-12): the local-player guid gate
+// is LIFTED — the wasm recv arm routes per-guid (retail per-OBJECT
+// chain has no local filter, acclient.c:342336-342338). Counter
+// poisoning stays guarded by the `_mtQueuedKeys` tagging contract
+// (acclient.c:329885-329894 is positional); NO current caller tags
+// plays, so remote notifies stay inert until the A3-D2 / ?interpRig
+// enqueue-consumers land and tag remote one-shots.
 function notifyMtQueuedOverlayDone(inst, key, success) {
   try {
     if (!MT_QUEUE_ON || !inst || !inst._mtQueuedKeys) return;
     if (!inst._mtQueuedKeys.has(key)) return;
     inst._mtQueuedKeys.delete(key);
     if (typeof window === "undefined") return;
-    if (typeof window.getLocalPlayerGuid !== "function") return;
-    const lpg = window.getLocalPlayerGuid();
-    if (!lpg || (lpg >>> 0) !== (inst.guid >>> 0)) return;
     if (typeof window.__notifyAnimationDone === "function") {
       window.__notifyAnimationDone(inst.guid >>> 0, !!success);
     }

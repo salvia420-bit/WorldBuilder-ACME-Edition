@@ -229,5 +229,38 @@ console.log("PART 4 — static picking.js invariants");
   );
 }
 
+console.log("PART 5 — A4/SA4F repeat-pursuit (the f6065782 stall, fixed)");
+{
+  // Two CONSECUTIVE charges on the same target: each per-charge monitor
+  // sees status 1 (active) → 2 (arrived) and fires exactly once — the
+  // second pursuit must ride the SAME no-timeout path now that the A4
+  // per-entity AnimationDone feed clears `motions_pending` between
+  // pursuits (core regression:
+  // `second_pursuit_entry_turn_begins_on_first_driver_frame`). Before
+  // A4 the second charge's status sat at 1 until the 10 s wall-clock
+  // timeout (the retired url-flags.md "KNOWN STAGING LIMIT").
+  let fires = 0;
+  let cancels = 0;
+  for (let charge = 0; charge < 2; charge += 1) {
+    const monitor = createPursuitMonitor({ maxDurationMs: 10_000 });
+    // The second pursuit's entry turn begins on the FIRST driver frame:
+    // status goes straight 1 → 1 → 2 (no idle stall, no timeout leg).
+    const statuses = [PURSUIT_ACTIVE, PURSUIT_ACTIVE, PURSUIT_ARRIVED];
+    let elapsedMs = 0;
+    for (const statusRaw of statuses) {
+      elapsedMs += 16;
+      const r = monitor({ statusRaw, elapsedMs, inCombatStance: true });
+      if (r.action === "arrive") fires += 1;
+      if (r.action === "cancel") cancels += 1;
+      check(
+        `charge ${charge + 1} step never times out`,
+        r.action !== "cancel" || r.reason !== "timeout",
+      );
+    }
+  }
+  check("both consecutive charges fire", fires === 2, `fires=${fires}`);
+  check("no cancel on either charge", cancels === 0, `cancels=${cancels}`);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -4589,6 +4589,40 @@ impl MovementSystem {
         self.motion_table_manager.animation_done(success);
     }
 
+    /// A4/SA4F (2026-06-12) — the PER-GUID renderer `AnimationDone`
+    /// route (retail has no local-only filter: `AnimDoneHook::Execute`
+    /// targets one object's own queue, acclient.c:342336-342338 →
+    /// :317087 → :325080-325086 → :329873; the wasm recv-arm local
+    /// drop was OUR staging artifact, now retired).
+    ///
+    /// 1. `is_local` → the existing [`Self::notify_animation_done`]
+    ///    (keeps the `USE_MOTION_TABLE_QUEUE` gate + the S9 unstick
+    ///    bubble exactly as landed — the system-level instance's
+    ///    `MotionDone` events ride the per-tick pump drain).
+    /// 2. ALWAYS → the registry [`MovementManager`] for `guid`, when
+    ///    one exists. Map-miss is a no-op (despawned guids are pruned
+    ///    on `EntityDespawned`), so this half needs no const gate: it
+    ///    is inert by construction unless a default-off lane
+    ///    (`USE_UNPACK_MOVEMENT_SEMANTICS` wire events / the
+    ///    `?wasmPursuit` input lane) created the manager.
+    ///
+    /// Spec SA4F §6 risk 2 (local dual-instance double-pop): one local
+    /// notify reaches BOTH local queues; their enqueue lanes are
+    /// disjoint today (rig lane vs lattice spine) and the
+    /// acclient.c:329884 head-null guard no-ops the empty one —
+    /// unification of the two local instances is the Stage-3 follow-on
+    /// (spec §7 OQ-1 fallback: keep both, document). Spec §7 OQ-3
+    /// fallback: the registry manager's unstick request is DROPPED
+    /// here (remote sticky is the F3-4 JS pin / A2-P3 owner's scope).
+    pub(crate) fn notify_animation_done_for(&mut self, guid: Guid, is_local: bool, success: bool) {
+        if is_local {
+            self.notify_animation_done(success);
+        }
+        if let Some(manager) = self.movement_managers.get_mut(&guid) {
+            let _unstick = manager.animation_done(success);
+        }
+    }
+
     /// A4-Q2 test seam: the local player's pending-animation queue.
     #[cfg(test)]
     pub(crate) fn motion_table_manager_mut(&mut self) -> &mut MotionTableManager {
@@ -4599,6 +4633,13 @@ impl MovementSystem {
     #[cfg(test)]
     pub(crate) fn movement_manager_for(&self, guid: Guid) -> Option<&MovementManager> {
         self.movement_managers.get(&guid)
+    }
+
+    /// A4/SA4F test seam: mutable registry view (enqueue fixtures for
+    /// the per-entity `notify_animation_done_for` routing tests).
+    #[cfg(test)]
+    pub(crate) fn movement_manager_for_mut(&mut self, guid: Guid) -> Option<&mut MovementManager> {
+        self.movement_managers.get_mut(&guid)
     }
 
     /// A13-W1 test seam: expose the last recorded server-control /

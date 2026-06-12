@@ -46,7 +46,12 @@
 //! `acclient.c:329960-329980`). This settles the A4 §6 "num_anims
 //! provenance" open question by convention; retail's multi-anim
 //! accounting (`acclient.c:330225` out-params) is intentionally
-//! collapsed to the bake's granularity.
+//! collapsed to the bake's granularity. A4/SA4F (2026-06-12) names the
+//! classifier: [`super::motion_interp::renderer_num_anims`] — `1` iff
+//! the action bit (0x10000000) is set (the class JS realizes as tagged
+//! LoopOnce overlays that notify completion); everything else is `0`
+//! (gait-loop realization, no `finished` event — retail itself never
+//! fires AnimDone for the cyclic anim, `acclient.c:340764-340773`).
 
 use std::collections::VecDeque;
 

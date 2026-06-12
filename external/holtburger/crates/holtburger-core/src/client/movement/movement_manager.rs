@@ -350,19 +350,14 @@ impl MovementManager {
         // `MotionTableManager::UseTime` every frame alongside the
         // MoveTo pump (`CPartArray::HandleMovement`,
         // acclient.c:325106-325112): zero-anim heads (the
-        // enter_default_state Ready seed) complete synchronously so
-        // they never wedge the driver's `motions_pending` gate.
-        // `num_anims > 0` nodes still await the A4 per-entity
-        // `animation_done` feed (staged) — `begin_turn_to_heading`
-        // defers behind them, retail-shaped.
+        // enter_default_state Ready seed AND, since A4/SA4F, every
+        // loop-realized locomotion/turn/stop node —
+        // `motion_interp::renderer_num_anims`) complete synchronously
+        // so they never wedge the driver's `motions_pending` gate.
+        // `num_anims > 0` (action-class) nodes complete via the A4
+        // per-entity [`Self::animation_done`] feed.
         self.motion_table_manager.use_time();
-        for event in self.motion_table_manager.drain_events() {
-            if let super::motion_table_manager::MotionTableEvent::MotionDone { success, .. } = event
-                && let Some(interp) = self.motion_interp.as_mut()
-            {
-                let _ = interp.motion_done(success);
-            }
-        }
+        let _ = self.drain_completions();
         // Re-read the gate post-pump (the caller sampled it pre-pump).
         let mut view = *view;
         view.motions_pending = self.moveto_motions_pending();
@@ -408,6 +403,42 @@ impl MovementManager {
         self.motion_interp
             .as_ref()
             .is_some_and(|interp| interp.motions_pending())
+    }
+
+    /// A4/SA4F (2026-06-12) — the ONE `MotionDone` fan-out for this
+    /// manager's two completion spines (shared by [`Self::use_time_moveto`],
+    /// [`Self::animation_done`], and the `apply_unpacked_movement` tail
+    /// pump, so A4 cannot fork the routing — retail
+    /// `CPhysicsObj::MotionDone` fan-out, acclient.c:317097 → :339349):
+    /// route each drained `MotionDone` into `interp.motion_done`, OR-ing
+    /// the unstick-hook requests. Spec §7 OQ-3 fallback taken: the
+    /// caller may DROP the returned unstick bit for remote entities —
+    /// remote sticky is the F3-4 JS pin / A2-P3 owner's scope (retail
+    /// has no local/remote split to cite; revisit with A2-P3).
+    fn drain_completions(&mut self) -> bool {
+        let mut unstick = false;
+        for event in self.motion_table_manager.drain_events() {
+            if let super::motion_table_manager::MotionTableEvent::MotionDone { success, .. } = event
+                && let Some(interp) = self.motion_interp.as_mut()
+            {
+                unstick |= interp.motion_done(success);
+            }
+        }
+        unstick
+    }
+
+    /// A4/SA4F (2026-06-12) — the per-entity renderer `AnimationDone`
+    /// feed: retail's per-OBJECT chain `AnimDoneHook::Execute(object)` →
+    /// `CPhysicsObj::Hook_AnimDone` → `CPartArray::AnimationDone` → that
+    /// object's OWN `MotionTableManager::AnimationDone`
+    /// (acclient.c:342336-342338 → :317087 → :325080-325086 → :329873 —
+    /// there is no global queue in retail). A stray notify on an empty
+    /// queue is harmless (the acclient.c:329884 head-null guard inside
+    /// `MotionTableManager::animation_done`). Returns the OR-ed
+    /// unstick-hook requests (see [`Self::drain_completions`] / OQ-3).
+    pub(crate) fn animation_done(&mut self, success: bool) -> bool {
+        self.motion_table_manager.animation_done(success);
+        self.drain_completions()
     }
 
     /// `MovementManager::move_to_interpreted_state` — lazy-create-first
@@ -672,6 +703,20 @@ impl MovementManager {
             // style step above is all that runs.
             (_, MovementTypeData::Invalid(_)) => {}
         }
+
+        // A4/SA4F (2026-06-12) — tail completion pump: managers WITHOUT
+        // an active MoveTo are never pumped by `use_time_moveto` (it
+        // early-returns) and `drive_local_moveto` is local-only, so a
+        // zero-anim style/stop node enqueued above would otherwise sit
+        // and wedge `motions_pending`. Retail completes
+        // PerformMovement-issued zero-anim motions the same frame via
+        // the synchronous `CheckForCompletedMotions` after every
+        // `PerformMovement` arm (acclient.c:344684-344704; the same
+        // cadence the system-level pump documents at `system.rs` tick).
+        // Unstick requests are dropped here per spec §7 OQ-3 fallback
+        // (remote sticky is the F3-4 / A2-P3 owner's scope).
+        self.motion_table_manager.use_time();
+        let _ = self.drain_completions();
 
         effects
     }
@@ -1038,10 +1083,25 @@ mod tests {
         assert!(!manager.standing_longjump());
 
         // motion_done → minterp only: pops the pending head; an action
-        // node reports the unstick hook.
+        // node reports the unstick hook. A4/SA4F: the tail pump now
+        // completes the zero-anim Ready seed inside apply itself, so
+        // seed a fresh pending node for the routing check.
+        {
+            let mut seed_effects = MotionSideEffects::default();
+            let interp = manager.motion_interp.as_mut().unwrap();
+            interp
+                .do_interpreted_motion(
+                    MOTION_READY,
+                    &MovementParameters::default(),
+                    true,
+                    &mut manager.motion_table_manager,
+                    &mut seed_effects,
+                )
+                .unwrap();
+        }
         let interp = manager.motion_interp_ref().unwrap();
         let head = interp.pending_motions.front().copied();
-        assert!(head.is_some(), "enter_default_state seeded a Ready node");
+        assert!(head.is_some(), "seeded a Ready pending node");
         assert!(!manager.motion_done(true), "Ready head is not an action");
 
         // use_time_moveto / handle_update_target → moveto only. An
@@ -1084,12 +1144,18 @@ mod tests {
     /// Lazy minterp creation runs `enter_default_state` exactly once:
     /// one Ready seed node on `pending_motions` + the A4-Q1
     /// `initialize_state` Ready on the per-entity completion spine; a
-    /// second unpack does not re-seed.
+    /// second unpack does not re-seed. A4/SA4F: the zero-anim Ready
+    /// seed now COMPLETES inside the same `apply_unpacked_movement`
+    /// call (the tail `use_time` pump — retail's synchronous
+    /// `CheckForCompletedMotions` after every `PerformMovement` arm,
+    /// acclient.c:344684-344704), so the post-call queue is EMPTY, not
+    /// one-deep.
     #[test]
     fn lazy_create_runs_enter_default_state_exactly_once() {
         let mut manager = MovementManager::default();
-        let event = case0(0, None, STYLE_NONCOMBAT_LOW16);
-        manager.apply_unpacked_movement(&event, false, 0.0, 0.0);
+
+        // Direct lazy-create (no tail pump): the seed is observable.
+        let _ = manager.minterp();
         let interp = manager.motion_interp_ref().unwrap();
         assert!(interp.initted);
         assert_eq!(
@@ -1102,11 +1168,85 @@ mod tests {
         );
         assert_eq!(interp.pending_motions.len(), 1);
 
+        // Through apply: the tail pump completes the zero-anim seed
+        // same-call; a second unpack neither re-seeds nor re-pends.
+        let mut manager = MovementManager::default();
+        let event = case0(0, None, STYLE_NONCOMBAT_LOW16);
         manager.apply_unpacked_movement(&event, false, 0.0, 0.0);
-        assert_eq!(
-            manager.motion_interp_ref().unwrap().pending_motions.len(),
-            1,
+        let interp = manager.motion_interp_ref().unwrap();
+        assert!(interp.initted);
+        assert!(
+            interp.pending_motions.is_empty(),
+            "the Ready seed completes via the same-call tail pump"
+        );
+        assert!(!manager.moveto_motions_pending());
+
+        manager.apply_unpacked_movement(&event, false, 0.0, 0.0);
+        assert!(
+            manager.motion_interp_ref().unwrap().pending_motions.is_empty(),
             "no re-seed on the second unpack"
+        );
+    }
+
+    /// A4/SA4F — [`MovementManager::animation_done`] pops BOTH spines
+    /// for a tagged action node (the per-entity renderer feed, retail
+    /// per-OBJECT chain acclient.c:342336 → :317087 → :325080 →
+    /// :329873); an empty-queue notify no-ops (the acclient.c:329884
+    /// head-null guard).
+    #[test]
+    fn animation_done_pops_both_spines_and_noops_when_empty() {
+        // Empty-queue notify: harmless no-op (manager not even seeded).
+        let mut manager = MovementManager::default();
+        assert!(!manager.animation_done(true), "empty notify no-ops");
+
+        // Seed (one Ready on each spine) + enqueue an action-class
+        // motion on both spines.
+        let _ = manager.minterp();
+        {
+            let mut effects = MotionSideEffects::default();
+            let interp = manager.motion_interp.as_mut().unwrap();
+            interp
+                .do_interpreted_motion(
+                    0x1000_0062,
+                    &MovementParameters::default(),
+                    true,
+                    &mut manager.motion_table_manager,
+                    &mut effects,
+                )
+                .unwrap();
+        }
+        assert!(manager.moveto_motions_pending());
+
+        // One renderer AnimationDone: pops the zero-anim Ready seed +
+        // the {action, 1} node off the mtm spine, routes both
+        // MotionDone events into the interp spine (action pop requests
+        // the unstick hook, acclient.c:343659).
+        assert!(manager.animation_done(true), "action pop bubbles the unstick request");
+        assert!(!manager.moveto_motions_pending(), "both spines drained");
+
+        // A second notify on the now-empty queue no-ops again.
+        assert!(!manager.animation_done(true));
+    }
+
+    /// A4/SA4F — the `apply_unpacked_movement` tail pump completes a
+    /// zero-anim style node same-call (retail same-frame
+    /// `CheckForCompletedMotions` after every `PerformMovement` arm,
+    /// acclient.c:344684-344704): a style delta enqueues `{style, 0}`
+    /// (loop-realized — `renderer_num_anims`) and `motions_pending` is
+    /// already false on return — no driver pump needed.
+    #[test]
+    fn apply_unpacked_movement_tail_pump_completes_style_node_same_call() {
+        let mut manager = MovementManager::default();
+        let event = case0(0, None, STYLE_SWORD_LOW16);
+        let effects = manager.apply_unpacked_movement(&event, false, 0.0, 0.0);
+        assert_eq!(
+            effects.style_do_motion,
+            Some(STYLE_SWORD),
+            "style delta dispatched through the lattice"
+        );
+        assert!(
+            !manager.moveto_motions_pending(),
+            "zero-anim style node completed inside the same apply call"
         );
     }
 }

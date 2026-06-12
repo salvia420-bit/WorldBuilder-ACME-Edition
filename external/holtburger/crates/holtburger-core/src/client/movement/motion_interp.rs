@@ -49,6 +49,38 @@ pub(crate) const MOTION_READY: u32 = 0x4100_0003;
 /// (`acclient.c:343656-343661`; ACE `CommandMask.Action`).
 pub(crate) const MOTION_ACTION_BIT: u32 = 0x1000_0000;
 
+/// A4 (2026-06-12, W3+ SA4F) — the renderer-realization-truth
+/// `num_anims` classifier for the lattice enqueue sites
+/// (`do_interpreted_motion` / `stop_interpreted_motion`).
+///
+/// Retail fires one `AnimDoneHook` per completed NON-LOOP (link /
+/// one-shot) anim only — `CSequence::update_internal` appends
+/// `anim_done_hook` exclusively when the completed node is NOT the
+/// first cyclic anim (`acclient.c:340764-340773`); a steady-state loop
+/// NEVER fires AnimDone per cycle. `num_anims` is `DoObjectMotion`'s
+/// appended-link-anim count (out-param plumb `acclient.c:330221-330228`).
+/// Under OUR renderer, action-class motions (`MOTION_ACTION_BIT`,
+/// 0x10000000) are exactly the class JS realizes as tagged LoopOnce
+/// overlays that report completion (`entities.js` `_tryPlayLink` /
+/// `?mtQueue` tagging contract); style/substate locomotion, turns,
+/// Ready stops, and default-state are realized as the KIND_MOTION gait
+/// LOOP (crossfades, no `finished` event) — no completion signal ever
+/// arrives, so they classify as `0` and complete through the per-frame
+/// poll (`MotionTableManager::check_for_completed_motions`,
+/// `acclient.c:329960-330020`). This follows the S5 bake-granularity
+/// convention pinned at `motion_table_manager.rs` (module doc):
+/// {0,1}-collapsed vs retail's multi-link accounting — divergence: a
+/// gait-change `MotionDone` fires ~1 link-anim earlier than retail's
+/// (accepted; spec SA4F §3 + §7 OQ-2 tracks the residual — a future
+/// un-flattened bake must teach this classifier real counts).
+/// Spec §7 OQ-6 fallback taken: ships BARE (no const) — every enqueue
+/// caller is already behind default-off gates (`USE_MOVETO_DRIVER` /
+/// `USE_UNPACK_MOVEMENT_SEMANTICS` / `?wasmPursuit` lane), so flag-off
+/// builds are byte-identical.
+pub(crate) fn renderer_num_anims(motion: u32) -> u32 {
+    u32::from(motion & MOTION_ACTION_BIT != 0)
+}
+
 // A3-D3 (2026-06-12) — motion-id literals the DoMotion lattice tests
 // (decompile literals at `acclient.c:344639-344653` / `:343990` /
 // `:343764-343784`; ACE `MotionCommand`).
@@ -807,7 +839,9 @@ impl MotionInterp {
     /// RemoveLinkAnimations effect (`:343992-343993`); the
     /// `CPhysicsObj::DoInterpretedMotion` inner body (sequence playback)
     /// is the A4-Q1 `motion_table_manager` enqueue (DESIGN.md:399-413,
-    /// num_anims = 1-per-realized-motion, S5 convention); jump_error =
+    /// `num_anims` from [`renderer_num_anims`] — action-class = 1,
+    /// loop-realized locomotion/turns = 0, A4/SA4F classification over
+    /// the S5 convention; `acclient.c:340764-340773`); jump_error =
     /// 72 under DisableJumpDuringLink, else the motion's own
     /// `motion_allows_jump`, non-actions falling back to the interpreted
     /// forward command's (`:343996-344005`).
@@ -842,7 +876,7 @@ impl MotionInterp {
         if motion == MOTION_DEAD {
             effects.remove_link_animations = true;
         }
-        motion_table_manager.queue_object_motion(motion, 1);
+        motion_table_manager.queue_object_motion(motion, renderer_num_anims(motion));
         let jump_error = if params.disable_jump_during_link() {
             72
         } else {
@@ -925,7 +959,11 @@ impl MotionInterp {
     /// `CPhysicsObj::StopInterpretedMotion` analog (Stop → Ready node on
     /// the A4-Q1 queue), an observable Ready (`0x41000003`) completion
     /// node on `pending_motions`, then the ModifyInterpretedState
-    /// removal.
+    /// removal. A4/SA4F: the Ready stop node enqueues `num_anims = 0`
+    /// — our stop realization is the KIND_MOTION idle crossfade, never
+    /// a completable clip (retail Ready node `acclient.c:330233-330245`;
+    /// classification rationale at [`renderer_num_anims`]), so it
+    /// completes through the per-frame poll.
     pub(crate) fn stop_interpreted_motion(
         &mut self,
         motion: u32,
@@ -946,7 +984,7 @@ impl MotionInterp {
             }
             return Ok(());
         }
-        motion_table_manager.queue_object_motion_stop(1);
+        motion_table_manager.queue_object_motion_stop(0);
         self.add_to_queue(params.context_id, MOTION_READY, 0);
         if params.modify_interpreted_state() {
             self.interpreted_state.remove_motion(motion);
@@ -2299,6 +2337,79 @@ mod tests {
                 stamp: 7,
                 autonomous: true
             }
+        );
+    }
+
+    /// A4/SA4F (2026-06-12) — [`renderer_num_anims`] classification at
+    /// the two lattice enqueue sites: action-class motions enqueue
+    /// `{motion, 1}` (await the per-entity renderer `AnimationDone`
+    /// feed, acclient.c:340764-340773 — only non-loop link/one-shot
+    /// anims fire AnimDone in retail); locomotion/turn enqueue
+    /// `{motion, 0}` and Ready stop nodes `{Ready, 0}` (loop-realized,
+    /// completed by the per-frame zero-anim poll,
+    /// acclient.c:329960-330020).
+    #[test]
+    fn renderer_num_anims_classifies_enqueue_sites() {
+        use crate::client::movement::motion_table_manager::MotionTableEvent;
+        const ACTION_X: u32 = 0x1000_0062;
+
+        assert_eq!(renderer_num_anims(ACTION_X), 1, "action class");
+        assert_eq!(renderer_num_anims(MOTION_WALK_FORWARD), 0);
+        assert_eq!(renderer_num_anims(MOTION_RUN_FORWARD), 0);
+        assert_eq!(renderer_num_anims(MOTION_TURN_RIGHT), 0);
+        assert_eq!(renderer_num_anims(MOTION_TURN_LEFT), 0);
+        assert_eq!(renderer_num_anims(MOTION_READY), 0);
+
+        let params = MovementParameters::default();
+
+        // Action → {ACTION_X, 1}: survives the zero-anim poll, pops
+        // only on the renderer AnimationDone.
+        let mut interp = MotionInterp::default();
+        let mut mtm = MotionTableManager::new();
+        let mut effects = MotionSideEffects::default();
+        interp
+            .do_interpreted_motion(ACTION_X, &params, true, &mut mtm, &mut effects)
+            .unwrap();
+        mtm.use_time();
+        assert!(
+            mtm.drain_events().is_empty(),
+            "action node must await the renderer feed"
+        );
+        mtm.animation_done(true);
+        assert_eq!(
+            mtm.drain_events(),
+            vec![MotionTableEvent::MotionDone { motion: ACTION_X, success: true }]
+        );
+
+        // Locomotion / turn → {motion, 0}: the same-frame poll
+        // completes them (THE repeat-pursuit stall fix — every
+        // driver-lattice node clears `motions_pending` next pump).
+        for motion in [MOTION_WALK_FORWARD, MOTION_RUN_FORWARD, MOTION_TURN_RIGHT] {
+            let mut interp = MotionInterp::default();
+            let mut mtm = MotionTableManager::new();
+            let mut effects = MotionSideEffects::default();
+            interp
+                .do_interpreted_motion(motion, &params, true, &mut mtm, &mut effects)
+                .unwrap();
+            mtm.use_time();
+            assert_eq!(
+                mtm.drain_events(),
+                vec![MotionTableEvent::MotionDone { motion, success: true }],
+                "{motion:#X} completes via the zero-anim poll"
+            );
+        }
+
+        // Stop → {Ready, 0} (KIND_MOTION idle crossfade realization).
+        let mut interp = MotionInterp::default();
+        let mut mtm = MotionTableManager::new();
+        let mut effects = MotionSideEffects::default();
+        interp
+            .stop_interpreted_motion(MOTION_WALK_FORWARD, &params, true, &mut mtm, &mut effects)
+            .unwrap();
+        mtm.use_time();
+        assert_eq!(
+            mtm.drain_events(),
+            vec![MotionTableEvent::MotionDone { motion: MOTION_READY, success: true }]
         );
     }
 }

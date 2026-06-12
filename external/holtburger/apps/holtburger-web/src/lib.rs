@@ -17572,14 +17572,17 @@ enum SessionCommand {
     /// one-shot overlay clip's end (`success=true`) or a cancellation on
     /// eviction/stop of a tagged, not-yet-completed overlay
     /// (`success=false`, the exit-world-drain analogy,
-    /// acclient.c:329940-329947). The recv arm filters to the LOCAL
-    /// player guid and forwards to
-    /// `MovementSystemHandle::notify_animation_done` → the A4-Q1
-    /// `MotionTableManager` queue (retail `AnimDoneHook::Execute` →
-    /// `Hook_AnimDone` → `CPartArray::AnimationDone` →
+    /// acclient.c:329940-329947). A4/SA4F (2026-06-12): the recv arm
+    /// routes PER-GUID via
+    /// `MovementSystemHandle::notify_animation_done_for` — the local
+    /// player keeps the landed A4-Q1 system-level queue route
+    /// (`USE_MOTION_TABLE_QUEUE`-gated) AND every guid reaches its
+    /// registry `MovementManager` (map-miss no-op), matching retail's
+    /// per-OBJECT chain (`AnimDoneHook::Execute` → `Hook_AnimDone` →
+    /// `CPartArray::AnimationDone` →
     /// `MotionTableManager::AnimationDone`, acclient.c:342336 → :317087
-    /// → :325080 → :329873). Inert unless `USE_MOTION_TABLE_QUEUE`
-    /// (core), and harmlessly no-op on an empty queue even then.
+    /// → :325080 → :329873 — retail has no local filter). Harmlessly
+    /// no-op on empty queues (acclient.c:329884 head-null guard).
     AnimationDone { guid: u32, success: bool },
     /// Phase 4 step 3.6 — JS-driven physics tick. Fired by
     /// `requestAnimationFrame` from `index.html`'s drainEvents loop;
@@ -26985,8 +26988,11 @@ impl SessionHandle {
     /// evicted/stopped before completing (`success=false` — the
     /// hang-prevention cancellation, exit-world-drain analogy). JS calls
     /// this ONLY for overlays the wasm pipeline queued (the
-    /// `_mtQueuedKeys` tagging contract in `scene3d/entities.js`) and
-    /// only for the local player; the recv arm re-filters the guid.
+    /// `_mtQueuedKeys` tagging contract in `scene3d/entities.js`).
+    /// A4/SA4F (2026-06-12): ANY guid — the recv arm routes per-entity
+    /// (local → the A4-Q1 system queue; every guid → its registry
+    /// `MovementManager`, map-miss no-op), retail's per-OBJECT chain.
+    /// Signature UNCHANGED — manifest stays v4.
     /// Completion is COUNTED, not keyed (acclient.c:329885-329894) —
     /// the renderer never says WHICH anim finished. Typeof-guarded +
     /// flag-gated JS-side, so a pre-v4 pkg soft-degrades (manifest
@@ -39856,28 +39862,40 @@ async fn recv_loop(
                         );
                     }
                     Some(SessionCommand::AnimationDone { guid, success }) => {
-                        // A4-Q2 (W3+ S5) — renderer overlay-completion
-                        // signal → the LOCAL player's MotionTableManager
-                        // queue. Guid filter: only the local player has a
-                        // queue instance (per-entity instances are DESIGN
-                        // Stage-3 scope); non-local guids are silently
-                        // dropped. Spec OQ-5 ordering note: this command
-                        // arrives on the same FIFO cmd channel as
+                        // A4-Q2 (W3+ S5) + A4/SA4F (per-entity feed) —
+                        // renderer overlay-completion signal, routed
+                        // PER-GUID (retail per-OBJECT chain, no local
+                        // filter: AnimDoneHook::Execute targets one
+                        // object's own MotionTableManager,
+                        // acclient.c:342336-342338 → :317087 →
+                        // :325080-325086 → :329873; the former local-guid
+                        // drop was a staging artifact, retired by SA4F).
+                        // `is_local` keeps the landed local-instance route
+                        // (USE_MOTION_TABLE_QUEUE-gated + S9 unstick
+                        // bubble); non-local guids reach their registry
+                        // MovementManager — map-miss no-op (despawn-
+                        // pruned), inert unless a default-off lane created
+                        // the manager. Spec OQ-5 ordering note: this
+                        // command arrives on the same FIFO cmd channel as
                         // TickMovement, but the two are SENT from two
                         // independent rAF callbacks (index.html's
                         // drainEvents loop sends TickMovement; the scene3d
                         // loop's `entityManager.tick` fires the notify), so
                         // a completion may be pumped the tick after the
                         // visual clip end — ≤1 rAF skew, accepted (spec §5
-                        // risk 4; retail drains same-frame via
-                        // process_hooks, acclient.c:320035). Inert unless
-                        // USE_MOTION_TABLE_QUEUE; empty-queue no-op even
-                        // then (acclient.c:329884 head-null guard).
+                        // risk 4, now per-entity; retail drains same-frame
+                        // via process_hooks, acclient.c:320035).
+                        // Empty-queue notifies no-op on both routes
+                        // (acclient.c:329884 head-null guard).
                         if let Some(w) = world.as_ref()
                             && entity_seeded
-                            && w.player.guid.0 == guid
                         {
-                            movement.notify_animation_done(success);
+                            let is_local = w.player.guid.0 == guid;
+                            movement.notify_animation_done_for(
+                                holtburger_common::Guid(guid),
+                                is_local,
+                                success,
+                            );
                         }
                     }
                     Some(SessionCommand::Jump { power }) => {

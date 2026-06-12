@@ -4114,7 +4114,13 @@ fn test_movement_manager_registry_create_apply_prune() {
         .expect("registry entry created");
     let interp = manager.motion_interp_ref().expect("lazy minterp created");
     assert!(interp.initted, "enter_default_state ran on lazy create");
-    assert_eq!(interp.pending_motions.len(), 1, "one Ready seed");
+    // A4/SA4F: the zero-anim Ready seed completes inside the same
+    // `apply_unpacked_movement` call (the tail `use_time` pump,
+    // acclient.c:344684-344704) — the post-call queue is empty.
+    assert!(
+        interp.pending_motions.is_empty(),
+        "the Ready seed completed via the same-call tail pump"
+    );
     assert!(manager.standing_longjump(), "the 0x02 bit was consumed");
 
     // Second event: no re-seed (enter_default_state exactly once).
@@ -4133,7 +4139,8 @@ fn test_movement_manager_registry_create_apply_prune() {
             .unwrap()
             .pending_motions
             .len(),
-        1
+        0,
+        "no re-seed on the second unpack (and the tail pump keeps the queue drained)"
     );
 
     // Local player keyed by its guid via SelfServerControlledMotion.
@@ -5093,12 +5100,9 @@ fn pursuit_status_lifecycle_and_cancel_restore() {
 
 /// S10 test 5b — `CancelPursuit` (the JS charge-abort) restores a held
 /// manual drive like any other pursuit end, with the 0x36 failure
-/// latched for the poll. Fresh system: a SECOND pursuit on the same
-/// manager would defer its entry turn node behind the previous run's
-/// `motions_pending` (num_anims>0 lattice nodes await the staged A4
-/// per-entity AnimationDone feed — the documented A3-D3 staging
-/// limitation, move_to.rs `begin_turn_to_heading` "defers behind
-/// them, retail-shaped").
+/// latched for the poll. (The former "a SECOND pursuit defers behind
+/// `motions_pending`" staging limitation is FIXED by A4/SA4F — see
+/// `second_pursuit_entry_turn_begins_on_first_driver_frame` below.)
 #[test]
 fn cancel_pursuit_restores_held_manual_drive() {
     let (mut world, guid, target_guid) = pursuit_fixture();
@@ -5171,4 +5175,165 @@ fn pursuit_active_suppresses_manual_double_drive_and_idle_does_not_stomp() {
     assert!(movement.drive_local_moveto(now, &mut world));
     assert!(movement.active_drive.is_none());
     assert_eq!(movement.pursuit_status(guid), 2);
+}
+
+// =====================================================================
+// A4/SA4F (2026-06-12) — per-entity AnimationDone feed: the
+// `renderer_num_anims` classification (motion_interp.rs), the
+// per-guid `notify_animation_done_for` route, and THE f6065782
+// repeat-pursuit stall regression (url-flags.md `?wasmPursuit`
+// "KNOWN STAGING LIMIT", now retired).
+// =====================================================================
+
+/// A4 regression — THE repeat-pursuit stall (spec SA4F §2/§5 item 1):
+/// at pre-A4 HEAD every driver-lattice node enqueued `num_anims = 1`
+/// and NOTHING ever fed the registry manager's `animation_done`, so
+/// pursuit 1's walk/stop nodes wedged `motions_pending` true forever
+/// and pursuit 2's `begin_turn_to_heading` deferred until the JS
+/// monitor timeout (move_to.rs:773-775 ↔ acclient.c:345480-345481).
+/// Post-A4: locomotion/turn/stop nodes are zero-anim
+/// (`renderer_num_anims`), the `use_time_moveto` pump pops them, and a
+/// SECOND pursuit's entry turn emits its do_motion + Turn steer on the
+/// FIRST driver frame.
+#[test]
+fn second_pursuit_entry_turn_begins_on_first_driver_frame() {
+    let (mut world, guid, target_guid) = pursuit_fixture();
+    // Second target placed north-west of the arrival point so pursuit 2
+    // NEEDS an entry turn (pursuit 1's fixture geometry pops its turn
+    // node immediately — facing the target dead-on).
+    let target2 = Guid(0x8000_0043);
+    let target2_pos = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(50.0, 60.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    world
+        .entities
+        .insert(Entity::new(target2, "Mosswart".to_string(), target2_pos));
+
+    let mut movement = MovementSystem::new();
+    let now = Instant::now();
+
+    // Pursuit 1: walk east, arrive (the landed S10 flow).
+    ingest_intent(&mut movement, pursue_intent(target_guid), now);
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    assert!(!movement.drive_local_moveto(now, &mut world), "walking");
+    place_player_at_arrival(&mut world);
+    assert!(movement.drive_local_moveto(now, &mut world), "arrival stop edge");
+    assert_eq!(movement.pursuit_status(guid), 2, "pursuit 1 arrived");
+    assert_eq!(movement.pursuit_status(guid), 0, "read-clear");
+
+    // Pursuit 2 on the SAME manager.
+    ingest_intent(&mut movement, pursue_intent(target2), now);
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    assert_eq!(movement.pursuit_status(guid), 1, "pursuit 2 active");
+
+    // FIRST driver frame: the pre-frame pump clears pursuit 1's
+    // zero-anim residue, `begin_turn_to_heading` passes the re-read
+    // `motions_pending` gate and emits the entry-turn do_motion → the
+    // Turn steer lands on the autonomous lane THIS frame. At pre-A4
+    // HEAD this assertion fails: active_drive stays None (the turn
+    // defers behind the wedged num_anims=1 nodes).
+    assert!(!movement.drive_local_moveto(now, &mut world));
+    match movement.active_drive.map(|active| active.intent) {
+        Some(ActiveDriveIntent::Autonomous(intent)) => {
+            assert!(
+                intent.desired_world_delta.length_squared() < 1e-12,
+                "entry turn steers in place (zero world delta)"
+            );
+            assert!(
+                intent.desired_heading.is_some(),
+                "entry turn carries the node heading"
+            );
+        }
+        other => panic!(
+            "second pursuit's entry turn must begin on the first driver frame, got {other:?}"
+        ),
+    }
+    assert_eq!(movement.pursuit_status(guid), 1, "still steering — no failure latch");
+
+    // SECOND driver frame: the pump completes the zero-anim turn node
+    // itself — the lattice is clear (at pre-A4 HEAD this read true
+    // forever: the wedge).
+    assert!(!movement.drive_local_moveto(now, &mut world));
+    assert!(
+        !movement
+            .movement_manager_for(guid)
+            .expect("registry manager")
+            .moveto_motions_pending(),
+        "motions_pending wedge cleared between pursuits"
+    );
+    assert_eq!(movement.pursuit_status(guid), 1, "turn still in progress, no timeout path");
+}
+
+/// A4/SA4F — `notify_animation_done_for` routing: the local half stays
+/// gate-shielded (`USE_MOTION_TABLE_QUEUE` off → the system-level
+/// queue is untouched by the gated route), the registry half pops the
+/// per-entity manager's spines, unknown guids and post-despawn
+/// notifies no-op (map-miss, `system.rs` prune).
+#[test]
+fn notify_animation_done_for_routes_local_gated_and_registry() {
+    let (mut world, guid, target_guid) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    let now = Instant::now();
+    const ACTION_X: u32 = 0x1000_0062;
+
+    // Unknown guid, no managers anywhere → no-op (must not panic).
+    movement.notify_animation_done_for(Guid(0xDEAD_BEEF), false, true);
+
+    // System-level queue: a num_anims=1 node that the GATED local
+    // route must NOT pop while USE_MOTION_TABLE_QUEUE is off.
+    movement.motion_table_manager_mut().add_to_queue(ACTION_X, 1);
+
+    // Registry manager via the ?wasmPursuit input lane; enqueue an
+    // action node on BOTH of its spines through the facade.
+    ingest_intent(&mut movement, pursue_intent(target_guid), now);
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    {
+        let manager = movement.movement_manager_for_mut(guid).expect("registry manager");
+        let mut effects = MotionSideEffects::default();
+        let mvs = MovementStruct::Motion(
+            crate::client::movement::motion_interp::MotionMovementStruct::InterpretedCommand {
+                motion: ACTION_X,
+                params: MovementParameters::default(),
+            },
+        );
+        manager
+            .perform_movement(&mvs, true, None, &mut effects)
+            .expect("action dispatch");
+        assert!(manager.moveto_motions_pending(), "action node pending on the registry interp");
+    }
+
+    // One renderer notify for the local guid: registry pops (Ready
+    // seed + the action node), system queue survives the gate.
+    movement.notify_animation_done_for(guid, true, true);
+    assert!(
+        !movement
+            .movement_manager_for(guid)
+            .expect("registry manager")
+            .moveto_motions_pending(),
+        "registry spines drained by the per-entity feed"
+    );
+    let _ = movement.motion_table_manager_mut().drain_events();
+    movement.notify_animation_done_ungated(true);
+    assert!(
+        movement
+            .motion_table_manager_mut()
+            .drain_events()
+            .iter()
+            .any(|event| matches!(
+                event,
+                MotionTableEvent::MotionDone { motion: ACTION_X, success: true }
+            )),
+        "system-level node survived the GATED local route (popped only by the ungated seam)"
+    );
+
+    // Post-despawn: the manager is pruned; a late notify is a map-miss
+    // no-op (spec §7 OQ-4 fallback: eviction-after-despawn is safe by
+    // construction).
+    movement.apply_movement_world_events_ungated(&[holtburger_world::WorldEvent::EntityDespawned(
+        guid,
+    )]);
+    assert!(movement.movement_manager_for(guid).is_none());
+    movement.notify_animation_done_for(guid, false, true);
 }

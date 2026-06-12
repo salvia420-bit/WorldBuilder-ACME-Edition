@@ -2,6 +2,7 @@ use super::jump_charge::{JumpOutcome, JumpRefusal};
 use super::system::MovementSystem;
 use crate::client::movement_types::{MotionStyle, PlayerDriveIntent};
 use anyhow::Result;
+use holtburger_common::Guid;
 use holtburger_protocol::messages::movement::InterpretedMotionCommand;
 use holtburger_session::Session;
 use holtburger_world::{WorldEvent, WorldState};
@@ -232,6 +233,16 @@ impl MovementSystemHandle {
     /// queue even then (the :329884 head-null guard).
     pub fn notify_animation_done(&mut self, success: bool) {
         self.inner.notify_animation_done(success);
+    }
+
+    /// A4/SA4F (2026-06-12) — the PER-GUID `notifyAnimationDone` forward
+    /// (retail per-OBJECT chain, no local filter: acclient.c:342336 →
+    /// :317087 → :325080 → :329873). `is_local` keeps the landed
+    /// local-instance route (`USE_MOTION_TABLE_QUEUE`-gated + the S9
+    /// unstick bubble); the registry `MovementManager` half is
+    /// map-miss-inert (despawn-pruned) so it carries no const gate.
+    pub fn notify_animation_done_for(&mut self, guid: Guid, is_local: bool, success: bool) {
+        self.inner.notify_animation_done_for(guid, is_local, success);
     }
 
     /// A14-I4 (W3+ S11) — press-time half of the retail jump charge
