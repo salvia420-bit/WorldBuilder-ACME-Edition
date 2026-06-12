@@ -2423,6 +2423,20 @@ impl SpatialScene {
         self.local_sticky_target
     }
 
+    /// A3-D3 driver (M4.1) — whether the LOCAL player's
+    /// position-manager interpolation queue is active (retail
+    /// `CPhysicsObj::IsInterpolating`, the MoveTo driver's
+    /// stall-bookkeeping gate acclient.c:345657/:345770). `false` when
+    /// no local body exists.
+    pub fn local_player_is_interpolating(&self) -> bool {
+        self.body_store
+            .bodies
+            .values()
+            .find(|body| matches!(body.id, SpatialBodyId::LocalPlayer(_)))
+            .map(|body| body.position_manager.is_interpolating())
+            .unwrap_or(false)
+    }
+
     /// Minimal TargetManager-subset pose feed (spec S9 §3 L1 step 4;
     /// retail `PositionManager::HandleUpdateTarget` →
     /// `StickyManager::HandleUpdateTarget`, acclient.c:388691-388720).

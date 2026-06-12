@@ -576,7 +576,7 @@ fn test_update_motion_caches_last_non_zero_server_style() {
     assert_eq!(state.player.server_control_sequence, 9);
     assert!(events.iter().any(|event| matches!(
         event,
-        WorldEvent::SelfServerControlledMotion(data)
+        WorldEvent::SelfServerControlledMotion { data, .. }
             if data.server_control_sequence == 9 && data.movement_sequence == 8
     )));
     assert_eq!(
@@ -603,7 +603,7 @@ fn test_update_motion_caches_last_non_zero_server_style() {
     assert_eq!(state.player.server_control_sequence, 12);
     assert!(events.iter().any(|event| matches!(
         event,
-        WorldEvent::SelfServerControlledMotion(data)
+        WorldEvent::SelfServerControlledMotion { data, .. }
             if data.server_control_sequence == 12 && data.movement_sequence == 11
     )));
     assert_eq!(

@@ -98,9 +98,18 @@ pub(crate) fn handle_message(
             {
                 let accepted = state.player.apply_self_update_motion(data);
                 if accepted && !data.is_autonomous {
-                    events.push(WorldEvent::SelfServerControlledMotion(Box::new(
-                        (**data).clone(),
-                    )));
+                    // A3-D3 driver (M4.3): real target_exists + case-6
+                    // target dims, same resolution as the remote lane
+                    // (closing the consumer's documented `false`
+                    // placeholder).
+                    let (target_exists, object_radius, object_height) =
+                        crate::handlers::movement::resolve_movement_target(state, data);
+                    events.push(WorldEvent::SelfServerControlledMotion {
+                        data: Box::new((**data).clone()),
+                        target_exists,
+                        object_radius,
+                        object_height,
+                    });
                 }
                 return !data.is_autonomous && !accepted;
             }

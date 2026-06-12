@@ -21,7 +21,7 @@ use super::motion_interp::{
     MotionInterp, MotionMovementStruct, MotionSideEffects, interpreted_state_from_wire,
 };
 use super::motion_table_manager::MotionTableManager;
-use super::move_to::MoveToManager;
+use super::move_to::{MoveToDriveOutput, MoveToManager, MoveToView};
 use super::params::MovementParameters;
 use holtburger_common::Guid;
 use holtburger_protocol::messages::movement::messages::motion::Origin;
@@ -57,11 +57,17 @@ pub(crate) const WEENIE_ERROR_GENERAL_MOVEMENT_FAILURE: u32 = 71;
 pub(crate) enum MovementStruct {
     /// Types 1-5 (`CMotionInterp::PerformMovement` subset).
     Motion(MotionMovementStruct),
-    /// Type 6.
+    /// Type 6. `object_radius`/`object_height` are the caller-resolved
+    /// target physics dims (retail `MovementStruct.radius/height`,
+    /// `MoveToManager::PerformMovement` case 6 acclient.c:346129-346131;
+    /// resolution `CPhysicsObj::MoveToObject` :319808-319817, 0.0
+    /// fallback) — A3-D3 driver / S10 §2.4 contract.
     MoveToObject {
         target: Guid,
         target_exists: bool,
         origin: Origin,
+        object_radius: f32,
+        object_height: f32,
         params: MovementParameters,
     },
     /// Type 7.
@@ -176,11 +182,28 @@ impl MovementManager {
                 target,
                 target_exists,
                 origin,
+                object_radius,
+                object_height,
                 params,
             } => {
+                // Retail MoveToManager::PerformMovement preamble:
+                // CancelMoveTo(0x36) before every 6-9 install
+                // (acclient.c:346123-346127); the CleanUp stop set
+                // rides the lattice (A3-D3 driver).
+                self.cancel_moveto_with_effects(
+                    WEENIE_ERROR_ACTION_CANCELLED,
+                    on_walkable_contact,
+                    effects,
+                );
                 let moveto = self.moveto();
                 if *target_exists {
-                    moveto.move_to_object(*target, origin.clone(), *params);
+                    moveto.move_to_object(
+                        *target,
+                        origin.clone(),
+                        *object_radius,
+                        *object_height,
+                        *params,
+                    );
                 } else {
                     // Retail LABEL_15 fallback (acclient.c:339572-339585).
                     moveto.move_to_position(origin.clone(), *params);
@@ -188,6 +211,11 @@ impl MovementManager {
                 Ok(())
             }
             MovementStruct::MoveToPosition { origin, params } => {
+                self.cancel_moveto_with_effects(
+                    WEENIE_ERROR_ACTION_CANCELLED,
+                    on_walkable_contact,
+                    effects,
+                );
                 self.moveto().move_to_position(origin.clone(), *params);
                 Ok(())
             }
@@ -196,6 +224,11 @@ impl MovementManager {
                 target_exists,
                 params,
             } => {
+                self.cancel_moveto_with_effects(
+                    WEENIE_ERROR_ACTION_CANCELLED,
+                    on_walkable_contact,
+                    effects,
+                );
                 let moveto = self.moveto();
                 if *target_exists {
                     moveto.turn_to_object(*target, *params);
@@ -205,10 +238,176 @@ impl MovementManager {
                 Ok(())
             }
             MovementStruct::TurnToHeading { params } => {
+                self.cancel_moveto_with_effects(
+                    WEENIE_ERROR_ACTION_CANCELLED,
+                    on_walkable_contact,
+                    effects,
+                );
                 self.moveto().turn_to_heading(*params);
                 Ok(())
             }
         }
+    }
+
+    /// A3-D3 driver — apply a [`MoveToDriveOutput`]'s `_StopMotion` /
+    /// `_DoMotion` requests through the landed lattice (retail
+    /// `MoveToManager::_DoMotion`/`_StopMotion`,
+    /// acclient.c:344753-344831: `adjust_motion` then
+    /// `Do/StopInterpretedMotion` — NOT the style-gated `DoMotion`
+    /// entry). Returns the FIRST `_DoMotion` error (retail
+    /// BeginMoveForward/BeginTurnToHeading cancel on it,
+    /// :345417-345418); stop errors are dropped exactly as retail's
+    /// CleanUp ignores them.
+    fn apply_moveto_lattice(
+        &mut self,
+        out: &MoveToDriveOutput,
+        on_walkable_contact: bool,
+        effects: &mut MotionSideEffects,
+    ) -> Option<u32> {
+        if out.stop_motions.is_empty() && out.do_motions.is_empty() {
+            return None;
+        }
+        if self.motion_interp.is_none() {
+            self.minterp();
+        }
+        // Split borrow: interpreter + per-entity completion spine.
+        let interp = self.motion_interp.as_mut().expect("created above");
+        for (motion, params) in &out.stop_motions {
+            let mut adjusted_motion = *motion;
+            let mut adjusted_params = *params;
+            interp.adjust_motion_command(
+                &mut adjusted_motion,
+                &mut adjusted_params.speed,
+                params.hold_key_to_apply,
+                None,
+            );
+            let _ = interp.stop_interpreted_motion(
+                adjusted_motion,
+                &adjusted_params,
+                on_walkable_contact,
+                &mut self.motion_table_manager,
+                effects,
+            );
+        }
+        let mut first_error = None;
+        for (motion, params) in &out.do_motions {
+            let mut adjusted_motion = *motion;
+            let mut adjusted_params = *params;
+            interp.adjust_motion_command(
+                &mut adjusted_motion,
+                &mut adjusted_params.speed,
+                params.hold_key_to_apply,
+                None,
+            );
+            if let Err(error) = interp.do_interpreted_motion(
+                adjusted_motion,
+                &adjusted_params,
+                on_walkable_contact,
+                &mut self.motion_table_manager,
+                effects,
+            ) && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        first_error
+    }
+
+    /// A3-D3 driver — `CancelMoveTo(error)` with the CleanUp stop set
+    /// applied through the lattice synchronously (retail inline
+    /// `_StopMotion`, acclient.c:345148-345164). No-op (default
+    /// output) when no movement is active.
+    pub(crate) fn cancel_moveto_with_effects(
+        &mut self,
+        error: u32,
+        on_walkable_contact: bool,
+        effects: &mut MotionSideEffects,
+    ) -> MoveToDriveOutput {
+        let Some(moveto) = self.move_to.as_mut() else {
+            return MoveToDriveOutput::default();
+        };
+        let out = moveto.cancel_moveto(error);
+        self.apply_moveto_lattice(&out, on_walkable_contact, effects);
+        out
+    }
+
+    /// A3-D3 driver — the facade `UseTime` (acclient.c:339359-339365 →
+    /// :346018): run the pure state machine over the caller-built
+    /// view, route its `_DoMotion`/`_StopMotion` requests through the
+    /// lattice, and cancel-with-error on a `_DoMotion` rejection
+    /// (retail :345417-345418). The returned output carries the
+    /// world-facing edges (steer/snap/stop/stick/completion) for the
+    /// `MovementSystem` shim.
+    pub(crate) fn use_time_moveto(
+        &mut self,
+        view: &MoveToView,
+        effects: &mut MotionSideEffects,
+    ) -> MoveToDriveOutput {
+        if self.move_to.is_none() {
+            return MoveToDriveOutput::default();
+        }
+        // Per-frame per-entity completion pump — retail runs
+        // `MotionTableManager::UseTime` every frame alongside the
+        // MoveTo pump (`CPartArray::HandleMovement`,
+        // acclient.c:325106-325112): zero-anim heads (the
+        // enter_default_state Ready seed) complete synchronously so
+        // they never wedge the driver's `motions_pending` gate.
+        // `num_anims > 0` nodes still await the A4 per-entity
+        // `animation_done` feed (staged) — `begin_turn_to_heading`
+        // defers behind them, retail-shaped.
+        self.motion_table_manager.use_time();
+        for event in self.motion_table_manager.drain_events() {
+            if let super::motion_table_manager::MotionTableEvent::MotionDone { success, .. } = event
+                && let Some(interp) = self.motion_interp.as_mut()
+            {
+                let _ = interp.motion_done(success);
+            }
+        }
+        // Re-read the gate post-pump (the caller sampled it pre-pump).
+        let mut view = *view;
+        view.motions_pending = self.moveto_motions_pending();
+        let view = &view;
+        let moveto = self.move_to.as_mut().expect("checked above");
+        let mut out = moveto.use_time(view);
+        if let Some(error) = self.apply_moveto_lattice(&out, view.on_walkable_contact, effects) {
+            let cancel_out = self
+                .move_to
+                .as_mut()
+                .expect("checked above")
+                .cancel_moveto(error);
+            self.apply_moveto_lattice(&cancel_out, view.on_walkable_contact, effects);
+            out.stop_completely |= cancel_out.stop_completely;
+            out.completion = cancel_out.completion.or(out.completion);
+            out.steer = None;
+            out.stick_to = None;
+            out.set_heading = None;
+        }
+        out
+    }
+
+    /// S10 A.3 passthrough — retail `is_moving_to`
+    /// (acclient.c:344895-344898).
+    pub(crate) fn is_moveto_active(&self) -> bool {
+        self.move_to.as_ref().is_some_and(|m| m.is_active())
+    }
+
+    /// S10 A.4 passthrough — read-clear completion latch.
+    pub(crate) fn take_moveto_completion(&mut self) -> Option<u32> {
+        self.move_to.as_mut().and_then(|m| m.take_completion())
+    }
+
+    /// Shim input: the targeted directive's guid (per-tick target
+    /// refresh, the `HandleUpdateTarget` cadence).
+    pub(crate) fn moveto_directive_target(&self) -> Option<Guid> {
+        self.move_to.as_ref().and_then(|m| m.directive_target())
+    }
+
+    /// Shim input: the lattice's `motions_pending` for the view
+    /// (acclient.c:343728).
+    pub(crate) fn moveto_motions_pending(&self) -> bool {
+        self.motion_interp
+            .as_ref()
+            .is_some_and(|interp| interp.motions_pending())
     }
 
     /// `MovementManager::move_to_interpreted_state` — lazy-create-first
@@ -242,14 +441,6 @@ impl MovementManager {
             .as_mut()
             .map(|interp| interp.motion_done(success))
             .unwrap_or(false)
-    }
-
-    /// `UseTime` → MoveToManager only (acclient.c:339359-339365).
-    #[allow(dead_code)] // staged: Stage-3 driver follow-on
-    pub(crate) fn use_time(&mut self) {
-        if let Some(moveto) = self.move_to.as_mut() {
-            moveto.use_time();
-        }
     }
 
     /// `HitGround` → BOTH children (acclient.c:339369-339382; ACE
@@ -376,6 +567,8 @@ impl MovementManager {
         &mut self,
         data: &MovementEventData,
         target_exists: bool,
+        object_radius: f32,
+        object_height: f32,
     ) -> UnpackEffects {
         use holtburger_protocol::messages::movement::MotionStance;
 
@@ -388,10 +581,11 @@ impl MovementManager {
         // Preamble (acclient.c:339518-339519): cancel any stored moveto
         // directive + drop the recorded sticky target. The JS-side
         // sticky pin (F3-4) and render motion are untouched — these are
-        // the core-domain records.
-        if let Some(moveto) = self.move_to.as_mut() {
-            moveto.cancel_moveto(WEENIE_ERROR_ACTION_CANCELLED);
-        }
+        // the core-domain records. A3-D3 driver: the cancel's CleanUp
+        // stop set now rides the lattice (contact `true` — same
+        // server-authoritative diagnostic stance as the style step).
+        let mut preamble_effects = MotionSideEffects::default();
+        self.cancel_moveto_with_effects(WEENIE_ERROR_ACTION_CANCELLED, true, &mut preamble_effects);
         self.sticky_target = None;
 
         // Style step — all movement types, before payload dispatch.
@@ -439,16 +633,26 @@ impl MovementManager {
                 self.minterp().my_run_rate = moveto.run_rate;
                 let params = MovementParameters::from_wire_moveto(&moveto.params);
                 if target_exists {
-                    self.moveto()
-                        .move_to_object(moveto.target, moveto.origin.clone(), params);
+                    // Wire case 6 dims are CALLER-resolved (the emit
+                    // sites compute them next to `target_exists`, 0.0
+                    // fallback — retail acclient.c:319810-319815).
+                    self.moveto().move_to_object(
+                        moveto.target,
+                        moveto.origin.clone(),
+                        object_radius,
+                        object_height,
+                        params,
+                    );
                 } else {
-                    self.moveto().move_to_position(moveto.origin.clone(), params);
+                    self.moveto()
+                        .move_to_position(moveto.origin.clone(), params);
                 }
             }
             (_, MovementTypeData::MoveToPosition(moveto)) => {
                 self.minterp().my_run_rate = moveto.run_rate;
                 let params = MovementParameters::from_wire_moveto(&moveto.params);
-                self.moveto().move_to_position(moveto.origin.clone(), params);
+                self.moveto()
+                    .move_to_position(moveto.origin.clone(), params);
             }
             (_, MovementTypeData::TurnToObject(turn)) => {
                 let mut params = MovementParameters::from_wire_turnto(&turn.params);
@@ -574,11 +778,14 @@ mod tests {
 
         // Install a directive + sticky first.
         let moveto = moveto_object(1.5);
-        manager.apply_unpacked_movement(&moveto, true);
+        manager.apply_unpacked_movement(&moveto, true, 0.0, 0.0);
         assert!(manager.move_to_ref().unwrap().directive().is_some());
         let sticky_event = case0(0x01, Some(Guid(0x8000_2222)), STYLE_NONCOMBAT_LOW16);
-        let effects = manager.apply_unpacked_movement(&sticky_event, false);
-        assert!(effects.cancel_moveto && effects.unstick, "preamble effects always set");
+        let effects = manager.apply_unpacked_movement(&sticky_event, false, 0.0, 0.0);
+        assert!(
+            effects.cancel_moveto && effects.unstick,
+            "preamble effects always set"
+        );
         assert_eq!(effects.stick_to, Some(Guid(0x8000_2222)));
         assert_eq!(manager.sticky_target(), Some(Guid(0x8000_2222)));
         // The case-0 unpack's own preamble cancelled the directive.
@@ -586,11 +793,14 @@ mod tests {
 
         // A repeated identical non-sticky message still unsticks.
         let plain = case0(0x00, None, STYLE_NONCOMBAT_LOW16);
-        let effects = manager.apply_unpacked_movement(&plain, false);
+        let effects = manager.apply_unpacked_movement(&plain, false, 0.0, 0.0);
         assert!(effects.cancel_moveto && effects.unstick);
         assert_eq!(manager.sticky_target(), None);
-        let effects = manager.apply_unpacked_movement(&plain, false);
-        assert!(effects.cancel_moveto && effects.unstick, "repeat still runs the preamble");
+        let effects = manager.apply_unpacked_movement(&plain, false, 0.0, 0.0);
+        assert!(
+            effects.cancel_moveto && effects.unstick,
+            "repeat still runs the preamble"
+        );
     }
 
     /// Style-DoMotion fires only on a style DELTA, and for ALL movement
@@ -601,8 +811,12 @@ mod tests {
         let mut manager = MovementManager::default();
 
         // NonCombat == the enter_default_state default → no DoMotion.
-        let effects =
-            manager.apply_unpacked_movement(&case0(0, None, STYLE_NONCOMBAT_LOW16), false);
+        let effects = manager.apply_unpacked_movement(
+            &case0(0, None, STYLE_NONCOMBAT_LOW16),
+            false,
+            0.0,
+            0.0,
+        );
         assert_eq!(effects.style_do_motion, None);
 
         // Type-1 (RawCommand, empty payload): style delta still restyles.
@@ -612,7 +826,7 @@ mod tests {
             STYLE_SWORD_LOW16,
             MovementTypeData::Invalid(MovementInvalid::default()),
         );
-        let effects = manager.apply_unpacked_movement(&raw_cmd, false);
+        let effects = manager.apply_unpacked_movement(&raw_cmd, false, 0.0, 0.0);
         assert_eq!(effects.style_do_motion, Some(STYLE_SWORD));
         assert!(effects.motion_errors.is_empty());
         assert_eq!(
@@ -622,13 +836,15 @@ mod tests {
         );
 
         // Same style again → no second DoMotion.
-        let effects = manager.apply_unpacked_movement(&raw_cmd, false);
+        let effects = manager.apply_unpacked_movement(&raw_cmd, false, 0.0, 0.0);
         assert_eq!(effects.style_do_motion, None);
 
         // And payload-bearing types restyle too.
         let effects = manager.apply_unpacked_movement(
             &case0(0, None, STYLE_NONCOMBAT_LOW16),
             false,
+            0.0,
+            0.0,
         );
         assert_eq!(effects.style_do_motion, Some(MOTION_NONCOMBAT_STYLE));
     }
@@ -639,7 +855,7 @@ mod tests {
     fn case0_move_stick_longjump_order_and_flags() {
         let mut manager = MovementManager::default();
         let event = case0(0x01 | 0x02, Some(Guid(0x8000_3333)), STYLE_NONCOMBAT_LOW16);
-        let effects = manager.apply_unpacked_movement(&event, false);
+        let effects = manager.apply_unpacked_movement(&event, false, 0.0, 0.0);
 
         // Movement copy took effect (server-controlled lane).
         let interp = manager.motion_interp_ref().unwrap();
@@ -654,8 +870,12 @@ mod tests {
         assert!(manager.standing_longjump());
 
         // Clearing event: no sticky bit, no longjump bit.
-        let effects =
-            manager.apply_unpacked_movement(&case0(0x00, None, STYLE_NONCOMBAT_LOW16), false);
+        let effects = manager.apply_unpacked_movement(
+            &case0(0x00, None, STYLE_NONCOMBAT_LOW16),
+            false,
+            0.0,
+            0.0,
+        );
         assert_eq!(effects.stick_to, None);
         assert_eq!(effects.standing_longjump, Some(false));
         assert!(!manager.standing_longjump());
@@ -670,8 +890,8 @@ mod tests {
         let mut manager_a = MovementManager::default();
         let mut manager_b = MovementManager::default();
 
-        manager_a.apply_unpacked_movement(&moveto_object(1.5), true);
-        manager_b.apply_unpacked_movement(&moveto_object(2.5), true);
+        manager_a.apply_unpacked_movement(&moveto_object(1.5), true, 0.0, 0.0);
+        manager_b.apply_unpacked_movement(&moveto_object(2.5), true, 0.0, 0.0);
         assert!((manager_a.motion_interp_ref().unwrap().my_run_rate - 1.5).abs() < 1e-6);
         assert!((manager_b.motion_interp_ref().unwrap().my_run_rate - 2.5).abs() < 1e-6);
         assert!(matches!(
@@ -680,7 +900,7 @@ mod tests {
         ));
 
         // Missing target (target_exists = false) → MoveToPosition.
-        manager_a.apply_unpacked_movement(&moveto_object(1.75), false);
+        manager_a.apply_unpacked_movement(&moveto_object(1.75), false, 0.0, 0.0);
         assert!((manager_a.motion_interp_ref().unwrap().my_run_rate - 1.75).abs() < 1e-6);
         assert!(matches!(
             manager_a.move_to_ref().unwrap().directive(),
@@ -698,7 +918,7 @@ mod tests {
                 run_rate: 3.25,
             }),
         );
-        manager_b.apply_unpacked_movement(&moveto_pos, false);
+        manager_b.apply_unpacked_movement(&moveto_pos, false, 0.0, 0.0);
         assert!((manager_b.motion_interp_ref().unwrap().my_run_rate - 3.25).abs() < 1e-6);
     }
 
@@ -723,13 +943,13 @@ mod tests {
             }),
         );
 
-        manager.apply_unpacked_movement(&turn, true);
+        manager.apply_unpacked_movement(&turn, true, 0.0, 0.0);
         assert!(matches!(
             manager.move_to_ref().unwrap().directive(),
             Some(MoveToDirective::TurnToObject { target, .. }) if *target == Guid(0x8000_4444)
         ));
 
-        manager.apply_unpacked_movement(&turn, false);
+        manager.apply_unpacked_movement(&turn, false, 0.0, 0.0);
         assert!(matches!(
             manager.move_to_ref().unwrap().directive(),
             Some(MoveToDirective::TurnToHeading { params })
@@ -748,7 +968,7 @@ mod tests {
                 },
             }),
         );
-        manager.apply_unpacked_movement(&heading_only, false);
+        manager.apply_unpacked_movement(&heading_only, false, 0.0, 0.0);
         assert!(matches!(
             manager.move_to_ref().unwrap().directive(),
             Some(MoveToDirective::TurnToHeading { params })
@@ -776,8 +996,12 @@ mod tests {
                 STYLE_SWORD_LOW16,
                 MovementTypeData::Invalid(MovementInvalid::default()),
             );
-            let effects = manager.apply_unpacked_movement(&event, false);
-            assert_eq!(effects.style_do_motion, Some(STYLE_SWORD), "{movement_type:?}");
+            let effects = manager.apply_unpacked_movement(&event, false, 0.0, 0.0);
+            assert_eq!(
+                effects.style_do_motion,
+                Some(STYLE_SWORD),
+                "{movement_type:?}"
+            );
             assert_eq!(effects.standing_longjump, None, "{movement_type:?}");
             assert_eq!(effects.stick_to, None);
             assert!(
@@ -796,8 +1020,8 @@ mod tests {
     fn facade_fan_out_table() {
         let mut manager = MovementManager::default();
         // Seed both children: a longjump case-0 + a moveto directive.
-        manager.apply_unpacked_movement(&case0(0x02, None, STYLE_NONCOMBAT_LOW16), false);
-        manager.apply_unpacked_movement(&moveto_object(1.5), true);
+        manager.apply_unpacked_movement(&case0(0x02, None, STYLE_NONCOMBAT_LOW16), false, 0.0, 0.0);
+        manager.apply_unpacked_movement(&moveto_object(1.5), true, 0.0, 0.0);
 
         // hit_ground → both: minterp effect + moveto re-begin marker.
         let mut effects = MotionSideEffects::default();
@@ -808,7 +1032,7 @@ mod tests {
         // leave_ground → minterp: clears standing_longjump. (Re-seed the
         // bit first — the moveto unpack above ran the style-free case-6
         // path, longjump survives it.)
-        manager.apply_unpacked_movement(&case0(0x02, None, STYLE_NONCOMBAT_LOW16), false);
+        manager.apply_unpacked_movement(&case0(0x02, None, STYLE_NONCOMBAT_LOW16), false, 0.0, 0.0);
         assert!(manager.standing_longjump());
         manager.leave_ground();
         assert!(!manager.standing_longjump());
@@ -820,9 +1044,23 @@ mod tests {
         assert!(head.is_some(), "enter_default_state seeded a Ready node");
         assert!(!manager.motion_done(true), "Ready head is not an action");
 
-        // use_time / handle_update_target → moveto only (no panic, no
-        // minterp change; the skeleton records the target update).
-        manager.use_time();
+        // use_time_moveto / handle_update_target → moveto only. An
+        // off-ground view keeps the driver inert (contact gate
+        // acclient.c:346024) so this exercises the routing without
+        // driving.
+        let airborne_view = MoveToView {
+            on_walkable_contact: false,
+            self_pos: holtburger_common::position::WorldPosition::default(),
+            self_radius: 0.4,
+            self_height: 1.8,
+            target_pos: None,
+            motions_pending: false,
+            is_interpolating: false,
+            now: web_time::Instant::now(),
+        };
+        let mut moveto_effects = MotionSideEffects::default();
+        let out = manager.use_time_moveto(&airborne_view, &mut moveto_effects);
+        assert!(out.do_motions.is_empty() && out.stop_motions.is_empty());
         manager.handle_update_target(Guid(0x8000_5555), Origin::default());
         assert_eq!(
             manager
@@ -851,7 +1089,7 @@ mod tests {
     fn lazy_create_runs_enter_default_state_exactly_once() {
         let mut manager = MovementManager::default();
         let event = case0(0, None, STYLE_NONCOMBAT_LOW16);
-        manager.apply_unpacked_movement(&event, false);
+        manager.apply_unpacked_movement(&event, false, 0.0, 0.0);
         let interp = manager.motion_interp_ref().unwrap();
         assert!(interp.initted);
         assert_eq!(
@@ -864,7 +1102,7 @@ mod tests {
         );
         assert_eq!(interp.pending_motions.len(), 1);
 
-        manager.apply_unpacked_movement(&event, false);
+        manager.apply_unpacked_movement(&event, false, 0.0, 0.0);
         assert_eq!(
             manager.motion_interp_ref().unwrap().pending_motions.len(),
             1,

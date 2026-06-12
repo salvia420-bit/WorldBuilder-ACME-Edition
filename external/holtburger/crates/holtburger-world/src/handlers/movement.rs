@@ -5,14 +5,39 @@ use holtburger_common::Guid;
 use holtburger_common::math::Quaternion;
 use holtburger_protocol::messages::{GameMessage, MovementEventData, MovementTypeData};
 
+/// A3-D3 driver (M4.3): resolve the MoveToObject / TurnToObject target
+/// against `state.entities` — `(target_exists, object_radius,
+/// object_height)`. The dims are the case-6 target physics dims the
+/// retail caller reads from the target's `CPartArray`
+/// (`CPhysicsObj::MoveToObject`, acclient.c:319808-319817): radius via
+/// the cached SetupModel cyl-sphere (`entity_collision_radius`, the
+/// ACE `GetPhysicsRadius` mirror); height has no entity-side source
+/// yet → `0.0` — the retail CPartArray-null fallback
+/// (acclient.c:319810-319815).
+pub(crate) fn resolve_movement_target(
+    state: &WorldState,
+    data: &MovementEventData,
+) -> (bool, f32, f32) {
+    match &data.data {
+        MovementTypeData::MoveToObject(moveto) => match state.entities.get(moveto.target) {
+            Some(entity) => (true, state.entity_collision_radius(entity), 0.0),
+            None => (false, 0.0, 0.0),
+        },
+        MovementTypeData::TurnToObject(turn) => {
+            (state.entities.get(turn.target).is_some(), 0.0, 0.0)
+        }
+        _ => (false, 0.0, 0.0),
+    }
+}
+
 /// A3-D3 (2026-06-12): emit the UNCONDITIONAL per-message
 /// [`WorldEvent::EntityMovementEvent`] for a REMOTE entity — retail's
 /// `unpack_movement` preamble is per-unpack, not change-gated
 /// (acclient.c:339518-339519). Skips the local player: that lane is the
 /// gate-bearing `SelfServerControlledMotion` (handlers/player.rs:96-107;
-/// see the event's doc). `target_exists` resolves the MoveToObject /
-/// TurnToObject target against `state.entities` here, where the world is
-/// visible.
+/// see the event's doc). `target_exists` + the case-6 target dims
+/// resolve against `state.entities` here, where the world is visible
+/// ([`resolve_movement_target`]).
 fn emit_entity_movement_event(
     state: &WorldState,
     guid: Guid,
@@ -22,15 +47,13 @@ fn emit_entity_movement_event(
     if guid == state.player.guid {
         return;
     }
-    let target_exists = match &data.data {
-        MovementTypeData::MoveToObject(moveto) => state.entities.get(moveto.target).is_some(),
-        MovementTypeData::TurnToObject(turn) => state.entities.get(turn.target).is_some(),
-        _ => false,
-    };
+    let (target_exists, object_radius, object_height) = resolve_movement_target(state, data);
     events.push(WorldEvent::EntityMovementEvent {
         guid,
         data: Box::new(data.clone()),
         target_exists,
+        object_radius,
+        object_height,
     });
 }
 
@@ -225,5 +248,110 @@ pub(crate) fn handle_message(
             handled
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::Entity;
+    use holtburger_common::position::WorldPosition;
+    use holtburger_protocol::messages::movement::messages::motion::{
+        MoveToObject, MoveToParameters, Origin,
+    };
+    use holtburger_protocol::messages::{MovementEventData, MovementType, MovementTypeData};
+
+    fn moveto_message(
+        guid: holtburger_common::Guid,
+        target: holtburger_common::Guid,
+    ) -> GameMessage {
+        GameMessage::UpdateMotion(Box::new(MovementEventData {
+            guid,
+            object_instance_sequence: 1,
+            movement_sequence: 2,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::MoveToObject,
+            motion_flags: 0,
+            current_style: 0x3D,
+            data: MovementTypeData::MoveToObject(MoveToObject {
+                target,
+                origin: Origin::default(),
+                params: MoveToParameters::default(),
+                run_rate: 1.0,
+            }),
+        }))
+    }
+
+    /// A3-D3 driver (M4.3, spec test 10): the wire case-6 emit sites
+    /// carry the CALLER-resolved target dims (radius via
+    /// `entity_collision_radius` — the no-gfx fallback is
+    /// PLAYER_CAPSULE_RADIUS; height 0.0, the retail CPartArray-null
+    /// fallback) on BOTH lanes, and the LOCAL lane carries a REAL
+    /// `target_exists` (regression for the documented `false`
+    /// placeholder).
+    #[test]
+    fn update_motion_case6_carries_dims_on_both_lanes() {
+        let mut state = WorldState::synthetic();
+        state.player.guid = holtburger_common::Guid(0x5000_0001);
+        let target = holtburger_common::Guid(0x8000_0042);
+        let remote = holtburger_common::Guid(0x8000_0077);
+        state.entities.insert(Entity::new(
+            target,
+            "Drudge".to_string(),
+            WorldPosition::default(),
+        ));
+        state.entities.insert(Entity::new(
+            remote,
+            "Chaser".to_string(),
+            WorldPosition::default(),
+        ));
+        let expected_radius = crate::spatial::PLAYER_CAPSULE_RADIUS;
+
+        // Remote lane.
+        let events = state.handle_message(&moveto_message(remote, target));
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                WorldEvent::EntityMovementEvent {
+                    guid,
+                    target_exists: true,
+                    object_radius,
+                    object_height,
+                    ..
+                } if *guid == remote
+                    && (*object_radius - expected_radius).abs() < 1e-6
+                    && *object_height == 0.0
+            )),
+            "remote case-6 must carry resolved dims: {events:?}"
+        );
+
+        // Local lane (SelfServerControlledMotion).
+        let events = state.handle_message(&moveto_message(state.player.guid, target));
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                WorldEvent::SelfServerControlledMotion {
+                    target_exists: true,
+                    object_radius,
+                    object_height,
+                    ..
+                } if (*object_radius - expected_radius).abs() < 1e-6 && *object_height == 0.0
+            )),
+            "local case-6 must carry real target_exists + dims: {events:?}"
+        );
+
+        // Missing target → false + 0.0 fallbacks.
+        let gone = holtburger_common::Guid(0x8000_9999);
+        let events = state.handle_message(&moveto_message(remote, gone));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            WorldEvent::EntityMovementEvent {
+                target_exists: false,
+                object_radius,
+                object_height,
+                ..
+            } if *object_radius == 0.0 && *object_height == 0.0
+        )));
     }
 }

@@ -521,11 +521,7 @@ fn motion_state_raw_motion_state_emits_turn_while_moving() {
             .contains(RawMotionFlags::TURN_COMMAND),
         "F2-4: turn command rides the wire alongside locomotion",
     );
-    assert!(
-        raw_motion_state
-            .flags
-            .contains(RawMotionFlags::TURN_SPEED),
-    );
+    assert!(raw_motion_state.flags.contains(RawMotionFlags::TURN_SPEED),);
     assert_eq!(
         raw_motion_state.turn_command,
         Some(TURN_RIGHT_MOTION_COMMAND)
@@ -1816,8 +1812,7 @@ fn advance_local_pose_for_manual_drive_applies_velocity_times_dt_once() {
     let mut world = WorldState::synthetic();
     let player_guid = Guid(0x50000777);
     world.player.guid = player_guid;
-    let _capabilities =
-        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
     // Place the player well inside the landblock (192 m per side) so
     // the integrator's `rebucket_outdoor_landblock` step at the end of
     // `advance_local_pose_for_manual_drive` doesn't shift coords into a
@@ -1930,8 +1925,7 @@ fn advance_local_pose_for_manual_drive_ramps_velocity_through_zero_on_direction_
     let mut world = WorldState::synthetic();
     let player_guid = Guid(0x5000_0AAA);
     world.player.guid = player_guid;
-    let _capabilities =
-        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
     let start_pose = WorldPosition {
         landblock_id: Guid(0xA9B40001),
         coords: Vector3::new(100.0, 100.0, 1.5),
@@ -2030,8 +2024,7 @@ fn advance_local_pose_for_manual_drive_decays_velocity_when_input_released() {
     let mut world = WorldState::synthetic();
     let player_guid = Guid(0x5000_0BBB);
     world.player.guid = player_guid;
-    let _capabilities =
-        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
     let start_pose = WorldPosition {
         landblock_id: Guid(0xA9B40001),
         coords: Vector3::new(100.0, 100.0, 1.5),
@@ -2101,8 +2094,7 @@ fn advance_local_pose_for_manual_drive_indoor_pre_bake_gates_motion() {
     let mut world = WorldState::synthetic();
     let player_guid = Guid(0x5000_0888);
     world.player.guid = player_guid;
-    let _capabilities =
-        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
 
     let indoor_landblock = Guid(0x8602_0100);
     let start_z = 5.0_f32;
@@ -2138,12 +2130,14 @@ fn advance_local_pose_for_manual_drive_indoor_pre_bake_gates_motion() {
     assert!(
         (after.coords.x - start_pose.coords.x).abs() < 1e-3,
         "pre-bake gate: X should be unchanged (got {:.4}, expected {:.4})",
-        after.coords.x, start_pose.coords.x
+        after.coords.x,
+        start_pose.coords.x
     );
     assert!(
         (after.coords.y - start_pose.coords.y).abs() < 1e-3,
         "pre-bake gate: Y should be unchanged (got {:.4}, expected {:.4})",
-        after.coords.y, start_pose.coords.y
+        after.coords.y,
+        start_pose.coords.y
     );
     assert!(
         (after.coords.z - start_z).abs() < 1e-3,
@@ -2173,8 +2167,7 @@ fn advance_local_pose_for_manual_drive_indoor_clamps_to_cell_aabb() {
     let mut world = WorldState::synthetic();
     let player_guid = Guid(0x5000_0889);
     world.player.guid = player_guid;
-    let _capabilities =
-        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
 
     // Holtburg Outpost academy area landblock — cell `0x86020100`
     // sits at the indoor end of the LB (`is_indoors()` → true). The
@@ -2271,8 +2264,7 @@ fn advance_local_pose_for_manual_drive_indoor_floor_snap_lifts_from_below() {
     let mut world = WorldState::synthetic();
     let player_guid = Guid(0x5000_088A);
     world.player.guid = player_guid;
-    let _capabilities =
-        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
 
     let cell_landblock = Guid(0x8602_0100);
     let cell_id = u32::from(cell_landblock);
@@ -2338,8 +2330,7 @@ fn indoor_ramp_floor_snap_keeps_retained_z_until_triangles_arrive() {
     let mut world = WorldState::synthetic();
     let player_guid = Guid(0x5000_088B);
     world.player.guid = player_guid;
-    let _capabilities =
-        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
 
     let cell_landblock = Guid(0x8602_0100);
     let cell_id = u32::from(cell_landblock);
@@ -2434,8 +2425,7 @@ fn indoor_aabb_only_below_cell_floor_still_gets_safety_snap() {
     let mut world = WorldState::synthetic();
     let player_guid = Guid(0x5000_088C);
     world.player.guid = player_guid;
-    let _capabilities =
-        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
 
     let cell_landblock = Guid(0x8602_0100);
     let cell_id = u32::from(cell_landblock);
@@ -2542,7 +2532,10 @@ fn quantum_slices_subdivides_quarter_second_into_three_slices() {
     // The schedule sums to the input frame (no time lost when the
     // remainder clears MinQuantum).
     let total: f32 = slices.iter().sum();
-    assert!((total - 0.25).abs() < 1e-6, "slices should sum to 0.25, got {total:.6}");
+    assert!(
+        (total - 0.25).abs() < 1e-6,
+        "slices should sum to 0.25, got {total:.6}"
+    );
 }
 
 /// Gap 1 — a sub-`MIN_QUANTUM` frame (a normal 16 ms rAF tick) yields
@@ -2610,7 +2603,10 @@ fn two_second_hitch_produces_bounded_fall_not_teleport() {
     // 2 s with no clamp would be 0.5·9.8·4 ≈ 19.6 m; the terminal-
     // velocity clamp keeps per-slice speed within 50 m/s so the drop
     // can never exceed ~100 m. Assert it's a sane, bounded value.
-    assert!(drop > 0.0, "player should fall downward, got drop={drop:.3} m");
+    assert!(
+        drop > 0.0,
+        "player should fall downward, got drop={drop:.3} m"
+    );
     assert!(
         drop < 100.0,
         "a 2 s hitch must NOT teleport the player; drop should be bounded \
@@ -2635,8 +2631,7 @@ fn two_second_hitch_produces_bounded_fall_not_teleport() {
 fn terminal_velocity_clamps_vertical_speed_at_fifty() {
     let mut world = WorldState::synthetic();
     // Start very high so the (terrain-less) free fall never lands.
-    let (movement, _start_pose) =
-        seed_airborne_player(&mut world, Guid(0x5000_0AB0), 100_000.0);
+    let (movement, _start_pose) = seed_airborne_player(&mut world, Guid(0x5000_0AB0), 100_000.0);
 
     // Drive ~10 s of fall in 0.1 s frames (each a single MAX_QUANTUM
     // slice). Unclamped this would reach 9.8·10 = 98 m/s.
@@ -2645,7 +2640,10 @@ fn terminal_velocity_clamps_vertical_speed_at_fifty() {
     }
 
     let vz = world.player.vertical_velocity;
-    assert!(vz < 0.0, "player should be falling (negative vz), got {vz:.3}");
+    assert!(
+        vz < 0.0,
+        "player should be falling (negative vz), got {vz:.3}"
+    );
     assert!(
         vz.abs() <= MAX_VELOCITY + 1e-3,
         "fall speed must be clamped to terminal velocity {MAX_VELOCITY} m/s, got {:.4}",
@@ -2755,7 +2753,11 @@ fn second_order_single_slice_uses_half_step_not_full_step() {
 /// caller can assert snap-down vs. fall. The heightmap is uniform so
 /// the move direction is irrelevant — only the retained-Z-vs-terrain
 /// delta drives the step-down decision.
-fn run_grounded_step_down_tick(guid: Guid, retained_z: f32, terrain_z: f32) -> (WorldPosition, bool) {
+fn run_grounded_step_down_tick(
+    guid: Guid,
+    retained_z: f32,
+    terrain_z: f32,
+) -> (WorldPosition, bool) {
     let mut world = WorldState::synthetic();
     world.player.guid = guid;
     let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
@@ -3057,8 +3059,7 @@ fn high_run_target_speed_reaches_retail_max_only_with_direct_velocity() {
 fn run_uphill_cliff(guid: Guid, ticks: u32) -> (f32, f32, f32, f32) {
     let mut world = WorldState::synthetic();
     world.player.guid = guid;
-    let _capabilities =
-        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
     // Steep face across LB (0,0) rising toward −X (the run-forward direction).
     let mut steep = [0.0f32; 81];
     for vx in 0..9 {
@@ -3135,8 +3136,7 @@ fn outdoor_steep_cliff_blocks_climb_only_with_walkable_gate() {
 fn run_into_water(guid: Guid, ticks: u32) -> (f32, f32) {
     let mut world = WorldState::synthetic();
     world.player.guid = guid;
-    let _capabilities =
-        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
     // Flat terrain at z=10 across LB (0,0); the whole LB is water (code 19).
     world.populate_terrain_heights(0, [10.0; 81]);
     world.populate_terrain_water(0, &[19u8; 81]);
@@ -3208,8 +3208,16 @@ fn edge_slide_recovers_tangent_travel_on_refused_step_up() {
     // Residual = lateral - clamped = (0.35, 0.3, 0); slid along tangent
     // drops the X (into-wall) component, keeping +Y. So slid = clamped +
     // (0, 0.3, 0) = (0.05, 0.3, 0).
-    assert!((slid.x - 0.05).abs() < 1e-6, "X must stay clamped, got {}", slid.x);
-    assert!((slid.y - 0.3).abs() < 1e-6, "tangent +Y must be recovered, got {}", slid.y);
+    assert!(
+        (slid.x - 0.05).abs() < 1e-6,
+        "X must stay clamped, got {}",
+        slid.x
+    );
+    assert!(
+        (slid.y - 0.3).abs() < 1e-6,
+        "tangent +Y must be recovered, got {}",
+        slid.y
+    );
 }
 
 /// Gap 3 follow-up — when the player does NOT allow edge-slide
@@ -3306,13 +3314,8 @@ fn cliff_slide_falls_back_to_stage1_on_parallel_walls() {
     let lateral_clamped = Vector3::new(0.05, 0.0, 0.0);
     let normal = Vector3::new(-1.0, 0.0, 0.0);
     // N_last identical to N_new ⇒ degenerate seam.
-    let slid = edge_slide_refused_step_up(
-        lateral,
-        lateral_clamped,
-        Some(normal),
-        Some(normal),
-        true,
-    );
+    let slid =
+        edge_slide_refused_step_up(lateral, lateral_clamped, Some(normal), Some(normal), true);
     // Regardless of the flag, the outcome is the Stage-1 tangent slide:
     // flag-off skips cliff_slide entirely; flag-on tries it, gets None,
     // and falls back to the same Stage-1 path.
@@ -3398,14 +3401,22 @@ fn substep_straight_wall_matches_single_pass() {
     // with a tiny +X bias into the wall.
     let pose = substep_pose(0.0, 0.0);
     let delta = Vector3::new(0.05, 1.2, 0.0);
-    let (multi, _n_multi) =
-        holtburger_world::spatial::clamp_delta_against_cell_walls_substepped(
-            &tris, &pose, delta, r, h, &[],
-        );
-    let (single, _n_single) =
-        holtburger_world::spatial::clamp_delta_against_cell_walls_with_normal(
-            &tris, &pose, delta, r, h, &[],
-        );
+    let (multi, _n_multi) = holtburger_world::spatial::clamp_delta_against_cell_walls_substepped(
+        &tris,
+        &pose,
+        delta,
+        r,
+        h,
+        &[],
+    );
+    let (single, _n_single) = holtburger_world::spatial::clamp_delta_against_cell_walls_with_normal(
+        &tris,
+        &pose,
+        delta,
+        r,
+        h,
+        &[],
+    );
     // Sanity: this delta really is subdivided (>1 step), so we are
     // comparing the LOOP against the single pass, not a 1-step delegate.
     let lateral_len = (delta.x * delta.x + delta.y * delta.y).sqrt();
@@ -3459,14 +3470,22 @@ fn substep_concave_corner_slides_along_both_walls() {
         "concave-corner test must subdivide"
     );
 
-    let (single, _ns) =
-        holtburger_world::spatial::clamp_delta_against_cell_walls_with_normal(
-            &tris, &pose, delta, r, h, &[],
-        );
-    let (multi, n_multi) =
-        holtburger_world::spatial::clamp_delta_against_cell_walls_substepped(
-            &tris, &pose, delta, r, h, &[],
-        );
+    let (single, _ns) = holtburger_world::spatial::clamp_delta_against_cell_walls_with_normal(
+        &tris,
+        &pose,
+        delta,
+        r,
+        h,
+        &[],
+    );
+    let (multi, n_multi) = holtburger_world::spatial::clamp_delta_against_cell_walls_substepped(
+        &tris,
+        &pose,
+        delta,
+        r,
+        h,
+        &[],
+    );
 
     let single_end_x = pose.coords.x + single.x;
     let single_end_y = pose.coords.y + single.y;
@@ -3663,7 +3682,10 @@ fn step_up_within_step_height_climbs_riser_through_integrator() {
     let (start, after, airborne) = run_grounded_step_up_tick(Guid(0x5000_03E0), rise);
 
     // Climbing is a ground action — the player stays grounded.
-    assert!(!airborne, "step-up must not go airborne; got airborne={airborne}");
+    assert!(
+        !airborne,
+        "step-up must not go airborne; got airborne={airborne}"
+    );
 
     // Z rose onto the riser top (feet + rise), within the 5 mm floor-snap
     // headroom the indoor snap adds after the climb.
@@ -3710,7 +3732,10 @@ fn step_up_beyond_step_height_stays_blocked_through_integrator() {
     let (start, after, airborne) = run_grounded_step_up_tick(Guid(0x5000_03E1), rise);
 
     // Refused step-up is a ground interaction, not a fall.
-    assert!(!airborne, "refused step-up must not go airborne; got airborne={airborne}");
+    assert!(
+        !airborne,
+        "refused step-up must not go airborne; got airborne={airborne}"
+    );
 
     // Z did NOT climb onto the tall riser — the riser top (feet + 0.9) is
     // above the step-up ceiling, so the floor probe rejects it and Z stays at
@@ -3804,8 +3829,14 @@ fn test_terrain_contour_slide_oblique_keeps_tangent_component() {
     let lateral = Vector3::new(0.3, 0.3, 0.0);
     let slide = terrain_contour_slide(lateral, normal).expect("oblique approach must slide");
     // Into-slope (Y) component gone, contour (X) component preserved.
-    assert!(slide.y.abs() < 1e-6, "into-slope component must be shed, got {slide:?}");
-    assert!((slide.x - 0.3).abs() < 1e-6, "contour component must survive, got {slide:?}");
+    assert!(
+        slide.y.abs() < 1e-6,
+        "into-slope component must be shed, got {slide:?}"
+    );
+    assert!(
+        (slide.x - 0.3).abs() < 1e-6,
+        "contour component must survive, got {slide:?}"
+    );
     // And the slide is perpendicular to the contour wall normal.
     let wall = Vector3::new(0.0, -1.0, 0.0);
     assert!(slide.dot(&wall).abs() < 1e-6);
@@ -3877,7 +3908,12 @@ fn test_apply_self_movement_world_events_records_all_sequence_families() {
     };
 
     movement.apply_self_movement_world_events(&[
-        WorldEvent::SelfServerControlledMotion(Box::new(motion)),
+        WorldEvent::SelfServerControlledMotion {
+            data: Box::new(motion),
+            target_exists: false,
+            object_radius: 0.0,
+            object_height: 0.0,
+        },
         WorldEvent::SelfUpdatePosition {
             teleport_sequence: 3,
             force_position_sequence: 5,
@@ -3969,7 +4005,7 @@ fn test_a13_w2_non_autonomous_update_motion_echoes_into_next_packs() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, WorldEvent::SelfServerControlledMotion(_))),
+            .any(|e| matches!(e, WorldEvent::SelfServerControlledMotion { .. })),
         "accepted non-autonomous UpdateMotion must emit SelfServerControlledMotion"
     );
 
@@ -4015,7 +4051,7 @@ fn test_a13_w2_non_autonomous_update_motion_echoes_into_next_packs() {
     assert!(
         !stale_events
             .iter()
-            .any(|e| matches!(e, WorldEvent::SelfServerControlledMotion(_))),
+            .any(|e| matches!(e, WorldEvent::SelfServerControlledMotion { .. })),
         "stale UpdateMotion must not re-emit SelfServerControlledMotion"
     );
 }
@@ -4057,6 +4093,8 @@ fn test_movement_manager_registry_create_apply_prune() {
         guid: remote_guid,
         data: Box::new(event_for(remote_guid)),
         target_exists: false,
+        object_radius: 0.0,
+        object_height: 0.0,
     }]);
     assert!(
         movement.movement_manager_for(remote_guid).is_none(),
@@ -4068,6 +4106,8 @@ fn test_movement_manager_registry_create_apply_prune() {
         guid: remote_guid,
         data: Box::new(event_for(remote_guid)),
         target_exists: false,
+        object_radius: 0.0,
+        object_height: 0.0,
     }]);
     let manager = movement
         .movement_manager_for(remote_guid)
@@ -4082,6 +4122,8 @@ fn test_movement_manager_registry_create_apply_prune() {
         guid: remote_guid,
         data: Box::new(event_for(remote_guid)),
         target_exists: false,
+        object_radius: 0.0,
+        object_height: 0.0,
     }]);
     assert_eq!(
         movement
@@ -4095,9 +4137,12 @@ fn test_movement_manager_registry_create_apply_prune() {
     );
 
     // Local player keyed by its guid via SelfServerControlledMotion.
-    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion(
-        Box::new(event_for(player_guid)),
-    )]);
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+        data: Box::new(event_for(player_guid)),
+        target_exists: false,
+        object_radius: 0.0,
+        object_height: 0.0,
+    }]);
     assert!(movement.movement_manager_for(player_guid).is_some());
 
     // Despawn prunes only the despawned guid.
@@ -4110,9 +4155,7 @@ fn test_movement_manager_registry_create_apply_prune() {
 // A6-T1/T2 (2026-06-12, W3+ S7) — unified transition pipeline.
 // =====================================================================
 
-fn unified_transition_fixture(
-    flag_on: bool,
-) -> (WorldState, MovementSystem, Guid, WorldPosition) {
+fn unified_transition_fixture(flag_on: bool) -> (WorldState, MovementSystem, Guid, WorldPosition) {
     let mut world = WorldState::synthetic();
     let player_guid = Guid(0x5000_0001);
     world.player.guid = player_guid;
@@ -4383,7 +4426,10 @@ fn simulation_tick_steps_remote_managers_once_per_slice() {
         // with the flag-on path, so flag-off must still not step it.
         {
             let body = world.scene.body_mut(body_id).expect("body");
-            assert!(body.position_manager.remote_interpolate_to(start, target, false, 100.0));
+            assert!(
+                body.position_manager
+                    .remote_interpolate_to(start, target, false, 100.0)
+            );
         }
         let mut simulation = ClientSimulationSystem::new();
         let mut movement = MovementSystem::new();
@@ -4554,7 +4600,9 @@ async fn queue_head_jump_error_refuses_release() {
         .jump_charge_commence(t0, &mut world)
         .expect("press commences");
     // A pending node carrying the charge-time 72 code blocks the jump.
-    movement.local_motion_interp.add_to_queue(1, 0x4500_0005, 72);
+    movement
+        .local_motion_interp
+        .add_to_queue(1, 0x4500_0005, 72);
     let outcome = movement
         .execute_jump_release(t0 + Duration::from_millis(300), &mut world, &mut session)
         .await
@@ -4579,7 +4627,10 @@ async fn successful_release_launches_with_clock_extent() {
         .expect("release must not error");
     match outcome {
         JumpOutcome::Jumped { extent, vz, .. } => {
-            assert!((extent - 0.5).abs() < 1e-2, "extent tracks the clock, got {extent}");
+            assert!(
+                (extent - 0.5).abs() < 1e-2,
+                "extent tracks the clock, got {extent}"
+            );
             assert!(vz > 0.0, "launch needs a positive vertical velocity");
         }
         other => panic!("expected Jumped, got {other:?}"),
@@ -4589,4 +4640,232 @@ async fn successful_release_launches_with_clock_extent() {
         !world.player.standing_long_jump_charge,
         "charge root consumed by the release"
     );
+}
+
+// =====================================================================
+// A3-D3 (2026-06-12, SD3D) — MoveToManager DRIVER shim
+// (USE_MOVETO_DRIVER). The shim body (`drive_local_moveto`) is
+// exercised directly — the `_ungated` house pattern — while the const
+// ships default-off (test 11's default-off identity is the rest of
+// this suite passing unmodified).
+// =====================================================================
+
+/// Build a wire-shaped case-6 MoveToObject event for `guid` chasing
+/// `target` (the registry consumer's input).
+fn moveto_object_event_for(
+    guid: Guid,
+    target: Guid,
+    target_pos: WorldPosition,
+) -> holtburger_protocol::messages::MovementEventData {
+    use holtburger_protocol::messages::movement::messages::motion::{
+        MoveToObject, MoveToParameters, Origin,
+    };
+    use holtburger_protocol::messages::{MovementEventData, MovementType, MovementTypeData};
+
+    MovementEventData {
+        guid,
+        object_instance_sequence: 1,
+        movement_sequence: 2,
+        server_control_sequence: 3,
+        is_autonomous: false,
+        movement_type: MovementType::MoveToObject,
+        motion_flags: 0,
+        current_style: MotionStance::NonCombat.interpreted(),
+        data: MovementTypeData::MoveToObject(MoveToObject {
+            target,
+            origin: Origin {
+                cell_id: target_pos.landblock_id,
+                position: target_pos.coords,
+            },
+            // ACE-realistic parameter block (the retail ctor values —
+            // a zeroed wire default would mean fail_distance 0).
+            params: MoveToParameters {
+                movement_parameters: 0x0001_EE0F,
+                distance_to_object: 0.6,
+                min_distance: 0.0,
+                fail_distance: f32::MAX,
+                speed: 1.0,
+                walk_run_threshold: 15.0,
+                desired_heading: 0.0,
+            },
+            run_rate: 1.0,
+        }),
+    }
+}
+
+/// Spec test 9 — the shim translates an active walk command into an
+/// `Autonomous` drive intent on the EXISTING lane
+/// (`current_local_drive_control` exposes it to the solver), and the
+/// arrival edge requests the stop EXACTLY once with the `Some(0)`
+/// completion latched (S10 contract).
+#[tokio::test]
+async fn moveto_driver_walks_then_arrives_with_single_stop_edge() {
+    use holtburger_world::WorldEvent;
+
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0123);
+    let target_guid = Guid(0x8000_0042);
+    // Facing EAST (AC heading 180) directly at the target 10 m away —
+    // the entry turn node pops immediately and the walk begins on the
+    // first driven frame.
+    let position = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::from_heading(180.0_f32.to_radians()),
+    };
+    let target_pos = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(60.0, 50.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    world.player.guid = guid;
+    seed_local_player(&mut world, guid, position);
+    world
+        .entities
+        .insert(Entity::new(target_guid, "Drudge".to_string(), target_pos));
+
+    let mut movement = MovementSystem::new();
+    // Install through the real registry consumer (the M4.3 local lane
+    // shape: real target_exists + caller-resolved dims).
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+        data: Box::new(moveto_object_event_for(guid, target_guid, target_pos)),
+        target_exists: true,
+        object_radius: 0.5,
+        object_height: 1.8,
+    }]);
+    assert!(movement.moveto_is_active(guid));
+    assert_eq!(movement.take_moveto_completion(guid), None);
+
+    let now = Instant::now();
+    // Frame 1: build + begin → walk steering on the autonomous lane.
+    let stop = movement.drive_local_moveto(now, &mut world);
+    assert!(!stop, "walking — no stop edge");
+    let drive = movement
+        .current_local_drive_control(&world, Duration::from_millis(16))
+        .expect("walk steering must ride the autonomous drive lane");
+    assert_eq!(drive.body_id, SpatialBodyId::LocalPlayer(guid));
+    assert!(
+        (drive.desired_world_delta.x - 1.0).abs() < 1e-3
+            && drive.desired_world_delta.y.abs() < 1e-3,
+        "unit-forward toward the target: {:?}",
+        drive.desired_world_delta
+    );
+    assert!(!drive.force_grounded);
+    assert!(drive.target_hint.is_some());
+
+    // Arrival: place the player at the target's standoff and pump —
+    // ONE stop edge, completion Some(0), directive cleared.
+    let _ = world.set_local_player_runtime_pose(WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(59.5, 50.0, 0.0),
+        rotation: Quaternion::from_heading(180.0_f32.to_radians()),
+    });
+    let stop = movement.drive_local_moveto(now, &mut world);
+    assert!(stop, "arrival owes the stop edge");
+    assert!(!movement.moveto_is_active(guid));
+    assert_eq!(movement.take_moveto_completion(guid), Some(0));
+    assert_eq!(movement.take_moveto_completion(guid), None, "read-clear");
+    assert!(
+        !movement.drive_local_moveto(now, &mut world),
+        "inactive driver never re-requests the stop edge"
+    );
+}
+
+/// Spec test 9 (M4.5) — a held non-idle MANUAL drive cancels the
+/// active MoveTo with 0x36 (retail apply_raw_movement →
+/// cancel_moveto(0x36)); the manual lane keeps the wire (no stop
+/// edge from the driver).
+#[tokio::test]
+async fn manual_nonidle_input_cancels_active_moveto_with_0x36() {
+    use holtburger_world::WorldEvent;
+
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0123);
+    let target_guid = Guid(0x8000_0042);
+    let position = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::from_heading(180.0_f32.to_radians()),
+    };
+    let target_pos = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(60.0, 50.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    world.player.guid = guid;
+    seed_local_player(&mut world, guid, position);
+    world
+        .entities
+        .insert(Entity::new(target_guid, "Drudge".to_string(), target_pos));
+
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+        data: Box::new(moveto_object_event_for(guid, target_guid, target_pos)),
+        target_exists: true,
+        object_radius: 0.5,
+        object_height: 1.8,
+    }]);
+    assert!(movement.moveto_is_active(guid));
+
+    // Held W (non-idle ManualSet) through the REAL ingest path.
+    let now = Instant::now();
+    movement.enqueue_drive_intent(
+        PlayerDriveIntent::ManualHeld(MotionState::builder().run().forward().build()),
+        now,
+    );
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("manual tick");
+
+    let stop = movement.drive_local_moveto(now, &mut world);
+    assert!(!stop, "manual lane owns the wire — no driver stop edge");
+    assert!(!movement.moveto_is_active(guid), "0x36 cancel ran");
+    assert_eq!(movement.take_moveto_completion(guid), Some(0x36));
+}
+
+/// Spec test 9/10 — a despawned target cancels 0x37 and owes the stop
+/// edge; the registry consumer carries the resolved dims end-to-end
+/// (the cylinder arrival uses them).
+#[tokio::test]
+async fn moveto_driver_target_loss_cancels_0x37() {
+    use holtburger_world::WorldEvent;
+
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0123);
+    let target_guid = Guid(0x8000_0042);
+    let position = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::from_heading(180.0_f32.to_radians()),
+    };
+    let target_pos = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(60.0, 50.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    world.player.guid = guid;
+    seed_local_player(&mut world, guid, position);
+    world
+        .entities
+        .insert(Entity::new(target_guid, "Drudge".to_string(), target_pos));
+
+    let mut movement = MovementSystem::new();
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+        data: Box::new(moveto_object_event_for(guid, target_guid, target_pos)),
+        target_exists: true,
+        object_radius: 0.5,
+        object_height: 1.8,
+    }]);
+
+    let now = Instant::now();
+    assert!(!movement.drive_local_moveto(now, &mut world), "walking");
+
+    // Target despawns → 0x37 + stop edge (acclient.c:346086).
+    world.entities.remove(target_guid);
+    let stop = movement.drive_local_moveto(now, &mut world);
+    assert!(stop, "target loss owes the stop edge");
+    assert_eq!(movement.take_moveto_completion(guid), Some(0x37));
+    assert!(!movement.moveto_is_active(guid));
 }

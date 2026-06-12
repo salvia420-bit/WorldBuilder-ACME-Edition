@@ -549,7 +549,7 @@ impl ClientRuntime {
                         grounded: *grounded,
                     });
             }
-            WorldEvent::SelfServerControlledMotion(data) => {
+            WorldEvent::SelfServerControlledMotion { data, .. } => {
                 let _ = tx
                     .send(ClientViewEvent::SelfServerControlledMotion { data: data.clone() });
             }

@@ -71,7 +71,7 @@ impl ClientRuntime {
             let mut follow_up_events = Vec::new();
             for event in pending_events {
                 match event {
-                    WorldEvent::SelfServerControlledMotion(data) => {
+                    WorldEvent::SelfServerControlledMotion { data, .. } => {
                         let world_events = {
                             let ClientRuntime {
                                 simulation,

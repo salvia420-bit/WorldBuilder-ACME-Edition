@@ -10,9 +10,50 @@
 //! wire `movement_parameters: u32` into [`MovementParameters::bitfield`]
 //! verbatim.
 
+use super::motion_interp::{
+    MOTION_RUN_FORWARD, MOTION_TURN_RIGHT, MOTION_WALK_BACKWARDS, MOTION_WALK_FORWARD,
+};
 use holtburger_protocol::messages::movement::messages::motion::{
     MoveToParameters, TurnToParameters,
 };
+
+/// A3-D3 driver (2026-06-12) — the retail heading epsilon every
+/// degrees-domain comparison in the MoveTo math uses
+/// (`0.00019999999`, acclient.c:344740/:345402/:345487 et al.).
+pub(crate) const HEADING_EPSILON_DEG: f32 = 0.000_199_999_99;
+
+/// `heading_diff(x, y, motion)` (acclient.c:344738-344752) — DEGREES
+/// domain. The signed delta `x − y` folded to `[0, 360)` measured in
+/// the direction of `motion`: TurnRight (`0x6500000D`) leaves the
+/// positive wrap as-is; any other motion (TurnLeft) mirrors it to
+/// `360 − diff`. Sub-epsilon deltas collapse to `0.0`.
+pub(crate) fn heading_diff(x: f32, y: f32, motion: u32) -> f32 {
+    let mut result = x - y;
+    if result.abs() < HEADING_EPSILON_DEG {
+        result = 0.0;
+    }
+    if result < -HEADING_EPSILON_DEG {
+        result += 360.0;
+    }
+    if result > HEADING_EPSILON_DEG && motion != MOTION_TURN_RIGHT {
+        result = 360.0 - result;
+    }
+    result
+}
+
+/// `heading_greater(x, y, motion)` (acclient.c:344715-344736) — the
+/// turn-arrival overshoot test, DEGREES domain. Shortest-arc compare:
+/// within 180° apart it is a plain `x > y`; wrapped further apart the
+/// sense inverts. TurnRight returns the "greater" sense; TurnLeft
+/// (any non-TurnRight motion) returns the complement.
+pub(crate) fn heading_greater(x: f32, y: f32, motion: u32) -> bool {
+    let le = if (x - y).abs() <= 180.0 {
+        x <= y
+    } else {
+        y <= x
+    };
+    if motion == MOTION_TURN_RIGHT { !le } else { le }
+}
 
 /// Retail default bitfield, transcribed from the `MovementParameters`
 /// ctor literal (`acclient.c:339455-339461`:
@@ -104,6 +145,134 @@ impl MovementParameters {
     /// Bit 12 — `Autonomous` (rides into the raw action stamp).
     pub(crate) fn autonomous(&self) -> bool {
         self.bitfield & 0x1000 != 0
+    }
+
+    // A3-D3 driver bits (get_command/GetCurrentDistance consumers).
+    // Cites: MoveTowards `BYTE1 & 2` = 0x200 / MoveAway `BYTE1 & 1` =
+    // 0x100 (acclient.c:346186-346200), UseSpheres `BYTE1 & 4` = 0x400
+    // (:344873), ForceRun/CanCharge `& 0x10` + CanRun `& 2` + CanWalk
+    // `& 1` in the hold-key rule (:346213-346221), UseFinalHeading
+    // `& 0x40` (:345835), StopCompletely `0x10000`
+    // (`*((BYTE*)&params+2) & 1`, :345966/:345248).
+
+    /// Bit 9 — `MoveTowards` (0x200).
+    pub(crate) fn move_towards(&self) -> bool {
+        self.bitfield & 0x200 != 0
+    }
+
+    /// Bit 8 — `MoveAway` (0x100).
+    pub(crate) fn move_away(&self) -> bool {
+        self.bitfield & 0x100 != 0
+    }
+
+    /// Bit 10 — `UseSpheres` (0x400): cylinder distance metric.
+    pub(crate) fn use_spheres(&self) -> bool {
+        self.bitfield & 0x400 != 0
+    }
+
+    /// Bit 6 — `UseFinalHeading` (0x40): trailing turn node.
+    pub(crate) fn use_final_heading(&self) -> bool {
+        self.bitfield & 0x40 != 0
+    }
+
+    /// Bit 16 — `StopCompletely` (0x10000): TurnTo* entry stop.
+    pub(crate) fn stop_completely(&self) -> bool {
+        self.bitfield & 0x1_0000 != 0
+    }
+
+    /// `MovementParameters::towards_and_away` (acclient.c:346153-346173)
+    /// — the both-bits (MoveTowards|MoveAway) band-following arm.
+    /// Spec §7 Q6: transcribed this pass. Inside the band → no command;
+    /// closer than `min_distance` (by the heading epsilon) →
+    /// WalkBackwards moving-away; beyond `distance_to_object` →
+    /// WalkForward towards.
+    fn towards_and_away(&self, curr_distance: f32) -> (Option<u32>, bool) {
+        if curr_distance <= self.distance_to_object {
+            if curr_distance - self.min_distance >= HEADING_EPSILON_DEG {
+                (None, false)
+            } else {
+                (Some(MOTION_WALK_BACKWARDS), true)
+            }
+        } else {
+            (Some(MOTION_WALK_FORWARD), false)
+        }
+    }
+
+    /// `MovementParameters::get_command` (acclient.c:346175-346222) —
+    /// `(command, hold_key, moving_away)`. `curr_heading` (degrees,
+    /// already epsilon-folded by the caller) is accepted-and-unused
+    /// exactly as the decomp's parameter is. Hold-key rule
+    /// (:346213-346221): Run (`2`) iff ForceRun `0x10`, or CanRun `0x2`
+    /// with (no CanWalk `0x1`, or the distance excess beyond
+    /// `distance_to_object` crosses `walk_run_threshhold`); else
+    /// None (`1`).
+    pub(crate) fn get_command(
+        &self,
+        curr_distance: f32,
+        _curr_heading: f32,
+    ) -> (Option<u32>, u32, bool) {
+        let towards = |dist: f32| -> (Option<u32>, bool) {
+            if dist > self.distance_to_object {
+                (Some(MOTION_WALK_FORWARD), false)
+            } else {
+                (None, false)
+            }
+        };
+        let (command, moving_away) = if self.move_towards() {
+            if self.move_away() {
+                self.towards_and_away(curr_distance)
+            } else {
+                towards(curr_distance)
+            }
+        } else if !self.move_away() {
+            // Neither bit set falls through to the towards arm
+            // (LABEL_8, acclient.c:346200-346208).
+            towards(curr_distance)
+        } else if curr_distance < self.min_distance {
+            // Away-only: WalkForward with moving_away set (the 180°
+            // aux turn faces the walk away, :346224-346239).
+            (Some(MOTION_WALK_FORWARD), true)
+        } else {
+            (None, false)
+        };
+
+        let bits = self.bitfield;
+        let hold_key = if bits & 0x10 != 0
+            || (bits & 0x2 != 0
+                && (bits & 0x1 == 0
+                    || curr_distance - self.distance_to_object > self.walk_run_threshhold))
+        {
+            2
+        } else {
+            1
+        };
+        (command, hold_key, moving_away)
+    }
+
+    /// `MovementParameters::get_desired_heading(command, moving_away)`
+    /// (acclient.c:346224-346239): the walk-direction offset folded
+    /// onto the heading-to-target. RunForward (`0x44000007`) /
+    /// WalkForward (`0x45000005`) → 180° iff moving away;
+    /// WalkBackwards (`0x45000006`) → 180° iff NOT moving away;
+    /// anything else → 0°.
+    pub(crate) fn get_desired_heading(command: u32, moving_away: bool) -> f32 {
+        match command {
+            MOTION_RUN_FORWARD | MOTION_WALK_FORWARD => {
+                if moving_away {
+                    180.0
+                } else {
+                    0.0
+                }
+            }
+            MOTION_WALK_BACKWARDS => {
+                if moving_away {
+                    0.0
+                } else {
+                    180.0
+                }
+            }
+            _ => 0.0,
+        }
     }
 
     /// Hydrate from the wire `MoveTo*` parameter block (`MoveToObject` /
@@ -199,5 +368,146 @@ mod tests {
         let params = MovementParameters::from_wire_turnto(&turn);
         assert!(params.modify_interpreted_state());
         assert!((params.desired_heading - 1.25).abs() < 1e-6);
+    }
+
+    /// A3-D3 driver — `get_command` table (acclient.c:346175-346222):
+    /// towards / away / both-bits × distance bands, plus the hold-key
+    /// rule incl. the `0x10` force-run and the walk_run_threshhold
+    /// crossover.
+    #[test]
+    fn get_command_table_matches_retail() {
+        // Default params: MoveTowards set (0x1EE0F has 0x200), CanWalk +
+        // CanRun set, distance_to_object 0.6, threshold 15.0.
+        let params = MovementParameters::default();
+        assert!(params.move_towards() && !params.move_away());
+        assert!(params.use_spheres());
+
+        // Towards, beyond distance_to_object → WalkForward, walk gait
+        // (excess 4.4 < threshold 15.0).
+        let (cmd, key, away) = params.get_command(5.0, 0.0);
+        assert_eq!(cmd, Some(MOTION_WALK_FORWARD));
+        assert_eq!(key, 1);
+        assert!(!away);
+
+        // Towards, inside → no command.
+        let (cmd, _, _) = params.get_command(0.5, 0.0);
+        assert_eq!(cmd, None);
+
+        // Threshold crossover → Run hold key.
+        let (cmd, key, _) = params.get_command(20.0, 0.0);
+        assert_eq!(cmd, Some(MOTION_WALK_FORWARD));
+        assert_eq!(key, 2);
+
+        // ForceRun bit 0x10 → Run even when close.
+        let forced = MovementParameters {
+            bitfield: params.bitfield | 0x10,
+            ..params
+        };
+        let (_, key, _) = forced.get_command(1.0, 0.0);
+        assert_eq!(key, 2);
+
+        // No CanWalk (bit 0x1 clear) + CanRun → always Run.
+        let no_walk = MovementParameters {
+            bitfield: (params.bitfield & !0x1),
+            ..params
+        };
+        let (_, key, _) = no_walk.get_command(1.0, 0.0);
+        assert_eq!(key, 2);
+
+        // Away-only (0x100 set, 0x200 clear), closer than min_distance →
+        // WalkForward with moving_away.
+        let away_only = MovementParameters {
+            bitfield: (params.bitfield & !0x200) | 0x100,
+            min_distance: 3.0,
+            ..params
+        };
+        let (cmd, _, away) = away_only.get_command(1.0, 0.0);
+        assert_eq!(cmd, Some(MOTION_WALK_FORWARD));
+        assert!(away);
+        let (cmd, _, _) = away_only.get_command(4.0, 0.0);
+        assert_eq!(cmd, None);
+
+        // Both bits (towards_and_away, acclient.c:346153-346173):
+        // beyond → forward; in-band → none; under min → WalkBackwards
+        // moving_away.
+        let both = MovementParameters {
+            bitfield: params.bitfield | 0x100 | 0x200,
+            distance_to_object: 4.0,
+            min_distance: 2.0,
+            ..params
+        };
+        let (cmd, _, away) = both.get_command(6.0, 0.0);
+        assert_eq!(cmd, Some(MOTION_WALK_FORWARD));
+        assert!(!away);
+        let (cmd, _, _) = both.get_command(3.0, 0.0);
+        assert_eq!(cmd, None);
+        let (cmd, _, away) = both.get_command(1.5, 0.0);
+        assert_eq!(cmd, Some(MOTION_WALK_BACKWARDS));
+        assert!(away);
+    }
+
+    /// `get_desired_heading` 0/180 matrix (acclient.c:346224-346239).
+    #[test]
+    fn get_desired_heading_matrix() {
+        for (cmd, away, expected) in [
+            (MOTION_WALK_FORWARD, false, 0.0),
+            (MOTION_WALK_FORWARD, true, 180.0),
+            (MOTION_RUN_FORWARD, false, 0.0),
+            (MOTION_RUN_FORWARD, true, 180.0),
+            (MOTION_WALK_BACKWARDS, false, 180.0),
+            (MOTION_WALK_BACKWARDS, true, 0.0),
+            (MOTION_TURN_RIGHT, true, 0.0),
+        ] {
+            assert_eq!(
+                MovementParameters::get_desired_heading(cmd, away),
+                expected,
+                "cmd {cmd:#x} away {away}"
+            );
+        }
+    }
+
+    /// `heading_diff` / `heading_greater` epsilon + wrap +
+    /// direction-fold (acclient.c:344715-344752), plus the
+    /// radians↔degrees boundary round-trip the driver's view seam uses.
+    #[test]
+    fn heading_diff_and_greater_fold_correctly() {
+        // Sub-epsilon collapse.
+        assert_eq!(heading_diff(10.0, 10.00001, MOTION_TURN_RIGHT), 0.0);
+        // TurnRight direction: positive stays.
+        assert!((heading_diff(30.0, 10.0, MOTION_TURN_RIGHT) - 20.0).abs() < 1e-4);
+        // Negative wraps +360.
+        assert!((heading_diff(10.0, 30.0, MOTION_TURN_RIGHT) - 340.0).abs() < 1e-4);
+        // TurnLeft mirrors.
+        assert!(
+            (heading_diff(30.0, 10.0, super::super::motion_interp::MOTION_TURN_LEFT) - 340.0).abs()
+                < 1e-4
+        );
+
+        // heading_greater: shortest-arc overshoot sense.
+        assert!(heading_greater(95.0, 90.0, MOTION_TURN_RIGHT));
+        assert!(!heading_greater(85.0, 90.0, MOTION_TURN_RIGHT));
+        // Wrapped pair (350 vs 10, 20° apart through 0): turning right
+        // from 350 toward 10 has NOT passed it.
+        assert!(!heading_greater(350.0, 10.0, MOTION_TURN_RIGHT));
+        assert!(heading_greater(15.0, 10.0, MOTION_TURN_RIGHT));
+        // TurnLeft complement.
+        assert!(heading_greater(
+            85.0,
+            90.0,
+            super::super::motion_interp::MOTION_TURN_LEFT
+        ));
+        assert!(!heading_greater(
+            95.0,
+            90.0,
+            super::super::motion_interp::MOTION_TURN_LEFT
+        ));
+
+        // Radians↔degrees round trip at the view boundary: a radian
+        // pose heading converted to degrees and back is identity within
+        // f32 tolerance.
+        for deg in [0.0f32, 45.0, 179.9, 359.5] {
+            let rad = deg.to_radians();
+            assert!((rad.to_degrees() - deg).abs() < 1e-3);
+        }
     }
 }

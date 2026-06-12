@@ -78,7 +78,8 @@ impl MovementSystemHandle {
     /// player enters the world (`kind=7 EnteredWorld` in the wasm bundle)
     /// so subsequent ticks emit heartbeats while moving.
     pub fn arm_heartbeat_schedule(&mut self, now: Instant, world: &WorldState) {
-        self.inner.arm_autonomous_position_heartbeat_schedule(now, world);
+        self.inner
+            .arm_autonomous_position_heartbeat_schedule(now, world);
     }
 
     /// Drive one physics tick. Reconciles server-controlled projection,
@@ -180,6 +181,23 @@ impl MovementSystemHandle {
     /// path). See [`MovementSystem::apply_movement_world_events`].
     pub fn apply_movement_world_events(&mut self, events: &[WorldEvent]) {
         self.inner.apply_movement_world_events(events);
+    }
+
+    /// A3-D3 driver (M4.4 / S10 A.3) — whether the LOCAL player's
+    /// MoveTo driver holds an active directive (retail `is_moving_to`,
+    /// acclient.c:344895-344898). S10's `pursuitStatus` export reads
+    /// this through the wasm bundle.
+    pub fn moveto_is_active(&self, world: &WorldState) -> bool {
+        self.inner.moveto_is_active(world.player.guid)
+    }
+
+    /// A3-D3 driver (M4.4 / S10 A.4) — read-clear completion latch for
+    /// the LOCAL player's MoveTo: `Some(0)` arrival; `Some(0x36)`
+    /// cancelled, `Some(0x3D)` fail-distance, `Some(0x37/0x38)` target
+    /// lost, `Some(8)` unresolvable (see `MoveToManager::
+    /// take_completion`).
+    pub fn take_moveto_completion(&mut self, world: &WorldState) -> Option<u32> {
+        self.inner.take_moveto_completion(world.player.guid)
     }
 
     /// A6-T1/T2 (2026-06-12, W3+ S7): install the `?unifiedTransition=on`

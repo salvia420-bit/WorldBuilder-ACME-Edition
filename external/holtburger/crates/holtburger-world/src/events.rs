@@ -107,11 +107,18 @@ pub enum WorldEvent {
     ///
     /// `target_exists` is computed at emit time (`state.entities` lookup
     /// for the MoveToObject / TurnToObject target — core cannot see
-    /// world entities at the consumer layer).
+    /// world entities at the consumer layer). A3-D3 driver (M4.3):
+    /// `object_radius`/`object_height` are the case-6 target physics
+    /// dims, resolved at the SAME emit site (retail
+    /// `CPhysicsObj::MoveToObject` reads
+    /// `CPartArray::GetRadius/GetHeight` with 0.0 fallback,
+    /// acclient.c:319808-319817) — additive fields, 0.0-safe.
     EntityMovementEvent {
         guid: Guid,
         data: Box<MovementEventData>,
         target_exists: bool,
+        object_radius: f32,
+        object_height: f32,
     },
     RuntimeBodyChanged {
         body_id: SpatialBodyId,
@@ -218,7 +225,16 @@ pub enum WorldEvent {
     },
     // Keep the full protocol payload for now: a future 3D client will likely need
     // richer server-authored movement detail than the current core/TUI consumer.
-    SelfServerControlledMotion(Box<MovementEventData>),
+    // A3-D3 driver (M4.3): the local lane now carries a REAL
+    // `target_exists` + the case-6 target dims (closing the documented
+    // `false` placeholder the registry consumer used to substitute),
+    // resolved at the emit site exactly like `EntityMovementEvent`'s.
+    SelfServerControlledMotion {
+        data: Box<MovementEventData>,
+        target_exists: bool,
+        object_radius: f32,
+        object_height: f32,
+    },
     ForcedReposition {
         guid: Guid,
         pos: WorldPosition,

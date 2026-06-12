@@ -9,9 +9,11 @@ use super::common::{
 };
 use super::jump_charge::{JumpChargeClock, JumpOutcome, JumpRefusal};
 use super::motion_interp::{
-    MotionInterp, interpreted_velocity_for_state, leave_ground_velocity_for_state,
+    MotionInterp, MotionSideEffects, interpreted_velocity_for_state,
+    leave_ground_velocity_for_state,
 };
 use super::motion_table_manager::{MotionTableEvent, MotionTableManager};
+use super::move_to::{MoveToSteer, MoveToView, USE_MOVETO_DRIVER};
 use super::movement_manager::{MovementManager, USE_UNPACK_MOVEMENT_SEMANTICS};
 use crate::client::movement_types::{
     AutonomousDriveIntent, ForwardLocomotion, MotionState, MotionStyle, MovementPacketMetadata,
@@ -26,7 +28,8 @@ use holtburger_protocol::messages::movement::{InterpretedMotionCommand, MotionIt
 use holtburger_session::Session;
 use holtburger_world::SolveBodyInput;
 use holtburger_world::spatial::{
-    InterpStep, LocalDriveControl, LocalDriveGait, LocalStickyStep, USE_STICKY_MANAGER,
+    InterpStep, LocalDriveControl, LocalDriveGait, LocalStickyStep, PLAYER_CAPSULE_HEIGHT,
+    PLAYER_CAPSULE_RADIUS, USE_STICKY_MANAGER,
 };
 use holtburger_world::{SpatialBodyId, WorldEvent, WorldState};
 use std::collections::HashMap;
@@ -92,9 +95,7 @@ const USE_SETUP_STEP_HEIGHTS: bool = false;
 /// A7-R1 — the effective step-up cap for the local player (see
 /// [`USE_SETUP_STEP_HEIGHTS`]).
 fn player_step_up_height(world: &WorldState) -> f32 {
-    if USE_SETUP_STEP_HEIGHTS
-        && let Some(height) = world.player.step_up_height
-    {
+    if USE_SETUP_STEP_HEIGHTS && let Some(height) = world.player.step_up_height {
         height
     } else {
         holtburger_world::spatial::PLAYER_STEP_UP_HEIGHT
@@ -103,9 +104,7 @@ fn player_step_up_height(world: &WorldState) -> f32 {
 
 /// A7-R1 — the effective step-down cap for the local player.
 fn player_step_down_height(world: &WorldState) -> f32 {
-    if USE_SETUP_STEP_HEIGHTS
-        && let Some(height) = world.player.step_down_height
-    {
+    if USE_SETUP_STEP_HEIGHTS && let Some(height) = world.player.step_down_height {
         height
     } else {
         holtburger_world::spatial::PLAYER_STEP_DOWN_HEIGHT
@@ -717,11 +716,9 @@ fn edge_slide_refused_step_up(
             // branch instead, which we do NOT implement here.
             let is_wall = normal.z < holtburger_world::spatial::FLOOR_Z;
             if is_wall {
-                if let Some(seam_slide) =
-                    holtburger_world::spatial::cliff_slide_residual_along_seam(
-                        residual, normal, n_last,
-                    )
-                {
+                if let Some(seam_slide) = holtburger_world::spatial::cliff_slide_residual_along_seam(
+                    residual, normal, n_last,
+                ) {
                     return lateral_clamped + seam_slide;
                 }
                 // `None` ⇒ near-parallel planes (degenerate seam):
@@ -751,9 +748,8 @@ fn edge_slide_refused_step_up(
 /// strong XY component, but guard anyway) or a head-on approach whose
 /// tangent component is negligible (the hard stop is then correct).
 fn terrain_contour_slide(lateral: Vector3, terrain_normal: Vector3) -> Option<Vector3> {
-    let n_xy_len = (terrain_normal.x * terrain_normal.x
-        + terrain_normal.y * terrain_normal.y)
-        .sqrt();
+    let n_xy_len =
+        (terrain_normal.x * terrain_normal.x + terrain_normal.y * terrain_normal.y).sqrt();
     if n_xy_len < 1e-6 {
         return None;
     }
@@ -762,8 +758,7 @@ fn terrain_contour_slide(lateral: Vector3, terrain_normal: Vector3) -> Option<Ve
         y: terrain_normal.y / n_xy_len,
         z: 0.0,
     };
-    let slide =
-        holtburger_world::spatial::slide_residual_along_wall_tangent(lateral, contour_wall);
+    let slide = holtburger_world::spatial::slide_residual_along_wall_tangent(lateral, contour_wall);
     if slide.x * slide.x + slide.y * slide.y < 1e-10 {
         return None;
     }
@@ -972,6 +967,16 @@ pub(crate) struct MovementSystem {
     /// bounded; only ever set under
     /// [`holtburger_world::spatial::USE_STICKY_MANAGER`].
     sticky_timeout_pending: std::cell::Cell<bool>,
+    /// A3-D3 driver (M4.5) — manual-cancel parity flag: a NON-IDLE
+    /// `ManualSet` ingested this tick owes the local MoveTo driver a
+    /// `CancelMoveTo(0x36)` (retail raw input cancels MoveTo:
+    /// `CMotionInterp::apply_raw_movement` →
+    /// `CPhysicsObj::cancel_moveto` →
+    /// `MovementManager::CancelMoveTo(0x36)`, acclient.c:317421-317427
+    /// → :339240-339246). Set in [`Self::ingest_drive_command`] (no
+    /// world/guid access there), consumed by the
+    /// [`USE_MOVETO_DRIVER`] shim. Inert without an active directive.
+    manual_moveto_cancel_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1069,6 +1074,7 @@ impl MovementSystem {
             unified_transition_runtime: false,
             jump_charge: JumpChargeClock::new(),
             sticky_timeout_pending: std::cell::Cell::new(false),
+            manual_moveto_cancel_pending: false,
         }
     }
 
@@ -1180,9 +1186,7 @@ impl MovementSystem {
         let burden = world.player_burden().unwrap_or(0.5);
         // Stamina cost (ACE non-PK formula — PK gate needs
         // `PKTimerActive`, untracked; default non-PK).
-        let cost = holtburger_world::player::PlayerState::jump_stamina_cost(
-            extent, burden, false,
-        );
+        let cost = holtburger_world::player::PlayerState::jump_stamina_cost(extent, burden, false);
         // ACE's active behavior on empty stamina: jumpSkill treated as
         // 0 in InqJumpVelocity → min-clamp hop, so an exhausted player
         // still pops a tiny jump.
@@ -1217,22 +1221,23 @@ impl MovementSystem {
         // runtime kinematics fallback. begin_jump deliberately leaves
         // current_planar_velocity untouched, so install the intent
         // there for the airborne trajectory lock.
-        let lateral_velocity = if charged_long_jump
-            && let Some(intent_v) = self.manual_intent_velocity(world)
-        {
-            world.player.current_planar_velocity = Vector3::new(intent_v.x, intent_v.y, 0.0);
-            Vector3::new(intent_v.x, intent_v.y, vz)
-        } else {
-            world
-                .local_player_runtime_kinematics()
-                .map(|(_, v, _)| Vector3::new(v.x, v.y, vz))
-                .unwrap_or(Vector3::new(0.0, 0.0, vz))
-        };
+        let lateral_velocity =
+            if charged_long_jump && let Some(intent_v) = self.manual_intent_velocity(world) {
+                world.player.current_planar_velocity = Vector3::new(intent_v.x, intent_v.y, 0.0);
+                Vector3::new(intent_v.x, intent_v.y, vz)
+            } else {
+                world
+                    .local_player_runtime_kinematics()
+                    .map(|(_, v, _)| Vector3::new(v.x, v.y, vz))
+                    .unwrap_or(Vector3::new(0.0, 0.0, vz))
+            };
 
         // The single pack ctor + the one counter-stamped funnel
         // (retail acclient.c:408180-408193).
         let data = build_jump(world, extent, lateral_velocity);
-        session.send_action(GameAction::Jump(Box::new(data))).await?;
+        session
+            .send_action(GameAction::Jump(Box::new(data)))
+            .await?;
 
         Ok(JumpOutcome::Jumped {
             extent,
@@ -1318,6 +1323,13 @@ impl MovementSystem {
     fn ingest_drive_command(&mut self, command: QueuedDriveCommand, now: Instant) {
         match command {
             QueuedDriveCommand::ManualSet(state) => {
+                // A3-D3 driver M4.5 — non-idle manual input cancels an
+                // active MoveTo (retail apply_raw_movement →
+                // cancel_moveto(0x36), acclient.c:317421-317427 →
+                // :339240-339246). Flag-consumed by the gated shim.
+                if USE_MOVETO_DRIVER && !(state.is_locomotion_idle() && state.turning.is_none()) {
+                    self.manual_moveto_cancel_pending = true;
+                }
                 self.active_drive = Some(ActiveDriveState::manual(state, None));
             }
             QueuedDriveCommand::ManualPulse { state, duration } => {
@@ -1387,8 +1399,7 @@ impl MovementSystem {
         // The diagonal-composition gain applies to manual input only; if
         // an autonomous routine later needs strafe semantics it can
         // populate `state.sidestep` directly.
-        let forward =
-            (planar_delta.length_squared() > 1e-6).then_some(ForwardLocomotion::Forward);
+        let forward = (planar_delta.length_squared() > 1e-6).then_some(ForwardLocomotion::Forward);
         let desired_heading = intent.desired_heading.map(normalize_heading).or_else(|| {
             (planar_delta.length_squared() > 1e-6)
                 .then(|| Vector3::zero().heading_to(&planar_delta))
@@ -1520,6 +1531,19 @@ impl MovementSystem {
         }
         self.suppress_frontend_autonomous_once = false;
 
+        // A3-D3 driver (M4) — the MoveToManager per-frame pump, LOCAL
+        // player only, gated default-off. Runs AFTER drive ingestion +
+        // the A4-Q1 pump (the retail UseTime cadence) and BEFORE the
+        // active-drive execution so a steering re-supply lands this
+        // same tick through the EXISTING autonomous-drive lane
+        // (`execute_autonomous_drive_intent` — zero new send sites,
+        // the A13 boundary; expiry per tick matches the re-supply).
+        let moveto_stop_requested = if USE_MOVETO_DRIVER {
+            self.drive_local_moveto(now, world)
+        } else {
+            false
+        };
+
         let mut events = Vec::new();
         if let Some(pose) = self.pending_arrival_pose.take() {
             events.extend(
@@ -1564,14 +1588,22 @@ impl MovementSystem {
                     self.execute_autonomous_drive_intent(intent, world, session, now)
                         .await?,
                 ),
-                None if had_active_manual_motion || explicit_stop_requested => {
+                None if had_active_manual_motion
+                    || explicit_stop_requested
+                    || moveto_stop_requested =>
+                {
+                    // A3-D3 driver: arrival/cancel rides the EXISTING
+                    // stop edge (`execute_stop_at` — ACE must see the
+                    // stop; no hand-rolled sender, spec M4.2).
                     events.extend(
                         self.execute_stop_at(
                             now,
                             world,
                             session,
                             MovementPacketMetadata::default(),
-                            had_active_manual_motion || explicit_stop_requested,
+                            had_active_manual_motion
+                                || explicit_stop_requested
+                                || moveto_stop_requested,
                         )
                         .await?,
                     );
@@ -1590,6 +1622,168 @@ impl MovementSystem {
             .await?;
 
         Ok(events)
+    }
+
+    /// A3-D3 driver (M4.1/M4.2) — one MoveTo driver frame for the
+    /// LOCAL player. Returns `true` when a stop edge is owed this tick
+    /// (arrival / cancel with no replacement steering). Only reachable
+    /// under [`USE_MOVETO_DRIVER`].
+    ///
+    /// View sources (spec M4.1):
+    /// - contact: `!world.player.is_airborne` — the same bit the wire
+    ///   `last_contact` byte reads (`on_contact` site below; spec §7
+    ///   Q3 fallback, retail `transient_state & 1` acclient.c:346024);
+    /// - pose: `local_player_runtime_pose` (the autonomous lane's own
+    ///   pose source);
+    /// - target pose: per-tick entity lookup (the client-side
+    ///   `HandleUpdateTarget` cadence); target gone →
+    ///   `cancel_moveto(0x37)` (acclient.c:346086);
+    /// - dims: `PLAYER_CAPSULE_RADIUS`/`PLAYER_CAPSULE_HEIGHT`
+    ///   (cylinder-metric self half, acclient.c:344877-344878);
+    /// - `motions_pending`: the registry manager's own lattice;
+    /// - `is_interpolating`: the local body's position-manager queue
+    ///   (A2 lane).
+    fn drive_local_moveto(&mut self, now: Instant, world: &mut WorldState) -> bool {
+        let guid = world.player.guid;
+        if guid == Guid::NULL {
+            return false;
+        }
+        let manual_cancel = std::mem::take(&mut self.manual_moveto_cancel_pending);
+        let Some(manager) = self.movement_managers.get_mut(&guid) else {
+            return false;
+        };
+        if !manager.is_moveto_active() {
+            return false;
+        }
+        let on_contact = !world.player.is_airborne;
+        let mut effects = MotionSideEffects::default();
+
+        // M4.5 manual-cancel parity: a non-idle ManualSet ingested this
+        // tick, OR a held non-idle manual drive, wins over the driver —
+        // the manual lane owns the wire; no stop edge here.
+        let manual_active = matches!(
+            self.active_drive.map(|active| active.intent),
+            Some(ActiveDriveIntent::Manual(state))
+                if !(state.is_locomotion_idle() && state.turning.is_none())
+        );
+        if manual_cancel || manual_active {
+            let _ = manager.cancel_moveto_with_effects(0x36, on_contact, &mut effects);
+            return false;
+        }
+
+        let Some(self_pos) = world.local_player_runtime_pose() else {
+            return false;
+        };
+
+        // Per-tick target refresh — the HandleUpdateTarget cadence;
+        // a despawned target cancels 0x37 (acclient.c:346086) and owes
+        // the stop edge.
+        let target_pos = match manager.moveto_directive_target() {
+            Some(target) => match world.entities.get(target) {
+                Some(entity) => Some(entity.position),
+                None => {
+                    let out = manager.cancel_moveto_with_effects(0x37, on_contact, &mut effects);
+                    return out.stop_completely;
+                }
+            },
+            None => None,
+        };
+
+        let view = MoveToView {
+            on_walkable_contact: on_contact,
+            self_pos,
+            self_radius: PLAYER_CAPSULE_RADIUS,
+            self_height: PLAYER_CAPSULE_HEIGHT,
+            target_pos,
+            motions_pending: manager.moveto_motions_pending(),
+            is_interpolating: world.scene.local_player_is_interpolating(),
+            now,
+        };
+        let out = manager.use_time_moveto(&view, &mut effects);
+
+        // Output translation (spec M4.2) — every edge rides an EXISTING
+        // path; the driver never writes a position and never sends.
+        if let Some(heading_rad) = out.set_heading {
+            // Retail snaps exactly at turn arrival (acclient.c:345746)
+            // — the existing snap path (`execute_snap_facing`).
+            self.pending_snap_facing = Some(heading_rad);
+        }
+        if let Some((target, radius, _height)) = out.stick_to {
+            // Sticky-bit arrival → the S9 sticky owner. OQ2 fallback:
+            // landed `stick_to(target, target_radius)` takes radius
+            // only (position_manager.rs) — the retail height param
+            // (acclient.c:345565) is DROPPED here; extending the S9
+            // signature is S9's call (spec §7 Q2).
+            if USE_STICKY_MANAGER {
+                world.scene.stick_local_player_to(target, radius);
+            }
+        }
+        match out.steer {
+            Some(MoveToSteer::Walk { target, away, run }) => {
+                let to_target = target.global_coords() - self_pos.global_coords();
+                let planar = Vector3::new(to_target.x, to_target.y, 0.0);
+                if planar.length_squared() > 1e-6 {
+                    let direction = planar.normalize();
+                    let heading = Vector3::zero().heading_to(&planar);
+                    // Unit-forward toward the target (spec M4.2);
+                    // negated when moving away — the away walk faces
+                    // away from the target (the 180° desired-heading
+                    // table, acclient.c:346224-346239). Realized speed
+                    // is the lane/integrator's policy (spec §7 Q4
+                    // spirit) — eye-test item.
+                    let (delta, desired_heading) = if away {
+                        (
+                            direction * -1.0,
+                            normalize_heading(heading + std::f32::consts::PI),
+                        )
+                    } else {
+                        (direction, heading)
+                    };
+                    self.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+                        desired_world_delta: delta,
+                        desired_heading: Some(desired_heading),
+                        target_hint: (!away).then_some(target),
+                        gait: if run {
+                            crate::client::movement_types::Gait::Run
+                        } else {
+                            crate::client::movement_types::Gait::Walk
+                        },
+                        force_grounded: false,
+                    }));
+                }
+                false
+            }
+            Some(MoveToSteer::Turn { heading_deg }) => {
+                // Turn-in-place: zero delta + desired heading (the
+                // lane's turning realization). Turn omega magnitude =
+                // integrator policy, NOT re-derived here (spec §7 Q4).
+                self.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+                    desired_world_delta: Vector3::zero(),
+                    desired_heading: Some(normalize_heading(heading_deg.to_radians())),
+                    target_hint: None,
+                    gait: crate::client::movement_types::Gait::Walk,
+                    force_grounded: false,
+                }));
+                false
+            }
+            None => out.stop_completely,
+        }
+    }
+
+    /// A3-D3 consumer surface (M4.4 / S10 A.3) — the local player's
+    /// MoveTo activity, read from the registry manager.
+    pub(crate) fn moveto_is_active(&self, guid: Guid) -> bool {
+        self.movement_managers
+            .get(&guid)
+            .is_some_and(|manager| manager.is_moveto_active())
+    }
+
+    /// A3-D3 consumer surface (M4.4 / S10 A.4) — read-clear completion
+    /// latch (`Some(0)` arrival; 0x36/0x3D/0x37/0x38/8 failures).
+    pub(crate) fn take_moveto_completion(&mut self, guid: Guid) -> Option<u32> {
+        self.movement_managers
+            .get_mut(&guid)
+            .and_then(|manager| manager.take_moveto_completion())
     }
 
     pub(crate) fn current_local_drive_control(
@@ -1695,11 +1889,7 @@ impl MovementSystem {
     /// giant step. Gated behind
     /// [`USE_QUANTUM_SUBDIVIDED_INTEGRATION`] (default on); when off,
     /// the old single-step path is preserved for A/B.
-    pub(crate) fn advance_local_pose_for_manual_drive(
-        &self,
-        world: &mut WorldState,
-        dt: Duration,
-    ) {
+    pub(crate) fn advance_local_pose_for_manual_drive(&self, world: &mut WorldState, dt: Duration) {
         if !USE_QUANTUM_SUBDIVIDED_INTEGRATION {
             // Legacy single-step path (pre-2026-06-01). Retained
             // behind the flag for A/B comparison of the subdivided
@@ -1748,11 +1938,7 @@ impl MovementSystem {
     /// (friction smoothing, lateral collision clamp, airborne gravity
     /// arc, floor-Z snap, rotation prediction) advanced by exactly one
     /// quantum.
-    fn advance_local_pose_for_manual_drive_slice(
-        &self,
-        world: &mut WorldState,
-        dt: Duration,
-    ) {
+    fn advance_local_pose_for_manual_drive_slice(&self, world: &mut WorldState, dt: Duration) {
         // A6-T1 (W3+ S7) — under the unified-transition gate the slice
         // routes through the retail substep pipeline; the legacy chain
         // below runs UNTOUCHED when the gate is off (zero code motion).
@@ -1889,8 +2075,8 @@ impl MovementSystem {
             // — an instant stop, matching retail (no skid for self-powered
             // locomotion).
             let mag_sq = v.x * v.x + v.y * v.y;
-            let threshold_sq = PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC
-                * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC;
+            let threshold_sq =
+                PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC;
             if mag_sq < threshold_sq {
                 v.x = 0.0;
                 v.y = 0.0;
@@ -1965,7 +2151,14 @@ impl MovementSystem {
             // component the projection then removes is what reduces the
             // horizontal speed.
             let velocity_mag2 = v.x * v.x + v.y * v.y;
-            calc_friction(&mut v, contact_normal, velocity_mag2, friction, sledding, dt_s);
+            calc_friction(
+                &mut v,
+                contact_normal,
+                velocity_mag2,
+                friction,
+                sledding,
+                dt_s,
+            );
             // Our velocity store is planar by contract — Z is owned by the
             // jump/fall arc + floor-Z snap below, not by this lateral
             // smoother. On a sloped contact normal the projection above
@@ -1980,18 +2173,15 @@ impl MovementSystem {
             // game-feel addition to make direction changes ramp through
             // zero. The user flagged this constant as "tune-later".
             let accel_step = PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ * dt_s;
-            for (cur, tgt) in [
-                (&mut v.x, target_velocity.x),
-                (&mut v.y, target_velocity.y),
-            ] {
+            for (cur, tgt) in [(&mut v.x, target_velocity.x), (&mut v.y, target_velocity.y)] {
                 let delta = tgt - *cur;
                 let clamped = delta.clamp(-accel_step, accel_step);
                 *cur += clamped;
             }
             // small-velocity snap (PhysicsObj.cpp:589-592).
             let mag_sq = v.x * v.x + v.y * v.y;
-            let threshold_sq = PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC
-                * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC;
+            let threshold_sq =
+                PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC;
             // The snap fires only when both the target and the current
             // velocity are below the threshold — otherwise the player
             // is actively accelerating from rest, and snapping would
@@ -2086,10 +2276,9 @@ impl MovementSystem {
         // reach the doorway so this flip can fire next tick.
         if USE_LOCAL_ENVCELL_ENTRY
             && pose.is_indoors()
-            && let Some(outdoor) = world.scene.exited_envcell_to_outdoor(
-                &pose,
-                holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
-            )
+            && let Some(outdoor) = world
+                .scene
+                .exited_envcell_to_outdoor(&pose, holtburger_world::spatial::PLAYER_CAPSULE_RADIUS)
         {
             pose.landblock_id = Guid(outdoor);
         }
@@ -2145,8 +2334,7 @@ impl MovementSystem {
             // case). Empty when no doors are open near the player; the
             // sweep no-ops on empty exclusion via the existing
             // `exclusion_aabbs.is_empty()` short-circuit.
-            let exclusion_aabbs =
-                world.scene.open_door_exclusion_aabbs_near(&pose);
+            let exclusion_aabbs = world.scene.open_door_exclusion_aabbs_near(&pose);
             if triangles.is_empty() && cell_aabb_opt.is_none() {
                 Vector3::zero()
             } else {
@@ -2368,8 +2556,7 @@ impl MovementSystem {
                         // shape as the building clamp's slide pass.
                         let delta = lateral_clamped;
                         let backoff = 1e-3;
-                        let safe_t =
-                            (hit.t - backoff / delta.length().max(1e-6)).max(0.0);
+                        let safe_t = (hit.t - backoff / delta.length().max(1e-6)).max(0.0);
                         let stopped_delta = delta * safe_t;
                         let remaining = delta * (1.0 - safe_t);
                         let into_normal = remaining.dot(&hit.normal);
@@ -2395,8 +2582,7 @@ impl MovementSystem {
                                 ) {
                                     Some(slide_hit) => {
                                         slide
-                                            * (slide_hit.t
-                                                - backoff / slide.length().max(1e-6))
+                                            * (slide_hit.t - backoff / slide.length().max(1e-6))
                                                 .max(0.0)
                                     }
                                     None => slide,
@@ -2515,8 +2701,7 @@ impl MovementSystem {
                 .filter(|e| {
                     e.guid != self_guid
                         && e.is_collidable()
-                        && !(SKIP_PARENTED_ENTITY_COLLISION
-                            && e.physics_parent_id.is_some())
+                        && !(SKIP_PARENTED_ENTITY_COLLISION && e.physics_parent_id.is_some())
                 })
                 .filter_map(|e| {
                     let g = e.position.global_coords();
@@ -2876,8 +3061,7 @@ impl MovementSystem {
                             world.player.land();
                         }
                     }
-                } else if USE_WATER_COLLISION
-                    && world.is_entirely_water_cell_at(global.x, global.y)
+                } else if USE_WATER_COLLISION && world.is_entirely_water_cell_at(global.x, global.y)
                 {
                     // F4-4 (bughunt 2026-06-09) — fully-water cell ahead. Retail
                     // collides on EntirelyWater land cells for walkers (ACE
@@ -2919,23 +3103,19 @@ impl MovementSystem {
                     // USE_TERRAIN_WALKABLE_GATE flag — this branch only runs
                     // with the gate on.
                     let mut slid = false;
-                    if let Some(slide) = world
-                        .terrain_normal_at(global.x, global.y)
-                        .and_then(|n| {
-                            terrain_contour_slide(
-                                Vector3 {
-                                    x: pose.coords.x - entry_local_xy.0,
-                                    y: pose.coords.y - entry_local_xy.1,
-                                    z: 0.0,
-                                },
-                                n,
-                            )
-                        })
-                    {
+                    if let Some(slide) = world.terrain_normal_at(global.x, global.y).and_then(|n| {
+                        terrain_contour_slide(
+                            Vector3 {
+                                x: pose.coords.x - entry_local_xy.0,
+                                y: pose.coords.y - entry_local_xy.1,
+                                z: 0.0,
+                            },
+                            n,
+                        )
+                    }) {
                         // Local deltas equal global deltas (the landblock
                         // offset is a pure translation).
-                        let cand_local =
-                            (entry_local_xy.0 + slide.x, entry_local_xy.1 + slide.y);
+                        let cand_local = (entry_local_xy.0 + slide.x, entry_local_xy.1 + slide.y);
                         let cand_global = (
                             global.x + (cand_local.0 - pose.coords.x),
                             global.y + (cand_local.1 - pose.coords.y),
@@ -3032,9 +3212,7 @@ impl MovementSystem {
                             holtburger_world::spatial::step_down_resolve(
                                 pose.coords.z,
                                 z,
-                                world
-                                    .terrain_normal_at(global.x, global.y)
-                                    .map(|n| n.z),
+                                world.terrain_normal_at(global.x, global.y).map(|n| n.z),
                                 player_step_down_height(world),
                                 holtburger_world::spatial::FLOOR_Z,
                             )
@@ -3058,9 +3236,7 @@ impl MovementSystem {
                                 world.player.begin_fall();
                                 // A3-D3-5: retail leave-ground launch
                                 // velocity (default-off no-op).
-                                stamp_leave_ground_velocity(
-                                    world, heading, state, &capabilities,
-                                );
+                                stamp_leave_ground_velocity(world, heading, state, &capabilities);
                                 // Leave Z alone — gravity drops us next tick.
                                 // Genuine ledge fall resolved — clear the
                                 // backup pose.
@@ -3231,9 +3407,7 @@ impl MovementSystem {
                                 world.player.begin_fall();
                                 // A3-D3-5: retail leave-ground launch
                                 // velocity (default-off no-op).
-                                stamp_leave_ground_velocity(
-                                    world, heading, state, &capabilities,
-                                );
+                                stamp_leave_ground_velocity(world, heading, state, &capabilities);
                                 // Leave Z alone — gravity drops us next tick.
                             }
                         }
@@ -3274,16 +3448,13 @@ impl MovementSystem {
             // practice — AC ceilings are usually higher than the
             // player ever reaches in a normal walk).
             if let Some(aabb) = cell_aabb {
-                let ceiling_z =
-                    aabb.max.z - holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT;
+                let ceiling_z = aabb.max.z - holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT;
                 // `floor_min` keeps the ceiling clamp from shoving the
                 // player below the floor. Prefer the real per-poly
                 // floor; otherwise the AABB lower bound. Matches the
                 // legacy `floor_z.unwrap_or(aabb.min.z + 0.005)` (the
                 // raw floor value, no headroom, exactly as before).
-                let floor_min = poly_floor_z
-                    .or(aabb_floor_z)
-                    .unwrap_or(aabb.min.z + 0.005);
+                let floor_min = poly_floor_z.or(aabb_floor_z).unwrap_or(aabb.min.z + 0.005);
                 if pose.coords.z > ceiling_z {
                     pose.coords.z = ceiling_z.max(floor_min);
                 }
@@ -3352,11 +3523,11 @@ impl MovementSystem {
         // easing on touchdown. (See the Wave-1 adversarial review finding.)
         let pose = if on_contact {
             let snapped_z = pose.coords.z;
-            match world.scene.step_force_position_interpolation(
-                body_id, dt_s, max_speed, on_contact,
-            ) {
-                InterpStep::Progressed { mut pose }
-                | InterpStep::Completed { mut pose } => {
+            match world
+                .scene
+                .step_force_position_interpolation(body_id, dt_s, max_speed, on_contact)
+            {
+                InterpStep::Progressed { mut pose } | InterpStep::Completed { mut pose } => {
                     pose.coords.z = snapped_z;
                     pose
                 }
@@ -3498,8 +3669,8 @@ impl MovementSystem {
             let mut v = target_velocity;
             v.z = 0.0;
             let mag_sq = v.x * v.x + v.y * v.y;
-            let threshold_sq = PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC
-                * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC;
+            let threshold_sq =
+                PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC;
             if mag_sq < threshold_sq {
                 v.x = 0.0;
                 v.y = 0.0;
@@ -3651,11 +3822,11 @@ impl MovementSystem {
         let max_speed = capabilities.resolved_manual_run_speed() * 2.0;
         let pose = if on_contact {
             let snapped_z = pose.coords.z;
-            match world.scene.step_force_position_interpolation(
-                body_id, dt_s, max_speed, on_contact,
-            ) {
-                InterpStep::Progressed { mut pose }
-                | InterpStep::Completed { mut pose } => {
+            match world
+                .scene
+                .step_force_position_interpolation(body_id, dt_s, max_speed, on_contact)
+            {
+                InterpStep::Progressed { mut pose } | InterpStep::Completed { mut pose } => {
                     pose.coords.z = snapped_z;
                     pose
                 }
@@ -3763,10 +3934,9 @@ impl MovementSystem {
                 match world.resolve_self_movement_capabilities() {
                     // G-7 / F1-6 — StandingLongJump root mirrors the manual
                     // slice above: zero locomotion, turning allowed.
-                    Ok(capabilities) if world.player.standing_long_jump_charge => (
-                        Vector3::zero(),
-                        local_omega_for_state(state, &capabilities),
-                    ),
+                    Ok(capabilities) if world.player.standing_long_jump_charge => {
+                        (Vector3::zero(), local_omega_for_state(state, &capabilities))
+                    }
                     Ok(capabilities) => (
                         local_velocity_for_state(heading, state, &capabilities),
                         local_omega_for_state(state, &capabilities),
@@ -3903,7 +4073,7 @@ impl MovementSystem {
         use holtburger_world::WorldEvent;
         for event in events {
             match event {
-                WorldEvent::SelfServerControlledMotion(data) => {
+                WorldEvent::SelfServerControlledMotion { data, .. } => {
                     self.record_server_control_sequence(data.server_control_sequence);
                 }
                 WorldEvent::SelfUpdatePosition {
@@ -3946,15 +4116,12 @@ impl MovementSystem {
     ///   (handlers/player.rs:96-107) so an ACE echo of the player's own
     ///   autonomous motion never runs the preamble (spec §3a.2, OPEN
     ///   QUESTION 1: a deliberate, documented deviation from retail's
-    ///   unconditional preamble). The local event carries no
-    ///   `target_exists`; `false` is correct enough for the inert D3-2
-    ///   directive store (no driver consumes it yet) — revisit when the
-    ///   Stage-3 driver lands.
+    ///   unconditional preamble). A3-D3 driver (M4.3): the local event
+    ///   now carries the REAL `target_exists` + case-6 target dims
+    ///   resolved at the emit site (the old `false` placeholder is
+    ///   closed).
     /// - `EntityDespawned` — registry prune.
-    pub(crate) fn apply_movement_world_events(
-        &mut self,
-        events: &[holtburger_world::WorldEvent],
-    ) {
+    pub(crate) fn apply_movement_world_events(&mut self, events: &[holtburger_world::WorldEvent]) {
         if !USE_UNPACK_MOVEMENT_SEMANTICS {
             return;
         }
@@ -3975,13 +4142,33 @@ impl MovementSystem {
                     guid,
                     data,
                     target_exists,
+                    object_radius,
+                    object_height,
                 } => {
                     let manager = self.movement_managers.entry(*guid).or_default();
-                    let _effects = manager.apply_unpacked_movement(data, *target_exists);
+                    let _effects = manager.apply_unpacked_movement(
+                        data,
+                        *target_exists,
+                        *object_radius,
+                        *object_height,
+                    );
                 }
-                WorldEvent::SelfServerControlledMotion(data) => {
+                WorldEvent::SelfServerControlledMotion {
+                    data,
+                    target_exists,
+                    object_radius,
+                    object_height,
+                } => {
+                    // A3-D3 driver (M4.3): the local lane now carries
+                    // the REAL target_exists + dims (the documented
+                    // `false` placeholder is closed).
                     let manager = self.movement_managers.entry(data.guid).or_default();
-                    let _effects = manager.apply_unpacked_movement(data, false);
+                    let _effects = manager.apply_unpacked_movement(
+                        data,
+                        *target_exists,
+                        *object_radius,
+                        *object_height,
+                    );
                 }
                 WorldEvent::EntityDespawned(guid) => {
                     self.movement_managers.remove(guid);
