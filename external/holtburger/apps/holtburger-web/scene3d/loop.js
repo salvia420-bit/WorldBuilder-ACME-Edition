@@ -1670,6 +1670,10 @@ function toMeta(upd) {
     physicsTranslucency: +(upd.physicsTranslucency ?? 0),
     paletteId: (upd.paletteId >>> 0),
     mtableId: (upd.mtableId >>> 0),
+    // A9-Stage1 (2026-06-12): wire placement id (PhysicsDesc
+    // .animation_frame; Spawn only). entities.js threads it into the
+    // rest-pose placement chain under ?placementId=on.
+    placementId: (upd.placementId ?? 0) >>> 0,
     motionCommand: (upd.motionCommand ?? 0) >>> 0,
     motionStance: (upd.motionStance ?? 0) >>> 0,
     // F3-1 (bughunt 2026-06-09): projectile launch velocity (AC world frame,

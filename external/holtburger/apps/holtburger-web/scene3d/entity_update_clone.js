@@ -98,6 +98,10 @@ export function cloneEntityUpdate(upd, opts) {
     iconId: (upd.iconId ?? 0) >>> 0,
     paletteId: (upd.paletteId ?? 0) >>> 0,
     mtableId: (upd.mtableId ?? 0) >>> 0,
+    // A9-Stage1 (2026-06-12): wire placement id (PhysicsDesc
+    // .animation_frame; Spawn only, 0 = absent). Consumed by the
+    // ?placementId=on rest-pose chain in entities.js.
+    placementId: (upd.placementId ?? 0) >>> 0,
     // Portal destination text — populated on a kind=3 META_REFRESH for
     // portals; empty otherwise. (2D path only consumer today.)
     portalDestination: upd.portalDestination || "",

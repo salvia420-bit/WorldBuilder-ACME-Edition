@@ -106,6 +106,35 @@ fn parse_unified_tick_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "unifiedTick=on")
 }
 
+/// A9-Stage1 (2026-06-12, unification survey): parse `?placementId=on`
+/// (or `&placementId=on`). Same shape as `parse_unified_tick_flag`.
+/// When on, the static placement-frame resolution follows RETAIL order
+/// — wire `PhysicsDesc.animation_frame` → `0x65` (Resting, the
+/// `InitObjectEnd` default, acclient.c:317303) → `0` (the
+/// `CPartArray::SetPlacementFrame` LABEL_4 fallback, acclient.c:326845)
+/// → first — instead of the legacy `0 → 1 → first`. Default OFF =
+/// legacy order, byte-identical.
+#[cfg(target_arch = "wasm32")]
+fn parse_placement_id_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "placementId=on")
+}
+
+/// A9-Stage1: the `?placementId=` gate, parsed once. Non-wasm builds
+/// (native tests/CLI) always resolve legacy order; the retail chain is
+/// unit-tested directly via `resolve_static_placement_frame`.
+fn placement_id_flag() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| parse_placement_id_flag(&js_location_search()))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
+
 /// A8-M2 (2026-06-11, unification survey): parse `?maintPrune=on`
 /// (or `&maintPrune=on`). Same shape as `parse_unified_tick_flag`.
 /// When on (AND `?unifiedTick=on` — the maint sweep only runs inside
@@ -442,7 +471,11 @@ pub fn build_info() -> String {
 // (G-7 standing long jump). index.html's EXPECTED stays at 1 until those
 // flags integrate always-on (the JS consumers are flag-gated +
 // typeof-guarded, so a v1 pkg soft-degrades to the prior behavior).
-pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 2;
+// v3 (2026-06-12, A9-Stage1): + trailing `placement_id` arg on
+// `fetchEntityAnimationKeyframes` + `EntityUpdate.placementId` getter.
+// index.html's EXPECTED stays at 1 (JS consumer is ?placementId=-gated;
+// older pkg coerces the missing getter to undefined → 0).
+pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 3;
 
 /// Returns the export-surface manifest version (F18-2). JS asserts this is
 /// `>=` its compiled-in expectation at boot; a mismatch — or this function
@@ -4648,6 +4681,7 @@ fn triangulate_setup_model_at_frame<S: holtburger_dat::ResourceSource + ?Sized>(
         texture_changes,
         mtable_override,
         pose_override,
+        None,
         |_pi, gfx, offset, rot, swaps| {
             append_gfx_tris_with_tex_swaps(tris, gfx, offset, rot, swaps);
         },
@@ -4680,6 +4714,7 @@ fn triangulate_setup_model_per_part<S: holtburger_dat::ResourceSource + ?Sized>(
         setup_id,
         model_changes,
         texture_changes,
+        None,
         None,
         None,
         |pi, gfx, offset, rot, swaps| {
@@ -4722,6 +4757,10 @@ fn triangulate_setup_model_per_part_with_rest_pose<
     setup_id: u32,
     model_changes: &[(u8, u32)],
     texture_changes: &[(u8, u32, u32)],
+    // A9-Stage1: the wire-commanded placement id
+    // (PhysicsDesc.animation_frame), consumed by the static placement
+    // chain under ?placementId=on. None = no wire placement.
+    wire_placement: Option<u32>,
 ) -> Option<(
     Vec<Vec<Tri>>,
     Vec<(holtburger_common::Vector3, holtburger_common::Quaternion)>,
@@ -4750,6 +4789,7 @@ fn triangulate_setup_model_per_part_with_rest_pose<
         texture_changes,
         None,
         None,
+        wire_placement,
         |pi, gfx, offset, rot, swaps| {
             if let Some(slot) = buckets.get_mut(pi) {
                 // Capture the pose-priority-resolved rest frame for this
@@ -4783,6 +4823,36 @@ fn triangulate_setup_model_per_part_with_rest_pose<
 /// ([`triangulate_setup_model_at_frame`]) and the per-part path
 /// ([`triangulate_setup_model_per_part`]).
 #[cfg(any(target_arch = "wasm32", test))]
+/// A9-Stage1 (2026-06-12, survey A9 §3 row 1): the static
+/// placement-frame resolution chain. `retail_order` ON follows retail —
+/// the wire-commanded placement id (`PhysicsDesc.animation_frame` →
+/// `CPhysicsObj::SetPlacementFrame`, acclient.c:318540-318562) → `0x65`
+/// Resting (the `InitObjectEnd` init default, acclient.c:317303) → `0`
+/// (the `CPartArray::SetPlacementFrame` miss fallback searching for
+/// `id == 0`, acclient.c:326845-326860) → first available. OFF keeps
+/// the legacy `0 → 1 → first` chain byte-identically.
+fn resolve_static_placement_frame<'a>(
+    setup: &'a holtburger_dat::file_type::SetupModel,
+    wire_placement: Option<u32>,
+    retail_order: bool,
+) -> Option<&'a holtburger_dat::file_type::setup_model::PlacementType> {
+    if retail_order {
+        wire_placement
+            .and_then(|id| i32::try_from(id).ok())
+            .and_then(|id| setup.placement_frames.get(&id))
+            .or_else(|| setup.placement_frames.get(&0x65))
+            .or_else(|| setup.placement_frames.get(&0))
+            .or_else(|| setup.placement_frames.values().next())
+    } else {
+        setup
+            .placement_frames
+            .get(&0)
+            .or_else(|| setup.placement_frames.get(&1))
+            .or_else(|| setup.placement_frames.values().next())
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
 fn walk_setup_parts<S: holtburger_dat::ResourceSource + ?Sized, F>(
     source: &S,
     setup_id: u32,
@@ -4790,6 +4860,7 @@ fn walk_setup_parts<S: holtburger_dat::ResourceSource + ?Sized, F>(
     texture_changes: &[(u8, u32, u32)],
     mtable_override: Option<u32>,
     pose_override: Option<&holtburger_dat::file_type::setup_model::AnimationFrame>,
+    wire_placement: Option<u32>,
     mut on_part: F,
 ) -> Option<()>
 where
@@ -4818,11 +4889,11 @@ where
     } else {
         None
     };
-    let placement = setup
-        .placement_frames
-        .get(&0)
-        .or_else(|| setup.placement_frames.get(&1))
-        .or_else(|| setup.placement_frames.values().next());
+    // A9-Stage1: retail order (wire → 0x65 → 0 → first) under
+    // ?placementId=on; legacy 0 → 1 → first otherwise. The idle-anim
+    // frame above stays preferred over placement either way (retail's
+    // sequence also prefers a live anim).
+    let placement = resolve_static_placement_frame(&setup, wire_placement, placement_id_flag());
 
     for (pi, &default_part_id) in setup.parts.iter().enumerate() {
         // Resolve the actual GfxObj DID for this part: substitution wins
@@ -4936,6 +5007,7 @@ fn walk_setup_parts_with_geom<S: holtburger_dat::ResourceSource + ?Sized>(
         &[],
         None,
         None,
+        None,
         |pi, gfx, offset, rot, _swaps| {
             let Some(slot) = aabbs.get_mut(pi) else { return };
             for vert in gfx.vertex_array.vertices.values() {
@@ -4997,6 +5069,7 @@ fn walk_setup_parts_with_geom_and_physics<S: holtburger_dat::ResourceSource + ?S
         setup_id,
         &[],
         &[],
+        None,
         None,
         None,
         |pi, gfx, offset, rot, _swaps| {
@@ -9823,6 +9896,7 @@ fn collect_setup_part_sort_centers<S: holtburger_dat::ResourceSource + ?Sized>(
                 setup_id,
                 &[],
                 &[],
+                None,
                 None,
                 None,
                 |pi, gfx, _offset, _rot, _tex_swaps| {
@@ -15326,10 +15400,10 @@ pub(crate) fn build_entity_animation_data_inner<S: holtburger_dat::ResourceSourc
     stance: u32,
 ) -> Result<EntityAnimationKeyframesInner, String> {
     // Back-compat shim — existing callers without a "from motion"
-    // hint fall through to the new 8-arg path with from_motion = 0
-    // which preserves the old cycle-lookup-only behaviour.
+    // hint fall through to the new 9-arg path with from_motion = 0 and
+    // no wire placement, which preserves the old behaviour.
     build_entity_animation_data_inner_v2(
-        source, setup_id, mc, tc, mt_override, motion_command, stance, 0,
+        source, setup_id, mc, tc, mt_override, motion_command, stance, 0, 0,
     )
 }
 
@@ -15343,6 +15417,11 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
     motion_command: u32,
     stance: u32,
     from_motion_command: u32,
+    // A9-Stage1 (2026-06-12): the wire placement id
+    // (PhysicsDesc.animation_frame from the entity's spawn meta).
+    // `0` = none. Consumed by the static placement-frame chain (rest
+    // pose) under ?placementId=on; ignored when a live anim resolves.
+    placement_id: u32,
 ) -> Result<EntityAnimationKeyframesInner, String> {
     use holtburger_dat::file_type::SetupModel;
     use holtburger_dat::ResourceKey;
@@ -15384,8 +15463,9 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
 
     // SetupModel (0x02 prefix) — full skeleton + optional motion
     // table + optional cycle.
+    let wire_placement = (placement_id != 0).then_some(placement_id);
     let (parts_tris, rest_poses) =
-        triangulate_setup_model_per_part_with_rest_pose(source, setup_id, mc, tc)
+        triangulate_setup_model_per_part_with_rest_pose(source, setup_id, mc, tc, wire_placement)
             .ok_or_else(|| {
                 format!(
                     "build_entity_animation_data_inner: triangulate setup 0x{setup_id:08X} failed"
@@ -15562,6 +15642,12 @@ pub async fn fetch_entity_animation_keyframes(
     // lookup. Older bundles' JS callers that don't pass this arg
     // see `0` via wasm-bindgen's `Option<u32>` Default coercion.
     from_motion_command: u32,
+    // A9-Stage1 (2026-06-12): wire placement id from the entity's
+    // spawn meta (PhysicsDesc.animation_frame). `0` = none. Only
+    // consulted by the rest-pose placement chain under
+    // ?placementId=on. Older JS callers see `0` via the same
+    // trailing-arg coercion as from_motion_command above.
+    placement_id: u32,
 ) -> Result<EntityAnimationData, JsValue> {
     use holtburger_dat::file_type::SetupModel;
     use holtburger_dat::{ResourceKey, ResourceSource};
@@ -15628,6 +15714,7 @@ pub async fn fetch_entity_animation_keyframes(
             motion_command,
             stance,
             from_motion_command,
+            placement_id,
         )
         .map_err(|e| JsValue::from_str(&e))?;
         return Ok(inner_to_wasm_animation_data(inner));
@@ -15689,6 +15776,7 @@ pub async fn fetch_entity_animation_keyframes(
         motion_command,
         stance,
         from_motion_command,
+        placement_id,
     )
     .map_err(|e| JsValue::from_str(&e))?;
     Ok(inner_to_wasm_animation_data(inner))
@@ -18268,6 +18356,12 @@ pub struct EntityUpdate {
     /// non-empty. ALWAYS empty on Position / Remove updates and on
     /// non-portal Spawns.
     portal_destination: String,
+    /// A9-Stage1 (2026-06-12): wire placement id
+    /// (`PhysicsDesc.animation_frame` — retail `frame_id` →
+    /// `CPhysicsObj::SetPlacementFrame`, acclient.c:318540-318562).
+    /// Spawn only; `0` = absent. JS threads it into the rest-pose
+    /// placement chain under `?placementId=on`.
+    placement_id: u32,
     // --- Phase 4 step 6 Phase A: model-data substitutions ----------
     // ACE's `Creature.CalculateObjDesc()` walks the NPC's equipped
     // inventory server-side, reads each equipped item's ClothingTable
@@ -18533,6 +18627,12 @@ impl EntityUpdate {
     #[wasm_bindgen(getter, js_name = portalDestination)]
     pub fn portal_destination(&self) -> String {
         self.portal_destination.clone()
+    }
+
+    /// A9-Stage1: wire placement id (Spawn only; `0` = absent).
+    #[wasm_bindgen(getter, js_name = placementId)]
+    pub fn placement_id(&self) -> u32 {
+        self.placement_id
     }
 
     /// Phase 4 step 6 Phase A: flat `[part_index, gfx_obj_did, …]`
@@ -31172,6 +31272,7 @@ async fn recv_loop(
                                                 model_changes: Vec::new(),
                                                 texture_changes: Vec::new(),
                                                 sub_palettes: Vec::new(),
+                                                placement_id: 0,
                                                 portal_destination: dest,
                                                 vx: 0.0,
                                                 vy: 0.0,
@@ -32439,6 +32540,7 @@ async fn recv_loop(
                                 model_changes: Vec::new(),
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
+                                placement_id: 0,
                                 portal_destination: String::new(),
                                 vx: 0.0,
                                 vy: 0.0,
@@ -32575,6 +32677,7 @@ async fn recv_loop(
                                     model_changes: Vec::new(),
                                     texture_changes: Vec::new(),
                                     sub_palettes: Vec::new(),
+                                    placement_id: 0,
                                     portal_destination: String::new(),
                                     vx: 0.0,
                                     vy: 0.0,
@@ -32621,6 +32724,7 @@ async fn recv_loop(
                                 model_changes: Vec::new(),
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
+                                placement_id: 0,
                                 portal_destination: String::new(),
                                 vx: 0.0,
                                 vy: 0.0,
@@ -32997,6 +33101,10 @@ async fn recv_loop(
                                     model_changes,
                                     texture_changes,
                                     sub_palettes,
+                                    // A9-Stage1: wire placement id (PhysicsDesc
+                                    // .animation_frame); JS threads it into the
+                                    // rest-pose chain under ?placementId=on.
+                                    placement_id: data.animation_frame.unwrap_or(0),
                                     portal_destination: String::new(),
                                     // F3-1: launch velocity for missiles (0 otherwise).
                                     vx: spawn_vx,
@@ -33170,6 +33278,7 @@ async fn recv_loop(
                                         model_changes: Vec::new(),
                                         texture_changes: Vec::new(),
                                         sub_palettes: Vec::new(),
+                                        placement_id: 0,
                                         portal_destination: String::new(),
                                         vx: 0.0,
                                         vy: 0.0,
@@ -33413,6 +33522,7 @@ async fn recv_loop(
                                 model_changes,
                                 texture_changes,
                                 sub_palettes,
+                                placement_id: 0,
                                 portal_destination: String::new(),
                                 vx: 0.0,
                                 vy: 0.0,
@@ -33500,6 +33610,7 @@ async fn recv_loop(
                                 model_changes,
                                 texture_changes,
                                 sub_palettes,
+                                placement_id: 0,
                                 portal_destination: String::new(),
                                 vx: 0.0,
                                 vy: 0.0,
@@ -33619,6 +33730,7 @@ async fn recv_loop(
                                         model_changes: Vec::new(),
                                         texture_changes: Vec::new(),
                                         sub_palettes: Vec::new(),
+                                        placement_id: 0,
                                         portal_destination: String::new(),
                                         vx: 0.0,
                                         vy: 0.0,
@@ -33675,6 +33787,7 @@ async fn recv_loop(
                                 model_changes: Vec::new(),
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
+                                placement_id: 0,
                                 portal_destination: String::new(),
                                 vx: 0.0,
                                 vy: 0.0,
@@ -33719,6 +33832,7 @@ async fn recv_loop(
                                 model_changes: Vec::new(),
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
+                                placement_id: 0,
                                 portal_destination: String::new(),
                                 vx: 0.0,
                                 vy: 0.0,
@@ -33771,6 +33885,7 @@ async fn recv_loop(
                                 model_changes: Vec::new(),
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
+                                placement_id: 0,
                                 portal_destination: String::new(),
                                 vx: 0.0,
                                 vy: 0.0,
@@ -33983,6 +34098,7 @@ async fn recv_loop(
                                 model_changes: Vec::new(),
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
+                                placement_id: 0,
                                 portal_destination: String::new(),
                                 // F3-5: per-creature run rate (0 = none); JS
                                 // stashes it for the velScale gait tempo.
@@ -34045,6 +34161,7 @@ async fn recv_loop(
                                     model_changes: Vec::new(),
                                     texture_changes: Vec::new(),
                                     sub_palettes: Vec::new(),
+                                    placement_id: 0,
                                     portal_destination: String::new(),
                                     vx: 0.0,
                                     vy: 0.0,
@@ -34139,6 +34256,7 @@ async fn recv_loop(
                                     model_changes: Vec::new(),
                                     texture_changes: Vec::new(),
                                     sub_palettes: Vec::new(),
+                                    placement_id: 0,
                                     portal_destination: String::new(),
                                     vx: 0.0,
                                     vy: 0.0,
@@ -34331,6 +34449,7 @@ async fn recv_loop(
                                 model_changes: Vec::new(),
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
+                                placement_id: 0,
                                 portal_destination: String::new(),
                                 vx: data.velocity.x,
                                 vy: data.velocity.y,
@@ -39294,6 +39413,7 @@ async fn recv_loop(
                                     model_changes: Vec::new(),
                                     texture_changes: Vec::new(),
                                     sub_palettes: Vec::new(),
+                                    placement_id: 0,
                                     portal_destination: String::new(),
                                     vx: 0.0,
                                     vy: 0.0,
@@ -39473,6 +39593,7 @@ async fn recv_loop(
                                             model_changes: Vec::new(),
                                             texture_changes: Vec::new(),
                                             sub_palettes: Vec::new(),
+                                            placement_id: 0,
                                             portal_destination: String::new(),
                                             vx: 0.0,
                                             vy: 0.0,
@@ -39606,6 +39727,7 @@ async fn recv_loop(
                                         model_changes: Vec::new(),
                                         texture_changes: Vec::new(),
                                         sub_palettes: Vec::new(),
+                                        placement_id: 0,
                                         portal_destination: String::new(),
                                         vx: 0.0,
                                         vy: 0.0,
@@ -39675,6 +39797,7 @@ async fn recv_loop(
                                         model_changes: Vec::new(),
                                         texture_changes: Vec::new(),
                                         sub_palettes: Vec::new(),
+                                        placement_id: 0,
                                         portal_destination: String::new(),
                                         vx: 0.0,
                                         vy: 0.0,
@@ -41662,6 +41785,74 @@ mod tests_substitution {
     /// `triangulate_setup_model_at_frame_applies_pose_override` test
     /// which would put part 1's tri in x in [5, 6] under the same
     /// placement).
+    /// A9-Stage1 (2026-06-12): the static placement chain. Retail order
+    /// resolves `wire placement -> 0x65 Resting -> 0 -> first`
+    /// (acclient.c:318554 SetPlacementFrame, :317303 InitObjectEnd
+    /// default, :326845 id==0 fallback); legacy order stays
+    /// `0 -> 1 -> first` byte-identically.
+    #[test]
+    fn resolve_static_placement_frame_orders() {
+        use holtburger_dat::file_type::setup_model::{AnimationFrame, PlacementType};
+        let frame_at = |x: f32| PlacementType {
+            anim_frame: AnimationFrame {
+                frames: vec![Frame {
+                    origin: Vector3 { x, y: 0.0, z: 0.0 },
+                    orientation: Quaternion::identity(),
+                }],
+                hooks: vec![],
+            },
+        };
+        let setup_with = |keys: &[i32]| {
+            let mut placement_frames = HashMap::new();
+            for &k in keys {
+                placement_frames.insert(k, frame_at(k as f32));
+            }
+            SetupModel {
+                id: 0x0200_0098,
+                flags: 0,
+                parts: vec![0x0100_000A],
+                parent_index: vec![],
+                default_scale: vec![],
+                holding_locations: HashMap::new(),
+                connection_points: HashMap::new(),
+                placement_frames,
+                cyl_spheres: vec![],
+                spheres: vec![],
+                height: 1.0,
+                radius: 1.0,
+                step_up: 0.1,
+                step_down: 0.1,
+                sorting_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+                selection_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+                lights: HashMap::new(),
+                default_animation: None,
+                default_script: None,
+                default_motion_table: None,
+                default_sound_table: None,
+                default_script_table: None,
+            }
+        };
+        let key_of = |p: Option<&PlacementType>| p.unwrap().anim_frame.frames[0].origin.x as i32;
+
+        // Setup carrying Default(0) AND Resting(0x65) — the survey's
+        // chest/corpse shape.
+        let setup = setup_with(&[0, 0x65, 1]);
+        // Retail: wire wins; absent wire -> 0x65 Resting beats 0.
+        assert_eq!(key_of(resolve_static_placement_frame(&setup, Some(1), true)), 1);
+        assert_eq!(key_of(resolve_static_placement_frame(&setup, None, true)), 0x65);
+        // Wire id the setup lacks -> falls to Resting.
+        assert_eq!(key_of(resolve_static_placement_frame(&setup, Some(7), true)), 0x65);
+        // Legacy order ignores wire + Resting: 0 first.
+        assert_eq!(key_of(resolve_static_placement_frame(&setup, Some(1), false)), 0);
+
+        // No Resting -> retail falls to 0; neither -> first available.
+        let setup = setup_with(&[0, 1]);
+        assert_eq!(key_of(resolve_static_placement_frame(&setup, None, true)), 0);
+        let setup = setup_with(&[9]);
+        assert_eq!(key_of(resolve_static_placement_frame(&setup, None, true)), 9);
+        assert_eq!(key_of(resolve_static_placement_frame(&setup, None, false)), 9);
+    }
+
     #[test]
     fn triangulate_setup_model_per_part_with_rest_pose_keeps_vertices_local() {
         use holtburger_dat::file_type::setup_model::{AnimationFrame, PlacementType};
@@ -41730,7 +41921,7 @@ mod tests_substitution {
         let source = MockSource { files };
 
         let (per_part_tris, rest_poses) =
-            triangulate_setup_model_per_part_with_rest_pose(&source, setup_id, &[], &[])
+            triangulate_setup_model_per_part_with_rest_pose(&source, setup_id, &[], &[], None)
                 .expect("triangulate per-part with rest pose");
 
         // Rest poses captured the placement frame even though the

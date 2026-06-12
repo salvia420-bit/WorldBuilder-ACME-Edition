@@ -461,6 +461,13 @@ export class AnimationCache {
         // `(stance, fromMotion → motionCommand)` transition before
         // falling back to the cycle lookup.
         const fromMotion = (opts.fromMotion ?? 0) >>> 0;
+        // A9-Stage1 (2026-06-12, ?placementId=on): wire placement id from
+        // the spawn meta (PhysicsDesc.animation_frame). Folded into the
+        // cache key so two entities sharing a setup but resting in
+        // different wire-commanded placements don't share a rest pose,
+        // and passed through as the wasm fetcher's trailing arg (older
+        // pkg bundles coerce the extra arg away harmlessly). 0 = none.
+        const placementId = (opts.placementId ?? 0) >>> 0;
         const modelChanges = opts.modelChanges ?? new Uint32Array(0);
         const textureChanges = opts.textureChanges ?? new Uint32Array(0);
         const paletteId = (opts.paletteId ?? 0) >>> 0;
@@ -470,9 +477,10 @@ export class AnimationCache {
         const subSuffix = AnimationCache._substitutionSuffix(
             modelChanges, textureChanges, paletteId, paletteSubsFlat);
         const baseKey = AnimationCache.makeKey(setupId, mtableId, motionCommand, stance);
+        const placementSuffix = placementId === 0 ? "" : `:pl:${placementId.toString(16)}`;
         const key = fromMotion === 0
-            ? `${baseKey}${subSuffix}`
-            : `${baseKey}:link:${fromMotion.toString(16)}${subSuffix}`;
+            ? `${baseKey}${subSuffix}${placementSuffix}`
+            : `${baseKey}:link:${fromMotion.toString(16)}${subSuffix}${placementSuffix}`;
         const hit = this.entries.get(key);
         if (hit) {
             // Wave 7.6 — move-to-tail on hit (strict LRU). JS Maps
@@ -495,6 +503,7 @@ export class AnimationCache {
                 motionCommand,
                 stance,
                 fromMotion,
+                placementId,
             ).catch((e) => {
                 try { window.__diag?.assets?.onAnimationError?.({ setupId, mtableId, motionCmd: motionCommand, stance, error: e, source: "get" }); } catch (_) {}
                 throw e;

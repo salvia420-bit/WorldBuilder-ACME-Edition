@@ -23,6 +23,21 @@ const SPAWN_TRACE = (() => {
   } catch (_) { return false; }
 })();
 
+// A9-Stage1 (2026-06-12) — `?placementId=on` opt-in: thread the wire
+// placement id (PhysicsDesc.animation_frame, spawn meta `placementId`)
+// into the AnimationCache fetch so the wasm rest-pose chain resolves
+// retail's `wire placement -> 0x65 Resting -> 0 -> first` order
+// (acclient.c:317303/:318554/:326845). Default OFF -> 0 is passed and
+// the legacy `0 -> 1 -> first` chain stays byte-identical (the wasm
+// side gates on the same query flag).
+const PLACEMENT_ID_ON = (() => {
+  try {
+    if (typeof window === "undefined") return false;
+    const v = new URLSearchParams(window.location.search).get("placementId");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) { return false; }
+})();
+
 // === Wave R2.A — entity-attached dynamic lights (SetLight hook 25) (2026-05-28) ===
 // `?entityLights=on` opt-in. Default OFF → no entity lights are created and
 // the SetLight (25) hook stays a logged no-op, so the rendered output is
@@ -2470,6 +2485,9 @@ export class EntityManager {
     const textureChanges = meta.textureChanges ?? new Uint32Array(0);
     const paletteId = (meta.paletteId ?? 0) >>> 0;
     const subPalettes = meta.subPalettes ?? new Uint32Array(0);
+    // A9-Stage1: wire placement id rides only under ?placementId=on so
+    // the default cache keys/fetch args stay byte-identical.
+    const placementId = PLACEMENT_ID_ON ? ((meta.placementId ?? 0) >>> 0) : 0;
 
     // Step A: kick the keyframe + rest-pose-mesh fetch via the cache.
     // Cache key folds in motion + stance so the very first action a
@@ -2498,6 +2516,7 @@ export class EntityManager {
         textureChanges,
         paletteId,
         paletteSubsFlat: subPalettes,
+        placementId,
       }
     );
     const _spawnTraceAnimMs = SPAWN_TRACE ? (performance.now() - _spawnTraceAnimStart) : 0;
