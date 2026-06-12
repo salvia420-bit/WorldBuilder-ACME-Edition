@@ -111,7 +111,20 @@ impl ClientSimulationSystem {
         let mut events = Vec::new();
         for slice in slices {
             let slice_dt = Duration::from_secs_f32(slice);
-            let Some(request) = self.build_solve_request(now, slice_dt, world, movement) else {
+            // A6-T2 (W3+ S7): under the unified-transition gate the
+            // LOCAL player resolves through the retail transition
+            // pipeline (outside `SpatialPhysics::solve` — the trait only
+            // receives `&mut SpatialScene`; the pipeline needs
+            // `&WorldState` for terrain/water, which this system holds).
+            // When it resolved, the local body + local_drive are
+            // EXCLUDED from the solve request so the solver cannot
+            // double-advance it. Flag off: `local_resolved` stays false
+            // and the request is byte-identical.
+            let local_resolved = movement.unified_transition_enabled()
+                && self.advance_local_player_via_transition(slice_dt, world, movement, &mut events);
+            let Some(request) =
+                self.build_solve_request_inner(now, slice_dt, world, movement, !local_resolved)
+            else {
                 continue;
             };
             let physics = Arc::clone(world.scene.physics());
@@ -121,13 +134,217 @@ impl ClientSimulationSystem {
         events
     }
 
+    /// A6-T2 (W3+ S7) — resolve the local player through the retail
+    /// transition pipeline for one solve slice. Two arms, mirroring the
+    /// legacy solver's split:
+    ///   - Drive (server-projection / autonomous / move-to):
+    ///     `LocalDriveControl::desired_world_delta` is the pipeline's
+    ///     offset input directly; `force_grounded` maps through. This
+    ///     upgrades the legacy P2 arm's buildings-only collision
+    ///     (`project_pose_by_velocity_with_collision`) to the full
+    ///     chain (retail runs ONE `find_valid_position` regardless of
+    ///     autonomy, acclient.c:313419).
+    ///   - Manual: the SAME shared driver T1 uses
+    ///     ([`MovementSystem::advance_manual_slice_via_transition`]),
+    ///     which kills the P2b zero-collision hole and makes T1↔T2
+    ///     equivalence structural.
+    ///
+    /// The resolved pose is fed through [`Self::apply_solve_batch`] as a
+    /// synthesized `SolvedBodyKinematics` so event emission /
+    /// projection-state bookkeeping is unchanged. Returns `false` (and
+    /// advances nothing) when there is no local player, no active
+    /// drive/manual input, or the body is `Suspended`
+    /// (AuthorityFrozen) — those cases keep the legacy solve path so
+    /// the freeze semantics are preserved.
+    fn advance_local_player_via_transition(
+        &mut self,
+        slice_dt: Duration,
+        world: &mut WorldState,
+        movement: &MovementSystem,
+        events: &mut Vec<WorldEvent>,
+    ) -> bool {
+        use holtburger_world::spatial::transition;
+
+        let guid = world.player.guid;
+        if guid == Guid::NULL {
+            return false;
+        }
+        let body_id = SpatialBodyId::LocalPlayer(guid);
+        // Preserve the AuthorityFrozen freeze: a suspended body keeps
+        // the legacy solve path (which returns the pose unchanged).
+        if world
+            .scene
+            .body(body_id)
+            .map(|body| body.sampling.mode == holtburger_world::SpatialSampleMode::Suspended)
+            .unwrap_or(false)
+        {
+            return false;
+        }
+
+        if let Some(control) = movement.current_local_drive_control(world, slice_dt) {
+            let Some(pose) = world.local_player_runtime_pose() else {
+                return false;
+            };
+            let (object, gates) = MovementSystem::transition_profile(world);
+            let end = holtburger_common::position::WorldPosition {
+                landblock_id: pose.landblock_id,
+                coords: Vector3::new(
+                    pose.coords.x + control.desired_world_delta.x,
+                    pose.coords.y + control.desired_world_delta.y,
+                    pose.coords.z + control.desired_world_delta.z,
+                ),
+                rotation: pose.rotation,
+            };
+            let input = transition::TransitionInput {
+                begin: pose,
+                end,
+                object,
+                airborne: world.player.is_airborne && !control.force_grounded,
+                descending: true,
+                force_grounded: control.force_grounded,
+                gates,
+                last_known_wall_normal: world.player.last_known_wall_normal,
+                frames_stationary_fall: 0,
+            };
+            let outcome = transition::find_transitional_position(&*world, &input);
+            if let Some(n) = outcome.wall_normal {
+                world.player.last_known_wall_normal = Some(n);
+            }
+            let mut next_pose = outcome.pose;
+            let current_heading = pose.rotation.to_heading();
+            let desired_heading = control.desired_heading.unwrap_or(current_heading);
+            next_pose.rotation = Quaternion::from_heading(desired_heading);
+            let dt_secs = slice_dt.as_secs_f32().max(1e-6);
+            let solved = SolvedBodyKinematics {
+                body_id,
+                pose: next_pose,
+                velocity: control.desired_world_delta / dt_secs,
+                omega: Vector3::zero(),
+                contact: if control.force_grounded || outcome.grounded {
+                    ContactState::Grounded
+                } else {
+                    ContactState::Airborne
+                },
+                projection_state: Some(if control.force_grounded || outcome.grounded {
+                    holtburger_world::SelfPlayerDriveProjectionState::LocalGroundedDirectDrive
+                } else {
+                    holtburger_world::SelfPlayerDriveProjectionState::LocalAirborne
+                }),
+            };
+            events.extend(self.apply_solve_batch(
+                world,
+                SpatialSolveBatch {
+                    solved: vec![solved],
+                    events: Vec::new(),
+                },
+            ));
+            return true;
+        }
+
+        if movement.has_active_manual_drive() {
+            // The shared T1 driver writes the runtime pose + player
+            // contact bookkeeping itself; synthesize the solved-body
+            // record from the result so apply_solve_batch's event /
+            // bookkeeping path sees the same shape the solver produces.
+            if movement.advance_manual_slice_via_transition(world, slice_dt) {
+                if let Some(pose) = world.local_player_runtime_pose() {
+                    let planar = world.player.current_planar_velocity;
+                    let solved = SolvedBodyKinematics {
+                        body_id,
+                        pose,
+                        velocity: Vector3::new(
+                            planar.x,
+                            planar.y,
+                            world.player.vertical_velocity,
+                        ),
+                        omega: Vector3::zero(),
+                        contact: if world.player.is_airborne {
+                            ContactState::Airborne
+                        } else {
+                            ContactState::Grounded
+                        },
+                        projection_state: None,
+                    };
+                    events.extend(self.apply_solve_batch(
+                        world,
+                        SpatialSolveBatch {
+                            solved: vec![solved],
+                            events: Vec::new(),
+                        },
+                    ));
+                }
+                return true;
+            }
+        }
+
+        false
+    }
+
+    // Production callers now route through `build_solve_request_inner`
+    // (the A6-T2 exclusion seam); the legacy-shape wrapper is kept for
+    // the client/mod.rs unit tests, which pin the request shape.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn build_solve_request(
+        &self,
+        now: Instant,
+        dt: Duration,
+        world: &WorldState,
+        movement: &MovementSystem,
+    ) -> Option<SpatialSolveRequest> {
+        self.build_solve_request_inner(now, dt, world, movement, true)
+    }
+
+    /// A6-T2 — `include_local: false` excludes the local body AND the
+    /// `local_drive` from the request (the transition pipeline already
+    /// advanced the local player this slice; the solver must not
+    /// double-advance it). `true` is the legacy byte-identical shape.
+    fn build_solve_request_inner(
         &self,
         _now: Instant,
         dt: Duration,
         world: &WorldState,
         movement: &MovementSystem,
+        include_local: bool,
     ) -> Option<SpatialSolveRequest> {
+        if !include_local {
+            let local_pose = world.local_player_runtime_pose();
+            let nearby_tracked = local_pose.as_ref().map(|pose| {
+                world
+                    .scene
+                    .get_entities_in_range(pose, ACTIVE_SOLVE_RADIUS_M)
+            });
+            let local_body_id = (world.player.guid != Guid::NULL)
+                .then_some(SpatialBodyId::LocalPlayer(world.player.guid));
+            let mut bodies = Vec::<SolveBodyInput>::new();
+            for body_id in self.tracked_body_ids.iter().copied() {
+                if Some(body_id) == local_body_id {
+                    continue;
+                }
+                if nearby_tracked.as_ref().is_some_and(|guids| {
+                    body_id
+                        .authoritative_guid()
+                        .is_some_and(|guid| !guids.contains(&guid))
+                }) {
+                    continue;
+                }
+                let Some(input) = world.resolve_body_projection_input(body_id) else {
+                    continue;
+                };
+                if input.basis.is_none() {
+                    continue;
+                }
+                bodies.push(input);
+            }
+            if bodies.is_empty() {
+                return None;
+            }
+            return Some(SpatialSolveRequest {
+                dt,
+                bodies,
+                local_drive: None,
+            });
+        }
+
         let local_body = movement.current_local_solve_body_input(world).or_else(|| {
             (world.player.guid != Guid::NULL)
                 .then_some(SpatialBodyId::LocalPlayer(world.player.guid))

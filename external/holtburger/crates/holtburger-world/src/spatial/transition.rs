@@ -1,0 +1,1197 @@
+//! A6-T1/T2 (2026-06-12, W3+ spec S7) — the retail transition pipeline.
+//!
+//! Retail runs ONE pipeline for every mover: `CPhysicsObj::transition`
+//! (acclient.c:320061) → `find_transitional_position`
+//! (acclient.c:313171-313340): the move is subdivided into
+//! `ceil(3D-dist / sphere-radius)` substeps (`calc_num_steps`,
+//! acclient.c:311764), each substep is offset-adjusted off the carried
+//! contact plane (`adjust_offset`, acclient.c:313266), inserted into the
+//! cell graph (`transitional_insert(this, 3)`, acclient.c:313307) and
+//! validated (`validate_transition`, acclient.c:312194) with step-up /
+//! step-down / edge-slide / cliff-slide redo handlers, while the cell
+//! membership is recomputed from geometry every step (`build_cell_array`,
+//! acclient.c:311675-311680).
+//!
+//! Ours: this module is the PURE pipeline shell. The per-contact rules are
+//! the A7 helpers in [`super::physics`] (`step_up_decision`,
+//! `step_down_resolve`, `landing_allows_touchdown`,
+//! `slide_residual_along_wall_tangent`, `cliff_slide_residual_along_seam`)
+//! — A6 owns the loop, A7 owns the rules. Geometry/state reads go through
+//! the [`TransitionEnv`] trait (implemented for `WorldState` below) so the
+//! pipeline is consumable by BOTH the legacy manual-drive handle path (T1,
+//! `movement/system.rs` swap site) and the canonical tick spine's
+//! simulation solve (T2, `client/simulation.rs`) — closing the W1-created
+//! P2b hole where `?unifiedTick=on` manual movement had ZERO collision.
+//!
+//! Flag carriers (both default-off): `USE_UNIFIED_TRANSITION`
+//! (movement/system.rs const, native) + `?unifiedTransition=on` (wasm URL
+//! flag → `MovementSystemHandle::set_unified_transition`). Flag-off, this
+//! module has no caller on the player tick path.
+//!
+//! Deliberate non-scope (spec S7 §3): A6-T3 remote entities (ROADMAP §8
+//! hold), A6-T4 camera (RULINGS §1 parked — the viewer arm of
+//! `calc_num_steps` is NOT implemented), A6-T5 projectiles (JS-live),
+//! A7-R4 `precipice_slide`, A2 force-position easing internals, and the
+//! default-off `USE_PHYSICS_BSP` / `USE_STATIC_BSP` narrow-phase arms
+//! (those stay legacy-chain-only until their owners wire them here).
+
+use super::collision::{PlacementCollisionInfo, TransitionState, physics_globals};
+use super::entity_collision::{EntityCollider, clamp_delta_against_entities};
+use super::physics::{
+    FLOOR_Z, PLAYER_CAPSULE_HEIGHT, PLAYER_CAPSULE_RADIUS, PLAYER_STEP_DOWN_HEIGHT,
+    PLAYER_STEP_UP_HEIGHT, StepDownOutcome, clamp_delta_against_buildings_with_normal,
+    clamp_delta_against_cell_walls_dispatch, clamp_delta_to_cell_interior,
+    cliff_slide_residual_along_seam, floor_normal_under, highest_floor_z_under,
+    landing_allows_touchdown, slide_residual_along_wall_tangent, step_down_decision,
+    step_down_resolve, step_up_decision, sweep_sphere_against_static_aabbs,
+};
+use super::scene::SpatialScene;
+use super::types::{BuildingAabbEntry, StaticAabbEntry};
+use crate::WorldState;
+use holtburger_common::position::WorldPosition;
+use holtburger_common::{Aabb, Guid, Vector3};
+
+/// Retail `ObjectInfoState` bits (names: ACE
+/// `ACE.Server.Physics/ObjectInfo.cs:8-23`; semantics verified in the
+/// decompile — 0x4 last-step remainder arm acclient.c:313245-313262, 0x8
+/// abort acclient.c:313312-313313, 0x10 rotation handling
+/// acclient.c:313180-313184 + 313276-313285).
+pub mod object_info_state {
+    pub const CONTACT: u32 = 0x1;
+    pub const ON_WALKABLE: u32 = 0x2;
+    pub const IS_VIEWER: u32 = 0x4;
+    pub const PATH_CLIPPED: u32 = 0x8;
+    pub const FREE_ROTATE: u32 = 0x10;
+    pub const EDGE_SLIDE: u32 = 0x200;
+    pub const IGNORE_CREATURES: u32 = 0x400;
+}
+
+/// Retail `OBJECTINFO` — the mover description cached ONCE per transition
+/// (`OBJECTINFO::init`, acclient.c:314128-314132: step heights from
+/// `CPartArray::GetStepUpHeight/-Down` acclient.c:325400-325424, ethereal
+/// bit from the object state).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObjectInfo {
+    pub state: u32,
+    /// A7-R1 hydrated per-setup value; fallback
+    /// [`PLAYER_STEP_UP_HEIGHT`] (0.6).
+    pub step_up_height: f32,
+    /// A7-R1 hydrated; fallback [`PLAYER_STEP_DOWN_HEIGHT`] (1.5).
+    pub step_down_height: f32,
+    /// ↔ acclient.c:314131 / ours `Entity::is_collidable`. Carried for
+    /// shape parity; the LOCAL player is never ethereal, and the A7-R6
+    /// deferred-solidify re-check stays OUTSIDE this pipeline (spec §1).
+    pub ethereal: bool,
+    pub radius: f32,
+    pub height: f32,
+    /// The mover's own guid — excluded from the entity-collider sweep.
+    pub self_guid: Guid,
+}
+
+impl ObjectInfo {
+    /// Build the local player's per-transition object description.
+    /// `step_up`/`step_down` are the A7-R1 hydrated heights (`None` ⇒
+    /// the hardcoded human-body fallbacks — identical for the player,
+    /// whose Setup `0x02000001` IS 0.6/1.5). `allow_edge_slide` is the
+    /// hydrated `PhysicsState::EDGE_SLIDE` bit.
+    pub fn for_local_player(
+        step_up: Option<f32>,
+        step_down: Option<f32>,
+        allow_edge_slide: bool,
+        self_guid: Guid,
+    ) -> Self {
+        let mut state = object_info_state::CONTACT;
+        if allow_edge_slide {
+            state |= object_info_state::EDGE_SLIDE;
+        }
+        Self {
+            state,
+            step_up_height: step_up.unwrap_or(PLAYER_STEP_UP_HEIGHT),
+            step_down_height: step_down.unwrap_or(PLAYER_STEP_DOWN_HEIGHT),
+            ethereal: false,
+            radius: PLAYER_CAPSULE_RADIUS,
+            height: PLAYER_CAPSULE_HEIGHT,
+            self_guid,
+        }
+    }
+}
+
+/// Extends the M4 `PlacementCollisionInfo` shape with the transition-only
+/// fields: `frames_stationary_fall` (set from `transient_state`
+/// 0x10/0x20/0x40, acclient.c:320104-320115) and the loop-exit collision
+/// normal (consumed at acclient.c:313312).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TransitionCollisionInfo {
+    pub base: PlacementCollisionInfo,
+    pub frames_stationary_fall: u8,
+    pub collision_normal: Option<Vector3>,
+}
+
+/// Flag values threaded in from the caller (the consts live in
+/// `movement/system.rs`, the flag owner) so the pipeline mirrors the
+/// legacy chain's gate behavior without a crate edge back into core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransitionGates {
+    /// `USE_STEP_UP_DOWN` — step-up onto risers / step-down off drops.
+    pub step_up_down: bool,
+    /// `USE_WALKABLE_STEP_DOWN` (A7-R2) — walkable acceptance on descents.
+    pub walkable_step_down: bool,
+    /// `USE_LANDING_WALKABLE` (A7-R3) — airborne touchdown allowance.
+    pub landing_walkable: bool,
+    /// `USE_WATER_COLLISION` — EntirelyWater block + wading-depth raise.
+    pub water_collision: bool,
+    /// `USE_TERRAIN_WALKABLE_GATE` — F4-2 uphill cliff refusal + contour
+    /// slide.
+    pub terrain_walkable_gate: bool,
+    /// `USE_LOCAL_ENVCELL_ENTRY` — client-local cell entry/exit flips +
+    /// the B11 doorway AABB-net relaxation.
+    pub local_envcell_entry: bool,
+    /// `USE_RAMP_FLOOR_SNAP_FIX` — split indoor floor sources.
+    pub ramp_floor_snap_fix: bool,
+    /// `SKIP_PARENTED_ENTITY_COLLISION` — FU-1 wielded-child exclusion.
+    pub skip_parented_entities: bool,
+}
+
+/// Geometry/state reads the pipeline needs — solves the
+/// WorldState-vs-SpatialScene split (`movement/system.rs` reads
+/// `world.scene.*` plus the terrain/water samplers that live on
+/// `WorldState`). Implemented for [`WorldState`] below; tests may provide
+/// synthetic impls.
+pub trait TransitionEnv {
+    fn scene(&self) -> &SpatialScene;
+    fn terrain_height_at(&self, x: f32, y: f32) -> Option<f32>;
+    fn terrain_normal_at(&self, x: f32, y: f32) -> Option<Vector3>;
+    fn water_depth_at(&self, x: f32, y: f32) -> f32;
+    fn is_entirely_water_cell_at(&self, x: f32, y: f32) -> bool;
+    /// Collidable entity cylinders within `prefilter_dist` of `pose`
+    /// (XY), excluding the mover itself. `skip_parented` mirrors FU-1.
+    fn entity_colliders_near(
+        &self,
+        pose: &WorldPosition,
+        prefilter_dist: f32,
+        exclude: Guid,
+        skip_parented: bool,
+    ) -> Vec<EntityCollider>;
+}
+
+impl TransitionEnv for WorldState {
+    fn scene(&self) -> &SpatialScene {
+        &self.scene
+    }
+
+    fn terrain_height_at(&self, x: f32, y: f32) -> Option<f32> {
+        WorldState::terrain_height_at(self, x, y)
+    }
+
+    fn terrain_normal_at(&self, x: f32, y: f32) -> Option<Vector3> {
+        WorldState::terrain_normal_at(self, x, y)
+    }
+
+    fn water_depth_at(&self, x: f32, y: f32) -> f32 {
+        WorldState::water_depth_at(self, x, y)
+    }
+
+    fn is_entirely_water_cell_at(&self, x: f32, y: f32) -> bool {
+        WorldState::is_entirely_water_cell_at(self, x, y)
+    }
+
+    fn entity_colliders_near(
+        &self,
+        pose: &WorldPosition,
+        prefilter_dist: f32,
+        exclude: Guid,
+        skip_parented: bool,
+    ) -> Vec<EntityCollider> {
+        let player_global = pose.global_coords();
+        let prefilter_sq = prefilter_dist * prefilter_dist;
+        self.entities
+            .iter()
+            .filter(|e| {
+                e.guid != exclude
+                    && e.is_collidable()
+                    && !(skip_parented && e.physics_parent_id.is_some())
+            })
+            .filter_map(|e| {
+                let g = e.position.global_coords();
+                let dx = g.x - player_global.x;
+                let dy = g.y - player_global.y;
+                if dx * dx + dy * dy >= prefilter_sq {
+                    return None;
+                }
+                Some(EntityCollider {
+                    center_xy: (g.x, g.y),
+                    radius: self.entity_collision_radius(e),
+                    has_physics_bsp: e.has_physics_bsp(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// One transition request. `end` carries the FULL desired displacement —
+/// velocity integration (smoothing, jump/fall gravity arc, leave-ground
+/// stamping) stays OUTSIDE the pipeline, exactly as retail integrates
+/// velocity in `update_object` BEFORE `transition()` consumes only
+/// old_pos→new_pos (acclient.c:320061). `begin`/`end` share a landblock
+/// frame; the pipeline rebuckets per accepted step.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransitionInput {
+    pub begin: WorldPosition,
+    pub end: WorldPosition,
+    pub object: ObjectInfo,
+    /// Mover is mid-jump/fall at slice entry.
+    pub airborne: bool,
+    /// Vertical velocity ≤ 0 at slice entry (touchdown only triggers on
+    /// the way down, mirroring the legacy `vertical_velocity <= 0` gate).
+    pub descending: bool,
+    /// Server-projection / autonomous drives pin contact (legacy
+    /// `LocalDriveControl::force_grounded`).
+    pub force_grounded: bool,
+    pub gates: TransitionGates,
+    /// Cliff-slide `N_last` carried across slices
+    /// (`world.player.last_known_wall_normal`).
+    pub last_known_wall_normal: Option<Vector3>,
+    /// acclient.c:320104-320115. Ported for shape; the resolution-side
+    /// consumer is spec S7 OPEN QUESTION 1 and stays inert.
+    pub frames_stationary_fall: u8,
+}
+
+/// Pipeline result. `grounded` is the FINAL contact state: the caller
+/// diffs it against entry (`land()` / `begin_fall()` + leave-ground
+/// stamp) — player-state mutation stays caller-side.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransitionOutcome {
+    pub pose: WorldPosition,
+    /// The LAST wall normal a step surfaced (the
+    /// `InitLastKnownContactPlane` stamp the caller carries forward).
+    pub wall_normal: Option<Vector3>,
+    pub grounded: bool,
+    pub cell_changed: bool,
+    pub state: TransitionState,
+}
+
+/// Retail `CTransition::calc_num_steps` non-viewer arm
+/// (acclient.c:311764, body 311823-311845): `ceil(3D dist / sphere
+/// radius)` equal substeps. Inside the pipeline the FULL-3D distance is
+/// simply the retail rule (this supersedes the orphan
+/// `USE_CALCNUMSTEPS_3D_DIST` gate, physics.rs). The viewer arm
+/// (`state & IS_VIEWER`, floor+1 with last-step remainder) is
+/// deliberately NOT implemented — A6-T4 is parked (RULINGS §1).
+pub fn calc_num_steps(offset: Vector3, radius: f32) -> (u32, Vector3) {
+    let dist = offset.length();
+    if !(dist > 0.0) || radius <= 0.0 {
+        return (1, offset);
+    }
+    let steps = (dist / radius).ceil().max(1.0) as u32;
+    (steps, offset * (1.0 / steps as f32))
+}
+
+/// Retail `CTransition::adjust_offset` call site (acclient.c:313266),
+/// minimal faithful form (spec S7 §3 Stage B.2 / OQ5): project the
+/// pending step off the carried sliding normal when valid. The fuller
+/// ACE `Transition.AdjustOffset` arms (z-slope kill, walkable-allowance
+/// interaction, Transition.cs:34-87) are the Stage-D fidelity pass.
+fn adjust_offset(step: &mut Vector3, collision: &TransitionCollisionInfo) {
+    if collision.base.sliding_normal_valid {
+        let n = collision.base.sliding_normal;
+        let into = step.dot(&n);
+        if into < 0.0 {
+            *step = *step - n * into;
+        }
+    }
+}
+
+/// Per-slice geometry candidate caches (spec S7 §5 risk 3: gather ONCE
+/// per slice, refresh per step only on a cell change — the same data the
+/// legacy chain gathers once per slice today).
+struct GeometryCaches {
+    buildings: Vec<BuildingAabbEntry>,
+    statics: Vec<StaticAabbEntry>,
+    entities: Vec<EntityCollider>,
+    entity_prefilter: f32,
+}
+
+impl GeometryCaches {
+    fn gather(env: &dyn TransitionEnv, pose: &WorldPosition, object: &ObjectInfo, gates: &TransitionGates, travel: f32) -> Self {
+        let entity_prefilter = travel + object.radius + 2.0;
+        Self {
+            buildings: env.scene().building_aabbs_near_pose(pose),
+            statics: env.scene().statics_aabbs_near_pose(pose),
+            entities: if object.state & object_info_state::IGNORE_CREATURES != 0 {
+                Vec::new()
+            } else {
+                env.entity_colliders_near(
+                    pose,
+                    entity_prefilter,
+                    object.self_guid,
+                    gates.skip_parented_entities,
+                )
+            },
+            entity_prefilter,
+        }
+    }
+
+    fn refresh(&mut self, env: &dyn TransitionEnv, pose: &WorldPosition, object: &ObjectInfo, gates: &TransitionGates) {
+        self.buildings = env.scene().building_aabbs_near_pose(pose);
+        self.statics = env.scene().statics_aabbs_near_pose(pose);
+        if object.state & object_info_state::IGNORE_CREATURES == 0 {
+            self.entities = env.entity_colliders_near(
+                pose,
+                self.entity_prefilter,
+                object.self_guid,
+                gates.skip_parented_entities,
+            );
+        }
+    }
+}
+
+/// Cell-transit flips at the step's start pose — retail re-derives cell
+/// membership from geometry every step (`build_cell_array`
+/// acclient.c:311675-311680 / per-step `find_cell_list`
+/// acclient.c:313300-313307; `check_building_transit` acclient.c:348110).
+/// Returns `true` when the landblock id changed.
+fn step_cell_transit_flips(
+    env: &dyn TransitionEnv,
+    pose: &mut WorldPosition,
+    gates: &TransitionGates,
+    radius: f32,
+) -> bool {
+    if !gates.local_envcell_entry {
+        return false;
+    }
+    if !pose.is_indoors() {
+        if let Some(entered) = env.scene().entered_envcell_for_outdoor_pose(pose, radius) {
+            pose.landblock_id = Guid(entered);
+            return true;
+        }
+    } else if let Some(outdoor) = env.scene().exited_envcell_to_outdoor(pose, radius) {
+        pose.landblock_id = Guid(outdoor);
+        return true;
+    }
+    false
+}
+
+/// Tier-1 statics stop-and-slide (port of the inline block in the legacy
+/// chain — swept-AABB clamp + one slide iteration). The `USE_STATIC_BSP`
+/// cede/push-out arms are deliberately NOT duplicated here (default-off;
+/// B4 wiring stays the flag-owner's follow-on, spec §3 Stage B.1).
+fn clamp_delta_against_statics(
+    candidates: &[StaticAabbEntry],
+    pose: &WorldPosition,
+    delta: Vector3,
+    radius: f32,
+) -> Vector3 {
+    if delta.length_squared() <= 1e-10 || candidates.is_empty() {
+        return delta;
+    }
+    let Some(hit) = sweep_sphere_against_static_aabbs(candidates, pose, delta, radius) else {
+        return delta;
+    };
+    let backoff = 1e-3;
+    let safe_t = (hit.t - backoff / delta.length().max(1e-6)).max(0.0);
+    let stopped_delta = delta * safe_t;
+    let remaining = delta * (1.0 - safe_t);
+    let into_normal = remaining.dot(&hit.normal);
+    let slide = remaining - hit.normal * into_normal;
+    if slide.length_squared() <= 1e-10 {
+        return stopped_delta;
+    }
+    let slide_pose = WorldPosition {
+        landblock_id: pose.landblock_id,
+        coords: Vector3::new(
+            pose.coords.x + stopped_delta.x,
+            pose.coords.y + stopped_delta.y,
+            pose.coords.z + stopped_delta.z,
+        ),
+        rotation: pose.rotation,
+    };
+    let slide_clamped = match sweep_sphere_against_static_aabbs(candidates, &slide_pose, slide, radius)
+    {
+        Some(slide_hit) => slide * (slide_hit.t - backoff / slide.length().max(1e-6)).max(0.0),
+        None => slide,
+    };
+    stopped_delta + slide_clamped
+}
+
+/// The per-step cell-insert analog (retail: the cell's virtual insert
+/// inside `insert_into_cell`, acclient.c:311632): the P1 lateral chain in
+/// its current order — indoor per-poly walls (+ AABB containment net with
+/// the doorway/exit relaxations) or outdoor buildings, then statics, then
+/// entity cylinders. Returns the clamped lateral and the wall normal the
+/// earliest wall surfaced (the contact-plane seed for `adjust_offset` /
+/// the seam skid).
+fn insert_check_offset(
+    env: &dyn TransitionEnv,
+    caches: &GeometryCaches,
+    object: &ObjectInfo,
+    gates: &TransitionGates,
+    pose: &WorldPosition,
+    lateral: Vector3,
+) -> (Vector3, Option<Vector3>) {
+    let scene = env.scene();
+    let mut wall_normal: Option<Vector3> = None;
+    let clamped = if pose.is_indoors() {
+        let cell_id = scene.current_cell(pose);
+        let triangles = scene.cell_triangles(cell_id);
+        let cell_aabb_opt = scene.cell_aabb(cell_id);
+        let exclusion_aabbs = scene.open_door_exclusion_aabbs_near(pose);
+        if triangles.is_empty() && cell_aabb_opt.is_none() {
+            // Pre-bake gate: refuse to predict indoor motion until the
+            // lazy physics bake lands (the academy-rubberband guard).
+            Vector3::zero()
+        } else {
+            let pre_clamped = if !triangles.is_empty() {
+                let (clamped, normal) = clamp_delta_against_cell_walls_dispatch(
+                    triangles,
+                    pose,
+                    lateral,
+                    object.radius,
+                    object.height,
+                    &exclusion_aabbs,
+                );
+                wall_normal = normal;
+                clamped
+            } else {
+                lateral
+            };
+            // AABB containment net + PR-RR.1 open-door bypass + B11
+            // outdoor-exit-room relaxation, exactly as the legacy chain.
+            let exit_room_relax = gates.local_envcell_entry
+                && !triangles.is_empty()
+                && scene.cell_has_outdoor_exit(cell_id);
+            match cell_aabb_opt {
+                Some(aabb) if exclusion_aabbs.is_empty() && !exit_room_relax => {
+                    clamp_delta_to_cell_interior(pose, pre_clamped, &aabb, object.radius)
+                }
+                _ => pre_clamped,
+            }
+        }
+    } else if caches.buildings.is_empty() {
+        lateral
+    } else {
+        // Pipeline rule: always the `_with_normal` variant — the clamped
+        // delta is identical to `clamp_delta_against_buildings` (which
+        // delegates), and the surfaced normal is what makes the seam skid
+        // ALWAYS available inside the pipeline (the legacy chain gates
+        // outdoor normals behind `USE_OUTDOOR_WALL_NORMALS`).
+        let (clamped, normal) =
+            clamp_delta_against_buildings_with_normal(&caches.buildings, pose, lateral, object.radius);
+        wall_normal = normal;
+        clamped
+    };
+    let clamped = clamp_delta_against_statics(&caches.statics, pose, clamped, object.radius);
+    let clamped = if caches.entities.is_empty() {
+        clamped
+    } else {
+        clamp_delta_against_entities(&caches.entities, pose, clamped, object.radius)
+    };
+    (clamped, wall_normal)
+}
+
+/// Refused-step slide — the pipeline's redo handler for a step-up the
+/// riser height refused. Inside the pipeline the previous step's plane is
+/// ALWAYS carried, so the retail cross-product seam skid
+/// (`cliff_slide`, acclient.c:312005-312080) is the rule (this is what
+/// the orphan `USE_CLIFF_SLIDE_INTRA_SUBSTEP` gate was scaffolded for);
+/// degenerate seams fall back to the single-plane tangent slide
+/// (`SpherePath.StepUpSlide` → `Sphere.SlideSphere`).
+fn refused_step_slide(
+    lateral: Vector3,
+    lateral_clamped: Vector3,
+    wall_normal: Option<Vector3>,
+    n_last: Option<Vector3>,
+    allow_edge_slide: bool,
+) -> Vector3 {
+    if !allow_edge_slide {
+        return lateral_clamped;
+    }
+    let Some(n_new) = wall_normal else {
+        return lateral_clamped;
+    };
+    let residual = Vector3::new(
+        lateral.x - lateral_clamped.x,
+        lateral.y - lateral_clamped.y,
+        0.0,
+    );
+    if residual.length_squared() <= 1e-12 {
+        return lateral_clamped;
+    }
+    if n_new.z < FLOOR_Z
+        && let Some(prev) = n_last
+        && let Some(seam) = cliff_slide_residual_along_seam(residual, n_new, prev)
+    {
+        return Vector3::new(
+            lateral_clamped.x + seam.x,
+            lateral_clamped.y + seam.y,
+            lateral_clamped.z,
+        );
+    }
+    let slid = slide_residual_along_wall_tangent(residual, n_new);
+    Vector3::new(
+        lateral_clamped.x + slid.x,
+        lateral_clamped.y + slid.y,
+        lateral_clamped.z,
+    )
+}
+
+/// F4-2 contour slide (port of the system.rs helper): project a refused
+/// uphill lateral onto the slope contour.
+fn terrain_contour_slide(lateral: Vector3, terrain_normal: Vector3) -> Option<Vector3> {
+    let n_xy_len =
+        (terrain_normal.x * terrain_normal.x + terrain_normal.y * terrain_normal.y).sqrt();
+    if n_xy_len < 1e-6 {
+        return None;
+    }
+    let contour_wall = Vector3 {
+        x: terrain_normal.x / n_xy_len,
+        y: terrain_normal.y / n_xy_len,
+        z: 0.0,
+    };
+    let slide = slide_residual_along_wall_tangent(lateral, contour_wall);
+    if slide.x * slide.x + slide.y * slide.y < 1e-10 {
+        return None;
+    }
+    Some(slide)
+}
+
+/// The transitional-position substep loop — retail
+/// `find_transitional_position` (acclient.c:313171-313340) over the
+/// `TransitionEnv` geometry backends. See the module doc for the
+/// per-step shape. Rotation is NOT interpolated per step (spec S7 OQ4:
+/// our lateral backends take only pose+delta; the caller integrates
+/// omega once per slice as today).
+pub fn find_transitional_position(
+    env: &dyn TransitionEnv,
+    input: &TransitionInput,
+) -> TransitionOutcome {
+    debug_assert_eq!(
+        input.object.state & object_info_state::IS_VIEWER,
+        0,
+        "viewer arm not implemented (A6-T4 parked)"
+    );
+    debug_assert_eq!(
+        input.begin.landblock_id, input.end.landblock_id,
+        "begin/end share a landblock frame; the pipeline rebuckets"
+    );
+
+    let offset = Vector3::new(
+        input.end.coords.x - input.begin.coords.x,
+        input.end.coords.y - input.begin.coords.y,
+        input.end.coords.z - input.begin.coords.z,
+    );
+    let (num_steps, step_offset) = calc_num_steps(offset, input.object.radius);
+
+    let mut pose = input.begin;
+    let mut airborne = input.airborne && !input.force_grounded;
+    let mut collision = TransitionCollisionInfo {
+        frames_stationary_fall: input.frames_stationary_fall,
+        ..Default::default()
+    };
+    let mut n_last = input.last_known_wall_normal;
+    let mut wall_normal_out: Option<Vector3> = None;
+    let mut cell_changed = false;
+    let mut state = TransitionState::OK;
+    let gates = &input.gates;
+    let object = &input.object;
+    let mut caches = GeometryCaches::gather(env, &pose, object, gates, offset.length());
+
+    for _ in 0..num_steps {
+        // adjust_offset consumes the PREVIOUS step's plane, then the
+        // per-step validity is cleared before the insert (retail order:
+        // acclient.c:313266 → 313286-313288).
+        let mut step = step_offset;
+        adjust_offset(&mut step, &collision);
+        collision.base.sliding_normal_valid = false;
+        collision.base.contact_plane_valid = false;
+
+        if step_cell_transit_flips(env, &mut pose, gates, object.radius) {
+            cell_changed = true;
+            caches.refresh(env, &pose, object, gates);
+        }
+
+        let scene = env.scene();
+        let indoor_unbaked = if pose.is_indoors() {
+            let cell_id = scene.current_cell(&pose);
+            scene.cell_triangles(cell_id).is_empty() && scene.cell_aabb(cell_id).is_none()
+        } else {
+            false
+        };
+
+        let step_entry_xy = (pose.coords.x, pose.coords.y);
+        let lateral = Vector3::new(step.x, step.y, 0.0);
+        let (lateral_clamped, n_new) =
+            insert_check_offset(env, &caches, object, gates, &pose, lateral);
+
+        // validate_transition redo handlers — step-up / refused slide.
+        let mut stepped_up = false;
+        if gates.step_up_down && !airborne && !indoor_unbaked && lateral.length_squared() > 1e-10 {
+            let requested_len = lateral.length();
+            let clamped_len = lateral_clamped.length();
+            let blocked_gap = requested_len - clamped_len;
+            let blocked = blocked_gap > (requested_len * 0.1).max(0.01);
+            if blocked {
+                let intended = WorldPosition {
+                    landblock_id: pose.landblock_id,
+                    coords: Vector3::new(
+                        pose.coords.x + lateral.x,
+                        pose.coords.y + lateral.y,
+                        pose.coords.z,
+                    ),
+                    rotation: pose.rotation,
+                };
+                let dest_global = intended.global_coords();
+                let feet_z = pose.coords.z;
+                let dest_floor_z: Option<f32> = if intended.is_indoors() {
+                    let cell_id = scene.current_cell(&intended);
+                    let triangles = scene.cell_triangles(cell_id);
+                    let ceiling = feet_z + object.step_up_height;
+                    if !triangles.is_empty() {
+                        highest_floor_z_under(triangles, dest_global.x, dest_global.y, ceiling)
+                    } else {
+                        None
+                    }
+                } else {
+                    env.terrain_height_at(dest_global.x, dest_global.y)
+                };
+                if let Some(new_feet_z) =
+                    step_up_decision(blocked, feet_z, dest_floor_z, object.step_up_height)
+                {
+                    pose.coords.x = intended.coords.x;
+                    pose.coords.y = intended.coords.y;
+                    pose.coords.z = new_feet_z;
+                    stepped_up = true;
+                } else {
+                    let slid = refused_step_slide(
+                        lateral,
+                        lateral_clamped,
+                        n_new,
+                        n_last,
+                        object.state & object_info_state::EDGE_SLIDE != 0,
+                    );
+                    pose.coords.x += slid.x;
+                    pose.coords.y += slid.y;
+                }
+            } else {
+                pose.coords.x += lateral_clamped.x;
+                pose.coords.y += lateral_clamped.y;
+            }
+        } else {
+            pose.coords.x += lateral_clamped.x;
+            pose.coords.y += lateral_clamped.y;
+        }
+
+        // Vertical: the step's share of the caller-integrated Z delta,
+        // then the floor resolution (snap / touchdown / step-down).
+        if !indoor_unbaked {
+            if !stepped_up {
+                pose.coords.z += step.z;
+            }
+            resolve_floor_for_step(
+                env,
+                object,
+                gates,
+                input.descending,
+                &mut pose,
+                &mut airborne,
+                step_entry_xy,
+            );
+        }
+
+        // Bookkeeping: carry the step's wall plane forward (the
+        // InitLastKnownContactPlane equivalent) and seed adjust_offset.
+        if let Some(n) = n_new {
+            n_last = Some(n);
+            wall_normal_out = Some(n);
+            collision.base.sliding_normal = n;
+            collision.base.sliding_normal_valid = true;
+            collision.collision_normal = Some(n);
+            state = TransitionState::Slid;
+        }
+
+        // Per-step outdoor rebucket — the analog of the per-step cell
+        // rebuild (the indoor flips ran at step start).
+        if !pose.is_indoors() {
+            let rebucketed = pose.rebucket_outdoor_landblock();
+            if rebucketed.landblock_id != pose.landblock_id {
+                cell_changed = true;
+                pose = rebucketed;
+                caches.refresh(env, &pose, object, gates);
+            }
+        }
+
+        // Retail loop-exit: collision-normal-valid && PathClipped
+        // (acclient.c:313312-313313). The player never carries
+        // PATH_CLIPPED today; ported for shape.
+        if collision.collision_normal.is_some()
+            && object.state & object_info_state::PATH_CLIPPED != 0
+        {
+            state = TransitionState::Collided;
+            break;
+        }
+    }
+
+    TransitionOutcome {
+        pose,
+        wall_normal: wall_normal_out,
+        grounded: !airborne,
+        cell_changed,
+        state,
+    }
+}
+
+/// Per-step floor resolution — the Z half of `validate_transition`:
+/// outdoor terrain snap (with the water / walkable-slope gates, A7-R3
+/// landing allowance, A7-R2 walkable step-down) and the indoor per-poly
+/// snap-up / F4-1 step-down / fall-through guard / ceiling clamp. Direct
+/// port of the legacy chain's floor block, parameterized per step.
+fn resolve_floor_for_step(
+    env: &dyn TransitionEnv,
+    object: &ObjectInfo,
+    gates: &TransitionGates,
+    descending: bool,
+    pose: &mut WorldPosition,
+    airborne: &mut bool,
+    step_entry_xy: (f32, f32),
+) {
+    let scene = env.scene();
+    if !pose.is_indoors() {
+        let global = pose.global_coords();
+        let Some(z) = env.terrain_height_at(global.x, global.y) else {
+            return;
+        };
+        let z = if gates.water_collision {
+            z + env.water_depth_at(global.x, global.y)
+        } else {
+            z
+        };
+        if *airborne {
+            // Touchdown only on the way down, through the A7-R3 landing
+            // allowance.
+            if descending && pose.coords.z <= z {
+                let landing_normal = if gates.landing_walkable {
+                    env.terrain_normal_at(global.x, global.y)
+                } else {
+                    None
+                };
+                if gates.landing_walkable
+                    && !landing_allows_touchdown(
+                        landing_normal.map(|n| n.z),
+                        physics_globals::LANDING_Z,
+                    )
+                {
+                    if let Some(normal) = landing_normal {
+                        let lateral = Vector3 {
+                            x: pose.coords.x - step_entry_xy.0,
+                            y: pose.coords.y - step_entry_xy.1,
+                            z: 0.0,
+                        };
+                        let slid = slide_residual_along_wall_tangent(lateral, normal);
+                        pose.coords.x = step_entry_xy.0 + slid.x;
+                        pose.coords.y = step_entry_xy.1 + slid.y;
+                    }
+                } else {
+                    pose.coords.z = z;
+                    *airborne = false;
+                }
+            }
+        } else if gates.water_collision && env.is_entirely_water_cell_at(global.x, global.y) {
+            // F4-4: refuse the grounded step into a fully-water cell.
+            pose.coords.x = step_entry_xy.0;
+            pose.coords.y = step_entry_xy.1;
+        } else if gates.terrain_walkable_gate
+            && z > pose.coords.z
+            && env
+                .terrain_normal_at(global.x, global.y)
+                .map(|n| n.z < FLOOR_Z)
+                .unwrap_or(false)
+        {
+            // F4-2: non-walkable uphill face — contour slide or hard stop.
+            let mut slid = false;
+            if let Some(slide) = env
+                .terrain_normal_at(global.x, global.y)
+                .and_then(|n| {
+                    terrain_contour_slide(
+                        Vector3 {
+                            x: pose.coords.x - step_entry_xy.0,
+                            y: pose.coords.y - step_entry_xy.1,
+                            z: 0.0,
+                        },
+                        n,
+                    )
+                })
+            {
+                let cand_local = (step_entry_xy.0 + slide.x, step_entry_xy.1 + slide.y);
+                let cand_global = (
+                    global.x + (cand_local.0 - pose.coords.x),
+                    global.y + (cand_local.1 - pose.coords.y),
+                );
+                let water_blocked = gates.water_collision
+                    && env.is_entirely_water_cell_at(cand_global.0, cand_global.1);
+                if !water_blocked
+                    && let Some(cand_z) = env.terrain_height_at(cand_global.0, cand_global.1)
+                {
+                    let cand_steep_uphill = cand_z > pose.coords.z
+                        && env
+                            .terrain_normal_at(cand_global.0, cand_global.1)
+                            .map(|n| n.z < FLOOR_Z)
+                            .unwrap_or(false);
+                    if !cand_steep_uphill {
+                        pose.coords.x = cand_local.0;
+                        pose.coords.y = cand_local.1;
+                        if (cand_z - pose.coords.z).abs() <= 0.5 {
+                            pose.coords.z = cand_z;
+                        }
+                        slid = true;
+                    }
+                }
+            }
+            if !slid {
+                pose.coords.x = step_entry_xy.0;
+                pose.coords.y = step_entry_xy.1;
+            }
+        } else {
+            // Grounded descent/rise: step-down resolve (A7-R2) or the
+            // legacy ledge heuristic.
+            const LEDGE_FALL_THRESHOLD_M: f32 = 0.5;
+            if gates.step_up_down {
+                let step_down_outcome = if gates.walkable_step_down {
+                    step_down_resolve(
+                        pose.coords.z,
+                        z,
+                        env.terrain_normal_at(global.x, global.y).map(|n| n.z),
+                        object.step_down_height,
+                        FLOOR_Z,
+                    )
+                } else {
+                    step_down_decision(pose.coords.z, z, object.step_down_height)
+                };
+                match step_down_outcome {
+                    StepDownOutcome::Snap(snap_z) => pose.coords.z = snap_z,
+                    StepDownOutcome::Fall => *airborne = true,
+                }
+            } else if pose.coords.z - z > LEDGE_FALL_THRESHOLD_M {
+                *airborne = true;
+            } else {
+                pose.coords.z = z;
+            }
+        }
+    } else {
+        // Indoor floor resolution (per-poly snap-up / F4-1 step-down /
+        // fall-through guard / ceiling clamp).
+        let cell_id = scene.current_cell(pose);
+        let global = pose.global_coords();
+        let triangles = scene.cell_triangles(cell_id);
+        let cell_aabb = scene.cell_aabb(cell_id);
+        let ceiling_for_floor_query = cell_aabb
+            .map(|a| a.max.z + 1.0)
+            .unwrap_or(pose.coords.z + 100.0);
+        let poly_floor_z = if !triangles.is_empty() {
+            highest_floor_z_under(triangles, global.x, global.y, ceiling_for_floor_query)
+        } else {
+            None
+        };
+        let aabb_floor_z = cell_aabb.map(|a| a.min.z);
+        if gates.ramp_floor_snap_fix {
+            if let Some(floor) = poly_floor_z {
+                let snap_z = floor + 0.005;
+                if pose.coords.z < snap_z {
+                    let refuse_landing = gates.landing_walkable
+                        && *airborne
+                        && !landing_allows_touchdown(
+                            floor_normal_under(
+                                triangles,
+                                global.x,
+                                global.y,
+                                ceiling_for_floor_query,
+                            )
+                            .map(|n| n.z),
+                            physics_globals::LANDING_Z,
+                        );
+                    if !refuse_landing {
+                        pose.coords.z = snap_z;
+                        if *airborne {
+                            *airborne = false;
+                        }
+                    }
+                } else if gates.step_up_down && !*airborne && pose.coords.z > snap_z {
+                    let step_down_outcome = if gates.walkable_step_down {
+                        step_down_resolve(
+                            pose.coords.z,
+                            snap_z,
+                            floor_normal_under(
+                                triangles,
+                                global.x,
+                                global.y,
+                                ceiling_for_floor_query,
+                            )
+                            .map(|n| n.z),
+                            object.step_down_height,
+                            FLOOR_Z,
+                        )
+                    } else {
+                        step_down_decision(pose.coords.z, snap_z, object.step_down_height)
+                    };
+                    match step_down_outcome {
+                        StepDownOutcome::Snap(z) => pose.coords.z = z,
+                        StepDownOutcome::Fall => *airborne = true,
+                    }
+                }
+            }
+            if let Some(aabb_min) = aabb_floor_z {
+                let cell_floor = aabb_min + 0.005;
+                if pose.coords.z < cell_floor {
+                    pose.coords.z = cell_floor;
+                    if *airborne {
+                        *airborne = false;
+                    }
+                }
+            }
+        } else {
+            let floor_z = poly_floor_z.or(aabb_floor_z);
+            if let Some(floor) = floor_z {
+                let snap_z = floor + 0.005;
+                if pose.coords.z < snap_z {
+                    pose.coords.z = snap_z;
+                    if *airborne {
+                        *airborne = false;
+                    }
+                }
+            }
+        }
+        if let Some(aabb) = cell_aabb {
+            let ceiling_z = aabb.max.z - object.height;
+            let floor_min = poly_floor_z.or(aabb_floor_z).unwrap_or(aabb.min.z + 0.005);
+            if pose.coords.z > ceiling_z {
+                pose.coords.z = ceiling_z.max(floor_min);
+            }
+        }
+    }
+}
+
+// Keep the Aabb import live for the doorway-exclusion signature even if
+// rustc's dead-code analysis changes; the type appears in
+// `open_door_exclusion_aabbs_near`'s return used above.
+#[allow(dead_code)]
+fn _aabb_type_anchor(_: &Aabb) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use holtburger_common::Quaternion;
+
+    fn pose_at(x: f32, y: f32, z: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            coords: Vector3::new(x, y, z),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    fn gates_default_on() -> TransitionGates {
+        TransitionGates {
+            step_up_down: true,
+            walkable_step_down: false,
+            landing_walkable: false,
+            water_collision: false,
+            terrain_walkable_gate: false,
+            local_envcell_entry: true,
+            ramp_floor_snap_fix: true,
+            skip_parented_entities: true,
+        }
+    }
+
+    fn local_player_object() -> ObjectInfo {
+        ObjectInfo::for_local_player(None, None, true, Guid(0x5000_0001))
+    }
+
+    fn input_for(begin: WorldPosition, end: WorldPosition) -> TransitionInput {
+        TransitionInput {
+            begin,
+            end,
+            object: local_player_object(),
+            airborne: false,
+            descending: true,
+            force_grounded: false,
+            gates: gates_default_on(),
+            last_known_wall_normal: None,
+            frames_stationary_fall: 0,
+        }
+    }
+
+    #[test]
+    fn calc_num_steps_sub_radius_is_single_step() {
+        // Sub-radius delta ⇒ 1 step ⇒ the behaviour-identical guarantee
+        // (physics.rs "pure superset" doc numbers).
+        let (steps, per) = calc_num_steps(Vector3::new(0.3, 0.0, 0.0), 0.4);
+        assert_eq!(steps, 1);
+        assert!((per.x - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn calc_num_steps_run_tick_is_two_steps() {
+        // 0.43 m run-tick @ r=0.4 ⇒ ceil(1.075) = 2 (physics.rs:37-42).
+        let (steps, per) = calc_num_steps(Vector3::new(0.43, 0.0, 0.0), 0.4);
+        assert_eq!(steps, 2);
+        assert!((per.x - 0.215).abs() < 1e-6);
+    }
+
+    #[test]
+    fn calc_num_steps_uses_full_3d_distance() {
+        // 3D dist = 0.5 (0.3/0.4 planar + 0.0 z is 0.5 via 3-4-5) at
+        // r=0.4 ⇒ 2 steps even though the planar part is sub-radius.
+        let (steps, _) = calc_num_steps(Vector3::new(0.3, 0.0, 0.4), 0.4);
+        assert_eq!(steps, 2);
+    }
+
+    #[test]
+    fn calc_num_steps_zero_offset_is_one_step() {
+        let (steps, per) = calc_num_steps(Vector3::zero(), 0.4);
+        assert_eq!(steps, 1);
+        assert_eq!(per, Vector3::zero());
+    }
+
+    #[test]
+    fn object_info_fallback_heights_are_retail_player_values() {
+        let object = ObjectInfo::for_local_player(None, None, false, Guid(1));
+        assert_eq!(object.step_up_height, 0.6);
+        assert_eq!(object.step_down_height, 1.5);
+        assert_eq!(object.state & object_info_state::EDGE_SLIDE, 0);
+        let slider = ObjectInfo::for_local_player(Some(0.8), Some(2.0), true, Guid(1));
+        assert_eq!(slider.step_up_height, 0.8);
+        assert_eq!(slider.step_down_height, 2.0);
+        assert_ne!(slider.state & object_info_state::EDGE_SLIDE, 0);
+    }
+
+    #[test]
+    fn adjust_offset_projects_off_carried_sliding_normal() {
+        let mut collision = TransitionCollisionInfo::default();
+        collision.base.sliding_normal = Vector3::new(-1.0, 0.0, 0.0);
+        collision.base.sliding_normal_valid = true;
+        let mut step = Vector3::new(0.2, 0.1, 0.0);
+        adjust_offset(&mut step, &collision);
+        // The +x component drives INTO the -x-facing wall ⇒ removed.
+        assert!((step.x - 0.0).abs() < 1e-6);
+        assert!((step.y - 0.1).abs() < 1e-6);
+        // A step moving AWAY from the plane is untouched.
+        let mut away = Vector3::new(-0.2, 0.1, 0.0);
+        adjust_offset(&mut away, &collision);
+        assert!((away.x + 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn open_ground_pipeline_reaches_end_pose() {
+        // Synthetic world: no geometry, no terrain cache ⇒ the pipeline
+        // must walk every substep and land exactly on `end`.
+        let world = WorldState::synthetic();
+        let begin = pose_at(50.0, 50.0, 10.0);
+        let mut end = begin;
+        end.coords.x += 1.3; // > 3 radii ⇒ 4 substeps
+        let outcome = find_transitional_position(&world, &input_for(begin, end));
+        assert!((outcome.pose.coords.x - end.coords.x).abs() < 1e-5);
+        assert!((outcome.pose.coords.y - end.coords.y).abs() < 1e-5);
+        assert!(outcome.grounded);
+        assert_eq!(outcome.state, TransitionState::OK);
+        assert_eq!(outcome.wall_normal, None);
+    }
+
+    #[test]
+    fn building_aabb_blocks_pipeline_step() {
+        use crate::spatial::types::BuildingAabbEntry;
+        let mut world = WorldState::synthetic();
+        let begin = pose_at(50.0, 50.0, 0.0);
+        // Wall directly ahead on +x, taller than step-up.
+        let global = begin.global_coords();
+        world.scene.insert_building_aabb(
+            begin.landblock_id.0,
+            BuildingAabbEntry {
+                building_id: crate::spatial::types::BuildingId::new(
+                    begin.landblock_id.0,
+                    1,
+                    0,
+                ),
+                part_index: 0,
+                aabb: Aabb {
+                    min: Vector3::new(global.x + 1.0, global.y - 5.0, global.z - 1.0),
+                    max: Vector3::new(global.x + 2.0, global.y + 5.0, global.z + 10.0),
+                },
+                active: true,
+            },
+        );
+        let mut end = begin;
+        end.coords.x += 3.0; // would tunnel straight through the wall
+        let outcome = find_transitional_position(&world, &input_for(begin, end));
+        // Stopped at (or just before) the wall face minus the capsule
+        // radius: 50 + 1.0 - 0.4 = 50.6.
+        assert!(
+            outcome.pose.coords.x <= 50.6 + 1e-3,
+            "pipeline must not pass through the building: x = {}",
+            outcome.pose.coords.x
+        );
+        assert!(outcome.pose.coords.x > 50.0, "some travel before the wall");
+        assert!(outcome.wall_normal.is_some(), "wall normal surfaced");
+    }
+
+    #[test]
+    fn entity_cylinder_blocks_pipeline_step() {
+        use crate::entity::Entity;
+        let mut world = WorldState::synthetic();
+        let player_guid = Guid(0x5000_0001);
+        let begin = pose_at(50.0, 50.0, 0.0);
+        world.seed_local_player_entity(player_guid, "Player", begin);
+        let mut blocker_pose = begin;
+        blocker_pose.coords.x += 1.5;
+        world.add_entity(Entity::new(
+            Guid(0x5000_0002),
+            "Blocker".to_string(),
+            blocker_pose,
+        ));
+        let mut end = begin;
+        end.coords.x += 3.0;
+        let mut input = input_for(begin, end);
+        input.object.self_guid = player_guid;
+        let outcome = find_transitional_position(&world, &input);
+        // Blocked short of the entity (combined radii ≈ 0.8 by default).
+        assert!(
+            outcome.pose.coords.x < 51.5,
+            "pipeline must stop at the entity cylinder: x = {}",
+            outcome.pose.coords.x
+        );
+    }
+
+    #[test]
+    fn ignore_creatures_state_skips_entity_sweep() {
+        use crate::entity::Entity;
+        let mut world = WorldState::synthetic();
+        let player_guid = Guid(0x5000_0001);
+        let begin = pose_at(50.0, 50.0, 0.0);
+        world.seed_local_player_entity(player_guid, "Player", begin);
+        let mut blocker_pose = begin;
+        blocker_pose.coords.x += 1.5;
+        world.add_entity(Entity::new(
+            Guid(0x5000_0002),
+            "Blocker".to_string(),
+            blocker_pose,
+        ));
+        let mut end = begin;
+        end.coords.x += 3.0;
+        let mut input = input_for(begin, end);
+        input.object.self_guid = player_guid;
+        input.object.state |= object_info_state::IGNORE_CREATURES;
+        let outcome = find_transitional_position(&world, &input);
+        assert!((outcome.pose.coords.x - end.coords.x).abs() < 1e-5);
+    }
+
+    #[test]
+    fn refused_step_slide_single_plane_removes_into_wall_component() {
+        let lateral = Vector3::new(0.2, 0.1, 0.0);
+        let clamped = Vector3::new(0.05, 0.025, 0.0);
+        let n = Vector3::new(-1.0, 0.0, 0.0);
+        let slid = refused_step_slide(lateral, clamped, Some(n), None, true);
+        // Residual (0.15, 0.075) slides to (0, 0.075) along the wall.
+        assert!((slid.x - 0.05).abs() < 1e-6);
+        assert!((slid.y - 0.1).abs() < 1e-6);
+        // Edge-slide refused ⇒ clamped only.
+        let dead = refused_step_slide(lateral, clamped, Some(n), None, false);
+        assert_eq!(dead, clamped);
+    }
+}

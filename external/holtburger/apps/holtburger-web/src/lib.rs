@@ -106,6 +106,27 @@ fn parse_unified_tick_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "unifiedTick=on")
 }
 
+/// A6-T1/T2 (2026-06-12, W3+ S7): parse `?unifiedTransition=on` (or
+/// `&unifiedTransition=on`). Same shape as `parse_unified_tick_flag`.
+/// When on, the local player's movement resolves through the retail
+/// transition pipeline (`CPhysicsObj::transition` →
+/// `find_transitional_position`, acclient.c:320061/313171; ours
+/// `holtburger_world::spatial::transition`) on BOTH solver paths: the
+/// legacy handle path (T1 — the manual-drive slice swaps its
+/// single-pass clamp chain for the substep pipeline) and the canonical
+/// spine's simulation solve (T2 — kills the P2b hole where
+/// `?unifiedTick=on` manual movement had ZERO collision). INDEPENDENT
+/// of `?unifiedTick=on`: the flag does something useful in all four
+/// cells of the {unifiedTick}×{unifiedTransition} matrix. Default OFF =
+/// every legacy path is untouched code, byte-identical. Native carrier:
+/// `USE_UNIFIED_TRANSITION` (movement/system.rs). Needs a wasm rebuild;
+/// NO manifest bump (no new JS-visible export).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_unified_transition_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "unifiedTransition=on")
+}
+
 /// A9-Stage1 (2026-06-12, unification survey): parse `?placementId=on`
 /// (or `&placementId=on`). Same shape as `parse_unified_tick_flag`.
 /// When on, the static placement-frame resolution follows RETAIL order
@@ -22387,6 +22408,19 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_wire_state_packs_flag("?wireStatePacks=on"));
         assert!(!parse_wire_state_packs_flag(""));
     }
+
+    /// A6-T1/T2 (W3+ S7): `?unifiedTransition=on` parse shape.
+    #[test]
+    fn unified_transition_flag_parses_only_exact_on_value() {
+        use super::parse_unified_transition_flag;
+        assert!(parse_unified_transition_flag("?unifiedTransition=on"));
+        assert!(parse_unified_transition_flag(
+            "?renderer=3d&unifiedTick=on&unifiedTransition=on"
+        ));
+        assert!(!parse_unified_transition_flag("?unifiedTransition=off"));
+        assert!(!parse_unified_transition_flag("?unifiedTick=on"));
+        assert!(!parse_unified_transition_flag(""));
+    }
 }
 
 /// CMT Wave 16 / Phase 50 (2026-05-26): resolve the entity's
@@ -30446,6 +30480,12 @@ async fn recv_loop(
     // the same point. See `docs/phase-4-step-3.6-movement-system.md`.
     let mut world: Option<holtburger_world::WorldState> = None;
     let mut movement = holtburger_core::MovementSystemHandle::new();
+    // A6-T1/T2 (2026-06-12, W3+ S7): `?unifiedTransition=on` — route the
+    // local player's movement (legacy handle slices AND the unified
+    // spine's simulation solve) through the retail transition pipeline.
+    // Default OFF = byte-identical legacy paths; see
+    // `parse_unified_transition_flag`.
+    movement.set_unified_transition(parse_unified_transition_flag(&js_location_search()));
     // A1-O1 (2026-06-11): the canonical tick spine's wasm facade — owns
     // the `ClientSimulationSystem` this recv loop otherwise lacks.
     // Constructed unconditionally (cheap empty Vec); driven ONLY when

@@ -397,6 +397,42 @@ const USE_MOTION_TABLE_QUEUE: bool = false;
 /// launch speed ≤ run_rate×4.0; jump arcs + arms-up pose UNCHANGED.
 const USE_LEAVE_GROUND_VELOCITY: bool = false;
 
+/// A6-T1/T2 (2026-06-12, W3+ spec S7) — the retail transition-pipeline
+/// rewrite of the local-player tick spine. ONE feature, TWO carriers:
+/// this const (native default) and the `?unifiedTransition=on` URL flag
+/// (wasm; parsed in `apps/holtburger-web/src/lib.rs` →
+/// `MovementSystemHandle::set_unified_transition` →
+/// [`MovementSystem::unified_transition_runtime`]). Effective predicate
+/// at every consumption site:
+/// [`MovementSystem::unified_transition_enabled`].
+///
+/// `true` / flag-on: BOTH local-player solver arms route through retail's
+/// single pipeline (`CPhysicsObj::transition` →
+/// `find_transitional_position`, acclient.c:320061/313171 — ported as
+/// [`holtburger_world::spatial::transition`]):
+///   - T1: the legacy handle path
+///     ([`MovementSystem::advance_local_pose_for_manual_drive_slice`])
+///     swaps its single-pass clamp chain for the substep pipeline
+///     ([`MovementSystem::advance_manual_slice_via_transition`]).
+///   - T2: the canonical tick spine's simulation solve
+///     (`client/simulation.rs`) resolves the local player through the
+///     SAME pipeline instead of the collision-free
+///     `advance_grounded_body_kinematics` arm — killing the W1-created
+///     P2b hole where `?unifiedTick=on` manual movement walked through
+///     everything, and upgrading the drive arm from buildings-only to
+///     the full chain. `?unifiedTick=on&unifiedTransition=on` is the
+///     first browser configuration that is simultaneously
+///     canonical-spine AND fully-collided.
+///
+/// `false` (DEFAULT): every legacy path is untouched code —
+/// byte-identical, rollback is dropping the URL flag.
+///
+/// Intended behavioral deltas under the flag (why promotion is
+/// 1070-eye-test-gated, W6): anti-tunneling substeps, always-available
+/// seam skid, per-step cell transit. Needs wasm rebuild; NO manifest
+/// bump (no new JS-visible export).
+const USE_UNIFIED_TRANSITION: bool = false;
+
 /// F4-2 (bughunt 2026-06-09) — outdoor walkable-slope gate.
 ///
 /// `false` (DEFAULT): the legacy behaviour — outdoor grounded movement
@@ -911,6 +947,12 @@ pub(crate) struct MovementSystem {
     /// [`Self::apply_movement_world_events`] (growth bounded by entity
     /// count between prunes).
     movement_managers: HashMap<Guid, MovementManager>,
+    /// A6-T1/T2 — runtime carrier of the `?unifiedTransition=on` URL
+    /// flag (wasm recv-loop init calls
+    /// `MovementSystemHandle::set_unified_transition`). OR'd with the
+    /// [`USE_UNIFIED_TRANSITION`] const by
+    /// [`Self::unified_transition_enabled`]. Default `false`.
+    unified_transition_runtime: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1005,7 +1047,22 @@ impl MovementSystem {
             motion_table_manager: MotionTableManager::new(),
             local_motion_interp: MotionInterp::default(),
             movement_managers: HashMap::new(),
+            unified_transition_runtime: false,
         }
+    }
+
+    /// A6-T1/T2 — install the `?unifiedTransition=on` runtime carrier
+    /// (see [`USE_UNIFIED_TRANSITION`]).
+    pub(crate) fn set_unified_transition(&mut self, on: bool) {
+        self.unified_transition_runtime = on;
+    }
+
+    /// A6-T1/T2 — the effective transition-pipeline predicate, used at
+    /// every consumption site (the T1 swap in
+    /// [`Self::advance_local_pose_for_manual_drive_slice`] and the T2
+    /// spine arm in `client/simulation.rs`).
+    pub(crate) fn unified_transition_enabled(&self) -> bool {
+        USE_UNIFIED_TRANSITION || self.unified_transition_runtime
     }
 
     pub(crate) fn note_server_controlled_movement_started(&mut self) {
@@ -1491,6 +1548,13 @@ impl MovementSystem {
         world: &mut WorldState,
         dt: Duration,
     ) {
+        // A6-T1 (W3+ S7) — under the unified-transition gate the slice
+        // routes through the retail substep pipeline; the legacy chain
+        // below runs UNTOUCHED when the gate is off (zero code motion).
+        if self.unified_transition_enabled() {
+            let _ = self.advance_manual_slice_via_transition(world, dt);
+            return;
+        }
         let Some(active) = self.active_drive else {
             return;
         };
@@ -3098,6 +3162,292 @@ impl MovementSystem {
         };
 
         let _ = world.set_local_player_runtime_pose(pose);
+    }
+
+    /// A6-T1/T2 — the local player's per-transition object description +
+    /// gate snapshot for the retail pipeline. The flag consts live HERE
+    /// (the flag owner); the pure pipeline in
+    /// [`holtburger_world::spatial::transition`] receives their values
+    /// so its behavior mirrors the legacy chain gate-for-gate.
+    pub(crate) fn transition_profile(
+        world: &WorldState,
+    ) -> (
+        holtburger_world::spatial::transition::ObjectInfo,
+        holtburger_world::spatial::transition::TransitionGates,
+    ) {
+        let step_up = if USE_SETUP_STEP_HEIGHTS {
+            world.player.step_up_height
+        } else {
+            None
+        };
+        let step_down = if USE_SETUP_STEP_HEIGHTS {
+            world.player.step_down_height
+        } else {
+            None
+        };
+        let object = holtburger_world::spatial::transition::ObjectInfo::for_local_player(
+            step_up,
+            step_down,
+            USE_EDGE_SLIDE && world.player.allow_edge_slide,
+            world.player.guid,
+        );
+        let gates = holtburger_world::spatial::transition::TransitionGates {
+            step_up_down: USE_STEP_UP_DOWN,
+            walkable_step_down: USE_WALKABLE_STEP_DOWN,
+            landing_walkable: USE_LANDING_WALKABLE,
+            water_collision: USE_WATER_COLLISION,
+            terrain_walkable_gate: USE_TERRAIN_WALKABLE_GATE,
+            local_envcell_entry: USE_LOCAL_ENVCELL_ENTRY,
+            ramp_floor_snap_fix: USE_RAMP_FLOOR_SNAP_FIX,
+            skip_parented_entities: SKIP_PARENTED_ENTITY_COLLISION,
+        };
+        (object, gates)
+    }
+
+    /// A6-T1/T2 — ONE manual-drive slice through the retail transition
+    /// pipeline. The SHARED driver for both consumers (which is what
+    /// makes the T1↔T2 equivalence structural):
+    ///   - T1: [`Self::advance_local_pose_for_manual_drive_slice`]'s
+    ///     gate-on swap (the legacy handle path).
+    ///   - T2: the canonical spine's `simulation.tick` manual arm
+    ///     (`client/simulation.rs`), which excludes the local body from
+    ///     `SpatialPhysics::solve` and calls this instead.
+    ///
+    /// Velocity contract: the interpreted-pipeline source
+    /// ([`interpreted_velocity_for_state`] — the same Stage-1 branch the
+    /// legacy P1 chain uses under `USE_INTERPRETED_VELOCITY = true`,
+    /// spec S7 §3 Stage C.1 / OQ2) with the StandingLongJump root and
+    /// the airborne frozen-launch-velocity rule. Velocity integration
+    /// (incl. the gravity arc) stays OUTSIDE the pipeline — retail
+    /// integrates velocity in `update_object` BEFORE `transition()`
+    /// consumes only old→new pose (acclient.c:320061).
+    ///
+    /// Returns `false` when no manual drive is active / prerequisites
+    /// are missing (caller falls through; nothing was advanced).
+    pub(crate) fn advance_manual_slice_via_transition(
+        &self,
+        world: &mut WorldState,
+        dt: Duration,
+    ) -> bool {
+        let Some(active) = self.active_drive else {
+            return false;
+        };
+        let ActiveDriveIntent::Manual(state) = active.intent else {
+            return false;
+        };
+        let Some(pose) = world.local_player_runtime_pose() else {
+            return false;
+        };
+        let heading = pose.rotation.to_heading();
+        let Ok(capabilities) = world.resolve_self_movement_capabilities() else {
+            return false;
+        };
+        let dt_s = dt.as_secs_f32();
+
+        let target_velocity = interpreted_velocity_for_state(heading, state, &capabilities);
+        // G-7 / F1-6 — StandingLongJump root (turning stays allowed via
+        // omega in the tail).
+        let target_velocity = if world.player.standing_long_jump_charge {
+            Vector3::zero()
+        } else {
+            target_velocity
+        };
+        let smoothed_planar = if world.player.is_airborne {
+            // Frozen world-frame launch velocity — mid-air WASD does not
+            // re-aim the trajectory (retail contact gate).
+            world.player.current_planar_velocity
+        } else {
+            // Retail direct-set + small-velocity snap (the Stage-1
+            // grounded model; see USE_INTERPRETED_VELOCITY).
+            let mut v = target_velocity;
+            v.z = 0.0;
+            let mag_sq = v.x * v.x + v.y * v.y;
+            let threshold_sq = PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC
+                * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC;
+            if mag_sq < threshold_sq {
+                v.x = 0.0;
+                v.y = 0.0;
+            }
+            world.player.current_planar_velocity = v;
+            v
+        };
+        let raw_delta = Vector3::new(
+            smoothed_planar.x * dt_s,
+            smoothed_planar.y * dt_s,
+            target_velocity.z * dt_s,
+        );
+        self.finish_manual_slice_via_transition(
+            world,
+            pose,
+            raw_delta,
+            heading,
+            state,
+            &capabilities,
+            dt_s,
+        );
+        true
+    }
+
+    /// A6-T1/T2 — the pipeline call + write-back tail shared by the
+    /// manual-slice driver above: A7-R6 deferred-ethereal re-check
+    /// (entity-side, deliberately OUTSIDE the pipeline per spec §1),
+    /// the airborne gravity/terminal-clamp integration (outside — the
+    /// pipeline consumes only the resulting Z delta), the
+    /// `find_transitional_position` call, contact-transition
+    /// bookkeeping (`land`/`begin_fall` + leave-ground stamp + the
+    /// `InitLastKnownContactPlane` wall-normal carry), and the legacy
+    /// tail (omega rotation prediction, force-position interpolation,
+    /// runtime-pose write-back).
+    #[allow(clippy::too_many_arguments)]
+    fn finish_manual_slice_via_transition(
+        &self,
+        world: &mut WorldState,
+        pose: holtburger_common::position::WorldPosition,
+        raw_delta: Vector3,
+        heading: f32,
+        state: MotionState,
+        capabilities: &holtburger_world::SelfMovementCapabilities,
+        dt_s: f32,
+    ) {
+        // A7-R6 — resolve deferred ethereal expiries against the working
+        // pose (flag off: no entity carries the pending bit ⇒ no-op).
+        if holtburger_world::entity::USE_ETHEREAL_RECHECK {
+            let player_global = pose.global_coords();
+            let pending: Vec<_> = world
+                .entities
+                .iter()
+                .filter(|e| e.ethereal_recheck_pending)
+                .map(|e| {
+                    let g = e.position.global_coords();
+                    (e.guid, (g.x, g.y), world.entity_collision_radius(e))
+                })
+                .collect();
+            for (guid, center, radius) in pending {
+                let overlapping = holtburger_world::spatial::spheres_overlap_xy(
+                    (player_global.x, player_global.y),
+                    holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+                    center,
+                    radius,
+                );
+                if let Some(entity) = world.entities.get_mut(guid) {
+                    entity.resolve_ethereal_recheck(overlapping);
+                }
+            }
+        }
+
+        let was_airborne = world.player.is_airborne;
+        let mut descending = true;
+        let dz = if was_airborne {
+            // 2nd-order gravity + terminal clamp — identical math to the
+            // legacy airborne arm; stays outside the pipeline.
+            let az = -9.8_f32;
+            let v_old = world.player.vertical_velocity;
+            let d = v_old * dt_s + 0.5 * az * dt_s * dt_s;
+            let v_new = v_old + az * dt_s;
+            let mut vx = world.player.current_planar_velocity.x;
+            let mut vy = world.player.current_planar_velocity.y;
+            let mut vz = v_new;
+            let speed_sq = vx * vx + vy * vy + vz * vz;
+            if speed_sq > MAX_VELOCITY * MAX_VELOCITY {
+                let scale = MAX_VELOCITY / speed_sq.sqrt();
+                vx *= scale;
+                vy *= scale;
+                vz *= scale;
+                world.player.current_planar_velocity.x = vx;
+                world.player.current_planar_velocity.y = vy;
+            }
+            world.player.vertical_velocity = vz;
+            descending = vz <= 0.0;
+            d
+        } else {
+            raw_delta.z
+        };
+
+        let (object, gates) = Self::transition_profile(world);
+        let end = holtburger_common::position::WorldPosition {
+            landblock_id: pose.landblock_id,
+            coords: Vector3::new(
+                pose.coords.x + raw_delta.x,
+                pose.coords.y + raw_delta.y,
+                pose.coords.z + dz,
+            ),
+            rotation: pose.rotation,
+        };
+        let input = holtburger_world::spatial::transition::TransitionInput {
+            begin: pose,
+            end,
+            object,
+            airborne: was_airborne,
+            descending,
+            force_grounded: false,
+            gates,
+            last_known_wall_normal: world.player.last_known_wall_normal,
+            frames_stationary_fall: 0,
+        };
+        let outcome =
+            holtburger_world::spatial::transition::find_transitional_position(&*world, &input);
+        let mut pose = outcome.pose;
+        // InitLastKnownContactPlane equivalent — a step with no wall
+        // leaves the prior tracked plane intact.
+        if let Some(n) = outcome.wall_normal {
+            world.player.last_known_wall_normal = Some(n);
+        }
+        if was_airborne && outcome.grounded {
+            world.player.land();
+        }
+        if !was_airborne && !outcome.grounded {
+            world.player.begin_fall();
+            // A3-D3-5: retail leave-ground launch velocity
+            // (default-off no-op).
+            stamp_leave_ground_velocity(world, heading, state, capabilities);
+        }
+
+        // Legacy tail: local rotation prediction + force-position
+        // interpolation + runtime write-back (same shape as the legacy
+        // slice's tail; the pipeline already rebucketted per step).
+        let omega = local_omega_for_state(state, capabilities);
+        if omega.z.abs() > f32::EPSILON {
+            let new_heading = normalize_heading(heading + omega.z * dt_s);
+            pose.rotation = Quaternion::from_heading(new_heading);
+        }
+        let body_id = SpatialBodyId::LocalPlayer(world.player.guid);
+        let on_contact = !world.player.is_airborne;
+        let max_speed = capabilities.resolved_manual_run_speed() * 2.0;
+        let pose = if on_contact {
+            let snapped_z = pose.coords.z;
+            match world.scene.step_force_position_interpolation(
+                body_id, dt_s, max_speed, on_contact,
+            ) {
+                InterpStep::Progressed { mut pose }
+                | InterpStep::Completed { mut pose } => {
+                    pose.coords.z = snapped_z;
+                    pose
+                }
+                _ => pose,
+            }
+        } else {
+            pose
+        };
+        let _ = world.set_local_player_runtime_pose(pose);
+    }
+
+    /// A6-T2 test seam + spine helper — whether a Manual drive is the
+    /// active drive (the spine's simulation arm needs to know whether
+    /// the manual transition driver applies).
+    pub(crate) fn has_active_manual_drive(&self) -> bool {
+        matches!(
+            self.active_drive,
+            Some(ActiveDriveState {
+                intent: ActiveDriveIntent::Manual(_),
+                ..
+            })
+        )
+    }
+
+    /// A6-T1/T2 test seam: install a Manual active drive directly.
+    #[cfg(test)]
+    pub(crate) fn set_active_manual_drive_for_test(&mut self, state: MotionState) {
+        self.active_drive = Some(ActiveDriveState::manual(state, None));
     }
 
     /// G-7 / F1-6 — the UN-rooted interpreted-intent planar velocity for

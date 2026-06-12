@@ -181,6 +181,18 @@ impl MovementSystemHandle {
         self.inner.apply_movement_world_events(events);
     }
 
+    /// A6-T1/T2 (2026-06-12, W3+ S7): install the `?unifiedTransition=on`
+    /// runtime carrier. The wasm recv-loop init calls this once after
+    /// parsing the URL flag; when on (or when the native
+    /// `USE_UNIFIED_TRANSITION` const is flipped) the local player's
+    /// manual-drive slices and the canonical spine's simulation solve
+    /// both route through the retail transition pipeline
+    /// (`holtburger_world::spatial::transition`). Default off —
+    /// byte-identical legacy paths.
+    pub fn set_unified_transition(&mut self, on: bool) {
+        self.inner.set_unified_transition(on);
+    }
+
     /// Phase 4 step 3.6 diagnostics — number of tick() calls since
     /// construction. The wasm bundle's recv loop reads this to throttle
     /// per-frame pose logs (one per ~60 ticks).

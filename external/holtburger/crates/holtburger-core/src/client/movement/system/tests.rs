@@ -4105,3 +4105,122 @@ fn test_movement_manager_registry_create_apply_prune() {
     assert!(movement.movement_manager_for(remote_guid).is_none());
     assert!(movement.movement_manager_for(player_guid).is_some());
 }
+
+// =====================================================================
+// A6-T1/T2 (2026-06-12, W3+ S7) — unified transition pipeline.
+// =====================================================================
+
+fn unified_transition_fixture(
+    flag_on: bool,
+) -> (WorldState, MovementSystem, Guid, WorldPosition) {
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0001);
+    world.player.guid = player_guid;
+    seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+    let start = WorldPosition {
+        landblock_id: Guid(0x1234_0000),
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(&mut world, player_guid, start);
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(flag_on);
+    movement.set_active_manual_drive_for_test(MotionState::builder().run().forward().build());
+    (world, movement, player_guid, start)
+}
+
+/// Lane-A test 2 (spec S7 §4): flag-on vs flag-off manual advance on
+/// OPEN ground (no geometry, no terrain cache) must agree — the
+/// pipeline is a pure superset that only differs at contacts.
+#[test]
+fn unified_transition_manual_slice_matches_legacy_on_open_ground() {
+    let dt = Duration::from_millis(100);
+    let (mut world_off, movement_off, _, _) = unified_transition_fixture(false);
+    movement_off.advance_local_pose_for_manual_drive(&mut world_off, dt);
+    let legacy_pose = world_off
+        .local_player_runtime_pose()
+        .expect("legacy pose advanced");
+
+    let (mut world_on, movement_on, _, start) = unified_transition_fixture(true);
+    movement_on.advance_local_pose_for_manual_drive(&mut world_on, dt);
+    let pipeline_pose = world_on
+        .local_player_runtime_pose()
+        .expect("pipeline pose advanced");
+
+    assert!(
+        (legacy_pose.coords.x - pipeline_pose.coords.x).abs() < 1e-5
+            && (legacy_pose.coords.y - pipeline_pose.coords.y).abs() < 1e-5
+            && (legacy_pose.coords.z - pipeline_pose.coords.z).abs() < 1e-5,
+        "open-ground equivalence: legacy {:?} vs pipeline {:?}",
+        legacy_pose.coords,
+        pipeline_pose.coords
+    );
+    // And the drive actually moved (forward at identity heading = +y).
+    assert!(
+        pipeline_pose.coords.y > start.coords.y + 1e-4,
+        "manual drive must advance: {:?}",
+        pipeline_pose.coords
+    );
+}
+
+/// Lane-A test 9 (spec S7 §4) — the P2b hole, pinned and fixed. The
+/// canonical spine's simulation solve advances a Manual body through
+/// `advance_grounded_body_kinematics` → `project_pose_by_velocity`
+/// with ZERO collision (physics.rs:1786); under
+/// `?unifiedTransition=on` the same input routes through the retail
+/// pipeline and stops at the wall.
+#[test]
+fn unified_transition_spine_manual_collision_matrix() {
+    use crate::client::simulation::ClientSimulationSystem;
+    use holtburger_world::spatial::BuildingId;
+
+    let run = |flag_on: bool| -> f32 {
+        let (mut world, mut movement, player_guid, start) = unified_transition_fixture(flag_on);
+        // Wall directly ahead on +y, spanning the whole approach.
+        let global = start.global_coords();
+        world.scene.insert_building_aabb(
+            start.landblock_id.0,
+            holtburger_world::spatial::BuildingAabbEntry {
+                building_id: BuildingId::new(start.landblock_id.0, 1, 0),
+                part_index: 0,
+                aabb: holtburger_common::Aabb {
+                    min: Vector3::new(global.x - 5.0, global.y + 1.0, global.z - 1.0),
+                    max: Vector3::new(global.x + 5.0, global.y + 2.0, global.z + 10.0),
+                },
+                active: true,
+            },
+        );
+        let mut simulation = ClientSimulationSystem::new();
+        simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+        // Enough slices to cross the 1.0 m gap at ~4 m/s.
+        for _ in 0..10 {
+            let _ = simulation.tick(
+                Instant::now(),
+                Duration::from_millis(100),
+                &mut world,
+                &mut movement,
+            );
+        }
+        world
+            .local_player_runtime_pose()
+            .expect("pose resolved")
+            .coords
+            .y
+    };
+
+    // Pin the P2b hole: flag-off, the spine walks straight through the
+    // wall (y well past the 51.0 face).
+    let off_y = run(false);
+    assert!(
+        off_y > 51.0 + 0.5,
+        "P2b pin: flag-off spine should pass through the wall, y = {off_y}"
+    );
+    // Fixed: flag-on stops at (or just before) the wall face minus the
+    // capsule radius (51.0 - 0.4 = 50.6).
+    let on_y = run(true);
+    assert!(
+        on_y <= 50.6 + 1e-3,
+        "unifiedTransition must stop the spine at the wall, y = {on_y}"
+    );
+    assert!(on_y > 50.0, "some travel before the wall, y = {on_y}");
+}

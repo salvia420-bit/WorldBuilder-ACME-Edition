@@ -1,4 +1,10 @@
 pub mod collision;
+/// A6-T1/T2 (2026-06-12, W3+ S7) — the retail transition pipeline
+/// (`find_transitional_position` substep loop over `TransitionEnv`
+/// geometry backends). Consumed by `holtburger-core`'s movement system
+/// under the default-off `USE_UNIFIED_TRANSITION` /
+/// `?unifiedTransition=on` gates.
+pub mod transition;
 mod entity_collision;
 mod force_position_interp;
 mod physics;
