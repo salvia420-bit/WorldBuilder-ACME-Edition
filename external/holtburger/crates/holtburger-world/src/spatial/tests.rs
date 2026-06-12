@@ -3200,3 +3200,152 @@ mod remote_pose_driver {
         assert!(scene.take_remote_stepped_poses().is_empty());
     }
 }
+
+// === A2-P3 (2026-06-12, W3+ S9) — LOCAL-player sticky scene tests. =======
+
+/// Spec S9 §4 test 11 — full cycle: install (with the `entity_poses`
+/// auto-feed), per-frame `step_local_sticky` convergence to the standoff
+/// with the heading facing the target, live re-feed via
+/// [`SpatialScene::update_entity`], and the 1.0 s timeout clear.
+#[test]
+fn local_sticky_install_feed_step_converges_and_times_out() {
+    let mut scene = SpatialScene::new();
+    let player_guid = Guid(0x5000_00AB);
+    let target_guid = Guid(0x8000_0001);
+    let lb = Guid(0x0102_0000);
+    let now = Instant::now();
+
+    let player_pose = make_position(50.0, 50.0, 0.0);
+    let body_id = SpatialBodyId::LocalPlayer(player_guid);
+    scene.upsert_runtime_body_snapshot(
+        body_id,
+        player_pose,
+        Vector3::zero(),
+        Vector3::zero(),
+        None,
+        now,
+    );
+
+    // Target pose known BEFORE the stick: the entity_poses auto-feed
+    // seeds the stash at install time (spec S9 §3 R1 step 2 deviation).
+    let target_pose = make_position(55.0, 50.0, 0.0);
+    scene.update_entity(target_guid, lb, target_pose);
+
+    assert_eq!(scene.local_sticky_target(), None);
+    scene.stick_local_player_to(target_guid, 0.0);
+    assert_eq!(scene.local_sticky_target(), Some(target_guid));
+
+    // Converge: gap 5 m, radii 0 → standoff 0.3 m; speed = 4*5 = 20 m/s
+    // → ~16 frames at 16 ms. The 1.0 s timeout must NOT fire first.
+    let mut cur = player_pose;
+    let mut converged_at = None;
+    for i in 0..30 {
+        match scene.step_local_sticky(cur, 0.016, 4.0) {
+            LocalStickyStep::Stepped(pose) => cur = pose,
+            LocalStickyStep::Inactive => panic!("sticky fed+active: must step (frame {i})"),
+            LocalStickyStep::TimedOut => panic!("timeout before 1.0 s (frame {i})"),
+        }
+        let planar = (cur.coords - target_pose.coords).length();
+        if converged_at.is_none() && (planar - STICKY_RADIUS).abs() < 0.02 {
+            converged_at = Some(i);
+        }
+    }
+    assert!(
+        converged_at.is_some(),
+        "must reach the 0.3 m standoff within 30 frames (got {:?})",
+        (cur.coords - target_pose.coords).length()
+    );
+    assert!(
+        (cur.rotation.to_heading() - cur.heading_to(&target_pose)).abs() < 1e-3,
+        "heading faces the target"
+    );
+    assert!((cur.coords.z - player_pose.coords.z).abs() < 1e-6, "z untouched");
+
+    // Live re-feed: the target moves; update_entity routes the new pose
+    // into the stash and the pull tracks it.
+    let moved_target = make_position(55.0, 56.0, 0.0);
+    scene.update_entity(target_guid, lb, moved_target);
+    let before = (cur.coords - moved_target.coords).length();
+    for _ in 0..10 {
+        if let LocalStickyStep::Stepped(pose) = scene.step_local_sticky(cur, 0.016, 4.0) {
+            cur = pose;
+        }
+    }
+    assert!(
+        (cur.coords - moved_target.coords).length() < before,
+        "tracks the moved target"
+    );
+
+    // Timeout: 30 + 10 frames burned 0.64 s; keep stepping past 1.0 s.
+    let mut timed_out = false;
+    for _ in 0..40 {
+        match scene.step_local_sticky(cur, 0.016, 4.0) {
+            LocalStickyStep::TimedOut => {
+                timed_out = true;
+                break;
+            }
+            LocalStickyStep::Stepped(pose) => cur = pose,
+            LocalStickyStep::Inactive => panic!("cleared without a TimedOut signal"),
+        }
+    }
+    assert!(timed_out, "1.0 s window must expire");
+    assert_eq!(scene.local_sticky_target(), None);
+    assert!(matches!(
+        scene.step_local_sticky(cur, 0.016, 4.0),
+        LocalStickyStep::Inactive
+    ));
+}
+
+/// Spec S9 §4 tests 9+6 (scene half) — install without a known target
+/// pose no-ops until the first feed (retail `Initialized` semantics,
+/// acclient.c:388691-388720); unstick reports was-active exactly once
+/// (the ACE `ClearTarget → cancel_moveto` signal); a stick replaces the
+/// prior target.
+#[test]
+fn local_sticky_uninitialized_noop_unstick_once_and_replace() {
+    let mut scene = SpatialScene::new();
+    let player_guid = Guid(0x5000_00AB);
+    let target_a = Guid(0x8000_0001);
+    let target_b = Guid(0x8000_0002);
+    let now = Instant::now();
+    let player_pose = make_position(50.0, 50.0, 0.0);
+    scene.upsert_runtime_body_snapshot(
+        SpatialBodyId::LocalPlayer(player_guid),
+        player_pose,
+        Vector3::zero(),
+        Vector3::zero(),
+        None,
+        now,
+    );
+
+    // Unknown target pose → active but uninitialized → Inactive steps.
+    scene.stick_local_player_to(target_a, 0.0);
+    assert_eq!(scene.local_sticky_target(), Some(target_a));
+    assert!(matches!(
+        scene.step_local_sticky(player_pose, 0.016, 4.0),
+        LocalStickyStep::Inactive
+    ));
+
+    // Feed via the wasm-arm entry point.
+    scene.sticky_pose_feed(target_a, make_position(53.0, 50.0, 0.0));
+    assert!(matches!(
+        scene.step_local_sticky(player_pose, 0.016, 4.0),
+        LocalStickyStep::Stepped(_)
+    ));
+
+    // A feed for a NON-target guid is ignored.
+    scene.sticky_pose_feed(target_b, make_position(40.0, 40.0, 0.0));
+
+    // Replace: stick to B drops A's stash (uninitialized again).
+    scene.stick_local_player_to(target_b, 0.0);
+    assert_eq!(scene.local_sticky_target(), Some(target_b));
+    assert!(matches!(
+        scene.step_local_sticky(player_pose, 0.016, 4.0),
+        LocalStickyStep::Inactive
+    ));
+
+    // Unstick: true once, then false (preamble subset idempotence).
+    assert!(scene.unstick_local_player());
+    assert!(!scene.unstick_local_player());
+    assert_eq!(scene.local_sticky_target(), None);
+}

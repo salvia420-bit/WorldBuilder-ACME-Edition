@@ -24314,6 +24314,16 @@ impl SessionHandle {
         }
     }
 
+    /// A2-P3 (2026-06-12, W3+ S9): the LOCAL player's current sticky
+    /// target guid (`0` = none) — diagnostic-only, for the wire-agent
+    /// melee-lock assertion (spec S9 §4). Published post-tick by the
+    /// TickMovement arm; always `0` while `USE_STICKY_MANAGER` is off.
+    /// Purely additive export — rides manifest v4 (F18-2: no bump).
+    #[wasm_bindgen(js_name = localStickyTarget)]
+    pub fn local_sticky_target(&self) -> u32 {
+        LOCAL_STICKY_TARGET.with(|c| c.get())
+    }
+
     /// Snapshot of the most recent CharacterList. The recv loop updates
     /// the inner state on every `CharacterList` re-fire (e.g. after a
     /// successful `CharacterCreate` or `CharacterDelete`); JS calls
@@ -30662,6 +30672,17 @@ thread_local! {
         const { std::cell::RefCell::new((Vec::new(), Vec::new(), Vec::new())) };
 }
 
+// A2-P3 (2026-06-12, W3+ S9) — diagnostic-only mirror of the LOCAL
+// player's sticky target guid (`scene.local_sticky_target()`),
+// published by the TickMovement arm each tick and read by
+// `SessionHandle::localStickyTarget` (the wire-agent assertion hook).
+// Diagnostic ⇒ NO `WASM_EXPORT_MANIFEST_VERSION` bump (F18-2 policy);
+// rides manifest v4 as a purely additive export. `0` = no sticky.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static LOCAL_STICKY_TARGET: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// A2-P2 — one frame of wasm-managed remote poses, three parallel
 /// arrays (the typed-array getter idiom): `guids[i]` / `landblocks[i]`
 /// pair with `poses[i*7 .. i*7+7]` = `[x, y, z, qw, qx, qy, qz]`
@@ -33206,6 +33227,20 @@ async fn recv_loop(
                             // (A13-W1: the `LocalPlayerSnapshot` position
                             // cache formerly refreshed here on a local-player
                             // echo was a write-only dead copy — removed.)
+                            // A2-P3 (W3+ S9): minimal TargetManager-subset
+                            // pose feed for the LOCAL sticky target —
+                            // remote entities are NOT world-routed on the
+                            // default wasm path (S8/A8-M2 territory), so
+                            // the sticky target's live pose is stashed
+                            // here (retail StickyManager::HandleUpdateTarget,
+                            // acclient.c:388691-388720). One inert compare
+                            // unless sticky is active (never, with
+                            // USE_STICKY_MANAGER off).
+                            if let Some(w) = world.as_mut()
+                                && w.scene.local_sticky_target() == Some(data.guid)
+                            {
+                                w.scene.sticky_pose_feed(data.guid, data.pos);
+                            }
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_POSITION,
                                 guid: u32::from(data.guid),
@@ -34557,6 +34592,38 @@ async fn recv_loop(
                                 }
                                 _ => 0,
                             };
+                            // A2-P3 (2026-06-12, W3+ S9; RULINGS item 4)
+                            // — LOCAL-player sticky install on the
+                            // DEFAULT wasm path (NOT ?wireStatePacks-
+                            // gated), mirroring how the JS arm consumes
+                            // the same `model_id` field for remotes.
+                            // Retail `unpack_movement` sticks the
+                            // addressed object UNCONDITIONALLY — incl.
+                            // the local player (acclient.c:339546-339560
+                            // after the :339518-339519 unstick
+                            // preamble); the player's own melee-swing
+                            // echo carries the bit + guid (ACE
+                            // Player_Melee.cs:420-427; live-server
+                            // MovementInvalid.cs:45-46). `0` ⇒ unstick.
+                            // The JS local-guid exclusion at
+                            // loop.js:1951/:2222 STAYS — the local rig
+                            // is never JS-glued; its pose comes from the
+                            // wasm pose getters (spec S9 §3 L1 step 2).
+                            // Radius fallback 0.0 (spec S9 OPEN Q3).
+                            if holtburger_world::spatial::USE_STICKY_MANAGER
+                                && let Some(w) = world.as_mut()
+                                && w.player.guid != holtburger_common::Guid::NULL
+                                && data.guid == w.player.guid
+                            {
+                                if sticky_target != 0 {
+                                    w.scene.stick_local_player_to(
+                                        holtburger_common::Guid(sticky_target),
+                                        0.0,
+                                    );
+                                } else {
+                                    w.scene.unstick_local_player();
+                                }
+                            }
                             // F3-5 (bughunt 2026-06-09) — per-creature run rate.
                             // A MoveTo* envelope carries the mover's OWN run_rate
                             // (`MoveToObject/MoveToPosition.run_rate`, ACE sets a
@@ -40299,6 +40366,19 @@ async fn recv_loop(
                                     REMOTE_POSES.with(|c| {
                                         *c.borrow_mut() = frame;
                                     });
+                                }
+                                // A2-P3 (W3+ S9): publish the local
+                                // sticky target for the diag getter —
+                                // post-tick (timeout clears land the
+                                // same frame). Always 0 with
+                                // USE_STICKY_MANAGER off.
+                                if holtburger_world::spatial::USE_STICKY_MANAGER {
+                                    let sticky = w
+                                        .scene
+                                        .local_sticky_target()
+                                        .map(u32::from)
+                                        .unwrap_or(0);
+                                    LOCAL_STICKY_TARGET.with(|c| c.set(sticky));
                                 }
                                 if was_airborne_pre_tick && !w.player.is_airborne {
                                     // Wave 10 Phase 10.1 (2026-05-26):

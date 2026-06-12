@@ -18,7 +18,8 @@ pub use force_position_interp::{
 };
 pub use position_manager::{
     ConstraintManager, INTERPOLATION_QUEUE_CAP, InterpolationCommand, InterpolationManager,
-    InterpolationNode, InterpolationNodeType, PositionManager, USE_POSITION_MANAGER_QUEUE,
+    InterpolationNode, InterpolationNodeType, PositionManager, STICKY_RADIUS, STICKY_TIME,
+    StickyManager, USE_POSITION_MANAGER_QUEUE, USE_STICKY_MANAGER,
 };
 pub use physics::{
     BasicSpatialPhysics, DEFAULT_STEP_HEIGHT, GenericSweptHit, NoopSpatialPhysics,
@@ -37,7 +38,7 @@ pub use physics::{
     sweep_sphere_against_static_aabbs, sweep_sphere_against_triangles,
 };
 pub use scene::{
-    CellMembership, CellPhysicsBsp, RemoteCorrectionCtx, SpatialScene,
+    CellMembership, CellPhysicsBsp, LocalStickyStep, RemoteCorrectionCtx, SpatialScene,
     pview_clip_polygon_against_polygon, pview_project_polygon,
 };
 pub use types::*;

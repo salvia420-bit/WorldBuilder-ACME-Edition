@@ -23,7 +23,8 @@
 use crate::spatial::force_position_interp::{
     InterpStep, MAX_INTERPOLATED_VELOCITY, RECONCILE_DEADBAND_M, RetailForcePositionInterpolator,
 };
-use holtburger_common::math::Vector3;
+use holtburger_common::guid::Guid;
+use holtburger_common::math::{Quaternion, Vector3};
 use holtburger_common::position::{METERS_PER_LANDBLOCK, WorldPosition};
 use std::collections::VecDeque;
 
@@ -35,6 +36,29 @@ use std::collections::VecDeque;
 /// fail→blipto recovery). Rust const (url-flags.md §6 pattern):
 /// flipping means editing this source + wasm rebuild.
 pub const USE_POSITION_MANAGER_QUEUE: bool = false;
+
+/// A2-P3 sticky gate (survey A2 §4 Stage P3, W3+ S9; RULINGS item 4) —
+/// OFF (default): no caller installs a sticky target, so the
+/// [`StickyManager`] slice is inert and every consumer site
+/// (`movement/system.rs` step/unstick, `client/simulation.rs` install,
+/// wasm `lib.rs` install/feed) early-outs — byte-identical to pre-P3.
+/// ON: server `StickToObject` motions (incl. the LOCAL player's own
+/// melee-swing echo, ACE `Player_Melee.cs:420-427` +
+/// `Network/Motion/MovementInvalid.cs:45-46` — live-server cites) glue
+/// the addressed object to its target via the retail
+/// `StickyManager::adjust_offset` pull (acclient.c:388519-388601).
+/// Rust const (url-flags.md §6 pattern): flipping means editing this
+/// source + wasm rebuild.
+pub const USE_STICKY_MANAGER: bool = false;
+
+/// `StickyManager` standoff shrink — retail subtracts 0.3 from the
+/// radii-aware cylinder distance (acclient.c:388559-388560; ACE
+/// `StickyManager.cs` `StickyRadius = 0.3f`).
+pub const STICKY_RADIUS: f32 = 0.3;
+
+/// Sticky timeout — `StickTo` arms `cur_time + 1.0`
+/// (acclient.c:388688; ACE `StickyManager.cs` `StickyTime = 1.0f`).
+pub const STICKY_TIME: f32 = 1.0;
 
 /// `BIG_DISTANCE` (`acclient.c:41537`) — `original_distance` idle seed.
 pub const BIG_DISTANCE: f32 = 999_999.0;
@@ -368,6 +392,11 @@ impl InterpolationManager {
     /// On stall: `++node_fail_counter; NodeCompleted(0)` — the node
     /// fails toward blipto recovery instead of silently stopping (the
     /// §3 row-5 gap this stage closes).
+    ///
+    /// A2-P3: `sticky_active` bypasses the 5-frame progress-test abort
+    /// while the owner's sticky target is non-zero — retail's interp
+    /// sticky exemption (acclient.c:389243-389245; local sticky and
+    /// local force-position coexist).
     #[allow(clippy::too_many_arguments)]
     fn step_position_head(
         &mut self,
@@ -376,6 +405,7 @@ impl InterpolationManager {
         max_speed: f32,
         on_contact: bool,
         constraint: &mut ConstraintManager,
+        sticky_active: bool,
     ) -> InterpStep {
         let Some(head) = self.position_queue.front().copied() else {
             return InterpStep::Idle;
@@ -407,7 +437,8 @@ impl InterpolationManager {
         let progressing = delta > EPSILON
             && self.progress_quantum > EPSILON
             && (delta / self.progress_quantum / max_speed) >= MIN_PROGRESS_RATIO;
-        let keep_interpolating = self.frame_counter < PROGRESS_WINDOW_FRAMES || progressing;
+        let keep_interpolating =
+            self.frame_counter < PROGRESS_WINDOW_FRAMES || progressing || sticky_active;
 
         if !keep_interpolating {
             // Stall: fail toward recovery (`:389271-389273`) — unlike the
@@ -458,6 +489,171 @@ impl InterpolationManager {
         InterpStep::Progressed {
             pose: WorldPosition { rotation, ..pose },
         }
+    }
+}
+
+/// A2-P3 (2026-06-12, W3+ S9) — the retail `StickyManager`
+/// (acclient.c:388519-388720; ACE `Physics/Managers/StickyManager.cs`),
+/// the third `PositionManager` slice: glues the owning body to its
+/// sticky target (server `StickToObject` motions — melee attack lock).
+///
+/// Documented deviations from retail (spec S9 §3 R1):
+/// - retail `StickTo` registers with the `TargetManager`
+///   (`set_target(0, id, 0.5, 0.5)`, acclient.c:388688); we replace
+///   that with an explicit pose feed
+///   ([`Self::handle_update_target`] from the scene's entity-pose
+///   update sites) — same `Initialized` no-op-until-fed semantics
+///   (acclient.c:388691-388720).
+/// - the 1.0 s timeout is a COUNTDOWN decremented by the per-frame
+///   quantum ([`Self::use_time`]) instead of a wall-clock compare
+///   (`cur_time > sticky_timeout_time`, acclient.c:388605-388620) —
+///   identical in accumulated sim-time, no clock plumbing across the
+///   native/wasm targets.
+/// - [`Self::adjust_offset`] returns the ABSOLUTE target heading; the
+///   pose-adopt path applies absolutes, where retail writes a heading
+///   DELTA into the offset frame combined by `Frame::combine`
+///   (acclient.c:388593-388600) — composes to the same heading for a
+///   single corrector (spec S9 OPEN Q6).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StickyManager {
+    /// Sticky target guid (`StickyManager::target_id`); `None` = inactive.
+    target_id: Option<Guid>,
+    /// Target physics radius (`CPartArray::GetRadius` analog; `0.0`
+    /// fallback per acclient.c:319756-319763 — spec S9 OPEN Q3).
+    target_radius: f32,
+    /// Stashed target pose; `None` ⇔ ACE `Initialized == false`
+    /// (acclient.c:388691-388720) — `adjust_offset` no-ops until fed.
+    target_position: Option<WorldPosition>,
+    /// Countdown remainder of the 1.0 s [`STICKY_TIME`] window.
+    timeout_remaining: f32,
+}
+
+impl Default for StickyManager {
+    fn default() -> Self {
+        Self {
+            target_id: None,
+            target_radius: 0.0,
+            target_position: None,
+            timeout_remaining: 0.0,
+        }
+    }
+}
+
+impl StickyManager {
+    /// `get_sticky_object_id() != 0` (acclient.c:389243-389245 caller).
+    pub fn is_active(&self) -> bool {
+        self.target_id.is_some()
+    }
+
+    pub fn target_id(&self) -> Option<Guid> {
+        self.target_id
+    }
+
+    /// `StickyManager::StickTo` (acclient.c:388665-388690; ACE
+    /// `StickyManager.cs:71-81`): replace any prior target, drop the
+    /// stale pose stash (uninitialized until the next feed), re-arm the
+    /// 1.0 s timeout.
+    pub fn stick_to(&mut self, target: Guid, target_radius: f32) {
+        self.target_id = Some(target);
+        self.target_radius = target_radius;
+        self.target_position = None;
+        self.timeout_remaining = STICKY_TIME;
+    }
+
+    /// `StickyManager::HandleUpdateTarget` OK arm
+    /// (acclient.c:388691-388720; ACE `StickyManager.cs:53-64`): guid
+    /// match → stash the pose (flips `Initialized`); mismatch ignored.
+    /// A failed/stale status maps to [`Self::clear_target`] (caller
+    /// decides).
+    pub fn handle_update_target(&mut self, target: Guid, pose: WorldPosition) {
+        if self.target_id == Some(target) {
+            self.target_position = Some(pose);
+        }
+    }
+
+    /// ACE `StickyManager.ClearTarget` (StickyManager.cs:33-41). The
+    /// `cancel_moveto` side effect is surfaced as the bool return so
+    /// the OWNER clears the server-controlled projection (spec S9 §3
+    /// Stage L1 step 4 / risk table row 3: only when sticky was
+    /// actually active).
+    pub fn clear_target(&mut self) -> bool {
+        let was_active = self.target_id.is_some();
+        *self = Self::default();
+        was_active
+    }
+
+    /// `StickyManager::UseTime` (acclient.c:388605-388620; ACE
+    /// `StickyManager.cs:83-87`) — countdown form (see the struct doc's
+    /// deviation note). Returns `true` when the timeout just cleared an
+    /// active target.
+    pub fn use_time(&mut self, quantum: f32) -> bool {
+        if self.target_id.is_none() {
+            return false;
+        }
+        self.timeout_remaining -= quantum;
+        if self.timeout_remaining < 0.0 {
+            self.clear_target();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// `StickyManager::adjust_offset` (acclient.c:388519-388601), the
+    /// per-frame pull toward the target. `None` unless a target is set
+    /// AND its pose was fed ([`Self::handle_update_target`]).
+    ///
+    /// Returns `(step, heading_rad)`:
+    /// - `step`: the world-space XY step (z ZEROED, acclient.c:388557).
+    ///   `mag = cylinder_distance_no_z(my_radius, target_radius) −`
+    ///   [`STICKY_RADIUS`] (:388559-388560); `speed = max_speed * 5.0`,
+    ///   floor `15.0` when ~0 (:388569-388579); `delta = speed *
+    ///   quantum`, capped at `mag` — BOTH signs: already inside the
+    ///   standoff gives a NEGATIVE `mag` → the capped step backs off
+    ///   (:388580-388591).
+    /// - `heading_rad`: the ABSOLUTE heading toward the target in
+    ///   radians, normalized to `[0, 2π)` (the `+360` negative wrap of
+    ///   :388593-388600 in radian form; see the struct doc deviation).
+    ///
+    /// NO contact requirement (contrast interp :389199 / constraint
+    /// :389478).
+    pub fn adjust_offset(
+        &self,
+        current: &WorldPosition,
+        my_radius: f32,
+        max_speed: f32,
+        quantum: f32,
+    ) -> Option<(Vector3, f32)> {
+        self.target_id?;
+        let target = self.target_position?;
+
+        let from = current.global_coords();
+        let to = target.global_coords();
+        let mut offset = to - from;
+        // Sticky zeroes the z component (acclient.c:388557).
+        offset.z = 0.0;
+        let planar = offset.length();
+
+        // cylinder_distance_no_z (ACE `Position.CylinderDistanceNoZ`):
+        // planar center distance minus both radii.
+        let mag = planar - my_radius - self.target_radius - STICKY_RADIUS;
+
+        let mut speed = max_speed * 5.0;
+        if speed < EPSILON {
+            speed = 15.0;
+        }
+        let mut delta = speed * quantum;
+        if delta >= mag.abs() {
+            delta = mag;
+        }
+
+        let dir = if planar > EPSILON {
+            offset * (1.0 / planar)
+        } else {
+            Vector3::zero()
+        };
+        let heading_rad = current.heading_to(&target);
+        Some((dir * delta, heading_rad))
     }
 }
 
@@ -544,6 +740,12 @@ pub struct PositionManager {
     legacy: RetailForcePositionInterpolator,
     pub interpolation: InterpolationManager,
     pub constraint: ConstraintManager,
+    /// A2-P3 sticky slice (acclient.h:30952-30956 third slot). Inert
+    /// unless a consumer installs a target — every install site is
+    /// gated by [`USE_STICKY_MANAGER`] (gate-at-entry; the slice itself
+    /// stays ungated so tests can exercise it directly, the A2-P1
+    /// `pub interpolation` pattern).
+    pub sticky: StickyManager,
 }
 
 impl Default for PositionManager {
@@ -552,6 +754,7 @@ impl Default for PositionManager {
             legacy: RetailForcePositionInterpolator::default(),
             interpolation: InterpolationManager::default(),
             constraint: ConstraintManager::default(),
+            sticky: StickyManager::default(),
         }
     }
 }
@@ -632,7 +835,17 @@ impl PositionManager {
             self.step_queue(current, quantum, max_speed, on_contact)
         } else {
             (
-                self.legacy.step(current, quantum, max_speed, on_contact),
+                // A2-P3: the legacy interp's progress test is bypassed
+                // while sticky is active (acclient.c:389243-389245) —
+                // `sticky.is_active()` is false unless a gated consumer
+                // installed a target, so flag-off this is `step`.
+                self.legacy.step_ext(
+                    current,
+                    quantum,
+                    max_speed,
+                    on_contact,
+                    self.sticky.is_active(),
+                ),
                 Vec::new(),
             )
         }
@@ -661,6 +874,7 @@ impl PositionManager {
             max_speed,
             on_contact,
             &mut self.constraint,
+            self.sticky.is_active(),
         );
         if matches!(step, InterpStep::Completed { .. }) && !self.interpolation.is_interpolating() {
             self.constraint.unconstrain();
@@ -715,6 +929,67 @@ impl PositionManager {
         on_contact: bool,
     ) -> (InterpStep, Vec<InterpolationCommand>) {
         self.step_queue(current, quantum, max_speed, on_contact)
+    }
+
+    // === A2-P3 (2026-06-12, W3+ S9) — the STICKY surface. ================
+    //
+    // Ungated like the remote surface above: gate-at-entry — every
+    // INSTALL site checks [`USE_STICKY_MANAGER`], so with the const off
+    // no target ever exists and these are inert (tests drive them
+    // directly, the `pub interpolation` pattern).
+
+    /// `StickyManager::StickTo` through the facade.
+    pub fn stick_to(&mut self, target: Guid, target_radius: f32) {
+        self.sticky.stick_to(target, target_radius);
+    }
+
+    /// Clear the sticky target (retail unstick sites: `MotionDone`
+    /// one-shot pop acclient.c:343659, unpack preamble :339518-339519,
+    /// timeout :388605-388620). Returns `true` when sticky was active —
+    /// the ACE `ClearTarget → cancel_moveto` signal for the owner.
+    pub fn unstick(&mut self) -> bool {
+        self.sticky.clear_target()
+    }
+
+    pub fn sticky_object_id(&self) -> Option<Guid> {
+        self.sticky.target_id()
+    }
+
+    /// Minimal TargetManager-subset pose feed (spec S9 §3 L1 step 4).
+    pub fn sticky_handle_update_target(&mut self, target: Guid, pose: WorldPosition) {
+        self.sticky.handle_update_target(target, pose);
+    }
+
+    /// Per-frame sticky timeout tick (retail `PositionManager::UseTime`
+    /// runs sticky's `UseTime` each frame, acclient.c:388283). `true` =
+    /// the 1.0 s window just expired and cleared the target.
+    pub fn sticky_use_time(&mut self, quantum: f32) -> bool {
+        self.sticky.use_time(quantum)
+    }
+
+    /// One per-frame sticky `adjust_offset` applied to the CURRENT
+    /// working pose (threaded by the caller — never re-read from a
+    /// stale body, spec S9 §3 L3 step 2). Chain position: AFTER interp,
+    /// BEFORE the runtime write-back (retail interp → sticky →
+    /// constraint, acclient.c:388287-388304; constraint scales XY only
+    /// in our chain — heading adopted unscaled, spec S9 OPEN Q6).
+    /// `None` while inactive or the target pose is unfed.
+    pub fn step_sticky_pose(
+        &mut self,
+        current: WorldPosition,
+        my_radius: f32,
+        max_speed: f32,
+        quantum: f32,
+    ) -> Option<WorldPosition> {
+        let (step, heading_rad) = self
+            .sticky
+            .adjust_offset(&current, my_radius, max_speed, quantum)?;
+        let stepped_global = current.global_coords() + step;
+        let mut pose = reproject_global_into(stepped_global, current);
+        // Heading offset toward the target (acclient.c:388593-388600;
+        // absolute-adopt equivalence documented on `StickyManager`).
+        pose.rotation = Quaternion::from_heading(heading_rad);
+        Some(pose)
     }
 }
 
@@ -820,7 +1095,7 @@ mod tests {
             // Never move `cur`: stall for the full window each time.
             let mut failed = false;
             for _ in 0..PROGRESS_WINDOW_FRAMES + 1 {
-                match interp.step_position_head(cur, 0.0, MAX_SPEED, true, &mut constraint) {
+                match interp.step_position_head(cur, 0.0, MAX_SPEED, true, &mut constraint, false) {
                     InterpStep::Failed { .. } => {
                         failed = true;
                         break;
@@ -874,6 +1149,7 @@ mod tests {
                 MAX_SPEED,
                 true,
                 &mut manager.constraint,
+                false,
             ) {
                 InterpStep::Progressed { pose } => cur = pose,
                 InterpStep::Completed { pose } => {
@@ -909,6 +1185,201 @@ mod tests {
         assert!(constraint.is_fully_constrained());
         constraint.constrain_to(1.0, 2.0, 4.0);
         assert!(!constraint.is_fully_constrained());
+    }
+
+
+    // === A2-P3 (W3+ S9) sticky tests =====================================
+
+    fn guid(raw: u32) -> Guid {
+        Guid(raw)
+    }
+
+    /// Spec S9 §4 tests 1+3 — radii-aware standoff `cyl_dist_no_z − 0.3`,
+    /// overshoot caps to `mag` BOTH signs (negative mag backs off,
+    /// acclient.c:388581-388588), and the returned step's z is always 0
+    /// (:388557).
+    #[test]
+    fn sticky_adjust_offset_standoff_overshoot_and_zero_z() {
+        let mut sticky = StickyManager::default();
+        sticky.stick_to(guid(0x1234), 0.7);
+        // Target 10 m due +X, 5 m HIGHER — z must not leak into the step.
+        sticky.handle_update_target(guid(0x1234), pose(60.0, 50.0, 5.0));
+        let cur = pose(50.0, 50.0, 0.0);
+
+        // mag = 10 − 0.5(my) − 0.7(target) − 0.3(STICKY_RADIUS) = 8.5.
+        // speed = 2*5 = 10; delta = 10*0.1 = 1.0 < 8.5 → uncapped step.
+        let (step, _) = sticky.adjust_offset(&cur, 0.5, 2.0, 0.1).unwrap();
+        assert!((step.x - 1.0).abs() < 1e-5);
+        assert!(step.y.abs() < 1e-6);
+        assert_eq!(step.z, 0.0, "sticky z is zeroed (acclient.c:388557)");
+
+        // Overshoot: delta = 10*1.0 = 10 ≥ 8.5 → capped at mag.
+        let (step, _) = sticky.adjust_offset(&cur, 0.5, 2.0, 1.0).unwrap();
+        assert!((step.x - 8.5).abs() < 1e-4);
+
+        // Inside the standoff: planar 0.5, mag = 0.5 − 1.5 = −1.0;
+        // delta = 1.0 ≥ |−1.0| → delta = mag → backs off (negative X).
+        sticky.handle_update_target(guid(0x1234), pose(50.5, 50.0, 0.0));
+        let (step, _) = sticky.adjust_offset(&cur, 0.5, 2.0, 0.1).unwrap();
+        assert!((step.x + 1.0).abs() < 1e-4, "negative mag backs off: {}", step.x);
+        assert_eq!(step.z, 0.0);
+    }
+
+    /// Spec S9 §4 test 2 — `max_speed * 5.0`, zero/absent → floor 15.0
+    /// (acclient.c:388569-388579).
+    #[test]
+    fn sticky_speed_model_floors_to_fifteen() {
+        let mut sticky = StickyManager::default();
+        sticky.stick_to(guid(1), 0.0);
+        sticky.handle_update_target(guid(1), pose(60.0, 50.0, 0.0));
+        let cur = pose(50.0, 50.0, 0.0);
+        // max_speed 0 → speed floors to 15 → delta = 1.5 over 0.1 s.
+        let (step, _) = sticky.adjust_offset(&cur, 0.0, 0.0, 0.1).unwrap();
+        assert!((step.x - 1.5).abs() < 1e-4, "floor 15: {}", step.x);
+        // max_speed 4 → speed 20 → delta = 2.0.
+        let (step, _) = sticky.adjust_offset(&cur, 0.0, 4.0, 0.1).unwrap();
+        assert!((step.x - 2.0).abs() < 1e-4);
+    }
+
+    /// Spec S9 §4 test 4 — absolute heading toward the target,
+    /// normalized to `[0, 2π)` (the radian form of retail's negative
+    /// `+360` wrap, acclient.c:388597-388600).
+    #[test]
+    fn sticky_heading_is_absolute_and_wrapped() {
+        let mut sticky = StickyManager::default();
+        sticky.stick_to(guid(1), 0.0);
+        let cur = pose(50.0, 50.0, 0.0);
+        let two_pi = std::f32::consts::TAU;
+        for (tx, ty) in [(60.0, 50.0), (40.0, 50.0), (50.0, 60.0), (50.0, 40.0), (43.0, 41.0)] {
+            sticky.handle_update_target(guid(1), pose(tx, ty, 0.0));
+            let (_, heading) = sticky.adjust_offset(&cur, 0.0, 4.0, 0.016).unwrap();
+            assert!(
+                (0.0..two_pi).contains(&heading),
+                "heading {heading} out of [0,2π) for target ({tx},{ty})"
+            );
+            assert!(
+                (heading - cur.heading_to(&pose(tx, ty, 0.0))).abs() < 1e-6,
+                "heading must face the target"
+            );
+        }
+    }
+
+    /// Spec S9 §4 test 5 — `use_time` clears strictly after 1.0 s;
+    /// `stick_to` re-arms (acclient.c:388605-388620, :388688).
+    #[test]
+    fn sticky_use_time_clears_after_one_second_and_stick_rearms() {
+        let mut sticky = StickyManager::default();
+        assert!(!sticky.use_time(10.0), "inactive: no clear signal");
+        sticky.stick_to(guid(7), 0.0);
+        assert!(!sticky.use_time(0.5));
+        assert!(!sticky.use_time(0.5), "exactly 1.0 s accumulated: not yet cleared");
+        assert!(sticky.use_time(0.1), "past 1.0 s clears");
+        assert!(!sticky.is_active());
+        // Re-arm: a fresh stick_to restarts the window.
+        sticky.stick_to(guid(7), 0.0);
+        assert!(!sticky.use_time(0.9));
+        assert!(sticky.is_active());
+        assert!(sticky.use_time(0.2));
+        assert!(!sticky.is_active());
+    }
+
+    /// Spec S9 §4 test 6 — guid mismatch ignored; the pose stash flips
+    /// `Initialized`; `adjust_offset` no-ops while uninitialized
+    /// (acclient.c:388691-388720).
+    #[test]
+    fn sticky_handle_update_target_gates_on_guid_and_initialized() {
+        let mut sticky = StickyManager::default();
+        sticky.stick_to(guid(0xAA), 0.0);
+        let cur = pose(50.0, 50.0, 0.0);
+        assert!(sticky.adjust_offset(&cur, 0.0, 4.0, 0.016).is_none(), "uninitialized no-op");
+        sticky.handle_update_target(guid(0xBB), pose(60.0, 50.0, 0.0));
+        assert!(sticky.adjust_offset(&cur, 0.0, 4.0, 0.016).is_none(), "mismatch ignored");
+        sticky.handle_update_target(guid(0xAA), pose(60.0, 50.0, 0.0));
+        assert!(sticky.adjust_offset(&cur, 0.0, 4.0, 0.016).is_some(), "fed → active");
+        // stick_to replaces the prior target and DROPS the stale stash.
+        sticky.stick_to(guid(0xCC), 0.0);
+        assert!(sticky.adjust_offset(&cur, 0.0, 4.0, 0.016).is_none());
+    }
+
+    /// Spec S9 §4 test 7 — default-off contract: the const is OFF and a
+    /// fresh facade carries no sticky state (every install site is
+    /// gated, so flag-off behavior is byte-identical by construction).
+    #[test]
+    fn sticky_flag_default_off_and_facade_inert_without_install() {
+        assert!(
+            !USE_STICKY_MANAGER,
+            "A2-P3 ships default-off (url-flags.md; pending 1070 eye-test)"
+        );
+        let mut manager = PositionManager::default();
+        assert_eq!(manager.sticky_object_id(), None);
+        assert!(!manager.sticky_use_time(10.0));
+        assert!(
+            manager.step_sticky_pose(pose(50.0, 50.0, 0.0), 0.0, 4.0, 0.016).is_none(),
+            "no sticky installed → no step"
+        );
+        assert!(!manager.unstick(), "nothing to clear");
+    }
+
+    /// Spec S9 §4 test 8 — the interp progress-test sticky exemption
+    /// (acclient.c:389243-389245): a stalled node does NOT fail while
+    /// sticky is active, on BOTH the queue path and the legacy path.
+    #[test]
+    fn interp_progress_test_exempted_while_sticky_active() {
+        // Queue path.
+        let mut interp = InterpolationManager::default();
+        let mut constraint = ConstraintManager::default();
+        let cur = pose(0.0, 0.0, 0.0);
+        interp.interpolate_to(cur, pose(3.0, 0.0, 0.0), true, BLIP);
+        for _ in 0..(PROGRESS_WINDOW_FRAMES * 4) {
+            match interp.step_position_head(cur, 0.016, MAX_SPEED, true, &mut constraint, true) {
+                InterpStep::Progressed { .. } => {}
+                other => panic!("sticky-active stall must keep interpolating, got {other:?}"),
+            }
+        }
+        assert_eq!(interp.node_fail_counter(), 0);
+
+        // Legacy path, threaded through the facade: install force-pos +
+        // an (ungated, test-driven) sticky target, then stall.
+        let mut manager = PositionManager::default();
+        assert!(manager.install_force_position(cur, pose(3.0, 0.0, 0.0), 10.0, 100.0, true));
+        manager.stick_to(guid(1), 0.0);
+        for _ in 0..(PROGRESS_WINDOW_FRAMES * 4) {
+            let (step, _) = manager.step_force_position(cur, 0.016, MAX_SPEED, true);
+            match step {
+                InterpStep::Progressed { .. } => {}
+                other => panic!("legacy sticky-active stall must keep interpolating, got {other:?}"),
+            }
+        }
+        // Unstick → the very next window can fail again (gate restored).
+        assert!(manager.unstick());
+        let mut failed = false;
+        for _ in 0..(PROGRESS_WINDOW_FRAMES * 4) {
+            if matches!(
+                manager.step_force_position(cur, 0.016, MAX_SPEED, true).0,
+                InterpStep::Failed { .. }
+            ) {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed, "without sticky the stall fails the node again");
+    }
+
+    /// Facade sticky step applies XY + heading and leaves z untouched
+    /// (chain slot: after interp, before write-back — the scene/system
+    /// integration is covered in `spatial::tests`).
+    #[test]
+    fn facade_step_sticky_pose_applies_xy_and_heading() {
+        let mut manager = PositionManager::default();
+        manager.stick_to(guid(2), 0.0);
+        let target = pose(55.0, 50.0, 3.0);
+        manager.sticky_handle_update_target(guid(2), target);
+        let cur = pose(50.0, 50.0, 1.25);
+        let stepped = manager.step_sticky_pose(cur, 0.0, 4.0, 0.016).unwrap();
+        assert!(stepped.coords.x > cur.coords.x, "pulled toward target");
+        assert_eq!(stepped.coords.z, cur.coords.z, "z untouched");
+        let expected_heading = cur.heading_to(&target);
+        assert!((stepped.rotation.to_heading() - expected_heading).abs() < 1e-3);
     }
 
     /// Flag-off facade byte-identity: install/step through the facade

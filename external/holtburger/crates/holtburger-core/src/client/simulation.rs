@@ -5,6 +5,7 @@ use holtburger_common::properties::WorldObjectExt;
 use holtburger_common::{Guid, Quaternion, Vector3};
 use holtburger_protocol::messages::*;
 use holtburger_session::Session;
+use holtburger_world::spatial::USE_STICKY_MANAGER;
 use holtburger_world::{
     ContactState, SolveBodyInput, SolvedBodyKinematics, SpatialBodyId, SpatialSolveBatch,
     SpatialSolveRequest, WorldEvent, WorldState,
@@ -468,9 +469,15 @@ impl ClientSimulationSystem {
                     speed_mps: (mto.run_rate * mto.params.speed.max(0.1)).max(0.1),
                 });
                 movement.arm_autonomous_position_heartbeat_schedule(Instant::now(), world);
+                // A2-P3: retail per-unpack preamble unstick subset
+                // (acclient.c:339518-339519) — a fresh MoveToObject for
+                // the local player releases any melee sticky.
+                if USE_STICKY_MANAGER {
+                    apply_local_sticky_from_invalid(world, None);
+                }
                 return Ok(Vec::new());
             }
-            MovementTypeData::Invalid(_) => {
+            MovementTypeData::Invalid(inv) => {
                 // Track B1 — Invalid is the server's Stop/terminate arm for
                 // a server-controlled move. It MUST clear any installed
                 // projection so the per-tick drive stops immediately;
@@ -478,12 +485,46 @@ impl ClientSimulationSystem {
                 // self-timeout) would keep driving the player toward the
                 // stale target.
                 movement.clear_server_controlled_projection();
+                // A2-P3 (2026-06-12, W3+ S9; RULINGS item 4) — LOCAL
+                // sticky install. The player's own melee-swing echo
+                // arrives here as a non-autonomous UpdateMotion Invalid
+                // (ACE `Player_Melee.cs:420-427` sets
+                // `MotionFlags.StickToObject` + `TargetGuid` and
+                // `EnqueueBroadcastMotion` sendSelf-includes our session,
+                // `WorldObject_Networking.cs:1306-1321`/`:1418-1432`;
+                // the guid is serialized by the live server's
+                // `Network/Motion/MovementInvalid.cs:45-46`). Retail
+                // consumes it in `unpack_movement` case-0 →
+                // `stick_to_object` UNCONDITIONALLY — no local-player
+                // exclusion (acclient.c:339546-339560). A `None` sticky
+                // guid on a fresh motion unsticks (the per-unpack
+                // preamble subset, acclient.c:339518-339519). Radius
+                // fallback `0.0` (acclient.c:319756-319763; spec S9
+                // OPEN Q3); pose seeded from the freshest entity record
+                // (scene `entity_poses` auto-feed inside
+                // `stick_local_player_to`, plus the explicit visible-
+                // entity feed below — retail-`Initialized` no-op until
+                // one lands).
+                if USE_STICKY_MANAGER {
+                    apply_local_sticky_from_invalid(world, inv.sticky_object);
+                }
             }
             _ => {
                 // Any other server movement type supersedes a prior
                 // MoveToObject projection — clear it so the two don't
                 // fight (Track B1).
                 movement.clear_server_controlled_projection();
+                // A2-P3: retail's per-unpack preamble unsticks on EVERY
+                // fresh movement unpack before the case dispatch
+                // (`cancel_moveto` + `unstick_from_object`,
+                // acclient.c:339518-339519) — non-Invalid local motions
+                // therefore unstick. (The MoveToObject sticky BIT is a
+                // remote-creature chase signal — F3-4 — and stays on the
+                // wasm KIND_MOTION extraction; spec S9 §3 L1 step 1
+                // installs from the Invalid arm only.)
+                if USE_STICKY_MANAGER {
+                    apply_local_sticky_from_invalid(world, None);
+                }
             }
         }
 
@@ -612,6 +653,36 @@ impl ClientSimulationSystem {
 
 fn should_send_immediate_server_controlled_sync(data: &MovementEventData) -> bool {
     !matches!(data.data, MovementTypeData::Invalid(_))
+}
+
+/// A2-P3 (2026-06-12, W3+ S9) — the LOCAL-player sticky consume for a
+/// server-controlled movement unpack (ungated; every call site checks
+/// [`USE_STICKY_MANAGER`]). `Some(target)` = the `Invalid` (case-0)
+/// envelope carried `StickToObject` + guid → `stick_to_object`
+/// UNCONDITIONALLY, local player included (acclient.c:339546-339560;
+/// RULINGS item 4). `None` = a fresh motion without the bit, or any
+/// non-Invalid movement type → the per-unpack preamble unstick subset
+/// (acclient.c:339518-339519). Radius fallback `0.0`
+/// (acclient.c:319756-319763; spec S9 OPEN Q3); the freshest known
+/// target pose is fed immediately (scene `entity_poses` auto-feed +
+/// the visible-entity record) — retail-`Initialized` no-op until one
+/// lands (acclient.c:388691-388720).
+pub(crate) fn apply_local_sticky_from_invalid(
+    world: &mut WorldState,
+    sticky_object: Option<Guid>,
+) {
+    match sticky_object {
+        Some(target) => {
+            let target_pose = world.get_visible_entity(target).map(|e| e.position);
+            world.scene.stick_local_player_to(target, 0.0);
+            if let Some(pose) = target_pose {
+                world.scene.sticky_pose_feed(target, pose);
+            }
+        }
+        None => {
+            world.scene.unstick_local_player();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -841,6 +912,70 @@ mod tests {
                     run_rate: 1.0,
                 }),
             }
+        ));
+    }
+}
+
+#[cfg(test)]
+mod sticky_tests {
+    use super::*;
+    use holtburger_world::entity::Entity;
+    use holtburger_world::spatial::LocalStickyStep;
+
+    fn make_pose(x: f32, y: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            coords: Vector3::new(x, y, 0.0),
+            rotation: Quaternion::from_heading(0.0),
+        }
+    }
+
+    /// Spec S9 §4 test 9 — the server-controlled-movement sticky
+    /// consume: an `Invalid` envelope with `sticky_object = Some`
+    /// installs the LOCAL player's sticky target (with the visible
+    /// entity's pose fed, so the very next step pulls); `None` — the
+    /// fresh-motion / non-Invalid preamble subset — unsticks. The arm
+    /// itself is gated by the default-off [`USE_STICKY_MANAGER`]; this
+    /// drives the ungated helper (gate-at-entry pattern).
+    #[test]
+    fn apply_local_sticky_from_invalid_installs_and_unsticks() {
+        let mut world = WorldState::synthetic();
+        let player_guid = Guid(0x5000_0001);
+        let target_guid = Guid(0x8000_0001);
+        world.seed_local_player_entity(player_guid, "Player", make_pose(50.0, 50.0));
+        world.add_entity(Entity::new(
+            target_guid,
+            "Drudge".to_string(),
+            make_pose(55.0, 50.0),
+        ));
+
+        assert_eq!(world.scene.local_sticky_target(), None);
+
+        // Install: the swing echo's StickToObject guid.
+        apply_local_sticky_from_invalid(&mut world, Some(target_guid));
+        assert_eq!(world.scene.local_sticky_target(), Some(target_guid));
+        // The target pose was fed at install — the first step pulls.
+        assert!(matches!(
+            world.scene.step_local_sticky(make_pose(50.0, 50.0), 0.016, 4.0),
+            LocalStickyStep::Stepped(_)
+        ));
+
+        // Preamble subset: a fresh motion without the bit unsticks.
+        apply_local_sticky_from_invalid(&mut world, None);
+        assert_eq!(world.scene.local_sticky_target(), None);
+        assert!(matches!(
+            world.scene.step_local_sticky(make_pose(50.0, 50.0), 0.016, 4.0),
+            LocalStickyStep::Inactive
+        ));
+
+        // Unknown target (no visible entity): installs uninitialized —
+        // retail no-op until a pose feed lands.
+        let stranger = Guid(0x8000_0002);
+        apply_local_sticky_from_invalid(&mut world, Some(stranger));
+        assert_eq!(world.scene.local_sticky_target(), Some(stranger));
+        assert!(matches!(
+            world.scene.step_local_sticky(make_pose(50.0, 50.0), 0.016, 4.0),
+            LocalStickyStep::Inactive
         ));
     }
 }

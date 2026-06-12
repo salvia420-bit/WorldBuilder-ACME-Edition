@@ -25,7 +25,9 @@ use holtburger_protocol::messages::game_message::RawMotionState;
 use holtburger_protocol::messages::movement::{InterpretedMotionCommand, MotionItem};
 use holtburger_session::Session;
 use holtburger_world::SolveBodyInput;
-use holtburger_world::spatial::{InterpStep, LocalDriveControl, LocalDriveGait};
+use holtburger_world::spatial::{
+    InterpStep, LocalDriveControl, LocalDriveGait, LocalStickyStep, USE_STICKY_MANAGER,
+};
 use holtburger_world::{SpatialBodyId, WorldEvent, WorldState};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -961,6 +963,15 @@ pub(crate) struct MovementSystem {
     /// `execute_jump_release` / `jump_charge_abort`); the legacy
     /// JS-clock path never touches it.
     jump_charge: JumpChargeClock,
+    /// A2-P3 (2026-06-12, W3+ S9) — deferred `cancel_moveto` signal:
+    /// the per-slice sticky step lives in the `&self` pose tails, so a
+    /// sticky TIMEOUT is reported through this `Cell`; the next
+    /// `tick()` (`&mut self`) consumes it and clears the
+    /// server-controlled projection (ACE `StickyManager.ClearTarget →
+    /// cancel_moveto`, StickyManager.cs:38-40). One-tick deferral,
+    /// bounded; only ever set under
+    /// [`holtburger_world::spatial::USE_STICKY_MANAGER`].
+    sticky_timeout_pending: std::cell::Cell<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1057,6 +1068,7 @@ impl MovementSystem {
             movement_managers: HashMap::new(),
             unified_transition_runtime: false,
             jump_charge: JumpChargeClock::new(),
+            sticky_timeout_pending: std::cell::Cell::new(false),
         }
     }
 
@@ -1419,6 +1431,16 @@ impl MovementSystem {
     ) -> Result<Vec<WorldEvent>> {
         self.reconcile_server_controlled_projection(world, now);
 
+        // A2-P3 (2026-06-12, W3+ S9) — consume the deferred sticky
+        // timeout: ACE `StickyManager.ClearTarget` also cancels the
+        // MoveTo (`cancel_moveto`, StickyManager.cs:38-40); our analog
+        // clears the server-controlled projection. Only set when sticky
+        // was ACTUALLY active (spec S9 §5 risk row 3), and only under
+        // the default-off gate.
+        if USE_STICKY_MANAGER && self.sticky_timeout_pending.take() {
+            self.clear_server_controlled_projection();
+        }
+
         let had_active_manual_motion = matches!(
             self.active_drive,
             Some(ActiveDriveState {
@@ -1456,10 +1478,11 @@ impl MovementSystem {
         // (2026-06-12): `MotionDone` events now route into the local
         // `CMotionInterp` consumer (`motion_interp.motion_done`,
         // `acclient.c:317097` → `:339349` → `:343641-343676`) — the
-        // pending-motions pop + one-shot RemoveAction drain. The unstick
-        // hook bubbles to A2's sticky owner once that lane lands (A2-P3,
-        // W5); until then a fired hook is a no-op by construction (the
-        // queue only fills via the Stage-2 ?interpRig= enqueue arms).
+        // pending-motions pop + one-shot RemoveAction drain. A2-P3
+        // (W3+ S9): a fired unstick hook now bubbles to the sticky
+        // owner (`scene.unstick_local_player`, gated USE_STICKY_MANAGER;
+        // the queue still only fills via the Stage-2 ?interpRig=
+        // enqueue arms).
         // Renderer-side events (RemoveLinkAnimations) stay with A4-Q2.
         // DEFAULT-OFF ([`USE_MOTION_TABLE_QUEUE`]): queue inert, current
         // paths untouched.
@@ -1467,7 +1490,16 @@ impl MovementSystem {
             self.motion_table_manager.use_time();
             for event in self.motion_table_manager.drain_events() {
                 if let MotionTableEvent::MotionDone { success, .. } = event {
-                    let _unstick = self.local_motion_interp.motion_done(success);
+                    // A2-P3 (2026-06-12, W3+ S9): the unstick hook now
+                    // bubbles to the sticky owner — the one-shot
+                    // RemoveAction pop demanding unstick
+                    // (acclient.c:343641-343676, unstick at :343659)
+                    // clears the local player's sticky target. Closes
+                    // the documented A3-D2 no-op.
+                    let unstick = self.local_motion_interp.motion_done(success);
+                    if unstick && USE_STICKY_MANAGER {
+                        world.scene.unstick_local_player();
+                    }
                 }
             }
         }
@@ -3334,6 +3366,37 @@ impl MovementSystem {
             pose
         };
 
+        // A2-P3 (2026-06-12, W3+ S9) — LOCAL sticky step, AFTER interp,
+        // BEFORE the runtime write-back (retail chain interp → sticky →
+        // constraint, acclient.c:388287-388304). NO contact gate —
+        // retail sticky has none (:388519-388601); the airborne arm is
+        // safe because sticky reads THIS tick's working `pose`, not the
+        // stale `body.pose` (spec S9 §3 L3 step 2; airborne-swing edge
+        // flagged for the eye-test list, OPEN Q5). Speed input is the
+        // RAW manual run speed (NOT the `* 2.0` interp value) — sticky
+        // applies its own `* 5.0` / floor-15 model inside
+        // `adjust_offset` (:388569-388579). Z stays with this tick's
+        // value (sticky z is zeroed by construction, :388557 — the
+        // grounded floor-snap carve-out is preserved).
+        let pose = if USE_STICKY_MANAGER {
+            let sticky_speed = capabilities.resolved_manual_run_speed();
+            match world.scene.step_local_sticky(pose, dt_s, sticky_speed) {
+                LocalStickyStep::Stepped(mut stepped) => {
+                    stepped.coords.z = pose.coords.z;
+                    stepped.rebucket_outdoor_landblock()
+                }
+                LocalStickyStep::TimedOut => {
+                    // Deferred ACE `ClearTarget → cancel_moveto` — these
+                    // tails are `&self`; the next `tick()` consumes it.
+                    self.sticky_timeout_pending.set(true);
+                    pose
+                }
+                LocalStickyStep::Inactive => pose,
+            }
+        } else {
+            pose
+        };
+
         let _ = world.set_local_player_runtime_pose(pose);
     }
 
@@ -3601,6 +3664,38 @@ impl MovementSystem {
         } else {
             pose
         };
+
+        // A2-P3 (2026-06-12, W3+ S9) — LOCAL sticky step, AFTER interp,
+        // BEFORE the runtime write-back (retail chain interp → sticky →
+        // constraint, acclient.c:388287-388304). NO contact gate —
+        // retail sticky has none (:388519-388601); the airborne arm is
+        // safe because sticky reads THIS tick's working `pose`, not the
+        // stale `body.pose` (spec S9 §3 L3 step 2; airborne-swing edge
+        // flagged for the eye-test list, OPEN Q5). Speed input is the
+        // RAW manual run speed (NOT the `* 2.0` interp value) — sticky
+        // applies its own `* 5.0` / floor-15 model inside
+        // `adjust_offset` (:388569-388579). Z stays with this tick's
+        // value (sticky z is zeroed by construction, :388557 — the
+        // grounded floor-snap carve-out is preserved).
+        let pose = if USE_STICKY_MANAGER {
+            let sticky_speed = capabilities.resolved_manual_run_speed();
+            match world.scene.step_local_sticky(pose, dt_s, sticky_speed) {
+                LocalStickyStep::Stepped(mut stepped) => {
+                    stepped.coords.z = pose.coords.z;
+                    stepped.rebucket_outdoor_landblock()
+                }
+                LocalStickyStep::TimedOut => {
+                    // Deferred ACE `ClearTarget → cancel_moveto` — these
+                    // tails are `&self`; the next `tick()` consumes it.
+                    self.sticky_timeout_pending.set(true);
+                    pose
+                }
+                LocalStickyStep::Inactive => pose,
+            }
+        } else {
+            pose
+        };
+
         let _ = world.set_local_player_runtime_pose(pose);
     }
 

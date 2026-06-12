@@ -230,6 +230,23 @@ impl RetailForcePositionInterpolator {
         max_speed: f32,
         on_contact: bool,
     ) -> InterpStep {
+        self.step_ext(current, quantum, max_speed, on_contact, false)
+    }
+
+    /// [`Self::step`] with the A2-P3 sticky exemption threaded:
+    /// `sticky_active` bypasses the 5-frame progress-test abort while
+    /// the owner's sticky target is non-zero (acclient.c:389243-389245
+    /// — the sticky term of the keep-interpolating gate, previously
+    /// hard-false here). [`Self::step`] delegates with `false` —
+    /// byte-identical for every legacy caller.
+    pub fn step_ext(
+        &mut self,
+        current: WorldPosition,
+        quantum: f32,
+        max_speed: f32,
+        on_contact: bool,
+        sticky_active: bool,
+    ) -> InterpStep {
         let Some(target) = self.target else {
             return InterpStep::Idle;
         };
@@ -260,12 +277,13 @@ impl RetailForcePositionInterpolator {
         self.frame_counter += 1;
 
         // The keep-interpolating gate (ACE InterpolationManager.cs:230-231).
-        // Sticky objects are never modelled here (force-position is never
-        // sticky), so the sticky term is always false.
+        // A2-P3: the sticky term is now threaded by the facade (it was
+        // hard-false pre-P3; force-position alone is never sticky).
         let progressing = delta > EPSILON
             && self.progress_quantum > EPSILON
             && (delta / self.progress_quantum / max_speed) >= MIN_PROGRESS_RATIO;
-        let keep_interpolating = self.frame_counter < PROGRESS_WINDOW_FRAMES || progressing;
+        let keep_interpolating =
+            self.frame_counter < PROGRESS_WINDOW_FRAMES || progressing || sticky_active;
 
         if !keep_interpolating {
             // Node failed its progress check (ACE InterpolationManager.cs:256-257).

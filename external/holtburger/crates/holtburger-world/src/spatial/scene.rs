@@ -583,6 +583,32 @@ pub struct SpatialScene {
     /// bodies never appear (the JS legacy dead-reckon path keeps owning
     /// them between corrections — S8 §5 risk 2).
     remote_stepped_poses: HashMap<Guid, WorldPosition>,
+    /// A2-P3 (2026-06-12, W3+ S9) — O(1) mirror of the LOCAL player
+    /// body's sticky target ([`PositionManager::sticky_object_id`]),
+    /// kept in sync by [`Self::stick_local_player_to`] /
+    /// [`Self::unstick_local_player`] / the timeout in
+    /// [`Self::step_local_sticky`]. Lets the entity-pose update sites
+    /// route the minimal TargetManager-subset feed
+    /// ([`Self::sticky_pose_feed`]) with one compare. `None` whenever
+    /// `USE_STICKY_MANAGER` is off (no install site runs) —
+    /// byte-identical default behavior.
+    local_sticky_target: Option<Guid>,
+}
+
+/// A2-P3 (2026-06-12, W3+ S9) — outcome of one
+/// [`SpatialScene::step_local_sticky`] slice.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LocalStickyStep {
+    /// No sticky target (or its pose is not fed yet) — pose unchanged.
+    Inactive,
+    /// The 1.0 s sticky window expired this slice and cleared the
+    /// target (acclient.c:388605-388620). The owner must also clear the
+    /// server-controlled projection (ACE `ClearTarget → cancel_moveto`,
+    /// StickyManager.cs:38-40) — pose unchanged this slice.
+    TimedOut,
+    /// The sticky pull stepped the working pose (XY + heading; z
+    /// untouched by construction, acclient.c:388557).
+    Stepped(WorldPosition),
 }
 
 impl Default for SpatialScene {
@@ -619,6 +645,7 @@ impl SpatialScene {
             sky_desc: None,
             remote_interp_enabled: false,
             remote_stepped_poses: HashMap::new(),
+            local_sticky_target: None,
         }
     }
 
@@ -2340,6 +2367,120 @@ impl SpatialScene {
         }
     }
 
+    // === A2-P3 (2026-06-12, W3+ S9) — LOCAL-player sticky surface. =======
+    //
+    // Gate-at-entry: every caller checks
+    // [`crate::spatial::position_manager::USE_STICKY_MANAGER`] before
+    // installing (`movement/system.rs` step/unstick, native
+    // `client/simulation.rs` Invalid arm, wasm `lib.rs` UpdateMotion
+    // arm), so with the const off `local_sticky_target` stays `None`
+    // and every method here is an inert compare — byte-identical.
+
+    /// The LOCAL player's spatial body, if registered.
+    fn local_player_body_mut(&mut self) -> Option<&mut SpatialBody> {
+        self.body_store
+            .bodies
+            .values_mut()
+            .find(|body| matches!(body.id, SpatialBodyId::LocalPlayer(_)))
+    }
+
+    /// `CPhysicsObj::stick_to_object` for the LOCAL player
+    /// (acclient.c:319725-319763 — retail resolves radius/height from
+    /// the target's `CPartArray`, else `0.0`; we pass the caller's best
+    /// radius, `0.0` fallback per spec S9 OPEN Q3) → `StickyManager::
+    /// StickTo` (:388665-388690). Seeds the pose stash immediately when
+    /// the target's pose is already known (`entity_poses`) — the
+    /// explicit-feed replacement for retail's TargetManager
+    /// registration (spec S9 §3 R1 step 2 deviation note).
+    pub fn stick_local_player_to(&mut self, target: Guid, target_radius: f32) {
+        let known_pose = self.entity_poses.get(&target).copied();
+        if let Some(body) = self.local_player_body_mut() {
+            body.position_manager.stick_to(target, target_radius);
+            if let Some(pose) = known_pose {
+                body.position_manager.sticky_handle_update_target(target, pose);
+            }
+            self.local_sticky_target = Some(target);
+        }
+    }
+
+    /// `unstick_from_object` for the LOCAL player (retail unstick
+    /// sites: `CMotionInterp::MotionDone` one-shot pop
+    /// acclient.c:343659, the per-unpack preamble :339518-339519).
+    /// Returns `true` when sticky was actually active — the ACE
+    /// `ClearTarget → cancel_moveto` signal for the owner.
+    pub fn unstick_local_player(&mut self) -> bool {
+        if self.local_sticky_target.is_none() {
+            return false;
+        }
+        self.local_sticky_target = None;
+        self.local_player_body_mut()
+            .map(|body| body.position_manager.unstick())
+            .unwrap_or(false)
+    }
+
+    /// The LOCAL player's current sticky target (diag + feed routing).
+    pub fn local_sticky_target(&self) -> Option<Guid> {
+        self.local_sticky_target
+    }
+
+    /// Minimal TargetManager-subset pose feed (spec S9 §3 L1 step 4;
+    /// retail `PositionManager::HandleUpdateTarget` →
+    /// `StickyManager::HandleUpdateTarget`, acclient.c:388691-388720).
+    /// Routed from [`Self::update_entity`] (native handlers) and the
+    /// wasm `PublicUpdatePosition` arm. No-op unless `guid` IS the
+    /// local sticky target.
+    pub fn sticky_pose_feed(&mut self, guid: Guid, pose: WorldPosition) {
+        if self.local_sticky_target != Some(guid) {
+            return;
+        }
+        if let Some(body) = self.local_player_body_mut() {
+            body.position_manager.sticky_handle_update_target(guid, pose);
+        }
+    }
+
+    /// One per-frame LOCAL sticky slice: timeout tick (retail
+    /// `PositionManager::UseTime` runs sticky's `UseTime` each frame,
+    /// acclient.c:388283) then `adjust_offset` applied to the CURRENT
+    /// working pose `current` (threaded by the caller — never the stale
+    /// `body.pose`, spec S9 §3 L3 step 2; this is why the airborne
+    /// integrator-freeze hazard does not apply). NO contact gate —
+    /// retail sticky has none (acclient.c:388519-388601).
+    pub fn step_local_sticky(
+        &mut self,
+        current: WorldPosition,
+        quantum: f32,
+        max_speed: f32,
+    ) -> LocalStickyStep {
+        if self.local_sticky_target.is_none() {
+            return LocalStickyStep::Inactive;
+        }
+        let Some(body) = self
+            .body_store
+            .bodies
+            .values_mut()
+            .find(|body| matches!(body.id, SpatialBodyId::LocalPlayer(_)))
+        else {
+            return LocalStickyStep::Inactive;
+        };
+        if body.position_manager.sticky_use_time(quantum) {
+            self.local_sticky_target = None;
+            return LocalStickyStep::TimedOut;
+        }
+        // `my_radius = 0.0` fallback (acclient.c:319756-319763; spec S9
+        // OPEN Q3 — no client-side physics-radius source located yet;
+        // degrades the standoff toward `−0.3`-clamped, functional but
+        // not size-aware).
+        match body
+            .position_manager
+            .step_sticky_pose(current, 0.0, max_speed, quantum)
+        {
+            Some(pose) => LocalStickyStep::Stepped(pose),
+            // Target pose not fed yet — retail-accurate `Initialized`
+            // no-op (acclient.c:388691-388720).
+            None => LocalStickyStep::Inactive,
+        }
+    }
+
     /// Physics deep-dive 2026-06-01 (gap 4, opt-in) — advance the faithful
     /// retail force-position interpolator for one physics frame, mutating
     /// `body.pose` toward the installed forced target via the retail
@@ -2565,6 +2706,12 @@ impl SpatialScene {
         }
         self.landblock_map.entry(new_lb).or_default().insert(guid);
         self.entity_poses.insert(guid, pose);
+        // A2-P3: minimal TargetManager-subset feed — every native
+        // entity-pose mutation site funnels through here
+        // (state/mutations.rs, liveness.rs, types.rs callers), so the
+        // local sticky target's live pose stays fed. One inert compare
+        // when no sticky is active (always, with USE_STICKY_MANAGER off).
+        self.sticky_pose_feed(guid, pose);
     }
 
     pub fn remove_entity(&mut self, guid: Guid, lb: Guid) {
