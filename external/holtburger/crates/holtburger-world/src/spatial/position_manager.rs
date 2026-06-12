@@ -629,31 +629,92 @@ impl PositionManager {
         on_contact: bool,
     ) -> (InterpStep, Vec<InterpolationCommand>) {
         if USE_POSITION_MANAGER_QUEUE {
-            let commands = self.interpolation.use_time(current);
-            // A drain that blipped (recovery) reports the blip pose as
-            // the step outcome so the owner lands the body there.
-            if let Some(InterpolationCommand::SetPosition(pos)) = commands.first().copied() {
-                return (InterpStep::Completed { pose: pos }, commands);
-            }
-            let step = self.interpolation.step_position_head(
-                current,
-                quantum,
-                max_speed,
-                on_contact,
-                &mut self.constraint,
-            );
-            if matches!(step, InterpStep::Completed { .. })
-                && !self.interpolation.is_interpolating()
-            {
-                self.constraint.unconstrain();
-            }
-            (step, commands)
+            self.step_queue(current, quantum, max_speed, on_contact)
         } else {
             (
                 self.legacy.step(current, quantum, max_speed, on_contact),
                 Vec::new(),
             )
         }
+    }
+
+    /// The queue step shared by the [`USE_POSITION_MANAGER_QUEUE`] local
+    /// path and the A2-P2 remote path — retail call order per
+    /// `PositionManager::UseTime` (`acclient.c:388267-388284`, drain)
+    /// then `adjust_offset` (`:388287-388304`).
+    fn step_queue(
+        &mut self,
+        current: WorldPosition,
+        quantum: f32,
+        max_speed: f32,
+        on_contact: bool,
+    ) -> (InterpStep, Vec<InterpolationCommand>) {
+        let commands = self.interpolation.use_time(current);
+        // A drain that blipped (recovery) reports the blip pose as
+        // the step outcome so the owner lands the body there.
+        if let Some(InterpolationCommand::SetPosition(pos)) = commands.first().copied() {
+            return (InterpStep::Completed { pose: pos }, commands);
+        }
+        let step = self.interpolation.step_position_head(
+            current,
+            quantum,
+            max_speed,
+            on_contact,
+            &mut self.constraint,
+        );
+        if matches!(step, InterpStep::Completed { .. }) && !self.interpolation.is_interpolating() {
+            self.constraint.unconstrain();
+        }
+        (step, commands)
+    }
+
+    // === A2-P2 (2026-06-12, W3+ S8) — the REMOTE driver surface. =========
+    //
+    // Remote `MoveOrTeleport` corrections (acclient.c:323451-323498)
+    // ALWAYS ride the retail node queue — the legacy single-node
+    // interpolator is the LOCAL-player force-position carrier and never
+    // holds remote state, so these entries bypass the
+    // [`USE_POSITION_MANAGER_QUEUE`] facade const (which only chooses the
+    // local path's backend). A2-P3 (sticky) extends this same surface.
+
+    /// True when the QUEUE holds nodes — the remote-driver activity
+    /// check ([`Self::is_interpolating`] reports the legacy interpolator
+    /// when the facade const is off, which is never the remote carrier).
+    pub fn queue_active(&self) -> bool {
+        self.interpolation.is_interpolating()
+    }
+
+    /// Remote `InterpolateTo` (`acclient.c:323492-323495` call site;
+    /// queue semantics `:389017-389173`). Returns `true` when a node was
+    /// queued.
+    pub fn remote_interpolate_to(
+        &mut self,
+        current: WorldPosition,
+        target: WorldPosition,
+        keep_heading: bool,
+        blip_distance: f32,
+    ) -> bool {
+        self.interpolation
+            .interpolate_to(current, target, keep_heading, blip_distance)
+    }
+
+    /// Remote `ConstrainTo` — the leash the caller anchors on the
+    /// object's OWN post-move position (`acclient.c:145223-145227`).
+    pub fn remote_constrain_to(&mut self, distance: f32, start: f32, max: f32) {
+        self.constraint.constrain_to(distance, start, max);
+    }
+
+    /// One per-frame remote step — unconditionally the queue path (see
+    /// the section comment above). Same outcome/commands contract as
+    /// [`Self::step_force_position`]'s queue arm.
+    pub fn step_remote(
+        &mut self,
+        current: WorldPosition,
+        quantum: f32,
+        max_speed: f32,
+        on_contact: bool,
+    ) -> (InterpStep, Vec<InterpolationCommand>) {
+        self.step_queue(current, quantum, max_speed, on_contact)
     }
 }
 

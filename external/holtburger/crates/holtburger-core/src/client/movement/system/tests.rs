@@ -4341,3 +4341,71 @@ fn notify_animation_done_empty_queue_is_a_no_op() {
     system.notify_animation_done_ungated(true);
     assert_eq!(system.motion_table_manager_mut().drain_events().len(), 1);
 }
+
+// === A2-P2 (2026-06-12, W3+ S8) — remote manager step in the spine =======
+
+/// S8 §4 test 2 — the per-slice remote PositionManager slot. A 0.25 s
+/// frame slices as [0.1, 0.1, 0.05] (MAX_QUANTUM = 0.1), so a remote
+/// body with a queued correction advances by max_speed_floor × dt =
+/// 7.5 × 0.25 = 1.875 m in ONE `ClientSimulationSystem::tick`; flag
+/// off, the manager is never stepped (zero work, byte-identical).
+#[test]
+fn simulation_tick_steps_remote_managers_once_per_slice() {
+    use crate::client::simulation::ClientSimulationSystem;
+    use holtburger_world::spatial::AuthoritativeBodySync;
+    use web_time::Instant as WtInstant;
+
+    let run = |flag_on: bool| -> (f32, usize) {
+        let mut world = WorldState::synthetic();
+        world.set_remote_interp_enabled(flag_on);
+        let guid = Guid(0x7000_0099);
+        let body_id = SpatialBodyId::Entity(guid);
+        let start = WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            coords: Vector3::new(50.0, 50.0, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        let target = WorldPosition {
+            coords: Vector3::new(50.0, 60.0, 0.0),
+            ..start
+        };
+        world.scene.reconcile_authoritative_body(
+            body_id,
+            start,
+            Vector3::zero(),
+            Vector3::zero(),
+            AuthoritativeBodySync::Snapshot,
+            WtInstant::now(),
+        );
+        // Queue the correction directly on the manager (the ingest
+        // lattice is pinned in holtburger-world's spatial tests; this
+        // lane pins the STEP SITE only) — the queue surface is shared
+        // with the flag-on path, so flag-off must still not step it.
+        {
+            let body = world.scene.body_mut(body_id).expect("body");
+            assert!(body.position_manager.remote_interpolate_to(start, target, false, 100.0));
+        }
+        let mut simulation = ClientSimulationSystem::new();
+        let mut movement = MovementSystem::new();
+        let _ = simulation.tick(
+            WtInstant::now(),
+            Duration::from_millis(250),
+            &mut world,
+            &mut movement,
+        );
+        let pose = world.scene.body(body_id).expect("body").pose;
+        let rows = world.scene.take_remote_stepped_poses();
+        (pose.coords.y - 50.0, rows.len())
+    };
+
+    let (advanced_on, rows_on) = run(true);
+    assert!(
+        (advanced_on - 1.875).abs() < 1e-3,
+        "3 slices × 7.5 m/s floor must advance 1.875 m, got {advanced_on}"
+    );
+    assert_eq!(rows_on, 1, "stepped body lands in the export ledger once");
+
+    let (advanced_off, rows_off) = run(false);
+    assert_eq!(advanced_off, 0.0, "flag off: manager never stepped");
+    assert_eq!(rows_off, 0, "flag off: ledger stays empty");
+}

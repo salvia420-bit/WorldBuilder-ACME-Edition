@@ -2,9 +2,9 @@ use super::*;
 use crate::context::WorldContextExt;
 use crate::entity::EntityPositionSyncOutcome;
 use crate::spatial::{
-    AuthoritativeBodySync, ContactState, RuntimeBodyResetCause, RuntimeSpatialBodyView,
-    SolvedBodyKinematics, SpatialBodyEvent, SpatialBodyId, SpatialSampleMode,
-    SpatialSamplingConfig,
+    AuthoritativeBodySync, ContactState, RemoteCorrectionCtx, RuntimeBodyResetCause,
+    RuntimeSpatialBodyView, SolvedBodyKinematics, SpatialBodyEvent, SpatialBodyId,
+    SpatialSampleMode, SpatialSamplingConfig,
 };
 use holtburger_common::math::Quaternion;
 use holtburger_common::position::WorldPosition;
@@ -54,6 +54,21 @@ impl WorldState {
         omega: Vector3,
         sync: AuthoritativeBodySync,
     ) {
+        self.reconcile_authoritative_body_with_remote(guid, pose, velocity, omega, sync, None);
+    }
+
+    /// A2-P2 (2026-06-12, W3+ S8): reconcile with the optional remote
+    /// wire context (see [`RemoteCorrectionCtx`]). `None` = the legacy
+    /// reconcile, byte-identical.
+    pub(crate) fn reconcile_authoritative_body_with_remote(
+        &mut self,
+        guid: Guid,
+        pose: WorldPosition,
+        velocity: Vector3,
+        omega: Vector3,
+        sync: AuthoritativeBodySync,
+        remote: Option<RemoteCorrectionCtx>,
+    ) {
         let Some(body_id) = self.authoritative_body_id_for_guid(guid) else {
             return;
         };
@@ -63,14 +78,22 @@ impl WorldState {
             return;
         }
 
-        self.scene.reconcile_authoritative_body(
+        self.scene.reconcile_authoritative_body_with_remote(
             body_id,
             pose,
             velocity,
             omega,
             sync,
             Instant::now(),
+            remote,
         );
+    }
+
+    /// A2-P2: flip the scene's remote-driver runtime switch (set once at
+    /// world creation from the parsed `?remoteInterp=on` flag; wasm-only
+    /// caller this stage — native stays off, S8 OPEN Q9).
+    pub fn set_remote_interp_enabled(&mut self, enabled: bool) {
+        self.scene.set_remote_interp_enabled(enabled);
     }
 
     pub(crate) fn retire_authoritative_body_for_guid(&mut self, guid: Guid) {
@@ -305,14 +328,35 @@ impl WorldState {
         events.push(WorldEvent::PlayerGroundedUpdated { grounded });
     }
 
+    /// A2-P2 (2026-06-12, W3+ S8): build the remote wire context for an
+    /// entity position sync — `Some` only when the remote driver is on
+    /// AND the sync came from a wire position correction (`contact` is
+    /// the frame's `IS_GROUNDED` bit when it carries one). Internal
+    /// bookkeeping syncs (rotation writes) pass `wire = None` and keep
+    /// the legacy reconcile, so a TurnTo heading write can never feed —
+    /// and deadband-cancel — an in-flight interpolation.
+    fn remote_correction_ctx(&self, wire: Option<Option<bool>>) -> Option<RemoteCorrectionCtx> {
+        if !self.scene.remote_interp_enabled() {
+            return None;
+        }
+        wire.map(|contact| RemoteCorrectionCtx {
+            contact,
+            // The at-ingest analog of retail's per-frame cached
+            // `player_distance` (acclient.c:323107-323114; S8 OPEN Q3).
+            player_pose: self.local_player_runtime_pose(),
+        })
+    }
+
     fn emit_entity_position_sync(
         &mut self,
         guid: Guid,
         old_lb: Guid,
         pos: WorldPosition,
         outcome: EntityPositionSyncOutcome,
+        wire_contact: Option<Option<bool>>,
         events: &mut Vec<WorldEvent>,
     ) {
+        let remote_ctx = self.remote_correction_ctx(wire_contact);
         match outcome {
             EntityPositionSyncOutcome::Rejected => {}
             EntityPositionSyncOutcome::Moved => {
@@ -322,12 +366,13 @@ impl WorldState {
                     .get(guid)
                     .map(|entity| (entity.velocity, entity.omega))
                     .unwrap_or((Vector3::zero(), Vector3::zero()));
-                self.reconcile_authoritative_body(
+                self.reconcile_authoritative_body_with_remote(
                     guid,
                     pos,
                     velocity,
                     omega,
                     AuthoritativeBodySync::Snapshot,
+                    remote_ctx,
                 );
                 if let Some(body_id) = self.runtime_body_id_for_guid(guid) {
                     Self::emit_runtime_body_changed(events, body_id);
@@ -341,12 +386,13 @@ impl WorldState {
                     .get(guid)
                     .map(|entity| (entity.velocity, entity.omega))
                     .unwrap_or((Vector3::zero(), Vector3::zero()));
-                self.reconcile_authoritative_body(
+                self.reconcile_authoritative_body_with_remote(
                     guid,
                     pos,
                     velocity,
                     omega,
                     AuthoritativeBodySync::Reset,
+                    remote_ctx,
                 );
                 if let Some(body_id) = self.runtime_body_id_for_guid(guid) {
                     Self::emit_runtime_body_changed(events, body_id);
@@ -530,7 +576,12 @@ impl WorldState {
             }
         }
 
-        self.emit_entity_position_sync(guid, old_lb, pos, outcome, events);
+        // A2-P2: a wire UpdatePosition correction — `pp.has_contact` is
+        // the IS_GROUNDED flag bit (acclient.c:145287 / position.rs).
+        let wire_contact = Some(Some(
+            pos_pack.flags.contains(UpdatePositionFlag::IS_GROUNDED),
+        ));
+        self.emit_entity_position_sync(guid, old_lb, pos, outcome, wire_contact, events);
         if let Some((velocity, omega)) = velocity_event {
             events.push(WorldEvent::EntityVectorUpdated {
                 guid,
@@ -563,7 +614,9 @@ impl WorldState {
             Some(data.server_control_sequence),
         );
         let accepted = !matches!(outcome, EntityPositionSyncOutcome::Rejected);
-        self.emit_entity_position_sync(data.guid, old_lb, pos, outcome, events);
+        // A2-P2: 0xF753 carries no contact bit — `Some(None)` = wire
+        // correction with contact assumed (S8 OPEN Q2 ruling).
+        self.emit_entity_position_sync(data.guid, old_lb, pos, outcome, Some(None), events);
         accepted
     }
 
@@ -813,11 +866,13 @@ impl WorldState {
 
             let old_lb = entity.position.landblock_id;
             entity.position = position;
+            // A2-P2: bare wire position frame, no contact bit.
             self.emit_entity_position_sync(
                 guid,
                 old_lb,
                 position,
                 EntityPositionSyncOutcome::Moved,
+                Some(None),
                 events,
             );
             return true;
@@ -937,7 +992,16 @@ impl WorldState {
             (old_lb, entity.position)
         };
 
-        self.emit_entity_position_sync(guid, old_lb, pos, EntityPositionSyncOutcome::Moved, events);
+        // A2-P2: internal rotation bookkeeping — NOT a wire correction
+        // (`None` keeps the legacy reconcile; see remote_correction_ctx).
+        self.emit_entity_position_sync(
+            guid,
+            old_lb,
+            pos,
+            EntityPositionSyncOutcome::Moved,
+            None,
+            events,
+        );
         true
     }
 

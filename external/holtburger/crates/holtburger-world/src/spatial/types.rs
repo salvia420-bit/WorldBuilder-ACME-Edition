@@ -252,6 +252,15 @@ pub struct SpatialBody {
     /// integrator advances it via
     /// [`crate::spatial::SpatialScene::step_force_position_interpolation`].
     pub position_manager: PositionManager,
+    /// A2-P2 (2026-06-12, W3+ S8): last wire-reported contact for a
+    /// REMOTE body — retail gates `InterpolationManager::adjust_offset`
+    /// on the object's `transient_state & 1` (acclient.c:389208), which
+    /// retail derives by simulating the remote body. We hold the latest
+    /// wire `IS_GROUNDED` (`pp.has_contact`, acclient.c:145287) here
+    /// instead; `None` (no flag seen yet) is treated as on-contact so
+    /// managers aren't permanently frozen (S8 OPEN Q6, documented
+    /// deviation). Only written on the `?remoteInterp=on` ingest path.
+    pub last_wire_contact: Option<bool>,
 }
 
 impl SpatialBody {
@@ -266,6 +275,7 @@ impl SpatialBody {
             contact: ContactState::Unknown,
             sampling: SpatialSamplingState::authoritative(now),
             position_manager: PositionManager::default(),
+            last_wire_contact: None,
         }
     }
 
@@ -280,6 +290,7 @@ impl SpatialBody {
             contact: ContactState::Unknown,
             sampling: SpatialSamplingState::authoritative(now),
             position_manager: PositionManager::default(),
+            last_wire_contact: None,
         }
     }
 

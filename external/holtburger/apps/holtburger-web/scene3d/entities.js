@@ -95,6 +95,25 @@ function readDeadReckonFlag() {
   }
 }
 
+// A2-P2 (2026-06-12, W3+ S8) — `?remoteInterp=on` opt-in (default OFF,
+// pending 1070 eye-test). COMPOSITE flag: only meaningful alongside
+// `?unifiedTick=on&wireStatePacks=stage1` (the wasm side warns + degrades
+// otherwise, and no pose rows ever arrive, so this stays inert). When rows DO
+// arrive (loop.js drainRemotePoses → applyManagedPose), the wasm-side retail
+// PositionManager owns each managed entity's POSITION (smoothing already
+// happened Rust-side, acclient.c:389258-389264) and the JS dead-reckon ease +
+// velocity extrapolation are skipped for it; heading stays JS-owned via the
+// K=14 ease this stage (S8 OPEN Q4). Same reader shape as readDeadReckonFlag.
+function readRemoteInterpFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("remoteInterp");
+    return v != null && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
 // A2 Path A — heading ease is DEFAULT-ON in the browser; `?headingSnap=on`
 // forces the legacy per-update rotation snap (A/B + instant revert). Returns
 // false outside a browser (Node harness) so unit tests see the byte-identical
@@ -224,6 +243,15 @@ const DEAD_RECKON_TELEPORT_SNAP_SQ =
 // a stopped entity (no fresh velocity) doesn't overshoot. Same units as
 // performance.now() deltas.
 const ENTITY_VELOCITY_STALE_MS = 500;
+
+// A2-P2 (2026-06-12, W3+ S8, ?remoteInterp=on) — frames of per-entity
+// position ownership granted by each wasm-managed pose row. While the Rust
+// PositionManager is interpolating, `applyManagedPose` lands ~every tick and
+// keeps re-arming this countdown; when the manager goes idle (sparse export —
+// no rows), the countdown drains in ~0.5 s @60fps and the legacy dead-reckon
+// ease resumes seamlessly from the re-anchored _serverTargetPos (S8 §5 risk 2
+// hand-back).
+const REMOTE_INTERP_OWNERSHIP_FRAMES = 30;
 
 // F3-4 (bughunt 2026-06-09) — sticky melee standoff (m). While a monster is
 // sticky-attacking, ACE withholds its position broadcast and relies on the
@@ -2290,6 +2318,9 @@ export class EntityManager {
     // `setPose` runs exactly as before (byte-identical), no target stored, no
     // tick smoothing.
     this._deadReckonOn = readDeadReckonFlag();
+    // A2-P2 (2026-06-12, W3+ S8) — `?remoteInterp=on` (default OFF). Read
+    // once HERE; consumed in `applyManagedPose` / `setPose` / `tick`.
+    this._remoteInterpOn = readRemoteInterpFlag();
     // A2 Path A (2026-05-29) — remote-entity heading ease. Default-on (browser);
     // `?headingSnap=on` reverts to the legacy snap, `?headingEaseK=` tunes rate.
     // Consumed in `setPose` (stash target / discontinuity-snap) + `tick` (slerp).
@@ -3761,11 +3792,51 @@ export class EntityManager {
    * `tick(dt)` critically-damps `root.position` toward it. Default OFF, or for
    * the local player, falls through to the byte-identical snap below.
    */
+  /**
+   * A2-P2 (2026-06-12, W3+ S8, `?remoteInterp=on`) — apply one wasm-managed
+   * remote pose row (loop.js `drainRemotePoses`, world coords). The Rust
+   * PositionManager already eased this position (retail `adjust_offset` step
+   * cap, acclient.c:389258-389264), so it's written DIRECTLY — no JS ease on
+   * top. Ownership rules (S8 P2.d.2):
+   *   - local guid → no-op (defense; loop.js also skips);
+   *   - `_ballistic` → no-op (F3-1/G-4 projectile self-integration owns it);
+   *   - `_stickyTarget` → no-op (F3-4 glue owns position until A2-P3 —
+   *     retail's sticky also runs inside this manager, acclient.c:388300,
+   *     but sticky is explicitly P3 scope);
+   *   - else: arm `_wasmDriven` ownership, write root.position, and
+   *     re-anchor `_serverTargetPos` so the legacy ease has nothing to drag
+   *     when ownership decays back (S8 §5 risk 2).
+   * ROTATION is deliberately untouched — heading stays JS-owned through the
+   * same K=14 ease stash `setPose` keeps feeding (S8 OPEN Q4).
+   */
+  applyManagedPose(guid, x, y, z) {
+    if (!this._remoteInterpOn) return;
+    const g = guid >>> 0;
+    if (this._isLocalPlayerGuid(g)) return;
+    const inst = this.entityMap.get(g);
+    if (!inst || !inst.root) return;
+    if (inst._ballistic) return;
+    if (inst._stickyTarget) return;
+    inst._wasmDriven = REMOTE_INTERP_OWNERSHIP_FRAMES;
+    inst.root.position.set(x, y, z);
+    let tgt = inst._serverTargetPos;
+    if (!tgt) tgt = inst._serverTargetPos = new THREE.Vector3();
+    tgt.set(x, y, z);
+  }
+
   setPose(guid, x, y, z, qw, qx, qy, qz) {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return;
     const isRemote = !this._isLocalPlayerGuid(g);
+    // A2-P2 (`?remoteInterp=on`): while the wasm PositionManager owns this
+    // entity's position, the wire packet that produced this KIND_POSITION
+    // ALREADY fed the Rust manager via the routed arm — writing/stashing the
+    // un-eased target here would double-apply it (S8 §5 risk 1). The
+    // sticky-clear below and the heading stash still run (heading stays
+    // JS-owned this stage); only the POSITION write/stash is skipped.
+    const wasmDriven =
+      this._remoteInterpOn && isRemote && (inst._wasmDriven | 0) > 0;
     // F3-4 (bughunt 2026-06-09): a real server position broadcast for this
     // entity means ACE resumed netsend-true movement — sticky is over (a
     // sticky monster receives NO position updates). Clear it so normal
@@ -3813,6 +3884,10 @@ export class EntityManager {
       // turn directive — drop the omega cap so smoothing keeps its fixed-K.
       if (inst._turnOmegaCapRad) inst._turnOmegaCapRad = 0;
       // Position — unchanged from R3.A: ease under ?deadReckon, else snap.
+      // A2-P2: skipped entirely while the wasm manager owns position.
+      if (wasmDriven) {
+        return;
+      }
       if (this._deadReckonOn) {
         let tgt = inst._serverTargetPos;
         if (!tgt) tgt = inst._serverTargetPos = new THREE.Vector3();
@@ -3853,6 +3928,11 @@ export class EntityManager {
       if (inst._omegaAccumQ) {
         inst.root.quaternion.premultiply(inst._omegaAccumQ);
       }
+      // A2-P2: rotation snapped above as before; position stash/snap is the
+      // wasm manager's while it owns this entity.
+      if (wasmDriven) {
+        return;
+      }
       // Lazily allocate the per-entity target vector (reused in place — no
       // per-update allocation).
       let tgt = inst._serverTargetPos;
@@ -3873,6 +3953,14 @@ export class EntityManager {
         cur.set(x, y, z);
       }
       tgt.set(x, y, z);
+      return;
+    }
+    if (wasmDriven) {
+      // A2-P2: rotation-only write (mirrors the deadReckon arm's quaternion
+      // path); position belongs to the wasm manager.
+      inst.root.quaternion.copy(acQuatToThree(qw, qx, qy, qz));
+      if (inst.airborneTilt) inst.root.quaternion.multiply(inst.airborneTilt);
+      if (inst._omegaAccumQ) inst.root.quaternion.premultiply(inst._omegaAccumQ);
       return;
     }
     inst.setPose(x, y, z, qw, qx, qy, qz);
@@ -9548,6 +9636,15 @@ export class EntityManager {
       // setStickyTarget(0) on a fresh non-sticky command or a resumed position
       // broadcast. Facing-toward-target is a documented follow-on (the mob keeps
       // its last chase facing, already roughly toward the player).
+      // A2-P2 (`?remoteInterp=on`): drain the wasm-ownership countdown each
+      // frame. While > 0 the dead-reckon ease + velocity extrapolation below
+      // are skipped — the Rust PositionManager wrote root.position directly
+      // (applyManagedPose) and easing toward the stale _serverTargetPos would
+      // fight it. Fresh rows re-arm the countdown; an idle manager lets it
+      // drain (~0.5 s) and the legacy ease resumes from the re-anchored
+      // target. Inert (0 | 0 = 0) unless applyManagedPose ever armed it.
+      const wasmDriven = (inst._wasmDriven | 0) > 0;
+      if (wasmDriven) inst._wasmDriven -= 1;
       let stickyGlued = false;
       if (inst._stickyTarget) {
         const tgtInst = this.entityMap.get(inst._stickyTarget >>> 0);
@@ -9575,7 +9672,7 @@ export class EntityManager {
       // projectile and a sticky-glued mob own their own motion above and must
       // never also be dragged by the dead-reckon ease (ACE sends no position
       // for either, so _serverTargetPos is normally absent/stale anyway).
-      if (runSmoothing && this._deadReckonOn && inst._serverTargetPos && !inst._ballistic && !stickyGlued) {
+      if (runSmoothing && this._deadReckonOn && inst._serverTargetPos && !inst._ballistic && !stickyGlued && !wasmDriven) {
         const tgt = inst._serverTargetPos;
         // B5/QW2/REMOTE-3: extrapolate the server target forward by the last
         // VectorUpdate velocity while it's fresh — retail integrates

@@ -112,6 +112,44 @@ const RECONCILE_DEADBAND_M: f32 = 0.05;
 const CONSTRAINT_MAX_INDOOR_M: f32 = 20.0;
 const CONSTRAINT_MAX_OUTDOOR_M: f32 = 50.0;
 
+/// A2-P2 (2026-06-12, W3+ S8) — retail `GetAutonomyBlipDistance` for a
+/// NON-player object: `20.0` indoor (cellid low word ≥ 0x100), `100.0`
+/// outdoor (acclient.c:315861-315880). NOT the player 25/100 pair above
+/// (`BLIP_SNAP_DISTANCE_INDOOR_M`); the outdoor value happens to match.
+/// The constraint start/max distances are the SAME for player and
+/// non-player (acclient.c:315885-315929), so the lattice reuses
+/// `CONSTRAINT_LEASH_*` / `CONSTRAINT_MAX_*`.
+const REMOTE_BLIP_INDOOR_M: f32 = 20.0;
+const REMOTE_BLIP_OUTDOOR_M: f32 = 100.0;
+
+/// A2-P2 — retail's "stop tracking far objects" radius: a remote
+/// correction for an object ≥ 96 m from the local player skips the
+/// interpolator and hard-sets (`MoveOrTeleport`'s `player_distance`
+/// gate, acclient.c:323483-323489).
+const REMOTE_INTERP_PLAYER_RADIUS_M: f32 = 96.0;
+
+/// A2-P2 (2026-06-12, W3+ S8) — wire context for a REMOTE position
+/// correction, threaded from `apply_entity_position_pack` (and friends)
+/// into the scene reconcile so the retail `MoveOrTeleport` lattice
+/// (acclient.c:323451-323498) can run. Only constructed on the remote
+/// movement-ingest paths; every other reconcile passes `None` and keeps
+/// the legacy snap.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RemoteCorrectionCtx {
+    /// Wire `pp.has_contact` (acclient.c:145287; ours
+    /// `UpdatePositionFlag::IS_GROUNDED`). `None` = the frame carries no
+    /// contact bit (AutonomousPosition / PublicUpdatePosition) — treated
+    /// as on-contact (S8 OPEN Q2/Q6 ruling: retail's 0xF753-adjacent
+    /// `HandleReceivedPosition(..., 1, ...)` call site passes
+    /// constant-contact).
+    pub contact: Option<bool>,
+    /// The local player's runtime pose at ingest — the at-ingest analog
+    /// of retail's per-frame cached `player_distance`
+    /// (acclient.c:323107-323114; S8 OPEN Q3). `None` (no local player
+    /// yet) is treated as ≥ 96 m, i.e. snap.
+    pub player_pose: Option<WorldPosition>,
+}
+
 /// Constraint-pull the integrator working pose `current` toward the
 /// server-forced `target`, returning the corrected pose. Indoor/outdoor
 /// awareness comes from `target` (the cell the server is forcing us
@@ -533,6 +571,18 @@ pub struct SpatialScene {
     /// SkyDesc heap-side avoids paying the copy cost on every body
     /// snapshot clone in the integrator.
     sky_desc: Option<Box<(SkyDesc, holtburger_dat::file_type::GameTime)>>,
+    /// A2-P2 (2026-06-12, W3+ S8) — runtime switch for the REMOTE
+    /// `MoveOrTeleport` lattice + per-frame remote manager step. Set
+    /// once at world creation from `?remoteInterp=on` (wasm; native
+    /// stays off this stage — S8 OPEN Q9). Default `false` =
+    /// byte-identical hard-snap reconcile for remote bodies.
+    remote_interp_enabled: bool,
+    /// A2-P2: per-tick ledger of remote bodies the manager stepped this
+    /// frame (guid → stepped pose), drained by the wasm TickMovement arm
+    /// into the JS-readable remote-pose export. Sparse by design: idle
+    /// bodies never appear (the JS legacy dead-reckon path keeps owning
+    /// them between corrections — S8 §5 risk 2).
+    remote_stepped_poses: HashMap<Guid, WorldPosition>,
 }
 
 impl Default for SpatialScene {
@@ -567,7 +617,27 @@ impl SpatialScene {
             statics_physics_bsp: Arc::new(HashMap::new()),
             building_physics_index: Arc::new(HashMap::new()),
             sky_desc: None,
+            remote_interp_enabled: false,
+            remote_stepped_poses: HashMap::new(),
         }
+    }
+
+    /// A2-P2: flip the remote-driver runtime switch (see the field doc).
+    pub fn set_remote_interp_enabled(&mut self, enabled: bool) {
+        self.remote_interp_enabled = enabled;
+    }
+
+    /// A2-P2: the remote-driver runtime switch.
+    pub fn remote_interp_enabled(&self) -> bool {
+        self.remote_interp_enabled
+    }
+
+    /// A2-P2: drain the per-tick remote stepped-pose ledger (guid →
+    /// stepped pose). Called by the wasm TickMovement arm after the
+    /// spine tick; empty whenever the flag is off or no remote manager
+    /// stepped this frame.
+    pub fn take_remote_stepped_poses(&mut self) -> Vec<(Guid, WorldPosition)> {
+        self.remote_stepped_poses.drain().collect()
     }
 
     /// Workstream Sky-B: install a parsed SkyDesc + GameTime onto the
@@ -2022,14 +2092,38 @@ impl SpatialScene {
         sync: AuthoritativeBodySync,
         now: Instant,
     ) {
+        self.reconcile_authoritative_body_with_remote(
+            body_id, pose, velocity, omega, sync, now, None,
+        );
+    }
+
+    /// A2-P2 (2026-06-12, W3+ S8): [`Self::reconcile_authoritative_body`]
+    /// with the optional remote wire context. With `remote = None`, the
+    /// flag off, or a non-`Entity` body this is byte-identical to the
+    /// pre-P2 reconcile; otherwise the retail remote `MoveOrTeleport`
+    /// lattice (acclient.c:323451-323498) decides between hard-snap,
+    /// leave-untouched (`!contact`), far-snap (≥ 96 m) and
+    /// `InterpolateTo` + `ConstrainTo`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reconcile_authoritative_body_with_remote(
+        &mut self,
+        body_id: SpatialBodyId,
+        pose: WorldPosition,
+        velocity: Vector3,
+        omega: Vector3,
+        sync: AuthoritativeBodySync,
+        now: Instant,
+        remote: Option<RemoteCorrectionCtx>,
+    ) {
         let mode = match sync {
             AuthoritativeBodySync::Snapshot => SpatialSampleMode::AuthoritativeOnly,
             AuthoritativeBodySync::Reset => SpatialSampleMode::Suspended,
         };
 
-        let mut body = self
-            .body_store
-            .remove_body(body_id)
+        let mut body = self.body_store.remove_body(body_id);
+        let body_existed = body.is_some();
+        let mut body = body
+            .take()
             .unwrap_or_else(|| SpatialBody::new(body_id, pose, now));
 
         let preserve_local_runtime_pose = matches!(body_id, SpatialBodyId::LocalPlayer(_))
@@ -2102,12 +2196,148 @@ impl SpatialScene {
             } else if USE_LOCAL_FORCE_POSITION_CONSTRAINT {
                 body.pose = constrain_local_pose_toward(body.pose, pose);
             }
+        } else if self.remote_interp_enabled && matches!(body_id, SpatialBodyId::Entity(_)) {
+            // A2-P2 (2026-06-12, W3+ S8): the retail remote
+            // `MoveOrTeleport` lattice (acclient.c:323451-323498). The
+            // flag-off path is the `else` arm below, byte-identical.
+            // `sampling.mode` is written in every arm (the manager
+            // mutates `body.pose` directly, like the local path; the
+            // solver's projection-basis law, tick_spine.rs, is
+            // untouched).
+            if let Some(ctx) = remote {
+                if let Some(contact) = ctx.contact {
+                    body.last_wire_contact = Some(contact);
+                }
+                let teleport_advanced = matches!(sync, AuthoritativeBodySync::Reset);
+                if teleport_advanced || !body_existed {
+                    // Teleport-stamp advance / no resolved prior pose →
+                    // hard set (acclient.c:323469-323478).
+                    body.position_manager.stop();
+                    body.pose = pose;
+                    body.sampling.mode = mode;
+                } else if ctx.contact == Some(false) {
+                    // `!contact` → return 0: working pose untouched, no
+                    // constrain; entity bookkeeping (authoritative_pose,
+                    // velocity, omega) already updated above
+                    // (acclient.c:323480-323481).
+                    body.sampling.mode = mode;
+                } else {
+                    let player_dist = ctx
+                        .player_pose
+                        .map(|player| body.pose.distance_to(&player))
+                        .unwrap_or(f32::INFINITY);
+                    if player_dist >= REMOTE_INTERP_PLAYER_RADIUS_M {
+                        // Far object: StopInterpolating + SetPositionSimple
+                        // (acclient.c:323483-323489); `None` player → snap.
+                        body.position_manager.stop();
+                        body.pose = pose;
+                        body.sampling.mode = mode;
+                    } else {
+                        // Near + contact: InterpolateTo with the NON-player
+                        // blip radius (20/100, acclient.c:315872-315878),
+                        // then ConstrainTo anchored on the object's OWN
+                        // post-move position (acclient.c:145223-145227)
+                        // with the shared start/max constants
+                        // (acclient.c:315885-315929). `keep_heading =
+                        // false` this stage — remote entities run no
+                        // client-side MoveTo yet (S8 OPEN Q4).
+                        let indoor = pose.is_indoors();
+                        let blip = if indoor {
+                            REMOTE_BLIP_INDOOR_M
+                        } else {
+                            REMOTE_BLIP_OUTDOOR_M
+                        };
+                        let queued = body
+                            .position_manager
+                            .remote_interpolate_to(body.pose, pose, false, blip);
+                        if queued {
+                            let start = if indoor {
+                                CONSTRAINT_LEASH_INDOOR_M
+                            } else {
+                                CONSTRAINT_LEASH_OUTDOOR_M
+                            };
+                            let max = if indoor {
+                                CONSTRAINT_MAX_INDOOR_M
+                            } else {
+                                CONSTRAINT_MAX_OUTDOOR_M
+                            };
+                            // Anchored on the object's own pose: the
+                            // running offset starts at zero (retail
+                            // constrains to `object->m_position`).
+                            body.position_manager.remote_constrain_to(0.0, start, max);
+                        }
+                        body.sampling.mode = mode;
+                    }
+                }
+            } else if body.position_manager.queue_active() {
+                // Ctx-less reconcile (VectorUpdate / bookkeeping paths)
+                // while the remote manager owns the working pose: update
+                // everything EXCEPT `body.pose` — retail's
+                // `DoVectorUpdate` sets velocity without relocating the
+                // object (acclient.c:143459-143480), and the legacy
+                // snap-to-`entity.position` here would stomp the eased
+                // pose every vector frame. Documented S8 deviation;
+                // unreachable with the flag off.
+                body.sampling.mode = mode;
+            } else {
+                body.pose = pose;
+                body.sampling.mode = mode;
+            }
         } else {
             body.pose = pose;
             body.sampling.mode = mode;
         }
 
         self.body_store.register_body(body);
+    }
+
+    /// A2-P2 (2026-06-12, W3+ S8) — per-slice remote manager step: the
+    /// retail `PositionManager::UseTime` + `adjust_offset` slot that
+    /// `CPhysicsObj::update_object` runs after MovementManager/PartArray
+    /// (acclient.c:322884-322886, 320029-320032), brought to every
+    /// remote `Entity` body with an active node queue. `quantum` is one
+    /// solver slice (≤ MAX_QUANTUM). `max_speed` is passed as `0.0` →
+    /// the manager floors to `MAX_INTERPOLATED_VELOCITY` (7.5 m/s,
+    /// acclient.c:389239-389240; S8 OPEN Q5 — no Rust-side per-entity
+    /// motion speed yet). Contact gates per the body's last wire flag
+    /// (`None` → contact, S8 OPEN Q6). Stepped poses land in the
+    /// [`Self::take_remote_stepped_poses`] ledger for the JS export.
+    /// Flag off (default) = zero work, byte-identical.
+    pub fn step_remote_position_managers(&mut self, quantum: f32) {
+        if !self.remote_interp_enabled {
+            return;
+        }
+        for body in self.body_store.bodies.values_mut() {
+            if !matches!(body.id, SpatialBodyId::Entity(_))
+                || !body.position_manager.queue_active()
+            {
+                continue;
+            }
+            let on_contact = body.last_wire_contact.unwrap_or(true);
+            let (outcome, commands) =
+                body.position_manager
+                    .step_remote(body.pose, quantum, 0.0, on_contact);
+            // Apply the drain's physics side effects (retail UseTime
+            // calls SetPositionSimple/set_velocity directly,
+            // acclient.c:389320-389368).
+            for command in commands {
+                match command {
+                    InterpolationCommand::SetPosition(pos) => body.pose = pos,
+                    InterpolationCommand::SetVelocity(v) => body.velocity = v,
+                }
+            }
+            match outcome {
+                InterpStep::Progressed { pose } | InterpStep::Completed { pose } => {
+                    body.pose = pose;
+                }
+                // Failed leaves the working pose; the queue recovers via
+                // the next drain's blipto. Idle: nothing stepped.
+                InterpStep::Failed { .. } | InterpStep::Idle => {}
+            }
+            if let SpatialBodyId::Entity(guid) = body.id {
+                self.remote_stepped_poses.insert(guid, body.pose);
+            }
+        }
     }
 
     /// Physics deep-dive 2026-06-01 (gap 4, opt-in) — advance the faithful

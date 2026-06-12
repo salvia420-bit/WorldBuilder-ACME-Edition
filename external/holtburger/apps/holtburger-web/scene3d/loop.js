@@ -324,6 +324,65 @@ function drainMotionAxes(scene3d, sessionHandle) {
   }
 }
 
+// A2-P2 (2026-06-12, W3+ S8) — `?remoteInterp=on` (default OFF, composite:
+// needs `?unifiedTick=on&wireStatePacks=stage1` or the wasm side degrades it
+// and no rows ever arrive). Drains the wasm `pollRemotePoses` side-channel —
+// the per-frame poses the Rust PositionManager (retail InterpolateTo /
+// ConstrainTo remote driver) stepped this tick — and hands each row to
+// `EntityManager.applyManagedPose`. Same flag-reader shape as CAST_AXES_ON.
+const REMOTE_INTERP_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("remoteInterp")?.toLowerCase() ===
+      "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+function drainRemotePoses(scene3d, sessionHandle) {
+  if (!REMOTE_INTERP_ON) return;
+  // typeof-guard (F18-2 soft-degrade): a stale pkg without the export keeps
+  // the legacy dead-reckon path — applyManagedPose is simply never armed.
+  if (!sessionHandle || typeof sessionHandle.pollRemotePoses !== "function") return;
+  let frame;
+  try {
+    frame = sessionHandle.pollRemotePoses();
+  } catch (_) {
+    return;
+  }
+  if (!frame) return;
+  const em = scene3d?.entityManager;
+  if (!em || typeof em.applyManagedPose !== "function") {
+    if (frame.free) frame.free();
+    return;
+  }
+  try {
+    const guids = frame.guids;
+    const landblocks = frame.landblocks;
+    const poses = frame.poses;
+    const n = Math.min(guids?.length ?? 0, landblocks?.length ?? 0);
+    for (let i = 0; i < n; i++) {
+      const g = guids[i] >>> 0;
+      if (isLocalPlayerGuid(g)) continue;
+      const lb = landblocks[i] >>> 0;
+      const base = i * 7;
+      // The exact KIND_POSITION drain math (landblock-local → world).
+      const wx = ((lb >>> 24) & 0xff) * 192.0 + poses[base];
+      const wy = ((lb >>> 16) & 0xff) * 192.0 + poses[base + 1];
+      const wz = poses[base + 2];
+      // Rotation rides the row (stride 7) but is deliberately unused this
+      // stage — heading stays on the JS K=14 ease (S8 OPEN Q4).
+      em.applyManagedPose(g, wx, wy, wz);
+    }
+  } finally {
+    // wasm-bindgen struct — release the handle.
+    if (frame.free) frame.free();
+  }
+}
+
 // A2 (perf plan 2026-05-18) — get-or-allocate the per-guid slot in
 // `window.__lastEntityWorldPos`. Mutates the slot in place on each
 // KIND_POSITION instead of allocating a fresh `{x,y,z,ts}` literal.
@@ -1570,6 +1629,11 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
     // Casting-ingredient axes: render remote strafe footwork + turn-in-place.
     // No-op unless ?castAxes=on. After drainMotionActions so the entity exists.
     drainMotionAxes(scene3d, sessionHandle);
+    // A2-P2 (?remoteInterp=on): apply this tick's wasm-managed remote poses.
+    // No-op unless the flag + export exist. AFTER drainEntityEvents3D so the
+    // same-frame KIND_POSITION bookkeeping (sticky-clear, heading stash,
+    // __lastEntityWorldPos) has landed and the managed write wins the frame.
+    drainRemotePoses(scene3d, sessionHandle);
     // Cohere-B follow-on (2026-05-12): drive the local-player rig
     // from the wasm integrator's authoritative pose each rAF. Runs
     // AFTER drainEntityEvents3D so any KIND_SPAWN for the local guid

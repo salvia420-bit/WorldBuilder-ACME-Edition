@@ -122,14 +122,24 @@ impl ClientSimulationSystem {
             // and the request is byte-identical.
             let local_resolved = movement.unified_transition_enabled()
                 && self.advance_local_player_via_transition(slice_dt, world, movement, &mut events);
-            let Some(request) =
+            if let Some(request) =
                 self.build_solve_request_inner(now, slice_dt, world, movement, !local_resolved)
-            else {
-                continue;
-            };
-            let physics = Arc::clone(world.scene.physics());
-            let solved = physics.solve(&request, &mut world.scene);
-            events.extend(self.apply_solve_batch(world, solved));
+            {
+                let physics = Arc::clone(world.scene.physics());
+                let solved = physics.solve(&request, &mut world.scene);
+                events.extend(self.apply_solve_batch(world, solved));
+            }
+            // A2-P2 (2026-06-12, W3+ S8): the remote PositionManager
+            // slot — retail runs `PositionManager::UseTime` /
+            // `adjust_offset` inside the per-object physics pass this
+            // system ports (acclient.c:322884-322886, 320029-320032),
+            // so the remote managers step once per MAX_QUANTUM slice.
+            // Gated inside on `scene.remote_interp_enabled` → flag off
+            // (default) is zero work, byte-identical. Runs even when no
+            // solve request was built this slice (no tracked local
+            // bodies) — remote corrections are independent of the local
+            // solver's input set.
+            world.scene.step_remote_position_managers(slice);
         }
         events
     }

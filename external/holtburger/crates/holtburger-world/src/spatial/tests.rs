@@ -2853,3 +2853,350 @@ mod envcell_exit {
         assert!(!scene.cell_has_outdoor_exit(LB_HIGH | 0x0199), "unknown cell");
     }
 }
+
+// === A2-P2 (2026-06-12, W3+ S8) — remote MoveOrTeleport lattice ==========
+//
+// Each row dual-cited against the decompiled remote correction pipeline
+// (`CPhysicsObj::MoveOrTeleport`, acclient.c:323451-323498, plus the
+// caller's ConstrainTo at :145223-145227 and the non-player constants at
+// :315861-315929). Flag-off byte-identity is pinned last.
+mod remote_pose_driver {
+    use super::*;
+    use crate::spatial::scene::RemoteCorrectionCtx;
+    use crate::spatial::{AuthoritativeBodySync, SpatialBodyId, SpatialSampleMode};
+
+    const GUID: Guid = Guid(0x7000_0042);
+
+    fn outdoor_pose(x: f32, y: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(0x0102_0000),
+            coords: Vector3::new(x, y, 0.0),
+            rotation: Quaternion::from_heading(0.0),
+        }
+    }
+
+    fn indoor_pose_at(x: f32, y: f32) -> WorldPosition {
+        WorldPosition {
+            // Low word ≥ 0x100 → indoor (`WorldPosition::is_indoors`).
+            landblock_id: Guid(0x0102_0105),
+            coords: Vector3::new(x, y, 0.0),
+            rotation: Quaternion::from_heading(0.0),
+        }
+    }
+
+    fn ctx(contact: Option<bool>, player: Option<WorldPosition>) -> Option<RemoteCorrectionCtx> {
+        Some(RemoteCorrectionCtx {
+            contact,
+            player_pose: player,
+        })
+    }
+
+    /// Scene with the flag on and the remote body seeded at `start`
+    /// (first reconcile creates the body — the "no resolved prior pose"
+    /// arm — so the lattice rows below act on an EXISTING body).
+    fn scene_with_remote_body(start: WorldPosition) -> (SpatialScene, SpatialBodyId) {
+        let mut scene = SpatialScene::new();
+        scene.set_remote_interp_enabled(true);
+        let body_id = SpatialBodyId::Entity(GUID);
+        scene.reconcile_authoritative_body_with_remote(
+            body_id,
+            start,
+            Vector3::zero(),
+            Vector3::zero(),
+            AuthoritativeBodySync::Snapshot,
+            Instant::now(),
+            ctx(Some(true), Some(start)),
+        );
+        assert_eq!(scene.body(body_id).unwrap().pose, start, "seed snap");
+        (scene, body_id)
+    }
+
+    fn reconcile(
+        scene: &mut SpatialScene,
+        body_id: SpatialBodyId,
+        target: WorldPosition,
+        sync: AuthoritativeBodySync,
+        remote: Option<RemoteCorrectionCtx>,
+    ) {
+        scene.reconcile_authoritative_body_with_remote(
+            body_id,
+            target,
+            Vector3::zero(),
+            Vector3::zero(),
+            sync,
+            Instant::now(),
+            remote,
+        );
+    }
+
+    /// Near + contact → `InterpolateTo` queues a node and the leash is
+    /// armed on the object's OWN pose; the working pose is NOT snapped
+    /// (acclient.c:323492-323495, :145223-145227).
+    #[test]
+    fn near_contact_queues_node_and_constrains_without_snapping() {
+        let start = outdoor_pose(50.0, 50.0);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        let target = outdoor_pose(55.0, 50.0);
+        reconcile(
+            &mut scene,
+            body_id,
+            target,
+            AuthoritativeBodySync::Snapshot,
+            ctx(Some(true), Some(start)),
+        );
+        let body = scene.body(body_id).unwrap();
+        assert_eq!(body.pose, start, "working pose untouched at ingest");
+        assert_eq!(body.authoritative_pose, Some(target));
+        assert!(body.position_manager.queue_active(), "node queued");
+        assert!(body.position_manager.constraint.is_constrained());
+        assert_eq!(body.sampling.mode, SpatialSampleMode::AuthoritativeOnly);
+    }
+
+    /// Teleport-stamp advance (`Reset`) → hard set + manager cleared
+    /// (acclient.c:323469-323478).
+    #[test]
+    fn teleport_reset_snaps_and_clears_manager() {
+        let start = outdoor_pose(50.0, 50.0);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        reconcile(
+            &mut scene,
+            body_id,
+            outdoor_pose(55.0, 50.0),
+            AuthoritativeBodySync::Snapshot,
+            ctx(Some(true), Some(start)),
+        );
+        assert!(scene.body(body_id).unwrap().position_manager.queue_active());
+        let teleport_target = outdoor_pose(120.0, 50.0);
+        reconcile(
+            &mut scene,
+            body_id,
+            teleport_target,
+            AuthoritativeBodySync::Reset,
+            ctx(Some(true), Some(start)),
+        );
+        let body = scene.body(body_id).unwrap();
+        assert_eq!(body.pose, teleport_target, "teleport hard-sets");
+        assert!(!body.position_manager.queue_active(), "manager cleared");
+        assert_eq!(body.sampling.mode, SpatialSampleMode::Suspended);
+    }
+
+    /// `!contact` → working pose untouched, bookkeeping still updates
+    /// (acclient.c:323480-323481).
+    #[test]
+    fn contact_false_leaves_working_pose_untouched() {
+        let start = outdoor_pose(50.0, 50.0);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        let target = outdoor_pose(55.0, 50.0);
+        reconcile(
+            &mut scene,
+            body_id,
+            target,
+            AuthoritativeBodySync::Snapshot,
+            ctx(Some(false), Some(start)),
+        );
+        let body = scene.body(body_id).unwrap();
+        assert_eq!(body.pose, start, "working pose untouched");
+        assert_eq!(body.authoritative_pose, Some(target), "bookkeeping updated");
+        assert!(!body.position_manager.queue_active(), "no node queued");
+        assert_eq!(body.last_wire_contact, Some(false));
+    }
+
+    /// `player_distance` gate: 95.9 m interpolates, 96.0 m (and a
+    /// missing player pose) snaps (acclient.c:323483-323489).
+    #[test]
+    fn player_distance_gate_at_96m() {
+        let start = outdoor_pose(50.0, 50.0);
+        let target = outdoor_pose(55.0, 50.0);
+
+        // 95.9 m → interpolate.
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        let player_near = outdoor_pose(50.0 + 95.9, 50.0);
+        reconcile(
+            &mut scene,
+            body_id,
+            target,
+            AuthoritativeBodySync::Snapshot,
+            ctx(Some(true), Some(player_near)),
+        );
+        assert!(
+            scene.body(body_id).unwrap().position_manager.queue_active(),
+            "95.9 m: interpolate"
+        );
+
+        // 96.0 m → stop + snap.
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        let player_far = outdoor_pose(50.0 + 96.0, 50.0);
+        reconcile(
+            &mut scene,
+            body_id,
+            target,
+            AuthoritativeBodySync::Snapshot,
+            ctx(Some(true), Some(player_far)),
+        );
+        let body = scene.body(body_id).unwrap();
+        assert_eq!(body.pose, target, "96.0 m: snap");
+        assert!(!body.position_manager.queue_active());
+
+        // No player pose → treated as far → snap.
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        reconcile(
+            &mut scene,
+            body_id,
+            target,
+            AuthoritativeBodySync::Snapshot,
+            ctx(Some(true), None),
+        );
+        let body = scene.body(body_id).unwrap();
+        assert_eq!(body.pose, target, "no player: snap");
+        assert!(!body.position_manager.queue_active());
+    }
+
+    /// Remote blip gate is the NON-player pair (20 indoor / 100 outdoor,
+    /// acclient.c:315872-315878): beyond-blip corrections queue the node
+    /// with `node_fail_counter = 4` (acclient.c:389141-389171).
+    #[test]
+    fn beyond_blip_node_carries_fail_counter_four() {
+        // Outdoor: 150 m > 100 → blip-type install.
+        let start = outdoor_pose(50.0, 50.0);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        reconcile(
+            &mut scene,
+            body_id,
+            outdoor_pose(50.0, 50.0 + 150.0),
+            AuthoritativeBodySync::Snapshot,
+            ctx(Some(true), Some(start)),
+        );
+        let body = scene.body(body_id).unwrap();
+        assert!(body.position_manager.queue_active());
+        assert_eq!(
+            body.position_manager.interpolation.node_fail_counter(),
+            4,
+            "outdoor beyond-blip"
+        );
+
+        // Indoor: 50 m > 20 (player indoor blip would be 25; the
+        // NON-player constant is what must gate here).
+        let start = indoor_pose_at(50.0, 50.0);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        reconcile(
+            &mut scene,
+            body_id,
+            indoor_pose_at(50.0, 50.0 + 50.0),
+            AuthoritativeBodySync::Snapshot,
+            ctx(Some(true), Some(start)),
+        );
+        let body = scene.body(body_id).unwrap();
+        assert_eq!(
+            body.position_manager.interpolation.node_fail_counter(),
+            4,
+            "indoor beyond-blip (20 m non-player radius)"
+        );
+    }
+
+    /// Ctx-less reconcile (VectorUpdate / bookkeeping) while the manager
+    /// owns the pose: velocity bookkeeping lands, working pose preserved
+    /// (retail `DoVectorUpdate` sets velocity without relocating,
+    /// acclient.c:143459-143480; documented S8 deviation arm).
+    #[test]
+    fn ctxless_reconcile_preserves_managed_pose() {
+        let start = outdoor_pose(50.0, 50.0);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        let target = outdoor_pose(55.0, 50.0);
+        reconcile(
+            &mut scene,
+            body_id,
+            target,
+            AuthoritativeBodySync::Snapshot,
+            ctx(Some(true), Some(start)),
+        );
+        // VectorUpdate-shaped reconcile: ctx None, entity pos re-asserted.
+        scene.reconcile_authoritative_body_with_remote(
+            body_id,
+            target,
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::zero(),
+            AuthoritativeBodySync::Snapshot,
+            Instant::now(),
+            None,
+        );
+        let body = scene.body(body_id).unwrap();
+        assert_eq!(body.pose, start, "managed working pose preserved");
+        assert_eq!(body.velocity, Vector3::new(1.0, 0.0, 0.0));
+        assert!(body.position_manager.queue_active(), "queue intact");
+    }
+
+    /// Flag OFF (default) → every arm above degrades to the legacy hard
+    /// snap, ctx or not — byte-identical rollback contract.
+    #[test]
+    fn flag_off_snaps_even_with_ctx() {
+        let mut scene = SpatialScene::new();
+        assert!(!scene.remote_interp_enabled());
+        let body_id = SpatialBodyId::Entity(GUID);
+        let start = outdoor_pose(50.0, 50.0);
+        scene.register_body(SpatialBody::new(body_id, start, Instant::now()));
+        let target = outdoor_pose(55.0, 50.0);
+        reconcile(
+            &mut scene,
+            body_id,
+            target,
+            AuthoritativeBodySync::Snapshot,
+            ctx(Some(true), Some(start)),
+        );
+        let body = scene.body(body_id).unwrap();
+        assert_eq!(body.pose, target, "flag off: legacy snap");
+        assert!(!body.position_manager.queue_active());
+        // And the per-frame step is zero work.
+        scene.step_remote_position_managers(0.1);
+        assert!(scene.take_remote_stepped_poses().is_empty());
+    }
+
+    /// Convergence (S8 §4 test 3): a queued correction approaches
+    /// monotonically at the 7.5 m/s floor, completes in the deadband,
+    /// goes idle, and every stepped frame lands in the export ledger.
+    #[test]
+    fn step_remote_managers_converges_and_records_ledger() {
+        let start = outdoor_pose(50.0, 50.0);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        let target = outdoor_pose(53.0, 50.0);
+        reconcile(
+            &mut scene,
+            body_id,
+            target,
+            AuthoritativeBodySync::Snapshot,
+            ctx(Some(true), Some(start)),
+        );
+
+        let mut last_dist = scene.body(body_id).unwrap().pose.distance_to(&target);
+        let mut stepped_frames = 0;
+        for _ in 0..60 {
+            scene.step_remote_position_managers(0.1);
+            let rows = scene.take_remote_stepped_poses();
+            let body = scene.body(body_id).unwrap();
+            if !rows.is_empty() {
+                stepped_frames += 1;
+                assert_eq!(rows[0].0, GUID);
+                assert_eq!(rows[0].1, body.pose, "ledger carries the stepped pose");
+            }
+            let dist = body.pose.distance_to(&target);
+            assert!(
+                dist <= last_dist + 1e-5,
+                "monotonic approach: {dist} > {last_dist}"
+            );
+            last_dist = dist;
+            if !body.position_manager.queue_active() {
+                break;
+            }
+        }
+        let body = scene.body(body_id).unwrap();
+        assert!(
+            body.pose.distance_to(&target) < 0.05 + 1e-3,
+            "completed in the deadband, dist = {}",
+            body.pose.distance_to(&target)
+        );
+        assert!(!body.position_manager.queue_active(), "manager idle");
+        assert!(stepped_frames >= 4, "stepped across frames: {stepped_frames}");
+        // Idle manager → no further ledger rows.
+        scene.step_remote_position_managers(0.1);
+        assert!(scene.take_remote_stepped_poses().is_empty());
+    }
+}

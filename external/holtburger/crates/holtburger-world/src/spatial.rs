@@ -37,8 +37,8 @@ pub use physics::{
     sweep_sphere_against_static_aabbs, sweep_sphere_against_triangles,
 };
 pub use scene::{
-    CellMembership, CellPhysicsBsp, SpatialScene, pview_clip_polygon_against_polygon,
-    pview_project_polygon,
+    CellMembership, CellPhysicsBsp, RemoteCorrectionCtx, SpatialScene,
+    pview_clip_polygon_against_polygon, pview_project_polygon,
 };
 pub use types::*;
 

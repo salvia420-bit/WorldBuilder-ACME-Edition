@@ -215,6 +215,28 @@ fn parse_wire_state_packs_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "wireStatePacks=stage1")
 }
 
+/// A2-P2 (2026-06-12, W3+ S8): parse `?remoteInterp=on` (or
+/// `&remoteInterp=on`). Same shape as `parse_unified_tick_flag`.
+/// COMPOSITE flag — effective ONLY when `?unifiedTick=on` AND
+/// `?wireStatePacks=stage1` are also on (the remote manager step rides
+/// the spine's simulation phase, and the ingest rides the routed remote
+/// `UpdatePosition` arm); the recv loop logs one warning and treats it
+/// as off otherwise. When effective: remote position corrections run
+/// the retail `MoveOrTeleport` lattice (`InterpolateTo`/`ConstrainTo`
+/// per-body PositionManager, acclient.c:323451-323498) Rust-side, the
+/// spine steps the managers per MAX_QUANTUM slice, the stepped poses
+/// export via `pollRemotePoses` (rides manifest v4 — purely additive),
+/// `PublicUpdatePosition` routes to the canonical world dispatcher, and
+/// the JS consumer (`EntityManager.applyManagedPose`) replaces the
+/// dead-reckon ease for managed entities. Default OFF = byte-identical
+/// everywhere (the F3-2 re-home; remote bodies keep the hard-snap +
+/// JS-ease legacy path).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_interp_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "remoteInterp=on")
+}
+
 /// Map a `GameEvent` variant back to its `GameEventOpcode` discriminant
 /// (the wire opcode read at `game_event.rs:97`). Used by the
 /// `[seq-gap]` observability hook to bucket sequence trackers per
@@ -501,6 +523,10 @@ pub fn build_info() -> String {
 // MotionTableManager queue). index.html's EXPECTED stays at 1 (the JS
 // caller is ?mtQueue=-gated + typeof-guarded, so a v3 pkg soft-degrades
 // to a no-op notify — the documented v2 precedent).
+// A2-P2 (2026-06-12, W3+ S8) RIDES v4 (no bump — purely additive):
+// + `SessionHandle.pollRemotePoses` + `RemotePoseFrame`. JS caller is
+// ?remoteInterp=-gated + typeof-guarded → a v4-without-it pkg
+// soft-degrades to the legacy dead-reckon path.
 pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 4;
 
 /// Returns the export-surface manifest version (F18-2). JS asserts this is
@@ -22305,6 +22331,7 @@ fn should_route_message_to_world(
     message: &holtburger_protocol::messages::GameMessage,
     world_lifecycle_on: bool,
     wire_state_packs_on: bool,
+    remote_interp_on: bool,
 ) -> bool {
     use holtburger_protocol::messages::GameMessage;
     // A8-M1 (2026-06-11): canonical lifecycle routing, gated
@@ -22345,6 +22372,14 @@ fn should_route_message_to_world(
                 | GameMessage::PlayerTeleport(_)
         )
     {
+        return true;
+    }
+    // A2-P2 (2026-06-12, W3+ S8): with the (effective) `?remoteInterp=on`
+    // composite flag, `PublicUpdatePosition` ALSO routes — its world
+    // handler (`handlers/movement.rs` → `apply_public_position_update`)
+    // already exists but never ran on wasm. PrivateUpdatePosition stays
+    // un-routed (local-player only, no remote driver concern).
+    if remote_interp_on && matches!(message, GameMessage::PublicUpdatePosition(_)) {
         return true;
     }
     matches!(
@@ -22490,7 +22525,7 @@ mod wire_state_packs_routing_tests {
     fn movement_family_not_routed_by_default() {
         for message in movement_family_messages() {
             assert!(
-                !should_route_message_to_world(&message, false, false),
+                !should_route_message_to_world(&message, false, false, false),
                 "{message:?} must NOT route with wireStatePacks off"
             );
         }
@@ -22502,7 +22537,7 @@ mod wire_state_packs_routing_tests {
     fn movement_family_routed_under_stage1() {
         for message in movement_family_messages() {
             assert!(
-                should_route_message_to_world(&message, false, true),
+                should_route_message_to_world(&message, false, true, false),
                 "{message:?} must route with wireStatePacks=stage1"
             );
         }
@@ -22524,9 +22559,65 @@ mod wire_state_packs_routing_tests {
             position_type: PositionType::Location,
             pos: holtburger_common::position::WorldPosition::default(),
         }));
-        for message in [private, public] {
-            assert!(!should_route_message_to_world(&message, true, true));
+        for message in [&private, &public] {
+            assert!(!should_route_message_to_world(message, true, true, false));
         }
+        // A2-P2: the (effective) remoteInterp composite routes ONLY the
+        // Public frame; Private stays un-routed regardless.
+        assert!(should_route_message_to_world(&public, false, true, true));
+        assert!(!should_route_message_to_world(&private, true, true, true));
+    }
+
+    /// A2-P2 (W3+ S8): `?remoteInterp=on` parse shape — exact value
+    /// only, both separator positions.
+    #[test]
+    fn remote_interp_flag_parses_only_exact_on_value() {
+        use super::parse_remote_interp_flag;
+        assert!(parse_remote_interp_flag("?remoteInterp=on"));
+        assert!(parse_remote_interp_flag(
+            "?unifiedTick=on&wireStatePacks=stage1&remoteInterp=on"
+        ));
+        assert!(!parse_remote_interp_flag("?remoteInterp=stage1"));
+        assert!(!parse_remote_interp_flag("?remoteInterp=off"));
+        assert!(!parse_remote_interp_flag(""));
+    }
+
+    /// A2-P2 (W3+ S8): export packing — two managed bodies flatten to
+    /// parallel arrays 2/2/14, u32 guid round-trips exactly at
+    /// 0xFFFFFFFF (the reason guids ride u32 arrays, not f32).
+    #[test]
+    fn remote_pose_rows_flatten_to_parallel_arrays() {
+        use holtburger_common::position::WorldPosition;
+        use holtburger_common::{Guid, Quaternion, Vector3};
+        let rows = vec![
+            (
+                Guid(0xFFFF_FFFF),
+                WorldPosition {
+                    landblock_id: Guid(0xA9B4_0000),
+                    coords: Vector3::new(1.5, 2.5, 3.5),
+                    rotation: Quaternion::from_heading(0.0),
+                },
+            ),
+            (
+                Guid(0x7000_0001),
+                WorldPosition {
+                    landblock_id: Guid(0x0102_0105),
+                    coords: Vector3::new(4.0, 5.0, 6.0),
+                    rotation: Quaternion::from_heading(1.0),
+                },
+            ),
+        ];
+        let (guids, landblocks, poses) = super::flatten_remote_pose_rows(&rows);
+        assert_eq!(guids.len(), 2);
+        assert_eq!(landblocks.len(), 2);
+        assert_eq!(poses.len(), 14, "stride 7");
+        assert_eq!(guids[0], 0xFFFF_FFFF, "u32 guid exact round-trip");
+        assert_eq!(landblocks[0], 0xA9B4_0000);
+        assert_eq!(&poses[0..3], &[1.5, 2.5, 3.5]);
+        assert_eq!(guids[1], 0x7000_0001);
+        assert_eq!(&poses[7..10], &[4.0, 5.0, 6.0]);
+        let q = Quaternion::from_heading(1.0);
+        assert_eq!(&poses[10..14], &[q.w, q.x, q.y, q.z]);
     }
 
     #[test]
@@ -24165,6 +24256,24 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = pollEntityUpdates)]
     pub fn poll_entity_updates(&mut self) -> Vec<EntityUpdate> {
         std::mem::take(&mut *self.entity_updates.borrow_mut())
+    }
+
+    /// A2-P2 (2026-06-12, W3+ S8): drain the wasm-managed remote poses
+    /// published by the last TickMovement (gated on the effective
+    /// `?remoteInterp=on` composite — always empty otherwise). JS calls
+    /// this per rAF (loop.js `drainRemotePoses`), typeof-guarded so a
+    /// stale pkg degrades to the legacy dead-reckon path. Purely
+    /// additive export — rides manifest v4 (F18-2: no bump for
+    /// additions).
+    #[wasm_bindgen(js_name = pollRemotePoses)]
+    pub fn poll_remote_poses(&self) -> RemotePoseFrame {
+        let (guids, landblocks, poses) =
+            REMOTE_POSES.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        RemotePoseFrame {
+            guids,
+            landblocks,
+            poses,
+        }
     }
 
     /// Snapshot of the most recent CharacterList. The recv loop updates
@@ -30439,6 +30548,77 @@ pub fn poll_motion_axes() -> Vec<u32> {
     MOTION_AXES.with(|q| std::mem::take(&mut *q.borrow_mut()))
 }
 
+// A2-P2 (2026-06-12, W3+ S8) — remote-pose export shadow. Refilled by the
+// TickMovement arm (post-tick, gated on the effective `?remoteInterp=on`)
+// from `scene.take_remote_stepped_poses()`; drained by JS via
+// `SessionHandle::pollRemotePoses` each rAF. REPLACE semantics per tick
+// (latest frame wins — rows are re-published every tick a manager steps),
+// take semantics per poll. Triple = (guids, landblocks, poses×7).
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static REMOTE_POSES: std::cell::RefCell<(Vec<u32>, Vec<u32>, Vec<f32>)> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new(), Vec::new())) };
+}
+
+/// A2-P2 — one frame of wasm-managed remote poses, three parallel
+/// arrays (the typed-array getter idiom): `guids[i]` / `landblocks[i]`
+/// pair with `poses[i*7 .. i*7+7]` = `[x, y, z, qw, qx, qy, qz]`
+/// (landblock-LOCAL coords; JS converts with the KIND_POSITION drain
+/// math `((lb>>>24)&0xff)*192 + x`). Guids/landblocks ride u32 arrays —
+/// an f32 mantissa cannot hold a full 32-bit guid.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct RemotePoseFrame {
+    guids: Vec<u32>,
+    landblocks: Vec<u32>,
+    poses: Vec<f32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl RemotePoseFrame {
+    #[wasm_bindgen(getter)]
+    pub fn guids(&self) -> Vec<u32> {
+        self.guids.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn landblocks(&self) -> Vec<u32> {
+        self.landblocks.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn poses(&self) -> Vec<f32> {
+        self.poses.clone()
+    }
+}
+
+/// A2-P2 — flatten the scene's stepped-pose ledger rows into the three
+/// parallel export arrays (`cfg(test)`-shared so the packing contract is
+/// pinned natively: u32 guid round-trip exact, stride 7).
+#[cfg(any(target_arch = "wasm32", test))]
+fn flatten_remote_pose_rows(
+    rows: &[(holtburger_common::Guid, holtburger_common::position::WorldPosition)],
+) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
+    let mut guids = Vec::with_capacity(rows.len());
+    let mut landblocks = Vec::with_capacity(rows.len());
+    let mut poses = Vec::with_capacity(rows.len() * 7);
+    for (guid, pose) in rows {
+        guids.push(u32::from(*guid));
+        landblocks.push(u32::from(pose.landblock_id));
+        poses.extend_from_slice(&[
+            pose.coords.x,
+            pose.coords.y,
+            pose.coords.z,
+            pose.rotation.w,
+            pose.rotation.x,
+            pose.rotation.y,
+            pose.rotation.z,
+        ]);
+    }
+    (guids, landblocks, poses)
+}
+
 #[cfg(target_arch = "wasm32")]
 fn publish_local_player_pose(
     world: &holtburger_world::WorldState,
@@ -30835,6 +31015,21 @@ async fn recv_loop(
     // `should_route_message_to_world`.
     let wire_state_packs_stage1_on: bool =
         parse_wire_state_packs_flag(&js_location_search());
+    // A2-P2 (2026-06-12, W3+ S8): `?remoteInterp=on` — the remote-pose
+    // driver (retail MoveOrTeleport lattice + per-slice manager step +
+    // pollRemotePoses export + PublicUpdatePosition routing). COMPOSITE:
+    // effective only with `?unifiedTick=on` AND `?wireStatePacks=stage1`
+    // (manager step rides the spine's simulation phase; ingest rides the
+    // routed remote UpdatePosition arm). Default OFF; see
+    // `parse_remote_interp_flag`.
+    let remote_interp_requested: bool = parse_remote_interp_flag(&js_location_search());
+    let remote_interp_on: bool =
+        remote_interp_requested && unified_tick_on && wire_state_packs_stage1_on;
+    if remote_interp_requested && !remote_interp_on {
+        console_log_str(
+            "[A2-P2] ?remoteInterp=on requires ?unifiedTick=on AND              ?wireStatePacks=stage1 — treating remoteInterp as OFF",
+        );
+    }
     // wieldedSpawn (2026-06-11): live-rig ledger — guids that currently have
     // a JS-side rig (KIND_SPAWN emitted, no KIND_REMOVE since). Maintained
     // unconditionally (cheap set ops at the existing emission sites), but
@@ -31153,6 +31348,7 @@ async fn recv_loop(
                         &message,
                         world_lifecycle_on,
                         wire_state_packs_stage1_on,
+                        remote_interp_on,
                     ) && let Some(w) = world.as_mut()
                     {
                         let mut world_events: Vec<holtburger_world::WorldEvent> = Vec::new();
@@ -32373,6 +32569,9 @@ async fn recv_loop(
                                 new_world.set_self_movement_capabilities_override(
                                     fallback_caps.clone(),
                                 );
+                                // A2-P2: arm the remote driver once at
+                                // world creation (composite flag).
+                                new_world.set_remote_interp_enabled(remote_interp_on);
                                 world = Some(new_world);
                                 console_log_str(&format!(
                                     "[step 3.6] WorldState constructed lazily on PlayerCreate (guid=0x{:08X}) — eager-construct path missed",
@@ -36398,6 +36597,9 @@ async fn recv_loop(
                             new_world.set_self_movement_capabilities_override(
                                 fallback_caps.clone(),
                             );
+                            // A2-P2: arm the remote driver once at
+                            // world creation (composite flag).
+                            new_world.set_remote_interp_enabled(remote_interp_on);
                             world = Some(new_world);
                             console_log_str(&format!(
                                 "[step4-follow-on] WorldState constructed eagerly on SelectCharacter (guid=0x{:08X})",
@@ -39865,6 +40067,24 @@ async fn recv_loop(
                                         w,
                                         &local_player_can_jump,
                                     );
+                                }
+                                // A2-P2 (2026-06-12, W3+ S8): publish the
+                                // remote poses the spine's manager step
+                                // produced THIS tick — post-tick by
+                                // construction (same slot family as the
+                                // A1-O2 publishes above; retail publishes
+                                // pose after update_object,
+                                // acclient.c:311375-311378). Sparse: only
+                                // bodies whose manager stepped this frame.
+                                // Flag off → the ledger is always empty
+                                // and this is a cheap take of an empty
+                                // map.
+                                if remote_interp_on {
+                                    let rows = w.scene.take_remote_stepped_poses();
+                                    let frame = flatten_remote_pose_rows(&rows);
+                                    REMOTE_POSES.with(|c| {
+                                        *c.borrow_mut() = frame;
+                                    });
                                 }
                                 if was_airborne_pre_tick && !w.player.is_airborne {
                                     // Wave 10 Phase 10.1 (2026-05-26):
