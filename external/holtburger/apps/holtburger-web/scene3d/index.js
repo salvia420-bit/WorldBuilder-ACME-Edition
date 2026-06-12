@@ -381,6 +381,60 @@ export async function preInit3D(canvas) {
     console.log("[render-cadence] ?nullRender=1 — skipping renderer.render() in tick");
   }
 
+  // A1-O3 (2026-06-12, W3+ S1) — `?syncPhysicsTick=on`: synchronous-feel
+  // physics tick via a frame-top microtask-flush boundary. At the TOP of
+  // each 3D frame, JS enqueues `handle.tickMovement()` itself (waking the
+  // wasm recv-loop task, whose TickMovement arm runs to completion in one
+  // microtask — every await on the tick path is ready-on-first-poll;
+  // WsTransport::send_to never yields) and then hops exactly one
+  // microtask (`await Promise.resolve()`). wasm-bindgen-futures schedules
+  // its task flush as microtask M1 BEFORE our continuation M2, so when
+  // the frame resumes, `tickPerFrame` reads a SAME-FRAME post-integration
+  // pose — retail's integrate → publish → read → render contract
+  // (`CPhysics::UseTime` acclient.c:146285 fires
+  // `PlayerPhysicsUpdatedCallback` 311371-311378 before net dispatch
+  // 146296-146316). Pair with `?unifiedTick=on&posePublishPostTick=on`;
+  // without posePublishPostTick the camera still reads a pre-tick pose
+  // (one-shot warning below). If the scheduling assumption ever fails,
+  // the tick simply lands next frame — exactly today's behavior (no
+  // crash surface; `?syncTickDiag=1` counters are the canary). JS-only,
+  // live on reload, no wasm rebuild, manifest unchanged.
+  const syncPhysicsTick = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return new URLSearchParams(window.location.search)
+        .get("syncPhysicsTick") === "on";
+    } catch (_) { return false; }
+  })();
+  // Diag counters for headless acceptance — kept off the hot path (the
+  // extra getLocalPlayerPose snapshots cross the wasm boundary twice per
+  // frame) unless explicitly requested.
+  const syncTickDiag = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return new URLSearchParams(window.location.search)
+        .get("syncTickDiag") === "1";
+    } catch (_) { return false; }
+  })();
+  if (syncPhysicsTick) {
+    // eslint-disable-next-line no-console
+    console.log("[sync-tick] ?syncPhysicsTick=on — frame-top tickMovement enqueue + microtask flush before tickPerFrame");
+    try {
+      if (!/[?&]posePublishPostTick=on/.test(window.location.search)) {
+        // eslint-disable-next-line no-console
+        console.warn("[sync-tick] ?syncPhysicsTick=on without ?posePublishPostTick=on — the camera still reads a pre-tick pose; the same-frame contract needs both flags");
+      }
+    } catch (_) { /* warning is best-effort */ }
+  }
+  if (syncTickDiag && typeof window !== "undefined") {
+    window.__syncTickDiag = {
+      enqueued: 0,
+      hopCompleted: 0,
+      poseChangedSameFrame: 0,
+      skipped2d: 0,
+    };
+  }
+
   // A1 (perf plan 2026-05-18) — antialias is read from the quality
   // preset (with optional Graphics-tab override). MSAA costs ~25% of
   // frametime on weaker GPUs; off at `low`, on otherwise.
@@ -750,6 +804,8 @@ export async function preInit3D(canvas) {
     renderOnDemand,
     netDrainHz,
     nullRender,
+    syncPhysicsTick,
+    syncTickDiag,
     diagMode,
     audioConstructable,
   };
@@ -791,6 +847,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     renderOnDemand,
     netDrainHz,
     nullRender,
+    syncPhysicsTick,
+    syncTickDiag,
     diagMode: _diagMode,
     audioConstructable,
   } = pre;
@@ -1455,7 +1513,51 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     }
     _schedRafId = requestAnimationFrame(tick);
   }
-  function tick(nowTs) {
+  // A1-O3 phase #0 — shared by tick() and the ?netDrainHz interval. The
+  // enqueue + one-microtask hop described at the syncPhysicsTick parse
+  // above. Stamps `__syncTickLastEnqueueMs` for the index.html 2D-loop
+  // recency watchdog (250 ms; if the 3D driver stalls — hidden tab,
+  // renderOnDemand idle without netDrainHz — the legacy enqueue
+  // re-engages automatically; degraded mode IS the pre-O3 behavior).
+  async function syncTickHop() {
+    const handle = liveScene3dRef?.sessionHandle;
+    if (!handle) return;
+    let prePose = null;
+    if (syncTickDiag) {
+      window.__syncTickDiag.enqueued += 1;
+      try { prePose = handle.getLocalPlayerPose(); } catch (_) {}
+    }
+    try {
+      handle.tickMovement();
+      window.__syncTickLastEnqueueMs = performance.now();
+      // recv-loop poll (microtask) runs before this resumes
+      await Promise.resolve();
+    } catch (_) {
+      return;
+    }
+    if (syncTickDiag) {
+      window.__syncTickDiag.hopCompleted += 1;
+      try {
+        const post = handle.getLocalPlayerPose();
+        if (prePose && post && (
+          post.x !== prePose.x || post.y !== prePose.y ||
+          post.z !== prePose.z || post.heading !== prePose.heading
+        )) {
+          window.__syncTickDiag.poseChangedSameFrame += 1;
+        }
+      } catch (_) {}
+    }
+  }
+  // NOTE (A1-O3): `tick` is async. Flag OFF: no await executes on the
+  // path, so the function completes synchronously through its return —
+  // ordering byte-identical to the pre-O3 sync function (the rAF
+  // dispatcher ignores the returned promise). Flag ON: exceptions thrown
+  // after the hop surface as unhandled rejections instead of sync throws
+  // into the rAF dispatcher (observability only — risky callees inside
+  // are already try/catch-wrapped). Re-entrancy is safe by construction:
+  // the loop only re-arms via scheduleNext() at the END of tick, so no
+  // second rAF can start while the hop is pending.
+  async function tick(nowTs) {
     if (!running) return;
     const ts = typeof nowTs === "number" ? nowTs : performance.now();
     // Raw dt (no cap) so we can detect post-unfocus recovery; the
@@ -1479,6 +1581,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       dt = Math.min(rawDt, 0.1);
     }
     lastFrameTs = ts;
+    // A1-O3 phase #0: enqueue the physics tick and hop one microtask so
+    // the wasm TickMovement arm (integration + post-tick pose publish)
+    // completes BEFORE this frame's pose reads + render below.
+    if (syncPhysicsTick && liveScene3dRef?.sessionHandle) {
+      await syncTickHop();
+      if (!running) return; // stop() may have raced the hop
+    }
     if (liveScene3dRef) {
       // Single per-frame wall-clock snapshot. Consumers that need
       // tsSec / dt read from here instead of calling performance.now()
@@ -1730,6 +1839,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     activeCam.layers.mask = camLayersBefore;
     scheduleNext();
   }
+  // A1-O3: declare 3D-driver ownership of the tickMovement enqueue so
+  // the index.html 2D loop's legacy enqueue (its sole `tickMovement()`
+  // call) skips while our phase #0 stamp stays fresh (<250 ms). This
+  // module IS the 3D driver — it only runs under renderer=3d.
+  if (syncPhysicsTick && typeof window !== "undefined") {
+    window.__syncTickOwned = true;
+  }
   // Initial kickoff is always a bare rAF — even in render-on-demand
   // mode we want one paint so the canvas isn't blank at boot. After
   // that first frame, scheduleNext() honours the cadence flags.
@@ -1739,6 +1855,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // imperatively when ?renderOnDemand=1 is set. Each call advances
   // exactly one tick (sim + render). Safe to call from outside as
   // tick is closed over the local `running` flag.
+  // A1-O3: under `?syncPhysicsTick=on`, tick is async — __renderOnce
+  // returns `true` BEFORE the frame completes (the post-hop continuation
+  // runs in a trailing microtask). Callers must allow a microtask before
+  // sampling; existing capture scripts already sleep between calls.
   if (typeof window !== "undefined") {
     window.__renderOnce = () => {
       try {
@@ -1766,12 +1886,19 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   let netDrainLastTs = null;
   if (netDrainHz > 0 && typeof setInterval === "function") {
     const periodMs = 1000 / netDrainHz;
-    netDrainInterval = setInterval(() => {
+    netDrainInterval = setInterval(async () => {
       if (!liveScene3dRef) return;
       const now = (typeof performance !== "undefined" && performance.now)
         ? performance.now() : Date.now();
       const dt = netDrainLastTs === null ? 1 / netDrainHz : Math.min((now - netDrainLastTs) / 1000, 0.1);
       netDrainLastTs = now;
+      // A1-O3 phase #0 — keep the renderOnDemand/wire-agent path on the
+      // same same-frame contract AND keep the 2D-loop watchdog stamp
+      // fresh while rAF idles (renderOnDemand without __renderOnce).
+      if (syncPhysicsTick && liveScene3dRef?.sessionHandle) {
+        await syncTickHop();
+        if (!liveScene3dRef) return;
+      }
       try {
         tickPerFrame(liveScene3dRef, liveScene3dRef.sessionHandle, dt);
       } catch (e) {

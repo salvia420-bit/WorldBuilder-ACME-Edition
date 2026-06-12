@@ -10781,7 +10781,23 @@ void main() {
             // (20 Hz) physics tick. Channel-closed errors are
             // discarded because rAF runs after the wasm bundle may
             // have already torn down on disconnect.
-            try { handle.tickMovement(); } catch (_) {}
+            // A1-O3 (?syncPhysicsTick): when the 3D driver owns the tick
+            // (phase #0 enqueue at scene3d/index.js tick()), skip this
+            // legacy enqueue so the integrator runs once per frame.
+            // Recency watchdog: if the 3D driver stalls (hidden tab,
+            // renderOnDemand idle without netDrainHz), fall back to this
+            // path automatically — degraded mode IS the pre-O3 behavior.
+            // Transient double-enqueue during handoff is benign: the
+            // second tick integrates ~0 time (retail skips quanta
+            // ≤0.2 ms, acclient.c:323120-323124; the spine measures dt
+            // between calls) and heartbeat rate is internally throttled.
+            const syncOwned = window.__syncTickOwned === true &&
+              (performance.now() - (window.__syncTickLastEnqueueMs ?? -1e9)) < 250;
+            if (!syncOwned) {
+              try { handle.tickMovement(); } catch (_) {}
+            } else if (window.__syncTickDiag) {
+              window.__syncTickDiag.skipped2d += 1;
+            }
             // Phase 4 step 3.5: client-side prediction. ACE doesn't
             // echo position back to the originator (retail AC's
             // protocol is asymmetric — see step 3 doc). Without
