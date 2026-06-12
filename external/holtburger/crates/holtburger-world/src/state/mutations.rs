@@ -96,6 +96,14 @@ impl WorldState {
         self.scene.set_remote_interp_enabled(enabled);
     }
 
+    /// A2-P3 R2: flip the scene's REMOTE sticky runtime switch (set once
+    /// at world creation from `?stickyRetail=on` AND the effective
+    /// `?remoteInterp=on` composite AND `USE_STICKY_MANAGER`; wasm-only
+    /// caller — native has no remote driver to compose with).
+    pub fn set_remote_sticky_enabled(&mut self, enabled: bool) {
+        self.scene.set_remote_sticky_enabled(enabled);
+    }
+
     pub(crate) fn retire_authoritative_body_for_guid(&mut self, guid: Guid) {
         let Some(body_id) = self.authoritative_body_id_for_guid(guid) else {
             return;

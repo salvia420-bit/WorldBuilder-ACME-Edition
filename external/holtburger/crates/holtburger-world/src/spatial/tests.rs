@@ -3199,6 +3199,190 @@ mod remote_pose_driver {
         scene.step_remote_position_managers(0.1);
         assert!(scene.take_remote_stepped_poses().is_empty());
     }
+
+    // === A2-P3 R2 (2026-06-12, W3+ S9 Stage R2) — REMOTE sticky. =========
+
+    /// Full cycle, the F3-4 case (mob glued to the LOCAL player):
+    /// install via the wire arm's API, per-slice step converges to the
+    /// retail standoff (cyl-dist − 0.3, radii 0.0 → 0.3 m) at the 15 m/s
+    /// floor with the heading facing the target, every sticky-stepped
+    /// frame lands in BOTH ledgers (pose rows + sticky flags), and the
+    /// 1.0 s retail timeout clears it (acclient.c:388519-388720).
+    #[test]
+    fn remote_sticky_converges_flags_rows_and_times_out() {
+        let start = outdoor_pose(50.0, 50.0);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        scene.set_remote_sticky_enabled(true);
+
+        // Target = the LOCAL player's body (resolution priority arm 2).
+        let player_guid = Guid(0x5000_00AB);
+        let player_pose = outdoor_pose(60.0, 50.0);
+        scene.upsert_runtime_body_snapshot(
+            SpatialBodyId::LocalPlayer(player_guid),
+            player_pose,
+            Vector3::zero(),
+            Vector3::zero(),
+            None,
+            Instant::now(),
+        );
+
+        scene.stick_remote_entity_to(GUID, player_guid);
+        assert_eq!(scene.remote_sticky_target(GUID), Some(player_guid));
+
+        // Gap 10 m, speed floor 15 m/s (no Rust-side per-entity motion
+        // speed → max_speed 0.0, acclient.c:388569-388579) → 0.24 m per
+        // 16 ms slice → ~41 slices to the 0.3 m standoff; the 1.0 s
+        // timeout (62.5 slices) must NOT fire first.
+        let mut converged_at = None;
+        let mut sticky_rows = 0;
+        for i in 0..55 {
+            scene.step_remote_position_managers(0.016);
+            let rows = scene.take_remote_stepped_poses();
+            let sticky = scene.take_remote_sticky_stepped();
+            let body = scene.body(body_id).unwrap();
+            if !rows.is_empty() {
+                assert_eq!(rows[0].0, GUID);
+                assert_eq!(rows[0].1, body.pose, "ledger carries the stepped pose");
+                assert!(sticky.contains(&GUID), "sticky-stepped rows are flagged");
+                sticky_rows += 1;
+            }
+            let planar = (body.pose.coords - player_pose.coords).length();
+            if converged_at.is_none() && (planar - STICKY_RADIUS).abs() < 0.02 {
+                converged_at = Some(i);
+            }
+        }
+        assert!(
+            converged_at.is_some(),
+            "must reach the 0.3 m standoff within 55 slices"
+        );
+        assert!(sticky_rows >= 40, "stepped across slices: {sticky_rows}");
+        let body = scene.body(body_id).unwrap();
+        assert!(
+            (body.pose.rotation.to_heading() - body.pose.heading_to(&player_pose)).abs() < 1e-3,
+            "heading faces the target"
+        );
+
+        // Past 1.0 s of slices → retail timeout clears target + index
+        // (THE F3-4 "glued mob never times out" closer).
+        for _ in 0..10 {
+            scene.step_remote_position_managers(0.016);
+        }
+        assert_eq!(scene.remote_sticky_target(GUID), None, "timed out");
+        scene.take_remote_stepped_poses();
+        scene.take_remote_sticky_stepped();
+        scene.step_remote_position_managers(0.016);
+        assert!(
+            scene.take_remote_sticky_stepped().is_empty(),
+            "no sticky steps after timeout"
+        );
+    }
+
+    /// Compose-rule inertness: without `set_remote_sticky_enabled(true)`
+    /// the install API is a no-op and the step does zero sticky work —
+    /// the flag-off (F3-4 JS glue) path stays byte-identical.
+    #[test]
+    fn remote_sticky_disabled_is_inert() {
+        let start = outdoor_pose(50.0, 50.0);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        assert!(!scene.remote_sticky_enabled());
+        let target_guid = Guid(0x8000_0001);
+        scene.update_entity(target_guid, Guid(0x0102_0000), outdoor_pose(60.0, 50.0));
+
+        scene.stick_remote_entity_to(GUID, target_guid);
+        assert_eq!(scene.remote_sticky_target(GUID), None, "install inert");
+        scene.step_remote_position_managers(0.016);
+        assert!(scene.take_remote_stepped_poses().is_empty());
+        assert!(scene.take_remote_sticky_stepped().is_empty());
+        assert_eq!(scene.body(body_id).unwrap().pose, start, "pose untouched");
+    }
+
+    /// Unstick (the wire `0` clear) stops the pull; a wire re-stick
+    /// re-arms the 1.0 s timeout (retail `StickTo` replaces the prior
+    /// target, acclient.c:388665-388690 — ACE re-sends the bit on every
+    /// chase/swing, so a live chase never times out spuriously).
+    #[test]
+    fn remote_sticky_unstick_clears_and_restick_rearms_timeout() {
+        let start = outdoor_pose(50.0, 50.0);
+        let (mut scene, _body_id) = scene_with_remote_body(start);
+        scene.set_remote_sticky_enabled(true);
+        let target_guid = Guid(0x8000_0001);
+        scene.update_entity(target_guid, Guid(0x0102_0000), outdoor_pose(60.0, 50.0));
+
+        scene.stick_remote_entity_to(GUID, target_guid);
+        scene.step_remote_position_managers(0.016);
+        assert!(!scene.take_remote_sticky_stepped().is_empty());
+        scene.unstick_remote_entity(GUID);
+        assert_eq!(scene.remote_sticky_target(GUID), None);
+        scene.take_remote_stepped_poses();
+        scene.step_remote_position_managers(0.016);
+        assert!(scene.take_remote_sticky_stepped().is_empty(), "unstuck");
+
+        // Re-stick, run 0.48 s, re-stick (re-arm), then run another
+        // 0.8 s: total 1.28 s > 1.0 s, but the re-arm keeps it alive.
+        scene.stick_remote_entity_to(GUID, target_guid);
+        for _ in 0..30 {
+            scene.step_remote_position_managers(0.016);
+        }
+        assert_eq!(scene.remote_sticky_target(GUID), Some(target_guid));
+        scene.stick_remote_entity_to(GUID, target_guid);
+        for _ in 0..50 {
+            scene.step_remote_position_managers(0.016);
+        }
+        assert_eq!(
+            scene.remote_sticky_target(GUID),
+            Some(target_guid),
+            "re-stick re-armed the timeout past the original 1.0 s mark"
+        );
+    }
+
+    /// Wire-order robustness: a sticky install can land BEFORE the
+    /// holder's body exists (KIND_MOTION before the first routed
+    /// UpdatePosition). The index entry is kept and the per-slice step
+    /// lazy-installs once the body appears; target pose resolves from
+    /// the `entity_poses` stash (priority arm 3). Entity removal drops
+    /// the index entry.
+    #[test]
+    fn remote_sticky_lazy_install_and_removal_cleanup() {
+        let mut scene = SpatialScene::new();
+        scene.set_remote_interp_enabled(true);
+        scene.set_remote_sticky_enabled(true);
+        let lb = Guid(0x0102_0000);
+        let target_guid = Guid(0x8000_0001);
+        scene.update_entity(target_guid, lb, outdoor_pose(55.0, 50.0));
+
+        // No holder body yet → install records the index only; step is
+        // a no-op (nothing steppable).
+        scene.stick_remote_entity_to(GUID, target_guid);
+        assert_eq!(scene.remote_sticky_target(GUID), Some(target_guid));
+        scene.step_remote_position_managers(0.016);
+        assert!(scene.take_remote_sticky_stepped().is_empty());
+
+        // Body appears → the next slice lazy-installs and steps.
+        let start = outdoor_pose(50.0, 50.0);
+        let body_id = SpatialBodyId::Entity(GUID);
+        scene.reconcile_authoritative_body_with_remote(
+            body_id,
+            start,
+            Vector3::zero(),
+            Vector3::zero(),
+            AuthoritativeBodySync::Snapshot,
+            Instant::now(),
+            ctx(Some(true), Some(start)),
+        );
+        scene.step_remote_position_managers(0.016);
+        assert!(
+            scene.take_remote_sticky_stepped().contains(&GUID),
+            "lazy install steps"
+        );
+        assert!(
+            scene.body(body_id).unwrap().pose.coords.x > start.coords.x,
+            "pulled toward the target"
+        );
+
+        // Despawn cleanup: the holder's index entry is dropped.
+        scene.remove_entity(GUID, lb);
+        assert_eq!(scene.remote_sticky_target(GUID), None);
+    }
 }
 
 // === A2-P3 (2026-06-12, W3+ S9) — LOCAL-player sticky scene tests. =======

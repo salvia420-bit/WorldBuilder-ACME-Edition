@@ -3806,10 +3806,14 @@ export class EntityManager {
    *   - else: arm `_wasmDriven` ownership, write root.position, and
    *     re-anchor `_serverTargetPos` so the legacy ease has nothing to drag
    *     when ownership decays back (S8 §5 risk 2).
-   * ROTATION is deliberately untouched — heading stays JS-owned through the
-   * same K=14 ease stash `setPose` keeps feeding (S8 OPEN Q4).
+   * ROTATION is deliberately untouched on plain rows — heading stays
+   * JS-owned through the same K=14 ease stash `setPose` keeps feeding (S8
+   * OPEN Q4). A2-P3 R2 (`?stickyRetail=on`): a STICKY-stepped row passes
+   * the optional AC quat (qw..qz) — retail sets the sticky heading hard
+   * every frame (acclient.c:388593-388600), so it's applied directly and
+   * the ease stash is re-anchored to it (no yank-back on release).
    */
-  applyManagedPose(guid, x, y, z) {
+  applyManagedPose(guid, x, y, z, qw, qx, qy, qz) {
     if (!this._remoteInterpOn) return;
     const g = guid >>> 0;
     if (this._isLocalPlayerGuid(g)) return;
@@ -3822,6 +3826,16 @@ export class EntityManager {
     let tgt = inst._serverTargetPos;
     if (!tgt) tgt = inst._serverTargetPos = new THREE.Vector3();
     tgt.set(x, y, z);
+    // A2-P3 R2 — sticky heading (only sticky-flagged rows carry a quat;
+    // loop.js drainRemotePoses omits it otherwise).
+    if (qw !== undefined && Number.isFinite(+qw)) {
+      const tq = acQuatToThree(+qw, +qx, +qy, +qz);
+      inst.root.quaternion.copy(tq);
+      let tgtQ = inst._serverTargetQuat;
+      if (!tgtQ) tgtQ = inst._serverTargetQuat = new THREE.Quaternion();
+      tgtQ.copy(tq);
+      inst._headingEaseInit = true;
+    }
   }
 
   setPose(guid, x, y, z, qw, qx, qy, qz) {

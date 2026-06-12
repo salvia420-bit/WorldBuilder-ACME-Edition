@@ -593,6 +593,29 @@ pub struct SpatialScene {
     /// `USE_STICKY_MANAGER` is off (no install site runs) —
     /// byte-identical default behavior.
     local_sticky_target: Option<Guid>,
+    /// A2-P3 R2 (2026-06-12, W3+ S9 Stage R2) — runtime switch for
+    /// REMOTE-entity sticky (`?stickyRetail=on`). COMPOSES on top of
+    /// the A2-P2 triple: set once at world creation from
+    /// `?stickyRetail=on` AND the effective `?remoteInterp=on`
+    /// composite AND the `USE_STICKY_MANAGER` const (wasm-only caller,
+    /// same shape as [`Self::set_remote_interp_enabled`]). Default
+    /// `false` = the remote install/step sites below are inert and the
+    /// JS F3-4 glue keeps owning remote sticky, byte-identical.
+    remote_sticky_enabled: bool,
+    /// A2-P3 R2 — holder guid → sticky target guid for REMOTE entities
+    /// (retail keeps this on each `CPhysicsObj`'s own StickyManager;
+    /// this map is the scene-level index so the per-slice step and the
+    /// target-pose resolution don't scan every body). Entries are
+    /// removed on unstick, on the 1.0 s retail timeout
+    /// (acclient.c:388605-388620), and on entity removal.
+    remote_sticky_targets: HashMap<Guid, Guid>,
+    /// A2-P3 R2 — per-tick set of remote bodies whose pose was
+    /// sticky-stepped this frame; drained next to
+    /// [`Self::take_remote_stepped_poses`] so the wasm export can flag
+    /// those rows (JS applies the sticky heading + clears the F3-4
+    /// glue for FLAGGED rows ONLY — the self-degrading compose rule:
+    /// no flagged rows ⇒ the glue path stays armed).
+    remote_sticky_stepped: HashSet<Guid>,
 }
 
 /// A2-P3 (2026-06-12, W3+ S9) — outcome of one
@@ -646,6 +669,9 @@ impl SpatialScene {
             remote_interp_enabled: false,
             remote_stepped_poses: HashMap::new(),
             local_sticky_target: None,
+            remote_sticky_enabled: false,
+            remote_sticky_targets: HashMap::new(),
+            remote_sticky_stepped: HashSet::new(),
         }
     }
 
@@ -665,6 +691,25 @@ impl SpatialScene {
     /// stepped this frame.
     pub fn take_remote_stepped_poses(&mut self) -> Vec<(Guid, WorldPosition)> {
         self.remote_stepped_poses.drain().collect()
+    }
+
+    /// A2-P3 R2: flip the REMOTE sticky runtime switch (see the field
+    /// doc — caller must already have folded in the `?remoteInterp=on`
+    /// composite AND `USE_STICKY_MANAGER`).
+    pub fn set_remote_sticky_enabled(&mut self, enabled: bool) {
+        self.remote_sticky_enabled = enabled;
+    }
+
+    /// A2-P3 R2: the REMOTE sticky runtime switch.
+    pub fn remote_sticky_enabled(&self) -> bool {
+        self.remote_sticky_enabled
+    }
+
+    /// A2-P3 R2: drain the per-tick sticky-stepped guid set (drained by
+    /// the wasm TickMovement arm next to
+    /// [`Self::take_remote_stepped_poses`] to flag the export rows).
+    pub fn take_remote_sticky_stepped(&mut self) -> HashSet<Guid> {
+        std::mem::take(&mut self.remote_sticky_stepped)
     }
 
     /// Workstream Sky-B: install a parsed SkyDesc + GameTime onto the
@@ -2334,37 +2379,156 @@ impl SpatialScene {
         if !self.remote_interp_enabled {
             return;
         }
+        // A2-P3 R2: resolve every sticky target's live pose BEFORE the
+        // mutable body walk (the per-slice refresh that replaces
+        // retail's TargetManager update stream for remotes — same
+        // explicit-feed deviation the local lane documents on
+        // `stick_local_player_to`, taken one step further: re-resolved
+        // every slice so a moving target — usually the LOCAL player,
+        // the F3-4 kiting case — is tracked at full rate). Empty (zero
+        // work) unless `?stickyRetail=on` armed the switch AND a sticky
+        // install landed.
+        let sticky_feeds: HashMap<Guid, (Guid, Option<WorldPosition>)> =
+            if self.remote_sticky_enabled && !self.remote_sticky_targets.is_empty() {
+                self.remote_sticky_targets
+                    .iter()
+                    .map(|(&holder, &target)| {
+                        (
+                            holder,
+                            (target, self.resolve_remote_sticky_target_pose(target)),
+                        )
+                    })
+                    .collect()
+            } else {
+                HashMap::new()
+            };
         for body in self.body_store.bodies.values_mut() {
-            if !matches!(body.id, SpatialBodyId::Entity(_))
-                || !body.position_manager.queue_active()
-            {
+            let SpatialBodyId::Entity(guid) = body.id else {
                 continue;
-            }
-            let on_contact = body.last_wire_contact.unwrap_or(true);
-            let (outcome, commands) =
-                body.position_manager
-                    .step_remote(body.pose, quantum, 0.0, on_contact);
-            // Apply the drain's physics side effects (retail UseTime
-            // calls SetPositionSimple/set_velocity directly,
-            // acclient.c:389320-389368).
-            for command in commands {
-                match command {
-                    InterpolationCommand::SetPosition(pos) => body.pose = pos,
-                    InterpolationCommand::SetVelocity(v) => body.velocity = v,
+            };
+            let mut stepped = false;
+            if body.position_manager.queue_active() {
+                let on_contact = body.last_wire_contact.unwrap_or(true);
+                let (outcome, commands) =
+                    body.position_manager
+                        .step_remote(body.pose, quantum, 0.0, on_contact);
+                // Apply the drain's physics side effects (retail UseTime
+                // calls SetPositionSimple/set_velocity directly,
+                // acclient.c:389320-389368).
+                for command in commands {
+                    match command {
+                        InterpolationCommand::SetPosition(pos) => body.pose = pos,
+                        InterpolationCommand::SetVelocity(v) => body.velocity = v,
+                    }
                 }
+                match outcome {
+                    InterpStep::Progressed { pose } | InterpStep::Completed { pose } => {
+                        body.pose = pose;
+                    }
+                    // Failed leaves the working pose; the queue recovers via
+                    // the next drain's blipto. Idle: nothing stepped.
+                    InterpStep::Failed { .. } | InterpStep::Idle => {}
+                }
+                stepped = true;
             }
-            match outcome {
-                InterpStep::Progressed { pose } | InterpStep::Completed { pose } => {
+            // A2-P3 R2 — the REMOTE sticky slice, AFTER the interp/
+            // constraint drain on the same working pose (chain shape
+            // matches the landed LOCAL lane: sticky applied to the
+            // already-interp-stepped pose; retail orders interp →
+            // sticky → constraint, acclient.c:388287-388304 — the
+            // constraint-after-sticky half is the same documented
+            // deviation as Stage L3). No contact gate — retail sticky
+            // has none (acclient.c:388519-388601).
+            if let Some(&(target, feed)) = sticky_feeds.get(&guid) {
+                // Lazy install: the wire install may have arrived
+                // before this body existed (KIND_MOTION before the
+                // first routed UpdatePosition) — arm the manager the
+                // first slice the body is steppable.
+                if body.position_manager.sticky_object_id() != Some(target) {
+                    body.position_manager.stick_to(target, 0.0);
+                }
+                if let Some(pose) = feed {
+                    body.position_manager.sticky_handle_update_target(target, pose);
+                }
+                if body.position_manager.sticky_use_time(quantum) {
+                    // Retail 1.0 s timeout (acclient.c:388605-388620) —
+                    // THE F3-4 "glued mob never times out" closer. The
+                    // manager already cleared itself; drop the index
+                    // entry so no re-install fires.
+                    self.remote_sticky_targets.remove(&guid);
+                } else if let Some(pose) = body.position_manager.step_sticky_pose(
+                    body.pose, /* my_radius (OPEN Q3 fallback) */ 0.0,
+                    /* max_speed → retail floor 15.0 */ 0.0, quantum,
+                ) {
                     body.pose = pose;
+                    self.remote_sticky_stepped.insert(guid);
+                    stepped = true;
                 }
-                // Failed leaves the working pose; the queue recovers via
-                // the next drain's blipto. Idle: nothing stepped.
-                InterpStep::Failed { .. } | InterpStep::Idle => {}
             }
-            if let SpatialBodyId::Entity(guid) = body.id {
+            if stepped {
                 self.remote_stepped_poses.insert(guid, body.pose);
             }
         }
+    }
+
+    /// A2-P3 R2 — best-known live pose for a REMOTE sticky target:
+    /// the target's own managed body (`Entity` — the freshest, the
+    /// interp/sticky-stepped working pose), the LOCAL player's body
+    /// (mob-glued-to-player is THE F3-4 case), then the wire-fed
+    /// `entity_poses` stash. `None` ⇒ the holder's sticky no-ops this
+    /// slice (retail `Initialized == false` semantics,
+    /// acclient.c:388691-388720).
+    fn resolve_remote_sticky_target_pose(&self, target: Guid) -> Option<WorldPosition> {
+        if let Some(body) = self.body_store.body(SpatialBodyId::Entity(target)) {
+            return Some(body.pose);
+        }
+        if let Some(body) = self.body_store.body(SpatialBodyId::LocalPlayer(target)) {
+            return Some(body.pose);
+        }
+        self.entity_poses.get(&target).copied()
+    }
+
+    /// A2-P3 R2 — `CPhysicsObj::stick_to_object` for a REMOTE entity
+    /// (`?stickyRetail=on`; retail sticks WHATEVER object the movement
+    /// message addresses, acclient.c:339546-339560). Re-stick re-arms
+    /// the 1.0 s timeout (retail `StickTo` replaces the prior target,
+    /// acclient.c:388665-388690 — ACE re-sends the sticky bit on every
+    /// chase MoveTo + melee swing, so a live chase keeps re-arming).
+    /// Radius `0.0` fallback per spec S9 OPEN Q3 (standoff degrades to
+    /// the −0.3-clamped cylinder distance; no Rust-side per-entity
+    /// physics radius yet). Inert unless the runtime switch is armed.
+    pub fn stick_remote_entity_to(&mut self, holder: Guid, target: Guid) {
+        if !self.remote_sticky_enabled {
+            return;
+        }
+        self.remote_sticky_targets.insert(holder, target);
+        let known_pose = self.resolve_remote_sticky_target_pose(target);
+        if let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(holder)) {
+            body.position_manager.stick_to(target, 0.0);
+            if let Some(pose) = known_pose {
+                body.position_manager.sticky_handle_update_target(target, pose);
+            }
+        }
+        // No body yet → the index entry alone is kept; the per-slice
+        // step lazy-installs once the body appears.
+    }
+
+    /// A2-P3 R2 — `unstick_from_object` for a REMOTE entity (retail
+    /// per-unpack preamble subset, acclient.c:339518-339519: every
+    /// fresh movement message without the sticky bit unsticks — the
+    /// wasm KIND_MOTION arm sends `target = 0` through here).
+    pub fn unstick_remote_entity(&mut self, holder: Guid) {
+        if self.remote_sticky_targets.remove(&holder).is_none() {
+            return;
+        }
+        if let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(holder)) {
+            body.position_manager.unstick();
+        }
+    }
+
+    /// A2-P3 R2 — a REMOTE entity's current sticky target (diag/tests).
+    pub fn remote_sticky_target(&self, holder: Guid) -> Option<Guid> {
+        self.remote_sticky_targets.get(&holder).copied()
     }
 
     // === A2-P3 (2026-06-12, W3+ S9) — LOCAL-player sticky surface. =======
@@ -2733,6 +2897,12 @@ impl SpatialScene {
             set.remove(&guid);
         }
         self.entity_poses.remove(&guid);
+        // A2-P3 R2: drop a despawned holder's sticky index entry (a
+        // body-less entry would otherwise linger — the 1.0 s timeout
+        // only ticks on steppable bodies). A removed TARGET needs no
+        // sweep: its holders just stop resolving a pose (retail
+        // `Initialized` no-op) until their own timeout clears them.
+        self.remote_sticky_targets.remove(&guid);
     }
 
     pub fn get_in_landblock(&self, lb: Guid) -> Option<&HashSet<Guid>> {

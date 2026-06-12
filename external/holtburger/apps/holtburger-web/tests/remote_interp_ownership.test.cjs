@@ -138,6 +138,47 @@ check('drainRemotePoses: landblock-local → world matches KIND_POSITION math', 
   assert.equal(wy, 180 * 192 + 100.25);
 });
 
+// ─── A2-P3 R2 (?stickyRetail=on) sticky-row handoff contract ────────────
+// Keep in sync with loop.js::drainRemotePoses (sticky-flag branch) and
+// entities.js::applyManagedPose (optional quat). A FLAGGED row clears the
+// F3-4 glue BEFORE applying (so the _stickyTarget skip can't block the
+// wasm-owned pose); a missing stickyFlags getter (stale pkg) or an
+// unflagged row leaves the glue armed — the self-degrading compose rule.
+function drainRowContract({ inst, stickyFlags, i }) {
+  const stickyRow = !!(stickyFlags && stickyFlags[i]);
+  if (stickyRow) inst._stickyTarget = null; // em.setStickyTarget(g, 0)
+  const applied = applyManagedPoseContract({
+    remoteInterpOn: true,
+    isLocal: false,
+    inst,
+  });
+  return { stickyRow, applied, headingApplied: stickyRow && applied };
+}
+
+check('R2: sticky-flagged row clears the F3-4 glue, applies pose + heading', () => {
+  const inst = { root: {}, _stickyTarget: 0x80000001 };
+  const out = drainRowContract({ inst, stickyFlags: new Uint8Array([1]), i: 0 });
+  assert.equal(inst._stickyTarget, null, 'glue cleared');
+  assert.equal(out.applied, true);
+  assert.equal(out.headingApplied, true);
+  assert.equal(inst._wasmDriven, REMOTE_INTERP_OWNERSHIP_FRAMES);
+});
+
+check('R2: unflagged row leaves a glued entity to the F3-4 path', () => {
+  const inst = { root: {}, _stickyTarget: 0x80000001 };
+  const out = drainRowContract({ inst, stickyFlags: new Uint8Array([0]), i: 0 });
+  assert.equal(inst._stickyTarget, 0x80000001, 'glue stays armed');
+  assert.equal(out.applied, false, '_stickyTarget skip holds');
+  assert.equal(out.headingApplied, false);
+});
+
+check('R2: stale pkg (no stickyFlags getter) degrades to the glue path', () => {
+  const inst = { root: {}, _stickyTarget: 0x80000001 };
+  const out = drainRowContract({ inst, stickyFlags: undefined, i: 0 });
+  assert.equal(inst._stickyTarget, 0x80000001, 'glue stays armed');
+  assert.equal(out.applied, false);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {
   for (const { name, err } of failures) console.error(`${name}: ${err.stack}`);

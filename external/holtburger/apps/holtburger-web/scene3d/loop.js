@@ -446,6 +446,11 @@ function drainRemotePoses(scene3d, sessionHandle) {
     const guids = frame.guids;
     const landblocks = frame.landblocks;
     const poses = frame.poses;
+    // A2-P3 R2 (`?stickyRetail=on`): per-row sticky-stepped flags.
+    // `undefined` on a stale pkg without the getter (F18-2 soft-degrade:
+    // every row is then non-sticky and the F3-4 glue keeps owning remote
+    // sticky — the self-degrading compose rule).
+    const stickyFlags = frame.stickyFlags;
     const n = Math.min(guids?.length ?? 0, landblocks?.length ?? 0);
     for (let i = 0; i < n; i++) {
       const g = guids[i] >>> 0;
@@ -456,9 +461,25 @@ function drainRemotePoses(scene3d, sessionHandle) {
       const wx = ((lb >>> 24) & 0xff) * 192.0 + poses[base];
       const wy = ((lb >>> 16) & 0xff) * 192.0 + poses[base + 1];
       const wz = poses[base + 2];
-      // Rotation rides the row (stride 7) but is deliberately unused this
-      // stage — heading stays on the JS K=14 ease (S8 OPEN Q4).
-      em.applyManagedPose(g, wx, wy, wz);
+      if (stickyFlags && stickyFlags[i]) {
+        // A2-P3 R2: the wasm StickyManager stepped this row (retail
+        // standoff/heading/1 s timeout, acclient.c:388519-388720). Hand
+        // it ownership: clear the F3-4 glue for this entity (the glue
+        // blocks applyManagedPose by design, S8 P2.d.2) and apply the
+        // row WITH its heading. Rows are only ever flagged when the
+        // wasm side is actually running remote sticky (?stickyRetail=on
+        // × the remoteInterp composite × USE_STICKY_MANAGER × fresh
+        // pkg), so the glue path self-restores in every degrade case.
+        if (typeof em.setStickyTarget === "function") em.setStickyTarget(g, 0);
+        em.applyManagedPose(
+          g, wx, wy, wz,
+          poses[base + 3], poses[base + 4], poses[base + 5], poses[base + 6]
+        );
+      } else {
+        // Rotation rides the row (stride 7) but is deliberately unused on
+        // non-sticky rows — heading stays on the JS K=14 ease (S8 OPEN Q4).
+        em.applyManagedPose(g, wx, wy, wz);
+      }
     }
   } finally {
     // wasm-bindgen struct — release the handle.
@@ -2130,6 +2151,9 @@ function _armMotion(scene3d, em, upd) {
   // of KIND_MOTION (0 = none/clear). Remote-only — the local player is
   // never sticky. While set, EntityManager.tick glues the mob to the
   // moving target so a kited melee monster tracks the player.
+  // A2-P3 R2 (?stickyRetail=on): this arm STAYS the flag-OFF path —
+  // when the wasm StickyManager owns a remote, its sticky-flagged
+  // pollRemotePoses rows clear this glue per row (drainRemotePoses).
   if (!isLocalPlayerGuid(motionGuid) && typeof em.setStickyTarget === "function") {
     em.setStickyTarget(motionGuid, upd.modelId >>> 0);
   }
@@ -2498,6 +2522,9 @@ function _legacyDirectDrainArm(scene3d, sessionHandle) {
         // KIND_MOTION (0 = none/clear). Remote-only — the local player is never
         // sticky. While set, EntityManager.tick glues the mob to the moving
         // target so a kited melee monster tracks the player instead of freezing.
+        // A2-P3 R2 (?stickyRetail=on): this arm STAYS the flag-OFF path — when
+        // the wasm StickyManager owns a remote, its sticky-flagged
+        // pollRemotePoses rows clear this glue per row (drainRemotePoses).
         if (!isLocalPlayerGuid(motionGuid) && typeof em.setStickyTarget === "function") {
           em.setStickyTarget(motionGuid, upd.modelId >>> 0);
         }

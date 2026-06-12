@@ -237,6 +237,30 @@ fn parse_remote_interp_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "remoteInterp=on")
 }
 
+/// A2-P3 R2 (2026-06-12, W3+ S9 Stage R2): parse `?stickyRetail=on`
+/// (or `&stickyRetail=on`). Same shape as `parse_remote_interp_flag`.
+/// COMPOSE RULE — effective ONLY when ALL of these hold:
+///   1. the A2-P2 triple is effective (`?remoteInterp=on` +
+///      `?unifiedTick=on` + `?wireStatePacks=stage1`) — remote sticky
+///      runs on the S8 remote bodies / per-slice manager step /
+///      `pollRemotePoses` export, and
+///   2. the Rust `USE_STICKY_MANAGER` const is on (the A2-P3 R1
+///      StickyManager core).
+/// The recv loop logs one warning and treats it as off otherwise. When
+/// effective: the wasm KIND_MOTION arm installs/unsticks REMOTE
+/// entities on the scene StickyManager (retail standoff
+/// `cyl_dist−0.3`, speed floor 15 m/s, heading toward target, 1.0 s
+/// timeout — acclient.c:388519-388720), the stepped rows export with a
+/// sticky flag, and JS hands those rows ownership (clearing the F3-4
+/// glue per flagged row). Default OFF / any compose miss / stale pkg =
+/// no flagged rows ⇒ the F3-4 JS glue keeps owning remote sticky,
+/// byte-identical.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_sticky_retail_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "stickyRetail=on")
+}
+
 /// Map a `GameEvent` variant back to its `GameEventOpcode` discriminant
 /// (the wire opcode read at `game_event.rs:97`). Used by the
 /// `[seq-gap]` observability hook to bucket sequence trackers per
@@ -22664,7 +22688,11 @@ mod wire_state_packs_routing_tests {
                 },
             ),
         ];
-        let (guids, landblocks, poses) = super::flatten_remote_pose_rows(&rows);
+        // A2-P3 R2: row 1 sticky-stepped, row 0 not — flags align per row.
+        let sticky: std::collections::HashSet<Guid> =
+            std::iter::once(Guid(0x7000_0001)).collect();
+        let (guids, landblocks, poses, sticky_flags) =
+            super::flatten_remote_pose_rows(&rows, &sticky);
         assert_eq!(guids.len(), 2);
         assert_eq!(landblocks.len(), 2);
         assert_eq!(poses.len(), 14, "stride 7");
@@ -22675,6 +22703,21 @@ mod wire_state_packs_routing_tests {
         assert_eq!(&poses[7..10], &[4.0, 5.0, 6.0]);
         let q = Quaternion::from_heading(1.0);
         assert_eq!(&poses[10..14], &[q.w, q.x, q.y, q.z]);
+        assert_eq!(sticky_flags, vec![0u8, 1u8], "per-row sticky flags");
+    }
+
+    /// A2-P3 R2 (W3+ S9 Stage R2): `?stickyRetail=on` parse shape —
+    /// exact value only, composes positionally anywhere in the query.
+    #[test]
+    fn sticky_retail_flag_parses_only_exact_on_value() {
+        use super::parse_sticky_retail_flag;
+        assert!(parse_sticky_retail_flag("?stickyRetail=on"));
+        assert!(parse_sticky_retail_flag(
+            "?unifiedTick=on&wireStatePacks=stage1&remoteInterp=on&stickyRetail=on"
+        ));
+        assert!(!parse_sticky_retail_flag("?stickyRetail=1"));
+        assert!(!parse_sticky_retail_flag("?stickyRetail=off"));
+        assert!(!parse_sticky_retail_flag(""));
     }
 
     #[test]
@@ -24344,12 +24387,13 @@ impl SessionHandle {
     /// additions).
     #[wasm_bindgen(js_name = pollRemotePoses)]
     pub fn poll_remote_poses(&self) -> RemotePoseFrame {
-        let (guids, landblocks, poses) =
+        let (guids, landblocks, poses, sticky) =
             REMOTE_POSES.with(|c| std::mem::take(&mut *c.borrow_mut()));
         RemotePoseFrame {
             guids,
             landblocks,
             poses,
+            sticky,
         }
     }
 
@@ -30817,11 +30861,12 @@ pub fn poll_motion_axes() -> Vec<u32> {
 // from `scene.take_remote_stepped_poses()`; drained by JS via
 // `SessionHandle::pollRemotePoses` each rAF. REPLACE semantics per tick
 // (latest frame wins — rows are re-published every tick a manager steps),
-// take semantics per poll. Triple = (guids, landblocks, poses×7).
+// take semantics per poll. Quad = (guids, landblocks, poses×7, sticky
+// flags×1 — A2-P3 R2, `1` = this row was sticky-stepped this tick).
 #[cfg(target_arch = "wasm32")]
 thread_local! {
-    static REMOTE_POSES: std::cell::RefCell<(Vec<u32>, Vec<u32>, Vec<f32>)> =
-        const { std::cell::RefCell::new((Vec::new(), Vec::new(), Vec::new())) };
+    static REMOTE_POSES: std::cell::RefCell<(Vec<u32>, Vec<u32>, Vec<f32>, Vec<u8>)> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new(), Vec::new(), Vec::new())) };
 }
 
 // A2-P3 (2026-06-12, W3+ S9) — diagnostic-only mirror of the LOCAL
@@ -30847,6 +30892,12 @@ pub struct RemotePoseFrame {
     guids: Vec<u32>,
     landblocks: Vec<u32>,
     poses: Vec<f32>,
+    /// A2-P3 R2 (`?stickyRetail=on`): per-row flag, `1` = the Rust
+    /// StickyManager stepped this row this tick (JS applies the row's
+    /// heading and clears the F3-4 glue for it). Purely additive getter
+    /// — a stale-pkg JS reads `undefined` and keeps the glue
+    /// (self-degrading compose rule); rides manifest v4 (F18-2).
+    sticky: Vec<u8>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -30866,18 +30917,29 @@ impl RemotePoseFrame {
     pub fn poses(&self) -> Vec<f32> {
         self.poses.clone()
     }
+
+    /// A2-P3 R2 — per-row sticky-stepped flags (`stickyFlags[i]` pairs
+    /// with `guids[i]`; `1` = sticky-stepped). See the field doc.
+    #[wasm_bindgen(getter, js_name = stickyFlags)]
+    pub fn sticky_flags(&self) -> Vec<u8> {
+        self.sticky.clone()
+    }
 }
 
-/// A2-P2 — flatten the scene's stepped-pose ledger rows into the three
+/// A2-P2 — flatten the scene's stepped-pose ledger rows into the four
 /// parallel export arrays (`cfg(test)`-shared so the packing contract is
-/// pinned natively: u32 guid round-trip exact, stride 7).
+/// pinned natively: u32 guid round-trip exact, stride 7). A2-P3 R2:
+/// `sticky` is the scene's per-tick sticky-stepped guid set — rows in it
+/// flag `1` (alignment is per-row by construction).
 #[cfg(any(target_arch = "wasm32", test))]
 fn flatten_remote_pose_rows(
     rows: &[(holtburger_common::Guid, holtburger_common::position::WorldPosition)],
-) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
+    sticky: &std::collections::HashSet<holtburger_common::Guid>,
+) -> (Vec<u32>, Vec<u32>, Vec<f32>, Vec<u8>) {
     let mut guids = Vec::with_capacity(rows.len());
     let mut landblocks = Vec::with_capacity(rows.len());
     let mut poses = Vec::with_capacity(rows.len() * 7);
+    let mut sticky_flags = Vec::with_capacity(rows.len());
     for (guid, pose) in rows {
         guids.push(u32::from(*guid));
         landblocks.push(u32::from(pose.landblock_id));
@@ -30890,8 +30952,9 @@ fn flatten_remote_pose_rows(
             pose.rotation.y,
             pose.rotation.z,
         ]);
+        sticky_flags.push(u8::from(sticky.contains(guid)));
     }
-    (guids, landblocks, poses)
+    (guids, landblocks, poses, sticky_flags)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -31306,6 +31369,19 @@ async fn recv_loop(
     if remote_interp_requested && !remote_interp_on {
         console_log_str(
             "[A2-P2] ?remoteInterp=on requires ?unifiedTick=on AND              ?wireStatePacks=stage1 — treating remoteInterp as OFF",
+        );
+    }
+    // A2-P3 R2 (2026-06-12, W3+ S9 Stage R2): `?stickyRetail=on` —
+    // REMOTE sticky parity on the A2-P2 remote bodies. COMPOSES on the
+    // effective remoteInterp composite AND the USE_STICKY_MANAGER
+    // const; see `parse_sticky_retail_flag` for the full compose rule.
+    let sticky_retail_requested: bool = parse_sticky_retail_flag(&js_location_search());
+    let remote_sticky_on: bool = sticky_retail_requested
+        && remote_interp_on
+        && holtburger_world::spatial::USE_STICKY_MANAGER;
+    if sticky_retail_requested && !remote_sticky_on {
+        console_log_str(
+            "[A2-P3 R2] ?stickyRetail=on requires the effective ?remoteInterp=on composite (?unifiedTick=on + ?wireStatePacks=stage1) AND the USE_STICKY_MANAGER const — treating stickyRetail as OFF (F3-4 JS glue keeps remote sticky)",
         );
     }
     // wieldedSpawn (2026-06-11): live-rig ledger — guids that currently have
@@ -32850,6 +32926,10 @@ async fn recv_loop(
                                 // A2-P2: arm the remote driver once at
                                 // world creation (composite flag).
                                 new_world.set_remote_interp_enabled(remote_interp_on);
+                                // A2-P3 R2: arm remote sticky on top
+                                // (stickyRetail × remoteInterp ×
+                                // USE_STICKY_MANAGER compose rule).
+                                new_world.set_remote_sticky_enabled(remote_sticky_on);
                                 world = Some(new_world);
                                 console_log_str(&format!(
                                     "[step 3.6] WorldState constructed lazily on PlayerCreate (guid=0x{:08X}) — eager-construct path missed",
@@ -34776,6 +34856,34 @@ async fn recv_loop(
                                     );
                                 } else {
                                     w.scene.unstick_local_player();
+                                }
+                            }
+                            // A2-P3 R2 (2026-06-12, W3+ S9 Stage R2;
+                            // ?stickyRetail=on) — REMOTE sticky install
+                            // from the SAME ride-along, on the S8
+                            // remote bodies. Retail sticks whatever
+                            // object the message addresses
+                            // (acclient.c:339546-339560); `0` ⇒ the
+                            // per-unpack preamble unstick subset
+                            // (:339518-339519). The JS F3-4 arms stay
+                            // untouched — ownership hands over per
+                            // sticky-flagged pollRemotePoses row
+                            // (drainRemotePoses clears the glue), so
+                            // every degrade case self-restores to the
+                            // glue path. Inert unless the full compose
+                            // rule holds (remote_sticky_on).
+                            if remote_sticky_on
+                                && let Some(w) = world.as_mut()
+                                && w.player.guid != holtburger_common::Guid::NULL
+                                && data.guid != w.player.guid
+                            {
+                                if sticky_target != 0 {
+                                    w.scene.stick_remote_entity_to(
+                                        data.guid,
+                                        holtburger_common::Guid(sticky_target),
+                                    );
+                                } else {
+                                    w.scene.unstick_remote_entity(data.guid);
                                 }
                             }
                             // F3-5 (bughunt 2026-06-09) — per-creature run rate.
@@ -36924,6 +37032,10 @@ async fn recv_loop(
                             // A2-P2: arm the remote driver once at
                             // world creation (composite flag).
                             new_world.set_remote_interp_enabled(remote_interp_on);
+                            // A2-P3 R2: arm remote sticky on top
+                            // (stickyRetail × remoteInterp ×
+                            // USE_STICKY_MANAGER compose rule).
+                            new_world.set_remote_sticky_enabled(remote_sticky_on);
                             world = Some(new_world);
                             console_log_str(&format!(
                                 "[step4-follow-on] WorldState constructed eagerly on SelectCharacter (guid=0x{:08X})",
@@ -40615,7 +40727,13 @@ async fn recv_loop(
                                 // map.
                                 if remote_interp_on {
                                     let rows = w.scene.take_remote_stepped_poses();
-                                    let frame = flatten_remote_pose_rows(&rows);
+                                    // A2-P3 R2: per-row sticky flags
+                                    // ride the same frame (empty set —
+                                    // all-zero flags — unless the
+                                    // stickyRetail compose rule armed
+                                    // the scene switch).
+                                    let sticky = w.scene.take_remote_sticky_stepped();
+                                    let frame = flatten_remote_pose_rows(&rows, &sticky);
                                     REMOTE_POSES.with(|c| {
                                         *c.borrow_mut() = frame;
                                     });
