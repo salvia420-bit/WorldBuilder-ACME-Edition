@@ -704,6 +704,83 @@ const SCRIPT_QUEUE_ON = (() => {
   }
 })();
 
+// A5-P1 (2026-06-12, W3+ S5) — `?hookDrain=on` (default OFF) routes the
+// animation-timeline hook executor through the retail queue-then-drain
+// shape: (a) finish-drain — a LoopOnce overlay that crosses its clip end
+// between two rAFs still fires its trailing hooks in (lastTime, duration]
+// exactly once (retail clamp-at-high_frame + fire-every-crossed-frame,
+// acclient.c:340697-340727; pure planner `scene3d/hook_windows.js`); and
+// (b) deferred fire — hooks queue into `inst._hookFireQueue` (retail
+// `add_anim_hook`, acclient.c:322063-322073) with the overlay's `animDone`
+// record AFTER its trailing hooks (acclient.c:340725 → :340764-340774)
+// and drain at the END of the per-instance tick body, after every
+// pose/tween/material application (our analog of process_hooks-after-
+// position-resolve, acclient.c:320030-320035). Off-path = the unchanged
+// inline executor, byte-identical. ScriptManager-fired hooks (PhysicsScript
+// chain, wall-clock-ordered) stay INLINE — merging the two queues is
+// explicitly out of P1 scope.
+import { planHookWindows } from "./hook_windows.js";
+const HOOK_DRAIN_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("hookDrain")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+// A4-Q2 (2026-06-12, W3+ S5) — `?mtQueue=on` (default OFF) wires one-shot
+// overlay COMPLETION across the wasm boundary: when a tagged
+// (`mtQueued`-played, see `_tryPlayLink`) local-player overlay ends, JS
+// calls `window.__notifyAnimationDone(guid, true)` → the wasm
+// `notifyAnimationDone` export → the local player's `MotionTableManager`
+// queue (retail `AnimDoneHook::Execute` → `Hook_AnimDone` →
+// `CPartArray::AnimationDone` → `MotionTableManager::AnimationDone`,
+// acclient.c:342336 → :317087 → :325080 → :329873; success hard-coded 1
+// on the renderer path, :317093). Eviction/stop of a tagged,
+// not-yet-completed overlay notifies success=false (hang prevention —
+// the Rust num_anims=1 node would otherwise never complete; exit-world
+// drain analogy, acclient.c:329940-329947). NO current caller tags plays
+// (the enqueue sources arrive with Stage-2 `?interpRig` / A3-D2); the
+// tagging contract prevents counter poisoning (only pipeline-queued
+// overlays may notify — acclient.c:329885-329894 is positional).
+// Independently flippable from `?hookDrain` (a mixer `finished` listener
+// is the fallback completion detector); full retail ORDERING parity needs
+// both on. Typeof-guarded — a pre-v4 pkg soft-degrades to a no-op.
+const MT_QUEUE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("mtQueue")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+// A4-Q2 — the ONE notify gate (shared by the EntityManager completion
+// path and EntityInstance eviction): only tagged keys, only the local
+// player, typeof-guarded bridge (`index.html` installs
+// `window.__notifyAnimationDone` next to the SessionHandle).
+function notifyMtQueuedOverlayDone(inst, key, success) {
+  try {
+    if (!MT_QUEUE_ON || !inst || !inst._mtQueuedKeys) return;
+    if (!inst._mtQueuedKeys.has(key)) return;
+    inst._mtQueuedKeys.delete(key);
+    if (typeof window === "undefined") return;
+    if (typeof window.getLocalPlayerGuid !== "function") return;
+    const lpg = window.getLocalPlayerGuid();
+    if (!lpg || (lpg >>> 0) !== (inst.guid >>> 0)) return;
+    if (typeof window.__notifyAnimationDone === "function") {
+      window.__notifyAnimationDone(inst.guid >>> 0, !!success);
+    }
+  } catch (_) { /* never block the tick on the notify */ }
+}
+
 // AC InterpretedMotionCommand low-16 constants — used for
 // category-agnostic classification. The wasm export returns the full
 // u32 (`0x4500_xxxx` NonCombat / `0x4400_xxxx` combat / etc.); we mask
@@ -1789,6 +1866,20 @@ class EntityInstance {
     this.hookTimelines = new Map();
     /** @type {Map<string, number>} */
     this.actionLastHookTime = new Map();
+    // A5-P1b (2026-06-12, ?hookDrain=on) — deferred hook-fire queue:
+    // `{kind:"hook", hook}` and `{kind:"animDone", key, action}` records
+    // pushed during `_tickAnimationHooks` and drained at the END of the
+    // per-instance tick body (retail add_anim_hook → process_hooks,
+    // acclient.c:322063/:320035). Empty + untouched when the flag is off.
+    /** @type {Array<object>} */
+    this._hookFireQueue = [];
+    // A4-Q2 (2026-06-12, ?mtQueue=on) — link-keys of overlays the wasm
+    // pipeline queued (`_tryPlayLink` `mtQueued` option). ONLY these may
+    // notify `notifyAnimationDone` (counter-poisoning guard); cleared on
+    // completion/eviction. No current caller tags — enqueue sources
+    // arrive with Stage-2 ?interpRig / A3-D2.
+    /** @type {Set<string>} */
+    this._mtQueuedKeys = new Set();
     // Cached SoundTable DID — read on spawn, used by every SoundTable
     // (hookType 2) hook fire. `0` when the entity has no SoundTable on
     // its weenie (most static placements + vanilla creatures). The
@@ -2009,6 +2100,14 @@ class EntityInstance {
         this.mixer.uncacheAction(action.getClip(), this.root);
       } catch (_) {}
     }
+    // A4-Q2 (?mtQueue=on) — CANCELLATION: evicting a tagged overlay that
+    // never completed must still complete its Rust-side num_anims=1 node
+    // (no JS→Rust truncation mirror exists; a missed completion is a
+    // hung node forever). success=false by analogy to the exit-world
+    // drain (acclient.c:329940-329947; spec S5 §6 OQ-2). A COMPLETED
+    // overlay already cleared its key, so this is a no-op for it; the
+    // whole call is a no-op when the flag is off / the set is empty.
+    notifyMtQueuedOverlayDone(this, oldestKey, false);
     this.actions.delete(oldestKey);
     this.actionLastUsedMs.delete(oldestKey);
     // Task E (2026-05-12): drop the evicted action's hook timeline +
@@ -7500,7 +7599,7 @@ export class EntityManager {
    * Intra-link multi-segment chaining (windup→strike→recover within ONE link
    * record) IS already handled by try_resolve_link_frames (T4, lib.rs).
    */
-  async _tryPlayLink(inst, setupId, mtableId, fromCmd, toCmd, stance) {
+  async _tryPlayLink(inst, setupId, mtableId, fromCmd, toCmd, stance, opts = undefined) {
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
     if (typeof fetchKeyframes !== "function") return;
     let entry;
@@ -7577,6 +7676,35 @@ export class EntityManager {
       inst.hookTimelines.set(linkKey, entry.hooks);
     }
     inst.actionLastHookTime.set(linkKey, 0);
+    // A4-Q2 (?mtQueue=on) — TAGGING CONTRACT: only overlays the wasm
+    // pipeline queued may notify `notifyAnimationDone` (counter
+    // poisoning guard — acclient.c:329885-329894 is positional). NO
+    // current caller passes `mtQueued: true`; the callers arrive with
+    // Stage-2 `?interpRig` consumption / A3-D2 — Q2 pins the plumb so
+    // D2 cannot fork it. Locomotion transition links and server-echo
+    // overlays NEVER notify.
+    if (MT_QUEUE_ON && opts?.mtQueued === true) {
+      inst._mtQueuedKeys?.add(linkKey);
+      if (!HOOK_DRAIN_ON && !action.__mtNotifyArmed) {
+        // Fallback completion detector when the drain executor is off
+        // (the flags stay independently flippable; full retail ORDERING
+        // parity only with both on — see url-flags.md). Caveat: three.js
+        // fires `finished` INSIDE `mixer.update`, i.e. before this
+        // frame's hooks (spec S5 §6 OQ-4) — accepted on the fallback.
+        // `__mtNotifyArmed` guards spam-replay duplicate listeners on
+        // the reused action (one finish = one notify).
+        action.__mtNotifyArmed = true;
+        const _mixer = inst.mixer;
+        const _overlayAction = action;
+        const onMtFinished = (e) => {
+          if (e.action !== _overlayAction) return;
+          try { _mixer.removeEventListener("finished", onMtFinished); } catch (_) {}
+          _overlayAction.__mtNotifyArmed = false;
+          notifyMtQueuedOverlayDone(inst, linkKey, true);
+        };
+        try { _mixer.addEventListener("finished", onMtFinished); } catch (_) {}
+      }
+    }
     try {
       // A3 (2026-05-29): attack/cast one-shots route here (from=Ready in
       // setMotion); honor the server's per-motion speed so hasted/slowed
@@ -7662,6 +7790,15 @@ export class EntityManager {
         : 1.0;
       baseAction.setEffectiveWeight(0);
       inst._baseSuppressAction = overlayAction;
+      // A5-P1b (?hookDrain=on): do NOT register the mixer listener —
+      // the restore moves into `_completeOverlay`, reached via the
+      // drain queue's `animDone` record (the listener and the queue
+      // path must be mutually exclusive or the weight double-restores;
+      // spec S5 §5 risk 5). Record what the restore needs instead.
+      if (HOOK_DRAIN_ON) {
+        inst._baseSuppressSaved = { savedWeight, baseAction };
+        return;
+      }
       const mixer = inst.mixer;
       const onFinished = (e) => {
         if (e.action !== overlayAction) return;
@@ -7677,6 +7814,48 @@ export class EntityManager {
       };
       mixer.addEventListener("finished", onFinished);
     } catch (_) { /* never block the swing on the weight-ramp */ }
+  }
+
+  /**
+   * A5-P1b + A4-Q2 (2026-06-12, W3+ S5) — the ONE owner of overlay-end
+   * work, reached via the drain queue's `animDone` record (?hookDrain=on).
+   *
+   * 1. Base-cycle weight restore: the flag-path counterpart of
+   *    `_suppressBaseCycleForOverlay`'s `onFinished` listener (which is
+   *    NOT registered under ?hookDrain — mutually exclusive, no
+   *    double-restore). Restores only if the loco cycle is still the same
+   *    action (a motion change may have swapped it; the old action is
+   *    then irrelevant and already faded out) — same rule as the
+   *    listener.
+   * 2. The A4-Q2 notify (?mtQueue=on): tagged local-player overlays
+   *    report completion across the wasm boundary (retail success is
+   *    hard-coded 1 on the renderer path, CPartArray::AnimationDone(v1,
+   *    1), acclient.c:317093). A no-op until a caller tags plays AND
+   *    both the flag + the v4 pkg are live.
+   *
+   * `finished` is true for natural clip end (the only current caller);
+   * cancellation paths (eviction) notify `false` directly via
+   * `notifyMtQueuedOverlayDone` without the weight-restore step.
+   */
+  _completeOverlay(inst, key, action, finished) {
+    try {
+      if (inst && action && inst._baseSuppressAction === action) {
+        inst._baseSuppressAction = null;
+        const saved = inst._baseSuppressSaved;
+        inst._baseSuppressSaved = null;
+        if (saved && saved.baseAction) {
+          const cur = inst.actions?.get(inst._locoCycleKey);
+          if (cur === saved.baseAction) {
+            try {
+              saved.baseAction.setEffectiveWeight(
+                saved.savedWeight > 0 ? saved.savedWeight : 1.0
+              );
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (_) { /* never block the drain on the weight-restore */ }
+    notifyMtQueuedOverlayDone(inst, key, !!finished);
   }
 
   /**
@@ -9532,6 +9711,39 @@ export class EntityManager {
           }
         }
       }
+      // A5-P1b (?hookDrain=on) — the per-instance hook-fire DRAIN: execute
+      // every queued hook + completion record in FIFO order, AFTER all
+      // pose/position/tween/omega/material application above — our analog
+      // of retail's process_hooks-after-position-resolve
+      // (CPhysicsObj::UpdatePositionInternal: offset combine → physics
+      // resolve → ONLY THEN process_hooks drains the queue in order,
+      // acclient.c:320030-320035). A thrown hook must not drop the rest
+      // of the queue (per-record try/catch). Off-path: queue is never
+      // written, this is one length check.
+      if (HOOK_DRAIN_ON && inst._hookFireQueue && inst._hookFireQueue.length > 0) {
+        const fireQueue = inst._hookFireQueue;
+        inst._hookFireQueue = [];
+        const _audioMgr = this.scene3d?.audioManager ?? null;
+        const _stCache = this.scene3d?.soundTableCache ?? null;
+        for (const rec of fireQueue) {
+          try {
+            if (rec.kind === "hook") {
+              this._fireHook(inst, rec.hook, _audioMgr, _stCache);
+            } else if (rec.kind === "animDone") {
+              this._completeOverlay(inst, rec.key, rec.action, true);
+            }
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            if (!this._hookDrainWarned) {
+              this._hookDrainWarned = true;
+              console.warn(
+                `[entities/hook-drain] record failed for entity 0x${inst.guid.toString(16)}:`,
+                e
+              );
+            }
+          }
+        }
+      }
       // IDLE_FIDGET (2026-06-09, ?idleFidget=on) — autonomous client-side idle
       // fidget. Accumulate per-entity standing-idle dwell time and, once it
       // crosses a per-entity randomized interval, trigger ONE idle-variation
@@ -9891,6 +10103,61 @@ export class EntityManager {
     const audioMgr = this.scene3d?.audioManager ?? null;
     const cache = this.scene3d?.soundTableCache ?? null;
     for (const [key, action] of inst.actions) {
+      // A5-P1 (?hookDrain=on) — finish-drain + completion-record path:
+      // window math via the pure planner (`hook_windows.js`), which adds
+      // exactly one behavior the legacy branch below lacks: a LoopOnce
+      // that crossed its end between two rAFs fires its trailing hooks in
+      // (lastTime, clipDuration] ONCE (retail clamp-at-high_frame,
+      // acclient.c:340697-340727) and then queues an `animDone` record
+      // AFTER them (retail order, :340725 → :340764-340774). The hooks
+      // themselves are QUEUED, not fired inline — `_fireHooksInRange`
+      // pushes records under this flag; the per-instance drain at the end
+      // of the tick body executes them. Legacy off-path below is
+      // byte-identical to pre-S5.
+      if (HOOK_DRAIN_ON) {
+        if (!action) continue;
+        // `has()` check BEFORE planning: an action that was never
+        // played/armed (no `actionLastHookTime` entry — every play site
+        // seeds 0) must not finish-drain.
+        const wasArmed = inst.actionLastHookTime.has(key);
+        let isRunning = false;
+        let isLoopOnce = false;
+        let currentTime = 0;
+        let clipDuration = 0;
+        try {
+          isRunning = !!action.isRunning();
+          isLoopOnce = action.loop === THREE.LoopOnce;
+          currentTime = +action.time;
+          const clip = action.getClip();
+          clipDuration = clip ? +clip.duration : 0;
+        } catch (_) {
+          continue;
+        }
+        if (!isRunning && !wasArmed) continue;
+        let lastTime = inst.actionLastHookTime.get(key);
+        if (lastTime === undefined) lastTime = 0;
+        const plan = planHookWindows({
+          lastTime,
+          currentTime,
+          clipDuration,
+          isRunning,
+          isLoopOnce,
+        });
+        const timeline = inst.hookTimelines.get(key);
+        if (timeline && timeline.length > 0) {
+          for (const w of plan.windows) {
+            this._fireHooksInRange(inst, timeline, w[0], w[1], audioMgr, cache);
+          }
+        }
+        if (plan.finished) {
+          // Completion record rides the SAME queue, after this overlay's
+          // trailing hook records — drained by `_completeOverlay`.
+          inst._hookFireQueue.push({ kind: "animDone", key, action });
+        }
+        if (isRunning) inst.actionLastHookTime.set(key, currentTime);
+        else if (plan.drainedTo !== null) inst.actionLastHookTime.set(key, plan.drainedTo);
+        continue;
+      }
       if (!action || !action.isRunning()) continue;
       const timeline = inst.hookTimelines.get(key);
       if (!timeline || timeline.length === 0) continue;
@@ -9942,6 +10209,15 @@ export class EntityManager {
       const t = h.time;
       if (t <= lowExclusive) continue;
       if (t > highInclusive) break; // sorted asc — no later entries match
+      if (HOOK_DRAIN_ON) {
+        // A5-P1b — queue instead of firing inline (retail add_anim_hook,
+        // acclient.c:322063-322073); the per-instance end-of-tick drain
+        // executes via the SAME `_fireHook`. Only the animation-timeline
+        // executor routes here — ScriptManager/PhysicsScript callers
+        // invoke `_fireHook` directly and stay inline.
+        inst._hookFireQueue.push({ kind: "hook", hook: h });
+        continue;
+      }
       this._fireHook(inst, h, audioMgr, cache);
     }
   }

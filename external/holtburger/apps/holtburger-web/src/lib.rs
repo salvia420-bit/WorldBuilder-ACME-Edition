@@ -496,7 +496,12 @@ pub fn build_info() -> String {
 // `fetchEntityAnimationKeyframes` + `EntityUpdate.placementId` getter.
 // index.html's EXPECTED stays at 1 (JS consumer is ?placementId=-gated;
 // older pkg coerces the missing getter to undefined → 0).
-pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 3;
+// v4 (2026-06-12, A4-Q2 / W3+ S5): + `SessionHandle.notifyAnimationDone`
+// (renderer one-shot overlay completion → the local player's
+// MotionTableManager queue). index.html's EXPECTED stays at 1 (the JS
+// caller is ?mtQueue=-gated + typeof-guarded, so a v3 pkg soft-degrades
+// to a no-op notify — the documented v2 precedent).
+pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 4;
 
 /// Returns the export-surface manifest version (F18-2). JS asserts this is
 /// `>=` its compiled-in expectation at boot; a mismatch — or this function
@@ -17344,6 +17349,19 @@ enum SessionCommand {
     /// G-7 / F1-6 — drop a held jump charge without jumping (movement key
     /// pressed during the charge, focus blur, or a refused release).
     JumpChargeCancel,
+    /// A4-Q2 (2026-06-12, W3+ S5, `?mtQueue=on`) — the renderer reports a
+    /// one-shot overlay clip's end (`success=true`) or a cancellation on
+    /// eviction/stop of a tagged, not-yet-completed overlay
+    /// (`success=false`, the exit-world-drain analogy,
+    /// acclient.c:329940-329947). The recv arm filters to the LOCAL
+    /// player guid and forwards to
+    /// `MovementSystemHandle::notify_animation_done` → the A4-Q1
+    /// `MotionTableManager` queue (retail `AnimDoneHook::Execute` →
+    /// `Hook_AnimDone` → `CPartArray::AnimationDone` →
+    /// `MotionTableManager::AnimationDone`, acclient.c:342336 → :317087
+    /// → :325080 → :329873). Inert unless `USE_MOTION_TABLE_QUEUE`
+    /// (core), and harmlessly no-op on an empty queue even then.
+    AnimationDone { guid: u32, success: bool },
     /// Phase 4 step 3.6 — JS-driven physics tick. Fired by
     /// `requestAnimationFrame` from `index.html`'s drainEvents loop;
     /// the recv loop pulls the next `now` and calls
@@ -26447,6 +26465,29 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::JumpChargeCancel)
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("jumpChargeCancel: cmd channel closed ({e})"))
+            })
+    }
+
+    /// A4-Q2 (2026-06-12, W3+ S5, `?mtQueue=on`) — renderer
+    /// `AnimationDone` signal: a one-shot overlay clip on `guid` ended
+    /// (`success=true`; retail hard-codes 1 on the renderer path,
+    /// `CPartArray::AnimationDone(v1, 1)`, acclient.c:317093) or was
+    /// evicted/stopped before completing (`success=false` — the
+    /// hang-prevention cancellation, exit-world-drain analogy). JS calls
+    /// this ONLY for overlays the wasm pipeline queued (the
+    /// `_mtQueuedKeys` tagging contract in `scene3d/entities.js`) and
+    /// only for the local player; the recv arm re-filters the guid.
+    /// Completion is COUNTED, not keyed (acclient.c:329885-329894) —
+    /// the renderer never says WHICH anim finished. Typeof-guarded +
+    /// flag-gated JS-side, so a pre-v4 pkg soft-degrades (manifest
+    /// policy, `WASM_EXPORT_MANIFEST_VERSION`).
+    #[wasm_bindgen(js_name = notifyAnimationDone)]
+    pub fn notify_animation_done(&self, guid: u32, success: bool) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AnimationDone { guid, success })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("notifyAnimationDone: cmd channel closed ({e})"))
             })
     }
 
@@ -38889,6 +38930,31 @@ async fn recv_loop(
                     Some(SessionCommand::JumpChargeCancel) => {
                         if let Some(w) = world.as_mut() {
                             w.player.standing_long_jump_charge = false;
+                        }
+                    }
+                    Some(SessionCommand::AnimationDone { guid, success }) => {
+                        // A4-Q2 (W3+ S5) — renderer overlay-completion
+                        // signal → the LOCAL player's MotionTableManager
+                        // queue. Guid filter: only the local player has a
+                        // queue instance (per-entity instances are DESIGN
+                        // Stage-3 scope); non-local guids are silently
+                        // dropped. Spec OQ-5 ordering note: this command
+                        // arrives on the same FIFO cmd channel as
+                        // TickMovement, but the two are SENT from two
+                        // independent rAF callbacks (index.html's
+                        // drainEvents loop sends TickMovement; the scene3d
+                        // loop's `entityManager.tick` fires the notify), so
+                        // a completion may be pumped the tick after the
+                        // visual clip end — ≤1 rAF skew, accepted (spec §5
+                        // risk 4; retail drains same-frame via
+                        // process_hooks, acclient.c:320035). Inert unless
+                        // USE_MOTION_TABLE_QUEUE; empty-queue no-op even
+                        // then (acclient.c:329884 head-null guard).
+                        if let Some(w) = world.as_ref()
+                            && entity_seeded
+                            && w.player.guid.0 == guid
+                        {
+                            movement.notify_animation_done(success);
                         }
                     }
                     Some(SessionCommand::Jump { power }) => {

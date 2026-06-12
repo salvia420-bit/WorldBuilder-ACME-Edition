@@ -3723,6 +3723,42 @@ impl MovementSystem {
         }
     }
 
+    /// A4-Q2 (2026-06-12, W3+ S5) — renderer `AnimationDone` signal:
+    /// the wasm `notifyAnimationDone` export lands here. Retail chain:
+    /// `AnimDoneHook::Execute` → `CPhysicsObj::Hook_AnimDone` →
+    /// `CPartArray::AnimationDone` →
+    /// `MotionTableManager::AnimationDone`
+    /// (`acclient.c:342336` → `:317087` → `:325080` → `:329873`).
+    /// Targets the LOCAL player's queue (the `MovementSystem`-owned
+    /// instance the A4-Q1 pump drains); non-local guids are filtered
+    /// at the wasm recv arm (per-entity instances are DESIGN Stage-3
+    /// scope). Gated by the default-off [`USE_MOTION_TABLE_QUEUE`]
+    /// const — flag-off this is a compile-time no-op; flag-on it is
+    /// STILL harmlessly inert on an empty queue (the
+    /// `acclient.c:329884` head-null guard inside `animation_done`).
+    /// Resulting `MotionDone` events ride the EXISTING per-tick pump
+    /// drain in [`Self::tick`] — no second drain site.
+    pub(crate) fn notify_animation_done(&mut self, success: bool) {
+        if !USE_MOTION_TABLE_QUEUE {
+            return;
+        }
+        self.notify_animation_done_ungated(success);
+    }
+
+    /// The gate-free body of [`Self::notify_animation_done`] — split
+    /// out (the A3-D3 `_ungated` house pattern) so the Lane-A unit
+    /// tests can exercise the system-level path while the const ships
+    /// default-off.
+    pub(crate) fn notify_animation_done_ungated(&mut self, success: bool) {
+        self.motion_table_manager.animation_done(success);
+    }
+
+    /// A4-Q2 test seam: the local player's pending-animation queue.
+    #[cfg(test)]
+    pub(crate) fn motion_table_manager_mut(&mut self) -> &mut MotionTableManager {
+        &mut self.motion_table_manager
+    }
+
     /// A3-D3 test seam: registry view.
     #[cfg(test)]
     pub(crate) fn movement_manager_for(&self, guid: Guid) -> Option<&MovementManager> {

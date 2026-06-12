@@ -33,6 +33,20 @@
 //! `:339349`) are emitted as [`MotionTableEvent`]s drained by the owner
 //! (`movement/system.rs` tick under `USE_MOTION_TABLE_QUEUE`,
 //! default-off — queue inert, current paths untouched).
+//!
+//! **`num_anims` contract (A4-Q2, 2026-06-12, W3+ S5):** one
+//! renderer-realized motion == ONE `AnimationDone`, because the bake
+//! flattens all `MotionData.anims` segments into one clip
+//! (`build_concatenated_motion_frames`, `apps/holtburger-web/src/lib.rs`)
+//! and JS plays ONE LoopOnce action per one-shot. Every future enqueue
+//! site (the A3-D2 `PerformMovement` dispatch and beyond) therefore uses
+//! `num_anims = 1` for motions with a clip and `num_anims = 0` for
+//! anim-free motions (which complete via the per-tick poll,
+//! [`MotionTableManager::check_for_completed_motions`] /
+//! `acclient.c:329960-329980`). This settles the A4 §6 "num_anims
+//! provenance" open question by convention; retail's multi-anim
+//! accounting (`acclient.c:330225` out-params) is intentionally
+//! collapsed to the bake's granularity.
 
 use std::collections::VecDeque;
 

@@ -193,6 +193,18 @@ impl MovementSystemHandle {
         self.inner.set_unified_transition(on);
     }
 
+    /// A4-Q2 (2026-06-12, W3+ S5) — public forward for the wasm
+    /// `notifyAnimationDone` export: renderer one-shot overlay
+    /// completion → the LOCAL player's `MotionTableManager` queue
+    /// (retail `AnimDoneHook::Execute` → `Hook_AnimDone` →
+    /// `CPartArray::AnimationDone` → `MotionTableManager::AnimationDone`,
+    /// acclient.c:342336 → :317087 → :325080 → :329873). Inert unless
+    /// `USE_MOTION_TABLE_QUEUE`, and harmlessly no-op on an empty
+    /// queue even then (the :329884 head-null guard).
+    pub fn notify_animation_done(&mut self, success: bool) {
+        self.inner.notify_animation_done(success);
+    }
+
     /// Phase 4 step 3.6 diagnostics — number of tick() calls since
     /// construction. The wasm bundle's recv loop reads this to throttle
     /// per-frame pose logs (one per ~60 ticks).

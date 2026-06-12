@@ -4224,3 +4224,120 @@ fn unified_transition_spine_manual_collision_matrix() {
     );
     assert!(on_y > 50.0, "some travel before the wall, y = {on_y}");
 }
+
+// === A4-Q2 (2026-06-12, W3+ S5) — notify_animation_done system path ======
+//
+// The module-level queue semantics (FIFO, num_anims accounting, counter
+// reset, truncation) are pinned in motion_table_manager.rs's own tests;
+// these cover the NEW system-level entry the wasm `notifyAnimationDone`
+// export lands on: the `USE_MOTION_TABLE_QUEUE` gate + the ungated body.
+
+/// Flag gate: with `USE_MOTION_TABLE_QUEUE` off (the shipped default) the
+/// gated entry must not touch the queue — a seeded node stays pending (a
+/// later direct `animation_done` still pops it, proving it was untouched).
+/// Written gate-aware so it stays green when the const flips default-on.
+#[test]
+fn notify_animation_done_respects_queue_flag() {
+    let mut system = MovementSystem::new();
+    // Seed ONE 1-anim node (0x4400_0001-style one-shot; exact id is
+    // irrelevant to the accounting).
+    system
+        .motion_table_manager_mut()
+        .queue_object_motion(0x4400_0001, 1);
+    // Drop any enqueue-time events so the assertions below see only
+    // completion traffic.
+    let _ = system.motion_table_manager_mut().drain_events();
+
+    system.notify_animation_done(true);
+    let events = system.motion_table_manager_mut().drain_events();
+    if USE_MOTION_TABLE_QUEUE {
+        assert_eq!(
+            events.len(),
+            1,
+            "flag-on: gated notify must pop the seeded node"
+        );
+    } else {
+        assert!(
+            events.is_empty(),
+            "flag-off: gated notify must be a compile-time no-op"
+        );
+        // The node must still be pending: a direct (ungated) completion
+        // now pops it.
+        system.notify_animation_done_ungated(true);
+        let events = system.motion_table_manager_mut().drain_events();
+        assert_eq!(events.len(), 1, "node untouched by the gated no-op");
+        assert!(matches!(
+            events[0],
+            MotionTableEvent::MotionDone {
+                motion: 0x4400_0001,
+                success: true
+            }
+        ));
+    }
+}
+
+/// Ungated path: one notify pops exactly ONE 1-anim head node and fires
+/// `MotionDone` with the caller's success value (positional counting —
+/// `acclient.c:329885-329894`); the second node waits for its own notify.
+#[test]
+fn notify_animation_done_ungated_pops_one_node_per_signal() {
+    let mut system = MovementSystem::new();
+    system
+        .motion_table_manager_mut()
+        .queue_object_motion(0x4400_0001, 1);
+    system
+        .motion_table_manager_mut()
+        .queue_object_motion(0x4400_0002, 1);
+    let _ = system.motion_table_manager_mut().drain_events();
+
+    system.notify_animation_done_ungated(true);
+    let events = system.motion_table_manager_mut().drain_events();
+    assert_eq!(events.len(), 1, "exactly one node per AnimationDone");
+    assert!(matches!(
+        events[0],
+        MotionTableEvent::MotionDone {
+            motion: 0x4400_0001,
+            success: true
+        }
+    ));
+
+    // Cancellation shape (the Stage-D eviction call): success=false rides
+    // through to the event (exit-world drain analogy, acclient.c:329940).
+    system.notify_animation_done_ungated(false);
+    let events = system.motion_table_manager_mut().drain_events();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events[0],
+        MotionTableEvent::MotionDone {
+            motion: 0x4400_0002,
+            success: false
+        }
+    ));
+}
+
+/// Empty-queue no-op: a notify on a fresh system emits nothing and leaves
+/// the counter at 0 — the `acclient.c:329884` head-null guard end-to-end.
+/// (Counter-at-0 is observed behaviorally: a node seeded AFTER the stray
+/// notify still needs its own notify to complete.)
+#[test]
+fn notify_animation_done_empty_queue_is_a_no_op() {
+    let mut system = MovementSystem::new();
+    system.notify_animation_done_ungated(true);
+    assert!(
+        system.motion_table_manager_mut().drain_events().is_empty(),
+        "empty-queue notify must emit nothing"
+    );
+    // Counter must NOT have been bumped by the stray notify: a fresh
+    // 1-anim node does not auto-complete.
+    system
+        .motion_table_manager_mut()
+        .queue_object_motion(0x4400_0003, 1);
+    let _ = system.motion_table_manager_mut().drain_events();
+    system.motion_table_manager_mut().use_time();
+    assert!(
+        system.motion_table_manager_mut().drain_events().is_empty(),
+        "stray pre-seed notify must not pre-pay the new node's completion"
+    );
+    system.notify_animation_done_ungated(true);
+    assert_eq!(system.motion_table_manager_mut().drain_events().len(), 1);
+}

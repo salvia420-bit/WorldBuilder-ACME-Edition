@@ -7864,6 +7864,20 @@ void main() {
           // without going through the per-button click flow. Strictly
           // debug-only; not relied on by any production code path.
           window.__sessionHandle = handle;
+          // A4-Q2 (2026-06-12, W3+ S5, ?mtQueue=on) — wasm-boundary bridge
+          // for renderer AnimationDone (entities.js holds module exports,
+          // NOT the SessionHandle; this window seam matches the
+          // getLocalPlayerGuid pattern). Typeof-guarded: a pre-manifest-v4
+          // pkg/ (no notifyAnimationDone export) soft-degrades to a no-op.
+          // The caller (entities.js notifyMtQueuedOverlayDone) is itself
+          // ?mtQueue=-gated + tagged-keys-only + local-guid-filtered.
+          window.__notifyAnimationDone = (guid, success) => {
+            try {
+              if (handle && typeof handle.notifyAnimationDone === "function") {
+                handle.notifyAnimationDone(guid >>> 0, !!success);
+              }
+            } catch (_) {}
+          };
 
           if (!pluginClient) {
             pluginClient = createClient(handle);
