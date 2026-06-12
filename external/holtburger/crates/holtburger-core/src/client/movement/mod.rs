@@ -3,6 +3,9 @@ mod handle;
 mod interp_state;
 mod motion_interp;
 mod motion_table_manager;
+mod move_to;
+mod movement_manager;
+mod params;
 mod raw_state;
 mod system;
 

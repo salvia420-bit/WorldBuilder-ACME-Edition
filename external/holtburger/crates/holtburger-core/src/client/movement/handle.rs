@@ -169,6 +169,18 @@ impl MovementSystemHandle {
         self.inner.apply_self_movement_world_events(events);
     }
 
+    /// A3-D3 (2026-06-12): sibling consumer — route the
+    /// `EntityMovementEvent` / `SelfServerControlledMotion` /
+    /// `EntityDespawned` stream into the per-entity `MovementManager`
+    /// registry (`unpack_movement` Stage-3 semantics), exactly as the
+    /// native runtime does. Gated internally by the default-off
+    /// `USE_UNPACK_MOVEMENT_SEMANTICS` const; on wasm additionally only
+    /// reachable under `?wireStatePacks=stage1` (the A13-W1 routed
+    /// path). See [`MovementSystem::apply_movement_world_events`].
+    pub fn apply_movement_world_events(&mut self, events: &[WorldEvent]) {
+        self.inner.apply_movement_world_events(events);
+    }
+
     /// Phase 4 step 3.6 diagnostics — number of tick() calls since
     /// construction. The wasm bundle's recv loop reads this to throttle
     /// per-frame pose logs (one per ~60 ticks).

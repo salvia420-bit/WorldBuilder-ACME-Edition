@@ -7,8 +7,11 @@ use super::common::{
     local_velocity_for_state, normalize_heading, raw_motion_state_with_motion_style,
     signed_heading_delta,
 };
-use super::motion_interp::{MotionInterp, interpreted_velocity_for_state};
+use super::motion_interp::{
+    MotionInterp, interpreted_velocity_for_state, leave_ground_velocity_for_state,
+};
 use super::motion_table_manager::{MotionTableEvent, MotionTableManager};
+use super::movement_manager::{MovementManager, USE_UNPACK_MOVEMENT_SEMANTICS};
 use crate::client::movement_types::{
     AutonomousDriveIntent, ForwardLocomotion, MotionState, MotionStyle, MovementPacketMetadata,
     PlayerDriveIntent, Turn,
@@ -23,6 +26,7 @@ use holtburger_session::Session;
 use holtburger_world::SolveBodyInput;
 use holtburger_world::spatial::{InterpStep, LocalDriveControl, LocalDriveGait};
 use holtburger_world::{SpatialBodyId, WorldEvent, WorldState};
+use std::collections::HashMap;
 use std::time::Duration;
 use web_time::Instant;
 
@@ -369,6 +373,29 @@ const USE_INTERPRETED_VELOCITY: bool = true;
 /// emote-completes-then-gait-resumes), then default-on per the
 /// passed-flag policy.
 const USE_MOTION_TABLE_QUEUE: bool = false;
+
+/// A3-D3-5 (2026-06-12, unified movement pipeline STAGE 3) —
+/// non-charged leave-ground velocity.
+///
+/// `true`: at a walk-off-ledge airborne transition (`begin_fall`), stamp
+/// `current_planar_velocity` from the CLAMPED retail closed form —
+/// `CMotionInterp::get_leave_ground_velocity` = `get_state_velocity`
+/// (magnitude capped at `run_rate × 4.0`) with the retail fallback to
+/// the integrator's velocity when the closed form is ~zero
+/// (acclient.c:343806-343843, consumed by `LeaveGround`
+/// :344457-344490; ACE `MotionInterp.cs:192`). Fixes survey A3 §3 row 6
+/// DIFF-ALGO: the legacy freeze launched the UNCLAMPED diagonal
+/// run+strafe composition (~5.7 m/s vs retail's 4.0×rate cap).
+///
+/// `false` (DEFAULT): the legacy trajectory-lock freeze — the planar
+/// store is left untouched at launch, byte-identical. Charged-jump
+/// departures (interpreted intent via `manual_intent_velocity`, the
+/// wasm Jump arm) are unchanged either way (DESIGN.md:487-488).
+/// HitGround stays event-less per the recorded decision
+/// (DESIGN.md:476-479 — the per-tick re-derive subsumes it).
+/// 1070-parked: walk off a ledge at diagonal run+strafe — measured
+/// launch speed ≤ run_rate×4.0; jump arcs + arms-up pose UNCHANGED.
+const USE_LEAVE_GROUND_VELOCITY: bool = false;
 
 /// F4-2 (bughunt 2026-06-09) — outdoor walkable-slope gate.
 ///
@@ -802,6 +829,33 @@ impl MovementSequenceDiagnostics {
     }
 }
 
+/// A3-D3-5 helper — stamp the retail leave-ground launch velocity into
+/// the planar store at a walk-off-ledge `begin_fall` transition (all
+/// three ledge sites: outdoor step-down Fall, legacy ledge heuristic,
+/// indoor F4-1 step-down Fall). No-op unless
+/// [`USE_LEAVE_GROUND_VELOCITY`]; the legacy default keeps the
+/// trajectory-lock freeze byte-identical. Charged jumps never route
+/// through here (`begin_jump` is the wasm Jump arm). Z stays owned by
+/// the gravity arc.
+fn stamp_leave_ground_velocity(
+    world: &mut WorldState,
+    heading: f32,
+    state: MotionState,
+    capabilities: &holtburger_world::SelfMovementCapabilities,
+) {
+    if !USE_LEAVE_GROUND_VELOCITY {
+        return;
+    }
+    let mut velocity = leave_ground_velocity_for_state(
+        heading,
+        state,
+        capabilities,
+        world.player.current_planar_velocity,
+    );
+    velocity.z = 0.0;
+    world.player.current_planar_velocity = velocity;
+}
+
 pub(crate) struct MovementSystem {
     sequence_diagnostics: MovementSequenceDiagnostics,
     queued_drive_commands: Vec<QueuedDriveCommand>,
@@ -847,6 +901,16 @@ pub(crate) struct MovementSystem {
     /// (`acclient.c:317097` → `:339349` → `:343641-343676`). Same
     /// default-off gate; per-entity instances arrive with Stage 3.
     local_motion_interp: MotionInterp,
+    /// A3-D3 (2026-06-12) — the per-entity `MovementManager` registry
+    /// (retail: one `MovementManager` per `CPhysicsObj`; DESIGN.md
+    /// STAGE 3 AMENDMENT "per-entity `my_run_rate`, no globals" — the
+    /// F3-5 rule). Local player keyed by the player guid (its events
+    /// arrive via `SelfServerControlledMotion`). Populated only under
+    /// [`USE_UNPACK_MOVEMENT_SEMANTICS`]; pruned on
+    /// `WorldEvent::EntityDespawned` in
+    /// [`Self::apply_movement_world_events`] (growth bounded by entity
+    /// count between prunes).
+    movement_managers: HashMap<Guid, MovementManager>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -940,6 +1004,7 @@ impl MovementSystem {
             heartbeats_sent: 0,
             motion_table_manager: MotionTableManager::new(),
             local_motion_interp: MotionInterp::default(),
+            movement_managers: HashMap::new(),
         }
     }
 
@@ -2722,6 +2787,11 @@ impl MovementSystem {
                             }
                             holtburger_world::spatial::StepDownOutcome::Fall => {
                                 world.player.begin_fall();
+                                // A3-D3-5: retail leave-ground launch
+                                // velocity (default-off no-op).
+                                stamp_leave_ground_velocity(
+                                    world, heading, state, &capabilities,
+                                );
                                 // Leave Z alone — gravity drops us next tick.
                                 // Genuine ledge fall resolved — clear the
                                 // backup pose.
@@ -2732,6 +2802,9 @@ impl MovementSystem {
                         }
                     } else if pose.coords.z - z > LEDGE_FALL_THRESHOLD_M {
                         world.player.begin_fall();
+                        // A3-D3-5: retail leave-ground launch velocity
+                        // (default-off no-op).
+                        stamp_leave_ground_velocity(world, heading, state, &capabilities);
                         // Leave Z alone — let the gravity integrator
                         // drop us next tick.
                     } else {
@@ -2887,6 +2960,11 @@ impl MovementSystem {
                             }
                             holtburger_world::spatial::StepDownOutcome::Fall => {
                                 world.player.begin_fall();
+                                // A3-D3-5: retail leave-ground launch
+                                // velocity (default-off no-op).
+                                stamp_leave_ground_velocity(
+                                    world, heading, state, &capabilities,
+                                );
                                 // Leave Z alone — gravity drops us next tick.
                             }
                         }
@@ -3230,6 +3308,75 @@ impl MovementSystem {
                 _ => {}
             }
         }
+    }
+
+    /// A3-D3 (2026-06-12): sibling of
+    /// [`Self::apply_self_movement_world_events`] — consume the
+    /// movement-event stream into the per-entity `MovementManager`
+    /// registry (the `unpack_movement` Stage-3 semantics). Called from
+    /// BOTH the native event pass (`client/messages.rs::
+    /// handle_world_events`) and the wasm `?wireStatePacks=stage1`
+    /// consumption site — one path, the A13 rule. Gated by the
+    /// default-off [`USE_UNPACK_MOVEMENT_SEMANTICS`] const: flag-off,
+    /// this is a no-op and the registry never allocates.
+    ///
+    /// Lanes:
+    /// - `EntityMovementEvent` — remote entities, unconditional
+    ///   per-message (retail preamble semantics);
+    /// - `SelfServerControlledMotion` — the local player, structurally
+    ///   gated accepted-&&-!autonomous at the emit site
+    ///   (handlers/player.rs:96-107) so an ACE echo of the player's own
+    ///   autonomous motion never runs the preamble (spec §3a.2, OPEN
+    ///   QUESTION 1: a deliberate, documented deviation from retail's
+    ///   unconditional preamble). The local event carries no
+    ///   `target_exists`; `false` is correct enough for the inert D3-2
+    ///   directive store (no driver consumes it yet) — revisit when the
+    ///   Stage-3 driver lands.
+    /// - `EntityDespawned` — registry prune.
+    pub(crate) fn apply_movement_world_events(
+        &mut self,
+        events: &[holtburger_world::WorldEvent],
+    ) {
+        if !USE_UNPACK_MOVEMENT_SEMANTICS {
+            return;
+        }
+        self.apply_movement_world_events_ungated(events);
+    }
+
+    /// The gate-free body of [`Self::apply_movement_world_events`] —
+    /// split out so the Lane-A unit tests can exercise the registry
+    /// while the const ships default-off (the spec's "land flag-off
+    /// with these green" rule).
+    pub(crate) fn apply_movement_world_events_ungated(
+        &mut self,
+        events: &[holtburger_world::WorldEvent],
+    ) {
+        for event in events {
+            match event {
+                WorldEvent::EntityMovementEvent {
+                    guid,
+                    data,
+                    target_exists,
+                } => {
+                    let manager = self.movement_managers.entry(*guid).or_default();
+                    let _effects = manager.apply_unpacked_movement(data, *target_exists);
+                }
+                WorldEvent::SelfServerControlledMotion(data) => {
+                    let manager = self.movement_managers.entry(data.guid).or_default();
+                    let _effects = manager.apply_unpacked_movement(data, false);
+                }
+                WorldEvent::EntityDespawned(guid) => {
+                    self.movement_managers.remove(guid);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// A3-D3 test seam: registry view.
+    #[cfg(test)]
+    pub(crate) fn movement_manager_for(&self, guid: Guid) -> Option<&MovementManager> {
+        self.movement_managers.get(&guid)
     }
 
     /// A13-W1 test seam: expose the last recorded server-control /

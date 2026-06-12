@@ -224,6 +224,111 @@ impl RawState {
         self.turn_holdkey = HoldKey::Invalid;
     }
 
+    /// A3-D3 (2026-06-12) — `RawMotionState::ApplyMotion`, the u32 form
+    /// the DoMotion lattice's ModifyRawState bit writes through
+    /// (`acclient.c:332852-332921`; ACE `RawMotionState.cs:32-98`).
+    /// Hold-key rule per ACE: when the params' SetHoldKey bit is set the
+    /// axis key is `Invalid` (defer to `current_holdkey`), else the
+    /// params' `hold_key_to_apply`. Normalizations: RunForward is NOT
+    /// stored (ACE `RawMotionState.cs:69`); non-locomotion substates
+    /// clear the forward slot (our enum holds the locomotion survivors
+    /// only — same normal form as `InterpretedState::apply_motion`);
+    /// the style arm is interp-side only (`InterpretedState.
+    /// current_style` is the single style owner here); the action arm
+    /// appends a stamped [`RawAction`].
+    pub(crate) fn apply_motion_u32(
+        &mut self,
+        motion: u32,
+        params: &super::params::MovementParameters,
+    ) {
+        const TURN_RIGHT: u32 = 0x6500_000D;
+        const TURN_LEFT: u32 = 0x6500_000E;
+        const SIDESTEP_RIGHT: u32 = 0x6500_000F;
+        const SIDESTEP_LEFT: u32 = 0x6500_0010;
+        const WALK_FORWARD: u32 = 0x4500_0005;
+        const WALK_BACKWARDS: u32 = 0x4500_0006;
+        const RUN_FORWARD: u32 = 0x4400_0007;
+        const MASK_SUBSTATE: u32 = 0x4000_0000;
+        const MASK_ACTION: u32 = 0x1000_0000;
+        let holdkey = if params.set_hold_key() {
+            HoldKey::Invalid
+        } else {
+            match params.hold_key_to_apply {
+                1 => HoldKey::NoKey,
+                2 => HoldKey::Run,
+                _ => HoldKey::Invalid,
+            }
+        };
+        match motion {
+            TURN_RIGHT => self.apply_turn(RawTurnCommand::TurnRight, params.speed, holdkey),
+            TURN_LEFT => self.apply_turn(RawTurnCommand::TurnLeft, params.speed, holdkey),
+            SIDESTEP_RIGHT => {
+                self.apply_sidestep(RawSidestepCommand::SideStepRight, params.speed, holdkey)
+            }
+            SIDESTEP_LEFT => {
+                self.apply_sidestep(RawSidestepCommand::SideStepLeft, params.speed, holdkey)
+            }
+            WALK_FORWARD => {
+                self.apply_forward(RawForwardCommand::WalkForward, params.speed, holdkey)
+            }
+            WALK_BACKWARDS => {
+                self.apply_forward(RawForwardCommand::WalkBackwards, params.speed, holdkey)
+            }
+            RUN_FORWARD => {
+                // ACE: `if (motion != RunForward)` — RunForward is never
+                // stored in the raw forward slot.
+            }
+            _ if motion & MASK_SUBSTATE != 0 => {
+                // Non-locomotion substate (Ready, Crouch, …): our raw
+                // enum holds the locomotion survivors only — clear.
+                self.remove_forward();
+            }
+            _ if motion & MASK_ACTION != 0 => {
+                self.actions.push(RawAction {
+                    action: motion,
+                    speed: params.speed,
+                    stamp: (params.action_stamp & 0x7FFF) as u16,
+                    autonomous: params.autonomous(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// A3-D3 — `RawMotionState::RemoveMotion`, u32 form (the
+    /// ModifyRawState bit of `StopMotion`, `acclient.c:344133-344135`):
+    /// turn/sidestep clear their slots; a forward locomotion command
+    /// clears the forward slot when it matches.
+    pub(crate) fn remove_motion_u32(&mut self, motion: u32) {
+        const TURN_RIGHT: u32 = 0x6500_000D;
+        const TURN_LEFT: u32 = 0x6500_000E;
+        const SIDESTEP_RIGHT: u32 = 0x6500_000F;
+        const SIDESTEP_LEFT: u32 = 0x6500_0010;
+        const WALK_FORWARD: u32 = 0x4500_0005;
+        const WALK_BACKWARDS: u32 = 0x4500_0006;
+        const RUN_FORWARD: u32 = 0x4400_0007;
+        match motion {
+            TURN_RIGHT | TURN_LEFT => self.remove_turn(),
+            SIDESTEP_RIGHT | SIDESTEP_LEFT => self.remove_sidestep(),
+            WALK_FORWARD => {
+                if self.forward_command == Some(RawForwardCommand::WalkForward) {
+                    self.remove_forward();
+                }
+            }
+            WALK_BACKWARDS => {
+                if self.forward_command == Some(RawForwardCommand::WalkBackwards) {
+                    self.remove_forward();
+                }
+            }
+            RUN_FORWARD => {
+                if self.forward_command == Some(RawForwardCommand::RunForward) {
+                    self.remove_forward();
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// `RawMotionState::RemoveAction` — pop the head queued action,
     /// returning its motion id, `0` when empty
     /// (`acclient.c:332616-332639`; ACE `RawMotionState.cs:90-98`).

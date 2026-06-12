@@ -18,6 +18,12 @@
 
 use std::collections::VecDeque;
 
+/// `NonCombat` style (`0x8000003D` = decompile literal `-2147483587`,
+/// `acclient.c:344639`; ACE `MotionCommand.NonCombat`) — the
+/// `InterpretedMotionState.current_style` default and the style the
+/// `DoMotion` lattice's combat-restriction gate keys off (A3-D3).
+pub(crate) const MOTION_NONCOMBAT_STYLE: u32 = 0x8000_003D;
+
 /// Forward command after `adjust_motion` — `WalkBackwards` never survives
 /// interpretation (it is rewritten to `WalkForward` with a negated speed,
 /// `acclient.c:343764-343767` / `MotionInterp.cs:404-406`).
@@ -36,6 +42,12 @@ pub(crate) type PendingAction = (u32, f32);
 /// signed speeds carry the direction (see module doc).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct InterpretedState {
+    /// Full 32-bit current style dword (`InterpretedMotionState.
+    /// current_style`, default NonCombat `0x8000003D` —
+    /// `acclient.c:344639`; ACE `InterpretedMotionState.cs:131`). Read by
+    /// the A3-D3 `DoMotion` lattice's combat-restriction gate
+    /// (`InqStyle()`), written by the style arm of [`Self::apply_motion`].
+    pub current_style: u32,
     pub forward_command: Option<InterpretedForwardCommand>,
     /// Signed: negative = backstep (rewritten `WalkBackwards`).
     pub forward_speed: f32,
@@ -53,6 +65,7 @@ pub(crate) struct InterpretedState {
 impl Default for InterpretedState {
     fn default() -> Self {
         Self {
+            current_style: MOTION_NONCOMBAT_STYLE,
             forward_command: None,
             forward_speed: 1.0,
             sidestep: false,
@@ -75,6 +88,9 @@ impl InterpretedState {
     /// actions are replayed separately under the stamp gate.
     #[allow(dead_code)]
     pub(crate) fn copy_movement_from(&mut self, other: &InterpretedState) {
+        // ACE `copy_movement_from` copies CurrentStyle along with the
+        // movement axes (`InterpretedMotionState.cs:61-69`).
+        self.current_style = other.current_style;
         self.forward_command = other.forward_command;
         self.forward_speed = other.forward_speed;
         self.sidestep = other.sidestep;
@@ -130,8 +146,123 @@ impl InterpretedState {
         let actions = std::mem::take(&mut self.actions);
         *self = InterpretedState {
             actions,
+            // A stop never changes stance — `current_style` survives
+            // (retail Stop arms touch the locomotion axes only).
+            current_style: self.current_style,
             ..InterpretedState::default()
         };
+    }
+
+    // ------------------------------------------------------------------
+    // A3-D3 (2026-06-12): the full `InterpretedMotionState::ApplyMotion`
+    // / `RemoveMotion` dispatch — the `ModifyInterpretedState` bit of the
+    // DoMotion lattice writes through these
+    // (`acclient.c:344656-344662`; ACE `InterpretedMotionState.cs:28-126`).
+    // ------------------------------------------------------------------
+
+    /// `InterpretedMotionState::ApplyMotion` (ACE
+    /// `InterpretedMotionState.cs:28-59`), normalized onto our
+    /// post-`adjust_motion` enum: the forward slot only models the two
+    /// locomotion survivors (`WalkForward` / `RunForward`); any OTHER
+    /// substate (Ready, Crouch, Falling, …) clears the forward command —
+    /// "no forward locomotion", the closest normal form (the full
+    /// substate id is tracked wire-side by `holtburger-world`'s
+    /// `current_substate`). Style arm = forward→Ready (here `None`) +
+    /// `current_style` write; action arm = FIFO append (the 6-cap is
+    /// enforced by the `DoMotion` lattice BEFORE dispatch,
+    /// `acclient.c:344651-344653`, so this arm appends uncapped exactly
+    /// as retail's).
+    pub(crate) fn apply_motion(&mut self, motion: u32, speed: f32) {
+        const TURN_RIGHT: u32 = 0x6500_000D;
+        const SIDESTEP_RIGHT: u32 = 0x6500_000F;
+        const WALK_FORWARD: u32 = 0x4500_0005;
+        const RUN_FORWARD: u32 = 0x4400_0007;
+        const MASK_SUBSTATE: u32 = 0x4000_0000;
+        const MASK_STYLE: u32 = 0x8000_0000;
+        const MASK_ACTION: u32 = 0x1000_0000;
+        match motion {
+            TURN_RIGHT => {
+                self.turn = true;
+                self.turn_speed = speed;
+            }
+            SIDESTEP_RIGHT => {
+                self.sidestep = true;
+                self.sidestep_speed = speed;
+            }
+            WALK_FORWARD => {
+                self.forward_command = Some(InterpretedForwardCommand::WalkForward);
+                self.forward_speed = speed;
+            }
+            RUN_FORWARD => {
+                self.forward_command = Some(InterpretedForwardCommand::RunForward);
+                self.forward_speed = speed;
+            }
+            _ if motion & MASK_SUBSTATE != 0 => {
+                // Non-locomotion substate occupies the forward slot in
+                // retail; our normal form clears locomotion.
+                self.forward_command = None;
+                self.forward_speed = speed;
+            }
+            _ if motion & MASK_STYLE != 0 => {
+                // Style arm: forward → Ready, style recorded
+                // (InterpretedMotionState.cs:48-52).
+                self.forward_command = None;
+                self.forward_speed = 1.0;
+                self.current_style = motion;
+            }
+            _ if motion & MASK_ACTION != 0 => {
+                self.apply_action(motion, speed);
+            }
+            _ => {}
+        }
+    }
+
+    /// `InterpretedMotionState::RemoveMotion` (ACE
+    /// `InterpretedMotionState.cs:99-126`): turn/sidestep clear their
+    /// slots; a substate clears the forward slot only when it matches
+    /// (here: any substate removal returns the forward slot to "no
+    /// locomotion" Ready form when the held command matches); a style
+    /// removal matching `current_style` resets to NonCombat.
+    pub(crate) fn remove_motion(&mut self, motion: u32) {
+        const TURN_RIGHT: u32 = 0x6500_000D;
+        const SIDESTEP_RIGHT: u32 = 0x6500_000F;
+        const WALK_FORWARD: u32 = 0x4500_0005;
+        const RUN_FORWARD: u32 = 0x4400_0007;
+        const MASK_SUBSTATE: u32 = 0x4000_0000;
+        const MASK_STYLE: u32 = 0x8000_0000;
+        match motion {
+            TURN_RIGHT => {
+                self.turn = false;
+                self.turn_speed = 1.0;
+            }
+            SIDESTEP_RIGHT => {
+                self.sidestep = false;
+                self.sidestep_speed = 1.0;
+            }
+            WALK_FORWARD => {
+                if self.forward_command == Some(InterpretedForwardCommand::WalkForward) {
+                    self.forward_command = None;
+                    self.forward_speed = 1.0;
+                }
+            }
+            RUN_FORWARD => {
+                if self.forward_command == Some(InterpretedForwardCommand::RunForward) {
+                    self.forward_command = None;
+                    self.forward_speed = 1.0;
+                }
+            }
+            _ if motion & MASK_SUBSTATE != 0 => {
+                // Non-locomotion substates are not held in our forward
+                // slot (apply_motion normalizes them to None) — nothing
+                // to remove.
+            }
+            _ if motion & MASK_STYLE != 0 => {
+                if self.current_style == motion {
+                    self.current_style = MOTION_NONCOMBAT_STYLE;
+                }
+            }
+            _ => {}
+        }
     }
 }
 

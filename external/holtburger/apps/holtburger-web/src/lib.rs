@@ -31550,6 +31550,15 @@ async fn recv_loop(
                         // F2-3 block below.
                         if wire_state_packs_stage1_on {
                             movement.apply_self_movement_world_events(&world_events);
+                            // A3-D3 (2026-06-12): the sibling movement-event
+                            // consumer — per-entity `MovementManager`
+                            // registry (`unpack_movement` Stage-3 semantics),
+                            // same shared helper the native runtime calls.
+                            // Doubly gated: this `stage1` URL flag (without
+                            // it UpdateMotion never reaches `handlers/`) AND
+                            // the default-off Rust const
+                            // `USE_UNPACK_MOVEMENT_SEMANTICS` inside.
+                            movement.apply_movement_world_events(&world_events);
                         }
                     }
 

@@ -60,6 +60,14 @@ impl ClientRuntime {
             self.movement
                 .apply_self_movement_world_events(&pending_events);
 
+            // A3-D3 (2026-06-12): the sibling movement-event consumer —
+            // per-entity `MovementManager` registry (`unpack_movement`
+            // Stage-3 semantics). Internally gated by the default-off
+            // `USE_UNPACK_MOVEMENT_SEMANTICS` const; same shared-helper
+            // rule as above (the wasm stage1 site calls the identical
+            // function).
+            self.movement.apply_movement_world_events(&pending_events);
+
             let mut follow_up_events = Vec::new();
             for event in pending_events {
                 match event {

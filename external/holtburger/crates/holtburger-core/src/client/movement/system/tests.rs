@@ -4019,3 +4019,89 @@ fn test_a13_w2_non_autonomous_update_motion_echoes_into_next_packs() {
         "stale UpdateMotion must not re-emit SelfServerControlledMotion"
     );
 }
+
+/// A3-D3 (2026-06-12): the per-entity `MovementManager` registry —
+/// lazy-create runs `enter_default_state` exactly once, the local
+/// player is keyed by its guid through the `SelfServerControlledMotion`
+/// lane, and `EntityDespawned` prunes. Exercised through the gate-free
+/// helper so the suite stays green while `USE_UNPACK_MOVEMENT_SEMANTICS`
+/// ships default-off (Lane-A rule); the gated public wrapper is a
+/// no-op until the const flips.
+#[test]
+fn test_movement_manager_registry_create_apply_prune() {
+    use holtburger_protocol::messages::{
+        MovementEventData, MovementInvalid, MovementType, MovementTypeData,
+    };
+    use holtburger_world::WorldEvent;
+
+    let remote_guid = Guid(0x8000_0077);
+    let player_guid = Guid(0x5000_0001);
+    let event_for = |guid: Guid| MovementEventData {
+        guid,
+        object_instance_sequence: 1,
+        movement_sequence: 2,
+        server_control_sequence: 3,
+        is_autonomous: false,
+        movement_type: MovementType::Invalid,
+        // standing_longjump bit — observable registry write.
+        motion_flags: 0x02,
+        current_style: MotionStance::NonCombat.interpreted(),
+        data: MovementTypeData::Invalid(MovementInvalid::default()),
+    };
+
+    let mut movement = MovementSystem::new();
+    assert!(movement.movement_manager_for(remote_guid).is_none());
+
+    // Default-off gate: the public wrapper must be a NO-OP.
+    movement.apply_movement_world_events(&[WorldEvent::EntityMovementEvent {
+        guid: remote_guid,
+        data: Box::new(event_for(remote_guid)),
+        target_exists: false,
+    }]);
+    assert!(
+        movement.movement_manager_for(remote_guid).is_none(),
+        "USE_UNPACK_MOVEMENT_SEMANTICS is default-off — registry must not allocate"
+    );
+
+    // Gate-free: remote lane creates + applies.
+    movement.apply_movement_world_events_ungated(&[WorldEvent::EntityMovementEvent {
+        guid: remote_guid,
+        data: Box::new(event_for(remote_guid)),
+        target_exists: false,
+    }]);
+    let manager = movement
+        .movement_manager_for(remote_guid)
+        .expect("registry entry created");
+    let interp = manager.motion_interp_ref().expect("lazy minterp created");
+    assert!(interp.initted, "enter_default_state ran on lazy create");
+    assert_eq!(interp.pending_motions.len(), 1, "one Ready seed");
+    assert!(manager.standing_longjump(), "the 0x02 bit was consumed");
+
+    // Second event: no re-seed (enter_default_state exactly once).
+    movement.apply_movement_world_events_ungated(&[WorldEvent::EntityMovementEvent {
+        guid: remote_guid,
+        data: Box::new(event_for(remote_guid)),
+        target_exists: false,
+    }]);
+    assert_eq!(
+        movement
+            .movement_manager_for(remote_guid)
+            .unwrap()
+            .motion_interp_ref()
+            .unwrap()
+            .pending_motions
+            .len(),
+        1
+    );
+
+    // Local player keyed by its guid via SelfServerControlledMotion.
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion(
+        Box::new(event_for(player_guid)),
+    )]);
+    assert!(movement.movement_manager_for(player_guid).is_some());
+
+    // Despawn prunes only the despawned guid.
+    movement.apply_movement_world_events_ungated(&[WorldEvent::EntityDespawned(remote_guid)]);
+    assert!(movement.movement_manager_for(remote_guid).is_none());
+    assert!(movement.movement_manager_for(player_guid).is_some());
+}

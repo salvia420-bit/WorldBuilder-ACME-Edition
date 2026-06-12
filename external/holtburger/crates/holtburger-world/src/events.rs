@@ -89,6 +89,30 @@ pub enum WorldEvent {
         guid: Guid,
         snapshot: Option<EntityMotionSnapshot>,
     },
+    /// A3-D3 (2026-06-12, unified movement pipeline STAGE 3): the FULL
+    /// decoded movement event for a REMOTE entity's `UpdateMotion` /
+    /// `PositionAndMovementEvent`, emitted UNCONDITIONALLY per message —
+    /// retail's `MovementManager::unpack_movement` preamble
+    /// (cancel_moveto + unstick, acclient.c:339518-339519) is per-unpack,
+    /// not change-gated, so the change-gated
+    /// [`WorldEvent::EntityMotionUpdated`] above is deliberately NOT the
+    /// vehicle. The local player's lane stays
+    /// [`WorldEvent::SelfServerControlledMotion`] (its
+    /// accepted-&&-!autonomous gate is load-bearing — ACE echoes the
+    /// originator on every accepted move, Player_Networking.cs:365; an
+    /// unconditional preamble would cancel-moveto/unstick the local
+    /// player on every echo), so the emit sites skip the local guid.
+    /// Consumer: `MovementSystem::apply_movement_world_events`, gated by
+    /// the default-off `USE_UNPACK_MOVEMENT_SEMANTICS` const.
+    ///
+    /// `target_exists` is computed at emit time (`state.entities` lookup
+    /// for the MoveToObject / TurnToObject target — core cannot see
+    /// world entities at the consumer layer).
+    EntityMovementEvent {
+        guid: Guid,
+        data: Box<MovementEventData>,
+        target_exists: bool,
+    },
     RuntimeBodyChanged {
         body_id: SpatialBodyId,
     },

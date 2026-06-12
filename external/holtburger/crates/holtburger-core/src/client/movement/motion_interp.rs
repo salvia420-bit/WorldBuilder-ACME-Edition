@@ -24,7 +24,11 @@
 //! `:506-523`, `apply_run_to_command` `:525-562`, `get_state_velocity`
 //! `:678-699`).
 
-use super::interp_state::{InterpretedForwardCommand, InterpretedState};
+use super::interp_state::{
+    InterpretedForwardCommand, InterpretedState, MOTION_NONCOMBAT_STYLE,
+};
+use super::motion_table_manager::MotionTableManager;
+use super::params::MovementParameters;
 use super::raw_state::{
     HoldKey, RawAction, RawForwardCommand, RawSidestepCommand, RawState, RawTurnCommand,
 };
@@ -44,6 +48,60 @@ pub(crate) const MOTION_READY: u32 = 0x4100_0003;
 /// whose completion fires the unstick + RemoveAction chain
 /// (`acclient.c:343656-343661`; ACE `CommandMask.Action`).
 pub(crate) const MOTION_ACTION_BIT: u32 = 0x1000_0000;
+
+// A3-D3 (2026-06-12) — motion-id literals the DoMotion lattice tests
+// (decompile literals at `acclient.c:344639-344653` / `:343990` /
+// `:343764-343784`; ACE `MotionCommand`).
+pub(crate) const MOTION_DEAD: u32 = 0x4000_0011; // 1073741841
+pub(crate) const MOTION_FALLING: u32 = 0x4000_0015; // 1073741845
+pub(crate) const MOTION_CROUCH: u32 = 0x4100_0012; // 1090519058
+pub(crate) const MOTION_SITTING: u32 = 0x4100_0013; // 1090519059
+pub(crate) const MOTION_SLEEPING: u32 = 0x4100_0014; // 1090519060
+pub(crate) const MOTION_WALK_FORWARD: u32 = 0x4500_0005; // 1157627909
+pub(crate) const MOTION_WALK_BACKWARDS: u32 = 0x4500_0006; // 1157627910
+pub(crate) const MOTION_RUN_FORWARD: u32 = 0x4400_0007; // 1140850695
+pub(crate) const MOTION_TURN_RIGHT: u32 = 0x6500_000D; // 1694498829
+pub(crate) const MOTION_TURN_LEFT: u32 = 0x6500_000E; // 1694498830
+pub(crate) const MOTION_SIDESTEP_RIGHT: u32 = 0x6500_000F; // 1694498831
+pub(crate) const MOTION_SIDESTEP_LEFT: u32 = 0x6500_0010; // 1694498832
+/// `CommandMask.ChatEmote` (`motion & 0x2000000` →
+/// `CantChatEmoteInCombat`, acclient.c:344648).
+pub(crate) const COMMAND_MASK_CHAT_EMOTE: u32 = 0x0200_0000;
+
+/// Physics-side effects the DoMotion lattice would perform inline on a
+/// `CPhysicsObj` — returned instead, because our physics owner is the
+/// integrator + JS rig (A3-D3 spec §3 D3-0.4: effects-not-hooks shape).
+/// The caller (`MovementManager::apply_unpacked_movement` /
+/// future input lanes) applies them in its own domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct MotionSideEffects {
+    /// `CPhysicsObj::cancel_moveto` requested (CancelMoveTo bit,
+    /// acclient.c:344633-344634).
+    pub cancel_moveto: bool,
+    /// `CPhysicsObj::RemoveLinkAnimations` requested (Dead arm /
+    /// HitGround, acclient.c:343992-343993) — renderer-side, A4/A5
+    /// completion-layer territory.
+    pub remove_link_animations: bool,
+}
+
+/// `MovementStruct` types 1-5 — the `CMotionInterp::PerformMovement`
+/// subset (`acclient.c:344670-344720`; retail `MovementStruct.type`).
+/// Types 6-9 (MoveTo/TurnTo) live on the `MovementManager` facade enum
+/// (`movement_manager::MovementStruct`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)] // staged: input-lane constructors arrive with the Stage-3 driver / A14-I2
+pub(crate) enum MotionMovementStruct {
+    /// type 1 → `DoMotion`.
+    RawCommand { motion: u32, params: MovementParameters },
+    /// type 2 → `DoInterpretedMotion`.
+    InterpretedCommand { motion: u32, params: MovementParameters },
+    /// type 3 → `StopMotion`.
+    StopRawCommand { motion: u32, params: MovementParameters },
+    /// type 4 → `StopInterpretedMotion`.
+    StopInterpretedCommand { motion: u32, params: MovementParameters },
+    /// type 5 → `StopCompletely`.
+    StopCompletely,
+}
 
 /// `MotionInterp.RunAnimSpeed` (`MotionInterp.cs:28`; `acclient.c`
 /// `get_state_velocity` `:343580`) — the closed-form run constant used
@@ -237,6 +295,15 @@ pub(crate) struct MotionInterp {
     /// and [`Self::motion_done`] pops the head when A4's
     /// `MotionTableManager` reports completion. Head = oldest.
     pub pending_motions: VecDeque<PendingMotion>,
+    /// A3-D3 — retail `CMotionInterp::standing_longjump`: set from the
+    /// unpack case-0 flags-byte bit `0x02` (`word & 0x200`,
+    /// acclient.c:339560), suppresses the velocity-bearing locomotion
+    /// trio in `DoInterpretedMotion` (`:343990`), cleared by
+    /// [`Self::leave_ground`] (`:344471-344476`).
+    pub standing_longjump: bool,
+    /// A3-D3 — retail `CMotionInterp::initted`, set by
+    /// [`Self::enter_default_state`] (`acclient.c:344595`).
+    pub initted: bool,
 }
 
 impl Default for MotionInterp {
@@ -247,6 +314,8 @@ impl Default for MotionInterp {
             my_run_rate: 1.0,
             server_action_stamp: 0,
             pending_motions: VecDeque::new(),
+            standing_longjump: false,
+            initted: false,
         }
     }
 }
@@ -270,6 +339,10 @@ impl MotionInterp {
         let raw = &self.raw_state;
         let mut interpreted = InterpretedState {
             actions: std::mem::take(&mut self.interpreted_state.actions),
+            // A3-D3: re-interpretation never changes the stance — the
+            // style survives the rebuild (retail apply_raw_movement only
+            // rewrites the locomotion axes).
+            current_style: self.interpreted_state.current_style,
             ..InterpretedState::default()
         };
 
@@ -571,11 +644,16 @@ impl MotionInterp {
     /// `InitializeMotionTables` + `initted` + `LeaveGround` are
     /// physics/renderer-side (`CPhysicsObj`) and stay with their owners
     /// (DESIGN.md STAGE 2 AMENDMENT / LeaveGround fan-out section).
-    #[allow(dead_code)] // staged: stage-3 per-entity construction (DESIGN.md STAGE 3 AMENDMENT)
     pub(crate) fn enter_default_state(&mut self) {
         self.raw_state = RawState::default();
         self.interpreted_state = InterpretedState::default();
         self.add_to_queue(0, MOTION_READY, 0);
+        // A3-D3: the retail tail — `initted = 1; LeaveGround(this)`
+        // (acclient.c:344595-344596). The LeaveGround velocity stamp is
+        // physics-side (D3-5, movement/system.rs); the state half clears
+        // `standing_longjump`.
+        self.initted = true;
+        self.leave_ground();
     }
 
     /// `CMotionInterp::ReportExhaustion` (`acclient.c:344318-344332`;
@@ -598,6 +676,474 @@ impl MotionInterp {
             self.apply_raw_movement(inq_run_rate);
         }
     }
+
+    // ------------------------------------------------------------------
+    // STAGE 3 (A3-D3, 2026-06-12): the DoMotion entry lattice —
+    // `CMotionInterp::{DoMotion, DoInterpretedMotion,
+    // StopInterpretedMotion, StopMotion, PerformMovement}` ports.
+    // Physics-obj-null (retail error 8, `WeenieError.NoPhysicsObject`,
+    // acclient.c:344616) is structurally unreachable here: a
+    // `MotionInterp` only exists inside a registry entry that IS the
+    // physics owner — documented, not ported. Physics side effects ride
+    // [`MotionSideEffects`], never inline (spec D3-0.4).
+    // ------------------------------------------------------------------
+
+    /// `CMotionInterp::InqStyle` — the interpreted state's full 32-bit
+    /// current style (`acclient.c:339541`; ACE `MotionInterp.cs:187-190`).
+    pub(crate) fn inq_style(&self) -> u32 {
+        self.interpreted_state.current_style
+    }
+
+    /// `CMotionInterp::contact_allows_move` (`acclient.c:343882-343919`;
+    /// ACE `MotionInterp.cs` `contact_allows_move`): TurnRight/TurnLeft
+    /// and Dead/Falling are exempt; everything else needs walkable
+    /// contact. The retail non-creature-weenie and gravity-less
+    /// exemptions are object-class properties our per-entity callers
+    /// fold into `on_walkable_contact` (server-controlled remotes pass
+    /// `true`: the server is authoritative — see
+    /// `apply_unpacked_movement`).
+    pub(crate) fn contact_allows_move(motion: u32, on_walkable_contact: bool) -> bool {
+        matches!(
+            motion,
+            MOTION_TURN_RIGHT | MOTION_TURN_LEFT | MOTION_DEAD | MOTION_FALLING
+        ) || on_walkable_contact
+    }
+
+    /// Map the wire/params `hold_key_to_apply` value onto the runtime
+    /// [`HoldKey`] (retail enum: 0 Invalid, 1 None, 2 Run).
+    fn hold_key_from_raw(raw: u32) -> HoldKey {
+        match raw {
+            1 => HoldKey::NoKey,
+            2 => HoldKey::Run,
+            _ => HoldKey::Invalid,
+        }
+    }
+
+    /// `CMotionInterp::SetHoldKey` (`acclient.c:344526+`; ACE
+    /// `MotionInterp.cs:274-287`): only the Run→None downgrade
+    /// re-derives the held interpretation (ACE's switch handles ONLY the
+    /// `HoldKey.None` arm; an `Invalid` key — the params default — is a
+    /// no-op). The retail `cancel_moveto` ride-along is a physics side
+    /// effect already carried by the caller's CancelMoveTo bit.
+    pub(crate) fn set_hold_key_from_params(&mut self, raw_key: u32, inq_run_rate: Option<f32>) {
+        let key = Self::hold_key_from_raw(raw_key);
+        if key == self.raw_state.current_holdkey {
+            return;
+        }
+        if key == HoldKey::NoKey && self.raw_state.current_holdkey == HoldKey::Run {
+            self.raw_state.current_holdkey = HoldKey::NoKey;
+            self.apply_raw_movement(inq_run_rate);
+        }
+    }
+
+    /// `CMotionInterp::adjust_motion`, the u32-command form the DoMotion
+    /// lattice runs (`acclient.c:343746-343803`): WalkBackwards →
+    /// WalkForward × `-BackwardsFactor`; TurnLeft → TurnRight negated;
+    /// SideStepRight × `SidestepFactor × (Walk/Sidestep)`; SideStepLeft →
+    /// SideStepRight negated then scaled; RunForward passes through
+    /// untouched (no hold-key application); then the resolved Run hold
+    /// key applies [`Self::apply_run_to_command_u32`].
+    pub(crate) fn adjust_motion_command(
+        &mut self,
+        motion: &mut u32,
+        speed: &mut f32,
+        key: u32,
+        inq_run_rate: Option<f32>,
+    ) {
+        let sidestep_adjust = SIDESTEP_FACTOR * (WALK_ANIM_SPEED / SIDESTEP_ANIM_SPEED);
+        match *motion {
+            MOTION_RUN_FORWARD => return,
+            MOTION_WALK_BACKWARDS => {
+                *motion = MOTION_WALK_FORWARD;
+                *speed *= -BACKWARDS_FACTOR;
+            }
+            MOTION_TURN_LEFT => {
+                *motion = MOTION_TURN_RIGHT;
+                *speed = -*speed;
+            }
+            MOTION_SIDESTEP_RIGHT => {
+                *speed *= sidestep_adjust;
+            }
+            MOTION_SIDESTEP_LEFT => {
+                *motion = MOTION_SIDESTEP_RIGHT;
+                *speed = -*speed * sidestep_adjust;
+            }
+            _ => {}
+        }
+        if Self::hold_key_from_raw(key).resolve(self.raw_state.current_holdkey) == HoldKey::Run {
+            self.apply_run_to_command_u32(motion, speed, inq_run_rate);
+        }
+    }
+
+    /// `CMotionInterp::apply_run_to_command`, u32 form
+    /// (`acclient.c:343439-343483`): a positive WalkForward promotes to
+    /// RunForward and run-scales; TurnRight × fixed 1.5; SideStepRight
+    /// run-scales then clamps at ±3.0.
+    fn apply_run_to_command_u32(&self, motion: &mut u32, speed: &mut f32, inq: Option<f32>) {
+        let run_rate = self.run_rate(inq);
+        match *motion {
+            MOTION_WALK_FORWARD => {
+                if *speed > 0.0 {
+                    *motion = MOTION_RUN_FORWARD;
+                }
+                *speed *= run_rate;
+            }
+            MOTION_TURN_RIGHT => {
+                *speed *= RUN_TURN_FACTOR;
+            }
+            MOTION_SIDESTEP_RIGHT => {
+                *speed = (*speed * run_rate)
+                    .clamp(-MAX_SIDESTEP_ANIM_RATE, MAX_SIDESTEP_ANIM_RATE);
+            }
+            _ => {}
+        }
+    }
+
+    /// `CMotionInterp::DoInterpretedMotion` (`acclient.c:343975-344031`;
+    /// ACE `MotionInterp.cs:51-110`). Contact-fail + action → `Err(36)`
+    /// (`YouCantJumpWhileInTheAir`); contact-fail + non-action →
+    /// interp-apply-only success; `standing_longjump` suppresses exactly
+    /// {WalkForward, RunForward, SideStepRight} (`:343990`); Dead →
+    /// RemoveLinkAnimations effect (`:343992-343993`); the
+    /// `CPhysicsObj::DoInterpretedMotion` inner body (sequence playback)
+    /// is the A4-Q1 `motion_table_manager` enqueue (DESIGN.md:399-413,
+    /// num_anims = 1-per-realized-motion, S5 convention); jump_error =
+    /// 72 under DisableJumpDuringLink, else the motion's own
+    /// `motion_allows_jump`, non-actions falling back to the interpreted
+    /// forward command's (`:343996-344005`).
+    pub(crate) fn do_interpreted_motion(
+        &mut self,
+        motion: u32,
+        params: &MovementParameters,
+        on_walkable_contact: bool,
+        motion_table_manager: &mut MotionTableManager,
+        effects: &mut MotionSideEffects,
+    ) -> Result<(), u32> {
+        if !Self::contact_allows_move(motion, on_walkable_contact) {
+            if motion & MOTION_ACTION_BIT != 0 {
+                return Err(36);
+            }
+            if params.modify_interpreted_state() {
+                self.interpreted_state.apply_motion(motion, params.speed);
+            }
+            return Ok(());
+        }
+        if self.standing_longjump
+            && matches!(
+                motion,
+                MOTION_WALK_FORWARD | MOTION_RUN_FORWARD | MOTION_SIDESTEP_RIGHT
+            )
+        {
+            if params.modify_interpreted_state() {
+                self.interpreted_state.apply_motion(motion, params.speed);
+            }
+            return Ok(());
+        }
+        if motion == MOTION_DEAD {
+            effects.remove_link_animations = true;
+        }
+        motion_table_manager.queue_object_motion(motion, 1);
+        let jump_error = if params.disable_jump_during_link() {
+            72
+        } else {
+            let mut error = motion_allows_jump(motion);
+            if error == 0 && motion & MOTION_ACTION_BIT == 0 {
+                error = motion_allows_jump(self.interpreted_forward_motion_id());
+            }
+            error
+        };
+        self.add_to_queue(params.context_id, motion, jump_error);
+        if params.modify_interpreted_state() {
+            self.interpreted_state.apply_motion(motion, params.speed);
+        }
+        Ok(())
+    }
+
+    /// `CMotionInterp::DoMotion` — THE entry lattice
+    /// (`acclient.c:344600-344666`; ACE `MotionInterp.cs:112-158`):
+    /// CancelMoveTo bit → effect; SetHoldKey bit → [`Self::
+    /// set_hold_key_from_params`]; `adjust_motion`; style gate (only
+    /// when `current_style != NonCombat`): Crouch → 63, Sitting → 64,
+    /// Sleeping → 65, ChatEmote mask → 66 — all tested against the
+    /// ORIGINAL (pre-adjust) motion, exactly as retail's `v6`; action
+    /// bit + `GetNumActions() >= 6` → 69; then `DoInterpretedMotion`
+    /// with the ADJUSTED motion/speed; on success the ModifyRawState
+    /// bit applies the ORIGINAL motion to the raw state.
+    pub(crate) fn do_motion(
+        &mut self,
+        motion: u32,
+        params: &MovementParameters,
+        on_walkable_contact: bool,
+        inq_run_rate: Option<f32>,
+        motion_table_manager: &mut MotionTableManager,
+        effects: &mut MotionSideEffects,
+    ) -> Result<(), u32> {
+        let mut adjusted_params = *params;
+        let mut adjusted_motion = motion;
+        if params.cancel_moveto() {
+            effects.cancel_moveto = true;
+        }
+        if params.set_hold_key() {
+            self.set_hold_key_from_params(params.hold_key_to_apply, inq_run_rate);
+        }
+        self.adjust_motion_command(
+            &mut adjusted_motion,
+            &mut adjusted_params.speed,
+            params.hold_key_to_apply,
+            inq_run_rate,
+        );
+        if self.interpreted_state.current_style != MOTION_NONCOMBAT_STYLE {
+            match motion {
+                MOTION_CROUCH => return Err(63),
+                MOTION_SITTING => return Err(64),
+                MOTION_SLEEPING => return Err(65),
+                _ => {}
+            }
+            if motion & COMMAND_MASK_CHAT_EMOTE != 0 {
+                return Err(66);
+            }
+        }
+        if motion & MOTION_ACTION_BIT != 0 && self.interpreted_state.num_actions() >= 6 {
+            return Err(69);
+        }
+        self.do_interpreted_motion(
+            adjusted_motion,
+            &adjusted_params,
+            on_walkable_contact,
+            motion_table_manager,
+            effects,
+        )?;
+        if params.modify_raw_state() {
+            self.raw_state.apply_motion_u32(motion, params);
+        }
+        Ok(())
+    }
+
+    /// `CMotionInterp::StopInterpretedMotion` (`acclient.c:344034-344078`):
+    /// contact-fail OR standing-longjump-suppressed trio → interp
+    /// RemoveMotion only, success; else the
+    /// `CPhysicsObj::StopInterpretedMotion` analog (Stop → Ready node on
+    /// the A4-Q1 queue), an observable Ready (`0x41000003`) completion
+    /// node on `pending_motions`, then the ModifyInterpretedState
+    /// removal.
+    pub(crate) fn stop_interpreted_motion(
+        &mut self,
+        motion: u32,
+        params: &MovementParameters,
+        on_walkable_contact: bool,
+        motion_table_manager: &mut MotionTableManager,
+        _effects: &mut MotionSideEffects,
+    ) -> Result<(), u32> {
+        let suppressed = !Self::contact_allows_move(motion, on_walkable_contact)
+            || (self.standing_longjump
+                && matches!(
+                    motion,
+                    MOTION_WALK_FORWARD | MOTION_RUN_FORWARD | MOTION_SIDESTEP_RIGHT
+                ));
+        if suppressed {
+            if params.modify_interpreted_state() {
+                self.interpreted_state.remove_motion(motion);
+            }
+            return Ok(());
+        }
+        motion_table_manager.queue_object_motion_stop(1);
+        self.add_to_queue(params.context_id, MOTION_READY, 0);
+        if params.modify_interpreted_state() {
+            self.interpreted_state.remove_motion(motion);
+        }
+        Ok(())
+    }
+
+    /// `CMotionInterp::StopMotion` (`acclient.c:344081-344143`):
+    /// CancelMoveTo bit → effect; copy params; `adjust_motion`;
+    /// `StopInterpretedMotion` with the adjusted motion; on success the
+    /// ModifyRawState bit removes the ORIGINAL motion from the raw
+    /// state (`RawMotionState::RemoveMotion`, `:344133-344135`).
+    pub(crate) fn stop_motion(
+        &mut self,
+        motion: u32,
+        params: &MovementParameters,
+        on_walkable_contact: bool,
+        inq_run_rate: Option<f32>,
+        motion_table_manager: &mut MotionTableManager,
+        effects: &mut MotionSideEffects,
+    ) -> Result<(), u32> {
+        if params.cancel_moveto() {
+            effects.cancel_moveto = true;
+        }
+        let mut adjusted_params = *params;
+        let mut adjusted_motion = motion;
+        self.adjust_motion_command(
+            &mut adjusted_motion,
+            &mut adjusted_params.speed,
+            params.hold_key_to_apply,
+            inq_run_rate,
+        );
+        self.stop_interpreted_motion(
+            adjusted_motion,
+            &adjusted_params,
+            on_walkable_contact,
+            motion_table_manager,
+            effects,
+        )?;
+        if params.modify_raw_state() {
+            self.raw_state.remove_motion_u32(motion);
+        }
+        Ok(())
+    }
+
+    /// `CMotionInterp::PerformMovement` (`acclient.c:344670-344720`;
+    /// ACE `MotionInterp.cs:236-258`): 5-way dispatch with the A4-Q1
+    /// completion pump (`check_for_completed_motions`) after EVERY arm —
+    /// a zero-anim motion completes inside the same call. The retail
+    /// `default → 71` arm is made unreachable by the typed
+    /// [`MotionMovementStruct`]; the facade
+    /// (`movement_manager::MovementManager::perform_movement`) owns the
+    /// type 6-9 routing and the residual 71.
+    pub(crate) fn perform_movement(
+        &mut self,
+        mvs: &MotionMovementStruct,
+        on_walkable_contact: bool,
+        inq_run_rate: Option<f32>,
+        motion_table_manager: &mut MotionTableManager,
+        effects: &mut MotionSideEffects,
+    ) -> Result<(), u32> {
+        let result = match mvs {
+            MotionMovementStruct::RawCommand { motion, params } => self.do_motion(
+                *motion,
+                params,
+                on_walkable_contact,
+                inq_run_rate,
+                motion_table_manager,
+                effects,
+            ),
+            MotionMovementStruct::InterpretedCommand { motion, params } => self
+                .do_interpreted_motion(
+                    *motion,
+                    params,
+                    on_walkable_contact,
+                    motion_table_manager,
+                    effects,
+                ),
+            MotionMovementStruct::StopRawCommand { motion, params } => self.stop_motion(
+                *motion,
+                params,
+                on_walkable_contact,
+                inq_run_rate,
+                motion_table_manager,
+                effects,
+            ),
+            MotionMovementStruct::StopInterpretedCommand { motion, params } => self
+                .stop_interpreted_motion(
+                    *motion,
+                    params,
+                    on_walkable_contact,
+                    motion_table_manager,
+                    effects,
+                ),
+            MotionMovementStruct::StopCompletely => {
+                self.stop_completely();
+                Ok(())
+            }
+        };
+        motion_table_manager.check_for_completed_motions();
+        result
+    }
+
+    /// `CMotionInterp::LeaveGround`, state half
+    /// (`acclient.c:344457-344490`; ACE `MotionInterp.cs:192-208`):
+    /// clear `standing_longjump` (+ retail's `jump_extent`, which lives
+    /// with the charge owner here). The launch-velocity stamp is the
+    /// D3-5 `USE_LEAVE_GROUND_VELOCITY` slice in `movement/system.rs`;
+    /// RemoveLinkAnimations is renderer-side (A4/A5).
+    pub(crate) fn leave_ground(&mut self) {
+        self.standing_longjump = false;
+    }
+
+    /// `CMotionInterp::HitGround` (ACE `MotionInterp.cs:175-185`):
+    /// RemoveLinkAnimations effect + `apply_current_movement` re-derive
+    /// (autonomous arm only — the server-controlled arm is the wire's
+    /// own next UpdateMotion).
+    #[allow(dead_code)] // staged: facade fan-out consumer is the Stage-3 driver / A1 tick spine
+    pub(crate) fn hit_ground(
+        &mut self,
+        last_move_was_autonomous: bool,
+        inq_run_rate: Option<f32>,
+        effects: &mut MotionSideEffects,
+    ) {
+        effects.remove_link_animations = true;
+        self.apply_current_movement(last_move_was_autonomous, inq_run_rate);
+    }
+}
+
+/// Convert the WIRE `InterpretedMotionState`
+/// (`holtburger-protocol/src/messages/movement/types.rs:226`) into the
+/// runtime [`InterpretedState`] + the stamped server-action list
+/// [`super::raw_state::RawAction`] that
+/// [`MotionInterp::move_to_interpreted_state`] consumes — the
+/// `InterpretedMotionState::UnPack` → `move_to_interpreted_state` seam of
+/// `unpack_movement` case 0 (acclient.c:339546-339557). Wire commands are
+/// the server's POST-adjust normal form, so forward only carries
+/// WalkForward (`0x0005`) / RunForward (`0x0007`) — anything else maps to
+/// "no locomotion" (`None`); a non-normalized SideStepLeft / TurnLeft is
+/// folded into the signed speed defensively. Wire action commands expand
+/// through the shared low16 expander
+/// (`holtburger_world::player::expand_motion_command_low16`); misses are
+/// skipped fail-soft (same policy as `EntityMotionSnapshot`).
+pub(crate) fn interpreted_state_from_wire(
+    wire: &holtburger_protocol::messages::movement::InterpretedMotionState,
+) -> (InterpretedState, Vec<RawAction>) {
+    let mut state = InterpretedState::default();
+    if let Some(style16) = wire.current_style {
+        // Style dwords all carry the 0x80000000 class prefix
+        // (command_ids_0[] expansion of the wire low16).
+        state.current_style = 0x8000_0000 | u32::from(style16);
+    }
+    state.forward_command = match wire.forward_command.map(|c| c.raw()) {
+        Some(0x0005) => Some(InterpretedForwardCommand::WalkForward),
+        Some(0x0007) => Some(InterpretedForwardCommand::RunForward),
+        _ => None,
+    };
+    if let Some(speed) = wire.forward_speed {
+        state.forward_speed = speed;
+    }
+    match wire.sidestep_command.map(|c| c.raw()) {
+        Some(0x000F) => {
+            state.sidestep = true;
+            state.sidestep_speed = wire.sidestep_speed.unwrap_or(1.0);
+        }
+        Some(0x0010) => {
+            state.sidestep = true;
+            state.sidestep_speed = -wire.sidestep_speed.unwrap_or(1.0);
+        }
+        _ => {}
+    }
+    match wire.turn_command.map(|c| c.raw()) {
+        Some(0x000D) => {
+            state.turn = true;
+            state.turn_speed = wire.turn_speed.unwrap_or(1.0);
+        }
+        Some(0x000E) => {
+            state.turn = true;
+            state.turn_speed = -wire.turn_speed.unwrap_or(1.0);
+        }
+        _ => {}
+    }
+    let actions = wire
+        .commands
+        .iter()
+        .filter_map(|item| {
+            let full =
+                holtburger_world::player::expand_motion_command_low16(item.command.raw())?;
+            Some(RawAction {
+                action: full,
+                speed: item.speed,
+                stamp: item.sequence(),
+                autonomous: item.is_autonomous(),
+            })
+        })
+        .collect();
+    (state, actions)
 }
 
 /// STAGE-1 integrator entry point — the unified-pipeline replacement for
@@ -632,6 +1178,39 @@ pub(crate) fn interpreted_velocity_for_state(
         capabilities.base_walk_forward_speed(),
         capabilities.base_run_forward_speed(),
     );
+    planar_velocity_for_heading(heading, body.y)
+        + planar_velocity_for_heading(heading + FRAC_PI_2, body.x)
+}
+
+/// A3-D3-5 (`USE_LEAVE_GROUND_VELOCITY`) — the retail launch-velocity
+/// form for a NON-charged airborne transition:
+/// `CMotionInterp::get_leave_ground_velocity` (acclient.c:343806-343843,
+/// consumed by `LeaveGround` :344457-344490; ACE `MotionInterp.cs:192`)
+/// = the CLAMPED closed-form [`MotionInterp::get_state_velocity`]
+/// (magnitude capped at `run_rate × 4.0`) rotated into the world frame,
+/// **falling back to the integrator's transformed velocity when the
+/// closed form is ~zero** (retail per-component epsilon `0.0002`,
+/// acclient.c:343826). The Z component is owned by the jump/fall arc
+/// (`get_jump_v_z` half), so this returns the planar launch velocity
+/// only. Replaces the unclamped planar-store freeze for walk-off-ledge
+/// departures (survey A3 §3 row 6: diagonal run+strafe launched ~5.7 m/s
+/// vs retail's `4.0 × rate` cap).
+pub(crate) fn leave_ground_velocity_for_state(
+    heading: f32,
+    state: MotionState,
+    capabilities: &SelfMovementCapabilities,
+    integrator_velocity: Vector3,
+) -> Vector3 {
+    const LEAVE_GROUND_EPSILON: f32 = 0.000_199_999_99;
+    let mut interp = MotionInterp {
+        raw_state: RawState::from_motion_state(state),
+        ..MotionInterp::default()
+    };
+    interp.apply_raw_movement(Some(capabilities.run_rate_scalar));
+    let body = interp.get_state_velocity(Some(capabilities.run_rate_scalar));
+    if body.x.abs() < LEAVE_GROUND_EPSILON && body.y.abs() < LEAVE_GROUND_EPSILON {
+        return integrator_velocity;
+    }
     planar_velocity_for_heading(heading, body.y)
         + planar_velocity_for_heading(heading + FRAC_PI_2, body.x)
 }
@@ -1223,5 +1802,503 @@ mod tests {
         interp.apply_raw_movement(Some(2.0));
         interp.report_exhaustion(false, Some(1.0));
         assert!((interp.interpreted_state.forward_speed - 2.0).abs() < 1e-6);
+    }
+
+    // ------------------------------------------------------------------
+    // STAGE 3 (A3-D3, 2026-06-12): the DoMotion lattice.
+    // ------------------------------------------------------------------
+
+    /// Style errors fire ONLY when `current_style != NonCombat`
+    /// (acclient.c:344639-344649): Crouch→63, Sitting→64, Sleeping→65,
+    /// ChatEmote mask→66; in NonCombat the same motions pass into the
+    /// queue.
+    #[test]
+    fn do_motion_style_gate_fires_only_in_combat() {
+        let chat_emote = 0x1300_0079_u32; // ShakeFist (0x02000000 mask set)
+        let params = MovementParameters::default();
+        let mut mtm = MotionTableManager::new();
+        let mut effects = MotionSideEffects::default();
+
+        let mut combat = MotionInterp::default();
+        combat.interpreted_state.current_style = 0x8000_003E; // SwordCombat
+        assert_eq!(
+            combat.do_motion(0x4100_0012, &params, true, None, &mut mtm, &mut effects),
+            Err(63)
+        );
+        assert_eq!(
+            combat.do_motion(0x4100_0013, &params, true, None, &mut mtm, &mut effects),
+            Err(64)
+        );
+        assert_eq!(
+            combat.do_motion(0x4100_0014, &params, true, None, &mut mtm, &mut effects),
+            Err(65)
+        );
+        assert_eq!(
+            combat.do_motion(chat_emote, &params, true, None, &mut mtm, &mut effects),
+            Err(66)
+        );
+        assert!(!combat.motions_pending(), "rejections must not enqueue");
+
+        let mut noncombat = MotionInterp::default();
+        assert_eq!(noncombat.inq_style(), 0x8000_003D);
+        assert_eq!(
+            noncombat.do_motion(0x4100_0012, &params, true, None, &mut mtm, &mut effects),
+            Ok(())
+        );
+        assert_eq!(
+            noncombat.do_motion(chat_emote, &params, true, None, &mut mtm, &mut effects),
+            Ok(())
+        );
+        assert_eq!(noncombat.pending_motions.len(), 2, "NonCombat passes the gate");
+    }
+
+    /// The 6-action FIFO cap → 69 (acclient.c:344651-344653): the cap
+    /// counts only `0x10000000`-class actions; a 7th refuses BEFORE any
+    /// dispatch.
+    #[test]
+    fn do_motion_action_cap_refuses_seventh_with_69() {
+        let params = MovementParameters::default();
+        let mut mtm = MotionTableManager::new();
+        let mut effects = MotionSideEffects::default();
+        let mut interp = MotionInterp::default();
+        for i in 0..6 {
+            interp.interpreted_state.apply_action(0x1000_0060 + i, 1.0);
+        }
+        let queued_before = interp.pending_motions.len();
+        assert_eq!(
+            interp.do_motion(0x1000_0066, &params, true, None, &mut mtm, &mut effects),
+            Err(69)
+        );
+        assert_eq!(interp.pending_motions.len(), queued_before, "69 enqueues nothing");
+        // A non-action motion is NOT capped.
+        assert_eq!(
+            interp.do_motion(MOTION_READY, &params, true, None, &mut mtm, &mut effects),
+            Ok(())
+        );
+    }
+
+    /// Bit semantics (acclient.c:344633-344662): CancelMoveTo(bit15) →
+    /// effect; ModifyRawState(bit13) applies the raw state ONLY on
+    /// success; ModifyInterpretedState(bit14) applies/removes the
+    /// interpreted state; SetHoldKey(bit11) routes the Run→None
+    /// downgrade through the re-derive.
+    #[test]
+    fn do_motion_bit_semantics() {
+        let params = MovementParameters::default();
+        let mut mtm = MotionTableManager::new();
+
+        // Success: cancel effect set, raw + interp applied.
+        let mut interp = MotionInterp::default();
+        let mut effects = MotionSideEffects::default();
+        assert_eq!(
+            interp.do_motion(MOTION_WALK_FORWARD, &params, true, None, &mut mtm, &mut effects),
+            Ok(())
+        );
+        assert!(effects.cancel_moveto, "default params carry CancelMoveTo");
+        assert_eq!(
+            interp.raw_state.forward_command,
+            Some(RawForwardCommand::WalkForward),
+            "ModifyRawState applied on success"
+        );
+        assert_eq!(
+            interp.interpreted_state.forward_command,
+            Some(InterpretedForwardCommand::WalkForward),
+            "ModifyInterpretedState applied"
+        );
+
+        // Failure (contact-fail + action): raw NOT applied.
+        let mut interp = MotionInterp::default();
+        let mut effects = MotionSideEffects::default();
+        assert_eq!(
+            interp.do_motion(0x1000_0062, &params, false, None, &mut mtm, &mut effects),
+            Err(36)
+        );
+        assert!(interp.raw_state.actions.is_empty(), "no raw apply on failure");
+        assert_eq!(interp.interpreted_state.num_actions(), 0);
+
+        // No-modify bits: nothing written even on success.
+        let bare = MovementParameters {
+            bitfield: 0,
+            ..MovementParameters::default()
+        };
+        let mut interp = MotionInterp::default();
+        let mut effects = MotionSideEffects::default();
+        assert_eq!(
+            interp.do_motion(MOTION_WALK_FORWARD, &bare, true, None, &mut mtm, &mut effects),
+            Ok(())
+        );
+        assert!(!effects.cancel_moveto);
+        assert_eq!(interp.raw_state.forward_command, None);
+        assert_eq!(interp.interpreted_state.forward_command, None);
+        assert_eq!(interp.pending_motions.len(), 1, "the queue node still lands");
+
+        // SetHoldKey Run→None downgrade re-derives the held forward.
+        let mut interp = MotionInterp::default();
+        interp.raw_state.current_holdkey = HoldKey::Run;
+        interp.raw_state.apply_forward(RawForwardCommand::WalkForward, 1.0, HoldKey::Invalid);
+        interp.apply_raw_movement(Some(2.0));
+        assert_eq!(
+            interp.interpreted_state.forward_command,
+            Some(InterpretedForwardCommand::RunForward)
+        );
+        let downgrade = MovementParameters {
+            hold_key_to_apply: 1, // HoldKey::None
+            ..MovementParameters::default()
+        };
+        let mut effects = MotionSideEffects::default();
+        assert_eq!(
+            interp.do_motion(
+                MOTION_TURN_RIGHT,
+                &downgrade,
+                true,
+                Some(2.0),
+                &mut mtm,
+                &mut effects
+            ),
+            Ok(())
+        );
+        assert_eq!(interp.raw_state.current_holdkey, HoldKey::NoKey);
+        assert_eq!(
+            interp.interpreted_state.forward_command,
+            Some(InterpretedForwardCommand::WalkForward),
+            "held forward re-derived at the downgraded key"
+        );
+        assert!((interp.interpreted_state.forward_speed - 1.0).abs() < 1e-6);
+    }
+
+    /// `do_interpreted_motion` matrix (acclient.c:343975-344031):
+    /// jump_error 72 under DisableJumpDuringLink; an action carries its
+    /// OWN `motion_allows_jump`; contact-fail + action → 36;
+    /// contact-fail + non-action → interp-apply-only success;
+    /// standing_longjump suppresses exactly the velocity trio.
+    #[test]
+    fn do_interpreted_motion_matrix() {
+        let params = MovementParameters::default();
+
+        // DisableJumpDuringLink → head jump error 72.
+        let mut interp = MotionInterp::default();
+        let mut mtm = MotionTableManager::new();
+        let mut effects = MotionSideEffects::default();
+        let charging = MovementParameters {
+            bitfield: MovementParameters::default().bitfield | 0x2_0000,
+            ..MovementParameters::default()
+        };
+        interp
+            .do_interpreted_motion(MOTION_WALK_FORWARD, &charging, true, &mut mtm, &mut effects)
+            .unwrap();
+        assert_eq!(interp.pending_jump_error(), 72);
+        interp.motion_done(true);
+
+        // Action keeps its OWN motion_allows_jump (0x1000006F =
+        // MagicPowerUp01 blocks); a permitted action stays 0 (no
+        // forward-command fallback for actions).
+        interp
+            .do_interpreted_motion(0x1000_006F, &params, true, &mut mtm, &mut effects)
+            .unwrap();
+        assert_eq!(interp.pending_jump_error(), 72);
+        interp.motion_done(true);
+        interp
+            .do_interpreted_motion(0x1000_0062, &params, true, &mut mtm, &mut effects)
+            .unwrap();
+        assert_eq!(interp.pending_jump_error(), 0);
+        interp.motion_done(true);
+
+        // Dead → RemoveLinkAnimations effect.
+        let mut effects = MotionSideEffects::default();
+        interp
+            .do_interpreted_motion(MOTION_DEAD, &params, true, &mut mtm, &mut effects)
+            .unwrap();
+        assert!(effects.remove_link_animations);
+        interp.motion_done(true);
+
+        // Contact-fail + action → 36 and NOTHING enqueued anywhere.
+        let mut interp = MotionInterp::default();
+        let mut mtm = MotionTableManager::new();
+        let mut effects = MotionSideEffects::default();
+        assert_eq!(
+            interp.do_interpreted_motion(0x1000_0062, &params, false, &mut mtm, &mut effects),
+            Err(36)
+        );
+        assert!(!interp.motions_pending());
+        mtm.animation_done(true);
+        assert!(mtm.drain_events().is_empty(), "no MTM node was queued");
+
+        // Contact-fail + non-action → interp-apply-only success.
+        assert_eq!(
+            interp.do_interpreted_motion(
+                MOTION_WALK_FORWARD,
+                &params,
+                false,
+                &mut mtm,
+                &mut effects
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            interp.interpreted_state.forward_command,
+            Some(InterpretedForwardCommand::WalkForward),
+            "interp applied"
+        );
+        assert!(!interp.motions_pending(), "no completion node on the contact-fail arm");
+
+        // Dead/Falling and the turn commands are contact-exempt.
+        assert!(MotionInterp::contact_allows_move(MOTION_DEAD, false));
+        assert!(MotionInterp::contact_allows_move(MOTION_FALLING, false));
+        assert!(MotionInterp::contact_allows_move(MOTION_TURN_RIGHT, false));
+        assert!(MotionInterp::contact_allows_move(MOTION_TURN_LEFT, false));
+        assert!(!MotionInterp::contact_allows_move(MOTION_WALK_FORWARD, false));
+
+        // standing_longjump suppresses EXACTLY the velocity trio.
+        let mut interp = MotionInterp::default();
+        let mut mtm = MotionTableManager::new();
+        interp.standing_longjump = true;
+        for motion in [MOTION_WALK_FORWARD, MOTION_RUN_FORWARD, MOTION_SIDESTEP_RIGHT] {
+            let mut effects = MotionSideEffects::default();
+            assert_eq!(
+                interp.do_interpreted_motion(motion, &params, true, &mut mtm, &mut effects),
+                Ok(())
+            );
+            assert!(!interp.motions_pending(), "suppressed motion {motion:#X} must not enqueue");
+        }
+        let mut effects = MotionSideEffects::default();
+        interp
+            .do_interpreted_motion(MOTION_TURN_RIGHT, &params, true, &mut mtm, &mut effects)
+            .unwrap();
+        assert!(interp.motions_pending(), "turning is NOT suppressed by the charge");
+        // leave_ground clears the charge (acclient.c:344471-344476).
+        interp.leave_ground();
+        assert!(!interp.standing_longjump);
+    }
+
+    /// Stop arms: `stop_interpreted_motion` enqueues an observable Ready
+    /// node + RemoveMotion under the bit; `stop_motion` adjusts then
+    /// removes the ORIGINAL from the raw state
+    /// (acclient.c:344034-344143).
+    #[test]
+    fn stop_arms_enqueue_ready_and_remove_motions() {
+        let params = MovementParameters::default();
+        let mut mtm = MotionTableManager::new();
+        let mut effects = MotionSideEffects::default();
+
+        let mut interp = MotionInterp::default();
+        interp
+            .do_motion(MOTION_WALK_FORWARD, &params, true, None, &mut mtm, &mut effects)
+            .unwrap();
+        assert_eq!(
+            interp.raw_state.forward_command,
+            Some(RawForwardCommand::WalkForward)
+        );
+        interp.motion_done(true);
+
+        interp
+            .stop_motion(MOTION_WALK_FORWARD, &params, true, None, &mut mtm, &mut effects)
+            .unwrap();
+        assert_eq!(
+            interp.pending_motions.front(),
+            Some(&PendingMotion {
+                context_id: 0,
+                motion: MOTION_READY,
+                jump_error_code: 0
+            })
+        );
+        assert_eq!(interp.raw_state.forward_command, None, "raw RemoveMotion ran");
+        assert_eq!(
+            interp.interpreted_state.forward_command, None,
+            "interp RemoveMotion ran"
+        );
+    }
+
+    /// `perform_movement` runs the A4-Q1 completion pump after EVERY
+    /// arm (acclient.c:344684-344704): a pre-queued zero-anim node
+    /// completes inside the same call, observable via the drained
+    /// `MotionDone` event.
+    #[test]
+    fn perform_movement_pumps_completions_after_every_arm() {
+        let mut interp = MotionInterp::default();
+        let mut mtm = MotionTableManager::new();
+        let mut effects = MotionSideEffects::default();
+
+        // Zero-anim node = completes on the next pump.
+        mtm.add_to_queue(MOTION_READY, 0);
+        interp
+            .perform_movement(
+                &MotionMovementStruct::StopCompletely,
+                true,
+                None,
+                &mut mtm,
+                &mut effects,
+            )
+            .unwrap();
+        let events = mtm.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(
+                    event,
+                    super::super::motion_table_manager::MotionTableEvent::MotionDone {
+                        motion,
+                        success: true
+                    } if *motion == MOTION_READY
+                )),
+            "the pump must run inside the same perform_movement call: {events:?}"
+        );
+
+        // And a Do arm pumps too.
+        mtm.add_to_queue(MOTION_READY, 0);
+        interp
+            .perform_movement(
+                &MotionMovementStruct::InterpretedCommand {
+                    motion: MOTION_WALK_FORWARD,
+                    params: MovementParameters::default(),
+                },
+                true,
+                None,
+                &mut mtm,
+                &mut effects,
+            )
+            .unwrap();
+        assert!(!mtm.drain_events().is_empty());
+    }
+
+    /// `enter_default_state` (acclient.c:344560-344597): Ready seed +
+    /// `initted` + the LeaveGround tail clears `standing_longjump`.
+    #[test]
+    fn enter_default_state_sets_initted_and_leaves_ground() {
+        let mut interp = MotionInterp::default();
+        interp.standing_longjump = true;
+        assert!(!interp.initted);
+        interp.enter_default_state();
+        assert!(interp.initted);
+        assert!(!interp.standing_longjump, "LeaveGround tail ran");
+        assert_eq!(
+            interp.pending_motions.back(),
+            Some(&PendingMotion {
+                context_id: 0,
+                motion: MOTION_READY,
+                jump_error_code: 0
+            })
+        );
+    }
+
+    /// u32 `adjust_motion` normal forms match the per-axis Stage-1 port
+    /// (acclient.c:343746-343803 / :343439-343483).
+    #[test]
+    fn adjust_motion_command_u32_normal_forms() {
+        let mut interp = MotionInterp::default();
+
+        // WalkBackwards → WalkForward × -BackwardsFactor.
+        let (mut motion, mut speed) = (MOTION_WALK_BACKWARDS, 1.0_f32);
+        interp.adjust_motion_command(&mut motion, &mut speed, 0, None);
+        assert_eq!(motion, MOTION_WALK_FORWARD);
+        assert!((speed - (-BACKWARDS_FACTOR)).abs() < 1e-6);
+
+        // TurnLeft → TurnRight negated.
+        let (mut motion, mut speed) = (MOTION_TURN_LEFT, 1.0_f32);
+        interp.adjust_motion_command(&mut motion, &mut speed, 0, None);
+        assert_eq!(motion, MOTION_TURN_RIGHT);
+        assert!((speed - (-1.0)).abs() < 1e-6);
+
+        // SideStepLeft → SideStepRight negated × the sidestep adjust.
+        let adjust = SIDESTEP_FACTOR * (WALK_ANIM_SPEED / SIDESTEP_ANIM_SPEED);
+        let (mut motion, mut speed) = (MOTION_SIDESTEP_LEFT, 1.0_f32);
+        interp.adjust_motion_command(&mut motion, &mut speed, 0, None);
+        assert_eq!(motion, MOTION_SIDESTEP_RIGHT);
+        assert!((speed - (-adjust)).abs() < 1e-6);
+
+        // Run hold key: positive WalkForward promotes + run-scales;
+        // sidestep clamps at ±3.0; turn × fixed 1.5.
+        let (mut motion, mut speed) = (MOTION_WALK_FORWARD, 1.0_f32);
+        interp.adjust_motion_command(&mut motion, &mut speed, 2, Some(2.0));
+        assert_eq!(motion, MOTION_RUN_FORWARD);
+        assert!((speed - 2.0).abs() < 1e-6);
+
+        let (mut motion, mut speed) = (MOTION_SIDESTEP_RIGHT, 1.0_f32);
+        interp.adjust_motion_command(&mut motion, &mut speed, 2, Some(4.5));
+        assert!((speed - MAX_SIDESTEP_ANIM_RATE).abs() < 1e-6);
+
+        let (mut motion, mut speed) = (MOTION_TURN_RIGHT, 1.0_f32);
+        interp.adjust_motion_command(&mut motion, &mut speed, 2, Some(4.5));
+        assert!((speed - RUN_TURN_FACTOR).abs() < 1e-6);
+
+        // RunForward passes through untouched.
+        let (mut motion, mut speed) = (MOTION_RUN_FORWARD, 1.0_f32);
+        interp.adjust_motion_command(&mut motion, &mut speed, 2, Some(2.0));
+        assert_eq!(motion, MOTION_RUN_FORWARD);
+        assert!((speed - 1.0).abs() < 1e-6);
+    }
+
+    /// A3-D3-5: the leave-ground launch form clamps the diagonal
+    /// composition to `run_rate × 4.0` and falls back to the
+    /// integrator's velocity when the closed form is ~zero
+    /// (acclient.c:343806-343843).
+    #[test]
+    fn leave_ground_velocity_clamps_and_falls_back() {
+        let capabilities = authored_capabilities(1.0);
+        let fallback = Vector3::new(0.5, -0.25, 0.0);
+
+        // Diagonal run+strafe: legacy composition exceeds 4.0; the
+        // launch form clamps to run_rate × 4.0.
+        let state = MotionState::builder().run().forward().strafe_right().build();
+        let launch = leave_ground_velocity_for_state(0.7, state, &capabilities, fallback);
+        assert!(
+            (launch.length() - 4.0).abs() < 1e-4,
+            "diagonal launch must clamp to run_rate×4.0, got {}",
+            launch.length()
+        );
+        let legacy = interpreted_velocity_for_state(0.7, state, &capabilities);
+        assert!(legacy.length() > launch.length(), "legacy freeze was unclamped");
+
+        // No input → ~zero closed form → integrator fallback verbatim.
+        let idle = MotionState::builder().build();
+        let launch = leave_ground_velocity_for_state(0.7, idle, &capabilities, fallback);
+        assert_eq!(launch, fallback);
+    }
+
+    /// Wire → runtime conversion (`interpreted_state_from_wire`):
+    /// style prefix, forward/sidestep/turn normal forms, expanded +
+    /// stamped action list (fail-soft on expansion misses).
+    #[test]
+    fn interpreted_state_from_wire_normalizes() {
+        use holtburger_protocol::messages::movement::{
+            InterpretedMotionState as WireState, MotionItem, MovementStateFlags,
+        };
+        let wire = WireState {
+            flags: MovementStateFlags::CURRENT_STYLE
+                | MovementStateFlags::FORWARD_COMMAND
+                | MovementStateFlags::FORWARD_SPEED
+                | MovementStateFlags::SIDE_STEP_COMMAND
+                | MovementStateFlags::TURN_COMMAND,
+            num_commands: 2,
+            current_style: Some(0x3E),
+            forward_command: Some(0x0007u16.into()),
+            sidestep_command: Some(0x0010u16.into()),
+            turn_command: Some(0x000Eu16.into()),
+            forward_speed: Some(1.9166666),
+            sidestep_speed: None,
+            turn_speed: None,
+            commands: vec![
+                MotionItem::new(0x005Bu16, 7, true, 1.25), // SlashHigh → 0x1000005B
+                MotionItem::new(0x0FFFu16, 8, false, 1.0), // expansion miss → skipped
+            ],
+        };
+        let (state, actions) = interpreted_state_from_wire(&wire);
+        assert_eq!(state.current_style, 0x8000_003E);
+        assert_eq!(
+            state.forward_command,
+            Some(InterpretedForwardCommand::RunForward)
+        );
+        assert!((state.forward_speed - 1.9166666).abs() < 1e-6);
+        assert!(state.sidestep && state.sidestep_speed < 0.0, "SideStepLeft folds to negative");
+        assert!(state.turn && state.turn_speed < 0.0, "TurnLeft folds to negative");
+        assert_eq!(actions.len(), 1, "the unexpandable command is skipped fail-soft");
+        assert_eq!(
+            actions[0],
+            RawAction {
+                action: 0x1000_005B,
+                speed: 1.25,
+                stamp: 7,
+                autonomous: true
+            }
+        );
     }
 }

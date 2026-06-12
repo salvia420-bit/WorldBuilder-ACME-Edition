@@ -53,6 +53,16 @@ pub struct EntityMotionSnapshot {
     /// [`Self::action_command`], so a hasted/slowed swing or eat plays at
     /// the right tempo. `None` when no action command is present.
     pub action_speed: Option<OrderedMotionSpeed>,
+    /// A3-D3-4 (2026-06-12) — the case-0 `motion_flags & 0x02`
+    /// StandingLongJump bit (retail `word & 0x200` →
+    /// `motion_interpreter->standing_longjump`, acclient.c:339560;
+    /// decode already present at motion.rs:65-67 / entity.rs
+    /// `from_object_description`). Set ONLY for `MovementType::Invalid`
+    /// events (retail consumes it in case 0 alone); additive —
+    /// `Default = false` keeps every pre-D3 snapshot byte-identical.
+    /// Completes the G-7/F1-6 wire side: remote rigs can pose the
+    /// standstill charge, and the local jump gates may consult it.
+    pub standing_longjump: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -141,6 +151,11 @@ impl EntityMotionSnapshot {
     pub fn from_movement_event(data: &MovementEventData) -> Option<Self> {
         let mut snapshot = Self {
             current_style: MotionStance::from_interpreted(data.current_style),
+            // A3-D3-4: case-0 only — types 1-5 share the (empty)
+            // `Invalid` data variant but retail reads the bit in case 0
+            // alone (acclient.c:339560).
+            standing_longjump: data.movement_type == MovementType::Invalid
+                && data.motion_flags & 0x02 != 0,
             ..Self::default()
         };
 
@@ -321,6 +336,43 @@ mod tests {
     use holtburger_protocol::messages::movement::messages::motion::{
         TurnToHeading, TurnToObject, TurnToParameters,
     };
+
+    /// A3-D3-4: the case-0 `motion_flags & 0x02` StandingLongJump bit
+    /// surfaces on the snapshot for `MovementType::Invalid` ONLY —
+    /// types 1-5 / MoveTo envelopes never set it even with the byte set
+    /// (retail consumes it in case 0 alone, acclient.c:339560).
+    #[test]
+    fn standing_longjump_bit_surfaces_for_case0_only() {
+        let base = MovementEventData {
+            guid: Guid(0x60000002),
+            object_instance_sequence: 1,
+            movement_sequence: 2,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0x02,
+            current_style: MotionStance::NonCombat.interpreted(),
+            data: MovementTypeData::Invalid(Default::default()),
+        };
+        let snapshot =
+            EntityMotionSnapshot::from_movement_event(&base).expect("style keeps it populated");
+        assert!(snapshot.standing_longjump);
+
+        let cleared = MovementEventData {
+            motion_flags: 0x01,
+            ..base.clone()
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&cleared).unwrap();
+        assert!(!snapshot.standing_longjump);
+
+        // Same flags byte on a non-case-0 type: bit must NOT surface.
+        let stop = MovementEventData {
+            movement_type: MovementType::StopCompletely,
+            ..base
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&stop).unwrap();
+        assert!(!snapshot.standing_longjump);
+    }
 
     #[test]
     fn turn_to_heading_with_non_finite_directive_preserves_other_snapshot_fields() {

@@ -3,7 +3,36 @@ use crate::entity::EntityMotionSnapshot;
 use crate::state::WorldState;
 use holtburger_common::Guid;
 use holtburger_common::math::Quaternion;
-use holtburger_protocol::messages::{GameMessage, MovementTypeData};
+use holtburger_protocol::messages::{GameMessage, MovementEventData, MovementTypeData};
+
+/// A3-D3 (2026-06-12): emit the UNCONDITIONAL per-message
+/// [`WorldEvent::EntityMovementEvent`] for a REMOTE entity — retail's
+/// `unpack_movement` preamble is per-unpack, not change-gated
+/// (acclient.c:339518-339519). Skips the local player: that lane is the
+/// gate-bearing `SelfServerControlledMotion` (handlers/player.rs:96-107;
+/// see the event's doc). `target_exists` resolves the MoveToObject /
+/// TurnToObject target against `state.entities` here, where the world is
+/// visible.
+fn emit_entity_movement_event(
+    state: &WorldState,
+    guid: Guid,
+    data: &MovementEventData,
+    events: &mut Vec<WorldEvent>,
+) {
+    if guid == state.player.guid {
+        return;
+    }
+    let target_exists = match &data.data {
+        MovementTypeData::MoveToObject(moveto) => state.entities.get(moveto.target).is_some(),
+        MovementTypeData::TurnToObject(turn) => state.entities.get(turn.target).is_some(),
+        _ => false,
+    };
+    events.push(WorldEvent::EntityMovementEvent {
+        guid,
+        data: Box::new(data.clone()),
+        target_exists,
+    });
+}
 
 fn update_entity_motion_snapshot(
     state: &mut WorldState,
@@ -55,6 +84,8 @@ pub(crate) fn handle_message(
         }
         GameMessage::UpdateMotion(data) => {
             let guid = data.guid;
+            // A3-D3: per-message, before any change gate / early return.
+            emit_entity_movement_event(state, guid, data, events);
             let snapshot = EntityMotionSnapshot::from_movement_event(data);
 
             update_entity_motion_snapshot(state, guid, snapshot, events);
@@ -141,6 +172,8 @@ pub(crate) fn handle_message(
             };
 
             // --- Movement half (mirrors GameMessage::UpdateMotion) ---
+            // A3-D3: per-message, before any change gate.
+            emit_entity_movement_event(state, guid, &data.movement, events);
             let snapshot = EntityMotionSnapshot::from_movement_event(&data.movement);
             update_entity_motion_snapshot(state, guid, snapshot, events);
 
