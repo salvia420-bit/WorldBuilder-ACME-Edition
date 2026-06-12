@@ -681,6 +681,17 @@ pub enum StepDownOutcome {
     Fall,
 }
 
+/// A7-R3 (2026-06-12, survey A7 §3 row 8): the airborne LANDING
+/// walkable allowance — retail lands with `z_for_landing = 0.0871557`
+/// (≈85° permit: refuse only near-vertical perching, allow landing on
+/// faces far steeper than walkable; `acclient.c:40376`,
+/// `:312807-312808`, `:312966-312967`;
+/// `collision.rs physics_globals::LANDING_Z`). `None` (no normal
+/// source) allows — absence of data never refuses a touchdown.
+pub fn landing_allows_touchdown(floor_normal_z: Option<f32>, landing_allowance: f32) -> bool {
+    floor_normal_z.is_none_or(|normal_z| normal_z >= landing_allowance)
+}
+
 /// A7-R2 (2026-06-12, survey A7 §3 rows 2/3): [`step_down_decision`]
 /// plus retail's WALKABLE-landing acceptance — `Transition::StepDown`
 /// succeeds only when `collision_info.contact_plane.N.z >= z_val`
@@ -2126,6 +2137,24 @@ mod tests {
         let (up, down) = setup_step_heights(None, None, 2.0);
         assert_eq!(up, DEFAULT_STEP_HEIGHT);
         assert_eq!(down, DEFAULT_STEP_HEIGHT);
+    }
+
+    // ---- A7-R3 (2026-06-12): landing allowance ----
+
+    /// `z_for_landing = 0.0871557` is deliberately laxer than `FLOOR_Z`:
+    /// landing on steeper-than-walkable faces is allowed (they slide),
+    /// only near-vertical perching refuses; `None` always allows.
+    #[test]
+    fn landing_allowance_refuses_only_near_vertical_faces() {
+        use crate::spatial::collision::physics_globals::LANDING_Z;
+        // Steeper than walkable (60°, N.z = 0.5) still LANDS.
+        assert!(landing_allows_touchdown(Some(0.5), LANDING_Z));
+        // Near-vertical (88°, N.z ≈ 0.035) refuses.
+        assert!(!landing_allows_touchdown(Some(0.035), LANDING_Z));
+        // Exactly at the allowance lands (>=).
+        assert!(landing_allows_touchdown(Some(LANDING_Z), LANDING_Z));
+        // No normal source: allow.
+        assert!(landing_allows_touchdown(None, LANDING_Z));
     }
 
     // ---- A7-R2 (2026-06-12): walkable step-down ----

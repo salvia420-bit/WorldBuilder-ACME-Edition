@@ -122,6 +122,23 @@ fn player_step_down_height(world: &WorldState) -> f32 {
 /// 1070-parked: downhill cliff-face feel check.
 const USE_WALKABLE_STEP_DOWN: bool = false;
 
+/// A7-R3 (2026-06-12, survey A7 §3 row 8) — landing walkable allowance.
+///
+/// `true`: airborne touchdown (outdoor terrain snap + indoor per-poly
+/// snap-up) tests the landing surface normal against retail's
+/// `z_for_landing = 0.0871557`
+/// (`holtburger_world::spatial::collision::physics_globals::LANDING_Z`;
+/// `acclient.c:40376`, `:312807-312808`, `:312966-312967`) — landing on
+/// faces steeper than walkable is ALLOWED (that's the point of the
+/// laxer allowance), but near-vertical perching is refused: the player
+/// keeps falling, with the slice's lateral displacement slid
+/// Stage-1-style along the refused face's tangent
+/// (`slide_residual_along_wall_tangent`).
+///
+/// `false` (default): touchdown snaps to any surface — byte-identical.
+/// 1070-parked: cliff-face jump eye-test.
+const USE_LANDING_WALKABLE: bool = false;
+
 /// Physics deep-dive 2026-06-01 (gap 3 follow-up) — gate for the
 /// edge_slide tangent-slide in the lateral-clamp + step-up path of
 /// [`MovementSystem::advance_local_pose_for_manual_drive_slice`].
@@ -2462,8 +2479,37 @@ impl MovementSystem {
                     // takes us below it with downward velocity, that's
                     // the touchdown.
                     if world.player.vertical_velocity <= 0.0 && pose.coords.z <= z {
-                        pose.coords.z = z;
-                        world.player.land();
+                        // A7-R3: landing allowance — refuse near-vertical
+                        // perches (N.z < LANDING_Z), keep falling and slide
+                        // the slice's lateral along the face tangent.
+                        let landing_normal = if USE_LANDING_WALKABLE {
+                            world.terrain_normal_at(global.x, global.y)
+                        } else {
+                            None
+                        };
+                        if USE_LANDING_WALKABLE
+                            && !holtburger_world::spatial::landing_allows_touchdown(
+                                landing_normal.map(|n| n.z),
+                                holtburger_world::spatial::collision::physics_globals::LANDING_Z,
+                            )
+                        {
+                            if let Some(normal) = landing_normal {
+                                let lateral = Vector3 {
+                                    x: pose.coords.x - entry_local_xy.0,
+                                    y: pose.coords.y - entry_local_xy.1,
+                                    z: 0.0,
+                                };
+                                let slid =
+                                    holtburger_world::spatial::slide_residual_along_wall_tangent(
+                                        lateral, normal,
+                                    );
+                                pose.coords.x = entry_local_xy.0 + slid.x;
+                                pose.coords.y = entry_local_xy.1 + slid.y;
+                            }
+                        } else {
+                            pose.coords.z = z;
+                            world.player.land();
+                        }
                     }
                 } else if USE_WATER_COLLISION
                     && world.is_entirely_water_cell_at(global.x, global.y)
@@ -2734,12 +2780,30 @@ impl MovementSystem {
                 if let Some(floor) = poly_floor_z {
                     let snap_z = floor + 0.005; // 5 mm headroom; matches AC
                     if pose.coords.z < snap_z {
-                        pose.coords.z = snap_z;
-                        // Indoor landing: snap-up triggered while
-                        // airborne → touchdown. Outdoor analog above
-                        // uses `world.player.land()` likewise.
-                        if world.player.is_airborne {
-                            world.player.land();
+                        // A7-R3: an AIRBORNE indoor touchdown tests the
+                        // per-poly landing normal; a refused (near-
+                        // vertical) face keeps the fall going. Grounded
+                        // snap-up (catch-up) is untouched.
+                        let refuse_landing = USE_LANDING_WALKABLE
+                            && world.player.is_airborne
+                            && !holtburger_world::spatial::landing_allows_touchdown(
+                                holtburger_world::spatial::floor_normal_under(
+                                    triangles,
+                                    global.x,
+                                    global.y,
+                                    ceiling_for_floor_query,
+                                )
+                                .map(|n| n.z),
+                                holtburger_world::spatial::collision::physics_globals::LANDING_Z,
+                            );
+                        if !refuse_landing {
+                            pose.coords.z = snap_z;
+                            // Indoor landing: snap-up triggered while
+                            // airborne → touchdown. Outdoor analog above
+                            // uses `world.player.land()` likewise.
+                            if world.player.is_airborne {
+                                world.player.land();
+                            }
                         }
                     } else if USE_STEP_UP_DOWN
                         && !world.player.is_airborne
