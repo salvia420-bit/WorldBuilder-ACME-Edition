@@ -1,5 +1,5 @@
 use crate::entity::EntityMotionSnapshot;
-use crate::spatial::force_position_interp::RetailForcePositionInterpolator;
+use crate::spatial::position_manager::PositionManager;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::{Aabb, Guid, Vector3};
 use std::time::Duration;
@@ -242,14 +242,16 @@ pub struct SpatialBody {
     pub motion_state: Option<EntityMotionSnapshot>,
     pub contact: ContactState,
     pub sampling: SpatialSamplingState,
-    /// Physics deep-dive 2026-06-01 (gap 4) — the faithful retail
-    /// `InterpolateTo` / `ConstrainTo` reconciliation easing state for a
-    /// LOCAL-player force-position. Only populated when the
-    /// [`crate::spatial::scene`] `USE_RETAIL_INTERPOLATE` flag is on; the
-    /// default single-step constraint-pull path never touches it. The
-    /// per-frame integrator advances it via
+    /// Physics deep-dive 2026-06-01 (gap 4) → A2-P1 (2026-06-12): the
+    /// retail per-body `PositionManager` (interpolation + constraint
+    /// sub-managers). Only populated when the [`crate::spatial::scene`]
+    /// `USE_RETAIL_INTERPOLATE` flag is on; the default single-step
+    /// constraint-pull path never touches it. With
+    /// `USE_POSITION_MANAGER_QUEUE` off (default) it delegates to the
+    /// legacy single-node interpolator byte-identically. The per-frame
+    /// integrator advances it via
     /// [`crate::spatial::SpatialScene::step_force_position_interpolation`].
-    pub force_position_interp: RetailForcePositionInterpolator,
+    pub position_manager: PositionManager,
 }
 
 impl SpatialBody {
@@ -263,7 +265,7 @@ impl SpatialBody {
             motion_state: None,
             contact: ContactState::Unknown,
             sampling: SpatialSamplingState::authoritative(now),
-            force_position_interp: RetailForcePositionInterpolator::default(),
+            position_manager: PositionManager::default(),
         }
     }
 
@@ -277,7 +279,7 @@ impl SpatialBody {
             motion_state: None,
             contact: ContactState::Unknown,
             sampling: SpatialSamplingState::authoritative(now),
-            force_position_interp: RetailForcePositionInterpolator::default(),
+            position_manager: PositionManager::default(),
         }
     }
 

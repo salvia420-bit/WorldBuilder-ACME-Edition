@@ -1,6 +1,7 @@
 use super::{
     AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, CellPortalPolygon,
-    ContactState, InterpStep, RuntimeSpatialBodyView, SolvedBodyKinematics, SpatialBody,
+    ContactState, InterpStep, InterpolationCommand, RuntimeSpatialBodyView, SolvedBodyKinematics,
+    SpatialBody,
     SpatialBodyId, SpatialPhysics, SpatialSampleMode, SpatialSamplingConfig, StaticAabbEntry,
     physics::sample_mode_for_projection_state,
 };
@@ -2083,7 +2084,7 @@ impl SpatialScene {
                 };
                 let distance = body.pose.distance_to(&pose);
                 if distance > blip {
-                    body.force_position_interp.stop();
+                    body.position_manager.stop();
                 } else {
                     // `keep_heading = true`: the integrator owns heading
                     // and the forced rotation is recorded in
@@ -2094,7 +2095,7 @@ impl SpatialScene {
                     // for the player. The `if distance > blip` gate above
                     // still uses the autonomy-blip radius (100/25) — that
                     // is the academy-rubberband cutoff, NOT the leash cap.
-                    body.force_position_interp.install(
+                    body.position_manager.install_force_position(
                         body.pose, pose, leash_start, leash_max, true,
                     );
                 }
@@ -2142,17 +2143,27 @@ impl SpatialScene {
         let Some(body) = self.body_store.body_mut(body_id) else {
             return InterpStep::Idle;
         };
-        if !body.force_position_interp.is_interpolating() {
+        if !body.position_manager.is_interpolating() {
             return InterpStep::Idle;
         }
-        let outcome =
-            body.force_position_interp
-                .step(body.pose, quantum, max_speed, on_contact);
+        let (outcome, commands) =
+            body.position_manager
+                .step_force_position(body.pose, quantum, max_speed, on_contact);
+        // A2-P1: apply the queue drain's physics side effects (retail
+        // `UseTime` calls SetPositionSimple/set_velocity directly,
+        // acclient.c:389320-389368). Empty on the default-off legacy path.
+        for command in commands {
+            match command {
+                InterpolationCommand::SetPosition(pos) => body.pose = pos,
+                InterpolationCommand::SetVelocity(v) => body.velocity = v,
+            }
+        }
         match outcome {
             InterpStep::Progressed { pose } | InterpStep::Completed { pose } => {
                 body.pose = pose;
             }
-            // Failed leaves the working pose where it was; Idle is unreachable
+            // Failed leaves the working pose where it was (the queue path
+            // recovers via the next drain's blipto); Idle is unreachable
             // here (we checked is_interpolating above).
             InterpStep::Failed { .. } | InterpStep::Idle => {}
         }

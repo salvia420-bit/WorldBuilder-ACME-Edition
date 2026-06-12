@@ -340,8 +340,9 @@ impl RetailForcePositionInterpolator {
 
 /// Shortest-path spherical linear interpolation between two quaternions by
 /// fraction `t` in [0,1]. Used by `step` to ease heading toward the target
-/// when `keep_heading` is false.
-fn slerp_rotation(
+/// when `keep_heading` is false (shared with the A2-P1
+/// [`crate::spatial::position_manager`] queue path).
+pub(crate) fn slerp_rotation(
     from: holtburger_common::math::Quaternion,
     to: holtburger_common::math::Quaternion,
     t: f32,

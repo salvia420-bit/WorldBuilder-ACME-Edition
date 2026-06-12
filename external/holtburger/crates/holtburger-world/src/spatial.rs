@@ -2,12 +2,17 @@ pub mod collision;
 mod entity_collision;
 mod force_position_interp;
 mod physics;
+mod position_manager;
 mod scene;
 mod types;
 
 pub use entity_collision::{EntityCollider, clamp_delta_against_entities};
 pub use force_position_interp::{
     InterpStep, MAX_INTERPOLATED_VELOCITY, RetailForcePositionInterpolator,
+};
+pub use position_manager::{
+    ConstraintManager, INTERPOLATION_QUEUE_CAP, InterpolationCommand, InterpolationManager,
+    InterpolationNode, InterpolationNodeType, PositionManager, USE_POSITION_MANAGER_QUEUE,
 };
 pub use physics::{
     BasicSpatialPhysics, GenericSweptHit, NoopSpatialPhysics, PLAYER_CAPSULE_HEIGHT,

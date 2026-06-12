@@ -651,7 +651,7 @@ fn reconcile_local_force_position_pulls_working_pose_toward_target_over_ticks() 
     // interpolator and does NOT move the working pose this tick — the
     // per-frame stepper eases it (no one-tick snap-back).
     assert!(
-        body.force_position_interp.is_interpolating(),
+        body.position_manager.is_interpolating(),
         "sub-blip gap installs the retail interpolator"
     );
     assert!(
@@ -779,7 +779,7 @@ fn force_position_interpolation_stepper_advances_when_flag_on() {
 
     let body = scene.body(body_id).unwrap();
     // Interpolator installed; the 3 m gap is NOT collapsed this tick.
-    assert!(body.force_position_interp.is_interpolating());
+    assert!(body.position_manager.is_interpolating());
     assert!(
         body.pose.distance_to(&forced) > 1.0,
         "reconcile installs the ease; it must not snap the 3 m gap shut"
@@ -833,7 +833,7 @@ fn force_position_interpolation_stepper_is_inert_while_airborne() {
         AuthoritativeBodySync::Snapshot,
         now + Duration::from_millis(16),
     );
-    assert!(scene.body(body_id).unwrap().force_position_interp.is_interpolating());
+    assert!(scene.body(body_id).unwrap().position_manager.is_interpolating());
 
     let before = scene.body(body_id).unwrap().pose;
     // Step with `on_contact = false` (airborne): the no-contact early-out
@@ -846,7 +846,7 @@ fn force_position_interpolation_stepper_is_inert_while_airborne() {
         "airborne step must leave the working pose untouched (no freeze-source)"
     );
     assert!(
-        scene.body(body_id).unwrap().force_position_interp.is_interpolating(),
+        scene.body(body_id).unwrap().position_manager.is_interpolating(),
         "interpolation stays armed while airborne and resumes on touchdown"
     );
 }
