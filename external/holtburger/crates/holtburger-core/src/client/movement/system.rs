@@ -7,8 +7,8 @@ use super::common::{
     local_velocity_for_state, normalize_heading, raw_motion_state_with_motion_style,
     signed_heading_delta,
 };
-use super::motion_interp::interpreted_velocity_for_state;
-use super::motion_table_manager::MotionTableManager;
+use super::motion_interp::{MotionInterp, interpreted_velocity_for_state};
+use super::motion_table_manager::{MotionTableEvent, MotionTableManager};
 use crate::client::movement_types::{
     AutonomousDriveIntent, ForwardLocomotion, MotionState, MotionStyle, MovementPacketMetadata,
     PlayerDriveIntent, Turn,
@@ -766,6 +766,12 @@ pub(crate) struct MovementSystem {
     /// DESIGN.md Stage 3). Pumped per-tick under
     /// [`USE_MOTION_TABLE_QUEUE`] (default-off → inert).
     motion_table_manager: MotionTableManager,
+    /// A3-D2 (2026-06-12) — the local player's `CMotionInterp`
+    /// completion consumer: the pump routes the manager's `MotionDone`
+    /// events into [`MotionInterp::motion_done`]
+    /// (`acclient.c:317097` → `:339349` → `:343641-343676`). Same
+    /// default-off gate; per-entity instances arrive with Stage 3.
+    local_motion_interp: MotionInterp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -858,6 +864,7 @@ impl MovementSystem {
             last_sent_autonomous_contact: None,
             heartbeats_sent: 0,
             motion_table_manager: MotionTableManager::new(),
+            local_motion_interp: MotionInterp::default(),
         }
     }
 
@@ -1075,15 +1082,24 @@ impl MovementSystem {
         // (`acclient.c:344684-344704`; ACE `MotionTableManager.cs:160`)
         // plus the per-frame `UseTime` poll (BN pseudo-C
         // `acclient_2013.bndb_pseudo_c.txt:290845-290850`), so a no-anim
-        // motion completes inside the same tick it was issued. The
-        // `MotionDone` events are drained and DROPPED until the A3-D2
-        // consumer (`motion_interp.motion_done`,
-        // `acclient.c:343641-343676`) lands — DESIGN.md STAGE 2
-        // AMENDMENT fan-out. DEFAULT-OFF ([`USE_MOTION_TABLE_QUEUE`]):
-        // queue inert, current paths untouched.
+        // motion completes inside the same tick it was issued. A3-D2
+        // (2026-06-12): `MotionDone` events now route into the local
+        // `CMotionInterp` consumer (`motion_interp.motion_done`,
+        // `acclient.c:317097` → `:339349` → `:343641-343676`) — the
+        // pending-motions pop + one-shot RemoveAction drain. The unstick
+        // hook bubbles to A2's sticky owner once that lane lands (A2-P3,
+        // W5); until then a fired hook is a no-op by construction (the
+        // queue only fills via the Stage-2 ?interpRig= enqueue arms).
+        // Renderer-side events (RemoveLinkAnimations) stay with A4-Q2.
+        // DEFAULT-OFF ([`USE_MOTION_TABLE_QUEUE`]): queue inert, current
+        // paths untouched.
         if USE_MOTION_TABLE_QUEUE {
             self.motion_table_manager.use_time();
-            let _pending_motion_done = self.motion_table_manager.drain_events();
+            for event in self.motion_table_manager.drain_events() {
+                if let MotionTableEvent::MotionDone { success, .. } = event {
+                    let _unstick = self.local_motion_interp.motion_done(success);
+                }
+            }
         }
 
         if self.suppress_frontend_autonomous_once

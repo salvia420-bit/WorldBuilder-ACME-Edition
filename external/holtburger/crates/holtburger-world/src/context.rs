@@ -1,6 +1,6 @@
 use crate::entity::Entity;
 use crate::state::WorldState;
-use crate::stats::{AttributeType, SkillType};
+use crate::stats::{AttributeType, SkillType, VitalType};
 use crate::vendor::VendorState;
 use holtburger_common::Guid;
 use holtburger_common::properties::{
@@ -64,6 +64,33 @@ pub fn burden_load_modifier(burden: f32) -> f32 {
 // `/4.0` is the whole formula; any "scaling divisor omitted" worry is
 // because the `4.0` cap (18/4 and the trailing `/4.0`) is the only
 // divisor and it is present.
+/// STAGE 2 AMENDMENT exhaustion lane, A3-D2(a) (2026-06-12,
+/// `docs/2026-06-11-unified-movement-pipeline/DESIGN.md`
+/// "ReportExhaustion"): feed the wire Stamina vital into the run-rate
+/// resolution — at Stamina current == 0 ACE resolves run promotion at
+/// the EXHAUSTED rate (server: stamina 0 → runskill treated as 0 →
+/// `Creature.GetRunRate` formula → exactly 1.0; retail event chain
+/// `MovementManager::ReportExhaustion` → `CMotionInterp::ReportExhaustion`
+/// re-derive, `~/ac-headers/acclient.c:344318-344332`, `:339421-339434`).
+/// Without it the exhausted player keeps predicting full run speed and
+/// the snapback class Stage 1 fixed returns exactly at stamina 0.
+/// Default-off const-gate pattern (url-flags.md §6); flipping it means
+/// editing this source + wasm rebuild. Rollback: const off.
+pub const USE_EXHAUSTION_RUN_RATE: bool = false;
+
+/// The exhaustion input fold: wire Stamina current == 0 → run skill
+/// treated as 0 (ACE server-side `runSkill = stamina == 0 ? 0 : ...`;
+/// `run_rate_from_skill_and_burden(0, _)` = `(load_mod·0·11 + 4)/4` =
+/// exactly 1.0 for every burden). `None` stamina (vital not yet
+/// populated) passes the skill through untouched — absence of data is
+/// never treated as exhaustion.
+pub fn exhausted_run_skill(run_skill: f32, stamina_current: Option<u32>) -> f32 {
+    match stamina_current {
+        Some(0) => 0.0,
+        _ => run_skill,
+    }
+}
+
 pub fn run_rate_from_skill_and_burden(run_skill: f32, burden: f32) -> f32 {
     if run_skill >= 800.0 {
         18.0 / 4.0
@@ -188,6 +215,10 @@ pub trait WorldContext {
         None
     }
 
+    fn get_player_vital_current(&self, _vital: VitalType) -> Option<u32> {
+        None
+    }
+
     fn get_player_int_property(&self, _prop: PropertyInt) -> Option<i32> {
         None
     }
@@ -227,6 +258,10 @@ impl WorldContext for WorldState {
 
     fn get_player_skill_current(&self, skill: SkillType) -> Option<u32> {
         self.player.skills.get(&skill).map(|skill| skill.current)
+    }
+
+    fn get_player_vital_current(&self, vital: VitalType) -> Option<u32> {
+        self.player.vitals.get(&vital).map(|vital| vital.current)
     }
 
     fn get_player_int_property(&self, prop: PropertyInt) -> Option<i32> {
@@ -328,6 +363,14 @@ pub trait WorldContextExt: WorldContext {
         // override (under-prediction → lag, self-correcting) — NEVER a
         // skill-synthesized rate ACE doesn't hold.
         let run_skill = self.get_player_skill_current(SkillType::Run)? as f32;
+        // A3-D2(a) exhaustion lane (2026-06-12): wire Stamina 0 →
+        // exhausted rate 1.0, matching ACE's stamina==0 → runskill 0
+        // chain (see [`USE_EXHAUSTION_RUN_RATE`]). Default-off.
+        let run_skill = if USE_EXHAUSTION_RUN_RATE {
+            exhausted_run_skill(run_skill, self.get_player_vital_current(VitalType::Stamina))
+        } else {
+            run_skill
+        };
         let burden = self.player_burden().unwrap_or(3.0);
         Some(run_rate_from_skill_and_burden(run_skill, burden))
     }
@@ -355,6 +398,16 @@ pub trait WorldContextExt: WorldContext {
             Some(v) => (Some(v as f32), RunSkillSource::WireRunSkill),
             None => (None, RunSkillSource::Unavailable),
         };
+        // A3-D2(a) (2026-06-12): mirror `player_run_rate()`'s gated
+        // exhaustion fold exactly, so the probe's `run_rate` keeps
+        // matching what the velScale path consumed.
+        let run_skill_used = run_skill_used.map(|s| {
+            if USE_EXHAUSTION_RUN_RATE {
+                exhausted_run_skill(s, self.get_player_vital_current(VitalType::Stamina))
+            } else {
+                s
+            }
+        });
 
         let burden = self.player_burden().unwrap_or(3.0);
         RunRateInputs {
@@ -820,10 +873,10 @@ mod tests {
 
     use super::{
         CombatTargetStatus, RunSkillSource, WorldContext, WorldContextExt, burden_load_modifier,
-        run_rate_from_skill_and_burden,
+        exhausted_run_skill, run_rate_from_skill_and_burden,
     };
     use crate::entity::{Entity, EntityMotionSnapshot};
-    use crate::stats::{AttributeType, SkillType};
+    use crate::stats::{AttributeType, SkillType, VitalType};
     use holtburger_common::Guid;
     use holtburger_common::position::WorldPosition;
     use holtburger_common::properties::EquipMask;
@@ -842,6 +895,7 @@ mod tests {
         open_containers: HashSet<Guid>,
         player_attributes: HashMap<AttributeType, u32>,
         player_skills: HashMap<SkillType, u32>,
+        player_vitals: HashMap<VitalType, u32>,
         player_int_properties: Vec<(PropertyInt, i32)>,
     }
 
@@ -878,6 +932,10 @@ mod tests {
             self.player_skills.get(&skill).copied()
         }
 
+        fn get_player_vital_current(&self, vital: VitalType) -> Option<u32> {
+            self.player_vitals.get(&vital).copied()
+        }
+
         fn get_player_int_property(&self, prop: PropertyInt) -> Option<i32> {
             self.player_int_properties
                 .iter()
@@ -902,6 +960,26 @@ mod tests {
         assert_eq!(burden_load_modifier(0.5), 1.0);
         assert_eq!(burden_load_modifier(1.25), 0.75);
         assert_eq!(burden_load_modifier(2.0), 0.0);
+    }
+
+    /// A3-D2(a) exhaustion lane (2026-06-12) — the "stamina 0→1.0" unit
+    /// test DESIGN.md's Stage-1 list promised: at wire Stamina current
+    /// == 0 ACE treats the run skill as 0, and `GetRunRate`'s formula
+    /// then yields exactly 1.0 for EVERY burden
+    /// (`(load_mod·0·11 + 4)/4`; acclient.c:339421-339434 event chain).
+    /// Stamina > 0 and an unpopulated vital both pass the skill through
+    /// untouched — absence of data is never exhaustion.
+    #[test]
+    fn exhausted_run_skill_stamina_zero_resolves_run_rate_one() {
+        for burden in [0.0, 0.5, 1.25, 3.0] {
+            assert_eq!(
+                run_rate_from_skill_and_burden(exhausted_run_skill(300.0, Some(0)), burden),
+                1.0,
+                "stamina 0 must resolve the exhausted rate at burden {burden}"
+            );
+        }
+        assert_eq!(exhausted_run_skill(300.0, Some(1)), 300.0);
+        assert_eq!(exhausted_run_skill(300.0, None), 300.0);
     }
 
     /// T1 (2026-06-02): `run_rate_from_skill_and_burden` is the run-rate

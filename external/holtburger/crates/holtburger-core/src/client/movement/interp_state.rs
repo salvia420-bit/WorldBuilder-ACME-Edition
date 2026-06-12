@@ -90,6 +90,38 @@ impl InterpretedState {
         self.actions.push_back((action, speed));
     }
 
+    /// `InterpretedMotionState::RemoveAction` — pop the head action,
+    /// returning its motion id, `0` when empty
+    /// (`acclient.c:332789-332812`; ACE
+    /// `InterpretedMotionState.cs:80-87`). Fired by the A3-D2
+    /// completion pop (`CMotionInterp::MotionDone`,
+    /// `acclient.c:343660`).
+    pub(crate) fn remove_action(&mut self) -> u32 {
+        self.actions.pop_front().map(|(action, _)| action).unwrap_or(0)
+    }
+
+    /// `InterpretedMotionState::GetNumActions`
+    /// (`acclient.c:332815-332825`).
+    #[allow(dead_code)] // staged: the D3 DoMotion validation lattice reads it
+    pub(crate) fn num_actions(&self) -> usize {
+        self.actions.len()
+    }
+
+    /// The `DoMotion` action-FIFO cap — STAGE 2 AMENDMENT (A3-D2,
+    /// 2026-06-11): retail refuses a 7th queued action with WD_Error
+    /// `69` (`acclient.c:344600-344666` `GetNumActions() >= 6`). The
+    /// full DoMotion style/substate validation lattice is the D3 slice;
+    /// the cap lands here so the FIFO is bounded the moment anything
+    /// enqueues through it.
+    #[allow(dead_code)] // staged: D3 DoMotion lattice is the in-tree caller
+    pub(crate) fn apply_action_capped(&mut self, action: u32, speed: f32) -> Result<(), u32> {
+        if self.actions.len() >= 6 {
+            return Err(69);
+        }
+        self.actions.push_back((action, speed));
+        Ok(())
+    }
+
     /// Clear the movement axes to defaults — the interpreted half of
     /// `StopCompletely` (`acclient.c:343597-343638`). The action FIFO is
     /// NOT cleared (retail lets queued one-shots complete).

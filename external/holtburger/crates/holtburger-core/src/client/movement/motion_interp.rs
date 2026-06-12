@@ -31,7 +31,19 @@ use super::raw_state::{
 use crate::client::movement_types::{MotionState, planar_velocity_for_heading};
 use holtburger_common::Vector3;
 use holtburger_world::SelfMovementCapabilities;
+use std::collections::VecDeque;
 use std::f32::consts::FRAC_PI_2;
+
+/// `Motion_Ready` (`0x41000003`) — the completion node Stop arms enqueue
+/// (`acclient.c:344056-344060` `StopInterpretedMotion`;
+/// `enter_default_state` seed `:344577-344582`; ACE
+/// `MotionCommand.Ready`).
+pub(crate) const MOTION_READY: u32 = 0x4100_0003;
+
+/// One-shot action bit — motions with `0x10000000` set are queued actions
+/// whose completion fires the unstick + RemoveAction chain
+/// (`acclient.c:343656-343661`; ACE `CommandMask.Action`).
+pub(crate) const MOTION_ACTION_BIT: u32 = 0x1000_0000;
 
 /// `MotionInterp.RunAnimSpeed` (`MotionInterp.cs:28`; `acclient.c`
 /// `get_state_velocity` `:343580`) — the closed-form run constant used
@@ -78,6 +90,50 @@ pub(crate) const MAX_SIDESTEP_ANIM_RATE: f32 = 3.0;
 pub(crate) fn is_newer_action_stamp(new: u16, old: u16) -> bool {
     let diff = new.wrapping_sub(old) & 0x7FFF;
     diff != 0 && diff < 0x4000
+}
+
+/// One pending-motion completion node — retail allocates
+/// `{ next, context_id, motion, jump_error_code }` 16-byte LList nodes
+/// (`CMotionInterp::add_to_queue`, `acclient.c:343406-343437`; ACE
+/// `MotionInterp.cs:390` `PendingMotion`). STAGE 2 AMENDMENT (A3-D2,
+/// 2026-06-11): the A3 half of the completion layer — A4's
+/// `MotionTableManager` decides WHEN a motion completes
+/// ([`super::motion_table_manager::MotionTableEvent::MotionDone`]); this
+/// queue decides what completion DOES to movement state
+/// (`DESIGN.md` "STAGE 2 AMENDMENT" seam contract).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PendingMotion {
+    pub context_id: u32,
+    pub motion: u32,
+    /// Error code `jump_is_allowed` returns while this node is the queue
+    /// head (`acclient.c:343946-343948`; ACE `MotionInterp.cs:753-754`):
+    /// `0` = the pending motion does not block jumping.
+    pub jump_error_code: u32,
+}
+
+/// `CMotionInterp::motion_allows_jump` (`acclient.c:343295-343316` —
+/// note: STATIC, takes the substate/motion id). Returns `0` when the
+/// motion permits jumping and the WD_Error `72` (you-can't-jump-while-X)
+/// when it blocks it — retail's inverted naming is kept verbatim. The
+/// blocking ranges are the seated/crouched/sleeping emote substates plus
+/// `Fallen` (`0x40000008`); plain locomotion (`WalkForward` `0x45000005`,
+/// `RunForward` `0x44000007`) falls in the `> 0x41000014` arm → `0`.
+pub(crate) fn motion_allows_jump(substate: u32) -> u32 {
+    let blocks = if substate > 0x4000_0018 {
+        substate <= 0x4100_0014
+            && (substate >= 0x4100_0012 || (0x4000_001E..=0x4000_0039).contains(&substate))
+    } else if substate < 0x4000_0016 {
+        if substate > 0x1000_0131 {
+            substate == 0x4000_0008
+        } else {
+            (0x1000_0128..=0x1000_0131).contains(&substate)
+                || (0x1000_006F..=0x1000_0078).contains(&substate)
+        }
+    } else {
+        // 0x40000016..=0x40000018 falls through both outer guards.
+        true
+    };
+    if blocks { 72 } else { 0 }
 }
 
 /// `CMotionInterp::adjust_motion`, forward axis
@@ -174,6 +230,13 @@ pub(crate) struct MotionInterp {
     /// Last accepted 15-bit server action stamp
     /// (`acclient.c:344398-344408`).
     pub server_action_stamp: u16,
+    /// Pending-motion completion queue — STAGE 2 AMENDMENT (A3-D2,
+    /// 2026-06-11): every accepted `DoInterpretedMotion` enqueues a node
+    /// (`acclient.c:343993-344010`), every successful
+    /// `StopInterpretedMotion` enqueues a Ready node (`:344056-344060`),
+    /// and [`Self::motion_done`] pops the head when A4's
+    /// `MotionTableManager` reports completion. Head = oldest.
+    pub pending_motions: VecDeque<PendingMotion>,
 }
 
 impl Default for MotionInterp {
@@ -183,6 +246,7 @@ impl Default for MotionInterp {
             interpreted_state: InterpretedState::default(),
             my_run_rate: 1.0,
             server_action_stamp: 0,
+            pending_motions: VecDeque::new(),
         }
     }
 }
@@ -378,6 +442,161 @@ impl MotionInterp {
         }
         self.raw_state.current_holdkey = key;
         self.apply_raw_movement(inq_run_rate);
+    }
+
+    // ------------------------------------------------------------------
+    // STAGE 2 AMENDMENT completion layer, A3-D2 half (2026-06-11):
+    // what completion DOES to movement state. A4's MotionTableManager
+    // (motion_table_manager.rs) owns WHO fires completion; the
+    // movement/system.rs pump routes its MotionDone events here under
+    // USE_MOTION_TABLE_QUEUE (default-off — inert until the Stage-2
+    // ?interpRig= rig lane enqueues through these arms).
+    // ------------------------------------------------------------------
+
+    /// `CMotionInterp::add_to_queue(context_id, motion, jump_error_code)`
+    /// — append a completion node (`acclient.c:343406-343437`; ACE
+    /// `MotionInterp.cs:390`).
+    pub(crate) fn add_to_queue(&mut self, context_id: u32, motion: u32, jump_error_code: u32) {
+        self.pending_motions.push_back(PendingMotion {
+            context_id,
+            motion,
+            jump_error_code,
+        });
+    }
+
+    /// The accepted-`DoInterpretedMotion` enqueue arm
+    /// (`acclient.c:343993-344010`): derive the node's `jump_error_code`
+    /// — `72` while jump-charging (`params->bitfield & 0x20000`), else
+    /// [`motion_allows_jump`] of the motion itself, falling back to the
+    /// CURRENT interpreted forward command when the motion is not a
+    /// one-shot action.
+    #[allow(dead_code)] // staged: stage-2 ?interpRig= rig lane (DESIGN.md STAGE 2 AMENDMENT)
+    pub(crate) fn enqueue_accepted_motion(&mut self, context_id: u32, motion: u32, charging: bool) {
+        let jump_error = if charging {
+            72
+        } else {
+            let mut error = motion_allows_jump(motion);
+            if error == 0 && motion & MOTION_ACTION_BIT == 0 {
+                error = motion_allows_jump(self.interpreted_forward_motion_id());
+            }
+            error
+        };
+        self.add_to_queue(context_id, motion, jump_error);
+    }
+
+    /// The successful-`StopInterpretedMotion` enqueue arm — stop
+    /// completion is observable, not display-only: a Ready
+    /// (`0x41000003`) node rides the same queue
+    /// (`acclient.c:344056-344060`).
+    #[allow(dead_code)] // staged: stage-2 ?interpRig= rig lane (DESIGN.md STAGE 2 AMENDMENT)
+    pub(crate) fn enqueue_stop(&mut self, context_id: u32) {
+        self.add_to_queue(context_id, MOTION_READY, 0);
+    }
+
+    /// The interpreted forward command's motion id — the
+    /// `motion_allows_jump(this->interpreted_state.forward_command)`
+    /// input (`acclient.c:344003`, `:343957`). Our normalized enum only
+    /// holds the two post-`adjust_motion` survivors
+    /// (`interp_state.rs:21-28`); both ids fall in `motion_allows_jump`'s
+    /// `> 0x41000014` permit arm, kept symbolic for fidelity.
+    fn interpreted_forward_motion_id(&self) -> u32 {
+        match self.interpreted_state.forward_command {
+            // Motion_WalkForward / Motion_RunForward (ACE MotionCommand).
+            Some(InterpretedForwardCommand::WalkForward) | None => 0x4500_0005,
+            Some(InterpretedForwardCommand::RunForward) => 0x4400_0007,
+        }
+    }
+
+    /// `CMotionInterp::MotionDone(success)` (`acclient.c:343641-343676`)
+    /// — pop the pending head; when it is a one-shot action
+    /// (`motion & 0x10000000`): `unstick_from_object` +
+    /// `InterpretedMotionState::RemoveAction` +
+    /// `RawMotionState::RemoveAction` (`:343656-343661`) — THE drain that
+    /// makes `interp_state.rs:31` true. Returns `true` when the unstick
+    /// hook must fire (A2 owns the sticky object itself — DESIGN.md
+    /// STAGE 2 AMENDMENT exposes the hook, never the stick state).
+    /// `success` is accepted for the A4 event seam but, exactly as
+    /// retail's body, does not branch (`:343646-343676` never reads it).
+    pub(crate) fn motion_done(&mut self, _success: bool) -> bool {
+        let Some(head) = self.pending_motions.front() else {
+            return false;
+        };
+        let unstick = head.motion & MOTION_ACTION_BIT != 0;
+        if unstick {
+            self.interpreted_state.remove_action();
+            self.raw_state.remove_action();
+        }
+        self.pending_motions.pop_front();
+        unstick
+    }
+
+    /// `CMotionInterp::motions_pending` (`acclient.c:343728-343732`).
+    #[allow(dead_code)] // staged: stage-2/3 consumers (DESIGN.md STAGE 2 AMENDMENT)
+    pub(crate) fn motions_pending(&self) -> bool {
+        !self.pending_motions.is_empty()
+    }
+
+    /// The queue-head jump gate input — `jump_is_allowed` refuses with
+    /// the head's `jump_error_code` before consulting the charge gates
+    /// (`acclient.c:343946-343948`; ACE `MotionInterp.cs:753-754`).
+    /// `0` = no pending node blocks jumping.
+    #[allow(dead_code)] // staged: lib.rs jump-gate consumer (wasm wave R4)
+    pub(crate) fn pending_jump_error(&self) -> u32 {
+        self.pending_motions
+            .front()
+            .map(|node| node.jump_error_code)
+            .unwrap_or(0)
+    }
+
+    /// `CMotionInterp::HandleExitWorld` (`acclient.c:343679-343713`) —
+    /// drain EVERY pending node through the same pop path with
+    /// success=0: queued one-shots are cancelled, not played, across
+    /// teleport/portal (A4-Q3 wires the JS trigger). Returns `true` when
+    /// any drained action requires the unstick hook.
+    #[allow(dead_code)] // staged: A4-Q3 portal/teleport trigger (DESIGN.md STAGE 2 AMENDMENT)
+    pub(crate) fn handle_exit_world(&mut self) -> bool {
+        let mut unstick = false;
+        while !self.pending_motions.is_empty() {
+            unstick |= self.motion_done(false);
+        }
+        unstick
+    }
+
+    /// `CMotionInterp::enter_default_state` (`acclient.c:344560-344598`)
+    /// — the construction semantics for every per-entity instance
+    /// (Stage 3 needs this; ACE `MotionInterp.cs:610-615`): reset BOTH
+    /// states to constructor defaults, then seed the queue with one
+    /// Ready (`0x41000003`) node — retail APPENDS the seed
+    /// (`:344577-344592`), it does not clear, and so does this port.
+    /// `InitializeMotionTables` + `initted` + `LeaveGround` are
+    /// physics/renderer-side (`CPhysicsObj`) and stay with their owners
+    /// (DESIGN.md STAGE 2 AMENDMENT / LeaveGround fan-out section).
+    #[allow(dead_code)] // staged: stage-3 per-entity construction (DESIGN.md STAGE 3 AMENDMENT)
+    pub(crate) fn enter_default_state(&mut self) {
+        self.raw_state = RawState::default();
+        self.interpreted_state = InterpretedState::default();
+        self.add_to_queue(0, MOTION_READY, 0);
+    }
+
+    /// `CMotionInterp::ReportExhaustion` (`acclient.c:344318-344332`;
+    /// fan-out `MovementManager::ReportExhaustion` `:339421-339434`) —
+    /// the stamina-0-crossing event re-runs the interpretation so run
+    /// promotion resolves at the exhausted rate (the D2(b) half; the
+    /// rate INPUT itself is `player_run_rate()`'s gated stamina term,
+    /// `holtburger-world` `context.rs`). Retail's autonomous arm re-runs
+    /// `apply_raw_movement`; the non-autonomous
+    /// `apply_interpreted_movement` arm belongs to the Stage-3 remote
+    /// lane (no port yet — `move_to_interpreted_state` is its entry) and
+    /// the MoveToManager fan-out lands with Stage 3.
+    #[allow(dead_code)] // staged: stamina 0-crossing event source is the stage-3 vitals lane
+    pub(crate) fn report_exhaustion(
+        &mut self,
+        last_move_was_autonomous: bool,
+        inq_run_rate: Option<f32>,
+    ) {
+        if last_move_was_autonomous {
+            self.apply_raw_movement(inq_run_rate);
+        }
     }
 }
 
@@ -800,5 +1019,209 @@ mod tests {
             Some(InterpretedForwardCommand::WalkForward)
         );
         assert!((remote.interpreted_state.forward_speed - 1.0).abs() < 1e-6);
+    }
+
+    // ------------------------------------------------------------------
+    // STAGE 2 AMENDMENT completion layer, A3-D2 FIFO lane (2026-06-12).
+    // ------------------------------------------------------------------
+
+    /// `add_to_queue` appends; `motion_done` pops strictly head-first
+    /// (`acclient.c:343406-343437`, `:343641-343676`).
+    #[test]
+    fn pending_motions_queue_is_fifo() {
+        let mut interp = MotionInterp::default();
+        interp.add_to_queue(1, 0x4500_0005, 0);
+        interp.add_to_queue(2, MOTION_READY, 0);
+        assert!(interp.motions_pending());
+
+        interp.motion_done(true);
+        assert_eq!(
+            interp.pending_motions.front(),
+            Some(&PendingMotion {
+                context_id: 2,
+                motion: MOTION_READY,
+                jump_error_code: 0
+            })
+        );
+        interp.motion_done(true);
+        assert!(!interp.motions_pending());
+        // Empty-queue MotionDone is a no-op (retail head-null guard).
+        assert!(!interp.motion_done(true));
+    }
+
+    /// A completed one-shot action (`motion & 0x10000000`) fires the
+    /// unstick hook and drains ONE action from BOTH state FIFOs — THE
+    /// drain that makes `interp_state.rs:31` true
+    /// (`acclient.c:343656-343661`). Non-action completions touch
+    /// neither.
+    #[test]
+    fn motion_done_action_pop_removes_raw_and_interp_actions() {
+        let mut interp = MotionInterp::default();
+        interp.interpreted_state.apply_action(0x1000_0062, 1.0);
+        interp.interpreted_state.apply_action(0x1000_0063, 1.0);
+        interp.raw_state.actions.push(RawAction {
+            action: 0x1000_0062,
+            speed: 1.0,
+            stamp: 1,
+            autonomous: true,
+        });
+
+        // Non-action node first: no unstick, no action drain.
+        interp.add_to_queue(1, MOTION_READY, 0);
+        assert!(!interp.motion_done(true));
+        assert_eq!(interp.interpreted_state.num_actions(), 2);
+        assert_eq!(interp.raw_state.actions.len(), 1);
+
+        // Action node: unstick fires, both FIFOs pop their heads.
+        interp.add_to_queue(2, 0x1000_0062, 0);
+        assert!(interp.motion_done(true));
+        assert_eq!(
+            interp.interpreted_state.actions,
+            VecDeque::from([(0x1000_0063, 1.0)])
+        );
+        assert!(interp.raw_state.actions.is_empty());
+        // Further RemoveActions on empty FIFOs return 0 (retail).
+        assert_eq!(interp.raw_state.remove_action(), 0);
+    }
+
+    /// `motion_allows_jump` blocking table (`acclient.c:343295-343316`):
+    /// seated/crouched emote ranges + Fallen block with error 72; plain
+    /// locomotion and one-shot actions outside the ranges permit.
+    #[test]
+    fn motion_allows_jump_blocking_table() {
+        // Permit arms.
+        assert_eq!(motion_allows_jump(0x4500_0005), 0); // WalkForward
+        assert_eq!(motion_allows_jump(0x4400_0007), 0); // RunForward
+        assert_eq!(motion_allows_jump(MOTION_READY), 0); // Ready 0x41000003
+        assert_eq!(motion_allows_jump(0x1000_0062), 0); // generic action
+        // Blocking ranges.
+        assert_eq!(motion_allows_jump(0x4000_0008), 72); // Fallen
+        assert_eq!(motion_allows_jump(0x4000_0016), 72); // mid-range fall-through
+        assert_eq!(motion_allows_jump(0x4000_001E), 72); // 0x1E..=0x39 arm
+        assert_eq!(motion_allows_jump(0x4000_0039), 72);
+        assert_eq!(motion_allows_jump(0x4100_0012), 72); // 0x12..=0x14 arm
+        assert_eq!(motion_allows_jump(0x4100_0014), 72);
+        assert_eq!(motion_allows_jump(0x1000_006F), 72); // 0x6F..=0x78 arm
+        assert_eq!(motion_allows_jump(0x1000_0128), 72); // 0x128..=0x131 arm
+        // Range edges back to permit.
+        assert_eq!(motion_allows_jump(0x4000_003A), 0);
+        assert_eq!(motion_allows_jump(0x4100_0015), 0);
+    }
+
+    /// The accepted-motion enqueue derives the node's jump error per
+    /// `acclient.c:343993-344010`: charging → 72; a blocking motion
+    /// carries its own error; a permitted NON-ACTION motion falls back
+    /// to the current interpreted forward command; `jump_is_allowed`
+    /// consults exactly the head's code (`:343946-343948`).
+    #[test]
+    fn enqueue_accepted_motion_derives_jump_error_and_head_gates() {
+        let mut interp = MotionInterp::default();
+        assert_eq!(interp.pending_jump_error(), 0);
+
+        interp.enqueue_accepted_motion(1, 0x4500_0005, true);
+        assert_eq!(interp.pending_jump_error(), 72, "charging blocks at enqueue");
+        interp.motion_done(true);
+
+        interp.enqueue_accepted_motion(2, 0x4000_0008, false);
+        assert_eq!(interp.pending_jump_error(), 72, "Fallen blocks by table");
+        interp.motion_done(true);
+
+        // Permitted locomotion with a permitted forward command → 0.
+        interp.enqueue_accepted_motion(3, 0x4500_0005, false);
+        assert_eq!(interp.pending_jump_error(), 0);
+        interp.motion_done(true);
+
+        // Stop arm enqueues an observable Ready completion node.
+        interp.enqueue_stop(4);
+        assert_eq!(
+            interp.pending_motions.front(),
+            Some(&PendingMotion {
+                context_id: 4,
+                motion: MOTION_READY,
+                jump_error_code: 0
+            })
+        );
+    }
+
+    /// `HandleExitWorld` drains EVERY node through the same pop path —
+    /// queued one-shots are cancelled (actions drained, unstick
+    /// reported), never played, across teleport/portal
+    /// (`acclient.c:343679-343713`).
+    #[test]
+    fn handle_exit_world_drains_queue_and_cancels_actions() {
+        let mut interp = MotionInterp::default();
+        interp.interpreted_state.apply_action(0x1000_0062, 1.0);
+        interp.add_to_queue(1, 0x4500_0005, 0);
+        interp.add_to_queue(2, 0x1000_0062, 0);
+        interp.add_to_queue(3, MOTION_READY, 0);
+
+        assert!(interp.handle_exit_world(), "drained action must report unstick");
+        assert!(!interp.motions_pending());
+        assert_eq!(interp.interpreted_state.num_actions(), 0);
+    }
+
+    /// `enter_default_state` resets both states to constructor defaults
+    /// and APPENDS one Ready seed node — retail appends, it does not
+    /// clear (`acclient.c:344560-344598`).
+    #[test]
+    fn enter_default_state_resets_states_and_seeds_ready() {
+        let mut interp = MotionInterp::default();
+        interp.raw_state.current_holdkey = HoldKey::Run;
+        interp.raw_state.apply_forward(RawForwardCommand::WalkForward, 1.0, HoldKey::Invalid);
+        interp.apply_raw_movement(Some(2.0));
+        interp.add_to_queue(7, 0x4500_0005, 0);
+
+        interp.enter_default_state();
+        assert_eq!(interp.raw_state, RawState::default());
+        assert_eq!(interp.interpreted_state, InterpretedState::default());
+        assert_eq!(interp.pending_motions.len(), 2, "seed APPENDS after the existing node");
+        assert_eq!(
+            interp.pending_motions.back(),
+            Some(&PendingMotion {
+                context_id: 0,
+                motion: MOTION_READY,
+                jump_error_code: 0
+            })
+        );
+    }
+
+    /// The action FIFO cap: a 7th queued action refuses with WD_Error 69
+    /// (`acclient.c:344600-344666` `GetNumActions() >= 6`).
+    #[test]
+    fn action_fifo_caps_at_six_with_error_69() {
+        let mut state = InterpretedState::default();
+        for i in 0..6 {
+            assert_eq!(state.apply_action_capped(0x1000_0060 + i, 1.0), Ok(()));
+        }
+        assert_eq!(state.apply_action_capped(0x1000_0066, 1.0), Err(69));
+        assert_eq!(state.num_actions(), 6);
+    }
+
+    /// `ReportExhaustion` re-runs the interpretation so run promotion
+    /// resolves at the exhausted rate (`acclient.c:344318-344332`): a
+    /// held Run forward re-derives from ×2.0 promotion down to the
+    /// exhausted 1.0.
+    #[test]
+    fn report_exhaustion_rederives_run_promotion_at_exhausted_rate() {
+        let mut interp = MotionInterp::default();
+        interp.raw_state.current_holdkey = HoldKey::Run;
+        interp.raw_state.apply_forward(RawForwardCommand::WalkForward, 1.0, HoldKey::Invalid);
+        interp.apply_raw_movement(Some(2.0));
+        assert_eq!(
+            interp.interpreted_state.forward_command,
+            Some(InterpretedForwardCommand::RunForward)
+        );
+        assert!((interp.interpreted_state.forward_speed - 2.0).abs() < 1e-6);
+
+        // Stamina hits 0: the rate INPUT collapses to 1.0
+        // (context.rs exhausted_run_skill) and the event re-derive
+        // resolves promotion at the exhausted rate.
+        interp.report_exhaustion(true, Some(1.0));
+        assert!((interp.interpreted_state.forward_speed - 1.0).abs() < 1e-6);
+
+        // Non-autonomous arm is the Stage-3 remote lane: no re-derive.
+        interp.apply_raw_movement(Some(2.0));
+        interp.report_exhaustion(false, Some(1.0));
+        assert!((interp.interpreted_state.forward_speed - 2.0).abs() < 1e-6);
     }
 }

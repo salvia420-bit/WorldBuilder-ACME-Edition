@@ -223,6 +223,18 @@ impl RawState {
         self.turn_speed = 1.0;
         self.turn_holdkey = HoldKey::Invalid;
     }
+
+    /// `RawMotionState::RemoveAction` — pop the head queued action,
+    /// returning its motion id, `0` when empty
+    /// (`acclient.c:332616-332639`; ACE `RawMotionState.cs:90-98`).
+    /// Fired by the A3-D2 completion pop (`CMotionInterp::MotionDone`,
+    /// `acclient.c:343661`).
+    pub(crate) fn remove_action(&mut self) -> u32 {
+        if self.actions.is_empty() {
+            return 0;
+        }
+        self.actions.remove(0).action
+    }
 }
 
 #[cfg(test)]
