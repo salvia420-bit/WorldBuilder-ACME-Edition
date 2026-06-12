@@ -636,6 +636,31 @@ impl WorldState {
         self.setup_radii.get(&gfx_id).copied().unwrap_or(DEFAULT)
     }
 
+    /// A7-R6 (2026-06-12) — does the local player's collision cylinder
+    /// overlap this entity's right now? The overlap input to the
+    /// ethereal-expiry re-check (retail
+    /// `CPhysicsObj::ethereal_check_for_collisions`,
+    /// `acclient.c:317832-317866`), evaluated against the player
+    /// entity's last-known wire pose in global XY (the same lateral
+    /// cylinder model `clamp_delta_against_entities` uses). `false`
+    /// when either party is unknown — absence of data never defers.
+    pub fn player_overlaps_entity_cylinder(&self, guid: holtburger_common::Guid) -> bool {
+        let Some(entity) = self.entities.get(guid) else {
+            return false;
+        };
+        let Some(player) = self.entities.get(self.player.guid) else {
+            return false;
+        };
+        let player_global = player.position.global_coords();
+        let entity_global = entity.position.global_coords();
+        crate::spatial::spheres_overlap_xy(
+            (player_global.x, player_global.y),
+            crate::spatial::PLAYER_CAPSULE_RADIUS,
+            (entity_global.x, entity_global.y),
+            self.entity_collision_radius(entity),
+        )
+    }
+
     /// Number of landblocks currently cached. Diagnostic only;
     /// used by the wasm bundle's `PopulateTerrain` recv arm to log
     /// progress as the spawn-area neighbourhood lands.

@@ -1225,6 +1225,11 @@ impl WorldState {
             self.player.allow_edge_slide = data.physics_state.contains(PhysicsState::EDGE_SLIDE);
         }
 
+        // A7-R6 (2026-06-12): the overlap input for the ethereal-expiry
+        // re-check, computed BEFORE the mutable entity borrow. Flag off:
+        // never consulted.
+        let recheck_overlap = crate::entity::USE_ETHEREAL_RECHECK
+            && self.player_overlaps_entity_cylinder(data.guid);
         if let Some(entity) = self.entities.get_mut(data.guid) {
             let is_door = entity.flags.contains(ObjectDescriptionFlag::DOOR);
             // Capture pre-mutation should_draw so we can detect a flip
@@ -1232,7 +1237,20 @@ impl WorldState {
             // physics_state. Mirrors how ACE's `WorldObject_Networking`
             // path watches PhysicsState diffs for visibility changes.
             let was_drawable = entity.should_draw();
-            entity.physics_state = data.physics_state;
+            if crate::entity::USE_ETHEREAL_RECHECK {
+                // Retail set_ethereal(0) overlap defer
+                // (acclient.c:319047-319071): a door/entity solidifying
+                // on top of the player stays passable until the player
+                // steps clear (resolution runs in the movement tick's
+                // entity arm). The WorldEvent below still reports the
+                // WIRE state — the defer is collision-side only.
+                entity.set_physics_state_with_ethereal_recheck(
+                    data.physics_state,
+                    recheck_overlap,
+                );
+            } else {
+                entity.physics_state = data.physics_state;
+            }
             let is_drawable = entity.should_draw();
             entity.properties.hydrate_from_set_state(data);
             events.push(WorldEvent::EntityStateUpdated {

@@ -764,7 +764,25 @@ pub struct Entity {
     /// `transitional_insert` for non-player movers.
     pub step_up_height: Option<f32>,
     pub step_down_height: Option<f32>,
+
+    /// A7-R6 (2026-06-12, survey A7 §3 row 9): a wire ethereal→solid
+    /// transition arrived while the player still overlapped this
+    /// entity — the solidify is DEFERRED (the ETHEREAL bit stays set)
+    /// until the overlap clears, exactly as retail `set_ethereal(0)`
+    /// re-sets the bit + transient `0x100` when
+    /// `ethereal_check_for_collisions` reports an overlap
+    /// (`acclient.c:319047-319071`, `:317832-317866`), so a door
+    /// closing on the player can't trap them inside its geometry.
+    /// Maintained ONLY under [`USE_ETHEREAL_RECHECK`].
+    pub ethereal_recheck_pending: bool,
 }
+
+/// A7-R6 gate (survey A7 §4 R6) — OFF (default): wire physics-state
+/// updates apply verbatim (a door can solidify on top of the player).
+/// ON: an ethereal→solid transition that overlaps the player defers
+/// via [`Entity::set_physics_state_with_ethereal_recheck`] and resolves
+/// in the movement tick's entity arm once the player steps clear.
+pub const USE_ETHEREAL_RECHECK: bool = false;
 
 const OBJECT_POSITION_SEQUENCE_INDEX: usize = 0;
 /// `ObjectVector` stamp — retail `CPhysicsObj::update_times[3]`, the
@@ -997,6 +1015,47 @@ impl Entity {
             .intersects(PhysicsState::ETHEREAL | PhysicsState::IGNORE_COLLISIONS)
     }
 
+    /// A7-R6 — apply a wire physics-state update with retail
+    /// `set_ethereal(0)`'s overlap defer (`acclient.c:319047-319071`):
+    /// when the update CLEARS a currently-set `ETHEREAL` bit while
+    /// `overlapping` (the player is inside this entity's cylinder), the
+    /// bit is re-set and the solidify deferred
+    /// ([`Self::ethereal_recheck_pending`]) — the entity stays passable
+    /// until [`Self::resolve_ethereal_recheck`] clears it. A wire update
+    /// that SETS ethereal cancels any pending re-check (retail clears
+    /// transient `0x100` on `set_ethereal(1)`, `:319057-319060`).
+    /// Initial-creation state (ObjectCreate) applies verbatim — only the
+    /// live transition consults the overlap, mirroring retail where the
+    /// check lives in the transition call, not construction.
+    pub fn set_physics_state_with_ethereal_recheck(
+        &mut self,
+        new_state: PhysicsState,
+        overlapping: bool,
+    ) {
+        let was_ethereal = self.physics_state.contains(PhysicsState::ETHEREAL);
+        self.physics_state = new_state;
+        if new_state.contains(PhysicsState::ETHEREAL) {
+            self.ethereal_recheck_pending = false;
+        } else if was_ethereal && overlapping {
+            self.physics_state |= PhysicsState::ETHEREAL;
+            self.ethereal_recheck_pending = true;
+        }
+    }
+
+    /// A7-R6 — the per-tick resolution half: once the player no longer
+    /// overlaps, the deferred solidify completes (clear `ETHEREAL`,
+    /// clear pending). Returns `true` when the entity solidified this
+    /// call. Retail re-runs the check via the transient `0x100` bit in
+    /// `update_object`; ours runs in the movement tick's entity arm.
+    pub fn resolve_ethereal_recheck(&mut self, overlapping: bool) -> bool {
+        if !self.ethereal_recheck_pending || overlapping {
+            return false;
+        }
+        self.physics_state.remove(PhysicsState::ETHEREAL);
+        self.ethereal_recheck_pending = false;
+        true
+    }
+
     /// Whether this is a static (non-moving) entity.
     ///
     /// ACE checks `PhysicsState.Static` in 30 places to skip physics
@@ -1081,6 +1140,7 @@ impl Entity {
             // (same chain as physics_script_table_did).
             step_up_height: None,
             step_down_height: None,
+            ethereal_recheck_pending: false,
         }
     }
 }
@@ -1190,6 +1250,44 @@ mod physics_state_predicates_tests {
         assert!(fixture(PhysicsState::REPORT_COLLISIONS).is_collidable());
         assert!(!fixture(PhysicsState::ETHEREAL).is_collidable());
         assert!(!fixture(PhysicsState::IGNORE_COLLISIONS).is_collidable());
+    }
+
+    /// A7-R6: an overlapped ethereal→solid transition DEFERS — the
+    /// entity stays passable (`is_collidable() == false`) until the
+    /// overlap clears; an un-overlapped transition solidifies
+    /// immediately (`acclient.c:319047-319071`).
+    #[test]
+    fn overlapped_ethereal_expiry_stays_passable_until_clear() {
+        let mut door = fixture(PhysicsState::ETHEREAL | PhysicsState::STATIC);
+        // Door closes while the player stands in the frame.
+        door.set_physics_state_with_ethereal_recheck(PhysicsState::STATIC, true);
+        assert!(!door.is_collidable(), "deferred solidify stays passable");
+        assert!(door.ethereal_recheck_pending);
+        // Still overlapped next tick: still passable.
+        assert!(!door.resolve_ethereal_recheck(true));
+        assert!(!door.is_collidable());
+        // Player steps clear: solidifies.
+        assert!(door.resolve_ethereal_recheck(false));
+        assert!(door.is_collidable());
+        assert!(!door.ethereal_recheck_pending);
+
+        // Un-overlapped transition solidifies immediately.
+        let mut door = fixture(PhysicsState::ETHEREAL | PhysicsState::STATIC);
+        door.set_physics_state_with_ethereal_recheck(PhysicsState::STATIC, false);
+        assert!(door.is_collidable());
+        assert!(!door.ethereal_recheck_pending);
+
+        // A wire update SETTING ethereal cancels a pending re-check
+        // (retail clears transient 0x100 on set_ethereal(1)).
+        let mut door = fixture(PhysicsState::ETHEREAL | PhysicsState::STATIC);
+        door.set_physics_state_with_ethereal_recheck(PhysicsState::STATIC, true);
+        assert!(door.ethereal_recheck_pending);
+        door.set_physics_state_with_ethereal_recheck(
+            PhysicsState::ETHEREAL | PhysicsState::STATIC,
+            true,
+        );
+        assert!(!door.ethereal_recheck_pending);
+        assert!(!door.is_collidable());
     }
 
     #[test]

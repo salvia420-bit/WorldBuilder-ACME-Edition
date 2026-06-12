@@ -2132,6 +2132,37 @@ impl MovementSystem {
         // humanoid-scale entities whose SetupModel hasn't been
         // loaded yet. Mirrors ACE's `PhysicsObj.GetPhysicsRadius` at
         // `Source/ACE.Server/Physics/PhysicsObj.cs:~590`.
+        // A7-R6 (2026-06-12): resolve deferred ethereal expiries — an
+        // entity whose solidify was deferred while the player overlapped
+        // it (apply_set_state_update, retail set_ethereal(0) defer)
+        // solidifies the moment the player steps clear, mirroring
+        // retail's transient-0x100 per-frame re-check
+        // (acclient.c:317832-317866). Runs against the LOCAL working
+        // pose (the freshest player position). Flag off: no entity ever
+        // has the pending bit, so this is a no-op scan.
+        if holtburger_world::entity::USE_ETHEREAL_RECHECK {
+            let player_global = pose.global_coords();
+            let pending: Vec<_> = world
+                .entities
+                .iter()
+                .filter(|e| e.ethereal_recheck_pending)
+                .map(|e| {
+                    let g = e.position.global_coords();
+                    (e.guid, (g.x, g.y), world.entity_collision_radius(e))
+                })
+                .collect();
+            for (guid, center, radius) in pending {
+                let overlapping = holtburger_world::spatial::spheres_overlap_xy(
+                    (player_global.x, player_global.y),
+                    holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+                    center,
+                    radius,
+                );
+                if let Some(entity) = world.entities.get_mut(guid) {
+                    entity.resolve_ethereal_recheck(overlapping);
+                }
+            }
+        }
         let lateral_clamped = {
             let self_guid = world.player.guid;
             let player_global = pose.global_coords();

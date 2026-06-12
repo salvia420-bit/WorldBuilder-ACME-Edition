@@ -60,6 +60,25 @@ pub struct EntityCollider {
     pub has_physics_bsp: bool,
 }
 
+/// A7-R6 (2026-06-12, survey A7 §3 row 9): the static overlap test the
+/// ethereal-expiry re-check runs — retail
+/// `CPhysicsObj::ethereal_check_for_collisions` sweeps the object's
+/// shadow cells with `CObjCell::check_collisions`
+/// (`acclient.c:317832-317866`); our entity model is the same lateral
+/// XY cylinder [`clamp_delta_against_entities`] uses, so the overlap is
+/// a circle-vs-circle test in global XY.
+pub fn spheres_overlap_xy(
+    center_a: (f32, f32),
+    radius_a: f32,
+    center_b: (f32, f32),
+    radius_b: f32,
+) -> bool {
+    let dx = center_a.0 - center_b.0;
+    let dy = center_a.1 - center_b.1;
+    let reach = radius_a + radius_b;
+    dx * dx + dy * dy < reach * reach
+}
+
 /// Clamp `delta` so the player's lateral motion does not penetrate
 /// any [`EntityCollider`]. Returns the clamped delta. `delta.z` is
 /// preserved unchanged (entity collision is lateral only).
