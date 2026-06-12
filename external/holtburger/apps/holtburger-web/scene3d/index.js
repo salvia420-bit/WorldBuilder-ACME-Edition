@@ -51,6 +51,11 @@ import { buildEnvCellsForLandblock } from "./cells.js";
 // header for the dispatch-surface contract.
 import { ensureSpawnsForLandblock } from "./spawns.js";
 import { tickPerFrame, installSharedDrainHook } from "./loop.js";
+// A11-S3 (`?particleClock=sim`): install the loop-owned sim clock into the
+// shared particle/script time hook (one clock for mixers + particles +
+// script queues, mirroring retail's single Timer::cur_time static,
+// acclient.c:46992). Install point is below, right after liveScene3d exists.
+import { particleClockMode, setCurrentTime } from "./particles/time_rng.js";
 import { EntityManager } from "./entities.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
@@ -2596,6 +2601,22 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // the latest fields (sessionHandle, cellContainers3d) — capture
   // scripts can replace these post-init without restarting init3D.
   liveScene3dRef = liveScene3d;
+
+  // A11-S3 =sim: ONE clock for mixers + particles + script queues. Retail
+  // runs every manager off the single Timer::cur_time static
+  // (acclient.c:46992; UpdateScripts read at :329201; AddScriptInternal seed
+  // :329093-329096). Ours previously mixed clamped-dt mixers with wall-clock
+  // particles. Install the loop-owned clock into the shared time hook
+  // (time_rng.js — covers emitters, RNG-paused CallPES scheduling, and
+  // script-queue next_hook_time); seeded from wall now so pre-existing
+  // absolute timestamps stay monotonic. The loop's manager phase (loop.js)
+  // advances _particleSimNowS by the CLAMPED dt, bounded by wall time —
+  // during DT_RECOVERY freeze frames particles/script hooks freeze WITH the
+  // mixers instead of jumping on wall time.
+  if (particleClockMode() === "sim") {
+    liveScene3d._particleSimNowS = performance.now() / 1000;
+    setCurrentTime(() => liveScene3d._particleSimNowS);
+  }
 
   // WebGL context loss/restore recovery. Without preventDefault on the
   // canvas `webglcontextlost` event, Three's renderer fails permanently

@@ -42,7 +42,14 @@ import { SHADOW_RECEIVE_RANGE_SQ_M as BUILDINGS_SHADOW_RANGE_SQ_M } from "./buil
 import {
   SHADOW_RECEIVE_RANGE_SQ_M as STATICS_SHADOW_RANGE_SQ_M,
   cullStaticsGroup,
+  tickStaticParticles,
 } from "./statics.js";
+// A11-S3 (2026-06-12 unification survey) — `?particleClock=off|loop|sim`.
+// "loop"/"sim" move the particle/script manager ticks into tickPerFrame's
+// dedicated manager phase (below) at the retail point in frame; "sim"
+// additionally drives the shared particle clock from the loop's clamped dt
+// (install in scene3d/index.js). time_rng.js is dependency-free.
+import { particleClockMode } from "./particles/time_rng.js";
 // FCULL (2026-06-08) — app-level frustum + distance render cull. loop.js
 // owns the import graph: it wires the per-domain cull fns into culling.js
 // (a three-only leaf module) via `setCullers`, then runs the coherent pass
@@ -1483,6 +1490,13 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // net-drain) drives the tick, so the throttle interval elapses normally in
   // both paths; the rAF path is unchanged (both clocks advance ~per frame).
   const _rp3TsSec = _rp3FrameStartMs * 0.001;
+  // A11-S3 diag (flag-gated, zero cost when off): frame counter for the
+  // "manager ticks == frames" headless parity check; managerTicks is
+  // incremented in the manager phase below.
+  if (scene3d && particleClockMode() !== "off") {
+    const _d = scene3d._a11s3Diag ?? (scene3d._a11s3Diag = { managerTicks: 0, frames: 0 });
+    _d.frames += 1;
+  }
 
   // ── CRITICAL #1 — cell visibility (gates the whole scene). ───────────
   tickCellVisibility3D(scene3d, sessionHandle);
@@ -1757,6 +1771,38 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
         scene3d._localPlayerPoseTickWarned = true;
         console.warn("[cohere-b] applyLocalPlayerPoseFromIntegrator threw:", e);
       }
+    }
+  }
+  // ── A11-S3 (CRITICAL — never RP3-gated): particle/script manager phase. ──
+  // Retail point in frame: managers run after PositionManager finalizes the
+  // frame, unconditionally (acclient.c:322883-322892), and statics update in
+  // the SAME pass as dynamic objects (acclient.c:311381-311386). Order:
+  // world (dynamic) managers first, then statics, mirroring CPhysics::UseTime
+  // (acclient.c:311371-311386). Sits AFTER mixer advance + entity drains +
+  // local-pose application and BEFORE any RP3-deferrable phase, so
+  // part-anchored emitters read THIS frame's part world frames (lazy
+  // getWorldPosition/getWorldQuaternion composition). Re-entry guard: under
+  // multi-driver regimes (?netDrainHz + rAF) tickPerFrame can run twice per
+  // display frame; managers are absolute-clock based so a second tick is
+  // wasted work, not corruption — skip if this driver call carries the same
+  // performance.now() timestamp (same-task double-call guard).
+  const _pcMode = particleClockMode();
+  if (scene3d && _pcMode !== "off") {
+    const _pcNowMs = performance.now();
+    if (scene3d._a11s3LastTickMs !== _pcNowMs) {
+      scene3d._a11s3LastTickMs = _pcNowMs;
+      if (_pcMode === "sim") {
+        // S3d: advance the shared sim clock by the loop's CLAMPED dt (A1-O5
+        // owns the clamp law — no clamp constants here); never ahead of wall
+        // time (absorbs double-driver overcount).
+        scene3d._particleSimNowS = Math.min(
+          (scene3d._particleSimNowS ?? _pcNowMs / 1000) + dt,
+          _pcNowMs / 1000
+        );
+      }
+      if (scene3d._a11s3Diag) scene3d._a11s3Diag.managerTicks += 1;
+      try { scene3d.entityManager?.tickParticlesAndScripts(); } catch (_) {}
+      try { tickStaticParticles(scene3d); } catch (_) {}
     }
   }
   // ── DEFERRABLE #20 (group NAME) — DOM-projected nameplate overlay. ───

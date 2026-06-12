@@ -734,7 +734,7 @@ import { fetchPhysicsScriptTable } from "../ui/ac_physics_script_table.js";
 // T6: reuse the particle runtime's shared RNG hook so the CallPES delay
 // jitter is the same mockable uniform[0,1) the rest of scene3d/particles
 // draws from (Math.random by default, deterministic under setRng in tests).
-import { rng as timeRng, currentTime } from "./particles/time_rng.js";
+import { rng as timeRng, currentTime, particleClockMode } from "./particles/time_rng.js";
 // A11-S1 (unification survey 2026-06-11) — shared PhysicsScript executor.
 // `?scriptQueue=on` (default OFF) routes the entity chain walker's hooks
 // through a per-owner time-ordered `ScriptManager` that fires them via the
@@ -10068,6 +10068,21 @@ export class EntityManager {
         }
       }
     }
+    // A11-S3 (`?particleClock=off|loop|sim`): when "off" (default), the
+    // particle/script manager phase runs here at the legacy point — the
+    // tail of tick(dt) — preserving the byte-identical call graph. When
+    // "loop"/"sim", tickPerFrame's dedicated manager phase (scene3d/loop.js)
+    // calls `tickParticlesAndScripts()` instead, at the retail point in
+    // frame (after pose application; acclient.c:322883-322892).
+    if (particleClockMode() === "off") this.tickParticlesAndScripts();
+  }
+
+  /** A11-S3: retail manager phase — ParticleManager::UpdateParticles then
+   *  ScriptManager::UpdateScripts (acclient.c:322887-322892 order). Called
+   *  from tick(dt) when ?particleClock=off (legacy point), or from
+   *  tickPerFrame's particle phase when =loop|sim. NEVER RP3-gated (retail
+   *  updates managers even for inactive objects, acclient.c:322886). */
+  tickParticlesAndScripts() {
     // H2 (2026-05-12): advance the world-side particle runtime. The
     // ParticleManager is lazily created on the first attach; tick is
     // a no-op when null.

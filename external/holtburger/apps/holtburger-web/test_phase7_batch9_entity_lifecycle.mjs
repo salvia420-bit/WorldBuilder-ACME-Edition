@@ -140,8 +140,11 @@ const UI_STUBS =
   "const removeSpeechBubbleFromEntity = () => {};\n" +
   "const ensureNameplateForEntity = () => {};\n";
 
+// A11-S3: stripped ?particleClock parse — "off" = legacy manager-tail path.
+const PARTICLE_CLOCK_STUB = "const particleClockMode = () => \"off\";\n";
+
 const composite =
-  "const timeRng = () => 0.999;\n" + RIG_STUBS + UI_STUBS +
+  "const timeRng = () => 0.999;\n" + PARTICLE_CLOCK_STUB + RIG_STUBS + UI_STUBS +
   "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
   "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
   "// === entities.js ===\n" + stripExports(entitiesSrc) + "\n" +
@@ -274,7 +277,7 @@ function spawnMeta(guid) {
     "const { groups, surfaceDids } = (this.__test_m2gg ? this.__test_m2gg(wasmMesh) : meshToGeometryGroups(wasmMesh));",
   );
   const comp =
-    "const timeRng = () => 0.999;\n" + RIG_STUBS + UI_STUBS +
+    "const timeRng = () => 0.999;\n" + PARTICLE_CLOCK_STUB + RIG_STUBS + UI_STUBS +
     "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
     "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
     "// === entities.js ===\n" + stripExports(eSrc) + "\n" +

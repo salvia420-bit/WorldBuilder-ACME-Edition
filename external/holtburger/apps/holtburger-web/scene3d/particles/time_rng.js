@@ -68,3 +68,25 @@ export function __resetTimeHook() {
 export function __resetRngHook() {
   _rngFn = () => Math.random();
 }
+
+// A11-S3 (unification survey 2026-06-11): `?particleClock=off|loop|sim` —
+// cached once. "loop": the particle/script managers tick from tickPerFrame
+// (retail point in frame: managers run after PositionManager finalizes the
+// frame, acclient.c:322887-322892, and statics update in the SAME
+// CPhysics::UseTime pass, acclient.c:311381-311386). "sim": additionally
+// drive `currentTime()` from the loop's clamped sim clock (retail's single
+// `Timer::cur_time` static, acclient.c:46992) so mixers + particles +
+// script queues obey ONE clock law. Default "off" = byte-identical legacy
+// behavior (entity-tail tick + statics private rAF + wall clock).
+let _particleClockMode = null;
+export function particleClockMode() {
+  if (_particleClockMode !== null) return _particleClockMode;
+  let m = "off";
+  if (typeof window !== "undefined" && window.location?.search) {
+    const v = new URLSearchParams(window.location.search).get("particleClock");
+    if (v === "loop" || v === "sim") m = v;
+  }
+  _particleClockMode = m;
+  return m;
+}
+export function __resetParticleClockMode() { _particleClockMode = null; } // tests

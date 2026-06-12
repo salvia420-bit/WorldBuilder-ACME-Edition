@@ -148,7 +148,12 @@ const UI_STUBS =
     "const removeSpeechBubbleFromEntity = () => {};\n" +
     "const ensureNameplateForEntity = () => {};\n";
 
-const composite = RIG_STUBS + UI_STUBS +
+// A11-S3: entities.js imports the ?particleClock flag parse (stripped
+// import from ./particles/time_rng.js); "off" = legacy manager-tail path
+// (covered by test_particle_clock.mjs).
+const PARTICLE_CLOCK_STUB = "const particleClockMode = () => \"off\";\n";
+
+const composite = PARTICLE_CLOCK_STUB + RIG_STUBS + UI_STUBS +
     "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
     "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
     "// === entities.js ===\n" + stripExports(entitiesSrc) + "\n" +

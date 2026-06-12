@@ -77,6 +77,11 @@ import { MaterialCache, materialCanCastShadow } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 import { CULL_DIST_SQ } from "./culling.js";
+// A11-S3: `?particleClock` flag parse — when "loop"/"sim" the static
+// ParticleManager is ticked from the main loop (loop.js manager phase) and
+// the private rAF below never arms. time_rng.js is dependency-free, so this
+// second specifier into the sibling particles/ package is cycle-safe.
+import { particleClockMode } from "./particles/time_rng.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -2924,15 +2929,28 @@ export function disposeStaticParticles(scene3d) {
   }
 }
 
+/** A11-S3: advance the static ParticleManager from the main loop — retail
+ *  runs animate_static_object's UpdateParticles in the SAME
+ *  CPhysics::UseTime pass as dynamic objects (acclient.c:311381-311386,
+ *  321191-321193), not on a private clock. Called from tickPerFrame's
+ *  manager phase (scene3d/loop.js) when `?particleClock=loop|sim`.
+ *  No-op until a manager exists. */
+export function tickStaticParticles(scene3d) {
+  const mgr = scene3d?._staticParticleManager;
+  if (mgr) { try { mgr.tick(); } catch (_) {} }
+}
+
 // Self-managed rAF to advance the static ParticleManager every frame —
 // same pattern as the billboard loop above (the render loop, loop.js,
 // is another agent's file, so we drive our own tick off
 // `window.liveScene3d`). No-op until a manager exists (i.e. until at
 // least one scripted static is placed). Browser-only.
+// A11-S3: never arms when `?particleClock=loop|sim` — the main loop's
+// manager phase (tickStaticParticles above) is the single driver then.
 let _spRafId = 0;
 let _spDisposed = false;
 
-if (typeof window !== "undefined" && _staticScriptsEnabled()) {
+if (typeof window !== "undefined" && _staticScriptsEnabled() && particleClockMode() === "off") {
   const _spLoop = () => {
     if (_spDisposed) return;
     try {
