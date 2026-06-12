@@ -4489,6 +4489,20 @@ void main() {
         const v = new URLSearchParams(window.location.search).get("unifiedClone");
         return v === "on" || v === "true" || v === "1" || v === "yes";
       })();
+      // A8-M3 (2026-06-11 unification): `?unifiedClientEvent=on`
+      // (default-off; renamed from the spec's `?unifiedEntityDispatch` by
+      // the SQ3 §3 flag ruling — it gates ClientEvents, not EntityUpdates)
+      // delegates the kind=17 EntityVisibilityChanged handler body to the
+      // scene3d-owned dispatcher (`window.__scene3dClientEventHook`,
+      // scene3d/client_event_dispatch.js, installed by
+      // loop.js#installSharedDrainHook). Off = legacy inline arm,
+      // byte-identical.
+      const __unifiedClientEventOn = (() => {
+        try {
+          return new URLSearchParams(window.location.search)
+            .get("unifiedClientEvent")?.toLowerCase() === "on";
+        } catch (_) { return false; }
+      })();
       let __backlogOverflowWarned = false;
       let __deferredSpawnsOverflowWarned = false;
 
@@ -10222,14 +10236,25 @@ void main() {
                 // THREE.Group. The 2D path is unaffected — it does
                 // not currently honor PhysicsState draw gates
                 // (a future ship can mirror this if needed).
-                const visGuid = evt.u32Payload >>> 0;
-                const visible = (evt.u32Payload2 >>> 0) === 1;
-                if (
-                  window.liveScene3d
-                  && window.liveScene3d.entityManager
-                  && typeof window.liveScene3d.entityManager.setVisibility === "function"
-                ) {
-                  window.liveScene3d.entityManager.setVisibility(visGuid, visible);
+                //
+                // A8-M3: under ?unifiedClientEvent=on the handler body
+                // lives in scene3d/client_event_dispatch.js (one
+                // rig-affecting ClientEvent dispatcher, retail parity:
+                // visibility owned by the entity layer, no renderer
+                // dispatch hop — acclient.c:143396/322197-322200);
+                // flag-off runs the legacy inline body below,
+                // byte-identical. The legacy body is the `else` of the
+                // consumed-hook test so the two can never double-handle.
+                if (!(__unifiedClientEventOn && window.__scene3dClientEventHook?.(evt))) {
+                  const visGuid = evt.u32Payload >>> 0;
+                  const visible = (evt.u32Payload2 >>> 0) === 1;
+                  if (
+                    window.liveScene3d
+                    && window.liveScene3d.entityManager
+                    && typeof window.liveScene3d.entityManager.setVisibility === "function"
+                  ) {
+                    window.liveScene3d.entityManager.setVisibility(visGuid, visible);
+                  }
                 }
               } else if (evt.kind === 55) {
                 // F17-5 — overhead speech bubble. The wasm recv loop emits

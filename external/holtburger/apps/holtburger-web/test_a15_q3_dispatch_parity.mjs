@@ -69,6 +69,10 @@ const tickPortalSpace = () => {};
 const cloneEntityUpdate = (u) => ({ ...u });
 const weatherForState = () => null;
 const wxUpdateFromDayGroup = () => {};
+// A8-M3: loop.js imports the pure ClientEvent dispatcher factory (kind=17
+// visibility) and installs it in installSharedDrainHook; out of scope for
+// this entity-update parity test (covered by test_a8_m3_kind17_dispatch.mjs).
+const createClientEventDispatcher = () => () => false;
 `;
 const transformed =
   stubs + stripped +

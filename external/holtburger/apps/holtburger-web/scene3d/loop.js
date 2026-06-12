@@ -57,6 +57,12 @@ import { tickPortalSpace } from "./portal_space.js";
 // schema shared with index.html's 2D path. Pure function, no DOM/wasm.
 // Wired into `toMeta` behind `?unifiedClone=on` (default-off, see below).
 import { cloneEntityUpdate } from "./entity_update_clone.js";
+// A8-M3 (2026-06-11 unification survey) — scene3d-owned dispatcher for
+// rig-affecting ClientEvents (kind=17 EntityVisibilityChanged). Pure
+// module, no DOM/wasm. Installed unconditionally below in
+// installSharedDrainHook; the flag (`?unifiedClientEvent=on`) is read at
+// the call site in index.html so flag-off never invokes it.
+import { createClientEventDispatcher } from "./client_event_dispatch.js";
 
 // Wire the per-domain cullers once at module load. Each fn is `(scene3d,
 // culler) => void` and is individually fail-soft (tickFrustumCull also
@@ -2508,6 +2514,19 @@ export function installSharedDrainHook(scene3d) {
       // mode 2 still calls the hook once per event).
       dispatchOne(updOrArray);
     };
+
+    // A8-M3: scene3d-owned ClientEvent dispatcher (kind=17 visibility). The
+    // 2D drainEvents forwards rig-affecting ClientEvents here under
+    // ?unifiedClientEvent=on; flag-off keeps the legacy index.html arm.
+    // Install is UNCONDITIONAL (like __scene3dEntityHook above); in pure-2D
+    // sessions installSharedDrainHook never runs, so the hook stays
+    // undefined and the legacy arm runs exactly as today. `getEntityManager`
+    // late-binds through scene3d.entityManager (same rationale as the
+    // call-time resolution in dispatchOne, A15-Q3.1 above).
+    // eslint-disable-next-line no-undef
+    window.__scene3dClientEventHook = createClientEventDispatcher({
+      getEntityManager: () => scene3d.entityManager,
+    });
 
     // Workstream E (3D camera/game-feel fix): drain the pre-init3D
     // backlog now that the real dispatcher is wired. The buffering
