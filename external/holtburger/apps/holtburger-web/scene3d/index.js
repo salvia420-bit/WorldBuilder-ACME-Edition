@@ -363,6 +363,42 @@ export async function preInit3D(canvas) {
     console.log(`[net-drain] ?netDrainHz=${netDrainHz} — setInterval drain at ${(1000 / netDrainHz).toFixed(1)} ms`);
   }
 
+  // A1-O4 (2026-06-12, W4 S2) — `?singleDriver=on`: scene3d claims the
+  // frame pump (the 2D loop's pumpNetFrame, exposed as
+  // window.__netFramePump) and runs it as tickPerFrame's CRITICAL phase
+  // #0; the 2D rAF driver parks. Claim rule (one boolean, no judgment):
+  // claim iff singleDriver && !(renderOnDemand && !(netDrainHz > 0)) —
+  // the excluded combo (renderOnDemand without netDrainHz) has NO
+  // periodic 3D caller of tickPerFrame, so claiming would starve
+  // net/chat; warn and leave the 2D loop as the net driver.
+  const singleDriverRequested = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return new URLSearchParams(window.location.search)
+        .get("singleDriver") === "on";
+    } catch (_) { return false; }
+  })();
+  const singleDriverOn =
+    singleDriverRequested && !(renderOnDemand && !(netDrainHz > 0));
+  if (singleDriverRequested && !singleDriverOn) {
+    // eslint-disable-next-line no-console
+    console.warn("[singleDriver] ?renderOnDemand=1 without ?netDrainHz — 2D loop remains the net driver");
+  } else if (singleDriverOn) {
+    // eslint-disable-next-line no-console
+    console.log("[singleDriver] ?singleDriver=on — scene3d will claim the frame pump after the drain hook installs");
+  }
+  // Un-claim helper for every path that stops the 3D cadence (stop(),
+  // onPause, mirrored by the index.html heartbeat watchdog): release the
+  // claim and queue the 2D rAF driver's resume. Idempotent — only acts
+  // on a held claim, so flag-off paths are byte-identical no-ops.
+  function _releaseFrameDriverClaim() {
+    if (typeof window === "undefined") return;
+    if (window.__scene3dFrameDriverActive) {
+      window.__scene3dFrameDriverActive = false;
+      try { window.__resume2dFrameDriver?.(); } catch (_) { /* resume is best-effort */ }
+    }
+  }
+
   // 2026-05-23 — Tier-3 ?nullRender=1: skip the renderer.render() call in
   // tick(). Sim/protocol/state-propagation still runs (cell visibility,
   // PVS, entity drain, animation mixers); GPU work is zero. Pairs with
@@ -2316,7 +2352,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // Stop hook — future phases use this for renderer hot-swap.
     // sched-timers (2026-06-07): cancel any pending re-arm so a stopped
     // loop leaves no orphaned setTimeout/rAF that could fire one more tick.
-    stop() { running = false; _cancelSchedule(); },
+    // A1-O4: a stopped 3D loop must hand the frame pump back to the 2D
+    // driver (un-claim + queued resume) or chat/net would freeze until
+    // the heartbeat watchdog fires (~4 s).
+    stop() { running = false; _cancelSchedule(); _releaseFrameDriverClaim(); },
     // Render-completeness audit (2026-05-29) — GAP 2: re-attach SetupModel
     // lights for geometry that streamed in after the initial boot scan
     // (interior cell lanterns via GAP 1, plus newly-baked buildings/statics).
@@ -2572,9 +2611,16 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     renderer,
     canvas,
     getLiveScene3d: () => liveScene3d,
-    onPause: () => { running = false; _cancelSchedule(); },
+    // A1-O4: context-loss pause releases the frame-pump claim so the 2D
+    // driver resumes net/chat while the GPU recovers; resume re-claims
+    // (the 2D wrapper re-parks itself on its next frame — at most a
+    // handful of double-pumped frames, today's steady-state concurrency).
+    onPause: () => { running = false; _cancelSchedule(); _releaseFrameDriverClaim(); },
     onResume: () => {
       running = true;
+      if (singleDriverOn && liveScene3d?.singleDriverOn && typeof window !== "undefined") {
+        window.__scene3dFrameDriverActive = true;
+      }
       // Reset the dt baseline so the first frame post-restore doesn't
       // trip the recovery-freeze path and stall sim for 10 frames.
       lastFrameTs = null;
@@ -3874,6 +3920,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // window.__scene3dEntityHook(upd) for each EntityUpdate to forward
   // it into the 3D path.
   installSharedDrainHook(liveScene3d);
+
+  // A1-O4 claim point: immediately AFTER installSharedDrainHook — the
+  // entity hook is live before the 2D loop parks, so no update is
+  // dropped during the handoff. `liveScene3d.singleDriverOn` arms
+  // tickPerFrame's CRITICAL phase #0 (loop.js); the window flag is what
+  // the 2D drainEvents wrapper claim-checks every frame.
+  if (singleDriverOn) {
+    liveScene3d.singleDriverOn = true;
+    if (typeof window !== "undefined") {
+      window.__scene3dFrameDriverActive = true;
+    }
+  }
 
   // 2026-05-21 wire-agent — camera alignment helper. Driver scripts
   // touring landblocks via @teleloc need the camera to point in the

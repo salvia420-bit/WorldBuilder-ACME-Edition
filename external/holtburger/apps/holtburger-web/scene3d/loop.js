@@ -1434,6 +1434,36 @@ function _rp3NowMs() {
 }
 
 export function tickPerFrame(scene3d, sessionHandle, dt) {
+  // ── CRITICAL #0 (A1-O4) — single-driver net/input pump. Retail runs net
+  // dispatch + input interp inside the one SmartBox::UseTime pass
+  // (acclient.c:146316, :146324); under ?singleDriver=on the scene3d
+  // driver owns that pass: `window.__netFramePump` is the 2D loop's whole
+  // pumpNetFrame body (index.html — events drain, entity drain +
+  // streaming, tickMovement enqueue, input side-effects), relocated here
+  // wholesale while the 2D rAF driver parks. Placed ABOVE the RP3 stamp
+  // and NEVER budget-gated (net + input are in the same never-gate class
+  // as the camera/input phase #13) — pump cost is excluded from the
+  // deferrable budget by design (A1-O4 spec §6 OQ3). Frame-top placement
+  // (retail dispatches at frame-bottom) is equivalent modulo one frame
+  // and means a server force-position lands before this frame's physics
+  // enqueue — the spec's documented choice. Living INSIDE tickPerFrame
+  // (not index.js tick) makes the ?netDrainHz interval and __renderOnce
+  // inherit the full contract-minus-render for free. If the watchdog
+  // un-claims while the 3D loop later revives, the brief double-pump is
+  // benign (take-based drains, dt-measured tick, sig-deduped input —
+  // today's steady-state concurrency).
+  if (scene3d?.singleDriverOn && typeof window !== "undefined"
+      && typeof window.__netFramePump === "function") {
+    try {
+      window.__netFramePump();
+    } catch (e) {
+      if (!scene3d._netPumpWarned) {
+        scene3d._netPumpWarned = true;
+        // eslint-disable-next-line no-console
+        console.warn("[singleDriver] __netFramePump threw:", e);
+      }
+    }
+  }
   // RP3 — stamp the frame-budget clock + resolve the wall-clock the throttles
   // read. Both the budget gate and the throttle now share ONE live monotonic
   // clock (_rp3NowMs), captured once per tick. This is deliberately NOT driven

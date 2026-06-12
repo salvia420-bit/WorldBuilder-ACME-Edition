@@ -4528,6 +4528,24 @@ void main() {
         const v = new URLSearchParams(window.location.search).get("unifiedDispatch");
         return v === "on" || v === "true" || v === "1" || v === "yes";
       })();
+      // A1-O4 (2026-06-12 unification): `?singleDriver=on` (default-off)
+      // — single frame driver. Inert unless `?renderer=3d` is also present
+      // (RULINGS #2: 2D stays supported and 2D mode keeps its own rAF
+      // driver). ON + 3D: once scene3d claims the frame
+      // (`window.__scene3dFrameDriverActive`, set after
+      // installSharedDrainHook in scene3d/index.js), the 2D rAF driver
+      // PARKS (no re-arm) and the whole net/input pump (`pumpNetFrame`
+      // below, exposed as `window.__netFramePump`) runs as CRITICAL
+      // phase #0 of scene3d's tickPerFrame — retail's single
+      // SmartBox::UseTime pass shape (acclient.c:146256-146325). A 2 s
+      // setTimeout watchdog (`_arm2dWatchdog`) resumes the 2D driver if
+      // the pump heartbeat (`window.__lastPumpMs`) goes stale >4 s.
+      const __SINGLE_DRIVER_ON = (() => {
+        try {
+          return new URLSearchParams(window.location.search)
+            .get("singleDriver") === "on";
+        } catch (_) { return false; }
+      })();
       let __backlogOverflowWarned = false;
       let __deferredSpawnsOverflowWarned = false;
 
@@ -9373,8 +9391,27 @@ void main() {
             new URLSearchParams(window.location.search).get("skytime") === "accel";
           const __skyTimeAccelStart = performance.now();
           window.__skyTimeAccel = __skyTimeAccel; // exposed for e2e probes
-          function drainEvents() {
-            window.__rafTickCount++;
+          // A1-O4 Stage O4-a (2026-06-12): the old drainEvents BODY,
+          // extracted verbatim as a closure-scoped function (it closes
+          // over `handle`, `characterUl`, `loginStatus`, `keyState`,
+          // `entityMap`, `liveScene`, ... — deliberately NOT a module).
+          // `drainEvents` below is now a thin rAF wrapper; under
+          // `?singleDriver=on&renderer=3d` scene3d's tickPerFrame calls
+          // this directly (via `window.__netFramePump`) as its CRITICAL
+          // phase #0 instead. Blocks 1-7 (events drain / entity drain /
+          // 2D presentation / tickMovement / 2D prediction / input
+          // dispatch incl. the 3D-only setMotion + sidestep overlays)
+          // move as an UNSPLIT unit, so the `upd.free()` wasm-bindgen
+          // lifetime and the input side-effects are unchanged by
+          // construction. ONE deliberate delta vs the pre-O4 body:
+          // `__rafTickCount++` stays in the drainEvents WRAPPER — it
+          // counts 2D rAF driver ticks (the handoff acceptance signal:
+          // it must FREEZE when the 2D driver parks), not pump runs.
+          function pumpNetFrame() {
+            // Heartbeat for the O4-c watchdog: stamped on EVERY pump run
+            // regardless of which driver (2D rAF, 3D tickPerFrame phase
+            // #0, or the ?netDrainHz interval) invoked it.
+            window.__lastPumpMs = performance.now();
             // Sky-B: drive the `?skytime=accel` synthetic day cycle.
             // Cheap (~0.5 µs per call) so it runs on every rAF tick
             // even when the SkyDesc hasn't been populated — the wasm
@@ -11426,8 +11463,65 @@ void main() {
                 }
               }
             }
+          }
+          // A1-O4 Stage O4-c — 2D watchdog (runtime rollback). A 2 s
+          // setTimeout chain (NOT rAF — must fire in hidden tabs) that,
+          // while the 3D claim is held, checks the `__lastPumpMs`
+          // heartbeat pumpNetFrame stamps. Two missed beats (>4 s) means
+          // the 3D loop died with the claim held (an uncaught throw
+          // between tickPerFrame and scheduleNext kills the rAF chain) —
+          // un-claim and resume the 2D driver instead of leaving a
+          // frozen chat/net session. Disarms itself when the claim flag
+          // is off (stop()/onPause un-claim and resume us directly).
+          let __watchdog2dTimer = null;
+          function _arm2dWatchdog() {
+            if (__watchdog2dTimer !== null) return;
+            __watchdog2dTimer = setTimeout(function __check2dHeartbeat() {
+              __watchdog2dTimer = null;
+              if (!window.__scene3dFrameDriverActive) return; // claim released elsewhere; resume already queued
+              const last = window.__lastPumpMs ?? 0;
+              if (performance.now() - last > 4000) {
+                console.warn("[singleDriver] pump heartbeat stale — resuming 2D driver");
+                window.__scene3dFrameDriverActive = false;
+                window.__resume2dFrameDriver();
+                return;
+              }
+              __watchdog2dTimer = setTimeout(__check2dHeartbeat, 2000);
+            }, 2000);
+          }
+          // A1-O4 Stage O4-b — the 2D rAF driver, now a thin wrapper.
+          // Claim-check EVERY frame (not once), so a later un-claim
+          // (stop()/onPause/watchdog) resumes 2D pumping automatically.
+          // The 2D loop keeps driving login/character-select (the 3D
+          // renderer boots AFTER the boot arm below — renderHoltburg()
+          // is awaited next) and all 2D-mode sessions, exactly as today.
+          function drainEvents() {
+            window.__rafTickCount++;
+            if (__SINGLE_DRIVER_ON && __USE_RENDERER_3D && window.__scene3dFrameDriverActive) {
+              if (!window.__singleDriverHandoffLogged) {
+                window.__singleDriverHandoffLogged = true;
+                console.log("[singleDriver] 2D rAF driver parked — scene3d owns the frame pump");
+              }
+              _arm2dWatchdog(); // does NOT pump, does NOT rAF-re-arm
+              return;
+            }
+            pumpNetFrame();
             requestAnimationFrame(drainEvents);
           }
+          // A1-O4 exposures: the pump for scene3d's phase #0, and the
+          // resume hook for the un-claim paths (scene3d stop()/onPause +
+          // the watchdog above). Resume is queue-deduped so a racing
+          // watchdog + onPause can't start two concurrent rAF chains.
+          window.__netFramePump = pumpNetFrame;
+          let __resume2dQueued = false;
+          window.__resume2dFrameDriver = () => {
+            if (__resume2dQueued) return;
+            __resume2dQueued = true;
+            requestAnimationFrame(() => {
+              __resume2dQueued = false;
+              drainEvents();
+            });
+          };
           requestAnimationFrame(drainEvents);
 
           // Boot the renderer as a backdrop. Login is the gate;
