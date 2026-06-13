@@ -71,6 +71,31 @@ function readSpawnHiddenStateFlag() {
   }
 }
 
+// A8-M4 (2026-06-11 unification survey) — `?preCreateBuffer=on` opt-in.
+// Default OFF → byte-identical: the per-kind `_pendingAttach` /
+// `_pendingVisibility` maps keep their exact legacy behavior and every
+// other pre-create event is dropped as before. On → events addressed to a
+// guid whose rig isn't built yet park in ONE generic guid-keyed FIFO
+// (`this._preCreate`, scene3d/pre_create_buffer.js), drained on spawn-commit
+// and expired 25 s after the bucket's last enqueue — the retail null-object
+// recovery (QueueBlobForObject acclient.c:310848-310860 + the 25.0 s
+// destruction stamp :310666). DELIBERATE retail-parity widening under the
+// flag: a kind=17 visibility for an unknown guid is buffered EVEN WITHOUT
+// `?spawnHiddenState=on` (retail parks ALL netblobs for unknown guids; the
+// per-kind opt-in was only ever a guard on the legacy map). The retail 20 s
+// SendForceObjdesc nag (acclient.c:310302-310308) is NOT implemented — ACE
+// support unresolved (ROADMAP bucket D). Same reader shape as
+// `readEntityLightsFlag`.
+function readPreCreateBufferFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("preCreateBuffer");
+    return typeof v === "string" && v.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
 // === Wave R3.A — remote-entity motion SMOOTHING (2026-05-28) ===
 // `?deadReckon=on` opt-in. Default OFF → remote entities snap to each
 // server-authoritative position exactly as before (byte-identical render).
@@ -462,6 +487,10 @@ const RIG_MODULE_ON = readRigModuleFlag();
 // cull. Only the constant is imported; the cull pass is driven from loop.js
 // via `tickEntityRenderVisibility`.
 import { CULL_DIST_SQ } from "./culling.js";
+// A8-M4 (2026-06-12) — generic pre-create event buffer (retail null-object
+// analog, `?preCreateBuffer=on`). Pure dependency-free module; ALL wiring
+// and flag gating lives in this file (see readPreCreateBufferFlag above).
+import { createPreCreateBuffer } from "./pre_create_buffer.js";
 
 // T11 (2026-05-28) — `?velScale=on` gates velocity-scaled locomotion cycle
 // speed (anti-ice-skating): the walk/run cycle's playback rate is scaled by
@@ -2528,6 +2557,21 @@ export class EntityManager {
     // ordering-safe pattern as `_pendingAttach`.
     /** @type {Map<number, boolean>} */
     this._pendingVisibility = new Map();
+    // A8-M4 (2026-06-12) — `?preCreateBuffer=on`: the generic guid-keyed
+    // pre-create FIFO that REPLACES the two per-kind maps above when on
+    // (they stay byte-identical when off). Drained from `_spawnImpl` via
+    // `_drainPreCreate`, purged on `remove()`/`_detachChild`, swept for the
+    // retail 25 s expiry at the tail of `tick(dt)`. Read the flag once here
+    // (constructor) — same scope as every consumer (`setVisibility`,
+    // `attachChildToParent`, `_spawnImpl`, `_detachChild`, `remove`,
+    // `tick`), all of which read `this._preCreateBufferOn`.
+    this._preCreateBufferOn = readPreCreateBufferFlag();
+    this._preCreate = createPreCreateBuffer();
+    // Rate-limit stamp for the once-per-second expiry sweep in tick(dt)
+    // (same pattern as `_lastRecentLocomotionPruneMs`, but Date.now()
+    // domain throughout — the buffer's enqueue stamps use its default
+    // Date.now() clock, so the sweep must compare in the same domain).
+    this._preCreateLastSweepMs = 0;
     /** @type {Map<number, Map<number, object>>} */
     this._holdingLocCache = new Map();
     // B5 (2026-06-09): child-weapon placement-frame cache, keyed
@@ -3376,24 +3420,37 @@ export class EntityManager {
     // attachChildToParent re-asserts `_setEntityStateVisible(c, true)` on
     // mount, and the cull walk recomposes from the same flag (a raw
     // `root.visible` write would be stomped by the next cull pass).
-    if (this._wieldedSpawn && this._pendingAttach.has(guid)) {
+    // A8-M4 (2026-06-12): under `?preCreateBuffer=on` the park lives in the
+    // generic buffer, not `_pendingAttach` — consult whichever map owns it.
+    const hasParkedAttach = this._preCreateBufferOn
+      ? this._preCreate.hasFor(guid, "attach")
+      : this._pendingAttach.has(guid);
+    if (this._wieldedSpawn && hasParkedAttach) {
       _setEntityStateVisible(inst, false);
     }
-    // Render-completeness audit (2026-05-29) — flush any wielded-item attach
-    // that arrived before this rig (or its counterpart) existed. Covers both
-    // roles: this entity may be a child waiting for its wielder, or a wielder
-    // whose children are queued. Fire-and-forget (resolves holding frame async).
-    this._flushPendingAttach(guid);
-    // F16-5 (2026-06-09) — apply any spawn-time draw gate that raced ahead
-    // of this rig. The wasm spawn-hidden emit (`?spawnHiddenState=on`) queued
-    // a visible:false here in `_pendingVisibility`; re-route through
-    // `setVisibility` now that the rig is in `entityMap` so the same
-    // attached-child / render-cull composite guards apply. No-op when nothing
-    // queued (flag off, or a normally-visible spawn).
-    if (this._pendingVisibility.size > 0 && this._pendingVisibility.has(guid)) {
-      const wantVisible = this._pendingVisibility.get(guid);
-      this._pendingVisibility.delete(guid);
-      this.setVisibility(guid, wantVisible);
+    if (this._preCreateBufferOn) {
+      // A8-M4 (2026-06-12) — spawn-commit drain of the generic pre-create
+      // buffer (retail: object creation replays the placeholder's queued
+      // netblobs in arrival order). Subsumes BOTH legacy flushes below;
+      // their maps stay empty under the flag (no enqueue site feeds them).
+      this._drainPreCreate(guid);
+    } else {
+      // Render-completeness audit (2026-05-29) — flush any wielded-item attach
+      // that arrived before this rig (or its counterpart) existed. Covers both
+      // roles: this entity may be a child waiting for its wielder, or a wielder
+      // whose children are queued. Fire-and-forget (resolves holding frame async).
+      this._flushPendingAttach(guid);
+      // F16-5 (2026-06-09) — apply any spawn-time draw gate that raced ahead
+      // of this rig. The wasm spawn-hidden emit (`?spawnHiddenState=on`) queued
+      // a visible:false here in `_pendingVisibility`; re-route through
+      // `setVisibility` now that the rig is in `entityMap` so the same
+      // attached-child / render-cull composite guards apply. No-op when nothing
+      // queued (flag off, or a normally-visible spawn).
+      if (this._pendingVisibility.size > 0 && this._pendingVisibility.has(guid)) {
+        const wantVisible = this._pendingVisibility.get(guid);
+        this._pendingVisibility.delete(guid);
+        this.setVisibility(guid, wantVisible);
+      }
     }
     // Diagnostic hook (always-on; cheap when __diag not installed). Fires
     // AFTER the entity is committed to the live scene graph so observed
@@ -4158,6 +4215,16 @@ export class EntityManager {
       // visible:false) lands before the async spawn completes — remember
       // the desired visibility so `spawn()` can apply it once the rig
       // exists, instead of dropping it. Off → no-op as before.
+      // A8-M4 (2026-06-12): under `?preCreateBuffer=on` ALL pre-create
+      // visibility events buffer in the generic FIFO — retail parks every
+      // netblob for an unknown guid (QueueBlobForObject), so the
+      // `?spawnHiddenState` per-kind opt-in is subsumed here. Appended (not
+      // last-write-wins): the FIFO replay at spawn applies them in arrival
+      // order and setVisibility is synchronous, so the last one wins anyway.
+      if (this._preCreateBufferOn) {
+        this._preCreate.enqueue(g, "visibility", { visible: !!visible });
+        return;
+      }
       if (readSpawnHiddenStateFlag()) this._pendingVisibility.set(g, !!visible);
       return;
     }
@@ -4225,6 +4292,19 @@ export class EntityManager {
     const parentInst = this.entityMap.get(pGuid);
     if (!childInst || !parentInst) {
       // One (or both) rigs not built yet — remember and retry on spawn.
+      // A8-M4 (2026-06-12): under `?preCreateBuffer=on` park in the generic
+      // buffer instead, keyed by CHILD guid (the parent-side unblock is the
+      // `_drainPreCreate` scan, mirroring `_flushPendingAttach`).
+      // `dedupeKind` preserves the legacy Map's last-write-wins: two parked
+      // attaches would race their async holding-location resolves on drain.
+      if (this._preCreateBufferOn) {
+        this._preCreate.enqueue(cGuid, "attach", {
+          parentGuid: pGuid,
+          location: location >>> 0,
+          placement: placement >>> 0,
+        }, { dedupeKind: true });
+        return;
+      }
       this._pendingAttach.set(cGuid, {
         parentGuid: pGuid,
         location: location >>> 0,
@@ -4307,6 +4387,10 @@ export class EntityManager {
     if (!p._attachedChildren) p._attachedChildren = new Set();
     p._attachedChildren.add(cGuid);
     this._pendingAttach.delete(cGuid);
+    // A8-M4 (2026-06-12): same stale-park cleanup for the generic buffer —
+    // a direct mount (both rigs present) supersedes any earlier parked
+    // attach for this child. No-op when the flag is off (buffer empty).
+    this._preCreate.removeMatching((g, ev) => g === cGuid && ev.kind === "attach");
     // Keep the child subtree on the indoor render layer (matches spawn).
     try {
       c.root.traverse((o) => o.layers.set(1));
@@ -4342,6 +4426,10 @@ export class EntityManager {
   _detachChild(childGuid) {
     const cGuid = childGuid >>> 0;
     this._pendingAttach.delete(cGuid);
+    // A8-M4 (2026-06-12): cancel ONLY a parked attach for this child (a
+    // parked visibility event must survive a detach, exactly as
+    // `_pendingVisibility` did). No-op when the flag is off (buffer empty).
+    this._preCreate.removeMatching((g, ev) => g === cGuid && ev.kind === "attach");
     const c = this.entityMap.get(cGuid);
     if (!c || !c.root) return;
     const parentGuid = c._attachedParentGuid;
@@ -4454,6 +4542,47 @@ export class EntityManager {
       g.position.set(fr.ox, fr.oy, fr.oz);
       // AC wire order (qw, qx, qy, qz) → three.js (qx, qy, qz, qw).
       g.quaternion.copy(acQuatToThree(fr.qw, fr.qx, fr.qy, fr.qz));
+    }
+  }
+
+  /**
+   * A8-M4 (2026-06-12, `?preCreateBuffer=on`) — spawn-commit drain of the
+   * generic pre-create buffer for a just-built rig. Retail analog: object
+   * creation replays the null-object placeholder's queued netblobs in
+   * arrival order (CPhysicsObj::queue_netblob FIFO, fed by
+   * CObjectMaint::QueueBlobForObject acclient.c:310848-310860). Two passes:
+   *   1. events parked UNDER this guid, in arrival order — `attach` retries
+   *      `attachChildToParent` (which re-parks if the counterpart is still
+   *      missing, exactly like the legacy `_flushPendingAttach` retry),
+   *      `visibility` re-routes through `setVisibility` so the same
+   *      attached-child / render-cull composite guards apply (F16-5).
+   *   2. parked attaches whose WIELDER is this guid — the parent-side
+   *      unblock the legacy `_flushPendingAttach` covered with its map scan
+   *      (a parked attach is keyed by CHILD guid, but either rig's spawn
+   *      can be the unblocking one).
+   * Unknown kinds are dropped with a one-shot warn (forward-compat: a
+   * future enqueue site must add its replay arm here).
+   */
+  _drainPreCreate(guid) {
+    const g = guid >>> 0;
+    if (this._preCreate.size() === 0) return;
+    for (const ev of this._preCreate.takeFor(g)) {
+      if (ev.kind === "attach") {
+        // Fire-and-forget (resolves holding frame async), like the legacy flush.
+        this.attachChildToParent(g, ev.data.parentGuid, ev.data.location, ev.data.placement);
+      } else if (ev.kind === "visibility") {
+        this.setVisibility(g, ev.data.visible);
+      } else if (!this._preCreateUnknownKindWarned) {
+        this._preCreateUnknownKindWarned = true;
+        // eslint-disable-next-line no-console
+        console.warn("[entities/A8-M4] unknown pre-create event kind dropped:", ev.kind);
+      }
+    }
+    const asWielder = this._preCreate.takeMatching(
+      (childGuid, ev) => ev.kind === "attach" && ev.data.parentGuid === g
+    );
+    for (const ev of asWielder) {
+      this.attachChildToParent(ev.guid, ev.data.parentGuid, ev.data.location, ev.data.placement);
     }
   }
 
@@ -7499,6 +7628,13 @@ export class EntityManager {
     // F16-5 (2026-06-09): drop any un-applied spawn-time draw gate so a guid
     // that despawned before its rig finished building doesn't leak.
     this._pendingVisibility.delete(g);
+    // A8-M4 (2026-06-12): same despawn purge for the generic pre-create
+    // buffer (retail RemoveObjectToBeDestroyed cancels the placeholder's
+    // timer on real removal, acclient.c:309906-309915; parked attaches
+    // keyed by OTHER child guids that name this guid as wielder are left
+    // to the 25 s expiry, matching the legacy `_pendingAttach` behavior).
+    // No-op when the flag is off (buffer empty).
+    this._preCreate.purgeGuid(g);
     // F17-5 (2026-06-09): tear down any in-flight speech bubble so a despawn
     // mid-fade doesn't leak its texture/material (the fade loop would
     // otherwise keep the sprite alive under the detached root).
@@ -10414,6 +10550,20 @@ export class EntityManager {
             inst._recentLocomotionTime.delete(key);
           }
         }
+      }
+    }
+    // A8-M4 (2026-06-12, `?preCreateBuffer=on`) — retail 25 s pre-create
+    // expiry (acclient.c:310666; the timer is refreshed on every enqueue,
+    // QueueBlobForObject → AddObjectToBeDestroyed remove+re-add). Whole
+    // buckets expire together, like retail destroying the placeholder with
+    // its queued blobs. Rate-limited to once/second (same pattern as the
+    // locomotion prune above); Date.now() domain to match the buffer's
+    // enqueue stamps. Flag off / empty buffer → size()===0, zero cost.
+    if (this._preCreateBufferOn && this._preCreate.size() > 0) {
+      const sweepNow = Date.now();
+      if (sweepNow - this._preCreateLastSweepMs > 1000) {
+        this._preCreateLastSweepMs = sweepNow;
+        this._preCreate.expire(sweepNow);
       }
     }
     // A11-S3 (`?particleClock=off|loop|sim`): when "off" (default), the

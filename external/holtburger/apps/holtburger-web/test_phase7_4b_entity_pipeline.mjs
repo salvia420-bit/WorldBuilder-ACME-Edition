@@ -161,7 +161,13 @@ const PARTICLE_OWNER_STUB =
     "stopEmitter: () => false, destroySome: () => 0, destroyAllForOwner: () => 0, " +
     "ownerKeys: () => [][Symbol.iterator]() };\n";
 
-const composite = PARTICLE_CLOCK_STUB + PARTICLE_OWNER_STUB + RIG_STUBS + UI_STUBS +
+// A8-M4: entities.js imports the generic pre-create buffer (stripped import
+// from ./pre_create_buffer.js). Pure + dependency-free by construction, so
+// splice the REAL module source rather than a stub.
+const PRE_CREATE_SRC = "// === pre_create_buffer.js ===\n" +
+    stripExports(loadModule("scene3d/pre_create_buffer.js")) + "\n";
+
+const composite = PRE_CREATE_SRC + PARTICLE_CLOCK_STUB + PARTICLE_OWNER_STUB + RIG_STUBS + UI_STUBS +
     "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
     "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
     "// === entities.js ===\n" + stripExports(entitiesSrc) + "\n" +
