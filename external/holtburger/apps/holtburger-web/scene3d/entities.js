@@ -767,6 +767,13 @@ import { fetchPhysicsScriptTable } from "../ui/ac_physics_script_table.js";
 // jitter is the same mockable uniform[0,1) the rest of scene3d/particles
 // draws from (Math.random by default, deterministic under setRng in tests).
 import { rng as timeRng, currentTime, particleClockMode } from "./particles/time_rng.js";
+// A11-S2 (unification survey 2026-06-11) — `?particleOwner=on` (default OFF)
+// routes emitter lifecycle through the ONE owner-keyed facade
+// (`scene3d/particles/owner_registry.js`): object-scoped script handles
+// (retail per-CPhysicsObj ParticleManager table, acclient.h:31040-31045),
+// single `destroyAllForOwner` teardown replacing `_particleEmittersForGuid`.
+// Off-path = the legacy per-guid map below, byte-identical.
+import { ownerRegistry, particleOwnerOn } from "./particles/owner_registry.js";
 // A11-S1 (unification survey 2026-06-11) — shared PhysicsScript executor.
 // `?scriptQueue=on` (default OFF) routes the entity chain walker's hooks
 // through a per-owner time-ordered `ScriptManager` that fires them via the
@@ -7386,6 +7393,15 @@ export class EntityManager {
       }
       this._particleEmittersForGuid.delete(g);
     }
+    // A11-S2: owner-facade teardown — the ONE `destroyAllForOwner` API
+    // (retail destroy_particle_manager on the CPhysicsObj destructor path,
+    // acclient.c:318082-318095). With the flag on, every emitter this guid
+    // owns (H2 chain + AnimationHook 13/26 + PlayEffect one-shots) lives in
+    // the registry, the legacy map above stays empty, and this single call
+    // (plus its epoch tombstone for in-flight creates) is the teardown.
+    if (particleOwnerOn()) {
+      try { ownerRegistry.destroyAllForOwner(g); } catch (_) {}
+    }
     // H3-E1 (2026-05-12): cancel any pending Sound / SoundTweaked
     // setTimeout schedules. If we didn't, a sound queued at start_time
     // = 30s would fire 30s after the rocket already despawned.
@@ -8713,7 +8729,17 @@ export class EntityManager {
           const handle = dvh.getUint32(0, true) >>> 0;
           if (handle !== 0) {
             try {
-              if (e.hookType === 14) {
+              if (particleOwnerOn()) {
+                // A11-S2: handle is OBJECT-SCOPED — resolve it through this
+                // guid's owner record (retail destroy/stop key into the
+                // object's OWN table, acclient.c:316382-316407), so a handle
+                // collision with another object's script can't cross-kill.
+                if (e.hookType === 14) {
+                  ownerRegistry.destroyEmitter(guid >>> 0, handle);
+                } else {
+                  ownerRegistry.stopEmitter(guid >>> 0, handle);
+                }
+              } else if (e.hookType === 14) {
                 this._worldParticleManager.destroyParticleEmitter(handle);
               } else {
                 this._worldParticleManager.stopParticleEmitter(handle);
@@ -8853,7 +8879,16 @@ export class EntityManager {
       // so the moon (pure CreateParticle, handle 0) is unaffected. Mirrors the
       // AnimationHook CreateParticle path (entities.js _fireCreateParticleHook
       // passes `emitterId: emitterIdSeed`). (anim-deep FIX-PLAN W1.3.)
-      this._worldParticleManager.addEmitter({
+      // A11-S2: with `?particleOwner=on`, route through the owner facade —
+      // the per-script instance handle becomes OBJECT-SCOPED (the facade
+      // allocates the underlying id and owns replace/blocking semantics per
+      // owner, retail per-CPhysicsObj table), and teardown is
+      // `destroyAllForOwner` at entity-release. Off-path unchanged.
+      const _s2AddEmitter = (req) =>
+        particleOwnerOn()
+          ? ownerRegistry.addEmitter(guid >>> 0, this._worldParticleManager, req)
+          : this._worldParticleManager.addEmitter(req);
+      _s2AddEmitter({
         emitterInfo,
         parent: rig,  // <-- the entity rig (THREE.Group); .position + .quaternion track the entity
         partIndex,
@@ -8861,6 +8896,9 @@ export class EntityManager {
         emitterId: (e.createParticleEmitterInstanceId >>> 0),
         // A11-S0: hook 26 = CreateBlockingParticle. With the parity flag on,
         // route it with retail blocking semantics (no-replace if id live).
+        // (A11-S2: the owner facade applies blocking per-owner regardless,
+        // but only when the S0 parity flag asks for blocking semantics —
+        // keep the two flags' contracts independent.)
         blocking: ((e.hookType | 0) === 26) && BLOCKING_PARTICLE_PARITY_ON,
       })
         .then((id) => {
@@ -8877,7 +8915,12 @@ export class EntityManager {
         });
     }
     if (emitterIds.length > 0) {
-      this._particleEmittersForGuid.set(guid, emitterIds);
+      // A11-S2: the owner facade is the registry of record when the flag is
+      // on — do NOT shadow it in the legacy per-guid map (the map would be a
+      // second teardown path, exactly the split-brain S2 removes).
+      if (!particleOwnerOn()) {
+        this._particleEmittersForGuid.set(guid, emitterIds);
+      }
       // eslint-disable-next-line no-console
       console.log(
         `[entities/H2] attached ${emitterIds.length} particle emitters ` +
@@ -10899,8 +10942,13 @@ export class EntityManager {
     }
     if (hookType === 14) {
       // DestroyParticle — tear down by per-script handle.
+      // A11-S2: with `?particleOwner=on` the handle is OBJECT-SCOPED —
+      // resolve through this entity's owner record (retail keys into the
+      // object's OWN table, acclient.c:316382-316393).
       const emitterId = hook.particleEmitterId >>> 0;
-      if (emitterId !== 0 && this._worldParticleManager) {
+      if (emitterId !== 0 && particleOwnerOn()) {
+        try { ownerRegistry.destroyEmitter(inst.guid >>> 0, emitterId); } catch (_) {}
+      } else if (emitterId !== 0 && this._worldParticleManager) {
         try { this._worldParticleManager.destroyParticleEmitter(emitterId); }
         catch (_) { /* idempotent — never error on unknown id */ }
       }
@@ -10909,8 +10957,12 @@ export class EntityManager {
     }
     if (hookType === 15) {
       // StopParticle — stop emission (no teardown) by per-script handle.
+      // A11-S2: owner-scoped resolve, as for Destroy(14) above
+      // (acclient.c:316395-316407).
       const emitterId = hook.particleEmitterId >>> 0;
-      if (emitterId !== 0 && this._worldParticleManager) {
+      if (emitterId !== 0 && particleOwnerOn()) {
+        try { ownerRegistry.stopEmitter(inst.guid >>> 0, emitterId); } catch (_) {}
+      } else if (emitterId !== 0 && this._worldParticleManager) {
         try { this._worldParticleManager.stopParticleEmitter(emitterId); }
         catch (_) { /* idempotent */ }
       }
@@ -11802,14 +11854,21 @@ export class EntityManager {
     const emitterIdSeed = hook.particleEmitterId >>> 0;
     let spawnedId;
     try {
-      spawnedId = await this._worldParticleManager.addEmitter({
+      // A11-S2: with `?particleOwner=on` route through the owner facade —
+      // `emitterIdSeed` becomes an OBJECT-SCOPED handle and entity-release
+      // teardown is the facade's `destroyAllForOwner` (the per-guid map
+      // below stays empty on-path).
+      const req = {
         emitterInfo,
         parent: inst.root,
         partIndex,
         parentOffset,
         emitterId: emitterIdSeed,
         blocking,
-      });
+      };
+      spawnedId = particleOwnerOn()
+        ? await ownerRegistry.addEmitter(inst.guid >>> 0, this._worldParticleManager, req)
+        : await this._worldParticleManager.addEmitter(req);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn(
@@ -11819,6 +11878,9 @@ export class EntityManager {
       return;
     }
     if (!spawnedId) return;
+    // A11-S2: on-path the facade already tracks this emitter under the
+    // guid owner — skip the legacy map (single registry of record).
+    if (particleOwnerOn()) return;
     // Track for release-time cleanup (same map the PhysicsScript chain
     // walker uses at line ~4260).
     const guidU = inst.guid >>> 0;

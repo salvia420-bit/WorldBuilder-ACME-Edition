@@ -152,8 +152,16 @@ const UI_STUBS =
 // import from ./particles/time_rng.js); "off" = legacy manager-tail path
 // (covered by test_particle_clock.mjs).
 const PARTICLE_CLOCK_STUB = "const particleClockMode = () => \"off\";\n";
+// A11-S2: entities.js imports the ?particleOwner facade (stripped import
+// from ./particles/owner_registry.js); flag-off = legacy per-guid map path
+// (the facade itself is covered by test_particle_owner.mjs).
+const PARTICLE_OWNER_STUB =
+    "const particleOwnerOn = () => false;\n" +
+    "const ownerRegistry = { addEmitter: async () => 0, destroyEmitter: () => false, " +
+    "stopEmitter: () => false, destroySome: () => 0, destroyAllForOwner: () => 0, " +
+    "ownerKeys: () => [][Symbol.iterator]() };\n";
 
-const composite = PARTICLE_CLOCK_STUB + RIG_STUBS + UI_STUBS +
+const composite = PARTICLE_CLOCK_STUB + PARTICLE_OWNER_STUB + RIG_STUBS + UI_STUBS +
     "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
     "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
     "// === entities.js ===\n" + stripExports(entitiesSrc) + "\n" +

@@ -97,6 +97,15 @@
 import * as THREE from "three";
 import { PLAY_SCRIPT, playScriptName } from "../ui/ac_play_script.js";
 import { fetchPhysicsScriptTable } from "../ui/ac_physics_script_table.js";
+// A11-S2 (unification survey 2026-06-11): `?particleOwner=on` registers
+// PlayEffect one-shot emitters under the TARGET ENTITY's guid in the shared
+// owner facade (retail-true: a PlayEffect script runs on the target object's
+// own per-CPhysicsObj managers, acclient.c:316330-316353). The FIFO cap +
+// one-shot reaper below survive as OWNER-POLICY metadata (`{ownerKey, ids}`)
+// routing partial teardown through `ownerRegistry.destroySome` — not as a
+// parallel id registry. Off-path = the legacy group registry + per-guid map
+// cross-writes, byte-identical.
+import { ownerRegistry, particleOwnerOn } from "./particles/owner_registry.js";
 
 // Default tween duration in ms (Launch/Explode). ~500ms keeps the
 // visual on-screen long enough to be perceptible but short enough
@@ -1095,6 +1104,12 @@ const _MAX_PLAYEFFECT_EMITTER_GROUPS = 24;
 /** Force-destroy a PlayEffect emitter group's emitters now (FIFO evict). */
 function _destroyEmitterGroup(group) {
   if (!group || !group.wm) return;
+  // A11-S2: owner-policy partial teardown — destroy THIS group's ids under
+  // the target entity's owner record so the facade tracking stays honest.
+  if (group.ownerKey !== undefined && particleOwnerOn()) {
+    try { ownerRegistry.destroySome(group.ownerKey, group.ids); } catch (_) {}
+    return;
+  }
   for (const eid of group.ids) {
     try { group.wm.destroyParticleEmitter(eid); } catch (_) {}
   }
@@ -1414,28 +1429,43 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
       // The target may have despawned during the StartTime delay; if
       // so, skip the spawn (matches the H2 arms' entityMap guard).
       if (!em.entityMap?.has?.(targetGuid >>> 0)) return;
-      wm.addEmitter({
+      const req = {
         emitterInfo,
         parent: inst.root,
         partIndex,
         parentOffset: offset,
         blocking: blockingHook,
-      })
+      };
+      // A11-S2: on-path, register under the TARGET entity's guid owner —
+      // entity-remove's single `destroyAllForOwner` then reaps PlayEffect
+      // one-shots too (and the facade's epoch tombstone covers a despawn
+      // racing this very resolve, replacing the manual destroy below).
+      (particleOwnerOn()
+        ? ownerRegistry.addEmitter(targetGuid >>> 0, wm, req)
+        : wm.addEmitter(req))
         .then((emitterId) => {
           if (emitterId !== 0) {
             // Wave-1 review: a despawn that raced this addEmitter resolve
             // already tore down (and dropped) this guid's per-emitter
             // bucket; re-seeding it would strand a live emitter the
             // entity-remove path can no longer reap. Destroy it now.
+            // (A11-S2 on-path: the facade already returned 0 + self-
+            // destroyed in that race, so this branch only acts off-path.)
             if (!em.entityMap?.has?.(targetGuid >>> 0)) {
-              try { wm.destroyParticleEmitter(emitterId); } catch (_) {}
+              if (particleOwnerOn()) {
+                try { ownerRegistry.destroySome(targetGuid >>> 0, [emitterId]); } catch (_) {}
+              } else {
+                try { wm.destroyParticleEmitter(emitterId); } catch (_) {}
+              }
               return;
             }
             spawnedEmitterIds.push(emitterId);
             // Keep the per-guid tracking honest as late hooks land so
             // entity-remove can tear them down (the synchronous block
             // below created the array; push into the live one if it
-            // still exists, otherwise re-seed it).
+            // still exists, otherwise re-seed it). A11-S2 on-path: the
+            // facade is the registry of record — skip the legacy map.
+            if (particleOwnerOn()) return;
             let perGuidIds = em._particleEmittersForGuid.get(targetGuid);
             if (!perGuidIds) {
               perGuidIds = [];
@@ -1478,7 +1508,8 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   // land (the array may still be empty at THIS synchronous point). We
   // ensure the array exists up front so an entity-remove that races the
   // first deferred spawn finds a bucket to clear.
-  {
+  // A11-S2 on-path: the facade owns the tracking — no legacy map seeding.
+  if (!particleOwnerOn()) {
     if (!em._particleEmittersForGuid.get(targetGuid)) {
       em._particleEmittersForGuid.set(targetGuid, []);
     }
@@ -1499,6 +1530,9 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
     ids: spawnedEmitterIds,
     critical: _isCriticalPlayScript(scriptId),
     _evicted: false,
+    // A11-S2: owner-policy metadata — the facade owner these ids live
+    // under (the target entity), for destroySome-routed evict/reap.
+    ownerKey: targetGuid >>> 0,
   };
   _registerEmitterGroup(_rp6Group);
 
@@ -1518,6 +1552,13 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
     // RP6: drop from the cap registry first (idempotent if already
     // FIFO-evicted — indexOf returns -1 and the splice is a no-op).
     _unregisterEmitterGroup(_rp6Group);
+    // A11-S2 on-path: one-shot reap routes through the facade so its
+    // owner tracking stays honest (idempotent on already-evicted /
+    // entity-removed ids); the legacy map below was never written.
+    if (particleOwnerOn()) {
+      try { ownerRegistry.destroySome(targetGuid >>> 0, spawnedEmitterIds); } catch (_) {}
+      return;
+    }
     for (const eid of spawnedEmitterIds) {
       try { wm.destroyParticleEmitter(eid); } catch (_) {}
     }

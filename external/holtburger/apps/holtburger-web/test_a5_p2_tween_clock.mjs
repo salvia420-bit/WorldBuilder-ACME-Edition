@@ -107,9 +107,17 @@ const UI_STUBS =
     "const removeSpeechBubbleFromEntity = () => {};\n" +
     "const ensureNameplateForEntity = () => {};\n";
 const PARTICLE_CLOCK_STUB = "const particleClockMode = () => \"off\";\n";
+// A11-S2: entities.js imports the ?particleOwner facade (stripped import
+// from ./particles/owner_registry.js); flag-off = legacy per-guid map path
+// (the facade itself is covered by test_particle_owner.mjs).
+const PARTICLE_OWNER_STUB =
+    "const particleOwnerOn = () => false;\n" +
+    "const ownerRegistry = { addEmitter: async () => 0, destroyEmitter: () => false, " +
+    "stopEmitter: () => false, destroySome: () => 0, destroyAllForOwner: () => 0, " +
+    "ownerKeys: () => [][Symbol.iterator]() };\n";
 
 const entitiesRaw = readFileSync(resolvePath(__dirname, "scene3d/entities.js"), "utf8");
-const composite = PARTICLE_CLOCK_STUB + RIG_STUBS + UI_STUBS +
+const composite = PARTICLE_CLOCK_STUB + PARTICLE_OWNER_STUB + RIG_STUBS + UI_STUBS +
     "// === adapter.js ===\n" + stripExports(loadModule("scene3d/adapter.js")) + "\n" +
     "// === animation.js ===\n" + stripExports(loadModule("scene3d/animation.js")) + "\n" +
     "// === entities.js ===\n" + stripExports(loadModule("scene3d/entities.js")) + "\n" +

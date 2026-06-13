@@ -2620,6 +2620,14 @@ if (typeof window !== "undefined" && _billboardEnabled()) {
 // ─────────────────────────────────────────────────────────────────────
 
 const STATIC_SCRIPT_FLAG = "staticScripts"; // ?staticScripts=off disables V1.
+
+// A11-S2 (unification survey 2026-06-11): `?particleOwner=on` routes static
+// emitter lifecycle through the shared owner facade — one owner key per
+// script anchor (`"static:<n>"`), single `destroyAllForOwner` teardown
+// instead of the whole-table nuke in `disposeStaticParticles`. Off-path =
+// the legacy unscoped manager table, byte-identical.
+import { ownerRegistry, particleOwnerOn } from "./particles/owner_registry.js";
+let _staticOwnerSeq = 0;
 // CreateParticle hook types (mirrors entities.js `_attachParticleChainForEntity`).
 const STATIC_HOOK_CREATE_PARTICLE = 13;
 const STATIC_HOOK_CREATE_BLOCKING_PARTICLE = 26;
@@ -2755,7 +2763,7 @@ const _staticOffsetQuat = new THREE.Quaternion();
  * Returns the count of emitters attached. Fail-soft: a fetch failure on
  * the script or any emitter is logged + skipped, never thrown.
  */
-async function _runStaticParticleChain(manager, anchor, pesId, wasmExports) {
+async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, ownerKey = null) {
   let ps;
   try {
     ps = await wasmExports.fetchPhysicsScript(pesId);
@@ -2804,7 +2812,7 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports) {
     const partIndex =
       e.createParticlePartIndex === 0xffffffff ? -1 : e.createParticlePartIndex | 0;
     try {
-      const id = await manager.addEmitter({
+      const req = {
         emitterInfo,
         parent: anchor, // THREE.Group at the static's world transform.
         partIndex,
@@ -2815,7 +2823,14 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports) {
         blocking:
           ((e.hookType | 0) === STATIC_HOOK_CREATE_BLOCKING_PARTICLE) &&
           _blockingParticleParityOn(),
-      });
+      };
+      // A11-S2: per-anchor owner scoping when `?particleOwner=on`. The
+      // statics walker auto-assigns ids (no explicit handle), so the
+      // facade's win here is the scoped teardown (`destroyAllForOwner`
+      // per anchor) replacing the whole-table nuke.
+      const id = (ownerKey !== null && particleOwnerOn())
+        ? await ownerRegistry.addEmitter(ownerKey, manager, req)
+        : await manager.addEmitter(req);
       if (id !== 0) attached += 1;
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -2886,10 +2901,15 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
     );
     const s = typeof p.scale === "number" && p.scale > 0 ? p.scale : 1;
     if (s !== 1) anchor.scale.set(s, s, s);
+    // A11-S2: one owner key per anchor (the static placement IS the
+    // retail CPhysicsObj analog here). Stashed on userData so a future
+    // per-landblock eviction can `destroyAllForOwner` per anchor.
+    const ownerKey = `static:${++_staticOwnerSeq}`;
     anchor.userData = {
       isStaticScriptAnchor: true,
       defaultScriptId: p.defaultScriptId >>> 0,
       landblockId: p.landblockId,
+      particleOwnerKey: ownerKey,
     };
     scene3d.staticsGroup.add(anchor);
     anchorCount += 1;
@@ -2898,7 +2918,8 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
       manager,
       anchor,
       p.defaultScriptId >>> 0,
-      wasmExports
+      wasmExports,
+      ownerKey
     );
   }
   if (anchorCount > 0) {
@@ -2925,6 +2946,19 @@ export function disposeStaticParticles(scene3d) {
     try {
       const ids = [...mgr.particleTable.keys()];
       for (const id of ids) mgr.destroyParticleEmitter(id);
+    } catch (_) {}
+  }
+  // A11-S2: drop the facade's per-anchor owner records too (the destroys
+  // above already freed the underlying emitters; this clears tracking +
+  // tombstones in-flight creates so a late addEmitter resolve self-destroys
+  // instead of repopulating a disposed manager).
+  if (particleOwnerOn()) {
+    try {
+      for (const key of [...ownerRegistry.ownerKeys()]) {
+        if (typeof key === "string" && key.startsWith("static:")) {
+          ownerRegistry.destroyAllForOwner(key);
+        }
+      }
     } catch (_) {}
   }
 }
