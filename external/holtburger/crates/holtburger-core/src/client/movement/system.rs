@@ -214,6 +214,26 @@ fn attempt_precipice_slide(
 /// 1070-parked: downhill cliff-face feel check.
 const USE_WALKABLE_STEP_DOWN: bool = false;
 
+/// A6/A7-R2 (2026-06-12, W5) — `check_walkable` re-insert probe (survey
+/// A7 §3 row 3's other half, deferred at W2 until the A6
+/// `transitional_insert` seam existed; S7's `spatial/transition.rs` IS
+/// that seam, so this gate lives ONLY inside the unified pipeline and
+/// is inert unless [`USE_UNIFIED_TRANSITION`]/`?unifiedTransition=on`
+/// routes movement through it).
+///
+/// `true`: retail `CTransition::step_down`'s acceptance arm
+/// (`acclient.c:312662-312673`) — an EDGE_SLIDE mover that did NOT
+/// begin the slice on walkable support must show positive walkable
+/// evidence at a step-down destination (`CTransition::check_walkable`'s
+/// re-insert probe, `acclient.c:312475-312524`;
+/// `holtburger_world::spatial::physics::check_walkable` +
+/// `check_walkable_probe_depth`) or the snap is refused → fall.
+///
+/// `false` (default): the pipeline's step-down acceptance is unchanged
+/// — byte-identical. 1070-parked: steep-face descent feel (rides the
+/// `?unifiedTransition` eye-test).
+const USE_WALKABLE_REINSERT_PROBE: bool = false;
+
 /// A7-R3 (2026-06-12, survey A7 §3 row 8) — landing walkable allowance.
 ///
 /// `true`: airborne touchdown (outdoor terrain snap + indoor per-poly
@@ -4193,6 +4213,7 @@ impl MovementSystem {
             local_envcell_entry: USE_LOCAL_ENVCELL_ENTRY,
             ramp_floor_snap_fix: USE_RAMP_FLOOR_SNAP_FIX,
             skip_parented_entities: SKIP_PARENTED_ENTITY_COLLISION,
+            walkable_reinsert_probe: USE_WALKABLE_REINSERT_PROBE,
         };
         (object, gates)
     }

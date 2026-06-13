@@ -710,8 +710,11 @@ pub fn landing_allows_touchdown(floor_normal_z: Option<f32>, landing_allowance: 
 /// test gates DESCENTS only (`drop > 0`): the flat-ground/rise snap
 /// folded into [`step_down_decision`] is the caller's pre-existing
 /// floor snap, not retail's StepDown, and stays byte-identical.
-/// `check_walkable`'s re-insert probe (`acclient.c:312475-312524`) is
-/// survey row 3's remaining half — A6's transitional_insert seam.
+/// `check_walkable`'s re-insert probe (`acclient.c:312475-312524`) —
+/// survey row 3's other half, deferred at W2 to the A6
+/// `transitional_insert` seam — landed W5 as [`check_walkable`] +
+/// [`check_walkable_probe_depth`], consumed inside the S7 pipeline
+/// (`spatial/transition.rs`, `USE_WALKABLE_REINSERT_PROBE`).
 pub fn step_down_resolve(
     feet_z: f32,
     floor_z_below: f32,
@@ -729,6 +732,62 @@ pub fn step_down_resolve(
         }
         StepDownOutcome::Fall => StepDownOutcome::Fall,
     }
+}
+
+/// A6/A7-R2 (2026-06-12, W5) — retail `CTransition::check_walkable`'s
+/// re-insert probe DEPTH law (`acclient.c:312495-312516`): the probe
+/// lowers the check position by an EFFECTIVE step-down height before
+/// re-running `transitional_insert(this, 1)` —
+/// - single-sphere movers (`num_sphere < 2`) with
+///   `step_down_height > 2·radius` probe only `radius · 0.5` deep;
+/// - otherwise a `step_down_height > 2·radius` is halved.
+///
+/// Player truth (Setup `0x02000001`, two spheres, step-down 1.5):
+/// `1.5 > 2·r` ⇒ probe depth `0.75`.
+///
+/// NOTE: the column-query floor sources the S7 pipeline consumes today
+/// (`terrain_height_at` / `highest_floor_z_under`) return the support
+/// directly under the candidate, so the probe sphere always starts ON
+/// that support and [`check_walkable`] collapses to its walkable test —
+/// this depth is NOT consumed by the column form. It is the documented
+/// retail law the `USE_PHYSICS_BSP`/`USE_STATIC_BSP` insert backends
+/// (S7 §3 Stage B.1, flag-owner follow-on) must use when the probe
+/// becomes a real geometry re-insert.
+pub fn check_walkable_probe_depth(step_down_height: f32, radius: f32, num_spheres: u32) -> f32 {
+    let mut depth = step_down_height;
+    let two_r = radius + radius;
+    if num_spheres < 2 && depth > two_r {
+        depth = radius * 0.5;
+    }
+    if depth > two_r {
+        depth *= 0.5;
+    }
+    depth
+}
+
+/// A6/A7-R2 (2026-06-12, W5) — retail `CTransition::check_walkable`
+/// (`acclient.c:312475-312524`) over column-query floor sources. Retail
+/// shape:
+/// 1. `state & 2` (OnWalkable — the mover BEGAN the transition on
+///    walkable support) short-circuits TRUE (`:312490`);
+/// 2. `SPHEREPATH::check_walkables()` — positive walkable evidence at
+///    the candidate — short-circuits TRUE (`:312491`);
+/// 3. else the re-insert probe: lower the check pos by
+///    [`check_walkable_probe_depth`] and `transitional_insert(_, 1)` in
+///    `check_walkable` mode (`:312505-312522`); walkable ⇔ the probe
+///    intersects walkable geometry (`result = v9 != OK`).
+///
+/// With column-query floor sources the probe sphere starts ON the
+/// candidate's support (see [`check_walkable_probe_depth`]), so step 3
+/// collapses to "is that support walkable" — i.e. the same
+/// `support_normal_z >= allowance` test, with the load-bearing
+/// difference from [`step_down_resolve`] that a `None` normal source is
+/// NO positive walkable evidence and REFUSES (retail's probe demands a
+/// walkable-poly intersection; an empty probe returns OK ⇒ not
+/// walkable). Consumed by the S7 pipeline's step-down acceptance behind
+/// `USE_WALKABLE_REINSERT_PROBE` (`spatial/transition.rs`).
+pub fn check_walkable(on_walkable: bool, support_normal_z: Option<f32>, allowance: f32) -> bool {
+    on_walkable || support_normal_z.is_some_and(|normal_z| normal_z >= allowance)
 }
 
 /// 2026-05-10 indoor collision: clamp a proposed lateral delta
@@ -2293,6 +2352,40 @@ mod tests {
             step_down_resolve(10.0, 8.0, Some(0.9), PLAYER_STEP_DOWN_HEIGHT, FLOOR_Z),
             StepDownOutcome::Fall
         );
+    }
+
+    // ---- A6/A7-R2 (2026-06-12, W5): check_walkable re-insert probe ----
+
+    /// Retail probe-depth halving law (`acclient.c:312495-312516`):
+    /// player (2 spheres, 1.5 step-down, 0.4 radius) probes 0.75 deep;
+    /// a single-sphere mover with a deep step-down probes `r·0.5`; a
+    /// step-down within `2·radius` is used as-is.
+    #[test]
+    fn check_walkable_probe_depth_halving_law() {
+        // Player: 1.5 > 0.8 ⇒ halve ⇒ 0.75.
+        assert_eq!(
+            check_walkable_probe_depth(PLAYER_STEP_DOWN_HEIGHT, PLAYER_CAPSULE_RADIUS, 2),
+            0.75
+        );
+        // Single sphere, deep step-down ⇒ r·0.5 (and the second arm
+        // must NOT halve again: 0.2 < 0.8).
+        assert_eq!(check_walkable_probe_depth(1.5, 0.4, 1), 0.2);
+        // Shallow step-down (≤ 2r) passes through under both arms.
+        assert_eq!(check_walkable_probe_depth(0.5, 0.4, 2), 0.5);
+        assert_eq!(check_walkable_probe_depth(0.5, 0.4, 1), 0.5);
+    }
+
+    /// `check_walkable` truth table (`acclient.c:312475-312524`): the
+    /// OnWalkable short-circuit, walkable-evidence pass, steep refusal,
+    /// and — the probe's load-bearing delta vs `step_down_resolve` —
+    /// `None` normal = no positive walkable evidence ⇒ REFUSE.
+    #[test]
+    fn check_walkable_requires_positive_evidence() {
+        assert!(check_walkable(true, None, FLOOR_Z));
+        assert!(check_walkable(true, Some(0.1), FLOOR_Z));
+        assert!(check_walkable(false, Some(0.9), FLOOR_Z));
+        assert!(!check_walkable(false, Some(0.5), FLOOR_Z));
+        assert!(!check_walkable(false, None, FLOOR_Z));
     }
 
     // ---- Physics deep-dive 2026-06-01 (gap 3): step-up / step-down ----

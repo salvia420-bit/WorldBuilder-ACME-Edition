@@ -39,8 +39,9 @@ use super::collision::{PlacementCollisionInfo, TransitionState, physics_globals}
 use super::entity_collision::{EntityCollider, clamp_delta_against_entities};
 use super::physics::{
     FLOOR_Z, PLAYER_CAPSULE_HEIGHT, PLAYER_CAPSULE_RADIUS, PLAYER_STEP_DOWN_HEIGHT,
-    PLAYER_STEP_UP_HEIGHT, StepDownOutcome, clamp_delta_against_buildings_with_normal,
-    clamp_delta_against_cell_walls_dispatch, clamp_delta_to_cell_interior,
+    PLAYER_STEP_UP_HEIGHT, StepDownOutcome, check_walkable,
+    clamp_delta_against_buildings_with_normal, clamp_delta_against_cell_walls_dispatch,
+    clamp_delta_to_cell_interior,
     cliff_slide_residual_along_seam, floor_normal_under, highest_floor_z_under,
     landing_allows_touchdown, slide_residual_along_wall_tangent, step_down_decision,
     step_down_resolve, step_up_decision, sweep_sphere_against_static_aabbs,
@@ -150,6 +151,13 @@ pub struct TransitionGates {
     pub ramp_floor_snap_fix: bool,
     /// `SKIP_PARENTED_ENTITY_COLLISION` — FU-1 wielded-child exclusion.
     pub skip_parented_entities: bool,
+    /// `USE_WALKABLE_REINSERT_PROBE` (A6/A7-R2, W5) — retail
+    /// `CTransition::step_down`'s `check_walkable` acceptance arm
+    /// (`acclient.c:312662-312673`): an EDGE_SLIDE mover that did NOT
+    /// begin the transition on walkable support must show positive
+    /// walkable evidence at a step-down's destination (re-insert probe,
+    /// `acclient.c:312475-312524`) or the snap is refused → fall.
+    pub walkable_reinsert_probe: bool,
 }
 
 /// Geometry/state reads the pipeline needs — solves the
@@ -554,6 +562,68 @@ fn terrain_contour_slide(lateral: Vector3, terrain_normal: Vector3) -> Option<Ve
     Some(slide)
 }
 
+/// A6/A7-R2 (W5): the slice-entry support normal feeding the OnWalkable
+/// stamp — `terrain_normal_at` outdoors, `floor_normal_under` indoors
+/// (the same sources the step-down arms consult). `None` = no normal
+/// source (unbaked cell / no terrain cache).
+fn entry_support_normal_z(env: &dyn TransitionEnv, pose: &WorldPosition) -> Option<f32> {
+    let global = pose.global_coords();
+    if pose.is_indoors() {
+        let scene = env.scene();
+        let cell_id = scene.current_cell(pose);
+        let triangles = scene.cell_triangles(cell_id);
+        if triangles.is_empty() {
+            return None;
+        }
+        let ceiling = scene
+            .cell_aabb(cell_id)
+            .map(|a| a.max.z + 1.0)
+            .unwrap_or(pose.coords.z + 100.0);
+        floor_normal_under(triangles, global.x, global.y, ceiling).map(|n| n.z)
+    } else {
+        env.terrain_normal_at(global.x, global.y).map(|n| n.z)
+    }
+}
+
+/// A6/A7-R2 (W5) — retail `CTransition::step_down`'s `check_walkable`
+/// acceptance (`acclient.c:312662-312673`): a step-down insert that
+/// found a walkable contact plane is STILL refused for an EDGE_SLIDE
+/// mover unless `!(state & 0x200) || step_up || check_walkable(z_val)`.
+/// Mapped onto the pipeline's Snap/Fall outcome: when the gate is on
+/// and the mover carries EDGE_SLIDE, a DESCENT snap additionally
+/// requires [`check_walkable`] (OnWalkable entry short-circuit, else
+/// positive walkable evidence at the destination — `None` normal
+/// REFUSES, see physics.rs). Retail's `step_up` skip is structural
+/// here: a successful step-up leaves `drop <= 0`, which this filter
+/// already passes through. Non-descents and `Fall` outcomes are
+/// untouched; gate off = identity.
+fn reinsert_probe_filter(
+    outcome: StepDownOutcome,
+    gates: &TransitionGates,
+    object: &ObjectInfo,
+    feet_z: f32,
+    floor_z: f32,
+    support_normal_z: Option<f32>,
+) -> StepDownOutcome {
+    if !gates.walkable_reinsert_probe
+        || object.state & object_info_state::EDGE_SLIDE == 0
+        || feet_z - floor_z <= 0.0
+    {
+        return outcome;
+    }
+    match outcome {
+        StepDownOutcome::Snap(_) => {
+            let on_walkable = object.state & object_info_state::ON_WALKABLE != 0;
+            if check_walkable(on_walkable, support_normal_z, FLOOR_Z) {
+                outcome
+            } else {
+                StepDownOutcome::Fall
+            }
+        }
+        StepDownOutcome::Fall => StepDownOutcome::Fall,
+    }
+}
+
 /// The transitional-position substep loop — retail
 /// `find_transitional_position` (acclient.c:313171-313340) over the
 /// `TransitionEnv` geometry backends. See the module doc for the
@@ -592,7 +662,21 @@ pub fn find_transitional_position(
     let mut cell_changed = false;
     let mut state = TransitionState::OK;
     let gates = &input.gates;
-    let object = &input.object;
+    // A6/A7-R2 (W5): retail stamps OBJECTINFO ONCE per transition
+    // (`OBJECTINFO::init`, acclient.c:314128); the OnWalkable bit (state
+    // & 2, the `check_walkable` short-circuit acclient.c:312490) maps to
+    // "entered this slice grounded on walkable support". A `None` entry
+    // normal counts as walkable (flag-off conservatism: absence of data
+    // at ENTRY never arms the probe). Queried only when the gate is on —
+    // flag-off this block is a no-op and `object` is byte-identical.
+    let mut object_local = input.object;
+    if gates.walkable_reinsert_probe
+        && !airborne
+        && entry_support_normal_z(env, &pose).is_none_or(|normal_z| normal_z >= FLOOR_Z)
+    {
+        object_local.state |= object_info_state::ON_WALKABLE;
+    }
+    let object = &object_local;
     let mut caches = GeometryCaches::gather(env, &pose, object, gates, offset.length());
 
     for _ in 0..num_steps {
@@ -854,17 +938,34 @@ fn resolve_floor_for_step(
             // legacy ledge heuristic.
             const LEDGE_FALL_THRESHOLD_M: f32 = 0.5;
             if gates.step_up_down {
+                // Destination support normal — shared by the A7-R2
+                // walkable acceptance and the re-insert probe; queried
+                // only when a consumer gate is on (flag-off no-op).
+                let support_normal_z = if gates.walkable_step_down || gates.walkable_reinsert_probe
+                {
+                    env.terrain_normal_at(global.x, global.y).map(|n| n.z)
+                } else {
+                    None
+                };
                 let step_down_outcome = if gates.walkable_step_down {
                     step_down_resolve(
                         pose.coords.z,
                         z,
-                        env.terrain_normal_at(global.x, global.y).map(|n| n.z),
+                        support_normal_z,
                         object.step_down_height,
                         FLOOR_Z,
                     )
                 } else {
                     step_down_decision(pose.coords.z, z, object.step_down_height)
                 };
+                let step_down_outcome = reinsert_probe_filter(
+                    step_down_outcome,
+                    gates,
+                    object,
+                    pose.coords.z,
+                    z,
+                    support_normal_z,
+                );
                 match step_down_outcome {
                     StepDownOutcome::Snap(snap_z) => pose.coords.z = snap_z,
                     StepDownOutcome::Fall => *airborne = true,
@@ -914,23 +1015,40 @@ fn resolve_floor_for_step(
                         }
                     }
                 } else if gates.step_up_down && !*airborne && pose.coords.z > snap_z {
-                    let step_down_outcome = if gates.walkable_step_down {
-                        step_down_resolve(
-                            pose.coords.z,
-                            snap_z,
+                    // Destination support normal — shared by the A7-R2
+                    // walkable acceptance and the re-insert probe
+                    // (flag-off: not queried).
+                    let support_normal_z =
+                        if gates.walkable_step_down || gates.walkable_reinsert_probe {
                             floor_normal_under(
                                 triangles,
                                 global.x,
                                 global.y,
                                 ceiling_for_floor_query,
                             )
-                            .map(|n| n.z),
+                            .map(|n| n.z)
+                        } else {
+                            None
+                        };
+                    let step_down_outcome = if gates.walkable_step_down {
+                        step_down_resolve(
+                            pose.coords.z,
+                            snap_z,
+                            support_normal_z,
                             object.step_down_height,
                             FLOOR_Z,
                         )
                     } else {
                         step_down_decision(pose.coords.z, snap_z, object.step_down_height)
                     };
+                    let step_down_outcome = reinsert_probe_filter(
+                        step_down_outcome,
+                        gates,
+                        object,
+                        pose.coords.z,
+                        snap_z,
+                        support_normal_z,
+                    );
                     match step_down_outcome {
                         StepDownOutcome::Snap(z) => pose.coords.z = z,
                         StepDownOutcome::Fall => *airborne = true,
@@ -997,6 +1115,7 @@ mod tests {
             local_envcell_entry: true,
             ramp_floor_snap_fix: true,
             skip_parented_entities: true,
+            walkable_reinsert_probe: false,
         }
     }
 
@@ -1179,6 +1298,132 @@ mod tests {
         input.object.state |= object_info_state::IGNORE_CREATURES;
         let outcome = find_transitional_position(&world, &input);
         assert!((outcome.pose.coords.x - end.coords.x).abs() < 1e-5);
+    }
+
+    // ---- A6/A7-R2 (W5): check_walkable re-insert probe lanes ----
+
+    /// Synthetic outdoor terrain split at a global-X boundary: entry
+    /// side has its own floor/normal, far side a 0.3 m drop with a
+    /// configurable normal source. Wraps a synthetic WorldState for the
+    /// scene; the terrain samplers are overridden.
+    struct TerrainStepEnv {
+        world: WorldState,
+        boundary_global_x: f32,
+        entry_floor_z: f32,
+        drop_floor_z: f32,
+        entry_normal_z: Option<f32>,
+        drop_normal_z: Option<f32>,
+    }
+
+    impl TransitionEnv for TerrainStepEnv {
+        fn scene(&self) -> &SpatialScene {
+            &self.world.scene
+        }
+        fn terrain_height_at(&self, x: f32, _y: f32) -> Option<f32> {
+            Some(if x < self.boundary_global_x {
+                self.entry_floor_z
+            } else {
+                self.drop_floor_z
+            })
+        }
+        fn terrain_normal_at(&self, x: f32, _y: f32) -> Option<Vector3> {
+            let normal_z = if x < self.boundary_global_x {
+                self.entry_normal_z
+            } else {
+                self.drop_normal_z
+            };
+            normal_z.map(|z| {
+                let xy = (1.0 - z * z).max(0.0).sqrt();
+                Vector3::new(xy, 0.0, z)
+            })
+        }
+        fn water_depth_at(&self, _x: f32, _y: f32) -> f32 {
+            0.0
+        }
+        fn is_entirely_water_cell_at(&self, _x: f32, _y: f32) -> bool {
+            false
+        }
+        fn entity_colliders_near(
+            &self,
+            _pose: &WorldPosition,
+            _prefilter_dist: f32,
+            _exclude: Guid,
+            _skip_parented: bool,
+        ) -> Vec<EntityCollider> {
+            Vec::new()
+        }
+    }
+
+    /// Build the step fixture: grounded at z=10 on the entry side,
+    /// walking +x across the boundary onto a 0.3 m drop (within the
+    /// 1.5 m step-down ⇒ height-only law snaps).
+    fn probe_fixture(
+        entry_normal_z: Option<f32>,
+        drop_normal_z: Option<f32>,
+        probe_on: bool,
+    ) -> (TerrainStepEnv, TransitionInput) {
+        let begin = pose_at(50.0, 50.0, 10.0);
+        let env = TerrainStepEnv {
+            world: WorldState::synthetic(),
+            boundary_global_x: begin.global_coords().x + 0.5,
+            entry_floor_z: 10.0,
+            drop_floor_z: 9.7,
+            entry_normal_z,
+            drop_normal_z,
+        };
+        let mut end = begin;
+        end.coords.x += 1.2; // 3 substeps at r=0.4; crosses on step 2
+        let mut input = input_for(begin, end);
+        input.gates.walkable_reinsert_probe = probe_on;
+        (env, input)
+    }
+
+    /// Steep entry support (not OnWalkable) + a destination with NO
+    /// normal source: the probe finds no positive walkable evidence ⇒
+    /// the step-down snap is refused and the mover FALLS
+    /// (acclient.c:312662-312673 + the :312518 re-insert probe). Gate
+    /// off, identical input snaps (the height-only law) — the byte-
+    /// identity arm.
+    #[test]
+    fn reinsert_probe_refuses_unevidenced_step_down() {
+        let (env, input) = probe_fixture(Some(0.3), None, true);
+        let outcome = find_transitional_position(&env, &input);
+        assert!(!outcome.grounded, "no walkable evidence ⇒ fall");
+        assert!(
+            (outcome.pose.coords.z - 10.0).abs() < 1e-5,
+            "refused snap keeps the entry height: z = {}",
+            outcome.pose.coords.z
+        );
+        // Flag-off: byte-identical legacy snap.
+        let (env_off, input_off) = probe_fixture(Some(0.3), None, false);
+        let off = find_transitional_position(&env_off, &input_off);
+        assert!(off.grounded);
+        assert!((off.pose.coords.z - 9.7).abs() < 1e-5);
+    }
+
+    /// OnWalkable entry (walkable support at slice entry) short-circuits
+    /// the probe (acclient.c:312490, `state & 2`): the snap stands even
+    /// with no destination normal source. A `None` ENTRY normal also
+    /// counts as OnWalkable (absence at entry never arms the probe).
+    #[test]
+    fn reinsert_probe_on_walkable_entry_short_circuits() {
+        let (env, input) = probe_fixture(Some(0.95), None, true);
+        let outcome = find_transitional_position(&env, &input);
+        assert!(outcome.grounded);
+        assert!((outcome.pose.coords.z - 9.7).abs() < 1e-5);
+        let (env_none, input_none) = probe_fixture(None, None, true);
+        let none_entry = find_transitional_position(&env_none, &input_none);
+        assert!(none_entry.grounded);
+    }
+
+    /// Walkable destination evidence passes the probe: steep entry, but
+    /// the drop face is walkable (N.z ≥ FLOOR_Z) ⇒ snap accepted.
+    #[test]
+    fn reinsert_probe_accepts_walkable_destination() {
+        let (env, input) = probe_fixture(Some(0.3), Some(0.9), true);
+        let outcome = find_transitional_position(&env, &input);
+        assert!(outcome.grounded);
+        assert!((outcome.pose.coords.z - 9.7).abs() < 1e-5);
     }
 
     #[test]
