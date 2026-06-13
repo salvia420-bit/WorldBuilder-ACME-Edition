@@ -131,6 +131,21 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { acToThree } from "./adapter.js";
 import { getInputController, readInputFunnelFlag } from "./input.js";
+// A12-C2/C3 (2026-06-12): retail camera math (zoom continuum / in-head /
+// near-fade / stiffness / mouse filter). Pure module, headless-tested by
+// tests/camera_retail_math.test.cjs. Only consulted behind the default-off
+// flags read in the constructor below.
+import {
+  retailZoomStep,
+  nearFadeOpacity,
+  stiffnessFrac,
+  filterMouseDelta,
+  clampInHeadDirZ,
+  IN_HEAD_FORWARD_M,
+  CAMERA_DEFAULT_PIVOT_Z,
+  STIFFNESS_SNAP_DIST_M,
+  STIFFNESS_TELEPORT_SNAP_M,
+} from "./camera_math.js";
 
 /**
  * Mode-cycle order on `C` press: follow → topDown → orbit → follow.
@@ -448,6 +463,46 @@ export class CameraSwitcher {
     this._listeners = [];
     this._globalListeners = [];
 
+    // A12-C2/C3 (2026-06-12) — retail camera flags, all default-OFF. Read
+    // once at construction (camera is rebuilt on reload; no live toggle).
+    //   ?retailCamZoom=on      → C2 zoom continuum + in-head + near-fade.
+    //   ?camStiffness=<0..1>   → C3 frame smoothing (absent/0 = hard-lock,
+    //                            today's behavior; retail default feel ≈ 0.5).
+    //   ?mouseSmooth=<0..1>    → C3 FilterMouseInput two-sample smoothing.
+    //   ?mouseSens=<mult>      → C3 option surface: sensitivity multiplier.
+    //   ?mouseInvertY=on       → C3 option surface: invert mouse pitch.
+    {
+      const params =
+        typeof window !== "undefined" && window.location
+          ? new URLSearchParams(window.location.search)
+          : null;
+      this._retailZoomOn =
+        params?.get("retailCamZoom")?.toLowerCase() === "on";
+      const stiff = params ? parseFloat(params.get("camStiffness")) : NaN;
+      this._camStiffness =
+        Number.isFinite(stiff) && stiff > 0 ? Math.min(stiff, 1.0) : null;
+      const msm = params ? parseFloat(params.get("mouseSmooth")) : NaN;
+      this._mouseSmooth =
+        Number.isFinite(msm) && msm > 0 ? Math.min(msm, 1.0) : null;
+      const msens = params ? parseFloat(params.get("mouseSens")) : NaN;
+      this._mouseSensMult =
+        Number.isFinite(msens) && msens > 0 ? msens : 1.0;
+      this._mouseInvertY =
+        params?.get("mouseInvertY")?.toLowerCase() === "on";
+    }
+    // C2 state: first-person latch (followDistance keeps its third-person
+    // value while in-head so bookkeeping survives the round trip).
+    this._inHead = false;
+    // C2 state: last opacity pushed to the local-player fade helper —
+    // dedupe so the per-frame fade only touches materials on change.
+    this._camFadeLastOpacity = 1.0;
+    // C3 state: FilterMouseInput two-sample holder (camera_math contract).
+    this._mlFilter = { lastDX: 0, lastDY: 0, lastT: -1 };
+    // C3 state: smoothed-camera scratch (allocated lazily; null forces the
+    // first stiffness frame to hard-snap so there's no swoosh from origin).
+    this._stiffSeeded = false;
+    this._stiffTmp = null;
+
     this._installKeyListeners();
     this._installModeToggle();
 
@@ -541,12 +596,29 @@ export class CameraSwitcher {
         };
         const onMouseMove = (ev) => {
           if (!dragging) return;
-          const mx = ev.clientX - lastX;
-          const my = ev.clientY - lastY;
+          let mx = ev.clientX - lastX;
+          let my = ev.clientY - lastY;
           lastX = ev.clientX;
           lastY = ev.clientY;
-          this.followYaw += mx * POINTER_YAW_SENS;
-          this.followPitch += my * POINTER_PITCH_SENS;
+          // A12-C3 (?mouseSmooth=<0..1>): retail FilterMouseInput two-sample
+          // smoothing on the RAW deltas, before sensitivity — the same order
+          // retail's MouseLookHandler uses (filter acclient.c:148138-148163,
+          // scale after at 149300-149303). Off (null) = identity, the exact
+          // pre-C3 statements.
+          if (this._mouseSmooth != null) {
+            const f = filterMouseDelta(
+              this._mlFilter, mx, my, this._mouseSmooth,
+              performance.now() / 1000,
+            );
+            mx = f.dx;
+            my = f.dy;
+          }
+          // A12-C3 option surface: sensitivity multiplier + invert-Y
+          // (retail m_MouseLookSensitivity / m_InvertMouseLookYAxis,
+          // acclient.c:149300-149309). Defaults 1.0 / off = no-op.
+          if (this._mouseInvertY) my = -my;
+          this.followYaw += mx * POINTER_YAW_SENS * this._mouseSensMult;
+          this.followPitch += my * POINTER_PITCH_SENS * this._mouseSensMult;
           if (this.followPitch < FOLLOW_PITCH_MIN)
             this.followPitch = FOLLOW_PITCH_MIN;
           if (this.followPitch > FOLLOW_PITCH_MAX)
@@ -715,9 +787,16 @@ export class CameraSwitcher {
 
   // ---- camera positioning ------------------------------------------
 
-  positionCamera(_dt) {
+  positionCamera(dt) {
     const p = this._safePlayerPos();
     if (this.mode === "follow") {
+      // A12-C2 (?retailCamZoom=on): first-person is the min endpoint of
+      // the zoom continuum, not a fourth mode — retail's in-head IS the
+      // viewer_offset (0, 0.18, 0) point (acclient.c:147680-147687).
+      if (this._retailZoomOn && this._inHead) {
+        this._positionInHead(p);
+        return;
+      }
       // Camera position = player + offset(yaw, pitch, distance).
       // Camera-forward direction (player-facing-toward) in AC XY:
       //   (sin yaw, cos yaw). Camera sits BEHIND the player along
@@ -751,7 +830,6 @@ export class CameraSwitcher {
       const camera = this._clipCameraAgainstWorld(p, finalX, finalY, finalZ);
       finalX = camera.x; finalY = camera.y; finalZ = camera.z;
 
-      this.persp.position.set(...acToThree(finalX, finalY, finalZ));
       // Phase 3 (Cohere-D follow-on, 2026-05-12): lookAt moves with
       // mouse-pitch so the view direction genuinely tilts up/down,
       // not just orbits around a fixed head-height point.
@@ -770,8 +848,30 @@ export class CameraSwitcher {
       // `(p.x, p.y, p.z + 1.6)`; sky/building tops were unreachable
       // because the view always pointed at the player's head.
       const lookLift = -Math.sin(this.followPitch) * LOOK_LIFT_DIST_M;
-      this.persp.lookAt(...acToThree(p.x, p.y, p.z + 1.6 + lookLift));
+      const lookX = p.x, lookY = p.y, lookZ = p.z + 1.6 + lookLift;
+      if (this._camStiffness != null) {
+        // A12-C3 (?camStiffness=): exponential interpolation of the camera
+        // frame toward the sought (clipped) frame instead of the hard-set.
+        this._applyStiffness(dt, finalX, finalY, finalZ, lookX, lookY, lookZ);
+      } else {
+        this.persp.position.set(...acToThree(finalX, finalY, finalZ));
+        this.persp.lookAt(...acToThree(lookX, lookY, lookZ));
+      }
+      if (this._retailZoomOn) {
+        // A12-C2 near-fade: fade the local player as the (actual) camera
+        // closes on the pivot (p + CAMERA_DEFAULT_PIVOT_Z). Distance is
+        // rotation-invariant, so measure in three.js space directly.
+        const [pvx, pvy, pvz] = acToThree(p.x, p.y, p.z + CAMERA_DEFAULT_PIVOT_Z);
+        const ddx = this.persp.position.x - pvx;
+        const ddy = this.persp.position.y - pvy;
+        const ddz = this.persp.position.z - pvz;
+        const d = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
+        this._applyCameraPlayerFade(nearFadeOpacity(d));
+      }
     } else if (this.mode === "orbit") {
+      // A12-C2: a mid-fade player must not stay ghosted when the user
+      // C-cycles out of follow mode — restore full opacity once.
+      if (this._retailZoomOn) this._applyCameraPlayerFade(1.0);
       // OrbitControls owns position. We only retarget. Damping in
       // .update() smooths the target slide. Target is in three.js
       // world coords (camera lives outside worldRoot), so apply the
@@ -780,6 +880,8 @@ export class CameraSwitcher {
         this.controls.target.set(...acToThree(p.x, p.y, p.z + 1.0));
       }
     } else if (this.mode === "topDown") {
+      // A12-C2: same fade-restore as the orbit branch.
+      if (this._retailZoomOn) this._applyCameraPlayerFade(1.0);
       // Ortho looking straight down at player. AC +Z up → three +Y up.
       // After the worldRoot rotation, AC +Y north maps to three.js -Z,
       // so camera.up = (0, 0, -1) keeps AC north at the top of the
@@ -939,6 +1041,120 @@ export class CameraSwitcher {
     } catch (_) {}
 
     return { x: finalX, y: finalY, z: finalZ };
+  }
+
+  // ---- A12-C2/C3 retail camera (default-off) ------------------------
+
+  /**
+   * A12-C2 — first-person (in-head) frame. Retail `CameraSet::SetInHead`
+   * (acclient.c:149230-149262): viewer_offset (0, 0.18, 0) off the pivot
+   * (player + CAMERA_DEFAULT_PIVOT_Z), translational stiffness forced to
+   * 1.0 — so this is a HARD-SET even when `?camStiffness=` is active.
+   * View direction comes from followYaw/followPitch with the retail
+   * in-head dir-z clamp ±0.8 (acclient.c:148398-148409); followPitch
+   * positive looks DOWN → dirZ = -sin(pitch).
+   *
+   * Deliberately NO collision pull-in: the camera sits inside the
+   * player's own collision sphere, so the sweep chain would clip it to
+   * the head every frame (and retail's camera never collides anyway).
+   * The player is hidden outright — retail in-head sets
+   * SetTranslucencyHierarchical(player, 1.0) = fully invisible
+   * (acclient.c:149187).
+   */
+  _positionInHead(p) {
+    const fx = Math.sin(this.followYaw);
+    const fy = Math.cos(this.followYaw);
+    const camX = p.x + fx * IN_HEAD_FORWARD_M;
+    const camY = p.y + fy * IN_HEAD_FORWARD_M;
+    const camZ = p.z + CAMERA_DEFAULT_PIVOT_Z;
+    const dirZ = clampInHeadDirZ(-Math.sin(this.followPitch));
+    const horiz = Math.sqrt(Math.max(0, 1 - dirZ * dirZ));
+    this.persp.position.set(...acToThree(camX, camY, camZ));
+    this.persp.lookAt(...acToThree(
+      camX + fx * horiz * LOOK_LIFT_DIST_M,
+      camY + fy * horiz * LOOK_LIFT_DIST_M,
+      camZ + dirZ * LOOK_LIFT_DIST_M,
+    ));
+    // Re-seed the C3 smoother on the way back out to third person so the
+    // first post-in-head frame snaps instead of swooshing from the head.
+    this._stiffSeeded = false;
+    this._applyCameraPlayerFade(0.0);
+  }
+
+  /**
+   * A12-C3 — retail stiffness smoothing (CameraManager::UpdateCamera,
+   * acclient.c:147796-147853): interpolate origin and rotation SEPARATELY
+   * toward the sought frame by `frac = clamp(stiffness * dt * 10, 0, 1)`,
+   * snapping when stiffness ≈ 1.0 or within the 4e-4 m early-out. Ours-only
+   * deviation (documented in camera_math.js): snap on > 50 m sought-frame
+   * jumps (teleports) — retail has no client teleports mid-stiffness to
+   * worry about because the pivot pose itself snaps server-side.
+   */
+  _applyStiffness(dt, finalX, finalY, finalZ, lookX, lookY, lookZ) {
+    if (!this._stiffTmp) {
+      this._stiffTmp = {
+        pos: new THREE.Vector3(),
+        look: new THREE.Vector3(),
+        m: new THREE.Matrix4(),
+        q: new THREE.Quaternion(),
+      };
+    }
+    const t = this._stiffTmp;
+    t.pos.set(...acToThree(finalX, finalY, finalZ));
+    t.look.set(...acToThree(lookX, lookY, lookZ));
+    const frac = stiffnessFrac(this._camStiffness, dt);
+    const dist = this.persp.position.distanceTo(t.pos);
+    if (!this._stiffSeeded || frac >= 1.0 || dist > STIFFNESS_TELEPORT_SNAP_M) {
+      this.persp.position.copy(t.pos);
+      this.persp.lookAt(t.look);
+      this._stiffSeeded = true;
+      return;
+    }
+    if (dist <= STIFFNESS_SNAP_DIST_M) {
+      this.persp.position.copy(t.pos);
+    } else {
+      this.persp.position.lerp(t.pos, frac);
+    }
+    // Sought rotation = the frame the hard-set path would have produced
+    // (lookAt from the SOUGHT origin). Matrix4.lookAt(eye, target, up) is
+    // exactly what Object3D.lookAt uses for cameras.
+    t.m.lookAt(t.pos, t.look, this.persp.up);
+    t.q.setFromRotationMatrix(t.m);
+    this.persp.quaternion.slerp(t.q, frac);
+  }
+
+  /**
+   * A12-C2 — push a camera-driven opacity onto the local player rig via
+   * the entities.js helper. Quantized to 1/128 + deduped so the per-frame
+   * fade only touches materials when it visibly changes. Never throws
+   * (pre-spawn / synthetic-test paths have no entityManager or guid).
+   */
+  _applyCameraPlayerFade(opacity) {
+    const q = Math.round(opacity * 128) / 128;
+    if (q === this._camFadeLastOpacity) return;
+    const em = this.scene3d && this.scene3d.entityManager;
+    if (!em || typeof em.setLocalPlayerCameraOpacity !== "function") return;
+    const lpgFn =
+      typeof window !== "undefined" ? window.getLocalPlayerGuid : null;
+    const localGuid = typeof lpgFn === "function" ? lpgFn() : null;
+    if (localGuid == null) return;
+    try {
+      em.setLocalPlayerCameraOpacity(localGuid >>> 0, q);
+      this._camFadeLastOpacity = q;
+    } catch (_) {}
+  }
+
+  /**
+   * A12-C2 — one zoom notch on the retail continuum (wheel / PageUp /
+   * PageDown in follow mode). Pure math in camera_math.js.
+   */
+  _retailZoomNotch(dir) {
+    const next = retailZoomStep(
+      { radius: this.followDistance, inHead: this._inHead },
+      dir,
+    );
+    this.followDistance = next.radius;
+    this._inHead = next.inHead;
   }
 
   // ---- prediction (Workstream B) -----------------------------------
@@ -1657,6 +1873,22 @@ export class CameraSwitcher {
       }
       if (ev.key === "Shift") {
         this.keys.shift = true;
+        return;
+      }
+      // A12-C2 (?retailCamZoom=on): PageUp = closer (zoom in), PageDown =
+      // farther — the plan's keyboard half of the wheel continuum. The
+      // retail binds are CameraCloser/CameraFarther latches
+      // (acclient.c:146992-147110); the PageUp/PageDown assignment is our
+      // choice (documented, no DAT keymap claim). preventDefault stops the
+      // browser page-scroll.
+      if (this._retailZoomOn && this.mode === "follow") {
+        if (ev.key === "PageUp") {
+          this._retailZoomNotch(-1);
+          ev.preventDefault();
+        } else if (ev.key === "PageDown") {
+          this._retailZoomNotch(1);
+          ev.preventDefault();
+        }
       }
     };
     const onKeyUp = (ev) => {
@@ -1682,6 +1914,15 @@ export class CameraSwitcher {
     // Wheel zoom for top-down mode.
     if (this.domElement) {
       const onWheel = (ev) => {
+        // A12-C2 (?retailCamZoom=on): wheel drives the follow-mode zoom
+        // continuum. deltaY > 0 (wheel toward user) = farther, matching
+        // the topDown branch's zoom-out convention below.
+        if (this.mode === "follow") {
+          if (this._retailZoomOn) {
+            this._retailZoomNotch(ev.deltaY > 0 ? 1 : -1);
+          }
+          return;
+        }
         if (this.mode !== "topDown") return;
         const factor = ev.deltaY > 0 ? 1 / 1.15 : 1.15;
         const next = this.ortho.zoom * factor;
@@ -1736,6 +1977,10 @@ export class CameraSwitcher {
   // ---- teardown -----------------------------------------------------
 
   dispose() {
+    // A12-C2: never leave the local player ghosted past camera teardown.
+    if (this._retailZoomOn) {
+      try { this._applyCameraPlayerFade(1.0); } catch (_) {}
+    }
     if (this.controls && typeof this.controls.dispose === "function") {
       try { this.controls.dispose(); } catch (_) {}
     }

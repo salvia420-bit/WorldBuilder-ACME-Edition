@@ -11941,6 +11941,66 @@ export class EntityManager {
   }
 
   /**
+   * A12-C2 (2026-06-12, ?retailCamZoom=on) — camera-driven local-player
+   * fade. Retail's CameraSet::UpdateCamera fades the player via
+   * SetTranslucencyHierarchical as the camera closes on the pivot
+   * (opaque at ≥0.45 m, invisible toward 0.2 m, fully hidden in-head —
+   * acclient.c:149187-149216). camera.js computes the opacity each frame
+   * (scene3d/camera_math.js `nearFadeOpacity`) and pushes it here.
+   *
+   * Mirrors `_applyObjectTranslucencyToEntity`'s snapshot/restore
+   * discipline with its OWN snapshot keys (`__preCamFadeOpacity` /
+   * `__preCamFadeDepthWrite`) so the camera fade COMPOSES multiplicatively
+   * over whatever the other opacity owners (surface render-state, object
+   * translucency, ethereal, Transparent hooks) set, and restores their
+   * value exactly when the camera backs off (opacity returns to 1).
+   *
+   * KNOWN COMPOSITION CAVEAT (flag-gated, acceptable): if another opacity
+   * system snapshots `mat.opacity` while a camera fade is mid-flight, it
+   * captures the faded value as its base. The camera fade re-derives from
+   * its own snapshot on every change so it never compounds itself, and the
+   * local player rarely receives runtime object-translucency — 1070
+   * eye-test will confirm before any default-on.
+   *
+   * Idempotent per `inst._camFadeOpacity`; camera.js additionally
+   * quantizes to 1/128 so material writes only happen on visible change.
+   */
+  setLocalPlayerCameraOpacity(guid, opacity) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst || !inst.root) return;
+    let o = +opacity;
+    if (!Number.isFinite(o)) o = 1.0;
+    if (o < 0) o = 0;
+    else if (o > 1) o = 1;
+    if (inst._camFadeOpacity === o) return;
+    inst._camFadeOpacity = o;
+    const dids = this._collectEntitySurfaceDids(inst, -1);
+    for (const did of dids) {
+      const mat = this._getOrCloneEntityMaterial(inst, did);
+      if (!mat) continue;
+      if (o < 1) {
+        if (mat.userData.__preCamFadeOpacity === undefined) {
+          mat.userData.__preCamFadeOpacity = mat.opacity;
+        }
+        mat.opacity = mat.userData.__preCamFadeOpacity * o;
+        mat.transparent = true;
+        if (mat.depthWrite !== false && mat.userData.__preCamFadeDepthWrite === undefined) {
+          mat.userData.__preCamFadeDepthWrite = mat.depthWrite;
+          mat.depthWrite = false;
+        }
+      } else if (mat.userData.__preCamFadeOpacity !== undefined) {
+        mat.opacity = mat.userData.__preCamFadeOpacity;
+        delete mat.userData.__preCamFadeOpacity;
+        mat.transparent = mat.opacity < 1.0;
+        if (mat.userData.__preCamFadeDepthWrite !== undefined) {
+          mat.depthWrite = mat.userData.__preCamFadeDepthWrite;
+          delete mat.userData.__preCamFadeDepthWrite;
+        }
+      }
+    }
+  }
+
+  /**
    * Wave 6 — Install a persistent UV-scroll velocity. `(us, vs)` are
    * Δoffset per second; `(0, 0)` clears. `partIndex < 0` applies to
    * every entity surface; `partIndex >= 0` scopes to one part. Tags
