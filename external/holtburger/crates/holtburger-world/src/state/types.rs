@@ -787,6 +787,64 @@ impl WorldState {
         Some(holtburger_common::Vector3::new(n.x / len, n.y / len, n.z / len))
     }
 
+    /// A7-R4 (2026-06-12, unification survey) — the 24 m terrain cell
+    /// containing world-frame `(x, y)` as a 4-corner polygon ring in
+    /// GLOBAL coordinates, CCW viewed from above (+Z), corner heights
+    /// from the SAME cached 9×9 grid [`Self::terrain_height_at`]
+    /// samples. `None` when the landblock isn't cached.
+    ///
+    /// This is the "walkable polygon" input to the precipice slide
+    /// (`CPolygon::find_crossed_edge`, acclient.c:360397): retail's
+    /// walkable is the land-cell TRIANGLE (the 24 m cell split along a
+    /// per-cell pseudo-random diagonal, which our heightmap cache does
+    /// not carry), so we use the full cell QUAD — its four edges are
+    /// exactly the retail outer edges; only the diagonal split edge is
+    /// missing, and a lip on the diagonal of a single cell is not
+    /// expressible by the bilinear sampler the rest of the outdoor
+    /// chain uses anyway (documented simplification, A7 §6 note).
+    pub fn terrain_cell_quad_at(
+        &self,
+        world_x: f32,
+        world_y: f32,
+    ) -> Option<[holtburger_common::Vector3; 4]> {
+        const LB_M: f32 = 192.0;
+        const VERT_M: f32 = 24.0;
+        if !world_x.is_finite() || !world_y.is_finite() {
+            return None;
+        }
+        let lb_x = (world_x / LB_M).floor() as i32;
+        let lb_y = (world_y / LB_M).floor() as i32;
+        if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
+            return None;
+        }
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let grid = self.terrain_heights.get(&landblock_id)?;
+
+        let local_x = world_x - lb_x as f32 * LB_M;
+        let local_y = world_y - lb_y as f32 * LB_M;
+        // Clamp the CELL index to 0..=7 so the +1 corner stays in-grid
+        // (a point exactly on the 192 m edge belongs to the last cell).
+        let cx0 = ((local_x / VERT_M).floor() as i32).clamp(0, 7) as usize;
+        let cy0 = ((local_y / VERT_M).floor() as i32).clamp(0, 7) as usize;
+        let cx1 = cx0 + 1;
+        let cy1 = cy0 + 1;
+        let x0 = lb_x as f32 * LB_M + cx0 as f32 * VERT_M;
+        let y0 = lb_y as f32 * LB_M + cy0 as f32 * VERT_M;
+        let x1 = x0 + VERT_M;
+        let y1 = y0 + VERT_M;
+        // Layout matches CellLandblock: idx = vx * 9 + vy.
+        let z00 = grid[cx0 * 9 + cy0];
+        let z10 = grid[cx1 * 9 + cy0];
+        let z01 = grid[cx0 * 9 + cy1];
+        let z11 = grid[cx1 * 9 + cy1];
+        Some([
+            holtburger_common::Vector3::new(x0, y0, z00),
+            holtburger_common::Vector3::new(x1, y0, z10),
+            holtburger_common::Vector3::new(x1, y1, z11),
+            holtburger_common::Vector3::new(x0, y1, z01),
+        ])
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn synthetic() -> Self {
         Self::synthetic_with_spatial_physics(Arc::new(BasicSpatialPhysics))

@@ -1267,6 +1267,103 @@ pub fn slide_residual_along_wall_tangent(residual: Vector3, normal: Vector3) -> 
     residual - normal * into_normal
 }
 
+/// A7-R4 (2026-06-12, unification survey) — faithful port of retail
+/// `CPolygon::find_crossed_edge` (`acclient.c:360397-360496`), the edge
+/// finder `SPHEREPATH::precipice_slide` (`acclient.c:313980-314040`)
+/// drives: given the walkable polygon and a check position that has
+/// left it, find WHICH edge was crossed and return that edge's in-plane
+/// normal (`plane.N × edge`, normalized — the "cliff lip" direction the
+/// slide projects against).
+///
+/// Algorithm (verbatim from the decompile):
+/// 1. Bail when `|N · up| < 0.0002` (the polygon is edge-on to the
+///    projection axis; retail's literal is `0.00019999999`,
+///    acclient.c:360430).
+/// 2. Project the sphere center onto the polygon plane along `up`:
+///    `proj = center - up * ((N·center + d) / (N·up))` where
+///    `d = -(N · v0)` (plane anchored at the polygon's first vertex;
+///    retail carries `plane.d` precomputed).
+/// 3. Walk the edges `v[i-1] → v[i]` (starting with the closing edge
+///    `v[last] → v[0]`, retail's loop order) and return the FIRST edge
+///    whose outward test `(proj - v[i-1]) · (N × edge) < 0` fires —
+///    i.e. the projected center sits on the outside of that edge.
+/// 4. No edge fired ⇒ the projection is still inside the polygon ⇒
+///    `None` (retail returns 0; `precipice_slide` reports `Collided`).
+///
+/// `vertices` is the walkable polygon's ring (≥ 3 points, retail
+/// winding); `plane_normal` is its plane normal — NOT required to be
+/// derived from the ring (the legacy chain passes the bilinear terrain
+/// gradient normal alongside the 24 m cell quad,
+/// `WorldState::terrain_cell_quad_at`). Returns the normalized
+/// `N × edge` of the crossed edge; the caller orients it against the
+/// motion ([`precipice_slide_residual`]).
+pub fn find_crossed_edge(
+    vertices: &[Vector3],
+    plane_normal: Vector3,
+    sphere_center: Vector3,
+    up: Vector3,
+) -> Option<Vector3> {
+    // Retail literal at acclient.c:360430 (`0.00019999999`).
+    const EDGE_ON_EPSILON: f32 = 0.000_199_999_99;
+    if vertices.len() < 3 {
+        return None;
+    }
+    let n = plane_normal;
+    let n_dot_up = n.dot(&up);
+    if n_dot_up.abs() < EDGE_ON_EPSILON {
+        return None;
+    }
+    // Plane through the polygon: N·p + d = 0 anchored at the first vertex.
+    let d = -n.dot(&vertices[0]);
+    let t = (n.dot(&sphere_center) + d) / n_dot_up;
+    let proj = sphere_center - up * t;
+
+    let mut prev = vertices[vertices.len() - 1];
+    for &curr in vertices {
+        let edge = curr - prev;
+        // (proj - prev) · (N × edge): negative ⇒ the projected center is
+        // OUTSIDE this edge ⇒ this is the crossed edge (retail's FPU
+        // `v16 < 0` break, acclient.c:360462-360465).
+        let outward = n.cross(&edge);
+        if (proj - prev).dot(&outward) < 0.0 {
+            let len_sq = outward.length_squared();
+            if len_sq < 1e-12 {
+                return None; // degenerate edge (duplicate vertices)
+            }
+            return Some(outward * (1.0 / len_sq.sqrt()));
+        }
+        prev = curr;
+    }
+    None
+}
+
+/// A7-R4 (2026-06-12) — the slide half of `SPHEREPATH::precipice_slide`
+/// (`acclient.c:314006-314036`): orient the crossed edge's normal
+/// AGAINST the motion (retail negates it when `motion · n > 0`,
+/// acclient.c:314026-314031) and slide the residual along the lip — the
+/// same single-plane tangent projection `CSphere::slide_sphere`
+/// performs ([`slide_residual_along_wall_tangent`]). The component of
+/// the motion that crosses the lip is removed; the along-lip component
+/// survives, so an oblique walk-off SKIDS along the cliff edge instead
+/// of stopping/falling abruptly.
+///
+/// Returns `None` for a degenerate edge normal (caller keeps its
+/// existing fall behavior). A perpendicular walk-off slides to ~zero —
+/// the retail "sticky lip" — which the caller's re-probe then accepts
+/// as staying put on the edge.
+pub fn precipice_slide_residual(residual: Vector3, edge_normal: Vector3) -> Option<Vector3> {
+    let n_len_sq = edge_normal.length_squared();
+    if n_len_sq < 1e-12 {
+        return None;
+    }
+    let oriented = if residual.dot(&edge_normal) > 0.0 {
+        edge_normal * -1.0
+    } else {
+        edge_normal
+    };
+    Some(slide_residual_along_wall_tangent(residual, oriented))
+}
+
 /// Physics deep-dive 2026-06-01 (cliff_slide Stage-2). Faithful port of
 /// retail's `Transition.CliffSlide` (ACE
 /// `external/ACE/Source/ACE.Server/Physics/Transition.cs:242-266`,
@@ -2365,6 +2462,139 @@ mod tests {
         let residual = Vector3::new(0.0, 0.5, 0.0); // pure +Y, along the wall
         let slid = slide_residual_along_wall_tangent(residual, normal);
         assert!(slid.x.abs() < 1e-6 && (slid.y - 0.5).abs() < 1e-6);
+    }
+
+    // ---- A7-R4: find_crossed_edge + precipice_slide_residual ----
+
+    /// Unit square walkable poly, CCW from above (retail land-cell
+    /// winding), flat at z = 0.
+    fn flat_quad() -> [Vector3; 4] {
+        [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(1.0, 1.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+        ]
+    }
+
+    const UP: Vector3 = Vector3 {
+        x: 0.0,
+        y: 0.0,
+        z: 1.0,
+    };
+
+    /// Crossing the +X edge of a flat quad: the crossed-edge normal is
+    /// `N × edge` for the (1,0)→(1,1) edge = (-1, 0, 0) (in-plane,
+    /// pointing back inside the poly). Hand-computed:
+    /// edge = (0,1,0); (0,0,1)×(0,1,0) = (-1,0,0).
+    #[test]
+    fn find_crossed_edge_plus_x_exit() {
+        let quad = flat_quad();
+        let n = UP;
+        // Check position past the +X edge, inside the Y span.
+        let center = Vector3::new(1.3, 0.5, 0.2);
+        let edge_n = find_crossed_edge(&quad, n, center, UP).expect("edge crossed");
+        assert!((edge_n.x + 1.0).abs() < 1e-6, "got {edge_n:?}");
+        assert!(edge_n.y.abs() < 1e-6 && edge_n.z.abs() < 1e-6);
+    }
+
+    /// A check position still INSIDE the polygon's projection crosses no
+    /// edge — retail returns 0 (our `None`) and `precipice_slide`
+    /// reports `Collided`.
+    #[test]
+    fn find_crossed_edge_inside_is_none() {
+        let quad = flat_quad();
+        assert_eq!(
+            find_crossed_edge(&quad, UP, Vector3::new(0.5, 0.5, 3.0), UP),
+            None
+        );
+    }
+
+    /// The edge-on bail: when the polygon plane is parallel to the
+    /// projection axis (`|N · up| < 0.0002`, retail acclient.c:360430)
+    /// the projection is undefined ⇒ `None`.
+    #[test]
+    fn find_crossed_edge_edge_on_plane_is_none() {
+        // Vertical wall poly (normal along +X, perpendicular to up).
+        let wall = [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, 1.0, 1.0),
+            Vector3::new(0.0, 0.0, 1.0),
+        ];
+        let n = Vector3::new(1.0, 0.0, 0.0);
+        assert_eq!(
+            find_crossed_edge(&wall, n, Vector3::new(0.5, 0.5, 0.5), UP),
+            None
+        );
+    }
+
+    /// Projection is along `up`, not vertical-only: on a sloped walkable
+    /// the same XY exit still finds the crossed edge.
+    #[test]
+    fn find_crossed_edge_sloped_quad() {
+        // Quad sloping up along +X (z = x), normal = normalize(-1,0,1).
+        let quad = [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 1.0),
+            Vector3::new(1.0, 1.0, 1.0),
+            Vector3::new(0.0, 1.0, 0.0),
+        ];
+        let inv = 1.0 / 2.0_f32.sqrt();
+        let n = Vector3::new(-inv, 0.0, inv);
+        let center = Vector3::new(1.4, 0.5, 0.0);
+        let edge_n = find_crossed_edge(&quad, n, center, UP).expect("edge crossed");
+        // Crossed the +X edge (1,0,1)→(1,1,1): N × (0,1,0) =
+        // (-inv·1 - 0, 0, -inv·(-0))… hand-computed = (-inv, 0, -inv)
+        // normalized ⇒ unit, in-plane (dot with n == 0).
+        assert!(edge_n.dot(&n).abs() < 1e-6, "edge normal in-plane: {edge_n:?}");
+        assert!(edge_n.x < -0.5, "points back inside (-X-ish): {edge_n:?}");
+        assert!((edge_n.length() - 1.0).abs() < 1e-5);
+    }
+
+    /// Oblique walk-off: the crossing (+X) component is removed, the
+    /// along-lip (+Y) component survives — the skid. Retail orientation
+    /// flip: the edge normal as returned points INSIDE (-X); motion·n
+    /// = -0.2 ≤ 0 keeps it un-negated, slide removes the +X crossing.
+    #[test]
+    fn precipice_slide_oblique_skids_along_lip() {
+        let edge_n = Vector3::new(-1.0, 0.0, 0.0);
+        let motion = Vector3::new(0.2, 0.3, 0.0);
+        let slid = precipice_slide_residual(motion, edge_n).expect("slide");
+        assert!(slid.x.abs() < 1e-6, "crossing component removed: {slid:?}");
+        assert!((slid.y - 0.3).abs() < 1e-6, "along-lip preserved: {slid:?}");
+    }
+
+    /// Orientation flip (acclient.c:314026-314031): when the edge
+    /// normal points WITH the motion it is negated first, so the result
+    /// is identical regardless of the winding the edge finder returned.
+    #[test]
+    fn precipice_slide_orients_normal_against_motion() {
+        let motion = Vector3::new(0.2, 0.3, 0.0);
+        let a = precipice_slide_residual(motion, Vector3::new(-1.0, 0.0, 0.0)).unwrap();
+        let b = precipice_slide_residual(motion, Vector3::new(1.0, 0.0, 0.0)).unwrap();
+        assert!((a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6);
+    }
+
+    /// Perpendicular walk-off: the entire motion crosses the lip ⇒ the
+    /// slide collapses to ~zero (retail "sticky lip" — the walker stays
+    /// on the edge instead of launching off).
+    #[test]
+    fn precipice_slide_perpendicular_sticks() {
+        let slid =
+            precipice_slide_residual(Vector3::new(0.4, 0.0, 0.0), Vector3::new(-1.0, 0.0, 0.0))
+                .unwrap();
+        assert!(slid.length() < 1e-6, "perpendicular slide ~0: {slid:?}");
+    }
+
+    /// Degenerate edge normal ⇒ `None` (caller falls back to the
+    /// existing begin_fall path).
+    #[test]
+    fn precipice_slide_degenerate_normal_is_none() {
+        assert_eq!(
+            precipice_slide_residual(Vector3::new(0.4, 0.0, 0.0), Vector3::zero()),
+            None
+        );
     }
 
     /// `clamp_delta_against_cell_walls_with_normal` surfaces the XY wall

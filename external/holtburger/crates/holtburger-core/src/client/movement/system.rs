@@ -112,6 +112,91 @@ fn player_step_down_height(world: &WorldState) -> f32 {
     }
 }
 
+/// A7-R4 (2026-06-12, unification survey) — the restore → precipice-slide
+/// re-attempt that consumes the `backup_pose_for_step_down` the A7-era
+/// stub only ever saved/cleared. Retail chain: a grounded step whose
+/// step-down probe finds no walkable landing reaches
+/// `CTransition::edge_slide` (acclient.c:312685), which restores the
+/// saved check position (`restore_check_pos`) and — when the mover still
+/// tracks a walkable poly and carries the `EDGE_SLIDE` state bit —
+/// calls `SPHEREPATH::precipice_slide` (acclient.c:313980):
+/// `CPolygon::find_crossed_edge` on the walkable, orient the lip normal
+/// against the motion, `slide_sphere` the move along the lip.
+///
+/// Ours (single-pass solver, OUTDOOR terrain arm only this pass):
+/// - walkable poly = the 24 m terrain cell quad under the SLICE-ENTRY
+///   position ([`WorldState::terrain_cell_quad_at`]) with the bilinear
+///   gradient normal — the per-cell diagonal split is a documented
+///   simplification (the quad edges ARE the retail outer edges).
+/// - `backup` = the saved post-lateral / pre-descent pose (the retail
+///   check position) — its global center is the crossed-edge probe.
+/// - the slid move re-probes the SAME step-down decision the original
+///   descent used (edge_slide branch (d): `step_down` re-probe then
+///   slide, acclient.c:312750-312772); only a walkable `Snap` accepts.
+///
+/// Returns the accepted landblock-local `(x, y, snap_z)`, or `None` ⇒
+/// the caller keeps the existing `begin_fall` path. Gated on the
+/// hydrated `PhysicsState::EDGE_SLIDE` bit exactly like retail's
+/// `state & 0x200` test (acclient.c:312708).
+fn attempt_precipice_slide(
+    world: &WorldState,
+    backup: &holtburger_common::position::WorldPosition,
+    entry_local_xy: (f32, f32),
+) -> Option<(f32, f32, f32)> {
+    if !world.player.allow_edge_slide {
+        return None;
+    }
+    let global = backup.global_coords();
+    // Landblock-local → global XY offset (Z is shared between frames).
+    let off_x = global.x - backup.coords.x;
+    let off_y = global.y - backup.coords.y;
+    let entry_gx = entry_local_xy.0 + off_x;
+    let entry_gy = entry_local_xy.1 + off_y;
+    // Walkable poly + plane normal under the pre-step (walkable) pose.
+    let quad = world.terrain_cell_quad_at(entry_gx, entry_gy)?;
+    let plane_n = world.terrain_normal_at(entry_gx, entry_gy)?;
+    let up = Vector3::new(0.0, 0.0, 1.0);
+    let center = Vector3::new(global.x, global.y, global.z);
+    let edge_n = holtburger_world::spatial::find_crossed_edge(&quad, plane_n, center, up)?;
+    let motion = Vector3::new(
+        backup.coords.x - entry_local_xy.0,
+        backup.coords.y - entry_local_xy.1,
+        0.0,
+    );
+    let slid = holtburger_world::spatial::precipice_slide_residual(motion, edge_n)?;
+    // Restore to the slice-entry XY and take the along-lip component
+    // (lateral-only, consistent with the rest of the legacy chain).
+    let new_x = entry_local_xy.0 + slid.x;
+    let new_y = entry_local_xy.1 + slid.y;
+    let new_gx = new_x + off_x;
+    let new_gy = new_y + off_y;
+    let z2 = world.terrain_height_at(new_gx, new_gy)?;
+    let z2 = if USE_WATER_COLLISION {
+        z2 + world.water_depth_at(new_gx, new_gy)
+    } else {
+        z2
+    };
+    let outcome = if USE_WALKABLE_STEP_DOWN {
+        holtburger_world::spatial::step_down_resolve(
+            backup.coords.z,
+            z2,
+            world.terrain_normal_at(new_gx, new_gy).map(|n| n.z),
+            player_step_down_height(world),
+            holtburger_world::spatial::FLOOR_Z,
+        )
+    } else {
+        holtburger_world::spatial::step_down_decision(
+            backup.coords.z,
+            z2,
+            player_step_down_height(world),
+        )
+    };
+    match outcome {
+        holtburger_world::spatial::StepDownOutcome::Snap(snap_z) => Some((new_x, new_y, snap_z)),
+        holtburger_world::spatial::StepDownOutcome::Fall => None,
+    }
+}
+
 /// A7-R2 (2026-06-12, survey A7 §3 rows 2/3) — walkable step-down.
 ///
 /// `true`: both step-down arms (outdoor terrain + indoor per-poly,
@@ -194,12 +279,22 @@ const USE_EDGE_SLIDE: bool = true;
 /// `true`: the pre-descent pose is saved into
 /// `world.player.backup_pose_for_step_down` before the step-down
 /// walkability check and cleared once the descent resolves (snap / fall /
-/// legacy fallback). NOTE: this slice lands the SAVE/CLEAR bookkeeping
-/// ONLY — the restore → precipice-slide re-attempt consumer is a
-/// documented follow-on that requires the CTransition substep / contact-
-/// plane state we do not yet have (see `USE_CLIFF_SLIDE` Stage-2). Until
-/// that consumer lands, flipping this flag on only populates and clears a
-/// field nobody reads (still behaviourally inert).
+/// legacy fallback) — AND (A7-R4, 2026-06-12) the restore →
+/// precipice-slide re-attempt CONSUMER is live: when the outdoor
+/// step-down probe says `Fall`, [`attempt_precipice_slide`] restores the
+/// saved pose, finds the crossed edge of the walkable terrain cell
+/// (`CPolygon::find_crossed_edge`, acclient.c:360397, ours
+/// [`holtburger_world::spatial::find_crossed_edge`]) and skids the
+/// blocked move along the cliff lip
+/// ([`holtburger_world::spatial::precipice_slide_residual`],
+/// `SPHEREPATH::precipice_slide` acclient.c:313980-314040) — an oblique
+/// walk-off rides the edge instead of dropping; a perpendicular walk-off
+/// sticks at the lip (the retail behavior). The slide only ACCEPTS when
+/// its re-probed landing is a walkable `Snap`; otherwise the legacy
+/// `begin_fall` runs unchanged. Outdoor terrain arm only this pass
+/// (indoor F4-1 step-down keeps the abrupt fall; the unified
+/// `transition.rs` pipeline keeps R4 out-of-scope per its module doc).
+/// Pending 1070 eye-test (walk off a cliff lip obliquely), BATCHED.
 const USE_PRECIPICE_SLIDE_REENTRY: bool = false;
 
 /// Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — gate for the
@@ -3694,15 +3789,45 @@ impl MovementSystem {
                                 }
                             }
                             holtburger_world::spatial::StepDownOutcome::Fall => {
-                                world.player.begin_fall();
-                                // A3-D3-5: retail leave-ground launch
-                                // velocity (default-off no-op).
-                                stamp_leave_ground_velocity(world, heading, state, &capabilities);
-                                // Leave Z alone — gravity drops us next tick.
-                                // Genuine ledge fall resolved — clear the
-                                // backup pose.
-                                if USE_PRECIPICE_SLIDE_REENTRY {
-                                    world.player.backup_pose_for_step_down = None;
+                                // A7-R4 (2026-06-12): restore →
+                                // precipice-slide re-attempt — the consumer
+                                // of the backup pose the stub deferred.
+                                // Retail: edge_slide's walkable branch
+                                // restores the saved check position and
+                                // skids the move along the crossed cliff
+                                // lip (acclient.c:312685-312772, 313980).
+                                // Accepts ONLY a walkable re-probed
+                                // landing; otherwise the legacy fall path
+                                // below runs unchanged. Flag off (default)
+                                // = byte-identical (backup never saved).
+                                let mut precipice_slid = false;
+                                if USE_PRECIPICE_SLIDE_REENTRY
+                                    && let Some(backup) =
+                                        world.player.backup_pose_for_step_down.take()
+                                    && let Some((new_x, new_y, snap_z)) =
+                                        attempt_precipice_slide(world, &backup, entry_local_xy)
+                                {
+                                    pose.coords.x = new_x;
+                                    pose.coords.y = new_y;
+                                    pose.coords.z = snap_z;
+                                    precipice_slid = true;
+                                }
+                                if !precipice_slid {
+                                    world.player.begin_fall();
+                                    // A3-D3-5: retail leave-ground launch
+                                    // velocity (default-off no-op).
+                                    stamp_leave_ground_velocity(
+                                        world,
+                                        heading,
+                                        state,
+                                        &capabilities,
+                                    );
+                                    // Leave Z alone — gravity drops us next
+                                    // tick. Genuine ledge fall resolved —
+                                    // clear the backup pose.
+                                    if USE_PRECIPICE_SLIDE_REENTRY {
+                                        world.player.backup_pose_for_step_down = None;
+                                    }
                                 }
                             }
                         }
