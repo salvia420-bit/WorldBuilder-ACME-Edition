@@ -2417,3 +2417,115 @@ fn qualities_update_remove_generated_structs_link() {
     assert_opcode::<S2C_Qualities_PrivateRemoveInstanceIdEvent>();
     assert_opcode::<S2C_Qualities_PrivateRemovePositionEvent>();
 }
+
+// ===== A13-W5 — quarantine the generated codec (unification-survey row 6) ======
+//
+// Two pack codecs exist for the same wire types: the hand-written RUNTIME
+// codec (`messages/movement/actions.rs`, wired into game_action.rs dispatch
+// and the wasm session handler) and this Chorizite-GENERATED codec
+// (test-only). The survey flagged the latent SPLIT-BRAIN: field names
+// already differ (generated `object_instance_sequence` vs runtime
+// `instance_sequence`) and the generated `JumpPack` stops at the 24-byte
+// pack while the runtime `JumpActionData` also carries the 8-byte
+// object_guid+spell_id trailer (ACE `GameActionJump.cs` constructs
+// `JumpPack(payload)` from the first 24 bytes, THEN reads
+// `objectGuid`/`spellId` and discards them; `JumpPack.cs` field order:
+// Extent f32, Velocity Vector3, InstanceSequence/ServerControlSequence/
+// TeleportSequence/ForcePositionSequence u16×4).
+//
+// These tests turn any future drift between the two codecs into a failing
+// test instead of a runtime wire bug: both decoders run over the SAME
+// golden bytes and every shared field must agree, and the runtime pack()
+// must re-emit the golden bytes exactly.
+
+/// Golden Jump wire payload, ACE-shaped: 24-byte JumpPack + 8-byte trailer.
+fn w5_golden_jump_bytes() -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0.75f32.to_le_bytes()); // extent (jump charge 0..1)
+    buf.extend_from_slice(&1.25f32.to_le_bytes()); // velocity.x
+    buf.extend_from_slice(&(-2.5f32).to_le_bytes()); // velocity.y
+    buf.extend_from_slice(&4.875f32.to_le_bytes()); // velocity.z
+    buf.extend_from_slice(&0x0102u16.to_le_bytes()); // InstanceSequence
+    buf.extend_from_slice(&0x0304u16.to_le_bytes()); // ServerControlSequence
+    buf.extend_from_slice(&0x0506u16.to_le_bytes()); // TeleportSequence
+    buf.extend_from_slice(&0x0708u16.to_le_bytes()); // ForcePositionSequence
+    // ACE trailer (read+discarded server-side, but on the wire):
+    buf.extend_from_slice(&0x5000_0001u32.to_le_bytes()); // objectGuid
+    buf.extend_from_slice(&0x0000_0000u32.to_le_bytes()); // spellId
+    buf
+}
+
+/// W5-1: generated `JumpPack` and runtime `JumpActionData` decode the same
+/// golden bytes to the same values on every shared field, and the generated
+/// decoder's cursor lands exactly where the runtime decoder begins the ACE
+/// trailer (byte 24).
+#[test]
+fn w5_jump_codecs_agree_on_golden_bytes() {
+    use holtburger_protocol::messages::movement::actions::JumpActionData;
+    use holtburger_protocol::traits::ProtocolUnpack;
+
+    let buf = w5_golden_jump_bytes();
+
+    // Generated codec: 24-byte pack only.
+    let mut goff = 0usize;
+    let gen_pack = generated::JumpPack::read_from(&buf, &mut goff).expect("generated decode");
+    assert_eq!(goff, 24, "generated JumpPack must consume exactly the 24-byte ACE pack");
+
+    // Runtime codec: pack + trailer.
+    let mut roff = 0usize;
+    let runtime = JumpActionData::unpack(&buf, &mut roff).expect("runtime decode");
+    assert_eq!(roff, 32, "runtime JumpActionData consumes pack + 8-byte trailer");
+
+    // Shared-field agreement (names differ; bytes must not).
+    assert_eq!(gen_pack.extent, runtime.extent);
+    assert_eq!(gen_pack.velocity.x, runtime.velocity.x);
+    assert_eq!(gen_pack.velocity.y, runtime.velocity.y);
+    assert_eq!(gen_pack.velocity.z, runtime.velocity.z);
+    assert_eq!(gen_pack.object_instance_sequence, runtime.instance_sequence);
+    assert_eq!(gen_pack.object_server_control_sequence, runtime.server_control_sequence);
+    assert_eq!(gen_pack.object_teleport_sequence, runtime.teleport_sequence);
+    assert_eq!(gen_pack.object_force_position_sequence, runtime.force_position_sequence);
+
+    // Trailer is runtime-only (ACE GameActionJump.cs reads it after JumpPack).
+    assert_eq!(runtime.object_guid.0, 0x5000_0001);
+    assert_eq!(runtime.spell_id, 0);
+}
+
+/// W5-2: the runtime codec round-trips — `pack()` of the decoded
+/// `JumpActionData` re-emits the golden bytes byte-for-byte. This pins the
+/// SEND path (build_jump → game_action dispatch) to the same shape ACE
+/// unpacks, independent of the generated codec.
+#[test]
+fn w5_runtime_jump_pack_round_trips_golden_bytes() {
+    use holtburger_protocol::messages::movement::actions::JumpActionData;
+    use holtburger_protocol::traits::{ProtocolPack, ProtocolUnpack};
+
+    let buf = w5_golden_jump_bytes();
+    let mut off = 0usize;
+    let runtime = JumpActionData::unpack(&buf, &mut off).expect("runtime decode");
+    let mut out = Vec::new();
+    runtime.pack(&mut out);
+    assert_eq!(out, buf, "runtime JumpActionData pack() must re-emit golden bytes");
+}
+
+/// W5-3: structural quarantine guard — the generated JumpPack layout is
+/// exactly the ACE `JumpPack.cs` reader (f32 + Vector3 + u16×4 = 24 bytes,
+/// align(4) consuming zero pad). If codegen ever grows/reorders the struct
+/// (protocol.xml edit, Chorizite update), this fails before anyone can wire
+/// the drifted shape into runtime.
+#[test]
+fn w5_generated_jump_pack_is_exactly_the_ace_24_byte_shape() {
+    let buf = w5_golden_jump_bytes();
+    // Decode from a buffer truncated to exactly 24 bytes: must succeed
+    // (proves no field beyond the ACE pack is read).
+    let mut off = 0usize;
+    let pack = generated::JumpPack::read_from(&buf[..24], &mut off).expect("24 bytes suffice");
+    assert_eq!(off, 24);
+    assert_eq!(pack.extent, 0.75);
+    // 23 bytes must NOT suffice (proves every ACE field is read).
+    let mut off2 = 0usize;
+    assert!(
+        generated::JumpPack::read_from(&buf[..23], &mut off2).is_err(),
+        "23 bytes must be a truncation error — every ACE JumpPack field is load-bearing"
+    );
+}

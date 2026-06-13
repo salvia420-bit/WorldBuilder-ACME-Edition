@@ -8,6 +8,18 @@ pub mod crypto;
 pub mod test_fixtures;
 pub mod traits;
 
+/// **TEST-ONLY — QUARANTINED (A13-W5).** The runtime wire codec is the
+/// hand-written `messages::*` tree (`messages/movement/actions.rs` for the
+/// movement packs, `messages/game_action.rs` for dispatch). Nothing outside
+/// `tests/` may wire `generated::*` types into a runtime path: field names
+/// and shapes already drift from the runtime codec (e.g. generated
+/// `JumpPack` uses Chorizite names `object_instance_sequence`… and stops at
+/// the 24-byte pack, while runtime `JumpActionData` uses `instance_sequence`…
+/// and carries the 8-byte object_guid+spell_id trailer that ACE
+/// `GameActionJump.cs` reads after `JumpPack`). Byte-level compatibility of
+/// the overlap is enforced by `tests/generated_parity.rs` (`w5_*` tests) —
+/// if the shapes diverge those tests fail.
+///
 /// PR 7 — Tier-1 codegen layer parsed from
 /// `external/chorizite/Chorizite.ACProtocol/Chorizite.ACProtocol/protocol.xml`
 /// at build time.
