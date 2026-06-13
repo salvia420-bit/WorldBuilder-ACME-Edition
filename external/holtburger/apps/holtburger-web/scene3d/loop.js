@@ -1480,6 +1480,15 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // un-claims while the 3D loop later revives, the brief double-pump is
   // benign (take-based drains, dt-measured tick, sig-deduped input —
   // today's steady-state concurrency).
+  // GUARD (S16 reopen check, 2026-06-12 — DECISIONS-A1-O5-constants.md
+  // (b)): this pump must stay dt-INDEPENDENT. It runs every frame,
+  // including the dt=0 freeze-band frames of the JS dt-clamp; the wasm
+  // tick inside it self-measures elapsed time (tick_spine.rs /
+  // MovementSystemHandle::tick). Gating this call on `dt > 0` — or
+  // passing the clamped JS `dt` into the wasm tick — would couple the
+  // two clamp laws and starve Rust physics under ?singleDriver during
+  // recovery: that is exactly the record's (b) reopen trigger. Revisit
+  // the decision record FIRST.
   if (scene3d?.singleDriverOn && typeof window !== "undefined"
       && typeof window.__netFramePump === "function") {
     try {

@@ -133,6 +133,33 @@ Four quantum-law surfaces + one JS clamp law:
   any future change that makes the JS dt and the Rust dt the same measurement
   MUST revisit this decision first (the freeze band would then starve Rust
   physics too).
+- **Reopen-trigger RE-CHECK (S16 follow-up, 2026-06-12 W5, read-HEAD 33b99b03 —
+  after the full W4 wave incl. A1-O4):** W5-REMAINDER flagged this trigger as
+  "fired, unactioned" once S1 (A1-O3) landed; re-evaluated with BOTH S1 and the
+  W4-landed A1-O4 `?singleDriver` single-frame driver (+ its `94b378c3` scope
+  fix) in the tree. Verdict: **trigger NOT fired — KEEP stands, no behavior
+  change.** Facts re-verified at this HEAD:
+  (1) the Rust spine still self-measures dt — `TickSpineHandle::tick_frame`
+  `saturating_duration_since(last_tick_at)`, first call 16 ms (tick_spine.rs,
+  anchor unchanged); the legacy `MovementSystemHandle::tick` arm likewise; no
+  export passes the clamped JS `dt` into wasm integration.
+  (2) A1-O3 `?syncPhysicsTick` (scene3d/index.js tick phase #0) enqueues the
+  wasm tick UNCONDITIONALLY — it is not gated on the clamped `dt`, so freeze-
+  band frames (dt=0) still tick Rust, which sees its own elapsed wall-clock
+  (sliced at MAX_QUANTUM / dropped at HUGE_QUANTUM).
+  (3) A1-O4 `?singleDriver` is the NEW coupling surface this re-check exists
+  for: the wasm pump (`window.__netFramePump`, incl. the tickMovement enqueue)
+  now rides scene3d's tick as `tickPerFrame` CRITICAL #0 (scene3d/loop.js) —
+  but that phase runs every frame and is dt-INDEPENDENT (and never
+  budget-gated), so the JS clamp still cannot bound or starve Rust physics.
+  Guard comment added at the pump site (loop.js CRITICAL #0) naming this
+  record. Trigger REFINED, remains live: it fires if (a) any change makes the
+  JS dt and the Rust dt the same measurement, OR (b) the single-driver pump /
+  syncPhysicsTick enqueue is ever gated on the clamped JS `dt` (e.g. skipped
+  on dt=0 freeze-band frames) — both couple the two clamp laws; revisit this
+  decision FIRST. Next scheduled look: the W6 `?physics30hz` code-half (c3),
+  which deliberately introduces a browser-side cadence gate and must respect
+  this independence.
 
 ## Decision (c) — MIN_QUANTUM / 30 Hz audit. Three sub-decisions + housekeeping.
 
