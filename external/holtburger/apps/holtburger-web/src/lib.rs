@@ -156,6 +156,39 @@ fn placement_id_flag() -> bool {
     }
 }
 
+/// A4-Q4 (2026-06-12, unification survey): parse `?getLink=on` (or
+/// `&getLink=on`). Same shape as `parse_placement_id_flag`. When on,
+/// the link-clip lookup in `try_resolve_link_frames` uses the faithful
+/// retail TWO-HOP `CMotionTable::get_link` resolver
+/// (`MotionTable::get_link`, acclient.c:337585-337639 / ACE
+/// `Physics/Animation/MotionTable.cs::get_link`) — exact
+/// `(style|substate) → motion` entry, then the style-level
+/// `(style << 16)` fallback group — instead of the shipped single-hop
+/// `motion_data_for_link`, so transitions the table authors through the
+/// second hop (cross-substate flourishes, motion-dispatch C2) play
+/// instead of hard-cutting. Default OFF = single-hop, byte-identical.
+#[cfg(target_arch = "wasm32")]
+fn parse_get_link_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "getLink=on")
+}
+
+/// A4-Q4: the `?getLink=` gate, parsed once. Non-wasm builds (native
+/// tests/CLI) always resolve the legacy single hop; the two-hop
+/// resolver is unit-tested directly in `holtburger-dat`
+/// (`motion_table.rs` q4_* tests).
+fn get_link_flag() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| parse_get_link_flag(&js_location_search()))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
+
 /// A8-M2 (2026-06-11, unification survey): parse `?maintPrune=on`
 /// (or `&maintPrune=on`). Same shape as `parse_unified_tick_flag`.
 /// When on (AND `?unifiedTick=on` — the maint sweep only runs inside
@@ -5793,7 +5826,21 @@ fn try_resolve_link_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         stance_override
     };
 
-    let motion_data = mtable.motion_data_for_link(resolved_stance, from_command, to_command)?;
+    // A4-Q4 (2026-06-12, `?getLink=on`): the faithful retail TWO-HOP
+    // `CMotionTable::get_link` resolver (exact entry, then the
+    // style-level `(style << 16)` fallback group; acclient.c:337585-337639)
+    // instead of the shipped single hop — second-hop-authored transitions
+    // (motion-dispatch C2) play their flourish instead of hard-cutting.
+    // Speeds are pinned `1.0` (forward): this bake site has no playback
+    // direction — the JS overlay plays links forward — so the
+    // negative-speed reversed lookups + style_defaults bridge are
+    // resolver-covered (dat q4_* tests) but unreachable here until a
+    // caller carries a signed speed. Flag off = single hop, byte-identical.
+    let motion_data = if get_link_flag() {
+        mtable.get_link(resolved_stance, from_command, 1.0, to_command, 1.0)?
+    } else {
+        mtable.motion_data_for_link(resolved_stance, from_command, to_command)?
+    };
     // T4 (2026-05-28): concatenate ALL AnimData segments with per-segment
     // timing + reverse playback (was `anims.first()`). Links are commonly
     // multi-segment (windup → strike → recover → settle) and ~22% of retail

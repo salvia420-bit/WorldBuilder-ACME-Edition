@@ -163,6 +163,78 @@ impl MotionTable {
         self.links.get(&from_key)?.get(&to_cmd)
     }
 
+    /// A4-Q4 (2026-06-12, unification survey) — the faithful retail
+    /// `CMotionTable::get_link` TWO-HOP resolver (`acclient.c:337585-337639`;
+    /// ACE `Physics/Animation/MotionTable.cs::get_link`, line-for-line),
+    /// closing motion-dispatch C2 / A4 divergence #6: the shipped
+    /// [`Self::motion_data_for_link`] is hop 1 ONLY, so any transition the
+    /// table authors through its second hop (the `style_defaults` bridge /
+    /// the style-level `(style << 16 | 0)` group) hard-cuts instead of
+    /// playing its flourish.
+    ///
+    /// Speed-direction split (verbatim from both sources — `speed < 0 ||
+    /// substate_speed < 0` selects the REVERSED lookups, since a
+    /// backward-playing cycle takes the reverse link):
+    ///
+    /// - **forward** (`both speeds >= 0`):
+    ///   1. `links[(style << 16) | (substate & 0xFFFFFF)][motion]`
+    ///   2. `links[style << 16][motion]` — the style-level group whose
+    ///      from-substate field is 0 (acclient.c:337631-337636 looks up
+    ///      `v8 = style << 16` with NO low bits OR-ed in; ACE mirrors).
+    /// - **backward** (either speed `< 0`):
+    ///   1. `links[(style << 16) | (motion & 0xFFFFFF)][substate]`
+    ///      (from/to swapped — the reverse transition)
+    ///   2. `style_defaults[style] = default` ⇒
+    ///      `links[(style << 16) | (substate & 0xFFFFFF)][default]`
+    ///      (the style_defaults bridge, acclient.c:337616-337629).
+    ///
+    /// Outer keys are built with the same `cycle_key` encoding the parser's
+    /// consumers use (byte-identical to the raw on-disk
+    /// `(style << 16) | (substate & 0xFFFFFF)` for every retail command —
+    /// see the `cycle_key` doc). Inner keys are the FULL 32-bit
+    /// MotionCommand, never masked (the W2.E invariant; the bare low-16
+    /// `0x0003` can't match `0x41000003`, callers pass full commands).
+    pub fn get_link(
+        &self,
+        style: u32,
+        substate: u32,
+        substate_speed: f32,
+        motion: u32,
+        speed: f32,
+    ) -> Option<&MotionData> {
+        let backward = speed < 0.0 || substate_speed < 0.0;
+        if backward {
+            // Hop 1 (reversed): links[style | motion] → [substate].
+            if let Some(link) = self
+                .links
+                .get(&cycle_key(style, motion))
+                .and_then(|inner| inner.get(&substate))
+            {
+                return Some(link);
+            }
+            // Hop 2: the style_defaults bridge —
+            // links[style | substate] → [StyleDefaults[style]].
+            let default_motion = self.style_defaults.get(&style)?;
+            self.links
+                .get(&cycle_key(style, substate))
+                .and_then(|inner| inner.get(default_motion))
+        } else {
+            // Hop 1: links[style | substate] → [motion].
+            if let Some(link) = self
+                .links
+                .get(&cycle_key(style, substate))
+                .and_then(|inner| inner.get(&motion))
+            {
+                return Some(link);
+            }
+            // Hop 2: the style-level group links[style << 16] → [motion]
+            // (retail looks up the outer key with NO substate bits).
+            self.links
+                .get(&cycle_key(style, 0))
+                .and_then(|inner| inner.get(&motion))
+        }
+    }
+
     pub fn movement_profile_for_stance(&self, stance: u32) -> MotionTableMovementProfile {
         MotionTableMovementProfile {
             motion_table_id: self.id,
@@ -688,6 +760,136 @@ mod tests {
         let md = make(0xFC);
         assert!(!md.clears_modifiers());
         assert!(!md.is_allowed_gate());
+    }
+
+    // ---- A4-Q4: get_link two-hop resolver ----
+
+    /// Marker-carrying MotionData so each table slot is distinguishable.
+    fn marked(marker: u8) -> MotionData {
+        MotionData {
+            bitfield: marker,
+            flags: MotionDataFlags::empty(),
+            anims: Vec::new(),
+            velocity: None,
+            omega: None,
+        }
+    }
+
+    const Q4_STYLE: u32 = 0x8000_003D; // NonCombat
+    const Q4_READY: u32 = 0x4100_0003;
+    const Q4_WALK: u32 = 0x4500_0005;
+    const Q4_SLASH: u32 = 0x1000_005B;
+
+    /// Synthetic table exercising every `get_link` arm:
+    /// - `links[style|Ready][Walk]`   = marker 1 (forward hop 1)
+    /// - `links[style<<16|0][Slash]`  = marker 2 (forward hop 2,
+    ///   style-level group)
+    /// - `links[style|Walk][Ready]`   = marker 3 (backward hop 1 for
+    ///   (substate=Ready, motion=Walk))
+    /// - `links[style|Slash][Ready]`  = marker 4 (backward hop 2 bridge:
+    ///   StyleDefaults[style] = Ready)
+    fn q4_table() -> MotionTable {
+        let mut links: HashMap<u32, HashMap<u32, MotionData>> = HashMap::new();
+        links
+            .entry(cycle_key(Q4_STYLE, Q4_READY))
+            .or_default()
+            .insert(Q4_WALK, marked(1));
+        links
+            .entry(cycle_key(Q4_STYLE, 0))
+            .or_default()
+            .insert(Q4_SLASH, marked(2));
+        links
+            .entry(cycle_key(Q4_STYLE, Q4_WALK))
+            .or_default()
+            .insert(Q4_READY, marked(3));
+        links
+            .entry(cycle_key(Q4_STYLE, Q4_SLASH))
+            .or_default()
+            .insert(Q4_READY, marked(4));
+        let mut style_defaults = HashMap::new();
+        style_defaults.insert(Q4_STYLE, Q4_READY);
+        MotionTable {
+            id: 0x0900_0101,
+            default_style: Q4_STYLE,
+            style_defaults,
+            cycles: HashMap::new(),
+            modifiers: HashMap::new(),
+            links,
+        }
+    }
+
+    /// Forward hop 1: the exact `(style|substate) → motion` entry wins.
+    #[test]
+    fn q4_get_link_forward_hop1_exact() {
+        let t = q4_table();
+        let md = t.get_link(Q4_STYLE, Q4_READY, 1.0, Q4_WALK, 1.0).unwrap();
+        assert_eq!(md.bitfield, 1);
+    }
+
+    /// Forward hop 2: no exact entry for `(style|Walk) → Slash`, but the
+    /// style-level group `(style << 16 | 0)` carries Slash — retail's
+    /// second lookup (acclient.c:337631-337636) finds it; the shipped
+    /// single-hop `motion_data_for_link` does NOT (the C2 hard-cut).
+    #[test]
+    fn q4_get_link_forward_hop2_style_level_group() {
+        let t = q4_table();
+        let md = t.get_link(Q4_STYLE, Q4_WALK, 1.0, Q4_SLASH, 1.0).unwrap();
+        assert_eq!(md.bitfield, 2);
+        // The pre-Q4 helper misses this transition entirely.
+        assert!(t.motion_data_for_link(Q4_STYLE, Q4_WALK, Q4_SLASH).is_none());
+    }
+
+    /// Backward hop 1: a negative speed swaps from/to —
+    /// `links[style|motion][substate]` (the reverse transition plays).
+    #[test]
+    fn q4_get_link_backward_hop1_reversed() {
+        let t = q4_table();
+        let md = t.get_link(Q4_STYLE, Q4_READY, 1.0, Q4_WALK, -1.0).unwrap();
+        // links[style|Walk][Ready] = marker 3 (NOT the forward marker 1).
+        assert_eq!(md.bitfield, 3);
+        // substate_speed < 0 selects the same arm (retail `speed < 0 ||
+        // substate_speed < 0`).
+        let md2 = t.get_link(Q4_STYLE, Q4_READY, -1.0, Q4_WALK, 1.0).unwrap();
+        assert_eq!(md2.bitfield, 3);
+    }
+
+    /// Backward hop 2: reversed hop 1 misses ⇒ the style_defaults
+    /// bridge — `links[style|substate][StyleDefaults[style]]`
+    /// (acclient.c:337616-337629).
+    #[test]
+    fn q4_get_link_backward_hop2_style_defaults_bridge() {
+        let t = q4_table();
+        // (substate=Slash, motion=Walk, backward): hop 1 looks up
+        // links[style|Walk][Slash] — absent. Hop 2: StyleDefaults = Ready
+        // ⇒ links[style|Slash][Ready] = marker 4.
+        let md = t.get_link(Q4_STYLE, Q4_SLASH, 1.0, Q4_WALK, -1.0).unwrap();
+        assert_eq!(md.bitfield, 4);
+    }
+
+    /// Both hops miss ⇒ None (caller keeps its crossfade fallback).
+    #[test]
+    fn q4_get_link_full_miss_is_none() {
+        let t = q4_table();
+        assert!(t.get_link(Q4_STYLE, Q4_SLASH, 1.0, Q4_WALK, 1.0).is_none());
+        // Unknown style misses everything (incl. the defaults bridge).
+        assert!(t.get_link(0x8000_0040, Q4_READY, 1.0, Q4_WALK, -1.0).is_none());
+    }
+
+    /// Key-width split (the W2.E invariant): the INNER key is the FULL
+    /// 32-bit MotionCommand — a bare low-16 `0x0005` must NOT match the
+    /// `0x45000005` inner entry — while the OUTER from-substate is
+    /// masked to its low 24 bits by the on-disk
+    /// `(style << 16) | (substate & 0xFFFFFF)` encoding, so the bare
+    /// `0x0003` DOES select the same outer group as `0x41000003`
+    /// (retail masks identically, acclient.c:337596/:337607).
+    #[test]
+    fn q4_get_link_inner_key_is_full_command() {
+        let t = q4_table();
+        // Inner: low-16 alias must miss.
+        assert!(t.get_link(Q4_STYLE, Q4_READY, 1.0, 0x0005, 1.0).is_none());
+        // Outer: low-24 alias selects the same group (retail parity).
+        let md = t.get_link(Q4_STYLE, 0x0003, 1.0, Q4_WALK, 1.0).unwrap();
+        assert_eq!(md.bitfield, 1);
     }
 
     // ---- T1-base-speed: GetAnimDist (vector-sum-then-magnitude) ----
