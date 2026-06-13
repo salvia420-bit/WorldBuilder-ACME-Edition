@@ -1002,6 +1002,22 @@ pub(crate) struct MovementSystem {
     /// a MoveTo — it runs until `CleanUpAndCallWeenie`,
     /// acclient.c:345171). Cleared on every pursuit end path.
     local_pursuit_engaged: bool,
+    /// A14-I3 (2026-06-12, `?retailRunKeys=on`) — the retail
+    /// `CommandInterpreter::auto_run` state (acclient.h:35349; ctor
+    /// zero-init acclient.c:717753). While set, the effective manual
+    /// drive is forward+Run regardless of the held forward/backstep
+    /// keys — retail `ApplyCurrentMovement` issues forward at
+    /// `autorun_speed` with `hold_run=1` BEFORE ever consulting the
+    /// SubstateList (acclient.c:717027-717064), and `NukeCommand`
+    /// refuses to pop substate heads while `auto_run`
+    /// (acclient.c:717472). Sidestep/turn lists still apply. Set ONLY
+    /// via [`Self::set_auto_run`] (the wasm `setAutoRun` bridge, which
+    /// JS calls only under the default-off URL flag) — default `false`
+    /// = byte-identical legacy behavior. `autorun_speed` is not
+    /// carried: retail defaults it to 1.0 (acclient.c:717756) and only
+    /// the speed-argument command form (cmd 0x09000047 + float)
+    /// changes it, which we don't surface.
+    auto_run: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1142,6 +1158,7 @@ impl MovementSystem {
             last_manual_drive: None,
             pending_pursuit_commands: Vec::new(),
             local_pursuit_engaged: false,
+            auto_run: false,
         }
     }
 
@@ -1149,6 +1166,55 @@ impl MovementSystem {
     /// (see [`USE_UNIFIED_TRANSITION`]).
     pub(crate) fn set_unified_transition(&mut self, on: bool) {
         self.unified_transition_runtime = on;
+    }
+
+    /// A14-I3 (`?retailRunKeys=on`) — overlay the retail autorun
+    /// command onto a held manual state: `ApplyCurrentMovement`'s
+    /// `auto_run` branch issues forward (cmd 0x45000005) with
+    /// `hold_run=1` (acclient.c:717038-717064), ignoring the
+    /// SubstateList's forward/backstep, while the Turn/Sidestep lists
+    /// still apply afterward (:717066+). Mirror: force
+    /// `forward=Forward` + `gait=Run`, preserve sidestep/turn.
+    fn overlay_auto_run(base: MotionState) -> MotionState {
+        use crate::client::movement_types::{ForwardLocomotion, Gait};
+        MotionState {
+            gait: Gait::Run,
+            forward: Some(ForwardLocomotion::Forward),
+            ..base
+        }
+    }
+
+    /// A14-I3 — retail `CommandInterpreter::SetAutoRun`
+    /// (acclient.c:718254-718292) + the `ApplyCurrentMovement`
+    /// re-issue it triggers (:717027-717064). Same-value calls no-op
+    /// (the `(val == 0) != (auto_run == 0)` edge guard, :718263).
+    ///
+    /// ON: cancels any S10 pursuit WITHOUT a manual restore (retail
+    /// SetAutoRun(1) runs the StopMoveTo callback first, :718268)
+    /// and installs the overlaid forward+Run drive. OFF: falls back
+    /// to the held manual state (retail: ApplyCurrentMovement
+    /// re-reads the SubstateList head, else Ready) — the recorded
+    /// `last_manual_drive`, or idle when none. Reached only through
+    /// the wasm `setAutoRun` bridge, which JS calls only under the
+    /// default-off `?retailRunKeys=on` flag.
+    pub(crate) fn set_auto_run(&mut self, on: bool) {
+        if on == self.auto_run {
+            return;
+        }
+        self.auto_run = on;
+        let base = self.last_manual_drive.unwrap_or_default();
+        if on {
+            self.pending_pursuit_commands
+                .push(PendingPursuitCommand::Cancel {
+                    restore_manual: false,
+                });
+            self.active_drive = Some(ActiveDriveState::manual(
+                Self::overlay_auto_run(base),
+                None,
+            ));
+        } else {
+            self.active_drive = Some(ActiveDriveState::manual(base, None));
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1425,7 +1491,21 @@ impl MovementSystem {
                 // not abort a MoveTo, acclient.c:345171 CleanUp-only
                 // end). Non-idle still takes over (cancel above).
                 if !(self.local_pursuit_engaged && !non_idle) {
-                    self.active_drive = Some(ActiveDriveState::manual(state, None));
+                    // A14-I3 — while `auto_run`, the effective drive
+                    // keeps forward+Run regardless of the held
+                    // forward/backstep keys (retail
+                    // ApplyCurrentMovement prefers auto_run over the
+                    // SubstateList, acclient.c:717038-717050;
+                    // NukeCommand suppresses substate pops while
+                    // auto_run, :717472). Sidestep/turn pass through.
+                    // `last_manual_drive` above keeps the RAW state so
+                    // toggling autorun off restores the actual keys.
+                    let effective = if self.auto_run {
+                        Self::overlay_auto_run(state)
+                    } else {
+                        state
+                    };
+                    self.active_drive = Some(ActiveDriveState::manual(effective, None));
                 }
             }
             QueuedDriveCommand::ManualPulse { state, duration } => {

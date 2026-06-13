@@ -54,6 +54,13 @@ export const LOCAL_ACTIONS = [
   { labelHash: "0xFF000014", label: "Hotbar Row 2 Slot 9", defaultCode: null },
   { labelHash: "0xFF000010", label: "Close Panel / Popover", defaultCode: "Escape" },
   { labelHash: "0xFF000011", label: "Delete Selected Spell", defaultCode: "Delete" },
+  // A14-I3 (?retailRunKeys=on) — autorun toggle (retail
+  // CommandInterpreter::ToggleAutoRun, acclient.c:717657). Retail's
+  // gmDefaultMap binds Autorun to Q (docs/action-map-finding-2026-05-24.md),
+  // but Q is our turn-left key (deliberate WASD/QE modernization, survey
+  // A14 §8) — default R instead, rebindable here. Consulted by the
+  // index.html keydown handler only when ?retailRunKeys=on.
+  { labelHash: "0xFF000015", label: "Autorun (toggle)", defaultCode: "KeyR" },
 ];
 
 /** Stable identifiers for synthetic local actions — handlers call
@@ -80,6 +87,7 @@ export const LOCAL_ACTION_IDS = Object.freeze({
   HOTBAR_R2_9: "0xFF000014",
   CLOSE:    "0xFF000010",
   DELETE_SPELL: "0xFF000011",
+  AUTORUN:  "0xFF000015",
 });
 
 let cache = null;

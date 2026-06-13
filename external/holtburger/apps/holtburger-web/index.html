@@ -1270,6 +1270,12 @@
         buildManifestBindings as buildManifestHotkeyBindings,
         setManifestBindings as setManifestHotkeyBindings,
         matchHotkeyEvent as matchManifestHotkeyEvent,
+        // A14-I3 (?retailRunKeys=on) — rebindable autorun-toggle key
+        // (LOCAL_ACTIONS "Autorun (toggle)", default KeyR; retail
+        // gmDefaultMap binds Q, kept for turn-left — survey A14 §8).
+        resolveLocalBinding as __resolveLocalBinding,
+        matchesBinding as __matchesKeyBinding,
+        LOCAL_ACTION_IDS as __LOCAL_ACTION_IDS,
       } from "./ui/keymap.js";
       import * as spellbookPlugin from "./plugins/spellbook.js";
       import * as inventoryPlugin from "./plugins/inventory.js";
@@ -1324,8 +1330,16 @@
       import {
         getInputController as __getInputController,
         readInputFunnelFlag as __readInputFunnelFlag,
+        // A14-I3 (?retailRunKeys=on, default-off) — the single
+        // run-modifier resolution: Shift XOR the persisted ToggleRun
+        // option (CharacterOption 0x0A "Run as default movement";
+        // retail SetHoldRun acclient.c:716978). Flag-off = legacy
+        // `!shift`, byte-identical. Both run sites below consult it.
+        resolveRunModifier as __resolveRunModifier,
+        readRetailRunKeysFlag as __readRetailRunKeysFlag,
       } from "./scene3d/input.js";
       const __inputFunnelOn = __readInputFunnelFlag();
+      const RETAIL_RUN_KEYS_ON = __readRetailRunKeysFlag();
 
       let pluginClient = null;
       let barInstance = null;
@@ -9024,6 +9038,49 @@ void main() {
               keyState.shift = true;
               return;
             }
+            // A14-I3 (?retailRunKeys=on, default-off) — autorun toggle
+            // key (rebindable LOCAL_ACTIONS "Autorun (toggle)", default
+            // KeyR; retail gmDefaultMap binds Q — kept for turn-left,
+            // survey A14 §8). Retail chain: bound key → MovePlayer
+            // AutoRun cmd 0x09000047 → ToggleAutoRun → SetAutoRun
+            // (acclient.c:717248-717268, :717657, :718254-718292) —
+            // flips `auto_run`, prints "AutoRun ON/OFF", re-applies
+            // movement. The motion half lives wasm-side
+            // (MovementSystem::set_auto_run, the ApplyCurrentMovement
+            // auto_run re-issue branch acclient.c:717027-717064);
+            // `setAutoRun` is typeof-guarded so a stale pkg/ degrades
+            // to a chat notice instead of a broken toggle.
+            if (RETAIL_RUN_KEYS_ON && !ev.repeat && handle) {
+              const autorunBinding = __resolveLocalBinding(
+                __LOCAL_ACTION_IDS.AUTORUN,
+                "KeyR",
+              );
+              if (__matchesKeyBinding(ev, autorunBinding)) {
+                if (typeof handle.setAutoRun === "function") {
+                  const on = !(window.__autoRunOn === true);
+                  window.__autoRunOn = on;
+                  try {
+                    handle.setAutoRun(on);
+                    // Retail ECM_UI::SendNotice literal text
+                    // (acclient.c:718270-718287).
+                    if (typeof appendChatLine === "function") {
+                      appendChatLine(on ? "AutoRun ON" : "AutoRun OFF", 10);
+                    }
+                  } catch (e) {
+                    window.__autoRunOn = false;
+                    console.warn("[retailRunKeys] setAutoRun failed:", e);
+                  }
+                } else if (typeof appendChatLine === "function") {
+                  // Stale pkg/ (export rides the batched wasm rebuild).
+                  appendChatLine(
+                    "AutoRun unavailable (wasm rebuild pending)",
+                    10,
+                  );
+                }
+                ev.preventDefault();
+                return;
+              }
+            }
             // Combat-mode toggle — backtick (`) mirrors retail
             // AC's default keybind. Wasm reads the player's current
             // CombatMode property + suggested mode from equipment
@@ -11204,8 +11261,10 @@ void main() {
                     // Run-by-default; Shift = walk modifier. See the
                     // setMovementInput dispatch below for the full
                     // rationale (matches retail AC, also a UX fix for
-                    // low-Run-skill new characters).
-                    const run = !keyState.shift;
+                    // low-Run-skill new characters). A14-I3
+                    // (?retailRunKeys=on): Shift XOR ToggleRun option
+                    // instead; flag-off = legacy !shift.
+                    const run = __resolveRunModifier(keyState.shift, handle);
                     const turnSpeed = run
                       ? RUN_HELD_TURN_SPEED_RAD_PER_SEC
                       : NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC;
@@ -11332,8 +11391,10 @@ void main() {
               // through `resolved_manual_run_speed` so even with a fresh
               // `Run=0` skill, the run gait reads as the more responsive
               // animation). Hold Shift to ease into 1 m/s walk if you need
-              // precision (e.g. lining up a click target).
-              const run = !keyState.shift;
+              // precision (e.g. lining up a click target). A14-I3
+              // (?retailRunKeys=on): Shift XOR ToggleRun option instead;
+              // flag-off = legacy !shift.
+              const run = __resolveRunModifier(keyState.shift, handle);
               const sig = `${forward},${strafe},${turn},${run}`;
               window.__lastInputSig = sig;
               if (sig !== lastInputSig) {

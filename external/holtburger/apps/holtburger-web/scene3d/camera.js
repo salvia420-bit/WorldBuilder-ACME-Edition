@@ -130,7 +130,14 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { acToThree } from "./adapter.js";
-import { getInputController, readInputFunnelFlag } from "./input.js";
+import {
+  getInputController,
+  readInputFunnelFlag,
+  // A14-I3 (?retailRunKeys=on) — the single run-modifier resolution
+  // (Shift XOR persisted ToggleRun option, retail SetHoldRun
+  // acclient.c:716978). Flag-off returns the legacy `!shift`.
+  resolveRunModifier,
+} from "./input.js";
 // A12-C2/C3 (2026-06-12): retail camera math (zoom continuum / in-head /
 // near-fade / stiffness / mouse filter). Pure module, headless-tested by
 // tests/camera_retail_math.test.cjs. Only consulted behind the default-off
@@ -1376,7 +1383,9 @@ export class CameraSwitcher {
     }
     if (heading === null) heading = 0.0;
 
-    const run = !k.shift;
+    // A14-I3: Shift XOR ToggleRun option under ?retailRunKeys=on;
+    // flag-off = legacy !shift (byte-identical).
+    const run = resolveRunModifier(k.shift, handle);
     let advanced = false;
     if (inputForward !== 0) {
       // Forward in heading direction; backstep flips by π and uses
@@ -1676,7 +1685,9 @@ export class CameraSwitcher {
     const inputForward = (k.w ? 1 : 0) - (k.s ? 1 : 0);
     const inputStrafe = (k.d ? 1 : 0) - (k.a ? 1 : 0);
     const qeTurn = (k.e ? 1 : 0) - (k.q ? 1 : 0);
-    const run = !k.shift;
+    // A14-I3: Shift XOR ToggleRun option under ?retailRunKeys=on;
+    // flag-off = legacy !shift (byte-identical).
+    const run = resolveRunModifier(k.shift, this._getSessionHandle?.());
 
     if (this.mode === "topDown") {
       // World-fixed (no yaw rotation). Forward = +Y, strafe = +X.

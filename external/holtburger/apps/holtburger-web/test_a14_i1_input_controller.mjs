@@ -258,8 +258,10 @@ check("index.html rAF dispatch routes through the controller under the flag",
 check("index.html keeps the legacy direct call on the else (flag-off) branch",
   /\}\s*else\s*\{\s*\n\s*handle\.setMovementInput\(forward,\s*strafe,\s*turn,\s*run\);/.test(idx));
 
+// A14-I3 (2026-06-12) widened this import to a multi-line form adding
+// resolveRunModifier — match names anywhere inside one import-from-input.js.
 check("camera.js imports getInputController + readInputFunnelFlag",
-  /import\s*\{\s*getInputController,\s*readInputFunnelFlag\s*\}\s*from\s*["']\.\/input\.js["']/.test(cam));
+  /import\s*\{[^}]*getInputController[^}]*readInputFunnelFlag[^}]*\}\s*from\s*["']\.\/input\.js["']/s.test(cam));
 check("camera.js registers its _movementPolicy with the controller under the flag",
   /this\._inputFunnelOn\s*=\s*readInputFunnelFlag\(\)/.test(cam) &&
   /setMovementPolicy\(\(raw\)\s*=>\s*this\._movementPolicy\(raw\)\)/.test(cam));

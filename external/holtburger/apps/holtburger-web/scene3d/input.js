@@ -50,6 +50,146 @@ export function clampSign(v) {
   return 0;
 }
 
+// ---------------------------------------------------------------------
+// A14-I3 (?retailRunKeys=on) — hold-key/options run parity.
+//
+// Survey: docs/2026-06-11-unification-survey/agents/A14-input-to-motion.md
+// §4 Stage I3 (+ §3 rows 5/8); W5-REMAINDER row A14-I3.
+//
+// Retail computes the effective run gait as Shift XOR the persisted
+// "Toggle Run" character option: `CommandInterpreter::SetHoldRun`
+// derives `(hold_run == 0) != (GetToggleRunOption() == 0)` — i.e.
+// run = shiftHeld XOR optionOn (acclient.c:716978 / 0x6B3370 body).
+// The option is retail's CharacterOption `RunAsDefaultMovement`
+// (0x0A) — already surfaced by plugins/options-panel.js ("Run as
+// default movement", Movement & Camera section) and persisted both
+// server-side (ACE CharacterOptions1) and in the panel's localStorage
+// cache. Ours hardcodes run-by-default (`run = !shift`) — equivalent
+// to the option permanently ON with no way to flip it.
+//
+// `resolveRunModifier` is the ONE helper all four run-computation
+// sites consult (index.html prediction + dispatch blocks, camera.js
+// _advancePrediction + computeMovementFromKeys):
+//   - flag OFF (default): legacy `!shiftHeld`, byte-identical.
+//   - flag ON: `shiftHeld XOR toggleRunOption` — with the option ON
+//     (its fallback default) this is IDENTICAL to legacy; flipping
+//     the option in Options → Character gives retail walk-by-default.
+//
+// The autorun half (toggle key → wasm `setAutoRun`, retail
+// `ToggleAutoRun`/`ApplyCurrentMovement` auto_run branch,
+// acclient.c:717657/:717027-717064) lives in index.html's keydown
+// handler + the wasm MovementSystem; this module only owns the flag
+// parse + the option read.
+// ---------------------------------------------------------------------
+
+/** CharacterOption index — `RunAsDefaultMovement` (retail ToggleRun),
+ *  `crates/holtburger-common/src/character.rs:128`. */
+export const RUN_AS_DEFAULT_MOVEMENT_OPTION = 0x0a;
+
+// options-panel.js localStorage cache shape (LS_CHAR_OPTIONS_KEY).
+const LS_CHAR_OPTIONS_KEY = "holtburger_character_options_v1";
+
+let _retailRunKeysOn = null;
+
+/** Read `?retailRunKeys=on` (cached; defensive — never throw). */
+export function readRetailRunKeysFlag(search) {
+  try {
+    const s =
+      typeof search === "string"
+        ? search
+        : typeof window !== "undefined" && window.location
+        ? window.location.search
+        : "";
+    return new URLSearchParams(s).get("retailRunKeys")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+/** Cached module-level flag accessor (parse once per page load). */
+export function retailRunKeysOn() {
+  if (_retailRunKeysOn === null) _retailRunKeysOn = readRetailRunKeysFlag();
+  return _retailRunKeysOn;
+}
+
+/** Test seam — reset the cached flag (and the LS-cache TTL below). */
+export function _resetRetailRunKeysForTest() {
+  _retailRunKeysOn = null;
+  _lsOptionCache = undefined;
+  _lsOptionCacheAt = 0;
+}
+
+// TTL cache for the localStorage fallback so the per-rAF run
+// computation doesn't JSON-parse localStorage at 60 Hz.
+let _lsOptionCache; // undefined = not cached; null = absent; bool = value
+let _lsOptionCacheAt = 0;
+const LS_OPTION_TTL_MS = 500;
+
+function _readToggleRunOptionFromLocalStorage() {
+  const now = Date.now();
+  if (_lsOptionCache !== undefined && now - _lsOptionCacheAt < LS_OPTION_TTL_MS) {
+    return _lsOptionCache;
+  }
+  _lsOptionCacheAt = now;
+  _lsOptionCache = null;
+  try {
+    const raw =
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem(LS_CHAR_OPTIONS_KEY)
+        : null;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const v = parsed?.[String(RUN_AS_DEFAULT_MOVEMENT_OPTION)];
+      if (typeof v === "boolean") _lsOptionCache = v;
+    }
+  } catch (_) {
+    /* quota / privacy mode / malformed JSON — fall through to default */
+  }
+  return _lsOptionCache;
+}
+
+/**
+ * The persisted ToggleRun option (retail `RunAsDefaultMovement`,
+ * CharacterOption 0x0A). Read priority:
+ *   1. wasm `isCharacterOptionEnabled(0x0A)` (server-authoritative,
+ *      hydrated from PlayerDescription) — typeof-guarded, a stale pkg
+ *      falls through;
+ *   2. options-panel localStorage cache (last user click);
+ *   3. default TRUE (run-by-default — preserves today's behavior when
+ *      the option has never been touched).
+ *
+ * @param {object} [handle] SessionHandle; defaults to window.__sessionHandle.
+ */
+export function toggleRunOptionEnabled(handle) {
+  const h =
+    handle ??
+    (typeof window !== "undefined" ? window.__sessionHandle : null);
+  if (h && typeof h.isCharacterOptionEnabled === "function") {
+    try {
+      return !!h.isCharacterOptionEnabled(RUN_AS_DEFAULT_MOVEMENT_OPTION);
+    } catch (_) {
+      /* unknown index on an older bundle — fall through */
+    }
+  }
+  const cached = _readToggleRunOptionFromLocalStorage();
+  if (typeof cached === "boolean") return cached;
+  return true;
+}
+
+/**
+ * The single run-modifier resolution (all four run sites call this).
+ *
+ * @param {boolean} shiftHeld current Shift keystate
+ * @param {object} [handle] SessionHandle for the option read
+ * @returns {boolean} effective run flag
+ */
+export function resolveRunModifier(shiftHeld, handle) {
+  if (!retailRunKeysOn()) return !shiftHeld; // legacy run-by-default
+  // Retail SetHoldRun: run = shift XOR ToggleRun option
+  // (acclient.c:716978 / 0x6B3370).
+  return !!shiftHeld !== !!toggleRunOptionEnabled(handle);
+}
+
 /** Read `?inputFunnel=on` once (defensive — never throw at import time). */
 export function readInputFunnelFlag(search) {
   try {

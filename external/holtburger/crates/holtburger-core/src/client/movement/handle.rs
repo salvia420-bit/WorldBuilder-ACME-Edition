@@ -223,6 +223,18 @@ impl MovementSystemHandle {
         self.inner.set_unified_transition(on);
     }
 
+    /// A14-I3 (2026-06-12, `?retailRunKeys=on`) — public forward for
+    /// the wasm `setAutoRun` export: retail
+    /// `CommandInterpreter::SetAutoRun` + the `ApplyCurrentMovement`
+    /// auto_run re-issue branch (acclient.c:718254-718292,
+    /// :717027-717064). While on, the effective manual drive is
+    /// forward+Run regardless of the held forward/backstep keys;
+    /// toggling off restores the recorded manual state. Same-value
+    /// calls no-op. JS reaches this only under the default-off flag.
+    pub fn set_auto_run(&mut self, on: bool) {
+        self.inner.set_auto_run(on);
+    }
+
     /// A4-Q2 (2026-06-12, W3+ S5) — public forward for the wasm
     /// `notifyAnimationDone` export: renderer one-shot overlay
     /// completion → the LOCAL player's `MotionTableManager` queue

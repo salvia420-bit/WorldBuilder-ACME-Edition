@@ -6,7 +6,7 @@ use super::super::common::{
     raw_motion_state_with_motion_style,
 };
 use super::*;
-use crate::client::movement_types::Gait;
+use crate::client::movement_types::{Gait, SidestepLocomotion};
 use holtburger_common::position::WorldPosition;
 use holtburger_common::{Guid, Quaternion, Vector3};
 use holtburger_protocol::messages::game_message::{RawMotionFlags, RawMotionState};
@@ -5412,4 +5412,155 @@ fn handle_exit_world_for_drains_registry_and_respects_gate() {
     // JS-notify-after-drain safety A4-Q3 relies on.
     movement.handle_exit_world_for(guid, true);
     assert!(movement.motion_table_manager_mut().drain_events().is_empty());
+}
+
+// =====================================================================
+// A14-I3 (2026-06-12, `?retailRunKeys=on`) — retail autorun
+// (`CommandInterpreter::auto_run`): SetAutoRun edge semantics
+// (acclient.c:718254-718292) + the ApplyCurrentMovement re-issue branch
+// (forward at autorun_speed with hold_run=1, SubstateList ignored,
+// acclient.c:717027-717064; NukeCommand substate suppression :717472).
+// Pure MovementSystem state tests — no world needed (the drive only
+// emits once ticks run; these pin the effective active_drive shape).
+// =====================================================================
+
+/// Engaging autorun from idle installs the forward+Run drive (retail
+/// ApplyCurrentMovement auto_run branch) and queues a pursuit cancel
+/// WITHOUT manual restore (retail SetAutoRun(1) runs StopMoveTo first,
+/// acclient.c:718268).
+#[test]
+fn auto_run_engage_installs_forward_run_and_cancels_pursuit() {
+    let mut movement = MovementSystem::new();
+    movement.set_auto_run(true);
+
+    match movement.active_drive.map(|a| a.intent) {
+        Some(ActiveDriveIntent::Manual(state)) => {
+            assert_eq!(state.forward, Some(ForwardLocomotion::Forward));
+            assert_eq!(state.gait, Gait::Run);
+            assert!(state.sidestep.is_none() && state.turning.is_none());
+        }
+        other => panic!("expected Manual(forward+Run), got {other:?}"),
+    }
+    assert_eq!(
+        movement.pending_pursuit_commands,
+        vec![PendingPursuitCommand::Cancel {
+            restore_manual: false
+        }],
+        "engage queues exactly one no-restore cancel"
+    );
+}
+
+/// While autorun, held forward/backstep keys are overridden (the
+/// SubstateList suppression) but sidestep + turn pass through
+/// (acclient.c:717066+ Turn/Sidestep lists still apply).
+#[test]
+fn auto_run_overrides_forward_keys_but_keeps_sidestep_turn() {
+    let mut movement = MovementSystem::new();
+    movement.set_auto_run(true);
+
+    let held = MotionState::builder()
+        .walk()
+        .backstep()
+        .strafe_left()
+        .turn_right()
+        .build();
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(held),
+        Instant::now(),
+    );
+
+    match movement.active_drive.map(|a| a.intent) {
+        Some(ActiveDriveIntent::Manual(state)) => {
+            assert_eq!(
+                state.forward,
+                Some(ForwardLocomotion::Forward),
+                "backstep overridden to forward while auto_run"
+            );
+            assert_eq!(state.gait, Gait::Run, "hold_run=1 while auto_run");
+            assert_eq!(state.sidestep, Some(SidestepLocomotion::StrafeLeft));
+            assert_eq!(state.turning, Some(Turn::Right));
+        }
+        other => panic!("expected overlaid Manual drive, got {other:?}"),
+    }
+    assert_eq!(
+        movement.last_manual_drive,
+        Some(held),
+        "raw keys recorded un-overlaid for the toggle-off restore"
+    );
+}
+
+/// Toggling autorun OFF restores the held manual state (retail:
+/// ApplyCurrentMovement falls back to the SubstateList head), and an
+/// all-released keyboard restores idle.
+#[test]
+fn auto_run_off_restores_held_manual_state() {
+    let mut movement = MovementSystem::new();
+    let held = MotionState::builder().walk().backstep().build();
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(held),
+        Instant::now(),
+    );
+    movement.set_auto_run(true);
+    movement.set_auto_run(false);
+
+    assert_eq!(
+        movement.active_drive.map(|a| a.intent),
+        Some(ActiveDriveIntent::Manual(held)),
+        "held backstep restored on toggle-off"
+    );
+
+    // No held keys at all → toggle-off restores idle (Ready analog).
+    let mut movement2 = MovementSystem::new();
+    movement2.set_auto_run(true);
+    movement2.set_auto_run(false);
+    match movement2.active_drive.map(|a| a.intent) {
+        Some(ActiveDriveIntent::Manual(state)) => {
+            assert!(state.is_locomotion_idle() && state.turning.is_none());
+        }
+        other => panic!("expected idle Manual drive, got {other:?}"),
+    }
+}
+
+/// Same-value SetAutoRun calls no-op (the `(val == 0) != (auto_run ==
+/// 0)` edge guard, acclient.c:718263) — no duplicate cancel, no drive
+/// churn.
+#[test]
+fn auto_run_same_value_is_a_noop() {
+    let mut movement = MovementSystem::new();
+    movement.set_auto_run(true);
+    let drive_after_first = movement.active_drive;
+    movement.set_auto_run(true);
+    assert_eq!(movement.active_drive, drive_after_first);
+    assert_eq!(
+        movement.pending_pursuit_commands.len(),
+        1,
+        "second engage queues no duplicate cancel"
+    );
+    movement.set_auto_run(false);
+    movement.set_auto_run(false);
+    assert_eq!(
+        movement.pending_pursuit_commands.len(),
+        1,
+        "disengage queues nothing"
+    );
+}
+
+/// Default state is inert: a fresh system never overlays (flag-off /
+/// never-toggled byte-identical guarantee).
+#[test]
+fn auto_run_default_off_keeps_manual_drive_verbatim() {
+    let mut movement = MovementSystem::new();
+    let held = MotionState::builder().walk().backstep().turn_left().build();
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(held),
+        Instant::now(),
+    );
+    assert_eq!(
+        movement.active_drive.map(|a| a.intent),
+        Some(ActiveDriveIntent::Manual(held)),
+        "no overlay without set_auto_run(true)"
+    );
 }

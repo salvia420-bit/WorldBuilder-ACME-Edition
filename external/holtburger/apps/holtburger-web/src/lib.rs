@@ -17568,6 +17568,16 @@ enum SessionCommand {
     /// A14-I2 — abort the in-flight pursuit/turn (retail
     /// `MovementManager::CancelMoveTo(0x36)`, acclient.c:339240-339246).
     CancelPursuit,
+    /// A14-I3 (`?retailRunKeys=on`) — toggle the retail autorun state
+    /// (retail bound-key chain: MovePlayer AutoRun cmd 0x09000047 →
+    /// `ToggleAutoRun` → `SetAutoRun`, acclient.c:717248-717268 /
+    /// :717657 / :718254-718292). While on, the movement crate's
+    /// effective manual drive is forward+Run regardless of the held
+    /// forward/backstep keys (the `ApplyCurrentMovement` auto_run
+    /// re-issue branch, acclient.c:717027-717064); off restores the
+    /// held manual state. JS sends this only under the default-off
+    /// flag; same-value sends no-op crate-side.
+    SetAutoRun { on: bool },
     /// A4-Q2 (2026-06-12, W3+ S5, `?mtQueue=on`) — the renderer reports a
     /// one-shot overlay clip's end (`success=true`) or a cancellation on
     /// eviction/stop of a tagged, not-yet-completed overlay
@@ -26759,6 +26769,27 @@ impl SessionHandle {
             })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("set_movement_input: cmd channel closed ({e})"))
+            })
+    }
+
+    /// A14-I3 (`?retailRunKeys=on`) — toggle the retail autorun state
+    /// (retail `CommandInterpreter::SetAutoRun` via the bound-key
+    /// `ToggleAutoRun` chain, acclient.c:717657 / :718254-718292).
+    /// While on, the wasm manual drive holds forward+Run regardless of
+    /// the held forward/backstep keys (the `ApplyCurrentMovement`
+    /// auto_run re-issue branch, acclient.c:717027-717064); sidestep
+    /// and turn keys still apply; toggling off restores the held
+    /// manual state. JS calls this only under the default-off URL
+    /// flag and typeof-guards the method (a stale pkg/ degrades to a
+    /// chat notice, F18-2 policy). ADDITIVE export — rides manifest
+    /// v4, no bump.
+    #[wasm_bindgen(js_name = setAutoRun)]
+    pub fn set_auto_run(&self, on: bool) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SetAutoRun { on })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("set_auto_run: cmd channel closed ({e})"))
             })
     }
 
@@ -39952,6 +39983,17 @@ async fn recv_loop(
                             web_time::Instant::now(),
                         );
                         *local_player_pursuit_status.borrow_mut() = 1;
+                    }
+                    Some(SessionCommand::SetAutoRun { on }) => {
+                        // A14-I3 (?retailRunKeys=on) — retail SetAutoRun
+                        // (acclient.c:718254-718292): flip the movement
+                        // crate's auto_run + re-apply movement. The
+                        // "AutoRun ON/OFF" notice is printed JS-side at
+                        // the keydown site (retail ECM_UI::SendNotice,
+                        // :718270-718287). No world/seed guard needed —
+                        // the state is pure movement-crate bookkeeping
+                        // and the drive only emits once ticks run.
+                        movement.set_auto_run(on);
                     }
                     Some(SessionCommand::CancelPursuit) => {
                         // A14-I2 — abort (retail CancelMoveTo(0x36)).
