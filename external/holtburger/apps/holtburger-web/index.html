@@ -1877,6 +1877,18 @@
           fetch_dye_preview_pixels: (stid, subs) => fetch_dye_preview_pixels(stid >>> 0, subs),
           fetch_gfx_obj_degrade_info: (id) => fetch_gfx_obj_degrade_info(id >>> 0),
           fetch_entity_degrade_for_distance: (sid, dist) => fetch_entity_degrade_for_distance(sid >>> 0, +dist),
+          // A11-S4 (?particleDegrade=retail) — authored particle degrade
+          // radius (retail GetMaxDegradeDistance, acclient.c:314372 /
+          // :332193). ADDITIVE v4 rider resolved off the NAMESPACE import
+          // (not the named list) so a stale pkg/ yields `undefined` here
+          // and particle_manager.js's typeof-guard soft-degrades to
+          // RP6-only culling instead of breaking module parse (F18-2).
+          ...(typeof __hbWasmNs?.fetch_particle_degrade_distance === "function"
+            ? {
+                fetch_particle_degrade_distance: (id) =>
+                  __hbWasmNs.fetch_particle_degrade_distance(id >>> 0),
+              }
+            : {}),
           fetch_clothing_table: (id) => fetch_clothing_table(id >>> 0),
           // Wave 16 / Phase 49 — PhysicsScriptTable (0x34) fetch. The
           // Wave 17 PlayEffect resolver in `scene3d/play_effect_vfx.js`

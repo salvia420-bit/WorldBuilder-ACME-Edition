@@ -104,6 +104,123 @@ const _RP6 = {
   maxDistance: 220,
 };
 const _RP6_MAX_DIST_SQ = _RP6.maxDistance * _RP6.maxDistance;
+
+// =====================================================================
+// A11-S4 (2026-06-12, `?particleDegrade=retail`) — authored degrade
+// radii folded into the RP6 predicate as an OR-term.
+// =====================================================================
+// Survey: docs/2026-06-11-unification-survey/agents/
+// A11-particles-physics-scripts.md §3 row 7 (DIFF-ALGO) + §4 Stage S4;
+// W5-REMAINDER row A11-S4 (class B — the wasm getter rides manifest v4).
+//
+// Retail: `ParticleEmitter::InitEnd` stamps `degrade_distance =
+// CPhysicsPart::GetMaxDegradeDistance(part_storage[0])` (the part built
+// from the emitter's hw GfxObj; 100.0 default when the GfxObj has no
+// 0x11 degrade chain, acclient.c:331265+/:314372-314383), then
+// `UpdateParticles` checks `ShouldDrawParticles(degrade_distance)` —
+// camera distance beyond the radius → `SetNoDraw(1)` + freeze
+// (timestamps only), auto-recover on re-entry
+// (acclient.c:331097-331139, :317184-317199). Ours ported the fields
+// but left them dead (`degradeDistance = Infinity`,
+// particle_emitter.js ctor); RP6's frustum/220 m cap replaced the
+// predicate wholesale, ignoring authored per-GfxObj radii.
+//
+// Stage S4 keeps RP6 as the perf SUPERSET and adds the authored radius
+// as an OR-term in `_rp6ShouldCull`: the existing culled-path contract
+// (visibility flip + lightweight stop/drain + full restore on
+// re-entry) is observably the retail SetNoDraw+freeze+auto-recover.
+//
+//   - Flag OFF (default): `degradeDistance` stays Infinity and the
+//     OR-term is gated out — byte-identical RP6 behavior.
+//   - Flag ON: `addEmitter` fire-and-forgets the wasm
+//     `fetch_particle_degrade_distance(hwGfxObjId)` (ADDITIVE export,
+//     rides manifest v4; typeof-guarded — a stale pkg/ soft-degrades
+//     to RP6-only culling) and stamps the resolved meters onto
+//     `emitter.degradeDistance` (the InitEnd analog). Values cached
+//     per hwGfxObjId.
+//   - Retail compares the object's camera distance (CYpt) DIRECTLY to
+//     the radius (no bounding-sphere slack, acclient.c:317195) — the
+//     OR-term mirrors that on the anchor distance already computed for
+//     the RP6 cap.
+
+let _particleDegradeRetail = null;
+
+/** Read `?particleDegrade=retail` (defensive — never throw). */
+export function readParticleDegradeFlag(search) {
+  try {
+    const s =
+      typeof search === "string"
+        ? search
+        : typeof window !== "undefined" && window.location
+        ? window.location.search
+        : "";
+    return (
+      new URLSearchParams(s).get("particleDegrade")?.toLowerCase() === "retail"
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+/** Cached flag accessor (parse once per page load). */
+export function particleDegradeRetailOn() {
+  if (_particleDegradeRetail === null) {
+    _particleDegradeRetail = readParticleDegradeFlag();
+  }
+  return _particleDegradeRetail;
+}
+
+/** hwGfxObjId → meters (or in-flight Promise). Module-shared across
+ *  both managers (world + statics) — the radius is a pure DAT fact. */
+const _degradeDistanceCache = new Map();
+
+let _degradeResolver = null;
+
+/** Test seam / explicit wiring: install a `(hwGfxObjId) => Promise<number>`
+ *  resolver. Absent, the default reads the curated
+ *  `window.__hbWasm.fetch_particle_degrade_distance` surface. */
+export function setParticleDegradeResolver(fn) {
+  _degradeResolver = typeof fn === "function" ? fn : null;
+}
+
+/** Test seam — reset the cached flag + cache + resolver. */
+export function _resetParticleDegradeForTest() {
+  _particleDegradeRetail = null;
+  _degradeResolver = null;
+  _degradeDistanceCache.clear();
+}
+
+/**
+ * Resolve (and cache) the authored degrade radius for one hw GfxObj.
+ * Returns meters, or null when unresolvable (stale pkg / fetch error /
+ * non-finite) — null means "leave `degradeDistance` at Infinity".
+ */
+async function _degradeDistanceFor(hwGfxObjId) {
+  const key = hwGfxObjId >>> 0;
+  if (key === 0) return null;
+  if (_degradeDistanceCache.has(key)) {
+    // Number or in-flight Promise — both await to the value.
+    return _degradeDistanceCache.get(key);
+  }
+  const fn =
+    _degradeResolver ??
+    (typeof window !== "undefined"
+      ? window.__hbWasm?.fetch_particle_degrade_distance
+      : null);
+  if (typeof fn !== "function") return null; // stale pkg — soft-degrade
+  const inflight = (async () => {
+    try {
+      const v = Number(await fn(key));
+      return Number.isFinite(v) && v > 0 ? v : null;
+    } catch (_) {
+      return null;
+    }
+  })();
+  _degradeDistanceCache.set(key, inflight);
+  const v = await inflight;
+  _degradeDistanceCache.set(key, v);
+  return v;
+}
 // Module scratches — never escape _rp6ShouldCull(). Mirrors the
 // `_scratch*` allocation-avoidance convention used across scene3d.
 const _rp6Mvp = new THREE.Matrix4();
@@ -222,6 +339,22 @@ function _rp6ShouldCull(emitter, camera) {
   const distSq = dx * dx + dy * dy + dz * dz;
   const slack = _RP6.maxDistance + radius;
   if (distSq > slack * slack) return true;
+
+  // A11-S4 (?particleDegrade=retail) — authored per-GfxObj degrade
+  // OR-term: retail ShouldDrawParticles culls when the object's camera
+  // distance exceeds `degrade_distance` (direct compare, no sphere
+  // slack — acclient.c:317195 `CYpt > i_fDegradeDistance`); the culled
+  // path's freeze + visibility flip + re-entry restore is the
+  // SetNoDraw/degraded_out contract (acclient.c:331097-331139). Gated
+  // on the flag AND a finite stamp so flag-off (ctor Infinity) is
+  // inert; RP6 frustum/cap above stays the superset.
+  if (
+    particleDegradeRetailOn() &&
+    Number.isFinite(emitter.degradeDistance) &&
+    distSq > emitter.degradeDistance * emitter.degradeDistance
+  ) {
+    return true;
+  }
 
   // Frustum test on the bounding sphere. intersectsSphere is true when
   // ANY part of the sphere is inside → we cull only when it is FALSE
@@ -477,6 +610,23 @@ export class ParticleManager {
     const id = (emitterId !== 0) ? emitterId : this.nextEmitterId++;
     emitter.id = id;
     this.particleTable.set(id, emitter);
+
+    // A11-S4 (?particleDegrade=retail) — the InitEnd analog: stamp the
+    // authored degrade radius (retail `degrade_distance =
+    // GetMaxDegradeDistance(part_storage[0])`, acclient.c:331265+;
+    // part_storage[0] is built from this emitter's hw GfxObj).
+    // Fire-and-forget: the field stays at the ctor Infinity (=never
+    // degrade-culled) until the cached wasm fetch resolves; a despawned
+    // or replaced emitter is skipped via the table identity check.
+    if (particleDegradeRetailOn()) {
+      _degradeDistanceFor(info.hwGfxObjId)
+        .then((meters) => {
+          if (meters != null && this.particleTable.get(id) === emitter) {
+            emitter.degradeDistance = meters;
+          }
+        })
+        .catch(() => {});
+    }
     return id;
   }
 

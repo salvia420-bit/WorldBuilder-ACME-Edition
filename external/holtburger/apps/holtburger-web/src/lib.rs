@@ -8311,6 +8311,124 @@ pub async fn fetch_gfx_obj_degrade_info(degrade_id: u32) -> Result<String, JsVal
     Ok(out)
 }
 
+/// A11-S4 (2026-06-12, `?particleDegrade=retail`) — the retail
+/// `GfxObjDegradeInfo::get_max_degrade_distance` band pick
+/// (acclient.c:332193-332204): `num_degrades <= 2` reads entry 0's
+/// `max_dist`; otherwise the decomp reads the float immediately before
+/// `&degrades[n-1]` — i.e. the SECOND-TO-LAST entry's `max_dist`
+/// (`max_dist` is the last f32 field of the 20-byte GfxObjInfo). The
+/// last band is the open-ended "draw nothing past here" sentinel; the
+/// max DEGRADE distance is the boundary before it. Empty chain falls
+/// back to the retail 100.0 default (`CPhysicsPart::
+/// GetMaxDegradeDistance` null-degrades arm, acclient.c:0050D510 body
+/// at :314372-314383 — retail never reaches the n==0 read because the
+/// pointer is null instead; our unpack can produce an empty vec, so
+/// default conservatively).
+#[cfg(any(target_arch = "wasm32", test))]
+fn max_degrade_distance(degrades: &[holtburger_dat::file_type::GfxObjInfo]) -> f32 {
+    const RETAIL_DEFAULT_DEGRADE_DISTANCE: f32 = 100.0;
+    match degrades.len() {
+        0 => RETAIL_DEFAULT_DEGRADE_DISTANCE,
+        n if n <= 2 => degrades[0].max_dist,
+        n => degrades[n - 2].max_dist,
+    }
+}
+
+#[cfg(test)]
+mod a11_s4_degrade_tests {
+    use super::max_degrade_distance;
+    use holtburger_dat::file_type::GfxObjInfo;
+
+    fn band(max_dist: f32) -> GfxObjInfo {
+        GfxObjInfo {
+            gfx_obj_id: 0x0100_0001,
+            degrade_mode: 0,
+            min_dist: 0.0,
+            ideal_dist: max_dist * 0.5,
+            max_dist,
+        }
+    }
+
+    /// Pins the retail acclient.c:332193-332204 band pick: n<=2 reads
+    /// entry 0's max_dist; n>2 reads the SECOND-TO-LAST entry's
+    /// max_dist (`(float*)&degrades[n-1] - 1`); empty = the 100.0
+    /// GetMaxDegradeDistance null-chain default (:314372-314383).
+    #[test]
+    fn max_degrade_distance_matches_retail_band_pick() {
+        assert_eq!(max_degrade_distance(&[]), 100.0, "null-chain default");
+        assert_eq!(max_degrade_distance(&[band(25.0)]), 25.0, "n=1 -> entry 0");
+        assert_eq!(
+            max_degrade_distance(&[band(25.0), band(50.0)]),
+            25.0,
+            "n=2 -> entry 0 (second-to-last)"
+        );
+        assert_eq!(
+            max_degrade_distance(&[band(10.0), band(25.0), band(50.0)]),
+            25.0,
+            "n=3 -> entry 1 (second-to-last)"
+        );
+        assert_eq!(
+            max_degrade_distance(&[band(10.0), band(25.0), band(50.0), band(100.0)]),
+            50.0,
+            "n=4 -> entry 2 (second-to-last)"
+        );
+    }
+}
+
+/// A11-S4 (2026-06-12, `?particleDegrade=retail`) — the authored
+/// per-GfxObj particle degrade radius, meters. Retail wiring:
+/// `ParticleEmitter::InitEnd` sets `degrade_distance =
+/// CPhysicsPart::GetMaxDegradeDistance(part_storage[0])`
+/// (acclient.c:331265+ region) — `part_storage[0]` is the part built
+/// from the emitter's hw GfxObj, so the key here is the emitter info's
+/// `hwGfxObjId`. `GetMaxDegradeDistance` returns 100.0 when the part
+/// carries no degrade chain (acclient.c:314372-314383), else the
+/// chain's max band boundary (see [`max_degrade_distance`]).
+///
+/// `UpdateParticles` then culls via
+/// `CPhysicsObj::ShouldDrawParticles(degrade_distance)` — camera
+/// distance beyond the radius → `SetNoDraw(1)` + freeze, auto-recover
+/// on re-entry (acclient.c:331097-331139, :317184-317199). The JS
+/// consumer (`particle_manager.js` `_rp6ShouldCull`) folds this in as
+/// an OR-term on the shipped RP6 cull, whose visibility-flip + freeze
+/// + re-entry restore is the same observable contract.
+///
+/// Resolution: `resolve_did_degrade(hw_gfx_obj_id)` (0x01 GfxObj →
+/// `did_degrade`, 0 when `HAS_DID_DEGRADE` unset) → 0x11
+/// `GfxObjDegradeInfo` unpack → band pick. Missing/parse-failed
+/// records return the retail 100.0 default (the no-chain arm).
+///
+/// ADDITIVE export — rides manifest v4, no bump (F18-2: the JS caller
+/// is flag-gated + typeof-guarded; a stale pkg/ keeps the field at
+/// `Infinity` = RP6-only culling).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_particle_degrade_distance(hw_gfx_obj_id: u32) -> Result<f32, JsValue> {
+    use holtburger_dat::file_type::GfxObjDegradeInfo;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    const RETAIL_DEFAULT_DEGRADE_DISTANCE: f32 = 100.0;
+    let source = global_source::global_source();
+    // Prefetch the GfxObj so resolve_did_degrade's sync read hits.
+    let initial = [ResourceKey::new("eor/portal", hw_gfx_obj_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    let degrade_id = resolve_did_degrade(source.as_ref(), hw_gfx_obj_id);
+    if degrade_id == 0 {
+        // No degrade chain — retail GetMaxDegradeDistance default.
+        return Ok(RETAIL_DEFAULT_DEGRADE_DISTANCE);
+    }
+    let chain = [ResourceKey::new("eor/portal", degrade_id)];
+    prefetch::ensure_walk_prefetched(&source, &chain, |_| {}).await?;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", degrade_id)) {
+        Ok(b) => b,
+        Err(_) => return Ok(RETAIL_DEFAULT_DEGRADE_DISTANCE),
+    };
+    let di = match GfxObjDegradeInfo::unpack(&bytes) {
+        Ok(d) => d,
+        Err(_) => return Ok(RETAIL_DEFAULT_DEGRADE_DISTANCE),
+    };
+    Ok(max_degrade_distance(&di.degrades))
+}
+
 /// Wave 7.4 (2026-05-24): one-shot LOD pick for an entity at a given
 /// camera distance. Composes `resolve_did_degrade` (which walks
 /// SetupModel → first GfxObj → did_degrade) + GfxObjDegradeInfo
