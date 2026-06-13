@@ -22960,6 +22960,20 @@ fn apply_inventory_object_create(
             .insert(u32::from(guid), table_did);
     }
 
+    // A11-S5 / G14 (2026-06-12): stash the raw PhysicsDesc default_script
+    // (PScriptType enum OR 0x33 DID) + intensity for the JS spawn-time
+    // resolver (see the DEFAULT_SCRIPT_INDEX doc). Hydration already put
+    // both on the entity's property dicts (`hydrate_from_odd`); absent
+    // intensity reads 0.0, matching retail's zero-init CPhysicsObj field.
+    if let Some(ds) = entity.default_script_id() {
+        let ds_u32 = u32::from(ds);
+        if ds_u32 != 0 {
+            let intensity = entity.default_script_intensity().unwrap_or(0.0) as f32;
+            DEFAULT_SCRIPT_INDEX
+                .with(|m| m.borrow_mut().insert(u32::from(guid), (ds_u32, intensity)));
+        }
+    }
+
     let container_id = entity.container_id();
     let wielder_id = entity.wielder_id();
     let equip_mask = entity.wield_location();
@@ -23239,13 +23253,23 @@ fn maintain_bridge_indexes_on_routed_create(
         std::cell::RefCell<std::collections::HashMap<u32, u32>>,
     >,
 ) {
-    use holtburger_common::properties::PhysicsState;
+    use holtburger_common::properties::{PhysicsState, WorldObjectExt as _};
     if let Some(entity) = world.entities.get_mut(guid) {
         let table_did = resolve_physics_script_table_did(entity);
         entity.physics_script_table_did = table_did;
         let g_u32 = u32::from(guid);
         if table_did != 0 {
             physics_script_table_index.borrow_mut().insert(g_u32, table_did);
+        }
+        // A11-S5 / G14: same default-script stash as the bypass path (see
+        // apply_inventory_object_create + the DEFAULT_SCRIPT_INDEX doc).
+        if let Some(ds) = entity.default_script_id() {
+            let ds_u32 = u32::from(ds);
+            if ds_u32 != 0 {
+                let intensity = entity.default_script_intensity().unwrap_or(0.0) as f32;
+                DEFAULT_SCRIPT_INDEX
+                    .with(|m| m.borrow_mut().insert(g_u32, (ds_u32, intensity)));
+            }
         }
         if entity.physics_state.contains(PhysicsState::MISSILE) {
             projectile_index.borrow_mut().insert(g_u32);
@@ -23306,6 +23330,8 @@ fn maintain_bridge_indexes_on_delete(
     projectile_index.borrow_mut().remove(&g_u32);
     // G-4 / F3-1 follow-on: symmetric prune of the gravity classification.
     PROJECTILE_GRAVITY_GUIDS.with(|g| g.borrow_mut().remove(&g_u32));
+    // A11-S5 / G14: symmetric prune of the default-script stash.
+    DEFAULT_SCRIPT_INDEX.with(|m| m.borrow_mut().remove(&g_u32));
 
     // CMT Wave 16 / Phase 50 (2026-05-26): PhysicsScriptTable index
     // cleanup — don't accumulate dead-GUID entries over a long session.
@@ -25158,6 +25184,34 @@ impl SessionHandle {
             .get(&guid)
             .copied()
             .unwrap_or(0)
+    }
+
+    /// **A11-S5 / G14 (2026-06-12, `?defaultScriptSpawn=on`).** The RAW
+    /// `PhysicsDesc.default_script` value carried by this entity's
+    /// ObjectCreate — usually a `PScriptType` ENUM (resolved through the
+    /// entity's PhysicsScriptTable via `GetScript(default_script,
+    /// default_script_intensity)`, retail acclient.c:320351-320376 /
+    /// :336931+), occasionally a raw 0x33 PhysicsScript DID. `0` for
+    /// unknown GUIDs and entities without a default script. The
+    /// EntityUpdateJs spawn payload's `physicsScriptDid` filters to raw
+    /// 0x33 DIDs; this getter is the JS-side resolver's input for the
+    /// filtered PScriptType case (entities.js
+    /// `_resolveDefaultScriptDid`). Backed by the `DEFAULT_SCRIPT_INDEX`
+    /// thread_local (same pattern as `entityProjectileHasGravity`);
+    /// typeof-guarded in JS so a stale pkg/ soft-degrades to 0.
+    #[wasm_bindgen(js_name = entityDefaultScript)]
+    pub fn entity_default_script(&self, guid: u32) -> u32 {
+        DEFAULT_SCRIPT_INDEX.with(|m| m.borrow().get(&guid).map(|v| v.0).unwrap_or(0))
+    }
+
+    /// **A11-S5 / G14 (2026-06-12).** `PhysicsDesc.default_script_intensity`
+    /// — the mod weight `GetScript` picks the script band with (retail
+    /// walks the type's entries and returns the first where
+    /// `intensity <= entry.mod`, acclient.c:336552). `0.0` when absent
+    /// (retail zero-init). Companion to `entityDefaultScript`.
+    #[wasm_bindgen(js_name = entityDefaultScriptIntensity)]
+    pub fn entity_default_script_intensity(&self, guid: u32) -> f32 {
+        DEFAULT_SCRIPT_INDEX.with(|m| m.borrow().get(&guid).map(|v| v.1).unwrap_or(0.0))
     }
 
     /// **Vendor UI (2026-05-19).** Pull the cached vendor state for a
@@ -29620,6 +29674,27 @@ thread_local! {
 thread_local! {
     static PROJECTILE_GRAVITY_GUIDS: std::cell::RefCell<std::collections::HashSet<u32>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+// A11-S5 / G14 (2026-06-12, `?defaultScriptSpawn=on`): per-GUID
+// `(default_script, default_script_intensity)` from the ObjectCreate
+// PhysicsDesc (wire `default_script_id` — usually a `PScriptType` ENUM, not
+// a 0x33 DID — paired with the DEFAULT_SCRIPT_INTENSITY f32; retail copies
+// both straight onto the CPhysicsObj, acclient.c:322389-322391, and
+// `play_default_script` resolves them through the object's
+// PhysicsScriptTable `GetScript(default_script, default_script_intensity)`,
+// acclient.c:320351-320376). The EntityUpdateJs spawn payload deliberately
+// FILTERS `physics_script_did` to raw 0x33 DIDs (the PScriptType case was
+// "a runtime resolver, deferred" — that resolver is A11-S5), so this index
+// is how JS reads the raw value + intensity. Same thread_local pattern as
+// `PROJECTILE_GRAVITY_GUIDS` (single-threaded wasm, no recv-loop parameter
+// threading); populated at both ObjectCreate paths (bypass +
+// `?worldLifecycle` routed), pruned on delete. Read by
+// `SessionHandle::entityDefaultScript` / `entityDefaultScriptIntensity`.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static DEFAULT_SCRIPT_INDEX: std::cell::RefCell<std::collections::HashMap<u32, (u32, f32)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// T1 (2026-06-03) — free wasm export of the cached player run-rate (ACE

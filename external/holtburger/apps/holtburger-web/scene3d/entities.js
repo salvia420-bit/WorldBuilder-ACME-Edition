@@ -854,6 +854,43 @@ const MT_QUEUE_ON = (() => {
   }
 })();
 
+// A11-S5 / G14 (2026-06-12, W3+ remainder) — `?defaultScriptSpawn=on`
+// (default OFF) closes the spawn-time DefaultScript auto-resolve gap
+// (survey A11 §3 row 9): the wire PhysicsDesc `default_script` is usually a
+// PScriptType ENUM (+ `default_script_intensity` mod weight), NOT a 0x33
+// DID — the wasm spawn payload filters it out (`physicsScriptDid` = raw
+// 0x33 only), so entities with PScriptType defaults showed no ambient
+// effect at spawn AND their DefaultScript(17)/DefaultScriptPart(18)
+// animation hooks fired into a 0. Retail resolves it through the object's
+// PhysicsScriptTable: `play_default_script` →
+// `PhysicsScriptTable::GetScript(default_script, default_script_intensity)`
+// → `play_script_internal` (acclient.c:320351-320376; GetScript picker
+// :336552 — first entry whose mod >= intensity). When ON,
+// `_resolveDefaultScriptDid` runs that chain (new `entityDefaultScript` /
+// `entityDefaultScriptIntensity` session-handle getters — typeof-guarded, a
+// pre-rebuild pkg/ soft-degrades to 0 — + the Phase 49 table facade + the
+// Phase 51/53 `pickScriptEntry` picker) and the resolved 0x33 plays through
+// `_attachParticleChainForEntity`, which routes onto the A11-S1
+// `ScriptManager.addScript` queue under `?scriptQueue=on` (the stage's
+// intended pairing) or the legacy walker otherwise. Wired at THREE retail
+// trigger points: the spawn arm (the survey's "spawn-time auto-play" —
+// note retail's own literal triggers are DefaultScriptHook 17/18,
+// acclient.c:342324-342334, and missile env-collision DoCollision,
+// :436861-436870; ACE-era content authors DefaultScript as the ambient
+// spawn effect, hence the survey framing) plus the hook 17/18 PScriptType
+// fallback. Default OFF = byte-identical (0x33-only) behavior.
+const DEFAULT_SCRIPT_SPAWN_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search)
+        .get("defaultScriptSpawn")?.toLowerCase() === "on"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
 // A4-Q2 — the ONE notify gate (shared by the EntityManager completion
 // path and EntityInstance eviction): only tagged keys, typeof-guarded
 // bridge (`index.html` installs `window.__notifyAnimationDone` next to
@@ -3504,6 +3541,40 @@ export class EntityManager {
       this._particleChainResolveForGuid.set(guid, resolvePromise);
     }
 
+    // A11-S5 / G14 (2026-06-12): spawn-time DefaultScript auto-resolve.
+    // When `meta.physicsScriptDid` is 0 the entity may STILL carry a
+    // PScriptType-coded PhysicsDesc default script (the wasm spawn payload
+    // filters non-0x33 values) — resolve it through the retail
+    // `play_default_script` chain (GetScript(default_script, intensity),
+    // acclient.c:320351-320376) and play it. Same idempotency guard as the
+    // raw-0x33 arm above; fire-and-forget (resolve is async DAT work).
+    if (
+      DEFAULT_SCRIPT_SPAWN_ON &&
+      pesId === 0 &&
+      !this._particleChainsAttached.has(guid) &&
+      this.wasmExports &&
+      typeof this.wasmExports.fetchPhysicsScript === "function" &&
+      typeof this.wasmExports.fetchParticleEmitter === "function" &&
+      typeof this.wasmExports.fetchBuildingPlacement === "function"
+    ) {
+      this._resolveDefaultScriptDid(guid)
+        .then((did) => {
+          if (did === 0) return;
+          if (!this.entityMap.has(guid)) return; // despawned mid-resolve
+          if (this._particleChainsAttached.has(guid)) return;
+          this._particleChainsAttached.add(guid);
+          this._attachParticleChainForEntity(guid, root, did).catch((e) => {
+            this._particleChainsAttached.delete(guid);
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[entities/A11-S5] default-script chain for 0x${guid.toString(16)} (pes=0x${did.toString(16)}) threw:`,
+              e
+            );
+          });
+        })
+        .catch(() => {});
+    }
+
     // Track B7 (2026-06-08): if this entity carries a PhysicsScriptTable
     // (DAT 0x34) it can be the target of an object-triggered PlayEffect
     // (opcode 0xF755) at any moment. The PlayEffect resolver
@@ -4935,6 +5006,79 @@ export class EntityManager {
       }
     } catch (_) { /* never break callers */ }
     return 0;
+  }
+
+  /**
+   * A11-S5 / G14 (2026-06-12): retail `play_default_script` resolution —
+   * `PhysicsScriptTable::GetScript(default_script, default_script_intensity)`
+   * (acclient.c:320351-320376; picker :336552). Reads the RAW PhysicsDesc
+   * `default_script` off the new session-handle getters (typeof-guarded —
+   * a pre-rebuild pkg/ returns 0 and this soft-degrades to a no-op):
+   *   - 0                    → 0 (no default script),
+   *   - 0x33xxxxxx           → returned as-is (a raw PhysicsScript DID;
+   *                            the existing `physicsScriptDid` spawn path
+   *                            already covers this case — callers gate on
+   *                            it being absent),
+   *   - anything else        → PScriptType ENUM: resolve via the entity's
+   *                            PhysicsScriptTable (Phase 49 facade) +
+   *                            `pickScriptEntry(entries, intensity)`
+   *                            (Phase 51/53 picker, acclient.c:336552).
+   * No table / no row → 0, matching retail's `play_script` null-table
+   * no-op (acclient.c:320335-320343). Never throws.
+   *
+   * @param {number} guid
+   * @returns {Promise<number>} resolved 0x33 PhysicsScript DID, or 0.
+   */
+  async _resolveDefaultScriptDid(guid) {
+    const g = (guid >>> 0) || 0;
+    if (g === 0) return 0;
+    let raw = 0;
+    let intensity = 0;
+    try {
+      const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+      if (!sh || typeof sh.entityDefaultScript !== "function") return 0;
+      raw = sh.entityDefaultScript(g) >>> 0;
+      if (raw === 0) return 0;
+      if ((raw >>> 24) === 0x33) return raw;
+      intensity = (typeof sh.entityDefaultScriptIntensity === "function")
+        ? +sh.entityDefaultScriptIntensity(g) || 0
+        : 0;
+    } catch (_) { return 0; }
+    const tableDid = this.getPhysicsScriptTableDid(g);
+    if (tableDid === 0) return 0;
+    try {
+      const table = await fetchPhysicsScriptTable(tableDid);
+      const entries = table?.scripts?.[String(raw)];
+      if (!Array.isArray(entries) || entries.length === 0) return 0;
+      // Lazy import — play_effect_vfx.js is a self-binding side-effect
+      // module index.html loads on its own schedule; only pull the pure
+      // picker when the flag-on resolver actually runs.
+      const { pickScriptEntry } = await import("./play_effect_vfx.js");
+      const picked = pickScriptEntry(entries, intensity);
+      return (picked?.scriptDid >>> 0) || 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /**
+   * A11-S5: fire-and-forget arm shared by the spawn path and the
+   * DefaultScript(17)/DefaultScriptPart(18) hook fallbacks — resolve the
+   * PScriptType default script and play it through the normal chain
+   * (`_attachParticleChainForEntity` → `?scriptQueue=on` ⇒ the A11-S1
+   * `ScriptManager.addScript` queue; legacy walker otherwise). Drops the
+   * play if the entity despawned during the async resolve.
+   */
+  _playDefaultScriptResolved(guid, rig, defaultPartIndex = -1) {
+    const g = guid >>> 0;
+    this._resolveDefaultScriptDid(g)
+      .then((did) => {
+        if (did === 0) return;
+        if (!this.entityMap.has(g)) return; // despawned mid-resolve
+        this._attachParticleChainForEntity(g, rig, did, 0, defaultPartIndex)
+          .catch(() => {});
+      })
+      .catch(() => {});
   }
 
   /**
@@ -11108,6 +11252,12 @@ export class EntityManager {
       if (pesId !== 0) {
         this._attachParticleChainForEntity(inst.guid >>> 0, inst.root, pesId)
           .catch(() => {});
+      } else if (DEFAULT_SCRIPT_SPAWN_ON) {
+        // A11-S5 / G14: PScriptType-coded default — this hook IS retail's
+        // `DefaultScriptHook::Execute → play_default_script` trigger
+        // (acclient.c:342330-342334 → :320351-320376); resolve via
+        // GetScript(default_script, intensity) and play.
+        this._playDefaultScriptResolved(inst.guid >>> 0, inst.root);
       }
       this._defaultScriptHookFires = (this._defaultScriptHookFires | 0) + 1;
       return;
@@ -11168,6 +11318,11 @@ export class EntityManager {
       if (pesId !== 0) {
         this._attachParticleChainForEntity(inst.guid >>> 0, inst.root, pesId, 0, defaultPartIndex)
           .catch(() => {});
+      } else if (DEFAULT_SCRIPT_SPAWN_ON) {
+        // A11-S5 / G14: PScriptType-coded default — retail
+        // `DefaultScriptPartHook::Execute → play_default_script(object,
+        // _part_index)` (acclient.c:342324-342327), part anchor threaded.
+        this._playDefaultScriptResolved(inst.guid >>> 0, inst.root, defaultPartIndex);
       }
       if (pushEventRecord) {
         pushEventRecord({
