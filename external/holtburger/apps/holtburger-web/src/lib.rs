@@ -1515,6 +1515,16 @@ pub struct ObjectPlacement {
     /// route building placements through the per-part container path
     /// (`window.buildingMap`) so Phase E can address door GfxObjs.
     is_building: bool,
+    /// SetupModel `default_script` (0x33 PhysicsScript) DID for this placed
+    /// object, resolved from the portal DAT at fetch time. 0 = none (GfxObj
+    /// `0x01` placements, or SetupModels without a `default_script`). The baked
+    /// scenery path already carries this via `ScenicPlacementJs::default_script_id`;
+    /// this is the live-DAT LandblockInfo counterpart it had been dropping, so
+    /// placed props (braziers / fountains / torches — ~1/3 of AC SetupModels carry
+    /// a CreateParticle `default_script`) drive `attachStaticDefaultScripts` ambient
+    /// particle chains. Retail plays these via `play_default_script`
+    /// (acclient `InitWithSetup`), so emitting them is parity, not embellishment.
+    default_script_id: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1567,6 +1577,13 @@ impl ObjectPlacement {
     pub fn is_building(&self) -> bool {
         self.is_building
     }
+    /// SetupModel `default_script` DID (0x33), or 0 when none. JS
+    /// `drainPlacements` reads this so LandblockInfo props feed the same
+    /// `attachStaticDefaultScripts` ambient-particle path the baked scenery uses.
+    #[wasm_bindgen(getter, js_name = defaultScriptId)]
+    pub fn default_script_id(&self) -> u32 {
+        self.default_script_id
+    }
 }
 
 /// Fetch per-landblock object placement records for a list of
@@ -1606,6 +1623,7 @@ pub async fn fetch_landblock_objects(
         .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
 
     let mut out = Vec::new();
+    let mut setup_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
     for &id in &cell_ids {
         // Some landblocks have no LandblockInfo record (ocean cells,
         // sparse wilderness). Treat "not found" as zero objects rather
@@ -1618,12 +1636,53 @@ pub async fn fetch_landblock_objects(
             .map_err(|e| JsValue::from_str(&format!("LandblockInfo::unpack {id:#010X}: {e}")))?;
 
         for stab in &info.objects {
+            if (stab.id >> 24) as u8 == 0x02 {
+                setup_ids.insert(stab.id);
+            }
             out.push(frame_to_placement(info.id, stab.id, &stab.frame, false));
         }
         for building in &info.buildings {
+            if (building.model_id >> 24) as u8 == 0x02 {
+                setup_ids.insert(building.model_id);
+            }
             out.push(frame_to_placement(info.id, building.model_id, &building.frame, true));
         }
     }
+
+    // Resolve each placed SetupModel's `default_script` (0x33 PhysicsScript DID)
+    // and stamp it onto the placement. The live LandblockInfo path had been
+    // dropping this (only the baked `ScenicPlacementJs` carried it), so placed
+    // props (braziers / fountains / torches) never reached the existing
+    // `attachStaticDefaultScripts` ambient-particle chain. Best-effort: a
+    // missing/unparseable setup just leaves `default_script_id = 0`, matching the
+    // "treat not found as zero" philosophy above — never fails the batch.
+    if !setup_ids.is_empty() {
+        let setup_keys: Vec<ResourceKey<'_>> = setup_ids
+            .iter()
+            .map(|sid| ResourceKey::new("eor/portal", *sid))
+            .collect();
+        let _ = source.prefetch(&setup_keys).await;
+        let mut script_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        for &sid in &setup_ids {
+            if let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", sid)) {
+                if let Ok(setup) = holtburger_dat::file_type::SetupModel::unpack(
+                    &mut std::io::Cursor::new(bytes),
+                ) {
+                    if let Some(ds) = setup.default_script {
+                        script_map.insert(sid, ds);
+                    }
+                }
+            }
+        }
+        if !script_map.is_empty() {
+            for p in out.iter_mut() {
+                if let Some(&ds) = script_map.get(&p.model_id) {
+                    p.default_script_id = ds;
+                }
+            }
+        }
+    }
+
     Ok(out)
 }
 
@@ -1665,6 +1724,10 @@ fn frame_to_placement(
         qy: q.y,
         qz: q.z,
         is_building,
+        // Resolved in `fetch_landblock_objects` after the placement list is
+        // built (one prefetch+parse pass over the unique placed SetupModels);
+        // the SoA parity test path leaves it at the default 0.
+        default_script_id: 0,
     }
 }
 

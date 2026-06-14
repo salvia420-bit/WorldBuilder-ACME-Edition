@@ -431,6 +431,15 @@ function drainPlacements(allPlacements) {
         qz: p.qz,
         isBuilding: false,
         scale: 1,
+        // SetupModel `default_script` (0x33) DID, resolved by
+        // `fetch_landblock_objects` (the `ObjectPlacement.defaultScriptId`
+        // getter). 0 = none / stale pkg. Mirrors the scenery drain
+        // (`fetchAndDrainScenery`) so placed LandblockInfo props
+        // (braziers / fountains / torches) feed `attachStaticDefaultScripts`
+        // and emit their retail ambient particle chains. Read here, before
+        // `p.free()` below releases the wasm record.
+        defaultScriptId:
+          typeof p.defaultScriptId === "number" ? p.defaultScriptId >>> 0 : 0,
         source: "landblockinfo",
       });
     }
