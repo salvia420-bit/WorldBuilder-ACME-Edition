@@ -1,0 +1,15 @@
+{
+  "name": "multi-agent",
+  "version": "1.0.0",
+  "description": "Density-test orchestrator for the wire-agent fleet workflow. Opens N pages in ONE chromium browser context (vs N separate chromiums) so the V8 runtime, JIT caches, and chrome process overhead are paid once. Empirically ~30-40% less RSS per agent than N independent browsers.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "playwright": "^1.49.1"
+  }
+}
