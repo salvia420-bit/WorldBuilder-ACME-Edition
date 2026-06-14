@@ -86,12 +86,18 @@ def normalise_record(rec: dict) -> dict:
 
     Pulls only fields the renderer's synthetic-spawn injector reads.
     Coordinates are LB-local metres (same convention as
-    LandblockInfo.objects + scenery bake). The orientation field in
-    the source JSONL has only `{isIdentity: bool}` — no per-axis
-    quaternion components are dumped — so we always emit identity
-    quaternion (qw=1, qx=qy=qz=0). The injector documents this.
+    LandblockInfo.objects + scenery bake).
+
+    Orientation: when the source carries explicit per-axis quaternion
+    components (`qw/qx/qy/qz` — added by the angle-merge from ACE
+    `landblock_instance.angles_*`), we emit them so the wasm
+    `EntitySpawnJsonRaw` parser (optional qw/qx/qy/qz, `#[serde(default)]`)
+    and `scene3d/spawns.js::buildUpd` render the REAL rotation. Identity
+    placements (and pre-merge sources that only ship `{isIdentity}`) omit
+    the quat — the parser defaults to qw=1 — keeping files lean and
+    backward-compatible.
     """
-    return {
+    out = {
         "wcid": rec["wcid"],
         "name": rec.get("name", ""),
         "category": rec.get("category", ""),
@@ -102,12 +108,22 @@ def normalise_record(rec: dict) -> dict:
         "y": rec["y"],
         "z": rec["z"],
         "isServerManaged": bool(rec.get("isServerManaged", True)),
-        # Orientation kept structurally (always identity-only per
-        # source-file shape; future re-runs of the dumper may include
-        # full quaternion fields — the schema absorbs them when they
-        # appear). Today the renderer ignores this and uses identity.
         "orientationIsIdentity": bool(rec.get("orientation", {}).get("isIdentity", False)),
     }
+    qw = rec.get("qw")
+    if qw is not None:
+        qx = rec.get("qx", 0.0)
+        qy = rec.get("qy", 0.0)
+        qz = rec.get("qz", 0.0)
+        # Skip identity (qw=1, rest 0) — the parser defaults to it; omit
+        # to keep the staged JSONL lean.
+        if not (abs(qw - 1.0) < 1e-6 and abs(qx) < 1e-6
+                and abs(qy) < 1e-6 and abs(qz) < 1e-6):
+            out["qw"] = qw
+            out["qx"] = qx
+            out["qy"] = qy
+            out["qz"] = qz
+    return out
 
 
 def write_lb_jsonl(out_dir: Path, lb: int, records: list[dict]) -> None:
@@ -245,17 +261,27 @@ def write_wcid_to_setup(out_dir: Path, ring_wcids: set[int],
 
 
 def stage_spawns(source_path: Path, out_dir: Path,
-                  weenie_index_path: Path) -> dict:
-    """Read source JSONL, partition by LB into ring files, write sha256.
+                  weenie_index_path: Path, all_world: bool = False) -> dict:
+    """Read source JSONL, partition by LB into per-LB files, write sha256.
 
-    Returns a stats dict for logging.
+    Ring mode (default): keep only the 13x13 Holtburg ring, pre-seeding an
+    empty file for every ring LB. World mode (`all_world=True`): keep EVERY
+    landblock present in the source, emitting a file only for LBs that have
+    spawns (unpopulated LBs 404 -> the loader fail-softs to "no spawns",
+    which is correct). Returns a stats dict for logging.
     """
     if not source_path.exists():
         raise SystemExit(f"FAIL: source missing: {source_path}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    ring = ring_lb_set()
-    per_lb: dict[int, list[dict]] = {lb: [] for lb in ring}
+    ring = None if all_world else ring_lb_set()
+    # World mode pre-seeds the 13x13 ring as empties so the whole-world bake is
+    # a strict SUPERSET of the legacy ring bake (every ring LB keeps a
+    # file + sidecar; other populated LBs are added on first record;
+    # unpopulated non-ring LBs 404 -> loader fail-softs to "no spawns").
+    per_lb: dict[int, list[dict]] = (
+        {lb: [] for lb in ring_lb_set()} if all_world else {lb: [] for lb in ring}
+    )
     ring_wcids: set[int] = set()
     total_seen = 0
     total_kept = 0
@@ -272,8 +298,13 @@ def stage_spawns(source_path: Path, out_dir: Path,
                 print(f"WARN: bad json on line {total_seen}: {e}", file=sys.stderr)
                 continue
             lb = rec.get("landblockId")
-            if lb not in ring:
-                continue
+            if ring is not None:
+                if lb not in ring:
+                    continue
+            else:
+                if not isinstance(lb, int):
+                    continue
+                per_lb.setdefault(lb, [])
             total_kept += 1
             per_lb[lb].append(normalise_record(rec))
             ring_wcids.add(rec["wcid"])
@@ -295,16 +326,26 @@ def stage_spawns(source_path: Path, out_dir: Path,
 
     wcid_stats = write_wcid_to_setup(out_dir, ring_wcids, weenie_index_path)
 
+    scope = "world" if ring is None else "ring"
+    lb_count = len(per_lb) if ring is None else len(ring)
+    range_lines = (
+        ""
+        if ring is None
+        else (
+            f"ring-x-range\t{RING_X_RANGE.start}..={RING_X_RANGE.stop - 1}\n"
+            f"ring-y-range\t{RING_Y_RANGE.start}..={RING_Y_RANGE.stop - 1}\n"
+        )
+    )
     (out_dir / "source.sha256").write_text(
         f"{source_path.name}\t{src_sha}\n"
-        f"bake-tool-version\tstage-ring-spawns.py/0.1.0\n"
-        f"ring-x-range\t{RING_X_RANGE.start}..={RING_X_RANGE.stop - 1}\n"
-        f"ring-y-range\t{RING_Y_RANGE.start}..={RING_Y_RANGE.stop - 1}\n"
-        f"ring-lb-count\t{len(ring)}\n"
+        f"bake-tool-version\tstage-ring-spawns.py/0.2.0\n"
+        f"scope\t{scope}\n"
+        + range_lines
+        + f"lb-count\t{lb_count}\n"
         f"populated-lbs\t{populated}\n"
         f"empty-lbs\t{empty}\n"
         f"total-records\t{total_kept}\n"
-        f"ring-wcids\t{len(ring_wcids)}\n"
+        f"unique-wcids\t{len(ring_wcids)}\n"
         f"wcid-to-setup-entries\t{wcid_stats['entries']}\n"
         f"wcid-to-setup-missing\t{len(wcid_stats['missing_wcids'])}\n"
     )
@@ -314,7 +355,7 @@ def stage_spawns(source_path: Path, out_dir: Path,
     return {
         "total_seen": total_seen,
         "total_kept": total_kept,
-        "ring_size": len(ring),
+        "ring_size": lb_count,
         "ring_wcids": len(ring_wcids),
         "populated": populated,
         "empty": empty,
@@ -332,12 +373,16 @@ def main() -> int:
                     help=f"Output dir (default: {DEFAULT_OUT})")
     ap.add_argument("--weenie-index", default=DEFAULT_WEENIE_INDEX,
                     help=f"Weenie index JSONL (default: {DEFAULT_WEENIE_INDEX})")
+    ap.add_argument("--all-world", action="store_true",
+                    help="Stage EVERY landblock present in the source (whole "
+                         "world), not just the 13x13 Holtburg ring. Emits a "
+                         "file only for LBs that have spawns.")
     args = ap.parse_args()
 
     src = Path(args.source)
     out = Path(args.out)
     weenie_index = Path(args.weenie_index)
-    stats = stage_spawns(src, out, weenie_index)
+    stats = stage_spawns(src, out, weenie_index, all_world=args.all_world)
 
     print(f"Phase D.1.a — staged spawn records")
     print(f"=================================")
