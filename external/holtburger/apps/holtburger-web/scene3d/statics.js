@@ -1368,6 +1368,99 @@ function makeEmptySummary() {
  * Returns the per-LB summary in the canonical shape, or `null` when
  * the LB has already been baked.
  */
+// === Problem-B (2026-06-15) — ?staticBatch=on — per-LB singleton BatchedMesh ===
+// The per-LB lazy baker emits ONE plain Mesh per placement-per-surface; a
+// 5-min town-hop measured these piling up to ~8,400 resident nodes (the
+// dominant per-frame traversal + draw-call cost — "CPU overwhelmed by meshes").
+// `?staticBatch=on` consolidates a landblock's plain-Mesh singletons that share
+// a surface material into ONE THREE.BatchedMesh per surfaceDid (r184): one node
+// + one draw call per (LB, surface) instead of one per placement, with
+// BatchedMesh's own per-instance GPU frustum culling. LOD wrappers + lone
+// singletons are left untouched. The batch is tagged with this LB's
+// landblockId, so the EXISTING evict `kill` (landblock_lru.js:238) removes it
+// per-LB; the LRU additionally `.dispose()`s it (its GPU buffer/textures, which
+// the geometry-disposables list doesn't cover). The source group geometries
+// stay in the disposables (BatchedMesh COPIES vertex data) → no double-free.
+// ALWAYS-ON (2026-06-15, live-validated); `?staticBatch=off` → byte-identical
+// legacy one-Mesh-per-placement path. JS-live.
+let _staticBatchFlag;
+function readStaticBatchFlag() {
+  if (_staticBatchFlag !== undefined) return _staticBatchFlag;
+  // ALWAYS-ON since 2026-06-15 — LIVE-VALIDATED on the Dell (6-town run-across-
+  // terrain probe): per-LB singletons 8,766→1,951 resident nodes (4.5x), visible
+  // statics ~3,194→~561 (~6-10x), no SwiftShader OOM-crash. `?staticBatch=off`
+  // reverts to one Mesh per placement-per-surface (escape hatch / A-B).
+  let on = true;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("staticBatch") || "").toLowerCase();
+      // Opt-out only — on/true/1/yes are accepted no-ops (it's the default now).
+      if (v === "off" || v === "0" || v === "false" || v === "no") on = false;
+    }
+  } catch (_) { on = true; }
+  _staticBatchFlag = on;
+  return on;
+}
+// Test seam.
+export function __setStaticBatchForTest(v) { _staticBatchFlag = v; }
+
+// Consolidate a per-LB list of built static nodes: plain-Mesh singletons sharing
+// a surface material → one BatchedMesh per surfaceDid; LOD wrappers, lone
+// singletons, and any member that won't fit the batch fall through as-is.
+// Returns the replacement node list. `outBatches` (optional) collects the
+// BatchedMeshes created (for the summary count).
+export function consolidateStaticSingletons(nodes, outBatches) {
+  const out = [];
+  const bySurf = new Map(); // surfaceDid -> Mesh[]
+  for (const n of nodes) {
+    if (n && n.isMesh && !n.isLOD && n.geometry && n.material && n.userData) {
+      const key = (n.userData.surfaceDid >>> 0);
+      let arr = bySurf.get(key);
+      if (!arr) { arr = []; bySurf.set(key, arr); }
+      arr.push(n);
+    } else {
+      out.push(n); // LOD wrappers / unexpected nodes — keep verbatim
+    }
+  }
+  for (const [surf, group] of bySurf) {
+    if (group.length < 2) { out.push(...group); continue; } // nothing to batch
+    const mat = group[0].material;
+    let maxVerts = 0, maxIdx = 0;
+    for (const m of group) {
+      maxVerts += m.geometry.attributes.position.count;
+      if (m.geometry.index) maxIdx += m.geometry.index.count;
+    }
+    let bm;
+    try { bm = new THREE.BatchedMesh(group.length, maxVerts, maxIdx, mat); }
+    catch (_) { out.push(...group); continue; }
+    let added = 0;
+    for (const m of group) {
+      try {
+        m.updateMatrix();
+        const gid = bm.addGeometry(m.geometry);
+        const iid = bm.addInstance(gid);
+        bm.setMatrixAt(iid, m.matrix);
+        added += 1;
+      } catch (_) {
+        // Geometry didn't fit this batch's layout — keep it as a standalone
+        // Mesh so nothing goes invisible (fail-soft, no dropped props).
+        out.push(m);
+      }
+    }
+    if (added === 0) { try { bm.dispose(); } catch (_) {} continue; }
+    const lbId = group[0].userData.landblockId;
+    bm.userData = { landblockId: lbId, surfaceDid: surf, __staticBatch: true };
+    bm.name = `static-batch-lb${(lbId >>> 0).toString(16)}-s${surf.toString(16).padStart(8, "0")}-x${added}`;
+    // Uniform per-surface shadow flags (the per-instance distance gate is a
+    // documented fidelity trade under this flag).
+    bm.castShadow = !!group[0].castShadow;
+    bm.receiveShadow = !!group[0].receiveShadow;
+    out.push(bm);
+    if (outBatches) outBatches.push(bm);
+  }
+  return out;
+}
+
 export async function bakeStaticsForLandblock(
   scene3d,
   lbX,
@@ -1624,7 +1717,23 @@ export async function bakeStaticsForLandblock(
       disposables: { geometries: [], materials: [], textures: [] },
     };
   }
-  for (const node of addedNodes) scene3d.staticsGroup.add(node);
+  // Problem-B — consolidate this LB's plain-Mesh singletons into per-surface
+  // BatchedMeshes (no-op unless ?staticBatch=on). Fail-soft: on any error fall
+  // back to the unbatched nodes so the LB still renders.
+  let nodesToAdd = addedNodes;
+  let staticBatchCount = 0;
+  if (readStaticBatchFlag() && addedNodes.length > 1) {
+    try {
+      const batches = [];
+      nodesToAdd = consolidateStaticSingletons(addedNodes, batches);
+      staticBatchCount = batches.length;
+    } catch (e) {
+      nodesToAdd = addedNodes;
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.statics/staticBatch] consolidation failed, using unbatched:", e);
+    }
+  }
+  for (const node of nodesToAdd) scene3d.staticsGroup.add(node);
 
   // V1 (2026-05-29) — run each scenery placement's `default_script`
   // ambient particle chain (fountains/braziers/torches). Fail-soft +
@@ -1678,6 +1787,7 @@ export async function bakeStaticsForLandblock(
     skippedZeroTri: primary.skippedZeroTri,
     skippedNoMesh,
     instancedGroupCount: 0,
+    staticBatchGroupCount: staticBatchCount,
     singletonCount,
     lodCount,
     drawCallReductionEstimate: 0,

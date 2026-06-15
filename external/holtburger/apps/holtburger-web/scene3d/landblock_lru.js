@@ -235,9 +235,9 @@ export class LandblockLRU {
       }
     }
 
-    // 3. Statics — singletons (Mesh / LOD) carry userData.landblockId.
-    //    InstancedMesh nodes have NO landblockId (they batch across all
-    //    LBs in the ring) and are intentionally skipped.
+    // 3. Statics — singletons (Mesh / LOD) AND per-LB BatchedMesh consolidations
+    //    (?staticBatch) carry userData.landblockId. InstancedMesh nodes have NO
+    //    landblockId (they batch across all LBs in the ring) and are skipped.
     if (s.staticsGroup?.children) {
       const kill = [];
       for (const c of s.staticsGroup.children) {
@@ -245,7 +245,16 @@ export class LandblockLRU {
         if (lb == null) continue;
         if (lbKeyOf(lb >>> 0) === lbKey) kill.push(c);
       }
-      for (const c of kill) s.staticsGroup.remove(c);
+      for (const c of kill) {
+        s.staticsGroup.remove(c);
+        // A per-LB BatchedMesh owns a GPU vertex buffer + per-instance
+        // DataTextures that the geometry-disposables list does NOT cover (its
+        // source group geoms are tracked separately). Dispose it here so
+        // ?staticBatch consolidations don't leak GPU memory on eviction.
+        if (c.isBatchedMesh && typeof c.dispose === "function") {
+          try { c.dispose(); } catch (_) { /* fail-soft */ }
+        }
+      }
     }
 
     // 4. EnvCells — cellContainers3d is keyed by full cellId. Remove
