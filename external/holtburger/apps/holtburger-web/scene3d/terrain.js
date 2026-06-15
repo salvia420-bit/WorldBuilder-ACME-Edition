@@ -2163,14 +2163,17 @@ async function resolveTerrainRingOpts(
  * Wrapped in try/catch for the non-browser Node harness.
  */
 function readTerrainSlopeShadingFlag() {
+  // 2026-06-15 — default-ON (KEPT after live eval on the Dell: subtle hill
+  // light/shade relief, no black/NaN at Yaraq or Holtburg). Opt-out
+  // ?terrainSlopeShading=off. Was default-OFF (F12-3/FU-2).
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get(
       "terrainSlopeShading",
     );
-    return typeof v === "string" && v.toLowerCase() === "on";
+    return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -2182,14 +2185,19 @@ function readTerrainSlopeShadingFlag() {
  * missing `window`.
  */
 function readTerrainModulationFlag() {
-  // default-ON per render-audit T1a (2026-06-09): per-vertex bright/sat/hue
-  // jitter (TerrainTex modulation); opt-out ?terrainMod=off, pending eye-test.
+  // 2026-06-15 — REVERTED to default-OFF. The default-ON flip (render-audit
+  // T1a 2026-06-09, never eye-tested) BLACKED OUT non-Holtburg terrain: the
+  // per-vertex TerrainTex brightness modulation (`result * vBrightness`,
+  // shader ~L1654, vBrightness NOT floored) computes ~0 for some biomes'
+  // terrain codes → black. Live-confirmed on the Dell at Yaraq (LB 0x7d64):
+  // terrainMod-only = black, all-off = correct grass. Dead-in-retail
+  // (acclient.c never applied it). Opt-in `?terrainMod=on` to A/B.
   try {
-    if (typeof window === "undefined" || !window.location) return true;
+    if (typeof window === "undefined" || !window.location) return false;
     const v = new URLSearchParams(window.location.search).get("terrainMod");
-    return !(typeof v === "string" && v.toLowerCase() === "off");
+    return typeof v === "string" && v.toLowerCase() === "on";
   } catch (_) {
-    return true;
+    return false;
   }
 }
 
@@ -2220,12 +2228,16 @@ function readTerrainModSatHueFlag() {
  * Same try/catch shape as `readTerrainModulationFlag` for the Node harness.
  */
 function readTerrainPaletteFlag() {
+  // 2026-06-15 — default-ON (KEPT after live eval on the Dell: subtle per-biome
+  // tint at 0.25 strength, no black). Opt-out ?terrainPalette=off. Note it
+  // sources the minimap/radar colour (region.rs:653), not the true retail
+  // terrain palette — a subtle biome bias, not a faithful tint.
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("terrainPalette");
-    return typeof v === "string" && v.toLowerCase() === "on";
+    return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 

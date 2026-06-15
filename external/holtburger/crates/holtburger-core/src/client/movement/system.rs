@@ -2983,11 +2983,26 @@ impl MovementSystem {
                 // Tied to the same `USE_LOCAL_ENVCELL_ENTRY` flag as the
                 // entry/exit flips so the whole transition feature toggles
                 // as a unit.
-                let exit_room_relax = USE_LOCAL_ENVCELL_ENTRY
+                // 2026-06-15 — extended the B11 relaxation from outdoor-exit
+                // rooms to INTERIOR room-to-room doorways. The per-cell AABB
+                // net stops at the current room's AABB face, which sits across
+                // an interior doorway, so it crops the player's delta there =
+                // the room-to-room invisible wall (e.g. Holtburg cottage cell
+                // 0xA9B40101, interior portals only). `at_interior_doorway`
+                // gates on a LOADED neighbour AABB within a capsule radius so a
+                // `visible_cells` PVS edge can't over-relax (wall-through). The
+                // `!triangles.is_empty()` guard keeps the per-poly walls as the
+                // backstop, so we never trade the doorway gap for unclamped drift.
+                let doorway_relax = USE_LOCAL_ENVCELL_ENTRY
                     && !triangles.is_empty()
-                    && world.scene.cell_has_outdoor_exit(cell_id);
+                    && (world.scene.cell_has_outdoor_exit(cell_id)
+                        || world.scene.at_interior_doorway(
+                            &pose,
+                            cell_id,
+                            holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+                        ));
                 match cell_aabb_opt {
-                    Some(aabb) if exclusion_aabbs.is_empty() && !exit_room_relax => {
+                    Some(aabb) if exclusion_aabbs.is_empty() && !doorway_relax => {
                         holtburger_world::spatial::clamp_delta_to_cell_interior(
                             &pose,
                             pre_clamped,

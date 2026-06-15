@@ -1450,6 +1450,58 @@ impl SpatialScene {
             .unwrap_or(false)
     }
 
+    /// Interior twin of [`Self::cell_has_outdoor_exit`] (2026-06-15): true
+    /// when the player at `pose` is straddling an INTERIOR room-to-room
+    /// doorway of `cell_id`. Used by the movement system to relax the
+    /// cell-AABB containment net (`clamp_delta_to_cell_interior`) at interior
+    /// doorways too — otherwise a multi-cell building (e.g. a Holtburg
+    /// cottage: cell 0xA9B40101 has only interior portals, no outdoor exit)
+    /// boxes the player at the current room's AABB face = an invisible wall
+    /// between rooms.
+    ///
+    /// A portal neighbour qualifies only when ALL hold:
+    ///   (a) it is NOT an outdoor-exit sentinel (`< 0xFFFE`);
+    ///   (b) it is a currently-LOADED EnvCell (present in `cell_aabbs`) — a
+    ///       room we can actually cross into;
+    ///   (c) the capsule centre is within `radius` of that neighbour's AABB —
+    ///       i.e. we are physically AT the shared doorway.
+    ///
+    /// The geometric near-test (c) is the load-bearing safety differentiator
+    /// from a naive "any portal edge" check: `cell_portal_graph` MERGES true
+    /// portal-direct edges with `visible_cells[]` PVS edges (see
+    /// `insert_cell_portal`), so a bare edge does NOT prove a walkable
+    /// doorway. Requiring a loaded neighbour AABB within a capsule radius
+    /// restricts the relaxation to the doorway straddle — the only place the
+    /// AABB net would wrongly box the player — and the per-poly cell-wall
+    /// clamp remains the wall backstop everywhere.
+    pub fn at_interior_doorway(&self, pose: &WorldPosition, cell_id: u32, radius: f32) -> bool {
+        let lb_high = cell_id & 0xFFFF_0000;
+        let global = pose.global_coords();
+        self.cell_portal_graph
+            .get(&cell_id)
+            .map(|edges| {
+                edges.iter().any(|&n| {
+                    (n & 0xFFFF) < 0xFFFE
+                        && (n & 0xFFFF_0000) == lb_high
+                        && n != cell_id
+                        && self
+                            .cell_aabbs
+                            .get(&n)
+                            .map(|aabb| {
+                                !aabb.is_empty()
+                                    && global.x >= aabb.min.x - radius
+                                    && global.x <= aabb.max.x + radius
+                                    && global.y >= aabb.min.y - radius
+                                    && global.y <= aabb.max.y + radius
+                                    && global.z >= aabb.min.z - radius
+                                    && global.z <= aabb.max.z + radius
+                            })
+                            .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    }
+
     /// EnvCell→terrain EXIT (B11, 2026-06-09): the inverse of
     /// [`Self::entered_envcell_for_outdoor_pose`]. When the player's
     /// predicted pose is flagged INDOOR but the capsule has left the

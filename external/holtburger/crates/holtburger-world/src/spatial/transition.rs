@@ -464,11 +464,16 @@ fn insert_check_offset(
             };
             // AABB containment net + PR-RR.1 open-door bypass + B11
             // outdoor-exit-room relaxation, exactly as the legacy chain.
-            let exit_room_relax = gates.local_envcell_entry
+            // 2026-06-15 — extended to INTERIOR room-to-room doorways too (must
+            // mirror the legacy path in system.rs; the 1070 eye-test may run
+            // either path). `at_interior_doorway`'s loaded-neighbour near-test
+            // gates against `visible_cells` PVS edges so it can't over-relax.
+            let doorway_relax = gates.local_envcell_entry
                 && !triangles.is_empty()
-                && scene.cell_has_outdoor_exit(cell_id);
+                && (scene.cell_has_outdoor_exit(cell_id)
+                    || scene.at_interior_doorway(pose, cell_id, object.radius));
             match cell_aabb_opt {
-                Some(aabb) if exclusion_aabbs.is_empty() && !exit_room_relax => {
+                Some(aabb) if exclusion_aabbs.is_empty() && !doorway_relax => {
                     clamp_delta_to_cell_interior(pose, pre_clamped, &aabb, object.radius)
                 }
                 _ => pre_clamped,

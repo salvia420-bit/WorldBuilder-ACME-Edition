@@ -69,6 +69,30 @@ const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
 const HOLTBURG_Y = 0xb4;
 
+// 2026-06-15 — building-floor-vs-terrain z-fight fix. SetupModel buildings
+// (layer 0) sit ON the terrain (layer 0); their floor geometry is coplanar with
+// the grass to ~cm. Under logarithmicDepthBuffer both write the identical
+// gl_FragDepth, so GL_LESS breaks the tie nondeterministically → the "floor and
+// grass both show / flicker" bug. We render building surfaces through the
+// floor-bias material variant (gl_FragDepth -= 2e-4, see materials.js
+// getCachedFloorBias/applyFloorDepthBias) so the floor wins the coplanar tie.
+// Buildings are opaque solids, so this has NO see-through risk (walls occlude
+// the floor from outside) and needs no per-cell gating. The epsilon is too
+// small to override real separation (a building behind a hill is unaffected);
+// it is a harmless no-op on non-coplanar walls/roofs. Opt-out ?buildingFloorBias=off.
+// DEFAULT-ON (user decision 2026-06-15): it's the proven applyFillDepthBias
+// mechanism sign-flipped. NOTE the headless swiftshader rasterizer does NOT
+// reproduce GPU z-fighting (it resolves coplanar depth deterministically), so
+// the visual A/B must be eye-tested on real GPU hardware (the 1070) via
+// ?buildingFloorBias=off — queued in url-flags.md.
+const BUILDING_FLOOR_BIAS = (() => {
+  try {
+    return new URLSearchParams(window.location.search).get("buildingFloorBias") !== "off";
+  } catch (_) {
+    return true;
+  }
+})();
+
 // FU2 (perf follow-on 2026-05-18) — distance-tier follow-on for C3's
 // `low`-preset receiveShadow gate. At mid/high/ultra a building gets
 // `receiveShadow = true` only when its world-space distance to the
@@ -397,7 +421,9 @@ function buildOneBuilding(
     };
 
     for (const g of part.groups) {
-      const mat = materialCache.getCached(g.surfaceDid);
+      const mat = BUILDING_FLOOR_BIAS
+        ? materialCache.getCachedFloorBias(g.surfaceDid)
+        : materialCache.getCached(g.surfaceDid);
       const mesh = new THREE.Mesh(g.geometry, mat);
       mesh.name = `surface-${g.surfaceDid.toString(16).padStart(8, "0")}`;
       mesh.userData = {

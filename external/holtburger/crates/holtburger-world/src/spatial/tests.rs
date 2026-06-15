@@ -1125,6 +1125,65 @@ mod collision {
         assert_eq!(scene.building_aabb_count(), 0);
     }
 
+    /// 2026-06-15 — interior room-to-room doorway relaxation predicate
+    /// (`at_interior_doorway`). Must fire ONLY when a portal neighbour is BOTH
+    /// loaded (present in `cell_aabbs`) AND the capsule centre is within
+    /// `radius` of its AABB, so a `visible_cells` PVS edge (carried in the same
+    /// `cell_portal_graph`) cannot over-relax the cell-AABB containment net
+    /// into a wall-through. This is the interior twin of the B11 outdoor-exit
+    /// relaxation that fixes the Holtburg room-to-room invisible wall.
+    #[test]
+    fn at_interior_doorway_requires_loaded_near_neighbour() {
+        let landblock_high = 0x0102_0000u32;
+        let cell_a = landblock_high | 0x0100; // interior cell A
+        let cell_b = landblock_high | 0x0101; // interior neighbour B (a real loaded room)
+        let cell_c = landblock_high | 0x0102; // PVS-visible-only cell C (no AABB)
+        let radius = 0.4_f32;
+
+        // Scene 1: A has interior portals to B (loaded room) AND C (PVS-only).
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_portal(cell_a, cell_b);
+        scene.insert_cell_portal(cell_a, cell_c);
+        // B's AABB in GLOBAL coords (landblock 0x0102 origin = (192, 384)).
+        scene.insert_cell_aabb(
+            cell_b,
+            global_aabb(Vector3::new(242.0, 434.0, 0.0), Vector3::new(252.0, 444.0, 5.0)),
+        );
+        // (C deliberately has NO cell_aabbs entry — a visibility-only edge.)
+
+        // Pose straddling the A/B boundary: global (242, 434, 1) == B's min
+        // corner, well within `radius` → relax.
+        let at_boundary = pose_at(Guid(cell_a), 50.0, 50.0, 1.0);
+        assert!(
+            scene.at_interior_doorway(&at_boundary, cell_a, radius),
+            "at the A/B doorway (capsule within radius of loaded neighbour B) must relax",
+        );
+
+        // Pose deep inside A, far from B's AABB → must NOT relax (net stays on,
+        // proving location-gating not mere topology).
+        let deep_inside = pose_at(Guid(cell_a), 10.0, 10.0, 1.0); // global (202, 414, 1)
+        assert!(
+            !scene.at_interior_doorway(&deep_inside, cell_a, radius),
+            "deep inside A and far from B's AABB must NOT relax",
+        );
+
+        // The old outdoor-exit predicate genuinely misses this interior-only cell.
+        assert!(
+            !scene.cell_has_outdoor_exit(cell_a),
+            "cell A has only interior portals (no outdoor-exit sentinel)",
+        );
+
+        // Scene 2: A's ONLY neighbour is the PVS-only cell C (no loaded AABB).
+        // A visibility-only edge must NOT relax even at the boundary pose —
+        // this is the wall-through guard.
+        let mut pvs_only = SpatialScene::new();
+        pvs_only.insert_cell_portal(cell_a, cell_c);
+        assert!(
+            !pvs_only.at_interior_doorway(&at_boundary, cell_a, radius),
+            "a visible_cells PVS edge with no loaded neighbour AABB must NOT relax",
+        );
+    }
+
     #[test]
     fn near_pose_includes_neighbour_outdoor_cells() {
         let mut scene = SpatialScene::new();

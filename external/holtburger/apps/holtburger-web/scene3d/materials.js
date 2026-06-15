@@ -238,7 +238,8 @@ function _patchSetCacheKey(material) {
     "|p" + (u.pomEnabled ? 1 : 0) +
     "|l" + (u.lightClampRetail ? 1 : 0) +
     "|a" + (u.__aoPatched ? 1 : 0) +
-    "|b" + (u.__depthBiased ? 1 : 0)
+    "|b" + (u.__depthBiased ? 1 : 0) +
+    "|f" + (u.__floorBiased ? 1 : 0)
   );
 }
 
@@ -336,6 +337,32 @@ export function applyFillDepthBias(material) {
   });
   material.userData = material.userData ?? {};
   material.userData.__depthBiased = true;
+}
+
+// 2026-06-15 — building/EnvCell floor-vs-terrain z-fight fix. Same log-depth
+// space as applyFillDepthBias, OPPOSITE sign. A SetupModel building's floor (or
+// an EnvCell floor) and the terrain beneath it write the IDENTICAL logarithmic
+// gl_FragDepth and are coplanar to ~cm at a building footprint, so under
+// GL_LESS the depth test is a tie → per-pixel/per-frame flicker (the "floor vs
+// grass, shows both" bug). Subtracting a tiny epsilon pulls the surface a hair
+// NEARER so it deterministically wins against the coplanar terrain. polygonOffset
+// is dead here (see applyFillDepthBias above — manual gl_FragDepth discards it).
+// The epsilon only breaks exact coplanar ties — far too small to push a floor up
+// through a real hill. Applied via getCachedFloorBias (cache-owned CLONE) so the
+// shared base material is never mutated.
+export function applyFloorDepthBias(material) {
+  if (!material || material.userData?.__floorBiased) return;
+  _chainBeforeCompile(material, (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <logdepthbuf_fragment>",
+      `#include <logdepthbuf_fragment>
+      #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+        gl_FragDepth -= 2.0e-4;
+      #endif`,
+    );
+  });
+  material.userData = material.userData ?? {};
+  material.userData.__floorBiased = true;
 }
 
 function _installDetailShaderPatch(material, detailTexture, opts = {}) {
@@ -1518,6 +1545,13 @@ export class MaterialCache {
      * @type {Map<number, THREE.Material>}
      */
     this.frontSideMaterials = new Map();
+    // 2026-06-15 — floor-bias variants, keyed by surfaceDid. A `.clone()` of the
+    // DoubleSide base with a log-depth `gl_FragDepth -= 2e-4` patch
+    // (applyFloorDepthBias). Used for surfaces coplanar with terrain (SetupModel
+    // building floors; EnvCell floors) so the floor wins the depth tie instead
+    // of flickering against the grass. Clones SHARE textures (THREE clone copies
+    // map refs); cache-owned; lazily minted; mirrors frontSideMaterials lifecycle.
+    this.floorBiasMaterials = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
     this.textures = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
@@ -1689,6 +1723,28 @@ export class MaterialCache {
       this.frontSideMaterials.set(key, front);
     }
     return front;
+  }
+
+  /**
+   * Floor-bias variant of `getCached`: the DoubleSide base with a tiny
+   * log-depth `gl_FragDepth` nudge toward the camera (applyFloorDepthBias), so a
+   * surface coplanar with terrain — a SetupModel building floor (buildings.js)
+   * or an EnvCell floor — deterministically wins the GL_LESS depth tie instead
+   * of flickering against the grass. Clone shares textures; cache-owned. Wire
+   * mode returns the base (wire path unaffected).
+   */
+  getCachedFloorBias(surfaceDid) {
+    const base = this._getCachedDouble(surfaceDid);
+    if (this.wireframeMode) return base;
+    const key = surfaceDid >>> 0;
+    let v = this.floorBiasMaterials.get(key);
+    if (!v) {
+      v = base.clone();
+      v.userData = { ...(base.userData || {}), __cacheOwned: true };
+      applyFloorDepthBias(v);
+      this.floorBiasMaterials.set(key, v);
+    }
+    return v;
   }
 
   /** The DoubleSide base material for a surface (original `getCached` body). */
@@ -2482,6 +2538,7 @@ export class MaterialCache {
       // re-clones from THIS base. Without this, single-sided (?perPolyCull)
       // meshes keep the fallback clone forever even after the texture arrives.
       this.frontSideMaterials.delete(did);
+      this.floorBiasMaterials.delete(did); // twin of the FrontSide invalidation
       // Render-completeness audit (2026-05-29) — kick animated-frame setup.
       this._maybeSetupSurfaceAnimation(did, mat, tex);
       return mat;
@@ -3044,6 +3101,7 @@ export class MaterialCache {
     // the 6-space twin in get()) so getCached(did,false) re-clones from this
     // textured base after a spawn-race fallback.
     this.frontSideMaterials.delete(did);
+    this.floorBiasMaterials.delete(did); // twin of the FrontSide invalidation
     // Render-completeness audit (2026-05-29) — kick animated-frame setup.
     this._maybeSetupSurfaceAnimation(did, mat, tex);
     return mat;
@@ -3157,6 +3215,9 @@ export class MaterialCache {
     // which are owned by `this.textures` and already freed above), so we
     // only dispose the material objects themselves.
     _disposeEach(this.frontSideMaterials, (m) => m);
+    // 2026-06-15 floor-bias variants — clones of base materials (share textures,
+    // freed above), so dispose only the material objects.
+    _disposeEach(this.floorBiasMaterials, (m) => m);
     // Wire-agent buckets + per-DID dominant-colour materials.
     _disposeEach(this.wireframeBuckets, (m) => m);
     _disposeEach(this.wireframeFillBuckets, (m) => m);
