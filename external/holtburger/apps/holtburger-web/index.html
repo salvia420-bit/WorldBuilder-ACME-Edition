@@ -11662,7 +11662,19 @@ void main() {
       // ────────────────────────────────────────────────────────────
       async function runAutonomousLogin(opts = {}) {
         const autoSpawn = opts.autoSpawn ?? "first";
-        const maxRetries = opts.maxRetries ?? 3;
+        // Single clean attempt by default (2026-06-14). The retry-"dance"
+        // was built to clear a STALE session, but it is destructive: every
+        // reconnect opens a 2nd login session that ACE boots the 1st with
+        // (account_login_boots_in_use=True), and on a slow cold-boot spawn
+        // the dance races/boots its OWN freshly-in-world session before the
+        // late EnteredWorld(kind=7) registers. A single WARM connect+spawn
+        // (see the idle-deferred trigger below) was verified to reach real
+        // in-world reliably, and a single connect ALSO handles a stale
+        // session cleanly (ACE boots it "in favor of new connection" — no
+        // 2nd session, so no self-race). Opt back into the dance with
+        // `?maxRetries=N` only if you specifically need stale-session
+        // recovery without an idle warm-up.
+        const maxRetries = opts.maxRetries ?? 0;
         // Tuned for localhost+tailnet ACE. Empirical measurements
         // (2026-05-21, 3 consecutive cold boots with /clear-cache):
         //   - Successful Connect after a 3s kick-wait: 250-300ms
@@ -11680,10 +11692,28 @@ void main() {
         // session that keeps emitting CharacterError::Logon (0x01) and
         // EnterGameCharacterInWorld (0x0D). Larger budgets give ACE
         // time to finish kicking the character before we Connect+Spawn
-        // again. Total agentic boot ≈ connectTimeoutMs + kickWaitMs +
-        // Connect#2 (~400ms) + Spawn (~100ms) = ~8.5s worst-case.
-        const connectTimeoutMs = opts.connectTimeoutMs ?? 5000;
-        const spawnTimeoutMs = opts.spawnTimeoutMs ?? 10000;
+        // again.
+        //
+        // Cold-boot fix (2026-06-14). Root cause of the "ready but no
+        // player" bug: autoLogin fires (via requestIdleCallback) WHILE
+        // the wasm + scene3d cold-bake is still saturating the main
+        // thread, so the wasm client's first login packet is delayed.
+        // Measured on the 1070's +RTT link: the wsbridge "ws accepted"
+        // → "routing/udp bound" gap (= time until the client's first
+        // packet) was ~15s cold vs ~1s warm. With the old 5s budget,
+        // attempt-0 ALWAYS timed out mid-handshake on a cold boot, which
+        // tripped the retry-dance; the reconnect then opened a 2nd login
+        // session that ACE booted the 1st with (account_login_boots_in_use),
+        // killing the in-flight spawn's recv loop. A single clean
+        // connect+spawn was verified to reach real in-world every time —
+        // the dance was the whole failure. Give attempt-0 enough runway
+        // to clear the cold-bake (25s ≫ the measured 15s) so it succeeds
+        // on the first try and the destructive dance never fires.
+        const connectTimeoutMs = opts.connectTimeoutMs ?? 25000;
+        // 10s was fine warm, but a cold-boot spawn (PVS stream + scene
+        // bake still competing for the main thread) can take >10s to reach
+        // EnteredWorld(kind=7); 20s gives it room without a false timeout.
+        const spawnTimeoutMs = opts.spawnTimeoutMs ?? 20000;
         const baseKickWaitMs = opts.kickWaitMs ?? 3000;
         // char-in-world (EnterGameCharacterInWorld, code 0x0D) means
         // ACE's character logout is still pending — we MUST wait
@@ -11814,11 +11844,23 @@ void main() {
             if (window.__bootState === "error") return "error";
             await sleep(50);
           }
-          // Login-boot diagnosis 2026-06-11 (fix 6): same late-success
-          // check as waitForConnectOutcome — an in-world transition that
-          // landed at the deadline edge must not be classified "timeout"
-          // (the retry would kick the freshly-spawned session).
-          if (window.__bootState === "in-world" || window.__bootState === "ready") return "in-world";
+          // Late-success check: an in-world transition that landed at the
+          // deadline edge must not be classified "timeout" (the retry
+          // would kick the freshly-spawned session).
+          //
+          // 2026-06-14: do NOT treat bare "ready" as in-world here. In
+          // wire-agent / wireframe mode `ready` is fired by scene3d the
+          // moment terrain+buildings+statics+entities finish baking
+          // (scene3d/index.js:~3999) — fully DECOUPLED from the player
+          // entering the world, and it can even fire BEFORE spawn. The
+          // old `|| "ready"` shortcut let a geometry-only scene (no
+          // local player: getLocalPlayerPose() undefined, currentCell
+          // 0x0) masquerade as a successful spawn. The REAL in-world
+          // signal is setBootState("in-world", guid=…) at EnteredWorld
+          // (kind=7). A genuine in-world that already advanced to "ready"
+          // is still caught by the history scan immediately below
+          // (setBootState records every transition, incl. "in-world").
+          if (window.__bootState === "in-world") return "in-world";
           {
             const history = window.__bootStateHistory;
             if (Array.isArray(history)) {
@@ -11865,6 +11907,19 @@ void main() {
           }
 
           for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            // Safety net (2026-06-14): never dance past a spawn that has
+            // already reached in-world. A late EnteredWorld(kind=7) can
+            // land AFTER an attempt's spawn-timeout (slow cold boot);
+            // without this, the next reconnect opens a 2nd login session
+            // that ACE boots our own freshly-in-world session with. Only
+            // relevant for the opt-in retry-dance (?maxRetries=N) — the
+            // default (maxRetries=0) never reconnects.
+            if (
+              attempt > 0 &&
+              (window.__bootStateHistory || []).some((e) => e.state === "in-world")
+            ) {
+              return;
+            }
             if (attempt > 0) {
               // Adaptive backoff: each retry adds 1.5× to the kick
               // wait. attempt 1: 3000ms, 2: 4500ms, 3: 6750ms.
@@ -12018,14 +12073,34 @@ void main() {
             parseInt(bootParams.get("spawnTimeoutMs") ?? "", 10) || undefined,
           kickWaitMs:
             parseInt(bootParams.get("kickWaitMs") ?? "", 10) || undefined,
-          maxRetries:
-            parseInt(bootParams.get("maxRetries") ?? "", 10) || undefined,
+          // `|| undefined` would coerce a legitimate 0 back to the
+          // default (3) — so `?maxRetries=0` (single clean attempt, no
+          // retry-dance) was impossible to request. Preserve 0; only
+          // fall back to the default on a non-numeric value.
+          maxRetries: (() => {
+            const n = parseInt(bootParams.get("maxRetries") ?? "", 10);
+            return Number.isFinite(n) ? n : undefined;
+          })(),
         };
+        // Cold-boot fix (2026-06-14): fire the connect only once the main
+        // thread is genuinely IDLE — i.e. after the terrain/buildings/
+        // statics cold-bake + the page-init fetch storm (140 modulepreloads
+        // + scenery + EnvCells) have settled. The old `{timeout: 800}`
+        // force-fired the connect ~800ms in, deep inside that storm, so the
+        // wasm client's first login packet was starved (~15s to route) and
+        // the WS was prone to being dropped mid-handshake ("recv loop exited
+        // before CharacterList"), which tripped the destructive retry-dance.
+        // A WARM connect (what a human gets by clicking Connect after the
+        // scene settles) routes in ~1s and just works. The long idle
+        // timeout (20s) lets requestIdleCallback wait for a real idle slot
+        // (post-bake) instead of force-firing mid-bake; it still fires by
+        // 20s if the thread never fully quiesces. The non-idle fallback uses
+        // a fixed warm-up delay rather than 0.
         const launch = () => runAutonomousLogin(opts);
         if (typeof window.requestIdleCallback === "function") {
-          window.requestIdleCallback(launch, { timeout: 800 });
+          window.requestIdleCallback(launch, { timeout: 20000 });
         } else {
-          setTimeout(launch, 0);
+          setTimeout(launch, 6000);
         }
       }
     </script>
