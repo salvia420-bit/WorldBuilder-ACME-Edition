@@ -9697,6 +9697,17 @@ void main() {
                       (evt.stringPayload ? ` (${evt.stringPayload})` : "");
                   }
                 } catch (_) { /* banner is best-effort */ }
+                // Entity reaping (2026-06-15): the dead session's entity
+                // guids are all invalid now. Clear them so an in-page
+                // reconnect (e.g. the autoLogin kick-dance, or any future
+                // reconnect path) re-streams onto an EMPTY map instead of
+                // stacking a 2nd set of ACE's freshly-guid'd generator items
+                // — the academy "two leather hats" double-spawn. Use
+                // clearWorldEntities() (NOT dispose(), which permanently
+                // disables the manager) so the EM stays reusable.
+                try {
+                  window.liveScene3d?.entityManager?.clearWorldEntities?.();
+                } catch (_) { /* best-effort */ }
                 return; // Stop polling.
               } else if (evt.kind === 20) {
                 // CharacterError — ACE wire-level signal. See

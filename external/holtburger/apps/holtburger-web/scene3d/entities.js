@@ -12392,6 +12392,42 @@ export class EntityManager {
   }
 
   /**
+   * Reap every live world entity but keep the manager REUSABLE for the
+   * next session — unlike dispose(), which permanently tears the manager
+   * down (sets _disposed, disposes the animationCache).
+   *
+   * Called when a session ENDS (ws disconnect / relogin): every entity
+   * guid from the dead session is now invalid, and the next connection
+   * re-streams a fresh ObjectCreate burst. Without this, the stale rigs
+   * linger and the re-streamed objects — which ACE re-creates under FRESH
+   * dynamic guids on each landblock load — stack on top of the old set
+   * (the academy "two leather hats" double-spawn). The per-guid remove()
+   * also tears down all per-entity driver state (MoveTo/pursuit/sticky/
+   * remoteInterp live ON the instance), so no ghost drivers linger under
+   * the unified pipeline either.
+   *
+   * Keeps the (session-agnostic) animationCache warm so the next session's
+   * re-spawn doesn't pay a cold cache.
+   */
+  clearWorldEntities() {
+    // Invalidate any in-flight spawns whose guid isn't mapped yet, so a
+    // late `_spawnImpl` Step-E commit can't re-add a ghost after we clear.
+    // (remove() below already bumps the generation for every MAPPED guid;
+    // clearing `_spawnGen` afterward makes the captured gen mismatch for
+    // the rest.)
+    for (const g of this.spawnInFlight.keys()) {
+      this._spawnGen.set(g, ((this._spawnGen.get(g) | 0) + 1) | 0);
+    }
+    for (const g of [...this.entityMap.keys()]) {
+      try { this.remove(g); } catch (_) {}
+    }
+    this.entityMap.clear();
+    this._nameToGuid.clear();
+    this.spawnInFlight.clear();
+    this._spawnGen.clear();
+  }
+
+  /**
    * Drop every entity + clear the animation cache. Called on scene
    * teardown.
    */

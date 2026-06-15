@@ -178,6 +178,8 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 | `nameplateRange` | float >0 | ~4000 | Max nameplate render distance. | scene3d/nameplate_sprite.js:236 |
 | `nameplateMax` | int >0 | ~500 | Max simultaneous nameplates. | scene3d/nameplate_sprite.js:244 |
 
+> **Stale entities are cleared on disconnect (2026-06-15, always-on, no flag)** — fix for the academy "two leather hats" double-spawn (client-side stale-entity accumulation; ACE serves ONE set, verified on the wire). On ws **disconnect** (kind=4), `entityManager.clearWorldEntities()` drops the dead session's entities so an in-page reconnect/relogin (e.g. the autoLogin kick-dance) re-streams onto an EMPTY map instead of stacking a 2nd set of ACE's freshly-dynamic-guid'd generator items. Safe because a reconnect opens a NEW ACE session (fresh per-player ObjMaint → full re-send). **In-session LB eviction deliberately does NOT cull entities** — that races ACE's ~25s ObjMaint grace (a portal / PvP dungeon chase can leave + re-enter a landblock inside the grace → ACE won't re-send → invisible opponents); a grace-aware time-based reaper is the correct future home for in-session cleanup. Sites: index.html kind-4 arm + scene3d/entities.js `clearWorldEntities`.
+
 ---
 
 ## 4. Dev / debug / perf flags
