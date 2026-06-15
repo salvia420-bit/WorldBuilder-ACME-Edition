@@ -257,6 +257,15 @@ export function setupSceneLighting(scene, opts = {}) {
     lightsGroup.add(hemisphere);
   }
 
+  // Problem-A fix — allocate the fixed light pool BEFORE the first render so
+  // its per-type count is the constant the renderer compiles against from frame
+  // 0. No-op (lightPool stays null) unless `?lightPool=on`.
+  let lightPool = null;
+  const lpCfg = getLightPoolConfig();
+  if (lpCfg.enabled) {
+    lightPool = allocateLightPool(lightsGroup, lpCfg);
+  }
+
   scene.add(lightsGroup);
 
   // Visual-fidelity Phase 3.3 — when caller opts into CSM, instantiate
@@ -301,7 +310,7 @@ export function setupSceneLighting(scene, opts = {}) {
     bundle._rp5GatedRenderer = null;
   }
 
-  const bundle = { sun, ambient, hemisphere, lightsGroup, csmState, dispose };
+  const bundle = { sun, ambient, hemisphere, lightsGroup, csmState, lightPool, dispose };
   return bundle;
 }
 
@@ -523,6 +532,198 @@ function getRp5Config() {
   return _rp5Config;
 }
 
+// === Problem-A fix (2026-06-15) — fixed light POOL (?lightPool=on) =====
+// THE FREEZE: three.js bakes the per-type COUNT of *visible* lights into every
+// lit material's shader program cache key (WebGLPrograms numPointLights/
+// numSpotLights/…; a `.visible=false` light is skipped in projectObject so it
+// is NOT counted — confirmed in three r184 WebGLPrograms.js / WebGLLights.js).
+// So ANY change to the visible point/spot count forces three to RELINK the
+// program of EVERY lit material in the scene on the next frame. Two sites churn
+// that count: `capActiveLightsByDistance` flips a source light's `.visible` to
+// enforce the 32-cap whenever the nearest-set shifts, and the entity SetLight
+// (hook 25) flips a creature's lights `.visible` on every spell cast. At high
+// quality (POM/CSM/normal maps) each program link is multi-ms and AC scenes
+// hold hundreds–thousands of unique materials, so one count change = the
+// multi-second main-thread seize the user sees when a monster casts.
+//
+// THE FIX (retail-faithful — D3D had a HARD 8 fixed light slots
+// [acclient.h FFLightEnable[8]] and SetLightHook just toggled a STATE BIT, the
+// light COUNT never changed [acclient.c set_lights @317037]): keep a
+// FIXED-COUNT pool of point + spot lights allocated once at setup, ALWAYS
+// `.visible=true`, never added/removed/visibility-toggled → the per-type count
+// is constant forever → three compiles each lit program exactly once and never
+// relinks. The real per-part "source" lights stay PERMANENTLY `.visible=false`
+// (uncounted, constant 0 contribution) and serve only as live world-position +
+// colour + intensity carriers; each frame the nearest `pointCount`/`spotCount`
+// of them are copied into the pool slots and unused slots driven to intensity 0.
+// Zero recompiles, zero visual change (same nearest-N selection + identical
+// params). ALWAYS-ON (2026-06-15, live-validated); `?lightPool=off` reverts to
+// the byte-identical legacy `.visible`-cap path. The sun's indoor/outdoor flip
+// is the same bug class (a DirectionalLight count change on dungeon entry) and
+// gets the same intensity-swap treatment.
+//
+//   ?lightPool=off       revert to the legacy .visible cap (escape hatch)
+//   ?lightPoolSize=<n>   point-pool size (default 32 = MAX_ACTIVE_LIGHTS;
+//                        ≥32 preserves the legacy cap's selection exactly)
+//   ?lightPoolSpot=<n>   spot-pool size (default 8; spots are ~absent in the
+//                        shipped base DAT so this is headroom, not real cost)
+const LIGHT_POOL_DEFAULT_POINT = MAX_ACTIVE_LIGHTS; // 32 — match legacy cap
+const LIGHT_POOL_DEFAULT_SPOT = 8;
+
+let _lightPoolConfig;
+function getLightPoolConfig() {
+  if (_lightPoolConfig !== undefined) return _lightPoolConfig;
+  const cfg = {
+    // ALWAYS-ON since 2026-06-15 — LIVE-VALIDATED on the Dell (headless
+    // SwiftShader + live ace-server, four @create-12 Red Phyntos Wasps casting):
+    // entityLights spell casts went from a 30.8 s main-thread freeze (+14 shader
+    // relinks, programs 37→51) to a perfectly FLAT program count with ZERO stalls
+    // — same wasps, same spells, pool on. The legacy `.visible`-cap path stays
+    // reachable via `?lightPool=off` (debug / A-B escape hatch).
+    enabled: true,
+    pointCount: LIGHT_POOL_DEFAULT_POINT,
+    spotCount: LIGHT_POOL_DEFAULT_SPOT,
+  };
+  const ps = _rp5ReadParams();
+  if (ps) {
+    const v = (ps.get("lightPool") || "").toLowerCase();
+    // Opt-out only — on/true/1/yes are accepted no-ops (it's the default now).
+    if (v === "off" || v === "false" || v === "0" || v === "no") cfg.enabled = false;
+    const sz = parseInt(ps.get("lightPoolSize"), 10);
+    if (Number.isFinite(sz) && sz >= 1) cfg.pointCount = Math.min(128, sz);
+    const sp = parseInt(ps.get("lightPoolSpot"), 10);
+    if (Number.isFinite(sp) && sp >= 0) cfg.spotCount = Math.min(32, sp);
+  }
+  _lightPoolConfig = cfg;
+  return _lightPoolConfig;
+}
+
+// Test seam — let the headless harness reset the module-cached config so each
+// case can exercise a different `?lightPool*` combination (mirrors how the RP5
+// tests would reset `_rp5Config` if they needed to).
+export function __resetLightPoolConfigForTest(next) {
+  _lightPoolConfig = next === undefined ? undefined : next;
+}
+
+/**
+ * Allocate the fixed light pool under `lightsGroup` (scene-root space — the
+ * same three.js world frame the sun/ambient live in, so source world-positions
+ * copy straight in). Every pool light starts visible + OFF (intensity 0) +
+ * non-shadowing; the per-type COUNT they establish here is the constant the
+ * renderer compiles against and never sees change. Returns the pool descriptor
+ * stored on the lighting bundle as `lightPool`.
+ */
+function allocateLightPool(lightsGroup, cfg) {
+  const point = [];
+  const spot = [];
+  for (let i = 0; i < cfg.pointCount; i += 1) {
+    const pl = new THREE.PointLight(0xffffff, 0, 0, 2);
+    pl.visible = true; // CONSTANT — never toggled (this is the count discipline)
+    pl.castShadow = false; // CONSTANT — shadow counts are ALSO in the cache key
+    pl.name = `lightpool-point-${i}`;
+    lightsGroup.add(pl);
+    point.push(pl);
+  }
+  for (let i = 0; i < cfg.spotCount; i += 1) {
+    const sl = new THREE.SpotLight(0xffffff, 0, 0, Math.PI / 6, 0, 2);
+    sl.visible = true;
+    sl.castShadow = false;
+    sl.name = `lightpool-spot-${i}`;
+    lightsGroup.add(sl);
+    lightsGroup.add(sl.target);
+    spot.push(sl);
+  }
+  return {
+    enabled: true,
+    pointCount: cfg.pointCount,
+    spotCount: cfg.spotCount,
+    point,
+    spot,
+    selPoint: [], // nearest point sources, re-picked at the sort cadence
+    selSpot: [], // nearest spot sources, re-picked at the sort cadence
+    _tmp: new THREE.Vector3(),
+  };
+}
+
+// Drive every pool slot to OFF (intensity 0) and forget the selected sources.
+// Used when the scene has zero active source lights so the pool goes dark
+// without a count change.
+function zeroLightPool(pool) {
+  for (let i = 0; i < pool.point.length; i += 1) pool.point[i].intensity = 0;
+  for (let i = 0; i < pool.spot.length; i += 1) pool.spot[i].intensity = 0;
+  pool.selPoint.length = 0;
+  pool.selSpot.length = 0;
+}
+
+// Re-pick which source lights occupy the pool slots: walk the distance-sorted
+// scratch and take the nearest `pointCount` point sources + nearest `spotCount`
+// spot sources. Type-separated budgets (vs the legacy combined 32-cap) are
+// identical on shipped data where spots are absent. Throttled (sort cadence).
+function pickSelectedSources(pool, scratch) {
+  pool.selPoint.length = 0;
+  pool.selSpot.length = 0;
+  for (let i = 0; i < scratch.length; i += 1) {
+    const src = scratch[i].light;
+    if (src.isSpotLight) {
+      if (pool.selSpot.length < pool.spotCount) pool.selSpot.push(src);
+    } else if (pool.selPoint.length < pool.pointCount) {
+      pool.selPoint.push(src);
+    }
+    if (
+      pool.selPoint.length >= pool.pointCount &&
+      pool.selSpot.length >= pool.spotCount
+    ) {
+      break;
+    }
+  }
+}
+
+// Copy the currently-selected sources' LIVE world-position + colour + intensity
+// into the pool slots, zeroing the unused tail. Runs EVERY frame (not just on a
+// re-sort) so a light riding a moving creature never lags — the source light is
+// parented under the rig part, so getWorldPosition tracks it exactly.
+function feedSelectedIntoPool(pool) {
+  const tmp = pool._tmp;
+  for (let i = 0; i < pool.point.length; i += 1) {
+    const dst = pool.point[i];
+    const src = i < pool.selPoint.length ? pool.selPoint[i] : null;
+    if (!src) {
+      dst.intensity = 0;
+      continue;
+    }
+    if (typeof src.getWorldPosition === "function") src.getWorldPosition(tmp);
+    else if (src.position) tmp.set(src.position.x, src.position.y, src.position.z);
+    else tmp.set(0, 0, 0);
+    dst.position.copy(tmp);
+    if (dst.color && src.color) dst.color.copy(src.color);
+    dst.intensity = src.intensity || 0;
+    dst.distance = src.distance || 0;
+    if (src.decay != null) dst.decay = src.decay;
+  }
+  for (let i = 0; i < pool.spot.length; i += 1) {
+    const dst = pool.spot[i];
+    const src = i < pool.selSpot.length ? pool.selSpot[i] : null;
+    if (!src) {
+      dst.intensity = 0;
+      continue;
+    }
+    if (typeof src.getWorldPosition === "function") src.getWorldPosition(tmp);
+    else if (src.position) tmp.set(src.position.x, src.position.y, src.position.z);
+    else tmp.set(0, 0, 0);
+    dst.position.copy(tmp);
+    if (dst.color && src.color) dst.color.copy(src.color);
+    dst.intensity = src.intensity || 0;
+    dst.distance = src.distance || 0;
+    if (src.decay != null) dst.decay = src.decay;
+    if (src.angle != null) dst.angle = src.angle;
+    if (src.penumbra != null) dst.penumbra = src.penumbra;
+    if (src.target && typeof src.target.getWorldPosition === "function") {
+      src.target.getWorldPosition(tmp);
+      dst.target.position.copy(tmp);
+    }
+  }
+}
+
 // === LG1 (render-completeness waves-3, 2026-05-29) — intensity clamp ===
 // Upper bound on per-light intensity. The previous cap of 8.0 guarded
 // against a feared "rogue 9999.0" entry, but a full census of all 608
@@ -610,15 +811,43 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
         // per-light cap still needs to run.
       }
       if (isIndoor !== null) {
-        // sun.visible flip — single comparison gate so we don't repeatedly
-        // dirty the GL state every frame for an already-correct value.
-        const wantSunVisible = !isIndoor;
-        if (sun.visible !== wantSunVisible) {
-          sun.visible = wantSunVisible;
-          // RP5 — the sun (and thus its shadow contribution) just turned
-          // on/off; force a shadow re-raster this frame so the cached
-          // shadow map doesn't lag the indoor/outdoor transition.
-          shadowDirty = true;
+        const lightPool = scene3d.lighting?.lightPool;
+        if (lightPool && lightPool.enabled) {
+          // Pool mode: NEVER flip sun.visible — a DirectionalLight count change
+          // relinks every lit material (the same freeze the pool kills, here on
+          // dungeon entry). Keep the sun permanently visible and zero its
+          // CONTRIBUTION via intensity. Edge-triggered (only on an indoor↔outdoor
+          // transition) so we never fight a per-frame sky/diurnal intensity
+          // driver: capture the outdoor intensity going in, restore it coming out.
+          if (sun.visible !== true) sun.visible = true;
+          if (scene3d._poolSunIndoor !== isIndoor) {
+            if (isIndoor) {
+              if (sun.intensity > 0) {
+                if (!sun.userData) sun.userData = {};
+                sun.userData.__poolOutdoorIntensity = sun.intensity;
+              }
+              sun.intensity = 0;
+            } else {
+              sun.intensity = Number.isFinite(sun.userData?.__poolOutdoorIntensity)
+                ? sun.userData.__poolOutdoorIntensity
+                : 1.0;
+            }
+            scene3d._poolSunIndoor = isIndoor;
+            shadowDirty = true;
+          }
+        } else {
+          // sun.visible flip — single comparison gate so we don't repeatedly
+          // dirty the GL state every frame for an already-correct value. (This
+          // flip changes numDirectional → relinks every lit material; the pool
+          // branch above avoids it.)
+          const wantSunVisible = !isIndoor;
+          if (sun.visible !== wantSunVisible) {
+            sun.visible = wantSunVisible;
+            // RP5 — the sun (and thus its shadow contribution) just turned
+            // on/off; force a shadow re-raster this frame so the cached
+            // shadow map doesn't lag the indoor/outdoor transition.
+            shadowDirty = true;
+          }
         }
         // === L1 (waves-2, 2026-05-29) — AC diurnal ambient on the legacy
         // path ==========================================================
@@ -1017,7 +1246,13 @@ function resolvePlayerThreePos(scene3d) {
  */
 function capActiveLightsByDistance(scene3d) {
   const lights = scene3d?.activeLights;
-  if (!Array.isArray(lights) || lights.length === 0) return;
+  const lightPool = scene3d?.lighting?.lightPool;
+  if (!Array.isArray(lights) || lights.length === 0) {
+    // Pool mode: no source lights → drive every pool slot dark (intensity 0),
+    // which is NOT a count change (the slots stay visible). Legacy: nothing.
+    if (lightPool && lightPool.enabled) zeroLightPool(lightPool);
+    return;
+  }
 
   // Resolve camera (Phase 7.5 switcher; fall back to .camera).
   const camera =
@@ -1049,10 +1284,14 @@ function capActiveLightsByDistance(scene3d) {
   scene3d._lightSortFrameCounter = frameCounter;
   const lastSortFrame = scene3d._lightSortLastFrame ?? 0;
   const lastSortCount = scene3d._lightSortLastCount ?? -1;
-  if (
+  const throttled =
     lastSortCount === lights.length &&
-    frameCounter - lastSortFrame < sortInterval
-  ) {
+    frameCounter - lastSortFrame < sortInterval;
+  if (throttled) {
+    // Sort throttled this tick. Legacy: nothing to do — stale `.visible` flags
+    // survive (the perf win). Pool: still re-feed every frame so a light riding
+    // a moving creature tracks exactly, then return without re-picking sources.
+    if (lightPool && lightPool.enabled) feedSelectedIntoPool(lightPool);
     return;
   }
 
@@ -1102,14 +1341,24 @@ function capActiveLightsByDistance(scene3d) {
     }
   }
   scratch.sort(sortByDistSq);
-  // The top MAX_ACTIVE_LIGHTS slots get .visible = true; the rest
-  // .visible = false. Single-comparison gate so we don't dirty
-  // already-correct flags.
-  for (let i = 0; i < scratch.length; i += 1) {
-    const want = i < MAX_ACTIVE_LIGHTS;
-    const light = scratch[i].light;
-    if (light.visible !== want) {
-      light.visible = want;
+  if (lightPool && lightPool.enabled) {
+    // Pool mode: pick the nearest sources for the fixed slots, then feed them
+    // in. Sources are never made visible (they're permanent `.visible=false`
+    // carriers), so the renderer's per-type light count NEVER changes → no
+    // shader relink → no freeze. Same nearest-N selection as legacy below.
+    pickSelectedSources(lightPool, scratch);
+    feedSelectedIntoPool(lightPool);
+  } else {
+    // Legacy: the top MAX_ACTIVE_LIGHTS slots get .visible = true; the rest
+    // .visible = false. Single-comparison gate so we don't dirty already-
+    // correct flags. (This `.visible` churn is exactly the per-type COUNT
+    // change that relinks every lit material — see the ?lightPool note above.)
+    for (let i = 0; i < scratch.length; i += 1) {
+      const want = i < MAX_ACTIVE_LIGHTS;
+      const light = scratch[i].light;
+      if (light.visible !== want) {
+        light.visible = want;
+      }
     }
   }
 
@@ -1498,6 +1747,12 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
         if (inst.isSpotLight && inst.userData && inst.userData.spotTargetLocal) {
           object3D.add(inst.target);
         }
+        // Pool mode: every source light must be a PERMANENT `.visible=false`
+        // carrier (the fixed pool, not the source, is what the renderer counts).
+        // THREE lights default to visible=true, so force it off here BEFORE the
+        // first render — otherwise a freshly-attached source is counted for a
+        // frame and triggers the very relink the pool exists to prevent.
+        if (getLightPoolConfig().enabled) inst.visible = false;
         scene3d.activeLights.push(inst);
         summary.lightCount += 1;
         if (inst.isPointLight) summary.pointLightCount += 1;

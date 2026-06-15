@@ -137,7 +137,7 @@ const composite =
     "// === landblock_lru.js (lbKeyOf shim) ===\n" + lbKeyOfShim + "\n" +
     "// === csm.js ===\n" + stripExports(csmSrc) + "\n" +
     "// === lighting.js ===\n" + stripExports(lightingSrc) + "\n" +
-    "; return { setupSceneLighting, tickLightingForCellState, attachSetupModelLights, buildLightForSetupLight, releaseLight, LIGHTING_CONSTANTS };";
+    "; return { setupSceneLighting, tickLightingForCellState, attachSetupModelLights, buildLightForSetupLight, releaseLight, LIGHTING_CONSTANTS, __resetLightPoolConfigForTest };";
 
 const factory = new Function("THREE", composite);
 const lightingMod = factory(THREE);
@@ -147,7 +147,14 @@ const {
     attachSetupModelLights,
     buildLightForSetupLight,
     LIGHTING_CONSTANTS,
+    __resetLightPoolConfigForTest,
 } = lightingMod;
+
+// 2026-06-15 — the fixed light POOL is now ALWAYS-ON in the browser. This suite
+// asserts the LEGACY `.visible`-cap mechanics (sun indoor-flip + the 100-light
+// → 32-visible cap), which are now the `?lightPool=off` escape-hatch path, so
+// force the pool OFF here. The pool path has its own suite (test_light_pool.mjs).
+__resetLightPoolConfigForTest({ enabled: false, pointCount: 32, spotCount: 8 });
 
 // ---- Build a scene + call setupSceneLighting ----------------------
 const scene = new THREE.Scene();

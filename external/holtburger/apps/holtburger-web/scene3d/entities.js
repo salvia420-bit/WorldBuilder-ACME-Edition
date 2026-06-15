@@ -11568,6 +11568,13 @@ export class EntityManager {
       const lights = inst._setupLights;
       if (this._entityLightsOn && Array.isArray(lights) && lights.length > 0) {
         const wantOn = (hook.lightsOn | 0) !== 0;
+        // Pool mode (?lightPool=on): the source light is a PERMANENT
+        // `.visible=false` carrier — the fixed light pool (lighting.js) renders
+        // it from its intensity. Flipping `.visible` here would change the
+        // renderer's per-type light count → relink every lit material in the
+        // scene → the multi-second freeze on every spell cast. So drive
+        // intensity ONLY and leave `.visible` untouched. Legacy: flip as before.
+        const poolOn = !!this.scene3d?.lighting?.lightPool?.enabled;
         for (const light of lights) {
           if (wantOn) {
             const authored =
@@ -11575,10 +11582,10 @@ export class EntityManager {
                 ? light.userData.__setupIntensity
                 : light.intensity;
             light.intensity = authored;
-            light.visible = true;
+            if (!poolOn) light.visible = true;
           } else {
             light.intensity = 0;
-            light.visible = false;
+            if (!poolOn) light.visible = false;
           }
         }
         this._entityLightHookFires = (this._entityLightHookFires | 0) + 1;

@@ -216,6 +216,57 @@ const BUILDINGS_RING_RADIUS = (() => {
 // `init3D` calls `preInit3D(canvas)` itself so the existing single-
 // argument call sites (Phase 7.0 hello-cube capture, etc.) keep
 // working unchanged.
+// Problem-B measurement (?renderDiag=on) — per-frame snapshot of the real GPU/
+// scene cost to `window.__diag.render`, the "measure first" enabler. Most
+// load-bearing field is `programs` (renderer.info.programs.length, the compiled
+// shader-program count): it is the DIRECT Problem-A signal — with ?lightPool=on
+// it must stay FLAT across a monster's spell cast instead of climbing (each
+// climb = the per-type-light-count relink that freezes the frame). `sceneNodes`
+// / `meshNodes` are the Problem-B traversal + draw-candidate signals. NOTE:
+// `calls`/`triangles` reflect the LAST render pass; under the atmosphere
+// composer that is the post pass, so for an accurate draw-call TOTAL run with
+// ?atmosphere=off. Zero overhead unless the flag is set.
+let _renderDiagArmed;
+function recordRenderDiag(renderer, scene) {
+  if (_renderDiagArmed === undefined) {
+    try {
+      _renderDiagArmed =
+        typeof window !== "undefined" &&
+        /(?:^|[?&])renderDiag=(on|1|true|yes)(?:&|$)/i.test(window.location.search);
+    } catch (_) {
+      _renderDiagArmed = false;
+    }
+  }
+  if (!_renderDiagArmed || !renderer || !renderer.info) return;
+  try {
+    let nodes = 0;
+    let meshes = 0;
+    if (scene && typeof scene.traverse === "function") {
+      scene.traverse((o) => {
+        nodes += 1;
+        if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh) meshes += 1;
+      });
+    }
+    if (!window.__diag) window.__diag = {};
+    const info = renderer.info;
+    window.__diag.render = {
+      ts:
+        typeof performance !== "undefined" && performance.now
+          ? performance.now()
+          : 0,
+      calls: info.render?.calls ?? 0,
+      triangles: info.render?.triangles ?? 0,
+      programs: Array.isArray(info.programs) ? info.programs.length : 0,
+      geometries: info.memory?.geometries ?? 0,
+      textures: info.memory?.textures ?? 0,
+      sceneNodes: nodes,
+      meshNodes: meshes,
+    };
+  } catch (_) {
+    /* a diagnostic must never break the frame */
+  }
+}
+
 export async function preInit3D(canvas) {
   // 2026-05-23 — install window.__diag observability surface eagerly so
   // every spawn from the autoLogin handshake onwards is captured. The
@@ -1809,6 +1860,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           if (cloudActive) {
             cloudOverlay.renderOverlay(renderer);
           }
+          recordRenderDiag(renderer, scene);
         } catch (e) {
           // eslint-disable-next-line no-console
           if (!liveScene3dRef._atmRenderWarned) {
@@ -1889,6 +1941,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // Restore the camera's layer mask so downstream consumers
     // (raycasters, CSM matrices) observe the outdoor-equivalent state.
     activeCam.layers.mask = camLayersBefore;
+    recordRenderDiag(renderer, scene);
     scheduleNext();
   }
   // A1-O3: declare 3D-driver ownership of the tickMovement enqueue so
