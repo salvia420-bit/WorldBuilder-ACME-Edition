@@ -1734,6 +1734,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // current-LB read; no-op unless ?lodRebake=on. Detects the LB change,
         // re-points the LOD reference, and drains one queued re-bake/frame.
         tickTerrainLodRebake(liveScene3dRef, currentLbKey);
+        // Grace-aware stale-entity reaper (2026-06-15). Shares the LRU's
+        // current-LB read; self-throttled. Culls entities whose landblock the
+        // player left longer ago than ACE's 25 s ObjMaint grace (so ACE
+        // re-sends on re-entry) — the SAFE in-session cleanup that replaces
+        // the reverted evict() cull. See EntityManager.reapStaleEntities.
+        liveScene3dRef.entityManager?.reapStaleEntities?.(currentLbKey);
       } catch (e) {
         // eslint-disable-next-line no-console
         if (!liveScene3dRef._lbLruTickWarned) {

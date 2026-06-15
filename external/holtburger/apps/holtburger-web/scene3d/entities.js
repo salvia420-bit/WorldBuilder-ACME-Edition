@@ -269,6 +269,26 @@ const DEAD_RECKON_TELEPORT_SNAP_SQ =
 // performance.now() deltas.
 const ENTITY_VELOCITY_STALE_MS = 500;
 
+// Grace-aware stale-entity reaper (2026-06-15). ACE's ObjectMaint keeps an
+// object in this player's destruction queue for DestructionTime = 25 s after
+// it leaves PVS, on the EXPLICIT assumption that "the client automatically
+// culls the object" after that window (ACE ObjectMaint.cs:21/41). So this
+// reaper is the retail client contract, not a hack. Culling EARLIER than 25 s
+// is the bug: a portal / PvP dungeon re-entry inside the window finds the
+// object still "known" to ACE (no re-send via handle_visible_cells) →
+// invisible. Hence REAP_GRACE_MS sits comfortably ABOVE 25 s; we'd rather keep
+// a stale rig a few extra seconds (ACE just re-sends it on re-entry → spawn()
+// dedupes by guid) than ever drop a still-tracked one.
+const REAP_GRACE_MS = 30000; // > ACE DestructionTime (25 s) + skew/throttle margin
+// LBs of Chebyshev distance from the player within which an entity is treated
+// as "near" (clock refreshed, never reaped). Set FAR wider than ACE's PVS
+// (~1-2 LBs) so nothing ACE still tracks is ever beyond it; only cross-world
+// porting leftovers (tens of LBs away — e.g. academy gear left resident after
+// porting to Holtburg, ~178 LBs) age out and get reaped.
+const REAP_PVS_RADIUS = 8;
+// Self-throttle for the full-entityMap scan (cheap, but no need per-frame).
+const REAP_SCAN_INTERVAL_MS = 4000;
+
 // A2-P2 (2026-06-12, W3+ S8, ?remoteInterp=on) — frames of per-entity
 // position ownership granted by each wasm-managed pose row. While the Rust
 // PositionManager is interpolating, `applyManagedPose` lands ~every tick and
@@ -12425,6 +12445,68 @@ export class EntityManager {
     this._nameToGuid.clear();
     this.spawnInFlight.clear();
     this._spawnGen.clear();
+  }
+
+  /**
+   * Grace-aware stale-entity reaper. Removes entities whose landblock the
+   * player left long enough ago (> ACE's 25 s ObjMaint grace) that ACE has
+   * dropped them from this player's known set — at which point ACE re-sends
+   * them via handle_visible_cells on re-entry, so culling is safe and
+   * matches the retail client contract (ACE ObjectMaint.cs:41). This is the
+   * SAFE replacement for the reverted landblock_lru.evict() cull, which
+   * culled immediately on render eviction and so raced the grace (a portal /
+   * PvP dungeon re-entry inside 25 s → invisible players).
+   *
+   * Per-entity `_lastNearMs` is refreshed whenever the entity is within
+   * REAP_PVS_RADIUS LBs of the player (far wider than ACE's PVS, so nothing
+   * ACE still tracks is ever beyond it). Only cross-world porting leftovers
+   * age out. Self-throttled; safe to call every frame. `currentLbKey` is the
+   * player's current landblock key (LB-LRU's getCurrentLbId()), or null.
+   */
+  reapStaleEntities(currentLbKey) {
+    const now = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    if (this._lastReapScanMs != null && now - this._lastReapScanMs < REAP_SCAN_INTERVAL_MS) {
+      return;
+    }
+    this._lastReapScanMs = now;
+    if (currentLbKey == null) return; // unknown player LB — never reap blind
+    const cx = (currentLbKey >>> 24) & 0xff;
+    const cy = (currentLbKey >>> 16) & 0xff;
+    let localGuid = 0;
+    try {
+      if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+        localGuid = (window.getLocalPlayerGuid() >>> 0) || 0;
+      }
+    } catch (_) { /* fall through with 0; the cheb guard still protects the player */ }
+
+    let kill = null;
+    for (const [guid, inst] of this.entityMap) {
+      if ((guid >>> 0) === localGuid) continue; // never the local player
+      const lbId = inst?.meta?.landblockId;
+      if (lbId == null) continue;
+      const lb = lbId >>> 0;
+      if (lb === 0) continue; // wielded/contained — rides the player, no landblock
+      const lx = (lb >>> 24) & 0xff;
+      const ly = (lb >>> 16) & 0xff;
+      const cheb = Math.max(Math.abs(lx - cx), Math.abs(ly - cy));
+      if (cheb <= REAP_PVS_RADIUS) {
+        inst._lastNearMs = now; // in/near PVS → keep, refresh the grace clock
+        continue;
+      }
+      // Far from the player. Start the clock on first sighting-out (so a
+      // newly-noticed far entity still gets a full grace), then reap once it
+      // has been gone longer than ACE keeps it.
+      if (inst._lastNearMs == null) { inst._lastNearMs = now; continue; }
+      if (now - inst._lastNearMs > REAP_GRACE_MS) {
+        if (!kill) kill = [];
+        kill.push(guid);
+      }
+    }
+    if (kill) {
+      for (const guid of kill) {
+        try { this.remove(guid); } catch (_) {}
+      }
+    }
   }
 
   /**

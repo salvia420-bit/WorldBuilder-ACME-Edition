@@ -268,12 +268,12 @@ export class LandblockLRU {
     // of and back into a landblock within that window (e.g. a PvP dungeon
     // chase — a dungeon EnvCell can sit 35 LBs away) would have its opponents
     // culled here while ACE still considers them visible (ACE won't re-send
-    // within the grace) → invisible players. Stale-entity cleanup is handled
-    // safely on session end (EntityManager.clearWorldEntities() from the
-    // disconnect handler) and on server ObjectDelete (0xF747). A grace-aware
-    // time-based entity reaper (cull only after an LB has been out of PVS
-    // longer than ACE's grace) is the correct home for in-session cleanup —
-    // tracked separately, not wired to render eviction.
+    // within the grace) → invisible players. In-session entity cleanup is
+    // instead done GRACE-AWARE by `EntityManager.reapStaleEntities()` (culls
+    // only after an LB has been out of PVS longer than ACE's 25s grace; driven
+    // from the per-frame LRU tick in index.js). Session-end cleanup is
+    // `EntityManager.clearWorldEntities()` (disconnect handler), and ACE
+    // ObjectDelete (0xF747) is handled by the normal remove path.
 
     // 5b. C3 #6 — release per-LB SetupModel lights SYNCHRONOUSLY before
     //    the geom/mat/tex loops (and before `entries.delete`) so the
