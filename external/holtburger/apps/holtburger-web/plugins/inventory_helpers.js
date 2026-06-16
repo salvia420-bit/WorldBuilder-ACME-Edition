@@ -213,7 +213,16 @@ export function canEquipInSlot(item, slotMask, playerEquipState) {
   if (!item) return { ok: false, reason: "No item." };
   const slot = (slotMask >>> 0) || 0;
   const vl = (item.validLocations >>> 0) || 0;
+  const equipMask = (item.equipMask >>> 0) || 0;
   if (vl === 0) {
+    // Weapon-type items must NOT speculatively pass when validLocations
+    // hasn't hydrated — ACE Creature.TrySetChild rejects multi-bit / wrong
+    // wield masks server-side, causing combat-toggle revert (F11-1). Non-
+    // weapon items keep speculative-ok so armor/clothing isn't gated.
+    const WEAPON_BITS = EQUIP.MeleeWeapon | EQUIP.MissileWeapon | EQUIP.Held | EQUIP.TwoHanded;
+    if ((equipMask & WEAPON_BITS) !== 0) {
+      return { ok: false, reason: "Item attributes pending — try again." };
+    }
     return { ok: true, speculative: true, reason: "" };
   }
   if (slot !== 0 && (vl & slot) === 0) {

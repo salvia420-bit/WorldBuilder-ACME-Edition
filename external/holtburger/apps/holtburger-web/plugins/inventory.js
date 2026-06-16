@@ -1306,7 +1306,7 @@ function doMount(parentEl, _ctx) {
       // for armor, and falls back to the slot mask if validLocations isn't
       // hydrated yet.
       const wieldLoc =
-        (((dropItem.validLocations >>> 0) & (s.equipMask >>> 0)) >>> 0) || (s.equipMask >>> 0);
+        (((dropItem.validLocations >>> 0) & (s.equipMask >>> 0)) >>> 0);
       if (handle?.setWielded) {
         try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
         try { handle.setWielded(guid, wieldLoc); }
