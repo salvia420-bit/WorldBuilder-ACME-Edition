@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "salvage-confirm",
+  "name": "Salvage Confirm",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Are-You-Sure modal before a salvage operation destroys the source items. Triggered via the hb:salvage-confirm-request window event.",
+  "icon": "⚠",
+  "iconHidden": true,
+  "entry": "./salvage-confirm.js",
+  "environments": ["browser"],
+  "slots": ["overlay"]
+}
