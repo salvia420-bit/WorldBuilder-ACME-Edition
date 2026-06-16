@@ -58,7 +58,7 @@
 | 48 | med | D11-fellowship-allegiance | `fellowship-panel.js:932-1002` | Expose FellowshipFullUpdate vs UpdateFellow distinction in snapshot protocol | 3f6bc813 |
 | 49 | med | D11-fellowship-allegiance | `fellowship-panel.js:815-843` | Add FellowshipUpdateRequest batching subscription toggle to main-panel | eadf9cc6 |
 | 51 | med | D13-character-info-titles-options | `plugins/character-info.js:795-886, CSS section 288-352` | Add title-selection visual feedback and state tracking | 9b35dd04 |
-| 52 | med | D14-examination-identify | `examine-target.js:556-622` | Add player vs creature dispatch (CharExamineUI equivalent) | defer-wasm |
+| 52 | med | D14-examination-identify | `examine-target.js:556-622` | Add player vs creature dispatch (CharExamineUI equivalent) | 90f2d6f1 |
 | 53 | med | D14-examination-identify | `examine-target.js:644-784` | Surface AppraisalProfile success_flag for skill-gated visibility | defer-wasm |
 | 54 | med | D14-examination-identify | `examine-target.js:631-784` | Implement wield requirements rendering | fd51c741 |
 | 55 | med | D14-examination-identify | `examine-target.js:484-554, 956-957` | Distinguish creature vs paperdoll-only rendering | 53cba3d0 |
