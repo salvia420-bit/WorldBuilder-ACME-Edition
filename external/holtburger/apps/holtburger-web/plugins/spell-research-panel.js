@@ -18,6 +18,7 @@ import {
   fetchIconDataUrl as fetchIconDataUrlShared,
   getIconImmediate as getIconImmediateShared,
 } from "../ui/ac_icon_cache.js";
+import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
 
 const OVERLAY_ID = "hb-spell-research-panel";
 const STYLE_ID = "hb-spell-research-style";
@@ -490,8 +491,6 @@ function castFromRow(id, meta) {
     return;
   }
   const untargeted = meta?.untargeted === true;
-  const client = window.__pluginClient ?? null;
-  const handle = window.__sessionHandle ?? null;
   let targetGuid = 0;
   if (!untargeted) {
     targetGuid = getSelectedTargetGuid();
@@ -501,13 +500,11 @@ function castFromRow(id, meta) {
     }
   }
   try {
-    if (client?.player?.castSpell) {
-      client.player.castSpell(id, untargeted ? null : targetGuid);
-    } else if (untargeted && handle?.castUntargetedSpell) {
-      handle.castUntargetedSpell(id);
-    } else if (!untargeted && handle?.castTargetedSpell) {
-      handle.castTargetedSpell(targetGuid, id);
-    } else {
+    // Rec #176 — shared spell-cast dispatcher (ui/ac_cast_spell.js)
+    // routes plugin-client → wasm sessionHandle in one place; matches
+    // hotbar.js + combat-bar.js to keep error handling and null-checks
+    // identical across every HUD-driven cast site.
+    if (!castSpellViaHandle(id, untargeted ? null : targetGuid)) {
       toast("Cast unavailable — no session.");
       return;
     }
