@@ -62,11 +62,11 @@
 | 53 | med | D14-examination-identify | `examine-target.js:644-784` | Surface AppraisalProfile success_flag for skill-gated visibility | 9129ee07 |
 | 54 | med | D14-examination-identify | `examine-target.js:631-784` | Implement wield requirements rendering | fd51c741 |
 | 55 | med | D14-examination-identify | `examine-target.js:484-554, 956-957` | Distinguish creature vs paperdoll-only rendering | 53cba3d0 |
-| 56 | med | D16-house-container-lifestone | `lifestone-popup.js:228-252 (button row DOM)` | Add Sanctuary location display to lifestone-popup UI | defer-wasm |
+| 56 | med | D16-house-container-lifestone | `lifestone-popup.js:228-252 (button row DOM)` | Add Sanctuary location display to lifestone-popup UI | defer-ace |
 | 59 | med | D17-status-indicators-and-floaty-chrome | `ac_window_position.js:53-169 (attachWindowPosition signature extension) + 82-125` | Implement window resize via bottom/right edge drag handles | d7c7b867 |
 | 63 | med | E01-font-system | `ui/ac_font.js:438-478 _drawGlyphs, 232-245 shadow render block` | Apply baseline offset + border pixels to glyph positioning | b1afca88 |
 | 65 | med | E02-layout-system-states | `tests/layout_state_inheritance.test.cjs (new), ui/ac_layout.js (conditional casc` | Validate state pass-to-children cascade in multi-level hierarchies | 3dc802cf |
-| 68 | med | E04-string-tables-localization | `index.html (session init) + ac_strings.js (import global context)` | Consolidate language initialization in session handshake | defer-wasm |
+| 68 | med | E04-string-tables-localization | `index.html (session init) + ac_strings.js (import global context)` | Consolidate language initialization in session handshake | defer-ace |
 | 69 | med | E06-tooltip-system | `vendor-ui.js:500-650 (item cell hover handler) + item-tooltip-formatter (shared ` | Vendor item tooltip with price and appraisal | 61e0e5b1 |
 | 71 | med | E07-keymap-hotkey-routing | `ui/keymap.js:314-325 (after loadRetailKeyMap), plugins/options-panel.js Controls` | Enumerate retail actions with friendly labels | d70b6333 |
 | 72 | med | E07-keymap-hotkey-routing | `ui/keymap.js:224-290, plugins/options-panel.js` | Support mouse button + joystick bindings | fea53a32 |
@@ -77,7 +77,7 @@
 | 79 | med | E11-window-mgmt-resize-persist | `ac_window_position.js:115-120 (pointerup), 200-209 (refactor snap logic)` | Snap-to-screen-edge on position release (optional refinement) | afe939ac |
 | 80 | med | E11-window-mgmt-resize-persist | `chat-panel.js:683-705 (delete); add ac_resize_corners import` | Unify chat-panel resize with ac_resize_corners (remove bespoke logic) | 64c8ecaa |
 | 82 | med | E12-login-character-select-creation | `character-creation.js:1155-1226 (renderAttributesPage), applyAttributeDelta help` | Add per-attribute lock buttons on Attributes page (J4.B.2 enhancement) | fable-skip |
-| 83 | med | E12-login-character-select-creation | `index.html:8162-8165 (loginStatus.innerHTML), api.js to expose world-info event` | Add character-list world-population display (post-login context) | defer-wasm |
+| 83 | med | E12-login-character-select-creation | `index.html:8162-8165 (loginStatus.innerHTML), api.js to expose world-info event` | Add character-list world-population display (post-login context) | 6373518d |
 | 84 | med | E12-login-character-select-creation | `api.js (add shared-cooldown event wiring), plugins that depend on it` | Port Character.OnSharedCooldownChanged event to web bus (cross-domain impact) | defer-wasm |
 | 85 | med | E12-login-character-select-creation | `character-creation.js:1356-1419 (renderSummaryPage), integrate 3D preview viewpo` | Implement character-appearance 3D preview on Summary page (final review) | fable-skip |
 | 86 | med | E13-death-resurrection-vitae-ui | `status-indicators.js:95 (INDICATORS vitae slot), acclient.h:54086 (gmUIElement_V` | Wire vitae icon to 3+ state variants (none/warning/critical thresholds) | 406d4ce4 |
