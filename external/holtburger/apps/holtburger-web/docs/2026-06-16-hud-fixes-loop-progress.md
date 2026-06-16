@@ -16,7 +16,7 @@
 | 4 | high | D01-inventory-slots-validation | `tests/inventory_paperdoll_helpers.test.cjs:50-260` | Add canEquipInSlot unit tests for weapon-type discrimination | 3037a0eb |
 | 5 | high | D04-radar-projection-heading | `radar.js:32` | Increase radar range default from 50 to 75 units | f9b6b22a |
 | 6 | high | D04-radar-projection-heading | `radar.js:209-223, 373-399` | Add blip shape rendering (RadarBlipShape enum support) | 5d11fb27 |
-| 7 | high | D04-radar-projection-heading | `radar.js:267-282, 373-376` | Implement RadarBehavior server-side filtering | — |
+| 7 | high | D04-radar-projection-heading | `radar.js:267-282, 373-376` | Implement RadarBehavior server-side filtering | 499c8a41 |
 | 8 | high | D04-radar-projection-heading | `radar.js:44-49, 393` | Support RadarColor server property for blip color mapping | — |
 | 9 | high | D04-radar-projection-heading | `radar.js:579-583, 607` | Fix heading-up disk visual (apply -heading rotation to disk or move into rotor) | — |
 | 10 | high | D06-buffs-enchantments-pipeline | `status-indicators.js:501-502,679-680` | Fix status-indicators ETF flag constants | — |
