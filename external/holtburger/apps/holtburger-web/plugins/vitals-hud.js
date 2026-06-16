@@ -165,6 +165,19 @@ function ensureStyles() {
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.85);
       pointer-events: none;
     }
+    /* HUD rec #202 — vital-delta flash. Damage = red flash, heal/regen
+       = green flash. Quick 400ms keyframe; box-shadow overlay so the
+       bar's existing background-image isn't disturbed. */
+    @keyframes hb-vital-flash-down {
+      0%   { box-shadow: inset 0 0 0 9999px rgba(224, 64, 64, 0.55); }
+      100% { box-shadow: inset 0 0 0 9999px rgba(224, 64, 64, 0);    }
+    }
+    @keyframes hb-vital-flash-up {
+      0%   { box-shadow: inset 0 0 0 9999px rgba(96, 224, 96, 0.55); }
+      100% { box-shadow: inset 0 0 0 9999px rgba(96, 224, 96, 0);    }
+    }
+    .hud-vital-flash-down { animation: hb-vital-flash-down 400ms ease-out 1; }
+    .hud-vital-flash-up   { animation: hb-vital-flash-up   400ms ease-out 1; }
   `;
   document.head.appendChild(style);
 }
@@ -223,7 +236,7 @@ function buildVitalRow(type) {
 // Mirrors the per-row mutation block inside `renderVitals` to stay
 // byte-identical at the DOM level. Only the rebuild / cleanup paths
 // from the full renderer are skipped.
-function applyVitalDelta(overlay, type, current, buffedMax) {
+function applyVitalDelta(overlay, type, current, buffedMax, oldValue) {
   const refs = overlay.__vitalRefs;
   if (!refs) return; // First-paint race; kind=8 will build the row.
   const entry = refs.get(type);
@@ -243,6 +256,20 @@ function applyVitalDelta(overlay, type, current, buffedMax) {
     entry.numsEl.textContent = numsStr;
     entry.lastNumsStr = numsStr;
   }
+
+  // HUD rec #202 — flash the row when current diverges from oldValue
+  // so a heal/hit/regen tick is visually obvious. Wave-6 (2026-05-28)
+  // started shipping `oldValue` on the per-vital bus events; consume
+  // it here. Damage flashes red, heal/regen flashes green; flash
+  // clears after ~400ms via CSS animationend. Safe degraded mode:
+  // when oldValue is missing (old packet path) we skip the flash.
+  if (Number.isFinite(oldValue) && oldValue !== current) {
+    const fill = entry.fillEl;
+    fill.classList.remove("hud-vital-flash-up", "hud-vital-flash-down");
+    void fill.offsetWidth; // restart CSS animation
+    fill.classList.add(current < oldValue ? "hud-vital-flash-down" : "hud-vital-flash-up");
+  }
+
   // The overlay may still be hidden if the first snapshot hasn't
   // landed (hidden=true sentinel set by renderVitals on empty
   // input). Reveal it now — we have authoritative wire data.
@@ -419,13 +446,13 @@ export function mount(ctx) {
     // Each handler paints exactly one bar — full `render()` only fires
     // on the coalesced kind=8 fallback.
     const onHealth = (e) => {
-      applyVitalDelta(overlay, 1, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0);
+      applyVitalDelta(overlay, 1, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0, e.detail?.oldValue);
     };
     const onStamina = (e) => {
-      applyVitalDelta(overlay, 3, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0);
+      applyVitalDelta(overlay, 3, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0, e.detail?.oldValue);
     };
     const onMana = (e) => {
-      applyVitalDelta(overlay, 5, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0);
+      applyVitalDelta(overlay, 5, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0, e.detail?.oldValue);
     };
     client.events.on("vitalChangedHealth", onHealth);
     client.events.on("vitalChangedStamina", onStamina);
