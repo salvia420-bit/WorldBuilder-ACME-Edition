@@ -1574,6 +1574,13 @@ function renderQueuePane(which) {
   const refs = state.refs[which];
   const vs = state.vendorState;
   const queue = which === "buying" ? state.buyQueue : state.sellQueue;
+  // Rec #179 — audited against ACE Vendor.cs GetBuyCost/GetSellCost
+  // (Source/ACE.Server/WorldObjects/Vendor.cs:577-599) +
+  // Player_Commerce.cs:63-112. Alt-currency vendors use vendor.AlternateCurrency
+  // to pick the wcid the player pays WITH; the cost rate is still
+  // vendor.BuyPrice / vendor.SellPrice regardless. No altCurrencyMultiplier
+  // exists on the server side, so the same mult covers both pyreal and
+  // alt-currency queue totals.
   const mult = which === "buying" ? (vs.buyMultiplier || 1) : (vs.sellMultiplier || 1);
 
   refs.list.innerHTML = "";
