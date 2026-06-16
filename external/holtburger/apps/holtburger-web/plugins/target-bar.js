@@ -658,6 +658,12 @@ export function mount(_ctx) {
       // F10-1 — new target: clear the stale health bar and ask the server
       // for this target's current health fraction (reply arrives as the
       // `entityHealthUpdated` bus event). Deselect (next===0) just clears.
+      //
+      // HUD rec #98 — there is a latency window between queryHealth() and
+      // the UpdateHealth reply. If the target dies / heals / gets
+      // damage_taken'd inside that window, the reply may carry a stale
+      // fraction. Follow-up: when ACE's UpdateHealth carries a timestamp,
+      // gate cache invalidation on it; for now the next bus event resyncs.
       state.selectedHealth = null;
       if (next) {
         try { window.__sessionHandle?.queryHealth?.(next); } catch (_) {}
