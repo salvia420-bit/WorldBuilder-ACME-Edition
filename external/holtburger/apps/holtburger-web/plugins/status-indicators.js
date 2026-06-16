@@ -178,6 +178,57 @@ function ensureStyles() {
     #${OVERLAY_ID} .hb-indicator:hover .hb-indicator-tip {
       opacity: 1;
     }
+    /* Lock button — 8×8 brass clickable target at the top-right of the
+       floaty frame. Wires to attachWindowPosition's lockButton param:
+       click toggles persisted lock state, which fires hb-ui-lock-changed
+       so consumers (frame-sprite swap, edge-drag gating) can react. The
+       padlock visual is CSS-only (a tiny U-shaped shackle on a rect)
+       so no DAT extraction is required; layout 0x21000071's locked /
+       unlocked sprites are a follow-on once attachFloatyFrame is wired
+       (rec #153 + future). */
+    #${OVERLAY_ID} .hb-status-lock-button {
+      position: absolute;
+      top: 1px;
+      right: 1px;
+      width: 8px;
+      height: 8px;
+      box-sizing: border-box;
+      background: linear-gradient(180deg, var(--hb-text-gold) 0%, var(--hb-border-brass) 100%);
+      border: 1px solid var(--hb-border-brass-deep);
+      cursor: pointer;
+      pointer-events: auto;
+      z-index: 5;
+      opacity: 0.6;
+      transition: opacity 120ms ease;
+    }
+    #${OVERLAY_ID} .hb-status-lock-button:hover { opacity: 1; }
+    #${OVERLAY_ID} .hb-status-lock-button::after {
+      content: "";
+      position: absolute;
+      top: -2px;
+      left: 1px;
+      width: 4px;
+      height: 3px;
+      border: 1px solid var(--hb-border-brass-deep);
+      border-bottom: none;
+      border-radius: 2px 2px 0 0;
+      background: transparent;
+    }
+    /* Locked state — fully opaque + a small dot to indicate keyhole. */
+    #${OVERLAY_ID} .hb-status-lock-button[data-locked="1"] {
+      opacity: 1;
+      background: linear-gradient(180deg, var(--hb-border-brass) 0%, var(--hb-border-brass-deep) 100%);
+    }
+    #${OVERLAY_ID} .hb-status-lock-button[data-locked="1"]::before {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 2px;
+      height: 2px;
+      background: var(--hb-border-brass-deep);
+      border-radius: 50%;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -264,8 +315,32 @@ export function mount(_ctx) {
     indicatorEls[ind.id] = el;
   }
 
+  // Lock button — 8×8 brass clickable target at the top-right corner of
+  // the floaty frame. attachWindowPosition wires the click to toggle
+  // state.locked + fire hb-ui-lock-changed; the [data-locked] attribute
+  // reflects current state for the CSS sprite swap (CSS-only padlock
+  // visual until layout 0x21000071's locked/unlocked sprites are wired
+  // through attachFloatyFrame).
+  const lockButton = document.createElement("div");
+  lockButton.className = "hb-status-lock-button";
+  lockButton.dataset.locked = "0";
+  lockButton.title = "Lock window";
+  overlay.appendChild(lockButton);
+
   document.body.appendChild(overlay);
-  attachDefaultTopDragHandle(overlay, WINDOW_ID.STATUS_INDICATORS);
+  const positionCtl = attachDefaultTopDragHandle(overlay, WINDOW_ID.STATUS_INDICATORS, {
+    lockButton,
+    onLockChange: (locked) => {
+      lockButton.dataset.locked = locked ? "1" : "0";
+      lockButton.title = locked ? "Unlock window" : "Lock window";
+    },
+  });
+  // Reflect the initial persisted-lock state (attachWindowPosition only
+  // fires onLockChange on toggle and on init-when-locked; we mirror
+  // unlocked-init here so the attribute is set on every mount path).
+  if (positionCtl?.isLocked?.() === false) {
+    lockButton.dataset.locked = "0";
+  }
 
   // Apply retail layout positions for sub-elements. mountBar() runs
   // BEFORE wasm is ready, so applyStatusIndicatorsLayout has an 8 × 2s
