@@ -944,6 +944,13 @@ function createWizardInstance(client, catalog, ctx) {
     apprBtn.className = "hb-cc-btn";
     setAcText(apprBtn, "Randomize appearance");
     apprBtn.addEventListener("click", () => {
+      // HUD rec #126 — retail's MakeRandomizeWarningDialog confirms
+      // before overwriting hand-tuned eyes/skin/hair so a stray click
+      // doesn't wipe minutes of work. window.confirm fronts the call
+      // until the brass modal dialog system is wired everywhere.
+      if (typeof window !== "undefined" && typeof window.confirm === "function") {
+        if (!window.confirm("Randomize appearance? Your current eye / skin / hair selections will be replaced.")) return;
+      }
       const g = heritage.genders.find((x) => x.genderId === state.genderId);
       if (g) state.appearance = randomizeAppearance(g);
       render();
