@@ -202,6 +202,18 @@ function ensureStyles() {
     #${OVERLAY_ID} .hb-hotbar-slot:not(.firing) {
       transition: transform 90ms ease-out, filter 90ms ease-out;
     }
+    /* Rec #75 — compensating-transaction failure flash. Red outline
+       held for the same 400 ms window the JS uses for the toast +
+       roll-back, then removed by the inline setTimeout. */
+    #${OVERLAY_ID} .hb-hotbar-slot.hb-hotbar-swap-fail {
+      outline: 2px solid rgba(214, 96, 96, 0.95);
+      outline-offset: -2px;
+      animation: hb-hotbar-swap-fail-flash 400ms ease-out;
+    }
+    @keyframes hb-hotbar-swap-fail-flash {
+      0%   { background-color: rgba(214, 96, 96, 0.55); }
+      100% { background-color: rgba(214, 96, 96, 0.0); }
+    }
 
     /* Cooldown overlay — gated behind localStorage hb-hotbar.cooldown-preview.
        TODO(PR10-followup): wire a server cooldown-update event so this can
@@ -423,14 +435,21 @@ export function mount(ctx) {
   // logout. We mirror retail UX: spell-bind clear → add ordering.
   // No-op when the wasm session isn't logged in or the bundle
   // predates the addShortcut method (older clients).
+  // Rec #75 — return boolean so compensating-transaction guards in the
+  // swap path can detect partial failures. Missing wasm export is a
+  // no-op success (true) so older bundles still let the optimistic
+  // local state-save proceed; an exception thrown by the export is the
+  // signal a guard would care about.
   function sendAddShortcut(slotIndex, objectGuid, spellId) {
     try {
       const handle = window.__sessionHandle ?? null;
       if (handle && typeof handle.addShortcut === "function") {
         handle.addShortcut(slotIndex >>> 0, objectGuid >>> 0, spellId >>> 0, 0);
       }
+      return true;
     } catch (e) {
       console.warn(`[hotbar] addShortcut(idx=${slotIndex}) failed:`, e);
+      return false;
     }
   }
   function sendRemoveShortcut(slotIndex) {
@@ -439,9 +458,47 @@ export function mount(ctx) {
       if (handle && typeof handle.removeShortcut === "function") {
         handle.removeShortcut(slotIndex >>> 0);
       }
+      return true;
     } catch (e) {
       console.warn(`[hotbar] removeShortcut(idx=${slotIndex}) failed:`, e);
+      return false;
     }
+  }
+
+  // Rec #75 — pending-swap guard. Keyed by an unordered pair so a
+  // retry-during-pending no-ops instead of double-submitting the
+  // 4-step RM/ADD sequence. Cleared once the sequence resolves.
+  const _pendingSwaps = new Set();
+  function _swapKey(a, b) {
+    const lo = a < b ? a : b;
+    const hi = a < b ? b : a;
+    return `${lo}:${hi}`;
+  }
+  function _flashSwapFail(slotIndex) {
+    try {
+      const el = state.slotEls?.[slotIndex];
+      if (!el) return;
+      el.classList.add("hb-hotbar-swap-fail");
+      setTimeout(() => { try { el.classList.remove("hb-hotbar-swap-fail"); } catch (_) {} }, 400);
+    } catch (_) {}
+  }
+  function _swapToast(text) {
+    try {
+      const ov = state.overlayEl ?? document.getElementById(OVERLAY_ID);
+      if (!ov) return;
+      const old = ov.querySelector(".hb-hotbar-toast");
+      if (old) old.remove();
+      const t = document.createElement("div");
+      t.className = "hb-hotbar-toast";
+      t.style.cssText =
+        "position:absolute;left:50%;bottom:-22px;transform:translateX(-50%);" +
+        "padding:3px 8px;font-size:10px;background:rgba(20,14,8,0.92);" +
+        "border:1px solid var(--hb-border-brass,#b08a4a);color:var(--hb-text-warn,#d6a060);" +
+        "pointer-events:none;z-index:5;white-space:nowrap;";
+      t.textContent = text;
+      ov.appendChild(t);
+      setTimeout(() => { try { t.remove(); } catch (_) {} }, 1800);
+    } catch (_) {}
   }
 
   function renderSlot(idx) {
@@ -781,17 +838,42 @@ export function mount(ctx) {
         const fromIdx = parseInt(fromSlotStr, 10);
         if (Number.isInteger(fromIdx) && fromIdx !== i && fromIdx >= 0 && fromIdx < SLOT_COUNT) {
           ev.preventDefault();
+          // Rec #75 — compensating-transaction guard. Skip if the
+          // same pair is already mid-swap (user double-drop). Track
+          // per-step success so a server-side reject rolls the local
+          // state back, highlights the failing slot, and toasts.
+          const swapKey = _swapKey(fromIdx, i);
+          if (_pendingSwaps.has(swapKey)) return;
+          _pendingSwaps.add(swapKey);
           const a = state.slots[fromIdx];
           const b = state.slots[i];
-          if (a) sendRemoveShortcut(fromIdx);
-          if (b) sendRemoveShortcut(i);
+          const preSlots = state.slots.slice();
+          let ok = true;
+          if (a) ok = sendRemoveShortcut(fromIdx) && ok;
+          if (b) ok = sendRemoveShortcut(i) && ok;
           state.slots[fromIdx] = b || null;
           state.slots[i] = a || null;
           saveState(state);
           renderSlot(fromIdx);
           renderSlot(i);
-          if (state.slots[fromIdx]) sendAddShortcut(fromIdx, state.slots[fromIdx].itemGuid || 0, state.slots[fromIdx].spellId || 0);
-          if (state.slots[i]) sendAddShortcut(i, state.slots[i].itemGuid || 0, state.slots[i].spellId || 0);
+          if (state.slots[fromIdx]) {
+            ok = sendAddShortcut(fromIdx, state.slots[fromIdx].itemGuid || 0, state.slots[fromIdx].spellId || 0) && ok;
+          }
+          if (state.slots[i]) {
+            ok = sendAddShortcut(i, state.slots[i].itemGuid || 0, state.slots[i].spellId || 0) && ok;
+          }
+          if (!ok) {
+            // Server rejected at least one step — roll the local
+            // state back so the visual matches what survived.
+            state.slots = preSlots;
+            saveState(state);
+            renderSlot(fromIdx);
+            renderSlot(i);
+            _flashSwapFail(fromIdx);
+            _flashSwapFail(i);
+            _swapToast("Swap failed: server rejected change");
+          }
+          _pendingSwaps.delete(swapKey);
           return;
         }
       }
