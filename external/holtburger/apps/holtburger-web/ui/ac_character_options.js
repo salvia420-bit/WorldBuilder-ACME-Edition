@@ -65,3 +65,21 @@ export function setUseFastMissiles(enabled) {
 export function setAutoRepeatAttacks(enabled) {
   setCharacterOption(CHARACTER_OPTION.AutoRepeatAttacks, enabled);
 }
+
+// Read the current state of a CharacterOption bit from the latest
+// playerStats snapshot held by the wasm session-handle. Returns
+// `fallback` (default null) when the session handle isn't ready yet
+// (pre-login) or when the wasm side throws — caller should treat null
+// as "no authoritative read available; keep current local state".
+export function isCharacterOptionEnabled(option, fallback = null) {
+  try {
+    const handle = window.__sessionHandle;
+    if (!handle || typeof handle.isCharacterOptionEnabled !== "function") {
+      return fallback;
+    }
+    return !!handle.isCharacterOptionEnabled(option >>> 0);
+  } catch (e) {
+    console.warn(`[character-options] isCharacterOptionEnabled failed:`, e);
+    return fallback;
+  }
+}

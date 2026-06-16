@@ -12,7 +12,7 @@ import {
   isShapeTableLoaded,
   SPELL_SHAPE,
 } from "../ui/ac_spell_shape.js";
-import { setUseFastMissiles, setAutoRepeatAttacks } from "../ui/ac_character_options.js";
+import { setUseFastMissiles, setAutoRepeatAttacks, isCharacterOptionEnabled, CHARACTER_OPTION } from "../ui/ac_character_options.js";
 import { suggestedCombatModeFromInventory } from "./inventory_helpers.js";
 
 // Wave 6 / Phase 17 — spell-shape badge mapping.
@@ -942,6 +942,31 @@ function renderAttackControls(bodyEl, state) {
   // ON, so push the current checkbox value once on mount to make the
   // displayed state authoritative (fail-softs pre-login).
   setAutoRepeatAttacks(!!state.autoRepeat);
+  // Subscribe to playerStatsUpdated to keep the checkbox in lockstep
+  // with ACE's echoed CharacterOptions1/2 bits (e.g. another client
+  // toggled the option, or ACE clamped/rejected our write). Falls back
+  // to localStorage when the wasm side returns null (pre-login).
+  const _autoRepClient = (typeof window !== "undefined") ? window.__pluginClient : null;
+  if (_autoRepClient?.events?.on) {
+    const onAutoRepStats = () => {
+      const server = isCharacterOptionEnabled(CHARACTER_OPTION.AutoRepeatAttacks, null);
+      if (server === null) return;
+      if (server === repeatBox.checked) return;
+      repeatBox.checked = server;
+      state.autoRepeat = server;
+      saveState(state);
+      syncWindowState(state);
+    };
+    _autoRepClient.events.on("playerStatsUpdated", onAutoRepStats);
+    const _autoRepDispose = () => {
+      try { _autoRepClient.events.off("playerStatsUpdated", onAutoRepStats); } catch (_) {}
+    };
+    const prevDispose = bodyEl.__autoRepDispose;
+    bodyEl.__autoRepDispose = () => {
+      try { prevDispose?.(); } catch (_) {}
+      try { _autoRepDispose(); } catch (_) {}
+    };
+  }
 
   // Phase I.1 — Charge Attack tickbox (retail's "Use Charge Attack").
   const chargeLabel = document.createElement("label");
@@ -1574,7 +1599,7 @@ export function activate(bodyEl, ctx) {
   // Tear down whichever body is currently mounted (each render fn parks its
   // disposer on the element it was handed — now stanceBodyEl, not bodyEl).
   function disposeStanceBody() {
-    for (const k of ["__spellPickerDispose", "__powerMeterDispose", "__reckBandDispose"]) {
+    for (const k of ["__spellPickerDispose", "__powerMeterDispose", "__reckBandDispose", "__autoRepDispose"]) {
       if (typeof stanceBodyEl[k] === "function") {
         try { stanceBodyEl[k](); } catch {}
       }
