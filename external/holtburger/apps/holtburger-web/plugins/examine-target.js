@@ -766,6 +766,51 @@ function renderAppraisal(wrapEl, guid) {
     }
   }
 
+  // === Requirements (wield gating) ===
+  // Ports retail ItemExamineUI::Appraisal_ShowWieldRequirements.
+  // WieldRequirements is the AC enum picking which check applies:
+  //   1=RawSkill, 2=AttribSkill, 3=RawAttrib, 4=Level, 5=RawAttrib2,
+  //   7=Heritage, 8=Faction (per acclient.h:54900-ish). When the wasm
+  //   side surfaces only the raw PropertyInts (no enum name), we
+  //   fall back to a generic "Skill <n> ≥ X" / "Attribute <n> ≥ X"
+  //   label so the player at least sees the bar.
+  const WIELD_REQ_LABELS = {
+    1: "Raw skill", 2: "Skill", 3: "Raw attribute",
+    4: "Level", 5: "Raw attribute (alt)",
+    7: "Heritage", 8: "Faction",
+  };
+  if (ints.WieldDifficulty != null
+      || ints.WieldRequirements != null
+      || ints.ItemMinLevel != null
+      || ints.HeritageGroup != null
+      || ints.Faction1Bits != null) {
+    sec("Requirements");
+    const reqKind = ints.WieldRequirements >>> 0;
+    const skillType = ints.WieldSkillType ?? null;
+    const diff = ints.WieldDifficulty ?? null;
+    if (reqKind || diff != null || skillType != null) {
+      const label = WIELD_REQ_LABELS[reqKind] || "Wield req";
+      if (skillType != null && diff != null) {
+        row(label, `id ${skillType} ≥ ${diff}`);
+      } else if (skillType != null) {
+        row(label, `id ${skillType}`);
+      } else if (diff != null) {
+        row(label, `≥ ${diff}`);
+      }
+    }
+    if (ints.ItemMinLevel != null) row("Min level", `${ints.ItemMinLevel}+`);
+    // Mirror requirements for the alt slot if present (some artifacts
+    // ship a second wield req block).
+    if (ints.WieldDifficulty2 != null || ints.WieldSkillType2 != null) {
+      const reqKind2 = ints.WieldRequirements2 >>> 0;
+      const label2 = WIELD_REQ_LABELS[reqKind2] || "Wield req (alt)";
+      if (ints.WieldSkillType2 != null && ints.WieldDifficulty2 != null) {
+        row(label2, `id ${ints.WieldSkillType2} ≥ ${ints.WieldDifficulty2}`);
+      }
+    }
+    if (ints.HeritageGroup != null) row("Heritage", String(ints.HeritageGroup));
+  }
+
   // === Debug (gated) — Type/Class/Wcid/X/Y/Z/Landblock ===
   // Reserved for `?debug=1` per the EX-05 plan; cheap to leave gated.
   try {
