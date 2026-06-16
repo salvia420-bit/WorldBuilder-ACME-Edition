@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "modal-dialog",
+  "name": "Modal Dialog",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Brass-themed modal confirm replacing window.confirm — Promise + callback APIs.",
+  "icon": "◆",
+  "iconHidden": true,
+  "entry": "./modal-dialog.js",
+  "environments": ["browser"],
+  "slots": ["overlay"]
+}

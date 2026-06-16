@@ -26,6 +26,14 @@
 //   window.__closeHousePanel()
 
 import { setAcText } from "../ui/ac_font.js";
+import { modalConfirmCallback } from "./modal-dialog.js";
+
+// Rec #76 — small helper so each callsite reads close to the old
+// `if (!window.confirm(msg)) return;` shape. Returns immediately;
+// `onConfirm` runs on the player's accept.
+function _doConfirmed(title, message, onConfirm) {
+  modalConfirmCallback({ title, message, onConfirm });
+}
 
 const OVERLAY_ID = "hb-house-panel";
 const STYLE_ID = "hb-house-panel-style";
@@ -454,18 +462,19 @@ function buildPanel() {
       console.warn("[house-panel] buy: invalid item GUID list");
       return;
     }
-    if (!window.confirm("Purchase house for these items?")) return;
-    const handle = getHandle();
-    if (!handle?.buyHouse) {
-      console.warn("[house-panel] no session handle");
-      return;
-    }
-    try {
-      handle.buyHouse(slumlord, items);
-      console.log(`[house-panel] buyHouse(slumlord=0x${slumlord.toString(16).padStart(8, "0")}, items=${items.length})`);
-    } catch (e) {
-      console.warn("[house-panel] buyHouse failed:", e);
-    }
+    _doConfirmed("Purchase House", "Purchase house for these items?", () => {
+      const handle = getHandle();
+      if (!handle?.buyHouse) {
+        console.warn("[house-panel] no session handle");
+        return;
+      }
+      try {
+        handle.buyHouse(slumlord, items);
+        console.log(`[house-panel] buyHouse(slumlord=0x${slumlord.toString(16).padStart(8, "0")}, items=${items.length})`);
+      } catch (e) {
+        console.warn("[house-panel] buyHouse failed:", e);
+      }
+    });
   });
   buySection.appendChild(buyBtn);
   body.appendChild(buySection);
@@ -491,18 +500,19 @@ function buildPanel() {
       console.warn("[house-panel] rent: invalid item GUID list");
       return;
     }
-    if (!window.confirm("Pay rent with these items?")) return;
-    const handle = getHandle();
-    if (!handle?.rentHouse) {
-      console.warn("[house-panel] no session handle");
-      return;
-    }
-    try {
-      handle.rentHouse(slumlord, items);
-      console.log(`[house-panel] rentHouse(slumlord=0x${slumlord.toString(16).padStart(8, "0")}, items=${items.length})`);
-    } catch (e) {
-      console.warn("[house-panel] rentHouse failed:", e);
-    }
+    _doConfirmed("Pay Rent", "Pay rent with these items?", () => {
+      const handle = getHandle();
+      if (!handle?.rentHouse) {
+        console.warn("[house-panel] no session handle");
+        return;
+      }
+      try {
+        handle.rentHouse(slumlord, items);
+        console.log(`[house-panel] rentHouse(slumlord=0x${slumlord.toString(16).padStart(8, "0")}, items=${items.length})`);
+      } catch (e) {
+        console.warn("[house-panel] rentHouse failed:", e);
+      }
+    });
   });
   rentSection.appendChild(rentBtn);
   body.appendChild(rentSection);
@@ -536,18 +546,19 @@ function buildPanel() {
   abandonBtn.className = "hbhp-btn hbhp-btn-danger";
   setAcText(abandonBtn, "Abandon House");
   abandonBtn.addEventListener("click", () => {
-    if (!window.confirm("Abandon your house? This cannot be undone.")) return;
-    const handle = getHandle();
-    if (!handle?.abandonHouse) {
-      console.warn("[house-panel] no session handle");
-      return;
-    }
-    try {
-      handle.abandonHouse();
-      console.log("[house-panel] abandonHouse()");
-    } catch (e) {
-      console.warn("[house-panel] abandonHouse failed:", e);
-    }
+    _doConfirmed("Abandon House", "Abandon your house? This cannot be undone.", () => {
+      const handle = getHandle();
+      if (!handle?.abandonHouse) {
+        console.warn("[house-panel] no session handle");
+        return;
+      }
+      try {
+        handle.abandonHouse();
+        console.log("[house-panel] abandonHouse()");
+      } catch (e) {
+        console.warn("[house-panel] abandonHouse failed:", e);
+      }
+    });
   });
   abandonSection.appendChild(abandonBtn);
   body.appendChild(abandonSection);
@@ -596,18 +607,19 @@ function buildPanel() {
       console.warn("[house-panel] boot: empty name");
       return;
     }
-    if (!window.confirm(`Boot ${name} from your house?`)) return;
-    const handle = getHandle();
-    if (!handle?.bootSpecificHouseGuest) {
-      console.warn("[house-panel] no session handle");
-      return;
-    }
-    try {
-      handle.bootSpecificHouseGuest(name);
-      console.log(`[house-panel] bootSpecificHouseGuest(${JSON.stringify(name)})`);
-    } catch (e) {
-      console.warn("[house-panel] bootSpecificHouseGuest failed:", e);
-    }
+    _doConfirmed("Boot Guest", `Boot ${name} from your house?`, () => {
+      const handle = getHandle();
+      if (!handle?.bootSpecificHouseGuest) {
+        console.warn("[house-panel] no session handle");
+        return;
+      }
+      try {
+        handle.bootSpecificHouseGuest(name);
+        console.log(`[house-panel] bootSpecificHouseGuest(${JSON.stringify(name)})`);
+      } catch (e) {
+        console.warn("[house-panel] bootSpecificHouseGuest failed:", e);
+      }
+    });
   });
   guestSection.appendChild(bootBtn);
 

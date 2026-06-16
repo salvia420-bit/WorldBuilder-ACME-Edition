@@ -74,6 +74,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { modalConfirmCallback } from "./modal-dialog.js";
 
 const STYLE_ID = "hb-fellow-view-style";
 
@@ -504,10 +505,15 @@ function invokeAssignLeader() {
 }
 
 function invokeQuit(disband, prompt) {
-  if (!window.confirm(prompt ?? "Leave fellowship?")) return;
-  withSession("fellowshipQuit", (h) => {
-    h.fellowshipQuit(!!disband);
-    emit(`[fellowship/quit] disband=${!!disband}`);
+  modalConfirmCallback({
+    title: disband ? "Disband Fellowship" : "Leave Fellowship",
+    message: prompt ?? "Leave fellowship?",
+    onConfirm: () => {
+      withSession("fellowshipQuit", (h) => {
+        h.fellowshipQuit(!!disband);
+        emit(`[fellowship/quit] disband=${!!disband}`);
+      });
+    },
   });
 }
 
@@ -1543,11 +1549,16 @@ function buildStandaloneOverlay() {
     {
       label: "Quit",
       onClick: () => {
-        if (!window.confirm("Quit fellowship?")) return;
-        withSession("fellowshipQuit", (h) => {
-          h.fellowshipQuit(false);
-          emit("[fellowship/quit] disband=false");
-          standaloneToast("Quit sent");
+        modalConfirmCallback({
+          title: "Quit Fellowship",
+          message: "Quit fellowship?",
+          onConfirm: () => {
+            withSession("fellowshipQuit", (h) => {
+              h.fellowshipQuit(false);
+              emit("[fellowship/quit] disband=false");
+              standaloneToast("Quit sent");
+            });
+          },
         });
       },
     },

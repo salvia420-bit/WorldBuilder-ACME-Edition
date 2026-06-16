@@ -60,6 +60,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { modalConfirmCallback } from "./modal-dialog.js";
 
 // gmAllegianceUI 0x2100002F — element_id constants from
 // allegiance_panel_layout_dump 2026-05-24. See head-comment block for
@@ -1259,11 +1260,16 @@ function buildStandaloneOverlay() {
     btn.addEventListener("click", () => {
       const guid = saCurrentSelectedGuid();
       if (!guid) { saToast("Click a player first"); return; }
-      if (!window.confirm(a.confirm)) return;
-      saWithSession(a.method, (h) => {
-        h[a.method](guid);
-        emit(`[allegiance/${a.verb}] target=0x${guid.toString(16).padStart(8, "0")}`);
-        saToast(`${a.verb === "swear" ? "Swear" : "Break"} sent`);
+      modalConfirmCallback({
+        title: a.verb === "swear" ? "Swear Allegiance" : "Break Allegiance",
+        message: a.confirm,
+        onConfirm: () => {
+          saWithSession(a.method, (h) => {
+            h[a.method](guid);
+            emit(`[allegiance/${a.verb}] target=0x${guid.toString(16).padStart(8, "0")}`);
+            saToast(`${a.verb === "swear" ? "Swear" : "Break"} sent`);
+          });
+        },
       });
     });
     stack.appendChild(btn);
