@@ -313,11 +313,28 @@ export function mount(ctx) {
   // sibling overlay that opened in response to the same click.
   document.addEventListener("click", onDocClick, true);
 
-  if (bus?.on) bus.on("lifestoneClicked", onLifestoneClicked);
+  // Bar boot runs mount() BEFORE window.__pluginClient is published
+  // (login publishes it). When that happens `bus` is null at this
+  // point and the subscription silently no-ops, leaving the popup
+  // permanently dead. Late-bind via __pluginClientReady so the
+  // subscription survives the pre-login mount path. `busForCleanup`
+  // captures whichever bus actually got the listener for the disposer.
+  let busForCleanup = bus;
+  if (bus?.on) {
+    bus.on("lifestoneClicked", onLifestoneClicked);
+  } else if (typeof window !== "undefined" && window.__pluginClientReady?.then) {
+    window.__pluginClientReady.then(() => {
+      const lateBus = window.__pluginClient?.events ?? null;
+      if (lateBus?.on) {
+        lateBus.on("lifestoneClicked", onLifestoneClicked);
+        busForCleanup = lateBus;
+      }
+    });
+  }
 
   // Cleanup.
   return () => {
-    if (bus?.off) try { bus.off("lifestoneClicked", onLifestoneClicked); } catch (_) {}
+    if (busForCleanup?.off) try { busForCleanup.off("lifestoneClicked", onLifestoneClicked); } catch (_) {}
     document.removeEventListener("keydown", onKeyDown);
     document.removeEventListener("click", onDocClick, true);
     overlay.remove();
