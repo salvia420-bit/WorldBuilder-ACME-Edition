@@ -350,6 +350,29 @@ function ensureStyles() {
       background: var(--hb-overlay-active);
       color: var(--hb-text-gold);
     }
+    /* Rec #51 — selectable title rows. The .current row carries the
+       server-confirmed display title; .selected is the pending pick
+       the user has clicked but not committed. */
+    .hb-ci-titles-row {
+      padding: 2px 6px;
+      font-size: 10px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 80ms;
+    }
+    .hb-ci-titles-row:hover {
+      background: rgba(120, 90, 50, 0.18);
+    }
+    .hb-ci-titles-row.current {
+      background: rgba(60, 40, 12, 0.45);
+    }
+    .hb-ci-titles-row.selected {
+      background: linear-gradient(90deg,
+        rgba(212, 175, 55, 0.18) 0%,
+        rgba(176, 138, 74, 0.32) 100%);
+      outline: 1px solid var(--hb-border-brass);
+      outline-offset: -1px;
+    }
     .hb-ci-footer {
       position: absolute;
       bottom: 0;
@@ -851,15 +874,37 @@ function renderTitles(bodyEl, _stats, titleRefs) {
     setAcText(listEmpty, "No titles earned yet.", { color: "#a8a090" });
     list.appendChild(listEmpty);
   } else {
-    // One row per earned title id, current title highlighted gold.
+    // One row per earned title id, current title highlighted gold +
+    // .current class. selectedTitleId tracks the user's pending pick;
+    // it seeds to currentId so the current title looks selected on
+    // first render. Click flips .selected onto the clicked row.
+    let selectedTitleId = currentId;
+    const rowEls = [];
+    function applySelectedClass() {
+      for (const el of rowEls) {
+        const idNum = (parseInt(el.dataset.titleId, 10) >>> 0) || 0;
+        el.classList.toggle("selected", idNum === selectedTitleId);
+      }
+    }
     for (const id of earnedIds.sort((a, b) => a - b)) {
       const r = document.createElement("div");
       r.className = "hb-ci-titles-row" + (id === currentId ? " current" : "");
       r.dataset.titleId = String(id);
       const name = TITLE_NAMES[id] || `Title ${id}`;
       setAcText(r, name, { color: id === currentId ? "#f0c87c" : "#f0d8a0" });
+      r.addEventListener("click", () => {
+        selectedTitleId = id;
+        applySelectedClass();
+      });
       list.appendChild(r);
+      rowEls.push(r);
     }
+    applySelectedClass();
+    // Stash the getter onto the list element so the bottomBtn handler
+    // attached below can read the live selection without juggling
+    // closures across the wrap → list → button chain.
+    list.dataset.selectedTitleId = String(selectedTitleId);
+    list._getSelectedTitleId = () => selectedTitleId;
   }
   wrap.appendChild(list);
 
@@ -871,6 +916,26 @@ function renderTitles(bodyEl, _stats, titleRefs) {
   const bottomBtn = document.createElement("div");
   bottomBtn.className = "hb-ci-titles-bottom";
   setAcText(bottomBtn, "Set Display Title", { color: "#f0d8a0" });
+  // Rec #51 — fire the wasm sendDisplayTitle binding when available
+  // (pass-1 rec #133 is fable-skip wiring), with optimistic update so
+  // the .current highlight moves immediately. The recv-loop kind=28
+  // drain re-renders renderTitles with the server-authoritative
+  // currentTitleId so a server reject naturally rolls back.
+  bottomBtn.addEventListener("click", () => {
+    let id = 0;
+    try { id = (list._getSelectedTitleId?.() >>> 0) || 0; } catch (_) { id = 0; }
+    if (!id) return;
+    try {
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      if (typeof handle?.sendDisplayTitle === "function") {
+        handle.sendDisplayTitle(id);
+      } else {
+        console.warn("[character-info] sendDisplayTitle wasm export missing (pass-1 rec #133)");
+      }
+    } catch (e) {
+      console.warn("[character-info] sendDisplayTitle failed:", e);
+    }
+  });
   wrap.appendChild(bottomBtn);
 
   bodyEl.appendChild(wrap);
