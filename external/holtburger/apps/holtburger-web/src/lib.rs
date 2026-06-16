@@ -20716,9 +20716,22 @@ impl AllegianceInfoSnapshotJs {
 /// Failure: returns `"null"` if serde_json::to_string fails (shouldn't
 /// happen since every field derives Serialize cleanly).
 #[cfg(target_arch = "wasm32")]
-fn build_appraisal_snapshot(entity: &holtburger_world::entity::Entity) -> String {
+fn build_appraisal_snapshot(
+    entity: &holtburger_world::entity::Entity,
+    identify_meta: Option<(bool, u32)>,
+) -> String {
+    let (identify_success, identify_flags) = identify_meta.unwrap_or((true, 0));
     let v = serde_json::json!({
         "guid": u32::from(entity.guid),
+        // HUD rec #53: surface the IdentifyResponse-level metadata so JS
+        // can show "Insufficient identification skill" when success=false
+        // and only render the sections covered by the wire flags
+        // (CREATURE_PROFILE=0x0100, ARMOR_PROFILE=0x0080,
+        // WEAPON_PROFILE=0x0020, etc.). `identify_meta=None` defaults to
+        // success=true with empty flags — that's the path for snapshots
+        // built outside of an Identify round-trip (e.g. ViewContents).
+        "identifySuccess": identify_success,
+        "identifyFlags": identify_flags,
         "properties": entity.properties,
         "armorProfile": entity.armor_profile,
         "creatureProfile": entity.creature_profile,
@@ -29285,6 +29298,16 @@ pub async fn start_session(
     let latest_appraisals: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, String>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    // HUD rec #53: per-guid (success, IdentifyResponseFlags.bits()) for
+    // the most recent IdentifyObjectResponse (opcode 0x00C9). Captured
+    // in the recv-loop pre-route block so even FAILED identifies (which
+    // holtburger-world swallows — apply_identify_response returns false
+    // and no WorldEvent fires) reach the JS examine panel as
+    // `identifySuccess=false`. build_appraisal_snapshot reads from this
+    // map to inject the bits into the JSON.
+    let identify_meta_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, (bool, u32)>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
     // TurbineChat state (2026-05-25): tracks whether ACE has the
     // Turbine-style chat infrastructure enabled (from CharacterList
     // packet's `use_turbine_chat` flag) + the per-channel-type room
@@ -29534,6 +29557,8 @@ pub async fn start_session(
         let physics_script_table_index_inner = physics_script_table_index.clone();
         // Wave 4.B (2026-05-28) — clone for recv_loop param.
         let entity_enchantments_index_inner = entity_enchantments_index.clone();
+        // HUD rec #53 (2026-06-16) — clone for recv_loop param.
+        let identify_meta_index_inner = identify_meta_index.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
         let local_player_pose = local_player_pose.clone();
@@ -29581,6 +29606,8 @@ pub async fn start_session(
                 physics_script_table_index_inner,
                 // === Wave 4.B — remote enchantments index (2026-05-28) ===
                 entity_enchantments_index_inner,
+                // === HUD rec #53 — identify meta index (2026-06-16) ===
+                identify_meta_index_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
@@ -31529,6 +31556,13 @@ async fn recv_loop(
     entity_enchantments_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, Vec<PlayerEnchantment>>>,
     >,
+    // HUD rec #53 (2026-06-16): per-guid (IdentifyResponse.success,
+    // IdentifyResponse.flags.bits()) for the most recent identify on
+    // that target. Read by build_appraisal_snapshot to inject identify
+    // metadata into the JSON the JS examine panel reads.
+    identify_meta_index: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, (bool, u32)>>,
+    >,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
@@ -32133,6 +32167,46 @@ async fn recv_loop(
                             GameEvent::FellowshipUpdateFellow(data) => {
                                 fellowship_update_type = data.update_type as u32;
                             }
+                            // HUD rec #53: stash IdentifyObjectResponse
+                            // (success, flags) so build_appraisal_snapshot
+                            // (post-route, success path) and the failure
+                            // synthesis below can read them. On failure
+                            // the world handler swallows the event without
+                            // emitting EntityIdentified, so we materialize
+                            // a stub snapshot + kind=32 here ourselves so
+                            // the JS examine panel can render
+                            // "Insufficient identification skill" instead
+                            // of staring at stale success data.
+                            GameEvent::IdentifyObjectResponse(data) => {
+                                let g = u32::from(data.object_guid);
+                                let succ = data.success;
+                                let flags_bits = data.flags.bits();
+                                identify_meta_index
+                                    .borrow_mut()
+                                    .insert(g, (succ, flags_bits));
+                                if !succ {
+                                    let stub = serde_json::json!({
+                                        "guid": g,
+                                        "identifySuccess": false,
+                                        "identifyFlags": flags_bits,
+                                        "properties": {
+                                            "ints": {}, "int64s": {}, "bools": {},
+                                            "floats": {}, "strings": {}, "dids": {},
+                                        },
+                                        "spellBook": [],
+                                    });
+                                    latest_appraisals
+                                        .borrow_mut()
+                                        .insert(g, stub.to_string());
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_OBJECT_APPRAISED,
+                                        string_payload: None,
+                                        u32_payload: Some(g),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -32484,8 +32558,19 @@ async fn recv_loop(
                                     // GUID. The JS examine plugin reads via
                                     // `getObjectAppraisal(guid)` after the
                                     // kind=32 event fires below.
+                                    // HUD rec #53: read the (success, flags)
+                                    // captured pre-route on this Identify
+                                    // round-trip. Always Some(...) here since
+                                    // the world handler only emits
+                                    // EntityIdentified on success; the failure
+                                    // path is handled separately in the
+                                    // pre-route block below.
+                                    let identify_meta = identify_meta_index
+                                        .borrow()
+                                        .get(&u32::from(entity_guid))
+                                        .copied();
                                     let appraisal_json =
-                                        build_appraisal_snapshot(&entity);
+                                        build_appraisal_snapshot(&entity, identify_meta);
                                     latest_appraisals
                                         .borrow_mut()
                                         .insert(u32::from(entity_guid), appraisal_json);

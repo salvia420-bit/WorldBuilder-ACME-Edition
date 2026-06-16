@@ -715,6 +715,37 @@ function renderAppraisal(wrapEl, guid) {
   if (!snapshot) { wrapEl.style.display = "none"; return; }
   wrapEl.style.display = "";
 
+  // HUD rec #53 (2026-06-16) — IdentifyResponse-level gating.
+  // identifySuccess=false means ACE rolled an Identify check the
+  // player's skill failed (Player_Skills.cs HandleIdentifyResponse).
+  // Render the AC failure line instead of the (potentially stale)
+  // appraisal sections. identifyFlags is the IdentifyResponseFlags
+  // bitmask — only render sections whose bit is set so we don't show
+  // stale data from a prior identify of a different target type.
+  // Snapshots NOT produced by an Identify (e.g. ViewContents on
+  // vendor items) default `identifySuccess=true` + flags=0 in wasm —
+  // which falls through to legacy behaviour (render everything).
+  const identifySuccess = snapshot.identifySuccess !== false;
+  const identifyFlags = (snapshot.identifyFlags ?? 0) >>> 0;
+  const gated = identifyFlags !== 0; // 0 = "no Identify round-trip yet", render all
+  const flagBit = (mask) => !gated || (identifyFlags & mask) !== 0;
+  const IDENTIFY_FLAG_WEAPON_PROFILE   = 0x0020;
+  const IDENTIFY_FLAG_HOOK_PROFILE     = 0x0040;
+  const IDENTIFY_FLAG_ARMOR_PROFILE    = 0x0080;
+  const IDENTIFY_FLAG_CREATURE_PROFILE = 0x0100;
+  const IDENTIFY_FLAG_ARMOR_ENCH       = 0x0200;
+  const IDENTIFY_FLAG_RESIST_ENCH      = 0x0400;
+  const IDENTIFY_FLAG_WEAPON_ENCH      = 0x0800;
+  const IDENTIFY_FLAG_SPELL_BOOK       = 0x0010;
+  const IDENTIFY_FLAG_ARMOR_LEVELS     = 0x4000;
+  if (!identifySuccess) {
+    const fail = document.createElement("div");
+    fail.className = "hb-exa-fail";
+    setAcText(fail, "Your skill is not high enough to identify this item.");
+    wrapEl.appendChild(fail);
+    return;
+  }
+
   // Helper: emit a "section header" + key/value rows table inside
   // wrapEl, like populate*'s `section()`/`r()` but scoped to wrapEl.
   const sec = (text) => {
@@ -749,9 +780,14 @@ function renderAppraisal(wrapEl, guid) {
   const al = snapshot.armorLevels || null;
 
   // === Attributes ===
-  if (cp?.attributes || ints.Strength != null || ints.Endurance != null
-      || ints.Coordination != null || ints.Quickness != null
-      || ints.Focus != null || ints.Self != null) {
+  // HUD rec #53: only render the Creature-Profile-derived attributes
+  // section when the wire identify included CREATURE_PROFILE (0x0100).
+  // Without the gate a successful armor identify would leak stale
+  // attribute numbers from a prior creature identify.
+  if (flagBit(IDENTIFY_FLAG_CREATURE_PROFILE)
+      && (cp?.attributes || ints.Strength != null || ints.Endurance != null
+        || ints.Coordination != null || ints.Quickness != null
+        || ints.Focus != null || ints.Self != null)) {
     sec("Attributes");
     const a = cp?.attributes || {};
     row("Strength",     a.strength     ?? ints.Strength);
@@ -771,7 +807,8 @@ function renderAppraisal(wrapEl, guid) {
   // Without a SkillTable lookup in this scope, render each entry's
   // key + base/current pair. JS-side later may join with the skill
   // catalog for human labels.
-  if (cp?.skills && typeof cp.skills === "object") {
+  if (flagBit(IDENTIFY_FLAG_CREATURE_PROFILE)
+      && cp?.skills && typeof cp.skills === "object") {
     const entries = Object.entries(cp.skills);
     if (entries.length > 0) {
       sec("Skills");
@@ -789,29 +826,46 @@ function renderAppraisal(wrapEl, guid) {
   }
 
   // === Equipment / Item profile ===
-  if (ap || wp || hp || al) {
+  // HUD rec #53: each profile sub-section gated by its own
+  // IdentifyResponseFlags bit. ARMOR_LEVELS is a separate wire flag
+  // from ARMOR_PROFILE (per IdentifyResponseFlags 0x0080 vs 0x4000),
+  // so a body-armor identify that only sent ARMOR_PROFILE won't leak
+  // chest/head/foot levels from a stale armor-levels payload.
+  const showArmor = flagBit(IDENTIFY_FLAG_ARMOR_PROFILE) && ap;
+  const showWeapon = flagBit(IDENTIFY_FLAG_WEAPON_PROFILE) && wp;
+  const showHook = flagBit(IDENTIFY_FLAG_HOOK_PROFILE) && hp;
+  const showArmorLevels = flagBit(IDENTIFY_FLAG_ARMOR_LEVELS) && al;
+  if (showArmor || showWeapon || showHook || showArmorLevels) {
     sec("Item");
-    if (ap?.armor_level != null) row("Armor Level", ap.armor_level);
-    if (ap?.physical_mod != null) row("Physical Mod", Number(ap.physical_mod).toFixed(2));
-    if (ap?.acid_mod != null)     row("Acid Mod",     Number(ap.acid_mod).toFixed(2));
-    if (ap?.fire_mod != null)     row("Fire Mod",     Number(ap.fire_mod).toFixed(2));
-    if (ap?.cold_mod != null)     row("Cold Mod",     Number(ap.cold_mod).toFixed(2));
-    if (ap?.electric_mod != null) row("Electric Mod", Number(ap.electric_mod).toFixed(2));
-    if (wp?.damage != null)       row("Damage",       wp.damage);
-    if (wp?.damage_variance != null) row("Variance",  Number(wp.damage_variance).toFixed(2));
-    if (wp?.damage_mod != null)   row("Damage Mod",   Number(wp.damage_mod).toFixed(2));
-    if (wp?.attack_skill != null) row("Attack Skill", wp.attack_skill);
-    if (al?.head_armor_level != null) row("Head Armor",  al.head_armor_level);
-    if (al?.foot_armor_level != null) row("Foot Armor",  al.foot_armor_level);
-    if (al?.chest_armor_level != null) row("Chest Armor", al.chest_armor_level);
-    if (hp?.hook_type != null)    row("Hook Type",    hp.hook_type);
+    if (showArmor && ap.armor_level != null) row("Armor Level", ap.armor_level);
+    if (showArmor && ap.physical_mod != null) row("Physical Mod", Number(ap.physical_mod).toFixed(2));
+    if (showArmor && ap.acid_mod != null)     row("Acid Mod",     Number(ap.acid_mod).toFixed(2));
+    if (showArmor && ap.fire_mod != null)     row("Fire Mod",     Number(ap.fire_mod).toFixed(2));
+    if (showArmor && ap.cold_mod != null)     row("Cold Mod",     Number(ap.cold_mod).toFixed(2));
+    if (showArmor && ap.electric_mod != null) row("Electric Mod", Number(ap.electric_mod).toFixed(2));
+    if (showWeapon && wp.damage != null)       row("Damage",       wp.damage);
+    if (showWeapon && wp.damage_variance != null) row("Variance",  Number(wp.damage_variance).toFixed(2));
+    if (showWeapon && wp.damage_mod != null)   row("Damage Mod",   Number(wp.damage_mod).toFixed(2));
+    if (showWeapon && wp.attack_skill != null) row("Attack Skill", wp.attack_skill);
+    if (showArmorLevels && al.head_armor_level != null) row("Head Armor",  al.head_armor_level);
+    if (showArmorLevels && al.foot_armor_level != null) row("Foot Armor",  al.foot_armor_level);
+    if (showArmorLevels && al.chest_armor_level != null) row("Chest Armor", al.chest_armor_level);
+    if (showHook && hp.hook_type != null)    row("Hook Type",    hp.hook_type);
   }
 
   // === Effects: enchantment bitfields + spell-book ===
-  const ah = snapshot.armorHighlight,  ac = snapshot.armorColor;
-  const wh = snapshot.weaponHighlight, wc = snapshot.weaponColor;
-  const rh = snapshot.resistHighlight, rc = snapshot.resistColor;
-  const sb = Array.isArray(snapshot.spellBook) ? snapshot.spellBook : [];
+  // HUD rec #53: each enchantment bitfield is its own wire flag
+  // (ARMOR=0x0200, WEAPON=0x0800, RESIST=0x0400). Spell-book gated by
+  // SPELL_BOOK (0x0010). Gating prevents a fresh skill-fail wipe from
+  // showing stale enchantment / spell numbers from the prior identify.
+  const ah = flagBit(IDENTIFY_FLAG_ARMOR_ENCH) ? snapshot.armorHighlight : null;
+  const ac = flagBit(IDENTIFY_FLAG_ARMOR_ENCH) ? snapshot.armorColor : null;
+  const wh = flagBit(IDENTIFY_FLAG_WEAPON_ENCH) ? snapshot.weaponHighlight : null;
+  const wc = flagBit(IDENTIFY_FLAG_WEAPON_ENCH) ? snapshot.weaponColor : null;
+  const rh = flagBit(IDENTIFY_FLAG_RESIST_ENCH) ? snapshot.resistHighlight : null;
+  const rc = flagBit(IDENTIFY_FLAG_RESIST_ENCH) ? snapshot.resistColor : null;
+  const sb = flagBit(IDENTIFY_FLAG_SPELL_BOOK) && Array.isArray(snapshot.spellBook)
+    ? snapshot.spellBook : [];
   if (ah != null || wh != null || rh != null || sb.length > 0) {
     sec("Effects");
     const hex = (n) => `0x${(n >>> 0).toString(16).toUpperCase().padStart(4, "0")}`;
