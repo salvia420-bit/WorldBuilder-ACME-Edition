@@ -62,6 +62,21 @@ import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { modalConfirmCallback } from "./modal-dialog.js";
 
+// Rec #102 — allegiance officer-level enum. Mirrors ACE
+// Source/ACE.Entity/Enum/AllegianceOfficerLevel.cs: Undef(0) /
+// Speaker(1) / Seneschal(2) / Castellan(3). The retail allegiance
+// panel surfaces officer level as a tier label adjacent to the
+// numeric rank (e.g. "[3 Castellan]"); we wear that pattern when
+// the snapshot publishes a non-Undef officer level. Plain rank
+// stays for everyone else (officer-tier is an explicitly-granted
+// promotion, NOT a derived rank tier).
+const ALLEGIANCE_OFFICER_LEVELS = {
+  0: null,
+  1: "Speaker",
+  2: "Seneschal",
+  3: "Castellan",
+};
+
 // gmAllegianceUI 0x2100002F — element_id constants from
 // allegiance_panel_layout_dump 2026-05-24. See head-comment block for
 // the full element-purpose mapping.
@@ -582,8 +597,14 @@ function renderAllegianceState(refs, snapshot) {
       `<span class="label">Followers:</span><span class="value">${totalVassals}</span>`;
   }
   if (refs.patronValueEl) {
+    // Rec #102 — append officer-level tier label when the wasm
+    // snapshot exposes it. `snapshot.officerLevel` is the
+    // AllegianceOfficerLevel u32; absent/Undef(0) hides the tag.
+    const officerLevel = (snapshot.officerLevel >>> 0) || 0;
+    const officerName = ALLEGIANCE_OFFICER_LEVELS[officerLevel];
+    const rankText = officerName ? `${rank} ${officerName}` : `${rank}`;
     refs.patronValueEl.innerHTML =
-      `<span class="label">Rank:</span><span class="value">[${rank}]</span>`;
+      `<span class="label">Rank:</span><span class="value">[${rankText}]</span>`;
   }
   if (refs.monarchPatronRowEl) {
     const text = playerIsMonarch
