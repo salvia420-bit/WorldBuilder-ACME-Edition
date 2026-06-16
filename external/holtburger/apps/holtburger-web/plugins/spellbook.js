@@ -496,6 +496,37 @@ function ensureStyles() {
       background: url("./data/ui-sprites/0x06002722.png") center/cover no-repeat;
       border-top: 1px solid var(--hb-border-brass);
     }
+    /* Component pouch — rec #46. Compact 2-column strip below the
+       filter band showing the player's component counts. Display
+       toggled in JS based on inventory snapshot. */
+    .hb-sb-components {
+      position: absolute;
+      top: 337px;
+      left: 0;
+      width: 300px;
+      max-height: 70px;
+      box-sizing: border-box;
+      padding: 4px 6px;
+      background: rgba(10, 6, 2, 0.72);
+      border-top: 1px solid var(--hb-border-brass-dim);
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      color: var(--hb-text-cream);
+      overflow-y: auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px 8px;
+    }
+    .hb-sb-comp-row {
+      display: flex;
+      justify-content: space-between;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .hb-sb-comp-row .name { color: var(--hb-text-muted-2, #b0a080); }
+    .hb-sb-comp-row .count { color: var(--hb-text-gold, #d4af37); margin-left: 6px; }
     .hb-sb-filter-label {
       position: absolute;
       width: 90px;
@@ -1011,6 +1042,15 @@ function doMount(parentEl, ctx) {
 
   root.appendChild(filtersBand);
 
+  // Rec #46 — component-pouch widget (retail gmSpellbookUI lower-left).
+  // Compact two-column strip of "Component: N" rows for any spell
+  // component the player carries. Refreshed each playerStatsUpdated;
+  // hidden when the inventory snapshot has no components.
+  const componentPouchEl = document.createElement("div");
+  componentPouchEl.className = "hb-sb-components";
+  componentPouchEl.style.display = "none";
+  root.appendChild(componentPouchEl);
+
   parentEl.appendChild(root);
 
   // Apply retail layout AFTER elements are in the DOM so any future
@@ -1238,12 +1278,79 @@ function doMount(parentEl, ctx) {
     refreshKnown();
   });
   // Phase J.2 — fetch component names in parallel.
-  loadComponentNames().then((m) => { componentNames = m; });
+  loadComponentNames().then((m) => {
+    componentNames = m;
+    // Rec #46: as soon as the component table lands, populate the
+    // pouch strip — playerStatsUpdated may already have fired before
+    // the catalog load completed.
+    try { refreshComponentPouch(); } catch (_) {}
+  });
+
+  // Rec #46 — sum the player's spell-component stacks and render
+  // them into componentPouchEl. Matches inventory items to
+  // components by name; the spell-components.json table carries the
+  // canonical retail name for each id. Hidden when no components.
+  function refreshComponentPouch() {
+    const el = componentPouchEl;
+    if (!el || !componentNames) return;
+    let inv = null;
+    try {
+      const handle = window.__sessionHandle;
+      if (typeof handle?.playerInventory === "function") {
+        inv = handle.playerInventory();
+      }
+    } catch (_) { return; }
+    if (!inv || (Array.isArray(inv) && inv.length === 0)) {
+      el.style.display = "none";
+      return;
+    }
+    const items = Array.isArray(inv) ? inv : Array.from(inv);
+    const nameSet = new Set();
+    for (const v of Object.values(componentNames)) {
+      if (v && typeof v.name === "string") nameSet.add(v.name);
+    }
+    if (nameSet.size === 0) {
+      el.style.display = "none";
+      return;
+    }
+    const counts = new Map();
+    for (const it of items) {
+      const itName = it?.name;
+      if (typeof itName !== "string" || !nameSet.has(itName)) continue;
+      const stack = (it?.stackSize >>> 0) || 1;
+      counts.set(itName, (counts.get(itName) || 0) + stack);
+    }
+    while (el.firstChild) el.removeChild(el.firstChild);
+    if (counts.size === 0) {
+      el.style.display = "none";
+      return;
+    }
+    el.style.display = "grid";
+    // Sort by descending count, then name — keeps the pyreal pile
+    // at the top where retail users expect it.
+    const rows = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    for (const [name, n] of rows) {
+      const row = document.createElement("div");
+      row.className = "hb-sb-comp-row";
+      const nameEl = document.createElement("span");
+      nameEl.className = "name";
+      setAcText(nameEl, name);
+      const countEl = document.createElement("span");
+      countEl.className = "count";
+      setAcText(countEl, String(n));
+      row.appendChild(nameEl);
+      row.appendChild(countEl);
+      el.appendChild(row);
+    }
+  }
 
   // ── Live subscriptions ─────────────────────────────────────────
   let statsHandler = null;
   if (client?.events?.on) {
-    statsHandler = () => refreshKnown();
+    statsHandler = () => {
+      refreshKnown();
+      try { refreshComponentPouch(); } catch (_) {}
+    };
     client.events.on("playerStatsUpdated", statsHandler);
   }
   const spellbarHandler = () => {
