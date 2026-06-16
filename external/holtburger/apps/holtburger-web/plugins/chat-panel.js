@@ -649,6 +649,26 @@ export function mount(_ctx) {
   }
   inputRow.appendChild(channelMenu);
 
+  // Rec #101 — channel-to-visible-tab follow. Retail gmMainChatUI
+  // collapses its m_llTextTypeFilter to the same axis as the speak-
+  // channel pick (acclient.h gmMainChatUI), so when the user picks
+  // an outgoing channel the visible filter snaps to the closest tab.
+  // Side channels (allegiance / fellowship / emote / broadcast) live
+  // under the Channels tab in our 4-button strip — same as retail's
+  // "Chan" filter.
+  const CHANNEL_TO_TAB = {
+    say:        "local",
+    tell:       "tell",
+    general:    "channels",
+    trade:      "channels",
+    lfg:        "channels",
+    roleplay:   "channels",
+    allegiance: "channels",
+    fellowship: "channels",
+    emote:      "local",
+    broadcast:  "channels",
+  };
+
   function selectChannel(id) {
     const c = CHANNELS.find((x) => x.id === id);
     if (!c) return;
@@ -659,6 +679,10 @@ export function mount(_ctx) {
     }
     closeChannelMenu();
     input.focus();
+    const targetTab = CHANNEL_TO_TAB[id];
+    if (targetTab && scroll.dataset.tab !== targetTab) {
+      setTab(targetTab);
+    }
   }
   function openChannelMenu()  { channelMenu.dataset.open = "1"; }
   function closeChannelMenu() { channelMenu.dataset.open = "0"; }
