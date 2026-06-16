@@ -205,6 +205,13 @@ function resolve(entry, accepted) {
   } catch (e) {
     console.warn("[modal-dialog] handler threw:", e);
   }
+  if (typeof entry.dialogId === "string") {
+    emitDialogResult({
+      dialogId: entry.dialogId,
+      action: entry.action,
+      result: accepted,
+    });
+  }
   try { entry.resolvePromise?.(accepted); } catch (_) {}
   _processing = false;
   // Drain queue (in case a callback enqueued another confirm).
@@ -228,6 +235,11 @@ function enqueue(entry) {
  * Promise-based confirm. Returns true on confirm, false on cancel /
  * Escape / backdrop click. Drop-in for `await modalConfirm({...})`
  * replacements of `window.confirm()`.
+ *
+ * Pass `opts.dialogId` to also fire the rec #77 dispatcher with
+ * { dialogId, action, result } so out-of-band consumers (e.g. the
+ * eventual server-side ConfirmationResponse 0x0275 wiring) can react
+ * without each dialog having to direct-call client.player.* methods.
  */
 export function modalConfirm(opts) {
   return new Promise((resolvePromise) => {
@@ -236,9 +248,72 @@ export function modalConfirm(opts) {
       message: opts?.message,
       confirmLabel: opts?.confirmLabel,
       cancelLabel: opts?.cancelLabel,
+      dialogId: opts?.dialogId,
+      action: opts?.action,
       resolvePromise,
     });
   });
+}
+
+// ─── Rec #77 — DialogFactory result protocol ──────────────────
+// Dispatcher routing `{dialogId, action, result}` to handlers
+// registered by id. Decouples dialog UI from its downstream
+// effects so a server-side ConfirmationResponse opcode (0x0275)
+// can be wired later without each dialog flipping its direct
+// `client.player.*` send calls. Each modal resolve emits one
+// event when `opts.dialogId` is set; per-id handlers fire first,
+// then a window-level `hb:dialog-result` for anything that can't
+// import this module.
+
+/** @type {Map<string, Set<(detail: {dialogId:string, action?:string, result:boolean}) => void>>} */
+const _dialogHandlers = new Map();
+
+/**
+ * Subscribe to a `dialogId`. Multiple handlers per id stack; the
+ * unsubscribe lets a plugin clean up on dispose.
+ *
+ * @param {string} dialogId
+ * @param {(detail:{dialogId:string, action?:string, result:boolean}) => void} handler
+ * @returns {() => void}
+ */
+export function registerDialogHandler(dialogId, handler) {
+  if (typeof dialogId !== "string" || typeof handler !== "function") {
+    return () => {};
+  }
+  let set = _dialogHandlers.get(dialogId);
+  if (!set) {
+    set = new Set();
+    _dialogHandlers.set(dialogId, set);
+  }
+  set.add(handler);
+  return () => {
+    const s = _dialogHandlers.get(dialogId);
+    if (!s) return;
+    s.delete(handler);
+    if (s.size === 0) _dialogHandlers.delete(dialogId);
+  };
+}
+
+/**
+ * Dispatch a dialog result. Per-id handlers fire first (in
+ * registration order), then a window `hb:dialog-result` event
+ * fires for module-less consumers. Safe to call when no handler
+ * is registered — drops a window event only.
+ *
+ * @param {{dialogId:string, action?:string, result:boolean}} detail
+ */
+export function emitDialogResult(detail) {
+  if (!detail || typeof detail.dialogId !== "string") return;
+  const set = _dialogHandlers.get(detail.dialogId);
+  if (set) {
+    for (const fn of set) {
+      try { fn(detail); }
+      catch (e) { console.warn(`[modal-dialog] handler for ${detail.dialogId} threw:`, e); }
+    }
+  }
+  try {
+    window.dispatchEvent(new CustomEvent("hb:dialog-result", { detail }));
+  } catch (_) {}
 }
 
 /**
@@ -247,7 +322,8 @@ export function modalConfirm(opts) {
  * doesn't need to be async. Use this when porting legacy
  * `if (!window.confirm()) return;` sites without rippling async up
  * the call stack: wrap the post-confirm work in onConfirm and pair
- * with an `return;` after the call.
+ * with an `return;` after the call. Optional `dialogId` + `action`
+ * forward to the rec #77 dispatcher.
  */
 export function modalConfirmCallback(opts) {
   enqueue({
@@ -255,6 +331,8 @@ export function modalConfirmCallback(opts) {
     message: opts?.message,
     confirmLabel: opts?.confirmLabel,
     cancelLabel: opts?.cancelLabel,
+    dialogId: opts?.dialogId,
+    action: opts?.action,
     onConfirm: opts?.onConfirm,
     onCancel: opts?.onCancel,
   });
@@ -294,4 +372,6 @@ export function mount() {
 if (typeof window !== "undefined") {
   window.__modalConfirm = modalConfirm;
   window.__modalConfirmCallback = modalConfirmCallback;
+  window.__registerDialogHandler = registerDialogHandler;
+  window.__emitDialogResult = emitDialogResult;
 }
