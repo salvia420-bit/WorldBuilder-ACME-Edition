@@ -453,6 +453,19 @@ function stanceIsMeleeOrMissile() {
   } catch { return false; }
 }
 
+// HUD rec #97 — ranged stance enum values; in ranged the power slider
+// drives Accuracy, not Recklessness. Mirrors combat-bar.js:448-450.
+const RANGED_STANCES_HUD = new Set([
+  0x003f, 0x0041, 0x0043, 0x0047, 0x00e8, 0x00e9, 0x013b, 0x013c,
+]);
+function stanceIsRanged() {
+  try {
+    const fn = window.__getCurrentStanceLow;
+    if (typeof fn !== "function") return false;
+    return RANGED_STANCES_HUD.has(fn());
+  } catch { return false; }
+}
+
 function syncPowerFill() {
   const ov = state.overlayEl;
   if (!ov) return;
@@ -460,6 +473,9 @@ function syncPowerFill() {
   const val = ov.querySelector(".hch-slider-val");
   if (fill) fill.style.width = `${Math.round(state.power * 100)}%`;
   if (val) setAcText(val, `${Math.round(state.power * 100)}%`);
+  // HUD rec #97 — re-label the slider per current stance.
+  const label = ov.querySelector(".hch-power-label");
+  if (label) setAcText(label, stanceIsRanged() ? "Accuracy" : "Recklessness");
   // Propagate to the shared combat bar state so picking.js's
   // fireAttackOnTarget honours the power level set here.
   if (window.__combatBarState) {
@@ -1062,6 +1078,9 @@ export function mount(_ctx) {
     const inCombat = stanceIsCombat();
     if (inCombat && !state.visible) show();
     else if (!inCombat && state.visible) hide();
+    // HUD rec #97 — stance may have flipped melee↔ranged; refresh the
+    // power slider label so Recklessness/Accuracy tracks the new stance.
+    syncPowerFill();
   };
   const onStatsForCombatVisible = () => recomputeVisible();
   const pcStanceClient = window.__pluginClient ?? null;
