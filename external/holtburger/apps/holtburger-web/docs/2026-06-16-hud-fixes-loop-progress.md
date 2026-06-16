@@ -260,6 +260,52 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 - All `pass2-pending` rows have a value (SHA / drift / fable-skip / defer-* / spec-ambiguous) → append closing line, end loop.
 - Three CONSECUTIVE iterations crash (tool failure, not skip/drift) → end loop, report.
 
+## Pass 3 — pending (local wasm + asset)
+
+**Scope: 31 items** (28 wasm + 3 asset). 1 ACE item (#208) stays deferred per `[Keep ACE vanilla]`.
+
+**Workflow**: edit source per row (Rust crate / JS plugin / DAT extract), commit, mark sha. **No rebuild per iteration** — a single `capped-build wasm-pack build --target web --out-dir pkg --release` runs after the loop empties this section, followed by a cache-bust bump in `index.html` and a binary-artifact commit. See guide for the build/bust commands and pass-3 policy.
+
+| # | sev | kind | domain | files | title | commit |
+|---:|---|---|---|---|---|---|
+| 18 | high | wasm | D12-vendor-and-trade | `vendor-ui.js:1391-1403 (hideOverlay), mount() section 1726-1843 (event subscript` | Implement approach distance enforcement for vendor UI | — |
+| 38 | high | wasm | E18-tradeskill-spell-research-salvage | `spell-research-panel.js:450-483` | Wire spell component availability check before cast | — |
+| 139 | high | wasm | D05-map-projection-markers | `map-panel.js:336-385 (positionPlayer, add new marker update functions), 124-135 ` | Add fellow/allegiance player pins on world map | — |
+| 140 | high | wasm | D09-vitals-and-attributes-streams | `src/lib.rs:47934-47960 (add error emission), index.html:10200+ (add bus emitter)` | Add raiseAttributeFailed and raiseVitalFailed event bus signals | — |
+| 141 | high | wasm | D09-vitals-and-attributes-streams | `src/lib.rs (define new ClientEvent kind for player_xp_updated), index.html:10350` | Subscribe to playerXpSpent bus event to refresh raise-button costs after server ack | — |
+| 142 | high | wasm | D10-chat-and-emote | `holtburger-web/src/lib.rs:26860+, emote-panel.js:220-264` | Implement broadcastEmoteSoundEffect wasm export | — |
+| 147 | high | wasm | D15-journal-contracts-book | `src/lib.rs:24162 (latest_contracts example to follow), plugins/journal-panel.js:` | Implement quest journal RPC (SessionHandle.playerJournal) | — |
+| 149 | high | asset | D17-status-indicators-and-floaty-chrome | `status-indicators.js:91-99 (INDICATORS) + 319-360 (buildLinkStateMap pattern to ` | Extract real minigame/portal-storm sprite DIDs from retail layout 0x21000071 | — |
+| 153 | high | asset | E02-layout-system-states | `ui/ac_floaty_frame.js (new export), plugins/main-panel.js (call during mount)` | Implement resolveFrameSpritesFromLayout helper and wire main-panel.js | — |
+| 154 | high | wasm | E04-string-tables-localization | `ac_layout.js (layout parser) + options-panel.js (update TABS hardcodes to use re` | Wire StringID resolution in layout element rendering | — |
+| 155 | high | wasm | E04-string-tables-localization | `wasm-side fetch_layout serializer + ac_layout.js LayoutDesc struct + options-pan` | Deferred serialization of StateDesc (unblock G3) | — |
+| 165 | high | wasm | E12-login-character-select-creation | `index.html:8171-8187 (renderCharacterList), plus new DELETE/RESTORE event handle` | Expose character deletion + restore workflow in post-login character list | — |
+| 48 | med | wasm | D11-fellowship-allegiance | `fellowship-panel.js:932-1002` | Expose FellowshipFullUpdate vs UpdateFellow distinction in snapshot protocol | — |
+| 52 | med | wasm | D14-examination-identify | `examine-target.js:556-622` | Add player vs creature dispatch (CharExamineUI equivalent) | — |
+| 53 | med | wasm | D14-examination-identify | `examine-target.js:644-784` | Surface AppraisalProfile success_flag for skill-gated visibility | — |
+| 56 | med | wasm | D16-house-container-lifestone | `lifestone-popup.js:228-252 (button row DOM)` | Add Sanctuary location display to lifestone-popup UI | — |
+| 66 | med | wasm | E03-sprite-icon-pipeline | `apps/holtburger-web/build.rs (proposed)` | Verify icon-manifest.json generation is automated in build pipeline | — |
+| 68 | med | wasm | E04-string-tables-localization | `index.html (session init) + ac_strings.js (import global context)` | Consolidate language initialization in session handshake | — |
+| 83 | med | wasm | E12-login-character-select-creation | `index.html:8162-8165 (loginStatus.innerHTML), api.js to expose world-info event` | Add character-list world-population display (post-login context) | — |
+| 84 | med | wasm | E12-login-character-select-creation | `api.js (add shared-cooldown event wiring), plugins that depend on it` | Port Character.OnSharedCooldownChanged event to web bus (cross-domain impact) | — |
+| 175 | med | wasm | D07-combat-hud-stance-power | `plugins/api.js:58, src/lib.rs ~32000, combat-hud.js:614, combat-bar.js:1630-1670` | Add fizzle event surface and spell-fail visual feedback | — |
+| 177 | med | wasm | D09-vitals-and-attributes-streams | `src/lib.rs (emit vitalBaseChanged on GameMessagePrivateUpdateVital), index.html:` | Subscribe to vitalBaseChanged event to auto-rerender Vitals subsection when attribute raises bump vital base | — |
+| 178 | med | wasm | D09-vitals-and-attributes-streams | `src/lib.rs:47934-47960 (add IsMaxRank check + event emit), index.html:10150+ (ad` | Implement maxRankAchieved event bus + celebration effects | — |
+| 180 | med | wasm | D15-journal-contracts-book | `plugins/book-panel.js:562–576 (current manual entry point), src/lib.rs (entity-u` | Wire 'Use' book interaction to auto-open book overlay | — |
+| 181 | med | wasm | D15-journal-contracts-book | `plugins/lore-panel.js (new file), acclient.h:56020 (gmPageListUI struct ref), sr` | Port lore entry catalog UI (gmPageListUI) | — |
+| 187 | med | wasm | E02-layout-system-states | `holtburger-web/src/lib.rs (fetch_layout return shape), ui/ac_layout.js (diag hoo` | Add diagnostics telemetry for G3 emission success rate | — |
+| 189 | med | wasm | E04-string-tables-localization | `ac_strings.js (new export + wasm binding) + any HUD panel that renders player-fa` | Add string variable substitution support | — |
+| 197 | med | asset | E14-loading-zone-transition-portal-storm | `plugins/status-indicators.js:91—99 (INDICATORS array); similar to lines 319—359 ` | Extract + wire real portal-storm sprite DIDs from retail StateDesc (not placeholder) | — |
+| 103 | low | wasm | D11-fellowship-allegiance | `fellowship-panel.js:1412-1420` | Expose departed member names in fellowship standalone overlay | — |
+| 107 | low | wasm | D14-examination-identify | `examine-target.js:961-978` | Wire up RNG-based identify retry (future wave) | — |
+| 203 | low | wasm | E03-sprite-icon-pipeline | `texture.rs:519-527` | Implement DXT2/DXT4 alpha interpolation decoders | — |
+
+### ACE-locked (never reached pass-3)
+
+| # | sev | kind | title |
+|---:|---|---|---|
+| 208 | low | defer-wasm | Implement window position server sync (PlayerModule::Chat-Window-Option replacement in ACE |
+
 ## Closing summary — pass 2 complete
 
 All 120 pass-2 rows processed. With pass 1, all 210 recs from the 2026-06-16 HUD research bundle are accounted for.
