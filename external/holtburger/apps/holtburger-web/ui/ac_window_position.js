@@ -30,6 +30,10 @@
 
 const STORAGE_PREFIX = "hb.window.";
 const LOCK_EVENT = "hb-ui-lock-changed";
+// Rec #79 — pixel band within which an absolute-position drag-release
+// snaps to the matching viewport edge. Matches the retail floaty
+// docking feel: <20 px from an edge dock; outside the band stay free.
+const EDGE_SNAP_PX = 20;
 
 /**
  * Attach m_eWindowID-keyed position persistence + drag + lock to a
@@ -126,8 +130,27 @@ export function attachWindowPosition(element, options) {
     });
     dragHandle.addEventListener("pointerup", (ev) => {
       if (drag) {
-        state.x = parseFloat(element.style.left) || 0;
-        state.y = parseFloat(element.style.top) || 0;
+        // Rec #79 — snap to screen edge on release when within
+        // EDGE_SNAP_PX. Only when clampToViewport is on so a caller
+        // that opted out of clamping doesn't get implicit docking.
+        // Docked windows persist via the same scheduleSave + the
+        // clampStateToViewport pass on next mount, so a viewport
+        // resize re-anchors them to the same edge.
+        let nx = parseFloat(element.style.left) || 0;
+        let ny = parseFloat(element.style.top) || 0;
+        if (clampToViewport) {
+          const r = element.getBoundingClientRect();
+          const vw = window.innerWidth;
+          const vh = window.innerHeight;
+          if (nx < EDGE_SNAP_PX) nx = 0;
+          else if (nx + r.width > vw - EDGE_SNAP_PX) nx = Math.max(0, vw - r.width);
+          if (ny < EDGE_SNAP_PX) ny = 0;
+          else if (ny + r.height > vh - EDGE_SNAP_PX) ny = Math.max(0, vh - r.height);
+          element.style.left = `${nx}px`;
+          element.style.top  = `${ny}px`;
+        }
+        state.x = nx;
+        state.y = ny;
         scheduleSave();
       }
       drag = null;
