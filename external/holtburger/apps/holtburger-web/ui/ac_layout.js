@@ -302,6 +302,52 @@ export function getElementStates(element) {
 }
 
 /**
+ * Walk an element subtree and collect, per element, the inherited
+ * StateDesc list propagated from ancestors whose StateDesc has
+ * `pass_to_children` set. Children also inherit their own ancestors'
+ * pass_to_children states — the cascade composes. Each returned entry
+ * holds the array of cascaded StateDescs (most-recent ancestor first)
+ * plus the element's own states.
+ *
+ * Pass the root element (or any subtree root). Returns
+ * `Map<elementKey, {own: StateDesc[], inherited: StateDesc[]}>` so
+ * consumers can render leaf elements with the right precedence:
+ * own state overrides win, with inherited cascaded states filling in
+ * unset sprite / color / position-delta / extent fields.
+ *
+ * This helper exists so the cascade can be unit-tested without
+ * spinning up the layout renderer. Rec #65.
+ *
+ * @param {object} root — an ElementDesc with optional `children[]`
+ * @returns {Map<string|number, {own: object[], inherited: object[]}>}
+ */
+export function collectCascadedStates(root) {
+  const out = new Map();
+  function walk(el, inheritedFromAbove) {
+    if (!el || typeof el !== "object") return;
+    const states = getElementStates(el);
+    const ownStates = Object.values(states);
+    const passThrough = ownStates.filter((s) => !!s?.pass_to_children);
+    const key = el.key ?? el.element_id ?? null;
+    if (key != null) {
+      out.set(key, {
+        own: ownStates,
+        inherited: inheritedFromAbove.slice(),
+      });
+    }
+    // Children inherit ancestors' pass_to_children states + ours.
+    const downstream = passThrough.length > 0
+      ? [...passThrough, ...inheritedFromAbove]
+      : inheritedFromAbove;
+    if (Array.isArray(el.children)) {
+      for (const c of el.children) walk(c, downstream);
+    }
+  }
+  walk(root, []);
+  return out;
+}
+
+/**
  * Look up a BaseProperty override by `dict_key` (typically the same
  * as MasterPropertyId) in a StateDesc. Returns the wrapped variant
  * object (e.g. `{ DataId: 0x06000123 }`) or null.
