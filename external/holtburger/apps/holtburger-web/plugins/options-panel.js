@@ -749,6 +749,15 @@ function renderCharacterTab(bodyEl) {
       cb.type = "checkbox";
       cb.checked = readCharacterOption(opt.idx, handle, localCache);
       cb.style.cssText = "accent-color: var(--hb-text-gold);";
+      // HUD rec #106 — when offline, the banner above already tells the
+      // player toggles won't sync. Enforce that by disabling the inputs
+      // so flipping a checkbox doesn't write a localStorage row that the
+      // next login could then push to the server unexpectedly.
+      if (offline) {
+        cb.disabled = true;
+        row.style.opacity = "0.6";
+        row.style.cursor = "not-allowed";
+      }
       cb.addEventListener("change", () => {
         const value = cb.checked;
         saveCharacterOption(opt.idx, value);
