@@ -53,6 +53,8 @@
 import { setAcText, CHAT_FONT_ID } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { installDragPersistence } from "./main-panel.js";
+import { persistWindowSize, WINDOW_ID } from "../ui/ac_window_position.js";
+import { attachCornerResizers } from "../ui/ac_resize_corners.js";
 
 const OVERLAY_ID = "hb-chat-panel";
 const WIDTH = 410;
@@ -268,20 +270,8 @@ function ensureStyles() {
     /* Resize handle — bottom-right corner, drag to grow/shrink. Wiki
        says retail chat windows are resizable, with size persisted
        per-character. Persistence is a follow-on. */
-    #${OVERLAY_ID} .hb-chat-resize {
-      position: absolute;
-      right: 0;
-      bottom: 0;
-      width: 12px;
-      height: 12px;
-      cursor: nwse-resize;
-      pointer-events: auto;
-      background:
-        linear-gradient(135deg, transparent 0%, transparent 40%, var(--hb-border-brass) 40%, var(--hb-border-brass) 50%, transparent 50%, transparent 60%, var(--hb-border-brass) 60%, var(--hb-border-brass) 70%, transparent 70%);
-      opacity: 0.7;
-      z-index: 4;
-    }
-    #${OVERLAY_ID} .hb-chat-resize:hover { opacity: 1; }
+    /* Rec #80 — bespoke .hb-chat-resize replaced by attachCornerResizers
+       in the mount path; CSS removed. */
     /* Input row container — per layout 0x10000013 at (5, 78) 400×17.
        Sub-elements (channel selector, text input, send button) are
        positioned absolutely inside via applyChatLayout(). */
@@ -678,37 +668,23 @@ export function mount(_ctx) {
 
   overlay.appendChild(inputRow);
 
-  // Resize handle (bottom-right) — pointer-capture drag to adjust
-  // panel width + height. Min/max clamps prevent escaping the viewport.
-  const resizeHandle = document.createElement("div");
-  resizeHandle.className = "hb-chat-resize";
-  resizeHandle.setAttribute("aria-label", "Resize chat");
-  let resizeDrag = null;
-  resizeHandle.addEventListener("pointerdown", (ev) => {
-    ev.preventDefault();
-    const rect = overlay.getBoundingClientRect();
-    resizeDrag = { startX: ev.clientX, startY: ev.clientY, w0: rect.width, h0: rect.height };
-    try { resizeHandle.setPointerCapture(ev.pointerId); } catch (_) {}
+  // Rec #80 — corner-resize hotspots replace the bespoke bottom-right
+  // handle. attachCornerResizers gives all four corners with lock-
+  // state sync via WINDOW_ID.CHAT; persistWindowSize stores width /
+  // height alongside x / y in the unified hb.window.<id> entry.
+  // Legacy hb_chat_panel_width/height are migrated on first mount
+  // (see below) so the visual size carries over from prior versions.
+  const _chatSize = persistWindowSize(overlay, WINDOW_ID.CHAT, {
+    minW: 220, minH: 70, maxW: 900, maxH: 500,
   });
-  resizeHandle.addEventListener("pointermove", (ev) => {
-    if (!resizeDrag) return;
-    const w = Math.max(220, Math.min(900, resizeDrag.w0 + (ev.clientX - resizeDrag.startX)));
-    const h = Math.max(70, Math.min(500, resizeDrag.h0 + (ev.clientY - resizeDrag.startY)));
-    overlay.style.width = `${w}px`;
-    overlay.style.height = `${h}px`;
+  // Resizer handle stashed on overlay so a future plugin-loader dispose
+  // pass can drop the corner divs + lock-change listener.
+  overlay._chatCornerResizers = attachCornerResizers(overlay, {
+    windowId: WINDOW_ID.CHAT,
+    minWidth: 220, minHeight: 70,
+    maxWidth: 900, maxHeight: 500,
+    onSizeChange: ({ width, height }) => _chatSize.commit(width, height),
   });
-  resizeHandle.addEventListener("pointerup", (ev) => {
-    resizeDrag = null;
-    try { resizeHandle.releasePointerCapture(ev.pointerId); } catch (_) {}
-    // HUD rec #47 — persist final size so the next mount restores it.
-    try {
-      const rect = overlay.getBoundingClientRect();
-      localStorage.setItem("hb_chat_panel_width", String(Math.round(rect.width)));
-      localStorage.setItem("hb_chat_panel_height", String(Math.round(rect.height)));
-    } catch (_) {}
-  });
-  resizeHandle.addEventListener("pointercancel", () => { resizeDrag = null; });
-  overlay.appendChild(resizeHandle);
 
   // P2-40 (cross-find chat-maximize-button-spurious): retail's chat
   // panel has a maximize/restore toggle that swaps between the
@@ -753,14 +729,22 @@ export function mount(_ctx) {
   // HUD rec #47 — restore persisted size if present. Same clamp as the
   // resize handler (220-900 wide, 70-500 tall) so corrupted/edge values
   // can't escape viewport. Position is owned by installDragPersistence.
+  // Rec #80 — persistWindowSize (above) reads the unified hb.window
+  // entry on construction and applies the stored size automatically.
+  // The block below is now a one-shot legacy migration: if the bespoke
+  // hb_chat_panel_width / height keys still exist, commit them through
+  // the new persistor and remove the old keys so subsequent loads use
+  // the unified storage.
   try {
     const w = parseInt(localStorage.getItem("hb_chat_panel_width") ?? "", 10);
     const h = parseInt(localStorage.getItem("hb_chat_panel_height") ?? "", 10);
-    if (Number.isFinite(w) && w > 0) {
-      overlay.style.width = `${Math.max(220, Math.min(900, w))}px`;
-    }
-    if (Number.isFinite(h) && h > 0) {
-      overlay.style.height = `${Math.max(70, Math.min(500, h))}px`;
+    if ((Number.isFinite(w) && w > 0) || (Number.isFinite(h) && h > 0)) {
+      _chatSize.commit(
+        Number.isFinite(w) && w > 0 ? Math.max(220, Math.min(900, w)) : null,
+        Number.isFinite(h) && h > 0 ? Math.max(70, Math.min(500, h)) : null,
+      );
+      try { localStorage.removeItem("hb_chat_panel_width"); } catch (_) {}
+      try { localStorage.removeItem("hb_chat_panel_height"); } catch (_) {}
     }
   } catch (_) {}
 
