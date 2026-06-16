@@ -437,7 +437,8 @@ const VITAL_ICON_URL = (id) =>
 let _xpTablesPromise = null;
 function loadXpTables() {
   if (_xpTablesPromise) return _xpTablesPromise;
-  _xpTablesPromise = fetch("./data/xp-tables.json").then((r) => r.json()).catch(() => null);
+  _xpTablesPromise = (typeof window !== "undefined" && window.__xpTablesPromise) ||
+    fetch("./data/xp-tables.json").then((r) => r.json()).catch(() => null);
   return _xpTablesPromise;
 }
 function nextRankCost(table, ranks) {
