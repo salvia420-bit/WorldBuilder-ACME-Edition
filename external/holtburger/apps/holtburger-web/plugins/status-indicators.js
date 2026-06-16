@@ -346,10 +346,20 @@ export function mount(_ctx) {
     if (poorUrl) linkStateUrls.poor = poorUrl;
     linkStateMapReady = !!(okUrl || middlingUrl || poorUrl);
     try {
+      const resolvedCount = ["ok", "middling", "poor"].filter((k) => !!linkStateUrls[k]).length;
       window.__diag?.layout?.onLinkStatusStateMap?.({
         states: stateIds.length,
-        resolved: ["ok", "middling", "poor"].filter((k) => !!linkStateUrls[k]).length,
+        resolved: resolvedCount,
       });
+      // HUD rec #60 — warn when fewer than 3 tier sprites resolved; the
+      // fallback hue-rotate filter will be in use, which debuggers should
+      // notice rather than seeing a "tinted" indicator and assuming bug.
+      if (resolvedCount < 3) {
+        console.warn(
+          `[status-indicators] link-state sprites partially resolved ` +
+          `(${resolvedCount}/3 tiers); falling back to hue-rotate on the ok sprite`,
+        );
+      }
     } catch (_) {}
     // Re-apply current tier so the sprite swaps in immediately.
     if (linkEl && linkLastTier && linkStateUrls[linkLastTier]) {
