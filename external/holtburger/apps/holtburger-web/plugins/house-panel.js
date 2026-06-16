@@ -60,6 +60,12 @@ let statusEl = null;
 let dataLinesEl = null;
 let statusUnsubscribe = null;
 let statusPollTimer = null;
+// Rec #182 — last-seen house snapshot signature so the per-tick
+// playerStatsUpdated handler can fire renderStatus + emit a dedicated
+// `houseStatusUpdated` event only when the underlying data actually
+// changed. Avoids burning a re-render on every stat tick + lets other
+// plugins react to house changes without diffing themselves.
+let _lastHouseSnapSig = "";
 
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) return;
@@ -654,27 +660,68 @@ function buildPanel() {
   return overlay;
 }
 
+// Rec #182 — build a stable signature from the wasm-side house
+// snapshots so the playerStatsUpdated handler can short-circuit when
+// nothing changed. Combines errorCode + landblockId + dwelling/owner
+// ids + the restrictions version stamp — the union of fields renderStatus
+// reads, so any visual change has to flip the signature.
+function _houseSnapSignature() {
+  const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+  if (!handle) return "";
+  let status = null, data = null, profile = null, restrictions = null;
+  try { status = handle.playerHouseStatus?.() ?? null; } catch (_) {}
+  try { data = handle.playerHouseData?.() ?? null; } catch (_) {}
+  try { profile = handle.playerHouseProfile?.() ?? null; } catch (_) {}
+  try { restrictions = handle.playerHouseRestrictions?.() ?? null; } catch (_) {}
+  return [
+    (status?.errorCode >>> 0) || 0,
+    (data?.landblockId >>> 0) || 0,
+    (data?.buyTime >>> 0) || 0,
+    (data?.rentTime >>> 0) || 0,
+    (profile?.dwellingId >>> 0) || 0,
+    (profile?.ownerId >>> 0) || 0,
+    (restrictions?.version >>> 0) || 0,
+    (restrictions?.guestCount >>> 0) || 0,
+  ].join(":");
+}
+
 function openPanel() {
   if (!overlayEl) {
     overlayEl = buildPanel();
     document.body.appendChild(overlayEl);
   }
   overlayEl.dataset.open = "1";
-  // Wave L2: drive `renderStatus()` from the existing
-  // `playerStatsUpdated` bus event (house ownership state often
-  // coincides with stat refreshes) + a 1Hz fallback for the QueryHouse
-  // landing case. Both no-op when the wasm handle isn't ready.
+  // Wave L2 + rec #182: drive `renderStatus()` from `playerStatsUpdated`
+  // BUT diff the house snapshot signature so we only re-render when
+  // something visible actually changed. On every detected change we
+  // ALSO emit a dedicated `houseStatusUpdated` bus event so other
+  // plugins can react without each one diffing the snapshot itself.
+  // The 1Hz fallback still runs for the QueryHouse-landing edge case
+  // (wasm-side snapshot may update outside the kind=8 path).
   renderStatus();
+  _lastHouseSnapSig = _houseSnapSignature();
   const client = window.__pluginClient;
   if (client?.events?.on && !statusUnsubscribe) {
-    const handler = () => renderStatus();
+    const handler = () => {
+      const sig = _houseSnapSignature();
+      if (sig === _lastHouseSnapSig) return;
+      _lastHouseSnapSig = sig;
+      renderStatus();
+      try { client.events.emit?.("houseStatusUpdated", {}); } catch (_) {}
+    };
     client.events.on("playerStatsUpdated", handler);
     statusUnsubscribe = () => {
       try { client.events.off("playerStatsUpdated", handler); } catch {}
     };
   }
   if (!statusPollTimer) {
-    statusPollTimer = setInterval(renderStatus, 1000);
+    statusPollTimer = setInterval(() => {
+      const sig = _houseSnapSignature();
+      if (sig === _lastHouseSnapSig) return;
+      _lastHouseSnapSig = sig;
+      renderStatus();
+      try { window.__pluginClient?.events?.emit?.("houseStatusUpdated", {}); } catch (_) {}
+    }, 1000);
   }
 }
 

@@ -60,6 +60,9 @@
 //   "attackDone"           (kind=19 JSON)   — {error}        ("None" on success)
 //   "death"                (kind=29)        — {victimGuid, killerGuid, message} (Q1a)
 //   "selectionChanged"     (client-only)    — {guid, prevGuid} emitted from scene3d/picking.js on every target change (Q1b)
+//   "houseStatusUpdated"   (client-only)    — {} emitted from plugins/house-panel.js when its diffed snapshot signature changes
+//                                              (rec #182). Dedicated event so house-aware subscribers don't have to diff
+//                                              the wasm-side house snapshots themselves on every playerStatsUpdated tick.
 //
 // Counts post-PR-2 (2026-05-27): 6 IMPLEMENTED, 6 PARTIAL, 3 MISSING, 3 N/A — total 18.
 // Pre-PR-2 baseline: 3 IMPLEMENTED, 6 PARTIAL, 6 MISSING, 3 N/A.
