@@ -330,17 +330,55 @@ export const DIK_TO_KEYBOARD_EVENT_CODE = Object.freeze({
 export function qualifiedControlToBinding(mapping, devices) {
   const idxDevice = mapping.key & 0xFF;
   const dev = devices?.[idxDevice];
-  if (!dev || dev.type !== 1) return null; // 1 = Keyboard
+  if (!dev) return null;
   const ofsKey = (mapping.key >>> 16) & 0xFFFF;
-  const code = DIK_TO_KEYBOARD_EVENT_CODE[ofsKey];
-  if (!code) return null;
-  return {
-    code,
+  const modifiers = {
     shift: !!(mapping.modifier & 0x80000000),
     ctrl:  !!(mapping.modifier & 0x40000000),
     alt:   !!(mapping.modifier & 0x20000000),
     meta:  !!(mapping.modifier & 0x10000000),
   };
+  if (dev.type === 1) { // Keyboard
+    const code = DIK_TO_KEYBOARD_EVENT_CODE[ofsKey];
+    if (!code) return null;
+    return { code, ...modifiers };
+  }
+  // Rec #72 — engine-level mouse + joystick bindings. retail never
+  // surfaces a rebind UI for them and the browser doesn't fire a
+  // matching KeyboardEvent so matchesBinding can never hit; we return
+  // a synthetic, labelled binding shape so the Controls capture UI
+  // can render the retail default ("Mouse:Left", "Joystick:Button 4")
+  // as read-only metadata.
+  if (dev.type === 2) { // Mouse
+    return { code: mouseCode(ofsKey), ...modifiers };
+  }
+  if (dev.type >= 3) { // Joystick / GamePad family
+    return { code: joystickCode(ofsKey), ...modifiers };
+  }
+  return null;
+}
+
+const MOUSE_BUTTON_LABEL = Object.freeze({
+  0: "Mouse:Left",
+  1: "Mouse:Right",
+  2: "Mouse:Middle",
+  3: "Mouse:X1",
+  4: "Mouse:X2",
+  5: "Mouse:WheelUp",
+  6: "Mouse:WheelDown",
+});
+function mouseCode(ofs) {
+  return MOUSE_BUTTON_LABEL[ofs] ?? `Mouse:${ofs}`;
+}
+function joystickCode(ofs) {
+  // DirectInput offsets: low byte = button index, high byte = sub-axis
+  // (hat / pov). We round-trip the raw offset into a stable label so
+  // the Controls UI can still show "Joystick:Button 7" without our
+  // having to fully decode the sub-control encoding.
+  const button = ofs & 0xFF;
+  const sub = (ofs >> 8) & 0xFF;
+  if (sub === 0) return `Joystick:Button ${button}`;
+  return `Joystick:Axis${sub}:${button}`;
 }
 
 let retailKeyMapPromise = null;
