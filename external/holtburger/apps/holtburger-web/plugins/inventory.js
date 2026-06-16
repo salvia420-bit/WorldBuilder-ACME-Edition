@@ -2250,12 +2250,28 @@ function doMount(parentEl, _ctx) {
     }
     // Side pack — its own per-item ItemsCapacity (fall back to the
     // ContainersCapacity field for snapshots predating itemsCapacity).
+    //
+    // HUD rec #41 — ACE Container.cs:116-117 sets ContainerCapacity to 0
+    // by default; Chest.cs:79 overrides to 10. The .containersCapacity
+    // fallback below may be dead code in the modern schema (itemsCapacity
+    // always populated), but we keep it for snapshot compatibility. If it
+    // ever fires, emit a diag event so we can identify the weenie class
+    // that's still missing itemsCapacity.
     const cid = selectedPackContainerId >>> 0;
     for (const it of inventorySnapshot) {
       if ((it.guid >>> 0) !== cid) continue;
       const items = (it.itemsCapacity >>> 0) || 0;
       if (items > 0) return items;
-      return (it.containersCapacity >>> 0) || 0;
+      const fallback = (it.containersCapacity >>> 0) || 0;
+      try {
+        window.__diag?.layout?.onInventoryCapacity?.({
+          sidePackFallback: true,
+          containerId: cid,
+          weenieType: it.weenieType ?? null,
+          fallbackValue: fallback,
+        });
+      } catch (_) {}
+      return fallback;
     }
     return 0;
   }
