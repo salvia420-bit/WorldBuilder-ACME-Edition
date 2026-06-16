@@ -33,7 +33,7 @@
 | 136 | high | D02-inventory-packs-capacity | `plugins/inventory.js:141 (BAG_COUNT), plugins/inventory.js:1390-1509 (bag-column` | Implement dynamic BAG_COUNT expansion for AugmentationExtraPackSlot | skip |
 | 137 | high | D03-cursor-and-drag | `plugins/inventory.js:1657-1679 (paperdoll dragstart), 2554-2567 (overlay dragsta` | Spec item-on-cursor sprite swap via drag-state plumbing | drift |
 | 138 | high | D05-map-projection-markers | `map-panel.js:248-385 (mount), 336-362 (positionPlayer), 59-160 (styles)` | Implement house location marker rendering when player owns house | 978be175 |
-| 139 | high | D05-map-projection-markers | `map-panel.js:336-385 (positionPlayer, add new marker update functions), 124-135 ` | Add fellow/allegiance player pins on world map | defer-wasm |
+| 139 | high | D05-map-projection-markers | `map-panel.js:336-385 (positionPlayer, add new marker update functions), 124-135 ` | Add fellow/allegiance player pins on world map | defer-ace |
 | 143 | high | D11-fellowship-allegiance | `allegiance-panel.js:484-610, 1497-1540` | Implement allegiance vassal tree browser in main-panel | 0eeaf302 |
 | 144 | high | D12-vendor-and-trade | `trade-panel.js:490-506 (onTradeUpdated subscription), 441-454 (requestClose)` | Implement distance enforcement for trade panel | ba4f2c83 |
 | 145 | high | D13-character-info-titles-options | `plugins/character-info.js:412-419, acclient.h enum PropertyAttribute section` | Verify attribute icon sprite DIDs match retail enum indices | drift |
@@ -42,15 +42,15 @@
 | 151 | high | E01-font-system | `ui/ac_font.js:193-261 renderAcText, 402-436 _measure, 438-478 _drawGlyphs` | Implement text alignment (left/center/right + top/middle/bottom) | fde854b5 |
 | 152 | high | E01-font-system | `ui/ac_font.js:103-146 loadAcFont, 335-363 _buildRuntime, 402-436 _measure, 438-4` | Integrate CJK fallback font chain for missing non-Latin chars | fda297b1 |
 | 153 | high | E02-layout-system-states | `ui/ac_floaty_frame.js (new export), plugins/main-panel.js (call during mount)` | Implement resolveFrameSpritesFromLayout helper and wire main-panel.js | defer-asset |
-| 154 | high | E04-string-tables-localization | `ac_layout.js (layout parser) + options-panel.js (update TABS hardcodes to use re` | Wire StringID resolution in layout element rendering | defer-wasm |
-| 155 | high | E04-string-tables-localization | `wasm-side fetch_layout serializer + ac_layout.js LayoutDesc struct + options-pan` | Deferred serialization of StateDesc (unblock G3) | defer-wasm |
+| 154 | high | E04-string-tables-localization | `ac_layout.js (layout parser) + options-panel.js (update TABS hardcodes to use re` | Wire StringID resolution in layout element rendering | defer-asset |
+| 155 | high | E04-string-tables-localization | `wasm-side fetch_layout serializer + ac_layout.js LayoutDesc struct + options-pan` | Deferred serialization of StateDesc (unblock G3) | skip |
 | 156 | high | E05-ui-sound-effects | `plugins/ui_click_sounds.js (new), plugins/inventory.js (~30 new lines for unsubs` | Wire UI_ButtonPress (0x72) click sound to all interactive UI elements | e7c0aa54 |
 | 157 | high | E05-ui-sound-effects | `plugins/audio_optimistic.js (add UI_ERROR const), plugins/inventory.js (paperdol` | Implement UI_GeneralError (0x6D) sound on invalid action feedback | 4dedde35 |
 | 158 | high | E06-tooltip-system | `inventory.js:800-1000 (new tooltip handler) + inventory_helpers.js (appraisal te` | Implement hover tooltips for inventory items | 23f85132 |
 | 161 | high | E09-drag-drop-full-system | `hotbar.js:708-714, vendor-ui.js:1313-1317, trade-panel.js:456-471, container-pan` | Add DropItemFlags enum + centralized MIME validator | 5863dafd |
 | 162 | high | E11-window-mgmt-resize-persist | `New: ui/ac_resize_corners.js; plugins/chat-panel.js:687-704 (replace); plugins/e` | Port 4-corner resize hotspots to hotbar, vitals, combat-hud, examine-floaty | 5c980536 |
 | 163 | high | E11-window-mgmt-resize-persist | `ac_window_position.js:89-95 (works); ac_resize_corners.js: new onAnyLockChange s` | Block corner resize + edge drag when window is locked | 0dbdfc03 |
-| 165 | high | E12-login-character-select-creation | `index.html:8171-8187 (renderCharacterList), plus new DELETE/RESTORE event handle` | Expose character deletion + restore workflow in post-login character list | defer-wasm |
+| 165 | high | E12-login-character-select-creation | `index.html:8171-8187 (renderCharacterList), plus new DELETE/RESTORE event handle` | Expose character deletion + restore workflow in post-login character list | 79a74373 |
 | 166 | high | E13-death-resurrection-vitae-ui | `combat-hud.js:1007-1037 (showDeathOverlay), character.js:495-509 (inPortalSpace ` | Implement multi-phase death overlay sequence (dying→portal→resurrection) | cc0a9e20 |
 | 167 | high | E13-death-resurrection-vitae-ui | `status-indicators.js:486-491 (applyVitae), character.js:146-148 (vitae property)` | Add vitae detail pane showing CP pool debt and penalty percentage | 1d858a1d |
 | 45 | med | D07-combat-hud-stance-power | `combat-bar.js:1035-1039, picking.js:1215-1265` | Default ?powerMeterSwingDuration=on and always pass swingDurationMs from picking.js | fable-skip |
