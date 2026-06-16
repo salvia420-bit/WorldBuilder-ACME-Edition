@@ -552,8 +552,23 @@ function updateTooltipPosition(headingRad) {
   const sin = Math.sin(theta);
   const screenX = cos * lx - sin * ly;
   const screenY = sin * lx + cos * ly;
-  _tooltipEl.style.left = `${overlayRect.left + DISK_SIZE / 2 + screenX}px`;
-  _tooltipEl.style.top = `${overlayRect.top + DISK_SIZE / 2 + screenY - 6}px`;
+  // HUD rec #70 — clamp to viewport so the tooltip doesn't slide off
+  // the right edge or below the visible area when a blip sits near the
+  // border of the radar disk. Measure actual rendered tooltip dims; on
+  // first paint they may be 0, in which case we just keep the raw pos.
+  const tipRect = _tooltipEl.getBoundingClientRect();
+  let left = overlayRect.left + DISK_SIZE / 2 + screenX;
+  let top  = overlayRect.top  + DISK_SIZE / 2 + screenY - 6;
+  if (tipRect.width > 0 && left + tipRect.width > window.innerWidth) {
+    left = window.innerWidth - tipRect.width;
+  }
+  if (tipRect.height > 0 && top + tipRect.height > window.innerHeight) {
+    top = window.innerHeight - tipRect.height;
+  }
+  if (left < 0) left = 0;
+  if (top < 0) top = 0;
+  _tooltipEl.style.left = `${left}px`;
+  _tooltipEl.style.top = `${top}px`;
 }
 
 function hideTooltip() {
