@@ -1525,6 +1525,13 @@ function renderItemsPane() {
   if (vs.hasNoMax === false && Number.isFinite(vs.maxValue)) {
     extras += ` · Cap ${fmtPrice(vs.maxValue)} p`;
   }
+  // HUD rec #50 — surface alt currency (e.g. Trade Notes) when this
+  // vendor doesn't pay in pyreals. Amount > 0 signals an active alt
+  // currency contract; render label + amount alongside the multipliers.
+  if ((vs.alternateCurrencyWcid >>> 0) !== 0 && Number(vs.alternateCurrencyAmount) > 0) {
+    const altName = vs.alternateCurrencyName || `wcid 0x${(vs.alternateCurrencyWcid >>> 0).toString(16)}`;
+    extras += ` · Pays in: ${altName} (${vs.alternateCurrencyAmount})`;
+  }
   refs.rates.innerHTML =
     `Sells <b>${Math.round((vs.buyMultiplier || 1) * 100)}%</b> · ` +
     `Buys <b>${Math.round((vs.sellMultiplier || 1) * 100)}%</b>${extras}`;
