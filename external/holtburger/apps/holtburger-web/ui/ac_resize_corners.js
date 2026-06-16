@@ -18,6 +18,9 @@
 //     module replaces)
 //   - ui/ac_window_position.js#persistWindowSize (companion that takes
 //     the {width, height} commit from onSizeChange)
+//   - ui/ac_window_position.js#onAnyLockChange (lock-state event source)
+
+import { onAnyLockChange } from "./ac_window_position.js";
 
 const CORNER_KEYS = ["tl", "tr", "bl", "br"];
 
@@ -60,6 +63,11 @@ const CORNER_STYLES = {
  *
  * @param {HTMLElement} element
  * @param {object} opts
+ * @param {number} [opts.windowId] — when provided, the resizer
+ *   subscribes to `hb-ui-lock-changed` (via onAnyLockChange) for that
+ *   windowId and auto-toggles setLocked. Use the same WINDOW_ID constant
+ *   the matching attachWindowPosition call uses so corner-resize and
+ *   drag share one lock state.
  * @param {number} [opts.minWidth=120]
  * @param {number} [opts.minHeight=80]
  * @param {number} [opts.maxWidth]
@@ -189,8 +197,29 @@ export function attachCornerResizers(element, opts) {
     }
   }
 
+  // Auto-sync with attachWindowPosition's lock state when a windowId
+  // is supplied. The same hb-ui-lock-changed bus that attachFloatyFrame
+  // listens to also drives the resizer here, so flipping the lock
+  // button hides the corners + blocks edge-drag in one motion.
+  let unsubLockChange = null;
+  if (typeof opts?.windowId === "number") {
+    try {
+      unsubLockChange = onAnyLockChange((detail) => {
+        if (!detail) return;
+        if ((detail.windowId >>> 0) !== (opts.windowId >>> 0)) return;
+        setLocked(!!detail.locked);
+      });
+    } catch (e) {
+      console.warn("[ac-resize-corners] lock-change subscribe failed:", e);
+    }
+  }
+
   function dispose() {
     try { clearTimeout(sizeChangeTimer); } catch (_) {}
+    if (typeof unsubLockChange === "function") {
+      try { unsubLockChange(); } catch (_) {}
+      unsubLockChange = null;
+    }
     for (const key of CORNER_KEYS) {
       const div = corners[key];
       if (!div) continue;
