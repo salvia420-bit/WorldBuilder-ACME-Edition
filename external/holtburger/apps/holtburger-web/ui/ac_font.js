@@ -236,7 +236,7 @@ export function getAcFont(fontId = UI_FONT_ID) {
  * Compose `text` to an HTMLCanvasElement using the AC font.
  *
  * @param {string} text — UTF-16 string to render.
- * @param {{color?: string, scale?: number, fontId?: number, shadow?: boolean}} opts
+ * @param {{color?: string, scale?: number, fontId?: number, shadow?: boolean, shadowColor?: string, shadowOffsetX?: number, shadowOffsetY?: number, align?: string, vAlign?: string, boxWidth?: number, boxHeight?: number, flags?: number}} opts
  * @returns {HTMLCanvasElement | null} — canvas sized to the rendered
  *   bounds, or null if the font isn't loaded (caller should fall back
  *   to system font). The canvas has transparent background; the text
@@ -277,6 +277,12 @@ export function renderAcText(text, opts = {}) {
   const color = opts.color ?? "#FFFFFF";
   const scale = Math.max(1, Math.floor(opts.scale ?? 1));
   const drawShadow = opts.shadow !== false && runtime.atlasBgCanvas !== null;
+  // Rec #185 — drop-shadow tint + offset are now caller-configurable.
+  // Defaults match the previous hardcoded rgba(0,0,0,0.85) at +1,+1px,
+  // so existing callers see no visual change.
+  const shadowColor = opts.shadowColor ?? "rgba(0, 0, 0, 0.85)";
+  const shadowOffsetX = Number.isFinite(opts.shadowOffsetX) ? Math.floor(opts.shadowOffsetX) : 1;
+  const shadowOffsetY = Number.isFinite(opts.shadowOffsetY) ? Math.floor(opts.shadowOffsetY) : 1;
 
   const measured = _measure(runtime, text);
   const textW = measured.width * scale;
@@ -333,10 +339,10 @@ export function renderAcText(text, opts = {}) {
       tbg.imageSmoothingEnabled = false;
       tbg.save();
       if (offsetX !== 0 || offsetY !== 0) tbg.translate(offsetX, offsetY);
-      _drawGlyphs(tbg, runtime, runtime.atlasBgCanvas, text, scale, 1, 1, "bg");
+      _drawGlyphs(tbg, runtime, runtime.atlasBgCanvas, text, scale, shadowOffsetX, shadowOffsetY, "bg");
       tbg.restore();
       tbg.globalCompositeOperation = "source-in";
-      tbg.fillStyle = "rgba(0, 0, 0, 0.85)";
+      tbg.fillStyle = shadowColor;
       tbg.fillRect(0, 0, w, h);
       ctx.drawImage(tmpBg, 0, 0);
     }
@@ -614,6 +620,9 @@ function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy, atlasKind) 
 //   scale="2"        — integer scale (default 1)
 //   font-id="..."    — alternative Font DataID (default 0x40000000)
 //   shadow="off"     — disable drop shadow
+//   shadow-color="rgba(0,0,0,0.85)" — drop shadow tint (rec #185)
+//   shadow-offset-x="1" — drop shadow X offset in source-space px (rec #185)
+//   shadow-offset-y="1" — drop shadow Y offset in source-space px (rec #185)
 
 // Custom-element registration is guarded AND deferred. When `ac_font.js`
 // ends up in the page-init static-import graph (e.g. via `plugins/
@@ -655,7 +664,11 @@ export function registerAcText() {
 function _registerAcTextImpl() {
   class AcTextElement extends HTMLElement {
     static get observedAttributes() {
-      return ["color", "scale", "font-id", "shadow", "align", "v-align", "box-width", "box-height"];
+      return [
+        "color", "scale", "font-id", "shadow", "align", "v-align",
+        "box-width", "box-height",
+        "shadow-color", "shadow-offset-x", "shadow-offset-y",
+      ];
     }
     constructor() {
       super();
@@ -723,6 +736,19 @@ function _registerAcTextImpl() {
       if (this.hasAttribute("box-height")) {
         const n = Number(this.getAttribute("box-height"));
         if (Number.isFinite(n) && n > 0) opts.boxHeight = n;
+      }
+      // Rec #185 — drop shadow tint + offset attrs. Any subset is fine;
+      // unset attrs fall through to renderAcText's defaults.
+      if (this.hasAttribute("shadow-color")) {
+        opts.shadowColor = this.getAttribute("shadow-color");
+      }
+      if (this.hasAttribute("shadow-offset-x")) {
+        const n = Number(this.getAttribute("shadow-offset-x"));
+        if (Number.isFinite(n)) opts.shadowOffsetX = n;
+      }
+      if (this.hasAttribute("shadow-offset-y")) {
+        const n = Number(this.getAttribute("shadow-offset-y"));
+        if (Number.isFinite(n)) opts.shadowOffsetY = n;
       }
       const runtime = getAcFont(opts.fontId ?? UI_FONT_ID);
       if (!runtime) {
