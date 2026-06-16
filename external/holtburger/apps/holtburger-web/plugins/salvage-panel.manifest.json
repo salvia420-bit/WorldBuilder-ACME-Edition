@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "salvage-panel",
+  "name": "Salvage",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Salvage panel — floating item-list scaffold; subscribes to SalvageOperationsResult and surfaces per-material yield (gmSalvageUI scaffolding, awaits CreateTinkeringTool wasm export).",
+  "icon": "⚒",
+  "iconHidden": true,
+  "entry": "./salvage-panel.js",
+  "environments": ["browser"],
+  "slots": ["overlay"]
+}
