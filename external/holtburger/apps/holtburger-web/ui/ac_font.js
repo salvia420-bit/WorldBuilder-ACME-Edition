@@ -529,13 +529,22 @@ function _measure(runtime, text) {
     penX += g.h_off_before;
     const right = penX + g.width;
     penX = right + g.h_off_after;
-    const bottom = g.v_off_before + g.height;
+    // Rec #63 — per-font baselineOffset shifts the glyph's vertical
+    // origin so descenders + ascenders don't get cropped. Applied
+    // identically in _drawGlyphs so the canvas reservation matches
+    // what gets painted. Border pixels (num_horizontal/vertical_border)
+    // aren't surfaced from the wasm side yet — a follow-on would
+    // inset the atlas sample rect by those values; here we conservatively
+    // assume zero so the shadow render at oy=1 doesn't bleed past
+    // the foreground.
+    const baseY = (gRuntime.baselineOffset >>> 0) || 0;
+    const bottom = baseY + g.v_off_before + g.height;
     if (bottom > maxY) maxY = bottom;
-    if (gRuntime.maxCharHeight > maxY) maxY = gRuntime.maxCharHeight;
+    if ((gRuntime.maxCharHeight + baseY) > maxY) maxY = gRuntime.maxCharHeight + baseY;
   }
   return {
     width: Math.max(1, penX),
-    height: Math.max(runtime.maxCharHeight, maxY),
+    height: Math.max(runtime.maxCharHeight + ((runtime.baselineOffset >>> 0) || 0), maxY),
   };
 }
 
@@ -571,6 +580,15 @@ function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy, atlasKind) 
     const atlas = pickAtlas(gRuntime);
     penX += g.h_off_before;
     if (g.width > 0 && g.height > 0 && atlas) {
+      // Rec #63 — same baselineOffset shift _measure applies. The
+      // shadow render path uses oy=1 (and the fg path oy=0) so the
+      // shadow ends up exactly one pixel below the foreground at the
+      // baseline-adjusted y, matching retail bitmap-font output. The
+      // num_horizontal/vertical_border_pixels atlas inset isn't
+      // wired (defer-wasm: not surfaced from FontData yet) — when it
+      // lands, subtract from offset_x/y and width/height to skip
+      // border padding.
+      const baseY = (gRuntime.baselineOffset >>> 0) || 0;
       ctx.drawImage(
         atlas,
         g.offset_x,
@@ -578,7 +596,7 @@ function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy, atlasKind) 
         g.width,
         g.height,
         (penX + ox) * scale,
-        (g.v_off_before + oy) * scale,
+        (baseY + g.v_off_before + oy) * scale,
         g.width * scale,
         g.height * scale,
       );
