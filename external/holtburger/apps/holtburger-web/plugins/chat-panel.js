@@ -515,27 +515,58 @@ export function mount(_ctx) {
 
   // Top-right Maximize button (0x1000046F at 368,5 16×16). Retail
   // toggles the chat panel between collapsed (default height) and
-  // m_OldHeight per acclient.c:254293. We surface a placeholder
-  // toggle that logs to console + flips a `data-maximized` flag for
-  // a future expansion handler.
+  // m_OldHeight per acclient.c:254293. Rec #100 — this is now the
+  // sole maximize toggle (the bespoke maxBtn below was consolidated
+  // away). State persists to hb_chat_panel_saved_height so a
+  // reloaded session restores the prior maximized/collapsed state
+  // mirroring chatFade persistence at line 501-507.
   const toprightBtn = document.createElement("button");
   toprightBtn.type = "button";
   toprightBtn.className = "hb-chat-topright-btn";
-  toprightBtn.title = "Maximize";
+  toprightBtn.title = "Maximize / Restore";
   setAcText(toprightBtn, "▲");
+  let _chatSavedHeight = null;
+  try {
+    const stored = localStorage.getItem("hb_chat_panel_saved_height");
+    if (stored != null && stored !== "") _chatSavedHeight = stored;
+  } catch (_) {}
+  function applyMaximizeState(maximized) {
+    overlay.dataset.maximized = maximized ? "1" : "0";
+    setAcText(toprightBtn, maximized ? "▼" : "▲");
+    if (maximized) {
+      // Save current height before expanding so restore returns to
+      // whatever the user had — mirrors retail m_OldHeight.
+      if (_chatSavedHeight == null) {
+        _chatSavedHeight = overlay.style.height
+          || `${Math.round(overlay.getBoundingClientRect().height)}px`;
+      }
+      overlay.style.height = `${Math.max(220, Math.floor(window.innerHeight * 0.5))}px`;
+      try { localStorage.setItem("hb_chat_panel_saved_height", _chatSavedHeight); } catch (_) {}
+    } else if (_chatSavedHeight != null) {
+      overlay.style.height = _chatSavedHeight;
+      _chatSavedHeight = null;
+      try { localStorage.removeItem("hb_chat_panel_saved_height"); } catch (_) {}
+    }
+  }
   toprightBtn.addEventListener("click", () => {
-    const next = overlay.dataset.maximized === "1" ? "0" : "1";
-    overlay.dataset.maximized = next;
-    setAcText(toprightBtn, next === "1" ? "▼" : "▲");
-    try {
-      console.log(`[chat-panel] maximize toggled → ${next === "1" ? "expanded" : "collapsed"}`);
-    } catch (_) {}
+    applyMaximizeState(overlay.dataset.maximized !== "1");
   });
   // Inline default position (the layout override lands after wasm
   // is ready; this prevents a 0,0 flicker on first paint).
   toprightBtn.style.left = "368px";
   toprightBtn.style.top = "5px";
   overlay.appendChild(toprightBtn);
+  // Restore prior maximized state on construction. The saved-height
+  // sentinel doubles as the persisted "was maximized last session" bit:
+  // its presence means a maximize is pending; applyMaximizeState(true)
+  // will rehydrate the savedHeight from current dimensions and expand.
+  if (_chatSavedHeight != null) {
+    // Re-flip false so applyMaximizeState(true) treats the current
+    // height as the prior collapsed state (so a subsequent restore
+    // returns to today's overlay dimensions, not a stale captured row).
+    overlay.dataset.maximized = "0";
+    queueMicrotask(() => applyMaximizeState(true));
+  }
 
   // Scrollback area — its [data-tab] drives the CSS filter chains
   // defined alongside this block in ensureStyles().
@@ -686,34 +717,9 @@ export function mount(_ctx) {
     onSizeChange: ({ width, height }) => _chatSize.commit(width, height),
   });
 
-  // P2-40 (cross-find chat-maximize-button-spurious): retail's chat
-  // panel has a maximize/restore toggle that swaps between the
-  // current height and m_OldHeight (acclient.c). Click expands to
-  // ~half the viewport height; click again restores. Tucked into
-  // the top-right corner of the panel, 12×12 square.
-  const maxBtn = document.createElement("div");
-  maxBtn.className = "hb-chat-maxbtn";
-  maxBtn.title = "Maximize / Restore";
-  maxBtn.style.cssText =
-    "position:absolute;top:2px;right:14px;width:12px;height:12px;cursor:pointer;" +
-    "background:rgba(0,0,0,0.4);border:1px solid var(--hb-border-brass-dim);" +
-    "z-index:25;color:var(--hb-text-cream);font-size:9px;text-align:center;line-height:11px;";
-  maxBtn.textContent = "▢";
-  overlay.appendChild(maxBtn);
-  let savedHeight = null;
-  maxBtn.addEventListener("click", () => {
-    if (savedHeight == null) {
-      // Maximize — save current height, expand to half viewport.
-      savedHeight = overlay.style.height || `${overlay.getBoundingClientRect().height}px`;
-      overlay.style.height = `${Math.max(220, Math.floor(window.innerHeight * 0.5))}px`;
-      maxBtn.textContent = "▣";
-    } else {
-      // Restore to previous size (retail m_OldHeight).
-      overlay.style.height = savedHeight;
-      savedHeight = null;
-      maxBtn.textContent = "▢";
-    }
-  });
+  // Rec #100 — duplicate maxBtn removed. The top-right toprightBtn
+  // (rendered above) is the sole maximize/restore toggle and persists
+  // its state to hb_chat_panel_saved_height across reloads.
 
   // No lock + move handles on chat — those are radar-only chrome per
   // user direction 2026-05-22. Resize is on the bottom-right corner.
