@@ -812,15 +812,19 @@ function buildInState(root, members, inRefs) {
   // 3 at the bottom. Labels mirror retail's typical fellowship actions;
   // each button is wired to its matching wasm GameAction send. Recruit,
   // Pass Leader → require a selected entity (uses scene3d entityManager
-  // selection state). Lock has no wasm method yet
-  // (FellowshipChangeOpenness commented out in opcodes).
+  // selection state). The 6th slot previously held a stub "Lock" button
+  // (FellowshipChangeOpenness opcode never implemented) — rec #49
+  // replaces it with the Vital-Updates toggle that mirrors the
+  // standalone overlay's `fellowshipUpdateRequest` call (Player_Fellowship.cs:16
+  // batching flag). togglesUpdates entries get a special click handler
+  // installed below so the closure captures the button.
   const ACTIONS = [
     { label: "Recruit",     fn: invokeRecruit },
     { label: "Disband",     fn: () => invokeQuit(true,  "Disband fellowship?") },
     { label: "Leave",       fn: () => invokeQuit(false, "Leave fellowship?") },
     { label: "Pass Leader", fn: invokeAssignLeader },
     { label: "Quit",        fn: () => invokeQuit(false, "Quit fellowship?") },
-    { label: "Lock",        fn: () => emit("[fellowship] Lock — FellowshipChangeOpenness opcode not implemented.") },
+    { label: "Vital Updates", togglesUpdates: true },
   ];
   // Each action button gets a per-instance fallback x/y; the layout
   // applier overrides with retail (18/108/198, 534/567) coords.
@@ -830,14 +834,30 @@ function buildInState(root, members, inRefs) {
   ];
   const btnEls = [];
   for (let i = 0; i < ACTIONS.length; i++) {
+    const action = ACTIONS[i];
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "hb-fellow-in-btn";
-    btn.dataset.action = ACTIONS[i].label.toLowerCase().replace(/\s+/g, "-");
+    btn.dataset.action = action.label.toLowerCase().replace(/\s+/g, "-");
     btn.style.left = `${FALLBACK_BTN_POS[i].left}px`;
     btn.style.top  = `${FALLBACK_BTN_POS[i].top}px`;
-    setAcText(btn, ACTIONS[i].label);
-    btn.addEventListener("click", ACTIONS[i].fn);
+    setAcText(btn, action.label);
+    if (action.togglesUpdates) {
+      // Mirror the standalone toggle: share standaloneUpdatesOn so
+      // both shells stay in sync when one toggles.
+      btn.setAttribute("aria-pressed", String(standaloneUpdatesOn));
+      btn.addEventListener("click", () => {
+        const next = !standaloneUpdatesOn;
+        withSession("fellowshipUpdateRequest", (h) => {
+          h.fellowshipUpdateRequest(next);
+          standaloneUpdatesOn = next;
+          btn.setAttribute("aria-pressed", String(next));
+          emit(`[fellowship/update-request] want_updates=${next}`);
+        });
+      });
+    } else if (typeof action.fn === "function") {
+      btn.addEventListener("click", action.fn);
+    }
     root.appendChild(btn);
     btnEls.push(btn);
   }
