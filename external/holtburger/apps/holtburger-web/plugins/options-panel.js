@@ -307,7 +307,7 @@ const TABS = [
   { id: "mouse",    label: "Mouse",    render: stubTab("Mouse & Camera", "Mouse-turn sensitivity / invert / camera distance / FOV. Plumbing already exists in scene3d/picking.js + ui/graphics_settings.js (FOV slider).") },
   { id: "controls", label: "Controls", render: renderControlsTab },
   { id: "chat",     label: "Chat",     render: stubTab("Chat", "Channel colours / timestamps / per-channel mute. Plumbing partially in plugins/chat-panel.js (tab filters).") },
-  { id: "network",  label: "Network",  render: stubTab("Network", "Server latency display / packet-loss warning / autoreconnect. Surfacing requires Login_WorldInfo bus event (api.js coverage row 8 — currently MISSING).") },
+  { id: "network",  label: "Network",  render: renderNetworkTab },
   { id: "char",     label: "Character",render: renderCharacterTab },
   { id: "about",    label: "About",    render: renderAboutTab },
 ];
@@ -808,6 +808,43 @@ function renderCharacterTab(bodyEl) {
       row.appendChild(label);
       bodyEl.appendChild(row);
     }
+  }
+}
+
+// Rec #199 — Network tab. AutoReconnect persists today (localStorage,
+// readable by the disconnect-handler when that wiring lands); RTT +
+// packet-loss are placeholder surfaces until the wasm/SessionHandle
+// stats stream is wired. Surfaced now so the tab stops being a stub
+// and the AutoReconnect preference is at least capturable.
+const LS_NETWORK_AUTO_RECONNECT_KEY = "hb.options.autoReconnect";
+
+function networkAutoReconnectEnabled() {
+  try { return window.localStorage?.getItem?.(LS_NETWORK_AUTO_RECONNECT_KEY) === "1"; }
+  catch (_) { return false; }
+}
+function setNetworkAutoReconnect(on) {
+  try { window.localStorage?.setItem?.(LS_NETWORK_AUTO_RECONNECT_KEY, on ? "1" : "0"); }
+  catch (_) {}
+}
+
+function renderNetworkTab(bodyEl) {
+  bodyEl.innerHTML = `
+    <div class="hb-opt-section">Connection</div>
+    <div class="hb-opt-row">
+      <label><input type="checkbox" id="hb-net-autoreconnect"> Reconnect automatically on disconnect</label>
+    </div>
+    <div class="hb-opt-section" style="margin-top:14px">Statistics</div>
+    <div class="hb-opt-row">Round-trip time: <span id="hb-net-rtt">—</span></div>
+    <div class="hb-opt-row">Packet loss: <span id="hb-net-loss">—</span></div>
+    <div class="hb-opt-stub" style="margin-top:10px;font-style:italic;opacity:0.7">
+      RTT / loss surfacing pending — needs Login_WorldInfo bus event +
+      PacketLossMonitor on SessionHandle (api.js coverage row 8).
+    </div>
+  `;
+  const cb = bodyEl.querySelector("#hb-net-autoreconnect");
+  if (cb) {
+    cb.checked = networkAutoReconnectEnabled();
+    cb.addEventListener("change", () => setNetworkAutoReconnect(!!cb.checked));
   }
 }
 
