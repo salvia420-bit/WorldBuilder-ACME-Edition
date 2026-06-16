@@ -342,7 +342,7 @@ export const view = {
       let pos;
       try { pos = sw.getPlayerWorldPos(); } catch (_) { pos = null; }
       if (!pos) { player.style.display = "none"; return; }
-      const { leftPct, topPct } = worldToMapPct(pos.x, pos.z);
+      const { leftPct, topPct } = worldToMapPct(pos.x, pos.y);
       // Bitmap is positioned `top:0, left:0, width:100%, height:100%`
       // with the transform translate(panX, panY) scale(scale). The
       // player marker also sits inside the same viewport, so we
@@ -354,9 +354,9 @@ export const view = {
       player.style.top  = `${yPx}px`;
       player.style.display = "block";
       // Coord readout
-      setAcText(coordValue, fmtCoord(pos.x, pos.z));
+      setAcText(coordValue, fmtCoord(pos.x, pos.y));
       const lbX = Math.max(0, Math.min(253, Math.floor(pos.x / LB_PITCH)));
-      const lbY = Math.max(0, Math.min(253, Math.floor(pos.z / LB_PITCH)));
+      const lbY = Math.max(0, Math.min(253, Math.floor(pos.y / LB_PITCH)));
       const lbKey = (lbX << 8) | lbY;
       setAcText(lbEl, `LB 0x${lbKey.toString(16).toUpperCase().padStart(4, "0")} (${lbX}, ${lbY})`);
     }
