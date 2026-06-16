@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "landblock-messages",
+  "name": "Landblock Messages",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "System chat line on each landblock cross (Entering Landblock 0x…).",
+  "icon": "▣",
+  "iconHidden": true,
+  "entry": "./landblock-messages.js",
+  "environments": ["browser"],
+  "slots": ["watcher"]
+}
