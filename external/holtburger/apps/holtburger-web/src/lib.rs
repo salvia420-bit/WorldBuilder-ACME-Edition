@@ -17536,6 +17536,21 @@ enum SessionCommand {
     CreateCharacter {
         request: Box<holtburger_protocol::messages::CharacterCreateRequestData>,
     },
+    /// `SessionHandle.deleteCharacter(slot)` — sends
+    /// `GameMessage::CharacterDeleteRequest` (opcode 0xF655). The
+    /// recv loop stamps the session's account name onto the request
+    /// before send. ACE replies with `CharacterDeleteResponse` + a
+    /// `CharacterList` re-fire that flips the row's `delete_time` to
+    /// the grace-period expiry timestamp (per `Player_Character.cs`
+    /// HandleCharacterDelete). JS reads the refreshed list via the
+    /// kind=0 CharacterListReceived event already wired below.
+    DeleteCharacter { character_slot: u32 },
+    /// `SessionHandle.restoreCharacter(guid)` — sends
+    /// `GameMessage::CharacterRestoreRequest` (opcode 0xF656). ACE
+    /// resets `delete_time` to 0 and emits a `CharacterList` re-fire.
+    /// Only valid while a character is in the deletion-pending grace
+    /// window; ACE silently drops the request once the grace expires.
+    RestoreCharacter { guid: u32 },
     /// `SessionHandle.send_chat(text)` — sends a `GameAction::Talk`
     /// over the wire. Used today by the JS-side "Teleport to
     /// Holtburg" button to dispatch `@telepoi Holtburg`. ACE's
@@ -24682,6 +24697,40 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = characterList)]
     pub fn character_list(&self) -> Vec<CharacterSummary> {
         self.character_list.borrow().clone()
+    }
+
+    /// HUD rec #165 (E12-login-character-select-creation): request
+    /// deletion of the character at `character_slot` (0-based index
+    /// into the current `characterList()`). Sends
+    /// `CharacterDeleteRequest` (opcode 0xF655); the recv loop stamps
+    /// the session account name onto the wire payload. ACE responds
+    /// with `CharacterDeleteResponse` + a `CharacterList` re-fire
+    /// that flips `delete_time` to the grace-period expiry timestamp.
+    /// JS observes via the kind=0 CharacterListReceived event.
+    #[wasm_bindgen(js_name = deleteCharacter)]
+    pub fn delete_character(&self, character_slot: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::DeleteCharacter { character_slot })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("deleteCharacter: cmd channel closed ({e})"))
+            })
+    }
+
+    /// HUD rec #165: restore a character currently in the deletion
+    /// grace window. `guid` is the character's GUID (matches
+    /// `CharacterSummary.id`). Sends `CharacterRestoreRequest`
+    /// (opcode 0xF656); ACE resets `delete_time = 0` on success and
+    /// emits a `CharacterList` re-fire. Silently dropped server-side
+    /// once the grace window has expired.
+    #[wasm_bindgen(js_name = restoreCharacter)]
+    pub fn restore_character(&self, guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RestoreCharacter { guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("restoreCharacter: cmd channel closed ({e})"))
+            })
     }
 
     /// Phase 4 step 4 follow-on: most recent player-stats snapshot.
@@ -37505,6 +37554,46 @@ async fn recv_loop(
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("CharacterCreate: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::DeleteCharacter { character_slot }) => {
+                        use holtburger_protocol::messages::CharacterDeleteRequestData;
+                        let req = CharacterDeleteRequestData {
+                            account_name: account_name.clone(),
+                            character_slot,
+                        };
+                        let msg = GameMessage::CharacterDeleteRequest(Box::new(req));
+                        if let Err(e) = session.send_message(&msg).await {
+                            log::warn!("recv_loop: send CharacterDeleteRequest: {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "CharacterDeleteRequest: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::RestoreCharacter { guid }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::CharacterRestoreRequestData;
+                        let req = CharacterRestoreRequestData { guid: Guid(guid) };
+                        let msg = GameMessage::CharacterRestoreRequest(Box::new(req));
+                        if let Err(e) = session.send_message(&msg).await {
+                            log::warn!("recv_loop: send CharacterRestoreRequest: {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "CharacterRestoreRequest: {e}"
+                                )),
                                 u32_payload: None,
                                 u32_payload_2: None,
                                 f32_payload: None,

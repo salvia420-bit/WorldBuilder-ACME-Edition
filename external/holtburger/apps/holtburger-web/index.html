@@ -8207,20 +8207,37 @@ void main() {
           // fallback). Always-rendered: a "Create test character" form
           // when handle.canCreateCharacter is true, so users on a
           // fresh account can populate the list before clicking Spawn.
+          //
+          // HUD rec #165 (2026-06-16): each active row gets a Delete
+          // button (with confirm dialog mirroring acclient.h
+          // MakeDeleteCharacterConfirmationDialog); rows currently in
+          // the grace window get a Restore button instead. Both wire
+          // to `handle.deleteCharacter(slot)` / `handle.restoreCharacter(guid)`
+          // and rely on ACE's CharacterList re-fire to refresh the
+          // displayed state.
           function renderCharacterList() {
             const list = handle.characterList();
             if (list.length === 0) {
               characterUl.innerHTML =
                 `<li class="hint">No characters on this account yet. Use the form below to create one.</li>`;
             } else {
-              characterUl.innerHTML = list.map((c) => {
+              characterUl.innerHTML = list.map((c, slot) => {
                 const idHex = `0x${c.id.toString(16).toUpperCase().padStart(8, "0")}`;
-                const pendingDelete = c.deleteTime !== 0
+                const isPending = c.deleteTime !== 0;
+                const pendingDelete = isPending
                   ? ` <span class="hint">[pending delete @ ${new Date(c.deleteTime * 1000).toISOString()}]</span>`
                   : "";
+                const actionBtn = isPending
+                  ? ` <button type="button" data-restore-id="${c.id}" data-name="${c.name}">Restore</button>`
+                  : ` <button type="button" data-id="${c.id}">Spawn</button>` +
+                    ` <button type="button" data-delete-slot="${slot}" data-name="${c.name}">Delete</button>`;
                 return `<li data-name="${c.name}" data-id="${c.id}"><strong>${c.name}</strong> &nbsp;<span class="hint">${idHex}</span>${pendingDelete}` +
-                  ` <button type="button" data-id="${c.id}">Spawn</button></li>`;
+                  actionBtn + `</li>`;
               }).join("");
+              // Delegate Delete / Restore click handling via the
+              // existing characterUl listener (set up in step 2a.5);
+              // it inspects `data-delete-slot` / `data-restore-id`
+              // and calls the corresponding session command.
             }
           }
           renderCharacterList();
@@ -8325,6 +8342,49 @@ void main() {
             };
           }
           characterUl.addEventListener("click", (ev) => {
+            // HUD rec #165 (2026-06-16): Delete + Restore branches
+            // before the existing Spawn branch. Both mutate the
+            // server-side character list; ACE's `CharacterList`
+            // re-fire arrives as a kind=0 event which the existing
+            // event-drain re-renders, so we don't need an optimistic
+            // local update.
+            const deleteBtn = ev.target.closest("button[data-delete-slot]");
+            if (deleteBtn) {
+              const slot = Number(deleteBtn.dataset.deleteSlot);
+              const name = deleteBtn.dataset.name || "<unknown>";
+              // Mirror acclient.h:56151-56156
+              // MakeDeleteCharacterConfirmationDialog: explicit
+              // grace-period warning before the network round-trip.
+              if (!window.confirm(
+                `Delete ${name}?\n\n` +
+                `The character will be marked for deletion and removed ` +
+                `after the server's grace window. You can press Restore ` +
+                `during the grace window to undo.`
+              )) {
+                return;
+              }
+              try {
+                handle.deleteCharacter(slot);
+              } catch (err) {
+                loginStatus.innerHTML =
+                  `<span class="fail">[FAIL]</span> deleteCharacter rejected: <code>${String(err?.message ?? err)}</code>`;
+              }
+              return;
+            }
+            const restoreBtn = ev.target.closest("button[data-restore-id]");
+            if (restoreBtn) {
+              const id = Number(restoreBtn.dataset.restoreId);
+              const name = restoreBtn.dataset.name || "<unknown>";
+              try {
+                handle.restoreCharacter(id);
+                loginStatus.innerHTML =
+                  `<span class="ok">[OK]</span> Restore requested for <strong>${name}</strong>; awaiting CharacterList re-fire.`;
+              } catch (err) {
+                loginStatus.innerHTML =
+                  `<span class="fail">[FAIL]</span> restoreCharacter rejected: <code>${String(err?.message ?? err)}</code>`;
+              }
+              return;
+            }
             const btn = ev.target.closest("button[data-id]");
             if (!btn) return;
             if (spawningCharId !== null || spawnedPlayerGuid !== null) {
