@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "loading-screen",
+  "name": "Loading Screen",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Modal load-screen overlay for zone-cross / portal-storm transitions (gmGamePlayUI::LoadScreenLayout port).",
+  "icon": "⌛",
+  "iconHidden": true,
+  "entry": "./loading-screen.js",
+  "environments": ["browser"],
+  "slots": ["overlay"]
+}
