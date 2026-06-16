@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "vitae-detail",
+  "name": "Vitae Detail",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Vitae popup — current penalty + ACE VitaeCPPoolThreshold; click the status-indicators vitae icon to toggle.",
+  "icon": "💀",
+  "iconHidden": true,
+  "entry": "./vitae-detail.js",
+  "environments": ["browser"],
+  "slots": ["overlay"]
+}
