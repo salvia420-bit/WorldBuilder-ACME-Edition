@@ -484,6 +484,51 @@ export function isToggleAction(actionHash) {
 }
 
 /**
+ * Resolve an action hash to its retail-friendly label (from the
+ * StringTable referenced by ActionMap.string_table_data_id). Returns
+ * the human label when the ActionMap is loaded AND the lookup hits a
+ * resolved label; otherwise falls back to `"0x{hash}"` so the Controls
+ * tab can render a stable identifier in either state.
+ *
+ * Pass `opts.fallback = "—"` to use a different placeholder when no
+ * label is known.
+ *
+ * @param {number} actionHash
+ * @param {{fallback?: string}} [opts]
+ * @returns {string}
+ */
+export function actionHashLabel(actionHash, opts) {
+  const hash = (actionHash >>> 0);
+  const a = findActionByHash(hash);
+  const label = a?.label;
+  if (typeof label === "string" && label.trim().length > 0) return label;
+  if (opts?.fallback) return opts.fallback;
+  return `0x${hash.toString(16).toUpperCase().padStart(8, "0")}`;
+}
+
+/**
+ * Build a `Map<actionHash, label>` for every action currently in the
+ * cached ActionMap. Useful for the Controls capture UI's group-by-
+ * category + alphabetize pass. Empty map when the ActionMap hasn't
+ * loaded yet. Same fallback semantics as `actionHashLabel` —
+ * unresolved labels are skipped from the map; the caller can call
+ * `actionHashLabel(hash)` for the hex-string default.
+ *
+ * @returns {Map<number, string>}
+ */
+export function getActionHashLabelMap() {
+  const out = new Map();
+  const am = getActionMap();
+  if (!am?.actions) return out;
+  for (const a of am.actions) {
+    const label = a?.label;
+    if (typeof label !== "string" || label.trim().length === 0) continue;
+    out.set(a.actionHash >>> 0, label);
+  }
+  return out;
+}
+
+/**
  * True if the player should be allowed to bind a key to this action
  * in the Options → Controls capture UI. The retail ActionMap stores
  * an ActivationType field, but the current wasm-side serializer
