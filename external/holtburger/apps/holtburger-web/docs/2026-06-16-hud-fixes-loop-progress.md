@@ -55,7 +55,7 @@
 | 167 | high | E13-death-resurrection-vitae-ui | `status-indicators.js:486-491 (applyVitae), character.js:146-148 (vitae property)` | Add vitae detail pane showing CP pool debt and penalty percentage | 1d858a1d |
 | 45 | med | D07-combat-hud-stance-power | `combat-bar.js:1035-1039, picking.js:1215-1265` | Default ?powerMeterSwingDuration=on and always pass swingDurationMs from picking.js | fable-skip |
 | 46 | med | D08-spellbook-spellcasting | `spellbook.js:1012-1028, ui/ac_spell_shape.js for component-specific shape annota` | Port component-pouch widget from retail gmSpellbookUI | c8b29604 |
-| 48 | med | D11-fellowship-allegiance | `fellowship-panel.js:932-1002` | Expose FellowshipFullUpdate vs UpdateFellow distinction in snapshot protocol | defer-wasm |
+| 48 | med | D11-fellowship-allegiance | `fellowship-panel.js:932-1002` | Expose FellowshipFullUpdate vs UpdateFellow distinction in snapshot protocol | 3f6bc813 |
 | 49 | med | D11-fellowship-allegiance | `fellowship-panel.js:815-843` | Add FellowshipUpdateRequest batching subscription toggle to main-panel | eadf9cc6 |
 | 51 | med | D13-character-info-titles-options | `plugins/character-info.js:795-886, CSS section 288-352` | Add title-selection visual feedback and state tracking | 9b35dd04 |
 | 52 | med | D14-examination-identify | `examine-target.js:556-622` | Add player vs creature dispatch (CharExamineUI equivalent) | defer-wasm |
