@@ -76,6 +76,7 @@ import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/key
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
+import { formatAppraisalTooltip } from "./inventory_helpers.js";
 
 // gmVendorUI 0x21000012 — element_id constants from
 // vendor_ui_layout_dump 2026-05-24. See head-comment block above for
@@ -1499,7 +1500,32 @@ function renderItemsPane() {
     const tipPrice = (typeof it.buyPrice === "number" && it.buyPrice >= 0)
       ? it.buyPrice
       : shopBuyPrice(it.value || 0, it.itemType || 0, vs.buyMultiplier || 1, 1);
-    cell.title = `${it.name} — ${fmtPrice(tipPrice)}p`;
+    const basicTitle = `${it.name} — ${fmtPrice(tipPrice)}p`;
+    cell.title = basicTitle;
+    // Rec #69 — vendor cell hover upgrades cell.title with a multi-line
+    // appraisal body via the shared formatAppraisalTooltip helper.
+    // Browsers show HTML title with their own delay so we don't need a
+    // setTimeout here — the upgrade happens on the FIRST mouseenter,
+    // which the OS-level tooltip will pick up by the time it paints.
+    // No richer DOM tooltip (yet); plain text keeps the diff bounded
+    // and matches the inventory tooltip's content. Falls back to the
+    // basic name/price line if getObjectAppraisal returns nothing.
+    let _vendorTooltipReady = false;
+    cell.addEventListener("mouseenter", () => {
+      if (_vendorTooltipReady) return;
+      try {
+        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+        if (typeof handle?.getObjectAppraisal !== "function") return;
+        const json = handle.getObjectAppraisal((it.itemGuid >>> 0) || 0);
+        if (typeof json !== "string" || json.length === 0) return;
+        let snap = null;
+        try { snap = JSON.parse(json); } catch (_) { return; }
+        const body = formatAppraisalTooltip(it.name, snap);
+        const priceLine = `Price: ${fmtPrice(tipPrice)} p`;
+        cell.title = body ? `${body}\n${priceLine}` : `${basicTitle}\n${priceLine}`;
+        _vendorTooltipReady = true;
+      } catch (_) {}
+    });
     cell.addEventListener("click", () => {
       state.selectedItemGuid = it.itemGuid;
       render();
