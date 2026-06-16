@@ -709,7 +709,24 @@ function renderAttributes(bodyEl, stats, _skillTable) {
       canAfford: cost <= availableXp,
       isMax: false,
       availableXp,
-      onClick: () => { try { handle.raiseAttribute(id >>> 0, cost >>> 0); } catch (e) { console.warn("[raiseAttribute]", e); } },
+      onClick: () => {
+        try {
+          handle.raiseAttribute(id >>> 0, cost >>> 0);
+        } catch (e) {
+          // HUD rec #140 — surface the failure on the client bus +
+          // toast so other panels (and the player) know. The wasm
+          // returns sync Err only on cmd-channel closure; ACE-side
+          // rejection (insufficient XP, max rank) would come back as
+          // a separate response opcode and is deferred until that
+          // wire surfaces. JS-side here is enough for the chrome.
+          console.warn("[raiseAttribute]", e);
+          try {
+            window.__pluginClient?.events?.emit?.("raiseAttributeFailed", {
+              detail: { attributeId: id >>> 0, cost: cost >>> 0, error: String(e?.message ?? e) },
+            });
+          } catch (_) {}
+        }
+      },
     } : (xpTables ? { cost: 0, canAfford: false, isMax: true, availableXp, onClick: () => {} } : null);
     bodyEl.appendChild(row(ATTR_ICON_URL(id), ATTR_NAMES[id] || `Attr ${id}`, display, raise));
   }
@@ -732,7 +749,19 @@ function renderAttributes(bodyEl, stats, _skillTable) {
         canAfford: cost <= availableXp,
         isMax: false,
         availableXp,
-        onClick: () => { try { handle.raiseVital(id >>> 0, cost >>> 0); } catch (e) { console.warn("[raiseVital]", e); } },
+        onClick: () => {
+          try {
+            handle.raiseVital(id >>> 0, cost >>> 0);
+          } catch (e) {
+            // HUD rec #140 — symmetric raiseVital fail-surface.
+            console.warn("[raiseVital]", e);
+            try {
+              window.__pluginClient?.events?.emit?.("raiseVitalFailed", {
+                detail: { vitalId: id >>> 0, cost: cost >>> 0, error: String(e?.message ?? e) },
+              });
+            } catch (_) {}
+          }
+        },
       } : null;
       bodyEl.appendChild(row(VITAL_ICON_URL(id), VITAL_NAMES[id] || `Vital ${id}`, `${cur}/${max}`, raise));
     }
