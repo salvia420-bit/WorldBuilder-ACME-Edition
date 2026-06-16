@@ -319,6 +319,29 @@ function classifyEntityForRadar(guid, inst) {
   return null;
 }
 
+// Retail eRadarBehavior (RadarBehavior.cs:3): 1=ShowNever, 2=ShowMovement,
+// 3=ShowAttacking, 4=ShowAlways. Missing/0 → fail open (show). ShowNever
+// hides outright; ShowMovement hides until velocity is non-zero;
+// ShowAttacking hides until the entity is in combat mode.
+const VEL_EPS_SQ = 0.0025; // 0.05 m/s squared
+function passesRadarBehavior(inst) {
+  const beh = (inst?.meta?.radarBehavior >>> 0) || 0;
+  if (!beh || beh === 4) return true; // ShowAlways / unset
+  if (beh === 1) return false;        // ShowNever
+  if (beh === 2) {                    // ShowMovement
+    const v = inst?.root?.velocity;
+    if (!v) return false;
+    const vsq = (v.x * v.x) + (v.y * v.y) + ((v.z || 0) * (v.z || 0));
+    return vsq > VEL_EPS_SQ;
+  }
+  if (beh === 3) {                    // ShowAttacking
+    const m = inst?.meta || {};
+    const combatMode = (m.combatMode >>> 0) || 0;
+    return combatMode !== 0 || m.attacking === true;
+  }
+  return true;
+}
+
 // Resolve the radar shape for a blip. Reads the server-sent
 // PropertyInt RadarBlipShape from inst.meta.radarShape (Wave M+
 // will plumb this from ACE); falls back to a per-kind default that
@@ -421,6 +444,7 @@ function updateRadarBlips(playerPos) {
     const kind = classifyEntityForRadar(g, inst);
     if (!kind) continue;
     if (_radarHostileOnly && kind !== "creature") continue;
+    if (!passesRadarBehavior(inst)) continue;
     candidates.push({ dx, dy, dist, kind, guid: g, inst });
   }
 
