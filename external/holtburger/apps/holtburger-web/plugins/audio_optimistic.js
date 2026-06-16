@@ -15,12 +15,27 @@
 //   DropItem      = 0x90
 
 export const SOUND = Object.freeze({
-  WIELD:   0x8C,
-  UNWIELD: 0x8D,
-  RECEIVE: 0x8E,
-  PICKUP:  0x8F,
-  DROP:    0x90,
+  WIELD:    0x8C,
+  UNWIELD:  0x8D,
+  RECEIVE:  0x8E,
+  PICKUP:   0x8F,
+  DROP:     0x90,
+  // UI_GeneralError — fires on user-action rejections (cannot equip,
+  // unequip-first, invalid drop target). Same play path as the action
+  // sounds; resolved against the local player's SoundTable.
+  UI_ERROR: 0x6D,
 });
+
+// Named alias so rejection-site callers can read playUiError(...) instead
+// of remembering the magic 0x6D. Falls back to the local player guid as
+// the second argument when none is provided so the ring-key matches the
+// (eventual) server echo.
+export function playUiError(playerGuid) {
+  const lpg = (playerGuid >>> 0)
+    || ((typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function")
+        ? (window.getLocalPlayerGuid() >>> 0) : 0);
+  try { void playOptimistic(SOUND.UI_ERROR, lpg); } catch (_) {}
+}
 
 const TTL_MS = 300;
 const recentFire = new Map(); // key=`${soundId}:${playerGuid}` -> expiresAtMs
@@ -97,5 +112,5 @@ export async function playOptimistic(soundId, itemGuid) {
 // Expose for the server-broadcast consumer in index.html which lives
 // outside ES-module scope (loaded via <script>, not import).
 if (typeof window !== "undefined") {
-  window.__audioOptimistic = { playOptimistic, shouldSuppressEcho, SOUND };
+  window.__audioOptimistic = { playOptimistic, shouldSuppressEcho, SOUND, playUiError };
 }

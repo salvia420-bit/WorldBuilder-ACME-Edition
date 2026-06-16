@@ -1360,6 +1360,7 @@ function onDrop(ev) {
       state.overlayEl?.querySelector?.(".hvb-sell-drop")?.classList?.remove?.("hb-server-rejected");
     }, 400);
     toast(`Unequip "${item.name}" first`, "err");
+    try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
     return;
   }
   // Switch to Selling tab and stage the item.

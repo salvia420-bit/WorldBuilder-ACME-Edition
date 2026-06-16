@@ -1301,6 +1301,7 @@ function doMount(parentEl, _ctx) {
       const dropVerdict = canEquipInSlot(dropItem, s.equipMask >>> 0, dropState);
       if (!dropVerdict.ok) {
         try { paperdollToast(dropVerdict.reason); } catch (_) {}
+        try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
         try {
           const srcSlot = overlay.querySelector(`.hb-inv-slot[data-guid="${String(guid)}"]`);
           if (srcSlot) {
@@ -1512,6 +1513,7 @@ function doMount(parentEl, _ctx) {
       }
       // Case C: non-container onto an empty tab -> reject flash.
       tab.classList.add("reject");
+      try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
       setTimeout(() => tab.classList.remove("reject"), 400);
     });
     bagCol.appendChild(tab);
@@ -1787,6 +1789,7 @@ function doMount(parentEl, _ctx) {
           const verdict = canEquipInSlot(item, mask >>> 0, playerState);
           if (verdict && verdict.ok === false) {
             try { paperdollToast(verdict.reason || "Cannot equip there."); } catch (_) {}
+            try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
             try { srcLi.classList.add("reject"); setTimeout(() => srcLi.classList.remove("reject"), 250); } catch (_) {}
             return;
           }
