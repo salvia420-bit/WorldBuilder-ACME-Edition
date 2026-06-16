@@ -48,6 +48,27 @@ const DOT_COLORS = Object.freeze({
   vendor:   "#40d060",
 });
 
+// Retail RadarColor enum (RadarColor.cs:3). Default=0 → fall through
+// to per-kind DOT_COLORS so unset entities keep current behaviour.
+// 0x10 = BrightGreen (intentional gap in 0x0A..0x0F).
+const RADAR_COLOR_HEX = Object.freeze({
+  0x01: "#4080ff", // Blue (LifeStone)
+  0x02: "#d4a836", // Gold (Creature)
+  0x03: "#ffffff", // White
+  0x04: "#b060d8", // Purple (Portal)
+  0x05: "#ff4040", // Red (PlayerKiller)
+  0x06: "#ff80b0", // Pink (Advocate, PKLite)
+  0x07: "#40d060", // Green
+  0x08: "#ffd040", // Yellow (NPC, Vendor)
+  0x09: "#40e0e0", // Cyan (Admin, Sentinel)
+  0x10: "#60ff60", // BrightGreen (Fellowship)
+});
+
+function getRadarColorHex(rawRadarColor, kind) {
+  const code = (rawRadarColor >>> 0) || 0;
+  return RADAR_COLOR_HEX[code] || DOT_COLORS[kind] || "#ffffff";
+}
+
 // Retail eRadarBlipShape (enums.cs:1133): 1=Circle, 2=Box, 3=X, 4=Plus,
 // 5=Triangle, 6=InvertedTriangle, 7=XBox, Default=4 (Plus). We map the
 // integer to a CSS-safe name applied as data-shape; per-shape CSS rules
@@ -463,9 +484,10 @@ function updateRadarBlips(playerPos) {
     b.style.display = "block";
     b.style.left = `${localX}px`;
     b.style.top = `${localY}px`;
-    b.style.background = DOT_COLORS[c.kind] || "#ffffff";
+    const hex = getRadarColorHex(c.inst?.meta?.radarColor, c.kind);
+    b.style.background = hex;
     b.style.opacity = String(alpha);
-    b.style.boxShadow = `0 0 2px ${DOT_COLORS[c.kind] || "#ffffff"}`;
+    b.style.boxShadow = `0 0 2px ${hex}`;
     if (b.dataset.shape !== shape) b.dataset.shape = shape;
     _blipRefs[i] = {
       guid: c.guid, inst: c.inst, dx: c.dx, dy: c.dy, dist: c.dist,
