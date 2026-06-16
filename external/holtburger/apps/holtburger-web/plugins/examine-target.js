@@ -505,6 +505,22 @@ function renderEntityPaperdoll(wrapEl, guid) {
     wrapEl.appendChild(note);
     return null;
   }
+  // Rec #55 — retail ItemExamineUI uses gm3DItemsUI for items and the
+  // creature-paperdoll only for creatures/NPCs/players. Mirror that
+  // here: skip the paperdoll mount when the target's ItemType is
+  // populated AND the IT_CREATURE bit (0x10) is clear. ItemType not
+  // set yet = pre-spawn snapshot; fall through to keep the existing
+  // "preview" behaviour for those (rarely observed but the safer
+  // default — wrong paperdoll < no paperdoll for an unknown class).
+  const ITEM_TYPE_CREATURE = 0x00000010;
+  const itemType = (meta.itemType >>> 0) || 0;
+  if (itemType !== 0 && (itemType & ITEM_TYPE_CREATURE) === 0) {
+    const note = document.createElement("div");
+    note.className = "hb-exa-paperdoll-empty";
+    setAcText(note, "(item — no paperdoll)");
+    wrapEl.appendChild(note);
+    return null;
+  }
   // Match the inventory paperdoll dimensions so the viewport reads
   // consistently across panels. Width clamped to the body slot's
   // ~284px usable interior (300 minus left/right body padding).
