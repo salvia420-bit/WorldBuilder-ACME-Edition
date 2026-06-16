@@ -11,7 +11,7 @@
 | # | sev | domain | files | title | commit |
 |---:|---|---|---|---|---|
 | 1 | crit | D01-inventory-slots-validation | `inventory_helpers.js:212-221; inventory.js:1308-1309` | PAIRED — Rec1 reject weapon equips when validLocations==0 (canEquipInSlot) + Rec2 drop \|\|equipMask fallback (wieldLoc) | 55ee4caa |
-| 2 | crit | D04-radar-projection-heading | `radar.js:708` | Fix heading unit conversion (radians to degrees) | — |
+| 2 | crit | D04-radar-projection-heading | `radar.js:708` | Fix heading unit conversion (radians to degrees) | f62b36b0 |
 | 3 | crit | D08-spellbook-spellcasting | `spellbook.js:1258-1278` | Fix spellbook 'Forget Spell' to call correct API (removeSpellFromBook) | — |
 | 4 | high | D01-inventory-slots-validation | `tests/inventory_paperdoll_helpers.test.cjs:50-260` | Add canEquipInSlot unit tests for weapon-type discrimination | — |
 | 5 | high | D04-radar-projection-heading | `radar.js:32` | Increase radar range default from 50 to 75 units | — |
