@@ -612,6 +612,11 @@ const LS_CHAR_OPTIONS_KEY = "holtburger_character_options_v1";
 // Subset of CharacterOption indices exposed in v1 of the Character tab.
 // Grouped roughly by retail's gmConfigUI Character sub-panel layout.
 // Add more entries as the panel matures.
+// Rec #89 — full ACE CharacterOption catalog (0x00-0x34 inclusive)
+// per ace-server Source/ACE.Entity/Enum/CharacterOption.cs. Indices
+// not listed below are intentionally excluded: 0x0E
+// VividTargetingIndicator routes through scene3d/target_ring.js
+// (pass-1 #129 fable-skip). 0x35 / 0x36 are *Default sentinels.
 const CHARACTER_OPTION_GROUPS = [
   {
     section: "Combat",
@@ -623,6 +628,7 @@ const CHARACTER_OPTION_GROUPS = [
       { idx: 0x2A, label: "Lead missile targets" },
       { idx: 0x2B, label: "Use fast missiles" },
       { idx: 0x0C, label: "Advanced combat interface" },
+      { idx: 0x09, label: "Attempt to deceive other players" },
     ],
   },
   {
@@ -642,6 +648,8 @@ const CHARACTER_OPTION_GROUPS = [
       { idx: 0x21, label: "Display timestamps" },
       { idx: 0x0B, label: "Stay in chat mode after sending" },
       { idx: 0x33, label: "Lock UI" },
+      { idx: 0x1A, label: "Show crafting success dialog" },
+      { idx: 0x2D, label: "Confirm use of rare gems" },
     ],
   },
   {
@@ -655,6 +663,20 @@ const CHARACTER_OPTION_GROUPS = [
       { idx: 0x0F, label: "Share fellowship XP and luminance" },
       { idx: 0x11, label: "Share fellowship loot" },
       { idx: 0x18, label: "Show allegiance logons" },
+      { idx: 0x10, label: "Accept corpse looting permissions" },
+      { idx: 0x17, label: "Drag item onto player opens trade" },
+      { idx: 0x27, label: "Appear offline" },
+    ],
+  },
+  {
+    section: "Privacy",
+    options: [
+      { idx: 0x1C, label: "Show date of birth" },
+      { idx: 0x1D, label: "Show age" },
+      { idx: 0x1E, label: "Show chess rank" },
+      { idx: 0x1F, label: "Show fishing skill" },
+      { idx: 0x20, label: "Show number of deaths" },
+      { idx: 0x28, label: "Show number of titles" },
     ],
   },
   {
@@ -667,6 +689,14 @@ const CHARACTER_OPTION_GROUPS = [
       { idx: 0x26, label: "Listen to roleplay chat" },
       { idx: 0x2E, label: "Listen to society chat" },
       { idx: 0x34, label: "Listen to PK death messages" },
+      { idx: 0x2C, label: "Filter language" },
+    ],
+  },
+  {
+    section: "Inventory",
+    options: [
+      { idx: 0x22, label: "Salvage multiple materials at once" },
+      { idx: 0x29, label: "Use main pack as default pickup destination" },
     ],
   },
   {
@@ -677,6 +707,7 @@ const CHARACTER_OPTION_GROUPS = [
       { idx: 0x2F, label: "Show helm/headgear" },
       { idx: 0x32, label: "Show cloak" },
       { idx: 0x30, label: "Disable distance fog" },
+      { idx: 0x16, label: "Disable house restriction effects" },
     ],
   },
 ];
