@@ -23,7 +23,7 @@
 | 11 | high | D06-buffs-enchantments-pipeline | `character.js:247-293, buffs-hud.js:809-814` | Debug and fix Character.getActiveEnchantments() returning empty despite populated allEnchantments | c4f919e3 |
 | 12 | high | D07-combat-hud-stance-power | `combat-bar.js:920-945, ui/ac_character_options.js (add isCharacterOptionEnabled ` | Sync auto-repeat checkbox state from server's CharacterOption bit on playerStatsUpdated | ee941647 |
 | 13 | high | D08-spellbook-spellcasting | `hotbar.js:614-644, combat-bar.js:1438-1450` | Add fallback spell-cast dispatch chain (SessionHandle.castUntargetedSpell / castTargetedSpell) | 56df00af |
-| 14 | high | D08-spellbook-spellcasting | `hotbar.js:204-221, buffs-hud.js:110-121` | Implement spell cooldown update event listener (0x02C1 GameEventMagicUpdateSpell) | — |
+| 14 | high | D08-spellbook-spellcasting | `hotbar.js:204-221, buffs-hud.js:110-121` | Implement spell cooldown update event listener (0x02C1 GameEventMagicUpdateSpell) | escalate-deferred |
 | 15 | high | D09-vitals-and-attributes-streams | `index.html:1300+ (add XP table fetch to bootstrap), plugins/character-info.js:43` | Pre-fetch XP tables during index.html bootstrap so raise buttons render on first character-info open | — |
 | 16 | high | D11-fellowship-allegiance | `fellowship-panel.js:817-823` | Wire fellowship main-panel action buttons (Recruit/Dismiss/Pass Leader) | — |
 | 17 | high | D11-fellowship-allegiance | `allegiance-panel.js:828-911` | Wire allegiance main-panel action buttons (Swear/Break/Kick) | — |
