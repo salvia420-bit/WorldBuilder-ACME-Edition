@@ -737,7 +737,12 @@ function buildAloneState(root, fellowshipName, opts, onCreate, aloneRefs) {
     row.addEventListener("click", () => {
       opts[o.id] = !opts[o.id];
       row.classList.toggle("on", opts[o.id]);
-      emit(`[fellowship] ${o.label} = ${opts[o.id] ? "on" : "off"} (client-side only)`);
+      // Rec #104 — persist to localStorage so the toggle survives
+      // page reload; preference still resets on relog (no server echo).
+      try {
+        window.localStorage?.setItem?.("hb.fellowship.opts", JSON.stringify(opts));
+      } catch (_) {}
+      emit(`[fellowship] ${o.label} = ${opts[o.id] ? "on" : "off"} (local-only — resets on relog)`);
     });
     root.appendChild(row);
     optEls.push(row);
@@ -923,7 +928,26 @@ export const view = {
     // wasm snapshot (kind=22 fellowshipUpdated). The Alone-state DOM
     // includes the Create form; the InFellowship DOM lists members
     // with vital bars. `__hbFellowshipDebug` overrides for testing.
+    // Rec #104 — fellowship preferences live client-side only. ACE
+    // doesn't expose setFellowshipPreference wire methods (no
+    // PropertyBool slots, no GameAction packets), so any setter is
+    // gated on a defer-wasm follow-up that adds the wire path. We
+    // persist to localStorage so the toggles survive page reloads
+    // within a session; a relog still resets them because the server
+    // doesn't echo any state back. The "(local-only)" qualifier in
+    // the toggle-click emit() advertises this clearly to the user.
     let opts = { ignore: false, autoAccept: false, shareXp: true, shareLoot: true };
+    try {
+      const raw = localStorage.getItem("hb.fellowship.opts");
+      if (raw) {
+        const stored = JSON.parse(raw);
+        if (stored && typeof stored === "object") {
+          for (const k of Object.keys(opts)) {
+            if (typeof stored[k] === "boolean") opts[k] = stored[k];
+          }
+        }
+      }
+    } catch (_) {}
     let fellowshipName = "";
 
     // `stateRoot` wraps both DOM subtrees so a re-render can teardown
