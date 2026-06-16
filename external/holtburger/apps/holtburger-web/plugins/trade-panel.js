@@ -35,6 +35,18 @@ const GRID_SLOTS = GRID_COLS * GRID_ROWS;
 let overlayEl = null;
 let onKeyDownHandler = null;
 
+// Trade-partner range enforcement. Retail auto-declines if either side
+// walks > ~24m from the other. ACE has no dedicated "partner left
+// range" wire event yet, so we poll partner + local-player world pos
+// while the panel is open and call handle.declineTrade() ourselves
+// when the threshold is crossed. The server-side decline is still
+// authoritative — this is the client-side mirror of retail behavior.
+const TRADE_MAX_RANGE_M = 24;
+const TRADE_RANGE_POLL_MS = 500;
+let currentPartnerGuid = 0;
+let rangeTimerId = 0;
+let rangeBreachFired = false;
+
 // Wave 15 — icon cache consolidated into `ui/ac_icon_cache.js`. Local
 // thin wrapper preserves the historical `[trade-panel]` warn label.
 async function fetchIconDataUrl(iconId) {
@@ -400,6 +412,8 @@ function renderSnapshot(snapshot) {
 
   const partnerLabel = snapshot.partnerName || fmtGuid(snapshot.partnerGuid || 0);
   setAcText(overlayEl._partnerNameEl, partnerLabel, { color: "#f0c87c" });
+  currentPartnerGuid = (snapshot.partnerGuid >>> 0) || 0;
+  rangeBreachFired = false;
 
   overlayEl._myDotEl.dataset.on = snapshot.myAccepted ? "1" : "0";
   overlayEl._partnerDotEl.dataset.on = snapshot.partnerAccepted ? "1" : "0";
@@ -427,6 +441,7 @@ function showPanel() {
     };
     document.addEventListener("keydown", onKeyDownHandler, true);
   }
+  startRangeWatcher();
 }
 
 function hidePanel() {
@@ -436,6 +451,63 @@ function hidePanel() {
     document.removeEventListener("keydown", onKeyDownHandler, true);
     onKeyDownHandler = null;
   }
+  stopRangeWatcher();
+  currentPartnerGuid = 0;
+  rangeBreachFired = false;
+}
+
+// Distance enforcement — polls partner + local-player world pos and
+// fires handle.declineTrade() if the trade partner moves > 24m away.
+// The trade snapshot's partnerGuid is captured in renderSnapshot; the
+// scene3d entityMap resolves it to a world position (read-only —
+// matches the radar/picking access pattern).
+function startRangeWatcher() {
+  if (rangeTimerId) return;
+  rangeTimerId = setInterval(checkPartnerRange, TRADE_RANGE_POLL_MS);
+}
+
+function stopRangeWatcher() {
+  if (!rangeTimerId) return;
+  try { clearInterval(rangeTimerId); } catch (_) {}
+  rangeTimerId = 0;
+}
+
+function checkPartnerRange() {
+  if (!overlayEl || overlayEl.dataset.open !== "1") return;
+  if (rangeBreachFired) return;
+  if (!currentPartnerGuid) return;
+  const sw = window.liveScene3d?.cameraSwitcher;
+  const em = window.liveScene3d?.entityManager;
+  const playerPos = sw?.getPlayerWorldPos?.();
+  const partnerInst = em?.entityMap?.get?.(currentPartnerGuid >>> 0)
+    ?? em?.entityMap?.get?.(String(currentPartnerGuid >>> 0));
+  const partnerPos = partnerInst?.root?.position;
+  if (!playerPos || !partnerPos) return;
+  const dx = partnerPos.x - playerPos.x;
+  const dy = partnerPos.y - playerPos.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist <= TRADE_MAX_RANGE_M) return;
+  rangeBreachFired = true;
+  const handle = window.__sessionHandle;
+  try { handle?.declineTrade?.(); }
+  catch (e) { console.warn("[trade-panel] declineTrade on range-breach failed:", e); }
+  showRangeToast();
+}
+
+function showRangeToast() {
+  if (!overlayEl) return;
+  const old = overlayEl.querySelector(".htp-range-toast");
+  if (old) old.remove();
+  const t = document.createElement("div");
+  t.className = "htp-range-toast";
+  t.style.cssText =
+    "position:absolute;left:50%;bottom:8px;transform:translateX(-50%);" +
+    "padding:4px 12px;font-size:11px;background:rgba(20,14,8,0.92);" +
+    "border:1px solid var(--hb-border-brass,#b08a4a);color:var(--hb-text-gold,#d4af37);" +
+    "pointer-events:none;z-index:5;";
+  setAcText(t, "Trade partner moved away");
+  overlayEl.appendChild(t);
+  setTimeout(() => { try { t.remove(); } catch (_) {} }, 2000);
 }
 
 function requestClose() {
