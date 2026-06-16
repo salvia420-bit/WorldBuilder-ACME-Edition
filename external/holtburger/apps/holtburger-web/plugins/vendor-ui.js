@@ -75,6 +75,7 @@ import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
 
 // gmVendorUI 0x21000012 — element_id constants from
 // vendor_ui_layout_dump 2026-05-24. See head-comment block above for
@@ -1310,10 +1311,11 @@ function onKeyDown(ev) {
 // Wave D (2026-06-06): accept BOTH the legacy text/x-hb-item-guid
 // and the polymorphic application/x-hb-inv-guid mimes so the bag-tab
 // drag surfaces dual-mime'd in inventory.js + index.html route here.
+// Rec #161 (2026-06-16): MIME table moved into ./drop_item_flags.js
+// (DropItemFlags.VENDOR) — local wrapper kept for the existing call
+// sites in this module so the diff stays bounded.
 function _hasInvMime(dt) {
-  if (!dt?.types) return false;
-  return dt.types.includes("text/x-hb-item-guid")
-      || dt.types.includes("application/x-hb-inv-guid");
+  return isDropAccepted(dt?.types, DropItemFlags.VENDOR);
 }
 function onDragEnter(ev) {
   if (_hasInvMime(ev.dataTransfer)) {

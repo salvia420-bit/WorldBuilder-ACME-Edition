@@ -25,6 +25,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
 
 const OVERLAY_ID = "hb-trade-panel";
 const STYLE_ID = "hb-trade-panel-style";
@@ -526,13 +527,13 @@ function requestClose() {
 }
 
 function onMyDragEnter(ev) {
-  if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
+  if (isDropAccepted(ev.dataTransfer?.types, DropItemFlags.TRADE)) {
     ev.preventDefault();
     overlayEl?._mySideEl?.classList.add("htp-drop-active");
   }
 }
 function onMyDragOver(ev) {
-  if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
+  if (isDropAccepted(ev.dataTransfer?.types, DropItemFlags.TRADE)) {
     ev.preventDefault();
     ev.dataTransfer.dropEffect = "move";
   }

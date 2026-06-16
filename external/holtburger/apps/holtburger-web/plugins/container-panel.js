@@ -22,6 +22,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
 
 const OVERLAY_ID = "hb-container-panel";
 const STYLE_ID = "hb-container-panel-style";
@@ -320,7 +321,7 @@ function renderItems(items) {
           }
         } catch (_) {}
       });
-      const _accepts = (dt) => !!dt?.types && (dt.types.includes("application/x-hb-inv-guid") || dt.types.includes("text/x-hb-item-guid"));
+      const _accepts = (dt) => isDropAccepted(dt?.types, DropItemFlags.CONTAINER);
       slot.addEventListener("dragenter", (ev) => {
         if (!_accepts(ev.dataTransfer)) return;
         ev.preventDefault();

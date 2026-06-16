@@ -47,6 +47,7 @@ import {
 } from "../ui/ac_floaty_frame.js";
 import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
 import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
+import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
 import { canBindToHotbar } from "./inventory_helpers.js";
 import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
 
@@ -704,11 +705,10 @@ export function mount(ctx) {
     // also consume inv-guid for swaps, to prevent cross-consume from
     // trade-panel or canvas drag sources.
     function dragHasAcceptedType(types) {
-      if (!types) return false;
-      const arr = Array.from(types);
-      return arr.includes("application/x-hb-spell-id")
-          || arr.includes("application/x-hb-inv-guid")
-          || arr.includes("application/x-hb-hotbar-slot");
+      // Rec #161 (2026-06-16): MIME list centralized in
+      // drop_item_flags.js — SHORTCUT flag covers the spell-id /
+      // inv-guid / hotbar-slot triple this slot accepts.
+      return isDropAccepted(types, DropItemFlags.SHORTCUT);
     }
     // Hotbar slot is itself a drag source for swap.
     el.draggable = true;
