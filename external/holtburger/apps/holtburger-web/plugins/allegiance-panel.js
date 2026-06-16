@@ -832,7 +832,13 @@ export const view = {
     setAcText(swearBtnEl, "Swear");
     swearBtnEl.title = "swear fealty to selected target";
     swearBtnEl.addEventListener("click", () => {
-      emit(`[allegiance] Swear: swear fealty to selected target (game-action not wired yet)`);
+      const guid = saCurrentSelectedGuid();
+      if (!guid) { emit(`[allegiance] Swear: click a player first.`); return; }
+      if (!window.confirm("Swear allegiance to the selected target?")) return;
+      saWithSession("swearAllegiance", (h) => {
+        h.swearAllegiance(guid);
+        emit(`[allegiance/swear] target=0x${guid.toString(16).padStart(8, "0")}`);
+      });
     });
     root.appendChild(swearBtnEl);
 
@@ -895,7 +901,13 @@ export const view = {
     setAcText(breakBtnEl, "Break");
     breakBtnEl.title = "break fealty (leave your patron)";
     breakBtnEl.addEventListener("click", () => {
-      emit(`[allegiance] Break: break fealty (leave your patron) (game-action not wired yet)`);
+      const guid = saCurrentSelectedGuid();
+      if (!guid) { emit(`[allegiance] Break: click a player first.`); return; }
+      if (!window.confirm("Break allegiance with the selected target?")) return;
+      saWithSession("breakAllegiance", (h) => {
+        h.breakAllegiance(guid);
+        emit(`[allegiance/break] target=0x${guid.toString(16).padStart(8, "0")}`);
+      });
     });
     root.appendChild(breakBtnEl);
 
@@ -906,7 +918,13 @@ export const view = {
     setAcText(kickBtnEl, "Kick");
     kickBtnEl.title = "kick a vassal from your allegiance";
     kickBtnEl.addEventListener("click", () => {
-      emit(`[allegiance] Kick: kick a vassal from your allegiance (game-action not wired yet)`);
+      const name = saCurrentSelectedName();
+      if (!name) { emit(`[allegiance] Kick: click a player first.`); return; }
+      if (!window.confirm(`Boot ${name} from the allegiance?`)) return;
+      saWithSession("breakAllegianceBoot", (h) => {
+        h.breakAllegianceBoot(name, false);
+        emit(`[allegiance/boot] target="${name}" account_boot=false`);
+      });
     });
     root.appendChild(kickBtnEl);
 
