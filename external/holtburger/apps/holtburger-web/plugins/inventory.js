@@ -2658,6 +2658,22 @@ function doMount(parentEl, _ctx) {
   // Capture dragstart on the overlay so we know what's being dragged
   // during subsequent dragover events (dataTransfer.getData isn't
   // available outside drop per the HTML5 spec).
+  //
+  // Rec #173 — also publish a canonical drag-state object on
+  // window.__inventory.dragState + fire hb:inventory-drag-state-change
+  // so consumers (dye-preview, map, future cross-plugin reactivity)
+  // can read the live state instead of subscribing to two separate
+  // dragstart / dragend events. The dataset.draggingGuid attribute
+  // stays in place so existing readers keep working.
+  function _publishDragState(state) {
+    if (!window.__inventory) window.__inventory = {};
+    window.__inventory.dragState = state;
+    try {
+      window.dispatchEvent(new CustomEvent("hb:inventory-drag-state-change", {
+        detail: state,
+      }));
+    } catch (_) {}
+  }
   overlay.addEventListener("dragstart", (ev) => {
     // Paperdoll slots use dataset.itemGuid; grid uses dataset.guid. Fall
     // back to closest() for elements that put the guid on an ancestor.
@@ -2667,9 +2683,16 @@ function doMount(parentEl, _ctx) {
       ?? t?.closest?.("[data-item-guid]")?.dataset?.itemGuid
       ?? t?.closest?.("[data-guid]")?.dataset?.guid;
     if (guid) overlay.dataset.draggingGuid = guid;
+    _publishDragState({
+      guid: (parseInt(guid, 10) >>> 0) || 0,
+      startX: ev.clientX,
+      startY: ev.clientY,
+      isDragging: !!guid,
+    });
   }, true);
   overlay.addEventListener("dragend", () => {
     delete overlay.dataset.draggingGuid;
+    _publishDragState({ guid: 0, startX: 0, startY: 0, isDragging: false });
     try {
       window.dispatchEvent(new CustomEvent("hb:inventory-drag-end"));
     } catch (_) {}
