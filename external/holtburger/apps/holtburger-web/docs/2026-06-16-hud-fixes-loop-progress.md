@@ -100,7 +100,7 @@
 | 190 | med | E05-ui-sound-effects | `plugins/audio_optimistic.js (add UI_GRAB, UI_RELEASE consts), plugins/settings-p` | Wire UI_GrabSlider (0x73) and UI_ReleaseSlider (0x74) on volume/settings sliders | 9b1fdd45 |
 | 192 | med | E07-keymap-hotkey-routing | `ui/keymap.js (serialize helper), index.html (export UI), ACE protocol layer` | Implement DAT file export + ACE keymap persistence | fable-skip |
 | 193 | med | E08-picking-target-cursor-feedback | `plugins/hover-tooltip.js (new plugin)` | Implement hover tooltip (low-latency popup) | 2946e0ec |
-| 194 | med | E08-picking-target-cursor-feedback | `plugins/context-menu.js (new plugin) + picking.js:679–710 (add button===2 dispat` | Add right-click context menu | — |
+| 194 | med | E08-picking-target-cursor-feedback | `plugins/context-menu.js (new plugin) + picking.js:679–710 (add button===2 dispat` | Add right-click context menu | 5aa434f4 |
 | 195 | med | E09-drag-drop-full-system | `container-panel.js:305-360, ~new salvage-validator.js module` | Implement gmSalvageUI drag rules | — |
 | 196 | med | E13-death-resurrection-vitae-ui | `character.js:150-151,506-509 (inPortalSpace tracking), api.js (portalSpaceEntere` | Add resurrection confirmation UI / respawn point selection dialog | — |
 | 199 | med | E15-settings-persistence-options | `options-panel.js:310 (stub), api.js, SessionHandle integration` | Implement Network tab (server latency display, packet loss, reconnect behavior) | — |
