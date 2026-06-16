@@ -54,6 +54,9 @@ function check(name, fn) {
     formatBurdenText,
     computeInventoryTitle,
     parseSlotsViewChecked,
+    canEquipInSlot,
+    EQUIP,
+    COMBAT_STYLE_CASTER,
   } = await import(INV_URL);
 
   // ============================================================
@@ -255,6 +258,103 @@ function check(name, fn) {
     // We write exactly "1" / "0", so any whitespace means storage was
     // tampered with → safe fall-back is unchecked.
     assert.strictEqual(parseSlotsViewChecked(" 1 "), false);
+  });
+
+  // ============================================================
+  // 5. canEquipInSlot — weapon-type discrimination + cascade
+  // ============================================================
+  console.log('\n[5] canEquipInSlot  (weapon/shield/caster/ammo cascade)');
+  const emptyState = { equippedByMask: {}, mainWeapon: null, inCombatMode: false };
+  // vl===0 weapon-type rejection (Rec #1 — combat-toggle revert bug)
+  check('vl=0 melee → rejected (pending hydrate)', () => {
+    const r = canEquipInSlot({ equipMask: EQUIP.MeleeWeapon, validLocations: 0 }, EQUIP.MeleeWeapon, emptyState);
+    assert.strictEqual(r.ok, false);
+  });
+  check('vl=0 bow → rejected (pending hydrate)', () => {
+    const r = canEquipInSlot({ equipMask: EQUIP.MissileWeapon, validLocations: 0 }, EQUIP.MissileWeapon, emptyState);
+    assert.strictEqual(r.ok, false);
+  });
+  check('vl=0 wand (Held) → rejected (pending hydrate)', () => {
+    const r = canEquipInSlot({ equipMask: EQUIP.Held, validLocations: 0 }, EQUIP.Held, emptyState);
+    assert.strictEqual(r.ok, false);
+  });
+  check('vl=0 two-handed → rejected (pending hydrate)', () => {
+    const r = canEquipInSlot({ equipMask: EQUIP.TwoHanded, validLocations: 0 }, EQUIP.TwoHanded, emptyState);
+    assert.strictEqual(r.ok, false);
+  });
+  check('vl=0 armor (non-weapon equipMask) → speculative ok', () => {
+    const r = canEquipInSlot({ equipMask: 0x00000001 /* HeadWear */, validLocations: 0 }, 0x00000001, emptyState);
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.speculative, true);
+  });
+  // Slot mismatch
+  check('vl set, slot mismatch → rejected', () => {
+    const r = canEquipInSlot({ equipMask: EQUIP.MeleeWeapon, validLocations: EQUIP.MeleeWeapon }, EQUIP.Shield, emptyState);
+    assert.strictEqual(r.ok, false);
+  });
+  // Shield + TwoHanded rejection cascade
+  check('shield while wielding two-handed → rejected', () => {
+    const main = { name: 'spadone', equipMask: EQUIP.TwoHanded };
+    const r = canEquipInSlot(
+      { equipMask: EQUIP.Shield, validLocations: EQUIP.Shield },
+      EQUIP.Shield,
+      { equippedByMask: {}, mainWeapon: main, inCombatMode: false }
+    );
+    assert.strictEqual(r.ok, false);
+    assert.match(r.reason, /two-handed|spadone/);
+  });
+  // Shield + caster main-hand
+  check('shield while wielding caster → rejected', () => {
+    const main = { name: 'wand', equipMask: EQUIP.Held, defaultCombatStyle: COMBAT_STYLE_CASTER };
+    const r = canEquipInSlot(
+      { equipMask: EQUIP.Shield, validLocations: EQUIP.Shield },
+      EQUIP.Shield,
+      { equippedByMask: {}, mainWeapon: main, inCombatMode: false }
+    );
+    assert.strictEqual(r.ok, false);
+  });
+  // Caster + melee main-hand in combat
+  check('caster wand while in-combat with melee equipped → rejected', () => {
+    const main = { name: 'sword', equipMask: EQUIP.MeleeWeapon };
+    const r = canEquipInSlot(
+      { equipMask: EQUIP.Held, validLocations: EQUIP.Held, defaultCombatStyle: COMBAT_STYLE_CASTER, name: 'wand' },
+      EQUIP.Held,
+      { equippedByMask: { [EQUIP.MeleeWeapon]: main }, mainWeapon: main, inCombatMode: true }
+    );
+    assert.strictEqual(r.ok, false);
+    assert.match(r.reason, /combat/i);
+  });
+  // Ammo type mismatch
+  check('arrow into crossbow → rejected (ammo type mismatch)', () => {
+    const mw = { name: 'crossbow', equipMask: EQUIP.MissileWeapon, ammoType: 2 /* bolt */ };
+    const r = canEquipInSlot(
+      { equipMask: EQUIP.MissileAmmo, validLocations: EQUIP.MissileAmmo, ammoType: 1 /* arrow */ },
+      EQUIP.MissileAmmo,
+      { equippedByMask: { [EQUIP.MissileWeapon]: mw }, mainWeapon: mw, inCombatMode: false }
+    );
+    assert.strictEqual(r.ok, false);
+  });
+  check('arrow into bow → accepted (ammo type match)', () => {
+    const mw = { name: 'bow', equipMask: EQUIP.MissileWeapon, ammoType: 1 /* arrow */ };
+    const r = canEquipInSlot(
+      { equipMask: EQUIP.MissileAmmo, validLocations: EQUIP.MissileAmmo, ammoType: 1 },
+      EQUIP.MissileAmmo,
+      { equippedByMask: { [EQUIP.MissileWeapon]: mw }, mainWeapon: mw, inCombatMode: false }
+    );
+    assert.strictEqual(r.ok, true);
+  });
+  // Happy path — melee with proper vl
+  check('melee with vl=MeleeWeapon, no conflicts → accepted', () => {
+    const r = canEquipInSlot(
+      { equipMask: EQUIP.MeleeWeapon, validLocations: EQUIP.MeleeWeapon },
+      EQUIP.MeleeWeapon,
+      emptyState
+    );
+    assert.strictEqual(r.ok, true);
+  });
+  check('null item → rejected', () => {
+    const r = canEquipInSlot(null, EQUIP.MeleeWeapon, emptyState);
+    assert.strictEqual(r.ok, false);
   });
 
   // ============================================================
