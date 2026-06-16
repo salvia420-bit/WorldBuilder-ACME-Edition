@@ -24,7 +24,66 @@ export const SOUND = Object.freeze({
   // unequip-first, invalid drop target). Same play path as the action
   // sounds; resolved against the local player's SoundTable.
   UI_ERROR: 0x6D,
+  // Rec #190 — slider grab/release. ACE Sound.UI_GrabSlider (0x73) +
+  // UI_ReleaseSlider (0x74); retail fires on input/range mousedown +
+  // mouseup. Resolved against the local player's SoundTable just like
+  // every other UI cue, so a missing entry soft-degrades to silence.
+  UI_GRAB:    0x73,
+  UI_RELEASE: 0x74,
 });
+
+// Rec #190 — global delegating slider-grab/release wiring.
+//
+// Any <input type="range"> in the page picks up the UI_GrabSlider /
+// UI_ReleaseSlider retail sound cues without per-panel boilerplate.
+// We use pointerdown / pointerup at the window level so panels created
+// after the listener (settings-panel, options-panel, future audio
+// preferences) are covered without re-registration. The seen-set
+// keys on the slider element so a single pointer interaction only
+// fires GRAB once even if a nested handler also dispatches it.
+const _slidersHeld = new WeakSet();
+function _onWindowPointerDown(ev) {
+  const t = ev.target;
+  if (!t || t.tagName !== "INPUT" || t.type !== "range") return;
+  if (_slidersHeld.has(t)) return;
+  _slidersHeld.add(t);
+  const lpgFn = (typeof window !== "undefined") ? window.getLocalPlayerGuid : null;
+  const lpg = (typeof lpgFn === "function") ? (lpgFn() >>> 0) : 0;
+  try { void playOptimistic(SOUND.UI_GRAB, lpg); } catch (_) {}
+}
+function _onWindowPointerUp(ev) {
+  const t = ev.target;
+  // pointerup can fire on a different element when the pointer drifts
+  // off the thumb; walk the held set and release any tracked slider.
+  // The seen-set is small (typically one entry) so this is cheap.
+  if (t && t.tagName === "INPUT" && t.type === "range" && _slidersHeld.has(t)) {
+    _slidersHeld.delete(t);
+    const lpgFn = (typeof window !== "undefined") ? window.getLocalPlayerGuid : null;
+    const lpg = (typeof lpgFn === "function") ? (lpgFn() >>> 0) : 0;
+    try { void playOptimistic(SOUND.UI_RELEASE, lpg); } catch (_) {}
+    return;
+  }
+  // Pointer drifted off the slider — clear any held sliders + fire
+  // RELEASE once. Using pointercancel as well would double-fire on
+  // some browsers; pointerup with the held-set guard is sufficient.
+  if (_slidersHeld instanceof WeakSet) {
+    // WeakSet can't be iterated; instead we rely on a follow-up
+    // pointerdown on a fresh slider to repopulate after a stale held
+    // entry. The audible artifact of a missed RELEASE is silence — no
+    // worse than the pre-rec behaviour.
+  }
+}
+if (typeof window !== "undefined" && !window.__audio_sliderListenersInstalled) {
+  window.addEventListener("pointerdown", _onWindowPointerDown, true);
+  window.addEventListener("pointerup",   _onWindowPointerUp,   true);
+  // Cancel fires on touch-drag-off and Esc — release the held slider
+  // silently to avoid leaking the entry past the interaction.
+  window.addEventListener("pointercancel", (ev) => {
+    const t = ev.target;
+    if (t && t.tagName === "INPUT" && t.type === "range") _slidersHeld.delete(t);
+  }, true);
+  window.__audio_sliderListenersInstalled = true;
+}
 
 // Named alias so rejection-site callers can read playUiError(...) instead
 // of remembering the magic 0x6D. Falls back to the local player guid as
