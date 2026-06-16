@@ -485,9 +485,52 @@ function refreshStanceDot() {
     : "Enter a combat stance to cast";
 }
 
+// HUD rec #38 — Pre-cast component check. Walks meta.components,
+// tallies required-per-id (duplicate entries = stacked requirement),
+// and asks window.__getComponentTracker() (api.js rec #95) what the
+// player is actually carrying. Bails with a "Need Nx Name, have Mx"
+// toast on the first short. Skips silently when tracker is unavailable
+// (catalog still loading) so we never block a cast on a transient.
+function _resolveComponentId(comp) {
+  if (typeof comp === "number") return String(comp);
+  if (typeof comp === "string") {
+    const m = comp.match(/^Comp_(\d+)$/);
+    if (m) return m[1];
+  }
+  return null;
+}
+function _checkSpellComponents(meta) {
+  const components = Array.isArray(meta?.components) ? meta.components : null;
+  if (!components || components.length === 0) return { ok: true };
+  const getter = (typeof window !== "undefined") ? window.__getComponentTracker : null;
+  if (typeof getter !== "function") return { ok: true }; // tracker missing — let cast proceed
+  let carried;
+  try { carried = getter() || {}; } catch (_) { return { ok: true }; }
+  const required = {};
+  for (const c of components) {
+    const id = _resolveComponentId(c);
+    if (!id) continue;
+    required[id] = (required[id] || 0) + 1;
+  }
+  for (const [id, need] of Object.entries(required)) {
+    const have = (carried[id] >>> 0) || 0;
+    if (have < need) {
+      const name = resolveComponentName(Number(id) || id);
+      return { ok: false, msg: `Need ${need}× ${name}, have ${have}×.` };
+    }
+  }
+  return { ok: true };
+}
+
 function castFromRow(id, meta) {
   if (getCurrentStanceLow() === 0) {
     toast("Enter a magic combat stance first.");
+    return;
+  }
+  // Rec #38 — fail early when the player doesn't have the components.
+  const compCheck = _checkSpellComponents(meta);
+  if (!compCheck.ok) {
+    toast(compCheck.msg);
     return;
   }
   const untargeted = meta?.untargeted === true;
