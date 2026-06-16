@@ -700,6 +700,12 @@ export function mount(_ctx) {
   resizeHandle.addEventListener("pointerup", (ev) => {
     resizeDrag = null;
     try { resizeHandle.releasePointerCapture(ev.pointerId); } catch (_) {}
+    // HUD rec #47 — persist final size so the next mount restores it.
+    try {
+      const rect = overlay.getBoundingClientRect();
+      localStorage.setItem("hb_chat_panel_width", String(Math.round(rect.width)));
+      localStorage.setItem("hb_chat_panel_height", String(Math.round(rect.height)));
+    } catch (_) {}
   });
   resizeHandle.addEventListener("pointercancel", () => { resizeDrag = null; });
   overlay.appendChild(resizeHandle);
@@ -743,6 +749,20 @@ export function mount(_ctx) {
   // dedicated titlebar. Drag suppressed on clicks targeting the tab
   // buttons themselves so a single click still selects a channel.
   installDragPersistence(overlay, tabStrip, "chat-panel");
+
+  // HUD rec #47 — restore persisted size if present. Same clamp as the
+  // resize handler (220-900 wide, 70-500 tall) so corrupted/edge values
+  // can't escape viewport. Position is owned by installDragPersistence.
+  try {
+    const w = parseInt(localStorage.getItem("hb_chat_panel_width") ?? "", 10);
+    const h = parseInt(localStorage.getItem("hb_chat_panel_height") ?? "", 10);
+    if (Number.isFinite(w) && w > 0) {
+      overlay.style.width = `${Math.max(220, Math.min(900, w))}px`;
+    }
+    if (Number.isFinite(h) && h > 0) {
+      overlay.style.height = `${Math.max(70, Math.min(500, h))}px`;
+    }
+  } catch (_) {}
 
   // Apply retail layout positions for sub-elements. The CSS values
   // above already match retail; this re-asserts from the DAT so the
