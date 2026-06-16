@@ -1079,8 +1079,37 @@ export const view = {
     const initial = TABS.find((x) => x.id === activeId) || TABS[0];
     initial.render(bodyEl);
 
+    // Rec #90 — re-render the Character tab whenever the player's
+    // CharacterOptions bits change server-side. The wasm side fires
+    // playerStatsUpdated on each PlayerDescription drain + after every
+    // accepted SetCharacterOption echo, so this catches both the login
+    // hydration ("server truth replaces empty localStorage on first
+    // arrival") and any out-of-band toggle from /options-style command
+    // flows. Only refresh when the tab is the one actually visible to
+    // avoid wasting render cycles on other tabs.
+    let _charStatsUnsub = null;
+    try {
+      const client = window.__pluginClient ?? null;
+      if (typeof client?.events?.on === "function") {
+        const onStats = () => {
+          if (activeId !== "char") return;
+          const t = TABS.find((x) => x.id === "char");
+          if (!t) return;
+          bodyEl.innerHTML = "";
+          t.render(bodyEl);
+        };
+        client.events.on("playerStatsUpdated", onStats);
+        _charStatsUnsub = () => {
+          try { client.events.off?.("playerStatsUpdated", onStats); } catch (_) {}
+        };
+      }
+    } catch (e) {
+      console.warn("[options-panel] playerStatsUpdated subscribe failed:", e);
+    }
+
     return () => {
       endCapture();
+      try { _charStatsUnsub?.(); } catch (_) {}
       root.remove();
       restoreMainPanelSize(prevMainPanelSize);
     };
