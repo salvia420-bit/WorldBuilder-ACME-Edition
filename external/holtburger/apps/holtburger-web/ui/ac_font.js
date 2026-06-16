@@ -192,16 +192,20 @@ export function getAcFont(fontId = UI_FONT_ID) {
  *
  * HUD rec #117 — retail's Font::DrawString signature carries alignment
  * via a single bitmask flags argument (acclient_2013.bndb_pseudo_c.txt
- * around line 668400). The mapping for future contributors porting
- * layout-driven labels:
+ * around line 668400). The mapping:
  *   flags &  0x08 → right-align horizontal
  *   flags &  0x10 → center horizontal
  *   flags &  0x40 → bottom-align vertical
  *   flags <  0    → vCenter (sign-bit flag, encoded as int)
- * Our renderAcText is alignment-agnostic — callers position the
- * returned canvas via CSS. Layout-driven panels that need the retail
- * alignment semantics should decode the flags at the caller and adjust
- * the canvas's offsetLeft/offsetTop accordingly.
+ *
+ * HUD rec #151 — when `opts.boxWidth` and/or `opts.boxHeight` are
+ * provided the canvas is grown to that size and the glyphs are aligned
+ * within the box via `opts.align` ("left" | "center" | "right") +
+ * `opts.vAlign` ("top" | "middle" | "bottom"). `opts.flags` (retail
+ * bitmask) is decoded into the same align/vAlign axes. Without a box
+ * the canvas still hugs the text (legacy alignment-agnostic behaviour;
+ * callers position via CSS) — adding alignment opts without a box is
+ * a no-op.
  */
 export function renderAcText(text, opts = {}) {
   registerAcText();
@@ -222,8 +226,33 @@ export function renderAcText(text, opts = {}) {
   const drawShadow = opts.shadow !== false && runtime.atlasBgCanvas !== null;
 
   const measured = _measure(runtime, text);
-  const w = Math.max(1, measured.width * scale);
-  const h = Math.max(1, measured.height * scale);
+  const textW = measured.width * scale;
+  const textH = measured.height * scale;
+
+  // Alignment box. boxWidth/boxHeight grow the canvas beyond the text;
+  // align/vAlign control where the glyphs sit inside. `flags` is the
+  // retail Font::DrawString bitmask (see the doc above) and is folded
+  // into align/vAlign before the offset is computed.
+  let align = opts.align ?? "left";
+  let vAlign = opts.vAlign ?? "top";
+  if (typeof opts.flags === "number" && opts.flags !== 0) {
+    const f = opts.flags >>> 0;
+    if (f & 0x10) align = "center";
+    else if (f & 0x08) align = "right";
+    if (f & 0x40) vAlign = "bottom";
+    if (opts.flags < 0) vAlign = "middle";
+  }
+  const boxW = Math.max(textW, Math.floor(opts.boxWidth ?? textW));
+  const boxH = Math.max(textH, Math.floor(opts.boxHeight ?? textH));
+  let offsetX = 0;
+  let offsetY = 0;
+  if (align === "center") offsetX = Math.floor((boxW - textW) / 2);
+  else if (align === "right") offsetX = Math.floor(boxW - textW);
+  if (vAlign === "middle") offsetY = Math.floor((boxH - textH) / 2);
+  else if (vAlign === "bottom") offsetY = Math.floor(boxH - textH);
+
+  const w = Math.max(1, Math.floor(boxW));
+  const h = Math.max(1, Math.floor(boxH));
 
   const canvas = document.createElement("canvas");
   canvas.width = w;
@@ -249,7 +278,10 @@ export function renderAcText(text, opts = {}) {
     const tbg = tmpBg.getContext("2d");
     if (tbg) {
       tbg.imageSmoothingEnabled = false;
+      tbg.save();
+      if (offsetX !== 0 || offsetY !== 0) tbg.translate(offsetX, offsetY);
       _drawGlyphs(tbg, runtime, runtime.atlasBgCanvas, text, scale, 1, 1);
+      tbg.restore();
       tbg.globalCompositeOperation = "source-in";
       tbg.fillStyle = "rgba(0, 0, 0, 0.85)";
       tbg.fillRect(0, 0, w, h);
@@ -264,7 +296,10 @@ export function renderAcText(text, opts = {}) {
   const tctx = tmp.getContext("2d");
   if (!tctx) return null;
   tctx.imageSmoothingEnabled = false;
+  tctx.save();
+  if (offsetX !== 0 || offsetY !== 0) tctx.translate(offsetX, offsetY);
   _drawGlyphs(tctx, runtime, runtime.atlasFgCanvas, text, scale, 0, 0);
+  tctx.restore();
   tctx.globalCompositeOperation = "source-in";
   tctx.fillStyle = color;
   tctx.fillRect(0, 0, w, h);
@@ -540,7 +575,7 @@ export function registerAcText() {
 function _registerAcTextImpl() {
   class AcTextElement extends HTMLElement {
     static get observedAttributes() {
-      return ["color", "scale", "font-id", "shadow"];
+      return ["color", "scale", "font-id", "shadow", "align", "v-align", "box-width", "box-height"];
     }
     constructor() {
       super();
@@ -592,6 +627,16 @@ function _registerAcTextImpl() {
           : undefined,
         shadow: this.getAttribute("shadow") !== "off",
       };
+      if (this.hasAttribute("align")) opts.align = this.getAttribute("align");
+      if (this.hasAttribute("v-align")) opts.vAlign = this.getAttribute("v-align");
+      if (this.hasAttribute("box-width")) {
+        const n = Number(this.getAttribute("box-width"));
+        if (Number.isFinite(n) && n > 0) opts.boxWidth = n;
+      }
+      if (this.hasAttribute("box-height")) {
+        const n = Number(this.getAttribute("box-height"));
+        if (Number.isFinite(n) && n > 0) opts.boxHeight = n;
+      }
       const runtime = getAcFont(opts.fontId ?? UI_FONT_ID);
       if (!runtime) {
         loadAcFont(opts.fontId ?? UI_FONT_ID).then(() => this._render());
