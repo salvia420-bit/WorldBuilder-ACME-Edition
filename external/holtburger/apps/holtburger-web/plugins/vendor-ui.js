@@ -735,6 +735,7 @@ let state = {
   categoryFilter: "all",
   buyQueue: [],              // [{ itemGuid, name, value, amount, iconId, itemType, stackSize, wcid }]
   sellQueue: [],             // [{ itemGuid, name, value, amount, iconId, itemType, stackSize, wcid }]
+  rangeCheckTimer: null,     // HUD rec #18 — 2Hz approach-distance watchdog
 };
 
 function setItemIcon(iconEl, item) {
@@ -1404,6 +1405,56 @@ function hideOverlay() {
   state.buyQueue = [];
   state.sellQueue = [];
   state.selectedItemGuid = null;
+  stopVendorRangeWatchdog();
+}
+
+// HUD rec #18 — vendor approach-distance enforcement. Retail Trade/
+// Vendor.cs sets MaxInteractDistance≈24 units; when the player walks
+// outside that radius the vendor UI auto-closes (acclient.h:55268
+// ObjectRangeHandler / OnObjectRangeExit). The wasm side doesn't yet
+// surface a per-frame ObjectRangeExit callback, so we poll the live
+// scene at 2Hz: read the vendor's `root.position` from entityManager
+// + the local player pose via window.getLocalPlayerPose(), compute
+// horizontal distance, and if it crosses the 24-unit threshold while
+// the overlay is open we hide it + show a single toast. Started by
+// openWith() and torn down by hideOverlay() / mount disposer.
+const VENDOR_MAX_INTERACT_RANGE = 24.0;
+function startVendorRangeWatchdog() {
+  stopVendorRangeWatchdog();
+  state.rangeCheckTimer = setInterval(() => {
+    const ov = state.overlayEl;
+    if (!ov || ov.dataset.open !== "1") {
+      stopVendorRangeWatchdog();
+      return;
+    }
+    const vendorGuid = (state.vendorState?.vendorGuid >>> 0) || 0;
+    if (!vendorGuid) return;
+    const em = window.liveScene3d?.entityManager;
+    const inst = em?.entityMap?.get?.(vendorGuid);
+    const vendorPos = inst?.root?.position;
+    if (!vendorPos) return; // vendor not in scene; let server timeout
+    const player = window.getLocalPlayerPose?.();
+    const pp = player?.position ?? player; // tolerate either {position} or flat
+    if (!pp || pp.x == null || pp.y == null) return;
+    const dx = vendorPos.x - pp.x;
+    const dy = vendorPos.y - pp.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > VENDOR_MAX_INTERACT_RANGE) {
+      console.info(
+        `[vendor-ui] vendor 0x${vendorGuid.toString(16)} out of range ` +
+        `(${dist.toFixed(1)}m > ${VENDOR_MAX_INTERACT_RANGE}m) — closing overlay`,
+      );
+      toast("Vendor moved away.", "err");
+      // Defer the close one tick so the toast has a parent to animate in.
+      setTimeout(hideOverlay, 50);
+    }
+  }, 500);
+}
+function stopVendorRangeWatchdog() {
+  if (state.rangeCheckTimer) {
+    clearInterval(state.rangeCheckTimer);
+    state.rangeCheckTimer = null;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -1852,6 +1903,8 @@ export function mount(ctx) {
     // ACE refreshes kind=12 after every buy. Drop the queues only
     // when switching vendors.
     showOverlay();
+    // Rec #18 — start range polling when vendor opens.
+    startVendorRangeWatchdog();
     if (state.refs?.items?.cat) {
       state.refs.items.cat.value = "all";
       try { state.refs.items.syncMenu?.(); } catch (_) {}
@@ -1878,6 +1931,7 @@ export function mount(ctx) {
     if (pollTimer) clearInterval(pollTimer);
     if (unsubscribe) unsubscribe();
     document.removeEventListener("keydown", onKeyDown);
+    stopVendorRangeWatchdog();
     if (state.overlayEl) {
       state.overlayEl.remove();
       state.overlayEl = null;
@@ -1919,6 +1973,8 @@ if (typeof window !== "undefined") {
     state.sellQueue = [];
     state.categoryFilter = "all";
     showOverlay();
+    // Rec #18 — start range polling when vendor opens.
+    startVendorRangeWatchdog();
     if (state.refs?.items?.cat) {
       state.refs.items.cat.value = "all";
       try { state.refs.items.syncMenu?.(); } catch (_) {}
