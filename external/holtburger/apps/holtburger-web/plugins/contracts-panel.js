@@ -761,9 +761,25 @@ export const view = {
       // start NPC location.
       const rec = lookupContractRecord(c.id);
       const cellId = rec?.locationNpcStart?.cellId || 0;
-      const lbId = cellId ? `0x${((cellId >>> 16) & 0xFFFF).toString(16).padStart(4, "0").toUpperCase()}` : "";
+      const lb16 = cellId ? ((cellId >>> 16) & 0xFFFF) : 0;
+      const lbHex = lb16 ? `0x${lb16.toString(16).padStart(4, "0").toUpperCase()}` : "";
+      // Rec #108 — friendly place-name lookup. Sparse table for the
+      // few landblocks where we have an authoritative source; falls
+      // back to the hex landblock id (and "—" when there's no
+      // location at all). 0xA9B4 = Holtburg is the only entry we can
+      // cite locally (WorldBuilder.Tests TownsExporter round-trip
+      // pins ModelId 0x020000A7-A8 at TownName="Holtburg"); other
+      // starter-town IDs (Shoushi / Yanshi / Yaraq / Cragstone /
+      // Arwic / Hebian-To / Sanamar / Mayoi / etc.) should be added
+      // here when verified against ACE landblock instances or a
+      // dist-regen ground-truth dump.
+      const PLACE_NAMES = {
+        0xA9B4: "Holtburg",
+      };
+      const placeName = PLACE_NAMES[lb16] || null;
+      const lbDisplay = placeName ? `${placeName} (${lbHex})` : lbHex;
       setAcText(detVal1El, c.npc || "—");
-      setAcText(detVal2El, lbId || "—");
+      setAcText(detVal2El, lbDisplay || "—");
       setAcText(detVal3El, c.descriptionProgress || c.progress);
       setAcText(detVal4El, c.cooldown);
       setAcText(detDescEl, c.desc);
