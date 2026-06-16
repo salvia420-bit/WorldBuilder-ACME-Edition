@@ -197,6 +197,24 @@ const TYPE_COLOR = {
 // (per acclient.h:4546-4552 UI_SLOT_SIDE_NULL=0, _LEFT=1, _RIGHT=2).
 // Equipped items render in the slot whose equipMask bit matches
 // `item.equipMask & slot.equipMask`.
+//
+// validLocations contract (HUD rec #39 — D01 documentation):
+//   (a) Each inventory item arrives with PropertyInt::ValidLocations
+//       populated server-side. The field reaches the JS plugin via two
+//       wires: SessionHandle.playerInventory() (initial snapshot at
+//       login) and kind=11 playerInventoryChanged (per-item deltas).
+//   (b) Server-side ACE MUST populate PropertyInt::ValidLocations for
+//       every wieldable. A wieldable with vl=0 is treated as
+//       "attributes pending" by canEquipInSlot — equip is rejected
+//       for weapons (multi-bit collision risk, see rec #1/#2 fixes)
+//       and speculative-ok'd for armor (single-bit slots).
+//   (c) The `validLocations & slotMask` check is defensive: it rejects
+//       multi-bit masks that would otherwise let a weapon equip into
+//       any of MeleeWeapon | MissileWeapon | Held | TwoHanded without
+//       a stable single-bit derivation. ACE Creature.TrySetChild
+//       performs the same check server-side.
+//   (d) Retail precedent: acclient decomp `GetLocationInfoFromElementID`
+//       at acclient.c:173620 — the same single-bit assert applies.
 const PAPERDOLL_SLOTS = [
   // Top-row chrome (left of head): Necklace + Trinket
   { elemId: "0x10000446", equipMask: 0x00008000, hintIconDid: 0x06000F68, x: 8,   y: 8,   name: "Necklace" },
