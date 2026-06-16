@@ -17512,6 +17512,18 @@ const CLIENT_EVENT_KIND_OVERHEAD_SPEECH: u32 = 55;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_JUMP_REFUSED: u32 = 56;
 
+/// `kind = 57` — ServerInfoReceived. HUD rec #83 (2026-06-16): ACE
+/// sent `GameMessage::ServerName` (opcode 0xF658) post-login with the
+/// world name + current/max connection counts. Recv loop has stashed
+/// `world_name` / `current_connections` / `max_connections` on
+/// `latest_server_info`. JS reads via [`SessionHandle::server_info`]
+/// to render "Server: <name> | Players: X/Max" in the post-login
+/// status line (acclient.h:56091 gmCharacterManagementUI::
+/// UpdateWorldName). String payload carries the server name for
+/// at-glance logging.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_SERVER_INFO: u32 = 57;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -23730,6 +23742,36 @@ impl CharacterSummary {
     }
 }
 
+/// HUD rec #83 (2026-06-16): post-login server info from
+/// `GameMessage::ServerName` (opcode 0xF658). ACE sends this once
+/// during the login handshake; we stash the world name + connection
+/// counts so the post-login status line can render
+/// "Server: <name> | Players: X/Max" (acclient.h:56091
+/// gmCharacterManagementUI::UpdateWorldName).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct ServerInfoJs {
+    name: String,
+    current_connections: u32,
+    max_connections: i32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl ServerInfoJs {
+    /// Server / world display name (e.g. "Frostfell", "Leafcull").
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+    /// Live connection count at the moment the wire packet was sent.
+    #[wasm_bindgen(getter, js_name = currentConnections)]
+    pub fn current_connections(&self) -> u32 { self.current_connections }
+    /// Configured ceiling. `-1` on retail = unlimited; ACE typically
+    /// sets a positive cap.
+    #[wasm_bindgen(getter, js_name = maxConnections)]
+    pub fn max_connections(&self) -> i32 { self.max_connections }
+}
+
 /// Live wasm-side proxy for an AC session connected via WS to ACE.
 /// Constructed by [`start_session`] once the handshake reaches
 /// `CharacterList`. The Session itself lives inside the `spawn_local`
@@ -23754,6 +23796,10 @@ pub struct SessionHandle {
     cmd_tx: futures::channel::mpsc::UnboundedSender<SessionCommand>,
     queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>>,
     character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>>,
+    /// HUD rec #83 (2026-06-16): most recent server info from
+    /// `GameMessage::ServerName`. `None` until the post-login handshake
+    /// arrives; refreshed if ACE re-sends (rare).
+    latest_server_info: std::rc::Rc<std::cell::RefCell<Option<ServerInfoJs>>>,
     account_name: String,
     /// Phase 4 step 2a.5: shared catalog slot, populated asynchronously
     /// in the background. `None` until the catalog HBA fetch completes
@@ -24733,6 +24779,16 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = characterList)]
     pub fn character_list(&self) -> Vec<CharacterSummary> {
         self.character_list.borrow().clone()
+    }
+
+    /// HUD rec #83 (2026-06-16): post-login server info from
+    /// `GameMessage::ServerName`. `None` until ACE sends the packet
+    /// during the login handshake. JS reads this on the kind=57
+    /// ServerInfoReceived event drain to render
+    /// "Server: <name> | Players: X/Max" in the post-login status line.
+    #[wasm_bindgen(js_name = serverInfo)]
+    pub fn server_info(&self) -> Option<ServerInfoJs> {
+        self.latest_server_info.borrow().clone()
     }
 
     /// HUD rec #165 (E12-login-character-select-creation): request
@@ -29246,6 +29302,9 @@ pub async fn start_session(
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // HUD rec #83 (2026-06-16): server info from GameMessage::ServerName.
+    let latest_server_info: std::rc::Rc<std::cell::RefCell<Option<ServerInfoJs>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
     let catalog: std::rc::Rc<
         std::cell::RefCell<Option<std::sync::Arc<holtburger_content::CharacterGenCatalog>>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -29528,6 +29587,8 @@ pub async fn start_session(
     {
         let queued_events = queued_events.clone();
         let character_list = character_list.clone();
+        // HUD rec #83 (2026-06-16) — clone for recv_loop param.
+        let latest_server_info_inner = latest_server_info.clone();
         let entity_updates = entity_updates.clone();
         let world_bootstrap = world_bootstrap.clone();
         let latest_stats = latest_stats.clone();
@@ -29608,6 +29669,8 @@ pub async fn start_session(
                 entity_enchantments_index_inner,
                 // === HUD rec #53 — identify meta index (2026-06-16) ===
                 identify_meta_index_inner,
+                // === HUD rec #83 — server info (2026-06-16) ===
+                latest_server_info_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
@@ -29681,6 +29744,7 @@ pub async fn start_session(
         cmd_tx,
         queued_events,
         character_list,
+        latest_server_info,
         account_name,
         catalog,
         entity_updates,
@@ -31563,6 +31627,10 @@ async fn recv_loop(
     identify_meta_index: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, (bool, u32)>>,
     >,
+    // HUD rec #83 (2026-06-16): shared latest_server_info slot — recv
+    // loop overwrites on GameMessage::ServerName, JS reads via
+    // SessionHandle::server_info.
+    latest_server_info: std::rc::Rc<std::cell::RefCell<Option<ServerInfoJs>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
@@ -35891,6 +35959,27 @@ async fn recv_loop(
                                 string_payload: Some(format!("[Server] {}", data.message)),
                                 u32_payload: Some(data.chat_type),
                                 u32_payload_2: Some(category),
+                                f32_payload: None,
+                            });
+                        }
+                        GameMessage::ServerName(data) => {
+                            // HUD rec #83 (2026-06-16): ACE pushes the
+                            // world identity + connection counts as part
+                            // of the post-login handshake. Stash the
+                            // snapshot + signal JS with kind=57 so the
+                            // post-login status line can render
+                            // "Server: <name> | Players: X/Max".
+                            let snapshot = ServerInfoJs {
+                                name: data.name.clone(),
+                                current_connections: data.current_connections,
+                                max_connections: data.max_connections,
+                            };
+                            *latest_server_info.borrow_mut() = Some(snapshot);
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_SERVER_INFO,
+                                string_payload: Some(data.name.clone()),
+                                u32_payload: Some(data.current_connections),
+                                u32_payload_2: Some(data.max_connections as u32),
                                 f32_payload: None,
                             });
                         }

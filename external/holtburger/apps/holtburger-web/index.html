@@ -8199,9 +8199,29 @@ void main() {
           handle.poll_events();
 
           const chars = handle.characterList();
-          loginStatus.innerHTML =
-            `<span class="ok">[OK]</span> Logged in as <code>${handle.accountName || account}</code>. ` +
-            `${chars.length} character${chars.length === 1 ? "" : "s"} on this account.`;
+          // HUD rec #83 (2026-06-16): post-login banner mirrors retail
+          // gmCharacterManagementUI::UpdateWorldName (acclient.h:56091).
+          // ServerName may already be cached by the time we hit this
+          // line (ACE pushes it pre-CharacterList); the kind=57 drain
+          // handler below also re-renders on later refreshes.
+          function renderLoginStatusBanner() {
+            const info = handle.serverInfo?.();
+            const chars2 = handle.characterList();
+            let banner = `<span class="ok">[OK]</span> Logged in as <code>${handle.accountName || account}</code>. ` +
+              `${chars2.length} character${chars2.length === 1 ? "" : "s"} on this account.`;
+            if (info) {
+              const name = info.name || "(unnamed server)";
+              const cur = info.currentConnections ?? 0;
+              const max = info.maxConnections;
+              const cap = (typeof max === "number" && max > 0) ? max : "∞";
+              banner += `<br>Server: <strong>${name}</strong> · Players: ${cur}/${cap}`;
+            }
+            loginStatus.innerHTML = banner;
+          }
+          renderLoginStatusBanner();
+          // Expose so the kind=57 ServerInfoReceived drain (and any
+          // post-login refresh) can re-render the same banner.
+          window.__renderLoginStatusBanner = renderLoginStatusBanner;
 
           // Phase 4 step 2a.5 — render character list (or empty-state
           // fallback). Always-rendered: a "Create test character" form
@@ -10685,6 +10705,17 @@ void main() {
                     evt.stringPayload || "",
                     isEmote,
                   );
+                }
+              } else if (evt.kind === 57) {
+                // HUD rec #83 (2026-06-16) — ServerInfoReceived. ACE
+                // sent GameMessage::ServerName (opcode 0xF658) with the
+                // world identity + connection counts; wasm has stashed
+                // a fresh `serverInfo()` snapshot. Re-render the post-
+                // login banner so users see "Server: <name> | Players:
+                // X/Max" (acclient.h:56091
+                // gmCharacterManagementUI::UpdateWorldName).
+                if (typeof window.__renderLoginStatusBanner === "function") {
+                  window.__renderLoginStatusBanner();
                 }
               } else if (evt.kind === 56) {
                 // A14-I4 (W3+ S11, ?jumpParity=on) — jump refusal text.
