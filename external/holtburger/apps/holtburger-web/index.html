@@ -1269,6 +1269,7 @@
       import {
         buildManifestBindings as buildManifestHotkeyBindings,
         setManifestBindings as setManifestHotkeyBindings,
+        setManifestHotkeyConflicts as setManifestHotkeyConflicts,
         matchHotkeyEvent as matchManifestHotkeyEvent,
         // A14-I3 (?retailRunKeys=on) — rebindable autorun-toggle key
         // (LOCAL_ACTIONS "Autorun (toggle)", default KeyR; retail
@@ -1620,6 +1621,9 @@
           const manifestList = [...loaded.values()].map((v) => v.manifest);
           const { map: hotkeyMap, duplicates } = buildManifestHotkeyBindings(manifestList);
           setManifestHotkeyBindings(hotkeyMap);
+          // HUD rec #113 — persist conflicts so the Options Controls
+          // tab can surface them to the player + suggest rebinding.
+          setManifestHotkeyConflicts(duplicates || []);
           if (duplicates && duplicates.length) {
             console.warn(`[hotkey-bindings] duplicates: ${duplicates.map((d) => d.key).join(", ")}`);
           }

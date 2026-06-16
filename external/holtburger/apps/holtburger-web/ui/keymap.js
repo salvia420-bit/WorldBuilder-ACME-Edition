@@ -781,6 +781,27 @@ export function buildManifestBindings(manifests) {
   return { map, labels, duplicates };
 }
 
+// HUD rec #113 — manifest-hotkey-conflict store + accessors.
+// buildManifestBindings() returns the duplicate list at build time but
+// the previous host startup only console.warn'd it. Persist it now so
+// the Controls tab (and any other UI) can surface conflicts to the
+// player and offer rebind. setManifestHotkeyConflicts is called from
+// the host alongside setManifestBindings; getManifestHotkeyConflicts
+// returns a defensive copy of the most recent list.
+let manifestConflicts = [];
+export function setManifestHotkeyConflicts(list) {
+  manifestConflicts = Array.isArray(list) ? list.map((d) => ({
+    keyString: d?.keyString || "",
+    conflicts: Array.isArray(d?.conflicts) ? [...d.conflicts] : [],
+  })) : [];
+}
+export function getManifestHotkeyConflicts() {
+  return manifestConflicts.map((d) => ({
+    keyString: d.keyString,
+    conflicts: [...d.conflicts],
+  }));
+}
+
 /**
  * Look up the manifest binding for a normalised key-string (e.g.
  * `"F4"`, `"Shift+F2"`). Returns `null` if no manifest claims it.

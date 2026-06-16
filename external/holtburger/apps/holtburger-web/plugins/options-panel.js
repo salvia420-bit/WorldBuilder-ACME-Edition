@@ -52,6 +52,7 @@ import {
   loadRetailKeyMap,
   getRetailKeyMap,
   lookupRetailDefault,
+  getManifestHotkeyConflicts,
 } from "../ui/keymap.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 
@@ -459,6 +460,39 @@ function renderControlsTab(bodyEl) {
   note.style.opacity = "0.75";
   setAcText(note, "Click Bind, press a key (Esc to cancel). Local actions below route through live JS handlers. Retail actions are grouped by their ActionMap category and show their factory-default key (from KeyMap 0x14000000 / gmDefaultMap).");
   bodyEl.appendChild(note);
+
+  // HUD rec #113 — surface plugin-manifest hotkey conflicts so the
+  // player can spot accidental F-key collisions (e.g. F2 + F5 both
+  // open the same panel). A conflict here means TWO+ plugin manifests
+  // declared the same default key; the host's last-wins resolution
+  // dispatches only one. Intentional aliases can be ignored; real
+  // conflicts can be rebound via the rows below.
+  const conflicts = getManifestHotkeyConflicts();
+  if (conflicts.length > 0) {
+    const cWrap = document.createElement("div");
+    cWrap.style.background = "rgba(120, 32, 32, 0.25)";
+    cWrap.style.border = "1px solid #802020";
+    cWrap.style.padding = "6px 8px";
+    cWrap.style.marginBottom = "8px";
+    cWrap.style.fontSize = "11px";
+    const cTitle = document.createElement("div");
+    setAcText(cTitle, `Plugin hotkey conflicts (${conflicts.length})`, { color: "#f0a060" });
+    cTitle.style.marginBottom = "4px";
+    cWrap.appendChild(cTitle);
+    for (const c of conflicts) {
+      const row = document.createElement("div");
+      row.style.fontFamily = "var(--hb-font-mono)";
+      setAcText(row, `  ${c.keyString} → ${c.conflicts.join(", ")}`, { color: "#e0d0a0" });
+      cWrap.appendChild(row);
+    }
+    const cHint = document.createElement("div");
+    cHint.style.marginTop = "4px";
+    cHint.style.fontStyle = "italic";
+    cHint.style.opacity = "0.75";
+    setAcText(cHint, "If unintended, rebind one side via Local Actions below.");
+    cWrap.appendChild(cHint);
+    bodyEl.appendChild(cWrap);
+  }
 
   const bindings = getKeybindings();
   const refresh = () => renderControlsTab(bodyEl);
