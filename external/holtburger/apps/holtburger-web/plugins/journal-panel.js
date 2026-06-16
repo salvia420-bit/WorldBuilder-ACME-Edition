@@ -571,10 +571,18 @@ export const view = {
     setAcText(lblSection, "Title:");
     root.appendChild(lblSection);
 
-    // Search/title field (retail 0x1000056B)
+    // Search/title field (retail 0x1000056B). HUD rec #109 — wire
+    // contenteditable + filter-on-input so the parchment shows only
+    // matching entries. Works on SAMPLE_ENTRIES today; same path will
+    // filter the real list once SessionHandle.journal() lands.
     const searchField = document.createElement("div");
     searchField.className = "hb-journal-hdr-field";
     searchField.dataset.field = "search";
+    searchField.contentEditable = "true";
+    searchField.spellcheck = false;
+    searchField.style.outline = "none";
+    searchField.style.minHeight = "1em";
+    searchField.style.padding = "1px 4px";
     setAcText(searchField, "");
     root.appendChild(searchField);
 
@@ -607,15 +615,32 @@ export const view = {
     setAcText(title, `Journal of ${playerName}`, { color: "#6b3a0a" });
     content.appendChild(title);
 
-    // Real journal data isn't wired — show the placeholder narrative
-    // so the parchment frame at least renders representative content.
-    if (SAMPLE_ENTRIES.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "hb-journal-empty";
-      setAcText(empty, "No journal entries yet.", { color: "#5a3a18" });
-      content.appendChild(empty);
-    } else {
-      for (const e of SAMPLE_ENTRIES) {
+    // Entry rendering — extracted so the search field (#109) can
+    // re-render with a filtered subset on each keystroke. Static
+    // filter state lives in the closure; switching tabs preserves it
+    // as long as the panel stays mounted (which it does — main-panel
+    // hides via display:none).
+    let filterText = "";
+    const renderEntriesFiltered = () => {
+      // Strip previous entries/notes/empty markers under content;
+      // keep the `title` element (first child) intact.
+      while (content.children.length > 1) content.removeChild(content.lastChild);
+      const q = filterText.trim().toLowerCase();
+      const matches = SAMPLE_ENTRIES.filter((e) => {
+        if (!q) return true;
+        return (e.title || "").toLowerCase().includes(q)
+            || (e.status || "").toLowerCase().includes(q);
+      });
+      if (matches.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "hb-journal-empty";
+        setAcText(empty, q
+          ? `No entries match “${filterText}”.`
+          : "No journal entries yet.", { color: "#5a3a18" });
+        content.appendChild(empty);
+        return;
+      }
+      for (const e of matches) {
         const entry = document.createElement("div");
         entry.className = "hb-journal-entry";
         const head = document.createElement("div");
@@ -640,9 +665,19 @@ export const view = {
       const note = document.createElement("div");
       note.className = "hb-journal-empty";
       note.style.fontSize = "9px";
-      setAcText(note, "—  Placeholder entries.  Server journal() RPC pending.  —", { color: "#5a3a18" });
+      const noteText = q
+        ? `—  Showing ${matches.length} of ${SAMPLE_ENTRIES.length}.  Server journal() RPC pending.  —`
+        : "—  Placeholder entries.  Server journal() RPC pending.  —";
+      setAcText(note, noteText, { color: "#5a3a18" });
       content.appendChild(note);
-    }
+    };
+    renderEntriesFiltered();
+
+    // Wire search field input — rec #109.
+    searchField.addEventListener("input", () => {
+      filterText = (searchField.textContent || "").replace(/\n/g, " ");
+      renderEntriesFiltered();
+    });
 
     parch.appendChild(content);
     root.appendChild(parch);
