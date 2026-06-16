@@ -416,6 +416,22 @@ function buildItems(ctx) {
         },
       });
     }
+    // Rec #194 — Follow entry. handle.pursueEntity drives the auto-
+    // follow movement (retail's PursueObject). Available on any
+    // non-self target the SessionHandle can resolve; guarded so a
+    // stale pkg/ that doesn't ship the export soft-degrades silently.
+    if (
+      guid !== localPlayerGuid
+      && typeof window.__sessionHandle?.pursueEntity === "function"
+    ) {
+      items.push({
+        label: "Follow",
+        action: () => {
+          try { window.__sessionHandle.pursueEntity(guid >>> 0); }
+          catch (e) { console.warn("[ctx-menu] follow failed:", e); }
+        },
+      });
+    }
   }
   return { items, ent };
 }
