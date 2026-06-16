@@ -14,7 +14,7 @@
 | 2 | crit | D04-radar-projection-heading | `radar.js:708` | Fix heading unit conversion (radians to degrees) | f62b36b0 |
 | 3 | crit | D08-spellbook-spellcasting | `spellbook.js:1258-1278` | Fix spellbook 'Forget Spell' to call correct API (removeSpellFromBook) | b94fe405 |
 | 4 | high | D01-inventory-slots-validation | `tests/inventory_paperdoll_helpers.test.cjs:50-260` | Add canEquipInSlot unit tests for weapon-type discrimination | 3037a0eb |
-| 5 | high | D04-radar-projection-heading | `radar.js:32` | Increase radar range default from 50 to 75 units | — |
+| 5 | high | D04-radar-projection-heading | `radar.js:32` | Increase radar range default from 50 to 75 units | f9b6b22a |
 | 6 | high | D04-radar-projection-heading | `radar.js:209-223, 373-399` | Add blip shape rendering (RadarBlipShape enum support) | — |
 | 7 | high | D04-radar-projection-heading | `radar.js:267-282, 373-376` | Implement RadarBehavior server-side filtering | — |
 | 8 | high | D04-radar-projection-heading | `radar.js:44-49, 393` | Support RadarColor server property for blip color mapping | — |
