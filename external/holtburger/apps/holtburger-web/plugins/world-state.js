@@ -563,10 +563,18 @@ export class WorldState extends EventTarget {
       };
       // Watchdog: if children never arrive (lost packet, ACE race),
       // fire the gate after 5s anyway so the UI doesn't hang open.
+      // HUD rec #57 — log a warning when this fires so lossy-network
+      // conditions surface in the console instead of silently degrading.
       gate.timeoutId = setTimeout(() => {
         if (this._disposed) return;
         const stillThere = this._pendingContainerOpens.get(cid);
         if (stillThere === gate) {
+          const remaining = gate.pending.size;
+          console.warn(
+            `[world-state] container 0x${cid.toString(16)} open-gate timed out ` +
+            `after 5s with ${remaining} child(ren) still missing — firing degraded ` +
+            `containerOpened with items received so far`,
+          );
           this._pendingContainerOpens.delete(cid);
           this._fireContainerOpened(gate.container);
         }
