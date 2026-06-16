@@ -21,7 +21,7 @@
 | 9 | high | D04-radar-projection-heading | `radar.js:579-583, 607` | Fix heading-up disk visual (apply -heading rotation to disk or move into rotor) | 0bcb14f1 |
 | 10 | high | D06-buffs-enchantments-pipeline | `status-indicators.js:501-502,679-680` | Fix status-indicators ETF flag constants | e87290c3 |
 | 11 | high | D06-buffs-enchantments-pipeline | `character.js:247-293, buffs-hud.js:809-814` | Debug and fix Character.getActiveEnchantments() returning empty despite populated allEnchantments | c4f919e3 |
-| 12 | high | D07-combat-hud-stance-power | `combat-bar.js:920-945, ui/ac_character_options.js (add isCharacterOptionEnabled ` | Sync auto-repeat checkbox state from server's CharacterOption bit on playerStatsUpdated | — |
+| 12 | high | D07-combat-hud-stance-power | `combat-bar.js:920-945, ui/ac_character_options.js (add isCharacterOptionEnabled ` | Sync auto-repeat checkbox state from server's CharacterOption bit on playerStatsUpdated | ee941647 |
 | 13 | high | D08-spellbook-spellcasting | `hotbar.js:614-644, combat-bar.js:1438-1450` | Add fallback spell-cast dispatch chain (SessionHandle.castUntargetedSpell / castTargetedSpell) | — |
 | 14 | high | D08-spellbook-spellcasting | `hotbar.js:204-221, buffs-hud.js:110-121` | Implement spell cooldown update event listener (0x02C1 GameEventMagicUpdateSpell) | — |
 | 15 | high | D09-vitals-and-attributes-streams | `index.html:1300+ (add XP table fetch to bootstrap), plugins/character-info.js:43` | Pre-fetch XP tables during index.html bootstrap so raise buttons render on first character-info open | — |
