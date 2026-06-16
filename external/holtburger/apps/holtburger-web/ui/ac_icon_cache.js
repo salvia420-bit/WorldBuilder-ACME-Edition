@@ -63,6 +63,17 @@ export async function fetchIconDataUrl(iconId, label = "ac-icon-cache") {
       return canvas.toDataURL("image/png");
     } catch (e) {
       console.warn(`[${label}] icon ${iconId} fetch failed:`, e);
+      // HUD rec #204 — surface to diag so missing-icon telemetry can
+      // identify DIDs that never resolved (palette/surface mis-routes,
+      // missing baked records, decode crashes). Caller's label and
+      // iconId both captured for trace.
+      try {
+        window.__diag?.clothing?.onIconFetchFailure?.({
+          iconId: iconId >>> 0,
+          label,
+          message: String(e?.message ?? e),
+        });
+      } catch (_) {}
       return false;
     }
   })();
