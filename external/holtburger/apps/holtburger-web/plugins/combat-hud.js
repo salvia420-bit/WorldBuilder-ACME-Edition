@@ -1019,6 +1019,37 @@ function ensureDeathStyles() {
 }
 
 let deathOverlayTimer = null;
+let deathPhaseTimers = [];
+
+function clearDeathSequence() {
+  for (const t of deathPhaseTimers) {
+    try { clearTimeout(t); } catch (_) {}
+  }
+  deathPhaseTimers = [];
+  if (deathOverlayTimer) {
+    try { clearTimeout(deathOverlayTimer); } catch (_) {}
+    deathOverlayTimer = null;
+  }
+}
+
+// Multi-phase death narrative (rec #166). The real
+// `portalSpaceEntered` / `applyEffectsPlayerTeleport` bus events that
+// retail gmFloatyPowerBarUI gates on are pending wasm-side surfacing
+// (pass-1 rec #168), so the phase progression here is driven by a
+// timer chain seeded by the death event. Phases:
+//   t=0   "You died."                  (1500 ms)
+//   t=1.5 "Entering portal space..."   (2500 ms)
+//   t=4.0 "Resurrecting..."            (1500 ms)
+//   t=5.5 fade
+// Listeners on the local Character bus can call advanceDeathPhase()
+// once the matching events become surface-side; until then the timer
+// approximates the retail cadence.
+function setDeathMessage(ov, message) {
+  setAcText(ov, message || "You died.");
+  ov.dataset.open = "0";
+  void ov.offsetWidth;
+  ov.dataset.open = "1";
+}
 
 function showDeathOverlay(message) {
   ensureDeathStyles();
@@ -1028,20 +1059,28 @@ function showDeathOverlay(message) {
     ov.id = DEATH_OVERLAY_ID;
     document.body.appendChild(ov);
   }
-  setAcText(ov, message || "You died.");
-  // Force reflow so the opacity transition retriggers if the overlay
-  // is already mounted (rapid back-to-back deaths in PK).
-  ov.dataset.open = "0";
-  void ov.offsetWidth;
-  ov.dataset.open = "1";
-  if (deathOverlayTimer) clearTimeout(deathOverlayTimer);
+  clearDeathSequence();
+  setDeathMessage(ov, message || "You died.");
+
+  const sequence = [
+    { at: 1500, text: "Entering portal space…" },
+    { at: 4000, text: "Resurrecting…" },
+  ];
+  for (const step of sequence) {
+    const t = setTimeout(() => {
+      if (!document.body.contains(ov)) return;
+      setDeathMessage(ov, step.text);
+    }, step.at);
+    deathPhaseTimers.push(t);
+  }
+  // Fade kick-off — give "Resurrecting…" ~1.5 s before fading.
   deathOverlayTimer = setTimeout(() => {
     ov.dataset.open = "0";
     deathOverlayTimer = setTimeout(() => {
-      ov.remove();
+      try { ov.remove(); } catch (_) {}
       deathOverlayTimer = null;
     }, 320);
-  }, 3000);
+  }, 5500);
 }
 
 function onDeath(ev) {
