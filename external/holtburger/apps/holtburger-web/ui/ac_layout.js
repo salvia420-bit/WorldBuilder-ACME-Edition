@@ -232,10 +232,20 @@ export function applyLayoutRegions(layoutId, refs, opts = {}) {
       if (typeof beforeApplyEl === "function") {
         try { beforeApplyEl(el, desc); } catch (_) {}
       }
-      if (typeof desc.x === "number") el.style.left = `${ox + desc.x}px`;
-      if (typeof desc.y === "number") el.style.top = `${oy + desc.y}px`;
-      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
-      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
+      // Rec #186 — edge-anchor fallback. Explicit x/y/width/height
+      // win as before; when an axis is missing we look at the
+      // {left,top,right,bottom}_edge fields and compute against
+      // opts.parentRect (if provided) — e.g. inventory's burden bar
+      // anchored to paperdoll's bottom. With no parentRect, the
+      // helper returns only the explicit dims, so behaviour is
+      // unchanged for the common case.
+      const geom = opts.parentRect
+        ? computeChildGeometry(desc, opts.parentRect)
+        : desc;
+      if (typeof geom.x === "number") el.style.left = `${ox + geom.x}px`;
+      if (typeof geom.y === "number") el.style.top = `${oy + geom.y}px`;
+      if (typeof geom.width === "number") el.style.width = `${geom.width}px`;
+      if (typeof geom.height === "number") el.style.height = `${geom.height}px`;
       applied += 1;
     }
     try {
@@ -386,6 +396,79 @@ export function getStateMediaByType(stateDesc, variantName) {
     if (m && typeof m === "object" && m[variantName]) return m[variantName];
   }
   return null;
+}
+
+/**
+ * Rec #186 — Edge-anchor flow-layout fallback for elements whose
+ * ElementDesc omits explicit x/y but carries left_edge / top_edge /
+ * right_edge / bottom_edge offsets relative to the parent rect.
+ *
+ * Retail mirror: client/UIElement::Layout reads the four edge fields
+ * as anchor distances measured INWARD from the parent rect's
+ * corresponding edge, and computes the child rect as
+ *   x = parent.x + left_edge
+ *   y = parent.y + top_edge
+ *   width  = parent.width  - left_edge - right_edge
+ *   height = parent.height - top_edge  - bottom_edge
+ *
+ * Explicit element.x / element.y win when present — this helper is a
+ * fallback for sparse ElementDescs (variable-height panels: chat log,
+ * vendor grid, burden bar anchored to paperdoll's bottom). When both
+ * explicit dims and edges are present, explicit dims take precedence
+ * (matches applyLayoutRegions today). When neither is present, the
+ * returned field is `undefined` so callers can fall through to CSS
+ * defaults.
+ *
+ * Caller convention: pass the parent's *content* rect (post-padding
+ * resolution), not the OS-window outer rect. The four edge fields are
+ * authored relative to whatever the parent's layout box is.
+ *
+ * @param {object} element — ElementDesc with optional x / y / width /
+ *        height / left_edge / top_edge / right_edge / bottom_edge.
+ * @param {{x: number, y: number, width: number, height: number}} parentRect
+ * @returns {{x?: number, y?: number, width?: number, height?: number}}
+ *        the resolved child geometry; fields are present only when
+ *        either explicit or edge-derived.
+ */
+export function computeChildGeometry(element, parentRect) {
+  const out = {};
+  if (!element || typeof element !== "object") return out;
+  const px = parentRect?.x ?? 0;
+  const py = parentRect?.y ?? 0;
+  const pw = parentRect?.width ?? 0;
+  const ph = parentRect?.height ?? 0;
+  const le = Number.isFinite(element.left_edge)   ? element.left_edge   : null;
+  const te = Number.isFinite(element.top_edge)    ? element.top_edge    : null;
+  const re = Number.isFinite(element.right_edge)  ? element.right_edge  : null;
+  const be = Number.isFinite(element.bottom_edge) ? element.bottom_edge : null;
+
+  // X position
+  if (Number.isFinite(element.x)) {
+    out.x = element.x;
+  } else if (le !== null) {
+    out.x = px + le;
+  }
+  // Y position
+  if (Number.isFinite(element.y)) {
+    out.y = element.y;
+  } else if (te !== null) {
+    out.y = py + te;
+  }
+  // Width — only edge-derive when explicit width is absent. Need both
+  // left and right edges to derive (single-edge anchoring leaves the
+  // width undetermined; callers should pass an explicit width then).
+  if (Number.isFinite(element.width)) {
+    out.width = element.width;
+  } else if (le !== null && re !== null) {
+    out.width = Math.max(0, pw - le - re);
+  }
+  // Height — symmetric to width.
+  if (Number.isFinite(element.height)) {
+    out.height = element.height;
+  } else if (te !== null && be !== null) {
+    out.height = Math.max(0, ph - te - be);
+  }
+  return out;
 }
 
 /**
