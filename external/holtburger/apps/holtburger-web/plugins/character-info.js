@@ -1036,6 +1036,26 @@ function row(iconUrl, name, value, raise) {
     btn.addEventListener("click", () => {
       if (btn.disabled) return;
       try { raise.onClick?.(); } catch (e) { console.warn("[raise]", e); }
+      // HUD rec #141 — disable optimistically after click. The
+      // `playerStatsUpdated` subscription in mount() re-renders the
+      // whole pane once the server confirms the spend, which rebuilds
+      // every row (this button is dropped). Until then we want to
+      // prevent the player double-clicking on a now-stale cost. The
+      // ~250ms timer is a fallback if the server never acks (lost
+      // packet); rerender will overwrite us before then in the happy
+      // path.
+      btn.disabled = true;
+      btn.title = "Waiting for server confirm…";
+      setTimeout(() => {
+        if (btn.isConnected) {
+          btn.disabled = raise.isMax || !raise.canAfford;
+          btn.title = raise.isMax
+            ? "Already at max rank"
+            : raise.canAfford
+              ? `Spend ${raise.cost} XP to raise this rank`
+              : `Needs ${raise.cost} XP (you have ${raise.availableXp ?? 0})`;
+        }
+      }, 1500);
     });
     el.appendChild(btn);
   }
