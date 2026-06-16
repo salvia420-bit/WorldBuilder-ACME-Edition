@@ -467,7 +467,36 @@ function _buildRuntime(data) {
     maxCharHeight: data.maxCharHeight,
     maxCharWidth: data.maxCharWidth,
     baselineOffset: data.baselineOffset,
+    // HUD rec #116 — lazy per-codepoint fallback-width cache. Used for
+    // codepoints absent from glyphMap AND the CJK chain (em-dash,
+    // curly quotes, etc.) where canvas measureText is the only source.
+    // Populated on demand by _measure / _drawGlyphs; entries persist
+    // for the lifetime of the runtime so repeat measurements stay O(1).
+    fallbackWidthCache: new Map(),
   };
+}
+
+// HUD rec #116 — shared fallback-width resolver. First call per
+// codepoint instantiates a measurement ctx (sized to the runtime's
+// font height) and stores the integer-rounded width; subsequent
+// calls hit the cache. Returns the codepoint's advance width in
+// integer canvas units, or maxCharWidth if the document is missing
+// (test/Node harness).
+function _fallbackAdvance(runtime, ch, cp) {
+  const cache = runtime.fallbackWidthCache;
+  const cached = cache.get(cp);
+  if (cached != null) return cached;
+  let w = runtime.maxCharWidth;
+  try {
+    const c = document.createElement("canvas");
+    const fctx = c.getContext("2d");
+    if (fctx) {
+      fctx.font = `${runtime.maxCharHeight}px sans-serif`;
+      w = Math.max(1, Math.ceil(fctx.measureText(ch).width));
+    }
+  } catch (_) {}
+  cache.set(cp, w);
+  return w;
 }
 
 function _atlasToCanvas(pixels, width, height) {
@@ -509,25 +538,13 @@ function _atlasToCanvas(pixels, width, height) {
 function _measure(runtime, text) {
   let penX = 0;
   let maxY = 0;
-  // Lazy fallback-measure canvas for codepoints not in the AC font
-  // OR the CJK font (em-dashes, curly quotes, etc.). Set up once.
-  let fallbackCtx = null;
   for (const ch of text) {
     const cp = ch.codePointAt(0);
     const resolved = _resolveGlyph(runtime, cp);
     if (!resolved) {
-      // Missing in both primary and CJK — measure the system-font
-      // fallback so the canvas reservation matches what `_drawGlyphs`
-      // will draw.
-      if (!fallbackCtx) {
-        const c = document.createElement("canvas");
-        fallbackCtx = c.getContext("2d");
-        if (fallbackCtx) fallbackCtx.font = `${runtime.maxCharHeight}px sans-serif`;
-      }
-      const w = fallbackCtx
-        ? Math.ceil(fallbackCtx.measureText(ch).width)
-        : runtime.maxCharWidth;
-      penX += Math.max(1, w);
+      // Missing in both primary and CJK — system-font fallback width
+      // (rec #116 cache makes repeats O(1)).
+      penX += _fallbackAdvance(runtime, ch, cp);
       if (runtime.maxCharHeight > maxY) maxY = runtime.maxCharHeight;
       continue;
     }
@@ -578,8 +595,11 @@ function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy, atlasKind) 
         fallbackConfigured = true;
       }
       ctx.fillText(ch, (penX + ox) * scale, oy * scale);
-      const w = Math.max(1, Math.ceil(ctx.measureText(ch).width / scale));
-      penX += w;
+      // Rec #116 — cache the scale=1 advance so subsequent renders of
+      // the same codepoint reuse the width without another measureText.
+      // _fallbackAdvance measures at scale=1; multiply isn't needed
+      // here because penX is itself a scale=1 quantity.
+      penX += _fallbackAdvance(runtime, ch, cp);
       continue;
     }
     const { runtime: gRuntime, glyph: g } = resolved;
