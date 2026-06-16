@@ -104,7 +104,7 @@
 | 195 | med | E09-drag-drop-full-system | `container-panel.js:305-360, ~new salvage-validator.js module` | Implement gmSalvageUI drag rules | spec-ambiguous |
 | 196 | med | E13-death-resurrection-vitae-ui | `character.js:150-151,506-509 (inPortalSpace tracking), api.js (portalSpaceEntere` | Add resurrection confirmation UI / respawn point selection dialog | spec-ambiguous |
 | 199 | med | E15-settings-persistence-options | `options-panel.js:310 (stub), api.js, SessionHandle integration` | Implement Network tab (server latency display, packet loss, reconnect behavior) | 81afbf45 |
-| 100 | low | D10-chat-and-emote | `chat-panel.js:712-734 (remove), 536-543 (enhance with localStorage)` | Consolidate chat maximize-button logic | — |
+| 100 | low | D10-chat-and-emote | `chat-panel.js:712-734 (remove), 536-543 (enhance with localStorage)` | Consolidate chat maximize-button logic | 51d739c4 |
 | 101 | low | D10-chat-and-emote | `chat-panel.js:557-575 (setTab), index.html:8365+ (CHAT_CATEGORY enum)` | Wire channel-selection to text-filter bitmask | — |
 | 102 | low | D11-fellowship-allegiance | `allegiance-panel.js:69-99, 549-551` | Implement allegiance tier/rank enum mapping + display | — |
 | 104 | low | D11-fellowship-allegiance | `fellowship-panel.js:708-738` | Persist fellowship options (Ignore/AutoAccept/ShareXp/ShareLoot) to server | — |
