@@ -144,6 +144,58 @@ export function setBinding(labelHashHex, binding) {
 }
 
 /**
+ * Scan the persisted user-binding cache for entries that match the
+ * given keystroke shape — used by the Controls-tab capture flow to
+ * warn the player before a setBinding() overwrites a silent conflict.
+ *
+ * Returns an array of `{labelHash, label, binding}` for every user
+ * override whose key/modifier shape matches. Empty array = no
+ * conflict. Pass `excludeLabelHash` to exclude the row being
+ * captured (so a no-op rebind doesn't report itself).
+ *
+ * Only the user-override cache is scanned today; retail-default
+ * bindings live in `loadRetailKeyMap`'s ActionMap and a cross-table
+ * scan is a follow-on.
+ *
+ * @param {string} code        — `KeyboardEvent.code` (e.g. "KeyR")
+ * @param {boolean} [shift]
+ * @param {boolean} [ctrl]
+ * @param {boolean} [alt]
+ * @param {boolean} [meta]
+ * @param {string} [excludeLabelHash] — labelHash to skip
+ * @returns {Array<{labelHash:string,label:string,binding:object}>}
+ */
+export function findConflictingBindings(code, shift, ctrl, alt, meta, excludeLabelHash) {
+  if (!code) return [];
+  cache = load();
+  const conflicts = [];
+  const want = {
+    code,
+    shift: !!shift,
+    ctrl: !!ctrl,
+    alt: !!alt,
+    meta: !!meta,
+  };
+  for (const [labelHash, binding] of Object.entries(cache)) {
+    if (labelHash === excludeLabelHash) continue;
+    if (!binding || !binding.code) continue;
+    if (binding.code === want.code
+        && !!binding.shift === want.shift
+        && !!binding.ctrl === want.ctrl
+        && !!binding.alt === want.alt
+        && !!binding.meta === want.meta) {
+      const action = LOCAL_ACTIONS.find((a) => a.labelHash === labelHash);
+      conflicts.push({
+        labelHash,
+        label: action?.label ?? `Action ${labelHash}`,
+        binding: { ...binding },
+      });
+    }
+  }
+  return conflicts;
+}
+
+/**
  * Remove the override for a labelHash so the next read falls back
  * to the default. Returns true if something was removed.
  */
