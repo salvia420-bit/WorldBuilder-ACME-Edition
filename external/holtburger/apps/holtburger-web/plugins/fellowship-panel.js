@@ -784,9 +784,13 @@ function buildInState(root, members, inRefs) {
 
   const list = document.createElement("div");
   list.className = "hb-fellow-members";
+  // HUD rec #48: tag each row with the member guid so the patch
+  // path below (`patchMemberRow`) can locate it via querySelector
+  // without re-deriving the full roster.
   for (const m of members) {
     const memberRow = document.createElement("div");
     memberRow.className = "hb-fellow-member";
+    if (m.guid != null) memberRow.dataset.guid = String(m.guid >>> 0);
     const head = document.createElement("div");
     head.className = "hb-fellow-member-h";
     const nameSpan = document.createElement("span");
@@ -1027,6 +1031,39 @@ export const view = {
       });
     }
 
+    // HUD rec #48: patch path used when the wire UpdateFellow event
+    // carried a Stats(2) or Vitals(3) tag — locate the member's row
+    // by data-guid and overwrite the level / bar widths in place.
+    // Returns false (caller falls back to rebuild) when the row isn't
+    // mounted yet or the roster size changed since last render.
+    function patchMemberRow(snapshot) {
+      const list = stateRoot.querySelector(".hb-fellow-members");
+      if (!list) return false;
+      const members = deriveMembers(snapshot);
+      const rows = list.querySelectorAll(".hb-fellow-member");
+      if (rows.length !== members.length) return false;
+      const rowByGuid = new Map();
+      for (const row of rows) {
+        const g = Number(row.dataset.guid);
+        if (Number.isFinite(g)) rowByGuid.set(g >>> 0, row);
+      }
+      for (const m of members) {
+        const row = rowByGuid.get(m.guid >>> 0);
+        if (!row) return false;
+        const lvl = row.querySelector(".hb-fellow-member-h .level");
+        if (lvl) setAcText(lvl, `Lv ${m.level ?? "?"}`);
+        for (const kind of ["health", "stamina", "mana"]) {
+          const fill = row.querySelector(`.hb-fellow-bar.${kind} .hb-fellow-bar-fill`);
+          if (!fill) continue;
+          const pct = m[kind] != null && m[kind + "Max"]
+            ? Math.max(0, Math.min(100, (m[kind] / m[kind + "Max"]) * 100))
+            : 100;
+          fill.style.width = `${pct}%`;
+        }
+      }
+      return true;
+    }
+
     rebuildFromSnapshot(fetchFellowshipSnapshot());
     root.appendChild(stateRoot);
 
@@ -1047,8 +1084,23 @@ export const view = {
 
     // Re-render whenever the wasm side emits fellowshipUpdated — covers
     // join/leave/disband as well as per-member vital ticks.
+    //
+    // HUD rec #48: when the wire event was an UpdateFellow with
+    // Stats(2) or Vitals(3), `snapshot.updateType` lets us patch a
+    // single member row instead of tearing down + rebuilding the
+    // whole roster. patchMemberRow returns false on any structural
+    // mismatch (roster size changed, row not found, mount not ready);
+    // we fall back to a full rebuild in that case so disband/recruit
+    // races stay correct.
     const unsub = subscribeFellowship(() => {
-      rebuildFromSnapshot(fetchFellowshipSnapshot());
+      const snapshot = fetchFellowshipSnapshot();
+      const updateType = snapshot?.updateType ?? 1;
+      const patched = (updateType === 2 || updateType === 3)
+        && snapshot
+        && patchMemberRow(snapshot);
+      if (!patched) {
+        rebuildFromSnapshot(snapshot);
+      }
     });
 
     return () => {

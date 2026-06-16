@@ -20270,6 +20270,18 @@ struct FellowshipSnapshot {
     members: Vec<FellowshipMember>,
     departed: Vec<FellowshipDepartedMember>,
     locks: Vec<FellowshipLockEntry>,
+    /// HUD rec #48: which wire event produced the most recent
+    /// snapshot. Mirrors `FellowUpdateType` from
+    /// `holtburger_protocol::messages::fellowship::events`:
+    /// `0 = Undef` (no wire event yet, e.g. after disband when the
+    /// snapshot becomes None then comes back), `1 = Full`
+    /// (FellowshipFullUpdate — JS rebuilds the whole roster panel),
+    /// `2 = Stats` (FellowshipUpdateFellow with Stats — JS patches
+    /// the cp/level fields of one member), `3 = Vitals`
+    /// (FellowshipUpdateFellow with Vitals — JS patches the HP/SP/MP
+    /// bars of one member). `FellowshipDisband` clears the snapshot
+    /// to None so this field never carries a Disband marker.
+    update_type: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -20404,6 +20416,7 @@ pub struct FellowshipSnapshotJs {
     members: Vec<FellowshipMember>,
     departed: Vec<FellowshipDepartedMember>,
     locks: Vec<FellowshipLockEntry>,
+    update_type: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -20462,6 +20475,16 @@ impl FellowshipSnapshotJs {
             })
             .collect()
     }
+
+    /// HUD rec #48: discriminator letting JS optimize panel diffs.
+    /// `1 = Full` → rebuild the roster from scratch (FellowshipFullUpdate
+    /// or first ever event); `2 = Stats` / `3 = Vitals` → patch just
+    /// the affected member without re-creating DOM nodes; `0 = Undef`
+    /// → no wire event has populated yet, treat conservatively as Full.
+    /// Matches `FellowUpdateType` (`holtburger_protocol::messages::
+    /// fellowship::events::FellowUpdateType`).
+    #[wasm_bindgen(getter, js_name = updateType)]
+    pub fn update_type(&self) -> u32 { self.update_type }
 }
 
 /// Wave-F2 (2026-05-26): JS-facing snapshot of the local player's
@@ -27893,6 +27916,7 @@ impl SessionHandle {
                 members: f.members.clone(),
                 departed: f.departed.clone(),
                 locks: f.locks.clone(),
+                update_type: f.update_type,
             }
         })
     }
@@ -30748,6 +30772,7 @@ fn publish_player_trade_snapshot(
 fn publish_player_fellowship_snapshot(
     world: &holtburger_world::WorldState,
     latest_fellowship: &std::rc::Rc<std::cell::RefCell<Option<FellowshipSnapshot>>>,
+    update_type: u32,
 ) {
     let next = world.fellowship.as_ref().map(|f| FellowshipSnapshot {
         name: f.name.clone(),
@@ -30791,6 +30816,7 @@ fn publish_player_fellowship_snapshot(
                 sequence: l.lock.sequence,
             })
             .collect(),
+        update_type,
     });
     *latest_fellowship.borrow_mut() = next;
 }
@@ -31868,6 +31894,12 @@ async fn recv_loop(
                     let mut stats_changed = false;
                     let mut inventory_changed = false;
                     let mut fellowship_changed = false;
+                    // HUD rec #48: defaults to FellowUpdateType::Full (1)
+                    // so disband-then-rejoin and recv-loop catch-all
+                    // re-fires both flag a full rebuild. Overwritten in
+                    // the pre-route block below when the wire payload
+                    // carries an explicit Stats / Vitals tag.
+                    let mut fellowship_update_type: u32 = 1;
                     let mut trade_changed = false;
                     let mut book_changed: Option<holtburger_common::Guid> = None;
                     // === Wave 4.B — remote enchantments pre-route hook (2026-05-28) ===
@@ -32083,6 +32115,23 @@ async fn recv_loop(
                                     }
                                     entity_enchantments_changed = Some(g);
                                 }
+                            }
+                            // HUD rec #48: capture the wire update_type
+                            // tag for the next FellowshipStateUpdated
+                            // republish. FullUpdate → Full(1) so the
+                            // panel rebuilds; UpdateFellow carries one
+                            // of Stats(2) / Vitals(3) / Full(1) on the
+                            // wire which lets the panel patch a single
+                            // member instead of redrawing. Disband
+                            // empties `world.fellowship` to None, so the
+                            // republished snapshot is None and JS won't
+                            // see this field — Full(1) is safe as the
+                            // default for the next rejoin.
+                            GameEvent::FellowshipFullUpdate(_) => {
+                                fellowship_update_type = 1;
+                            }
+                            GameEvent::FellowshipUpdateFellow(data) => {
+                                fellowship_update_type = data.update_type as u32;
                             }
                             _ => {}
                         }
@@ -32927,11 +32976,21 @@ async fn recv_loop(
                         // from `world.fellowship` here and signal JS with a
                         // single kind=22 event — the panel re-fetches via
                         // `handle.playerFellowship()`.
-                        publish_player_fellowship_snapshot(w, &latest_fellowship);
+                        //
+                        // HUD rec #48: `fellowship_update_type` was set in
+                        // the pre-route GameEvent match above. Threads
+                        // into the snapshot so JS can decide between
+                        // `rebuildFromSnapshot()` (Full) and a per-member
+                        // patch path (Stats / Vitals).
+                        publish_player_fellowship_snapshot(
+                            w,
+                            &latest_fellowship,
+                            fellowship_update_type,
+                        );
                         queued_events.borrow_mut().push(ClientEvent {
                             kind: CLIENT_EVENT_KIND_FELLOWSHIP_UPDATED,
                             string_payload: None,
-                            u32_payload: None,
+                            u32_payload: Some(fellowship_update_type),
                             u32_payload_2: None,
                             f32_payload: None,
                         });
