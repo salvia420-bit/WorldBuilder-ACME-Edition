@@ -360,6 +360,194 @@ function applySize(element, size) {
   if (size.height != null) element.style.height = `${size.height}px`;
 }
 
+const EDGE_SPECS = {
+  top:    { css: "top:0;left:0;right:0;height:5px;cursor:ns-resize;",  axis: "h", sign: -1, affectsOrigin: true },
+  bottom: { css: "bottom:0;left:0;right:0;height:5px;cursor:ns-resize;", axis: "h", sign: 1, affectsOrigin: false },
+  left:   { css: "top:0;bottom:0;left:0;width:5px;cursor:ew-resize;",  axis: "w", sign: -1, affectsOrigin: true },
+  right:  { css: "top:0;bottom:0;right:0;width:5px;cursor:ew-resize;", axis: "w", sign: 1, affectsOrigin: false },
+};
+
+/**
+ * Attach 5-px transparent edge-drag handles for resizing a positioned
+ * floaty. Complements attachCornerResizers (4-corner version); use the
+ * edges when you want a wider hit zone than the 8×8 corner divs (e.g.
+ * chat-panel right-edge grab) or when only one axis should resize.
+ *
+ * Each edge mutates element.style.width / height. Top/left edges also
+ * shift element.style.left/top so the OPPOSITE edge stays pinned —
+ * same anchoring math attachCornerResizers uses. Min/max clamps stop
+ * the drag at the bound; the per-edge actual-delta math prevents the
+ * panel from continuing to track the cursor once clamped.
+ *
+ * `opts.windowId` opts into the shared hb-ui-lock-changed bus so
+ * locking the floaty hides every edge handle in one motion. onSizeChange
+ * debounces 120 ms after the last pointermove (same cadence as
+ * attachCornerResizers + persistWindowSize so handlers compose).
+ *
+ * @param {HTMLElement} element
+ * @param {object} opts
+ * @param {Array<"top"|"bottom"|"left"|"right">} opts.edges
+ * @param {number} [opts.windowId]
+ * @param {number} [opts.minWidth=120]
+ * @param {number} [opts.minHeight=80]
+ * @param {number} [opts.maxWidth]
+ * @param {number} [opts.maxHeight]
+ * @param {(detail:{width:number,height:number}) => void} [opts.onSizeChange]
+ * @returns {{dispose():void, setLocked(b:boolean):void, isLocked():boolean,
+ *            getHandles():Record<string,HTMLDivElement>}}
+ */
+export function attachEdgeResizers(element, opts) {
+  if (!element || typeof element !== "object") {
+    throw new Error("attachEdgeResizers requires an element");
+  }
+  const edges = Array.isArray(opts?.edges) ? opts.edges.slice() : [];
+  if (edges.length === 0) {
+    throw new Error("attachEdgeResizers requires opts.edges (e.g. ['bottom','right'])");
+  }
+  const minW = opts?.minWidth ?? 120;
+  const minH = opts?.minHeight ?? 80;
+  const maxW = opts?.maxWidth ?? null;
+  const maxH = opts?.maxHeight ?? null;
+  const onSizeChange = typeof opts?.onSizeChange === "function" ? opts.onSizeChange : null;
+
+  const computed = window.getComputedStyle(element);
+  if (computed.position === "static") {
+    element.style.position = "relative";
+  }
+
+  const handles = {};
+  let locked = !!opts?.initialLocked;
+  let drag = null;
+  let sizeChangeTimer = 0;
+
+  function clamp(v, min, max) {
+    let r = v;
+    if (min != null) r = Math.max(min, r);
+    if (max != null) r = Math.min(max, r);
+    return r;
+  }
+
+  function scheduleSizeChange(width, height) {
+    if (!onSizeChange) return;
+    try { clearTimeout(sizeChangeTimer); } catch (_) {}
+    sizeChangeTimer = setTimeout(() => {
+      sizeChangeTimer = 0;
+      try { onSizeChange({ width, height }); } catch (_) {}
+    }, 120);
+  }
+
+  for (const edge of edges) {
+    const spec = EDGE_SPECS[edge];
+    if (!spec) continue;
+    const div = document.createElement("div");
+    div.className = `hb-resize-edge hb-resize-edge-${edge}`;
+    div.dataset.edge = edge;
+    div.style.cssText =
+      `position:absolute;background:transparent;pointer-events:auto;z-index:5;${spec.css}`;
+    if (locked) {
+      div.style.pointerEvents = "none";
+      div.style.visibility = "hidden";
+    }
+    element.appendChild(div);
+    handles[edge] = div;
+
+    div.addEventListener("pointerdown", (ev) => {
+      if (locked) return;
+      if (ev.button != null && ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const rect = element.getBoundingClientRect();
+      drag = {
+        edge,
+        startX: ev.clientX,
+        startY: ev.clientY,
+        x0: rect.left,
+        y0: rect.top,
+        w0: rect.width,
+        h0: rect.height,
+      };
+      try { div.setPointerCapture(ev.pointerId); } catch (_) {}
+    });
+    div.addEventListener("pointermove", (ev) => {
+      if (!drag || drag.edge !== edge) return;
+      const dx = ev.clientX - drag.startX;
+      const dy = ev.clientY - drag.startY;
+      let newW = drag.w0;
+      let newH = drag.h0;
+      if (spec.axis === "w") newW = drag.w0 + spec.sign * dx;
+      else newH = drag.h0 + spec.sign * dy;
+      newW = clamp(newW, minW, maxW);
+      newH = clamp(newH, minH, maxH);
+      const actualDw = newW - drag.w0;
+      const actualDh = newH - drag.h0;
+      element.style.width = `${newW}px`;
+      element.style.height = `${newH}px`;
+      if (spec.affectsOrigin) {
+        if (spec.axis === "w") {
+          element.style.left = `${drag.x0 - actualDw * spec.sign}px`;
+          element.style.right = "auto";
+        } else {
+          element.style.top = `${drag.y0 - actualDh * spec.sign}px`;
+          element.style.bottom = "auto";
+        }
+      }
+      scheduleSizeChange(newW, newH);
+    });
+    function endDrag(ev) {
+      if (!drag || drag.edge !== edge) return;
+      drag = null;
+      try { div.releasePointerCapture(ev.pointerId); } catch (_) {}
+    }
+    div.addEventListener("pointerup", endDrag);
+    div.addEventListener("pointercancel", endDrag);
+  }
+
+  function setLocked(next) {
+    const want = !!next;
+    if (want === locked) return;
+    locked = want;
+    for (const edge of Object.keys(handles)) {
+      const div = handles[edge];
+      div.style.pointerEvents = locked ? "none" : "auto";
+      div.style.visibility = locked ? "hidden" : "";
+    }
+  }
+
+  let unsubLock = null;
+  if (typeof opts?.windowId === "number") {
+    try {
+      unsubLock = onAnyLockChange((detail) => {
+        if (!detail) return;
+        if ((detail.windowId >>> 0) !== (opts.windowId >>> 0)) return;
+        setLocked(!!detail.locked);
+      });
+    } catch (e) {
+      console.warn("[ac-window-position] edge lock-change subscribe failed:", e);
+    }
+  }
+
+  function dispose() {
+    try { clearTimeout(sizeChangeTimer); } catch (_) {}
+    if (typeof unsubLock === "function") {
+      try { unsubLock(); } catch (_) {}
+      unsubLock = null;
+    }
+    for (const edge of Object.keys(handles)) {
+      const div = handles[edge];
+      try {
+        if (div.parentNode === element) element.removeChild(div);
+      } catch (_) {}
+    }
+  }
+
+  return {
+    dispose,
+    setLocked,
+    isLocked: () => locked,
+    getHandles: () => ({ ...handles }),
+  };
+}
+
 /**
  * Subscribe to lock-state changes from any window. Returns an
  * unsubscribe function.
