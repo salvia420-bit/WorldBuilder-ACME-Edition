@@ -785,15 +785,16 @@ export function mount(_ctx) {
   // player facing, counter-rotate cardinals so N/E/S/W stay upright,
   // and populate the coord strip.
   let rafId = 0;
+  // HUD rec #42 — show packed landblock notation matching retail's
+  // gmCompassUI display + map-panel.js:358-361. LB_PITCH = 192 units
+  // per cell row, world is 254×254 landblocks. lbKey = (lbX<<8)|lbY.
+  const LB_PITCH = 192;
   function fmtCoord(x, y) {
-    // AC-style coords: world x is east-west axis, world z (3JS) is N-S,
-    // displayed as "NN.NN, EE.EE" in dec-degree-ish form. Holtburg sits
-    // near (32000, -34000) in three.js coords — divide by ~1000 for a
-    // readable order of magnitude until we wire the real packed coords.
     if (x == null || y == null) return "";
-    const ew = (x / 240).toFixed(1);
-    const ns = (-y / 240).toFixed(1);
-    return `${ns}, ${ew}`;
+    const lbX = Math.max(0, Math.min(253, Math.floor(x / LB_PITCH)));
+    const lbY = Math.max(0, Math.min(253, Math.floor(y / LB_PITCH)));
+    const lbKey = (lbX << 8) | lbY;
+    return `0x${lbKey.toString(16).toUpperCase().padStart(4, "0")} (${lbX}, ${lbY})`;
   }
   function tick() {
     const sw = window.liveScene3d?.cameraSwitcher;
