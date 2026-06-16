@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "hover-tooltip",
+  "name": "Hover Tooltip",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Low-latency popup with entity name / level / HP / quality on cursor rest (rec #193).",
+  "icon": "?",
+  "iconHidden": true,
+  "entry": "./hover-tooltip.js",
+  "environments": ["browser"],
+  "slots": ["watcher"]
+}
