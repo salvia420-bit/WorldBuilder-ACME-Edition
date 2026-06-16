@@ -1265,7 +1265,10 @@ function doMount(parentEl, ctx) {
     // user-initiated, matches retail's expectation that the player
     // owns the action they just clicked.
     try {
-      client?.player?.forgetSpell?.(selectedRowId);
+      const handle = window.__sessionHandle ?? null;
+      if (handle && typeof handle.removeSpellFromBook === "function") {
+        handle.removeSpellFromBook(selectedRowId >>> 0);
+      }
     } catch (e) {
       console.warn(`[spellbook] forget(${selectedRowId}) failed: ${e?.message ?? e}`);
     }
