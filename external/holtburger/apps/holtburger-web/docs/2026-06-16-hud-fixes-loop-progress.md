@@ -111,27 +111,27 @@
 | 105 | low | D13-character-info-titles-options | `plugins/character-info.js:573-606, mount function` | Reconcile title-tab vertical scaling with body height variance | c1081f01 |
 | 107 | low | D14-examination-identify | `examine-target.js:961-978` | Wire up RNG-based identify retry (future wave) | defer-wasm |
 | 108 | low | D15-journal-contracts-book | `plugins/contracts-panel.js:756–766 (detail binding location)` | Add place-name lookup for contract location field | 23ad3462 |
-| 109 | low | D15-journal-contracts-book | `plugins/journal-panel.js:574–579 (search field creation)` | Implement journal search/filter functionality | — |
-| 110 | low | D16-house-container-lifestone | `house-panel.js:324-334 (where rentDueTs is computed and rendered)` | Add house rent-due countdown / maintenance warning | — |
-| 111 | low | D17-status-indicators-and-floaty-chrome | `apps/holtburger-web/src/boot.rs (or equivalent boot asset list) — add layout ID ` | Preload status-indicators layout 0x21000071 into boot.hba G1 prefetch | — |
-| 113 | low | D18-pane-mgmt-hotkeys-frame-seam | `ui/keymap.js:551-582, plugins/options-panel.js:???` | Implement manifest hotkey conflict detection + user warning in Options Controls tab | — |
-| 116 | low | E01-font-system | `ui/ac_font.js:328-364 _buildRuntime, 402-436 _measure` | Implement glyph-width measurement cache | — |
-| 119 | low | E03-sprite-icon-pipeline | `proposed: docs/architecture-sprite-icons.md` | Document Surface vs RenderSurface DID routing in HUD integration guide | — |
-| 120 | low | E05-ui-sound-effects | `doc/ui_sounds_coverage.md (research-only; no code changes)` | Verify retail Sound enum coverage in decomp and document missing mappings | — |
-| 121 | low | E06-tooltip-system | `spellbook-panel.js:400-550 (spell row hover handler)` | Spell description tooltip in spellbook | — |
-| 123 | low | E09-drag-drop-full-system | `vendor-ui.js:1354-1363, +URL param check` | Gate vendor-sell equipped-item block behind feature flag | — |
-| 124 | low | E09-drag-drop-full-system | `container-panel.js:345-354` | Audit container→corpse drop-INTO behavior vs retail | — |
-| 125 | low | E10-modal-dialog-system | `lifestone-popup.js:1-40 (Wave 6.B comment) \| spellbook.js:~75 (P3-42 comment)` | Document modal dialog architecture decision | — |
-| 126 | low | E12-login-character-select-creation | `character-creation.js:936-953 (renderHeritagePage Randomize button event handler` | Implement Randomize Appearance confirmation dialog (retail parity) | — |
-| 127 | low | E12-login-character-select-creation | `character-creation.js:1125-1261 (renderAttributesPage), add optional template-va` | Add per-profession attribute template variant selector on Attributes page (UX refinement) | — |
-| 128 | low | E15-settings-persistence-options | `plugins/chat-panel.js, ac_character_options.js` | Move chat channel muting UI into chat-panel affordance (not just Character tab) | — |
-| 130 | low | E18-tradeskill-spell-research-salvage | `plugins/salvage-panel.js:~450-750` | Add salvage operation history panel (optional enhancement) | — |
-| 202 | low | D09-vitals-and-attributes-streams | `plugins/vitals-hud.js:226-250 (enhance applyVitalDelta to use oldValue for anima` | Verify vital event oldValue field is being used for old-value animation | — |
-| 203 | low | E03-sprite-icon-pipeline | `texture.rs:519-527` | Implement DXT2/DXT4 alpha interpolation decoders | — |
-| 204 | low | E03-sprite-icon-pipeline | `ac_icon_cache.js:34-73, ac_palette.js:47-86, ac_dye_preview.js:72-200` | Add diagnostic hooks for icon/palette decode failures | — |
-| 206 | low | E12-login-character-select-creation | `character-creation.js:1190-1201 (slider input/change events), update banner on i` | Implement live attribute-budget countdown during slider drag | — |
-| 207 | low | E15-settings-persistence-options | `options-panel.js:785-795, 970-1003, ui/graphics_settings.js` | Decouple graphics settings from options-panel and unify Apply/Cancel semantics | — |
-| 208 | low | E15-settings-persistence-options | `ac_window_position.js:53-231, ACE Player_Character.cs, holtburger-common charact` | Implement window position server sync (PlayerModule::Chat-Window-Option replacement in ACE) | — |
+| 109 | low | D15-journal-contracts-book | `plugins/journal-panel.js:574–579 (search field creation)` | Implement journal search/filter functionality | 000a266f |
+| 110 | low | D16-house-container-lifestone | `house-panel.js:324-334 (where rentDueTs is computed and rendered)` | Add house rent-due countdown / maintenance warning | b9c3e396 |
+| 111 | low | D17-status-indicators-and-floaty-chrome | `apps/holtburger-web/src/boot.rs (or equivalent boot asset list) — add layout ID ` | Preload status-indicators layout 0x21000071 into boot.hba G1 prefetch | drift |
+| 113 | low | D18-pane-mgmt-hotkeys-frame-seam | `ui/keymap.js:551-582, plugins/options-panel.js:???` | Implement manifest hotkey conflict detection + user warning in Options Controls tab | 9512c55b |
+| 116 | low | E01-font-system | `ui/ac_font.js:328-364 _buildRuntime, 402-436 _measure` | Implement glyph-width measurement cache | 52eeef89 |
+| 119 | low | E03-sprite-icon-pipeline | `proposed: docs/architecture-sprite-icons.md` | Document Surface vs RenderSurface DID routing in HUD integration guide | skip |
+| 120 | low | E05-ui-sound-effects | `doc/ui_sounds_coverage.md (research-only; no code changes)` | Verify retail Sound enum coverage in decomp and document missing mappings | skip |
+| 121 | low | E06-tooltip-system | `spellbook-panel.js:400-550 (spell row hover handler)` | Spell description tooltip in spellbook | skip |
+| 123 | low | E09-drag-drop-full-system | `vendor-ui.js:1354-1363, +URL param check` | Gate vendor-sell equipped-item block behind feature flag | skip |
+| 124 | low | E09-drag-drop-full-system | `container-panel.js:345-354` | Audit container→corpse drop-INTO behavior vs retail | skip |
+| 125 | low | E10-modal-dialog-system | `lifestone-popup.js:1-40 (Wave 6.B comment) \| spellbook.js:~75 (P3-42 comment)` | Document modal dialog architecture decision | skip |
+| 126 | low | E12-login-character-select-creation | `character-creation.js:936-953 (renderHeritagePage Randomize button event handler` | Implement Randomize Appearance confirmation dialog (retail parity) | 6c5ef108 |
+| 127 | low | E12-login-character-select-creation | `character-creation.js:1125-1261 (renderAttributesPage), add optional template-va` | Add per-profession attribute template variant selector on Attributes page (UX refinement) | fable-skip |
+| 128 | low | E15-settings-persistence-options | `plugins/chat-panel.js, ac_character_options.js` | Move chat channel muting UI into chat-panel affordance (not just Character tab) | spec-ambiguous |
+| 130 | low | E18-tradeskill-spell-research-salvage | `plugins/salvage-panel.js:~450-750` | Add salvage operation history panel (optional enhancement) | skip |
+| 202 | low | D09-vitals-and-attributes-streams | `plugins/vitals-hud.js:226-250 (enhance applyVitalDelta to use oldValue for anima` | Verify vital event oldValue field is being used for old-value animation | cc636814 |
+| 203 | low | E03-sprite-icon-pipeline | `texture.rs:519-527` | Implement DXT2/DXT4 alpha interpolation decoders | defer-wasm |
+| 204 | low | E03-sprite-icon-pipeline | `ac_icon_cache.js:34-73, ac_palette.js:47-86, ac_dye_preview.js:72-200` | Add diagnostic hooks for icon/palette decode failures | 36dcb3a8 |
+| 206 | low | E12-login-character-select-creation | `character-creation.js:1190-1201 (slider input/change events), update banner on i` | Implement live attribute-budget countdown during slider drag | fable-skip |
+| 207 | low | E15-settings-persistence-options | `options-panel.js:785-795, 970-1003, ui/graphics_settings.js` | Decouple graphics settings from options-panel and unify Apply/Cancel semantics | skip |
+| 208 | low | E15-settings-persistence-options | `ac_window_position.js:53-231, ACE Player_Character.cs, holtburger-common charact` | Implement window position server sync (PlayerModule::Chat-Window-Option replacement in ACE) | defer-wasm |
 
 ## Pass 1 — done (commit)
 
@@ -259,3 +259,34 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 
 - All `pass2-pending` rows have a value (SHA / drift / fable-skip / defer-* / spec-ambiguous) → append closing line, end loop.
 - Three CONSECUTIVE iterations crash (tool failure, not skip/drift) → end loop, report.
+
+## Closing summary — pass 2 complete
+
+All 120 pass-2 rows processed. With pass 1, all 210 recs from the 2026-06-16 HUD research bundle are accounted for.
+
+**Pass 2 final tally:**
+
+| Outcome | Count |
+|---|---:|
+| applied (commit SHA) | 72 |
+| skip (model-judged risky / spec-ambiguous / new-doc) | 16 |
+| defer-wasm (cloud buildbox session) | 15 |
+| fable-skip (caught mid-iteration as Fable territory) | 7 |
+| spec-ambiguous (cannot reasonably interpret) | 5 |
+| drift (already correct) | 4 |
+| defer-asset (DAT extraction tooling) | 1 |
+| **TOTAL** | **120** |
+
+**Cross-pass totals (210 recs):**
+
+| Status | Count |
+|---|---:|
+| Applied (pass 1 + pass 2) | 37 + 72 = **109** |
+| Drift (already correct) | 8 + 4 = **12** |
+| Fable-skip (DO NOT TOUCH) | 30 + 7 = **37** |
+| Skip / spec-ambiguous | 16 + 5 = **21** |
+| Defer-wasm (cloud buildbox) | 14 + 15 = **29** |
+| Defer-asset (DAT extraction) | 2 + 1 = **3** |
+| Absorbed | **1** (rec #2 paired into #1) |
+
+Remaining work is concentrated in: (a) Fable-owned scene3d/camera/picking/combat-math (37 items — out of scope for this workflow), (b) cloud-buildbox wasm rebuilds (29 items), (c) DAT extraction tooling (3 items). The 21 in-loop skips were either too-big greenfield panels or recs where the spec couldn't be interpreted safely.
