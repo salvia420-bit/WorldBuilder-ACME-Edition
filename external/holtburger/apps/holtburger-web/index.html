@@ -1351,6 +1351,19 @@
       window.__pluginClientReady = new Promise((resolve) => {
         window.__resolvePluginClient = resolve;
       });
+
+      // Pose accessor shim (HUD rec #25 — D18 frame-seam). Reads
+      // window.__sessionHandle dynamically so it survives disconnect/
+      // reconnect cycles without being re-bound. Returns null pre-login
+      // and after disconnect. Unblocks plugins/radar.js heading-rotation
+      // and other HUD widgets that need the local pose.
+      window.getLocalPlayerPose = () => {
+        try {
+          return window.__sessionHandle?.getLocalPlayerPose?.() ?? null;
+        } catch (_) {
+          return null;
+        }
+      };
       // Chorizite WorldObject taxonomy mirror — populated lazily right after
       // start_session resolves. Exposed as `window.__wom` for plugin/debugger
       // consumption. See CHORIZITE_PORTING_PLAN.md §13 for the contract.
