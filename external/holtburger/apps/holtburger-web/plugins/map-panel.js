@@ -133,6 +133,23 @@ function ensureStyles() {
       pointer-events: none;
       z-index: 3;
     }
+    /* Owned-house marker — 8×8 brass-and-gold square placed at the
+       player's house position when handle.playerHouseData() returns a
+       valid landblockId. Sprite-less by design (retail 0x06004D0F is
+       not in our extracted UI-sprite set) so the marker is always
+       visible regardless of DAT extraction state. */
+    .hb-map-house {
+      position: absolute;
+      box-sizing: border-box;
+      width: 8px;
+      height: 8px;
+      background: linear-gradient(180deg, var(--hb-text-gold) 0%, var(--hb-border-brass) 100%);
+      border: 1px solid var(--hb-border-brass-deep);
+      transform: translate(-50%, -50%);
+      filter: drop-shadow(0 0 3px rgba(212, 175, 55, 0.7));
+      pointer-events: none;
+      z-index: 2;
+    }
     /* Coord readout — per gmMapUI 0x100001EF at (21,303) 257×20 rel
        to 0x100001EA. Below the viewport. */
     .hb-map-meta-coord {
@@ -271,6 +288,13 @@ export const view = {
     player.className = "hb-map-player";
     player.style.display = "none";
     viewport.appendChild(player);
+    // Owned-house marker. Hidden until handle.playerHouseData() returns
+    // a snapshot with a non-zero landblockId.
+    const house = document.createElement("div");
+    house.className = "hb-map-house";
+    house.title = "Your house";
+    house.style.display = "none";
+    viewport.appendChild(house);
     root.appendChild(viewport);
 
     // Coord readout — per gmMapUI 0x100001EF.
@@ -317,6 +341,7 @@ export const view = {
       pan.y = drag.py + (ev.clientY - drag.oy);
       applyTransform();
       positionPlayer();
+      positionHouseMarker();
     });
     viewport.addEventListener("pointerup", (ev) => {
       drag = null;
@@ -329,6 +354,7 @@ export const view = {
       scale = Math.max(0.5, Math.min(4, scale * delta));
       applyTransform();
       positionPlayer();
+      positionHouseMarker();
     }, { passive: false });
 
     // Position the player marker over the world-map bitmap using the
@@ -361,6 +387,35 @@ export const view = {
       setAcText(lbEl, `LB 0x${lbKey.toString(16).toUpperCase().padStart(4, "0")} (${lbX}, ${lbY})`);
     }
 
+    // Position the owned-house marker. handle.playerHouseData() returns
+    // {landblockId, posX, posY, posZ, ...} or null/undefined. We hide
+    // the marker on the null path (no house) or zero landblockId (the
+    // wasm-side default before a HouseData payload has been observed).
+    // Otherwise convert the landblock-local coords to global via
+    // landblock × LB_PITCH + cell-local, then re-use worldToMapPct.
+    function positionHouseMarker() {
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      let data = null;
+      try { data = handle?.playerHouseData?.() ?? null; } catch (_) { data = null; }
+      const lbId = (data?.landblockId >>> 0) || 0;
+      if (!lbId) {
+        house.style.display = "none";
+        return;
+      }
+      const lbKey = (lbId >>> 16) & 0xFFFF;
+      const lbX = (lbKey >> 8) & 0xFF;
+      const lbY = lbKey & 0xFF;
+      const globalX = lbX * LB_PITCH + (Number(data.posX) || 0);
+      const globalY = lbY * LB_PITCH + (Number(data.posY) || 0);
+      const { leftPct, topPct } = worldToMapPct(globalX, globalY);
+      const vpRect = viewport.getBoundingClientRect();
+      const xPx = (leftPct / 100) * vpRect.width * scale + pan.x;
+      const yPx = (topPct  / 100) * vpRect.height * scale + pan.y;
+      house.style.left = `${xPx}px`;
+      house.style.top  = `${yPx}px`;
+      house.style.display = "block";
+    }
+
     function updateDate() {
       // AC clock — same epoch + compression as Sky-K stars/moon.
       // AC_LAUNCH_UNIX_EPOCH = 941500800 (1999-11-01), 11.34× compression.
@@ -371,8 +426,14 @@ export const view = {
     updateDate();
 
     let rafId = 0;
+    let houseTick = 0;
     function tick() {
       positionPlayer();
+      // House position changes only on HouseData arrival; sample once
+      // a second (≈60 frames at 60Hz) to keep the rAF cost negligible.
+      if ((houseTick++ % 60) === 0) {
+        positionHouseMarker();
+      }
       rafId = requestAnimationFrame(tick);
     }
     rafId = requestAnimationFrame(tick);
