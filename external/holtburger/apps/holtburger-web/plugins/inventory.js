@@ -71,6 +71,7 @@ import {
   parseSlotsViewChecked,
   canEquipInSlot,
   buildPlayerEquipState,
+  formatAppraisalTooltip,
 } from "./inventory_helpers.js";
 
 /** Retail LayoutDescs covering the inventory window.
@@ -846,6 +847,15 @@ function ensureStyles() {
       opacity: 0;
       transition: opacity 120ms ease;
       z-index: 60;
+    }
+    /* Appraisal-upgraded variant — fires after a 250 ms hover when the
+       wasm-side AppraisalProfile snapshot is cached. Allows multi-line
+       content (name + stats) and stays a touch wider. */
+    #${OVERLAY_ID} .hb-inv-tip[data-appraised="1"] {
+      white-space: pre-line;
+      text-align: left;
+      max-width: 220px;
+      line-height: 1.35;
     }
     #${OVERLAY_ID} .hb-inv-slot:hover .hb-inv-tip { opacity: 1; }
     /* In-place examine view — overlays the items grid when an inventory
@@ -1668,8 +1678,42 @@ function doMount(parentEl, _ctx) {
     const tip = document.createElement("span");
     tip.className = "hb-inv-tip";
     const name = srcLi.querySelector(".name");
-    setAcText(tip, name?.textContent ?? "(unnamed)", { color: "#f0d8a0" });
+    const tipName = name?.textContent ?? "(unnamed)";
+    setAcText(tip, tipName, { color: "#f0d8a0" });
     slot.appendChild(tip);
+    // Appraisal-upgrade: after 250 ms hover (retail m_tooltipDelay),
+    // fetch the cached AppraisalProfile snapshot via getObjectAppraisal
+    // and rewrite the tip body with formatted stats. Reverts to the
+    // plain name on mouseleave so the next hover re-fetches (in case
+    // the snapshot grew between hovers). All sync — getObjectAppraisal
+    // returns a string immediately and we JSON.parse here.
+    let _tipDelayTimer = 0;
+    slot.addEventListener("mouseenter", () => {
+      _tipDelayTimer = setTimeout(() => {
+        _tipDelayTimer = 0;
+        try {
+          const guid = (parseInt(slot.dataset.guid, 10) >>> 0) || 0;
+          if (!guid) return;
+          const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+          if (typeof handle?.getObjectAppraisal !== "function") return;
+          const json = handle.getObjectAppraisal(guid);
+          if (typeof json !== "string" || json.length === 0) return;
+          let snap = null;
+          try { snap = JSON.parse(json); } catch (_) { return; }
+          const body = formatAppraisalTooltip(tipName, snap);
+          if (!body) return;
+          setAcText(tip, body, { color: "#f0d8a0" });
+          tip.dataset.appraised = "1";
+        } catch (_) {}
+      }, 250);
+    });
+    slot.addEventListener("mouseleave", () => {
+      if (_tipDelayTimer) { try { clearTimeout(_tipDelayTimer); } catch (_) {} _tipDelayTimer = 0; }
+      if (tip.dataset.appraised === "1") {
+        setAcText(tip, tipName, { color: "#f0d8a0" });
+        delete tip.dataset.appraised;
+      }
+    });
     // Forward draggable (vendor sells use the same pattern as the
     // source <li> with draggable=true).
     if (srcLi.getAttribute("draggable") === "true") {

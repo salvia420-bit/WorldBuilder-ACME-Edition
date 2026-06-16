@@ -264,6 +264,56 @@ export function canEquipInSlot(item, slotMask, playerEquipState) {
 }
 
 /**
+ * Format an AppraisalProfile snapshot (`handle.getObjectAppraisal(guid)`
+ * result, JSON-parsed) into a short multi-line tooltip body. Returns
+ * `null` when the snapshot has nothing useful to show — the caller
+ * should fall back to its plain name-only tooltip in that case.
+ *
+ * Mirrors the ItemExamineUI.Appraisal_Show* line ordering: name,
+ * a quick stats row (workmanship + value + burden), then per-profile
+ * lines (armor / weapon / wield requirement) when present.
+ *
+ * @param {string} name — caller's primary label (item.name)
+ * @param {object} snapshot — parsed AppraisalProfile snapshot
+ * @returns {string|null}
+ */
+export function formatAppraisalTooltip(name, snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const props = snapshot.properties || {};
+  const ints = props.ints || {};
+  const ap = snapshot.armorProfile || null;
+  const wp = snapshot.weaponProfile || null;
+  const lines = [];
+  if (typeof name === "string" && name.length > 0) lines.push(name);
+  const headerBits = [];
+  if (ints.ItemWorkmanship != null) headerBits.push(`Wkm ${ints.ItemWorkmanship}`);
+  if (ints.Value != null) headerBits.push(`${ints.Value}p`);
+  if (ints.EncumbranceVal != null) headerBits.push(`Bur ${ints.EncumbranceVal}`);
+  if (headerBits.length > 0) lines.push(headerBits.join(" · "));
+  if (ap?.armor_level != null) {
+    const mods = [];
+    if (ap.physical_mod != null) mods.push(`P${Number(ap.physical_mod).toFixed(1)}`);
+    if (ap.fire_mod != null) mods.push(`F${Number(ap.fire_mod).toFixed(1)}`);
+    if (ap.cold_mod != null) mods.push(`C${Number(ap.cold_mod).toFixed(1)}`);
+    lines.push(`AL ${ap.armor_level}${mods.length ? "  " + mods.join(" ") : ""}`);
+  }
+  if (wp) {
+    const bits = [];
+    if (wp.damage != null) bits.push(`Dmg ${wp.damage}`);
+    if (wp.damage_variance != null) bits.push(`Var ${Number(wp.damage_variance).toFixed(2)}`);
+    if (wp.damage_mod != null && wp.damage_mod !== 1) {
+      bits.push(`×${Number(wp.damage_mod).toFixed(2)}`);
+    }
+    if (bits.length > 0) lines.push(bits.join("  "));
+  }
+  if (ints.WieldDifficulty != null && ints.WieldSkillType != null) {
+    lines.push(`Wield req ${ints.WieldSkillType} ${ints.WieldDifficulty}`);
+  }
+  if (lines.length <= 1) return null;
+  return lines.join("\n");
+}
+
+/**
  * Hotbar-binding validator. Rejects Container items and Sigil items per
  * the user-authorized spec; everything else binds. Returns { ok, reason }.
  */
