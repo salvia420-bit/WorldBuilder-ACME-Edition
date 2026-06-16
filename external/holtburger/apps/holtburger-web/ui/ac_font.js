@@ -89,6 +89,58 @@ const PRIMARY_FONT_IDS = Object.freeze([
 const runtimes = new Map();
 // Promise per pending fetch so concurrent callers share one fetch.
 const inFlight = new Map();
+// Listeners fire on every successful loadAcFont resolve so consumers
+// (AcTextElement, layout-driven labels) can re-render after a lazy
+// CJK miss triggers loadAcFont(CJK_FONT_ID) in the middle of a paint.
+const fontLoadListeners = new Set();
+// Latch — fire loadAcFont(CJK_FONT_ID) at most once per session even
+// if many high-codepoint misses land before the runtime resolves.
+let _cjkPreloadKicked = false;
+
+/**
+ * Subscribe to font-load events. Each successful loadAcFont resolve
+ * calls every listener with `{fontId}`; AcTextElement uses this to
+ * upgrade pre-CJK system-font glyphs once the CJK runtime arrives.
+ * Returns an unsubscribe function.
+ *
+ * @param {(detail: {fontId: number}) => void} cb
+ */
+export function addFontLoadListener(cb) {
+  if (typeof cb !== "function") return () => {};
+  fontLoadListeners.add(cb);
+  return () => fontLoadListeners.delete(cb);
+}
+
+function emitFontLoaded(fontId) {
+  for (const cb of fontLoadListeners) {
+    try { cb({ fontId }); } catch (_) {}
+  }
+}
+
+// Resolve a codepoint against the primary runtime first, then the
+// CJK runtime (if the codepoint is non-Latin and the CJK font has
+// been loaded). On CJK miss, lazily kicks off loadAcFont(CJK_FONT_ID)
+// so subsequent paints upgrade from system-font fallback.
+function _resolveGlyph(primary, cp) {
+  const g = primary.glyphMap.get(cp);
+  if (g) return { runtime: primary, glyph: g };
+  // High codepoint — Cyrillic + everything above (0x0400 onward). The
+  // ASCII / Latin-1 / Latin Extended ranges below this threshold are
+  // already in the primary atlas so the CJK lookup is skipped to keep
+  // the per-glyph hot path cheap.
+  if (cp >= 0x0400) {
+    const cjk = runtimes.get(CJK_FONT_ID);
+    if (cjk) {
+      const cjkG = cjk.glyphMap.get(cp);
+      if (cjkG) return { runtime: cjk, glyph: cjkG };
+    } else if (!_cjkPreloadKicked) {
+      _cjkPreloadKicked = true;
+      // Fire-and-forget; once it lands every listener is notified.
+      void loadAcFont(CJK_FONT_ID);
+    }
+  }
+  return null;
+}
 
 /**
  * Load a Font + atlases, build the runtime, cache it. Idempotent —
@@ -131,6 +183,7 @@ export async function loadAcFont(fontId = UI_FONT_ID) {
           atlasHeight: data.atlasHeight,
         });
       } catch (_) {}
+      emitFontLoaded(fontId);
       return runtime;
     } catch (err) {
       console.warn(`[ac-font] load failed (font 0x${fontId.toString(16)}):`, err);
@@ -280,7 +333,7 @@ export function renderAcText(text, opts = {}) {
       tbg.imageSmoothingEnabled = false;
       tbg.save();
       if (offsetX !== 0 || offsetY !== 0) tbg.translate(offsetX, offsetY);
-      _drawGlyphs(tbg, runtime, runtime.atlasBgCanvas, text, scale, 1, 1);
+      _drawGlyphs(tbg, runtime, runtime.atlasBgCanvas, text, scale, 1, 1, "bg");
       tbg.restore();
       tbg.globalCompositeOperation = "source-in";
       tbg.fillStyle = "rgba(0, 0, 0, 0.85)";
@@ -298,7 +351,7 @@ export function renderAcText(text, opts = {}) {
   tctx.imageSmoothingEnabled = false;
   tctx.save();
   if (offsetX !== 0 || offsetY !== 0) tctx.translate(offsetX, offsetY);
-  _drawGlyphs(tctx, runtime, runtime.atlasFgCanvas, text, scale, 0, 0);
+  _drawGlyphs(tctx, runtime, runtime.atlasFgCanvas, text, scale, 0, 0, "fg");
   tctx.restore();
   tctx.globalCompositeOperation = "source-in";
   tctx.fillStyle = color;
@@ -451,14 +504,15 @@ function _measure(runtime, text) {
   let penX = 0;
   let maxY = 0;
   // Lazy fallback-measure canvas for codepoints not in the AC font
-  // (em-dashes, curly quotes, etc.). Set up once per call.
+  // OR the CJK font (em-dashes, curly quotes, etc.). Set up once.
   let fallbackCtx = null;
   for (const ch of text) {
     const cp = ch.codePointAt(0);
-    const g = runtime.glyphMap.get(cp);
-    if (!g) {
-      // Missing glyph — measure the system-font fallback so the
-      // canvas reservation matches what `_drawGlyphs` will draw.
+    const resolved = _resolveGlyph(runtime, cp);
+    if (!resolved) {
+      // Missing in both primary and CJK — measure the system-font
+      // fallback so the canvas reservation matches what `_drawGlyphs`
+      // will draw.
       if (!fallbackCtx) {
         const c = document.createElement("canvas");
         fallbackCtx = c.getContext("2d");
@@ -471,11 +525,13 @@ function _measure(runtime, text) {
       if (runtime.maxCharHeight > maxY) maxY = runtime.maxCharHeight;
       continue;
     }
+    const { runtime: gRuntime, glyph: g } = resolved;
     penX += g.h_off_before;
     const right = penX + g.width;
     penX = right + g.h_off_after;
     const bottom = g.v_off_before + g.height;
     if (bottom > maxY) maxY = bottom;
+    if (gRuntime.maxCharHeight > maxY) maxY = gRuntime.maxCharHeight;
   }
   return {
     width: Math.max(1, penX),
@@ -483,18 +539,22 @@ function _measure(runtime, text) {
   };
 }
 
-function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy) {
+function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy, atlasKind) {
   let penX = 0;
-  // System-font fallback for codepoints the AC bitmap doesn't carry
-  // (em-dash, curly quotes, …). Drawn in white so the resulting
-  // pixels contribute to the alpha mask consumed by the outer
-  // `source-in` colorize pass — the fallback chars get the same
-  // caller-supplied color as the AC-rendered chars.
+  // Per-glyph atlas selection so CJK glyphs (sourced from the CJK
+  // runtime cached in `runtimes.get(CJK_FONT_ID)`) draw from the CJK
+  // atlas, not the primary atlas the caller passed. The legacy
+  // atlasCanvas argument is the PRIMARY atlas; atlasKind ("fg" | "bg")
+  // tells us which to pick from non-primary runtimes.
   let fallbackConfigured = false;
+  const pickAtlas = (gRuntime) => {
+    if (gRuntime === runtime) return atlasCanvas;
+    return atlasKind === "bg" ? gRuntime.atlasBgCanvas : gRuntime.atlasFgCanvas;
+  };
   for (const ch of text) {
     const cp = ch.codePointAt(0);
-    const g = runtime.glyphMap.get(cp);
-    if (!g) {
+    const resolved = _resolveGlyph(runtime, cp);
+    if (!resolved) {
       try { window.__diag?.fonts?.onFallbackGlyph?.({ codepoint: cp }); } catch (_) {}
       if (!fallbackConfigured) {
         ctx.font = `${runtime.maxCharHeight * scale}px sans-serif`;
@@ -507,10 +567,12 @@ function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy) {
       penX += w;
       continue;
     }
+    const { runtime: gRuntime, glyph: g } = resolved;
+    const atlas = pickAtlas(gRuntime);
     penX += g.h_off_before;
-    if (g.width > 0 && g.height > 0) {
+    if (g.width > 0 && g.height > 0 && atlas) {
       ctx.drawImage(
-        atlasCanvas,
+        atlas,
         g.offset_x,
         g.offset_y,
         g.width,
@@ -591,9 +653,16 @@ function _registerAcTextImpl() {
       this._sourceText = (this.textContent ?? "").trim();
       this._render();
       this._observer.observe(this, { childList: true, characterData: true, subtree: true });
+      // Re-render when a new font (e.g. CJK) lands — upgrades any
+      // system-font fallback glyphs to their AC-font equivalents.
+      this._unsubFontLoad = addFontLoadListener(() => this._render());
     }
     disconnectedCallback() {
       this._observer.disconnect();
+      if (typeof this._unsubFontLoad === "function") {
+        try { this._unsubFontLoad(); } catch (_) {}
+        this._unsubFontLoad = null;
+      }
     }
     attributeChangedCallback() {
       this._render();
