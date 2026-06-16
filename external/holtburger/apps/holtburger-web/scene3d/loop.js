@@ -1953,6 +1953,12 @@ function toMeta(upd) {
     // 2) hooks via `soundTableCache.resolveSound(soundTableDid,
     // soundEnum)`. `0` for entities without a SoundTable property.
     soundTableDid: (upd.soundTableDid ?? 0) >>> 0,
+    // HUD rec #52 (2026-06-16): ObjectDescription bitfield. Needed by
+    // examine-target.js to dispatch player (bit 0x08) vs creature paths
+    // and surface PlayerKiller (bit 0x20). Already present on the
+    // unified-clone path (entity_update_clone.js:114) — adding here
+    // keeps parity in the legacy default branch.
+    objDescFlags: (upd.objDescFlags ?? 0) >>> 0,
   };
 }
 

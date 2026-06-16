@@ -606,9 +606,50 @@ function populateFromEntity(body, ctx, nameEl, guidEl) {
   const type_ = v("type");
   const classId = v("classId");
   const wcid = v("wcid");
-  if (type_ != null) r(body, "Type", String(type_));
+  // HUD rec #52 (2026-06-16) — player vs creature dispatch via
+  // `ObjectDescriptionFlag::PLAYER` (0x08). Replaces the CharExamineUI
+  // branch in retail's gmExamineUI::SetTargetGuid. PLAYER_KILLER
+  // (0x20) marks PK status — surfaced as an Identity row when set so
+  // the examiner sees the same UI affordance retail's nameplate
+  // showed via the red "Player Killer" tag.
+  const objDescFlags = (v("objDescFlags") ?? 0) >>> 0;
+  const isPlayer = (objDescFlags & 0x08) !== 0;
+  const isPlayerKiller = (objDescFlags & 0x20) !== 0;
+  if (isPlayer) {
+    r(body, "Type", "Player");
+  } else if (type_ != null) {
+    r(body, "Type", String(type_));
+  }
   if (classId != null) r(body, "Class", `0x${classId.toString(16)}`);
   if (wcid != null) r(body, "Wcid", String(wcid));
+  if (isPlayer && isPlayerKiller) {
+    r(body, "PK Status", "Player Killer");
+  }
+  if (isPlayer) {
+    // Heritage / Profession / Allegiance arrive through the
+    // AppraisalProfile (`handle.getObjectAppraisal(guid)`) when ACE
+    // includes them on Identify. Read what's present and render the
+    // labels retail's CharExamineUI did; absent fields skip silently
+    // (server may not surface them for remote players).
+    try {
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      const json = handle?.getObjectAppraisal?.(guid >>> 0);
+      if (typeof json === "string" && json.length > 0) {
+        const snapshot = JSON.parse(json);
+        const props = snapshot.properties || {};
+        const ints = props.ints || {};
+        const strings = props.strings || {};
+        const heritage = ints.HeritageGroup;
+        if (heritage != null) r(body, "Heritage", String(heritage));
+        const title = strings.Title || strings.CharacterTitle;
+        if (title) r(body, "Profession", String(title));
+        const allegianceName = strings.AllegianceName
+          ?? strings.MonarchsName
+          ?? strings.PatronsName;
+        if (allegianceName) r(body, "Allegiance", String(allegianceName));
+      }
+    } catch (_) { /* leave the player-specific rows empty on failure */ }
+  }
   const position = v("position");
   const landblock = v("landblock");
   if (position) {
