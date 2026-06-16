@@ -65,6 +65,18 @@
 // Pre-PR-2 baseline: 3 IMPLEMENTED, 6 PARTIAL, 6 MISSING, 3 N/A.
 // Remaining backlog (in order): #6 StateChanged (unified), #8 WorldInfo,
 // #12 SharedCooldown, #13 PortalSpaceEntered. See CHORIZITE_PORTING_PLAN.md §3.4.
+//
+// ---- Window-global helpers (rec #95, 2026-06-16) ----
+//   window.__getCurrentStanceLow()   — () => uint, the local player's
+//     low-32 MotionStance bits. Set up in index.html (around L2652) as
+//     part of the recv-loop's motion-state mirror; cited here for the
+//     audit trail. Read by combat-bar, spell-research-panel,
+//     scene3d/picking.js, the k1 / probe headless harnesses.
+//   window.__getComponentTracker()   — () => Record<compId, count>,
+//     synchronous summary of how many of each spell component (per
+//     spell-components.json id) the player carries in their inventory.
+//     Catalog loads lazily on first call; pre-load callers see {}
+//     until the JSON resolves and the next call returns counts.
 // =============================================================================
 
 // =============================================================================
@@ -93,6 +105,81 @@
  * Client lifecycle state. Direct port of `ClientState.cs:5-45`.
  * Numeric values match the upstream C# enum exactly.
  */
+// ─── Rec #95 — componentTracker helper ───────────────────────────
+// Synchronous summary of carried spell components keyed by id from
+// spell-components.json. First call kicks off a fire-and-forget
+// fetch of the catalog (cached `force-cache`); until it resolves
+// `getComponentTracker` returns `{}`. Once the catalog lands, calls
+// walk `window.__sessionHandle.playerInventory()`, match item.name
+// against component records, and sum stackSize per matching id.
+//
+// The name match mirrors plugins/spellbook.js#refreshComponentPouch
+// (rec #46) so a single canonical mapping owns the heuristic. Plugins
+// that need component data should prefer this helper over rolling
+// their own inventory scan.
+let _componentCatalog = null;
+let _componentCatalogPromise = null;
+let _componentNameToId = null;
+
+function _ensureComponentCatalog() {
+  if (_componentCatalog) return _componentCatalog;
+  if (_componentCatalogPromise) return null;
+  if (typeof fetch !== "function") return null;
+  _componentCatalogPromise = fetch("./data/spell-components.json", { cache: "force-cache" })
+    .then((r) => r.json())
+    .then((j) => {
+      _componentCatalog = j?.components || {};
+      _componentNameToId = new Map();
+      for (const [id, rec] of Object.entries(_componentCatalog)) {
+        if (rec && typeof rec.name === "string") {
+          _componentNameToId.set(rec.name, id);
+        }
+      }
+      return _componentCatalog;
+    })
+    .catch((e) => {
+      console.warn("[api] component-catalog load failed:", e);
+      _componentCatalog = {};
+      _componentNameToId = new Map();
+      return _componentCatalog;
+    });
+  return null;
+}
+
+/**
+ * Returns a `{[componentId: string]: count: number}` summary of the
+ * local player's spell-component inventory. Empty object pre-catalog
+ * load (catalog is fetched lazily on first call); subsequent calls
+ * after the JSON lands return populated counts. The componentId keys
+ * are the string ids from spell-components.json (e.g. `"1"` for Lead
+ * Scarab); a `Comp_<id>` value or numeric form is the same.
+ *
+ * @returns {Record<string, number>}
+ */
+export function getComponentTracker() {
+  const catalog = _componentCatalog ?? _ensureComponentCatalog();
+  if (!catalog || !_componentNameToId) return {};
+  const out = {};
+  try {
+    const handle = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    const inv = (typeof handle?.playerInventory === "function") ? handle.playerInventory() : null;
+    if (!inv) return out;
+    const items = Array.isArray(inv) ? inv : Array.from(inv);
+    for (const it of items) {
+      if (typeof it?.name !== "string") continue;
+      const id = _componentNameToId.get(it.name);
+      if (!id) continue;
+      const stack = (it.stackSize >>> 0) || 1;
+      out[id] = (out[id] || 0) + stack;
+    }
+  } catch (_) {}
+  return out;
+}
+
+if (typeof window !== "undefined") {
+  window.__getComponentTracker = getComponentTracker;
+}
+
 export const ClientState = Object.freeze({
   Initial: 0,            // ClientState.cs:9
   GameStarted: 1,        // ClientState.cs:14 — "Client is done initializing"
