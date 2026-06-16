@@ -555,11 +555,23 @@ export class WorldState extends EventTarget {
       // pending child arrives via `dispatchItemCreateObject`,
       // `_resolveContainerGate` strikes it off; when the set is empty
       // the gate fires.
-      this._pendingContainerOpens.set(cid, {
+      const gate = {
         container,
         pending,
         startedAt: Date.now(),
-      });
+        timeoutId: null,
+      };
+      // Watchdog: if children never arrive (lost packet, ACE race),
+      // fire the gate after 5s anyway so the UI doesn't hang open.
+      gate.timeoutId = setTimeout(() => {
+        if (this._disposed) return;
+        const stillThere = this._pendingContainerOpens.get(cid);
+        if (stillThere === gate) {
+          this._pendingContainerOpens.delete(cid);
+          this._fireContainerOpened(gate.container);
+        }
+      }, 5000);
+      this._pendingContainerOpens.set(cid, gate);
     }
   }
 
@@ -571,6 +583,7 @@ export class WorldState extends EventTarget {
       if (gate.pending.has(g)) {
         gate.pending.delete(g);
         if (gate.pending.size === 0) {
+          if (gate.timeoutId != null) clearTimeout(gate.timeoutId);
           this._pendingContainerOpens.delete(cid);
           this._fireContainerOpened(gate.container);
         }
@@ -1026,6 +1039,9 @@ export class WorldState extends EventTarget {
     this.weenies.clear();
     this.openContainer = null;
     this.selected = null;
+    for (const gate of this._pendingContainerOpens.values()) {
+      if (gate.timeoutId != null) clearTimeout(gate.timeoutId);
+    }
     this._pendingContainerOpens.clear();
     this._pendingContainerOpenForContainer.clear();
     this._enchantmentSnapshot.clear();
