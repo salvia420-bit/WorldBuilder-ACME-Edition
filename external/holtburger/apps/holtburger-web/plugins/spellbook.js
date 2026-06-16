@@ -1261,9 +1261,11 @@ function doMount(parentEl, ctx) {
     // P3-42 (cross-find SB-08): retail confirms via a brass-themed
     // ConfirmationResponse dialog (opcode 0x0275), not the browser
     // chrome window.confirm(). Until the ConfirmationResponse path
-    // is wired, the click is committed directly — irreversible but
-    // user-initiated, matches retail's expectation that the player
-    // owns the action they just clicked.
+    // is wired, fall back to window.confirm() so the player has at
+    // least one stop-sign before an irreversible drop (HUD rec #33).
+    if (typeof window !== "undefined" && typeof window.confirm === "function") {
+      if (!window.confirm("Forget this spell? This action cannot be undone.")) return;
+    }
     try {
       const handle = window.__sessionHandle ?? null;
       if (handle && typeof handle.removeSpellFromBook === "function") {
