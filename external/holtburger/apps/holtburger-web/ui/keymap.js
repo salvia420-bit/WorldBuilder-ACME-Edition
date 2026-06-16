@@ -19,6 +19,8 @@
  * render UI; this module owns the data layer.
  */
 
+import { getActionMap } from "./ac_strings.js";
+
 export const LS_KEY_KEYBINDINGS = "holtburger_keybindings_v1";
 
 /**
@@ -440,6 +442,68 @@ export function lookupRetailDefault(inputMap, actionHash) {
   const km = retailKeyMapCache;
   if (!km) return null;
   return km.byCategoryAction.get(`${inputMap >>> 0}:${actionHash >>> 0}`) ?? null;
+}
+
+/**
+ * Look up an entry in the cached retail ActionMap (loaded via
+ * `ac_strings.loadActionMap`) by actionHash. Returns the first match
+ * across input maps (the same action may appear in multiple categories;
+ * `toggle` is a per-action property so any match is equivalent).
+ *
+ * @param {number} actionHash
+ * @returns {null | {inputMap:number, actionHash:number, labelHash:number, toggle:number, label:string|null}}
+ */
+function findActionByHash(actionHash) {
+  const am = getActionMap();
+  if (!am?.actions) return null;
+  const want = actionHash >>> 0;
+  for (const a of am.actions) {
+    if (a.actionHash === want) return a;
+  }
+  return null;
+}
+
+/**
+ * True if the retail ActionMap marks this action as a toggle
+ * (`ActionMapValue.toggle_type != 0`). Toggles fire on key-down and
+ * latch state until the next key-down; press-release semantics gate
+ * the alternative (hold to keep active). Controls UI uses this to
+ * label the rebind row "(toggle)" so the player knows the binding's
+ * activation semantics.
+ *
+ * Returns `false` when the ActionMap isn't loaded yet OR the action
+ * is not present — safe to call before `loadActionMap()` resolves.
+ *
+ * @param {number} actionHash
+ * @returns {boolean}
+ */
+export function isToggleAction(actionHash) {
+  const a = findActionByHash(actionHash);
+  if (!a) return false;
+  return (a.toggle >>> 0) !== 0;
+}
+
+/**
+ * True if the player should be allowed to bind a key to this action
+ * in the Options → Controls capture UI. The retail ActionMap stores
+ * an ActivationType field, but the current wasm-side serializer
+ * (`src/lib.rs#fetch_action_map`) does not surface it — so this
+ * heuristic falls back to "has a user-facing label". Actions with no
+ * resolved label are presumed system / category-stubs (e.g. internal
+ * dispatch entries) and not user-rebindable.
+ *
+ * Returns `false` when the ActionMap isn't loaded yet — the Controls
+ * UI should re-render after `loadActionMap()` resolves.
+ *
+ * @param {number} actionHash
+ * @returns {boolean}
+ */
+export function canUserBind(actionHash) {
+  const a = findActionByHash(actionHash);
+  if (!a) return false;
+  const label = a.label;
+  if (typeof label !== "string") return false;
+  return label.trim().length > 0;
 }
 
 /**
