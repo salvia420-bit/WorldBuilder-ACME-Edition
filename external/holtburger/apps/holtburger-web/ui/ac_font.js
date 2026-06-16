@@ -189,6 +189,19 @@ export function getAcFont(fontId = UI_FONT_ID) {
  *   to system font). The canvas has transparent background; the text
  *   is filled with `opts.color` (default "#FFFFFF") at integer scale
  *   `opts.scale` (default 1).
+ *
+ * HUD rec #117 — retail's Font::DrawString signature carries alignment
+ * via a single bitmask flags argument (acclient_2013.bndb_pseudo_c.txt
+ * around line 668400). The mapping for future contributors porting
+ * layout-driven labels:
+ *   flags &  0x08 → right-align horizontal
+ *   flags &  0x10 → center horizontal
+ *   flags &  0x40 → bottom-align vertical
+ *   flags <  0    → vCenter (sign-bit flag, encoded as int)
+ * Our renderAcText is alignment-agnostic — callers position the
+ * returned canvas via CSS. Layout-driven panels that need the retail
+ * alignment semantics should decode the flags at the caller and adjust
+ * the canvas's offsetLeft/offsetTop accordingly.
  */
 export function renderAcText(text, opts = {}) {
   registerAcText();
