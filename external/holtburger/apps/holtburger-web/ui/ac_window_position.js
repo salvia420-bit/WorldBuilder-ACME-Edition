@@ -15,6 +15,18 @@
 // The server round-trip (replace localStorage with a PlayerModule
 // equivalent) is a follow-on once ACE exposes the chat-window-option
 // columns to non-chat windows; the API surface stays the same.
+//
+// HUD rec #81 — Retail property IDs for PlayerModule
+// InqChatWindowOption / SetChatWindowOption (from
+// acclient_2013.bndb_pseudo_c.txt:212787+):
+//   0x10000086 = X position
+//   0x10000087 = Y position
+//   0x10000088 = width
+//   0x10000089 = height
+//   0x1000008A = locked
+// When ACE exposes these as generic per-window props, swap the
+// localStorage path here for the wire round-trip without changing
+// callers; the keys above are the canonical mapping.
 
 const STORAGE_PREFIX = "hb.window.";
 const LOCK_EVENT = "hb-ui-lock-changed";
