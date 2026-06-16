@@ -1142,8 +1142,45 @@ export const view = {
       off = () => { try { client.events.off("playerStatsUpdated", onStats); } catch (_) {} };
     }
 
+    // Rec #105 — title-tab scaleY = bodyH / 600 depends on bodyEl's
+    // current height. Tabs/header/footer thickness varies with theme,
+    // window zoom, and the user-resized panel envelope, so latch a
+    // ResizeObserver to re-apply the layout whenever bodyEl's box
+    // changes. Debounced to one rAF so a rapid drag-resize doesn't
+    // burn layout cost. Observer is null in non-Resize-aware
+    // environments (older Safari, headless test harness) — fall back
+    // to a window resize listener.
+    let resizeObserver = null;
+    let resizeRaf = 0;
+    const scheduleResizeApply = () => {
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0;
+        // Only the titles tab depends on the scaleY math today, but
+        // re-apply unconditionally — applyCharacterInfoLayout is
+        // idempotent and other tabs absorb the work cheaply.
+        applyCharacterInfoLayout({
+          rootEl: root,
+          tabsEl,
+          headEl,
+          bodyEl,
+          scrollbarEl,
+          titleRefs,
+        });
+      });
+    };
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(scheduleResizeApply);
+      resizeObserver.observe(bodyEl);
+    } else {
+      window.addEventListener("resize", scheduleResizeApply, { passive: true });
+    }
+
     return () => {
       if (off) off();
+      if (resizeObserver) { try { resizeObserver.disconnect(); } catch (_) {} }
+      else { try { window.removeEventListener("resize", scheduleResizeApply); } catch (_) {} }
+      if (resizeRaf) { try { cancelAnimationFrame(resizeRaf); } catch (_) {} }
       root.remove();
     };
   },
