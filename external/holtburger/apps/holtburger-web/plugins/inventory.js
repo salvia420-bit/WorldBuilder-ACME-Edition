@@ -2236,6 +2236,16 @@ function doMount(parentEl, _ctx) {
           cap = (handle.playerItemsCapacity() >>> 0) || 0;
         }
       } catch (_) { cap = 0; }
+      // HUD rec #40 — canonical retail default for the main pack is 120
+      // (ACE.Server/WorldObjects/Player_Inventory.cs). We do NOT auto-fill
+      // here: a 0 on the main pack means CreateObject lacked the
+      // ITEMS_CAPACITY weenie-flag (a deeper bug), so surface it honestly
+      // via the diag stream so the boot harness can flag the anomaly.
+      if (cap === 0) {
+        try {
+          window.__diag?.layout?.onInventoryCapacity?.({ mainPackCap: 0, isAnomalous: true });
+        } catch (_) {}
+      }
       return cap;
     }
     // Side pack — its own per-item ItemsCapacity (fall back to the
