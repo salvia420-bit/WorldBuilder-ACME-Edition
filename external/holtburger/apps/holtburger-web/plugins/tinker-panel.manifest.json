@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "tinker-panel",
+  "name": "Tinker",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Tinker panel — two-slot staging UI (tool + target) that fires useWithTarget on commit (gmTinkerUI scaffolding).",
+  "icon": "🔧",
+  "iconHidden": true,
+  "entry": "./tinker-panel.js",
+  "environments": ["browser"],
+  "slots": ["overlay"]
+}
