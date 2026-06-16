@@ -12,86 +12,86 @@
 
 | # | sev | domain | files | title | commit |
 |---:|---|---|---|---|---|
-| 131 | crit | D03-cursor-and-drag | `index.html:149 (body declaration); index.html:160-161 (#stage canvas rules); add` | Install AC cursor sprite as body default | — |
-| 132 | crit | D05-map-projection-markers | `map-panel.js:345,357,359` | Fix map projection: use pos.y instead of pos.z for N-S axis in player marker positioning | — |
-| 134 | crit | E18-tradeskill-spell-research-salvage | `plugins/salvage-panel.js:0-500` | Implement salvage panel UI (floating, item-list-based) | — |
-| 135 | crit | E18-tradeskill-spell-research-salvage | `plugins/tinker-panel.js:0-800` | Implement tinker UI panel (tool selection + target item slot) | — |
-| 210 | crit | D01-inventory-slots-validation | `inventory.js:1308-1309` | Remove the fallback \|\| (s.equipMask) from wield-location derivation | — |
-| 14 | high | D08-spellbook-spellcasting | `hotbar.js:204-221, buffs-hud.js:110-121` | Implement spell cooldown update event listener (0x02C1 GameEventMagicUpdateSpell) | — |
-| 19 | high | D14-examination-identify | `examine-target.js:948-958, 556-622` | Add type-based sub-pane dispatch in mountExamineBody | — |
-| 20 | high | D14-examination-identify | `examine-target.js:631-784 (renderAppraisal reference), 556-622 (populateFromEnti` | Implement spell examination pane (renderSpellPane) | — |
-| 23 | high | D16-house-container-lifestone | `house-panel.js:435-639 (entire panel layout)` | Implement house storage permissions UI (Wave M+ backlog) | — |
-| 24 | high | D16-house-container-lifestone | `house-panel.js:436-471 (Buy section) + 474-507 (Rent section)` | Add house slumlord picker + available-house browser (Wave M+ backlog) | — |
-| 26 | high | E02-layout-system-states | `plugins/options-panel.js (applyTabContentLayout function)` | Audit and complete options-panel.js tab content G3 wiring | — |
-| 27 | high | E04-string-tables-localization | `ac_strings.js (add langId tracking) + options-panel.js (add Language tab stub → ` | Implement language context parameter in string loaders | — |
-| 28 | high | E06-tooltip-system | `Settings registry + radar.js:410-420 (read pref) + inventory.js (read pref) + ve` | Add tooltip preference system (enable/delay/duration) | — |
-| 30 | high | E07-keymap-hotkey-routing | `ui/keymap.js:131-144, plugins/options-panel.js (Controls capture UI)` | Add conflict detection at rebind time | — |
-| 31 | high | E07-keymap-hotkey-routing | `ui/keymap.js:300-370 (loadRetailActionMap), plugins/options-panel.js` | Expose activation type + toggle semantics | — |
-| 32 | high | E10-modal-dialog-system | `lifestone-popup.js:60-108 (pattern) \| tradeskill.js (trigger point) \| need to ` | Wire salvage confirmation dialog | — |
-| 34 | high | E11-window-mgmt-resize-persist | `ac_window_position.js:66-85 (state shape), 211-230 (readPersisted/writePersisted` | Extend ac_window_position.js to persist window size (width/height) | — |
-| 35 | high | E14-loading-zone-transition-portal-storm | `plugins/loading-screen.js (new); index.html:~460 (insert mount call into bar boo` | Add modal loading-screen overlay (initial-load + zone-cross) | — |
-| 136 | high | D02-inventory-packs-capacity | `plugins/inventory.js:141 (BAG_COUNT), plugins/inventory.js:1390-1509 (bag-column` | Implement dynamic BAG_COUNT expansion for AugmentationExtraPackSlot | — |
-| 137 | high | D03-cursor-and-drag | `plugins/inventory.js:1657-1679 (paperdoll dragstart), 2554-2567 (overlay dragsta` | Spec item-on-cursor sprite swap via drag-state plumbing | — |
-| 138 | high | D05-map-projection-markers | `map-panel.js:248-385 (mount), 336-362 (positionPlayer), 59-160 (styles)` | Implement house location marker rendering when player owns house | — |
-| 139 | high | D05-map-projection-markers | `map-panel.js:336-385 (positionPlayer, add new marker update functions), 124-135 ` | Add fellow/allegiance player pins on world map | — |
-| 143 | high | D11-fellowship-allegiance | `allegiance-panel.js:484-610, 1497-1540` | Implement allegiance vassal tree browser in main-panel | — |
-| 144 | high | D12-vendor-and-trade | `trade-panel.js:490-506 (onTradeUpdated subscription), 441-454 (requestClose)` | Implement distance enforcement for trade panel | — |
-| 145 | high | D13-character-info-titles-options | `plugins/character-info.js:412-419, acclient.h enum PropertyAttribute section` | Verify attribute icon sprite DIDs match retail enum indices | — |
-| 146 | high | D13-character-info-titles-options | `plugins/options-panel.js:615-772, update renderCharacterTab() loop` | Implement CharacterOption split validation and persist server-read state | — |
-| 150 | high | D17-status-indicators-and-floaty-chrome | `status-indicators.js:102-183 (styles, add .lock-button) + 232-273 (mount, add fr` | Add lock button UI + sprite swapping for floaty window | — |
-| 151 | high | E01-font-system | `ui/ac_font.js:193-261 renderAcText, 402-436 _measure, 438-478 _drawGlyphs` | Implement text alignment (left/center/right + top/middle/bottom) | — |
-| 152 | high | E01-font-system | `ui/ac_font.js:103-146 loadAcFont, 335-363 _buildRuntime, 402-436 _measure, 438-4` | Integrate CJK fallback font chain for missing non-Latin chars | — |
-| 153 | high | E02-layout-system-states | `ui/ac_floaty_frame.js (new export), plugins/main-panel.js (call during mount)` | Implement resolveFrameSpritesFromLayout helper and wire main-panel.js | — |
-| 154 | high | E04-string-tables-localization | `ac_layout.js (layout parser) + options-panel.js (update TABS hardcodes to use re` | Wire StringID resolution in layout element rendering | — |
-| 155 | high | E04-string-tables-localization | `wasm-side fetch_layout serializer + ac_layout.js LayoutDesc struct + options-pan` | Deferred serialization of StateDesc (unblock G3) | — |
-| 156 | high | E05-ui-sound-effects | `plugins/ui_click_sounds.js (new), plugins/inventory.js (~30 new lines for unsubs` | Wire UI_ButtonPress (0x72) click sound to all interactive UI elements | — |
-| 157 | high | E05-ui-sound-effects | `plugins/audio_optimistic.js (add UI_ERROR const), plugins/inventory.js (paperdol` | Implement UI_GeneralError (0x6D) sound on invalid action feedback | — |
-| 158 | high | E06-tooltip-system | `inventory.js:800-1000 (new tooltip handler) + inventory_helpers.js (appraisal te` | Implement hover tooltips for inventory items | — |
-| 161 | high | E09-drag-drop-full-system | `hotbar.js:708-714, vendor-ui.js:1313-1317, trade-panel.js:456-471, container-pan` | Add DropItemFlags enum + centralized MIME validator | — |
-| 162 | high | E11-window-mgmt-resize-persist | `New: ui/ac_resize_corners.js; plugins/chat-panel.js:687-704 (replace); plugins/e` | Port 4-corner resize hotspots to hotbar, vitals, combat-hud, examine-floaty | — |
-| 163 | high | E11-window-mgmt-resize-persist | `ac_window_position.js:89-95 (works); ac_resize_corners.js: new onAnyLockChange s` | Block corner resize + edge drag when window is locked | — |
-| 165 | high | E12-login-character-select-creation | `index.html:8171-8187 (renderCharacterList), plus new DELETE/RESTORE event handle` | Expose character deletion + restore workflow in post-login character list | — |
-| 166 | high | E13-death-resurrection-vitae-ui | `combat-hud.js:1007-1037 (showDeathOverlay), character.js:495-509 (inPortalSpace ` | Implement multi-phase death overlay sequence (dying→portal→resurrection) | — |
-| 167 | high | E13-death-resurrection-vitae-ui | `status-indicators.js:486-491 (applyVitae), character.js:146-148 (vitae property)` | Add vitae detail pane showing CP pool debt and penalty percentage | — |
-| 45 | med | D07-combat-hud-stance-power | `combat-bar.js:1035-1039, picking.js:1215-1265` | Default ?powerMeterSwingDuration=on and always pass swingDurationMs from picking.js | — |
-| 46 | med | D08-spellbook-spellcasting | `spellbook.js:1012-1028, ui/ac_spell_shape.js for component-specific shape annota` | Port component-pouch widget from retail gmSpellbookUI | — |
-| 48 | med | D11-fellowship-allegiance | `fellowship-panel.js:932-1002` | Expose FellowshipFullUpdate vs UpdateFellow distinction in snapshot protocol | — |
-| 49 | med | D11-fellowship-allegiance | `fellowship-panel.js:815-843` | Add FellowshipUpdateRequest batching subscription toggle to main-panel | — |
-| 51 | med | D13-character-info-titles-options | `plugins/character-info.js:795-886, CSS section 288-352` | Add title-selection visual feedback and state tracking | — |
-| 52 | med | D14-examination-identify | `examine-target.js:556-622` | Add player vs creature dispatch (CharExamineUI equivalent) | — |
-| 53 | med | D14-examination-identify | `examine-target.js:644-784` | Surface AppraisalProfile success_flag for skill-gated visibility | — |
-| 54 | med | D14-examination-identify | `examine-target.js:631-784` | Implement wield requirements rendering | — |
-| 55 | med | D14-examination-identify | `examine-target.js:484-554, 956-957` | Distinguish creature vs paperdoll-only rendering | — |
-| 56 | med | D16-house-container-lifestone | `lifestone-popup.js:228-252 (button row DOM)` | Add Sanctuary location display to lifestone-popup UI | — |
-| 59 | med | D17-status-indicators-and-floaty-chrome | `ac_window_position.js:53-169 (attachWindowPosition signature extension) + 82-125` | Implement window resize via bottom/right edge drag handles | — |
-| 63 | med | E01-font-system | `ui/ac_font.js:438-478 _drawGlyphs, 232-245 shadow render block` | Apply baseline offset + border pixels to glyph positioning | — |
-| 65 | med | E02-layout-system-states | `tests/layout_state_inheritance.test.cjs (new), ui/ac_layout.js (conditional casc` | Validate state pass-to-children cascade in multi-level hierarchies | — |
-| 68 | med | E04-string-tables-localization | `index.html (session init) + ac_strings.js (import global context)` | Consolidate language initialization in session handshake | — |
-| 69 | med | E06-tooltip-system | `vendor-ui.js:500-650 (item cell hover handler) + item-tooltip-formatter (shared ` | Vendor item tooltip with price and appraisal | — |
-| 71 | med | E07-keymap-hotkey-routing | `ui/keymap.js:314-325 (after loadRetailKeyMap), plugins/options-panel.js Controls` | Enumerate retail actions with friendly labels | — |
-| 72 | med | E07-keymap-hotkey-routing | `ui/keymap.js:224-290, plugins/options-panel.js` | Support mouse button + joystick bindings | — |
-| 75 | med | E09-drag-drop-full-system | `hotbar.js:781-798, plugins/rejection_feedback.js:70-83` | Add compensating transaction guards for hotbar swap | — |
-| 76 | med | E10-modal-dialog-system | `main-panel.js:152-232 (CSS/DOM pattern) \| allegiance-panel.js:1235 (window.conf` | Unify modal dialogs to custom ConfirmDialog component | — |
-| 77 | med | E10-modal-dialog-system | `lifestone-popup.js:259-268 (applyAction pattern) \| allegiance-panel.js:1236-124` | Implement DialogFactory result callback protocol | — |
-| 78 | med | E10-modal-dialog-system | `lifestone-popup.js (template) \| container-panel.js (where mana-stone items are ` | Add mana-stone confirmation (stub scaffolding) | — |
-| 79 | med | E11-window-mgmt-resize-persist | `ac_window_position.js:115-120 (pointerup), 200-209 (refactor snap logic)` | Snap-to-screen-edge on position release (optional refinement) | — |
-| 80 | med | E11-window-mgmt-resize-persist | `chat-panel.js:683-705 (delete); add ac_resize_corners import` | Unify chat-panel resize with ac_resize_corners (remove bespoke logic) | — |
-| 82 | med | E12-login-character-select-creation | `character-creation.js:1155-1226 (renderAttributesPage), applyAttributeDelta help` | Add per-attribute lock buttons on Attributes page (J4.B.2 enhancement) | — |
-| 83 | med | E12-login-character-select-creation | `index.html:8162-8165 (loginStatus.innerHTML), api.js to expose world-info event` | Add character-list world-population display (post-login context) | — |
-| 84 | med | E12-login-character-select-creation | `api.js (add shared-cooldown event wiring), plugins that depend on it` | Port Character.OnSharedCooldownChanged event to web bus (cross-domain impact) | — |
-| 85 | med | E12-login-character-select-creation | `character-creation.js:1356-1419 (renderSummaryPage), integrate 3D preview viewpo` | Implement character-appearance 3D preview on Summary page (final review) | — |
-| 86 | med | E13-death-resurrection-vitae-ui | `status-indicators.js:95 (INDICATORS vitae slot), acclient.h:54086 (gmUIElement_V` | Wire vitae icon to 3+ state variants (none/warning/critical thresholds) | — |
-| 88 | med | E14-loading-zone-transition-portal-storm | `plugins/status-indicators.js or plugins/landblock-messages.js (new); wiring to c` | Implement landblockChanged status message (zone-cross name display) | — |
-| 89 | med | E15-settings-persistence-options | `options-panel.js:615-682, ac_character_options.js:17-30` | Catalog all 0x51 CharacterOption enum values and add missing options to Character tab | — |
-| 90 | med | E15-settings-persistence-options | `options-panel.js:684-712` | Wire character options defaults on login via PlayerDescription hydration | — |
-| 93 | med | E18-tradeskill-spell-research-salvage | `spell-research-panel.js:569-600` | Add spell component cost labels to spell-research-panel rows | — |
-| 95 | med | E18-tradeskill-spell-research-salvage | `plugins/api.js:~1-50` | Export __getCurrentStanceLow and componentTracker APIs | — |
-| 173 | med | D03-cursor-and-drag | `plugins/inventory.js:2554-2567 dragstart/dragend handlers; expand overlay.datase` | Export drag state global for cross-plugin reactivity | — |
-| 174 | med | D06-buffs-enchantments-pipeline | `buffs-hud.js:58-71, status-indicators.js:498-502, ui/enchantment_constants.js (n` | Extract shared EnchantmentTypeFlags constants to a module | — |
-| 176 | med | D08-spellbook-spellcasting | `hotbar.js:563-659, combat-bar.js:1438-1450, plugins/spellbook.js:1255-1291` | Consolidate spell casting dispatch into a shared helper module | — |
-| 179 | med | D12-vendor-and-trade | `vendor-ui.js:1554-1556 (queue total calculation), 1637-1647 (buy wire), 1690-170` | Audit alt-currency buy/sell price formulas | — |
-| 182 | med | D16-house-container-lifestone | `house-panel.js:656-665 (current playerStatsUpdated subscription); plugins/api.js` | Add real-time house query response subscription (avoid 1Hz polling latency) | — |
-| 183 | med | D17-status-indicators-and-floaty-chrome | `status-indicators.js:91-99 (INDICATORS.burden add 5 DIDs) + 472-482 (applyBurden` | Refactor burden indicator to render 5-state ramp with distinct sprites | — |
+| 131 | crit | D03-cursor-and-drag | `index.html:149 (body declaration); index.html:160-161 (#stage canvas rules); add` | Install AC cursor sprite as body default | c6b370bd |
+| 132 | crit | D05-map-projection-markers | `map-panel.js:345,357,359` | Fix map projection: use pos.y instead of pos.z for N-S axis in player marker positioning | dfe5e81f |
+| 134 | crit | E18-tradeskill-spell-research-salvage | `plugins/salvage-panel.js:0-500` | Implement salvage panel UI (floating, item-list-based) | 0120dd15 |
+| 135 | crit | E18-tradeskill-spell-research-salvage | `plugins/tinker-panel.js:0-800` | Implement tinker UI panel (tool selection + target item slot) | 332b64c6 |
+| 210 | crit | D01-inventory-slots-validation | `inventory.js:1308-1309` | Remove the fallback \|\| (s.equipMask) from wield-location derivation | drift |
+| 14 | high | D08-spellbook-spellcasting | `hotbar.js:204-221, buffs-hud.js:110-121` | Implement spell cooldown update event listener (0x02C1 GameEventMagicUpdateSpell) | spec-ambiguous |
+| 19 | high | D14-examination-identify | `examine-target.js:948-958, 556-622` | Add type-based sub-pane dispatch in mountExamineBody | skip |
+| 20 | high | D14-examination-identify | `examine-target.js:631-784 (renderAppraisal reference), 556-622 (populateFromEnti` | Implement spell examination pane (renderSpellPane) | spec-ambiguous |
+| 23 | high | D16-house-container-lifestone | `house-panel.js:435-639 (entire panel layout)` | Implement house storage permissions UI (Wave M+ backlog) | skip |
+| 24 | high | D16-house-container-lifestone | `house-panel.js:436-471 (Buy section) + 474-507 (Rent section)` | Add house slumlord picker + available-house browser (Wave M+ backlog) | skip |
+| 26 | high | E02-layout-system-states | `plugins/options-panel.js (applyTabContentLayout function)` | Audit and complete options-panel.js tab content G3 wiring | skip |
+| 27 | high | E04-string-tables-localization | `ac_strings.js (add langId tracking) + options-panel.js (add Language tab stub → ` | Implement language context parameter in string loaders | skip |
+| 28 | high | E06-tooltip-system | `Settings registry + radar.js:410-420 (read pref) + inventory.js (read pref) + ve` | Add tooltip preference system (enable/delay/duration) | skip |
+| 30 | high | E07-keymap-hotkey-routing | `ui/keymap.js:131-144, plugins/options-panel.js (Controls capture UI)` | Add conflict detection at rebind time | 85d1ce5d |
+| 31 | high | E07-keymap-hotkey-routing | `ui/keymap.js:300-370 (loadRetailActionMap), plugins/options-panel.js` | Expose activation type + toggle semantics | e57b9edd |
+| 32 | high | E10-modal-dialog-system | `lifestone-popup.js:60-108 (pattern) \| tradeskill.js (trigger point) \| need to ` | Wire salvage confirmation dialog | 785436b8 |
+| 34 | high | E11-window-mgmt-resize-persist | `ac_window_position.js:66-85 (state shape), 211-230 (readPersisted/writePersisted` | Extend ac_window_position.js to persist window size (width/height) | 8d6f2910 |
+| 35 | high | E14-loading-zone-transition-portal-storm | `plugins/loading-screen.js (new); index.html:~460 (insert mount call into bar boo` | Add modal loading-screen overlay (initial-load + zone-cross) | a7aa7de5 |
+| 136 | high | D02-inventory-packs-capacity | `plugins/inventory.js:141 (BAG_COUNT), plugins/inventory.js:1390-1509 (bag-column` | Implement dynamic BAG_COUNT expansion for AugmentationExtraPackSlot | skip |
+| 137 | high | D03-cursor-and-drag | `plugins/inventory.js:1657-1679 (paperdoll dragstart), 2554-2567 (overlay dragsta` | Spec item-on-cursor sprite swap via drag-state plumbing | drift |
+| 138 | high | D05-map-projection-markers | `map-panel.js:248-385 (mount), 336-362 (positionPlayer), 59-160 (styles)` | Implement house location marker rendering when player owns house | 978be175 |
+| 139 | high | D05-map-projection-markers | `map-panel.js:336-385 (positionPlayer, add new marker update functions), 124-135 ` | Add fellow/allegiance player pins on world map | defer-wasm |
+| 143 | high | D11-fellowship-allegiance | `allegiance-panel.js:484-610, 1497-1540` | Implement allegiance vassal tree browser in main-panel | 0eeaf302 |
+| 144 | high | D12-vendor-and-trade | `trade-panel.js:490-506 (onTradeUpdated subscription), 441-454 (requestClose)` | Implement distance enforcement for trade panel | ba4f2c83 |
+| 145 | high | D13-character-info-titles-options | `plugins/character-info.js:412-419, acclient.h enum PropertyAttribute section` | Verify attribute icon sprite DIDs match retail enum indices | drift |
+| 146 | high | D13-character-info-titles-options | `plugins/options-panel.js:615-772, update renderCharacterTab() loop` | Implement CharacterOption split validation and persist server-read state | skip |
+| 150 | high | D17-status-indicators-and-floaty-chrome | `status-indicators.js:102-183 (styles, add .lock-button) + 232-273 (mount, add fr` | Add lock button UI + sprite swapping for floaty window | cdd87103 |
+| 151 | high | E01-font-system | `ui/ac_font.js:193-261 renderAcText, 402-436 _measure, 438-478 _drawGlyphs` | Implement text alignment (left/center/right + top/middle/bottom) | fde854b5 |
+| 152 | high | E01-font-system | `ui/ac_font.js:103-146 loadAcFont, 335-363 _buildRuntime, 402-436 _measure, 438-4` | Integrate CJK fallback font chain for missing non-Latin chars | fda297b1 |
+| 153 | high | E02-layout-system-states | `ui/ac_floaty_frame.js (new export), plugins/main-panel.js (call during mount)` | Implement resolveFrameSpritesFromLayout helper and wire main-panel.js | defer-asset |
+| 154 | high | E04-string-tables-localization | `ac_layout.js (layout parser) + options-panel.js (update TABS hardcodes to use re` | Wire StringID resolution in layout element rendering | defer-wasm |
+| 155 | high | E04-string-tables-localization | `wasm-side fetch_layout serializer + ac_layout.js LayoutDesc struct + options-pan` | Deferred serialization of StateDesc (unblock G3) | defer-wasm |
+| 156 | high | E05-ui-sound-effects | `plugins/ui_click_sounds.js (new), plugins/inventory.js (~30 new lines for unsubs` | Wire UI_ButtonPress (0x72) click sound to all interactive UI elements | e7c0aa54 |
+| 157 | high | E05-ui-sound-effects | `plugins/audio_optimistic.js (add UI_ERROR const), plugins/inventory.js (paperdol` | Implement UI_GeneralError (0x6D) sound on invalid action feedback | 4dedde35 |
+| 158 | high | E06-tooltip-system | `inventory.js:800-1000 (new tooltip handler) + inventory_helpers.js (appraisal te` | Implement hover tooltips for inventory items | 23f85132 |
+| 161 | high | E09-drag-drop-full-system | `hotbar.js:708-714, vendor-ui.js:1313-1317, trade-panel.js:456-471, container-pan` | Add DropItemFlags enum + centralized MIME validator | 5863dafd |
+| 162 | high | E11-window-mgmt-resize-persist | `New: ui/ac_resize_corners.js; plugins/chat-panel.js:687-704 (replace); plugins/e` | Port 4-corner resize hotspots to hotbar, vitals, combat-hud, examine-floaty | 5c980536 |
+| 163 | high | E11-window-mgmt-resize-persist | `ac_window_position.js:89-95 (works); ac_resize_corners.js: new onAnyLockChange s` | Block corner resize + edge drag when window is locked | 0dbdfc03 |
+| 165 | high | E12-login-character-select-creation | `index.html:8171-8187 (renderCharacterList), plus new DELETE/RESTORE event handle` | Expose character deletion + restore workflow in post-login character list | defer-wasm |
+| 166 | high | E13-death-resurrection-vitae-ui | `combat-hud.js:1007-1037 (showDeathOverlay), character.js:495-509 (inPortalSpace ` | Implement multi-phase death overlay sequence (dying→portal→resurrection) | cc0a9e20 |
+| 167 | high | E13-death-resurrection-vitae-ui | `status-indicators.js:486-491 (applyVitae), character.js:146-148 (vitae property)` | Add vitae detail pane showing CP pool debt and penalty percentage | 1d858a1d |
+| 45 | med | D07-combat-hud-stance-power | `combat-bar.js:1035-1039, picking.js:1215-1265` | Default ?powerMeterSwingDuration=on and always pass swingDurationMs from picking.js | fable-skip |
+| 46 | med | D08-spellbook-spellcasting | `spellbook.js:1012-1028, ui/ac_spell_shape.js for component-specific shape annota` | Port component-pouch widget from retail gmSpellbookUI | c8b29604 |
+| 48 | med | D11-fellowship-allegiance | `fellowship-panel.js:932-1002` | Expose FellowshipFullUpdate vs UpdateFellow distinction in snapshot protocol | defer-wasm |
+| 49 | med | D11-fellowship-allegiance | `fellowship-panel.js:815-843` | Add FellowshipUpdateRequest batching subscription toggle to main-panel | eadf9cc6 |
+| 51 | med | D13-character-info-titles-options | `plugins/character-info.js:795-886, CSS section 288-352` | Add title-selection visual feedback and state tracking | 9b35dd04 |
+| 52 | med | D14-examination-identify | `examine-target.js:556-622` | Add player vs creature dispatch (CharExamineUI equivalent) | defer-wasm |
+| 53 | med | D14-examination-identify | `examine-target.js:644-784` | Surface AppraisalProfile success_flag for skill-gated visibility | defer-wasm |
+| 54 | med | D14-examination-identify | `examine-target.js:631-784` | Implement wield requirements rendering | fd51c741 |
+| 55 | med | D14-examination-identify | `examine-target.js:484-554, 956-957` | Distinguish creature vs paperdoll-only rendering | 53cba3d0 |
+| 56 | med | D16-house-container-lifestone | `lifestone-popup.js:228-252 (button row DOM)` | Add Sanctuary location display to lifestone-popup UI | defer-wasm |
+| 59 | med | D17-status-indicators-and-floaty-chrome | `ac_window_position.js:53-169 (attachWindowPosition signature extension) + 82-125` | Implement window resize via bottom/right edge drag handles | d7c7b867 |
+| 63 | med | E01-font-system | `ui/ac_font.js:438-478 _drawGlyphs, 232-245 shadow render block` | Apply baseline offset + border pixels to glyph positioning | b1afca88 |
+| 65 | med | E02-layout-system-states | `tests/layout_state_inheritance.test.cjs (new), ui/ac_layout.js (conditional casc` | Validate state pass-to-children cascade in multi-level hierarchies | 3dc802cf |
+| 68 | med | E04-string-tables-localization | `index.html (session init) + ac_strings.js (import global context)` | Consolidate language initialization in session handshake | defer-wasm |
+| 69 | med | E06-tooltip-system | `vendor-ui.js:500-650 (item cell hover handler) + item-tooltip-formatter (shared ` | Vendor item tooltip with price and appraisal | 61e0e5b1 |
+| 71 | med | E07-keymap-hotkey-routing | `ui/keymap.js:314-325 (after loadRetailKeyMap), plugins/options-panel.js Controls` | Enumerate retail actions with friendly labels | d70b6333 |
+| 72 | med | E07-keymap-hotkey-routing | `ui/keymap.js:224-290, plugins/options-panel.js` | Support mouse button + joystick bindings | fea53a32 |
+| 75 | med | E09-drag-drop-full-system | `hotbar.js:781-798, plugins/rejection_feedback.js:70-83` | Add compensating transaction guards for hotbar swap | 9058a1a4 |
+| 76 | med | E10-modal-dialog-system | `main-panel.js:152-232 (CSS/DOM pattern) \| allegiance-panel.js:1235 (window.conf` | Unify modal dialogs to custom ConfirmDialog component | 0f28bbe7 |
+| 77 | med | E10-modal-dialog-system | `lifestone-popup.js:259-268 (applyAction pattern) \| allegiance-panel.js:1236-124` | Implement DialogFactory result callback protocol | f412d425 |
+| 78 | med | E10-modal-dialog-system | `lifestone-popup.js (template) \| container-panel.js (where mana-stone items are ` | Add mana-stone confirmation (stub scaffolding) | d330e472 |
+| 79 | med | E11-window-mgmt-resize-persist | `ac_window_position.js:115-120 (pointerup), 200-209 (refactor snap logic)` | Snap-to-screen-edge on position release (optional refinement) | afe939ac |
+| 80 | med | E11-window-mgmt-resize-persist | `chat-panel.js:683-705 (delete); add ac_resize_corners import` | Unify chat-panel resize with ac_resize_corners (remove bespoke logic) | 64c8ecaa |
+| 82 | med | E12-login-character-select-creation | `character-creation.js:1155-1226 (renderAttributesPage), applyAttributeDelta help` | Add per-attribute lock buttons on Attributes page (J4.B.2 enhancement) | fable-skip |
+| 83 | med | E12-login-character-select-creation | `index.html:8162-8165 (loginStatus.innerHTML), api.js to expose world-info event` | Add character-list world-population display (post-login context) | defer-wasm |
+| 84 | med | E12-login-character-select-creation | `api.js (add shared-cooldown event wiring), plugins that depend on it` | Port Character.OnSharedCooldownChanged event to web bus (cross-domain impact) | defer-wasm |
+| 85 | med | E12-login-character-select-creation | `character-creation.js:1356-1419 (renderSummaryPage), integrate 3D preview viewpo` | Implement character-appearance 3D preview on Summary page (final review) | fable-skip |
+| 86 | med | E13-death-resurrection-vitae-ui | `status-indicators.js:95 (INDICATORS vitae slot), acclient.h:54086 (gmUIElement_V` | Wire vitae icon to 3+ state variants (none/warning/critical thresholds) | 406d4ce4 |
+| 88 | med | E14-loading-zone-transition-portal-storm | `plugins/status-indicators.js or plugins/landblock-messages.js (new); wiring to c` | Implement landblockChanged status message (zone-cross name display) | b939a583 |
+| 89 | med | E15-settings-persistence-options | `options-panel.js:615-682, ac_character_options.js:17-30` | Catalog all 0x51 CharacterOption enum values and add missing options to Character tab | b88f6477 |
+| 90 | med | E15-settings-persistence-options | `options-panel.js:684-712` | Wire character options defaults on login via PlayerDescription hydration | 85fb4784 |
+| 93 | med | E18-tradeskill-spell-research-salvage | `spell-research-panel.js:569-600` | Add spell component cost labels to spell-research-panel rows | 7173854c |
+| 95 | med | E18-tradeskill-spell-research-salvage | `plugins/api.js:~1-50` | Export __getCurrentStanceLow and componentTracker APIs | 28bc5a8f |
+| 173 | med | D03-cursor-and-drag | `plugins/inventory.js:2554-2567 dragstart/dragend handlers; expand overlay.datase` | Export drag state global for cross-plugin reactivity | e6ccec7e |
+| 174 | med | D06-buffs-enchantments-pipeline | `buffs-hud.js:58-71, status-indicators.js:498-502, ui/enchantment_constants.js (n` | Extract shared EnchantmentTypeFlags constants to a module | f133e290 |
+| 176 | med | D08-spellbook-spellcasting | `hotbar.js:563-659, combat-bar.js:1438-1450, plugins/spellbook.js:1255-1291` | Consolidate spell casting dispatch into a shared helper module | 3fa1a3f4 |
+| 179 | med | D12-vendor-and-trade | `vendor-ui.js:1554-1556 (queue total calculation), 1637-1647 (buy wire), 1690-170` | Audit alt-currency buy/sell price formulas | 243277b0 |
+| 182 | med | D16-house-container-lifestone | `house-panel.js:656-665 (current playerStatsUpdated subscription); plugins/api.js` | Add real-time house query response subscription (avoid 1Hz polling latency) | 1e8567df |
+| 183 | med | D17-status-indicators-and-floaty-chrome | `status-indicators.js:91-99 (INDICATORS.burden add 5 DIDs) + 472-482 (applyBurden` | Refactor burden indicator to render 5-state ramp with distinct sprites | 04f7c73c |
 | 184 | med | D18-pane-mgmt-hotkeys-frame-seam | `index.html:8094, 1857, 1784` | Formalize window-global API contract with schema | — |
 | 185 | med | E01-font-system | `ui/ac_font.js:193-261 renderAcText, 232-245 shadow block, 527-612 AcTextElement` | Make drop shadow color + offset configurable | — |
 | 186 | med | E02-layout-system-states | `ui/ac_layout.js (new computeChildGeometry function), plugins/inventory.js (enabl` | Implement edge-anchor flow-layout fallback for dynamic geometry | — |
