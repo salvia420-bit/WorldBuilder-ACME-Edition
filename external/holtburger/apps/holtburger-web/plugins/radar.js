@@ -444,12 +444,12 @@ function fillTooltipContent(ref) {
 // frame, so we compute the blip's screen position analytically from
 // its rotor-local offset + the current heading. Cheaper than reading
 // getBoundingClientRect on each frame (no layout reflow).
-function updateTooltipPosition(headingDeg) {
+function updateTooltipPosition(headingRad) {
   if (_hoveredBlipIdx < 0 || !_tooltipEl || _tooltipEl.hidden) return;
   const ref = _blipRefs[_hoveredBlipIdx];
   if (!ref || !_overlayEl) return;
   const overlayRect = _overlayEl.getBoundingClientRect();
-  const theta = (-headingDeg * Math.PI) / 180;
+  const theta = -headingRad;
   const lx = ref.localX - DISK_SIZE / 2;
   const ly = ref.localY - DISK_SIZE / 2;
   const cos = Math.cos(theta);
@@ -705,7 +705,7 @@ export function mount(_ctx) {
     // CSS rotation is clockwise; AC heading is compass bearing (0 = north,
     // 90 = east). To make N world-stay (player turning rotates the disk
     // counter-clockwise relative to screen), apply `-heading`.
-    rotor.style.transform = `rotate(${-heading}deg)`;
+    rotor.style.transform = `rotate(${(-heading * 180) / Math.PI}deg)`;
     // Counter-rotate each cardinal so the letters stay screen-upright.
     for (const dir of ["n", "e", "s", "w"]) {
       const el = cardinalEls[dir];
