@@ -672,17 +672,18 @@ export function mount(_ctx) {
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
 
-  // Disk (will eventually rotate with -heading so the dark north-wedge
-  // points to true north).
-  const disk = document.createElement("div");
-  disk.className = "hb-radar-disk";
-  overlay.appendChild(disk);
-
-  // Rotor wraps the cardinals + FOV wedge + (future) entity blips.
+  // Rotor wraps the disk + cardinals + FOV wedge + entity blips.
   // We rotate it by `-heading` so that N stays world-north when the
   // player turns; the cardinals counter-rotate to stay readable.
+  // The brass-rim disk sprite (north-wedge baked in) lives inside the
+  // rotor so it tracks world-north too — retail behavior.
   const rotor = document.createElement("div");
   rotor.className = "hb-radar-rotor";
+
+  // Disk first so cardinals, FOV wedge, and blips stack over it.
+  const disk = document.createElement("div");
+  disk.className = "hb-radar-disk";
+  rotor.appendChild(disk);
   // Field-of-view wedge — points UP in rotor-local space, which after
   // rotor's -heading rotation lands in world-space at the player's
   // facing direction. So this is BOTH player facing + N indicator combined?
