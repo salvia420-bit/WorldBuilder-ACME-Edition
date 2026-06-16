@@ -568,11 +568,37 @@ export function mount(_ctx) {
 
   // Vitae: 1.0 = no vitae, <1.0 = active death penalty (counter-intuitive
   // per handoff §3 row 4 / Character.cs:80-88). Active when ratio<1.0.
+  // Rec #86 — vitae icon tier ramp. Mirrors gmUIElement_VitaeIndicator
+  // multi-state subclass (acclient.h:54086). Tiers:
+  //   none       vitae >= 1.0          — hidden (uses .inactive sprite)
+  //   warning    0.75 <= vitae < 1.0   — 0x060074A0
+  //   critical   0.50 <= vitae < 0.75  — 0x060074A1
+  //   severe     vitae < 0.50          — 0x060074A2
+  // Sprites past the current "active" / "inactive" pair in INDICATORS;
+  // the canonical mapping from retail isn't documented to us so the
+  // sequence is the next three extracted assets. data-state mirrors
+  // the tier label so CSS / sibling plugins can react without
+  // re-walking the vitae value.
+  const VITAE_TIER_SPRITES = {
+    none:     "0x060074A4",
+    warning:  "0x060074A0",
+    critical: "0x060074A1",
+    severe:   "0x060074A2",
+  };
+  function tierForVitae(vitae) {
+    if (!Number.isFinite(vitae) || vitae >= 1.0) return "none";
+    if (vitae >= 0.75) return "warning";
+    if (vitae >= 0.50) return "critical";
+    return "severe";
+  }
   function applyVitae(vitae) {
     const el = indicatorEls.vitae;
     if (!el) return;
-    const active = vitae < 1.0;
-    setIndicatorActive("vitae", active);
+    const tier = tierForVitae(Number(vitae));
+    el.dataset.state = tier;
+    el.classList.toggle("active", tier !== "none");
+    const sprite = VITAE_TIER_SPRITES[tier] ?? VITAE_TIER_SPRITES.none;
+    el.style.backgroundImage = `url("./data/ui-sprites/${sprite}.png")`;
   }
 
   // Buff/debuff fallback: emit our own indicator state from raw enchantment
