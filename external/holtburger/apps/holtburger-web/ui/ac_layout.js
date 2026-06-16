@@ -190,6 +190,18 @@ function countElements(elements) {
  *        anchor correctly).
  * @returns {void} — synchronous if layout is already cached;
  *        otherwise fires async load + apply when resolved.
+ *
+ * HUD rec #118 — incorporated vs sparse geometry note:
+ * ElementDesc records use `incorporation_flags` to mark which
+ * geometry fields (x / y / w / h) are actually authored on this
+ * element. A field with its incorporation bit clear is INTENTIONALLY
+ * undefined — NOT a parse miss. Callers must not treat undefined
+ * dims as zero or as an error; instead leave the element on its
+ * CSS default (or parent-relative positioning) and only apply the
+ * dims that were actually authored. applyBox below already honors
+ * this contract by skipping undefined fields, but plugin authors
+ * iterating element children directly should re-check the flags
+ * before clobbering CSS positions.
  */
 export function applyLayoutRegions(layoutId, refs, opts = {}) {
   const { retry = true, afterApply, beforeApplyEl, parentOrigin } = opts;
@@ -270,6 +282,12 @@ export function applyLayoutRegions(layoutId, refs, opts = {}) {
  * inside `element.states` keyed by `default_state`. If the latter is
  * missing we inject the former under its own `state_id` so callers
  * always see the default state via the same lookup.
+ *
+ * HUD rec #118 — sparse-state note: a state's StateDesc can omit any
+ * subset of (sprite / color / position-delta / extent) fields. Missing
+ * = "inherit from default-state". Callers picking a property out of a
+ * specific UIStateId should fall back to the default-state entry when
+ * the value is absent rather than treating undefined as "clear it".
  */
 export function getElementStates(element) {
   const states = element?.states ?? {};
