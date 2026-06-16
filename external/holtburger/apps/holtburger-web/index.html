@@ -1760,6 +1760,11 @@
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const tag = ev.target?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
+        // HUD rec #61 — contentEditable inputs (rich text widgets, chat
+        // composer, future inline-edit panels) should not steal F-key
+        // hotkeys mid-typing. Covers any element with the attribute set,
+        // not just the two HTML tags above.
+        if (ev.target?.isContentEditable) return;
 
         // Polish B (2026-05-27): manifest-declared hotkeys take precedence.
         // Plugin id → view-name convention: strip "com.holtburger." prefix
