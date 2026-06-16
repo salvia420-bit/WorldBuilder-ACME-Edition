@@ -29,7 +29,7 @@ const BUTTON_SIZE = 27;
 // 3px dot at polar (dx, dy) scaled into the disk's effective radius.
 // The effective radius leaves ~10px margin so blips don't intrude on
 // the brass rim.
-const MAX_RADAR_RANGE = 50;
+const MAX_RADAR_RANGE = 75;
 const DOT_RADIUS_PX = (DISK_SIZE / 2) - 10;
 const MAX_BLIPS = 32;
 
