@@ -48,27 +48,13 @@
 import { setAcText } from "../ui/ac_font.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
 import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
+import { ETF } from "../ui/enchantment_constants.js";
 
 const OVERLAY_ID = "hb-buffs-hud";
 const STYLE_ID = "hb-buffs-hud-style";
 
-// ─── EnchantmentTypeFlags subset (`holtburger_common::properties::combat`) ───
-// Only the bits the HUD actually reads. Full enum at
-// `crates/holtburger-common/src/properties/combat.rs:99-122`.
-const ETF = Object.freeze({
-  ATTRIBUTE:      0x0000001,
-  SECOND_ATT:     0x0000002,
-  INT:            0x0000004,
-  FLOAT:          0x0000008,
-  SKILL:          0x0000010,
-  SINGLE_STAT:    0x0001000,
-  MULTIPLE_STAT:  0x0002000,
-  MULTIPLICATIVE: 0x0004000,
-  ADDITIVE:       0x0008000,
-  VITAE:          0x0800000,
-  COOLDOWN:       0x1000000,
-  BENEFICIAL:     0x2000000,
-});
+// Rec #174 — EnchantmentTypeFlags moved to ui/enchantment_constants.js
+// so buffs-hud + status-indicators share one authoritative definition.
 
 // ─── StatKey label tables ───
 // Per `Enchantment.StatKey` doc (`Enchantment.cs:85-87`): the key is

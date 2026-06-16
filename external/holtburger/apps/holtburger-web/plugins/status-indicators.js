@@ -23,6 +23,7 @@ import {
 } from "../ui/ac_layout.js";
 import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
 import { fetchIconDataUrl } from "../ui/ac_icon_cache.js";
+import { ETF } from "../ui/enchantment_constants.js";
 
 const OVERLAY_ID = "hb-status-indicators";
 const WIDTH = 150;
@@ -606,18 +607,15 @@ export function mount(_ctx) {
   // so this is belt-and-braces — bus-event subscription means the indicator
   // still updates even if the buffs-hud plugin isn't loaded.
   //
-  // EnchantmentTypeFlags (mirrors plugins/buffs-hud.js:ETF):
-  const ETF_COOLDOWN    = 0x1000000;
-  const ETF_BENEFICIAL  = 0x2000000;
-  const ETF_ADDITIVE    = 0x0008000;
-  const ETF_MULTIPLICATIVE = 0x0004000;
+  // Rec #174 — EnchantmentTypeFlags moved to ui/enchantment_constants.js
+  // so this routine + buffs-hud share one definition.
   function classifyEnchKind(e) {
     const t = (e?.type ?? e?.statModType ?? 0) | 0;
-    if ((t & ETF_COOLDOWN) !== 0) return "cooldown";
-    if ((t & ETF_BENEFICIAL) !== 0) return "buff";
+    if ((t & ETF.COOLDOWN) !== 0) return "cooldown";
+    if ((t & ETF.BENEFICIAL) !== 0) return "buff";
     const v = Number(e?.statValue ?? e?.statModValue ?? 0);
-    if ((t & ETF_ADDITIVE) !== 0) return v >= 0 ? "buff" : "debuff";
-    if ((t & ETF_MULTIPLICATIVE) !== 0) return v >= 1.0 ? "buff" : "debuff";
+    if ((t & ETF.ADDITIVE) !== 0) return v >= 0 ? "buff" : "debuff";
+    if ((t & ETF.MULTIPLICATIVE) !== 0) return v >= 1.0 ? "buff" : "debuff";
     return "buff";
   }
   function applyEnchantmentSnapshot(snapshot) {
@@ -783,18 +781,14 @@ export function mount(_ctx) {
 // production path — `mount()` is the only consumer in the wild.
 export const __test = Object.freeze({
   /** Classify an enchantment as buff/debuff/cooldown — mirrors the
-   *  module-private classifyEnchKind() with the same ETF flag literals. */
+   *  module-private classifyEnchKind() via the shared ETF import. */
   classifyEnchKind(e) {
-    const ETF_COOLDOWN = 0x1000000;
-    const ETF_BENEFICIAL = 0x2000000;
-    const ETF_ADDITIVE = 0x0008000;
-    const ETF_MULTIPLICATIVE = 0x0004000;
     const t = (e?.type ?? e?.statModType ?? 0) | 0;
-    if ((t & ETF_COOLDOWN) !== 0) return "cooldown";
-    if ((t & ETF_BENEFICIAL) !== 0) return "buff";
+    if ((t & ETF.COOLDOWN) !== 0) return "cooldown";
+    if ((t & ETF.BENEFICIAL) !== 0) return "buff";
     const v = Number(e?.statValue ?? e?.statModValue ?? 0);
-    if ((t & ETF_ADDITIVE) !== 0) return v >= 0 ? "buff" : "debuff";
-    if ((t & ETF_MULTIPLICATIVE) !== 0) return v >= 1.0 ? "buff" : "debuff";
+    if ((t & ETF.ADDITIVE) !== 0) return v >= 0 ? "buff" : "debuff";
+    if ((t & ETF.MULTIPLICATIVE) !== 0) return v >= 1.0 ? "buff" : "debuff";
     return "buff";
   },
   /** Burden ratio → indicator active flag. >=0.5 = active. */
