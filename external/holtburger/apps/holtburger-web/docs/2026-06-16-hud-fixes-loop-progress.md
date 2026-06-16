@@ -101,9 +101,9 @@
 | 192 | med | E07-keymap-hotkey-routing | `ui/keymap.js (serialize helper), index.html (export UI), ACE protocol layer` | Implement DAT file export + ACE keymap persistence | fable-skip |
 | 193 | med | E08-picking-target-cursor-feedback | `plugins/hover-tooltip.js (new plugin)` | Implement hover tooltip (low-latency popup) | 2946e0ec |
 | 194 | med | E08-picking-target-cursor-feedback | `plugins/context-menu.js (new plugin) + picking.js:679–710 (add button===2 dispat` | Add right-click context menu | 5aa434f4 |
-| 195 | med | E09-drag-drop-full-system | `container-panel.js:305-360, ~new salvage-validator.js module` | Implement gmSalvageUI drag rules | — |
-| 196 | med | E13-death-resurrection-vitae-ui | `character.js:150-151,506-509 (inPortalSpace tracking), api.js (portalSpaceEntere` | Add resurrection confirmation UI / respawn point selection dialog | — |
-| 199 | med | E15-settings-persistence-options | `options-panel.js:310 (stub), api.js, SessionHandle integration` | Implement Network tab (server latency display, packet loss, reconnect behavior) | — |
+| 195 | med | E09-drag-drop-full-system | `container-panel.js:305-360, ~new salvage-validator.js module` | Implement gmSalvageUI drag rules | spec-ambiguous |
+| 196 | med | E13-death-resurrection-vitae-ui | `character.js:150-151,506-509 (inPortalSpace tracking), api.js (portalSpaceEntere` | Add resurrection confirmation UI / respawn point selection dialog | spec-ambiguous |
+| 199 | med | E15-settings-persistence-options | `options-panel.js:310 (stub), api.js, SessionHandle integration` | Implement Network tab (server latency display, packet loss, reconnect behavior) | 81afbf45 |
 | 100 | low | D10-chat-and-emote | `chat-panel.js:712-734 (remove), 536-543 (enhance with localStorage)` | Consolidate chat maximize-button logic | — |
 | 101 | low | D10-chat-and-emote | `chat-panel.js:557-575 (setTab), index.html:8365+ (CHAT_CATEGORY enum)` | Wire channel-selection to text-filter bitmask | — |
 | 102 | low | D11-fellowship-allegiance | `allegiance-panel.js:69-99, 549-551` | Implement allegiance tier/rank enum mapping + display | — |
