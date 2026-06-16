@@ -558,13 +558,39 @@ export function mount(_ctx) {
   function applyBurden(ratio) {
     const el = indicatorEls.burden;
     if (!el) return;
-    // 0.50 is the gentlest threshold that visibly distinguishes "carrying
-    // a real load" from "empty backpack"; matches the 2-state collapse
-    // documented above. ACE's GetBurdenState() returns 1..5 — when we
-    // later have 5 distinct sprites this can become a state index.
-    const active = ratio >= 0.5;
-    setIndicatorActive("burden", active);
-    el.dataset.over = ratio >= 1.0 ? "1" : "0";
+    // Rec #183 — burden tier ramp. Mirrors gmUIElement_BurdenIndicator's
+    // 5-state visual progression (ACE.EncumbranceSystem.GetBurdenState):
+    //   light       ratio < 0.20         → 0x06007495
+    //   moderate    0.20 ≤ ratio < 0.40  → 0x06007496 (not yet extracted)
+    //   heavy       0.40 ≤ ratio < 0.60  → 0x06007497 (not yet extracted)
+    //   very-heavy  0.60 ≤ ratio < 1.00  → 0x06007498
+    //   over        ratio ≥ 1.00         → 0x06007498 + data-over="1"
+    // 0x06007496 / 0x06007497 aren't in the extracted UI-sprite set
+    // yet (defer-asset, pending a layout 0x21000071 StateDesc dump),
+    // so those tiers fall back to the nearest available sprite while
+    // data-state still carries the canonical tier label — sibling
+    // plugins + CSS can react to the precise tier today, and once
+    // the missing sprites land it's a one-line lookup update.
+    const BURDEN_TIER_SPRITES = {
+      "light":      "0x06007495",
+      "moderate":   "0x06007495", // TODO 0x06007496 once extracted
+      "heavy":      "0x06007498", // TODO 0x06007497 once extracted
+      "very-heavy": "0x06007498",
+      "over":       "0x06007498",
+    };
+    function tierForBurden(r) {
+      if (!Number.isFinite(r) || r < 0.20) return "light";
+      if (r < 0.40) return "moderate";
+      if (r < 0.60) return "heavy";
+      if (r < 1.00) return "very-heavy";
+      return "over";
+    }
+    const tier = tierForBurden(Number(ratio));
+    el.dataset.state = tier;
+    el.dataset.over = tier === "over" ? "1" : "0";
+    el.classList.toggle("active", tier !== "light");
+    const sprite = BURDEN_TIER_SPRITES[tier] ?? BURDEN_TIER_SPRITES.light;
+    el.style.backgroundImage = `url("./data/ui-sprites/${sprite}.png")`;
   }
 
   // Vitae: 1.0 = no vitae, <1.0 = active death penalty (counter-intuitive
