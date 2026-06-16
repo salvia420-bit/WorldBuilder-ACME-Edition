@@ -335,13 +335,31 @@ function renderStatus() {
       console.warn("[house-panel] playerHouseRestrictions threw:", e);
     }
   }
+  // HUD rec #110 — rent-due color coding. Lines may be plain strings
+  // or { text, color } objects so the renderer below can flag warnings
+  // (yellow when < 7 days, red when overdue) without restructuring the
+  // calling sites. The bare-string form remains the default.
   const lines = [];
   if (dataSnap) {
     lines.push(`Dwelling: ${formatHouseType(dataSnap.houseType)}`);
     const lb = (dataSnap.landblockId >>> 0).toString(16).padStart(8, "0").toUpperCase();
     lines.push(`House ID: 0x${lb}`);
     const rentDueTs = (dataSnap.rentTime >>> 0) + MAINTENANCE_PERIOD_SECONDS;
-    lines.push(`Rent due: ${formatUnixTimestamp(rentDueTs)}`);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const secsRemaining = rentDueTs - nowSec;
+    const daysRemaining = secsRemaining / 86400;
+    if (dataSnap.maintenanceFree) {
+      lines.push(`Rent due: ${formatUnixTimestamp(rentDueTs)}`);
+    } else if (secsRemaining <= 0) {
+      lines.push({ text: `Rent due: OVERDUE — Rent now!`, color: "#e04040" });
+    } else if (daysRemaining < 7) {
+      lines.push({
+        text: `Rent due: ${formatUnixTimestamp(rentDueTs)} (${daysRemaining < 1 ? "<1 day" : Math.ceil(daysRemaining) + " day" + (Math.ceil(daysRemaining) === 1 ? "" : "s")} left)`,
+        color: "#e0c050",
+      });
+    } else {
+      lines.push(`Rent due: ${formatUnixTimestamp(rentDueTs)}`);
+    }
     lines.push(`Maintenance period: 7 days`);
     if (dataSnap.maintenanceFree) {
       lines.push(`Maintenance: FREE (admin)`);
@@ -364,10 +382,14 @@ function renderStatus() {
     dataLinesEl.replaceChildren();
     return;
   }
-  const children = lines.map((text) => {
+  const children = lines.map((entry) => {
     const div = document.createElement("div");
     div.className = "hbhp-data-line";
-    setAcText(div, text);
+    if (entry && typeof entry === "object" && "text" in entry) {
+      setAcText(div, entry.text, entry.color ? { color: entry.color } : undefined);
+    } else {
+      setAcText(div, entry);
+    }
     return div;
   });
   dataLinesEl.replaceChildren(...children);
