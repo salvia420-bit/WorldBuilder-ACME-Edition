@@ -230,6 +230,8 @@ function readPersisted(key) {
       x: typeof parsed.x === "number" ? parsed.x : null,
       y: typeof parsed.y === "number" ? parsed.y : null,
       locked: !!parsed.locked,
+      width: typeof parsed.width === "number" ? parsed.width : null,
+      height: typeof parsed.height === "number" ? parsed.height : null,
     };
   } catch (_) { return null; }
 }
@@ -237,9 +239,125 @@ function readPersisted(key) {
 function writePersisted(key, state) {
   try {
     localStorage.setItem(key, JSON.stringify({
-      x: state.x, y: state.y, locked: state.locked,
+      x: state.x,
+      y: state.y,
+      locked: state.locked,
+      width: state.width ?? null,
+      height: state.height ?? null,
     }));
   } catch (_) {}
+}
+
+/**
+ * Persist a window's size (width/height) alongside its position. The
+ * shared localStorage entry (`hb.window.<windowId hex>`) is extended
+ * in-place — readers that only know about {x,y,locked} silently
+ * ignore the new fields, and writers that touch position-only paths
+ * preserve them.
+ *
+ * Callers managing their own resize logic (ac_resize_corners.js,
+ * chat-panel.js bespoke handles) invoke this once on mount and feed
+ * the resulting `commit(width, height)` from inside their resize-end
+ * handler. The optional `observe()` attaches a ResizeObserver that
+ * auto-persists on any size change — useful for CSS-resize boxes.
+ *
+ * `minW/minH/maxW/maxH` are advisory clamps applied before persist.
+ * Any may be `null` to skip that bound. Defaults: minW=120, minH=80,
+ * no upper bound.
+ *
+ * @param {HTMLElement} element
+ * @param {number} windowId — same uint as attachWindowPosition.
+ * @param {object} [opts]
+ * @param {number} [opts.minW=120]
+ * @param {number} [opts.minH=80]
+ * @param {number} [opts.maxW]
+ * @param {number} [opts.maxH]
+ * @returns {{
+ *   getSize: () => {width:number|null, height:number|null},
+ *   commit: (w:number|null, h:number|null) => void,
+ *   observe: () => () => void,
+ *   reset: () => void,
+ * }}
+ */
+export function persistWindowSize(element, windowId, opts) {
+  if (!element) throw new Error("persistWindowSize requires an element");
+  if (typeof windowId !== "number") {
+    throw new Error("persistWindowSize requires windowId (uint)");
+  }
+  const minW = opts?.minW ?? 120;
+  const minH = opts?.minH ?? 80;
+  const maxW = opts?.maxW ?? null;
+  const maxH = opts?.maxH ?? null;
+  const storageKey = STORAGE_PREFIX + (windowId >>> 0).toString(16);
+
+  let size = (() => {
+    const persisted = readPersisted(storageKey);
+    if (!persisted) return { width: null, height: null };
+    return { width: persisted.width, height: persisted.height };
+  })();
+  applySize(element, size);
+
+  let saveDebounce = 0;
+  function persist() {
+    clearTimeout(saveDebounce);
+    saveDebounce = setTimeout(() => {
+      // Merge into the canonical entry so x/y/locked written by
+      // attachWindowPosition are not stomped.
+      const cur = readPersisted(storageKey) || { x: null, y: null, locked: false };
+      cur.width = size.width;
+      cur.height = size.height;
+      writePersisted(storageKey, cur);
+    }, 120);
+  }
+
+  function clamp(value, min, max) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    let v = value;
+    if (min != null) v = Math.max(min, v);
+    if (max != null) v = Math.min(max, v);
+    return v;
+  }
+
+  function commit(w, h) {
+    size.width = clamp(w, minW, maxW);
+    size.height = clamp(h, minH, maxH);
+    applySize(element, size);
+    persist();
+  }
+
+  function observe() {
+    if (typeof ResizeObserver === "undefined") return () => {};
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const r = entry.contentRect;
+        commit(r.width, r.height);
+      }
+    });
+    ro.observe(element);
+    return () => { try { ro.disconnect(); } catch (_) {} };
+  }
+
+  function reset() {
+    size = { width: null, height: null };
+    element.style.removeProperty("width");
+    element.style.removeProperty("height");
+    const cur = readPersisted(storageKey) || { x: null, y: null, locked: false };
+    cur.width = null;
+    cur.height = null;
+    writePersisted(storageKey, cur);
+  }
+
+  return {
+    getSize: () => ({ width: size.width, height: size.height }),
+    commit,
+    observe,
+    reset,
+  };
+}
+
+function applySize(element, size) {
+  if (size.width != null) element.style.width = `${size.width}px`;
+  if (size.height != null) element.style.height = `${size.height}px`;
 }
 
 /**
