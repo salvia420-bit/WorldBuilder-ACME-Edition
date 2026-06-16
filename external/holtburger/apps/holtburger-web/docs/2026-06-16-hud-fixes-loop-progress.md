@@ -19,7 +19,7 @@
 | 7 | high | D04-radar-projection-heading | `radar.js:267-282, 373-376` | Implement RadarBehavior server-side filtering | 499c8a41 |
 | 8 | high | D04-radar-projection-heading | `radar.js:44-49, 393` | Support RadarColor server property for blip color mapping | 6f85e32d |
 | 9 | high | D04-radar-projection-heading | `radar.js:579-583, 607` | Fix heading-up disk visual (apply -heading rotation to disk or move into rotor) | 0bcb14f1 |
-| 10 | high | D06-buffs-enchantments-pipeline | `status-indicators.js:501-502,679-680` | Fix status-indicators ETF flag constants | — |
+| 10 | high | D06-buffs-enchantments-pipeline | `status-indicators.js:501-502,679-680` | Fix status-indicators ETF flag constants | e87290c3 |
 | 11 | high | D06-buffs-enchantments-pipeline | `character.js:247-293, buffs-hud.js:809-814` | Debug and fix Character.getActiveEnchantments() returning empty despite populated allEnchantments | — |
 | 12 | high | D07-combat-hud-stance-power | `combat-bar.js:920-945, ui/ac_character_options.js (add isCharacterOptionEnabled ` | Sync auto-repeat checkbox state from server's CharacterOption bit on playerStatsUpdated | — |
 | 13 | high | D08-spellbook-spellcasting | `hotbar.js:614-644, combat-bar.js:1438-1450` | Add fallback spell-cast dispatch chain (SessionHandle.castUntargetedSpell / castTargetedSpell) | — |
