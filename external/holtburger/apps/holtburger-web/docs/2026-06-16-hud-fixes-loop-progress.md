@@ -92,7 +92,7 @@
 | 179 | med | D12-vendor-and-trade | `vendor-ui.js:1554-1556 (queue total calculation), 1637-1647 (buy wire), 1690-170` | Audit alt-currency buy/sell price formulas | 243277b0 |
 | 182 | med | D16-house-container-lifestone | `house-panel.js:656-665 (current playerStatsUpdated subscription); plugins/api.js` | Add real-time house query response subscription (avoid 1Hz polling latency) | 1e8567df |
 | 183 | med | D17-status-indicators-and-floaty-chrome | `status-indicators.js:91-99 (INDICATORS.burden add 5 DIDs) + 472-482 (applyBurden` | Refactor burden indicator to render 5-state ramp with distinct sprites | 04f7c73c |
-| 184 | med | D18-pane-mgmt-hotkeys-frame-seam | `index.html:8094, 1857, 1784` | Formalize window-global API contract with schema | — |
+| 184 | med | D18-pane-mgmt-hotkeys-frame-seam | `index.html:8094, 1857, 1784` | Formalize window-global API contract with schema | ef075be7 |
 | 185 | med | E01-font-system | `ui/ac_font.js:193-261 renderAcText, 232-245 shadow block, 527-612 AcTextElement` | Make drop shadow color + offset configurable | — |
 | 186 | med | E02-layout-system-states | `ui/ac_layout.js (new computeChildGeometry function), plugins/inventory.js (enabl` | Implement edge-anchor flow-layout fallback for dynamic geometry | — |
 | 188 | med | E03-sprite-icon-pipeline | `texture.rs:575-650 (test section)` | Add comprehensive format coverage test matrix | — |
