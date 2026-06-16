@@ -498,8 +498,8 @@ export function mount(_ctx) {
   // EnchantmentTypeFlags (mirrors plugins/buffs-hud.js:ETF):
   const ETF_COOLDOWN    = 0x1000000;
   const ETF_BENEFICIAL  = 0x2000000;
-  const ETF_ADDITIVE    = 0x40000;
-  const ETF_MULTIPLICATIVE = 0x80000;
+  const ETF_ADDITIVE    = 0x0008000;
+  const ETF_MULTIPLICATIVE = 0x0004000;
   function classifyEnchKind(e) {
     const t = (e?.type ?? e?.statModType ?? 0) | 0;
     if ((t & ETF_COOLDOWN) !== 0) return "cooldown";
@@ -676,8 +676,8 @@ export const __test = Object.freeze({
   classifyEnchKind(e) {
     const ETF_COOLDOWN = 0x1000000;
     const ETF_BENEFICIAL = 0x2000000;
-    const ETF_ADDITIVE = 0x40000;
-    const ETF_MULTIPLICATIVE = 0x80000;
+    const ETF_ADDITIVE = 0x0008000;
+    const ETF_MULTIPLICATIVE = 0x0004000;
     const t = (e?.type ?? e?.statModType ?? 0) | 0;
     if ((t & ETF_COOLDOWN) !== 0) return "cooldown";
     if ((t & ETF_BENEFICIAL) !== 0) return "buff";
