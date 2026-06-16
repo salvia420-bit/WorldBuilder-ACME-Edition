@@ -247,6 +247,10 @@ export class Character extends Container {
   getActiveEnchantments(filterKind = null, filterId = 0) {
     const setSpells = this._getSetSpellsSnapshot();
     const level8 = this._getLevel8AuraSelfSpells();
+    const dbg = typeof window !== "undefined" && window.__debugEnchantments === true;
+    if (dbg) {
+      console.log(`[character.getActiveEnchantments] allEnchantments.size=${this.allEnchantments.size} filter=${filterKind ?? "(none)"} id=${filterId}`);
+    }
 
     // Filter pre-pass (`Character.cs:247-258` / 265-279 / 286-297).
     const filtered = [];
@@ -264,6 +268,9 @@ export class Character extends Container {
       }
       filtered.push(e);
     }
+    if (dbg) {
+      console.log(`[character.getActiveEnchantments] filtered.length=${filtered.length}`);
+    }
 
     // Group by category (`Character.cs:232`).
     const byCategory = new Map();
@@ -272,12 +279,21 @@ export class Character extends Container {
       if (!byCategory.has(cat)) byCategory.set(cat, []);
       byCategory.get(cat).push(e);
     }
+    if (dbg) {
+      const catSizes = Array.from(byCategory.entries()).map(([c, g]) => `cat=${c}:${g.length}`);
+      console.log(`[character.getActiveEnchantments] categories=${catSizes.join(", ") || "(none)"}`);
+    }
 
     // Per-category resolve via the load-bearing tiebreak.
     const winners = [];
-    for (const group of byCategory.values()) {
+    for (const [cat, group] of byCategory.entries()) {
       group.sort((a, b) => Character._tiebreakDescending(a, b, level8, setSpells));
-      winners.push(group[0]);
+      const winner = group[0];
+      winners.push(winner);
+      if (dbg && group.length > 1) {
+        const summary = group.map((e) => `spellId=${e.spellId} pwr=${e.power} layer=${e.layer} start=${e.startTime}`).join(" | ");
+        console.log(`[character.getActiveEnchantments] cat=${cat} tiebreak winner=spellId=${winner.spellId} pwr=${winner.power} of [${summary}]`);
+      }
     }
     return winners;
   }
