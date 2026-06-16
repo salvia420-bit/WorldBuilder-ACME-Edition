@@ -82,6 +82,43 @@ function loadComponentNames() {
   return componentNamesPromise;
 }
 
+// Rec #93 — group a spell's component list by component typeName so
+// the spell row can render a "Cost: 1× Scarab, 2× Herb" line. Each
+// component referenced in the spell's `components` array is consumed
+// once per cast (per ACE.Server SpellComponentManager) — counts here
+// reflect that one-per-cast usage. componentNames is the loaded
+// spell-components.json map: { "1": {name, typeName, ...}, ... }.
+function formatComponentCost(components) {
+  if (!Array.isArray(components) || components.length === 0) return "";
+  if (!componentNames) return "";
+  const byType = new Map();
+  for (const c of components) {
+    let id;
+    if (typeof c === "number") id = String(c);
+    else if (typeof c === "string") {
+      const m = c.match(/^Comp_(\d+)$/);
+      id = m ? m[1] : null;
+    }
+    if (!id) continue;
+    const record = componentNames[id];
+    const typeName = record?.typeName || "Misc";
+    byType.set(typeName, (byType.get(typeName) || 0) + 1);
+  }
+  if (byType.size === 0) return "";
+  // Stable ordering — Scarab first (mana power), then everything else
+  // alphabetised. Matches the retail Magic-tab grouping intuition.
+  const TYPE_ORDER = ["Scarab", "Herb", "Powder", "Potion", "Talisman", "Taper"];
+  const sorted = [...byType.entries()].sort((a, b) => {
+    const ia = TYPE_ORDER.indexOf(a[0]);
+    const ib = TYPE_ORDER.indexOf(b[0]);
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return a[0].localeCompare(b[0]);
+  });
+  return sorted.map(([typeName, n]) => `${n}× ${typeName}`).join(", ");
+}
+
 function resolveComponentName(comp) {
   if (typeof comp === "number") {
     return componentNames?.[String(comp)] ?? `Comp_${comp}`;
@@ -574,6 +611,20 @@ function makeRow(id, meta) {
       .join(", ");
     meta2.innerHTML = `components: ${compHtml}`;
     text.appendChild(meta2);
+    // Rec #93 — per-cast component cost line, grouped by component
+    // typeName (Scarab / Herb / Powder / Potion / Talisman / Taper)
+    // pulled from spell-components.json. Each component listed in the
+    // spell is consumed once per cast, so the count = how many
+    // distinct components of that type the spell pulls. Rendered in
+    // the muted hb-sr-meta color so it sits visually below the names.
+    const costStr = formatComponentCost(meta.components);
+    if (costStr) {
+      const meta3 = document.createElement("div");
+      meta3.className = "hb-sr-meta hb-sr-cost";
+      meta3.style.opacity = "0.78";
+      meta3.textContent = `Cost: ${costStr}`;
+      text.appendChild(meta3);
+    }
   }
 
   main.appendChild(iconEl);
