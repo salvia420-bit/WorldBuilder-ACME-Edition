@@ -48,6 +48,7 @@ import {
 import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
 import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
 import { canBindToHotbar } from "./inventory_helpers.js";
+import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
 
 const OVERLAY_ID = "hb-hotbar";
 const WIDTH = 310;
@@ -563,7 +564,6 @@ export function mount(ctx) {
   function fireSlot(idx) {
     const bound = state.slots[idx];
     if (!bound) return;
-    const client = ctx?.client ?? window.__pluginClient ?? null;
     const handle = window.__sessionHandle ?? null;
 
     // Resolve the spell's self-target flag from the wasm SpellTable
@@ -612,12 +612,11 @@ export function mount(ctx) {
         return;
       }
       case "castSelf": {
-        if (typeof client?.player?.castSpell !== "function") {
-          logToChat(`Hotbar ${idx + 1}: not logged in — castSpell unavailable`);
-          return;
-        }
         try {
-          client.player.castSpell(action.spellId, null);
+          if (!castSpellViaHandle(action.spellId, null)) {
+            logToChat(`Hotbar ${idx + 1}: not logged in — castSpell unavailable`);
+            return;
+          }
           logToChat(
             `Hotbar ${idx + 1}: cast spell 0x${action.spellId.toString(16).toUpperCase()} on self`,
           );
@@ -628,12 +627,11 @@ export function mount(ctx) {
         return;
       }
       case "castOnTarget": {
-        if (typeof client?.player?.castSpell !== "function") {
-          logToChat(`Hotbar ${idx + 1}: not logged in — castSpell unavailable`);
-          return;
-        }
         try {
-          client.player.castSpell(action.spellId, action.targetGuid);
+          if (!castSpellViaHandle(action.spellId, action.targetGuid)) {
+            logToChat(`Hotbar ${idx + 1}: not logged in — castSpell unavailable`);
+            return;
+          }
           logToChat(
             `Hotbar ${idx + 1}: cast spell 0x${action.spellId.toString(16).toUpperCase()} on 0x${action.targetGuid.toString(16).toUpperCase()}`,
           );

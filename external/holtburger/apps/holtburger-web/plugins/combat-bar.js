@@ -13,6 +13,7 @@ import {
   SPELL_SHAPE,
 } from "../ui/ac_spell_shape.js";
 import { setUseFastMissiles, setAutoRepeatAttacks, isCharacterOptionEnabled, CHARACTER_OPTION } from "../ui/ac_character_options.js";
+import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
 import { suggestedCombatModeFromInventory } from "./inventory_helpers.js";
 
 // Wave 6 / Phase 17 — spell-shape badge mapping.
@@ -1235,7 +1236,7 @@ function renderAttackControls(bodyEl, state) {
   })();
 }
 
-function renderSpellPicker(bodyEl, state, client) {
+function renderSpellPicker(bodyEl, state) {
   // Banner naming the stance — magic combat with wand/orb/staff equipped.
   const hint = document.createElement("div");
   hint.className = "hb-cb-magic-hint";
@@ -1463,9 +1464,7 @@ function renderSpellPicker(bodyEl, state, client) {
       row.addEventListener("click", () => {
         if (isUntargeted) {
           try {
-            if (client?.player?.castSpell) {
-              client.player.castSpell(spellId, null);
-            }
+            castSpellViaHandle(spellId, null);
           } catch (e) {
             console.warn(`[combat-bar] cast(${spellId}) failed: ${e?.message ?? e}`);
           }
@@ -1612,7 +1611,7 @@ export function activate(bodyEl, ctx) {
     stanceBodyEl.replaceChildren();
     renderedBodyMode = currentStanceBodyMode();
     if (renderedBodyMode === "magic") {
-      renderSpellPicker(stanceBodyEl, state, client);
+      renderSpellPicker(stanceBodyEl, state);
     } else {
       renderAttackControls(stanceBodyEl, state);
     }
