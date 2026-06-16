@@ -2285,8 +2285,24 @@ function doMount(parentEl, _ctx) {
   // cap) likewise adds none.
   function padItemsGridToCapacity() {
     itemsGrid.querySelectorAll(".hb-inv-slot.empty").forEach((el) => el.remove());
+    // Drop any previous capacity-pending placeholder before recomputing.
+    itemsGrid.querySelectorAll(".hb-inv-cap-pending").forEach((el) => el.remove());
     const cap = selectedPackItemCapacity() >>> 0;
-    if (cap === 0) return; // capacity-unknown — degrade to occupied-only.
+    if (cap === 0) {
+      // HUD rec #96 — render a single placeholder row instead of an
+      // empty grid so the player understands the pack is still loading
+      // rather than thinking it's been wiped. Removed automatically on
+      // the next pad pass once capacity arrives.
+      const placeholder = document.createElement("div");
+      placeholder.className = "hb-inv-slot empty hb-inv-cap-pending";
+      placeholder.style.gridColumn = "1 / -1";
+      placeholder.style.textAlign = "center";
+      placeholder.style.opacity = "0.55";
+      placeholder.style.fontStyle = "italic";
+      placeholder.textContent = "(capacity pending…)";
+      itemsGrid.appendChild(placeholder);
+      return;
+    }
     const occupied = itemsGrid.querySelectorAll(".hb-inv-slot:not(.empty)").length;
     for (let i = occupied; i < cap; i++) {
       itemsGrid.appendChild(makeEmptySlot());
