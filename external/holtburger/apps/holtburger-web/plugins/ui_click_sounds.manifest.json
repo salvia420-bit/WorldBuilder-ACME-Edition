@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "ui-click-sounds",
+  "name": "UI Click Sounds",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Document-delegated click sound (UI_ButtonPress 0x72) for every interactive HUD control.",
+  "icon": "🔉",
+  "iconHidden": true,
+  "entry": "./ui_click_sounds.js",
+  "environments": ["browser"],
+  "slots": ["watcher"]
+}
