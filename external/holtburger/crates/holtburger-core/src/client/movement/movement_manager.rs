@@ -37,7 +37,7 @@ use holtburger_protocol::messages::{MovementEventData, MovementType, MovementTyp
 /// stage1, UpdateMotion never reaches `holtburger_world::handlers` and
 /// D3 is inert by construction. Flip + wasm rebuild + 1070 eye-test
 /// before defaulting on (see url-flags.md §6).
-pub(crate) const USE_UNPACK_MOVEMENT_SEMANTICS: bool = false;
+pub(crate) const USE_UNPACK_MOVEMENT_SEMANTICS: bool = true;
 
 /// `WeenieError.ActionCancelled = 0x36` — what `CPhysicsObj::
 /// cancel_moveto` reports into `MoveToManager::CancelMoveTo` (ACE

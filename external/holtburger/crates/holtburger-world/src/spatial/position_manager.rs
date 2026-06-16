@@ -35,7 +35,7 @@ use std::collections::VecDeque;
 /// retail node QUEUE (`interpolate_to` dedupe/cap, `use_time` drain,
 /// fail→blipto recovery). Rust const (url-flags.md §6 pattern):
 /// flipping means editing this source + wasm rebuild.
-pub const USE_POSITION_MANAGER_QUEUE: bool = false;
+pub const USE_POSITION_MANAGER_QUEUE: bool = true;
 
 /// A2-P3 sticky gate (survey A2 §4 Stage P3, W3+ S9; RULINGS item 4) —
 /// OFF (default): no caller installs a sticky target, so the
@@ -49,7 +49,7 @@ pub const USE_POSITION_MANAGER_QUEUE: bool = false;
 /// `StickyManager::adjust_offset` pull (acclient.c:388519-388601).
 /// Rust const (url-flags.md §6 pattern): flipping means editing this
 /// source + wasm rebuild.
-pub const USE_STICKY_MANAGER: bool = false;
+pub const USE_STICKY_MANAGER: bool = true;
 
 /// `StickyManager` standoff shrink — retail subtracts 0.3 from the
 /// radii-aware cylinder distance (acclient.c:388559-388560; ACE

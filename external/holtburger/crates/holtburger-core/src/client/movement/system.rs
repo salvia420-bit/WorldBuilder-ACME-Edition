@@ -91,7 +91,7 @@ const USE_STEP_UP_DOWN: bool = true;
 /// effect — byte-identical for the player (its Setup `0x02000001`
 /// resolves to exactly those values; the flag only matters for scaled /
 /// non-human movers once A6 consumes the entity-side fields).
-const USE_SETUP_STEP_HEIGHTS: bool = false;
+const USE_SETUP_STEP_HEIGHTS: bool = true;
 
 /// A7-R1 — the effective step-up cap for the local player (see
 /// [`USE_SETUP_STEP_HEIGHTS`]).
@@ -212,7 +212,7 @@ fn attempt_precipice_slide(
 /// `false` (default): the shipped height-only
 /// [`holtburger_world::spatial::step_down_decision`] — byte-identical.
 /// 1070-parked: downhill cliff-face feel check.
-const USE_WALKABLE_STEP_DOWN: bool = false;
+const USE_WALKABLE_STEP_DOWN: bool = true;
 
 /// A6/A7-R2 (2026-06-12, W5) — `check_walkable` re-insert probe (survey
 /// A7 §3 row 3's other half, deferred at W2 until the A6
@@ -232,7 +232,7 @@ const USE_WALKABLE_STEP_DOWN: bool = false;
 /// `false` (default): the pipeline's step-down acceptance is unchanged
 /// — byte-identical. 1070-parked: steep-face descent feel (rides the
 /// `?unifiedTransition` eye-test).
-const USE_WALKABLE_REINSERT_PROBE: bool = false;
+const USE_WALKABLE_REINSERT_PROBE: bool = true;
 
 /// A7-R3 (2026-06-12, survey A7 §3 row 8) — landing walkable allowance.
 ///
@@ -249,7 +249,7 @@ const USE_WALKABLE_REINSERT_PROBE: bool = false;
 ///
 /// `false` (default): touchdown snaps to any surface — byte-identical.
 /// 1070-parked: cliff-face jump eye-test.
-const USE_LANDING_WALKABLE: bool = false;
+const USE_LANDING_WALKABLE: bool = true;
 
 /// Physics deep-dive 2026-06-01 (gap 3 follow-up) — gate for the
 /// edge_slide tangent-slide in the lateral-clamp + step-up path of
@@ -315,7 +315,7 @@ const USE_EDGE_SLIDE: bool = true;
 /// (indoor F4-1 step-down keeps the abrupt fall; the unified
 /// `transition.rs` pipeline keeps R4 out-of-scope per its module doc).
 /// Pending 1070 eye-test (walk off a cliff lip obliquely), BATCHED.
-const USE_PRECIPICE_SLIDE_REENTRY: bool = false;
+const USE_PRECIPICE_SLIDE_REENTRY: bool = true;
 
 /// Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — gate for the
 /// retail SEAM-skid (`Transition.CliffSlide`,
@@ -347,7 +347,7 @@ const USE_PRECIPICE_SLIDE_REENTRY: bool = false;
 /// `AllowEdgeSlide` flag (retail reaches `CliffSlide` only through
 /// `EdgeSlide`, which requires the `EdgeSlide` ObjectInfo state —
 /// `Transition.cs:270`).
-const USE_CLIFF_SLIDE: bool = false;
+const USE_CLIFF_SLIDE: bool = true;
 
 /// Physics deep-dive 2026-06-01 (gap 4) — gate the AutonomousPosition
 /// heartbeat on a position change instead of firing unconditionally.
@@ -422,7 +422,7 @@ const SERVER_PROJECTION_LANDBLOCK_TOLERANCE: u32 = 1;
 /// are always applied to the grounded friction step — they are a no-op on
 /// flat ground and only correct behaviour on slopes, so they carry the
 /// low-risk fidelity without touching the contested knob.
-const USE_RETAIL_GROUND_FRICTION: bool = false;
+const USE_RETAIL_GROUND_FRICTION: bool = true;
 
 /// Unified movement pipeline STAGE 1 (2026-06-11) — interpreted-state
 /// velocity derivation + retail direct-set grounded velocity model.
@@ -490,7 +490,7 @@ const USE_INTERPRETED_VELOCITY: bool = true;
 /// amendment): A3-D2 → A4-Q2 → 1070 eye-test (spam-click truncation,
 /// emote-completes-then-gait-resumes), then default-on per the
 /// passed-flag policy.
-const USE_MOTION_TABLE_QUEUE: bool = false;
+const USE_MOTION_TABLE_QUEUE: bool = true;
 
 /// A3-D3-5 (2026-06-12, unified movement pipeline STAGE 3) —
 /// non-charged leave-ground velocity.
@@ -513,7 +513,7 @@ const USE_MOTION_TABLE_QUEUE: bool = false;
 /// (DESIGN.md:476-479 — the per-tick re-derive subsumes it).
 /// 1070-parked: walk off a ledge at diagonal run+strafe — measured
 /// launch speed ≤ run_rate×4.0; jump arcs + arms-up pose UNCHANGED.
-const USE_LEAVE_GROUND_VELOCITY: bool = false;
+const USE_LEAVE_GROUND_VELOCITY: bool = true;
 
 /// A6-T1/T2 (2026-06-12, W3+ spec S7) — the retail transition-pipeline
 /// rewrite of the local-player tick spine. ONE feature, TWO carriers:
@@ -549,7 +549,7 @@ const USE_LEAVE_GROUND_VELOCITY: bool = false;
 /// 1070-eye-test-gated, W6): anti-tunneling substeps, always-available
 /// seam skid, per-step cell transit. Needs wasm rebuild; NO manifest
 /// bump (no new JS-visible export).
-const USE_UNIFIED_TRANSITION: bool = false;
+const USE_UNIFIED_TRANSITION: bool = true;
 
 /// F4-2 (bughunt 2026-06-09) — outdoor walkable-slope gate.
 ///
@@ -576,7 +576,7 @@ const USE_UNIFIED_TRANSITION: bool = false;
 /// non-walkable plane, feeding the terrain normal into `calc_friction` for
 /// uphill slowdown, and the exact per-cell triangle SPLIT normal (the gate
 /// uses the bilinear-gradient normal, faithful at the walkable cutoff).
-const USE_TERRAIN_WALKABLE_GATE: bool = false;
+const USE_TERRAIN_WALKABLE_GATE: bool = true;
 
 /// F4-4 (bughunt 2026-06-09) — deep-water movement block.
 ///
@@ -600,7 +600,7 @@ const USE_TERRAIN_WALKABLE_GATE: bool = false;
 /// over-water static (a bridge) would also be refused; such bridges over
 /// EntirelyWater are rare in AC outdoor terrain (water = open ocean/lake) and
 /// the outdoor solver already snaps grounded Z to the lakebed there.
-const USE_WATER_COLLISION: bool = false;
+const USE_WATER_COLLISION: bool = true;
 
 /// FU-1 (eye-test 2026-06-11) — exclude wielded/parented child objects
 /// from the player-vs-entity collision pass.
@@ -682,7 +682,7 @@ const USE_RAMP_FLOOR_SNAP_FIX: bool = true;
 /// final pose THROUGH the BSP (StepUp / SlideSphere / CollideObject
 /// orchestration) rather than using the BSP only as a solid gate over
 /// the flat-tri slide. See the module-doc DEFERRED block.
-const USE_PHYSICS_BSP: bool = false;
+const USE_PHYSICS_BSP: bool = true;
 
 /// B4 Tier-2 (2026-06-09): per-static physics-BSP push-out for OUTDOOR
 /// statics. SEPARATE from `USE_PHYSICS_BSP` (indoor cells) on purpose —
@@ -701,7 +701,7 @@ const USE_PHYSICS_BSP: bool = false;
 /// + the Transition step/slide stack) that would stop a FAST move AT the
 /// surface is the deferred Tier-2 follow-on, as is per-part BSP for 0x02
 /// SetupModel statics. See the static-sweep block below.
-const USE_STATIC_BSP: bool = false;
+const USE_STATIC_BSP: bool = true;
 
 /// Terrain→EnvCell entry (2026-06-02): when ON (DEFAULT), the manual-
 /// drive integrator flips the local player indoors the tick its capsule
@@ -726,7 +726,7 @@ const USE_LOCAL_ENVCELL_ENTRY: bool = true;
 /// `cell_wall_normal` (then `last_known_wall_normal`) so the refused
 /// step-up slide and seam-skid fire outdoors too. See
 /// `clamp_delta_against_buildings_with_normal`.
-const USE_OUTDOOR_WALL_NORMALS: bool = false;
+const USE_OUTDOOR_WALL_NORMALS: bool = true;
 
 /// Physics deep-dive 2026-06-01 (gap 1) — bound + subdivide a raw
 /// per-frame `dt` (seconds) into the integration-slice schedule,

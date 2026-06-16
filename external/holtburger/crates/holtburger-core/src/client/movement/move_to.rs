@@ -50,7 +50,7 @@ use web_time::Instant;
 /// (b) the JS KIND_TURN ease already skips the local guid
 /// (`!isLocalPlayerGuid(turnGuid)`, loop.js:2195/:2563). Remote
 /// entities never enter the shim (F3-2/A2 territory).
-pub(crate) const USE_MOVETO_DRIVER: bool = false;
+pub(crate) const USE_MOVETO_DRIVER: bool = true;
 
 /// The retail "already at target distance" walk band (degrees domain
 /// epsilon shared with the heading math — `0.00019999999`,
