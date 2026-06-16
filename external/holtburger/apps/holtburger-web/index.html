@@ -8120,6 +8120,12 @@ void main() {
           // Playwright capture dispatch admin commands like `@pk pk`
           // without going through the per-button click flow. Strictly
           // debug-only; not relied on by any production code path.
+          //
+          // Window-global API contract: see ui/window-api.schema.json
+          // for the curated catalog of __sessionHandle / __mainPanel /
+          // __hbWasm / __pluginClient / getLocalPlayerPose lifecycles
+          // and method surfaces. Bump that schema's `version` whenever
+          // a new load-bearing global is added/renamed (HUD rec #184).
           window.__sessionHandle = handle;
           // A4-Q2 (2026-06-12, W3+ S5, ?mtQueue=on) — wasm-boundary bridge
           // for renderer AnimationDone (entities.js holds module exports,

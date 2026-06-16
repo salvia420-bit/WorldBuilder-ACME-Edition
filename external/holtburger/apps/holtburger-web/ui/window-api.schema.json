@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://holtburger.local/ui/window-api.schema.json",
+  "title": "Holtburger window-global API surface",
+  "description": "Curated catalog of `window.*` globals that plugins, HUD widgets, and the renderer rely on. Generated during HUD rec #184 (D18 pane-mgmt). Not enforced at runtime — surface visible for feature planning and regression review. Bump `version` and edit this file whenever a new load-bearing global is added/renamed/removed; index.html links to this schema from the post-login assignment site (search for `__sessionHandle = handle`).",
+  "version": 1,
+  "lifecycle": {
+    "preLogin": "All __session* / __plugin* / __mainPanel / __barInstance globals are absent or null until createClient resolves post-login. __hbWasm, getLocalPlayerPose, __pluginClientReady, and the debug-capture hooks exist from module init.",
+    "postLogin": "index.html LoginComplete handler assigns __sessionHandle, __notifyAnimationDone, __pluginClient (via createClient(handle)), and resolves __pluginClientReady. Plugins should `await window.__pluginClientReady` rather than poll.",
+    "disconnect": "__sessionHandle, __pluginClient, and __barInstance are nulled on disconnect/reconnect. Cached references on plugin closures will silently no-op until the next login. Read-through getters (e.g. window.getLocalPlayerPose) survive the bounce."
+  },
+  "globals": {
+    "__sessionHandle": {
+      "kind": "wasm-handle",
+      "type": "SessionHandle | null",
+      "source": "pkg/holtburger.js (wasm-bindgen, crates/lib.rs SessionHandle struct)",
+      "lifecycle": "null pre-login; set in index.html post-login (search `window.__sessionHandle = handle`); null'd on disconnect.",
+      "consumers": "scene3d/*, plugins/* (most use it indirectly via __pluginClient).",
+      "methods": [
+        "attack", "cameraSweepCollision", "cancelAttack", "castTargetedSpell",
+        "castUntargetedSpell", "characterList", "createTestCharacter",
+        "entityEquippedWeapon", "entityIsProjectile", "entityPhysicsScriptTableDid",
+        "entityProjectileHasGravity", "entityWieldedItems", "getBuildingPartForDoor",
+        "getCharacterGenAppearanceStrips", "getCharacterGenCatalog", "getCurrentCellId",
+        "getLastClientPrediction", "getLocalPlayerPose", "getRenderSet",
+        "getRenderSetWithFrustum", "getRenderSetWithPView", "getSkillCostsForHeritage",
+        "getSkyObjectStates", "getSkyState", "hasSkyDesc", "isCurrentCellIndoor",
+        "jump", "lookupMotionLinkForSwing", "missileAttack", "openTrade",
+        "playerEnchantments", "playerInventory", "playerKnownSpells",
+        "playerResolvedModifiers", "playerStats", "playerTitle", "pollEntityUpdates",
+        "pollMotionActions", "pollMotionAxes", "pollRemotePoses", "pursueEntity",
+        "pursuitStatus", "raiseSkill", "removeSpellFromBook", "selectCharacter",
+        "sendCharGenResult", "sendChat", "setCharacterOption", "setGameDayOverride",
+        "setMovementInput", "setSkyTimeOverride", "spellSetIds",
+        "sweepSphereAgainstBuildingMesh", "sweepSphereAgainstCellMesh",
+        "sweepSphereAgainstStatics", "teleToLifestone", "terrainHeightAt",
+        "tickMovement", "toggleCombatMode", "trainSkill"
+      ],
+      "stability": "Direct access is intentional but plugins are encouraged to prefer __pluginClient facades where one exists — the wasm signature is more brittle across rebuilds than the JS layer."
+    },
+    "__pluginClient": {
+      "kind": "facade",
+      "type": "Client",
+      "source": "plugins/api.js createClient(handle)",
+      "lifecycle": "Created post-login alongside __sessionHandle; null'd on disconnect.",
+      "shape": {
+        "world": "WorldFacade — local-guid setter, entity lookup",
+        "events": "EventBus — on/off/emit; see api.js coverage table (~18 Chorizite-equivalent events)",
+        "attack": "Combat-mode + swing dispatch",
+        "render": "scene3d hooks (entity registration, draw-gate)"
+      },
+      "stability": "Public surface for third-party plugins. Add new methods; do not rename."
+    },
+    "__pluginClientReady": {
+      "kind": "promise",
+      "type": "Promise<Client>",
+      "source": "index.html ~L1351",
+      "lifecycle": "Resolved by index.html when createClient runs.",
+      "usage": "`const client = await window.__pluginClientReady;` — replaces the legacy poll-setInterval pattern (P3-41)."
+    },
+    "__mainPanel": {
+      "kind": "facade",
+      "type": "{ pushView, showView, toggleView }",
+      "source": "main-panel plugin",
+      "consumers": "hotkey dispatch (~index.html:1750-1790), bar, manifest hotkey table.",
+      "methods": {
+        "pushView(name)": "Open a panel by id and add to back-stack.",
+        "showView(name)": "Open a panel without touching the back-stack.",
+        "toggleView(name)": "Toggle visibility; safest entry-point for unknown state."
+      }
+    },
+    "__hbWasm": {
+      "kind": "curated-export-map",
+      "type": "object",
+      "source": "index.html ~L1886",
+      "lifecycle": "Populated immediately after wasm module load. Re-bound on hot wasm rebuild.",
+      "entries": [
+        "fetch_surface_pixels(id)", "fetch_surfaces_pixels", "fetch_icon_pixels(id)",
+        "fetch_font(id)", "fetch_string_table(id)", "fetch_language_string(id)",
+        "fetch_action_map(id)", "fetch_key_map(id)", "fetch_layout(id)",
+        "fetch_combat_maneuver_table(id)", "fetch_palette_set(id)", "fetch_palette(id)",
+        "fetch_dye_preview_pixels(stid, subs)", "fetch_gfx_obj_degrade_info(id)",
+        "fetch_entity_degrade_for_distance(sid, dist)",
+        "fetch_particle_degrade_distance(id) [optional — pkg v4+]",
+        "fetch_clothing_table(id)", "fetchPhysicsScriptTable(did)",
+        "hash32", "has_resource_source"
+      ],
+      "stability": "Plugins MAY typeof-guard each entry; a stale pkg/ silently omits newer riders rather than throwing on module parse (F18-2 pattern)."
+    },
+    "__barInstance": {
+      "kind": "instance",
+      "type": "Bar | null",
+      "source": "ui/bar.js — mountBar()",
+      "lifecycle": "Set when mountBar runs (pluginsDisabled gate); undefined when ?plugins=none.",
+      "consumers": "Hotbar, examine flow, combat dispatcher.",
+      "fallback": "When undefined, callers go straight to window.__sessionHandle (see ~L1797-1800 comment block)."
+    },
+    "__notifyAnimationDone": {
+      "kind": "wasm-boundary-callback",
+      "type": "(guid: number, success: boolean) => void",
+      "source": "index.html ~L8131 (A4-Q2)",
+      "purpose": "Renderer entities.js calls back into the wasm SessionHandle to acknowledge an MT-queued AnimationDone overlay completion. Pre-v4 pkg/ soft-degrades to a no-op.",
+      "stability": "Internal — keep typeof-guarded on the caller side."
+    },
+    "getLocalPlayerPose": {
+      "kind": "read-through-getter",
+      "type": "() => Pose | null",
+      "source": "index.html ~L1360",
+      "purpose": "HUD widgets (radar heading, map cursor) read the local pose without binding the wasm handle directly — survives disconnect/reconnect.",
+      "stability": "Stable — added in HUD rec #25 (D18 frame-seam)."
+    },
+    "__wom": {
+      "kind": "facade",
+      "type": "WorldObjectManager",
+      "source": "Chorizite WorldObjectManager mirror, populated lazily after start_session.",
+      "consumers": "Plugins/debugger that need the Chorizite WorldObject taxonomy.",
+      "spec": "CHORIZITE_PORTING_PLAN.md §13"
+    },
+    "entityMap": {
+      "kind": "debug-hook",
+      "type": "Map<guid, Entity>",
+      "purpose": "Capture-script visibility into the renderer entity table.",
+      "stability": "Debug-only. Do NOT depend from production plugin code."
+    },
+    "liveScene": {
+      "kind": "debug-hook",
+      "type": "THREE.Scene",
+      "purpose": "Capture-script visibility into the 3D scene root.",
+      "stability": "Debug-only. Do NOT depend from production plugin code."
+    }
+  },
+  "wasmExportManifestContract": {
+    "expectedVersion": "EXPECTED_WASM_MANIFEST_VERSION constant (index.html ~L1856)",
+    "wasmSide": "WASM_EXPORT_MANIFEST_VERSION (crates/lib.rs)",
+    "rule": "Bump BOTH together when adding a load-bearing wasm export. Mismatch fires an on-screen banner and console.error (F18-2)."
+  },
+  "additionGuide": [
+    "1. Set/null the global at a single, documented site in index.html.",
+    "2. Add an entry to this schema with kind, type, source, lifecycle, consumers.",
+    "3. If wasm-backed, bump EXPECTED_WASM_MANIFEST_VERSION (JS) and WASM_EXPORT_MANIFEST_VERSION (Rust).",
+    "4. Typeof-guard consumers when the global may be absent (stale pkg/, pre-login, disconnect)."
+  ]
+}
