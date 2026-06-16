@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "manastone-confirm",
+  "name": "Mana Stone Confirm",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Are-You-Sure prompt before consumeManaStone — scaffold over modal-dialog + dialog-result dispatcher. wasm export pending.",
+  "icon": "◇",
+  "iconHidden": true,
+  "entry": "./manastone-confirm.js",
+  "environments": ["browser"],
+  "slots": ["overlay"]
+}
