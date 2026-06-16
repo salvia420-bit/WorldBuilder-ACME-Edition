@@ -326,6 +326,40 @@ function memberDisplay(m) {
   };
 }
 
+// Shared vassal-row renderer. Clears `targetEl`, then either renders
+// "No vassals." or one row per vassal with name + level + rank. Both
+// the main-panel allegiance view (renderAllegianceState) and the
+// standalone overlay (renderStateBox) call this so the vassal tree
+// looks identical in both shells.
+function renderVassalRowsInto(targetEl, vassals) {
+  if (!targetEl) return;
+  while (targetEl.firstChild) targetEl.removeChild(targetEl.firstChild);
+  const list = Array.isArray(vassals) ? vassals : [];
+  if (list.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "hb-alleg-empty";
+    setAcText(empty, "No vassals.");
+    targetEl.appendChild(empty);
+    return;
+  }
+  for (const v of list) {
+    const display = memberDisplay(v);
+    if (!display) continue;
+    const row = document.createElement("div");
+    row.className = "hb-alleg-vassal-row";
+    row.dataset.guid = String(display.guid);
+    const nameEl = document.createElement("span");
+    nameEl.className = "name";
+    setAcText(nameEl, display.name + (display.loggedIn ? "" : " (offline)"));
+    row.appendChild(nameEl);
+    const meta = document.createElement("span");
+    meta.className = "xp";
+    setAcText(meta, `L${display.level || "?"} R${display.rank || 1}`);
+    row.appendChild(meta);
+    targetEl.appendChild(row);
+  }
+}
+
 // Apply gmAllegianceUI 0x2100002F layout to the allegiance plugin's
 // sub-regions. Native layout is 300×600; we squeeze into the main-
 // panel body's 300×337 by SCALING vertical offsets/heights by
@@ -582,32 +616,7 @@ function renderAllegianceState(refs, snapshot) {
     refs.statusRightEl.innerHTML =
       `<span class="label">MOTD:</span><span class="value">${motdShort.replace(/[<>&]/g, "")}</span>`;
   }
-  if (refs.vassalListEl) {
-    while (refs.vassalListEl.firstChild)
-      refs.vassalListEl.removeChild(refs.vassalListEl.firstChild);
-    if (vassals.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "hb-alleg-empty";
-      setAcText(empty, "No vassals.");
-      refs.vassalListEl.appendChild(empty);
-    } else {
-      for (const v of vassals) {
-        const display = memberDisplay(v);
-        const row = document.createElement("div");
-        row.className = "hb-alleg-vassal-row";
-        row.dataset.guid = String(display.guid);
-        const nameEl = document.createElement("span");
-        nameEl.className = "name";
-        setAcText(nameEl, display.name + (display.loggedIn ? "" : " (offline)"));
-        row.appendChild(nameEl);
-        const meta = document.createElement("span");
-        meta.className = "xp";
-        setAcText(meta, `L${display.level || "?"} R${display.rank || 1}`);
-        row.appendChild(meta);
-        refs.vassalListEl.appendChild(row);
-      }
-    }
-  }
+  renderVassalRowsInto(refs.vassalListEl, vassals);
 }
 
 // Subscribe `rerender` to allegianceUpdated events on the plugin bus.
@@ -1555,6 +1564,14 @@ function buildStandaloneOverlay() {
     setAcText(vassalLine, `Vassals: ${vassals.length}`);
     vassalLine.style.fontStyle = "normal";
     stateBox.appendChild(vassalLine);
+
+    // Full vassal tree — same row shape as the main-panel view via
+    // the shared renderVassalRowsInto helper.
+    const vassalListEl = document.createElement("div");
+    vassalListEl.className = "hb-alleg-vassal-list";
+    vassalListEl.style.marginTop = "4px";
+    stateBox.appendChild(vassalListEl);
+    renderVassalRowsInto(vassalListEl, vassals);
   };
   renderStateBox();
   // Track the unsub so we can drop it if the overlay is closed; for the
