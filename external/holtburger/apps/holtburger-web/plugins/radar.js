@@ -48,6 +48,21 @@ const DOT_COLORS = Object.freeze({
   vendor:   "#40d060",
 });
 
+// Retail eRadarBlipShape (enums.cs:1133): 1=Circle, 2=Box, 3=X, 4=Plus,
+// 5=Triangle, 6=InvertedTriangle, 7=XBox, Default=4 (Plus). We map the
+// integer to a CSS-safe name applied as data-shape; per-shape CSS rules
+// below pick border-radius or clip-path. Unknown/0 falls back to circle.
+const RADAR_SHAPE_NAMES = Object.freeze({
+  1: "circle", 2: "box", 3: "x", 4: "plus",
+  5: "triangle", 6: "invtriangle", 7: "xbox",
+});
+const DEFAULT_SHAPE_BY_KIND = Object.freeze({
+  player:   "triangle",
+  creature: "circle",
+  npc:      "box",
+  vendor:   "box",
+});
+
 const RADAR_HOSTILE_ONLY_BY_URL = (() => {
   try {
     if (typeof window === "undefined") return false;
@@ -208,14 +223,37 @@ function ensureStyles() {
        the correct screen position relative to the player's facing. */
     #${OVERLAY_ID} .hb-radar-blip {
       position: absolute;
-      width: 3px;
-      height: 3px;
+      width: 4px;
+      height: 4px;
       border-radius: 50%;
       transform: translate(-50%, -50%);
       will-change: left, top, opacity;
       pointer-events: auto;
       cursor: pointer;
       z-index: 4;
+    }
+    /* Retail RadarBlipShape variants (enums.cs:1133). Circle is the
+       default class style; the other shapes override via data-shape. */
+    #${OVERLAY_ID} .hb-radar-blip[data-shape="box"] { border-radius: 0; }
+    #${OVERLAY_ID} .hb-radar-blip[data-shape="x"] {
+      border-radius: 0;
+      clip-path: polygon(0% 20%, 20% 0%, 50% 30%, 80% 0%, 100% 20%, 70% 50%, 100% 80%, 80% 100%, 50% 70%, 20% 100%, 0% 80%, 30% 50%);
+    }
+    #${OVERLAY_ID} .hb-radar-blip[data-shape="plus"] {
+      border-radius: 0;
+      clip-path: polygon(40% 0%, 60% 0%, 60% 40%, 100% 40%, 100% 60%, 60% 60%, 60% 100%, 40% 100%, 40% 60%, 0% 60%, 0% 40%, 40% 40%);
+    }
+    #${OVERLAY_ID} .hb-radar-blip[data-shape="triangle"] {
+      border-radius: 0;
+      clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+    }
+    #${OVERLAY_ID} .hb-radar-blip[data-shape="invtriangle"] {
+      border-radius: 0;
+      clip-path: polygon(0% 0%, 100% 0%, 50% 100%);
+    }
+    #${OVERLAY_ID} .hb-radar-blip[data-shape="xbox"] {
+      border-radius: 0;
+      clip-path: polygon(0% 0%, 30% 0%, 50% 30%, 70% 0%, 100% 0%, 100% 30%, 70% 50%, 100% 70%, 100% 100%, 70% 100%, 50% 70%, 30% 100%, 0% 100%, 0% 70%, 30% 50%, 0% 30%);
     }
     #${OVERLAY_ID} .hb-radar-blip-pulse {
       transform: translate(-50%, -50%) scale(2.2);
@@ -279,6 +317,16 @@ function classifyEntityForRadar(guid, inst) {
   if (odf & ODF_VENDOR) return "vendor";
   if (meta.category === "creature") return "creature";
   return null;
+}
+
+// Resolve the radar shape for a blip. Reads the server-sent
+// PropertyInt RadarBlipShape from inst.meta.radarShape (Wave M+
+// will plumb this from ACE); falls back to a per-kind default that
+// matches retail behaviour for entities that don't override.
+function resolveRadarShape(kind, inst) {
+  const raw = (inst?.meta?.radarShape >>> 0) || 0;
+  if (raw && RADAR_SHAPE_NAMES[raw]) return RADAR_SHAPE_NAMES[raw];
+  return DEFAULT_SHAPE_BY_KIND[kind] || "circle";
 }
 
 function entityDisplayName(ref) {
@@ -387,12 +435,14 @@ function updateRadarBlips(playerPos) {
     const localX = DISK_SIZE / 2 + c.dx * scale;
     const localY = DISK_SIZE / 2 - c.dy * scale;
     const alpha = Math.max(0.25, 1 - c.dist / MAX_RADAR_RANGE);
+    const shape = resolveRadarShape(c.kind, c.inst);
     b.style.display = "block";
     b.style.left = `${localX}px`;
     b.style.top = `${localY}px`;
     b.style.background = DOT_COLORS[c.kind] || "#ffffff";
     b.style.opacity = String(alpha);
     b.style.boxShadow = `0 0 2px ${DOT_COLORS[c.kind] || "#ffffff"}`;
+    if (b.dataset.shape !== shape) b.dataset.shape = shape;
     _blipRefs[i] = {
       guid: c.guid, inst: c.inst, dx: c.dx, dy: c.dy, dist: c.dist,
       kind: c.kind, localX, localY,
