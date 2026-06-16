@@ -109,8 +109,8 @@
 | 102 | low | D11-fellowship-allegiance | `allegiance-panel.js:69-99, 549-551` | Implement allegiance tier/rank enum mapping + display | dc7331f2 |
 | 104 | low | D11-fellowship-allegiance | `fellowship-panel.js:708-738` | Persist fellowship options (Ignore/AutoAccept/ShareXp/ShareLoot) to server | d04645b0 |
 | 105 | low | D13-character-info-titles-options | `plugins/character-info.js:573-606, mount function` | Reconcile title-tab vertical scaling with body height variance | c1081f01 |
-| 107 | low | D14-examination-identify | `examine-target.js:961-978` | Wire up RNG-based identify retry (future wave) | — |
-| 108 | low | D15-journal-contracts-book | `plugins/contracts-panel.js:756–766 (detail binding location)` | Add place-name lookup for contract location field | — |
+| 107 | low | D14-examination-identify | `examine-target.js:961-978` | Wire up RNG-based identify retry (future wave) | defer-wasm |
+| 108 | low | D15-journal-contracts-book | `plugins/contracts-panel.js:756–766 (detail binding location)` | Add place-name lookup for contract location field | 23ad3462 |
 | 109 | low | D15-journal-contracts-book | `plugins/journal-panel.js:574–579 (search field creation)` | Implement journal search/filter functionality | — |
 | 110 | low | D16-house-container-lifestone | `house-panel.js:324-334 (where rentDueTs is computed and rendered)` | Add house rent-due countdown / maintenance warning | — |
 | 111 | low | D17-status-indicators-and-floaty-chrome | `apps/holtburger-web/src/boot.rs (or equivalent boot asset list) — add layout ID ` | Preload status-indicators layout 0x21000071 into boot.hba G1 prefetch | — |
