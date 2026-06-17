@@ -96,7 +96,7 @@
 | 185 | med | E01-font-system | `ui/ac_font.js:193-261 renderAcText, 232-245 shadow block, 527-612 AcTextElement` | Make drop shadow color + offset configurable | 3171bf0a |
 | 186 | med | E02-layout-system-states | `ui/ac_layout.js (new computeChildGeometry function), plugins/inventory.js (enabl` | Implement edge-anchor flow-layout fallback for dynamic geometry | 614054b9 |
 | 188 | med | E03-sprite-icon-pipeline | `texture.rs:575-650 (test section)` | Add comprehensive format coverage test matrix | fable-skip |
-| 189 | med | E04-string-tables-localization | `ac_strings.js (new export + wasm binding) + any HUD panel that renders player-fa` | Add string variable substitution support | defer-wasm |
+| 189 | med | E04-string-tables-localization | `ac_strings.js (new export + wasm binding) + any HUD panel that renders player-fa` | Add string variable substitution support | skip |
 | 190 | med | E05-ui-sound-effects | `plugins/audio_optimistic.js (add UI_GRAB, UI_RELEASE consts), plugins/settings-p` | Wire UI_GrabSlider (0x73) and UI_ReleaseSlider (0x74) on volume/settings sliders | 9b1fdd45 |
 | 192 | med | E07-keymap-hotkey-routing | `ui/keymap.js (serialize helper), index.html (export UI), ACE protocol layer` | Implement DAT file export + ACE keymap persistence | fable-skip |
 | 193 | med | E08-picking-target-cursor-feedback | `plugins/hover-tooltip.js (new plugin)` | Implement hover tooltip (low-latency popup) | 2946e0ec |
@@ -109,7 +109,7 @@
 | 102 | low | D11-fellowship-allegiance | `allegiance-panel.js:69-99, 549-551` | Implement allegiance tier/rank enum mapping + display | dc7331f2 |
 | 104 | low | D11-fellowship-allegiance | `fellowship-panel.js:708-738` | Persist fellowship options (Ignore/AutoAccept/ShareXp/ShareLoot) to server | d04645b0 |
 | 105 | low | D13-character-info-titles-options | `plugins/character-info.js:573-606, mount function` | Reconcile title-tab vertical scaling with body height variance | c1081f01 |
-| 107 | low | D14-examination-identify | `examine-target.js:961-978` | Wire up RNG-based identify retry (future wave) | defer-wasm |
+| 107 | low | D14-examination-identify | `examine-target.js:961-978` | Wire up RNG-based identify retry (future wave) | 4d6a2fb6 |
 | 108 | low | D15-journal-contracts-book | `plugins/contracts-panel.js:756–766 (detail binding location)` | Add place-name lookup for contract location field | 23ad3462 |
 | 109 | low | D15-journal-contracts-book | `plugins/journal-panel.js:574–579 (search field creation)` | Implement journal search/filter functionality | 000a266f |
 | 110 | low | D16-house-container-lifestone | `house-panel.js:324-334 (where rentDueTs is computed and rendered)` | Add house rent-due countdown / maintenance warning | b9c3e396 |
