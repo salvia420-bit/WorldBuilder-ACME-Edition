@@ -44,7 +44,23 @@ pub enum SurfacePixelFormat {
     /// we port the same path through `jpeg-decoder`.
     CustomRawJpeg = 500,
     Dxt1 = 827611204,
+    /// FourCC 'DXT2' = 0x32545844. Same on-wire layout as
+    /// [`SurfacePixelFormat::Dxt3`] (BC2 — 64-bit explicit-alpha block
+    /// followed by 64-bit DXT1-style colour block); the difference is
+    /// purely semantic — DXT2 signals that the encoded RGB has been
+    /// premultiplied by alpha. Our straight-RGBA8 decode emits the
+    /// stored bytes as-is, so downstream consumers that need straight
+    /// colour from a DXT2 record must un-premultiply (rgb / alpha).
+    /// HUD rec #203 (2026-06-16): added for retail completeness.
+    Dxt2 = 844388420,
     Dxt3 = 861165636,
+    /// FourCC 'DXT4' = 0x34545844. Same on-wire layout as
+    /// [`SurfacePixelFormat::Dxt5`] (BC3 — 64-bit interpolated-alpha
+    /// block + 64-bit DXT1 colour block); the difference is purely
+    /// semantic — DXT4 signals premultiplied RGB, mirroring DXT2 vs
+    /// DXT3. Decode routes through `decompress_dxt5`. HUD rec #203
+    /// (2026-06-16): added for retail completeness.
+    Dxt4 = 877942852,
     Dxt5 = 894720068,
     /// Sentinel for any value not in the curated set above. Carries the
     /// raw u32 so callers can report it.
@@ -66,7 +82,9 @@ impl SurfacePixelFormat {
             244 => Self::CustomLscapeAlpha,
             500 => Self::CustomRawJpeg,
             827611204 => Self::Dxt1,
+            844388420 => Self::Dxt2,
             861165636 => Self::Dxt3,
+            877942852 => Self::Dxt4,
             894720068 => Self::Dxt5,
             other => Self::Other(other),
         }
@@ -519,10 +537,21 @@ impl Texture {
             SurfacePixelFormat::Dxt1 => {
                 Ok(super::dxt::decompress_dxt1(&self.source_data, self.width as u32, self.height as u32))
             }
-            SurfacePixelFormat::Dxt3 => {
+            // HUD rec #203 (2026-06-16): DXT2 = BC2 with premultiplied
+            // RGB. Wire layout is byte-identical to DXT3 — only the
+            // RGB interpretation differs, and our straight-RGBA8 decode
+            // emits the stored bytes verbatim, so routing through
+            // decompress_dxt3 is the correct shape. Downstream
+            // consumers that need straight colour must un-premultiply.
+            SurfacePixelFormat::Dxt2 | SurfacePixelFormat::Dxt3 => {
                 Ok(super::dxt::decompress_dxt3(&self.source_data, self.width as u32, self.height as u32))
             }
-            SurfacePixelFormat::Dxt5 => {
+            // HUD rec #203 (2026-06-16): DXT4 = BC3 with premultiplied
+            // RGB. Wire layout is byte-identical to DXT5 — only the
+            // RGB interpretation differs. Same straight-byte handling
+            // as DXT2 above; consumers that need straight colour must
+            // un-premultiply.
+            SurfacePixelFormat::Dxt4 | SurfacePixelFormat::Dxt5 => {
                 Ok(super::dxt::decompress_dxt5(&self.source_data, self.width as u32, self.height as u32))
             }
 
