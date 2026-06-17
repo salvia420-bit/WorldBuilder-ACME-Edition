@@ -131,7 +131,7 @@
 | 204 | low | E03-sprite-icon-pipeline | `ac_icon_cache.js:34-73, ac_palette.js:47-86, ac_dye_preview.js:72-200` | Add diagnostic hooks for icon/palette decode failures | 36dcb3a8 |
 | 206 | low | E12-login-character-select-creation | `character-creation.js:1190-1201 (slider input/change events), update banner on i` | Implement live attribute-budget countdown during slider drag | fable-skip |
 | 207 | low | E15-settings-persistence-options | `options-panel.js:785-795, 970-1003, ui/graphics_settings.js` | Decouple graphics settings from options-panel and unify Apply/Cancel semantics | skip |
-| 208 | low | E15-settings-persistence-options | `ac_window_position.js:53-231, ACE Player_Character.cs, holtburger-common charact` | Implement window position server sync (PlayerModule::Chat-Window-Option replacement in ACE) | defer-wasm |
+| 208 | low | E15-settings-persistence-options | `ac_window_position.js:53-231, ACE Player_Character.cs, holtburger-common charact` | Implement window position server sync (PlayerModule::Chat-Window-Option replacement in ACE) | defer-ace |
 
 ## Pass 1 — done (commit)
 
@@ -228,7 +228,7 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 
 | # | sev | domain | files | title | status |
 |---:|---|---|---|---|---|
-| 18 | high | D12-vendor-and-trade | `vendor-ui.js:1391-1403 (hideOverlay), mount() section 1726-1843 (event subscript` | Implement approach distance enforcement for vendor UI | defer-wasm |
+| 18 | high | D12-vendor-and-trade | `vendor-ui.js:1391-1403 (hideOverlay), mount() section 1726-1843 (event subscript` | Implement approach distance enforcement for vendor UI | 1a7be79f |
 | 38 | high | E18-tradeskill-spell-research-salvage | `spell-research-panel.js:450-483` | Wire spell component availability check before cast | defer-wasm |
 | 140 | high | D09-vitals-and-attributes-streams | `src/lib.rs:47934-47960 (add error emission), index.html:10200+ (add bus emitter)` | Add raiseAttributeFailed and raiseVitalFailed event bus signals | defer-wasm |
 | 141 | high | D09-vitals-and-attributes-streams | `src/lib.rs (define new ClientEvent kind for player_xp_updated), index.html:10350` | Subscribe to playerXpSpent bus event to refresh raise-button costs after server ack | defer-wasm |
