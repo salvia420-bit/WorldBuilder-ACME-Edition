@@ -233,7 +233,7 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 | 140 | high | D09-vitals-and-attributes-streams | `src/lib.rs:47934-47960 (add error emission), index.html:10200+ (add bus emitter)` | Add raiseAttributeFailed and raiseVitalFailed event bus signals | 173ca4c6 |
 | 141 | high | D09-vitals-and-attributes-streams | `src/lib.rs (define new ClientEvent kind for player_xp_updated), index.html:10350` | Subscribe to playerXpSpent bus event to refresh raise-button costs after server ack | 92011aa9 |
 | 142 | high | D10-chat-and-emote | `holtburger-web/src/lib.rs:26860+, emote-panel.js:220-264` | Implement broadcastEmoteSoundEffect wasm export | ee1ea939 |
-| 147 | high | D15-journal-contracts-book | `src/lib.rs:24162 (latest_contracts example to follow), plugins/journal-panel.js:` | Implement quest journal RPC (SessionHandle.playerJournal) | defer-ace |
+| 147 | high | D15-journal-contracts-book | `src/lib.rs:24162 (latest_contracts example to follow), plugins/journal-panel.js:` | Implement quest journal RPC (SessionHandle.playerJournal) | 85b47b65 |
 | 66 | med | E03-sprite-icon-pipeline | `apps/holtburger-web/build.rs (proposed)` | Verify icon-manifest.json generation is automated in build pipeline | skip |
 | 175 | med | D07-combat-hud-stance-power | `plugins/api.js:58, src/lib.rs ~32000, combat-hud.js:614, combat-bar.js:1630-1670` | Add fizzle event surface and spell-fail visual feedback | fable-skip |
 | 177 | med | D09-vitals-and-attributes-streams | `src/lib.rs (emit vitalBaseChanged on GameMessagePrivateUpdateVital), index.html:` | Subscribe to vitalBaseChanged event to auto-rerender Vitals subsection when attribute raises bump vital base | skip |
@@ -274,7 +274,7 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 | 140 | high | wasm | D09-vitals-and-attributes-streams | `src/lib.rs:47934-47960 (add error emission), index.html:10200+ (add bus emitter)` | Add raiseAttributeFailed and raiseVitalFailed event bus signals | 173ca4c6 |
 | 141 | high | wasm | D09-vitals-and-attributes-streams | `src/lib.rs (define new ClientEvent kind for player_xp_updated), index.html:10350` | Subscribe to playerXpSpent bus event to refresh raise-button costs after server ack | 92011aa9 |
 | 142 | high | wasm | D10-chat-and-emote | `holtburger-web/src/lib.rs:26860+, emote-panel.js:220-264` | Implement broadcastEmoteSoundEffect wasm export | skip |
-| 147 | high | wasm | D15-journal-contracts-book | `src/lib.rs:24162 (latest_contracts example to follow), plugins/journal-panel.js:` | Implement quest journal RPC (SessionHandle.playerJournal) | defer-ace |
+| 147 | high | wasm | D15-journal-contracts-book | `src/lib.rs:24162 (latest_contracts example to follow), plugins/journal-panel.js:` | Implement quest journal RPC (SessionHandle.playerJournal) | 85b47b65 |
 | 149 | high | asset | D17-status-indicators-and-floaty-chrome | `status-indicators.js:91-99 (INDICATORS) + 319-360 (buildLinkStateMap pattern to ` | Extract real minigame/portal-storm sprite DIDs from retail layout 0x21000071 | b4da0b3f |
 | 153 | high | asset | E02-layout-system-states | `ui/ac_floaty_frame.js (new export), plugins/main-panel.js (call during mount)` | Implement resolveFrameSpritesFromLayout helper and wire main-panel.js | skip |
 | 154 | high | wasm | E04-string-tables-localization | `ac_layout.js (layout parser) + options-panel.js (update TABS hardcodes to use re` | Wire StringID resolution in layout element rendering | skip |
