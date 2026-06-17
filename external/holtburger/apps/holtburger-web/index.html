@@ -2142,6 +2142,16 @@
             })
             .catch((err) => console.warn("[ac-font] preload failed:", err));
 
+          // HUD rec #154 — preload the UI_Options StringTable (0x23000004),
+          // the default table gmConfigUI button/label StringInfos resolve
+          // against (via ac_layout.js resolveStringInfo). Fire-and-forget so
+          // the options-panel's Apply/OK/Cancel labels resolve to the retail-
+          // localized text on first open instead of after a re-render.
+          import("./ui/ac_strings.js")
+            .then((m) => m.loadStringTable(0x23000004))
+            .then((map) => console.log(`[ac-strings] UI_Options table loaded: ${map.size} entries`))
+            .catch((err) => console.warn("[ac-strings] UI_Options preload failed:", err));
+
           // Preload the input-binding StringTable (0x23000005) — this
           // is the table ActionMap (0x26000001) references for human-
           // readable key/action labels. Future input-rebind UI uses

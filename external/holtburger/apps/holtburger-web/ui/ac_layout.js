@@ -33,6 +33,8 @@
  * `children` map.
  */
 
+import { acString } from "./ac_strings.js";
+
 const layoutInflight = new Map(); // id → Promise<layout | null> (in-flight only)
 const layoutResolved = new Map(); // id → layout (cached on success only)
 
@@ -394,6 +396,56 @@ export function basePropertyValue(prop) {
   if (!prop || typeof prop !== "object") return undefined;
   for (const k of Object.keys(prop)) return prop[k]; // single-discriminant
   return undefined;
+}
+
+/**
+ * HUD rec #154 — resolve a `StringInfo` BaseProperty to its localized text
+ * via the DAT StringTable. `prop` is a wrapped BaseProperty (e.g. the return
+ * of {@link getStateProperty}); only the
+ * `{ StringInfo: { string_id, table_id, ... } }` variant resolves — any other
+ * variant returns null so the caller keeps its placeholder. `table_id` is used
+ * when non-zero, else `defaultTableId` (many layout StringInfos leave the table
+ * empty; gmConfigUI labels live in UI_Options 0x23000004). {@link acString}
+ * returns null until the table is loaded, so `resolved` reports whether the
+ * lookup actually hit. Pure — the caller swaps the element text when resolved.
+ *
+ * @param {object|null} prop — wrapped BaseProperty, e.g. `{ StringInfo: {...} }`
+ * @param {number} defaultTableId — StringTable id to use when StringInfo.table_id is 0
+ * @returns {{ text: (string|null), stringId: number, tableId: number, resolved: boolean }|null}
+ */
+export function resolveStringInfo(prop, defaultTableId) {
+  const si = (prop && typeof prop === "object") ? prop.StringInfo : null;
+  if (!si || typeof si !== "object") return null;
+  const stringId = (si.string_id ?? si.stringId ?? 0) >>> 0;
+  if (!stringId) return null;
+  const rawTable = si.table_id ?? si.tableId;
+  // The DAT serializes table_id as 0/empty for most entries — fall back to the
+  // layout default. Guard against non-numeric (e.g. an empty object) too.
+  const tableId = (typeof rawTable === "number" && rawTable > 0)
+    ? (rawTable >>> 0)
+    : (defaultTableId >>> 0);
+  const text = acString(tableId, stringId);
+  try {
+    window.__diag?.layout?.onStringInfoResolved?.({ stringId, tableId, resolved: text != null });
+  } catch (_) { /* diag is best-effort */ }
+  return { text, stringId, tableId, resolved: text != null };
+}
+
+/**
+ * HUD rec #154 — resolve the label text for a layout element. Reads the
+ * canonical label slot (MasterProperty 0x17 = dict_key 23) from the element's
+ * default StateDesc and runs {@link resolveStringInfo}. Returns null when the
+ * element carries no StringInfo label (so callers keep their placeholder text).
+ *
+ * @param {object} element — ElementDesc (e.g. from {@link findElementById})
+ * @param {number} [defaultTableId=0x23000004] — UI_Options default for gmConfigUI
+ * @returns {{ text: (string|null), stringId: number, tableId: number, resolved: boolean }|null}
+ */
+export function resolveElementLabel(element, defaultTableId = 0x23000004) {
+  const sd = element?.state_desc;
+  if (!sd) return null;
+  const prop = getStateProperty(sd, 23);
+  return resolveStringInfo(prop, defaultTableId);
 }
 
 /**

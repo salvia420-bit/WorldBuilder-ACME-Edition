@@ -54,7 +54,8 @@ import {
   lookupRetailDefault,
   getManifestHotkeyConflicts,
 } from "../ui/keymap.js";
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { loadLayout, findElementById, getCachedLayout, resolveElementLabel } from "../ui/ac_layout.js";
+import { loadStringTable } from "../ui/ac_strings.js";
 
 const VIEW_STYLE_ID = "hb-options-view-style";
 
@@ -958,6 +959,15 @@ function applyOptionsPanelLayout(refs, attempt = 0) {
       if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
       if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
       if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
+      // HUD rec #154 — swap the hardcoded English placeholder for the
+      // retail-localized label when the element carries a StringInfo (resolved
+      // against UI_Options 0x23000004). Keeps the placeholder when the table
+      // isn't cached yet or the element has no StringInfo label; the re-apply
+      // after the StringTable preload (in mount) fills it in.
+      const label = resolveElementLabel(desc);
+      if (label && label.resolved && label.text) {
+        setAcText(el, label.text);
+      }
       applied += 1;
     }
     // Per-tab content (0x21000293) is NOT applied here — that
@@ -1125,12 +1135,20 @@ export const view = {
     // showView, not early-boot mountBar), so layout typically lands
     // on first call. 3 × 1s retry covers transient null from a
     // late-arriving eor/local shard.
-    applyOptionsPanelLayout({
+    const optionsLayoutRefs = {
       tablistEl,
       applyBtnEl: applyBtn,
       okBtnEl: okBtn,
       cancelBtnEl: cancelBtn,
-    });
+    };
+    applyOptionsPanelLayout(optionsLayoutRefs);
+    // HUD rec #154 — make sure the UI_Options StringTable (0x23000004) is
+    // loaded so the Apply/OK/Cancel labels resolve to retail-localized text,
+    // then re-apply once it lands (the first apply above can run on a cached
+    // layout before the table is in cache). Fire-and-forget.
+    loadStringTable(0x23000004)
+      .then(() => applyOptionsPanelLayout(optionsLayoutRefs))
+      .catch(() => {});
 
     function switchTo(tabId) {
       // Cancel any in-flight keybind capture when leaving Controls.
