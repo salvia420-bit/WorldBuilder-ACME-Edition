@@ -1,0 +1,78 @@
+{
+  "meta": {
+    "synthLead": "Opus-4.8 (1M)",
+    "date": "2026-06-17",
+    "webRoot": "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web",
+    "headline": "skills-pane-consolidation (owner tabbed-pane architecture; gmStatManagementUI improve-footer inside character pane Skills+Attributes tabs; retire standalone train-skills view + F11-as-separate-panel)",
+    "hardenFoldedIn": true
+  },
+  "forks": [
+    { "id": "A", "topic": "S1 cost math", "options": ["push raw next_rank_xp (cumulative)", "push next_rank_xp - spent_xp (marginal)"], "recommend": "marginal (RESOLVED)", "evidence": "xp_table.rs:54-62 indexes cumulative list; CLI render.rs:425/464/529 subtracts spent_xp; test_train_skill.mjs:124-158 expects snap.xp already marginal; retail gmSkillUI::GetCostToRaise @0x0049b680" },
+    { "id": "B", "topic": "S1 path", "options": ["Rust 6-tuple", "JS xp-tables.json regen"], "recommend": "Rust 6-tuple", "evidence": "no skills curve in xp-tables.json; 5-tuple lacks spent_xp" },
+    { "id": "C", "topic": "S3 F11 route", "options": ["toggleView('character',{tab:skills})", "showView('character',{tab:skills})"], "recommend": "showView", "evidence": "toggleView main-panel.js:324-330 CLOSES when stack-top id==character" },
+    { "id": "D", "topic": "S2 Attributes raise", "options": ["keep per-row buttons + add footer", "remove per-row, route via footer"], "recommend": "keep+add (additive)", "evidence": "per-row raiseAttribute/raiseVital is PROTECTED shipped path" },
+    { "id": "E", "topic": "R13 reach panels", "options": ["FULL-FINISH salvage via useObject route", "GATE-OFF manifests"], "recommend": "FULL-FINISH", "evidence": "IT_TINKERING_TOOL=0x20000000 canonical_classify.js:56 (NOT 0x00020000=IT_LOCKABLE)" },
+    { "id": "F", "topic": "R5 stance tint cause-3", "options": ["iconSprite:0x06004D1C in combat-bar.manifest.json", "retarget CSS off img"], "recommend": "iconSprite", "evidence": "sprite data/ui-sprites/0x06004D1C.png exists (2185B)" },
+    { "id": "G", "topic": "S5 Improve-x10", "options": ["defer", "single-spend x10", "Rust batch export"], "recommend": "defer", "evidence": "no skills XP curve for accurate x10 cost" },
+    { "id": "H", "topic": "R3 social toggle", "options": ["add __toggleSocialPanel", "open-only + Escape"], "recommend": "add __toggleSocialPanel", "evidence": "matches house-panel/spell-research pattern" }
+  ],
+  "protect": [
+    "combat-bar.js:509 Recklessness reader (value stays i+4; stride->6 in lockstep)",
+    "character-info read-only Skills tiering :798-810",
+    "computeNextRaiseCost(snap) 1-arg (snap.xp MARGINAL)",
+    "raiseSkill/trainSkill/raiseAttribute/raiseVital dispatch",
+    "renderAttributes per-row raise wiring :707-766",
+    "options-panel setCharacterOption :827-839 (reference, not edited)",
+    "main-panel.js:346 setTitle (text helper)",
+    "examine-floaty.mount + examine registerView + __showExamineFor",
+    "persistWindowSize.persist() :324-333 (template, not bug)",
+    "pushView/closeView semantics",
+    "salvage-confirm bus + tradeskill requireConfirm",
+    "vitae-detail self-wired handler (no second listener)",
+    "F11-stance-revert: inventory_helpers.js:217-226 + inventory.js:1337-1338",
+    "SalvageItemsWithActionData pack order + opcode 0x027D + parity fixture",
+    "UseWithTarget export/recv arm",
+    "train-skills.js pure exports (do NOT delete file; do NOT keep as separate panel)"
+  ],
+  "bands": [
+    { "id": "A", "label": "skills-raise Rust 6-tuple", "atomic": true, "oneCommit": true, "seqs": [1,2,3,4,5,6] },
+    { "id": "C-part1", "label": "registry-dispatch (R2/R3/R4/R5) then R10", "seqs": [7,8,9,10,11] },
+    { "id": "B", "label": "skills-pane consolidation S2/S4/S3", "after": ["A","C-part1"], "seqs": [12,13,14] },
+    { "id": "D", "label": "parity-wiring R6/R7", "seqs": [15,16] },
+    { "id": "E", "label": "examine + window R8/R9/R11", "seqs": [17,18,19] },
+    { "id": "F", "label": "scaffolds R12/R13/R14", "seqs": [20,21,22] }
+  ],
+  "orderedSteps": [
+    { "seq": 1, "id": "S1.rust", "needsRust": true, "action": "lib.rs:30714 skills builder *5->*6, push next_rank_xp.saturating_sub(spent_xp) (None->0); doc-comments 30688/19400-19404/19447", "gateBefore": "cargo test -p holtburger-world --lib green", "verify": "cargo build -p holtburger-web compiles; world lib tests green" },
+    { "seq": 2, "id": "S1.js.train-skills", "needsRust": false, "action": "train-skills.js:230 stride i+=6; :251 entry.xp=tupleArrayAt(i+5); fix comments :48-49/:95-104/:247-250", "gateBefore": "seq 1", "verify": "node test_train_skill.mjs green" },
+    { "seq": 3, "id": "S1.js.character-info", "needsRust": false, "action": "character-info.js:788 stride i+=6; add xpByLine from i+5; fix doc :777-782 + :413", "gateBefore": "seq 1", "verify": "parses; no stride-5 skill loop remains" },
+    { "seq": 4, "id": "S1.js.combat-bar", "needsRust": false, "action": "combat-bar.js:509 stride i+=6; value stays skills[i+4]; comment :508", "gateBefore": "seq 1", "verify": "Recklessness returns same i+4 value" },
+    { "seq": 5, "id": "S1.js.ac-damage-rating", "needsRust": false, "action": "ui/ac_damage_rating.js:105 stride i+=6 (value i+4); doc ~:85-87; UPDATE test_ac_damage_rating.mjs stub :66-80 to 6-tuple", "gateBefore": "seq 1", "verify": "node test_ac_damage_rating.mjs green (fails if stub left at 5)" },
+    { "seq": 6, "id": "S1.build", "needsRust": true, "action": "capped-build wasm-pack build --target web --out-dir pkg --dev; bump ?v= cache-bust", "gateBefore": "seq 2-5 all edited", "verify": "run-all.mjs --js green; drive.mjs skills.length%6===0, fresh Trained shows small positive cost, max=Max, DR/Recklessness unchanged. COMMIT BAND-A" },
+    { "seq": 7, "id": "R2", "needsRust": false, "action": "index.html import emotePanelPlugin (after :1311) + registerView('emote') (after :1735); emote-panel.js reshape view to {name,nameFor,mount} + add 'let cachedTaxonomy=null;' after :42 (EDIT D blocker)", "gateBefore": "BAND-A committed", "verify": "drive.mjs Shift+F2 Emote Palette renders, no mount error, toggles" },
+    { "seq": 8, "id": "R3", "needsRust": false, "action": "social-panel.manifest.json hotkeys Shift+F3; index.html:1784 dispatch __toggleSocialPanel; social-panel.js add __toggleSocialPanel (before :974)", "gateBefore": "none", "verify": "drive.mjs Shift+F3 toggles #social; Escape closes; no dup warn" },
+    { "seq": 9, "id": "R4", "needsRust": false, "action": "index.html:1784 add '\"house-panel\":()=>window.__toggleHousePanel?.()'", "gateBefore": "none", "verify": "drive.mjs Shift+F6 toggles #hb-house-panel; no placeholder" },
+    { "seq": 10, "id": "R5", "needsRust": false, "action": "index.html import stanceTogglePlugin + post-login mount(real client)+__stanceBarMounted guard after :8257; stance-toggle.js:160 selector [data-plugin-id=combat-bar]; combat-bar.manifest.json:11 iconSprite 0x06004D1C", "gateBefore": "none", "verify": "drive.mjs toggle combat mode -> img warms/cools live x2; no double-mount on relog" },
+    { "seq": 11, "id": "R10", "needsRust": false, "action": "main-panel.js:292-302 unregistered-view branch -> warn-and-return; leave _mountCurrent :266-276", "gateBefore": "seq 7-10 (emote registered; social/house dispatch)", "verify": "drive.mjs showView(unregistered) keeps current+warn; Shift+F2/F3/F6 still open" },
+    { "seq": 12, "id": "S2", "needsRust": false, "action": "character-info.js: selection state + .hb-ci-improve footer (Skills+Attributes); selectable Skills rows (no per-row btn); renderImproveFooter 3 states snap={training:stateByLine,xp:xpByLine}; Improve via decideTrainAction; keep Attributes per-row + add footer; reset selection on tab switch; import pure helpers", "gateBefore": "BAND-A committed", "verify": "drive.mjs footer credits/XP; Trained->numeric cost+raiseSkill; Untrained->Train+trainSkill; max=Max; tiering+attr raise unchanged; test_train_skill.mjs green" },
+    { "seq": 13, "id": "S4", "needsRust": false, "action": "confirm character-info.js:804-810 tierOrder not reordered by S2; if train-skills renderBody survives fix :507", "gateBefore": "seq 12", "verify": "Skills headers Specialized->Trained->Untrained->Unusable" },
+    { "seq": 14, "id": "S3", "needsRust": false, "action": "index.html remove registerView train-skills :1735 (+comment block); KEEP import :1311/map :1472/preload :968; add F11 dispatch '\"train-skills\":()=>window.__mainPanel?.showView?.(\"character\",{tab:\"skills\"})' (FORK-C showView NOT toggleView)", "gateBefore": "seq 11 (R10) + seq 12/13", "verify": "drive.mjs F11 opens character@Skills even when open on Attributes (no close); no 'no view registered'; test_train_skill.mjs green. COMMIT BAND-B+C" },
+    { "seq": 15, "id": "R6", "needsRust": false, "action": "character-info.js token-replace sendDisplayTitle->setTitle (5 occ; no reflow); do NOT touch main-panel.js:346", "gateBefore": "none", "verify": "grep -c sendDisplayTitle=0; jsdom stub setTitle captured===selectedId" },
+    { "seq": 16, "id": "R7a+R7b", "needsRust": false, "action": "allegiance-panel.js seed+setCharacterOption(0x01) ordinal; fellowship-panel.js FELLOW_OPT_IDX{ignore:0x02,autoAccept:0x12,shareXp:0x0F,shareLoot:0x11} server-seed after :954 + round-trip + Ignore<->AutoAccept mutual-exclusion", "gateBefore": "none (land together)", "verify": "jsdom allegiance->[[1,false]]; fellowship AutoAccept->Ignore ordered [[0x12,false],[0x02,true]]; local-only counts->0; options-panel reflects on re-open" },
+    { "seq": 17, "id": "R8", "needsRust": false, "action": "index.html:7666-7673 replace console.log with __showExamineFor(guid,{name,fromInventory:true}) + pushView fallback", "gateBefore": "none", "verify": "drive.mjs select item->Examine->floaty populated; Use/setSelectedItem unchanged" },
+    { "seq": 18, "id": "R9", "needsRust": false, "action": "examine-floaty.js:302 id-scoped close-before-open guard (currentViewId()==='examine'->closeView())", "gateBefore": "none (pairs R8)", "verify": "drive.mjs main-panel examine then floaty->only floaty; inventory not collapsed" },
+    { "seq": 19, "id": "R11", "needsRust": false, "action": "ac_window_position.js add persistPosition() read-modify-merge ~:81; swap writePersisted(state)->persistPosition() at :101/:176/:194/:200; leave :88 + writePersisted :262-272 + persistWindowSize.persist", "gateBefore": "none", "verify": "NEW test_ac_window_position_merge.mjs (TIER4, jsdom-lite shim): seed width/height, drag, assert survive; run-all.mjs --js green. COMMIT BAND-D+E" },
+    { "seq": 20, "id": "R12", "needsRust": false, "action": "salvage-panel.js split fireSalvage->request+commitSalvage(tool,itemGuids) (drop :449-451, keep :452-489 body); awaitingConfirm-guarded result listener + teardown", "gateBefore": "none", "verify": "jsdom fire->modal+0 sends; Cancel->0 sends panel open; confirm->exactly 1 send" },
+    { "seq": 21, "id": "R13", "needsRust": false, "action": "inventory.js guarded pre-return before useObject :1845: isSalvageTool(item) (mask 0x20000000) -> window.__openSalvagePanel(guid)", "gateBefore": "seq 20", "verify": "jsdom tool itemType=0x20000000->panel once useObject zero; melee 0x00000001->existing path" },
+    { "seq": 22, "id": "R14", "needsRust": true, "action": "lib.rs SessionCommand::SalvageItemsWith + #[wasm_bindgen(js_name=createTinkeringTool)] export + recv_loop arm (mirror UseWithTarget); NO protocol/core/JS change; capped wasm build + bump ?v=", "gateBefore": "BAND-A committed (separate Rust commit)", "verify": "cargo test -p holtburger-protocol --lib test_salvage_items_with_parity green; d.ts has createTinkeringTool; Tier-3 ONE 0x027D + ONE kind-52. COMMIT BAND-F" }
+  ],
+  "counts": {
+    "orderedSteps": 22,
+    "needsRust": 3,
+    "forks": 8,
+    "protectItems": 16,
+    "bands": 6,
+    "groups": { "skills-pane-consolidation": 5, "registry-dispatch": 4, "parity-wiring": 2, "examine-state": 3, "scaffolds": 3 },
+    "hardenBlockersFixed": 4
+  }
+}

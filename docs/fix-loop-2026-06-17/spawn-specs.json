@@ -1,0 +1,65 @@
+{
+  "spec": "empty-world-fix-implementation",
+  "wave": 3,
+  "model": "opus-4.8-1m",
+  "date": "2026-06-17",
+  "repoRoot": "/home/wbterminal/WorldBuilder-ACME-Edition",
+  "activeDist": "/home/wbterminal/holtburger-dist",
+  "sourceBacklog": "/home/wbterminal/out/empty-world-audit-opus-2026-06-17/findings.json",
+  "verifiedGroundTruth": {
+    "weenieSetupTuples": 43911,
+    "distinctPlacedWcids_serverManaged": 19154,
+    "landblockInstanceRows": 365183,
+    "landblockInstanceDistinctLBs": 4520,
+    "holtburgRows": 106,
+    "encounterRows": 165465,
+    "encounterDistinctLBs": 35634,
+    "encounterDistinctWcids": 212,
+    "encounterMaxCellXY": 8,
+    "whereCreateDistribution": {"Scatter_2": 13486, "Specific_4": 5552, "Contain_8": 1439, "OnTop_1": 620, "ContainTreasure_72": 495, "Treasure_64": 41, "Shop_32": 16, "SpecificTreasure_68": 5},
+    "wcid1966": {"profiles": 64, "allWhereCreate": 2, "allInitCreate": 1, "probabilityLadder": "0.015873..1.0", "retailEmits": 1, "naiveEmits": 64},
+    "worldDb": "ace_world (creds ace/ace; TerrainDeep.wbproj WRONGLY persists ace_shard)",
+    "spawnsSummaryAggregateField": "placeholderCount (SINGULAR, spawns.js:761)",
+    "orientationSerialization": "{isIdentity:bool} only — GazetteerJsonOpts has no IncludeFields; angles_* dropped",
+    "ingestAceSpawnsAppendMode": "false (CommandEngine.SiteIngest.cs:269)",
+    "stagerDedup": "none today — only .sort() at stage-ring-spawns.py:136",
+    "toolchain": "/opt/dotnet/dotnet DOTNET_ROOT=/opt/dotnet DOTNET_ROLL_FORWARD=LatestMajor; WBT net8.0; ACE net10.0; cargo RUSTUP_HOME=/opt/rust"
+  },
+  "forks": [
+    {"id": "F1", "q": "where expansion runs", "options": ["INGEST C#", "FETCH renderer js"], "recommend": "INGEST", "why": "renderer lacks encounter/generator tables and offline terrain Z (terrain_heights_shadow is wire-only); ThreadSafeRandom non-deterministic"},
+    {"id": "F2", "q": "encounter placement fidelity", "options": ["bare cell*24 clamp", "+seeded in-cell jitter"], "recommend": "bare clamp", "why": "GDL active path 24*cell NO +12; jitter block is commented-out dead code"},
+    {"id": "F3", "q": "generator cardinality", "options": ["weighted-random pick-ONE + always prob==-1", "every profile"], "recommend": "pick-ONE (MANDATORY)", "why": "wcid 1966 = 64 profiles init=1 laddered; SelectAProfile rolls once and breaks; per-profile = millions phantom fauna"},
+    {"id": "F4", "q": "scatter RNG", "options": ["FNV-seeded deterministic", "live Random"], "recommend": "FNV-seeded", "why": "preserves source.sha256 byte-stability + posweep/oracle parity"},
+    {"id": "F5", "q": "merge encounters into spawn JSONL", "options": ["append:true single file ordered spawns->encounters", "sibling file + multi-source stager"], "recommend": "append single file + enforced order + WARN-if-missing", "why": "no stager change, one source.sha256"},
+    {"id": "F6", "q": "wcid_to_setup scope", "options": ["FULL 43911", "staged-wcids only"], "recommend": "FULL when --all-world", "why": "future-proofs encounter/generator-child wcids; 1.2MB gzips to 0.3MB"},
+    {"id": "F7", "q": "encounter emit shape", "options": ["children-only", "anchor-creature + selected children"], "recommend": "anchor+children", "why": "GDL:163 spawns the encounter wcid itself; children-only discards the visible creature"}
+  ],
+  "hardenCorrectionsFolded": {
+    "encounter-algorithm": ["replace &0x0F with Treasure-first + &~0x40 switch", "fix probe to spawnsSummary.placeholderCount singular", "cite CWeenieObject::CreateGeneratorSpawn 2678 drop GeneratorProfile.cs", "fix ACE Landblock.cs:269-292 mis-cite (scenery not encounter)", "dataContract emit Orientation {isIdentity} + IsSynthetic + Encounter tag", "promote (lb,cell,childWcid) dedup to explicit stager item", "resolve single-file merge hazard concretely", "self-contained ingest FNV not mirror spawns.js", "move setupDid drop-gate to stage time"],
+    "encounter-ingest": ["float-faithful surfaceZ Func<ushort,float,float,float>", "fail-loud on synthetic height table (GetHeightAtWorldPosition returns 0 not throw; GetHeightTable synthetic ramp); add ZeroZRecords", "verification cmd {cmd:help} not list-commands", "add Encounter to SpawnRecord doc", "cell 8 is REAL data (11 rows) not malformed", "soften EnrichedPlacementTests analogy"],
+    "generator-expansion": ["D1 weighted-random pick-ONE + always-prob==-1 + MaxGeneratedObjects cap (PropertyInt 81)", "D2 Treasure-first then full where_Create switch no 0x0F mask", "D3 childWeenieTypes Dictionary<int,int> non-null + TryGetValue not []", "D4 encounter anchor-as-creature then expand", "D5 numChildren (InitCreate==-1||MaxCreate==-1)?1:InitCreate", "D6 lead with Scatter 64%", "D7 extend IngestAceSpawnsResult record + both ctors"],
+    "landblock-instance-ingest": ["BLOCKER connect to ace_world not persisted ace_shard; delete drop-password fork", "post-connect sanity gate recordsWritten==0 hard-fail", "orientation dataContract {isIdentity} not {quat}", "absolute paths incl Spawn/ dir + SpawnRecord.cs", "loosen exact-count gates to approximate vs reported counts"],
+    "weenie-index": ["withSetupDid 43911 not 43910", "serverManaged 19154 not 4520 (per-wcid)", "correct {} causal model: missing=no-file, empty out_map=stub; guard both", "convert capture diag console.log to real check()", "drop ?spawns=force (harness uses direct loadSpawnsForLandblock)", "csetup_id lib.rs:35515 physics_translucency 2579"]
+  },
+  "groups": {
+    "ingest": ["A0-algorithm", "A1-ENC-encounter", "A2-GEN-generator", "A3-SPAWN1-landblock-instance", "A4-WEENIE1-setup-map"],
+    "determinism-fork": ["B0-F1-decision", "B1-stage-dedup"],
+    "provenance": ["C1-source.sha256-schema", "C2-SCEN1-scenery-manifest"],
+    "fail-soft": ["D1-DIST1-serve.py", "D2-PIPE3-validator", "D3-lib.rs-fetch-info"],
+    "de-hardcode": ["E1-PIPE4-stager-env", "E2-PIPE2-gen-oracles", "E3-PIPE1-worldsweep-driver"],
+    "scenery-manifest": ["C2-SCEN1"],
+    "runtime-streaming": ["G1-RUNTIME1", "G2-RUNTIME2", "G3-RUNTIME3", "G4-PREFETCH1", "G5-TERR1", "G6-INT1", "G7-DOC1"]
+  },
+  "criticalPath": ["ENV-DB", "ENV-HARNESS", "ENC-A1.1", "GEN-A2.1", "GEN-A2.3", "GEN-A2.2/A2.4", "ENC-A1.2", "ENC-A1.3", "ENC-A1.4", "ENC-A1.5", "BUILD", "TEST", "WEENIE-IDX", "SPAWN+ENC", "SANITY", "PIPE-4", "WEENIE-A4.2", "WEENIE-A4.3", "DEDUP-B1", "PROV-C1", "STAGE", "HARNESS-FIX", "REBUILD-WASM", "PROBE-TOWN", "PROBE-WILD"],
+  "regressionGuardrails": [
+    "Holtburg 0xA9B4 stays exactly 106 records (1:1 invariant)",
+    "re-stage byte-identical (diff -rq clean)",
+    "wilderness injectedCount SMALL ~1-3/cell NOT tens (proves F3)",
+    "no Shop/Wield/Treasure profile emits world fauna (D2)",
+    "ace-db-ingest-spawns recordsWritten==0 => wrong DB => HARD-FAIL"
+  ],
+  "harnessProbes": {
+    "town": {"lb": "0xA9B4", "expect": "injectedCount>0, 106 record(s), spawnsSummary.placeholderCount===0"},
+    "wilderness": {"lb": "0xA9B2", "dec": 43442, "encounterWcid": 5150, "childWcids": [2566, 24937], "expect": "injectedCount>0 small, placeholderCount==0, record.wcid is CHILD not bare generator"}
+  }
+}
