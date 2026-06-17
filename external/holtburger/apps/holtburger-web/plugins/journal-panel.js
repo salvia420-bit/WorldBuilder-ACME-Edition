@@ -15,9 +15,13 @@
 // Journal entries are quest progress notes the player accumulates as
 // they complete missions. Companion tab strip with Contracts.
 //
-// Player journal data isn't exposed yet — placeholder content surfaces
-// the parchment frame + tab pattern. When server adds a `journal()`
-// method to SessionHandle we wire real entries here.
+// HUD rec #147 — entries are sourced live from the contract tracker (the
+// only quest-shaped data ACE sends; the contract tracker IS the retail quest
+// journal). projectContractsToJournalEntries() maps SessionHandle.playerContracts()
+// + the DAT ContractTable (window.getContractRecord) into the parchment's
+// {title, status, body} rows; the panel falls back to placeholder content
+// before login. ~322 contract-quests reach the client — non-contract quest
+// flags stay server-side and are not shown.
 //
 // Layout-port 2026-05-24: wired retail gmJournalUI (LayoutDesc
 // 0x21000066, 300×500 active panel + 300×600 chrome wrapper) — sizes
@@ -455,6 +459,85 @@ const SAMPLE_ENTRIES = [
   },
 ];
 
+// ─── HUD rec #147 — live quest journal from the contract tracker ──────
+// The contract tracker IS the retail quest journal: ACE only surfaces quest
+// state to the client via SendClientContractTracker(Table) (there is no
+// QuestUpdate opcode). Mirror contracts-panel.js's wasm access — read the
+// live snapshot from SessionHandle.playerContracts(), resolve names/text from
+// the DAT-backed ContractTable (window.getContractRecord), and project into
+// the {title, status, body} shape the parchment renders. JS-only: every
+// wasm surface used here already ships.
+
+function fetchContractsSnapshot() {
+  const handle = (typeof window !== "undefined") ? window.__sessionHandle : null;
+  if (typeof handle?.playerContracts !== "function") return null;
+  try { return handle.playerContracts() ?? null; } catch (_) { return null; }
+}
+
+let contractTablePrefetched = false;
+let contractTablePrefetchInFlight = null;
+async function ensureContractTablePrefetched() {
+  if (contractTablePrefetched) return true;
+  if (contractTablePrefetchInFlight) return contractTablePrefetchInFlight;
+  if (typeof window?.prefetchContractTable !== "function") return false;
+  contractTablePrefetchInFlight = (async () => {
+    try { await window.prefetchContractTable(); contractTablePrefetched = true; return true; }
+    catch (_) { return false; }
+    finally { contractTablePrefetchInFlight = null; }
+  })();
+  return contractTablePrefetchInFlight;
+}
+
+function lookupContractRecord(id) {
+  if (typeof window?.getContractRecord !== "function") return null;
+  try { return window.getContractRecord(id >>> 0) ?? null; } catch (_) { return null; }
+}
+
+/**
+ * Pure projection: a ContractsSnapshot (from SessionHandle.playerContracts())
+ * → journal entries. `lookup(id)` returns the DAT ContractRecord
+ * (window.getContractRecord) or null; `nowSec` is the current epoch seconds
+ * (active-vs-cooldown). Exported for unit tests; the DOM render consumes
+ * `{id, title, status, body}`.
+ *
+ * ContractStage: 1=New, 2=InProgress, 3=DoneOrPendingRepeat. The DAT
+ * `descriptionProgress` is a template with `%d` placeholders we cannot fill
+ * client-side (the running count lives server-side in
+ * CharacterPropertiesQuestRegistry), so the `%d` are blanked best-effort.
+ *
+ * @param {{ trackers?: Array<{contractId?:number, stage?:number, timeWhenRepeats?:number}> }|null} snapshot
+ * @param {(id:number)=>({name?:string, description?:string, descriptionProgress?:string}|null)} lookup
+ * @param {number} nowSec
+ * @returns {Array<{id:number, title:string, status:string, body:string, progressText:string}>}
+ */
+export function projectContractsToJournalEntries(snapshot, lookup, nowSec) {
+  if (!snapshot) return [];
+  const trackers = snapshot.trackers || [];
+  const out = [];
+  for (const tr of trackers) {
+    const id = (tr.contractId ?? 0) >>> 0;
+    const stage = (tr.stage ?? 0) >>> 0;
+    const rec = (typeof lookup === "function") ? lookup(id) : null;
+    const title = (rec && rec.name) ? rec.name : `Contract ${id}`;
+    const description = (rec && rec.description) ? rec.description : "";
+    const rawProgress = (rec && rec.descriptionProgress) ? rec.descriptionProgress : "";
+    const progressText = rawProgress ? rawProgress.replace(/%d/g, "?").trim() : "";
+    let status;
+    if (stage >= 3) {
+      const repeatAt = Number(tr.timeWhenRepeats || 0);
+      status = (repeatAt > nowSec) ? "cooldown" : "complete";
+    } else {
+      status = "active";
+    }
+    let body = description;
+    if (progressText && (!description || !description.includes(progressText))) {
+      body = description ? `${description}  •  ${progressText}` : progressText;
+    }
+    out.push({ id, title, status, body, progressText });
+  }
+  return out;
+}
+
 // Apply gmJournalUI 0x21000066 layout to the journal plugin's sub-
 // elements. Each ref gets explicit left/top/width/height from the
 // LayoutDesc. Text content (button labels, tab labels, footer copy)
@@ -529,7 +612,7 @@ function applyBox(el, layoutEl) {
 export const view = {
   name: "Journal",
   nameFor: () => "Quest Journal",
-  mount: (parentEl, _ctx) => {
+  mount: (parentEl, ctx) => {
     ensureStyles();
     const root = document.createElement("div");
     root.className = "hb-journal-root";
@@ -573,8 +656,8 @@ export const view = {
 
     // Search/title field (retail 0x1000056B). HUD rec #109 — wire
     // contenteditable + filter-on-input so the parchment shows only
-    // matching entries. Works on SAMPLE_ENTRIES today; same path will
-    // filter the real list once SessionHandle.journal() lands.
+    // matching entries. HUD rec #147 — the same filter now runs over the
+    // live `entries` list (contract-derived quests), not SAMPLE_ENTRIES.
     const searchField = document.createElement("div");
     searchField.className = "hb-journal-hdr-field";
     searchField.dataset.field = "search";
@@ -620,13 +703,19 @@ export const view = {
     // filter state lives in the closure; switching tabs preserves it
     // as long as the panel stays mounted (which it does — main-panel
     // hides via display:none).
+    // HUD rec #147 — live entry list. Starts on the placeholder set; swapped
+    // to live contract-derived quests by refreshEntries() (post-mount + on
+    // every contractsUpdated bus event). `entriesLive` flips once a real
+    // snapshot (even an empty one) replaces the placeholder.
+    let entries = [...SAMPLE_ENTRIES];
+    let entriesLive = false;
     let filterText = "";
     const renderEntriesFiltered = () => {
       // Strip previous entries/notes/empty markers under content;
       // keep the `title` element (first child) intact.
       while (content.children.length > 1) content.removeChild(content.lastChild);
       const q = filterText.trim().toLowerCase();
-      const matches = SAMPLE_ENTRIES.filter((e) => {
+      const matches = entries.filter((e) => {
         if (!q) return true;
         return (e.title || "").toLowerCase().includes(q)
             || (e.status || "").toLowerCase().includes(q);
@@ -666,8 +755,10 @@ export const view = {
       note.className = "hb-journal-empty";
       note.style.fontSize = "9px";
       const noteText = q
-        ? `—  Showing ${matches.length} of ${SAMPLE_ENTRIES.length}.  Server journal() RPC pending.  —`
-        : "—  Placeholder entries.  Server journal() RPC pending.  —";
+        ? `—  Showing ${matches.length} of ${entries.length}.  —`
+        : entriesLive
+          ? `—  ${entries.length} quest${entries.length === 1 ? "" : "s"} from your contract tracker.  —`
+          : "—  Placeholder entries — log in to load your quest journal.  —";
       setAcText(note, noteText, { color: "#5a3a18" });
       content.appendChild(note);
     };
@@ -721,7 +812,7 @@ export const view = {
     const footText = document.createElement("div");
     footText.className = "hb-journal-footer-text";
     footText.dataset.row = "1";
-    setAcText(footText, `${SAMPLE_ENTRIES.length} entries`);
+    setAcText(footText, `${entries.length} entries`);
     root.appendChild(footText);
 
     const footRightInd = document.createElement("div");
@@ -763,7 +854,7 @@ export const view = {
     const pgDigit3 = document.createElement("div");
     pgDigit3.className = "hb-journal-pg-digit";
     pgDigit3.dataset.digit = "3";
-    setAcText(pgDigit3, String(SAMPLE_ENTRIES.length));
+    setAcText(pgDigit3, String(entries.length));
     root.appendChild(pgDigit3);
 
     const pgSep3 = document.createElement("div");
@@ -822,7 +913,45 @@ export const view = {
       sealEl:         seal,
     });
 
-    return () => { root.remove(); };
+    // HUD rec #147 — swap the placeholder list for live contract-derived
+    // quests, then keep it fresh. The contract tracker is the only
+    // quest-shaped data ACE sends; getContractRecord supplies names/text.
+    const updateCounts = () => {
+      setAcText(footText, `${entries.length} entries`);
+      setAcText(pgDigit3, String(entries.length));
+    };
+    const refreshEntries = () => {
+      const snap = fetchContractsSnapshot();
+      if (snap) {
+        entries = projectContractsToJournalEntries(snap, lookupContractRecord, Date.now() / 1000);
+        entriesLive = true;
+      } else {
+        // Not logged in / wasm not ready — keep the placeholder set.
+        entries = [...SAMPLE_ENTRIES];
+        entriesLive = false;
+      }
+      renderEntriesFiltered();
+      updateCounts();
+    };
+    refreshEntries();
+    // Warm the DAT ContractTable so names/descriptions resolve, then
+    // re-render once it lands (first paint shows "Contract <id>" until then).
+    ensureContractTablePrefetched().then((ok) => { if (ok) refreshEntries(); });
+    // Re-render on every contracts delta (kind=34 → contractsUpdated bus).
+    const bus = ctx?.client?.events
+      ?? (typeof window !== "undefined" ? window.__pluginClient?.events : null)
+      ?? null;
+    let offContracts = null;
+    if (bus && typeof bus.on === "function") {
+      const onContracts = () => refreshEntries();
+      bus.on("contractsUpdated", onContracts);
+      offContracts = () => { try { bus.off?.("contractsUpdated", onContracts); } catch (_) {} };
+    }
+
+    return () => {
+      if (offContracts) offContracts();
+      root.remove();
+    };
   },
 };
 
