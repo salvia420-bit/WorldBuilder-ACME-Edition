@@ -239,8 +239,8 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 | 177 | med | D09-vitals-and-attributes-streams | `src/lib.rs (emit vitalBaseChanged on GameMessagePrivateUpdateVital), index.html:` | Subscribe to vitalBaseChanged event to auto-rerender Vitals subsection when attribute raises bump vital base | skip |
 | 178 | med | D09-vitals-and-attributes-streams | `src/lib.rs:47934-47960 (add IsMaxRank check + event emit), index.html:10150+ (ad` | Implement maxRankAchieved event bus + celebration effects | skip |
 | 180 | med | D15-journal-contracts-book | `plugins/book-panel.js:562–576 (current manual entry point), src/lib.rs (entity-u` | Wire 'Use' book interaction to auto-open book overlay | eb6debff |
-| 181 | med | D15-journal-contracts-book | `plugins/lore-panel.js (new file), acclient.h:56020 (gmPageListUI struct ref), sr` | Port lore entry catalog UI (gmPageListUI) | defer-wasm |
-| 187 | med | E02-layout-system-states | `holtburger-web/src/lib.rs (fetch_layout return shape), ui/ac_layout.js (diag hoo` | Add diagnostics telemetry for G3 emission success rate | defer-wasm |
+| 181 | med | D15-journal-contracts-book | `plugins/lore-panel.js (new file), acclient.h:56020 (gmPageListUI struct ref), sr` | Port lore entry catalog UI (gmPageListUI) | defer-ace |
+| 187 | med | E02-layout-system-states | `holtburger-web/src/lib.rs (fetch_layout return shape), ui/ac_layout.js (diag hoo` | Add diagnostics telemetry for G3 emission success rate | d6279d68 |
 | 103 | low | D11-fellowship-allegiance | `fellowship-panel.js:1412-1420` | Expose departed member names in fellowship standalone overlay | defer-wasm |
 
 ## Deferred — needs DAT/asset extraction
