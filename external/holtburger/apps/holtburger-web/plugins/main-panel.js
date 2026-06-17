@@ -22,6 +22,9 @@
 import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
+import {
+  attachFloatyFrame, resolveFrameSpritesFromLayout, MAIN_PANEL_FRAME_UI_IDS,
+} from "../ui/ac_floaty_frame.js";
 
 const OVERLAY_ID = "hb-main-panel";
 const STYLE_ID = "hb-main-panel-style";
@@ -167,10 +170,15 @@ function ensureStyles() {
       background: url("./data/ui-sprites/0x06004D0A.png") center/cover no-repeat,
                   linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
       border: 6px solid transparent;
-      border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
       box-shadow: var(--hb-shadow-panel);
       color: var(--hb-text-cream);
       display: none;
+    }
+    /* HUD rec #153 — placeholder 9-slice chrome. Suppressed once the DAT
+       sprite frame (attachFloatyFrame) attaches and adds .hb-floaty-framed,
+       so the retail 8-piece chrome paints over it cleanly. */
+    #${OVERLAY_ID}:not(.hb-floaty-framed) {
+      border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
     }
     #${OVERLAY_ID}[data-open="1"] { display: block; }
     #${OVERLAY_ID} .hb-mp-title {
@@ -441,6 +449,33 @@ function applyMainPanelLayout(refs, attempt = 0) {
         });
       }
       applied += 1;
+
+      // HUD rec #153 — attach the retail 8-piece gmFloatyPanelUI chrome from
+      // the DAT. Sprite DIDs resolve via fetch_layout's StateDesc emission
+      // (G3-reland 2026-06-05). Idempotent via the hb-floaty-framed class so
+      // the retry loop doesn't double-attach; the placeholder border-image
+      // is suppressed by the :not(.hb-floaty-framed) CSS rule once this runs.
+      // windowId wires the locked/unlocked sprite swap to the
+      // hb-ui-lock-changed events installDragPersistence already publishes.
+      if (!refs.overlayEl.classList.contains("hb-floaty-framed")) {
+        const sprites = resolveFrameSpritesFromLayout(layout, MAIN_PANEL_FRAME_UI_IDS);
+        if (sprites) {
+          attachFloatyFrame(refs.overlayEl, {
+            unlocked: sprites.unlocked,
+            locked: sprites.locked,
+            cornerSize: 5,
+            borderThickness: 5,
+            windowId: WINDOW_ID.MAIN_PANEL,
+          });
+          refs.overlayEl.classList.add("hb-floaty-framed");
+          applied += 1;
+          try {
+            window.__diag?.layout?.onMainPanelFloatyFrame?.({
+              unlocked: sprites.unlocked, locked: sprites.locked,
+            });
+          } catch (_) {}
+        }
+      }
     }
 
     // Body slot — (5,5) 300×362 inside the outer. The CSS positions

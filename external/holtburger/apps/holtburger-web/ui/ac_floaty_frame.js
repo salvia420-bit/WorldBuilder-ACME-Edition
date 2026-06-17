@@ -212,6 +212,24 @@ export const TOOLBAR_FRAME_UI_IDS = Object.freeze({
 });
 
 /**
+ * HUD rec #153 — gmFloatyPanelUI (main-panel, layout 0x2100006E) 8-piece
+ * chrome UIElement IDs in the canonical TL/T/TR/L/BL/B/BR/R order, with the
+ * `_Locked` twins. Lifted verbatim from main-panel.js's element-id map. Feed
+ * into `resolveFrameSpritesFromLayout` + `attachFloatyFrame` to paint the
+ * retail sprite frame over the placeholder CSS border-image.
+ */
+export const MAIN_PANEL_FRAME_UI_IDS = Object.freeze({
+  unlocked: Object.freeze([
+    0x10000653, 0x10000654, 0x10000655, 0x10000656,
+    0x10000657, 0x10000658, 0x10000659, 0x1000065A,
+  ]),
+  locked: Object.freeze([
+    0x1000065B, 0x1000065C, 0x1000065D, 0x1000065E,
+    0x1000065F, 0x10000660, 0x10000661, 0x10000662,
+  ]),
+});
+
+/**
  * Walk a `fetch_layout` result to extract the `0x06xxxxxx` sprite DID
  * for each chrome UIElement. Returns an `{ unlocked, locked }` shape
  * ready to feed into `attachFloatyFrame`. Each element's sprite is
