@@ -247,8 +247,8 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 
 | # | sev | domain | files | title | status |
 |---:|---|---|---|---|---|
-| 149 | high | D17-status-indicators-and-floaty-chrome | `status-indicators.js:91-99 (INDICATORS) + 319-360 (buildLinkStateMap pattern to ` | Extract real minigame/portal-storm sprite DIDs from retail layout 0x21000071 | defer-asset |
-| 197 | med | E14-loading-zone-transition-portal-storm | `plugins/status-indicators.js:91—99 (INDICATORS array); similar to lines 319—359 ` | Extract + wire real portal-storm sprite DIDs from retail StateDesc (not placeholder) | defer-asset |
+| 149 | high | D17-status-indicators-and-floaty-chrome | `status-indicators.js:91-99 (INDICATORS) + 319-360 (buildLinkStateMap pattern to ` | Extract real minigame/portal-storm sprite DIDs from retail layout 0x21000071 | b4da0b3f |
+| 197 | med | E14-loading-zone-transition-portal-storm | `plugins/status-indicators.js:91—99 (INDICATORS array); similar to lines 319—359 ` | Extract + wire real portal-storm sprite DIDs from retail StateDesc (not placeholder) | b4da0b3f |
 
 ## Absorbed (collapsed into a paired row)
 
@@ -275,7 +275,7 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 | 141 | high | wasm | D09-vitals-and-attributes-streams | `src/lib.rs (define new ClientEvent kind for player_xp_updated), index.html:10350` | Subscribe to playerXpSpent bus event to refresh raise-button costs after server ack | 92011aa9 |
 | 142 | high | wasm | D10-chat-and-emote | `holtburger-web/src/lib.rs:26860+, emote-panel.js:220-264` | Implement broadcastEmoteSoundEffect wasm export | skip |
 | 147 | high | wasm | D15-journal-contracts-book | `src/lib.rs:24162 (latest_contracts example to follow), plugins/journal-panel.js:` | Implement quest journal RPC (SessionHandle.playerJournal) | defer-ace |
-| 149 | high | asset | D17-status-indicators-and-floaty-chrome | `status-indicators.js:91-99 (INDICATORS) + 319-360 (buildLinkStateMap pattern to ` | Extract real minigame/portal-storm sprite DIDs from retail layout 0x21000071 | defer-asset |
+| 149 | high | asset | D17-status-indicators-and-floaty-chrome | `status-indicators.js:91-99 (INDICATORS) + 319-360 (buildLinkStateMap pattern to ` | Extract real minigame/portal-storm sprite DIDs from retail layout 0x21000071 | b4da0b3f |
 | 153 | high | asset | E02-layout-system-states | `ui/ac_floaty_frame.js (new export), plugins/main-panel.js (call during mount)` | Implement resolveFrameSpritesFromLayout helper and wire main-panel.js | skip |
 | 154 | high | wasm | E04-string-tables-localization | `ac_layout.js (layout parser) + options-panel.js (update TABS hardcodes to use re` | Wire StringID resolution in layout element rendering | skip |
 | 155 | high | wasm | E04-string-tables-localization | `wasm-side fetch_layout serializer + ac_layout.js LayoutDesc struct + options-pan` | Deferred serialization of StateDesc (unblock G3) | skip |
@@ -295,7 +295,7 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 | 181 | med | wasm | D15-journal-contracts-book | `plugins/lore-panel.js (new file), acclient.h:56020 (gmPageListUI struct ref), sr` | Port lore entry catalog UI (gmPageListUI) | skip |
 | 187 | med | wasm | E02-layout-system-states | `holtburger-web/src/lib.rs (fetch_layout return shape), ui/ac_layout.js (diag hoo` | Add diagnostics telemetry for G3 emission success rate | skip |
 | 189 | med | wasm | E04-string-tables-localization | `ac_strings.js (new export + wasm binding) + any HUD panel that renders player-fa` | Add string variable substitution support | skip |
-| 197 | med | asset | E14-loading-zone-transition-portal-storm | `plugins/status-indicators.js:91—99 (INDICATORS array); similar to lines 319—359 ` | Extract + wire real portal-storm sprite DIDs from retail StateDesc (not placeholder) | defer-asset |
+| 197 | med | asset | E14-loading-zone-transition-portal-storm | `plugins/status-indicators.js:91—99 (INDICATORS array); similar to lines 319—359 ` | Extract + wire real portal-storm sprite DIDs from retail StateDesc (not placeholder) | b4da0b3f |
 | 103 | low | wasm | D11-fellowship-allegiance | `fellowship-panel.js:1412-1420` | Expose departed member names in fellowship standalone overlay | skip |
 | 107 | low | wasm | D14-examination-identify | `examine-target.js:961-978` | Wire up RNG-based identify retry (future wave) | skip |
 | 203 | low | wasm | E03-sprite-icon-pipeline | `texture.rs:519-527` | Implement DXT2/DXT4 alpha interpolation decoders | skip |
