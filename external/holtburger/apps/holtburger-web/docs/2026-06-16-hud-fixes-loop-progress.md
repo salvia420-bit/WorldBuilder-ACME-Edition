@@ -33,7 +33,7 @@
 | 136 | high | D02-inventory-packs-capacity | `plugins/inventory.js:141 (BAG_COUNT), plugins/inventory.js:1390-1509 (bag-column` | Implement dynamic BAG_COUNT expansion for AugmentationExtraPackSlot | skip |
 | 137 | high | D03-cursor-and-drag | `plugins/inventory.js:1657-1679 (paperdoll dragstart), 2554-2567 (overlay dragsta` | Spec item-on-cursor sprite swap via drag-state plumbing | drift |
 | 138 | high | D05-map-projection-markers | `map-panel.js:248-385 (mount), 336-362 (positionPlayer), 59-160 (styles)` | Implement house location marker rendering when player owns house | 978be175 |
-| 139 | high | D05-map-projection-markers | `map-panel.js:336-385 (positionPlayer, add new marker update functions), 124-135 ` | Add fellow/allegiance player pins on world map | defer-ace |
+| 139 | high | D05-map-projection-markers | `map-panel.js:336-385 (positionPlayer, add new marker update functions), 124-135 ` | Add fellow/allegiance player pins on world map | 0467afd0 |
 | 143 | high | D11-fellowship-allegiance | `allegiance-panel.js:484-610, 1497-1540` | Implement allegiance vassal tree browser in main-panel | 0eeaf302 |
 | 144 | high | D12-vendor-and-trade | `trade-panel.js:490-506 (onTradeUpdated subscription), 441-454 (requestClose)` | Implement distance enforcement for trade panel | ba4f2c83 |
 | 145 | high | D13-character-info-titles-options | `plugins/character-info.js:412-419, acclient.h enum PropertyAttribute section` | Verify attribute icon sprite DIDs match retail enum indices | drift |
