@@ -919,7 +919,7 @@ function doMount(parentEl, ctx) {
   // selector. The slot data persistence stays in place; SPELL_BAR_TABS
   // can still be cycled via combat-bar.js shortcuts.
   const retailParity = (() => {
-    try { return new URLSearchParams(window.location.search).get("retailParity") === "1"; }
+    try { return new URLSearchParams(window.location.search).get("retailParity") !== "off"; }
     catch (_) { return false; }
   })();
   const tabsEl = document.createElement("div");

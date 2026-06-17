@@ -3,6 +3,13 @@
 Every `?key=value` query flag the web client reads, grouped by purpose. Flags are
 appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 
+> ## ⚠ 2026-06-17 — validated feature-gates are now DEFAULT-ON
+> The `?flag=on` scaffolding has been retired for the validated feature work: these are now **always-on** (each keeps a `?flag=off` escape hatch). Where a "Default" cell below still says `off` for one of these, treat it as **on**.
+>
+> **Now default-ON** (was default-off): `singleDriver`, `unifiedDispatch`, `unifiedClientEvent`, `unifiedClone`, `inputFunnel`, `syncPhysicsTick`, `dispatchParity`, `mtQueue`, `hookDrain`, `scriptQueue`, `rootMotionObject`, `cmtStanceMask`, `castSpeed`, `castStateMachine`, `castFizzle`, `castFaceTarget`, `castAxes`, `multiAction`, `melee3dRange`, `fullBodyOneShot`, `signedMotionSpeed`, `powerMeterSwingDuration`, `idleFidget`, `dynLod`, `serverSwing`, `wieldHandAttach`, `wieldedSpawn`, `turnOmega`, `jumpParity`, `retailRunKeys`, `longJump`, `projectileGravity`, `projectileArc`, `retailParity`, `retailCamZoom`, `blockingParticleParity`, `particleOwner`, `defaultScriptSpawn`, `envcellFusion`, `strictWaterCodes`, `mtClassFallback`.
+>
+> **Still opt-in (default-off) on purpose:** instrumentation/debug (`wireframe`, `diag`, `syncTickDiag`, `spawnTrace`, `debug`, `lbLruDebug`, `profileStatics`, `eventLog`, `nullRender`, `renderOnDemand`), login/automation (`autoLogin`, `agent`, `nosw`), perf opt-ins (`eagerDungeons`, `cullTerrain`, `forcePom`, `forceDetail`, `preloadIcons`), user preferences (`mouseInvertY`, `chatFade`, `radarHostileOnly`), the legacy escape hatch (`legacyDirectDrain`), and known-incomplete (`lodRebake` — edge-weld seams pending; Rust BSP `USE_PHYSICS_BSP`/`USE_STATIC_BSP`). Plus the genuine render toggles `clouds`, `quality`, `renderScale`, `hud`, `plugins`, weather `rain`/`snow`/`lightning`/`skyWeather`, and the texture/palette overrides.
+
 Line numbers are approximate (code drifts); grep the named file for the flag key
 if a line has moved. Compiled from a full sweep of `index.html`, `scene3d/**`,
 and `plugins/**` on 2026-06-08.

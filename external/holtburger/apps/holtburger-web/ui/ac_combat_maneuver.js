@@ -37,7 +37,7 @@ export const DEFAULT_CMT_ID = 0x30000000;
 const CMT_STANCE_MASK = (() => {
   try {
     return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("cmtStanceMask")?.toLowerCase() === "on";
+      new URLSearchParams(window.location.search).get("cmtStanceMask")?.toLowerCase() !== "off";
   } catch (_) {
     return false;
   }

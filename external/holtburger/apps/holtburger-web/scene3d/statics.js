@@ -2764,7 +2764,7 @@ function _blockingParticleParityOn() {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
       return (
         new URLSearchParams(globalThis.location.search)
-          .get("blockingParticleParity")?.toLowerCase() === "on"
+          .get("blockingParticleParity")?.toLowerCase() !== "off"
       );
     }
   } catch (_) {}

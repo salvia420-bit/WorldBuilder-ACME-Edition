@@ -213,7 +213,7 @@ const MULTI_ACTION_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("multiAction")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("multiAction")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -229,7 +229,7 @@ const UNIFIED_CLONE_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("unifiedClone")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("unifiedClone")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -247,7 +247,7 @@ const SERVER_SWING_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("serverSwing")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("serverSwing")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -267,7 +267,7 @@ const DISPATCH_PARITY_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("dispatchParity")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("dispatchParity")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -288,7 +288,7 @@ const UNIFIED_DISPATCH_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("unifiedDispatch")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("unifiedDispatch")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -366,7 +366,7 @@ const CAST_AXES_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("castAxes")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("castAxes")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;

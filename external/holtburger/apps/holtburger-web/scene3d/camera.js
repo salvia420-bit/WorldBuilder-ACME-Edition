@@ -484,7 +484,7 @@ export class CameraSwitcher {
           ? new URLSearchParams(window.location.search)
           : null;
       this._retailZoomOn =
-        params?.get("retailCamZoom")?.toLowerCase() === "on";
+        params?.get("retailCamZoom")?.toLowerCase() !== "off";
       const stiff = params ? parseFloat(params.get("camStiffness")) : NaN;
       this._camStiffness =
         Number.isFinite(stiff) && stiff > 0 ? Math.min(stiff, 1.0) : null;

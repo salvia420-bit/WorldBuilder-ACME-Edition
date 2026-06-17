@@ -56,7 +56,7 @@ export function particleOwnerOn() {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
       on =
         new URLSearchParams(globalThis.location.search)
-          .get("particleOwner")?.toLowerCase() === "on";
+          .get("particleOwner")?.toLowerCase() !== "off";
     }
   } catch (_) {
     on = false;

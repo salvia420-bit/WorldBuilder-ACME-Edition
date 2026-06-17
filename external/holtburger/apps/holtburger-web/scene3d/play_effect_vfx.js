@@ -1666,7 +1666,7 @@ const BLOCKING_PARTICLE_PARITY_ON = (() => {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search)
-        .get("blockingParticleParity")?.toLowerCase() === "on"
+        .get("blockingParticleParity")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;

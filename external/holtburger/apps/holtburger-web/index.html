@@ -4613,7 +4613,7 @@ void main() {
       const __unifiedClientEventOn = (() => {
         try {
           return new URLSearchParams(window.location.search)
-            .get("unifiedClientEvent")?.toLowerCase() === "on";
+            .get("unifiedClientEvent")?.toLowerCase() !== "off";
         } catch (_) { return false; }
       })();
       // A15-Q4 (2026-06-12 unification): `?unifiedDispatch=on` (default-off)
@@ -4647,7 +4647,7 @@ void main() {
       const __SINGLE_DRIVER_ON = (() => {
         try {
           return new URLSearchParams(window.location.search)
-            .get("singleDriver") === "on";
+            .get("singleDriver") !== "off";
         } catch (_) { return false; }
       })();
       let __backlogOverflowWarned = false;
@@ -4748,13 +4748,75 @@ void main() {
         // path), so without a cap the backlog grows unbounded for the
         // whole session. Keep the latest N so the 3D-hot-swap race the
         // backlog exists for is still covered.
+        //
+        // SPAWN-PRESERVING eviction (2026-06-17 ultra-spawn fix): the old
+        // `b.splice(0, b.length - CAP)` evicted OLDEST-first and was NOT
+        // spawn-aware. KIND_SPAWN (kind===1) is an EARLY, finite burst at
+        // zone entry (one ObjectCreate per visible NPC/item + the one-shot
+        // local-player spawn ~+2 s post-SelectCharacter, emitted ONCE and
+        // drained-once wasm-side so never re-delivered). Steady state is a
+        // KIND_POSITION/KIND_MOTION flood (100s/sec). When init3D is slow to
+        // reach installSharedDrainHook (e.g. quality=ultra: subdivLevel 8 ⇒
+        // the awaited bakeTerrainRing fetch_subdivided_landblocks(level=4)
+        // batch + CSM/POM/cloud construction runs FIRST, scene3d/index.js
+        // ~L1196), that flood overflowed the 512 ring and the oldest-first
+        // splice dropped the entire spawn burst before the install-time
+        // replay ran — so EntityManager.spawn() was never called for ANY
+        // guid (spawnAttempted:0) and the rig never appeared. Position/motion
+        // events for an unspawned guid create no placeholder (loop.js
+        // _armPosition only stashes __lastEntityWorldPos / no-op setPose), so
+        // the miss was permanent. Fix: NEVER evict a KIND_SPAWN; trim the
+        // OLDEST non-spawn instead. Spawns are a bounded burst, so the
+        // surviving spawn set replays in full on install regardless of how
+        // late init3D installs the live dispatcher. Decoupled from the ultra
+        // atmosphere/terrain warm-up; identical behavior at low / wireframe /
+        // 2D (those rarely overflow, and when they do only filler is dropped).
         if (b.length > ENTITY_BUFFER_CAP) {
-          b.splice(0, b.length - ENTITY_BUFFER_CAP);
-          if (!__backlogOverflowWarned) {
+          // O(n) compaction (no per-element splice): keep ALL spawns + the
+          // NEWEST non-spawns that fit the REMAINING budget. Two passes so
+          // the non-spawn budget is computed against the FINAL spawn count
+          // (a single reverse pass can't know how many spawns remain ahead
+          // of it). Pass 1: count spawns. Pass 2 (reverse, newest-first):
+          // mark every spawn to keep + the freshest `CAP - spawnCount`
+          // non-spawns. Pass 3 (forward): rebuild in ORIGINAL arrival order
+          // so the install-time replay sees the same interleave. The ring's
+          // array identity (the same `window.__scene3dEntityBacklog` the
+          // drain does `.splice(0)` on) is preserved via in-place rebuild.
+          let __spawnCount = 0;
+          for (let __i = 0; __i < b.length; __i += 1) {
+            if ((b[__i].kind | 0) === 1 /* KIND.SPAWN */) __spawnCount += 1;
+          }
+          // Budget for non-spawns once all spawns are retained. If spawns
+          // alone already meet/exceed the cap (a >512-spawn burst — not
+          // seen in practice), keep zero filler; spawns still all survive
+          // (bounded by the finite zone-entry burst, and the install replay
+          // would dispatch them regardless).
+          const __nonSpawnBudget = Math.max(0, ENTITY_BUFFER_CAP - __spawnCount);
+          const __keep = new Set();
+          let __nonSpawnKept = 0;
+          for (let __i = b.length - 1; __i >= 0; __i -= 1) {
+            const __e = b[__i];
+            if ((__e.kind | 0) === 1 /* KIND.SPAWN */) {
+              __keep.add(__e); // every spawn kept
+            } else if (__nonSpawnKept < __nonSpawnBudget) {
+              __keep.add(__e); // freshest non-spawns up to budget
+              __nonSpawnKept += 1;
+            }
+            // else: oldest non-spawn over budget — drop it.
+          }
+          const __compacted = [];
+          for (let __i = 0; __i < b.length; __i += 1) {
+            if (__keep.has(b[__i])) __compacted.push(b[__i]);
+          }
+          const __overEvicted = __compacted.length < b.length;
+          b.length = 0;
+          for (let __i = 0; __i < __compacted.length; __i += 1) b.push(__compacted[__i]);
+          if (__overEvicted && !__backlogOverflowWarned) {
             __backlogOverflowWarned = true;
             console.warn(
               `[A15-Q1] __scene3dEntityBacklog exceeded ${ENTITY_BUFFER_CAP}; ` +
-              `dropping oldest (3D drain hook never installed — likely 2D mode).`
+              `dropping oldest non-spawn (spawns preserved; 3D drain hook not ` +
+              `installed yet — slow init3D, e.g. quality=ultra, or 2D mode).`
             );
           }
         }
@@ -9006,7 +9068,7 @@ void main() {
           const LONG_JUMP_ON = (() => {
             try {
               return new URLSearchParams(window.location.search)
-                .get("longJump")?.toLowerCase() === "on";
+                .get("longJump")?.toLowerCase() !== "off";
             } catch (_) { return false; }
           })();
           // A14-I4 (W3+ S11, 2026-06-12) — `?jumpParity=on`: the retail jump
@@ -9026,7 +9088,7 @@ void main() {
           const JUMP_PARITY_ON = (() => {
             try {
               return new URLSearchParams(window.location.search)
-                .get("jumpParity")?.toLowerCase() === "on";
+                .get("jumpParity")?.toLowerCase() !== "off";
             } catch (_) { return false; }
           })();
           // Effective only when all four additive exports exist (rides
@@ -10515,7 +10577,7 @@ void main() {
                 // (?castFizzle=on), pending a 1070 eye-test.
                 if (errCode === 0x0402) {
                   try {
-                    if (new URLSearchParams(window.location.search).get("castFizzle") === "on") {
+                    if (new URLSearchParams(window.location.search).get("castFizzle") !== "off") {
                       const em = window.liveScene3d?.entityManager;
                       const lg = (getLocalPlayerGuid?.() ?? 0) >>> 0;
                       if (em && lg && typeof em.cancelCastSequence === "function") {

@@ -687,7 +687,7 @@ const DEFAULT_TRIPLANAR_SHARPNESS = 6.0;
 function readStrictWaterCodesFlag() {
   try {
     return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("strictWaterCodes") === "on";
+      new URLSearchParams(window.location.search).get("strictWaterCodes") !== "off";
   } catch (_) { return false; }
 }
 const TERRAIN_WATER_CODES = new Set(

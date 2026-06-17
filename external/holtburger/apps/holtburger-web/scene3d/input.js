@@ -100,7 +100,7 @@ export function readRetailRunKeysFlag(search) {
         : typeof window !== "undefined" && window.location
         ? window.location.search
         : "";
-    return new URLSearchParams(s).get("retailRunKeys")?.toLowerCase() === "on";
+    return new URLSearchParams(s).get("retailRunKeys")?.toLowerCase() !== "off";
   } catch (_) {
     return false;
   }
@@ -199,7 +199,7 @@ export function readInputFunnelFlag(search) {
         : typeof window !== "undefined" && window.location
         ? window.location.search
         : "";
-    return new URLSearchParams(s).get("inputFunnel")?.toLowerCase() === "on";
+    return new URLSearchParams(s).get("inputFunnel")?.toLowerCase() !== "off";
   } catch (_) {
     return false;
   }

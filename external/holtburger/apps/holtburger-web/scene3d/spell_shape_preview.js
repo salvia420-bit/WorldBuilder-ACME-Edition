@@ -62,7 +62,7 @@ const PROJECTILE_ARC_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("projectileArc")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("projectileArc")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;

@@ -1060,7 +1060,7 @@ function renderAttackControls(bodyEl, state) {
     // byte-identical to pre-F10-3. (?powerMeterSwingDuration=on)
     const useSwingDuration = (() => {
       try {
-        return new URLSearchParams(window.location.search).get("powerMeterSwingDuration") === "on";
+        return new URLSearchParams(window.location.search).get("powerMeterSwingDuration") !== "off";
       } catch (_) { return false; }
     })();
     // F2: when the bar / panel is hidden mid-refill we stop scheduling

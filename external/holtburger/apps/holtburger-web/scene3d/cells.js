@@ -187,7 +187,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   try {
     if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
       envcellFusion =
-        new URLSearchParams(globalThis.location.search).get("envcellFusion") === "1";
+        new URLSearchParams(globalThis.location.search).get("envcellFusion") !== "off";
     }
   } catch (_) {
     envcellFusion = false;

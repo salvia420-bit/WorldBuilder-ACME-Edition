@@ -184,7 +184,7 @@ function readHeadingEaseK() {
 function readRootMotionObjectFlag() {
   try {
     if (typeof window === "undefined" || !window.location) return false;
-    return new URLSearchParams(window.location.search).get("rootMotionObject") === "1";
+    return new URLSearchParams(window.location.search).get("rootMotionObject") !== "off";
   } catch (_) {
     return false;
   }
@@ -339,7 +339,7 @@ const TURN_OMEGA_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("turnOmega")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("turnOmega")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -575,7 +575,7 @@ const TWEEN_CLOCK_DT = (() => {
 const SIGNED_MOTION_SPEED = (() => {
   try {
     return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("signedMotionSpeed")?.toLowerCase() === "on";
+      new URLSearchParams(window.location.search).get("signedMotionSpeed")?.toLowerCase() !== "off";
   } catch (_) {
     return false;
   }
@@ -592,7 +592,7 @@ const SIGNED_MOTION_SPEED = (() => {
 const FULL_BODY_ONE_SHOT = (() => {
   try {
     return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("fullBodyOneShot")?.toLowerCase() === "on";
+      new URLSearchParams(window.location.search).get("fullBodyOneShot")?.toLowerCase() !== "off";
   } catch (_) {
     return false;
   }
@@ -608,7 +608,7 @@ const FULL_BODY_ONE_SHOT = (() => {
 const CAST_SPEED = (() => {
   try {
     return (typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("castSpeed")?.toLowerCase() === "on")
+      new URLSearchParams(window.location.search).get("castSpeed")?.toLowerCase() !== "off")
       ? 2.0 : 1.0;
   } catch (_) {
     return 1.0;
@@ -625,7 +625,7 @@ const CAST_SPEED = (() => {
 const CAST_STATE_MACHINE = (() => {
   try {
     return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("castStateMachine")?.toLowerCase() === "on";
+      new URLSearchParams(window.location.search).get("castStateMachine")?.toLowerCase() !== "off";
   } catch (_) {
     return false;
   }
@@ -661,7 +661,7 @@ const MT_CLASS_FALLBACK_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("mtClassFallback")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("mtClassFallback")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -685,7 +685,7 @@ const IDLE_FIDGET_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("idleFidget")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("idleFidget")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -705,7 +705,7 @@ const PROJECTILE_GRAVITY_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("projectileGravity")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("projectileGravity")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -725,7 +725,7 @@ const BLOCKING_PARTICLE_PARITY_ON = (() => {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search)
-        .get("blockingParticleParity")?.toLowerCase() === "on"
+        .get("blockingParticleParity")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -774,7 +774,7 @@ const DYN_LOD_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
-      new URLSearchParams(window.location.search).get("dynLod")?.toLowerCase() === "on"
+      new URLSearchParams(window.location.search).get("dynLod")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -836,7 +836,7 @@ const SCRIPT_QUEUE_ON = (() => {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search)
-        .get("scriptQueue")?.toLowerCase() === "on"
+        .get("scriptQueue")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -864,7 +864,7 @@ const HOOK_DRAIN_ON = (() => {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search)
-        .get("hookDrain")?.toLowerCase() === "on"
+        .get("hookDrain")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -896,7 +896,7 @@ const MT_QUEUE_ON = (() => {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search)
-        .get("mtQueue")?.toLowerCase() === "on"
+        .get("mtQueue")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -933,7 +933,7 @@ const DEFAULT_SCRIPT_SPAWN_ON = (() => {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search)
-        .get("defaultScriptSpawn")?.toLowerCase() === "on"
+        .get("defaultScriptSpawn")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;

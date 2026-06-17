@@ -42,7 +42,7 @@ const FACE_TURN_TIMEOUT_MS = 800;
 const CAST_FACE_TARGET = (() => {
   try {
     return typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("castFaceTarget") === "on";
+      new URLSearchParams(window.location.search).get("castFaceTarget") !== "off";
   } catch { return false; }
 })();
 
@@ -57,7 +57,7 @@ const CAST_FACE_TARGET = (() => {
 const MELEE_3D_RANGE = (() => {
   try {
     return typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("melee3dRange") === "on";
+      new URLSearchParams(window.location.search).get("melee3dRange") !== "off";
   } catch { return false; }
 })();
 
@@ -74,7 +74,7 @@ const MELEE_3D_RANGE = (() => {
 const SERVER_SWING = (() => {
   try {
     return typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("serverSwing") === "on";
+      new URLSearchParams(window.location.search).get("serverSwing") !== "off";
   } catch { return false; }
 })();
 

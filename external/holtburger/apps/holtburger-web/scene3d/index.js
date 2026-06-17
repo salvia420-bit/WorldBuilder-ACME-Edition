@@ -431,7 +431,7 @@ export async function preInit3D(canvas) {
     try {
       if (typeof window === "undefined") return false;
       return new URLSearchParams(window.location.search)
-        .get("singleDriver") === "on";
+        .get("singleDriver") !== "off";
     } catch (_) { return false; }
   })();
   const singleDriverOn =
@@ -495,7 +495,7 @@ export async function preInit3D(canvas) {
     try {
       if (typeof window === "undefined") return false;
       return new URLSearchParams(window.location.search)
-        .get("syncPhysicsTick") === "on";
+        .get("syncPhysicsTick") !== "off";
     } catch (_) { return false; }
   })();
   // Diag counters for headless acceptance — kept off the hot path (the
@@ -2092,14 +2092,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // current gate / heuristic / root-origin fallback so nothing changes
   // until the flag is set (pending 1070 eye-test). Read once here.
   const wieldHandAttach =
-    new URLSearchParams(window.location.search).get("wieldHandAttach")?.toLowerCase() === "on";
+    new URLSearchParams(window.location.search).get("wieldHandAttach")?.toLowerCase() !== "off";
   // wieldedSpawn (2026-06-11): default-OFF opt-in paired with the wasm-side
   // `?wieldedSpawn=on` gate (synthetic KIND_SPAWN + attach for wielded items
   // with no world presence). JS half: hide a freshly-committed rig whose own
   // attach is parked in `_pendingAttach` so the weapon never flashes at its
   // spawn pose before the async hand-mount lands. Read once here.
   const wieldedSpawn =
-    new URLSearchParams(window.location.search).get("wieldedSpawn")?.toLowerCase() === "on";
+    new URLSearchParams(window.location.search).get("wieldedSpawn")?.toLowerCase() !== "off";
   const entityManager = new EntityManager(scene3dForBuilders, wasmExports);
   // Thread the flag onto the manager so attachChildToParent /
   // _resolveHoldingLocation can read it without a second URL parse.
