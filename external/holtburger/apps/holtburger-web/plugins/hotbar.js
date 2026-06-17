@@ -1076,6 +1076,22 @@ export function mount(ctx) {
     const client = ctx?.client ?? window.__pluginClient;
     client?.events?.on?.("playerInventoryChanged", pruneStaleItemBindings);
     client?.events?.on?.("landblockChanged", () => { inWorld = true; });
+    // HUD rec #84 (2026-06-16): toggle the .cooldown-active class on
+    // every hotbar slot whenever the wasm side flags a shared-cooldown
+    // change. The radial overlay CSS (line 218 / .cooldown-active
+    // ::after at line 223) is already in place — the TODO at line
+    // 219-222 specifically called out the missing event wiring.
+    // Future refinement: per-slot cooldown gating using
+    // handle.playerEnchantments() filtered by COOLDOWN bit (0x1000000)
+    // matched against each slot's bound spell-id.
+    client?.events?.on?.("sharedCooldownChanged", (e) => {
+      const active = ((e?.activeCount ?? e?.detail?.activeCount) ?? 0) >>> 0;
+      const overlay = document.getElementById(OVERLAY_ID);
+      if (!overlay) return;
+      for (const slot of overlay.querySelectorAll(".hb-hotbar-slot")) {
+        slot.classList.toggle("cooldown-active", active > 0);
+      }
+    });
   } catch (_) {}
   const reconcileTimer = setInterval(() => {
     reconcileAttempts++;

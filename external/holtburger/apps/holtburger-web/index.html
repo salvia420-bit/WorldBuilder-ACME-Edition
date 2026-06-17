@@ -10717,6 +10717,23 @@ void main() {
                 if (typeof window.__renderLoginStatusBanner === "function") {
                   window.__renderLoginStatusBanner();
                 }
+              } else if (evt.kind === 58) {
+                // HUD rec #84 (2026-06-16) — SharedCooldownsUpdated.
+                // Wasm flagged a PlayerEnchantmentsUpdated tick (incl.
+                // adds, refreshes, expiries, dispels). u32Payload
+                // carries the active-cooldown count for at-a-glance
+                // use. Re-broadcast on the plugin bus as the
+                // Chorizite-style `sharedCooldownChanged` event so
+                // hotbar / vitals-hud / future cooldown HUDs can
+                // subscribe without re-filtering enchantments on every
+                // kind=8 stats fire. Mirrors api.js #12
+                // (Character.OnSharedCooldownChanged, previously
+                // MISSING per the rec's audit).
+                if (window.__pluginClient?.events) {
+                  window.__pluginClient.events.emit("sharedCooldownChanged", {
+                    activeCount: (evt.u32Payload ?? 0) >>> 0,
+                  });
+                }
               } else if (evt.kind === 56) {
                 // A14-I4 (W3+ S11, ?jumpParity=on) — jump refusal text.
                 // `u32Payload` = the retail refusal code (jump_is_allowed /

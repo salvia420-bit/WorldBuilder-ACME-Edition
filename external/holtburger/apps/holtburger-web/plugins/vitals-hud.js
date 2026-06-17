@@ -458,11 +458,27 @@ export function mount(ctx) {
     client.events.on("vitalChangedStamina", onStamina);
     client.events.on("vitalChangedMana", onMana);
 
+    // HUD rec #84 (2026-06-16): cooldown-active class hook. Wasm emits
+    // kind=58 SharedCooldownsUpdated whenever the player's enchantment
+    // table is republished (incl. mana/stamina spell cooldowns).
+    // index.html re-broadcasts as `sharedCooldownChanged` on the
+    // plugin bus. We toggle a body-level data attribute so per-vital
+    // CSS can dim the bars while the global cooldown is active.
+    // Future: thread per-spell cooldown ids in via
+    // `handle.playerEnchantments()` and the COOLDOWN bit (0x1000000)
+    // for fine-grained spell-row overlays.
+    const onSharedCooldown = (e) => {
+      const active = ((e?.activeCount ?? e?.detail?.activeCount) ?? 0) >>> 0;
+      overlay.dataset.cooldownActive = active > 0 ? "1" : "0";
+    };
+    client.events.on("sharedCooldownChanged", onSharedCooldown);
+
     unsubscribe = () => {
       client.events.off("playerStatsUpdated", render);
       client.events.off("vitalChangedHealth", onHealth);
       client.events.off("vitalChangedStamina", onStamina);
       client.events.off("vitalChangedMana", onMana);
+      client.events.off("sharedCooldownChanged", onSharedCooldown);
     };
     render();
     return true;

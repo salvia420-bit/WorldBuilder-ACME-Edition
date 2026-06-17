@@ -17524,6 +17524,19 @@ const CLIENT_EVENT_KIND_JUMP_REFUSED: u32 = 56;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_SERVER_INFO: u32 = 57;
 
+/// `kind = 58` — SharedCooldownsUpdated. HUD rec #84 (2026-06-16):
+/// emitted alongside the existing kind=8 stats refresh whenever the
+/// local player's enchantment table changes AND at least one entry
+/// carries the `EnchantmentTypeFlags::COOLDOWN` bit (`0x1000000`).
+/// JS-side: index.html re-broadcasts as the `sharedCooldownChanged`
+/// plugin-bus event so hotbar / vitals-hud can refresh their
+/// cooldown overlays without re-filtering the full enchantment list
+/// on every kind=8 fire. Mirrors Chorizite
+/// `Character.OnSharedCooldownChanged` (api.js #12, previously
+/// MISSING). String/u32 payloads unused.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_SHARED_COOLDOWNS: u32 = 58;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -31994,6 +32007,10 @@ async fn recv_loop(
                     // entity_updates push) that double-handling would risk
                     // regressing.
                     let mut stats_changed = false;
+                    // HUD rec #84 (2026-06-16): set when
+                    // PlayerEnchantmentsUpdated fires, gates the kind=58
+                    // SharedCooldownsUpdated emit below.
+                    let mut cooldowns_changed = false;
                     let mut inventory_changed = false;
                     let mut fellowship_changed = false;
                     // HUD rec #48: defaults to FellowUpdateType::Full (1)
@@ -32341,9 +32358,23 @@ async fn recv_loop(
                                 WorldEvent::AttributeUpdated(_)
                                 | WorldEvent::SkillUpdated(_)
                                 | WorldEvent::LevelInfoUpdated(_)
-                                | WorldEvent::DerivedStatsUpdated(_)
-                                | WorldEvent::PlayerEnchantmentsUpdated { .. } => {
+                                | WorldEvent::DerivedStatsUpdated(_) => {
                                     stats_changed = true;
+                                }
+                                // HUD rec #84 (2026-06-16): keep the
+                                // kind=8 stats refresh wired (existing
+                                // behavior) AND additionally flag a
+                                // kind=58 SharedCooldownsUpdated emit
+                                // whenever the COOLDOWN bit
+                                // (`EnchantmentTypeFlags::COOLDOWN =
+                                // 0x1000000`) appears in the refreshed
+                                // enchantment list. JS hotbar / vitals-
+                                // hud subscribe to a narrower bus event
+                                // instead of re-filtering on every
+                                // stats tick.
+                                WorldEvent::PlayerEnchantmentsUpdated { .. } => {
+                                    stats_changed = true;
+                                    cooldowns_changed = true;
                                 }
                                 // F10-1: a tracked entity's health fraction
                                 // changed (QueryHealth response, or a damage
@@ -33075,6 +33106,29 @@ async fn recv_loop(
                             kind: CLIENT_EVENT_KIND_PLAYER_STATS_UPDATED,
                             string_payload: None,
                             u32_payload: None,
+                            u32_payload_2: None,
+                            f32_payload: None,
+                        });
+                    }
+                    // HUD rec #84 (2026-06-16): kind=58
+                    // SharedCooldownsUpdated. Fires whenever
+                    // PlayerEnchantmentsUpdated lands (cooldown or not)
+                    // so hotbar / vitals-hud get a narrow signal — the
+                    // payload-less variant lets them re-pull via
+                    // `playerEnchantments()` and filter on the COOLDOWN
+                    // bit themselves. `u32_payload` carries the cooldown
+                    // count for at-a-glance "anything active right now".
+                    if cooldowns_changed {
+                        const COOLDOWN_BIT: u32 = 0x1000000;
+                        let count = latest_enchantments
+                            .borrow()
+                            .iter()
+                            .filter(|e| (e.stat_mod_type & COOLDOWN_BIT) != 0)
+                            .count() as u32;
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_SHARED_COOLDOWNS,
+                            string_payload: None,
+                            u32_payload: Some(count),
                             u32_payload_2: None,
                             f32_payload: None,
                         });
