@@ -62,7 +62,7 @@
 | 53 | med | D14-examination-identify | `examine-target.js:644-784` | Surface AppraisalProfile success_flag for skill-gated visibility | 9129ee07 |
 | 54 | med | D14-examination-identify | `examine-target.js:631-784` | Implement wield requirements rendering | fd51c741 |
 | 55 | med | D14-examination-identify | `examine-target.js:484-554, 956-957` | Distinguish creature vs paperdoll-only rendering | 53cba3d0 |
-| 56 | med | D16-house-container-lifestone | `lifestone-popup.js:228-252 (button row DOM)` | Add Sanctuary location display to lifestone-popup UI | defer-ace |
+| 56 | med | D16-house-container-lifestone | `lifestone-popup.js:228-252 (button row DOM)` | Add Sanctuary location display to lifestone-popup UI | f28ec696 |
 | 59 | med | D17-status-indicators-and-floaty-chrome | `ac_window_position.js:53-169 (attachWindowPosition signature extension) + 82-125` | Implement window resize via bottom/right edge drag handles | d7c7b867 |
 | 63 | med | E01-font-system | `ui/ac_font.js:438-478 _drawGlyphs, 232-245 shadow render block` | Apply baseline offset + border pixels to glyph positioning | b1afca88 |
 | 65 | med | E02-layout-system-states | `tests/layout_state_inheritance.test.cjs (new), ui/ac_layout.js (conditional casc` | Validate state pass-to-children cascade in multi-level hierarchies | 3dc802cf |
