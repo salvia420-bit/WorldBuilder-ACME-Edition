@@ -1845,6 +1845,16 @@ function doMount(parentEl, _ctx) {
         if (typeof handle?.useObject === "function") {
           try { handle.useObject(guid); }
           catch (e) { console.warn("[inv-click] useObject failed:", e); }
+          // HUD rec #180 (2026-06-16): writable items (books, signs,
+          // shop journals) need an explicit bookData follow-up — ACE's
+          // Use handler acks the action but doesn't auto-send the
+          // BookDataResponse. Detect via the ItemType WRITABLE bit
+          // (0x00002000) on the inventory snapshot row.
+          try {
+            const ITEM_TYPE_WRITABLE = 0x00002000;
+            const isBook = (((item?.itemType ?? itemTypeBits) >>> 0) & ITEM_TYPE_WRITABLE) !== 0;
+            if (isBook && handle.bookData) handle.bookData(guid);
+          } catch (_) { /* best-effort */ }
           return;
         }
         return;

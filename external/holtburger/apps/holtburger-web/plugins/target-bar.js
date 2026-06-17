@@ -446,11 +446,27 @@ function build() {
   useBtn.addEventListener("click", () => {
     const handle = window.__sessionHandle;
     if (!handle?.useObject || !state.selectedGuid) return;
+    const guid = state.selectedGuid >>> 0;
     try {
-      handle.useObject(state.selectedGuid >>> 0);
+      handle.useObject(guid);
     } catch (e) {
       console.warn("[target-bar] useObject failed", e);
     }
+    // HUD rec #180 (2026-06-16): if the target is a book (object-
+    // description flag BOOK = 0x100), fan out a bookData() request so
+    // the book-panel auto-opens once ACE's BookDataResponse lands.
+    // ACE's Use handler on a book object only sends the action ack,
+    // not the BookData payload — without this follow-up the book
+    // overlay only opens from the debug entry. Cheap to issue on
+    // non-books (server ignores BookData on non-book GUIDs).
+    try {
+      const em = window.liveScene3d?.entityManager;
+      const ent = em?.entityMap?.get?.(guid);
+      const objDescFlags = ((ent?.meta?.objDescFlags ?? ent?.objDescFlags) ?? 0) >>> 0;
+      if ((objDescFlags & 0x100) !== 0 && handle.bookData) {
+        handle.bookData(guid);
+      }
+    } catch (_) { /* book auto-open is best-effort */ }
   });
   action.appendChild(useBtn);
   refs.useBtn = useBtn;
