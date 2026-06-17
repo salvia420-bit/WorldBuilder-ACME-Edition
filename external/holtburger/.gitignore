@@ -1,6 +1,14 @@
 # Rust
 target/
 
+# Node deps. The root `node_modules/` rule is defeated here by the
+# external/* + !external/holtburger/ re-include in the top-level
+# .gitignore, so it must be restated within this subtree. No trailing
+# slash: these are often symlinks to scratch (e.g. scripts/multi-agent/
+# node_modules -> /mnt/.../claude-scratch/...), which git treats as
+# non-directory entries that `node_modules/` would not match.
+node_modules
+
 # Dats
 dats/*
 !dats/README.md
