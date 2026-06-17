@@ -127,7 +127,7 @@
 | 128 | low | E15-settings-persistence-options | `plugins/chat-panel.js, ac_character_options.js` | Move chat channel muting UI into chat-panel affordance (not just Character tab) | spec-ambiguous |
 | 130 | low | E18-tradeskill-spell-research-salvage | `plugins/salvage-panel.js:~450-750` | Add salvage operation history panel (optional enhancement) | skip |
 | 202 | low | D09-vitals-and-attributes-streams | `plugins/vitals-hud.js:226-250 (enhance applyVitalDelta to use oldValue for anima` | Verify vital event oldValue field is being used for old-value animation | cc636814 |
-| 203 | low | E03-sprite-icon-pipeline | `texture.rs:519-527` | Implement DXT2/DXT4 alpha interpolation decoders | defer-wasm |
+| 203 | low | E03-sprite-icon-pipeline | `texture.rs:519-527` | Implement DXT2/DXT4 alpha interpolation decoders | 487a13f1 |
 | 204 | low | E03-sprite-icon-pipeline | `ac_icon_cache.js:34-73, ac_palette.js:47-86, ac_dye_preview.js:72-200` | Add diagnostic hooks for icon/palette decode failures | 36dcb3a8 |
 | 206 | low | E12-login-character-select-creation | `character-creation.js:1190-1201 (slider input/change events), update banner on i` | Implement live attribute-budget countdown during slider drag | fable-skip |
 | 207 | low | E15-settings-persistence-options | `options-panel.js:785-795, 970-1003, ui/graphics_settings.js` | Decouple graphics settings from options-panel and unify Apply/Cancel semantics | skip |

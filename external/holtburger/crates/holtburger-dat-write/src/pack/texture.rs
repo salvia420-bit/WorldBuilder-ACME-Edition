@@ -63,8 +63,13 @@ fn fixed_bytes_per_pixel(format: SurfacePixelFormat) -> Option<usize> {
         | SurfacePixelFormat::R5G6B5
         | SurfacePixelFormat::A4R4G4B4 => Some(2),
         // Block-compressed / JPEG / unknown — variable length, verbatim.
+        // HUD rec #203 (2026-06-16): DXT2 + DXT4 join the block-
+        // compressed family alongside DXT1/DXT3/DXT5; same variable-
+        // length verbatim handling.
         SurfacePixelFormat::Dxt1
+        | SurfacePixelFormat::Dxt2
         | SurfacePixelFormat::Dxt3
+        | SurfacePixelFormat::Dxt4
         | SurfacePixelFormat::Dxt5
         | SurfacePixelFormat::CustomRawJpeg
         | SurfacePixelFormat::Unknown
