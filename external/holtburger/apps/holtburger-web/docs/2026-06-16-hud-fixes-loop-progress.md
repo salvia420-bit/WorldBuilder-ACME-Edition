@@ -241,7 +241,7 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 | 180 | med | D15-journal-contracts-book | `plugins/book-panel.js:562–576 (current manual entry point), src/lib.rs (entity-u` | Wire 'Use' book interaction to auto-open book overlay | eb6debff |
 | 181 | med | D15-journal-contracts-book | `plugins/lore-panel.js (new file), acclient.h:56020 (gmPageListUI struct ref), sr` | Port lore entry catalog UI (gmPageListUI) | defer-ace |
 | 187 | med | E02-layout-system-states | `holtburger-web/src/lib.rs (fetch_layout return shape), ui/ac_layout.js (diag hoo` | Add diagnostics telemetry for G3 emission success rate | d6279d68 |
-| 103 | low | D11-fellowship-allegiance | `fellowship-panel.js:1412-1420` | Expose departed member names in fellowship standalone overlay | defer-wasm |
+| 103 | low | D11-fellowship-allegiance | `fellowship-panel.js:1412-1420` | Expose departed member names in fellowship standalone overlay | 934572df |
 
 ## Deferred — needs DAT/asset extraction
 
