@@ -131,7 +131,7 @@
 | 204 | low | E03-sprite-icon-pipeline | `ac_icon_cache.js:34-73, ac_palette.js:47-86, ac_dye_preview.js:72-200` | Add diagnostic hooks for icon/palette decode failures | 36dcb3a8 |
 | 206 | low | E12-login-character-select-creation | `character-creation.js:1190-1201 (slider input/change events), update banner on i` | Implement live attribute-budget countdown during slider drag | fable-skip |
 | 207 | low | E15-settings-persistence-options | `options-panel.js:785-795, 970-1003, ui/graphics_settings.js` | Decouple graphics settings from options-panel and unify Apply/Cancel semantics | skip |
-| 208 | low | E15-settings-persistence-options | `ac_window_position.js:53-231, ACE Player_Character.cs, holtburger-common charact` | Implement window position server sync (PlayerModule::Chat-Window-Option replacement in ACE) | defer-ace |
+| 208 | low | E15-settings-persistence-options | `ac_window_position.js:53-231, ACE Player_Character.cs, holtburger-common charact` | Implement window position server sync (PlayerModule::Chat-Window-Option replacement in ACE) | defer-genuine |
 
 ## Pass 1 — done (commit)
 
