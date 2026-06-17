@@ -17579,6 +17579,15 @@ const CLIENT_EVENT_KIND_SERVER_INFO: u32 = 57;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_SHARED_COOLDOWNS: u32 = 58;
 
+/// `kind = 59` — LocalizationReceived. HUD rec #68 (2026-06-16): ACE's
+/// `DddInterrogation` (0xF7E5) carries the server's language context during
+/// the DDD handshake (before CharacterList). `u32_payload` =
+/// `name_rule_language`, `u32_payload_2` = `servers_region`. JS reads
+/// [`SessionHandle::localization`] on this drain to seed
+/// `window.__acLocalization` before string-table preloads run.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_LOCALIZATION: u32 = 59;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -23843,6 +23852,40 @@ impl ServerInfoJs {
     pub fn max_connections(&self) -> i32 { self.max_connections }
 }
 
+/// HUD rec #68 (2026-06-16): the server's language context from
+/// `GameMessage::DddInterrogation` (opcode 0xF7E5). ACE sends this during the
+/// DDD handshake (before CharacterList) carrying `name_rule_language` +
+/// `servers_region` + the supported-languages list. `lang_id` is a global
+/// server config (0 = English on English ACE installs), not a per-account
+/// preference. JS reads this to seed `window.__acLocalization` (numericLocale /
+/// currencyFormat are JS-side derivations from `lang_id`, not server-supplied).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct LocalizationJs {
+    lang_id: u32,
+    servers_region: u32,
+    product_id: u32,
+    supported_languages: Vec<u32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl LocalizationJs {
+    /// `name_rule_language` — the server's language id (0 = English).
+    #[wasm_bindgen(getter, js_name = langId)]
+    pub fn lang_id(&self) -> u32 { self.lang_id }
+    /// `servers_region` — the server's region code.
+    #[wasm_bindgen(getter, js_name = serversRegion)]
+    pub fn servers_region(&self) -> u32 { self.servers_region }
+    /// `product_id` — the client product id ACE expects.
+    #[wasm_bindgen(getter, js_name = productId)]
+    pub fn product_id(&self) -> u32 { self.product_id }
+    /// Informational list of language ids the server advertises support for.
+    #[wasm_bindgen(getter, js_name = supportedLanguages)]
+    pub fn supported_languages(&self) -> Vec<u32> { self.supported_languages.clone() }
+}
+
 /// HUD rec #56 (2026-06-16): the player's current Sanctuary (lifestone
 /// bind) location. Surfaced from the already-arriving PrivateUpdatePosition
 /// (`PositionType::Sanctuary`, opcode 0x02DB) overlay, which the wasm recv
@@ -24018,6 +24061,10 @@ pub struct SessionHandle {
     /// snapshot, refreshed by the recv loop on each Sanctuary
     /// PrivateUpdatePosition. JS reads via [`SessionHandle::player_sanctuary`].
     latest_sanctuary: std::rc::Rc<std::cell::RefCell<Option<SanctuaryJs>>>,
+    /// HUD rec #68 (2026-06-16): server language context from the
+    /// DddInterrogation handshake packet. JS reads via
+    /// [`SessionHandle::localization`].
+    latest_localization: std::rc::Rc<std::cell::RefCell<Option<LocalizationJs>>>,
     account_name: String,
     /// Phase 4 step 2a.5: shared catalog slot, populated asynchronously
     /// in the background. `None` until the catalog HBA fetch completes
@@ -25016,6 +25063,15 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = playerSanctuary)]
     pub fn player_sanctuary(&self) -> Option<SanctuaryJs> {
         self.latest_sanctuary.borrow().clone()
+    }
+
+    /// HUD rec #68 (2026-06-16): the server's language context (langId,
+    /// serversRegion, supportedLanguages) from the DddInterrogation
+    /// handshake, or `None` if it has not arrived yet. JS seeds
+    /// `window.__acLocalization` from this on the kind=59 drain.
+    #[wasm_bindgen(js_name = localization)]
+    pub fn localization(&self) -> Option<LocalizationJs> {
+        self.latest_localization.borrow().clone()
     }
 
     /// HUD rec #165 (E12-login-character-select-creation): request
@@ -29572,6 +29628,9 @@ pub async fn start_session(
     // HUD rec #56 (2026-06-16): Sanctuary bind snapshot.
     let latest_sanctuary: std::rc::Rc<std::cell::RefCell<Option<SanctuaryJs>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
+    // HUD rec #68 (2026-06-16): server language context (DddInterrogation).
+    let latest_localization: std::rc::Rc<std::cell::RefCell<Option<LocalizationJs>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
     let catalog: std::rc::Rc<
         std::cell::RefCell<Option<std::sync::Arc<holtburger_content::CharacterGenCatalog>>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -29858,6 +29917,8 @@ pub async fn start_session(
         let latest_server_info_inner = latest_server_info.clone();
         // HUD rec #56 (2026-06-16) — clone for recv_loop param.
         let latest_sanctuary_inner = latest_sanctuary.clone();
+        // HUD rec #68 (2026-06-16) — clone for recv_loop param.
+        let latest_localization_inner = latest_localization.clone();
         let entity_updates = entity_updates.clone();
         let world_bootstrap = world_bootstrap.clone();
         let latest_stats = latest_stats.clone();
@@ -29942,6 +30003,8 @@ pub async fn start_session(
                 latest_server_info_inner,
                 // === HUD rec #56 — sanctuary bind (2026-06-16) ===
                 latest_sanctuary_inner,
+                // === HUD rec #68 — localization (2026-06-16) ===
+                latest_localization_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
@@ -30017,6 +30080,7 @@ pub async fn start_session(
         character_list,
         latest_server_info,
         latest_sanctuary,
+        latest_localization,
         account_name,
         catalog,
         entity_updates,
@@ -31938,6 +32002,9 @@ async fn recv_loop(
     // HUD rec #56 (2026-06-16): shared sanctuary snapshot — recv loop
     // overwrites on each Sanctuary PrivateUpdatePosition.
     latest_sanctuary: std::rc::Rc<std::cell::RefCell<Option<SanctuaryJs>>>,
+    // HUD rec #68 (2026-06-16): shared localization snapshot — recv loop
+    // overwrites on DddInterrogation.
+    latest_localization: std::rc::Rc<std::cell::RefCell<Option<LocalizationJs>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
@@ -36343,6 +36410,39 @@ async fn recv_loop(
                                 string_payload: Some(data.name.clone()),
                                 u32_payload: Some(data.current_connections),
                                 u32_payload_2: Some(data.max_connections as u32),
+                                f32_payload: None,
+                            });
+                        }
+                        GameMessage::DddInterrogation(data) => {
+                            // HUD rec #68 (2026-06-16): ACE sends the server's
+                            // language context (name_rule_language +
+                            // servers_region + supported_languages) during the
+                            // DDD handshake, before CharacterList. Stash it +
+                            // signal JS with kind=59 so window.__acLocalization
+                            // is seeded before string-table preloads run.
+                            //
+                            // NOTE: we deliberately do NOT send
+                            // DddInterrogationResponse here. The web login
+                            // handshake already completes without it (ACE does
+                            // not block on the DDD response in this flow — this
+                            // arm was previously the `_ => {}` fallthrough and
+                            // login worked); the native core Client models the
+                            // echo at holtburger-core messages.rs. Adding an
+                            // unvalidated wire send to the working login
+                            // handshake is out of scope per [Keep ACE vanilla]
+                            // + can't-validate-without-1070.
+                            let snapshot = LocalizationJs {
+                                lang_id: data.name_rule_language,
+                                servers_region: data.servers_region,
+                                product_id: data.product_id,
+                                supported_languages: data.supported_languages.clone(),
+                            };
+                            *latest_localization.borrow_mut() = Some(snapshot);
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_LOCALIZATION,
+                                string_payload: None,
+                                u32_payload: Some(data.name_rule_language),
+                                u32_payload_2: Some(data.servers_region),
                                 f32_payload: None,
                             });
                         }

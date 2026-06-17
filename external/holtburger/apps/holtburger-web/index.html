@@ -2142,6 +2142,17 @@
             })
             .catch((err) => console.warn("[ac-font] preload failed:", err));
 
+          // HUD rec #68 — localization-ready gate. Resolved on the kind=59
+          // LocalizationReceived drain (below) once DddInterrogation lands.
+          // Future per-language string loads can `await
+          // window.__acLocalizationReady` before lookups. Created once here so
+          // it exists before the handshake fires kind=59.
+          if (!window.__acLocalizationReady) {
+            window.__acLocalizationReady = new Promise((resolve) => {
+              window.__resolveAcLocalizationReady = resolve;
+            });
+          }
+
           // HUD rec #154 — preload the UI_Options StringTable (0x23000004),
           // the default table gmConfigUI button/label StringInfos resolve
           // against (via ac_layout.js resolveStringInfo). Fire-and-forget so
@@ -10743,6 +10754,56 @@ void main() {
                   window.__pluginClient.events.emit("sharedCooldownChanged", {
                     activeCount: (evt.u32Payload ?? 0) >>> 0,
                   });
+                }
+              } else if (evt.kind === 59) {
+                // HUD rec #68 (2026-06-16) — LocalizationReceived. ACE's
+                // DddInterrogation (0xF7E5) carried the server language
+                // context; wasm stashed a localization() snapshot. Seed
+                // window.__acLocalization with langId/region plus the JS-side
+                // locale derivations: numericLocale + currencyFormat come from
+                // langId via a static BCP-47 table (ACE has no per-account
+                // currency/format preference — these are pure client
+                // derivations), then resolve __acLocalizationReady so panels
+                // can await locale context. langId is a global server config
+                // (0 = English on English ACE installs), not per-character.
+                try {
+                  const loc = handle.localization?.() ?? null;
+                  const langId = (evt.u32Payload ?? loc?.langId ?? 0) >>> 0;
+                  const region = (evt.u32Payload2 ?? loc?.serversRegion ?? 0) >>> 0;
+                  // AC name_rule_language convention: 0 English, 1 French,
+                  // 2 German, 3 Spanish, 4 Italian, 5 Portuguese, 6 Korean,
+                  // 7 Chinese, 8 Japanese. pyreal (₱) is the universal AC
+                  // currency symbol; only the numeric grouping differs.
+                  const LANG_ID_TO_LOCALE = {
+                    0: { code: "en-US", numericLocale: { decimal: ".", thousands: "," } },
+                    1: { code: "fr-FR", numericLocale: { decimal: ",", thousands: " " } },
+                    2: { code: "de-DE", numericLocale: { decimal: ",", thousands: "." } },
+                    3: { code: "es-ES", numericLocale: { decimal: ",", thousands: "." } },
+                    4: { code: "it-IT", numericLocale: { decimal: ",", thousands: "." } },
+                    5: { code: "pt-BR", numericLocale: { decimal: ",", thousands: "." } },
+                    6: { code: "ko-KR", numericLocale: { decimal: ".", thousands: "," } },
+                    7: { code: "zh-CN", numericLocale: { decimal: ".", thousands: "," } },
+                    8: { code: "ja-JP", numericLocale: { decimal: ".", thousands: "," } },
+                  };
+                  const locale = LANG_ID_TO_LOCALE[langId] ?? LANG_ID_TO_LOCALE[0];
+                  window.__acLocalization = {
+                    langId,
+                    region,
+                    productId: (loc?.productId ?? 0) >>> 0,
+                    supportedLangs: loc?.supportedLanguages ? Array.from(loc.supportedLanguages) : [],
+                    code: locale.code,
+                    numericLocale: locale.numericLocale,
+                    currencyFormat: { symbol: "₱", position: "suffix" },
+                  };
+                  if (window.__pluginClient?.events) {
+                    window.__pluginClient.events.emit("localizationReady", window.__acLocalization);
+                  }
+                  if (typeof window.__resolveAcLocalizationReady === "function") {
+                    window.__resolveAcLocalizationReady(window.__acLocalization);
+                    window.__resolveAcLocalizationReady = null;
+                  }
+                } catch (e) {
+                  console.warn("[hud rec#68] localization drain failed:", e);
                 }
               } else if (evt.kind === 56) {
                 // A14-I4 (W3+ S11, ?jumpParity=on) — jump refusal text.
