@@ -23843,6 +23843,149 @@ impl ServerInfoJs {
     pub fn max_connections(&self) -> i32 { self.max_connections }
 }
 
+/// HUD rec #56 (2026-06-16): the player's current Sanctuary (lifestone
+/// bind) location. Surfaced from the already-arriving PrivateUpdatePosition
+/// (`PositionType::Sanctuary`, opcode 0x02DB) overlay, which the wasm recv
+/// loop reads directly — that packet stays un-routed to the world handler
+/// (`should_route_message_to_world`), so there is no `world.player` overlay
+/// to read; the snapshot is built from the packet's `WorldPosition`.
+///
+/// `is_bound` is false until the first bind/recall echo lands (ACE does not
+/// proactively re-send the overlay on login, matching its
+/// YouDoNotHaveASanctuary semantics). `town_name` resolves via a nearest-
+/// landblock lookup against the 41 retail town centres; `None` for
+/// wilderness / dungeon / off-grid binds (~half of locations), which render
+/// with raw coordinates instead.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct SanctuaryJs {
+    is_bound: bool,
+    lat: f32,
+    lon: f32,
+    alt: f32,
+    landblock_id: u32,
+    formatted: String,
+    town_name: Option<String>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SanctuaryJs {
+    /// True once a bind/recall echo has populated the Sanctuary overlay.
+    #[wasm_bindgen(getter, js_name = isBound)]
+    pub fn is_bound(&self) -> bool { self.is_bound }
+    /// Map latitude (North positive). 0.0 for indoor binds.
+    #[wasm_bindgen(getter)]
+    pub fn lat(&self) -> f32 { self.lat }
+    /// Map longitude (East positive). 0.0 for indoor binds.
+    #[wasm_bindgen(getter)]
+    pub fn lon(&self) -> f32 { self.lon }
+    /// Altitude (Z). 0.0 for indoor binds.
+    #[wasm_bindgen(getter)]
+    pub fn alt(&self) -> f32 { self.alt }
+    /// Packed landblock id of the bind location.
+    #[wasm_bindgen(getter, js_name = landblockId)]
+    pub fn landblock_id(&self) -> u32 { self.landblock_id }
+    /// Pre-formatted coordinate string, e.g. "65.5N, 30.3E, 12.0Z" or
+    /// "Indoors [860201AD]" — ACE-canonical formatting via
+    /// `WorldCoordinates::to_string_with_precision(1)`.
+    #[wasm_bindgen(getter)]
+    pub fn formatted(&self) -> String { self.formatted.clone() }
+    /// Nearest retail town name, or `None` for off-grid binds.
+    #[wasm_bindgen(getter, js_name = townName)]
+    pub fn town_name(&self) -> Option<String> { self.town_name.clone() }
+}
+
+/// HUD rec #56 — retail town landblock centres `(lbX, lbY, name)`, baked from
+/// `town_kits/index.json` (version 1.0, 41 towns). Static game data — retail
+/// landblock coordinates do not change across builds. Used by
+/// [`nearest_town_name`] to label a Sanctuary bind with a human-readable town.
+#[cfg(target_arch = "wasm32")]
+const TOWN_LUT: &[(u8, u8, &str)] = &[
+    (149, 113, "Al-Arqas"),
+    (172, 79, "Al-Jalima"),
+    (176, 159, "Arwic"),
+    (162, 56, "Ayan Baqur"),
+    (210, 68, "Baishi"),
+    (166, 150, "Cragstone"),
+    (91, 156, "Danby's Outpost"),
+    (206, 149, "Eastham"),
+    (37, 129, "Fort Tethana"),
+    (162, 164, "Glenden Wood"),
+    (43, 181, "Greenspire"),
+    (231, 77, "Hebian-To"),
+    (170, 179, "Holtburg"),
+    (186, 23, "Kara"),
+    (158, 68, "Khayyaban"),
+    (233, 34, "Kryst"),
+    (219, 59, "Lin"),
+    (191, 128, "Lytelthorpe"),
+    (242, 34, "MacNiall's Freehold"),
+    (230, 50, "Mayoi"),
+    (229, 61, "Nanto"),
+    (149, 214, "Neydisa"),
+    (73, 182, "Plateau Village"),
+    (151, 34, "Qalaba'r"),
+    (24, 180, "Redspire"),
+    (200, 140, "Rithwic"),
+    (152, 124, "Samsur"),
+    (50, 217, "Sanamar"),
+    (199, 95, "Sawato"),
+    (218, 85, "Shoushi"),
+    (39, 235, "Silyun"),
+    (100, 213, "Stonehold"),
+    (30, 182, "Timaru"),
+    (247, 93, "Tou-Tou"),
+    (134, 109, "Tufa"),
+    (162, 96, "Uziz"),
+    (63, 50, "Wai Jhou"),
+    (147, 75, "Xarabydun"),
+    (180, 112, "Yanshi"),
+    (126, 100, "Yaraq"),
+    (128, 143, "Zaikhal"),
+];
+
+/// HUD rec #56 — resolve the nearest retail town to a packed landblock id.
+/// Returns the closest town whose centre landblock is within Chebyshev
+/// distance 1 of the bind landblock; `None` for wilderness / dungeon /
+/// off-grid binds, which then render with raw coordinates.
+#[cfg(target_arch = "wasm32")]
+fn nearest_town_name(landblock_id: u32) -> Option<String> {
+    let lb_x = ((landblock_id >> 24) & 0xFF) as i32;
+    let lb_y = ((landblock_id >> 16) & 0xFF) as i32;
+    let mut best: Option<(i32, &'static str)> = None;
+    for &(tx, ty, name) in TOWN_LUT {
+        let d = (tx as i32 - lb_x).abs().max((ty as i32 - lb_y).abs());
+        if d <= 1 && best.map_or(true, |(bd, _)| d < bd) {
+            best = Some((d, name));
+        }
+    }
+    best.map(|(_, name)| name.to_string())
+}
+
+/// HUD rec #56 — build a [`SanctuaryJs`] snapshot from a bind `WorldPosition`.
+#[cfg(target_arch = "wasm32")]
+fn build_sanctuary_js(pos: &holtburger_common::position::WorldPosition) -> SanctuaryJs {
+    use holtburger_common::position::WorldCoordinates;
+    let landblock_id = u32::from(pos.landblock_id);
+    let coords = pos.to_world_coords();
+    let formatted = coords.to_string_with_precision(1);
+    let (lat, lon, alt) = match coords {
+        WorldCoordinates::Outdoor { lat, lon, alt } => (lat, lon, alt),
+        WorldCoordinates::Indoor { .. } => (0.0f32, 0.0f32, 0.0f32),
+    };
+    SanctuaryJs {
+        is_bound: true,
+        lat,
+        lon,
+        alt,
+        landblock_id,
+        formatted,
+        town_name: nearest_town_name(landblock_id),
+    }
+}
+
 /// Live wasm-side proxy for an AC session connected via WS to ACE.
 /// Constructed by [`start_session`] once the handshake reaches
 /// `CharacterList`. The Session itself lives inside the `spawn_local`
@@ -23871,6 +24014,10 @@ pub struct SessionHandle {
     /// `GameMessage::ServerName`. `None` until the post-login handshake
     /// arrives; refreshed if ACE re-sends (rare).
     latest_server_info: std::rc::Rc<std::cell::RefCell<Option<ServerInfoJs>>>,
+    /// HUD rec #56 (2026-06-16): the player's Sanctuary (lifestone bind)
+    /// snapshot, refreshed by the recv loop on each Sanctuary
+    /// PrivateUpdatePosition. JS reads via [`SessionHandle::player_sanctuary`].
+    latest_sanctuary: std::rc::Rc<std::cell::RefCell<Option<SanctuaryJs>>>,
     account_name: String,
     /// Phase 4 step 2a.5: shared catalog slot, populated asynchronously
     /// in the background. `None` until the catalog HBA fetch completes
@@ -24860,6 +25007,15 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = serverInfo)]
     pub fn server_info(&self) -> Option<ServerInfoJs> {
         self.latest_server_info.borrow().clone()
+    }
+
+    /// HUD rec #56 (2026-06-16): the player's current Sanctuary (lifestone
+    /// bind) location, or `None` if no bind/recall echo has arrived yet this
+    /// session. Read by the lifestone-popup on open to show "Currently bound
+    /// to: <town> (<coords>)".
+    #[wasm_bindgen(js_name = playerSanctuary)]
+    pub fn player_sanctuary(&self) -> Option<SanctuaryJs> {
+        self.latest_sanctuary.borrow().clone()
     }
 
     /// HUD rec #165 (E12-login-character-select-creation): request
@@ -29413,6 +29569,9 @@ pub async fn start_session(
     // HUD rec #83 (2026-06-16): server info from GameMessage::ServerName.
     let latest_server_info: std::rc::Rc<std::cell::RefCell<Option<ServerInfoJs>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
+    // HUD rec #56 (2026-06-16): Sanctuary bind snapshot.
+    let latest_sanctuary: std::rc::Rc<std::cell::RefCell<Option<SanctuaryJs>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
     let catalog: std::rc::Rc<
         std::cell::RefCell<Option<std::sync::Arc<holtburger_content::CharacterGenCatalog>>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -29697,6 +29856,8 @@ pub async fn start_session(
         let character_list = character_list.clone();
         // HUD rec #83 (2026-06-16) — clone for recv_loop param.
         let latest_server_info_inner = latest_server_info.clone();
+        // HUD rec #56 (2026-06-16) — clone for recv_loop param.
+        let latest_sanctuary_inner = latest_sanctuary.clone();
         let entity_updates = entity_updates.clone();
         let world_bootstrap = world_bootstrap.clone();
         let latest_stats = latest_stats.clone();
@@ -29779,6 +29940,8 @@ pub async fn start_session(
                 identify_meta_index_inner,
                 // === HUD rec #83 — server info (2026-06-16) ===
                 latest_server_info_inner,
+                // === HUD rec #56 — sanctuary bind (2026-06-16) ===
+                latest_sanctuary_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
@@ -29853,6 +30016,7 @@ pub async fn start_session(
         queued_events,
         character_list,
         latest_server_info,
+        latest_sanctuary,
         account_name,
         catalog,
         entity_updates,
@@ -31771,6 +31935,9 @@ async fn recv_loop(
     // loop overwrites on GameMessage::ServerName, JS reads via
     // SessionHandle::server_info.
     latest_server_info: std::rc::Rc<std::cell::RefCell<Option<ServerInfoJs>>>,
+    // HUD rec #56 (2026-06-16): shared sanctuary snapshot — recv loop
+    // overwrites on each Sanctuary PrivateUpdatePosition.
+    latest_sanctuary: std::rc::Rc<std::cell::RefCell<Option<SanctuaryJs>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
@@ -33202,6 +33369,21 @@ async fn recv_loop(
                                     strip_wielder_index_item(data.child_guid, &wielder_index);
                                 }
                                 inventory_changed = true;
+                            }
+                            // HUD rec #56 (2026-06-16): a Sanctuary
+                            // PrivateUpdatePosition carries the player's
+                            // lifestone bind location. This packet stays
+                            // un-routed to the world handler on wasm
+                            // (should_route_message_to_world), so read it
+                            // directly and refresh the snapshot JS reads via
+                            // SessionHandle::player_sanctuary on lifestone-popup
+                            // open.
+                            GameMessage::PrivateUpdatePosition(data)
+                                if data.position_type
+                                    == holtburger_protocol::messages::movement::PositionType::Sanctuary =>
+                            {
+                                *latest_sanctuary.borrow_mut() =
+                                    Some(build_sanctuary_js(&data.pos));
                             }
                             _ => {}
                         }

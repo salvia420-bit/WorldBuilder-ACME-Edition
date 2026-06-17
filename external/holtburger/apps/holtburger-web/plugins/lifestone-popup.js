@@ -107,6 +107,25 @@ export function decideLifestoneAction(action, client) {
   return { called: null, args: [] };
 }
 
+/**
+ * HUD rec #56 — format the Sanctuary bind status line from a
+ * `playerSanctuary()` snapshot (or null/undefined). Pure (no DOM/wasm) so it
+ * is unit-testable; the DOM-side `refreshSanctuaryStatus()` in mount() just
+ * assigns the result to textContent.
+ *
+ * @param {{ isBound?: boolean, formatted?: string, townName?: (string|null) }|null|undefined} sanc
+ * @returns {string}
+ */
+export function formatSanctuaryStatus(sanc) {
+  if (!sanc || !sanc.isBound) return "Not yet bound to any sanctuary";
+  const coords = sanc.formatted ?? "";
+  const town = sanc.townName;
+  if (town) return `Currently bound to: ${town} (${coords})`;
+  return coords
+    ? `Currently bound to: ${coords}`
+    : "Currently bound to your sanctuary";
+}
+
 // ─── Manifest ────────────────────────────────────────────────────
 export const manifest = {
   id: "lifestone-popup",
@@ -195,6 +214,15 @@ function ensureStyles() {
       color: var(--hb-text-cream, #e8d8b0);
       border-color: var(--hb-border-brass, #b08a4a);
     }
+    /* HUD rec #56 — Sanctuary bind status line. */
+    #${OVERLAY_ID} .hb-lifestone-sanctuary-status {
+      font-size: 11px;
+      font-style: italic;
+      color: var(--hb-text-muted-3, #a08868);
+      text-align: center;
+      margin: 0 0 10px 0;
+      line-height: 1.3;
+    }
   `;
   document.head.appendChild(s);
 }
@@ -222,6 +250,27 @@ export function mount(ctx) {
   title.className = "hb-lifestone-title";
   title.textContent = "Lifestone";
   overlay.appendChild(title);
+
+  // HUD rec #56 — Sanctuary bind status line. Reads the SessionHandle's
+  // playerSanctuary() snapshot (refreshed by the recv loop on each Sanctuary
+  // PrivateUpdatePosition) and shows the bound town + coords, or a
+  // not-yet-bound fallback. Refreshed on mount and on every lifestone click.
+  const sanctuaryStatus = document.createElement("div");
+  sanctuaryStatus.className = "hb-lifestone-sanctuary-status";
+  overlay.appendChild(sanctuaryStatus);
+
+  function refreshSanctuaryStatus() {
+    const sh = (typeof window !== "undefined" ? window.__sessionHandle : null) ?? null;
+    let sanc = null;
+    try {
+      sanc = (sh && typeof sh.playerSanctuary === "function")
+        ? sh.playerSanctuary() : null;
+    } catch (_) {
+      // Stale pkg without playerSanctuary — fall through to the fallback.
+    }
+    sanctuaryStatus.textContent = formatSanctuaryStatus(sanc);
+  }
+  refreshSanctuaryStatus();
 
   const row = document.createElement("div");
   row.className = "hb-lifestone-row";
@@ -285,6 +334,7 @@ export function mount(ctx) {
     const detail = payload?.detail ?? payload ?? {};
     const guid = (detail.guid ?? 0) >>> 0;
     if (!guid) return;
+    refreshSanctuaryStatus();
     handle({ type: "lifestoneClicked", guid });
   }
 

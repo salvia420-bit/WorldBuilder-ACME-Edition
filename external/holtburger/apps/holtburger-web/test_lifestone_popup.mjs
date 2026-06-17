@@ -58,6 +58,7 @@ const url = pathToFileURL(
 const {
   nextStateForAction,
   decideLifestoneAction,
+  formatSanctuaryStatus,
   manifest,
 } = await import(url);
 
@@ -106,6 +107,45 @@ check("exports nextStateForAction + decideLifestoneAction", () => {
   if (typeof decideLifestoneAction !== "function") {
     throw new Error("decideLifestoneAction not exported");
   }
+});
+
+console.log("\n[1b] formatSanctuaryStatus — HUD rec #56");
+
+check("null / no snapshot → not-yet-bound fallback", () => {
+  assertEq(formatSanctuaryStatus(null), "Not yet bound to any sanctuary", "null");
+  assertEq(formatSanctuaryStatus(undefined), "Not yet bound to any sanctuary", "undefined");
+});
+
+check("isBound=false → not-yet-bound fallback", () => {
+  assertEq(
+    formatSanctuaryStatus({ isBound: false, formatted: "65.5N, 30.3E, 12.0Z", townName: "Holtburg" }),
+    "Not yet bound to any sanctuary",
+    "unbound",
+  );
+});
+
+check("bound with town → 'Currently bound to: <town> (<coords>)'", () => {
+  assertEq(
+    formatSanctuaryStatus({ isBound: true, formatted: "45.2N, 12.8E, 0.0Z", townName: "Holtburg" }),
+    "Currently bound to: Holtburg (45.2N, 12.8E, 0.0Z)",
+    "town",
+  );
+});
+
+check("bound without town → coords only", () => {
+  assertEq(
+    formatSanctuaryStatus({ isBound: true, formatted: "65.5N, 30.3E, 12.0Z", townName: null }),
+    "Currently bound to: 65.5N, 30.3E, 12.0Z",
+    "coords-only",
+  );
+});
+
+check("bound with indoor formatted string (no town) → coords only", () => {
+  assertEq(
+    formatSanctuaryStatus({ isBound: true, formatted: "Indoors [860201AD]" }),
+    "Currently bound to: Indoors [860201AD]",
+    "indoor",
+  );
 });
 
 console.log("\n[2] nextStateForAction — idle → open transition");
