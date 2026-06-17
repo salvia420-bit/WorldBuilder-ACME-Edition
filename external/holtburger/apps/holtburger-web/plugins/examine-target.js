@@ -1138,10 +1138,53 @@ export function mountExamineBody(parentEl, ctx) {
     // gates the Set Inscription button).
     const pc = window.__pluginClient ?? null;
     const onRefresh = () => renderInscription(inscWrap, examineGuid);
+    // HUD rec #107 (2026-06-16) — RNG-based identify retry. ACE rolls
+    // an Identify skill check per Player_Skills.cs HandleIdentifyResponse;
+    // on failure the IdentifyResponse comes back with success=false and
+    // the panel falls through to the "Insufficient identification skill"
+    // banner (rec #53). Retail's awaiting_appraisal_ID gating retries
+    // automatically on failure (acclient.h:55670-ish). Mirror that with
+    // bounded exponential backoff: 3 attempts at 5s / 10s / 20s, then
+    // give up. Cancellation: any successful identify (or unmount) clears
+    // the pending timer so we don't double-fire.
+    const IDENTIFY_RETRY_DELAYS_MS = [5000, 10000, 20000];
+    let identifyRetryAttempt = 0;
+    let identifyRetryTimer = null;
+    const cancelIdentifyRetry = () => {
+      if (identifyRetryTimer !== null) {
+        clearTimeout(identifyRetryTimer);
+        identifyRetryTimer = null;
+      }
+    };
+    const scheduleIdentifyRetry = () => {
+      if (!examineGuid) return;
+      if (identifyRetryAttempt >= IDENTIFY_RETRY_DELAYS_MS.length) return;
+      const delay = IDENTIFY_RETRY_DELAYS_MS[identifyRetryAttempt];
+      identifyRetryAttempt++;
+      cancelIdentifyRetry();
+      identifyRetryTimer = setTimeout(() => {
+        identifyRetryTimer = null;
+        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+        try { handle?.requestAppraisal?.(examineGuid >>> 0); } catch (_) {}
+      }, delay);
+    };
     const onAppraised = (ev) => {
       const guid = (ev?.detail?.u32Payload ?? 0) >>> 0;
       if (!examineGuid || guid !== (examineGuid >>> 0)) return;
       renderAppraisal(appraisalWrap, examineGuid);
+      try {
+        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+        const json = handle?.getObjectAppraisal?.(guid >>> 0);
+        if (typeof json === "string" && json.length > 0) {
+          const snap = JSON.parse(json);
+          if (snap?.identifySuccess === false) {
+            scheduleIdentifyRetry();
+          } else {
+            cancelIdentifyRetry();
+            identifyRetryAttempt = 0;
+          }
+        }
+      } catch (_) { /* leave retry state untouched on parse failure */ }
     };
     // Wave 3.B — refresh the paperdoll when the examined entity's
     // appearance changes (e.g. NPC equips a new item via ACE's
@@ -1174,6 +1217,9 @@ export function mountExamineBody(parentEl, ctx) {
         try { pc.events.off("entityAppearanceChanged", onAppearanceRefresh); } catch (_) {}
         try { pc.events.off("objectAppraised", onAppraised); } catch (_) {}
       }
+      // HUD rec #107: drop any pending identify-retry timer so the
+      // backoff schedule doesn't outlive the panel's unmount.
+      cancelIdentifyRetry();
       if (paperdollViewport) {
         try { paperdollViewport.dispose(); } catch (_) {}
         paperdollViewport = null;
