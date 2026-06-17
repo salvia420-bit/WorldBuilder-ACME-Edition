@@ -231,12 +231,12 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 | 18 | high | D12-vendor-and-trade | `vendor-ui.js:1391-1403 (hideOverlay), mount() section 1726-1843 (event subscript` | Implement approach distance enforcement for vendor UI | 1a7be79f |
 | 38 | high | E18-tradeskill-spell-research-salvage | `spell-research-panel.js:450-483` | Wire spell component availability check before cast | 1775d78b |
 | 140 | high | D09-vitals-and-attributes-streams | `src/lib.rs:47934-47960 (add error emission), index.html:10200+ (add bus emitter)` | Add raiseAttributeFailed and raiseVitalFailed event bus signals | 173ca4c6 |
-| 141 | high | D09-vitals-and-attributes-streams | `src/lib.rs (define new ClientEvent kind for player_xp_updated), index.html:10350` | Subscribe to playerXpSpent bus event to refresh raise-button costs after server ack | defer-wasm |
-| 142 | high | D10-chat-and-emote | `holtburger-web/src/lib.rs:26860+, emote-panel.js:220-264` | Implement broadcastEmoteSoundEffect wasm export | defer-wasm |
-| 147 | high | D15-journal-contracts-book | `src/lib.rs:24162 (latest_contracts example to follow), plugins/journal-panel.js:` | Implement quest journal RPC (SessionHandle.playerJournal) | defer-wasm |
-| 66 | med | E03-sprite-icon-pipeline | `apps/holtburger-web/build.rs (proposed)` | Verify icon-manifest.json generation is automated in build pipeline | defer-wasm |
-| 175 | med | D07-combat-hud-stance-power | `plugins/api.js:58, src/lib.rs ~32000, combat-hud.js:614, combat-bar.js:1630-1670` | Add fizzle event surface and spell-fail visual feedback | defer-wasm |
-| 177 | med | D09-vitals-and-attributes-streams | `src/lib.rs (emit vitalBaseChanged on GameMessagePrivateUpdateVital), index.html:` | Subscribe to vitalBaseChanged event to auto-rerender Vitals subsection when attribute raises bump vital base | defer-wasm |
+| 141 | high | D09-vitals-and-attributes-streams | `src/lib.rs (define new ClientEvent kind for player_xp_updated), index.html:10350` | Subscribe to playerXpSpent bus event to refresh raise-button costs after server ack | 92011aa9 |
+| 142 | high | D10-chat-and-emote | `holtburger-web/src/lib.rs:26860+, emote-panel.js:220-264` | Implement broadcastEmoteSoundEffect wasm export | defer-ace |
+| 147 | high | D15-journal-contracts-book | `src/lib.rs:24162 (latest_contracts example to follow), plugins/journal-panel.js:` | Implement quest journal RPC (SessionHandle.playerJournal) | defer-ace |
+| 66 | med | E03-sprite-icon-pipeline | `apps/holtburger-web/build.rs (proposed)` | Verify icon-manifest.json generation is automated in build pipeline | skip |
+| 175 | med | D07-combat-hud-stance-power | `plugins/api.js:58, src/lib.rs ~32000, combat-hud.js:614, combat-bar.js:1630-1670` | Add fizzle event surface and spell-fail visual feedback | fable-skip |
+| 177 | med | D09-vitals-and-attributes-streams | `src/lib.rs (emit vitalBaseChanged on GameMessagePrivateUpdateVital), index.html:` | Subscribe to vitalBaseChanged event to auto-rerender Vitals subsection when attribute raises bump vital base | skip |
 | 178 | med | D09-vitals-and-attributes-streams | `src/lib.rs:47934-47960 (add IsMaxRank check + event emit), index.html:10150+ (ad` | Implement maxRankAchieved event bus + celebration effects | defer-wasm |
 | 180 | med | D15-journal-contracts-book | `plugins/book-panel.js:562–576 (current manual entry point), src/lib.rs (entity-u` | Wire 'Use' book interaction to auto-open book overlay | defer-wasm |
 | 181 | med | D15-journal-contracts-book | `plugins/lore-panel.js (new file), acclient.h:56020 (gmPageListUI struct ref), sr` | Port lore entry catalog UI (gmPageListUI) | defer-wasm |
