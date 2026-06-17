@@ -4,15 +4,20 @@
 //   cd apps/holtburger-web/
 //   node test_status_indicators.mjs
 //
-// Validates that the 6 (well, 7 — retail layout 0x21000071 actually has
-// 7 indicator slots) indicators wire to the established event bus correctly:
+// Validates that the 6 indicators wire to the established event bus
+// correctly. Retail layout 0x21000071's indicator children are read_order
+// 17-23 (Link/PositiveEffects/NegativeEffects/Vitae/Burden/MiniGame/Logoff);
+// read_order 23 is the LogoffButton, NOT a PortalStormIndicator (rec #197),
+// so there are 6 status indicators here, not 7:
 //
 //   buffs / debuffs  ← world.enchantmentAdded/Removed
 //   vitae            ← Character.vitaeChanged + playerStatsUpdated fallback
 //   burden           ← playerStatsUpdated → sessionHandle.playerBurden
 //   linkstatus       ← 1Hz internal poll (not exercised here — covered by SS / SS.1)
 //   minigame         ← client.events.miniGameChanged (no upstream emit yet)
-//   portalstorm      ← client.events.portalStormChanged (no upstream emit yet)
+//
+// Portal storm has no indicator slot — portalStormChanged drives a CSS
+// screen-edge pulse (#hb-portal-storm-pulse) instead.
 //
 // The test installs a jsdom-lite DOM shim, mounts the plugin via dynamic
 // import, dispatches synthetic events through a minimal fake client, and
@@ -225,16 +230,30 @@ check("vitae 0.5 → active (50% vitae)", () => {
 
 console.log("\n[4] Indicator inventory");
 
-check("7 indicators present (retail layout 0x21000071 read_order 17-23)", () => {
-  if (__test.INDICATORS.length !== 7) {
-    throw new Error(`got ${__test.INDICATORS.length} indicators, expected 7`);
+check("6 indicators present (retail layout 0x21000071 read_order 17-22; 23 is LogoffButton)", () => {
+  if (__test.INDICATORS.length !== 6) {
+    throw new Error(`got ${__test.INDICATORS.length} indicators, expected 6`);
   }
   const ids = __test.INDICATORS.map(i => i.id).sort();
-  const expected = ["buffs", "burden", "debuffs", "linkstatus", "minigame", "portalstorm", "vitae"];
+  const expected = ["buffs", "burden", "debuffs", "linkstatus", "minigame", "vitae"];
   for (let i = 0; i < expected.length; i += 1) {
     if (ids[i] !== expected[i]) {
       throw new Error(`missing/extra indicator: got=${ids[i]}, want=${expected[i]}`);
     }
+  }
+});
+
+check("minigame indicator uses resolved layout sprites 0x060074A5/A6 (rec #149)", () => {
+  const mg = __test.INDICATORS.find(i => i.id === "minigame");
+  if (!mg) throw new Error("minigame indicator missing");
+  if (mg.active !== "0x060074A5" || mg.inactive !== "0x060074A6") {
+    throw new Error(`minigame sprites got active=${mg.active} inactive=${mg.inactive}, want 0x060074A5/0x060074A6`);
+  }
+});
+
+check("no phantom portalstorm indicator slot (rec #197)", () => {
+  if (__test.INDICATORS.some(i => i.id === "portalstorm")) {
+    throw new Error("portalstorm slot should have been removed");
   }
 });
 
@@ -298,14 +317,18 @@ check("overlay mounted to document.body", () => {
   if (!overlay) throw new Error("no overlay child on body");
 });
 
-check("all 7 indicator elements rendered", () => {
-  for (const id of ["linkstatus", "buffs", "debuffs", "vitae", "burden", "minigame", "portalstorm"]) {
+check("all 6 indicator elements rendered", () => {
+  for (const id of ["linkstatus", "buffs", "debuffs", "vitae", "burden", "minigame"]) {
     if (!getIndicator(id)) throw new Error(`missing indicator: ${id}`);
   }
 });
 
+check("no portalstorm indicator element rendered (rec #197)", () => {
+  if (getIndicator("portalstorm")) throw new Error("portalstorm element should not render");
+});
+
 check("indicators start inactive (no active class)", () => {
-  for (const id of ["buffs", "debuffs", "vitae", "burden", "minigame", "portalstorm"]) {
+  for (const id of ["buffs", "debuffs", "vitae", "burden", "minigame"]) {
     if (getIndicator(id).classList.contains("active")) {
       throw new Error(`${id} starts active`);
     }
@@ -438,20 +461,32 @@ check("enchantments emptied → both indicators inactive", () => {
 
 console.log("\n[9] Portal storm / mini-game — speculative bus hooks");
 
-check("portalStormChanged level=2 → portalstorm indicator active", () => {
-  // Speculative bus name — no upstream emit today. This validates the
-  // hook is wired so the moment a downstream wave surfaces the wire,
-  // the indicator lights up without further status-indicators edits.
-  fakeClient.events.emit("portalStormChanged", { level: 2 });
-  if (!getIndicator("portalstorm").classList.contains("active")) {
-    throw new Error("portalstorm not active");
+// rec #197 — portal storm has no indicator slot (read_order 23 is the
+// LogoffButton). A level>=2 storm flashes the #hb-portal-storm-pulse
+// screen overlay instead. The DOM shim's getElementById always returns
+// null, so firePortalStormPulse creates a fresh body-appended div per
+// level>=2 trigger; we locate it by scanning body.children by id. Test
+// the below-threshold case first (no element is ever created for it).
+function findPortalStormPulse() {
+  return (document.body.children || []).find(c => c.id === "hb-portal-storm-pulse") || null;
+}
+
+check("portalStormChanged level=1 → no screen pulse (below threshold)", () => {
+  fakeClient.events.emit("portalStormChanged", { level: 1 });
+  const pulse = findPortalStormPulse();
+  if (pulse && pulse.classList.contains("active")) {
+    throw new Error("portal-storm pulse should not activate below level 2");
   }
 });
 
-check("portalStormChanged level=0 → portalstorm indicator inactive", () => {
-  fakeClient.events.emit("portalStormChanged", { level: 0 });
-  if (getIndicator("portalstorm").classList.contains("active")) {
-    throw new Error("portalstorm still active");
+check("portalStormChanged level=2 → screen-edge pulse active", () => {
+  // Speculative bus name — no upstream emit today. Validates the hook is
+  // wired so the moment a downstream wave surfaces the wire, the pulse
+  // fires without further status-indicators edits.
+  fakeClient.events.emit("portalStormChanged", { level: 2 });
+  const pulse = findPortalStormPulse();
+  if (!pulse || !pulse.classList.contains("active")) {
+    throw new Error("portal-storm pulse not active on level=2");
   }
 });
 

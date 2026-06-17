@@ -29,6 +29,8 @@ const OVERLAY_ID = "hb-status-indicators";
 const WIDTH = 150;
 const HEIGHT = 30;
 const ICON_SIZE = 20;
+// rec #197 — full-viewport overlay id for the portal-storm warning pulse.
+const PORTAL_STORM_PULSE_ID = "hb-portal-storm-pulse";
 
 /** gmFloatyIndicatorsUI — retail layout 0x21000071 (150×30, 23 children).
  *  Element-id map confirmed by status_indicators_layout_dump 2026-05-24
@@ -44,8 +46,16 @@ const ICON_SIZE = 20;
  *      0x100000F6 x=45  type=268435458 (Effects, 3 states) — debuffs
  *      0x100000F4 x=65  type=268435462 (Vitae, 3 states)
  *      0x100000F7 x=85  type=268435457 (Burden, 5 states)
- *      0x100000F3 x=105 type=268435460 (MiniGame, 3 states)
- *      0x100000FA x=125 type=0 (generic 2-state) — likely PortalStorm
+ *      0x100000F3 x=105 type=268435460 (MiniGameIndicator) — sprites 0x060074A5/A6
+ *      0x100000FA x=125 type=0          (LogoffButton)      — sprites 0x060074B1/B2
+ *
+ *  rec #197 (2026-06-16): read_order 23 is the retail LogoffButton, NOT a
+ *  PortalStormIndicator. acclient.h declares gmUIElement_PortalStormIndicator
+ *  (class 268435461) but it is placed in NO extracted LayoutDesc — confirmed
+ *  by data/retail-layouts/0x21000071.json (indicator children read_order
+ *  17-23 = Link/PositiveEffects/NegativeEffects/Vitae/Burden/MiniGame/Logoff).
+ *  The former `portalstorm` slot was a phantom re-using Vitae's 0x060074A0/A1
+ *  sprites and has been removed.
  *
  *  acclient.h class hierarchy for the 6 retail indicator subtypes:
  *    gmUIElement_BurdenIndicator      268435457 (0x10000001)
@@ -63,7 +73,8 @@ const STATUS_ELEMS = {
   vitae:       0x100000F4,
   burden:      0x100000F7,
   minigame:    0x100000F3,
-  portalstorm: 0x100000FA,
+  // read_order 23 (0x100000FA) is the retail LogoffButton, not PortalStorm —
+  // no PortalStormIndicator exists in layout 0x21000071 (rec #197).
 };
 
 // 7 indicators with (active, inactive) sprite pairs, ordered LEFT→RIGHT
@@ -81,22 +92,27 @@ const STATUS_ELEMS = {
 // owns click-to-toggle of the active-spells strip.
 //
 // PR-LL 2026-05-24: layout wiring + retail-correct slot order. Added
-// `minigame` and `portalstorm` slots (real retail subclasses); dropped
-// the prior speculative `linkup` slot whose sprite (0x060074A0/A1) had
-// no retail UIElementType backing. Order now matches retail read_order
-// 17→23 — left-to-right: linkstatus, buffs, debuffs, vitae, burden,
-// minigame, portalstorm. Sprite DIDs for the new minigame/portalstorm
-// slots are placeholders (re-using the linkup pair) until extracted
-// from retail StateDesc — show/hide logic stays no-op until real game
-// events land.
+// `minigame` slot (real retail subclass); dropped the prior speculative
+// `linkup` slot whose sprite (0x060074A0/A1) had no retail UIElementType
+// backing. Order matches retail read_order 17→22 — left-to-right:
+// linkstatus, buffs, debuffs, vitae, burden, minigame.
+//
+// rec #149 (2026-06-16): minigame sprite DIDs resolved from the committed
+// data/retail-layouts/0x21000071.json dump — MiniGameIndicator (0x100000F3)
+// StateDesc media is Normal=0x060074A5 / Ghosted=0x060074A6. (The old
+// 0x060074A0/A1 placeholders were actually Vitae's sprites.)
+//
+// rec #197 (2026-06-16): the former 7th `portalstorm` slot was removed —
+// no PortalStormIndicator is authored in any extracted layout (read_order
+// 23 is the LogoffButton). Portal-storm warnings now surface via a CSS
+// screen-edge pulse (see firePortalStormPulse) instead of an icon slot.
 const INDICATORS = [
   { id: "linkstatus",  name: "Link Status",       active: "0x06004CE8", inactive: "0x06004CE8" },
   { id: "buffs",       name: "Beneficial Spells", active: "0x0600749C", inactive: "0x0600749D" },
   { id: "debuffs",     name: "Harmful Spells",    active: "0x0600749E", inactive: "0x0600749F" },
   { id: "vitae",       name: "Vitae",             active: "0x06007499", inactive: "0x060074A4" },
   { id: "burden",      name: "Burden",            active: "0x06007498", inactive: "0x06007498" },
-  { id: "minigame",    name: "Mini-Game",         active: "0x060074A0", inactive: "0x060074A1" },
-  { id: "portalstorm", name: "Portal Storm",      active: "0x060074A0", inactive: "0x060074A1" },
+  { id: "minigame",    name: "Mini-Game",         active: "0x060074A5", inactive: "0x060074A6" },
 ];
 
 let stylesInjected = false;
@@ -230,8 +246,49 @@ function ensureStyles() {
       background: var(--hb-border-brass-deep);
       border-radius: 50%;
     }
+    /* rec #197 — portal-storm screen-edge alert pulse. Fixed full-viewport
+       overlay, click-through, inset red glow that flashes once per trigger.
+       Stays at opacity 0 until JS adds .active (which replays the keyframe). */
+    #${PORTAL_STORM_PULSE_ID} {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 2147483000;
+      opacity: 0;
+      box-shadow: inset 0 0 80px 24px rgba(200, 32, 16, 0.7);
+    }
+    #${PORTAL_STORM_PULSE_ID}.active {
+      animation: hb-portal-storm-pulse 1.6s ease-out 1;
+    }
+    @keyframes hb-portal-storm-pulse {
+      0%   { opacity: 0; }
+      18%  { opacity: 1; }
+      100% { opacity: 0; }
+    }
   `;
   document.head.appendChild(style);
+}
+
+// rec #197 — CSS-only portal-storm alert. Retail authored no
+// PortalStormIndicator sprite (the acclient.h class is never placed in any
+// extracted layout), so a portal-storm warning surfaces as a brief red
+// screen-edge pulse rather than a (non-existent) indicator icon. Levels
+// >= 2 (Imminent / Active) fire the pulse; lower levels clear it.
+function firePortalStormPulse(level) {
+  let el = document.getElementById(PORTAL_STORM_PULSE_ID);
+  if (Number(level) < 2) {
+    if (el) el.classList.remove("active");
+    return;
+  }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = PORTAL_STORM_PULSE_ID;
+    document.body.appendChild(el);
+  }
+  // Replay the keyframe: drop the class, force a reflow, re-add it.
+  el.classList.remove("active");
+  void el.offsetWidth;
+  el.classList.add("active");
 }
 
 export const manifest = {
@@ -742,12 +799,13 @@ export function mount(_ctx) {
     // crates/holtburger-protocol but NOT surfaced to JS as bus events yet
     // (see plugins/api.js coverage row #8 / data/chorizite/chorizite-acprotocol-opcodes.json).
     // When the wire surfaces, the bus name will likely be `portalStormChanged`
-    // with `{level: 0..4}` mirroring gmUIElement_PortalStormIndicator's
-    // RecvNotice_PortalStormLevel(float). Pre-emptively subscribe so the
-    // indicator lights up the moment that wire lands without another edit.
+    // with `{level: 0..4}` mirroring acclient.h's RecvNotice_PortalStormLevel(float).
+    // Pre-emptively subscribe. rec #197: retail authored no PortalStormIndicator
+    // sprite, so instead of an indicator icon a level>=2 storm fires a brief red
+    // screen-edge pulse (firePortalStormPulse) — no phantom indicator slot needed.
     const onPortalStorm = (evt) => {
       const lvl = Number(evt?.detail?.level ?? evt?.detail?.extent ?? 0);
-      setIndicatorActive("portalstorm", lvl > 0);
+      firePortalStormPulse(lvl);
     };
     client.events.on("portalStormChanged", onPortalStorm);
     eventUnsubs.push(() => client.events.off?.("portalStormChanged", onPortalStorm));
@@ -798,6 +856,7 @@ export function mount(_ctx) {
     eventUnsubs.length = 0;
     delete window.__setStatusIndicator;
     overlay.remove();
+    document.getElementById(PORTAL_STORM_PULSE_ID)?.remove();
   };
 }
 
