@@ -20373,6 +20373,15 @@ struct FellowshipMember {
 struct FellowshipDepartedMember {
     guid: u32,
     departed_timestamp: u32,
+    /// HUD rec #103 (2026-06-16): cached name from a prior member
+    /// snapshot. `FellowshipDepartedMemberData` on the wire only
+    /// carries (guid, departed_timestamp); ACE never re-sends the
+    /// departed player's name. We look it up from the rolling
+    /// guid→name cache that the publish helper populates from
+    /// every member-list snapshot before transition. Empty when no
+    /// matching prior name was ever cached (e.g. the player departed
+    /// before the first FullUpdate the session observed).
+    name: String,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -20439,6 +20448,7 @@ impl FellowshipMemberJs {
 pub struct FellowshipDepartedMemberJs {
     guid: u32,
     departed_timestamp: u32,
+    name: String,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -20448,6 +20458,11 @@ impl FellowshipDepartedMemberJs {
     pub fn guid(&self) -> u32 { self.guid }
     #[wasm_bindgen(getter, js_name = departedTimestamp)]
     pub fn departed_timestamp(&self) -> u32 { self.departed_timestamp }
+    /// HUD rec #103 (2026-06-16): name resolved from the rolling
+    /// guid→name cache; empty string when no prior snapshot of this
+    /// session knew the member by name.
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -20528,6 +20543,7 @@ impl FellowshipSnapshotJs {
             .map(|d| FellowshipDepartedMemberJs {
                 guid: d.guid,
                 departed_timestamp: d.departed_timestamp,
+                name: d.name.clone(),
             })
             .collect()
     }
@@ -30920,6 +30936,34 @@ fn publish_player_fellowship_snapshot(
     latest_fellowship: &std::rc::Rc<std::cell::RefCell<Option<FellowshipSnapshot>>>,
     update_type: u32,
 ) {
+    // HUD rec #103 (2026-06-16): rolling guid→name cache for departed
+    // members. ACE's FellowshipDepartedMemberData only carries
+    // (guid, departed_timestamp) — the departed player's name is never
+    // re-sent. Seed the cache from the OUTGOING members list of the
+    // PRIOR snapshot (anyone who survived the previous publish) and
+    // from the incoming members of THIS snapshot. When the world hands
+    // us a departed entry, we look up the name from this cache.
+    let mut name_cache: std::collections::HashMap<u32, String> =
+        std::collections::HashMap::new();
+    if let Some(prev) = latest_fellowship.borrow().as_ref() {
+        for m in &prev.members {
+            if !m.name.is_empty() {
+                name_cache.insert(m.guid, m.name.clone());
+            }
+        }
+        for d in &prev.departed {
+            if !d.name.is_empty() {
+                name_cache.insert(d.guid, d.name.clone());
+            }
+        }
+    }
+    if let Some(f) = world.fellowship.as_ref() {
+        for m in &f.members {
+            if !m.name.is_empty() {
+                name_cache.insert(u32::from(m.guid), m.name.clone());
+            }
+        }
+    }
     let next = world.fellowship.as_ref().map(|f| FellowshipSnapshot {
         name: f.name.clone(),
         leader_guid: u32::from(f.leader_guid),
@@ -30948,9 +30992,13 @@ fn publish_player_fellowship_snapshot(
         departed: f
             .departed_members
             .iter()
-            .map(|d| FellowshipDepartedMember {
-                guid: u32::from(d.guid),
-                departed_timestamp: d.departed_timestamp,
+            .map(|d| {
+                let g = u32::from(d.guid);
+                FellowshipDepartedMember {
+                    guid: g,
+                    departed_timestamp: d.departed_timestamp,
+                    name: name_cache.get(&g).cloned().unwrap_or_default(),
+                }
             })
             .collect(),
         locks: f

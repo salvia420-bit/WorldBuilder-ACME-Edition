@@ -1513,8 +1513,15 @@ function renderFellowshipState(container, snapshot) {
     const ul = document.createElement("ul");
     for (const d of snapshot.departed) {
       const li = document.createElement("li");
+      // HUD rec #103 (2026-06-16): prefer the cached name when wasm
+      // has it; the FellowshipDepartedMemberData wire payload only
+      // carries guid + departed_timestamp, so the rolling guid→name
+      // cache in publish_player_fellowship_snapshot fills the name
+      // from prior member snapshots. Empty string falls back to the
+      // hex GUID (departure was before any FullUpdate this session).
       const guidHex = `0x${(d.guid >>> 0).toString(16).padStart(8, "0").toUpperCase()}`;
-      setAcText(li, guidHex);
+      const label = (d.name && d.name.length > 0) ? `${d.name} (${guidHex})` : guidHex;
+      setAcText(li, label);
       ul.appendChild(li);
     }
     details.appendChild(ul);
