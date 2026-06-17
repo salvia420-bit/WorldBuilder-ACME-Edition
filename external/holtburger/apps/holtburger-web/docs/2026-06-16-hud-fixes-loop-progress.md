@@ -41,7 +41,7 @@
 | 150 | high | D17-status-indicators-and-floaty-chrome | `status-indicators.js:102-183 (styles, add .lock-button) + 232-273 (mount, add fr` | Add lock button UI + sprite swapping for floaty window | cdd87103 |
 | 151 | high | E01-font-system | `ui/ac_font.js:193-261 renderAcText, 402-436 _measure, 438-478 _drawGlyphs` | Implement text alignment (left/center/right + top/middle/bottom) | fde854b5 |
 | 152 | high | E01-font-system | `ui/ac_font.js:103-146 loadAcFont, 335-363 _buildRuntime, 402-436 _measure, 438-4` | Integrate CJK fallback font chain for missing non-Latin chars | fda297b1 |
-| 153 | high | E02-layout-system-states | `ui/ac_floaty_frame.js (new export), plugins/main-panel.js (call during mount)` | Implement resolveFrameSpritesFromLayout helper and wire main-panel.js | defer-asset |
+| 153 | high | E02-layout-system-states | `ui/ac_floaty_frame.js (new export), plugins/main-panel.js (call during mount)` | Implement resolveFrameSpritesFromLayout helper and wire main-panel.js | bfa442da |
 | 154 | high | E04-string-tables-localization | `ac_layout.js (layout parser) + options-panel.js (update TABS hardcodes to use re` | Wire StringID resolution in layout element rendering | defer-asset |
 | 155 | high | E04-string-tables-localization | `wasm-side fetch_layout serializer + ac_layout.js LayoutDesc struct + options-pan` | Deferred serialization of StateDesc (unblock G3) | skip |
 | 156 | high | E05-ui-sound-effects | `plugins/ui_click_sounds.js (new), plugins/inventory.js (~30 new lines for unsubs` | Wire UI_ButtonPress (0x72) click sound to all interactive UI elements | e7c0aa54 |
