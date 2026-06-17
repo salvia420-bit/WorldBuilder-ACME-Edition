@@ -63,6 +63,27 @@ function dispatchEmoteAction(t, ctx) {
       info: `For pose emotes use slash commands in chat (e.g. /wave, /bow). Action type ${t.name} is dispatched per-pose.`,
     };
   }
+  if (t.id === 0x09 /* Sound */) {
+    // HUD rec #142 — local-only emote sound (mirrors emote-panel.js).
+    if (typeof handle.broadcastEmoteSoundEffect !== "function") {
+      return { dispatched: false, info: `Action ${t.name}: sound playback needs a newer client build.` };
+    }
+    const guid = (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function")
+      ? (window.getLocalPlayerGuid() >>> 0) : 0;
+    if (!guid) {
+      return { dispatched: false, info: `Action ${t.name}: enter the world before playing a sound.` };
+    }
+    const soundEnum = 0x40; // Sound.Eat1 — representative in-humanoid-table cue.
+    try {
+      handle.broadcastEmoteSoundEffect(guid, soundEnum);
+    } catch (err) {
+      return { dispatched: false, error: `Sound dispatch failed: ${err?.message ?? err}` };
+    }
+    return {
+      dispatched: true,
+      echo: `Played Sound enum 0x${soundEnum.toString(16)} locally (remote players will not hear it).`,
+    };
+  }
   if (t.id === 0x08) {
     if (typeof handle.sendEmote === "function") {
       return {
@@ -108,6 +129,8 @@ const SYNTHETIC_TAXONOMY = {
     // Motion
     { id: 0x05, name: "Motion", isUserVisible: true, shape: "Motion", fields: ["motion"] },
     { id: 0x34, name: "ForceMotion", isUserVisible: true, shape: "Motion", fields: ["motion"] },
+    // Sound (HUD rec #142 — local-only emote sound)
+    { id: 0x09, name: "Sound", isUserVisible: true, shape: "Sound", fields: ["sound"] },
     // SpellId
     { id: 0x0E, name: "CastSpell", isUserVisible: true, shape: "SpellId", fields: ["spellId"] },
     // AwardHeroXp
@@ -200,6 +223,42 @@ check("dispatchEmoteAction: ForceMotion (0x34) → soul-emote hint", () => {
   assert.match(result.info, /pose emotes use slash commands/);
 });
 
+check("dispatchEmoteAction: Sound (0x09) without wasm export → upgrade hint", () => {
+  const t = { id: 0x09, name: "Sound", isUserVisible: true, shape: "Sound", fields: ["sound"] };
+  const result = dispatchEmoteAction(t, { handle: {} });
+  assert.equal(result.dispatched, false);
+  assert.match(result.info, /newer client build/);
+});
+
+check("dispatchEmoteAction: Sound (0x09) pre-world (no guid) → enter-world hint", () => {
+  const t = { id: 0x09, name: "Sound", isUserVisible: true, shape: "Sound", fields: ["sound"] };
+  const calls = [];
+  const handle = { broadcastEmoteSoundEffect: (g, s) => calls.push([g, s]) };
+  // No window.getLocalPlayerGuid in scope → guid resolves to 0.
+  const result = dispatchEmoteAction(t, { handle });
+  assert.equal(result.dispatched, false);
+  assert.match(result.info, /enter the world/);
+  assert.equal(calls.length, 0);
+});
+
+check("dispatchEmoteAction: Sound (0x09) in-world → local-only play (rec #142)", () => {
+  const t = { id: 0x09, name: "Sound", isUserVisible: true, shape: "Sound", fields: ["sound"] };
+  const calls = [];
+  const handle = { broadcastEmoteSoundEffect: (g, s) => calls.push([g, s]) };
+  const prevWindow = globalThis.window;
+  globalThis.window = { getLocalPlayerGuid: () => 0x50000123 };
+  try {
+    const result = dispatchEmoteAction(t, { handle });
+    assert.equal(result.dispatched, true);
+    assert.match(result.echo, /locally/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], 0x50000123); // local player guid forwarded
+    assert.equal(calls[0][1], 0x40);       // Sound.Eat1 representative cue
+  } finally {
+    globalThis.window = prevWindow;
+  }
+});
+
 check("dispatchEmoteAction: Say (0x08) → /me chat hint", () => {
   const t = { id: 0x08, name: "Say", isUserVisible: true, shape: "Message", fields: ["message"] };
   const result = dispatchEmoteAction(t, { handle: { sendEmote() {} } });
@@ -224,7 +283,7 @@ check("dispatchEmoteAction: user-visible but no specific handler → deferred me
 check("synthetic taxonomy: shape counts", () => {
   // Spot-check the synthetic payload to confirm the structure is consistent.
   assert.equal(SYNTHETIC_TAXONOMY.categories.length, 7);
-  assert.equal(SYNTHETIC_TAXONOMY.types.length, 11);
+  assert.equal(SYNTHETIC_TAXONOMY.types.length, 12);
   // All types must have id + name + shape + fields + isUserVisible.
   for (const t of SYNTHETIC_TAXONOMY.types) {
     assert.ok(Number.isInteger(t.id));

@@ -27080,6 +27080,43 @@ impl SessionHandle {
             })
     }
 
+    /// HUD rec #142 (2026-06-16): play the local player's emote sound
+    /// effect. **Local-only** — there is no C2S "broadcast sound" GameAction
+    /// in ACE (`GameMessageSound` 0xF750 is server-emitted only, from
+    /// internal EmoteManager / Lifestone / combat scripts), so we cannot
+    /// make PVS-visible observers hear it without an ACE handler (forbidden
+    /// per Keep ACE vanilla). Instead we synthesize the same kind=16
+    /// `SoundTriggered` [`ClientEvent`] the recv loop builds from an inbound
+    /// `GameMessageSound` and push it straight onto `queued_events`; the JS
+    /// drain (index.html `kind === 16`) resolves it through the local
+    /// player's SoundTable (defaulted to the humanoid table 0x20000001) and
+    /// plays it at the player's position via the existing PannerNode chain.
+    ///
+    /// `guid` is the local player GUID (from `window.getLocalPlayerGuid()`);
+    /// it must match the player's entity so the JS handler's `entityMap`
+    /// lookup + local-player SoundTable fallback fire. `sound_enum` is the
+    /// ACE `Sound` enum value to play. Returns `Err` before EnteredWorld
+    /// (`guid == 0`), mirroring `broadcast_emote_motion`'s pre-world guard.
+    ///
+    /// The `broadcast*` name is preserved for emote-panel.js wiring
+    /// continuity but is a misnomer: nothing is broadcast.
+    #[wasm_bindgen(js_name = broadcastEmoteSoundEffect)]
+    pub fn broadcast_emote_sound_effect(&self, guid: u32, sound_enum: u32) -> Result<(), JsValue> {
+        if guid == 0 {
+            return Err(JsValue::from_str(
+                "broadcast_emote_sound_effect: local player guid is 0 (call after EnteredWorld)",
+            ));
+        }
+        self.queued_events.borrow_mut().push(ClientEvent {
+            kind: CLIENT_EVENT_KIND_SOUND_TRIGGERED,
+            string_payload: None,
+            u32_payload: Some(guid),
+            u32_payload_2: Some(sound_enum),
+            f32_payload: Some(1.0),
+        });
+        Ok(())
+    }
+
     /// Phase 4 step 5 (interactive entities): the player clicked an
     /// entity sprite. Wraps the target guid in a
     /// `GameAction::Use(UseActionData { guid })` and dispatches via

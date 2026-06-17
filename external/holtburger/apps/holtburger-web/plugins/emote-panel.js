@@ -240,6 +240,36 @@ function dispatchEmoteAction(t, ctx) {
       info: `For pose emotes use slash commands in chat (e.g. /wave, /bow). Action type ${t.name} is dispatched per-pose.`,
     };
   }
+  if (t.id === 0x09 /* Sound */) {
+    // HUD rec #142 — local-only emote sound. ACE has no C2S "broadcast
+    // sound" GameAction (GameMessageSound 0xF750 is server-emitted only),
+    // so this plays the cue for the LOCAL player only; PVS-visible
+    // observers will NOT hear it. The panel surfaces the EmoteType
+    // taxonomy (not per-NPC emote records), so there is no specific sound
+    // bound to the generic Sound type — we play a representative cue that
+    // is verified to live in the local player's humanoid SoundTable
+    // (0x20000001). A future sound-picker could expose the full ACE Sound
+    // enum (external/melt/Source/Ace.Entity/Enum/Sound.cs).
+    if (typeof handle.broadcastEmoteSoundEffect !== "function") {
+      // Typeof-guard (F18-2): a pre-rec-#142 wasm bundle lacks this export.
+      return { dispatched: false, info: `Action ${t.name}: sound playback needs a newer client build.` };
+    }
+    const guid = (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function")
+      ? (window.getLocalPlayerGuid() >>> 0) : 0;
+    if (!guid) {
+      return { dispatched: false, info: `Action ${t.name}: enter the world before playing a sound.` };
+    }
+    const soundEnum = 0x40; // Sound.Eat1 — representative in-humanoid-table cue.
+    try {
+      handle.broadcastEmoteSoundEffect(guid, soundEnum);
+    } catch (err) {
+      return { dispatched: false, error: `Sound dispatch failed: ${err?.message ?? err}` };
+    }
+    return {
+      dispatched: true,
+      echo: `Played Sound enum 0x${soundEnum.toString(16)} locally (remote players will not hear it).`,
+    };
+  }
   if (t.id === 0x08 /* Say */) {
     // Say is just a chat broadcast — pass through.
     if (typeof handle.sendEmote === "function") {
