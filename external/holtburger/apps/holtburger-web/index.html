@@ -958,8 +958,10 @@
     <link rel="modulepreload" href="./plugins/inventory_helpers.js">
     <link rel="modulepreload" href="./plugins/journal-panel.js">
     <link rel="modulepreload" href="./plugins/loader.js">
+    <link rel="modulepreload" href="./plugins/lore-panel.js">
     <link rel="modulepreload" href="./plugins/main-panel.js">
     <link rel="modulepreload" href="./plugins/map-panel.js">
+    <link rel="modulepreload" href="./plugins/modal-dialog.js">
     <link rel="modulepreload" href="./plugins/options-panel.js">
     <link rel="modulepreload" href="./plugins/rejection_feedback.js">
     <link rel="modulepreload" href="./plugins/spellbook.js">
@@ -1018,6 +1020,7 @@
     <link rel="modulepreload" href="./scene3d/camera.js">
     <link rel="modulepreload" href="./scene3d/camera_math.js">
     <link rel="modulepreload" href="./scene3d/cells.js">
+    <link rel="modulepreload" href="./scene3d/client_event_dispatch.js">
     <link rel="modulepreload" href="./scene3d/cloud_overlay.js">
     <link rel="modulepreload" href="./scene3d/cloud_volume.js">
     <link rel="modulepreload" href="./scene3d/csm.js">
@@ -1041,20 +1044,31 @@
     <link rel="modulepreload" href="./scene3d/diag/strings.js">
     <link rel="modulepreload" href="./scene3d/diag/wire.js">
     <link rel="modulepreload" href="./scene3d/entities.js">
+    <link rel="modulepreload" href="./scene3d/entity_dispatch.js">
+    <link rel="modulepreload" href="./scene3d/entity_update_clone.js">
+    <link rel="modulepreload" href="./scene3d/hook_windows.js">
     <link rel="modulepreload" href="./scene3d/hud.js">
     <link rel="modulepreload" href="./scene3d/index.js?v=diag-followons-2026-05-23">
+    <link rel="modulepreload" href="./scene3d/input.js">
     <link rel="modulepreload" href="./scene3d/landblock_lru.js">
     <link rel="modulepreload" href="./scene3d/lighting.js">
     <link rel="modulepreload" href="./scene3d/loop.js">
     <link rel="modulepreload" href="./scene3d/materials.js">
     <link rel="modulepreload" href="./scene3d/nameplate_sprite.js">
+    <link rel="modulepreload" href="./scene3d/particles/owner_registry.js">
     <link rel="modulepreload" href="./scene3d/particles/time_rng.js">
     <link rel="modulepreload" href="./scene3d/picking.js">
     <link rel="modulepreload" href="./scene3d/play_effect_vfx.js">
+    <link rel="modulepreload" href="./scene3d/portal_space.js">
+    <link rel="modulepreload" href="./scene3d/pre_create_buffer.js">
+    <link rel="modulepreload" href="./scene3d/pursuit_monitor.js">
     <link rel="modulepreload" href="./scene3d/quality.js">
+    <link rel="modulepreload" href="./scene3d/script_manager.js">
+    <link rel="modulepreload" href="./scene3d/setup_rig.js">
     <link rel="modulepreload" href="./scene3d/sky_dome.js">
     <link rel="modulepreload" href="./scene3d/sky_lighting.js">
     <link rel="modulepreload" href="./scene3d/spawns.js">
+    <link rel="modulepreload" href="./scene3d/speech_bubble.js">
     <link rel="modulepreload" href="./scene3d/spell_shape_preview.js">
     <link rel="modulepreload" href="./scene3d/statics.js?v=phase7-par">
     <link rel="modulepreload" href="./scene3d/stream_bake_guard.js">
@@ -1066,12 +1080,14 @@
     <link rel="modulepreload" href="./scene3d/weather/snow.js">
     <link rel="modulepreload" href="./scene3d/weather_state.js">
     <link rel="modulepreload" href="./scene3d/webgl_context_recovery.js">
+    <link rel="modulepreload" href="./scene3d/world_stream.js">
     <link rel="modulepreload" href="./ui/ac_aim_level_for_velocity.js">
     <link rel="modulepreload" href="./ui/ac_attack_type_for_weapon.js">
     <link rel="modulepreload" href="./ui/ac_clothing.js">
     <link rel="modulepreload" href="./ui/ac_combat_maneuver.js">
     <link rel="modulepreload" href="./ui/ac_dye_preview.js">
     <link rel="modulepreload" href="./ui/ac_entity_icon.js">
+    <link rel="modulepreload" href="./ui/ac_floaty_frame.js">
     <link rel="modulepreload" href="./ui/ac_font.js">
     <link rel="modulepreload" href="./ui/ac_icon_cache.js">
     <link rel="modulepreload" href="./ui/ac_layout.js">
@@ -1288,6 +1304,8 @@
       import * as fellowshipPanelPlugin from "./plugins/fellowship-panel.js";
       import * as journalPanelPlugin from "./plugins/journal-panel.js";
       import * as contractsPanelPlugin from "./plugins/contracts-panel.js";
+      // HUD rec #181 — Personal Library view (synthesized writable-item catalog).
+      import * as lorePanelPlugin from "./plugins/lore-panel.js";
       import * as optionsPanelPlugin from "./plugins/options-panel.js";
       // Wave 4.A (2026-05-28) — Train Skills view (gmSkillUI port).
       import * as trainSkillsPlugin from "./plugins/train-skills.js";
@@ -1449,6 +1467,7 @@
         "fellowship-panel": fellowshipPanelPlugin,
         "journal-panel": journalPanelPlugin,
         "contracts-panel": contractsPanelPlugin,
+        "lore-panel": lorePanelPlugin,
         // Wave 4.A (2026-05-28) — Train Skills (gmSkillUI port).
         "train-skills": trainSkillsPlugin,
       };
@@ -1698,6 +1717,10 @@
         mainPanelPlugin.registerView("spellbook", spellbookPlugin.view);
         mainPanelPlugin.registerView("journal",   journalPanelPlugin.view);
         mainPanelPlugin.registerView("contracts", contractsPanelPlugin.view);
+        // HUD rec #181 — Personal Library (Shift+F8). matchManifestHotkeyEvent
+        // resolves the manifest hotkey → pluginId "lore-panel" → strip "-panel"
+        // → "lore" view via the generic toggleView bridge.
+        mainPanelPlugin.registerView("lore",      lorePanelPlugin.view);
         // PR-II (2026-05-23): Options view — main-panel port of retail
         // gmConfigUI (layout 0x21000029). Same convention as Inventory /
         // Character / Spellbook / etc. — shares the right-side pane and

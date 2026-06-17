@@ -1,0 +1,16 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "lore-panel",
+  "name": "Library",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Personal Library — synthesized client-side catalog of writable items (books/scrolls) the player has held, with lazy page-text fetch (HUD rec #181)",
+  "icon": "📚",
+  "iconHidden": true,
+  "entry": "./lore-panel.js",
+  "environments": ["browser"],
+  "slots": ["panel"],
+  "hotkeys": [
+    { "id": "toggle", "default": "Shift+F8", "label": "Toggle Library" }
+  ]
+}
