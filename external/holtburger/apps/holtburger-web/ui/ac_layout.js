@@ -85,6 +85,18 @@ export async function loadLayout(layoutId) {
           topLevelElements: raw.elements.length,
           totalElements: countElements(raw.elements),
         });
+        // HUD rec #187 (2026-06-16): G3 emission telemetry. Wasm
+        // populates `ok` + `g3SerializeErrors.{stateDesc,states}` at
+        // the top of the layout payload — surface fallback hits to
+        // the diag layer so Round-3 probes can pick up regressions.
+        if (raw.ok === false) {
+          const e = raw.g3SerializeErrors ?? {};
+          window.__diag?.layout?.onG3SerializeError?.(
+            layoutId,
+            (e.stateDesc ?? 0) >>> 0,
+            (e.states ?? 0) >>> 0,
+          );
+        }
       } catch (_) {}
       return raw;
     } catch (err) {

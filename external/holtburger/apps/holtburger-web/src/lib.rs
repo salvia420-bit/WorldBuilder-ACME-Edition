@@ -7878,6 +7878,8 @@ pub async fn fetch_layout(layout_id: u32) -> Result<String, JsValue> {
         out: &mut String,
         key: u32,
         el: &holtburger_dat::file_type::ElementDesc,
+        state_desc_err_count: &mut u32,
+        states_err_count: &mut u32,
     ) {
         out.push_str("{\"key\":");
         out.push_str(&key.to_string());
@@ -7909,12 +7911,27 @@ pub async fn fetch_layout(layout_id: u32) -> Result<String, JsValue> {
         // `serde_json::to_string` errors fall back to the prior empty
         // shape so a malformed sub-record can't blow up the whole
         // layout payload.
-        let state_desc_json = serde_json::to_string(&el.state_desc)
-            .unwrap_or_else(|_| "null".to_string());
+        //
+        // HUD rec #187 (2026-06-16): bump the per-element failure
+        // counters so the top-level `ok` / `g3SerializeErrors` summary
+        // surfaces fallback hits to the JS diag hook
+        // (window.__diag?.layout?.onG3SerializeError).
+        let state_desc_json = match serde_json::to_string(&el.state_desc) {
+            Ok(s) => s,
+            Err(_) => {
+                *state_desc_err_count += 1;
+                "null".to_string()
+            }
+        };
         out.push_str(",\"state_desc\":");
         out.push_str(&state_desc_json);
-        let states_json = serde_json::to_string(&el.states)
-            .unwrap_or_else(|_| "{}".to_string());
+        let states_json = match serde_json::to_string(&el.states) {
+            Ok(s) => s,
+            Err(_) => {
+                *states_err_count += 1;
+                "{}".to_string()
+            }
+        };
         out.push_str(",\"states\":");
         out.push_str(&states_json);
         out.push_str(",\"children\":[");
@@ -7922,11 +7939,18 @@ pub async fn fetch_layout(layout_id: u32) -> Result<String, JsValue> {
         for (ck, cv) in &el.children {
             if !first { out.push(','); }
             first = false;
-            emit_element(out, *ck, cv);
+            emit_element(out, *ck, cv, state_desc_err_count, states_err_count);
         }
         out.push_str("]}");
     }
 
+    // HUD rec #187 (2026-06-16): G3 emission diagnostics. Both counters
+    // start at 0 and bump per fallback inside emit_element; the
+    // top-level layout JSON gains `ok` (true when both are zero) plus
+    // per-kind counts. JS reads `__diag.layout.onG3SerializeError` to
+    // surface the regression to the diag layer.
+    let mut state_desc_err_count: u32 = 0;
+    let mut states_err_count: u32 = 0;
     let mut out = String::with_capacity(layout.elements.len() * 256);
     out.push_str("{\"id\":");
     out.push_str(&layout.id.to_string());
@@ -7939,9 +7963,27 @@ pub async fn fetch_layout(layout_id: u32) -> Result<String, JsValue> {
     for (k, el) in &layout.elements {
         if !first { out.push(','); }
         first = false;
-        emit_element(&mut out, *k, el);
+        emit_element(
+            &mut out,
+            *k,
+            el,
+            &mut state_desc_err_count,
+            &mut states_err_count,
+        );
     }
-    out.push_str("]}");
+    out.push_str("]");
+    // HUD rec #187 (2026-06-16): expose G3 emission outcome at the top
+    // level of the JSON payload — `ok=false` when any sub-record fell
+    // back to the empty shape, with per-kind counts so JS can pick a
+    // useful telemetry label.
+    let ok = state_desc_err_count == 0 && states_err_count == 0;
+    out.push_str(",\"ok\":");
+    out.push_str(if ok { "true" } else { "false" });
+    out.push_str(",\"g3SerializeErrors\":{\"stateDesc\":");
+    out.push_str(&state_desc_err_count.to_string());
+    out.push_str(",\"states\":");
+    out.push_str(&states_err_count.to_string());
+    out.push_str("}}");
     Ok(out)
 }
 
