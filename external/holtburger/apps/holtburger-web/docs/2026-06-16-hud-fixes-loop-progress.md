@@ -66,7 +66,7 @@
 | 59 | med | D17-status-indicators-and-floaty-chrome | `ac_window_position.js:53-169 (attachWindowPosition signature extension) + 82-125` | Implement window resize via bottom/right edge drag handles | d7c7b867 |
 | 63 | med | E01-font-system | `ui/ac_font.js:438-478 _drawGlyphs, 232-245 shadow render block` | Apply baseline offset + border pixels to glyph positioning | b1afca88 |
 | 65 | med | E02-layout-system-states | `tests/layout_state_inheritance.test.cjs (new), ui/ac_layout.js (conditional casc` | Validate state pass-to-children cascade in multi-level hierarchies | 3dc802cf |
-| 68 | med | E04-string-tables-localization | `index.html (session init) + ac_strings.js (import global context)` | Consolidate language initialization in session handshake | defer-ace |
+| 68 | med | E04-string-tables-localization | `index.html (session init) + ac_strings.js (import global context)` | Consolidate language initialization in session handshake | c766b30f |
 | 69 | med | E06-tooltip-system | `vendor-ui.js:500-650 (item cell hover handler) + item-tooltip-formatter (shared ` | Vendor item tooltip with price and appraisal | 61e0e5b1 |
 | 71 | med | E07-keymap-hotkey-routing | `ui/keymap.js:314-325 (after loadRetailKeyMap), plugins/options-panel.js Controls` | Enumerate retail actions with friendly labels | d70b6333 |
 | 72 | med | E07-keymap-hotkey-routing | `ui/keymap.js:224-290, plugins/options-panel.js` | Support mouse button + joystick bindings | fea53a32 |
@@ -285,7 +285,7 @@ These touch scene3d render pipeline, camera modes, picking/raycast, first-person
 | 53 | med | wasm | D14-examination-identify | `examine-target.js:644-784` | Surface AppraisalProfile success_flag for skill-gated visibility | skip |
 | 56 | med | wasm | D16-house-container-lifestone | `lifestone-popup.js:228-252 (button row DOM)` | Add Sanctuary location display to lifestone-popup UI | skip |
 | 66 | med | wasm | E03-sprite-icon-pipeline | `apps/holtburger-web/build.rs (proposed)` | Verify icon-manifest.json generation is automated in build pipeline | skip |
-| 68 | med | wasm | E04-string-tables-localization | `index.html (session init) + ac_strings.js (import global context)` | Consolidate language initialization in session handshake | defer-ace |
+| 68 | med | wasm | E04-string-tables-localization | `index.html (session init) + ac_strings.js (import global context)` | Consolidate language initialization in session handshake | c766b30f |
 | 83 | med | wasm | E12-login-character-select-creation | `index.html:8162-8165 (loginStatus.innerHTML), api.js to expose world-info event` | Add character-list world-population display (post-login context) | skip |
 | 84 | med | wasm | E12-login-character-select-creation | `api.js (add shared-cooldown event wiring), plugins that depend on it` | Port Character.OnSharedCooldownChanged event to web bus (cross-domain impact) | skip |
 | 175 | med | wasm | D07-combat-hud-stance-power | `plugins/api.js:58, src/lib.rs ~32000, combat-hud.js:614, combat-bar.js:1630-1670` | Add fizzle event surface and spell-fail visual feedback | fable-skip |
