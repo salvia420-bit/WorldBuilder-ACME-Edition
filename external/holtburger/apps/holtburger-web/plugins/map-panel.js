@@ -150,6 +150,26 @@ function ensureStyles() {
       pointer-events: none;
       z-index: 2;
     }
+    /* HUD rec #139 — fellow / allegiance member pins. fellow uses the retail
+       darker-green friend dot 0x06004D10; allegiance uses an amber square. */
+    .hb-map-roster {
+      position: absolute;
+      box-sizing: border-box;
+      width: 10px;
+      height: 10px;
+      transform: translate(-50%, -50%);
+      pointer-events: auto;
+      z-index: 3;
+      display: none;
+    }
+    .hb-map-roster[data-kind="fellow"] {
+      background: url("./data/ui-sprites/0x06004D10.png") center/contain no-repeat;
+      border-radius: 50%;
+    }
+    .hb-map-roster[data-kind="alleg"] {
+      background: linear-gradient(180deg, #d8b24a 0%, #a8801a 100%);
+      border: 1px solid #6a5010;
+    }
     /* Coord readout — per gmMapUI 0x100001EF at (21,303) 257×20 rel
        to 0x100001EA. Below the viewport. */
     .hb-map-meta-coord {
@@ -206,6 +226,42 @@ function fmtCoord(worldX, worldZ) {
   const ewLabel = ew >= 0 ? "E" : "W";
   const nsLabel = ns >= 0 ? "N" : "S";
   return `${Math.abs(ns).toFixed(1)}${nsLabel}, ${Math.abs(ew).toFixed(1)}${ewLabel}`;
+}
+
+// HUD rec #139 — collect renderable roster-member map markers. Pure (no DOM):
+// given the roster map (guid → {kind, name}), the live entityMap, a last-seen
+// position cache, the current time, and the local player's guid, return one
+// descriptor per locatable member. Live PVS positions (entityMap) win and
+// refresh the cache; recently-seen members fall back to the cache (faded by
+// age) up to staleMs. Members never seen — outside the local PVS or offline —
+// are omitted: the AC server never broadcast roster-wide positions, so this is
+// fidelity-correct, not a regression. A PLAYER objDescFlags guard suppresses
+// the rare case of an item guid recycled onto a roster guid (radar.js:38).
+export function collectRosterMarkers(roster, entityMap, lastSeen, nowMs, localGuid, opts = {}) {
+  const staleMs = opts.staleMs ?? 5 * 60 * 1000;
+  const ODF_PLAYER = 0x08;
+  const lg = (localGuid ?? 0) >>> 0;
+  const out = [];
+  for (const [guidRaw, info] of roster) {
+    const g = guidRaw >>> 0;
+    if (g === lg) continue; // the local player already has their own marker
+    const kind = info?.kind ?? "fellow";
+    const name = info?.name ?? "";
+    const inst = (entityMap && typeof entityMap.get === "function") ? entityMap.get(g) : null;
+    const pos = inst?.root?.position ?? null;
+    const odf = inst?.meta?.objDescFlags;
+    const isPlayer = (odf == null) ? true : (((odf >>> 0) & ODF_PLAYER) !== 0);
+    if (pos && isPlayer && typeof pos.x === "number" && typeof pos.y === "number") {
+      lastSeen.set(g, { x: pos.x, y: pos.y, ts: nowMs });
+      out.push({ guid: g, kind, name, x: pos.x, y: pos.y, source: "live", ageMs: 0 });
+    } else {
+      const cached = lastSeen.get(g);
+      if (cached && (nowMs - cached.ts) <= staleMs) {
+        out.push({ guid: g, kind, name, x: cached.x, y: cached.y, source: "cached", ageMs: nowMs - cached.ts });
+      }
+    }
+  }
+  return out;
 }
 
 // Apply gmMapUI 0x21000026 layout to the map view's sub-elements.
@@ -265,7 +321,7 @@ function applyMapLayout(refs) {
 export const view = {
   name: "Map",
   nameFor: () => "Map of Dereth",
-  mount: (parentEl, _ctx) => {
+  mount: (parentEl, ctx) => {
     ensureStyles();
     const root = document.createElement("div");
     root.className = "hb-map-root";
@@ -342,6 +398,7 @@ export const view = {
       applyTransform();
       positionPlayer();
       positionHouseMarker();
+      positionRosterMarkers();
     });
     viewport.addEventListener("pointerup", (ev) => {
       drag = null;
@@ -355,6 +412,7 @@ export const view = {
       applyTransform();
       positionPlayer();
       positionHouseMarker();
+      positionRosterMarkers();
     }, { passive: false });
 
     // Position the player marker over the world-map bitmap using the
@@ -416,6 +474,87 @@ export const view = {
       house.style.display = "block";
     }
 
+    // HUD rec #139 — fellow / allegiance member pins. The wire never carries
+    // roster-wide positions (FellowshipMemberData / AllegianceDataEntry have
+    // no coords), but members inside the local PVS exist in the 3D
+    // entityManager with live AC-world positions (the radar plugin reads the
+    // same source). Cross-reference roster guids against entityMap each tick;
+    // a small last-seen cache keeps a fading marker for members who just left
+    // PVS. The roster guid set is refreshed on the fellowship/allegiance bus
+    // events. JS-only — every wasm surface used here already ships.
+    const rosterLastSeen = new Map(); // guid -> { x, y, ts }
+    const rosterPool = [];            // reused marker divs
+    let roster = new Map();           // guid -> { kind, name }
+
+    function refreshRoster() {
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      const next = new Map();
+      try {
+        const fel = handle?.playerFellowship?.();
+        if (fel?.members) {
+          for (const m of fel.members) {
+            if (m?.guid != null) next.set(m.guid >>> 0, { kind: "fellow", name: m.name ?? "" });
+          }
+        }
+      } catch (_) { /* not in a fellowship / stale pkg */ }
+      try {
+        const alg = handle?.playerAllegiance?.();
+        if (alg) {
+          const members = [alg.monarch, alg.patron, alg.myself, ...(alg.vassals ?? [])];
+          for (const m of members) {
+            if (m?.guid != null && !next.has(m.guid >>> 0)) {
+              next.set(m.guid >>> 0, { kind: "alleg", name: m.name ?? "" });
+            }
+          }
+        }
+      } catch (_) { /* not in an allegiance / stale pkg */ }
+      roster = next;
+    }
+
+    function ensureRosterPool(n) {
+      while (rosterPool.length < n) {
+        const el = document.createElement("div");
+        el.className = "hb-map-roster";
+        viewport.appendChild(el);
+        rosterPool.push(el);
+      }
+    }
+
+    function positionRosterMarkers() {
+      const entityMap = window.liveScene3d?.entityManager?.entityMap ?? null;
+      const localGuid = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+      const markers = collectRosterMarkers(roster, entityMap, rosterLastSeen, Date.now(), localGuid);
+      ensureRosterPool(markers.length);
+      const vpRect = viewport.getBoundingClientRect();
+      for (let i = 0; i < rosterPool.length; i++) {
+        const el = rosterPool[i];
+        const m = markers[i];
+        if (!m) { el.style.display = "none"; continue; }
+        const { leftPct, topPct } = worldToMapPct(m.x, m.y);
+        el.style.left = `${(leftPct / 100) * vpRect.width * scale + pan.x}px`;
+        el.style.top  = `${(topPct  / 100) * vpRect.height * scale + pan.y}px`;
+        el.dataset.kind = m.kind;
+        el.style.opacity = m.source === "cached"
+          ? String(Math.max(0.25, 1 - m.ageMs / (5 * 60 * 1000)))
+          : "1";
+        const ageStr = m.source === "cached" ? ` (last seen ${Math.round(m.ageMs / 1000)}s ago)` : "";
+        el.title = `${m.name || ("0x" + m.guid.toString(16))}${ageStr}`;
+        el.style.display = "block";
+      }
+    }
+    refreshRoster();
+
+    // Refresh the roster guid set on roster changes (kind=22/25 → these bus
+    // events). Positions still come live from entityMap each tick.
+    const rosterBus = ctx?.client?.events
+      ?? (typeof window !== "undefined" ? window.__pluginClient?.events : null)
+      ?? null;
+    const onRosterChange = () => refreshRoster();
+    if (rosterBus && typeof rosterBus.on === "function") {
+      rosterBus.on("fellowshipUpdated", onRosterChange);
+      rosterBus.on("allegianceUpdated", onRosterChange);
+    }
+
     function updateDate() {
       // AC clock — same epoch + compression as Sky-K stars/moon.
       // AC_LAUNCH_UNIX_EPOCH = 941500800 (1999-11-01), 11.34× compression.
@@ -429,6 +568,7 @@ export const view = {
     let houseTick = 0;
     function tick() {
       positionPlayer();
+      positionRosterMarkers();
       // House position changes only on HouseData arrival; sample once
       // a second (≈60 frames at 60Hz) to keep the rAF cost negligible.
       if ((houseTick++ % 60) === 0) {
@@ -440,6 +580,10 @@ export const view = {
 
     return () => {
       cancelAnimationFrame(rafId);
+      if (rosterBus && typeof rosterBus.off === "function") {
+        try { rosterBus.off("fellowshipUpdated", onRosterChange); } catch (_) {}
+        try { rosterBus.off("allegianceUpdated", onRosterChange); } catch (_) {}
+      }
       root.remove();
     };
   },
