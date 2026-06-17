@@ -78,7 +78,7 @@
 | 80 | med | E11-window-mgmt-resize-persist | `chat-panel.js:683-705 (delete); add ac_resize_corners import` | Unify chat-panel resize with ac_resize_corners (remove bespoke logic) | 64c8ecaa |
 | 82 | med | E12-login-character-select-creation | `character-creation.js:1155-1226 (renderAttributesPage), applyAttributeDelta help` | Add per-attribute lock buttons on Attributes page (J4.B.2 enhancement) | fable-skip |
 | 83 | med | E12-login-character-select-creation | `index.html:8162-8165 (loginStatus.innerHTML), api.js to expose world-info event` | Add character-list world-population display (post-login context) | 6373518d |
-| 84 | med | E12-login-character-select-creation | `api.js (add shared-cooldown event wiring), plugins that depend on it` | Port Character.OnSharedCooldownChanged event to web bus (cross-domain impact) | defer-wasm |
+| 84 | med | E12-login-character-select-creation | `api.js (add shared-cooldown event wiring), plugins that depend on it` | Port Character.OnSharedCooldownChanged event to web bus (cross-domain impact) | 6ebde6f3 |
 | 85 | med | E12-login-character-select-creation | `character-creation.js:1356-1419 (renderSummaryPage), integrate 3D preview viewpo` | Implement character-appearance 3D preview on Summary page (final review) | fable-skip |
 | 86 | med | E13-death-resurrection-vitae-ui | `status-indicators.js:95 (INDICATORS vitae slot), acclient.h:54086 (gmUIElement_V` | Wire vitae icon to 3+ state variants (none/warning/critical thresholds) | 406d4ce4 |
 | 88 | med | E14-loading-zone-transition-portal-storm | `plugins/status-indicators.js or plugins/landblock-messages.js (new); wiring to c` | Implement landblockChanged status message (zone-cross name display) | b939a583 |
