@@ -1753,3 +1753,45 @@ void main() {
         parentContainer.addChild(lbContainer);
         return lbContainer;
       }
+
+// ===== TERRAIN_TYPES (2D terrain colour-key palette, 32 entries) =====
+      const TERRAIN_TYPES = [
+        { code: 0x00, name: "BarrenRock",          color: 0xb4ad9a },
+        { code: 0x01, name: "Grassland",           color: 0x5d8740 },
+        { code: 0x02, name: "Ice",                 color: 0xd8e9f0 },
+        { code: 0x03, name: "LushGrass",           color: 0x4f8a31 },
+        { code: 0x04, name: "MarshSparseSwamp",    color: 0x6b6a3e },
+        { code: 0x05, name: "MudRichDirt",         color: 0x6e4f30 },
+        { code: 0x06, name: "ObsidianPlain",       color: 0x3a3530 },
+        { code: 0x07, name: "PackedDirt",          color: 0x9d7c4f },
+        { code: 0x08, name: "PatchyDirt",          color: 0xb0936c },
+        { code: 0x09, name: "PatchyGrassland",     color: 0x82934a },
+        { code: 0x0a, name: "SandYellow",          color: 0xd4c082 },
+        { code: 0x0b, name: "SandGrey",            color: 0xb0a98e },
+        { code: 0x0c, name: "SandRockStrewn",      color: 0xaa9a78 },
+        { code: 0x0d, name: "SedimentaryRock",     color: 0xa37050 },
+        { code: 0x0e, name: "SemiBarrenRock",      color: 0x948872 },
+        { code: 0x0f, name: "Snow",                color: 0xf5f4f1 },
+        { code: 0x10, name: "WaterRunning",        color: 0x3a6480 },
+        { code: 0x11, name: "WaterStandingFresh",  color: 0x46708a },
+        { code: 0x12, name: "WaterShallowSea",     color: 0x5a8398 },
+        { code: 0x13, name: "WaterShallowStillSea",color: 0x6a93a4 },
+        { code: 0x14, name: "WaterDeepSea",        color: 0x233e58 },
+        { code: 0x15, name: "ForestFloor",         color: 0x4a5630 },
+        { code: 0x16, name: "FauxWaterRunning",    color: 0x4f7e88 },
+        { code: 0x17, name: "SeaSlime",            color: 0x5c7d3f },
+        { code: 0x18, name: "Argila",              color: 0x8a5a44 },
+        { code: 0x19, name: "Volcano1",            color: 0xb45638 },
+        { code: 0x1a, name: "Volcano2",            color: 0x7a3326 },
+        { code: 0x1b, name: "BlueIce",             color: 0xb8d4e2 },
+        { code: 0x1c, name: "Moss",                color: 0x5a7340 },
+        { code: 0x1d, name: "DarkMoss",            color: 0x3e5128 },
+        { code: 0x1e, name: "Olthoi",              color: 0x98a356 },
+        { code: 0x1f, name: "DesolateLands",       color: 0x8c7b5e },
+      ];
+
+// ===== ATLAS_* (2D terrain atlas grid constants) =====
+      const ATLAS_COLS = 6;
+      const ATLAS_ROWS = 6;
+      const ATLAS_TILE_PX = 256;
+      const ATLAS_PX = ATLAS_COLS * ATLAS_TILE_PX; // 1536; ATLAS_ROWS too.
