@@ -505,6 +505,9 @@ const UNIFIED_MODE = (() => {
 })();
 const UNIFIED_ATTACK = UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
 const UNIFIED_DEATH = UNIFIED_MODE === "death" || UNIFIED_MODE === "on";
+// Missile rides with attack (both Step 1): an aim-level fire is a CYCLE
+// (class 0x40, in MotionTable.cycles) the links-only swing resolver can't reach.
+const UNIFIED_MISSILE = UNIFIED_MODE === "missile" || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import {
   materialCanCastShadow,
@@ -6037,6 +6040,49 @@ export class EntityManager {
   }
 
   /**
+   * Animation consolidation (docs/animation-audit §5 Step 1, missile): build a
+   * one-shot Rust MotionSequence from the CYCLE bake for `cmd` and drive it
+   * full-body (hands back to the mixer on completion). The bake resolves cycles
+   * (lib.rs try_resolve_cycle_frames), so an aim-level fire (class 0x40, in
+   * MotionTable.cycles) — which the links-only swing resolver structurally can't
+   * reach (canPlayReal false → single-arm/non-human setSwingPose no-op = "missile
+   * fires with no animation") — animates here instead. Returns true if a sequence
+   * was built (caller skips the fallback), false otherwise (bake didn't resolve a
+   * cycle / stale pkg → unchanged behavior).
+   * @returns {Promise<boolean>}
+   */
+  async _tryUnifiedCycleOneShot(guid, setupId, mtableId, cmd, stance) {
+    const g = guid >>> 0;
+    const inst = this.entityMap.get(g);
+    if (!inst) return false;
+    const MS =
+      (typeof window !== "undefined" && window.__hbWasm) ? window.__hbWasm.MotionSequence : null;
+    const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
+    if (!MS || typeof fetchKeyframes !== "function") return false;
+    let entry = null;
+    try {
+      entry = await this.animationCache.get(setupId >>> 0, mtableId >>> 0, cmd >>> 0, stance >>> 0, fetchKeyframes, {
+        modelChanges: inst.meta?.modelChanges ?? new Uint32Array(0),
+        textureChanges: inst.meta?.textureChanges ?? new Uint32Array(0),
+        paletteId: (inst.meta?.paletteId ?? 0) >>> 0,
+        paletteSubsFlat: inst.meta?.subPalettes ?? new Uint32Array(0),
+      });
+    } catch (_) { return false; }
+    if (!this.entityMap.has(g)) return false;
+    const d = entry?.sequenceDescriptor;
+    if (!d) return false;
+    const seq = MS.fromDescriptor(
+      d.numFrames >>> 0, +d.framerate || 0, +d.duration || 0,
+      d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
+      false, // one-shot: play the draw/aim once, then hand back to the cycle
+    );
+    if (!seq) return false;
+    if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
+    inst._unifiedSeq = { seq, desc: d, clearOnDone: true };
+    return true;
+  }
+
+  /**
    * @param {number} guid
    * @param {number} motionCmd
    * @param {{ holdAtPeak?: boolean }} [opts]
@@ -6079,6 +6125,14 @@ export class EntityManager {
       result.source === "wasm-link";
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
     if (!canPlayReal || typeof fetchKeyframes !== "function") {
+      // Missile / aim-level fire is a CYCLE (class 0x40) the links-only gate
+      // above can't resolve. Under ?unifiedMotion, route it through the Rust
+      // authority on the cycle bake (full-body, retail-faithful) instead of the
+      // single-arm/non-human setSwingPose no-op. Only diverts when a real cycle
+      // resolves; otherwise falls through unchanged. Default-off.
+      if (UNIFIED_MISSILE && await this._tryUnifiedCycleOneShot(g, setupId, mtableId, motionCmd >>> 0, stance)) {
+        return;
+      }
       this.setSwingPose(g);
       return;
     }

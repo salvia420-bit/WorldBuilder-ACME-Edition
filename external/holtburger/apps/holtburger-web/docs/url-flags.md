@@ -18,6 +18,10 @@ appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 > - `attack` (and `on`): an attack swing builds a one-shot `MotionSequence` from the bake's
 >   segment descriptor, drives the FULL body + suppresses the mixer (fixes "upper-body-only
 >   swing"), then hands back to the frozen cycle on completion.
+> - `missile` (and `attack`/`on`): an aim-level fire is a CYCLE (class 0x40) the links-only
+>   swing resolver structurally can't reach; `_tryUnifiedCycleOneShot` builds a one-shot from
+>   the cycle bake and animates the full body instead of the single-arm/non-human `setSwingPose`
+>   no-op ("missile fires with no animation"). Only diverts when a real cycle resolves.
 > - `death` (and `on`): Dead (0x0011) plays the collapse ONCE then HOLDS the final prone
 >   frame (one-shot `done`+clamp) — replaces the held-looping pose + racy collapse overlay.
 >   The default (flag-off) STATIONARY→cycle path is untouched.
