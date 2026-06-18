@@ -4626,18 +4626,19 @@ void main() {
         const v = new URLSearchParams(window.location.search).get("spawnDefer2dOnly");
         return v === "on" || v === "true" || v === "1" || v === "yes";
       })();
-      // A15-Q2 (2026-06-11 unification): `?unifiedClone=on` (default-off)
-      // routes the backlog clone (__scene3dCloneEntityUpdate) and the 2D
-      // deferred-spawn clone (cloneEntitySpawn) through the single shared
-      // `cloneEntityUpdate` schema (scene3d/entity_update_clone.js), the
-      // same one scene3d/loop.js#toMeta consumes under the same flag. Off =
-      // the legacy per-site clones below. The unified clone is a strict
-      // superset, so it ALSO carries `isAutonomous` / `physicsTranslucency`
-      // / `motionSpeed` — fields the LIVE 3D dispatcher reads but the legacy
-      // backlog clone silently dropped (A15 §3 row 2).
+      // A15-Q2 (2026-06-11 unification): `?unifiedClone` (default-ON as of W6
+      // flip 2026-06-18; `?unifiedClone=off` escape) routes the backlog clone
+      // (__scene3dCloneEntityUpdate) and the 2D deferred-spawn clone
+      // (cloneEntitySpawn) through the single shared `cloneEntityUpdate`
+      // schema (scene3d/entity_update_clone.js), the same one
+      // scene3d/loop.js#toMeta consumes under the same flag. Off = the legacy
+      // per-site clones below. The unified clone is a strict superset, so it
+      // ALSO carries `isAutonomous` / `physicsTranslucency` / `motionSpeed` —
+      // fields the LIVE 3D dispatcher (now the default renderer) reads but the
+      // legacy backlog clone silently dropped (A15 §3 row 2).
       const __UNIFIED_CLONE = (() => {
         const v = new URLSearchParams(window.location.search).get("unifiedClone");
-        return v === "on" || v === "true" || v === "1" || v === "yes";
+        return v?.toLowerCase() !== "off";
       })();
       // A8-M3 (2026-06-11 unification): `?unifiedClientEvent=on`
       // (default-off; renamed from the spec's `?unifiedEntityDispatch` by
