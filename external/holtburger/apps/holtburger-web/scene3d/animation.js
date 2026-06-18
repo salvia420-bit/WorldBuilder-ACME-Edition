@@ -73,7 +73,14 @@ export function buildSequenceDescriptor(animData) {
     if (numFrames === 0) return null;
     const expectedSize = numFrames * partCount * FLOATS_PER_PART_PER_FRAME;
     if (!partFrames || partFrames.length !== expectedSize) return null;
-    return { partCount, numFrames, framerate, partFrames, frameTimes, duration, posFrames };
+    // Step 1: the wasm per-segment AnimData descriptor (EntityAnimationData
+    // segmentStarts/Counts/Framerates/AnimIds) — lets the MotionSequence node-split
+    // the bake. Absent on legacy/plain animData → the interpreter builds one node.
+    const { segmentStarts, segmentCounts, segmentFramerates, segmentAnimIds } = animData;
+    return {
+        partCount, numFrames, framerate, partFrames, frameTimes, duration, posFrames,
+        segmentStarts, segmentCounts, segmentFramerates, segmentAnimIds,
+    };
 }
 
 export function buildAnimationClip(animData, partNames) {

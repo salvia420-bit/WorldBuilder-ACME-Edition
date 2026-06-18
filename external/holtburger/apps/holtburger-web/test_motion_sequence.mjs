@@ -15,6 +15,7 @@
 
 import {
   sequenceFromAnimationData,
+  chainOneShotThenCycle,
   poseRig,
   unifiedMotionMode,
 } from "./scene3d/motion/motion_sequence.js";
@@ -151,6 +152,63 @@ if (THREE && anim) {
     }
   }
   check(`mixer vs sequence per-part parity over ${samples.length} sample times`, allMatch, `maxErr=${maxErr.toExponential(2)}`);
+}
+
+// ---- Part C: multi-node node-split parity (the Step-1 descriptor) ------------
+// A node-split bake (one MotionNode per AnimData segment, windows into the SHARED
+// buffer) must reproduce the single concatenated node's frame + pose at every
+// time, including across the loop wrap. This proves the wasm segment descriptor
+// (segmentStarts/Counts) is faithful end-to-end: Rust segments → JS nodes → pose.
+console.log("=== Part C: multi-node (segment-split) parity ===");
+{
+  const F = 4, P = 2;
+  const pf = new Float32Array(F * P * 7);
+  for (let f = 0; f < F; f += 1) {
+    for (let p = 0; p < P; p += 1) {
+      const b = (f * P + p) * 7;
+      pf[b + 0] = f * 7 + p; pf[b + 1] = f; pf[b + 2] = p;
+      const [qw, qx, qy, qz] = nquat(f * 0.25 + p * 0.13);
+      pf[b + 3] = qw; pf[b + 4] = qx; pf[b + 5] = qy; pf[b + 6] = qz;
+    }
+  }
+  // Cumulative times for a 2-segment bake: seg0 frames 0,1 @ 10fps (dt .1);
+  // seg1 frames 2,3 @ 5fps (dt .2). Matches build_concatenated_motion_frames.
+  const ftimes = Float32Array.from([0, 0.1, 0.2, 0.4]);
+  const dur = 0.6;
+  const descNoSeg = { partCount: P, numFrames: F, framerate: 10, partFrames: pf, frameTimes: ftimes, duration: dur };
+  const descSeg = {
+    ...descNoSeg,
+    segmentStarts: Uint32Array.from([0, 2]),
+    segmentCounts: Uint32Array.from([2, 2]),
+    segmentFramerates: Float32Array.from([10, 5]),
+  };
+  const single = sequenceFromAnimationData(descNoSeg);
+  const multi = sequenceFromAnimationData(descSeg);
+  check("single-segment desc → 1 node", single.nodes.length === 1, `nodes=${single.nodes.length}`);
+  check("segment desc → 2 nodes", multi.nodes.length === 2, `nodes=${multi.nodes.length}`);
+
+  const rigA = [stubPart(), stubPart()];
+  const rigB = [stubPart(), stubPart()];
+  const samples = [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.39, 0.45, 0.55, 0.6, 0.65, 1.27];
+  let allMatch = true, maxErr = 0;
+  for (const t of samples) {
+    single.reset().advance(t); poseRig(single, rigA);
+    multi.reset().advance(t); poseRig(multi, rigB);
+    for (let p = 0; p < P; p += 1) {
+      const dp = Math.max(Math.abs(rigA[p].position.x - rigB[p].position.x), Math.abs(rigA[p].position.y - rigB[p].position.y), Math.abs(rigA[p].position.z - rigB[p].position.z));
+      const dq = Math.max(Math.abs(rigA[p].quaternion.x - rigB[p].quaternion.x), Math.abs(rigA[p].quaternion.y - rigB[p].quaternion.y), Math.abs(rigA[p].quaternion.z - rigB[p].quaternion.z), Math.abs(rigA[p].quaternion.w - rigB[p].quaternion.w));
+      maxErr = Math.max(maxErr, dp, dq);
+      if (dp > 1e-6 || dq > 1e-6) allMatch = false;
+    }
+  }
+  check(`node-split === concatenated pose over ${samples.length} times (+wrap)`, allMatch, `maxErr=${maxErr.toExponential(2)}`);
+
+  // chainOneShotThenCycle: link (one-shot) before cycle, firstCyclic at the boundary.
+  const linkSeq = sequenceFromAnimationData(descNoSeg, { cyclic: false });
+  const cycleSeq = sequenceFromAnimationData(descNoSeg);
+  const chained = chainOneShotThenCycle(linkSeq, cycleSeq);
+  check("chainOneShotThenCycle: 2 nodes, firstCyclic=1, link non-cyclic",
+    chained.nodes.length === 2 && chained.firstCyclicIndex === 1 && chained.nodes[0].cyclic === false && chained.nodes[1].cyclic === true);
 }
 
 console.log("===========================================================");
