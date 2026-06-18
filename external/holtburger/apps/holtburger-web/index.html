@@ -10788,9 +10788,21 @@ void main() {
                 // centred origin will spin in place; refine via SetupModel
                 // hingeFrame extraction in a follow-up.
                 if (window.liveScene3d?.entityManager?.entityMap) {
-                  const inst = window.liveScene3d.entityManager.entityMap.get(doorGuid >>> 0);
+                  const em3d = window.liveScene3d.entityManager;
+                  const inst = em3d.entityMap.get(doorGuid >>> 0);
                   if (inst?.root) {
-                    inst.root.rotation.z = doorState === "open" ? -Math.PI / 2 : 0;
+                    // Animation consolidation (?unifiedMotion=door): play the
+                    // door's real On (open) / Off (close) swing via the Rust
+                    // authority — the hinge is baked into the keyframes (63 door
+                    // MTs carry On/Off cycles; probe_door_motions.rs), so the door
+                    // panel parts swing correctly instead of the instant
+                    // root-rotation snap (which spins centred-origin doors in
+                    // place). Default-off → unchanged snap.
+                    if (em3d.usesUnifiedDoor?.()) {
+                      em3d.playDoorMotion(doorGuid >>> 0, doorState === "open");
+                    } else {
+                      inst.root.rotation.z = doorState === "open" ? -Math.PI / 2 : 0;
+                    }
                     inst.__doorState = doorState;
                   }
                 }

@@ -25,6 +25,13 @@ appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 > - `death` (and `on`): Dead (0x0011) plays the collapse ONCE then HOLDS the final prone
 >   frame (one-shot `done`+clamp) — replaces the held-looping pose + racy collapse overlay.
 >   The default (flag-off) STATIONARY→cycle path is untouched.
+> - `door` (and `on`): door open/close plays the door's real On (`0x4000000b`) / Off
+>   (`0x4000000c`) swing via the Rust authority — CYCLE commands the bake resolves, hinge
+>   baked into the keyframes (63 of 436 retail MTs carry On/Off cycles; verified by
+>   `crates/holtburger-dat/examples/probe_door_motions.rs`). Held as a one-shot at the final
+>   frame (`clearOnDone:false`). Replaces the instant root-rotation snap (which spins
+>   centred-origin doors in place); §8 Q5 hinge-extraction is NOT needed. The legacy 2D sprite
+>   path and the flag-off 3D snap are untouched.
 > - `cast` (and `on`): cast gestures (in `MotionTable.links`, like swings) build the same
 >   full-body one-shot via `_tryPlayLink` instead of the both-arms-up vibe tween. Covers the
 >   server-echo / remote-caster path. Per-SPELL windup variation stays blocked (no

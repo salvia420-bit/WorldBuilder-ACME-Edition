@@ -509,6 +509,13 @@ const UNIFIED_DEATH = UNIFIED_MODE === "death" || UNIFIED_MODE === "on";
 // Per-SPELL windup variation stays blocked (no prj_spell_id on the wire; ACE is
 // kept vanilla), so this animates the real full-body cast GESTURE, not per-spell.
 const UNIFIED_CAST = UNIFIED_MODE === "cast" || UNIFIED_MODE === "on";
+// Doors open/close via On (0x4000000b) / Off (0x4000000c) CYCLE commands — 63 of
+// 436 retail MTs carry them with hinge baked into the keyframes (no SetupModel
+// hinge extraction needed; probe_door_motions.rs). Same one-shot path as missile.
+const UNIFIED_DOOR = UNIFIED_MODE === "door" || UNIFIED_MODE === "on";
+// MotionCommand.On / .Off (door open / close).
+const CMD_DOOR_ON = 0x4000000b;
+const CMD_DOOR_OFF = 0x4000000c;
 // Missile rides with attack (both Step 1): an aim-level fire is a CYCLE
 // (class 0x40, in MotionTable.cycles) the links-only swing resolver can't reach.
 const UNIFIED_MISSILE = UNIFIED_MODE === "missile" || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
@@ -6055,7 +6062,7 @@ export class EntityManager {
    * cycle / stale pkg → unchanged behavior).
    * @returns {Promise<boolean>}
    */
-  async _tryUnifiedCycleOneShot(guid, setupId, mtableId, cmd, stance) {
+  async _tryUnifiedCycleOneShot(guid, setupId, mtableId, cmd, stance, clearOnDone = true) {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return false;
@@ -6078,12 +6085,36 @@ export class EntityManager {
     const seq = MS.fromDescriptor(
       d.numFrames >>> 0, +d.framerate || 0, +d.duration || 0,
       d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
-      false, // one-shot: play the draw/aim once, then hand back to the cycle
+      false, // one-shot: play once. clearOnDone=true hands back to the mixer
+             // (swing/missile); false HOLDS the final frame (door open/closed).
     );
     if (!seq) return false;
     if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
-    inst._unifiedSeq = { seq, desc: d, clearOnDone: true };
+    inst._unifiedSeq = { seq, desc: d, clearOnDone };
     return true;
+  }
+
+  // Whether door open/close should route through the Rust authority
+  // (?unifiedMotion=door). index.html's kind=15 handler reads this to decide
+  // between playDoorMotion and the legacy instant root-rotation snap.
+  usesUnifiedDoor() { return UNIFIED_DOOR; }
+
+  // Animation consolidation (docs/animation-audit §5 Step 3): play a door's real
+  // swing via the Rust authority. Open = On (0x4000000b), close = Off
+  // (0x4000000c) — CYCLE commands the bake resolves (try_resolve_cycle_frames),
+  // with the hinge baked into the keyframes (no SetupModel extraction). Played as
+  // a one-shot that HOLDS the final frame (clearOnDone:false → door stays open/
+  // closed). stance 0 → the bake resolves default_style (doors key under
+  // NonCombat 0x003D). Returns whether it handled the door (caller falls back to
+  // the instant snap on false). @returns {Promise<boolean>}
+  async playDoorMotion(guid, open) {
+    if (!UNIFIED_DOOR) return false;
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst) return false;
+    const setupId = (inst.meta?.modelId ?? inst.meta?.setupId ?? 0) >>> 0;
+    const mtableId = (inst.meta?.mtableId ?? 0) >>> 0;
+    const cmd = open ? CMD_DOOR_ON : CMD_DOOR_OFF;
+    return this._tryUnifiedCycleOneShot(guid, setupId, mtableId, cmd, 0, false);
   }
 
   /**
