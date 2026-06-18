@@ -1,6 +1,6 @@
 # Ring Expansion Method
 
-How to take the 169-LB Holtburg ring and grow it — to a wider ring, to a new town, or eventually to whole Dereth (256×256 = 65,536 LBs) — as a **one-shot batch**: bake → stage → diagnose → ship, with the multi-agent fleet doing the per-LB verification in parallel.
+How to take the 169-LB Holtburg ring and grow it — to a wider ring, to a new town, or eventually to whole Dereth (255×255 = 65,025 LBs) — as a **one-shot batch**: bake → stage → diagnose → ship, with the multi-agent fleet doing the per-LB verification in parallel.
 
 Pairs with [`world-completeness-method.md`](world-completeness-method.md) (the placement contract), [`event-completeness-method.md`](event-completeness-method.md) (events), and [`ring-diagnose-repair-playbook.md`](ring-diagnose-repair-playbook.md) (the diagnose-loop this references when something goes wrong).
 
@@ -72,7 +72,7 @@ Five gaps between "run three CLIs in sequence" and "one orchestrator":
 
 1. **No unified entry point**. Each CLI has its own argument shape, output dir convention, and error reporting. Operators must remember 4 invocations + paths.
 2. **Heterogeneous languages**. Two Rust CLIs + one Python script + one C# WB.T command. Wrapping them in one `bash` script is feasible but fragile (cwd assumptions, env vars, virtualenvs).
-3. **No parallelism**. All three bake CLIs are per-LB serial (`scenery-bake.rs:738-763` etc.). Extrapolated 65,536-LB whole-Dereth bake = ~hours. World-completeness-method §"Open follow-ons" calls this out as "future tool work" because `bake_landblock` has no shared state — embarrassingly parallel — but the CLI hasn't been wired to use a thread pool.
+3. **No parallelism**. All three bake CLIs are per-LB serial (`scenery-bake.rs:738-763` etc.). Extrapolated 65,025-LB whole-Dereth bake = ~hours. World-completeness-method §"Open follow-ons" calls this out as "future tool work" because `bake_landblock` has no shared state — embarrassingly parallel — but the CLI hasn't been wired to use a thread pool.
 4. **No atomic dist publish**. The bake CLIs write per-LB JSONL files in-place. If a re-bake is interrupted mid-LB, the dist tree has a mix of new + old files. No staging-dir + atomic rename + symlink swap pattern exists.
 5. **No determinism re-verify step**. The bake CLIs emit `bake-source.sha256` per run; nothing automatically compares against a prior bake's sidecar to confirm inputs haven't drifted.
 
@@ -207,8 +207,8 @@ From measurement runs (see `~/.claude/projects/-home-wbterminal/memory/reference
 | Current 13×13 Holtburg | 169 | ~3 min | ~4 min | **~7 min** |
 | 25×25 Holtburg | 625 | ~12 min | ~15 min | **~27 min** |
 | 49×49 region | 2,401 | ~45 min | ~60 min | **~1.75 h** |
-| Whole-Dereth 256×256 | 65,536 | ~22 h serial | ~28 h serial | **~50 h serial** |
-| Whole-Dereth with 8-way bake parallelism | 65,536 | ~3 h | ~28 h | **~31 h** |
+| Whole-Dereth 255×255 | 65,025 | ~22 h serial | ~28 h serial | **~50 h serial** |
+| Whole-Dereth with 8-way bake parallelism | 65,025 | ~3 h | ~28 h | **~31 h** |
 
 The validation side is the dominant cost above ring 25×25. Two optimizations would shift this:
 
@@ -222,7 +222,7 @@ Both are concrete tool work, not algorithm changes. See §7.
 
 - Per-agent RSS in the fleet: **~130 MB chromium + JS heap 28 MB** (measured). 32-agent fleet = ~4 GB RSS — fits on an 8 vCPU / 16 GB VM.
 - Bake disk usage (extrapolated from 13×13's 3.1 MB scenery JSONL): **~1.5 GB scenery + ~50 MB events + ~25 MB spawns = ~1.6 GB whole-Dereth dist tree.**
-- Per-LB sha256 sidecar overhead: 64 bytes each × 3 types × 65,536 LBs = ~12 MB. Negligible.
+- Per-LB sha256 sidecar overhead: 64 bytes each × 3 types × 65,025 LBs = ~12 MB. Negligible.
 
 ---
 

@@ -11,10 +11,20 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
-const DOTNET = "/home/wbterminal/.dotnet/dotnet";
-const WBT = "/home/wbterminal/WorldBuilder-ACME-Edition/WorldBuilder.Terminal/bin/Release/net8.0/WorldBuilder.Terminal.dll";
-const PROJ = "/home/wbterminal/projects/RetailSmoke/RetailSmoke.wbproj";
+// PIPE-2: env-overridable toolchain so laptop / buildbox / CI all work without
+// editing the script (the old hardcoded /home/wbterminal/.dotnet/dotnet does
+// not exist on the laptop).
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const DOTNET = process.env.DOTNET
+  ?? (process.env.DOTNET_ROOT ? path.join(process.env.DOTNET_ROOT, "dotnet") : null)
+  ?? (existsSync("/opt/dotnet/dotnet") ? "/opt/dotnet/dotnet" : "dotnet");
+const WBT = process.env.WBT_DLL
+  ?? path.join(HERE, "../../../../WorldBuilder.Terminal/bin/Release/net8.0/WorldBuilder.Terminal.dll");
+const PROJ = process.env.RETAILSMOKE_PROJ
+  ?? "/home/wbterminal/projects/RetailSmoke/RetailSmoke.wbproj";
 
 function parseArgs(argv) {
   const a = {
@@ -39,6 +49,13 @@ async function loadLbList(spec) {
 
 const args = parseArgs(process.argv);
 if (!args.lbs || !args.out) { console.error("need --lbs and --out"); process.exit(2); }
+// PIPE-2: fail fast with a clear message instead of a cryptic spawn ENOENT.
+for (const [label, p] of [["WBT dll", WBT], ["project", PROJ]]) {
+  if (!existsSync(p)) {
+    console.error(`[gen-oracles] missing ${label}: ${p} (set ${label === "WBT dll" ? "WBT_DLL" : "RETAILSMOKE_PROJ"})`);
+    process.exit(2);
+  }
+}
 const lbs = await loadLbList(args.lbs);
 await mkdir(args.out, { recursive: true });
 
@@ -56,9 +73,18 @@ cmds.push(JSON.stringify({ command: "quit" }));
 
 console.log(`[gen-oracles] ${lbs.length} LBs -> ${args.out}`);
 const t0 = Date.now();
-const proc = spawn(DOTNET, [WBT, "--stdin"], { stdio: ["pipe", "ignore", "inherit"] });
+const proc = spawn(DOTNET, [WBT, "--stdin"], { stdio: ["pipe", "pipe", "inherit"] });
+let stdoutBuf = "";
+proc.stdout.on("data", (d) => { stdoutBuf += d.toString(); });
 proc.stdin.write(cmds.join("\n") + "\n");
 proc.stdin.end();
-await new Promise((res) => proc.on("exit", res));
+const code = await new Promise((res) => proc.on("exit", res));
+if (code !== 0) {
+  console.error(`[gen-oracles] WB.Terminal exited ${code}; last output:\n${stdoutBuf.slice(-800)}`);
+}
 const written = (await readdir(args.out)).filter((f) => f.endsWith(".json")).length;
 console.log(`[gen-oracles] wrote ${written} oracle files in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+if (written === 0) {
+  console.error("[gen-oracles] FAIL: wrote 0 oracle files (project load or dump failed)");
+  process.exit(1);
+}

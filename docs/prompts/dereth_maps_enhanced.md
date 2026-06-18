@@ -30,7 +30,7 @@ Read these before touching anything; the design assumes you understand what's al
 
 ### Coordinates and constants
 - 1 landblock = 192 world units, 8×8 cells, 9×9 vertices.
-- World grid = 256 × 256 LBs (lbX × lbY, both `[0..255]`).
+- World grid = 255 × 255 LBs (lbX × lbY, both `[0..254]`; 65,025 LBs — the `0xFF` row/column is the boundary sentinel, not playable).
 - World extent = 49,152 × 49,152 world units.
 - LB hex format: `0xXXYY` where XX = lbX, YY = lbY.
 
