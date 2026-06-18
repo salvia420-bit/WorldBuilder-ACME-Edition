@@ -13,8 +13,16 @@ Status of the stitched empty-world + HUD fix-loop (`LOOP-RUNBOOK.md`). Merged to
   0xA9B2=31 injected, **0 placeholders**, 12 assertions). Live in the dist at
   `/mnt/wbterminal2/holtburger-dist/spawns` (old dir backed up to
   `spawns.bak-2026-06-17`).
-- **PART II (HUD): 5 of 6 bands SHIPPED + verified** (A, C1, D, E, F).
-- **DEFERRED: BAND-B** (skills-pane consolidation) + most of PART III. See below.
+- **PART II (HUD): ALL 6 bands SHIPPED + verified** (A, B, C1, D, E, F). **BAND-B
+  landed 2026-06-18** (`3d8a4a6d`): the headline skills-pane consolidation, now
+  in-world verified (Playwright auto-login vs live ACE — F11→Skills tab, footer
+  raise/train cost, real raiseSkill dispatch). JS-only, no wasm rebuild.
+- **PART III: PIPE-1 + PIPE-2 + DOC-1 shipped; INT-1 confirmed no-op.** PIPE-1
+  landed 2026-06-18 (`97306a3f`). Still DEFERRED: TERR-1, SCEN-1 (native-tool
+  Rust — workspace build is OOM-jailed on the 8GB laptop, low value), RUNTIME-1/2/3
+  (render-path JS — unverifiable in the local swiftshader env which crashes on
+  repeat in-world runs), PREFETCH-1 (Rust crate + wasm rebuild, diagnostics-only).
+  Best tackled on the buildbox (Rust) / 1070 (render). See below.
 
 ## Commits (origin/master)
 
@@ -122,45 +130,46 @@ capped-build wasm-pack build --target web --out-dir pkg --dev   # ~70s increment
 
 ## REMAINING WORK
 
-### BAND-B (S2/S4/S3) — skills-pane consolidation — DEFERRED
-The headline HUD feature (owner's tabbed-pane architecture: gmStatManagementUI
-improve-footer INSIDE the character pane's Skills+Attributes tabs; retire the
-standalone train-skills view; repoint F11). **Deferred because** it's a ~150-line
-click-to-improve UI refactor of the **PROTECTED** character pane whose interactive
-flow (click skill → footer cost → Improve fires `raiseSkill`) **cannot be verified
-headlessly** — the render probe only proves the page boots. Shipping it unverified
-risked a regression in a working, protected pane.
+### BAND-B (S2/S4/S3) — skills-pane consolidation — SHIPPED 2026-06-18 (`3d8a4a6d`)
+The headline HUD feature (gmStatManagementUI improve-footer INSIDE the character
+pane's Skills+Attributes tabs; standalone train-skills view retired; F11 repointed).
+JS-only (BAND-A had already shipped the Rust 6-tuple) — **no wasm rebuild**.
+- **S2** (`character-info.js`, +294): selectable skill/attribute/vital rows +
+  `.hb-ci-improve` footer band (body bottom 18→82px on Skills+Attributes only);
+  3 retail states (default / "Cost to Train … credits" / "Cost to Raise … XP" via
+  S1's MARGINAL `computeNextRaiseCost`); Improve lifts `decideTrainAction`. FORK-D:
+  KEEP the Attributes per-row buttons AND add the footer. `statIndex` keyed by
+  composite `${kind}:${id}` (skill 6 / attr 6, attr 1 / vital 1 collide on bare id).
+- **S4** (`train-skills.js`): fixed the now-dead `renderBody` tier order to
+  Specialized→Trained→Untrained→Unusable (R15). character-info tierOrder already OK.
+- **S3** (`index.html`): removed the standalone `registerView`; KEPT import/plugin-map/
+  modulepreload (pure helpers still imported); F11 → `showView('character',{tab:'skills'})`.
+- **In-world verified** (Playwright auto-login `phase4demo` vs live ACE/wsbridge/serve,
+  driver at `/mnt/wbterminal1/tmp/claude-scratch/bandb-verify/`): F11→Skills tab;
+  default footer credits+disabled; Arcane Lore (Trained)→"Cost to Raise: 178 XP";
+  Untrained→"Train"/"Cost to Train: 10 credits"; Attributes keeps 9 per-row buttons +
+  footer; attribute→"Cost to Raise: 110 XP"; Titles hides band. The Improve dispatch
+  fired the real `raiseSkill` end-to-end (server raise confirmed, cost 178→204).
+  Unit: `test_train_skill.mjs` 17/17, `run-all --js` 13/5 (same pre-existing). **Caveat:**
+  the local swiftshader renderer crashes ("Target crashed") on repeat in-world runs
+  (1.6G /dev/shm + 8GB box) — the FIRST cold run completes; reset chromium between runs.
 
-**Not a regression to defer it:** the standalone `train-skills.js` view still works
-(F11 opens it, has the raise UI). BAND-B is an architectural consolidation, not new
-functionality.
+### PART III — DONE this pass
+- **PIPE-1** SHIPPED 2026-06-18 (`97306a3f`): `worldsweep-driver.sh` reconstructed
+  (env-default + path-guarded + `--dry-run`; HOLTBURGER_DIST → /mnt/wbterminal2).
+  `bash -n` clean; `--dry-run` exits 0 with all paths resolving.
+- **INT-1** confirmed a no-op: `posweep.mjs:71` already prefers `lb_numcells.json`.
+- (Prior) DOC-1 (`84e8817a`) + PIPE-2 (`84e8817a`).
 
-To do BAND-B, you need an **in-world keystroke/click session** (the page must boot
-past login so the HUD mounts, then drive `Shift+...`/clicks via Playwright + an
-auto-login URL). Prereqs are all verified and ready:
-- S1 (the marginal `next_rank_cost` 6th tuple field) is **already shipped** (BAND-A),
-  so the footer's raise-cost preview has its data source.
-- Pure helpers `{TRAINING, computeNextRaiseCost, decideTrainAction}` in
-  `train-skills.js` are intact and tested (`test_train_skill.mjs` 17/17).
-- Full spec + verified line numbers in `hud-SPEC.md` §S2/S3/S4. PROTECT the
-  read-only Skills tiering (character-info.js:798-810) and the Attributes per-row
-  raise buttons (additive footer only).
-- S3 must NOT land without S2 (retiring the standalone view without the new footer
-  would regress the raise capability — they're a unit).
-
-### PART III — DEFERRED (lower priority / higher risk)
-- PIPE-1 (reconstruct `worldsweep-driver.sh` from
-  `FULL-WORLD-BAKE-VERIFY-HANDOFF.md:38-72`).
-- RUNTIME-1/2/3 (scene3d streaming polish — JS; harder to verify, lower value).
-- PREFETCH-1 + TERR-1 (Rust: resource-http sentinel mesh / dat-shard guard).
-- SCEN-1 (scenery-bake `--manifest-out` for the parallel-bake manifest race;
-  scenery is already correctly baked at 80,395 LBs, so this only matters on a
-  parallel re-bake).
-- INT-1 (verify-side: posweep already prefers `lb_numcells.json` — likely a no-op).
-
-### Done in PART III
-- DOC-1 (65,025-LB grid myth corrected; Leaflet tile-pixel refs left correct).
-- PIPE-2 (`gen-oracles.mjs` env-overridable toolchain + existsSync guards).
+### PART III — STILL DEFERRED (env-blocked here; do on buildbox / 1070)
+- RUNTIME-1/2/3 (scene3d streaming polish — render-path JS; the local swiftshader env
+  crashes on repeat in-world runs, so a render regression can't be eye-tested here.
+  Do on the 1070).
+- PREFETCH-1 + TERR-1 + SCEN-1 (Rust: resource-http sentinel mesh / dat-shard guard /
+  scenery-bake `--manifest-out`). Native/wasm builds are OOM-jailed on the 8GB laptop
+  (memory rule: never workspace-build locally). Low current value (TERR-1/PREFETCH-1 =
+  diagnostics; SCEN-1 only matters on a parallel re-bake — scenery is already correctly
+  baked at 80,395 LBs). Do on the buildbox.
 
 ---
 
