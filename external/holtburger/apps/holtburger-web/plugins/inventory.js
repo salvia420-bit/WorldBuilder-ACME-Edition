@@ -1842,6 +1842,14 @@ function doMount(parentEl, _ctx) {
           catch (e) { console.warn("[inv-click] setWielded failed:", e); }
           return;
         }
+        // R13: a tinkering/salvage tool opens the salvage panel locally on use
+        // (retail UsingItem → SendNotice_OpenSalvagePanel). IT_TINKERING_TOOL =
+        // 0x20000000 (canonical_classify.js / chorizite enum), NOT 0x00020000
+        // (= IT_LOCKABLE). A non-tool falls through to useObject (no regress).
+        if ((((item?.itemType >>> 0) & 0x20000000) !== 0)
+            && typeof window.__openSalvagePanel === "function") {
+          try { window.__openSalvagePanel(guid); return; } catch (_) {}
+        }
         if (typeof handle?.useObject === "function") {
           try { handle.useObject(guid); }
           catch (e) { console.warn("[inv-click] useObject failed:", e); }

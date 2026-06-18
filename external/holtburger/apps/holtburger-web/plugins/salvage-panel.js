@@ -94,6 +94,7 @@ const state = {
   keydownHandler: null,
   autoCloseTimer: null,
   warnedMissingSend: false,
+  awaitingConfirm: false,
 };
 
 // ─── Module-scoped one-warning flag ─────────────────────────────
@@ -445,10 +446,9 @@ function onSalvageResult(detail) {
   }, 1750);
 }
 
-function fireSalvage() {
-  if (state.items.length === 0 || !state.toolGuid) return;
-  const tool = state.toolGuid >>> 0;
-  const itemGuids = state.items.map((it) => it.guid >>> 0);
+// R12: the actual destructive send-ladder, now taking explicit args so it can
+// be invoked only after the salvage-confirm bus returns a "confirm".
+function commitSalvage(tool, itemGuids) {
   const client = state.client ?? window.__pluginClient ?? null;
   const handle = window.__sessionHandle ?? null;
   let sent = false;
@@ -488,11 +488,35 @@ function fireSalvage() {
   // dispatch, leave the panel open so the user can retry.
 }
 
+// R12: fireSalvage now emits a confirmation REQUEST instead of sending. The
+// salvage-confirm bus shows the modal; onConfirmResult (mount) commits only on
+// an explicit "confirm". If the bus is absent the catch commits directly so the
+// flow never dead-ends.
+function fireSalvage() {
+  if (state.items.length === 0 || !state.toolGuid) return;
+  const tool = state.toolGuid >>> 0;
+  const items = state.items.map((it) => ({ guid: it.guid >>> 0, label: it.label }));
+  state.awaitingConfirm = true;
+  try {
+    window.dispatchEvent(new CustomEvent("hb:salvage-confirm-request", {
+      detail: {
+        toolGuid: tool,
+        toolLabel: `0x${tool.toString(16).toUpperCase().padStart(8, "0")}`,
+        items,
+      },
+    }));
+  } catch (_) {
+    state.awaitingConfirm = false;
+    commitSalvage(tool, items.map((i) => i.guid));
+  }
+}
+
 export function openPanel(toolGuid) {
   const overlay = ensurePanel();
   state.toolGuid = (toolGuid >>> 0) || 0;
   state.items = [];
   state.warnedMissingSend = false;
+  state.awaitingConfirm = false;
   if (state.autoCloseTimer) {
     try { clearTimeout(state.autoCloseTimer); } catch (_) {}
     state.autoCloseTimer = null;
@@ -528,6 +552,7 @@ export function closePanel() {
   if (!overlay) return;
   if (overlay.dataset.open !== "1") return;
   overlay.dataset.open = "0";
+  state.awaitingConfirm = false;
   if (state.keydownHandler) {
     overlay.removeEventListener("keydown", state.keydownHandler);
     state.keydownHandler = null;
@@ -579,8 +604,23 @@ export function mount(ctx) {
   }
   window.addEventListener("hb:salvage-panel-add-item", onAddItemEvent);
 
+  // R12: commit only after the salvage-confirm bus returns a "confirm",
+  // guarded by awaitingConfirm so a stray result can't fire a phantom send.
+  function onConfirmResult(ev) {
+    const d = ev?.detail ?? {};
+    if (!state.awaitingConfirm) return;
+    state.awaitingConfirm = false;
+    if (d.kind !== "confirm") return;
+    const items = (Array.isArray(d.items) ? d.items : [])
+      .map((it) => (it.guid >>> 0)).filter(Boolean);
+    if (!items.length || !(d.toolGuid >>> 0)) return;
+    commitSalvage(d.toolGuid >>> 0, items);
+  }
+  window.addEventListener("hb:salvage-confirm-result", onConfirmResult);
+
   return () => {
     window.removeEventListener("hb:salvage-panel-add-item", onAddItemEvent);
+    window.removeEventListener("hb:salvage-confirm-result", onConfirmResult);
     try {
       if (typeof state.unsubscribeSalvage === "function") state.unsubscribeSalvage();
       else if (state.unsubscribeSalvage?.off) state.unsubscribeSalvage.off();

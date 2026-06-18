@@ -17787,6 +17787,10 @@ enum SessionCommand {
     /// practice, on both items being visible in inventory —
     /// pre-EnteredWorld attempts are silently dropped by ACE).
     UseWithTarget { item_guid: u32, target_guid: u32 },
+    /// R14: batch salvage — GameActionCreateTinkeringTool (0x027D). The
+    /// protocol/core pipeline already exists as `SalvageItemsWith`; this
+    /// SessionCommand variant is the web wasm bridge into it.
+    SalvageItemsWith { tool_guid: u32, items: Vec<u32> },
     /// Phase 4 step 3: keyboard / click input → AC `MoveToState`
     /// packet. Each axis is `-1` / `0` / `+1`; `run` is the
     /// shift-modifier flag.
@@ -27412,6 +27416,22 @@ impl SessionHandle {
             })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("use_with_target: cmd channel closed ({e})"))
+            })
+    }
+
+    /// R14: batch-salvage the given item GUIDs into the tinkering tool —
+    /// GameActionCreateTinkeringTool (0x027D). Named `createTinkeringTool` to
+    /// match salvage-panel.js's existing feature-detect (no JS change).
+    #[wasm_bindgen(js_name = createTinkeringTool)]
+    pub fn create_tinkering_tool(&self, tool_guid: u32, items: Vec<u32>) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        if items.is_empty() {
+            return Err(JsValue::from_str("create_tinkering_tool: items empty"));
+        }
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SalvageItemsWith { tool_guid, items })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("create_tinkering_tool: cmd channel closed ({e})"))
             })
     }
 
@@ -38683,6 +38703,33 @@ async fn recv_loop(
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("use_with_target: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::SalvageItemsWith { tool_guid, items }) => {
+                        // R14: GameActionCreateTinkeringTool (0x027D). The
+                        // actiondata pack order + parity fixture
+                        // (test_salvage_items_with_parity) are locked in the
+                        // protocol crate; this arm only bridges the wasm cmd.
+                        let action =
+                            holtburger_protocol::messages::GameAction::SalvageItemsWith(Box::new(
+                                holtburger_protocol::messages::SalvageItemsWithActionData {
+                                    tool_guid: holtburger_common::Guid::from(tool_guid),
+                                    items: items
+                                        .into_iter()
+                                        .map(holtburger_common::Guid::from)
+                                        .collect(),
+                                },
+                            ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(SalvageItemsWith): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("salvage_items_with: {e}")),
                                 u32_payload: None,
                                 u32_payload_2: None,
                                 f32_payload: None,
