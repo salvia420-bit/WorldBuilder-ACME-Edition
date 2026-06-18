@@ -68,14 +68,27 @@ generators** that would have grown it to ~119 — the owner chose **encounters-o
 - `canonical_classify.js` → `plugins/world-objects/`; `xp_table.rs` →
   `holtburger-dat`.
 
-## Known caveat (data, not code)
+## Known caveat (terrain-lookup miss — NOT a partial dat)
 
-`~/ac_base_dats/client_cell_1.dat` is **332 MB — partial** (retail full ~750MB+).
-~4,450 wilderness LBs (newbie/forest, e.g. lb 764) get terrain-miss **Z=0**; the
-encounter ingest counts these (`zeroZRecords=27582`) and warns, but stages them
-anyway. The probe targets (0xA9B2/0xA9B4) have valid Z. To eliminate the Z=0
-tail, re-run the encounter ingest against a project with a full cell dat and
-re-stage (deterministic — `diff -rq` clean on re-run).
+> **CORRECTED 2026-06-18.** The earlier "client_cell_1.dat is 332 MB — partial
+> (retail full ~750MB+)" claim was WRONG — **332 MB (348,127,232 B) is the normal,
+> complete size** for `client_cell_1.dat` (the ~884 MB figure is `client_portal.dat`).
+> It's the canonical dat used everywhere (the host ingest project symlinks it:
+> `e1-inworld/dats/base/client_cell_1.dat -> ~/ac_base_dats/...`). A partial dat is
+> NOT the cause, and "re-run against a full cell dat" is a no-op (it already is full).
+
+The real story: the terrain service computes real heights world-wide (sampled
+staged Z range **−83 → +358**), but ~4.7% of staged encounter records (≈27k —
+matches `zeroZRecords=27582`) carry **exactly Z=0**, clustered in specific LBs
+(e.g. 0xEE6C had 28 of them). Exactly-0 across thousands of records is a
+default/miss, not coincidental real terrain — i.e. the height lookup returned its
+0 default for those (LB, cell) positions. Cause still OPEN (candidates: genuinely
+landless grid cells; cell-local edge-coordinate clamp misses; or LBs the host
+project didn't resolve terrain for). The probe targets (0xA9B2/0xA9B4) have valid
+Z. To pin it: `WB.Terminal` terrain-dump the worst offenders (0xEE6C/0xC9EA) and
+check whether they have a CellLandblock + a non-synthetic height at the queried
+cell coords. The records stage anyway (warned), so this is a placement-quality
+tail, not a load failure.
 
 ---
 
