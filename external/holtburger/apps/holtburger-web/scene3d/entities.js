@@ -6090,7 +6090,7 @@ export class EntityManager {
     );
     if (!seq) return false;
     if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
-    inst._unifiedSeq = { seq, desc: d, clearOnDone };
+    inst._unifiedSeq = { seq, desc: d, clearOnDone, hooks: entry?.hooks || null, lastHookTime: 0 };
     return true;
   }
 
@@ -6778,7 +6778,7 @@ export class EntityManager {
           if (seq) {
             if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
             // clearOnDone:false → keep posing the clamped prone frame (held dead).
-            inst._unifiedSeq = { seq, desc: d, clearOnDone: false };
+            inst._unifiedSeq = { seq, desc: d, clearOnDone: false, hooks: entry?.hooks || null, lastHookTime: 0 };
             return; // the tick drives the rig; skip the legacy cycle path
           }
         }
@@ -8399,7 +8399,7 @@ export class EntityManager {
           // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
           // clearOnDone: the one-shot swing hands the rig back to the mixer
           // (frozen cycle resumes) on completion.
-          inst._unifiedSeq = { seq, desc: d, clearOnDone: true };
+          inst._unifiedSeq = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: 0 };
           return; // skip the mixer overlay; the tick drives the rig
         }
       }
@@ -10573,10 +10573,29 @@ export class EntityManager {
           //    mixer (the frozen cycle action resumes).
           //  - death (clearOnDone:false): HOLD the clamped final (prone) frame —
           //    advance is inert once `done`, poseRigAt keeps writing it.
-          // Hooks (swing swoosh / footfall) fire via the sequence in a later step.
           const ua = inst._unifiedSeq;
           ua.seq.advance(dt);
           poseRigAt(ua.seq.globalFrameIndex, ua.desc, inst.parts);
+          // Step 6 (hooks): the mixer-time hook path is suppressed under the flag,
+          // so fire the sequence's hooks (swing swoosh, magic chime, footfall,
+          // strike) here — map the current frame → clip-time and drain the bake's
+          // hook timeline in (lastHookTime, curT] through the SHARED
+          // _fireHooksInRange (queues under ?hookDrain=on; the per-entity drain
+          // below executes them). No new hook executor (ROADMAP §2 reuse).
+          if (ua.hooks && ua.hooks.length) {
+            const gf = ua.seq.globalFrameIndex;
+            const ft = ua.desc.frameTimes;
+            const fr = +ua.desc.framerate || 0;
+            const curT = (ft && gf < ft.length) ? ft[gf] : (fr > 0 ? gf / fr : 0);
+            if (curT > ua.lastHookTime) {
+              this._fireHooksInRange(
+                inst, ua.hooks, ua.lastHookTime, curT,
+                this.scene3d?.audioManager ?? null,
+                this.scene3d?.soundTableCache ?? null,
+              );
+              ua.lastHookTime = curT;
+            }
+          }
           if (ua.seq.done && ua.clearOnDone) {
             try { ua.seq.free(); } catch (_) { /* already freed */ }
             inst._unifiedSeq = null;

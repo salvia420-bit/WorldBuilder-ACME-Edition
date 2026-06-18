@@ -39,8 +39,10 @@ appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 >   (`setTimeout`-paced) replacement is a follow-on; this animates the cast GESTURE, not per-spell.
 > **Logic-verified headlessly** (cargo `motion_sequence` 5/5 parity + one-shot completion;
 > `test_motion_sequence.mjs` poser-vs-mixer maxErr 0; `test_motion_sequence_wasm_smoke.mjs`
-> drives the real compiled wasm 14/14). **In-world render UNVERIFIED** (no eye-test). Swing/
-> footfall hooks are silent under the flag for now. See `docs/animation-audit/ANIMATION-AUDIT.md` §5.
+> drives the real compiled wasm 14/14). **In-world render UNVERIFIED** (no eye-test). Hooks
+> (swing swoosh / magic chime / footfall / strike) now FIRE under the flag — drained from the
+> bake's hook timeline by the sequence's frame-time through the shared `_fireHooksInRange`
+> (Step 6). See `docs/animation-audit/ANIMATION-AUDIT.md` §5.
 >
 > **Still opt-in (default-off) on purpose:** instrumentation/debug (`wireframe`, `diag`, `syncTickDiag`, `spawnTrace`, `debug`, `lbLruDebug`, `profileStatics`, `eventLog`, `nullRender`, `renderOnDemand`), login/automation (`autoLogin`, `agent`, `nosw`), perf opt-ins (`eagerDungeons`, `cullTerrain`, `forcePom`, `forceDetail`, `preloadIcons`), user preferences (`mouseInvertY`, `chatFade`, `radarHostileOnly`), the legacy escape hatch (`legacyDirectDrain`), and known-incomplete (`lodRebake` — edge-weld seams pending; Rust BSP `USE_PHYSICS_BSP`/`USE_STATIC_BSP`). Plus the genuine render toggles `clouds`, `quality`, `renderScale`, `hud`, `plugins`, weather `rain`/`snow`/`lightning`/`skyWeather`, and the texture/palette overrides.
 
