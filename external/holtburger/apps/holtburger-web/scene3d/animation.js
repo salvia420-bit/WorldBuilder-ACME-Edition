@@ -60,6 +60,22 @@ const FLOATS_PER_PART_PER_FRAME = 7;
  * it later (the `AnimationCache.get` path stamps `${setupId}:${...}`
  * for debugger ergonomics).
  */
+// Step 0 of the animation consolidation (docs/animation-audit §5): extract the
+// raw frame data a `MotionSequence` consumes — the sequence structure that
+// buildAnimationClip flattens into an inert clip. Pure passthrough of the wasm
+// boundary fields (no reshape); the interpreter (scene3d/motion/) owns timing +
+// the discrete per-part pose. Returns null when no cycle resolved (rest-pose
+// only), matching buildAnimationClip's numFrames===0 path.
+export function buildSequenceDescriptor(animData) {
+    if (!animData) return null;
+    const { partCount, numFrames, framerate, partFrames, frameTimes, duration, posFrames } = animData;
+    if (typeof partCount !== "number" || typeof numFrames !== "number") return null;
+    if (numFrames === 0) return null;
+    const expectedSize = numFrames * partCount * FLOATS_PER_PART_PER_FRAME;
+    if (!partFrames || partFrames.length !== expectedSize) return null;
+    return { partCount, numFrames, framerate, partFrames, frameTimes, duration, posFrames };
+}
+
 export function buildAnimationClip(animData, partNames) {
     const {
         partCount,

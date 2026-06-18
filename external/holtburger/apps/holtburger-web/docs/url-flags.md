@@ -8,6 +8,13 @@ appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 >
 > **Now default-ON** (was default-off): `singleDriver`, `unifiedDispatch`, `unifiedClientEvent`, `unifiedClone`, `inputFunnel`, `syncPhysicsTick`, `dispatchParity`, `mtQueue`, `hookDrain`, `scriptQueue`, `rootMotionObject`, `cmtStanceMask`, `castSpeed`, `castStateMachine`, `castFizzle`, `castFaceTarget`, `castAxes`, `multiAction`, `melee3dRange`, `fullBodyOneShot`, `signedMotionSpeed`, `powerMeterSwingDuration`, `idleFidget`, `dynLod`, `serverSwing`, `wieldHandAttach`, `wieldedSpawn`, `turnOmega`, `jumpParity`, `retailRunKeys`, `longJump`, `projectileGravity`, `projectileArc`, `retailParity`, `retailCamZoom`, `blockingParticleParity`, `particleOwner`, `defaultScriptSpawn`, `envcellFusion`, `strictWaterCodes`, `mtClassFallback`.
 >
+> **`unifiedMotion` (NEW, Step 0 of the animation consolidation — default-off):** values
+> `off` | `shadow` | per-class (`attack`/`death`/`door`/`cast`/`locomotion`) | `on`. Selects
+> the ported `CSequence`/`CMotionInterp` motion authority (`scene3d/motion/motion_sequence.js`)
+> over the three.js AnimationMixer per the audit in `docs/animation-audit/`. Step 0 only ships
+> the scaffold + a headless mixer-parity gate (`test_motion_sequence.mjs`, exact match); no
+> production entity switches off the mixer yet. See `docs/animation-audit/ANIMATION-AUDIT.md` §5.
+>
 > **Still opt-in (default-off) on purpose:** instrumentation/debug (`wireframe`, `diag`, `syncTickDiag`, `spawnTrace`, `debug`, `lbLruDebug`, `profileStatics`, `eventLog`, `nullRender`, `renderOnDemand`), login/automation (`autoLogin`, `agent`, `nosw`), perf opt-ins (`eagerDungeons`, `cullTerrain`, `forcePom`, `forceDetail`, `preloadIcons`), user preferences (`mouseInvertY`, `chatFade`, `radarHostileOnly`), the legacy escape hatch (`legacyDirectDrain`), and known-incomplete (`lodRebake` — edge-weld seams pending; Rust BSP `USE_PHYSICS_BSP`/`USE_STATIC_BSP`). Plus the genuine render toggles `clouds`, `quality`, `renderScale`, `hud`, `plugins`, weather `rain`/`snow`/`lightning`/`skyWeather`, and the texture/palette overrides.
 
 Line numbers are approximate (code drifts); grep the named file for the flag key

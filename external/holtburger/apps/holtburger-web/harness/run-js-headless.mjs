@@ -84,6 +84,7 @@ const TIER1 = [
   { flag: "retailCamZoom+camStiffness+mouseSmooth", file: "tests/camera_retail_math.test.cjs" },
   { flag: "remoteInterp(JS)", file: "tests/remote_interp_ownership.test.cjs" },
   { flag: "jumpParity(JS)", file: "tests/jump_charge_parity.test.cjs" },
+  { flag: "unifiedMotion(Step0)", file: "test_motion_sequence.mjs" },
 ].map((t) => ({ ...t, tier: 1 }));
 
 // New files (authored in parallel). Referenced by path even if not present yet:
