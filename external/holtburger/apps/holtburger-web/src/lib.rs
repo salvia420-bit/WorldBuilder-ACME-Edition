@@ -19398,7 +19398,9 @@ impl EntityUpdate {
 ///   quadruples, one per attribute ordered by `AttributeType` value
 ///   (Strength=1 .. Self=6).
 /// - `skills` — flat `[type_u32, current_u32, base_u32, ranks_u32,
-///   training_u32, ...]` quintuples, sorted by `SkillType` value.
+///   training_u32, next_rank_cost_u32, ...]` sextuples, sorted by
+///   `SkillType` value. `next_rank_cost_u32` is the MARGINAL xp to advance
+///   one rank (cumulative next_rank_xp − spent_xp); 0 = max/unraisable.
 ///   Training: 0=Untrained, 1=Untrained-but-Trainable, 2=Trained,
 ///   3=Specialized (mirrors `holtburger_common::stats::TrainingLevel`
 ///   numeric layout).
@@ -19444,10 +19446,11 @@ impl PlayerStatsSnapshot {
         self.attributes.clone()
     }
 
-    /// Flat `[type, current, base, ranks, training, ...]` per skill.
-    /// Sorted by `SkillType` value. JS labels via the `SkillType`
-    /// strum-display strings (the wasm bundle exposes a static
-    /// `skillName(type)` helper, see [`skill_name`]).
+    /// Flat `[type, current, base, ranks, training, next_rank_cost, ...]`
+    /// per skill (stride 6). `next_rank_cost` is the MARGINAL xp to advance
+    /// one rank (0 = max/unraisable). Sorted by `SkillType` value. JS labels
+    /// via the `SkillType` strum-display strings (the wasm bundle exposes a
+    /// static `skillName(type)` helper, see [`skill_name`]).
     #[wasm_bindgen(getter)]
     pub fn skills(&self) -> Vec<u32> {
         self.skills.clone()
@@ -30685,7 +30688,7 @@ fn build_raw_motion_state_for_input(
 /// Layout matches `PlayerStatsSnapshot`'s wasm-bindgen contract:
 /// - `vitals` is `[type, current, base, buffed_max] × 3`
 /// - `attributes` is `[type, current, base, ranks] × 6`
-/// - `skills` is `[type, current, base, ranks, training] × N`
+/// - `skills` is `[type, current, base, ranks, training, next_rank_cost] × N`
 /// - `level_info` is `[level, current_xp_lo, current_xp_hi,
 ///   unspent_xp_lo, unspent_xp_hi, available_luminance_lo,
 ///   available_luminance_hi]`
@@ -30712,13 +30715,25 @@ fn publish_player_stats_snapshot(
         attributes.push(attr.ranks);
     }
     let mut skills: Vec<u32> =
-        Vec::with_capacity(world.player.skills.len() * 5);
+        Vec::with_capacity(world.player.skills.len() * 6);
     for skill in world.player.skill_snapshot() {
         skills.push(skill.skill_type as u32);
         skills.push(skill.current);
         skills.push(skill.base);
         skills.push(skill.ranks);
         skills.push(skill.training as u32);
+        // 6th field: MARGINAL xp to advance one rank. `next_rank_xp` is the
+        // CUMULATIVE xp to reach rank+1 (xp_table.rs get_next_skill_rank_xp
+        // indexes the list directly); subtract spent_xp for the per-rank cost,
+        // matching CLI render.rs:529-530 (saturating_sub) and retail
+        // gmSkillUI::GetCostToRaise (= ExperienceToSkillLevel(level+1) -
+        // invested). 0 == max rank / unraisable; JS reads 0 as "no raise".
+        // Do NOT push raw next_rank_xp.
+        let next_cost = match skill.next_rank_xp {
+            Some(cumulative) => cumulative.saturating_sub(skill.spent_xp),
+            None => 0,
+        };
+        skills.push(next_cost);
     }
     let lvl = world.get_level_info();
     let level_info: Vec<u32> = vec![

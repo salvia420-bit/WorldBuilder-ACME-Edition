@@ -410,7 +410,7 @@ function loadSkillTable() {
   return skillTablePromise;
 }
 
-// AC skill state encoding (player.stats.skills[i*5+3] value):
+// AC skill state encoding (player.stats.skills[i*6+4] value, stride-6 tuple):
 //   0 = Unusable (some Magic skills if class can't learn)
 //   1 = Untrained (default for usable)
 //   2 = Trained
@@ -774,24 +774,26 @@ function renderSkills(bodyEl, stats, skillTable) {
     bodyEl.appendChild(emptyMsg("Skill table not loaded."));
     return;
   }
-  // Player skills: 5-tuple per entry — `[type, current, base, ranks, training]`
-  // (Rust src/lib.rs:16191). Pre-2026-05-29 the JS read index 3 as
-  // `trained` and ignored index 4, so the diag character's skills (which
-  // have ranks=0 + training=Untrained=1) all bucketed into Unusable.
-  // ACE's `SkillAdvancementClass`: Inactive=0, Untrained=1, Trained=2,
-  // Specialized=3 — matches the TRAINING enum in train-skills.js.
+  // Player skills: stride-6 per entry — `[type, current, base, ranks,
+  // training, next_rank_cost]` (Rust src/lib.rs publish_player_stats_snapshot).
+  // `training` (index 4) is ACE's `SkillAdvancementClass`: Inactive=0,
+  // Untrained=1, Trained=2, Specialized=3 — matches the TRAINING enum in
+  // train-skills.js. Index 5 is the MARGINAL next-rank cost (0 = max).
   const playerSkills = stats?.skills;
   const valueByLine = new Map();   // skillId → "cur/base"
   const stateByLine = new Map();
+  const xpByLine = new Map();      // skillId → MARGINAL next-rank cost (S2 footer)
   if (playerSkills) {
     const len = playerSkills.length ?? 0;
-    for (let i = 0; i + 4 < len; i += 5) {
+    for (let i = 0; i + 5 < len; i += 6) {
       const id = tupleArrayAt(playerSkills, i);
       const cur = tupleArrayAt(playerSkills, i + 1);
       const base = tupleArrayAt(playerSkills, i + 2);
       const trained = tupleArrayAt(playerSkills, i + 4);
+      const xp = tupleArrayAt(playerSkills, i + 5);
       valueByLine.set(id, base != null && cur != null ? `${base}` : "—");
       stateByLine.set(id, trained ?? 0);
+      xpByLine.set(id, xp ?? 0);
     }
   }
   // Group by trained state — Specialized first, then Trained, then Untrained.

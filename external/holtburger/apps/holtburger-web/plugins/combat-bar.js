@@ -505,11 +505,11 @@ function readRecklessnessTrainingLevel() {
     // same coercion (see tupleArrayAt).
     const len = skills.length ?? 0;
     if (len === 0) return null;
-    // 5-tuples: [type, current, base, ranks, training]
-    for (let i = 0; i + 4 < len; i += 5) {
+    // stride-6: [type, current, base, ranks, training, next_rank_cost]
+    for (let i = 0; i + 5 < len; i += 6) {
       const type = skills[i];
       if (type === SKILL_TYPE_RECKLESSNESS) {
-        return skills[i + 4] ?? 0;
+        return skills[i + 4] ?? 0;   // training class (value index unchanged)
       }
     }
     return null;

@@ -83,8 +83,9 @@ const DR_BY_TRAINING = Object.freeze({
  *
  * Mirrors `plugins/combat-bar.js`'s `readRecklessnessTrainingLevel`
  * pattern. The wasm-side `playerStats().skills` is a flat `Vec<u32>`
- * of 5-tuples `[type, current, base, ranks, training]` sorted by
- * SkillType — see `src/lib.rs:13911-13915`.
+ * of stride-6 tuples `[type, current, base, ranks, training,
+ * next_rank_cost]` sorted by SkillType — see
+ * `src/lib.rs` publish_player_stats_snapshot.
  *
  * @param {number} skillType  SkillType enum value (see stats.rs).
  * @param {object|null} [sessionHandle]  Optional session handle for
@@ -101,10 +102,10 @@ export function readTrainingLevel(skillType, sessionHandle = null) {
     if (!skills) return null;
     const len = skills.length ?? 0;
     if (len === 0) return null;
-    // 5-tuples: [type, current, base, ranks, training]
-    for (let i = 0; i + 4 < len; i += 5) {
+    // stride-6: [type, current, base, ranks, training, next_rank_cost]
+    for (let i = 0; i + 5 < len; i += 6) {
       if (skills[i] === skillType) {
-        return skills[i + 4] ?? 0;
+        return skills[i + 4] ?? 0;   // training class (value index unchanged)
       }
     }
     return null;

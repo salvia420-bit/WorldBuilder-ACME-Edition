@@ -60,7 +60,9 @@ function eqRollup(name, got, expected) {
 // Build a stub session handle whose `playerStats()` returns a `skills`
 // flat array containing the requested Recklessness + SneakAttack
 // training levels. Any other skill row is omitted (the helper iterates
-// 5-tuples until it finds the target type or runs out).
+// stride-6 tuples until it finds the target type or runs out). The 6th
+// element (next_rank_cost) is mandatory — without it the stride-6 reader
+// would silently misalign and these assertions would be false-green.
 //
 //   trainings = { [SkillType]: trainingLevel }
 function stubSessionHandle(trainings) {
@@ -72,6 +74,7 @@ function stubSessionHandle(trainings) {
       0,            // base
       0,            // ranks
       training,     // training
+      0,            // next_rank_cost (stride-6 6th field)
     );
   }
   return {

@@ -45,8 +45,8 @@
 // the simpler `SkillTable.trainedCost / specializedCost` for credit cost,
 // and ACE's "next rank XP" (already broadcast as part of
 // `Qualities_PrivateUpdateSkillLevel`) for the XP cost — that arrives
-// as part of every `playerStatsUpdated` drain via `skills[i*5+4]`
-// (the per-skill `xp` field — see character-info.js:609-622).
+// as part of every `playerStatsUpdated` drain via `skills[i*6+5]`
+// (the per-skill MARGINAL next-rank-cost field — stride 6).
 //
 // **Trigger / discoverability:** F11 hotkey, with explicit
 // PLUGIN_HOTKEY_DISPATCH bridge that calls `window.__mainPanel?.toggleView("train-skills")`.
@@ -92,10 +92,10 @@ export const TRAINING = Object.freeze({
 
 /**
  * Returns the next-rank XP cost for a skill given the latest snapshot
- * row from `playerStats().skills` (a 5-tuple `[id, current, base,
- * trained_state, xp]`). The `xp` field carries ACE's broadcast
- * `next_rank_xp` for the current rank — directly usable as the
- * raise-cost preview without consulting any client-side curve.
+ * row from `playerStats().skills` (a 6-tuple `[id, current, base,
+ * ranks, training, next_rank_cost]`). `snap.xp` is the index-5
+ * MARGINAL next-rank cost (next_rank_xp − spent_xp, computed Rust-side)
+ * — directly usable as the raise-cost preview, no client-side curve.
  *
  * Returns `null` when the skill is at max rank, not yet hydrated, or
  * the snapshot row is malformed.
@@ -227,13 +227,12 @@ function mergeSkillRows(stats, skillTable) {
   const playerSkills = stats?.skills;
   if (playerSkills) {
     const len = playerSkills.length ?? 0;
-    for (let i = 0; i + 4 < len; i += 5) {
-      // Rust src/lib.rs:16191 layout is `[type, current, base, ranks, training]`.
-      // Pre-2026-05-29 the JS read i+3 as training and i+4 as xp, which is
-      // why every skill rendered as Unusable for fresh characters (their
-      // `ranks` field was 0 → mapped to TRAINING.UNUSABLE). `ranks` is the
-      // XP-derived rank counter (1..10); `training` is the
-      // `SkillAdvancementClass` enum (Inactive=0..Specialized=3).
+    for (let i = 0; i + 5 < len; i += 6) {
+      // Rust src/lib.rs publish_player_stats_snapshot layout is the stride-6
+      // `[type, current, base, ranks, training, next_rank_cost]`. `ranks` is
+      // the XP-derived rank counter (1..10); `training` is the
+      // `SkillAdvancementClass` enum (Inactive=0..Specialized=3); index 5 is
+      // the MARGINAL xp to advance one rank (0 = max/unraisable).
       const id = tupleArrayAt(playerSkills, i);
       const cur = tupleArrayAt(playerSkills, i + 1);
       const base = tupleArrayAt(playerSkills, i + 2);
@@ -245,10 +244,9 @@ function mergeSkillRows(stats, skillTable) {
       entry.base = base ?? 0;
       entry.current = cur ?? 0;
       entry.ranks = ranks ?? 0;
-      // `xp` is not in the per-skill 5-tuple; spendable XP comes from
-      // `levelInfo.unspent_xp`. Retain a 0 default so older callers don't
-      // hit `undefined.toLocaleString()`.
-      entry.xp = 0;
+      // index 5 is the MARGINAL next-rank cost (computeNextRaiseCost treats
+      // snap.xp as already-marginal).
+      entry.xp = tupleArrayAt(playerSkills, i + 5) ?? 0;
     }
   }
   return out;
