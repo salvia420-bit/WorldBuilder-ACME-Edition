@@ -1387,6 +1387,9 @@ export class CameraSwitcher {
     // flag-off = legacy !shift (byte-identical).
     const run = resolveRunModifier(k.shift, handle);
     let advanced = false;
+    // Per-second velocity (m/s) captured during integration so the oracle
+    // tap below can report it. Set in whichever branch advances.
+    let predVx = 0.0, predVy = 0.0;
     if (inputForward !== 0) {
       // Forward in heading direction; backstep flips by π and uses
       // walk speed. Compass-bearing convention: heading=0 → +Y north,
@@ -1397,17 +1400,61 @@ export class CameraSwitcher {
         effHeading = heading + Math.PI;
         speed = WALK_SPEED;
       }
-      this.predictedPlayerPos.x += Math.sin(effHeading) * speed * dtSafe;
-      this.predictedPlayerPos.y += Math.cos(effHeading) * speed * dtSafe;
+      predVx = Math.sin(effHeading) * speed;
+      predVy = Math.cos(effHeading) * speed;
+      this.predictedPlayerPos.x += predVx * dtSafe;
+      this.predictedPlayerPos.y += predVy * dtSafe;
       advanced = true;
     } else if (inputStrafe !== 0) {
       // Strafe right (D, +1) = heading + π/2; strafe left (A, -1) =
       // heading - π/2. Always walk speed (matches 2D path's
       // strafe-as-walk-speed convention).
       const effHeading = heading + inputStrafe * (Math.PI / 2);
-      this.predictedPlayerPos.x += Math.sin(effHeading) * WALK_SPEED * dtSafe;
-      this.predictedPlayerPos.y += Math.cos(effHeading) * WALK_SPEED * dtSafe;
+      predVx = Math.sin(effHeading) * WALK_SPEED;
+      predVy = Math.cos(effHeading) * WALK_SPEED;
+      this.predictedPlayerPos.x += predVx * dtSafe;
+      this.predictedPlayerPos.y += predVy * dtSafe;
       advanced = true;
+    }
+
+    // Item 5 / Wave 3.F oracle shadow (2026-06-18) — ports the retired 2D rAF
+    // tap (index.html:8318, gated on the now-dead 2D sprite) to the 3D path.
+    // Writes the pure-prediction frame into the wasm shadow so
+    // capture_physics_replay.cjs can diff CLIENT prediction vs the C# server
+    // oracle. ADDITIVE + WRITE-ONLY: it only populates a validation buffer
+    // (read back via getLastClientPrediction); nothing reads it into
+    // predictedPlayerPos, so it can NEVER cause snapback.
+    //
+    // Coordinate space: predictedPlayerPos is WORLD coords (seeded from
+    // __lastEntityWorldPos, wx=((lbId>>>24)&0xff)*192+localX). The 2D tap — the
+    // physics_replay calibration reference — fed localEntry.sprite.x (= wx,
+    // world; legacy/entity_2d.js:87), so the faithful port passes world coords
+    // directly. NOTE the Rust doc on set_last_client_prediction says
+    // "landblock-local (0..192)" — that's stale vs the actual 2D caller;
+    // physics_replay is the arbiter of the expected space. velocity_* use the
+    // 3D integrator's per-second velocity (sin/cos heading), NOT the 2D path's
+    // screen-space (-cos/sin). vz=0 — z is server-authoritative, not
+    // client-integrated. UNVALIDATED in this env (no Playwright); the
+    // loads/spawns smoke does NOT cover it — needs physics_replay.
+    if (advanced && handle && typeof handle.setLastClientPrediction === "function") {
+      // tick_count: monotonically advancing on frames with non-zero input
+      // (the contract the 2D path met at index.html:8219).
+      window.__predTickCount = (window.__predTickCount || 0) + 1;
+      try {
+        handle.setLastClientPrediction(
+          this.predictedPlayerPos.x,
+          this.predictedPlayerPos.y,
+          this.predictedPlayerPos.z,
+          predVx,
+          predVy,
+          0.0, // vz — JS integrator doesn't simulate z (server-authoritative).
+          true, // on_ground default; jump arc is server-side today.
+          (window.__predTickCount || 0) >>> 0,
+          now,
+        );
+      } catch (_) {
+        // Channel-closed on disconnect; safe to swallow (matches the 2D tap).
+      }
     }
 
     // Optional debug trace — pushes `(t, predX, predY, authX, authY)`
