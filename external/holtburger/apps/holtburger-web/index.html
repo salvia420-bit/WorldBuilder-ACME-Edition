@@ -7682,11 +7682,16 @@ void main() {
       });
       selectedItemExamineBtn.addEventListener("click", () => {
         if (!selectedItemGuid) return;
-        // The wasm side auto-fires IdentifyObject on every ObjectCreate
-        // (see Phase B+ memory), so the appraisal data is already
-        // cached. A dedicated re-examine wire method would be Phase K.
-        // For now: log so the user has feedback the click registered.
-        console.log(`[selected-item] Examine 0x${selectedItemGuid.toString(16)} (appraisal already cached server-side)`);
+        // R8: open the examine view for the selected inventory item. The wasm
+        // side already cached the appraisal (auto IdentifyObject on
+        // ObjectCreate), so __showExamineFor just surfaces it. fromInventory
+        // mirrors inventory.js's examine contract (vs fromEntity for world).
+        const name = selectedItemName?.textContent || `Item 0x${selectedItemGuid.toString(16)}`;
+        if (typeof window.__showExamineFor === "function") {
+          window.__showExamineFor(selectedItemGuid, { name, fromInventory: true });
+        } else {
+          window.__mainPanel?.pushView?.("examine", { guid: selectedItemGuid, name, fromInventory: true });
+        }
       });
       // Click anywhere in an inv list → select that item.
       // Drag from pack list → exposes the item GUID via

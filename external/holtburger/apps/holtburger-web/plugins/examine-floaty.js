@@ -300,6 +300,12 @@ function runCleanup() {
 }
 
 export function openFloaty(ctx = {}) {
+  // R9: if a main-panel examine view is up, close it first so we don't show
+  // the same appraisal twice. Guard on the "examine" id ONLY — never collapse
+  // inventory/options/map, which share the main pane.
+  if (window.__mainPanel?.currentViewId?.() === "examine") {
+    window.__mainPanel.closeView?.();
+  }
   if (!state.overlay) buildOverlay();
   runCleanup();
   setAcText(

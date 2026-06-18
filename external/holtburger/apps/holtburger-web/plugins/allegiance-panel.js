@@ -838,7 +838,18 @@ export const view = {
     const toggleRowEl = document.createElement("div");
     toggleRowEl.className = "hb-alleg-toggle-row";
     toggleRowEl.dataset.elId = "0x10000262";
+    // R7a: CharacterOption::IgnoreAllegianceRequests ORDINAL (character.rs:119)
+    // — set_character_option calls CharacterOption::from_repr, so pass 0x01,
+    // NOT a bitmask. Seed from the server-held option via a bare try/catch
+    // (ACE doesn't echo options; options-panel reads them at render time).
+    const ALLEG_IGNORE_OPT = 0x01;
     let ignore = false;
+    try {
+      const h = window.__sessionHandle;
+      if (typeof h?.isCharacterOptionEnabled === "function") {
+        ignore = !!h.isCharacterOptionEnabled(ALLEG_IGNORE_OPT);
+      }
+    } catch (_) {}
     const toggle = document.createElement("span");
     toggle.className = "hb-alleg-toggle";
     toggle.setAttribute("role", "button");
@@ -848,10 +859,14 @@ export const view = {
     setAcText(toggleLabel, "Ignore Allegiance Requests");
     toggleLabel.style.color = "var(--hb-text-cream)";
     toggleRowEl.appendChild(toggleLabel);
+    toggle.classList.toggle("on", ignore);
     toggle.addEventListener("click", () => {
       ignore = !ignore;
       toggle.classList.toggle("on", ignore);
-      emit(`[allegiance] Ignore-requests ${ignore ? "enabled" : "disabled"} (client-side only)`);
+      saWithSession("setCharacterOption", (h) => {
+        h.setCharacterOption(ALLEG_IGNORE_OPT, ignore);
+        emit(`[allegiance] Ignore allegiance requests = ${ignore ? "on" : "off"}`);
+      });
     });
     root.appendChild(toggleRowEl);
 

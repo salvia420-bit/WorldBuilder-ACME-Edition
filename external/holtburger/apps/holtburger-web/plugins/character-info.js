@@ -947,7 +947,7 @@ function renderTitles(bodyEl, _stats, titleRefs) {
   const bottomBtn = document.createElement("div");
   bottomBtn.className = "hb-ci-titles-bottom";
   setAcText(bottomBtn, "Set Display Title", { color: "#f0d8a0" });
-  // Rec #51 — fire the wasm sendDisplayTitle binding when available
+  // Rec #51 — fire the wasm setTitle binding when available
   // (pass-1 rec #133 is fable-skip wiring), with optimistic update so
   // the .current highlight moves immediately. The recv-loop kind=28
   // drain re-renders renderTitles with the server-authoritative
@@ -958,13 +958,13 @@ function renderTitles(bodyEl, _stats, titleRefs) {
     if (!id) return;
     try {
       const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      if (typeof handle?.sendDisplayTitle === "function") {
-        handle.sendDisplayTitle(id);
+      if (typeof handle?.setTitle === "function") {
+        handle.setTitle(id);
       } else {
-        console.warn("[character-info] sendDisplayTitle wasm export missing (pass-1 rec #133)");
+        console.warn("[character-info] setTitle wasm export missing (pass-1 rec #133)");
       }
     } catch (e) {
-      console.warn("[character-info] sendDisplayTitle failed:", e);
+      console.warn("[character-info] setTitle failed:", e);
     }
   });
   wrap.appendChild(bottomBtn);

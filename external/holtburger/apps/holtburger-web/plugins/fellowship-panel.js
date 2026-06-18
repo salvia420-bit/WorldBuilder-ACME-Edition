@@ -688,6 +688,11 @@ function applyFellowshipLayout(refs) {
   loadLayout(FELLOWSHIP_LAYOUT_ID).then(apply).catch(() => {});
 }
 
+// R7b: fellowship option-key → CharacterOption ORDINAL (character.rs
+// 120/136/133/135; matches options-panel.js). setCharacterOption calls
+// CharacterOption::from_repr, so these are literal ordinals, not bit shifts.
+const FELLOW_OPT_IDX = { ignore: 0x02, autoAccept: 0x12, shareXp: 0x0F, shareLoot: 0x11 };
+
 function buildAloneState(root, fellowshipName, opts, onCreate, aloneRefs) {
   const empty = document.createElement("div");
   empty.className = "hb-fellow-empty";
@@ -735,14 +740,28 @@ function buildAloneState(root, fellowshipName, opts, onCreate, aloneRefs) {
     txt.style.color = "var(--hb-text-cream)";
     row.appendChild(txt);
     row.addEventListener("click", () => {
-      opts[o.id] = !opts[o.id];
-      row.classList.toggle("on", opts[o.id]);
-      // Rec #104 — persist to localStorage so the toggle survives
-      // page reload; preference still resets on relog (no server echo).
+      // R7b: round-trip to the server + retail Ignore↔AutoAccept mutual
+      // exclusion (acclient gmFellowshipUI). Enabling one clears the other.
+      const next = !opts[o.id];
+      opts[o.id] = next;
+      row.classList.toggle("on", next);
+      let pairClear = null;
+      if (next && o.id === "ignore" && opts.autoAccept) pairClear = "autoAccept";
+      else if (next && o.id === "autoAccept" && opts.ignore) pairClear = "ignore";
+      if (pairClear) {
+        opts[pairClear] = false;
+        const pi = OPT_DEFS.findIndex((d) => d.id === pairClear);
+        optEls[pi]?.classList.remove("on");
+        withSession("setCharacterOption", (h) => h.setCharacterOption(FELLOW_OPT_IDX[pairClear], false));
+      }
+      // Keep the localStorage write as a pre-login fallback.
       try {
         window.localStorage?.setItem?.("hb.fellowship.opts", JSON.stringify(opts));
       } catch (_) {}
-      emit(`[fellowship] ${o.label} = ${opts[o.id] ? "on" : "off"} (local-only — resets on relog)`);
+      withSession("setCharacterOption", (h) => {
+        h.setCharacterOption(FELLOW_OPT_IDX[o.id], next);
+        emit(`[fellowship] ${o.label} = ${next ? "on" : "off"}`);
+      });
     });
     root.appendChild(row);
     optEls.push(row);
@@ -934,12 +953,10 @@ export const view = {
     // with vital bars. `__hbFellowshipDebug` overrides for testing.
     // Rec #104 — fellowship preferences live client-side only. ACE
     // doesn't expose setFellowshipPreference wire methods (no
-    // PropertyBool slots, no GameAction packets), so any setter is
-    // gated on a defer-wasm follow-up that adds the wire path. We
-    // persist to localStorage so the toggles survive page reloads
-    // within a session; a relog still resets them because the server
-    // doesn't echo any state back. The "(local-only)" qualifier in
-    // the toggle-click emit() advertises this clearly to the user.
+    // R7b: the toggles now round-trip to the server via setCharacterOption
+    // (FELLOW_OPT_IDX ordinals) and seed from isCharacterOptionEnabled below.
+    // The localStorage write is kept only as a pre-login fallback; ACE does
+    // not echo option state, so the seed reads it fresh at render time.
     let opts = { ignore: false, autoAccept: false, shareXp: true, shareLoot: true };
     try {
       const raw = localStorage.getItem("hb.fellowship.opts");
@@ -949,6 +966,17 @@ export const view = {
           for (const k of Object.keys(opts)) {
             if (typeof stored[k] === "boolean") opts[k] = stored[k];
           }
+        }
+      }
+    } catch (_) {}
+    // R7b: seed from the server-held character options (overrides the
+    // localStorage fallback). ACE doesn't echo options, so read them at
+    // render time via isCharacterOptionEnabled. Covers both render branches.
+    try {
+      const h = window.__sessionHandle;
+      if (typeof h?.isCharacterOptionEnabled === "function") {
+        for (const k of Object.keys(FELLOW_OPT_IDX)) {
+          opts[k] = !!h.isCharacterOptionEnabled(FELLOW_OPT_IDX[k]);
         }
       }
     } catch (_) {}

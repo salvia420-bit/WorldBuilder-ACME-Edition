@@ -94,11 +94,22 @@ export function attachWindowPosition(element, options) {
   if (clampToViewport) clampStateToViewport(state, element);
   applyPosition(element, state, defaultPos);
 
+  // R11: position writes must NOT clobber width/height written under the same
+  // key by persistWindowSize (the CHAT window 0x10000600 has dual writers).
+  // Read-modify-merge: keep the persisted size, overwrite only x/y/locked.
+  function persistPosition() {
+    const cur = readPersisted(storageKey) || {};
+    writePersisted(storageKey, {
+      x: state.x, y: state.y, locked: state.locked,
+      width: cur.width ?? null, height: cur.height ?? null,
+    });
+  }
+
   let drag = null;
   let saveDebounce = 0;
   function scheduleSave() {
     clearTimeout(saveDebounce);
-    saveDebounce = setTimeout(() => { writePersisted(storageKey, state); }, 120);
+    saveDebounce = setTimeout(() => { persistPosition(); }, 120);
   }
   if (dragHandle) {
     dragHandle.style.cursor = dragHandle.style.cursor || "move";
@@ -173,7 +184,7 @@ export function attachWindowPosition(element, options) {
   if (lockButton) {
     lockButton.addEventListener("click", () => {
       state.locked = !state.locked;
-      writePersisted(storageKey, state);
+      persistPosition();
       fireLockChanged();
     });
   }
@@ -191,13 +202,13 @@ export function attachWindowPosition(element, options) {
       const next = !!locked;
       if (next === state.locked) return;
       state.locked = next;
-      writePersisted(storageKey, state);
+      persistPosition();
       fireLockChanged();
     },
     resetPosition() {
       state.x = null;
       state.y = null;
-      writePersisted(storageKey, state);
+      persistPosition();
       applyPosition(element, state, defaultPos);
     },
   };
