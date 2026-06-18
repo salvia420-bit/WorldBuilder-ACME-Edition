@@ -2340,7 +2340,7 @@
           // that lack rIC pre-shim.
           try {
             const wantRenderer3d =
-              new URLSearchParams(window.location.search).get("renderer") === "3d";
+              new URLSearchParams(window.location.search).get("renderer") !== "2d";
             if (wantRenderer3d) {
               const eagerImport = () => {
                 Promise.all([
@@ -4610,8 +4610,11 @@ void main() {
       // in a populated zone — pollEntityUpdates can carry 100s/sec).
       // Cap both with a keep-latest-N ring (one-time overflow warn).
       const ENTITY_BUFFER_CAP = 512;
+      // W6 flip (2026-06-18): 3D is the UNCONDITIONAL DEFAULT renderer.
+      // `?renderer=2d` is the escape hatch to the (soon-to-be-/legacy) PIXI
+      // path. All six `renderer` parse sites in this file read `!== "2d"`.
       const __USE_RENDERER_3D =
-        new URLSearchParams(window.location.search).get("renderer") === "3d";
+        new URLSearchParams(window.location.search).get("renderer") !== "2d";
       // `?spawnDefer2dOnly=on` (default-off): under ?renderer=3d the 2D
       // `liveScene` is PERMANENTLY null (the 2D PIXI bring-up is skipped),
       // so every KIND_SPAWN gets cloned into `deferredSpawns` that the 3D
@@ -6035,7 +6038,7 @@ void main() {
             // fall through to the existing retry-on-late-liveScene
             // behaviour.
             const wantRenderer3d =
-              new URLSearchParams(window.location.search).get("renderer") === "3d";
+              new URLSearchParams(window.location.search).get("renderer") !== "2d";
             if (wantRenderer3d || window.liveScene3d) {
               cellContainersPopulatedLbs.add(lbId);
             }
@@ -7301,7 +7304,7 @@ void main() {
         // consumes it). Removes one side of the Promise.all without
         // touching the wasm-side fetch_landblock_objects warmup.
         const _useRenderer3dFast =
-          new URLSearchParams(window.location.search).get("renderer") === "3d";
+          new URLSearchParams(window.location.search).get("renderer") !== "2d";
         renderStatus.textContent = _useRenderer3dFast
           ? "Fetching object placements…"
           : "Fetching object placements + sprite atlas…";
@@ -7333,7 +7336,7 @@ void main() {
         // Three.js is dynamically imported so 2D-only users never
         // pay the bundle cost.
         const useRenderer3d =
-          new URLSearchParams(window.location.search).get("renderer") === "3d";
+          new URLSearchParams(window.location.search).get("renderer") !== "2d";
         if (useRenderer3d) {
           // #13 Option A — idempotency guard. The autoLogin / kick-retry
           // path can re-enter renderHoltburg after a char is already in
@@ -7544,7 +7547,7 @@ void main() {
         // never came up.
         try {
           const _pick3D =
-            new URLSearchParams(window.location.search).get("renderer") === "3d";
+            new URLSearchParams(window.location.search).get("renderer") !== "2d";
           if (_pick3D) {
             const { setupClickPicking } = await import("./scene3d/picking.js");
             setupClickPicking({

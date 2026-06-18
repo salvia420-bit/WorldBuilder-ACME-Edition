@@ -112,7 +112,7 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 
 | Flag | Values | Default | Effect | Where |
 |---|---|---|---|---|
-| `renderer` | `3d` vs anything | **2D** (PIXI) | `=3d` switches to the three.js pipeline. **Required** to exercise any scene3d work. | index.html:2128, 6736, 6768 |
+| `renderer` | `2d` (escape) vs anything | **3D** (three.js) — W6 flip 2026-06-18 | Default is now the three.js pipeline (all six `renderer` parse sites read `!== "2d"`). `?renderer=2d` is the escape hatch to the legacy PIXI path (slated for `/legacy`). | index.html (6 sites: 2343, 4614, 6038, 7304, 7336, 7547) |
 | `quality` | `low`\|`mid`\|`high`\|`ultra` | auto-detect by GPU | Master visual preset — drives ~15 feature toggles at once. | scene3d/quality.js:323 |
 | `agent` | `1` | off | Agent-mode CSS: hides login form, canvas only. (autoLogin also adds this class.) | index.html:556 |
 | `hud` | `none` | HUD shown | Hides all UI overlays (HUD, bars, nameplates). | index.html:559, 2128 |
