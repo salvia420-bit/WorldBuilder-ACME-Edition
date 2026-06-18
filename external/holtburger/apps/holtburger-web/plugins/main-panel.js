@@ -291,10 +291,11 @@ function _mountCurrent() {
 // to a missing view — keeps the previous view shown.
 export function showView(id, ctx = {}) {
   if (!views.has(id)) {
+    // R10 (BAND-C1): warn-and-return — do NOT clobber the stack with an
+    // unregistered id (toggleView routes unregistered hotkeys here; before
+    // R2/R3/R4 the live blast radius was {emote, social, house}). Keeping the
+    // current view avoids the "View not built yet" placeholder flash.
     console.warn(`[main-panel] showView: no view "${id}"; keeping current`);
-    // Show a placeholder anyway so the user sees the click landed.
-    stack = [{ id, ctx }];
-    _mountCurrent();
     return;
   }
   stack = [{ id, ctx }];

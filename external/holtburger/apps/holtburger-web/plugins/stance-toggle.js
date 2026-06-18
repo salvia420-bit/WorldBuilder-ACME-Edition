@@ -157,7 +157,10 @@ export function mount(ctx) {
       ? window.__getCurrentStanceLow()
       : 0x003d;
     const kind = classifyStance(low);
-    const btn = document.querySelector('.hb-bar-icon[data-plugin-id="stance-toggle"]');
+    // R5 (BAND-C1): stance-toggle is BAR_SLOT_SUPPRESS-ed into combat-bar, so
+    // the bar icon carries data-plugin-id="combat-bar" (bar.js sets it from
+    // slot.id), not "stance-toggle" — the old selector matched nothing.
+    const btn = document.querySelector('.hb-bar-icon[data-plugin-id="combat-bar"]');
     if (btn) btn.dataset.stance = kind;
   }
   // First apply on next animation frame so bar.js has built the icon.

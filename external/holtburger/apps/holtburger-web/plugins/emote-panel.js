@@ -40,6 +40,10 @@
 const PANEL_ID = "hb-emote-panel";
 
 let stylesInjected = false;
+// R2 EDIT-D (BLOCKER): module-scope cache read at view-mount time (below).
+// Was referenced but never declared → strict-mode ReferenceError on first
+// mount, which main-panel swallowed as "view mount error (emote)" → blank.
+let cachedTaxonomy = null;
 function ensureStyles() {
   if (stylesInjected) return;
   stylesInjected = true;
@@ -406,9 +410,13 @@ export const manifest = {
     "through soul-emote slash commands).",
 };
 
-// main-panel `view` export — same convention as
-// spellbook / inventory / allegiance / etc.
-export function view(ctx) {
+// main-panel `view` export — object form `{name, nameFor, mount}` (mirrors
+// lore-panel). main-panel calls mount(bodyEl, ctx) and clears innerHTML in
+// _runCleanup, so the explicit append + remover is safe.
+export const view = {
+  name: "Emote Palette",
+  nameFor: () => "Emote Palette",
+  mount(parentEl, ctx) {
   ensureStyles();
   const handle = ctx?.handle ?? window.__sessionHandle ?? null;
   if (!cachedTaxonomy && handle && typeof handle.getEmoteTaxonomy === "function") {
@@ -462,8 +470,10 @@ export function view(ctx) {
   allCheckbox.addEventListener("change", render);
   render();
 
-  return container;
-}
+  parentEl.appendChild(container);
+  return () => container.remove();
+  },
+};
 
 // Test-only export (Wave F.6 unit tests in tests/emote_table.test.cjs).
 // Hidden behind a no-window guard so production bundles strip it.

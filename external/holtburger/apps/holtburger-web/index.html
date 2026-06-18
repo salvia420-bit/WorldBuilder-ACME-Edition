@@ -1309,6 +1309,11 @@
       import * as optionsPanelPlugin from "./plugins/options-panel.js";
       // Wave 4.A (2026-05-28) — Train Skills view (gmSkillUI port).
       import * as trainSkillsPlugin from "./plugins/train-skills.js";
+      // R2/R5 (BAND-C1): emote-panel registers a main-panel view; stance-toggle
+      // mounts a bar icon. Both are BAR_SLOT_SUPPRESS-ed, so their modules are
+      // not auto-loaded — a static import is required for the view/mount hooks.
+      import * as emotePanelPlugin from "./plugins/emote-panel.js";
+      import * as stanceTogglePlugin from "./plugins/stance-toggle.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
       // CMT Wave 2 / Phase 5 (2026-05-26): remote-player swing dispatch.
       // The damageTaken / evadedAttacker handlers consult the
@@ -1733,6 +1738,10 @@
         // and toggleView("train-skills") works without an explicit override,
         // but spelling it out keeps the wiring discoverable).
         mainPanelPlugin.registerView("train-skills", trainSkillsPlugin.view);
+        // R2 (BAND-C1): Emote Palette as a main-panel view (Shift+F2). The
+        // generic strip rule maps pluginId "emote-panel" → view "emote" →
+        // toggleView, so no PLUGIN_HOTKEY_DISPATCH entry is needed.
+        mainPanelPlugin.registerView("emote", emotePanelPlugin.view);
       }
       // PR-GG (2026-05-23): vendor-ui is its own top-level horizontal bar
       // (retail gmVendorUI layout 0x21000012), NOT a main-panel view.
@@ -1782,6 +1791,11 @@
         // it directly. Same pattern that house-panel / emote-panel
         // could later adopt for their non-main-panel hotkeys.
         "spell-research-panel": () => window.__toggleSpellResearchPanel?.(),
+        // R3/R4 (BAND-C1): social-panel (Shift+F3) and house-panel (Shift+F6)
+        // are standalone overlays, not main-panel views — dispatch straight to
+        // their toggle globals (same pattern as spell-research above).
+        "social-panel": () => window.__toggleSocialPanel?.(),
+        "house-panel": () => window.__toggleHousePanel?.(),
       };
       window.addEventListener("keydown", (ev) => {
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
@@ -8263,6 +8277,16 @@ void main() {
             if (typeof window.__resolvePluginClient === "function") {
               try { window.__resolvePluginClient(pluginClient); } catch (_) {}
               window.__resolvePluginClient = null;
+            }
+            // R5 (BAND-C1): stance-toggle is BAR_SLOT_SUPPRESS-ed (merged into
+            // combat-bar), so its mount never fires from the bar loop. Mount it
+            // here, post-login, with the real client so playerStatsUpdated
+            // drives the live combat-mode tint. Guard is load-bearing if this
+            // ever moves out of the single-fire block.
+            if (!pluginsDisabled && !window.__stanceBarMounted) {
+              window.__stanceBarMounted = true;
+              try { stanceTogglePlugin.mount({ client: pluginClient }); }
+              catch (e) { console.warn("[stance-toggle] bar mount", e); }
             }
           }
 

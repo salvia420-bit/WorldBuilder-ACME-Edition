@@ -971,6 +971,12 @@ if (typeof window !== "undefined") {
   }
   window.__openSocialPanel = open;
   window.__closeSocialPanel = close;
+  // R3 (BAND-C1): symmetric toggle for the Shift+F3 hotkey dispatch
+  // (mirrors house-panel / spell-research-panel).
+  window.__toggleSocialPanel = () => {
+    if (overlay?.classList.contains("open")) close();
+    else open();
+  };
 }
 
 export const manifest = {

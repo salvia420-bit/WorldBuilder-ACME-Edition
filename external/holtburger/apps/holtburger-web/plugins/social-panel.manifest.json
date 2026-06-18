@@ -9,5 +9,6 @@
   "iconHidden": true,
   "entry": "./social-panel.js",
   "environments": ["browser"],
-  "slots": ["panel"]
+  "slots": ["panel"],
+  "hotkeys": [{ "id": "toggle", "default": "Shift+F3", "label": "Toggle Social" }]
 }

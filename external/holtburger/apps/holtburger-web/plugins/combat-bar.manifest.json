@@ -6,6 +6,7 @@
   "version": "0.1.0",
   "description": "Stance toggle + attack settings + spell picker",
   "icon": "⚔",
+  "iconSprite": "0x06004D1C",
   "entry": "./combat-bar.js",
   "environments": ["browser"],
   "slots": ["bar", "panel"]
