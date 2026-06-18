@@ -53,6 +53,10 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+// BAND-B S2 — the gmStatManagementUI improve-footer lives in this pane now.
+// These pure helpers stay exported from train-skills.js even after S3 retires
+// that view; importing them here keeps the raise/train math single-sourced.
+import { TRAINING, computeNextRaiseCost, decideTrainAction } from "./train-skills.js";
 
 const VIEW_STYLE_ID = "hb-charinfo-view-style";
 
@@ -395,6 +399,65 @@ function ensureStyles() {
       font-style: italic;
       text-align: center;
     }
+    /* BAND-B S2 — selectable skill/attribute/vital rows. Clicking a row
+       pins it as the footer's "improve" target. Mirrors the title-row
+       .selected gold-gradient treatment for a coherent look. */
+    .hb-ci-selectable { cursor: pointer; }
+    .hb-ci-row.selected {
+      background: linear-gradient(90deg,
+        rgba(212, 175, 55, 0.18) 0%,
+        rgba(176, 138, 74, 0.32) 100%);
+      outline: 1px solid var(--hb-border-brass);
+      outline-offset: -1px;
+    }
+    /* BAND-B S2 — retail gmStatManagementUI improve-footer band, mounted
+       ABOVE the 18-px status footer (so .hb-ci-body bottom shifts to 82px
+       on the Skills + Attributes tabs). Element-id provenance (decompiled):
+       StatManagement_Footer_Default 0x10000240, _Text 0x10000241,
+       _LineOne 0x10000242, _LineTwo 0x10000244, _RaiseButton 0x10000246. */
+    .hb-ci-improve {
+      position: absolute;
+      bottom: 18px;
+      left: 0;
+      right: 0;
+      height: 64px;
+      box-sizing: border-box;
+      padding: 4px 8px;
+      background: rgba(0, 0, 0, 0.55);
+      border-top: 1px solid var(--hb-border-brass);
+    }
+    .hb-ci-improve-title {
+      font-size: 11px;
+      color: var(--hb-text-gold);
+      letter-spacing: 0.02em;
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+    }
+    .hb-ci-improve-line {
+      font-size: 9px;
+      line-height: 13px;
+      color: var(--hb-text-cream);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+    }
+    .hb-ci-improve-btn {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      padding: 2px 14px;
+      font-family: var(--hb-font-serif);
+      font-size: 10px;
+      color: var(--hb-text-cream-bright);
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid var(--hb-border-brass);
+      cursor: pointer;
+      user-select: none;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .hb-ci-improve-btn:hover:not([disabled]) {
+      background: var(--hb-overlay-active);
+      color: var(--hb-text-gold);
+    }
+    .hb-ci-improve-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
   `;
   document.head.appendChild(style);
 }
@@ -482,6 +545,13 @@ function getAvailableXp(stats) {
   return (hi >>> 0) * 0x1_0000_0000 + (lo >>> 0);
 }
 
+// BAND-B S2 — unspent skill credits for the improve-footer's "Cost to Train"
+// gate. Mirrors train-skills.js:getAvailableCredits (same wasm accessor).
+function getAvailableCredits() {
+  try { return window.__pluginClient?.player?.skillCredits >>> 0; }
+  catch (_) { return 0; }
+}
+
 function tupleArrayAt(arr, i) {
   // Wasm flat-array stat tuples are exposed as `{ "0": v, "1": v, ... }`
   // when read from a JS Object accessor. Coerce to a real array.
@@ -497,7 +567,7 @@ function getStats() {
     return {
       name: s.name,
       attributes: s.attributes,   // [id, cur, base, buffed_max] × 6 + vitals appended?
-      skills: s.skills,           // [id, cur, base, trained_state, xp] × 38
+      skills: s.skills,           // stride-6: [type, cur, base, ranks, training, next_rank_cost]
       vitals: s.vitals,           // [type, cur, base, buffed_max] × 3
       levelInfo: s.levelInfo,     // [level, xp_total, xp_to_next, ...]
     };
@@ -670,8 +740,32 @@ function renderHead(headEl, stats) {
   headEl.appendChild(levelEl);
 }
 
-function renderAttributes(bodyEl, stats, _skillTable) {
+// BAND-B S2 — wire a rendered stat row for improve-footer selection. Clicking
+// the row pins it as the footer's target; clicks that land on the shipped
+// per-row raise button (attributes/vitals, FORK-D) are left to that button.
+// `rec` is stashed in selectCtx.statIndex under the composite `${kind}:${id}`
+// key — skill id 6 / attribute id 6, and attribute id 1 / vital id 1, collide
+// on the bare id, so the kind prefix disambiguates.
+function wireSelectableRow(el, selectCtx, id, kind, rec) {
+  el.classList.add("hb-ci-selectable");
+  el.dataset.statId = String(id);
+  el.dataset.statKind = kind;
+  if (kind === "skill") el.dataset.skillId = String(id);
+  if (!selectCtx) return;
+  selectCtx.statIndex.set(kind + ":" + id, rec);
+  el.classList.toggle(
+    "selected",
+    selectCtx.selectedStatId === id && selectCtx.selectedStatKind === kind,
+  );
+  el.addEventListener("click", (ev) => {
+    if (ev.target?.closest?.(".hb-ci-raise")) return;
+    selectCtx.onSelect(id, kind);
+  });
+}
+
+function renderAttributes(bodyEl, stats, _skillTable, selectCtx) {
   bodyEl.innerHTML = "";
+  if (selectCtx) selectCtx.statIndex.clear();
   const a = stats?.attributes;
   if (!a) {
     const e = document.createElement("div");
@@ -728,7 +822,11 @@ function renderAttributes(bodyEl, stats, _skillTable) {
         }
       },
     } : (xpTables ? { cost: 0, canAfford: false, isMax: true, availableXp, onClick: () => {} } : null);
-    bodyEl.appendChild(row(ATTR_ICON_URL(id), ATTR_NAMES[id] || `Attr ${id}`, display, raise));
+    const name = ATTR_NAMES[id] || `Attr ${id}`;
+    const el = row(ATTR_ICON_URL(id), name, display, raise);
+    wireSelectableRow(el, selectCtx, id, "attribute",
+      { kind: "attribute", name, cost: cost != null ? cost : null, isMax: cost == null });
+    bodyEl.appendChild(el);
   }
   const v = stats?.vitals;
   if (v) {
@@ -763,13 +861,18 @@ function renderAttributes(bodyEl, stats, _skillTable) {
           }
         },
       } : null;
-      bodyEl.appendChild(row(VITAL_ICON_URL(id), VITAL_NAMES[id] || `Vital ${id}`, `${cur}/${max}`, raise));
+      const name = VITAL_NAMES[id] || `Vital ${id}`;
+      const el = row(VITAL_ICON_URL(id), name, `${cur}/${max}`, raise);
+      wireSelectableRow(el, selectCtx, id, "vital",
+        { kind: "vital", name, cost: cost != null ? cost : null, isMax: cost == null });
+      bodyEl.appendChild(el);
     }
   }
 }
 
-function renderSkills(bodyEl, stats, skillTable) {
+function renderSkills(bodyEl, stats, skillTable, selectCtx) {
   bodyEl.innerHTML = "";
+  if (selectCtx) selectCtx.statIndex.clear();
   if (!skillTable?.skills?.length) {
     bodyEl.appendChild(emptyMsg("Skill table not loaded."));
     return;
@@ -816,8 +919,19 @@ function renderSkills(bodyEl, stats, skillTable) {
     bodyEl.appendChild(section(t.label));
     for (const skill of items) {
       const iconUrl = `./data/ui-sprites/${skill.iconIdHex}.png`;
-      const value = valueByLine.get(skill.skillIdInt) ?? "—";
-      bodyEl.appendChild(row(iconUrl, skill.name, value));
+      const id = skill.skillIdInt;
+      const value = valueByLine.get(id) ?? "—";
+      // BAND-B S2 — Skills rows carry NO per-row button (retail puts the
+      // action in the shared footer); they're selectable instead.
+      const el = row(iconUrl, skill.name, value);
+      wireSelectableRow(el, selectCtx, id, "skill", {
+        kind: "skill",
+        name: skill.name,
+        training: stateByLine.get(id) ?? TRAINING.UNTRAINED,
+        xp: xpByLine.get(id) ?? 0,
+        trainedCost: skill.trainedCost ?? 0,
+      });
+      bodyEl.appendChild(el);
     }
   }
 }
@@ -1124,6 +1238,33 @@ export const view = {
     footerEl.appendChild(footR);
     root.appendChild(footerEl);
 
+    // BAND-B S2 — gmStatManagementUI improve-footer band (above the status
+    // footer). Shown only on the Skills + Attributes tabs; the body bottom
+    // shifts to 82px for those tabs so it doesn't overlap. data-el tags carry
+    // the decompiled retail element ids for test_ac_layout_strings.mjs.
+    const improveEl = document.createElement("div");
+    improveEl.className = "hb-ci-improve";
+    improveEl.dataset.el = "0x10000240";
+    const improveTitle = document.createElement("div");
+    improveTitle.className = "hb-ci-improve-title";
+    improveTitle.dataset.el = "0x10000241";
+    const improveLine1 = document.createElement("div");
+    improveLine1.className = "hb-ci-improve-line";
+    improveLine1.dataset.el = "0x10000242";
+    const improveLine2 = document.createElement("div");
+    improveLine2.className = "hb-ci-improve-line";
+    improveLine2.dataset.el = "0x10000244";
+    const improveBtn = document.createElement("button");
+    improveBtn.type = "button";
+    improveBtn.className = "hb-ci-improve-btn";
+    improveBtn.dataset.el = "0x10000246";
+    setAcText(improveBtn, "Improve", { color: "#f0e8d0" });
+    improveEl.appendChild(improveTitle);
+    improveEl.appendChild(improveLine1);
+    improveEl.appendChild(improveLine2);
+    improveEl.appendChild(improveBtn);
+    root.appendChild(improveEl);
+
     parentEl.appendChild(root);
 
     // Apply retail layouts: parent panel anchors + Title-tab structured
@@ -1140,8 +1281,137 @@ export const view = {
     });
 
     let skillTable = null;
+
+    // BAND-B S2 — improve-footer selection model. statIndex maps the
+    // composite `${kind}:${id}` key (rebuilt every render) to the footer
+    // descriptor; selectedStat* is the pinned target.
+    const statIndex = new Map();
+    let selectedStatId = null;
+    let selectedStatKind = null;
+    const selectCtx = {
+      statIndex,
+      get selectedStatId() { return selectedStatId; },
+      get selectedStatKind() { return selectedStatKind; },
+      onSelect: (id, kind) => {
+        selectedStatId = id;
+        selectedStatKind = kind;
+        renderImproveFooter();
+        reapplySelectedClass();
+      },
+    };
+
+    function reapplySelectedClass() {
+      bodyEl.querySelectorAll("[data-stat-id]").forEach((r) => {
+        const id = Number(r.dataset.statId);
+        const kind = r.dataset.statKind;
+        r.classList.toggle(
+          "selected", id === selectedStatId && kind === selectedStatKind);
+      });
+    }
+
+    // Skill train/raise — lifted from train-skills.js dispatch(): the pure
+    // decideTrainAction picks the wasm method + u32-coerced args, gated on
+    // credits/xp; we invoke it. ACE echoes a PrivateUpdateSkill that drives
+    // a playerStatsUpdated rerender.
+    function fireImprove(action) {
+      const client = window.__pluginClient;
+      const decision = decideTrainAction(action, client);
+      if (decision.called === "trainSkill") {
+        try { client.player.trainSkill(...decision.args); }
+        catch (e) { console.warn("[char-info] trainSkill failed:", e); }
+      } else if (decision.called === "raiseSkill") {
+        try { client.player.raiseSkill(...decision.args); }
+        catch (e) { console.warn("[char-info] raiseSkill failed:", e); }
+      } else if (decision.reason) {
+        console.log(`[char-info] improve no-op (${decision.reason})`);
+      }
+    }
+
+    function renderImproveFooter() {
+      const stats = getStats();
+      const credits = getAvailableCredits();
+      const availableXp = getAvailableXp(stats);
+      const rec = (selectedStatId != null)
+        ? statIndex.get(selectedStatKind + ":" + selectedStatId)
+        : null;
+
+      // Default — DisplayDefaultFooter (no selection / off-tab selection).
+      if (!rec) {
+        setAcText(improveTitle, "Select a Skill to Improve", { color: "#f0c87c" });
+        setAcText(improveLine1, `Skill Credits Available: ${credits}`, { color: "#e8d8b0" });
+        setAcText(improveLine2, `Unassigned Experience: ${availableXp.toLocaleString()}`, { color: "#e8d8b0" });
+        setAcText(improveBtn, "Improve", { color: "#f0e8d0" });
+        improveBtn.disabled = true;
+        improveBtn.onclick = null;
+        return;
+      }
+
+      let line1 = "", line2 = "", btnLabel = "Improve", enabled = false, onClick = null;
+      if (rec.kind === "skill") {
+        if (rec.training === TRAINING.UNTRAINED) {
+          const cost = rec.trainedCost ?? 0;
+          line1 = `Cost to Train: ${cost} credits`;
+          line2 = `Skill Credits Available: ${credits}`;
+          btnLabel = "Train";
+          enabled = cost > 0 && cost <= credits;
+          onClick = () => fireImprove({
+            kind: "train", skillId: selectedStatId, cost,
+            availableXp, availableCredits: credits,
+          });
+        } else if (rec.training === TRAINING.TRAINED || rec.training === TRAINING.SPECIALIZED) {
+          // snap.xp is S1's MARGINAL cost — computeNextRaiseCost returns it
+          // verbatim (no further JS subtraction), or null at max rank.
+          const cost = computeNextRaiseCost({ training: rec.training, xp: rec.xp });
+          line1 = `Cost to Raise: ${cost == null ? "Max" : cost.toLocaleString()} XP`;
+          line2 = `Unassigned Experience: ${availableXp.toLocaleString()}`;
+          enabled = cost != null && cost <= availableXp;
+          onClick = () => fireImprove({
+            kind: "raise", skillId: selectedStatId, cost,
+            availableXp, availableCredits: credits,
+          });
+        } else {
+          line1 = "Unusable";
+          line2 = `Unassigned Experience: ${availableXp.toLocaleString()}`;
+        }
+      } else {
+        // Attribute / vital — raise through the same wasm handle the shipped
+        // per-row buttons use (cost precomputed in renderAttributes).
+        const cost = rec.cost;
+        line1 = `Cost to Raise: ${cost == null ? "Max" : cost.toLocaleString()} XP`;
+        line2 = `Unassigned Experience: ${availableXp.toLocaleString()}`;
+        enabled = cost != null && cost <= availableXp;
+        onClick = () => {
+          const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+          try {
+            if (rec.kind === "attribute") handle?.raiseAttribute?.(selectedStatId >>> 0, cost >>> 0);
+            else handle?.raiseVital?.(selectedStatId >>> 0, cost >>> 0);
+          } catch (e) { console.warn("[char-info] improve attr/vital", e); }
+        };
+      }
+
+      setAcText(improveTitle, rec.name, { color: "#f0c87c" });
+      setAcText(improveLine1, line1, { color: "#e8d8b0" });
+      setAcText(improveLine2, line2, { color: "#e8d8b0" });
+      setAcText(improveBtn, btnLabel, { color: "#f0e8d0" });
+      improveBtn.disabled = !enabled;
+      improveBtn.onclick = enabled
+        ? () => {
+            if (improveBtn.disabled) return;
+            try { onClick?.(); } catch (e) { console.warn("[improve]", e); }
+            // Optimistic disable; the playerStatsUpdated rerender (or the
+            // 1.5s fallback) re-evaluates affordability against fresh stats.
+            improveBtn.disabled = true;
+            setTimeout(() => { if (improveBtn.isConnected) renderImproveFooter(); }, 1500);
+          }
+        : null;
+    }
+
     function setTab(id) {
       activeTab = id;
+      // Reset the footer selection on every tab switch (skill ids and
+      // attribute/vital ids overlap, so a stale pin would mis-resolve).
+      selectedStatId = null;
+      selectedStatKind = null;
       for (const k of Object.keys(tabBtns)) {
         const btn = tabBtns[k];
         btn.classList.toggle("active", k === id);
@@ -1152,9 +1422,14 @@ export const view = {
     function rerender() {
       const stats = getStats();
       renderHead(headEl, stats);
+      // The improve-footer band only applies to the stat tabs; the Titles
+      // tab keeps the full body (its structured layout assumes bottom:18px).
+      const showImprove = activeTab === "skills" || activeTab === "attributes";
+      improveEl.style.display = showImprove ? "" : "none";
+      bodyEl.style.bottom = showImprove ? "82px" : "18px";
       switch (activeTab) {
-        case "attributes": renderAttributes(bodyEl, stats, skillTable); break;
-        case "skills":     renderSkills(bodyEl, stats, skillTable); break;
+        case "attributes": renderAttributes(bodyEl, stats, skillTable, selectCtx); break;
+        case "skills":     renderSkills(bodyEl, stats, skillTable, selectCtx); break;
         case "titles":
           renderTitles(bodyEl, stats, titleRefs);
           // After Title-tab DOM lands, re-apply the structured layout
@@ -1169,6 +1444,7 @@ export const view = {
           });
           break;
       }
+      if (showImprove) renderImproveFooter();
       // Footer: XP if available.
       const lv = stats?.levelInfo;
       setAcText(footL, lv ? `XP: ${tupleArrayAt(lv, 1) ?? 0}` : "—", { color: "#a8a090" });

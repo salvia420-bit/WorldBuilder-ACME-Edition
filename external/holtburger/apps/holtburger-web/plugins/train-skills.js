@@ -502,7 +502,10 @@ function renderBody(bodyEl, stats, skillTable, availableCredits, availableXp, ho
     const tier = tiers[snap.training] ?? tiers[TRAINING.UNUSABLE];
     tier.items.push({ skill: sk, snap });
   }
-  for (const key of [TRAINING.UNTRAINED, TRAINING.TRAINED, TRAINING.SPECIALIZED, TRAINING.UNUSABLE]) {
+  // S4/R15 — retail gmSkillUI::RebuildSkillList orders specialized → trained
+  // → untrained → unusable (matches character-info renderSkills). This view's
+  // DOM render is dead after S3 unregisters it, but keep the order correct.
+  for (const key of [TRAINING.SPECIALIZED, TRAINING.TRAINED, TRAINING.UNTRAINED, TRAINING.UNUSABLE]) {
     const tier = tiers[key];
     if (!tier.items.length) continue;
     bodyEl.appendChild(renderSection(tier.label));

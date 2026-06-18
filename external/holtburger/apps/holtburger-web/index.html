@@ -1731,13 +1731,14 @@
         // Character / Spellbook / etc. — shares the right-side pane and
         // gets brass-rim chrome from main-panel's container slot.
         mainPanelPlugin.registerView("options",   optionsPanelPlugin.view);
-        // Wave 4.A (2026-05-28): Train Skills view — gmSkillUI port,
-        // surfaces RaiseSkill (0x0046) / TrainSkill (0x0047) wire on
-        // the player's known skills. F11 hotkey via PLUGIN_HOTKEY_DISPATCH
-        // (the generic strip rule would land on "train-skills" already
-        // and toggleView("train-skills") works without an explicit override,
-        // but spelling it out keeps the wiring discoverable).
-        mainPanelPlugin.registerView("train-skills", trainSkillsPlugin.view);
+        // BAND-B S3 (2026-06-17): the standalone Train Skills view is RETIRED —
+        // its gmSkillUI raise/train flow now lives in the character pane's
+        // Skills tab (the gmStatManagementUI improve-footer). train-skills.js is
+        // still imported (its pure helpers `computeNextRaiseCost` /
+        // `decideTrainAction` / `TRAINING` are used by character-info.js + the
+        // unit test), but no longer registered as a view. F11 is repointed to
+        // `__mainPanel.showView('character', { tab: 'skills' })` via the
+        // PLUGIN_HOTKEY_DISPATCH override below.
         // R2 (BAND-C1): Emote Palette as a main-panel view (Shift+F2). The
         // generic strip rule maps pluginId "emote-panel" → view "emote" →
         // toggleView, so no PLUGIN_HOTKEY_DISPATCH entry is needed.
@@ -1796,6 +1797,13 @@
         // their toggle globals (same pattern as spell-research above).
         "social-panel": () => window.__toggleSocialPanel?.(),
         "house-panel": () => window.__toggleHousePanel?.(),
+        // BAND-B S3 (2026-06-17): F11 (train-skills manifest hotkey) opens the
+        // SHARED character pane at the Skills tab instead of the retired
+        // standalone view. showView (NOT toggleView) — toggleView would CLOSE
+        // the pane when it's already open on any character tab; showView resets
+        // the stack and re-mounts honoring ctx.tab, so F11 always lands on
+        // Skills even mid-Attributes.
+        "train-skills": () => window.__mainPanel?.showView?.("character", { tab: "skills" }),
       };
       window.addEventListener("keydown", (ev) => {
         if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
