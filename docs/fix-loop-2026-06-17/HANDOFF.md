@@ -68,27 +68,27 @@ generators** that would have grown it to ~119 — the owner chose **encounters-o
 - `canonical_classify.js` → `plugins/world-objects/`; `xp_table.rs` →
   `holtburger-dat`.
 
-## Known caveat (terrain-lookup miss — NOT a partial dat)
+## RESOLVED non-issue — Z=0 is correct coastal terrain (not a dat/lookup problem)
 
-> **CORRECTED 2026-06-18.** The earlier "client_cell_1.dat is 332 MB — partial
-> (retail full ~750MB+)" claim was WRONG — **332 MB (348,127,232 B) is the normal,
-> complete size** for `client_cell_1.dat` (the ~884 MB figure is `client_portal.dat`).
-> It's the canonical dat used everywhere (the host ingest project symlinks it:
-> `e1-inworld/dats/base/client_cell_1.dat -> ~/ac_base_dats/...`). A partial dat is
-> NOT the cause, and "re-run against a full cell dat" is a no-op (it already is full).
+> **RESOLVED 2026-06-18 (was twice-misdiagnosed).** Earlier claims — "partial cell
+> dat (retail full ~750MB+)" then "terrain-lookup miss / default-0" — are BOTH wrong.
+> 1. `client_cell_1.dat` = **348,127,232 B (332 MB) is the normal complete size**
+>    (the ~884 MB file is `client_portal.dat`); it's the canonical dat the host
+>    ingest project symlinks (`e1-inworld/dats/base/... -> ~/ac_base_dats/...`).
+> 2. The `zeroZRecords=27582` (~4.7%) records are NOT a miss — **Z=0 is the real
+>    ground height** at those positions. WB.Terminal (the DAT terrain oracle) returns
+>    the SAME heights the ingest stored: e.g. LB 0xEE6C is **Tusker Island** (a low
+>    beach, terrain-info heightMin=0/heightMax=7); its "Uber Beach"/"AD Camp"
+>    encounters sit on the lowest terrain step (`get-region` height table index 0 =
+>    0.0 = sea level) → `get-height` = 0 there, = 3.92/4.0 a few metres inland, and
+>    = 66 at Holtburg — all matching the staged Z exactly.
 
-The real story: the terrain service computes real heights world-wide (sampled
-staged Z range **−83 → +358**), but ~4.7% of staged encounter records (≈27k —
-matches `zeroZRecords=27582`) carry **exactly Z=0**, clustered in specific LBs
-(e.g. 0xEE6C had 28 of them). Exactly-0 across thousands of records is a
-default/miss, not coincidental real terrain — i.e. the height lookup returned its
-0 default for those (LB, cell) positions. Cause still OPEN (candidates: genuinely
-landless grid cells; cell-local edge-coordinate clamp misses; or LBs the host
-project didn't resolve terrain for). The probe targets (0xA9B2/0xA9B4) have valid
-Z. To pin it: `WB.Terminal` terrain-dump the worst offenders (0xEE6C/0xC9EA) and
-check whether they have a CellLandblock + a non-synthetic height at the queried
-cell coords. The records stage anyway (warned), so this is a placement-quality
-tail, not a load failure.
+No action needed: the wilderness fill placed coastal/low-island encounters correctly
+at sea-level terrain. The `zeroZRecords` warning is a **mislabelled counter** (it
+counts "Z came out 0", which is legitimate for beach/coast, as if it were a failure)
+— cosmetic only; harmless. Verified via `WB.Terminal get-height` on the worst-offender
+LBs (0xEE6C beach z=0 vs z=3.9 inland, Holtburg z=66 baseline). The probe targets
+0xA9B2/0xA9B4 also have valid Z.
 
 ---
 
