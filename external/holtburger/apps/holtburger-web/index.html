@@ -912,9 +912,9 @@
     <div id="render-status" class="hint">Render pending login.</div>
 
     <!--
-      PixiJS 8 ESM build pinned via jsdelivr. We import * as PIXI rather
-      than relying on a window global so the `<script type="module">`
-      works without a separate UMD path.
+      The PixiJS pin was REMOVED 2026-06-18 (item 8) — the 2D PIXI renderer is
+      retired to legacy/. The importmap below now pins only three / @takram /
+      postprocessing (the 3D pipeline) + tiny-invariant.
 
       Pin: 8.18.1 (npm `pixi.js@8.18.1`). Update both this URL and the
       version note in `apps/holtburger-web/README.md` together when
@@ -928,7 +928,6 @@
     <script type="importmap">
       {
         "imports": {
-          "pixi.js": "https://cdn.jsdelivr.net/npm/pixi.js@8.18.1/dist/pixi.min.mjs",
           "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
           "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
           "@takram/three-clouds": "./vendor/takram-three-clouds/build/index.js",
@@ -1255,7 +1254,8 @@
       // for a missing export instead, so the boot check can run safely.
       import * as __hbWasmNs from "./pkg/holtburger_web.js?v=wave-l-segdesc-2026-06-18";
 
-      import * as PIXI from "pixi.js";
+      // pixi.js import REMOVED 2026-06-18 (item 8) — the 2D PIXI renderer is
+      // retired to legacy/. Zero live PIXI.* references remain in index.html.
       import { configureBakeWorker } from "./scene3d/bake_worker_client.js";
       import { createClient } from "./plugins/api.js";
       import { mountBar } from "./ui/bar.js";
@@ -3773,20 +3773,10 @@
           if (entry.portalChip.text !== display) entry.portalChip.text = display;
           return;
         }
-        const text = new PIXI.Text({
-          text: display,
-          style: {
-            fontFamily: "Georgia, serif",
-            fontSize: 11,
-            fontStyle: "italic",
-            fill: 0xC8E8FA,                  // pale cyan, matches portal swirl
-            stroke: { color: 0x000000, alpha: 0.85, width: 2.2 },
-            align: "center",
-          },
-        });
-        text.anchor.set(0.5, 0.0);            // top-centred below the sprite
-        liveScene.nameplateContainer.addChild(text);
-        entry.portalChip = text;
+        // 2D PIXI.Text portal-destination chip RETIRED 2026-06-18 (item 8) →
+        // legacy/entity_2d.js. The function early-returns above on !liveScene
+        // (so this is dead in 3D); it was the last remaining PIXI.* reference
+        // in index.html, which let the pixi.js import + importmap pin be removed.
       }
 
       // Tier 2: per-rAF animation cycler. Walks every entityMap
