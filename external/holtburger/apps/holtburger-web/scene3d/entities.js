@@ -477,6 +477,25 @@ import {
   acToThree,
 } from "./adapter.js";
 import { AnimationCache, cycleTimeScale, hasRootMotion } from "./animation.js";
+// Step-1 Layer 2 (docs/animation-audit §5): route attack swings through the ported
+// MotionSequence (full-body, retail-faithful) instead of the mixer overlay that
+// the locomotion cycle half-blends into the "upper-body-only swing" bug.
+// Default-OFF — enable with ?unifiedMotion=attack (or =on). UNVERIFIED in-world
+// pending a 1070 eye-test; safe behind the flag.
+import { sequenceFromAnimationData, poseRig } from "./motion/motion_sequence.js";
+// Inline flag read (NOT the imported helper) so module-load works in the
+// source-eval headless harness that doesn't resolve ESM imports — matches the
+// FULL_BODY_ONE_SHOT pattern. sequenceFromAnimationData/poseRig are referenced
+// only inside the flag-on runtime branches, so an unresolved import is inert when off.
+const UNIFIED_ATTACK = (() => {
+  try {
+    const v = new URLSearchParams(
+      (typeof window !== "undefined" && window.location && window.location.search) || "",
+    ).get("unifiedMotion");
+    const m = v == null ? "off" : String(v).toLowerCase();
+    return m === "attack" || m === "on";
+  } catch (_) { return false; }
+})();
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import {
   materialCanCastShadow,
@@ -6522,6 +6541,10 @@ export class EntityManager {
   async setMotion(guid, motionCommand, motionStance, motionSpeed = 1.0) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return;
+    // Step-1: a new locomotion/stance command ends any in-progress unified
+    // attack override so movement stays responsive (the cycle takes over). No-op
+    // when ?unifiedMotion=attack is off (the field is never set).
+    if (inst._unifiedAttack) inst._unifiedAttack = null;
     // A1: stash the playback speed (fail-soft to 1.0 for non-finite /
     // non-positive). Read by the locomotion timeScale composition below
     // and by the per-frame T11 velScale tick.
@@ -8189,6 +8212,24 @@ export class EntityManager {
         );
       }
       return;
+    }
+    // Step-1 (?unifiedMotion=attack): drive an attack swing as a FULL-BODY
+    // sequence (retail GetObjectSequence one-shot, acclient.c:337842) instead of
+    // a LoopOnce overlay the locomotion cycle half-blends ("upper-body-only
+    // swing"). The tick loop advances inst._unifiedAttack + poses the rig and
+    // SUPPRESSES the mixer; on completion the stance cycle resumes. Default-off
+    // (UNIFIED_ATTACK false) → unchanged mixer overlay path below.
+    if (
+      UNIFIED_ATTACK &&
+      entry?.sequenceDescriptor &&
+      typeof classifyMotionCommand === "function" &&
+      classifyMotionCommand(toCmd >>> 0) === "attack"
+    ) {
+      const seq = sequenceFromAnimationData(entry.sequenceDescriptor, { cyclic: false });
+      if (seq) {
+        inst._unifiedAttack = { seq };
+        return; // skip the mixer overlay; the tick drives the rig
+      }
     }
     // Use a stable cache key so repeated transitions reuse the same
     // AnimationAction (mixer-bound bindings live per-entity).
@@ -10352,7 +10393,19 @@ export class EntityManager {
         }
       }
       try {
-        inst.mixer.update(dt);
+        if (inst._unifiedAttack) {
+          // Step-1 (?unifiedMotion=attack): the ported sequence owns the rig for
+          // the swing's duration (full-body, no blend) — SUPPRESS the mixer so it
+          // can't half-apply the locomotion cycle on top. On completion hand back
+          // to the mixer (the frozen cycle action resumes). Hooks (swing swoosh)
+          // fire via the sequence in a later step — silent under this flag for now.
+          const ua = inst._unifiedAttack;
+          ua.seq.advance(dt);
+          poseRig(ua.seq, inst.parts);
+          if (ua.seq.done) inst._unifiedAttack = null;
+        } else {
+          inst.mixer.update(dt);
+        }
       } catch (e) {
         // Don't let one bad mixer kill the whole tick.
         // eslint-disable-next-line no-console

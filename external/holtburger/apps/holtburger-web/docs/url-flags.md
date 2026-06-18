@@ -11,9 +11,12 @@ appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 > **`unifiedMotion` (NEW, Step 0 of the animation consolidation — default-off):** values
 > `off` | `shadow` | per-class (`attack`/`death`/`door`/`cast`/`locomotion`) | `on`. Selects
 > the ported `CSequence`/`CMotionInterp` motion authority (`scene3d/motion/motion_sequence.js`)
-> over the three.js AnimationMixer per the audit in `docs/animation-audit/`. Step 0 only ships
-> the scaffold + a headless mixer-parity gate (`test_motion_sequence.mjs`, exact match); no
-> production entity switches off the mixer yet. See `docs/animation-audit/ANIMATION-AUDIT.md` §5.
+> over the three.js AnimationMixer per the audit in `docs/animation-audit/`. `attack` (and `on`)
+> are WIRED (Step 1): an attack swing drives the ported full-body MotionSequence + poses the rig,
+> SUPPRESSING the mixer for the swing (fixes "upper-body-only swing"); the stance cycle resumes on
+> completion. **UNVERIFIED in-world — pending a 1070 eye-test; swing hooks (swoosh) are silent under
+> the flag for now.** Headless-proven: `test_motion_sequence.mjs` (mixer parity + segment-split,
+> exact). See `docs/animation-audit/ANIMATION-AUDIT.md` §5.
 >
 > **Still opt-in (default-off) on purpose:** instrumentation/debug (`wireframe`, `diag`, `syncTickDiag`, `spawnTrace`, `debug`, `lbLruDebug`, `profileStatics`, `eventLog`, `nullRender`, `renderOnDemand`), login/automation (`autoLogin`, `agent`, `nosw`), perf opt-ins (`eagerDungeons`, `cullTerrain`, `forcePom`, `forceDetail`, `preloadIcons`), user preferences (`mouseInvertY`, `chatFade`, `radarHostileOnly`), the legacy escape hatch (`legacyDirectDrain`), and known-incomplete (`lodRebake` — edge-weld seams pending; Rust BSP `USE_PHYSICS_BSP`/`USE_STATIC_BSP`). Plus the genuine render toggles `clouds`, `quality`, `renderScale`, `hud`, `plugins`, weather `rain`/`snow`/`lightning`/`skyWeather`, and the texture/palette overrides.
 
