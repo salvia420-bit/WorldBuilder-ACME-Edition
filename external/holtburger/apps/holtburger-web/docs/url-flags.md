@@ -8,8 +8,11 @@ appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 >
 > **Now default-ON** (was default-off): `singleDriver`, `unifiedDispatch`, `unifiedClientEvent`, `unifiedClone`, `inputFunnel`, `syncPhysicsTick`, `dispatchParity`, `mtQueue`, `hookDrain`, `scriptQueue`, `rootMotionObject`, `cmtStanceMask`, `castSpeed`, `castStateMachine`, `castFizzle`, `castFaceTarget`, `castAxes`, `multiAction`, `melee3dRange`, `fullBodyOneShot`, `signedMotionSpeed`, `powerMeterSwingDuration`, `idleFidget`, `dynLod`, `serverSwing`, `wieldHandAttach`, `wieldedSpawn`, `turnOmega`, `jumpParity`, `retailRunKeys`, `longJump`, `projectileGravity`, `projectileArc`, `retailParity`, `retailCamZoom`, `blockingParticleParity`, `particleOwner`, `defaultScriptSpawn`, `envcellFusion`, `strictWaterCodes`, `mtClassFallback`.
 >
-> **`unifiedMotion` (animation consolidation — default-off):** values
-> `off` | `shadow` | per-class (`attack`/`death`/`door`/`cast`/`locomotion`) | `on`. Selects
+> **`unifiedMotion` (animation consolidation — W6 flip 2026-06-18: DEFAULT-ON for every
+> class EXCEPT locomotion; `=off` is the escape, `=on` adds locomotion):** values
+> `off` | `shadow` | per-class (`attack`/`death`/`door`/`cast`/`locomotion`) | `on`. The bare
+> default now enables attack/death/cast/door/missile via the Rust authority; locomotion stays
+> opt-in (`=locomotion`/`=on`) until the B-1 movement-integrator overshoot is fixed (§9 ruling). Selects
 > the ported `CSequence` motion authority — now the **RUST** wasm `MotionSequence`
 > (`src/motion_sequence.rs`; the playhead/advance/node-split/one-shot-completion all live
 > in Rust per audit §8 Q1), with JS keeping only the dumb per-part poser (`poseRigAt`,
@@ -44,6 +47,10 @@ appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 >   completion (single playhead). Replaces the mixer `crossFadeTo` + the `CROSSFADE_S=0`/
 >   `RESUME_WINDOW` band-aids. The WORKING oracle — migrated LAST; in-world gait UNVERIFIED
 >   (no eye-test). Edge cases (true STOP, stance transitions) may need refinement post-eye-test.
+>   **NOT in the W6 default** (§9 class-by-class ruling 2026-06-18): locomotion stays behind
+>   explicit `?unifiedMotion=locomotion` / `=on` because enabling it by default exposes the
+>   open **B-1** movement-integrator overshoot (Walk→Stop→Walk oscillation), which is an
+>   upstream `MovementSystem`/`get_state_velocity` bug — fix B-1 first, then fold loco into the default.
 > **Logic-verified headlessly** (cargo `motion_sequence` 7/7 parity + one-shot completion + phase;
 > `test_motion_sequence.mjs` poser-vs-mixer maxErr 0; `test_motion_sequence_wasm_smoke.mjs`
 > drives the real compiled wasm 14/14). **In-world render UNVERIFIED** (no eye-test). Hooks

@@ -17,7 +17,7 @@ Environment note: **playwright is ABSENT**, BUT the live stack is up (serve.py:8
 - [x] **2. renderer=3d unconditional default** — inverted all **6** `get("renderer") === "3d"` → `!== "2d"` (sites 2343/4614/6038/7304/7336/7547) + comment + url-flags.md row. `?renderer=2d` = escape. Verify: logic (missing→3D, =2d→2D, =3d→3D); Tier-1 JS baseline-identical (zero new); **REAL browser smoke GREEN** via chrome-devtools + `?nosw=1` — bare default → webgl2 canvas + `liveScene` null + spawned in-world (localGuid 1342177287) + channel-join + **0 console errors**. Commit: `241ebf4e`.
 - 3. flip rest default-on (SPLIT per-flag for bisectability):
   - [x] **3a. unifiedClone default-on** + doc-reconcile unifiedClientEvent/singleDriver (already on in code). `index.html:4638` → `v?.toLowerCase() !== "off"`. Verify: logic; dedicated `test_a15_q2_entity_update_clone.mjs` **21/0**; Tier-1 baseline-identical; browser smoke GREEN (clean connect → in-world 19.6s, 0 console errors). Commit: `2e19d8ac`.
-  - [ ] 3b. unifiedMotion=on default (scene3d/entities.js + animation.js parse; JS, no rebuild). The big motion-authority flip; B-1 risk is tracked, not blocking.
+  - [x] **3b. unifiedMotion default-on, CLASS-BY-CLASS** (user §9 ruling: defer locomotion for B-1). New `"default"` mode in scene3d/entities.js (UNIFIED_MODE `null→"default"`, +`UNIFIED_DEFAULT`; attack/death/cast/door/missile gates OR it; LOCO stays `=locomotion`/`=on` only) + animation.js `UNIFIED_MOTION_ON` (`(v??"")!=="off"`) + url-flags.md. `=off` all-off, `=on` all incl loco. Verify: gate-logic table; Tier-1 baseline-identical incl. both unifiedMotion tests PASS; browser smoke GREEN (in-world 19.8s, webgl2, 0 console errors, unifiedMotion null=default). Commit: `<pending>`.
   - [ ] 3c. worldLifecycle=on default (Rust/lib.rs → capped wasm rebuild).
 ### PHASE 2 — strip prerequisites (correctness refactors)
 - [ ] 4. `__doorStates` module-scope hoist (GROUND-TRUTH §3.1) — must precede door split
@@ -39,4 +39,4 @@ Environment note: **playwright is ABSENT**, BUT the live stack is up (serve.py:8
 - iter 1 — branch created; ledger created; item 1 (unifiedDispatch default-on) shipped.
 - iter 2 — item 2 (renderer=3d default) shipped; real browser smoke GREEN via chrome-devtools+nosw=1; discovered the SW app-shell cache footgun (see Environment note).
 - iter 3 — item 3a (unifiedClone default-on + doc reconcile) shipped; first smoke hit the ghost-session account-in-use race (diagnosed via ACE log, NOT the flag); clean re-connect GREEN. Split item 3 → 3a/3b/3c.
-- iter 4 — reached item 3b (unifiedMotion=on). This is the §9 "unifiedMotion flip granularity" human decision (all-at-once exposes B-1 locomotion oscillation by default). PAUSED loop, surfaced the decision to the user. No autonomous flip.
+- iter 4 — reached item 3b (unifiedMotion). §9 decision surfaced; user chose CLASS-BY-CLASS (defer loco). Implemented the `"default"` all-but-loco mode; smoke GREEN. Shipped 3b.

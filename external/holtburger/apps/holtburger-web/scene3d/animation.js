@@ -62,13 +62,16 @@ const FLOATS_PER_PART_PER_FRAME = 7;
  */
 // Step 1: only retain the raw sequence descriptor in the cache when the unified
 // motion interpreter is active (it carries ~17KB/clip of raw frames). Read once.
+// W6 flip (2026-06-18): unified motion is default-ON for all classes except
+// locomotion, so the descriptor is needed whenever the flag is absent or any
+// value other than `off` — `=off` is the only state that disables it.
 const UNIFIED_MOTION_ON = (() => {
     try {
         const v = new URLSearchParams(
             (typeof window !== "undefined" && window.location && window.location.search) || "",
         ).get("unifiedMotion");
-        return v != null && String(v).toLowerCase() !== "off";
-    } catch (_) { return false; }
+        return (v ?? "").toLowerCase() !== "off";
+    } catch (_) { return true; }
 })();
 
 // Step 0 of the animation consolidation (docs/animation-audit §5): extract the

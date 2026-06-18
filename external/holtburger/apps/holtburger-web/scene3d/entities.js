@@ -494,25 +494,31 @@ const EMPTY_U32 = new Uint32Array(0);
 // FULL_BODY_ONE_SHOT pattern. The wasm MotionSequence + poseRigAt are referenced
 // only inside the flag-on runtime branches, so they're inert when off.
 // `?unifiedMotion=<class>` selects which motion classes route through the Rust
-// authority; `=on` enables all of them. Each is default-off until eye-tested.
+// authority. W6 flip (2026-06-18, §9 class-by-class ruling): the bare default
+// enables every class EXCEPT locomotion — locomotion carries the open B-1
+// movement-integrator oscillation (Walk→Stop→Walk), so it stays behind explicit
+// `?unifiedMotion=locomotion` / `=on` until B-1 lands. `=off` = all off (escape);
+// `=on` = all incl. locomotion; `=<class>` = that class only.
 const UNIFIED_MODE = (() => {
   try {
     const v = new URLSearchParams(
       (typeof window !== "undefined" && window.location && window.location.search) || "",
     ).get("unifiedMotion");
-    return v == null ? "off" : String(v).toLowerCase();
-  } catch (_) { return "off"; }
+    return v == null ? "default" : String(v).toLowerCase();
+  } catch (_) { return "default"; }
 })();
-const UNIFIED_ATTACK = UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
-const UNIFIED_DEATH = UNIFIED_MODE === "death" || UNIFIED_MODE === "on";
+// "default" = the W6 all-but-locomotion default; "on" = all classes incl. loco.
+const UNIFIED_DEFAULT = UNIFIED_MODE === "default";
+const UNIFIED_ATTACK = UNIFIED_DEFAULT || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
+const UNIFIED_DEATH = UNIFIED_DEFAULT || UNIFIED_MODE === "death" || UNIFIED_MODE === "on";
 // Cast gestures live in `MotionTable.links` like swings — same one-shot path.
 // Per-SPELL windup variation stays blocked (no prj_spell_id on the wire; ACE is
 // kept vanilla), so this animates the real full-body cast GESTURE, not per-spell.
-const UNIFIED_CAST = UNIFIED_MODE === "cast" || UNIFIED_MODE === "on";
+const UNIFIED_CAST = UNIFIED_DEFAULT || UNIFIED_MODE === "cast" || UNIFIED_MODE === "on";
 // Doors open/close via On (0x4000000b) / Off (0x4000000c) CYCLE commands — 63 of
 // 436 retail MTs carry them with hinge baked into the keyframes (no SetupModel
 // hinge extraction needed; probe_door_motions.rs). Same one-shot path as missile.
-const UNIFIED_DOOR = UNIFIED_MODE === "door" || UNIFIED_MODE === "on";
+const UNIFIED_DOOR = UNIFIED_DEFAULT || UNIFIED_MODE === "door" || UNIFIED_MODE === "on";
 // MotionCommand.On / .Off (door open / close).
 const CMD_DOOR_ON = 0x4000000b;
 const CMD_DOOR_OFF = 0x4000000c;
@@ -523,7 +529,7 @@ const CMD_DOOR_OFF = 0x4000000c;
 const UNIFIED_LOCO = UNIFIED_MODE === "locomotion" || UNIFIED_MODE === "on";
 // Missile rides with attack (both Step 1): an aim-level fire is a CYCLE
 // (class 0x40, in MotionTable.cycles) the links-only swing resolver can't reach.
-const UNIFIED_MISSILE = UNIFIED_MODE === "missile" || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
+const UNIFIED_MISSILE = UNIFIED_DEFAULT || UNIFIED_MODE === "missile" || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import {
   materialCanCastShadow,
