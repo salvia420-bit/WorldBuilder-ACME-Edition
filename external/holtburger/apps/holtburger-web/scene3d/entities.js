@@ -516,6 +516,11 @@ const UNIFIED_DOOR = UNIFIED_MODE === "door" || UNIFIED_MODE === "on";
 // MotionCommand.On / .Off (door open / close).
 const CMD_DOOR_ON = 0x4000000b;
 const CMD_DOOR_OFF = 0x4000000c;
+// Locomotion (walk/run/idle cycles) — the WORKING oracle, migrated LAST. Drives
+// a CYCLIC MotionSequence with gait scaling + Rust phase carry across swaps.
+// A one-shot (_unifiedSeq) suppresses _unifiedLoco during a swing, then resumes
+// it on completion (single playhead — retail-faithful).
+const UNIFIED_LOCO = UNIFIED_MODE === "locomotion" || UNIFIED_MODE === "on";
 // Missile rides with attack (both Step 1): an aim-level fire is a CYCLE
 // (class 0x40, in MotionTable.cycles) the links-only swing resolver can't reach.
 const UNIFIED_MISSILE = UNIFIED_MODE === "missile" || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
@@ -2355,11 +2360,16 @@ class EntityInstance {
       this.mixer.stopAllAction();
       this.mixer.uncacheRoot(this.root);
     } catch (_) {}
-    // Free a mid-swing wasm MotionSequence (?unifiedMotion=attack) so a despawn
-    // during a swing doesn't leak the Rust-side allocation.
+    // Free in-flight wasm MotionSequences (?unifiedMotion) — the one-shot
+    // (_unifiedSeq) and the locomotion cycle (_unifiedLoco) — so a despawn
+    // doesn't leak the Rust-side allocations.
     if (this._unifiedSeq) {
       try { this._unifiedSeq.seq.free(); } catch (_) {}
       this._unifiedSeq = null;
+    }
+    if (this._unifiedLoco) {
+      try { this._unifiedLoco.seq.free(); } catch (_) {}
+      this._unifiedLoco = null;
     }
     // Perf B3 (2026-05-18) — walk the rig BEFORE detaching from the
     // scene graph so traverse() still has the part-Mesh subtree
@@ -6117,6 +6127,59 @@ export class EntityManager {
     return this._tryUnifiedCycleOneShot(guid, setupId, mtableId, cmd, 0, false);
   }
 
+  // Drain a unified sequence's hook timeline (swoosh/chime/strike/footfall) by
+  // the sequence's current frame-time, through the SHARED _fireHooksInRange.
+  // Wrap-aware: for a looping cycle whose frame-time rolled back to a new loop,
+  // fire the prior loop's tail (lastHookTime, end] then restart the window — so
+  // a cycle's footfalls fire every loop. One-shots never wrap → the wrap branch
+  // is inert. `ua` is the _unifiedSeq / _unifiedLoco record { seq, desc, hooks,
+  // lastHookTime }.
+  _drainUnifiedHooks(inst, ua) {
+    if (!ua.hooks || !ua.hooks.length) return;
+    const audioMgr = this.scene3d?.audioManager ?? null;
+    const cache = this.scene3d?.soundTableCache ?? null;
+    const gf = ua.seq.globalFrameIndex;
+    const ft = ua.desc.frameTimes;
+    const fr = +ua.desc.framerate || 0;
+    const curT = (ft && gf < ft.length) ? ft[gf] : (fr > 0 ? gf / fr : 0);
+    if (curT < ua.lastHookTime) {
+      // Cycle wrapped: fire the tail of the prior loop, then restart at 0.
+      const dur = +ua.desc.duration || (ft && ft.length ? ft[ft.length - 1] : 0);
+      if (dur > ua.lastHookTime) {
+        this._fireHooksInRange(inst, ua.hooks, ua.lastHookTime, dur, audioMgr, cache);
+      }
+      ua.lastHookTime = 0;
+    }
+    if (curT > ua.lastHookTime) {
+      this._fireHooksInRange(inst, ua.hooks, ua.lastHookTime, curT, audioMgr, cache);
+      ua.lastHookTime = curT;
+    }
+  }
+
+  // The locomotion gait framerate scale (how fast to advance the cyclic
+  // playhead) — mirrors the mixer path's setEffectiveTimeScale math: the
+  // anti-ice-skating velScale (actual ground speed / authored cycle speed,
+  // clamped [0.25,4.0]) composed with the server per-motion speed + backstep
+  // sign. When no base speed (idle / velScale-absent), plays at motionSpeed.
+  _unifiedLocoGaitScale(inst, base) {
+    let scale;
+    if (base > 0) {
+      let actual = this._resolveStateGroundSpeed(inst);
+      const fromGetter = Number.isFinite(actual) && actual > 0;
+      if (!fromGetter) actual = inst._emaSpeed ?? 0;
+      const velComp = cycleTimeScale(actual, base);
+      // Getter path: velComp is the complete scale (motionSpeed already encoded,
+      // matching the mixer tick). EMA fallback composes with motionSpeed.
+      scale = fromGetter ? velComp : velComp * (inst._motionSpeed ?? 1.0);
+    } else {
+      scale = inst._motionSpeed ?? 1.0;
+    }
+    const signed = scale * (inst._motionSpeedSign ?? 1);
+    // Guard against a zero/negative-at-rest stall (idle still needs to tick its
+    // cycle); fall back to native rate on a non-finite result.
+    return Number.isFinite(signed) && signed !== 0 ? signed : 1.0;
+  }
+
   /**
    * @param {number} guid
    * @param {number} motionCmd
@@ -6935,6 +6998,41 @@ export class EntityManager {
         // — fade out the current action.
         inst.fadeOutCurrent(CROSSFADE_S);
         return;
+      }
+      // Animation consolidation (docs/animation-audit §5 Step 5,
+      // ?unifiedMotion=locomotion): drive the locomotion CYCLE through the Rust
+      // authority instead of the mixer crossFadeTo. Phase is carried across a
+      // cycle swap (walk→run) via the Rust seekPhase so the feet don't pop.
+      // A one-shot (_unifiedSeq) suppresses this during a swing then resumes it.
+      // By here attack/cast/death/stop have already returned, so cls is a
+      // locomotion cycle (walk/run/idle/Ready). Default-off → unchanged below.
+      if (UNIFIED_LOCO) {
+        const MS =
+          (typeof window !== "undefined" && window.__hbWasm) ? window.__hbWasm.MotionSequence : null;
+        const d = entry.sequenceDescriptor;
+        if (MS && d) {
+          const seq = MS.fromDescriptor(
+            d.numFrames >>> 0, +d.framerate || 0, +d.duration || 0,
+            d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
+            true, // cyclic locomotion — loops
+          );
+          if (seq) {
+            const prev = inst._unifiedLoco;
+            // Carry normalized phase from the prior cycle (no foot-pop on swap).
+            if (prev?.seq && typeof seq.seekPhase === "function") {
+              try { seq.seekPhase(prev.seq.phase); } catch (_) {}
+            }
+            if (prev?.seq) { try { prev.seq.free(); } catch (_) {} }
+            inst._unifiedLoco = {
+              seq, desc: d, cacheKey,
+              base: inst._locoBaseSpeed || 0,
+              hooks: entry.hooks || null, lastHookTime: 0,
+            };
+            inst._locoCycleKey = cacheKey;
+            try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
+            return; // the tick drives the loco cycle; skip the mixer crossFadeTo
+          }
+        }
       }
       // Don't exceed the per-entity action cap. Evict before install.
       inst.evictOldestUnused();
@@ -10567,39 +10665,29 @@ export class EntityManager {
       }
       try {
         if (inst._unifiedSeq) {
-          // The Rust MotionSequence owns the rig (full-body, no blend) — SUPPRESS
-          // the mixer so it can't half-apply the locomotion cycle on top.
-          //  - attack (clearOnDone:true): on completion hand the rig back to the
-          //    mixer (the frozen cycle action resumes).
-          //  - death (clearOnDone:false): HOLD the clamped final (prone) frame —
-          //    advance is inert once `done`, poseRigAt keeps writing it.
+          // A one-shot Rust MotionSequence owns the rig (full-body, no blend) —
+          // SUPPRESS the mixer AND _unifiedLoco (single playhead). attack
+          // (clearOnDone:true) hands back on completion → the tick then falls to
+          // _unifiedLoco below (locomotion resumes); death (clearOnDone:false)
+          // holds the clamped prone frame.
           const ua = inst._unifiedSeq;
           ua.seq.advance(dt);
           poseRigAt(ua.seq.globalFrameIndex, ua.desc, inst.parts);
-          // Step 6 (hooks): the mixer-time hook path is suppressed under the flag,
-          // so fire the sequence's hooks (swing swoosh, magic chime, footfall,
-          // strike) here — map the current frame → clip-time and drain the bake's
-          // hook timeline in (lastHookTime, curT] through the SHARED
-          // _fireHooksInRange (queues under ?hookDrain=on; the per-entity drain
-          // below executes them). No new hook executor (ROADMAP §2 reuse).
-          if (ua.hooks && ua.hooks.length) {
-            const gf = ua.seq.globalFrameIndex;
-            const ft = ua.desc.frameTimes;
-            const fr = +ua.desc.framerate || 0;
-            const curT = (ft && gf < ft.length) ? ft[gf] : (fr > 0 ? gf / fr : 0);
-            if (curT > ua.lastHookTime) {
-              this._fireHooksInRange(
-                inst, ua.hooks, ua.lastHookTime, curT,
-                this.scene3d?.audioManager ?? null,
-                this.scene3d?.soundTableCache ?? null,
-              );
-              ua.lastHookTime = curT;
-            }
-          }
+          this._drainUnifiedHooks(inst, ua); // swoosh / chime / strike (Step 6)
           if (ua.seq.done && ua.clearOnDone) {
             try { ua.seq.free(); } catch (_) { /* already freed */ }
             inst._unifiedSeq = null;
           }
+        } else if (inst._unifiedLoco) {
+          // ?unifiedMotion=locomotion: drive the cyclic locomotion sequence with
+          // gait scaling (anti-ice-skating velScale × server motionSpeed — the
+          // same math the mixer path applied via setEffectiveTimeScale) by
+          // advancing the playhead faster/slower. frameNumber carries phase, so
+          // the swap band-aids (CROSSFADE_S=0, RESUME_WINDOW) aren't needed.
+          const lo = inst._unifiedLoco;
+          lo.seq.advance(dt * this._unifiedLocoGaitScale(inst, lo.base));
+          poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts);
+          this._drainUnifiedHooks(inst, lo); // footfalls (wrap-aware)
         } else {
           inst.mixer.update(dt);
         }

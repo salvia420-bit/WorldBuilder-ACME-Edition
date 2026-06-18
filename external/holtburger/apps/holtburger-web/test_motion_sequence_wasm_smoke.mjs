@@ -79,6 +79,19 @@ console.log("wasm MotionSequence smoke — real compiled boundary (entities.js p
   link.free(); cycle.free(); chained.free();
 }
 
+// phase / seekPhase — locomotion phase carry across a cycle swap (walk→run).
+{
+  const walk = MotionSequence.fromDescriptor(4, 10.0, 0.4, EMPTY_F32, EMPTY_U32, EMPTY_U32, true);
+  check("phase starts at 0", Math.abs(walk.phase - 0) < 1e-6, `phase=${walk.phase}`);
+  walk.advance(0.2); // half of dur 0.4
+  check("phase ~0.5 mid-cycle", Math.abs(walk.phase - 0.5) < 1e-4, `phase=${walk.phase}`);
+  const run = MotionSequence.fromDescriptor(4, 20.0, 0.2, EMPTY_F32, EMPTY_U32, EMPTY_U32, true);
+  run.seekPhase(walk.phase);
+  check("seekPhase carries phase across differing durations",
+    Math.abs(run.phase - 0.5) < 1e-4, `run.phase=${run.phase}`);
+  walk.free(); run.free();
+}
+
 console.log("===========================================================");
 console.log(`Result: ${passed} passed, ${failed} failed`);
 console.log("===========================================================");

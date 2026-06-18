@@ -37,7 +37,14 @@ appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 >   server-echo / remote-caster path. Per-SPELL windup variation stays blocked (no
 >   `prj_spell_id` on the wire — ACE is kept vanilla), and the deeper local `playCastSequence`
 >   (`setTimeout`-paced) replacement is a follow-on; this animates the cast GESTURE, not per-spell.
-> **Logic-verified headlessly** (cargo `motion_sequence` 5/5 parity + one-shot completion;
+> - `locomotion` (and `on`): walk/run/idle cycles drive a CYCLIC `MotionSequence` (separate
+>   `_unifiedLoco` slot) with gait scaling (anti-ice-skating velScale × server motionSpeed,
+>   advancing the playhead faster/slower) + Rust `seekPhase` phase carry across a cycle swap
+>   (walk→run no foot-pop). A one-shot (swing/death) suppresses the cycle then resumes it on
+>   completion (single playhead). Replaces the mixer `crossFadeTo` + the `CROSSFADE_S=0`/
+>   `RESUME_WINDOW` band-aids. The WORKING oracle — migrated LAST; in-world gait UNVERIFIED
+>   (no eye-test). Edge cases (true STOP, stance transitions) may need refinement post-eye-test.
+> **Logic-verified headlessly** (cargo `motion_sequence` 7/7 parity + one-shot completion + phase;
 > `test_motion_sequence.mjs` poser-vs-mixer maxErr 0; `test_motion_sequence_wasm_smoke.mjs`
 > drives the real compiled wasm 14/14). **In-world render UNVERIFIED** (no eye-test). Hooks
 > (swing swoosh / magic chime / footfall / strike) now FIRE under the flag — drained from the

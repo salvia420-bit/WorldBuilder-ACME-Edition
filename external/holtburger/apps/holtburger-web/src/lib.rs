@@ -600,7 +600,12 @@ pub fn build_info() -> String {
 // JS consumer is ?unifiedMotion=-gated and reads the class off
 // `window.__hbWasm` through a typeof guard → a v4 pkg soft-degrades to the
 // mixer overlay; the documented v2/v3/v4 precedent).
-pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 5;
+// v6 (2026-06-18, anim locomotion): + `MotionSequence.phase` getter +
+// `MotionSequence.seekPhase` — normalized playhead carry across a locomotion
+// cycle swap (walk→run no-foot-pop). Additive on the v5 class; index.html's
+// EXPECTED stays 1 (the JS caller is ?unifiedMotion=locomotion-gated and
+// typeof-guards `seekPhase` → a v5 pkg soft-degrades to no phase carry).
+pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 6;
 
 /// Returns the export-surface manifest version (F18-2). JS asserts this is
 /// `>=` its compiled-in expectation at boot; a mismatch — or this function

@@ -309,6 +309,41 @@ impl MotionSequence {
             None => 0,
         }
     }
+
+    fn total_duration(&self) -> f32 {
+        self.nodes.iter().map(|n| n.duration).sum()
+    }
+
+    // Normalized playhead position across the whole sequence (0..1). Used to
+    // carry locomotion phase across a cycle SWAP (walk→run) so the feet don't
+    // pop — retail preserves `frame_number` in place (change_cycle_speed,
+    // acclient.c:337775); we carry the normalized phase since the swap is a
+    // different bake with a different frame count.
+    fn phase_impl(&self) -> f32 {
+        let total = self.total_duration();
+        if total <= 0.0 {
+            return 0.0;
+        }
+        let mut before = 0.0f32;
+        for (i, n) in self.nodes.iter().enumerate() {
+            if i == self.node_index {
+                break;
+            }
+            before += n.duration;
+        }
+        ((before + self.time) / total).clamp(0.0, 1.0)
+    }
+
+    // Seek the playhead to a normalized phase (0..1) — reset then advance by
+    // p·totalDuration, so it lands on the same node+frame the cumulative timing
+    // implies (mirrors advance()'s node-walk exactly).
+    fn seek_phase_impl(&mut self, p: f32) {
+        self.reset_impl();
+        let t = p.clamp(0.0, 1.0) * self.total_duration();
+        if t > 0.0 {
+            self.advance_impl(t);
+        }
+    }
 }
 
 // ---- wasm-bindgen surface (wasm32-only, thin JS-named wrappers) -----------
@@ -382,6 +417,20 @@ impl MotionSequence {
     #[wasm_bindgen(getter, js_name = nodeCount)]
     pub fn node_count(&self) -> u32 {
         self.nodes.len() as u32
+    }
+
+    // Normalized playhead position (0..1) — read at a locomotion cycle swap to
+    // carry phase into the new cycle.
+    #[wasm_bindgen(getter)]
+    pub fn phase(&self) -> f32 {
+        self.phase_impl()
+    }
+
+    // Seek to a normalized phase (0..1) — set on the new cycle from the old
+    // cycle's `phase` so walk→run doesn't foot-pop.
+    #[wasm_bindgen(js_name = seekPhase)]
+    pub fn seek_phase(&mut self, p: f32) {
+        self.seek_phase_impl(p);
     }
 }
 
@@ -491,5 +540,30 @@ mod tests {
     #[test]
     fn empty_bake_is_none() {
         assert!(MotionSequence::build_impl(0, 10.0, 0.0, &[], &[], &[], true).is_none());
+    }
+
+    // phase() progresses 0→1 over a cycle and round-trips through seek_phase().
+    #[test]
+    fn phase_progresses_and_round_trips() {
+        let mut seq = MotionSequence::build_impl(4, 10.0, 0.4, &[], &[], &[], true).unwrap();
+        assert!((seq.phase_impl() - 0.0).abs() < 1e-6);
+        seq.advance_impl(0.2); // half of dur 0.4
+        assert!((seq.phase_impl() - 0.5).abs() < 1e-4, "phase={}", seq.phase_impl());
+        let mut seq2 = MotionSequence::build_impl(4, 10.0, 0.4, &[], &[], &[], true).unwrap();
+        seq2.seek_phase_impl(0.5);
+        assert!((seq2.phase_impl() - 0.5).abs() < 1e-4);
+        // same phase → same frame.
+        assert_eq!(seq.global_frame_index_impl(), seq2.global_frame_index_impl());
+    }
+
+    // seek_phase carries phase across a cycle SWAP with a different duration
+    // (walk dur 0.4 → run dur 0.2) — the locomotion no-foot-pop invariant.
+    #[test]
+    fn seek_phase_preserves_position_across_durations() {
+        let mut walk = MotionSequence::build_impl(4, 10.0, 0.4, &[], &[], &[], true).unwrap();
+        walk.advance_impl(0.2); // phase 0.5
+        let mut run = MotionSequence::build_impl(4, 20.0, 0.2, &[], &[], &[], true).unwrap();
+        run.seek_phase_impl(walk.phase_impl());
+        assert!((run.phase_impl() - 0.5).abs() < 1e-4, "run phase={}", run.phase_impl());
     }
 }
