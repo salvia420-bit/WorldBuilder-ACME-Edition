@@ -2934,7 +2934,6 @@
         } catch (_) { return false; }
       })();
       let __backlogOverflowWarned = false;
-      let __deferredSpawnsOverflowWarned = false;
 
       // Workstream E (3D camera/game-feel fix): pre-init3D entity-event
       // backlog. The 2D drainEvents loop forwards every pollEntityUpdates
@@ -3131,7 +3130,6 @@
       // wasm-bindgen EntityUpdate gets free()'d at the end of the
       // drain loop, so we can't keep the live struct), then replay
       // through handleEntitySpawn once liveScene is ready.
-      const deferredSpawns = [];
       // cloneEntitySpawn + 2D placeholder glyph stack RETIRED → legacy/entity_2d.js.
 
       // Quaternion → yaw extraction. AC is Z-up; top-down view rotates
@@ -4205,43 +4203,12 @@
           `;
           renderStatus.innerHTML =
             `<span class="ok">[OK]</span> 3D renderer initialised — see hello-cube. Terrain / buildings / cells / entities land in phases 7.1–7.4.`;
-        } else {
-          renderStatus.textContent = "Rendering…";
-          const renderCounts = await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes, objects, spriteMap, colourMap);
-
-          // Aggregate height range across the 9 landblocks for the panel.
-          let aggMin = Infinity;
-          let aggMax = -Infinity;
-          for (const m of meshes) {
-            if (m.heightMin < aggMin) aggMin = m.heightMin;
-            if (m.heightMax > aggMax) aggMax = m.heightMax;
-          }
-          const centre = meshes[4];
-          const distinctTypes = new Set(centre.terrainCodes).size;
-          const centreObjects = objects.filter((o) => o.landblockId === (NEIGHBOURHOOD[4].id ^ 1) >>> 0).length;
-          const totalObjects = objects.length;
-          stageInfo.innerHTML = `
-            <dt>Centre cell</dt><dd>0x${(NEIGHBOURHOOD[4].id >>> 0)
-              .toString(16)
-              .toUpperCase()
-              .padStart(8, "0")} (Holtburg)</dd>
-            <dt>Landblocks</dt><dd>${meshes.length} (3×3)</dd>
-            <dt>Centre min/max</dt><dd>${centre.heightMin.toFixed(1)} / ${centre.heightMax.toFixed(1)} m</dd>
-            <dt>Aggregate min/max</dt><dd>${aggMin.toFixed(1)} / ${aggMax.toFixed(1)} m</dd>
-            <dt>Centre terrain types</dt><dd>${distinctTypes} distinct</dd>
-            <dt>Objects</dt><dd>${totalObjects} placed (${centreObjects} at Holtburg)</dd>
-            <dt>Sprite coverage</dt><dd>${spriteMap.size} atlas entries available</dd>
-            <dt>Live tiles</dt><dd>${renderCounts?.withLive ?? 0} placements rendered live (step 6)</dd>
-            <dt>Invisible</dt><dd>${renderCounts?.invisible ?? 0} engine-internal anchors suppressed</dd>
-            <dt>Real colours</dt><dd>${colourMap.size} of ${uniqueModels.length} unique models resolved</dd>
-            <dt>Vertex spacing</dt><dd>${(METERS_PER_LANDBLOCK / 8).toFixed(0)} m</dd>
-            <dt>Controls</dt><dd>wheel = zoom, drag = pan</dd>
-          `;
-          renderStatus.innerHTML =
-            `<span class="ok">[OK]</span> Rendered Holtburg + 8 neighbours with terrain atlas + ${totalObjects} object sprites. Mouse-wheel to zoom, click-and-drag to pan.`;
-          for (const m of meshes) m.free();
-          for (const o of objects) o.free();
         }
+        // The 2D else-branch (renderNeighbourhood + 2D stage panel) RETIRED 2026-06-18
+        // (item 8b). renderNeighbourhood was extracted to legacy/render_2d.js in 7a-1
+        // (NOT imported), so this dead branch held a dangling ReferenceError reachable
+        // only via the now-inert ?renderer=2d escape. 3D is unconditional; ?renderer=2d
+        // degrades to blank rather than throwing.
        } catch (err) {
         const msg = String(err?.message ?? err);
         const missingFixture =

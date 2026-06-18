@@ -12,7 +12,7 @@ Resume point for the `2d-pixi-retirement` effort (driven by a `/loop` self-paced
 - 3D is the unconditional default; the unified pipeline (`unifiedDispatch`/`renderer=3d`/`unifiedClone`/
   `unifiedMotion` class-by-class) is default-on; `holtburger` loads + spawns in-world with
   `typeof PIXI === "undefined"`, 0 console errors.
-- **`index.html`: 12,483 → 9,097 lines.** ~3,386 lines quarantined in `legacy/` (render_2d.js 91 KB,
+- **`index.html`: 12,483 → 9,065 lines** (8b dead-code removal: −32). ~3,386 lines quarantined in `legacy/` (render_2d.js 91 KB,
   entity_2d.js 68 KB, door_2d.js 6.7 KB). Each is a reference copy per RULINGS item 2 (NOT imported).
 - Every step was smoke-verified in-world; the load-bearing world-stream **seam survived** (wasm
   populate-halves still stream terrain/cells in 3D; A15-Q4 parity test 46/0).
@@ -25,10 +25,12 @@ pipeline→legacy/render_2d.js · `1222a1f1`+`3f4e0775` 7b entity dispatch→leg
 7c ensure* PIXI-tail seam · `ca5ba439` 8a remove pixi.js. (`dc5e0a99`/`a376d82e` ledger.)
 
 ## Remaining queue (the tail — loop is mid-flight on these)
-- **8b** — dead-2D cleanup (all dead-in-3D, low risk): `deferredSpawns` decl + refs; the backlog clone
-  machinery (`__scene3dEntityBacklog`/`__scene3dCloneEntityUpdate`/`__pushBacklog`) **only if** scene3d/loop.js
-  no longer drains it at init3D (CHECK scene3d first — may still consume → KEEP); the `useSharedDrain`
-  early-return (loop.js); the dead `renderHoltburg` 2D else-block (the now-dangling `renderNeighbourhood` call).
+- **8b** — DONE (iter 14, smoke GREEN). Scope was over-stated: only 3 things were dead. KEPT (load-bearing,
+  confirmed by grep): the backlog clone machinery (scene3d/loop.js:2818 still drains it) AND the `useSharedDrain`
+  early-return (the net-frame pump `drainEvents`→`__scene3dEntityHook` is the ACTIVE 3D drain; the early-return
+  stops `drainEntityEvents3D` double-consuming). Removed only `deferredSpawns` + `__deferredSpawnsOverflowWarned`
+  decls + the dangling-`renderNeighbourhood` 2D else-block. index.html 9097→9065. (Minor dead colourMap compute
+  left — out of scope.)
 - **9** — 2D captures: move/delete the dead ones; **PORT to 3D**: capture_phase4_step3, phase6_step_a_geometry,
   phase6_step_e_doors, capture_physics_replay; fix the `harness/run-all.mjs:417-422` skip-as-green clause.
   **+ item-5's 3D oracle tap**: add a `setLastClientPrediction` call in `scene3d/camera.js _advancePrediction`
