@@ -268,6 +268,19 @@ function makeServer() {
           out.steps.push(`canvas: ${canvas.width}x${canvas.height}`);
 
           const wasmMod = await import("./pkg/holtburger_web.js?v=h3-e1");
+          // wasm-bindgen --target web: the named exports are inert until the
+          // default init (__wbg_init) instantiates the module — the page does
+          // `await init()` (index.html). Without it the internal `wasm` binding
+          // is undefined and any export throws "reading 'has_resource_source'".
+          if (typeof wasmMod.default === "function") {
+            await wasmMod.default();
+          }
+          // The fetch_* exports read a GLOBAL ManifestResourceSource that
+          // init_resource_source() sets up — the page calls this before init3D.
+          if (typeof wasmMod.init_resource_source === "function"
+              && !(typeof wasmMod.has_resource_source === "function" && wasmMod.has_resource_source())) {
+            await wasmMod.init_resource_source("../../dist/manifest.json");
+          }
           out.steps.push(
             `wasm loaded: has_resource_source=${typeof wasmMod.has_resource_source === "function" ? wasmMod.has_resource_source() : "n/a"}, ` +
               `fetch_landblock_spawns=${typeof wasmMod.fetch_landblock_spawns}`
@@ -370,9 +383,11 @@ function makeServer() {
         out.results.holtburg = await live.loadSpawnsForLandblock(0xa9, 0xb4);
         // 0xA9B0 = South Holtburg Outpost (13 records).
         out.results.south = await live.loadSpawnsForLandblock(0xa9, 0xb0);
-        // 0xA3AF = empty wilderness LB (0 records) — verifies the
-        // empty-body soft-pass goes through the dispatcher cleanly.
-        out.results.empty = await live.loadSpawnsForLandblock(0xa3, 0xaf);
+        // 0xA9B2 = wilderness LB that USED to 404 to zero spawns; after the
+        // empty-world fix it stages encounter fauna (anchor 5150 "Harmless
+        // Aluvian Generator" + FNV-scattered child 2566 "Black Rabbit").
+        // This is the PROBE-WILD positive case (was injectedCount==0 before).
+        out.results.wild = await live.loadSpawnsForLandblock(0xa9, 0xb2);
         // Re-fire Holtburg — verifies idempotency.
         out.results.holtburgAgain = await live.loadSpawnsForLandblock(0xa9, 0xb4);
         out.steps.push(
@@ -402,9 +417,11 @@ function makeServer() {
         `fetched=${injectProbe.results?.south?.fetched}`
       );
       check(
-        "0xA3AF fetch returns 0 records (empty wilderness)",
-        injectProbe.results?.empty?.fetched === 0,
-        `fetched=${injectProbe.results?.empty?.fetched}`
+        "0xA9B2 wilderness now returns encounter fauna (>0, was 0 pre-fix)",
+        injectProbe.results?.wild?.fetched > 0
+          && (injectProbe.results?.wild?.placeholdersCount ?? 0) === 0,
+        `fetched=${injectProbe.results?.wild?.fetched}, ` +
+          `placeholders=${injectProbe.results?.wild?.placeholdersCount}`
       );
       check(
         "Re-firing 0xA9B4 is idempotent",
