@@ -27,29 +27,37 @@
 //   5. Walking forward through the now-open door succeeds (delta
 //      ≥ 1 m, vs the < 0.5 m we just clamped to).
 //
-// Sibling tests:
-//   - capture_phase6_step_a_geometry.cjs   — Phase A (per-part
-//     building geometry; HARD prerequisite — door is a Setup part
-//     addressable via window.buildingMap that Phase A populates).
-//   - capture_phase6_step_b_collision.cjs  — Phase B (AABB collision;
-//     HARD prerequisite — closed-door blocks rely on the AABB index
-//     Phase B builds; Phase E toggles entries in/out).
-//   - capture_phase6_step_c_envcells.cjs   — Phase C (cellContainers
-//     registry; soft prerequisite — Phase E doesn't strictly need
-//     EnvCells to render, but a real door is usually attached to a
-//     building/cell that Phase C populates).
-//   - capture_phase4_step3.cjs             — keyboard input pattern.
-//   - capture_phase4_step5.cjs             — `useObject` dispatch and
-//     `kind=12/13/14` event-capture pattern (closely mirrored here).
+// ====================================================================
+// 3D PORT (item 9b, 2026-06-18) — UNVALIDATED (no Playwright in the
+// porting env; this MUST be run under Playwright to confirm). The
+// original drove the 2D PIXI path (entry.sprite / window.buildingMap /
+// window.liveScene.doorStates). Under the default ?renderer=3d (since
+// the 2D-pixi retirement, item 2) the live door renderer is the kind=15
+// DoorStateChanged arm at index.html:7388-7406, which:
+//   - sets window.__doorStates: Map<guid,"open"|"closed">  (state)
+//   - resolves the door entity inst via
+//       window.liveScene3d.entityManager.entityMap.get(guid)
+//   - rotates inst.root.rotation.z (0 closed → -π/2 open) on the SNAP
+//     path, OR plays em3d.playDoorMotion(...) under unifiedMotion=door
+//     (default-on). **CAVEAT (E.2):** under unified door motion the
+//     swing is animation-driven, so inst.root.rotation.z may stay ~0 —
+//     the snap-path delta is only the signal with ?unifiedMotion=off.
+//     The mode-independent door signal is the __doorStates flip; the
+//     root-rotation check is the visual confirmation and is the one
+//     assertion that may need a validation-run tweak (run with
+//     ?unifiedMotion=off, or extend to a motion-state probe).
+// Positions are read from getLocalPlayerPose() (wasm, renderer-agnostic)
+// converted to world coords, NOT 2D sprite.x/y. Building presence comes
+// from window.buildingMap3d (the 3D mirror of the 2D window.buildingMap).
 //
-// IMPORTANT — Phase E is not yet implemented at the time this capture
-// script lands. The implementation agent will wire `WorldEvent::
-// DoorStateChanged`, the door-state map, the sprite-rotation hinge
-// frame baking, and the AABB-index toggle in a follow-up commit.
-// Until that lands, this script will fail with a SPECIFIC
-// "Phase E not yet implemented" detail message rather than a generic
-// null-deref. That's the intended behaviour — we're locking the
-// contract before the implementation arrives.
+// 3D coverage siblings (the 2D Phase A/B/C + phase4 captures this file
+// once referenced were deleted in item 9a — see
+// docs/2d-pixi-retirement-DELETED-CAPTURES.md):
+//   - capture_phase7_2_buildings.cjs  — 3D building geometry presence.
+//   - capture_3d_movement_e2e.cjs     — 3D keyboard-drive + movement.
+//   - capture_phase4_step5.cjs (deleted) — useObject + kind=12/13/14
+//     pattern, still mirrored inline here (renderer-agnostic).
+// ====================================================================
 //
 // === Door-discovery heuristic ========================================
 //
@@ -57,9 +65,10 @@
 // We therefore use a "walk-until-you-see" heuristic to find a closed
 // door:
 //
-//   1. After @telepoi Holtburg + entity drain, scan window.entityMap
-//      for any entry whose meta.name matches /door/i (case-insensitive)
-//      AND whose door-state placeholder reads "closed".
+//   1. After @telepoi Holtburg + entity drain, scan the 3D
+//      liveScene3d.entityManager.entityMap for any inst whose
+//      meta.name matches /door/i AND whose door state reads "closed"
+//      (absent-state ⇒ "closed", since ACE doors spawn closed).
 //   2. If none is in range immediately, walk forward (W) up to ~10 m
 //      total in 2 m increments, scanning between each step. Holtburg
 //      houses have a door weenie at each portal; the @telepoi spawn
@@ -363,12 +372,18 @@ const path = require("node:path");
     // observe rotating. Without buildingMap there's no per-part
     // sprite to read rotation off.
     const phaseAPresent = await page.evaluate(() => {
-        if (!window.buildingMap || typeof window.buildingMap.entries !== "function") {
-            return { ok: false, reason: "window.buildingMap missing" };
+        // 3D building presence: window.buildingMap3d (the 3D mirror of
+        // the retired 2D window.buildingMap), with liveScene3d.buildingsGroup
+        // as the fallback (capture_phase7_2_buildings asserts the latter).
+        if (window.buildingMap3d && typeof window.buildingMap3d.entries === "function") {
+            let n = 0;
+            for (const _ of window.buildingMap3d.entries()) n += 1;
+            if (n > 0) return { ok: true, count: n, source: "window.buildingMap3d" };
         }
-        let n = 0;
-        for (const _ of window.buildingMap.entries()) n += 1;
-        return { ok: n > 0, reason: n === 0 ? "window.buildingMap empty" : null, count: n };
+        const grp = window.liveScene3d && window.liveScene3d.buildingsGroup;
+        const gc = grp && grp.children ? grp.children.length : 0;
+        if (gc > 0) return { ok: true, count: gc, source: "liveScene3d.buildingsGroup" };
+        return { ok: false, reason: "no 3D buildings (window.buildingMap3d / liveScene3d.buildingsGroup empty)" };
     });
     if (!phaseAPresent.ok) {
         console.error(
@@ -382,7 +397,7 @@ const path = require("node:path");
         await browser.close();
         process.exit(1);
     }
-    console.log(`phase A guard OK: window.buildingMap has ${phaseAPresent.count} buildings`);
+    console.log(`phase A guard OK: ${phaseAPresent.source} has ${phaseAPresent.count} buildings`);
 
     // === Phase E door-state map presence guard ==========================
     //
@@ -391,23 +406,26 @@ const path = require("node:path");
     // the implementation agent picks a different name, update this
     // guard, the discovery loop below, and the smoke check together.
     const doorStateMapPresent = await page.evaluate(() => {
+        // window.__doorStates is the live 3D door-state map (set by the
+        // kind=15 DoorStateChanged handler, index.html:7369). liveScene3d
+        // .doorStates is a defensive fallback if a future build relocates it.
         if (window.__doorStates && typeof window.__doorStates.entries === "function") {
             return { ok: true, source: "window.__doorStates" };
         }
         if (
-            window.liveScene
-            && window.liveScene.doorStates
-            && typeof window.liveScene.doorStates.entries === "function"
+            window.liveScene3d
+            && window.liveScene3d.doorStates
+            && typeof window.liveScene3d.doorStates.entries === "function"
         ) {
-            return { ok: true, source: "window.liveScene.doorStates" };
+            return { ok: true, source: "window.liveScene3d.doorStates" };
         }
-        return { ok: false, reason: "Phase E door state map not exposed" };
+        return { ok: false, reason: "door state map not exposed (window.__doorStates absent)" };
     });
     if (!doorStateMapPresent.ok) {
         console.error(
-            `FAIL (phase-E-not-shipped): ${doorStateMapPresent.reason}. `
-            + `Expected window.__doorStates: Map<u32, "open"|"closed"> (placeholder name) `
-            + `or window.liveScene.doorStates per `
+            `FAIL (door-state-map-absent): ${doorStateMapPresent.reason}. `
+            + `Expected window.__doorStates: Map<u32, "open"|"closed"> (set by the kind=15 `
+            + `DoorStateChanged handler at index.html:7369) per `
             + `docs/phase-6-buildings-and-interiors.md §5 phase E step 2 — populated `
             + `from PublicWeenieDesc.DoorState updates as ACE pushes them.`
         );
@@ -418,21 +436,27 @@ const path = require("node:path");
     }
     console.log(`phase E guard OK: door state map at ${doorStateMapPresent.source}`);
 
-    // Pre-walk snapshot helper (mirrors step B). entityMap is a
-    // Map<u32, { sprite, modelId, meta }>; each sprite carries
-    // world-coord position via .x/.y in metres.
+    // Pre-walk snapshot helper. The 2D path scanned every entity sprite
+    // and let maxDelta() pick out the local player (the only thing moving
+    // >>1 m). Under 3D there is no window.entityMap sprite layer, so we
+    // snapshot the LOCAL PLAYER directly via getLocalPlayerPose() (a wasm,
+    // renderer-agnostic getter) and convert landblock-local (x,y in 0..192)
+    // → world metres: wx = ((lbId>>>24)&0xff)*192 + x. Keyed by "local" so
+    // the unchanged maxDelta() computes the player's pre→post delta.
     async function snapshotEntities() {
         return page.evaluate(() => {
             const out = {};
-            if (window.entityMap) {
-                for (const [guid, entry] of window.entityMap.entries()) {
-                    if (entry?.sprite) {
-                        out[guid] = {
-                            x: entry.sprite.x,
-                            y: entry.sprite.y,
-                        };
+            const h = window.__sessionHandle;
+            if (h && typeof h.getLocalPlayerPose === "function") {
+                try {
+                    const p = h.getLocalPlayerPose();
+                    if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+                        const lb = (p.landblockId ?? p.landblock ?? 0) >>> 0;
+                        const wx = ((lb >>> 24) & 0xff) * 192 + p.x;
+                        const wy = ((lb >>> 16) & 0xff) * 192 + p.y;
+                        out.local = { x: wx, y: wy };
                     }
-                }
+                } catch (_) {}
             }
             return out;
         });
@@ -464,63 +488,65 @@ const path = require("node:path");
 
     // === Door discovery via walk-until-you-see ==========================
     //
-    // Scan window.entityMap for a closed door. If none is in range
-    // immediately, walk forward in DISCOVERY_STEP_MS increments
-    // (~2 m at 1 m/s) up to DISCOVERY_MAX_WALK_M total.
+    // Scan the 3D liveScene3d.entityManager.entityMap for a closed door.
+    // If none is in range immediately, walk forward in DISCOVERY_STEP_MS
+    // increments (~2 m at 1 m/s) up to DISCOVERY_MAX_WALK_M total.
     //
     // The probe returns the first door entity whose:
     //   - meta.name matches /door/i (case-insensitive)
-    //   - door state placeholder reads "closed"
-    //   - sprite has a readable rotation (for the baseline + post
+    //   - door state reads "closed" (absent-state ⇒ "closed")
+    //   - inst.root.rotation.z is readable (for the baseline + post
     //     comparison)
     async function findClosedDoor() {
         return page.evaluate(() => {
-            const m = window.entityMap;
-            if (!m) return null;
+            // 3D: scan the EntityManager's entityMap (window.entityMap is
+            // empty under renderer=3d). inst.meta.name carries the weenie
+            // name (entities.js:3551); door rotation lives on
+            // inst.root.rotation.z (kind=15 handler, index.html:7402).
+            const em = window.liveScene3d && window.liveScene3d.entityManager;
+            const emMap = em && em.entityMap;
+            if (!emMap || typeof emMap.entries !== "function") return null;
             const doorStates = window.__doorStates
-                || (window.liveScene && window.liveScene.doorStates)
+                || (window.liveScene3d && window.liveScene3d.doorStates)
                 || null;
-            if (!doorStates) return null;
-            for (const [guid, entry] of m.entries()) {
-                const name = entry?.meta?.name || "";
+            for (const [guid, inst] of emMap.entries()) {
+                const name = inst?.meta?.name || "";
                 if (!/door/i.test(name)) continue;
-                // Per-entity placeholder: `entry.__doorState` is set
-                // by the Phase E handler when DoorState lands. The
-                // shared map in window.__doorStates is the canonical
-                // record; per-entity is a convenience mirror. Either
-                // shape passes.
+                const g = guid >>> 0;
+                // State: per-entity mirror inst.__doorState (set by the
+                // kind=15 handler) or the shared __doorStates map. A door
+                // that hasn't fired a DoorStateChanged since spawn is in
+                // NEITHER yet — ACE doors spawn "closed", so treat an
+                // absent state as "closed" (the discovery target).
                 let state = null;
-                if (typeof entry.__doorState === "string") {
-                    state = entry.__doorState;
-                } else if (doorStates.get) {
-                    const v = doorStates.get(guid >>> 0);
+                if (typeof inst.__doorState === "string") {
+                    state = inst.__doorState;
+                } else if (doorStates && typeof doorStates.get === "function") {
+                    const v = doorStates.get(g);
                     if (typeof v === "string") state = v;
                 }
+                if (state === null) state = "closed";
                 if (state !== "closed") continue;
-                // Sprite rotation — the placeholder is `sprite.rotation`
-                // (PIXI standard) but the impl agent may park it in
-                // a child container (the hinge frame). Try both.
-                let rotation = null;
-                const sprite = entry.sprite;
-                if (sprite && typeof sprite.rotation === "number") {
-                    rotation = sprite.rotation;
-                } else if (
-                    sprite
-                    && sprite.children
-                    && sprite.children[0]
-                    && typeof sprite.children[0].rotation === "number"
-                ) {
-                    rotation = sprite.children[0].rotation;
+                // 3D rotation: inst.root.rotation.z (snap path: 0 → -π/2).
+                // Under unifiedMotion=door (default) the swing is anim-driven
+                // and root.z may stay 0 — see the header E.2 caveat.
+                let rotation = null, x = 0, y = 0;
+                if (inst.root) {
+                    if (typeof inst.root.rotation?.z === "number") {
+                        rotation = inst.root.rotation.z;
+                    }
+                    const pos = inst.root.position;
+                    if (pos) { x = pos.x ?? 0; y = pos.y ?? 0; }
                 }
                 return {
-                    guid: guid >>> 0,
+                    guid: g,
                     name,
                     state,
                     rotation,
-                    x: sprite?.x ?? 0,
-                    y: sprite?.y ?? 0,
-                    wcid: (entry?.meta?.wcid ?? 0) >>> 0,
-                    category: entry?.meta?.category || "(unknown)",
+                    x,
+                    y,
+                    wcid: (inst?.meta?.wcid ?? 0) >>> 0,
+                    category: inst?.meta?.category || "(unknown)",
                 };
             }
             return null;
@@ -725,39 +751,33 @@ const path = require("node:path");
     //   2. Door sprite rotation differs from the closed baseline.
     //   3. Walking forward through the door succeeds (delta ≥ 1 m).
     const openDoor = await page.evaluate((guid) => {
-        const m = window.entityMap;
-        if (!m) return null;
-        const entry = m.get(guid);
-        if (!entry) return null;
+        const em = window.liveScene3d && window.liveScene3d.entityManager;
+        const emMap = em && em.entityMap;
+        if (!emMap || typeof emMap.get !== "function") return null;
+        const inst = emMap.get(guid >>> 0);
+        if (!inst) return null;
         const doorStates = window.__doorStates
-            || (window.liveScene && window.liveScene.doorStates)
+            || (window.liveScene3d && window.liveScene3d.doorStates)
             || null;
         let state = null;
-        if (typeof entry.__doorState === "string") {
-            state = entry.__doorState;
-        } else if (doorStates && doorStates.get) {
+        if (typeof inst.__doorState === "string") {
+            state = inst.__doorState;
+        } else if (doorStates && typeof doorStates.get === "function") {
             const v = doorStates.get(guid >>> 0);
             if (typeof v === "string") state = v;
         }
         let rotation = null;
-        const sprite = entry.sprite;
-        if (sprite && typeof sprite.rotation === "number") {
-            rotation = sprite.rotation;
-        } else if (
-            sprite
-            && sprite.children
-            && sprite.children[0]
-            && typeof sprite.children[0].rotation === "number"
-        ) {
-            rotation = sprite.children[0].rotation;
+        if (inst.root && typeof inst.root.rotation?.z === "number") {
+            rotation = inst.root.rotation.z;
         }
+        const pos = inst.root && inst.root.position;
         return {
             guid: guid >>> 0,
-            name: entry?.meta?.name || "",
+            name: inst?.meta?.name || "",
             state,
             rotation,
-            x: sprite?.x ?? 0,
-            y: sprite?.y ?? 0,
+            x: pos?.x ?? 0,
+            y: pos?.y ?? 0,
         };
     }, closedDoor.guid);
 
@@ -795,20 +815,37 @@ const path = require("node:path");
     // ticks could otherwise pass; the real signal is "rotation
     // changed by more than noise". 0.01 rad (~0.6°) is a generous
     // floor; an actual hinge swing is on the order of π/2 (90°).
+    // SOFT under the 3D port. The 2D path hard-failed if sprite.rotation
+    // didn't change. In 3D the swing is EITHER a snap on inst.root.rotation.z
+    // (?unifiedMotion=off → ~π/2 delta) OR — under the default
+    // unifiedMotion=door — an animation-driven swing where root.z stays ~0
+    // (the rotation lives in the played door motion, not the root transform).
+    // A flat root.z is therefore NOT proof the door didn't swing. We WARN
+    // (not FAIL): the mode-independent door signals are the state flip (E.1,
+    // already asserted) and the AABB toggle / walk-through (E.3, below). To
+    // hard-assert the visual swing, re-run with ?unifiedMotion=off.
     const rotationEpsilon = 0.01;
-    const rotationDelta = Math.abs(openDoor.rotation - closedRotationBaseline);
-    console.log(`rotation delta: ${rotationDelta.toFixed(4)} rad (epsilon ${rotationEpsilon})`);
-    if (rotationDelta < rotationEpsilon) {
-        console.error(
-            `FAIL (door-rotation-not-wired): door geometry rotation not wired. The door state `
-            + `flipped from "closed" to "open" but the sprite rotation only changed by `
-            + `${rotationDelta.toFixed(4)} rad (< ${rotationEpsilon} epsilon). Phase E's hinge-`
-            + `frame rotation handler isn't being invoked on DoorStateChanged. See `
-            + `docs/phase-6-buildings-and-interiors.md §5 phase E step 3 — "rotate the door's `
-            + `GfxObj sprite around its hinge frame on state change".`
+    const rotationReadable = typeof openDoor.rotation === "number"
+        && Number.isFinite(openDoor.rotation);
+    const rotationDelta = rotationReadable
+        ? Math.abs(openDoor.rotation - closedRotationBaseline)
+        : NaN;
+    console.log(
+        `root.z rotation delta: `
+        + `${rotationReadable ? rotationDelta.toFixed(4) + " rad" : "(root.z not animated)"} `
+        + `(epsilon ${rotationEpsilon})`
+    );
+    if (!rotationReadable || rotationDelta < rotationEpsilon) {
+        console.warn(
+            `WARN (door-root-rotation-flat): inst.root.rotation.z changed by `
+            + `${rotationReadable ? rotationDelta.toFixed(4) : "(null)"} rad (< ${rotationEpsilon}). `
+            + `Under unifiedMotion=door (default) the door swing is animation-driven, so a flat `
+            + `root.z is EXPECTED here — NOT a failure. Re-run with ?unifiedMotion=off to assert `
+            + `the root-rotation snap, or extend this probe to read the door motion state. The `
+            + `state flip (E.1) and AABB toggle (E.3) remain the load-bearing door signals.`
         );
-        await browser.close();
-        process.exit(1);
+    } else {
+        console.log(`door root-rotation swing confirmed: ${rotationDelta.toFixed(4)} rad`);
     }
 
     // (E.3) Walking through the now-open door succeeds.
@@ -867,7 +904,7 @@ const path = require("node:path");
         `PASS: Phase E door geometry + state active. `
         + `Closed door blocked at ${closedDelta.max.toFixed(2)} m (< ${CLOSED_BLOCK_THRESHOLD_M} m); `
         + `useObject -> kind=14 UseDone round-tripped; door state flipped closed → open; `
-        + `sprite rotation animated by ${rotationDelta.toFixed(4)} rad around hinge frame; `
+        + `door root.z swing ${rotationReadable && rotationDelta >= rotationEpsilon ? rotationDelta.toFixed(4) + " rad" : "(anim-driven; see E.2 WARN)"}; `
         + `walking through opened door succeeded at ${openDelta.max.toFixed(2)} m `
         + `(>= ${OPEN_PASS_THRESHOLD_M} m, AABB toggle confirmed). `
         + `Door wcid=${closedDoor.wcid}, name="${closedDoor.name}".`
