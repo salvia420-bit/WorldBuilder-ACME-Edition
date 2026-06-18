@@ -8,15 +8,23 @@ appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 >
 > **Now default-ON** (was default-off): `singleDriver`, `unifiedDispatch`, `unifiedClientEvent`, `unifiedClone`, `inputFunnel`, `syncPhysicsTick`, `dispatchParity`, `mtQueue`, `hookDrain`, `scriptQueue`, `rootMotionObject`, `cmtStanceMask`, `castSpeed`, `castStateMachine`, `castFizzle`, `castFaceTarget`, `castAxes`, `multiAction`, `melee3dRange`, `fullBodyOneShot`, `signedMotionSpeed`, `powerMeterSwingDuration`, `idleFidget`, `dynLod`, `serverSwing`, `wieldHandAttach`, `wieldedSpawn`, `turnOmega`, `jumpParity`, `retailRunKeys`, `longJump`, `projectileGravity`, `projectileArc`, `retailParity`, `retailCamZoom`, `blockingParticleParity`, `particleOwner`, `defaultScriptSpawn`, `envcellFusion`, `strictWaterCodes`, `mtClassFallback`.
 >
-> **`unifiedMotion` (NEW, Step 0 of the animation consolidation — default-off):** values
+> **`unifiedMotion` (animation consolidation — default-off):** values
 > `off` | `shadow` | per-class (`attack`/`death`/`door`/`cast`/`locomotion`) | `on`. Selects
-> the ported `CSequence`/`CMotionInterp` motion authority (`scene3d/motion/motion_sequence.js`)
-> over the three.js AnimationMixer per the audit in `docs/animation-audit/`. `attack` (and `on`)
-> are WIRED (Step 1): an attack swing drives the ported full-body MotionSequence + poses the rig,
-> SUPPRESSING the mixer for the swing (fixes "upper-body-only swing"); the stance cycle resumes on
-> completion. **UNVERIFIED in-world — pending a 1070 eye-test; swing hooks (swoosh) are silent under
-> the flag for now.** Headless-proven: `test_motion_sequence.mjs` (mixer parity + segment-split,
-> exact). See `docs/animation-audit/ANIMATION-AUDIT.md` §5.
+> the ported `CSequence` motion authority — now the **RUST** wasm `MotionSequence`
+> (`src/motion_sequence.rs`; the playhead/advance/node-split/one-shot-completion all live
+> in Rust per audit §8 Q1), with JS keeping only the dumb per-part poser (`poseRigAt`,
+> `scene3d/motion/motion_sequence.js`) — over the three.js AnimationMixer per the audit in
+> `docs/animation-audit/`.
+> - `attack` (and `on`): an attack swing builds a one-shot `MotionSequence` from the bake's
+>   segment descriptor, drives the FULL body + suppresses the mixer (fixes "upper-body-only
+>   swing"), then hands back to the frozen cycle on completion.
+> - `death` (and `on`): Dead (0x0011) plays the collapse ONCE then HOLDS the final prone
+>   frame (one-shot `done`+clamp) — replaces the held-looping pose + racy collapse overlay.
+>   The default (flag-off) STATIONARY→cycle path is untouched.
+> **Logic-verified headlessly** (cargo `motion_sequence` 5/5 parity + one-shot completion;
+> `test_motion_sequence.mjs` poser-vs-mixer maxErr 0; `test_motion_sequence_wasm_smoke.mjs`
+> drives the real compiled wasm 14/14). **In-world render UNVERIFIED** (no eye-test). Swing/
+> footfall hooks are silent under the flag for now. See `docs/animation-audit/ANIMATION-AUDIT.md` §5.
 >
 > **Still opt-in (default-off) on purpose:** instrumentation/debug (`wireframe`, `diag`, `syncTickDiag`, `spawnTrace`, `debug`, `lbLruDebug`, `profileStatics`, `eventLog`, `nullRender`, `renderOnDemand`), login/automation (`autoLogin`, `agent`, `nosw`), perf opt-ins (`eagerDungeons`, `cullTerrain`, `forcePom`, `forceDetail`, `preloadIcons`), user preferences (`mouseInvertY`, `chatFade`, `radarHostileOnly`), the legacy escape hatch (`legacyDirectDrain`), and known-incomplete (`lodRebake` — edge-weld seams pending; Rust BSP `USE_PHYSICS_BSP`/`USE_STATIC_BSP`). Plus the genuine render toggles `clouds`, `quality`, `renderScale`, `hud`, `plugins`, weather `rain`/`snow`/`lightning`/`skyWeather`, and the texture/palette overrides.
 

@@ -493,15 +493,18 @@ const EMPTY_U32 = new Uint32Array(0);
 // source-eval headless harness that doesn't resolve ESM imports — matches the
 // FULL_BODY_ONE_SHOT pattern. The wasm MotionSequence + poseRigAt are referenced
 // only inside the flag-on runtime branches, so they're inert when off.
-const UNIFIED_ATTACK = (() => {
+// `?unifiedMotion=<class>` selects which motion classes route through the Rust
+// authority; `=on` enables all of them. Each is default-off until eye-tested.
+const UNIFIED_MODE = (() => {
   try {
     const v = new URLSearchParams(
       (typeof window !== "undefined" && window.location && window.location.search) || "",
     ).get("unifiedMotion");
-    const m = v == null ? "off" : String(v).toLowerCase();
-    return m === "attack" || m === "on";
-  } catch (_) { return false; }
+    return v == null ? "off" : String(v).toLowerCase();
+  } catch (_) { return "off"; }
 })();
+const UNIFIED_ATTACK = UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
+const UNIFIED_DEATH = UNIFIED_MODE === "death" || UNIFIED_MODE === "on";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import {
   materialCanCastShadow,
@@ -1009,6 +1012,8 @@ const CMD_LOW_RUN_FORWARD = 0x0007;
 // it as STOP → fadeOutCurrent, and the stance change was tracked
 // statefully (UI label updated) but never visualized on the rig.
 const CMD_LOW_READY = 0x0003;
+// Dead (0x0011, MotionCommand.cs L24) — the post-death collapse/prone motion.
+const CMD_LOW_DEAD = 0x0011;
 // Sidestep / turn-in-place locomotion. Values from
 // `external/ACE/Source/ACE.Entity/Enum/MotionCommand.cs:20-23`:
 // TurnRight=0x6500000D, TurnLeft=0x6500000E, SideStepRight=0x6500000F,
@@ -2338,9 +2343,9 @@ class EntityInstance {
     } catch (_) {}
     // Free a mid-swing wasm MotionSequence (?unifiedMotion=attack) so a despawn
     // during a swing doesn't leak the Rust-side allocation.
-    if (this._unifiedAttack) {
-      try { this._unifiedAttack.seq.free(); } catch (_) {}
-      this._unifiedAttack = null;
+    if (this._unifiedSeq) {
+      try { this._unifiedSeq.seq.free(); } catch (_) {}
+      this._unifiedSeq = null;
     }
     // Perf B3 (2026-05-18) — walk the rig BEFORE detaching from the
     // scene graph so traverse() still has the part-Mesh subtree
@@ -6553,12 +6558,12 @@ export class EntityManager {
   async setMotion(guid, motionCommand, motionStance, motionSpeed = 1.0) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return;
-    // Step-1: a new locomotion/stance command ends any in-progress unified
-    // attack override so movement stays responsive (the cycle takes over). No-op
-    // when ?unifiedMotion=attack is off (the field is never set).
-    if (inst._unifiedAttack) {
-      try { inst._unifiedAttack.seq.free(); } catch (_) { /* already freed */ }
-      inst._unifiedAttack = null;
+    // A new locomotion/stance/motion command ends any in-progress unified
+    // sequence (swing override, or a death hold on resurrect/correction) so
+    // movement stays responsive. No-op when ?unifiedMotion is off (never set).
+    if (inst._unifiedSeq) {
+      try { inst._unifiedSeq.seq.free(); } catch (_) { /* already freed */ }
+      inst._unifiedSeq = null;
     }
     // A1: stash the playback speed (fail-soft to 1.0 for non-finite /
     // non-positive). Read by the locomotion timeScale composition below
@@ -6650,6 +6655,47 @@ export class EntityManager {
     const setupId =
       (inst.meta.modelId ?? inst.meta.setupId ?? 0) >>> 0;
     const mtableId = (inst.meta.mtableId ?? 0) >>> 0;
+
+    // Animation consolidation (docs/animation-audit §5 Step 2,
+    // ?unifiedMotion=death): route Dead (0x0011) through the Rust one-shot
+    // authority — play the collapse ONCE, then HOLD the final (prone) frame
+    // (a non-cyclic MotionSequence latches `done` and clamps its last frame).
+    // Replaces the held-LOOPING cycle pose + the racy separate collapse overlay
+    // (two unsequenced mixer actions) with ONE sequence. Default-off: when the
+    // flag is off this is skipped and Dead falls through to the legacy
+    // STATIONARY_COMMANDS → cycle path below (untouched, no regression).
+    if (UNIFIED_DEATH && cmdLow === CMD_LOW_DEAD) {
+      const MS =
+        (typeof window !== "undefined" && window.__hbWasm) ? window.__hbWasm.MotionSequence : null;
+      const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
+      if (MS && typeof fetchKeyframes === "function") {
+        let entry = null;
+        try {
+          entry = await this.animationCache.get(setupId, mtableId, cmd, stance, fetchKeyframes, {
+            modelChanges: inst.meta?.modelChanges ?? new Uint32Array(0),
+            textureChanges: inst.meta?.textureChanges ?? new Uint32Array(0),
+            paletteId: (inst.meta?.paletteId ?? 0) >>> 0,
+            paletteSubsFlat: inst.meta?.subPalettes ?? new Uint32Array(0),
+          });
+        } catch (_) { entry = null; }
+        if (!this.entityMap.has(guid >>> 0)) return; // despawned mid-resolve
+        const d = entry?.sequenceDescriptor;
+        if (d) {
+          const seq = MS.fromDescriptor(
+            d.numFrames >>> 0, +d.framerate || 0, +d.duration || 0,
+            d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
+            false, // one-shot collapse → latches `done`, holds the final prone frame
+          );
+          if (seq) {
+            if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
+            // clearOnDone:false → keep posing the clamped prone frame (held dead).
+            inst._unifiedSeq = { seq, desc: d, clearOnDone: false };
+            return; // the tick drives the rig; skip the legacy cycle path
+          }
+        }
+      }
+      // MS missing (stale pkg) / empty bake → fall through to the legacy path.
+    }
 
     // Swings + magic casts live in `MotionTable.links[(stance,
     // Ready)][swingCmd]` — never in `cycles[(stance, swingCmd)]`.
@@ -8231,7 +8277,7 @@ export class EntityManager {
     // Step-1 (?unifiedMotion=attack): drive an attack swing as a FULL-BODY
     // sequence (retail GetObjectSequence one-shot, acclient.c:337842) instead of
     // a LoopOnce overlay the locomotion cycle half-blends ("upper-body-only
-    // swing"). The tick loop advances inst._unifiedAttack + poses the rig and
+    // swing"). The tick loop advances inst._unifiedSeq + poses the rig and
     // SUPPRESSES the mixer; on completion the stance cycle resumes. Default-off
     // (UNIFIED_ATTACK false) → unchanged mixer overlay path below.
     if (
@@ -8258,7 +8304,9 @@ export class EntityManager {
         );
         if (seq) {
           // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
-          inst._unifiedAttack = { seq, desc: d };
+          // clearOnDone: the one-shot swing hands the rig back to the mixer
+          // (frozen cycle resumes) on completion.
+          inst._unifiedSeq = { seq, desc: d, clearOnDone: true };
           return; // skip the mixer overlay; the tick drives the rig
         }
       }
@@ -10425,19 +10473,20 @@ export class EntityManager {
         }
       }
       try {
-        if (inst._unifiedAttack) {
-          // Step-1 (?unifiedMotion=attack): the ported sequence owns the rig for
-          // the swing's duration (full-body, no blend) — SUPPRESS the mixer so it
-          // can't half-apply the locomotion cycle on top. On completion hand back
-          // to the mixer (the frozen cycle action resumes). Hooks (swing swoosh)
-          // fire via the sequence in a later step — silent under this flag for now.
-          const ua = inst._unifiedAttack;
+        if (inst._unifiedSeq) {
+          // The Rust MotionSequence owns the rig (full-body, no blend) — SUPPRESS
+          // the mixer so it can't half-apply the locomotion cycle on top.
+          //  - attack (clearOnDone:true): on completion hand the rig back to the
+          //    mixer (the frozen cycle action resumes).
+          //  - death (clearOnDone:false): HOLD the clamped final (prone) frame —
+          //    advance is inert once `done`, poseRigAt keeps writing it.
+          // Hooks (swing swoosh / footfall) fire via the sequence in a later step.
+          const ua = inst._unifiedSeq;
           ua.seq.advance(dt);
           poseRigAt(ua.seq.globalFrameIndex, ua.desc, inst.parts);
-          if (ua.seq.done) {
+          if (ua.seq.done && ua.clearOnDone) {
             try { ua.seq.free(); } catch (_) { /* already freed */ }
-            // Hand the rig back to the mixer (the frozen cycle action resumes).
-            inst._unifiedAttack = null;
+            inst._unifiedSeq = null;
           }
         } else {
           inst.mixer.update(dt);
