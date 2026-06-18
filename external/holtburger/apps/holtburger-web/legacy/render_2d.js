@@ -1795,3 +1795,102 @@ void main() {
       const ATLAS_ROWS = 6;
       const ATLAS_TILE_PX = 256;
       const ATLAS_PX = ATLAS_COLS * ATLAS_TILE_PX; // 1536; ATLAS_ROWS too.
+
+// ===== ensureLandblockObjectsForLandblock 2D body (per-LB building/object
+// PIXI render: fetch_landblock_objects + colours + bakePerPartBuildingTextures
+// + buildBuildingsContainer + buildObjectsContainer + worldContainer.addChild).
+// Pure-2D (the fn early-returns on !liveScene); 3D builds objects via init3D. =====
+async function ensureLandblockObjectsForLandblock_2dBody(lbId, lbHex) {
+        objectsRenderAddInFlight.add(lbId);
+        const lbHex = `0x${lbId.toString(16).padStart(8, "0")}`;
+        try {
+          const cellId = (lbId | 0xfffe) >>> 0;
+          const objects = await fetch_landblock_objects(new Uint32Array([cellId]));
+          if (!objects || objects.length === 0) {
+            objectsRenderAddedLbs.add(lbId);
+            return;
+          }
+          // Resolve representative ARGB for any model id we haven't
+          // tried yet. fetch_object_colours returns 0 when the walk
+          // can't resolve a colour; we still mark "tried" so we don't
+          // re-fetch every LB change for unresolveable models.
+          const newColourModels = [...new Set(objects.map((o) => o.modelId))]
+            .filter((id) => !colourResolveAttempted.has(id));
+          if (newColourModels.length > 0) {
+            try {
+              const colours = await fetch_object_colours(new Uint32Array(newColourModels));
+              for (let i = 0; i < newColourModels.length; i += 1) {
+                colourResolveAttempted.add(newColourModels[i]);
+                if (colours[i] !== 0) {
+                  liveScene.colourMap.set(newColourModels[i], colours[i]);
+                }
+              }
+            } catch (e) {
+              for (const id of newColourModels) colourResolveAttempted.add(id);
+              console.warn(`[colour] LB-change resolve failed for ${lbHex}:`, e);
+            }
+          }
+          const lbX = (lbId >>> 24) & 0xff;
+          const lbY = (lbId >>> 16) & 0xff;
+          const neighbourhood = [{ x: lbX, y: lbY, id: cellId }];
+          const buildings = objects.filter((o) => o.isBuilding);
+          const nonBuildings = objects.filter((o) => !o.isBuilding);
+          // Bake per-part textures for any building model we haven't
+          // baked before. The bake cache is shared across LBs so a
+          // building model that appears in two landblocks bakes once.
+          if (buildings.length > 0) {
+            const newBuildingModels = [...new Set(buildings.map((o) => o.modelId))]
+              .filter((id) => !liveScene.perPartBuildingMap.has(id));
+            if (newBuildingModels.length > 0) {
+              try {
+                const newBakes = await bakePerPartBuildingTextures(
+                  liveScene.app, newBuildingModels
+                );
+                for (const [k, v] of newBakes) {
+                  liveScene.perPartBuildingMap.set(k, v);
+                }
+              } catch (e) {
+                console.warn(`[phase6.A] bake failed for ${lbHex}:`, e);
+              }
+            }
+            const buildingsBundle = buildBuildingsContainer(
+              neighbourhood,
+              buildings,
+              liveScene.perPartBuildingMap,
+              liveScene.liveSpriteMap,
+              liveScene.invisibleModels,
+            );
+            liveScene.outdoorContainer.addChild(buildingsBundle.container);
+            // Merge per-placement entries into the shared buildingMap
+            // so wasm-side door state lookups (Phase 6E) find them.
+            for (const [k, v] of buildingsBundle.buildingMap) {
+              liveScene.buildingMap.set(k, v);
+            }
+            console.log(
+              `[phase6.A] painted ${buildingsBundle.withParts}+${buildingsBundle.withFallback} `
+              + `(parts+fallback) buildings, dropped ${buildingsBundle.dropped} for ${lbHex}`
+            );
+          }
+          if (nonBuildings.length > 0) {
+            const objectsBundle = buildObjectsContainer(
+              neighbourhood,
+              nonBuildings,
+              liveScene.spriteMap,
+              liveScene.colourMap,
+              liveScene.liveSpriteMap,
+              liveScene.invisibleModels,
+            );
+            liveScene.outdoorContainer.addChild(objectsBundle.container);
+            console.log(
+              `[step4] painted ${objectsBundle.withSprite}+${objectsBundle.withLive} `
+              + `(atlas+live) objects, fallback ${objectsBundle.fallback}, `
+              + `invisible ${objectsBundle.invisible} for ${lbHex}`
+            );
+          }
+          objectsRenderAddedLbs.add(lbId);
+        } catch (e) {
+          console.warn(`[buildings/objects] LB-change render failed for ${lbHex}:`, e);
+        } finally {
+          objectsRenderAddInFlight.delete(lbId);
+        }
+}

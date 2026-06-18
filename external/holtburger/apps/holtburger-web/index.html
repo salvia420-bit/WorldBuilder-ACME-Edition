@@ -3325,29 +3325,13 @@
             }
             return;
           }
-          // Bake meshes + build the per-cell PIXI containers.
-          const baked = await bakeCellTextures(app, placements);
-          // Build a single-LB neighbourhood so buildCellsContainer's
-          // landblock filter accepts these cells; the actual
-          // worldContainer placement is independent.
-          const lbX = (lbId >>> 24) & 0xff;
-          const lbY = (lbId >>> 16) & 0xff;
-          const neighbourhood = [{ x: lbX, y: lbY }];
-          const bundle = buildCellsContainer(neighbourhood, placements, baked, null);
-          // Attach the bundle to the worldContainer so cells render
-          // alongside outdoor objects.
-          if (liveScene?.worldContainer) {
-            liveScene.worldContainer.addChild(bundle.container);
-            liveScene.cellContainers = liveScene.cellContainers ?? cellContainerRegistry;
-            for (const [cellId, cont] of bundle.cellContainers) {
-              cellContainerRegistry.set(cellId, cont);
-            }
-          }
+          // 2D PIXI cell-bake tail (bakeCellTextures → buildCellsContainer →
+          // liveScene.worldContainer.addChild) RETIRED 2026-06-18 (item 7c) →
+          // legacy/render_2d.js. Only reachable when liveScene.app exists (2D);
+          // in 3D the function already returned at the `if (!app)` gate above,
+          // after the wasm-side fetchEnvCellsInLandblock queued the cell-graph +
+          // physics data the 3D path consumes. Bookkeeping kept:
           cellContainersPopulatedLbs.add(lbId);
-          console.log(
-            `[phase6.C] baked ${bundle.withMesh}/${placements.length} EnvCells `
-            + `(${bundle.totalStatics} static objects) for landblock 0x${lbId.toString(16).padStart(8, "0")}`
-          );
           for (const placement of placements) placement.free();
         } catch (e) {
           console.warn(
@@ -3439,98 +3423,12 @@
           || objectsRenderAddInFlight.has(lbId)
         ) return;
         if (!liveScene || !liveScene.outdoorContainer) return;
-        objectsRenderAddInFlight.add(lbId);
-        const lbHex = `0x${lbId.toString(16).padStart(8, "0")}`;
-        try {
-          const cellId = (lbId | 0xfffe) >>> 0;
-          const objects = await fetch_landblock_objects(new Uint32Array([cellId]));
-          if (!objects || objects.length === 0) {
-            objectsRenderAddedLbs.add(lbId);
-            return;
-          }
-          // Resolve representative ARGB for any model id we haven't
-          // tried yet. fetch_object_colours returns 0 when the walk
-          // can't resolve a colour; we still mark "tried" so we don't
-          // re-fetch every LB change for unresolveable models.
-          const newColourModels = [...new Set(objects.map((o) => o.modelId))]
-            .filter((id) => !colourResolveAttempted.has(id));
-          if (newColourModels.length > 0) {
-            try {
-              const colours = await fetch_object_colours(new Uint32Array(newColourModels));
-              for (let i = 0; i < newColourModels.length; i += 1) {
-                colourResolveAttempted.add(newColourModels[i]);
-                if (colours[i] !== 0) {
-                  liveScene.colourMap.set(newColourModels[i], colours[i]);
-                }
-              }
-            } catch (e) {
-              for (const id of newColourModels) colourResolveAttempted.add(id);
-              console.warn(`[colour] LB-change resolve failed for ${lbHex}:`, e);
-            }
-          }
-          const lbX = (lbId >>> 24) & 0xff;
-          const lbY = (lbId >>> 16) & 0xff;
-          const neighbourhood = [{ x: lbX, y: lbY, id: cellId }];
-          const buildings = objects.filter((o) => o.isBuilding);
-          const nonBuildings = objects.filter((o) => !o.isBuilding);
-          // Bake per-part textures for any building model we haven't
-          // baked before. The bake cache is shared across LBs so a
-          // building model that appears in two landblocks bakes once.
-          if (buildings.length > 0) {
-            const newBuildingModels = [...new Set(buildings.map((o) => o.modelId))]
-              .filter((id) => !liveScene.perPartBuildingMap.has(id));
-            if (newBuildingModels.length > 0) {
-              try {
-                const newBakes = await bakePerPartBuildingTextures(
-                  liveScene.app, newBuildingModels
-                );
-                for (const [k, v] of newBakes) {
-                  liveScene.perPartBuildingMap.set(k, v);
-                }
-              } catch (e) {
-                console.warn(`[phase6.A] bake failed for ${lbHex}:`, e);
-              }
-            }
-            const buildingsBundle = buildBuildingsContainer(
-              neighbourhood,
-              buildings,
-              liveScene.perPartBuildingMap,
-              liveScene.liveSpriteMap,
-              liveScene.invisibleModels,
-            );
-            liveScene.outdoorContainer.addChild(buildingsBundle.container);
-            // Merge per-placement entries into the shared buildingMap
-            // so wasm-side door state lookups (Phase 6E) find them.
-            for (const [k, v] of buildingsBundle.buildingMap) {
-              liveScene.buildingMap.set(k, v);
-            }
-            console.log(
-              `[phase6.A] painted ${buildingsBundle.withParts}+${buildingsBundle.withFallback} `
-              + `(parts+fallback) buildings, dropped ${buildingsBundle.dropped} for ${lbHex}`
-            );
-          }
-          if (nonBuildings.length > 0) {
-            const objectsBundle = buildObjectsContainer(
-              neighbourhood,
-              nonBuildings,
-              liveScene.spriteMap,
-              liveScene.colourMap,
-              liveScene.liveSpriteMap,
-              liveScene.invisibleModels,
-            );
-            liveScene.outdoorContainer.addChild(objectsBundle.container);
-            console.log(
-              `[step4] painted ${objectsBundle.withSprite}+${objectsBundle.withLive} `
-              + `(atlas+live) objects, fallback ${objectsBundle.fallback}, `
-              + `invisible ${objectsBundle.invisible} for ${lbHex}`
-            );
-          }
-          objectsRenderAddedLbs.add(lbId);
-        } catch (e) {
-          console.warn(`[buildings/objects] LB-change render failed for ${lbHex}:`, e);
-        } finally {
-          objectsRenderAddInFlight.delete(lbId);
-        }
+        // 2D PIXI building/object render body (fetch_landblock_objects +
+        // bakePerPartBuildingTextures + buildBuildingsContainer +
+        // buildObjectsContainer + worldContainer.addChild) RETIRED 2026-06-18
+        // (item 7c) → legacy/render_2d.js. This whole function is pure-2D — it
+        // early-returns above on !liveScene, so 3D never reaches here (the 3D
+        // path builds objects via init3D / scene3d). No wasm-populate half.
       }
 
       async function ensureTerrainAroundLandblock(centreLb) {
@@ -3580,24 +3478,11 @@
               // hasn't completed) — the startup loop pre-populates
               // terrainMeshAddedLbs for the initial 9 LBs so we
               // don't double-paint them.
-              if (
-                liveScene
-                && liveScene.outdoorContainer
-                && liveScene.atlasTexture
-                && !terrainMeshAddedLbs.has(lbId)
-              ) {
-                const lbX = (lbId >>> 24) & 0xff;
-                const lbY = (lbId >>> 16) & 0xff;
-                addLandblockToScene(
-                  liveScene.outdoorContainer,
-                  meshes[i],
-                  lbX,
-                  lbY,
-                  liveScene.atlasTexture,
-                  liveScene.roadTexture,
-                );
-                terrainMeshAddedLbs.add(lbId);
-              }
+              // 2D PIXI terrain-tile paint (addLandblockToScene) RETIRED
+              // 2026-06-18 (item 7c) → legacy/render_2d.js. Dead in 3D (gated
+              // on liveScene/atlasTexture); the wasm populateTerrain above
+              // already ran for collision/physics. The 3D path paints terrain
+              // via init3D / scene3d.
             } catch (e) {
               console.warn(`[terrain] populateTerrain failed for 0x${lbId.toString(16)}:`, e);
             } finally {
