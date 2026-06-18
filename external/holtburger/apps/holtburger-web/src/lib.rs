@@ -6029,6 +6029,19 @@ pub(crate) struct ConcatenatedMotionBake {
     /// visual semantics — the legacy `pos` channel is translation-only).
     pub net_translation: [f32; 3],
     pub net_orientation: holtburger_common::Quaternion,
+    /// Step-1 of the animation consolidation (docs/animation-audit §5): the
+    /// per-`AnimData` SEGMENT boundaries the concatenation otherwise flattens
+    /// away. Parallel arrays, one entry per contributing segment in play order:
+    /// `segment_starts[i]` = frame offset into `frames`/`part_frames` where the
+    /// segment begins; `segment_counts[i]` = its frame count; framerate (signed:
+    /// negative = reverse, already applied to the baked frames — kept for the
+    /// JS interpreter's segment metadata); the source `anim_id`. Lets the
+    /// MotionSequence node-split one bake (e.g. windup→strike→recover) for
+    /// sub-link interrupt/branch + segment-exact MotionDone.
+    pub segment_starts: Vec<u32>,
+    pub segment_counts: Vec<u32>,
+    pub segment_framerates: Vec<f32>,
+    pub segment_anim_ids: Vec<u32>,
 }
 
 /// Returns the bake (`ConcatenatedMotionBake`) or `None` when no segment
@@ -6069,6 +6082,13 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // identity-orientation cycle (so the gated fold is a no-op there). Mirrors
     // melt `MotionTable.cs:229` (`orientation *= posFrame.Orientation`).
     let mut ori_accum = holtburger_common::Quaternion::identity();
+
+    // Step-1: per-segment boundaries (parallel arrays, one entry per
+    // frame-contributing AnimData, in play order). See ConcatenatedMotionBake.
+    let mut segment_starts: Vec<u32> = Vec::new();
+    let mut segment_counts: Vec<u32> = Vec::new();
+    let mut segment_framerates: Vec<f32> = Vec::new();
+    let mut segment_anim_ids: Vec<u32> = Vec::new();
 
     for anim_data in &motion_data.anims {
         let anim_did = anim_data.anim_id;
@@ -6169,6 +6189,7 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
                 pos.push(accum[2]);
             }
         };
+        let seg_start = frames.len() as u32; // Step-1: segment boundary
         if reverse {
             // Reverse playback: HighFrame → LowFrame (AnimSequenceNode).
             for idx in (low..high).rev() {
@@ -6212,6 +6233,15 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
                 t += dt;
             }
         }
+        // Step-1: record this segment's boundary (only when it contributed
+        // frames; the `continue` guards above skip non-contributing AnimData).
+        let seg_count = frames.len() as u32 - seg_start;
+        if seg_count > 0 {
+            segment_starts.push(seg_start);
+            segment_counts.push(seg_count);
+            segment_framerates.push(anim_data.framerate);
+            segment_anim_ids.push(anim_data.anim_id);
+        }
     }
 
     if frames.is_empty() {
@@ -6229,6 +6259,10 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         // displacement — previously discarded here.
         net_translation: pos_accum,
         net_orientation: ori_accum,
+        segment_starts,
+        segment_counts,
+        segment_framerates,
+        segment_anim_ids,
     })
 }
 
@@ -15564,6 +15598,13 @@ pub struct EntityAnimationData {
     /// for three.js's quaternion layout in `entities.js`'s rest-pose
     /// apply step.
     rest_orientations: Vec<f32>,
+    /// Step-1: per-segment AnimData boundaries (see ConcatenatedMotionBake).
+    /// `segmentStarts[i]`/`segmentCounts[i]` slice `partFrames` by frame; the
+    /// JS MotionSequence node-splits one bake (windup→strike→recover) here.
+    segment_starts: Vec<u32>,
+    segment_counts: Vec<u32>,
+    segment_framerates: Vec<f32>,
+    segment_anim_ids: Vec<u32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -15683,6 +15724,35 @@ impl EntityAnimationData {
         self.rest_orientations.clone()
     }
 
+    /// Step-1: per-segment frame offsets into `partFrames` (one per AnimData
+    /// segment, in play order). Empty when no clip resolved or a single-segment
+    /// cycle. `segmentStarts[i] * partCount * 7` indexes the segment's first frame.
+    #[wasm_bindgen(getter, js_name = segmentStarts)]
+    pub fn segment_starts(&self) -> Vec<u32> {
+        self.segment_starts.clone()
+    }
+
+    /// Step-1: per-segment frame counts (parallel to `segmentStarts`).
+    #[wasm_bindgen(getter, js_name = segmentCounts)]
+    pub fn segment_counts(&self) -> Vec<u32> {
+        self.segment_counts.clone()
+    }
+
+    /// Step-1: per-segment AnimData framerate (signed; negative = the segment was
+    /// baked in reverse — informational, the reversal is already applied to the
+    /// frames). Parallel to `segmentStarts`.
+    #[wasm_bindgen(getter, js_name = segmentFramerates)]
+    pub fn segment_framerates(&self) -> Vec<f32> {
+        self.segment_framerates.clone()
+    }
+
+    /// Step-1: per-segment source `anim_id` (0x03 Animation DID). Parallel to
+    /// `segmentStarts`.
+    #[wasm_bindgen(getter, js_name = segmentAnimIds)]
+    pub fn segment_anim_ids(&self) -> Vec<u32> {
+        self.segment_anim_ids.clone()
+    }
+
     /// **Task E (2026-05-12).** Drain the per-cycle `AnimationHookJs`
     /// timeline across the wasm boundary. Each entry carries
     /// `(time_in_clip_s, hook_type, direction, hook_data)`; hook_type
@@ -15736,6 +15806,10 @@ impl EntityAnimationData {
             // Task E (2026-05-12): no cycle resolved → no hooks. JS keeps
             // an empty timeline and the per-frame executor is a no-op.
             hooks: Vec::new(),
+            segment_starts: Vec::new(),
+            segment_counts: Vec::new(),
+            segment_framerates: Vec::new(),
+            segment_anim_ids: Vec::new(),
         }
     }
 }
@@ -15805,6 +15879,11 @@ pub(crate) struct EntityAnimationKeyframesInner {
     pub rest_origins: Vec<f32>,
     pub rest_orientations: Vec<f32>,
     pub hooks: Vec<HookDataPlain>,
+    /// Step-1: per-segment AnimData boundaries (see ConcatenatedMotionBake).
+    pub segment_starts: Vec<u32>,
+    pub segment_counts: Vec<u32>,
+    pub segment_framerates: Vec<f32>,
+    pub segment_anim_ids: Vec<u32>,
 }
 
 /// Post-prefetch body of `fetch_entity_animation_keyframes`. Takes a
@@ -15894,6 +15973,10 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
             rest_origins,
             rest_orientations,
             hooks: Vec::new(),
+            segment_starts: Vec::new(),
+            segment_counts: Vec::new(),
+            segment_framerates: Vec::new(),
+            segment_anim_ids: Vec::new(),
         });
     }
 
@@ -15964,6 +16047,10 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
                     rest_origins,
                     rest_orientations,
                     hooks: Vec::new(),
+                    segment_starts: Vec::new(),
+                    segment_counts: Vec::new(),
+                    segment_framerates: Vec::new(),
+                    segment_anim_ids: Vec::new(),
                 });
             }
         },
@@ -15975,6 +16062,10 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
         duration,
         net_translation,
         net_orientation,
+        segment_starts,
+        segment_counts,
+        segment_framerates,
+        segment_anim_ids,
     } = bake;
     // A5-P3: surface the bake's net rigid root displacement as the 7-float
     // `[tx,ty,tz, qw,qx,qy,qz]` metadata vec (AC w-first quat order).
@@ -16047,6 +16138,10 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
         rest_origins,
         rest_orientations,
         hooks: hooks_out,
+        segment_starts,
+        segment_counts,
+        segment_framerates,
+        segment_anim_ids,
     })
 }
 
@@ -16272,6 +16367,10 @@ fn inner_to_wasm_animation_data(inner: EntityAnimationKeyframesInner) -> EntityA
         rest_origins: inner.rest_origins,
         rest_orientations: inner.rest_orientations,
         hooks,
+        segment_starts: inner.segment_starts,
+        segment_counts: inner.segment_counts,
+        segment_framerates: inner.segment_framerates,
+        segment_anim_ids: inner.segment_anim_ids,
     }
 }
 
