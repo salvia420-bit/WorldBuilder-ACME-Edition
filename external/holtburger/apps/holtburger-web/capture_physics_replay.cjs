@@ -251,11 +251,15 @@ console.log(`[w3a-cap] expanded ${scenario.phases.length} phases → ${tickStrea
   console.log(`[w3a-cap] initial pose: (${probePose.x.toFixed(2)}, ${probePose.y.toFixed(2)}, ${probePose.z.toFixed(2)}) heading=${probePose.heading.toFixed(3)} lb=0x${probePose.lb.toString(16).toUpperCase()}`);
 
   // ─── Wave 3.F: confirm setLastClientPrediction/getLastClientPrediction wired ──
-  // The wasm bundle has these exports from the lib.rs side; the
-  // index.html rAF block calls setLastClientPrediction every tick (per
-  // the W3.F edit). If either symbol is missing, the prediction shadow
-  // stays null and the validator falls back to the legacy `pos` signal,
-  // which structurally cannot pass the 0.10 m bar (W3.A documented gap).
+  // The wasm bundle has these exports from the lib.rs side. UNDER ?renderer=3d
+  // (the default since the 2D-pixi retirement, item 2) the tick-time writer is
+  // `scene3d/camera.js::_advancePrediction` (item 9d, 2026-06-18) — the prior
+  // 2D rAF writer at index.html:8318 was gated on the now-dead 2D sprite. This
+  // capture is renderer-agnostic: it drives the default page + reads the wasm
+  // shadow via getLastClientPrediction, so it validates whichever tap is live.
+  // If either symbol is missing, the prediction shadow stays null and the
+  // validator falls back to the legacy `pos` signal, which structurally cannot
+  // pass the 0.10 m bar (W3.A documented gap).
   const w3fProbe = await page.evaluate(() => {
     const h = window.__sessionHandle;
     return {
