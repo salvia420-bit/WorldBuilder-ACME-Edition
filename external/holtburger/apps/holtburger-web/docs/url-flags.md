@@ -25,6 +25,11 @@ appended to the app URL, e.g. `…/apps/holtburger-web/?renderer=3d&clouds=on`.
 > - `death` (and `on`): Dead (0x0011) plays the collapse ONCE then HOLDS the final prone
 >   frame (one-shot `done`+clamp) — replaces the held-looping pose + racy collapse overlay.
 >   The default (flag-off) STATIONARY→cycle path is untouched.
+> - `cast` (and `on`): cast gestures (in `MotionTable.links`, like swings) build the same
+>   full-body one-shot via `_tryPlayLink` instead of the both-arms-up vibe tween. Covers the
+>   server-echo / remote-caster path. Per-SPELL windup variation stays blocked (no
+>   `prj_spell_id` on the wire — ACE is kept vanilla), and the deeper local `playCastSequence`
+>   (`setTimeout`-paced) replacement is a follow-on; this animates the cast GESTURE, not per-spell.
 > **Logic-verified headlessly** (cargo `motion_sequence` 5/5 parity + one-shot completion;
 > `test_motion_sequence.mjs` poser-vs-mixer maxErr 0; `test_motion_sequence_wasm_smoke.mjs`
 > drives the real compiled wasm 14/14). **In-world render UNVERIFIED** (no eye-test). Swing/

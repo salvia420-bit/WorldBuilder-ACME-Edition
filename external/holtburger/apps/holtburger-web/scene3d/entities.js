@@ -505,6 +505,10 @@ const UNIFIED_MODE = (() => {
 })();
 const UNIFIED_ATTACK = UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
 const UNIFIED_DEATH = UNIFIED_MODE === "death" || UNIFIED_MODE === "on";
+// Cast gestures live in `MotionTable.links` like swings — same one-shot path.
+// Per-SPELL windup variation stays blocked (no prj_spell_id on the wire; ACE is
+// kept vanilla), so this animates the real full-body cast GESTURE, not per-spell.
+const UNIFIED_CAST = UNIFIED_MODE === "cast" || UNIFIED_MODE === "on";
 // Missile rides with attack (both Step 1): an aim-level fire is a CYCLE
 // (class 0x40, in MotionTable.cycles) the links-only swing resolver can't reach.
 const UNIFIED_MISSILE = UNIFIED_MODE === "missile" || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
@@ -8328,17 +8332,21 @@ export class EntityManager {
       }
       return;
     }
-    // Step-1 (?unifiedMotion=attack): drive an attack swing as a FULL-BODY
-    // sequence (retail GetObjectSequence one-shot, acclient.c:337842) instead of
-    // a LoopOnce overlay the locomotion cycle half-blends ("upper-body-only
-    // swing"). The tick loop advances inst._unifiedSeq + poses the rig and
-    // SUPPRESSES the mixer; on completion the stance cycle resumes. Default-off
-    // (UNIFIED_ATTACK false) → unchanged mixer overlay path below.
+    // Step-1/4 (?unifiedMotion=attack|cast): drive an attack swing or a cast
+    // gesture as a FULL-BODY one-shot sequence (retail GetObjectSequence,
+    // acclient.c:337842) instead of a LoopOnce overlay the locomotion cycle
+    // half-blends ("upper-body-only swing") or the both-arms-up cast vibe tween.
+    // Casts, like swings, live in MotionTable.links — same one-shot mechanism.
+    // The tick loop advances inst._unifiedSeq + poses the rig and SUPPRESSES the
+    // mixer; on completion the stance cycle resumes. Default-off → unchanged
+    // mixer overlay path below.
+    const _unifiedCls =
+      (entry?.sequenceDescriptor && typeof classifyMotionCommand === "function")
+        ? classifyMotionCommand(toCmd >>> 0)
+        : null;
     if (
-      UNIFIED_ATTACK &&
-      entry?.sequenceDescriptor &&
-      typeof classifyMotionCommand === "function" &&
-      classifyMotionCommand(toCmd >>> 0) === "attack"
+      (UNIFIED_ATTACK && _unifiedCls === "attack") ||
+      (UNIFIED_CAST && _unifiedCls === "cast")
     ) {
       // Build the swing as a one-shot in the RUST MotionSequence interpreter.
       // The class is read off window.__hbWasm (typeof-guarded): a stale pkg/
