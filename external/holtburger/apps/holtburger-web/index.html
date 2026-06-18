@@ -4650,7 +4650,9 @@ void main() {
             .get("unifiedClientEvent")?.toLowerCase() !== "off";
         } catch (_) { return false; }
       })();
-      // A15-Q4 (2026-06-12 unification): `?unifiedDispatch=on` (default-off)
+      // A15-Q4 (2026-06-12 unification): `?unifiedDispatch` (default-ON as of
+      // W6 flip 2026-06-18; `?unifiedDispatch=off` escape — matches the 3D
+      // side scene3d/loop.js which already defaulted ON)
       // — renderer-neutral core extraction. ON: (1) the load-bearing
       // world-streaming block (terrain/building/envcell wasm bakes + 3D
       // mesh-layer loads, hoisted out of handlePositionUpdate) is owned by
@@ -4664,7 +4666,7 @@ void main() {
       // in lockstep until graduation).
       const __UNIFIED_DISPATCH = (() => {
         const v = new URLSearchParams(window.location.search).get("unifiedDispatch");
-        return v === "on" || v === "true" || v === "1" || v === "yes";
+        return v?.toLowerCase() !== "off";
       })();
       // A1-O4 (2026-06-12 unification): `?singleDriver=on` (default-off)
       // — single frame driver. Inert unless `?renderer=3d` is also present
