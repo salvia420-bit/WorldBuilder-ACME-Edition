@@ -6683,46 +6683,11 @@ void main() {
       // within ~0.5 m of the door part's centre). Returns
       // `{ container, sprite }` on a hit (sprite is the per-part
       // PIXI sprite to rotate), null on no match.
-      function findClosestBuildingPart(doorEntry) {
-        if (!liveScene || !liveScene.buildingMap) return null;
-        if (!doorEntry || !doorEntry.sprite) return null;
-        const doorX = doorEntry.sprite.x;
-        const doorY = doorEntry.sprite.y;
-        // Skip pre-spawn / placeholder positions (entityMap entry
-        // exists at (0, 0) until the first PrivateUpdatePosition).
-        if (doorX === 0 && doorY === 0) return null;
-        let best = null;
-        let bestDist = Infinity;
-        for (const [, buildingContainer] of liveScene.buildingMap) {
-          // Cheap pre-filter: if the door is more than ~30 m from
-          // the building's pivot, skip iterating its children.
-          // Holtburg buildings are at most ~20 m wide; 30 m gives
-          // a comfortable margin without spending cycles on every
-          // non-container in a populated landblock.
-          const bdx = buildingContainer.x - doorX;
-          const bdy = buildingContainer.y - doorY;
-          if (bdx * bdx + bdy * bdy > 900) continue;
-          const cosR = Math.cos(buildingContainer.rotation);
-          const sinR = Math.sin(buildingContainer.rotation);
-          for (const sprite of buildingContainer.children) {
-            const wx = buildingContainer.x
-              + sprite.x * cosR - sprite.y * sinR;
-            const wy = buildingContainer.y
-              + sprite.x * sinR + sprite.y * cosR;
-            const dx = wx - doorX;
-            const dy = wy - doorY;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < bestDist) {
-              bestDist = d2;
-              best = { container: buildingContainer, sprite, d2 };
-            }
-          }
-        }
-        // 25 m^2 = 5 m radius. Beyond that we're matching a
-        // structural sprite that just happens to be the closest in
-        // a small map; rotating it would visibly mis-fire.
-        return best && best.d2 < 25 ? best : null;
-      }
+      // findClosestBuildingPart (2D PIXI door-part spatial match) was RETIRED
+      // 2026-06-18 (2D-PIXI-retirement). It rotated building door-part PIXI
+      // sprites in the 2D renderer; the 3D path rotates inst.root / plays the
+      // Rust door swing instead. Preserved in legacy/door_2d.js. Zero 3D
+      // readers (verified at extraction).
 
       // Phase 4 step 6f (portal destination chips): merge a kind=3
       // META_REFRESH update into an existing entityMap entry. Today
@@ -10685,103 +10650,13 @@ void main() {
                 const doorState = (evt.u32Payload2 >>> 0) === 1
                   ? "open"
                   : "closed";
-                const rotation = doorState === "open" ? Math.PI / 2 : 0;
                 window.__doorStates.set(doorGuid, doorState);
-                if (window.liveScene) {
-                  if (!window.liveScene.doorStates) {
-                    window.liveScene.doorStates = window.__doorStates;
-                  }
-                }
-                // Track which building-part sprite (if any) we
-                // rotated for this door so the close-state branch
-                // unrotates the right one even if the door entity
-                // moved between events. Keyed on door GUID.
-                if (!window.__doorBuildingParts) {
-                  window.__doorBuildingParts = new Map();
-                }
-                let matchedPart = null;
-                // Mirror onto the entity's entry so per-entity
-                // sprite logic (rotation, occlusion fade, future
-                // open-door SFX) can read it directly.
-                if (window.entityMap && window.entityMap.get) {
-                  const entry = window.entityMap.get(doorGuid);
-                  if (entry) {
-                    entry.__doorState = doorState;
-                    // Rotate the door entity's own sprite around
-                    // its anchor (0.5, 0.5). PIXI rotation is
-                    // Z-axis radians. Hinge-frame extraction from
-                    // SetupModel is deferred (see
-                    // `holtburg_test_door_rotation_keyframe` doc
-                    // comment) — for now we approximate by
-                    // rotating around the sprite centre.
-                    if (entry.sprite) {
-                      entry.sprite.rotation = rotation;
-                    }
-                    // Resolve the building's static door part on
-                    // open (so it swings with the entity) or reuse
-                    // the cached match on close (so we unrotate
-                    // the same sprite even if findClosestBuilding-
-                    // Part would now miss because the entity moved).
-                    if (doorState === "open") {
-                      // Phase 6 step E follow-up (2026-05-09): try the
-                      // wasm-side indexed lookup first. The recv-loop's
-                      // ObjectCreate arm registers each DOOR-flagged
-                      // entity against its building part's AABB, so
-                      // most doors resolve in O(1) by GUID instead of
-                      // an O(N parts) spatial scan with a 5 m
-                      // proximity threshold. The spatial heuristic
-                      // stays as fallback for the race window between
-                      // door spawn and the landblock's AABB drain
-                      // (and for admin-spawned dynamic dungeons that
-                      // skip the LandblockInfo.buildings flow).
-                      let resolved = null;
-                      if (typeof handle.getBuildingPartForDoor === "function") {
-                        try {
-                          const ref = handle.getBuildingPartForDoor(doorGuid);
-                          if (ref) {
-                            const lbHex = (ref.landblockId >>> 0)
-                              .toString(16).padStart(8, "0");
-                            const modelHex = (ref.modelId >>> 0)
-                              .toString(16).padStart(8, "0");
-                            const buildingKey =
-                              `${lbHex}_`
-                              + `${ref.originX.toFixed(2)}_${ref.originY.toFixed(2)}_`
-                              + `${modelHex}`;
-                            const buildingContainer =
-                              liveScene && liveScene.buildingMap
-                                ? liveScene.buildingMap.get(buildingKey)
-                                : null;
-                            if (buildingContainer) {
-                              const partSprite = buildingContainer.children
-                                .find((c) => c.__partIndex === ref.partIndex);
-                              if (partSprite) {
-                                resolved = { container: buildingContainer, sprite: partSprite };
-                              }
-                            }
-                          }
-                        } catch (err) {
-                          // Indexed lookup is best-effort. Any failure
-                          // falls back to the spatial heuristic below.
-                          // eslint-disable-next-line no-console
-                          console.warn(
-                            `[phase6.E] getBuildingPartForDoor(0x${doorGuid.toString(16)}) failed:`,
-                            err,
-                          );
-                        }
-                      }
-                      matchedPart = resolved || findClosestBuildingPart(entry);
-                      if (matchedPart) {
-                        window.__doorBuildingParts.set(doorGuid, matchedPart.sprite);
-                      }
-                    } else {
-                      const cached = window.__doorBuildingParts.get(doorGuid);
-                      if (cached) matchedPart = { sprite: cached };
-                    }
-                  }
-                }
-                if (matchedPart && matchedPart.sprite) {
-                  matchedPart.sprite.rotation = rotation;
-                }
+                // The 2D PIXI door-sprite-rotation branch (rotate the door
+                // entity's PIXI sprite + the building's static door-part sprite,
+                // resolved via handle.getBuildingPartForDoor / findClosestBuilding-
+                // Part and cached in __doorBuildingParts) was RETIRED 2026-06-18
+                // (2D-PIXI-retirement) → legacy/door_2d.js. Zero 3D readers
+                // (verified). The 3D path below is the live door renderer.
                 // PR-OO 2026-05-23: 3D path — rotate the door entity's
                 // THREE.Group root around the world-up (Z) axis. The
                 // 2D path above only touches Pixi sprites; the 3D
@@ -10815,8 +10690,7 @@ void main() {
                 }
                 // eslint-disable-next-line no-console
                 console.log(
-                  `[phase6.E] door 0x${doorGuid.toString(16).toUpperCase().padStart(8, "0")} → ${doorState}`
-                  + (matchedPart ? ` (building part rotated)` : ` (no building part match)`),
+                  `[phase6.E] door 0x${doorGuid.toString(16).toUpperCase().padStart(8, "0")} → ${doorState}`,
                 );
               } else if (evt.kind === 17) {
                 // EntityVisibilityChanged — wasm detected that
