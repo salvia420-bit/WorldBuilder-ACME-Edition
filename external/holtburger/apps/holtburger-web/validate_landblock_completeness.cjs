@@ -80,11 +80,16 @@ function parseArgs(argv) {
     ring: { min: 0xa3ae, max: 0xafba },
     out: "/mnt/wbterminal1/tmp/claude-scratch/scenery-bake/e/",
     strict: false,
+    skipSpawns: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === "--strict") {
       args.strict = true;
+    } else if (a === "--skip-spawns") {
+      // PIPE-3: validate terrain/scenery even when spawns aren't staged yet,
+      // instead of hard-exiting before [stage 1].
+      args.skipSpawns = true;
     } else if (a === "--ring") {
       const v = argv[i + 1];
       i += 1;
@@ -99,7 +104,7 @@ function parseArgs(argv) {
       args.out = argv[i + 1];
       i += 1;
     } else {
-      console.error(`FAIL: unknown arg '${a}'. Usage: --ring 0xAAAA..0xBBBB --out DIR [--strict]`);
+      console.error(`FAIL: unknown arg '${a}'. Usage: --ring 0xAAAA..0xBBBB --out DIR [--strict] [--skip-spawns]`);
       process.exit(2);
     }
   }
@@ -169,12 +174,17 @@ if (!fs.existsSync(path.join(DIST_V2, "manifest.json"))) {
   console.error(`FAIL: dist v2 manifest missing at ${DIST_V2}/manifest.json`);
   process.exit(2);
 }
-if (!fs.existsSync(path.join(DIST_V2, "spawns/source.sha256"))) {
+const spawnsPresent = fs.existsSync(path.join(DIST_V2, "spawns/source.sha256"));
+if (!spawnsPresent && args.skipSpawns) {
+  console.warn("WARN: spawns not staged — entity validation skipped (--skip-spawns)");
+} else if (!spawnsPresent) {
   console.error(
-    `FAIL: spawns dir missing at ${DIST_V2}/spawns. Re-stage via Phase D.1 first.`
+    `FAIL: spawns dir missing at ${DIST_V2}/spawns. Re-stage via Phase D.1 first ` +
+    `(or pass --skip-spawns to validate terrain/scenery only).`
   );
   process.exit(2);
 }
+// Scenery is required hard (terrain ground truth) — never softened.
 if (!fs.existsSync(path.join(DIST_V2, "scenery"))) {
   console.error(
     `FAIL: scenery dir missing at ${DIST_V2}/scenery. Re-stage via Phase C.1 first.`

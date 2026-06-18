@@ -260,9 +260,15 @@ public partial class CommandEngine {
                 weenieDescriptors[e.Wcid] = new AceWeenieDescriptor(e.Wcid, e.DisplayName, e.WeenieType);
             }
 
+            // OWNER DECISION (2026-06-17): landblock_instance stays STRICTLY 1:1
+            // — town generator expansion is deferred so the existing per-town
+            // staged files (e.g. Holtburg 0xA9B4 = 106) are byte-stable. Only
+            // the encounter layer (wilderness) expands generators; see
+            // IngestAceEncountersAsync. Do NOT pass generator dicts here.
             var spawnsByLb = SpawnGazetteerBuilder.BuildFromAceLandblockInstances(rows, weenieDescriptors);
             int total = spawnsByLb.Values.Sum(v => v.Count);
             int synthetic = spawnsByLb.Values.SelectMany(v => v).Count(s => s.IsSynthetic);
+            int generatorChildren = total - rows.Count; // 0 while town expansion is deferred
 
             string targetPath = outPath ?? Path.Combine(
                 _projectManager.CurrentProject!.ProjectDirectory, "ace_spawn_records.jsonl");
@@ -273,9 +279,83 @@ public partial class CommandEngine {
                     }
                 }
             }
-            return new IngestAceSpawnsResult(true, spawnsByLb.Count, total, synthetic, targetPath);
+            return new IngestAceSpawnsResult(true, spawnsByLb.Count, total, synthetic, generatorChildren, targetPath);
         } catch (Exception ex) {
-            return new IngestAceSpawnsResult(false, 0, 0, 0, null, ex.Message);
+            return new IngestAceSpawnsResult(false, 0, 0, 0, 0, null, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Pull every <c>encounter</c> row, resolve LB-local placement + terrain
+    /// surface Z, emit the encounter wcid as a Creature plus its generated
+    /// child(ren), and write the resulting <see cref="SpawnRecord"/> set as
+    /// JSONL. With <paramref name="append"/>=true this appends to the same file
+    /// the spawns layer wrote (F5 ordering: spawns truncate, encounters append).
+    /// Fails loud if the terrain height table is synthetic (Region 0x13000000
+    /// absent) so we never stage encounters with bogus Z.
+    /// </summary>
+    public async Task<IngestAceEncountersResult> IngestAceEncountersAsync(
+            string? outPath = null, bool append = false) {
+        RequireProject();
+        try {
+            using var connector = RequireAceDbConnector();
+            var encounters = await connector.GetAllEncountersAsync();
+
+            await EnsureWeenieIndexLoadedAsync();
+            var weenieDescriptors = new Dictionary<int, AceWeenieDescriptor>(_weenieIndex.Count);
+            var childWeenieTypes = new Dictionary<int, int>(_weenieIndex.Count);
+            foreach (var e in _weenieIndex.Entries) {
+                weenieDescriptors[e.Wcid] = new AceWeenieDescriptor(e.Wcid, e.DisplayName, e.WeenieType);
+                childWeenieTypes[e.Wcid] = e.WeenieType;
+            }
+
+            var generatorProfiles = await connector.GetAllGeneratorProfilesAsync();
+            var generatorRadii = await connector.GetGeneratorRadiiAsync();
+            var generatorMaxObjects = await connector.GetGeneratorMaxObjectsAsync();
+
+            // FAIL-LOUD on synthetic terrain: GetHeightAtWorldPosition returns 0
+            // (not throws) when an LB is absent, and GetHeightTable silently
+            // substitutes an i*2 ramp when Region 0x13000000 is missing.
+            var terrainDoc = GetTerrainDoc();
+            var heightTable = GetHeightTable();
+            if (HeightTableIsSynthetic) {
+                return new IngestAceEncountersResult(false, 0, 0, 0, 0, null,
+                    "Region 0x13000000 absent — refusing to stage encounters with synthetic terrain Z");
+            }
+            Func<ushort, float, float, float> surfaceZ = (lbId, localX, localY) => {
+                float worldX = ((lbId >> 8) * 192f) + localX;
+                float worldY = ((lbId & 0xFF) * 192f) + localY;
+                return _terrainService.GetHeightAtWorldPosition(
+                    worldX, worldY, terrainDoc.GetLandblockInternal, heightTable);
+            };
+
+            var encByLb = SpawnGazetteerBuilder.BuildFromAceEncounters(
+                encounters, surfaceZ, weenieDescriptors,
+                generatorProfiles, generatorRadii, generatorMaxObjects, childWeenieTypes);
+            int total = encByLb.Values.Sum(v => v.Count);
+            int synthetic = encByLb.Values.SelectMany(v => v).Count(s => s.IsSynthetic);
+            int zeroZ = encByLb.Values.SelectMany(v => v).Count(s => s.Z == 0f);
+
+            string targetPath = outPath ?? Path.Combine(
+                _projectManager.CurrentProject!.ProjectDirectory, "ace_spawn_records.jsonl");
+            if (append && !File.Exists(targetPath)) {
+                Console.Error.WriteLine("[ace-db-ingest-encounters] WARNING: append=true but " +
+                    $"'{targetPath}' is absent — the spawns layer must land first (F5 ordering).");
+            }
+            using (var w = new StreamWriter(targetPath, append: append)) {
+                foreach (var (lbId, recs) in encByLb) {
+                    foreach (var sp in recs) {
+                        w.WriteLine(JsonSerializer.Serialize(sp, GazetteerJsonOpts));
+                    }
+                }
+            }
+            if (zeroZ > 0) {
+                Console.Error.WriteLine($"[ace-db-ingest-encounters] WARNING: {zeroZ} record(s) " +
+                    "have Z==0 (terrain miss at those landblocks).");
+            }
+            return new IngestAceEncountersResult(true, encByLb.Count, total, synthetic, zeroZ, targetPath);
+        } catch (Exception ex) {
+            return new IngestAceEncountersResult(false, 0, 0, 0, 0, null, ex.Message);
         }
     }
 }

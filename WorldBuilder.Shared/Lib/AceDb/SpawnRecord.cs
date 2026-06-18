@@ -17,9 +17,11 @@ namespace WorldBuilder.Shared.Lib.AceDb;
 /// per tile.
 /// </param>
 /// <param name="Generator">
-/// Spawn provenance hint: "Static" | "Linkable" | "Respawn" | "Unknown".
+/// Spawn provenance hint: "Static" | "Linkable" | "Respawn" | "Encounter" | "Unknown".
 /// LSD source maps from the placement-system field; ACE source maps from
-/// generator type or "Static" for direct landblock_instance rows.
+/// generator type, "Encounter" for encounter-table fauna, or "Static" for
+/// direct landblock_instance rows. The renderer ignores this; the stager
+/// drops it (ingest-side provenance + a dedup discriminator).
 /// </param>
 /// <param name="LandblockId">
 /// Owning landblock key (high byte = lbX, low byte = lbY). Lets a single

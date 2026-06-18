@@ -93,6 +93,28 @@ def dir_nonempty(d: Path) -> bool:
         return False
 
 
+def count_suffix(d: Path, suffix: str) -> int:
+    """Count files ending in `suffix` (e.g. only `.spawns.jsonl`, ignoring
+    README.md / wcid_to_setup.json / source.sha256 / per-LB .sha256 sidecars)."""
+    try:
+        return sum(1 for e in os.scandir(d) if e.is_file() and e.name.endswith(suffix))
+    except OSError:
+        return 0
+
+
+def parse_sha256_meta(path: Path) -> dict:
+    """Parse a TSV `key\\tvalue` provenance sidecar (source.sha256)."""
+    meta: dict[str, str] = {}
+    try:
+        for line in path.read_text().splitlines():
+            if "\t" in line:
+                k, v = line.split("\t", 1)
+                meta[k] = v
+    except OSError:
+        pass
+    return meta
+
+
 def ensure_dist_symlink(root: Path, allow_missing: bool) -> None:
     """Make `external/holtburger/dist` point at `root`, creating/repairing as
     needed. The whole point: a fresh checkout/worktree gets the binding for free.
@@ -134,6 +156,32 @@ def build_health():
 
     for name in REQUIRED_DIRS + RECOMMENDED_DIRS:
         d = DIST_LINK / name
+        if name == "spawns":
+            # DIST-1: content-aware — a spawns/ dir holding only README.md +
+            # wcid_to_setup.json (the old `{}` stub failure mode) must NOT read
+            # present. Require real per-LB JSONL + the provenance sidecar, and
+            # surface scope / populated-lbs so a content-blind dir can't go green.
+            jsonl = count_suffix(d, ".spawns.jsonl") if d.is_dir() else 0
+            sha = d / "source.sha256"
+            present = jsonl > 0 and sha.is_file()
+            layer = {"present": present, "files": jsonl}
+            if sha.is_file():
+                meta = parse_sha256_meta(sha)
+                if "scope" in meta:
+                    layer["scope"] = meta["scope"]
+                if "populated-lbs" in meta:
+                    try:
+                        layer["populated_lbs"] = int(meta["populated-lbs"])
+                    except ValueError:
+                        pass
+                if "wcid-to-setup-scope" in meta:
+                    layer["wcid_to_setup_scope"] = meta["wcid-to-setup-scope"]
+            layers[name] = layer
+            if not present:
+                failures.append(
+                    f"layer 'spawns/' has no .spawns.jsonl + source.sha256 at {d} "
+                    "(README/wcid_to_setup alone is not a staged world)")
+            continue
         present = d.is_dir() and dir_nonempty(d)
         files = count_files(d) if (name in COUNTED_DIRS and d.is_dir()) else (1 if present else 0)
         layers[name] = {"present": present, "files": files}

@@ -612,12 +612,14 @@ function makeServer() {
           `outOfBounds=${summary.holtburgPositionsOutOfBounds}`
       );
 
-      // Placeholder split — diag only, not a hard fail. The 13×13
-      // ring resolves 193/193 wcids per the staging stats, so a
-      // healthy run expects placeholderCount=0.
-      console.log(
-        `[stage 5] placeholder split: ` +
-          `${summary.placeholderCount} placeholder / ${summary.realModelCount} real-model`
+      // Placeholder split — now a HARD gate (HARNESS-FIX). With WEENIE-1's
+      // wcid_to_setup.json staged, every resolved spawn must map to a real
+      // setup; any placeholder (the 0x0200016F fallback) means a wcid was
+      // absent from the map — a staging regression, not a render quirk.
+      check(
+        "placeholderCount === 0 after WEENIE-1 (no unresolved-setup placeholders)",
+        (summary.placeholderCount ?? 0) === 0,
+        `${summary.placeholderCount} placeholder / ${summary.realModelCount} real-model`
       );
     }
 

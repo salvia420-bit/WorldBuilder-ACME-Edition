@@ -45,7 +45,12 @@ from pathlib import Path
 RING_X_RANGE = range(163, 176)   # inclusive 163..=175
 RING_Y_RANGE = range(174, 187)   # inclusive 174..=186
 
-DEFAULT_SOURCE = "/home/wbterminal/projects/RetailSmoke/ace_spawn_records.jsonl"
+# PIPE-4: env-overridable so the laptop / buildbox / CI can point at freshly
+# ingested artifacts without editing the script (mirrors HOLTBURGER_DIST below).
+DEFAULT_SOURCE = (
+    os.environ.get("ACE_SPAWN_SOURCE")
+    or "/home/wbterminal/projects/RetailSmoke/ace_spawn_records.jsonl"
+)
 
 # Single canonical baked-data root (see scripts/serve.py). All layers stage as
 # real subdirs of it; the legacy HOLTBURGER_DIST_V2 is honoured as a fallback.
@@ -55,7 +60,10 @@ HOLTBURGER_DIST = (
     or "/mnt/wbterminal2/holtburger-dist"
 )
 DEFAULT_OUT = os.path.join(HOLTBURGER_DIST, "spawns")
-DEFAULT_WEENIE_INDEX = "/home/wbterminal/projects/RetailSmoke/weenie_index.jsonl"
+DEFAULT_WEENIE_INDEX = (
+    os.environ.get("ACE_WEENIE_INDEX")
+    or "/home/wbterminal/projects/RetailSmoke/weenie_index.jsonl"
+)
 
 
 def lb_hex(landblock_id: int) -> str:
@@ -109,6 +117,8 @@ def normalise_record(rec: dict) -> dict:
         "z": rec["z"],
         "isServerManaged": bool(rec.get("isServerManaged", True)),
         "orientationIsIdentity": bool(rec.get("orientation", {}).get("isIdentity", False)),
+        # Transient dedup/drop-gate discriminator (B1); stripped before write.
+        "_generator": rec.get("generator", ""),
     }
     qw = rec.get("qw")
     if qw is not None:
@@ -126,13 +136,48 @@ def normalise_record(rec: dict) -> dict:
     return out
 
 
-def write_lb_jsonl(out_dir: Path, lb: int, records: list[dict]) -> None:
-    """Write one LB's JSONL, sorted deterministically.
+def write_lb_jsonl(out_dir: Path, lb: int, records: list[dict],
+                   setup_wcids: set[int] | None = None) -> int:
+    """Write one LB's JSONL, deduped + drop-gated + sorted deterministically.
 
     Sort key: (cell, x, y, z, wcid). Stable across re-runs given the
     same source JSONL. The empty-file invariant: every LB in the ring
     gets a file, even when records is [].
+
+    DEDUP-B1: collapse exact (cell, round(x,3), round(y,3), wcid) duplicates
+    that arise where an encounter cell coincides with a landblock_instance
+    placement, preferring the non-"Encounter" survivor so named statics win
+    over wilderness fauna. Setup-DID drop gate: a generator/encounter marker
+    whose wcid has no visible setup (absent from `setup_wcids`) is invisible
+    and would render as a placeholder — drop it. Static rows are never gated,
+    so the per-town 1:1 record counts (e.g. Holtburg 0xA9B4 = 106) hold.
+
+    Returns the count of records written.
     """
+    # Setup-DID drop gate (only generator/encounter markers; Static untouched).
+    if setup_wcids is not None:
+        records = [
+            r for r in records
+            if r.get("_generator", "") not in ("Encounter", "Respawn")
+            or r["wcid"] in setup_wcids
+        ]
+
+    # DEDUP-B1: keep one record per (cell, round(x,3), round(y,3), wcid),
+    # preferring a non-Encounter survivor on a tie.
+    deduped: dict[tuple, dict] = {}
+    for r in records:
+        key = (r["cell"], round(r["x"], 3), round(r["y"], 3), r["wcid"])
+        prev = deduped.get(key)
+        if prev is None:
+            deduped[key] = r
+        elif prev.get("_generator", "") == "Encounter" and r.get("_generator", "") != "Encounter":
+            deduped[key] = r  # named static wins over wilderness fauna
+    records = list(deduped.values())
+
+    # Strip the transient discriminator before serialisation.
+    for r in records:
+        r.pop("_generator", None)
+
     records.sort(key=lambda r: (r["cell"], r["x"], r["y"], r["z"], r["wcid"]))
     path = out_dir / f"{lb_hex(lb)}.spawns.jsonl"
     # Strict JSON serialisation — sort_keys for byte-identical output
@@ -149,6 +194,7 @@ def write_lb_jsonl(out_dir: Path, lb: int, records: list[dict]) -> None:
     # tampering downstream of the bake, and stale CDN caches.
     sha = sha256_file(path)
     (path.parent / f"{path.name}.sha256").write_text(sha + "\n")
+    return len(records)
 
 
 def write_readme(out_dir: Path) -> None:
@@ -212,21 +258,13 @@ same spawn snapshot.
     (out_dir / "README.md").write_text(content)
 
 
-def write_wcid_to_setup(out_dir: Path, ring_wcids: set[int],
-                         weenie_index_path: Path) -> dict:
-    """Stage a `wcid_to_setup.json` mapping for the ring's wcids.
-
-    The renderer's synthetic injector reads this to resolve a SetupModel
-    DID (0x02xxxxxx) for each spawn record — the JSONL itself doesn't
-    carry the setup_id. Filtered to ring wcids only so the file stays
-    tiny (~4 KB for the 13x13 ring vs ~1 MB for all 43k weenies).
-
-    Returns a stats dict (entry counts, miss list).
-    """
+def load_setup_map(weenie_index_path: Path) -> dict[int, int] | None:
+    """Load the full {wcid: setupDid} map from the weenie index, or None when
+    the index file is absent. Only setup-bearing entries are returned (the
+    index already filters to withSetupDid)."""
     if not weenie_index_path.exists():
-        return {"missing_input": True, "entries": 0, "missing_wcids": list(ring_wcids)}
-
-    wcid_to_setup: dict[int, int] = {}
+        return None
+    full: dict[int, int] = {}
     with weenie_index_path.open() as f:
         for line in f:
             line = line.strip().lstrip("﻿")
@@ -238,30 +276,74 @@ def write_wcid_to_setup(out_dir: Path, ring_wcids: set[int],
                 continue
             setup = rec.get("setupDid")
             if setup:
-                wcid_to_setup[rec["wcid"]] = setup
+                full[rec["wcid"]] = setup
+    return full
 
-    out_map: dict[str, int] = {}
-    missing: list[int] = []
-    for w in sorted(ring_wcids):
-        setup = wcid_to_setup.get(w)
-        if setup:
-            out_map[str(w)] = setup
-        else:
-            missing.append(w)
 
-    (out_dir / "wcid_to_setup.json").write_text(
-        json.dumps(out_map, sort_keys=True, indent=2)
-    )
+def write_wcid_to_setup(out_dir: Path, ring_wcids: set[int],
+                         full_setup_map: dict[int, int] | None,
+                         full_map: bool = False) -> dict:
+    """Stage a `wcid_to_setup.json` mapping the renderer's synthetic injector
+    reads to resolve a SetupModel DID (0x02xxxxxx) per spawn record.
+
+    WEENIE-A4.2: a MISSING index writes NO file and warns loudly (the deployed
+    3-byte `{}` stub previously masqueraded as "WEENIE-1 landed"); an
+    index-present-but-empty result also skips the write. WEENIE-A4.3: with
+    `full_map` (default ON under --all-world) emit EVERY setup-bearing entry
+    (covers encounter/generator-child wcids landblock_instance never placed),
+    serialised compactly.
+
+    Returns a stats dict (entry counts, miss list, scope).
+    """
+    if full_setup_map is None:
+        print(
+            "WARN: weenie index absent — wcid_to_setup.json NOT written. "
+            "Set ACE_WEENIE_INDEX (or --weenie-index) to the ingested "
+            "weenie_index.jsonl. Without it the renderer falls back to the "
+            "placeholder setup 0x0200016F for EVERY spawn (100% placeholders).",
+            file=sys.stderr,
+        )
+        return {"missing_input": True, "entries": 0,
+                "missing_wcids": sorted(ring_wcids), "scope": "missing"}
+
+    if full_map:
+        out_map = {str(w): s for w, s in full_setup_map.items()}
+        missing = [w for w in sorted(ring_wcids) if w not in full_setup_map]
+        scope = "full-index"
+        dumped = json.dumps(out_map, sort_keys=True)  # compact for the 43k map
+    else:
+        out_map = {}
+        missing = []
+        for w in sorted(ring_wcids):
+            setup = full_setup_map.get(w)
+            if setup:
+                out_map[str(w)] = setup
+            else:
+                missing.append(w)
+        scope = "staged-wcids"
+        dumped = json.dumps(out_map, sort_keys=True, indent=2)
+
+    if not out_map:
+        # Never ship a misleading empty `{}` (WEENIE-A4.2 causal fix).
+        print("WARN: wcid_to_setup map is empty — skipping wcid_to_setup.json "
+              "(no setup-bearing wcids resolved).", file=sys.stderr)
+        return {"missing_input": False, "entries": 0,
+                "missing_wcids": missing, "scope": scope}
+
+    (out_dir / "wcid_to_setup.json").write_text(dumped)
 
     return {
+        "missing_input": False,
         "entries": len(out_map),
         "missing_wcids": missing,
-        "missing_input": False,
+        "scope": scope,
     }
 
 
 def stage_spawns(source_path: Path, out_dir: Path,
-                  weenie_index_path: Path, all_world: bool = False) -> dict:
+                  weenie_index_path: Path, all_world: bool = False,
+                  full_map: bool | None = None,
+                  require_weenie_index: bool = False) -> dict:
     """Read source JSONL, partition by LB into per-LB files, write sha256.
 
     Ring mode (default): keep only the 13x13 Holtburg ring, pre-seeding an
@@ -273,6 +355,19 @@ def stage_spawns(source_path: Path, out_dir: Path,
     if not source_path.exists():
         raise SystemExit(f"FAIL: source missing: {source_path}")
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # --full-wcid-map defaults ON under --all-world (A4.3).
+    if full_map is None:
+        full_map = all_world
+
+    # Load the setup map once: feeds the drop gate (invisible generator/
+    # encounter markers) AND wcid_to_setup.json.
+    full_setup_map = load_setup_map(weenie_index_path)
+    if full_setup_map is None and require_weenie_index:
+        raise SystemExit(
+            f"FAIL: --require-weenie-index set but weenie index missing: "
+            f"{weenie_index_path}")
+    setup_wcids = set(full_setup_map) if full_setup_map is not None else None
 
     ring = None if all_world else ring_lb_set()
     # World mode pre-seeds the 13x13 ring as empties so the whole-world bake is
@@ -309,13 +404,16 @@ def stage_spawns(source_path: Path, out_dir: Path,
             per_lb[lb].append(normalise_record(rec))
             ring_wcids.add(rec["wcid"])
 
-    # Write per-LB files (empties included)
+    # Write per-LB files (empties included). Counts reflect post-dedup /
+    # post-drop-gate records actually on disk, not raw lines read.
     populated = 0
     empty = 0
+    total_written = 0
     for lb in sorted(per_lb.keys()):
         recs = per_lb[lb]
-        write_lb_jsonl(out_dir, lb, recs)
-        if recs:
+        written = write_lb_jsonl(out_dir, lb, recs, setup_wcids)
+        total_written += written
+        if written:
             populated += 1
         else:
             empty += 1
@@ -324,7 +422,12 @@ def stage_spawns(source_path: Path, out_dir: Path,
     # consumers (Phase E will verify against expected hashes).
     src_sha = sha256_file(source_path)
 
-    wcid_stats = write_wcid_to_setup(out_dir, ring_wcids, weenie_index_path)
+    wcid_stats = write_wcid_to_setup(out_dir, ring_wcids, full_setup_map,
+                                     full_map=full_map)
+
+    weenie_sha = (sha256_file(weenie_index_path)
+                  if full_setup_map is not None else "MISSING")
+    weenie_name = weenie_index_path.name if full_setup_map is not None else "MISSING"
 
     scope = "world" if ring is None else "ring"
     lb_count = len(per_lb) if ring is None else len(ring)
@@ -344,10 +447,13 @@ def stage_spawns(source_path: Path, out_dir: Path,
         + f"lb-count\t{lb_count}\n"
         f"populated-lbs\t{populated}\n"
         f"empty-lbs\t{empty}\n"
-        f"total-records\t{total_kept}\n"
+        f"total-records\t{total_written}\n"
         f"unique-wcids\t{len(ring_wcids)}\n"
         f"wcid-to-setup-entries\t{wcid_stats['entries']}\n"
         f"wcid-to-setup-missing\t{len(wcid_stats['missing_wcids'])}\n"
+        f"wcid-to-setup-scope\t{wcid_stats['scope']}\n"
+        f"weenie-index-sha256\t{weenie_sha}\n"
+        f"weenie-index-name\t{weenie_name}\n"
     )
 
     write_readme(out_dir)
@@ -355,6 +461,7 @@ def stage_spawns(source_path: Path, out_dir: Path,
     return {
         "total_seen": total_seen,
         "total_kept": total_kept,
+        "total_written": total_written,
         "ring_size": lb_count,
         "ring_wcids": len(ring_wcids),
         "populated": populated,
@@ -362,6 +469,7 @@ def stage_spawns(source_path: Path, out_dir: Path,
         "source_sha256": src_sha,
         "wcid_to_setup_entries": wcid_stats["entries"],
         "wcid_to_setup_missing": wcid_stats["missing_wcids"],
+        "wcid_to_setup_scope": wcid_stats["scope"],
     }
 
 
@@ -377,24 +485,37 @@ def main() -> int:
                     help="Stage EVERY landblock present in the source (whole "
                          "world), not just the 13x13 Holtburg ring. Emits a "
                          "file only for LBs that have spawns.")
+    ap.add_argument("--full-wcid-map", dest="full_map", action="store_true",
+                    default=None,
+                    help="Emit EVERY setup-bearing weenie into wcid_to_setup.json "
+                         "(default ON under --all-world; covers encounter/"
+                         "generator-child wcids landblock_instance never placed).")
+    ap.add_argument("--no-full-wcid-map", dest="full_map", action="store_false",
+                    help="Force the ring-scoped (staged-wcids only) map.")
+    ap.add_argument("--require-weenie-index", action="store_true",
+                    help="Hard-fail (exit 1) if the weenie index is missing "
+                         "rather than warning and skipping wcid_to_setup.json.")
     args = ap.parse_args()
 
     src = Path(args.source)
     out = Path(args.out)
     weenie_index = Path(args.weenie_index)
-    stats = stage_spawns(src, out, weenie_index, all_world=args.all_world)
+    stats = stage_spawns(src, out, weenie_index, all_world=args.all_world,
+                         full_map=args.full_map,
+                         require_weenie_index=args.require_weenie_index)
 
     print(f"Phase D.1.a — staged spawn records")
     print(f"=================================")
     print(f"source            : {src}")
     print(f"out               : {out}")
     print(f"records scanned   : {stats['total_seen']}")
-    print(f"records kept      : {stats['total_kept']}  (ring={stats['ring_size']})")
+    print(f"records written   : {stats['total_written']}  (ring={stats['ring_size']})")
     print(f"  populated LBs   : {stats['populated']}")
     print(f"  empty LBs       : {stats['empty']}")
     print(f"ring unique wcids : {stats['ring_wcids']}")
     print(f"wcid_to_setup ents: {stats['wcid_to_setup_entries']}  "
-          f"(missing={len(stats['wcid_to_setup_missing'])})")
+          f"(scope={stats['wcid_to_setup_scope']}, "
+          f"missing={len(stats['wcid_to_setup_missing'])})")
     print(f"source.sha256     : {stats['source_sha256']}")
     return 0
 

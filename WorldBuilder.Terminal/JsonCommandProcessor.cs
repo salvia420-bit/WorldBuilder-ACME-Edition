@@ -224,6 +224,7 @@ public class JsonCommandProcessor {
             ["ace-db-ingest-npcs"] = CmdAceDbIngestNpcs,
             ["ace-db-ingest-housing"] = CmdAceDbIngestHousing,
             ["ace-db-ingest-spawns"] = CmdAceDbIngestSpawns,
+            ["ace-db-ingest-encounters"] = CmdAceDbIngestEncounters,
             ["ace-db-ingest-weenie-index"] = CmdAceDbIngestWeenieIndex,
             ["compare-creatures-to-retail"] = _ => CmdCompareCreaturesToRetail(),
             ["benchmark"] = _ => CmdBenchmark(),
@@ -2527,7 +2528,8 @@ public class JsonCommandProcessor {
             new { name = "ace-db-ingest-creatures", args = "out?",                              description = "Pull creature roster from ACE DB → creature_gazetteer.json" },
             new { name = "ace-db-ingest-npcs",      args = "out?",                              description = "Pull NPC roster from ACE DB → npc_gazetteer.json" },
             new { name = "ace-db-ingest-housing",   args = "out?",                              description = "Pull housing portal roster from ACE DB → housing_gazetteer.json" },
-            new { name = "ace-db-ingest-spawns",    args = "out?",                              description = "Pull every landblock_instance row → ace_spawn_records.jsonl (SpawnRecord shape)" },
+            new { name = "ace-db-ingest-spawns",    args = "out?",                              description = "Pull every landblock_instance row (+ generator children) → ace_spawn_records.jsonl (SpawnRecord shape)" },
+            new { name = "ace-db-ingest-encounters", args = "out? append?",                      description = "Pull every encounter row (+ generator children) → SpawnRecords; append:true merges into the spawns file" },
             new { name = "ace-db-ingest-weenie-index", args = "out?",                           description = "Pull canonical wcid → identity (setup, name, type) → weenie_index.jsonl" },
             new { name = "compare-creatures-to-retail", args = "",                              description = "Jaccard similarity of project's spawn gazetteer vs. ACE creature/NPC rosters (global wcid sets; housing = counts only, jaccard not computed; novelWcids/missingWcids capped at 50 with novelTotal/missingTotal pre-truncation counts)" },
             new { name = "benchmark",        args = "",                                         description = "Run speed test suite (terrain, objects, validation, bulk). Non-destructive: snapshots the first 50 populated landblocks and restores them afterward (landblocksRestored). Reports failedObjectPlacements (excluded from opsPerSec)." },
@@ -2942,7 +2944,17 @@ public class JsonCommandProcessor {
         var r = _engine.IngestAceSpawnsAsync(outPath).GetAwaiter().GetResult();
         return Serialize(new { success = r.Success, command = "ace-db-ingest-spawns",
             landblocksTouched = r.LandblocksTouched, recordsWritten = r.RecordsWritten,
-            syntheticRecords = r.SyntheticRecords,
+            syntheticRecords = r.SyntheticRecords, generatorChildren = r.GeneratorChildren,
+            outputPath = r.OutputPath, error = r.Error });
+    }
+
+    private string CmdAceDbIngestEncounters(System.Text.Json.Nodes.JsonNode node) {
+        var outPath = node["out"]?.GetValue<string>();
+        var append = node["append"]?.GetValue<bool>() ?? false;
+        var r = _engine.IngestAceEncountersAsync(outPath, append).GetAwaiter().GetResult();
+        return Serialize(new { success = r.Success, command = "ace-db-ingest-encounters",
+            landblocksTouched = r.LandblocksTouched, recordsWritten = r.RecordsWritten,
+            syntheticRecords = r.SyntheticRecords, zeroZRecords = r.ZeroZRecords,
             outputPath = r.OutputPath, error = r.Error });
     }
 

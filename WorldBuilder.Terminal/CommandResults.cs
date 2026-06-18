@@ -1480,6 +1480,16 @@ public record IngestAceSpawnsResult(
     int LandblocksTouched,
     int RecordsWritten,
     int SyntheticRecords,
+    int GeneratorChildren,
+    string? OutputPath,
+    string? Error = null);
+
+public record IngestAceEncountersResult(
+    bool Success,
+    int LandblocksTouched,
+    int RecordsWritten,
+    int SyntheticRecords,
+    int ZeroZRecords,
     string? OutputPath,
     string? Error = null);
 

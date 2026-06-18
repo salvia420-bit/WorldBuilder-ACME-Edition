@@ -4319,7 +4319,8 @@ public class TerminalRepl {
             Console.WriteLine("  ingest-creatures [out]                     Pull creature roster → JSON");
             Console.WriteLine("  ingest-npcs [out]                          Pull NPC roster → JSON");
             Console.WriteLine("  ingest-housing [out]                       Pull housing portal roster → JSON");
-            Console.WriteLine("  ingest-spawns [out]                        Pull every landblock_instance → JSONL");
+            Console.WriteLine("  ingest-spawns [out]                        Pull every landblock_instance (+ gen children) → JSONL");
+            Console.WriteLine("  ingest-encounters [out] [append]           Pull every encounter (+ gen children) → JSONL (append merges)");
             Console.WriteLine("  ingest-weenie-index [out]                  Pull canonical wcid → identity map → JSONL");
             return;
         }
@@ -4337,10 +4338,11 @@ public class TerminalRepl {
             case "ingest-npcs":         HandleAceDbIngestNpcs(tokens); break;
             case "ingest-housing":      HandleAceDbIngestHousing(tokens); break;
             case "ingest-spawns":       HandleAceDbIngestSpawns(tokens); break;
+            case "ingest-encounters":   HandleAceDbIngestEncounters(tokens); break;
             case "ingest-weenie-index": HandleAceDbIngestWeenieIndex(tokens); break;
             default:
                 Console.WriteLine($"Unknown ace-db sub-command: '{sub}'");
-                Console.WriteLine("  Available: connect, status, query-instances, reposition, export-sql, stats, clear-instances, ingest-creatures, ingest-npcs, ingest-housing, ingest-spawns, ingest-weenie-index");
+                Console.WriteLine("  Available: connect, status, query-instances, reposition, export-sql, stats, clear-instances, ingest-creatures, ingest-npcs, ingest-housing, ingest-spawns, ingest-encounters, ingest-weenie-index");
                 break;
         }
     }
@@ -4389,7 +4391,23 @@ public class TerminalRepl {
         Console.WriteLine("Pulling landblock_instance rows from ACE DB...");
         var r = _engine.IngestAceSpawnsAsync(outPath).GetAwaiter().GetResult();
         if (r.Success) {
-            Console.WriteLine($"  ✓ {r.RecordsWritten} spawns across {r.LandblocksTouched} LBs ({r.SyntheticRecords} synthetic) → {r.OutputPath}");
+            Console.WriteLine($"  ✓ {r.RecordsWritten} spawns across {r.LandblocksTouched} LBs ({r.SyntheticRecords} synthetic, {r.GeneratorChildren} generator children) → {r.OutputPath}");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ {r.Error}");
+            Console.ResetColor();
+        }
+    }
+
+    private void HandleAceDbIngestEncounters(string[] tokens) {
+        string? outPath = tokens.Length > 2 ? tokens[2] : null;
+        bool append = tokens.Length > 3
+            && (tokens[3].Equals("append", StringComparison.OrdinalIgnoreCase)
+                || tokens[3].Equals("true", StringComparison.OrdinalIgnoreCase));
+        Console.WriteLine("Pulling encounter rows from ACE DB...");
+        var r = _engine.IngestAceEncountersAsync(outPath, append).GetAwaiter().GetResult();
+        if (r.Success) {
+            Console.WriteLine($"  ✓ {r.RecordsWritten} encounter records across {r.LandblocksTouched} LBs ({r.SyntheticRecords} synthetic, {r.ZeroZRecords} zero-Z) → {r.OutputPath}");
         } else {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"  ✗ {r.Error}");
