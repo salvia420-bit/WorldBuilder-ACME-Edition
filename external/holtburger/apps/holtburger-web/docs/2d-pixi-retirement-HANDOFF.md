@@ -31,11 +31,15 @@ pipeline→legacy/render_2d.js · `1222a1f1`+`3f4e0775` 7b entity dispatch→leg
   stops `drainEntityEvents3D` double-consuming). Removed only `deferredSpawns` + `__deferredSpawnsOverflowWarned`
   decls + the dangling-`renderNeighbourhood` 2D else-block. index.html 9097→9065. (Minor dead colourMap compute
   left — out of scope.)
-- **9** — 2D captures: move/delete the dead ones; **PORT to 3D**: capture_phase4_step3, phase6_step_a_geometry,
-  phase6_step_e_doors, capture_physics_replay; fix the `harness/run-all.mjs:417-422` skip-as-green clause.
-  **+ item-5's 3D oracle tap**: add a `setLastClientPrediction` call in `scene3d/camera.js _advancePrediction`
-  (from `predictedPlayerPos` + the 3D velocity; Rust setter exported `lib.rs:26875`) — additive (write-only
-  validation buffer, can't cause snapback), validated by the ported physics_replay (NOT the loads/spawns smoke).
+- **9** — MOSTLY DONE (iters 15-18). 9a deleted 16 dead/redundant 2D captures (`cc8d7134` + manifest
+  `docs/2d-pixi-retirement-DELETED-CAPTURES.md`). 9b: physics_replay 3D-aligned (`84876160`, already
+  renderer-agnostic); phase4_step3 + phase6_step_a were redundant-with-3D-siblings (deleted in 9a, not ported);
+  phase6_step_e_doors blind-ported to 3D (`e9f4f482`, UNVALIDATED — needs Playwright). 9d oracle tap shipped
+  (`18dddb76`, additive/write-only, tap-firing unvalidated). **9c STILL OPEN** — the `run-all.mjs` skip-as-green
+  clause. Architectural snag: `runTier` uses `stdio:"inherit"` + GREEN-by-exit-code, and child runners fold
+  skip→exit 0, so run-all can't distinguish skip-from-pass without capturing child output (loses the
+  deliberate live-streaming) or a child-runner protocol change. Needs a design call (minimal honest-message
+  fix vs full output-capture + `--strict-skips`).
 - **10** — WS-B poser teardown (now unblocked, `unifiedMotion` default-on for the 5 classes): delete
   `scene3d/entities.js` `setSwingPose`/`setCastPose` + swing/cast tweens + `FULL_BODY_ONE_SHOT` + the
   death/door one-shot posers superseded by the Rust authority. **KEEP** `CROSSFADE_S`/`RESUME_WINDOW` + the
