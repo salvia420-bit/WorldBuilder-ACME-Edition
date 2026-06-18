@@ -477,16 +477,22 @@ import {
   acToThree,
 } from "./adapter.js";
 import { AnimationCache, cycleTimeScale, hasRootMotion } from "./animation.js";
-// Step-1 Layer 2 (docs/animation-audit §5): route attack swings through the ported
-// MotionSequence (full-body, retail-faithful) instead of the mixer overlay that
-// the locomotion cycle half-blends into the "upper-body-only swing" bug.
-// Default-OFF — enable with ?unifiedMotion=attack (or =on). UNVERIFIED in-world
-// pending a 1070 eye-test; safe behind the flag.
-import { sequenceFromAnimationData, poseRig } from "./motion/motion_sequence.js";
-// Inline flag read (NOT the imported helper) so module-load works in the
+// Animation consolidation (docs/animation-audit §5): route attack swings through
+// the RUST MotionSequence interpreter (full-body, retail-faithful, cargo-tested —
+// src/motion_sequence.rs) instead of the mixer overlay that the locomotion cycle
+// half-blends into the "upper-body-only swing" bug. The wasm `MotionSequence`
+// class is read at runtime off `window.__hbWasm` (set during boot) so a stale
+// pkg/ soft-degrades to the mixer overlay. `poseRigAt` is the JS-only per-part
+// pose write (the one step that can't live in Rust). Default-OFF — enable with
+// ?unifiedMotion=attack (or =on).
+import { poseRigAt } from "./motion/motion_sequence.js";
+// Reused empties for the absent fields of MotionSequence.fromDescriptor.
+const EMPTY_F32 = new Float32Array(0);
+const EMPTY_U32 = new Uint32Array(0);
+// Inline flag read (NOT an imported helper) so module-load works in the
 // source-eval headless harness that doesn't resolve ESM imports — matches the
-// FULL_BODY_ONE_SHOT pattern. sequenceFromAnimationData/poseRig are referenced
-// only inside the flag-on runtime branches, so an unresolved import is inert when off.
+// FULL_BODY_ONE_SHOT pattern. The wasm MotionSequence + poseRigAt are referenced
+// only inside the flag-on runtime branches, so they're inert when off.
 const UNIFIED_ATTACK = (() => {
   try {
     const v = new URLSearchParams(
@@ -2330,6 +2336,12 @@ class EntityInstance {
       this.mixer.stopAllAction();
       this.mixer.uncacheRoot(this.root);
     } catch (_) {}
+    // Free a mid-swing wasm MotionSequence (?unifiedMotion=attack) so a despawn
+    // during a swing doesn't leak the Rust-side allocation.
+    if (this._unifiedAttack) {
+      try { this._unifiedAttack.seq.free(); } catch (_) {}
+      this._unifiedAttack = null;
+    }
     // Perf B3 (2026-05-18) — walk the rig BEFORE detaching from the
     // scene graph so traverse() still has the part-Mesh subtree
     // attached. The helper disposes per-Mesh geometry + materials only
@@ -6544,7 +6556,10 @@ export class EntityManager {
     // Step-1: a new locomotion/stance command ends any in-progress unified
     // attack override so movement stays responsive (the cycle takes over). No-op
     // when ?unifiedMotion=attack is off (the field is never set).
-    if (inst._unifiedAttack) inst._unifiedAttack = null;
+    if (inst._unifiedAttack) {
+      try { inst._unifiedAttack.seq.free(); } catch (_) { /* already freed */ }
+      inst._unifiedAttack = null;
+    }
     // A1: stash the playback speed (fail-soft to 1.0 for non-finite /
     // non-positive). Read by the locomotion timeScale composition below
     // and by the per-frame T11 velScale tick.
@@ -8225,10 +8240,27 @@ export class EntityManager {
       typeof classifyMotionCommand === "function" &&
       classifyMotionCommand(toCmd >>> 0) === "attack"
     ) {
-      const seq = sequenceFromAnimationData(entry.sequenceDescriptor, { cyclic: false });
-      if (seq) {
-        inst._unifiedAttack = { seq };
-        return; // skip the mixer overlay; the tick drives the rig
+      // Build the swing as a one-shot in the RUST MotionSequence interpreter.
+      // The class is read off window.__hbWasm (typeof-guarded): a stale pkg/
+      // without it falls through to the mixer overlay below (soft-degrade).
+      const MS =
+        (typeof window !== "undefined" && window.__hbWasm && window.__hbWasm.MotionSequence) || null;
+      const d = entry.sequenceDescriptor;
+      if (MS && d) {
+        const seq = MS.fromDescriptor(
+          d.numFrames >>> 0,
+          +d.framerate || 0,
+          +d.duration || 0,
+          d.frameTimes || EMPTY_F32,
+          d.segmentStarts || EMPTY_U32,
+          d.segmentCounts || EMPTY_U32,
+          false, // one-shot swing (no cyclic region) → latches `done`, holds last frame
+        );
+        if (seq) {
+          // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
+          inst._unifiedAttack = { seq, desc: d };
+          return; // skip the mixer overlay; the tick drives the rig
+        }
       }
     }
     // Use a stable cache key so repeated transitions reuse the same
@@ -10401,8 +10433,12 @@ export class EntityManager {
           // fire via the sequence in a later step — silent under this flag for now.
           const ua = inst._unifiedAttack;
           ua.seq.advance(dt);
-          poseRig(ua.seq, inst.parts);
-          if (ua.seq.done) inst._unifiedAttack = null;
+          poseRigAt(ua.seq.globalFrameIndex, ua.desc, inst.parts);
+          if (ua.seq.done) {
+            try { ua.seq.free(); } catch (_) { /* already freed */ }
+            // Hand the rig back to the mixer (the frozen cycle action resumes).
+            inst._unifiedAttack = null;
+          }
         } else {
           inst.mixer.update(dt);
         }

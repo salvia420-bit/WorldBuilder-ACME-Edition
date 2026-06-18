@@ -1974,6 +1974,15 @@
           // which calls `window.__hbWasm.fetchPhysicsScriptTable(did)`
           // and parses the JSON string. Wasm returns "null" on DAT miss.
           fetchPhysicsScriptTable: (did) => fetchPhysicsScriptTable(did >>> 0),
+          // Animation consolidation (docs/animation-audit §5): the ported Rust
+          // CSequence interpreter, exported as the wasm `MotionSequence` class
+          // (src/motion_sequence.rs). ADDITIVE namespace rider (typeof-guarded;
+          // classes are functions) so a stale pkg/ yields `undefined` here and
+          // entities.js's ?unifiedMotion=attack path soft-degrades to the mixer
+          // overlay (F18-2, mirrors fetch_particle_degrade_distance above).
+          ...(typeof __hbWasmNs?.MotionSequence === "function"
+            ? { MotionSequence: __hbWasmNs.MotionSequence }
+            : {}),
           hash32,
           has_resource_source,
         };

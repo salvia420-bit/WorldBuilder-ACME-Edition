@@ -533,6 +533,14 @@ mod walk_dedup;
 #[cfg(any(target_arch = "wasm32", test))]
 mod surface_overrides;
 
+// Animation consolidation (docs/animation-audit/ANIMATION-AUDIT.md §5): the
+// ported `CSequence`/`update_internal` motion authority. Gate mirrors
+// `walk_dedup` (wasm32 OR test) so the native test target exercises the
+// playhead math (Parts A+C parity vs test_motion_sequence.mjs) without the
+// wasm-bindgen stack. The `#[wasm_bindgen]` surface inside is wasm32-only.
+#[cfg(any(target_arch = "wasm32", test))]
+mod motion_sequence;
+
 #[cfg(target_arch = "wasm32")]
 pub use global_source::{
     cached_shard_count, has_resource_source, init_resource_source,
@@ -584,7 +592,15 @@ pub fn build_info() -> String {
 // + `SessionHandle.pollRemotePoses` + `RemotePoseFrame`. JS caller is
 // ?remoteInterp=-gated + typeof-guarded → a v4-without-it pkg
 // soft-degrades to the legacy dead-reckon path.
-pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 4;
+// v5 (2026-06-18, animation consolidation): + the wasm `MotionSequence`
+// class (`fromDescriptor`/`advance`/`globalFrameIndex`/`done`/
+// `chainOneShotThenCycle`) — the ported retail `CSequence` playhead
+// (src/motion_sequence.rs) that owns attack-swing timing now and, per the
+// §5 plan, all motion incrementally. index.html's EXPECTED stays at 1 (the
+// JS consumer is ?unifiedMotion=-gated and reads the class off
+// `window.__hbWasm` through a typeof guard → a v4 pkg soft-degrades to the
+// mixer overlay; the documented v2/v3/v4 precedent).
+pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 5;
 
 /// Returns the export-surface manifest version (F18-2). JS asserts this is
 /// `>=` its compiled-in expectation at boot; a mismatch — or this function
