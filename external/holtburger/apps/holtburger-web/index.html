@@ -4431,9 +4431,7 @@ void main() {
         // probes can find the live state. Open doors have their
         // building-AABB entry's `active` flag toggled wasm-side, so
         // the integrator's swept clamp lets the player walk through.
-        if (!window.__doorStates) {
-          window.__doorStates = new Map();
-        }
+        // __doorStates is hoisted to module scope; just link the 2D liveScene.
         liveScene.doorStates = window.__doorStates;
         // Phase 6 step C: marker symbol the smoke checks via
         // `typeof wasm.init_cell_containers === "function"`. Calling
@@ -4564,6 +4562,12 @@ void main() {
       // nameplate is the PIXI.Text in nameplateContainer (set by
       // ensureNameplate, destroyed in handleEntityRemove).
       const entityMap = new Map();
+      // Door open/close state, keyed by door guid. HOISTED to module scope
+      // (W6 strip-prereq, GROUND-TRUTH §3.1): the 3D DoorStateChanged dispatch
+      // reads/writes this, so it must exist independently of the 2D
+      // `renderNeighbourhood` bring-up that used to lazy-init it (now removed,
+      // along with the redundant 3D-path fallback init).
+      window.__doorStates = window.__doorStates || new Map();
       // Phase 4 step 6e: hide the local player's nameplate. Set by the
       // kind=1 PlayerSpawned handler in drainEvents; nullable until
       // PlayerCreate lands. ensureNameplate skips entries whose guid
@@ -10682,9 +10686,6 @@ void main() {
                   ? "open"
                   : "closed";
                 const rotation = doorState === "open" ? Math.PI / 2 : 0;
-                if (!window.__doorStates) {
-                  window.__doorStates = new Map();
-                }
                 window.__doorStates.set(doorGuid, doorState);
                 if (window.liveScene) {
                   if (!window.liveScene.doorStates) {
