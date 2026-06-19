@@ -942,7 +942,12 @@ export function setupClickPicking({
       return;
     }
     const cb = window.__combatBarState;
-    const safeHeight = Number.isFinite(height) ? height : (cb?.attackHeight ?? ATTACK_HEIGHT_MEDIUM);
+    const rawHeight = Number.isFinite(height) ? height : (cb?.attackHeight ?? ATTACK_HEIGHT_MEDIUM);
+    // AC AttackHeight is 1=High/2=Medium/3=Low; the wasm `attack()` throws on
+    // anything else. 0 (and other invalid values) must never reach it — fall
+    // back to Medium rather than crash the swing. (Number.isFinite(0) is true,
+    // so a 0 would otherwise sail past the `??` above.)
+    const safeHeight = (rawHeight === 1 || rawHeight === 2 || rawHeight === 3) ? rawHeight : ATTACK_HEIGHT_MEDIUM;
     const slider =
       cb && typeof cb.powerLevel === "number" ? cb.powerLevel : ATTACK_POWER_FULL;
     const fireOnce = (cmd, commenceDetail) => {

@@ -834,10 +834,13 @@ function build() {
   // Right button column (0x10000056).
   const buttons = document.createElement("div");
   buttons.className = "hch-buttons";
+  // AC AttackHeight enum is 1=High, 2=Medium, 3=Low (wasm `attack()` rejects
+  // anything else — a 0 here threw "invalid attack_height 0" and killed the
+  // swing). Matches combat-bar.js HEIGHTS and holtburger_protocol AttackHeight.
   const HEIGHTS = [
-    { id: "high",   label: "High",   value: 2 },
-    { id: "medium", label: "Medium", value: 1 },
-    { id: "low",    label: "Low",    value: 0 },
+    { id: "high",   label: "High",   value: 1 },
+    { id: "medium", label: "Medium", value: 2 },
+    { id: "low",    label: "Low",    value: 3 },
   ];
   const heightEls = { high: null, medium: null, low: null };
   // P1-24 (cross-find combat-hud-states-armed): mirror retail
