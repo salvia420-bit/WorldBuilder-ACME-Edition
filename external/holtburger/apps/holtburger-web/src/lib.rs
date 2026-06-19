@@ -16335,6 +16335,21 @@ pub async fn fetch_entity_animation_keyframes(
         if let Ok(setup_bytes) = s.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) {
             if let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes)) {
                 let _ = try_resolve_cycle_frames(s, &setup, mt_override, stance, motion_command);
+                // 2026-06-19: ALSO warm the LINK transition's anims (attack/cast/eat
+                // one-shots) when a from_motion is supplied. The walk previously followed
+                // ONLY try_resolve_cycle_frames, so a link-only target (e.g. a swing
+                // 0x1000005x and its Animation chain) was never prefetched — the sync
+                // build_concatenated_motion_frames in build_entity_animation_data_inner
+                // then missed those anim shards and returned 0 frames ("no MotionTable
+                // link … swing will not play"), even though the MotionTable + the link
+                // anims are all served. Touching them here pulls them into the shard
+                // cache before the bake. Mirrors the cycle warm above; no-op when
+                // from_motion_command == 0 (the pre-link cycle-only call sites).
+                if from_motion_command != 0 {
+                    let _ = try_resolve_link_frames(
+                        s, &setup, mt_override, stance, from_motion_command, motion_command,
+                    );
+                }
             }
         }
     })
