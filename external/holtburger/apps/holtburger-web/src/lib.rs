@@ -7364,7 +7364,18 @@ pub async fn fetch_surface_anim_frames(surface_did: u32) -> Result<SurfaceAnimFr
     use holtburger_dat::ResourceKey;
     let source = global_source::global_source();
     let initial = [ResourceKey::new("eor/portal", surface_did)];
-    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    // 2026-06-19: warm the SAME records the sync collect_surface_anim_frames bake
+    // reads — the SurfaceTexture (0x05) and EVERY per-frame RenderSurface (0x06) +
+    // its palette. The empty closure here seeded ONLY the 0x08 Surface; the prior
+    // fetch_surface_pixels warm pulled just highest_res() (the LAST 0x06), so every
+    // non-last animation frame + palette was uncached and the sync bake bailed on
+    // the first miss → frame_count 0 → animated surfaces (water/lava/effects)
+    // rendered frozen. Running the bake fn itself in the walk touches exactly its
+    // record set (mirrors the sibling fetch_surface_pixels below + a0e0a0c1).
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = collect_surface_anim_frames(s, surface_did);
+    })
+    .await?;
     let (width, height, frames) = collect_surface_anim_frames(source.as_ref(), surface_did);
     let frame_count = frames.len() as u32;
     let mut pixels = Vec::with_capacity(frames.iter().map(|f| f.len()).sum());
@@ -8670,7 +8681,17 @@ pub async fn fetch_entity_degrade_for_distance(
     // SetupModel → first GfxObj. Matches the prefetch shape used by
     // fetch_entity_animation_keyframes ahead of its own degrade reads.
     let initial = [ResourceKey::new("eor/portal", setup_id)];
-    prefetch::ensure_walk_prefetched(&source, &initial, |_| {}).await?;
+    // 2026-06-19: warm what resolve_did_degrade actually reads. For a 0x02
+    // SetupModel it derives parts[0] (a 0x01 GfxObj) at bake time and does a SECOND
+    // get_file_by_key on it — NOT covered by initial=[setup_id]. The empty closure
+    // left that part uncached, so single-part 0x02 setups with a real degrade chain
+    // silently returned 0 (no LOD substitution). Running resolve_did_degrade in the
+    // walk touches the part too (mirrors a0e0a0c1). The degrade chain itself is
+    // still walked via initial2 below.
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = resolve_did_degrade(s, setup_id);
+    })
+    .await?;
     let degrade_id = resolve_did_degrade(source.as_ref(), setup_id);
     if degrade_id == 0 {
         return Ok(0);
