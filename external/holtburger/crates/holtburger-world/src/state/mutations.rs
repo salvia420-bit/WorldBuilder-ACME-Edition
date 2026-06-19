@@ -33,6 +33,20 @@ use web_time::Instant;
 /// matches a fresh-login server `ObjectVector`, so no first-update drop.
 const USE_VECTOR_SEQUENCE_GATE: bool = true;
 
+/// B1 snapback fix (2026-06-19): the local player must NOT reconcile its
+/// predicted runtime body to its OWN autonomous-position echoes. ACE rebroadcasts
+/// the player's client-initiated movement (`AutonomousPosition` 0xF753) at ~20 Hz
+/// with gaps up to ~1.2 s; reconciling the predicted body toward that laggy echo
+/// is the "outrun then get pulled back, constant cadence" rubberband (amplified on
+/// high-Run chars). Retail snaps the local player ONLY on a sequence-class ADVANCE
+/// (teleport / force_position — see `set_player_position_with_sync` doc), never on
+/// every echo; this mirrors the 2D path's deliberate skip of syncing the local
+/// sprite to Public/PrivateUpdatePosition. ON (default): autonomous self-echoes
+/// update authoritative bookkeeping only (the runtime body keeps client prediction);
+/// a forced teleport/force_position advance still hard-snaps. OFF: legacy
+/// (Snapshot-reconcile on every accepted echo).
+const USE_LOCAL_PLAYER_AUTONOMOUS_GUARD: bool = true;
+
 impl WorldState {
     pub(crate) fn authoritative_body_id_for_guid(&self, guid: Guid) -> Option<SpatialBodyId> {
         if guid == Guid::NULL {
@@ -647,8 +661,26 @@ impl WorldState {
     /// reconciliation state aligned with that world-owned pose.
     fn update_player_position(
         &mut self,
-        mut pos: WorldPosition,
+        pos: WorldPosition,
         sync: AuthoritativeBodySync,
+    ) -> Option<(Guid, WorldPosition)> {
+        self.update_player_position_core(pos, Some(sync))
+    }
+
+    /// B1 snapback fix ([`USE_LOCAL_PLAYER_AUTONOMOUS_GUARD`]): update the
+    /// authoritative player position bookkeeping WITHOUT reconciling the runtime
+    /// spatial body, so the predicted pose keeps running on client prediction.
+    fn update_player_position_authoritative_only(
+        &mut self,
+        pos: WorldPosition,
+    ) -> Option<(Guid, WorldPosition)> {
+        self.update_player_position_core(pos, None)
+    }
+
+    fn update_player_position_core(
+        &mut self,
+        mut pos: WorldPosition,
+        sync: Option<AuthoritativeBodySync>,
     ) -> Option<(Guid, WorldPosition)> {
         let guid = self.player.guid;
         if guid == Guid::NULL {
@@ -690,7 +722,9 @@ impl WorldState {
             .get(guid)
             .map(|entity| (entity.velocity, entity.omega))
             .unwrap_or((Vector3::zero(), Vector3::zero()));
-        self.reconcile_authoritative_body(guid, pos, velocity, omega, sync);
+        if let Some(sync) = sync {
+            self.reconcile_authoritative_body(guid, pos, velocity, omega, sync);
+        }
 
         Some((guid, pos))
     }
@@ -845,7 +879,23 @@ impl WorldState {
             server_control_sequence: data.server_control_sequence,
         }];
 
-        events.extend(self.set_player_position(position));
+        // B1 snapback fix: a routine autonomous self-echo (the server rebroadcasting
+        // our OWN client-initiated movement) must NOT reconcile the predicted runtime
+        // body to the laggy ~20 Hz echo — that is the "outrun then snap back, constant
+        // cadence" rubberband (amplified on high-Run chars). Only a FORCED correction
+        // (teleport / force_position sequence ADVANCE) snaps the body. Compared against
+        // the STORED sequences (still pre-update here; advanced at the bottom).
+        let forced = data.teleport_sequence != self.player.teleport_sequence
+            || data.force_position_sequence != self.player.force_position_sequence;
+        if USE_LOCAL_PLAYER_AUTONOMOUS_GUARD && !forced {
+            // Authoritative bookkeeping only (entity.position + scene + sequences below);
+            // the runtime body keeps client prediction. No EntityMoved/runtime-changed —
+            // the local rig follows the runtime body, and emitting the authoritative
+            // (laggy) pose would tug it back.
+            let _ = self.update_player_position_authoritative_only(position);
+        } else {
+            events.extend(self.set_player_position(position));
+        }
 
         self.player.instance_sequence = data.instance_sequence;
         self.player.server_control_sequence = data.server_control_sequence;
