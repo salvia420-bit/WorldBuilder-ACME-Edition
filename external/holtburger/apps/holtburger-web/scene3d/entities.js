@@ -588,9 +588,9 @@ const VEL_SCALE_ON = (() => {
 })();
 
 // A5-P2 (unification survey 2026-06-11) — `?tweenClock=dt` (default OFF).
-// One clock domain for the four hook-side-effect tweens
-// (`_tickSwingTween` / `_tickJumpPoseTween` / `_tickCastTween` /
-// `_tickScaleHookTween`). Retail clocks EVERY animation side effect off the
+// One clock domain for the hook-side-effect tweens
+// (`_tickJumpPoseTween` / `_tickScaleHookTween`; the swing/cast pose tickers
+// were retired in the WS-B teardown). Retail clocks EVERY animation side effect off the
 // single physics quantum inside the one update pass (acclient.c:340659-340780
 // — frame crossings, hooks and their side effects all consume the same
 // elapsed-time quantum, on the single `Timer::cur_time` static,
@@ -5666,30 +5666,10 @@ export class EntityManager {
     return performance.now() <= expiry;
   }
 
-  setSwingPose(guid) {
-    const inst = this.entityMap.get(guid >>> 0);
-    if (!inst || !inst.root) return;
-    const isHuman = inst.parts && inst.parts.length >= 16;
-    if (!isHuman) return;
-    const armIdx = 13; // RIGHT_UPPER_ARM (same index as jump pose)
-    const arm = inst.parts[armIdx];
-    if (!arm) return;
-    const baseQ = arm.quaternion.clone();
-    const swingQ = baseQ.clone().multiply(
-      new THREE.Quaternion().setFromAxisAngle(
-        new THREE.Vector3(1, 0, 0),
-        -Math.PI / 2,
-      ),
-    );
-    inst._swingTween = {
-      // A5-P2: stamp from the same clock `_tickSwingTween` reads.
-      startMs: this._tweenNowMs(),
-      durationMs: 300,
-      armIdx,
-      baseQ,
-      swingQ,
-    };
-  }
+  // setSwingPose (the single-arm vibe-pose one-shot) RETIRED 2026-06-18
+  // (WS-B teardown). Superseded by the Rust motion authority (unifiedMotion
+  // default-on); its callers now no-op when no real MotionTable link/clip
+  // resolves. The _swingTween machinery it drove is removed below.
 
   /**
    * Wave 13 / Phase 42 (2026-05-26) — one-shot magic cast pose. Mirrors
@@ -5713,33 +5693,10 @@ export class EntityManager {
    * <16 parts) no-op, mirroring `setSwingPose`. Per-frame advance lives
    * in `_tickCastTween` below.
    */
-  setCastPose(guid) {
-    const inst = this.entityMap.get(guid >>> 0);
-    if (!inst || !inst.root) return;
-    const isHuman = inst.parts && inst.parts.length >= 16;
-    if (!isHuman) return;
-    const X = new THREE.Vector3(1, 0, 0);
-    // BOTH upper arms outstretched upward (negative rotation around
-    // local X lifts the arms — same axis the jump pose uses for
-    // arms-horizontal, just a different magnitude/sign coupling).
-    const armEntries = [];
-    for (const armIdx of [10, 13]) { // LEFT_UPPER_ARM, RIGHT_UPPER_ARM
-      const arm = inst.parts[armIdx];
-      if (!arm) continue;
-      const baseQ = arm.quaternion.clone();
-      const castQ = baseQ.clone().multiply(
-        new THREE.Quaternion().setFromAxisAngle(X, -Math.PI / 2),
-      );
-      armEntries.push({ armIdx, baseQ, castQ });
-    }
-    if (armEntries.length === 0) return;
-    inst._castTween = {
-      // A5-P2: stamp from the same clock `_tickCastTween` reads.
-      startMs: this._tweenNowMs(),
-      durationMs: 600,
-      arms: armEntries,
-    };
-  }
+  // setCastPose (the both-arms-up vibe-pose one-shot) RETIRED 2026-06-18
+  // (WS-B teardown). Superseded by playCastSequence's real ACE-derived
+  // gesture chain + the Rust motion authority; its fallback callers now
+  // no-op. The _castTween machinery it drove is removed below.
 
   /**
    * Wave 14 / Phase 45 (2026-05-26) — per-spell scarab-windup chain
@@ -5804,7 +5761,10 @@ export class EntityManager {
     if (!inst) return;
     // Fallback path A: missing spellId → vibe-pose.
     if (!spellId) {
-      this.setCastPose(g);
+      // WS-B teardown (2026-06-18): setCastPose vibe-pose fallback removed.
+      // The real path is playCastSequence's ACE-derived gesture chain; when
+      // it falls through (no spellId / table not loaded / no setSwingMotion),
+      // the entity plays NO fallback gesture (the pose was a placeholder).
       return;
     }
     // Fallback path B: table not loaded yet (first-frame race) OR
@@ -5813,13 +5773,19 @@ export class EntityManager {
     // cast hits a populated table.
     const seq = getCastSequence(spellId);
     if (!seq) {
-      this.setCastPose(g);
+      // WS-B teardown (2026-06-18): setCastPose vibe-pose fallback removed.
+      // The real path is playCastSequence's ACE-derived gesture chain; when
+      // it falls through (no spellId / table not loaded / no setSwingMotion),
+      // the entity plays NO fallback gesture (the pose was a placeholder).
       return;
     }
     // Fallback path C: setSwingMotion not available (defensive — the
     // melee/missile path has the same guard around `setSwingMotion`).
     if (typeof this.setSwingMotion !== "function") {
-      this.setCastPose(g);
+      // WS-B teardown (2026-06-18): setCastPose vibe-pose fallback removed.
+      // The real path is playCastSequence's ACE-derived gesture chain; when
+      // it falls through (no spellId / table not loaded / no setSwingMotion),
+      // the entity plays NO fallback gesture (the pose was a placeholder).
       return;
     }
     // F8-4 — cast-state-machine gate. While a cast is in flight, ignore a
@@ -5840,9 +5806,7 @@ export class EntityManager {
     // started, bail out".
     const token = ((inst._castSequenceToken | 0) + 1) | 0;
     inst._castSequenceToken = token;
-    // Kill any vibe-pose tween that may have been started by a prior
-    // fallback path on the same entity — the real chain supersedes it.
-    inst._castTween = null;
+    // (vibe-pose _castTween clear removed — setCastPose retired, WS-B 2026-06-18)
     // Helper: play one gesture (windup or cast) and sleep for its
     // duration. Returns false if cancelled mid-flight (caller breaks
     // out of the chain).
@@ -5994,7 +5958,6 @@ export class EntityManager {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return false;
     inst._castSequenceToken = ((inst._castSequenceToken | 0) + 1) | 0;
-    inst._castTween = null;
     inst._castBusyUntilMs = 0; // F8-4 — cancelled cast frees the busy window
     try {
       const stance = ((inst.currentStance ?? inst.lastStance ??
@@ -6237,7 +6200,11 @@ export class EntityManager {
       if (UNIFIED_MISSILE && await this._tryUnifiedCycleOneShot(g, setupId, mtableId, motionCmd >>> 0, stance)) {
         return;
       }
-      this.setSwingPose(g);
+      // WS-B teardown (2026-06-18): the setSwingPose vibe-pose fallback was
+      // removed — the Rust motion authority (unifiedMotion default-on) is the
+      // swing path; when no real MotionTable link/clip resolves, the entity
+      // now plays NO gesture (the pose was a placeholder), matching the
+      // non-human silent-no-op that already applied.
       return;
     }
     const resolvedCmd = result.resolvedCommand >>> 0;
@@ -6258,13 +6225,21 @@ export class EntityManager {
         },
       );
     } catch (_) {
-      this.setSwingPose(g);
+      // WS-B teardown (2026-06-18): the setSwingPose vibe-pose fallback was
+      // removed — the Rust motion authority (unifiedMotion default-on) is the
+      // swing path; when no real MotionTable link/clip resolves, the entity
+      // now plays NO gesture (the pose was a placeholder), matching the
+      // non-human silent-no-op that already applied.
       return;
     }
     if (!this.entityMap.has(g)) return;
     const clip = entry?.clip;
     if (!clip) {
-      this.setSwingPose(g);
+      // WS-B teardown (2026-06-18): the setSwingPose vibe-pose fallback was
+      // removed — the Rust motion authority (unifiedMotion default-on) is the
+      // swing path; when no real MotionTable link/clip resolves, the entity
+      // now plays NO gesture (the pose was a placeholder), matching the
+      // non-human silent-no-op that already applied.
       return;
     }
     const swingKey = `swing:${resolvedCmd.toString(16)}:${stance.toString(16)}`;
@@ -6310,10 +6285,7 @@ export class EntityManager {
     if (prior && prior !== action && !FULL_BODY_ONE_SHOT) {
       try { action.crossFadeFrom(prior, 0.1, false); } catch (_) {}
     }
-    inst._swingTween = null;
-    // Wave 13 / Phase 42 — if a real swing clip plays, kill any cast-
-    // pose tween still in flight (e.g. caster swapped to melee mid-cast).
-    inst._castTween = null;
+    // (swing/cast vibe-pose tween clears removed — posers retired, WS-B 2026-06-18)
     inst.currentAction = action;
     inst.currentActionKey = swingKey;
     // FU-3 (2026-06-11) — make the LOCAL optimistic swing/cast one-shot
@@ -6401,9 +6373,9 @@ export class EntityManager {
   }
 
   /**
-   * A5-P2 (`?tweenClock=dt`) — the single clock read for the four pose-tween
-   * tickers (`_tickSwingTween` / `_tickJumpPoseTween` / `_tickCastTween` /
-   * `_tickScaleHookTween`) and their `startMs` stamp sites. Flag on →
+   * A5-P2 (`?tweenClock=dt`) — the single clock read for the pose-tween
+   * tickers (`_tickJumpPoseTween` / `_tickScaleHookTween`; swing/cast pose
+   * tickers retired in the WS-B teardown) and their `startMs` stamp sites. Flag on →
    * the accumulated-dt clock advanced in `tick(dt)` (one clock domain with
    * the mixers, retail's single-quantum contract, acclient.c:340659-340780);
    * flag off → `performance.now()`, byte-identical to the legacy wall-clock
@@ -6523,52 +6495,10 @@ export class EntityManager {
     }
   }
 
-  _tickSwingTween(inst, nowMs) {
-    const tw = inst._swingTween;
-    if (!tw) return;
-    const t = (nowMs - tw.startMs) / tw.durationMs;
-    const p = inst.parts && inst.parts[tw.armIdx];
-    if (!p) {
-      inst._swingTween = null;
-      return;
-    }
-    if (t >= 1) {
-      p.quaternion.copy(tw.baseQ);
-      inst._swingTween = null;
-      return;
-    }
-    const clampedT = Math.max(0, t);
-    // Triangle wave: 0→1 over t=[0,0.5], then 1→0 over t=[0.5,1].
-    const triangle = clampedT < 0.5 ? clampedT * 2 : (1 - clampedT) * 2;
-    p.quaternion.slerpQuaternions(tw.baseQ, tw.swingQ, triangle);
-  }
-
-  /**
-   * Wave 13 / Phase 42 (2026-05-26) — per-frame advance of the cast-pose
-   * tween. Mirrors `_tickSwingTween` but iterates over the multi-arm
-   * `arms` array (left + right upper arms slerp in unison). Same
-   * triangle-wave 0→1→0 amplitude as the swing tween; final tick
-   * restores all participating arms to their base quaternion.
-   */
-  _tickCastTween(inst, nowMs) {
-    const tw = inst._castTween;
-    if (!tw) return;
-    const t = (nowMs - tw.startMs) / tw.durationMs;
-    if (t >= 1) {
-      for (const { armIdx, baseQ } of tw.arms) {
-        const p = inst.parts && inst.parts[armIdx];
-        if (p) p.quaternion.copy(baseQ);
-      }
-      inst._castTween = null;
-      return;
-    }
-    const clampedT = Math.max(0, t);
-    const triangle = clampedT < 0.5 ? clampedT * 2 : (1 - clampedT) * 2;
-    for (const { armIdx, baseQ, castQ } of tw.arms) {
-      const p = inst.parts && inst.parts[armIdx];
-      if (p) p.quaternion.slerpQuaternions(baseQ, castQ, triangle);
-    }
-  }
+  // _tickSwingTween / _tickCastTween (per-frame advance of the swing/cast
+  // vibe-pose tweens) RETIRED 2026-06-18 (WS-B teardown) along with
+  // setSwingPose/setCastPose — nothing assigns _swingTween/_castTween anymore.
+  // (_tickJumpPoseTween above is KEPT — jump arms-up is retail-correct.)
 
   /**
    * T11 — resolve a locomotion cycle's authored ground speed
@@ -6878,15 +6808,8 @@ export class EntityManager {
     // the underlying locomotion. Net effect: no swing visible AND
     // the walk cycle stopped.
     if (cls === "attack" || cls === "cast") {
-      // Clear any in-flight vibe-coded tween (`setSwingPose`'s
-      // triangle wave). It applies in `_tickSwingTween` AFTER
-      // `mixer.update`, so it would otherwise overwrite the real
-      // motion-table clip's arm pose for the ~300ms tween duration.
-      inst._swingTween = null;
-      // Wave 13 / Phase 42 — same treatment for the cast-pose tween.
-      // The arms-up incantation gesture must yield to the real cast
-      // clip; otherwise both arms stick out through the spell animation.
-      inst._castTween = null;
+      // (swing/cast vibe-pose tween clears removed — setSwingPose/setCastPose
+      // retired, WS-B teardown 2026-06-18; nothing assigns the tweens now.)
       // Wave 2 (2026-06-08, C3): the MotionTable link inner key is the
       // FULL 32-bit command. lib.rs's main path already sends one, but a
       // bare low-16 from the side-channel / legacy caller is expanded here
@@ -7055,11 +6978,7 @@ export class EntityManager {
       if (cls === "attack" || cls === "cast") {
         action.setLoop(THREE.LoopOnce, 1);
         action.clampWhenFinished = false;
-        inst._swingTween = null;
-        // Wave 13 / Phase 42 — clear the cast-pose vibe-tween here too
-        // so the real motion-table cast clip wins (matches the
-        // `_swingTween = null` guard a few lines up).
-        inst._castTween = null;
+        // (swing/cast vibe-pose tween clears removed — posers retired, WS-B 2026-06-18)
       } else {
         action.setLoop(THREE.LoopRepeat, Infinity);
         action.clampWhenFinished = false;
@@ -10120,12 +10039,8 @@ export class EntityManager {
     // to finish the slerp. Without this, an entity that left the tick
     // radius mid-air would freeze in the arms-up pose after re-entry.
     if (inst._jumpPoseTween) return true;
-    // (3) Active swing-pose tween — always tick to finish the slerp.
-    if (inst._swingTween) return true;
-    // (3b) Active cast-pose tween (Wave 13 Phase 42) — same reason: the
-    // 600ms slerp needs every tick or the arms stick out after the
-    // visible cast window has passed.
-    if (inst._castTween) return true;
+    // (swing/cast vibe-pose tween reads removed — setSwingPose/setCastPose
+    // retired, WS-B teardown 2026-06-18; the tweens are never assigned now.)
     // (4) Distance gate — same camera-resolution convention as
     // `capActiveLightsByDistance` in lighting.js (Phase 7.5 switcher
     // first, fall back to `.camera`). Bail open (return `true` —
@@ -10188,7 +10103,7 @@ export class EntityManager {
       if (!inst._lodOriginalSetup) continue; // no degrade chain captured
       if (inst._lodRespawning) continue; // a band query / respawn is in flight
       if (this.spawnInFlight.has(g)) continue;
-      if (inst._jumpPoseTween || inst._swingTween || inst._castTween) continue;
+      if (inst._jumpPoseTween) continue; // (swing/cast tweens retired, WS-B 2026-06-18)
       const p = inst.root?.position;
       if (!p) continue;
       // Entity WORLD horizontal distance. entitiesGroup is under worldRoot
@@ -10336,7 +10251,7 @@ export class EntityManager {
         const isLocal =
           _smoothLocalGuid !== null && (inst.guid >>> 0) === _smoothLocalGuid;
         const hasActiveTween =
-          inst._jumpPoseTween || inst._swingTween || inst._castTween;
+          inst._jumpPoseTween; // (swing/cast tweens retired, WS-B 2026-06-18)
         if (isLocal || hasActiveTween) {
           // Always-smooth set: run every frame and keep the stamp current so a
           // later transition into the throttled set doesn't fire immediately.
@@ -10739,40 +10654,9 @@ export class EntityManager {
           }
         }
       }
-      // Phase C — swing-pose tween. Same post-mixer ordering as the
-      // jump pose so the arm rotation wins for the swing duration.
-      if (inst._swingTween) {
-        try {
-          this._tickSwingTween(inst, this._tweenNowMs());
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          if (!this._swingTweenWarned) {
-            this._swingTweenWarned = true;
-            console.warn(
-              `[entities/swing-tween] tick failed for entity 0x${inst.guid.toString(16)}:`,
-              e
-            );
-          }
-        }
-      }
-      // Wave 13 / Phase 42 — cast-pose tween. Same post-mixer ordering
-      // as the swing/jump poses; arms-up incantation slerp wins for
-      // the cast duration (600ms) or until a real motion-table cast
-      // clip clears `_castTween` in setMotion's `cls === "cast"` branch.
-      if (inst._castTween) {
-        try {
-          this._tickCastTween(inst, this._tweenNowMs());
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          if (!this._castTweenWarned) {
-            this._castTweenWarned = true;
-            console.warn(
-              `[entities/cast-tween] tick failed for entity 0x${inst.guid.toString(16)}:`,
-              e
-            );
-          }
-        }
-      }
+      // Swing-pose / cast-pose tween ticks RETIRED 2026-06-18 (WS-B teardown)
+      // along with setSwingPose/setCastPose + _tickSwingTween/_tickCastTween.
+      // (Jump-pose tween above + scale-hook tween below are KEPT.)
       // Wave 3 (2026-05-28) — Scale hook tween. Ticks after the
       // mixer + jump/swing/cast tweens so the scaled-object value wins
       // for the tween duration. Per-tween guard (gated on
@@ -11022,8 +10906,6 @@ export class EntityManager {
     //     never fight an incoming server clip.
     if (
       inst._jumpPoseTween ||
-      inst._swingTween ||
-      inst._castTween ||
       inst._idleFidgetActive
     ) {
       inst._idleDwellS = 0;
@@ -11172,7 +11054,7 @@ export class EntityManager {
     // Re-check the entity is still plainly idle (the probe loop is synchronous,
     // but a server motion could have landed via a queued event between the
     // dwell check and here; cheapest re-guard is the overlay-tween set).
-    if (inst._jumpPoseTween || inst._swingTween || inst._castTween) return;
+    if (inst._jumpPoseTween) return; // (swing/cast tweens retired, WS-B 2026-06-18)
     inst._idleFidgetActive = true;
     // Play the fidget as a LoopOnce overlay on top of the Ready cycle (from =
     // Ready, same as a swing). `_tryPlayLink` is async + fail-soft; a fetch
