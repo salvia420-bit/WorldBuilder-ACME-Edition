@@ -35,16 +35,25 @@ pipeline→legacy/render_2d.js · `1222a1f1`+`3f4e0775` 7b entity dispatch→leg
   `docs/2d-pixi-retirement-DELETED-CAPTURES.md`). 9b: physics_replay 3D-aligned (`84876160`, already
   renderer-agnostic); phase4_step3 + phase6_step_a were redundant-with-3D-siblings (deleted in 9a, not ported);
   phase6_step_e_doors blind-ported to 3D (`e9f4f482`, UNVALIDATED — needs Playwright). 9d oracle tap shipped
-  (`18dddb76`, additive/write-only, tap-firing unvalidated). **9c STILL OPEN** — the `run-all.mjs` skip-as-green
-  clause. Architectural snag: `runTier` uses `stdio:"inherit"` + GREEN-by-exit-code, and child runners fold
-  skip→exit 0, so run-all can't distinguish skip-from-pass without capturing child output (loses the
-  deliberate live-streaming) or a child-runner protocol change. Needs a design call (minimal honest-message
-  fix vs full output-capture + `--strict-skips`).
-- **10** — WS-B poser teardown (now unblocked, `unifiedMotion` default-on for the 5 classes): delete
-  `scene3d/entities.js` `setSwingPose`/`setCastPose` + swing/cast tweens + `FULL_BODY_ONE_SHOT` + the
-  death/door one-shot posers superseded by the Rust authority. **KEEP** `CROSSFADE_S`/`RESUME_WINDOW` + the
-  locomotion band-aids (loco is NOT in the default — B-1). The no-MotionTable-link fallback callers need a
-  no-op replacement. Touches motion → smoke + careful; revert on any motion ReferenceError.
+  (`18dddb76`, additive/write-only, tap-firing unvalidated). **9c DONE** (`025deab1`) — capture + `--strict-skips`:
+  `runTier` captures child output (re-printed, buffered per-tier), scans for tier-level skip banners
+  (`SERVER_DOWN`/`PLAYWRIGHT_MISSING`/`cargo-absent`/`print-only`) → new SKIP status; gate = GREEN / "GREEN
+  (with skips)" / RED; `--strict-skips` escalates SKIP→RED. **Item 9 COMPLETE.**
+- **10** — WS-B vibe-poser teardown **DONE** (`f39a8c77`, smoke GREEN, motion behavior UNVALIDATED). Removed
+  `setSwingPose`/`setCastPose` + ALL swing/cast tween machinery (caller-first: 6 internal fallbacks → no-op
+  return; 3 external callers auto-no-op via their typeof/`?.` guards). **KEPT** `CROSSFADE_S`/`RESUME_WINDOW`
+  + `_jumpPoseTween`/`_tickJumpPoseTween` (jump retail-correct). **DEFERRED `FULL_BODY_ONE_SHOT`** — on
+  inspection it's the real full-body-OVERLAY flag (default-ON, gates `_suppressBaseCycleForOverlay` on live
+  motions), NOT a dead vibe-poser; removing it is a behavior-affecting flag-hardcode best done with overlay
+  validation. There was no separate `setDeathPose` (door → unified `playDoorMotion`, KEPT). Static grep +
+  node --check eliminate the ReferenceError risk; swing/cast *behavior* needs a 1070 eye-test / motion capture.
+
+## Remaining (small, optional)
+- **`FULL_BODY_ONE_SHOT` flag-hardcode** — remove the default-ON flag + its `?fullBodyOneShot=off` escape,
+  hardcoding the overlay path. Behavior-neutral by default but touches the live `_suppressBaseCycleForOverlay`
+  overlay; do it where overlays can be motion-validated.
+- **Playwright validation pass** — run `capture_physics_replay` (validates 9d oracle tap) + the ported
+  `capture_phase6_step_e_doors` in a Playwright env; eye-test item-10 swing/cast on the 1070.
 
 ## Parked — your decision, NOT blockers
 - **3c `worldLifecycle=on`** — DEFERRED. Unsafe to flip standalone: its canonical ObjectDelete needs
