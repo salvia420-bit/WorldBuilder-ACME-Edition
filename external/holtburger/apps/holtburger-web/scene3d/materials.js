@@ -74,6 +74,36 @@ export const SURFACE_TYPE = Object.freeze({
 // Surface. Caller paints these with `materialCache.fallbackMaterial`.
 const FALLBACK_SURFACE_DID = 0;
 
+// === G2-fix (2026-06-19) — object-surface texture WRAP mode ===============
+// The G2 blocks below (2026-05-29) clamped every non-Stippled object surface,
+// reading the wrap flag off the *Surface type's* Stippled bit (0x40000000).
+// That was a misread of retail: D3DPolyRender::SetSurface (acclient.c:454437)
+// takes its `stippled` arg from `isStippledOrAlphaedMask[subset] & 1`, whose
+// bit 0 is set ONLY by `CPolygon.stippling > 0` (acclient.c:456003) — a
+// PER-POLYGON field, NOT the surface-type bit (which is ~never set). Net effect:
+// every tiling object surface (tree-trunk bark, building walls — whose UVs run
+// past [0,1]) wrongly CLAMPED, so the whole face sampled one stretched edge
+// texel → flat, untextured (validated on the GTX 1070: conifer 0x02000257
+// surface 0x0800157e, UVs 0→4.7, rendered as a smooth flat cylinder; flipping
+// wrapS/wrapT→Repeat in-place instantly restored detailed bark). AC object
+// textures tile by design — adapter.js's surfacePixelsTo*Texture hardcodes
+// RepeatWrapping ("most AC textures tile"). ClampToEdge and RepeatWrapping are
+// identical for UVs within [0,1], so defaulting to Repeat is safe for
+// non-tiling surfaces and fixes the tiling ones. Default-on;
+// `?surfaceWrapClamp=on` restores the old clamp-default for A/B.
+// TODO(faithful): drive wrap from per-polygon CPolygon.stippling, plumbed
+// through the wasm adapter → mesh builder, instead of this surface-wide default.
+const _SURFACE_WRAP_CLAMP = (() => {
+  try {
+    return (
+      (new URLSearchParams(globalThis.location.search).get("surfaceWrapClamp") || "")
+        .toLowerCase() === "on"
+    );
+  } catch {
+    return false;
+  }
+})();
+
 // #22 (2026-06-07) — paletted-material LRU cap. Each dyed outfit
 // signature (surface|palette|subPalettes) mints one cache-owned
 // MeshStandardMaterial + (optionally) one owned DataTexture. Without a
@@ -2413,8 +2443,11 @@ export class MaterialCache {
     // inherit the base texture's wrapS/wrapT downstream, so fixing `texture`
     // propagates to them. Terrain detail/atlas textures are OUT OF SCOPE
     // (they tile by design) and never pass through this object path.
+    // G2-fix (2026-06-19, see _SURFACE_WRAP_CLAMP): default RepeatWrapping
+    // (AC object textures tile; wrap is per-polygon stippling in retail, not the
+    // surface Stippled bit). `?surfaceWrapClamp=on` restores the old clamp-default.
     const isStippled = (flags & SURFACE_TYPE.Stippled) !== 0;
-    const wrapMode = isStippled
+    const wrapMode = (isStippled || !_SURFACE_WRAP_CLAMP)
       ? THREE.RepeatWrapping
       : THREE.ClampToEdgeWrapping;
     if (texture) {
@@ -2957,8 +2990,9 @@ export class MaterialCache {
     // CLAMP unless Stippled (SurfaceType 0x40000000). `surfacePixelsToTexture`
     // hardcodes RepeatWrapping; override per-surface. FAIL-SOFT: surfaceType
     // 0/missing → ClampToEdge. Only a base `tex` here (no normal/height).
+    // G2-fix (2026-06-19, see _SURFACE_WRAP_CLAMP): default RepeatWrapping.
     const isStippled = ((surfaceType >>> 0) & SURFACE_TYPE.Stippled) !== 0;
-    tex.wrapS = tex.wrapT = isStippled
+    tex.wrapS = tex.wrapT = (isStippled || !_SURFACE_WRAP_CLAMP)
       ? THREE.RepeatWrapping
       : THREE.ClampToEdgeWrapping;
     // === A10-M2 (2026-06-11) — `?surfaceUnified=on` thread render-state flags ===
