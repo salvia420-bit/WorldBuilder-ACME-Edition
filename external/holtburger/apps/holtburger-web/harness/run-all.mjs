@@ -65,11 +65,16 @@
 // ----------------------------------------------------------------------------
 // EXIT CODE (the gate)
 // ----------------------------------------------------------------------------
-//   0 (GREEN) when every selected tier that RAN exited 0. skip / rebuild-pending
-//             / print-only are NOT failures — the sibling runners already fold
-//             those into exit 0, so a tier exiting 0 means "no hard failure".
+//   0 (GREEN) when every selected tier that RAN exited 0. The sibling runners
+//             fold skip / rebuild-pending / print-only into exit 0, so run-all
+//             scans each tier's captured output for a tier-level skip banner
+//             (SERVER_DOWN / PLAYWRIGHT_MISSING / cargo-absent / print-only)
+//             and reports "GREEN (with skips)" when a tier exited 0 but ran
+//             NOTHING real — a SKIP is surfaced, never silently counted as a
+//             pass. (Default: skips do not fail the gate; see --strict-skips.)
 //   1 (RED)   if any selected tier exited non-zero (a real, present+reachable
-//             behavior was WRONG, or a JS unit test failed).
+//             behavior was WRONG, or a JS unit test failed), OR — under
+//             --strict-skips — if any tier SKIPPED instead of running.
 //
 // USAGE
 //   node harness/run-all.mjs                 # default: --js (the works-today gate)
@@ -136,6 +141,7 @@ function parseArgs(argv) {
     list: false,
     help: false,
     showRebuildNote: true,
+    strictSkips: false, // when true, a SKIP tier (exit 0 but ran nothing real) fails the gate
     passThrough: [], // forwarded verbatim to each child
   };
   const selected = new Set();
@@ -161,6 +167,11 @@ function parseArgs(argv) {
         break;
       case "--no-rebuild-note":
         opts.showRebuildNote = false;
+        break;
+      case "--strict-skips":
+        // Treat a tier that exited 0 but ran NOTHING real (SERVER_DOWN /
+        // PLAYWRIGHT_MISSING / cargo-absent / print-only) as a gate failure.
+        opts.strictSkips = true;
         break;
       case "--help":
       case "-h":
@@ -259,28 +270,58 @@ function runTier(tier, childArgs) {
   console.log(`#  $ ${banner}`);
   console.log("#".repeat(76));
 
+  // Capture stdout/stderr (instead of `stdio:"inherit"`) so we can tell a
+  // tier that RAN and passed from one that exited 0 but SKIPPED everything —
+  // the child runners fold skip / rebuild-pending / print-only into exit 0,
+  // so the exit code alone hides a silent skip (a ported capture that never
+  // ran would otherwise masquerade as "passed"). We re-print the captured
+  // text immediately, preserving the child's own pass/fail table — it just
+  // appears as one block per tier rather than streaming live.
   const run = spawnSync(process.execPath, argv, {
     cwd: APP_ROOT,
-    stdio: "inherit", // stream the child's own pass/fail table live
+    stdio: ["inherit", "pipe", "pipe"],
     encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
   });
+  const stdout = run.stdout || "";
+  const stderr = run.stderr || "";
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
 
   const killed = !!run.signal;
   const spawnErr = run.error ? run.error.message : "";
   const code = typeof run.status === "number" ? run.status : null;
-  // A child runner is GREEN iff it exited 0 with no spawn error / signal. The
-  // child has ALREADY folded skip / rebuild-pending / print-only into exit 0.
-  const ok = !run.error && !killed && code === 0;
+  const okExit = !run.error && !killed && code === 0;
+
+  // Tier-level "didn't really run" banners. A tier matching one of these
+  // while exiting 0 ran NOTHING real → SKIP (not GREEN). These are the exact
+  // strings the child runners print: playwright drive.mjs (SERVER_DOWN /
+  // PLAYWRIGHT_MISSING) and cargo-tests.mjs (cargo-absent / print-only).
+  const combined = `${stdout}\n${stderr}`;
+  const SKIP_MARKERS = [
+    { re: /SERVER_DOWN/, name: "SERVER_DOWN" },
+    { re: /PLAYWRIGHT_MISSING/, name: "PLAYWRIGHT_MISSING" },
+    { re: /cargo not found/i, name: "cargo-absent" },
+    { re: /not running cargo/i, name: "print-only" },
+    { re: /PRINT-ONLY-SAFE/, name: "print-only" },
+  ];
+  const skipHit = okExit ? SKIP_MARKERS.find((m) => m.re.test(combined)) : null;
+
+  let status = "RED";
+  if (okExit) status = skipHit ? "SKIP" : "GREEN";
+
   let detail = "";
-  if (!ok) {
+  if (!okExit) {
     if (spawnErr) detail = `spawn error: ${spawnErr}`;
     else if (killed) detail = `killed by signal ${run.signal}`;
     else detail = `child exited ${code}`;
+  } else if (skipHit) {
+    detail = `tier SKIPPED (exit 0, no real run — ${skipHit.name})`;
   }
   return {
     id: tier.id,
     label: tier.label,
-    status: ok ? "GREEN" : "RED",
+    status,
     code,
     detail,
   };
@@ -364,6 +405,8 @@ function main() {
         "  --playwright  in-browser in-world descriptors (needs rebuild + serve.py/ACE/wsbridge).",
         "  --all         run all three and print one GREEN/RED gate.",
         "  --list        print the tier plan + child commands, exit 0.",
+        "  --strict-skips a tier that exits 0 but ran NOTHING real (SERVER_DOWN /",
+        "                PLAYWRIGHT_MISSING / cargo-absent / print-only) fails the gate.",
         "",
         "  Unrecognized args are forwarded to the selected child runner(s), e.g.:",
         "    --js --only=surface           --rust --print-only --only=holtburger-core",
@@ -392,15 +435,23 @@ function main() {
   console.log("  RUN-ALL GATE");
   console.log("=".repeat(76));
   for (const r of results) {
-    const mark = r.status === "GREEN" ? "GREEN" : r.status === "RED" ? "RED  " : "MISS ";
+    const mark = r.status === "GREEN" ? "GREEN"
+      : r.status === "RED" ? "RED  "
+      : r.status === "SKIP" ? "SKIP "
+      : "MISS ";
     console.log(`  [${mark}] ${pad(r.id, 11)} ${r.label}${r.detail ? `  — ${r.detail}` : ""}`);
   }
   console.log("-".repeat(76));
 
   const reds = results.filter((r) => r.status === "RED");
   const missing = results.filter((r) => r.status === "MISSING");
+  const skips = results.filter((r) => r.status === "SKIP");
   // A MISSING runner is a hard problem (the harness is incomplete) → RED gate.
-  const hardFail = reds.length > 0 || missing.length > 0;
+  // A SKIP (tier exited 0 but ran nothing real) is a HARD fail only under
+  // --strict-skips; otherwise it is surfaced as a non-green caveat so a
+  // ported capture that silently skips cannot masquerade as "all passed".
+  const hardFail =
+    reds.length > 0 || missing.length > 0 || (opts.strictSkips && skips.length > 0);
 
   if (hardFail) {
     console.log("  GATE: RED  ✗");
@@ -414,11 +465,26 @@ function main() {
         `        ${missing.length} runner(s) missing: ${missing.map((r) => r.id).join(", ")}`
       );
     }
+    if (opts.strictSkips && skips.length) {
+      console.log(
+        `        ${skips.length} tier(s) SKIPPED (--strict-skips → fail): ${skips.map((r) => r.id).join(", ")}`
+      );
+    }
+  } else if (skips.length) {
+    // GREEN, but some tiers skipped — say so plainly. The old clause claimed
+    // "all selected tiers passed" here, which hid that a tier never ran.
+    const ranOk = results.length - skips.length;
+    console.log("  GATE: GREEN (with skips)  ✓");
+    console.log(
+      `        ${ranOk} tier(s) ran and passed; ${skips.length} SKIPPED (exit 0, no real run): ${skips.map((r) => r.id).join(", ")}.`
+    );
+    console.log(
+      "        A SKIP is NOT a pass — the tier could not run (no server/rebuild/cargo/browser)."
+    );
+    console.log("        Use --strict-skips to make skips fail the gate.");
   } else {
     console.log("  GATE: GREEN  ✓");
-    console.log(
-      "        all selected tiers passed (skip / rebuild-pending / print-only are not failures)."
-    );
+    console.log("        all selected tiers ran and passed.");
   }
   console.log("=".repeat(76));
 
