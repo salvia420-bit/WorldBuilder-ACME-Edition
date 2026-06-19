@@ -97,6 +97,25 @@ export function buildSequenceDescriptor(animData) {
     };
 }
 
+// B1-render fix (2026-06-19): root-motion (`posFrames` whole-object translation)
+// must NOT be baked into the rendered clip. Entity position is driven EXTERNALLY
+// (the wasm integrator / server reconcile positions the rig root), so adding the
+// clip's forward stride to every part double-counts it: a LOOPING locomotion cycle
+// strides the model ~0.9 m ahead of the rig root, then snaps back every cycle
+// (~0.8 s) — the live "model runs ahead of camera-center, snaps back ~1/sec"
+// rubberband (verified on the GTX 1070: 0.9 m avg lead, 115 snaps over an 887 m run).
+// The 2026-05-29 "render-completeness" add ASSUMED walk/run carry no pos_frames, but
+// only idle was verified; walk/run DO carry the stride. Doors swing via part
+// QUATERNIONS (hinge), not posFrames, so they're unaffected. Default = in-place
+// (skip root-motion); `?renderRootMotion=on` restores the old behavior for A/B.
+let RENDER_ROOT_MOTION = false;
+try {
+    RENDER_ROOT_MOTION =
+        new URLSearchParams(globalThis.location.search).get("renderRootMotion") === "on";
+} catch (_) {
+    /* non-browser (test) context — keep the fix default (in-place) */
+}
+
 export function buildAnimationClip(animData, partNames) {
     const {
         partCount,
@@ -178,9 +197,39 @@ export function buildAnimationClip(animData, partNames) {
     // cycles (verified pos_frames_len==0 on the human idle), so this is a no-op
     // for the common case. Fail-soft: wrong length → no offset.
     const hasPos =
+        RENDER_ROOT_MOTION &&
         posFrames &&
         typeof posFrames.length === "number" &&
         posFrames.length === numFrames * 3;
+
+    // B1-render fix v2 (2026-06-19): for LOCOMOTION the forward stride is baked into
+    // the SKELETON (every part translates ~uniformly forward per frame) — NOT into
+    // posFrames (0 for walk/run, so the v1 posFrames skip above was a no-op). Live on
+    // the GTX 1070: the model strode ~3.1m ahead of the integrator-driven rig root,
+    // snapping back each 0.8s cycle. Play IN-PLACE: subtract each frame's COMMON
+    // translation (mean of all parts relative to frame 0) from every part — removes the
+    // whole-body drift, preserves per-part (limb) motion. Position is integrator-driven
+    // so this is correct. Gated by RENDER_ROOT_MOTION (default = in-place;
+    // ?renderRootMotion=on restores the raw baked motion for A/B).
+    const rootDisp = new Float32Array(numFrames * 3);
+    if (!RENDER_ROOT_MOTION && partCount > 0 && numFrames > 0) {
+        let c0x = 0, c0y = 0, c0z = 0;
+        for (let p = 0; p < partCount; p += 1) {
+            const b = p * FLOATS_PER_PART_PER_FRAME; // frame 0
+            c0x += flat[b]; c0y += flat[b + 1]; c0z += flat[b + 2];
+        }
+        c0x /= partCount; c0y /= partCount; c0z /= partCount;
+        for (let f = 0; f < numFrames; f += 1) {
+            let cx = 0, cy = 0, cz = 0;
+            for (let p = 0; p < partCount; p += 1) {
+                const b = (f * partCount + p) * FLOATS_PER_PART_PER_FRAME;
+                cx += flat[b]; cy += flat[b + 1]; cz += flat[b + 2];
+            }
+            rootDisp[f * 3 + 0] = cx / partCount - c0x;
+            rootDisp[f * 3 + 1] = cy / partCount - c0y;
+            rootDisp[f * 3 + 2] = cz / partCount - c0z;
+        }
+    }
 
     const tracks = [];
     for (let p = 0; p < partCount; p += 1) {
@@ -193,9 +242,9 @@ export function buildAnimationClip(animData, partNames) {
             const rx = hasPos ? posFrames[f * 3 + 0] : 0;
             const ry = hasPos ? posFrames[f * 3 + 1] : 0;
             const rz = hasPos ? posFrames[f * 3 + 2] : 0;
-            posValues[f * 3 + 0] = flat[base + 0] + rx;
-            posValues[f * 3 + 1] = flat[base + 1] + ry;
-            posValues[f * 3 + 2] = flat[base + 2] + rz;
+            posValues[f * 3 + 0] = flat[base + 0] + rx - rootDisp[f * 3 + 0];
+            posValues[f * 3 + 1] = flat[base + 1] + ry - rootDisp[f * 3 + 1];
+            posValues[f * 3 + 2] = flat[base + 2] + rz - rootDisp[f * 3 + 2];
             // (qw, qx, qy, qz) → (qx, qy, qz, qw) for three.js's
             // QuaternionKeyframeTrack value layout.
             const qw = flat[base + 3];
