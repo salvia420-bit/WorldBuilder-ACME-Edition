@@ -490,9 +490,10 @@ import { poseRigAt } from "./motion/motion_sequence.js";
 const EMPTY_F32 = new Float32Array(0);
 const EMPTY_U32 = new Uint32Array(0);
 // Inline flag read (NOT an imported helper) so module-load works in the
-// source-eval headless harness that doesn't resolve ESM imports — matches the
-// FULL_BODY_ONE_SHOT pattern. The wasm MotionSequence + poseRigAt are referenced
-// only inside the flag-on runtime branches, so they're inert when off.
+// source-eval headless harness that doesn't resolve ESM imports — the same
+// inline-read pattern the other URL flags use. The wasm MotionSequence +
+// poseRigAt are referenced only inside the flag-on runtime branches, so
+// they're inert when off.
 // `?unifiedMotion=<class>` selects which motion classes route through the Rust
 // authority. W6 flip (2026-06-18, §9 class-by-class ruling): the bare default
 // enables every class EXCEPT locomotion — locomotion carries the open B-1
@@ -634,22 +635,14 @@ const SIGNED_MOTION_SPEED = (() => {
   }
 })();
 
-// F15-1 (2026-06-09) — `?fullBodyOneShot=on` gates FULL-BODY one-shot
-// playback. Default OFF: an attack/cast/emote overlay plays on top of the
-// still-running base locomotion cycle, so three.js normalizes them to ~50/50
-// and the swing plays at half amplitude (a drudge's overhead smash looks like
-// a wiggle), then pops to the base pose in one frame at clip end. When ON, the
-// base cycle's weight is ramped to 0 for the one-shot's duration and restored
-// on its 'finished' event (retail's remove_cyclic_anims-then-re-add). Needs a
-// 1070 eye-test.
-const FULL_BODY_ONE_SHOT = (() => {
-  try {
-    return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("fullBodyOneShot")?.toLowerCase() !== "off";
-  } catch (_) {
-    return false;
-  }
-})();
+// F15-1 (2026-06-09) — FULL-BODY one-shot overlay. An attack/cast/emote
+// one-shot ramps the base locomotion cycle's weight to 0 for its duration
+// (restored on its 'finished' event — retail's remove_cyclic_anims-then-re-add),
+// so the swing plays at full amplitude over still-running legs instead of
+// three.js normalizing overlay+base to ~50/50 (which made a drudge's overhead
+// smash look like a wiggle). The `?fullBodyOneShot` flag (default-ON) was
+// RETIRED 2026-06-18 (WS-B teardown) — this is now the UNCONDITIONAL path; the
+// `=off` half-amplitude / crossfade-the-legs-out fallback is gone.
 
 // F8-1 (2026-06-09) — `?castSpeed=on` (default OFF) paces the local cast-
 // gesture chain at ACE CastSpeed=2.0 instead of 1× — without it a level-7 war
@@ -6276,36 +6269,30 @@ export class EntityManager {
     action.reset();
     action.play();
     const prior = inst.currentAction;
-    // FU-3 (2026-06-11) — when MOVING, `prior` is the run/walk cycle; the
-    // crossfade-away fades the LEGS OUT instead of overlaying the swing on a
-    // still-running gait. Under ?fullBodyOneShot=on, skip the crossfade so the
-    // local swing OVERLAYS locomotion (legs keep running) — matching retail and
-    // the `_tryPlayLink` server-echo path; the base-cycle suppression below then
-    // ramps that base to 0 for the overlay's duration. Default-off (flag).
-    if (prior && prior !== action && !FULL_BODY_ONE_SHOT) {
-      try { action.crossFadeFrom(prior, 0.1, false); } catch (_) {}
-    }
+    // FU-3 (2026-06-11) — full-body one-shot is now UNCONDITIONAL (the
+    // ?fullBodyOneShot flag was retired 2026-06-18): the local swing/cast
+    // OVERLAYS locomotion (legs keep running) like the `_tryPlayLink`
+    // server-echo path, and the base-cycle suppression below ramps that base to
+    // 0 for the overlay's duration. The old `=off` branch — crossFadeFrom(prior),
+    // which faded the legs OUT — is gone.
     // (swing/cast vibe-pose tween clears removed — posers retired, WS-B 2026-06-18)
     inst.currentAction = action;
     inst.currentActionKey = swingKey;
-    // FU-3 (2026-06-11) — make the LOCAL optimistic swing/cast one-shot
-    // full-body, exactly like the server-echo `_tryPlayLink` path. Without
-    // this, with ?fullBodyOneShot=on three.js still normalizes overlay+base
-    // to ~50/50 → the swing plays at half amplitude. No-op when the flag is
-    // off (byte-identical to today).
-    if (FULL_BODY_ONE_SHOT) {
-      if (!inst._locoCycleKey || !inst.actions?.has(inst._locoCycleKey)) {
-        // ensure a base to suppress when velScale is off (it only sets
-        // _locoCycleKey for walk/run): point it at the prior locomotion/Ready
-        // action so its weight is ramped to 0 for the overlay's duration
-        if (prior && prior !== action) {
-          for (const [k, a] of inst.actions) {
-            if (a === prior) { inst._locoCycleKey = k; break; }
-          }
+    // Make the LOCAL optimistic swing/cast one-shot full-body, exactly like the
+    // server-echo `_tryPlayLink` path: without the base-cycle suppression
+    // three.js normalizes overlay+base to ~50/50 → the swing plays at half
+    // amplitude.
+    if (!inst._locoCycleKey || !inst.actions?.has(inst._locoCycleKey)) {
+      // ensure a base to suppress when velScale is off (it only sets
+      // _locoCycleKey for walk/run): point it at the prior locomotion/Ready
+      // action so its weight is ramped to 0 for the overlay's duration
+      if (prior && prior !== action) {
+        for (const [k, a] of inst.actions) {
+          if (a === prior) { inst._locoCycleKey = k; break; }
         }
       }
-      this._suppressBaseCycleForOverlay(inst, action);
     }
+    this._suppressBaseCycleForOverlay(inst, action);
     if (inst._swingRestoreTimer) clearTimeout(inst._swingRestoreTimer);
     // Wave 4 / Phase 4.2 (2026-05-26) — hold-at-peak windup. Schedule a
     // pause at `dur * 0.5` after play() so the rig holds at the peak
@@ -8533,7 +8520,8 @@ export class EntityManager {
         if (_tcls === "attack" || _tcls === "cast") {
           inst._lastServerSwingMs = performance.now();
           // F15-1: make this one-shot full-body (ramp the base cycle to 0).
-          if (FULL_BODY_ONE_SHOT) this._suppressBaseCycleForOverlay(inst, action);
+          // Unconditional since the ?fullBodyOneShot flag was retired 2026-06-18.
+          this._suppressBaseCycleForOverlay(inst, action);
         }
       }
       console.log(

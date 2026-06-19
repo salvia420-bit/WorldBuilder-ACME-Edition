@@ -49,11 +49,14 @@ pipeline→legacy/render_2d.js · `1222a1f1`+`3f4e0775` 7b entity dispatch→leg
   node --check eliminate the ReferenceError risk; swing/cast *behavior* needs a 1070 eye-test / motion capture.
 
 ## Remaining (small, optional)
-- **`FULL_BODY_ONE_SHOT` flag-hardcode** — remove the default-ON flag + its `?fullBodyOneShot=off` escape,
-  hardcoding the overlay path. Behavior-neutral by default but touches the live `_suppressBaseCycleForOverlay`
-  overlay; do it where overlays can be motion-validated.
-- **Playwright validation pass** — run `capture_physics_replay` (validates 9d oracle tap) + the ported
-  `capture_phase6_step_e_doors` in a Playwright env; eye-test item-10 swing/cast on the 1070.
+- **`FULL_BODY_ONE_SHOT` flag-hardcode — DONE** (smoke GREEN, overlay behavior UNVALIDATED). Removed the
+  default-ON flag + its `?fullBodyOneShot=off` escape; the full-body one-shot overlay (base-cycle weight → 0
+  via `_suppressBaseCycleForOverlay`, no legs-out crossfade) is now unconditional. url-flags.md row marked
+  RETIRED. Static grep 0 refs + node --check + Tier-1 baseline + boot smoke (EntityManager + 46 entities,
+  `_suppressBaseCycleForOverlay` present, 0 errors). Overlay *behavior* needs a 1070 eye-test.
+- **Playwright + 1070 validation pass** (the only thing left) — run `capture_physics_replay` (validates the
+  9d oracle tap) + the ported `capture_phase6_step_e_doors` in a Playwright env; eye-test item-10 swing/cast
+  + the FULL_BODY_ONE_SHOT overlay on the 1070. All retirement CODE is shipped; this is verification only.
 
 ## Parked — your decision, NOT blockers
 - **3c `worldLifecycle=on`** — DEFERRED. Unsafe to flip standalone: its canonical ObjectDelete needs
