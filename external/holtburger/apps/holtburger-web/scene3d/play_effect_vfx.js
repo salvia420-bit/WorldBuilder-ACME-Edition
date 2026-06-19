@@ -1371,6 +1371,23 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   const spawnedEmitterIds = [];
   let pendingSpawnCount = 0;
   let maxStartTimeMs = 0;
+  // RP6 group declared UP FRONT (before the hook loop) so the StartTime=0
+  // `setTimeout` closures below can't reference it inside its TDZ window:
+  // the loop's `await fetchParticleEmitter` yields the event loop, which let
+  // a 0ms timer fire before the (previously post-loop) `const _rp6Group`
+  // initialized → "Cannot access '_rp6Group' before initialization". `.ids`
+  // is the same live array the closures push into; the concurrent-cap FIFO
+  // registration still runs AFTER the loop (below), so eviction semantics are
+  // unchanged (`_evicted` stays false until then, exactly as before).
+  const _rp6Group = {
+    wm,
+    ids: spawnedEmitterIds,
+    critical: _isCriticalPlayScript(scriptId),
+    _evicted: false,
+    // A11-S2: owner-policy metadata — the facade owner these ids live
+    // under (the target entity), for destroySome-routed evict/reap.
+    ownerKey: targetGuid >>> 0,
+  };
   for (const e of entriesJs) {
     if (e.hookType !== 13 && e.hookType !== 26) continue;
     const emitterDid = (e.createParticleEmitterId >>> 0);
@@ -1422,9 +1439,9 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
       // Wave-1 review (RP6 cap): if this group was FIFO-evicted under
       // concurrent-emitter cap pressure during the StartTime delay, do
       // NOT spawn the late emitter — the eviction's force-destroy already
-      // ran and a late spawn would escape the cap. (`_rp6Group` is
-      // declared below and is initialized by the time this async
-      // callback fires.)
+      // ran and a late spawn would escape the cap. (`_rp6Group` is declared
+      // ABOVE the loop, so it's always initialized when this callback fires —
+      // even when a StartTime=0 timer races the loop's `await`.)
       if (_rp6Group._evicted) return;
       // The target may have despawned during the StartTime delay; if
       // so, skip the spawn (matches the H2 arms' entityMap guard).
@@ -1525,15 +1542,6 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   // per-guid tracking above means an evicted group's emitter IDs are
   // still pruned correctly when the entity-remove or one-shot timer
   // fires (destroyParticleEmitter is idempotent).
-  const _rp6Group = {
-    wm,
-    ids: spawnedEmitterIds,
-    critical: _isCriticalPlayScript(scriptId),
-    _evicted: false,
-    // A11-S2: owner-policy metadata — the facade owner these ids live
-    // under (the target entity), for destroySome-routed evict/reap.
-    ownerKey: targetGuid >>> 0,
-  };
   _registerEmitterGroup(_rp6Group);
 
   // 10. Schedule one-shot cleanup. PlayEffect events are by definition
