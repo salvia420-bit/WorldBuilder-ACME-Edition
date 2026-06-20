@@ -1013,7 +1013,18 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     typeof scene3d.loadBuildingsForLandblock === "function"
       ? scene3d.loadBuildingsForLandblock.bind(scene3d)
       : null;
-  if (!loadStatics && !loadBuildings) return;
+  // 2026-06-20 barren-wilderness fix: terrain MESH must widen in lockstep with
+  // the statics/scenery ring, otherwise baking statics at radius>1 floats trees
+  // over the void terrain beyond the 3×3 startup patch (index.html
+  // ensureTerrainAroundLandblock). The per-LB terrain baker is self-contained
+  // (fetches its own heightmaps) and idempotent via terrainBakedLbs. Distant
+  // terrain only needs to be VISIBLE — wasm collision (populateTerrain) stays a
+  // tight 3×3 around the player via the index.html prefetch, unchanged here.
+  const loadTerrain =
+    typeof scene3d.loadTerrainForLandblock === "function"
+      ? scene3d.loadTerrainForLandblock.bind(scene3d)
+      : null;
+  if (!loadStatics && !loadBuildings && !loadTerrain) return;
 
   let renderSetArr = null;
   try {
@@ -1047,14 +1058,42 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   // neighbour ring around every PVS-visible LB, those loads start ~5s
   // earlier (one ring's traversal time at run speed). Idempotency in
   // both loadStatics + loadBuildings makes redundant calls free.
+  //
+  // 2026-06-20 barren-wilderness fix: the ring radius is now player-tunable
+  // (`scene3d.pvsRingRadius`, default 5 = 11×11 ≈ 960 m). Outdoors `seen` is a
+  // single LB (the player's — outdoor renderSet is structurally {current}), so
+  // this is exactly a player-centered radius-N ring, matching the radius-6 boot
+  // ring's "full visible horizon" intent as the player roams away from the
+  // Holtburg-hardcoded boot bake. Falls back to 1 (the legacy 3×3) when the
+  // property is absent (older build / capture path).
+  const ringRadius =
+    Number.isFinite(scene3d.pvsRingRadius) && scene3d.pvsRingRadius >= 0
+      ? scene3d.pvsRingRadius | 0
+      : 1;
+  // Per-frame fire-storm guard: the fire loop below makes
+  // (ringSize × 3-domain) idempotent hook calls — at radius 5 that is
+  // 121×3 ≈ 363 calls/frame, each allocating a guarded-bake Promise even
+  // for already-baked LBs (the baked-Set short-circuit lives inside the
+  // async closure, past the allocation). The LBs to (re)fire only change
+  // when the player's `seen` set or the ring radius changes (an LB
+  // crossing / renderSet shift), so skip the whole sweep when the
+  // signature is unchanged since last frame — collapsing the steady-state
+  // cost to one sweep per LB-crossing while still leading motion. `seen`
+  // derives from a wasm-sorted renderSet so its iteration order is stable
+  // frame-to-frame. (A cooldown-backed-off failed bake retries on the next
+  // signature change, which roaming produces within seconds.)
+  let fireSig = String(ringRadius);
+  for (const lbKey of seen) fireSig += "," + lbKey;
+  if (scene3d._pvsLastFireSig === fireSig) return;
+  scene3d._pvsLastFireSig = fireSig;
   const ringSeen = scene3d._pvsRingLbScratch || (scene3d._pvsRingLbScratch = new Set());
   ringSeen.clear();
   for (const lbKey of seen) {
     ringSeen.add(lbKey);
     const lbX = (lbKey >>> 24) & 0xff;
     const lbY = (lbKey >>> 16) & 0xff;
-    for (let dx = -1; dx <= 1; dx += 1) {
-      for (let dy = -1; dy <= 1; dy += 1) {
+    for (let dx = -ringRadius; dx <= ringRadius; dx += 1) {
+      for (let dy = -ringRadius; dy <= ringRadius; dy += 1) {
         if (dx === 0 && dy === 0) continue;
         const nx = lbX + dx;
         const ny = lbY + dy;
@@ -1069,6 +1108,17 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     // Fire-and-forget — each hook resolves a Promise but we don't
     // await them from the tick. The per-domain Set checks make
     // re-fires near-free.
+    if (loadTerrain) {
+      try {
+        loadTerrain(lbX, lbY);
+      } catch (e) {
+        if (!scene3d._pvsLoadTerrainWarned) {
+          scene3d._pvsLoadTerrainWarned = true;
+          // eslint-disable-next-line no-console
+          console.warn("[scene3d.cells] PVS loadTerrainForLandblock threw:", e);
+        }
+      }
+    }
     if (loadStatics) {
       try {
         loadStatics(lbX, lbY);

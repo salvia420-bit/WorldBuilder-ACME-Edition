@@ -183,6 +183,36 @@ const BUILDINGS_RING_RADIUS = (() => {
   return 6;
 })();
 
+// 2026-06-20 empty-world / barren-wilderness fix — player-centered PVS
+// expansion ring radius. The radius-6 boot ring (HOLTBURG_RING_RADIUS) is
+// hardcoded to center on Holtburg, so AWAY from Holtburg the only static /
+// scenery / building / terrain-mesh coverage came from `tickPvsLoadExpansion`,
+// which — because an OUTDOOR `renderSet` is structurally always {current}
+// (the cell_portal_graph holds only indoor EnvCell portals, scene.rs:990) —
+// expanded to a hardcoded 3×3 (radius 1, ~288 m). Result: everywhere except
+// the Holtburg neighborhood showed exactly the "empty wilderness past ~480 m"
+// symptom the 2026-05-16 radius 2→6 boot bump cured — but the cure never
+// followed the player. This raises the per-frame player-centered ring to
+// radius 5 (11×11 ≈ 960 m horizon), matching the boot ring's "full visible
+// horizon" intent as the player roams. `?pvsRingRadius=N` overrides
+// (N=1 restores the old 3×3 for A/B). The 11×11 (121-LB) moving working set
+// fits under the LRU cap (169 = 13×13 from the boot ring) with ~48 LBs of
+// headroom against evict↔re-bake thrash. NOTE: pvsRingRadius=6 (13×13=169)
+// would exactly fill the default cap and thrash — pair it with `?lbCap=225`.
+const PVS_RING_RADIUS = (() => {
+  try {
+    if (typeof window === "undefined") return 5;
+    const ps = new URLSearchParams(window.location.search);
+    const raw = ps.get("pvsRingRadius");
+    if (raw) {
+      const n = Number.parseInt(raw, 10);
+      if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
+    }
+    if (ps.get("agentic") === "low") return 1;
+  } catch (_) { /* fallthrough */ }
+  return 5;
+})();
+
 // 2026-05-21 cold-boot Phase G (eager-init) — session-independent
 // scene3d bootstrap. Runs during page-init while the user is still
 // reading the login form, so the renderer + atmosphere LUTs + detail
@@ -2338,6 +2368,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     terrainOpts: scene3dForBuilders.terrainOpts,
     buildingsOpts: scene3dForBuilders.buildingsOpts,
     staticsOpts: scene3dForBuilders.staticsOpts,
+    // 2026-06-20 barren-wilderness fix: player-centered PVS-expansion ring
+    // radius read by loop.js's `tickPvsLoadExpansion` (cells.js). Default 5
+    // (11×11 ≈ 960 m), `?pvsRingRadius=N` overrides; see PVS_RING_RADIUS above.
+    pvsRingRadius: PVS_RING_RADIUS,
     // Wire-agent — without this alias, loadTerrainForLandblock /
     // loadBuildingsForLandblock / loadStaticsForLandblock (called from
     // handlePositionUpdate when player crosses an LB) pass `this =
@@ -3531,7 +3565,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // above the live PVS working set (3×3 bake ≈9 + PVS expansion ≲25) so growth
     // is bounded WITHOUT evict↔re-bake thrash. The 3×3 always-resident floor in
     // LandblockLRU.tickEviction is the hard thrash guard regardless of this cap.
-    const ringMax = Math.max(HOLTBURG_RING_RADIUS, STATICS_RING_RADIUS, BUILDINGS_RING_RADIUS);
+    const ringMax = Math.max(HOLTBURG_RING_RADIUS, STATICS_RING_RADIUS, BUILDINGS_RING_RADIUS, PVS_RING_RADIUS);
     let lbCap = Math.max((2 * ringMax + 1) ** 2, 32);
     let lbLruDebug = false;
     if (typeof window !== "undefined" && window.location?.search) {
