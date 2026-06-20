@@ -21,6 +21,19 @@ use crate::stats;
 use crate::vendor::VendorState;
 use crate::{WorldBootstrap, WorldEvent};
 
+/// Terrain-sink fix 2026-06-19: when `true` (default), [`WorldState::terrain_height_at`]
+/// interpolates the standing Z within the per-cell TRIANGLE on the SAME fixed
+/// z00↔z11 (SW→NE) diagonal the base render mesh (`build_mesh`, holtburger-web
+/// src/lib.rs) triangulates every cell on — so physics Z == the DRAWN surface.
+/// The old BILINEAR interpolation deviated from the triangulated render surface
+/// by up to `twist/4` on saddle cells (live-measured 1.15 m), rendering the local
+/// player half-sunk into slopes (it stood at the bilinear Z while the eye saw the
+/// triangle mesh). `false` = legacy bilinear, retained for A/B + revert. (Retail
+/// uses a per-cell split via `terrain_subdiv::cell_swto_ne_cut`; the base render
+/// mesh does NOT yet — matching the render's fixed diagonal here is what un-buries
+/// the rig at the shipped quality levels.)
+const USE_TRIANGLE_TERRAIN_Z: bool = true;
+
 pub struct ServerTimeSync {
     pub server_time: f64,
     pub local_time: web_time::Instant,
@@ -716,14 +729,38 @@ impl WorldState {
         let fx = cell_x - cx0 as f32;
         let fy = cell_y - cy0 as f32;
         // Layout matches CellLandblock: idx = vx * 9 + vy.
+        // z00 = SW (fx=0,fy=0), z10 = SE (fx=1,fy=0), z01 = NW (fx=0,fy=1), z11 = NE.
         let z00 = grid[cx0 * 9 + cy0];
         let z10 = grid[cx1 * 9 + cy0];
         let z01 = grid[cx0 * 9 + cy1];
         let z11 = grid[cx1 * 9 + cy1];
-        let z = z00 * (1.0 - fx) * (1.0 - fy)
-            + z10 * fx * (1.0 - fy)
-            + z01 * (1.0 - fx) * fy
-            + z11 * fx * fy;
+
+        if !USE_TRIANGLE_TERRAIN_Z {
+            // Legacy bilinear over the cell quad (retained for A/B + revert).
+            let z = z00 * (1.0 - fx) * (1.0 - fy)
+                + z10 * fx * (1.0 - fy)
+                + z01 * (1.0 - fx) * fy
+                + z11 * fx * fy;
+            return Some(z);
+        }
+
+        // Interpolate within the per-cell TRIANGLE so the standing Z equals the
+        // DRAWN terrain surface (no more half-sunk rig on slopes). Match the
+        // RENDER mesh EXACTLY: the base (subdivLevel=1) mesh builder `build_mesh`
+        // (apps/holtburger-web/src/lib.rs) triangulates EVERY cell on the FIXED
+        // z00↔z11 (SW→NE) diagonal — it does NOT apply the retail per-cell split
+        // for the base mesh (only the subdiv>=2 path does, via
+        // `terrain_subdiv::cell_swto_ne_cut`). So mirror that fixed SW→NE diagonal
+        // here. (Follow-on: if `build_mesh` is upgraded to the retail per-cell
+        // `cell_swto_ne_cut` split, switch this to call the same function so
+        // physics keeps matching the render.)
+        let z = if fx >= fy {
+            // lower-right triangle: SW(z00), SE(z10), NE(z11).
+            z00 + (z10 - z00) * fx + (z11 - z10) * fy
+        } else {
+            // upper-left triangle: SW(z00), NE(z11), NW(z01).
+            z00 + (z11 - z01) * fx + (z01 - z00) * fy
+        };
         Some(z)
     }
 

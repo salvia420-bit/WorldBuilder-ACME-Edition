@@ -26964,7 +26964,8 @@ impl SessionHandle {
     ///
     /// JS camera path uses this to lift the camera off the ground:
     /// `if (cameraZ < terrainZ + radius + 0.2) cameraZ = terrainZ + 0.6;`.
-    /// Smooth because bilinear → no jitter on slopes.
+    /// Triangle-plane (fixed z00↔z11 diagonal) so it tracks the drawn terrain
+    /// surface the player stands on — continuous across cells, no slope jitter.
     #[wasm_bindgen(js_name = terrainHeightAt)]
     pub fn terrain_height_at(&self, world_x: f32, world_y: f32) -> Option<f32> {
         const LB_M: f32 = 192.0;
@@ -26994,10 +26995,16 @@ impl SessionHandle {
         let z10 = grid[cx1 * 9 + cy0];
         let z01 = grid[cx0 * 9 + cy1];
         let z11 = grid[cx1 * 9 + cy1];
-        let z = z00 * (1.0 - fx) * (1.0 - fy)
-            + z10 * fx * (1.0 - fy)
-            + z01 * (1.0 - fx) * fy
-            + z11 * fx * fy;
+        // Terrain-sink fix 2026-06-19: TRIANGLE interpolation on the fixed
+        // z00↔z11 (SW→NE) diagonal, mirroring `WorldState::terrain_height_at`
+        // and the base render mesh `build_mesh`. Keeps this query export (JS
+        // camera-lift) on the SAME surface the player physics stands on; the
+        // old bilinear sat up to ~1.15 m below the drawn triangle mesh on slopes.
+        let z = if fx >= fy {
+            z00 + (z10 - z00) * fx + (z11 - z10) * fy
+        } else {
+            z00 + (z11 - z01) * fx + (z01 - z00) * fy
+        };
         Some(z)
     }
 
