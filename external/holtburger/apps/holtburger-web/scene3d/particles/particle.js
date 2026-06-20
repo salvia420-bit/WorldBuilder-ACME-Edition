@@ -152,7 +152,7 @@ export class Particle {
    * @returns {boolean} Always false (mirrors ACE return value).
    */
   init(info, parent, partIdx, parentOffset, mesh, randomOffset, persistent, a, b, c,
-       startScale, finalScale, startTrans, finalTrans) {
+       startScale, finalScale, startTrans, finalTrans, anchorFrame) {
     const now = currentTime();
 
     this.lastUpdateTime = now;
@@ -172,20 +172,19 @@ export class Particle {
 
     // Snapshot the parent frame. ACE: if partIdx==-1, copy parent.Position.Frame,
     // else copy parent.PartArray.Parts[partIdx].Pos.Frame.
-    if (partIdx === -1) {
-      this.startFrame.position.copy(parent.position);
-      this.startFrame.quaternion.copy(parent.quaternion);
-    } else {
-      const pf = parent.partFrames && parent.partFrames[partIdx];
-      if (pf) {
-        this.startFrame.position.copy(pf.position);
-        this.startFrame.quaternion.copy(pf.quaternion);
-      } else {
-        // Defensive: caller passed an invalid partIdx. Mirror parent.
-        this.startFrame.position.copy(parent.position);
-        this.startFrame.quaternion.copy(parent.quaternion);
-      }
-    }
+    //
+    // 2026-06-20: the emitter pre-resolves this into `_scene`-LOCAL space and
+    // passes it as `anchorFrame` (partFrames[i] is WORLD space; snapshotting it
+    // raw double-applies the worldRoot −π/2 X rotation → particle flung
+    // ~28k units off-world; see ParticleEmitter._resolveAnchorFrame). Use the
+    // pre-resolved frame when supplied; fall back to the legacy in-place read
+    // (root anchor / direct callers) otherwise.
+    const startSrc = anchorFrame
+      || (partIdx === -1
+        ? parent
+        : (parent.partFrames && parent.partFrames[partIdx]) || parent);
+    this.startFrame.position.copy(startSrc.position);
+    this.startFrame.quaternion.copy(startSrc.quaternion);
 
     // ACE: Offset = StartFrame.LocalToGlobalVec(parentOffset.Origin + _offset).
     // LocalToGlobalVec is PURE rotation by orientation — NO translation —
@@ -344,13 +343,20 @@ export class Particle {
       case ParticleType.ParabolicLVGA:
       case ParticleType.ParabolicLVLA:
       case ParticleType.ParabolicGVGA: {
-        // ACE: part.Pos.Frame.Origin += (lifetime² * B / 2) + (lifetime * A) + Offset;
-        // The `+=` accumulates onto whatever was already in the mesh
-        // position. Faithful port preserves that.
+        // acclient CParticle::Update (acclient.c:330453-330465) ASSIGNS the full
+        // parabola anchored at the parent frame:
+        //   position = parent.Origin + Offset + (t·A) + (½·t²·B)
+        // — it is NOT `+=`. ParticleViewer/ACE use `+=`, which is a decomp-port
+        // bug: in three.js the mesh starts at (0,0,0), so accumulating drops the
+        // parent origin entirely and the particle flies to WORLD-ORIGIN
+        // (CDP-verified on LB 0xAB94 doll auras, 2026-06-20). Assign the clean
+        // parabola including (px,py,pz), consistent with the *GR variants below.
         const halfT2 = lt * lt * 0.5;
-        mesh.position.x += halfT2 * this.b.x + lt * this.a.x + ox;
-        mesh.position.y += halfT2 * this.b.y + lt * this.a.y + oy;
-        mesh.position.z += halfT2 * this.b.z + lt * this.a.z + oz;
+        mesh.position.set(
+          px + ox + lt * this.a.x + halfT2 * this.b.x,
+          py + oy + lt * this.a.y + halfT2 * this.b.y,
+          pz + oz + lt * this.a.z + halfT2 * this.b.z,
+        );
         break;
       }
       case ParticleType.ParabolicLVGAGR:

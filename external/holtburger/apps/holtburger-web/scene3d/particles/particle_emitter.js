@@ -108,6 +108,46 @@ export class ParticleEmitter {
   }
 
   /**
+   * Resolve this emitter's CURRENT anchor frame in `_scene`-LOCAL space — the
+   * space the particle meshes (children of `_scene`) are positioned in.
+   *
+   * 2026-06-20 coordinate fix (CDP-diagnosed on LB 0xAB94 Beaten/Battered
+   * Doll). `parent.partFrames[i]` (setup_rig `createPartFramesProxy`) returns
+   * the part frame in WORLD space (`getWorldPosition`/`getWorldQuaternion`).
+   * But the particle meshes are children of `_scene` (the entities/statics
+   * group), itself under the `worldRoot` whose −π/2 X rotation IS `acToThree`.
+   * Setting a mesh's LOCAL position from a WORLD frame makes `worldRoot`
+   * re-apply its rotation, flinging the particle to (ax,−ay,−az) ~28k units
+   * off-world (so the aura never appears and you see only the bare luminous
+   * anchor part — the "white box monster"). The ROOT anchor (−1 / 0xFFFFFFFF)
+   * uses `parent.position`, which is ALREADY `_scene`-local (the rig is a child
+   * of `_scene`), so only the part-anchored path needs converting. We convert
+   * via `_scene.worldToLocal` (NOT a hardcoded `threeToAc`) so it stays correct
+   * if the worldRoot transform ever changes. Returns a reused scratch frame:
+   * callers `.copy()` out of it (Particle.init) or consume it within the tick.
+   */
+  _resolveAnchorFrame() {
+    if (this.partIndex === -1 || (this.partIndex >>> 0) === 0xffffffff) {
+      return this.parent;
+    }
+    const wf = this.parent.partFrames && this.parent.partFrames[this.partIndex];
+    if (!wf) return this.parent;
+    if (!this._scene) return wf; // no scene to localize against → bail open
+    const f = this._anchorScratch
+      || (this._anchorScratch = {
+        position: new THREE.Vector3(),
+        quaternion: new THREE.Quaternion(),
+      });
+    f.position.copy(wf.position);
+    this._scene.worldToLocal(f.position); // world → _scene-local
+    const sceneQ = this._anchorSceneQuat
+      || (this._anchorSceneQuat = new THREE.Quaternion());
+    this._scene.getWorldQuaternion(sceneQ).invert();
+    f.quaternion.copy(sceneQ).multiply(wf.quaternion);
+    return f;
+  }
+
+  /**
    * Port of `SetInfo` (ParticleEmitter.cs:102-123). Allocates per-slot
    * meshes via the factory. Returns false if info.hwGfxObjId is 0 (ACE
    * destroys the emitter in that case — caller should discard).
@@ -310,6 +350,11 @@ export class ParticleEmitter {
       finalScale,
       startTrans,
       finalTrans,
+      // 2026-06-20: the emitter's anchor frame already converted to
+      // `_scene`-LOCAL space (partFrames are WORLD; see _resolveAnchorFrame).
+      // Particle.init snapshots this as startFrame instead of re-reading the
+      // WORLD-space partFrames directly.
+      this._resolveAnchorFrame(),
     );
 
     this.recordParticleEmission();
@@ -330,23 +375,15 @@ export class ParticleEmitter {
         if (mesh === null) continue;
         let frame;
         if (this.info.isParentLocal) {
-          // T4: anchor to the named part's WORLD frame via the `partFrames`
-          // per-part accessor that entities.js attaches to inst.root (the
-          // emitter `parent`). partFrames[partIndex] -> {position, quaternion}
-          // in world space (entities.js composes inst.parts[partIndex] up via
-          // getWorldPosition/getWorldQuaternion). The static `parentOffset`
-          // composition is preserved — it is applied separately in
-          // particle.js:init (parentOffset.position rotated by startFrame) and
-          // is NOT touched here. Root sentinels (-1 and the raw unsigned
-          // 0xFFFFFFFF from the wire/wasm boundary) and any missing/out-of-range
-          // `partFrames` entry fall back to the root `parent` frame, matching
-          // the pre-T4 behavior for root-anchored emitters.
-          if (this.partIndex === -1 || (this.partIndex >>> 0) === 0xffffffff) {
-            frame = this.parent;
-          } else {
-            frame = (this.parent.partFrames && this.parent.partFrames[this.partIndex])
-              || this.parent;
-          }
+          // T4: anchor to the named part's frame via the `partFrames` per-part
+          // accessor entities.js attaches to inst.root (the emitter `parent`).
+          // partFrames[i] is WORLD space; `_resolveAnchorFrame` converts it
+          // into `_scene`-LOCAL (the space the particle meshes live in) so the
+          // worldRoot −π/2 X rotation isn't re-applied (2026-06-20 fix). Root
+          // sentinels (−1 / 0xFFFFFFFF) and missing/out-of-range entries fall
+          // back to the root `parent` frame. The static `parentOffset` is
+          // applied separately in particle.js:init and is NOT touched here.
+          frame = this._resolveAnchorFrame();
         } else {
           frame = this.particles[i].startFrame;
         }
