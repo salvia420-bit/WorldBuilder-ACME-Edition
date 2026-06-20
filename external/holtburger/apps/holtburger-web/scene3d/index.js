@@ -33,6 +33,7 @@ import * as THREE from "three";
 import {
   bakeTerrainForLandblock,
   bakeTerrainRing,
+  resolveTerrainRingOpts,
   tickTerrainLodRebake,
 } from "./terrain.js?v=phase-d-batch";
 import {
@@ -475,13 +476,17 @@ export async function preInit3D(canvas) {
   }
   // Un-claim helper for every path that stops the 3D cadence (stop(),
   // onPause, mirrored by the index.html heartbeat watchdog): release the
-  // claim and queue the 2D rAF driver's resume. Idempotent — only acts
-  // on a held claim, so flag-off paths are byte-identical no-ops.
+  // claim only. Post-2D-retire we deliberately do NOT resume the old 2D
+  // rAF driver — it was net-only and could not drive PVS/scenery
+  // streaming (tickPvsLoadExpansion runs only in the 3D loop), so on a
+  // context-loss pause resuming it collapsed the world to the narrow
+  // neighborhood. The 3D loop is the sole streaming driver; onResume
+  // re-claims and revives it. Idempotent — only acts on a held claim, so
+  // flag-off paths are byte-identical no-ops.
   function _releaseFrameDriverClaim() {
     if (typeof window === "undefined") return;
     if (window.__scene3dFrameDriverActive) {
       window.__scene3dFrameDriverActive = false;
-      try { window.__resume2dFrameDriver?.(); } catch (_) { /* resume is best-effort */ }
     }
   }
 
@@ -1353,10 +1358,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     const runBuildings = async () => {
       try {
         // 2026-05-16 bandwidth optimisation — buildings ring decoupled
-        // from the terrain ring (radius=6) and shrunk to radius=2
-        // (5×5=25 LBs). PVS-driven expansion in loop.js's
-        // tickPvsLoadExpansion fires `loadBuildingsForLandblock`
-        // (idempotent) for any LB whose cell becomes visible.
+        // from the terrain ring but, post-2026-05-16 horizon-fill bump,
+        // shares its radius=6 default (13×13 = 169 LBs; BUILDINGS_RING_RADIUS).
+        // PVS-driven expansion in loop.js's tickPvsLoadExpansion fires
+        // `loadBuildingsForLandblock` (idempotent) for any LB whose cell
+        // becomes visible.
         const s = await bakeBuildingsRing(
           scene3dForBuilders,
           HOLTBURG_X,
@@ -1378,10 +1384,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       if (typeof wasmExports.fetch_model_meshes !== "function") return null;
       try {
         // 2026-05-16 bandwidth optimisation — statics ring decoupled
-        // from the terrain/buildings ring. Initial radius=2 (5×5=25
-        // LBs). PVS expansion + the per-LB hook
-        // `loadStaticsForLandblock` are idempotent so concurrent
-        // expansion paths converge cleanly.
+        // from the terrain/buildings ring. Initial radius=6 default
+        // (13×13 = 169 LBs; STATICS_RING_RADIUS). PVS expansion + the
+        // per-LB hook `loadStaticsForLandblock` are idempotent so
+        // concurrent expansion paths converge cleanly.
         const s = await bakeStaticsRing(
           scene3dForBuilders,
           HOLTBURG_X,
@@ -2562,6 +2568,33 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       const lbKeyForLru = lbKeyFromXY(lbX, lbY);
       const self = this;
       return this._guardedStreamBake("terrain", lbKeyForLru, async () => {
+        // A1-part2 (permanent-barren belt-and-suspenders): if the
+        // once-per-ring opts bag is missing (init3D's bakeTerrainRing
+        // threw early so `scene3d.terrainOpts` was never stashed), lazily
+        // resolve it here centred on the ring centre LB rather than
+        // letting `bakeTerrainForLandblock` throw "opts missing" and
+        // permanently strip terrain for this LB. Guarded so a resolve
+        // throw is non-fatal (we still hand the baker the unset opts and
+        // let its own explicit error surface).
+        if (!self.terrainOpts) {
+          try {
+            const centreLbKey =
+              typeof self.initialCentreLbKey === "number"
+                ? self.initialCentreLbKey
+                : ((HOLTBURG_X << 24) | (HOLTBURG_Y << 16)) >>> 0;
+            const centreLbX = (centreLbKey >>> 24) & 0xff;
+            const centreLbY = (centreLbKey >>> 16) & 0xff;
+            self.terrainOpts = await resolveTerrainRingOpts(
+              self,
+              self.wasmExports,
+              centreLbX,
+              centreLbY,
+              self
+            );
+          } catch (_) {
+            /* resolve best-effort; baker raises its own opts error */
+          }
+        }
         // Terrain bake handles its own wire-fill companion (second mesh
         // per LB sharing geometry, added directly to terrainGroup by
         // `bakeTerrainForLandblock` — see scene3d/terrain.js:1335ish).
@@ -2727,10 +2760,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     renderer,
     canvas,
     getLiveScene3d: () => liveScene3d,
-    // A1-O4: context-loss pause releases the frame-pump claim so the 2D
-    // driver resumes net/chat while the GPU recovers; resume re-claims
-    // (the 2D wrapper re-parks itself on its next frame — at most a
-    // handful of double-pumped frames, today's steady-state concurrency).
+    // A1-O4 / C2: context-loss pause releases the frame-pump claim. Post-
+    // 2D-retire we no longer resume the old net-only 2D driver here (it
+    // can't stream PVS/scenery — see _releaseFrameDriverClaim); the sim
+    // simply pauses until onResume re-claims and revives the sole 3D loop.
     onPause: () => { running = false; _cancelSchedule(); _releaseFrameDriverClaim(); },
     onResume: () => {
       running = true;
@@ -2740,6 +2773,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // Reset the dt baseline so the first frame post-restore doesn't
       // trip the recovery-freeze path and stall sim for 10 frames.
       lastFrameTs = null;
+      // C2: clear the PVS ring-fire signature (cells.js `_pvsLastFireSig`)
+      // so the first post-resume tickPvsLoadExpansion does a full ring
+      // re-sweep instead of short-circuiting on a stale match — revives
+      // wide streaming that the now-removed 2D-driver resume used to fake.
+      try {
+        if (liveScene3d) liveScene3d._pvsLastFireSig = null;
+      } catch (_) { /* best-effort */ }
       // sched-timers: cancel any handle the pause left in flight before
       // re-arming, so context loss/restore mid-interval doesn't double
       // the cadence (two ticks racing per frame interval).

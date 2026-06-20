@@ -57,6 +57,32 @@ const CELL_BUG_PARITY = (() => {
   return false;
 })();
 
+// C1 (2026-06-20 busted-world load fix): cap the per-frame PVS-ring bake
+// fan-out. `tickPvsLoadExpansion` otherwise fires the whole radius-N ring
+// (~363 hooks at radius 5) on every LB-crossing all at once, saturating the
+// bake worker/network and multiplying the late-paint stall + the single-fetch-
+// throw poison. With the cap, only up to K NEW (not-yet-baked) LBs are STARTED
+// per call, nearest-to-player first; the fire signature is held until the ring
+// fully drains so subsequent frames keep filling progressively.
+//
+// `?pvsBakeCap` — default-ON, K = PVS_BAKE_DEFAULT_K (4). `=off` restores the
+// legacy uncapped all-at-once fan-out. `=N` (positive integer) overrides K.
+// NOTE: K needs 1070 roam-feel tuning.
+const PVS_BAKE_DEFAULT_K = 4;
+const PVS_BAKE_CAP = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      const raw = new URLSearchParams(globalThis.location.search).get("pvsBakeCap");
+      if (raw === "off") return { enabled: false, k: PVS_BAKE_DEFAULT_K };
+      if (raw != null) {
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n) && n > 0) return { enabled: true, k: n };
+      }
+    }
+  } catch (_) {}
+  return { enabled: true, k: PVS_BAKE_DEFAULT_K };
+})();
+
 // Phase 4 PView port (2026-05-25): module-scope scratch for the
 // per-frame MVP matrix passed to `getRenderSetWithFrustum`. Allocated
 // lazily on first call so capture-time setups without a Three.js
@@ -1084,8 +1110,13 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   // signature change, which roaming produces within seconds.)
   let fireSig = String(ringRadius);
   for (const lbKey of seen) fireSig += "," + lbKey;
+  // Steady-state short-circuit: skip the whole sweep when the signature is
+  // unchanged since last frame. Under the bake cap, the signature is recorded
+  // ONLY once the ring is fully drained (a partially-drained ring stores a
+  // sentinel below that can't match `fireSig`), so the cap still re-enters each
+  // frame to fill the remaining LBs progressively while a fully-baked ring
+  // collapses to one sweep per LB-crossing — exactly as the uncapped path does.
   if (scene3d._pvsLastFireSig === fireSig) return;
-  scene3d._pvsLastFireSig = fireSig;
   const ringSeen = scene3d._pvsRingLbScratch || (scene3d._pvsRingLbScratch = new Set());
   ringSeen.clear();
   for (const lbKey of seen) {
@@ -1102,12 +1133,13 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
       }
     }
   }
-  for (const lbKey of ringSeen) {
+
+  // Fire-and-forget the three per-domain hooks for one ring LB. Each hook
+  // resolves a Promise but we don't await it; the per-domain baked-Set + the
+  // stream guard's in-flight/cooldown dedup make re-fires near-free.
+  const fireOne = (lbKey) => {
     const lbX = (lbKey >>> 24) & 0xff;
     const lbY = (lbKey >>> 16) & 0xff;
-    // Fire-and-forget — each hook resolves a Promise but we don't
-    // await them from the tick. The per-domain Set checks make
-    // re-fires near-free.
     if (loadTerrain) {
       try {
         loadTerrain(lbX, lbY);
@@ -1141,5 +1173,74 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
         }
       }
     }
+  };
+
+  if (!PVS_BAKE_CAP.enabled) {
+    // Legacy uncapped fan-out: fire the whole ring at once, then record the
+    // signature so the steady-state sweep is one per LB-crossing.
+    scene3d._pvsLastFireSig = fireSig;
+    for (const lbKey of ringSeen) fireOne(lbKey);
+    return;
+  }
+
+  // Capped path: an LB is a "new bake" if ANY present domain hasn't baked it
+  // yet. Start at most K new bakes per call, nearest-to-player first, so the
+  // ring fills progressively instead of saturating the bake worker/network all
+  // at once. Already-fully-baked LBs are skipped (their hooks are no-ops).
+  const tBaked = scene3d.terrainBakedLbs instanceof Set ? scene3d.terrainBakedLbs : null;
+  const sBaked = scene3d.staticsBakedLbs instanceof Set ? scene3d.staticsBakedLbs : null;
+  const bBaked = scene3d.buildingsBakedLbs instanceof Set ? scene3d.buildingsBakedLbs : null;
+  const isNewBake = (lbKey) => {
+    if (loadTerrain && tBaked && !tBaked.has(lbKey)) return true;
+    if (loadStatics && sBaked && !sBaked.has(lbKey)) return true;
+    if (loadBuildings && bBaked && !bBaked.has(lbKey)) return true;
+    // No baked-Set wired for a present domain → can't prove baked; treat as new
+    // so we still make progress (and the per-key guard dedups the re-fire).
+    if (loadTerrain && !tBaked) return true;
+    if (loadStatics && !sBaked) return true;
+    if (loadBuildings && !bBaked) return true;
+    return false;
+  };
+
+  // Sort the ring by Chebyshev distance to the nearest `seen` (player) LB so
+  // the closest unbaked LBs paint first.
+  const ringArr = scene3d._pvsRingSortScratch || (scene3d._pvsRingSortScratch = []);
+  ringArr.length = 0;
+  for (const lbKey of ringSeen) ringArr.push(lbKey);
+  const distToPlayer = (lbKey) => {
+    const lbX = (lbKey >>> 24) & 0xff;
+    const lbY = (lbKey >>> 16) & 0xff;
+    let best = Infinity;
+    for (const pKey of seen) {
+      const pX = (pKey >>> 24) & 0xff;
+      const pY = (pKey >>> 16) & 0xff;
+      const d = Math.max(Math.abs(lbX - pX), Math.abs(lbY - pY));
+      if (d < best) best = d;
+    }
+    return best;
+  };
+  ringArr.sort((a, b) => distToPlayer(a) - distToPlayer(b));
+
+  const maxNew = PVS_BAKE_CAP.k | 0;
+  let started = 0;
+  let remaining = false;
+  for (let i = 0; i < ringArr.length; i += 1) {
+    const lbKey = ringArr[i];
+    if (!isNewBake(lbKey)) continue; // already fully baked — skip cheaply
+    if (started >= maxNew) {
+      remaining = true; // more new bakes left for a later frame
+      break;
+    }
+    fireOne(lbKey);
+    started += 1;
+  }
+  // Hold the signature (force a re-entry next frame) until the ring is fully
+  // drained, so subsequent frames keep filling the remaining LBs progressively
+  // instead of re-deciding from scratch. Once nothing new remains, record the
+  // signature so the steady-state cost collapses to one sweep per LB-crossing.
+  if (!remaining) {
+    scene3d._pvsLastFireSig = fireSig;
+  } else {
+    scene3d._pvsLastFireSig = null;
   }
 }

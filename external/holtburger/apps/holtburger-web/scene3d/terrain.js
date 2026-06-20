@@ -1719,7 +1719,7 @@ export const PHASE_2_2_LAVA_CODES = TERRAIN_LAVA_CODES;
  * distance-keyed LOD generalisation is Objective 7's job, not this
  * objective's.
  */
-async function resolveTerrainRingOpts(
+export async function resolveTerrainRingOpts(
   scene3d,
   wasmExports,
   centreLbX,
@@ -2170,6 +2170,30 @@ function readTerrainSlopeShadingFlag() {
     if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get(
       "terrainSlopeShading",
+    );
+    return !(typeof v === "string" && v.toLowerCase() === "off");
+  } catch (_) {
+    return true;
+  }
+}
+
+/**
+ * B2 (2026-06-20) — Parse `?terrainRingTimeSlice` from the page URL.
+ * Defaults to ON; only the literal `"off"` (case-insensitive) disables it.
+ * When ON, `bakeTerrainRing`'s final synchronous per-LB bake fan-out is
+ * frame-budgeted: the centre + ring-1 (9 nearest coords) bake first, then
+ * the remaining coords bake in small batches that yield a REAL macrotask
+ * (`setTimeout(0)`) whenever ~6ms of wall-clock has elapsed, so the rAF
+ * pump (pumpNetFrame → __lastPumpMs) keeps running and the load watchdog
+ * never trips during the ~169-LB radius-6 boot ring. `=off` restores the
+ * prior single uninterrupted `Promise.all` fan-out. Wrapped in try/catch
+ * for the non-browser Node harness, mirroring the sibling readers.
+ */
+function readTerrainRingTimeSliceFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get(
+      "terrainRingTimeSlice",
     );
     return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
@@ -3131,6 +3155,16 @@ export async function bakeTerrainRing(
     null
   );
 
+  // A1 (2026-06-20) — stash the resolved opts on the scene3d IMMEDIATELY,
+  // not at the end of this function. If any later per-LB bake throws, the
+  // tail-end `scene3d.terrainOpts = opts;` never runs, leaving terrainOpts
+  // undefined → `bakeTerrainForLandblock` throws "opts missing" (~:2517) on
+  // every lazy LB-entry and the stream guard cooldown-retries forever
+  // (permanent barren terrain). Setting it here means even a partial ring
+  // bake leaves the lazy path with a usable opts bag. (The tail assignment
+  // remains below as a harmless idempotent duplicate.)
+  scene3d.terrainOpts = opts;
+
   // 3. Batch-fetch heightmaps for the whole ring in a single call —
   // matches today's `fetch_landblock_heightmaps(ids)` shape.
   const ids = new Uint32Array(coords.map((c) => c.id >>> 0));
@@ -3212,15 +3246,55 @@ export async function bakeTerrainRing(
   // wasmMesh + subdivEntry via a shallow-copied `opts` so the once-
   // per-ring fields stay shared by reference and the per-LB prefetch
   // is the only per-call payload variation.
-  const bakePromises = coords.map((c, i) => {
+  //
+  // B2 (2026-06-20) — `bakeTerrainForLandblock` is fully synchronous from
+  // its mesh-build onward (~:2576 "sync from here on"), so the prior
+  // `Promise.all` over all 169 radius-6 coords was one uninterrupted
+  // main-thread burst (multi-second stall, black viewport, watchdog trip).
+  // When `?terrainRingTimeSlice` is ON (default), bake the centre + ring-1
+  // (the 9 nearest coords) FIRST so the player's immediate surroundings
+  // appear, then bake the rest in small batches, yielding a REAL macrotask
+  // (`setTimeout(0)`, NOT a microtask — a microtask wouldn't let the rAF
+  // pump run) whenever ~6ms of wall-clock has elapsed. This keeps
+  // pumpNetFrame's __lastPumpMs fresh so the load watchdog never trips.
+  // `?terrainRingTimeSlice=off` restores the single Promise.all.
+  const bakeOne = (c, i) => {
     const perLbOpts = {
       ...opts,
       prefetchedMesh: meshes[i],
       prefetchedSubdiv: subdivMeshes ? subdivMeshes[i] : null,
     };
     return bakeTerrainForLandblock(scene3d, c.x, c.y, perLbOpts, wasmExports);
-  });
-  const lbMeshes = await Promise.all(bakePromises);
+  };
+  let lbMeshes;
+  if (readTerrainRingTimeSliceFlag()) {
+    // Order the coords centre/ring-1 first, then the rest, so the nearest
+    // terrain shows immediately while the far ring trickles in.
+    const nearIdx = [];
+    const farIdx = [];
+    for (let i = 0; i < coords.length; i += 1) {
+      const dx = coords[i].x - centreLbX;
+      const dy = coords[i].y - centreLbY;
+      if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1) nearIdx.push(i);
+      else farIdx.push(i);
+    }
+    const order = nearIdx.concat(farIdx);
+    lbMeshes = new Array(coords.length);
+    let sliceStart = performance.now();
+    for (let k = 0; k < order.length; k += 1) {
+      const i = order[k];
+      lbMeshes[i] = await bakeOne(coords[i], i);
+      // Yield a real macrotask every ~6ms so the rAF pump keeps the
+      // watchdog's __lastPumpMs fresh during the burst.
+      if (performance.now() - sliceStart >= 6) {
+        await new Promise((r) => setTimeout(r, 0));
+        sliceStart = performance.now();
+      }
+    }
+  } else {
+    const bakePromises = coords.map((c, i) => bakeOne(c, i));
+    lbMeshes = await Promise.all(bakePromises);
+  }
 
   // Free the prefetched base wasm meshes the ring driver owns. The
   // per-LB baker skips freeing prefetched meshes specifically so this

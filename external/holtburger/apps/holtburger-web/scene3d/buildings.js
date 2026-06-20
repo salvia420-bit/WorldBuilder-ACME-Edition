@@ -93,6 +93,33 @@ const BUILDING_FLOOR_BIAS = (() => {
   }
 })();
 
+// A3 (busted-world load fix 2026-06-20) — concurrent-call dedup for the
+// per-LB buildings baker. The permanent `scene3d.buildingsBakedLbs.add(lbKey)`
+// used to double as the in-flight guard, marking an LB "baked" BEFORE the
+// load-bearing `fetch_landblock_objects`. A single fetch throw (likelier under
+// the heavy boot load) then permanently stripped that LB's cottages/shops for
+// the whole session. We now mark the PERMANENT set only AFTER the fetch +
+// placement build succeed (so a throw leaves the LB retryable), and use this
+// module-local Set to preserve the concurrent-call dedup the permanent add
+// previously provided.
+const _buildingsInFlight = new Set();
+
+// B3 (busted-world load fix 2026-06-20) — frame-budget the boot buildings ring
+// emitter so a building-dense ring doesn't build all per-LB placement Groups in
+// one synchronous burst (a multi-frame main-thread stall that delays the entity
+// drain hook / frame pump at init3D). Mirrors statics.js's F3 time-slice (~6ms
+// chunk + setTimeout(0) macrotask yield). Default-ON; `?buildingsRingTimeSlice=off`
+// disables. Guarded for the headless/capture path (no `window`).
+const BUILDINGS_RING_TIME_SLICE = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search).get("buildingsRingTimeSlice") !== "off";
+  } catch (_) {
+    return true;
+  }
+})();
+const BUILDINGS_RING_BUILD_BUDGET_MS = 6;
+
 // FU2 (perf follow-on 2026-05-18) — distance-tier follow-on for C3's
 // `low`-preset receiveShadow gate. At mid/high/ultra a building gets
 // `receiveShadow = true` only when its world-space distance to the
@@ -602,7 +629,12 @@ export async function bakeBuildingsForLandblock(
     scene3d.buildingsBakedLbs = new Set();
   }
   const lbKey = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
-  if (scene3d.buildingsBakedLbs.has(lbKey)) {
+  // A3: short-circuit on the PERMANENT baked set OR the in-flight set. The
+  // in-flight check preserves the concurrent-call dedup the permanent
+  // pre-add used to provide; the permanent add now runs only AFTER the
+  // load-bearing fetch + placement build succeed (below), so a throw leaves
+  // the LB un-baked and retryable instead of permanently stripped.
+  if (scene3d.buildingsBakedLbs.has(lbKey) || _buildingsInFlight.has(lbKey)) {
     return {
       idempotent: true,
       placementCount: 0,
@@ -613,162 +645,178 @@ export async function bakeBuildingsForLandblock(
       disposables: { geometries: [], materials: [], textures: [] },
     };
   }
-  scene3d.buildingsBakedLbs.add(lbKey);
-
-  // Step 1 — fetch this LB's placements. The `0xfffe` suffix selects
-  // LandblockInfo (objects + buildings); `0xffff` is the terrain
-  // CellLandblock and won't return placements.
-  const cellId = (lbKey | 0xfffe) >>> 0;
-  const allPlacements = await wasmExports.fetch_landblock_objects(
-    new Uint32Array([cellId])
-  );
-
-  // Step 2 — filter buildings, snapshot to JS-owned plain objects,
-  // and free the wasm side. The statics path filters !isBuilding from
-  // a separate wasm call (no shared state across the two readers).
-  const buildings = [];
-  for (const p of allPlacements) {
-    if (p.isBuilding) {
-      buildings.push({
-        landblockId: p.landblockId,
-        modelId: p.modelId,
-        x: p.x,
-        y: p.y,
-        z: p.z,
-        rotationZ: p.rotationZ,
-        isBuilding: true,
-      });
-    }
-    if (typeof p.free === "function") p.free();
-  }
-
-  if (buildings.length === 0) {
-    // Empty LB (most of the 13×13 ring's outer LBs are wilderness).
-    // Still counts as baked so the idempotency set holds.
-    return {
-      idempotent: false,
-      placementCount: 0,
-      modelCount: 0,
-      surfaceCount: 0,
-      partCount: 0,
-      surfaceMeshCount: 0,
-      disposables: { geometries: [], materials: [], textures: [] },
-    };
-  }
-
-  // Step 3 — bake unique modelIds for this LB, hit-checking the
-  // ring-shared cache. Holtburg ground truth: 14 unique modelIds
-  // across 16 placements (memory note at top of file). Across a
-  // larger ring most LBs hit the cache for every building.
-  const uniqueModelIds = [...new Set(buildings.map((b) => b.modelId))];
-  const toBake = uniqueModelIds.filter((id) => !opts.bakeCache.has(id));
-  if (toBake.length > 0) {
-    const bakeResults = await Promise.all(
-      toBake.map((id) =>
-        bakeBuildingPlacement(id, wasmExports.fetchBuildingPlacement)
-      )
+  // A3: from here on the LB is "in flight". The PERMANENT
+  // `scene3d.buildingsBakedLbs.add(lbKey)` is deferred to AFTER the
+  // load-bearing fetch + placement build succeed (the two success returns
+  // below); the `finally` clears the in-flight marker on ANY exit — so a
+  // fetch throw leaves the LB un-baked and retryable instead of permanently
+  // stripping its cottages/shops for the session.
+  _buildingsInFlight.add(lbKey);
+  try {
+    // Step 1 — fetch this LB's placements. The `0xfffe` suffix selects
+    // LandblockInfo (objects + buildings); `0xffff` is the terrain
+    // CellLandblock and won't return placements.
+    const cellId = (lbKey | 0xfffe) >>> 0;
+    const allPlacements = await wasmExports.fetch_landblock_objects(
+      new Uint32Array([cellId])
     );
-    for (let i = 0; i < toBake.length; i += 1) {
-      if (bakeResults[i]) {
-        opts.bakeCache.set(toBake[i], bakeResults[i]);
+
+    // Step 2 — filter buildings, snapshot to JS-owned plain objects,
+    // and free the wasm side. The statics path filters !isBuilding from
+    // a separate wasm call (no shared state across the two readers).
+    const buildings = [];
+    for (const p of allPlacements) {
+      if (p.isBuilding) {
+        buildings.push({
+          landblockId: p.landblockId,
+          modelId: p.modelId,
+          x: p.x,
+          y: p.y,
+          z: p.z,
+          rotationZ: p.rotationZ,
+          isBuilding: true,
+        });
+      }
+      if (typeof p.free === "function") p.free();
+    }
+
+    if (buildings.length === 0) {
+      // Empty LB (most of the 13×13 ring's outer LBs are wilderness).
+      // Still counts as baked so the idempotency set holds. The fetch
+      // above succeeded, so it's safe to mark this LB permanently baked.
+      scene3d.buildingsBakedLbs.add(lbKey);
+      return {
+        idempotent: false,
+        placementCount: 0,
+        modelCount: 0,
+        surfaceCount: 0,
+        partCount: 0,
+        surfaceMeshCount: 0,
+        disposables: { geometries: [], materials: [], textures: [] },
+      };
+    }
+
+    // Step 3 — bake unique modelIds for this LB, hit-checking the
+    // ring-shared cache. Holtburg ground truth: 14 unique modelIds
+    // across 16 placements (memory note at top of file). Across a
+    // larger ring most LBs hit the cache for every building.
+    const uniqueModelIds = [...new Set(buildings.map((b) => b.modelId))];
+    const toBake = uniqueModelIds.filter((id) => !opts.bakeCache.has(id));
+    if (toBake.length > 0) {
+      const bakeResults = await Promise.all(
+        toBake.map((id) =>
+          bakeBuildingPlacement(id, wasmExports.fetchBuildingPlacement)
+        )
+      );
+      for (let i = 0; i < toBake.length; i += 1) {
+        if (bakeResults[i]) {
+          opts.bakeCache.set(toBake[i], bakeResults[i]);
+        }
       }
     }
-  }
 
-  // Step 4 — preload referenced surface DIDs for this LB's bakes.
-  // MaterialCache.preload is idempotent on already-loaded DIDs, so
-  // cross-LB redundancy is filtered at the cache layer (see
-  // materials.js:1207 `if (this.materials.has(d)) continue`).
-  const lbSurfaceDids = new Set();
-  for (const id of uniqueModelIds) {
-    const bake = opts.bakeCache.get(id);
-    if (!bake) continue;
-    for (const did of bake.surfaceDids) lbSurfaceDids.add(did);
-  }
-  if (lbSurfaceDids.size > 0) {
-    try {
-      await opts.materialCache.preload(
-        [...lbSurfaceDids],
-        surfacePixelsFetcher(wasmExports)
-      );
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[scene3d.buildings] materialCache.preload failed for lb 0x${lbKey.toString(16)}:`,
-        e
-      );
+    // Step 4 — preload referenced surface DIDs for this LB's bakes.
+    // MaterialCache.preload is idempotent on already-loaded DIDs, so
+    // cross-LB redundancy is filtered at the cache layer (see
+    // materials.js:1207 `if (this.materials.has(d)) continue`).
+    const lbSurfaceDids = new Set();
+    for (const id of uniqueModelIds) {
+      const bake = opts.bakeCache.get(id);
+      if (!bake) continue;
+      for (const did of bake.surfaceDids) lbSurfaceDids.add(did);
     }
-  }
+    if (lbSurfaceDids.size > 0) {
+      try {
+        await opts.materialCache.preload(
+          [...lbSurfaceDids],
+          surfacePixelsFetcher(wasmExports)
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[scene3d.buildings] materialCache.preload failed for lb 0x${lbKey.toString(16)}:`,
+          e
+        );
+      }
+    }
 
-  // Step 5 — instantiate each building placement in this LB. The
-  // per-placement Group → hinge wrapper → per-surface Mesh topology
-  // is the door-rotation contract (Phase 7.3+); preserved verbatim
-  // by routing through `buildOneBuilding`.
-  let partCount = 0;
-  let surfaceMeshCount = 0;
-  for (const placement of buildings) {
-    const placementLbX = (placement.landblockId >>> 24) & 0xff;
-    const placementLbY = (placement.landblockId >>> 16) & 0xff;
-    const worldOffset = {
-      x: placementLbX * METERS_PER_LANDBLOCK,
-      y: placementLbY * METERS_PER_LANDBLOCK,
+    // Step 5 — instantiate each building placement in this LB. The
+    // per-placement Group → hinge wrapper → per-surface Mesh topology
+    // is the door-rotation contract (Phase 7.3+); preserved verbatim
+    // by routing through `buildOneBuilding`.
+    let partCount = 0;
+    let surfaceMeshCount = 0;
+    for (const placement of buildings) {
+      const placementLbX = (placement.landblockId >>> 24) & 0xff;
+      const placementLbY = (placement.landblockId >>> 16) & 0xff;
+      const worldOffset = {
+        x: placementLbX * METERS_PER_LANDBLOCK,
+        y: placementLbY * METERS_PER_LANDBLOCK,
+      };
+      const bake = opts.bakeCache.get(placement.modelId);
+      if (!bake) {
+        // No bake for this modelId — the bake call failed earlier;
+        // skip with a warning rather than crash. The 2D path falls
+        // back to a fused single-sprite here; the 3D fallback is
+        // Phase 7.7 polish (out of scope for the world-expand step 1
+        // refactor).
+        continue;
+      }
+      // Compute placementKey BEFORE constructing the Group so we can
+      // dedup against `opts.buildingMap3d`. MUST match `buildOneBuilding`'s
+      // formula at L314: landblockId_x_y_modelId. Without this check, a
+      // placement returned by multiple LBs' `fetch_landblock_objects`
+      // (cross-LB inclusion for buildings near landblock boundaries)
+      // would be baked once per LB that surfaced it — producing N
+      // invisible stacked copies at the same world position, each its
+      // own draw call. User report 2026-05-20: 26 copies of every
+      // surface in the centre LB, 3,885 wasted draw calls scene-wide
+      // (~40% of all draws).
+      const placementKey =
+        `${(placement.landblockId >>> 0).toString(16).padStart(8, "0")}_` +
+        `${placement.x.toFixed(2)}_${placement.y.toFixed(2)}_` +
+        `${(placement.modelId >>> 0).toString(16).padStart(8, "0")}`;
+      if (opts.buildingMap3d.has(placementKey)) {
+        // Same placement was already baked by another LB whose
+        // fetch_landblock_objects returned it — skip the duplicate.
+        continue;
+      }
+      const { group, surfaceMeshCount: smc } = buildOneBuilding(
+        placement,
+        bake,
+        opts.materialCache,
+        worldOffset,
+        opts.shadowsEnabled,
+        opts.buildingsReceiveShadow
+      );
+      scene3d.buildingsGroup.add(group);
+      partCount += bake.parts.length;
+      surfaceMeshCount += smc;
+      opts.buildingMap3d.set(group.userData.placementKey, group);
+    }
+
+    // A3: placement build succeeded — NOW mark the LB permanently baked.
+    scene3d.buildingsBakedLbs.add(lbKey);
+    return {
+      idempotent: false,
+      placementCount: buildings.length,
+      modelCount: uniqueModelIds.length,
+      surfaceCount: lbSurfaceDids.size,
+      partCount,
+      surfaceMeshCount,
+      // LRU wave H4 — confirmed zero per-LB disposables: every building
+      // BufferGeometry is shared via `opts.bakeCache` (per-modelId,
+      // cross-LB) and every material is `materialCache.getCached`-shared
+      // (per-DID). Container-remove in the LRU evict path is sufficient.
+      // Empty arrays kept for shape uniformity with cells/statics tags.
+      disposables: { geometries: [], materials: [], textures: [] },
     };
-    const bake = opts.bakeCache.get(placement.modelId);
-    if (!bake) {
-      // No bake for this modelId — the bake call failed earlier;
-      // skip with a warning rather than crash. The 2D path falls
-      // back to a fused single-sprite here; the 3D fallback is
-      // Phase 7.7 polish (out of scope for the world-expand step 1
-      // refactor).
-      continue;
-    }
-    // Compute placementKey BEFORE constructing the Group so we can
-    // dedup against `opts.buildingMap3d`. MUST match `buildOneBuilding`'s
-    // formula at L314: landblockId_x_y_modelId. Without this check, a
-    // placement returned by multiple LBs' `fetch_landblock_objects`
-    // (cross-LB inclusion for buildings near landblock boundaries)
-    // would be baked once per LB that surfaced it — producing N
-    // invisible stacked copies at the same world position, each its
-    // own draw call. User report 2026-05-20: 26 copies of every
-    // surface in the centre LB, 3,885 wasted draw calls scene-wide
-    // (~40% of all draws).
-    const placementKey =
-      `${(placement.landblockId >>> 0).toString(16).padStart(8, "0")}_` +
-      `${placement.x.toFixed(2)}_${placement.y.toFixed(2)}_` +
-      `${(placement.modelId >>> 0).toString(16).padStart(8, "0")}`;
-    if (opts.buildingMap3d.has(placementKey)) {
-      // Same placement was already baked by another LB whose
-      // fetch_landblock_objects returned it — skip the duplicate.
-      continue;
-    }
-    const { group, surfaceMeshCount: smc } = buildOneBuilding(
-      placement,
-      bake,
-      opts.materialCache,
-      worldOffset,
-      opts.shadowsEnabled,
-      opts.buildingsReceiveShadow
-    );
-    scene3d.buildingsGroup.add(group);
-    partCount += bake.parts.length;
-    surfaceMeshCount += smc;
-    opts.buildingMap3d.set(group.userData.placementKey, group);
+  } finally {
+    // A3: clear the in-flight marker on ANY exit (success, empty-LB
+    // return, or throw). On a throw the permanent baked set was never
+    // touched, so the LB stays retryable on the next approach.
+    _buildingsInFlight.delete(lbKey);
   }
-
-  return {
-    idempotent: false,
-    placementCount: buildings.length,
-    modelCount: uniqueModelIds.length,
-    surfaceCount: lbSurfaceDids.size,
-    partCount,
-    surfaceMeshCount,
-    // LRU wave H4 — confirmed zero per-LB disposables: every building
-    // BufferGeometry is shared via `opts.bakeCache` (per-modelId,
-    // cross-LB) and every material is `materialCache.getCached`-shared
-    // (per-DID). Container-remove in the LRU evict path is sufficient.
-    // Empty arrays kept for shape uniformity with cells/statics tags.
-    disposables: { geometries: [], materials: [], textures: [] },
-  };
 }
 
 /**
@@ -873,10 +921,13 @@ export async function bakeBuildingsRing(
   const lbsToBake = ringLbs.filter(
     (l) => !scene3d.buildingsBakedLbs.has(l.lbKey)
   );
-  // Mark all freshly-baking LBs in the set BEFORE the wasm round-trip
-  // so a concurrent lazy hook observing mid-ring state sees them as
-  // baked (matches the per-LB baker's pre-instantiation guard at L549).
-  for (const l of lbsToBake) scene3d.buildingsBakedLbs.add(l.lbKey);
+  // A3 (busted-world load fix 2026-06-20): the permanent `buildingsBakedLbs.add`
+  // used to run HERE, BEFORE the ring's wasm round-trip — so if the ring
+  // `fetch_landblock_objects` (or the bake `Promise.all`) threw under the heavy
+  // boot load, every LB in the ring was permanently stripped of its
+  // cottages/shops for the session. The add is now deferred to Stage 5, AFTER
+  // the awaits succeed (per-LB, right before that LB's synchronous
+  // instantiation), so a throw leaves the ring's LBs un-baked and retryable.
 
   const perLbSummaries = [];
   if (lbsToBake.length > 0) {
@@ -972,13 +1023,24 @@ export async function bakeBuildingsRing(
       }
     }
 
-    // ── Stage 5: per-LB instantiation. PURE JS, no awaits — every
-    // wasm dependency is already cached above. Mirrors the L645-697
-    // instantiation block of the per-LB baker, scoped per LB so the
-    // returned summaries keep the legacy shape.
+    // ── Stage 5: per-LB instantiation. Every wasm dependency is already
+    // cached above (Stages 1-4). Mirrors the L645-697 instantiation block of
+    // the per-LB baker, scoped per LB so the returned summaries keep the
+    // legacy shape.
+    //
+    // B3 (busted-world load fix 2026-06-20): a building-dense ring builds all
+    // per-LB placement Groups in one synchronous burst here, a multi-frame
+    // main-thread stall at init3D (delaying the entity drain hook / frame
+    // pump). Frame-budget it: yield a macrotask once a chunk has spent ~6ms,
+    // mirroring statics.js's F3 time-slice. Gated DEFAULT-ON behind
+    // `?buildingsRingTimeSlice` (`=off` escape). setTimeout (NOT rIC/rAF — see
+    // the statics F3 note).
+    let _ringChunkStart = performance.now();
     for (const l of lbsToBake) {
       const buildings = buildingsByLb.get(l.lbKey) ?? [];
       if (buildings.length === 0) {
+        // A3: fetch + bakes succeeded above — mark this empty LB baked.
+        scene3d.buildingsBakedLbs.add(l.lbKey);
         perLbSummaries.push({
           idempotent: false,
           placementCount: 0,
@@ -1031,6 +1093,9 @@ export async function bakeBuildingsRing(
         surfaceMeshCount += smc;
         opts.buildingMap3d.set(group.userData.placementKey, group);
       }
+      // A3: this LB's placements are instantiated — mark it permanently baked
+      // now (AFTER the ring's awaits + this LB's synchronous build succeeded).
+      scene3d.buildingsBakedLbs.add(l.lbKey);
       perLbSummaries.push({
         idempotent: false,
         placementCount: buildings.length,
@@ -1039,6 +1104,16 @@ export async function bakeBuildingsRing(
         partCount,
         surfaceMeshCount,
       });
+
+      // B3 time-slice: yield a macrotask once this chunk has spent its frame
+      // budget so the boot buildings ring doesn't stall the main thread.
+      if (
+        BUILDINGS_RING_TIME_SLICE &&
+        performance.now() - _ringChunkStart > BUILDINGS_RING_BUILD_BUDGET_MS
+      ) {
+        await new Promise((r) => setTimeout(r, 0));
+        _ringChunkStart = performance.now();
+      }
     }
   }
 

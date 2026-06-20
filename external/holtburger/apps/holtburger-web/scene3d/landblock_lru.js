@@ -390,6 +390,13 @@ export class LandblockLRU {
     if (s.buildingsBakedLbs instanceof Set) s.buildingsBakedLbs.delete(lbKey);
     if (s.staticsBakedLbs instanceof Set) s.staticsBakedLbs.delete(lbKey);
     if (s.envCellLoadedLbs instanceof Set) s.envCellLoadedLbs.delete(lbKey);
+    // Spawns idempotency lives in scene3d/spawns.js (its own module-local
+    // Set, not on scene3d). It installs `_evictSpawnsInjectedLb` onto
+    // scene3d so we can clear its per-LB mark without an import — letting a
+    // re-walk into this LB re-inject its NPCs/spawns. Guard with typeof.
+    if (typeof s._evictSpawnsInjectedLb === "function") {
+      try { s._evictSpawnsInjectedLb(lbKey); } catch (_) { /* fail-soft */ }
+    }
 
     // 6b. C3 #7 — if a cross-LB InstancedMesh node survived step 5c (it
     //    still covers other resident LBs), this LB's statics are STILL on

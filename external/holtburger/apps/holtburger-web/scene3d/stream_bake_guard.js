@@ -24,6 +24,14 @@
 
 export const STREAM_BAKE_RETRY_COOLDOWN_MS = 2500;
 
+// Global cap on concurrently-running bakes (across all keys) when a caller
+// doesn't pass `opts.maxInFlight`. The PVS-ring expansion fires ~363
+// fire-and-forget guarded bakes per LB-crossing; without a global cap they all
+// race at once, saturating the bake worker + network and multiplying the
+// late-paint stall. The caller re-fires the ring on later ticks, so bakes
+// skipped here are retried — not lost.
+export const STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT = 6;
+
 /** Create the mutable state bag a caller threads through `guardedStreamBake`. */
 export function createStreamGuardState() {
   return {
@@ -38,11 +46,12 @@ export function createStreamGuardState() {
  * @param {string} kind baker label ("terrain" | "buildings" | "statics")
  * @param {number} lbKey landblock key
  * @param {() => Promise<any>} run the baker thunk (returns the bake promise)
- * @param {{cooldownMs?: number, now?: () => number, warn?: (msg: string, err: any) => void}} [opts]
+ * @param {{cooldownMs?: number, maxInFlight?: number, now?: () => number, warn?: (msg: string, err: any) => void}} [opts]
  * @returns {Promise<any>} the bake result, or null when skipped/failed. Never rejects.
  */
 export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
   const cooldownMs = opts.cooldownMs ?? STREAM_BAKE_RETRY_COOLDOWN_MS;
+  const maxInFlight = opts.maxInFlight ?? STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT;
   const now = opts.now ?? (() => performance.now());
   const warn =
     opts.warn ??
@@ -63,6 +72,12 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
     if (now() < until) return Promise.resolve(null);
     state.failUntil.delete(guardKey);
   }
+
+  // Global concurrency cap: if too many bakes are already running (across all
+  // keys), skip STARTING this one. The PVS ring re-fires on later ticks, so a
+  // skipped bake is retried, not lost. Checked after the per-key dedup +
+  // cooldown so neither is bypassed by the cap.
+  if (state.inFlight.size >= maxInFlight) return Promise.resolve(null);
 
   state.inFlight.add(guardKey);
   return Promise.resolve()

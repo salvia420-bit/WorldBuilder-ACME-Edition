@@ -349,6 +349,16 @@ function lbSetKey(lbX, lbY) {
   return (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
 }
 
+// A2 (busted-world load fix) — concurrent-call dedup for the per-LB
+// baker. The permanent `scene3d.staticsBakedLbs.add(lbKey)` now runs
+// AFTER the load-bearing fetch+drain succeeds (so a throw leaves the LB
+// un-baked and retryable, instead of permanently stripping its statics
+// for the whole session). That move loses the old "set.add doubles as
+// concurrent dedup" property, so this module-local in-flight Set takes
+// over that job: two overlapping calls for the same LB still short-
+// circuit, but a failed fetch no longer poisons the LB.
+const _staticsInFlight = new Set();
+
 /**
  * Acquire (or create) `scene3d.materialCache`. Lifted out of the old
  * inline body so both the per-LB and ring drivers can share the same
@@ -1493,15 +1503,21 @@ export async function bakeStaticsForLandblock(
   }
 
   const lbKey = lbSetKey(lbX, lbY);
-  if (scene3d.staticsBakedLbs.has(lbKey)) {
-    // Idempotent — second call for the same LB no-ops.
+  if (scene3d.staticsBakedLbs.has(lbKey) || _staticsInFlight.has(lbKey)) {
+    // Idempotent — second call for the same LB no-ops. Already-baked
+    // OR currently-in-flight (a concurrent overlapping call, e.g. two
+    // `handlePositionUpdate` events for the same LB) both short-circuit
+    // here. The in-flight guard replaces the old pre-add to the
+    // permanent set as the concurrent-dedup mechanism (A2).
     return null;
   }
-  // Mark BEFORE the bake completes so a concurrent caller (e.g. two
-  // overlapping `handlePositionUpdate` events for the same LB) sees
-  // the gate and short-circuits. Matches the pattern in
-  // `buildEnvCellsForLandblock`.
-  scene3d.staticsBakedLbs.add(lbKey);
+  // A2 — claim the in-flight slot (NOT the permanent baked set). The
+  // permanent `staticsBakedLbs.add(lbKey)` is deferred until AFTER the
+  // load-bearing fetch+drain succeeds, so a fetch throw leaves the LB
+  // un-baked and retryable instead of permanently stripping its statics.
+  // The `finally` after the bake body releases this slot.
+  _staticsInFlight.add(lbKey);
+  try {
 
   // Materials shared with buildings / cells phases (Phase 0.2 / 3.3
   // propagation). The ring driver creates this first; the per-LB
@@ -1537,6 +1553,14 @@ export async function bakeStaticsForLandblock(
   // the rest of the per-LB bake. Order is LandblockInfo first then
   // scenery — purely for log-readability; the renderer doesn't care.
   const statics = landblockInfoStatics.concat(sceneryStatics);
+  // A2 — the load-bearing fetch+drain (fetch_landblock_objects +
+  // fetchAndDrainScenery) has now SUCCEEDED. Mark the LB permanently
+  // baked HERE (not at function entry) so a throw above this line leaves
+  // the LB un-baked and retryable. An empty result is still a success —
+  // mark before the `statics.length === 0` early-return so a subsequent
+  // call doesn't re-fetch the empty LB. `_staticsInFlight` is released
+  // in the `finally` regardless.
+  scene3d.staticsBakedLbs.add(lbKey);
   if (statics.length === 0) {
     return makeEmptySummary();
   }
@@ -1799,6 +1823,14 @@ export async function bakeStaticsForLandblock(
       textures: [],
     },
   };
+
+  } finally {
+    // A2 — release the in-flight slot on EVERY exit path (success, empty
+    // summary, eviction-guard return, or a throw). The permanent
+    // `staticsBakedLbs` membership is what gates future calls now; the
+    // in-flight Set only deduped the concurrent window.
+    _staticsInFlight.delete(lbKey);
+  }
 }
 
 /**
@@ -2119,6 +2151,28 @@ export async function bakeStaticsRing(
   // eviction). Singletons carry `userData.landblockId` and are evicted by
   // the existing per-LB walker, so they are NOT collected here.
   const instancedNodes = [];
+  // B3 (busted-world load fix) — frame-budget the BOOT RING emit loop.
+  // The per-LB baker already time-slices its singleton build (F3, the
+  // `?noStaticsTimeSlice` gate); the radius-6 boot ring previously
+  // emitted ALL ~130 (model×surface) InstancedMesh/Mesh groups in one
+  // synchronous burst, blocking the main thread for ~hundreds of ms at
+  // init (a big share of the ~25s init3D stall). Yield to a macrotask
+  // once each chunk has spent ~6ms so the frame pump / entity drain can
+  // run between groups. Default ON; `?staticsRingTimeSlice=off` disables.
+  // setTimeout (NOT rIC/rAF — same rationale as the per-LB F3 path).
+  // Headless/capture-safe: the flag read is guarded by the globalThis
+  // location check (mirrors the per-LB `staticsTimeSlice` read).
+  let staticsRingTimeSlice = true;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      staticsRingTimeSlice =
+        new URLSearchParams(globalThis.location.search).get("staticsRingTimeSlice") !== "off";
+    }
+  } catch (_) {
+    staticsRingTimeSlice = true;
+  }
+  const STATICS_BUILD_BUDGET_MS = 6;
+  let _ringChunkStart = (typeof performance !== "undefined" ? performance.now() : Date.now());
   for (const [modelId, group] of placementsByModel) {
     const surfaceGroups = primary.groupsByModel.get(modelId);
     if (!surfaceGroups || surfaceGroups.length === 0) continue;
@@ -2205,6 +2259,19 @@ export async function bakeStaticsRing(
         singletonCount += 1;
         if (isLod) lodCount += 1;
       }
+    }
+
+    // B3 — yield to a macrotask once this chunk has spent its frame
+    // budget so the entity drain / frame pump runs between model groups
+    // instead of after the entire ring's worth of nodes. Checked at the
+    // end of each model iteration (group granularity) — fine-grained
+    // enough at ~130 groups, and keeps each group's per-surface nodes
+    // attached atomically.
+    if (staticsRingTimeSlice && (
+      (typeof performance !== "undefined" ? performance.now() : Date.now()) - _ringChunkStart
+    ) > STATICS_BUILD_BUDGET_MS) {
+      await new Promise((r) => setTimeout(r, 0));
+      _ringChunkStart = (typeof performance !== "undefined" ? performance.now() : Date.now());
     }
   }
   mark(`stage3: build+add ${placementsByModel.size} groups (inst=${instancedGroupCount}, single=${singletonCount})`);

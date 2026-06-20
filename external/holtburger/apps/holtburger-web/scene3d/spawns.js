@@ -68,6 +68,13 @@ let _wcidToSetupLoadFailed = false;    // sticky flag — set on any error
 // `staticsBakedLbs`/`buildingsBakedLbs`/`cellContainers3d` patterns).
 const _spawnsInjectedLbs = new Set();
 const _spawnsInjectInFlight = new Set();
+// Short per-LB cooldown after a transient fetch/inject failure. A throw no
+// longer permanently poisons the LB (used to `.add` to `_spawnsInjectedLbs`
+// in the catch, stripping its NPCs for the whole session); instead we record
+// a retry-after timestamp so a transient failure retries once the window
+// elapses rather than never.
+const _spawnsFailUntil = new Map();
+const _SPAWNS_FAIL_COOLDOWN_MS = 2500;
 
 // `?spawns=` URL flag — controls whether the pre-baked synthetic
 // JSONL spawn records get injected. Background:
@@ -494,6 +501,13 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
   // working 3D stack (e.g. a synthetic capture path that skipped
   // init3D's entity-manager setup).
   if (!scene3d) return null;
+  // Expose the per-LB injected-state evictor on scene3d so landblock_lru
+  // (which holds the same object as `this.scene3d` and takes no imports)
+  // can clear our idempotency mark when it evicts the LB — letting a
+  // re-walk into the LB re-inject its spawns. Idempotent assignment.
+  if (scene3d._evictSpawnsInjectedLb !== _evictSpawnsInjectedLb) {
+    scene3d._evictSpawnsInjectedLb = _evictSpawnsInjectedLb;
+  }
   if (!wasmExports || typeof wasmExports.fetch_landblock_spawns !== "function") {
     if (!scene3d._spawnsFetchUnavailableWarned) {
       scene3d._spawnsFetchUnavailableWarned = true;
@@ -522,6 +536,18 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
   }
   if (_spawnsInjectInFlight.has(lbKey)) {
     return { lbKey, inFlight: true };
+  }
+  // Transient-failure cooldown: a recent throw set a retry-after timestamp.
+  // Skip until it elapses so we don't hammer the failing fetch every
+  // position update, but DO retry once the window passes (unlike the old
+  // permanent-poison behaviour).
+  const failUntil = _spawnsFailUntil.get(lbKey);
+  if (failUntil !== undefined) {
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (nowMs < failUntil) {
+      return { lbKey, failCooldown: true };
+    }
+    _spawnsFailUntil.delete(lbKey);
   }
   _spawnsInjectInFlight.add(lbKey);
 
@@ -782,9 +808,13 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
       `[scene3d.spawns] LB 0x${((lbKey >>> 16) & 0xffff).toString(16)}: ` +
         `fetch/inject failed: ${String(e).slice(0, 200)}`
     );
-    // Mark "tried" so we don't retry on every position update —
-    // matches the scene3d.statics fail-soft contract.
-    _spawnsInjectedLbs.add(lbKey);
+    // Record a short retry-after cooldown so we don't retry on every
+    // position update, but DO retry once the window elapses — a single
+    // transient fetch reject must NOT permanently strip this LB's NPCs
+    // for the whole session (the old `_spawnsInjectedLbs.add` did exactly
+    // that). The success-path add (above) is the only permanent mark.
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    _spawnsFailUntil.set(lbKey, nowMs + _SPAWNS_FAIL_COOLDOWN_MS);
     return { lbKey, error: String(e) };
   } finally {
     _spawnsInjectInFlight.delete(lbKey);
@@ -803,6 +833,21 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
 export function _resetSpawnsInjectorState() {
   _spawnsInjectedLbs.clear();
   _spawnsInjectInFlight.clear();
+  _spawnsFailUntil.clear();
+}
+
+/**
+ * LRU-eviction hook — drop the per-LB injected/cooldown state so roaming
+ * back into a previously-evicted landblock re-injects its spawns. Called
+ * from landblock_lru when it evicts the LB's terrain/buildings/statics
+ * baked sets — reached via the `scene3d._evictSpawnsInjectedLb` reference
+ * installed in `ensureSpawnsForLandblock` (landblock_lru takes no imports).
+ * The injected EntityInstances themselves are evicted by the LRU's own
+ * entity sweep; this just clears the idempotency marks.
+ */
+export function _evictSpawnsInjectedLb(lbKey) {
+  _spawnsInjectedLbs.delete(lbKey);
+  _spawnsFailUntil.delete(lbKey);
 }
 
 /** Test helper — read-only view of injected LB keys. */
