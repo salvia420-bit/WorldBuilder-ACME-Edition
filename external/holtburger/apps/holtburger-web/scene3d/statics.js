@@ -2854,7 +2854,10 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
       const r = await resolveGfxObj(hwGfxObjId);
       if (!r?.surfaceDid) return null;
       try {
-        return await materialCache.get(r.surfaceDid, surfacePixelsFetcher(wasmExports));
+        // 2026-06-20 ParticleViewer parity: UNLIT scenery-particle billboard
+        // (texture × opacity, additive/alpha from the surface flag), NOT the
+        // lit MeshStandard entity path. `?particleUnlit=off` → legacy lit.
+        return await materialCache.getParticleUnlit(r.surfaceDid, surfacePixelsFetcher(wasmExports));
       } catch (_) {
         return null;
       }

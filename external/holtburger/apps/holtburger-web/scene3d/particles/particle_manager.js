@@ -20,6 +20,31 @@ import * as THREE from "three";
 import { ParticleEmitter } from "./particle_emitter.js";
 import { ParticleEmitterInfo } from "./particle_emitter_info.js";
 
+// 2026-06-20 white-box guard. When a particle's gfxobj resolves to NO
+// surface, `materialFactory` returns null. The pre-fix meshFactory then did
+// `new THREE.Mesh(geometry, null)`, and THREE substitutes its DEFAULT white
+// `MeshBasicMaterial` — that is the "white box instead of a particle effect"
+// symptom (the per-vertex scenery anchor setups + any emitter whose gfxobj
+// carries geometry but no Surface; particle texture/color lives on the
+// gfxobj surface, NOT the 0x32 emitter info, which has no texture field).
+// A surface-less particle has nothing to draw, so render NOTHING rather than
+// a white box: a shared `colorWrite:false`/`depthWrite:false` material. Shared
+// singleton, tagged `__cacheOwned` so per-slot dispose never frees it.
+let _noSurfaceParticleMat = null;
+function noSurfaceParticleMaterial() {
+  if (!_noSurfaceParticleMat) {
+    _noSurfaceParticleMat = new THREE.MeshBasicMaterial({
+      colorWrite: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0,
+    });
+    _noSurfaceParticleMat.name = "particle-no-surface-invisible";
+    _noSurfaceParticleMat.userData = { __cacheOwned: true };
+  }
+  return _noSurfaceParticleMat;
+}
+
 // Perf E5 (2026-05-18) — URL escape hatch `?particleSortObjects=off`.
 // Read once at module-load; stash on `window.__particleSortObjects` so the
 // scene-construction site (scene3d/index.js:301, `new THREE.Scene()`) can
@@ -591,7 +616,12 @@ export class ParticleManager {
         // cache, e.g. the sky-cell hwGfxObjId lookup). Per the B3
         // convention, cache-owned geometries are NOT disposed by us; we
         // leave them alone and let the cache outlive the emitter.
-        const mesh = new THREE.Mesh(geometry, mat);
+        //
+        // 2026-06-20 white-box guard: `mat` is null when the particle gfxobj
+        // has no Surface (materialFactory → null). Do NOT pass null — THREE
+        // would substitute its default white MeshBasicMaterial (the white
+        // box). Render nothing instead via the shared invisible material.
+        const mesh = new THREE.Mesh(geometry, mat || noSurfaceParticleMaterial());
         mesh.frustumCulled = false; // sky-cell particles always render
         mesh.visible = false;
         return mesh;

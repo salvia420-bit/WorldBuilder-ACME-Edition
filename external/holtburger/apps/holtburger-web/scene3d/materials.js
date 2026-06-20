@@ -1293,6 +1293,26 @@ export function readSurfaceParityV2Flag() {
   }
 }
 
+// === 2026-06-20 — `?particleUnlit` (DEFAULT ON) ============================
+// ParticleViewer parity: particles render UNLIT (texture × opacity, additive/
+// alpha picked from Surfaces[0].Type) — NOT through the lit MeshStandard entity
+// path. That lit path dragged scene lighting + luminosity-emissive + normalMap
+// into particle billboards, so a particle whose first surface is a bright/white
+// texture or a `ColorValue=0xFFFFFFFF` 1×1 swatch rendered as a flat lit white
+// BOX (the "white box instead of a particle effect" symptom). Default ON;
+// `?particleUnlit=off` restores the legacy lit-material path for A/B.
+export function readParticleUnlitFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("particleUnlit");
+    if (typeof v !== "string") return true;
+    const lv = v.toLowerCase();
+    return !(lv === "off" || lv === "0" || lv === "false");
+  } catch (_) {
+    return true;
+  }
+}
+
 // L4 — categories that get the flat-diffuse treatment under
 // `?flatDiffuse=retail`. Metal (the over-glossy offender) + Lava (so the
 // emissive bloom reads instead of a specular sheen). Stone/Wood/Sand/Foliage
@@ -1607,6 +1627,14 @@ export class MaterialCache {
     this.palettedMaterials = new Map();
     /** @type {Map<string, THREE.DataTexture>} — cache-owned paletted textures. */
     this.palettedTextures = new Map();
+    /**
+     * 2026-06-20 ParticleViewer parity — cache-owned UNLIT particle materials
+     * keyed by surfaceDid. Particles render unlit (texture × opacity, additive/
+     * alpha from the surface flag) — NOT through the lit MeshStandard entity
+     * path. See `getParticleUnlit`. Cleared on scene rebuild with the others.
+     * @type {Map<number, THREE.MeshBasicMaterial>}
+     */
+    this.particleUnlitMaterials = new Map();
     /**
      * Sidecar to `pendingFetches` keyed by the same DID — records the
      * wall-clock at which the fetch was kicked off so `__diag.assets
@@ -2587,6 +2615,49 @@ export class MaterialCache {
   }
 
   /**
+   * 2026-06-20 ParticleViewer parity — resolve a surface as an UNLIT particle
+   * billboard material instead of the lit `MeshStandard` entity material.
+   *
+   * gmriggs ParticleViewer renders particles unlit: the gfxobj's Surfaces[0]
+   * texture (or a 1×1 ColorValue swatch) sampled raw, opacity from the per-
+   * particle translucency, additive-or-alpha from `Surfaces[0].Type`. Routing
+   * particles through `get()` (the entity path) instead dragged in scene
+   * lighting + luminosity-emissive + normalMap, so a particle whose first
+   * surface is a bright/white texture rendered as a flat LIT WHITE BOX.
+   *
+   * Reuses `get()` to resolve + cache the surface TEXTURE (and the
+   * `surfaceTypeFlags` additive signal that particle_manager.js's meshFactory
+   * reads), then wraps it in a cache-owned `MeshBasicMaterial`. The per-slot
+   * clone + blend selection still happens in the emitter's meshFactory.
+   *
+   * `?particleUnlit=off` → returns the legacy lit material from `get()`.
+   * Returns the shared `fallbackMaterial` (or the lit material) unchanged when
+   * the surface didn't resolve — caller handles null/fallback as before.
+   */
+  async getParticleUnlit(surfaceDid, fetchSurfacesPixels) {
+    const lit = await this.get(surfaceDid, fetchSurfacesPixels);
+    if (!readParticleUnlitFlag()) return lit;
+    if (!lit || lit === this.fallbackMaterial || this.wireframeMode) return lit;
+    const did = surfaceDid >>> 0;
+    const cached = this.particleUnlitMaterials.get(did);
+    if (cached) return cached;
+    const m = new THREE.MeshBasicMaterial({
+      map: lit.map || null,
+      side: lit.side ?? THREE.DoubleSide,
+      transparent: true,
+      depthWrite: false,
+    });
+    // Preserve the additive signal both ways so the emitter meshFactory's
+    // `baseIsAdditive` probe (blending===Additive || userData.surfaceTypeFlags
+    // & 0x10000) still fires; it owns the final per-slot blend/alphaTest.
+    m.blending = lit.blending;
+    m.userData = { ...(lit.userData || {}), __cacheOwned: true };
+    m.name = `particle-unlit-${did.toString(16)}`;
+    this.particleUnlitMaterials.set(did, m);
+    return m;
+  }
+
+  /**
    * Bulk-load N surfaces in one wasm round-trip. Strongly preferred
    * over N x `get()` because `fetch_surfaces_pixels` batches HTTP
    * shard fetches under the hood.
@@ -2609,15 +2680,37 @@ export class MaterialCache {
       return 0;
     }
     // Dedupe + filter cached. The 0 sentinel never goes to wasm.
+    //
+    // 2026-06-20 grey-surface race fix: a DID already in `pendingFetches` is
+    // being fetched by a CONCURRENT bake (the statics/buildings ring driver,
+    // or another per-LB bake firing the same frame). The pre-fix code
+    // `continue`d past it WITHOUT awaiting — so `await preload()` could return
+    // before that surface resolved, and the caller's SYNCHRONOUS
+    // `getCached(did)` then handed back the grey `fallbackMaterial`
+    // (`_getCachedDouble` cache-miss → fallback), permanently for that mesh
+    // (no re-resolve once the texture lands). The more LBs baking at once, the
+    // likelier a common surface is mid-flight when a sibling bake needs it —
+    // so `?pvsRingRadius=5` (13× more concurrent bakes than the legacy 3×3)
+    // turned a rare race into the "~18% of statics render flat grey 0x888888"
+    // symptom. Fix: collect the in-flight promises for those DIDs and await
+    // them alongside our own batch, so the post-preload `getCached` sees a
+    // resolved material instead of the fallback.
     const need = [];
+    const alreadyPending = [];
     for (const did of surfaceDids) {
       const d = did >>> 0;
       if (d === FALLBACK_SURFACE_DID) continue;
       if (this.materials.has(d)) continue;
-      if (this.pendingFetches.has(d)) continue;
+      const inflight = this.pendingFetches.get(d);
+      if (inflight) { alreadyPending.push(inflight); continue; }
       need.push(d);
     }
-    if (need.length === 0) return 0;
+    if (need.length === 0) {
+      // Nothing fresh to fetch, but a sibling bake may still be resolving
+      // surfaces this caller is about to `getCached()` — wait for them.
+      if (alreadyPending.length) await Promise.allSettled(alreadyPending);
+      return 0;
+    }
 
     // Install one shared promise per DID before the wasm call so
     // concurrent `get()` calls latch on.
@@ -2650,6 +2743,13 @@ export class MaterialCache {
       try { window.__diag?.assets?.onMaterialError?.({ dids: need, error: e, source: "preload" }); } catch (_) {}
       throw e;
     }
+
+    // Grey-surface race fix (2026-06-20): also wait for the sibling-bake
+    // in-flight fetches collected above, so DIDs this caller will `getCached`
+    // are resolved into `this.materials` before preload() resolves. allSettled
+    // — a sibling's genuine empty-pixel surface resolves to the (uncached)
+    // fallback, which is correct; we only need to not return early on it.
+    if (alreadyPending.length) await Promise.allSettled(alreadyPending);
 
     // F4 (2026-06-01) — the per-DID `pendingFetches` chains registered above are
     // the SOLE consumers of each SurfacePixels: each installs + `sp.free()`s

@@ -8883,7 +8883,10 @@ export class EntityManager {
         const r = await resolveGfxObj(hwGfxObjId);
         if (!r?.surfaceDid) return null;
         try {
-          return await materialCache.get(
+          // 2026-06-20 ParticleViewer parity: UNLIT billboard material
+          // (texture × opacity, additive/alpha from the surface flag), NOT the
+          // lit MeshStandard entity path. `?particleUnlit=off` → legacy lit.
+          return await materialCache.getParticleUnlit(
             r.surfaceDid,
             ents_wasm.fetch_surfaces_pixels
           );
