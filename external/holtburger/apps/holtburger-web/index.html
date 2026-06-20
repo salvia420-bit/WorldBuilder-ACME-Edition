@@ -8529,9 +8529,22 @@
               if (!window.__scene3dFrameDriverActive) return; // claim released elsewhere; resume already queued
               const last = window.__lastPumpMs ?? 0;
               if (performance.now() - last > 4000) {
-                console.warn("[singleDriver] pump heartbeat stale — resuming 2D driver");
-                window.__scene3dFrameDriverActive = false;
-                window.__resume2dFrameDriver();
+                // 2026-06-20 regression fix: the 2D driver was RETIRED (PixiJS
+                // removed, 2d-retire). The 3D loop is now the SOLE owner of the
+                // net/input pump AND the scenery/PVS streaming (tickPvsLoadExpansion).
+                // The old `un-claim + __resume2dFrameDriver()` handed off to a driver
+                // that no longer exists, so ANY >4 s pump stall (a long ring bake, or
+                // just a backgrounded/unfocused tab throttling rAF) ORPHANED the pump:
+                // net froze and the world stopped streaming (barren) with no recovery,
+                // because nothing re-claims the 3D pump. Keep the 3D claim instead — the
+                // 3D loop resumes pumping on its own once it un-stalls (tab refocus /
+                // bake completes). Keep monitoring (re-arm) but never relinquish.
+                if (!window.__pumpStaleWarned) {
+                  window.__pumpStaleWarned = true;
+                  console.warn("[singleDriver] pump heartbeat stale — 3D is the sole driver post-2D-retire; holding the claim (was: resume 2D, which orphaned the pump)");
+                }
+                window.__scene3dFrameDriverActive = true;
+                __watchdog2dTimer = setTimeout(__check2dHeartbeat, 2000);
                 return;
               }
               __watchdog2dTimer = setTimeout(__check2dHeartbeat, 2000);
