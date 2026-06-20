@@ -224,6 +224,29 @@ fn parse_pose_publish_post_tick_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "posePublishPostTick=on")
 }
 
+/// Movement bughunt 2026-06-19 ("stall → pull-back"): parse
+/// `?routinePosGuard=off`. DEFAULT ON (off-escape only). When on, a
+/// ROUTINE (non-forced) self position broadcast for the local player
+/// (`UpdatePosition` / `PrivateUpdatePosition`) updates authoritative
+/// bookkeeping ONLY and does NOT reconcile the predicted runtime body —
+/// so a backlog-delayed ~20 Hz echo that lands tens of metres behind can
+/// no longer install a force-position interpolation that eases the avatar
+/// backward (scene.rs `preserve_local_runtime_pose` →
+/// `install_force_position` within the 100 m blip radius, the measured
+/// ~run_speed×2 backward ease). Only a FORCED correction (teleport /
+/// force_position sequence ADVANCE) still snaps the body. This is the
+/// `UpdatePosition`/`PrivateUpdatePosition` sibling of the 2026-06-19 B1
+/// `AutonomousPosition` guard (`USE_LOCAL_PLAYER_AUTONOMOUS_GUARD`),
+/// honouring the documented `set_player_position_with_sync` contract
+/// ("snap keyed on a sequence-class ADVANCE, never on every
+/// UpdatePosition"). `?routinePosGuard=off` restores the legacy
+/// always-reconcile path for A/B.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_routine_pos_guard_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "routinePosGuard=off")
+}
+
 /// A13-W1 (2026-06-11, unification survey): parse
 /// `?wireStatePacks=stage1` (or `&wireStatePacks=stage1`). Same shape as
 /// `parse_world_lifecycle_flag`. When on, the movement-message family
@@ -32438,6 +32461,16 @@ async fn recv_loop(
     // `should_route_message_to_world`.
     let wire_state_packs_stage1_on: bool =
         parse_wire_state_packs_flag(&js_location_search());
+    // Movement bughunt 2026-06-19 ("stall → pull-back"): `?routinePosGuard=off`
+    // (DEFAULT ON). Routine non-forced self UpdatePosition/PrivateUpdatePosition
+    // for the local player → authoritative bookkeeping only (no runtime-body
+    // reconcile), so a backlog-stale echo can't ease the avatar backward. See
+    // `parse_routine_pos_guard_flag`.
+    let routine_pos_guard_on: bool = parse_routine_pos_guard_flag(&js_location_search());
+    console_log_str(&format!(
+        "[movement] routinePosGuard {} (?routinePosGuard=off to disable)",
+        if routine_pos_guard_on { "ON" } else { "OFF" },
+    ));
     // A2-P2 (2026-06-12, W3+ S8): `?remoteInterp=on` — the remote-pose
     // driver (retail MoveOrTeleport lattice + per-slice manager step +
     // pollRemotePoses export + PublicUpdatePosition routing). COMPOSITE:
@@ -34489,12 +34522,29 @@ async fn recv_loop(
                                                 data.pos.force_position_sequence,
                                                 w.player.force_position_sequence,
                                             );
-                                        let sync = if force_or_teleport_advanced {
-                                            holtburger_world::AuthoritativeBodySync::Reset
+                                        if routine_pos_guard_on && !force_or_teleport_advanced {
+                                            // Movement bughunt 2026-06-19
+                                            // ("stall → pull-back"): a ROUTINE
+                                            // self UpdatePosition is the laggy
+                                            // ~20 Hz echo of our OWN movement;
+                                            // when backlog-delayed it lands
+                                            // tens of metres behind and the
+                                            // preserve path eases the avatar
+                                            // backward (force-position interp).
+                                            // Keep client prediction; update
+                                            // authoritative bookkeeping only.
+                                            // Only a FORCED correction (below)
+                                            // snaps the body.
+                                            let _ =
+                                                w.set_player_position_authoritative_only(pose);
                                         } else {
-                                            holtburger_world::AuthoritativeBodySync::Snapshot
-                                        };
-                                        let _ = w.set_player_position_with_sync(pose, sync);
+                                            let sync = if force_or_teleport_advanced {
+                                                holtburger_world::AuthoritativeBodySync::Reset
+                                            } else {
+                                                holtburger_world::AuthoritativeBodySync::Snapshot
+                                            };
+                                            let _ = w.set_player_position_with_sync(pose, sync);
+                                        }
                                     }
                                     // Mirror the quartet sequences onto the
                                     // WorldState player so outbound
@@ -34644,13 +34694,29 @@ async fn recv_loop(
                                             // larger drifts indicate the
                                             // integrator has gotten lost.
                                             if dist_sq > 25.0 {
-                                                if DIAG_VERBOSE {
-                                                    console_log_str(&format!(
-                                                        "[acad-diag reconcile] PrivateUpdatePosition drift {:.2} m → snapping to server",
-                                                        dist_sq.sqrt(),
-                                                    ));
+                                                if routine_pos_guard_on {
+                                                    // Movement bughunt 2026-06-19
+                                                    // ("stall → pull-back"):
+                                                    // PrivateUpdatePosition carries
+                                                    // no force/teleport sequences →
+                                                    // always ROUTINE. A backlog-stale
+                                                    // echo drifts >5 m behind; the old
+                                                    // `set_player_position` snap eased
+                                                    // the avatar backward. Keep client
+                                                    // prediction; bookkeeping only.
+                                                    let _ = w
+                                                        .set_player_position_authoritative_only(
+                                                            *pos,
+                                                        );
+                                                } else {
+                                                    if DIAG_VERBOSE {
+                                                        console_log_str(&format!(
+                                                            "[acad-diag reconcile] PrivateUpdatePosition drift {:.2} m → snapping to server",
+                                                            dist_sq.sqrt(),
+                                                        ));
+                                                    }
+                                                    let _ = w.set_player_position(*pos);
                                                 }
-                                                let _ = w.set_player_position(*pos);
                                             }
                                         }
                                     }

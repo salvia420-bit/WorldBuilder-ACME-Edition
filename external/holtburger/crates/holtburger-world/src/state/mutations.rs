@@ -733,6 +733,25 @@ impl WorldState {
         self.set_player_position_with_sync(pos, AuthoritativeBodySync::Snapshot)
     }
 
+    /// Movement bughunt 2026-06-19 ("stall → pull-back"): apply a ROUTINE
+    /// (non-forced) server position broadcast to the local player WITHOUT
+    /// reconciling the runtime spatial body — authoritative bookkeeping
+    /// only (`entity.position` + scene authoritative pose + outbound
+    /// sequence mirror, done by the caller), leaving the predicted body on
+    /// client prediction. The `UpdatePosition`/`PrivateUpdatePosition`
+    /// sibling of the B1 `apply_player_autonomous_position` guard: it
+    /// stops a backlog-delayed ~20 Hz echo (which can land tens of metres
+    /// behind) from installing a `force_position` interpolation that eases
+    /// the avatar backward (scene.rs `preserve_local_runtime_pose`). Emits
+    /// NO `EntityMoved`/runtime-changed event — the local rig follows the
+    /// runtime body, so re-emitting the laggy authoritative pose would tug
+    /// it back. Only a FORCED correction (sequence advance) routes through
+    /// [`Self::set_player_position_with_sync`] and snaps the body.
+    pub fn set_player_position_authoritative_only(&mut self, pos: WorldPosition) -> Vec<WorldEvent> {
+        let _ = self.update_player_position_authoritative_only(pos);
+        Vec::new()
+    }
+
     /// Applies a server-authored player position with an explicit reconcile
     /// discriminant (B1/D3-SNAP). `Reset` hard-snaps the working pose — retail
     /// BlipPlayer / TeleportPlayer on a force_position OR teleport sequence
