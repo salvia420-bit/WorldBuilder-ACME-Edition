@@ -127,6 +127,7 @@ public class TerminalRepl {
             ["get-object-detail"] = HandleGetObjectDetail,
             ["diff-terrain"] = HandleDiffTerrain,
             ["get-terrain-layers"] = HandleGetTerrainLayers,
+            ["get-terrain-textures"] = _ => HandleGetTerrainTextures(),
             ["export-textures"] = HandleExportTextures,
             ["import-texture"] = HandleImportTexture,
             ["clone-dat"] = HandleCloneDat,
@@ -1319,7 +1320,17 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         var r = _engine.GetRegion();
         Console.WriteLine();
-        Console.WriteLine("  â•â•â• Region Data â•â•â•");
+        Console.WriteLine("  === Region Data ===");
+        Console.WriteLine($"  Region #{r.RegionNumber}  \"{r.RegionName}\"  v{r.Version}  partsMask=0x{r.PartsMask:X8}");
+        if (r.LandDefs != null) {
+            var ld = r.LandDefs;
+            Console.WriteLine($"  LandDefs: blocks {ld.NumBlockLength}x{ld.NumBlockWidth}  square={ld.SquareLength}  lblock={ld.LBlockLength}  vertsPerCell={ld.VertexPerCell}");
+            Console.WriteLine($"            maxObjHeight={ld.MaxObjHeight}  skyHeight={ld.SkyHeight}  roadWidth={ld.RoadWidth}");
+        }
+        if (r.GameTime is { Present: true } gt) {
+            Console.WriteLine($"  GameTime: dayLength={gt.DayLength}  daysPerYear={gt.DaysPerYear}  yearSpec=\"{gt.YearSpec}\"  timesOfDay={gt.TimesOfDayCount}  seasons={gt.SeasonsCount}");
+        }
+        Console.WriteLine($"  Parts: sky={r.HasSkyInfo}({r.DayGroupCount})  sound={r.HasSoundInfo}({r.SoundStbCount})  scene={r.HasSceneInfo}({r.SceneTypeCount})  misc={r.HasRegionMisc}");
         Console.WriteLine($"  Height table ({r.HeightTable.Length} entries):");
         for (int i = 0; i < r.HeightTable.Length; i += 8) {
             Console.Write("    ");
@@ -1327,10 +1338,33 @@ public class TerminalRepl {
                 Console.Write($"[{j,3}]={r.HeightTable[j],7:F1}  ");
             Console.WriteLine();
         }
-        if (r.TerrainTypes != null && r.TerrainTypes.Count > 0) {
+        if (r.TerrainTypeDetails != null && r.TerrainTypeDetails.Count > 0) {
+            Console.WriteLine();
+            Console.WriteLine($"  Terrain types ({r.TerrainTypeDetails.Count}):");
+            foreach (var td in r.TerrainTypeDetails)
+                Console.WriteLine($"    [{td.Index,2}] {td.Name,-24} color=0x{td.TerrainColor:X8}  sceneTypes={td.SceneTypeCount}");
+        }
+        else if (r.TerrainTypes != null && r.TerrainTypes.Count > 0) {
             Console.WriteLine();
             Console.WriteLine($"  Terrain types ({r.TerrainTypes.Count}):");
             foreach (var tt in r.TerrainTypes) Console.WriteLine($"    [{tt.Index,2}] {tt.Name}");
+        }
+        Console.WriteLine();
+    }
+
+    private void HandleGetTerrainTextures() {
+        if (!CheckProject()) return;
+        var r = _engine.GetTerrainTextures();
+        Console.WriteLine();
+        Console.WriteLine("  === Terrain Textures (TexMerge) ===");
+        if (!r.Found) {
+            Console.WriteLine($"  (unavailable) {r.Error}");
+            Console.WriteLine();
+            return;
+        }
+        Console.WriteLine($"  BaseTexSize={r.BaseTexSize}  terrainDesc={r.TerrainDesc.Count}  corner={r.CornerTerrainMaps.Count}  side={r.SideTerrainMaps.Count}  road={r.RoadMaps.Count}");
+        foreach (var d in r.TerrainDesc) {
+            Console.WriteLine($"    [{d.Index,2}] {d.TerrainType,-24} tex=0x{d.TexGID:X8}->0x{d.ResolvedTextureId:X8}  tiling={d.TexTiling}  detail=0x{d.DetailTexGID:X8}(t={d.DetailTexTiling})  bright[{d.MinVertBright},{d.MaxVertBright}]");
         }
         Console.WriteLine();
     }

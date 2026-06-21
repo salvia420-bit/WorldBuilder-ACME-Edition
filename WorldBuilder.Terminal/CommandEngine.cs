@@ -2601,21 +2601,152 @@ public partial class CommandEngine {
         RequireProject();
         var ht = GetHeightTable();
         List<TerrainTypeNameInfo>? terrainTypes = null;
+        // T-1: widen get-region to faithfully expose Region 0x13 — LandDefs scalars,
+        // GameTime, PartsMask + Sky/Sound/Scene/RegionMisc presence, and per-type
+        // {TerrainColor, SceneType count}. Previously only the type names were emitted,
+        // which is the "EMPTY LandDefs/GameTime/Sky/Sound/Scene" the user observed.
+        uint regionNumber = 0, version = 0, partsMask = 0;
+        string? regionName = null;
+        RegionLandDefsInfo? landDefs = null;
+        RegionGameTimeInfo? gameTime = null;
+        bool hasSky = false, hasSound = false, hasScene = false, hasMisc = false;
+        int? dayGroupCount = null, soundStbCount = null, sceneTypeCount = null;
+        List<TerrainTypeDetail>? terrainDetails = null;
         try {
             if (_projectManager.CurrentProject!.DocumentManager.Dats
                 .TryGet<DatReaderWriter.DBObjs.Region>(0x13000000, out var region)) {
+                regionNumber = region.RegionNumber;
+                version = region.Version;
+                regionName = region.RegionName?.ToString();
+                partsMask = (uint)region.PartsMask;
+
+                var ld = region.LandDefs;
+                if (ld != null) {
+                    landDefs = new RegionLandDefsInfo(
+                        ld.NumBlockLength, ld.NumBlockWidth, ld.SquareLength, ld.LBlockLength,
+                        ld.VertexPerCell, ld.MaxObjHeight, ld.SkyHeight, ld.RoadWidth);
+                }
+
+                var gt = region.GameTime;
+                if (gt != null) {
+                    gameTime = new RegionGameTimeInfo(
+                        Present: true,
+                        ZeroTimeOfYear: gt.ZeroTimeOfYear, ZeroYear: gt.ZeroYear,
+                        DayLength: gt.DayLength, DaysPerYear: gt.DaysPerYear,
+                        YearSpec: gt.YearSpec?.ToString() ?? "",
+                        TimesOfDayCount: gt.TimesOfDay?.Count ?? 0,
+                        SeasonsCount: gt.Seasons?.Count ?? 0);
+                }
+
+                hasSky = region.SkyInfo != null;
+                hasSound = region.SoundInfo != null;
+                hasScene = region.SceneInfo != null;
+                hasMisc = region.RegionMisc != null;
+                dayGroupCount = region.SkyInfo?.DayGroups?.Count;
+                soundStbCount = region.SoundInfo?.STBDesc?.Count;
+                sceneTypeCount = region.SceneInfo?.SceneTypes?.Count;
+
                 var types = region.TerrainInfo?.TerrainTypes;
                 if (types != null) {
                     terrainTypes = types.Select((tt, i) => {
                         try { return new TerrainTypeNameInfo(i, tt.TerrainName); }
                         catch { return new TerrainTypeNameInfo(i, "(unavailable)"); }
                     }).ToList();
+                    terrainDetails = types.Select((tt, i) => {
+                        try {
+                            return new TerrainTypeDetail(
+                                i, tt.TerrainName?.ToString() ?? "(unavailable)",
+                                ColorToUint(tt.TerrainColor), tt.SceneTypes?.Count ?? 0);
+                        } catch {
+                            return new TerrainTypeDetail(i, "(unavailable)", 0, 0);
+                        }
+                    }).ToList();
                 }
             }
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[GetRegion] Failed to read terrain types from Region 0x13000000: {ex.Message}");
+            Console.Error.WriteLine($"[GetRegion] Failed to read Region 0x13000000: {ex.Message}");
         }
-        return new RegionResult(ht, terrainTypes);
+        return new RegionResult(
+            ht, terrainTypes,
+            RegionNumber: regionNumber, Version: version, RegionName: regionName,
+            PartsMask: partsMask, LandDefs: landDefs, GameTime: gameTime,
+            HasSkyInfo: hasSky, HasSoundInfo: hasSound, HasSceneInfo: hasScene,
+            HasRegionMisc: hasMisc, DayGroupCount: dayGroupCount,
+            SoundStbCount: soundStbCount, SceneTypeCount: sceneTypeCount,
+            TerrainTypeDetails: terrainDetails);
+    }
+
+    // Pack a DatReaderWriter ColorARGB (a.r.g.b bytes) into 0xAARRGGBB.
+    private static uint ColorToUint(DatReaderWriter.Types.ColorARGB c) =>
+        ((uint)c.Alpha << 24) | ((uint)c.Red << 16) | ((uint)c.Green << 8) | c.Blue;
+
+    // ─────────────────────────────────────────────────────────────────
+    //  T-2: painting / TexMerge texture chain (get-terrain-textures)
+    //  Exposes region.TerrainInfo.LandSurfaces.TexMerge so client-vs-DAT
+    //  painting fidelity is auditable through the terminal. Resolves
+    //  TexGID -> SurfaceTexture(0x05) -> highest-res RenderSurface(0x06)
+    //  using the same pattern as CalibrateWorldMap.
+    // ─────────────────────────────────────────────────────────────────
+    public TerrainTexturesResult GetTerrainTextures() {
+        RequireProject();
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+        try {
+            if (!dats.TryGet<DatReaderWriter.DBObjs.Region>(0x13000000, out var region) || region == null) {
+                return new TerrainTexturesResult(false, "Failed to load Region 0x13000000 from DATs",
+                    0, new(), new(), new(), new());
+            }
+            var tm = region.TerrainInfo?.LandSurfaces?.TexMerge;
+            if (tm == null) {
+                return new TerrainTexturesResult(false, "Region has no TerrainInfo.LandSurfaces.TexMerge",
+                    0, new(), new(), new(), new());
+            }
+
+            var descs = new List<TerrainTexDescInfo>();
+            var terrainDescs = tm.TerrainDesc;
+            if (terrainDescs != null) {
+                for (int i = 0; i < terrainDescs.Count; i++) {
+                    var d = terrainDescs[i];
+                    var tex = d.TerrainTex;
+                    uint texGid = tex?.TextureId ?? 0;
+                    // Resolve TexGID -> SurfaceTexture -> highest-res RenderSurface.
+                    uint resolved = 0;
+                    try {
+                        if (texGid != 0 &&
+                            dats.TryGet<DatReaderWriter.DBObjs.SurfaceTexture>(texGid, out var st) &&
+                            st.Textures != null && st.Textures.Count > 0) {
+                            resolved = st.Textures[^1];
+                        }
+                    } catch { /* leave resolved = 0 */ }
+
+                    string typeName;
+                    try { typeName = d.TerrainType.ToString(); } catch { typeName = $"Type{i}"; }
+
+                    descs.Add(new TerrainTexDescInfo(
+                        Index: i,
+                        TerrainType: typeName,
+                        TexGID: texGid,
+                        ResolvedTextureId: resolved,
+                        TexTiling: tex?.TexTiling ?? 0,
+                        DetailTexGID: tex?.DetailTextureId ?? 0,
+                        DetailTexTiling: tex?.DetailTexTiling ?? 0,
+                        MinVertBright: tex?.MinVertBright ?? 0, MaxVertBright: tex?.MaxVertBright ?? 0,
+                        MinVertSaturate: tex?.MinVertSaturate ?? 0, MaxVertSaturate: tex?.MaxVertSaturate ?? 0,
+                        MinVertHue: tex?.MinVertHue ?? 0, MaxVertHue: tex?.MaxVertHue ?? 0));
+                }
+            }
+
+            var corner = (tm.CornerTerrainMaps ?? new())
+                .Select(m => new TerrainAlphaMapInfo(m.TCode, m.TextureId)).ToList();
+            var side = (tm.SideTerrainMaps ?? new())
+                .Select(m => new TerrainAlphaMapInfo(m.TCode, m.TextureId)).ToList();
+            var road = (tm.RoadMaps ?? new())
+                .Select(m => new TerrainAlphaMapInfo(m.RCode, m.TextureId)).ToList();
+
+            return new TerrainTexturesResult(true, null, tm.BaseTexSize, descs, corner, side, road);
+        } catch (Exception ex) {
+            return new TerrainTexturesResult(false, $"Failed to read TexMerge: {ex.Message}",
+                0, new(), new(), new(), new());
+        }
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

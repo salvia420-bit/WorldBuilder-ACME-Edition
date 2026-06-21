@@ -307,9 +307,64 @@ public record WorldInfoResult(
 
 public record TerrainTypeNameInfo(int Index, string Name);
 
+// Per-terrain-type detail (color + scene-type count) read from the live Region.
+public record TerrainTypeDetail(int Index, string Name, uint TerrainColor, int SceneTypeCount);
+
+// LandDefs scalars (always present on Region 0x13).
+public record RegionLandDefsInfo(
+    int NumBlockLength, int NumBlockWidth, float SquareLength, int LBlockLength,
+    int VertexPerCell, float MaxObjHeight, float SkyHeight, float RoadWidth);
+
+// GameTime summary (presence + a few scalars + counts).
+public record RegionGameTimeInfo(
+    bool Present, double ZeroTimeOfYear, uint ZeroYear, float DayLength, uint DaysPerYear,
+    string YearSpec, int TimesOfDayCount, int SeasonsCount);
+
 public record RegionResult(
     float[] HeightTable,
-    List<TerrainTypeNameInfo>? TerrainTypes = null);
+    List<TerrainTypeNameInfo>? TerrainTypes = null,
+    // T-1: widened so get-region faithfully exposes Region 0x13 (was empty before).
+    uint RegionNumber = 0,
+    uint Version = 0,
+    string? RegionName = null,
+    uint PartsMask = 0,
+    RegionLandDefsInfo? LandDefs = null,
+    RegionGameTimeInfo? GameTime = null,
+    bool HasSkyInfo = false,
+    bool HasSoundInfo = false,
+    bool HasSceneInfo = false,
+    bool HasRegionMisc = false,
+    int? DayGroupCount = null,
+    int? SoundStbCount = null,
+    int? SceneTypeCount = null,
+    List<TerrainTypeDetail>? TerrainTypeDetails = null);
+
+// ── T-2: painting / TexMerge texture chain (get-terrain-textures) ──
+
+// One TexMerge.TerrainDesc[] entry: base + detail texture chain for a terrain type.
+public record TerrainTexDescInfo(
+    int Index,
+    string TerrainType,
+    uint TexGID,             // TerrainTex.TextureId (SurfaceTexture 0x05)
+    uint ResolvedTextureId,  // resolved highest-res RenderSurface (0x06), 0 if unresolved
+    uint TexTiling,
+    uint DetailTexGID,       // TerrainTex.DetailTextureId
+    uint DetailTexTiling,
+    uint MinVertBright, uint MaxVertBright,
+    uint MinVertSaturate, uint MaxVertSaturate,
+    uint MinVertHue, uint MaxVertHue);
+
+// One {code, textureId} alpha-map pair (corner/side terrain maps, road maps).
+public record TerrainAlphaMapInfo(uint Code, uint TextureId);
+
+public record TerrainTexturesResult(
+    bool Found,
+    string? Error,
+    uint BaseTexSize,
+    List<TerrainTexDescInfo> TerrainDesc,
+    List<TerrainAlphaMapInfo> CornerTerrainMaps,
+    List<TerrainAlphaMapInfo> SideTerrainMaps,
+    List<TerrainAlphaMapInfo> RoadMaps);
 
 // ── Ontology ───────────────────────────────────────────────
 public record OntologyScanResult(OntologyScanReport Report);

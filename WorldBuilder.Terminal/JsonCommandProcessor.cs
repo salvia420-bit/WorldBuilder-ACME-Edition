@@ -196,6 +196,7 @@ public class JsonCommandProcessor {
             ["get-object-detail"] = CmdGetObjectDetail,
             ["diff-terrain"] = CmdDiffTerrain,
             ["get-terrain-layers"] = CmdGetTerrainLayers,
+            ["get-terrain-textures"] = _ => CmdGetTerrainTextures(),
             ["export-textures"] = CmdExportTextures,
             ["import-texture"] = CmdImportTexture,
             ["clone-dat"] = CmdCloneDat,
@@ -2267,10 +2268,71 @@ public class JsonCommandProcessor {
     private string CmdGetRegion() {
         var r = _engine.GetRegion();
         return Serialize(new { success = true, command = "get-region",
+            // T-1: full Region 0x13 projection (was: heightTable + names only).
+            regionNumber = r.RegionNumber,
+            version = r.Version,
+            regionName = r.RegionName,
+            partsMask = $"0x{r.PartsMask:X8}",
+            landDefs = r.LandDefs == null ? null : new {
+                numBlockLength = r.LandDefs.NumBlockLength,
+                numBlockWidth = r.LandDefs.NumBlockWidth,
+                squareLength = r.LandDefs.SquareLength,
+                lBlockLength = r.LandDefs.LBlockLength,
+                vertexPerCell = r.LandDefs.VertexPerCell,
+                maxObjHeight = r.LandDefs.MaxObjHeight,
+                skyHeight = r.LandDefs.SkyHeight,
+                roadWidth = r.LandDefs.RoadWidth,
+            },
+            gameTime = r.GameTime == null ? null : new {
+                present = r.GameTime.Present,
+                zeroTimeOfYear = r.GameTime.ZeroTimeOfYear,
+                zeroYear = r.GameTime.ZeroYear,
+                dayLength = r.GameTime.DayLength,
+                daysPerYear = r.GameTime.DaysPerYear,
+                yearSpec = r.GameTime.YearSpec,
+                timesOfDayCount = r.GameTime.TimesOfDayCount,
+                seasonsCount = r.GameTime.SeasonsCount,
+            },
+            hasSkyInfo = r.HasSkyInfo,
+            hasSoundInfo = r.HasSoundInfo,
+            hasSceneInfo = r.HasSceneInfo,
+            hasRegionMisc = r.HasRegionMisc,
+            dayGroupCount = r.DayGroupCount,
+            soundStbCount = r.SoundStbCount,
+            sceneTypeCount = r.SceneTypeCount,
             heightTable = r.HeightTable.Select(h => Math.Round(h, 2)).ToArray(),
             heightTableSize = r.HeightTable.Length,
             terrainTypeCount = r.TerrainTypes?.Count,
-            terrainTypes = r.TerrainTypes?.Select(tt => new { index = tt.Index, name = tt.Name }).ToArray() });
+            terrainTypes = r.TerrainTypes?.Select(tt => new { index = tt.Index, name = tt.Name }).ToArray(),
+            terrainTypeDetails = r.TerrainTypeDetails?.Select(td => new {
+                index = td.Index, name = td.Name,
+                terrainColor = $"0x{td.TerrainColor:X8}",
+                sceneTypeCount = td.SceneTypeCount,
+            }).ToArray() });
+    }
+
+    private string CmdGetTerrainTextures() {
+        var r = _engine.GetTerrainTextures();
+        if (!r.Found)
+            return Serialize(new { success = false, command = "get-terrain-textures", error = r.Error });
+        return Serialize(new { success = true, command = "get-terrain-textures",
+            baseTexSize = r.BaseTexSize,
+            terrainDescCount = r.TerrainDesc.Count,
+            terrainDesc = r.TerrainDesc.Select(d => new {
+                index = d.Index,
+                terrainType = d.TerrainType,
+                texGID = $"0x{d.TexGID:X8}",
+                resolvedTextureId = $"0x{d.ResolvedTextureId:X8}",
+                texTiling = d.TexTiling,
+                detailTexGID = $"0x{d.DetailTexGID:X8}",
+                detailTexTiling = d.DetailTexTiling,
+                minVertBright = d.MinVertBright, maxVertBright = d.MaxVertBright,
+                minVertSaturate = d.MinVertSaturate, maxVertSaturate = d.MaxVertSaturate,
+                minVertHue = d.MinVertHue, maxVertHue = d.MaxVertHue,
+            }).ToArray(),
+            cornerTerrainMaps = r.CornerTerrainMaps.Select(m => new { code = m.Code, textureId = $"0x{m.TextureId:X8}" }).ToArray(),
+            sideTerrainMaps = r.SideTerrainMaps.Select(m => new { code = m.Code, textureId = $"0x{m.TextureId:X8}" }).ToArray(),
+            roadMaps = r.RoadMaps.Select(m => new { code = m.Code, textureId = $"0x{m.TextureId:X8}" }).ToArray() });
     }
 
     // ════════════════════════════════════════════════════
@@ -2491,7 +2553,7 @@ public class JsonCommandProcessor {
             new { name = "validate-all",     args = "lbX, lbY, cliffThreshold?",             description = "Run all validators (footprint flush + cliffs + portals)" },
             new { name = "list-landblocks",  args = "minX?, minY?, maxX?, maxY?, limit?",    description = "List landblocks" },
             new { name = "get-world-info",   args = "",                                      description = "World metadata" },
-            new { name = "get-region",       args = "",                                      description = "Height table and terrain types" },
+            new { name = "get-region",       args = "",                                      description = "Full Region 0x13: LandDefs, GameTime, PartsMask + Sky/Sound/Scene presence, height table, per-type color/sceneTypes" },
             new { name = "scan-ontology",    args = "scanGfxObjs?",                             description = "Scan DAT to classify all models" },
             new { name = "query-ontology",   args = "category?, scale?, keyword?, objectId?, limit?", description = "Query the ontology index" },
             new { name = "ontology-stats",   args = "",                                      description = "Ontology category/scale breakdown" },
@@ -2501,6 +2563,7 @@ public class JsonCommandProcessor {
             new { name = "get-object-detail", args = "objectId",                              description = "DAT model geometry & ontology info" },
             new { name = "diff-terrain",     args = "lbX, lbY",                              description = "Compare current terrain vs base DAT" },
             new { name = "get-terrain-layers", args = "lbX, lbY",                              description = "Terrain type distribution per landblock" },
+            new { name = "get-terrain-textures", args = "",                                    description = "Region TexMerge painting chain: per-type base/detail TexGID + tiling + vert-mod, corner/side/road alpha maps" },
             new { name = "export-textures",  args = "outputDir, minId?, maxId?",               description = "Export RenderSurface textures to PNG" },
             new { name = "import-texture",   args = "textureId, imagePath",                    description = "Replace a texture from image file (IMMEDIATE + PERMANENT in-place write to the base client_portal.dat; not undoable. Use import-render-surface for a deferred, export-time replacement)" },
             new { name = "clone-dat",        args = "outputPath",                              description = "Clone portal DAT to a new file" },
