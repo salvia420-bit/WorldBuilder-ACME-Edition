@@ -233,6 +233,12 @@ enum Commands {
         /// Namespace label for multi-namespace HBA archives
         #[arg(long)]
         namespace: Option<String>,
+        /// Emit every LandblockInfo static object (loose `objects` + `buildings`,
+        /// matching WB.Terminal `list-objects`/`GetStaticObjects`) as JSONL
+        /// (id,x,y,z,qw,qx,qy,qz,scale) for offline parity; suppresses the
+        /// human-readable summary.
+        #[arg(long)]
+        objects_jsonl: bool,
     },
     /// Pack a directory into an HBA archive
     HbaPack {
@@ -663,6 +669,7 @@ fn main() -> Result<()> {
             path,
             id,
             namespace,
+            objects_jsonl,
         } => {
             let provider = Provider::open(&path)?;
             let mut id_val = parse_id_auto(&id)?;
@@ -670,6 +677,32 @@ fn main() -> Result<()> {
             // Auto-fix ID if they passed base landblock ID
             if id_val & 0xFFFF == 0 {
                 id_val |= 0xFFFF;
+            }
+
+            // Gate-1 statics parity: emit every LandblockInfo static object
+            // (loose `objects` + `buildings`, exactly the set WB.Terminal
+            // `GetStaticObjects` returns) as JSONL, then stop. LandblockInfo
+            // objects carry no per-object scale in the DAT, so scale = 1.0.
+            if objects_jsonl {
+                let info_id = (id_val & 0xFFFF0000) | 0xFFFE;
+                if let Ok(info_data) = provider.get_file_in_namespace(namespace.as_deref(), info_id) {
+                    let info = holtburger_dat::landblock::LandblockInfo::unpack(&info_data)?;
+                    let emit = |oid: u32, f: &holtburger_dat::landblock::Frame| {
+                        let o = &f.origin;
+                        let q = &f.orientation;
+                        println!(
+                            "{{\"id\":\"0x{:08X}\",\"x\":{},\"y\":{},\"z\":{},\"qw\":{},\"qx\":{},\"qy\":{},\"qz\":{},\"scale\":1.0}}",
+                            oid, o.x, o.y, o.z, q.w, q.x, q.y, q.z
+                        );
+                    };
+                    for s in &info.objects {
+                        emit(s.id, &s.frame);
+                    }
+                    for b in &info.buildings {
+                        emit(b.model_id, &b.frame);
+                    }
+                }
+                return Ok(());
             }
 
             let terrain_data = provider.get_file_in_namespace(namespace.as_deref(), id_val)?;
