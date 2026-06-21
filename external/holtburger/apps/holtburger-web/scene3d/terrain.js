@@ -2302,16 +2302,18 @@ function readTerrainDetailTexOffFlag() {
 }
 
 /**
- * T1 (2026-05-28) — Parse `?texMerge=on`. Gates the retail TexMerge
- * composite (`uTexMergeEnabled` + the per-LB merge texture + the alpha-mask
- * array fetch). Default OFF — the mask-driven biome boundaries replace the
- * bilinear cross-dissolve and the rotation/orientation conventions are
- * eye-test-tuned, so it ships behind a flag. Same try/catch shape as the
- * sibling flag readers for the Node harness.
+ * T1 (2026-05-28) — Parse `?texMerge`. Gates the retail TexMerge composite
+ * (`uTexMergeEnabled` + the per-LB merge texture + the alpha-mask array fetch).
+ * Default ON (opt-out `?texMerge=off`) per render-audit T1a 2026-06-09 — the
+ * mask-driven biome boundaries replace the bilinear cross-dissolve. The
+ * SELECTION half is bit-exact vs the decomp (`holtburger-dat::terrain_merge`);
+ * only the pixel composite's rotation/orientation conventions wanted a real-GPU
+ * eye (waived 2026-06-20). Same try/catch shape as the sibling flag readers for
+ * the Node harness.
  */
 function readTexMergeFlag() {
   // default-ON per render-audit T1a (2026-06-09): patchy biome alpha-splat
-  // composite; opt-out ?texMerge=off, pending 1070 eye-test.
+  // composite; opt-out ?texMerge=off. (1070 eye-test waived 2026-06-20.)
   try {
     if (typeof window === "undefined" || !window.location) return true;
     const v = new URLSearchParams(window.location.search).get("texMerge");

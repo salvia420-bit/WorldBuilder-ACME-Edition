@@ -76,6 +76,13 @@ namespace WorldBuilder.Shared.Documents {
         };
     }
 
+    /// WB.Terminal's INTERNAL per-vertex terrain representation: four separate
+    /// bytes, packed/unpacked as a uint as byte0=Road, byte1=Scenery,
+    /// byte2=Type, byte3=Height (see <see cref="ToUInt"/> / the uint ctor).
+    /// This is NOT the AC client_cell.dat 16-bit terrain word — there
+    /// Road=bits0-1 (mask 0x3), Type=bits2-6 (mask 0x7C), Scenery=bits11-15
+    /// (mask 0xF800), and Height lives in a SEPARATE byte array (not packed in).
+    /// Do not assume this uint equals the DAT ushort.
     public readonly record struct TerrainEntry {
         public byte Road { get; init; }
         public byte Scenery { get; init; }

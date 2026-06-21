@@ -457,6 +457,81 @@ pub fn cell_swto_ne_cut(global_cell_x: u32, global_cell_y: u32) -> bool {
     (v8 as f64) * 2.3283064e-10 >= 0.5
 }
 
+/// Interpolate terrain height inside a single 24 m cell on the SAME
+/// triangulation the render mesh uses, so physics/camera Z tracks the drawn
+/// surface exactly (RC-1, 2026-06-20).
+///
+/// Corner heights: `z00`=SW, `z10`=SE, `z01`=NW, `z11`=NE. `fx`/`fy` ∈ [0, 1]
+/// are the east/north fractions within the cell. `sw_ne_cut` selects the
+/// diagonal — feed [`cell_swto_ne_cut`] for the retail per-cell split, or a
+/// fixed `true` for the legacy single SW↔NE diagonal:
+/// - `true`  → SW↔NE diagonal (z00↔z11); split on `fx == fy`.
+/// - `false` → NW↔SE diagonal (z01↔z10); split on `fx + fy == 1`.
+///
+/// Continuous across the chosen diagonal (both triangle planes meet on it) and
+/// exact at all four corners. The `true` branch is byte-identical to the prior
+/// fixed-diagonal interpolation, so `sw_ne_cut == true` everywhere reproduces
+/// the legacy behaviour exactly (A/B revert).
+#[inline]
+pub fn triangle_height_in_cell(
+    z00: f32,
+    z10: f32,
+    z01: f32,
+    z11: f32,
+    fx: f32,
+    fy: f32,
+    sw_ne_cut: bool,
+) -> f32 {
+    if sw_ne_cut {
+        // SW↔NE diagonal (z00↔z11): split on fx == fy.
+        if fx >= fy {
+            // lower-right triangle: SW(z00), SE(z10), NE(z11).
+            z00 + (z10 - z00) * fx + (z11 - z10) * fy
+        } else {
+            // upper-left triangle: SW(z00), NE(z11), NW(z01).
+            z00 + (z11 - z01) * fx + (z01 - z00) * fy
+        }
+    } else {
+        // NW↔SE diagonal (z01↔z10): split on fx + fy == 1.
+        if fx + fy <= 1.0 {
+            // lower-left triangle: SW(z00), SE(z10), NW(z01).
+            z00 + (z10 - z00) * fx + (z01 - z00) * fy
+        } else {
+            // upper-right triangle: NE(z11), NW(z01), SE(z10).
+            z11 + (z01 - z11) * (1.0 - fx) + (z10 - z11) * (1.0 - fy)
+        }
+    }
+}
+
+/// Per-cell terrain gradient `(∂z/∂fx, ∂z/∂fy)` in CELL-FRACTION units for the
+/// SAME triangle [`triangle_height_in_cell`] interpolates over. Divide each by
+/// the cell size in metres to get m/m partials, then
+/// `normal = normalize(-∂z/∂x, -∂z/∂y, 1)`. Corner/diagonal conventions match
+/// the height fn (`z00`=SW, `z10`=SE, `z01`=NW, `z11`=NE; `sw_ne_cut`). Constant
+/// within each triangle (planar), so this is the exact face normal.
+#[inline]
+pub fn triangle_grad_in_cell(
+    z00: f32,
+    z10: f32,
+    z01: f32,
+    z11: f32,
+    fx: f32,
+    fy: f32,
+    sw_ne_cut: bool,
+) -> (f32, f32) {
+    if sw_ne_cut {
+        if fx >= fy {
+            (z10 - z00, z11 - z10) // lower-right: SW, SE, NE
+        } else {
+            (z11 - z01, z01 - z00) // upper-left: SW, NE, NW
+        }
+    } else if fx + fy <= 1.0 {
+        (z10 - z00, z01 - z00) // lower-left: SW, SE, NW
+    } else {
+        (z11 - z01, z11 - z10) // upper-right: NE, NW, SE
+    }
+}
+
 /// Subdivide a 9×9 control-height grid into `(subdiv*8+1)²` vertices
 /// with Catmull-Rom bicubic interpolation + per-category noise.
 ///
@@ -1223,6 +1298,62 @@ mod tests {
         // cell (0,0) must stay SW↔NE so the legacy fixed-diagonal winding
         // test (`winding_is_consistent_ccw_post_mirror`) keeps passing.
         assert!(cell_swto_ne_cut(0xA9 * 8, 0xB4 * 8));
+    }
+
+    /// RC-1 (2026-06-20): the shared per-cell triangle interpolation must
+    /// (a) hit every corner exactly, (b) be continuous across the chosen
+    /// diagonal, (c) actually DIFFER between the two diagonals on a saddle
+    /// (proving the choice bites), and (d) follow the retail per-cell cut.
+    #[test]
+    fn triangle_height_in_cell_diagonal_and_continuity() {
+        // Saddle: SW=NE=0, SE=NW=10 → the two diagonals disagree at center.
+        let (z00, z10, z01, z11) = (0.0f32, 10.0, 10.0, 0.0); // SW, SE, NW, NE
+        // (a) corners exact regardless of diagonal.
+        for &cut in &[true, false] {
+            assert_eq!(triangle_height_in_cell(z00, z10, z01, z11, 0.0, 0.0, cut), z00);
+            assert_eq!(triangle_height_in_cell(z00, z10, z01, z11, 1.0, 0.0, cut), z10);
+            assert_eq!(triangle_height_in_cell(z00, z10, z01, z11, 0.0, 1.0, cut), z01);
+            assert_eq!(triangle_height_in_cell(z00, z10, z01, z11, 1.0, 1.0, cut), z11);
+        }
+        // (c) center: SW↔NE diagonal joins the two 0 corners (→0); NW↔SE joins
+        // the two 10 corners (→10). Distinct ⇒ the diagonal choice matters.
+        let sw_ne = triangle_height_in_cell(z00, z10, z01, z11, 0.5, 0.5, true);
+        let nw_se = triangle_height_in_cell(z00, z10, z01, z11, 0.5, 0.5, false);
+        assert!((sw_ne - 0.0).abs() < 1e-6, "SW-NE center = {sw_ne}");
+        assert!((nw_se - 10.0).abs() < 1e-6, "NW-SE center = {nw_se}");
+        // (b) continuity across each diagonal seam.
+        let eps = 1e-4;
+        let a = triangle_height_in_cell(z00, z10, z01, z11, 0.5 + eps, 0.5, true);
+        let b = triangle_height_in_cell(z00, z10, z01, z11, 0.5 - eps, 0.5, true);
+        assert!((a - b).abs() < 1e-2, "SW-NE discontinuity {a} vs {b}");
+        let c = triangle_height_in_cell(z00, z10, z01, z11, 0.5 + eps, 0.5, false);
+        let d = triangle_height_in_cell(z00, z10, z01, z11, 0.5 - eps, 0.5, false);
+        assert!((c - d).abs() < 1e-2, "NW-SE discontinuity {c} vs {d}");
+        // (d) cell (1353,1440) is NW↔SE per the retail PRNG
+        // (cell_split_rule_matches_retail_prng), so its center must follow the
+        // NW↔SE plane (10), not the legacy fixed SW↔NE plane (0).
+        let cut = cell_swto_ne_cut(1353, 1440);
+        assert!(!cut, "expected NW↔SE cut at (1353,1440)");
+        let z = triangle_height_in_cell(z00, z10, z01, z11, 0.5, 0.5, cut);
+        assert!((z - 10.0).abs() < 1e-6, "retail-cut center = {z}");
+    }
+
+    /// RC-1 follow-up: the per-cell gradient must equal the finite-difference of
+    /// the per-cell height inside each triangle (same split), for both diagonals.
+    #[test]
+    fn triangle_grad_matches_height() {
+        let (z00, z10, z01, z11) = (1.0f32, 4.0, -2.0, 7.0); // arbitrary tilt
+        let h = 1e-3;
+        for &cut in &[true, false] {
+            for &(fx, fy) in &[(0.7f32, 0.2f32), (0.2, 0.7)] {
+                let (gfx, gfy) = triangle_grad_in_cell(z00, z10, z01, z11, fx, fy, cut);
+                let z = triangle_height_in_cell(z00, z10, z01, z11, fx, fy, cut);
+                let zx = triangle_height_in_cell(z00, z10, z01, z11, fx + h, fy, cut);
+                let zy = triangle_height_in_cell(z00, z10, z01, z11, fx, fy + h, cut);
+                assert!(((zx - z) / h - gfx).abs() < 1e-2, "d/dfx mismatch cut={cut}");
+                assert!(((zy - z) / h - gfy).abs() < 1e-2, "d/dfy mismatch cut={cut}");
+            }
+        }
     }
 
     /// Wave R1.B reporting test — bake a real Holtburg landblock and

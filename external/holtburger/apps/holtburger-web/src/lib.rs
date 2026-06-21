@@ -860,15 +860,25 @@ fn resolve_region_land_height_table() -> Option<Vec<f32>> {
     (!table.is_empty()).then_some(table)
 }
 
+/// RC-1 (2026-06-20): default-on retail per-cell triangle split. `false`
+/// reverts to the legacy single fixed SW↔NE diagonal (A/B). The render mesh
+/// (`build_mesh`) and BOTH Z queries (`WorldState::terrain_height_at` in
+/// holtburger-world, `terrainHeightAt` below) read the SAME
+/// `terrain_subdiv::cell_swto_ne_cut`, so render shape and standing/camera Z
+/// never diverge. Mirrors `USE_TRIANGLE_TERRAIN_Z` in holtburger-world.
+const USE_RETAIL_SPLIT_DIR: bool = true;
+
 /// Tessellate a parsed `CellLandblock` into a [`LandblockMesh`].
 ///
 /// Pure CPU work — no I/O, no JS interop. Shared by
 /// [`fetch_landblock_heightmap`] and [`fetch_landblock_heightmaps`] so
 /// the two exports stay in lockstep without code duplication.
+/// `landblock_id` (the 0xLLLLFFFF cell id) supplies the per-cell split key.
 #[cfg(target_arch = "wasm32")]
 fn build_mesh(
     cell: &holtburger_dat::landblock::CellLandblock,
     land_height_table: Option<&[f32]>,
+    landblock_id: u32,
 ) -> LandblockMesh {
     // Vertex spacing = METERS_PER_LANDBLOCK / 8 = 24 m. The 9×9 grid
     // spans the full 192 m landblock, NOT a single 24 m cell.
@@ -901,6 +911,13 @@ fn build_mesh(
     // WebGL2's `flat` interpolation feeds the SW terrain code to every
     // fragment of both triangles — i.e. the whole cell shades as one
     // type, no smear across the diagonal.
+    // RC-1 (2026-06-20): split each cell on the retail PER-CELL diagonal
+    // (`cell_swto_ne_cut`) — the subdiv>=2 path already does this; the base
+    // mesh + the Z queries now match it so render shape and standing/camera Z
+    // agree with the retail surface. Naming here: v10 = NW (+y/north),
+    // v01 = SE (+x/east), v00 = SW, v11 = NE.
+    let lb_cx = ((landblock_id >> 24) & 0xff) * 8; // global cell X of LB SW corner
+    let lb_cy = ((landblock_id >> 16) & 0xff) * 8; // global cell Y of LB SW corner
     let mut indices = Vec::with_capacity(64 * 6);
     for x in 0..8u16 {
         for y in 0..8u16 {
@@ -908,8 +925,23 @@ fn build_mesh(
             let v10 = x * 9 + y + 1;
             let v01 = (x + 1) * 9 + y;
             let v11 = (x + 1) * 9 + y + 1;
-            // T1: NW → NE → SW (CCW; SW last). T2: NE → SE → SW.
-            indices.extend_from_slice(&[v10, v11, v00, v11, v01, v00]);
+            let sw_ne_cut = if USE_RETAIL_SPLIT_DIR {
+                holtburger_dat::terrain_subdiv::cell_swto_ne_cut(
+                    lb_cx + x as u32,
+                    lb_cy + y as u32,
+                )
+            } else {
+                true // legacy: fixed SW↔NE diagonal for every cell
+            };
+            if sw_ne_cut {
+                // SW↔NE diagonal (v00↔v11). SW (v00) last in both → flat-shade.
+                // T1: NW → NE → SW. T2: NE → SE → SW.
+                indices.extend_from_slice(&[v10, v11, v00, v11, v01, v00]);
+            } else {
+                // NW↔SE diagonal (v10↔v01). Same CW-from-+Z winding.
+                // T1: NW → NE → SE. T2: NW → SE → SW (SW last).
+                indices.extend_from_slice(&[v10, v11, v01, v10, v01, v00]);
+            }
         }
     }
 
@@ -1047,7 +1079,7 @@ pub async fn fetch_landblock_heightmaps(
             .map_err(|e| JsValue::from_str(&format!("get_file_by_key {id:#010X}: {e}")))?;
         let cell = CellLandblock::unpack(&bytes)
             .map_err(|e| JsValue::from_str(&format!("CellLandblock::unpack {id:#010X}: {e}")))?;
-        out.push(build_mesh(&cell, height_table.as_deref()));
+        out.push(build_mesh(&cell, height_table.as_deref(), *id));
     }
     Ok(out)
 }
@@ -3582,16 +3614,36 @@ pub async fn fetch_landblock_surface_dids(lb_cell_id: u32) -> Result<Vec<u32>, J
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn fetch_terrain_textures() -> Result<Vec<TerrainTexture>, JsValue> {
-    use holtburger_dat::file_type::{Palette, SurfaceTexture, Texture, TextureDecodeError};
+    use holtburger_dat::file_type::{Palette, Region, SurfaceTexture, Texture, TextureDecodeError};
     use holtburger_dat::{ResourceKey, ResourceSource};
 
     let source = global_source::global_source();
+
+    // C-2 (2026-06-20): resolve each type's base SurfaceTexture id from the LIVE
+    // Region (`terrain_desc[].terrain_tex.tex_gid`) instead of the frozen
+    // RETAIL_TERRAIN_SURFACE_TEXTURES table — so a modified Region renders its
+    // OWN base tiles (matching tiling/modulation/detail, which already walk the
+    // Region). The frozen table is the fail-soft fallback for any slot the
+    // Region omits or zeroes; for stock retail Dereth the two are identical so
+    // the bare-default render is byte-unchanged. (RC-4 in the terrain recon.)
+    let mut surf_ids: [u32; 33] = RETAIL_TERRAIN_SURFACE_TEXTURES;
+    if let Ok(rb) = source.get_file_by_key(ResourceKey::new("eor/portal", 0x1300_0000)) {
+        let mut cursor = std::io::Cursor::new(&rb[..]);
+        if let Ok(region) = Region::unpack(&mut cursor) {
+            for td in &region.terrain_info.land_surfaces.tex_merge.terrain_desc {
+                let idx = td.terrain_type as usize;
+                if idx < 33 && td.terrain_tex.texture_id != 0 {
+                    surf_ids[idx] = td.terrain_tex.texture_id;
+                }
+            }
+        }
+    }
 
     // Phase 5.0b — explicit per-level prefetch. The dependency
     // graph here is well-known: 33 SurfaceTextures → 33
     // Textures → up to 33 Palettes. Hand-rolled rather than
     // RecordingSource-driven because the levels are predictable.
-    let surf_keys: Vec<ResourceKey<'_>> = RETAIL_TERRAIN_SURFACE_TEXTURES
+    let surf_keys: Vec<ResourceKey<'_>> = surf_ids
         .iter()
         .map(|id| ResourceKey::new("eor/portal", *id))
         .collect();
@@ -3600,8 +3652,8 @@ pub async fn fetch_terrain_textures() -> Result<Vec<TerrainTexture>, JsValue> {
         .await
         .map_err(|e| JsValue::from_str(&format!("prefetch SurfaceTextures: {e}")))?;
 
-    let mut tex_ids: Vec<u32> = Vec::with_capacity(RETAIL_TERRAIN_SURFACE_TEXTURES.len());
-    for &surf_id in RETAIL_TERRAIN_SURFACE_TEXTURES.iter() {
+    let mut tex_ids: Vec<u32> = Vec::with_capacity(surf_ids.len());
+    for &surf_id in surf_ids.iter() {
         if let Ok(b) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_id))
             && let Ok(s) = SurfaceTexture::unpack(&b)
             && let Some(t) = s.highest_res()
@@ -3638,8 +3690,8 @@ pub async fn fetch_terrain_textures() -> Result<Vec<TerrainTexture>, JsValue> {
             .map_err(|e| JsValue::from_str(&format!("prefetch Palettes: {e}")))?;
     }
 
-    let mut out = Vec::with_capacity(RETAIL_TERRAIN_SURFACE_TEXTURES.len());
-    for (terrain_type, surf_id) in RETAIL_TERRAIN_SURFACE_TEXTURES.iter().copied().enumerate() {
+    let mut out = Vec::with_capacity(surf_ids.len());
+    for (terrain_type, surf_id) in surf_ids.iter().copied().enumerate() {
         // SurfaceTexture (mip stack).
         let surf_bytes = source
             .get_file_by_key(ResourceKey::new("eor/portal", surf_id))
@@ -26995,16 +27047,21 @@ impl SessionHandle {
         let z10 = grid[cx1 * 9 + cy0];
         let z01 = grid[cx0 * 9 + cy1];
         let z11 = grid[cx1 * 9 + cy1];
-        // Terrain-sink fix 2026-06-19: TRIANGLE interpolation on the fixed
-        // z00↔z11 (SW→NE) diagonal, mirroring `WorldState::terrain_height_at`
-        // and the base render mesh `build_mesh`. Keeps this query export (JS
-        // camera-lift) on the SAME surface the player physics stands on; the
-        // old bilinear sat up to ~1.15 m below the drawn triangle mesh on slopes.
-        let z = if fx >= fy {
-            z00 + (z10 - z00) * fx + (z11 - z10) * fy
+        // RC-1 (2026-06-20): TRIANGLE interpolation on the retail PER-CELL
+        // diagonal (`cell_swto_ne_cut`), mirroring `build_mesh` and
+        // `WorldState::terrain_height_at` so the JS camera-lift tracks the exact
+        // drawn surface the player physics stands on (was a fixed SW↔NE diagonal,
+        // wrong on ~53% of cells). `gx`/`gy` = landblock byte * 8 + cell index.
+        let gx = (lb_x as u32) * 8 + cx0 as u32;
+        let gy = (lb_y as u32) * 8 + cy0 as u32;
+        let sw_ne_cut = if USE_RETAIL_SPLIT_DIR {
+            holtburger_dat::terrain_subdiv::cell_swto_ne_cut(gx, gy)
         } else {
-            z00 + (z11 - z01) * fx + (z01 - z00) * fy
+            true // legacy: fixed SW↔NE diagonal for every cell
         };
+        let z = holtburger_dat::terrain_subdiv::triangle_height_in_cell(
+            z00, z10, z01, z11, fx, fy, sw_ne_cut,
+        );
         Some(z)
     }
 

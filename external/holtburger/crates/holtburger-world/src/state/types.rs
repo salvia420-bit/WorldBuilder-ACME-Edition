@@ -34,6 +34,14 @@ use crate::{WorldBootstrap, WorldEvent};
 /// the rig at the shipped quality levels.)
 const USE_TRIANGLE_TERRAIN_Z: bool = true;
 
+/// RC-1 (2026-06-20): pick the per-cell triangulation diagonal via the retail
+/// AC2D hash (`terrain_subdiv::cell_swto_ne_cut`) instead of one fixed SW↔NE
+/// diagonal for every cell — matching what the base render mesh `build_mesh`
+/// and the subdiv>=2 path now do, so standing Z sits on the exact triangle the
+/// player sees. `false` reverts to the legacy fixed SW↔NE diagonal (A/B). Only
+/// consulted when [`USE_TRIANGLE_TERRAIN_Z`] is on.
+const USE_RETAIL_SPLIT_DIR: bool = true;
+
 pub struct ServerTimeSync {
     pub server_time: f64,
     pub local_time: web_time::Instant,
@@ -745,22 +753,22 @@ impl WorldState {
         }
 
         // Interpolate within the per-cell TRIANGLE so the standing Z equals the
-        // DRAWN terrain surface (no more half-sunk rig on slopes). Match the
-        // RENDER mesh EXACTLY: the base (subdivLevel=1) mesh builder `build_mesh`
-        // (apps/holtburger-web/src/lib.rs) triangulates EVERY cell on the FIXED
-        // z00↔z11 (SW→NE) diagonal — it does NOT apply the retail per-cell split
-        // for the base mesh (only the subdiv>=2 path does, via
-        // `terrain_subdiv::cell_swto_ne_cut`). So mirror that fixed SW→NE diagonal
-        // here. (Follow-on: if `build_mesh` is upgraded to the retail per-cell
-        // `cell_swto_ne_cut` split, switch this to call the same function so
-        // physics keeps matching the render.)
-        let z = if fx >= fy {
-            // lower-right triangle: SW(z00), SE(z10), NE(z11).
-            z00 + (z10 - z00) * fx + (z11 - z10) * fy
+        // DRAWN terrain surface (no more half-sunk rig on slopes), and pick the
+        // SAME per-cell diagonal the retail client uses (RC-1, 2026-06-20). The
+        // base render mesh `build_mesh` and the subdiv>=2 path both split each
+        // cell via `terrain_subdiv::cell_swto_ne_cut`; mirror it here so physics
+        // standing-Z stays on the exact triangle the player sees. `gx`/`gy` are
+        // global cell coords (landblock byte * 8 + intra-LB cell index).
+        let gx = (lb_x as u32) * 8 + cx0 as u32;
+        let gy = (lb_y as u32) * 8 + cy0 as u32;
+        let sw_ne_cut = if USE_RETAIL_SPLIT_DIR {
+            holtburger_dat::terrain_subdiv::cell_swto_ne_cut(gx, gy)
         } else {
-            // upper-left triangle: SW(z00), NE(z11), NW(z01).
-            z00 + (z11 - z01) * fx + (z01 - z00) * fy
+            true // legacy: fixed SW↔NE diagonal for every cell
         };
+        let z = holtburger_dat::terrain_subdiv::triangle_height_in_cell(
+            z00, z10, z01, z11, fx, fy, sw_ne_cut,
+        );
         Some(z)
     }
 
@@ -776,15 +784,16 @@ impl WorldState {
     /// were freely climbable. This surfaces the local slope so the integrator
     /// can apply the cutoff.
     ///
-    /// Derivation: the analytic gradient of the SAME bilinear height field
-    /// [`Self::terrain_height_at`] samples (∂z/∂x, ∂z/∂y over the 24 m cell),
-    /// giving `normal = normalize(-∂z/∂x, -∂z/∂y, 1)`. This matches the
-    /// walkable cutoff exactly at the boundary (a 48.4° slope ⇒ |grad| =
-    /// tan 48.4° = 1.126 ⇒ normal.z = 0.664 = FloorZ) and is monotonic with
-    /// steepness, so the gate decision is faithful. The per-cell triangle
-    /// SPLIT direction (which the gradient averages over) only shifts the
-    /// classification within a hair of the boundary on mixed cells — a
-    /// fidelity refinement, not the exploit; documented as a follow-on.
+    /// Derivation: the analytic gradient of the SAME per-cell TRIANGLE height
+    /// field [`Self::terrain_height_at`] samples (∂z/∂x, ∂z/∂y), giving
+    /// `normal = normalize(-∂z/∂x, -∂z/∂y, 1)`. This matches the walkable cutoff
+    /// exactly at the boundary (a 48.4° slope ⇒ |grad| = tan 48.4° = 1.126 ⇒
+    /// normal.z = 0.664 = FloorZ) and is monotonic with steepness, so the gate
+    /// decision is faithful. RC-1 follow-up (2026-06-20): the gradient now comes
+    /// from the per-cell TRIANGLE (`terrain_subdiv::triangle_grad_in_cell`, the
+    /// same split `build_mesh` / `terrain_height_at` use) instead of a bilinear
+    /// average across the cell, so the walkable normal is the exact face the
+    /// player stands on rather than a smear across the diagonal.
     pub fn terrain_normal_at(&self, world_x: f32, world_y: f32) -> Option<holtburger_common::Vector3> {
         const LB_M: f32 = 192.0;
         const VERT_M: f32 = 24.0;
@@ -813,9 +822,21 @@ impl WorldState {
         let z10 = grid[cx1 * 9 + cy0];
         let z01 = grid[cx0 * 9 + cy1];
         let z11 = grid[cx1 * 9 + cy1];
-        // Bilinear partials in cell units, converted to m/m (÷ VERT_M).
-        let dzdx = ((z10 - z00) * (1.0 - fy) + (z11 - z01) * fy) / VERT_M;
-        let dzdy = ((z01 - z00) * (1.0 - fx) + (z11 - z10) * fx) / VERT_M;
+        // RC-1 follow-up (2026-06-20): per-cell TRIANGLE gradient — the same
+        // split build_mesh / terrain_height_at use — so the walkable-slope gate
+        // reads the exact face normal, not a bilinear average across the cell.
+        let gx = (lb_x as u32) * 8 + cx0 as u32;
+        let gy = (lb_y as u32) * 8 + cy0 as u32;
+        let sw_ne_cut = if USE_RETAIL_SPLIT_DIR {
+            holtburger_dat::terrain_subdiv::cell_swto_ne_cut(gx, gy)
+        } else {
+            true
+        };
+        let (gfx, gfy) = holtburger_dat::terrain_subdiv::triangle_grad_in_cell(
+            z00, z10, z01, z11, fx, fy, sw_ne_cut,
+        );
+        let dzdx = gfx / VERT_M;
+        let dzdy = gfy / VERT_M;
         let n = holtburger_common::Vector3::new(-dzdx, -dzdy, 1.0);
         let len = (n.x * n.x + n.y * n.y + n.z * n.z).sqrt();
         if !len.is_finite() || len <= f32::EPSILON {
