@@ -71,7 +71,12 @@ CROSSCHECK_DIR="${CROSSCHECK_DIR:-}"
 OUT_DIR="${OUT_DIR:-/mnt/wbterminal1/tmp/claude-scratch/gate1/report}"
 CELL_DAT="${CELL_DAT:-${HOME}/ac_base_dats/client_cell_1.dat}"
 PROJECT="${PROJECT:-/home/wbterminal/projects/RetailSmoke/RetailSmoke.wbproj}"
-DAT_TOOL="${DAT_TOOL:-/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/target/debug/dat-tool}"
+# dat-tool: prefer the release binary (faster DAT parse) when present.
+_DT_BASE="/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/target"
+if [ -z "${DAT_TOOL:-}" ]; then
+  if [ -x "${_DT_BASE}/release/dat-tool" ]; then DAT_TOOL="${_DT_BASE}/release/dat-tool"
+  else DAT_TOOL="${_DT_BASE}/debug/dat-tool"; fi
+fi
 DLL="${DLL:-}"
 TOL="${TOL:-0.02}"
 DB_NAME="${DB_NAME:-ace_world}"

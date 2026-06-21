@@ -240,6 +240,20 @@ enum Commands {
         #[arg(long)]
         objects_jsonl: bool,
     },
+    /// Batch form of `landblock --objects-jsonl`: read landblock ids from stdin
+    /// (one per line, hex `0x..` or decimal; base ids without the low word are
+    /// auto-fixed to ..FFFF), open the DAT ONCE, and stream every LandblockInfo
+    /// static object for each as JSONL. Each line carries a leading `"lb"`
+    /// ("0xLLLL") so the consumer can group; otherwise byte-for-byte the same
+    /// per-object fields as the single-LB path. Amortizes the ~seconds DAT load
+    /// across all landblocks (full-world statics parity in minutes, not hours).
+    LandblockObjectsBatch {
+        /// Path to the DAT or HBA file
+        path: PathBuf,
+        /// Namespace label for multi-namespace HBA archives
+        #[arg(long)]
+        namespace: Option<String>,
+    },
     /// Pack a directory into an HBA archive
     HbaPack {
         /// Input directory containing files named [ID].[TYPE] (hex)
@@ -733,6 +747,69 @@ fn main() -> Result<()> {
                     );
                 }
             }
+            Ok(())
+        }
+        Commands::LandblockObjectsBatch { path, namespace } => {
+            use std::io::{BufRead, Write};
+            // One JSONL object line, identical per-object fields to the single-LB
+            // `--objects-jsonl` path plus a leading "lb" tag for grouping.
+            fn emit<W: Write>(
+                w: &mut W,
+                lb_tag: u32,
+                oid: u32,
+                f: &holtburger_dat::landblock::Frame,
+            ) -> std::io::Result<()> {
+                let o = &f.origin;
+                let q = &f.orientation;
+                writeln!(
+                    w,
+                    "{{\"lb\":\"0x{:04X}\",\"id\":\"0x{:08X}\",\"x\":{},\"y\":{},\"z\":{},\"qw\":{},\"qx\":{},\"qy\":{},\"qz\":{},\"scale\":1.0}}",
+                    lb_tag, oid, o.x, o.y, o.z, q.w, q.x, q.y, q.z
+                )
+            }
+            // Open the DAT exactly once, then loop landblocks from stdin. This is
+            // the whole point: the per-LB DAT load that `landblock --objects-jsonl`
+            // paid 40,197 times is paid once here.
+            let provider = Provider::open(&path)?;
+            let stdin = std::io::stdin();
+            let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+            for line in stdin.lock().lines() {
+                let line = line?;
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                // One malformed line must not abort the whole batch.
+                let Ok(mut id_val) = parse_id_auto(trimmed) else {
+                    eprintln!("skip: unparseable landblock id {:?}", trimmed);
+                    continue;
+                };
+                if id_val & 0xFFFF == 0 {
+                    id_val |= 0xFFFF;
+                }
+                let lb_tag = (id_val >> 16) & 0xFFFF;
+                let info_id = (id_val & 0xFFFF0000) | 0xFFFE;
+                // No LandblockInfo file => the landblock has no statics (matches
+                // the single-LB path emitting nothing). Skip silently.
+                let Ok(info_data) = provider.get_file_in_namespace(namespace.as_deref(), info_id)
+                else {
+                    continue;
+                };
+                let info = match holtburger_dat::landblock::LandblockInfo::unpack(&info_data) {
+                    Ok(info) => info,
+                    Err(e) => {
+                        eprintln!("skip: 0x{:04X} LandblockInfo unpack failed: {}", lb_tag, e);
+                        continue;
+                    }
+                };
+                for s in &info.objects {
+                    emit(&mut out, lb_tag, s.id, &s.frame)?;
+                }
+                for b in &info.buildings {
+                    emit(&mut out, lb_tag, b.model_id, &b.frame)?;
+                }
+            }
+            out.flush()?;
             Ok(())
         }
     }

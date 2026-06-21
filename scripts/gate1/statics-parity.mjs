@@ -4,7 +4,9 @@
 // non-building statics the frozen snapshot never carried).
 //
 // Two independent parsers of the same client_cell.dat LandblockInfo:
-//   CLIENT  = holtburger-dat (Rust)  via `dat-tool landblock <cell.dat> <lb> --objects-jsonl`
+//   CLIENT  = holtburger-dat (Rust)  via `dat-tool landblock-objects-batch <cell.dat>`
+//                                    (LB ids on stdin; the 348MB DAT is loaded ONCE
+//                                     for the whole ring, not re-loaded per LB)
 //   ORACLE  = DatReaderWriter (C#)   via WB.Terminal `list-objects` (GetStaticObjects)
 // dat-tool emits LANDBLOCK-LOCAL coords; list-objects emits WORLD coords, so the
 // client side is lifted to world frame (wx = lbX*192 + localx) before matching.
@@ -22,8 +24,13 @@ import { execFileSync } from "node:child_process";
 // execFileSync does not run a shell, so leading ~ is not expanded.
 const expandTilde = (p) => (p && p.startsWith("~") ? os.homedir() + p.slice(1) : p);
 
-const DEF_DAT_TOOL =
-  "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/target/debug/dat-tool";
+const DAT_TARGET =
+  "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/target";
+// Prefer the release binary (~5-10x faster DAT parse) when present; with the
+// batch path the DAT load is a one-time cost either way, but release still wins.
+const DEF_DAT_TOOL = fs.existsSync(`${DAT_TARGET}/release/dat-tool`)
+  ? `${DAT_TARGET}/release/dat-tool`
+  : `${DAT_TARGET}/debug/dat-tool`;
 const DOTNET = "/home/wbterminal/.dotnet/dotnet";
 
 function parseArgs(argv) {
@@ -74,30 +81,40 @@ function readRing(ring) {
 
 const hex4 = (v) => `0x${v.toString(16).toUpperCase().padStart(4, "0")}`;
 
-// CLIENT: dat-tool per LB -> local objects, lifted to world frame.
-function clientObjects(o, lb) {
-  const lbX = (lb >> 8) & 0xff;
-  const lbY = lb & 0xff;
+// CLIENT: ONE dat-tool batch call for the whole ring (DAT loaded once) -> local
+// objects grouped by landblock, each lifted to world frame. Returns Map<lb,recs>
+// keyed by the numeric 0xLLLL landblock.
+function clientObjectsBatch(o, lbs) {
+  // Feed base ids on stdin; dat-tool auto-fixes 0xLLLL0000 -> 0xLLLLFFFF.
   // NB: `>>> 0` gives the unsigned 32-bit value; do NOT `| 0` after — that
   // re-signs it back to negative and toString(16) emits a bogus "-…" id.
-  const id = `0x${((lb << 16) >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+  const ids = lbs
+    .map((lb) => `0x${((lb << 16) >>> 0).toString(16).toUpperCase().padStart(8, "0")}`)
+    .join("\n");
   let txt = "";
   try {
-    txt = execFileSync(o.datTool, ["landblock", o.cellDat, id, "--objects-jsonl"], {
+    txt = execFileSync(o.datTool, ["landblock-objects-batch", o.cellDat], {
+      input: ids + "\n",
       encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
+      maxBuffer: 512 * 1024 * 1024,
     });
   } catch {
-    return [];
+    return new Map();
   }
-  const recs = [];
+  const byLb = new Map();
   for (const line of txt.split("\n")) {
     const s = line.trim();
-    if (!s.startsWith("{")) continue;
-    const r = JSON.parse(s);
-    recs.push({ id: String(r.id).toLowerCase(), x: r.x + lbX * 192, y: r.y + lbY * 192, z: r.z });
+    if (s.charCodeAt(0) !== 123) continue; // fast skip non-{ lines
+    let r;
+    try { r = JSON.parse(s); } catch { continue; }
+    const lb = parseInt(String(r.lb).replace(/^0x/i, ""), 16) & 0xffff;
+    const lbX = (lb >> 8) & 0xff;
+    const lbY = lb & 0xff;
+    let arr = byLb.get(lb);
+    if (!arr) { arr = []; byLb.set(lb, arr); }
+    arr.push({ id: String(r.id).toLowerCase(), x: r.x + lbX * 192, y: r.y + lbY * 192, z: r.z });
   }
-  return recs;
+  return byLb;
 }
 
 // ORACLE: one WB.Terminal --stdin session for all LBs -> world coords already.
@@ -155,12 +172,13 @@ function main() {
   const lbs = readRing(o.ring);
   process.stderr.write(`statics-parity: ${lbs.length} LBs, tol ${o.tol}m\n`);
   const oracle = oracleObjects(o, lbs);
+  const client = clientObjectsBatch(o, lbs);
   const rows = [];
   let tot = { oracle: 0, client: 0, matched: 0, missing: 0, extra: 0, pass: 0, drift: 0, skip: 0 };
   for (const lb of lbs) {
     const h = hex4(lb);
     const orc = oracle.get(h) || [];
-    const cli = clientObjects(o, lb);
+    const cli = client.get(lb) || [];
     if (orc.length === 0 && cli.length === 0) { tot.skip += 1; continue; }
     const d = diffLb(orc, cli, o.tol);
     const verdict = d.missing === 0 && d.extra === 0 ? "PASS" : "DRIFT";
@@ -175,7 +193,7 @@ function main() {
     );
   }
   process.stdout.write(
-    `\nSTATICS PARITY: ${tot.pass} PASS / ${tot.drift} DRIFT / ${tot.skip} empty  |  ` +
+    `\nSTATICS PARITY: ${tot.pass} PASS / ${tot.drift} DRIFT / ${tot.skip} no-statics  |  ` +
       `objects oracle=${tot.oracle} client=${tot.client} matched=${tot.matched} missing=${tot.missing} extra=${tot.extra}\n`,
   );
   if (o.out) {
