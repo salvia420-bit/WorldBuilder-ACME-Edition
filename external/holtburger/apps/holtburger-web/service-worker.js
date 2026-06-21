@@ -13,7 +13,13 @@
 // `index.html` registration code logs and continues; nothing
 // blocks on SW availability.
 
-const CONTENT_CACHE = "holtburger-content-v1";
+// v1 -> v2 (2026-06-21): cache-bust the immutable shard cache (tree/scenery
+// models + textures). Investigating "no trees render on a phone" where the
+// scenery placement data is confirmed present and served — a stale/incomplete
+// cached shard set would load tree positions but fail to build their meshes.
+// The activate-step GC sweeps the `holtburger-content-` prefix, so renaming
+// this constant purges the old cache for every client on next load.
+const CONTENT_CACHE = "holtburger-content-v2";
 
 // `holtburger-shards-` matches the Phase 5.0 cache name (renamed
 // to `holtburger-content-` in Phase 5.2 obj 7); the activate-step
