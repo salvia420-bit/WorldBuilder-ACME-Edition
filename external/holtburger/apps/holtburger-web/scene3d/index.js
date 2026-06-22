@@ -625,8 +625,26 @@ export async function preInit3D(canvas) {
   renderer.setSize(cssW, cssH, false);
   renderer.setClearColor(0x101418, 1);
 
-  // Texture quality 2026-05-20 — anisotropy cap. 1 ≡ OFF.
-  setAdapterMaxAnisotropy(1);
+  // Texture quality — anisotropic texture filtering. The 2026-05-20
+  // hardcoded `setAdapterMaxAnisotropy(1)` (≡ OFF) disabled anisotropy on
+  // EVERY adapter-built texture (the 33-layer terrain atlas, road tile,
+  // detail diffuse/normal arrays, and object surface textures), which made
+  // all of them smear into directional bands at grazing angles — the
+  // reported "roads & terrain streaked/smeared" bug, confirmed on the GTX
+  // 1070 at quality=high (live atlas anisotropy=1 vs GPU max=16). 2026-06-21:
+  // drive it from the quality preset's `anisotropy` cap (low:1, mid:4,
+  // high/ultra:16), clamped to the GPU's reported max. `?anisotropy=N`
+  // overrides for an on-device A/B (=1 reproduces the old smeared look).
+  const _gpuMaxAniso = renderer.capabilities?.getMaxAnisotropy?.() ?? 1;
+  const _anisoParam = Number.parseInt(
+    new URLSearchParams(window.location.search).get("anisotropy"),
+    10,
+  );
+  const _anisoCap =
+    Number.isFinite(_anisoParam) && _anisoParam >= 1
+      ? _anisoParam
+      : (quality?.flags?.anisotropy ?? _gpuMaxAniso);
+  setAdapterMaxAnisotropy(Math.max(1, Math.min(_anisoCap, _gpuMaxAniso)));
 
   // 2026-05-21 — texture knobs (URL flags, default off).
   //   `?textureScale=N` divides every surface + normal texture by N

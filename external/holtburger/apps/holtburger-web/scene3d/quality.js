@@ -34,6 +34,10 @@ export const PRESETS = {
         terrainDetailNormal: false,
         triplanar: false,
         triplanarSlopeThresholdPct: 100,
+        // Anisotropic texture filtering cap (1 = isotropic / off). Driven into
+        // setAdapterMaxAnisotropy at scene init and capped by the GPU max. Kept
+        // OFF on `low` for integrated/mobile/swiftshader perf-worker GPUs.
+        anisotropy: 1,
         subdivLevel: 1,
         hero: false,
         pom: false,
@@ -58,6 +62,9 @@ export const PRESETS = {
         terrainDetailNormal: true,
         triplanar: true,
         triplanarSlopeThresholdPct: 60,
+        // Anisotropic filtering — moderate on mid-tier to keep grazing-angle
+        // terrain/road textures from smearing without the full 16× cost.
+        anisotropy: 4,
         subdivLevel: 2,
         hero: false,
         pom: false,
@@ -78,6 +85,10 @@ export const PRESETS = {
         terrainDetailNormal: true,
         triplanar: true,
         triplanarSlopeThresholdPct: 30,
+        // Full anisotropic filtering on high+ (capped by the GPU max in
+        // index.js). Restores retail-sharp terrain/road textures at grazing
+        // angles — the prior global `setAdapterMaxAnisotropy(1)` smeared them.
+        anisotropy: 16,
         subdivLevel: 4,
         hero: true,
         pom: true,
@@ -98,6 +109,7 @@ export const PRESETS = {
         terrainDetailNormal: true,
         triplanar: true,
         triplanarSlopeThresholdPct: 30,
+        anisotropy: 16,
         subdivLevel: 8,
         hero: true,
         pom: true,

@@ -618,11 +618,16 @@ const DEFAULT_DETAIL_TEX_FADE_END = 75.0;
 const DETAIL_TEX_SLICE_FALLBACK = Object.freeze(new Array(33).fill(255));
 const DETAIL_TEX_TILING_FALLBACK = Object.freeze(new Array(33).fill(1));
 
-// T1 (2026-05-29) — base tex_tiling LUT fallback (default-on path). When the
-// wasm `fetch_terrain_base_tex_tiling()` export is missing or the fetch fails,
-// every code tiles 1× → atlasUvFor is an exact no-op → fail-soft to the prior
-// (pre-T1) render. Real retail values (all 2) come from the wasm LUT.
-const BASE_TEX_TILING_FALLBACK = Object.freeze(new Array(33).fill(1));
+// T1 (2026-05-29) — base tex_tiling LUT fallback (default-on path). The real
+// per-code values come from the wasm `fetch_terrain_base_tex_tiling()` export.
+// 2026-06-21: the fallback is now retail's value (2 for all 33 types, verified
+// against the DAT via WB.Terminal get-terrain-textures — texTiling is a uniform
+// 2 across every TerrainDesc) instead of 1. The prior `fill(1)` meant that any
+// silent fetch failure / stale-bundle / pre-LUT bake left base tiles rendered
+// 1× = 2× too large = stretched/blurry ground (observed live on the 1070:
+// uBaseTexTiling all-1). Failing soft to the correct retail tiling keeps the
+// ground sharp even when the LUT path doesn't run.
+const BASE_TEX_TILING_FALLBACK = Object.freeze(new Array(33).fill(2));
 
 // R4.a 2026-05-28 — retail TexMerge mid-point alpha rounding sub-flag.
 // The composite already ships behind ?texMerge; this rides that flag (no
@@ -1156,7 +1161,17 @@ vec3 atlasUvFor(int code, vec2 cellUv) {
 // LandDefs::Rotation the selection core resolves per overlay). The rotation
 // SIGN is a convention to confirm by eye-test on the 1070; flip the 90°/270°
 // branches if the masked overlays land on the wrong corner.
+//
+// uMaskRotFlip (2026-06-21) swaps the 90°/270° steps at runtime so the correct
+// orientation can be A/B'd live (set material.uniforms.uMaskRotFlip.value=1)
+// without a reload+recompile. Once the right sign is eye-confirmed it becomes
+// the static default and this toggle can go.
+uniform float uMaskRotFlip;
 vec2 rotateCellUv(vec2 uv, int rot) {
+  if (uMaskRotFlip > 0.5) {
+    if (rot == 1) rot = 3;
+    else if (rot == 3) rot = 1;
+  }
   vec2 c = uv - 0.5;
   if (rot == 1) c = vec2(-c.y, c.x);        // 90°
   else if (rot == 2) c = vec2(-c.x, -c.y);  // 180°
@@ -1271,11 +1286,19 @@ void main() {
   // intra-cell UV so the water texture pattern drifts. The scroll is
   // small enough to stay within a tile each frame; fract() wraps
   // cleanly inside the per-tile slot via atlasUvFor's modular indexing
-  // because the slot only sees the fractional part. Gated by both the
-  // displacement quality flag AND the per-vertex water flag so
-  // non-water cells (and low quality) keep their static UV.
+  // because the slot only sees the fractional part.
+  //
+  // 2026-06-21 — dropped the "and vIsWater == 1" gate. vIsWater is FLAT (the
+  // triangle's provoking vertex), so on a shoreline cell whose provoking
+  // vertex is land it was 0 → the cell's water corners stayed STATIC even
+  // though open-water neighbours scrolled, producing a hard per-cell
+  // flow/no-flow block right at the waterline (user reported water flowing
+  // in neighbouring blocks but not the one underfoot). The per-corner selection below
+  // already scrolls only the water-typed corners, so computing the drifted UV
+  // unconditionally (still under the displacement quality gate) makes the flow
+  // bilinear-continuous across the land/water seam — no provoking-vertex block.
   vec2 waterCellUv = cellUv;
-  if (uDisplacementEnabled > 0.5 && vIsWater == 1) {
+  if (uDisplacementEnabled > 0.5) {
     waterCellUv = fract(cellUv + vec2(uTime * 0.05, uTime * 0.02));
   }
 
@@ -1337,13 +1360,17 @@ void main() {
     // the Chorizite FindRoadAlpha all-road semantics and avoids three
     // dead texelFetch / mask samples per all-road fragment).
     if (baseLayer != 32) {
-      // T2 — slots 1..3 terrain overlays + 4..5 road overlays. Road slots
-      // carry the same [atlas_layer(=32), alpha_mask_idx, rotation, valid]
-      // packing as terrain overlays, so the existing rotate + alpha-mask +
-      // mid-point-round pipeline handles them with no special-casing. (An
-      // all-road cell short-circuits above with baseLayer==32 and no
-      // overlays, so this loop only runs for terrain/partial-road cells.)
-      for (int s = 1; s < 6; s++) {
+      // Slots 1..3 = terrain overlays only. 2026-06-21: the road overlay
+      // slots (4..5) are deliberately SKIPPED here (loop stops at s<4). The
+      // retail road alpha masks (0x0500168E/168C/168D) decode to near-full
+      // coverage, so applying them as overlays paints the road across BOTH
+      // cell-columns adjacent to a road vertex-line → a ~2-cell "two-lane
+      // highway" (acclient roads are a single ~5 m lane, _road_width=5.0 at
+      // acclient.c:467318). The narrow smoothstep(0.85,0.95) road painter
+      // below now runs in texMerge mode too (its uTexMergeEnabled<0.5 gate was
+      // removed) and is the single road source — one centred ~5 m lane.
+      // Terrain overlays keep their organic per-cell alpha-mask blend.
+      for (int s = 1; s < 4; s++) {
         vec4 t = texelFetch(uMergeData, ivec2(colBase + s, iv), 0);
         if (t.a < 0.5) continue;            // empty slot
         int layer = int(t.r * 255.0 + 0.5);
@@ -1388,15 +1415,25 @@ void main() {
   }
 
   // Phase 2.2 — water tint shift. Subtle bluish modulation that breathes
-  // over time (period ~21 s at uTime * 0.3). Only applied on water-
-  // flagged provoking vertices; non-water surfaces stay colour-stable.
+  // over time (period ~21 s at uTime * 0.3).
   // Perf D1 — read the pre-computed sin(uTime * 0.3) from the varying
   // (constant across the cell since uTime is constant per draw call;
   // linear interpolation of a constant is exact).
-  if (uDisplacementEnabled > 0.5 && vIsWater == 1) {
+  //
+  // 2026-06-21 — was gated on the FLAT vIsWater (provoking vertex), tinting
+  // the whole cell or none of it → a hard tint step at shoreline cells (same
+  // per-cell block as the scroll). Now weighted by the bilinear per-corner
+  // water fraction (waterW) so the tint fades in across the land/water seam
+  // exactly like the texture blend — continuous, no block.
+  if (uDisplacementEnabled > 0.5) {
+    float waterW =
+      (t00 >= 0 && t00 < 32 && (uWaterCodeMask & (1 << t00)) != 0 ? w00 : 0.0) +
+      (t10 >= 0 && t10 < 32 && (uWaterCodeMask & (1 << t10)) != 0 ? w10 : 0.0) +
+      (t01 >= 0 && t01 < 32 && (uWaterCodeMask & (1 << t01)) != 0 ? w01 : 0.0) +
+      (t11 >= 0 && t11 < 32 && (uWaterCodeMask & (1 << t11)) != 0 ? w11 : 0.0);
     vec3 tint = mix(vec3(0.9, 0.95, 1.05), vec3(1.0, 1.0, 1.0),
                     0.5 + 0.5 * vWaveModulation.x);
-    result *= tint;
+    result *= mix(vec3(1.0), tint, clamp(waterW, 0.0, 1.0));
   }
 
   // T7 — terrain detail-diffuse modulation (near-camera, MODULATE2X).
@@ -1436,12 +1473,13 @@ void main() {
   // separate road-overlay quad mesh — same painted appearance retail
   // had, naturally flush with the terrain surface.
   //
-  // T3 (2026-05-29): this is the LEGACY bilinear-approximation road painter.
-  // When the TexMerge path (T2) is active it already composited the authored
-  // road alpha masks (slots 4..5) into the result color, so running this too
-  // would double-blend roads. Gate it OFF whenever uTexMergeEnabled is on, the
-  // painter stays the road source for the default (non-?texMerge) path.
-  if (uRoadEnabled > 0.5 && uTexMergeEnabled < 0.5) {
+  // This narrow smoothstep road painter is the SINGLE road source in BOTH the
+  // bilinear and texMerge paths (2026-06-21). The texMerge composite above now
+  // skips its road overlay slots (loop stops at s<4), because those near-full
+  // road masks painted a ~2-cell "two-lane highway"; the bilinear road-bit
+  // mask narrowed by smoothstep(0.85,0.95) gives the correct single ~5 m lane
+  // (retail _road_width=5.0, acclient.c:467318) on top of either terrain blend.
+  if (uRoadEnabled > 0.5) {
     float r00 = vertexRoadAt(iu,     iv    );
     float r10 = vertexRoadAt(iu + 1, iv    );
     float r01 = vertexRoadAt(iu,     iv + 1);
@@ -1949,7 +1987,8 @@ export async function resolveTerrainRingOpts(
   // replication TexMerge::TileCSI bakes (acclient.c:365513) instead of one
   // ~2×-too-large copy. LB-independent → fetched once + cached on scene3d
   // (like the detail/palette LUTs). Missing export or fetch failure → null →
-  // the BASE_TEX_TILING_FALLBACK (all 1) binds → exact no-op (prior 1×).
+  // the BASE_TEX_TILING_FALLBACK (now all 2, the verified retail value) binds,
+  // so a fetch failure still renders at the correct 2× tiling.
   let baseTilingLut = scene3d.terrainBaseTilingLut ?? null;
   if (
     !baseTilingLut &&
@@ -2106,7 +2145,7 @@ export async function resolveTerrainRingOpts(
     roadCanvas,
     // T1 (2026-05-29) — base tex_tiling LUT (length-33 number array; retail
     // all 2). Null when the fetch failed/export missing → the material binds
-    // BASE_TEX_TILING_FALLBACK (all 1) → atlasUvFor no-op → fail-soft 1×.
+    // BASE_TEX_TILING_FALLBACK (now all 2, the retail value) → correct tiling.
     baseTexTiling: baseTilingLut ?? null,
     // Wave 2.A — terrain palette LUT + tint strength. Texture is the
     // 32×1 RGBA DataTexture built from data/terrain_palette.json;
@@ -2150,6 +2189,18 @@ export async function resolveTerrainRingOpts(
     // shared mask array + the gate. Disabled → bilinear path unchanged.
     texMergeAlphaArray: texMergeState?.alphaArray ?? null,
     texMergeEnabled: !!texMergeState,
+    // 2026-06-21 — ?texMergeRot=flip swaps the alpha-mask 90°/270° rotation
+    // (rotateCellUv) for the eye-test of the correct overlay orientation.
+    maskRotFlip: (() => {
+      try {
+        return (
+          new URLSearchParams(window.location.search)
+            .get("texMergeRot") || ""
+        ).toLowerCase() === "flip";
+      } catch (_) {
+        return false;
+      }
+    })(),
   };
 }
 
@@ -2304,22 +2355,31 @@ function readTerrainDetailTexOffFlag() {
 /**
  * T1 (2026-05-28) — Parse `?texMerge`. Gates the retail TexMerge composite
  * (`uTexMergeEnabled` + the per-LB merge texture + the alpha-mask array fetch).
- * Default ON (opt-out `?texMerge=off`) per render-audit T1a 2026-06-09 — the
- * mask-driven biome boundaries replace the bilinear cross-dissolve. The
- * SELECTION half is bit-exact vs the decomp (`holtburger-dat::terrain_merge`);
- * only the pixel composite's rotation/orientation conventions wanted a real-GPU
- * eye (waived 2026-06-20). Same try/catch shape as the sibling flag readers for
- * the Node harness.
+ *
+ * 2026-06-21 — flipped to DEFAULT OFF (opt-in `?texMerge=on`). The composite
+ * shipped default-on with its real-GPU eye-test waived (2026-06-20), and the
+ * user confirmed live on the 1070 that it renders WRONG: per-cell flat tiles
+ * read as hard "big blocks", and the road alpha masks paint near-full cells
+ * across BOTH cell-columns adjacent to a road vertex-line → a "two-lane
+ * highway" instead of one narrow lane. With this flag OFF the bilinear path
+ * (a) cross-dissolves the 4 cell corners → smooth biome transitions (no
+ * blocks) and (b) runs the legacy road painter, which narrows the road via
+ * smoothstep(0.85, 0.95) to retail's _road_width (~5 m, acclient.c:467318) =
+ * a single centered lane. Live A/B at 0xcd9d confirmed bilinear fixes both.
+ * The SELECTION half of the port is still bit-exact vs the decomp
+ * (`holtburger-dat::terrain_merge`); the pixel composite's road-width +
+ * rotation conventions (the near-full road masks, cell-boundary hard edges)
+ * need real work before it can default on again — keep it opt-in until then.
  */
 function readTexMergeFlag() {
-  // default-ON per render-audit T1a (2026-06-09): patchy biome alpha-splat
-  // composite; opt-out ?texMerge=off. (1070 eye-test waived 2026-06-20.)
+  // 2026-06-21 — DEFAULT OFF (opt-in ?texMerge=on); see docstring. The
+  // bilinear + smoothstep-road path is the smoother, single-lane default.
   try {
-    if (typeof window === "undefined" || !window.location) return true;
+    if (typeof window === "undefined" || !window.location) return false;
     const v = new URLSearchParams(window.location.search).get("texMerge");
-    return !(typeof v === "string" && v.toLowerCase() === "off");
+    return typeof v === "string" && v.toLowerCase() === "on";
   } catch (_) {
-    return true;
+    return false;
   }
 }
 
@@ -2839,6 +2899,11 @@ export async function bakeTerrainForLandblock(
       uTexMergeEnabled: {
         value: opts.texMergeEnabled && mergeDataTex ? 1.0 : 0.0,
       },
+      // 2026-06-21 — runtime A/B toggle for the alpha-mask rotation sign (see
+      // rotateCellUv). Default 0 (current convention); set to 1 live to swap
+      // the 90°/270° steps and eye-test which orientation lands the organic
+      // overlay masks on the correct corner. Honour ?texMergeRot=flip too.
+      uMaskRotFlip: { value: opts.maskRotFlip ? 1.0 : 0.0 },
       // R4.a — retail mid-point alpha rounding sub-gate. Rides ?texMerge
       // (defaults ON when the composite is active) so the refinement is
       // part of the opt-in feature; flip TEXMERGE_ALPHA_ROUND to false for
