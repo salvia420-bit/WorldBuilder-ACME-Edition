@@ -196,10 +196,17 @@ const BUILDINGS_RING_RADIUS = (() => {
 // followed the player. This raises the per-frame player-centered ring to
 // radius 5 (11×11 ≈ 960 m horizon), matching the boot ring's "full visible
 // horizon" intent as the player roams. `?pvsRingRadius=N` overrides
-// (N=1 restores the old 3×3 for A/B). The 11×11 (121-LB) moving working set
-// fits under the LRU cap (169 = 13×13 from the boot ring) with ~48 LBs of
-// headroom against evict↔re-bake thrash. NOTE: pvsRingRadius=6 (13×13=169)
-// would exactly fill the default cap and thrash — pair it with `?lbCap=225`.
+// (N=1 restores the old 3×3 for A/B). Default (5) is unchanged.
+//
+// Goal-1 draw-distance throttle (2026-06-22): the ceiling was `<= 6` because a
+// larger ring flooded the per-LB bake/fetch pipeline and stalled the main
+// thread (the 0.2 fps "draw distance got destroyed" symptom). The bounded
+// stream-queue in cells.js (`?pvsStreamQueue`, default-ON) now caps how many
+// bakes' fan-outs run at once regardless of ring size, so larger draw distance
+// is safe to reach; the ceiling is raised to 12 (25×25 ≈ 4.8 km) for testing.
+// The LRU cap below self-sizes to the ring + headroom (no manual `?lbCap`
+// pairing needed). NOTE: resident geometry/VRAM still grows as (2N+1)², so very
+// large radii ultimately want Goal-2 (texture compression) headroom.
 const PVS_RING_RADIUS = (() => {
   try {
     if (typeof window === "undefined") return 5;
@@ -207,7 +214,7 @@ const PVS_RING_RADIUS = (() => {
     const raw = ps.get("pvsRingRadius");
     if (raw) {
       const n = Number.parseInt(raw, 10);
-      if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
+      if (Number.isFinite(n) && n >= 0 && n <= 12) return n;
     }
     if (ps.get("agentic") === "low") return 1;
   } catch (_) { /* fallthrough */ }
@@ -570,6 +577,22 @@ export async function preInit3D(canvas) {
     antialias: !!quality.flags.antialias,
     logarithmicDepthBuffer: true,
   });
+  // Goal-1 (2026-06-22): three.js `renderer.debug.checkShaderErrors` defaults TRUE, which
+  // forces a SYNCHRONOUS `getProgramInfoLog`/LINK_STATUS read after every shader-program
+  // link — a main-thread FLUSH that blocks on the GPU compile. The 1070 `pvsRingRadius=10`
+  // draw-distance probe measured this at ~63 % of the cold fill (first-load shader linking;
+  // warm reloads hit Chrome's on-disk program cache and run ~idle). Disabling it lets
+  // programs link in the driver background (KHR_parallel_shader_compile + the bake_prewarm
+  // compileAsync path) instead of stalling the fill. Default OFF for perf;
+  // `?shaderErrorCheck=on` restores three.js's checking for shader development (a broken
+  // shader then logs the GLSL info log instead of just a raw GL error on first draw).
+  try {
+    const shaderErrCheck =
+      typeof window !== "undefined" && window.location && window.location.search
+        ? new URLSearchParams(window.location.search).get("shaderErrorCheck") === "on"
+        : false;
+    renderer.debug.checkShaderErrors = shaderErrCheck;
+  } catch (_) { /* renderer.debug always exists; guard is belt-and-suspenders */ }
   // 2026-05-21 Phase F — explicitly enable EXT_float_blend so the GPU
   // stops emitting "Using format enabled by implicitly enabled extension"
   // warnings every frame the atmosphere LUTs are sampled.
@@ -3624,7 +3647,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // is bounded WITHOUT evict↔re-bake thrash. The 3×3 always-resident floor in
     // LandblockLRU.tickEviction is the hard thrash guard regardless of this cap.
     const ringMax = Math.max(HOLTBURG_RING_RADIUS, STATICS_RING_RADIUS, BUILDINGS_RING_RADIUS, PVS_RING_RADIUS);
-    let lbCap = Math.max((2 * ringMax + 1) ** 2, 32);
+    // Goal-1 (2026-06-22): the floor is the ring AREA plus a perimeter of
+    // headroom. The old floor was the bare ring area ((2N+1)²), which a
+    // one-LB roam transiently exceeds — the shifted ring + the trailing edge
+    // are both resident before eviction runs, so LBs still inside the ring get
+    // evicted and immediately re-baked (evict↔re-bake thrash; pvsRingRadius=6
+    // hit this exactly and needed a manual `?lbCap=225`). Adding ~2·(2N+1)
+    // (the LBs that enter on a diagonal shift) + a small margin for in-flight
+    // bakes lets the cap self-size with the ring at any radius. `?lbCap=N`
+    // still overrides (below). At the default ring this floor sits above the
+    // working set so eviction effectively never fires (unchanged behavior).
+    const span = 2 * ringMax + 1;
+    let lbCap = Math.max(span * span + 2 * span + 8, 32);
     let lbLruDebug = false;
     if (typeof window !== "undefined" && window.location?.search) {
       const ps = new URLSearchParams(window.location.search);

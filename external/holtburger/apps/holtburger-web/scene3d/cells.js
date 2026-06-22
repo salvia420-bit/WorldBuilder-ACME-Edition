@@ -45,6 +45,7 @@ import {
 } from "./adapter.js";
 import { materialCanCastShadow } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
+import { STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT } from "./stream_bake_guard.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 
 // ?cellBugParity=retail keeps indoor cells visible from outdoors — matches a known retail rendering quirk for nostalgia research.
@@ -81,6 +82,48 @@ const PVS_BAKE_CAP = (() => {
     }
   } catch (_) {}
   return { enabled: true, k: PVS_BAKE_DEFAULT_K };
+})();
+
+// Goal-1 draw-distance throttle (2026-06-22): a bounded distance-priority
+// bake-START gate that supersedes PVS_BAKE_CAP's "K new starts per frame".
+// The K-per-frame cap fires a FIXED number of new LBs each frame regardless
+// of how many bakes are already running, so at large `pvsRingRadius` it keeps
+// kicking off new fan-outs (and re-firing the ones the guard's global
+// maxInFlight rejects) every frame — wasted fire-and-forget churn that scales
+// with ring area. Instead, drain the (already distance-sorted, already
+// `isNewBake`-filtered) ring into the stream guard's AVAILABLE in-flight slots
+// only: each frame start nearest-unbaked LBs while the guard's in-flight count
+// is below `targetInFlight`, then hold the fire signature (re-enter next frame)
+// while new LBs remain. This makes ring radius set EVENTUAL coverage with a
+// FIXED bake-start ceiling, instead of an instantaneous per-frame multiplier.
+//
+// Invariants preserved by construction (see the failure-mode map): no separate
+// queue structure — the SOURCE OF TRUTH stays `isNewBake` (the per-domain
+// baked-Sets, written only AFTER a bake succeeds) + the guard's own in-flight
+// Set, so a starved/cooling/evicted LB is never marked baked and stays
+// retryable (no mark-baked-before-fetch poison, nothing to evict). The
+// signature is held (`skipped != done`) until no new LB remains. The guard's
+// `maxInFlight` (default 6) is the HARD backstop; `targetInFlight` is the soft
+// pacing target (a single dequeue fires up to 3 domains, so actual in-flight
+// can briefly exceed `targetInFlight` but never the guard's hard cap).
+//
+// `?pvsStreamQueue` — default-ON, targetInFlight = STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT
+// (6). `=off` falls back to the PVS_BAKE_CAP K-per-frame path (and, if that is
+// also `?pvsBakeCap=off`, to the legacy uncapped fan-out). `=N` (positive
+// integer) overrides targetInFlight. NOTE: targetInFlight needs 1070 roam-feel
+// tuning vs the guard's maxInFlight.
+const PVS_STREAM_QUEUE = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      const raw = new URLSearchParams(globalThis.location.search).get("pvsStreamQueue");
+      if (raw === "off") return { enabled: false, targetInFlight: STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT };
+      if (raw != null) {
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n) && n > 0) return { enabled: true, targetInFlight: n };
+      }
+    }
+  } catch (_) {}
+  return { enabled: true, targetInFlight: STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT };
 })();
 
 // Phase 4 PView port (2026-05-25): module-scope scratch for the
@@ -1175,9 +1218,10 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     }
   };
 
-  if (!PVS_BAKE_CAP.enabled) {
-    // Legacy uncapped fan-out: fire the whole ring at once, then record the
-    // signature so the steady-state sweep is one per LB-crossing.
+  if (!PVS_BAKE_CAP.enabled && !PVS_STREAM_QUEUE.enabled) {
+    // Legacy uncapped fan-out (`?pvsBakeCap=off&pvsStreamQueue=off`): fire the
+    // whole ring at once, then record the signature so the steady-state sweep
+    // is one per LB-crossing.
     scene3d._pvsLastFireSig = fireSig;
     for (const lbKey of ringSeen) fireOne(lbKey);
     return;
@@ -1220,6 +1264,42 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     return best;
   };
   ringArr.sort((a, b) => distToPlayer(a) - distToPlayer(b));
+
+  if (PVS_STREAM_QUEUE.enabled) {
+    // Goal-1 stream-queue path: start nearest-unbaked LBs only while the stream
+    // guard's in-flight count is below `targetInFlight`, so the number of bakes
+    // (and their fetch fan-outs) live at once is bounded by `targetInFlight`
+    // regardless of ring radius. Re-read `inFlight.size` each iteration: a
+    // `fireOne` enqueues up to 3 guarded bakes which the guard adds to its
+    // in-flight Set synchronously (stream_bake_guard.js), so the next
+    // iteration's read reflects the previous start. The guard state may not
+    // exist until the first guarded bake creates it, so treat a missing Set as
+    // size 0 (the first fireOne then creates it). A `fireOne` for an LB whose
+    // domains are all in-flight/cooling is a cheap no-op (the guard resolves
+    // null without growing in-flight), so a cooling-down nearest LB does NOT
+    // block the drain — the next iteration simply advances to the next-nearest.
+    const target = PVS_STREAM_QUEUE.targetInFlight | 0;
+    let remaining = false;
+    for (let i = 0; i < ringArr.length; i += 1) {
+      const lbKey = ringArr[i];
+      if (!isNewBake(lbKey)) continue; // already fully baked — skip cheaply
+      const guard = scene3d._streamGuardState;
+      const inFlightSize =
+        guard && guard.inFlight instanceof Set ? guard.inFlight.size : 0;
+      if (inFlightSize >= target) {
+        remaining = true; // budget full — more new bakes left for a later frame
+        break;
+      }
+      fireOne(lbKey);
+    }
+    // Hold the signature (re-enter next frame) while new LBs remain, so the ring
+    // fills progressively as in-flight slots free; record it once nothing new
+    // remains so the steady-state cost collapses to one sweep per LB-crossing.
+    // (A bake that fails sets a guard cooldown but leaves its baked-Set unset;
+    // it is retried on the next LB-crossing, matching the legacy capped path.)
+    scene3d._pvsLastFireSig = remaining ? null : fireSig;
+    return;
+  }
 
   const maxNew = PVS_BAKE_CAP.k | 0;
   let started = 0;

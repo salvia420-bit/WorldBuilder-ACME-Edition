@@ -79,6 +79,27 @@ pub(crate) fn configured_fetch_concurrency() -> usize {
     }
 }
 
+/// Perf hook (Goal-1, 2026-06-22): JS global `globalThis.__hbVerifyShards`. When
+/// EXPLICITLY set to a falsy value (`false` / `0`), skip the per-shard sha256
+/// verification of fetched shard bytes (catalog mode v2 + v1). The boot pack is
+/// already sha256-verified at connect and the catalog carries a CRC32, so the
+/// per-shard check is redundant defense; at large draw distance it dominates fill
+/// CPU — the 1070 `pvsRingRadius=10` probe measured ~71 % of main-thread time in
+/// sha256 over ~25 MB across ~2 k shards. Absent / null / non-falsy → verify
+/// (default ON, behaviour unchanged). Reads the global via `js_sys::global()` so it
+/// works in both window + worker contexts (same pattern as the fetch-concurrency hook).
+pub(crate) fn shard_verify_enabled() -> bool {
+    let g = js_sys::global();
+    match js_sys::Reflect::get(
+        g.as_ref(),
+        &wasm_bindgen::JsValue::from_str("__hbVerifyShards"),
+    ) {
+        Ok(v) if v.is_undefined() || v.is_null() => true, // unset → verify (default)
+        Ok(v) => !v.is_falsy(),                           // false/0 → skip; else verify
+        Err(_) => true,
+    }
+}
+
 /// Failure surfaces for [`ManifestResourceSource::connect`].
 #[derive(Debug)]
 pub enum ManifestConnectError {
@@ -580,23 +601,28 @@ impl V2Source {
             .await
             .map_err(PrefetchError::Http)?;
 
-        // Step E: verify + insert. Skip None results (404s).
+        // Step E: verify + insert. Skip None results (404s). The per-shard sha256
+        // verify is gated by `__hbVerifyShards` (default ON) — at large draw distance
+        // it dominates fill CPU (~71% on the 1070 r10 probe); see shard_verify_enabled.
+        let verify = shard_verify_enabled();
         let mut cache = self.shards.lock().expect("shard cache mutex poisoned");
         for (task, bytes_opt) in shard_tasks.into_iter().zip(bytes_vec) {
             let Some(bytes) = bytes_opt else {
                 continue;
             };
-            if let Some(expected_trunc) = task.expected_trunc {
-                let got_full = sha256_hex(&bytes);
-                let got_trunc = &got_full[..32];
-                let expected_str = hex_encode_16(&expected_trunc);
-                if got_trunc != expected_str {
-                    return Err(PrefetchError::HashMismatch {
-                        namespace: task.key.0,
-                        file_id: task.key.1,
-                        expected: expected_str,
-                        got: got_trunc.to_owned(),
-                    });
+            if verify {
+                if let Some(expected_trunc) = task.expected_trunc {
+                    let got_full = sha256_hex(&bytes);
+                    let got_trunc = &got_full[..32];
+                    let expected_str = hex_encode_16(&expected_trunc);
+                    if got_trunc != expected_str {
+                        return Err(PrefetchError::HashMismatch {
+                            namespace: task.key.0,
+                            file_id: task.key.1,
+                            expected: expected_str,
+                            got: got_trunc.to_owned(),
+                        });
+                    }
                 }
             }
             cache.insert(task.key, bytes);

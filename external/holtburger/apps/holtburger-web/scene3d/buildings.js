@@ -51,6 +51,7 @@
 // honest measurement, not faked savings.
 
 import * as THREE from "three";
+import { prewarmSubtree } from "./bake_prewarm.js";
 import {
   meshToGeometryGroups,
   placementToMatrix4,
@@ -746,6 +747,10 @@ export async function bakeBuildingsForLandblock(
     // by routing through `buildOneBuilding`.
     let partCount = 0;
     let surfaceMeshCount = 0;
+    // Item 4 (2026-06-22): collect this LB's building Groups and pre-warm them as one
+    // subtree BEFORE attaching (see below), so the per-DID material program link +
+    // texture upload happen in the driver background instead of on the first render frame.
+    const _pendingGroups = [];
     for (const placement of buildings) {
       const placementLbX = (placement.landblockId >>> 24) & 0xff;
       const placementLbY = (placement.landblockId >>> 16) & 0xff;
@@ -789,10 +794,24 @@ export async function bakeBuildingsForLandblock(
         opts.shadowsEnabled,
         opts.buildingsReceiveShadow
       );
-      scene3d.buildingsGroup.add(group);
+      _pendingGroups.push(group);
       partCount += bake.parts.length;
       surfaceMeshCount += smc;
       opts.buildingMap3d.set(group.userData.placementKey, group);
+    }
+
+    // Item 4 (2026-06-22): pre-warm all of this LB's building Groups as one subtree, then
+    // attach. compileAsync on a temp parent backgrounds the program link + texture upload;
+    // re-parenting to buildingsGroup afterward is transform-independent (program/texture
+    // results live on the material/texture objects). Safe without a residency re-check: the
+    // LB isn't LRU-tracked until this baker resolves (the attach loop is past all awaits).
+    // `?bakePrewarm=off` skips the await and attaches straight away.
+    if (_pendingGroups.length > 0) {
+      const _tmp = new THREE.Group();
+      for (const g of _pendingGroups) _tmp.add(g);
+      await prewarmSubtree(scene3d, _tmp);
+      for (const g of [..._tmp.children]) _tmp.remove(g);
+      for (const g of _pendingGroups) scene3d.buildingsGroup.add(g);
     }
 
     // A3: placement build succeeded — NOW mark the LB permanently baked.

@@ -72,6 +72,7 @@
 //      Phase 7.2 capture, F#5+6 capture) stay green.
 
 import * as THREE from "three";
+import { BAKE_PREWARM, prewarmSubtree } from "./bake_prewarm.js";
 import { meshToGeometryGroups } from "./adapter.js";
 import { MaterialCache, materialCanCastShadow } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
@@ -1755,6 +1756,36 @@ export async function bakeStaticsForLandblock(
       nodesToAdd = addedNodes;
       // eslint-disable-next-line no-console
       console.warn("[scene3d.statics/staticBatch] consolidation failed, using unbatched:", e);
+    }
+  }
+  // Item 4 (2026-06-22): pre-warm this LB's static/scenery nodes (per-DID material program
+  // link + texture upload) in the driver background BEFORE attaching, so the first render
+  // frame after attach doesn't hitch — the cost the 1070 r10 probe flagged. Unlike terrain/
+  // buildings, statics time-slices its build loop and CAN be evicted across an await, so the
+  // prewarm await re-checks residency afterward (mirrors the cancellation guard above).
+  // `?bakePrewarm=off` skips straight to the attach. Use the post-batch `nodesToAdd`.
+  if (BAKE_PREWARM && nodesToAdd.length > 0) {
+    const _tmp = new THREE.Group();
+    for (const n of nodesToAdd) _tmp.add(n);
+    await prewarmSubtree(scene3d, _tmp);
+    for (const n of [..._tmp.children]) _tmp.remove(n);
+    if (staticsTimeSlice && !scene3d.staticsBakedLbs.has(lbKey)) {
+      // Evicted while the prewarm await was outstanding — dispose this LB's per-surface
+      // group geometries (full + degraded) and bail without attaching (same as the
+      // time-slice cancellation guard above; nodes were never added to the scene graph).
+      for (const groups of primary.groupsByModel.values()) {
+        for (const g of groups) { try { g?.geometry?.dispose?.(); } catch (_) {} }
+      }
+      for (const bySurface of degradedGeomByModel.values()) {
+        for (const levels of bySurface.values()) {
+          for (const lvl of levels) { try { lvl?.geometry?.dispose?.(); } catch (_) {} }
+        }
+      }
+      return {
+        ...makeEmptySummary(),
+        evictedDuringBuild: true,
+        disposables: { geometries: [], materials: [], textures: [] },
+      };
     }
   }
   for (const node of nodesToAdd) scene3d.staticsGroup.add(node);

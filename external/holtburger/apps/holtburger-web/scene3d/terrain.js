@@ -22,6 +22,7 @@
 // triangle-strip overlay mesh is gone.
 
 import * as THREE from "three";
+import { prewarmSubtree } from "./bake_prewarm.js";
 import {
   landblockMeshToGeometry,
   subdividedLandblockMeshToGeometry,
@@ -3323,6 +3324,14 @@ export async function bakeTerrainForLandblock(
     waterCodeMask: opts.waterCodeMask,
     lavaCodeMask: opts.lavaCodeMask,
   };
+
+  // Item 4 (2026-06-22): pre-warm this LB's shader program + DataTexture uploads
+  // (vertexTypes / TexMerge) in the driver background BEFORE attaching, so the
+  // first render frame after attach doesn't pay a synchronous compile+upload hitch
+  // (the cost the 1070 r10 probe flagged). Safe without a residency re-check: the LB
+  // isn't LRU-tracked until this baker resolves and the stream guard holds the
+  // in-flight key, so it can't be evicted across this await. `?bakePrewarm=off` skips.
+  await prewarmSubtree(scene3d, lbMesh);
 
   scene3d.terrainGroup.add(lbMesh);
 

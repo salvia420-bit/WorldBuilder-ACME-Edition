@@ -26,7 +26,7 @@ use crate::http::{HttpError, fetch_bytes, join_url};
 use crate::inflight::InflightMap;
 use crate::manifest_source::{
     ManifestConnectError, OwnedKey, PrefetchError, arc_to_http_error, configured_fetch_concurrency,
-    owned, url_dirname,
+    owned, shard_verify_enabled, url_dirname,
 };
 
 /// v1 manifest source. Reads the full `shards` map at connect time
@@ -133,16 +133,21 @@ impl ManifestResourceSourceV1 {
             .await
             .map_err(PrefetchError::Http)?;
 
+        // Per-shard sha256 verify gated by `__hbVerifyShards` (default ON); see
+        // shard_verify_enabled — at large draw distance the hash dominates fill CPU.
+        let verify = shard_verify_enabled();
         let mut cache = self.shards.lock().expect("shard cache mutex poisoned");
         for ((key, entry, _), bytes) in to_fetch.into_iter().zip(bytes_vec) {
-            let got = sha256_hex(&bytes);
-            if got != entry.sha256 {
-                return Err(PrefetchError::HashMismatch {
-                    namespace: key.0,
-                    file_id: key.1,
-                    expected: entry.sha256,
-                    got,
-                });
+            if verify {
+                let got = sha256_hex(&bytes);
+                if got != entry.sha256 {
+                    return Err(PrefetchError::HashMismatch {
+                        namespace: key.0,
+                        file_id: key.1,
+                        expected: entry.sha256,
+                        got,
+                    });
+                }
             }
             cache.insert(key, bytes);
         }
