@@ -1,0 +1,180 @@
+{
+  "ts": "2026-06-22T20:17:26.231Z",
+  "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=high&pvsRingRadius=10&clouds=off&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&nosw=1&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F",
+  "profileMs": 140000,
+  "spawnCell": "0xa9b40019",
+  "inWorld": true,
+  "lbBaked": {
+    "start": 0,
+    "end": 169,
+    "delta": 169
+  },
+  "fps": 19.8,
+  "worstFrameMs": 12285,
+  "analysis": {
+    "totalSamples": 87627,
+    "bucketPct": {
+      "wasm": 6.5,
+      "atlas": 0,
+      "wasmDecodeJs": 0,
+      "bake": 0.1,
+      "mesh_geom": 0,
+      "shaderGl": 14,
+      "gc": 0.3,
+      "idle": 28,
+      "other": 51
+    },
+    "top": [
+      {
+        "fn": "(program)",
+        "pct": 17.4,
+        "hits": 15244
+      },
+      {
+        "fn": "getProgramParameter",
+        "pct": 13.7,
+        "hits": 11985
+      },
+      {
+        "fn": "(idle)",
+        "pct": 10.6,
+        "hits": 9329
+      },
+      {
+        "fn": "getParameters",
+        "pct": 5.9,
+        "hits": 5206
+      },
+      {
+        "fn": "WebGLRenderer.renderBufferDirect",
+        "pct": 2.8,
+        "hits": 2477
+      },
+      {
+        "fn": "getProgram",
+        "pct": 2.6,
+        "hits": 2300
+      },
+      {
+        "fn": "setValue",
+        "pct": 2.3,
+        "hits": 2029
+      },
+      {
+        "fn": "getProgramCacheKey",
+        "pct": 2.1,
+        "hits": 1851
+      },
+      {
+        "fn": "setProgram",
+        "pct": 2,
+        "hits": 1758
+      },
+      {
+        "fn": "wasm-function[351]",
+        "pct": 1.7,
+        "hits": 1516
+      },
+      {
+        "fn": "upload",
+        "pct": 1.3,
+        "hits": 1138
+      },
+      {
+        "fn": "tick",
+        "pct": 1.2,
+        "hits": 1039
+      },
+      {
+        "fn": "flatten",
+        "pct": 1.1,
+        "hits": 972
+      },
+      {
+        "fn": "uniformMatrix4fv",
+        "pct": 1.1,
+        "hits": 968
+      },
+      {
+        "fn": "updateMatrixWorld",
+        "pct": 1,
+        "hits": 908
+      },
+      {
+        "fn": "bindVertexArray",
+        "pct": 0.9,
+        "hits": 826
+      },
+      {
+        "fn": "wasm-function[356]",
+        "pct": 0.9,
+        "hits": 822
+      },
+      {
+        "fn": "projectObject",
+        "pct": 0.9,
+        "hits": 767
+      },
+      {
+        "fn": "refreshCsmUniforms",
+        "pct": 0.8,
+        "hits": 742
+      },
+      {
+        "fn": "traverse",
+        "pct": 0.8,
+        "hits": 672
+      },
+      {
+        "fn": "setValueV3f",
+        "pct": 0.7,
+        "hits": 656
+      },
+      {
+        "fn": "drawImage",
+        "pct": 0.7,
+        "hits": 650
+      },
+      {
+        "fn": "bindTexture",
+        "pct": 0.7,
+        "hits": 628
+      },
+      {
+        "fn": "compose",
+        "pct": 0.7,
+        "hits": 620
+      },
+      {
+        "fn": "setValueM4",
+        "pct": 0.7,
+        "hits": 585
+      },
+      {
+        "fn": "multiplyMatrices",
+        "pct": 0.6,
+        "hits": 540
+      },
+      {
+        "fn": "copy",
+        "pct": 0.6,
+        "hits": 516
+      },
+      {
+        "fn": "fetch",
+        "pct": 0.6,
+        "hits": 488
+      },
+      {
+        "fn": "arraysEqual",
+        "pct": 0.6,
+        "hits": 488
+      },
+      {
+        "fn": "renderObject",
+        "pct": 0.5,
+        "hits": 465
+      }
+    ]
+  }
+}

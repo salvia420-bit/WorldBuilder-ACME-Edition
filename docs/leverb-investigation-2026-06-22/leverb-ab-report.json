@@ -1,0 +1,134 @@
+{
+  "ts": "2026-06-22T20:47:03.014Z",
+  "host": "GTX1070",
+  "scene": "quality=high pvsRingRadius=10 clouds=off",
+  "arms": [
+    {
+      "key": "baseline",
+      "flags": {},
+      "inWorld": true,
+      "flagEcho": [],
+      "errors": [],
+      "lbBaked": {
+        "start": 0,
+        "end": 169,
+        "delta": 169,
+        "perSec": 1.78
+      },
+      "fps": 20.6,
+      "frameMs": {
+        "p50": 18,
+        "p95": 65.8,
+        "p99": 223.2,
+        "worst": 12367
+      },
+      "stalls": {
+        "gt33": 904,
+        "gt100": 33,
+        "gt250": 15,
+        "gt1000": 5,
+        "total": 1955
+      }
+    },
+    {
+      "key": "fix1",
+      "flags": {
+        "terrainNoDoubleCopy": "on"
+      },
+      "inWorld": true,
+      "flagEcho": [
+        "log: [adapter] terrainNoDoubleCopy=true",
+        "log: [adapter] terrainNoDoubleCopy=true"
+      ],
+      "errors": [
+        "log: [boot-state] error: connect failed after 1 attempts: timeout"
+      ],
+      "lbBaked": {
+        "start": 0,
+        "end": 169,
+        "delta": 169,
+        "perSec": 1.78
+      },
+      "fps": 21,
+      "frameMs": {
+        "p50": 17.9,
+        "p95": 66.1,
+        "p99": 243.1,
+        "worst": 12403
+      },
+      "stalls": {
+        "gt33": 905,
+        "gt100": 40,
+        "gt250": 19,
+        "gt1000": 4,
+        "total": 1994
+      }
+    },
+    {
+      "key": "fix2",
+      "flags": {
+        "pvsStreamStartsPerTick": "2"
+      },
+      "inWorld": true,
+      "flagEcho": [],
+      "errors": [
+        "log: [boot-state] error: connect failed after 1 attempts: timeout"
+      ],
+      "lbBaked": {
+        "start": 0,
+        "end": 169,
+        "delta": 169,
+        "perSec": 1.78
+      },
+      "fps": 21.6,
+      "frameMs": {
+        "p50": 18.1,
+        "p95": 59.3,
+        "p99": 231,
+        "worst": 11810
+      },
+      "stalls": {
+        "gt33": 989,
+        "gt100": 39,
+        "gt250": 19,
+        "gt1000": 4,
+        "total": 2055
+      }
+    },
+    {
+      "key": "both",
+      "flags": {
+        "terrainNoDoubleCopy": "on",
+        "pvsStreamStartsPerTick": "2"
+      },
+      "inWorld": true,
+      "flagEcho": [
+        "log: [adapter] terrainNoDoubleCopy=true",
+        "log: [adapter] terrainNoDoubleCopy=true"
+      ],
+      "errors": [
+        "log: [boot-state] error: connect failed after 1 attempts: timeout"
+      ],
+      "lbBaked": {
+        "start": 0,
+        "end": 169,
+        "delta": 169,
+        "perSec": 1.78
+      },
+      "fps": 21.6,
+      "frameMs": {
+        "p50": 18.4,
+        "p95": 60,
+        "p99": 224.3,
+        "worst": 11492
+      },
+      "stalls": {
+        "gt33": 1002,
+        "gt100": 35,
+        "gt250": 15,
+        "gt1000": 5,
+        "total": 2056
+      }
+    }
+  ]
+}
