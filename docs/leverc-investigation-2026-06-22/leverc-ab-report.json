@@ -1,0 +1,105 @@
+{
+  "ts": "2026-06-22T21:50:31.609Z",
+  "host": "GTX1070",
+  "scene": "quality=high outdoor Holtburg, warm steady-state",
+  "arms": [
+    {
+      "key": "on-1",
+      "flags": {},
+      "inWorld": true,
+      "logDepthActive": false,
+      "fps": 21.7,
+      "frameMs": {
+        "p50": 44.9,
+        "p95": 54.3,
+        "worst": 90
+      },
+      "gpuUtil": {
+        "min": 26,
+        "max": 32,
+        "avg": 29.3
+      },
+      "gpuWatts": {
+        "min": 15.7,
+        "max": 22.4,
+        "avg": 18.4
+      },
+      "gpuTempC": {
+        "min": 52,
+        "max": 53,
+        "avg": 52.2
+      },
+      "smClock": {
+        "min": 885,
+        "max": 885,
+        "avg": 885
+      }
+    },
+    {
+      "key": "off",
+      "flags": {
+        "logDepth": "off"
+      },
+      "inWorld": true,
+      "logDepthActive": false,
+      "fps": 22.1,
+      "frameMs": {
+        "p50": 43.6,
+        "p95": 55.2,
+        "worst": 101
+      },
+      "gpuUtil": {
+        "min": 11,
+        "max": 26,
+        "avg": 16.1
+      },
+      "gpuWatts": {
+        "min": 16.5,
+        "max": 41.3,
+        "avg": 32.7
+      },
+      "gpuTempC": {
+        "min": 54,
+        "max": 57,
+        "avg": 56.1
+      },
+      "smClock": {
+        "min": 873,
+        "max": 1442,
+        "avg": 1199.4
+      }
+    },
+    {
+      "key": "on-2",
+      "flags": {},
+      "inWorld": true,
+      "logDepthActive": false,
+      "fps": 22.7,
+      "frameMs": {
+        "p50": 42.9,
+        "p95": 52.4,
+        "worst": 92
+      },
+      "gpuUtil": {
+        "min": 15,
+        "max": 32,
+        "avg": 20.9
+      },
+      "gpuWatts": {
+        "min": 15.4,
+        "max": 44.9,
+        "avg": 34.5
+      },
+      "gpuTempC": {
+        "min": 55,
+        "max": 58,
+        "avg": 56.8
+      },
+      "smClock": {
+        "min": 873,
+        "max": 1442,
+        "avg": 1205.7
+      }
+    }
+  ]
+}
