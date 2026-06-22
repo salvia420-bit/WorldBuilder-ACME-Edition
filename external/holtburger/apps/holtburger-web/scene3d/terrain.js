@@ -982,6 +982,15 @@ uniform float uDetailTexEnabled;          // 0.0 OFF / 1.0 ON (URL flag gate)
 uniform highp sampler2D uMergeData;       // per-LB 48×8 RGBA8 (NearestFilter)
 uniform sampler2DArray uAlphaMasks;       // 8 ordered A8 masks (R = weight)
 uniform float uTexMergeEnabled;           // 0.0 OFF / 1.0 ON
+// 2026-06-21 — per-vertex stochastic winner-take-all blend (?paintMode=winner).
+// uPaintMode 0=bilinear average (legacy default), 1=winner-take-all per vertex.
+// uPaintNoiseFreq: noise sampling rate over vGridUv (which is 1.0 per 24 m), so
+// a value of 8.0 = ~3 m noise pattern. uPaintNoiseStrength: how far noise can
+// push a corner's bilinear weight (0.4 = noise dominates near cell diagonals,
+// bilinear dominates near vertex corners). Both runtime-tunable via uniforms.
+uniform float uPaintMode;
+uniform float uPaintNoiseFreq;
+uniform float uPaintNoiseStrength;
 // R4.a 2026-05-28 — sub-gate for the retail mid-point alpha rounding
 // (acclient.c:365787-365798 ImgTex::MergeTexture: if 0<a<0xFF && a>0x80, a++).
 // 1.0 when ?texMerge=on so the composite includes the rounding by default;
@@ -1333,7 +1342,37 @@ void main() {
   float w01 = (1.0 - fu) * fv;
   float w11 = fu * fv;
 
-  vec3 result = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
+  vec3 result;
+  if (uPaintMode > 0.5) {
+    // Stochastic per-vertex winner-take-all (2026-06-21). The 9x9 vertex
+    // grid carries 1 terrain-type byte per vertex (5.27M total across the
+    // world); the data IS per-vertex. The default bilinear average mudded
+    // distinct types together because the 4 colours were just linearly
+    // mixed by position. Here each fragment perturbs the four bilinear
+    // corner weights with a unique high-freq noise value and selects the
+    // SINGLE winning corner. In the middle of a single-type region each
+    // corner's weight is ~1 so noise cannot flip it; only near the cell
+    // diagonals (weights converge to ~0.5) does noise decide — that is
+    // where the organic, noise-shaped boundary appears. No texture
+    // muddying, no per-cell flat blocks, true per-vertex painting.
+    float NOISE_FREQ = uPaintNoiseFreq;       // 1 unit per ~ (24/freq) m
+    float NOISE_STRENGTH = uPaintNoiseStrength;
+    float n00 = hash21(vGridUv * NOISE_FREQ + vec2(0.317, 0.731)) - 0.5;
+    float n10 = hash21(vGridUv * NOISE_FREQ + vec2(0.443, 0.119)) - 0.5;
+    float n01 = hash21(vGridUv * NOISE_FREQ + vec2(0.561, 0.917)) - 0.5;
+    float n11 = hash21(vGridUv * NOISE_FREQ + vec2(0.682, 0.379)) - 0.5;
+    float pw00 = w00 + n00 * NOISE_STRENGTH;
+    float pw10 = w10 + n10 * NOISE_STRENGTH;
+    float pw01 = w01 + n01 * NOISE_STRENGTH;
+    float pw11 = w11 + n11 * NOISE_STRENGTH;
+    float maxW = pw00; result = c00;
+    if (pw10 > maxW) { maxW = pw10; result = c10; }
+    if (pw01 > maxW) { maxW = pw01; result = c01; }
+    if (pw11 > maxW) { maxW = pw11; result = c11; }
+  } else {
+    // Legacy linear bilinear (current default until winner-take-all eye-test confirms).
+    result = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
+  }
 
   // T1 — retail TexMerge composite (opt-in, overrides the bilinear blend
   // above). Per-cell merge data lives in uMergeData (48×8: 8 EW cells × 6
@@ -2191,6 +2230,40 @@ export async function resolveTerrainRingOpts(
     texMergeEnabled: !!texMergeState,
     // 2026-06-21 — ?texMergeRot=flip swaps the alpha-mask 90°/270° rotation
     // (rotateCellUv) for the eye-test of the correct overlay orientation.
+    // 2026-06-21 — ?paintMode=winner switches the per-fragment blend to
+    // stochastic per-vertex winner-take-all (organic noise-shaped edges,
+    // distinct textures, no blocks). ?paintNoiseFreq + ?paintNoiseStrength
+    // tune the noise pattern frequency / how aggressively it overrides
+    // bilinear position weight. Defaults restore the muddy-bilinear look.
+    paintMode: (() => {
+      try {
+        return (
+          new URLSearchParams(window.location.search).get("paintMode") || ""
+        ).toLowerCase();
+      } catch (_) {
+        return "";
+      }
+    })(),
+    paintNoiseFreq: (() => {
+      try {
+        const v = Number.parseFloat(
+          new URLSearchParams(window.location.search).get("paintNoiseFreq"),
+        );
+        return Number.isFinite(v) && v > 0 ? v : 8.0;
+      } catch (_) {
+        return 8.0;
+      }
+    })(),
+    paintNoiseStrength: (() => {
+      try {
+        const v = Number.parseFloat(
+          new URLSearchParams(window.location.search).get("paintNoiseStrength"),
+        );
+        return Number.isFinite(v) && v >= 0 ? v : 0.4;
+      } catch (_) {
+        return 0.4;
+      }
+    })(),
     maskRotFlip: (() => {
       try {
         return (
@@ -2904,6 +2977,10 @@ export async function bakeTerrainForLandblock(
       // the 90°/270° steps and eye-test which orientation lands the organic
       // overlay masks on the correct corner. Honour ?texMergeRot=flip too.
       uMaskRotFlip: { value: opts.maskRotFlip ? 1.0 : 0.0 },
+      // 2026-06-21 — per-vertex stochastic painting (?paintMode=winner).
+      uPaintMode: { value: opts.paintMode === "winner" ? 1.0 : 0.0 },
+      uPaintNoiseFreq: { value: Number.isFinite(opts.paintNoiseFreq) ? opts.paintNoiseFreq : 8.0 },
+      uPaintNoiseStrength: { value: Number.isFinite(opts.paintNoiseStrength) ? opts.paintNoiseStrength : 0.4 },
       // R4.a — retail mid-point alpha rounding sub-gate. Rides ?texMerge
       // (defaults ON when the composite is active) so the refinement is
       // part of the opt-in feature; flip TEXMERGE_ALPHA_ROUND to false for
