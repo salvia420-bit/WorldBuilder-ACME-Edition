@@ -1353,25 +1353,37 @@ void main() {
   float w01 = (1.0 - fu) * fv;
   float w11 = fu * fv;
 
+  // Skip stochastic blending when all four corners are the same terrain type:
+  // there is no boundary to draw, and picking between identical textures only
+  // sampled at slightly different scrolled UVs (water + lava cells) made the
+  // animated water look grainy. Uniform cells fall back to plain bilinear.
+  bool allSameType = (t00 == t10) && (t00 == t01) && (t00 == t11);
+
   vec3 result;
-  if (uPaintMode > 0.5) {
-    // Stochastic per-vertex winner-take-all (2026-06-21). The 9x9 vertex
-    // grid carries 1 terrain-type byte per vertex (5.27M total across the
-    // world); the data IS per-vertex. The default bilinear average mudded
-    // distinct types together because the 4 colours were just linearly
-    // mixed by position. Here each fragment perturbs the four bilinear
-    // corner weights with a unique high-freq noise value and selects the
-    // SINGLE winning corner. In the middle of a single-type region each
-    // corner's weight is ~1 so noise cannot flip it; only near the cell
-    // diagonals (weights converge to ~0.5) does noise decide — that is
-    // where the organic, noise-shaped boundary appears. No texture
-    // muddying, no per-cell flat blocks, true per-vertex painting.
-    float NOISE_FREQ = uPaintNoiseFreq;       // 1 unit per ~ (24/freq) m
+  if (uPaintMode > 0.5 && !allSameType) {
+    // Stochastic per-vertex winner-take-all (2026-06-21, revised 2026-06-22).
+    // The 9x9 vertex grid carries 1 terrain-type byte per vertex (5.27M total
+    // across the world); the data IS per-vertex. The default bilinear average
+    // mudded distinct types together because the 4 corner colours were just
+    // linearly mixed by position. Here each fragment perturbs the four
+    // bilinear corner weights with a unique noise value and selects the
+    // SINGLE winning corner — distinct textures, no muddying. In the middle
+    // of a single-type region each corner's weight is ~1 so noise cannot flip
+    // it; only near the cell diagonals (weights converge to ~0.5) does noise
+    // decide — that is where the organic, noise-shaped boundary appears.
+    //
+    // Sample the noise at WORLD-SPACE position (vWorldPos.xy in metres), NOT
+    // at vGridUv which is LB-LOCAL [0..8] and resets every 192 m, producing a
+    // visible LB-grid pattern. World-space sampling gives one continuous noise
+    // field across all 5.27M vertices — the user-reported "lines, slightly
+    // different colors" were the 192-m LB-grid repeat of the noise pattern.
+    float NOISE_FREQ = uPaintNoiseFreq / 24.0;     // freq in 1/m
     float NOISE_STRENGTH = uPaintNoiseStrength;
-    float n00 = fragHash21(vGridUv * NOISE_FREQ + vec2(0.317, 0.731)) - 0.5;
-    float n10 = fragHash21(vGridUv * NOISE_FREQ + vec2(0.443, 0.119)) - 0.5;
-    float n01 = fragHash21(vGridUv * NOISE_FREQ + vec2(0.561, 0.917)) - 0.5;
-    float n11 = fragHash21(vGridUv * NOISE_FREQ + vec2(0.682, 0.379)) - 0.5;
+    vec2 np = vWorldPos.xy * NOISE_FREQ;
+    float n00 = fragHash21(np + vec2(0.317, 0.731)) - 0.5;
+    float n10 = fragHash21(np + vec2(0.443, 0.119)) - 0.5;
+    float n01 = fragHash21(np + vec2(0.561, 0.917)) - 0.5;
+    float n11 = fragHash21(np + vec2(0.682, 0.379)) - 0.5;
     float pw00 = w00 + n00 * NOISE_STRENGTH;
     float pw10 = w10 + n10 * NOISE_STRENGTH;
     float pw01 = w01 + n01 * NOISE_STRENGTH;
@@ -1381,7 +1393,8 @@ void main() {
     if (pw01 > maxW) { maxW = pw01; result = c01; }
     if (pw11 > maxW) { maxW = pw11; result = c11; }
   } else {
-    // Legacy linear bilinear (current default until winner-take-all eye-test confirms).
+    // Uniform-type cell OR paintMode off: plain bilinear (which for a uniform
+    // cell is just the same texture, slightly averaged for the per-corner UVs).
     result = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
   }
 
