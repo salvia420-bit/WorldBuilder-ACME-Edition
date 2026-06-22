@@ -991,6 +991,17 @@ uniform float uTexMergeEnabled;           // 0.0 OFF / 1.0 ON
 uniform float uPaintMode;
 uniform float uPaintNoiseFreq;
 uniform float uPaintNoiseStrength;
+// 2026-06-22 — Candidate H (domain-warped coherent-noise winner). uWarpAmp>0
+// swaps the per-pixel sin-hash perturbation (fragHash21 — directional moire +
+// salt-and-pepper, and STATIC over scrolling water, the "liney" coast look)
+// for a spatially-coherent value-noise field (fragValueNoise2D) sampled through
+// a domain warp, so the boundary goes organic instead of liney. uWarpFreq
+// scales the warp lattice. uWinnerSoftness>0 replaces the hard argmax with a
+// soft top-two blend (a narrow, distinct-texture transition band). All three
+// default 0.0 = byte-identical to the shipped ?paintMode=winner path.
+uniform float uWarpAmp;
+uniform float uWarpFreq;
+uniform float uWinnerSoftness;
 
 // Per-fragment 2D hash. Mirrors hash21 in TERRAIN_VERTEX_GLSL (line ~801).
 // Fragment + vertex shaders compile separately, so a function defined in the
@@ -1001,6 +1012,23 @@ uniform float uPaintNoiseStrength;
 // output if shared.
 float fragHash21(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+// 2026-06-22 — Candidate H: fragment-stage copy of TERRAIN_VERTEX_GLSL's
+// fade + valueNoise2D (lines ~800-816). Quintic-interpolated lattice noise is
+// C1-continuous, so it has NONE of the sin-dot directional banding the raw
+// fragHash21 shows, and it varies smoothly in space (no per-pixel speckle).
+// Returns roughly [-0.5, 0.5] to match the old (fragHash21 - 0.5) amplitude.
+float fragFade(float t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
+float fragValueNoise2D(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float a = fragHash21(i);
+  float b = fragHash21(i + vec2(1.0, 0.0));
+  float c = fragHash21(i + vec2(0.0, 1.0));
+  float d = fragHash21(i + vec2(1.0, 1.0));
+  float u = fragFade(f.x);
+  float v = fragFade(f.y);
+  return (mix(mix(a, b, u), mix(c, d, u), v) - 0.5);
 }
 // R4.a 2026-05-28 — sub-gate for the retail mid-point alpha rounding
 // (acclient.c:365787-365798 ImgTex::MergeTexture: if 0<a<0xFF && a>0x80, a++).
@@ -1380,18 +1408,60 @@ void main() {
     float NOISE_FREQ = uPaintNoiseFreq / 24.0;     // freq in 1/m
     float NOISE_STRENGTH = uPaintNoiseStrength;
     vec2 np = vWorldPos.xy * NOISE_FREQ;
-    float n00 = fragHash21(np + vec2(0.317, 0.731)) - 0.5;
-    float n10 = fragHash21(np + vec2(0.443, 0.119)) - 0.5;
-    float n01 = fragHash21(np + vec2(0.561, 0.917)) - 0.5;
-    float n11 = fragHash21(np + vec2(0.682, 0.379)) - 0.5;
+    // Candidate H (2026-06-22): pick the perturbation noise source.
+    // uWarpAmp == 0 -> legacy per-pixel sin-hash (byte-identical to the shipped
+    // winner). uWarpAmp > 0 -> spatially-coherent value noise sampled through a
+    // domain warp: organic, no sin-dot banding, and (being continuous) it does
+    // not sit as a static line grid over scrolling water. The 4 corner offsets
+    // are spread across separate lattice cells so the corners stay decorrelated
+    // while each remains individually smooth.
+    float n00, n10, n01, n11;
+    if (uWarpAmp > 0.0) {
+      vec2 warp = vec2(
+        fragValueNoise2D(np * uWarpFreq),
+        fragValueNoise2D(np * uWarpFreq + vec2(19.3, 7.7))
+      ) * uWarpAmp;
+      vec2 wp = np + warp;
+      n00 = fragValueNoise2D(wp + vec2(0.0, 0.0));
+      n10 = fragValueNoise2D(wp + vec2(11.3, 4.1));
+      n01 = fragValueNoise2D(wp + vec2(5.7, 19.2));
+      n11 = fragValueNoise2D(wp + vec2(23.4, 13.8));
+    } else {
+      n00 = fragHash21(np + vec2(0.317, 0.731)) - 0.5;
+      n10 = fragHash21(np + vec2(0.443, 0.119)) - 0.5;
+      n01 = fragHash21(np + vec2(0.561, 0.917)) - 0.5;
+      n11 = fragHash21(np + vec2(0.682, 0.379)) - 0.5;
+    }
     float pw00 = w00 + n00 * NOISE_STRENGTH;
     float pw10 = w10 + n10 * NOISE_STRENGTH;
     float pw01 = w01 + n01 * NOISE_STRENGTH;
     float pw11 = w11 + n11 * NOISE_STRENGTH;
-    float maxW = pw00; result = c00;
-    if (pw10 > maxW) { maxW = pw10; result = c10; }
-    if (pw01 > maxW) { maxW = pw01; result = c01; }
-    if (pw11 > maxW) { maxW = pw11; result = c11; }
+    if (uWinnerSoftness > 0.0) {
+      // Soft top-two blend (Candidate D half): cross-fade between the two
+      // highest-perturbed-weight corner colours across a band of width
+      // uWinnerSoftness (in weight units). Away from a boundary the winner
+      // dominates (pure distinct texture); at the boundary it is a 2-way blend
+      // of the two adjacent types only (distinct, NOT a muddy 4-way average).
+      // No arrays / dynamic indexing (ANGLE D3D11-safe): single-pass top-two.
+      float w1 = -1e9; vec3 col1 = c00;
+      float w2 = -1e9; vec3 col2 = c00;
+      if (pw00 > w1) { w2 = w1; col2 = col1; w1 = pw00; col1 = c00; }
+      else if (pw00 > w2) { w2 = pw00; col2 = c00; }
+      if (pw10 > w1) { w2 = w1; col2 = col1; w1 = pw10; col1 = c10; }
+      else if (pw10 > w2) { w2 = pw10; col2 = c10; }
+      if (pw01 > w1) { w2 = w1; col2 = col1; w1 = pw01; col1 = c01; }
+      else if (pw01 > w2) { w2 = pw01; col2 = c01; }
+      if (pw11 > w1) { w2 = w1; col2 = col1; w1 = pw11; col1 = c11; }
+      else if (pw11 > w2) { w2 = pw11; col2 = c11; }
+      float gap = w1 - w2;
+      float t = clamp(0.5 + 0.5 * gap / max(uWinnerSoftness, 1e-4), 0.0, 1.0);
+      result = mix(col2, col1, t);
+    } else {
+      float maxW = pw00; result = c00;
+      if (pw10 > maxW) { maxW = pw10; result = c10; }
+      if (pw01 > maxW) { maxW = pw01; result = c01; }
+      if (pw11 > maxW) { maxW = pw11; result = c11; }
+    }
   } else {
     // Uniform-type cell OR paintMode off: plain bilinear (which for a uniform
     // cell is just the same texture, slightly averaged for the per-corner UVs).
@@ -2288,6 +2358,45 @@ export async function resolveTerrainRingOpts(
         return 0.4;
       }
     })(),
+    // 2026-06-22 — Candidate H. ?paintMode=warp turns it on with sensible
+    // defaults; ?warpAmp / ?warpFreq / ?winnerSoftness tune it live (and also
+    // compose onto ?paintMode=winner). warpAmp/winnerSoftness 0 = legacy winner.
+    warpAmp: (() => {
+      try {
+        const v = Number.parseFloat(
+          new URLSearchParams(window.location.search).get("warpAmp"),
+        );
+        if (Number.isFinite(v) && v >= 0) return v;
+        return (
+          new URLSearchParams(window.location.search).get("paintMode") || ""
+        ).toLowerCase() === "warp" ? 0.6 : 0.0;
+      } catch (_) {
+        return 0.0;
+      }
+    })(),
+    warpFreq: (() => {
+      try {
+        const v = Number.parseFloat(
+          new URLSearchParams(window.location.search).get("warpFreq"),
+        );
+        return Number.isFinite(v) && v > 0 ? v : 1.0;
+      } catch (_) {
+        return 1.0;
+      }
+    })(),
+    winnerSoftness: (() => {
+      try {
+        const v = Number.parseFloat(
+          new URLSearchParams(window.location.search).get("winnerSoftness"),
+        );
+        if (Number.isFinite(v) && v >= 0) return v;
+        return (
+          new URLSearchParams(window.location.search).get("paintMode") || ""
+        ).toLowerCase() === "warp" ? 0.3 : 0.0;
+      } catch (_) {
+        return 0.0;
+      }
+    })(),
     maskRotFlip: (() => {
       try {
         return (
@@ -3002,9 +3111,13 @@ export async function bakeTerrainForLandblock(
       // overlay masks on the correct corner. Honour ?texMergeRot=flip too.
       uMaskRotFlip: { value: opts.maskRotFlip ? 1.0 : 0.0 },
       // 2026-06-21 — per-vertex stochastic painting (?paintMode=winner).
-      uPaintMode: { value: opts.paintMode === "winner" ? 1.0 : 0.0 },
+      uPaintMode: { value: (opts.paintMode === "winner" || opts.paintMode === "warp") ? 1.0 : 0.0 },
       uPaintNoiseFreq: { value: Number.isFinite(opts.paintNoiseFreq) ? opts.paintNoiseFreq : 8.0 },
       uPaintNoiseStrength: { value: Number.isFinite(opts.paintNoiseStrength) ? opts.paintNoiseStrength : 0.4 },
+      // 2026-06-22 — Candidate H (domain-warped coherent-noise winner + soft band).
+      uWarpAmp: { value: Number.isFinite(opts.warpAmp) ? opts.warpAmp : 0.0 },
+      uWarpFreq: { value: Number.isFinite(opts.warpFreq) ? opts.warpFreq : 1.0 },
+      uWinnerSoftness: { value: Number.isFinite(opts.winnerSoftness) ? opts.winnerSoftness : 0.0 },
       // R4.a — retail mid-point alpha rounding sub-gate. Rides ?texMerge
       // (defaults ON when the composite is active) so the refinement is
       // part of the opt-in feature; flip TEXMERGE_ALPHA_ROUND to false for
