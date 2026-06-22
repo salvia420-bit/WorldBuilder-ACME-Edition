@@ -1,0 +1,388 @@
+{
+  "ts": "2026-06-22T19:15:45.819Z",
+  "host": "GTX1070",
+  "sceneQuality": "mid",
+  "app": "http://127.0.0.1:18765/apps/holtburger-web/index.html",
+  "arms": [
+    {
+      "key": "off",
+      "label": "clouds OFF (baseline, mid)",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "spawnCell": "0xa9b40019",
+      "inWorld": true,
+      "loginSec": 5,
+      "outdoorCell": "0xa9b40019",
+      "outdoor": true,
+      "cloudConfig": {
+        "present": false
+      },
+      "fps": 20.6,
+      "frameMs": {
+        "p50": 47.3,
+        "p95": 57.5,
+        "p99": 71.5,
+        "worst": 121.2
+      },
+      "spikes": {
+        "gt33": 631,
+        "gt50": 184,
+        "total": 631
+      },
+      "gpuUtilPct": {
+        "min": 29,
+        "max": 37,
+        "avg": 35
+      },
+      "gpuMemMB": {
+        "min": 860,
+        "max": 862,
+        "avg": 861.8
+      },
+      "gpuTempC": {
+        "min": 53,
+        "max": 55,
+        "avg": 54.1
+      },
+      "gpuWatts": {
+        "min": 9.9,
+        "max": 16.1,
+        "avg": 13.5
+      },
+      "scene": {
+        "geometries": 1021,
+        "textures": 534,
+        "programs": 46
+      },
+      "consoleTail": [
+        "log: [sky-k.3] renderer.compile (pass 1: world) 664.1ms (programs=20, textures=0, geometries=0)",
+        "log: [sky-k.3] AtmosphereRuntime ready (load 2513.6ms). AerialPerspective + ToneMapping(AGX) + Dithering composer wired. SunDirectionalLight + SkyLightProbe added; parametric lights silenced. toneMappingExposure=5 — tune via __setExposure(v",
+        "log: [boot-state] ready: scene fully loaded (atmosphere load 2513.6ms)",
+        "log: [singleDriver] 2D rAF driver parked — scene3d owns the frame pump",
+        "log: [scene3d.spawns] mode=auto, sessionHandle=present → synthetic injection SKIPPED (live session — wire feeds spawns; use ?spawns=force to override)",
+        "log: [sky-k.3] renderer.compile (pass 2: entities + lazy) 21.3ms (programs=31, textures=130, geometries=149)",
+        "log: [phase6.D] drained 2002 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)",
+        "log: [phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)",
+        "log: [bsp] drained 123 cell physics BSP trees into scene (123 cells with BSP)",
+        "log: [envcell-entry] drained 123 cell membership trees into scene (123 cells with membership)",
+        "log: [ac-moons] textures decoded: alb=1024x1024 rez=1024x1024",
+        "log: [ac-moons] Alb'arel + Rez'arel attached to sky scene (speedMul=1). Tweak motion via ?moonSpeed=N URL param.",
+        "warning: [motion-link] no MotionTable link for attack 0x10000052 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x80002b65 — swing/cast/eat will not play",
+        "warning: [motion-link] no MotionTable link for attack 0x10000052 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x800025fc — swing/cast/eat will not play",
+        "warning: [motion-link] no MotionTable link for attack 0x10000051 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x800025fc — swing/cast/eat will not play"
+      ]
+    },
+    {
+      "key": "high",
+      "label": "clouds ON - high (current default)",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&clouds=on",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "spawnCell": "0xa9b40019",
+      "inWorld": true,
+      "loginSec": 5,
+      "outdoorCell": "0xa9b40019",
+      "outdoor": true,
+      "cloudConfig": {
+        "present": true,
+        "frameCount": 1,
+        "lastError": null,
+        "resolutionScale": 1,
+        "lightShafts": false,
+        "shapeDetail": true,
+        "turbulence": true,
+        "maxIterationCount": 500,
+        "multiScatteringOctaves": 8,
+        "shadowCascades": 3,
+        "shadowMap": "512x512"
+      },
+      "fps": 21.4,
+      "frameMs": {
+        "p50": 44.9,
+        "p95": 57.6,
+        "p99": 74.3,
+        "worst": 123.7
+      },
+      "spikes": {
+        "gt33": 659,
+        "gt50": 137,
+        "total": 659
+      },
+      "gpuUtilPct": {
+        "min": 11,
+        "max": 40,
+        "avg": 33.1
+      },
+      "gpuMemMB": {
+        "min": 959,
+        "max": 961,
+        "avg": 960.8
+      },
+      "gpuTempC": {
+        "min": 56,
+        "max": 57,
+        "avg": 56.1
+      },
+      "gpuWatts": {
+        "min": 16,
+        "max": 29.7,
+        "avg": 22.1
+      },
+      "scene": {
+        "geometries": 1026,
+        "textures": 551,
+        "programs": 56
+      },
+      "consoleTail": [
+        "log: [workstream-E] replaying 512 pre-init3D entity events (kinds=0:451,1:58,5:2,8:1, localGuid=0x50000008, local=452, other=60) through 3D EntityManager",
+        "log: [sky-k.6] CloudVolume.attachAtmosphere wired Bruneton tables onto the cloud material.",
+        "log: [sky-k.3] renderer.compile (pass 1: world) 127.7ms (programs=20, textures=0, geometries=0)",
+        "log: [sky-k.3] AtmosphereRuntime ready (load 2608.2ms). AerialPerspective + ToneMapping(AGX) + Dithering composer wired. SunDirectionalLight + SkyLightProbe added; parametric lights silenced. toneMappingExposure=5 — tune via __setExposure(v",
+        "log: [boot-state] ready: scene fully loaded (atmosphere load 2608.2ms)",
+        "log: [singleDriver] 2D rAF driver parked — scene3d owns the frame pump",
+        "log: [scene3d.spawns] mode=auto, sessionHandle=present → synthetic injection SKIPPED (live session — wire feeds spawns; use ?spawns=force to override)",
+        "log: [sky-k.3] renderer.compile (pass 2: entities + lazy) 25.6ms (programs=39, textures=145, geometries=153)",
+        "log: [phase6.D] drained 2002 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)",
+        "log: [phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)",
+        "log: [bsp] drained 123 cell physics BSP trees into scene (123 cells with BSP)",
+        "log: [envcell-entry] drained 123 cell membership trees into scene (123 cells with membership)",
+        "log: [ac-moons] textures decoded: alb=1024x1024 rez=1024x1024",
+        "log: [ac-moons] Alb'arel + Rez'arel attached to sky scene (speedMul=1). Tweak motion via ?moonSpeed=N URL param.",
+        "warning: [motion-link] no MotionTable link for attack 0x10000052 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x800025fc — swing/cast/eat will not play"
+      ]
+    },
+    {
+      "key": "medium",
+      "label": "clouds ON - medium preset",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&clouds=on&cloudQuality=medium",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "spawnCell": "0xa9b40019",
+      "inWorld": true,
+      "loginSec": 5,
+      "outdoorCell": "0xa9b40019",
+      "outdoor": true,
+      "cloudConfig": {
+        "present": true,
+        "frameCount": 1,
+        "lastError": null,
+        "resolutionScale": 1,
+        "lightShafts": false,
+        "shapeDetail": true,
+        "turbulence": false,
+        "maxIterationCount": 500,
+        "multiScatteringOctaves": 8,
+        "shadowCascades": 3,
+        "shadowMap": "256x256"
+      },
+      "fps": 19.9,
+      "frameMs": {
+        "p50": 48.2,
+        "p95": 61.8,
+        "p99": 83.9,
+        "worst": 170.2
+      },
+      "spikes": {
+        "gt33": 613,
+        "gt50": 232,
+        "total": 613
+      },
+      "gpuUtilPct": {
+        "min": 25,
+        "max": 52,
+        "avg": 44.9
+      },
+      "gpuMemMB": {
+        "min": 927,
+        "max": 929,
+        "avg": 928.8
+      },
+      "gpuTempC": {
+        "min": 53,
+        "max": 54,
+        "avg": 53.3
+      },
+      "gpuWatts": {
+        "min": 12.1,
+        "max": 17.1,
+        "avg": 14.4
+      },
+      "scene": {
+        "geometries": 1026,
+        "textures": 551,
+        "programs": 56
+      },
+      "consoleTail": [
+        "log: [sky-k.6] CloudVolume.attachAtmosphere wired Bruneton tables onto the cloud material.",
+        "log: [sky-k.3] renderer.compile (pass 1: world) 105.9ms (programs=20, textures=0, geometries=0)",
+        "log: [sky-k.3] AtmosphereRuntime ready (load 2270.1ms). AerialPerspective + ToneMapping(AGX) + Dithering composer wired. SunDirectionalLight + SkyLightProbe added; parametric lights silenced. toneMappingExposure=5 — tune via __setExposure(v",
+        "log: [boot-state] ready: scene fully loaded (atmosphere load 2270.1ms)",
+        "log: [singleDriver] 2D rAF driver parked — scene3d owns the frame pump",
+        "log: [scene3d.spawns] mode=auto, sessionHandle=present → synthetic injection SKIPPED (live session — wire feeds spawns; use ?spawns=force to override)",
+        "log: [phase6.D] drained 2002 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)",
+        "log: [phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)",
+        "log: [bsp] drained 123 cell physics BSP trees into scene (123 cells with BSP)",
+        "log: [envcell-entry] drained 123 cell membership trees into scene (123 cells with membership)",
+        "log: [sky-k.3] renderer.compile (pass 2: entities + lazy) 21.3ms (programs=41, textures=145, geometries=154)",
+        "log: [ac-moons] textures decoded: alb=1024x1024 rez=1024x1024",
+        "log: [ac-moons] Alb'arel + Rez'arel attached to sky scene (speedMul=1). Tweak motion via ?moonSpeed=N URL param.",
+        "warning: [motion-link] no MotionTable link for attack 0x10000051 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x80002b65 — swing/cast/eat will not play",
+        "warning: [motion-link] no MotionTable link for attack 0x10000052 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x800025fc — swing/cast/eat will not play"
+      ]
+    },
+    {
+      "key": "low",
+      "label": "clouds ON - low preset",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&clouds=on&cloudQuality=low",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "spawnCell": "0xa9b40019",
+      "inWorld": true,
+      "loginSec": 5,
+      "outdoorCell": "0xa9b40019",
+      "outdoor": true,
+      "cloudConfig": {
+        "present": true,
+        "frameCount": 1,
+        "lastError": null,
+        "resolutionScale": 1,
+        "lightShafts": false,
+        "shapeDetail": false,
+        "turbulence": false,
+        "maxIterationCount": 200,
+        "multiScatteringOctaves": 8,
+        "shadowCascades": 2,
+        "shadowMap": "256x256"
+      },
+      "fps": 21,
+      "frameMs": {
+        "p50": 46,
+        "p95": 60.8,
+        "p99": 83.6,
+        "worst": 157.4
+      },
+      "spikes": {
+        "gt33": 646,
+        "gt50": 175,
+        "total": 646
+      },
+      "gpuUtilPct": {
+        "min": 12,
+        "max": 45,
+        "avg": 26.9
+      },
+      "gpuMemMB": {
+        "min": 985,
+        "max": 999,
+        "avg": 989.6
+      },
+      "gpuTempC": {
+        "min": 54,
+        "max": 58,
+        "avg": 55.4
+      },
+      "gpuWatts": {
+        "min": 12.5,
+        "max": 42,
+        "avg": 26.1
+      },
+      "scene": {
+        "geometries": 1026,
+        "textures": 551,
+        "programs": 56
+      },
+      "consoleTail": [
+        "log: [workstream-E] replaying 512 pre-init3D entity events (kinds=0:445,1:58,5:6,8:3, localGuid=0x50000008, local=446, other=66) through 3D EntityManager",
+        "log: [sky-k.6] CloudVolume.attachAtmosphere wired Bruneton tables onto the cloud material.",
+        "log: [sky-k.3] renderer.compile (pass 1: world) 115.9ms (programs=20, textures=0, geometries=0)",
+        "log: [sky-k.3] AtmosphereRuntime ready (load 2529.3ms). AerialPerspective + ToneMapping(AGX) + Dithering composer wired. SunDirectionalLight + SkyLightProbe added; parametric lights silenced. toneMappingExposure=5 — tune via __setExposure(v",
+        "log: [boot-state] ready: scene fully loaded (atmosphere load 2529.3ms)",
+        "log: [singleDriver] 2D rAF driver parked — scene3d owns the frame pump",
+        "log: [scene3d.spawns] mode=auto, sessionHandle=present → synthetic injection SKIPPED (live session — wire feeds spawns; use ?spawns=force to override)",
+        "log: [sky-k.3] renderer.compile (pass 2: entities + lazy) 23.3ms (programs=41, textures=145, geometries=154)",
+        "log: [phase6.D] drained 2002 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)",
+        "log: [phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)",
+        "log: [bsp] drained 123 cell physics BSP trees into scene (123 cells with BSP)",
+        "log: [envcell-entry] drained 123 cell membership trees into scene (123 cells with membership)",
+        "log: [ac-moons] textures decoded: alb=1024x1024 rez=1024x1024",
+        "log: [ac-moons] Alb'arel + Rez'arel attached to sky scene (speedMul=1). Tweak motion via ?moonSpeed=N URL param.",
+        "warning: [motion-link] no MotionTable link for attack 0x10000051 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x800025fc — swing/cast/eat will not play"
+      ]
+    },
+    {
+      "key": "halfres",
+      "label": "clouds ON - high @ resScale 0.5",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&clouds=on",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "spawnCell": "0xa9b40019",
+      "inWorld": true,
+      "loginSec": 5,
+      "outdoorCell": "0xa9b40019",
+      "outdoor": true,
+      "cloudConfig": {
+        "present": true,
+        "frameCount": 21,
+        "lastError": null,
+        "resolutionScale": 0.5,
+        "lightShafts": false,
+        "shapeDetail": true,
+        "turbulence": true,
+        "maxIterationCount": 500,
+        "multiScatteringOctaves": 8,
+        "shadowCascades": 3,
+        "shadowMap": "512x512"
+      },
+      "fps": 20.4,
+      "frameMs": {
+        "p50": 47.3,
+        "p95": 59.5,
+        "p99": 67.4,
+        "worst": 128.6
+      },
+      "spikes": {
+        "gt33": 628,
+        "gt50": 195,
+        "total": 628
+      },
+      "gpuUtilPct": {
+        "min": 40,
+        "max": 51,
+        "avg": 47.1
+      },
+      "gpuMemMB": {
+        "min": 935,
+        "max": 936,
+        "avg": 935.9
+      },
+      "gpuTempC": {
+        "min": 53,
+        "max": 55,
+        "avg": 54
+      },
+      "gpuWatts": {
+        "min": 11.4,
+        "max": 18.3,
+        "avg": 15.1
+      },
+      "scene": {
+        "geometries": 1026,
+        "textures": 551,
+        "programs": 56
+      },
+      "consoleTail": [
+        "log: [workstream-E] replaying 512 pre-init3D entity events (kinds=0:448,1:58,5:4,8:2, localGuid=0x50000008, local=449, other=63) through 3D EntityManager",
+        "log: [sky-k.6] CloudVolume.attachAtmosphere wired Bruneton tables onto the cloud material.",
+        "log: [sky-k.3] renderer.compile (pass 1: world) 133.0ms (programs=20, textures=0, geometries=0)",
+        "log: [sky-k.3] AtmosphereRuntime ready (load 2432.0ms). AerialPerspective + ToneMapping(AGX) + Dithering composer wired. SunDirectionalLight + SkyLightProbe added; parametric lights silenced. toneMappingExposure=5 — tune via __setExposure(v",
+        "log: [boot-state] ready: scene fully loaded (atmosphere load 2432.0ms)",
+        "log: [singleDriver] 2D rAF driver parked — scene3d owns the frame pump",
+        "log: [scene3d.spawns] mode=auto, sessionHandle=present → synthetic injection SKIPPED (live session — wire feeds spawns; use ?spawns=force to override)",
+        "log: [sky-k.3] renderer.compile (pass 2: entities + lazy) 22.3ms (programs=39, textures=145, geometries=153)",
+        "log: [phase6.D] drained 2002 portal edges + 123 cell AABBs into scene (graph now 123 cells, 123 cell AABBs)",
+        "log: [phase6.G] drained 1953 cell physics triangles into scene (123 cells with physics)",
+        "log: [bsp] drained 123 cell physics BSP trees into scene (123 cells with BSP)",
+        "log: [envcell-entry] drained 123 cell membership trees into scene (123 cells with membership)",
+        "log: [ac-moons] textures decoded: alb=1024x1024 rez=1024x1024",
+        "log: [ac-moons] Alb'arel + Rez'arel attached to sky scene (speedMul=1). Tweak motion via ?moonSpeed=N URL param.",
+        "warning: [motion-link] no MotionTable link for attack 0x10000051 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x800025fc — swing/cast/eat will not play"
+      ]
+    }
+  ]
+}
