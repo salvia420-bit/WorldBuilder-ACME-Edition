@@ -991,6 +991,17 @@ uniform float uTexMergeEnabled;           // 0.0 OFF / 1.0 ON
 uniform float uPaintMode;
 uniform float uPaintNoiseFreq;
 uniform float uPaintNoiseStrength;
+
+// Per-fragment 2D hash. Mirrors hash21 in TERRAIN_VERTEX_GLSL (line ~801).
+// Fragment + vertex shaders compile separately, so a function defined in the
+// vertex stage is NOT visible here; without this redeclaration the
+// uPaintMode=1 branch fails to compile and three.js renders the whole
+// terrain as a black fallback (no console error visible in __bootState,
+// just black ground). Same constants as the vertex copy for byte-identical
+// output if shared.
+float fragHash21(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
 // R4.a 2026-05-28 — sub-gate for the retail mid-point alpha rounding
 // (acclient.c:365787-365798 ImgTex::MergeTexture: if 0<a<0xFF && a>0x80, a++).
 // 1.0 when ?texMerge=on so the composite includes the rounding by default;
@@ -1357,10 +1368,10 @@ void main() {
     // muddying, no per-cell flat blocks, true per-vertex painting.
     float NOISE_FREQ = uPaintNoiseFreq;       // 1 unit per ~ (24/freq) m
     float NOISE_STRENGTH = uPaintNoiseStrength;
-    float n00 = hash21(vGridUv * NOISE_FREQ + vec2(0.317, 0.731)) - 0.5;
-    float n10 = hash21(vGridUv * NOISE_FREQ + vec2(0.443, 0.119)) - 0.5;
-    float n01 = hash21(vGridUv * NOISE_FREQ + vec2(0.561, 0.917)) - 0.5;
-    float n11 = hash21(vGridUv * NOISE_FREQ + vec2(0.682, 0.379)) - 0.5;
+    float n00 = fragHash21(vGridUv * NOISE_FREQ + vec2(0.317, 0.731)) - 0.5;
+    float n10 = fragHash21(vGridUv * NOISE_FREQ + vec2(0.443, 0.119)) - 0.5;
+    float n01 = fragHash21(vGridUv * NOISE_FREQ + vec2(0.561, 0.917)) - 0.5;
+    float n11 = fragHash21(vGridUv * NOISE_FREQ + vec2(0.682, 0.379)) - 0.5;
     float pw00 = w00 + n00 * NOISE_STRENGTH;
     float pw10 = w10 + n10 * NOISE_STRENGTH;
     float pw01 = w01 + n01 * NOISE_STRENGTH;
