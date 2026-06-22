@@ -47,11 +47,17 @@ import { EffectComposer, EffectPass, RenderPass } from 'postprocessing';
  *   feed the result to CloudVolume.tick.
  * @property {Object} [cloudOptions] — passthrough to CloudsEffect
  *   options (qualityPreset, coverage, resolutionScale, …).
- * @property {boolean} [proceduralTextures=true] — instantiate +
- *   wire the four procedural textures (LocalWeather, CloudShape,
- *   CloudShapeDetail, Turbulence). Disable to load pre-baked .bin
- *   textures instead (Clouds-D-extended; future swiftshader-friendly
- *   path).
+ * @property {boolean} [proceduralTextures=false] — when true, generate the
+ *   four noise textures (LocalWeather, CloudShape, CloudShapeDetail,
+ *   Turbulence) on the GPU at boot. When false (DEFAULT), load takram's
+ *   pre-baked `.bin`/`.png` assets instead — this skips the four GPU noise-
+ *   bake shader programs that otherwise compile + run on the first cold
+ *   frame (tens of seconds of D3D11 shader link; see
+ *   docs/HANDOFF-perf-followups-3-levers Lever A). Identical output; lower
+ *   cold-load cost. `?cloudProcedural=on` opts back into the procedural path,
+ *   and a prebake load failure auto-falls-back to it.
+ * @property {string} [assetsBaseUrl] — override the prebaked-asset base URL
+ *   (default: `../assets/clouds/` relative to this module). For testing.
  */
 
 export class CloudOverlay {
@@ -64,7 +70,7 @@ export class CloudOverlay {
       sessionHandleAccessor,
       sceneAccessor,
       cloudOptions,
-      proceduralTextures = true,
+      proceduralTextures = false,
     } = opts || {};
     if (!camera) throw new Error('CloudOverlay: opts.camera is required');
 
@@ -87,18 +93,38 @@ export class CloudOverlay {
     // rays miss the cloud volume entirely.
     this.volume = new CloudVolume({ camera, cloudOptions });
 
-    // Procedural textures need a one-time bake (or per-frame for the
-    // animated weather map). CloudsEffect.update() calls each
-    // procedural's .render() with `needsRender=true`; the
-    // Procedural*Base implementation sets `needsRender=false` after
-    // the first bake. So the bake amortises across subsequent frames.
+    // Noise textures (localWeather/shape/shapeDetail/turbulence) come from
+    // ONE of two sources that produce identical sampling:
+    //   - prebaked (DEFAULT): fetch takram's canonical .bin/.png assets and
+    //     assign plain Texture/Data3DTexture. This SKIPS the four GPU noise-
+    //     bake shader programs that otherwise compile + run on the first cold
+    //     frame (tens of seconds of D3D11 shader link — see
+    //     docs/HANDOFF-perf-followups-3-levers Lever A). The assets are
+    //     takram's noise for this vendored `ref`, so byte-equivalent output.
+    //   - procedural (`?cloudProcedural=on`, or on a prebake-load failure):
+    //     the original path — generate the four noise textures on the GPU.
+    // All four are one-shot — Procedural*Base sets `needsRender=false` after
+    // the first bake and nothing resets it — so the static prebaked textures
+    // are behaviour-identical, NOT a quality change.
+    this._proceduralTextures = proceduralTextures;
+    this._prebakedLoaded = false;
     if (proceduralTextures) {
-      const effect = this.volume.effect;
-      effect.localWeatherTexture = new LocalWeather();
-      effect.shapeTexture = new CloudShape();
-      effect.shapeDetailTexture = new CloudShapeDetail();
-      effect.turbulenceTexture = new Turbulence();
+      this._installProceduralNoise();
+    } else {
+      this._loadPrebakedNoise(opts && opts.assetsBaseUrl).catch((err) => {
+        this.lastError = 'prebake load failed: ' + String(err);
+        // eslint-disable-next-line no-console
+        console.warn('[clouds] prebaked noise load failed → procedural fallback:', err);
+        try { this._installProceduralNoise(); } catch (_) {}
+      });
+    }
 
+    // Layer config + coverage are independent of the noise SOURCE, so they
+    // apply to BOTH paths. (These previously lived inside the procedural-only
+    // block, which silently dropped the alto deck + 0.5 coverage whenever
+    // prebaked textures were used — a quality regression this avoids.)
+    {
+      const effect = this.volume.effect;
       // Add an altocumulus middle-étage layer. takram defaults only ship
       // 3 channels (R/G cumulus 750-2200m, B cirrus 7500-8000m), leaving
       // channel A unused — meteorologically, the middle étage (2-7km mid-
@@ -288,6 +314,96 @@ export class CloudOverlay {
     this.frameCount = 0;
     this.lastError = null;
     this._cloudsBufferUniform = null;
+  }
+
+  /**
+   * Original path: generate the four noise textures on the GPU at boot.
+   * Assigning a Procedural*Texture (not a plain Texture) routes through the
+   * CloudsEffect setters' procedural branch, so CloudsEffect.update() bakes
+   * them on the first frame (the 4 noise-bake shader programs). Also used as
+   * the fallback when prebaked-asset loading fails.
+   */
+  _installProceduralNoise() {
+    const effect = this.volume.effect;
+    effect.localWeatherTexture = new LocalWeather();
+    effect.shapeTexture = new CloudShape();
+    effect.shapeDetailTexture = new CloudShapeDetail();
+    effect.turbulenceTexture = new Turbulence();
+    this._proceduralTextures = true;
+  }
+
+  /**
+   * Default path: load takram's pre-baked noise assets and assign them as
+   * plain Texture/Data3DTexture. Assigning a plain texture routes through the
+   * setters' NON-procedural branch (`value instanceof Data3DTexture`), so the
+   * four GPU noise-bake programs are never compiled or run — that's the cold-
+   * load win. Async (fetch + image decode); clouds render empty for the brief
+   * window until the textures land, same as the procedural path's first bake.
+   *
+   * @param {string} [assetsBaseUrl] override base URL (default: the committed
+   *   `../assets/clouds/` relative to this module, resolved via import.meta).
+   */
+  async _loadPrebakedNoise(assetsBaseUrl) {
+    const base = assetsBaseUrl
+      ? new URL(assetsBaseUrl, window.location.href)
+      : new URL('../assets/clouds/', import.meta.url);
+    const url = (name) => new URL(name, base).href;
+
+    // 3D R8 noise volumes — raw bytes (size^3), RedFormat, linear, repeat.
+    // Matches Procedural3DTextureBase's texture config exactly.
+    const load3D = async (name, size) => {
+      const res = await fetch(url(name));
+      if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
+      const data = new Uint8Array(await res.arrayBuffer());
+      if (data.length !== size * size * size) {
+        throw new Error(`${name}: ${data.length} bytes, expected ${size * size * size}`);
+      }
+      const tex = new THREE.Data3DTexture(data, size, size, size);
+      tex.format = THREE.RedFormat;
+      tex.type = THREE.UnsignedByteType;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.wrapR = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.NoColorSpace;
+      tex.generateMipmaps = false;
+      tex.unpackAlignment = 1;
+      tex.needsUpdate = true;
+      return tex;
+    };
+    // 2D RGBA noise maps — mipmapped, linear, repeat. Matches
+    // ProceduralTextureBase's texture config.
+    const load2D = async (name) => {
+      const tex = await new THREE.TextureLoader().loadAsync(url(name));
+      tex.minFilter = THREE.LinearMipMapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.NoColorSpace;
+      tex.generateMipmaps = true;
+      tex.needsUpdate = true;
+      return tex;
+    };
+
+    const [localWeather, turbulence, shape, shapeDetail] = await Promise.all([
+      load2D('local_weather.png'),
+      load2D('turbulence.png'),
+      load3D('shape.bin', 128),
+      load3D('shape_detail.bin', 32),
+    ]);
+
+    // The overlay may have been disposed during the async load.
+    if (!this.volume || !this.volume.effect) {
+      [localWeather, turbulence, shape, shapeDetail].forEach((t) => t && t.dispose && t.dispose());
+      return;
+    }
+    const effect = this.volume.effect;
+    effect.localWeatherTexture = localWeather;
+    effect.turbulenceTexture = turbulence;
+    effect.shapeTexture = shape;
+    effect.shapeDetailTexture = shapeDetail;
+    this._prebakedLoaded = true;
   }
 
   /**

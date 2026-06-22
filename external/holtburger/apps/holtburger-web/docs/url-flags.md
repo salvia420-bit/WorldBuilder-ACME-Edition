@@ -137,6 +137,7 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 | `clouds` | `on` | off | Volumetric cloud rendering (Bruneton/takram). GPU-heavy. | scene3d/index.js:2535 |
 | `cloudCoverage` | float 0–1 | 0.5 | Cloud coverage density. | scene3d/index.js:2540 |
 | `cloudQuality` | `low`\|`medium`\|`high`\|`ultra` | high | Cloud raymarch resolution. | scene3d/index.js:2541 |
+| `cloudProcedural` | `on` | off (prebaked) | Cloud noise source. Default loads takram's pre-baked `.bin`/`.png` assets (`assets/clouds/`), skipping the 4 GPU noise-bake shader programs at boot (cold-load Lever A). `on` generates the noise on the GPU instead. Identical output; auto-falls-back to procedural if assets fail to load. | scene3d/index.js + scene3d/cloud_overlay.js |
 | `cloudShadow` | `off` | on | Cloud shadows on terrain. | scene3d/index.js:2581 |
 | `cloudShadowStrength` | float 0–10 | 2.0 | Cloud shadow extinction. | scene3d/index.js:2585 |
 | `cloudShadowRes` | int 64–2048 | takram default | Cloud shadow map resolution. | scene3d/index.js:2594 |

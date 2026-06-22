@@ -2975,6 +2975,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // dev console.
         const coverageParam = parseFloat(params.get("cloudCoverage") ?? "");
         const qualityParam = params.get("cloudQuality"); // 'low'|'medium'|'high'|'ultra'
+        // Noise source: prebaked .bin/.png assets by default (skips the ~tens-
+        // of-seconds boot-time GPU noise-bake shader compile — Lever A).
+        // `?cloudProcedural=on` opts back into generating the noise on the GPU.
+        const cloudProcedural = params.get("cloudProcedural") === "on";
 
         const cloudOverlay = new CloudOverlay({
           camera,
@@ -2988,6 +2992,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           // cloud raymarch occludes correctly at terrain/buildings/
           // player. Without this, clouds paint over land + player.
           sceneAccessor: () => scene,
+          proceduralTextures: cloudProcedural,
         });
 
         // Apply URL knobs post-construction so the CloudOverlay's
@@ -3076,6 +3081,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // eslint-disable-next-line no-console
         console.log(
           "[clouds-d] CloudOverlay wired into SkyDome (?clouds=on). " +
+            `noise=${cloudProcedural ? "procedural" : "prebaked"} ` +
             `coverage=${effect.clouds.coverage} qualityPreset=${effect.qualityPreset ?? "default"}. ` +
             `cloudShadow=${cloudShadowDisabled ? "off" : "on"} ` +
             `strength=${liveScene3d.__cloudShadowStrength ?? "default"} ` +
