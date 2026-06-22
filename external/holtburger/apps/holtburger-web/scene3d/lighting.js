@@ -563,12 +563,26 @@ function getRp5Config() {
 // gets the same intensity-swap treatment.
 //
 //   ?lightPool=off       revert to the legacy .visible cap (escape hatch)
-//   ?lightPoolSize=<n>   point-pool size (default 32 = MAX_ACTIVE_LIGHTS;
-//                        ≥32 preserves the legacy cap's selection exactly)
-//   ?lightPoolSpot=<n>   spot-pool size (default 8; spots are ~absent in the
+//   ?lightPoolSize=<n>   point-pool size (default 8 — shader-compile-trim 2026-06-22;
+//                        =32 restores the prior 32-slot selection exactly)
+//   ?lightPoolSpot=<n>   spot-pool size (default 2; spots are ~absent in the
 //                        shipped base DAT so this is headroom, not real cost)
-const LIGHT_POOL_DEFAULT_POINT = MAX_ACTIVE_LIGHTS; // 32 — match legacy cap
-const LIGHT_POOL_DEFAULT_SPOT = 8;
+//
+// 2026-06-22 (shader-compile-trim) — default pool shrunk 32/8 → 8/2. Each lit
+// MeshStandardMaterial fragment UNROLLS the physical BRDF over the fixed pool
+// (6 dir + N point + M spot `RE_Direct` sites); at 32/8 that is 46 sites ≈ half of the
+// ~4.4k-line surface fragment, and the 1070 ANGLE/D3D11 backend links each surface
+// program SYNCHRONOUSLY at first use — measured ~59.6 s of the cold first-load
+// draw-distance stall (`pvsRingRadius=10`, 72 programs). 8/2 = 16 sites cut surface
+// link −76 % (4334 → 1058 ms on the heaviest program) with NO visible change: daytime
+// is byte-identical (entityLights is default-OFF → the point pool is ~empty), and the
+// dusk + `?entityLights=on` dense-light worst case is visually identical (the pool keeps
+// the NEAREST sources, which dominate; the sun + ambient carry building light) —
+// human-verified 2026-06-22. Retail had 8 fixed HW light slots. Still a FIXED count, so
+// it compiles ONCE and never relinks (the spell-freeze fix holds). The exact prior look
+// is one flag away: `?lightPoolSize=32&lightPoolSpot=8`.
+const LIGHT_POOL_DEFAULT_POINT = 8;
+const LIGHT_POOL_DEFAULT_SPOT = 2;
 
 let _lightPoolConfig;
 function getLightPoolConfig() {
