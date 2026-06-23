@@ -1,0 +1,165 @@
+// Per-effect VFX flag readers — Visual-Behavior Suite, Phase 1 (2026-06-23).
+//
+// The ?visual master gate (vfx_catalog.js visualEnabled()) turns the
+// descriptor-catalog VFX path ON; these per-effect flags pick WHICH cheap-
+// fragment effects within that path are live. Every per-effect flag is a
+// NON-RETAIL enhancement and ships DEFAULT-OFF, so the frozen render stays
+// byte-identical until each is opted in.
+//
+// THE FIREWALL AT THE FLAG LAYER: an effect is active iff
+//   visualEnabled()  AND  <its per-effect flag>
+// — gating on BOTH means a per-effect flag alone (e.g. ?glint=on without
+// ?visual) NEVER builds a VFX material variant. vfxEffectEnabled(id) is the one
+// gate the frag-install path + each component installer consult.
+//
+// `?visual=all` (or `?visualAll=on`) is the one-URL "light everything" switch:
+// it flips the master gate on AND defaults every per-effect flag on, so the 1070
+// eye-test can A/B the whole suite in one URL; opt out per effect with
+// `?glint=off` etc.
+//
+// `?visualBudget` is a governor STUB — parsed + memoized now so the future
+// bloom/light governor (build spec §10/§11) can read a cap without a later
+// flag-plumbing change; nothing consumes it yet (queued-for-1070).
+//
+// Import-cycle-safe: imports ONLY visualEnabled from vfx_catalog.js, which
+// imports nothing from the scene3d graph. No back-edges → no static cycle.
+// Lint-clean by construction (no Math.random / argless Date.now / .visible= /
+// wire / per-instance cache key); this module lives outside scene3d/vfx/
+// components/ so the legacy-safety component sweep does not scan it, but it is
+// kept clean regardless.
+
+import { visualEnabled } from "./vfx_catalog.js";
+
+function _strFlag(name) {
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      return new URLSearchParams(window.location.search).get(name);
+    }
+  } catch (_) { /* default */ }
+  return null;
+}
+
+function _boolFlag(name, def) {
+  const v = _strFlag(name);
+  if (v == null) return def;
+  const s = v.toLowerCase();
+  if (s === "on" || s === "1" || s === "true" || s === "yes") return true;
+  if (s === "off" || s === "0" || s === "false" || s === "no" || s === "") return false;
+  return def;
+}
+
+function _numFlag(name, def, min, max) {
+  const v = _strFlag(name);
+  const n = v == null ? NaN : parseFloat(v);
+  if (Number.isFinite(n) && (min == null || n >= min) && (max == null || n <= max)) return n;
+  return def;
+}
+
+let _all;
+/** `?visual=all` OR `?visualAll=on` — default every per-effect flag ON (opt out
+ *  per effect). The one-URL "light everything" switch for the 1070 eye-test.
+ *  Still composed with the ?visual master gate by vfxEffectEnabled(). DEFAULT-OFF. */
+export function visualAllEffects() {
+  if (_all !== undefined) return _all;
+  let on = _boolFlag("visualAll", false);
+  if (!on) {
+    const v = _strFlag("visual");
+    if (v != null && v.toLowerCase() === "all") on = true;
+  }
+  return (_all = on);
+}
+
+let _glint;
+/** `?glint=on` — emissive.glint specular sparkle on metal. DEFAULT-OFF. */
+export function glintEnabled() {
+  if (_glint === undefined) _glint = _boolFlag("glint", visualAllEffects());
+  return _glint;
+}
+
+let _magicGlow;
+/** `?magicGlow=on` — emissive.magicGlow ambient glow on magic items. DEFAULT-OFF. */
+export function magicGlowEnabled() {
+  if (_magicGlow === undefined) _magicGlow = _boolFlag("magicGlow", visualAllEffects());
+  return _magicGlow;
+}
+
+let _enchantShimmer;
+/** `?enchantShimmer=on` — emissive.enchantShimmer pulse on enchanted gear. DEFAULT-OFF. */
+export function enchantShimmerEnabled() {
+  if (_enchantShimmer === undefined) _enchantShimmer = _boolFlag("enchantShimmer", visualAllEffects());
+  return _enchantShimmer;
+}
+
+let _tarnish;
+/** `?tarnish=on` — weathering.tarnish metal patina + crevice darkening. DEFAULT-OFF. */
+export function tarnishEnabled() {
+  if (_tarnish === undefined) _tarnish = _boolFlag("tarnish", visualAllEffects());
+  return _tarnish;
+}
+
+let _wetness;
+/** `?wetness=on` — weathering.wetness global rain sheen. DEFAULT-OFF. */
+export function wetnessEnabled() {
+  if (_wetness === undefined) _wetness = _boolFlag("wetness", visualAllEffects());
+  return _wetness;
+}
+
+let _frost;
+/** `?frost=on` — weathering.frost winter-zone frost/ice. DEFAULT-OFF. */
+export function frostEnabled() {
+  if (_frost === undefined) _frost = _boolFlag("frost", visualAllEffects());
+  return _frost;
+}
+
+let _flameFlicker;
+/** `?flameFlicker=on` — light.flameFlicker torch/brazier intensity jitter. DEFAULT-OFF. */
+export function flameFlickerEnabled() {
+  if (_flameFlicker === undefined) _flameFlicker = _boolFlag("flameFlicker", visualAllEffects());
+  return _flameFlicker;
+}
+
+let _budget;
+/** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
+ *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
+ *  (build spec §10/§11) will enforce. DEFAULT ∞ (uncapped). Parsed + memoized
+ *  now; nothing consumes it yet (queued-for-1070). Clamp 0..4096. */
+export function visualBudget() {
+  if (_budget === undefined) _budget = _numFlag("visualBudget", Infinity, 0, 4096);
+  return _budget;
+}
+
+// Component-id → per-effect flag reader (the gate router). Extend per effect.
+// flameFlicker is a light-tick (not a frag component) but rides the same gate.
+export const VFX_EFFECT_FLAGS = Object.freeze({
+  "emissive.glint": glintEnabled,
+  "emissive.magicGlow": magicGlowEnabled,
+  "emissive.enchantShimmer": enchantShimmerEnabled,
+  "weathering.tarnish": tarnishEnabled,
+  "weathering.wetness": wetnessEnabled,
+  "weathering.frost": frostEnabled,
+  "light.flameFlicker": flameFlickerEnabled,
+});
+
+/**
+ * Is this VFX component's effect live? Requires the ?visual master gate AND the
+ * component's per-effect flag — the single gate the frag-install path + each
+ * per-component installer consult. Unknown ids fall back to visualAllEffects()
+ * (so `?visual=all` lights up a not-yet-flagged component, otherwise off).
+ * Fail-safe: master off ⇒ always false ⇒ byte-identical frozen render.
+ */
+export function vfxEffectEnabled(componentId) {
+  if (!visualEnabled()) return false;
+  const reader = VFX_EFFECT_FLAGS[componentId];
+  return reader ? reader() : visualAllEffects();
+}
+
+/** The component ids whose effect is currently active (diag / gauge / slice 15). */
+export function vfxActiveEffectIds() {
+  if (!visualEnabled()) return [];
+  return Object.keys(VFX_EFFECT_FLAGS).filter((id) => VFX_EFFECT_FLAGS[id]());
+}
+
+/** Reset memoized flag readers (tests only). */
+export function _resetVfxFlags() {
+  _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _budget = undefined;
+}
