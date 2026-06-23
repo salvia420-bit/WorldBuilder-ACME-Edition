@@ -36,6 +36,26 @@ Spec-commit 1 is split into 1a/1b/1c for small, safe, individually-verifiable st
 
 **✅ PHASE 0 COMPLETE — exit bar GREEN:** classifier round-trips `TREE_WIND_DIDS` byte-identically (commit 2) · `vfx gauge` STRUCTURAL-PASS (commit 5) · legacy-safety lint green (commit 4) · `?treeWind` byte-identical + `?visual` default-OFF (commits 1/3) · all 7 VFX harness tests + C# build green. **Next = Phase 1 (emissive/material bundle) — AWAITING USER GO (don't auto-cross phase boundaries).**
 
+## Phase 1 — emissive/material/frag bundle (kit §11 P1.1→P1.16)
+Driven by the self-paced `/loop`, one commit per step. Authentic leaf source recovered
+from the buildbox working tree (the kit's "✅ on disk" files were never committed) →
+`/mnt/wbterminal1/tmp/claude-scratch/phase1-reference-2026-06-23/` (checksum-verified). Each
+step copies leaf files verbatim from the reference + applies that step's portion of the
+existing-file edits; P1.14 statics activation / `vfx_catalog.js` §7-A / P1.16 barrel are
+authored from the kit's §-blocks (not applied on the box).
+
+- [x] **P1.1 — oscillator registry + per-frame tick** `[JS]` ✅ verified — NEW `scene3d/vfx/oscillators.js`
+  (THREE-free leaf: `WAVES` sine/triangle/smoothNoise/decay, `sampleWave`, `setMasterClock`,
+  `registerOscillator`/`update`/`unregister`/`get`/`list`/`_clear`, `tickOscillators`, `OSCILLATOR_INFRA_MANIFEST`)
+  copied verbatim from the reference. **Applied handoff R-D:** `tickOscillators` now wraps the clock
+  `t = tSec % 3600` (float32 GLSL precision guard, kit R6) — master clock + every channel read the SAME
+  wrapped value (phase-locked; no-op for tSec<3600). `loop.js` got the **oscillator-only** edits (the P1.12
+  weather + P1.13 flameFlicker ticks bundled in the reference loop.js were excluded): import + `setMasterClock(VFX_GLOBALS.uTime)`,
+  `tickVfxOscillators(scene3d)` fn (mirrors `tickTerrainUTime` clock resolution), and the try/catch tick call
+  right after `tickTerrainUTime` (never budget-gated — it IS the clock).
+  - **Gate GREEN:** `test_vfx_oscillators` 32/32 (+1 new wrap assertion `tickOscillators(3601.5)→1.5`) · legacy-safety 17/17 · P0 regression windbend 11 / catalog 14 / substrate 6 · `loop.js` node --check OK · harness TIER1 7/7.
+  - **Byte-identical when off:** registry empty until an effect registers a channel (P1.6+), so the tick only advances `uTime` (`{value}` no material binds until a frag variant exists) → zero render change with `?visual` off. Gauge unaffected (infra row, not yet added — P1.15).
+
 ## Queued for buildbox / 1070 (not done locally)
 - (none yet — Phase 0 1a is JS-only and verified)
 

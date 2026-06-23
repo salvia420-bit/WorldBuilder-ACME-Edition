@@ -84,6 +84,16 @@ setCullers({
 import { weatherForState } from "./daygroup_weather.js";
 import { updateFromDayGroup as wxUpdateFromDayGroup } from "./weather_state.js";
 
+// VFX material-oscillator registry (Visual-Behavior Suite, Phase 1 — spec §7).
+// The SINGLE per-frame VFX tick: drives VFX_GLOBALS.uTime (the master clock) plus
+// every shared VFX uniform once/frame, O(1). uTime is bound BY REFERENCE here so
+// the leaf oscillators.js stays THREE-free (node-testable) — it's the same {value}
+// object getCachedVariant binds into every VFX-patched material. Dormant until an
+// effect registers a channel; the master clock advances every frame regardless.
+import { VFX_GLOBALS } from "./materials.js";
+import { tickOscillators, setMasterClock } from "./vfx/oscillators.js";
+setMasterClock(VFX_GLOBALS.uTime);
+
 // A15-Q4 (2026-06-12 unification survey) — the renderer-neutral
 // EntityUpdate kind table + per-host dispatcher factory. `KIND` is the
 // single source for the kind constants (mirrors the wasm
@@ -828,6 +838,30 @@ function tickTerrainUTime(scene3d) {
       mat.uniforms.uTime.value = tSec;
     }
   }
+}
+
+/**
+ * Phase 1 (Visual-Behavior Suite, spec §7) — drive the shared VFX uniforms.
+ * The SINGLE per-frame VFX tick: writes VFX_GLOBALS.uTime (the master clock) plus
+ * every registered oscillator channel ONCE per frame, O(1) (no per-instance
+ * work). Sourced from the SAME `scene3d.frameTime.tsSec` snapshot tickTerrainUTime
+ * reads, so the VFX clock and the terrain water clock never drift (single time
+ * source — cf. the "three time sources" hazard in INTERACTING_LAYERS_ANALYSIS.md).
+ *
+ * Cheap + unconditional: with no effect active the oscillator registry is empty,
+ * so this is one scalar write to the uTime uniform (which no material binds until
+ * a frag/MECH-B variant is built) — byte-identical render when ?visual is off.
+ * The fallback clock keeps capture scripts / tests that tick outside the rAF loop
+ * working, exactly like tickTerrainUTime.
+ */
+function tickVfxOscillators(scene3d) {
+  const tSec =
+    scene3d?.frameTime?.tsSec ??
+    ((typeof performance !== "undefined" && performance.now)
+      ? performance.now() * 0.001
+      : Date.now() * 0.001);
+  const dt = scene3d?.frameTime?.dt ?? 0;
+  tickOscillators(tSec, dt);
 }
 
 /**
@@ -1608,6 +1642,21 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
     if (!scene3d._terrainUTimeTickWarned) {
       scene3d._terrainUTimeTickWarned = true;
       console.warn("[phase2.2] tickTerrainUTime threw:", e);
+    }
+  }
+  // Phase 1 (Visual-Behavior Suite, §7) — the SINGLE per-frame VFX oscillator
+  // tick. Placed right after the terrain uTime push so the VFX master clock
+  // (VFX_GLOBALS.uTime) + every shared VFX uniform are current before any
+  // VFX-patched material renders this frame. O(1); NEVER budget-gated (it IS the
+  // clock — deferring it would freeze every emissive/weathering effect). Wrapped
+  // like tickTerrainUTime so a thrown channel never kills the tick.
+  try {
+    tickVfxOscillators(scene3d);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    if (!scene3d._vfxOscTickWarned) {
+      scene3d._vfxOscTickWarned = true;
+      console.warn("[vfx] tickVfxOscillators threw:", e);
     }
   }
   // ── DEFERRABLE group SKY decision (#4 + #7-#12). ─────────────────────
