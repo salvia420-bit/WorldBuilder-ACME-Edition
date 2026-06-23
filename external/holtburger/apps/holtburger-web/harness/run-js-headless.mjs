@@ -88,6 +88,14 @@ const TIER1 = [
   // Exercises the REAL compiled wasm MotionSequence boundary (entities.js path);
   // SKIPs (exit 0) gracefully when pkg/ isn't built, so it's safe in the pure-JS tier.
   { flag: "unifiedMotion(wasm)", file: "test_motion_sequence_wasm_smoke.mjs" },
+  // VFX (Visual-Behavior Suite) — tree-wind + the component system (2026-06-23).
+  { flag: "treeWind(JS)", file: "test_wind_clip_gen.mjs" },
+  { flag: "treeWindRig(JS)", file: "test_bbox_rig.mjs" },
+  { flag: "treeWindOffFrozen(JS)", file: "test_wind_off_frozen.mjs" },
+  { flag: "vfxComponent(JS)", file: "test_vfx_windbend.mjs" },
+  { flag: "vfxMaterialSubstrate(JS)", file: "test_vfx_material_substrate.mjs" },
+  { flag: "vfxCatalog(JS)", file: "test_vfx_catalog.mjs" },
+  { flag: "vfxLegacySafety(JS)", file: "test_vfx_legacy_safety.mjs" },
 ].map((t) => ({ ...t, tier: 1 }));
 
 // New files (authored in parallel). Referenced by path even if not present yet:
