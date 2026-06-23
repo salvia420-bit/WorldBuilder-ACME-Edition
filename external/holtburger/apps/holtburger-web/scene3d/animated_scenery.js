@@ -37,6 +37,8 @@
 import * as THREE from "three";
 import { meshToGeometryGroups } from "./adapter.js";
 import { surfacePixelsFetcher } from "./bake_worker_client.js";
+import { treeWindEnabled, treeWindStrength, treeWindDir } from "./tree_wind.js";
+import { buildTreeWindClip, buildBboxRig, partBBox, hash01 } from "./wind_rig.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const DEFAULT_ANIM_FPS = 30.0;
@@ -354,6 +356,190 @@ export async function attachAnimatedScenery(scene3d, placements, wasmExports, op
   }
   if (built > 0 || dropped > 0) {
     console.log(`[anim-scenery] built ${built} instances across ${_didGroups.size} anim DIDs` +
+      (dropped > 0 ? `; DROPPED ${dropped} over the ${maxAnimated()} cap (?animSceneryMax)` : ""));
+  }
+  return built;
+}
+
+// ===========================================================================
+// Tree wind sway (Phase 1, 2026-06-23) — drives the SAME per-part keyframe
+// player above with a SYNTHETIC, procedurally-generated wind clip (wind_rig.js)
+// instead of a DAT `default_animation`. Non-retail; gated by ?treeWind (default
+// OFF). Reuses _didGroups / _instances / _builtKeys / _ensureRaf / placeNode /
+// maxAnimated verbatim — the only new machinery is the clip source + the bbox
+// base-pivot rig. The rAF copy loop, distance cull, LRU/orphan reclaim, and the
+// 512 cap all apply unchanged because a wind instance is just an _instances
+// entry whose `animId` is a string key into _didGroups.
+// ===========================================================================
+
+// Per-model rig cache: every placement of a setupId shares the same per-part
+// geometry → same pivots/weights. Compute the rig once, reuse for all instances.
+const _windRigCache = new Map(); // setupId -> rigs[] (from buildBboxRig)
+
+function _unionBox(a, b) {
+  return {
+    minX: Math.min(a.minX, b.minX), minY: Math.min(a.minY, b.minY), minZ: Math.min(a.minZ, b.minZ),
+    maxX: Math.max(a.maxX, b.maxX), maxY: Math.max(a.maxY, b.maxY), maxZ: Math.max(a.maxZ, b.maxZ),
+    cx: 0, cy: 0, cz: 0, // recomputed below
+  };
+}
+
+/** Shared wind driver per (setupId, phase-bucket): one mixer playing a synthetic
+ *  clip, ONE per group, advanced once per rAF (same model as getOrCreateDidGroup). */
+function getOrCreateWindGroup(groupKey, numParts, rig, windParams) {
+  const existing = _didGroups.get(groupKey);
+  if (existing) return existing;
+  if (numParts <= 0) return null;
+  const { frames, numFrames, fps } = buildTreeWindClip(numParts, rig, windParams);
+  const clip = buildSceneryAnimationClip(THREE, frames, numParts, numFrames, fps);
+  if (!clip) return null;
+  const template = new THREE.Group();
+  template.name = `wind-template-${groupKey}`;
+  const parts = [];
+  for (let i = 0; i < numParts; i++) {
+    const g = new THREE.Group();
+    g.name = `part${i}`;
+    template.add(g);
+    parts.push(g);
+  }
+  const mixer = new THREE.AnimationMixer(template);
+  const action = mixer.clipAction(clip);
+  action.setLoop(THREE.LoopRepeat, Infinity);
+  action.play();
+  const group = { mixer, template, parts, numParts, refCount: 0 };
+  _didGroups.set(groupKey, group);
+  return group;
+}
+
+/** Build one wind-tree instance node (per-part meshes at the placement's world
+ *  transform) + the per-part bbox rig. Mirrors buildOne; the ANIMATION comes
+ *  from the shared wind group (copied each frame), so the node carries no mixer. */
+async function buildOneWind(p, wasmExports, materialCache, spFetch) {
+  const setupId = (p.modelId ?? p.objId ?? p.obj_id ?? 0) >>> 0;
+  if (setupId === 0) return null;
+
+  let bundle;
+  try {
+    bundle = await wasmExports.fetchBuildingPlacement(setupId);
+  } catch (e) {
+    console.warn(`[tree-wind] fetchBuildingPlacement(0x${setupId.toString(16)}) failed:`, e);
+    return null;
+  }
+  const partCount = bundle.partCount | 0;
+  if (partCount === 0) { bundle.free?.(); return null; }
+  const partMeshes = bundle.takePartMeshes();
+  const hinge = (typeof bundle.takePartHingeFrames === "function") ? bundle.takePartHingeFrames() : [];
+  bundle.free?.();
+
+  const node = new THREE.Group();
+  node.name = `wind-tree-0x${setupId.toString(16)}`;
+  // Tag with the LB so the existing LRU evict (matches userData.landblockId)
+  // removes wind nodes from staticsGroup on eviction.
+  node.userData = { landblockId: (p.landblockId >>> 0), isAnimatedScenery: true, isTreeWind: true };
+  placeNode(node, p);
+
+  const parts = [];
+  const partBoxes = [];
+  for (let i = 0; i < partCount; i++) {
+    const partGroup = new THREE.Group();
+    partGroup.name = `part${i}`;
+    let localBox = null;
+    const wasmMesh = partMeshes[i];
+    if (wasmMesh) {
+      try {
+        const { groups, surfaceDids } = meshToGeometryGroups(wasmMesh);
+        for (let g = 0; g < (groups?.length || 0); g++) {
+          const grp = groups[g];
+          const sid = grp.surfaceDid || surfaceDids?.[g] || 0;
+          // eslint-disable-next-line no-await-in-loop
+          const mat = await materialCache.get(sid, spFetch);
+          if (grp.geometry && mat) {
+            partGroup.add(new THREE.Mesh(grp.geometry, mat));
+            const pos = grp.geometry.getAttribute?.("position")?.array;
+            if (pos && pos.length) {
+              const bb = partBBox(pos);
+              localBox = localBox ? _unionBox(localBox, bb) : bb;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn(`[tree-wind] part ${i} mesh build failed:`, e);
+      }
+      wasmMesh.free?.();
+    }
+    // Re-center the union box (the _unionBox merge left cx/cy/cz stale).
+    if (localBox) {
+      localBox.cx = (localBox.minX + localBox.maxX) / 2;
+      localBox.cy = (localBox.minY + localBox.maxY) / 2;
+      localBox.cz = (localBox.minZ + localBox.maxZ) / 2;
+    }
+    partBoxes.push(localBox || partBBox(null));
+    node.add(partGroup);
+    parts.push(partGroup);
+  }
+
+  let rig = _windRigCache.get(setupId);
+  if (!rig) {
+    rig = buildBboxRig(partBoxes, hinge).rigs;
+    _windRigCache.set(setupId, rig);
+  }
+  return { node, parts, rig, partCount };
+}
+
+/**
+ * Entry point — build animated wind nodes for tree placements peeled out of the
+ * frozen statics bake (statics.js, when ?treeWind=on). No-op when the flag is
+ * off, the pkg predates fetchBuildingPlacement, or nothing qualifies. Fail-soft,
+ * capped, deduped. Returns the count built.
+ */
+export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
+  if (!treeWindEnabled()) return 0;
+  if (!scene3d?.staticsGroup || !Array.isArray(placements) || !wasmExports) return 0;
+  if (typeof wasmExports.fetchBuildingPlacement !== "function") return 0; // pre-rebuild → frozen
+  if (placements.length === 0) return 0;
+  _rafDisposed = false; // re-arm after a prior dispose if scenery loads again.
+
+  const resolveParent = (typeof opts?.resolveParent === "function") ? opts.resolveParent : null;
+  const { getOrCreateMaterialCache } = await import("./statics.js");
+  const materialCache = getOrCreateMaterialCache(scene3d);
+  if (!materialCache) return 0;
+  const spFetch = surfacePixelsFetcher(wasmExports);
+
+  const K = Math.max(1, (opts?.phaseBuckets | 0) || 4);
+  const windBase = { dirDeg: treeWindDir(), strength: treeWindStrength() };
+
+  let built = 0;
+  let dropped = 0;
+  for (const p of placements) {
+    const key = "w:" + placementKey(p);
+    if (_builtKeys.has(key)) continue;
+    if (_instances.length >= maxAnimated()) { dropped += 1; continue; }
+    _builtKeys.add(key);
+    // eslint-disable-next-line no-await-in-loop
+    const r = await buildOneWind(p, wasmExports, materialCache, spFetch).catch((e) => {
+      console.warn("[tree-wind] buildOneWind threw:", e);
+      return null;
+    });
+    if (!r) { _builtKeys.delete(key); continue; }
+
+    const setupId = (p.modelId ?? p.objId ?? 0) >>> 0;
+    // Deterministic per-instance phase bucket → masks forest lockstep without a
+    // per-instance mixer (instances within a bucket still share one driver).
+    const bucket = Math.floor(hash01(key) * K) % K;
+    const groupKey = `wind:0x${setupId.toString(16)}:${bucket}`;
+    const windParams = { ...windBase, phaseOffset: (bucket / K) * 2 * Math.PI };
+    const g = getOrCreateWindGroup(groupKey, r.partCount, r.rig, windParams);
+    if (!g) { _builtKeys.delete(key); continue; }
+
+    const parent = (resolveParent && resolveParent(p)) || scene3d.staticsGroup;
+    parent.add(r.node);
+    g.refCount += 1;
+    _instances.push({ node: r.node, parts: r.parts, animId: groupKey, key });
+    _ensureRaf();
+    built += 1;
+  }
+  if (built > 0 || dropped > 0) {
+    console.log(`[tree-wind] built ${built} wind-tree instances across ${_didGroups.size} groups` +
       (dropped > 0 ? `; DROPPED ${dropped} over the ${maxAnimated()} cap (?animSceneryMax)` : ""));
   }
   return built;

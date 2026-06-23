@@ -86,7 +86,10 @@ import { particleClockMode, rng } from "./particles/time_rng.js";
 // Task #7 — true mesh-animated scenery (flags/foliage). Static import is
 // cycle-safe: animated_scenery.js imports statics.js only via a deferred
 // dynamic import() inside a function, never at module load.
-import { attachAnimatedScenery, animSceneryEnabled } from "./animated_scenery.js";
+import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees } from "./animated_scenery.js";
+// Tree wind sway (?treeWind, default-OFF). When off, the peel below never runs
+// and `statics` is unchanged → byte-identical frozen instanced path.
+import { treeWindEnabled, isTreeDid } from "./tree_wind.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -1585,6 +1588,16 @@ export async function bakeStaticsForLandblock(
       statics = statics.filter((p) => ((p?.defaultAnimationId >>> 0) || 0) === 0);
     }
   }
+  // Tree wind (?treeWind) — peel allowlisted tree DIDs out of the frozen path,
+  // AFTER the anim peel so the two sets are disjoint. Off ⇒ statics unchanged.
+  let windTrees = null;
+  if (treeWindEnabled()) {
+    const t = statics.filter((p) => isTreeDid((p?.modelId >>> 0) || 0));
+    if (t.length > 0) {
+      windTrees = t;
+      statics = statics.filter((p) => !isTreeDid((p?.modelId >>> 0) || 0));
+    }
+  }
   // A2 — the load-bearing fetch+drain (fetch_landblock_objects +
   // fetchAndDrainScenery) has now SUCCEEDED. Mark the LB permanently
   // baked HERE (not at function entry) so a throw above this line leaves
@@ -1828,6 +1841,9 @@ export async function bakeStaticsForLandblock(
     await attachStaticDefaultScripts(scene3d, statics, wasmExports);
     if (animatedStatics) {
       await attachAnimatedScenery(scene3d, animatedStatics, wasmExports);
+    }
+    if (windTrees) {
+      await attachWindTrees(scene3d, windTrees, wasmExports);
     }
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -2088,6 +2104,16 @@ export async function bakeStaticsRing(
     if (anim.length > 0) {
       animatedStatics = anim;
       statics = statics.filter((p) => ((p?.defaultAnimationId >>> 0) || 0) === 0);
+    }
+  }
+  // Tree wind (?treeWind) — peel allowlisted tree DIDs (ring path), AFTER the
+  // anim peel so the sets are disjoint. Off ⇒ statics unchanged.
+  let windTrees = null;
+  if (treeWindEnabled()) {
+    const t = statics.filter((p) => isTreeDid((p?.modelId >>> 0) || 0));
+    if (t.length > 0) {
+      windTrees = t;
+      statics = statics.filter((p) => !isTreeDid((p?.modelId >>> 0) || 0));
     }
   }
   // Mark every newly-baked LB in the set BEFORE instantiation runs
@@ -2362,6 +2388,9 @@ export async function bakeStaticsRing(
     await attachStaticDefaultScripts(scene3d, statics, wasmExports);
     if (animatedStatics) {
       await attachAnimatedScenery(scene3d, animatedStatics, wasmExports);
+    }
+    if (windTrees) {
+      await attachWindTrees(scene3d, windTrees, wasmExports);
     }
   } catch (e) {
     // eslint-disable-next-line no-console
