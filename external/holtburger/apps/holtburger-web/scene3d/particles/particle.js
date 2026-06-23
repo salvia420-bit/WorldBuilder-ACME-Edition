@@ -41,6 +41,21 @@ import { currentTime, rng } from "./time_rng.js";
 const _scratchEuler = new THREE.Euler(0, 0, 0, "YXZ");
 const _scratchQuat = new THREE.Quaternion();
 
+// Swarm-trajectory fidelity escape (2026-06-23). Default = retail-correct
+// (`cos(b·t)*C` amplitude, acclient.c:330502-330510). `?swarmAce=on` reverts
+// to ACE.Server Particle.cs:160's `cos(b·t)+C` port (amplitude pinned to 1.0,
+// C demoted to a static offset) for a side-by-side 1070 eye-test. Read once at
+// module load — the per-particle `update()` hot path must not parse the URL.
+const SWARM_ACE_LEGACY = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search)
+      .get("swarmAce")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+
 /**
  * `ACE.Entity.Enum.ParticleType` — frozen enum mirror.
  * Source: external/ACE/Source/ACE.Entity/Enum/ParticleType.cs
@@ -383,21 +398,37 @@ export class Particle {
         break;
       }
       case ParticleType.Swarm: {
-        // ACE Particle.cs:159-164:
-        //   swarm = (lifetime * A) + C + parent.Origin + Offset;
-        //   X = cos(lifetime * B.X) + swarm.X;
-        //   Y = sin(lifetime * B.Y) + swarm.Y;
-        //   Z = cos(lifetime * B.Z) + swarm.Z;
-        // (Note Y uses sin where X and Z use cos — a quirk of the ACE
-        // port from the AC client; preserved faithfully.)
-        const sx = lt * this.a.x + this.c.x + px + ox;
-        const sy = lt * this.a.y + this.c.y + py + oy;
-        const sz = lt * this.a.z + this.c.z + pz + oz;
-        mesh.position.set(
-          Math.cos(lt * this.b.x) + sx,
-          Math.sin(lt * this.b.y) + sy,
-          Math.cos(lt * this.b.z) + sz,
-        );
+        // Retail acclient CParticle::Update Swarm (acclient.c:330502-330510):
+        //   x = cos(b.x*t) * c.x + t*a.x + offset.x + parent.x
+        //   y = sin(b.y*t) * c.y + t*a.y + offset.y + parent.y
+        //   z = cos(b.z*t) * c.z + t*a.z + offset.z + parent.z
+        // C is the oscillation AMPLITUDE (it MULTIPLIES cos/sin), which is what
+        // produces the fluttering orbit. ACE.Server Particle.cs:160-163 ports
+        // this as `cos(b*t) + (t*a + C + parent + offset)` — i.e. amplitude
+        // hard-coded to 1.0 with C demoted to a static offset. That is a
+        // decomp-port bug (ACE's own Implode case, Particle.cs:169, correctly
+        // does `cos(A.X*t) * C`); cross-checked against the retail decomp
+        // above. Restored to retail here so swarms (butterflies/insects) orbit
+        // with their real amplitude instead of barely jittering ±1 unit.
+        // ACE stays vanilla — this is the client-side fidelity fix.
+        // (Note Y uses sin where X and Z use cos — a retail quirk, preserved.)
+        const base_x = lt * this.a.x + px + ox;
+        const base_y = lt * this.a.y + py + oy;
+        const base_z = lt * this.a.z + pz + oz;
+        if (SWARM_ACE_LEGACY) {
+          // Legacy ACE port (kept only as a `?swarmAce=on` A/B reference).
+          mesh.position.set(
+            Math.cos(lt * this.b.x) + (this.c.x + base_x),
+            Math.sin(lt * this.b.y) + (this.c.y + base_y),
+            Math.cos(lt * this.b.z) + (this.c.z + base_z),
+          );
+        } else {
+          mesh.position.set(
+            Math.cos(lt * this.b.x) * this.c.x + base_x,
+            Math.sin(lt * this.b.y) * this.c.y + base_y,
+            Math.cos(lt * this.b.z) * this.c.z + base_z,
+          );
+        }
         break;
       }
       case ParticleType.Explode: {

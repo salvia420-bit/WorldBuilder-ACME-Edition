@@ -294,8 +294,8 @@ check("throwing static manager tick is swallowed", !stThrew);
 const staticsSrc = readFileSync(joinPath(__dirname, "scene3d", "statics.js"), "utf8");
 check("statics rAF arm gated to particleClockMode() === \"off\"",
   /if \(typeof window !== "undefined" && _staticScriptsEnabled\(\) && particleClockMode\(\) === "off"\)/.test(staticsSrc));
-check("statics.js imports particleClockMode",
-  staticsSrc.includes('import { particleClockMode } from "./particles/time_rng.js"'));
+check("statics.js imports particleClockMode (+ rng for the CallPES loop) from time_rng.js",
+  /import \{ particleClockMode(, rng)? \} from "\.\/particles\/time_rng\.js"/.test(staticsSrc));
 
 const indexSrc = readFileSync(joinPath(__dirname, "scene3d", "index.js"), "utf8");
 check("index.js installs the =sim clock hook (setCurrentTime over _particleSimNowS)",

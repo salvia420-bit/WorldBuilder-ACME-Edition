@@ -1601,6 +1601,14 @@ pub struct ObjectPlacement {
     /// particle chains. Retail plays these via `play_default_script`
     /// (acclient `InitWithSetup`), so emitting them is parity, not embellishment.
     default_script_id: u32,
+    /// SetupModel `default_animation` (0x03 Animation) DID, resolved at fetch
+    /// time. 0 = none. Task #7 (2026-06-23): the per-part keyframe clip retail's
+    /// `PhysicsObj::InitDefaults` flags `HasDefaultAnim` and plays every frame
+    /// (PartArray.Update) for STATIC animated scenery — flags/banners/windmills/
+    /// animated foliage (e.g. 0x02000493 → 0x030006cb). JS animates these via
+    /// `?animScenery=on` instead of rendering them frozen. 0 for GfxObj (0x01)
+    /// placements + SetupModels without a default_animation.
+    default_animation_id: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1659,6 +1667,12 @@ impl ObjectPlacement {
     #[wasm_bindgen(getter, js_name = defaultScriptId)]
     pub fn default_script_id(&self) -> u32 {
         self.default_script_id
+    }
+    /// SetupModel `default_animation` DID (0x03), or 0 when none. Task #7 —
+    /// drives the `?animScenery=on` per-part keyframe animation path.
+    #[wasm_bindgen(getter, js_name = defaultAnimationId)]
+    pub fn default_animation_id(&self) -> u32 {
+        self.default_animation_id
     }
 }
 
@@ -1739,6 +1753,8 @@ pub async fn fetch_landblock_objects(
             .collect();
         let _ = source.prefetch(&setup_keys).await;
         let mut script_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        // Task #7 — resolve default_animation (0x03) in the SAME setup parse.
+        let mut anim_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
         for &sid in &setup_ids {
             if let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", sid)) {
                 if let Ok(setup) = holtburger_dat::file_type::SetupModel::unpack(
@@ -1747,13 +1763,19 @@ pub async fn fetch_landblock_objects(
                     if let Some(ds) = setup.default_script {
                         script_map.insert(sid, ds);
                     }
+                    if let Some(da) = setup.default_animation {
+                        anim_map.insert(sid, da);
+                    }
                 }
             }
         }
-        if !script_map.is_empty() {
+        if !script_map.is_empty() || !anim_map.is_empty() {
             for p in out.iter_mut() {
                 if let Some(&ds) = script_map.get(&p.model_id) {
                     p.default_script_id = ds;
+                }
+                if let Some(&da) = anim_map.get(&p.model_id) {
+                    p.default_animation_id = da;
                 }
             }
         }
@@ -1804,6 +1826,7 @@ fn frame_to_placement(
         // built (one prefetch+parse pass over the unique placed SetupModels);
         // the SoA parity test path leaves it at the default 0.
         default_script_id: 0,
+        default_animation_id: 0,
     }
 }
 
@@ -1911,6 +1934,13 @@ pub struct ScenicPlacementJs {
     /// (GfxObjs, or SetupModels without a `default_script`). The
     /// static-render path runs this chain (fountains/braziers/torches).
     default_script_id: u32,
+    /// Task #7 (2026-06-23) — SetupModel `default_animation` (0x03) DID, or 0.
+    /// NOT baked into the JSONL (pre-existing bakes predate it); resolved LIVE
+    /// from the obj_id's SetupModel in `fetch_landblock_scenery` (same as the
+    /// ObjectPlacement default_script pass) so no 40k-file re-bake is needed.
+    /// Drives the `?animScenery=on` per-part keyframe path for animated scenery
+    /// (flags/banners/foliage, e.g. 0x02000493 → 0x030006cb).
+    default_animation_id: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1976,6 +2006,12 @@ impl ScenicPlacementJs {
     #[wasm_bindgen(getter, js_name = defaultScriptId)]
     pub fn default_script_id(&self) -> u32 {
         self.default_script_id
+    }
+    /// Task #7 — SetupModel `default_animation` DID (0x03), or 0. Resolved live
+    /// in `fetch_landblock_scenery`; drives `?animScenery=on`. 0 on stale pkg.
+    #[wasm_bindgen(getter, js_name = defaultAnimationId)]
+    pub fn default_animation_id(&self) -> u32 {
+        self.default_animation_id
     }
 }
 
@@ -2386,6 +2422,8 @@ mod scenery_fetch {
             source_obj_idx: rec.source_obj_idx,
             landblock_id,
             default_script_id: rec.default_script_id,
+            // Task #7 — not baked; resolved live in fetch_landblock_scenery.
+            default_animation_id: 0,
         }
     }
 }
@@ -2463,6 +2501,72 @@ pub async fn fetch_landblock_scenery(
             out.push(scenery_fetch::to_js(r, lb_key));
         }
     }
+
+    // Task #7 (2026-06-23) — resolve each unique scenic SetupModel's
+    // `default_animation` (0x03) LIVE. It is NOT baked into the per-LB JSONL
+    // (pre-existing bakes predate it), so rather than re-bake ~40k files we
+    // parse the SetupModel here, exactly like the ObjectPlacement default_script
+    // pass. A page-lifetime thread-local cache means each model is parsed once
+    // across all LB fetches (scenery re-fetches the same models constantly).
+    // Best-effort: a missing/unparseable setup leaves default_animation_id = 0
+    // (fail-soft, same philosophy as the script pass). 0x01 GfxObj placements
+    // are skipped (no SetupModel → no default_animation).
+    {
+        use holtburger_dat::file_type::SetupModel;
+        use holtburger_dat::{ResourceKey, ResourceSource};
+        thread_local! {
+            static ANIM_CACHE: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
+                std::cell::RefCell::new(std::collections::HashMap::new());
+        }
+        let source = global_source::global_source();
+        // Unique 0x02 SetupModel obj_ids not yet resolved → prefetch their DAT
+        // entries before the sync parse (cold first-fetch of an LB can precede
+        // the mesh fetch that warms these). `.with` can't await, so collect →
+        // prefetch → parse → stamp in separate borrows.
+        let mut to_fetch: Vec<u32> = Vec::new();
+        ANIM_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            for p in out.iter() {
+                let oid = p.obj_id;
+                if (oid >> 24) as u8 == 0x02
+                    && !cache.contains_key(&oid)
+                    && !to_fetch.contains(&oid)
+                {
+                    to_fetch.push(oid);
+                }
+            }
+        });
+        if !to_fetch.is_empty() {
+            let keys: Vec<ResourceKey<'_>> = to_fetch
+                .iter()
+                .map(|&o| ResourceKey::new("eor/portal", o))
+                .collect();
+            let _ = source.prefetch(&keys).await;
+            ANIM_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                for &oid in &to_fetch {
+                    let da = source
+                        .get_file_by_key(ResourceKey::new("eor/portal", oid))
+                        .ok()
+                        .and_then(|bytes| {
+                            SetupModel::unpack(&mut std::io::Cursor::new(&bytes)).ok()
+                        })
+                        .and_then(|s| s.default_animation)
+                        .unwrap_or(0);
+                    cache.insert(oid, da);
+                }
+            });
+        }
+        ANIM_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            for p in out.iter_mut() {
+                if let Some(&da) = cache.get(&p.obj_id) {
+                    p.default_animation_id = da;
+                }
+            }
+        });
+    }
+
     Ok(out)
 }
 
@@ -12585,6 +12689,10 @@ pub struct StaticObjectPlacement {
     // `attachStaticDefaultScripts` ambient-particle chain the outdoor
     // scenery already uses. Retail plays these via `play_default_script`.
     default_script_id: u32,
+    // Task #9 — SetupModel `default_animation` (0x03) DID for interior animated
+    // props (banners/flags); 0 when none. cells.js feeds non-zero values to the
+    // world-frame animated-scenery builder (`?animScenery`).
+    default_animation_id: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -12618,6 +12726,10 @@ impl StaticObjectPlacement {
     /// fountains emit their ambient particle chains like outdoor scenery.
     #[wasm_bindgen(getter, js_name = defaultScriptId)]
     pub fn default_script_id(&self) -> u32 { self.default_script_id }
+    /// Task #9 — SetupModel `default_animation` (0x03) DID for this interior
+    /// static, or 0. cells.js drives the `?animScenery` per-part keyframe path.
+    #[wasm_bindgen(getter, js_name = defaultAnimationId)]
+    pub fn default_animation_id(&self) -> u32 { self.default_animation_id }
 }
 
 /// Phase 6 step C: per-cell placement bundle returned by
@@ -14580,6 +14692,9 @@ pub async fn fetch_env_cells_in_landblock(
             let aabb_local = static_object_local_aabb(source.as_ref(), stab.stab_id);
             let default_script_id =
                 static_object_default_script(source.as_ref(), stab.stab_id);
+            // Task #9 — resolve interior default_animation (0x03) in the same pass.
+            let default_animation_id =
+                static_object_default_animation(source.as_ref(), stab.stab_id);
             static_objects.push(StaticObjectPlacement {
                 did: stab.stab_id,
                 x: world_x,
@@ -14591,6 +14706,7 @@ pub async fn fetch_env_cells_in_landblock(
                 qz,
                 aabb_local,
                 default_script_id,
+                default_animation_id,
             });
         }
 
@@ -14676,6 +14792,26 @@ fn static_object_default_script<S: holtburger_dat::ResourceSource + ?Sized>(
         && let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes))
     {
         return setup.default_script.unwrap_or(0);
+    }
+    0
+}
+
+/// Task #9 — sibling of `static_object_default_script` for interior animated
+/// scenery: resolve a Stab SetupModel's `default_animation` (0x03), or 0.
+#[cfg(target_arch = "wasm32")]
+fn static_object_default_animation<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    stab_id: u32,
+) -> u32 {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    if (stab_id >> 24) as u8 != 0x02 {
+        return 0;
+    }
+    if let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", stab_id))
+        && let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes))
+    {
+        return setup.default_animation.unwrap_or(0);
     }
     0
 }
@@ -42946,6 +43082,84 @@ impl ParticleEmitterJs {
 ///     }
 ///   }
 #[cfg(target_arch = "wasm32")]
+/// Task #6 (2026-06-23) — JS-facing Animation (0x03) keyframe bundle for the
+/// `?animScenery=on` per-part scenery animation path. `frames` is a FLAT
+/// Float32Array laid out frame-major then part-major, 7 floats per (frame,part):
+/// `[origin.x, origin.y, origin.z, quat.w, quat.x, quat.y, quat.z]`. JS slices
+/// it into per-part position+quaternion KeyframeTracks for a THREE.AnimationClip.
+/// Animations carry no framerate (it comes from the MotionTable/AnimData when
+/// linked); JS picks/tunes the rate (`?animSceneryFps`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct AnimationJs {
+    num_parts: u32,
+    num_frames: u32,
+    flags: u32,
+    frames: Vec<f32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl AnimationJs {
+    #[wasm_bindgen(getter, js_name = numParts)]
+    pub fn num_parts(&self) -> u32 {
+        self.num_parts
+    }
+    #[wasm_bindgen(getter, js_name = numFrames)]
+    pub fn num_frames(&self) -> u32 {
+        self.num_frames
+    }
+    #[wasm_bindgen(getter)]
+    pub fn flags(&self) -> u32 {
+        self.flags
+    }
+    /// Flat per-(frame,part) [origin xyz, quat wxyz]; length = numParts*numFrames*7.
+    #[wasm_bindgen(getter)]
+    pub fn frames(&self) -> Vec<f32> {
+        self.frames.clone()
+    }
+}
+
+/// Fetch + flatten an Animation (0x03) for JS clip construction. Fail-soft:
+/// returns an error JsValue (JS soft-degrades to frozen scenery). Mirrors
+/// `fetchPhysicsScript`'s source/prefetch ergonomics.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchAnimation)]
+pub async fn fetch_animation(did: u32) -> Result<AnimationJs, JsValue> {
+    use holtburger_dat::file_type::Animation;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let source = global_source::global_source();
+    let key = ResourceKey::new("eor/portal", did);
+    prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", did))
+        .map_err(|e| {
+            JsValue::from_str(&format!("fetchAnimation 0x{did:08X}: fetch failed: {e:?}"))
+        })?;
+    let anim = Animation::read(&mut std::io::Cursor::new(&bytes)).map_err(|e| {
+        JsValue::from_str(&format!("fetchAnimation 0x{did:08X}: parse failed: {e:?}"))
+    })?;
+    let mut frames: Vec<f32> =
+        Vec::with_capacity((anim.num_parts as usize) * (anim.num_frames as usize) * 7);
+    for pf in &anim.part_frames {
+        for fr in &pf.frames {
+            frames.push(fr.origin.x);
+            frames.push(fr.origin.y);
+            frames.push(fr.origin.z);
+            frames.push(fr.orientation.w);
+            frames.push(fr.orientation.x);
+            frames.push(fr.orientation.y);
+            frames.push(fr.orientation.z);
+        }
+    }
+    Ok(AnimationJs {
+        num_parts: anim.num_parts,
+        num_frames: anim.num_frames,
+        flags: anim.flags.bits(),
+        frames,
+    })
+}
+
 #[wasm_bindgen(js_name = fetchPhysicsScript)]
 pub async fn fetch_physics_script(did: u32) -> Result<PhysicsScriptJs, JsValue> {
     use holtburger_dat::file_type::PhysicsScript;

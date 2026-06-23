@@ -82,7 +82,11 @@ import { CULL_DIST_SQ } from "./culling.js";
 // ParticleManager is ticked from the main loop (loop.js manager phase) and
 // the private rAF below never arms. time_rng.js is dependency-free, so this
 // second specifier into the sibling particles/ package is cycle-safe.
-import { particleClockMode } from "./particles/time_rng.js";
+import { particleClockMode, rng } from "./particles/time_rng.js";
+// Task #7 — true mesh-animated scenery (flags/foliage). Static import is
+// cycle-safe: animated_scenery.js imports statics.js only via a deferred
+// dynamic import() inside a function, never at module load.
+import { attachAnimatedScenery, animSceneryEnabled } from "./animated_scenery.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -451,6 +455,10 @@ function drainPlacements(allPlacements) {
         // `p.free()` below releases the wasm record.
         defaultScriptId:
           typeof p.defaultScriptId === "number" ? p.defaultScriptId >>> 0 : 0,
+        // Task #7 — default_animation (0x03) for placed animated props.
+        defaultAnimationId:
+          typeof p.defaultAnimationId === "number" ? p.defaultAnimationId >>> 0 : 0,
+        objId: p.modelId,
         source: "landblockinfo",
       });
     }
@@ -534,17 +542,28 @@ async function fetchAndDrainScenery(cellIds, wasmExports) {
     // Fail-soft: the getter is absent on older wasm bundles → 0.
     const defaultScriptId =
       typeof p.defaultScriptId === "number" ? p.defaultScriptId >>> 0 : 0;
+    // Task #7 — carry default_animation (0x03) through to the bake so
+    // attachAnimatedScenery can peel + animate these. Plus the full quat +
+    // sourceObjIdx the animated node-builder needs (placeNode uses the quat for
+    // non-yaw orientation; placementKey uses sourceObjIdx for dedupe). 0/absent
+    // on a pre-rebuild pkg → soft-degrade to frozen.
+    const defaultAnimationId =
+      typeof p.defaultAnimationId === "number" ? p.defaultAnimationId >>> 0 : 0;
     out.push({
       landblockId: p.landblockId,
       modelId: p.objId,
+      objId: p.objId,
       x: p.x,
       y: p.y,
       z: p.z,
+      qw, qx, qy, qz,
       rotationZ: yaw,
       isBuilding: false,
       scale: p.scale && p.scale > 0 ? p.scale : 1,
       source: "scenery",
       defaultScriptId,
+      defaultAnimationId,
+      sourceObjIdx: typeof p.sourceObjIdx === "number" ? p.sourceObjIdx : undefined,
     });
     if (typeof p.free === "function") p.free();
   }
@@ -1553,7 +1572,19 @@ export async function bakeStaticsForLandblock(
   // Concatenate. The merged array is the single source of truth for
   // the rest of the per-LB bake. Order is LandblockInfo first then
   // scenery — purely for log-readability; the renderer doesn't care.
-  const statics = landblockInfoStatics.concat(sceneryStatics);
+  let statics = landblockInfoStatics.concat(sceneryStatics);
+  // Task #7 — peel animated scenery (defaultAnimationId != 0) out of the frozen
+  // instanced path so it isn't double-rendered; attachAnimatedScenery builds
+  // per-part animated nodes for it. Flag-gated; when off, statics is unchanged
+  // (byte-identical frozen path).
+  let animatedStatics = null;
+  if (animSceneryEnabled()) {
+    const anim = statics.filter((p) => ((p?.defaultAnimationId >>> 0) || 0) !== 0);
+    if (anim.length > 0) {
+      animatedStatics = anim;
+      statics = statics.filter((p) => ((p?.defaultAnimationId >>> 0) || 0) === 0);
+    }
+  }
   // A2 — the load-bearing fetch+drain (fetch_landblock_objects +
   // fetchAndDrainScenery) has now SUCCEEDED. Mark the LB permanently
   // baked HERE (not at function entry) so a throw above this line leaves
@@ -1795,6 +1826,9 @@ export async function bakeStaticsForLandblock(
   // zero-cost when no placement carries a script (the pre-re-bake case).
   try {
     await attachStaticDefaultScripts(scene3d, statics, wasmExports);
+    if (animatedStatics) {
+      await attachAnimatedScenery(scene3d, animatedStatics, wasmExports);
+    }
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[scene3d.statics/V1] per-LB default_script attach failed:", e);
@@ -2043,7 +2077,19 @@ export async function bakeStaticsRing(
   mark("stage1: drainPlacements (JS)");
   const sceneryStatics = await fetchAndDrainScenery(cellIds, wasmExports);
   mark("stage1: fetchAndDrainScenery");
-  const statics = landblockInfoStatics.concat(sceneryStatics);
+  let statics = landblockInfoStatics.concat(sceneryStatics);
+  // Task #7 — peel animated scenery (defaultAnimationId != 0) out of the frozen
+  // instanced path so it isn't double-rendered; attachAnimatedScenery builds
+  // per-part animated nodes for it. Flag-gated; when off, statics is unchanged
+  // (byte-identical frozen path).
+  let animatedStatics = null;
+  if (animSceneryEnabled()) {
+    const anim = statics.filter((p) => ((p?.defaultAnimationId >>> 0) || 0) !== 0);
+    if (anim.length > 0) {
+      animatedStatics = anim;
+      statics = statics.filter((p) => ((p?.defaultAnimationId >>> 0) || 0) === 0);
+    }
+  }
   // Mark every newly-baked LB in the set BEFORE instantiation runs
   // so a concurrent caller observing mid-instantiation state sees the
   // bake-in-progress LBs as baked. Matches the per-LB baker's
@@ -2314,6 +2360,9 @@ export async function bakeStaticsRing(
   // when no placement carries a script (the pre-re-bake case).
   try {
     await attachStaticDefaultScripts(scene3d, statics, wasmExports);
+    if (animatedStatics) {
+      await attachAnimatedScenery(scene3d, animatedStatics, wasmExports);
+    }
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[scene3d.statics/V1] ring default_script attach failed:", e);
@@ -2849,6 +2898,39 @@ let _staticOwnerSeq = 0;
 const STATIC_HOOK_CREATE_PARTICLE = 13;
 const STATIC_HOOK_CREATE_BLOCKING_PARTICLE = 26;
 
+// CallPES (2026-06-23) — hook type 19. Retail re-plays a PhysicsScript after a
+// random [0, pause]s delay (CPhysicsObj::CallPES, acclient.c:318973-319000 →
+// play_script_internal). This is the LOOP that keeps ambient swarms
+// (butterflies/insects) refreshing: e.g. script 0x33000455 is
+// `CreateParticle(Swarm 0x320002b5, finite total=60) + CallPES(self, pause=35)`,
+// so without this arm the swarm bursts once at LB-load and never returns.
+// The static walker had explicitly skipped CallPES as "entity-targeted"
+// (header note above) — that was wrong for self-looping scenery scripts.
+const STATIC_HOOK_CALL_PES = 19;
+// Cross-reference (callPesDid !== own scriptId) recursion cap — mirrors
+// entities.js MAX_CALL_PES_DEPTH. A SELF-reference (the ambient loop) is NOT
+// depth-capped (retail loops it forever via the re-added FPHook); it is bounded
+// instead by anchor liveness (anchor.parent) + `_spDisposed` + the cancel set.
+const STATIC_MAX_CALL_PES_DEPTH = 3;
+// Pending CallPES re-run timers, so disposeStaticParticles can cancel a
+// still-pending loop (a 0–35s window can outlive a teardown). Module-level,
+// consistent with `_spRafId`/`_spDisposed` below.
+const _staticCallPesTimeouts = new Set();
+// `?staticCallPes=off` disables ONLY the CallPES re-play loop (default on),
+// while keeping the one-shot CreateParticle emitters. Lets the 1070 A/B isolate
+// the loop (timers + repeated finite-swarm re-spawns) from the base emitter
+// render. The whole static-script system still has the coarser
+// `?staticScripts=off`. Read once at module load.
+const STATIC_CALL_PES_ON = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      return new URLSearchParams(globalThis.location.search)
+        .get("staticCallPes")?.toLowerCase() !== "off";
+    }
+  } catch (_) {}
+  return true;
+})();
+
 // Survey A11-S0 (2026-06-11): default-off `?blockingParticleParity=on`.
 // When on, hook 26 (CreateBlockingParticle) takes retail blocking
 // semantics (acclient.c:329528-329565: no-replace if emitter id already
@@ -2972,6 +3054,60 @@ const _staticOffsetVec3 = new THREE.Vector3();
 const _staticOffsetQuat = new THREE.Quaternion();
 
 /**
+ * CallPES (hook 19) arm for the static script walker (2026-06-23). Decodes the
+ * sub-script DID + pause from the entry's raw `hookData` (PhysicsScriptEntryJs
+ * exposes no callPes getters, so we read the bytes exactly like the entity
+ * walker does — entities.js:9184-9185: callPesDid = u32 LE @[0..4], callPesPause
+ * = f32 LE @[4..8]) and schedules a re-run of `_runStaticParticleChain` on that
+ * sub-script after a retail-style random [0, pause]s jitter (+ the hook's own
+ * start_time). This is what makes finite ambient swarms (e.g. 0x33000455 →
+ * Swarm 0x320002b5, total=60) refresh instead of bursting once at LB-load.
+ *
+ * SELF-reference (callPesDid === scriptId) is the perpetual ambient loop and is
+ * NOT depth-capped (retail re-adds it forever); it is bounded instead by anchor
+ * liveness + `_spDisposed` + the cancel set. CROSS-reference is capped at
+ * STATIC_MAX_CALL_PES_DEPTH to stop a cyclic script graph from spawn-storming.
+ * The timer is tracked in `_staticCallPesTimeouts` so disposeStaticParticles
+ * can cancel a still-pending loop. No-op in non-browser contexts (tests).
+ */
+function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, ownerKey, depth) {
+  if (!STATIC_CALL_PES_ON) return; // `?staticCallPes=off` — base emitters only.
+  if (typeof setTimeout !== "function") return; // headless tests — no loop.
+  const bytes = entry.hookData;
+  if (!bytes || bytes.byteLength < 8) return;
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const callPesDid = dv.getUint32(0, true) >>> 0;
+  if (callPesDid === 0) return;
+  const callPesPause = dv.getFloat32(4, true);
+  const isSelf = callPesDid === (scriptId >>> 0);
+  if (!isSelf && depth >= STATIC_MAX_CALL_PES_DEPTH) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[scene3d.statics/CallPES] depth guard hit (depth=${depth} >= ` +
+        `${STATIC_MAX_CALL_PES_DEPTH}); dropping cross-script ` +
+        `0x${callPesDid.toString(16)} from 0x${(scriptId >>> 0).toString(16)}`
+    );
+    return;
+  }
+  // Retail rolls a UNIFORM random duration in [0, pause] (Random::RollDice,
+  // acclient.c:318987); a sub-0.0002 pause fires immediately. Add the hook's
+  // own start_time offset within the script. rng() = Math.random by default.
+  const pauseW = +callPesPause || 0;
+  const randPause = pauseW < 0.0002 ? 0 : rng() * pauseW;
+  const delayMs = Math.max(0, ((+entry.startTime || 0) + randPause) * 1000);
+  const nextDepth = isSelf ? depth : depth + 1; // self-loop never caps.
+  const tid = setTimeout(() => {
+    _staticCallPesTimeouts.delete(tid);
+    if (_spDisposed) return; // scene torn down.
+    if (!anchor || !anchor.parent) return; // LB evicted — anchor detached.
+    _runStaticParticleChain(
+      manager, anchor, callPesDid, wasmExports, ownerKey, nextDepth
+    ).catch(() => {});
+  }, delayMs);
+  _staticCallPesTimeouts.add(tid);
+}
+
+/**
  * Run ONE static placement's `default_script` PhysicsScript chain,
  * anchored to `anchor` (a THREE.Group at the static's world transform).
  * Mirrors the CreateParticle arm of entities.js
@@ -2983,7 +3119,7 @@ const _staticOffsetQuat = new THREE.Quaternion();
  * Returns the count of emitters attached. Fail-soft: a fetch failure on
  * the script or any emitter is logged + skipped, never thrown.
  */
-async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, ownerKey = null) {
+async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, ownerKey = null, depth = 0) {
   let ps;
   try {
     ps = await wasmExports.fetchPhysicsScript(pesId);
@@ -2999,6 +3135,13 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
   if (typeof ps.free === "function") ps.free();
   let attached = 0;
   for (const e of entries) {
+    // CallPES (19): re-play arm — the ambient loop that refreshes finite
+    // swarms. Schedule the sub-script re-run (self = perpetual loop) and move
+    // on. Fire-and-forget; never blocks the create-particle hooks below.
+    if ((e.hookType | 0) === STATIC_HOOK_CALL_PES) {
+      _scheduleStaticCallPes(manager, anchor, pesId, e, wasmExports, ownerKey, depth);
+      continue;
+    }
     if (
       e.hookType !== STATIC_HOOK_CREATE_PARTICLE &&
       e.hookType !== STATIC_HOOK_CREATE_BLOCKING_PARTICLE
@@ -3084,6 +3227,35 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
  *
  * @returns {Promise<{anchorCount:number, emitterCount:number}>}
  */
+/**
+ * Sky-particle (bird / aurora) chain attach — task #4 (2026-06-23).
+ *
+ * Region SkyObjects carry a `default_pes` (0x33 PhysicsScript) that, for the
+ * sky swarms, does CreateParticle → ParticleEmitter(ParticleType.Swarm). e.g.
+ * the region's 0x330007db spawns 0x32000455/456/457 (Swarm, gfxobj
+ * 0x01001a61/a62/a63) — the "birds in the sky". sky_dome.js never walked this
+ * chain (its W1 weather path draws billboards only — see the TODO there), so
+ * those swarms never rendered.
+ *
+ * This reuses the EXACT scenery infrastructure — the shared ParticleManager
+ * (`_ensureStaticParticleManager`), the chain walker (`_runStaticParticleChain`
+ * incl. the fixed Swarm trajectory and the CallPES loop arm), and the
+ * gfxobj→surface material path — but the caller supplies a CAMERA-FOLLOWING
+ * `anchor` (moved every frame in sky_dome.js::tick) instead of a fixed world
+ * placement, so the swarm orbits overhead wherever the player goes (retail
+ * anchors sky particles to the camera-following sky cell). Honors the shared
+ * `?staticScripts=off` kill switch; ticks on the same manager as scenery.
+ *
+ * @returns {Promise<number>} emitter count attached (0 on no-op / fail-soft).
+ */
+export async function attachSkyParticleChain(scene3d, anchor, pesId, wasmExports, ownerKey = null) {
+  if (!scene3d || !anchor || !_staticScriptsEnabled()) return 0;
+  if (((pesId >>> 0) === 0)) return 0;
+  const manager = await _ensureStaticParticleManager(scene3d, wasmExports);
+  if (!manager) return 0;
+  return _runStaticParticleChain(manager, anchor, pesId >>> 0, wasmExports, ownerKey, 0);
+}
+
 export async function attachStaticDefaultScripts(scene3d, placements, wasmExports) {
   if (!scene3d || !scene3d.staticsGroup || !Array.isArray(placements)) {
     return { anchorCount: 0, emitterCount: 0 };
@@ -3248,6 +3420,15 @@ export function disposeStaticParticles(scene3d) {
     } catch (_) {}
   }
   _spRafId = 0;
+  // Cancel any pending CallPES re-run timers (a 0–35s ambient-loop window can
+  // outlive teardown). The `_spDisposed` guard already no-ops a fire, but clear
+  // them so they don't linger.
+  if (typeof clearTimeout === "function") {
+    for (const tid of _staticCallPesTimeouts) {
+      try { clearTimeout(tid); } catch (_) {}
+    }
+  }
+  _staticCallPesTimeouts.clear();
   const mgr = scene3d?._staticParticleManager;
   if (mgr && typeof mgr.particleTable?.forEach === "function") {
     try {

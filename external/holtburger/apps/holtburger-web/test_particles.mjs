@@ -211,7 +211,7 @@ check(
   };
   const p = new Particle();
   // Init internally invokes update with parent=parentOffset, so position
-  // will momentarily be (1+300+450+450, 300, 301) = (1201, 300, 301).
+  // will momentarily be (cos0*300+450+450, 0, 300) = (1200, 0, 300).
   p.init(info, parent, -1, parentOffset, mesh,
     /*randomOffset*/ info.getRandomOffset(),
     /*persistent*/ false,
@@ -227,18 +227,18 @@ check(
   p.update(ParticleType.Swarm, /*persistent*/ false, mesh, parent);
 
   check(
-    "Swarm @ t=0: position.x = cos(0) + C.x + parent.x + offset.x = 1+300+1900+450 = 2651",
-    approx(mesh.position.x, 2651, 1e-3),
+    "Swarm @ t=0: position.x = cos(0)*C.x + t*a.x + parent.x + offset.x = 300+0+1900+450 = 2650",
+    approx(mesh.position.x, 2650, 1e-3),
     `mesh.position.x=${mesh.position.x}`
   );
   check(
-    "Swarm @ t=0: position.y = sin(0) + C.y + parent.y + offset.y = 0+300+0+0 = 300",
-    approx(mesh.position.y, 300, 1e-3),
+    "Swarm @ t=0: position.y = sin(0)*C.y + t*a.y + parent.y + offset.y = 0+0+0+0 = 0",
+    approx(mesh.position.y, 0, 1e-3),
     `mesh.position.y=${mesh.position.y}`
   );
   check(
-    "Swarm @ t=0: position.z = cos(0) + C.z + parent.z + offset.z = 1+300+0+0 = 301",
-    approx(mesh.position.z, 301, 1e-3),
+    "Swarm @ t=0: position.z = cos(0)*C.z + t*a.z + parent.z + offset.z = 300+0+0+0 = 300",
+    approx(mesh.position.z, 300, 1e-3),
     `mesh.position.z=${mesh.position.z}`
   );
 }
@@ -269,23 +269,29 @@ check(
   mockTime = 101.0;
   p.update(ParticleType.Swarm, false, mesh, parent);
 
-  const expX = Math.cos(0.2) + 0 + 300 + 1900 + 450; // 0.98007 + 2650 ≈ 2650.98
-  const expY = Math.sin(0.2) + 0 + 300 + 0 + 0;
-  const expZ = Math.cos(0.2) + 0 + 300 + 0 + 0;
+  // retail: pos = cos/sin(b*t)*C + t*a + parent + offset  (a=0 here)
+  const expX = Math.cos(0.2) * 300 + 1900 + 450; // 294.02 + 2350 ≈ 2644.02
+  const expY = Math.sin(0.2) * 300;              // ≈ 59.60
+  const expZ = Math.cos(0.2) * 300;              // ≈ 294.02
   check(
-    `Swarm @ t=1: position.x = cos(0.2)+2650 ≈ ${expX.toFixed(3)}`,
+    `Swarm @ t=1: position.x = cos(0.2)*300+2350 ≈ ${expX.toFixed(3)}`,
     approx(mesh.position.x, expX, 1e-3),
     `got=${mesh.position.x.toFixed(6)}, expected=${expX.toFixed(6)}`
   );
   check(
-    `Swarm @ t=1: position.y = sin(0.2)+300 ≈ ${expY.toFixed(3)}`,
+    `Swarm @ t=1: position.y = sin(0.2)*300 ≈ ${expY.toFixed(3)}`,
     approx(mesh.position.y, expY, 1e-3),
     `got=${mesh.position.y.toFixed(6)}, expected=${expY.toFixed(6)}`
   );
   check(
+    `Swarm @ t=1: position.z = cos(0.2)*300 ≈ ${expZ.toFixed(3)}`,
+    approx(mesh.position.z, expZ, 1e-3),
+    `got=${mesh.position.z.toFixed(6)}, expected=${expZ.toFixed(6)}`
+  );
+  check(
     `Swarm @ t=1: position differs from t=0 (proves time evolution)`,
-    Math.abs(mesh.position.x - 2651) > 1e-6,
-    `mesh.position.x at t=1 = ${mesh.position.x}, vs 2651 @ t=0`
+    Math.abs(mesh.position.x - 2650) > 1e-6,
+    `mesh.position.x at t=1 = ${mesh.position.x}, vs 2650 @ t=0`
   );
 }
 
@@ -330,16 +336,18 @@ check(
 }
 
 // ============================================================
-// Test 5: ParabolicLVGA update — t² growth with `+=` accumulator
+// Test 5: ParabolicLVGA update — t² parabola ASSIGNED (retail-anchored)
 // ============================================================
 {
-  // ACE Particle.cs:150 uses `+=` so each Update keeps adding to mesh.position.
-  // **ACE quirk**: ParabolicLVGA's Init only sets B (Particle.cs:54-56), NOT
-  // A. So `this.a` stays at (0,0,0) regardless of the input `a`. The
-  // accumulator's A contribution is therefore always zero.
-  // With B=(2,0,0), randomA ignored: at t=1 x += 0.5*1²*2 + 1*0 = 1 → x=1.
-  // At t=2 (non-persistent lifetime = elapsed, lastUpdateTime not bumped),
-  // x += 0.5*4*2 + 0 = 4 → cumulative x = 1+4 = 5.
+  // particle.js ASSIGNS the parabola anchored at the parent frame
+  // (position = parent + offset + t*A + 0.5*t²*B), matching retail
+  // acclient.c:330453-330465 — NOT ACE Particle.cs:150's `+=` accumulator
+  // (that decomp-port bug dropped the parent origin → particles flew to
+  // world-origin; see the particle.js comment for the CDP repro).
+  // **ACE quirk preserved**: ParabolicLVGA's Init only sets B, NOT A, so
+  // `this.a` stays (0,0,0) regardless of input `a`.
+  // With B=(2,0,0): at t=1 x = 0.5*1²*2 = 1; at t=2 x = 0.5*2²*2 = 4
+  // (assigned each tick, not accumulated).
   mockTime = 0;
   mockRngVal = 0.5;
   const info = new ParticleEmitterInfo(makeBaseInfo({
@@ -367,24 +375,25 @@ check(
 
   // First explicit update: lt = (now - lastUpdateTime) = 1 (non-persistent).
   // ACE ParabolicLVGA init only sets B — A stays (0,0,0). So:
-  // pos += 0.5*1²*B + 1*0 + offset → += (1, 0, 0).
+  // pos = parent + offset + 0.5*1²*B + 1*0 = (1, 0, 0).
   mockTime = 1.0;
   p.update(ParticleType.ParabolicLVGA, false, mesh, parent);
   check(
-    "ParabolicLVGA @ t=1: position += 0.5*t²*B + offset → x=1 (A=0 per ACE init quirk)",
+    "ParabolicLVGA @ t=1: position = parent + 0.5*t²*B + offset → x=1 (A=0 per ACE init quirk)",
     approx(mesh.position.x, 1),
     `pos.x=${mesh.position.x}`
   );
 
   // Second update at lt=2. Non-persistent sets lifetime = elapsed,
   // but lastUpdateTime is NOT updated in non-persistent path (Particle.cs:128-134).
-  // So lt = 2, and pos += 0.5*4*2 + 0 = 4. Cumulative: 1 + 4 = 5.
+  // So lt = 2, and pos is ASSIGNED 0.5*2²*2 = 4 (anchored at parent, not
+  // accumulated onto the t=1 value).
   mockTime = 2.0;
   p.update(ParticleType.ParabolicLVGA, false, mesh, parent);
   check(
-    "ParabolicLVGA @ t=2: position += 0.5*4*2 + 0 = 4 → cumulative x = 1+4 = 5 (faithful ACE += accumulator)",
-    approx(mesh.position.x, 5),
-    "pos.x=" + mesh.position.x + ", expected=5"
+    "ParabolicLVGA @ t=2: position = parent + 0.5*t²*B = 0.5*4*2 = 4 (retail assign, not ACE += accumulator)",
+    approx(mesh.position.x, 4),
+    "pos.x=" + mesh.position.x + ", expected=4"
   );
 }
 

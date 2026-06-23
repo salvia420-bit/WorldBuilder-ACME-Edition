@@ -48,6 +48,8 @@ import { lbKeyOf } from "./landblock_lru.js";
 import { STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT } from "./stream_bake_guard.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 import { attachStaticDefaultScriptsWorld } from "./statics.js";
+// Task #9 — interior animated scenery (banners/flags via default_animation 0x03).
+import { attachAnimatedScenery, animSceneryEnabled } from "./animated_scenery.js";
 
 // ?cellBugParity=retail keeps indoor cells visible from outdoors — matches a known retail rendering quirk for nostalgia research.
 const CELL_BUG_PARITY = (() => {
@@ -365,6 +367,10 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         // the attach filter, so this is a no-op until then.
         defaultScriptId:
           typeof so.defaultScriptId === "number" ? so.defaultScriptId >>> 0 : 0,
+        // Task #9 — interior default_animation (0x03) for animated props
+        // (banners/flags). typeof-guarded; soft-degrades to 0 pre-rebuild.
+        defaultAnimationId:
+          typeof so.defaultAnimationId === "number" ? so.defaultAnimationId >>> 0 : 0,
       });
       if (typeof so.free === "function") so.free();
     }
@@ -538,6 +544,11 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // empty (no-op) until the wasm exposes `defaultScriptId` on EnvCell
   // statics (batched rebuild).
   const scriptedInteriorStatics = [];
+  // Task #9 — interior props with a default_animation (0x03); peeled out of the
+  // frozen per-cell mesh path (when ?animScenery is on) and handed to the
+  // world-frame animated builder so banners/flags wave indoors too.
+  const animatedInteriorStatics = [];
+  const animSceneryOn = animSceneryEnabled();
   let _chunkStart = performance.now();
   for (const snap of snapshots) {
     const cellContainer = new THREE.Group();
@@ -727,6 +738,22 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           qw: so.qw, qx: so.qx, qy: so.qy, qz: so.qz,
         });
       }
+      // Task #9 — peel animated interior props (flag-gated) to the world-frame
+      // animated builder and SKIP their frozen mesh (no double-render). When the
+      // flag is off, fall through to the frozen path (byte-identical).
+      if (animSceneryOn && (so.defaultAnimationId >>> 0) !== 0) {
+        animatedInteriorStatics.push({
+          objId: so.did,
+          defaultAnimationId: so.defaultAnimationId >>> 0,
+          x: so.x, y: so.y, z: so.z,
+          qw: so.qw, qx: so.qx, qy: so.qy, qz: so.qz,
+          scale: 1,
+          worldFrame: true,
+          landblockId,
+          sourceObjIdx: snap.cellId >>> 0,
+        });
+        continue;
+      }
       const geom = staticGeomByDid.get(so.did);
       if (!geom) continue;
       const mat = staticMatByDid.get(so.did) || scene3d.materialCache.fallbackMaterial;
@@ -855,6 +882,21 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     ).catch((e) => {
       // eslint-disable-next-line no-console
       console.warn("[envcell] interior default_script attach failed:", e);
+    });
+  }
+
+  // Task #9 — interior animated props (banners/flags) via the world-frame
+  // animated-scenery builder. Parent each node to ITS cell container (keyed by
+  // sourceObjIdx = cellId) so it inherits the cell's enter-to-show visibility
+  // gate AND is evicted with the container (the rAF detects the orphaned node).
+  // Fire-and-forget; no-op when ?animScenery is off or pre-rebuild.
+  if (animatedInteriorStatics.length > 0) {
+    const cellContainerById = new Map(newCells.map(({ container, cellId }) => [cellId >>> 0, container]));
+    attachAnimatedScenery(scene3d, animatedInteriorStatics, wasmExports, {
+      resolveParent: (item) => cellContainerById.get(item.sourceObjIdx >>> 0) || null,
+    }).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn("[envcell] interior animated scenery attach failed:", e);
     });
   }
 

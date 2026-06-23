@@ -124,6 +124,48 @@ function readSkyWeatherHdrGain() {
   return g;
 }
 
+// === Task #4 (2026-06-23) — sky-object particle (bird/aurora) chain ==========
+//
+// Region SkyObjects carry a `default_pes` (0x33 PhysicsScript) that walks to
+// ParticleType.Swarm emitters — the "birds in the sky" (e.g. 0x330007db →
+// 0x32000455/456/457). The W1 weather path above draws billboards only and
+// never walked this chain (its own TODO), so the sky swarms never rendered.
+// `?skyBirds` is **default-ON** (2026-06-23 user directive); `?skyBirds=off` is
+// the escape. Wires the chain via the shared scenery ParticleManager + chain
+// walker (`statics.js::attachSkyParticleChain`), anchored to a camera-following
+// group so the swarm orbits overhead. `?skyBirdAlt=<m>` tunes the overhead
+// altitude (AC Z-up). Reuses the fixed Swarm trajectory + CallPES loop +
+// gfxobj→surface material from tasks #1-#3. (Visual still pending a 1070 A/B;
+// shipped default-on per directive, `=off` reverts to the empty-sky behavior.)
+const SKY_BIRD_ALTITUDE_DEFAULT = 40.0;
+let _skyBirdsFlagCache;
+function readSkyBirdsFlag() {
+  if (_skyBirdsFlagCache !== undefined) return _skyBirdsFlagCache;
+  let on = true; // default-on; only `?skyBirds=off` disables.
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      on = new URLSearchParams(window.location.search)
+        .get("skyBirds")?.toLowerCase() !== "off";
+    }
+  } catch (_) { on = true; }
+  _skyBirdsFlagCache = on;
+  return on;
+}
+let _skyBirdAltCache;
+function readSkyBirdAltitude() {
+  if (_skyBirdAltCache !== undefined) return _skyBirdAltCache;
+  let a = SKY_BIRD_ALTITUDE_DEFAULT;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = new URLSearchParams(window.location.search).get("skyBirdAlt");
+      const n = v == null ? NaN : parseFloat(v);
+      if (Number.isFinite(n)) a = n;
+    }
+  } catch (_) { /* default */ }
+  _skyBirdAltCache = a;
+  return a;
+}
+
 /**
  * Build a small procedural streak texture (vertical translucent streaks on
  * a transparent ground) used for the UV-scrolling weather billboards. The
@@ -237,6 +279,12 @@ export class SkyDome {
     // Flag-gated (`?skyWeather=on`); pool + shared texture built lazily on
     // the first weather update so the default path pays nothing.
     this._skyWeatherEnabled = readSkyWeatherFlag();
+    // Task #4 — sky-object Swarm particle chain (birds/aurora). Default OFF.
+    this._skyBirdsEnabled = readSkyBirdsFlag();
+    this._skyBirdAltitude = readSkyBirdAltitude();
+    this._skyBirdAnchor = null;        // lazy camera-following THREE.Group
+    this._skyBirdChainsAttached = null; // Set<pesObjectId>, lazy
+    this._skyBirdChainWarned = false;
     this._weatherPool = null;     // THREE.Mesh[] or null until built
     this._weatherTex = null;      // shared CanvasTexture (cloned per-mesh)
     this._weatherTexBuilt = false;
@@ -463,6 +511,59 @@ export class SkyDome {
    * @param {number} _dt
    * @param {THREE.Camera} camera
    */
+  /**
+   * Task #4 (2026-06-23) — realize Region SkyObject Swarm chains (the birds in
+   * the sky). For each VISIBLE SkyObject carrying a `default_pes` (0x33), attach
+   * its CreateParticle→ParticleEmitter(Swarm) chain ONCE to the camera-following
+   * `_skyBirdAnchor`, via the shared scenery ParticleManager
+   * (`statics.js::attachSkyParticleChain` — reuses the fixed Swarm trajectory,
+   * the CallPES loop, and the gfxobj→surface material). Idempotent per
+   * pesObjectId. Gated by `?skyBirds=on`; no-op without the snapshot/exports.
+   * Called from loop.js::tickWeatherState with `getSkyObjectStates()`.
+   * @param {Array|null} skyObjects getSkyObjectStates() snapshot
+   * @param {object|null} wasmExports
+   */
+  updateSkyParticleChains(skyObjects, wasmExports) {
+    if (!this._skyBirdsEnabled) return;
+    if (!Array.isArray(skyObjects) || skyObjects.length === 0 || !wasmExports) return;
+    const scene3d = this.liveScene3dRef;
+    if (!scene3d) return;
+    if (!this._skyBirdAnchor) {
+      this._skyBirdAnchor = new THREE.Group();
+      this._skyBirdAnchor.name = "sky-bird-anchor";
+      this._skyBirdAnchor.frustumCulled = false;
+      this.scene.add(this._skyBirdAnchor); // world scene → world-scale particles
+      this._skyBirdChainsAttached = new Set();
+    }
+    for (const o of skyObjects) {
+      if (!o) continue;
+      let pes = 0;
+      let vis = true;
+      try {
+        pes = (o.pesObjectId >>> 0);
+        vis = (typeof o.visible === "boolean") ? o.visible : true;
+      } catch (_) { continue; }
+      if (pes === 0 || !vis) continue;
+      if (this._skyBirdChainsAttached.has(pes)) continue;
+      this._skyBirdChainsAttached.add(pes); // guard set BEFORE the async attach
+      // eslint-disable-next-line no-await-in-loop -- fire-and-forget, not awaited
+      import("./statics.js")
+        .then((m) =>
+          m.attachSkyParticleChain(scene3d, this._skyBirdAnchor, pes, wasmExports, `sky:${pes}`)
+        )
+        .catch((e) => {
+          this._skyBirdChainsAttached.delete(pes); // allow a retry next snapshot
+          if (!this._skyBirdChainWarned) {
+            this._skyBirdChainWarned = true;
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[sky-birds] chain attach for 0x${pes.toString(16)} failed:`, e
+            );
+          }
+        });
+    }
+  }
+
   tick(_dt, camera) {
     this._tickCount += 1;
 
@@ -480,6 +581,23 @@ export class SkyDome {
       }
     }
     this._lastIsIndoor = isIndoor;
+
+    // Task #4 — keep the sky-swarm (bird) anchor overhead, following the camera
+    // (AC Z-up). Hidden indoors (no birds through ceilings). The emitters tick
+    // on the shared static ParticleManager; only the anchor transform moves
+    // here, so the Swarm particles orbit around the player wherever they go.
+    if (this._skyBirdAnchor) {
+      if (camera && camera.position && !isIndoor) {
+        this._skyBirdAnchor.visible = true;
+        this._skyBirdAnchor.position.set(
+          camera.position.x,
+          camera.position.y,
+          camera.position.z + this._skyBirdAltitude
+        );
+      } else {
+        this._skyBirdAnchor.visible = false;
+      }
+    }
 
     if (this.cloudOverlay) {
       const cachedState =

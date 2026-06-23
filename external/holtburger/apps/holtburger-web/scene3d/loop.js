@@ -939,6 +939,11 @@ function tickWeatherState(scene3d, sessionHandle) {
     if (scene3d?.skyDome?.updateWeatherSkyObjects) {
       scene3d.skyDome.updateWeatherSkyObjects(skyObjects, indoor);
     }
+    // Task #4 — realize SkyObject Swarm (bird/aurora) particle chains from the
+    // same snapshot. Self-gated on `?skyBirds=on`; idempotent per pesObjectId.
+    if (scene3d?.skyDome?.updateSkyParticleChains) {
+      scene3d.skyDome.updateSkyParticleChains(skyObjects, scene3d.wasmExports);
+    }
   } catch (_) {
     // Weather wiring must never kill the frame.
   }
@@ -1873,6 +1878,9 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       try { tickStaticParticles(scene3d); } catch (_) {}
     }
   }
+  // Task #7 — animated-scenery mixers are driven by a self-managed rAF in
+  // animated_scenery.js (mirrors the static-particle _spLoop), because this
+  // function's `dt` arrives as 0 on the net-drain path. No tick here.
   // ── DEFERRABLE #20 (group NAME) — DOM-projected nameplate overlay. ───
   // The single biggest deferrable (5-50 ms): a full project-every-entity +
   // DOM-write pass. Runs LAST, after every CRITICAL phase has already had
