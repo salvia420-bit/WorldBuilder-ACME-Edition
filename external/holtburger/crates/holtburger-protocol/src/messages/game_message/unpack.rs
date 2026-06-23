@@ -204,6 +204,9 @@ impl ProtocolUnpack for GameMessage {
             GameOpcode::PlayEffect => Some(GameMessage::PlayEffect(Box::new(
                 PlayEffectData::unpack(data, offset)?,
             ))),
+            GameOpcode::AdminEnvirons => Some(GameMessage::EnvironChange(Box::new(
+                EnvironChangeData::unpack(data, offset)?,
+            ))),
             GameOpcode::PrivateUpdatePropertyInt => Some(GameMessage::PrivateUpdatePropertyInt(
                 Box::new(PrivateUpdatePropertyIntData::unpack(data, offset)?),
             )),

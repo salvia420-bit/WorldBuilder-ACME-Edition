@@ -999,6 +999,24 @@ function readFogLerpFlag() {
 function tickDistanceFogColor(scene3d) {
   const fog = scene3d?.scene?.fog;
   if (!fog || !fog.color || typeof fog.color.setHex !== "function") return;
+  // AdminEnvirons (0xEA60) fog override — server-pushed RedFog/BlueFog/etc.
+  // (acclient.c:396344-416). Set by index.html's kind-60 handler; takes
+  // precedence over the region/sky fog until a Clear (0x00) nulls it. `rgb`
+  // is sRGB hex (0xRRGGBB); `fogMax` is the AC far band. (On the default
+  // atmosphere path the visible distance haze is the sky/cloud horizon, not
+  // `scene.fog` — full-coverage environ fog there is a follow-up; this
+  // override fully drives the wireframe / `?fogLerp` linear THREE.Fog.)
+  const environOv = (typeof window !== "undefined") ? window.__environFogOverride : null;
+  if (environOv && Number.isFinite(environOv.rgb)) {
+    fog.color.setHex(environOv.rgb & 0xffffff);
+    if (typeof fog.far === "number" && Number.isFinite(environOv.fogMax) && environOv.fogMax > 0) {
+      fog.far = environOv.fogMax;
+      if (typeof fog.near === "number" && fog.near >= environOv.fogMax) {
+        fog.near = environOv.fogMax * 0.1;
+      }
+    }
+    return;
+  }
   const state = scene3d.skyLightingController?._lastState ?? null;
   if (!state) return;
   const useLerp = readFogLerpFlag();

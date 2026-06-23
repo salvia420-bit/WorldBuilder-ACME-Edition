@@ -67,6 +67,33 @@ impl ProtocolPack for PlayEffectData {
     }
 }
 
+/// AdminEnvirons (0xEA60) payload — a single `EnvironChangeType` enum
+/// value. Fog tint (0x00-0x06) or environment sound (0x65-0x7B); the
+/// client decides the reaction (fog colors / sound-table lookup), the
+/// server only names the change. ACE `GameMessageAdminEnvirons` writes
+/// exactly this u32 (no target guid).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnvironChangeData {
+    pub change_type: u32,
+}
+
+impl ProtocolUnpack for EnvironChangeData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let change_type = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+        *offset += 4;
+        Some(EnvironChangeData { change_type })
+    }
+}
+
+impl ProtocolPack for EnvironChangeData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.change_type).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

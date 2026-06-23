@@ -97,6 +97,7 @@ pub enum GameMessage {
     SetState(Box<SetStateData>),
     PlaySound(Box<PlaySoundData>),
     PlayEffect(Box<PlayEffectData>),
+    EnvironChange(Box<EnvironChangeData>),
 
     Unknown(u32, Vec<u8>),
 }

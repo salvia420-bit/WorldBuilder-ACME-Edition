@@ -17265,6 +17265,15 @@ const CLIENT_EVENT_KIND_DOOR_STATE_CHANGED: u32 = 15;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_SOUND_TRIGGERED: u32 = 16;
 
+/// AdminEnvirons (0xEA60) — server-pushed environment change. `u32Payload`
+/// = `EnvironChangeType`: fog tint (0x00 Clear / 0x01-0x06 Red/Blue/White/
+/// Green/Black fog) or environment sound (0x65-0x7B Roar/Bell/Chant/…/
+/// Thunder). JS-side (`index.html` drainEvents) applies the fog override
+/// or plays the environ sound. Retail: acclient.c:396298
+/// (`CPlayerSystem::Handle_Admin__Environs`).
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_ENVIRON_CHANGE: u32 = 60;
+
 /// An entity's draw-gate flipped. ACE's retail client gates rendering
 /// on bits of `PhysicsState` from `~/ac-headers/acclient.h`:
 /// `HIDDEN = 0x4000`, `NO_DRAW = 0x20`, `CLOAKED = 0x100000`. The
@@ -38375,6 +38384,21 @@ async fn recv_loop(
                                 u32_payload: Some(u32::from(data.target)),
                                 u32_payload_2: Some(data.sound_id),
                                 f32_payload: Some(data.volume),
+                            });
+                        }
+                        GameMessage::EnvironChange(data) => {
+                            // AdminEnvirons (0xEA60) — server-pushed fog/sound
+                            // environment change. Forward the raw
+                            // EnvironChangeType to JS as a kind=60 ClientEvent;
+                            // the drainEvents handler applies the fog tint
+                            // override (0x00-0x06) or plays the environ sound
+                            // (0x65-0x7B). Retail: acclient.c:396298.
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_ENVIRON_CHANGE,
+                                string_payload: None,
+                                u32_payload: Some(data.change_type),
+                                u32_payload_2: None,
+                                f32_payload: None,
                             });
                         }
                         GameMessage::CharacterError(data) => {

@@ -7825,6 +7825,85 @@
                       });
                   }
                 }
+              } else if (evt.kind === 60) {
+                // AdminEnvirons (0xEA60) — server-pushed environment change
+                // (retail CPlayerSystem::Handle_Admin__Environs, acclient.c:396298).
+                // evt.u32Payload = EnvironChangeType:
+                //   0x00 Clear · 0x01-0x06 fog tint · 0x65-0x7B environment sound.
+                const ec = evt.u32Payload >>> 0;
+                if (ec <= 0x06) {
+                  // FOG: set a global override the distance-fog tick
+                  // (scene3d/loop.js::tickDistanceFogColor) respects until a
+                  // Clear (0x00) resets it. Colors + fogMax from retail
+                  // (acclient.c:396344-416; ARGB 0x64RRGGBB -> RGB). Clear
+                  // restores the region/sky fog.
+                  const ENVIRON_FOG = {
+                    0x01: { rgb: 0x960000, fogMax: 50 }, // RedFog
+                    0x02: { rgb: 0x320096, fogMax: 50 }, // BlueFog
+                    0x03: { rgb: 0x646464, fogMax: 30 }, // WhiteFog
+                    0x04: { rgb: 0x1e6400, fogMax: 50 }, // GreenFog
+                    0x05: { rgb: 0x969696, fogMax: 40 }, // BlackFog
+                    0x06: { rgb: 0x969696, fogMax: 40 }, // BlackFog2 (== BlackFog)
+                  };
+                  window.__environFogOverride = ec === 0x00 ? null : (ENVIRON_FOG[ec] || null);
+                  // eslint-disable-next-line no-console
+                  console.log(
+                    `[environ] fog change 0x${ec.toString(16)} -> `
+                    + `${window.__environFogOverride ? `override rgb=0x${window.__environFogOverride.rgb.toString(16)}` : "clear (region fog)"}`,
+                  );
+                } else if (ec >= 0x65) {
+                  // SOUND: retail plays SoundType (= EnvironChangeType + 0x11)
+                  // from the UI SoundTable via PlaySoundFromCenter
+                  // (acclient.c:396438+) — non-positional ("from center"), so
+                  // play at the listener. Resolve via the canonical sound
+                  // table (0x20000001; override with window.__environSoundTableDid).
+                  // NOTE: the exact retail UI SoundTable DID is unconfirmed (the
+                  // decomp loads it dynamically) — fail-soft if 0x20000001 lacks
+                  // the 0x76-0x8A environ slots.
+                  const ENVIRON_SOUND_TABLE = (window.__environSoundTableDid >>> 0) || 0x20000001;
+                  const soundType = (ec + 0x11) >>> 0;
+                  const scene3d = window.liveScene3d;
+                  const cache = scene3d?.soundTableCache ?? null;
+                  const audioMgr = scene3d?.audioManager ?? null;
+                  // eslint-disable-next-line no-console
+                  console.log(
+                    `[environ] sound 0x${ec.toString(16)} -> sType 0x${soundType.toString(16)} `
+                    + `via stb 0x${ENVIRON_SOUND_TABLE.toString(16)}`
+                    + `${(cache && audioMgr) ? "" : " (no 3D audio runtime — skip)"}`,
+                  );
+                  if (cache && audioMgr) {
+                    cache.resolveSound(ENVIRON_SOUND_TABLE, soundType)
+                      .then((entry) => {
+                        if (!entry) {
+                          // eslint-disable-next-line no-console
+                          console.debug(
+                            `[environ] no sound for type 0x${ec.toString(16)} `
+                            + `(sType 0x${soundType.toString(16)}) on stb 0x`
+                            + `${ENVIRON_SOUND_TABLE.toString(16)} — skip`,
+                          );
+                          return;
+                        }
+                        // Co-locate with the (camera-anchored) listener so the
+                        // environ cue is heard "around" the player, not from a
+                        // direction. camera.position is already three.js-frame.
+                        const cam = scene3d?.camera?.position;
+                        const pos = cam ? { x: cam.x, y: cam.y, z: cam.z } : { x: 0, y: 0, z: 0 };
+                        const gain = entry.volume > 0 ? entry.volume : 1.0;
+                        // eslint-disable-next-line no-console
+                        console.log(`[environ] sound playing wave 0x${(entry.waveDid >>> 0).toString(16)} gain=${gain.toFixed(2)}`);
+                        return audioMgr.play(entry.waveDid, pos, {
+                          category: "ambient",
+                          gain,
+                          refDistance: 1e6,
+                          rolloffFactor: 0,
+                        });
+                      })
+                      .catch((e) => {
+                        // eslint-disable-next-line no-console
+                        console.warn(`[environ] sound resolve/play threw for type 0x${ec.toString(16)}:`, e);
+                      });
+                  }
+                }
               } else if (evt.kind === 19) {
                 // Phase C — structured combat event for plugin
                 // subscribers. The recv loop also emits a kind=2 chat

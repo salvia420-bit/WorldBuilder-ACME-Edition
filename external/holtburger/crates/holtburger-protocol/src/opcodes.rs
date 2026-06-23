@@ -301,8 +301,10 @@ pub enum GameOpcode {
     /// C2S: Wrapper for various game actions.
     /// High-level container for client-initiated actions such as using items, talking, or moving.
     GameAction = 0xF7B1,
-    // /// S2C: Admin environs (legacy admin tool).
-    // AdminEnvirons = 0xEA60,
+    /// S2C: Admin environs — server-pushed environment change
+    /// (`EnvironChangeType`): fog tint (0x00-0x06) or environment sound
+    /// (0x65-0x7B). ACE `GameMessageAdminEnvirons`; payload `u32 change_type`.
+    AdminEnvirons = 0xEA60,
 
     // --- Data Download (DDD) ---
     /// S2C: Data download interrogation.

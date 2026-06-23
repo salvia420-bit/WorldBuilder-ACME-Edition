@@ -252,6 +252,11 @@ impl ProtocolPack for GameMessage {
                     .unwrap();
                 data.pack(buf);
             }
+            GameMessage::EnvironChange(data) => {
+                buf.write_u32::<LittleEndian>(GameOpcode::AdminEnvirons as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
             GameMessage::PrivateUpdatePropertyInt(data) => {
                 buf.write_u32::<LittleEndian>(GameOpcode::PrivateUpdatePropertyInt as u32)
                     .unwrap();
