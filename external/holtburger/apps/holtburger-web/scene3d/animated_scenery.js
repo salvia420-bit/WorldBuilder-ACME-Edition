@@ -24,7 +24,7 @@
 // keyframes from `fetchAnimation`. AC Z-up object space (see statics.js anchors),
 // so part AFrames apply with no handedness conversion.
 //
-// **Flagged `?animScenery=on` (default OFF).** Outdoor placements anchor to
+// **`?animScenery` default-ON (`?animScenery=off` escape).** Outdoor placements anchor to
 // `scene3d.staticsGroup`; interior (EnvCell) placements pass `worldFrame:true`
 // items + an `opts.resolveParent` so the node parents to its cell container
 // (inheriting the cell's enter-to-show visibility gate). Eviction is handled by
@@ -69,13 +69,13 @@ function tickRadiusSq() {
 let _animSceneryFlag;
 export function animSceneryEnabled() {
   if (_animSceneryFlag !== undefined) return _animSceneryFlag;
-  let on = false;
+  let on = true; // default-ON (2026-06-23 user directive); ?animScenery=off escape.
   try {
     if (typeof window !== "undefined" && window.location) {
       on = new URLSearchParams(window.location.search)
-        .get("animScenery")?.toLowerCase() === "on";
+        .get("animScenery")?.toLowerCase() !== "off";
     }
-  } catch (_) { on = false; }
+  } catch (_) { on = true; }
   _animSceneryFlag = on;
   return on;
 }
