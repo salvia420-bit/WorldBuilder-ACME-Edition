@@ -30,6 +30,9 @@ export const ALLOWED_WRITES = Object.freeze(new Set([
   "partTransform",    // render.partTransform (animated_scenery template)
   "materialUniform",  // material.clonedUniform
   "emitter",          // synthesized particle emitter
+  "lightIntensity",   // mech:"light" — render-time .intensity of a POOLED/cloned
+                      // light slot ONLY; NEVER .visible or the light COUNT (the
+                      // no-relink rule). lightCountDelta must still be 0.
 ]));
 
 // FORBIDDEN concepts (documentation; enforced because reads/writes must be a

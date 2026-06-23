@@ -38,6 +38,7 @@
 import * as THREE from "three";
 import { tickCellVisibility3D, tickPvsLoadExpansion } from "./cells.js";
 import { tickLightingForCellState } from "./lighting.js";
+import { tickFlameFlicker } from "./vfx/components/flameFlicker.js";
 import { getTerrainVisualZ, cullTerrainGroup } from "./terrain.js?v=phase-d-batch";
 import { SHADOW_RECEIVE_RANGE_SQ_M as BUILDINGS_SHADOW_RANGE_SQ_M } from "./buildings.js";
 import {
@@ -1736,6 +1737,21 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
     if (!scene3d._lightingTickWarned) {
       scene3d._lightingTickWarned = true;
       console.warn("[phase7.6] tickLightingForCellState threw:", e);
+    }
+  }
+  // VFX Phase 1 (light.flameFlicker) — torch/brazier intensity jitter. Runs
+  // AFTER the lighting tick so the pool slots are already re-fed from their
+  // sources this frame; it multiplies the occupied point-slot intensities by a
+  // deterministic flame waveform. Hard no-op (byte-identical) unless ?visual &&
+  // ?flameFlicker AND ?lightPool=on. Intensity-only — never a light count /
+  // visibility change (THE RULE / the no-relink discipline).
+  try {
+    tickFlameFlicker(scene3d);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    if (!scene3d._flameFlickerTickWarned) {
+      scene3d._flameFlickerTickWarned = true;
+      console.warn("[vfx] tickFlameFlicker threw:", e);
     }
   }
   // Wave 1.E (2026-05-28) — player-tracked shadow-receive gate.

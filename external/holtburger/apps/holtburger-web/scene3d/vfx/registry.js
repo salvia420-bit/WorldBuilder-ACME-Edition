@@ -30,7 +30,7 @@ export const FAMILY_ORDER = { deformation: 0, texture: 1, weathering: 2, emissiv
 const READ_CAPS = new Set([
   "geometry", "surface", "setup", "weenieProps", "serverPose", "instanceHash", "clock", "drawCastSubstate", "weather",
 ]);
-const WRITE_CAPS = new Set(["renderTransform", "partTransform", "materialUniform", "emitter"]);
+const WRITE_CAPS = new Set(["renderTransform", "partTransform", "materialUniform", "emitter", "lightIntensity"]);
 const FAMILIES = new Set(["deformation", "weathering", "emissive", "texture", "particle"]);
 const MECHS = new Set(["A", "B", "frag", "light", "particle"]);
 
