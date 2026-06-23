@@ -307,6 +307,7 @@ public class JsonCommandProcessor {
             // Visual-Behavior Suite (build-spec §12.2) — see CommandEngine.Vfx.cs
             ["vfx-classify"] = CmdVfxClassify,
             ["vfx-emit-allowlist"] = CmdVfxEmitAllowlist,
+            ["vfx-gauge"] = CmdVfxGauge,
             ["chorizite-dump-enum-values"] = CmdChoriziteDumpEnumValues,
             ["chorizite-dump-world-object-taxonomy"] = CmdChoriziteDumpWorldObjectTaxonomy,
             ["chorizite-hash-string"] = CmdChoriziteHashString,
@@ -1130,6 +1131,32 @@ public class JsonCommandProcessor {
             count = r.Dids.Length,
             selectorOnly = r.SelectorOnly,
             dids = r.Dids.Select(d => $"0x{d:X8}"),
+        });
+    }
+
+    private string CmdVfxGauge(System.Text.Json.Nodes.JsonNode node) {
+        string reference = node["ref"]?.GetValue<string>() ?? "holtburg";
+        var r = _engine.VfxGauge(reference);
+        if (r.Error != null) {
+            return Serialize(new { success = false, command = "vfx-gauge", reference, error = r.Error, verdict = r.Verdict });
+        }
+        // success=false / withinBudget=false when a structural gate trips (the gate, build-spec §12.2).
+        return Serialize(new {
+            success = r.Success,
+            command = "vfx-gauge",
+            reference = r.Reference,
+            uniqueModels = r.UniqueModels,
+            totalPlacements = r.TotalPlacements,
+            drawcallsDelta = r.DrawcallsDelta,
+            programsDelta = r.ProgramsDelta,
+            vramMB = r.VramMB,
+            particleEmitters = r.ParticleEmitters,
+            headroomPct = r.HeadroomPct,
+            withinBudget = r.WithinBudget,
+            verdict = r.Verdict,
+            timingMeter = r.TimingMeter,
+            archetypeBreakdown = r.ArchetypeBreakdown,
+            gates = r.Gates.Select(g => new { id = g.Id, name = g.Name, pass = g.Pass, detail = g.Detail }),
         });
     }
 

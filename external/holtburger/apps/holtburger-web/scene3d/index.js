@@ -267,6 +267,11 @@ const PVS_RING_RADIUS = (() => {
 // ?atmosphere=off. Zero overhead unless the flag is set.
 let _renderDiagArmed;
 function recordRenderDiag(renderer, scene) {
+  // ?vfxGauge=on (build-spec §11.7) — close the T_cpu/T_gpu window opened by
+  // vfxGaugeBeginFrame just before the render submission. Independent of the
+  // ?renderDiag flag below; itself a no-op when ?vfxGauge is off (so this line
+  // adds zero cost on the normal render path).
+  vfxGaugeEndFrame(renderer);
   if (_renderDiagArmed === undefined) {
     try {
       _renderDiagArmed =
@@ -303,6 +308,152 @@ function recordRenderDiag(renderer, scene) {
     };
   } catch (_) {
     /* a diagnostic must never break the frame */
+  }
+}
+
+// ── Visual-Behavior Suite — ?vfxGauge=on tick instrumentation (build-spec
+// §11.7, the gauge Half-B Timing-Meter runtime hook). Wraps the render tick
+// (tickPerFrame → renderer.render → recordRenderDiag) with a T_cpu
+// performance.now() pair + a T_gpu source: (1) EXT_disjoint_timer_query_webgl2
+// if present, (2) a gl.finish() fence (perturbs the pipeline — gauge-only),
+// (3) else N/A. Exposes the numbers on window.__diag.vfxGauge.
+//
+// CRITICAL (build-spec §11.7): ZERO cost when unarmed. The whole apparatus
+// sits behind ONE lazy module flag (mirrors `_renderDiagArmed` above). When
+// ?vfxGauge is off, vfxGaugeBeginFrame/vfxGaugeEndFrame return on their first
+// line and the normal render path is byte-IDENTICAL (no timestamp, no GL call,
+// no allocation). The timing numbers are 1070-only meaningful — on SwiftShader
+// they are reported but flagged software-GL (the C# Half-A is the CI gate).
+let _vfxGaugeState; // undefined = not yet probed; null = disarmed; object = armed
+function _vfxGaugeArm(renderer) {
+  if (_vfxGaugeState !== undefined) return _vfxGaugeState;
+  let armed = false;
+  try {
+    armed =
+      typeof window !== "undefined" &&
+      /(?:^|[?&])vfxGauge=(on|1|true|yes)(?:&|$)/i.test(window.location.search);
+  } catch (_) {
+    armed = false;
+  }
+  if (!armed) {
+    _vfxGaugeState = null;
+    return null;
+  }
+  // Probe the GPU-time source ONCE (only when armed → zero cost when off).
+  let gl = null,
+    timerExt = null,
+    useFence = false;
+  try {
+    gl = renderer && renderer.getContext ? renderer.getContext() : null;
+    if (gl && typeof gl.getExtension === "function") {
+      timerExt = gl.getExtension("EXT_disjoint_timer_query_webgl2");
+    }
+    // ?vfxGaugeFence=on opts into the gl.finish() fence when no timer query
+    // exists. It perturbs the async-submit pipeline so it is OPT-IN only.
+    if (!timerExt) {
+      useFence =
+        /(?:^|[?&])vfxGaugeFence=(on|1|true|yes)(?:&|$)/i.test(
+          window.location.search
+        );
+    }
+  } catch (_) {
+    /* leave source as N/A */
+  }
+  let gpuSource = "n/a";
+  if (timerExt) gpuSource = "timerQuery";
+  else if (useFence) gpuSource = "fence";
+  _vfxGaugeState = {
+    gl,
+    timerExt,
+    useFence,
+    gpuSource,
+    query: null, // in-flight timer query
+    tCpuStart: 0,
+    tCpuMs: 0,
+    tGpuMs: -1, // -1 = not-yet / N/A
+    frames: 0,
+  };
+  try {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[vfx-gauge] ?vfxGauge=on — T_gpu source: ${gpuSource}` +
+        (gpuSource === "n/a"
+          ? " (no timer query; add ?vfxGaugeFence=on for a gl.finish fence — perturbs)"
+          : "")
+    );
+  } catch (_) {
+    /* logging must never break boot */
+  }
+  return _vfxGaugeState;
+}
+
+function vfxGaugeBeginFrame(renderer) {
+  const s = _vfxGaugeArm(renderer);
+  if (!s) return; // disarmed → byte-identical render path, ZERO cost
+  try {
+    s.tCpuStart =
+      typeof performance !== "undefined" && performance.now
+        ? performance.now()
+        : 0;
+    if (s.timerExt && s.gl && !s.query) {
+      // Begin a GPU timer query around this frame's submission.
+      const q = s.gl.createQuery();
+      s.gl.beginQuery(s.timerExt.TIME_ELAPSED_EXT, q);
+      s.query = q;
+    }
+  } catch (_) {
+    /* a gauge must never break the frame */
+  }
+}
+
+function vfxGaugeEndFrame(renderer) {
+  const s = _vfxGaugeState;
+  if (!s) return; // disarmed (or not yet probed) → nothing to do
+  try {
+    if (s.timerExt && s.gl && s.query) {
+      s.gl.endQuery(s.timerExt.TIME_ELAPSED_EXT);
+      // Poll the PREVIOUS query (results are async — never block the frame).
+      const available = s.gl.getQueryParameter(
+        s.query,
+        s.gl.QUERY_RESULT_AVAILABLE
+      );
+      const disjoint = s.gl.getParameter(s.timerExt.GPU_DISJOINT_EXT);
+      if (available && !disjoint) {
+        const ns = s.gl.getQueryParameter(s.query, s.gl.QUERY_RESULT);
+        s.tGpuMs = ns / 1e6;
+        s.gl.deleteQuery(s.query);
+        s.query = null;
+      }
+    } else if (s.useFence && s.gl) {
+      // Fence fallback — gl.finish() blocks until the GPU drains this frame,
+      // so (now − cpuStart) ≈ max(T_cpu, T_gpu). Perturbs; gauge-only, opt-in.
+      s.gl.finish();
+      s.tGpuMs =
+        (typeof performance !== "undefined" && performance.now
+          ? performance.now()
+          : 0) - s.tCpuStart;
+    }
+    s.tCpuMs =
+      (typeof performance !== "undefined" && performance.now
+        ? performance.now()
+        : 0) - s.tCpuStart;
+    s.frames += 1;
+    if (!window.__diag) window.__diag = {};
+    window.__diag.vfxGauge = {
+      armed: true,
+      gpuSource: s.gpuSource,
+      tCpuMs: s.tCpuMs,
+      tGpuMs: s.tGpuMs, // -1 when N/A / not-yet-available
+      frames: s.frames,
+      // SwiftShader has no representative GPU clock — flag it loudly so a
+      // reader never mistakes a software-GL number for a 1070 measurement.
+      note:
+        s.gpuSource === "n/a"
+          ? "T_gpu N/A — no timer query (Half-A C# estimator is the CI gate; timing is 1070-only)"
+          : "timing is 1070-only meaningful; SwiftShader GPU clock is not representative",
+    };
+  } catch (_) {
+    /* a gauge must never break the frame */
   }
 }
 
@@ -1900,6 +2051,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // to the original perspective camera so the Phase 7.0 hello-cube
     // capture path keeps working.
     const activeCam = liveScene3dRef?.cameraSwitcher?.activeCamera ?? camera;
+    // ?vfxGauge=on (build-spec §11.7) — open the T_cpu/T_gpu window around the
+    // render submission below. No-op (returns on line 1) when the flag is off,
+    // so the render path stays byte-identical. Both the composer and the direct
+    // path converge on recordRenderDiag(), which closes the window.
+    vfxGaugeBeginFrame(renderer);
     // Workstream Sky-I-C (2026-05-11) — render the sky pass FIRST,
     // then the world OVER it. The sky pass clears the framebuffer
     // (color+depth) and paints the dome + celestials. We then clear

@@ -2964,9 +2964,10 @@ public class TerminalRepl {
     // Two verbs land in Phase-0 commit 2: `classify` and `emit-allowlist`.
     private void HandleVfx(string[] tokens) {
         if (tokens.Length < 2) {
-            Console.WriteLine("Usage: vfx <classify|emit-allowlist> ...");
+            Console.WriteLine("Usage: vfx <classify|emit-allowlist|gauge> ...");
             Console.WriteLine("  vfx classify <DID>            run the auto-classifier cascade on a SetupDID");
             Console.WriteLine("  vfx emit-allowlist <archetype>  enumerate the DID set the archetype's rule matches");
+            Console.WriteLine("  vfx gauge [--ref holtburg]   Half-A static cost estimator + structural gates");
             return;
         }
         try {
@@ -2999,6 +3000,33 @@ public class TerminalRepl {
                         + (r.SelectorOnly ? " (selector-only — needs weenie props, build-spec §18 #1)" : ""));
                     foreach (var did in r.Dids)
                         Console.WriteLine($"  0x{did:X8}");
+                    break;
+                }
+                case "gauge": {
+                    // Default --ref holtburg; accept "vfx gauge" and "vfx gauge --ref holtburg".
+                    string reference = "holtburg";
+                    for (int i = 2; i < tokens.Length - 1; i++) {
+                        if (tokens[i] == "--ref") { reference = tokens[i + 1]; i++; }
+                    }
+                    var r = _engine.VfxGauge(reference);
+                    if (r.Error != null) { Console.WriteLine($"Error: {r.Error}"); return; }
+                    Console.WriteLine($"vfx gauge --ref {r.Reference}  (Half-A static estimator)");
+                    Console.WriteLine($"  uniqueModels      {r.UniqueModels}   (totalPlacements {r.TotalPlacements} — cost summed PER UNIQUE DRIVER, NOT per placement)");
+                    Console.WriteLine($"  programsDelta     {r.ProgramsDelta}");
+                    Console.WriteLine($"  drawcallsDelta    {r.DrawcallsDelta}");
+                    Console.WriteLine($"  vramMB            {r.VramMB:F2}");
+                    Console.WriteLine($"  particleEmitters  {r.ParticleEmitters}");
+                    Console.WriteLine($"  headroomPct       {r.HeadroomPct:F1}%   (G1 program-link budget)");
+                    if (r.ArchetypeBreakdown.Count > 0) {
+                        Console.WriteLine("  archetypes:");
+                        foreach (var kv in r.ArchetypeBreakdown.OrderByDescending(k => k.Value))
+                            Console.WriteLine($"    {kv.Key}: {kv.Value}");
+                    }
+                    Console.WriteLine("  gates:");
+                    foreach (var g in r.Gates)
+                        Console.WriteLine($"    [{(g.Pass ? "PASS" : "FAIL")}] {g.Id} {g.Name} — {g.Detail}");
+                    Console.WriteLine($"  timing meter: {r.TimingMeter}");
+                    Console.WriteLine($"  VERDICT: {r.Verdict}  (withinBudget={r.WithinBudget})");
                     break;
                 }
                 default:
