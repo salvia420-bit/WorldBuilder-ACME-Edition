@@ -38,7 +38,11 @@ import * as THREE from "three";
 import { meshToGeometryGroups } from "./adapter.js";
 import { surfacePixelsFetcher } from "./bake_worker_client.js";
 import { treeWindEnabled, treeWindStrength, treeWindDir } from "./tree_wind.js";
-import { buildTreeWindClip, buildBboxRig, partBBox, hash01 } from "./wind_rig.js";
+import { buildBboxRig, partBBox, hash01 } from "./wind_rig.js";
+// VFX (Visual-Behavior Suite): the live tree-wind runtime now generates its
+// clip through the deformation.windBend component (byte-identical wrapper over
+// buildTreeWindClip). archetype #1's MECH-A consumer.
+import { windBend } from "./vfx/components/windBend.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const DEFAULT_ANIM_FPS = 30.0;
@@ -390,7 +394,7 @@ function getOrCreateWindGroup(groupKey, numParts, rig, windParams) {
   const existing = _didGroups.get(groupKey);
   if (existing) return existing;
   if (numParts <= 0) return null;
-  const { frames, numFrames, fps } = buildTreeWindClip(numParts, rig, windParams);
+  const { frames, numFrames, fps } = windBend.buildClip({ numParts, rig }, windParams);
   const clip = buildSceneryAnimationClip(THREE, frames, numParts, numFrames, fps);
   if (!clip) return null;
   const template = new THREE.Group();

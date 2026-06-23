@@ -38,6 +38,13 @@ check("buildClip returns {frames,numParts,numFrames,fps}",
   !!a && a.frames instanceof Float32Array && a.numParts === 3 && a.numFrames > 0 && a.fps === 30);
 check("★ buildClip byte-identical to inline buildBboxRig+buildTreeWindClip (?treeWind unchanged)",
   eqF32(a.frames, b.frames), `lenA=${a.frames.length} lenB=${b.frames.length}`);
+
+// 1c rewire: the live runtime calls buildClip({numParts, rig}, cfg) with its
+// precomputed per-setupId rig. That must equal the partBoxes path AND the old
+// inline buildTreeWindClip(numParts, rig, cfg) call → byte-identical swap.
+const aRig = windBend.buildClip({ numParts: 3, rig }, cfg);
+check("★ buildClip({numParts,rig}) == partBoxes path == inline buildTreeWindClip (runtime swap byte-identical)",
+  eqF32(aRig.frames, a.frames) && eqF32(aRig.frames, b.frames));
 check("validateComponent(windBend) clean", validateComponent(windBend).length === 0,
   validateComponent(windBend).join("; "));
 check("legacy-safe manifest: lightCountDelta 0 + deterministic + cacheKeyScope none",

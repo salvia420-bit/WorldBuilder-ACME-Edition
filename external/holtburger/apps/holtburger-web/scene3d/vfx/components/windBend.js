@@ -41,7 +41,11 @@ export const windBend = {
    *          the flat clip for buildSceneryAnimationClip — byte-identical to today's inline call.
    */
   buildClip(ctx, config) {
-    const rig = buildBboxRig(ctx.partBoxes, ctx.hingeFrames).rigs;
+    // Accept a PRECOMPUTED rig (the live runtime passes its per-setupId cached
+    // rig) OR derive it from per-part bounding boxes (offline / tests). Either
+    // way the clip is the same buildTreeWindClip(numParts, rig, config) call the
+    // runtime made inline before — byte-identical.
+    const rig = ctx.rig || buildBboxRig(ctx.partBoxes, ctx.hingeFrames).rigs;
     return buildTreeWindClip(ctx.numParts, rig, config || {});
   },
 };
