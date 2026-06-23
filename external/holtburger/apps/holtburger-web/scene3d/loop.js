@@ -35,6 +35,7 @@
 // `init3D`'s render loop calls this once per requestAnimationFrame
 // frame, BEFORE `renderer.render(scene, camera)`.
 
+import * as THREE from "three";
 import { tickCellVisibility3D, tickPvsLoadExpansion } from "./cells.js";
 import { tickLightingForCellState } from "./lighting.js";
 import { getTerrainVisualZ, cullTerrainGroup } from "./terrain.js?v=phase-d-batch";
@@ -997,26 +998,45 @@ function readFogLerpFlag() {
 // (plain numbers — no THREE import needed); FogExp2 (wireframe fallback)
 // carries `.density` and no near/far, so we feature-detect.
 function tickDistanceFogColor(scene3d) {
-  const fog = scene3d?.scene?.fog;
-  if (!fog || !fog.color || typeof fog.color.setHex !== "function") return;
+  const scene = scene3d?.scene;
+  if (!scene) return;
   // AdminEnvirons (0xEA60) fog override — server-pushed RedFog/BlueFog/etc.
   // (acclient.c:396344-416). Set by index.html's kind-60 handler; takes
   // precedence over the region/sky fog until a Clear (0x00) nulls it. `rgb`
-  // is sRGB hex (0xRRGGBB); `fogMax` is the AC far band. (On the default
-  // atmosphere path the visible distance haze is the sky/cloud horizon, not
-  // `scene.fog` — full-coverage environ fog there is a follow-up; this
-  // override fully drives the wireframe / `?fogLerp` linear THREE.Fog.)
+  // is sRGB hex (0xRRGGBB); `fogMax` is the AC far band (a dense near fog —
+  // RedFog ~50 m). The world materials honour `scene.fog` (fog:true on terrain
+  // + statics), but on the default atmosphere path `scene.fog` is null (only
+  // wireframe creates the FogExp2; the ?fogLerp linear Fog is gated on one
+  // already existing), so when an environ fog is active we CREATE a transient
+  // linear THREE.Fog the materials then tint, and tear it down on Clear. This
+  // sums with the atmosphere aerial-perspective haze; for these dramatic
+  // overrides the dense colored fog dominates (an aerial-opacity knock, like
+  // ?fogLerp's FOGLERP_AERIAL_OPACITY, is an optional tuning follow-up).
   const environOv = (typeof window !== "undefined") ? window.__environFogOverride : null;
   if (environOv && Number.isFinite(environOv.rgb)) {
-    fog.color.setHex(environOv.rgb & 0xffffff);
-    if (typeof fog.far === "number" && Number.isFinite(environOv.fogMax) && environOv.fogMax > 0) {
-      fog.far = environOv.fogMax;
-      if (typeof fog.near === "number" && fog.near >= environOv.fogMax) {
-        fog.near = environOv.fogMax * 0.1;
+    const far = (Number.isFinite(environOv.fogMax) && environOv.fogMax > 0) ? environOv.fogMax : 50;
+    const near = far * 0.1;
+    const rgb = environOv.rgb & 0xffffff;
+    if (!scene.fog) {
+      scene.fog = new THREE.Fog(rgb, near, far);
+      scene.fog.__environCreated = true;
+    } else if (typeof scene.fog.color?.setHex === "function") {
+      scene.fog.color.setHex(rgb);
+      if (typeof scene.fog.far === "number") {
+        scene.fog.far = far;
+        if (typeof scene.fog.near === "number") scene.fog.near = near;
       }
     }
     return;
   }
+  // Override cleared (Clear / no environ) — tear down a fog WE created so the
+  // default path returns to no-scene.fog. A fog we didn't create (wireframe
+  // FogExp2 / ?fogLerp linear Fog) is left untouched.
+  if (scene.fog && scene.fog.__environCreated) {
+    scene.fog = null;
+  }
+  const fog = scene.fog;
+  if (!fog || !fog.color || typeof fog.color.setHex !== "function") return;
   const state = scene3d.skyLightingController?._lastState ?? null;
   if (!state) return;
   const useLerp = readFogLerpFlag();
