@@ -7855,12 +7855,12 @@
                   // SOUND: retail plays SoundType (= EnvironChangeType + 0x11)
                   // from the UI SoundTable via PlaySoundFromCenter
                   // (acclient.c:396438+) — non-positional ("from center"), so
-                  // play at the listener. Resolve via the canonical sound
-                  // table (0x20000001; override with window.__environSoundTableDid).
-                  // NOTE: the exact retail UI SoundTable DID is unconfirmed (the
-                  // decomp loads it dynamically) — fail-soft if 0x20000001 lacks
-                  // the 0x76-0x8A environ slots.
-                  const ENVIRON_SOUND_TABLE = (window.__environSoundTableDid >>> 0) || 0x20000001;
+                  // play at the listener. The UI SoundTable is **0x2000004B**:
+                  // a portal.dat scan found it is the UNIQUE 0x20 SoundTable
+                  // carrying all 21 environ slots 0x76-0x8A (Roar 0x76->Wave
+                  // 0x0A000314 … Thunder6 0x8A->0x0A0004D2). Override with
+                  // window.__environSoundTableDid. Fail-soft if the slot is absent.
+                  const ENVIRON_SOUND_TABLE = (window.__environSoundTableDid >>> 0) || 0x2000004B;
                   const soundType = (ec + 0x11) >>> 0;
                   const scene3d = window.liveScene3d;
                   const cache = scene3d?.soundTableCache ?? null;
