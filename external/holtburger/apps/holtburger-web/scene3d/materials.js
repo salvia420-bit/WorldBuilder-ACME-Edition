@@ -1870,7 +1870,11 @@ export class MaterialCache {
       v = base.clone();
       // Set __vfxSetKey BEFORE the builder runs _chainBeforeCompile so the
       // lazily-read program cache key reflects this variant's component SET.
-      v.userData = { ...(base.userData || {}), __cacheOwned: true, __vfxSetKey: setKey };
+      // __vfxColorPassOnly tags this clone as carrying a COLOR-pass-only patch
+      // (spec §8): the shadow/depth WRITE must never use it — three renders
+      // casters with its internal _depthMaterial (which never sees our
+      // onBeforeCompile/userData). See scene3d/vfx/shadow_guard.js.
+      v.userData = { ...(base.userData || {}), __cacheOwned: true, __vfxSetKey: setKey, __vfxColorPassOnly: true };
       try { builder?.(v); } catch (e) { console.warn(`[vfx] getCachedVariant builder failed for ${key}:`, e); }
       v.needsUpdate = true;
       this.vfxVariants.set(key, v);
