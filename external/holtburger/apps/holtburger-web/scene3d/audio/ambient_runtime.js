@@ -111,6 +111,21 @@ export class AmbientRuntime {
    *        until the Region has fetched). Either a sync getter that
    *        returns the cached `RegionJs` once it's available, or an
    *        async function — the runtime awaits the latter once.
+   *        Unused when `getBakedAmbientTriggers` is supplied (the
+   *        baked source replaces the live Region chain entirely).
+   * @param {(lbX: number, lbY: number) => (Array<{stbId:number,
+   *           vertexIndices:number[], ambientSounds:Array<object>}>|null)}
+   *        [opts.getBakedAmbientTriggers]
+   *        Baked-events source (2026-06-23). When supplied, the runtime
+   *        sources its per-vertex STB from the pre-baked
+   *        `dist/events/*.events.jsonl` (via `BakedAmbientSource`)
+   *        INSTEAD of walking the live wasm Region chain. Return the
+   *        LB's triggers array (possibly empty) once loaded, or `null`
+   *        while the LB is still fetching (the runtime treats `null` as
+   *        a transient sample miss and retries next tick). This is the
+   *        strictly-more-faithful path: the baker resolved the real
+   *        `scene_type` per vertex, whereas the live chain hard-codes
+   *        `scenePick=0`. See `baked_ambient_source.js`.
    * @param {() => boolean} [opts.isCurrentCellIndoor]
    *        Indoor predicate. When true, continuous loops are stopped
    *        and probabilistic timers freeze. Defaults to `() => false`
@@ -174,6 +189,12 @@ export class AmbientRuntime {
     this._audioManager = opts.audioManager;
     this._getPlayerPos = opts.getPlayerPos;
     this._getRegion = opts.getRegion;
+    // Baked-events source (2026-06-23). When set, replaces the live
+    // Region chain — see the constructor JSDoc + `baked_ambient_source.js`.
+    this._getBakedAmbientTriggers =
+      typeof opts.getBakedAmbientTriggers === "function"
+        ? opts.getBakedAmbientTriggers
+        : null;
     this._isCurrentCellIndoor =
       typeof opts.isCurrentCellIndoor === "function"
         ? opts.isCurrentCellIndoor
@@ -298,11 +319,16 @@ export class AmbientRuntime {
     // accommodate the boot path where init3D constructs AmbientRuntime
     // BEFORE `populateSkyDescFromRegion` lands; the user supplies a
     // resolver that returns null until the Region is parsed.
-    if (!this._region) {
-      this._tryResolveRegion();
+    // The live Region chain is only needed when NOT using the baked
+    // source — baked mode never touches `this._region`, so don't stall
+    // ambient on the (slow) Region 0x13000000 fetch.
+    if (!this._getBakedAmbientTriggers) {
       if (!this._region) {
-        this.skippedNoRegion += 1;
-        return;
+        this._tryResolveRegion();
+        if (!this._region) {
+          this.skippedNoRegion += 1;
+          return;
+        }
       }
     }
 
@@ -341,25 +367,49 @@ export class AmbientRuntime {
       return;
     }
 
-    // Sample the terrain code at the player's LB-local position.
-    const code = this._sampleTerrainCodeAt(player);
-    if (code < 0) {
+    // Sample the terrain at the player's LB-local position. Returns
+    // `{code, vertexIndex, lbX, lbY}` (the baked path keys off
+    // vertexIndex + lb; the live path keys off code).
+    const sample = this._sampleTerrainVertex(player);
+    if (!sample) {
       this.terrainSampleMisses += 1;
       // Don't clear loops on a transient sample miss — the player
       // may just be on the edge of a freshly-loaded LB. The next
       // tick gets another shot.
       return;
     }
+    const code = sample.code;
 
-    // Walk the chain. Returns AmbientStbJs | null/undefined.
+    // Resolve the active STB. Two sources:
+    //   - Baked (2026-06-23): per-vertex STB from the pre-baked
+    //     `dist/events/*.events.jsonl` — scene_type-accurate.
+    //   - Live: the wasm Region `terrain_type → STB` chain at
+    //     `scenePick=0` (the scene-selection hash isn't decompiled).
+    // `stb` is duck-typed `{stbId, ambientSounds()}` either way, so the
+    // continuous/probabilistic machinery below is source-agnostic.
     let stb = null;
-    try {
-      stb = this._region.ambientStbForTerrainCode(code, this._scenePick);
-    } catch (e) {
-      this.lastError = String(e?.message ?? e);
-      // eslint-disable-next-line no-console
-      console.warn("[task-d/ambient] ambientStbForTerrainCode threw:", e);
-      return;
+    if (this._getBakedAmbientTriggers) {
+      const triggers = this._getBakedAmbientTriggers(sample.lbX, sample.lbY);
+      if (triggers == null) {
+        // Baked source configured but this LB hasn't finished loading.
+        // Treat as a transient miss — keep current loops/timers and
+        // retry next tick. Intentionally do NOT fall back to the live
+        // chain: that would flicker the STB when the bake lands and
+        // muddy any baked-vs-live A/B.
+        this.terrainSampleMisses += 1;
+        return;
+      }
+      stb = this._bakedStbForVertex(triggers, sample.vertexIndex);
+    } else {
+      // Walk the live chain. Returns AmbientStbJs | null/undefined.
+      try {
+        stb = this._region.ambientStbForTerrainCode(code, this._scenePick);
+      } catch (e) {
+        this.lastError = String(e?.message ?? e);
+        // eslint-disable-next-line no-console
+        console.warn("[task-d/ambient] ambientStbForTerrainCode threw:", e);
+        return;
+      }
     }
 
     if (!stb) {
@@ -604,8 +654,23 @@ export class AmbientRuntime {
    * design choice for Task D.
    */
   _sampleTerrainCodeAt(player) {
+    const s = this._sampleTerrainVertex(player);
+    return s ? s.code : -1;
+  }
+
+  /**
+   * Richer terrain sample: returns `{code, vertexIndex, lbX, lbY}` for
+   * the player's nearest LB vertex, or `null` on any miss (no covering
+   * mesh, missing `terrainCodes`). `vertexIndex` is the column-major
+   * `col * 9 + row` — the SAME 0..80 index the baker emits in
+   * `vertex_indices` (it enumerates the raw terrain array, which is
+   * x-outer / column-major), so the baked feed can be keyed off it
+   * directly. `code` is the terrain code (0..31) at that vertex, used
+   * by the live chain.
+   */
+  _sampleTerrainVertex(player) {
     const meshes = this._listTerrainMeshes();
-    if (!meshes || meshes.length === 0) return -1;
+    if (!meshes || meshes.length === 0) return null;
 
     // Derive the player's LB from world (x, y). Each LB is 192 m;
     // (lbX = floor(x/192), lbY = floor(y/192)). Mirrors the wasm
@@ -622,9 +687,9 @@ export class AmbientRuntime {
         break;
       }
     }
-    if (!mesh || !mesh.userData) return -1;
+    if (!mesh || !mesh.userData) return null;
     const codes = mesh.userData.terrainCodes;
-    if (!codes || codes.length < VERTEX_GRID * VERTEX_GRID) return -1;
+    if (!codes || codes.length < VERTEX_GRID * VERTEX_GRID) return null;
 
     // LB-local x/y in metres [0, 192). The vertex grid is 9×9; vertex
     // (col, row) sits at world (lbX*192 + col*24, lbY*192 + row*24).
@@ -639,7 +704,38 @@ export class AmbientRuntime {
     if (row > VERTEX_GRID - 1) row = VERTEX_GRID - 1;
     // Column-major: `terrainCodes[col * 9 + row]`. Verified vs
     // `adapter.js::buildVertexTypesDataTexture` (line 248-250).
-    return codes[col * VERTEX_GRID + row] | 0;
+    const vertexIndex = col * VERTEX_GRID + row;
+    return { code: codes[vertexIndex] | 0, vertexIndex, lbX, lbY };
+  }
+
+  /**
+   * Find the baked trigger covering `vertexIndex` and adapt it to the
+   * `{stbId, ambientSounds()}` duck-type the tick machinery consumes.
+   * Returns `null` when no baked trigger covers this vertex (== "no
+   * ambient here", same semantics as the live chain returning no STB).
+   *
+   * Linear scan: a landblock has at most a handful of triggers (≤ ~9
+   * for Holtburg), each with ≤ 81 vertices, so this is a few hundred
+   * comparisons per tick — negligible.
+   *
+   * @param {Array<{stbId:number, vertexIndices:number[],
+   *          ambientSounds:Array<object>}>} triggers
+   * @param {number} vertexIndex 0..80
+   */
+  _bakedStbForVertex(triggers, vertexIndex) {
+    if (!triggers || triggers.length === 0) return null;
+    for (let i = 0; i < triggers.length; i += 1) {
+      const t = triggers[i];
+      if (!t || !Array.isArray(t.vertexIndices)) continue;
+      if (t.vertexIndices.indexOf(vertexIndex) !== -1) {
+        const sounds = t.ambientSounds || [];
+        return {
+          stbId: t.stbId >>> 0,
+          ambientSounds: () => sounds,
+        };
+      }
+    }
+    return null;
   }
 
   /**

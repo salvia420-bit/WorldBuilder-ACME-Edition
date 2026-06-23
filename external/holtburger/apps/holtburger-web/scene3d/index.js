@@ -75,6 +75,7 @@ import { createNameplateOverlay } from "./hud.js";
 import { AudioManager } from "./audio/audio_manager.js";
 import { SoundTableCache } from "./audio/sound_table_cache.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
+import { BakedAmbientSource } from "./audio/baked_ambient_source.js";
 import { WeatherEffectsManager } from "./weather/manager.js";
 import { LandblockLRU, lbKeyFromXY } from "./landblock_lru.js";
 import { getQuality, installQualityOnWindow } from "./quality.js";
@@ -4014,9 +4015,42 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     typeof wasmExports.fetchRegion === "function"
   ) {
     try {
+      // Baked-events ambient source (2026-06-23). `?ambientBaked=off`
+      // reverts to the live wasm Region chain (scenePick=0). Default
+      // ON: the baked feed (`dist/events/*.events.jsonl`, from
+      // `holtburger-event-bake/ambient.rs`) is scene_type-accurate
+      // per vertex, whereas the live chain can't compute the
+      // un-decompiled scene-selection hash. Fail-soft — a 404/parse
+      // error caches empty (silence), never throws.
+      const ambientBakedEnabled = (() => {
+        try {
+          if (typeof window === "undefined") return true;
+          const v = new URLSearchParams(window.location.search).get(
+            "ambientBaked"
+          );
+          if (v === "off") return false;
+          if (v === "on") return true;
+          return true; // default ON
+        } catch (_) {
+          return true;
+        }
+      })();
+      const bakedAmbientSource = ambientBakedEnabled
+        ? new BakedAmbientSource()
+        : null;
+      if (typeof window !== "undefined") {
+        // eslint-disable-next-line no-undef
+        window.__bakedAmbientSource = bakedAmbientSource;
+      }
       ambientRuntime = new AmbientRuntime({
         soundTableCache,
         audioManager,
+        // When the baked source is active it fully replaces the live
+        // Region chain; when off, this stays null and the runtime walks
+        // `getRegion`'s `ambientStbForTerrainCode` as before.
+        getBakedAmbientTriggers: bakedAmbientSource
+          ? (lbX, lbY) => bakedAmbientSource.getTriggersForLb(lbX, lbY)
+          : undefined,
         getPlayerPos: () => {
           // Mirror the cameraSwitcher's resolver — prefer the
           // EntityManager local-player rig (kind=1 spawn lands it),
@@ -4103,8 +4137,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       }
       // eslint-disable-next-line no-console
       console.log(
-        "[task-d/ambient] AmbientRuntime attached; first tick fetches " +
-          "Region 0x13000000 lazily"
+        bakedAmbientSource
+          ? "[task-d/ambient] AmbientRuntime attached; source=BAKED " +
+              "(dist/events/*.events.jsonl, per-LB lazy fetch). " +
+              "?ambientBaked=off → live Region chain."
+          : "[task-d/ambient] AmbientRuntime attached; source=LIVE " +
+              "(Region 0x13000000, fetched lazily on first tick)."
       );
     } catch (e) {
       // eslint-disable-next-line no-console
