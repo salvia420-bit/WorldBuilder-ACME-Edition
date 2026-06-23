@@ -251,6 +251,21 @@ export function readWeatherFlags(out) {
   return dst;
 }
 
+/**
+ * Zero-alloc per-frame accessor for the three fields the VFX weather-input
+ * driver reads (`is_storm` + `temperature_C` + `season`). Separate from
+ * readWeatherFlags() so that accessor's two-key contract (test_weather_flags)
+ * is untouched. Pass a reusable scratch object as `out`; it is filled and
+ * returned. See scene3d/vfx/weather_inputs.js.
+ */
+export function readWeatherVfxInputs(out) {
+  const dst = out || {};
+  dst.is_storm = state.is_storm;
+  dst.temperature_C = state.temperature_C;
+  dst.season = state.season;
+  return dst;
+}
+
 // Initialise derived fields on module load.
 recompute();
 

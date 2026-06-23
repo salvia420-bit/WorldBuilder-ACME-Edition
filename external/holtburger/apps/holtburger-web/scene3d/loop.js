@@ -92,6 +92,11 @@ import { updateFromDayGroup as wxUpdateFromDayGroup } from "./weather_state.js";
 // effect registers a channel; the master clock advances every frame regardless.
 import { VFX_GLOBALS } from "./materials.js";
 import { tickOscillators, setMasterClock } from "./vfx/oscillators.js";
+// Phase 1 (VFX slice 12) — derives VFX_GLOBALS.uWetness/uFrost/uWindDir from the
+// client weather snapshot. Imports materials.js (VFX_GLOBALS) so it is NOT a
+// leaf like oscillators.js — but loop.js already pulls in materials.js, so no
+// new cycle. Ticked right after the oscillator so it shares the master clock.
+import { tickWeatherInputs } from "./vfx/weather_inputs.js";
 setMasterClock(VFX_GLOBALS.uTime);
 
 // A15-Q4 (2026-06-12 unification survey) — the renderer-neutral
@@ -862,6 +867,29 @@ function tickVfxOscillators(scene3d) {
       : Date.now() * 0.001);
   const dt = scene3d?.frameTime?.dt ?? 0;
   tickOscillators(tSec, dt);
+}
+
+/**
+ * Phase 1 (Visual-Behavior Suite, slice 12) — drive the three CLIENT-SIDE
+ * weather/wind uniforms (VFX_GLOBALS.uWetness / uFrost / uWindDir) from the
+ * already-client-derived weather_state snapshot. Ticked right AFTER
+ * tickVfxOscillators so it reads the SAME `scene3d.frameTime.tsSec` the master
+ * clock (uTime) was just driven from — wind/wetness stay phase-locked with
+ * uTime, no second clock. O(1) + zero per-frame alloc.
+ *
+ * Unconditional + byte-identical when off: like the oscillator's uTime write,
+ * uWetness/uFrost/uWindDir are dormant {value} objects no material binds until
+ * a frag weathering variant is built (only when ?visual is on). Writing them
+ * with ?visual off changes nothing on screen. Kept always-on (not flag-gated)
+ * so the smoothing state stays warm if the user flips ?visual mid-session.
+ */
+function tickVfxWeatherInputs(scene3d) {
+  const tSec =
+    scene3d?.frameTime?.tsSec ??
+    ((typeof performance !== "undefined" && performance.now)
+      ? performance.now() * 0.001
+      : Date.now() * 0.001);
+  tickWeatherInputs(tSec);
 }
 
 /**
@@ -1657,6 +1685,18 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
     if (!scene3d._vfxOscTickWarned) {
       scene3d._vfxOscTickWarned = true;
       console.warn("[vfx] tickVfxOscillators threw:", e);
+    }
+  }
+  // Phase 1 (VFX slice 12) — weather/wind inputs. AFTER tickVfxOscillators so
+  // uTime is current; shares the same frame clock. Same try/catch shape so a
+  // thrown weather read never kills the tick. Byte-identical when ?visual off.
+  try {
+    tickVfxWeatherInputs(scene3d);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    if (!scene3d._vfxWeatherTickWarned) {
+      scene3d._vfxWeatherTickWarned = true;
+      console.warn("[vfx] tickVfxWeatherInputs threw:", e);
     }
   }
   // ── DEFERRABLE group SKY decision (#4 + #7-#12). ─────────────────────
