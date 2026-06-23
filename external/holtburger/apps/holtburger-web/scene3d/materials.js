@@ -321,6 +321,25 @@ export const VFX_GLOBALS = {
   uCamPos: { value: new THREE.Vector3() },
 };
 
+// Install ONE frag/MECH-B VFX component's patch onto a getCachedVariant clone
+// (Visual-Behavior Suite, spec §2.3/§2.6). frag_install.js calls this per
+// component in (FAMILY_ORDER, id) order; the chain composition + the
+// __vfxSetKey-driven program-cache key (set by getCachedVariant, read by
+// _patchSetCacheKey) live entirely here so frag_install stays THREE-free.
+// declareUniforms binds VFX_GLOBALS by REFERENCE (shared {value} objects driven
+// once/frame); inject splices the GLSL seam. Both run at compile (inside
+// onBeforeCompile), never at install time — so the shared uniforms are present
+// on shader.uniforms before three builds the program.
+export function installVfxComponentPatch(material, component, config, globals) {
+  if (!material || !component) return;
+  _chainBeforeCompile(material, function vfxComponentHook(shader) {
+    try { component.declareUniforms && component.declareUniforms(shader, config, globals); }
+    catch (e) { console.warn(`[vfx] declareUniforms ${component.id} failed:`, e); }
+    try { component.inject && component.inject(shader, { material: this, config, globals }); }
+    catch (e) { console.warn(`[vfx] inject ${component.id} failed:`, e); }
+  });
+}
+
 // 2026-05-22 — wire-agent: cheap normal-based AO modulation. Patches a
 // MeshBasicMaterial's shader to multiply the fragment colour by
 // `mix(0.45, 1.0, smoothstep(-0.3, 1.0, vWorldNormalAO.y))`. Result:
