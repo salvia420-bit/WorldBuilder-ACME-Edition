@@ -12578,6 +12578,13 @@ pub struct StaticObjectPlacement {
     qy: f32,
     qz: f32,
     aabb_local: Vec<f32>,
+    // SetupModel `default_script` (0x33 PhysicsScript) DID for this
+    // interior static, or 0 (GfxObjs / SetupModels without one). Mirrors
+    // the outdoor `fetch_landblock_objects` resolution (~:1728) so
+    // interior props (braziers/torches/fountains) reach the SAME
+    // `attachStaticDefaultScripts` ambient-particle chain the outdoor
+    // scenery already uses. Retail plays these via `play_default_script`.
+    default_script_id: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -12605,6 +12612,12 @@ impl StaticObjectPlacement {
     /// AABB index for collision once interior collision lands.
     #[wasm_bindgen(getter, js_name = aabbLocal)]
     pub fn aabb_local(&self) -> Vec<f32> { self.aabb_local.clone() }
+    /// SetupModel `default_script` (0x33) DID for this interior static,
+    /// or 0 when none. JS (`cells.js`) feeds non-zero values to
+    /// `attachStaticDefaultScripts` so interior braziers/torches/
+    /// fountains emit their ambient particle chains like outdoor scenery.
+    #[wasm_bindgen(getter, js_name = defaultScriptId)]
+    pub fn default_script_id(&self) -> u32 { self.default_script_id }
 }
 
 /// Phase 6 step C: per-cell placement bundle returned by
@@ -14565,6 +14578,8 @@ pub async fn fetch_env_cells_in_landblock(
             let qy = cq.w * stab_q.y - cq.x * stab_q.z + cq.y * stab_q.w + cq.z * stab_q.x;
             let qz = cq.w * stab_q.z + cq.x * stab_q.y - cq.y * stab_q.x + cq.z * stab_q.w;
             let aabb_local = static_object_local_aabb(source.as_ref(), stab.stab_id);
+            let default_script_id =
+                static_object_default_script(source.as_ref(), stab.stab_id);
             static_objects.push(StaticObjectPlacement {
                 did: stab.stab_id,
                 x: world_x,
@@ -14575,6 +14590,7 @@ pub async fn fetch_env_cells_in_landblock(
                 qy,
                 qz,
                 aabb_local,
+                default_script_id,
             });
         }
 
@@ -14636,6 +14652,32 @@ fn static_object_local_aabb<S: holtburger_dat::ResourceSource + ?Sized>(
         return vec![0.0; 6];
     }
     vec![aabb.min.x, aabb.min.y, aabb.min.z, aabb.max.x, aabb.max.y, aabb.max.z]
+}
+
+/// Resolve an interior static's `default_script` (0x33 PhysicsScript DID)
+/// from its SetupModel, or 0. Sibling of [`static_object_local_aabb`] —
+/// per-stab, synchronous, best-effort (a missing/unparseable setup or a
+/// GfxObj `0x01` stab yields 0, never fails the cell build). Mirrors the
+/// outdoor `fetch_landblock_objects` resolution (~:1728) so interior
+/// props (braziers/torches/fountains) reach the same
+/// `attachStaticDefaultScripts` particle chain. Only SetupModels
+/// (`0x02`) carry a `default_script`.
+#[cfg(target_arch = "wasm32")]
+fn static_object_default_script<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    stab_id: u32,
+) -> u32 {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    if (stab_id >> 24) as u8 != 0x02 {
+        return 0;
+    }
+    if let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", stab_id))
+        && let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes))
+    {
+        return setup.default_script.unwrap_or(0);
+    }
+    0
 }
 
 /// Local helper for `EnvCellPlacement::take_mesh` move semantics.

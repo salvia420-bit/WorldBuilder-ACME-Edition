@@ -3152,6 +3152,93 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
   return { anchorCount, emitterCount };
 }
 
+/**
+ * World-frame sibling of `attachStaticDefaultScripts` for INTERIOR
+ * EnvCell statics (2026-06-23). `cells.js` places interior props with a
+ * fully-resolved world transform (cell rotation × stab — a FULL
+ * quaternion, not yaw-only), so this variant takes ready world-frame
+ * items instead of recomputing `lbX*192 + localX` + yaw. Otherwise
+ * identical: it reuses the SAME `_ensureStaticParticleManager` +
+ * `_runStaticParticleChain` + owner-key plumbing + `?staticScripts=off`
+ * gate as the outdoor path, so interior braziers/torches/fountains emit
+ * their `default_script` particle chains exactly like their outdoor twins.
+ *
+ * Each item: `{ defaultScriptId:number, x, y, z:number, qw, qx, qy,
+ * qz?:number, scale?:number }` (x/y/z + q already in world frame).
+ * Items with `defaultScriptId === 0` are skipped — the overwhelming
+ * majority, so the filter is the whole default-path cost (one numeric
+ * check per item; no manager/runtime imported when nothing is scripted).
+ *
+ * NOTE (first cut): anchors are added to `scene3d.staticsGroup` (always
+ * visible), mirroring the outdoor path — NOT parented to the per-cell
+ * container. A follow-up could parent to the EnvCell container so the
+ * effect inherits the cell's enter-to-show visibility gate; for now the
+ * emitter sits at the brazier's world position regardless of cell BFS.
+ *
+ * @returns {Promise<{anchorCount:number, emitterCount:number}>}
+ */
+export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExports) {
+  if (!scene3d || !scene3d.staticsGroup || !Array.isArray(items)) {
+    return { anchorCount: 0, emitterCount: 0 };
+  }
+  if (!_staticScriptsEnabled()) return { anchorCount: 0, emitterCount: 0 };
+
+  const scripted = [];
+  for (const it of items) {
+    const did = (it && it.defaultScriptId) >>> 0;
+    if (did !== 0) scripted.push(it);
+  }
+  if (scripted.length === 0) return { anchorCount: 0, emitterCount: 0 };
+
+  const manager = await _ensureStaticParticleManager(scene3d, wasmExports);
+  if (!manager) return { anchorCount: 0, emitterCount: 0 };
+
+  let anchorCount = 0;
+  let emitterCount = 0;
+  for (const it of scripted) {
+    const anchor = new THREE.Group();
+    anchor.name = `cellstatic-script-anchor-0x${(it.defaultScriptId >>> 0)
+      .toString(16)
+      .padStart(8, "0")}`;
+    anchor.position.set(+it.x, +it.y, +it.z);
+    // Full world-frame quaternion (interior cells can be arbitrarily
+    // rotated, so yaw-only would mis-orient directional emitters).
+    // THREE quaternion component order is (x, y, z, w).
+    const qw = Number.isFinite(it.qw) ? it.qw : 1;
+    const qx = Number.isFinite(it.qx) ? it.qx : 0;
+    const qy = Number.isFinite(it.qy) ? it.qy : 0;
+    const qz = Number.isFinite(it.qz) ? it.qz : 0;
+    anchor.quaternion.set(qx, qy, qz, qw);
+    const s = typeof it.scale === "number" && it.scale > 0 ? it.scale : 1;
+    if (s !== 1) anchor.scale.set(s, s, s);
+    const ownerKey = `static:${++_staticOwnerSeq}`;
+    anchor.userData = {
+      isStaticScriptAnchor: true,
+      isCellStaticScriptAnchor: true,
+      defaultScriptId: it.defaultScriptId >>> 0,
+      particleOwnerKey: ownerKey,
+    };
+    scene3d.staticsGroup.add(anchor);
+    anchorCount += 1;
+    // eslint-disable-next-line no-await-in-loop
+    emitterCount += await _runStaticParticleChain(
+      manager,
+      anchor,
+      it.defaultScriptId >>> 0,
+      wasmExports,
+      ownerKey
+    );
+  }
+  if (anchorCount > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[scene3d.statics/V1] attached interior default_script chains: ` +
+        `${anchorCount} anchors, ${emitterCount} emitters`
+    );
+  }
+  return { anchorCount, emitterCount };
+}
+
 /** Tear down the static ParticleManager + its rAF. Idempotent. */
 export function disposeStaticParticles(scene3d) {
   _spDisposed = true;

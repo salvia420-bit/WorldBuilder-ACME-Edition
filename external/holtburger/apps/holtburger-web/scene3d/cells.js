@@ -47,6 +47,7 @@ import { materialCanCastShadow } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
 import { STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT } from "./stream_bake_guard.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
+import { attachStaticDefaultScriptsWorld } from "./statics.js";
 
 // ?cellBugParity=retail keeps indoor cells visible from outdoors — matches a known retail rendering quirk for nostalgia research.
 const CELL_BUG_PARITY = (() => {
@@ -357,6 +358,13 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         did,
         x: so.x, y: so.y, z: so.z,
         qw: so.qw, qx: so.qx, qy: so.qy, qz: so.qz,
+        // 2026-06-23: interior default_script (0x33) for the ambient
+        // particle chain (braziers/torches/fountains). typeof-guarded —
+        // soft-degrades to 0 until the wasm exposes `defaultScriptId` on
+        // EnvCell statics (batched rebuild); 0 is skipped at zero cost by
+        // the attach filter, so this is a no-op until then.
+        defaultScriptId:
+          typeof so.defaultScriptId === "number" ? so.defaultScriptId >>> 0 : 0,
       });
       if (typeof so.free === "function") so.free();
     }
@@ -522,6 +530,14 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // thread on real GPUs; on SwiftShader/llvmpipe it falls back to
   // sync compile but the code shape is the same.
   const newCells = [];
+  // 2026-06-23: interior static props (braziers/torches/fountains) whose
+  // SetupModel carries a `default_script` (0x33). Collected during the
+  // cell build (world-frame transform + defaultScriptId already on the
+  // snapshot) and handed to `attachStaticDefaultScriptsWorld` after the
+  // cells attach — the indoor twin of the outdoor scenery path. Stays
+  // empty (no-op) until the wasm exposes `defaultScriptId` on EnvCell
+  // statics (batched rebuild).
+  const scriptedInteriorStatics = [];
   let _chunkStart = performance.now();
   for (const snap of snapshots) {
     const cellContainer = new THREE.Group();
@@ -702,6 +718,15 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     cellContainer.add(meshGroup);
 
     for (const so of snap.staticSnaps) {
+      // Collect scripted interior props for the ambient particle chain
+      // (independent of geometry — a script-only static still emits).
+      if ((so.defaultScriptId >>> 0) !== 0) {
+        scriptedInteriorStatics.push({
+          defaultScriptId: so.defaultScriptId >>> 0,
+          x: so.x, y: so.y, z: so.z,
+          qw: so.qw, qx: so.qx, qy: so.qy, qz: so.qz,
+        });
+      }
       const geom = staticGeomByDid.get(so.did);
       if (!geom) continue;
       const mat = staticMatByDid.get(so.did) || scene3d.materialCache.fallbackMaterial;
@@ -814,6 +839,23 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     container.traverse((o) => o.layers.set(1));
     scene3d.cellsGroup.add(container);
     scene3d.cellContainers3d.set(cellId, container);
+  }
+
+  // 2026-06-23: light up interior props' default_script particle chains
+  // (braziers/torches/fountains) — the indoor twin of the outdoor
+  // `attachStaticDefaultScripts`. Fire-and-forget: the cells are already
+  // attached, so the chains light up a beat later without blocking the
+  // build result. No-op until the wasm exposes `defaultScriptId` on
+  // EnvCell statics (the list stays empty); honours `?staticScripts=off`.
+  if (scriptedInteriorStatics.length > 0) {
+    attachStaticDefaultScriptsWorld(
+      scene3d,
+      scriptedInteriorStatics,
+      wasmExports
+    ).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn("[envcell] interior default_script attach failed:", e);
+    });
   }
 
   return {
