@@ -269,7 +269,12 @@ function _patchSetCacheKey(material) {
     "|l" + (u.lightClampRetail ? 1 : 0) +
     "|a" + (u.__aoPatched ? 1 : 0) +
     "|b" + (u.__depthBiased ? 1 : 0) +
-    "|f" + (u.__floorBiased ? 1 : 0)
+    "|f" + (u.__floorBiased ? 1 : 0) +
+    // VFX component-SET key (Visual-Behavior Suite, spec §2.4). Encodes the
+    // component SET + each component's linkVariant() — NEVER per-instance
+    // config/hash — so program count ≈ distinct sets, not 10k DIDs. Empty ""
+    // when no VFX patch is installed → key unchanged for every existing material.
+    "|v" + (u.__vfxSetKey || "")
   );
 }
 
@@ -302,6 +307,19 @@ function _chainBeforeCompile(material, newHook) {
   };
   _installPatchSetCacheKey(material);
 }
+
+// Shared VFX uniform globals (Visual-Behavior Suite, spec §2.5). One {value}
+// object per global, assigned BY REFERENCE into every patched material's
+// uniforms and driven once/frame by the material-oscillator tick (Phase 1):
+// `uTime` IS the single VFX clock — there is exactly ONE per-frame VFX tick.
+// Dormant until a frag/MECH-B component declares one of these uniforms.
+export const VFX_GLOBALS = {
+  uTime: { value: 0 },
+  uWindDir: { value: new THREE.Vector2(1, 0) },
+  uWetness: { value: 0 },
+  uFrost: { value: 0 },
+  uCamPos: { value: new THREE.Vector3() },
+};
 
 // 2026-05-22 — wire-agent: cheap normal-based AO modulation. Patches a
 // MeshBasicMaterial's shader to multiply the fragment colour by
@@ -1602,6 +1620,10 @@ export class MaterialCache {
     // of flickering against the grass. Clones SHARE textures (THREE clone copies
     // map refs); cache-owned; lazily minted; mirrors frontSideMaterials lifecycle.
     this.floorBiasMaterials = new Map();
+    // VFX component-variant clones (Visual-Behavior Suite). Keyed by
+    // (surfaceDid|setKey|configKey); CLONES of the base material that share
+    // textures. Dormant until a frag/MECH-B component calls getCachedVariant.
+    this.vfxVariants = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
     this.textures = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
@@ -1801,6 +1823,38 @@ export class MaterialCache {
       v.userData = { ...(base.userData || {}), __cacheOwned: true };
       applyFloorDepthBias(v);
       this.floorBiasMaterials.set(key, v);
+    }
+    return v;
+  }
+
+  /**
+   * Get-or-create a VFX component-variant material (Visual-Behavior Suite,
+   * spec §2.6). Mirrors getCachedFloorBias: a CLONE of the surface's base
+   * material (shares textures, owned by this.materials), tagged __cacheOwned +
+   * __vfxSetKey, built by `builder(clone)` which installs the component patches
+   * via _chainBeforeCompile. Keyed by (surfaceDid|setKey|configKey) so two
+   * objects with the same component SET + config share ONE material; the
+   * program-cache key (driven by __vfxSetKey, read lazily by _patchSetCacheKey)
+   * collapses same-SET materials onto ONE compiled program. Dormant until a
+   * frag/MECH-B component uses it (Phase 1).
+   * @param {number} surfaceDid
+   * @param {string} setKey     component-SET key (drives the program cache key)
+   * @param {string} configKey  link-irrelevant config hash (heap dedup only)
+   * @param {(m: object) => void} builder  installs the component patches
+   */
+  getCachedVariant(surfaceDid, setKey, configKey, builder) {
+    const base = this._getCachedDouble(surfaceDid);
+    if (this.wireframeMode) return base;
+    const key = `${surfaceDid >>> 0}|${setKey}|${configKey}`;
+    let v = this.vfxVariants.get(key);
+    if (!v) {
+      v = base.clone();
+      // Set __vfxSetKey BEFORE the builder runs _chainBeforeCompile so the
+      // lazily-read program cache key reflects this variant's component SET.
+      v.userData = { ...(base.userData || {}), __cacheOwned: true, __vfxSetKey: setKey };
+      try { builder?.(v); } catch (e) { console.warn(`[vfx] getCachedVariant builder failed for ${key}:`, e); }
+      v.needsUpdate = true;
+      this.vfxVariants.set(key, v);
     }
     return v;
   }
@@ -3352,6 +3406,9 @@ export class MaterialCache {
     // 2026-06-15 floor-bias variants — clones of base materials (share textures,
     // freed above), so dispose only the material objects.
     _disposeEach(this.floorBiasMaterials, (m) => m);
+    // VFX component-variant clones (share textures, freed above) — dispose the
+    // material objects only.
+    _disposeEach(this.vfxVariants, (m) => m);
     // Wire-agent buckets + per-DID dominant-colour materials.
     _disposeEach(this.wireframeBuckets, (m) => m);
     _disposeEach(this.wireframeFillBuckets, (m) => m);
