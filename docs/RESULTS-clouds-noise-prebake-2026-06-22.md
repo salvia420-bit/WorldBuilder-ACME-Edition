@@ -13,9 +13,20 @@ them on the GPU at boot. Verified on the real 1070: the prebaked path compiles *
 shader programs** (the noise bakes), still has all four noise textures (loaded from assets), and
 renders clouds **identically**. The seconds-level cold-load win is **not measurable on headless
 Chromium** (ANGLE compiles fast there) — it lands on the user's *headed* Chrome-desktop 1070 where
-shader link is synchronous; per the goal1 breakdown the realistic saving there is **~6–13 s** (the
-noise programs' own link), after excluding the ~26 s one-time driver warmup that relocates rather than
-disappears.
+shader link is synchronous.
+
+> **★ CORRECTION 2026-06-23 (this section originally understated the win at "~6–13s").** Cross-
+> referencing the goal1 72-program manifest (`shader-manifest-full.json`, real-1070 synchronous,
+> KHR `maxThreads=null`) with the per-program GLSL analysis (`all-analyses.json`) shows the 4 programs
+> this prebake removes are manifest **#0 LocalWeather (25.9s) + #1 turbulence/curl (6.1s) + #23
+> CloudShape/CloudShapeDetail (0.8s) = ~33s** of synchronous cold-link. I had wrongly attributed #0's
+> 26s to "relocatable driver warmup" — but a dedicated goal1 agent read prog-00's GLSL and identified
+> it as the LocalWeather bake itself (an unrolled 8-octave Perlin + 27-iter Worley ALU kernel that
+> stresses the D3D11 fxc optimizer), removed outright by `proceduralTextures=false`. So **the real
+> saving is ~33s** (the handoff's original "~33s noise bake" estimate was correct), not ~6–13s. A few
+> seconds of unavoidable first-link driver init relocates to whatever program links first, so net is
+> ~25–33s. The 2 cloud *render* programs (CloudsMaterial 2.7s + CloudsResolveMaterial 2.8s) remain.
+> This makes clouds-default-on far more viable on the *cold-load* front too, not just steady-state.
 
 ## What was implemented
 
@@ -57,16 +68,22 @@ so ANGLE links fast and there is no stall to cut. The cold-load **stall goal1 me
 user's *headed* Chrome-desktop 1070** (goal1: "KHR present but maxThreads=null" → synchronous link),
 which the "1070 tests never on screen" rule forbids running headless.
 
-From goal1's breakdown of clouds' ~38.9 s `?clouds=on` cold contribution:
-- **~26 s is the one-time D3D11 first-link driver warmup** — it attaches to whatever links first and
-  **relocates** to the first surface shader when the noise programs are gone; it does *not* disappear.
-- The **noise programs' own link** (rank-1 ~6 s + #23 + #30 + rank-0's residual) ≈ **~6–13 s** — this
-  is what prebake removes, plus the noise **bake** itself (160 layer draws for the 3D volumes).
+From goal1's breakdown of clouds' ~38.9 s `?clouds=on` cold contribution (manifest + per-program
+GLSL analysis, real-1070 synchronous link) — see the ★CORRECTION at the top, which supersedes the
+original "driver warmup" reading here:
+- **#0 LocalWeather noise bake = 25.9 s** — a one-time offscreen `RawShaderMaterial` bake of an
+  unrolled 8-octave Perlin + 27-iter Worley ALU kernel; the cost is D3D11 fxc optimizing the giant
+  arithmetic DAG, **not** driver warmup. Removed outright by `proceduralTextures=false`.
+- **#1 turbulence/curl noise = 6.1 s** + **#23 CloudShape/CloudShapeDetail = 0.8 s** — the sibling
+  bakes, also removed by the prebake. (Plus the noise **bake** run itself — the 3D layer draws.)
+- Total removed = **~33 s**. A few seconds of unavoidable first-link driver init relocates to whatever
+  program links first, so net ≈ **~25–33 s**.
 - The 2 cloud **render** programs (`CloudsMaterial` ~2.7 s + `CloudsResolveMaterial` ~2.8 s) remain.
 
-So: **yes, the prebake cuts cold load** — by removing the 4 noise programs + their bake from the
-synchronous-link path, realistically **~6–13 s** on the real 1070 — while keeping clouds visually
-identical. It does **not** eliminate the full 33 s headline (most of that is relocatable driver warmup).
+So: **the prebake cuts ~33 s of synchronous cold-link** on the real 1070 (clouds=on) — the handoff's
+original "~33 s noise bake" was correct — while keeping clouds visually identical. Combined with the
+light-pool trim (surface family 59.6 s → ~14 s), the two shipped fixes take the clouds=on cold shader-
+link from ~100 s → ~22 s.
 
 ## Risk / rollback
 

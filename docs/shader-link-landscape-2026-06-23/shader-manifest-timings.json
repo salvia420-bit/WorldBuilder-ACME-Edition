@@ -1,0 +1,732 @@
+{
+ "meta": {
+  "programCount": 72,
+  "matchedSource": 72,
+  "rendererStr": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "khrPresent": true,
+  "maxThreads": null,
+  "checkShaderErrors": false
+ },
+ "rows": [
+  {
+   "rank": 0,
+   "name": null,
+   "totalMs": 25929.9,
+   "queryMs": 25929.8,
+   "linkCallMs": 0.1,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 1,
+   "name": null,
+   "totalMs": 6056.9,
+   "queryMs": 6056.9,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 2,
+   "name": "scene3d-surface-08000b47",
+   "totalMs": 4334.2,
+   "queryMs": 4334.2,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 3,
+   "name": "scene3d-surface-08000497",
+   "totalMs": 4101.3,
+   "queryMs": 4101.3,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 4,
+   "name": "scene3d-surface-08000334",
+   "totalMs": 4024.2,
+   "queryMs": 4024.2,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 8
+  },
+  {
+   "rank": 5,
+   "name": "scene3d-surface-080001d0",
+   "totalMs": 3929.5,
+   "queryMs": 3929.5,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 6,
+   "name": "scene3d-surface-080001f3",
+   "totalMs": 3840.8,
+   "queryMs": 3840.8,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 9
+  },
+  {
+   "rank": 7,
+   "name": "scene3d-surface-08000007",
+   "totalMs": 3696.4,
+   "queryMs": 3696.4,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 8,
+   "name": "scene3d-surface-080011f1",
+   "totalMs": 3671.3,
+   "queryMs": 3671.3,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 28
+  },
+  {
+   "rank": 9,
+   "name": "scene3d-surface-08000102",
+   "totalMs": 3524.5,
+   "queryMs": 3524.5,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 69
+  },
+  {
+   "rank": 10,
+   "name": "scene3d-surface-080000e2",
+   "totalMs": 3448.8,
+   "queryMs": 3448.8,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 3
+  },
+  {
+   "rank": 11,
+   "name": "scene3d-surface-08000754",
+   "totalMs": 3420.2,
+   "queryMs": 3420.2,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 2
+  },
+  {
+   "rank": 12,
+   "name": "scene3d-surface-08000747",
+   "totalMs": 3397.2,
+   "queryMs": 3397.2,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 39
+  },
+  {
+   "rank": 13,
+   "name": "scene3d-surface-08000006",
+   "totalMs": 3338.7,
+   "queryMs": 3338.7,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 3
+  },
+  {
+   "rank": 14,
+   "name": "scene3d-surface-08000006",
+   "totalMs": 3213.6,
+   "queryMs": 3213.6,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 3
+  },
+  {
+   "rank": 15,
+   "name": "CloudsResolveMaterial",
+   "totalMs": 2798.9,
+   "queryMs": 2798.8,
+   "linkCallMs": 0,
+   "compileMs": 0.1,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 16,
+   "name": "CloudsMaterial",
+   "totalMs": 2666.4,
+   "queryMs": 2666.4,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 17,
+   "name": "scene3d-surface-08000742",
+   "totalMs": 2012.9,
+   "queryMs": 2012.9,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 23
+  },
+  {
+   "rank": 18,
+   "name": "scene3d-surface-080003b2",
+   "totalMs": 1950.8,
+   "queryMs": 1950.8,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 22
+  },
+  {
+   "rank": 19,
+   "name": "paletted-8000015-400007e",
+   "totalMs": 1949.9,
+   "queryMs": 1949.9,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 13
+  },
+  {
+   "rank": 20,
+   "name": "paletted-800051c-400007e",
+   "totalMs": 1919.1,
+   "queryMs": 1918.5,
+   "linkCallMs": 0.6,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 233
+  },
+  {
+   "rank": 21,
+   "name": "scene3d-surface-080011de",
+   "totalMs": 1910.6,
+   "queryMs": 1910.5,
+   "linkCallMs": 0.1,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 22,
+   "name": "paletted-8000015-400007e",
+   "totalMs": 1884,
+   "queryMs": 1884,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 13
+  },
+  {
+   "rank": 23,
+   "name": null,
+   "totalMs": 812.9,
+   "queryMs": 812.9,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 24,
+   "name": null,
+   "totalMs": 598.8,
+   "queryMs": 598.7,
+   "linkCallMs": 0.1,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 30
+  },
+  {
+   "rank": 25,
+   "name": null,
+   "totalMs": 370.7,
+   "queryMs": 370.7,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 62
+  },
+  {
+   "rank": 26,
+   "name": null,
+   "totalMs": 257.5,
+   "queryMs": 257.5,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 2
+  },
+  {
+   "rank": 27,
+   "name": "ShadowMaterial",
+   "totalMs": 242.7,
+   "queryMs": 242.7,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 28,
+   "name": "EffectMaterial",
+   "totalMs": 231.6,
+   "queryMs": 231.5,
+   "linkCallMs": 0.1,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 29,
+   "name": "ShadowResolveMaterial",
+   "totalMs": 183.1,
+   "queryMs": 183.1,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 30,
+   "name": null,
+   "totalMs": 174.3,
+   "queryMs": 174.3,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 31,
+   "name": "SkyMaterial",
+   "totalMs": 80.3,
+   "queryMs": 80.2,
+   "linkCallMs": 0,
+   "compileMs": 0.1,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 32,
+   "name": "EffectMaterial",
+   "totalMs": 75.9,
+   "queryMs": 75.9,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 33,
+   "name": "StarsMaterial",
+   "totalMs": 53.8,
+   "queryMs": 53.8,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 34,
+   "name": "DownsamplingMaterial",
+   "totalMs": 29.1,
+   "queryMs": 29.1,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 35,
+   "name": null,
+   "totalMs": 18.6,
+   "queryMs": 18.6,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 36,
+   "name": null,
+   "totalMs": 17.7,
+   "queryMs": 17.7,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 37,
+   "name": null,
+   "totalMs": 15.5,
+   "queryMs": 15.5,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 38,
+   "name": "UpsamplingMaterial",
+   "totalMs": 15.3,
+   "queryMs": 15.3,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 39,
+   "name": "nameplate-Fispur Ansel the Grocer|#e07070|ac",
+   "totalMs": 13.4,
+   "queryMs": 13.3,
+   "linkCallMs": 0,
+   "compileMs": 0.1,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 11
+  },
+  {
+   "rank": 40,
+   "name": "LuminanceMaterial",
+   "totalMs": 12.1,
+   "queryMs": 12.1,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 41,
+   "name": null,
+   "totalMs": 10.1,
+   "queryMs": 10.1,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 42,
+   "name": null,
+   "totalMs": 9.6,
+   "queryMs": 9.6,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 43,
+   "name": null,
+   "totalMs": 7.8,
+   "queryMs": 7.8,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:35718",
+   "usedTimes": 1
+  },
+  {
+   "rank": 44,
+   "name": "scene3d-surface-080000e3",
+   "totalMs": 0.2,
+   "queryMs": 0,
+   "linkCallMs": 0.1,
+   "compileMs": 0.1,
+   "queryKind": "getProgramParameter:37297",
+   "usedTimes": 26
+  },
+  {
+   "rank": 45,
+   "name": "particle-unlit-8000041",
+   "totalMs": 0.2,
+   "queryMs": null,
+   "linkCallMs": 0.2,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 35
+  },
+  {
+   "rank": 46,
+   "name": null,
+   "totalMs": 0.1,
+   "queryMs": null,
+   "linkCallMs": 0.1,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 169
+  },
+  {
+   "rank": 47,
+   "name": "scene3d-surface-080011c7",
+   "totalMs": 0.1,
+   "queryMs": 0.1,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:37297",
+   "usedTimes": 8
+  },
+  {
+   "rank": 48,
+   "name": "scene3d-surface-080000e2",
+   "totalMs": 0.1,
+   "queryMs": 0,
+   "linkCallMs": 0.1,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:37297",
+   "usedTimes": 5
+  },
+  {
+   "rank": 49,
+   "name": "scene3d-surface-080004e9",
+   "totalMs": 0.1,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0.1,
+   "queryKind": null,
+   "usedTimes": 2
+  },
+  {
+   "rank": 50,
+   "name": "scene3d-surface-08000015",
+   "totalMs": 0.1,
+   "queryMs": 0,
+   "linkCallMs": 0.1,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:37297",
+   "usedTimes": 2
+  },
+  {
+   "rank": 51,
+   "name": "scene3d-surface-08000742",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 42
+  },
+  {
+   "rank": 52,
+   "name": "scene3d-surface-08000afb",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 3
+  },
+  {
+   "rank": 53,
+   "name": "scene3d-surface-080004d2",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 79
+  },
+  {
+   "rank": 54,
+   "name": "scene3d-surface-080011f1",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 31
+  },
+  {
+   "rank": 55,
+   "name": "scene3d-surface-0800157e",
+   "totalMs": 0,
+   "queryMs": 0,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:37297",
+   "usedTimes": 152
+  },
+  {
+   "rank": 56,
+   "name": "scene3d-surface-08000006",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 3
+  },
+  {
+   "rank": 57,
+   "name": "scene3d-surface-08000006",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 3
+  },
+  {
+   "rank": 58,
+   "name": "scene3d-surface-080003ea",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 9
+  },
+  {
+   "rank": 59,
+   "name": "scene3d-surface-08000b47",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 1
+  },
+  {
+   "rank": 60,
+   "name": "scene3d-surface-0800012d",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 3
+  },
+  {
+   "rank": 61,
+   "name": "scene3d-surface-080001d0",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 1
+  },
+  {
+   "rank": 62,
+   "name": "scene3d-surface-08000497",
+   "totalMs": 0,
+   "queryMs": 0,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:37297",
+   "usedTimes": 2
+  },
+  {
+   "rank": 63,
+   "name": "scene3d-surface-08000015",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 2
+  },
+  {
+   "rank": 64,
+   "name": "particle-unlit-80000e6",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 14
+  },
+  {
+   "rank": 65,
+   "name": "particle-unlit-80000e6",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 14
+  },
+  {
+   "rank": 66,
+   "name": "particle-unlit-8000041",
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 35
+  },
+  {
+   "rank": 67,
+   "name": null,
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 1
+  },
+  {
+   "rank": 68,
+   "name": null,
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 2
+  },
+  {
+   "rank": 69,
+   "name": null,
+   "totalMs": 0,
+   "queryMs": null,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": null,
+   "usedTimes": 2
+  },
+  {
+   "rank": 70,
+   "name": "scene3d-surface-0800045e",
+   "totalMs": 0,
+   "queryMs": 0,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:37297",
+   "usedTimes": 1
+  },
+  {
+   "rank": 71,
+   "name": "scene3d-surface-0800013d",
+   "totalMs": 0,
+   "queryMs": 0,
+   "linkCallMs": 0,
+   "compileMs": 0,
+   "queryKind": "getProgramParameter:37297",
+   "usedTimes": 1
+  }
+ ]
+}
