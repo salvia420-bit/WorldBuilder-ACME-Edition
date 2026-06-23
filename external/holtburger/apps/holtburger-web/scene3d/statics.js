@@ -90,6 +90,10 @@ import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees } from "./an
 // Tree wind sway (?treeWind, default-OFF). When off, the peel below never runs
 // and `statics` is unchanged → byte-identical frozen instanced path.
 import { treeWindEnabled, isTreeDid } from "./tree_wind.js";
+// VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
+// placement also goes to the wind player if its catalog descriptor carries
+// deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
+import { visualEnabled, ensureVfxCatalog, vfxDescriptorFor, hasWindBend } from "./vfx_catalog.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -1591,11 +1595,17 @@ export async function bakeStaticsForLandblock(
   // Tree wind (?treeWind) — peel allowlisted tree DIDs out of the frozen path,
   // AFTER the anim peel so the two sets are disjoint. Off ⇒ statics unchanged.
   let windTrees = null;
-  if (treeWindEnabled()) {
-    const t = statics.filter((p) => isTreeDid((p?.modelId >>> 0) || 0));
+  if (treeWindEnabled() || visualEnabled()) {
+    if (visualEnabled()) { try { await ensureVfxCatalog(); } catch (_) {} }
+    const isWind = (p) => {
+      const did = (p?.modelId >>> 0) || 0;
+      return (treeWindEnabled() && isTreeDid(did)) ||
+             (visualEnabled() && hasWindBend(vfxDescriptorFor(did)));
+    };
+    const t = statics.filter(isWind);
     if (t.length > 0) {
       windTrees = t;
-      statics = statics.filter((p) => !isTreeDid((p?.modelId >>> 0) || 0));
+      statics = statics.filter((p) => !isWind(p));
     }
   }
   // A2 — the load-bearing fetch+drain (fetch_landblock_objects +
@@ -2109,11 +2119,17 @@ export async function bakeStaticsRing(
   // Tree wind (?treeWind) — peel allowlisted tree DIDs (ring path), AFTER the
   // anim peel so the sets are disjoint. Off ⇒ statics unchanged.
   let windTrees = null;
-  if (treeWindEnabled()) {
-    const t = statics.filter((p) => isTreeDid((p?.modelId >>> 0) || 0));
+  if (treeWindEnabled() || visualEnabled()) {
+    if (visualEnabled()) { try { await ensureVfxCatalog(); } catch (_) {} }
+    const isWind = (p) => {
+      const did = (p?.modelId >>> 0) || 0;
+      return (treeWindEnabled() && isTreeDid(did)) ||
+             (visualEnabled() && hasWindBend(vfxDescriptorFor(did)));
+    };
+    const t = statics.filter(isWind);
     if (t.length > 0) {
       windTrees = t;
-      statics = statics.filter((p) => !isTreeDid((p?.modelId >>> 0) || 0));
+      statics = statics.filter((p) => !isWind(p));
     }
   }
   // Mark every newly-baked LB in the set BEFORE instantiation runs
