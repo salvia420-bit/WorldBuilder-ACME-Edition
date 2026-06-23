@@ -304,6 +304,9 @@ public class JsonCommandProcessor {
             ["emit-static-site"] = CmdEmitStaticSite,
             ["emit-render-gallery"] = CmdEmitRenderGallery,
             ["serve-render-gallery"] = CmdServeRenderGallery,
+            // Visual-Behavior Suite (build-spec §12.2) — see CommandEngine.Vfx.cs
+            ["vfx-classify"] = CmdVfxClassify,
+            ["vfx-emit-allowlist"] = CmdVfxEmitAllowlist,
             ["chorizite-dump-enum-values"] = CmdChoriziteDumpEnumValues,
             ["chorizite-dump-world-object-taxonomy"] = CmdChoriziteDumpWorldObjectTaxonomy,
             ["chorizite-hash-string"] = CmdChoriziteHashString,
@@ -1082,6 +1085,51 @@ public class JsonCommandProcessor {
                 lbHex = f.LbHex,
                 error = f.Error,
             }),
+        });
+    }
+
+    // ── Visual-Behavior Suite (build-spec §12.2) — see CommandEngine.Vfx.cs ──
+
+    private string CmdVfxClassify(System.Text.Json.Nodes.JsonNode node) {
+        var didNode = node["did"] ?? throw new ArgumentException("Missing 'did' field");
+        uint did = didNode.GetValueKind() == System.Text.Json.JsonValueKind.String
+            ? WorldBuilder.Shared.Lib.HexDidJsonConverter.ParseDid(didNode.GetValue<string>())
+            : didNode.GetValue<uint>();
+        var r = _engine.VfxClassify(did);
+        if (!r.Success) {
+            return Serialize(new { success = false, command = "vfx-classify", did = $"0x{did:X8}", error = r.Error });
+        }
+        return Serialize(new {
+            success = true,
+            command = "vfx-classify",
+            did = $"0x{r.Did:X8}",
+            archetype = r.Archetype,
+            confidence = r.Confidence,
+            source = r.Source,
+            mech = r.Mech,
+            components = r.Components.Select(c => new {
+                name = c.Name,
+                channel = c.Channel,
+                config = c.Config,
+            }),
+            signals = r.Signals.Select(s => new { name = s.Name, value = s.Value, weight = s.Weight }),
+        });
+    }
+
+    private string CmdVfxEmitAllowlist(System.Text.Json.Nodes.JsonNode node) {
+        string archetype = node["archetype"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'archetype' field");
+        var r = _engine.VfxEmitAllowlist(archetype);
+        if (!r.Success) {
+            return Serialize(new { success = false, command = "vfx-emit-allowlist", archetype, error = r.Error });
+        }
+        return Serialize(new {
+            success = true,
+            command = "vfx-emit-allowlist",
+            archetype = r.Archetype,
+            count = r.Dids.Length,
+            selectorOnly = r.SelectorOnly,
+            dids = r.Dids.Select(d => $"0x{d:X8}"),
         });
     }
 

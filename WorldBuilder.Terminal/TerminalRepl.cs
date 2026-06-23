@@ -163,6 +163,7 @@ public class TerminalRepl {
             ["weenie"] = HandleWeenie,
             ["placement"] = HandlePlacement,
             ["surface-materials"] = HandleSurfaceMaterials,
+            ["vfx"] = HandleVfx,
             ["fresh-start"] = HandleFreshStart,
             ["generate-world"] = HandleGenerateWorld,
             ["export-towns-csv"] = HandleExportTownsCsv,
@@ -2951,6 +2952,57 @@ public class TerminalRepl {
                 }
                 default:
                     Console.WriteLine($"Unknown surface-materials subcommand: {tokens[1]}");
+                    break;
+            }
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    // ── Visual-Behavior Suite (vfx) — build-spec §12.2. ──────────────────
+    // Two verbs land in Phase-0 commit 2: `classify` and `emit-allowlist`.
+    private void HandleVfx(string[] tokens) {
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: vfx <classify|emit-allowlist> ...");
+            Console.WriteLine("  vfx classify <DID>            run the auto-classifier cascade on a SetupDID");
+            Console.WriteLine("  vfx emit-allowlist <archetype>  enumerate the DID set the archetype's rule matches");
+            return;
+        }
+        try {
+            switch (tokens[1].ToLowerInvariant()) {
+                case "classify": {
+                    if (tokens.Length < 3) { Console.WriteLine("Usage: vfx classify <DID>"); return; }
+                    if (!TryParseUint(tokens[2], "DID", out var did)) return;
+                    var r = _engine.VfxClassify(did);
+                    if (!r.Success) { Console.WriteLine($"Error: {r.Error}"); return; }
+                    Console.WriteLine($"0x{r.Did:X8} → {r.Archetype}  (confidence {r.Confidence:F2}, source {r.Source}, mech {r.Mech ?? "-"})");
+                    if (r.Components.Count == 0) {
+                        Console.WriteLine("  components: (none — rigid/frozen path)");
+                    } else {
+                        Console.WriteLine("  components:");
+                        foreach (var c in r.Components)
+                            Console.WriteLine($"    - {c.Name} [channel={c.Channel ?? "-"}]");
+                    }
+                    if (r.Signals.Count > 0) {
+                        Console.WriteLine("  signals:");
+                        foreach (var s in r.Signals)
+                            Console.WriteLine($"    {s.Name}={s.Value} (w={s.Weight:F2})");
+                    }
+                    break;
+                }
+                case "emit-allowlist": {
+                    if (tokens.Length < 3) { Console.WriteLine("Usage: vfx emit-allowlist <archetype>"); return; }
+                    var r = _engine.VfxEmitAllowlist(tokens[2]);
+                    if (!r.Success) { Console.WriteLine($"Error: {r.Error}"); return; }
+                    Console.WriteLine($"{r.Archetype}: {r.Dids.Length} DID(s)"
+                        + (r.SelectorOnly ? " (selector-only — needs weenie props, build-spec §18 #1)" : ""));
+                    foreach (var did in r.Dids)
+                        Console.WriteLine($"  0x{did:X8}");
+                    break;
+                }
+                default:
+                    Console.WriteLine($"Unknown vfx subcommand: {tokens[1]}");
                     break;
             }
         }

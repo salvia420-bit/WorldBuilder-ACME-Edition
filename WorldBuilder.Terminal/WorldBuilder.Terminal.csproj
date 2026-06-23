@@ -62,6 +62,13 @@
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
 		</Content>
+		<!-- Visual-Behavior Suite archetype-rule registry (single source of
+		     truth for `vfx classify` / `vfx emit-allowlist`). Shipped next to the
+		     binary so the round-trip works regardless of CWD / loaded project. -->
+		<Content Include="VfxData\**\*">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+		</Content>
 	</ItemGroup>
 
 	<ItemGroup>
