@@ -96,6 +96,22 @@ const TIER1 = [
   { flag: "vfxMaterialSubstrate(JS)", file: "test_vfx_material_substrate.mjs" },
   { flag: "vfxCatalog(JS)", file: "test_vfx_catalog.mjs" },
   { flag: "vfxLegacySafety(JS)", file: "test_vfx_legacy_safety.mjs" },
+  { flag: "vfxShadowPass(JS)", file: "test_vfx_shadow_pass.mjs" },
+  { flag: "vfxOscillators(JS)", file: "test_vfx_oscillators.mjs" },
+  { flag: "vfxPerInstanceHash(JS)", file: "test_vfx_per_instance_hash.mjs" },
+  { flag: "vfxFragInstall(JS)", file: "test_vfx_frag_install.mjs" },
+  { flag: "vfxFragAttach(JS)", file: "test_vfx_frag_attach.mjs" },
+  { flag: "vfxGlint(JS)", file: "test_vfx_glint.mjs" },
+  { flag: "vfxMagicGlow(JS)", file: "test_vfx_magicglow.mjs" },
+  { flag: "vfxEnchantShimmer(JS)", file: "test_vfx_enchantshimmer.mjs" },
+  { flag: "vfxTarnish(JS)", file: "test_vfx_tarnish.mjs" },
+  { flag: "vfxWetness(JS)", file: "test_vfx_wetness.mjs" },
+  { flag: "vfxFrost(JS)", file: "test_vfx_frost.mjs" },
+  { flag: "vfxFlameFlicker(JS)", file: "test_vfx_flameflicker.mjs" },
+  { flag: "vfxWeatherInputs(JS)", file: "test_vfx_weather_inputs.mjs" },
+  { flag: "vfxFlags(JS)", file: "test_vfx_flags.mjs" },
+  { flag: "vfxCostModel(JS)", file: "test_vfx_cost_model.mjs" },
+  { flag: "vfxFirewall(JS)", file: "test_vfx_firewall.mjs" },
 ].map((t) => ({ ...t, tier: 1 }));
 
 // New files (authored in parallel). Referenced by path even if not present yet:

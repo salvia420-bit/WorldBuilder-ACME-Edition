@@ -103,6 +103,10 @@ import { visualEnabled, ensureVfxCatalog, vfxDescriptorFor, hasWindBend } from "
 import { fragPlanForDid } from "./vfx/frag_attach.js";
 import { buildFragVariant } from "./vfx/frag_install.js";
 import { ensureVfxHashVarying } from "./vfx/per_instance.js";
+// Barrel — registers ALL Phase-1 frag/light components so fragPlanForDid can
+// resolve them at bake time when ?visual is on. Side-effect-only (registration);
+// byte-identical when ?visual is off (the registry is consulted only then).
+import "./vfx/components/index.js";
 
 // VFX frag variant (?visual, P1.14). frag_attach selects + merges per the
 // descriptor; frag_install builds the per-SET cloned variant (one program per

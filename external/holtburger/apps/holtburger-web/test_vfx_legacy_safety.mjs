@@ -9,7 +9,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { lintManifest, lintSource, ALLOWED_READS, ALLOWED_WRITES } from "./scene3d/vfx/lint_caps.js";
-import { windBend } from "./scene3d/vfx/components/windBend.js"; // registers it
+import "./scene3d/vfx/components/index.js"; // barrel — registers ALL Phase-1 components
+import { windBend, TIER1_COMPONENT_IDS } from "./scene3d/vfx/components/index.js";
 import { allComponents } from "./scene3d/vfx/registry.js";
 
 let passed = 0, failed = 0;
@@ -21,6 +22,12 @@ function check(label, cond, extra = "") {
 // ---- Layer A: manifest conformance (every registered component) ----
 const comps = allComponents();
 check("at least one component registered (windBend)", comps.length >= 1 && comps.includes(windBend));
+// Slice-16: the barrel must register EXACTLY the canonical Phase-1 set — no
+// missing barrel export (effect silently never attaches) and no stray.
+const _regIds = new Set(comps.map((c) => c.id));
+check("registry == TIER1 component set (barrel registers all 8; no missing/stray)",
+  _regIds.size === TIER1_COMPONENT_IDS.length && TIER1_COMPONENT_IDS.every((id) => _regIds.has(id)),
+  [..._regIds].join());
 let aClean = true;
 for (const c of comps) {
   const errs = lintManifest(c);
