@@ -3016,6 +3016,7 @@ public class TerminalRepl {
                     Console.WriteLine($"  drawcallsDelta    {r.DrawcallsDelta}");
                     Console.WriteLine($"  vramMB            {r.VramMB:F2}");
                     Console.WriteLine($"  particleEmitters  {r.ParticleEmitters}");
+                    Console.WriteLine($"  lightsDelta       {r.LightsDelta}   (G4 — must be 0, no light-count relink)");
                     Console.WriteLine($"  headroomPct       {r.HeadroomPct:F1}%   (G1 program-link budget)");
                     if (r.ArchetypeBreakdown.Count > 0) {
                         Console.WriteLine("  archetypes:");

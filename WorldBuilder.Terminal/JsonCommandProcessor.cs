@@ -1151,6 +1151,7 @@ public class JsonCommandProcessor {
             programsDelta = r.ProgramsDelta,
             vramMB = r.VramMB,
             particleEmitters = r.ParticleEmitters,
+            lightsDelta = r.LightsDelta,
             headroomPct = r.HeadroomPct,
             withinBudget = r.WithinBudget,
             verdict = r.Verdict,

@@ -365,6 +365,7 @@ public partial class CommandEngine {
         int drawcallsDelta = 0;         // Σ dCallsPerInstance — MUST stay 0 for non-particle effects (G2)
         double vramMB = 0.0;            // Σ dVramMB per driver (G3)
         int particleEmitters = 0;       // Σ dParticleEmitters per driver
+        int lightsDelta = 0;            // Σ dLightsPerDriver — MUST stay 0 (G4 no-relink invariant)
         var perArchetype = new Dictionary<string, int>(StringComparer.Ordinal);
         var missingCostRows = new List<string>();
 
@@ -382,6 +383,7 @@ public partial class CommandEngine {
                 drawcallsDelta += row.DCallsPerInstance;   // 0 for every non-particle row
                 vramMB += row.DVramMB;
                 particleEmitters += row.DParticleEmitters;
+                lightsDelta += row.DLightsPerDriver;       // 0 for every row (the no-relink invariant)
             }
             // A rigid (zero-component) model still counts the "rigid" no-op row
             // for completeness if present — it contributes nothing on any axis.
@@ -390,6 +392,7 @@ public partial class CommandEngine {
                 drawcallsDelta += rr.DCallsPerInstance;
                 vramMB += rr.DVramMB;
                 particleEmitters += rr.DParticleEmitters;
+                lightsDelta += rr.DLightsPerDriver;
             }
         }
 
@@ -422,7 +425,17 @@ public partial class CommandEngine {
             "G3", "ΔVRAM ≤ budget, no per-instance texture growth",
             g3, $"vramMB={vramMB:F2} ≤ budget={GaugeVramBudgetMB:F1}"));
 
-        bool allPass = g1 && g2 && g3;
+        // G4 — Δlights = 0 (no light-COUNT change). A light effect (light.flameFlicker)
+        // modulates an EXISTING light's .intensity only; ANY added light forces a
+        // MeshStandard relink + frame freeze (THE RULE — the spell-freeze light-pool
+        // history). Mirrors the JS manifest's lightCountDelta==0 enforcement on the C#
+        // side, so a future light component that tried to grow the count FAILs here.
+        bool g4 = lightsDelta == 0;
+        gates.Add(new VfxGaugeGate(
+            "G4", "Δlights = 0 (intensity-only, no light-count relink)",
+            g4, $"lightsDelta={lightsDelta} (must be 0 — no MeshStandard relink)"));
+
+        bool allPass = g1 && g2 && g3 && g4;
 
         // Headroom on the binding gate (G1, the link budget) — how much of the
         // unique-driver program cap the suite consumes. 100% = empty, 0% = at cap.
@@ -441,6 +454,7 @@ public partial class CommandEngine {
             ProgramsDelta: programsDelta,
             VramMB: Math.Round(vramMB, 3),
             ParticleEmitters: particleEmitters,
+            LightsDelta: lightsDelta,
             HeadroomPct: Math.Round(headroomPct, 1),
             WithinBudget: allPass,
             Verdict: verdict,
@@ -490,6 +504,10 @@ public sealed record VfxComponentCost {
     [System.Text.Json.Serialization.JsonPropertyName("dVramMB")] public double DVramMB { get; init; }
     /// <summary>Particle emitters added per driver (only the particle family is non-zero).</summary>
     [System.Text.Json.Serialization.JsonPropertyName("dParticleEmitters")] public int DParticleEmitters { get; init; }
+    /// <summary>Lights ADDED per driver (the G4 axis). MUST be 0 for every effect — a light-count change forces a
+    /// MeshStandard relink + frame freeze (THE RULE; the spell-freeze light-pool history). flameFlicker modulates
+    /// an existing light's .intensity only, so this stays 0. Absent on legacy rows ⇒ deserializes to 0 (no churn).</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("dLightsPerDriver")] public int DLightsPerDriver { get; init; }
     /// <summary>ALU class estimate: none|low|medium|high (POM/heat-haze only).</summary>
     [System.Text.Json.Serialization.JsonPropertyName("dAluClass")] public string? DAluClass { get; init; }
     [System.Text.Json.Serialization.JsonPropertyName("mech")] public string? Mech { get; init; }
@@ -515,6 +533,7 @@ public sealed record VfxGaugeResult(
     int ProgramsDelta,
     double VramMB,
     int ParticleEmitters,
+    int LightsDelta,
     double HeadroomPct,
     bool WithinBudget,
     string Verdict,
@@ -526,7 +545,7 @@ public sealed record VfxGaugeResult(
     /// <summary>A failed gauge (unknown ref / missing cost rows). Not within budget.</summary>
     public static VfxGaugeResult Failure(string reference, string error) => new(
         Success: false, Reference: reference, UniqueModels: 0, TotalPlacements: 0,
-        DrawcallsDelta: 0, ProgramsDelta: 0, VramMB: 0, ParticleEmitters: 0,
+        DrawcallsDelta: 0, ProgramsDelta: 0, VramMB: 0, ParticleEmitters: 0, LightsDelta: 0,
         HeadroomPct: 0, WithinBudget: false, Verdict: "STRUCTURAL-FAIL",
         TimingMeter: "N/A (SwiftShader/CI — 1070-only)",
         ArchetypeBreakdown: new Dictionary<string, int>(), Gates: new List<VfxGaugeGate>(),
