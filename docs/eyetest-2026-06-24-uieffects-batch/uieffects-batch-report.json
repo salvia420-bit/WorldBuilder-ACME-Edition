@@ -1,0 +1,24 @@
+{
+  "ts": "2026-06-24T13:58:03.657Z",
+  "arms": {
+    "icons": {
+      "name": "uiEffectIcons",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "inWorld": true,
+      "katarGuid": "0x80004284",
+      "badge": {
+        "present": false
+      }
+    },
+    "aura": {
+      "name": "itemFx",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "inWorld": false,
+      "error": "no in-world"
+    },
+    "luminousEmissiveMap": {
+      "name": "luminousEmissiveMap",
+      "notRun": "needs DYED-LUMINOUS gear (katar lum=0); stage a dyed glowing item/NPC to A/B"
+    }
+  }
+}
