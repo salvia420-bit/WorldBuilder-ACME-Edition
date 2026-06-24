@@ -87,7 +87,11 @@ function loadModule(relPath) {
         .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
         // Strip relative `import { … } from "./X.js"` / "../ui/X.js" lines —
         // we splice the modules we need by hand instead.
-        .replace(/^\s*import\s+\{[^}]+\}\s+from\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "");
+        .replace(/^\s*import\s+\{[^}]+\}\s+from\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "")
+        // Strip bare relative side-effect imports `import "./X.js";` (e.g. the VFX
+        // component barrel that self-registers components). The eval sandbox does
+        // not need the side effect; spliced deps are shimmed by hand below.
+        .replace(/^\s*import\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "");
     return src;
 }
 

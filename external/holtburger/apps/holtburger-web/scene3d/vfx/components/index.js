@@ -8,6 +8,7 @@
 // Side-effect-only for registration, but the named re-exports let consumers grab
 // a component object directly (e.g. test_vfx_firewall, the legacy-safety audit).
 export { windBend } from "./windBend.js";              // deformation (Phase 0, MECH-A)
+export { tipFlex } from "./tipFlex.js";                // deformation (Phase 2, MECH-B vertex)
 export { tarnish } from "./tarnish.js";                // weathering / frag
 export { wetness } from "./wetness.js";                // weathering / frag (channel precip)
 export { frost } from "./frost.js";                    // weathering / frag (channel precip)
@@ -22,6 +23,7 @@ export { flameFlicker } from "./flameFlicker.js";      // light (intensity-only)
 // stray registration).
 export const TIER1_COMPONENT_IDS = Object.freeze([
   "deformation.windBend",
+  "deformation.tipFlex",
   "weathering.tarnish",
   "weathering.wetness",
   "weathering.frost",

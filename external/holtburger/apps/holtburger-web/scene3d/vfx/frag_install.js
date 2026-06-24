@@ -27,11 +27,12 @@
 import { FAMILY_ORDER, getComponent } from "./registry.js";
 import { COMPONENT_MECH, vfxDescriptorFor, visualEnabled } from "../vfx_catalog.js";
 
-// The mechs whose components attach as a fragment/shader material patch on the
-// getCachedVariant clone. Phase 1 = "frag" only; MECH-B vertex displacement
-// (deformation.tipFlex) reuses the SAME getCachedVariant chain + __vfxSetKey when
-// it lands, so it joins this set then (queued-for-1070, see integration notes).
-export const PATCH_MECHS = Object.freeze(new Set(["frag"]));
+// The mechs whose components attach on the getCachedVariant clone under ONE
+// __vfxSetKey. "frag" = fragment-seam patch (Phase 1); "B" = MECH-B vertex
+// displacement at #include <begin_vertex> (Phase 2, deformation.tipFlex) — it
+// reuses the SAME getCachedVariant chain + __vfxSetKey, so it joins this set. The
+// installer (installVfxComponentPatch) dispatches each entry to its seam by mech.
+export const PATCH_MECHS = Object.freeze(new Set(["frag", "B"]));
 
 /** Composition order: family bucket (FAMILY_ORDER) then id ascending. The chain
  *  runs hooks in this order; matches the seam composition every frag component

@@ -100,6 +100,8 @@ const TIER1 = [
   { flag: "vfxOscillators(JS)", file: "test_vfx_oscillators.mjs" },
   { flag: "vfxPerInstanceHash(JS)", file: "test_vfx_per_instance_hash.mjs" },
   { flag: "vfxFragInstall(JS)", file: "test_vfx_frag_install.mjs" },
+  { flag: "vfxVertexInstall(JS)", file: "test_vfx_vertex_install.mjs" }, // P2.1 MECH-B firewall
+  { flag: "vfxTipFlex(JS)", file: "test_vfx_tipflex.mjs" },              // P2.2 deformation.tipFlex
   { flag: "vfxFragAttach(JS)", file: "test_vfx_frag_attach.mjs" },
   { flag: "vfxGlint(JS)", file: "test_vfx_glint.mjs" },
   { flag: "vfxMagicGlow(JS)", file: "test_vfx_magicglow.mjs" },

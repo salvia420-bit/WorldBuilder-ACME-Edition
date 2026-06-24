@@ -84,7 +84,15 @@ export function fragEntriesForDescriptor(descriptor) {
   const out = [];
   ids.forEach((id) => {
     const comp = getComponent(id);
-    if (!comp || comp.mech !== "frag") return;            // not a registered frag comp
+    // P2 — admit BOTH the fragment seam ("frag") AND the MECH-B vertex seam ("B")
+    // so a single descriptor SET (e.g. [deformation.tipFlex (B), emissive.glint
+    // (frag)]) resolves as ONE plan -> ONE getCachedVariant -> ONE __vfxSetKey.
+    // installVfxComponentPatch dispatches each entry to its own shader seam by
+    // comp.mech; the comp.enabled gate below still drops a component when its
+    // per-effect flag is off (tipFlex -> ?tipFlex), so widening membership never
+    // forces an effect on. FAMILY_ORDER puts deformation(0) before emissive(3) ->
+    // the vertex patch is installed before the frag patch on the shared chain.
+    if (!comp || (comp.mech !== "frag" && comp.mech !== "B")) return; // not a patchable comp
     if (typeof comp.enabled === "function" && !comp.enabled()) return; // per-effect flag (slice 14)
     out.push({ comp, config: mergeComponentConfig(comp, split) });
   });

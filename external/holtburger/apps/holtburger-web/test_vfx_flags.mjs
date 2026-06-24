@@ -8,7 +8,7 @@
 import {
   vfxEffectEnabled, vfxActiveEffectIds, VFX_EFFECT_FLAGS,
   glintEnabled, magicGlowEnabled, enchantShimmerEnabled,
-  tarnishEnabled, wetnessEnabled, frostEnabled, flameFlickerEnabled,
+  tarnishEnabled, wetnessEnabled, frostEnabled, flameFlickerEnabled, tipFlexEnabled,
   visualAllEffects, visualBudget, _resetVfxFlags,
 } from "./scene3d/vfx_flags.js";
 import { visualEnabled, _resetVfxCatalog } from "./scene3d/vfx_catalog.js";
@@ -25,11 +25,11 @@ function setUrl(search) {
 function clearUrl() { delete globalThis.window; _resetVfxCatalog(); _resetVfxFlags(); }
 
 const ALL_READERS = [glintEnabled, magicGlowEnabled, enchantShimmerEnabled,
-  tarnishEnabled, wetnessEnabled, frostEnabled, flameFlickerEnabled];
+  tarnishEnabled, wetnessEnabled, frostEnabled, flameFlickerEnabled, tipFlexEnabled];
 const ALL_IDS = Object.keys(VFX_EFFECT_FLAGS);
 
 // ---- the router map is complete ----
-check("VFX_EFFECT_FLAGS maps all 7 Phase-1 effect ids", ALL_IDS.length === 7, ALL_IDS.join());
+check("VFX_EFFECT_FLAGS maps all 8 effect ids (Phase-1 + deformation.tipFlex)", ALL_IDS.length === 8, ALL_IDS.join());
 check("every mapped id has a function reader", ALL_IDS.every((id) => typeof VFX_EFFECT_FLAGS[id] === "function"));
 
 // ---- default OFF (no window) ----
@@ -69,7 +69,7 @@ check("?visual=all: visualAllEffects() true", visualAllEffects() === true);
 check("?visual=all: every per-effect reader true", ALL_READERS.every((f) => f() === true));
 check("?visual=all: vfxEffectEnabled(all ids) true", ALL_IDS.every((id) => vfxEffectEnabled(id) === true));
 check("?visual=all: unknown id falls back to ALL (true)", vfxEffectEnabled("emissive.future") === true);
-check("?visual=all: all 7 effects active", vfxActiveEffectIds().length === 7);
+check("?visual=all: all 8 effects active", vfxActiveEffectIds().length === 8);
 
 // ---- ?visualAll=on alias (composed with ?visual=on) ----
 setUrl("?visual=on&visualAll=on");
@@ -81,7 +81,7 @@ setUrl("?visual=all&glint=off");
 check("?visual=all&glint=off: glintEnabled() false (opt-out wins)", glintEnabled() === false);
 check("?visual=all&glint=off: vfxEffectEnabled(glint) false", vfxEffectEnabled("emissive.glint") === false);
 check("?visual=all&glint=off: vfxEffectEnabled(tarnish) still true", vfxEffectEnabled("weathering.tarnish") === true);
-check("?visual=all&glint=off: 6 effects active", vfxActiveEffectIds().length === 6);
+check("?visual=all&glint=off: 7 effects active", vfxActiveEffectIds().length === 7);
 
 // ---- ?visualAll=on WITHOUT ?visual still firewalled (master off) ----
 setUrl("?visualAll=on");

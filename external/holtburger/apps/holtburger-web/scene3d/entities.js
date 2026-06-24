@@ -546,10 +546,19 @@ import { drainPendingPlayEffects } from "./play_effect_vfx.js";
 // statics.js frag seam (buildFragVariant + VFX_GLOBALS), keyed off the entity's
 // UiEffects bitmask via item_fx.itemFxPlanFor. Lazy frag deps below keep the
 // eval-based harnesses loadable. itemAura self-registers through item_fx's import.
-import { visualEnabled } from "./vfx_catalog.js";
+import { visualEnabled, ensureVfxCatalog } from "./vfx_catalog.js";
 import { buildFragVariant } from "./vfx/frag_install.js";
 import { ensureVfxHashVarying } from "./vfx/per_instance.js";
 import { itemFxPlanFor, itemFxEnabled } from "./vfx/item_fx.js";
+// P2.2 (?tipFlex): the offline catalog descriptor -> frag/MECH-B "plan" for an
+// entity's setup DID, the per-effect flag, FAMILY_ORDER for the plan merge, and
+// the component barrel so tipFlex + glint self-register (item_fx imports only
+// itemAura). buildFragVariant + VFX_GLOBALS/installVfxComponentPatch are already
+// imported (the statics-mirrored entity frag seam).
+import { fragPlanForDid } from "./vfx/frag_attach.js";
+import { tipFlexEnabled } from "./vfx_flags.js";
+import { FAMILY_ORDER } from "./vfx/registry.js";
+import "./vfx/components/index.js";
 const VFX_HASH_PRELUDE = { id: "infra.vfxHash", inject: (s) => ensureVfxHashVarying(s) };
 let _entityVfxFragDeps = null;
 function _entityFragMat(base, materialCache, surfaceDid, fragPlan) {
@@ -562,6 +571,32 @@ function _entityFragMat(base, materialCache, surfaceDid, fragPlan) {
     };
   }
   return buildFragVariant(materialCache, surfaceDid, fragPlan.entries, _entityVfxFragDeps) || base;
+}
+// Combine two frag plans ({entries,ids}|null) into ONE so a single material variant
+// carries BOTH the offline-catalog SET (e.g. [deformation.tipFlex (MECH-B vertex),
+// emissive.glint (frag)]) AND any live itemFx aura -> ONE getCachedVariant / ONE
+// __vfxSetKey (the one-variant-per-SET firewall). Dedup by comp.id (first wins),
+// re-sort (FAMILY_ORDER major, id minor) so the vertex entry (deformation=0)
+// installs before frag (emissive=3) on the shared chain. Either-null => the other
+// (or null) => a pure passthrough, so ?tipFlex-off is byte-identical to today's
+// itemFx-only path. Pure (no Date.now/Math.random); bake/spawn-time, not hot frame.
+function _mergeFragPlans(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  const seen = new Set();
+  const entries = [];
+  for (const e of a.entries.concat(b.entries)) {
+    if (seen.has(e.comp.id)) continue;
+    seen.add(e.comp.id);
+    entries.push(e);
+  }
+  entries.sort((x, y) => {
+    const fx = FAMILY_ORDER[x.comp.family] ?? 99;
+    const fy = FAMILY_ORDER[y.comp.family] ?? 99;
+    if (fx !== fy) return fx - fy;
+    return x.comp.id < y.comp.id ? -1 : x.comp.id > y.comp.id ? 1 : 0;
+  });
+  return { entries, ids: entries.map((e) => e.comp.id) };
 }
 import {
   showSpeechBubbleOnEntity,
@@ -3251,6 +3286,25 @@ export class EntityManager {
         if (ue) _itemFxPlan = itemFxPlanFor(ue);
       } catch (_) { _itemFxPlan = null; }
     }
+    // P2.2 (?tipFlex) — offline catalog descriptor for this entity's ORIGINAL
+    // (pre-LOD) setup DID. Carries the tip-flex SET [deformation.tipFlex (MECH-B
+    // vertex), emissive.glint (frag)]; the widened frag_attach mech filter admits
+    // the vertex entry, and tipFlex's own `enabled: tipFlexEnabled` gate drops it
+    // when ?tipFlex is off. Gate visualEnabled() && tipFlexEnabled() (|| future
+    // entity-side deform effects, e.g. bow-limb). Off => no catalog plan => entity
+    // material path unchanged (byte-identical). Use lodOriginalSetup so the
+    // descriptor key matches the canonical SetupModel even when a 0x01 LOD gfxobj
+    // was substituted. await ensureVfxCatalog() is a cached no-op after first load.
+    let _catalogPlan = null;
+    if (visualEnabled() && tipFlexEnabled()) {
+      try {
+        await ensureVfxCatalog();
+        _catalogPlan = fragPlanForDid(lodOriginalSetup >>> 0);
+      } catch (_) { _catalogPlan = null; }
+    }
+    // ONE combined plan => ONE getCachedVariant / ONE __vfxSetKey when BOTH the
+    // catalog SET and a live itemFx aura are present; passthrough otherwise.
+    const _entityPlan = _mergeFragPlans(_catalogPlan, _itemFxPlan);
     const resolveEntityMaterial = (g) => {
       const did = g.surfaceDid >>> 0;
       if (inst._entityMaterials && inst._entityMaterials.has(did)) {
@@ -3259,7 +3313,7 @@ export class EntityManager {
       if (this.materialCache) {
         // T2: g.doubleSided drives FrontSide vs DoubleSide (default true).
         const base = this.materialCache.getCached(did, g.doubleSided);
-        return _itemFxPlan ? _entityFragMat(base, this.materialCache, did, _itemFxPlan) : base;
+        return _entityPlan ? _entityFragMat(base, this.materialCache, did, _entityPlan) : base;
       }
       return this._fallbackMaterial();
     };

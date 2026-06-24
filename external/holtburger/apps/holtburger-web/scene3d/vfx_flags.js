@@ -118,6 +118,19 @@ export function flameFlickerEnabled() {
   return _flameFlicker;
 }
 
+let _tipFlex;
+/** `?tipFlex=on` — deformation.tipFlex GPU (MECH-B) spear/staff/wand tip-sway: the
+ *  FIRST vertex-displacement effect. Default-OFF, composed under the ?visual master
+ *  gate (and lit by ?visual=all for the 1070 batch). Consumed in TWO places:
+ *  (a) as the tipFlex component's `enabled` gate — frag_attach.fragEntriesForDescriptor
+ *  drops the MECH-B entry when off, so statics/entities stay byte-identical without a
+ *  seam change; (b) at the entities.js catalog-plan seam (whether to resolve the plan
+ *  at all). DEFAULT-OFF. */
+export function tipFlexEnabled() {
+  if (_tipFlex === undefined) _tipFlex = _boolFlag("tipFlex", visualAllEffects());
+  return _tipFlex;
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -131,6 +144,7 @@ export function visualBudget() {
 // Component-id → per-effect flag reader (the gate router). Extend per effect.
 // flameFlicker is a light-tick (not a frag component) but rides the same gate.
 export const VFX_EFFECT_FLAGS = Object.freeze({
+  "deformation.tipFlex": tipFlexEnabled,
   "emissive.glint": glintEnabled,
   "emissive.magicGlow": magicGlowEnabled,
   "emissive.enchantShimmer": enchantShimmerEnabled,
@@ -161,5 +175,5 @@ export function vfxActiveEffectIds() {
 
 /** Reset memoized flag readers (tests only). */
 export function _resetVfxFlags() {
-  _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _budget = undefined;
+  _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _tipFlex = _budget = undefined;
 }
