@@ -1,0 +1,103 @@
+// test_vfx_foliage.mjs — P3.7 foliage/breath particle components + gates.
+// Plain node, NO node_modules (like the other VFX harness tests). From $W:
+//   node test_vfx_foliage.mjs
+//
+// Locks: (1) the 4 components register + are manifest-valid (legacy-safety
+// contract); (2) the gates are pure + deterministic + day/weather/season
+// correct; (3) emit() gates OUT → [] (byte-free) and ON → a persistent emitter
+// POJO naming the right sprite; (4) flag-OFF → no emit.
+
+import {
+  foliagePollen, foliageFireflies, foliageLeaves,
+} from "./scene3d/vfx/components/foliageAmbient.js";
+import { breathFog } from "./scene3d/vfx/components/breathFog.js";
+import { allComponents, validateComponent } from "./scene3d/vfx/registry.js";
+import {
+  nightFactor, pollenGate, firefliesGate, leavesGate, breathFogGate,
+} from "./scene3d/vfx/particle_env_gates.js";
+
+let pass = 0, fail = 0;
+const check = (name, cond, extra) => {
+  if (cond) { pass++; } else { fail++; console.log("  FAIL:", name, extra ?? ""); }
+};
+
+// ── 1. registration + manifest conformance ───────────────────────────────────
+const FOUR = ["particle.breathFog", "particle.foliageFireflies", "particle.foliagePollen", "particle.foliageLeaves"];
+const liveIds = allComponents().map((c) => c.id);
+for (const id of FOUR) check(`registered: ${id}`, liveIds.includes(id));
+for (const c of [foliagePollen, foliageFireflies, foliageLeaves, breathFog]) {
+  check(`${c.id} manifest valid`, validateComponent(c).length === 0, validateComponent(c));
+  check(`${c.id} mech=particle`, c.mech === "particle");
+  check(`${c.id} family=particle`, c.family === "particle");
+  check(`${c.id} channel=emitter`, c.channel === "emitter");
+  check(`${c.id} linkVariant()===""`, c.linkVariant() === "");
+  check(`${c.id} cacheKeyScope=none`, c.cacheKeyScope === "none");
+  check(`${c.id} writes=[emitter]`, JSON.stringify(c.writes) === '["emitter"]');
+  check(`${c.id} lightCountDelta=0`, c.lightCountDelta === 0);
+  check(`${c.id} deterministic`, c.deterministic === true);
+  check(`${c.id} has emit()`, typeof c.emit === "function");
+}
+
+// ── 2. gate correctness (pure) ───────────────────────────────────────────────
+const noon = { sunAlt: 0.92, season: 2, temperatureC: 25, stormness: 0, frost: 0, windStrength: 1.0 };
+const night = { sunAlt: -0.4, season: 2, temperatureC: 16, stormness: 0, frost: 0, windStrength: 1.0 };
+const winterNight = { sunAlt: -0.4, season: 0, temperatureC: -4, frost: 0.9, stormness: 0, windStrength: 1.2 };
+const autumnGust = { sunAlt: 0.3, season: 3, temperatureC: 9, stormness: 0.2, frost: 0.1, windStrength: 1.55 };
+const stormNoon = { ...noon, stormness: 1, isStorm: true };
+
+check("nightFactor: noon=0", nightFactor(noon.sunAlt) === 0);
+check("nightFactor: night=1", nightFactor(night.sunAlt) === 1);
+check("pollen: day>0", pollenGate(noon) > 0);
+check("pollen: night=0", pollenGate(night) === 0);
+check("pollen: storm=0", pollenGate(stormNoon) === 0);
+check("firefly: day=0", firefliesGate(noon) === 0);
+check("firefly: night>0", firefliesGate(night) > 0);
+check("firefly: winter=0", firefliesGate(winterNight) === 0);
+check("leaves: autumn+gust > summer", leavesGate(autumnGust) > leavesGate(noon));
+check("leaves: winter=0", leavesGate(winterNight) === 0);
+check("breath: warm=0", breathFogGate(noon) === 0);
+check("breath: cold>0", breathFogGate(winterNight) > 0);
+// determinism: pure fns return identical for identical input
+check("gate deterministic", firefliesGate(night) === firefliesGate({ ...night }));
+
+// ── 3. emit() — gate out / on / sprite wiring / persistence ───────────────────
+const sprites = { softDot: 0x0A001001, spark: 0x0A001002, leaf: 0x0A001003, smoke: 0x0A001004 };
+const anchor = { partIndex: 7, center: { x: 0, y: 3.2, z: 0 }, radius: 2.5 };
+const ctx = (env) => ({ env, anchor, sprites, seed: 0xABCD1234, config: {} });
+
+check("pollen emits by day", foliagePollen.emit(ctx(noon)).length === 1);
+check("pollen [] at night", foliagePollen.emit(ctx(night)).length === 0);
+check("firefly [] by day", foliageFireflies.emit(ctx(noon)).length === 0);
+check("firefly emits at night", foliageFireflies.emit(ctx(night)).length === 1);
+check("leaves emits autumn-gust", foliageLeaves.emit(ctx(autumnGust)).length === 1);
+check("breath [] warm", breathFog.emit(ctx(noon)).length === 0);
+check("breath emits winter-night", breathFog.emit(ctx(winterNight)).length === 1);
+
+const e = foliageFireflies.emit(ctx(night))[0];
+check("emitter persistent (totalSeconds=0, totalParticles=0)",
+  e.emitterInfo.totalSeconds === 0 && e.emitterInfo.totalParticles === 0);
+check("emitter names spark sprite", e.emitterInfo.hwGfxObjId === sprites.spark);
+check("emitter particleType=Swarm(5)", e.emitterInfo.particleType === 5);
+check("partIndex from anchor", e.partIndex === 7);
+check("parentOffset at canopy centre", e.parentOffset.position.y === 3.2);
+check("birthrate is a finite positive PERIOD", e.emitterInfo.birthrate > 0 && Number.isFinite(e.emitterInfo.birthrate));
+
+// unresolved sprite → invisible-guard (no emitter). D6: components import a default
+// sprite from particle_sprites.js, so the guard only fires when hwGfxObjId is forced 0.
+check("no sprite (hwGfxObjId:0) → []", foliageFireflies.emit({ env: night, anchor, sprites: {}, seed: 1, config: { hwGfxObjId: 0 } }).length === 0);
+// D6: default sprite present ⇒ emits even without ctx.sprites (renders at runtime, no ctx.sprites needed)
+check("default sprite (no ctx.sprites) ⇒ emits", foliageFireflies.emit({ env: night, anchor, seed: 1, config: {} }).length === 1);
+
+// determinism: same seed → identical, different seed → different period
+const p1 = foliageFireflies.emit(ctx(night))[0].emitterInfo.birthrate;
+const p2 = foliageFireflies.emit(ctx(night))[0].emitterInfo.birthrate;
+const p3 = foliageFireflies.emit({ env: night, anchor, sprites, seed: 0x99, config: {} })[0].emitterInfo.birthrate;
+check("same seed → same period", p1 === p2);
+check("different seed → different period", p1 !== p3);
+
+// dusk (g≈0.5) sparser than full night (g=1)
+const dusk = { sunAlt: 0.0, season: 2, temperatureC: 18, stormness: 0, frost: 0, windStrength: 1.0 };
+check("dusk period > night period (ramp)", foliageFireflies.emit(ctx(dusk))[0].emitterInfo.birthrate > p1);
+
+console.log(`\n[test_vfx_foliage] ${pass} pass / ${fail} fail`);
+if (fail > 0) process.exit(1);

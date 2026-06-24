@@ -29,7 +29,7 @@ const ALL_READERS = [glintEnabled, magicGlowEnabled, enchantShimmerEnabled,
 const ALL_IDS = Object.keys(VFX_EFFECT_FLAGS);
 
 // ---- the router map is complete ----
-check("VFX_EFFECT_FLAGS maps all 10 effect ids (Phase-1 + tipFlex + particle.gemSparkle + particle.brazierEmbers)", ALL_IDS.length === 10, ALL_IDS.join());
+check("VFX_EFFECT_FLAGS maps all 14 effect ids (Phase-1 + tipFlex + 6 particle: gemSparkle/brazierEmbers/foliage{Pollen,Fireflies,Leaves}/breathFog)", ALL_IDS.length === 14, ALL_IDS.join());
 check("every mapped id has a function reader", ALL_IDS.every((id) => typeof VFX_EFFECT_FLAGS[id] === "function"));
 
 // ---- default OFF (no window) ----
@@ -69,7 +69,7 @@ check("?visual=all: visualAllEffects() true", visualAllEffects() === true);
 check("?visual=all: every per-effect reader true", ALL_READERS.every((f) => f() === true));
 check("?visual=all: vfxEffectEnabled(all ids) true", ALL_IDS.every((id) => vfxEffectEnabled(id) === true));
 check("?visual=all: unknown id falls back to ALL (true)", vfxEffectEnabled("emissive.future") === true);
-check("?visual=all: all 10 effects active", vfxActiveEffectIds().length === 10);
+check("?visual=all: all 14 effects active", vfxActiveEffectIds().length === 14);
 
 // ---- ?visualAll=on alias (composed with ?visual=on) ----
 setUrl("?visual=on&visualAll=on");
@@ -81,7 +81,7 @@ setUrl("?visual=all&glint=off");
 check("?visual=all&glint=off: glintEnabled() false (opt-out wins)", glintEnabled() === false);
 check("?visual=all&glint=off: vfxEffectEnabled(glint) false", vfxEffectEnabled("emissive.glint") === false);
 check("?visual=all&glint=off: vfxEffectEnabled(tarnish) still true", vfxEffectEnabled("weathering.tarnish") === true);
-check("?visual=all&glint=off: 9 effects active", vfxActiveEffectIds().length === 9);
+check("?visual=all&glint=off: 13 effects active", vfxActiveEffectIds().length === 13);
 
 // ---- ?visualAll=on WITHOUT ?visual still firewalled (master off) ----
 setUrl("?visualAll=on");

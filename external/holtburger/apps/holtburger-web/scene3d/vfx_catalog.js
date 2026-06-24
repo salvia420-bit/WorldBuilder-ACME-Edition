@@ -48,6 +48,10 @@ export const COMPONENT_MECH = {
   "weathering.frost": "frag",            // + slice 10 (P1.11)
   "particle.gemSparkle": "particle",     // + Phase 3 (P3.3) synthesized additive emitter
   "particle.brazierEmbers": "particle",  // + Phase 3 (P3.6) embers+smoke flame-bowl
+  "particle.foliagePollen": "particle",  // + Phase 3 (P3.7) daytime motes
+  "particle.foliageFireflies": "particle", // + Phase 3 (P3.7) dusk additive swarm
+  "particle.foliageLeaves": "particle",  // + Phase 3 (P3.7) canopy falling leaves
+  "particle.breathFog": "particle",      // + Phase 3 (P3.7) creature head cold-breath
 };
 
 const DEFAULT_CATALOG_URL = "../../dist/vfx/visual_descriptors.jsonl";

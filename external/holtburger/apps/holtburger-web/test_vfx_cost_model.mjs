@@ -91,7 +91,7 @@ for (const id of NEW_ROWS) {
 //        emitter count (calls ≤ emitters), adds 0 programs / 0 VRAM / 0 lights,
 //        and declares mech "particle". (gemSparkle = P3.3; brazierEmbers +
 //        foliageMotes = P3.6/P3.7 stubs.)
-const PARTICLE_ROWS = ["particle.gemSparkle", "particle.brazierEmbers", "particle.foliageMotes"];
+const PARTICLE_ROWS = ["particle.gemSparkle", "particle.brazierEmbers", "particle.foliagePollen", "particle.foliageFireflies", "particle.foliageLeaves", "particle.breathFog"];
 for (const id of PARTICLE_ROWS) {
   const r = byId.get(id);
   check(`particle cost row present: ${id}`, !!r);

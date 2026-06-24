@@ -156,6 +156,28 @@ export function brazierEnabled() {
   return _brazier;
 }
 
+let _foliagePollen, _foliageFireflies, _foliageLeaves, _breathFog;
+/** `?foliagePollen=on` — particle.foliagePollen daytime soft motes. DEFAULT-OFF. */
+export function foliagePollenEnabled() {
+  if (_foliagePollen === undefined) _foliagePollen = _boolFlag("foliagePollen", visualAllEffects());
+  return _foliagePollen;
+}
+/** `?foliageFireflies=on` — particle.foliageFireflies dusk/night additive swarm. DEFAULT-OFF. */
+export function foliageFirefliesEnabled() {
+  if (_foliageFireflies === undefined) _foliageFireflies = _boolFlag("foliageFireflies", visualAllEffects());
+  return _foliageFireflies;
+}
+/** `?foliageLeaves=on` — particle.foliageLeaves canopy falling leaves. DEFAULT-OFF. */
+export function foliageLeavesEnabled() {
+  if (_foliageLeaves === undefined) _foliageLeaves = _boolFlag("foliageLeaves", visualAllEffects());
+  return _foliageLeaves;
+}
+/** `?breathFog=on` — particle.breathFog creature head cold-breath puff. DEFAULT-OFF. */
+export function breathFogEnabled() {
+  if (_breathFog === undefined) _breathFog = _boolFlag("breathFog", visualAllEffects());
+  return _breathFog;
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -179,6 +201,10 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "light.flameFlicker": flameFlickerEnabled,
   "particle.gemSparkle": gemSparkleEnabled,
   "particle.brazierEmbers": brazierEnabled,
+  "particle.foliagePollen": foliagePollenEnabled,
+  "particle.foliageFireflies": foliageFirefliesEnabled,
+  "particle.foliageLeaves": foliageLeavesEnabled,
+  "particle.breathFog": breathFogEnabled,
 });
 
 /**
@@ -202,5 +228,5 @@ export function vfxActiveEffectIds() {
 
 /** Reset memoized flag readers (tests only). */
 export function _resetVfxFlags() {
-  _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _tipFlex = _gemSparkle = _brazier = _budget = undefined;
+  _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _tipFlex = _gemSparkle = _brazier = _foliagePollen = _foliageFireflies = _foliageLeaves = _breathFog = _budget = undefined;
 }
