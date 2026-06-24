@@ -189,5 +189,69 @@ export function resolveFragMaterialForDid({ materialCache, surfaceDid, did, glob
   });
 }
 
+/**
+ * Build (or cache-fetch) the frag-variant material from a frag_attach PLAN's
+ * entries — the bridge the P1.14 statics activation seam (kit §7 EDIT C/D/E) and
+ * frag_attach.js reference by name. `entries` is Array<{comp, config}>, already
+ * FAMILY_ORDER-sorted with per-component config merged (defaults < shared < byId)
+ * by frag_attach.fragEntriesForDescriptor.
+ *
+ * Same FIREWALL as resolveFragMaterial but driven by pre-resolved entries: the
+ * program-cache key (setKey) encodes ONLY the ordered component ids + each
+ * linkVariant() token — NEVER config scalars / per-instance state. Per-component
+ * config rides uniforms + the heap-dedup configKey. Two (surfaceDid) clones with
+ * the same SET share ONE compiled program (program count = O(distinct SETs)).
+ *
+ * `deps` keeps this module THREE-free (mirrors resolveFragMaterial — frag_install
+ * imports nothing from the THREE world): the host (statics.js) injects
+ * { globals: VFX_GLOBALS, installComponentPatch: installVfxComponentPatch,
+ *   sharedPrelude?: the slice-03 vVfxHash prelude }. No installer ⇒ null
+ * (fail-soft) ⇒ caller keeps the base material (byte-identical).
+ *
+ * @param {object} materialCache  MaterialCache (has getCachedVariant)
+ * @param {number} surfaceDid
+ * @param {Array<{comp:object, config:object}>} entries  frag_attach plan.entries
+ * @param {{globals?:object, installComponentPatch?:Function, sharedPrelude?:object}} [deps]
+ * @returns {object|null} the cloned variant material, or null
+ */
+export function buildFragVariant(materialCache, surfaceDid, entries, deps) {
+  if (!materialCache || typeof materialCache.getCachedVariant !== "function") return null;
+  if (!entries || entries.length === 0) return null;
+  const d = deps || {};
+  const installComponentPatch = d.installComponentPatch;
+  if (typeof installComponentPatch !== "function") {
+    if (!_warnedNoInstaller) {
+      _warnedNoInstaller = true;
+      // eslint-disable-next-line no-console
+      console.warn("[vfx] buildFragVariant: no installComponentPatch supplied; frag path inert (base material kept)");
+    }
+    return null;
+  }
+  const globals = d.globals;
+  const sharedPrelude = d.sharedPrelude;
+  // setKey: ordered ids + each linkVariant() token ONLY (the program-cache
+  // discriminator). entries are pre-sorted (FAMILY_ORDER, id) by frag_attach, so
+  // identical SETs ⇒ identical key regardless of config (all Phase-1 frag comps
+  // have linkVariant()==="" — config rides uniforms, never the program).
+  const setKey = entries
+    .map((e) => {
+      let v = "";
+      try { v = e.comp && e.comp.linkVariant ? e.comp.linkVariant(e.config) || "" : ""; }
+      catch (_) { v = ""; }
+      return v ? `${e.comp.id}:${v}` : e.comp.id;
+    })
+    .join("+");
+  // configKey: heap-dedup only (two DIDs same SET + same config ⇒ one clone) —
+  // NOT in the program key.
+  const configKey = entries.map((e) => e.comp.id + "=" + _stableStr(e.config)).join("&") || "default";
+  return materialCache.getCachedVariant(surfaceDid, setKey, configKey, (material) => {
+    // Shared prelude FIRST (slice-03 vVfxHash varying) so component injects that
+    // read the per-instance hash see it declared; it rides no link bit (setKey
+    // intact). Then each entry in FAMILY_ORDER under the one __vfxSetKey.
+    if (sharedPrelude) installComponentPatch(material, sharedPrelude, undefined, globals);
+    for (const e of entries) installComponentPatch(material, e.comp, e.config, globals);
+  });
+}
+
 /** Test-only: reset the one-shot warn latch. */
 export function _resetFragInstall() { _warnedNoInstaller = false; }

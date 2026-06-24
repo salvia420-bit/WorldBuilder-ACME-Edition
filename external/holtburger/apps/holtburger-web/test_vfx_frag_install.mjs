@@ -13,7 +13,7 @@
 
 import {
   componentSetKey, fragConfigKey, fragComponentsForDescriptor,
-  configForComponent, resolveFragMaterial, resolveFragMaterialForDid, _resetFragInstall,
+  configForComponent, resolveFragMaterial, resolveFragMaterialForDid, buildFragVariant, _resetFragInstall,
 } from "./scene3d/vfx/frag_install.js";
 import { registerComponent, _clearComponents } from "./scene3d/vfx/registry.js";
 import { visualEnabled, _resetVfxCatalog, setVfxCatalog } from "./scene3d/vfx_catalog.js";
@@ -191,6 +191,38 @@ check("configForComponent picks the namespaced slice",
   configForComponent(fragGlint, { "emissive.glint": { strength: 9 } }).strength === 9);
 check("configForComponent falls back to flat config",
   configForComponent(fragGlint, { strength: 3 }).strength === 3);
+
+// ===== buildFragVariant (P1.14 bridge — consumes frag_attach plan.entries) =====
+// entries are pre-sorted (FAMILY_ORDER: weathering before emissive) with per-comp
+// config already merged; deps inject globals+installer (frag_install stays THREE-free).
+const bEntries = [
+  { comp: fragTarnish, config: { tarnish: 0.3 } },
+  { comp: fragGlint, config: { strength: 0.6 } },
+];
+const bDeps = (mc) => ({ globals: GLOBALS, installComponentPatch: mc.installComponentPatch });
+const bmc = makeFakeMC();
+const bmat = buildFragVariant(bmc, 5, bEntries, bDeps(bmc));
+check("buildFragVariant builds a variant from entries", !!bmat);
+check("buildFragVariant setKey == componentSetKey order (firewall-consistent)",
+  bmc.calls[0].setKey === "weathering.tarnish+emissive.glint", bmc.calls[0].setKey);
+check("buildFragVariant installs entries in FAMILY_ORDER",
+  bmat.__installed.join() === "weathering.tarnish,emissive.glint", bmat.__installed.join());
+// config rides the configKey/uniforms, NEVER the program (setKey) — the firewall.
+const bmc2 = makeFakeMC();
+buildFragVariant(bmc2, 5, [{ comp: fragTarnish, config: { tarnish: 0.9 } }, { comp: fragGlint, config: { strength: 0.6 } }], bDeps(bmc2));
+check("buildFragVariant: config change keeps setKey but forks configKey (firewall)",
+  bmc2.calls[0].setKey === bmc.calls[0].setKey && bmc2.calls[0].configKey !== bmc.calls[0].configKey,
+  `${bmc2.calls[0].setKey} | ${bmc2.calls[0].configKey} vs ${bmc.calls[0].configKey}`);
+// sharedPrelude (slice-03 vVfxHash) installs FIRST without touching setKey.
+const bmc3 = makeFakeMC();
+const bmat3 = buildFragVariant(bmc3, 5, bEntries, { ...bDeps(bmc3), sharedPrelude: { id: "__vfxHash", inject() {} } });
+check("buildFragVariant sharedPrelude installs FIRST, setKey unchanged",
+  bmat3.__installed.join() === "__vfxHash,weathering.tarnish,emissive.glint" && bmc3.calls[0].setKey === "weathering.tarnish+emissive.glint",
+  bmat3.__installed.join());
+check("buildFragVariant: no installer ⇒ null (fail-soft, base kept)",
+  buildFragVariant(makeFakeMC(), 5, bEntries, { globals: GLOBALS }) === null);
+check("buildFragVariant: empty entries ⇒ null (byte-identical, base kept)",
+  buildFragVariant(makeFakeMC(), 5, [], bDeps(makeFakeMC())) === null);
 
 visualOff();
 console.log(`\nVFX frag-install: ${passed} passed, ${failed} failed`);

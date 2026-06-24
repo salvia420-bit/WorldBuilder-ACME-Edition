@@ -74,7 +74,7 @@
 import * as THREE from "three";
 import { BAKE_PREWARM, prewarmSubtree } from "./bake_prewarm.js";
 import { meshToGeometryGroups } from "./adapter.js";
-import { MaterialCache, materialCanCastShadow } from "./materials.js";
+import { MaterialCache, materialCanCastShadow, VFX_GLOBALS, installVfxComponentPatch } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 import { CULL_DIST_SQ } from "./culling.js";
@@ -94,6 +94,35 @@ import { treeWindEnabled, isTreeDid } from "./tree_wind.js";
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
 import { visualEnabled, ensureVfxCatalog, vfxDescriptorFor, hasWindBend } from "./vfx_catalog.js";
+// VFX fragment effects (?visual, P1.14 activation). frag_attach maps a DID's
+// descriptor → its registered FRAG components + per-component config ("plan");
+// frag_install (slice 02) turns a plan into the cached per-SET material variant.
+// Plan null (off / no descriptor / no frag comp) ⇒ the plain getCached material
+// is kept ⇒ byte-identical frozen path. ensureVfxHashVarying = the slice-03
+// per-instance vVfxHash prelude installed FIRST in each variant's chain.
+import { fragPlanForDid } from "./vfx/frag_attach.js";
+import { buildFragVariant } from "./vfx/frag_install.js";
+import { ensureVfxHashVarying } from "./vfx/per_instance.js";
+
+// VFX frag variant (?visual, P1.14). frag_attach selects + merges per the
+// descriptor; frag_install builds the per-SET cloned variant (one program per
+// SET — the firewall). Off / no frag plan ⇒ base material ⇒ byte-identical. The
+// vVfxHash prelude (slice 03) runs FIRST in the chain so component injects that
+// read it see the varying declared. Deps are injected so frag_install stays
+// THREE-free (the material surgery lives in materials.js).
+const VFX_HASH_PRELUDE = { id: "infra.vfxHash", inject: (s) => ensureVfxHashVarying(s) };
+// Built LAZILY on the first frag attach (visual-on only). Deferring the
+// VFX_GLOBALS/installVfxComponentPatch references out of module-eval keeps the
+// eval-based test_static_batch harness (which shims neither import) loadable, and
+// it's a single shared object (no per-call alloc; bake-time, not hot frame path).
+let _vfxFragDeps = null;
+function _fragMat(base, materialCache, surfaceDid, fragPlan) {
+  if (!fragPlan) return base;
+  if (!_vfxFragDeps) {
+    _vfxFragDeps = { globals: VFX_GLOBALS, installComponentPatch: installVfxComponentPatch, sharedPrelude: VFX_HASH_PRELUDE };
+  }
+  return buildFragVariant(materialCache, surfaceDid, fragPlan.entries, _vfxFragDeps) || base;
+}
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -1448,10 +1477,16 @@ export function __setStaticBatchForTest(v) { _staticBatchFlag = v; }
 // BatchedMeshes created (for the summary count).
 export function consolidateStaticSingletons(nodes, outBatches) {
   const out = [];
-  const bySurf = new Map(); // surfaceDid -> Mesh[]
+  const bySurf = new Map(); // material identity -> Mesh[]
   for (const n of nodes) {
     if (n && n.isMesh && !n.isLOD && n.geometry && n.material && n.userData) {
-      const key = (n.userData.surfaceDid >>> 0);
+      // P1.14 (kit §7 EDIT F): key by the MATERIAL OBJECT, not the surfaceDid.
+      // With ?visual on, two DIDs sharing a surfaceDid but carrying different frag
+      // SETs resolve to different (surfaceDid|setKey|configKey) variant clones —
+      // keying by surfaceDid would fuse them and inherit one SET's material (wrong).
+      // ?visual OFF ⇒ every node keeps the SHARED base per surfaceDid (getCached
+      // memoizes one object/surfaceDid) ⇒ identical grouping ⇒ byte-identical.
+      const key = n.material;
       let arr = bySurf.get(key);
       if (!arr) { arr = []; bySurf.set(key, arr); }
       arr.push(n);
@@ -1459,7 +1494,7 @@ export function consolidateStaticSingletons(nodes, outBatches) {
       out.push(n); // LOD wrappers / unexpected nodes — keep verbatim
     }
   }
-  for (const [surf, group] of bySurf) {
+  for (const group of bySurf.values()) {
     if (group.length < 2) { out.push(...group); continue; } // nothing to batch
     const mat = group[0].material;
     let maxVerts = 0, maxIdx = 0;
@@ -1485,6 +1520,9 @@ export function consolidateStaticSingletons(nodes, outBatches) {
       }
     }
     if (added === 0) { try { bm.dispose(); } catch (_) {} continue; }
+    // surf is no longer the map key (now material identity) — read it from the
+    // group (every node in a group shares one material ⇒ one surfaceDid).
+    const surf = (group[0].userData.surfaceDid >>> 0);
     const lbId = group[0].userData.landblockId;
     bm.userData = { landblockId: lbId, surfaceDid: surf, __staticBatch: true };
     bm.name = `static-batch-lb${(lbId >>> 0).toString(16)}-s${surf.toString(16).padStart(8, "0")}-x${added}`;
@@ -1726,8 +1764,14 @@ export async function bakeStaticsForLandblock(
     // One node per surface group. Single-surface model → one node
     // (byte-identical to the pre-RP1 fused path); multi-surface model →
     // one node per surface, each painted with its own material.
+    // P1.14 — frag plan once per placement (descriptor keyed by modelId; windBend
+    // MECH-A DIDs were already peeled to the wind player above, so this loop sees
+    // only non-windBend placements). ?visual off / no plan ⇒ _fragMat keeps base
+    // ⇒ byte-identical. One program per component-SET (every surface of this DID
+    // shares the SAME setKey, so a multi-surface model adds clones, not programs).
+    const fragPlan = visualEnabled() ? fragPlanForDid(placement.modelId) : null;
     for (const g of groups) {
-      const mat = materialCache.getCached(g.surfaceDid);
+      let mat = _fragMat(materialCache.getCached(g.surfaceDid), materialCache, g.surfaceDid, fragPlan);
       // Pair the LOD with the degraded surface group of the SAME
       // (surfaceDid, doubleSided) bucket; a group with no degraded
       // counterpart renders without an LOD wrapper (always full-detail),
@@ -2321,8 +2365,12 @@ export async function bakeStaticsRing(
 
     // RP1 — one node PER SURFACE GROUP. Single-surface model → one node
     // per modelId (byte-identical to the pre-RP1 fused path).
+    // P1.14 — frag plan once per model (descriptor keyed by modelId). One swap
+    // covers both the InstancedMesh and Singleton branches (both read `mat`).
+    // ?visual off / no plan ⇒ _fragMat keeps base ⇒ byte-identical.
+    const fragPlan = visualEnabled() ? fragPlanForDid(modelId) : null;
     for (const sg of surfaceGroups) {
-      const mat = materialCache.getCached(sg.surfaceDid);
+      let mat = _fragMat(materialCache.getCached(sg.surfaceDid), materialCache, sg.surfaceDid, fragPlan);
       const staticsMatCastsShadow = materialCanCastShadow(mat);
       // Pair the LOD with the degraded surface group of the SAME
       // (surfaceDid, doubleSided) bucket; a group with no degraded

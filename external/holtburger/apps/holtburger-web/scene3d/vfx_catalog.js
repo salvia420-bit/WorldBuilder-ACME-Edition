@@ -41,7 +41,11 @@ export const COMPONENT_MECH = {
   "deformation.windBend": "A",
   "deformation.tipFlex": "B",
   "emissive.glint": "frag",
+  "emissive.magicGlow": "frag",          // + slice 06 (P1.7)
+  "emissive.enchantShimmer": "frag",     // + slice 07 (P1.8)
   "weathering.tarnish": "frag",
+  "weathering.wetness": "frag",          // + slice 09 (P1.10)
+  "weathering.frost": "frag",            // + slice 10 (P1.11)
 };
 
 const DEFAULT_CATALOG_URL = "../../dist/vfx/visual_descriptors.jsonl";

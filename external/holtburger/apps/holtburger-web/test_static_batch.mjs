@@ -103,6 +103,26 @@ let disposed = true;
 try { for (const b of outBatched) b.dispose(); } catch (e) { disposed = false; }
 check("10: BatchedMesh.dispose() runs without throwing (evict path)", disposed, "");
 
+// ===== P1.14 EDIT F — material-identity keying (the ?visual-ON correctness) =====
+// Two DIDs sharing a surfaceDid but carrying DIFFERENT frag SETs resolve (via
+// getCachedVariant) to DIFFERENT material objects. consolidateStaticSingletons now
+// keys by material identity, so they must NOT fuse into one batch inheriting a
+// single SET's material. (The ?visual-OFF case — one shared base per surfaceDid —
+// is checks 1–8 above, which prove the grouping stays byte-identical.)
+{
+  const matE1 = new THREE.MeshBasicMaterial(), matE2 = new THREE.MeshBasicMaterial();
+  const ns = [];
+  for (let i = 0; i < 2; i++) { const m = singleton(0x0E00, i); m.material = matE1; ns.push(m); }
+  for (let i = 0; i < 2; i++) { const m = singleton(0x0E00, i + 10); m.material = matE2; ns.push(m); }
+  const bs = [];
+  consolidateStaticSingletons(ns, bs);
+  check("F1: same surfaceDid + 2 distinct materials ⇒ 2 batches (no cross-SET fusion)", bs.length === 2, `batches=${bs.length}`);
+  check("F2: each batch keeps its OWN material (matE1 + matE2 both present)",
+    bs.length === 2 && bs.some((b) => b.material === matE1) && bs.some((b) => b.material === matE2));
+  check("F3: both batches still tag the shared surfaceDid 0x0E00",
+    bs.length === 2 && bs.every((b) => (b.userData.surfaceDid >>> 0) === 0x0E00));
+}
+
 console.log("=========================");
 console.log(`static-batch test: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
