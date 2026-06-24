@@ -2935,7 +2935,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // liveEmitters; without this the 1070 probe can only see meshNodes deltas.
   if (typeof window !== "undefined" && window.__diag) {
     window.__diag.particles = () => {
-      const s = liveScene3dRef;
+      // Read the canonical builder object: the statics bake stamps
+      // _staticParticleManager on scene3dForBuilders (statics.js:3220), and
+      // entityManager lives there too — liveScene3dRef is a different facade that
+      // only carries entityManager (hence the static count read 0 via it).
+      const s = scene3dForBuilders;
       const sm = s && s._staticParticleManager;
       const wm = s && s.entityManager && s.entityManager._worldParticleManager;
       const staticEmitters = (sm && sm.particleTable && sm.particleTable.size) || 0;
