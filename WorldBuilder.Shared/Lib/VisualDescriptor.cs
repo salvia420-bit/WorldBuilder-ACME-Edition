@@ -184,10 +184,19 @@ public static class VisualArchetypeIds {
     // rule is forward-declared in visual_archetype_rules.jsonl but NOT yet wired
     // into the VfxClassify cascade (no FindRule(GemSparkle)), so it classifies
     // nothing yet — gauge stays all-zero (gauge-safe; agent-14 deferred predicate).
-    public const string GemSparkle  = "gem-sparkle";
+    public const string GemSparkle     = "gem-sparkle";
+    public const string Brazier        = "brazier";
+    public const string CreatureBreath = "creature-breath";
+    public const string FoliagePollen  = "foliage-pollen";
+    public const string FoliageLeaves  = "foliage-leaves";
 
-    /// <summary>The commit-2 archetype set + the P3.5 gem-sparkle, cascade-tier order.</summary>
-    public static readonly string[] All = { GemSparkle, RigidGlint, TipFlex, TrunkCanopy, Rigid };
+    /// <summary>The archetype set, in cascade-tier order (Phase-1 + Phase-3 particle).</summary>
+    public static readonly string[] All = {
+        GemSparkle, RigidGlint, TipFlex,            // tier 1
+        TrunkCanopy, Brazier, CreatureBreath,       // tier 2
+        FoliagePollen, FoliageLeaves,               // tier 3
+        Rigid,                                      // tier 5
+    };
 }
 
 /// <summary>

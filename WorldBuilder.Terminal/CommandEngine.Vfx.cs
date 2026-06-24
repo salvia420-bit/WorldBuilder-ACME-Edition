@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using WorldBuilder.Shared.Lib;
+using DatReaderWriter.DBObjs; // Setup (P3.6 Track-B coexistence guard, SetupHasDatScript)
 
 namespace WorldBuilder.Terminal;
 
@@ -214,13 +215,56 @@ public partial class CommandEngine {
             signals.Add(new VisualSignal { Name = "partCount", Value = onto.PartCount.ToString(CultureInfo.InvariantCulture), Weight = 0.2 });
         }
 
+        // ── Track-B coexistence guard (build-spec §9 #14 / Phase-3 handoff §5) ──
+        // A DID whose SetupModel already carries a DAT script (DefaultScript 0x33… /
+        // DefaultScriptTable 0x34…) animates ITSELF (CreateParticle / DefaultScript
+        // hooks), so the suite must NOT bolt a synthesized particle archetype on top
+        // (no double-animation; e.g. the Track-B flame Setup 0x0200051C). Computed ONCE;
+        // gates EVERY particle stage below. Non-particle archetypes (trunk-canopy /
+        // tip-flex / rigid) are unaffected. The 27 Holtburg gauge refs are all
+        // script-free (verified), so `vfx gauge` is unchanged.
+        bool datScript = SetupHasDatScript(did);
+        if (datScript)
+            signals.Add(new VisualSignal { Name = "datScriptHook", Value = "true", Weight = 1.0 });
+
         // ── Cascade (build-spec §4.3, the subset this commit can resolve) ──
+        // Stage 1 — gem-sparkle, explicit allowlist (a vetted magic gem/crystal seed).
+        var gem = FindRule(VisualArchetypeIds.GemSparkle);
+        if (!datScript && gem?.Select?.Dids is { Length: > 0 } gemSeed && gemSeed.Contains(did)) {
+            signals.Add(new VisualSignal { Name = "gemAllowlist", Value = "true", Weight = gem.Select.Confidence });
+            return BuildResult(did, gem, gem.Select.Confidence, "allowlist", signals);
+        }
+
         // Stage 2 — wind allowlist (the trunk-canopy seed). Authoritative,
         // confidence 1.0; this is the round-trip anchor.
         var trunk = FindRule(VisualArchetypeIds.TrunkCanopy);
         if (trunk?.Select?.Dids is { Length: > 0 } windSeed && windSeed.Contains(did)) {
             signals.Add(new VisualSignal { Name = "windAllowlist", Value = "true", Weight = 1.0 });
             return BuildResult(did, trunk, trunk.Select.Confidence, "allowlist", signals);
+        }
+
+        // Stage 2 — brazier, explicit allowlist (flame-bowl part; lit DAT-flame
+        // braziers are already excluded by !datScript).
+        var brazier = FindRule(VisualArchetypeIds.Brazier);
+        if (!datScript && brazier?.Select?.Dids is { Length: > 0 } brazSeed && brazSeed.Contains(did)) {
+            signals.Add(new VisualSignal { Name = "brazierAllowlist", Value = "true", Weight = brazier.Select.Confidence });
+            return BuildResult(did, brazier, brazier.Select.Confidence, "allowlist", signals);
+        }
+
+        // Stage 2 — creature-breath. Allowlist-first; a WeenieType==Creature(7)
+        // auto-match is emitted classifier-low (audit-gated) until graduated. COLD
+        // visibility is a runtime (JS) gate, not a classify-time decision.
+        var breath = FindRule(VisualArchetypeIds.CreatureBreath);
+        if (!datScript && breath != null) {
+            bool breathAllow = breath.Select?.Dids is { Length: > 0 } bSeed && bSeed.Contains(did);
+            bool breathWt    = onto?.WeenieType == 7; // ACE WeenieType.Creature
+            if (breathAllow || breathWt) {
+                double conf = breathAllow ? breath.Select!.Confidence : 0.55; // 0.55 < AuditThreshold ⇒ classifier-low
+                signals.Add(new VisualSignal {
+                    Name = breathAllow ? "breathAllowlist" : "creatureWeenieType", Value = "true", Weight = conf });
+                return BuildResult(did, breath, conf,
+                    breathAllow ? "allowlist" : (conf >= AuditThreshold ? "classifier" : "classifier-low"), signals);
+            }
         }
 
         // Stage 2/3 — geometry-derived trunk-canopy hint: foliage/scenery,
@@ -230,6 +274,18 @@ public partial class CommandEngine {
             double conf = onto.MaxDimension >= 8f ? 0.9 : 0.5 + 0.5 * (onto.MaxDimension - 4f) / 4f;
             signals.Add(new VisualSignal { Name = "geometryTrunkCanopy", Value = "foliage+multipart+tall", Weight = conf });
             return BuildResult(did, trunk, conf, conf >= AuditThreshold ? "classifier" : "classifier-low", signals);
+        }
+
+        // Stage 3 — foliage-pollen for foliage trunk-canopy did NOT claim above
+        // (winner-take-all: tall multipart wind trees already returned). The
+        // remainder — small / single-part foliage — gets ambient pollen motes.
+        // (foliage-leaves is NOT a standalone stage: trunk-canopy shadows it for tall
+        // trees; wire it as a COMPOSE modifier on the trunk-canopy bundle later.)
+        var pollen = FindRule(VisualArchetypeIds.FoliagePollen);
+        if (!datScript && pollen != null && onto != null && IsFoliageLike(onto.Category)) {
+            double conf = pollen.Select?.Confidence ?? 0.7;
+            signals.Add(new VisualSignal { Name = "geometryFoliagePollen", Value = onto.Category, Weight = conf });
+            return BuildResult(did, pollen, conf, conf >= AuditThreshold ? "classifier" : "classifier-low", signals);
         }
 
         // Stage 1 (geometry surrogate) — tip-flex by thin-distal geometry. With
@@ -258,6 +314,33 @@ public partial class CommandEngine {
          || category.Contains("Foliage", StringComparison.OrdinalIgnoreCase)
          || category.Contains("Tree", StringComparison.OrdinalIgnoreCase)
          || category.Contains("Plant", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Track-B coexistence (build-spec §9 #14 / Phase-3 handoff §5): true when the
+    /// SetupModel already carries a DAT-driven script — DefaultScript (PhysicsScript
+    /// 0x33…) or DefaultScriptTable (PhysicsScriptTable 0x34…) — which may fire
+    /// CreateParticle / DefaultScript hooks. Such a DID animates itself from the DAT,
+    /// so the suite must NOT attach a synthesized particle archetype on top of it.
+    /// CONSERVATIVE: ANY default script ⇒ skip the particle suite for this DID. Reads
+    /// only static DAT metadata (server-blind) — within the legacy-safe firewall.
+    /// Fail-OPEN (returns false) when the project/DAT is not loaded — the curated
+    /// allowlist seeds remain the vetted safety net and the gauge's Holtburg refs are
+    /// independently proven script-free. (Empirical: ~2165/5935 portal Setups carry a
+    /// default script — the guard is load-bearing.) Mirrors ObjectSpriteGenerator's
+    /// Setup→DefaultScriptTable coexistence check (ObjectSpriteGenerator.cs:429).
+    /// </summary>
+    private bool SetupHasDatScript(uint did) {
+        try {
+            var db = _projectManager?.CurrentProject?.DocumentManager?.Dats?.Dats?.Portal;
+            if (db == null) return false;
+            if (!db.TryGet<Setup>(did, out var setup) || setup == null) return false;
+            bool s  = setup.DefaultScript      != null && setup.DefaultScript.DataId      != 0;
+            bool st = setup.DefaultScriptTable != null && setup.DefaultScriptTable.DataId != 0;
+            return s || st;
+        } catch {
+            return false; // fail-open: do not block classification on a DAT read error
+        }
+    }
 
     /// <summary>
     /// Resolve an archetype rule into a descriptor result: build the component
