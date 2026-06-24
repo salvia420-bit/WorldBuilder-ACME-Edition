@@ -104,7 +104,7 @@ import { visualEnabled, ensureVfxCatalog, vfxDescriptorFor, hasWindBend, descrip
 // `scene3d._evictStaticParticlesForLb`). DEPENDS ON P3.1 (particle_attach.js) +
 // P3.3 (gemSparkleEnabled + COMPONENT_MECH "particle.gemSparkle").
 import { attachParticleEmitters, staticOwnerKeyForLb } from "./vfx/particle_attach.js";
-import { gemSparkleEnabled } from "./vfx_flags.js";
+import { readParticleEnv } from "./vfx/particle_env.js"; // P3.7 derived day/weather/season for ctx.env
 // VFX fragment effects (?visual, P1.14 activation). frag_attach maps a DID's
 // descriptor → its registered FRAG components + per-component config ("plan");
 // frag_install (slice 02) turns a plan into the cached per-SET material variant.
@@ -413,11 +413,46 @@ function lbSetKey(lbX, lbY) {
 // OFF ⇒ null ⇒ no attach ⇒ byte-identical. The catalog is already loaded by the
 // windBend peel block that runs just before each caller (ensureVfxCatalog()).
 function _collectParticlePlacements(statics) {
-  if (!(visualEnabled() && gemSparkleEnabled())) return null;
+  // Gate on the ?visual master only — the PER-EFFECT flag (gemSparkle / brazier /
+  // foliage*) is enforced downstream by particleEntriesForDescriptor (comp.enabled()),
+  // so a placement is dropped from the plan when its specific effect is off. Gating
+  // here on gemSparkleEnabled() alone (the old bug) starved brazier/foliage statics.
+  if (!visualEnabled()) return null;
   const hasParticle = (p) =>
     descriptorMechs(vfxDescriptorFor((p?.modelId >>> 0) || 0)).has("particle");
   const out = statics.filter(hasParticle);
   return out.length > 0 ? out : null;
+}
+
+// P3.7 — opts.buildParent for the STATIC seam: a parent frame at the placement's
+// position+orientation IN `staticsGroup`-local coords (the static ParticleManager's
+// scene = scene3d.staticsGroup), matching exactly the static MESH transform
+// (buildSingletonNode: position (lbX*MPL+x, lbY*MPL+y, z), applyPlacementOrientation).
+// So the emitter anchors where the gem/brazier mesh actually stands. partFrames are
+// omitted (root/model-offset anchoring) — a future geometryFor can add per-part bboxes.
+const _PARTICLE_PARENT_AXISZ = new THREE.Vector3(0, 0, 1);
+function _buildStaticParticleParent(p) {
+  if (!p) return null;
+  const lbX = (p.landblockId >>> 24) & 0xff;
+  const lbY = (p.landblockId >>> 16) & 0xff;
+  const position = new THREE.Vector3(
+    lbX * METERS_PER_LANDBLOCK + p.x,
+    lbY * METERS_PER_LANDBLOCK + p.y,
+    p.z,
+  );
+  const quaternion = new THREE.Quaternion();
+  applyPlacementOrientation(quaternion, p, _PARTICLE_PARENT_AXISZ);
+  return { position, quaternion };
+}
+
+/** opts passed to attachParticleEmitters at BOTH static seams (per-LB + ring). */
+function _staticParticleOpts(scene3d) {
+  return {
+    ensureManager: _ensureStaticParticleManager,
+    buildParent: _buildStaticParticleParent,
+    env: readParticleEnv(scene3d),
+    clockNow: () => (scene3d.frameTime && scene3d.frameTime.tsSec) || 0,
+  };
 }
 
 // A2 (busted-world load fix) — concurrent-call dedup for the per-LB
@@ -1940,6 +1975,7 @@ export async function bakeStaticsForLandblock(
     if (particlePlacements) {
       await attachParticleEmitters(
         scene3d, particlePlacements, wasmExports, () => staticOwnerKeyForLb(lbKey),
+        _staticParticleOpts(scene3d),
       );
     }
   } catch (e) {
@@ -2509,6 +2545,7 @@ export async function bakeStaticsRing(
       await attachParticleEmitters(
         scene3d, particlePlacements, wasmExports,
         (p) => staticOwnerKeyForLb(p.landblockId),
+        _staticParticleOpts(scene3d),
       );
     }
   } catch (e) {

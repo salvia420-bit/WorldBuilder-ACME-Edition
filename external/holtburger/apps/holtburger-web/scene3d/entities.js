@@ -560,6 +560,7 @@ import { tipFlexEnabled, gemSparkleEnabled } from "./vfx_flags.js";
 // Phase 3 (P3.1) — shared emit helper: runs each particle component's emit(ctx)
 // for a descriptor and returns [{emitterInfo, partIndex, parentOffset}] specs.
 import { attachParticleEmitters } from "./vfx/particle_attach.js";
+import { readParticleEnv } from "./vfx/particle_env.js"; // P3.7 derived day/weather/season for ctx.env
 import { FAMILY_ORDER } from "./vfx/registry.js";
 import "./vfx/components/index.js";
 const VFX_HASH_PRELUDE = { id: "infra.vfxHash", inject: (s) => ensureVfxHashVarying(s) };
@@ -9244,6 +9245,7 @@ export class EntityManager {
           didFor: (p) => (p.modelId >>> 0),
           geometryFor: () => ({ numParts: (rig.partFrames && rig.partFrames.length) || 1, partBoxes: [], rig }),
           clockNow: () => (this.scene3d && this.scene3d.frameTime && this.scene3d.frameTime.tsSec) || 0,
+          env: readParticleEnv(this.scene3d), // P3.7 — day/weather/season for foliage/breath gates
         },
       );
     } catch (e) {

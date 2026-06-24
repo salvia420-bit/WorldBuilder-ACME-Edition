@@ -283,6 +283,38 @@ function _normalizeSpecs(ret) {
  *        false only for a bare-manager diagnostic.
  * @returns {Promise<{placementCount:number, emitterCount:number, ids:number[]}>}
  */
+/**
+ * P3.7 — resolve a part-anchor from the component config's anchor ROLE
+ * (canopy/head/…) against the per-part bboxes (wind_rig.partBBox shape:
+ * {minX..maxZ, cx,cy,cz}). Foliage/breath read ctx.anchor for partIndex + a
+ * spawn-volume centre/radius. role "root" (or no partBoxes) ⇒ root anchor (-1).
+ * Pure (no THREE). A future `vfx anchor-parts` bake can replace the heuristic
+ * (topmost-centroid-Z part) with an authored per-DID partIndex.
+ */
+function _resolveAnchor(config, partBoxes) {
+  const role = (config && config.anchor) || "root";
+  if (role !== "root" && Array.isArray(partBoxes) && partBoxes.length > 0) {
+    let bi = 0, bestZ = -Infinity;
+    for (let k = 0; k < partBoxes.length; k += 1) {
+      const b = partBoxes[k];
+      if (!b) continue;
+      const cz = Number.isFinite(b.cz) ? b.cz : 0;
+      if (cz > bestZ) { bestZ = cz; bi = k; }
+    }
+    const b = partBoxes[bi];
+    if (b) {
+      const radius = Math.max(b.maxX - b.minX, b.maxY - b.minY, b.maxZ - b.minZ) * 0.5;
+      return {
+        partIndex: bi,
+        center: { x: b.cx || 0, y: b.cy || 0, z: b.cz || 0 },
+        radius: radius > 0 ? radius : 1,
+      };
+    }
+  }
+  const r = config && Number.isFinite(+config.maxOffset) ? +config.maxOffset : 1;
+  return { partIndex: -1, center: { x: 0, y: 0, z: 0 }, radius: r };
+}
+
 export async function attachParticleEmitters(scene3d, placements, wasmExports, ownerKeyFn, opts = {}) {
   const RESULT = { placementCount: 0, emitterCount: 0, ids: [] };
   if (!scene3d || !Array.isArray(placements) || placements.length === 0) return RESULT;
@@ -322,6 +354,10 @@ export async function attachParticleEmitters(scene3d, placements, wasmExports, o
   const clockNow = typeof opts.clockNow === "function"
     ? opts.clockNow
     : () => (scene3d.frameTime && scene3d.frameTime.tsSec) || 0;
+  // P3.7 — the derived day/weather/season snapshot (readParticleEnv), computed ONCE
+  // per attach call by the seam and forwarded as ctx.env. null when the seam doesn't
+  // supply it (gemSparkle/brazier ignore env; foliage/breath gates fail-soft to calm).
+  const env = opts.env || null;
 
   for (let i = 0; i < placements.length; i += 1) {
     const p = placements[i];
@@ -353,7 +389,11 @@ export async function attachParticleEmitters(scene3d, placements, wasmExports, o
       // components (read `clock`) nor the agent-05 install test (asserts `tSec`)
       // diverge. Sprites are intentionally NOT in ctx (components import
       // particle_sprites.js / take config.hwGfxObjId) — keeps ctx DAT-lookup-free.
-      const ctx = { did, numParts, partBoxes, rig, hash01, seed, clock: tSec, tSec, weather, config };
+      // P3.7 — derived env (day/weather/season, for the foliage/breath gates) +
+      // resolved anchor (part bbox picked by config.anchor role). gemSparkle/brazier
+      // ignore both (they bake partIndex/offset in their own emit); foliage/breath read them.
+      const anchor = _resolveAnchor(config, partBoxes);
+      const ctx = { did, numParts, partBoxes, rig, hash01, seed, clock: tSec, tSec, weather, env, anchor, config };
       let specs;
       try {
         specs = _normalizeSpecs(comp.emit ? comp.emit(ctx) : null);
