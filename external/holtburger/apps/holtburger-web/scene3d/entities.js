@@ -537,8 +537,32 @@ import {
   SURFACE_TYPE,
   applySurfaceRenderState,
   readSurfaceUnifiedFlag,
+  readLuminousEmissiveMapFlag,
+  VFX_GLOBALS,
+  installVfxComponentPatch,
 } from "./materials.js";
 import { drainPendingPlayEffects } from "./play_effect_vfx.js";
+// #16 (?itemFx) — the optional non-retail UiEffects 3D item-aura. Mirrors the
+// statics.js frag seam (buildFragVariant + VFX_GLOBALS), keyed off the entity's
+// UiEffects bitmask via item_fx.itemFxPlanFor. Lazy frag deps below keep the
+// eval-based harnesses loadable. itemAura self-registers through item_fx's import.
+import { visualEnabled } from "./vfx_catalog.js";
+import { buildFragVariant } from "./vfx/frag_install.js";
+import { ensureVfxHashVarying } from "./vfx/per_instance.js";
+import { itemFxPlanFor, itemFxEnabled } from "./vfx/item_fx.js";
+const VFX_HASH_PRELUDE = { id: "infra.vfxHash", inject: (s) => ensureVfxHashVarying(s) };
+let _entityVfxFragDeps = null;
+function _entityFragMat(base, materialCache, surfaceDid, fragPlan) {
+  if (!fragPlan || !materialCache) return base;
+  if (!_entityVfxFragDeps) {
+    _entityVfxFragDeps = {
+      globals: VFX_GLOBALS,
+      installComponentPatch: installVfxComponentPatch,
+      sharedPrelude: VFX_HASH_PRELUDE,
+    };
+  }
+  return buildFragVariant(materialCache, surfaceDid, fragPlan.entries, _entityVfxFragDeps) || base;
+}
 import {
   showSpeechBubbleOnEntity,
   removeSpeechBubbleFromEntity,
@@ -981,6 +1005,33 @@ const DEFAULT_SCRIPT_SPAWN_ON = (() => {
       new URLSearchParams(window.location.search)
         .get("defaultScriptSpawn")?.toLowerCase() !== "off"
     );
+  } catch (_) {
+    return false;
+  }
+})();
+
+// Track B (2026-06-24) — `?setupDefaultScript` (default OFF) honors the
+// entity's SetupModel `default_script_id` (a 0x33 PhysicsScript DID baked in
+// the Setup DAT), the DAT-driven ambient particle chain dynamic entities
+// currently ignore. Statics already honor it (`statics.js`
+// attachStaticDefaultScripts ← wasm fetch_landblock_objects), but the entity
+// spawn path only reads the WIRE PhysicsDesc default_script (DEFAULT_SCRIPT_SPAWN_ON
+// above) + the raw 0x33 `physicsScriptDid` — never the Setup's own default_script.
+// That gap hides e.g. the Burning Sands Katar flame (Setup 0x0200051C →
+// default_script 0x33000347 → 3× CreateParticle → emitters 0x3200026E/0x32000270).
+// Retail: acclient.c:320867 `if (setup->default_script_id.id) play_script_internal(...)`.
+// When ON, the entity-spawn arm fetches the Setup's default_script via the wasm
+// `fetchSetupDefaultScript` getter and routes the 0x33 DID through the same
+// `_attachParticleChainForEntity` walker the other arms use (anchored on `root`,
+// so wield carries it for free). Default OFF = byte-identical.
+const SETUP_DEFAULT_SCRIPT_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search)
+      .get("setupDefaultScript");
+    if (v == null) return true; // 2026-06-24: DEFAULT-ON (retail-faithful; `=off` to opt out)
+    const s = String(v).toLowerCase();
+    return !(s === "off" || s === "0" || s === "false" || s === "no");
   } catch (_) {
     return false;
   }
@@ -3184,6 +3235,22 @@ export class EntityManager {
     // the entity material decisions; setup_rig makes none). The closure
     // mirrors the legacy inline branch exactly. `?rigModule=off` reverts.
     const castShadowGate = !!(this.scene3d?.shadowsEnabled || this.scene3d?.csmEnabled);
+    // #16 (?itemFx): optional NON-RETAIL UiEffects emissive aura. Compute the frag
+    // plan ONCE per spawn from the entity's UiEffects bitmask (the entityUiEffects
+    // getter; typeof-guarded → a stale pkg/ soft-degrades to 0 / no aura). Gated
+    // `?visual && ?itemFx`; null plan ⇒ base material ⇒ byte-identical. Applied only
+    // to the surfaceDid-keyed `getCached` path (its variant is correctly shared by
+    // surfaceDid); the paletted `_entityMaterials` branch is left as base — per-
+    // palette variant keying is a follow-up (workflow's getCachedPalettedVariant).
+    let _itemFxPlan = null;
+    if (visualEnabled() && itemFxEnabled()) {
+      try {
+        const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+        const ue = (sh && typeof sh.entityUiEffects === "function")
+          ? (sh.entityUiEffects(guid >>> 0) >>> 0) : 0;
+        if (ue) _itemFxPlan = itemFxPlanFor(ue);
+      } catch (_) { _itemFxPlan = null; }
+    }
     const resolveEntityMaterial = (g) => {
       const did = g.surfaceDid >>> 0;
       if (inst._entityMaterials && inst._entityMaterials.has(did)) {
@@ -3191,7 +3258,8 @@ export class EntityManager {
       }
       if (this.materialCache) {
         // T2: g.doubleSided drives FrontSide vs DoubleSide (default true).
-        return this.materialCache.getCached(did, g.doubleSided);
+        const base = this.materialCache.getCached(did, g.doubleSided);
+        return _itemFxPlan ? _entityFragMat(base, this.materialCache, did, _itemFxPlan) : base;
       }
       return this._fallbackMaterial();
     };
@@ -3711,6 +3779,51 @@ export class EntityManager {
         .catch(() => {});
     }
 
+    // Track B (2026-06-24): honor the entity's SetupModel.default_script — a
+    // 0x33 PhysicsScript DID baked in the Setup DAT, the DAT-driven ambient
+    // particle chain dynamic entities ignore (statics already play it via
+    // `attachStaticDefaultScripts` ← wasm `fetch_landblock_objects`). The arms
+    // above only read the WIRE PhysicsDesc default_script + raw `physicsScriptDid`,
+    // never the Setup's own `default_script`. Gated `?setupDefaultScript`
+    // (default OFF). Sibling of the A11-S5 wire arm — same `pesId===0` +
+    // `_particleChainsAttached` idempotency guard, same
+    // `_attachParticleChainForEntity` walker (anchored on `root`, so wield
+    // carries it for free). Resolves via the new `fetchSetupDefaultScript` wasm
+    // getter (typeof-guarded → a pre-rebuild pkg/ soft-degrades to skipped).
+    // e.g. Burning Sands Katar: Setup 0x0200051C → 0x33000347 → 3× CreateParticle
+    // → emitters 0x3200026E/0x32000270. Default OFF = byte-identical.
+    if (
+      SETUP_DEFAULT_SCRIPT_ON &&
+      pesId === 0 &&
+      (setupId >>> 0) !== 0 &&
+      !this._particleChainsAttached.has(guid) &&
+      this.wasmExports &&
+      typeof this.wasmExports.fetchSetupDefaultScript === "function" &&
+      typeof this.wasmExports.fetchPhysicsScript === "function" &&
+      typeof this.wasmExports.fetchParticleEmitter === "function" &&
+      typeof this.wasmExports.fetchBuildingPlacement === "function"
+    ) {
+      const sId = (setupId >>> 0);
+      Promise.resolve(this.wasmExports.fetchSetupDefaultScript(sId))
+        .then((rawDid) => {
+          const did = (rawDid >>> 0);
+          if (did === 0) return;
+          if (!this.entityMap.has(guid)) return; // despawned mid-resolve
+          if (this._particleChainsAttached.has(guid)) return;
+          this._particleChainsAttached.add(guid);
+          this._attachParticleChainForEntity(guid, root, did).catch((e) => {
+            this._particleChainsAttached.delete(guid);
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[entities/TrackB] setup default_script chain for 0x${guid.toString(16)} ` +
+                `(setup=0x${sId.toString(16)}, pes=0x${did.toString(16)}) threw:`,
+              e
+            );
+          });
+        })
+        .catch(() => {});
+    }
+
     // Track B7 (2026-06-08): if this entity carries a PhysicsScriptTable
     // (DAT 0x34) it can be the target of an object-triggered PlayEffect
     // (opcode 0xF755) at any moment. The PlayEffect resolver
@@ -4024,6 +4137,14 @@ export class EntityManager {
       // rollback. Clamp to (0, 2] (ACE ~[0,1] with occasional HDR pushes).
       mat.emissive = new THREE.Color(0xffffff);
       mat.emissiveIntensity = Math.min(2.0, sfLuminosity);
+      // R1 (2026-06-24, `?luminousEmissiveMap`): attach the (recoloured)
+      // diffuse map as emissiveMap so a COLOURED dyed-luminous surface glows
+      // in-colour (FF texture×emissive) instead of washing to white — the same
+      // resolved reading `?surfaceUnified` takes, as a narrow opt-in. The
+      // non-dyed cache path already does this (applyFloatLumDiffuse:1284), so the
+      // emissiveMap program variant already exists (no net new program expected).
+      // Default OFF = byte-identical (flat white).
+      if (readLuminousEmissiveMapFlag() && mat.map) mat.emissiveMap = mat.map;
     }
     // Diffuse-reflectance albedo tint — parity with _materialFromFlags
     // (materials.js:1839; retail acclient.c:454458). No-op at d≈1 (~96% of

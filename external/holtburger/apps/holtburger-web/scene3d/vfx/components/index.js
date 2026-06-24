@@ -13,6 +13,7 @@ export { wetness } from "./wetness.js";                // weathering / frag (cha
 export { frost } from "./frost.js";                    // weathering / frag (channel precip)
 export { glint } from "./glint.js";                    // emissive / frag
 export { magicGlow } from "./magicGlow.js";            // emissive / frag
+export { itemAura } from "./itemAura.js";              // emissive / frag (#16 UiEffects aura)
 export { enchantShimmer } from "./enchantShimmer.js";  // emissive / frag
 export { flameFlicker } from "./flameFlicker.js";      // light (intensity-only)
 
@@ -26,6 +27,7 @@ export const TIER1_COMPONENT_IDS = Object.freeze([
   "weathering.frost",
   "emissive.glint",
   "emissive.magicGlow",
+  "emissive.itemAura",
   "emissive.enchantShimmer",
   "light.flameFlicker",
 ]);

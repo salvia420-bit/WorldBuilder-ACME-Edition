@@ -23,6 +23,11 @@
 import { setAcText } from "../ui/ac_font.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
+import {
+  uiEffectIconsEnabled,
+  uiEffectIconsFor,
+  uiEffectTintCss,
+} from "../scene3d/vfx/ui_effects_registry.js";
 
 const OVERLAY_ID = "hb-container-panel";
 const STYLE_ID = "hb-container-panel-style";
@@ -163,6 +168,7 @@ function resolveItemMeta(guid) {
             name: it.name || fmtGuid(g),
             iconId: (it.iconId >>> 0) || 0,
             stackSize: it.stackSize || 1,
+            uiEffects: (it.uiEffects >>> 0) || 0,
           };
         }
       }
@@ -263,6 +269,31 @@ function renderItems(items) {
       badge.className = "hcp-stack";
       setAcText(badge, String(it.stackSize), { color: "#f0e8d0" });
       slot.appendChild(badge);
+    }
+    // Track A (?uiEffectIcons, default OFF): UiEffects magic-effect badge(s).
+    // Same registry + real-icon (0x25000009 map) + tint fallback as the
+    // inventory grid. `.hcp-slot` is position:relative. DOM-only; flag-off no-op.
+    if (uiEffectIconsEnabled()) {
+      const uiFx = uiEffectIconsFor((it.uiEffects >>> 0) || 0);
+      if (uiFx.length) {
+        const fxWrap = document.createElement("div");
+        fxWrap.style.cssText =
+          "position:absolute;top:2px;left:2px;display:flex;gap:2px;pointer-events:none;z-index:3;";
+        for (const f of uiFx) {
+          const dot = document.createElement("span");
+          dot.title = f.name;
+          dot.style.cssText =
+            "width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,0.55);" +
+            `background:${uiEffectTintCss(f.tint)} center/contain no-repeat;`;
+          fxWrap.appendChild(dot);
+          if (f.iconDid) {
+            fetchIconDataUrl(f.iconDid >>> 0).then((url) => {
+              if (url && dot.isConnected) dot.style.background = `url("${url}") center/contain no-repeat`;
+            }).catch(() => {});
+          }
+        }
+        slot.appendChild(fxWrap);
+      }
     }
     slot.addEventListener("click", (ev) => {
       ev.stopPropagation();

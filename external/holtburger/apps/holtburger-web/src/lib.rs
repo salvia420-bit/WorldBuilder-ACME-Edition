@@ -10129,6 +10129,55 @@ fn collect_setup_model_lights<S: holtburger_dat::ResourceSource + ?Sized>(
     out
 }
 
+/// Track B (2026-06-24) — surface a SetupModel's `default_script` (a 0x33
+/// PhysicsScript DID) to JS so dynamic entities can honor the DAT-baked
+/// ambient particle chain the STATICS path already plays
+/// (`fetch_landblock_objects` → `ObjectPlacement.default_script_id`). The
+/// entity spawn path otherwise only reads the WIRE PhysicsDesc default_script +
+/// the raw `physicsScriptDid`, never the Setup's own `default_script` — so a
+/// DAT-baked item flame (e.g. Burning Sands Katar: Setup 0x0200051C →
+/// default_script 0x33000347 → 3× CreateParticle → emitters 0x3200026E/0x32000270)
+/// never fires. Retail: `if (setup->default_script_id.id) play_script_internal(...)`
+/// (acclient.c:320867). Returns 0 for raw `0x01` GfxObjs, SetupModels without a
+/// default_script, or any DAT/parse failure (JS treats 0 as "none"). Mirrors
+/// the [`fetch_setup_model_lights`] prefetch contract.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchSetupDefaultScript)]
+pub async fn fetch_setup_default_script(setup_id: u32) -> Result<u32, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", setup_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = s.get_file_by_key(ResourceKey::new("eor/portal", setup_id));
+    })
+    .await?;
+    Ok(setup_default_script_id(source.as_ref(), setup_id))
+}
+
+/// Pure helper: a SetupModel's `default_script` DID (0x33 PhysicsScript), or 0
+/// for raw `0x01` GfxObjs / parse failure / no script. Mirrors
+/// [`collect_setup_model_lights`]'s fetch+parse discipline so "none" resolves
+/// uniformly regardless of cause.
+#[cfg(any(target_arch = "wasm32", test))]
+fn setup_default_script_id<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+) -> u32 {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    // 0x01 = raw GfxObj — no Setup, no default_script.
+    if (setup_id >> 24) as u8 != 0x02 {
+        return 0;
+    }
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) else {
+        return 0;
+    };
+    let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) else {
+        return 0;
+    };
+    setup.default_script.unwrap_or(0)
+}
+
 // === Render-completeness audit (2026-05-29) — wielded-item holding locations ===
 //
 // AC attaches a wielded child object (weapon / shield / bow) to its wielder by
@@ -19998,6 +20047,11 @@ pub struct InventoryItem {
     name: String,
     icon_id: u32,
     item_type: u32,
+    /// Track A A1 (2026-06-24): `PropertyInt::UiEffects = 18` bitmask — the
+    /// item's magic-effect flags (Fire/Frost/Magical/…), rendered as 2D icon
+    /// badges in the inventory grid (see `scene3d/vfx/ui_effects_registry.js`).
+    /// `0` when the item carries no UiEffects. Surfaced like `icon_id`/`item_type`.
+    ui_effects: u32,
     value: u32,
     stack_size: u32,
     equip_mask: u32,
@@ -20082,6 +20136,13 @@ impl InventoryItem {
     #[wasm_bindgen(getter, js_name = iconId)]
     pub fn icon_id(&self) -> u32 {
         self.icon_id
+    }
+
+    /// Track A A1 (2026-06-24): `PropertyInt::UiEffects` (18) magic-effect
+    /// bitmask. JS maps it via `ui_effects_registry.js` to inventory badges.
+    #[wasm_bindgen(getter, js_name = uiEffects)]
+    pub fn ui_effects(&self) -> u32 {
+        self.ui_effects
     }
 
     /// `ItemType` bitmask. Used by the inventory-panel filter chips
@@ -23779,6 +23840,13 @@ fn apply_inventory_object_create(
                 .with(|m| m.borrow_mut().insert(u32::from(guid), (ds_u32, intensity)));
         }
     }
+    // #16 (2026-06-24): stash UiEffects (PropertyInt 18) for the optional
+    // ?itemFx 3D aura (mirrors the default_script stash above).
+    if let Some(ue) = entity.ui_effects() {
+        if ue != 0 {
+            UI_EFFECTS_INDEX.with(|m| m.borrow_mut().insert(u32::from(guid), ue));
+        }
+    }
 
     let container_id = entity.container_id();
     let wielder_id = entity.wielder_id();
@@ -24077,6 +24145,13 @@ fn maintain_bridge_indexes_on_routed_create(
                     .with(|m| m.borrow_mut().insert(g_u32, (ds_u32, intensity)));
             }
         }
+        // #16 (2026-06-24): stash UiEffects (PropertyInt 18) for the optional
+        // ?itemFx 3D aura (mirrors the default_script stash above).
+        if let Some(ue) = entity.ui_effects() {
+            if ue != 0 {
+                UI_EFFECTS_INDEX.with(|m| m.borrow_mut().insert(g_u32, ue));
+            }
+        }
         if entity.physics_state.contains(PhysicsState::MISSILE) {
             projectile_index.borrow_mut().insert(g_u32);
             if entity.physics_state.contains(PhysicsState::GRAVITY) {
@@ -24138,6 +24213,8 @@ fn maintain_bridge_indexes_on_delete(
     PROJECTILE_GRAVITY_GUIDS.with(|g| g.borrow_mut().remove(&g_u32));
     // A11-S5 / G14: symmetric prune of the default-script stash.
     DEFAULT_SCRIPT_INDEX.with(|m| m.borrow_mut().remove(&g_u32));
+    // #16 (2026-06-24): symmetric prune of the UiEffects stash.
+    UI_EFFECTS_INDEX.with(|m| m.borrow_mut().remove(&g_u32));
 
     // CMT Wave 16 / Phase 50 (2026-05-26): PhysicsScriptTable index
     // cleanup — don't accumulate dead-GUID entries over a long session.
@@ -26299,6 +26376,17 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = entityDefaultScriptIntensity)]
     pub fn entity_default_script_intensity(&self, guid: u32) -> f32 {
         DEFAULT_SCRIPT_INDEX.with(|m| m.borrow().get(&guid).map(|v| v.1).unwrap_or(0.0))
+    }
+
+    /// **#16 (2026-06-24).** This entity's `UiEffects` (PropertyInt 18)
+    /// magic-effect bitmask, stashed at ObjectCreate (`UI_EFFECTS_INDEX`,
+    /// same pattern as `entityDefaultScript`). `0` for unknown GUIDs and
+    /// entities without UiEffects. Drives the optional non-retail 3D item
+    /// aura (`?itemFx`) in `entities.js`; typeof-guarded in JS so a stale
+    /// pkg/ soft-degrades to 0 (aura off).
+    #[wasm_bindgen(js_name = entityUiEffects)]
+    pub fn entity_ui_effects(&self, guid: u32) -> u32 {
+        UI_EFFECTS_INDEX.with(|m| m.borrow().get(&guid).copied().unwrap_or(0))
     }
 
     /// **Vendor UI (2026-05-19).** Pull the cached vendor state for a
@@ -30909,6 +30997,16 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+// #16 (2026-06-24) — per-entity UiEffects (PropertyInt 18) bitmask, populated at
+// ObjectCreate (mirrors DEFAULT_SCRIPT_INDEX) so `SessionHandle::entityUiEffects`
+// can drive the optional non-retail 3D item-aura (`?itemFx`) on dynamic entities,
+// whose UiEffects is otherwise not exposed JS-side at spawn.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static UI_EFFECTS_INDEX: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 /// T1 (2026-06-03) — free wasm export of the cached player run-rate (ACE
 /// `GetRunRate`: run-skill + burden, 18/4 cap). JS feeds it into the
 /// `stateGroundSpeed` getter's `run_rate` arg (which clamps the ground
@@ -31460,12 +31558,20 @@ fn publish_player_inventory_snapshot(
             .get_int_prop(PropertyInt::ItemsCapacity)
             .map(|bits| bits as u32)
             .unwrap_or(0);
+        // Track A A1 (2026-06-24): UiEffects (PropertyInt 18) magic-effect
+        // bitmask for the inventory badge overlay. Same accessor pattern as
+        // items_capacity above; 0 when the item has no UiEffects.
+        let ui_effects = entity
+            .get_int_prop(PropertyInt::UiEffects)
+            .map(|bits| bits as u32)
+            .unwrap_or(0);
         items.push(InventoryItem {
             guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
             name: entity.name().to_string(),
             icon_id: entity.icon_id.unwrap_or(0),
             item_type: entity.item_type_int().unwrap_or(0),
+            ui_effects,
             value: entity.item_value(),
             stack_size: entity.stack_size(),
             equip_mask,

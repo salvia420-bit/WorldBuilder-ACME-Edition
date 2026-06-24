@@ -47,6 +47,12 @@ import {
 } from "../ui/ac_floaty_frame.js";
 import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
 import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
+import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import {
+  uiEffectIconsEnabled,
+  uiEffectIconsFor,
+  uiEffectTintCss,
+} from "../scene3d/vfx/ui_effects_registry.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
 import { canBindToHotbar } from "./inventory_helpers.js";
 import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
@@ -529,6 +535,50 @@ export function mount(ctx) {
       if (icon.dataset.boundKey !== key) return;
       if (url) icon.style.backgroundImage = `url("${url}")`;
     }).catch(() => { /* shared helper logs; placeholder stays */ });
+
+    // Track A (?uiEffectIcons, default OFF): UiEffects magic-effect badge for an
+    // ITEM binding (potions/wands etc.). Same registry + real icon (0x25000009)
+    // + tint fallback as inventory/container. Re-render clears the prior badge.
+    // `.hb-hotbar-slot` is position:relative. DOM-only; flag-off no-op.
+    const prevFx = el.querySelector(".hb-hotbar-uifx");
+    if (prevFx) prevFx.remove();
+    if (uiEffectIconsEnabled() && bound.itemGuid) {
+      const uiFx = uiEffectIconsFor(_itemUiEffects(bound.itemGuid));
+      if (uiFx.length) {
+        const fxWrap = document.createElement("span");
+        fxWrap.className = "hb-hotbar-uifx";
+        fxWrap.style.cssText =
+          "position:absolute;top:1px;left:1px;display:flex;gap:2px;pointer-events:none;z-index:4;";
+        for (const f of uiFx) {
+          const dot = document.createElement("span");
+          dot.title = f.name;
+          dot.style.cssText =
+            "width:11px;height:11px;border-radius:3px;border:1px solid rgba(0,0,0,0.55);" +
+            `background:${uiEffectTintCss(f.tint)} center/contain no-repeat;`;
+          fxWrap.appendChild(dot);
+          if (f.iconDid) {
+            fetchIconDataUrlShared(f.iconDid >>> 0).then((url) => {
+              if (url && dot.isConnected) dot.style.background = `url("${url}") center/contain no-repeat`;
+            }).catch(() => {});
+          }
+        }
+        el.appendChild(fxWrap);
+      }
+    }
+  }
+
+  // UiEffects (PropertyInt 18) bitmask for a hotbar-bound item guid, from the
+  // live wasm inventory snapshot (InventoryItem.uiEffects). 0 if not found.
+  function _itemUiEffects(guid) {
+    try {
+      const h = window.__sessionHandle;
+      if (!h?.playerInventory) return 0;
+      const g = guid >>> 0;
+      for (const it of h.playerInventory()) {
+        if ((it.guid >>> 0) === g) return (it.uiEffects >>> 0) || 0;
+      }
+    } catch (_) { /* default 0 */ }
+    return 0;
   }
 
   // Read the soft-target GUID — the most recently clicked entity in the

@@ -1309,6 +1309,31 @@ export function readSurfaceUnifiedFlag() {
   }
 }
 
+// === R1 (2026-06-24) — `?luminousEmissiveMap` opt-in ========================
+// Narrow sibling of `?surfaceUnified`: on the DYED/paletted luminous path,
+// attach the (recoloured) diffuse map as `emissiveMap` so a COLOURED
+// dyed-luminous surface glows in-colour instead of washing to flat white —
+// WITHOUT the rest of the surfaceUnified render-state unification. The
+// non-dyed (cache) path already does this via `applyFloatLumDiffuse`. Default
+// OFF = byte-identical (flat-white emissive). Also implied when
+// `?surfaceUnified=on` (that path already attaches the emissiveMap). Memoized.
+let _luminousEmissiveMap;
+export function readLuminousEmissiveMapFlag() {
+  if (_luminousEmissiveMap === undefined) {
+    _luminousEmissiveMap = false; // non-browser/test default
+    try {
+      if (typeof window !== "undefined" && window.location) {
+        const v = new URLSearchParams(window.location.search).get("luminousEmissiveMap");
+        // 2026-06-24: DEFAULT-ON (retail-faithful dyed-luminous glow; `=off` to opt out)
+        _luminousEmissiveMap = (v == null)
+          ? true
+          : !(["off", "0", "false", "no"].includes(String(v).toLowerCase()));
+      }
+    } catch (_) { /* default off in non-browser */ }
+  }
+  return _luminousEmissiveMap;
+}
+
 // === A10-M3b (2026-06-12) — `?surfaceParityV2=on` opt-in ====================
 // Layered ON TOP of `?surfaceUnified=on`: the parityV2 branches live only
 // inside `applySurfaceRenderState`, which is only invoked when surfaceUnified

@@ -46,6 +46,12 @@ import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
 import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
+import {
+  uiEffectIconsEnabled,
+  uiEffectIconsFor,
+  uiEffectTintCss,
+} from "../scene3d/vfx/ui_effects_registry.js";
+import { fetchIconDataUrl } from "../ui/ac_icon_cache.js";
 
 const EXAMINE_LAYOUT_ID = 0x2100006B;
 // Retail popup root is 310x400 inside an 800x600 canvas. Our embed
@@ -778,6 +784,48 @@ function renderAppraisal(wrapEl, guid) {
   const wp = snapshot.weaponProfile || null;
   const hp = snapshot.hookProfile || null;
   const al = snapshot.armorLevels || null;
+
+  // === UiEffects magic-effect badges (Track A A0, 2026-06-24) ===
+  // `?uiEffectIcons` (default OFF) — render the item's UiEffects (PropertyInt
+  // 18) as colored badge(s). UiEffects is a 2D icon overlay in retail
+  // (acclient IconData::RenderIcons), so this lives in the DOM/HUD layer and
+  // never touches the WebGL canvas. A0 uses the registry TINT; resolving the
+  // real `*_UIEffectImage` icon (EnumIDMap 0x25000009) is A1. The appraisal
+  // serializer may key ints by name or number — accept both. Flag-off =
+  // byte-identical (block never runs).
+  if (uiEffectIconsEnabled()) {
+    const uiEffectsMask = ((ints.UiEffects ?? ints["18"] ?? 0) >>> 0);
+    const fx = uiEffectIconsFor(uiEffectsMask);
+    if (fx.length) {
+      sec("Magic Effects");
+      const badges = document.createElement("div");
+      badges.className = "hb-exa-uifx";
+      badges.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;margin:2px 0;";
+      for (const f of fx) {
+        const b = document.createElement("span");
+        b.className = "hb-exa-uifx-badge";
+        b.style.cssText =
+          "display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:7px;" +
+          `font-size:11px;color:#111;background:${uiEffectTintCss(f.tint)};`;
+        b.title = f.name;
+        // real *_UIEffectImage icon (0x06 DID via the 0x25000009 map); tint pill
+        // is the fallback while it fetches / if it fails.
+        const ic = document.createElement("span");
+        ic.style.cssText = "width:14px;height:14px;display:inline-block;background:center/contain no-repeat;";
+        b.appendChild(ic);
+        const txt = document.createElement("span");
+        setAcText(txt, f.name);
+        b.appendChild(txt);
+        badges.appendChild(b);
+        if (f.iconDid) {
+          fetchIconDataUrl(f.iconDid >>> 0).then((url) => {
+            if (url && ic.isConnected) ic.style.background = `url("${url}") center/contain no-repeat`;
+          }).catch(() => {});
+        }
+      }
+      wrapEl.appendChild(badges);
+    }
+  }
 
   // === Attributes ===
   // HUD rec #53: only render the Creature-Profile-derived attributes

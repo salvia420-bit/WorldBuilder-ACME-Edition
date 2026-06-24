@@ -56,6 +56,11 @@ import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import {
+  uiEffectIconsEnabled,
+  uiEffectIconsFor,
+  uiEffectTintCss,
+} from "../scene3d/vfx/ui_effects_registry.js";
 // Side-effect import: installs window.__audioOptimistic for the
 // optimistic inventory-action sound cues + server-echo dedupe ring.
 import "./audio_optimistic.js";
@@ -1666,6 +1671,37 @@ function doMount(parentEl, _ctx) {
       });
     }
     slot.appendChild(icon);
+    // Track A A1 (2026-06-24): UiEffects magic-effect badge dot(s). Gated
+    // `?uiEffectIcons` (default OFF). Reads InventoryItem.uiEffects (PropertyInt
+    // 18, the new wasm getter; 0 pre-rebuild → no badge). Same registry + tint
+    // as the examine A0 badge. DOM-only, never touches WebGL. The slot is
+    // position:relative (see `.hb-inv-slot.armed::after`), so the corner dots
+    // anchor within it. Flag-off = byte-identical (block never runs).
+    if (uiEffectIconsEnabled()) {
+      const uiFx = uiEffectIconsFor((item?.uiEffects >>> 0) || 0);
+      if (uiFx.length) {
+        const fxWrap = document.createElement("span");
+        fxWrap.className = "hb-inv-uifx";
+        fxWrap.style.cssText =
+          "position:absolute;top:2px;left:2px;display:flex;gap:2px;pointer-events:none;z-index:3;";
+        for (const f of uiFx) {
+          const dot = document.createElement("span");
+          dot.title = f.name;
+          // real *_UIEffectImage icon (0x06 DID via the 0x25000009 map); tint is
+          // the instant fallback while the icon fetches / if it fails.
+          dot.style.cssText =
+            "width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,0.55);" +
+            `background:${uiEffectTintCss(f.tint)} center/contain no-repeat;`;
+          fxWrap.appendChild(dot);
+          if (f.iconDid) {
+            fetchIconDataUrlShared(f.iconDid >>> 0).then((url) => {
+              if (url && dot.isConnected) dot.style.background = `url("${url}") center/contain no-repeat`;
+            }).catch(() => {});
+          }
+        }
+        slot.appendChild(fxWrap);
+      }
+    }
     // Stack count (if the source row has a ×N badge)
     const stack = srcLi.querySelector(".stack");
     if (stack) {
