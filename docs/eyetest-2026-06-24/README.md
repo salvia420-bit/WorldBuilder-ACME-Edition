@@ -11,3 +11,12 @@ Captured headless on the GTX 1070 (real ANGLE/NVIDIA D3D11), Holtburg, quality=l
 - **03-katar-closeup-nameplate-no-weaponmesh.png** — camera aimed at the katar. Its **nameplate** + the
   **Life Stone mesh** (blue crystal) render, but the **katar weapon mesh does NOT** — i.e. weapon/item
   meshes aren't drawing (ground or hand), only nameplates, while world-objects (Life Stone) do render.
+
+## Update — katar IS visible (it was out of frame), flame is the real gap
+- **04-katar-rig-aimed-at-root-IS-visible.png** / **05-katar-tight-closeup-weapon-present-no-flame.png** —
+  camera aimed at the katar's ENTITY RIG ROOT (not its nameplate). The weapon mesh **builds + renders**
+  (rig = 4 visible surface meshes, 90 verts). The earlier "no mesh" shot (#03) aimed at the nameplate,
+  which floats **2.2m above** the object (nameplate y96.3 vs rig y94.1) → weapon was below frame.
+- **Flame does NOT render:** `particleNodes=0` on the rig; the katar's native flame (play-effect
+  `scriptId=0x58`, a PhysicsScript/particle) is `enqueued for not-yet-spawned guid` and never materializes.
+  So the weapon body draws but the flame particle effect isn't rendered by the client.
