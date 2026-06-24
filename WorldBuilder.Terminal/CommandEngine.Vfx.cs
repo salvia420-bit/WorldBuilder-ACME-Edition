@@ -317,6 +317,17 @@ public partial class CommandEngine {
     // G3 — ΔVRAM budget for the reference ring (per-driver textures only; no
     // per-instance growth). Holtburg's cheap set adds ~0; a healthy ceiling.
     private const double GaugeVramBudgetMB = 16.0;
+    // G2 — the per-reference synthesized-emitter budget (the FILL axis, design
+    // §5.3). Particles are the FIRST effect that adds draw calls; the structural
+    // (SwiftShader/CI) gauge can't measure additive OVERDRAW — that's the
+    // 1070-only Half-B timing meter — so it bounds the EMITTER COUNT instead.
+    // Like Δprograms (G1), the emitter count must be O(unique drivers), NEVER
+    // O(placements): Kpe = uniqueModels + slack mirrors the G1 link budget, and a
+    // per-placement emitter explosion (the §11.2 failure this guards) blows past
+    // it immediately. The runtime caps (RP6 220 m + frustum cull,
+    // maxParticlesPerEmitter 64-2048/quality, the PlayEffect FIFO) then bound the
+    // *concurrent visible* fill far below this structural ceiling.
+    private const int GaugeKpeSlack = 8;
 
     /// <summary>
     /// The Holtburg radius-1 reference UNIQUE model set (build-spec §11.2 cites
@@ -362,9 +373,10 @@ public partial class CommandEngine {
         // THE SCALING INVARIANT (§11.2): every axis is summed ONCE per unique
         // model (one driver per model×surface×patch-set), NEVER × placements.
         int programsDelta = 0;          // Σ dProgramsPerDriver (the G1 axis)
-        int drawcallsDelta = 0;         // Σ dCallsPerInstance — MUST stay 0 for non-particle effects (G2)
+        int drawcallsDelta = 0;         // Σ dCallsPerInstance (whole delta; split below for G2)
+        int particleDrawcalls = 0;      // Σ dCallsPerInstance from PARTICLE rows only (the FILL subset, G2)
         double vramMB = 0.0;            // Σ dVramMB per driver (G3)
-        int particleEmitters = 0;       // Σ dParticleEmitters per driver
+        int particleEmitters = 0;       // Σ dParticleEmitters per driver (the G2 emitter budget)
         int lightsDelta = 0;            // Σ dLightsPerDriver — MUST stay 0 (G4 no-relink invariant)
         var perArchetype = new Dictionary<string, int>(StringComparer.Ordinal);
         var missingCostRows = new List<string>();
@@ -380,7 +392,9 @@ public partial class CommandEngine {
                     continue;
                 }
                 programsDelta += row.DProgramsPerDriver;
-                drawcallsDelta += row.DCallsPerInstance;   // 0 for every non-particle row
+                drawcallsDelta += row.DCallsPerInstance;    // 0 for every non-particle row (G2 firewall)
+                if (string.Equals(row.Mech, "particle", StringComparison.OrdinalIgnoreCase))
+                    particleDrawcalls += row.DCallsPerInstance;  // the FILL subset — bounded by emitters (G2)
                 vramMB += row.DVramMB;
                 particleEmitters += row.DParticleEmitters;
                 lightsDelta += row.DLightsPerDriver;       // 0 for every row (the no-relink invariant)
@@ -412,12 +426,30 @@ public partial class CommandEngine {
             "G1", "Δprograms = O(unique drivers) ≤ Kp (link-explosion guard)",
             g1, $"programsDelta={programsDelta} ≤ Kp={kp} (uniqueDrivers {uniqueModels} + slack {GaugeKpSlack})"));
 
-        // G2 — ΔCalls = 0 per non-particle effect. (No particle archetypes in
-        // the Phase-0 3-archetype set, so the whole drawcall delta must be 0.)
-        bool g2 = drawcallsDelta == 0;
+        // G2 — particle-aware FILL budget (build-spec §11.6 / design §5.3).
+        // Phases 0-2 were all dCallsPerInstance:0, so the OLD G2 asserted the
+        // whole drawcall delta == 0. Particles are the FIRST effect on the FILL
+        // axis, so G2 now splits the delta into three bounded conditions:
+        //   (a) the NON-particle subset MUST still be exactly 0 — every frag /
+        //       MECH-A/B / light effect adds zero draw calls (instancing intact);
+        //       this preserves the old G2 for the whole pre-particle suite.
+        //   (b) the particle subset is BOUNDED by the emitter count: one additive
+        //       billboard draw call per synthesized emitter ⇒ particleCalls ≤
+        //       emitters (cost rides emitters, not particle COUNT — the §5.3 axis).
+        //   (c) the emitter count itself is O(unique drivers) ≤ Kpe (the §11.2
+        //       scaling invariant — emitters scale with unique drivers, NEVER with
+        //       placement count; a per-placement explosion blows past Kpe at once).
+        int nonParticleDrawcalls = drawcallsDelta - particleDrawcalls;
+        int kpe = uniqueModels + GaugeKpeSlack;
+        bool g2NonParticleZero = nonParticleDrawcalls == 0;
+        bool g2CallsBoundByEmitters = particleDrawcalls <= particleEmitters;
+        bool g2EmittersWithinCap = particleEmitters <= kpe;
+        bool g2 = g2NonParticleZero && g2CallsBoundByEmitters && g2EmittersWithinCap;
         gates.Add(new VfxGaugeGate(
-            "G2", "ΔCalls = 0 per non-particle effect",
-            g2, $"drawcallsDelta={drawcallsDelta} (particleEmitters={particleEmitters})"));
+            "G2", "ΔCalls: non-particle == 0, particle ≤ emitters ≤ Kpe (FILL budget)",
+            g2, $"nonParticleCalls={nonParticleDrawcalls} (must be 0); "
+                + $"particleCalls={particleDrawcalls} ≤ emitters={particleEmitters} ≤ Kpe={kpe} "
+                + $"(uniqueDrivers {uniqueModels} + slack {GaugeKpeSlack})"));
 
         // G3 — ΔVRAM within budget, no per-instance texture growth.
         bool g3 = vramMB <= GaugeVramBudgetMB;

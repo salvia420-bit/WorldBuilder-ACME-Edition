@@ -93,7 +93,18 @@ import { treeWindEnabled, isTreeDid } from "./tree_wind.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
-import { visualEnabled, ensureVfxCatalog, vfxDescriptorFor, hasWindBend } from "./vfx_catalog.js";
+import { visualEnabled, ensureVfxCatalog, vfxDescriptorFor, hasWindBend, descriptorMechs } from "./vfx_catalog.js";
+// Phase 3 (?gemSparkle, default-OFF) — SYNTHESIZED additive particle emitters.
+// A placement whose catalog descriptor carries a `particle` mech gets one or
+// more client-local additive billboard emitters attached ON TOP of its frozen
+// mesh. Unlike the windBend peel (which REMOVES the placement so the animated
+// player renders the mesh), the particle collect is NON-DESTRUCTIVE: the mesh
+// stays in the frozen instanced path and the emitter is a pure overlay. Owner
+// key `static:<lbKey>` → the LRU per-LB evict tears it down (statics installs
+// `scene3d._evictStaticParticlesForLb`). DEPENDS ON P3.1 (particle_attach.js) +
+// P3.3 (gemSparkleEnabled + COMPONENT_MECH "particle.gemSparkle").
+import { attachParticleEmitters, staticOwnerKeyForLb } from "./vfx/particle_attach.js";
+import { gemSparkleEnabled } from "./vfx_flags.js";
 // VFX fragment effects (?visual, P1.14 activation). frag_attach maps a DID's
 // descriptor → its registered FRAG components + per-component config ("plan");
 // frag_install (slice 02) turns a plan into the cached per-SET material variant.
@@ -392,6 +403,21 @@ function ensureSceneryInit(wasmExports) {
  */
 function lbSetKey(lbX, lbY) {
   return (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
+}
+
+// Phase 3 — NON-destructive particle collect. Returns the subset of `statics`
+// whose catalog descriptor carries a `particle` mech, WITHOUT removing them from
+// `statics` (the mesh must keep rendering in the frozen instanced path — a
+// particle emitter is an ADDITIVE overlay, not a mesh replacement; contrast the
+// windBend peel which splices). Gated visualEnabled() && gemSparkleEnabled();
+// OFF ⇒ null ⇒ no attach ⇒ byte-identical. The catalog is already loaded by the
+// windBend peel block that runs just before each caller (ensureVfxCatalog()).
+function _collectParticlePlacements(statics) {
+  if (!(visualEnabled() && gemSparkleEnabled())) return null;
+  const hasParticle = (p) =>
+    descriptorMechs(vfxDescriptorFor((p?.modelId >>> 0) || 0)).has("particle");
+  const out = statics.filter(hasParticle);
+  return out.length > 0 ? out : null;
 }
 
 // A2 (busted-world load fix) — concurrent-call dedup for the per-LB
@@ -1650,6 +1676,10 @@ export async function bakeStaticsForLandblock(
       statics = statics.filter((p) => !isWind(p));
     }
   }
+  // Phase 3 (?gemSparkle) — collect particle placements to overlay ON TOP of the
+  // frozen path (non-destructive: `statics` is unchanged so the mesh still
+  // renders). OFF ⇒ null.
+  const particlePlacements = _collectParticlePlacements(statics);
   // A2 — the load-bearing fetch+drain (fetch_landblock_objects +
   // fetchAndDrainScenery) has now SUCCEEDED. Mark the LB permanently
   // baked HERE (not at function entry) so a throw above this line leaves
@@ -1902,6 +1932,15 @@ export async function bakeStaticsForLandblock(
     }
     if (windTrees) {
       await attachWindTrees(scene3d, windTrees, wasmExports);
+    }
+    // Phase 3 — attach synthesized additive emitters to the particle
+    // placements. ALL placements in THIS per-LB path share one landblock → one
+    // constant owner key `static:<lbKey>` (lbKey is in scope from the bake
+    // head). OFF ⇒ particlePlacements is null ⇒ skipped ⇒ byte-identical.
+    if (particlePlacements) {
+      await attachParticleEmitters(
+        scene3d, particlePlacements, wasmExports, () => staticOwnerKeyForLb(lbKey),
+      );
     }
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -2180,6 +2219,8 @@ export async function bakeStaticsRing(
       statics = statics.filter((p) => !isWind(p));
     }
   }
+  // Phase 3 (?gemSparkle) — non-destructive particle collect (mesh stays frozen).
+  const particlePlacements = _collectParticlePlacements(statics);
   // Mark every newly-baked LB in the set BEFORE instantiation runs
   // so a concurrent caller observing mid-instantiation state sees the
   // bake-in-progress LBs as baked. Matches the per-LB baker's
@@ -2459,6 +2500,16 @@ export async function bakeStaticsRing(
     }
     if (windTrees) {
       await attachWindTrees(scene3d, windTrees, wasmExports);
+    }
+    // Phase 3 — the ring path spans MANY landblocks, so key each emitter to
+    // ITS placement's landblock: owner `static:<lbKey(p)>`. Each LB's emitters
+    // then tear down independently when THAT LB evicts. OFF ⇒ null ⇒ skipped ⇒
+    // byte-identical. (lbKeyOf == lbSetKey == the LRU evict key: mask 0xffff0000.)
+    if (particlePlacements) {
+      await attachParticleEmitters(
+        scene3d, particlePlacements, wasmExports,
+        (p) => staticOwnerKeyForLb(p.landblockId),
+      );
     }
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -3074,6 +3125,15 @@ function _staticScriptsEnabled() {
  */
 async function _ensureStaticParticleManager(scene3d, wasmExports) {
   if (scene3d._staticParticleManager) return scene3d._staticParticleManager;
+  // Phase 3 — expose the per-LB particle evictor on scene3d so landblock_lru
+  // (same object as `this.scene3d`, a zero-import leaf) can tear down THIS LB's
+  // synthesized emitters on eviction. Mirrors spawns.js `_evictSpawnsInjectedLb`
+  // (spawns.js:508). Persistent (totalSeconds:0) emitters never auto-finish and
+  // the RP6 220m cull only stops DRAWING them — without this they leak per LB.
+  // Idempotent assignment; flag-independent (the Phase-3 path always owner-scopes).
+  if (scene3d._evictStaticParticlesForLb !== _evictStaticParticlesForLb) {
+    scene3d._evictStaticParticlesForLb = _evictStaticParticlesForLb;
+  }
   if (
     !wasmExports ||
     typeof wasmExports.fetchBuildingPlacement !== "function" ||
@@ -3506,6 +3566,25 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
     );
   }
   return { anchorCount, emitterCount };
+}
+
+/**
+ * Phase 3 — tear down every SYNTHESIZED particle emitter owned by one landblock
+ * (owner key `static:<lbKey>`). Called by the LRU eviction via the
+ * `scene3d._evictStaticParticlesForLb` hook installed in
+ * `_ensureStaticParticleManager`. `lbKeyOrId` may be a packed lb-key
+ * ((lbX<<24)|(lbY<<16)) or a full landblockId — both normalize to the same key
+ * via the 0xffff0000 mask, matching `lbSetKey` and the attach-side owner key.
+ * No-op for an LB that placed no particles (empty-owner fast path in the facade).
+ * Flag-independent: the Phase-3 attach always routes through ownerRegistry, so
+ * teardown must too (this is its ONLY per-LB teardown path — disposeStaticParticles
+ * is whole-scene only).
+ */
+export function _evictStaticParticlesForLb(lbKeyOrId) {
+  // D7 — the SAME single-source helper the attach seams use, so the teardown key
+  // is char-for-char identical to the attach key (no drift → no persistent leak).
+  const key = staticOwnerKeyForLb(lbKeyOrId);
+  try { ownerRegistry.destroyAllForOwner(key); } catch (_) { /* fail-soft */ }
 }
 
 /** Tear down the static ParticleManager + its rAF. Idempotent. */

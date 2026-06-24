@@ -46,6 +46,7 @@ export const COMPONENT_MECH = {
   "weathering.tarnish": "frag",
   "weathering.wetness": "frag",          // + slice 09 (P1.10)
   "weathering.frost": "frag",            // + slice 10 (P1.11)
+  "particle.gemSparkle": "particle",     // + Phase 3 (P3.3) synthesized additive emitter
 };
 
 const DEFAULT_CATALOG_URL = "../../dist/vfx/visual_descriptors.jsonl";

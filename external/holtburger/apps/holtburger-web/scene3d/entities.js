@@ -546,7 +546,7 @@ import { drainPendingPlayEffects } from "./play_effect_vfx.js";
 // statics.js frag seam (buildFragVariant + VFX_GLOBALS), keyed off the entity's
 // UiEffects bitmask via item_fx.itemFxPlanFor. Lazy frag deps below keep the
 // eval-based harnesses loadable. itemAura self-registers through item_fx's import.
-import { visualEnabled, ensureVfxCatalog } from "./vfx_catalog.js";
+import { visualEnabled, ensureVfxCatalog, vfxDescriptorFor, descriptorMechs } from "./vfx_catalog.js";
 import { buildFragVariant } from "./vfx/frag_install.js";
 import { ensureVfxHashVarying } from "./vfx/per_instance.js";
 import { itemFxPlanFor, itemFxEnabled } from "./vfx/item_fx.js";
@@ -556,7 +556,10 @@ import { itemFxPlanFor, itemFxEnabled } from "./vfx/item_fx.js";
 // itemAura). buildFragVariant + VFX_GLOBALS/installVfxComponentPatch are already
 // imported (the statics-mirrored entity frag seam).
 import { fragPlanForDid } from "./vfx/frag_attach.js";
-import { tipFlexEnabled } from "./vfx_flags.js";
+import { tipFlexEnabled, gemSparkleEnabled } from "./vfx_flags.js";
+// Phase 3 (P3.1) — shared emit helper: runs each particle component's emit(ctx)
+// for a descriptor and returns [{emitterInfo, partIndex, parentOffset}] specs.
+import { attachParticleEmitters } from "./vfx/particle_attach.js";
 import { FAMILY_ORDER } from "./vfx/registry.js";
 import "./vfx/components/index.js";
 const VFX_HASH_PRELUDE = { id: "infra.vfxHash", inject: (s) => ensureVfxHashVarying(s) };
@@ -3876,6 +3879,29 @@ export class EntityManager {
           });
         })
         .catch(() => {});
+    }
+
+    // Track P3 (?gemSparkle, default-OFF) — SYNTHESIZED additive particle suite
+    // for entities. If this entity's catalog descriptor carries a `particle`
+    // mech AND the DID does NOT already self-emit via a DAT default_script
+    // (coexistence rule §5 / §9 #14 — never double-animate the Track-B flame),
+    // attach the client-local additive emitter(s) to `root` under owner
+    // `guid>>>0`. Reuses the SAME ownerRegistry path + per-guid teardown the
+    // H2/CreateParticle chains use, so entity-remove's destroyAllForOwner(g)
+    // (entities.js:8060) reaps it for free. Fire-and-forget; OFF ⇒ no attach ⇒
+    // byte-identical. Uses `lodOriginalSetup` (canonical SetupModel key) for the
+    // descriptor lookup and `setupId` for the default_script coexistence probe.
+    if (
+      visualEnabled() && gemSparkleEnabled() &&
+      (setupId >>> 0) !== 0 && this.wasmExports
+    ) {
+      this._attachVfxParticlesForEntity(guid, root, lodOriginalSetup >>> 0, setupId >>> 0)
+        .catch((e) => {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[entities/P3] vfx particle attach for 0x${guid.toString(16)} threw:`, e,
+          );
+        });
     }
 
     // Track B7 (2026-06-08): if this entity carries a PhysicsScriptTable
@@ -9148,6 +9174,104 @@ export class EntityManager {
       }
     }
     return cloned;
+  }
+
+  /**
+   * Phase 3 (P3.4) — attach SYNTHESIZED additive particle emitter(s) for an
+   * entity whose catalog descriptor carries a `particle` mech. Sibling of the
+   * DAT-driven `_attachParticleChainForEntity`, but for the legacy-safe POJO
+   * path: it runs each particle component's `emit(ctx)` (P3.1/P3.3) and routes
+   * the resulting emitterInfo POJOs through the SAME world ParticleManager +
+   * ownerRegistry the H2/CreateParticle chains use, anchored on the live rig.
+   *
+   * Coexistence (§5 / §9 #14): SKIP any DID whose SetupModel already fires a
+   * `default_script` (the Track-B flame) — its DAT emitters already render, so a
+   * suite particle would double-animate it. Resolved via `fetchSetupDefaultScript`
+   * (typeof-guarded; a pre-rebuild pkg/ soft-degrades to "no default_script").
+   *
+   * Owner key = `guid>>>0`; teardown is the existing entity-remove
+   * `destroyAllForOwner(g)` (g = guid>>>0, entities.js:8060) — plus the legacy
+   * `_particleEmittersForGuid` fallback when `?particleOwner=off` (the H2 path at
+   * entities.js:8045 reaps it). Despawn never leaks. Fail-soft throughout.
+   */
+  async _attachVfxParticlesForEntity(guid, rig, descriptorDid, setupDid) {
+    if (!rig || !this.wasmExports) return;
+    let descriptor = null;
+    try {
+      await ensureVfxCatalog();
+      descriptor = vfxDescriptorFor(descriptorDid >>> 0);
+    } catch (_) { return; }
+    if (!descriptor || !descriptorMechs(descriptor).has("particle")) return;
+
+    // Coexistence: a Setup that self-emits via default_script is animated by the
+    // Track-B / DAT path already — never stack a suite particle on top. (Probe
+    // only AFTER the cheap in-memory mech check, so the DAT read is paid by the
+    // handful of allowlisted particle DIDs, not every spawn.)
+    if (typeof this.wasmExports.fetchSetupDefaultScript === "function") {
+      try {
+        const ds = (await this.wasmExports.fetchSetupDefaultScript(setupDid >>> 0)) >>> 0;
+        if (ds !== 0) return;
+      } catch (_) { /* fall through — treat as no default_script */ }
+    }
+    if (!this.entityMap.has(guid)) return; // despawned during the async resolve
+
+    const manager = await this._ensureWorldParticleManager(rig);
+    if (!manager) return;
+    if (!this.entityMap.has(guid)) return; // despawned during the manager build
+
+    // P3.1 attach driver (D5): route the single-element entity placement through
+    // the CANONICAL attachParticleEmitters — it builds the deterministic emit-ctx
+    // (hash01+clock, NEVER Math.random), runs each registered particle component's
+    // emit(ctx), and routes every synthesized spec through ParticleManager.addEmitter.
+    // Owner-scoped under guid>>>0 when ?particleOwner is on (despawn's
+    // destroyAllForOwner reaps it, entities.js:8086); else the returned ids are
+    // registered in the legacy per-guid bucket below so the H2 despawn path
+    // (entities.js:8071) tears them down. The driver resolves the descriptor from
+    // `descriptorDid`; geometry is the LIVE rig (numParts from partFrames) so a
+    // future P3.6 anchor-parts pick can resolve against the animated parts.
+    // (This supersedes agent 07's `emitSpecsForDescriptor` — that export was
+    // dropped from the canonical particle_attach module, D5.)
+    const ownedByRegistry = particleOwnerOn();
+    let result;
+    try {
+      result = await attachParticleEmitters(
+        this, [{ modelId: descriptorDid >>> 0, guid: guid >>> 0 }], this.wasmExports,
+        () => guid >>> 0,
+        {
+          manager,
+          buildParent: () => rig,
+          useOwnerRegistry: ownedByRegistry,
+          didFor: (p) => (p.modelId >>> 0),
+          geometryFor: () => ({ numParts: (rig.partFrames && rig.partFrames.length) || 1, partBoxes: [], rig }),
+          clockNow: () => (this.scene3d && this.scene3d.frameTime && this.scene3d.frameTime.tsSec) || 0,
+        },
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(`[entities/P3] attachParticleEmitters(0x${(descriptorDid >>> 0).toString(16)}) threw:`, e);
+      return;
+    }
+    const ids = (result && result.ids) || [];
+    if (ids.length === 0) return;
+
+    // Despawn raced the awaits: if the entity is already gone, reap now so a late
+    // emitter doesn't outlive its rig (mirrors play_effect_vfx.js:1471-1476).
+    if (!this.entityMap.has(guid)) {
+      if (ownedByRegistry) {
+        try { ownerRegistry.destroySome(guid >>> 0, ids); } catch (_) {}
+      } else {
+        for (const id of ids) { try { manager.destroyParticleEmitter(id); } catch (_) {} }
+      }
+      return;
+    }
+    // Off-path: register in the legacy per-guid map so entity-remove tears them
+    // down (entities.js:8071). On-path the owner facade already tracks them —
+    // don't double-register (that's the split-brain S2 removed).
+    if (!ownedByRegistry) {
+      let bucket = this._particleEmittersForGuid.get(guid);
+      if (!bucket) { bucket = []; this._particleEmittersForGuid.set(guid, bucket); }
+      for (const id of ids) bucket.push(id);
+    }
   }
 
   // W4.7 / DIM3-3 (2026-06-05): `defaultPartIndex` lets a caller anchor the

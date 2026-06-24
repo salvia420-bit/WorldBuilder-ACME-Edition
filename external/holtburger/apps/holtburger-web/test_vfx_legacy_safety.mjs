@@ -22,10 +22,11 @@ function check(label, cond, extra = "") {
 // ---- Layer A: manifest conformance (every registered component) ----
 const comps = allComponents();
 check("at least one component registered (windBend)", comps.length >= 1 && comps.includes(windBend));
-// Slice-16: the barrel must register EXACTLY the canonical Phase-1 set — no
-// missing barrel export (effect silently never attaches) and no stray.
+// Slice-16 / P3.1: the barrel must register EXACTLY the canonical TIER1 set
+// (Phase 1 + the Phase-3 particle.gemSparkle) — no missing barrel export (effect
+// silently never attaches) and no stray.
 const _regIds = new Set(comps.map((c) => c.id));
-check("registry == TIER1 component set (barrel registers all 8; no missing/stray)",
+check("registry == TIER1 component set (barrel registers all 11; no missing/stray)",
   _regIds.size === TIER1_COMPONENT_IDS.length && TIER1_COMPONENT_IDS.every((id) => _regIds.has(id)),
   [..._regIds].join());
 let aClean = true;

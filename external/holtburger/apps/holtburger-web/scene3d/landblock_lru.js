@@ -397,6 +397,17 @@ export class LandblockLRU {
     if (typeof s._evictSpawnsInjectedLb === "function") {
       try { s._evictSpawnsInjectedLb(lbKey); } catch (_) { /* fail-soft */ }
     }
+    // Phase 3 — tear down this LB's SYNTHESIZED particle emitters (owner key
+    // `static:<lbKey>`). statics.js installs this hook when its particle manager
+    // is first created (mirrors `_evictSpawnsInjectedLb`); absent ⇒ no static
+    // particle manager was ever built ⇒ nothing to tear down. Persistent
+    // (totalSeconds:0) gemSparkle/brazier emitters never auto-finish and the RP6
+    // 220m cull only stops DRAWING them, so eviction MUST destroy them or they
+    // leak in the manager table for the rest of the session. Fail-soft; the
+    // facade no-ops for an LB that placed no particles (empty-owner fast path).
+    if (typeof s._evictStaticParticlesForLb === "function") {
+      try { s._evictStaticParticlesForLb(lbKey); } catch (_) { /* fail-soft */ }
+    }
 
     // 6b. C3 #7 — if a cross-LB InstancedMesh node survived step 5c (it
     //    still covers other resident LBs), this LB's statics are STILL on

@@ -17,10 +17,11 @@ export { magicGlow } from "./magicGlow.js";            // emissive / frag
 export { itemAura } from "./itemAura.js";              // emissive / frag (#16 UiEffects aura)
 export { enchantShimmer } from "./enchantShimmer.js";  // emissive / frag
 export { flameFlicker } from "./flameFlicker.js";      // light (intensity-only)
+export { gemSparkle } from "./gemSparkle.js";          // particle (Phase 3 / P3.3, synthesized additive emitter)
 
-// The canonical Phase-1 registered-component id set — the legacy-safety audit
-// asserts the live registry equals exactly this (no missing barrel export, no
-// stray registration).
+// The canonical TIER1 registered-component id set (Phase 1 + Phase-3 particle) —
+// the legacy-safety audit asserts the live registry equals exactly this (no
+// missing barrel export, no stray registration).
 export const TIER1_COMPONENT_IDS = Object.freeze([
   "deformation.windBend",
   "deformation.tipFlex",
@@ -32,4 +33,5 @@ export const TIER1_COMPONENT_IDS = Object.freeze([
   "emissive.itemAura",
   "emissive.enchantShimmer",
   "light.flameFlicker",
+  "particle.gemSparkle",
 ]);

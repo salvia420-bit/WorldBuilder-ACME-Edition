@@ -131,6 +131,19 @@ export function tipFlexEnabled() {
   return _tipFlex;
 }
 
+let _gemSparkle;
+/** `?gemSparkle=on` — particle.gemSparkle synthesized additive twinkle on magic
+ *  gems/crystals: the FIRST synthesized-emitter (MECH "particle") effect, the Phase-3
+ *  minimal vertical slice (like tipFlex was for Phase 2). Default-OFF, composed under
+ *  the ?visual master gate (and lit by ?visual=all for the 1070 batch). Consumed as the
+ *  gemSparkle component's `enabled` gate — particle_attach.particleEntriesForDescriptor
+ *  drops the emitter entry when off, so statics/entities stay byte-identical (no emitter
+ *  synthesized, no addEmitter call) without a seam change. DEFAULT-OFF. */
+export function gemSparkleEnabled() {
+  if (_gemSparkle === undefined) _gemSparkle = _boolFlag("gemSparkle", visualAllEffects());
+  return _gemSparkle;
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -152,6 +165,7 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "weathering.wetness": wetnessEnabled,
   "weathering.frost": frostEnabled,
   "light.flameFlicker": flameFlickerEnabled,
+  "particle.gemSparkle": gemSparkleEnabled,
 });
 
 /**
@@ -175,5 +189,5 @@ export function vfxActiveEffectIds() {
 
 /** Reset memoized flag readers (tests only). */
 export function _resetVfxFlags() {
-  _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _tipFlex = _budget = undefined;
+  _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _tipFlex = _gemSparkle = _budget = undefined;
 }

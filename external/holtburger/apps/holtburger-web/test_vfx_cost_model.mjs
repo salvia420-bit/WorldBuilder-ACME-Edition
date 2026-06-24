@@ -86,6 +86,36 @@ for (const id of NEW_ROWS) {
   check(`${id}: 0 particle emitters`, num(r, "dParticleEmitters") === 0);
 }
 
+// ── 4b. Particle rows — the FIRST family on the FILL axis (P3.5). They are
+//        the ONLY rows allowed dCallsPerInstance>0; each is bounded by its own
+//        emitter count (calls ≤ emitters), adds 0 programs / 0 VRAM / 0 lights,
+//        and declares mech "particle". (gemSparkle = P3.3; brazierFire +
+//        foliageMotes = P3.6/P3.7 stubs.)
+const PARTICLE_ROWS = ["particle.gemSparkle", "particle.brazierFire", "particle.foliageMotes"];
+for (const id of PARTICLE_ROWS) {
+  const r = byId.get(id);
+  check(`particle cost row present: ${id}`, !!r);
+  if (!r) continue;
+  check(`${id}: mech=particle`, r.mech === "particle", `got ${r.mech}`);
+  check(`${id}: ≥1 emitter`, num(r, "dParticleEmitters") >= 1, `got ${r.dParticleEmitters}`);
+  check(`${id}: 1 ≤ calls ≤ emitters (FILL bound, G2)`,
+    num(r, "dCallsPerInstance") >= 1 && num(r, "dCallsPerInstance") <= num(r, "dParticleEmitters"),
+    `calls=${r.dCallsPerInstance} emitters=${r.dParticleEmitters}`);
+  check(`${id}: 0 programs (no shader patch — additive billboard)`, num(r, "dProgramsPerDriver") === 0);
+  check(`${id}: 0 VRAM (reuses existing DAT sprite gfxobj)`, num(r, "dVramMB") === 0);
+  check(`${id}: 0 lights (G4)`, num(r, "dLightsPerDriver") === 0);
+}
+
+// ── 4c. The G2 firewall on the data: ONLY particle rows may add draw calls.
+//        Every non-particle row stays dCallsPerInstance:0 (the phases-0-2
+//        invariant the old G2 == 0 asserted, now restricted to the non-particle
+//        subset).
+for (const r of rows) {
+  if (r.mech === "particle") continue;
+  check(`${r.id}: non-particle ⇒ 0 draw calls (G2 firewall)`, num(r, "dCallsPerInstance") === 0,
+    `got ${r.dCallsPerInstance}`);
+}
+
 // ── 5. G4 light invariant — NO row adds a light (absent ⇒ 0) ────────────
 for (const r of rows)
   check(`${r.id}: dLightsPerDriver == 0 (no relink, G4)`, num(r, "dLightsPerDriver") === 0,
@@ -126,8 +156,53 @@ for (const r of rules) {
   if (r.id === "trunk-canopy" || r.id === "rigid")
     for (const c of (r.components || [])) holtburgResolvable.add(typeof c === "string" ? c : c.id);
 }
-for (const id of NEW_ROWS)
+for (const id of [...NEW_ROWS, ...PARTICLE_ROWS])
   check(`Holtburg ref unperturbed: ${id} not on trunk-canopy/rigid`, !holtburgResolvable.has(id));
+
+// ── 7c. JS mirror of the NEW particle-aware G2 (CommandEngine.Vfx.cs VfxGauge).
+//        Splits the drawcall delta: the NON-particle subset must be exactly 0,
+//        the particle subset is bounded by emitters, and the emitter count is
+//        O(unique drivers) ≤ Kpe = uniqueDrivers + slack (mirrors the G1 link
+//        budget — emitters scale with unique drivers, NEVER placements).
+const GAUGE_KPE_SLACK = 8; // mirrors CommandEngine.Vfx.cs GaugeKpeSlack
+function g2Eval(rowsArr, uniqueDrivers) {
+  let nonParticleCalls = 0, particleCalls = 0, emitters = 0;
+  for (const r of rowsArr) {
+    const calls = num(r, "dCallsPerInstance");
+    if (r.mech === "particle") { particleCalls += calls; emitters += num(r, "dParticleEmitters"); }
+    else nonParticleCalls += calls;
+  }
+  const kpe = uniqueDrivers + GAUGE_KPE_SLACK;
+  return { nonParticleCalls, particleCalls, emitters, kpe,
+    pass: nonParticleCalls === 0 && particleCalls <= emitters && emitters <= kpe };
+}
+function gaugeG2(componentIds, uniqueDrivers) {
+  return g2Eval(componentIds.map((id) => {
+    const r = byId.get(id); if (!r) throw new Error(`missing cost row ${id}`); return r;
+  }), uniqueDrivers);
+}
+// (a) the Phase-1 frag+light set: 0 particle calls, non-particle subset 0 → PASS.
+const g2frag = gaugeG2(["emissive.magicGlow", "emissive.enchantShimmer", "weathering.tarnish", "light.flameFlicker"], 27);
+check("G2 mirror: frag/light set non-particle==0 & 0 particle calls (PASS)",
+  g2frag.pass && g2frag.particleCalls === 0 && g2frag.nonParticleCalls === 0, JSON.stringify(g2frag));
+// (b) a particle driver (gemSparkle) + a frag sibling: calls ≤ emitters, non-particle still 0 → PASS.
+const g2gem = gaugeG2(["particle.gemSparkle", "emissive.glint"], 27);
+check("G2 mirror: gemSparkle+glint PASS (calls ≤ emitters, non-particle == 0)",
+  g2gem.pass && g2gem.particleCalls === 1 && g2gem.emitters === 1 && g2gem.nonParticleCalls === 0,
+  JSON.stringify(g2gem));
+// (c) the brazier stub (2 emitters / 2 calls) stays within its own bound → PASS.
+const g2braz = gaugeG2(["particle.brazierFire"], 27);
+check("G2 mirror: brazierFire 2 calls ≤ 2 emitters (PASS)",
+  g2braz.pass && g2braz.particleCalls === 2 && g2braz.emitters === 2, JSON.stringify(g2braz));
+// (d) NEGATIVE control — a particle row with calls > emitters MUST fail the FILL bound.
+check("G2 mirror: calls>emitters FAILS (negative control)",
+  g2Eval([{ mech: "particle", dCallsPerInstance: 3, dParticleEmitters: 1 }], 27).pass === false);
+// (e) NEGATIVE control — a non-particle row with calls>0 MUST fail the firewall.
+check("G2 mirror: non-particle calls>0 FAILS (firewall negative control)",
+  g2Eval([{ mech: "frag", dCallsPerInstance: 1, dParticleEmitters: 0 }], 27).pass === false);
+// (f) NEGATIVE control — emitters exceeding Kpe (a per-placement explosion proxy) MUST fail.
+check("G2 mirror: emitters>Kpe FAILS (placement-explosion negative control)",
+  g2Eval([{ mech: "particle", dCallsPerInstance: 36, dParticleEmitters: 36 }], 27).pass === false);
 
 console.log(`\nVFX cost-model + gauge accounting: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

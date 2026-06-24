@@ -179,9 +179,15 @@ public static class VisualArchetypeIds {
     public const string RigidGlint  = "rigid-glint";
     public const string TipFlex     = "tip-flex";
     public const string Rigid       = "rigid";
+    // Phase-3 particle/aura archetypes. gem-sparkle lands with the P3.5 slice
+    // (COMMIT 4); brazier/creature-breath/foliage-* register with P3.6/P3.7. The
+    // rule is forward-declared in visual_archetype_rules.jsonl but NOT yet wired
+    // into the VfxClassify cascade (no FindRule(GemSparkle)), so it classifies
+    // nothing yet — gauge stays all-zero (gauge-safe; agent-14 deferred predicate).
+    public const string GemSparkle  = "gem-sparkle";
 
-    /// <summary>The commit-2 archetype set, in cascade-tier order.</summary>
-    public static readonly string[] All = { TrunkCanopy, RigidGlint, TipFlex, Rigid };
+    /// <summary>The commit-2 archetype set + the P3.5 gem-sparkle, cascade-tier order.</summary>
+    public static readonly string[] All = { GemSparkle, RigidGlint, TipFlex, TrunkCanopy, Rigid };
 }
 
 /// <summary>
