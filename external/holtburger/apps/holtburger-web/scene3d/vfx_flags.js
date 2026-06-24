@@ -56,12 +56,14 @@ function _numFlag(name, def, min, max) {
 }
 
 let _all;
-/** `?visual=all` OR `?visualAll=on` — default every per-effect flag ON (opt out
- *  per effect). The one-URL "light everything" switch for the 1070 eye-test.
- *  Still composed with the ?visual master gate by vfxEffectEnabled(). DEFAULT-OFF. */
+/** Per-effect default. DEFAULT-ON (2026-06-24: validated suite ships on). Every
+ *  per-effect flag defaults to this, so absent any URL flag all effects are on
+ *  (still composed with the ?visual master gate by vfxEffectEnabled()). Escapes:
+ *  `?visualAll=off` drops ALL per-effects (master stays on); `?<effect>=off` opts
+ *  one out; `?visual=off` kills the whole suite. `?visual=all` still forces on. */
 export function visualAllEffects() {
   if (_all !== undefined) return _all;
-  let on = _boolFlag("visualAll", false);
+  let on = _boolFlag("visualAll", true); // default-on; ?visualAll=off drops per-effects
   if (!on) {
     const v = _strFlag("visual");
     if (v != null && v.toLowerCase() === "all") on = true;

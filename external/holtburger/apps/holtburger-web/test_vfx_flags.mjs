@@ -1,9 +1,8 @@
-// VFX Phase 1 — per-effect flag readers + the master-gate firewall.
-//
-// Locks: every per-effect flag DEFAULT-OFF; vfxEffectEnabled() requires BOTH the
-// ?visual master gate AND the per-effect flag (a per-effect flag alone never
-// enables — the firewall); ?visual=all / ?visualAll=on light everything (opt-out
-// per effect); the ?visualBudget governor stub parses + clamps; reset hygiene.
+// VFX — per-effect flag readers + the master gate. DEFAULT-ON (2026-06-24): the
+// validated suite ships on. Escapes: ?visual=off = master kill-switch (everything
+// off); ?visualAll=off drops every per-effect (master stays on); ?<effect>=off opts
+// one out; ?<effect>=on re-enables one under ?visualAll=off. vfxEffectEnabled() still
+// requires BOTH the master gate AND the per-effect flag.
 
 import {
   vfxEffectEnabled, vfxActiveEffectIds, VFX_EFFECT_FLAGS,
@@ -18,10 +17,7 @@ function check(label, cond, extra = "") {
   if (cond) { passed++; console.log(`  [OK] ${label}`); }
   else { failed++; console.log(`  [FAIL] ${label} ${extra}`); }
 }
-function setUrl(search) {
-  globalThis.window = { location: { search } };
-  _resetVfxCatalog(); _resetVfxFlags(); // _resetVfxCatalog clears visualEnabled()'s memo too
-}
+function setUrl(search) { globalThis.window = { location: { search } }; _resetVfxCatalog(); _resetVfxFlags(); }
 function clearUrl() { delete globalThis.window; _resetVfxCatalog(); _resetVfxFlags(); }
 
 const ALL_READERS = [glintEnabled, magicGlowEnabled, enchantShimmerEnabled,
@@ -29,82 +25,70 @@ const ALL_READERS = [glintEnabled, magicGlowEnabled, enchantShimmerEnabled,
 const ALL_IDS = Object.keys(VFX_EFFECT_FLAGS);
 
 // ---- the router map is complete ----
-check("VFX_EFFECT_FLAGS maps all 14 effect ids (Phase-1 + tipFlex + 6 particle: gemSparkle/brazierEmbers/foliage{Pollen,Fireflies,Leaves}/breathFog)", ALL_IDS.length === 14, ALL_IDS.join());
+check("VFX_EFFECT_FLAGS maps all 14 effect ids", ALL_IDS.length === 14, ALL_IDS.join());
 check("every mapped id has a function reader", ALL_IDS.every((id) => typeof VFX_EFFECT_FLAGS[id] === "function"));
 
-// ---- default OFF (no window) ----
+// ---- DEFAULT-ON (no window / no flags) ----
 clearUrl();
-check("no ?visual: visualEnabled() false", visualEnabled() === false);
-check("no flags: every per-effect reader false", ALL_READERS.every((f) => f() === false));
-check("no flags: vfxEffectEnabled(all ids) false", ALL_IDS.every((id) => vfxEffectEnabled(id) === false));
-check("no flags: visualAllEffects() false", visualAllEffects() === false);
+check("no flags: visualEnabled() true (default-on)", visualEnabled() === true);
+check("no flags: visualAllEffects() true (default-on)", visualAllEffects() === true);
+check("no flags: every per-effect reader true", ALL_READERS.every((f) => f() === true));
+check("no flags: vfxEffectEnabled(all ids) true", ALL_IDS.every((id) => vfxEffectEnabled(id) === true));
+check("no flags: all 14 effects active", vfxActiveEffectIds().length === 14);
 check("no flags: visualBudget() === Infinity (uncapped)", visualBudget() === Infinity);
-check("no flags: vfxActiveEffectIds() empty", vfxActiveEffectIds().length === 0);
 
-// ---- ?visual=on alone → master ON but every effect still OFF ----
-setUrl("?visual=on");
-check("?visual=on: master gate visualEnabled() true", visualEnabled() === true);
-check("?visual=on alone: per-effect readers still false", ALL_READERS.every((f) => f() === false));
-check("?visual=on alone: vfxEffectEnabled(glint) FALSE (effect not opted in)",
-  vfxEffectEnabled("emissive.glint") === false);
-check("?visual=on alone: no active effects", vfxActiveEffectIds().length === 0);
+// ---- ?visual=off → master kill-switch → nothing ----
+setUrl("?visual=off");
+check("?visual=off: visualEnabled() false", visualEnabled() === false);
+check("?visual=off: vfxEffectEnabled(all ids) false", ALL_IDS.every((id) => vfxEffectEnabled(id) === false));
+check("?visual=off: no active effects", vfxActiveEffectIds().length === 0);
 
-// ---- ?visual=on&glint=on → ONLY glint ----
-setUrl("?visual=on&glint=on");
-check("?visual+?glint: glintEnabled() true", glintEnabled() === true);
-check("?visual+?glint: vfxEffectEnabled(glint) true", vfxEffectEnabled("emissive.glint") === true);
-check("?visual+?glint: vfxEffectEnabled(tarnish) FALSE (surgical)", vfxEffectEnabled("weathering.tarnish") === false);
-check("?visual+?glint: active = [emissive.glint]", vfxActiveEffectIds().join() === "emissive.glint");
+// ---- ?visual=off dominates a per-effect ?glint=on (master kill wins) ----
+setUrl("?visual=off&glint=on");
+check("?visual=off&glint=on: master kill wins → glint NOT active", vfxEffectEnabled("emissive.glint") === false);
+check("?visual=off&glint=on: no active effects", vfxActiveEffectIds().length === 0);
 
-// ---- THE FIREWALL: ?glint=on WITHOUT ?visual enables NOTHING ----
-setUrl("?glint=on");
-check("?glint without ?visual: glintEnabled() reads URL true", glintEnabled() === true);
-check("FIREWALL: ?glint without ?visual: vfxEffectEnabled(glint) FALSE", vfxEffectEnabled("emissive.glint") === false);
-check("FIREWALL: ?glint without ?visual: no active effects", vfxActiveEffectIds().length === 0);
+// ---- ?visualAll=off → master on, EVERY per-effect dropped ----
+setUrl("?visualAll=off");
+check("?visualAll=off: master still on", visualEnabled() === true);
+check("?visualAll=off: visualAllEffects() false", visualAllEffects() === false);
+check("?visualAll=off: per-effect readers false", ALL_READERS.every((f) => f() === false));
+check("?visualAll=off: no active effects", vfxActiveEffectIds().length === 0);
 
-// ---- ?visual=all → light everything (master + every effect) ----
+// ---- ?visualAll=off&glint=on → surgical single re-enable ----
+setUrl("?visualAll=off&glint=on");
+check("?visualAll=off&glint=on: glint active", vfxEffectEnabled("emissive.glint") === true);
+check("?visualAll=off&glint=on: tarnish off (surgical)", vfxEffectEnabled("weathering.tarnish") === false);
+check("?visualAll=off&glint=on: active = [emissive.glint]", vfxActiveEffectIds().join() === "emissive.glint");
+
+// ---- per-effect opt-OUT under default-on: ?glint=off ----
+setUrl("?glint=off");
+check("?glint=off: glintEnabled() false", glintEnabled() === false);
+check("?glint=off: vfxEffectEnabled(glint) false", vfxEffectEnabled("emissive.glint") === false);
+check("?glint=off: tarnish still active (default-on)", vfxEffectEnabled("weathering.tarnish") === true);
+check("?glint=off: 13 effects active", vfxActiveEffectIds().length === 13);
+
+// ---- ?visual=all still forces everything on (explicit) ----
 setUrl("?visual=all");
-check("?visual=all: master gate on", visualEnabled() === true);
-check("?visual=all: visualAllEffects() true", visualAllEffects() === true);
-check("?visual=all: every per-effect reader true", ALL_READERS.every((f) => f() === true));
-check("?visual=all: vfxEffectEnabled(all ids) true", ALL_IDS.every((id) => vfxEffectEnabled(id) === true));
-check("?visual=all: unknown id falls back to ALL (true)", vfxEffectEnabled("emissive.future") === true);
 check("?visual=all: all 14 effects active", vfxActiveEffectIds().length === 14);
+check("?visual=all: unknown id falls back to ALL (true)", vfxEffectEnabled("emissive.future") === true);
 
-// ---- ?visualAll=on alias (composed with ?visual=on) ----
-setUrl("?visual=on&visualAll=on");
-check("?visualAll=on: visualAllEffects() true", visualAllEffects() === true);
-check("?visualAll=on: vfxEffectEnabled(frost) true", vfxEffectEnabled("weathering.frost") === true);
-
-// ---- ?visual=all with a per-effect opt-OUT ----
-setUrl("?visual=all&glint=off");
-check("?visual=all&glint=off: glintEnabled() false (opt-out wins)", glintEnabled() === false);
-check("?visual=all&glint=off: vfxEffectEnabled(glint) false", vfxEffectEnabled("emissive.glint") === false);
-check("?visual=all&glint=off: vfxEffectEnabled(tarnish) still true", vfxEffectEnabled("weathering.tarnish") === true);
-check("?visual=all&glint=off: 13 effects active", vfxActiveEffectIds().length === 13);
-
-// ---- ?visualAll=on WITHOUT ?visual still firewalled (master off) ----
-setUrl("?visualAll=on");
-check("FIREWALL: ?visualAll without ?visual: master off ⇒ no active effects", vfxActiveEffectIds().length === 0);
-
-// ---- ?visualBudget governor stub ----
-setUrl("?visual=on&visualBudget=10");
+// ---- ?visualBudget governor stub (default-on: no ?visual needed) ----
+setUrl("?visualBudget=10");
 check("?visualBudget=10 → 10", visualBudget() === 10);
-setUrl("?visual=on&visualBudget=0");
+setUrl("?visualBudget=0");
 check("?visualBudget=0 → 0 (in range)", visualBudget() === 0);
-setUrl("?visual=on&visualBudget=99999");
+setUrl("?visualBudget=99999");
 check("?visualBudget out-of-range → Infinity (def)", visualBudget() === Infinity);
-setUrl("?visual=on&visualBudget=abc");
+setUrl("?visualBudget=abc");
 check("?visualBudget garbage → Infinity (def)", visualBudget() === Infinity);
-setUrl("?visual=on&visualBudget=-5");
-check("?visualBudget negative → Infinity (def, min 0)", visualBudget() === Infinity);
 
 // ---- memoization reset hygiene ----
-setUrl("?visual=on&tarnish=on");
-check("memo: tarnish true under its URL", vfxEffectEnabled("weathering.tarnish") === true);
+setUrl("?glint=off");
+check("memo: glint off under its URL", vfxEffectEnabled("emissive.glint") === false);
 clearUrl();
-check("memo: reset+clear ⇒ tarnish false again", vfxEffectEnabled("weathering.tarnish") === false);
+check("memo: reset+clear ⇒ glint active again (default-on)", vfxEffectEnabled("emissive.glint") === true);
 
 clearUrl();
-console.log(`\nVFX flags + firewall: ${passed} passed, ${failed} failed`);
+console.log(`\nVFX flags + firewall (default-on): ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

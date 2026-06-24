@@ -169,7 +169,7 @@ function installCatalog() {
 function reset() { _resetVfxCatalog(); _resetVfxFlags(); _resetParticleAttach(); }
 function visualOn() { globalThis.window = { location: { search: "?visual=on" } }; reset(); installCatalog(); }
 function visualAll() { globalThis.window = { location: { search: "?visual=all" } }; reset(); installCatalog(); }
-function visualOff() { delete globalThis.window; reset(); installCatalog(); }
+function visualOff() { globalThis.window = { location: { search: "?visual=off" } }; reset(); installCatalog(); } // master kill (default-on: absent ?visual = ON)
 
 // ============================================================================
 // SECTION A — particleEntriesForDescriptor: mech filtering + gate + ordering.
@@ -194,11 +194,14 @@ const eDis = particleEntriesForDescriptor(desc(["particle.gemSparkle", "particle
 check("[A] effect gate drops a disabled particle comp (enabled()→false)",
   eDis.length === 1 && eDis[0].comp.id === "particle.gemSparkle", eDis.map((e) => e.comp.id).join());
 
-// airtight default: a particle comp with NO `enabled` + plain ?visual → dropped
-// (vfxEffectEnabled fallback is OFF until a per-effect flag is wired).
+// default-on: an unflagged comp rides the visualAllEffects fallback (admitted by
+// default). ?visualAll=off turns the fallback OFF → the unflagged comp drops — the
+// airtight gate still works, just inverted to opt-out.
+globalThis.window = { location: { search: "?visualAll=off" } }; reset(); installCatalog();
 const eUnflagged = particleEntriesForDescriptor(desc(["particle.unflagged"]));
-check("[A] unflagged particle comp DROPPED under plain ?visual (airtight default-OFF)",
+check("[A] unflagged particle comp DROPPED under ?visualAll=off (fallback off)",
   eUnflagged.length === 0, eUnflagged.map((e) => e.comp.id).join());
+visualOn(); // restore section-A default
 
 // config merge precedence (defaults < shared < byId).
 const merged = mergeComponentConfig(pGem, { shared: { sprite: 7 }, byId: { "particle.gemSparkle": { sprite: 9 } } });

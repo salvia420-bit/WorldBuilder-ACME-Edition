@@ -58,16 +58,16 @@ ok("deterministic: identical ctx => identical specs", d1 === d2);
 // ---- OFF => byte-identical (attach-layer enabled-gate, mirror frag_attach:96) ----
 function setSearch(q) { globalThis.window = { location: { search: q } }; _resetVfxFlags(); }
 const dropped = () => (typeof brazierEmbers.enabled === "function" && !brazierEmbers.enabled());
-setSearch("");
-ok("DEFAULT: enabled()==false ⇒ DROPPED ⇒ byte-identical", dropped() === true && brazierEnabled() === false);
-setSearch("?visual=on");
-ok("?visual=on alone: still DROPPED (per-effect default OFF)", dropped() === true);
-setSearch("?brazier=on");
-ok("?brazier=on: KEPT ⇒ emitters synthesized", dropped() === false && brazierEnabled() === true);
-setSearch("?visual=all");
-ok("?visual=all lights brazier", brazierEnabled() === true);
+setSearch(""); // DEFAULT-ON (2026-06-24)
+ok("DEFAULT (no flags): enabled()==true ⇒ KEPT (default-on)", dropped() === false && brazierEnabled() === true);
 setSearch("?brazier=off");
-ok("?brazier=off: explicitly DROPPED", dropped() === true);
+ok("?brazier=off: explicitly DROPPED (opt-out) ⇒ byte-identical", dropped() === true && brazierEnabled() === false);
+setSearch("?visualAll=off");
+ok("?visualAll=off: per-effect fallback off ⇒ DROPPED", dropped() === true && brazierEnabled() === false);
+setSearch("?visualAll=off&brazier=on");
+ok("?visualAll=off&brazier=on: surgical re-enable ⇒ KEPT", dropped() === false && brazierEnabled() === true);
+setSearch("?visual=all");
+ok("?visual=all: KEPT", dropped() === false && brazierEnabled() === true);
 delete globalThis.window;
 
 console.log(`\nbrazierEmbers emit/firewall: ${pass} passed, ${fail} failed`);

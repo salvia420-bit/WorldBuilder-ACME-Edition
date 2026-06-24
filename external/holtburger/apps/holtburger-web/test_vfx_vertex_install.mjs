@@ -162,7 +162,7 @@ function makeFakeMC() {
 const GLOBALS = { uTime: { value: 0 } };
 
 function visualOn() { globalThis.window = { location: { search: "?visual=on" } }; _resetVfxCatalog(); _resetFragInstall(); }
-function visualOff() { delete globalThis.window; _resetVfxCatalog(); _resetFragInstall(); }
+function visualOff() { globalThis.window = { location: { search: "?visual=off" } }; _resetVfxCatalog(); _resetFragInstall(); } // master kill (default-on: absent ?visual = ON)
 
 // ============================================================================
 // GATE A — the LIVE runtime selection: frag_attach.fragEntriesForDescriptor.

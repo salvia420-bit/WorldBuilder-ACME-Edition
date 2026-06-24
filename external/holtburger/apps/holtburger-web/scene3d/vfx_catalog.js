@@ -21,11 +21,12 @@ function _strFlag(name) {
 }
 
 let _flag;
-/** ?visual enables the descriptor-catalog-driven VFX path. DEFAULT-OFF.
- *  Accepts on|1|true|yes or a non-"off" value (e.g. ?visual=archetypes). */
+/** ?visual enables the descriptor-catalog-driven VFX path. DEFAULT-ON (2026-06-24:
+ *  the validated suite ships on; ?visual=off is the master kill-switch). Accepts
+ *  off|0|false|no|"" to disable; any other value (or absent) keeps it on. */
 export function visualEnabled() {
   if (_flag !== undefined) return _flag;
-  let on = false;
+  let on = true; // default-on (master); ?visual=off disables the whole suite
   const v = _strFlag("visual");
   if (v != null) {
     const s = v.toLowerCase();

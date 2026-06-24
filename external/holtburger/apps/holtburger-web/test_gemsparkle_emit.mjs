@@ -71,16 +71,16 @@ function setSearch(q) { globalThis.window = { location: { search: q } }; _resetV
 // frag_attach.js:96 idiom: if (typeof comp.enabled === "function" && !comp.enabled()) drop.
 const dropped = () => (typeof gemSparkle.enabled === "function" && !gemSparkle.enabled());
 
-setSearch(""); // default: no flags
-ok("DEFAULT (no flags): enabled()==false ⇒ entry DROPPED ⇒ no emit ⇒ byte-identical", dropped() === true && gemSparkleEnabled() === false);
-setSearch("?visual=on"); // master on, per-effect absent
-ok("?visual=on alone: still DROPPED (per-effect default OFF)", dropped() === true);
-setSearch("?gemSparkle=on");
-ok("?gemSparkle=on: enabled()==true ⇒ entry KEPT ⇒ emitter synthesized", dropped() === false && gemSparkleEnabled() === true);
-setSearch("?visual=all");
-ok("?visual=all lights gemSparkle (visualAllEffects default)", gemSparkleEnabled() === true);
+setSearch(""); // default: no flags → DEFAULT-ON (2026-06-24)
+ok("DEFAULT (no flags): enabled()==true ⇒ KEPT ⇒ emitter synthesized (default-on)", dropped() === false && gemSparkleEnabled() === true);
 setSearch("?gemSparkle=off");
-ok("?gemSparkle=off: explicitly DROPPED", dropped() === true);
+ok("?gemSparkle=off: explicitly DROPPED (opt-out escape) ⇒ byte-identical", dropped() === true && gemSparkleEnabled() === false);
+setSearch("?visualAll=off");
+ok("?visualAll=off: per-effect fallback off ⇒ DROPPED", dropped() === true && gemSparkleEnabled() === false);
+setSearch("?visualAll=off&gemSparkle=on");
+ok("?visualAll=off&gemSparkle=on: surgical re-enable ⇒ KEPT", dropped() === false && gemSparkleEnabled() === true);
+setSearch("?visual=all");
+ok("?visual=all: KEPT", dropped() === false && gemSparkleEnabled() === true);
 delete globalThis.window;
 
 console.log(`\ngemSparkle emit/firewall: ${pass} passed, ${fail} failed`);
