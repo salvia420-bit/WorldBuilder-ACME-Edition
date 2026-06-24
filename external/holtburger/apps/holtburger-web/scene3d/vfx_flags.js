@@ -144,6 +144,18 @@ export function gemSparkleEnabled() {
   return _gemSparkle;
 }
 
+let _brazier;
+/** `?brazier=on` — particle.brazierEmbers synthesized embers+smoke on flame-bowl
+ *  braziers/torches (P3.6). TWO persistent emitters (additive embers + alpha smoke)
+ *  anchored to the bowl part. Default-OFF, composed under ?visual (lit by ?visual=all).
+ *  Consumed as the brazierEmbers component's `enabled` gate — off ⇒ no emitter ⇒
+ *  byte-identical. The classifier gates this OUT for default_script-bearing DIDs
+ *  (Track-B coexistence). DEFAULT-OFF. */
+export function brazierEnabled() {
+  if (_brazier === undefined) _brazier = _boolFlag("brazier", visualAllEffects());
+  return _brazier;
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -166,6 +178,7 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "weathering.frost": frostEnabled,
   "light.flameFlicker": flameFlickerEnabled,
   "particle.gemSparkle": gemSparkleEnabled,
+  "particle.brazierEmbers": brazierEnabled,
 });
 
 /**
@@ -189,5 +202,5 @@ export function vfxActiveEffectIds() {
 
 /** Reset memoized flag readers (tests only). */
 export function _resetVfxFlags() {
-  _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _tipFlex = _gemSparkle = _budget = undefined;
+  _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _tipFlex = _gemSparkle = _brazier = _budget = undefined;
 }

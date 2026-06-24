@@ -18,6 +18,7 @@ export { itemAura } from "./itemAura.js";              // emissive / frag (#16 U
 export { enchantShimmer } from "./enchantShimmer.js";  // emissive / frag
 export { flameFlicker } from "./flameFlicker.js";      // light (intensity-only)
 export { gemSparkle } from "./gemSparkle.js";          // particle (Phase 3 / P3.3, synthesized additive emitter)
+export { brazierEmbers } from "./brazierEmbers.js";    // particle (Phase 3 / P3.6, embers+smoke flame-bowl)
 
 // The canonical TIER1 registered-component id set (Phase 1 + Phase-3 particle) —
 // the legacy-safety audit asserts the live registry equals exactly this (no
@@ -34,4 +35,5 @@ export const TIER1_COMPONENT_IDS = Object.freeze([
   "emissive.enchantShimmer",
   "light.flameFlicker",
   "particle.gemSparkle",
+  "particle.brazierEmbers",
 ]);

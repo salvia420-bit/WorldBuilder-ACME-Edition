@@ -26,7 +26,7 @@ check("at least one component registered (windBend)", comps.length >= 1 && comps
 // (Phase 1 + the Phase-3 particle.gemSparkle) — no missing barrel export (effect
 // silently never attaches) and no stray.
 const _regIds = new Set(comps.map((c) => c.id));
-check("registry == TIER1 component set (barrel registers all 11; no missing/stray)",
+check("registry == TIER1 component set (barrel registers all 12; no missing/stray)",
   _regIds.size === TIER1_COMPONENT_IDS.length && TIER1_COMPONENT_IDS.every((id) => _regIds.has(id)),
   [..._regIds].join());
 let aClean = true;

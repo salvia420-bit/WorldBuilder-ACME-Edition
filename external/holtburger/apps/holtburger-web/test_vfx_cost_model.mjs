@@ -89,9 +89,9 @@ for (const id of NEW_ROWS) {
 // ── 4b. Particle rows — the FIRST family on the FILL axis (P3.5). They are
 //        the ONLY rows allowed dCallsPerInstance>0; each is bounded by its own
 //        emitter count (calls ≤ emitters), adds 0 programs / 0 VRAM / 0 lights,
-//        and declares mech "particle". (gemSparkle = P3.3; brazierFire +
+//        and declares mech "particle". (gemSparkle = P3.3; brazierEmbers +
 //        foliageMotes = P3.6/P3.7 stubs.)
-const PARTICLE_ROWS = ["particle.gemSparkle", "particle.brazierFire", "particle.foliageMotes"];
+const PARTICLE_ROWS = ["particle.gemSparkle", "particle.brazierEmbers", "particle.foliageMotes"];
 for (const id of PARTICLE_ROWS) {
   const r = byId.get(id);
   check(`particle cost row present: ${id}`, !!r);
@@ -191,8 +191,8 @@ check("G2 mirror: gemSparkle+glint PASS (calls ≤ emitters, non-particle == 0)"
   g2gem.pass && g2gem.particleCalls === 1 && g2gem.emitters === 1 && g2gem.nonParticleCalls === 0,
   JSON.stringify(g2gem));
 // (c) the brazier stub (2 emitters / 2 calls) stays within its own bound → PASS.
-const g2braz = gaugeG2(["particle.brazierFire"], 27);
-check("G2 mirror: brazierFire 2 calls ≤ 2 emitters (PASS)",
+const g2braz = gaugeG2(["particle.brazierEmbers"], 27);
+check("G2 mirror: brazierEmbers 2 calls ≤ 2 emitters (PASS)",
   g2braz.pass && g2braz.particleCalls === 2 && g2braz.emitters === 2, JSON.stringify(g2braz));
 // (d) NEGATIVE control — a particle row with calls > emitters MUST fail the FILL bound.
 check("G2 mirror: calls>emitters FAILS (negative control)",
