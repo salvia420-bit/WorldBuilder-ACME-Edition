@@ -57,6 +57,7 @@ import { tickPerFrame, installSharedDrainHook } from "./loop.js";
 // script queues, mirroring retail's single Timer::cur_time static,
 // acclient.c:46992). Install point is below, right after liveScene3d exists.
 import { particleClockMode, setCurrentTime } from "./particles/time_rng.js";
+import { ownerRegistry as particleOwnerRegistry } from "./particles/owner_registry.js"; // P3.8 __diag.particles() bridge
 import { EntityManager } from "./entities.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
@@ -2927,6 +2928,29 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // the latest fields (sessionHandle, cellContainers3d) — capture
   // scripts can replace these post-init without restarting init3D.
   liveScene3dRef = liveScene3d;
+
+  // P3.8 eye-test enabler — read-only window.__diag.particles() snapshot bridge
+  // (agent 11; adapted for BOTH the static + world ParticleManagers + the shared
+  // owner registry). On-demand only (no per-frame cost). The PASS gates read
+  // liveEmitters; without this the 1070 probe can only see meshNodes deltas.
+  if (typeof window !== "undefined" && window.__diag) {
+    window.__diag.particles = () => {
+      const s = liveScene3dRef;
+      const sm = s && s._staticParticleManager;
+      const wm = s && s.entityManager && s.entityManager._worldParticleManager;
+      const staticEmitters = (sm && sm.particleTable && sm.particleTable.size) || 0;
+      const worldEmitters = (wm && wm.particleTable && wm.particleTable.size) || 0;
+      const byOwner = {};
+      let owners = 0;
+      try {
+        owners = particleOwnerRegistry.ownerCount;
+        for (const k of particleOwnerRegistry.ownerKeys()) {
+          byOwner[String(k)] = particleOwnerRegistry.emitterCountForOwner(k);
+        }
+      } catch (_) { /* registry not ready */ }
+      return { liveEmitters: staticEmitters + worldEmitters, staticEmitters, worldEmitters, owners, byOwner };
+    };
+  }
 
   // A11-S3 =sim: ONE clock for mixers + particles + script queues. Retail
   // runs every manager off the single Timer::cur_time static
