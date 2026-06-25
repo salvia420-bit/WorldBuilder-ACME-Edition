@@ -72,13 +72,25 @@ function _didToNum(d) {
 }
 
 /**
- * Parse a visual_descriptors.jsonl text into a Map(didNum -> descriptor).
- * Tolerant of the C# emit shape: `did` may be a hex string ("0x02001063") or a
- * number; `components` may be an array of id-strings OR of {id} objects. Pure.
+ * Parse a visual_descriptors.jsonl text into a Map(didNum -> descriptor). Pure.
+ * Tolerant — a strict superset of every shape we have ever emitted:
+ *   • `did` — hex string ("0x02001063") or number.
+ *   • `components[]` — id-strings, `{id}` objects, OR `{name}` objects (the shape
+ *     the live C# classifier emits). [S0 fix, P4.0c]
+ *   • config — top-level `o.config` (canonical, keyed by component-id) merged with
+ *     any legacy nested `components[].config` (hoisted to config[id]); top-level
+ *     wins on collision. The merged object is what `_splitConfig` consumes. [S0 fix]
+ *   • `sidecars` / `schemaVersion` — recorded when present (P4 bake-migration).
+ *   • a leading UTF-8 BOM is stripped (the C# emit writes one; the browser's
+ *     res.text() strips it, a raw node read does not). [P4.0a finding]
+ * Before P4.0c the parser read only `c.id` + top-level `o.config`, so the served
+ * `{name}`+nested catalog parsed to componentIds=∅/config={} and the suite rendered
+ * NOTHING — see docs/phase4-bake/P4.0a-preflight-findings.md.
  */
 export function parseDescriptorsJsonl(text) {
   const map = new Map();
   if (typeof text !== "string") return map;
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // strip a leading BOM
   for (const line of text.split("\n")) {
     const s = line.trim();
     if (!s || s[0] === "#") continue;
@@ -87,14 +99,27 @@ export function parseDescriptorsJsonl(text) {
     const did = _didToNum(o.did);
     if (!did) continue;
     const componentIds = new Set();
+    let config = {};
     const comps = o.components;
     if (Array.isArray(comps)) {
       for (const c of comps) {
-        if (typeof c === "string") componentIds.add(c);
-        else if (c && typeof c.id === "string") componentIds.add(c.id);
+        if (typeof c === "string") { componentIds.add(c); continue; }
+        if (!c || typeof c !== "object") continue;
+        const id = (typeof c.id === "string" && c.id) || (typeof c.name === "string" && c.name) || "";
+        if (!id) continue;
+        componentIds.add(id);
+        if (c.config && typeof c.config === "object") config[id] = c.config; // hoist legacy nested
       }
     }
-    map.set(did, { archetype: o.archetype || "", componentIds, config: o.config || {}, raw: o });
+    if (o.config && typeof o.config === "object") config = { ...config, ...o.config }; // top-level canonical wins
+    map.set(did, {
+      archetype: o.archetype || "",
+      componentIds,
+      config,
+      sidecars: (o.sidecars && typeof o.sidecars === "object") ? o.sidecars : {},
+      schemaVersion: (typeof o.schemaVersion === "number") ? o.schemaVersion : 0,
+      raw: o,
+    });
   }
   return map;
 }
