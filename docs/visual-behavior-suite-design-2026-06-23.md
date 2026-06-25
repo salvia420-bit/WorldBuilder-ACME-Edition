@@ -291,10 +291,13 @@ New partial `CommandEngine.Vfx.cs` (sibling of `CommandEngine.SurfaceMaterials.c
 ### Phase 3 — particle/aura bundle
 - [ ] Synthesized emitters: `brazier embers+smoke`, `foliage pollen/fireflies/leaves`, `gem sparkle`, `breath-fog`. Define shared billboard gfxobjs + `vfx anchor-parts` selector.
 
-### Phase 4 — texture/detail (excluding isolated AI track)
-- [ ] Extend `normal_gen.rs` (roughness/AO channels), richer detail tiles, anisotropic metal, seam-fix. AI super-res runs as the **isolated** parallel track and only swaps pixels at the ingest seam.
+### Phase 4 — bake-side migration + system simplification  ⟵ RE-PHASED 2026-06-25
+- [ ] Move the suite's deterministic runtime work to the BUILD SIDE (Rust crates / WorldBuilder.Terminal) as **per-DID** baked artifacts the runtime just FETCHES; three.js/wasm renders. **Bucket A (descriptor-config enrichment, the bulk):** bake Phase-2 shaft geometry (shaftAxis/gripBase/shaftLen), Phase-3 resolved emitter POJOs + anchor part-index/bbox, and Phase-0 wind config into the existing per-DID `visual_descriptors.jsonl` via the C# classifier `BuildResult`. **Bucket B (one new binary artifact):** stand up a **per-DID binary-sidecar** bake+fetch path on Phase-0 wind clips (VAT / Animation-0x03) — the same path Phase 5 texture channels reuse. **Leave Phase 1 (emissive) alone** (already baked). Dual mandate: *analyze + simplify* the runtime now that derivation moves offline, guarded by `off=byte-identical` + the legacy/program-key firewall. Plan: `docs/PHASE4-BAKE-MIGRATION-WORKFLOW-2026-06-25.md` (16-agent buildbox sweep).
 
-### Phase 5 — classifier maturation + full catalog
+### Phase 5 — texture/detail (excluding isolated AI track)  ⟵ was Phase 4
+- [ ] Extend `normal_gen.rs` (roughness/AO channels), richer detail tiles, seam-fix; anisotropy as ONE global filtering option (not per-material). Uniform per-surface treatment baked offline onto the Phase-4 per-DID binary-sidecar path; category tunes strength only, never *which* effects. AI super-res runs as the **isolated** parallel track and only swaps pixels at the ingest seam.
+
+### Phase 6 — classifier maturation + full catalog  ⟵ was Phase 5
 - [ ] Grow to ~20–40 archetypes; audit/override pass; per-archetype default-on flips gated by `vfx gauge` + batched 1070 eye-tests.
 
 ---
