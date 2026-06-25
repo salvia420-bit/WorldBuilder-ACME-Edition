@@ -190,6 +190,14 @@ export function gemSparkleEmitterInfo(cfg, ctx) {
     // hugs the gem (updateParticles :377; _resolveAnchorFrame converts the WORLD-space
     // partFrames to scene-local — do NOT double-apply the worldRoot −π/2 X rotation).
     isParentLocal: c.isParentLocal !== false,
+
+    // Camera-facing billboard (HANDOFF Bug 3 fix, 2026-06-24): the sparkleStar
+    // GfxObj is a FLAT planar quad; a fixed-orientation Still particle renders it
+    // edge-on (≈0 pixels) from perpendicular azimuths. ParticleManager.tick()
+    // faces these at the camera each frame (particle_manager.js _billboardEmitter).
+    // Engine default is false (retail-faithful for DAT replay); synthesized
+    // sprite emitters opt in. Honours ?particleBillboard=off for A/B eye-test.
+    billboard: true,
   };
 }
 
@@ -227,10 +235,18 @@ export const gemSparkle = {
     birthrate: 0.45,        // SECONDS BETWEEN spawns (interval, not rate) → low spawn rate
     lifespan: 1.3,          // seconds a dot lives
     lifespanRand: 0.4,      // ± lifetime jitter
-    spawnRadius: 0.05,      // metres — small spawn ball at the gem (maxOffset; geometry-sized)
-    startScale: 0.06,       // metres — born small-bright
-    finalScale: 0.012,      // metres — shrink as it fades (startScale > finalScale)
-    scaleRand: 0.02,        // ± per-dot size variety
+    spawnRadius: 0.05,      // metres — small spawn ball at the gem (maxOffset is a POSITION offset; correctly metres)
+    // startScale/finalScale are UNITLESS MULTIPLIERS on the sprite GfxObj's
+    // native size (particle.js:299/475 mesh.scale.setScalar) — NOT metres. The
+    // sparkleStar quad is ~0.294 m across (DAT obj-export), so 0.45 → ~0.13 m
+    // born, 0.15 → ~0.044 m faded. BOTH must stay above the 0.1 floor that
+    // getRandomStartScale/getRandomFinalScale clamp to (particle_emitter_info.js
+    // :138/147) — the old 0.06/0.012 both clamped UP to 0.1, collapsing to a
+    // constant ~0.029 m dot with no shrink AND (being a fixed-orientation flat
+    // quad) edge-on invisible. See billboard:true below + HANDOFF Bug 3.
+    startScale: 0.45,       // ×native (~0.13 m) — born small-bright
+    finalScale: 0.15,       // ×native (~0.044 m) — shrink as it fades (startScale > finalScale)
+    scaleRand: 0.06,        // ± per-dot size variety (×native)
     startTrans: 0.0,        // born opaque   (ACE translucency 0 = opaque)
     finalTrans: 1.0,        // fade to invisible (ACE translucency 1 = invisible / NoDraw)
     transRand: 0.0,         // clean fade (no opacity jitter)

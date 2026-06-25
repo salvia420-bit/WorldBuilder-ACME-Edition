@@ -307,6 +307,7 @@ public class JsonCommandProcessor {
             // Visual-Behavior Suite (build-spec §12.2) — see CommandEngine.Vfx.cs
             ["vfx-classify"] = CmdVfxClassify,
             ["vfx-emit-allowlist"] = CmdVfxEmitAllowlist,
+            ["vfx-emit-catalog"] = CmdVfxEmitCatalog,
             ["vfx-gauge"] = CmdVfxGauge,
             ["chorizite-dump-enum-values"] = CmdChoriziteDumpEnumValues,
             ["chorizite-dump-world-object-taxonomy"] = CmdChoriziteDumpWorldObjectTaxonomy,
@@ -1131,6 +1132,23 @@ public class JsonCommandProcessor {
             count = r.Dids.Length,
             selectorOnly = r.SelectorOnly,
             dids = r.Dids.Select(d => $"0x{d:X8}"),
+        });
+    }
+
+    private string CmdVfxEmitCatalog(System.Text.Json.Nodes.JsonNode node) {
+        string outputPath = node["outputPath"]?.GetValue<string>()
+            ?? node["out"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outputPath' field");
+        var r = _engine.VfxEmitCatalog(outputPath);
+        return Serialize(new {
+            success = r.Success,
+            command = "vfx-emit-catalog",
+            scannedSetups = r.ScannedSetups,
+            withEffect = r.WithEffect,
+            written = r.Written,
+            archetypeBreakdown = r.ArchetypeBreakdown,
+            outputPath = r.OutputPath,
+            error = r.Error,
         });
     }
 

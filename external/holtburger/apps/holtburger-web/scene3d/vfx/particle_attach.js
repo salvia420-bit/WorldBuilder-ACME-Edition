@@ -407,6 +407,18 @@ export async function attachParticleEmitters(scene3d, placements, wasmExports, o
         // hwGfxObjId:0 ⇒ addEmitter returns 0 (task01 §1.2 dominant failure); skip
         // early so we don't churn the manager for a guaranteed-0 create.
         if (!info || ((info.hwGfxObjId >>> 0) === 0)) continue;
+        // HANDOFF Bug 3 (2026-06-24): EVERY synthesized sprite emitter here renders a
+        // FLAT planar quad GfxObj (sparkleStar/softGlowDot/leafMote/smokePuff … all
+        // zero-thickness, DAT-confirmed). A fixed-orientation Still/LocalVelocity
+        // particle shows such a quad EDGE-ON (≈0 px) from perpendicular camera
+        // azimuths — the "attaches + ticks but draws nothing" symptom. These are all
+        // client-local cosmetic billboards, so default billboard:true for the whole
+        // synthesized family (ParticleManager.tick faces them at the camera). A
+        // component may still opt out by setting emitterInfo.billboard:false. Retail
+        // 0x32 default_script replay does NOT come through here (CallPES/static-script
+        // chain calls addEmitter directly with a wasm ParticleEmitterJs that has no
+        // `billboard` field ⇒ false ⇒ retail-faithful). `?particleBillboard=off` A/B.
+        if (info.billboard === undefined) info.billboard = true;
         const req = {
           emitterInfo: info,
           parent,

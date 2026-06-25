@@ -102,6 +102,20 @@ export class ParticleEmitterInfo {
     this.finalTrans = wasmInfo.finalTrans ?? 0;
     this.isParentLocal = !!wasmInfo.isParentLocal;
 
+    // Camera-facing billboard (2026-06-24). DEFAULT FALSE = retail-faithful:
+    // retail/ACE render a particle's GfxObj at its part-frame orientation with
+    // NO billboarding (acclient has no face-camera path — verified in the
+    // decomp), so DAT-replay emitters (wasm ParticleEmitterJs has no `billboard`
+    // getter ⇒ undefined ⇒ false) are byte-unchanged. SYNTHESIZED sprite
+    // emitters (Visual-Behavior Suite Phase 3 — gemSparkle et al.) set this
+    // true in their POJO: their GfxObjs are FLAT planar quads (e.g. sparkleStar
+    // 0x010010F9 is 0.29×0.29, zero-thickness), which a fixed-orientation Still
+    // particle renders EDGE-ON (≈0 projected pixels) from perpendicular camera
+    // azimuths. ParticleManager.tick() camera-faces these so the additive
+    // twinkle is visible from any angle (the design intent — these leaves call
+    // themselves "billboard" emitters).
+    this.billboard = !!wasmInfo.billboard;
+
     // SortingSphere: bounded by max(maxOffset, maxA * lifespan). Used by
     // the renderer for frustum-culling the emitter as a whole.
     this.sortingSphere = { center: new THREE.Vector3(0, 0, 0), radius: 0 };

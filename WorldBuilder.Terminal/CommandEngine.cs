@@ -3571,6 +3571,8 @@ public partial class CommandEngine {
                     int? level = null;
                     int? creatureType = null;
                     int? itemType = null;
+                    int? weaponType = null;    // PropertyInt.WeaponType (353) — Sword/Axe/Mace/Spear/Staff…
+                    int? materialType = null;  // PropertyInt.MaterialType (131) — Iron/Steel/Silver…
 
                     // didStats â†’ key 1 = SetupDID
                     if (root.TryGetProperty("didStats", out var didStats)) {
@@ -3593,6 +3595,10 @@ public partial class CommandEngine {
                                 creatureType = vEl2.GetInt32();
                             else if (key == 25 && ip.TryGetProperty("value", out var vEl3))
                                 level = vEl3.GetInt32();
+                            else if (key == 353 && ip.TryGetProperty("value", out var vEl4))
+                                weaponType = vEl4.GetInt32();   // PropertyInt.WeaponType
+                            else if (key == 131 && ip.TryGetProperty("value", out var vEl5))
+                                materialType = vEl5.GetInt32(); // PropertyInt.MaterialType
                         }
                     }
 
@@ -3633,6 +3639,10 @@ public partial class CommandEngine {
                     writer.Write(creatureType.HasValue ? creatureType.Value.ToString() : "null");
                     writer.Write(",\"itemType\":");
                     writer.Write(itemType.HasValue ? itemType.Value.ToString() : "null");
+                    writer.Write(",\"weaponType\":");
+                    writer.Write(weaponType.HasValue ? weaponType.Value.ToString() : "null");
+                    writer.Write(",\"materialType\":");
+                    writer.Write(materialType.HasValue ? materialType.Value.ToString() : "null");
                     writer.WriteLine("}");
 
                     processed++;
