@@ -243,7 +243,10 @@ public sealed class VisualDescriptorIndex {
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
         int count = 0;
-        using var w = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
+        // UTF-8 WITHOUT a BOM (P4.0c): the default Encoding.UTF8 writes a leading
+        // BOM, which a raw reader (the JS parser pre-P4.0c, the P4 bake oracle) trips
+        // on. The browser's res.text() + C# StreamReader strip it, but emit clean.
+        using var w = new StreamWriter(outputPath, false, new System.Text.UTF8Encoding(false));
         foreach (var d in _byDid.Values.OrderBy(e => e.Did)) {
             w.WriteLine(JsonSerializer.Serialize(d, JsonOpts));
             count++;
