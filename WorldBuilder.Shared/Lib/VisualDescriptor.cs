@@ -160,6 +160,10 @@ public sealed record VisualArchetypeSelect {
     /// <summary>WeaponType ints this rule matches (build-spec §4.4), null when N/A.</summary>
     [JsonPropertyName("weaponTypes")] public int[]? WeaponTypes { get; init; }
 
+    /// <summary>ItemType BITFIELD flags this rule matches — a DID fires when its
+    /// (OR-merged) ItemType has ANY of these bits set (e.g. Gem=2048). null when N/A.</summary>
+    [JsonPropertyName("itemTypes")] public int[]? ItemTypes { get; init; }
+
     /// <summary>MaterialType ints that REFINE (never select) this rule (build-spec §4.5).</summary>
     [JsonPropertyName("materialTypes")] public int[]? MaterialTypes { get; init; }
 

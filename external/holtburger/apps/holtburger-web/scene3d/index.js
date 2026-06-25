@@ -2954,6 +2954,193 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       } catch (_) { /* registry not ready */ }
       return { liveEmitters: staticEmitters + worldEmitters, staticEmitters, worldEmitters, owners, byOwner };
     };
+
+    // HANDOFF Bug-3 probe (2026-06-24): for the VISIBLE particle nearest the
+    // active camera, report everything needed to explain "live + ticked + real
+    // material + correct position but draws no pixels". Read-only, on-demand.
+    // Verdict guide:
+    //   faceAngleDeg ≈ 90 (faceDot ≈ 0) → the flat quad is EDGE-ON (the original
+    //     symptom; fixed by billboard:true) — the handoff's NDC-only probe would
+    //     MISS this, reporting onScreen+nonzero-scale and falsely blaming blend.
+    //   onScreen:false                   → anchor/position bug.
+    //   projHalfWidthPx < ~1             → per-particle scale too small.
+    //   onScreen + face-on + sized but invisible → blend/opacity/depth.
+    // (THREE.blending: 1=Normal 2=Additive 5=Custom.)
+    window.__diag.probeNearestParticle = () => {
+      const s = scene3dForBuilders;
+      const cam = s && (s.cameraSwitcher?.activeCamera ?? s.camera);
+      if (!cam) return { ok: false, reason: "no camera" };
+      cam.updateMatrixWorld?.();
+      const camPos = new THREE.Vector3();
+      cam.getWorldPosition(camPos);
+      const camDir = new THREE.Vector3();
+      if (cam.getWorldDirection) cam.getWorldDirection(camDir);
+
+      const sm = s && s._staticParticleManager;
+      const wm = s && s.entityManager && s.entityManager._worldParticleManager;
+      const managers = [];
+      if (sm) managers.push(["static", sm]);
+      if (wm) managers.push(["world", wm]);
+
+      const meshWorld = new THREE.Vector3();
+      let best = null, bestDistSq = Infinity, bestSrc = null, bestEid = null, bestBb = false;
+      let liveCount = 0;
+      for (const [src, mgr] of managers) {
+        if (!mgr.particleTable) continue;
+        for (const [eid, emitter] of mgr.particleTable) {
+          const parts = emitter.parts;
+          if (!parts) continue;
+          for (let i = 0; i < parts.length; i++) {
+            const m = parts[i];
+            if (!m || !m.visible) continue;
+            liveCount++;
+            m.updateMatrixWorld?.();
+            m.getWorldPosition(meshWorld);
+            const dsq = meshWorld.distanceToSquared(camPos);
+            if (dsq < bestDistSq) {
+              bestDistSq = dsq; best = m; bestSrc = src; bestEid = eid;
+              bestBb = !!(emitter.info && emitter.info.billboard);
+            }
+          }
+        }
+      }
+      if (!best) return { ok: false, reason: "no visible particle", liveCount: 0 };
+
+      best.updateMatrixWorld?.();
+      const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+      best.matrixWorld.decompose(pos, quat, scl);
+      const ndc = pos.clone().project(cam);
+      const onScreen = Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1 && ndc.z >= -1 && ndc.z <= 1;
+
+      // Edge-on test: |world quad-normal · camera view dir|. ~1 face-on, ~0 edge-on.
+      let faceDot = null, faceAngleDeg = null;
+      const geom = best.geometry;
+      const pa = geom && geom.getAttribute && geom.getAttribute("position");
+      if (pa && pa.count >= 3 && camDir.lengthSq() > 0.5) {
+        const a = new THREE.Vector3().fromBufferAttribute(pa, 0);
+        const b = new THREE.Vector3().fromBufferAttribute(pa, 1);
+        const c = new THREE.Vector3().fromBufferAttribute(pa, 2);
+        const nLocal = new THREE.Vector3().crossVectors(b.sub(a), c.sub(a));
+        if (nLocal.lengthSq() > 1e-12) {
+          const nWorld = nLocal.normalize().applyQuaternion(quat).normalize();
+          faceDot = +Math.abs(nWorld.dot(camDir)).toFixed(3);
+          faceAngleDeg = +(Math.acos(Math.min(1, faceDot)) * 180 / Math.PI).toFixed(1);
+        }
+      }
+
+      // Approx projected half-width in px (native quad span × worldScale).
+      let projHalfWidthPx = null;
+      if (geom) {
+        if (!geom.boundingBox && geom.computeBoundingBox) geom.computeBoundingBox();
+        const bb = geom.boundingBox;
+        if (bb) {
+          const span = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+          const worldR = 0.5 * span * Math.max(scl.x, scl.y, scl.z);
+          const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0).normalize();
+          const p0 = pos.clone().project(cam);
+          const p1 = pos.clone().addScaledVector(right, worldR).project(cam);
+          const vpW = (typeof window !== "undefined" && window.innerWidth) || 1920;
+          projHalfWidthPx = +(Math.abs(p1.x - p0.x) * 0.5 * vpW).toFixed(1);
+        }
+      }
+
+      const mat = best.material || {};
+      return {
+        ok: true, src: bestSrc, emitterId: bestEid, billboard: bestBb, liveCount,
+        distance: +Math.sqrt(bestDistSq).toFixed(2),
+        worldPos: [+pos.x.toFixed(1), +pos.y.toFixed(1), +pos.z.toFixed(1)],
+        worldScale: [+scl.x.toFixed(3), +scl.y.toFixed(3), +scl.z.toFixed(3)],
+        ndc: [+ndc.x.toFixed(3), +ndc.y.toFixed(3), +ndc.z.toFixed(3)], onScreen,
+        faceDot, faceAngleDeg, projHalfWidthPx,
+        material: {
+          blending: mat.blending, opacity: mat.opacity, transparent: mat.transparent,
+          depthTest: mat.depthTest, depthWrite: mat.depthWrite, colorWrite: mat.colorWrite,
+          hasMap: !!mat.map, name: mat.name,
+        },
+      };
+    };
+
+    // HANDOFF Bug-3 A/B probe: aggregate face-on stats over ONLY the BILLBOARD
+    // (synthesized sprite, e.g. gemSparkle) particles — the ones the fix targets.
+    // With billboarding ON every live billboard quad faces the camera ⇒ faceAngleDeg
+    // ≈ 0 across the board; with ?particleBillboard=off they keep a fixed authored
+    // orientation ⇒ faceAngleDeg scattered (many near 90 = edge-on). Returns the
+    // distribution + the nearest billboard particle's worldPos (to frame a shot).
+    window.__diag.probeBillboardParticles = () => {
+      const s = scene3dForBuilders;
+      const cam = s && (s.cameraSwitcher?.activeCamera ?? s.camera);
+      if (!cam) return { ok: false, reason: "no camera" };
+      cam.updateMatrixWorld?.();
+      const camPos = new THREE.Vector3(); cam.getWorldPosition(camPos);
+      const camDir = new THREE.Vector3(); if (cam.getWorldDirection) cam.getWorldDirection(camDir);
+      const sm = s && s._staticParticleManager;
+      const wm = s && s.entityManager && s.entityManager._worldParticleManager;
+      const mgrs = []; if (sm) mgrs.push(sm); if (wm) mgrs.push(wm);
+      const angles = []; const mw = new THREE.Vector3();
+      let emitters = 0, nearest = null, nearDsq = Infinity, sampleMat = null;
+      // Diagnostic: histogram of ALL emitters' hwGfxObjId (is the sparkleStar
+      // 0x010010F9 / softGlowDot 0x01001062 even present?) + total + billboard-prop count.
+      let allEmitters = 0, hasBillboardProp = 0, sparkleSprites = 0; const hwHist = {};
+      for (const mgr of mgrs) {
+        if (!mgr.particleTable) continue;
+        for (const [, em] of mgr.particleTable) {
+          allEmitters++;
+          const info = em.info || {};
+          if ("billboard" in info) hasBillboardProp++;
+          const hw = (info.hwGfxObjId >>> 0); hwHist[hw] = (hwHist[hw] || 0) + 1;
+          if (hw === 0x010010F9 || hw === 0x01001062) sparkleSprites++;
+        }
+      }
+      const hwHistTop = Object.entries(hwHist).sort((a, b) => b[1] - a[1]).slice(0, 12)
+        .map(([k, v]) => "0x" + (+k).toString(16) + ":" + v);
+      const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+      const toCam = new THREE.Vector3();
+      for (const mgr of mgrs) {
+        if (!mgr.particleTable) continue;
+        for (const [, em] of mgr.particleTable) {
+          if (!em.info || !em.info.billboard) continue;
+          emitters++;
+          const parts = em.parts; if (!parts) continue;
+          for (const m of parts) {
+            if (!m || !m.visible) continue;
+            m.updateMatrixWorld?.();
+            const pa = m.geometry && m.geometry.getAttribute && m.geometry.getAttribute("position");
+            if (pa && pa.count >= 3) {
+              a.fromBufferAttribute(pa, 0); b.fromBufferAttribute(pa, 1); c.fromBufferAttribute(pa, 2);
+              n.crossVectors(b.sub(a), c.sub(a));
+              if (n.lengthSq() > 1e-12) {
+                const q = new THREE.Quaternion(); m.getWorldQuaternion(q);
+                n.normalize().applyQuaternion(q).normalize();
+                // CORRECT billboard metric: angle between the quad world-normal and
+                // the per-particle direction TO THE CAMERA POSITION (not camera
+                // forward). A working billboard ⇒ normal points at the camera ⇒ ~0
+                // for EVERY particle regardless of where it sits in the view. Fixed
+                // orientation (billboard off) ⇒ scattered. (Matches the node harness.)
+                m.getWorldPosition(toCam); toCam.subVectors(camPos, toCam);
+                if (toCam.lengthSq() > 1e-9) {
+                  toCam.normalize();
+                  const dot = Math.min(1, Math.abs(n.dot(toCam)));
+                  angles.push(+(Math.acos(dot) * 180 / Math.PI).toFixed(1));
+                }
+              }
+            }
+            m.getWorldPosition(mw);
+            const dsq = mw.distanceToSquared(camPos);
+            if (dsq < nearDsq) { nearDsq = dsq; nearest = [+mw.x.toFixed(1), +mw.y.toFixed(1), +mw.z.toFixed(1)]; sampleMat = m.material; }
+          }
+        }
+      }
+      angles.sort((x, y) => x - y);
+      const q = (p) => angles.length ? angles[Math.min(angles.length - 1, Math.floor(p * angles.length))] : null;
+      const mat = sampleMat || {};
+      return {
+        ok: angles.length > 0, billboardEmitters: emitters, billboardParticles: angles.length,
+        faceAngleDeg: { min: angles[0] ?? null, median: q(0.5), p90: q(0.9), max: angles[angles.length - 1] ?? null },
+        nearestWorldPos: nearest, nearestDist: nearest ? +Math.sqrt(nearDsq).toFixed(2) : null,
+        sampleMaterial: { blending: mat.blending, depthWrite: mat.depthWrite, hasMap: !!mat.map, name: mat.name },
+        diag: { allEmitters, hasBillboardProp, sparkleSprites, hwHistTop },
+      };
+    };
   }
 
   // A11-S3 =sim: ONE clock for mixers + particles + script queues. Retail

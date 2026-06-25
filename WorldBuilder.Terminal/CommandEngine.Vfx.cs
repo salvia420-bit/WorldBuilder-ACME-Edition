@@ -235,6 +235,15 @@ public partial class CommandEngine {
             return BuildResult(did, gem, gem.Select.Confidence, "allowlist", signals);
         }
 
+        // Stage 1 — gem-sparkle by ItemType (the Gem bit, 2048). Data-driven: any Setup
+        // whose OR-merged ItemType carries a flag in the rule's itemTypes set gets the
+        // standing sparkle. Particle ⇒ gated by !datScript (Track-B coexistence §9#14).
+        if (!datScript && gem?.Select?.ItemTypes is { Length: > 0 } gemBits
+            && onto?.ItemType is int gemItemType && gemBits.Any(b => (gemItemType & b) != 0)) {
+            signals.Add(new VisualSignal { Name = "itemTypeGem", Value = "0x" + gemItemType.ToString("x", CultureInfo.InvariantCulture), Weight = gem!.Select!.Confidence });
+            return BuildResult(did, gem, gem.Select.Confidence, "classifier", signals);
+        }
+
         // Stage 2 — wind allowlist (the trunk-canopy seed). Authoritative,
         // confidence 1.0; this is the round-trip anchor.
         var trunk = FindRule(VisualArchetypeIds.TrunkCanopy);
@@ -267,6 +276,31 @@ public partial class CommandEngine {
             }
         }
 
+        // Stage 1 — rigid-glint by WeaponType (Sword/Axe/Mace). A FRAG effect (NOT a
+        // particle), so NOT gated by datScript. MaterialType (metals) only REFINES the
+        // signal (never gates), per build-spec §4.5. Previously unreachable (no WeaponType
+        // data); now data-driven off the LSD weenie ItemType/WeaponType ingest.
+        var glint = FindRule(VisualArchetypeIds.RigidGlint);
+        if (glint?.Select?.WeaponTypes is { Length: > 0 } glintWt
+            && onto?.WeaponType is int gwt && glintWt.Contains(gwt)) {
+            double conf = glint.Select.Confidence;
+            bool metal = glint.Select.MaterialTypes is { Length: > 0 } gmats
+                         && onto.MaterialType is int gmt && gmats.Contains(gmt);
+            signals.Add(new VisualSignal { Name = "weaponTypeGlint", Value = $"wt={gwt}{(metal ? ",metal" : "")}", Weight = conf });
+            return BuildResult(did, glint, conf, "classifier", signals);
+        }
+
+        // Stage 1 — tip-flex by WeaponType (Spear/Staff). MECH-B vertex bend; the
+        // geometry surrogate further below stays as the fallback for thin models that
+        // lack a WeaponType (e.g. unenriched DIDs).
+        var tipRule = FindRule(VisualArchetypeIds.TipFlex);
+        if (tipRule?.Select?.WeaponTypes is { Length: > 0 } tipWt
+            && onto?.WeaponType is int twt && tipWt.Contains(twt)) {
+            double conf = tipRule.Select.Confidence;
+            signals.Add(new VisualSignal { Name = "weaponTypeTipFlex", Value = $"wt={twt}", Weight = conf });
+            return BuildResult(did, tipRule, conf, "classifier", signals);
+        }
+
         // Stage 2/3 — geometry-derived trunk-canopy hint: foliage/scenery,
         // multi-part, tall. A ramped confidence (mirrors OntologyService.Ramp).
         if (onto != null && trunk != null
@@ -288,13 +322,19 @@ public partial class CommandEngine {
             return BuildResult(did, pollen, conf, conf >= AuditThreshold ? "classifier" : "classifier-low", signals);
         }
 
-        // Stage 1 (geometry surrogate) — tip-flex by thin-distal geometry. With
-        // no WeaponType data (build-spec §18 #1), a strong single-axis aspect on
-        // a low-part-count model is the only available distal-protrusion proxy.
+        // Stage 1 (geometry surrogate) — tip-flex by thin-distal geometry, but ONLY
+        // for objects that are actually WEAPONS (ItemType MeleeWeapon 0x1 | MissileWeapon
+        // 0x100). The WeaponType-exact path above already caught spears/staffs; this
+        // surrogate is the fallback for a thin weapon whose WeaponType wasn't enriched.
+        // CRITICAL (2026-06-25 fix): the prior un-gated surrogate fired on EVERY thin
+        // low-part model — including thin SCENERY (poles, signs, fences) — and the
+        // MECH-B vertex bend turned ~848 such statics into on-screen slivers across the
+        // world (1070-confirmed). Requiring a weapon ItemType excludes scenery entirely.
         var tip = FindRule(VisualArchetypeIds.TipFlex);
-        if (onto != null && tip != null && onto.AspectRatio >= 3f && onto.PartCount <= 2) {
+        if (onto != null && tip != null && onto.AspectRatio >= 3f && onto.PartCount <= 2
+            && ((onto.ItemType ?? 0) & 0x101) != 0) {
             double conf = 0.7; // geometry-only surrogate, below the WeaponType-exact 0.95
-            signals.Add(new VisualSignal { Name = "geometryTipFlex", Value = $"aspect={onto.AspectRatio:F2},parts={onto.PartCount}", Weight = conf });
+            signals.Add(new VisualSignal { Name = "geometryTipFlex", Value = $"aspect={onto.AspectRatio:F2},parts={onto.PartCount},weaponItemType", Weight = conf });
             return BuildResult(did, tip, conf, conf >= AuditThreshold ? "classifier" : "classifier-low", signals);
         }
 
@@ -578,6 +618,47 @@ public partial class CommandEngine {
             Gates: gates,
             Error: null);
     }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  vfx emit-catalog <out.jsonl>  — bulk catalog generator
+    //
+    //  Runs the §3 classifier cascade over EVERY scanned Setup ontology entry
+    //  and writes a full visual_descriptors.jsonl — the catalog the client loads
+    //  at runtime (vfx_catalog.js ensureVfxCatalog). This is what turns the suite
+    //  from "14 hand-staged eye-test DIDs" into a world-wide classification.
+    //  Rigid/fallback DIDs (zero components) are OMITTED — their absence IS the
+    //  byte-identical frozen path. Deterministic (ontology + weenie enrichment).
+    // ─────────────────────────────────────────────────────────────────
+    public VfxEmitCatalogResult VfxEmitCatalog(string outputPath) {
+        if (string.IsNullOrWhiteSpace(outputPath))
+            return new VfxEmitCatalogResult(false, 0, 0, 0, new(), null, "outputPath is required");
+        try {
+            var index = new VisualDescriptorIndex(new Dictionary<uint, VisualDescriptor>());
+            int scanned = 0, withEffect = 0;
+            var perArchetype = new Dictionary<string, int>();
+            foreach (var onto in _ontologyService.GetAllEntries()) {
+                if (!string.Equals(onto.DatType, "Setup", StringComparison.OrdinalIgnoreCase)) continue;
+                scanned++;
+                var r = VfxClassify(onto.ObjectId);
+                if (!r.Success || r.Components.Count == 0) continue; // rigid/fallback ⇒ frozen, omit
+                index.Upsert(new VisualDescriptor {
+                    Did = r.Did,
+                    Archetype = r.Archetype,
+                    Confidence = r.Confidence,
+                    Source = r.Source,
+                    Mech = r.Mech,
+                    Components = r.Components,
+                    Signals = r.Signals,
+                });
+                withEffect++;
+                perArchetype[r.Archetype] = perArchetype.GetValueOrDefault(r.Archetype) + 1;
+            }
+            int written = index.SaveJsonl(outputPath);
+            return new VfxEmitCatalogResult(true, scanned, withEffect, written, perArchetype, outputPath, null);
+        } catch (Exception ex) {
+            return new VfxEmitCatalogResult(false, 0, 0, 0, new(), outputPath, ex.Message);
+        }
+    }
 }
 
 // ── Result records (CommandResults.Vfx pattern — see build-spec §12.1) ──
@@ -600,6 +681,16 @@ public record VfxEmitAllowlistResult(
     string Archetype,
     uint[] Dids,
     bool SelectorOnly,
+    string? Error);
+
+/// <summary>Result of <c>vfx emit-catalog &lt;out.jsonl&gt;</c> — bulk classification.</summary>
+public record VfxEmitCatalogResult(
+    bool Success,
+    int ScannedSetups,
+    int WithEffect,
+    int Written,
+    Dictionary<string, int> ArchetypeBreakdown,
+    string? OutputPath,
     string? Error);
 
 /// <summary>

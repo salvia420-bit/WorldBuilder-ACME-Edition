@@ -1075,6 +1075,12 @@ public class OntologyService : IOntologyService {
                     ? lvlEl.GetInt32() : null;
                 int? creatureType = root.TryGetProperty("creatureType", out var ctEl) && ctEl.ValueKind != System.Text.Json.JsonValueKind.Null
                     ? ctEl.GetInt32() : null;
+                int? itemType = root.TryGetProperty("itemType", out var itEl) && itEl.ValueKind != System.Text.Json.JsonValueKind.Null
+                    ? itEl.GetInt32() : null;
+                int? weaponType = root.TryGetProperty("weaponType", out var wpEl) && wpEl.ValueKind != System.Text.Json.JsonValueKind.Null
+                    ? wpEl.GetInt32() : null;
+                int? materialType = root.TryGetProperty("materialType", out var mtEl) && mtEl.ValueKind != System.Text.Json.JsonValueKind.Null
+                    ? mtEl.GetInt32() : null;
 
                 // Skip weenies without a Setup DID — can't match to ontology
                 if (setupDid == 0) continue;
@@ -1090,6 +1096,18 @@ public class OntologyService : IOntologyService {
                     entry.Name = name;
                 if (level.HasValue) entry.Level = level;
                 if (creatureType.HasValue) entry.CreatureType = creatureType;
+
+                // VFX classifier inputs. ItemType is a BITFIELD → OR-merge across all
+                // weenies sharing this Setup so "any weenie on this model is a gem"
+                // sticks (6 magic gems share 0x02000D1F). WeaponType/MaterialType are
+                // scalar enums → keep the first non-zero (weapons rarely share a model
+                // with non-weapons, and a real value should not be clobbered by 0).
+                if (itemType.HasValue)
+                    entry.ItemType = (entry.ItemType ?? 0) | itemType.Value;
+                if (weaponType.HasValue && weaponType.Value != 0 && (entry.WeaponType ?? 0) == 0)
+                    entry.WeaponType = weaponType.Value;
+                if (materialType.HasValue && materialType.Value != 0 && (entry.MaterialType ?? 0) == 0)
+                    entry.MaterialType = materialType.Value;
 
                 // Compute difficulty tier from level
                 if (level.HasValue) {
@@ -1636,6 +1654,9 @@ public class OntologyService : IOntologyService {
                 materialTags = entry.MaterialTags,
                 weenieClassId = entry.WeenieClassId,
                 weenieType = entry.WeenieType,
+                itemType = entry.ItemType,
+                weaponType = entry.WeaponType,
+                materialType = entry.MaterialType,
                 level = entry.Level,
                 creatureType = entry.CreatureType,
                 difficultyTier = entry.DifficultyTier,
@@ -1696,6 +1717,9 @@ public class OntologyService : IOntologyService {
                     MaterialTags = TryGetStringArray(root, "materialTags"),
                     WeenieClassId = TryGetInt32(root, "weenieClassId"),
                     WeenieType = TryGetInt32(root, "weenieType"),
+                    ItemType = TryGetInt32(root, "itemType"),
+                    WeaponType = TryGetInt32(root, "weaponType"),
+                    MaterialType = TryGetInt32(root, "materialType"),
                     Level = TryGetInt32(root, "level"),
                     CreatureType = TryGetInt32(root, "creatureType"),
                     DifficultyTier = TryGetString(root, "difficultyTier"),

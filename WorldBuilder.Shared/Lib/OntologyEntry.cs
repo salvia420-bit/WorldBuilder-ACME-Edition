@@ -78,6 +78,20 @@ public class OntologyEntry {
     /// <summary>Weenie Type enumeration (1=Generic, 7=Creature, 12=Vendor, etc.).</summary>
     public int? WeenieType { get; set; }
 
+    /// <summary>ACE PropertyInt.ItemType (key 1) — a BITFIELD (Gem=2048, MeleeWeapon=1,
+    /// MissileWeapon=256, Jewelry=8, …). OR-merged across all weenies sharing this Setup.
+    /// Drives the VFX classifier's gem-sparkle (and future item-keyed) predicates.</summary>
+    public int? ItemType { get; set; }
+
+    /// <summary>ACE PropertyInt.WeaponType (key 353) — the weapon-class enum
+    /// (Unarmed=1, Sword=2, Axe=3, Mace=4, Spear=5, Dagger=6, Staff=7, Bow=8, …).
+    /// Drives rigid-glint (sword/axe/mace) and tip-flex (spear/staff).</summary>
+    public int? WeaponType { get; set; }
+
+    /// <summary>ACE PropertyInt.MaterialType (key 131) — material enum (Iron=10, Steel=20,
+    /// Silver=57, …). REFINES (never selects) glint/tarnish for metal weapons.</summary>
+    public int? MaterialType { get; set; }
+
     /// <summary>Creature level from weenie data.</summary>
     public int? Level { get; set; }
 

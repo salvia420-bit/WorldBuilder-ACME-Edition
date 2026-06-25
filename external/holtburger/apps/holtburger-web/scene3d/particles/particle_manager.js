@@ -298,6 +298,109 @@ function _rp6PrepareFrustum() {
   return camera;
 }
 
+// =====================================================================
+// Camera-facing billboard (2026-06-24) — Visual-Behavior Suite Phase 3.
+// =====================================================================
+// Synthesized sprite emitters (emitterInfo.billboard === true) render FLAT
+// planar quad GfxObjs — sparkleStar 0x010010F9 etc. are zero-thickness ~0.29 m
+// quads (DAT-confirmed via obj-export). A fixed-orientation Still/LocalVelocity
+// particle shows such a quad EDGE-ON (≈0 projected pixels) from perpendicular
+// camera azimuths — the "particles attach + tick but draw no pixels" symptom
+// (HANDOFF-phase3-particle-render Bug 3). After each on-screen emitter's
+// updateParticles(), face every live part toward the active camera. Retail does
+// NOT billboard (acclient has no face-camera path — verified in the decomp), so
+// this runs ONLY for emitters that opt in via the POJO flag; DAT-replay emitters
+// are byte-untouched. `?particleBillboard=off` disables it for an A/B eye-test.
+const BILLBOARD_DISABLED = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search)
+      .get("particleBillboard")?.toLowerCase() === "off";
+  } catch (_) {
+    return false;
+  }
+})();
+
+// Module scratches — never escape _billboardEmitter() / _billboardLocalNormal().
+const _bbCamWorld = new THREE.Vector3();
+const _bbMeshWorld = new THREE.Vector3();
+const _bbDir = new THREE.Vector3();
+const _bbParentQuat = new THREE.Quaternion();
+const _bbNormal = new THREE.Vector3();
+const _bbVa = new THREE.Vector3();
+const _bbVb = new THREE.Vector3();
+const _bbVc = new THREE.Vector3();
+const _bbAB = new THREE.Vector3();
+const _bbAC = new THREE.Vector3();
+
+/**
+ * Local-space face normal of a (flat) particle quad, computed once from the
+ * first non-degenerate triangle and cached on geometry.userData. Robust against
+ * a missing/zeroed normal attribute (we derive it from positions). Returns a
+ * unit Vector3 (the cached instance — treat read-only) or null if the geometry
+ * has fewer than 3 usable vertices.
+ */
+function _billboardLocalNormal(geometry) {
+  if (!geometry) return null;
+  const ud = geometry.userData || (geometry.userData = {});
+  if (ud.__bbNormal !== undefined) return ud.__bbNormal;
+  const pos = geometry.getAttribute && geometry.getAttribute("position");
+  if (!pos || pos.count < 3) { ud.__bbNormal = null; return null; }
+  for (let i = 0; i + 2 < pos.count; i++) {
+    _bbVa.fromBufferAttribute(pos, i);
+    _bbVb.fromBufferAttribute(pos, i + 1);
+    _bbVc.fromBufferAttribute(pos, i + 2);
+    _bbAB.subVectors(_bbVb, _bbVa);
+    _bbAC.subVectors(_bbVc, _bbVa);
+    const n = new THREE.Vector3().crossVectors(_bbAB, _bbAC);
+    if (n.lengthSq() > 1e-12) {
+      n.normalize();
+      ud.__bbNormal = n;
+      return n;
+    }
+  }
+  ud.__bbNormal = null;
+  return null;
+}
+
+/**
+ * Orient every live part of a billboard emitter so its quad faces the camera.
+ * Aligns the quad's local face normal to the per-part→camera direction,
+ * expressed in the part's PARENT space (the meshes live under worldRoot's
+ * -π/2-about-X group, so the world direction is mapped back through the
+ * parent's world quaternion). Roll is left free (shortest-arc) — fine for the
+ * radially-symmetric sprites this serves; materials are DoubleSide so the normal
+ * sign is irrelevant. Camera world position is read off `camera.position`, which
+ * cameraSwitcher.tick() has already made current this frame (same convention as
+ * RP6's distance gate).
+ */
+function _billboardEmitter(emitter, camera) {
+  const parts = emitter.parts;
+  if (!parts || !parts.length || !camera || !camera.position) return;
+  _bbCamWorld.copy(camera.position);
+  for (let i = 0; i < parts.length; i++) {
+    const mesh = parts[i];
+    if (!mesh || !mesh.visible) continue;
+    const nLocal = _billboardLocalNormal(mesh.geometry);
+    if (!nLocal) continue;
+    const parent = mesh.parent;
+    if (parent && parent.matrixWorld) {
+      _bbMeshWorld.copy(mesh.position).applyMatrix4(parent.matrixWorld);
+    } else {
+      _bbMeshWorld.copy(mesh.position);
+    }
+    _bbDir.subVectors(_bbCamWorld, _bbMeshWorld);
+    if (_bbDir.lengthSq() < 1e-10) continue;
+    _bbDir.normalize();
+    if (parent && parent.getWorldQuaternion) {
+      parent.getWorldQuaternion(_bbParentQuat).invert();
+      _bbDir.applyQuaternion(_bbParentQuat).normalize();
+    }
+    _bbNormal.copy(nLocal);
+    mesh.quaternion.setFromUnitVectors(_bbNormal, _bbDir);
+  }
+}
+
 /**
  * Should this emitter be culled (skip the expensive updateParticles())
  * for the current camera? Conservative: only true when the WHOLE
@@ -674,6 +777,12 @@ export class ParticleManager {
     const recheck = (this._rp6Frame % _RP6.recheckInterval) === 0;
     const camera = recheck ? _rp6PrepareFrustum() : null;
 
+    // Billboard (2026-06-24): the active camera, resolved EVERY tick (cheap —
+    // a single global read), used to face synthesized sprite emitters' flat
+    // quads toward the viewer after their per-particle walk. null when disabled
+    // (?particleBillboard=off) or no camera is resolvable → leave orientations.
+    const bbCamera = BILLBOARD_DISABLED ? null : _rp6ResolveCamera();
+
     for (const [id, emitter] of this.particleTable) {
       if (recheck) {
         // Bail open when no camera (camera===null) — never cull on a
@@ -765,6 +874,10 @@ export class ParticleManager {
 
       if (!emitter.updateParticles()) {
         removeIds.push(id);
+      } else if (bbCamera && emitter.info && emitter.info.billboard) {
+        // On-screen, still live, opted-in: face its flat sprite quads at the
+        // camera so they aren't edge-on invisible (HANDOFF Bug 3).
+        _billboardEmitter(emitter, bbCamera);
       }
     }
     for (const id of removeIds) {
