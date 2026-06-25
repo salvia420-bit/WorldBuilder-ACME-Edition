@@ -3161,7 +3161,7 @@ function _staticScriptsEnabled() {
  * missing — the caller no-ops in that case (fail-soft).
  */
 async function _ensureStaticParticleManager(scene3d, wasmExports) {
-  if (scene3d._staticParticleManager) return scene3d._staticParticleManager;
+  if (scene3d._staticParticleManager) { _staticParticleMgrRef = scene3d._staticParticleManager; return scene3d._staticParticleManager; }
   // Phase 3 — expose the per-LB particle evictor on scene3d so landblock_lru
   // (same object as `this.scene3d`, a zero-import leaf) can tear down THIS LB's
   // synthesized emitters on eviction. Mirrors spawns.js `_evictSpawnsInjectedLb`
@@ -3237,6 +3237,7 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
       }
     },
   });
+  _staticParticleMgrRef = scene3d._staticParticleManager; // decouple the tick driver from the scene-facade
   return scene3d._staticParticleManager;
 }
 
@@ -3670,8 +3671,18 @@ export function disposeStaticParticles(scene3d) {
  *  321191-321193), not on a private clock. Called from tickPerFrame's
  *  manager phase (scene3d/loop.js) when `?particleClock=loop|sim`.
  *  No-op until a manager exists. */
+// Module-level handle to the static ParticleManager (set in _ensureStaticParticleManager).
+// THE BUG (2026-06-24, found on the 1070): the self-rAF tick driver below read
+// `window.liveScene3d._staticParticleManager`, but the manager is stamped on
+// `scene3dForBuilders` — a DIFFERENT object than the `window.liveScene3d` facade — so
+// `mgr` was always undefined and the static manager NEVER ticked: every static particle
+// (lifestone gemSparkle, tree foliage, retail default_script statics) stayed invisible
+// (visible:0 in __diag.particlesDebug). This ref decouples the tick from that facade
+// mismatch, so it works regardless of which scene object the loop/window carry.
+let _staticParticleMgrRef = null;
+
 export function tickStaticParticles(scene3d) {
-  const mgr = scene3d?._staticParticleManager;
+  const mgr = scene3d?._staticParticleManager || _staticParticleMgrRef;
   if (mgr) { try { mgr.tick(); } catch (_) {} }
 }
 
@@ -3689,7 +3700,7 @@ if (typeof window !== "undefined" && _staticScriptsEnabled() && particleClockMod
   const _spLoop = () => {
     if (_spDisposed) return;
     try {
-      const mgr = window.liveScene3d?._staticParticleManager;
+      const mgr = _staticParticleMgrRef || window.liveScene3d?._staticParticleManager;
       if (mgr) mgr.tick();
     } catch (_) {}
     _spRafId = window.requestAnimationFrame(_spLoop);
