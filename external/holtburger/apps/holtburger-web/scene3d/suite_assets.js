@@ -87,3 +87,81 @@ export class SuiteAssetSource {
     };
   }
 }
+
+// ── P4.3 windclip decoder ───────────────────────────────────────────────────
+// Parses a `windclip` artifact — the RAW WindClip::encode_payload() bytes, NOT a
+// SuiteBlob "HSB1" container. fetch_suite_artifact returns the on-disk file verbatim
+// and strips NOTHING, so the producer MUST write encode_payload() (num_parts at
+// offset 0); writing encode() instead makes this decoder read 'HSB1' as num_parts ->
+// overflow -> null -> silent frozen fallback. (The SuiteBlob container path is inert/
+// reserved for a future wasm-side strip.) Decodes into the object getOrCreateWindGroup
+// consumes. Layout (all little-endian) is buildTreeWindClip's output verbatim, so
+// the decode is a pure read — NO re-pack, NO endianness dance (both wasm/JS are LE):
+//
+//   off 0   u32  num_parts
+//   off 4   u32  num_frames
+//   off 8   u32  k            (phase-bucket count; live K = 4)
+//   off 12  f32  fps
+//   off 16  k bucket-major blocks, each num_frames*num_parts*7 f32, FRAME-MAJOR:
+//             frames[(f*num_parts + p)*7 + 0..6] = [ox,oy,oz, qw,qx,qy,qz]  (AC wxyz)
+//   off 16+k*BS  num_parts rig records, 11 f32 each:
+//             pivot.x,y,z, weight, rest_o.x,y,z, rest_q.w,x,y,z   (BS = num_frames*num_parts*7*4)
+//
+// FAIL-SOFT: any malformed input (short/long buffer, k==0, overflow, bad header)
+// returns null so the caller fail-soft-degrades to frozen statics (A12 R1). Never
+// throws. The returned `frames` (bucket 0) is the zero-transform Float32Array
+// buildSceneryAnimationClip already expects; `buckets[b]` carries each phase bucket
+// and `rig` lets the consumer re-synthesize per-bucket phase from live wind.
+const _WINDCLIP_FLOATS_PER_PART_PER_FRAME = 7;
+const _WINDCLIP_RIG_FLOATS_PER_PART = 11;
+registerSuiteDecoder("windclip", (bytes, _did) => {
+  try {
+    if (!bytes || bytes.byteLength < 16) return null;
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const numParts = dv.getUint32(0, true);
+    const numFrames = dv.getUint32(4, true);
+    const k = dv.getUint32(8, true);
+    const fps = dv.getFloat32(12, true);
+    if (k === 0 || numParts === 0 || numFrames === 0) return null;
+    // Overflow-guarded float counts (mirror the rust codec's checked_mul).
+    const ff = numFrames * numParts * _WINDCLIP_FLOATS_PER_PART_PER_FRAME; // floats / bucket
+    if (!Number.isSafeInteger(ff)) return null;
+    const bs = ff * 4;                                                     // bytes / bucket
+    const rigBytes = numParts * _WINDCLIP_RIG_FLOATS_PER_PART * 4;
+    const expected = 16 + k * bs + rigBytes;
+    if (!Number.isSafeInteger(expected) || bytes.byteLength !== expected) return null;
+    // K phase-bucket clips, each copied into its own Float32Array (alignment-safe:
+    // the source byteOffset need not be 4-aligned, so we read scalar-by-scalar).
+    const buckets = new Array(k);
+    for (let b = 0; b < k; b++) {
+      const fa = new Float32Array(ff);
+      let o = 16 + b * bs;
+      for (let i = 0; i < ff; i++, o += 4) fa[i] = dv.getFloat32(o, true);
+      buckets[b] = fa;
+    }
+    // Per-part rig (pivot, weight, rest.o, rest.q wxyz) — geometry-derived; lets the
+    // consumer re-synthesize each bucket's phaseOffset from rig + live wind.
+    const rig = new Array(numParts);
+    let ro = 16 + k * bs;
+    for (let p = 0; p < numParts; p++) {
+      rig[p] = {
+        pivot: { x: dv.getFloat32(ro, true), y: dv.getFloat32(ro + 4, true), z: dv.getFloat32(ro + 8, true) },
+        weight: dv.getFloat32(ro + 12, true),
+        rest: {
+          o: { x: dv.getFloat32(ro + 16, true), y: dv.getFloat32(ro + 20, true), z: dv.getFloat32(ro + 24, true) },
+          q: [dv.getFloat32(ro + 28, true), dv.getFloat32(ro + 32, true), dv.getFloat32(ro + 36, true), dv.getFloat32(ro + 40, true)],
+        },
+      };
+      ro += _WINDCLIP_RIG_FLOATS_PER_PART * 4;
+    }
+    return {
+      numParts, numFrames, fps, numBuckets: k,
+      frames: buckets[0],                 // REQUIRED zero-transform clip (bucket 0, phaseOffset 0)
+      buckets,                            // all K phase buckets
+      rig,                                // per-bucket re-synthesis source
+      bucketFrames(b) { return buckets[((b % k) + k) % k]; },
+    };
+  } catch (_) {
+    return null;                          // fail-soft ⇒ caller keeps frozen statics
+  }
+});

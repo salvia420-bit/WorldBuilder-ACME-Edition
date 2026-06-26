@@ -494,19 +494,29 @@ async function buildOneWind(p, wasmExports, materialCache, spFetch) {
  * Entry point — build animated wind nodes for tree placements peeled out of the
  * frozen statics bake (statics.js, when ?treeWind=on). No-op when the flag is
  * off, the pkg predates fetchBuildingPlacement, or nothing qualifies. Fail-soft,
- * capped, deduped. Returns the count built.
+ * capped, deduped.
+ *
+ * P4.3 coverage-gated peel fallback — returns `{built:number, failed:Placement[]}`.
+ * `failed` carries the ORIGINAL placement objects (the same ones peeled from
+ * `statics`) for every placement that could NOT be turned into a live wind node
+ * (build returned null/threw, group degenerate, or over the animated cap). The
+ * caller (statics.js) re-adds `failed` to the FROZEN instanced path so a missed
+ * wind clip yields a STATIC tree, never a vanished one. When every build
+ * succeeds `failed` is empty ⇒ the frozen path is untouched ⇒ byte-identical.
+ * The guard early-returns keep `failed` empty (they did nothing before, so they
+ * peel nothing back — the off-trace stays [R] byte-identical).
  */
 export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
-  if (!treeWindEnabled()) return 0;
-  if (!scene3d?.staticsGroup || !Array.isArray(placements) || !wasmExports) return 0;
-  if (typeof wasmExports.fetchBuildingPlacement !== "function") return 0; // pre-rebuild → frozen
-  if (placements.length === 0) return 0;
+  if (!treeWindEnabled()) return { built: 0, failed: [] };
+  if (!scene3d?.staticsGroup || !Array.isArray(placements) || !wasmExports) return { built: 0, failed: [] };
+  if (typeof wasmExports.fetchBuildingPlacement !== "function") return { built: 0, failed: [] }; // pre-rebuild → frozen
+  if (placements.length === 0) return { built: 0, failed: [] };
   _rafDisposed = false; // re-arm after a prior dispose if scenery loads again.
 
   const resolveParent = (typeof opts?.resolveParent === "function") ? opts.resolveParent : null;
   const { getOrCreateMaterialCache } = await import("./statics.js");
   const materialCache = getOrCreateMaterialCache(scene3d);
-  if (!materialCache) return 0;
+  if (!materialCache) return { built: 0, failed: [] };
   const spFetch = surfacePixelsFetcher(wasmExports);
 
   const K = Math.max(1, (opts?.phaseBuckets | 0) || 4);
@@ -514,17 +524,20 @@ export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
 
   let built = 0;
   let dropped = 0;
+  // P4.3 — placements that could NOT become a live wind node. Each entry is the
+  // ORIGINAL peeled placement `p`; statics.js re-freezes these so none vanish.
+  const failed = [];
   for (const p of placements) {
     const key = "w:" + placementKey(p);
     if (_builtKeys.has(key)) continue;
-    if (_instances.length >= maxAnimated()) { dropped += 1; continue; }
+    if (_instances.length >= maxAnimated()) { failed.push(p); dropped += 1; continue; }
     _builtKeys.add(key);
     // eslint-disable-next-line no-await-in-loop
     const r = await buildOneWind(p, wasmExports, materialCache, spFetch).catch((e) => {
       console.warn("[tree-wind] buildOneWind threw:", e);
       return null;
     });
-    if (!r) { _builtKeys.delete(key); continue; }
+    if (!r) { _builtKeys.delete(key); failed.push(p); continue; }
 
     const setupId = (p.modelId ?? p.objId ?? 0) >>> 0;
     // Deterministic per-instance phase bucket → masks forest lockstep without a
@@ -533,7 +546,7 @@ export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
     const groupKey = `wind:0x${setupId.toString(16)}:${bucket}`;
     const windParams = { ...windBase, phaseOffset: (bucket / K) * 2 * Math.PI };
     const g = getOrCreateWindGroup(groupKey, r.partCount, r.rig, windParams);
-    if (!g) { _builtKeys.delete(key); continue; }
+    if (!g) { _builtKeys.delete(key); failed.push(p); continue; }
 
     const parent = (resolveParent && resolveParent(p)) || scene3d.staticsGroup;
     parent.add(r.node);
@@ -544,9 +557,9 @@ export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
   }
   if (built > 0 || dropped > 0) {
     console.log(`[tree-wind] built ${built} wind-tree instances across ${_didGroups.size} groups` +
-      (dropped > 0 ? `; DROPPED ${dropped} over the ${maxAnimated()} cap (?animSceneryMax)` : ""));
+      (dropped > 0 ? `; DROPPED ${dropped} over the ${maxAnimated()} cap (?animSceneryMax) → re-frozen` : ""));
   }
-  return built;
+  return { built, failed };
 }
 
 // Diag counters (probe via animatedSceneryDiag() during a local A/B).
