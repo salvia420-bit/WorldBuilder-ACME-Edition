@@ -55,6 +55,17 @@ export function treeWindDir() {
   return _dirDeg;
 }
 
+let _windBake;
+/** `?windBake=on` — consume baked dist/suite windclips instead of synthesizing.
+ *  DEFAULT-OFF. OFF ⇒ live synthesis (byte-identical to today). [C]. */
+export function windBakeEnabled() {
+  if (_windBake !== undefined) return _windBake;
+  let on = false;
+  const v = _strFlag("windBake");
+  if (v != null) { const s = v.toLowerCase(); on = s === "on" || s === "1" || s === "true" || s === "yes"; }
+  return (_windBake = on);
+}
+
 // Phase-1 allowlist of scenery SetupModel DIDs to animate. Seeded from the
 // verified top-placement foliage/trees (client_portal.dat survey 2026-06-23).
 // The bbox base-pivot rig (wind_rig.js) pivots each part about its own vertex
@@ -82,5 +93,5 @@ export function treeWindDids() {
 
 /** Reset memoized flag readers (tests only). */
 export function _resetTreeWindFlags() {
-  _flag = undefined; _strength = undefined; _dirDeg = undefined;
+  _flag = undefined; _strength = undefined; _dirDeg = undefined; _windBake = undefined;
 }
