@@ -682,3 +682,25 @@ export function disposeAnimatedScenery(_scene3d) {
   _didGroups.clear();
   _builtKeys.clear();
 }
+
+// ── INERT diag surface (P4.3 rig byte-identity proof) ────────────────────────
+// Read-only mirror of the runtime per-setupId rig cache, for the producer's
+// OQ-2 rig-verify pass (tools/bake-windclips.mjs step 7): after one
+// attachWindTrees pass with ?treeWind=on, window.__dumpWindRig(did) returns the
+// exact `_windRigCache.get(did)` (buildBboxRig().rigs) the live path produced so
+// it can be diffed bit-for-bit against the producer's re-composed rig. Guarded
+// like the other window.__* diag surfaces; attaches a single read-only function
+// and mutates no module state → zero behavior change whether ?treeWind is on or
+// off. Returns null for an un-cached DID. Deep-cloned so callers cannot poke the
+// live cache entry.
+if (typeof window !== "undefined") {
+  window.__dumpWindRig = (did) => {
+    const rig = _windRigCache.get((did >>> 0));
+    if (!rig) return null;
+    try {
+      return JSON.parse(JSON.stringify(rig));
+    } catch (_) {
+      return null;
+    }
+  };
+}
