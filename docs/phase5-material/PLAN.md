@@ -77,10 +77,17 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
   `sp.category` → materials.js), and `Vfx::BuildResult` is SetupDID/archetype scope, not surfaces. No C#
   change. The category lookup the producer needs is folded into **S5** (Rust classify at bake time). No code.
 
-- [ ] **S4 — wasm: extend `suite_fetch` for `texchan`** (`apps/holtburger-web/src/lib.rs:2425`)
-  Allow a surface-hash-keyed `texchan` artifact type alongside the `(did,type)` path. Keep inert until S6.
-  **Gate:** `PATH="$HOME/.cargo/bin:$PATH" capped-build wasm-pack build --target web --out-dir pkg --dev` +
-  boot-smoke `suite_cache_size()==0` when unreferenced. (Rebuild clobbers `pkg/`; it's gitignored.)
+- [x] **S4 — wasm: extend `suite_fetch` for `texchan`** (`apps/holtburger-web/src/lib.rs:2425`) ✅
+  Added a STRING-keyed cache (`SUITE_CACHE_BY_KEY`) + `fetch_suite_artifact_by_key(key, artifact_type)` (URL
+  `{base}{key}.{type}.bin`) alongside the untouched DID `(did,type)` path; `suite_cache_size()` now sums both;
+  `clear_suite_cache()` clears both. Key stem is caller-owned (S6) so this fn stays agnostic to the hash
+  format. Inert (no JS caller). DID path byte-unchanged.
+  **Gate:** ✅ `capped-build wasm-pack build --dev` green (53s); `fetch_suite_artifact_by_key` present in
+  `pkg/holtburger_web.{js,d.ts}` (correct `(key,type)→Promise<Uint8Array>` sig); zero JS callers (grep).
+  Boot-smoke adaptation: live `suite_cache_size()==0` page-smoke **deferred to S6** (no playwright wired in-dir;
+  `window.__hbWasm` is a curated literal not the namespace; inert export ⇒ 0-at-boot holds by construction —
+  both caches init empty, nothing fetches at boot, DID-path equivalent proven live in P4.0b). S6 does the
+  index.html named-import + `?v=` bump + the real-fetch smoke together. (`pkg/` rebuilt, gitignored.)
 
 - [ ] **S5 — Producer: WB.Terminal bake command** → `${HOLTBURGER_DIST}/suite/<surfacehash>.texchan.bin`
   (+ `.sha256` + `.texchan-hash`, `texchan-coverage.json`, `bake-source.sha256`). Runs `normal_gen` offline
@@ -129,3 +136,4 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 - S1 — roughness + AO channels in normal_gen.rs; `cargo test -p holtburger-dat --lib` 351/0. Real-portal.dat golden deferred to S5.
 - S2 — texchan codec in holtburger-suite-bake (name was pre-reserved); `cargo test -p holtburger-suite-bake` 20/0. Renamed matclip→texchan across §2.
 - S3 — HALTED then DROPPED (user-approved). Surface→category already wired in Rust; folded the producer's classify need into S5. Loop re-armed; next live step S4.
+- S4 — wasm fetch_suite_artifact_by_key (string/surface-hash keyed) + dual-cache suite_cache_size; capped wasm-pack --dev green, export in pkg js/dts, inert. Live boot-smoke deferred to S6.

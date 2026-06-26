@@ -2439,6 +2439,13 @@ mod suite_fetch {
         /// so the `RefCell` is sound.
         static SUITE_CACHE: RefCell<HashMap<(u32, String), Vec<u8>>> =
             RefCell::new(HashMap::new());
+
+        /// Per-`(key, artifact_type)` byte cache for STRING-keyed
+        /// artifacts — Phase-5 `texchan` sidecars keyed by surface
+        /// content-hash (not DID), since surfaces are shared across DIDs.
+        /// Same empty-Vec = "no sidecar" convention as `SUITE_CACHE`.
+        static SUITE_CACHE_BY_KEY: RefCell<HashMap<(String, String), Vec<u8>>> =
+            RefCell::new(HashMap::new());
     }
 
     /// Set the base URL for `/suite/...` fetches. Mirrors
@@ -2455,18 +2462,22 @@ mod suite_fetch {
         });
     }
 
-    /// Number of `(did, type)` artifacts currently cached (empties
-    /// count too). `0` at boot since nothing fetches yet.
+    /// Number of suite artifacts currently cached across BOTH the
+    /// `(did, type)` and the string-`(key, type)` caches (empties count
+    /// too). `0` at boot since nothing fetches yet — the inert-when-
+    /// unreferenced assertion for both the windclip and texchan paths.
     #[wasm_bindgen]
     pub fn suite_cache_size() -> usize {
         SUITE_CACHE.with(|cell| cell.borrow().len())
+            + SUITE_CACHE_BY_KEY.with(|cell| cell.borrow().len())
     }
 
-    /// Clear the suite cache. Test / smoke helper; not used in the
+    /// Clear both suite caches. Test / smoke helper; not used in the
     /// normal page flow.
     #[wasm_bindgen]
     pub fn clear_suite_cache() {
         SUITE_CACHE.with(|cell| cell.borrow_mut().clear());
+        SUITE_CACHE_BY_KEY.with(|cell| cell.borrow_mut().clear());
     }
 
     pub fn base_url() -> Option<String> {
@@ -2483,6 +2494,20 @@ mod suite_fetch {
     pub fn cache_put(did: u32, artifact_type: String, bytes: Vec<u8>) {
         SUITE_CACHE.with(|cell| {
             cell.borrow_mut().insert((did, artifact_type), bytes);
+        });
+    }
+
+    /// Cache-hit lookup for one string-`(key, type)` pair (texchan).
+    /// Returns the cached bytes (possibly empty) or `None` on miss.
+    pub fn cache_get_by_key(key: &str, artifact_type: &str) -> Option<Vec<u8>> {
+        SUITE_CACHE_BY_KEY
+            .with(|cell| cell.borrow().get(&(key.to_owned(), artifact_type.to_owned())).cloned())
+    }
+
+    /// Insert one string-`(key, type)` → bytes entry into the cache.
+    pub fn cache_put_by_key(key: String, artifact_type: String, bytes: Vec<u8>) {
+        SUITE_CACHE_BY_KEY.with(|cell| {
+            cell.borrow_mut().insert((key, artifact_type), bytes);
         });
     }
 }
@@ -2537,6 +2562,47 @@ pub async fn fetch_suite_artifact(
     };
 
     suite_fetch::cache_put(did, artifact_type, bytes.clone());
+    Ok(bytes)
+}
+
+/// Fetch one STRING-keyed suite artifact sidecar (Phase-5 `texchan`,
+/// keyed by surface content-hash rather than DID — surfaces are shared
+/// across many DIDs, so the bake dedups by content).
+///
+/// URL shape: `<suite_base_url>/{key}.{artifact_type}.bin`. The caller
+/// (S6 `materials.js`) owns the exact `key` stem so it matches whatever
+/// the S5 producer wrote (e.g. `0x{hash:016X}`) — this fn stays
+/// agnostic to the hash format.
+///
+/// Same fail-soft contract as [`fetch_suite_artifact`]: cache-check
+/// first (empty `Vec` = positive "no sidecar"), 404 → cached empty
+/// `Vec` (never throws), other transport errors → `Err`. INERT until S6
+/// wires a JS caller.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_suite_artifact_by_key(
+    key: String,
+    artifact_type: String,
+) -> Result<Vec<u8>, JsValue> {
+    let base_url = suite_fetch::base_url().ok_or_else(|| {
+        JsValue::from_str("init_suite_base_url must be called before fetch_suite_artifact_by_key")
+    })?;
+
+    if let Some(hit) = suite_fetch::cache_get_by_key(&key, &artifact_type) {
+        return Ok(hit);
+    }
+
+    let url = format!("{base_url}{key}.{artifact_type}.bin");
+    let bytes = match holtburger_resource_http::fetch_bytes(&url).await {
+        Ok(b) => b,
+        Err(holtburger_resource_http::HttpError::Http { status: 404, .. }) => {
+            suite_fetch::cache_put_by_key(key, artifact_type, Vec::new());
+            return Ok(Vec::new());
+        }
+        Err(e) => return Err(JsValue::from_str(&format!("fetch {url}: {e}"))),
+    };
+
+    suite_fetch::cache_put_by_key(key, artifact_type, bytes.clone());
     Ok(bytes)
 }
 
