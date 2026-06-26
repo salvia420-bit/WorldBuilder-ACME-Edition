@@ -11,6 +11,9 @@
 
 use holtburger_common::bake_fingerprint::{fnv1a_fold, FNV1A_OFFSET};
 
+/// P4.3 per-DID tree-wind codec, layered on [`SuiteBlob`]'s `payload` (`type_tag="windclip"`).
+pub mod windclip;
+
 /// Container magic — "Holtburger Suite Bake", container format v1.
 pub const MAGIC: [u8; 4] = *b"HSB1";
 pub const CONTAINER_VERSION: u16 = 1;
