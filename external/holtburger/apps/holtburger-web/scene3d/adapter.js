@@ -1079,6 +1079,42 @@ export function surfacePixelsToRoughnessTexture(roughR8, width, height) {
 }
 
 /**
+ * Phase-5 — RED `DataTexture` for `MeshStandardMaterial.aoMap` from the texchan
+ * AO channel (R8; aoMap convention 255 = unoccluded). aoMap samples `.r`, so
+ * RedFormat is the right fit. `channel = 0` makes it sample the main "uv"
+ * attribute (three r152+ UV-channel system) — no uv2 needed; the geometry's
+ * existing "uv" is reused. `NoColorSpace` (scalar). Conservative darkening is
+ * applied at the material via `aoMapIntensity`, not baked here. Null on malformed.
+ */
+export function surfacePixelsToAoTexture(aoR8, width, height) {
+  if (!aoR8 || aoR8.byteLength === 0 || width === 0 || height === 0) {
+    return null;
+  }
+  const px = width * height;
+  if (aoR8.byteLength < px) return null;
+  const copy = new Uint8Array(px);
+  copy.set(aoR8.subarray(0, px));
+  const tex = new THREE.DataTexture(
+    copy,
+    width,
+    height,
+    THREE.RedFormat,
+    THREE.UnsignedByteType
+  );
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.flipY = false;
+  tex.channel = 0; // sample the main "uv" attribute (NOT uv2) — r152+ UV channels
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = _maxAnisotropy;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
  * Convert AC quaternion ordering (qw, qx, qy, qz) to three.js's
  * (x, y, z, w) convention. AC stores w-first in wire and DAT formats;
  * three.js's `Quaternion` constructor takes w last.

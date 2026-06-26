@@ -199,3 +199,24 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 - S6b-2 — materials.js attaches baked roughnessMap (default-ON, conservative remap can't-chrome); adapter texture builder; getByKeyAsync upgrade; index.html plumb + ?v= bump. Gates: node --check 6/6, decode 60/0, remap invariant. In-world boot-smoke best-effort; 1070 look-tuning owed.
 - S7 — ABSORBED (default-on shipped in S6b-2). S8 — N/A (normal stays runtime-generated; nothing dead to delete).
 - S6b-2 page-load smoke — 0 module-load errors, boots to form-shown, wasm loaded (structural risk retired). In-world render smoke + 1070 look-tuning OWED. **Phase-5 core COMPLETE + default-ON.**
+
+---
+
+## 6. Follow-ups (post-completion loop, value-ordered; "without adding needlessly")
+- [x] **F1 — aoMap** ✅ three r184 ⇒ no uv2 needed. `adapter.surfacePixelsToAoTexture` (RedFormat, `channel=0`
+  → main "uv", aoMap reads `.r`); `_applyRough` now also attaches `mat.aoMap` + conservative
+  `aoMapIntensity=0.6` (subtle darkening; AO can't chrome). Default-ON via the existing `?material` gate;
+  fail-soft. Supersedes S6b-2's "aoMap deferred".
+  **Gate:** ✅ `node --check` adapter+materials; ✅ page-load smoke 0 module-load errors, boots clean.
+  (look owed to 1070, like roughness.)
+- [ ] **F2 — in-world render smoke** (validate roughness + ao live): improved headless boot (longer timeout +
+  reload-on-ACE-error) → reach in-world → assert 0 console errors + suite fetches (`stats().hits>0`) +
+  roughnessMap/aoMap attached on real materials. Retires the OWED in-world smoke. Best-effort (ACE flaky).
+- [ ] **F3 — BC/DXT compression — SKIP (needless locally).** 1.1 GB lives on the 8 TB external drive, fetched
+  per-surface on demand; BC also risks breaking SwiftShader local render. Revisit only before a real deploy.
+  The `encoding` field is reserved. (Do only if USER insists.)
+- [ ] **F4 — anti-tiling (old S9) — DEFER (scope-creep + can't validate without 1070).** A new visual feature
+  whose look needs an eye; holds against "not too many features". (Do only if USER insists.)
+
+### §6 progress log
+- F1 — aoMap attached (RedFormat, channel 0, aoMapIntensity 0.6); node --check + page-load smoke 0 errors. three r184 (no uv2 needed).

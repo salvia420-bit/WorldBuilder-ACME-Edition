@@ -48,6 +48,7 @@ import {
   surfacePixelsToNormalTexture,
   surfacePixelsToHeightTexture,
   surfacePixelsToRoughnessTexture,
+  surfacePixelsToAoTexture,
 } from "./adapter.js";
 import { materialBakeEnabled } from "./vfx_flags.js";
 import { SuiteAssetSource, loadTexchanManifest } from "./suite_assets.js";
@@ -2306,12 +2307,22 @@ export class MaterialCache {
   }
 
   _applyRough(mat, tc) {
-    if (!tc || !tc.roughness) return;
-    const rtex = surfacePixelsToRoughnessTexture(tc.roughness, tc.width, tc.height);
-    if (!rtex) return;
-    mat.roughnessMap = rtex;
+    if (!tc) return;
+    let touched = false;
+    if (tc.roughness) {
+      const rtex = surfacePixelsToRoughnessTexture(tc.roughness, tc.width, tc.height);
+      if (rtex) { mat.roughnessMap = rtex; touched = true; }
+    }
+    // F1 — baked cavity AO. r184 lets aoMap use the main "uv" (channel 0); reads
+    // .r (RedFormat). Conservative intensity so the darkening stays subtle (AO
+    // can only darken, never chrome). Look-polish owed to a 1070 eye-test.
+    if (tc.ao) {
+      const atex = surfacePixelsToAoTexture(tc.ao, tc.width, tc.height);
+      if (atex) { mat.aoMap = atex; mat.aoMapIntensity = 0.6; touched = true; }
+    }
+    if (!touched) return;
     mat.needsUpdate = true;
-    mat.userData = { ...(mat.userData || {}), texchanRoughness: true };
+    mat.userData = { ...(mat.userData || {}), texchanRoughness: !!tc.roughness, texchanAo: !!tc.ao };
   }
 
   _materialFromFlags(surfaceTypeFlags, texture, category, normalTexture, overrides, heightTexture, surfaceFloats) {
