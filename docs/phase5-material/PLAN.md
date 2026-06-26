@@ -54,11 +54,15 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
 
 ## 2. Worklist (each row = ONE tick = ONE gated commit)
 
-- [ ] **S1 — Rust: extend `normal_gen.rs`** (`crates/holtburger-dat/src/normal_gen.rs`)
-  Add `roughness_from_luminance` + `ao_from_luminance` (or `cavity_*`), palette-aware, deterministic. Inert
-  (no caller yet). Re-export in `lib.rs`.
-  **Gate:** `PATH="$HOME/.cargo/bin:$PATH" capped-build cargo test -p holtburger-dat` + a golden test
-  asserting stable bytes for a fixed real `~/ac_base_dats/client_portal.dat` surface.
+- [x] **S1 — Rust: extend `normal_gen.rs`** (`crates/holtburger-dat/src/normal_gen.rs`) ✅
+  Added `roughness_from_luminance` (per-texel 3x3 σ → micro-roughness) + `ao_from_luminance` (lum vs local
+  mean → cavity AO). Per-pixel (crop-stable for the dedup key), palette-safe (decoded RGBA only), inert (no
+  caller). Existing `normal_from_luminance`/`height_from_luminance` left byte-frozen (own inline lum copies);
+  shared `build_luminance` helper used by the new fns only. Re-exported in `lib.rs`.
+  **Gate:** ✅ `capped-build cargo test -p holtburger-dat --lib` → **351 passed / 0 failed** (12 new tests; all
+  prior normal_gen goldens unchanged). Golden adaptation: exact-byte goldens are the hermetic predictable
+  cases (uniform→roughness all-0, AO all-255); the **real-`portal.dat` byte golden is deferred to S5** (DAT
+  access lives there, not in a hermetic unit test).
 
 - [ ] **S2 — Rust: `matclip` codec** (`crates/holtburger-suite-bake/src/matclip.rs`, mirror `windclip.rs`)
   Pack {normal, roughness, ao} for one surface; **surface-hash** keyed; deterministic fingerprint via
@@ -118,3 +122,4 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 
 ## 5. Progress log (loop appends one line per committed step)
 - S0 (this file) — committed.
+- S1 — roughness + AO channels in normal_gen.rs; `cargo test -p holtburger-dat --lib` 351/0. Real-portal.dat golden deferred to S5.

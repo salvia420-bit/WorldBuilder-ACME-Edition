@@ -22,7 +22,7 @@ use binrw::{BinRead, io::Cursor};
 pub use error::{DatError, Result};
 pub use file_type::{DatFileType, DatKind};
 pub use manifest::StripperManifest;
-pub use normal_gen::normal_from_luminance;
+pub use normal_gen::{ao_from_luminance, normal_from_luminance, roughness_from_luminance};
 pub use surface_classify::{SurfaceCategory, SurfaceStats, classify, compute_stats};
 use std::collections::HashMap;
 use std::fs::File;
