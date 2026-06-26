@@ -89,13 +89,24 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
   both caches init empty, nothing fetches at boot, DID-path equivalent proven live in P4.0b). S6 does the
   index.html named-import + `?v=` bump + the real-fetch smoke together. (`pkg/` rebuilt, gitignored.)
 
-- [ ] **S5 — Producer: WB.Terminal bake command** → `${HOLTBURGER_DIST}/suite/<surfacehash>.texchan.bin`
-  (+ `.sha256` + `.texchan-hash`, `texchan-coverage.json`, `bake-source.sha256`). Runs `normal_gen` offline
-  over real `portal.dat` surfaces. **base dats only** (`~/ac_base_dats/`; reject `0x__FFxxxx`).
-  **Folds dropped S3:** classify each surface in Rust via `surface_classify::classify`+`compute_stats` to pick
-  the per-category bake **strength** (the same categories the runtime already uses). Real-`portal.dat` byte
-  golden (deferred from S1) lands here.
-  **Gate:** re-run → **byte-identical sha256** (determinism) + coverage report (N baked / 0 skipped).
+- [x] **S5 — Producer: Rust bake example** (`crates/holtburger-dat/examples/bake_texchan.rs`) ✅
+  Implemented as a **pure-Rust example** (not a WB.Terminal C# command): byte-identity *requires* running the
+  same Rust `normal_from_luminance` the runtime runs, so the producer replicates the runtime ingest chain
+  exactly (Surface→SurfaceTexture.highest_res→Texture.actual_dimensions→to_rgba8(palette)→`normal_from_luminance(_,1.0)`).
+  **All three channels baked at strength 1.0** — per-category strength stays a runtime JS concern
+  (materials.js normalScale/detail tables), exactly as the runtime already applies `normalScale`; nothing
+  per-category is baked into pixels ⇒ **the dropped-S3 classify is unnecessary at bake time** (simplification).
+  Dedup by content-hash (`texchan::fingerprint` = filename stem); `texchan-manifest.json` maps surfaceDid→stem
+  for S6. Skips LUMINOUS / solid-1x1 / untextured (matches runtime). base-dats rule: rejects `0x__FFxxxx`.
+  Adaptations: `sha2` (in-producer `bake-source.sha256`, streamed over the 926MB dat); per-file `.sha256` +
+  `.texchan-hash` sidecars **dropped** (filename IS the content-hash). Real-`portal.dat` golden (deferred from
+  S1) = this real bake.
+  **Gate:** ✅ **determinism** — two `--limit 300` runs byte-identical (dir digest `816db22e…`). ✅ **full bake**
+  (release) — scanned **6152** / baked **5999** / **5475 unique** / 524 dedup / **0 errors** (parse/chain/
+  decode/empty all 0; 153 solid-untextured skipped). ⚠ **sizing: 1.1 GB raw RGBA8** → motivates the reserved
+  `encoding` field (BC/DXT) as a follow-up; fine for local default-on (on-demand fetch from external drive).
+  Artifacts in `/mnt/wbterminal2/holtburger-dist/suite/` (not git). Re-run full bake: `cargo build --release
+  -p holtburger-dat --example bake_texchan && target/release/examples/bake_texchan`.
 
 - [ ] **S6 — JS consumer: fetch-not-generate** (`scene3d/materials.js`, behind `?material=`)
   In `MaterialCache`, branch on `suite.get(surfaceHash,"texchan")` → use baked maps; **miss → current
@@ -137,3 +148,4 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 - S2 — texchan codec in holtburger-suite-bake (name was pre-reserved); `cargo test -p holtburger-suite-bake` 20/0. Renamed matclip→texchan across §2.
 - S3 — HALTED then DROPPED (user-approved). Surface→category already wired in Rust; folded the producer's classify need into S5. Loop re-armed; next live step S4.
 - S4 — wasm fetch_suite_artifact_by_key (string/surface-hash keyed) + dual-cache suite_cache_size; capped wasm-pack --dev green, export in pkg js/dts, inert. Live boot-smoke deferred to S6.
+- S5 — Rust bake_texchan example; determinism 300-subset byte-identical; full release bake 6152→5999 baked/5475 unique/524 dedup/0 errors; 1.1GB raw (BC follow-up flagged). normal@1.0 = byte-identity preserved; S3-classify confirmed unnecessary at bake.
