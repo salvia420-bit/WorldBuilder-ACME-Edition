@@ -1,0 +1,6464 @@
+{
+  "ts": "2026-06-26T18:50:17.006Z",
+  "host": "GTX1070",
+  "app": "http://127.0.0.1:18765/apps/holtburger-web/index.html",
+  "arms": [
+    {
+      "key": "staff-on",
+      "kind": "item",
+      "extra": {
+        "material": "on",
+        "windBake": "off"
+      },
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&material=on&windBake=off",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D",
+      "spawnCell": "0xa9b40019",
+      "inWorld": true,
+      "outdoorCell": "0xa9b40019",
+      "sceneReady": true,
+      "items": [
+        {
+          "wcid": 24205,
+          "itemName": "Weeping Staff (unpaletted)",
+          "found": true,
+          "count": 203,
+          "meshes": [
+            {
+              "uuid": "3532be7c",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32526.9,
+                "y": 103.2,
+                "z": -34604.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "7efdec09",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32545.9,
+                "y": 76.4,
+                "z": -34695.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "fd7fa331",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32479,
+                "y": 75.1,
+                "z": -34726.1
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "1a8c5f78",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32538.3,
+                "y": 68.2,
+                "z": -34711.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "0c58f322",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32489.4,
+                "y": 68.2,
+                "z": -34692.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "b77a4820",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32581.5,
+                "y": 68.2,
+                "z": -34696.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "7e2c957f",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32603.8,
+                "y": 68.2,
+                "z": -34674.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "de1eefdf",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32554,
+                "y": 96.2,
+                "z": -34577.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "cbd6ddd9",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.5,
+                "y": 68.2,
+                "z": -34686.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "0915a9c2",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32538.3,
+                "y": 68.2,
+                "z": -34711.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "75ded5e6",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32489.4,
+                "y": 68.2,
+                "z": -34692.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "1f22f31c",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32581.5,
+                "y": 68.2,
+                "z": -34696.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "d9a38a08",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32603.8,
+                "y": 68.2,
+                "z": -34674.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "e7bb5b73",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32554,
+                "y": 96.2,
+                "z": -34577.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "14f13dbd",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.5,
+                "y": 68.2,
+                "z": -34686.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "b57157e7",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32538.3,
+                "y": 68.2,
+                "z": -34711.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "2a5cb1cd",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32489.4,
+                "y": 68.2,
+                "z": -34692.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "445912b6",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32581.5,
+                "y": 68.2,
+                "z": -34696.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "a32268c8",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32603.8,
+                "y": 68.2,
+                "z": -34674.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "03295846",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32554,
+                "y": 96.2,
+                "z": -34577.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "e59e31c3",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.5,
+                "y": 68.2,
+                "z": -34686.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "72eeec0d",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32526.9,
+                "y": 102.2,
+                "z": -34604.3
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "668719e8",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32541.9,
+                "y": 76.1,
+                "z": -34691.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "f862994a",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32545.9,
+                "y": 75.5,
+                "z": -34695.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "555aa849",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32606.7,
+                "y": 78.7,
+                "z": -34687.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "941036ab",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32479,
+                "y": 74.2,
+                "z": -34726.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "5bcf11c8",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32538.3,
+                "y": 68.2,
+                "z": -34711.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "78d8fc5c",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32489.4,
+                "y": 68.2,
+                "z": -34692.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "252d5013",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32581.5,
+                "y": 68.2,
+                "z": -34696.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "c4b74b40",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32603.8,
+                "y": 68.2,
+                "z": -34674.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "fa698a7a",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32554,
+                "y": 96.2,
+                "z": -34577.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "924528dc",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.5,
+                "y": 68.2,
+                "z": -34686.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "93190db1",
+              "name": "part_0_surface_8000d99",
+              "chain": [
+                "part_0_surface_8000d99",
+                "part_0",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "66aad820",
+              "name": "part_0_surface_8000d9a",
+              "chain": [
+                "part_0_surface_8000d9a",
+                "part_0",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "36846620",
+              "name": "part_1_surface_8000d95",
+              "chain": [
+                "part_1_surface_8000d95",
+                "part_1",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.1,
+                "y": 95,
+                "z": -34568.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "c015d202",
+              "name": "part_1_surface_8000d97",
+              "chain": [
+                "part_1_surface_8000d97",
+                "part_1",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.1,
+                "y": 95,
+                "z": -34568.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "fe228480",
+              "name": "part_1_surface_8000d98",
+              "chain": [
+                "part_1_surface_8000d98",
+                "part_1",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.1,
+                "y": 95,
+                "z": -34568.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "247b14c3",
+              "name": "part_2_surface_8000d95",
+              "chain": [
+                "part_2_surface_8000d95",
+                "part_2",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.1,
+                "y": 94.5,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "1aba7638",
+              "name": "part_2_surface_8000d96",
+              "chain": [
+                "part_2_surface_8000d96",
+                "part_2",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.1,
+                "y": 94.5,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "1509d68f",
+              "name": "part_3_surface_8000015",
+              "chain": [
+                "part_3_surface_8000015",
+                "part_3",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.2,
+                "y": 94.1,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "cad98292",
+              "name": "part_4_surface_8000015",
+              "chain": [
+                "part_4_surface_8000015",
+                "part_4",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.1,
+                "y": 94,
+                "z": -34568.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "a683cd60",
+              "name": "part_5_surface_8000d98",
+              "chain": [
+                "part_5_surface_8000d98",
+                "part_5",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95,
+                "z": -34568.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "838a71d2",
+              "name": "part_5_surface_8000d97",
+              "chain": [
+                "part_5_surface_8000d97",
+                "part_5",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95,
+                "z": -34568.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "1305e864",
+              "name": "part_5_surface_8000d95",
+              "chain": [
+                "part_5_surface_8000d95",
+                "part_5",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95,
+                "z": -34568.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "dbf0ee8c",
+              "name": "part_6_surface_8000d95",
+              "chain": [
+                "part_6_surface_8000d95",
+                "part_6",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 94.5,
+                "z": -34568.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "2db44dc5",
+              "name": "part_6_surface_8000d96",
+              "chain": [
+                "part_6_surface_8000d96",
+                "part_6",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 94.5,
+                "z": -34568.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "c2d6a275",
+              "name": "part_7_surface_8000015",
+              "chain": [
+                "part_7_surface_8000015",
+                "part_7",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.1,
+                "y": 94.1,
+                "z": -34568.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6216037c",
+              "name": "part_8_surface_8000015",
+              "chain": [
+                "part_8_surface_8000015",
+                "part_8",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 94,
+                "z": -34568.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "1aa3d710",
+              "name": "part_9_surface_8000c20",
+              "chain": [
+                "part_9_surface_8000c20",
+                "part_9",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95.2,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "4f81b786",
+              "name": "part_9_surface_8000c21",
+              "chain": [
+                "part_9_surface_8000c21",
+                "part_9",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95.2,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "79aba3f6",
+              "name": "part_10_surface_8000d9c",
+              "chain": [
+                "part_10_surface_8000d9c",
+                "part_10",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.2,
+                "y": 95.5,
+                "z": -34568.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "90eca380",
+              "name": "part_11_surface_8000d9b",
+              "chain": [
+                "part_11_surface_8000d9b",
+                "part_11",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.2,
+                "y": 95.1,
+                "z": -34568.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "c4fc0a42",
+              "name": "part_12_surface_8000817",
+              "chain": [
+                "part_12_surface_8000817",
+                "part_12",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.2,
+                "y": 94.9,
+                "z": -34568.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "3a0f16ad",
+              "name": "part_13_surface_8000d9c",
+              "chain": [
+                "part_13_surface_8000d9c",
+                "part_13",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32610.9,
+                "y": 95.5,
+                "z": -34568.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "4e4419dc",
+              "name": "part_14_surface_8000d9b",
+              "chain": [
+                "part_14_surface_8000d9b",
+                "part_14",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32610.8,
+                "y": 95.1,
+                "z": -34569
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "ece3e342",
+              "name": "part_15_surface_8000817",
+              "chain": [
+                "part_15_surface_8000817",
+                "part_15",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32610.8,
+                "y": 94.9,
+                "z": -34569
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "748a67d9",
+              "name": "part_16_surface_8001758",
+              "chain": [
+                "part_16_surface_8001758",
+                "part_16",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95.6,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "c7c2d1fc",
+              "name": "part_16_surface_8000b04",
+              "chain": [
+                "part_16_surface_8000b04",
+                "part_16",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95.6,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "3eac7523",
+              "name": "part_16_surface_8000b05",
+              "chain": [
+                "part_16_surface_8000b05",
+                "part_16",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95.6,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "ab80a6f4",
+              "name": "part_16_surface_8000b01",
+              "chain": [
+                "part_16_surface_8000b01",
+                "part_16",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95.6,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "48180091",
+              "name": "part_16_surface_8000b03",
+              "chain": [
+                "part_16_surface_8000b03",
+                "part_16",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95.6,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "925905c5",
+              "name": "part_16_surface_8000b02",
+              "chain": [
+                "part_16_surface_8000b02",
+                "part_16",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95.6,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "81c60449",
+              "name": "part_17_surface_8000015",
+              "chain": [
+                "part_17_surface_8000015",
+                "part_17",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "c1e051f8",
+              "name": "part_18_surface_8000015",
+              "chain": [
+                "part_18_surface_8000015",
+                "part_18",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.2,
+                "y": 94.9,
+                "z": -34568.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "491cedc2",
+              "name": "part_19_surface_8000015",
+              "chain": [
+                "part_19_surface_8000015",
+                "part_19",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.3,
+                "y": 94.7,
+                "z": -34568.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "3a1d4b37",
+              "name": "part_20_surface_8000015",
+              "chain": [
+                "part_20_surface_8000015",
+                "part_20",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.5,
+                "y": 94.5,
+                "z": -34569
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "b9739815",
+              "name": "part_21_surface_8000015",
+              "chain": [
+                "part_21_surface_8000015",
+                "part_21",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95.6,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6de8774f",
+              "name": "part_22_surface_8000015",
+              "chain": [
+                "part_22_surface_8000015",
+                "part_22",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95.6,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "a4bd371c",
+              "name": "part_23_surface_8000015",
+              "chain": [
+                "part_23_surface_8000015",
+                "part_23",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.2,
+                "y": 95.4,
+                "z": -34568.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "281b245f",
+              "name": "part_24_surface_8000015",
+              "chain": [
+                "part_24_surface_8000015",
+                "part_24",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32610.9,
+                "y": 95.4,
+                "z": -34568.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "3be3c956",
+              "name": "part_25_surface_8000015",
+              "chain": [
+                "part_25_surface_8000015",
+                "part_25",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.1,
+                "y": 94.5,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "63aa92a3",
+              "name": "part_26_surface_8000015",
+              "chain": [
+                "part_26_surface_8000015",
+                "part_26",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 94.5,
+                "z": -34568.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6eb4e7e4",
+              "name": "part_27_surface_8000015",
+              "chain": [
+                "part_27_surface_8000015",
+                "part_27",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.2,
+                "y": 95.2,
+                "z": -34568.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "59ae6027",
+              "name": "part_28_surface_8000015",
+              "chain": [
+                "part_28_surface_8000015",
+                "part_28",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32610.9,
+                "y": 95.2,
+                "z": -34569
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "0121e02d",
+              "name": "part_29_surface_8000015",
+              "chain": [
+                "part_29_surface_8000015",
+                "part_29",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611,
+                "y": 95.2,
+                "z": -34568.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "c2529c26",
+              "name": "part_30_surface_8000015",
+              "chain": [
+                "part_30_surface_8000015",
+                "part_30",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.2,
+                "y": 95.5,
+                "z": -34568.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "2b317fda",
+              "name": "part_31_surface_8000015",
+              "chain": [
+                "part_31_surface_8000015",
+                "part_31",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.2,
+                "y": 95,
+                "z": -34568.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "0d0f4f69",
+              "name": "part_32_surface_8000015",
+              "chain": [
+                "part_32_surface_8000015",
+                "part_32",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.2,
+                "y": 94.8,
+                "z": -34568.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "1ab00094",
+              "name": "part_33_surface_8000015",
+              "chain": [
+                "part_33_surface_8000015",
+                "part_33",
+                "entity_7a9b4041",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32611.2,
+                "y": 94.6,
+                "z": -34568.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "15fe999b",
+              "name": "part_0_surface_8000283",
+              "chain": [
+                "part_0_surface_8000283",
+                "part_0",
+                "entity_7a9b4014",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32580.5,
+                "y": 97.3,
+                "z": -34569.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "7698b16b",
+              "name": "part_0_surface_80003b2",
+              "chain": [
+                "part_0_surface_80003b2",
+                "part_0",
+                "entity_7a9b4014",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32580.5,
+                "y": 97.3,
+                "z": -34569.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "f3799d52",
+              "name": "part_0_surface_8000283",
+              "chain": [
+                "part_0_surface_8000283",
+                "part_0",
+                "entity_7a9b4014",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32580.5,
+                "y": 97.3,
+                "z": -34569.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "38978355",
+              "name": "part_1_surface_8000283",
+              "chain": [
+                "part_1_surface_8000283",
+                "part_1",
+                "entity_7a9b4014",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32580.5,
+                "y": 97.4,
+                "z": -34569.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "d35b5bbf",
+              "name": "part_1_surface_8000384",
+              "chain": [
+                "part_1_surface_8000384",
+                "part_1",
+                "entity_7a9b4014",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32580.5,
+                "y": 97.4,
+                "z": -34569.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "9d1c9dba",
+              "name": "part_1_surface_8000283",
+              "chain": [
+                "part_1_surface_8000283",
+                "part_1",
+                "entity_7a9b4014",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32580.5,
+                "y": 97.4,
+                "z": -34569.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "67e162e1",
+              "name": "part_0_surface_8000283",
+              "chain": [
+                "part_0_surface_8000283",
+                "part_0",
+                "entity_7a9b401d",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32523.8,
+                "y": 94.3,
+                "z": -34598.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "ffba6c57",
+              "name": "part_0_surface_80003b2",
+              "chain": [
+                "part_0_surface_80003b2",
+                "part_0",
+                "entity_7a9b401d",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32523.8,
+                "y": 94.3,
+                "z": -34598.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "618d5dbe",
+              "name": "part_0_surface_8000283",
+              "chain": [
+                "part_0_surface_8000283",
+                "part_0",
+                "entity_7a9b401d",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32523.8,
+                "y": 94.3,
+                "z": -34598.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "030964f9",
+              "name": "part_1_surface_8000283",
+              "chain": [
+                "part_1_surface_8000283",
+                "part_1",
+                "entity_7a9b401d",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32523.6,
+                "y": 94.4,
+                "z": -34598.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "5244dd97",
+              "name": "part_1_surface_8000384",
+              "chain": [
+                "part_1_surface_8000384",
+                "part_1",
+                "entity_7a9b401d",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32523.6,
+                "y": 94.4,
+                "z": -34598.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "407211b7",
+              "name": "part_1_surface_8000283",
+              "chain": [
+                "part_1_surface_8000283",
+                "part_1",
+                "entity_7a9b401d",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32523.6,
+                "y": 94.4,
+                "z": -34598.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "f3a73661",
+              "name": "part_0_surface_8000283",
+              "chain": [
+                "part_0_surface_8000283",
+                "part_0",
+                "entity_7a9b4072",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32547,
+                "y": 94.3,
+                "z": -34589.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "34a04eca",
+              "name": "part_0_surface_80003b2",
+              "chain": [
+                "part_0_surface_80003b2",
+                "part_0",
+                "entity_7a9b4072",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32547,
+                "y": 94.3,
+                "z": -34589.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "d039abd2",
+              "name": "part_0_surface_8000283",
+              "chain": [
+                "part_0_surface_8000283",
+                "part_0",
+                "entity_7a9b4072",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32547,
+                "y": 94.3,
+                "z": -34589.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "7d60b2df",
+              "name": "part_1_surface_8000283",
+              "chain": [
+                "part_1_surface_8000283",
+                "part_1",
+                "entity_7a9b4072",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32547,
+                "y": 94.4,
+                "z": -34589.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "d182ab9b",
+              "name": "part_1_surface_8000384",
+              "chain": [
+                "part_1_surface_8000384",
+                "part_1",
+                "entity_7a9b4072",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32547,
+                "y": 94.4,
+                "z": -34589.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "d8559798",
+              "name": "part_1_surface_8000283",
+              "chain": [
+                "part_1_surface_8000283",
+                "part_1",
+                "entity_7a9b4072",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32547,
+                "y": 94.4,
+                "z": -34589.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6bcac807",
+              "name": "part_0_surface_8000283",
+              "chain": [
+                "part_0_surface_8000283",
+                "part_0",
+                "entity_7a9b4013",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32583.7,
+                "y": 97.3,
+                "z": -34569.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "589489ec",
+              "name": "part_0_surface_80003b2",
+              "chain": [
+                "part_0_surface_80003b2",
+                "part_0",
+                "entity_7a9b4013",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32583.7,
+                "y": 97.3,
+                "z": -34569.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "85beaa93",
+              "name": "part_0_surface_8000283",
+              "chain": [
+                "part_0_surface_8000283",
+                "part_0",
+                "entity_7a9b4013",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32583.7,
+                "y": 97.3,
+                "z": -34569.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "060dc2c3",
+              "name": "part_1_surface_8000283",
+              "chain": [
+                "part_1_surface_8000283",
+                "part_1",
+                "entity_7a9b4013",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32583.7,
+                "y": 97.4,
+                "z": -34569.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "8599b0db",
+              "name": "part_1_surface_8000384",
+              "chain": [
+                "part_1_surface_8000384",
+                "part_1",
+                "entity_7a9b4013",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32583.7,
+                "y": 97.4,
+                "z": -34569.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "f31b24d0",
+              "name": "part_1_surface_8000283",
+              "chain": [
+                "part_1_surface_8000283",
+                "part_1",
+                "entity_7a9b4013",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32583.7,
+                "y": 97.4,
+                "z": -34569.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "5d197ffa",
+              "name": "part_0_surface_8000516",
+              "chain": [
+                "part_0_surface_8000516",
+                "part_0",
+                "entity_800001c4",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "dd5d4f74",
+              "name": "part_0_surface_80011df",
+              "chain": [
+                "part_0_surface_80011df",
+                "part_0",
+                "entity_7a9b404f",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32529,
+                "y": 94,
+                "z": -34572.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "eab5cd5b",
+              "name": "part_1_surface_80011df",
+              "chain": [
+                "part_1_surface_80011df",
+                "part_1",
+                "entity_7a9b404f",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32530.1,
+                "y": 94,
+                "z": -34571.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "b290b4cf",
+              "name": "part_2_surface_80011df",
+              "chain": [
+                "part_2_surface_80011df",
+                "part_2",
+                "entity_7a9b404f",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32529,
+                "y": 94,
+                "z": -34571.1
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "7a347506",
+              "name": "part_3_surface_80011de",
+              "chain": [
+                "part_3_surface_80011de",
+                "part_3",
+                "entity_7a9b404f",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32529.3,
+                "y": 96,
+                "z": -34571.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "87043867",
+              "name": "part_0_surface_8000f53",
+              "chain": [
+                "part_0_surface_8000f53",
+                "part_0",
+                "entity_80001699",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.1,
+                "y": 94.4,
+                "z": -34493.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "b9baf36b",
+              "name": "part_1_surface_8000f53",
+              "chain": [
+                "part_1_surface_8000f53",
+                "part_1",
+                "entity_80001699",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466,
+                "y": 94.5,
+                "z": -34493.3
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "662d93d3",
+              "name": "part_2_surface_8000f53",
+              "chain": [
+                "part_2_surface_8000f53",
+                "part_2",
+                "entity_80001699",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32465.9,
+                "y": 94.2,
+                "z": -34493.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "b892c4f9",
+              "name": "part_2_surface_8000f54",
+              "chain": [
+                "part_2_surface_8000f54",
+                "part_2",
+                "entity_80001699",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32465.9,
+                "y": 94.2,
+                "z": -34493.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "8ee0f8eb",
+              "name": "part_3_surface_8000f53",
+              "chain": [
+                "part_3_surface_8000f53",
+                "part_3",
+                "entity_80001699",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.2,
+                "y": 94.5,
+                "z": -34493.3
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "c8c791e7",
+              "name": "part_4_surface_8000f53",
+              "chain": [
+                "part_4_surface_8000f53",
+                "part_4",
+                "entity_80001699",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.3,
+                "y": 94.2,
+                "z": -34493.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "a3740f82",
+              "name": "part_4_surface_8000f54",
+              "chain": [
+                "part_4_surface_8000f54",
+                "part_4",
+                "entity_80001699",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.3,
+                "y": 94.2,
+                "z": -34493.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "10fb2a9b",
+              "name": "part_5_surface_8000f55",
+              "chain": [
+                "part_5_surface_8000f55",
+                "part_5",
+                "entity_80001699",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.1,
+                "y": 94.6,
+                "z": -34493.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "dba44791",
+              "name": "part_5_surface_8000f56",
+              "chain": [
+                "part_5_surface_8000f56",
+                "part_5",
+                "entity_80001699",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.1,
+                "y": 94.6,
+                "z": -34493.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "f2ce28cd",
+              "name": "part_6_surface_8000f57",
+              "chain": [
+                "part_6_surface_8000f57",
+                "part_6",
+                "entity_80001699",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.1,
+                "y": 94.3,
+                "z": -34493
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "51f641ed",
+              "name": "part_6_surface_8000f53",
+              "chain": [
+                "part_6_surface_8000f53",
+                "part_6",
+                "entity_80001699",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32466.1,
+                "y": 94.3,
+                "z": -34493
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "bb309134",
+              "name": "part_0_surface_80001c9",
+              "chain": [
+                "part_0_surface_80001c9",
+                "part_0",
+                "entity_7a9b3001",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32475.8,
+                "y": 93,
+                "z": -34541.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "ed9be8bf",
+              "name": "part_0_surface_8000d13",
+              "chain": [
+                "part_0_surface_8000d13",
+                "part_0",
+                "entity_7a9b3001",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32475.8,
+                "y": 93,
+                "z": -34541.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "821aa928",
+              "name": "part_0_surface_80001c8",
+              "chain": [
+                "part_0_surface_80001c8",
+                "part_0",
+                "entity_7a9b3001",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32475.8,
+                "y": 93,
+                "z": -34541.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "a4fac185",
+              "name": "part_0_surface_8000128",
+              "chain": [
+                "part_0_surface_8000128",
+                "part_0",
+                "entity_7a9b4037",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32557.7,
+                "y": 95,
+                "z": -34593
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "b041ff7f",
+              "name": "part_0_surface_80002df",
+              "chain": [
+                "part_0_surface_80002df",
+                "part_0",
+                "entity_7a9b4037",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32557.7,
+                "y": 95,
+                "z": -34593
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "1dbd1b27",
+              "name": "part_0_surface_80002e0",
+              "chain": [
+                "part_0_surface_80002e0",
+                "part_0",
+                "entity_7a9b4037",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32557.7,
+                "y": 95,
+                "z": -34593
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.3,
+                  "metalness": 0.9,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "70b73258",
+              "name": "part_0_surface_80002e1",
+              "chain": [
+                "part_0_surface_80002e1",
+                "part_0",
+                "entity_7a9b4037",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32557.7,
+                "y": 95,
+                "z": -34593
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "e4221e8d",
+              "name": "part_0_surface_80002e2",
+              "chain": [
+                "part_0_surface_80002e2",
+                "part_0",
+                "entity_7a9b4037",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32557.7,
+                "y": 95,
+                "z": -34593
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6ae8019f",
+              "name": "part_0_surface_80002e3",
+              "chain": [
+                "part_0_surface_80002e3",
+                "part_0",
+                "entity_7a9b4037",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32557.7,
+                "y": 95,
+                "z": -34593
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.3,
+                  "metalness": 0.9,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "0ad3d322",
+              "name": "part_0_surface_8000682",
+              "chain": [
+                "part_0_surface_8000682",
+                "part_0",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.8,
+                "y": 95.8,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "ee41471c",
+              "name": "part_0_surface_8000683",
+              "chain": [
+                "part_0_surface_8000683",
+                "part_0",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.8,
+                "y": 95.8,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "0285d13e",
+              "name": "part_1_surface_8000684",
+              "chain": [
+                "part_1_surface_8000684",
+                "part_1",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32573.3,
+                "y": 96.3,
+                "z": -34591.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "14700742",
+              "name": "part_2_surface_8000685",
+              "chain": [
+                "part_2_surface_8000685",
+                "part_2",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32573.5,
+                "y": 95.6,
+                "z": -34591.3
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "5f9beb0c",
+              "name": "part_3_surface_8000686",
+              "chain": [
+                "part_3_surface_8000686",
+                "part_3",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32573.6,
+                "y": 95.4,
+                "z": -34591.3
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "c9de3755",
+              "name": "part_3_surface_8000687",
+              "chain": [
+                "part_3_surface_8000687",
+                "part_3",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32573.6,
+                "y": 95.4,
+                "z": -34591.3
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "2a4f9000",
+              "name": "part_4_surface_8000684",
+              "chain": [
+                "part_4_surface_8000684",
+                "part_4",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.4,
+                "y": 96.3,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "dcbfe138",
+              "name": "part_5_surface_8000685",
+              "chain": [
+                "part_5_surface_8000685",
+                "part_5",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.1,
+                "y": 95.6,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "88fedc19",
+              "name": "part_6_surface_8000686",
+              "chain": [
+                "part_6_surface_8000686",
+                "part_6",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.1,
+                "y": 95.4,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "edf73978",
+              "name": "part_6_surface_8000687",
+              "chain": [
+                "part_6_surface_8000687",
+                "part_6",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.1,
+                "y": 95.4,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "05729eb1",
+              "name": "part_7_surface_8000688",
+              "chain": [
+                "part_7_surface_8000688",
+                "part_7",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.8,
+                "y": 95.3,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6d540c35",
+              "name": "part_7_surface_8000689",
+              "chain": [
+                "part_7_surface_8000689",
+                "part_7",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.8,
+                "y": 95.3,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "1743c352",
+              "name": "part_8_surface_800068a",
+              "chain": [
+                "part_8_surface_800068a",
+                "part_8",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.9,
+                "y": 95.3,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "ab364a12",
+              "name": "part_9_surface_8000685",
+              "chain": [
+                "part_9_surface_8000685",
+                "part_9",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32573,
+                "y": 94.7,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "738a1cb3",
+              "name": "part_10_surface_800068b",
+              "chain": [
+                "part_10_surface_800068b",
+                "part_10",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32573.1,
+                "y": 94.3,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "e80994a4",
+              "name": "part_11_surface_800068a",
+              "chain": [
+                "part_11_surface_800068a",
+                "part_11",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.7,
+                "y": 95.3,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "a3c2f0c4",
+              "name": "part_12_surface_8000685",
+              "chain": [
+                "part_12_surface_8000685",
+                "part_12",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.6,
+                "y": 94.7,
+                "z": -34591.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "5fdfb966",
+              "name": "part_13_surface_800068b",
+              "chain": [
+                "part_13_surface_800068b",
+                "part_13",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.6,
+                "y": 94.3,
+                "z": -34591.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "2b8c3a94",
+              "name": "part_14_surface_800068c",
+              "chain": [
+                "part_14_surface_800068c",
+                "part_14",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.8,
+                "y": 96.4,
+                "z": -34591.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "0af7a0a1",
+              "name": "part_14_surface_800068d",
+              "chain": [
+                "part_14_surface_800068d",
+                "part_14",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.8,
+                "y": 96.4,
+                "z": -34591.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "9b747850",
+              "name": "part_15_surface_800068e",
+              "chain": [
+                "part_15_surface_800068e",
+                "part_15",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32573.2,
+                "y": 94,
+                "z": -34591.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "eff74acb",
+              "name": "part_16_surface_800068e",
+              "chain": [
+                "part_16_surface_800068e",
+                "part_16",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32573,
+                "y": 94,
+                "z": -34591.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "eaee33bd",
+              "name": "part_17_surface_800068e",
+              "chain": [
+                "part_17_surface_800068e",
+                "part_17",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.7,
+                "y": 94,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "90fb0698",
+              "name": "part_18_surface_800068e",
+              "chain": [
+                "part_18_surface_800068e",
+                "part_18",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.4,
+                "y": 94,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "101c6962",
+              "name": "part_19_surface_8000015",
+              "chain": [
+                "part_19_surface_8000015",
+                "part_19",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32573.3,
+                "y": 96.3,
+                "z": -34591.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "07f81416",
+              "name": "part_20_surface_8000015",
+              "chain": [
+                "part_20_surface_8000015",
+                "part_20",
+                "entity_7a9b404e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32572.4,
+                "y": 96.3,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "3c25f1b2",
+              "name": "part_0_surface_8000de9",
+              "chain": [
+                "part_0_surface_8000de9",
+                "part_0",
+                "entity_7a9b4050",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32593,
+                "y": 94,
+                "z": -34601.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "42041e86",
+              "name": "part_0_surface_8000dea",
+              "chain": [
+                "part_0_surface_8000dea",
+                "part_0",
+                "entity_7a9b4050",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32593,
+                "y": 94,
+                "z": -34601.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "790e69a2",
+              "name": "part_0_surface_8000deb",
+              "chain": [
+                "part_0_surface_8000deb",
+                "part_0",
+                "entity_7a9b4050",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32593,
+                "y": 94,
+                "z": -34601.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "5137c2c0",
+              "name": "part_1_surface_8000dec",
+              "chain": [
+                "part_1_surface_8000dec",
+                "part_1",
+                "entity_7a9b4050",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32593,
+                "y": 94.5,
+                "z": -34601.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "d80a1cbf",
+              "name": "part_2_surface_8000deb",
+              "chain": [
+                "part_2_surface_8000deb",
+                "part_2",
+                "entity_7a9b4050",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32593,
+                "y": 94.5,
+                "z": -34601.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "e786c49a",
+              "name": "part_3_surface_8000dec",
+              "chain": [
+                "part_3_surface_8000dec",
+                "part_3",
+                "entity_7a9b4050",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32593.8,
+                "y": 97,
+                "z": -34602.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "14a301b6",
+              "name": "part_4_surface_8000dec",
+              "chain": [
+                "part_4_surface_8000dec",
+                "part_4",
+                "entity_7a9b4050",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32592,
+                "y": 97,
+                "z": -34602.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "95e0ca36",
+              "name": "part_5_surface_8000dec",
+              "chain": [
+                "part_5_surface_8000dec",
+                "part_5",
+                "entity_7a9b4050",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32592.1,
+                "y": 97,
+                "z": -34600.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "5a35d280",
+              "name": "part_6_surface_8000dec",
+              "chain": [
+                "part_6_surface_8000dec",
+                "part_6",
+                "entity_7a9b4050",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32594,
+                "y": 97,
+                "z": -34600.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "29b7294f",
+              "name": "part_0_surface_8000853",
+              "chain": [
+                "part_0_surface_8000853",
+                "part_0",
+                "entity_80001581",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32570.2,
+                "y": 94,
+                "z": -34572
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "e52731e1",
+              "name": "part_0_surface_8000b4f",
+              "chain": [
+                "part_0_surface_8000b4f",
+                "part_0",
+                "entity_80001581",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32570.2,
+                "y": 94,
+                "z": -34572
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "80f0de96",
+              "name": "part_0_surface_8000893",
+              "chain": [
+                "part_0_surface_8000893",
+                "part_0",
+                "entity_80001581",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32570.2,
+                "y": 94,
+                "z": -34572
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6ee72cf7",
+              "name": "part_0_surface_8001645",
+              "chain": [
+                "part_0_surface_8001645",
+                "part_0",
+                "entity_7a9b4015",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32580.6,
+                "y": 95.4,
+                "z": -34577
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "ca5ceb58",
+              "name": "part_1_surface_8001645",
+              "chain": [
+                "part_1_surface_8001645",
+                "part_1",
+                "entity_7a9b4015",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32579.9,
+                "y": 95.3,
+                "z": -34577.1
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "061d1e6c",
+              "name": "part_2_surface_8001645",
+              "chain": [
+                "part_2_surface_8001645",
+                "part_2",
+                "entity_7a9b4015",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32579.9,
+                "y": 95.3,
+                "z": -34576.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "c5161f27",
+              "name": "part_0_surface_8001645",
+              "chain": [
+                "part_0_surface_8001645",
+                "part_0",
+                "entity_7a9b4016",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32584.4,
+                "y": 95.4,
+                "z": -34565.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "b34719f2",
+              "name": "part_1_surface_8001645",
+              "chain": [
+                "part_1_surface_8001645",
+                "part_1",
+                "entity_7a9b4016",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32584.3,
+                "y": 95.3,
+                "z": -34564.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6417e845",
+              "name": "part_2_surface_8001645",
+              "chain": [
+                "part_2_surface_8001645",
+                "part_2",
+                "entity_7a9b4016",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32584.5,
+                "y": 95.3,
+                "z": -34564.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "e10c0acc",
+              "name": "part_0_surface_8001645",
+              "chain": [
+                "part_0_surface_8001645",
+                "part_0",
+                "entity_7a9b4017",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32552.1,
+                "y": 95.4,
+                "z": -34591.1
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "89b7bf3e",
+              "name": "part_1_surface_8001645",
+              "chain": [
+                "part_1_surface_8001645",
+                "part_1",
+                "entity_7a9b4017",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32552.8,
+                "y": 95.3,
+                "z": -34591
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "7a4b997a",
+              "name": "part_2_surface_8001645",
+              "chain": [
+                "part_2_surface_8001645",
+                "part_2",
+                "entity_7a9b4017",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32552.8,
+                "y": 95.3,
+                "z": -34591.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "2c9791d1",
+              "name": "part_0_surface_8001645",
+              "chain": [
+                "part_0_surface_8001645",
+                "part_0",
+                "entity_7a9b4018",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32558.9,
+                "y": 95.4,
+                "z": -34591.1
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6762feac",
+              "name": "part_1_surface_8001645",
+              "chain": [
+                "part_1_surface_8001645",
+                "part_1",
+                "entity_7a9b4018",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32559.6,
+                "y": 95.3,
+                "z": -34591
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "923ac0b8",
+              "name": "part_2_surface_8001645",
+              "chain": [
+                "part_2_surface_8001645",
+                "part_2",
+                "entity_7a9b4018",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32559.6,
+                "y": 95.3,
+                "z": -34591.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "76389b8e",
+              "name": "part_0_surface_8001645",
+              "chain": [
+                "part_0_surface_8001645",
+                "part_0",
+                "entity_7a9b4019",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32555.5,
+                "y": 95.4,
+                "z": -34591.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "ad151357",
+              "name": "part_1_surface_8001645",
+              "chain": [
+                "part_1_surface_8001645",
+                "part_1",
+                "entity_7a9b4019",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32554.8,
+                "y": 95.3,
+                "z": -34591.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "5fa831c7",
+              "name": "part_2_surface_8001645",
+              "chain": [
+                "part_2_surface_8001645",
+                "part_2",
+                "entity_7a9b4019",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32554.8,
+                "y": 95.3,
+                "z": -34591.3
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "1eb14aa0",
+              "name": "part_0_surface_8001645",
+              "chain": [
+                "part_0_surface_8001645",
+                "part_0",
+                "entity_7a9b401a",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32545.6,
+                "y": 95.4,
+                "z": -34596
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "93773193",
+              "name": "part_1_surface_8001645",
+              "chain": [
+                "part_1_surface_8001645",
+                "part_1",
+                "entity_7a9b401a",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32545.5,
+                "y": 95.3,
+                "z": -34595.3
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "1faf3490",
+              "name": "part_2_surface_8001645",
+              "chain": [
+                "part_2_surface_8001645",
+                "part_2",
+                "entity_7a9b401a",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32545.7,
+                "y": 95.3,
+                "z": -34595.3
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "a02f0a80",
+              "name": "part_0_surface_8001645",
+              "chain": [
+                "part_0_surface_8001645",
+                "part_0",
+                "entity_7a9b401b",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32566.4,
+                "y": 95.4,
+                "z": -34596
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "5bdd84ad",
+              "name": "part_1_surface_8001645",
+              "chain": [
+                "part_1_surface_8001645",
+                "part_1",
+                "entity_7a9b401b",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32566.5,
+                "y": 95.3,
+                "z": -34596.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "d71cec5d",
+              "name": "part_2_surface_8001645",
+              "chain": [
+                "part_2_surface_8001645",
+                "part_2",
+                "entity_7a9b401b",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32566.3,
+                "y": 95.3,
+                "z": -34596.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "44eb3e76",
+              "name": "part_0_surface_8001645",
+              "chain": [
+                "part_0_surface_8001645",
+                "part_0",
+                "entity_7a9b401c",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32555.5,
+                "y": 98.9,
+                "z": -34600.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "8b909888",
+              "name": "part_1_surface_8001645",
+              "chain": [
+                "part_1_surface_8001645",
+                "part_1",
+                "entity_7a9b401c",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32554.8,
+                "y": 98.8,
+                "z": -34601
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "561d5ea7",
+              "name": "part_2_surface_8001645",
+              "chain": [
+                "part_2_surface_8001645",
+                "part_2",
+                "entity_7a9b401c",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32554.8,
+                "y": 98.8,
+                "z": -34600.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "91535c78",
+              "name": "part_0_surface_8001645",
+              "chain": [
+                "part_0_surface_8001645",
+                "part_0",
+                "entity_7a9b401e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32523.8,
+                "y": 95.4,
+                "z": -34593.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6e1b9ec1",
+              "name": "part_1_surface_8001645",
+              "chain": [
+                "part_1_surface_8001645",
+                "part_1",
+                "entity_7a9b401e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32524.2,
+                "y": 95.3,
+                "z": -34593.2
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "9e8ea3d9",
+              "name": "part_2_surface_8001645",
+              "chain": [
+                "part_2_surface_8001645",
+                "part_2",
+                "entity_7a9b401e",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32524.4,
+                "y": 95.3,
+                "z": -34593.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "3a2c4d90",
+              "name": "part_0_surface_8001645",
+              "chain": [
+                "part_0_surface_8001645",
+                "part_0",
+                "entity_7a9b401f",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32529.6,
+                "y": 95.4,
+                "z": -34593.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "828f8015",
+              "name": "part_1_surface_8001645",
+              "chain": [
+                "part_1_surface_8001645",
+                "part_1",
+                "entity_7a9b401f",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32530.2,
+                "y": 95.3,
+                "z": -34594.1
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "0284fc5a",
+              "name": "part_2_surface_8001645",
+              "chain": [
+                "part_2_surface_8001645",
+                "part_2",
+                "entity_7a9b401f",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32530,
+                "y": 95.3,
+                "z": -34594.3
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "08b34cb2",
+              "name": "part_0_surface_8001645",
+              "chain": [
+                "part_0_surface_8001645",
+                "part_0",
+                "entity_7a9b403a",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32603.4,
+                "y": 95.4,
+                "z": -34575.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "ea37c1e9",
+              "name": "part_1_surface_8001645",
+              "chain": [
+                "part_1_surface_8001645",
+                "part_1",
+                "entity_7a9b403a",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32602.7,
+                "y": 95.3,
+                "z": -34575.9
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "2c03b9a3",
+              "name": "part_2_surface_8001645",
+              "chain": [
+                "part_2_surface_8001645",
+                "part_2",
+                "entity_7a9b403a",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32602.7,
+                "y": 95.3,
+                "z": -34575.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "5881fc26",
+              "name": "part_0_surface_80005c1",
+              "chain": [
+                "part_0_surface_80005c1",
+                "part_0",
+                "entity_7a9b46b1",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32556.3,
+                "y": 94,
+                "z": -34599.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.95,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "8617c141",
+              "name": "part_0_surface_80005c2",
+              "chain": [
+                "part_0_surface_80005c2",
+                "part_0",
+                "entity_7a9b46b1",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32556.3,
+                "y": 94,
+                "z": -34599.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6303cfa8",
+              "name": "part_0_surface_80005c4",
+              "chain": [
+                "part_0_surface_80005c4",
+                "part_0",
+                "entity_7a9b46b1",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32556.3,
+                "y": 94,
+                "z": -34599.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "220dd22c",
+              "name": "part_0_surface_80005c3",
+              "chain": [
+                "part_0_surface_80005c3",
+                "part_0",
+                "entity_7a9b46b1",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32556.3,
+                "y": 94,
+                "z": -34599.5
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            }
+          ],
+          "itemPos": {
+            "x": 32403.8,
+            "y": 91.6,
+            "z": -34421.2
+          },
+          "itemRough": 0,
+          "itemAo": 0
+        },
+        {
+          "wcid": 46088,
+          "itemName": "Atlan Sword (paletted)",
+          "found": true,
+          "count": 24,
+          "meshes": [
+            {
+              "uuid": "d1a0cc68",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32606.7,
+                "y": 79,
+                "z": -34687.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "c462d50a",
+              "name": "",
+              "chain": [
+                "statics",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32541.9,
+                "y": 76.1,
+                "z": -34691.6
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "954638f4",
+              "name": "part_0_surface_8000130",
+              "chain": [
+                "part_0_surface_8000130",
+                "part_0",
+                "entity_7a9b402b",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32531.1,
+                "y": 94.1,
+                "z": -34594.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "28d2269f",
+              "name": "part_0_surface_8000cf3",
+              "chain": [
+                "part_0_surface_8000cf3",
+                "part_0",
+                "entity_7a9b402b",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32531.1,
+                "y": 94.1,
+                "z": -34594.4
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "2feb37a7",
+              "name": "",
+              "chain": [
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 0,
+                "y": 2.1,
+                "z": 0
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "b2daf67b",
+              "name": "",
+              "chain": [
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 0,
+                "y": 1.7,
+                "z": 0
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "07fd3003",
+              "name": "",
+              "chain": [
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 0,
+                "y": 2.5,
+                "z": 0
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6cae8615",
+              "name": "",
+              "chain": [
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 0.1,
+                "y": 2.8,
+                "z": 0
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshBasicMaterial",
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "3df85cfa",
+              "name": "part_0_surface_8000128",
+              "chain": [
+                "part_0_surface_8000128",
+                "part_0",
+                "entity_7a9b4037",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32557.7,
+                "y": 95,
+                "z": -34593
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "f7c1e3df",
+              "name": "part_0_surface_80002e1",
+              "chain": [
+                "part_0_surface_80002e1",
+                "part_0",
+                "entity_7a9b4037",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32557.7,
+                "y": 95,
+                "z": -34593
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "7fdbe8ca",
+              "name": "part_0_surface_80002e2",
+              "chain": [
+                "part_0_surface_80002e2",
+                "part_0",
+                "entity_7a9b4037",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32557.7,
+                "y": 95,
+                "z": -34593
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "5f3f3ae4",
+              "name": "part_0_surface_80002e0",
+              "chain": [
+                "part_0_surface_80002e0",
+                "part_0",
+                "entity_7a9b4037",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32557.7,
+                "y": 95,
+                "z": -34593
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.3,
+                  "metalness": 0.9,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "f8578c96",
+              "name": "part_0_surface_80001c8",
+              "chain": [
+                "part_0_surface_80001c8",
+                "part_0",
+                "entity_7a9b3001",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32475.8,
+                "y": 93,
+                "z": -34541.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "af5052ee",
+              "name": "part_0_surface_80001c9",
+              "chain": [
+                "part_0_surface_80001c9",
+                "part_0",
+                "entity_7a9b3001",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32475.8,
+                "y": 93,
+                "z": -34541.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "4fcd47b1",
+              "name": "part_0_surface_8000d13",
+              "chain": [
+                "part_0_surface_8000d13",
+                "part_0",
+                "entity_7a9b3001",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32475.8,
+                "y": 93,
+                "z": -34541.8
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "54b742b8",
+              "name": "part_0_surface_8000853",
+              "chain": [
+                "part_0_surface_8000853",
+                "part_0",
+                "entity_80001581",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32570.2,
+                "y": 94,
+                "z": -34572
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.9,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "65c6265e",
+              "name": "part_0_surface_8000b4f",
+              "chain": [
+                "part_0_surface_8000b4f",
+                "part_0",
+                "entity_80001581",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32570.2,
+                "y": 94,
+                "z": -34572
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "4de99b0b",
+              "name": "part_0_surface_8000893",
+              "chain": [
+                "part_0_surface_8000893",
+                "part_0",
+                "entity_80001581",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32570.2,
+                "y": 94,
+                "z": -34572
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6c516792",
+              "name": "part_0_surface_80007e5",
+              "chain": [
+                "part_0_surface_80007e5",
+                "part_0",
+                "entity_80001582",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32539.5,
+                "y": 94,
+                "z": -34597.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "331d0fb6",
+              "name": "part_0_surface_800113d",
+              "chain": [
+                "part_0_surface_800113d",
+                "part_0",
+                "entity_80001582",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32539.5,
+                "y": 94,
+                "z": -34597.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.85,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "2aa73323",
+              "name": "part_0_surface_80007ac",
+              "chain": [
+                "part_0_surface_80007ac",
+                "part_0",
+                "entity_80001582",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32539.5,
+                "y": 94,
+                "z": -34597.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "4cbd5383",
+              "name": "part_0_surface_8000908",
+              "chain": [
+                "part_0_surface_8000908",
+                "part_0",
+                "entity_80001582",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32539.5,
+                "y": 94,
+                "z": -34597.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "92b3db64",
+              "name": "part_0_surface_8000747",
+              "chain": [
+                "part_0_surface_8000747",
+                "part_0",
+                "entity_80001582",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32539.5,
+                "y": 94,
+                "z": -34597.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            },
+            {
+              "uuid": "6d523c56",
+              "name": "part_0_surface_8000ac2",
+              "chain": [
+                "part_0_surface_8000ac2",
+                "part_0",
+                "entity_80001582",
+                "entities",
+                "worldRoot"
+              ],
+              "pos": {
+                "x": 32539.5,
+                "y": 94,
+                "z": -34597.7
+              },
+              "rough": 0,
+              "ao": 0,
+              "hasMap": 1,
+              "matInfo": [
+                {
+                  "type": "MeshStandardMaterial",
+                  "roughness": 0.8,
+                  "metalness": 0,
+                  "hasMap": true,
+                  "hasRough": false,
+                  "hasAo": false
+                }
+              ]
+            }
+          ],
+          "itemPos": {
+            "x": 27117.4,
+            "y": 77.4,
+            "z": -28827.8
+          },
+          "itemRough": 0,
+          "itemAo": 0
+        }
+      ],
+      "consoleErrors": 0,
+      "consoleTail": [
+        "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x800015d0 (depth 1)",
+        "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x800015d3 (depth 1)",
+        "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x8000174f (depth 1)",
+        "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80001751 (depth 1)",
+        "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80001698 (depth 1)",
+        "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80001699 (depth 1)",
+        "log: [ac-strings] char-create hints loaded",
+        "log: [workstream-E] replaying 510 pre-init3D entity events (kinds=0:443,1:58,3:2,5:5,8:2, localGuid=0x50000008, local=445, other=65) through 3D EntityManager",
+        "log: [scene3d.spawns] mode=auto, sessionHandle=present → synthetic injection SKIPPED (live session — wire feeds spawns; use ?spawns=force to override)",
+        "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x800016a9 (depth 1)",
+        "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x800015e2 (depth 1)",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed"
+      ]
+    }
+  ]
+}

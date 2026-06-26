@@ -1,0 +1,432 @@
+{
+  "ts": "2026-06-26T18:15:35.688Z",
+  "host": "GTX1070",
+  "app": "http://127.0.0.1:18765/apps/holtburger-web/index.html",
+  "arms": [
+    {
+      "key": "mat-off",
+      "pair": "material",
+      "extra": {
+        "material": "off",
+        "windBake": "off"
+      },
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&material=off&windBake=off",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "spawnCell": "0xa9b40019",
+      "inWorld": true,
+      "loginSec": 11.6,
+      "outdoorCell": "0xa9b40019",
+      "outdoor": true,
+      "globals": [
+        "__hbAllegiancePanelEscBound",
+        "__hbFellowshipPanelEscBound",
+        "__hbSocialPanelEscBound",
+        "__hbDyePreviewState",
+        "__hbWasm",
+        "__scene3dEntityBacklog",
+        "__scene3dCloneEntityUpdate",
+        "__scene3dEntityHook",
+        "__diag",
+        "liveScene3d",
+        "__scene3dClientEventHook",
+        "__scene3dFrameDriverActive"
+      ],
+      "sceneAtReady": {
+        "present": true,
+        "hasScene": true,
+        "hasRenderer": true,
+        "children": 10,
+        "frame": 703,
+        "geometries": 1364,
+        "textures": 235,
+        "programs": 46,
+        "terrainMats": 169,
+        "globals": [
+          "__hbAllegiancePanelEscBound",
+          "__hbFellowshipPanelEscBound",
+          "__hbSocialPanelEscBound",
+          "__hbDyePreviewState",
+          "__hbWasm",
+          "__scene3dEntityBacklog",
+          "__scene3dCloneEntityUpdate",
+          "__scene3dEntityHook",
+          "__diag",
+          "liveScene3d",
+          "__scene3dClientEventHook",
+          "__scene3dFrameDriverActive"
+        ]
+      },
+      "sceneReady": true,
+      "sceneWaitSec": 59.6,
+      "diag": {
+        "hasScene": true,
+        "hasRenderer": true,
+        "programs": 51,
+        "geometries": 1497,
+        "textures": 296,
+        "meshes": 7195,
+        "uniqueMaterials": 5674,
+        "instancedMeshes": 196,
+        "withMap": 5502,
+        "withRoughnessMap": 0,
+        "withAoMap": 0,
+        "chromeRiskMats": 0,
+        "windNodes": 512,
+        "windDids": [
+          "0x2000bbf",
+          "0x2000494",
+          "0x2000493",
+          "0x20005ac"
+        ]
+      },
+      "closeFrame": {
+        "reframed": true,
+        "target": {
+          "x": 32555.999998438354,
+          "y": 100.87500000000769,
+          "z": -34592.999999739724
+        },
+        "radius": 14.36
+      },
+      "consoleErrors": 0,
+      "suiteFailures": 0,
+      "windLog": [
+        "log: [diag] window.__diag installed — call .summary() / .runAll(lbId) / .diff(lbId) from devtools",
+        "log: [boot] preInit3D handle staged on window.__preInit3DHandle",
+        "log: [anim-scenery] built 512 instances across 4 anim DIDs; DROPPED 1572 over the 512 cap (?animSceneryMax)"
+      ],
+      "consoleTail": [
+        "warning: [sync-tick] ?syncPhysicsTick=on without ?posePublishPostTick=on — the camera still reads a pre-tick pose; the same-frame contract needs both flags",
+        "warning: [world-state] dispatchSetAppraiseInfo: unknown weenie 0x7a9b4051",
+        "warning: [world-state] dispatchSetAppraiseInfo: unknown weenie 0x7a9b4080",
+        "warning: [motion-link] no MotionTable link for attack 0x10000051 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x800013b6 — swing/cast/eat will not play",
+        "warning: [motion-link] no MotionTable link for attack 0x10000053 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x800014b3 — swing/cast/eat will not play"
+      ]
+    },
+    {
+      "key": "mat-on",
+      "pair": "material",
+      "extra": {
+        "material": "on",
+        "windBake": "off"
+      },
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&material=on&windBake=off",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "spawnCell": "0xa9b40019",
+      "inWorld": true,
+      "loginSec": 11.7,
+      "outdoorCell": "0xa9b40019",
+      "outdoor": true,
+      "globals": [
+        "__hbAllegiancePanelEscBound",
+        "__hbFellowshipPanelEscBound",
+        "__hbSocialPanelEscBound",
+        "__hbDyePreviewState",
+        "__hbWasm",
+        "__scene3dEntityBacklog",
+        "__scene3dCloneEntityUpdate",
+        "__scene3dEntityHook",
+        "__diag",
+        "liveScene3d",
+        "__scene3dClientEventHook",
+        "__scene3dFrameDriverActive"
+      ],
+      "sceneAtReady": {
+        "present": true,
+        "hasScene": true,
+        "hasRenderer": true,
+        "children": 10,
+        "frame": 779,
+        "geometries": 1368,
+        "textures": 235,
+        "programs": 46,
+        "terrainMats": 169,
+        "globals": [
+          "__hbAllegiancePanelEscBound",
+          "__hbFellowshipPanelEscBound",
+          "__hbSocialPanelEscBound",
+          "__hbDyePreviewState",
+          "__hbWasm",
+          "__scene3dEntityBacklog",
+          "__scene3dCloneEntityUpdate",
+          "__scene3dEntityHook",
+          "__diag",
+          "liveScene3d",
+          "__scene3dClientEventHook",
+          "__scene3dFrameDriverActive"
+        ]
+      },
+      "sceneReady": true,
+      "sceneWaitSec": 57.8,
+      "diag": {
+        "hasScene": true,
+        "hasRenderer": true,
+        "programs": 51,
+        "geometries": 1583,
+        "textures": 335,
+        "meshes": 7400,
+        "uniqueMaterials": 5766,
+        "instancedMeshes": 196,
+        "withMap": 5594,
+        "withRoughnessMap": 0,
+        "withAoMap": 0,
+        "chromeRiskMats": 0,
+        "windNodes": 512,
+        "windDids": [
+          "0x2000bbf",
+          "0x2000494",
+          "0x2000493",
+          "0x20005ac"
+        ]
+      },
+      "closeFrame": {
+        "reframed": true,
+        "target": {
+          "x": 32555.999998438354,
+          "y": 100.87500000000769,
+          "z": -34592.999999739724
+        },
+        "radius": 14.36
+      },
+      "consoleErrors": 0,
+      "suiteFailures": 0,
+      "windLog": [
+        "log: [diag] window.__diag installed — call .summary() / .runAll(lbId) / .diff(lbId) from devtools",
+        "log: [boot] preInit3D handle staged on window.__preInit3DHandle",
+        "log: [diag] window.__diag installed — call .summary() / .runAll(lbId) / .diff(lbId) from devtools",
+        "log: [boot] preInit3D handle staged on window.__preInit3DHandle",
+        "log: [anim-scenery] built 512 instances across 4 anim DIDs; DROPPED 1572 over the 512 cap (?animSceneryMax)"
+      ],
+      "consoleTail": [
+        "warning: [sync-tick] ?syncPhysicsTick=on without ?posePublishPostTick=on — the camera still reads a pre-tick pose; the same-frame contract needs both flags",
+        "log: [boot-state] error: connect failed after 1 attempts: timeout",
+        "warning: [play-effect-vfx] gave up waiting for __pluginClient after 30s",
+        "warning: [spell-shape-preview] gave up waiting for __pluginClient after 30s",
+        "warning: [diag.combat] gave up waiting for __pluginClient (sneakAttackPredicted not subscribed)",
+        "warning: [diag.combat] gave up waiting for __pluginClient (damageDealt not subscribed)",
+        "warning: [sync-tick] ?syncPhysicsTick=on without ?posePublishPostTick=on — the camera still reads a pre-tick pose; the same-frame contract needs both flags",
+        "warning: [world-state] dispatchSetAppraiseInfo: unknown weenie 0x7a9b4051",
+        "warning: [world-state] dispatchSetAppraiseInfo: unknown weenie 0x7a9b4080",
+        "warning: [motion-link] no MotionTable link for attack 0x10000053 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x800013b6 — swing/cast/eat will not play",
+        "warning: [motion-link] no MotionTable link for attack 0x10000051 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x800013b6 — swing/cast/eat will not play"
+      ]
+    },
+    {
+      "key": "wind-synth",
+      "pair": "wind",
+      "extra": {
+        "windBake": "off",
+        "material": "off"
+      },
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&windBake=off&material=off",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "spawnCell": "0xa9b40019",
+      "inWorld": true,
+      "loginSec": 11.5,
+      "outdoorCell": "0xa9b40019",
+      "outdoor": true,
+      "globals": [
+        "__hbAllegiancePanelEscBound",
+        "__hbFellowshipPanelEscBound",
+        "__hbSocialPanelEscBound",
+        "__hbDyePreviewState",
+        "__hbWasm",
+        "__scene3dEntityBacklog",
+        "__scene3dCloneEntityUpdate",
+        "__scene3dEntityHook",
+        "__diag",
+        "liveScene3d",
+        "__scene3dClientEventHook",
+        "__scene3dFrameDriverActive"
+      ],
+      "sceneAtReady": {
+        "present": true,
+        "hasScene": true,
+        "hasRenderer": true,
+        "children": 10,
+        "frame": 646,
+        "geometries": 1365,
+        "textures": 235,
+        "programs": 46,
+        "terrainMats": 169,
+        "globals": [
+          "__hbAllegiancePanelEscBound",
+          "__hbFellowshipPanelEscBound",
+          "__hbSocialPanelEscBound",
+          "__hbDyePreviewState",
+          "__hbWasm",
+          "__scene3dEntityBacklog",
+          "__scene3dCloneEntityUpdate",
+          "__scene3dEntityHook",
+          "__diag",
+          "liveScene3d",
+          "__scene3dClientEventHook",
+          "__scene3dFrameDriverActive"
+        ]
+      },
+      "sceneReady": true,
+      "sceneWaitSec": 60.8,
+      "diag": {
+        "hasScene": true,
+        "hasRenderer": true,
+        "programs": 50,
+        "geometries": 1574,
+        "textures": 330,
+        "meshes": 10021,
+        "uniqueMaterials": 8384,
+        "instancedMeshes": 196,
+        "withMap": 8212,
+        "withRoughnessMap": 0,
+        "withAoMap": 0,
+        "chromeRiskMats": 0,
+        "windNodes": 512,
+        "windDids": [
+          "0x2000bbf",
+          "0x2000494",
+          "0x2000493",
+          "0x20005ac"
+        ]
+      },
+      "treeFrame": {
+        "reframed": true,
+        "mode": "trees",
+        "cluster": {
+          "x": 32492.6,
+          "y": 39.5,
+          "z": -35355.7
+        },
+        "nodesTotal": 512,
+        "nearestDist": 773.1
+      },
+      "consoleErrors": 0,
+      "suiteFailures": 0,
+      "windLog": [
+        "log: [diag] window.__diag installed — call .summary() / .runAll(lbId) / .diff(lbId) from devtools",
+        "log: [boot] preInit3D handle staged on window.__preInit3DHandle",
+        "log: [anim-scenery] built 512 instances across 4 anim DIDs; DROPPED 1572 over the 512 cap (?animSceneryMax)"
+      ],
+      "consoleTail": [
+        "warning: [sync-tick] ?syncPhysicsTick=on without ?posePublishPostTick=on — the camera still reads a pre-tick pose; the same-frame contract needs both flags",
+        "warning: [world-state] dispatchSetAppraiseInfo: unknown weenie 0x7a9b4051",
+        "warning: [world-state] dispatchSetAppraiseInfo: unknown weenie 0x7a9b4080",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+        "warning: [motion-link] no MotionTable link for attack 0x10000053 (from 0x3, stance 0x3d, mtable 0x9000001) on entity 0x800013b6 — swing/cast/eat will not play"
+      ]
+    },
+    {
+      "key": "wind-bake",
+      "pair": "wind",
+      "extra": {
+        "windBake": "on",
+        "material": "off"
+      },
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&windBake=on&material=off",
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "spawnCell": "0xa9b40019",
+      "inWorld": true,
+      "loginSec": 11.6,
+      "outdoorCell": "0xa9b40019",
+      "outdoor": true,
+      "globals": [
+        "__hbAllegiancePanelEscBound",
+        "__hbFellowshipPanelEscBound",
+        "__hbSocialPanelEscBound",
+        "__hbDyePreviewState",
+        "__hbWasm",
+        "__scene3dEntityBacklog",
+        "__scene3dCloneEntityUpdate",
+        "__scene3dEntityHook",
+        "__diag",
+        "liveScene3d",
+        "__scene3dClientEventHook",
+        "__scene3dFrameDriverActive"
+      ],
+      "sceneAtReady": {
+        "present": true,
+        "hasScene": true,
+        "hasRenderer": true,
+        "children": 10,
+        "frame": 703,
+        "geometries": 1365,
+        "textures": 235,
+        "programs": 46,
+        "terrainMats": 169,
+        "globals": [
+          "__hbAllegiancePanelEscBound",
+          "__hbFellowshipPanelEscBound",
+          "__hbSocialPanelEscBound",
+          "__hbDyePreviewState",
+          "__hbWasm",
+          "__scene3dEntityBacklog",
+          "__scene3dCloneEntityUpdate",
+          "__scene3dEntityHook",
+          "__diag",
+          "liveScene3d",
+          "__scene3dClientEventHook",
+          "__scene3dFrameDriverActive"
+        ]
+      },
+      "sceneReady": true,
+      "sceneWaitSec": 57.6,
+      "diag": {
+        "hasScene": true,
+        "hasRenderer": true,
+        "programs": 51,
+        "geometries": 1580,
+        "textures": 335,
+        "meshes": 22818,
+        "uniqueMaterials": 21184,
+        "instancedMeshes": 196,
+        "withMap": 21012,
+        "withRoughnessMap": 0,
+        "withAoMap": 0,
+        "chromeRiskMats": 0,
+        "windNodes": 512,
+        "windDids": [
+          "0x2000bbf",
+          "0x2000494",
+          "0x2000493",
+          "0x20005ac"
+        ]
+      },
+      "treeFrame": {
+        "reframed": true,
+        "mode": "trees",
+        "cluster": {
+          "x": 32492.6,
+          "y": 39.5,
+          "z": -35355.7
+        },
+        "nodesTotal": 512,
+        "nearestDist": 773.1
+      },
+      "consoleErrors": 0,
+      "suiteFailures": 0,
+      "windLog": [
+        "log: [diag] window.__diag installed — call .summary() / .runAll(lbId) / .diff(lbId) from devtools",
+        "log: [boot] preInit3D handle staged on window.__preInit3DHandle",
+        "log: [diag] window.__diag installed — call .summary() / .runAll(lbId) / .diff(lbId) from devtools",
+        "log: [boot] preInit3D handle staged on window.__preInit3DHandle",
+        "log: [anim-scenery] built 512 instances across 4 anim DIDs; DROPPED 1572 over the 512 cap (?animSceneryMax)"
+      ],
+      "consoleTail": [
+        "warning: [sync-tick] ?syncPhysicsTick=on without ?posePublishPostTick=on — the camera still reads a pre-tick pose; the same-frame contract needs both flags",
+        "log: [boot-state] error: connect failed after 1 attempts: timeout",
+        "warning: [play-effect-vfx] gave up waiting for __pluginClient after 30s",
+        "warning: [spell-shape-preview] gave up waiting for __pluginClient after 30s",
+        "warning: [diag.combat] gave up waiting for __pluginClient (sneakAttackPredicted not subscribed)",
+        "warning: [diag.combat] gave up waiting for __pluginClient (damageDealt not subscribed)",
+        "warning: [sync-tick] ?syncPhysicsTick=on without ?posePublishPostTick=on — the camera still reads a pre-tick pose; the same-frame contract needs both flags",
+        "warning: [world-state] dispatchSetAppraiseInfo: unknown weenie 0x7a9b4051",
+        "warning: [world-state] dispatchSetAppraiseInfo: unknown weenie 0x7a9b4080",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+        "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed"
+      ]
+    }
+  ]
+}
