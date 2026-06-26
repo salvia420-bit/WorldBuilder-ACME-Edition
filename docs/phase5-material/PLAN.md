@@ -224,5 +224,5 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 
 ### §6 progress log
 - F1 — aoMap attached (RedFormat, channel 0, aoMapIntensity 0.6); node --check + page-load smoke 0 errors. three r184 (no uv2 needed).
-- F2 — in-world smoke: reached in-world, 0 reloads, 0 console errors (attach path exception-free live). Map-count introspection not captured (diag global mismatch); not re-run. Visible look owed to 1070.
+- F2 — in-world smoke: reached in-world, 0 reloads, 0 console errors (attach path exception-free live). Map-count introspection not captured — ROOT-CAUSED: `liveScene3d.materialCache` is a stale one-time snapshot (index.js:2541) taken before the lazy cache exists. See `HANDOFF-smoke-materialcache-introspection-2026-06-26.md` (fix = live getter or window expose; ~30min). Visible look owed to 1070.
 - F3 (BC) SKIP / F4 (anti-tiling) DEFER — per §6 (needless / scope-creep). **Follow-ups loop COMPLETE.**
