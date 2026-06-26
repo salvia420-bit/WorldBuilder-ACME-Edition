@@ -50,8 +50,11 @@ import { windBend } from "./vfx/components/windBend.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const DEFAULT_ANIM_FPS = 30.0;
-const DEFAULT_MAX_ANIMATED = 512;
-const DEFAULT_TICK_RADIUS_M = 140.0;
+// Bumped 2026-06-26 (user): animate far MORE trees. Nearest-to-player build order (below) means a
+// hit cap only drops the FARTHEST trees, and the per-frame work is a transform memcpy bounded by the
+// cap, so a big cap + wide cull stays cheap. Both still URL-tunable (?animSceneryMax / ?animSceneryRadius).
+const DEFAULT_MAX_ANIMATED = 4096;   // was 512
+const DEFAULT_TICK_RADIUS_M = 800.0; // was 140 — distant swaying trees are desirable, not "imperceptible"
 function _numFlag(name, def, min) {
   try {
     if (typeof window !== "undefined" && window.location) {
@@ -570,7 +573,20 @@ export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
   // P4.3 — placements that could NOT become a live wind node. Each entry is the
   // ORIGINAL peeled placement `p`; statics.js re-freezes these so none vanish.
   const failed = [];
-  for (const p of placements) {
+  // Build NEAREST-to-player first: if the cap is hit, only the FARTHEST trees drop (→ re-frozen),
+  // so whatever you're standing next to always animates. Player pos ≈ the follow camera (AC Z-up world XY).
+  let order = placements;
+  try {
+    const cp = (typeof window !== "undefined" &&
+      (window.liveScene3d?.camera || window.liveScene3d?.activeCamera)?.position) || null;
+    if (cp) {
+      const wx = (p) => p.worldFrame ? (p.x || 0) : (((p.landblockId >>> 24) & 0xff) * METERS_PER_LANDBLOCK + (p.x || 0));
+      const wy = (p) => p.worldFrame ? (p.y || 0) : (((p.landblockId >>> 16) & 0xff) * METERS_PER_LANDBLOCK + (p.y || 0));
+      order = [...placements].sort((a, b) =>
+        ((wx(a) - cp.x) ** 2 + (wy(a) - cp.y) ** 2) - ((wx(b) - cp.x) ** 2 + (wy(b) - cp.y) ** 2));
+    }
+  } catch (_) { order = placements; }
+  for (const p of order) {
     const key = "w:" + placementKey(p);
     if (_builtKeys.has(key)) continue;
     if (_instances.length >= maxAnimated()) { failed.push(p); dropped += 1; continue; }
@@ -595,14 +611,20 @@ export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
     // statics.js re-freezes this LB's tree; the next LB load animates from the warm bake.
     let g;
     if (useBake) {
-      const clip = suite.get(setupId, "windclip"); // sync; null while loading/absent
-      if (!clip) { _builtKeys.delete(key); failed.push(p); continue; }
-      // PARAM-DRIFT GUARD (§B.3): the bake's part count MUST equal the runtime's
-      // material-gated part count, else the frame-major frames address the wrong parts.
-      // A mismatch is a STALE bake → treat as a miss; do NOT animate a wrong-arity clip.
-      if (clip.numParts !== r.partCount) { _builtKeys.delete(key); failed.push(p); continue; }
-      g = getOrCreateWindGroup(groupKey, clip.numParts, r.rig, windParams,
-        { frames: clip.bucketFrames(bucket), numFrames: clip.numFrames, fps: clip.fps });
+      const clip = suite.get(setupId, "windclip"); // sync; null while loading/absent/un-baked
+      // PARAM-DRIFT GUARD (§B.3): a baked clip's part count MUST equal the runtime's material-gated
+      // part count, else the frame-major frames address the wrong parts — treat a mismatch as a miss.
+      if (clip && clip.numParts === r.partCount) {
+        g = getOrCreateWindGroup(groupKey, clip.numParts, r.rig, windParams,
+          { frames: clip.bucketFrames(bucket), numFrames: clip.numFrames, fps: clip.fps });
+      } else {
+        // SYNTH FALLBACK (2026-06-26, user: "include many more species"): no baked clip yet
+        // (un-baked species, cold cache, or part-count drift) → SYNTHESIZE from the live rig so
+        // the tree still sways instead of re-freezing. Synth ≈ bake (the bake IS bit-copied synth),
+        // so this is visually equivalent; it also kills the one-load-frozen cold-cache window.
+        // The old "re-freeze and wait for the warm bake" purity is traded for "always animate".
+        g = getOrCreateWindGroup(groupKey, r.partCount, r.rig, windParams);
+      }
     } else {
       g = getOrCreateWindGroup(groupKey, r.partCount, r.rig, windParams);
     }
@@ -657,8 +679,8 @@ function _ensureRaf() {
     for (const g of _didGroups.values()) {
       try { g.mixer.update(dt); } catch (_) {}
     }
-    // Distance tick-cull (task #10): only COPY the animated pose onto instances
-    // within the radius of the camera; far ones freeze (imperceptible at range).
+    // Distance tick-cull: only COPY the animated pose onto instances within the
+    // camera radius (now 800 m — distant sway is wanted); beyond it they freeze.
     const radSq = tickRadiusSq();
     let camPos = null;
     if (radSq !== Infinity && typeof window !== "undefined") {

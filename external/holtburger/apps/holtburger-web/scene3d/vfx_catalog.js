@@ -176,3 +176,18 @@ export function descriptorMechs(descriptor) {
 export function hasWindBend(descriptor) {
   return !!descriptor?.componentIds?.has("deformation.windBend");
 }
+
+/** True if a DID SHOULD sway in the wind. Superset of hasWindBend (2026-06-26, user:
+ *  "include many more species"): the classifier's "trunk-canopy" rule only tags foliage that
+ *  is multi-part AND ≥4m tall; shorter multi-part foliage falls through to "foliage-pollen".
+ *  But those bushes/shrubs/saplings have ≥2 articulable parts, so they CAN be wind-rigged — we
+ *  synth a clip from their live rig (animated_scenery's synth fallback). Single-part pollen
+ *  plants (no parts to bend) correctly stay out. Adds ~42 species (103→~145) with no re-bake. */
+export function windResponds(descriptor) {
+  if (hasWindBend(descriptor)) return true;
+  if (descriptor?.archetype !== "foliage-pollen") return false;
+  const sig = descriptor.raw?.signals;
+  if (!Array.isArray(sig)) return false;
+  const pc = sig.find((s) => s && s.name === "partCount");
+  return !!pc && parseInt(pc.value, 10) >= 2;
+}

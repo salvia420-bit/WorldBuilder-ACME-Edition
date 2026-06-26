@@ -93,7 +93,7 @@ import { treeWindEnabled, isTreeDid } from "./tree_wind.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
-import { visualEnabled, ensureVfxCatalog, vfxDescriptorFor, hasWindBend, descriptorMechs } from "./vfx_catalog.js";
+import { visualEnabled, ensureVfxCatalog, vfxDescriptorFor, windResponds, descriptorMechs } from "./vfx_catalog.js";
 // Phase 3 (?gemSparkle, default-OFF) — SYNTHESIZED additive particle emitters.
 // A placement whose catalog descriptor carries a `particle` mech gets one or
 // more client-local additive billboard emitters attached ON TOP of its frozen
@@ -1705,7 +1705,7 @@ export async function bakeStaticsForLandblock(
     const isWind = (p) => {
       const did = (p?.modelId >>> 0) || 0;
       return (treeWindEnabled() && isTreeDid(did)) ||
-             (visualEnabled() && hasWindBend(vfxDescriptorFor(did)));
+             (visualEnabled() && windResponds(vfxDescriptorFor(did)));
     };
     const t = statics.filter(isWind);
     if (t.length > 0) {
@@ -2269,7 +2269,7 @@ export async function bakeStaticsRing(
     const isWind = (p) => {
       const did = (p?.modelId >>> 0) || 0;
       return (treeWindEnabled() && isTreeDid(did)) ||
-             (visualEnabled() && hasWindBend(vfxDescriptorFor(did)));
+             (visualEnabled() && windResponds(vfxDescriptorFor(did)));
     };
     const t = statics.filter(isWind);
     if (t.length > 0) {
