@@ -64,10 +64,13 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
   cases (uniform→roughness all-0, AO all-255); the **real-`portal.dat` byte golden is deferred to S5** (DAT
   access lives there, not in a hermetic unit test).
 
-- [ ] **S2 — Rust: `matclip` codec** (`crates/holtburger-suite-bake/src/matclip.rs`, mirror `windclip.rs`)
-  Pack {normal, roughness, ao} for one surface; **surface-hash** keyed; deterministic fingerprint via
-  `holtburger_common::bake_fingerprint`. `encode_payload`/`decode_payload` (raw RGBA8 LE), reencode_eq test.
-  **Gate:** `PATH="$HOME/.cargo/bin:$PATH" capped-build cargo test -p holtburger-suite-bake`.
+- [x] **S2 — Rust: `texchan` codec** (`crates/holtburger-suite-bake/src/texchan.rs`, mirror `windclip.rs`) ✅
+  Named **`texchan`** (the tag pre-reserved by the crate doc + windclip wrong-tag test), NOT `matclip`. Packs
+  {normal RGB8, roughness R8, ao R8} for one surface; channel-mask header (optional channels); `encoding`
+  field reserved for BC/DXT (raw=0 only). `encode_payload`/`decode_payload` round-trip + container wrap +
+  `fingerprint()` (FNV-1a, `.texchan-hash` sidecar). Surface-hash keyed (codec is key-agnostic; key set at S5).
+  **Gate:** ✅ `capped-build cargo test -p holtburger-suite-bake` → **20 passed / 0 failed** (8 new texchan;
+  windclip + container unchanged).
 
 - [ ] **S3 — C#: classifier emits material-class per surface** (`WorldBuilder.Terminal/CommandEngine.Vfx.cs`
   + `WorldBuilder.Shared/Lib/VisualDescriptor.cs`)
@@ -76,18 +79,18 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
   **Gate:** `DOTNET_ROLL_FORWARD=LatestMajor dotnet test WorldBuilder.Tests -c Release` (memory-safe;
   single-project) — extend `VisualDescriptorRoundTripTests`.
 
-- [ ] **S4 — wasm: extend `suite_fetch` for `matclip`** (`apps/holtburger-web/src/lib.rs:2425`)
-  Allow a surface-hash-keyed `matclip` artifact type alongside the `(did,type)` path. Keep inert until S6.
+- [ ] **S4 — wasm: extend `suite_fetch` for `texchan`** (`apps/holtburger-web/src/lib.rs:2425`)
+  Allow a surface-hash-keyed `texchan` artifact type alongside the `(did,type)` path. Keep inert until S6.
   **Gate:** `PATH="$HOME/.cargo/bin:$PATH" capped-build wasm-pack build --target web --out-dir pkg --dev` +
   boot-smoke `suite_cache_size()==0` when unreferenced. (Rebuild clobbers `pkg/`; it's gitignored.)
 
-- [ ] **S5 — Producer: WB.Terminal bake command** → `${HOLTBURGER_DIST}/suite/<surfacehash>.matclip.bin`
-  (+ `.sha256` + `.matclip-hash`, `matclip-coverage.json`, `bake-source.sha256`). Runs `normal_gen` offline
+- [ ] **S5 — Producer: WB.Terminal bake command** → `${HOLTBURGER_DIST}/suite/<surfacehash>.texchan.bin`
+  (+ `.sha256` + `.texchan-hash`, `texchan-coverage.json`, `bake-source.sha256`). Runs `normal_gen` offline
   over real `portal.dat` surfaces. **base dats only** (`~/ac_base_dats/`; reject `0x__FFxxxx`).
   **Gate:** re-run → **byte-identical sha256** (determinism) + coverage report (N baked / 0 skipped).
 
 - [ ] **S6 — JS consumer: fetch-not-generate** (`scene3d/materials.js`, behind `?material=`)
-  In `MaterialCache`, branch on `suite.get(surfaceHash,"matclip")` → use baked maps; **miss → current
+  In `MaterialCache`, branch on `suite.get(surfaceHash,"texchan")` → use baked maps; **miss → current
   runtime path** (fallback firewall). Keep the ONE existing material path (no new program permutations).
   `?material=off` → exact current rendering.
   **Gate:** harness (`harness/test_*`) + boot-smoke 0 errors + program-count + maps-bound (`__diag`) +
@@ -123,3 +126,4 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 ## 5. Progress log (loop appends one line per committed step)
 - S0 (this file) — committed.
 - S1 — roughness + AO channels in normal_gen.rs; `cargo test -p holtburger-dat --lib` 351/0. Real-portal.dat golden deferred to S5.
+- S2 — texchan codec in holtburger-suite-bake (name was pre-reserved); `cargo test -p holtburger-suite-bake` 20/0. Renamed matclip→texchan across §2.
