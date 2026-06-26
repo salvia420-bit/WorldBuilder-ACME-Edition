@@ -2262,43 +2262,24 @@ mod scenery_fetch {
         Ok(out)
     }
 
-    /// Canonicalise one f32 into the bits the `*.scenery.jsonl` wire
-    /// carries — the wasm twin of
-    /// `holtburger_scenery_bake::wire_f32_bits`. The bake serialises
-    /// every float through `{:.6}` (with `-0.0 → 0.0`), which is LOSSY
-    /// for f32, so the bake-side `placements_fingerprint` hashes the
-    /// post-truncation bits, NOT the full-precision in-memory f32. We
-    /// MUST hash the same representation or the advisory gate false-
-    /// positives on essentially every non-axis-aligned placement (e.g.
-    /// a `0.7071068` quaternion component round-trips to different bits).
-    ///
-    /// The values we receive in `CachedRecord` were already parsed from
-    /// the `{:.6}` JSONL text, so re-applying the same `{:.6}` rule here
-    /// is idempotent — but doing it explicitly makes both sides provably
-    /// symmetric regardless of how the record was sourced, and matches
-    /// the bake-side helper rule-for-rule.
-    fn wire_f32_bits(v: f32) -> u32 {
-        let v = if v == 0.0 { 0.0 } else { v };
-        let truncated: f32 = format!("{v:.6}").parse().unwrap_or(v);
-        truncated.to_bits()
-    }
-
     /// FNV-1a/64 over the FROZEN explicit placement stream — the wasm
     /// twin of `holtburger_scenery_bake::placements_fingerprint`. Folds
     /// the SAME twelve wire fields, in the SAME order, with the SAME
     /// constants, so the value matches the `placements-hash` the bake
     /// CLI wrote bit-for-bit. The nine float fields are folded through
-    /// [`wire_f32_bits`] (the post-`{:.6}` bits the JSONL carries), the
-    /// three `u32` fields as-is — exactly the bake side's rule. Identity
-    /// (E2) is intentionally excluded — the JSONL doesn't carry it, so
-    /// neither side can hash it. Kept inline (rather than depending on
-    /// the bake crate, which pulls in the whole DAT stack) because the
-    /// logic is a trivially-auditable FNV-1a fold; the
-    /// `placements_fingerprint_is_stable` golden test pins the bake side
-    /// and this WARN is advisory either way.
+    /// `wire_f32_bits` (the post-`{:.6}` bits the JSONL carries — LOSSY
+    /// for f32, so we hash the truncated representation both sides agree
+    /// on, NOT the full-precision in-memory f32), the three `u32` fields
+    /// as-is — exactly the bake side's rule. Identity (E2) is
+    /// intentionally excluded — the JSONL doesn't carry it, so neither
+    /// side can hash it. The fold primitives (`fnv1a_fold`,
+    /// `wire_f32_bits`) are now shared via
+    /// [`holtburger_common::bake_fingerprint`], so both producers fold
+    /// through one definition; the `placements_fingerprint_is_stable`
+    /// golden test pins the bake side and this WARN is advisory either
+    /// way.
     fn placements_freeze_hash(records: &[CachedRecord]) -> u64 {
-        const FNV1A_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-        const FNV1A_PRIME: u64 = 0x0000_0100_0000_01b3;
+        use holtburger_common::bake_fingerprint::{fnv1a_fold, wire_f32_bits, FNV1A_OFFSET};
         let mut h = FNV1A_OFFSET;
         for r in records {
             for word in [
@@ -2315,10 +2296,7 @@ mod scenery_fetch {
                 r.source_cell_y,
                 r.source_obj_idx,
             ] {
-                for byte in word.to_le_bytes() {
-                    h ^= byte as u64;
-                    h = h.wrapping_mul(FNV1A_PRIME);
-                }
+                h = fnv1a_fold(h, word);
             }
         }
         h
