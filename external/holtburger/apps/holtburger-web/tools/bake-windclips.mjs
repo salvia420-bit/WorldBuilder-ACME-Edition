@@ -18,7 +18,8 @@
 // exact float the runtime's getOrCreateWindGroup would build, bit-for-bit.
 //
 // ── FIREWALL / DETERMINISM ───────────────────────────────────────────────────
-//   * PER-DID keyed (one .bin per SetupModel DID on the tree_wind.js allowlist).
+//   * PER-DID keyed (one .bin per SetupModel DID in the windBend-descriptor set —
+//     the EXACT set the runtime peel consumes; see DID-SET below).
 //   * No live input baked: clip = geometry + DEFAULT wind params only
 //     (dirDeg 135 / strength 1 / fps 30 / loopSeconds 4 / ampDeg 7 /
 //      cycles1 3 / cycles2 11 / flutter 0.3). Weather, creature-part frames and
@@ -40,11 +41,22 @@
 // Artifacts → ${HOLTBURGER_DIST:-/mnt/wbterminal2/holtburger-dist}/suite/  (the
 // external/holtburger/dist symlink target) — NEVER inside the git repo.
 //
+// ── DID-SET (the bake set == the runtime consume set) ────────────────────────
+// The runtime peels a tree iff
+//   (treeWindEnabled() && isTreeDid(did))               // 6 ?treeWind DIDs, or
+//   || (visualEnabled() && hasWindBend(vfxDescriptorFor(did)))   // windBend set
+// and the VFX suite is DEFAULT-ON, so the real consume set is the windBend set:
+// every DID whose visual_descriptors.jsonl entry carries `deformation.windBend`
+// (~103 DIDs, a superset of the 6 TREE_WIND_DIDS). We enumerate it EXACTLY as the
+// peel does — parseDescriptorsJsonl(fetch('/dist/vfx/visual_descriptors.jsonl'))
+// filtered by hasWindBend (both from scene3d/vfx_catalog.js) — so bake == consume.
+// Catalog fetch failure is FATAL (never silently fall back to baking only the 6).
+//
 // USAGE
-//   node tools/bake-windclips.mjs            # bake every allowlist DID
-//   node tools/bake-windclips.mjs --list     # dry: print the DIDs it WILL bake (no chromium, no writes)
+//   node tools/bake-windclips.mjs            # bake every windBend-descriptor DID
+//   node tools/bake-windclips.mjs --list     # dry: print the DIDs it WILL bake (no chromium, no writes; fetches the catalog → needs serve.py :8765)
 //   node tools/bake-windclips.mjs --help     # this help
-//   node tools/bake-windclips.mjs --did 0x02001063,0x02000258   # subset (allowlist-only)
+//   node tools/bake-windclips.mjs --did 0x02001063,0x02000258   # subset (windBend-set-only)
 //
 // GATE: `node --check tools/bake-windclips.mjs` + `--list` self-describe.
 
@@ -172,9 +184,9 @@ function parseArgs(argv) {
 
 const HELP = `bake-windclips.mjs — P4.3 per-DID tree-wind clip producer
 
-  node tools/bake-windclips.mjs            bake every tree_wind.js allowlist DID
-  node tools/bake-windclips.mjs --list     print the DIDs that WOULD be baked (no chromium, no writes)
-  node tools/bake-windclips.mjs --did A,B  bake a subset (allowlist-only)
+  node tools/bake-windclips.mjs            bake every windBend-descriptor DID (~103; the runtime consume set)
+  node tools/bake-windclips.mjs --list     print the DIDs that WOULD be baked (no chromium, no writes; fetches the catalog → needs serve.py :8765)
+  node tools/bake-windclips.mjs --did A,B  bake a subset (windBend-set-only)
   node tools/bake-windclips.mjs --help     this help
 
   K (phase buckets) = ${K_BUCKETS}
@@ -406,24 +418,67 @@ async function bakeOneInPage({ href, did, K, scene, dirDeg, strength }) {
   }
 }
 
-// ── allowlist DIDs (Node side, for --list / fallback) ────────────────────────
-// tree_wind.js imports NOTHING and reads `window` only inside guarded flag
-// helpers, so it loads cleanly in Node — keeping --list drift-free from the
-// in-page allowlist used by the real bake.
-async function loadAllowlistDidsNode() {
-  try {
-    const tw = await import("../scene3d/tree_wind.js");
-    return Array.from(tw.treeWindDids()).map((d) => d >>> 0);
-  } catch (e) {
-    // Last-resort literal mirror of TREE_WIND_DIDS (kept in sync by review).
-    return [0x02001063, 0x02001064, 0x020007a2, 0x02000246, 0x02000258, 0x0200035f];
+// ── DID set = windBend-descriptor set (bake == consume) ──────────────────────
+// The 6 ?treeWind-hardcoded DIDs (tree_wind.js TREE_WIND_DIDS). The windBend set
+// MUST be a superset of these; we assert it (a degenerate fetch must not let the
+// bake silently collapse back to baking only these 6).
+const TREE_WIND_DIDS = Object.freeze([
+  0x02001063, 0x02001064, 0x020007a2, 0x02000246, 0x02000258, 0x0200035f,
+]);
+
+/** Fail-loud sanity gate on the enumerated windBend set; returns its size. */
+function assertWindBendSet(dids, where) {
+  const set = new Set(dids.map((d) => d >>> 0));
+  const missing = TREE_WIND_DIDS.filter((d) => !set.has(d >>> 0));
+  if (missing.length) {
+    throw new Error(
+      `WINDBEND_SET_NOT_SUPERSET (${where}): missing TREE_WIND_DIDS ${missing.map(didHex).join(",")} — ` +
+        `the bake set must contain every ?treeWind DID`,
+    );
   }
+  if (set.size < 20) {
+    throw new Error(
+      `WINDBEND_SET_TOO_SMALL (${where}): only ${set.size} windBend DIDs enumerated (expected ~103) — ` +
+        `refusing to bake. Did the catalog fetch silently fall back to the 6 TREE_WIND_DIDS?`,
+    );
+  }
+  if (set.size < 90 || set.size > 130) {
+    // Not fatal, but surface a drift from the known ~103 loudly.
+    process.stderr.write(`[warn] windBend set size ${set.size} is outside the expected ~103 band (${where})\n`);
+  }
+  return set.size;
 }
 
+// vfx_catalog.js imports NOTHING from the scene3d graph and touches `window` only
+// inside guarded flag helpers, so it loads cleanly in Node — keeping --list
+// drift-free from the in-page enumeration the real bake uses.
+async function loadWindBendDidsNode() {
+  const { parseDescriptorsJsonl, hasWindBend } = await import("../scene3d/vfx_catalog.js");
+  const url = new URL("../../dist/vfx/visual_descriptors.jsonl", SERVER_BASE).href;
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (e) {
+    throw new Error(`CATALOG_FETCH_FAILED (${url}): ${e && e.message ? e.message : e} — start serve.py :8765 (do NOT bake only the 6 TREE_WIND_DIDS)`);
+  }
+  if (!res.ok) throw new Error(`CATALOG_FETCH_FAILED (${url}): HTTP ${res.status} (do NOT bake only the 6 TREE_WIND_DIDS)`);
+  const text = await res.text();
+  const map = parseDescriptorsJsonl(text);
+  return [...map].filter(([did, desc]) => hasWindBend(desc)).map(([did]) => did >>> 0);
+}
+
+// In-page enumeration — EXACTLY the runtime peel (statics.js:1705): the served
+// catalog parsed by vfx_catalog.parseDescriptorsJsonl, filtered by hasWindBend.
+// A fetch failure throws → page.evaluate rejects → main() goes FATAL (fail-loud;
+// never silently bake only the 6 TREE_WIND_DIDS).
 async function resolveDidsInPage(page) {
   return page.evaluate(async () => {
-    const tw = await import("/apps/holtburger-web/scene3d/tree_wind.js");
-    return Array.from(tw.treeWindDids()).map((d) => d >>> 0);
+    const vc = await import("/apps/holtburger-web/scene3d/vfx_catalog.js");
+    const res = await fetch("/dist/vfx/visual_descriptors.jsonl");
+    if (!res.ok) throw new Error("CATALOG_FETCH_FAILED: HTTP " + res.status + " for /dist/vfx/visual_descriptors.jsonl");
+    const text = await res.text();
+    const map = vc.parseDescriptorsJsonl(text);
+    return [...map].filter(([did, desc]) => vc.hasWindBend(desc)).map(([did]) => did >>> 0);
   });
 }
 
@@ -462,7 +517,8 @@ async function main() {
   }
 
   if (args.list) {
-    let dids = await loadAllowlistDidsNode();
+    let dids = await loadWindBendDidsNode();
+    const fullSize = assertWindBendSet(dids, "--list");
     if (args.dids) {
       const allow = new Set(dids);
       dids = args.dids.filter((d) => allow.has(d));
@@ -470,6 +526,7 @@ async function main() {
     dids = dids.slice().sort((a, b) => a - b);
     process.stdout.write(`# bake-windclips --list (no chromium, no writes)\n`);
     process.stdout.write(`# K=${K_BUCKETS} dirDeg=${WIND_PARAMS.dirDeg} strength=${WIND_PARAMS.strength} fps=${WIND_PARAMS.fps} out=${OUT_DIR}\n`);
+    process.stdout.write(`# windBend set = ${fullSize} DID(s)${args.dids ? ` (filtered by --did to ${dids.length})` : ""}\n`);
     process.stdout.write(`# ${dids.length} DID(s) to bake:\n`);
     for (const d of dids) process.stdout.write(didHex(d) + "\n");
     return 0;
@@ -522,13 +579,16 @@ async function main() {
     const ready = await waitPkgReady(page, href);
     if (!ready) throw new Error("PKG_NOT_INITIALIZED: has_resource_source() never went true (manifest source uninitialized)");
 
-    // RESOLVE DIDS (from the in-page allowlist; never drift).
+    // RESOLVE DIDS (the windBend-descriptor set, enumerated in-page EXACTLY as the
+    // runtime peel does; bake == consume). Fail-loud if the catalog is missing.
     let dids = await resolveDidsInPage(page);
+    const windBendSize = assertWindBendSet(dids, "in-page");
+    process.stdout.write(`[dids] enumerated ${windBendSize} windBend DIDs (expected ~103; superset of the 6 TREE_WIND_DIDS)\n`);
     if (K_BUCKETS !== 4) throw new Error("K_BUCKETS must be 4 (live phase-bucket count)");
     if (args.dids) {
       const allow = new Set(dids);
       const bad = args.dids.filter((d) => !allow.has(d));
-      if (bad.length) throw new Error("--did contains non-allowlist DIDs: " + bad.map(didHex).join(","));
+      if (bad.length) throw new Error("--did contains non-windBend DIDs: " + bad.map(didHex).join(","));
       dids = args.dids;
     }
     dids = dids.slice().sort((a, b) => a - b);
