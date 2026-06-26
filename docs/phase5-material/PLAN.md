@@ -129,15 +129,24 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
   fail-soft to null). Cross-language Rust-`encode()` → JS-decode validated on real on-disk artifacts.
 
 - [ ] **S6b-2 — materials.js wiring + index.html** (behind `?material=`, default-OFF; S7 flips on)
-  1. `materialBakeEnabled()` flag reader (default false until S7), mirror `windBakeEnabled`.
-  2. Load `texchan-manifest.json` once at MaterialCache init; build a lazy `SuiteAssetSource`.
-  3. Pre-warm: when a surface is loaded, `getByKey(manifest.get(did),'texchan')` (async populate).
-  4. `_materialFromFlags` (sync, gated): if the surface's texchan is cached, attach **roughnessMap + aoMap**
-     (additive; normal stays byte-identical). Miss/cold = exact current look. ONE material path, no new program
-     permutations. Decide attach-on-resolve vs cache-warm-before-build for the already-built cached material.
-  5. index.html: add `fetch_suite_artifact_by_key` to the wasm named import (both sites) + bump `?v=`.
-  **Gate:** SwiftShader boot-smoke 0 errors + program-count unchanged + maps-bound (`__diag`) + the deferred S4
-  `suite_cache_size()` observation. (Runtime-vs-bake normal already proven at S6a; decode at S6b-1.)
+  **SCOPED (execution map, ready to implement):**
+  - `_materialFromFlags` lacks `surfaceDid` → attach at the **two caller sites** (materials.js:2681 build path,
+    :3318 twin) where `did` is in scope, right after `mat` is built + `this.materials.set(did,mat)`.
+  - **attach-on-resolve is REQUIRED** (a material is built once then cached; sync-attach-only would never
+    attach on a cold first visit). Need a promise accessor `getByKeyAsync(key,type)` on `SuiteAssetSource`.
+    On resolve: `_applyTexchan(mat,tc)` + `mat.needsUpdate=true` + invalidate `frontSideMaterials.delete(did)` /
+    `floorBiasMaterials.delete(did)` (clones re-mint with the maps). Sync `getByKey` hit path covers warm.
+  - `_applyTexchan(mat,tc)`: build **R8 `RedFormat` DataTextures** for `tc.roughness` + `tc.ao` →
+    `mat.roughnessMap` / `mat.aoMap`. Normal left as-is (byte-identical). No new program permutations.
+  - MaterialCache ctor already takes wasm getters via `opts` (e.g. `opts.animFramesFetch`) → add
+    `opts.texchanFetch`/`wasmExports`; thread from the **3 call sites** (statics.js, buildings.js, index.js).
+    Lazy-build the `SuiteAssetSource` + `loadTexchanManifest()` on first gated use.
+  - `materialBakeEnabled()` flag (default **false** until S7), mirror `windBakeEnabled` (in vfx_flags.js).
+  - index.html: add `fetch_suite_artifact_by_key` to BOTH wasm named-import sites (:1152, :4131) + bump `?v=`.
+  **Gate:** node attach unit test (real `.bin` → stub material → `roughnessMap`/`aoMap` set, correct dims) +
+  in-world boot-smoke via `harness/ln/drive.mjs` (playwright in `~/.npm/_npx/…`; ACE flaky → reload-retry):
+  0 console errors + program-count unchanged + maps-bound + the deferred S4 `suite_cache_size()>0`. Lands
+  default-OFF; the live boot-smoke is also S7's gate. (Runtime-vs-bake normal proven S6a; decode S6b-1.)
 
 - [ ] **S7 — Default-on flip** (`scene3d/vfx_flags.js` reader, mirror `windBakeEnabled`)
   Add `materialBakeEnabled()` default **true**, `?material=off` escape. Update `docs/url-flags.md`.
