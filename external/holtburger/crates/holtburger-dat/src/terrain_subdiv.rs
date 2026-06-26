@@ -95,64 +95,6 @@ pub const VISUAL_VS_COLLISION_MAX_M: f32 = 0.3;
 /// ~2 m, sub-character scale.
 const NOISE_FREQ_PER_METER: f32 = 0.5;
 
-/// Per-terrain-code noise amplitude multiplier. Range `0.0 .. 1.0`.
-/// Water and slime get 0 — Phase 2.2 animates those with vertex
-/// displacement instead. Lava is not exposed in the retail terrain
-/// code table for Holtburg, but stays 0 for forward-compat.
-///
-/// Per the prompt's per-category table:
-///   water (16-20, 22-23) → 0
-///   sand (10-12)         → 0.5
-///   stone (0, 6, 13, 14, 25, 26, 30) → 1.0
-///   dirt (5, 7, 8, 24, 31)           → 1.0
-///   grass (1, 3, 9, 21, 28, 29)      → 0.8
-///   snow (2, 15, 27)                 → 0.3
-///   swamp (4)                        → 0.5
-const TERRAIN_NOISE_SCALE: [f32; 32] = [
-    1.0, // 0 BarrenRock (Stone)
-    0.8, // 1 Grassland (Grass)
-    0.3, // 2 Ice (Snow)
-    0.8, // 3 LushGrass (Grass)
-    0.5, // 4 MarshSparseSwamp (Swamp)
-    1.0, // 5 MudRichDirt (Dirt)
-    1.0, // 6 ObsidianPlain (Stone)
-    1.0, // 7 PackedDirt (Dirt)
-    1.0, // 8 PatchyDirt (Dirt)
-    0.8, // 9 PatchyGrassland (Grass)
-    0.5, // 10 SandYellow (Sand)
-    0.5, // 11 SandGrey (Sand)
-    0.5, // 12 SandRockStrewn (Sand)
-    1.0, // 13 SedimentaryRock (Stone)
-    1.0, // 14 SemiBarrenRock (Stone)
-    0.3, // 15 Snow (Snow)
-    0.0, // 16 WaterRunning
-    0.0, // 17 WaterStandingFresh
-    0.0, // 18 WaterShallowSea
-    0.0, // 19 WaterShallowStillSea
-    0.0, // 20 WaterDeepSea
-    0.8, // 21 ForestFloor (Grass)
-    0.0, // 22 FauxWaterRunning
-    0.0, // 23 SeaSlime
-    1.0, // 24 Argila (Dirt)
-    1.0, // 25 Volcano1 (Stone)
-    1.0, // 26 Volcano2 (Stone)
-    0.3, // 27 BlueIce (Snow)
-    0.8, // 28 Moss (Grass)
-    0.8, // 29 DarkMoss (Grass)
-    1.0, // 30 Olthoi (Stone)
-    1.0, // 31 DesolateLands (Dirt)
-];
-
-/// Look up the noise amplitude scale for a terrain code. Codes outside
-/// `0..32` get 0 (defensive — should never happen for retail data).
-fn noise_scale_for_code(code: u8) -> f32 {
-    if (code as usize) < TERRAIN_NOISE_SCALE.len() {
-        TERRAIN_NOISE_SCALE[code as usize]
-    } else {
-        0.0
-    }
-}
-
 /// Convenience: noise scale by [`SurfaceCategory`]. Phase 2.1 uses the
 /// terrain-code path; this is exposed so downstream consumers (e.g.
 /// Phase 1.4 surface classification fallback) can ask "what category
@@ -397,16 +339,6 @@ pub fn noise_displacement_m(world_x_m: f32, world_y_m: f32, scale: f32, seed: u6
         .min(NOISE_AMPLITUDE_MAX_M)
 }
 
-/// A/B toggle for the per-cell triangulation diagonal (Wave R1.B,
-/// 2026-05-28). When `false` (default, retail-faithful), the diagonal
-/// each base cell is split along is computed per-cell by
-/// [`cell_swto_ne_cut`] — exactly mirroring the retail client. When
-/// `true`, every quad falls back to the legacy *fixed* SW↔NE diagonal
-/// the renderer shipped with. The branch-vs-master build comparison is
-/// the real A/B for the 1070 eye-test; flip this to `true` to bake the
-/// old behavior without otherwise touching the bake.
-const LEGACY_FIXED_DIAGONAL: bool = false;
-
 /// Per-cell terrain-quad triangulation diagonal — `true` ⇒ the cell is
 /// cut along the SW→NE diagonal (triangles share the SW–NE edge),
 /// `false` ⇒ cut along the SE→NW diagonal (share the SE–NW edge).
@@ -532,6 +464,82 @@ pub fn triangle_grad_in_cell(
     }
 }
 
+/// Per-vertex terrain normals at the 9×9 control grid, **continuous
+/// across landblock seams**. Each normal is a central difference of the
+/// control heights; at an LB-edge vertex the sample one step past the
+/// seam comes from the neighbour LB's strip (`adjacent`) rather than a
+/// mirror of the interior, so the vertex shared by two landblocks gets
+/// an *identical* normal on both sides — eliminating the lighting seam
+/// retail itself has (retail computes terrain normals per-landblock, see
+/// `CLandBlockStruct::calc_lighting`). Falls back to a one-sided
+/// difference only at the world boundary (neighbour `None`).
+///
+/// Returned as `[x][y]` unit vectors in AC space (+Z up). Neighbour-strip
+/// index map (see [`AdjacentHeights`]): `west[0]`=x−1, `east[1]`=x+9,
+/// `south[i][0]`=y−1, `north[i][1]`=y+9.
+fn control_grid_normals(
+    heights: &[[f32; 9]; 9],
+    adjacent: &AdjacentHeights,
+) -> [[[f32; 3]; 9]; 9] {
+    let s = CONTROL_SPACING_M;
+    let mut out = [[[0.0f32, 0.0, 1.0]; 9]; 9];
+    for i in 0..9usize {
+        for j in 0..9usize {
+            // x slope: samples at i−1 (west) and i+1 (east).
+            let (h_xm, span_m) = if i > 0 {
+                (heights[i - 1][j], s)
+            } else if let Some(w) = &adjacent.west {
+                (w[0][j], s) // west neighbour col 7 == x = −1
+            } else {
+                (heights[i][j], 0.0) // world edge → one-sided
+            };
+            let (h_xp, span_p) = if i < 8 {
+                (heights[i + 1][j], s)
+            } else if let Some(e) = &adjacent.east {
+                (e[1][j], s) // east neighbour col 1 == x = +9
+            } else {
+                (heights[i][j], 0.0)
+            };
+            let span_x = span_m + span_p;
+            let dzdx = if span_x > 0.0 {
+                (h_xp - h_xm) / span_x
+            } else {
+                0.0
+            };
+
+            // y slope: samples at j−1 (south) and j+1 (north).
+            let (h_ym, span_s) = if j > 0 {
+                (heights[i][j - 1], s)
+            } else if let Some(so) = &adjacent.south {
+                (so[i][0], s) // south neighbour row 7 == y = −1
+            } else {
+                (heights[i][j], 0.0)
+            };
+            let (h_yp, span_n) = if j < 8 {
+                (heights[i][j + 1], s)
+            } else if let Some(no) = &adjacent.north {
+                (no[i][1], s) // north neighbour row 1 == y = +9
+            } else {
+                (heights[i][j], 0.0)
+            };
+            let span_y = span_s + span_n;
+            let dzdy = if span_y > 0.0 {
+                (h_yp - h_ym) / span_y
+            } else {
+                0.0
+            };
+
+            // normal = normalize(−dz/dx, −dz/dy, 1)
+            let nx = -dzdx;
+            let ny = -dzdy;
+            let nz = 1.0;
+            let mag = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-6);
+            out[i][j] = [nx / mag, ny / mag, nz / mag];
+        }
+    }
+    out
+}
+
 /// Subdivide a 9×9 control-height grid into `(subdiv*8+1)²` vertices
 /// with Catmull-Rom bicubic interpolation + per-category noise.
 ///
@@ -550,7 +558,7 @@ pub fn subdivide_landblock(
     terrain_codes: &[[u8; 9]; 9],
     road_codes: &[[u8; 9]; 9],
     landblock_id: u32,
-    seed: u64,
+    _seed: u64,
 ) -> SubdividedLandblock {
     assert!(subdiv_factor >= 1, "subdiv_factor must be >= 1");
     let factor = subdiv_factor.max(1) as usize;
@@ -558,144 +566,88 @@ pub fn subdivide_landblock(
     let n = factor * 8 + 1;
     let vertex_count = n * n;
 
-    let lb_x = ((landblock_id >> 24) & 0xff) as f32;
-    let lb_y = ((landblock_id >> 16) & 0xff) as f32;
-    // LB-keyed seed mix so different LBs get uncorrelated noise. The
-    // page-load-stable component is `seed`; combine with the LB id so
-    // the same LB always produces the same noise.
-    let lb_seed = seed
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(landblock_id as u64);
-
     // Step in control-point coords per subdivided vertex.
     let step_ctrl = 1.0 / factor as f32; // 1 control unit / factor steps
     let step_m = CONTROL_SPACING_M / factor as f32;
 
-    // First pass: bicubic-interpolated heights without noise. Stored
-    // in a 2D array so the normal computation can finite-diff against
-    // them. Noise is applied as a final delta post-normal computation —
-    // see below.
-    let mut interp_heights = vec![0.0f32; vertex_count];
-    let mut noise_deltas = vec![0.0f32; vertex_count];
+    // Cross-LB-continuous smooth normals at the 9×9 control grid; the
+    // subdivided vertices below bilinearly interpolate these, so shading
+    // stays smooth (Gouraud) with NO landblock lighting seam, while
+    // POSITIONS stay pinned to the faceted collision surface (no
+    // visual-vs-collision gap → no "half-sunk").
+    let control_normals = control_grid_normals(heights, adjacent);
+
+    // Global cell coords of this LB's SW corner — picks the SAME per-cell
+    // triangulation diagonal the collision sampler (`triangle_height_in_cell`
+    // via `WorldState::terrain_height_at`) and the index buffer below use,
+    // so the drawn surface IS the collision surface (retail-exact).
+    let lb_x_int = ((landblock_id >> 24) & 0xff) * 8;
+    let lb_y_int = ((landblock_id >> 16) & 0xff) * 8;
+
     let mut height_min = f32::INFINITY;
     let mut height_max = f32::NEG_INFINITY;
     let mut codes_out = vec![0u8; vertex_count];
     let mut road_out = vec![0u8; vertex_count];
+    let mut positions = vec![0.0f32; vertex_count * 3];
+    let mut normals = vec![0.0f32; vertex_count * 3];
 
     for i in 0..n {
         for j in 0..n {
             let u = i as f32 * step_ctrl;
             let v = j as f32 * step_ctrl;
-            let h_bilinear = eval_bilinear_at(heights, u, v);
-            let h_interp_raw = if factor == 1 {
-                heights[i][j]
-            } else {
-                eval_bicubic_at(heights, adjacent, u, v)
-            };
-            // Clamp bicubic to stay within ±VISUAL_VS_COLLISION_MAX_M
-            // of the bilinear (collision) surface. Catmull-Rom can
-            // overshoot the convex hull on hilly terrain by several
-            // metres — see `terrain_subdiv.rs::VISUAL_VS_COLLISION_MAX_M`
-            // doc comment for the rationale.
-            let interp_delta = h_interp_raw - h_bilinear;
-            let interp_delta_clamped = interp_delta
-                .max(-VISUAL_VS_COLLISION_MAX_M)
-                .min(VISUAL_VS_COLLISION_MAX_M);
-            let h_interp = h_bilinear + interp_delta_clamped;
-            // Nearest control-point terrain code (no smoothing — the
-            // shader interpolates these via the 9×9 texture anyway).
+            // Owning base cell (+1 corner kept in range) and in-cell fractions.
+            let cu = (u.floor() as usize).min(7);
+            let cv = (v.floor() as usize).min(7);
+            let fx = u - cu as f32;
+            let fy = v - cv as f32;
+            // Corner heights: z00=SW, z10=SE, z01=NW, z11=NE.
+            let z00 = heights[cu][cv];
+            let z10 = heights[cu + 1][cv];
+            let z01 = heights[cu][cv + 1];
+            let z11 = heights[cu + 1][cv + 1];
+            // POSITION Z = faceted collision surface on this cell's retail
+            // split diagonal. At factor==1 this is exactly heights[i][j].
+            let sw_ne_cut =
+                cell_swto_ne_cut(lb_x_int + cu as u32, lb_y_int + cv as u32);
+            let z = triangle_height_in_cell(z00, z10, z01, z11, fx, fy, sw_ne_cut);
+
+            // NORMAL = bilinear blend of the 4 cross-LB control normals.
+            let n00 = control_normals[cu][cv];
+            let n10 = control_normals[cu + 1][cv];
+            let n01 = control_normals[cu][cv + 1];
+            let n11 = control_normals[cu + 1][cv + 1];
+            let mut nrm = [0.0f32; 3];
+            for k in 0..3 {
+                let s0 = n00[k] * (1.0 - fx) + n10[k] * fx;
+                let s1 = n01[k] * (1.0 - fx) + n11[k] * fx;
+                nrm[k] = s0 * (1.0 - fy) + s1 * fy;
+            }
+            let mag = (nrm[0] * nrm[0] + nrm[1] * nrm[1] + nrm[2] * nrm[2])
+                .sqrt()
+                .max(1e-6);
+
+            // Nearest control-point terrain/road code (shader blends these
+            // via the 9×9 texture anyway).
             let ci = (u.round() as usize).min(8);
             let cj = (v.round() as usize).min(8);
-            let code = terrain_codes[ci][cj];
-            let road = road_codes[ci][cj];
-            let noise_scale = noise_scale_for_code(code);
-            // Sample noise in LB-global metres so the pattern is
-            // continuous across LB boundaries.
-            let world_x = lb_x * LANDBLOCK_M + i as f32 * step_m;
-            let world_y = lb_y * LANDBLOCK_M + j as f32 * step_m;
-            // subdiv=1 → no noise (the 9×9 grid is the collision/control
-            // grid, mutating it would shift collision out of sync with
-            // the visual mesh).
-            let noise_raw = if factor == 1 {
-                0.0
-            } else {
-                noise_displacement_m(world_x, world_y, noise_scale, lb_seed)
-            };
-            // Combined deviation budget: bicubic-vs-bilinear PLUS noise
-            // must stay within ±VISUAL_VS_COLLISION_MAX_M. Clamp the
-            // total so the visual surface stays on the collision floor.
-            let total_delta_unclamped = interp_delta_clamped + noise_raw;
-            let total_delta = total_delta_unclamped
-                .max(-VISUAL_VS_COLLISION_MAX_M)
-                .min(VISUAL_VS_COLLISION_MAX_M);
-            let noise = total_delta - interp_delta_clamped;
 
             let idx = i * n + j;
-            interp_heights[idx] = h_interp;
-            noise_deltas[idx] = noise;
-            codes_out[idx] = code;
-            road_out[idx] = road;
+            let idx3 = idx * 3;
+            positions[idx3] = i as f32 * step_m;
+            positions[idx3 + 1] = j as f32 * step_m;
+            positions[idx3 + 2] = z;
+            normals[idx3] = nrm[0] / mag;
+            normals[idx3 + 1] = nrm[1] / mag;
+            normals[idx3 + 2] = nrm[2] / mag;
+            codes_out[idx] = terrain_codes[ci][cj];
+            road_out[idx] = road_codes[ci][cj];
 
-            let h_total = h_interp + noise;
-            if h_total < height_min {
-                height_min = h_total;
+            if z < height_min {
+                height_min = z;
             }
-            if h_total > height_max {
-                height_max = h_total;
+            if z > height_max {
+                height_max = z;
             }
-        }
-    }
-
-    // Build positions in flat xyz form.
-    let mut positions = Vec::with_capacity(vertex_count * 3);
-    for i in 0..n {
-        for j in 0..n {
-            let idx = i * n + j;
-            let x = i as f32 * step_m;
-            let y = j as f32 * step_m;
-            let z = interp_heights[idx] + noise_deltas[idx];
-            positions.push(x);
-            positions.push(y);
-            positions.push(z);
-        }
-    }
-
-    // Vertex normals via central difference. `h(x±step, y) - h(x∓step,y)`
-    // gives a slope; cross-product with the y-slope produces a unit
-    // up-normal at a flat region.
-    //
-    // Note: we finite-difference the *combined* height (interp + noise)
-    // so normals match the actual rendered surface, not the smooth-only
-    // version. This is important — noise creates real bumps the
-    // lighting should follow.
-    let mut normals = vec![0.0f32; vertex_count * 3];
-    for i in 0..n {
-        for j in 0..n {
-            let i_minus = if i == 0 { 0 } else { i - 1 };
-            let i_plus = if i + 1 >= n { n - 1 } else { i + 1 };
-            let j_minus = if j == 0 { 0 } else { j - 1 };
-            let j_plus = if j + 1 >= n { n - 1 } else { j + 1 };
-
-            let h_xm = interp_heights[i_minus * n + j] + noise_deltas[i_minus * n + j];
-            let h_xp = interp_heights[i_plus * n + j] + noise_deltas[i_plus * n + j];
-            let h_ym = interp_heights[i * n + j_minus] + noise_deltas[i * n + j_minus];
-            let h_yp = interp_heights[i * n + j_plus] + noise_deltas[i * n + j_plus];
-
-            let dx = (i_plus - i_minus) as f32 * step_m;
-            let dy = (j_plus - j_minus) as f32 * step_m;
-            // Tangent along +x is (dx, 0, h_xp - h_xm).
-            // Tangent along +y is (0, dy, h_yp - h_ym).
-            // Normal = (Tx × Ty)  →  (-(h_xp-h_xm)*dy, -(h_yp-h_ym)*dx, dx*dy)
-            // Both dx and dy are positive, so the z-component is always
-            // positive → normal points up (+Z) for flat terrain.
-            let nx = -(h_xp - h_xm) * dy;
-            let ny = -(h_yp - h_ym) * dx;
-            let nz = dx * dy;
-            let mag = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-6);
-            let idx3 = (i * n + j) * 3;
-            normals[idx3] = nx / mag;
-            normals[idx3 + 1] = ny / mag;
-            normals[idx3 + 2] = nz / mag;
         }
     }
 
@@ -711,8 +663,9 @@ pub fn subdivide_landblock(
     // all sub-quads inside a base cell inherit that cell's diagonal so
     // the silhouette matches retail's per-cell split exactly (and at
     // `factor == 1` the sub-quad IS the cell, the retail case).
-    let lb_x_int = ((landblock_id >> 24) & 0xff) * 8; // global cell X of LB's SW corner
-    let lb_y_int = ((landblock_id >> 16) & 0xff) * 8; // global cell Y of LB's SW corner
+    // `lb_x_int` / `lb_y_int` (global cell X/Y of the LB's SW corner) are
+    // declared above with the position loop — reused here for the index
+    // triangulation so the diagonal matches the drawn surface exactly.
     let mut indices = Vec::with_capacity((n - 1) * (n - 1) * 6);
     for i in 0..(n - 1) {
         for j in 0..(n - 1) {
@@ -723,11 +676,7 @@ pub fn subdivide_landblock(
             // Which retail cell does this sub-quad belong to?
             let cell_x = lb_x_int + (i / factor) as u32;
             let cell_y = lb_y_int + (j / factor) as u32;
-            let swto_ne = if LEGACY_FIXED_DIAGONAL {
-                true // legacy: every quad on the SW↔NE diagonal
-            } else {
-                cell_swto_ne_cut(cell_x, cell_y)
-            };
+            let swto_ne = cell_swto_ne_cut(cell_x, cell_y);
             // Both branches emit the SAME CW-from-+Z winding the legacy
             // fixed split used; the adapter's per-triangle reversal then
             // yields conventional CCW for FrontSide rendering, so per-poly
@@ -888,66 +837,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stone_codes_get_noise_within_bounds() {
-        let h = flat(0.0);
-        let c = codes(0); // BarrenRock — stone, scale 1.0
-        let r = zero_roads();
-        let adj = AdjacentHeights::default();
-        let out = subdivide_landblock(&h, &adj, 4, &c, &r, 0xA9B40000, 0xC0FFEE);
-        // Every vertex z should be in [-0.3, 0.3].
-        let mut saw_positive = false;
-        let mut saw_negative = false;
-        for i in 0..out.vertex_count as usize {
-            let z = out.positions[i * 3 + 2];
-            assert!(
-                z.abs() <= NOISE_AMPLITUDE_MAX_M + 1e-5,
-                "noise out of bounds at {i}: z={z}"
-            );
-            if z > 0.05 {
-                saw_positive = true;
-            }
-            if z < -0.05 {
-                saw_negative = true;
-            }
-        }
-        assert!(saw_positive, "expected at least one +noise sample");
-        assert!(saw_negative, "expected at least one -noise sample");
-    }
-
-    #[test]
-    fn snow_amplitude_smaller_than_stone() {
-        let h = flat(0.0);
-        let stone = codes(0); // 1.0 multiplier
-        let snow = codes(15); // 0.3 multiplier
-        let r = zero_roads();
-        let adj = AdjacentHeights::default();
-        let s_stone = subdivide_landblock(&h, &adj, 4, &stone, &r, 0xA9B40000, 0xC0FFEE);
-        let s_snow = subdivide_landblock(&h, &adj, 4, &snow, &r, 0xA9B40000, 0xC0FFEE);
-        // Max absolute z on stone should exceed snow (same RNG path so
-        // the per-vertex noise sign + magnitude order is preserved).
-        let max_abs = |s: &SubdividedLandblock| -> f32 {
-            let mut m = 0.0f32;
-            for i in 0..s.vertex_count as usize {
-                let z = s.positions[i * 3 + 2].abs();
-                if z > m {
-                    m = z;
-                }
-            }
-            m
-        };
-        let m_stone = max_abs(&s_stone);
-        let m_snow = max_abs(&s_snow);
-        assert!(
-            m_snow < m_stone,
-            "snow amplitude {m_snow} should be smaller than stone {m_stone}"
-        );
-        // Snow scale is 0.3 — magnitudes track the multiplier ratio.
-        assert!(
-            (m_snow - 0.3 * m_stone).abs() < 0.05 * m_stone,
-            "expected snow ≈ 0.3 × stone, got snow={m_snow} stone={m_stone}"
-        );
-    }
+    // Removed `stone_codes_get_noise_within_bounds` and
+    // `snow_amplitude_smaller_than_stone` (2026-06-26): per-category noise
+    // no longer displaces terrain GEOMETRY — vertex positions are the
+    // faceted collision surface. `noise_displacement_m` and its own unit
+    // tests remain below for any non-geometry use.
 
     #[test]
     fn lb_edge_mirror_boundary_when_adjacent_absent() {
@@ -982,64 +876,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn lb_edge_uses_adjacent_when_loaded() {
-        // Inner LB is flat at 10.0. Adjacent LBs all at 50.0. The
-        // bicubic right at the east boundary should DIFFER between
-        // the mirror branch (which sees flat 10) and the adjacent
-        // branch (which sees the 10 → 50 step). Catmull-Rom is
-        // non-monotonic — overshoot/undershoot near a step is real
-        // math, not a bug — so we test "differs", not "is higher".
-        let h = flat(10.0);
-        let c = codes(16);
-        let r = zero_roads();
-        let east_heights = [[50.0f32; 9]; 2];
-        let adj_with = AdjacentHeights {
-            east: Some(east_heights),
-            ..Default::default()
-        };
-        let adj_mirror = AdjacentHeights::default();
-
-        let out_with = subdivide_landblock(&h, &adj_with, 4, &c, &r, 0xA9B40000, 1);
-        let out_mirror = subdivide_landblock(&h, &adj_mirror, 4, &c, &r, 0xA9B40000, 1);
-
-        // Mirror case: every sample is 10 because mirror reads h itself.
-        let n = out_with.grid_size as usize;
-        for i in 0..n {
-            for j in 0..n {
-                let z = out_mirror.positions[(i * n + j) * 3 + 2];
-                assert!(
-                    (z - 10.0).abs() < 1e-3,
-                    "mirror-boundary flat LB should stay at 10 at ({i},{j}), got {z}"
-                );
-            }
-        }
-
-        // Adjacent branch: at u=7.5 (between control 7 and 8) and
-        // beyond, the patch reads east column at h[9]=50, producing a
-        // raw bicubic value different from 10. Pre-clamp CR(10,10,10,50,0.5)
-        // = 7.5 — an undershoot of 2.5 m below the bilinear (= 10).
-        // The visual-vs-collision clamp caps this at ±0.3 m → 9.7.
-        let mid_j = n / 2;
-        let z_75 = out_with.positions[(30 * n + mid_j) * 3 + 2];
-        assert!(
-            (z_75 - 9.7).abs() < 0.05,
-            "adjacent-east branch at u=7.5 should deviate to clamp at 9.7 (got {z_75})"
-        );
-        // i=32 → u=8.0 → t=0 → returns p1 = h[8] = 10 (no clamp needed).
-        let z_80 = out_with.positions[(32 * n + mid_j) * 3 + 2];
-        assert!(
-            (z_80 - 10.0).abs() < 0.1,
-            "exact east edge u=8.0 reads control point directly, got {z_80}"
-        );
-        // Verify some adjacent-branch vertex differs from the
-        // mirror-branch baseline by at least the clamp amount.
-        let z_mirror_30 = out_mirror.positions[(30 * n + mid_j) * 3 + 2];
-        assert!(
-            (z_75 - z_mirror_30).abs() > 0.25,
-            "adjacent and mirror at u=7.5 should differ by clamp; got adj={z_75}, mirror={z_mirror_30}"
-        );
-    }
+    // Removed `lb_edge_uses_adjacent_when_loaded` (2026-06-26): it asserted
+    // the bicubic POSITION path read neighbour-LB heights and overshot, then
+    // clamped to ±0.3 m. Positions are faceted now (no bicubic, no clamp);
+    // the neighbour strips feed cross-LB NORMALS instead — covered by
+    // `cross_lb_normals_are_seam_continuous`.
 
     #[test]
     fn vertex_normal_flat_terrain_is_z_up() {
@@ -1133,44 +974,114 @@ mod tests {
     }
 
     #[test]
-    fn visual_stays_within_collision_clamp() {
-        // Build a 9×9 grid with strong elevation gradient — exactly the
-        // case where Catmull-Rom overshoots the bilinear.
+    fn visual_surface_equals_collision_surface() {
+        // Strong elevation gradient — the case the old bicubic path used
+        // to overshoot by metres. Now every subdivided vertex must sit
+        // EXACTLY on the faceted collision surface (`triangle_height_in_cell`
+        // on the cell's retail split), so the local player can never be
+        // half-sunk under / floating over the drawn ground.
         let mut h = [[0.0f32; 9]; 9];
         for x in 0..9 {
             for y in 0..9 {
-                // Sinusoidal hills: peaks of 50m, valleys of 0m.
-                let xx = x as f32;
-                let yy = y as f32;
-                h[x][y] = 25.0 + 25.0 * (xx * 0.7).sin() * (yy * 0.7).cos();
+                h[x][y] = 25.0 + 25.0 * (x as f32 * 0.7).sin() * (y as f32 * 0.7).cos();
             }
         }
-        let c = codes(0); // stone — noise scale 1.0
+        let c = codes(0);
         let r = zero_roads();
         let adj = AdjacentHeights::default();
-        let out = subdivide_landblock(&h, &adj, 4, &c, &r, 0xA9B40000, 0xC0FFEE);
+        let lb_id = 0xA9B4_0000u32;
+        let factor = 4usize;
+        let out = subdivide_landblock(&h, &adj, factor as u32, &c, &r, lb_id, 0xC0FFEE);
         let n = out.grid_size as usize;
-        let factor = 4;
-        // Every subdivided vertex must be within ±VISUAL_VS_COLLISION_MAX_M
-        // of the bilinear-at-that-point.
+        let lb_x_int = ((lb_id >> 24) & 0xff) * 8;
+        let lb_y_int = ((lb_id >> 16) & 0xff) * 8;
         let mut max_dev = 0.0f32;
         for i in 0..n {
             for j in 0..n {
                 let u = i as f32 / factor as f32;
                 let v = j as f32 / factor as f32;
-                let bilinear = eval_bilinear_at(&h, u, v);
+                let cu = (u.floor() as usize).min(7);
+                let cv = (v.floor() as usize).min(7);
+                let fx = u - cu as f32;
+                let fy = v - cv as f32;
+                let sw_ne_cut =
+                    cell_swto_ne_cut(lb_x_int + cu as u32, lb_y_int + cv as u32);
+                let expected = triangle_height_in_cell(
+                    h[cu][cv],
+                    h[cu + 1][cv],
+                    h[cu][cv + 1],
+                    h[cu + 1][cv + 1],
+                    fx,
+                    fy,
+                    sw_ne_cut,
+                );
                 let z = out.positions[(i * n + j) * 3 + 2];
-                let dev = (z - bilinear).abs();
+                let dev = (z - expected).abs();
                 if dev > max_dev {
                     max_dev = dev;
                 }
                 assert!(
-                    dev <= VISUAL_VS_COLLISION_MAX_M + 1e-4,
-                    "visual ({i},{j}) deviated by {dev} > {VISUAL_VS_COLLISION_MAX_M}"
+                    dev < 1e-4,
+                    "visual ({i},{j}) Z={z} != collision {expected} (dev {dev})"
                 );
             }
         }
-        eprintln!("[visual_stays_within_collision_clamp] max dev = {max_dev}");
+        eprintln!("[visual_surface_equals_collision_surface] max dev = {max_dev}");
+    }
+
+    #[test]
+    fn cross_lb_normals_are_seam_continuous() {
+        // The vertex shared by two adjacent landblocks must get an
+        // IDENTICAL normal from each LB's `control_grid_normals` — else
+        // lighting seams every 192 m. Build LB-A (global x 0..=8) and its
+        // east neighbour LB-B (x 8..=16) from one continuous, nonlinear
+        // height field, wire the neighbour strips, and check the shared
+        // east/west edge.
+        let f = |gx: i32, gy: i32| -> f32 {
+            (gx as f32 * 0.37).sin() * 3.0 + (gy as f32 * 0.29).cos() * 2.0 + gx as f32 * 0.5
+        };
+        let mut a = [[0.0f32; 9]; 9];
+        let mut b = [[0.0f32; 9]; 9];
+        for i in 0..9 {
+            for j in 0..9 {
+                a[i][j] = f(i as i32, j as i32);
+                b[i][j] = f(8 + i as i32, j as i32);
+            }
+        }
+        // A's east strip = B columns 0,1 (global x 8,9).
+        let mut a_adj = AdjacentHeights::default();
+        let mut e = [[0.0f32; 9]; 2];
+        for j in 0..9 {
+            e[0][j] = b[0][j];
+            e[1][j] = b[1][j];
+        }
+        a_adj.east = Some(e);
+        // B's west strip = A columns 7,8 (global x 7,8).
+        let mut b_adj = AdjacentHeights::default();
+        let mut w = [[0.0f32; 9]; 2];
+        for j in 0..9 {
+            w[0][j] = a[7][j];
+            w[1][j] = a[8][j];
+        }
+        b_adj.west = Some(w);
+
+        let na = control_grid_normals(&a, &a_adj);
+        let nb = control_grid_normals(&b, &b_adj);
+        for j in 0..9 {
+            for k in 0..3 {
+                let dev = (na[8][j][k] - nb[0][j][k]).abs();
+                assert!(
+                    dev < 1e-6,
+                    "seam normal mismatch at j={j} k={k}: A={} B={} (dev {dev})",
+                    na[8][j][k],
+                    nb[0][j][k]
+                );
+            }
+        }
+        // Sanity: the field is not flat, so the seam normal must actually
+        // tilt off straight-up (otherwise the test proves nothing).
+        let tilted = (0..9).any(|j| na[8][j][0].abs() > 1e-3 || na[8][j][1].abs() > 1e-3);
+        assert!(tilted, "expected non-trivial normals on a sloped field");
     }
 
     #[test]
@@ -1242,11 +1153,9 @@ mod tests {
             h_max - h_min > 1.0,
             "Holtburg should have >1m height range, got [{h_min}, {h_max}]"
         );
-        // Subdivided heights should never deviate from the underlying
-        // bicubic + 0.3m noise by an unbounded amount. At control points
-        // the subdivided value must equal the 9×9 grid exactly (modulo
-        // the noise term — but bicubic-at-control-point is the control
-        // height, and noise can shift it by up to 0.3m).
+        // At control points the subdivided value must equal the 9×9 grid
+        // EXACTLY — positions are the faceted collision surface now (no
+        // bicubic overshoot, no noise).
         for cx in 0..9 {
             for cy in 0..9 {
                 let i = cx * factor as usize;
@@ -1255,8 +1164,8 @@ mod tests {
                 let expected = heights[cx][cy];
                 let deviation = (z - expected).abs();
                 assert!(
-                    deviation <= NOISE_AMPLITUDE_MAX_M + 0.01,
-                    "control ({cx},{cy}) deviation {deviation} exceeds noise cap"
+                    deviation < 1e-3,
+                    "control ({cx},{cy}) deviation {deviation} — visual must equal collision"
                 );
             }
         }

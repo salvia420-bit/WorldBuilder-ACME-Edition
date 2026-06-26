@@ -1,29 +1,36 @@
 //! Per-LB height sample. Two implementations, selected at bake time
 //! via [`crate::BakeMode`]:
 //!
-//! - **Bilinear** ([`bilinear_height_from_grid`]) — renderer-friendly,
-//!   matches `holtburger_world::state::types::terrain_height_at`. Used
-//!   by [`crate::BakeMode::Strict`].
 //! - **Triangle-plane** ([`triangle_plane_height_from_grid`]) — verbatim
-//!   port of ACE's `LandblockMesh.GetZ`. Each 8×8 cell is split into
-//!   two triangles by a diagonal whose direction comes from
-//!   [`get_split_dir`] (a deterministic hash of the global cell coord).
-//!   Z at `(lx, ly)` is the plane equation of whichever triangle
-//!   contains the query point. Used by [`crate::BakeMode::AceCompat`].
+//!   port of ACE's `LandblockMesh.GetZ`. Each 8×8 cell is split into two
+//!   triangles by a diagonal from [`get_split_dir`] (a deterministic hash
+//!   of the global cell coord); Z is the plane equation of whichever
+//!   triangle contains the query point. Used by [`crate::BakeMode::AceCompat`]
+//!   — the **default**, and the mode that lands scenery on the Z the player
+//!   actually stands on: the render meshes (`build_mesh`, `subdivide_landblock`)
+//!   and physics (`holtburger_world::state::types::terrain_height_at`) all
+//!   interpolate within the per-cell TRIANGLE.
+//! - **Bilinear** ([`bilinear_height_from_grid`]) — interpolates across the
+//!   whole cell quad. Used by [`crate::BakeMode::Strict`]. NOTE (2026-06-26):
+//!   this NO LONGER matches the player/render surface — physics + render moved
+//!   to the per-cell triangle on 2026-06-19/20, so bilinear now diverges from
+//!   the drawn ground by up to `twist/4` (~1.15 m) on saddle cells. Retained
+//!   only as an explicit alternative.
 //!
 //! ## Why the two modes
 //!
-//! At the 4 corners of each cell, both methods evaluate to the vertex
-//! height — they agree exactly there. Along the diagonal split they
-//! disagree: bilinear interpolates across the whole quad, triangle-plane
-//! snaps to whichever of the two triangles contains the point. For
-//! typical Holtburg slopes the disagreement is sub-decimetre, but for
-//! 1:1 Coldeve parity we must match ACE bit-exactly. The renderer
-//! (`apps/holtburger-web`) and `holtburger-world` physics integrator
-//! use bilinear (see `holtburger_world::state::types::terrain_height_at`
-//! at `crates/holtburger-world/src/state/types.rs:460`), so Strict mode
-//! makes scenery snap to the same Z the player walks on, while
-//! AceCompat snaps to whatever Z ACE itself would emit today.
+//! At the 4 corners of each cell both methods evaluate to the vertex
+//! height — they agree exactly there. Along the diagonal they disagree:
+//! bilinear interpolates across the whole quad, triangle-plane snaps to
+//! whichever triangle contains the point. Since the renderer and
+//! `holtburger-world` physics now both interpolate the per-cell TRIANGLE,
+//! **AceCompat is the mode that matches where the player walks**; Strict
+//! (bilinear) is the divergent option.
+//!
+//! The two split hashes are equivalent: [`get_split_dir`] (ACE convention,
+//! `true` = NW-SE) and `holtburger_dat::terrain_subdiv::cell_swto_ne_cut`
+//! (retail convention, `true` = SW↔NE) select the SAME diagonal with inverse
+//! boolean sense — locked by the `split_conformance` test below.
 //!
 //! Determinism is preserved either way — the bake's output is
 //! byte-identical given identical inputs.
@@ -148,6 +155,40 @@ pub fn get_split_dir(landblock_id_top_16: u16, cell_x: i32, cell_y: i32) -> bool
     let dw = term0.wrapping_sub(term1).wrapping_add(term2).wrapping_sub(0x519B_8F25);
     // `(dw & 0x80000000) == 0` — i.e. the sign bit is 0, i.e. dw >= 0.
     dw >= 0
+}
+
+#[cfg(test)]
+mod split_conformance {
+    use super::get_split_dir;
+    use holtburger_dat::terrain_subdiv::cell_swto_ne_cut;
+
+    /// ACE's `get_split_dir` (`true` = NW-SE) and the retail
+    /// `cell_swto_ne_cut` (`true` = SW↔NE) are the SAME geometric diagonal
+    /// with INVERSE boolean sense (the hash constants are bit-identical:
+    /// 0x0CCAC033 == 214614067, etc.). Lock that across a spread of
+    /// landblocks + cells so the bake's diagonal can never silently drift
+    /// from the surface the player stands on.
+    #[test]
+    fn split_dir_matches_retail_cell_swto_ne_cut() {
+        for lb_x in [0u16, 1, 42, 0xA9, 0xFE, 0xFF] {
+            for lb_y in [0u16, 7, 0xB4, 0xC0, 0xFF] {
+                let top16 = (lb_x << 8) | lb_y;
+                for cx in 0..8i32 {
+                    for cy in 0..8i32 {
+                        let gx = (lb_x as u32) * 8 + cx as u32;
+                        let gy = (lb_y as u32) * 8 + cy as u32;
+                        let ace = get_split_dir(top16, cx, cy);
+                        let retail = cell_swto_ne_cut(gx, gy);
+                        assert_eq!(
+                            ace, !retail,
+                            "split mismatch at lb=({lb_x:#x},{lb_y:#x}) cell=({cx},{cy}): \
+                             ace(NW-SE)={ace} retail(SW-NE)={retail}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// 2D triangle containment test. Mirrors `Triangle.Contains` from

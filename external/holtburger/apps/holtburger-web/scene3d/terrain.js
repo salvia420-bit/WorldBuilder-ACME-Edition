@@ -1993,8 +1993,12 @@ export async function resolveTerrainRingOpts(
   // the flag is missing or the wasm export hasn't been built yet (e.g.
   // tests stubbing wasmExports).
   const subdivLevel = pickSubdivLevel(scene3d);
+  // 2026-06-26: route subdivLevel=1 through the subdivided path too (factor=1).
+  // It returns the same 9×9 grid as build_mesh BUT with seam-continuous
+  // cross-LB normals + faceted (collision-exact) positions, so the base path
+  // no longer shows a lighting seam at every 192 m landblock boundary.
   const canSubdivide =
-    subdivLevel > 1 &&
+    subdivLevel >= 1 &&
     typeof wasmExports.fetch_subdivided_landblocks === "function";
 
   // Phase 2.2 — animated water/lava displacement. Only enabled at
@@ -3651,74 +3655,16 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
 }
 
 // ---------------------------------------------------------------------
-// Visual-vs-collision Z reconciliation.
+// Visual-vs-collision Z reconciliation was REMOVED 2026-06-26.
 //
-// Phase 2.1 subdivision interpolates 9×9 control heights with a bicubic
-// Catmull-Rom basis. The resulting visual surface deviates from the
-// 24 m bilinear collision surface by up to ±VISUAL_VS_COLLISION_MAX_M
-// (= 0.3 m, clamped server-side at terrain_subdiv.rs). Physics
-// (`WorldState::terrain_height_at`) queries bilinear; the rendered mesh
-// is Catmull-Rom. So a player at the bilinear standing-Z appears to
-// sink up to 0.3 m into a Catmull-Rom peak, or float over a Catmull-Rom
-// valley dip.
-//
-// `getTerrainVisualZ` casts a vertical ray against the rendered terrain
-// group and returns the visible surface Z at (x, y). Callers (loop.js's
-// player pose appliers) substitute this for the bilinear Z when
-// positioning the rendered avatar, while leaving the server-
-// authoritative collision pose unchanged.
-//
-// Cost: one raycast per call. THREE's bounding-sphere broad-phase skips
-// every LB whose mesh doesn't intersect the vertical ray (only the
-// 1–2 LBs directly under the query XY get triangle-tested), so per-
-// frame cost is ~one LB's worth of triangle tests — sub-millisecond
-// at subdivLevel=8 (≈8K tris/LB).
+// The terrain mesh now sits *exactly* on the faceted collision surface:
+// `terrain_subdiv::subdivide_landblock` builds every vertex Z from
+// `triangle_height_in_cell` on the cell's retail split — the same surface
+// `WorldState::terrain_height_at` binds the player to. With visual ==
+// collision there is no gap to reconcile, so the old `getTerrainVisualZ`
+// raycast (+ its 0.3 m lift / indoor-clamp dance) is gone. The rig and
+// remote players render directly at their authoritative Z (see loop.js).
 // ---------------------------------------------------------------------
-
-const _terrainVisualRaycaster = new THREE.Raycaster();
-const _terrainVisualRayOrigin = new THREE.Vector3();
-const _terrainVisualRayDir = new THREE.Vector3(0, -1, 0);
-const _terrainVisualIntersects = [];
-
-export function getTerrainVisualZ(scene3d, x, y, fallbackZ, maxDeltaM = Infinity) {
-  const group = scene3d?.terrainGroup;
-  if (!group || !group.children || group.children.length === 0) {
-    return fallbackZ;
-  }
-  // Raycaster works in three.js WORLD space, but the terrain mesh sits
-  // under worldRoot's -π/2 X rotation (AC z-up → three y-up). So we
-  // transform the AC query into the world frame: acToThree(x, y, 1000) =
-  // (x, 1000, -y), cast straight down (three -Y), and read the hit back
-  // as AC z = point.y (the exact closed-form inverse). Cast from well
-  // above any plausible terrain height (Holtburg ~96 m peak; AC overall
-  // ~200 m max) so the ray origin is always above the surface.
-  _terrainVisualRayOrigin.set(x, 1000, -y);
-  _terrainVisualRaycaster.set(_terrainVisualRayOrigin, _terrainVisualRayDir);
-  _terrainVisualRaycaster.far = 2000;
-  _terrainVisualIntersects.length = 0;
-  _terrainVisualRaycaster.intersectObject(
-    group,
-    true,
-    _terrainVisualIntersects
-  );
-  if (_terrainVisualIntersects.length === 0) return fallbackZ;
-  const z = _terrainVisualIntersects[0].point.y;
-  _terrainVisualIntersects.length = 0;
-  if (!Number.isFinite(z)) return fallbackZ;
-  // F4-3 (bughunt 2026-06-09) — max-delta safety clamp. This raycast is an
-  // OUTDOOR-ONLY cosmetic reconcile (lift the rig ≤0.3 m from the bilinear
-  // collision surface onto the Catmull-Rom render surface). The vertical ray
-  // is fired from y=1000 and three's raycaster ignores `.visible` (and the
-  // PView fix force-shows terrain indoors), so an INDOOR pose's ray hits the
-  // OUTDOOR land surface dozens of metres away — pre-fix that buried every
-  // dungeon mob / upstairs character at the terrain surface. A hit further
-  // than `maxDeltaM` from the caller's authoritative Z is therefore never the
-  // surface this object is standing on: reject it and keep `fallbackZ`. With
-  // the default `Infinity` this is a no-op (old behaviour); the pose-appliers
-  // pass the documented 0.3 m bound + margin.
-  if (Math.abs(z - fallbackZ) > maxDeltaM) return fallbackZ;
-  return z;
-}
 
 // ── FCULL — OPT-IN per-LB terrain frustum + distance cull (2026-06-08) ─
 //
@@ -3730,13 +3676,13 @@ export function getTerrainVisualZ(scene3d, x, y, fallbackZ, maxDeltaM = Infinity
 // cell-visibility BFS (which keeps `terrainGroup.visible`) + three's auto
 // per-mesh cull, exactly as the recon recommended.
 //
-// CAVEAT (why this is opt-in, not default): `getTerrainVisualZ` raycasts
-// the terrain group for nameplate Y-projection, and THREE's raycaster skips
-// `.visible === false` objects. Flipping an LB's `.visible` here would make
-// a nameplate that projects onto a culled (off-screen / far) LB fall back to
-// `fallbackZ`. That is benign (the LB is off-screen by definition) but it is
-// a behaviour change, so the pass is opt-in and the default path never
-// touches terrain `.visible`.
+// CAVEAT (why this is opt-in, not default): kept opt-in conservatively to
+// avoid any behaviour change. The original reason no longer applies — it was
+// that `getTerrainVisualZ` raycast the terrain group and THREE's raycaster
+// skips `.visible === false` objects, so flipping an LB's `.visible` could
+// change a raycast result — but that reconcile raycast was removed
+// 2026-06-26. If a future audit confirms nothing else raycasts the terrain
+// group, this pass could safely become default-on.
 //
 // The per-LB cull sphere is a CLOSED-FORM known-bounds sphere (no geometry
 // walk): center at the LB's AC-space middle (lb*192 + 96, height midpoint),

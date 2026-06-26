@@ -76,7 +76,7 @@ use holtburger_dat::landblock::CellLandblock;
 ///
 /// | Concern | `AceCompat` (default) | `Strict` |
 /// |---|---|---|
-/// | Z snap | Triangle-plane via [`triangle_plane_height_from_grid`] — mirrors `LandblockMesh.GetZ` per-cell triangulation. | Bilinear via [`bilinear_height_from_grid`] — matches `holtburger_world` and the live renderer. |
+/// | Z snap | Triangle-plane via [`triangle_plane_height_from_grid`] — mirrors `LandblockMesh.GetZ` per-cell triangulation, **and matches the live player surface** (render + `holtburger_world` physics both use the per-cell triangle). | Bilinear via [`bilinear_height_from_grid`] — NB: no longer matches the player/render surface (they moved to the per-cell triangle 2026-06-19/20); retained as an explicit alternative. |
 /// | Slope rejection | Skipped — `Scenery.cs:69` has it as `TODO: ensure walkable slope` so ACE doesn't reject. | Implemented — rejects placements whose terrain-normal Z (cos slope) falls outside `[min_slope, max_slope]`, matching retail `ObjectDesc::CheckSlope`. |
 ///
 /// `AceCompat` is the **1:1 Coldeve compatibility** target — what the

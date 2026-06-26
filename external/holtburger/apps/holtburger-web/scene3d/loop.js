@@ -39,7 +39,7 @@ import * as THREE from "three";
 import { tickCellVisibility3D, tickPvsLoadExpansion } from "./cells.js";
 import { tickLightingForCellState } from "./lighting.js";
 import { tickFlameFlicker } from "./vfx/components/flameFlicker.js";
-import { getTerrainVisualZ, cullTerrainGroup } from "./terrain.js?v=phase-d-batch";
+import { cullTerrainGroup } from "./terrain.js?v=phase-d-batch";
 import { SHADOW_RECEIVE_RANGE_SQ_M as BUILDINGS_SHADOW_RANGE_SQ_M } from "./buildings.js";
 import {
   SHADOW_RECEIVE_RANGE_SQ_M as STATICS_SHADOW_RANGE_SQ_M,
@@ -734,31 +734,13 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   }
   const qw = Math.cos(heading * 0.5);
   const qz = Math.sin(heading * 0.5);
-  // Visual-vs-collision Z reconcile. `posZ` is the wasm integrator's
-  // bilinear standing-Z (matches what ACE physics agrees on); the
-  // rendered terrain mesh interpolates with Catmull-Rom and can sit up
-  // to VISUAL_VS_COLLISION_MAX_M (0.3 m) above bilinear on peaks. That
-  // delta was rendering the player's feet inside the ground. Raycast
-  // the rendered terrain at the player's XY and use the visual Z if
-  // the cast hits — physics/server pose stays untouched (see
-  // `getTerrainVisualZ` doc in terrain.js).
-  //
-  // Track B2 (2026-06-08): only clamp to the terrain mesh while
-  // grounded. Mid-jump the integrator's ballistic `posZ` IS the rig's
-  // altitude — clamping it to `getTerrainVisualZ` every frame flattened
-  // the gravity arc so the rig never left the ground (only the camera,
-  // which reads raw integrator Z, flew up). When airborne, render at the
-  // raw `posZ` so the arc reaches the rig.
-  // F4-3 (bughunt 2026-06-09): the 4th arg caps the lift to 0.3 m (the
-  // documented visual-vs-collision delta) + margin. The raycast hits the
-  // OUTDOOR land surface even for an INDOOR pose (the ray ignores `.visible`
-  // and terrain is force-shown indoors), which pre-fix sank the grounded
-  // third-person avatar to the terrain surface — dozens of metres off — in
-  // any dungeon / upstairs room. A hit beyond the clamp is never the surface
-  // we're standing on, so it's rejected and the integrator's Z is kept.
-  let renderZ = isOnGround
-    ? getTerrainVisualZ(scene3d, predicted.x, predicted.y, posZ, 0.5)
-    : posZ;
+  // The rendered terrain mesh now sits exactly on the faceted collision
+  // surface the integrator's `posZ` is bound to (terrain_subdiv builds
+  // vertex Z from `triangle_height_in_cell`: visual == collision), so
+  // there is no visual-vs-collision gap to reconcile — render the rig
+  // directly at the authoritative `posZ`. (Removed the per-frame
+  // `getTerrainVisualZ` raycast + 0.3 m grounded lift, 2026-06-26.)
+  const renderZ = posZ;
 
   // Low-pass the rig Z to kill the ~5-10 Hz vertical reconcile bob (see
   // the note atop this fn). Ease a persisted rig-Z toward `renderZ`; snap
@@ -2236,30 +2218,13 @@ function _armPosition(scene3d, em, upd) {
   // B reconciliation gate sees the fresh `ts` and behaves
   // correctly.
   if (!isLocalPlayerGuid(g)) {
-    // Visual-vs-collision Z reconcile (same rationale as the
-    // local-player path in applyLocalPlayerPoseFromIntegrator):
-    // server sends bilinear-collision Z; Catmull-Rom render
-    // surface deviates by up to 0.3 m. Raycast lifts the
-    // remote rig to the visible terrain so other players don't
-    // appear partially buried.
-    //
-    // F4-3 (bughunt 2026-06-09): this is OUTDOOR-ONLY. The old
-    // "returns wz when the ray misses indoors" claim was false —
-    // a vertical ray over a dungeon HITS the outdoor land surface
-    // above it (the raycaster ignores `.visible` and terrain is
-    // force-shown indoors), so every indoor mob/player rig was
-    // relocated to the surface dozens of metres up. Gate on the
-    // entity's cell: indoor (landblock low16 >= 0x100) keeps the
-    // server Z untouched; outdoor reconciles but clamps the lift
-    // to the documented 0.3 m delta + margin so a stray far hit
-    // can never teleport the rig.
-    const cellIndoor = ((upd.landblockId >>> 0) & 0xffff) >= 0x100;
-    const renderWz = cellIndoor
-      ? wz
-      : getTerrainVisualZ(scene3d, wx, wy, wz, 0.5);
+    // Terrain renders exactly on the collision surface the server Z is
+    // bound to (visual == collision), so no visual reconcile is needed —
+    // pose the remote rig directly at the server Z. (Removed the
+    // outdoor-only getTerrainVisualZ raycast + 0.3 m lift, 2026-06-26.)
     em.setPose(
       g,
-      wx, wy, renderWz,
+      wx, wy, wz,
       upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0
     );
   }

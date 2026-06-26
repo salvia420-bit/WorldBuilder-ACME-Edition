@@ -21,27 +21,6 @@ use crate::stats;
 use crate::vendor::VendorState;
 use crate::{WorldBootstrap, WorldEvent};
 
-/// Terrain-sink fix 2026-06-19: when `true` (default), [`WorldState::terrain_height_at`]
-/// interpolates the standing Z within the per-cell TRIANGLE on the SAME fixed
-/// z00↔z11 (SW→NE) diagonal the base render mesh (`build_mesh`, holtburger-web
-/// src/lib.rs) triangulates every cell on — so physics Z == the DRAWN surface.
-/// The old BILINEAR interpolation deviated from the triangulated render surface
-/// by up to `twist/4` on saddle cells (live-measured 1.15 m), rendering the local
-/// player half-sunk into slopes (it stood at the bilinear Z while the eye saw the
-/// triangle mesh). `false` = legacy bilinear, retained for A/B + revert. (Retail
-/// uses a per-cell split via `terrain_subdiv::cell_swto_ne_cut`; the base render
-/// mesh does NOT yet — matching the render's fixed diagonal here is what un-buries
-/// the rig at the shipped quality levels.)
-const USE_TRIANGLE_TERRAIN_Z: bool = true;
-
-/// RC-1 (2026-06-20): pick the per-cell triangulation diagonal via the retail
-/// AC2D hash (`terrain_subdiv::cell_swto_ne_cut`) instead of one fixed SW↔NE
-/// diagonal for every cell — matching what the base render mesh `build_mesh`
-/// and the subdiv>=2 path now do, so standing Z sits on the exact triangle the
-/// player sees. `false` reverts to the legacy fixed SW↔NE diagonal (A/B). Only
-/// consulted when [`USE_TRIANGLE_TERRAIN_Z`] is on.
-const USE_RETAIL_SPLIT_DIR: bool = true;
-
 pub struct ServerTimeSync {
     pub server_time: f64,
     pub local_time: web_time::Instant,
@@ -743,29 +722,16 @@ impl WorldState {
         let z01 = grid[cx0 * 9 + cy1];
         let z11 = grid[cx1 * 9 + cy1];
 
-        if !USE_TRIANGLE_TERRAIN_Z {
-            // Legacy bilinear over the cell quad (retained for A/B + revert).
-            let z = z00 * (1.0 - fx) * (1.0 - fy)
-                + z10 * fx * (1.0 - fy)
-                + z01 * (1.0 - fx) * fy
-                + z11 * fx * fy;
-            return Some(z);
-        }
-
         // Interpolate within the per-cell TRIANGLE so the standing Z equals the
-        // DRAWN terrain surface (no more half-sunk rig on slopes), and pick the
-        // SAME per-cell diagonal the retail client uses (RC-1, 2026-06-20). The
-        // base render mesh `build_mesh` and the subdiv>=2 path both split each
-        // cell via `terrain_subdiv::cell_swto_ne_cut`; mirror it here so physics
-        // standing-Z stays on the exact triangle the player sees. `gx`/`gy` are
-        // global cell coords (landblock byte * 8 + intra-LB cell index).
+        // DRAWN terrain surface (no half-sunk rig on slopes), picking the SAME
+        // per-cell diagonal the render meshes use: `build_mesh` (base) and
+        // `subdivide_landblock` (subdiv) both split each cell via
+        // `terrain_subdiv::cell_swto_ne_cut`, so physics standing-Z stays on the
+        // exact triangle the player sees. `gx`/`gy` are global cell coords
+        // (landblock byte * 8 + intra-LB cell index).
         let gx = (lb_x as u32) * 8 + cx0 as u32;
         let gy = (lb_y as u32) * 8 + cy0 as u32;
-        let sw_ne_cut = if USE_RETAIL_SPLIT_DIR {
-            holtburger_dat::terrain_subdiv::cell_swto_ne_cut(gx, gy)
-        } else {
-            true // legacy: fixed SW↔NE diagonal for every cell
-        };
+        let sw_ne_cut = holtburger_dat::terrain_subdiv::cell_swto_ne_cut(gx, gy);
         let z = holtburger_dat::terrain_subdiv::triangle_height_in_cell(
             z00, z10, z01, z11, fx, fy, sw_ne_cut,
         );
@@ -827,11 +793,7 @@ impl WorldState {
         // reads the exact face normal, not a bilinear average across the cell.
         let gx = (lb_x as u32) * 8 + cx0 as u32;
         let gy = (lb_y as u32) * 8 + cy0 as u32;
-        let sw_ne_cut = if USE_RETAIL_SPLIT_DIR {
-            holtburger_dat::terrain_subdiv::cell_swto_ne_cut(gx, gy)
-        } else {
-            true
-        };
+        let sw_ne_cut = holtburger_dat::terrain_subdiv::cell_swto_ne_cut(gx, gy);
         let (gfx, gfy) = holtburger_dat::terrain_subdiv::triangle_grad_in_cell(
             z00, z10, z01, z11, fx, fy, sw_ne_cut,
         );

@@ -860,14 +860,6 @@ fn resolve_region_land_height_table() -> Option<Vec<f32>> {
     (!table.is_empty()).then_some(table)
 }
 
-/// RC-1 (2026-06-20): default-on retail per-cell triangle split. `false`
-/// reverts to the legacy single fixed SW↔NE diagonal (A/B). The render mesh
-/// (`build_mesh`) and BOTH Z queries (`WorldState::terrain_height_at` in
-/// holtburger-world, `terrainHeightAt` below) read the SAME
-/// `terrain_subdiv::cell_swto_ne_cut`, so render shape and standing/camera Z
-/// never diverge. Mirrors `USE_TRIANGLE_TERRAIN_Z` in holtburger-world.
-const USE_RETAIL_SPLIT_DIR: bool = true;
-
 /// Tessellate a parsed `CellLandblock` into a [`LandblockMesh`].
 ///
 /// Pure CPU work — no I/O, no JS interop. Shared by
@@ -925,14 +917,10 @@ fn build_mesh(
             let v10 = x * 9 + y + 1;
             let v01 = (x + 1) * 9 + y;
             let v11 = (x + 1) * 9 + y + 1;
-            let sw_ne_cut = if USE_RETAIL_SPLIT_DIR {
-                holtburger_dat::terrain_subdiv::cell_swto_ne_cut(
-                    lb_cx + x as u32,
-                    lb_cy + y as u32,
-                )
-            } else {
-                true // legacy: fixed SW↔NE diagonal for every cell
-            };
+            let sw_ne_cut = holtburger_dat::terrain_subdiv::cell_swto_ne_cut(
+                lb_cx + x as u32,
+                lb_cy + y as u32,
+            );
             if sw_ne_cut {
                 // SW↔NE diagonal (v00↔v11). SW (v00) last in both → flat-shade.
                 // T1: NW → NE → SW. T2: NE → SE → SW.
@@ -1189,10 +1177,12 @@ const TERRAIN_NOISE_SEED: u64 = 0xAC_5EED_C0FFEE;
 /// path stays on the 9×9 grid via `SessionHandle::populateTerrain`.
 ///
 /// `cell_ids` is the same `XXYYFFFF` cell id list as
-/// [`fetch_landblock_heightmaps`]. Adjacent-LB heights are NOT yet
-/// stitched here — the bicubic uses mirror-boundary at LB edges.
-/// Stitching is a deferred follow-on; the visible seam at the loaded-
-/// ring edge is acceptable per the Phase 2.1 hand-off note.
+/// [`fetch_landblock_heightmaps`]. Neighbour-LB edge heights ARE stitched
+/// (2026-06-26): the 4-neighbour ring is best-effort-prefetched and its
+/// edge strips fed to `subdivide_landblock` so cross-LB vertex normals are
+/// seam-continuous (no lighting seam at the 192 m landblock boundary). A
+/// neighbour missing from the dat (world edge) falls back to a one-sided
+/// normal at that edge.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn fetch_subdivided_landblock(
@@ -1235,6 +1225,16 @@ pub async fn fetch_subdivided_landblocks(
     // F12-4 — table-aware height decode (no-op on retail; `?regionHeightTable=on`).
     let height_table = resolve_region_land_height_table();
     let height_table = height_table.as_deref();
+
+    // NOTE: no extra neighbour prefetch here. The ring driver fetches a
+    // whole ring as one batch (already prefetched above), so each LB's
+    // in-ring neighbours are resident in the cache and the synchronous
+    // `get_file_by_key` below picks them up for cross-LB normals. The
+    // ring's OUTWARD edge (neighbour outside the batch) is simply not
+    // cached → `get_file_by_key` returns `None` → one-sided normal there,
+    // which the next ring expansion fixes. (An explicit `prefetch().await`
+    // of the neighbour ring could stall the whole scene-init bake on a
+    // single slow/again-missing shard, so we deliberately avoid it.)
     let mut out = Vec::with_capacity(cell_ids.len());
     for id in &cell_ids {
         let bytes = source
@@ -1256,7 +1256,65 @@ pub async fn fetch_subdivided_landblocks(
             }
         }
 
-        let adjacent = AdjacentHeights::default();
+        // Gather neighbour-LB edge heights for seam-continuous cross-LB
+        // normals (see `control_grid_normals`). Missing neighbour → None →
+        // one-sided fallback at that edge.
+        let lb_x = (*id >> 24) & 0xFF;
+        let lb_y = (*id >> 16) & 0xFF;
+        let load_nbr = |nx: u32, ny: u32| -> Option<CellLandblock> {
+            let nid = (nx << 24) | (ny << 16) | 0xFFFF;
+            let bytes = source
+                .get_file_by_key(ResourceKey::new("eor/cell", nid))
+                .ok()?;
+            CellLandblock::unpack(&bytes).ok()
+        };
+        let mut adjacent = AdjacentHeights::default();
+        if lb_x < 0xFF {
+            if let Some(e) = load_nbr(lb_x + 1, lb_y) {
+                let mut s = [[0.0f32; 9]; 2];
+                for xl in 0..2usize {
+                    for y in 0..9usize {
+                        s[xl][y] = e.get_height_with_table(xl, y, height_table);
+                    }
+                }
+                adjacent.east = Some(s);
+            }
+        }
+        if lb_x > 0 {
+            if let Some(w) = load_nbr(lb_x - 1, lb_y) {
+                let mut s = [[0.0f32; 9]; 2];
+                for xl in 0..2usize {
+                    for y in 0..9usize {
+                        // west cols 7,8 → strip indices 0,1
+                        s[xl][y] = w.get_height_with_table(7 + xl, y, height_table);
+                    }
+                }
+                adjacent.west = Some(s);
+            }
+        }
+        if lb_y < 0xFF {
+            if let Some(n) = load_nbr(lb_x, lb_y + 1) {
+                let mut s = [[0.0f32; 2]; 9];
+                for x in 0..9usize {
+                    for yl in 0..2usize {
+                        s[x][yl] = n.get_height_with_table(x, yl, height_table);
+                    }
+                }
+                adjacent.north = Some(s);
+            }
+        }
+        if lb_y > 0 {
+            if let Some(so) = load_nbr(lb_x, lb_y - 1) {
+                let mut s = [[0.0f32; 2]; 9];
+                for x in 0..9usize {
+                    for yl in 0..2usize {
+                        // south rows 7,8 → strip indices 0,1
+                        s[x][yl] = so.get_height_with_table(x, 7 + yl, height_table);
+                    }
+                }
+                adjacent.south = Some(s);
+            }
+        }
         let sub = subdivide_landblock(
             &heights,
             &adjacent,
@@ -27466,7 +27524,8 @@ impl SessionHandle {
     ///
     /// JS camera path uses this to lift the camera off the ground:
     /// `if (cameraZ < terrainZ + radius + 0.2) cameraZ = terrainZ + 0.6;`.
-    /// Triangle-plane (fixed z00↔z11 diagonal) so it tracks the drawn terrain
+    /// Triangle-plane on the retail per-cell split diagonal
+    /// (`terrain_subdiv::cell_swto_ne_cut`) so it tracks the drawn terrain
     /// surface the player stands on — continuous across cells, no slope jitter.
     #[wasm_bindgen(js_name = terrainHeightAt)]
     pub fn terrain_height_at(&self, world_x: f32, world_y: f32) -> Option<f32> {
@@ -27504,11 +27563,7 @@ impl SessionHandle {
         // wrong on ~53% of cells). `gx`/`gy` = landblock byte * 8 + cell index.
         let gx = (lb_x as u32) * 8 + cx0 as u32;
         let gy = (lb_y as u32) * 8 + cy0 as u32;
-        let sw_ne_cut = if USE_RETAIL_SPLIT_DIR {
-            holtburger_dat::terrain_subdiv::cell_swto_ne_cut(gx, gy)
-        } else {
-            true // legacy: fixed SW↔NE diagonal for every cell
-        };
+        let sw_ne_cut = holtburger_dat::terrain_subdiv::cell_swto_ne_cut(gx, gy);
         let z = holtburger_dat::terrain_subdiv::triangle_height_in_cell(
             z00, z10, z01, z11, fx, fy, sw_ne_cut,
         );
