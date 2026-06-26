@@ -2409,6 +2409,137 @@ mod scenery_fetch {
 #[cfg(target_arch = "wasm32")]
 pub use scenery_fetch::{clear_scenery_cache, init_scenery_base_url, scenery_cache_size};
 
+// Phase 4 (P4.0b) — suite artifact transport (`fetch_suite_artifact`).
+//
+// Suite artifacts are OPAQUE per-DID binary sidecars (one file per
+// `(did, artifact_type)` pair), NOT parsed JSONL. So this module is
+// deliberately MUCH simpler than `scenery_fetch`: it reuses only the
+// base-url + cache scaffolding and returns raw bytes. There is no line
+// parser, no `CachedRecord`, no freeze-hash gate — the renderer (later
+// phases) owns interpreting the bytes.
+//
+// INERT until later phases: nothing in the live page calls
+// `fetch_suite_artifact` yet, so `suite_cache_size()` is `0` at boot and
+// the OFF path is byte-identical to before this module existed.
+#[cfg(target_arch = "wasm32")]
+mod suite_fetch {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use wasm_bindgen::prelude::*;
+
+    thread_local! {
+        /// Suite base URL, set once by `init_suite_base_url`. Trailing
+        /// slash is normalised in. `None` until init.
+        static SUITE_BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
+
+        /// Per-`(did, artifact_type)` byte cache. An empty `Vec` is a
+        /// positive cache entry meaning "no sidecar here" (404 →
+        /// fail-soft "no artifact"). The wasm runtime is single-threaded
+        /// so the `RefCell` is sound.
+        static SUITE_CACHE: RefCell<HashMap<(u32, String), Vec<u8>>> =
+            RefCell::new(HashMap::new());
+    }
+
+    /// Set the base URL for `/suite/...` fetches. Mirrors
+    /// `init_scenery_base_url`: trailing slash is added if missing,
+    /// safe to call multiple times — overwrites.
+    #[wasm_bindgen]
+    pub fn init_suite_base_url(url: String) {
+        let mut normalised = url;
+        if !normalised.ends_with('/') {
+            normalised.push('/');
+        }
+        SUITE_BASE_URL.with(|cell| {
+            *cell.borrow_mut() = Some(normalised);
+        });
+    }
+
+    /// Number of `(did, type)` artifacts currently cached (empties
+    /// count too). `0` at boot since nothing fetches yet.
+    #[wasm_bindgen]
+    pub fn suite_cache_size() -> usize {
+        SUITE_CACHE.with(|cell| cell.borrow().len())
+    }
+
+    /// Clear the suite cache. Test / smoke helper; not used in the
+    /// normal page flow.
+    #[wasm_bindgen]
+    pub fn clear_suite_cache() {
+        SUITE_CACHE.with(|cell| cell.borrow_mut().clear());
+    }
+
+    pub fn base_url() -> Option<String> {
+        SUITE_BASE_URL.with(|cell| cell.borrow().clone())
+    }
+
+    /// Cache-hit lookup for one `(did, type)` pair. Returns the cached
+    /// bytes (possibly empty) or `None` on miss.
+    pub fn cache_get(did: u32, artifact_type: &str) -> Option<Vec<u8>> {
+        SUITE_CACHE.with(|cell| cell.borrow().get(&(did, artifact_type.to_owned())).cloned())
+    }
+
+    /// Insert one `(did, type)` → bytes entry into the cache.
+    pub fn cache_put(did: u32, artifact_type: String, bytes: Vec<u8>) {
+        SUITE_CACHE.with(|cell| {
+            cell.borrow_mut().insert((did, artifact_type), bytes);
+        });
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub use suite_fetch::{clear_suite_cache, init_suite_base_url, suite_cache_size};
+
+/// Fetch one opaque suite artifact sidecar for a given DID + type.
+///
+/// URL shape: `<suite_base_url>/0x{did:08X}.{artifact_type}.bin`.
+///
+/// # Behaviour
+///
+/// 1. Cache-check the `(did, artifact_type)` pair — a hit (even an
+///    empty `Vec`) returns immediately.
+/// 2. Otherwise `GET` the sidecar.
+/// 3. On HTTP 404: a missing sidecar is "no artifact", NOT an error —
+///    cache + return an EMPTY `Vec` (fail-soft, never throws).
+/// 4. On any other HTTP/transport error: return `Err(JsValue)`.
+/// 5. On success: cache the bytes + return them.
+///
+/// wasm-bindgen auto-marshals `Vec<u8>` → `Uint8Array`, so JS receives
+/// a `Promise<Uint8Array>`. INERT until later phases call it.
+///
+/// JS must call [`init_suite_base_url`] once at page-init before any
+/// `fetch_suite_artifact` call.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_suite_artifact(
+    did: u32,
+    artifact_type: String,
+) -> Result<Vec<u8>, JsValue> {
+    let base_url = suite_fetch::base_url().ok_or_else(|| {
+        JsValue::from_str("init_suite_base_url must be called before fetch_suite_artifact")
+    })?;
+
+    // Cache hit (empty Vec is a positive "no sidecar" entry)?
+    if let Some(hit) = suite_fetch::cache_get(did, &artifact_type) {
+        return Ok(hit);
+    }
+
+    let url = format!("{base_url}0x{did:08X}.{artifact_type}.bin");
+    let bytes = match holtburger_resource_http::fetch_bytes(&url).await {
+        Ok(b) => b,
+        // 404 → missing sidecar = "no artifact". Fail-soft: cache an
+        // empty Vec and return it (must NOT throw).
+        Err(holtburger_resource_http::HttpError::Http { status: 404, .. }) => {
+            suite_fetch::cache_put(did, artifact_type, Vec::new());
+            return Ok(Vec::new());
+        }
+        Err(e) => return Err(JsValue::from_str(&format!("fetch {url}: {e}"))),
+    };
+
+    suite_fetch::cache_put(did, artifact_type, bytes.clone());
+    Ok(bytes)
+}
+
 /// Fetch per-landblock baked scenery placements for a list of
 /// `XXYYFFFE` LandblockInfo cell IDs. Mirrors
 /// [`fetch_landblock_objects`]'s call shape so the renderer's
