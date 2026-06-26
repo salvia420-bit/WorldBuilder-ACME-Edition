@@ -11,6 +11,7 @@ members = [
     "crates/holtburger-manifest",
     "crates/holtburger-resource-http",
     "crates/holtburger-scenery-bake",
+    "crates/holtburger-suite-bake",
     "crates/holtburger-scripting",
     "crates/holtburger-session",
     "crates/holtburger-transport-ws",

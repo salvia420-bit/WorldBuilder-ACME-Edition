@@ -1627,6 +1627,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "holtburger-suite-bake"
+version = "0.1.0"
+dependencies = [
+ "holtburger-common",
+]
+
+[[package]]
 name = "holtburger-tools"
 version = "0.1.0"
 dependencies = [
