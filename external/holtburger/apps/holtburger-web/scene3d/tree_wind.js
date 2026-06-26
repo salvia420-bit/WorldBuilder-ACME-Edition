@@ -56,13 +56,16 @@ export function treeWindDir() {
 }
 
 let _windBake;
-/** `?windBake=on` — consume baked dist/suite windclips instead of synthesizing.
- *  DEFAULT-OFF. OFF ⇒ live synthesis (byte-identical to today). [C]. */
+/** `?windBake=on/off` — consume baked dist/suite windclips instead of synthesizing.
+ *  DEFAULT-ON (2026-06-26); `?windBake=off` reverts to live synthesis. Baked frames
+ *  are bit-identical to synth (proven), so the steady-state render is unchanged; only
+ *  the brief cold-load (frozen until the async fetch warms) and the dir/strength-inert
+ *  (baked-authoritative) behavior differ. [C] — owes the batched 1070 eye-test. */
 export function windBakeEnabled() {
   if (_windBake !== undefined) return _windBake;
-  let on = false;
+  let on = true; // default-on; `?windBake=off` is the escape to live synthesis
   const v = _strFlag("windBake");
-  if (v != null) { const s = v.toLowerCase(); on = s === "on" || s === "1" || s === "true" || s === "yes"; }
+  if (v != null) { const s = v.toLowerCase(); on = s !== "off" && s !== "0" && s !== "false" && s !== "no" && s !== ""; }
   return (_windBake = on);
 }
 
