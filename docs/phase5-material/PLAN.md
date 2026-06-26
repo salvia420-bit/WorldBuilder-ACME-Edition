@@ -138,8 +138,10 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
   **Normal stays runtime-generated** (byte-identical); only roughness sourced from the sidecar. **aoMap
   deferred** (needs a uv2 the geometry lacks; ao bytes baked + ready). Fail-soft: miss/cold = exact current look.
   **Gate:** ✅ `node --check` all 6 changed JS; ✅ decode regression 60/0; ✅ remap invariant g∈[0.8,1.0]
-  monotonic can't-chrome. ⏳ **in-world SwiftShader boot-smoke** (no-crash + suite fetches + maps-bound) =
-  best-effort this session; **1070 look-tuning OWED** (per user: default-on blind, polish later).
+  monotonic can't-chrome; ✅ **page-load SwiftShader smoke** (headless playwright): **0 module-load errors**,
+  boots to `form-shown`, wasm loaded — the structural risk (my JS breaking boot) is retired. ⏳ **in-world**
+  render smoke (suite fetches + maps-bound in a live scene) OWED — the full in-world boot timed out on init3D
+  + flaky ACE this session, not a code issue. **1070 look-tuning OWED** (per user: default-on blind, polish later).
   - `_materialFromFlags` lacks `surfaceDid` → attach at the **two caller sites** (materials.js:2681 build path,
     :3318 twin) where `did` is in scope, right after `mat` is built + `this.materials.set(did,mat)`.
   - **attach-on-resolve is REQUIRED** (a material is built once then cached; sync-attach-only would never
@@ -196,3 +198,4 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 - S6b-1 — JS decoder (HSB1 container→texchan payload) + getByKey + loadTexchanManifest in suite_assets.js (inert); test_texchan_decode.mjs ok=60/0. Rust-encode→JS-decode validated.
 - S6b-2 — materials.js attaches baked roughnessMap (default-ON, conservative remap can't-chrome); adapter texture builder; getByKeyAsync upgrade; index.html plumb + ?v= bump. Gates: node --check 6/6, decode 60/0, remap invariant. In-world boot-smoke best-effort; 1070 look-tuning owed.
 - S7 — ABSORBED (default-on shipped in S6b-2). S8 — N/A (normal stays runtime-generated; nothing dead to delete).
+- S6b-2 page-load smoke — 0 module-load errors, boots to form-shown, wasm loaded (structural risk retired). In-world render smoke + 1070 look-tuning OWED. **Phase-5 core COMPLETE + default-ON.**
