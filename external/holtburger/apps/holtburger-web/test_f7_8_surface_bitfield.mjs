@@ -113,9 +113,10 @@ const matSrc = readFileSync(matPath, "utf8");
 const patched = matSrc
   .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
   .replace(
-    // Phase 1.1 — materials.js now also imports surfacePixelsToNormalTexture;
-    // accept any combination of named imports from adapter.js.
-    /^\s*import\s+\{\s*[^}]*\s*\}\s+from\s+["'].\/adapter\.js["'];?\s*$/m,
+    // Strip ALL bare relative imports (adapter.js, vfx_flags.js,
+    // suite_assets.js, …) so the source runs under `new Function`. The
+    // referenced symbols are injected as factory params (stubs below).
+    /^\s*import\s+(?:\*\s+as\s+\w+|\{[^}]*\}|\w+)\s+from\s+["']\.\/[^"']+["'];?\s*$/gm,
     "",
   )
   .replace(/^\s*export\s+function\s+/gm, "function ")
@@ -124,10 +125,21 @@ const patched = matSrc
 
 const factory = new Function(
   "THREE",
+  // Phase-5 — materials.js imports these; inject stubs. This test never
+  // enables the baked-material path (materialBakeEnabled() → false), so the
+  // SuiteAssetSource / loadTexchanManifest stubs are never actually called.
+  "materialBakeEnabled",
+  "SuiteAssetSource",
+  "loadTexchanManifest",
   `${patched}\n; return { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag, readSurfaceParityV2Flag };`,
 );
 const { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag, readSurfaceParityV2Flag } =
-  factory(THREE);
+  factory(
+    THREE,
+    () => false,
+    function SuiteAssetSourceStub() {},
+    async () => new Map(),
+  );
 
 // ---- Stage 1: SURFACE_TYPE bit-value verification -------------------
 check(

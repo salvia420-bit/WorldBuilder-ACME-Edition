@@ -55,6 +55,20 @@ export function treeWindDir() {
   return _dirDeg;
 }
 
+let _windBake;
+/** `?windBake=on/off` — consume baked dist/suite windclips instead of synthesizing.
+ *  DEFAULT-ON (2026-06-26); `?windBake=off` reverts to live synthesis. Baked frames
+ *  are bit-identical to synth (proven), so the steady-state render is unchanged; only
+ *  the brief cold-load (frozen until the async fetch warms) and the dir/strength-inert
+ *  (baked-authoritative) behavior differ. [C] — owes the batched 1070 eye-test. */
+export function windBakeEnabled() {
+  if (_windBake !== undefined) return _windBake;
+  let on = true; // default-on; `?windBake=off` is the escape to live synthesis
+  const v = _strFlag("windBake");
+  if (v != null) { const s = v.toLowerCase(); on = s !== "off" && s !== "0" && s !== "false" && s !== "no" && s !== ""; }
+  return (_windBake = on);
+}
+
 // Phase-1 allowlist of scenery SetupModel DIDs to animate. Seeded from the
 // verified top-placement foliage/trees (client_portal.dat survey 2026-06-23).
 // The bbox base-pivot rig (wind_rig.js) pivots each part about its own vertex
@@ -82,5 +96,5 @@ export function treeWindDids() {
 
 /** Reset memoized flag readers (tests only). */
 export function _resetTreeWindFlags() {
-  _flag = undefined; _strength = undefined; _dirDeg = undefined;
+  _flag = undefined; _strength = undefined; _dirDeg = undefined; _windBake = undefined;
 }

@@ -37,8 +37,12 @@
 import * as THREE from "three";
 import { meshToGeometryGroups } from "./adapter.js";
 import { surfacePixelsFetcher } from "./bake_worker_client.js";
-import { treeWindEnabled, treeWindStrength, treeWindDir } from "./tree_wind.js";
+import { treeWindEnabled, treeWindStrength, treeWindDir, windBakeEnabled } from "./tree_wind.js";
 import { buildBboxRig, partBBox, hash01 } from "./wind_rig.js";
+// P4.3 fetch-not-synthesize flip (?windBake=on, DEFAULT-OFF). Imported eagerly but
+// the SuiteAssetSource is constructed LAZILY and ONLY under windBakeEnabled(), so the
+// off-trace never touches suite_assets.js (zero fetch / zero cache mutation — [R]).
+import { SuiteAssetSource, ensureSuiteInit } from "./suite_assets.js";
 // VFX (Visual-Behavior Suite): the live tree-wind runtime now generates its
 // clip through the deformation.windBend component (byte-identical wrapper over
 // buildTreeWindClip). archetype #1's MECH-A consumer.
@@ -380,6 +384,15 @@ export async function attachAnimatedScenery(scene3d, placements, wasmExports, op
 // geometry → same pivots/weights. Compute the rig once, reuse for all instances.
 const _windRigCache = new Map(); // setupId -> rigs[] (from buildBboxRig)
 
+// P4.3 — lazy SuiteAssetSource singleton. Constructed ONLY under windBakeEnabled()
+// so the default off-trace never instantiates it (no fetch, no cache mutation → [R]).
+let _suiteSource = null;
+let _windBakeInertWarned = false; // §B.5 dir/strength-inert warn fires at most once.
+function _getSuiteSource(wasmExports) {
+  if (!_suiteSource) _suiteSource = new SuiteAssetSource({ wasmExports });
+  return _suiteSource;
+}
+
 function _unionBox(a, b) {
   return {
     minX: Math.min(a.minX, b.minX), minY: Math.min(a.minY, b.minY), minZ: Math.min(a.minZ, b.minZ),
@@ -390,11 +403,15 @@ function _unionBox(a, b) {
 
 /** Shared wind driver per (setupId, phase-bucket): one mixer playing a synthetic
  *  clip, ONE per group, advanced once per rAF (same model as getOrCreateDidGroup). */
-function getOrCreateWindGroup(groupKey, numParts, rig, windParams) {
+function getOrCreateWindGroup(groupKey, numParts, rig, windParams, bakedClip) {
   const existing = _didGroups.get(groupKey);
   if (existing) return existing;
   if (numParts <= 0) return null;
-  const { frames, numFrames, fps } = windBend.buildClip({ numParts, rig }, windParams);
+  // P4.3 — prefer the baked phase-bucket frames when present (?windBake=on); else the
+  // UNCHANGED live synthesis. bakedClip === undefined on the off-path ⇒ byte-identical.
+  let frames, numFrames, fps;
+  if (bakedClip) { ({ frames, numFrames, fps } = bakedClip); }
+  else           { ({ frames, numFrames, fps } = windBend.buildClip({ numParts, rig }, windParams)); }
   const clip = buildSceneryAnimationClip(THREE, frames, numParts, numFrames, fps);
   if (!clip) return null;
   const template = new THREE.Group();
@@ -494,37 +511,76 @@ async function buildOneWind(p, wasmExports, materialCache, spFetch) {
  * Entry point — build animated wind nodes for tree placements peeled out of the
  * frozen statics bake (statics.js, when ?treeWind=on). No-op when the flag is
  * off, the pkg predates fetchBuildingPlacement, or nothing qualifies. Fail-soft,
- * capped, deduped. Returns the count built.
+ * capped, deduped.
+ *
+ * P4.3 coverage-gated peel fallback — returns `{built:number, failed:Placement[]}`.
+ * `failed` carries the ORIGINAL placement objects (the same ones peeled from
+ * `statics`) for every placement that could NOT be turned into a live wind node
+ * (build returned null/threw, group degenerate, or over the animated cap). The
+ * caller (statics.js) re-adds `failed` to the FROZEN instanced path so a missed
+ * wind clip yields a STATIC tree, never a vanished one. When every build
+ * succeeds `failed` is empty ⇒ the frozen path is untouched ⇒ byte-identical.
+ * The guard early-returns keep `failed` empty (they did nothing before, so they
+ * peel nothing back — the off-trace stays [R] byte-identical).
  */
 export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
-  if (!treeWindEnabled()) return 0;
-  if (!scene3d?.staticsGroup || !Array.isArray(placements) || !wasmExports) return 0;
-  if (typeof wasmExports.fetchBuildingPlacement !== "function") return 0; // pre-rebuild → frozen
-  if (placements.length === 0) return 0;
+  if (!treeWindEnabled()) return { built: 0, failed: [] };
+  if (!scene3d?.staticsGroup || !Array.isArray(placements) || !wasmExports) return { built: 0, failed: [] };
+  if (typeof wasmExports.fetchBuildingPlacement !== "function") return { built: 0, failed: [] }; // pre-rebuild → frozen
+  if (placements.length === 0) return { built: 0, failed: [] };
   _rafDisposed = false; // re-arm after a prior dispose if scenery loads again.
 
   const resolveParent = (typeof opts?.resolveParent === "function") ? opts.resolveParent : null;
   const { getOrCreateMaterialCache } = await import("./statics.js");
   const materialCache = getOrCreateMaterialCache(scene3d);
-  if (!materialCache) return 0;
+  if (!materialCache) return { built: 0, failed: [] };
   const spFetch = surfacePixelsFetcher(wasmExports);
 
   const K = Math.max(1, (opts?.phaseBuckets | 0) || 4);
   const windBase = { dirDeg: treeWindDir(), strength: treeWindStrength() };
 
+  // P4.3 fetch-not-synthesize flip (?windBake=on, DEFAULT-OFF). Construct the suite
+  // source + init its base URL ONLY under windBakeEnabled() so the off-trace never
+  // touches suite_assets.js (no SuiteAssetSource, no ensureSuiteInit, no fetch → [R]).
+  const useBake = windBakeEnabled();
+  const suite = useBake ? _getSuiteSource(wasmExports) : null;
+  if (suite) {
+    ensureSuiteInit(wasmExports);
+    // §B.5 — baked clips are dir/strength-AUTHORITATIVE (Option A, §0.2): the header
+    // carries no per-param echo, so dirDeg/strength are frozen into the baked frames.
+    // The ?treeWindDir/?treeWindStrength URL knobs are therefore INERT under
+    // windBake=on; warn ONCE so a knob can't silently desync the consumed clip.
+    if (!_windBakeInertWarned && (treeWindDir() !== 135 || treeWindStrength() !== 1)) {
+      _windBakeInertWarned = true;
+      console.warn("[tree-wind] windBake=on: ?treeWindDir/?treeWindStrength are INERT " +
+        "(baked clips are dir/strength-authoritative, baked at 135/1); the URL knobs do not " +
+        "affect the consumed sway.");
+    }
+    // §B.2 pre-warm — kick all distinct setupId fetches once before the build loop so
+    // the suite cache is warm by the next LB load (shrinks the one-load-frozen window).
+    const warmed = new Set();
+    for (const p of placements) {
+      const sid = (p.modelId ?? p.objId ?? 0) >>> 0;
+      if (sid !== 0 && !warmed.has(sid)) { warmed.add(sid); suite.get(sid, "windclip"); }
+    }
+  }
+
   let built = 0;
   let dropped = 0;
+  // P4.3 — placements that could NOT become a live wind node. Each entry is the
+  // ORIGINAL peeled placement `p`; statics.js re-freezes these so none vanish.
+  const failed = [];
   for (const p of placements) {
     const key = "w:" + placementKey(p);
     if (_builtKeys.has(key)) continue;
-    if (_instances.length >= maxAnimated()) { dropped += 1; continue; }
+    if (_instances.length >= maxAnimated()) { failed.push(p); dropped += 1; continue; }
     _builtKeys.add(key);
     // eslint-disable-next-line no-await-in-loop
     const r = await buildOneWind(p, wasmExports, materialCache, spFetch).catch((e) => {
       console.warn("[tree-wind] buildOneWind threw:", e);
       return null;
     });
-    if (!r) { _builtKeys.delete(key); continue; }
+    if (!r) { _builtKeys.delete(key); failed.push(p); continue; }
 
     const setupId = (p.modelId ?? p.objId ?? 0) >>> 0;
     // Deterministic per-instance phase bucket → masks forest lockstep without a
@@ -532,8 +588,25 @@ export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
     const bucket = Math.floor(hash01(key) * K) % K;
     const groupKey = `wind:0x${setupId.toString(16)}:${bucket}`;
     const windParams = { ...windBase, phaseOffset: (bucket / K) * 2 * Math.PI };
-    const g = getOrCreateWindGroup(groupKey, r.partCount, r.rig, windParams);
-    if (!g) { _builtKeys.delete(key); continue; }
+    // P4.3 — baked (ON) vs synth (OFF, UNCHANGED). The two branches are kept separate
+    // (no synth-fallback-inside-ON) so a null/cold suite never builds a synth group that
+    // _didGroups would then never replace once the suite warms (the D3 lazy-replace
+    // hazard). Under ON, a loading/absent/part-count-mismatched clip → failed.push(p) →
+    // statics.js re-freezes this LB's tree; the next LB load animates from the warm bake.
+    let g;
+    if (useBake) {
+      const clip = suite.get(setupId, "windclip"); // sync; null while loading/absent
+      if (!clip) { _builtKeys.delete(key); failed.push(p); continue; }
+      // PARAM-DRIFT GUARD (§B.3): the bake's part count MUST equal the runtime's
+      // material-gated part count, else the frame-major frames address the wrong parts.
+      // A mismatch is a STALE bake → treat as a miss; do NOT animate a wrong-arity clip.
+      if (clip.numParts !== r.partCount) { _builtKeys.delete(key); failed.push(p); continue; }
+      g = getOrCreateWindGroup(groupKey, clip.numParts, r.rig, windParams,
+        { frames: clip.bucketFrames(bucket), numFrames: clip.numFrames, fps: clip.fps });
+    } else {
+      g = getOrCreateWindGroup(groupKey, r.partCount, r.rig, windParams);
+    }
+    if (!g) { _builtKeys.delete(key); failed.push(p); continue; }
 
     const parent = (resolveParent && resolveParent(p)) || scene3d.staticsGroup;
     parent.add(r.node);
@@ -544,9 +617,9 @@ export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
   }
   if (built > 0 || dropped > 0) {
     console.log(`[tree-wind] built ${built} wind-tree instances across ${_didGroups.size} groups` +
-      (dropped > 0 ? `; DROPPED ${dropped} over the ${maxAnimated()} cap (?animSceneryMax)` : ""));
+      (dropped > 0 ? `; DROPPED ${dropped} over the ${maxAnimated()} cap (?animSceneryMax) → re-frozen` : ""));
   }
-  return built;
+  return { built, failed };
 }
 
 // Diag counters (probe via animatedSceneryDiag() during a local A/B).
@@ -668,4 +741,26 @@ export function disposeAnimatedScenery(_scene3d) {
   _instances.length = 0;
   _didGroups.clear();
   _builtKeys.clear();
+}
+
+// ── INERT diag surface (P4.3 rig byte-identity proof) ────────────────────────
+// Read-only mirror of the runtime per-setupId rig cache, for the producer's
+// OQ-2 rig-verify pass (tools/bake-windclips.mjs step 7): after one
+// attachWindTrees pass with ?treeWind=on, window.__dumpWindRig(did) returns the
+// exact `_windRigCache.get(did)` (buildBboxRig().rigs) the live path produced so
+// it can be diffed bit-for-bit against the producer's re-composed rig. Guarded
+// like the other window.__* diag surfaces; attaches a single read-only function
+// and mutates no module state → zero behavior change whether ?treeWind is on or
+// off. Returns null for an un-cached DID. Deep-cloned so callers cannot poke the
+// live cache entry.
+if (typeof window !== "undefined") {
+  window.__dumpWindRig = (did) => {
+    const rig = _windRigCache.get((did >>> 0));
+    if (!rig) return null;
+    try {
+      return JSON.parse(JSON.stringify(rig));
+    } catch (_) {
+      return null;
+    }
+  };
 }

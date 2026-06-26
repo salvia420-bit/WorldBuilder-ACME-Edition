@@ -21,6 +21,12 @@
 
 const LOW_RES_THRESHOLD: u32 = 64;
 
+/// Per-texel gain applied to the 3x3 luminance std-dev before clamping
+/// in `roughness_from_luminance`. A full black/white 1px edge yields a
+/// local σ near 0.5; gain 2.0 maps that to ~1.0 (max roughness) at the
+/// baseline `strength = 1.0`.
+const ROUGHNESS_CONTRAST_GAIN: f32 = 2.0;
+
 /// Generate an RGB8 normal map from RGBA8 diffuse pixels.
 ///
 /// `strength` scales the Sobel gradient before normalisation. `1.0` is
@@ -207,6 +213,119 @@ pub fn height_from_luminance(rgba: &[u8], w: u32, h: u32, strength: f32) -> Vec<
             .round()
             .clamp(0.0, 255.0);
         out[i] = n as u8;
+    }
+    out
+}
+
+/// Build a Rec.601 luminance buffer (f32 in [0,1]) from RGBA8 pixels.
+///
+/// Shared by the Phase-5 roughness/AO generators. The pre-existing
+/// `normal_from_luminance` / `height_from_luminance` keep their own
+/// inline copies deliberately untouched so their byte output stays
+/// frozen for the Phase-5 offline-vs-online byte-identity proof.
+fn build_luminance(rgba: &[u8], pixel_count: usize) -> Vec<f32> {
+    let mut lum = vec![0.0f32; pixel_count];
+    for i in 0..pixel_count {
+        let r = rgba[i * 4] as f32 / 255.0;
+        let g = rgba[i * 4 + 1] as f32 / 255.0;
+        let b = rgba[i * 4 + 2] as f32 / 255.0;
+        lum[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+    }
+    lum
+}
+
+/// Phase 5 — micro-roughness map (R8) from diffuse luminance detail.
+///
+/// Per-texel local 3x3 luminance standard deviation, scaled by
+/// `ROUGHNESS_CONTRAST_GAIN * strength` and clamped to [0,1]: locally
+/// busy regions (grain, weave, pitting) read rougher; locally flat
+/// regions read smooth (`0`). The mapping is **per-pixel** (no global
+/// normalisation) so a cropped/atlased sub-region bakes the same bytes
+/// as the standalone texture — important for the Phase-5 per-surface
+/// dedup key.
+///
+/// Output is one byte per pixel (`Vec<u8>` length `w*h`), intended as a
+/// `THREE.MeshStandardMaterial.roughnessMap` contribution the JS side
+/// folds against the per-category base roughness. `0` = no added
+/// roughness (a uniform surface bakes all-zero and leaves the base
+/// roughness untouched).
+///
+/// Palette-safe by construction: reads the **decoded** RGBA, never
+/// palette indices, so it can't emboss index-boundary seams.
+///
+/// Returns empty on malformed input (`rgba.len() < w*h*4` or zero dim).
+pub fn roughness_from_luminance(rgba: &[u8], w: u32, h: u32, strength: f32) -> Vec<u8> {
+    let pixel_count = (w as usize).saturating_mul(h as usize);
+    let needed_rgba = pixel_count.saturating_mul(4);
+    if pixel_count == 0 || rgba.len() < needed_rgba {
+        return Vec::new();
+    }
+
+    let mut lum = build_luminance(rgba, pixel_count);
+    if w <= LOW_RES_THRESHOLD || h <= LOW_RES_THRESHOLD {
+        lum = gaussian_blur_3x3(&lum, w, h);
+    }
+
+    let width = w as i32;
+    let height = h as i32;
+    let mut out = vec![0u8; pixel_count];
+    for y in 0..height {
+        for x in 0..width {
+            // 3x3 neighbourhood mean then variance → standard deviation.
+            let mut sum = 0.0f32;
+            let mut sum_sq = 0.0f32;
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let s = sample_clamped(&lum, x + dx, y + dy, width, height);
+                    sum += s;
+                    sum_sq += s * s;
+                }
+            }
+            let mean = sum / 9.0;
+            let var = (sum_sq / 9.0 - mean * mean).max(0.0);
+            let sigma = var.sqrt();
+            let r = (sigma * ROUGHNESS_CONTRAST_GAIN * strength).clamp(0.0, 1.0);
+            out[(y as usize) * (w as usize) + x as usize] =
+                (r * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    out
+}
+
+/// Phase 5 — cavity / ambient-occlusion map (R8) from diffuse luminance.
+///
+/// Compares each texel's luminance to its local (3x3 Gaussian) mean:
+/// texels darker than their surroundings read as crevices and get
+/// occluded; raised/flat texels stay fully lit. Output follows the
+/// `THREE.MeshStandardMaterial.aoMap` convention — `255` = no occlusion
+/// (white), lower = more occluded. `occ = clamp(strength * relu(mean -
+/// lum))`, `ao = 1 - occ`.
+///
+/// Per-pixel after the blur, so (like the roughness map) it is crop-
+/// stable for the per-surface dedup key, and palette-safe (decoded RGBA
+/// only). A uniform surface bakes all-`255` (no AO).
+///
+/// Returns empty on malformed input.
+pub fn ao_from_luminance(rgba: &[u8], w: u32, h: u32, strength: f32) -> Vec<u8> {
+    let pixel_count = (w as usize).saturating_mul(h as usize);
+    let needed_rgba = pixel_count.saturating_mul(4);
+    if pixel_count == 0 || rgba.len() < needed_rgba {
+        return Vec::new();
+    }
+
+    let mut lum = build_luminance(rgba, pixel_count);
+    if w <= LOW_RES_THRESHOLD || h <= LOW_RES_THRESHOLD {
+        lum = gaussian_blur_3x3(&lum, w, h);
+    }
+    // Local mean = one 3x3 Gaussian pass over the (possibly pre-blurred)
+    // luminance. Crevice signal = how far a texel sits below that mean.
+    let local_mean = gaussian_blur_3x3(&lum, w, h);
+
+    let mut out = vec![0u8; pixel_count];
+    for i in 0..pixel_count {
+        let occ = (strength * (local_mean[i] - lum[i]).max(0.0)).clamp(0.0, 1.0);
+        let ao = 1.0 - occ;
+        out[i] = (ao * 255.0).round().clamp(0.0, 255.0) as u8;
     }
     out
 }
@@ -543,5 +662,154 @@ mod tests {
         let a = height_from_luminance(&buf, 16, 16, 1.0);
         let b = height_from_luminance(&buf, 16, 16, 1.0);
         assert_eq!(a, b, "non-deterministic heightmap output");
+    }
+
+    // Phase 5 — roughness-map tests.
+
+    #[test]
+    fn roughness_empty_and_malformed_return_empty() {
+        assert!(roughness_from_luminance(&[], 0, 0, 1.0).is_empty());
+        assert!(roughness_from_luminance(&[0u8; 8], 4, 4, 1.0).is_empty());
+    }
+
+    #[test]
+    fn roughness_uniform_is_zero_golden() {
+        // Exact-byte golden: a flat surface has zero local contrast, so
+        // every texel bakes 0 (no added roughness — JS keeps the base).
+        // Predictable without a run-first cycle; the real-portal.dat byte
+        // golden lands at the S5 producer (DAT access there).
+        let buf = solid(128, 128, 90, 120, 60);
+        let r = roughness_from_luminance(&buf, 128, 128, 1.0);
+        assert_eq!(r.len(), 128 * 128);
+        assert!(
+            r.iter().all(|&b| b == 0),
+            "uniform surface must bake all-zero roughness"
+        );
+    }
+
+    #[test]
+    fn roughness_uniform_low_res_is_zero() {
+        let buf = solid(16, 16, 200, 200, 200);
+        let r = roughness_from_luminance(&buf, 16, 16, 1.0);
+        assert!(r.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn roughness_detail_is_nonzero() {
+        // A 1px checkerboard at 128 (above the low-res pre-blur threshold)
+        // is maximally busy → texels must read rough.
+        let buf = checker(128, 128, [0, 0, 0], [255, 255, 255]);
+        let r = roughness_from_luminance(&buf, 128, 128, 1.0);
+        assert_eq!(r.len(), 128 * 128);
+        assert!(
+            r.iter().any(|&b| b > 0),
+            "checkerboard should produce nonzero roughness"
+        );
+    }
+
+    #[test]
+    fn roughness_strength_scales() {
+        // 128x128 left-right ramp gives a constant small local σ. Higher
+        // strength must not lower any texel and must raise overall.
+        let w = 128u32;
+        let mut buf = Vec::with_capacity((w * w * 4) as usize);
+        for _ in 0..w {
+            for x in 0..w {
+                let v = (x as f32 / (w - 1) as f32 * 255.0).round() as u8;
+                buf.extend_from_slice(&[v, v, v, 0xFF]);
+            }
+        }
+        let lo = roughness_from_luminance(&buf, w, w, 0.5);
+        let hi = roughness_from_luminance(&buf, w, w, 2.0);
+        let idx = (60 * w + 60) as usize;
+        assert!(
+            hi[idx] >= lo[idx],
+            "higher strength must not reduce roughness (lo={}, hi={})",
+            lo[idx],
+            hi[idx]
+        );
+        let sum_lo: u64 = lo.iter().map(|&b| b as u64).sum();
+        let sum_hi: u64 = hi.iter().map(|&b| b as u64).sum();
+        assert!(
+            sum_hi > sum_lo,
+            "higher strength should raise overall roughness (lo={sum_lo}, hi={sum_hi})"
+        );
+    }
+
+    #[test]
+    fn roughness_determinism() {
+        let buf = checker(16, 16, [10, 10, 10], [240, 240, 240]);
+        let a = roughness_from_luminance(&buf, 16, 16, 1.0);
+        let b = roughness_from_luminance(&buf, 16, 16, 1.0);
+        assert_eq!(a, b, "non-deterministic roughness output");
+    }
+
+    // Phase 5 — AO / cavity-map tests.
+
+    #[test]
+    fn ao_empty_and_malformed_return_empty() {
+        assert!(ao_from_luminance(&[], 0, 0, 1.0).is_empty());
+        assert!(ao_from_luminance(&[0u8; 8], 4, 4, 1.0).is_empty());
+    }
+
+    #[test]
+    fn ao_uniform_is_white_golden() {
+        // Exact-byte golden: no luminance gradient → no crevices → AO is
+        // fully lit (255) everywhere. aoMap convention: white = no AO.
+        let buf = solid(128, 128, 70, 70, 70);
+        let ao = ao_from_luminance(&buf, 128, 128, 1.0);
+        assert_eq!(ao.len(), 128 * 128);
+        assert!(
+            ao.iter().all(|&b| b == 255),
+            "uniform surface must bake all-white AO"
+        );
+    }
+
+    #[test]
+    fn ao_dark_crevice_is_occluded() {
+        // A single dark texel in a bright field (128 → above the pre-blur
+        // threshold so it stays sharp) sits below its local mean → it
+        // must read occluded (< 255); a far bright texel stays lit (255).
+        let w = 128u32;
+        let mut buf = solid(w, w, 230, 230, 230);
+        let (cx, cy) = (64usize, 64usize);
+        let p = (cy * w as usize + cx) * 4;
+        buf[p] = 0;
+        buf[p + 1] = 0;
+        buf[p + 2] = 0;
+        let ao = ao_from_luminance(&buf, w, w, 1.0);
+        assert!(
+            ao[cy * w as usize + cx] < 255,
+            "dark crevice texel should be occluded"
+        );
+        assert_eq!(ao[0], 255, "far bright texel should stay fully lit");
+    }
+
+    #[test]
+    fn ao_strength_scales() {
+        let w = 128u32;
+        let mut buf = solid(w, w, 230, 230, 230);
+        let (cx, cy) = (64usize, 64usize);
+        let p = (cy * w as usize + cx) * 4;
+        buf[p] = 40;
+        buf[p + 1] = 40;
+        buf[p + 2] = 40;
+        let lo = ao_from_luminance(&buf, w, w, 0.5);
+        let hi = ao_from_luminance(&buf, w, w, 2.0);
+        let i = cy * w as usize + cx;
+        assert!(
+            hi[i] <= lo[i],
+            "higher strength should deepen occlusion (lo={}, hi={})",
+            lo[i],
+            hi[i]
+        );
+    }
+
+    #[test]
+    fn ao_determinism() {
+        let buf = checker(16, 16, [20, 20, 20], [220, 220, 220]);
+        let a = ao_from_luminance(&buf, 16, 16, 1.0);
+        let b = ao_from_luminance(&buf, 16, 16, 1.0);
+        assert_eq!(a, b, "non-deterministic AO output");
     }
 }

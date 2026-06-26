@@ -491,6 +491,8 @@ export function getOrCreateMaterialCache(scene3d) {
     forcePom: !!scene3d.forcePom,
     // Render-completeness audit (2026-05-29) — animated SurfaceTextures.
     animFramesFetch: scene3d.wasmExports?.fetchSurfaceAnimFrames ?? null,
+    // Phase-5 — wasm namespace for the baked-roughness by-key suite fetch.
+    wasmExports: scene3d.wasmExports ?? null,
     // === Wave 2.B — procedural normals (2026-05-28) ===
     // Quality-preset gate for Phase 1.1 procedural normal maps. Set on
     // scene3d in index.js from `quality.flags.normalMaps`. Undefined
@@ -1727,6 +1729,27 @@ export async function bakeStaticsForLandblock(
     return makeEmptySummary();
   }
 
+  // P4.3 coverage-gated peel fallback — attach the peeled wind trees HERE, BEFORE
+  // the frozen build consumes `statics`, so any placement whose wind node fails to
+  // build (a future fetch-not-synthesize clip miss, a build error, or the animated
+  // cap) flows back into the frozen instanced path via `statics.concat(failed)`
+  // instead of vanishing. On today's always-succeeds synthesis path `failed` is
+  // empty ⇒ `statics` is unchanged ⇒ the frozen build is byte-identical. windTrees
+  // is null whenever ?treeWind / ?visual are both off ⇒ this block is skipped on
+  // the off-trace (the materialCache used by attachWindTrees was already created at
+  // the head of this baker, so no ordering hazard).
+  if (windTrees) {
+    try {
+      const { failed } = await attachWindTrees(scene3d, windTrees, wasmExports);
+      if (failed && failed.length) statics = statics.concat(failed);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.statics] attachWindTrees threw; re-freezing all wind trees:", e);
+      statics = statics.concat(windTrees);
+    }
+    windTrees = null; // consumed — the post-build attach below is now a no-op.
+  }
+
   const uniqueModelIds = [...new Set(statics.map((s) => s.modelId))];
   // M2 (worker-based asset bake): route the model-mesh decode through the
   // bake worker when enabled (`?bakeWorker=1`). When disabled, `mmFetch`
@@ -1965,9 +1988,8 @@ export async function bakeStaticsForLandblock(
     if (animatedStatics) {
       await attachAnimatedScenery(scene3d, animatedStatics, wasmExports);
     }
-    if (windTrees) {
-      await attachWindTrees(scene3d, windTrees, wasmExports);
-    }
+    // (wind trees were attached above, BEFORE the frozen build, so a clip miss
+    //  re-freezes via statics.concat(failed) instead of vanishing — P4.3.)
     // Phase 3 — attach synthesized additive emitters to the particle
     // placements. ALL placements in THIS per-LB path share one landblock → one
     // constant owner key `static:<lbKey>` (lbKey is in scope from the bake
@@ -2271,6 +2293,26 @@ export async function bakeStaticsRing(
     return makeEmptySummary();
   }
 
+  // P4.3 coverage-gated peel fallback (ring path) — attach the peeled wind trees
+  // HERE, BEFORE the ring's primary-geometry fetch consumes `statics`, so any
+  // placement whose wind node fails to build (a future fetch-not-synthesize clip
+  // miss, a build error, or the animated cap) flows back into the frozen
+  // instanced path via `statics.concat(failed)` instead of vanishing. On today's
+  // always-succeeds synthesis path `failed` is empty ⇒ `statics` is unchanged ⇒
+  // the frozen build is byte-identical. windTrees is null whenever ?treeWind /
+  // ?visual are both off ⇒ this block is skipped on the off-trace.
+  if (windTrees) {
+    try {
+      const { failed } = await attachWindTrees(scene3d, windTrees, wasmExports);
+      if (failed && failed.length) statics = statics.concat(failed);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.statics] ring attachWindTrees threw; re-freezing all wind trees:", e);
+      statics = statics.concat(windTrees);
+    }
+    windTrees = null; // consumed — the post-build attach below is now a no-op.
+  }
+
   // ── Stage 2: unified primary geometry + degraded + material fetch ──
   // ONE round trip across the entire ring — preserves the F#5+6 win.
   const uniqueModelIds = [...new Set(statics.map((s) => s.modelId))];
@@ -2534,9 +2576,8 @@ export async function bakeStaticsRing(
     if (animatedStatics) {
       await attachAnimatedScenery(scene3d, animatedStatics, wasmExports);
     }
-    if (windTrees) {
-      await attachWindTrees(scene3d, windTrees, wasmExports);
-    }
+    // (wind trees were attached above, BEFORE the frozen build, so a clip miss
+    //  re-freezes via statics.concat(failed) instead of vanishing — P4.3.)
     // Phase 3 — the ring path spans MANY landblocks, so key each emitter to
     // ITS placement's landblock: owner `static:<lbKey(p)>`. Each LB's emitters
     // then tear down independently when THAT LB evicts. OFF ⇒ null ⇒ skipped ⇒

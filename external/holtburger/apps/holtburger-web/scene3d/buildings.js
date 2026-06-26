@@ -518,6 +518,8 @@ function resolveBuildingsOpts(scene3d) {
       csmState: scene3d.csmState ?? null,
       pomEnabled: !!scene3d.pomEnabled,
       forcePom: !!scene3d.forcePom,
+      // Phase-5 — wasm namespace for the baked-roughness by-key suite fetch.
+      wasmExports: scene3d.wasmExports ?? null,
       // === Wave 2.B — procedural normals (2026-05-28) ===
       // Quality-preset gate for Phase 1.1 procedural normal maps. Set on
       // scene3d in index.js from `quality.flags.normalMaps`. Undefined

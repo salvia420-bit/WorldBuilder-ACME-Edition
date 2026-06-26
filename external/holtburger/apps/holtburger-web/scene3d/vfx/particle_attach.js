@@ -53,6 +53,7 @@ import { vfxDescriptorFor } from "../vfx_catalog.js";
 import { getComponent, FAMILY_ORDER } from "./registry.js";
 import { vfxEffectEnabled } from "../vfx_flags.js";
 import { ownerRegistry as defaultOwnerRegistry } from "../particles/owner_registry.js";
+import { splitConfig as _splitConfig, mergeComponentConfig } from "./config_merge.js";
 
 /** The registry mech this attach path owns (registry.js MECHS includes it). */
 export const PARTICLE_MECH = "particle";
@@ -70,33 +71,10 @@ function _orderKey(comp) {
   return (fam == null ? 99 : fam) * 1000 + 0; // family-major; id breaks ties (string compare)
 }
 
-// Split a descriptor's flat config{} into per-component override buckets + a
-// shared scalar bucket. Precedence (low→high): comp.defaults < shared < byId[id].
-// Byte-for-byte the frag_attach._splitConfig idiom (replicated, not imported, so
-// this module is self-contained and node-testable in isolation — the "mirror
-// frag_attach" instruction). Pure.
-function _splitConfig(descriptorConfig) {
-  const shared = {};
-  const byId = {};
-  const cfg = descriptorConfig || {};
-  for (const k in cfg) {
-    if (!Object.prototype.hasOwnProperty.call(cfg, k)) continue;
-    const v = cfg[k];
-    if (v && typeof v === "object" && !Array.isArray(v)) byId[k] = v;
-    else shared[k] = v;
-  }
-  return { shared, byId };
-}
-
-/**
- * Merge a descriptor's config onto one particle component's defaults (pure).
- * @param {object} comp  a registered particle VisualComponent (`.defaults`, `.id`)
- * @param {{shared:object, byId:object}} split  from _splitConfig
- * @returns {object} the per-component config handed to emit(ctx) as ctx.config.
- */
-export function mergeComponentConfig(comp, split) {
-  return { ...(comp.defaults || {}), ...split.shared, ...(split.byId[comp.id] || {}) };
-}
+// _splitConfig + mergeComponentConfig moved to ./config_merge.js (P4.1a — frag_attach
+// and particle_attach shared a byte-identical copy). Re-exported so any importer of
+// mergeComponentConfig from this module is unaffected (handed to emit(ctx) as ctx.config).
+export { mergeComponentConfig };
 
 /**
  * Is this particle component's effect live? The default-OFF gate. Hardened vs

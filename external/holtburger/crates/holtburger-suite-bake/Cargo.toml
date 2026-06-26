@@ -1,0 +1,10 @@
+[package]
+name = "holtburger-suite-bake"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+holtburger-common.workspace = true

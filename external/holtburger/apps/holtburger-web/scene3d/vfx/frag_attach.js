@@ -25,6 +25,7 @@
 
 import { vfxDescriptorFor } from "../vfx_catalog.js";
 import { getComponent, FAMILY_ORDER } from "./registry.js";
+import { splitConfig as _splitConfig, mergeComponentConfig } from "./config_merge.js";
 
 // The chain-composition order (spec §2.3): deformation < texture < weathering <
 // emissive < particle. A frag plan is sorted by (FAMILY_ORDER[family], id) so the
@@ -35,35 +36,11 @@ function _orderKey(comp) {
   return (fam == null ? 99 : fam) * 1000 + 0; // family-major; id breaks ties (string compare)
 }
 
-// Split a descriptor's flat config{} into:
-//   • byId   — per-component override buckets: a top-level key whose value is a
-//              plain object (e.g. "emissive.glint": { strength: 0.9 }).
-//   • shared — every scalar/array top-level key (e.g. age: 0.4), applied to ALL
-//              components. The classifier emits scalars for shared knobs.
-// Precedence (low→high): comp.defaults < shared < byId[comp.id].
-function _splitConfig(descriptorConfig) {
-  const shared = {};
-  const byId = {};
-  const cfg = descriptorConfig || {};
-  for (const k in cfg) {
-    if (!Object.prototype.hasOwnProperty.call(cfg, k)) continue;
-    const v = cfg[k];
-    if (v && typeof v === "object" && !Array.isArray(v)) byId[k] = v;
-    else shared[k] = v;
-  }
-  return { shared, byId };
-}
-
-/**
- * Merge a descriptor's config onto one component's defaults (pure).
- * @param {object} comp   a registered VisualComponent (has `.defaults`, `.id`)
- * @param {{shared:object, byId:object}} split  from _splitConfig
- * @returns {object} the per-component config handed to declareUniforms (uniform
- *          VALUES) + the heap-dedup configKey — NEVER the program-cache key.
- */
-export function mergeComponentConfig(comp, split) {
-  return { ...(comp.defaults || {}), ...split.shared, ...(split.byId[comp.id] || {}) };
-}
+// _splitConfig + mergeComponentConfig moved to ./config_merge.js (P4.1a — frag_attach
+// and particle_attach shared a byte-identical copy). Re-exported so any importer of
+// mergeComponentConfig from this module is unaffected (the seam handed to declareUniforms
+// = uniform VALUES + the heap-dedup configKey — NEVER the program-cache key).
+export { mergeComponentConfig };
 
 /**
  * The registered FRAG components a DID's descriptor carries, as FAMILY_ORDER-

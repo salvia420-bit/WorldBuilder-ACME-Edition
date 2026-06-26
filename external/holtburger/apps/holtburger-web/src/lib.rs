@@ -2262,43 +2262,24 @@ mod scenery_fetch {
         Ok(out)
     }
 
-    /// Canonicalise one f32 into the bits the `*.scenery.jsonl` wire
-    /// carries — the wasm twin of
-    /// `holtburger_scenery_bake::wire_f32_bits`. The bake serialises
-    /// every float through `{:.6}` (with `-0.0 → 0.0`), which is LOSSY
-    /// for f32, so the bake-side `placements_fingerprint` hashes the
-    /// post-truncation bits, NOT the full-precision in-memory f32. We
-    /// MUST hash the same representation or the advisory gate false-
-    /// positives on essentially every non-axis-aligned placement (e.g.
-    /// a `0.7071068` quaternion component round-trips to different bits).
-    ///
-    /// The values we receive in `CachedRecord` were already parsed from
-    /// the `{:.6}` JSONL text, so re-applying the same `{:.6}` rule here
-    /// is idempotent — but doing it explicitly makes both sides provably
-    /// symmetric regardless of how the record was sourced, and matches
-    /// the bake-side helper rule-for-rule.
-    fn wire_f32_bits(v: f32) -> u32 {
-        let v = if v == 0.0 { 0.0 } else { v };
-        let truncated: f32 = format!("{v:.6}").parse().unwrap_or(v);
-        truncated.to_bits()
-    }
-
     /// FNV-1a/64 over the FROZEN explicit placement stream — the wasm
     /// twin of `holtburger_scenery_bake::placements_fingerprint`. Folds
     /// the SAME twelve wire fields, in the SAME order, with the SAME
     /// constants, so the value matches the `placements-hash` the bake
     /// CLI wrote bit-for-bit. The nine float fields are folded through
-    /// [`wire_f32_bits`] (the post-`{:.6}` bits the JSONL carries), the
-    /// three `u32` fields as-is — exactly the bake side's rule. Identity
-    /// (E2) is intentionally excluded — the JSONL doesn't carry it, so
-    /// neither side can hash it. Kept inline (rather than depending on
-    /// the bake crate, which pulls in the whole DAT stack) because the
-    /// logic is a trivially-auditable FNV-1a fold; the
-    /// `placements_fingerprint_is_stable` golden test pins the bake side
-    /// and this WARN is advisory either way.
+    /// `wire_f32_bits` (the post-`{:.6}` bits the JSONL carries — LOSSY
+    /// for f32, so we hash the truncated representation both sides agree
+    /// on, NOT the full-precision in-memory f32), the three `u32` fields
+    /// as-is — exactly the bake side's rule. Identity (E2) is
+    /// intentionally excluded — the JSONL doesn't carry it, so neither
+    /// side can hash it. The fold primitives (`fnv1a_fold`,
+    /// `wire_f32_bits`) are now shared via
+    /// [`holtburger_common::bake_fingerprint`], so both producers fold
+    /// through one definition; the `placements_fingerprint_is_stable`
+    /// golden test pins the bake side and this WARN is advisory either
+    /// way.
     fn placements_freeze_hash(records: &[CachedRecord]) -> u64 {
-        const FNV1A_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-        const FNV1A_PRIME: u64 = 0x0000_0100_0000_01b3;
+        use holtburger_common::bake_fingerprint::{fnv1a_fold, wire_f32_bits, FNV1A_OFFSET};
         let mut h = FNV1A_OFFSET;
         for r in records {
             for word in [
@@ -2315,10 +2296,7 @@ mod scenery_fetch {
                 r.source_cell_y,
                 r.source_obj_idx,
             ] {
-                for byte in word.to_le_bytes() {
-                    h ^= byte as u64;
-                    h = h.wrapping_mul(FNV1A_PRIME);
-                }
+                h = fnv1a_fold(h, word);
             }
         }
         h
@@ -2430,6 +2408,203 @@ mod scenery_fetch {
 
 #[cfg(target_arch = "wasm32")]
 pub use scenery_fetch::{clear_scenery_cache, init_scenery_base_url, scenery_cache_size};
+
+// Phase 4 (P4.0b) — suite artifact transport (`fetch_suite_artifact`).
+//
+// Suite artifacts are OPAQUE per-DID binary sidecars (one file per
+// `(did, artifact_type)` pair), NOT parsed JSONL. So this module is
+// deliberately MUCH simpler than `scenery_fetch`: it reuses only the
+// base-url + cache scaffolding and returns raw bytes. There is no line
+// parser, no `CachedRecord`, no freeze-hash gate — the renderer (later
+// phases) owns interpreting the bytes.
+//
+// INERT until later phases: nothing in the live page calls
+// `fetch_suite_artifact` yet, so `suite_cache_size()` is `0` at boot and
+// the OFF path is byte-identical to before this module existed.
+#[cfg(target_arch = "wasm32")]
+mod suite_fetch {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use wasm_bindgen::prelude::*;
+
+    thread_local! {
+        /// Suite base URL, set once by `init_suite_base_url`. Trailing
+        /// slash is normalised in. `None` until init.
+        static SUITE_BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
+
+        /// Per-`(did, artifact_type)` byte cache. An empty `Vec` is a
+        /// positive cache entry meaning "no sidecar here" (404 →
+        /// fail-soft "no artifact"). The wasm runtime is single-threaded
+        /// so the `RefCell` is sound.
+        static SUITE_CACHE: RefCell<HashMap<(u32, String), Vec<u8>>> =
+            RefCell::new(HashMap::new());
+
+        /// Per-`(key, artifact_type)` byte cache for STRING-keyed
+        /// artifacts — Phase-5 `texchan` sidecars keyed by surface
+        /// content-hash (not DID), since surfaces are shared across DIDs.
+        /// Same empty-Vec = "no sidecar" convention as `SUITE_CACHE`.
+        static SUITE_CACHE_BY_KEY: RefCell<HashMap<(String, String), Vec<u8>>> =
+            RefCell::new(HashMap::new());
+    }
+
+    /// Set the base URL for `/suite/...` fetches. Mirrors
+    /// `init_scenery_base_url`: trailing slash is added if missing,
+    /// safe to call multiple times — overwrites.
+    #[wasm_bindgen]
+    pub fn init_suite_base_url(url: String) {
+        let mut normalised = url;
+        if !normalised.ends_with('/') {
+            normalised.push('/');
+        }
+        SUITE_BASE_URL.with(|cell| {
+            *cell.borrow_mut() = Some(normalised);
+        });
+    }
+
+    /// Number of suite artifacts currently cached across BOTH the
+    /// `(did, type)` and the string-`(key, type)` caches (empties count
+    /// too). `0` at boot since nothing fetches yet — the inert-when-
+    /// unreferenced assertion for both the windclip and texchan paths.
+    #[wasm_bindgen]
+    pub fn suite_cache_size() -> usize {
+        SUITE_CACHE.with(|cell| cell.borrow().len())
+            + SUITE_CACHE_BY_KEY.with(|cell| cell.borrow().len())
+    }
+
+    /// Clear both suite caches. Test / smoke helper; not used in the
+    /// normal page flow.
+    #[wasm_bindgen]
+    pub fn clear_suite_cache() {
+        SUITE_CACHE.with(|cell| cell.borrow_mut().clear());
+        SUITE_CACHE_BY_KEY.with(|cell| cell.borrow_mut().clear());
+    }
+
+    pub fn base_url() -> Option<String> {
+        SUITE_BASE_URL.with(|cell| cell.borrow().clone())
+    }
+
+    /// Cache-hit lookup for one `(did, type)` pair. Returns the cached
+    /// bytes (possibly empty) or `None` on miss.
+    pub fn cache_get(did: u32, artifact_type: &str) -> Option<Vec<u8>> {
+        SUITE_CACHE.with(|cell| cell.borrow().get(&(did, artifact_type.to_owned())).cloned())
+    }
+
+    /// Insert one `(did, type)` → bytes entry into the cache.
+    pub fn cache_put(did: u32, artifact_type: String, bytes: Vec<u8>) {
+        SUITE_CACHE.with(|cell| {
+            cell.borrow_mut().insert((did, artifact_type), bytes);
+        });
+    }
+
+    /// Cache-hit lookup for one string-`(key, type)` pair (texchan).
+    /// Returns the cached bytes (possibly empty) or `None` on miss.
+    pub fn cache_get_by_key(key: &str, artifact_type: &str) -> Option<Vec<u8>> {
+        SUITE_CACHE_BY_KEY
+            .with(|cell| cell.borrow().get(&(key.to_owned(), artifact_type.to_owned())).cloned())
+    }
+
+    /// Insert one string-`(key, type)` → bytes entry into the cache.
+    pub fn cache_put_by_key(key: String, artifact_type: String, bytes: Vec<u8>) {
+        SUITE_CACHE_BY_KEY.with(|cell| {
+            cell.borrow_mut().insert((key, artifact_type), bytes);
+        });
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub use suite_fetch::{clear_suite_cache, init_suite_base_url, suite_cache_size};
+
+/// Fetch one opaque suite artifact sidecar for a given DID + type.
+///
+/// URL shape: `<suite_base_url>/0x{did:08X}.{artifact_type}.bin`.
+///
+/// # Behaviour
+///
+/// 1. Cache-check the `(did, artifact_type)` pair — a hit (even an
+///    empty `Vec`) returns immediately.
+/// 2. Otherwise `GET` the sidecar.
+/// 3. On HTTP 404: a missing sidecar is "no artifact", NOT an error —
+///    cache + return an EMPTY `Vec` (fail-soft, never throws).
+/// 4. On any other HTTP/transport error: return `Err(JsValue)`.
+/// 5. On success: cache the bytes + return them.
+///
+/// wasm-bindgen auto-marshals `Vec<u8>` → `Uint8Array`, so JS receives
+/// a `Promise<Uint8Array>`. INERT until later phases call it.
+///
+/// JS must call [`init_suite_base_url`] once at page-init before any
+/// `fetch_suite_artifact` call.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_suite_artifact(
+    did: u32,
+    artifact_type: String,
+) -> Result<Vec<u8>, JsValue> {
+    let base_url = suite_fetch::base_url().ok_or_else(|| {
+        JsValue::from_str("init_suite_base_url must be called before fetch_suite_artifact")
+    })?;
+
+    // Cache hit (empty Vec is a positive "no sidecar" entry)?
+    if let Some(hit) = suite_fetch::cache_get(did, &artifact_type) {
+        return Ok(hit);
+    }
+
+    let url = format!("{base_url}0x{did:08X}.{artifact_type}.bin");
+    let bytes = match holtburger_resource_http::fetch_bytes(&url).await {
+        Ok(b) => b,
+        // 404 → missing sidecar = "no artifact". Fail-soft: cache an
+        // empty Vec and return it (must NOT throw).
+        Err(holtburger_resource_http::HttpError::Http { status: 404, .. }) => {
+            suite_fetch::cache_put(did, artifact_type, Vec::new());
+            return Ok(Vec::new());
+        }
+        Err(e) => return Err(JsValue::from_str(&format!("fetch {url}: {e}"))),
+    };
+
+    suite_fetch::cache_put(did, artifact_type, bytes.clone());
+    Ok(bytes)
+}
+
+/// Fetch one STRING-keyed suite artifact sidecar (Phase-5 `texchan`,
+/// keyed by surface content-hash rather than DID — surfaces are shared
+/// across many DIDs, so the bake dedups by content).
+///
+/// URL shape: `<suite_base_url>/{key}.{artifact_type}.bin`. The caller
+/// (S6 `materials.js`) owns the exact `key` stem so it matches whatever
+/// the S5 producer wrote (e.g. `0x{hash:016X}`) — this fn stays
+/// agnostic to the hash format.
+///
+/// Same fail-soft contract as [`fetch_suite_artifact`]: cache-check
+/// first (empty `Vec` = positive "no sidecar"), 404 → cached empty
+/// `Vec` (never throws), other transport errors → `Err`. INERT until S6
+/// wires a JS caller.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_suite_artifact_by_key(
+    key: String,
+    artifact_type: String,
+) -> Result<Vec<u8>, JsValue> {
+    let base_url = suite_fetch::base_url().ok_or_else(|| {
+        JsValue::from_str("init_suite_base_url must be called before fetch_suite_artifact_by_key")
+    })?;
+
+    if let Some(hit) = suite_fetch::cache_get_by_key(&key, &artifact_type) {
+        return Ok(hit);
+    }
+
+    let url = format!("{base_url}{key}.{artifact_type}.bin");
+    let bytes = match holtburger_resource_http::fetch_bytes(&url).await {
+        Ok(b) => b,
+        Err(holtburger_resource_http::HttpError::Http { status: 404, .. }) => {
+            suite_fetch::cache_put_by_key(key, artifact_type, Vec::new());
+            return Ok(Vec::new());
+        }
+        Err(e) => return Err(JsValue::from_str(&format!("fetch {url}: {e}"))),
+    };
+
+    suite_fetch::cache_put_by_key(key, artifact_type, bytes.clone());
+    Ok(bytes)
+}
 
 /// Fetch per-landblock baked scenery placements for a list of
 /// `XXYYFFFE` LandblockInfo cell IDs. Mirrors

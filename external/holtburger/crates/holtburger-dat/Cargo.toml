@@ -33,6 +33,17 @@ tempfile.workspace = true
 rand.workspace = true
 criterion.workspace = true
 serde_json.workspace = true
+# Phase-5 S5 producer (examples/bake_texchan.rs): the texchan codec + sha2
+# for the bake-source provenance hash. Acyclic — suite-bake deps only
+# holtburger-common, not holtburger-dat.
+holtburger-suite-bake = { path = "../holtburger-suite-bake" }
+sha2.workspace = true
+
+[[example]]
+name = "bake_texchan"
+
+[[example]]
+name = "verify_texchan"
 
 [[bench]]
 name = "provider_bench"

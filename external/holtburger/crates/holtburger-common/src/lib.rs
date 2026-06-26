@@ -1,3 +1,4 @@
+pub mod bake_fingerprint;
 pub mod character;
 pub mod defaults;
 pub mod guid;

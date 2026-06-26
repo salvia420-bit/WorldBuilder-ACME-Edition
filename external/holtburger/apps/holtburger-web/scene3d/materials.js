@@ -47,7 +47,11 @@ import {
   surfacePixelsToTexture,
   surfacePixelsToNormalTexture,
   surfacePixelsToHeightTexture,
+  surfacePixelsToRoughnessTexture,
+  surfacePixelsToAoTexture,
 } from "./adapter.js";
+import { materialBakeEnabled } from "./vfx_flags.js";
+import { SuiteAssetSource, loadTexchanManifest } from "./suite_assets.js";
 
 // ACE SurfaceType bit constants (mirrored from ACE.Entity.Enum.SurfaceType,
 // see external/ACE/Source/ACE.Entity/Enum/SurfaceType.cs). Exported so
@@ -1636,6 +1640,19 @@ export class MaterialCache {
   constructor(opts = {}) {
     /** @type {Map<number, THREE.MeshStandardMaterial>} */
     this.materials = new Map();
+    // Phase-5 — baked material-detail (texchan roughnessMap). DEFAULT-ON via
+    // `materialBakeEnabled()` (`?material=off` escape). The wasm namespace is
+    // threaded in for the by-key suite fetch; the SuiteAssetSource + manifest
+    // are built lazily on first gated use. Normal stays runtime-generated
+    // (byte-identical to the bake); only roughness is sourced from the sidecar.
+    // aoMap is baked-and-ready but deferred (needs a uv2 the geometry lacks).
+    this.materialBakeEnabled = materialBakeEnabled();
+    this._texchanWasm = opts.wasmExports || null;
+    this._texchanSource = null;
+    this._texchanManifest = null;
+    this._texchanInit = false;
+    /** Materials awaiting the manifest (built before it loaded): [mat, did]. */
+    this._pendingRough = [];
     // Render-completeness audit (2026-05-29) — animated SurfaceTextures.
     // `_animFramesFetch` is the wasm `fetchSurfaceAnimFrames(did)` getter
     // (null on legacy builds → animation silently disabled). `_animatedMaterials`
@@ -2248,6 +2265,66 @@ export class MaterialCache {
    * `surfaceTypeFlags === 0` (the empty-surface fallback) hits the
    * opaque path → standard albedo material with DoubleSide.
    */
+  // ── Phase-5 baked roughness attach (pre-warm + sync-attach) ──────────────
+  /** Lazily build the SuiteAssetSource + kick the (one) manifest fetch. */
+  _ensureTexchanInit() {
+    if (this._texchanInit) return;
+    this._texchanInit = true;
+    if (!this._texchanWasm || typeof this._texchanWasm.fetch_suite_artifact_by_key !== "function") return;
+    this._texchanSource = new SuiteAssetSource({ wasmExports: this._texchanWasm });
+    loadTexchanManifest()
+      .then((m) => {
+        this._texchanManifest = m;
+        const pend = this._pendingRough;
+        this._pendingRough = [];
+        for (const [mat, did] of pend) this._resolveRough(mat, did);
+      })
+      .catch(() => { this._texchanManifest = new Map(); });
+  }
+
+  /** Attach the baked roughnessMap for `did` to `mat` (gated, fail-soft). Called
+   *  at material-build time. If the manifest isn't loaded yet, defers until it is. */
+  _attachRoughnessMap(mat, did) {
+    if (!this.materialBakeEnabled || !mat) return;
+    this._ensureTexchanInit();
+    if (!this._texchanSource) return;
+    if (!this._texchanManifest) { this._pendingRough.push([mat, did]); return; }
+    this._resolveRough(mat, did);
+  }
+
+  _resolveRough(mat, did) {
+    const stem = this._texchanManifest.get(did >>> 0);
+    if (!stem || !this._texchanSource) return;
+    const tc = this._texchanSource.getByKey(stem, "texchan"); // sync: decoded|null (kicks fetch)
+    if (tc) { this._applyRough(mat, tc); return; }
+    // Cold: upgrade once the async fetch resolves, then re-mint clone variants.
+    this._texchanSource.getByKeyAsync(stem, "texchan").then((t) => {
+      if (!t || !mat) return;
+      this._applyRough(mat, t);
+      this.frontSideMaterials.delete(did >>> 0);
+      this.floorBiasMaterials.delete(did >>> 0);
+    });
+  }
+
+  _applyRough(mat, tc) {
+    if (!tc) return;
+    let touched = false;
+    if (tc.roughness) {
+      const rtex = surfacePixelsToRoughnessTexture(tc.roughness, tc.width, tc.height);
+      if (rtex) { mat.roughnessMap = rtex; touched = true; }
+    }
+    // F1 — baked cavity AO. r184 lets aoMap use the main "uv" (channel 0); reads
+    // .r (RedFormat). Conservative intensity so the darkening stays subtle (AO
+    // can only darken, never chrome). Look-polish owed to a 1070 eye-test.
+    if (tc.ao) {
+      const atex = surfacePixelsToAoTexture(tc.ao, tc.width, tc.height);
+      if (atex) { mat.aoMap = atex; mat.aoMapIntensity = 0.6; touched = true; }
+    }
+    if (!touched) return;
+    mat.needsUpdate = true;
+    mat.userData = { ...(mat.userData || {}), texchanRoughness: !!tc.roughness, texchanAo: !!tc.ao };
+  }
+
   _materialFromFlags(surfaceTypeFlags, texture, category, normalTexture, overrides, heightTexture, surfaceFloats) {
     const flags = surfaceTypeFlags >>> 0;
     // Wave 8 (2026-05-28) — Surface (0x08) trailing T/L/D triplet.
@@ -3316,6 +3393,7 @@ export class MaterialCache {
       hasPalette: hasPaletteB,
     };
     const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides, heightTex, surfaceFloats);
+    this._attachRoughnessMap(mat, did); // Phase-5 baked roughness (gated; fail-soft)
     mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
     mat.userData = {
       ...(mat.userData || {}),
