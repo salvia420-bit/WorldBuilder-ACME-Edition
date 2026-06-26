@@ -55,6 +55,18 @@ function _numFlag(name, def, min, max) {
   return def;
 }
 
+let _materialBake;
+/** Phase-5 — `?material=off` escapes the baked roughness detail maps. DEFAULT-ON
+ *  (the conservative remap cannot chrome; look-polish owed to a 1070 eye-test).
+ *  `?material=off` ⇒ exact pre-Phase-5 material (no roughnessMap from the bake). */
+export function materialBakeEnabled() {
+  if (_materialBake !== undefined) return _materialBake;
+  let on = true; // default-on; ?material=off is the escape
+  const v = _strFlag("material");
+  if (v != null) { const s = v.toLowerCase(); on = s !== "off" && s !== "0" && s !== "false" && s !== "no" && s !== ""; }
+  return (_materialBake = on);
+}
+
 let _all;
 /** Per-effect default. DEFAULT-ON (2026-06-24: validated suite ships on). Every
  *  per-effect flag defaults to this, so absent any URL flag all effects are on

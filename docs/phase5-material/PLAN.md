@@ -128,8 +128,18 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
   **Gate:** ✅ `node harness/test_texchan_decode.mjs` → **ok=60 fail=0** (52 unique stems; negative inputs
   fail-soft to null). Cross-language Rust-`encode()` → JS-decode validated on real on-disk artifacts.
 
-- [ ] **S6b-2 — materials.js wiring + index.html** (behind `?material=`, default-OFF; S7 flips on)
-  **SCOPED (execution map, ready to implement):**
+- [x] **S6b-2 — materials.js wiring + index.html** ✅ (user-chosen: ship **default-ON**, conservative remap)
+  Implemented: `materialBakeEnabled()` (default-ON, `?material=off` escape); `adapter.js`
+  `surfacePixelsToRoughnessTexture` (RGBA, GREEN = `roughnessMapByteFromContrast` = `255-round(c*0.2)` ⇒
+  g∈[0.8,1.0], **cannot chrome**) + the pure remap fn; `MaterialCache` lazy `SuiteAssetSource` + manifest,
+  `_attachRoughnessMap`/`_resolveRough`/`_applyRough` (sync-attach if warm, else `getByKeyAsync` upgrade +
+  clone re-mint); wired at both build sites; `wasmExports` threaded via statics.js + buildings.js opts;
+  index.html `fetch_suite_artifact_by_key` added to both sites + `?v=` bump (fixes the S4 stale-cache trap).
+  **Normal stays runtime-generated** (byte-identical); only roughness sourced from the sidecar. **aoMap
+  deferred** (needs a uv2 the geometry lacks; ao bytes baked + ready). Fail-soft: miss/cold = exact current look.
+  **Gate:** ✅ `node --check` all 6 changed JS; ✅ decode regression 60/0; ✅ remap invariant g∈[0.8,1.0]
+  monotonic can't-chrome. ⏳ **in-world SwiftShader boot-smoke** (no-crash + suite fetches + maps-bound) =
+  best-effort this session; **1070 look-tuning OWED** (per user: default-on blind, polish later).
   - `_materialFromFlags` lacks `surfaceDid` → attach at the **two caller sites** (materials.js:2681 build path,
     :3318 twin) where `did` is in scope, right after `mat` is built + `this.materials.set(did,mat)`.
   - **attach-on-resolve is REQUIRED** (a material is built once then cached; sync-attach-only would never
@@ -148,14 +158,13 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
   0 console errors + program-count unchanged + maps-bound + the deferred S4 `suite_cache_size()>0`. Lands
   default-OFF; the live boot-smoke is also S7's gate. (Runtime-vs-bake normal proven S6a; decode S6b-1.)
 
-- [ ] **S7 — Default-on flip** (`scene3d/vfx_flags.js` reader, mirror `windBakeEnabled`)
-  Add `materialBakeEnabled()` default **true**, `?material=off` escape. Update `docs/url-flags.md`.
-  **Gate:** harness + boot-smoke.
+- [x] **S7 — Default-on flip** ✅ **ABSORBED into S6b-2** (user chose default-ON directly; `materialBakeEnabled()`
+  ships default-true with the `?material=off` escape). url-flags.md row still owed (janitorial).
 
-- [ ] **S8 — Simplify: delete dead runtime normal-gen** (`apps/holtburger-web/src/lib.rs:7517 / 9151`)
-  Once baked-default-on, the ingest-time `normal_from_luminance` calls are dead. Remove + rebuild wasm.
-  **Gate:** `?material=off` still byte-identical (fallback re-generates) + builds green. *(If OFF needs the
-  runtime gen, KEEP it and mark S8 N/A — note here.)*
+- [x] **S8 — Simplify: delete dead runtime normal-gen** — **N/A.** The consumer sources ONLY roughness from the
+  bake; the **normal stays runtime-generated** (byte-identical), so the ingest-time `normal_from_luminance` is
+  still live and must NOT be deleted. (Sourcing the baked normal + deleting runtime gen could be a future
+  simplification, but it adds no visible value since the two are byte-identical — deferred, low priority.)
 
 - [ ] **S9 — (STRETCH, only if S1–S8 all green) anti-tiling / richer detail tiles**
   Macro-variation to break obvious repetition; strength-only per category. Skip if any earlier step is shaky.
@@ -185,3 +194,5 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 - S6a — verify_texchan example; 800/800 byte-faithful (baked normal == fresh normal_from_luminance, rough/ao ok), 0 mismatches. S1 real-portal golden landed.
 - S6b — DECISION: user chose pre-warm+sync-attach; refined to JS-owned cache (JS-only, no wasm rebuild). Loop re-armed to implement.
 - S6b-1 — JS decoder (HSB1 container→texchan payload) + getByKey + loadTexchanManifest in suite_assets.js (inert); test_texchan_decode.mjs ok=60/0. Rust-encode→JS-decode validated.
+- S6b-2 — materials.js attaches baked roughnessMap (default-ON, conservative remap can't-chrome); adapter texture builder; getByKeyAsync upgrade; index.html plumb + ?v= bump. Gates: node --check 6/6, decode 60/0, remap invariant. In-world boot-smoke best-effort; 1070 look-tuning owed.
+- S7 — ABSORBED (default-on shipped in S6b-2). S8 — N/A (normal stays runtime-generated; nothing dead to delete).
