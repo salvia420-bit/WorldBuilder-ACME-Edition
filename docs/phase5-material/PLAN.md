@@ -72,12 +72,17 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
   **Gate:** ✅ `capped-build cargo test -p holtburger-suite-bake` → **20 passed / 0 failed** (8 new texchan;
   windclip + container unchanged).
 
-- [ ] **S3 — C#: classifier emits material-class per surface** (`WorldBuilder.Terminal/CommandEngine.Vfx.cs`
-  + `WorldBuilder.Shared/Lib/VisualDescriptor.cs`)
-  Emit the `SURFACE_CATEGORY` tag per DID/surface into `visual_descriptors.jsonl` via `BuildResult` (the
-  Bucket-A enrichment). WB.Terminal = **Opus-4.8 only**.
-  **Gate:** `DOTNET_ROLL_FORWARD=LatestMajor dotnet test WorldBuilder.Tests -c Release` (memory-safe;
-  single-project) — extend `VisualDescriptorRoundTripTests`.
+- [ ] **S3 — ⚠ HALTED 2026-06-26: decision needed (recommend DROP / fold into S5).**
+  Original intent: "C# emits per-surface material-class into `visual_descriptors.jsonl` via `BuildResult`."
+  **On inspection the premise is false:** (1) surface→`SURFACE_CATEGORY` is already a wired Rust→wasm→JS path —
+  wasm `lib.rs:7379 classify_with_overrides` calls `holtburger_dat::surface_classify::classify`+`compute_stats`
+  and hands JS a numeric `sp.category` (Stone=0…Generic=12), already consumed by materials.js for base
+  roughness/metalness/detail-strength; (2) `CommandEngine.Vfx.cs::BuildResult` is keyed by **SetupDID** and is
+  about motion/particle archetypes, NOT surfaces — emitting per-surface class there is a category error.
+  The only Phase-5 consumer of category is the **S5 producer** (to pick per-category strength), which calls the
+  same Rust `surface_classify::classify` directly → **zero C# change**. Building a per-surface C# descriptor
+  channel = "adding things needlessly". **Recommendation: drop S3; the producer (S5) classifies in Rust.**
+  Awaiting user ruling before proceeding.
 
 - [ ] **S4 — wasm: extend `suite_fetch` for `texchan`** (`apps/holtburger-web/src/lib.rs:2425`)
   Allow a surface-hash-keyed `texchan` artifact type alongside the `(did,type)` path. Keep inert until S6.
@@ -127,3 +132,4 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 - S0 (this file) — committed.
 - S1 — roughness + AO channels in normal_gen.rs; `cargo test -p holtburger-dat --lib` 351/0. Real-portal.dat golden deferred to S5.
 - S2 — texchan codec in holtburger-suite-bake (name was pre-reserved); `cargo test -p holtburger-suite-bake` 20/0. Renamed matclip→texchan across §2.
+- S3 — HALTED. Premise false: surface→category already wired (Rust surface_classify → wasm sp.category → materials.js); Vfx BuildResult is SetupDID/archetype, wrong layer. Recommend drop S3, fold into S5. Loop NOT re-armed; awaiting ruling.
