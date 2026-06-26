@@ -108,12 +108,22 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
   Artifacts in `/mnt/wbterminal2/holtburger-dist/suite/` (not git). Re-run full bake: `cargo build --release
   -p holtburger-dat --example bake_texchan && target/release/examples/bake_texchan`.
 
-- [ ] **S6 — JS consumer: fetch-not-generate** (`scene3d/materials.js`, behind `?material=`)
-  In `MaterialCache`, branch on `suite.get(surfaceHash,"texchan")` → use baked maps; **miss → current
-  runtime path** (fallback firewall). Keep the ONE existing material path (no new program permutations).
-  `?material=off` → exact current rendering.
-  **Gate:** harness (`harness/test_*`) + boot-smoke 0 errors + program-count + maps-bound (`__diag`) +
-  **bit-compare baked normal == runtime `normal_from_luminance`** for ≥1 surface.
+- [x] **S6a — byte-faithfulness verifier** (`crates/holtburger-dat/examples/verify_texchan.rs`) ✅
+  Independently re-derives each sampled surface's normal from real `portal.dat` and bit-compares to the
+  on-disk `.texchan.bin` normal channel (resolved via `texchan-manifest.json`); checks dims + rough/ao
+  presence/length. Proves the codec+manifest+dedup pipeline faithfully stores `normal_from_luminance` output
+  (the real-`portal.dat` golden deferred from S1) and that dedup merges are content-correct.
+  **Gate:** ✅ `verify_texchan --limit 800` → **checked=800 ok=800, 0 mismatches** (normal/dim/channel/missing/
+  rederive all 0). BYTE-FAITHFUL.
+
+- [ ] **S6b — JS consumer: attach baked maps** (`scene3d/materials.js`, behind `?material=`) ⚠ **DECISION (HALT)**
+  The material build is **synchronous** (`normalTexture` already in hand from the wasm at decode time); the
+  texchan fetch is **async** (HTTP). Injecting async maps into the sync build is a design fork on the live
+  material path (renders everything). Since the baked normal is byte-identical, the consumer's real *new* value
+  is the additive **roughnessMap + aoMap** (normal can stay as-is, or switch to baked to enable S8). Miss =
+  graceful (current look). `?material=off` = exact current path. **Awaiting user ruling on integration
+  approach** (pre-warm+attach vs two-phase swap vs async build); see report. Gate (when chosen): harness +
+  boot-smoke 0 errors + program-count + maps-bound (`__diag`) + runtime-vs-bake normal compare via wasm.
 
 - [ ] **S7 — Default-on flip** (`scene3d/vfx_flags.js` reader, mirror `windBakeEnabled`)
   Add `materialBakeEnabled()` default **true**, `?material=off` escape. Update `docs/url-flags.md`.
@@ -149,3 +159,5 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 - S3 — HALTED then DROPPED (user-approved). Surface→category already wired in Rust; folded the producer's classify need into S5. Loop re-armed; next live step S4.
 - S4 — wasm fetch_suite_artifact_by_key (string/surface-hash keyed) + dual-cache suite_cache_size; capped wasm-pack --dev green, export in pkg js/dts, inert. Live boot-smoke deferred to S6.
 - S5 — Rust bake_texchan example; determinism 300-subset byte-identical; full release bake 6152→5999 baked/5475 unique/524 dedup/0 errors; 1.1GB raw (BC follow-up flagged). normal@1.0 = byte-identity preserved; S3-classify confirmed unnecessary at bake.
+- S6a — verify_texchan example; 800/800 byte-faithful (baked normal == fresh normal_from_luminance, rough/ao ok), 0 mismatches. S1 real-portal golden landed.
+- S6b — HALTED: sync material build vs async fetch = integration fork on live render path. Awaiting user ruling on approach. Loop NOT re-armed.

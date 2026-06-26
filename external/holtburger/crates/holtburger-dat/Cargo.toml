@@ -42,6 +42,9 @@ sha2.workspace = true
 [[example]]
 name = "bake_texchan"
 
+[[example]]
+name = "verify_texchan"
+
 [[bench]]
 name = "provider_bench"
 harness = false
