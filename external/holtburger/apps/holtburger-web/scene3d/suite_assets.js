@@ -76,6 +76,39 @@ export class SuiteAssetSource {
     }).finally(() => { this._inflight.delete(k); });
   }
 
+  /**
+   * Sync accessor for a STRING-keyed artifact (Phase-5 texchan, keyed by
+   * surface content-hash stem, not DID). Mirrors {@link get} but routes
+   * through the wasm `fetch_suite_artifact_by_key`. Returns the decoded
+   * artifact or null while loading/absent; kicks the async fetch on the
+   * first ask. The consumer (materials.js) retries next time it builds.
+   */
+  getByKey(key, type) {
+    const k = `${type}:${key}`;
+    if (this._cache.has(k)) return this._cache.get(k);
+    if (!this._inflight.has(k)) this._beginFetchByKey(key, type, k);
+    return null;
+  }
+
+  _beginFetchByKey(key, type, k) {
+    this._inflight.add(k); this.fetchCount += 1;
+    const bytesP = this._fetchImpl
+      ? Promise.resolve(this._fetchImpl(key, type))
+      : (this._wasm && typeof this._wasm.fetch_suite_artifact_by_key === "function"
+          ? (ensureSuiteInit(this._wasm), Promise.resolve(this._wasm.fetch_suite_artifact_by_key(key, type)))
+          : Promise.resolve(null));
+    bytesP.then((bytes) => {
+      if (!bytes || bytes.length === 0) { this._cache.set(k, null); this.absent += 1; return; }
+      const dec = _decoders.get(type);
+      this._cache.set(k, dec ? dec(bytes, key) : bytes); this.hits += 1;
+    }).catch((e) => {
+      this.lastError = String(e && e.message ? e.message : e); this.errors += 1;
+      this._cache.set(k, null);
+      // eslint-disable-next-line no-console
+      console.warn(`[suite] fetch failed ${k}:`, e);
+    }).finally(() => { this._inflight.delete(k); });
+  }
+
   get cacheSize() { return this._cache.size; }
 
   /** Plain-scalar snapshot for the off-trace harness / capture scripts. */
@@ -165,3 +198,92 @@ registerSuiteDecoder("windclip", (bytes, _did) => {
     return null;                          // fail-soft ⇒ caller keeps frozen statics
   }
 });
+
+// ── Phase-5 texchan decoder ─────────────────────────────────────────────────
+// texchan rides in a SuiteBlob "HSB1" CONTAINER (unlike windclip's raw payload —
+// the producer writes TexChan::encode(), so the bytes are integrity-framed and the
+// decoder validates magic/version/tag before reading the payload).
+//
+//   Container (LE): magic[4]="HSB1" | ver:u16 | tagLen:u8 | tag[tagLen] |
+//                   payloadLen:u32 | payload | contentHash:u64
+//   Payload   (LE): width:u32 | height:u32 | channelMask:u32 | encoding:u32 |
+//                   <channels, ascending bit order, present iff mask bit set>
+//                     normal   : w*h*3 (RGB8 tangent-space)   bit0
+//                     roughness: w*h   (R8)                    bit1
+//                     ao       : w*h   (R8, 255=unoccluded)    bit2
+//
+// FAIL-SOFT: any malformation (bad magic/version/tag, unknown encoding, short/long
+// buffer) returns null → the consumer keeps the current (runtime-generated) look.
+// Channels are zero-copy Uint8Array VIEWS over the fetched buffer (the fetched array
+// is cached + stable). Returns { width, height, normal|null, roughness|null, ao|null }.
+const _TEXCHAN_CH_NORMAL = 1;
+const _TEXCHAN_CH_ROUGH = 2;
+const _TEXCHAN_CH_AO = 4;
+const _TEXCHAN_HEADER = 16; // payload header bytes (4 x u32)
+
+export function decodeTexchanBytes(bytes) {
+  try {
+    // 4 magic + 2 ver + 1 tagLen + (>=1 tag) + 4 payloadLen + 16 payload-hdr + 8 hash
+    if (!bytes || bytes.byteLength < 4 + 2 + 1 + 4 + _TEXCHAN_HEADER + 8) return null;
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    // magic "HSB1"
+    if (dv.getUint8(0) !== 0x48 || dv.getUint8(1) !== 0x53 || dv.getUint8(2) !== 0x42 || dv.getUint8(3) !== 0x31) {
+      return null;
+    }
+    let o = 4;
+    const ver = dv.getUint16(o, true); o += 2;
+    if (ver !== 1) return null;
+    const tagLen = dv.getUint8(o); o += 1;
+    let tag = "";
+    for (let i = 0; i < tagLen; i++) tag += String.fromCharCode(dv.getUint8(o + i));
+    o += tagLen;
+    if (tag !== "texchan") return null;
+    const payloadLen = dv.getUint32(o, true); o += 4;
+    const payloadStart = o;
+    if (payloadStart + payloadLen + 8 > bytes.byteLength) return null; // +8 trailing hash
+
+    let p = payloadStart;
+    const width = dv.getUint32(p, true); p += 4;
+    const height = dv.getUint32(p, true); p += 4;
+    const mask = dv.getUint32(p, true); p += 4;
+    const encoding = dv.getUint32(p, true); p += 4;
+    if (encoding !== 0) return null; // raw RGBA8/R8 only (BC reserved)
+    const px = width * height;
+    if (!Number.isSafeInteger(px)) return null;
+
+    const base = bytes.byteOffset;
+    let normal = null, roughness = null, ao = null;
+    if (mask & _TEXCHAN_CH_NORMAL) { normal = new Uint8Array(bytes.buffer, base + p, px * 3); p += px * 3; }
+    if (mask & _TEXCHAN_CH_ROUGH) { roughness = new Uint8Array(bytes.buffer, base + p, px); p += px; }
+    if (mask & _TEXCHAN_CH_AO) { ao = new Uint8Array(bytes.buffer, base + p, px); p += px; }
+    if (p - payloadStart !== payloadLen) return null; // short/long payload
+    return { width, height, normal, roughness, ao };
+  } catch (_) {
+    return null;
+  }
+}
+registerSuiteDecoder("texchan", (bytes, _key) => decodeTexchanBytes(bytes));
+
+/**
+ * Load the Phase-5 `texchan-manifest.json` (surfaceDid → content-hash stem) once.
+ * Maps each "0x%08X" key to a numeric DID. Returns an empty Map on any failure
+ * (fail-soft: the consumer then never finds a stem and keeps the runtime look).
+ * @param {string} [baseUrl]
+ * @param {typeof fetch} [fetchFn]
+ * @returns {Promise<Map<number,string>>}
+ */
+export async function loadTexchanManifest(baseUrl = SUITE_BASE_URL, fetchFn = fetch) {
+  try {
+    const res = await fetchFn(`${baseUrl}texchan-manifest.json`);
+    if (!res || !res.ok) return new Map();
+    const obj = await res.json();
+    const m = new Map();
+    for (const [didStr, stem] of Object.entries(obj)) {
+      const did = parseInt(String(didStr).replace(/^0x/i, ""), 16) >>> 0;
+      if (Number.isFinite(did)) m.set(did, stem);
+    }
+    return m;
+  } catch (_) {
+    return new Map();
+  }
+}

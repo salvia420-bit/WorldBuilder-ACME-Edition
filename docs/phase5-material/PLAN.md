@@ -116,21 +116,28 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
   **Gate:** ✅ `verify_texchan --limit 800` → **checked=800 ok=800, 0 mismatches** (normal/dim/channel/missing/
   rederive all 0). BYTE-FAITHFUL.
 
-- [ ] **S6b — JS consumer: attach baked maps** (`scene3d/materials.js`, behind `?material=`)
-  **Approach: PRE-WARM + SYNC ATTACH** (user-chosen 2026-06-26). Refinement: the sync cache lives in **JS**
-  (prefetch promises populate `Map<stem, decodedTexChan>`; the material build reads it synchronously) → **S6b is
-  JS-only, no wasm rebuild**. Pieces:
-  1. JS texchan decoder (mirror Rust: SuiteBlob magic/ver/tag/payload/hash → texchan w/h/mask/encoding → channel
-     Uint8Array views). Add a `harness/test_texchan_decode.mjs` round-trip vs a known-good `.bin`.
-  2. Load `texchan-manifest.json` once at init (surfaceDid→stem).
-  3. Pre-warm: when surfaces load, `fetch_suite_artifact_by_key(stem,'texchan')` → decode → store in the JS Map.
-  4. `_materialFromFlags` (sync, gated on `?material`, default-on at S7): if the surface's decoded texchan is in
-     the Map, attach **roughnessMap + aoMap** (additive; normal stays byte-identical). Miss/cold = exact current
-     look. Keep the ONE material path (no new program permutations).
-  5. index.html: add `fetch_suite_artifact_by_key` to the wasm named import + bump `?v=`; ensure
-     `init_suite_base_url` is set (windBake already does).
-  **Gate:** `test_texchan_decode.mjs` + SwiftShader boot-smoke 0 errors + program-count unchanged + maps-bound
-  (`__diag`) + the deferred S4 `suite_cache_size()` observation. (Runtime-vs-bake normal already proven at S6a.)
+  **S6b approach: PRE-WARM + SYNC ATTACH** (user-chosen 2026-06-26). The sync cache lives in **JS** (prefetch
+  promises populate the `SuiteAssetSource` cache; the material build reads it synchronously) → **JS-only, no
+  wasm rebuild**.
+
+- [x] **S6b-1 — JS decoder + by-key transport + manifest loader** (`scene3d/suite_assets.js`, inert) ✅
+  Added `SuiteAssetSource.getByKey(stem,type)` (routes through wasm `fetch_suite_artifact_by_key`),
+  `decodeTexchanBytes` (parses the SuiteBlob "HSB1" CONTAINER — texchan writes `encode()`, unlike windclip's raw
+  payload — then the w/h/mask/encoding payload → zero-copy channel views) registered as the `"texchan"` decoder,
+  and `loadTexchanManifest()` (surfaceDid→stem, fail-soft). Inert: no materials.js caller yet.
+  **Gate:** ✅ `node harness/test_texchan_decode.mjs` → **ok=60 fail=0** (52 unique stems; negative inputs
+  fail-soft to null). Cross-language Rust-`encode()` → JS-decode validated on real on-disk artifacts.
+
+- [ ] **S6b-2 — materials.js wiring + index.html** (behind `?material=`, default-OFF; S7 flips on)
+  1. `materialBakeEnabled()` flag reader (default false until S7), mirror `windBakeEnabled`.
+  2. Load `texchan-manifest.json` once at MaterialCache init; build a lazy `SuiteAssetSource`.
+  3. Pre-warm: when a surface is loaded, `getByKey(manifest.get(did),'texchan')` (async populate).
+  4. `_materialFromFlags` (sync, gated): if the surface's texchan is cached, attach **roughnessMap + aoMap**
+     (additive; normal stays byte-identical). Miss/cold = exact current look. ONE material path, no new program
+     permutations. Decide attach-on-resolve vs cache-warm-before-build for the already-built cached material.
+  5. index.html: add `fetch_suite_artifact_by_key` to the wasm named import (both sites) + bump `?v=`.
+  **Gate:** SwiftShader boot-smoke 0 errors + program-count unchanged + maps-bound (`__diag`) + the deferred S4
+  `suite_cache_size()` observation. (Runtime-vs-bake normal already proven at S6a; decode at S6b-1.)
 
 - [ ] **S7 — Default-on flip** (`scene3d/vfx_flags.js` reader, mirror `windBakeEnabled`)
   Add `materialBakeEnabled()` default **true**, `?material=off` escape. Update `docs/url-flags.md`.
@@ -168,3 +175,4 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 - S5 — Rust bake_texchan example; determinism 300-subset byte-identical; full release bake 6152→5999 baked/5475 unique/524 dedup/0 errors; 1.1GB raw (BC follow-up flagged). normal@1.0 = byte-identity preserved; S3-classify confirmed unnecessary at bake.
 - S6a — verify_texchan example; 800/800 byte-faithful (baked normal == fresh normal_from_luminance, rough/ao ok), 0 mismatches. S1 real-portal golden landed.
 - S6b — DECISION: user chose pre-warm+sync-attach; refined to JS-owned cache (JS-only, no wasm rebuild). Loop re-armed to implement.
+- S6b-1 — JS decoder (HSB1 container→texchan payload) + getByKey + loadTexchanManifest in suite_assets.js (inert); test_texchan_decode.mjs ok=60/0. Rust-encode→JS-decode validated.
