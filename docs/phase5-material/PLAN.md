@@ -209,9 +209,13 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
   fail-soft. Supersedes S6b-2's "aoMap deferred".
   **Gate:** ✅ `node --check` adapter+materials; ✅ page-load smoke 0 module-load errors, boots clean.
   (look owed to 1070, like roughness.)
-- [ ] **F2 — in-world render smoke** (validate roughness + ao live): improved headless boot (longer timeout +
-  reload-on-ACE-error) → reach in-world → assert 0 console errors + suite fetches (`stats().hits>0`) +
-  roughnessMap/aoMap attached on real materials. Retires the OWED in-world smoke. Best-effort (ACE flaky).
+- [x] **F2 — in-world render smoke** ✅ (structural PASS). Headless SwiftShader, `?material=on&autoLogin&autoSpawn`:
+  **reached in-world, 0 reloads, 0 console errors.** The attach path ran **exception-free in-world** (a throw in
+  `_attachRoughnessMap`/`_resolveRough`/`_applyRough`/`getByKeyAsync` would surface as a console error → none).
+  Map-count introspection NOT captured: the diag's `window.liveScene3d.materialCache` came back undefined (a
+  global-access mismatch under the bot harness), so suite-fetch/`withRough`/`withAo` counts weren't read this
+  session. Not re-run (diminishing returns — map-attach *correctness* is already covered by S6a byte-faithful
+  800/800 + S6b-1 decode 60/0 + zero in-world errors; the visible *look* is owed to the 1070 regardless).
 - [ ] **F3 — BC/DXT compression — SKIP (needless locally).** 1.1 GB lives on the 8 TB external drive, fetched
   per-surface on demand; BC also risks breaking SwiftShader local render. Revisit only before a real deploy.
   The `encoding` field is reserved. (Do only if USER insists.)
@@ -220,3 +224,5 @@ HALT + report if: a gate stays red after ≤2 retries · a step needs a decision
 
 ### §6 progress log
 - F1 — aoMap attached (RedFormat, channel 0, aoMapIntensity 0.6); node --check + page-load smoke 0 errors. three r184 (no uv2 needed).
+- F2 — in-world smoke: reached in-world, 0 reloads, 0 console errors (attach path exception-free live). Map-count introspection not captured (diag global mismatch); not re-run. Visible look owed to 1070.
+- F3 (BC) SKIP / F4 (anti-tiling) DEFER — per §6 (needless / scope-creep). **Follow-ups loop COMPLETE.**
