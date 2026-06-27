@@ -539,6 +539,57 @@ export class ParticleManager {
     // every `_RP6.recheckInterval` ticks; between re-checks each
     // emitter keeps its cached `_rp6Culled` decision.
     this._rp6Frame = 0;
+    // Perf (2026-06-27) — per-slot material POOL. Each emitter slot needs its
+    // OWN material instance (per-particle opacity lerps must not stomp
+    // neighbours), so addEmitter() `baseMaterial.clone()`d up to maxParticles
+    // materials PER emitter (1024 at high / 2048 at ultra) and dispose()'d
+    // every one on teardown — ~0.5-2 MB of allocate/free churn per spell cast,
+    // the GC source behind the sustained-combat cast stutter. Recycle them
+    // instead: teardown parks disposable clones here keyed by gfxobj+blend
+    // branch; addEmitter pops a free one before cloning. Safe because the
+    // branch state (transparent/blending/depthWrite/alphaTest) and the
+    // __cacheOwned/__disposable/__poolKey tags are FULLY re-applied on reuse,
+    // and per-particle opacity is overwritten every frame — a recycled
+    // material is indistinguishable from a fresh clone. Bounded per key so a
+    // one-off oversized emitter can't pin GPU memory forever (overflow falls
+    // through to the original dispose()).
+    /** @type {Map<string, import('three').Material[]>} */
+    this._materialPool = new Map();
+    this._MATERIAL_POOL_MAX_PER_KEY = 512;
+  }
+
+  /**
+   * Perf (2026-06-27) — pop a recycled per-slot material for `key`, or null if
+   * the pool is empty (caller clones fresh). State + tags are re-applied by the
+   * meshFactory after this returns, so no reset is needed here.
+   * @private
+   */
+  _takePooledMaterial(key) {
+    if (key == null) return null;
+    const pool = this._materialPool.get(key);
+    return pool && pool.length ? pool.pop() : null;
+  }
+
+  /**
+   * Perf (2026-06-27) — reclaim a per-slot material at emitter teardown. A
+   * disposable, pool-keyed clone is parked back in its pool (bounded) for
+   * reuse instead of being dispose()'d on every cast; everything else
+   * (cache-owned base, the no-surface singleton, untagged) falls through to
+   * the original _disposeMaterialIfOwned guard unchanged. Replaces the two
+   * teardown-site dispose calls (tick() auto-finish + destroyParticleEmitter).
+   * @private
+   */
+  _reclaimSlotMaterial(mat) {
+    const ud = mat && mat.userData;
+    if (ud && ud.__disposable === true && ud.__cacheOwned !== true && ud.__poolKey != null) {
+      let pool = this._materialPool.get(ud.__poolKey);
+      if (!pool) { pool = []; this._materialPool.set(ud.__poolKey, pool); }
+      if (pool.length < this._MATERIAL_POOL_MAX_PER_KEY) {
+        pool.push(mat);
+        return;
+      }
+    }
+    _disposeMaterialIfOwned(mat);
   }
 
   /** ACE `GetNumEmitters()` (ParticleManager.cs:47-50). */
@@ -671,8 +722,17 @@ export class ParticleManager {
       scene: this._scene,
       meshFactory: async (_slotIdx) => {
         // Per-slot mesh: shared geometry, cloned material so per-particle
-        // opacity lerps don't stomp neighbors.
-        const mat = baseMaterial ? baseMaterial.clone() : null;
+        // opacity lerps don't stomp neighbors. Perf (2026-06-27): reuse a
+        // recycled clone from the per-slot material pool when available
+        // (keyed by gfxobj + blend branch — both constant for this emitter),
+        // falling back to a fresh clone. Cuts the allocate/free churn that
+        // drove the sustained-combat cast stutter.
+        const poolKey = baseMaterial
+          ? `${(info.hwGfxObjId >>> 0)}|${baseIsAdditive ? 1 : 0}`
+          : null;
+        const mat = baseMaterial
+          ? (this._takePooledMaterial(poolKey) || baseMaterial.clone())
+          : null;
         if (mat) {
           // Perf FU4 (2026-05-18) — per-emitter Additive vs Alpha branch.
           // E5 (e1339af) shipped a single conservative middle ground for
@@ -713,6 +773,9 @@ export class ParticleManager {
           // landblock eviction while moving.
           mat.userData.__cacheOwned = false;
           mat.userData.__disposable = true;
+          // Perf (2026-06-27): tag the pool key so _reclaimSlotMaterial() can
+          // park this clone back in the right pool at teardown.
+          mat.userData.__poolKey = poolKey;
         }
         // NOTE: `geometry` is shared across all slots and originates from
         // the caller-supplied `geometryFactory` (typically a DAT-backed
@@ -900,7 +963,7 @@ export class ParticleManager {
         for (let i = 0; i < e.partStorage.length; i++) {
           const slotMesh = e.partStorage[i];
           if (!slotMesh) continue;
-          _disposeMaterialIfOwned(slotMesh.material);
+          this._reclaimSlotMaterial(slotMesh.material);
         }
       }
       this.particleTable.delete(id);

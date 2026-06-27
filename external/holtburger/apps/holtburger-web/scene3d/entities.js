@@ -5524,6 +5524,20 @@ export class EntityManager {
   async _prewarmPhysicsScriptTable(tableDid, rig) {
     const td = (tableDid >>> 0);
     if (td === 0) return;
+    // Perf (2026-06-27): on the FIRST PhysicsScriptTable prewarm of the
+    // session, also kick off a one-time background warm of the SHARED cast/
+    // effect PhysicsScripts (Launch/Explode/cast-glyphs — the canonical
+    // PlayScript→PhysicsScript map, refCount up to 101 across tables) so the
+    // first war/void cast resolves to real VFX warm instead of paying the cold
+    // fetchPhysicsScript + per-hook fetchParticleEmitter chain ON the cast
+    // frame. That cold chain is the >0.5 s stall that trips the dt-recovery
+    // window (index.js:1763-1776) into freezing the sim — which (pre the
+    // _tickBallisticProjectiles fix) also froze the spell projectile mid-flight.
+    // Chunked + fire-and-forget so the warm itself never stalls a frame.
+    if (!this._canonicalCastPrewarmStarted) {
+      this._canonicalCastPrewarmStarted = true;
+      this._prewarmCanonicalCastScripts().catch(() => {});
+    }
     // Dedup: only prewarm a given table DID once per session. The DAT
     // caches make repeat fetches cheap, but skipping the walk entirely
     // avoids redundant parse cost when many entities share a table.
@@ -5572,6 +5586,82 @@ export class EntityManager {
         if (emitterDid === 0) continue;
         try { await wasm.fetchParticleEmitter(emitterDid); } catch (_) { /* warm-only */ }
       }
+    }
+  }
+
+  /**
+   * Perf (2026-06-27) — one-time background warm of the SHARED cast/effect
+   * PhysicsScripts. `_prewarmPhysicsScriptTable` only warms the scripts of an
+   * already-spawned entity's table; the cast-VFX scripts (Launch 0x33000E62,
+   * Explode 0x3300011E, the cast glyphs, etc.) are referenced by the canonical
+   * PlayScript map and may be cold until the matching entity happens to spawn.
+   * Warming them up front means the player's first war/void cast resolves to
+   * real emitters without the cold fetchPhysicsScript + fetchParticleEmitter
+   * chain landing on the cast frame (the >0.5 s hitch). DAT-cache warm only
+   * (no geometry/material build, no manager mutation) → zero visual/behaviour
+   * change. Chunked under a tiny per-slice time budget with a yield between
+   * slices so the warm never itself causes a stall. Fired once per session.
+   * @private
+   */
+  async _prewarmCanonicalCastScripts() {
+    const wasm = this.wasmExports;
+    if (!wasm || typeof wasm.fetchPhysicsScript !== "function") return;
+    const canFetchEmitter = typeof wasm.fetchParticleEmitter === "function";
+    // Load the canonical PlayScript→PhysicsScript map (generated data file).
+    let canon;
+    try {
+      const url = new URL(
+        "../data/playscript-canonical-physics-scripts.json",
+        import.meta.url,
+      );
+      const resp = await fetch(url);
+      canon = (await resp.json())?.canonical;
+    } catch (_) {
+      return; // data file absent / unreadable → silently skip (warm is opt-in perf)
+    }
+    if (!canon || typeof canon !== "object") return;
+    // Unique 0x33 PhysicsScript DIDs from the map, skipping any already warmed
+    // by an entity-table prewarm (the DAT cache makes a repeat fetch cheap, but
+    // skipping avoids redundant parse work).
+    const dids = [];
+    const seen = this._prewarmedCanonicalScripts || (this._prewarmedCanonicalScripts = new Set());
+    for (const k of Object.keys(canon)) {
+      const did = (parseInt(canon[k] && canon[k].scriptDid, 16) || 0) >>> 0;
+      if (did && !seen.has(did)) { seen.add(did); dids.push(did); }
+    }
+    if (dids.length === 0) return;
+    const yieldOnce = () =>
+      new Promise((r) =>
+        typeof requestIdleCallback === "function"
+          ? requestIdleCallback(() => r(), { timeout: 250 })
+          : setTimeout(r, 16),
+      );
+    let i = 0;
+    while (i < dids.length) {
+      // Tiny per-slice budget: warm a couple of scripts, then yield so the
+      // synchronous wasm DAT parses never accumulate into a frame stall.
+      const budgetEnd =
+        (typeof performance !== "undefined" ? performance.now() : 0) + 3;
+      do {
+        const scriptDid = dids[i++];
+        let ps;
+        try { ps = await wasm.fetchPhysicsScript(scriptDid); } catch (_) { continue; }
+        if (!ps || typeof ps.takeEntries !== "function" || !canFetchEmitter) continue;
+        let entries;
+        try { entries = ps.takeEntries(); } catch (_) { continue; }
+        if (!Array.isArray(entries)) continue;
+        for (const e of entries) {
+          if (e.hookType !== 13 && e.hookType !== 26) continue;
+          const emitterDid = (e.createParticleEmitterId >>> 0);
+          if (emitterDid !== 0) {
+            try { await wasm.fetchParticleEmitter(emitterDid); } catch (_) { /* warm-only */ }
+          }
+        }
+      } while (
+        i < dids.length &&
+        (typeof performance !== "undefined" ? performance.now() : 0) < budgetEnd
+      );
+      if (i < dids.length) await yieldOnce();
     }
   }
 
@@ -10470,10 +10560,73 @@ export class EntityManager {
   }
 
   /**
+   * F3-1b (bughunt 2026-06-27) — advance every ballistic projectile by REAL
+   * elapsed wall-clock time, independent of the main-loop `dt`. Called at the
+   * very top of tick(), BEFORE the `dt<=0` recovery early-return, so a cast-time
+   * frame stall (which trips the dt-recovery window into forcing dt=0 for ~10
+   * frames — exactly a projectile's flight) can no longer freeze the bolt at its
+   * launch point. War/void/life bolts + arrows/bolts/thrown weapons are
+   * PhysicsState::Missile entities for which ACE streams NO in-flight
+   * UpdatePosition — the ObjectCreate launch velocity is the only motion datum,
+   * so the client owns their integration (retail: acclient.c update_object
+   * integrates by real elapsed quantum, substepped at <=0.1 s, skipping >2 s
+   * gaps as teleports). `_ballistic` + `lastVel` + `lastVelMs` are seeded in
+   * _spawnImpl. No-op (single Map walk, early `continue`) when nothing is
+   * ballistic, so non-combat frames pay ~nothing.
+   * @private
+   */
+  _tickBallisticProjectiles() {
+    if (!this.entityMap || this.entityMap.size === 0) return;
+    const now = typeof performance !== "undefined" ? performance.now() : 0;
+    for (const inst of this.entityMap.values()) {
+      if (!inst || !inst._ballistic || !inst.lastVel || !inst.root) continue;
+      const lv = inst.lastVel;
+      // Anchor the first step to when the launch velocity was seeded so the
+      // total displacement stays correct even if this pass starts a few frames
+      // late (e.g. the spawn raced a stalled frame).
+      let last = inst._ballisticLastMs;
+      if (last == null) last = inst.lastVelMs != null ? inst.lastVelMs : now;
+      let rdt = (now - last) / 1000;
+      inst._ballisticLastMs = now;
+      if (!(rdt > 1e-4)) continue;
+      // Retail update_object treats a >2 s gap as a teleport and does NOT
+      // integrate across it (acclient.c:323120-323159) — otherwise an alt-tab
+      // would hurl the bolt forward. (Moot in practice: a projectile despawns
+      // on impact within ~1 s, so it's long gone after any real stall.)
+      if (rdt > 2.0) continue;
+      const pos = inst.root.position;
+      // Substep at <=0.1 s (native MAX_QUANTUM) so a recovered multi-frame gap
+      // integrates the full path instead of one oversized Euler step.
+      let remaining = rdt;
+      while (remaining > 1e-4) {
+        const step = remaining > 0.1 ? 0.1 : remaining;
+        // G-4 (?projectileGravity=on): semi-implicit Euler — decay vertical
+        // velocity first, then integrate, matching the retail arc for gravity-
+        // class missiles. Flag off / non-gravity class → lv.vz untouched (flat).
+        if (inst._ballisticGravity) lv.vz += PROJECTILE_GRAVITY_Z * step;
+        pos.x += lv.vx * step;
+        pos.y += lv.vy * step;
+        pos.z += lv.vz * step;
+        remaining -= step;
+      }
+    }
+  }
+
+  /**
    * Per-rAF tick. Advances every entity's mixer by dt seconds.
    * Called from loop.js#tickPerFrame.
    */
   tick(dt) {
+    // F3-1b (bughunt 2026-06-27): integrate ballistic projectiles on a
+    // wall-clock dt BEFORE the dt<=0 recovery early-return below. The main
+    // loop forces dt=0 for ~10 frames after any >0.5 s frame stall (the
+    // dt-recovery window, index.js:1763-1776), and the first cast of a spell
+    // stalls that long loading its particle DATs — so keying projectile flight
+    // off `dt` left the bolt frozen at the launch point for its entire sub-
+    // second flight. Projectiles own their motion (ACE streams no in-flight
+    // UpdatePosition), so a real-time integration here is correct and immune to
+    // the freeze. Runs unconditionally; no-op when no entity is ballistic.
+    this._tickBallisticProjectiles();
     if (!(dt > 0)) return;
     // A5-P2 (`?tweenClock=dt`) — advance the unified tween clock by the SAME
     // dt every mixer below consumes (retail: one elapsed-time quantum for the
@@ -10625,37 +10778,19 @@ export class EntityManager {
       // frames (default true → no change). The target is re-anchored every
       // setPose, so a skipped frame is recovered on the next run with no drift
       // — the documented far-band visual-lag trade. mixer/hooks are untouched.
-      // F3-1 (bughunt 2026-06-09) — ballistic projectile flight. War/void/life
-      // bolts and arrows/bolts/thrown weapons are PhysicsState::Missile entities:
-      // ACE never broadcasts an in-flight UpdatePosition for them (the missile
-      // tick's SendUpdatePosition is commented out — WorldObject_Tick.cs), so the
-      // ONLY motion datum the client receives is the ObjectCreate PhysicsDesc
-      // launch velocity, which retail integrates every frame. Our dead-reckon
-      // ease below only moves entities that have a _serverTargetPos (set by
-      // KIND_POSITION) — a projectile never gets one, so pre-fix it sat frozen at
-      // the launch point for its whole flight and the impact VFX played at the
-      // caster's hand. Integrate the seeded launch velocity directly here: no
-      // _serverTargetPos and no staleness gate (there are no follow-up packets to
-      // be stale against), runs independent of `?deadReckon`/`runSmoothing` since
-      // projectile flight is gameplay motion, not visual smoothing. Constant-
-      // velocity — arc curvature (gravity) is deferred (see _spawnImpl + the wasm
-      // KIND_SPAWN note); the projectile despawns on impact (KIND_REMOVE) within
-      // its sub-second flight, so it never sails off and the impact VFX now plays
-      // near the target. `_ballistic` + `lastVel` seeded in _spawnImpl.
-      if (inst._ballistic && inst.lastVel) {
-        const lv = inst.lastVel;
-        // G-4 (?projectileGravity=on): semi-implicit Euler — decay the
-        // vertical velocity first, then integrate, so the arc matches the
-        // retail ballistic shape for gravity-class missiles. Flag off /
-        // non-gravity class / stale pkg → lv.vz untouched (flat flight).
-        if (inst._ballisticGravity) {
-          lv.vz += PROJECTILE_GRAVITY_Z * dt;
-        }
-        const pos = inst.root.position;
-        pos.x += lv.vx * dt;
-        pos.y += lv.vy * dt;
-        pos.z += lv.vz * dt;
-      }
+      // F3-1b (bughunt 2026-06-27) — ballistic projectile integration MOVED OUT
+      // of this gated, dt-driven loop into `_tickBallisticProjectiles()`, which
+      // runs every tick on a WALL-CLOCK dt BEFORE the `dt<=0` recovery early-
+      // return at the top of tick(). Integrating here keyed off the main-loop
+      // `dt`, which the dt-recovery window (index.js:1763-1776) forces to 0 for
+      // ~10 frames after ANY >0.5 s frame stall. The first cast of a spell
+      // stalls that long synchronously loading its particle DATs + cloning per-
+      // slot materials (the cast-time hitch), so the projectile's whole sub-
+      // second flight landed inside the dt=0 freeze: it sat frozen at the launch
+      // point while only the impact VFX (a non-sim-gated burst) played near the
+      // target — the reported "I see the end but not the bolt travelling". The
+      // wall-clock pass is also retail-faithful: acclient.c update_object
+      // integrates by real elapsed quantum, substepped, not by a render dt.
       // F3-4 (bughunt 2026-06-09) — sticky melee tracking. While a monster is
       // sticky-attacking, ACE withholds its position broadcast (relying on the
       // retail client's StickyManager to glue it to the moving target), so our
