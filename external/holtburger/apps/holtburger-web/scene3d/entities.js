@@ -310,6 +310,15 @@ const REMOTE_INTERP_OWNERSHIP_FRAMES = 30;
 // + target radius) is a refinement.
 const ENTITY_STICKY_STANDOFF_M = 1.3;
 
+// F3-4b (2026-06-27, ?stickyGroundZ=on) — vertical gap (m) past which a sticky
+// melee mob RELEASES its glue: the victim has left ground melee reach (jumped),
+// so the mob should fall back to its server-driven grounded path and circle
+// beneath rather than levitate after the airborne target (retail StickyManager
+// is horizontal-only, z zeroed — acclient.c:388557; melee uses a 3D cylinder
+// range — ACE Position.cs:100-114). ~melee cylinder reach; ACE MaxMeleeRange is
+// 0.75 (radius-excluded) and a clear jump clears 1 m.
+const STICKY_AIRBORNE_RELEASE_M = 1.0;
+
 // === A2 Path A (2026-05-29) — remote-entity HEADING easing (DEFAULT-ON).
 // Remote entities used to SNAP their quaternion to each server heading
 // (~30 Hz), so a turning creature stepped through its facing. AC's MotionTable
@@ -697,6 +706,42 @@ const SIGNED_MOTION_SPEED = (() => {
   try {
     return typeof window !== "undefined" && window.location &&
       new URLSearchParams(window.location.search).get("signedMotionSpeed")?.toLowerCase() !== "off";
+  } catch (_) {
+    return false;
+  }
+})();
+
+// F3-4b (2026-06-27) — `?stickyGroundZ` keeps a sticky melee mob GROUNDED.
+// DEFAULT-ON (validated 2026-06-27 on real rigs: jumped to z+15, all 3 sticky
+// mobs stayed grounded, mobMaxZrise=0; `=off` escape). The legacy F3-4 glue
+// eased the mob's Z to the TARGET's Z, so it floated up after a jumping player;
+// retail's StickyManager pulls XY + heading only (z zeroed, acclient.c:388557)
+// and a monster can't follow/attack an airborne target. When on: release the
+// glue while the victim is airborne / vertically out of melee reach (mob reverts
+// to its grounded server pose), else glue XY only (own ground Z). `=off` =
+// byte-identical legacy (gz = tp.z).
+const STICKY_GROUND_Z = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("stickyGroundZ")?.toLowerCase() !== "off";
+  } catch (_) {
+    return false;
+  }
+})();
+
+// F3-6 (2026-06-27) — `?meleeFaceTarget` snaps a swinging mob to face its melee
+// victim at swing start. DEFAULT-ON (validated 2026-06-27: from a perturbed
+// 110°-off heading the snap recovers exact facing — fwd·dir 1.0; `=off` escape).
+// ACE only broadcasts the attack motion once the attacker is already facing
+// within ~5° (→20° point-blank: Monster_Tick.cs:125, IsFacing
+// Monster_Navigation.cs:385), but our remote heading-ease lags and the F3-4
+// sticky glue never re-faces ("documented follow-on"), so a mob can visibly
+// swing while angled off. Mirrors the server's facing guarantee. `=off` =
+// byte-identical (swing plays at the eased heading).
+const MELEE_FACE_TARGET = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("meleeFaceTarget")?.toLowerCase() !== "off";
   } catch (_) {
     return false;
   }
@@ -7093,6 +7138,28 @@ export class EntityManager {
     if (cls === "attack" || cls === "cast") {
       // (swing/cast vibe-pose tween clears removed — setSwingPose/setCastPose
       // retired, WS-B teardown 2026-06-18; nothing assigns the tweens now.)
+      // F3-6 (?meleeFaceTarget=on): orient a swinging mob toward its melee
+      // victim before the swing renders. The server only broadcasts the attack
+      // when the attacker is already facing (IsFacing ~5°→20°), but our remote
+      // heading-ease lags and the F3-4 sticky glue never re-faces, so the mob
+      // can visibly swing angled off. Snap-face the sticky target on the XY
+      // plane (AC-forward = (-sin h, cos h, 0) → h = atan2(-Δx, Δy); pure-Z quat
+      // (0,0,sin(h/2),cos(h/2)) — .z/.w map to AC z/w directly per getHeading),
+      // and pin _serverTargetQuat so the ease holds the facing through the
+      // swing. Attack only (casters keep their windup heading). Inert when the
+      // flag is off or there's no known target.
+      if (MELEE_FACE_TARGET && cls === "attack" && inst._stickyTarget && inst.root) {
+        const tgtInst = this.entityMap.get(inst._stickyTarget >>> 0);
+        if (tgtInst && tgtInst !== inst && tgtInst.root) {
+          const tp = tgtInst.root.position;
+          const p = inst.root.position;
+          const h = Math.atan2(-(tp.x - p.x), tp.y - p.y);
+          const hz = Math.sin(h / 2);
+          const hw = Math.cos(h / 2);
+          inst.root.quaternion.set(0, 0, hz, hw);
+          if (inst._serverTargetQuat) inst._serverTargetQuat.set(0, 0, hz, hw);
+        }
+      }
       // Wave 2 (2026-06-08, C3): the MotionTable link inner key is the
       // FULL 32-bit command. lib.rs's main path already sends one, but a
       // bare low-16 from the side-channel / legacy caller is expanded here
@@ -10828,12 +10895,27 @@ export class EntityManager {
           const uy = dh > 1e-3 ? dy / dh : 0;
           const gx = tp.x + ux * ENTITY_STICKY_STANDOFF_M;
           const gy = tp.y + uy * ENTITY_STICKY_STANDOFF_M;
-          const gz = tp.z; // match the target's height (same ground/level)
-          const factor = 1 - Math.exp(-DEAD_RECKON_DAMP_K * dt);
-          p.x += (gx - p.x) * factor;
-          p.y += (gy - p.y) * factor;
-          p.z += (gz - p.z) * factor;
-          stickyGlued = true;
+          // F3-4b (?stickyGroundZ=on): a monster can't follow/attack an airborne
+          // victim. If the target jumped out of vertical melee reach, RELEASE the
+          // glue (stickyGlued stays false → the dead-reckon ease below resumes
+          // from the server's grounded pose; the mob circles beneath, attacking
+          // but unable to land it). Otherwise glue XY only and leave Z to the
+          // mob's own ground (retail StickyManager zeroes the follow Z,
+          // acclient.c:388557). Flag off = legacy (ease Z to the target's Z).
+          const targetAirborne =
+            STICKY_GROUND_Z &&
+            (tgtInst._isAirborne === true ||
+              Math.abs(tp.z - p.z) > STICKY_AIRBORNE_RELEASE_M);
+          if (!targetAirborne) {
+            const factor = 1 - Math.exp(-DEAD_RECKON_DAMP_K * dt);
+            p.x += (gx - p.x) * factor;
+            p.y += (gy - p.y) * factor;
+            if (!STICKY_GROUND_Z) {
+              const gz = tp.z; // legacy: match the target's height
+              p.z += (gz - p.z) * factor;
+            }
+            stickyGlued = true;
+          }
         }
       }
       // `!inst._ballistic`/`!stickyGlued` defense-in-depth: a ballistic

@@ -1873,6 +1873,50 @@ export class CameraSwitcher {
     const localGuid = typeof lpgFn === "function" ? lpgFn() : null;
     if (localGuid == null) return;
     const g = localGuid >>> 0;
+    // F15-3 (2026-06-27, ?localRigCombo=on) — compose the local rig from
+    // INDEPENDENT forward + sidestep slots (retail CMotionInterp drives
+    // forward/sidestep/turn commands concurrently, acclient.c:344147) instead of
+    // the single dominant clip below. Fixes (a) BACKWARD: emit WalkForward at
+    // motionSpeed -1 so the default-on ?signedMotionSpeed plays the forward clip
+    // in REVERSE (retail WalkBackwards = WalkForward negated, acclient.c:343746)
+    // — the legacy path sent the distinct WalkBackwards cmd at +1.0, which never
+    // triggers the reverse; and (b) COMBINATIONAL: layer the additive sidestep
+    // blend (setSidestepLayer) over the forward/backward base so backward-left /
+    // forward-right diagonals animate both axes instead of collapsing to one
+    // clip. Left-vs-right strafe reverse + a dedicated turn slot stay follow-ons
+    // (setSidestepLayer collapses Left→Right; matches the F15-2 deferral).
+    // DEFAULT-ON (validated 2026-06-27 on the local rig: backward→motionSign −1,
+    // backward-left→sign −1 + sidestep slot 0x6500000f; `=off` escape). Lazy
+    // module-once flag read.
+    if (this._localRigCombo === undefined) {
+      try {
+        this._localRigCombo = typeof window !== "undefined" &&
+          new URLSearchParams(window.location.search).get("localRigCombo") !== "off";
+      } catch (_) { this._localRigCombo = false; }
+    }
+    if (this._localRigCombo) {
+      let fwdCmd, fwdSpeed = 1.0;
+      if (m.forward > 0) { fwdCmd = m.run ? 0x44000007 : 0x45000005; }   // Run / Walk Forward
+      else if (m.forward < 0) { fwdCmd = 0x45000005; fwdSpeed = -1.0; }  // WalkForward reversed
+      else if (m.strafe !== 0) { fwdCmd = 0x41000003; }                 // idle base under a pure strafe
+      else if (m.turn > 0) { fwdCmd = 0x6500000d; }                     // TurnRight
+      else if (m.turn < 0) { fwdCmd = 0x6500000e; }                     // TurnLeft
+      else { fwdCmd = 0x41000003; }                                     // Ready (stop → idle)
+      const sideCmd = m.strafe !== 0 ? 0x6500000f : 0;                  // SideStepRight (layer collapses L→R)
+      const sideSpeed = m.strafe < 0 ? -1.0 : 1.0;
+      let stanceC = 0x8000003d;                                         // NonCombat fallback
+      try { if (typeof em.getStance === "function") { const s = (em.getStance(g) >>> 0); if (s) stanceC = s; } } catch (_) {}
+      try {
+        em.setMotion(g, fwdCmd, stanceC, fwdSpeed);
+        if (typeof em.setSidestepLayer === "function") em.setSidestepLayer(g, sideCmd, stanceC, sideSpeed);
+      } catch (e) {
+        if (!this._rigDispatchWarned) {
+          this._rigDispatchWarned = true;
+          console.warn("[cameraSwitcher] local-rig combo setMotion failed:", String(e?.message ?? e));
+        }
+      }
+      return;
+    }
     let cmd;
     if (m.forward > 0) cmd = m.run ? 0x44000007 : 0x45000005;   // Run / Walk Forward
     else if (m.forward < 0) cmd = 0x45000006;                   // WalkBackwards
