@@ -3635,6 +3635,25 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               skyPromise,
             ]);
             liveScene3d.atmosphereLights = atmosphereLights;
+            // World-light calibration default (2026-06-27) — tame the
+            // exposure=5 / AGX surface wash so buildings + terrain show their
+            // texture albedo (retail-leaning) instead of blowing toward white.
+            // Scales ONLY the scene sun + sky probe; the takram sky raymarch,
+            // sun disc, and clouds read the Bruneton tables directly and are
+            // untouched. `?worldLightScale=1` restores the original HDR look;
+            // live-tune via __setWorldLightScale(v). EYE-TEST CONSTANT — dial
+            // on the 1070 and bake the preferred value here.
+            const WORLD_LIGHT_SCALE_DEFAULT = 0.4;
+            if (atmosphereLights) {
+              let wls = WORLD_LIGHT_SCALE_DEFAULT;
+              try {
+                if (typeof window !== "undefined" && window.location?.search) {
+                  const raw = new URLSearchParams(window.location.search).get("worldLightScale");
+                  if (raw != null && raw !== "" && Number.isFinite(+raw)) wls = +raw;
+                }
+              } catch (_) { /* keep default */ }
+              atmosphereLights.worldLightScale = wls;
+            }
             // eslint-disable-next-line no-undef
             if (typeof window !== "undefined") {
               // eslint-disable-next-line no-undef
@@ -3820,7 +3839,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 `[sky-k.3] AtmosphereRuntime ready (${tag} ${ms}ms). ` +
                   "AerialPerspective + ToneMapping(AGX) + Dithering composer wired. " +
                   "SunDirectionalLight + SkyLightProbe added; parametric lights silenced. " +
-                  "toneMappingExposure=5 — tune via __setExposure(v)."
+                  "toneMappingExposure=5 — tune via __setExposure(v). " +
+                  `worldLightScale=${atmosphereLights?.worldLightScale ?? 1} — tune via __setWorldLightScale(v) / ?worldLightScale=.`
               );
               // 2026-05-21 — terminal boot signal for agents. Pass 1
               // pre-warmed world + atmosphere; entity-only lazy
@@ -3863,6 +3883,17 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               window.__setExposure = (v) => {
                 renderer.toneMappingExposure = +v;
                 return renderer.toneMappingExposure;
+              };
+              // World-light scale live tweak (2026-06-27) — scales ONLY the
+              // scene sun + sky probe so lit surfaces stop washing toward white
+              // at AGX exposure=5; the sky raymarch / sun disc / clouds are
+              // untouched. Takes effect on the next atmosphere tick. Returns
+              // null if the atmosphere lights aren't up yet. 1.0 = original.
+              // eslint-disable-next-line no-undef
+              window.__setWorldLightScale = (v) => {
+                if (!liveScene3d.atmosphereLights) return null;
+                liveScene3d.atmosphereLights.worldLightScale = +v;
+                return liveScene3d.atmosphereLights.worldLightScale;
               };
               // Bloom / Vignette live tweaks. Each effect is null when its
               // preset flag is off; setters return null in that case so the

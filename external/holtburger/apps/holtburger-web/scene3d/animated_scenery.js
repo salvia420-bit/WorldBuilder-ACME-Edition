@@ -47,6 +47,7 @@ import { SuiteAssetSource, ensureSuiteInit } from "./suite_assets.js";
 // clip through the deformation.windBend component (byte-identical wrapper over
 // buildTreeWindClip). archetype #1's MECH-A consumer.
 import { windBend } from "./vfx/components/windBend.js";
+import { visualEnabled } from "./vfx_catalog.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const DEFAULT_ANIM_FPS = 30.0;
@@ -527,16 +528,23 @@ async function buildOneWind(p, wasmExports, materialCache, spFetch) {
  * peel nothing back — the off-trace stays [R] byte-identical).
  */
 export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
-  if (!treeWindEnabled()) return { built: 0, failed: [] };
+  // 2026-06-27 vanished-trees fix: the statics.js peel removes trees from the
+  // FROZEN path under `treeWindEnabled() || visualEnabled()` (visual is default-ON),
+  // but this builder previously bailed on `!treeWindEnabled()` and returned an EMPTY
+  // `failed`, so the peeled trees were neither animated NOR re-frozen → they vanished.
+  // Match this gate to the peel gate so the default (visual-on) path actually builds
+  // the wind trees; the can't-build guards below now re-freeze via `failed: placements`
+  // so a tree is at worst STATIC, never gone.
+  if (!treeWindEnabled() && !visualEnabled()) return { built: 0, failed: [] };
   if (!scene3d?.staticsGroup || !Array.isArray(placements) || !wasmExports) return { built: 0, failed: [] };
-  if (typeof wasmExports.fetchBuildingPlacement !== "function") return { built: 0, failed: [] }; // pre-rebuild → frozen
+  if (typeof wasmExports.fetchBuildingPlacement !== "function") return { built: 0, failed: placements }; // pre-rebuild → re-freeze static
   if (placements.length === 0) return { built: 0, failed: [] };
   _rafDisposed = false; // re-arm after a prior dispose if scenery loads again.
 
   const resolveParent = (typeof opts?.resolveParent === "function") ? opts.resolveParent : null;
   const { getOrCreateMaterialCache } = await import("./statics.js");
   const materialCache = getOrCreateMaterialCache(scene3d);
-  if (!materialCache) return { built: 0, failed: [] };
+  if (!materialCache) return { built: 0, failed: placements }; // re-freeze static, don't vanish
   const spFetch = surfacePixelsFetcher(wasmExports);
 
   const K = Math.max(1, (opts?.phaseBuckets | 0) || 4);

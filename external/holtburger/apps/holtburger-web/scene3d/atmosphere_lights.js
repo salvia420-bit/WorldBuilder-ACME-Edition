@@ -55,8 +55,10 @@ export class AtmosphereLights {
    * @param {number} [opts.sunDistance=1000] — DirectionalLight target offset.
    *   Doesn't affect shading (DirectionalLight is parallel); only shadow camera.
    *   Match sky_lighting.js's SUN_POSITION_DISTANCE for visual continuity.
+   * @param {number} [opts.worldLightScale=1] — scalar applied to the sun +
+   *   sky-probe intensity each tick (see tick()). 1.0 = raw physical HDR.
    */
-  constructor({ scene, atmosphereRuntime, atmosphere, sunDistance = 1000 }) {
+  constructor({ scene, atmosphereRuntime, atmosphere, sunDistance = 1000, worldLightScale = 1 }) {
     if (!scene) throw new Error("AtmosphereLights: scene is required");
     if (!atmosphereRuntime) throw new Error("AtmosphereLights: atmosphereRuntime is required");
 
@@ -88,6 +90,15 @@ export class AtmosphereLights {
     scene.add(this.sun);
     scene.add(this.sun.target);
     scene.add(this.skyProbe);
+
+    // World-light calibration (2026-06-27). takram's sun/probe emit physical
+    // radiance that, at the composer's exposure=5 + AGX tone map, pushes lit
+    // SURFACES (buildings/terrain/statics) past AGX's ~3.3 white point so their
+    // texture albedo desaturates toward white. This scalar pulls those two
+    // SCENE lights back into AGX's colour-true range. It does NOT touch the sky
+    // raymarch, sun disc, or clouds — those read the Bruneton tables directly,
+    // not these lights — so the atmosphere look is preserved. Applied in tick().
+    this.worldLightScale = worldLightScale;
 
     this._sunDirScratch = new THREE.Vector3();
     this._tickCount = 0;
@@ -124,11 +135,23 @@ export class AtmosphereLights {
 
     // === L1 (waves-2, 2026-05-29) — drive the probe intensity from AC's
     // diurnal ambient level with the 0.2 floor. Fail-soft: a missing /
-    // non-finite ambBright leaves the probe at its default intensity (1.0).
+    // non-finite ambBright falls back to the takram default base (1.0).
     const ambBright = +state.ambBright;
-    if (Number.isFinite(ambBright)) {
-      this.skyProbe.intensity = Math.max(LSCAPE_LIGHT_MINIMUM, ambBright);
-    }
+    const baseAmbient = Number.isFinite(ambBright)
+      ? Math.max(LSCAPE_LIGHT_MINIMUM, ambBright)
+      : 1.0;
+
+    // World-light calibration (2026-06-27) — see constructor. takram's
+    // update() sets the sun's HDR radiance on `color` and the probe's on the
+    // SH coeffs, but never touches `intensity`; three.js multiplies color ×
+    // intensity, so `intensity` is a free scalar we set absolutely each tick
+    // (no compounding). Scaling ONLY these two scene lights tames the surface
+    // wash without touching the sky/sun-disc/clouds. The retail
+    // LSCAPE_LIGHT_MINIMUM (0.2) floor is re-applied AFTER the scale so nights
+    // stay dark-but-visible. worldLightScale=1 → byte-identical original look.
+    const s = this.worldLightScale;
+    this.sun.intensity = s;
+    this.skyProbe.intensity = Math.max(LSCAPE_LIGHT_MINIMUM, baseAmbient * s);
 
     this._lastState = state;
     this._tickCount += 1;
