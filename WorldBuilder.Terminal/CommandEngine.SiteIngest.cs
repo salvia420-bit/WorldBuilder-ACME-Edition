@@ -256,19 +256,32 @@ public partial class CommandEngine {
             // the NPC/Creature subset.
             await EnsureWeenieIndexLoadedAsync();
             var weenieDescriptors = new Dictionary<int, AceWeenieDescriptor>(_weenieIndex.Count);
+            var childWeenieTypes = new Dictionary<int, int>(_weenieIndex.Count);
             foreach (var e in _weenieIndex.Entries) {
                 weenieDescriptors[e.Wcid] = new AceWeenieDescriptor(e.Wcid, e.DisplayName, e.WeenieType);
+                childWeenieTypes[e.Wcid] = e.WeenieType;
             }
 
-            // OWNER DECISION (2026-06-17): landblock_instance stays STRICTLY 1:1
-            // — town generator expansion is deferred so the existing per-town
-            // staged files (e.g. Holtburg 0xA9B4 = 106) are byte-stable. Only
-            // the encounter layer (wilderness) expands generators; see
-            // IngestAceEncountersAsync. Do NOT pass generator dicts here.
-            var spawnsByLb = SpawnGazetteerBuilder.BuildFromAceLandblockInstances(rows, weenieDescriptors);
+            // PER-LANDBLOCK FAITHFUL (2026-06-26, supersedes the 2026-06-17 defer):
+            // expand generator children for the landblock_instance layer exactly the
+            // way the encounter (wilderness) layer already does (see
+            // IngestAceEncountersAsync). gmriggs: "almost every dungeon spawn was tied
+            // to a gen" — empirically ~94.6% at dungeon 0x00B4, which otherwise stages
+            // 331 invisible anchors and 0 visible monsters. ExpandGeneratorChildren is
+            // a deterministic FNV-1a replay of ACE SelectAProfile (byte-stable across
+            // re-stages), so the bake stays reproducible. Cost: Holtburg 0xA9B4
+            // 106 -> 119; world landblock_instance layer +~25.6k children (~17.8k
+            // creatures), concentrated in dungeons.
+            // See docs/per-landblock-faithful-world-method-2026-06-26.md Fix 1.
+            var generatorProfiles = await connector.GetAllGeneratorProfilesAsync();
+            var generatorRadii = await connector.GetGeneratorRadiiAsync();
+            var generatorMaxObjects = await connector.GetGeneratorMaxObjectsAsync();
+            var spawnsByLb = SpawnGazetteerBuilder.BuildFromAceLandblockInstances(
+                rows, weenieDescriptors,
+                generatorProfiles, generatorRadii, generatorMaxObjects, childWeenieTypes);
             int total = spawnsByLb.Values.Sum(v => v.Count);
             int synthetic = spawnsByLb.Values.SelectMany(v => v).Count(s => s.IsSynthetic);
-            int generatorChildren = total - rows.Count; // 0 while town expansion is deferred
+            int generatorChildren = total - rows.Count; // count of expanded generator children
 
             string targetPath = outPath ?? Path.Combine(
                 _projectManager.CurrentProject!.ProjectDirectory, "ace_spawn_records.jsonl");

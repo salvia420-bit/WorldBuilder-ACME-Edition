@@ -1809,6 +1809,26 @@ public class JsonCommandProcessor {
             System.IO.Path.Combine(eventsDir, $"{lbHex16}.events.jsonl"),
             bakeWarnings);
 
+        // Interior detail (per-cell stabs + cell-portals) so the oracle is
+        // interior-COMPLETE, not count-only — the DAT-side ground truth the
+        // independent-truth verify compares the rendered scene against
+        // (per-landblock-faithful-world-method §7 / Step 6). Reuses
+        // GetDungeonInfo (same source as the get-dungeon-info command), so the
+        // interior `cells[]` carry the exact stab ids + positions and the cell
+        // portal graph. A missing interior stab/portal is now visible to the
+        // oracle (it was invisible while interior was count-only — regression D1).
+        var dinfo = _engine.GetDungeonInfo(lbX, lbY);
+        object[]? interiorCells = (dinfo.HasDungeon && dinfo.Document != null)
+            ? dinfo.Document.Cells.Select(c => (object)new {
+                cellNumber = $"0x{c.CellNumber:X4}",
+                environmentId = $"0x{c.EnvironmentId:X4}",
+                origin = new { x = Math.Round(c.Origin.X, 2), y = Math.Round(c.Origin.Y, 2), z = Math.Round(c.Origin.Z, 2) },
+                portals = c.CellPortals.Select(p => new { otherCellId = $"0x{p.OtherCellId:X4}", polygonId = p.PolygonId }).ToArray(),
+                stabs = c.StaticObjects.Select(s => new { id = $"0x{s.Id:X8}",
+                    x = Math.Round(s.Origin.X, 2), y = Math.Round(s.Origin.Y, 2), z = Math.Round(s.Origin.Z, 2) }).ToArray(),
+              }).ToArray()
+            : null;
+
         bool outWritten = false;
         string? outError = null;
         var payload = new {
@@ -1856,6 +1876,7 @@ public class JsonCommandProcessor {
                 cellGraphEdges = r.Body.Interior.CellGraphEdges,
                 exteriorPortals = r.Body.Interior.ExteriorPortals,
                 staticObjectCount = r.Body.Interior.StaticObjectCount,
+                cells = interiorCells,
             },
             counts = new {
                 npcs = r.Body.Spawns.Count,

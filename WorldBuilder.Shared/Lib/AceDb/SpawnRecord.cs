@@ -89,4 +89,23 @@ public sealed record SpawnRecord(
 
     /// <summary>World-space Y coordinate; see <see cref="WorldX"/>.</summary>
     public float WorldY => (LandblockId & 0xFF) * 192f + Y;
+
+    /// <summary>
+    /// Orientation quaternion components, emitted as flat scalars (qw/qx/qy/qz)
+    /// so the per-LB stager (stage-ring-spawns.py) and any non-.NET consumer can
+    /// read rotation without a Quaternion deserializer. Required because
+    /// <see cref="System.Numerics.Quaternion"/> serializes only its
+    /// <c>IsIdentity</c> property under System.Text.Json (W/X/Y/Z are fields, not
+    /// properties), so <see cref="Orientation"/> alone drops the rotation on the
+    /// wire — the 2026-06 orientation regression. Falls back to identity (Qw=1)
+    /// when the source supplied no orientation. See
+    /// docs/per-landblock-faithful-world-method-2026-06-26.md Fix 2.
+    /// </summary>
+    public float Qw => OrientationOrIdentity.W;
+    /// <inheritdoc cref="Qw"/>
+    public float Qx => OrientationOrIdentity.X;
+    /// <inheritdoc cref="Qw"/>
+    public float Qy => OrientationOrIdentity.Y;
+    /// <inheritdoc cref="Qw"/>
+    public float Qz => OrientationOrIdentity.Z;
 }

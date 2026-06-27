@@ -1,0 +1,197 @@
+{
+  "ts": "2026-06-27T01:46:12.372Z",
+  "host": "GTX1070",
+  "app": "http://127.0.0.1:18765/apps/holtburger-web/index.html",
+  "locs": [
+    {
+      "key": "town-holtburg",
+      "expect": "portals(oriented)+NPCs+ambient+buildings",
+      "landedCell": "0xa9b40019",
+      "cap": {
+        "err": "no liveScene3d"
+      },
+      "errDuring": 0,
+      "png": "gf-town-holtburg.png"
+    },
+    {
+      "key": "cottage-interior",
+      "expect": "interior walls + stabs (known-good drop)",
+      "landedCell": "0xa9b40019",
+      "cap": {
+        "cell": "0xa9b40100",
+        "pose": {
+          "x": 84,
+          "y": 7.1,
+          "z": 94
+        },
+        "indoor": true,
+        "statics": {
+          "present": true,
+          "children": 5326,
+          "meshes": 7507,
+          "vis": 9104
+        },
+        "buildings": {
+          "present": true,
+          "children": 47,
+          "meshes": 239,
+          "vis": 239
+        },
+        "cells": {
+          "present": true,
+          "children": 0,
+          "meshes": 0,
+          "vis": 0
+        },
+        "entities": {
+          "present": true,
+          "children": 0,
+          "meshes": 0,
+          "vis": 0
+        },
+        "entRoots": 0,
+        "entMeshes": 0,
+        "entWithMap": 0,
+        "entWhiteBoxish": 0,
+        "entMatTypes": {},
+        "sceneChildren": 9,
+        "renderFrame": 19,
+        "geometries": 2133
+      },
+      "errDuring": 0,
+      "png": "gf-cottage-interior.png"
+    },
+    {
+      "key": "dungeon-0x00B4",
+      "expect": "810 generator monsters + deep interior",
+      "landedCell": null,
+      "cap": {
+        "cell": "0xaf0118",
+        "pose": {
+          "x": 84,
+          "y": 7.1,
+          "z": 94
+        },
+        "indoor": true,
+        "statics": {
+          "present": true,
+          "children": 8183,
+          "meshes": 10364,
+          "vis": 9186
+        },
+        "buildings": {
+          "present": true,
+          "children": 47,
+          "meshes": 239,
+          "vis": 239
+        },
+        "cells": {
+          "present": true,
+          "children": 2737,
+          "meshes": 4509,
+          "vis": 4509
+        },
+        "entities": {
+          "present": true,
+          "children": 187,
+          "meshes": 2391,
+          "vis": 2386
+        },
+        "entRoots": 119,
+        "entMeshes": 2391,
+        "entWithMap": 2391,
+        "entWhiteBoxish": 68,
+        "entMatTypes": {
+          "MeshStandardMaterial": 2323,
+          "MeshBasicMaterial": 68
+        },
+        "sceneChildren": 10,
+        "renderFrame": 13591,
+        "geometries": 3589
+      },
+      "errDuring": 0,
+      "png": "gf-dungeon-0x00B4.png"
+    },
+    {
+      "key": "combat-0xAB94",
+      "expect": "outdoor monsters render (no white-box)",
+      "landedCell": "0xab940025",
+      "cap": {
+        "cell": "0xab940025",
+        "pose": {
+          "x": 84,
+          "y": 7.1,
+          "z": 94
+        },
+        "indoor": false,
+        "statics": {
+          "present": true,
+          "children": 8179,
+          "meshes": 10360,
+          "vis": 9186
+        },
+        "buildings": {
+          "present": true,
+          "children": 47,
+          "meshes": 239,
+          "vis": 239
+        },
+        "cells": {
+          "present": true,
+          "children": 2737,
+          "meshes": 4509,
+          "vis": 4509
+        },
+        "entities": {
+          "present": true,
+          "children": 187,
+          "meshes": 2361,
+          "vis": 2353
+        },
+        "entRoots": 117,
+        "entMeshes": 2361,
+        "entWithMap": 2361,
+        "entWhiteBoxish": 70,
+        "entMatTypes": {
+          "MeshStandardMaterial": 2291,
+          "MeshBasicMaterial": 70
+        },
+        "sceneChildren": 10,
+        "renderFrame": 15755,
+        "geometries": 3652
+      },
+      "errDuring": 0,
+      "png": "gf-combat-0xAB94.png"
+    }
+  ],
+  "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "realGpu": true,
+  "consoleErrors": 0,
+  "consoleTail": [
+    "log: [bsp] drained 908 cell physics BSP trees into scene (2737 cells with BSP)",
+    "log: [envcell-entry] drained 908 cell membership trees into scene (2737 cells with membership)",
+    "warning: [cohere-b] applyLocalPlayerPoseFromIntegrator threw: TypeError: Assignment to constant variable.\n    at applyLocalPlayerPoseFromIntegrator (http://127.0.0.1:18765/apps/holtburger-web/scene3d/loop.js:766:17)\n    at tickPerFrame (htt",
+    "warning: [particle-owner] addEmitter failed: TypeError: Cannot read properties of null (reading 'morphAttributes')\n    at Mesh.updateMorphTargets (https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.core.js:23123:36)\n    at new Mesh (htt",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [particle-owner] addEmitter failed: TypeError: Cannot read properties of null (reading 'morphAttributes')\n    at Mesh.updateMorphTargets (https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.core.js:23123:36)\n    at new Mesh (htt",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80000b2c (depth 1)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80000b32 (depth 1)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80000b37 (depth 1)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80000b38 (depth 1)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80000bac (depth 1)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80000be2 (depth 1)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80000bb8 (depth 1)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80000bb6 (depth 1)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80000c4c (depth 1)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80000c48 (depth 1)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x58 for not-yet-spawned guid 0x80000c4f (depth 1)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x39 for not-yet-spawned guid 0x80000be2 (depth 2)",
+    "debug: [play-effect-vfx/queue] enqueued scriptId=0x3f for not-yet-spawned guid 0x80000be2 (depth 3)",
+    "log: [phase6.B] drained 6 pending building AABBs into scene (total now 26 across all cells)"
+  ]
+}

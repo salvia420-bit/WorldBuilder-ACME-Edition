@@ -1,0 +1,222 @@
+{
+  "ts": "2026-06-27T02:22:13.215Z",
+  "host": "laptop-swiftshader-nullRender",
+  "app": "http://127.0.0.1:8765/apps/holtburger-web/index.html",
+  "locs": [
+    {
+      "key": "town-holtburg",
+      "landedCell": "0xa9b40019",
+      "cap": {
+        "cell": "0xa9b40019",
+        "pose": {
+          "x": 79.1,
+          "y": -65.9,
+          "z": -12
+        },
+        "indoor": false,
+        "curLbCells": 123,
+        "curLbCellMeshes": 528,
+        "totalCellContainers": 552,
+        "statics": {
+          "children": 18426,
+          "meshes": 25339
+        },
+        "buildings": {
+          "children": 47,
+          "meshes": 239
+        },
+        "cells": {
+          "children": 552,
+          "meshes": 1471
+        },
+        "entities": {
+          "children": 74,
+          "meshes": 1311
+        },
+        "entRoots": 73,
+        "curLbEntRoots": 49,
+        "entMeshes": 1311,
+        "entWithMap": 1311,
+        "entBasic": 1,
+        "entMatTypes": {
+          "MeshStandardMaterial": 1310,
+          "MeshBasicMaterial": 1
+        },
+        "diagWalk": {
+          "_total": 400,
+          "statics": 339,
+          "buildings": 12,
+          "entities": 49
+        },
+        "diagTypes": {}
+      },
+      "errDuring": 0
+    },
+    {
+      "key": "cottage-interior",
+      "landedCell": "0xa9b40019",
+      "cap": {
+        "cell": "0xa9b40100",
+        "pose": {
+          "x": 79.1,
+          "y": -65.9,
+          "z": -12
+        },
+        "indoor": true,
+        "curLbCells": 123,
+        "curLbCellMeshes": 528,
+        "totalCellContainers": 552,
+        "statics": {
+          "children": 18426,
+          "meshes": 25339
+        },
+        "buildings": {
+          "children": 47,
+          "meshes": 239
+        },
+        "cells": {
+          "children": 552,
+          "meshes": 1471
+        },
+        "entities": {
+          "children": 87,
+          "meshes": 1074
+        },
+        "entRoots": 70,
+        "curLbEntRoots": 48,
+        "entMeshes": 1074,
+        "entWithMap": 1074,
+        "entBasic": 17,
+        "entMatTypes": {
+          "MeshStandardMaterial": 1057,
+          "MeshBasicMaterial": 17
+        },
+        "diagWalk": {
+          "_total": 414,
+          "statics": 339,
+          "buildings": 12,
+          "entities": 63
+        },
+        "diagTypes": {}
+      },
+      "errDuring": 0
+    },
+    {
+      "key": "arena-0x00B4",
+      "landedCell": "0xb4016a",
+      "cap": {
+        "cell": "0xb4016a",
+        "pose": {
+          "x": 79.1,
+          "y": -65.9,
+          "z": -12
+        },
+        "indoor": true,
+        "curLbCells": 2160,
+        "curLbCellMeshes": 3242,
+        "totalCellContainers": 2712,
+        "statics": {
+          "children": 18426,
+          "meshes": 25339
+        },
+        "buildings": {
+          "children": 47,
+          "meshes": 239
+        },
+        "cells": {
+          "children": 2712,
+          "meshes": 4713
+        },
+        "entities": {
+          "children": 24,
+          "meshes": 240
+        },
+        "entRoots": 24,
+        "curLbEntRoots": 0,
+        "entMeshes": 240,
+        "entWithMap": 240,
+        "entBasic": 0,
+        "entMatTypes": {
+          "MeshStandardMaterial": 240
+        },
+        "diagWalk": {
+          "_total": 0
+        },
+        "diagTypes": {}
+      },
+      "errDuring": 0
+    },
+    {
+      "key": "holtdungeon-0x01F6",
+      "landedCell": "0x1f60175",
+      "cap": {
+        "cell": "0x1f60175",
+        "pose": {
+          "x": 79.1,
+          "y": -65.9,
+          "z": -12
+        },
+        "indoor": true,
+        "curLbCells": 429,
+        "curLbCellMeshes": 943,
+        "totalCellContainers": 2712,
+        "statics": {
+          "children": 18426,
+          "meshes": 25339
+        },
+        "buildings": {
+          "children": 47,
+          "meshes": 239
+        },
+        "cells": {
+          "children": 2712,
+          "meshes": 4713
+        },
+        "entities": {
+          "children": 24,
+          "meshes": 240
+        },
+        "entRoots": 24,
+        "curLbEntRoots": 0,
+        "entMeshes": 240,
+        "entWithMap": 240,
+        "entBasic": 0,
+        "entMatTypes": {
+          "MeshStandardMaterial": 240
+        },
+        "diagWalk": {
+          "_total": 18,
+          "statics": 18
+        },
+        "diagTypes": {}
+      },
+      "errDuring": 0
+    }
+  ],
+  "consoleErrors": 0,
+  "consoleTail": [
+    "log: [step 3.7] PlayerDescription handled; fallback caps cleared (real_caps_ok=true)",
+    "log: [phase6.D] drained 15555 portal edges + 429 cell AABBs into scene (graph now 425 cells, 429 cell AABBs)",
+    "log: [envcell-entry] drained 429 cell membership trees into scene (429 cells with membership)",
+    "log: [phase7.3] envCells: dungeon eager-load deferred to handlePositionUpdate (opt in via ?eagerDungeons=on for capture scripts)",
+    "log: fetch_landblock_scenery: bake-source.sha256:\nclient_portal.dat\tdc6e500ba22e6b186db7171e3f3345238b6444c85d798adc85e550973b8d12e4\nclient_cell_1.dat\t6db0abf00fbceed62c3f1ee842ee7c1f423d732bed77a5b7c102ee89a52ab99e\nclient_local_English.dat",
+    "log: [phase7.6.1] setupModelLights: {lightCount: 27, pointLightCount: 27, spotLightCount: 0, modelsScanned: 154, modelsWithLights: 10}",
+    "log: [phase6.D] drained 15555 portal edges + 429 cell AABBs into scene (graph now 425 cells, 429 cell AABBs)",
+    "log: [envcell-entry] drained 429 cell membership trees into scene (429 cells with membership)",
+    "warning: [cohere-b] applyLocalPlayerPoseFromIntegrator threw: TypeError: Assignment to constant variable.\n    at applyLocalPlayerPoseFromIntegrator (http://127.0.0.1:8765/apps/holtburger-web/scene3d/loop.js:766:17)\n    at tickPerFrame (http",
+    "log: [phase6.D] drained 4004 portal edges + 246 cell AABBs into scene (graph now 548 cells, 552 cell AABBs)",
+    "log: [envcell-entry] drained 246 cell membership trees into scene (552 cells with membership)",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "log: [phase6.D] drained 528120 portal edges + 4320 cell AABBs into scene (graph now 2708 cells, 2712 cell AABBs)",
+    "log: [envcell-entry] drained 4320 cell membership trees into scene (2712 cells with membership)",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed",
+    "warning: [entities/H2] fetchBuildingPlacement(0x0) failed: fetchBuildingPlacement 0x00000000: failed"
+  ]
+}
