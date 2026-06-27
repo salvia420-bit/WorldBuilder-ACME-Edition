@@ -1433,8 +1433,14 @@ function startVendorRangeWatchdog() {
     const inst = em?.entityMap?.get?.(vendorGuid);
     const vendorPos = inst?.root?.position;
     if (!vendorPos) return; // vendor not in scene; let server timeout
-    const player = window.getLocalPlayerPose?.();
-    const pp = player?.position ?? player; // tolerate either {position} or flat
+    // B4 fix (2026-06-27): `vendorPos` is the vendor entity's root.position in
+    // WORLD frame (lbX*192 + local). `getLocalPlayerPose()` returns LANDBLOCK-
+    // LOCAL coords (0..192), so the old subtraction mixed frames → distance
+    // ~30000 ≫ 24 on the first tick → the watchdog closed the store window
+    // almost immediately. Use the local player ENTITY's root.position so both
+    // sides are world-frame (verified live: pose={94,7} vs entityRoot={30430,34183}).
+    const localGuid = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+    const pp = em?.entityMap?.get?.(localGuid)?.root?.position;
     if (!pp || pp.x == null || pp.y == null) return;
     const dx = vendorPos.x - pp.x;
     const dy = vendorPos.y - pp.y;

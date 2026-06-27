@@ -33,8 +33,12 @@ const SPAWN_TRACE = (() => {
 const PLACEMENT_ID_ON = (() => {
   try {
     if (typeof window === "undefined") return false;
+    // Default-ON (2026-06-27): retail wire-placement rest-pose chain so
+    // chests/corpses/levers render their commanded rest pose (e.g. a corpse
+    // lying, not standing — pairs with the B5 death fix). `?placementId=off`
+    // restores the legacy `0 -> 1 -> first` chain.
     const v = new URLSearchParams(window.location.search).get("placementId");
-    return typeof v === "string" && v.toLowerCase() === "on";
+    return v == null ? true : v.toLowerCase() !== "off";
   } catch (_) { return false; }
 })();
 

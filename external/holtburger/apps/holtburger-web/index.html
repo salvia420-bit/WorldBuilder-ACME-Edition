@@ -1219,6 +1219,11 @@
         // entities.js can honor an item's DAT-baked ambient particle chain
         // (?setupDefaultScript). Listed here AND in the init3D opts block below.
         fetchSetupDefaultScript,
+        // B1 fix (2026-06-27): wire the SetupModel holding-location export so
+        // scene3d/entities.js `_resolveHoldingLocation` can mount wielded items
+        // in-hand instead of at the wielder root (feet). MUST also be listed in
+        // the init3D opts block below. Import here AND opts there.
+        fetchSetupHoldingLocations,
         populateBuildingAabbsForLandblock,
         populateStaticsAabbsForLandblock,
         populateSkyDescFromRegion,
@@ -4179,6 +4184,9 @@
             // scene3d so entities.js can play an item's DAT-baked ambient
             // particle chain (?setupDefaultScript; e.g. the katar flame).
             fetchSetupDefaultScript,
+            // B1 fix (2026-06-27): thread the holding-location export onto
+            // wasmExports so EntityManager._resolveHoldingLocation resolves.
+            fetchSetupHoldingLocations,
             populateBuildingAabbsForLandblock,
             populateStaticsAabbsForLandblock,
             fetchEnvCellsInLandblock,

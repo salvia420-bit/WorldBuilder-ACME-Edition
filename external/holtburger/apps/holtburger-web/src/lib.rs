@@ -137,8 +137,11 @@ fn parse_unified_transition_flag(search: &str) -> bool {
 /// legacy order, byte-identical.
 #[cfg(target_arch = "wasm32")]
 fn parse_placement_id_flag(search: &str) -> bool {
+    // Default-ON (2026-06-27): retail wire-placement rest-pose chain (pairs with
+    // the B5 death fix so corpses/chests render their commanded rest pose).
+    // Disabled only by an explicit `placementId=off`.
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "placementId=on")
+    !trimmed.split('&').any(|kv| kv == "placementId=off")
 }
 
 /// A9-Stage1: the `?placementId=` gate, parsed once. Non-wasm builds
@@ -6549,12 +6552,19 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
             continue;
         }
 
-        // Per-segment dt from |framerate|. A zero/non-finite framerate is
-        // degenerate (no timing) — skip rather than divide by zero.
-        let fr = anim_data.framerate.abs();
-        if !(fr > 0.0) {
-            continue;
-        }
+        // Per-segment dt from |framerate|. Retail (acclient.c:340705) treats a
+        // ~0 framerate as a HOLD — the cycle snaps to its frame and holds rather
+        // than stepping (ACE/melt: numFrames/|framerate| → infinite duration).
+        // A handful of creature NonCombat Dead cycles (MotionData key 0x3D0011)
+        // author framerate 0; the previous `continue` emitted NO keyframes, so
+        // the death motion baked to an empty clip and creatures never visibly
+        // died (B5). Fall back to a default rate so the dead-pose frames are
+        // still emitted; the UNIFIED_DEATH one-shot then clamps the final prone
+        // frame (clearOnDone:false), matching retail's held pose.
+        let fr = {
+            let f = anim_data.framerate.abs();
+            if f > 0.0 { f } else { 30.0 }
+        };
         let dt = 1.0 / fr;
 
         // pos_frames is parallel to part_frames ONLY when the POS_FRAMES
@@ -6672,7 +6682,13 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         if seg_count > 0 {
             segment_starts.push(seg_start);
             segment_counts.push(seg_count);
-            segment_framerates.push(anim_data.framerate);
+            // Use the effective rate (0-framerate Dead cycles fall back to 30.0
+            // above) so JS-side per-segment timing never divides by zero.
+            segment_framerates.push(if anim_data.framerate.abs() > 0.0 {
+                anim_data.framerate
+            } else {
+                fr
+            });
             segment_anim_ids.push(anim_data.anim_id);
         }
     }
