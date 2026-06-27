@@ -433,9 +433,10 @@ function drainMotionAxes(scene3d, sessionHandle) {
 const REMOTE_INTERP_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
+    // F-2026-06-27: DEFAULT-ON; only an explicit `=off` disables.
     return (
-      new URLSearchParams(window.location.search).get("remoteInterp")?.toLowerCase() ===
-      "on"
+      new URLSearchParams(window.location.search).get("remoteInterp")?.toLowerCase() !==
+      "off"
     );
   } catch (_) {
     return false;

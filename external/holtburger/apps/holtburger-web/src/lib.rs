@@ -103,7 +103,8 @@ fn parse_world_lifecycle_flag(search: &str) -> bool {
 #[cfg(target_arch = "wasm32")]
 fn parse_unified_tick_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "unifiedTick=on")
+    // F-2026-06-27: DEFAULT-ON (was `== "unifiedTick=on"`); only `=off` disables.
+    !trimmed.split('&').any(|kv| kv == "unifiedTick=off")
 }
 
 /// A6-T1/T2 (2026-06-12, W3+ S7): parse `?unifiedTransition=on` (or
@@ -271,7 +272,8 @@ fn parse_routine_pos_guard_flag(search: &str) -> bool {
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_wire_state_packs_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "wireStatePacks=stage1")
+    // F-2026-06-27: DEFAULT-ON (was `== "wireStatePacks=stage1"`); only `=off` disables.
+    !trimmed.split('&').any(|kv| kv == "wireStatePacks=off")
 }
 
 /// A2-P2 (2026-06-12, W3+ S8): parse `?remoteInterp=on` (or
@@ -293,7 +295,8 @@ fn parse_wire_state_packs_flag(search: &str) -> bool {
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_remote_interp_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "remoteInterp=on")
+    // F-2026-06-27: DEFAULT-ON (was `== "remoteInterp=on"`); only `=off` disables.
+    !trimmed.split('&').any(|kv| kv == "remoteInterp=off")
 }
 
 /// A2-P3 R2 (2026-06-12, W3+ S9 Stage R2): parse `?stickyRetail=on`
@@ -317,7 +320,8 @@ fn parse_remote_interp_flag(search: &str) -> bool {
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_sticky_retail_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "stickyRetail=on")
+    // F-2026-06-27: DEFAULT-ON (was `== "stickyRetail=on"`); only `=off` disables.
+    !trimmed.split('&').any(|kv| kv == "stickyRetail=off")
 }
 
 /// Map a `GameEvent` variant back to its `GameEventOpcode` discriminant
@@ -23768,18 +23772,18 @@ mod wire_state_packs_routing_tests {
         assert!(!should_route_message_to_world(&private, true, true, true));
     }
 
-    /// A2-P2 (W3+ S8): `?remoteInterp=on` parse shape — exact value
-    /// only, both separator positions.
+    /// A2-P2 (W3+ S8): `?remoteInterp` parse shape — DEFAULT-ON
+    /// (F-2026-06-27); only an explicit `=off` disables.
     #[test]
-    fn remote_interp_flag_parses_only_exact_on_value() {
+    fn remote_interp_flag_defaults_on_unless_off() {
         use super::parse_remote_interp_flag;
+        assert!(parse_remote_interp_flag(""));
         assert!(parse_remote_interp_flag("?remoteInterp=on"));
-        assert!(parse_remote_interp_flag(
-            "?unifiedTick=on&wireStatePacks=stage1&remoteInterp=on"
-        ));
-        assert!(!parse_remote_interp_flag("?remoteInterp=stage1"));
+        assert!(parse_remote_interp_flag("?renderer=3d"));
         assert!(!parse_remote_interp_flag("?remoteInterp=off"));
-        assert!(!parse_remote_interp_flag(""));
+        assert!(!parse_remote_interp_flag(
+            "?unifiedTick=on&remoteInterp=off"
+        ));
     }
 
     /// A2-P2 (W3+ S8): export packing — two managed bodies flatten to
@@ -23825,28 +23829,30 @@ mod wire_state_packs_routing_tests {
         assert_eq!(sticky_flags, vec![0u8, 1u8], "per-row sticky flags");
     }
 
-    /// A2-P3 R2 (W3+ S9 Stage R2): `?stickyRetail=on` parse shape —
-    /// exact value only, composes positionally anywhere in the query.
+    /// A2-P3 R2 (W3+ S9 Stage R2): `?stickyRetail` parse shape — DEFAULT-ON
+    /// (F-2026-06-27); only an explicit `=off` disables.
     #[test]
-    fn sticky_retail_flag_parses_only_exact_on_value() {
+    fn sticky_retail_flag_defaults_on_unless_off() {
         use super::parse_sticky_retail_flag;
+        assert!(parse_sticky_retail_flag(""));
         assert!(parse_sticky_retail_flag("?stickyRetail=on"));
-        assert!(parse_sticky_retail_flag(
-            "?unifiedTick=on&wireStatePacks=stage1&remoteInterp=on&stickyRetail=on"
-        ));
-        assert!(!parse_sticky_retail_flag("?stickyRetail=1"));
+        assert!(parse_sticky_retail_flag("?stickyRetail=1"));
         assert!(!parse_sticky_retail_flag("?stickyRetail=off"));
-        assert!(!parse_sticky_retail_flag(""));
+        assert!(!parse_sticky_retail_flag(
+            "?unifiedTick=on&stickyRetail=off"
+        ));
     }
 
     #[test]
-    fn flag_parses_only_exact_stage1_value() {
+    fn wire_state_packs_flag_defaults_on_unless_off() {
+        // F-2026-06-27: DEFAULT-ON; only an explicit `=off` disables.
+        assert!(parse_wire_state_packs_flag(""));
         assert!(parse_wire_state_packs_flag("?wireStatePacks=stage1"));
-        assert!(parse_wire_state_packs_flag(
-            "?renderer=3d&wireStatePacks=stage1"
+        assert!(parse_wire_state_packs_flag("?wireStatePacks=on"));
+        assert!(!parse_wire_state_packs_flag("?wireStatePacks=off"));
+        assert!(!parse_wire_state_packs_flag(
+            "?renderer=3d&wireStatePacks=off"
         ));
-        assert!(!parse_wire_state_packs_flag("?wireStatePacks=on"));
-        assert!(!parse_wire_state_packs_flag(""));
     }
 
     /// A6-T1/T2 (W3+ S7): `?unifiedTransition=on` parse shape.

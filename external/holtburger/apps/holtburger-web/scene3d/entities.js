@@ -136,8 +136,9 @@ function readDeadReckonFlag() {
 function readRemoteInterpFlag() {
   try {
     if (typeof window === "undefined" || !window.location) return false;
+    // F-2026-06-27: DEFAULT-ON; only an explicit `=off` disables.
     const v = new URLSearchParams(window.location.search).get("remoteInterp");
-    return v != null && v.toLowerCase() === "on";
+    return v == null || v.toLowerCase() !== "off";
   } catch (_) {
     return false;
   }
