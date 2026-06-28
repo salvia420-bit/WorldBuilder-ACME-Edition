@@ -551,6 +551,26 @@ const USE_LEAVE_GROUND_VELOCITY: bool = true;
 /// bump (no new JS-visible export).
 const USE_UNIFIED_TRANSITION: bool = true;
 
+/// Phase 3 B4 (2026-06-28) — route the local player's collision through the
+/// decomp-faithful `CTransition` driver (holtburger-dat
+/// `transition::driver_validate`, bridged by
+/// `holtburger_world::spatial::faithful_bridge`) instead of the existing
+/// transition pipeline. ONE feature, TWO carriers: this const (native default)
+/// and a runtime carrier ([`MovementSystem::faithful_transition_runtime`], the
+/// Phase-B `?faithfulTransition=on` URL flag). Effective predicate:
+/// [`MovementSystem::faithful_transition_enabled`].
+///
+/// `true` / flag-on: the dispatcher
+/// ([`holtburger_world::spatial::transition::find_transitional_position_dispatch`])
+/// routes to the faithful driver — env-cells faithful, statics identity,
+/// outdoor via the existing heightfield.
+///
+/// `false` (DEFAULT): the dispatcher routes to the unchanged existing pipeline —
+/// byte-identical, rollback is dropping the flag. Phase A wires the flag + the
+/// bridge; Phase B adds the wasm/JS export and validates the faithful path
+/// (A/B test, the `// VERIFY(PhaseB):` marshalling notes).
+const USE_FAITHFUL_TRANSITION: bool = false;
+
 /// F4-2 (bughunt 2026-06-09) — outdoor walkable-slope gate.
 ///
 /// `false` (DEFAULT): the legacy behaviour — outdoor grounded movement
@@ -1067,6 +1087,11 @@ pub(crate) struct MovementSystem {
     /// [`USE_UNIFIED_TRANSITION`] const by
     /// [`Self::unified_transition_enabled`]. Default `false`.
     unified_transition_runtime: bool,
+    /// Phase 3 B4 (2026-06-28) — runtime carrier of the Phase-B
+    /// `?faithfulTransition=on` URL flag. OR'd with the
+    /// [`USE_FAITHFUL_TRANSITION`] const by
+    /// [`Self::faithful_transition_enabled`]. Default `false`.
+    faithful_transition_runtime: bool,
     /// A14-I4 (W3+ S11, 2026-06-12) — the retail jump charge clock
     /// (`ClientCombatSystem` `jump_pending` / `buildStartTime`,
     /// acclient.c:407902-407916). Reached only via the wasm
@@ -1267,6 +1292,7 @@ impl MovementSystem {
             local_motion_interp: MotionInterp::default(),
             movement_managers: HashMap::new(),
             unified_transition_runtime: false,
+            faithful_transition_runtime: false,
             jump_charge: JumpChargeClock::new(),
             sticky_timeout_pending: std::cell::Cell::new(false),
             manual_moveto_cancel_pending: false,
@@ -1281,6 +1307,14 @@ impl MovementSystem {
     /// (see [`USE_UNIFIED_TRANSITION`]).
     pub(crate) fn set_unified_transition(&mut self, on: bool) {
         self.unified_transition_runtime = on;
+    }
+
+    /// Phase 3 B4 — install the Phase-B `?faithfulTransition=on` runtime carrier
+    /// (see [`USE_FAITHFUL_TRANSITION`]). Phase B wires the handle/URL-flag
+    /// plumbing; this setter is the runtime entry it targets (unused until then).
+    #[allow(dead_code)]
+    pub(crate) fn set_faithful_transition(&mut self, on: bool) {
+        self.faithful_transition_runtime = on;
     }
 
     /// A14-I3 (`?retailRunKeys=on`) — overlay the retail autorun
@@ -1501,6 +1535,14 @@ impl MovementSystem {
     /// spine arm in `client/simulation.rs`).
     pub(crate) fn unified_transition_enabled(&self) -> bool {
         USE_UNIFIED_TRANSITION || self.unified_transition_runtime
+    }
+
+    /// Phase 3 B4 — the effective faithful-transition predicate, threaded to the
+    /// two `find_transitional_position` call sites (the T2 spine arm in
+    /// `client/simulation.rs` and the T1 manual slice in
+    /// [`Self::finish_manual_slice_via_transition`]) via the dispatcher.
+    pub(crate) fn faithful_transition_enabled(&self) -> bool {
+        USE_FAITHFUL_TRANSITION || self.faithful_transition_runtime
     }
 
     pub(crate) fn note_server_controlled_movement_started(&mut self) {
@@ -4413,8 +4455,11 @@ impl MovementSystem {
             last_known_wall_normal: world.player.last_known_wall_normal,
             frames_stationary_fall: 0,
         };
-        let outcome =
-            holtburger_world::spatial::transition::find_transitional_position(&*world, &input);
+        let outcome = holtburger_world::spatial::transition::find_transitional_position_dispatch(
+            &*world,
+            &input,
+            self.faithful_transition_enabled(),
+        );
         let mut pose = outcome.pose;
         // InitLastKnownContactPlane equivalent — a step with no wall
         // leaves the prior tracked plane intact.

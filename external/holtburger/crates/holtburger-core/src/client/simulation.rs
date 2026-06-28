@@ -217,7 +217,11 @@ impl ClientSimulationSystem {
                 last_known_wall_normal: world.player.last_known_wall_normal,
                 frames_stationary_fall: 0,
             };
-            let outcome = transition::find_transitional_position(&*world, &input);
+            let outcome = transition::find_transitional_position_dispatch(
+                &*world,
+                &input,
+                movement.faithful_transition_enabled(),
+            );
             if let Some(n) = outcome.wall_normal {
                 world.player.last_known_wall_normal = Some(n);
             }

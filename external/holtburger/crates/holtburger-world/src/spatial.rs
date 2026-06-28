@@ -5,6 +5,11 @@ pub mod collision;
 /// under the default-off `USE_UNIFIED_TRANSITION` /
 /// `?unifiedTransition=on` gates.
 pub mod transition;
+/// Phase 3 B4 (2026-06-28) — `SpatialScene` → `CObjCell` bridge wiring the
+/// decomp-faithful `CTransition` collision driver (holtburger-dat
+/// `transition::driver_validate`) into the live path, behind the default-off
+/// `USE_FAITHFUL_TRANSITION` flag.
+pub mod faithful_bridge;
 mod entity_collision;
 mod force_position_interp;
 mod physics;
