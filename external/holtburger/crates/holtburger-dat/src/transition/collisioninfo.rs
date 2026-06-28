@@ -33,7 +33,7 @@
 //! write `Some(...)`, with `Some(Vector3::zero())` standing for "valid but
 //! collapsed".
 
-use super::types::{CollisionInfo, normalize_check_small};
+use super::types::{CollisionInfo, TransitionState, normalize_check_small};
 use holtburger_common::{Plane, Vector3};
 
 impl CollisionInfo {
@@ -101,6 +101,37 @@ impl CollisionInfo {
             n = Vector3::zero();
         }
         self.sliding_normal = Some(n);
+    }
+
+    /// `COLLISIONINFO::add_object` (`acclient.c:718729`). Records `object` as a
+    /// collided object IF not already present (the decomp scans
+    /// `[0, num_collide_object)` and bails on a hit). On a fresh add the decomp
+    /// grows the `DArray` (`Vec::push`) and — when the transition result `ts`
+    /// is NOT `Ok` — latches `last_collided_object`.
+    // acclient.c:718729
+    pub fn add_object(&mut self, object: u32, ts: TransitionState) {
+        // Dedup scan (acclient.c:718739-718748). Already present → no-op.
+        if self.collide_object.iter().any(|&o| o == object) {
+            return;
+        }
+        // Fresh add (acclient.c:718753-718755); grow handled by Vec::push.
+        self.collide_object.push(object);
+        self.num_collide_object = self.collide_object.len() as u32;
+        // acclient.c:718756-718757 — ts != Ok latches the last collided object.
+        if ts != TransitionState::Ok {
+            self.last_collided_object = Some(object);
+        }
+    }
+
+    /// The object-object subset of `COLLISIONINFO::init` (`acclient.c:311573`):
+    /// clear the collided-objects list. The decomp zeroes `num_collide_object`
+    /// / `last_collided_object` (retaining the `DArray` buffer); `Vec::clear`
+    /// is the observable equivalent.
+    // acclient.c:311573
+    pub fn reset_objects(&mut self) {
+        self.num_collide_object = 0;
+        self.collide_object.clear();
+        self.last_collided_object = None;
     }
 }
 
@@ -181,5 +212,41 @@ mod tests {
         // collapsed to zero (still Some).
         ci.set_sliding_normal(v(0.0, 0.0, 1.0));
         assert_eq!(ci.sliding_normal, Some(Vector3::zero()));
+    }
+
+    // ── COLLISIONINFO::add_object (acclient.c:718729) ───────────────────────
+
+    #[test]
+    fn add_object_dedups_and_latches_last_on_non_ok() {
+        let mut ci = CollisionInfo::default();
+
+        // First add with COLLIDED (ts != Ok) → recorded + latched.
+        ci.add_object(0x1001, TransitionState::Collided);
+        assert_eq!(ci.collide_object, vec![0x1001]);
+        assert_eq!(ci.num_collide_object, 1);
+        assert_eq!(ci.last_collided_object, Some(0x1001));
+
+        // Duplicate → no-op.
+        ci.add_object(0x1001, TransitionState::Slid);
+        assert_eq!(ci.collide_object, vec![0x1001]);
+        assert_eq!(ci.num_collide_object, 1);
+        assert_eq!(ci.last_collided_object, Some(0x1001));
+
+        // New object with ts == Ok → recorded but does NOT latch last.
+        ci.add_object(0x2002, TransitionState::Ok);
+        assert_eq!(ci.collide_object, vec![0x1001, 0x2002]);
+        assert_eq!(ci.num_collide_object, 2);
+        assert_eq!(ci.last_collided_object, Some(0x1001));
+
+        // New object with ts != Ok → recorded and latches last.
+        ci.add_object(0x3003, TransitionState::Adjusted);
+        assert_eq!(ci.num_collide_object, 3);
+        assert_eq!(ci.last_collided_object, Some(0x3003));
+
+        // reset_objects clears the list.
+        ci.reset_objects();
+        assert_eq!(ci.num_collide_object, 0);
+        assert!(ci.collide_object.is_empty());
+        assert!(ci.last_collided_object.is_none());
     }
 }

@@ -43,7 +43,7 @@
 //! normal, curr_center) -> i32` wrapper that both call.
 
 use super::sphere_slide::{slide_sphere, SlideSphere};
-use super::types::{CollisionInfo, ObjectInfo, Position, SpherePath};
+use super::types::{CollisionInfo, LandDefs, ObjectInfo, Position, SpherePath};
 use crate::physics::ResolvedPolygon;
 use holtburger_common::{Sphere, Vector3};
 
@@ -280,7 +280,8 @@ impl SpherePath {
         // block_offset = LandDefs::get_block_offset(curr_pos, check_pos): the
         // cross-cell landblock delta. Zero within one cell; Phase 3 threads the
         // real value through.
-        let block_offset = Vector3::zero(); // PHASE3
+        let block_offset =
+            LandDefs::get_block_offset(self.curr_pos.objcell_id, self.check_pos.objcell_id); // acclient.c:311721
 
         match slide_sphere(center, normal, curr_center, contact_normal, block_offset) {
             // Case 1 (zero collision normal): split the gap; NO

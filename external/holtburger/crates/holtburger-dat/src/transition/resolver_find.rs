@@ -179,6 +179,14 @@ pub fn find_collisions(
                     //   localspace_pos, poly->plane); trans.d *= scale. Same-cell
                     //   reduction (block offset 0); cross-cell delta is PHASE3.
                     let mut trans = lpos.frame.plane_localtoglobal(&poly.plane);
+                    // Cross-landblock carry: Position::localtoglobal adds
+                    // get_block_offset(check_pos, localspace_pos) to the plane
+                    // point → shifts d by -(N·offset). Zero within one LB.
+                    // acclient.c:467672→147154 (A08; B3 cross-LB test verifies sign).
+                    trans.d -= trans.normal.dot(&LandDefs::get_block_offset(
+                        transition.sphere_path.check_pos.objcell_id,
+                        lpos.objcell_id,
+                    ));
                     trans.d *= scale;
                     // acclient.c:361399 — set_contact_plane(collisions, &trans, false) (P1).
                     transition.collision_info.set_contact_plane(trans, false);

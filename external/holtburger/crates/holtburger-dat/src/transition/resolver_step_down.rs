@@ -30,7 +30,7 @@
 //!   `Plane::localtoglobal` (`acclient.c:467672`), with `d` scaled.
 
 use super::bspnode_walkable::{FindWalkable, find_walkable};
-use super::types::{CollisionInfo, SpherePath, TransitionState};
+use super::types::{CollisionInfo, LandDefs, SpherePath, TransitionState};
 use crate::physics::{BspNode, ResolvedPolygon};
 use holtburger_common::{Sphere, Vector3};
 use std::collections::HashMap;
@@ -137,6 +137,12 @@ pub fn step_sphere_down(
         //   adds LandDefs::get_block_offset(check_pos.objcell_id,
         //   localspace_pos.objcell_id) — non-zero only across landblocks.
         let mut global_plane = lpos.frame.plane_localtoglobal(&poly.plane);
+        // Cross-landblock carry (zero within one LB); see A08.
+        // acclient.c:467672→147154 (B3 cross-LB test verifies sign).
+        global_plane.d -= global_plane.normal.dot(&LandDefs::get_block_offset(
+            path.check_pos.objcell_id,
+            lpos.objcell_id,
+        ));
         global_plane.d *= scale;
 
         // collisions->contact_plane = result; is_water = 0;

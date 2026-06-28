@@ -45,10 +45,14 @@ pub const Z_FOR_LANDING: f32 = 0.0871557;
 pub const GRAVITY: f32 = -9.8;
 
 /// `PhysicsGlobals::floor_z` (`acclient.c:316502`,
-/// `return normal->z >= (double)PhysicsGlobals::floor_z`). The idb renders
-/// the initializer as `cos(3437.746770784939)` — an arcminutes-confused
-/// decompiler artifact, not the literal — so we use the value ACE carries.
-/// VERIFY floor_z vs decomp.
+/// `return normal->z >= (double)PhysicsGlobals::floor_z`). Initialized as
+/// `floor_z = cos(3437.746770784939)` (`acclient.c:800530`) — that literal IS
+/// what the decompiler emitted, and `cos()` of it evaluates (f64) to
+/// 0.6641741461866276, which rounds to this f32 (= cos 48.381°). The PDB types
+/// `floor_z` as T_REAL32, so f32 is canonical. VERIFIED vs decomp (A08/A15).
+/// Distinct from [`Z_FOR_LANDING`] (cos 85°): `walkable_allowance` defaults to
+/// `Z_FOR_LANDING`, but `step_up`/`step_down` raise it to `FLOOR_Z` once the
+/// object is `ON_WALKABLE`. Both thresholds are load-bearing — do not merge.
 pub const FLOOR_Z: f32 = 0.66417414618662751_f32;
 
 // ─── Shared vector helper ────────────────────────────────────────────────
@@ -77,6 +81,55 @@ pub fn normalize_check_small(v: &mut Vector3) -> bool {
         false
     } else {
         true
+    }
+}
+
+// ─── LandDefs (landblock geometry) ───────────────────────────────────────
+
+/// `LandDefs` static helpers (decomp `LandDefs::` namespace).
+pub struct LandDefs;
+
+impl LandDefs {
+    /// `LandDefs::get_block_offset` (`acclient.c:123110`). The world offset of
+    /// `cell_to`'s landblock origin relative to `cell_from`'s:
+    /// `((Xto-Xfrom), (Yto-Yfrom), 0) * 192` (192 = 8 cells × 24 units).
+    ///
+    /// A cell id packs its landblock id in the high 16 bits — bits 24-31 =
+    /// landblock X, bits 16-23 = landblock Y. Used to express a point/plane
+    /// living in one landblock's local frame in another's; zero within one
+    /// landblock (high-16 equal). Decomp arg order is `(cell_from, cell_to)`
+    /// with result `(to - from)`. VERIFIED vs ACE `LandDefs.GetBlockOffset`
+    /// (A08/A15).
+    // acclient.c:123110
+    pub fn get_block_offset(cell_from: u32, cell_to: u32) -> Vector3 {
+        // Same landblock (high 16 bits equal) → zero (acclient.c:123121).
+        if cell_from >> 16 == cell_to >> 16 {
+            return Vector3::zero();
+        }
+        // FROM landblock (X,Y) * 8 (0 when cell==0) (acclient.c:123128-123137):
+        //   (cell >> 21) & 0x7F8  == ((cell >> 24) & 0xFF) << 3 == X * 8
+        //   8 * ((cell >> 16) & 0xFF)                           == Y * 8
+        let (v5, v6): (u32, u32) = if cell_from != 0 {
+            ((cell_from >> 21) & 0x7F8, 8 * ((cell_from >> 16) & 0xFF))
+        } else {
+            (0, 0)
+        };
+        // TO landblock (X,Y) * 8 (acclient.c:123138-123147). The `cell_to == 0`
+        // branch is a decomp quirk (feeds raw `cell_from` into both lanes);
+        // unreachable for real transitions (cell ids are non-zero).
+        let (v7, v8): (u32, u32) = if cell_to != 0 {
+            ((cell_to >> 21) & 0x7F8, 8 * ((cell_to >> 16) & 0xFF))
+        } else {
+            (cell_from, cell_from)
+        };
+        // (to - from) * 24 (the *8 already baked in → net *192/landblock).
+        // Decomp subtracts as unsigned then reinterprets signed; `wrapping_sub
+        // .. as i32` is bit-exact (acclient.c:123148-123152).
+        Vector3::new(
+            (v7.wrapping_sub(v5) as i32) as f32 * 24.0,
+            (v8.wrapping_sub(v6) as i32) as f32 * 24.0,
+            0.0,
+        )
     }
 }
 
@@ -200,10 +253,20 @@ pub struct CollisionInfo {
     /// `collision_normal(_valid)`.
     pub collision_normal: Option<Vector3>,
     pub adjust_offset: Vector3,
+    // ── object-object collision tail (acclient.h:52321-52323) ──
+    /// `num_collide_object` — active count of distinct objects hit this step.
+    /// Mirrors `collide_object.len()`; `add_object`/`reset_objects` keep them
+    /// in sync.
+    pub num_collide_object: u32,
+    /// `collide_object` (`DArray<CPhysicsObj const *>`) — distinct physics
+    /// objects collided with. A `CPhysicsObj*` reduces to its id (`u32`),
+    /// matching [`ObjectInfo::object_id`]/`target_id`.
+    pub collide_object: Vec<u32>,
+    /// `last_collided_object` — most recent non-`Ok` collision (`None` = 0).
+    pub last_collided_object: Option<u32>,
+    // ── (existing tail) ──
     pub collided_with_environment: bool,
     pub frames_stationary_fall: u8,
-    // PHASE2/PHASE3: num_collide_object, collide_object (DArray<CPhysicsObj*>),
-    //                last_collided_object.
 }
 
 /// `struct SPHEREPATH` (592 B, `acclient.h:32625`). The swept-sphere path
@@ -369,14 +432,40 @@ impl Default for SpherePath {
     }
 }
 
-// ─── Phase-3 driver shells ───────────────────────────────────────────────
+// ─── Phase-3 cell ring (CELLARRAY @31574 / CELLINFO @31925) ───────────────
 
-/// Phase-3 cell-array shell (`CELLARRAY`). Holds the 3×3 ring of cells the
-/// driver sweeps so leaf predicates stay cell-agnostic.
-// PHASE3
+/// Handle to a loaded `CObjCell` (the decomp's `CObjCell *` in `CELLINFO.cell`).
+/// holtburger-world's `SpatialScene` is keyed by cell id, so the driver
+/// resolves a handle → `&dyn CObjCell` at the BSP-walk boundary rather than
+/// this crate owning a cell reference. We model the handle as the cell id
+/// (`u32`), matching `SpherePath::{begin,curr,check,backup}_cell`
+/// (`Option<u32>`). `None` ⇒ not loaded (`do_not_load_cells`) or absent.
+pub type ObjCellHandle = u32;
+
+/// `struct CELLINFO` (`acclient.h:31925`). One slot of the cell ring.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CellInfo {
+    /// `CELLINFO.cell_id` @0 — the landcell id (always set).
+    pub cell_id: u32,
+    /// `CELLINFO.cell` @4 (`CObjCell *`) — loaded cell handle, or `None`.
+    pub cell: Option<ObjCellHandle>,
+}
+
+/// `struct CELLARRAY` (`acclient.h:31574`). The 3×3 ring of cells the driver
+/// sweeps so leaf predicates stay cell-agnostic. The decomp `DArray<CELLINFO>`
+/// collapses to a `Vec<CellInfo>`; the CELLARRAY methods (owned by A09) keep
+/// `num_cells == cells.len()`. `int added_outside` / `int do_not_load_cells`
+/// collapse to `bool`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CellArray {
-    // PHASE3: cells, num_cells, added_outside, do_not_load_cells, …
+    /// `added_outside` @0 — the outdoor landblock cell has been appended.
+    pub added_outside: bool,
+    /// `do_not_load_cells` @4 — skip loading uncached cells (leave `cell=None`).
+    pub do_not_load_cells: bool,
+    /// `num_cells` @8 — active cell count.
+    pub num_cells: u32,
+    /// `cells` @12 — `DArray<CELLINFO>` → owned vector.
+    pub cells: Vec<CellInfo>,
 }
 
 /// `struct CTransition` (`acclient.h:52329`). The driver shell that wires
@@ -490,5 +579,72 @@ mod tests {
         let mut t = CTransition::default();
         assert_eq!(t.sphere_path.num_sphere, 0);
         assert_eq!(t.step_up(&Vector3::new(0.0, 0.0, 1.0)), 0);
+    }
+
+    // ── A08 contract: LandDefs::get_block_offset (acclient.c:123110) ────────
+
+    fn approx_v(a: Vector3, b: Vector3) -> bool {
+        (a.x - b.x).abs() < 1e-3 && (a.y - b.y).abs() < 1e-3 && (a.z - b.z).abs() < 1e-3
+    }
+
+    #[test]
+    fn get_block_offset_same_landblock_is_zero() {
+        // Same high-16 (landblock 0x0102), different cell index → zero.
+        let o = LandDefs::get_block_offset(0x0102_0001, 0x0102_0005);
+        assert!(approx_v(o, Vector3::zero()), "got {o:?}");
+    }
+
+    #[test]
+    fn get_block_offset_x_and_y_deltas() {
+        // (X,Y) (1,2)→(3,2): +2 blocks X → +384, 0 Y.
+        let o = LandDefs::get_block_offset(0x0102_0001, 0x0302_0001);
+        assert!(approx_v(o, Vector3::new(384.0, 0.0, 0.0)), "got {o:?}");
+        // Reverse (3,2)→(1,2): −384 X.
+        let o = LandDefs::get_block_offset(0x0302_0001, 0x0102_0001);
+        assert!(approx_v(o, Vector3::new(-384.0, 0.0, 0.0)), "got {o:?}");
+        // Pure +Y: (5,5)→(5,6): +192 Y.
+        let o = LandDefs::get_block_offset(0x0505_0000, 0x0506_0000);
+        assert!(approx_v(o, Vector3::new(0.0, 192.0, 0.0)), "got {o:?}");
+    }
+
+    #[test]
+    fn get_block_offset_zero_from_edge_branch() {
+        // cell_from == 0 → v5=v6=0; to (X,Y)=(2,1) → (2*192, 1*192, 0).
+        let o = LandDefs::get_block_offset(0, 0x0201_0000);
+        assert!(approx_v(o, Vector3::new(384.0, 192.0, 0.0)), "got {o:?}");
+    }
+
+    // ── A08 contract: FLOOR_Z verify + CellArray real fields ────────────────
+
+    #[test]
+    fn floor_z_matches_decomp_cos_and_is_distinct_from_z_for_landing() {
+        let from_decomp = (3437.746770784939_f64).cos() as f32;
+        assert_eq!(FLOOR_Z, from_decomp);
+        // floor_z ≈ cos(48.381°); strictly above z_for_landing (cos 85°).
+        let deg = (FLOOR_Z as f64).acos().to_degrees();
+        assert!((deg - 48.381).abs() < 0.01, "got {deg}");
+        assert!(FLOOR_Z > Z_FOR_LANDING);
+    }
+
+    #[test]
+    fn cellarray_real_fields_and_default() {
+        let ca = CellArray::default();
+        assert!(!ca.added_outside);
+        assert!(!ca.do_not_load_cells);
+        assert_eq!(ca.num_cells, 0);
+        assert!(ca.cells.is_empty());
+
+        let ca = CellArray {
+            added_outside: true,
+            do_not_load_cells: false,
+            num_cells: 2,
+            cells: vec![
+                CellInfo { cell_id: 0x0102_0001, cell: Some(0x0102_0001) },
+                CellInfo { cell_id: 0x0102_0002, cell: None },
+            ],
+        };
+        assert_eq!(ca.cells.len() as u32, ca.num_cells);
+        assert_eq!(ca.cells[0].cell, Some(0x0102_0001));
+        assert!(ca.cells[1].cell.is_none());
     }
 }

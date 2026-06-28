@@ -55,7 +55,7 @@
 //!   called here by the decomp's exact arg order.
 
 use super::sphere_slide::{self, SlideSphere};
-use super::types::{CTransition, CollisionInfo, SpherePath, TransitionState};
+use super::types::{CTransition, CollisionInfo, LandDefs, SpherePath, TransitionState};
 use holtburger_common::Vector3;
 
 /// `BSPTREE::slide_sphere` (`acclient.c:361031`, `sub_00539E50`, `__stdcall`).
@@ -110,7 +110,8 @@ pub fn slide_sphere(
     // leaf layer only sees same-landblock steps, where it is `0`.
     // acclient.c:358937 — LandDefs::get_block_offset(curr.objcell_id,
     // check_pos.objcell_id).
-    let block_offset = Vector3::zero(); // PHASE3: LandDefs::get_block_offset
+    let block_offset =
+        LandDefs::get_block_offset(path.curr_pos.objcell_id, path.check_pos.objcell_id); // acclient.c:358937
 
     // ── Call the pure leaf. ──
     let outcome =
