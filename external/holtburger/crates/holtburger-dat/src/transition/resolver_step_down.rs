@@ -364,4 +364,72 @@ mod tests {
         assert!((cp.normal.z - 1.0).abs() < 1e-4);
         assert!((cp.d + 2.0).abs() < 1e-4, "d={}", cp.d);
     }
+
+    /// Cross-landblock plane carry (A15 R4 — verifies the B1 `get_block_offset`
+    /// fold is wired AND sign-correct). A walkable surface defined in the
+    /// localspace cell's landblock-local frame must land at the right WORLD
+    /// position once carried into a `check_pos` that lives in a DIFFERENT
+    /// landblock: the fold shifts the carried plane `d` by exactly
+    /// `-(N · get_block_offset(check_pos, localspace_pos))`. A flat floor (N=+Z)
+    /// hides this (N·offset_xy = 0); a gently-tilted floor reveals it.
+    ///
+    /// Setup: localspace cell in landblock (1,1), `check_pos` candidate in (2,1)
+    /// — a +1 landblock step in X. `get_block_offset(check, lpos) = (-192,0,0)`,
+    /// so the fold shifts `d` by `-(N·offset) = -(0.1·-192) = +19.2`.
+    #[test]
+    fn step_down_cross_landblock_plane_carry_shifts_d() {
+        // Gently-tilted walkable floor through the local origin: N is unit,
+        // N.z ≈ 0.995 ≫ Z_FOR_LANDING (settles like a floor), N.x = 0.1.
+        let n = v(0.1, 0.0, 0.994_987_4);
+        let tilted = ResolvedPolygon {
+            num_points: 4,
+            vertices: vec![
+                v(0.0, 0.0, 0.0),
+                v(2.0, 0.0, -0.201_008),
+                v(2.0, 2.0, -0.201_008),
+                v(0.0, 2.0, 0.0),
+            ],
+            plane: Plane { normal: n, d: 0.0 },
+        };
+        let lpos_cell = 0x0101_0100u32; // landblock (1,1)
+        let check_cell = 0x0201_0100u32; // landblock (2,1)
+        let expect_shift = -(n.x * -192.0); // -(N · (-192,0,0)) = +19.2
+
+        let run = |lpos_id: u32, check_id: u32| -> f32 {
+            let mut path = base_path();
+            path.localspace_pos.objcell_id = lpos_id;
+            path.check_pos.objcell_id = check_id;
+            let mut collisions = CollisionInfo::default();
+            let sphere = Sphere {
+                center: v(1.0, 1.0, 0.3),
+                radius: 0.5,
+            };
+            let r = step_sphere_down(
+                &leaf_node(vec![0]),
+                &mut path,
+                &mut collisions,
+                &sphere,
+                1.0,
+                &single(tilted.clone()),
+            );
+            assert_eq!(r, 3, "tilted floor must settle (Adjusted)");
+            collisions.contact_plane.expect("contact plane set").d
+        };
+
+        // Same-landblock control: offset = 0 ⇒ carried d = poly d = 0.
+        let d_same = run(lpos_cell, lpos_cell);
+        assert!(d_same.abs() < 1e-3, "same-LB d should be ~0, got {d_same}");
+
+        // Cross-landblock: d shifted by exactly -(N·offset) = +19.2.
+        let d_cross = run(lpos_cell, check_cell);
+        assert!(
+            (d_cross - expect_shift).abs() < 1e-2,
+            "cross-LB d should be {expect_shift}, got {d_cross}"
+        );
+        // The fold must actually be live (cross differs from same).
+        assert!(
+            (d_cross - d_same).abs() > 1.0,
+            "get_block_offset fold not exercised: {d_cross} vs {d_same}"
+        );
+    }
 }
