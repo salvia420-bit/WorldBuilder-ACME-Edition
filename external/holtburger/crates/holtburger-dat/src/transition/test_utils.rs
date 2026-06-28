@@ -681,8 +681,8 @@ mod tests {
     }
 
     // PAYOFF (2026-06-28): a GROUNDED walker (CONTACT held by a floor) walking
-    // into a wall STOPS instead of passing through — the realistic counterpart
-    // to the floorless `..._walker_blocked_by_wall_...` probe below. With CONTACT
+    // into a wall STOPS instead of passing through (its airborne counterpart is
+    // `..._airborne_mover_stops_at_wall` below). With CONTACT
     // set, the sphere[0] wall hit routes through the SLIDE branch
     // (resolver_find.rs:214 → step_sphere_up → step_up fails on a vertical wall →
     // step_up_slide → slide_sphere, which stamps the horizontal collision_normal);
@@ -706,59 +706,43 @@ mod tests {
         assert!(x < 2.0, "grounded walker never advanced toward the wall: final x = {x}");
     }
 
-    // B4-B FINDING (2026-06-28, root cause corrected 2026-06-28): the faithful
-    // driver walks a player STRAIGHT THROUGH this wall end-to-end (final_x = -2;
-    // code=1). The CTransition algorithm is decomp-faithful — the passthrough is
-    // a FIXTURE/STATE issue, not the slide math:
-    //   - This scene is `vertical_wall()` — a bare wall with NO FLOOR. The mover
-    //     therefore never holds a contact plane, so validate_transition clears
-    //     its CONTACT bit every step (driver_validate.rs:183-194).
-    //   - CONTACT is the resolver's discriminator (resolver_find.rs:214): only a
-    //     CONTACT mover routes a sphere[0] wall hit through step_sphere_up /
-    //     slide_sphere (which stamps the horizontal collision_normal). A
-    //     non-CONTACT mover takes the `:259` branch, which treats the wall as a
-    //     LANDING candidate (set_collide → ADJUSTED) and never produces a usable
-    //     sliding_normal — so adjust_offset has nothing to project and the
-    //     X-into-wall step stays full.
-    //   The GROUNDED counterpart `..._grounded_walker_stops_at_wall` (above) is
-    //   the realistic case and PASSES. This probe is retained as the honest
-    //   AIRBORNE/non-CONTACT facet: a player jumping/falling into a wall still
-    //   passes through. FIX (own session): make the non-CONTACT wall hit stop via
-    //   transitional_insert's collide block (collision_normal = step_up_normal)
-    //   rather than silently returning ADJUSTED. Un-ignore when it lands.
-    //   (Marshalling/bridge is correct; this is a holtburger-dat driver-fidelity
-    //   gap for the airborne case — and SEPARATELY the live faithful path stubs
-    //   static-object collision: faithful_bridge.rs find_obj_collisions → OK.)
+    // AIRBORNE/non-CONTACT wall stop (2026-06-28). Counterpart to the grounded
+    // test above: a non-CONTACT mover (a jumping/falling player — CONTACT clear,
+    // step_down off so it stays airborne) walking into a wall must also STOP. Here
+    // the wall hit routes through the non-CONTACT branch (resolver_find.rs:259):
+    // set_collide → transitional_insert's collide block, which (the landing being
+    // non-walkable) returns COLLIDED with collision_normal = step_up_normal;
+    // validate_transition promotes that to sliding_normal and adjust_offset zeroes
+    // the into-wall step — same x≈0.5 stop as the grounded case.
+    //
+    // NB the scene needs a FLOOR even though the mover is airborne ABOVE it: the
+    // synthetic SynthEnvCell::point_in_cell only counts a point "inside" the cell
+    // when it is within 1.0 of a WALKABLE poly, so a floorless scene (the old
+    // `vertical_wall()` end-to-end probe) makes check_other_cells/find_cell_list
+    // null `check_cell` after step 0 (driver_cell_dispatch.rs:215), which silently
+    // disables collision for the rest of the walk — a HARNESS cell-seating
+    // artifact, NOT a driver bug. (The driver was never wrong here; the earlier
+    // "faithful driver walks through walls" §4 diagnosis was the floorless fixture.
+    // The live blocker is instead the static-object stub:
+    // faithful_bridge.rs find_obj_collisions → OK.)
     #[test]
-    #[ignore = "airborne/non-CONTACT mover walks through walls (no floor ⇒ CONTACT cleared ⇒ wall takes the landing branch, not the slide branch); see comment"]
-    fn find_transitional_walker_blocked_by_wall_does_not_pass_through() {
-        // Walker starts CLEAR of the wall (x=2, r=0.5; wall plane at x=0, N=+X),
-        // walks to x=-2. A faithful driver must NOT let the sphere center cross
-        // to the wall's far side; it should stop around one radius (x ≈ 0.5).
+    fn find_transitional_airborne_mover_stops_at_wall() {
+        // Non-CONTACT mover hovering one radius above z=0 floor (z=0.9 keeps the
+        // cell seated), walks x=2 → -2 into a wall at x=0. Expected stop x ≈ 0.5.
+        let mut obj = build::walker(0.5, 0.5);
+        obj.state = object_info_state::IS_PLAYER; // non-CONTACT, non-ON_WALKABLE
+        obj.step_down = false; // do not snap to the floor → stays airborne
         let (code, t) = drive_find(
-            scenes::vertical_wall(),
-            build::walker(0.5, 0.5),
-            v(2.0, 1.0, 1.5),
-            v(-2.0, 1.0, 1.5),
+            scenes::floor_and_wall(),
+            obj,
+            v(2.0, 1.0, 0.9),
+            v(-2.0, 1.0, 0.9),
             0.5,
         );
         let x = t.sphere_path.curr_pos.frame.origin.x;
-        println!("DIAG A find_transitional walker: code={code} final_x={x}");
-
-        // B: find_transitional with state=0 (the resolver self-test's state).
-        let mut o0 = build::walker(0.5, 0.5);
-        o0.state = 0;
-        let (cb, tb) = drive_find(scenes::vertical_wall(), o0, v(2.0, 1.0, 1.5), v(-2.0, 1.0, 1.5), 0.5);
-        println!("DIAG B find_transitional state0: code={cb} final_x={}", tb.sphere_path.curr_pos.frame.origin.x);
-
-        // C: transitional_insert directly, sphere swept 1.0 -> 0.0 (crosses wall).
-        let mut o2 = build::walker(0.5, 0.5);
-        o2.state = 0;
-        let (cc, tc) = drive(scenes::vertical_wall(), o2, v(1.0, 1.0, 1.5), v(0.0, 1.0, 1.5), 0.5);
-        println!("DIAG C transitional_insert: code={cc} check_x={} backup_x={}",
-            tc.sphere_path.check_pos.frame.origin.x, tc.sphere_path.backup_check_pos.frame.origin.x);
-
-        assert!(x >= 0.0, "walker passed THROUGH the wall: final x = {x} (code {code})");
+        println!("DIAG airborne mover: code={code} final_x={x}");
+        assert!(x >= 0.0, "airborne mover passed THROUGH the wall: final x = {x} (code {code})");
+        assert!(x < 2.0, "airborne mover never advanced toward the wall: final x = {x}");
     }
 
     #[test]
