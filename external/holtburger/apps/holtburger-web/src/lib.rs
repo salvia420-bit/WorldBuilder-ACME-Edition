@@ -11475,6 +11475,19 @@ thread_local! {
         std::cell::RefCell<Vec<(u32, holtburger_world::CellPhysicsBsp)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
+    /// Phase C (2026-06-28): pending PRECISE physics BSPs for INDOOR env-cell
+    /// resident STATIC OBJECTS — the cell-keyed twin of `STATIC_BSP_PENDING`
+    /// (which is outdoor/landblock-keyed). Queued per stab by
+    /// `fetchEnvCellsInLandblock` (one entry per physics-bearing GfxObj, or per
+    /// physics-bearing SetupModel part, framed to world by the stab placement)
+    /// and drained into `scene.cell_static_physics_bsp` each `TickMovement`.
+    /// Consumed by the faithful driver's per-cell `find_obj_collisions`. Cleared
+    /// per landblock on the scene side (`clear_landblock_collision` retains by
+    /// `lb_high`, alongside `cell_physics_bsp`) so a re-bake REPLACES.
+    static CELL_STATIC_BSP_PENDING:
+        std::cell::RefCell<Vec<(u32, holtburger_world::CellPhysicsBsp)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+
     /// Workstream Sky-B (parametric skybox, 2026-05-11): thread-local
     /// holding the parsed SkyDesc + GameTime + per-frame evaluator
     /// state. Populated once per session by `populateSkyDescFromRegion`
@@ -11721,6 +11734,21 @@ fn drain_pending_cell_bsp_into(scene: &mut holtburger_world::SpatialScene) -> us
         let count = buf.len();
         for (cell_id, bsp) in buf.drain(..) {
             scene.insert_cell_physics_bsp(cell_id, bsp);
+        }
+        count
+    })
+}
+
+/// Phase C (2026-06-28): drain the pending per-cell static physics BSPs into
+/// `scene.cell_static_physics_bsp`. Same `TickMovement` cadence as the cell-env
+/// BSP drain so the faithful driver's `find_obj_collisions` sees a cell's static
+/// walls/doors the same tick the cell loads.
+fn drain_pending_cell_static_bsps_into(scene: &mut holtburger_world::SpatialScene) -> usize {
+    CELL_STATIC_BSP_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (cell_id, bsp) in buf.drain(..) {
+            scene.insert_cell_static_physics_bsp(cell_id, bsp);
         }
         count
     })
@@ -15146,6 +15174,102 @@ pub async fn fetch_env_cells_in_landblock(
                 default_script_id,
                 default_animation_id,
             });
+
+            // Phase C live feed (2026-06-28): stage this static's PRECISE physics
+            // BSP(s) for the faithful driver's per-cell `find_obj_collisions`,
+            // framed to WORLD by the stab placement. Mirrors the OUTDOOR static
+            // path in `populate_statics_aabbs_for_landblock_impl` (0x01 GfxObj
+            // inline / 0x02 SetupModel per-part), but keyed by `cell_id`
+            // (CELL_STATIC_BSP_PENDING → scene.cell_static_physics_bsp). The
+            // render-only `StaticObjectPlacement` pushed above is unchanged; this
+            // is its collision twin. Best-effort: a stab with no physics BSP
+            // stages nothing (no collision change, never a crash).
+            let stab_world_origin =
+                holtburger_common::Vector3::new(world_x, world_y, world_z);
+            let stab_world_orientation =
+                holtburger_common::Quaternion { w: qw, x: qx, y: qy, z: qz };
+            match (stab.stab_id >> 24) as u8 {
+                0x01 => {
+                    source
+                        .prefetch(&[ResourceKey::new("eor/portal", stab.stab_id)])
+                        .await
+                        .ok();
+                    if let Ok(bytes) =
+                        source.get_file_by_key(ResourceKey::new("eor/portal", stab.stab_id))
+                        && let Ok(gfx) = holtburger_dat::file_type::GfxObj::unpack(
+                            &mut std::io::Cursor::new(&bytes),
+                        )
+                        && let Some(tree) = &gfx.physics_bsp
+                        && !gfx.physics_polygons.is_empty()
+                    {
+                        let polys = holtburger_dat::physics::resolve_cell_physics_polygons(
+                            &gfx.physics_polygons,
+                            |vid| {
+                                gfx.vertex_array.vertices.get(&vid).map(|sw| {
+                                    holtburger_common::Vector3::new(
+                                        sw.origin.x,
+                                        sw.origin.y,
+                                        sw.origin.z,
+                                    )
+                                })
+                            },
+                        );
+                        if !polys.is_empty() {
+                            CELL_STATIC_BSP_PENDING.with(|pile| {
+                                pile.borrow_mut().push((
+                                    envcell.cell_id,
+                                    holtburger_world::CellPhysicsBsp {
+                                        tree: tree.clone(),
+                                        polys,
+                                        origin: stab_world_origin,
+                                        orientation: stab_world_orientation,
+                                    },
+                                ));
+                            });
+                        }
+                    }
+                }
+                0x02 => {
+                    let initial = [ResourceKey::new("eor/portal", stab.stab_id)];
+                    let cache_key = prefetch::WalkCacheKey::new(
+                        "fetchEnvCellsInLandblock:static-bsp:0x02",
+                    )
+                    .with_u32(stab.stab_id);
+                    let sid = stab.stab_id;
+                    if prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
+                        let _ = walk_setup_parts_with_geom(s, sid);
+                    })
+                    .await
+                    .is_ok()
+                        && let Some(parts) =
+                            walk_setup_parts_with_geom_and_bsp(source.as_ref(), stab.stab_id)
+                    {
+                        for (_aabb, bsp) in parts.into_iter() {
+                            if let Some(b) = bsp {
+                                let pr = quat_rotate(stab_world_orientation, b.offset);
+                                let wo = holtburger_common::Vector3::new(
+                                    stab_world_origin.x + pr.x,
+                                    stab_world_origin.y + pr.y,
+                                    stab_world_origin.z + pr.z,
+                                );
+                                let wq = stab_world_orientation.multiply(b.rot);
+                                CELL_STATIC_BSP_PENDING.with(|pile| {
+                                    pile.borrow_mut().push((
+                                        envcell.cell_id,
+                                        holtburger_world::CellPhysicsBsp {
+                                            tree: b.tree,
+                                            polys: b.polys,
+                                            origin: wo,
+                                            orientation: wq,
+                                        },
+                                    ));
+                                });
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
 
         out.push(EnvCellPlacement {
@@ -42528,6 +42652,18 @@ async fn recv_loop(
                             console_log_str(&format!(
                                 "[bsp] drained {drained_bsp} cell physics BSP trees into scene ({} cells with BSP)",
                                 w.scene.cell_physics_bsp_count(),
+                            ));
+                        }
+                        // Phase C (2026-06-28): drain per-cell STATIC object
+                        // physics BSPs so the faithful driver's
+                        // find_obj_collisions can stop the player at static
+                        // walls/doors. Same cadence as the cell-env BSP drain.
+                        let drained_static_cell_bsp =
+                            drain_pending_cell_static_bsps_into(&mut w.scene);
+                        if drained_static_cell_bsp > 0 {
+                            console_log_str(&format!(
+                                "[bsp] drained {drained_static_cell_bsp} cell STATIC physics BSPs into scene ({} total)",
+                                w.scene.cell_static_physics_bsp_count(),
                             ));
                         }
                         // Terrain→EnvCell entry (2026-06-02): drain the
