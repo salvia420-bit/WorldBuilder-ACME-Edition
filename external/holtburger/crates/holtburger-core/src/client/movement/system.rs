@@ -560,16 +560,21 @@ const USE_UNIFIED_TRANSITION: bool = true;
 /// Phase-B `?faithfulTransition=on` URL flag). Effective predicate:
 /// [`MovementSystem::faithful_transition_enabled`].
 ///
-/// `true` / flag-on: the dispatcher
+/// `true` (DEFAULT, Phase E 2026-06-28): the dispatcher
 /// ([`holtburger_world::spatial::transition::find_transitional_position_dispatch`])
-/// routes to the faithful driver — env-cells faithful, statics identity,
-/// outdoor via the existing heightfield.
+/// routes to the faithful driver — env-cells faithful, in-cell STATICS faithful
+/// (Phase C: `SceneObjCell::find_obj_collisions` over `cell_static_physics_bsp`),
+/// outdoor via the existing heightfield. Flipped default-on after validation:
+/// holtburger-dat `transition::` (252 pass) + the `mod drift` static-stop test,
+/// the in-world static-BSP live feed (cells drain real static BSPs), and the
+/// in-world A/B (faithful on/off both in-world, grounded, 0 errors). Mirrors the
+/// `USE_UNIFIED_TRANSITION = true` convention above. Rollback: revert this const.
 ///
-/// `false` (DEFAULT): the dispatcher routes to the unchanged existing pipeline —
-/// byte-identical, rollback is dropping the flag. Phase A wires the flag + the
-/// bridge; Phase B adds the wasm/JS export and validates the faithful path
-/// (A/B test, the `// VERIFY(PhaseB):` marshalling notes).
-const USE_FAITHFUL_TRANSITION: bool = false;
+/// `false` / flag-off: the dispatcher routes to the unchanged existing pipeline
+/// (byte-identical). The Phase-B runtime carrier
+/// ([`MovementSystem::faithful_transition_runtime`], `?faithfulTransition=on`)
+/// remains for forcing the faithful path on when this const is `false`.
+const USE_FAITHFUL_TRANSITION: bool = true;
 
 /// F4-2 (bughunt 2026-06-09) — outdoor walkable-slope gate.
 ///
