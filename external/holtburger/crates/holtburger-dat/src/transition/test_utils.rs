@@ -605,4 +605,117 @@ mod tests {
         assert_eq!(r, crate::transition::types::TransitionState::Ok);
         assert!(!redo);
     }
+
+    // ── PAYOFF: find_transitional_position end-to-end (B3, the canonical
+    //    validate_transition caller). Drives a sphere across each synthetic
+    //    scene through `find_valid_position` (insert_type == Transition). The
+    //    swept-step search runs calc_num_steps → N× adjust_offset +
+    //    transitional_insert + validate_transition; the depth guard must not
+    //    fire (no panic) and the result is the int 0/1 the search returns. ──
+
+    /// Drive `find_valid_position` over a single-cell synthetic scene.
+    fn drive_find(scene: Scene, obj: ObjectInfo, from: Vector3, to: Vector3, r: f32) -> (i32, CTransition) {
+        let cell: Rc<dyn CObjCell> = SynthEnvCell::new(scene).handle();
+        let world = SceneWorld::single(cell);
+        let mut t = sweep(ENV_CELL_ID, obj, r, from, to);
+        // find_valid_position dispatches on insert_type; sweep() seeds Transition.
+        let code = t.find_valid_position(&world, &NoGravity);
+        (code, t)
+    }
+
+    #[test]
+    fn find_transitional_walk_across_flat_floor_is_ok() {
+        // A short horizontal walk along the floor (sphere resting on z=0): the
+        // search advances check_pos one whole-offset step and validates OK.
+        let (code, t) = drive_find(
+            scenes::flat_floor(),
+            build::walker(0.5, 0.5),
+            v(1.0, 1.0, 0.5),
+            v(1.4, 1.0, 0.5),
+            0.5,
+        );
+        assert_eq!(code, 1, "clean floor walk ⇒ find_transitional_position OK");
+        // curr_pos advanced toward the target (validate_transition committed it).
+        assert!(t.sphere_path.curr_pos.frame.origin.x > 1.0);
+    }
+
+    #[test]
+    fn find_transitional_no_motion_seeds_cell_array_and_succeeds() {
+        // begin == end ⇒ num_steps == 0 ⇒ the no-motion branch seats check_pos,
+        // builds the cell ring, and returns 1.
+        let (code, t) = drive_find(
+            scenes::flat_floor(),
+            build::walker(0.5, 0.5),
+            v(1.0, 1.0, 0.5),
+            v(1.0, 1.0, 0.5),
+            0.5,
+        );
+        assert_eq!(code, 1);
+        assert!(t.sphere_path.cell_array_valid);
+    }
+
+    #[test]
+    fn find_transitional_no_begin_cell_fails() {
+        let cell: Rc<dyn CObjCell> = SynthEnvCell::new(scenes::flat_floor()).handle();
+        let world = SceneWorld::single(cell);
+        let mut t = sweep(ENV_CELL_ID, build::walker(0.5, 0.5), 0.5, v(1.0, 1.0, 0.5), v(1.4, 1.0, 0.5));
+        t.sphere_path.begin_cell = None; // 313203 guard
+        assert_eq!(t.find_valid_position(&world, &NoGravity), 0);
+    }
+
+    #[test]
+    fn find_transitional_wall_sidesweep_terminates() {
+        // Walking into a wall: the search drives the slide/blocked machinery and
+        // terminates with a valid 0/1 code (the depth guard does not fire).
+        let (code, _t) = drive_find(
+            scenes::vertical_wall(),
+            build::walker(0.5, 0.5),
+            v(0.6, 1.0, 1.5),
+            v(-0.4, 1.0, 1.5),
+            0.5,
+        );
+        assert!(code == 0 || code == 1, "got {code}");
+    }
+
+    #[test]
+    fn find_transitional_step_up_terminates() {
+        // Sweep into a climbable step (rise < step_up_height): exercises the
+        // step-up path under the swept-step loop.
+        let (code, _t) = drive_find(
+            scenes::single_step(STEP_H),
+            build::walker(0.5, 0.5),
+            v(1.6, 1.0, 0.25),
+            v(2.4, 1.0, 0.25),
+            0.3,
+        );
+        assert!(code == 0 || code == 1, "got {code}");
+    }
+
+    #[test]
+    fn find_transitional_cliff_step_down_terminates() {
+        // Sweep off a shallow cliff edge: exercises step_down + edge_slide under
+        // the search.
+        let (code, _t) = drive_find(
+            scenes::cliff_edge(SHALLOW_DROP),
+            build::walker(0.5, 0.5),
+            v(1.4, 1.0, 0.5),
+            v(2.6, 1.0, 0.5),
+            0.5,
+        );
+        assert!(code == 0 || code == 1, "got {code}");
+    }
+
+    #[test]
+    fn find_transitional_ramp_slide_terminates() {
+        // Sweep into a too-steep ramp (landable, not walkable): exercises the
+        // slide response under the search.
+        let (code, _t) = drive_find(
+            scenes::sloped_ramp(),
+            build::walker(0.5, 0.5),
+            v(0.4, 1.0, 1.2),
+            v(0.4, 1.0, 0.2),
+            0.5,
+        );
+        assert!(code == 0 || code == 1, "got {code}");
+    }
 }

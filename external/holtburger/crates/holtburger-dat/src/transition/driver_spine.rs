@@ -296,7 +296,7 @@ impl CTransition {
                             self.sphere_path.walkable = None; // LABEL_52
                             return 1;
                         }
-                        let v14 = self.edge_slide(&mut ts, v13, v11); // SEAM(B3)
+                        let v14 = self.edge_slide(world, &mut ts, v13, v11);
                         if v14 != 0 {
                             return ts; // LABEL_36
                         }
@@ -309,7 +309,7 @@ impl CTransition {
                         if self.step_down(world, v22, z_val) == 0
                             && self.step_down(world, v12, v11) == 0
                         {
-                            let v14 = self.edge_slide(&mut ts, v12, v11); // SEAM(B3)
+                            let v14 = self.edge_slide(world, &mut ts, v12, v11);
                             if v14 != 0 {
                                 return ts; // LABEL_36
                             }
@@ -497,18 +497,119 @@ impl CTransition {
         (v9 != 1) as i32
     }
 
-    /// SEAM(B3): `CTransition::edge_slide` (`acclient.c:312685`, agent A05).
-    /// Drives `cliff_slide`/`precipice_slide`/step-down-then-precipice when a
-    /// swept step ends unsupported past a finite surface boundary. NOT ported in
-    /// B2 (depends on `cliff_slide`/`adjust_offset`, A05/B3). Returns `0` ("made
-    /// no progress") so `transitional_insert` takes the `v5 = ts` → LABEL_38
-    /// fall-through rather than the LABEL_36 early-return — the safe default
-    /// (the outer loop still bounds it). B3 MUST port the real body and thread
-    /// `world` (it reaches `transitional_insert`/`step_down`).
+    // ───────────────────────────────────────────────────────────────────────
+    // CTransition::edge_slide — acclient.c:312685 (B3, agent A05)
+    // ───────────────────────────────────────────────────────────────────────
+    /// `int CTransition::edge_slide(CTransition*, TransitionState* ts, float
+    /// step_down_ht, float z_val)`. The edge/cliff/precipice/step-down decision
+    /// tree run after a walkable-object sweep is blocked at an edge. Writes the
+    /// resulting transition code through `ts` and returns the decomp's `int`
+    /// (0/1) "handled" flag. Reaching the LABEL_36 early-return in
+    /// `transitional_insert` (returning `ts`) when this returns non-zero.
+    ///
+    /// Top gate (312707): only the cliff/precipice/step-down machine when the
+    /// object is both `ON_WALKABLE` and `EDGE_SLIDE`; otherwise rewind to the
+    /// backup position (inlined `restore_check_pos`) and report OK. Inside the
+    /// gate, in decomp order: steep contact plane → `cliff_slide`; resting on a
+    /// walkable poly → `precipice_slide`; non-steep contact plane → accept;
+    /// else step-down-and-retest (rewind the sweep, `step_down`, and — if a
+    /// walkable surface was found below — re-seat the localspace sphere and
+    /// `precipice_slide`, else COLLIDED).
+    ///
+    /// Threads `world` because the step-down-and-retest branch reaches
+    /// [`CTransition::step_down`].
     // acclient.c:312685
-    fn edge_slide(&mut self, ts: &mut i32, step_down_ht: f32, z_val: f32) -> i32 {
-        let _ = (ts, step_down_ht, z_val);
-        0
+    fn edge_slide(
+        &mut self,
+        world: &dyn CellWorld,
+        ts: &mut i32,
+        step_down_ht: f32,
+        z_val: f32,
+    ) -> i32 {
+        let state = self.object_info.state;
+        // 312707: (state & ON_WALKABLE) && (state & EDGE_SLIDE).
+        if (state & object_info_state::ON_WALKABLE) != 0
+            && (state & object_info_state::EDGE_SLIDE) != 0
+        {
+            let contact_valid = self.collision_info.contact_plane.is_some(); // v6
+            // 312710: steep contact plane (N.z < z_val) → cliff.
+            let steep =
+                contact_valid && self.collision_info.contact_plane.unwrap().normal.z < z_val;
+
+            if steep {
+                // 312712-312717: CLIFF.
+                self.sphere_path.walkable = None;
+                self.sphere_path.restore_check_pos();
+                let cp = self.collision_info.contact_plane.unwrap(); // Plane is Copy
+                *ts = self.cliff_slide(&cp);
+                self.collision_info.contact_plane = None;
+                self.collision_info.contact_plane_is_water = false;
+                0 // v7 = 0
+            } else if self.sphere_path.walkable.is_some() {
+                // 312721-312727: PRECIPICE (already on a walkable poly).
+                self.sphere_path.restore_check_pos();
+                self.collision_info.contact_plane = None; // *(v16+24) = 0
+                self.collision_info.contact_plane_is_water = false; // *(v16+52) = 0
+                let v17 = self.sphere_path.precipice_slide(&mut self.collision_info);
+                *ts = v17;
+                (v17 == 2) as i32
+            } else if contact_valid {
+                // 312731-312737: ACCEPT (contact plane present, not steep, no walkable).
+                self.sphere_path.walkable = None;
+                self.sphere_path.restore_check_pos();
+                self.sphere_path.cell_array_valid = true;
+                self.collision_info.contact_plane = None;
+                self.collision_info.contact_plane_is_water = false;
+                *ts = 1;
+                1 // v7 = 1
+            } else {
+                // 312741-312772: STEP-DOWN-AND-RETEST.
+                // move = global_curr_center − global_sphere.center (rewind the sweep).
+                let gc = self.sphere_path.global_curr_center;
+                let gs = self.sphere_path.global_sphere[0].center;
+                let mv = Vector3::new(gc.x - gs.x, gc.y - gs.y, gc.z - gs.z);
+                self.sphere_path.add_offset_to_check_pos(&mv); // 312748
+                self.step_down(world, step_down_ht, z_val); // 312749 (return ignored)
+                self.collision_info.contact_plane = None; // *(v12+24) = 0
+                self.collision_info.contact_plane_is_water = false; // *(v12+52) = 0
+                self.sphere_path.restore_check_pos();
+
+                if self.sphere_path.walkable.is_some() {
+                    // 312756-312764: landed on a walkable surface below → re-seat & precipice.
+                    self.collision_info.contact_plane = None;
+                    self.collision_info.contact_plane_is_water = false;
+                    let scale = self.sphere_path.walkable_scale; // v13
+                    let wpos = self.sphere_path.get_walkable_pos(); // 312104
+                    self.sphere_path.cache_localspace_sphere(&wpos, scale); // 313852
+                    let ls = self.sphere_path.localspace_sphere[0];
+                    self.sphere_path.set_walkable_check_pos(&ls); // 311551
+                    let v15 = self.sphere_path.precipice_slide(&mut self.collision_info);
+                    *ts = v15;
+                    (v15 == 2) as i32
+                } else {
+                    // 312766-312771: nothing to stand on → COLLIDED.
+                    self.sphere_path.walkable = None;
+                    *ts = 2;
+                    self.sphere_path.cell_array_valid = true;
+                    1 // v7 = 1
+                }
+            }
+        } else {
+            // 312775-312788: not (ON_WALKABLE && EDGE_SLIDE) → rewind to backup
+            // (restore_check_pos inlined by the decomp) and OK.
+            self.sphere_path.walkable = None;
+            let backup_cell = self.sphere_path.backup_cell; // v18 (read before write)
+            self.sphere_path.check_pos.objcell_id = self.sphere_path.backup_check_pos.objcell_id;
+            self.sphere_path.check_pos.frame = self.sphere_path.backup_check_pos.frame;
+            self.sphere_path.check_cell = backup_cell;
+            self.sphere_path.cell_array_valid = false;
+            self.sphere_path.cache_global_sphere(None);
+            self.collision_info.contact_plane = None;
+            self.collision_info.contact_plane_is_water = false;
+            self.sphere_path.cell_array_valid = true;
+            *ts = 1;
+            1 // v7 = 1
+        }
     }
 }
 
@@ -677,5 +778,117 @@ mod tests {
         // offset = (curr - center) * 0.5 = (2,0,0); no collision normal recorded.
         assert!((path.check_pos.frame.origin - v(2.0, 0.0, 0.0)).length() < 1e-4);
         assert!(ci.collision_normal.is_none());
+    }
+
+    // ── edge_slide (acclient.c:312685) — every branch, real collaborators ──
+
+    use holtburger_common::Plane;
+
+    fn sample_poly() -> crate::physics::ResolvedPolygon {
+        crate::physics::ResolvedPolygon {
+            num_points: 3,
+            vertices: vec![v(0.0, 0.0, 0.0), v(1.0, 0.0, 0.0), v(0.0, 1.0, 0.0)],
+            plane: Plane { normal: v(0.0, 0.0, 1.0), d: 0.0 },
+        }
+    }
+
+    #[test]
+    fn edge_slide_not_gated_rewinds_to_backup() {
+        // Top gate false (neither ON_WALKABLE nor EDGE_SLIDE) → restore from
+        // backup, clear contact plane, OK(1).
+        let mut t = CTransition::default();
+        t.object_info.state = object_info_state::DEFAULT;
+        t.sphere_path.num_sphere = 1;
+        t.sphere_path.local_sphere[0] = Sphere { center: v(0.0, 0.0, 0.0), radius: 1.0 };
+        t.sphere_path.backup_check_pos.objcell_id = 0x42;
+        t.sphere_path.backup_check_pos.frame.origin = v(5.0, 6.0, 7.0);
+        t.sphere_path.backup_cell = Some(9);
+        t.collision_info.contact_plane = Some(Plane { normal: v(0.0, 0.0, 1.0), d: 0.0 });
+
+        let mut ts = 0;
+        let ret = t.edge_slide(&EmptyWorld, &mut ts, 0.04, Z_FOR_LANDING);
+        assert_eq!(ret, 1);
+        assert_eq!(ts, 1);
+        assert_eq!(t.sphere_path.check_pos.objcell_id, 0x42);
+        assert!((t.sphere_path.check_pos.frame.origin - v(5.0, 6.0, 7.0)).length() < 1e-3);
+        assert_eq!(t.sphere_path.check_cell, Some(9));
+        assert!(t.collision_info.contact_plane.is_none());
+        assert!(t.sphere_path.cell_array_valid);
+    }
+
+    #[test]
+    fn edge_slide_steep_contact_takes_cliff() {
+        // ON_WALKABLE|EDGE_SLIDE + steep plane (N.z < z_val) → cliff_slide (ret 0).
+        let mut t = CTransition::default();
+        t.object_info.state = object_info_state::ON_WALKABLE | object_info_state::EDGE_SLIDE;
+        t.sphere_path.num_sphere = 1;
+        t.sphere_path.local_sphere[0] = Sphere { center: v(0.0, 0.0, 0.0), radius: 1.0 };
+        t.collision_info.contact_plane = Some(Plane { normal: v(1.0, 0.0, 0.0), d: 0.0 }); // N.z=0
+        t.collision_info.last_known_contact_plane = Some(Plane { normal: v(0.0, 0.0, 1.0), d: 0.0 });
+
+        let mut ts = 0;
+        let ret = t.edge_slide(&EmptyWorld, &mut ts, 0.04, Z_FOR_LANDING);
+        assert_eq!(ret, 0);
+        assert_eq!(ts, 3); // cliff_slide returns ADJUSTED
+        assert!(t.collision_info.contact_plane.is_none());
+    }
+
+    #[test]
+    fn edge_slide_accept_branch_reports_ok() {
+        // Plane present, NOT steep, no walkable → accept (restore + OK).
+        let mut t = CTransition::default();
+        t.object_info.state = object_info_state::ON_WALKABLE | object_info_state::EDGE_SLIDE;
+        t.sphere_path.num_sphere = 1;
+        t.sphere_path.local_sphere[0] = Sphere { center: v(0.0, 0.0, 0.0), radius: 1.0 };
+        t.sphere_path.backup_check_pos.frame.origin = v(3.0, 3.0, 3.0);
+        t.collision_info.contact_plane = Some(Plane { normal: v(0.0, 0.0, 1.0), d: 0.0 }); // N.z=1
+        t.sphere_path.walkable = None;
+
+        let mut ts = 0;
+        let ret = t.edge_slide(&EmptyWorld, &mut ts, 0.04, Z_FOR_LANDING);
+        assert_eq!(ret, 1);
+        assert_eq!(ts, 1);
+        assert!(t.collision_info.contact_plane.is_none());
+        assert!(t.sphere_path.cell_array_valid);
+    }
+
+    #[test]
+    fn edge_slide_walkable_takes_precipice() {
+        // walkable poly present (plane present, not steep) → precipice. The
+        // resting sphere sits inside the face ⇒ precipice_slide finds no edge ⇒
+        // COLLIDED(2), ret 1.
+        let mut t = CTransition::default();
+        t.object_info.state = object_info_state::ON_WALKABLE | object_info_state::EDGE_SLIDE;
+        t.sphere_path.num_sphere = 1;
+        t.collision_info.contact_plane = Some(Plane { normal: v(0.0, 0.0, 1.0), d: 0.0 });
+        t.sphere_path.walkable = Some(sample_poly());
+        t.sphere_path.walkable_check_pos = Sphere { center: v(0.2, 0.2, 0.0), radius: 0.1 };
+        t.sphere_path.walkable_up = v(0.0, 0.0, 1.0);
+
+        let mut ts = 0;
+        let ret = t.edge_slide(&EmptyWorld, &mut ts, 0.04, Z_FOR_LANDING);
+        assert_eq!(ts, 2);
+        assert_eq!(ret, 1); // precipice_slide returned 2
+        assert!(t.collision_info.contact_plane.is_none());
+        assert!(t.sphere_path.walkable.is_none()); // cleared by precipice_slide
+    }
+
+    #[test]
+    fn edge_slide_stepdown_no_floor_reports_collided() {
+        // No contact plane, no walkable → step-down-and-retest. step_down finds
+        // no walkable (EmptyWorld) → COLLIDED(2), ret 1, cell_array re-validated.
+        let mut t = CTransition::default();
+        t.object_info.state = object_info_state::ON_WALKABLE | object_info_state::EDGE_SLIDE;
+        t.sphere_path.num_sphere = 1;
+        t.sphere_path.local_sphere[0] = Sphere { center: v(0.0, 0.0, 0.0), radius: 1.0 };
+        t.collision_info.contact_plane = None;
+        t.sphere_path.walkable = None;
+
+        let mut ts = 0;
+        let ret = t.edge_slide(&EmptyWorld, &mut ts, 0.04, Z_FOR_LANDING);
+        assert_eq!(ts, 2);
+        assert_eq!(ret, 1);
+        assert!(t.sphere_path.cell_array_valid);
+        assert!(t.sphere_path.walkable.is_none());
     }
 }

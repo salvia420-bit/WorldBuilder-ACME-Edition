@@ -422,6 +422,64 @@ impl SpherePath {
         self.global_curr_center = frame.localtoglobal(self.local_sphere[0].center);
     }
 
+    /// `SPHEREPATH::get_walkable_pos` (`acclient.c:312104`). Returns a copy of
+    /// the recorded resting `walkable_pos` (cell id + frame). Trivial accessor
+    /// used by `CTransition::edge_slide`'s step-down-and-retest branch.
+    // acclient.c:312104
+    pub fn get_walkable_pos(&self) -> Position {
+        Position {
+            objcell_id: self.walkable_pos.objcell_id,
+            frame: self.walkable_pos.frame,
+        }
+    }
+
+    /// `SPHEREPATH::set_walkable_check_pos` (`acclient.c:311551`):
+    /// `walkable_check_pos = *sphere`.
+    // acclient.c:311551
+    pub fn set_walkable_check_pos(&mut self, sphere: &Sphere) {
+        self.walkable_check_pos = *sphere;
+    }
+
+    /// `SPHEREPATH::cache_localspace_sphere` (`acclient.c:313852`). Re-bases the
+    /// swept sphere(s) into a target cell's local space `p` (the BSP cell's
+    /// `pos`), scaled by `1/scale`, and refreshes `localspace_pos` / `localspace_z`
+    /// / `localspace_low_point`. The decomp's `Position::localtolocal(p, from,
+    /// point)` (acclient.c:143795) is `p.frame.globaltolocal(from.frame.
+    /// localtoglobal(point) + get_block_offset(p.id, from.id))`; `from` is
+    /// `check_pos` for the candidate centers and `curr_pos` for the swept-from
+    /// center. `localspace_curr_center` is the single-`Vector3` model (sphere 0).
+    ///
+    /// All-frame math (no real cell geometry), so this completes
+    /// `edge_slide`'s deepest branch; the localspace cache it writes is the
+    /// resolver's `find_collisions` input.
+    // acclient.c:313852
+    pub fn cache_localspace_sphere(&mut self, p: &Position, scale: f32) {
+        let inv = 1.0 / scale; // scalea = 1.0 / scale
+        let n = self.num_sphere as usize;
+        for i in 0..n {
+            self.localspace_sphere[i].radius = inv * self.local_sphere[i].radius;
+            // localtolocal(p, check_pos, local_sphere[i].center)
+            let local = self.local_sphere[i].center;
+            let global = self.check_pos.frame.localtoglobal(local)
+                + LandDefs::get_block_offset(p.objcell_id, self.check_pos.objcell_id);
+            self.localspace_sphere[i].center = p.frame.globaltolocal(global) * inv;
+            // localtolocal(p, curr_pos, local_sphere[i].center) → localspace_curr_center
+            if i == 0 {
+                let global_curr = self.curr_pos.frame.localtoglobal(local)
+                    + LandDefs::get_block_offset(p.objcell_id, self.curr_pos.objcell_id);
+                self.localspace_curr_center = p.frame.globaltolocal(global_curr) * inv;
+            }
+        }
+        // localspace_pos = *p (objcell_id + frame).
+        self.localspace_pos.objcell_id = p.objcell_id;
+        self.localspace_pos.frame = p.frame;
+        // localspace_z = global image of local +Z = fl2gv column 2.
+        self.localspace_z = Vector3::new(p.frame.fl2gv[2], p.frame.fl2gv[5], p.frame.fl2gv[8]);
+        // localspace_low_point = center − radius·localspace_z (of sphere 0).
+        let s0 = self.localspace_sphere[0];
+        self.localspace_low_point = s0.center - self.localspace_z * s0.radius;
+    }
+
     /// `SPHEREPATH::check_walkables` (`acclient.c:313468`). THE recursion-
     /// termination gate for the `transitional_insert ↔ check_walkable` cycle
     /// (A15 R1/D1): returns truthy (`1`) when there is no cached walkable poly,

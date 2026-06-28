@@ -155,6 +155,37 @@ impl Frame {
                 .all(|(a, b)| (a - b).abs() < EPS)
     }
 
+    /// `Frame::get_vector_heading` (acclient.c:357394). Returns column 1 of the
+    /// `m_fl2gv` basis — `(m[3],m[4],m[5])` — i.e. the global image of local +Y
+    /// (the AC "heading" axis). Equivalent to `localtoglobalvec((0,1,0))`. The
+    /// decomp's `(m[7]+m[1])*0.0 + m[4]` etc. drop the inert `*0.0` terms.
+    // acclient.c:357394
+    pub fn get_vector_heading(&self) -> Vector3 {
+        Vector3::new(self.fl2gv[3], self.fl2gv[4], self.fl2gv[5])
+    }
+
+    /// `Frame::set_heading` (acclient.c:357692 → `set_vector_heading` 357668 →
+    /// euler `set_rotate` → `cache`). Rebuilds this frame's pure-yaw basis from a
+    /// heading in DEGREES so that local +Y maps to the global heading
+    /// `(sinθ, cosθ, 0)`.
+    ///
+    /// ## Reduced-`Frame` deviation (A04)
+    /// The decomp `Frame` carries a quaternion (`qw..qz`) the euler path writes
+    /// before `cache()` rebuilds `m_fl2gv`; the holtburger `Frame` is the reduced
+    /// `fl2gv`+`origin` model (no quaternion). The ONLY observable
+    /// `find_placement_pos` reads after `set_heading` is `get_vector_heading`
+    /// (column 1), so the pure-yaw basis is built directly column-major:
+    /// `col0=(cosθ,−sinθ,0)`, `col1=(sinθ,cosθ,0)`, `col2=(0,0,1)`. `origin` is
+    /// untouched. A full-quaternion `set_rotate`/SLERP is B4.
+    // acclient.c:357692
+    pub fn set_heading(&mut self, degrees: f32) {
+        // 0.0174532925199433 == π/180, spelled as the decomp's literal.
+        let rad = degrees * 0.0174532925199433_f32;
+        let s = rad.sin();
+        let c = rad.cos();
+        self.fl2gv = [c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0];
+    }
+
     /// Same-cell reduction of `Plane::localtoglobal` (acclient.c:467672):
     /// `self` is the `from` frame and `to` shares its landblock, so the
     /// `LandDefs::get_block_offset` term is zero. See

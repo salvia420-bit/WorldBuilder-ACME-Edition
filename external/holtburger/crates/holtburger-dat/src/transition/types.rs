@@ -148,6 +148,22 @@ pub enum TransitionState {
     Slid = 4,
 }
 
+impl TransitionState {
+    /// Map a raw resolver/spine `int` code (the convention the leaf + dispatch
+    /// layers carry: `1`=OK … `4`=SLID, anything else `Invalid`) back to the
+    /// typed enum. The Phase-3 search loops thread `transitional_insert`'s `i32`
+    /// straight into the typed `validate_*` entry points through this.
+    pub fn from_i32(v: i32) -> Self {
+        match v {
+            1 => TransitionState::Ok,
+            2 => TransitionState::Collided,
+            3 => TransitionState::Adjusted,
+            4 => TransitionState::Slid,
+            _ => TransitionState::Invalid,
+        }
+    }
+}
+
 /// `enum SPHEREPATH::InsertType` (`acclient.h:6160`). How a sphere is being
 /// placed into the world for this transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

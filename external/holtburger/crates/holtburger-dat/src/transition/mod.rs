@@ -57,6 +57,15 @@ pub mod driver_spine;
 pub mod driver_cell_dispatch;
 pub mod driver_validate;
 
+// Phase-3 B3 — the remaining `CTransition` DRIVER methods that fill the B2
+// SEAMs: the collision-response slide geometry (adjust_offset/cliff_slide), the
+// placement search slice (find_placement_pos/placement_insert/validate_placement),
+// and the init/factory suite (init*/makeTransition pool). edge_slide +
+// find_{transitional,placement}_position bodies land in driver_spine/driver_validate.
+pub mod driver_geometry;
+pub mod driver_placement;
+pub mod driver_init;
+
 // Shared synthetic-cell test harness (A16) — exercises the spine end-to-end
 // against the real foundation `CObjCell` + the committed Phase-2 resolver.
 #[cfg(test)]
