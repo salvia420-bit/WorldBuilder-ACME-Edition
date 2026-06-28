@@ -223,6 +223,20 @@ impl MovementSystemHandle {
         self.inner.set_unified_transition(on);
     }
 
+    /// Phase 3 B4 Phase B (2026-06-28): install the `?faithfulTransition=on`
+    /// runtime carrier. The wasm recv-loop init calls this once after parsing
+    /// the URL flag; when on (or when the native `USE_FAITHFUL_TRANSITION`
+    /// const is flipped) the local player's INDOOR collision routes through
+    /// the decomp-faithful `CTransition` BSP driver
+    /// (`holtburger_world::spatial::faithful_bridge`) via the
+    /// `find_transitional_position_dispatch` seam; statics stay identity
+    /// (Phase C) and outdoor poses delegate to the existing heightfield
+    /// pipeline (Phase D). Default off — the dispatcher routes to the
+    /// unchanged approximate pipeline, byte-identical.
+    pub fn set_faithful_transition(&mut self, on: bool) {
+        self.inner.set_faithful_transition(on);
+    }
+
     /// A14-I3 (2026-06-12, `?retailRunKeys=on`) — public forward for
     /// the wasm `setAutoRun` export: retail
     /// `CommandInterpreter::SetAutoRun` + the `ApplyCurrentMovement`

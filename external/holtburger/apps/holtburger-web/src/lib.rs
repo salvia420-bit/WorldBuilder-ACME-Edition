@@ -128,6 +128,24 @@ fn parse_unified_transition_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "unifiedTransition=on")
 }
 
+/// Phase 3 B4 Phase B (2026-06-28): parse `?faithfulTransition=on` (or
+/// `&faithfulTransition=on`). Same shape as `parse_unified_transition_flag`.
+/// When on, the local player's INDOOR (env-cell) collision routes through
+/// the decomp-faithful `CTransition` BSP driver
+/// (`holtburger_world::spatial::faithful_bridge::faithful_find_transitional_position`,
+/// via the `find_transitional_position_dispatch` seam) instead of the
+/// approximate flat-triangle pipeline. Statics are identity (Phase C) and
+/// outdoor poses delegate to the existing heightfield pipeline (Phase D).
+/// Default OFF = the dispatcher routes to the unchanged approximate path,
+/// byte-identical. Native carrier: `USE_FAITHFUL_TRANSITION`
+/// (movement/system.rs). Needs a wasm rebuild; NO manifest bump (no new
+/// JS-visible export).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_faithful_transition_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "faithfulTransition=on")
+}
+
 /// A9-Stage1 (2026-06-12, unification survey): parse `?placementId=on`
 /// (or `&placementId=on`). Same shape as `parse_unified_tick_flag`.
 /// When on, the static placement-frame resolution follows RETAIL order
@@ -23985,6 +24003,19 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_unified_transition_flag("?unifiedTick=on"));
         assert!(!parse_unified_transition_flag(""));
     }
+
+    /// Phase 3 B4 Phase B: `?faithfulTransition=on` parse shape.
+    #[test]
+    fn faithful_transition_flag_parses_only_exact_on_value() {
+        use super::parse_faithful_transition_flag;
+        assert!(parse_faithful_transition_flag("?faithfulTransition=on"));
+        assert!(parse_faithful_transition_flag(
+            "?renderer=3d&unifiedTransition=on&faithfulTransition=on"
+        ));
+        assert!(!parse_faithful_transition_flag("?faithfulTransition=off"));
+        assert!(!parse_faithful_transition_flag("?unifiedTransition=on"));
+        assert!(!parse_faithful_transition_flag(""));
+    }
 }
 
 /// CMT Wave 16 / Phase 50 (2026-05-26): resolve the entity's
@@ -32992,6 +33023,12 @@ async fn recv_loop(
     // Default OFF = byte-identical legacy paths; see
     // `parse_unified_transition_flag`.
     movement.set_unified_transition(parse_unified_transition_flag(&js_location_search()));
+    // Phase 3 B4 Phase B (2026-06-28): `?faithfulTransition=on` — route the
+    // local player's INDOOR collision through the decomp-faithful CTransition
+    // BSP driver (via `find_transitional_position_dispatch`). Default OFF =
+    // the approximate flat-triangle pipeline, byte-identical; see
+    // `parse_faithful_transition_flag`.
+    movement.set_faithful_transition(parse_faithful_transition_flag(&js_location_search()));
     // A1-O1 (2026-06-11): the canonical tick spine's wasm facade — owns
     // the `ClientSimulationSystem` this recv loop otherwise lacks.
     // Constructed unconditionally (cheap empty Vec); driven ONLY when

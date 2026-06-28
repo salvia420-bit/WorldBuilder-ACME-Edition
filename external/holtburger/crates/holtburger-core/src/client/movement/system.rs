@@ -1310,9 +1310,9 @@ impl MovementSystem {
     }
 
     /// Phase 3 B4 — install the Phase-B `?faithfulTransition=on` runtime carrier
-    /// (see [`USE_FAITHFUL_TRANSITION`]). Phase B wires the handle/URL-flag
-    /// plumbing; this setter is the runtime entry it targets (unused until then).
-    #[allow(dead_code)]
+    /// (see [`USE_FAITHFUL_TRANSITION`]). Phase B wired the handle/URL-flag
+    /// plumbing (`MovementSystemHandle::set_faithful_transition` ←
+    /// `parse_faithful_transition_flag`); this is the runtime entry it targets.
     pub(crate) fn set_faithful_transition(&mut self, on: bool) {
         self.faithful_transition_runtime = on;
     }
