@@ -42,6 +42,8 @@
 //! shared driver-shaped `CSphere::slide_sphere(sphere, path, collisions,
 //! normal, curr_center) -> i32` wrapper that both call.
 
+use super::polygon_edge::find_crossed_edge;
+use super::polygon_walkable::check_small_walkable;
 use super::sphere_slide::{slide_sphere, SlideSphere};
 use super::types::{CollisionInfo, LandDefs, ObjectInfo, Position, SpherePath};
 use crate::physics::ResolvedPolygon;
@@ -322,6 +324,181 @@ impl SpherePath {
             .map(|p| p.normal)
             .unwrap_or_else(Vector3::zero)
     }
+
+    /// `SPHEREPATH::save_check_pos` (`acclient.c:312083`). Snapshots
+    /// `check_cell`/`check_pos` into the backup slots so the driver can rewind
+    /// to them (the counterpart of [`SpherePath::restore_check_pos`]).
+    // acclient.c:312083
+    pub fn save_check_pos(&mut self) {
+        self.backup_cell = self.check_cell;
+        self.backup_check_pos.objcell_id = self.check_pos.objcell_id;
+        self.backup_check_pos.frame = self.check_pos.frame; // Frame::operator=
+    }
+
+    /// `SPHEREPATH::restore_check_pos` (`acclient.c:312528`). Rewinds
+    /// `check_pos`/`check_cell` to the backup snapshot, invalidates the cell
+    /// ring, and re-caches the global sphere from scratch (`offset == 0` ⇒
+    /// recompute through `check_pos.frame`).
+    // acclient.c:312528
+    pub fn restore_check_pos(&mut self) {
+        self.check_pos.objcell_id = self.backup_check_pos.objcell_id;
+        self.check_pos.frame = self.backup_check_pos.frame; // Frame::operator=
+        self.check_cell = self.backup_cell;
+        self.cell_array_valid = false;
+        self.cache_global_sphere(None); // offset = 0 → recompute
+    }
+
+    /// `SPHEREPATH::adjust_check_pos` (`acclient.c:313962`). Re-bases `check_pos`
+    /// into `cell_id`'s landblock frame. For an OUTDOOR target
+    /// (`cell_id & 0xFFFF < 0x100`) it slides the cached global sphere by the
+    /// cross-landblock delta `LandDefs::get_block_offset(cell_id,
+    /// check_pos.objcell_id)` and shifts the `check_pos` origin by the same
+    /// delta; an interior target only retags the id. Always stores `cell_id`.
+    ///
+    /// Decomp:
+    /// ```text
+    /// if ((u16)cell_id < 0x100) {
+    ///     LandDefs::get_block_offset(&offset, cell_id, check_pos.objcell_id);
+    ///     cache_global_sphere(&offset);
+    ///     check_pos.frame.m_fOrigin += offset;
+    /// }
+    /// check_pos.objcell_id = cell_id;
+    /// ```
+    // acclient.c:313962
+    pub fn adjust_check_pos(&mut self, cell_id: u32) {
+        if (cell_id & 0xFFFF) < 0x100 {
+            // get_block_offset(cell_from = cell_id, cell_to = check_pos.objcell_id).
+            let offset = LandDefs::get_block_offset(cell_id, self.check_pos.objcell_id);
+            self.cache_global_sphere(Some(&offset));
+            self.check_pos.frame.origin.x += offset.x;
+            self.check_pos.frame.origin.y += offset.y;
+            self.check_pos.frame.origin.z += offset.z;
+        }
+        self.check_pos.objcell_id = cell_id;
+    }
+
+    /// `SPHEREPATH::check_walkables` (`acclient.c:313468`). THE recursion-
+    /// termination gate for the `transitional_insert ↔ check_walkable` cycle
+    /// (A15 R1/D1): returns truthy (`1`) when there is no cached walkable poly,
+    /// OR when the resting sphere still sits walkably on the cached `walkable`
+    /// polygon — i.e. the object has converged onto a floor so the recursion may
+    /// stop. Returns `0` when it has walked off the walkable face (recurse on).
+    ///
+    /// Decomp:
+    /// ```text
+    /// v2 = this->walkable;                              // CPolygon*
+    /// if (v2) {
+    ///     walkable_check_pos.radius *= 0.5;             // HALVE (persisted)
+    ///     result = (int)CPolygon::check_walkable(v2, &walkable_check_pos, &walkable_up);
+    /// } else result = 1;
+    /// ```
+    /// `CPolygon::check_walkable` (acclient.c:360227) is byte-identical to
+    /// `CPolygon::check_small_walkable` (360312, [`check_small_walkable`]) EXCEPT
+    /// it uses the full `radius²` acceptance band instead of `radius²·0.25`.
+    /// Halving the radius first makes its band `(0.5·r)² = 0.25·r²` — exactly the
+    /// one `check_small_walkable` derives from the ORIGINAL radius (both 0.5 and
+    /// 0.25 are exact powers of two ⇒ the f32 product is bit-identical, and the
+    /// projected contact point is radius-independent). So we evaluate
+    /// `check_small_walkable` on the pre-halved sphere and then persist the
+    /// decomp's radius-halving side-effect on `walkable_check_pos`.
+    // acclient.c:313468
+    pub fn check_walkables(&mut self) -> i32 {
+        match self.walkable.clone() {
+            Some(poly) => {
+                // CPolygon::check_walkable(walkable, &walkable_check_pos{r0}, up)
+                // ≡ check_small_walkable on the original radius (see doc above).
+                let hit = check_small_walkable(&poly, &self.walkable_check_pos, self.walkable_up);
+                self.walkable_check_pos.radius *= 0.5; // persist (acclient.c:313481-313485)
+                i32::from(hit)
+            }
+            None => 1,
+        }
+    }
+
+    /// `SPHEREPATH::precipice_slide` (`acclient.c:313980`). When the resting
+    /// sphere has walked OFF the edge of its `walkable` polygon (a precipice),
+    /// find the crossed edge, clear the walkable latch, and slide the global
+    /// sphere back along that edge's (re-oriented) normal. Returns the slide
+    /// code (`4` SLID, `3` CONTACT, `2` COLLIDED); `2` when no edge is found
+    /// (nowhere to slide).
+    ///
+    /// Decomp:
+    /// ```text
+    /// if (CPolygon::find_crossed_edge(walkable, &walkable_check_pos, &walkable_up, &normal)) {
+    ///     walkable = 0; step_up = 0;
+    ///     normal = walkable_pos.frame.localtoglobalvec(normal);          // rotate to global
+    ///     get_block_offset(&result, curr_pos.objcell_id, check_pos.objcell_id);
+    ///     disp = result + (global_sphere[0].center − global_curr_center);
+    ///     if (normal · disp > 0) normal = -normal;                       // face downhill
+    ///     return CSphere::slide_sphere(global_sphere, this, collisions, &normal, global_curr_center);
+    /// } else { walkable = 0; return 2; }
+    /// ```
+    /// The decompiler's per-component rotation aliases a stack slot (the third
+    /// component reads the already-rotated `normal.y` rather than the original);
+    /// the intended op is the orthonormal `Frame::localtoglobalvec`, used here.
+    /// The `CSphere::slide_sphere` tail is replayed inline against the leaf
+    /// [`slide_sphere`] exactly as [`SpherePath::step_up_slide`] does.
+    // acclient.c:313980
+    pub fn precipice_slide(&mut self, collisions: &mut CollisionInfo) -> i32 {
+        // CPolygon::find_crossed_edge(walkable, &walkable_check_pos, &walkable_up, &normal)
+        let crossed = self
+            .walkable
+            .clone()
+            .and_then(|poly| find_crossed_edge(&poly, &self.walkable_check_pos, self.walkable_up));
+
+        let edge_normal = match crossed {
+            Some(nrm) => nrm,
+            None => {
+                self.walkable = None; // walkable = 0
+                return 2;
+            }
+        };
+
+        self.walkable = None; // walkable = 0
+        self.step_up = false; // step_up = 0
+        let curr_center = self.global_curr_center; // v5
+        let center = self.global_sphere[0].center; // CSphere `this` = global_sphere[0]
+
+        // Rotate the crossed-edge normal from walkable_pos local space into
+        // global space (decomp `localtoglobalvec` via `walkable_pos.frame`).
+        let mut normal = self.walkable_pos.frame.localtoglobalvec(edge_normal);
+
+        // block_offset = get_block_offset(curr_pos, check_pos). acclient.c:314020
+        let block_offset =
+            LandDefs::get_block_offset(self.curr_pos.objcell_id, self.check_pos.objcell_id);
+
+        // disp = block_offset + (center − global_curr_center); face downhill.
+        let disp = Vector3::new(
+            block_offset.x + (center.x - curr_center.x),
+            block_offset.y + (center.y - curr_center.y),
+            block_offset.z + (center.z - curr_center.z),
+        );
+        if normal.dot(&disp) > 0.0 {
+            normal = Vector3::new(-normal.x, -normal.y, -normal.z);
+        }
+
+        // CSphere::slide_sphere(global_sphere, this, collisions, &normal, curr_center)
+        // — inline driver replay against the pure leaf (see step_up_slide).
+        let contact_normal = self.resolve_slide_plane_normal(collisions);
+        match slide_sphere(center, normal, curr_center, contact_normal, block_offset) {
+            SlideSphere::Adjusted { offset } => {
+                self.add_offset_to_check_pos(&offset);
+                3
+            }
+            SlideSphere::Slid { offset } => {
+                collisions.set_collision_normal(normal);
+                self.add_offset_to_check_pos(&offset);
+                4
+            }
+            SlideSphere::Collided { recomputed_normal } => {
+                collisions.set_collision_normal(normal);
+                if let Some(recomputed) = recomputed_normal {
+                    collisions.set_collision_normal(recomputed);
+                }
+                2
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -583,5 +760,139 @@ mod tests {
         assert!(ci.collision_normal.is_none());
         assert!(ci.contact_plane.is_none());
         assert!(!sp.step_up);
+    }
+
+    // ── SPHEREPATH::save_check_pos / restore_check_pos (312083 / 312528) ─────
+
+    #[test]
+    fn save_then_restore_check_pos_round_trips() {
+        let mut sp = SpherePath::default();
+        sp.num_sphere = 1;
+        sp.check_cell = Some(42);
+        sp.check_pos.objcell_id = 0x100;
+        sp.check_pos.frame.origin = v(1.0, 2.0, 3.0);
+
+        sp.save_check_pos();
+        assert_eq!(sp.backup_cell, Some(42));
+        assert_eq!(sp.backup_check_pos.objcell_id, 0x100);
+        assert!(approx(sp.backup_check_pos.frame.origin, v(1.0, 2.0, 3.0)));
+
+        // Move elsewhere, then restore to the snapshot.
+        sp.check_cell = Some(99);
+        sp.check_pos.objcell_id = 0x200;
+        sp.check_pos.frame.origin = v(9.0, 9.0, 9.0);
+        sp.cell_array_valid = true;
+
+        sp.restore_check_pos();
+        assert_eq!(sp.check_cell, Some(42));
+        assert_eq!(sp.check_pos.objcell_id, 0x100);
+        assert!(approx(sp.check_pos.frame.origin, v(1.0, 2.0, 3.0)));
+        assert!(!sp.cell_array_valid);
+        // cache recomputed (None): local_sphere[0] center 0 → global = origin.
+        assert!(approx(sp.global_sphere[0].center, v(1.0, 2.0, 3.0)));
+    }
+
+    // ── SPHEREPATH::adjust_check_pos (acclient.c:313962) ────────────────────
+
+    #[test]
+    fn adjust_check_pos_outdoor_rebases_origin_and_cache() {
+        let mut sp = SpherePath::default();
+        sp.num_sphere = 1;
+        sp.check_pos.objcell_id = 0x0102_0001;
+        sp.check_pos.frame.origin = v(10.0, 20.0, 0.0);
+        sp.global_sphere[0].center = v(10.0, 20.0, 0.0);
+        sp.global_low_point = v(10.0, 20.0, 0.0);
+
+        // outdoor target in landblock (3,2): offset = get_block_offset(
+        //   from = 0x0302_0001, to = 0x0102_0001) = ((1-3)*192,0,0) = (-384,0,0).
+        sp.adjust_check_pos(0x0302_0001);
+
+        assert_eq!(sp.check_pos.objcell_id, 0x0302_0001);
+        assert!(approx(sp.check_pos.frame.origin, v(-374.0, 20.0, 0.0)));
+        assert!(approx(sp.global_sphere[0].center, v(-374.0, 20.0, 0.0)));
+        assert!(approx(sp.global_low_point, v(-374.0, 20.0, 0.0)));
+    }
+
+    #[test]
+    fn adjust_check_pos_interior_only_retags_id() {
+        let mut sp = SpherePath::default();
+        sp.num_sphere = 1;
+        sp.check_pos.objcell_id = 0x0102_0001;
+        sp.check_pos.frame.origin = v(5.0, 5.0, 5.0);
+        sp.global_sphere[0].center = v(5.0, 5.0, 5.0);
+
+        // interior target (low u16 == 0x100 >= 0x100): no block-offset rebase.
+        sp.adjust_check_pos(0x0001_0100);
+
+        assert_eq!(sp.check_pos.objcell_id, 0x0001_0100);
+        assert!(approx(sp.check_pos.frame.origin, v(5.0, 5.0, 5.0)));
+        assert!(approx(sp.global_sphere[0].center, v(5.0, 5.0, 5.0)));
+    }
+
+    // ── SPHEREPATH::check_walkables (acclient.c:313468) ─────────────────────
+
+    #[test]
+    fn check_walkables_no_poly_returns_one() {
+        let mut sp = SpherePath::default();
+        assert!(sp.walkable.is_none());
+        assert_eq!(sp.check_walkables(), 1);
+    }
+
+    #[test]
+    fn check_walkables_resting_on_poly_returns_one_and_halves_radius() {
+        let mut sp = SpherePath::default();
+        sp.walkable = Some(sample_poly()); // triangle in z=0, normal +Z
+        sp.walkable_check_pos = Sphere { center: v(0.2, 0.2, 1.0), radius: 1.0 };
+        sp.walkable_up = v(0.0, 0.0, 1.0);
+        assert_eq!(sp.check_walkables(), 1);
+        // decomp halves walkable_check_pos.radius (persisted side-effect).
+        assert!((sp.walkable_check_pos.radius - 0.5).abs() < TOL);
+    }
+
+    #[test]
+    fn check_walkables_off_face_returns_zero() {
+        let mut sp = SpherePath::default();
+        sp.walkable = Some(sample_poly());
+        sp.walkable_check_pos = Sphere { center: v(5.0, 5.0, 1.0), radius: 0.1 };
+        sp.walkable_up = v(0.0, 0.0, 1.0);
+        assert_eq!(sp.check_walkables(), 0);
+    }
+
+    // ── SPHEREPATH::precipice_slide (acclient.c:313980) ─────────────────────
+
+    #[test]
+    fn precipice_slide_no_walkable_returns_collided() {
+        let mut sp = SpherePath::default();
+        sp.num_sphere = 1;
+        let mut ci = CollisionInfo::default();
+        assert_eq!(sp.precipice_slide(&mut ci), 2);
+        assert!(sp.walkable.is_none());
+    }
+
+    #[test]
+    fn precipice_slide_inside_face_finds_no_edge_returns_collided() {
+        let mut sp = SpherePath::default();
+        sp.num_sphere = 1;
+        sp.walkable = Some(sample_poly());
+        sp.walkable_check_pos = Sphere { center: v(0.2, 0.2, 0.0), radius: 0.1 };
+        sp.walkable_up = v(0.0, 0.0, 1.0);
+        let mut ci = CollisionInfo::default();
+        assert_eq!(sp.precipice_slide(&mut ci), 2);
+        assert!(sp.walkable.is_none()); // latch cleared either way
+    }
+
+    #[test]
+    fn precipice_slide_off_edge_slides_and_clears_walkable() {
+        let mut sp = SpherePath::default();
+        sp.num_sphere = 1;
+        sp.walkable = Some(sample_poly());
+        // projected center well below the y=0 edge → off the face.
+        sp.walkable_check_pos = Sphere { center: v(0.3, -0.5, 0.0), radius: 0.1 };
+        sp.walkable_up = v(0.0, 0.0, 1.0);
+        sp.global_sphere[0].center = v(0.3, -0.5, 0.0);
+        let mut ci = CollisionInfo::default();
+        let r = sp.precipice_slide(&mut ci);
+        assert!(r == 2 || r == 3 || r == 4, "got {r}");
+        assert!(sp.walkable.is_none());
     }
 }

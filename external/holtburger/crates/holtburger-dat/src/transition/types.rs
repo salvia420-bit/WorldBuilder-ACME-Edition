@@ -435,15 +435,23 @@ impl Default for SpherePath {
 // ─── Phase-3 cell ring (CELLARRAY @31574 / CELLINFO @31925) ───────────────
 
 /// Handle to a loaded `CObjCell` (the decomp's `CObjCell *` in `CELLINFO.cell`).
-/// holtburger-world's `SpatialScene` is keyed by cell id, so the driver
-/// resolves a handle → `&dyn CObjCell` at the BSP-walk boundary rather than
-/// this crate owning a cell reference. We model the handle as the cell id
-/// (`u32`), matching `SpherePath::{begin,curr,check,backup}_cell`
-/// (`Option<u32>`). `None` ⇒ not loaded (`do_not_load_cells`) or absent.
-pub type ObjCellHandle = u32;
+///
+/// The Phase-3 reconciliation adopts A10's **fat trait-object handle**
+/// (`Rc<dyn CObjCell>`) so the driver can call the cell's collision vtable
+/// (`find_collisions`, `find_transit_cells`, `point_in_cell`) directly through
+/// the array rather than re-resolving an id → `&dyn CObjCell` at the BSP-walk
+/// boundary. `None` ⇒ the cell is not loaded (`do_not_load_cells`) or absent;
+/// `Some(rc)` ⇒ a loaded cell. (Single-threaded like the client; swap to `Arc`
+/// only if the scene is shared across threads.)
+pub type ObjCellHandle = std::rc::Rc<dyn super::objcell::CObjCell>;
 
 /// `struct CELLINFO` (`acclient.h:31925`). One slot of the cell ring.
-#[derive(Debug, Clone, Default, PartialEq)]
+///
+/// `Clone` only — `Option<Rc<dyn CObjCell>>` is neither `PartialEq` nor
+/// `Default` (the trait carries no `Debug`/`PartialEq` supertrait), so `Debug`
+/// is hand-written (prints `cell_id` + whether the handle is loaded) and the
+/// `Default`/`PartialEq` derives are dropped.
+#[derive(Clone)]
 pub struct CellInfo {
     /// `CELLINFO.cell_id` @0 — the landcell id (always set).
     pub cell_id: u32,
@@ -451,12 +459,26 @@ pub struct CellInfo {
     pub cell: Option<ObjCellHandle>,
 }
 
+impl std::fmt::Debug for CellInfo {
+    /// Hand-written so `CObjCell` needs no `Debug` supertrait. Prints the id
+    /// and whether the fat handle is loaded (the observable shape of the slot).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CellInfo")
+            .field("cell_id", &self.cell_id)
+            .field("cell_loaded", &self.cell.is_some())
+            .finish()
+    }
+}
+
 /// `struct CELLARRAY` (`acclient.h:31574`). The 3×3 ring of cells the driver
 /// sweeps so leaf predicates stay cell-agnostic. The decomp `DArray<CELLINFO>`
-/// collapses to a `Vec<CellInfo>`; the CELLARRAY methods (owned by A09) keep
-/// `num_cells == cells.len()`. `int added_outside` / `int do_not_load_cells`
-/// collapse to `bool`.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// collapses to a `Vec<CellInfo>`; the CELLARRAY methods (A09, in
+/// [`super::objcell`]) keep `num_cells == cells.len()`. `int added_outside` /
+/// `int do_not_load_cells` collapse to `bool`.
+///
+/// `Debug` works because [`CellInfo`] has a manual `Debug`; `Default` works
+/// because `Vec` defaults empty (no `PartialEq` — `CellInfo` carries none).
+#[derive(Debug, Clone, Default)]
 pub struct CellArray {
     /// `added_outside` @0 — the outdoor landblock cell has been appended.
     pub added_outside: bool,
@@ -634,17 +656,29 @@ mod tests {
         assert_eq!(ca.num_cells, 0);
         assert!(ca.cells.is_empty());
 
+        // CELLINFO now carries the fat handle (`Option<Rc<dyn CObjCell>>`),
+        // which is not `PartialEq`/`Default` — so build a null-slot entry and
+        // assert on `cell_id` + `cell.is_some()` (the manual-Debug contract)
+        // instead of `assert_eq!`ing the Option. The loaded-handle (`is_some`)
+        // path + the `num_cells == cells.len()` invariant are exercised by
+        // `objcell::tests::cellarray_add_remove_reset_and_bridge` (a real `Rc`
+        // cell lives there). A null `cell` ⇒ do_not_load / absent landblock.
         let ca = CellArray {
             added_outside: true,
             do_not_load_cells: false,
             num_cells: 2,
             cells: vec![
-                CellInfo { cell_id: 0x0102_0001, cell: Some(0x0102_0001) },
+                CellInfo { cell_id: 0x0102_0001, cell: None },
                 CellInfo { cell_id: 0x0102_0002, cell: None },
             ],
         };
         assert_eq!(ca.cells.len() as u32, ca.num_cells);
-        assert_eq!(ca.cells[0].cell, Some(0x0102_0001));
+        assert_eq!(ca.cells[0].cell_id, 0x0102_0001);
+        assert!(ca.cells[0].cell.is_none());
         assert!(ca.cells[1].cell.is_none());
+
+        // The hand-written Debug prints cell_id + load state (no Rc Debug).
+        let dbg = format!("{:?}", ca.cells[0]);
+        assert!(dbg.contains("cell_id") && dbg.contains("cell_loaded"));
     }
 }

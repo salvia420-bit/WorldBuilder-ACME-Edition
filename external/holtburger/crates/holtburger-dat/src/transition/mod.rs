@@ -39,3 +39,11 @@ pub mod resolver_slide;
 pub mod resolver_collide_pt;
 pub mod resolver_find;
 pub mod spherepath_methods;
+
+// Phase-3 CELL/OBJECTINFO foundation the `CTransition` driver builds on:
+// the `CObjCell` collision abstraction + `CELLARRAY` container/ring assembly
+// (`objcell`), and the `OBJECTINFO` walkable validators (`objectinfo`). The
+// driver methods (transitional_insert/step_*/check_walkable/insert_into_cell/
+// check_other_cells/validate_*) land in a later sub-stage on top of these.
+pub mod objcell;
+pub mod objectinfo;
