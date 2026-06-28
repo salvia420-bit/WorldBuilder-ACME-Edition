@@ -56,7 +56,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use holtburger_common::position::WorldPosition;
-use holtburger_common::{Quaternion, Sphere, Vector3};
+use holtburger_common::{Aabb, Quaternion, Sphere, Vector3};
 
 use holtburger_dat::transition::driver_validate::MovingObjectPhysics;
 use holtburger_dat::transition::frame_transform::Frame;
@@ -109,6 +109,22 @@ pub struct SceneObjCell {
     /// geometry → `find_collisions` is identity (statics / outdoor are handled
     /// elsewhere).
     bsp: Option<CellPhysicsBsp>,
+    /// Phase C: the cell's resident STATIC objects' physics BSPs (each framed to
+    /// WORLD via its own origin/orientation), cloned out of
+    /// [`SpatialScene::cell_static_physics_bsp`]. The faithful analogue of the
+    /// decomp's `CEnvCell` shadow-object list — iterated by [`Self::find_obj_collisions`]
+    /// after the env-cell geometry, so static walls/doors/props stop the mover
+    /// instead of being walked through.
+    statics: Vec<CellPhysicsBsp>,
+    /// The cell's WORLD-space AABB (from [`SpatialScene::cell_aabb`]). Drives
+    /// [`Self::point_in_cell`] so `find_cell_list` re-seats `check_cell` to this
+    /// cell each step instead of nulling it (the base trait `point_in_cell`
+    /// returns false, which would disable collision after the first step).
+    /// VERIFY(1070): the decomp's `CEnvCell::point_in_cell` (acclient.c:347935)
+    /// uses the precise cell-membership BSP (`CellStruct.cell_bsp`, carried in
+    /// [`super::scene::CellMembership`]); the AABB is a looser client-side bound
+    /// — adequate for the single-cell indoor sweep, refine for cross-portal.
+    aabb: Option<Aabb>,
     /// `((CEnvCell*)this)->stab_list` — the portal-visible neighbour cell ids
     /// (the cell ring `find_transit_cells` floods).
     portal_neighbours: Vec<u32>,
@@ -150,6 +166,27 @@ impl CObjCell for SceneObjCell {
         self.portal_neighbours.clone()
     }
 
+    /// `CEnvCell::point_in_cell` (acclient.c:347935) — does `point` (WORLD space
+    /// for same-landblock queries: `find_cell_list` passes
+    /// `global_sphere[0].center − block_offset`) lie inside this cell? Used by
+    /// `find_cell_list` to re-seat `check_cell` each step. Without this the base
+    /// returns false and `check_other_cells` nulls `check_cell`, silently
+    /// disabling collision after step 0. Uses the cell AABB (see the `aabb`
+    /// field's VERIFY note on the precise membership-BSP form).
+    fn point_in_cell(&self, point: Vector3) -> bool {
+        match self.aabb {
+            Some(a) => {
+                point.x >= a.min.x
+                    && point.x <= a.max.x
+                    && point.y >= a.min.y
+                    && point.y <= a.max.y
+                    && point.z >= a.min.z
+                    && point.z <= a.max.z
+            }
+            None => false,
+        }
+    }
+
     /// `CEnvCell::find_transit_cells` (acclient.c:348250) — flood the portal
     /// neighbour cell ids into the ring. Phase A appends them with NULL handles:
     /// the PRIMARY (player's own) cell is collision-tested faithfully via
@@ -170,42 +207,80 @@ impl CObjCell for SceneObjCell {
         }
     }
 
-    /// `CEnvCell::find_collisions` (acclient.c:347816) — env collisions, then
-    /// object collisions. Phase A: cache the swept sphere into the cell-local
-    /// frame and run the Phase-2 resolver over the physics BSP (env-cell
-    /// faithful); object collisions are identity (`find_obj_collisions` → 1).
+    /// `CEnvCell::find_collisions` (acclient.c:347816) — env collisions FIRST,
+    /// then object/static collisions, and only when the env pass returned OK
+    /// (decomp 347816-347818). A cell with no env BSP still runs its statics
+    /// (an unbaked-environment cell can carry resident static objects).
     fn find_collisions(&self, transition: &mut CTransition) -> i32 {
-        let Some(bsp) = self.bsp.as_ref() else {
-            // No narrow-phase geometry → OK (no collision). Matches the existing
-            // pipeline's unbaked-cell pass-through.
-            return TransitionState::OK as i32;
-        };
         let scale = if transition.object_info.scale != 0.0 {
             transition.object_info.scale
         } else {
             1.0
         };
-        // SPHEREPATH::cache_localspace_sphere(&this->pos, scale) — the resolver's
-        // localspace_* input.
-        transition
-            .sphere_path
-            .cache_localspace_sphere(&self.pos, scale);
-        // BSPTREE::find_collisions(transition, scale) over the cell-local tree.
-        let env = holtburger_dat::transition::resolver_find::find_collisions(
-            &bsp.tree,
-            transition,
-            scale,
-            &bsp.polys,
-        );
-        if env != TransitionState::OK as i32 {
-            return env;
+        if let Some(bsp) = self.bsp.as_ref() {
+            // SPHEREPATH::cache_localspace_sphere(&this->pos, scale) — the
+            // resolver's localspace_* input — then BSPTREE::find_collisions over
+            // the cell-local environment tree.
+            transition
+                .sphere_path
+                .cache_localspace_sphere(&self.pos, scale);
+            let env = holtburger_dat::transition::resolver_find::find_collisions(
+                &bsp.tree,
+                transition,
+                scale,
+                &bsp.polys,
+            );
+            if env != TransitionState::OK as i32 {
+                return env;
+            }
         }
-        // Object/static collisions — identity for Phase A (Phase C).
+        // Object/static collisions (Phase C).
         self.find_obj_collisions(transition)
     }
 
-    /// Statics / object collisions are identity in Phase A (Phase C wires them).
-    fn find_obj_collisions(&self, _transition: &mut CTransition) -> i32 {
+    /// `CObjCell::find_obj_collisions` (acclient.c:347142) — sweep the mover
+    /// against each resident static object's physics BSP. The decomp instantiates
+    /// stabs as `CPhysicsObj` shadow objects and runs `CPhysicsObj::FindObjCollisions`
+    /// per object, **breaking on the first non-OK result** (acclient.c:347151-347169);
+    /// object collisions are skipped entirely for an INITIAL placement insert
+    /// (`insert_type != 2`). Each static here is a `CellPhysicsBsp` framed to world
+    /// via its own origin/orientation, so we cache the swept sphere into the
+    /// static's frame (`cache_localspace_sphere`) and run the same Phase-2 resolver
+    /// the env pass uses (`CGfxObj::find_obj_collisions` → `BSPTREE::find_collisions`).
+    fn find_obj_collisions(&self, transition: &mut CTransition) -> i32 {
+        // acclient.c:347151 — `if ( insert_type != 2 )`: statics are not tested
+        // during the initial placement probe.
+        if transition.sphere_path.insert_type
+            == holtburger_dat::transition::types::InsertType::InitialPlacement
+        {
+            return TransitionState::OK as i32;
+        }
+        let scale = if transition.object_info.scale != 0.0 {
+            transition.object_info.scale
+        } else {
+            1.0
+        };
+        for st in &self.statics {
+            // The static's WORLD frame (origin + orientation basis) — the part
+            // pose `CPhysicsPart::find_obj_collisions` caches into (acclient.c:314669).
+            let st_pos = Position {
+                objcell_id: self.cell_id,
+                frame: frame_from(st.orientation, st.origin),
+            };
+            transition
+                .sphere_path
+                .cache_localspace_sphere(&st_pos, scale);
+            let r = holtburger_dat::transition::resolver_find::find_collisions(
+                &st.tree,
+                transition,
+                scale,
+                &st.polys,
+            );
+            // acclient.c:347162 — first object whose result != OK wins.
+            if r != TransitionState::OK as i32 {
+                return r;
+            }
+        }
         TransitionState::OK as i32
     }
 }
@@ -233,8 +308,10 @@ impl<'a> SceneWorld<'a> {
     /// CLONE of the cell's physics BSP (`'static` requirement).
     fn build_cell(&self, cell_id: u32) -> Option<Rc<dyn CObjCell>> {
         let bsp = self.scene.cell_physics_bsp(cell_id).cloned();
+        let statics = self.scene.cell_static_physics_bsp(cell_id).to_vec();
+        let aabb = self.scene.cell_aabb(cell_id);
         let portal_neighbours = self.scene.cell_portal_neighbours(cell_id).to_vec();
-        if bsp.is_none() && portal_neighbours.is_empty() {
+        if bsp.is_none() && statics.is_empty() && portal_neighbours.is_empty() {
             // Not resident → the decomp's GetVisible returns null.
             return None;
         }
@@ -252,6 +329,8 @@ impl<'a> SceneWorld<'a> {
             cell_id,
             pos,
             bsp,
+            statics,
+            aabb,
             portal_neighbours,
         };
         Some(Rc::new(cell) as Rc<dyn CObjCell>)
@@ -1004,6 +1083,79 @@ mod drift {
         assert_in_cell_aabb(&env, &f);
         assert_no_overshoot(&begin, &end, &f);
         assert_pose_roundtrips_driver(&env, &input, &f);
+    }
+
+    // ── (b') Phase C: a resident STATIC object stops the mover ──
+    // The cell ENVIRONMENT is a bare floor; the WALL is a resident static object
+    // fed via `cell_static_physics_bsp` (NOT the env BSP). A player walking into
+    // it must STOP — exercising `SceneObjCell::find_obj_collisions`. Control: the
+    // SAME scene minus the static walks straight through, proving the static BSP
+    // (not the floor/env) is what blocks.
+    #[test]
+    fn faithful_static_object_stops_mover() {
+        fn floor_only_scene() -> SpatialScene {
+            let o = cell_origin();
+            let mut floor = HashMap::new();
+            floor.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+            let mut scene = SpatialScene::new();
+            scene.insert_cell_physics_bsp(CELL_ID, bsp_from(floor));
+            seed_common(
+                &mut scene,
+                floor_tris_world(o.x - HE, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ),
+            );
+            scene
+        }
+        // A static wall quad at cell-local x=WALL_X_LOCAL (N=−X faces the +x
+        // approach), framed to world at the cell origin (identity orientation).
+        fn static_wall_bsp() -> CellPhysicsBsp {
+            let mut wallp = HashMap::new();
+            wallp.insert(
+                1u16,
+                poly(vec![
+                    v(WALL_X_LOCAL, -HE, 0.0),
+                    v(WALL_X_LOCAL, -HE, WALL_H),
+                    v(WALL_X_LOCAL, HE, WALL_H),
+                    v(WALL_X_LOCAL, HE, 0.0),
+                ]),
+            );
+            bsp_from(wallp)
+        }
+
+        let begin = pose_at(FCX, FCY, FLOOR_WZ);
+        let end = pose_at(FCX + 2.0, FCY, FLOOR_WZ); // horizontal walk (grounded)
+        let input = input_for(begin, end);
+        let wall_x = FCX + WALL_X_LOCAL; // landblock-local x of the wall face
+
+        // WITH the static wall.
+        let mut scene = floor_only_scene();
+        scene.insert_cell_static_physics_bsp(CELL_ID, static_wall_bsp());
+        assert_eq!(scene.cell_static_physics_bsp_count(), 1);
+        let env = DriftEnv { scene };
+        let with = faithful_find_transitional_position(&env, &input);
+
+        // CONTROL: no static (env floor only).
+        let ctrl = DriftEnv { scene: floor_only_scene() };
+        let without = faithful_find_transitional_position(&ctrl, &input);
+
+        eprintln!(
+            "static-object: WITH x={:.4}  WITHOUT x={:.4}  wall_x={wall_x}",
+            with.pose.coords.x, without.pose.coords.x
+        );
+
+        // The static stops the mover at/short of the wall face …
+        assert!(
+            with.pose.coords.x <= wall_x + 1e-2,
+            "static object did not stop the mover: x={} wall_x={wall_x}",
+            with.pose.coords.x
+        );
+        // … and the control (no static) advances clearly further (the static BSP,
+        // not the floor, is what blocks).
+        assert!(
+            without.pose.coords.x > with.pose.coords.x + 0.25,
+            "control should advance past the stopped position: with={} without={}",
+            with.pose.coords.x, without.pose.coords.x
+        );
+        assert_in_cell_aabb(&env, &with);
     }
 
     // ── (c) step down a ledge ──

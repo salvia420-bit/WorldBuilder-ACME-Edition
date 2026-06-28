@@ -453,6 +453,23 @@ pub struct SpatialScene {
     /// (see [`CellPhysicsBsp::world_to_local`]). Cleared on landblock
     /// unload alongside `cell_physics_index`.
     cell_physics_bsp: Arc<HashMap<u32, CellPhysicsBsp>>,
+    /// Phase C (2026-06-28): per-cell PRECISE physics BSPs for an EnvCell's
+    /// resident STATIC OBJECTS (the `stab_list` — furniture, doors, props),
+    /// keyed by full 32-bit cell id. The indoor twin of `statics_physics_bsp`
+    /// (which is outdoor/per-landblock): each [`CellPhysicsBsp`] is one static's
+    /// `GfxObj.physics_bsp` + resolved polys, framed to WORLD via the placement
+    /// origin/orientation. `cell_physics_bsp` carries only the cell ENVIRONMENT
+    /// (walls/floor/ceiling); a cell's statics are NOT baked into it, so the
+    /// faithful driver tests them separately via
+    /// [`super::faithful_bridge::SceneObjCell::find_obj_collisions`]. Cleared on
+    /// landblock unload alongside `cell_physics_bsp`.
+    ///
+    /// LIVE FEED (TODO, wasm-only): nothing populates this yet — the wasm
+    /// bundle's `fetchEnvCellsInLandblock` static-object loop currently builds
+    /// render-only `StaticObjectPlacement`s. A populate pass mirroring the
+    /// outdoor `populateStaticsAabbsForLandblock` BSP extraction must push each
+    /// stab's resolved physics BSP here for the gap to close on the live path.
+    cell_static_physics_bsp: Arc<HashMap<u32, Vec<CellPhysicsBsp>>>,
     /// Terrain→EnvCell entry (2026-06-02): per-cell MEMBERSHIP bsp
     /// (`CellStruct.cell_bsp`) + cell frame, keyed by full 32-bit cell
     /// id (parallel to `cell_physics_bsp`). Populated by
@@ -657,6 +674,7 @@ impl SpatialScene {
             cell_seen_outside: Arc::new(HashMap::new()),
             cell_physics_index: Arc::new(HashMap::new()),
             cell_physics_bsp: Arc::new(HashMap::new()),
+            cell_static_physics_bsp: Arc::new(HashMap::new()),
             cell_membership: Arc::new(HashMap::new()),
             cell_portal_polygons: Arc::new(HashMap::new()),
             door_part_index: HashMap::new(),
@@ -1043,6 +1061,9 @@ impl SpatialScene {
         // BSP collision (PASS 1): same lifetime as cell_physics_index.
         Arc::make_mut(&mut self.cell_physics_bsp)
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
+        // Phase C: per-cell static physics BSPs share the cell lifetime.
+        Arc::make_mut(&mut self.cell_static_physics_bsp)
+            .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         // Terrain→EnvCell entry: cell-membership trees share the
         // EnvCell lifetime like the physics BSP.
         Arc::make_mut(&mut self.cell_membership)
@@ -1193,6 +1214,32 @@ impl SpatialScene {
     /// BSP. Diagnostic only.
     pub fn cell_physics_bsp_count(&self) -> usize {
         self.cell_physics_bsp.len()
+    }
+
+    /// Phase C (2026-06-28): append one resident static's physics BSP for
+    /// `cell_id`. Append-only (a cell holds many statics); the per-landblock
+    /// clear on unload keeps it bounded. Mirrors `insert_static_physics_bsp`
+    /// (the outdoor twin) but keyed by full cell id.
+    pub fn insert_cell_static_physics_bsp(&mut self, cell_id: u32, bsp: CellPhysicsBsp) {
+        Arc::make_mut(&mut self.cell_static_physics_bsp)
+            .entry(cell_id)
+            .or_default()
+            .push(bsp);
+    }
+
+    /// Phase C: the resident static physics BSPs for `cell_id` (or `&[]` when
+    /// the cell has none / isn't loaded). Iterated by the faithful driver's
+    /// per-cell `find_obj_collisions`.
+    pub fn cell_static_physics_bsp(&self, cell_id: u32) -> &[CellPhysicsBsp] {
+        self.cell_static_physics_bsp
+            .get(&cell_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Phase C: total registered per-cell static physics-BSP count. Diagnostic.
+    pub fn cell_static_physics_bsp_count(&self) -> usize {
+        self.cell_static_physics_bsp.values().map(|v| v.len()).sum()
     }
 
     /// Terrain→EnvCell entry (2026-06-02): register a cell-membership
