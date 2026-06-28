@@ -104,8 +104,37 @@ pub mod scenes {
     }
 
     /// Vertical wall: x = 0, y ∈ [0,2], z ∈ [0,3], N = +X. `N.z = 0` ⇒ wall.
+    /// NB: NO floor — a mover here can never hold a contact plane, so
+    /// `validate_transition` clears its CONTACT bit every step
+    /// (`driver_validate.rs:183-194`). Models the AIRBORNE/non-CONTACT case.
     pub fn vertical_wall() -> Scene {
         let mut m = HashMap::new();
+        m.insert(
+            1u16,
+            quad(
+                [v(0.0, 0.0, 0.0), v(0.0, 2.0, 0.0), v(0.0, 2.0, 3.0), v(0.0, 0.0, 3.0)],
+                v(1.0, 0.0, 0.0),
+                0.0,
+            ),
+        );
+        Scene::from_polys(m, v(0.0, 1.0, 1.5), 100.0)
+    }
+
+    /// Walkable floor (z = 0, N = +Z, x ∈ [-3,3]) meeting a vertical wall
+    /// (x = 0, N = +X, z ∈ [0,3]). Models a GROUNDED player walking into a wall:
+    /// the floor supplies a contact plane every step, so the mover keeps its
+    /// CONTACT bit and the wall hit routes through the slide branch
+    /// (`resolver_find.rs:214`) — unlike the floorless [`vertical_wall`].
+    pub fn floor_and_wall() -> Scene {
+        let mut m = HashMap::new();
+        m.insert(
+            0u16,
+            quad(
+                [v(-3.0, 0.0, 0.0), v(3.0, 0.0, 0.0), v(3.0, 2.0, 0.0), v(-3.0, 2.0, 0.0)],
+                v(0.0, 0.0, 1.0),
+                0.0,
+            ),
+        );
         m.insert(
             1u16,
             quad(
@@ -379,6 +408,18 @@ pub mod build {
         }
     }
 
+    /// A GROUNDED walking player: [`walker`] with the CONTACT bit set, i.e. a
+    /// player already standing on a walkable surface. CONTACT is the resolver's
+    /// discriminator that routes a wall hit through the slide path
+    /// (`resolver_find.rs:214`); a non-CONTACT mover instead treats the wall as
+    /// a landing candidate (`:259`). Pair with [`scenes::floor_and_wall`] so the
+    /// floor's contact plane keeps CONTACT set across steps.
+    pub fn grounded_walker(step_up_height: f32, step_down_height: f32) -> ObjectInfo {
+        let mut o = walker(step_up_height, step_down_height);
+        o.state |= object_info_state::CONTACT;
+        o
+    }
+
     /// A single-sphere `CTransition` sweeping a radius-`r` collision sphere from
     /// world `from` to world `to`, in `cell_id`, with `object`. The global
     /// sphere cache is seeded from `check_pos` (the driver's `init_sphere` would).
@@ -639,27 +680,57 @@ mod tests {
         assert!(t.sphere_path.curr_pos.frame.origin.x > 1.0);
     }
 
-    // B4-B FINDING (2026-06-28): the faithful driver walks a player STRAIGHT
-    // THROUGH a wall end-to-end (final_x = -2, the full target; code=1). The
-    // 250 B2/B3 tests only asserted termination + valid codes, so they missed
-    // this. LOCALIZED:
-    //   - The resolver + transitional_insert DO detect the wall: a direct
-    //     find_collisions / transitional_insert returns COLLIDED=2 (probe C
-    //     below; cf. wall_sidesweep_adjusts_with_horizontal_normal).
-    //   - But transitional_insert returns COLLIDED while leaving check_pos AT
-    //     the penetrating position (probe C: check_x=0, backup_x=0 — not
-    //     backed up), and find_transitional_position's loop only HARD-STOPS on
-    //     `collision_normal && PATH_CLIPPED (0x8)` (driver_validate.rs:471). A
-    //     walker is ON_WALKABLE|IS_PLAYER (not PATH_CLIPPED), so it relies on
-    //     adjust_offset (driver_validate.rs:413) projecting the step onto the
-    //     wall's sliding plane — that slide is NOT engaging, so it walks through.
-    //   FIX (own session): the non-path-clipped collision RESPONSE — ensure a
-    //   wall hit sets the sliding_normal/contact_plane that adjust_offset reads
-    //   (or clamps check_pos), so the X-into-wall step projects to ~0. Un-ignore
-    //   when it lands. (Marshalling/bridge is correct — it maps what the driver
-    //   produces; this is a holtburger-dat driver-fidelity gap.)
+    // PAYOFF (2026-06-28): a GROUNDED walker (CONTACT held by a floor) walking
+    // into a wall STOPS instead of passing through — the realistic counterpart
+    // to the floorless `..._walker_blocked_by_wall_...` probe below. With CONTACT
+    // set, the sphere[0] wall hit routes through the SLIDE branch
+    // (resolver_find.rs:214 → step_sphere_up → step_up fails on a vertical wall →
+    // step_up_slide → slide_sphere, which stamps the horizontal collision_normal);
+    // validate_transition promotes collision_normal → sliding_normal
+    // (driver_validate.rs:132-134) and the NEXT step's adjust_offset zeroes the
+    // into-wall component. So the sphere center must NOT cross the wall.
     #[test]
-    #[ignore = "B4-B: faithful driver walks through walls; find_transitional_position slide/clamp not engaging for non-PATH_CLIPPED movers (see comment)"]
+    fn find_transitional_grounded_walker_stops_at_wall() {
+        // Grounded walker rests on z=0 (center z = radius = 0.5), walks x=2 → -2
+        // into a wall at x=0 (N=+X). Expected stop ≈ one radius out (x ≈ 0.5).
+        let (code, t) = drive_find(
+            scenes::floor_and_wall(),
+            build::grounded_walker(0.5, 0.5),
+            v(2.0, 1.0, 0.5),
+            v(-2.0, 1.0, 0.5),
+            0.5,
+        );
+        let x = t.sphere_path.curr_pos.frame.origin.x;
+        println!("DIAG grounded walker: code={code} final_x={x}");
+        assert!(x >= 0.0, "grounded walker passed THROUGH the wall: final x = {x} (code {code})");
+        assert!(x < 2.0, "grounded walker never advanced toward the wall: final x = {x}");
+    }
+
+    // B4-B FINDING (2026-06-28, root cause corrected 2026-06-28): the faithful
+    // driver walks a player STRAIGHT THROUGH this wall end-to-end (final_x = -2;
+    // code=1). The CTransition algorithm is decomp-faithful — the passthrough is
+    // a FIXTURE/STATE issue, not the slide math:
+    //   - This scene is `vertical_wall()` — a bare wall with NO FLOOR. The mover
+    //     therefore never holds a contact plane, so validate_transition clears
+    //     its CONTACT bit every step (driver_validate.rs:183-194).
+    //   - CONTACT is the resolver's discriminator (resolver_find.rs:214): only a
+    //     CONTACT mover routes a sphere[0] wall hit through step_sphere_up /
+    //     slide_sphere (which stamps the horizontal collision_normal). A
+    //     non-CONTACT mover takes the `:259` branch, which treats the wall as a
+    //     LANDING candidate (set_collide → ADJUSTED) and never produces a usable
+    //     sliding_normal — so adjust_offset has nothing to project and the
+    //     X-into-wall step stays full.
+    //   The GROUNDED counterpart `..._grounded_walker_stops_at_wall` (above) is
+    //   the realistic case and PASSES. This probe is retained as the honest
+    //   AIRBORNE/non-CONTACT facet: a player jumping/falling into a wall still
+    //   passes through. FIX (own session): make the non-CONTACT wall hit stop via
+    //   transitional_insert's collide block (collision_normal = step_up_normal)
+    //   rather than silently returning ADJUSTED. Un-ignore when it lands.
+    //   (Marshalling/bridge is correct; this is a holtburger-dat driver-fidelity
+    //   gap for the airborne case — and SEPARATELY the live faithful path stubs
+    //   static-object collision: faithful_bridge.rs find_obj_collisions → OK.)
+    #[test]
+    #[ignore = "airborne/non-CONTACT mover walks through walls (no floor ⇒ CONTACT cleared ⇒ wall takes the landing branch, not the slide branch); see comment"]
     fn find_transitional_walker_blocked_by_wall_does_not_pass_through() {
         // Walker starts CLEAR of the wall (x=2, r=0.5; wall plane at x=0, N=+X),
         // walks to x=-2. A faithful driver must NOT let the sphere center cross
