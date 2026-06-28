@@ -29,3 +29,13 @@ pub mod bspnode_walkable;
 pub mod bsptree_adjust;
 pub mod collisioninfo;
 pub mod frame_transform;
+
+// Phase-2 resolver layer — the swept-step driver on top of the leaf
+// predicates (`BSPTREE::find_collisions` + branch helpers + the SPHEREPATH
+// mutators they call). Authored by the Phase-2 fan-out agents (01–06).
+pub mod resolver_check_walkable;
+pub mod resolver_step_down;
+pub mod resolver_slide;
+pub mod resolver_collide_pt;
+pub mod resolver_find;
+pub mod spherepath_methods;
