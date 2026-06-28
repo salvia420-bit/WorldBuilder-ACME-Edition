@@ -90,7 +90,7 @@ import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees } from "./an
 // Tree wind sway (?treeWind, default-OFF). When off, the peel below never runs
 // and `statics` is unchanged → byte-identical frozen instanced path.
 import { treeWindEnabled, isTreeDid, windGeoEnabled } from "./tree_wind.js";
-import { statAtlasEnabled, consolidateSingletonsViaTexArray } from "./static_atlas.js";
+import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb } from "./static_atlas.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
@@ -1984,6 +1984,36 @@ export async function bakeStaticsForLandblock(
       };
     }
   }
+  // ?statAtlas (default-OFF) — SECOND feed seam: route this LB's plain-Mesh
+  // singletons (walk-in / re-entry) into the SAME global cross-LB size buckets the
+  // boot ring feeds, so movement past the boot ring keeps the draw-call win. Keyed
+  // on _atlasBakedLbs (hasAtlasLb), INDEPENDENT of staticsBakedLbs/step-6b. LOD /
+  // transparent-without-image.data / no-uv singletons fall through to the existing
+  // staticsGroup.add path. Flag-off: the whole block is skipped → byte-identical.
+  if (statAtlasEnabled() && !hasAtlasLb(lbKey)) {
+    try {
+      const atlasable = [];
+      const rest = [];
+      for (const node of nodesToAdd) {
+        const m = node && node.material;
+        const t = m && m.map;
+        const img = t && t.image;
+        if (node && node.isMesh && !node.isLOD && node.geometry && node.geometry.attributes?.uv && t && img && img.data) {
+          atlasable.push(node);
+        } else {
+          rest.push(node);
+        }
+      }
+      if (atlasable.length > 0) {
+        const { passthrough } = addSingletonsToCrossLbAtlas(atlasable, scene3d);
+        nodesToAdd = rest.concat(passthrough);
+      }
+    } catch (e) {
+      // fail-soft: keep the unbatched nodesToAdd as-is.
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.statics/statAtlas per-LB] failed, adding singletons unbatched:", String(e?.message ?? e));
+    }
+  }
   for (const node of nodesToAdd) scene3d.staticsGroup.add(node);
 
   // V1 (2026-05-29) — run each scenery placement's `default_script`
@@ -2580,14 +2610,15 @@ export async function bakeStaticsRing(
     }
   }
   // ?statAtlas (default-OFF, opt-in eye-test): collapse the ring's unique-material
-  // singletons into per-(LB,size) sampler2DArray-batched merged meshes. ~5,400 lone
-  // draws -> a few dozen. Fail-soft: on error add the singletons unbatched.
+  // singletons into GLOBAL (cross-LB) size-bucket BatchedMeshes — ~5,400 lone draws
+  // -> ~20-30 multidraw calls. The bucket BatchedMeshes self-add to staticsGroup;
+  // each LB's per-LB eviction is handled by scene3d._evictStaticAtlasForLb (installed
+  // by addSingletonsToCrossLbAtlas). Fail-soft: on error add the singletons unbatched.
   if (statAtlasEnabled() && ringSingletons.length > 0) {
     try {
-      const { meshes, passthrough } = consolidateSingletonsViaTexArray(ringSingletons);
-      for (const m of meshes) scene3d.staticsGroup.add(m);
+      const { passthrough } = addSingletonsToCrossLbAtlas(ringSingletons, scene3d);
       for (const n of passthrough) scene3d.staticsGroup.add(n);
-      mark(`stage3: statAtlas ${ringSingletons.length} singletons -> ${meshes.length} atlas + ${passthrough.length} passthrough`);
+      mark(`stage3: statAtlas ${ringSingletons.length} singletons -> cross-LB buckets + ${passthrough.length} passthrough`);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[scene3d.statics/statAtlas] failed, adding singletons unbatched:", String(e?.message ?? e));
