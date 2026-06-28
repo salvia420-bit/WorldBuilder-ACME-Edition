@@ -90,6 +90,7 @@ import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees } from "./an
 // Tree wind sway (?treeWind, default-OFF). When off, the peel below never runs
 // and `statics` is unchanged → byte-identical frozen instanced path.
 import { treeWindEnabled, isTreeDid, windGeoEnabled } from "./tree_wind.js";
+import { statAtlasEnabled, consolidateSingletonsViaTexArray } from "./static_atlas.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
@@ -2447,6 +2448,9 @@ export async function bakeStaticsRing(
   // eviction). Singletons carry `userData.landblockId` and are evicted by
   // the existing per-LB walker, so they are NOT collected here.
   const instancedNodes = [];
+  // ?statAtlas (default-OFF): collect singleton-branch nodes for texture-array
+  // batching after the loop. Flag off => stays empty, singletons add directly.
+  const ringSingletons = [];
   // B3 (busted-world load fix) — frame-budget the BOOT RING emit loop.
   // The per-LB baker already time-slices its singleton build (F3, the
   // `?noStaticsTimeSlice` gate); the radius-6 boot ring previously
@@ -2555,7 +2559,8 @@ export async function bakeStaticsRing(
           staticsMatCastsShadow,
           staticsReceiveShadow,
         });
-        scene3d.staticsGroup.add(node);
+        if (statAtlasEnabled()) ringSingletons.push(node); // batched after the loop (perf, opt-in)
+        else scene3d.staticsGroup.add(node);
         singletonCount += 1;
         if (isLod) lodCount += 1;
       }
@@ -2572,6 +2577,21 @@ export async function bakeStaticsRing(
     ) > STATICS_BUILD_BUDGET_MS) {
       await new Promise((r) => setTimeout(r, 0));
       _ringChunkStart = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    }
+  }
+  // ?statAtlas (default-OFF, opt-in eye-test): collapse the ring's unique-material
+  // singletons into per-(LB,size) sampler2DArray-batched merged meshes. ~5,400 lone
+  // draws -> a few dozen. Fail-soft: on error add the singletons unbatched.
+  if (statAtlasEnabled() && ringSingletons.length > 0) {
+    try {
+      const { meshes, passthrough } = consolidateSingletonsViaTexArray(ringSingletons);
+      for (const m of meshes) scene3d.staticsGroup.add(m);
+      for (const n of passthrough) scene3d.staticsGroup.add(n);
+      mark(`stage3: statAtlas ${ringSingletons.length} singletons -> ${meshes.length} atlas + ${passthrough.length} passthrough`);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.statics/statAtlas] failed, adding singletons unbatched:", String(e?.message ?? e));
+      for (const n of ringSingletons) scene3d.staticsGroup.add(n);
     }
   }
   mark(`stage3: build+add ${placementsByModel.size} groups (inst=${instancedGroupCount}, single=${singletonCount})`);
