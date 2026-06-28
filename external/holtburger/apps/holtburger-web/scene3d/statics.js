@@ -89,7 +89,7 @@ import { particleClockMode, rng } from "./particles/time_rng.js";
 import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees } from "./animated_scenery.js";
 // Tree wind sway (?treeWind, default-OFF). When off, the peel below never runs
 // and `statics` is unchanged → byte-identical frozen instanced path.
-import { treeWindEnabled, isTreeDid } from "./tree_wind.js";
+import { treeWindEnabled, isTreeDid, windGeoEnabled } from "./tree_wind.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
@@ -1700,12 +1700,17 @@ export async function bakeStaticsForLandblock(
   // Tree wind (?treeWind) — peel allowlisted tree DIDs out of the frozen path,
   // AFTER the anim peel so the two sets are disjoint. Off ⇒ statics unchanged.
   let windTrees = null;
-  if (treeWindEnabled() || visualEnabled()) {
-    if (visualEnabled()) { try { await ensureVfxCatalog(); } catch (_) {} }
+  // 2026-06-27 perf fix: gate the wind GEOMETRY peel on windGeoEnabled() (DEFAULT-OFF),
+  // NOT visualEnabled() (default-ON). Coupling it to the visual suite de-instanced ~4096
+  // Holtburg trees into ~17k individual meshes -> 1 fps / 968 ms CPU (measured, GTX 1070);
+  // keeping them frozen+instanced restores 12 fps / 47 ms CPU. The frag-VFX suite stays on
+  // via visualEnabled() elsewhere; ?treeWind=on or ?windGeo=on opts back into animated trees.
+  if (treeWindEnabled() || windGeoEnabled()) {
+    if (windGeoEnabled()) { try { await ensureVfxCatalog(); } catch (_) {} }
     const isWind = (p) => {
       const did = (p?.modelId >>> 0) || 0;
       return (treeWindEnabled() && isTreeDid(did)) ||
-             (visualEnabled() && windResponds(vfxDescriptorFor(did)));
+             (windGeoEnabled() && windResponds(vfxDescriptorFor(did)));
     };
     const t = statics.filter(isWind);
     if (t.length > 0) {
@@ -2264,12 +2269,17 @@ export async function bakeStaticsRing(
   // Tree wind (?treeWind) — peel allowlisted tree DIDs (ring path), AFTER the
   // anim peel so the sets are disjoint. Off ⇒ statics unchanged.
   let windTrees = null;
-  if (treeWindEnabled() || visualEnabled()) {
-    if (visualEnabled()) { try { await ensureVfxCatalog(); } catch (_) {} }
+  // 2026-06-27 perf fix: gate the wind GEOMETRY peel on windGeoEnabled() (DEFAULT-OFF),
+  // NOT visualEnabled() (default-ON). Coupling it to the visual suite de-instanced ~4096
+  // Holtburg trees into ~17k individual meshes -> 1 fps / 968 ms CPU (measured, GTX 1070);
+  // keeping them frozen+instanced restores 12 fps / 47 ms CPU. The frag-VFX suite stays on
+  // via visualEnabled() elsewhere; ?treeWind=on or ?windGeo=on opts back into animated trees.
+  if (treeWindEnabled() || windGeoEnabled()) {
+    if (windGeoEnabled()) { try { await ensureVfxCatalog(); } catch (_) {} }
     const isWind = (p) => {
       const did = (p?.modelId >>> 0) || 0;
       return (treeWindEnabled() && isTreeDid(did)) ||
-             (visualEnabled() && windResponds(vfxDescriptorFor(did)));
+             (windGeoEnabled() && windResponds(vfxDescriptorFor(did)));
     };
     const t = statics.filter(isWind);
     if (t.length > 0) {

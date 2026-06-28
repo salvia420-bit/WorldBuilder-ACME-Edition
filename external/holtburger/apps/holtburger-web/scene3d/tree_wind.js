@@ -69,6 +69,24 @@ export function windBakeEnabled() {
   return (_windBake = on);
 }
 
+let _windGeo;
+/** `?windGeo=on` — let the VISUAL suite peel wind-responsive foliage out of the
+ *  frozen InstancedMesh path and rebuild it as individual animated wind nodes.
+ *  DEFAULT-OFF (2026-06-27). It was previously coupled to `visualEnabled()` (default-ON),
+ *  which de-instanced ~4096 trees at Holtburg into ~17k individual meshes — measured on
+ *  a real GTX 1070 as 1 fps / 968 ms CPU per frame; re-freezing to instanced restored
+ *  12 fps / 47 ms CPU (8x faster, 20x less CPU). Default-OFF keeps trees frozen+instanced
+ *  (retail-faithful — retail trees are frozen) and fast; `?treeWind=on` OR `?windGeo=on`
+ *  opt back into the animated (slow) peel. The frag-VFX suite (emissive/weathering/
+ *  particles) stays ON via `visualEnabled()` regardless. */
+export function windGeoEnabled() {
+  if (_windGeo !== undefined) return _windGeo;
+  let on = false;
+  const v = _strFlag("windGeo");
+  if (v != null) { const s = v.toLowerCase(); on = s === "on" || s === "1" || s === "true" || s === "yes"; }
+  return (_windGeo = on);
+}
+
 // Phase-1 allowlist of scenery SetupModel DIDs to animate. Seeded from the
 // verified top-placement foliage/trees (client_portal.dat survey 2026-06-23).
 // The bbox base-pivot rig (wind_rig.js) pivots each part about its own vertex
