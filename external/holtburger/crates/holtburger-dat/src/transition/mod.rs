@@ -47,3 +47,17 @@ pub mod spherepath_methods;
 // check_other_cells/validate_*) land in a later sub-stage on top of these.
 pub mod objcell;
 pub mod objectinfo;
+
+// Phase-3 B2b/B2c — the `CTransition` DRIVER on top of the foundation: the
+// recursive spine (transitional_insert/step_up/step_down/check_walkable), the
+// cell-collision dispatch (check_collisions/insert_into_cell/check_other_cells/
+// build_cell_array), and the transition validation + top dispatcher
+// (validate_transition/validate_placement_transition/find_valid_position).
+pub mod driver_spine;
+pub mod driver_cell_dispatch;
+pub mod driver_validate;
+
+// Shared synthetic-cell test harness (A16) — exercises the spine end-to-end
+// against the real foundation `CObjCell` + the committed Phase-2 resolver.
+#[cfg(test)]
+pub mod test_utils;

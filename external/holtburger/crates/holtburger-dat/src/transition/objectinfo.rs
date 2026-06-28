@@ -39,6 +39,21 @@ impl ObjectInfo {
         normal.z >= FLOOR_Z
     }
 
+    /// `OBJECTINFO::kill_velocity` (`acclient.c:314148`). The decomp body is
+    /// `CPhysicsObj::set_velocity(this->object, &{0,0,0}, 0)` — it zeroes the
+    /// moving object's velocity through the `CPhysicsObj` the `OBJECTINFO`
+    /// points at.
+    ///
+    /// SEAM(B3 / A13): `CPhysicsObj` is not modeled in this stage (`ObjectInfo`
+    /// reduces `object` to `object_id`), so there is no velocity to zero — this
+    /// is a faithful no-op placeholder. The driver spine + `validate_transition`
+    /// call it at the points the decomp does; B3 wires it to the real
+    /// `CPhysicsObj::set_velocity` once the physics object lands.
+    // acclient.c:314148
+    pub fn kill_velocity(&self) {
+        // SEAM(B3): CPhysicsObj::set_velocity(object, {0,0,0}, 0).
+    }
+
     /// `OBJECTINFO::validate_walkable` (`acclient.c:314161`). Given a candidate
     /// sphere `check_pos` resting against `contact_plane`, decide whether the
     /// object is walkably supported, hovering, or penetrating — and record the

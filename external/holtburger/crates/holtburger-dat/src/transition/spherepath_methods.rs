@@ -377,6 +377,51 @@ impl SpherePath {
         self.check_pos.objcell_id = cell_id;
     }
 
+    /// `SPHEREPATH::set_check_pos` (`acclient.c:312091`). Re-seats the candidate
+    /// position/cell, invalidates the cell ring, and rebuilds the global sphere
+    /// cache from scratch (`offset == 0` ⇒ recompute through `check_pos.frame`).
+    /// (A06 — driver `validate_transition`; A01 — `check_walkable` rewind.)
+    ///
+    /// Decomp:
+    /// ```text
+    /// this->check_pos.objcell_id = p->objcell_id;
+    /// this->check_pos.frame      = p->frame;        // Frame::operator=
+    /// this->check_cell           = cell;
+    /// this->cell_array_valid     = 0;
+    /// SPHEREPATH::cache_global_sphere(this, 0);
+    /// ```
+    /// `CObjCell *cell` → `Option<u32>` (cell id) per the seam convention.
+    // acclient.c:312091
+    pub fn set_check_pos(&mut self, p: &Position, cell: Option<u32>) {
+        self.check_pos.objcell_id = p.objcell_id;
+        self.check_pos.frame = p.frame; // Frame is Copy → `operator=`
+        self.check_cell = cell;
+        self.cell_array_valid = false;
+        self.cache_global_sphere(None); // offset == 0 → recompute through frame
+    }
+
+    /// `SPHEREPATH::cache_global_curr_center` (`acclient.c:313697`). Caches the
+    /// moving sphere's start center in global space by mapping `local_sphere[0]`
+    /// through `curr_pos.frame`. (A06.)
+    ///
+    /// Decomp (per-sphere loop, guarded by `if (num_sphere)`):
+    /// ```text
+    /// global_curr_center[i] = curr_pos.frame.localtoglobal(local_sphere[i].center);
+    /// ```
+    /// TYPES-COLLAPSE: `global_curr_center` is modeled as a single `Vector3`
+    /// (sphere 0 — the only index the resolver reads, matching
+    /// `cache_global_sphere`/`localspace_curr_center`); a 0-sphere path leaves it
+    /// untouched. If a `num_sphere == 2` caller ever needs sphere 1's cached
+    /// start center, promote the field to `[Vector3; 2]` and fill both.
+    // acclient.c:313697
+    pub fn cache_global_curr_center(&mut self) {
+        if self.num_sphere == 0 {
+            return; // decomp: `if (this->num_sphere)`
+        }
+        let frame = self.curr_pos.frame;
+        self.global_curr_center = frame.localtoglobal(self.local_sphere[0].center);
+    }
+
     /// `SPHEREPATH::check_walkables` (`acclient.c:313468`). THE recursion-
     /// termination gate for the `transitional_insert ↔ check_walkable` cycle
     /// (A15 R1/D1): returns truthy (`1`) when there is no cached walkable poly,

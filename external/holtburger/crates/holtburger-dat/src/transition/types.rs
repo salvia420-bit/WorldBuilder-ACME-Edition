@@ -505,20 +505,13 @@ pub struct CTransition {
     // PHASE3: new_cell_ptr: Option<CObjCell>.
 }
 
-impl CTransition {
-    /// `CTransition::step_up` (`acclient.c`, idb) — the Phase-3 driver method
-    /// `BSPTREE::step_sphere_up` calls (agent 03) to attempt a step-up over a
-    /// hit polygon. The real body re-sweeps the sphere up the surface using
-    /// the cell array; it is owned by the Phase-3 driver. This stub lets the
-    /// Phase-2 resolver compile and link: returning `0` reports "did not step
-    /// up", so `step_sphere_up` falls through to its `step_up_slide` branch.
-    // PHASE3
-    pub fn step_up(&mut self, normal: &Vector3) -> i32 {
-        // PHASE3: re-sweep `sphere_path` up `normal` against `cell_array`.
-        let _ = normal;
-        0
-    }
-}
+// `CTransition::step_up` (acclient.c:312794) is the Phase-3 DRIVER method; its
+// real body lives in `super::driver_spine` (B2b). It keeps the same signature
+// (`fn step_up(&mut self, &Vector3) -> i32`) the B1 stub had, so the committed
+// `resolver_slide::step_sphere_up` call site (`transition.step_up(&gnormal)`)
+// links unchanged. Called outside a driver sweep (no thread-local world ctx —
+// e.g. the resolver/types unit tests), it returns `0`, preserving the B1
+// "did not step up → fall through to step_up_slide" behaviour.
 
 #[cfg(test)]
 mod tests {

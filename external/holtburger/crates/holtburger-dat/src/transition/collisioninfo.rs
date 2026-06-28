@@ -133,6 +133,34 @@ impl CollisionInfo {
         self.collide_object.clear();
         self.last_collided_object = None;
     }
+
+    /// `COLLISIONINFO::init` (`acclient.c:311567`). Resets the per-step collision
+    /// accumulators. (A06 — `validate_placement_transition` relies on this.)
+    ///
+    /// Decomp (verbatim field list):
+    /// ```text
+    /// last_known_contact_plane_valid = 0;  contact_plane_valid    = 0;
+    /// sliding_normal_valid           = 0;  collision_normal_valid = 0;
+    /// num_collide_object = 0;  last_collided_object = 0;
+    /// collided_with_environment = 0;  contact_plane_cell_id = 0;
+    /// frames_stationary_fall = 0;
+    /// ```
+    /// NOT `Default`: `init` does NOT touch the `*_is_water` flags,
+    /// `adjust_offset`, the `last_known_*_cell_id`, nor the normal *values*
+    /// beyond invalidation. The `_valid = 0` pairs collapse to `None`.
+    // acclient.c:311567
+    pub fn init(&mut self) {
+        self.last_known_contact_plane = None; // last_known_contact_plane_valid = 0
+        self.contact_plane = None; //            contact_plane_valid    = 0
+        self.sliding_normal = None; //            sliding_normal_valid   = 0
+        self.collision_normal = None; //          collision_normal_valid = 0
+        self.num_collide_object = 0;
+        self.collide_object.clear();
+        self.last_collided_object = None;
+        self.collided_with_environment = false;
+        self.contact_plane_cell_id = 0;
+        self.frames_stationary_fall = 0;
+    }
 }
 
 #[cfg(test)]

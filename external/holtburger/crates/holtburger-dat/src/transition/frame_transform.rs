@@ -131,6 +131,30 @@ impl Frame {
         self.globaltolocalvec(point - self.origin)
     }
 
+    /// `Frame::is_equal` (acclient.c:96700). True when the origins match
+    /// (`Vector3Math::AreEqual`, |Δ| ≤ EPSILON) AND the orientations match.
+    ///
+    /// DECOMP-DEVIATION (A06): the decomp's `Frame::is_quaternion_equal`
+    /// (acclient.c:96716) compares four quaternion components; this `Frame`
+    /// stores orientation as the `fl2gv` rotation matrix (no quaternion fields),
+    /// so the 9 matrix elements are compared element-wise (|Δ| < EPSILON).
+    /// Equivalent for the sole caller — `validate_transition`'s "position
+    /// unchanged between steps?" gate (equal quaternions ⇒ equal matrices).
+    /// `Vector3Math::AreEqual` uses `<=`; `is_quaternion_equal` uses `<`.
+    // acclient.c:96700
+    pub fn is_equal(&self, rhs: &Frame) -> bool {
+        // EPS == super::types::EPSILON (0.0002, the retail 0.00019999999).
+        const EPS: f32 = 0.0002;
+        (self.origin.x - rhs.origin.x).abs() <= EPS
+            && (self.origin.y - rhs.origin.y).abs() <= EPS
+            && (self.origin.z - rhs.origin.z).abs() <= EPS
+            && self
+                .fl2gv
+                .iter()
+                .zip(rhs.fl2gv.iter())
+                .all(|(a, b)| (a - b).abs() < EPS)
+    }
+
     /// Same-cell reduction of `Plane::localtoglobal` (acclient.c:467672):
     /// `self` is the `from` frame and `to` shares its landblock, so the
     /// `LandDefs::get_block_offset` term is zero. See
