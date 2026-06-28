@@ -2662,15 +2662,21 @@ function pickSubdivLevelForLb(opts, lbX, lbY) {
 // resident LB's BAKED level (`lbMesh.userData.subdivLevel`) against the level
 // the NEW player centre would pick, and re-bakes the mismatches one-per-frame.
 //
-// Opt-in via `?lodRebake=on` (default OFF → byte-identical: no reconcile, no
-// re-bake). The doc pairs this with the F12-1 edge weld (deferred, 1070) so the
-// MOVING LOD boundary stays crack-free; until that lands the flag-on path can
-// show a seam at the boundary — hence default-off + eye-test-pending.
+// DEFAULT-ON (2026-06-28): re-bakes each resident LB to the subdiv level the
+// CURRENT player centre picks, one-per-frame, as the player moves — so detail
+// follows you instead of being frozen at login. The F12-1 edge-weld it was once
+// gated on is NOT needed: the subdivided vertex Z is the faceted collision
+// surface (`triangle_height_in_cell`), which is LINEAR along every cell edge, so
+// a finer LB's boundary vertices land EXACTLY on a coarser neighbour's straight
+// chord — crack-free across LOD levels regardless of the moving boundary. Locked
+// by the Rust regression test
+// `holtburger_dat::terrain_subdiv::tests::lod_boundary_edges_coincide_across_factors`.
+// Escape: `?lodRebake=off` (byte-identical: no reconcile, no re-bake).
 const LOD_REBAKE_ON = (() => {
   try {
-    return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("lodRebake") === "on";
-  } catch (_) { return false; }
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search).get("lodRebake") !== "off";
+  } catch (_) { return true; }
 })();
 
 // Re-point the LOD reference at `newLbKey` and enqueue every resident terrain

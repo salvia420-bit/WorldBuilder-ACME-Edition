@@ -45,6 +45,11 @@ import {
   bakeStaticsRing,
   getOrCreateMaterialCache,
 } from "./statics.js?v=phase7-par";
+// ?statAtlas cross-LB static atlas per-LB eviction hook. Imported with the SAME
+// specifier statics.js uses (no ?v=) so it is the SAME module instance → shares
+// _lbMembership state. Wired onto liveScene3d at LRU construction so the LRU's
+// evict always finds it (closes the boot-ring-before-first-per-LB-feed identity gap).
+import { evictStaticAtlasForLb } from "./static_atlas.js";
 import { buildEnvCellsForLandblock } from "./cells.js";
 // Phase D.1 — synthetic ACE entity-spawn injector. The third
 // placement stream (after `fetch_landblock_objects` DAT-explicit and
@@ -4075,6 +4080,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       if (Number.isFinite(v) && v > 0) lbCap = v;
       lbLruDebug = ps.get("lbLruDebug") === "1";
     }
+    // ?statAtlas — deterministically wire the cross-LB atlas eviction hook onto the
+    // object the LRU reads (liveScene3d), independent of feed timing. evictStaticAtlasForLb
+    // is module-stateful and a no-op for an LB with no atlas membership, so this is safe
+    // even with ?statAtlas=off (nothing was ever fed → nothing to excise).
+    liveScene3d._evictStaticAtlasForLb = evictStaticAtlasForLb;
     const landblockLru = new LandblockLRU({
       scene3d: liveScene3d,
       maxResident: lbCap,

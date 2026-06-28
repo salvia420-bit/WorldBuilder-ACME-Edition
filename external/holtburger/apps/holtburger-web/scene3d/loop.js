@@ -37,7 +37,7 @@
 
 import * as THREE from "three";
 import { tickCellVisibility3D, tickPvsLoadExpansion } from "./cells.js";
-// ?statAtlas (default-OFF) — lazy buffer-compaction for the cross-LB static
+// ?statAtlas (default-ON; ?statAtlas=off escapes) — lazy buffer-compaction for the cross-LB static
 // texture-array buckets, driven off the ~10 Hz PVS path (NOT the per-frame
 // eviction tick). Flag-off: statAtlasEnabled() is false → never runs.
 import { statAtlasEnabled, tickStatAtlasOptimize } from "./static_atlas.js";
@@ -1646,7 +1646,7 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   // budget-starved frame can never stall scenery prefetch indefinitely.
   if (!_rp3 || _rp3ShouldRun(_rp3, RP3_G_PVS, _rp3TsSec, _rp3NowMs())) {
     tickPvsLoadExpansion(scene3d, sessionHandle);
-    // ?statAtlas (default-OFF) — compact fragmented cross-LB static buckets here
+    // ?statAtlas (default-ON; ?statAtlas=off escapes) — compact fragmented cross-LB static buckets here
     // (low-frequency, off the per-frame hot path). No-op flag-off / no churn.
     if (statAtlasEnabled()) tickStatAtlasOptimize();
   }

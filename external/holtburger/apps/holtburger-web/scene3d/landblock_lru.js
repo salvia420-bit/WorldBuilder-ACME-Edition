@@ -408,10 +408,10 @@ export class LandblockLRU {
     if (typeof s._evictStaticParticlesForLb === "function") {
       try { s._evictStaticParticlesForLb(lbKey); } catch (_) { /* fail-soft */ }
     }
-    // ?statAtlas (default-OFF) — excise this LB's geometry from the cross-LB
-    // size-bucket BatchedMeshes (per-instance deleteGeometry; same-frame, no
-    // rebuild, no orphan). static_atlas.js installs this hook the first time the
-    // cross-LB path runs; absent ⇒ ?statAtlas was never on ⇒ nothing to excise.
+    // ?statAtlas (default-ON; ?statAtlas=off escapes) — excise this LB's geometry from
+    // the cross-LB size-bucket BatchedMeshes (per-instance deleteGeometry; same-frame, no
+    // rebuild, no orphan). Hook is wired onto liveScene3d at LRU construction (index.js)
+    // and re-installed by each feed; absent ⇒ ?statAtlas=off ⇒ nothing to excise.
     // Fail-soft. Mirrors the _evictStaticParticlesForLb facade above.
     if (typeof s._evictStaticAtlasForLb === "function") {
       try { s._evictStaticAtlasForLb(lbKey); } catch (_) { /* fail-soft */ }

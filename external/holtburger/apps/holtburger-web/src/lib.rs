@@ -5661,6 +5661,90 @@ fn walk_setup_parts_with_geom<S: holtburger_dat::ResourceSource + ?Sized>(
 /// dat corruption). Triangles are returned in part-local-post-part-
 /// frame coords; caller applies the placement transform.
 #[cfg(target_arch = "wasm32")]
+/// Per-part static physics BSP carried out of [`walk_setup_parts_with_geom_and_bsp`].
+/// `tree`/`polys` live in the part's GfxObj-LOCAL space; `offset`/`rot` are the
+/// part's frame within the SetupModel (already nested-composed by the walker).
+/// The caller composes these with the world placement frame to stage a
+/// `holtburger_world::CellPhysicsBsp`. (Tier-2 per-part static BSP, 2026-06-28.)
+struct StaticPartBsp {
+    tree: holtburger_dat::physics::BspNode,
+    polys: std::collections::HashMap<u16, holtburger_dat::physics::ResolvedPolygon>,
+    offset: holtburger_common::Vector3,
+    rot: holtburger_common::Quaternion,
+}
+
+/// Like [`walk_setup_parts_with_geom`] but ALSO extracts each part's physics BSP
+/// (when present), so 0x02 SetupModel statics get per-part precise collision
+/// under `USE_STATIC_BSP` — matching the 0x01 single-GfxObj path. Returns one
+/// `(Aabb, Option<StaticPartBsp>)` per part, index-parallel to `setup.parts`.
+fn walk_setup_parts_with_geom_and_bsp<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+) -> Option<Vec<(holtburger_common::Aabb, Option<StaticPartBsp>)>> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+        .ok()?;
+    let setup = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
+    let part_count = setup.parts.len();
+    let mut out: Vec<(holtburger_common::Aabb, Option<StaticPartBsp>)> = (0..part_count)
+        .map(|_| (holtburger_common::Aabb::empty(), None))
+        .collect();
+    walk_setup_parts(
+        source,
+        setup_id,
+        &[],
+        &[],
+        None,
+        None,
+        None,
+        |pi, gfx, offset, rot, _swaps| {
+            let Some(slot) = out.get_mut(pi) else { return };
+            // AABB from the vertex array, post part-frame (mirrors
+            // `walk_setup_parts_with_geom_and_physics`).
+            for vert in gfx.vertex_array.vertices.values() {
+                let p = quat_rotate(rot, vert.origin);
+                slot.0.expand_to_include_point(holtburger_common::Vector3 {
+                    x: p.x + offset.x,
+                    y: p.y + offset.y,
+                    z: p.z + offset.z,
+                });
+            }
+            // Per-part physics BSP, kept in part-GfxObj-LOCAL space; the
+            // [offset, rot] part-frame is carried out so the caller composes it
+            // with the placement frame. One callback per part index.
+            if slot.1.is_none() {
+                if let Some(tree) = &gfx.physics_bsp {
+                    if !gfx.physics_polygons.is_empty() {
+                        let polys = holtburger_dat::physics::resolve_cell_physics_polygons(
+                            &gfx.physics_polygons,
+                            |vid| {
+                                gfx.vertex_array.vertices.get(&vid).map(|sw| {
+                                    holtburger_common::Vector3::new(
+                                        sw.origin.x,
+                                        sw.origin.y,
+                                        sw.origin.z,
+                                    )
+                                })
+                            },
+                        );
+                        if !polys.is_empty() {
+                            slot.1 = Some(StaticPartBsp {
+                                tree: tree.clone(),
+                                polys,
+                                offset,
+                                rot,
+                            });
+                        }
+                    }
+                }
+            }
+        },
+    )?;
+    Some(out)
+}
+
 fn walk_setup_parts_with_geom_and_physics<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     setup_id: u32,
@@ -12301,8 +12385,42 @@ async fn populate_statics_aabbs_for_landblock_impl(
                     );
                     continue;
                 }
-                match walk_setup_parts_with_geom(source.as_ref(), model_id) {
-                    Some(v) => v,
+                match walk_setup_parts_with_geom_and_bsp(source.as_ref(), model_id) {
+                    Some(parts) => {
+                        // Tier-2 per-part static BSP (2026-06-28): stage one
+                        // CellPhysicsBsp per SetupModel part that carries a physics
+                        // BSP, framed to world by composing the placement frame
+                        // with the part frame (world = placement ∘ part). Mirrors
+                        // the 0x01 inline staging; eviction is per-landblock so no
+                        // per-part key is needed.
+                        let mut aabbs = Vec::with_capacity(parts.len());
+                        for (aabb, bsp) in parts.into_iter() {
+                            if let Some(b) = bsp {
+                                let pr = quat_rotate(placement_orientation, b.offset);
+                                let world_origin = holtburger_common::Vector3 {
+                                    x: placement_origin.x + pr.x,
+                                    y: placement_origin.y + pr.y,
+                                    z: placement_origin.z + pr.z,
+                                };
+                                let world_orientation =
+                                    placement_orientation.multiply(b.rot);
+                                has_bsp = true;
+                                STATIC_BSP_PENDING.with(|pile| {
+                                    pile.borrow_mut().push((
+                                        landblock_high,
+                                        holtburger_world::CellPhysicsBsp {
+                                            tree: b.tree,
+                                            polys: b.polys,
+                                            origin: world_origin,
+                                            orientation: world_orientation,
+                                        },
+                                    ));
+                                });
+                            }
+                            aabbs.push(aabb);
+                        }
+                        aabbs
+                    }
                     None => continue,
                 }
             }

@@ -788,6 +788,65 @@ mod tests {
         assert_eq!(a.indices, b.indices);
     }
 
+    /// F12-1 seam invariant: a FINER landblock's boundary vertices land
+    /// EXACTLY on the COARSER neighbour's straight edge chord, so adjacent
+    /// LBs baked at DIFFERENT subdiv levels (the moving `?lodRebake` LOD
+    /// boundary) meet crack-free with NO runtime edge-weld. This holds
+    /// because the position Z is the faceted collision surface
+    /// (`triangle_height_in_cell`), which is LINEAR along every cell edge and
+    /// therefore factor-independent. Regression guard: if Z ever reverts to a
+    /// curved (e.g. Catmull-Rom) edge, the finer edge bulges off the chord and
+    /// this fails — exactly the seam that kept `?lodRebake` default-off. (2026-06-28)
+    #[test]
+    fn lod_boundary_edges_coincide_across_factors() {
+        // Varied, non-flat heights; water code (16) ⇒ zero noise so Z is the
+        // pure surface. A coarse neighbour at factor 1 draws each edge span as
+        // the straight chord between consecutive control heights.
+        let mut h = [[0.0f32; 9]; 9];
+        for x in 0..9 {
+            for y in 0..9 {
+                h[x][y] = (x * 13 + y * 5) as f32 + (x as f32) * (y as f32) * 0.5;
+            }
+        }
+        let c = codes(16);
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        let fine = subdivide_landblock(&h, &adj, 4, &c, &r, 0xA9B40000, 7);
+        let factor = 4usize;
+        let n = factor * 8 + 1; // 33 verts per side
+        // The coarse-neighbour edge value at fine position `pos`: linear interp
+        // between the two bracketing control heights (the rendered chord).
+        let chord = |edge: &[f32; 9], pos: usize| -> f32 {
+            let u = pos as f32 / factor as f32;
+            let lo = (u.floor() as usize).min(8);
+            let hi = (lo + 1).min(8);
+            let t = u - lo as f32;
+            edge[lo] * (1.0 - t) + edge[hi] * t
+        };
+        // positions: idx = i*n + j; i = east, j = north.
+        let zat = |i: usize, j: usize| fine.positions[(i * n + j) * 3 + 2];
+        let mut south = [0.0f32; 9];
+        let mut north = [0.0f32; 9];
+        let mut west = [0.0f32; 9];
+        let mut east = [0.0f32; 9];
+        for k in 0..9 {
+            south[k] = h[k][0];
+            north[k] = h[k][8];
+            west[k] = h[0][k];
+            east[k] = h[8][k];
+        }
+        for k in 0..n {
+            let zs = zat(k, 0);
+            assert!((zs - chord(&south, k)).abs() < 1e-4, "south seam i={k}: {zs} vs {}", chord(&south, k));
+            let zn = zat(k, n - 1);
+            assert!((zn - chord(&north, k)).abs() < 1e-4, "north seam i={k}: {zn} vs {}", chord(&north, k));
+            let zw = zat(0, k);
+            assert!((zw - chord(&west, k)).abs() < 1e-4, "west seam j={k}: {zw} vs {}", chord(&west, k));
+            let ze = zat(n - 1, k);
+            assert!((ze - chord(&east, k)).abs() < 1e-4, "east seam j={k}: {ze} vs {}", chord(&east, k));
+        }
+    }
+
     #[test]
     fn bicubic_matches_corners_at_control_points() {
         let mut h = [[0.0f32; 9]; 9];

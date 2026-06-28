@@ -27,16 +27,21 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 let _flag;
-/** `?statAtlas=on` — texture-array batch unique-material static singletons. DEFAULT-OFF. */
+/** `?statAtlas=off` escapes the cross-LB texture-array batching of unique-material
+ *  STATIC LIT singletons. DEFAULT-ON (2026-06-28). NOTE: the atlas only ever captures
+ *  genuinely static lit singletons (`buildSingletonNode` output). Animated scenery
+ *  (`isAnimatedScenery` Groups) and additive particle billboards (`particle-unlit-*`)
+ *  are a DIFFERENT subsystem and are correctly never fed here — they must keep their
+ *  per-frame animation/orientation/blend. See docs/2026-06-28-cross-lb-atlas-feedbug-handoff.md. */
 export function statAtlasEnabled() {
   if (_flag !== undefined) return _flag;
-  let on = false;
+  let on = true; // DEFAULT-ON; ?statAtlas=off is the escape hatch (byte-identical legacy path)
   try {
     if (typeof window !== "undefined" && window.location?.search) {
       const v = new URLSearchParams(window.location.search).get("statAtlas");
-      if (v != null) { const s = v.toLowerCase(); on = s === "on" || s === "1" || s === "true" || s === "yes"; }
+      if (v != null) { const s = v.toLowerCase(); on = !(s === "off" || s === "0" || s === "false" || s === "no"); }
     }
-  } catch (_) { on = false; }
+  } catch (_) { on = true; }
   return (_flag = on);
 }
 
@@ -300,6 +305,8 @@ function _getOrCreateBucket(bucketKey, w, h, transparent, alphaTest, scene3d) {
     maxVerts: _ATLAS_INIT_VERTS,
     maxInst: _ATLAS_INIT_INST,
     deadVerts: 0,        // vertices in deleted geometries awaiting optimize()
+    usedVerts: 0,        // total live+dead vertices ever appended (the buffer's used extent;
+                         //   deleteGeometry does NOT compact, so this only drops on optimize())
     gidVerts: new Map(), // gid -> vertexCount (to account dead space on delete)
   };
   bm.name = `stat-atlas-x-${bucketKey}`;
@@ -348,9 +355,11 @@ function _addInstanceGrow(bm, gid) {
  */
 export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
   const passthrough = [];
-  // Install the per-LB eviction hook the first time the cross-LB path runs. This
-  // only ever executes under ?statAtlas=on, so flag-off the hook stays undefined
-  // and the landblock_lru typeof-guard no-ops (byte-identical).
+  // Install the per-LB eviction hook on the baker's scene3d (the per-LB walk-in path
+  // passes liveScene3d directly; the boot-ring path passes scene3dForBuilders). The
+  // LRU reads this hook off liveScene3d, which is ALSO wired deterministically at LRU
+  // construction (index.js) so a ring-fed LB evicting before the first per-LB feed still
+  // excises (no orphan). ?statAtlas=off ⇒ this never runs ⇒ landblock_lru typeof-guard no-ops.
   if (scene3d && scene3d._evictStaticAtlasForLb !== evictStaticAtlasForLb) {
     scene3d._evictStaticAtlasForLb = evictStaticAtlasForLb;
   }
@@ -362,8 +371,8 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       const mat = n && n.material;
       const tex = mat && mat.map;
       const img = tex && tex.image;
-      if (!n || !n.isMesh || n.isLOD || !n.geometry || !n.geometry.attributes?.uv || !tex || !img || !img.data) {
-        passthrough.push(n); continue;
+      if (!n || !n.isMesh || n.isBatchedMesh || n.isLOD || !n.geometry || !n.geometry.attributes?.uv || !tex || !img || !img.data || n.userData?.__staticBatch) {
+        passthrough.push(n); continue; // ?staticBatch nodes already batched — never re-feed
       }
       const w = img.width | 0, h = img.height | 0;
       if (!w || !h) { passthrough.push(n); continue; }
@@ -416,6 +425,7 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       n.updateMatrix();
       bm.setMatrixAt(iid, n.matrix); // world transform (node is staticsGroup-relative)
       ud.gidVerts.set(gid, vcount);
+      ud.usedVerts += vcount; // grow the used-extent denominator for the optimize() trigger
       g.dispose?.(); // copied into the batch buffer; the clone is no longer needed
       const lbKey = _lbKeyOfId(n.userData?.landblockId);
       let list = _lbMembership.get(lbKey);
@@ -479,8 +489,12 @@ export function tickStatAtlasOptimize() {
     if (!b) continue;
     const bm = b.bm;
     const ud = bm.userData;
-    if (ud.maxVerts > 0 && ud.deadVerts / ud.maxVerts > _ATLAS_OPTIMIZE_FRAC) {
-      try { bm.optimize(); ud.deadVerts = 0; } catch (_) {}
+    // Trigger on dead / USED-EXTENT (live+dead actually appended), not / CAPACITY
+    // (maxVerts, the pre-allocated/grown buffer size) — capacity over-counts the
+    // denominator so a small-but-mostly-dead bucket would never compact. optimize()
+    // compacts away the dead verts, so the used extent drops by deadVerts.
+    if (ud.usedVerts > 0 && ud.deadVerts / ud.usedVerts > _ATLAS_OPTIMIZE_FRAC) {
+      try { bm.optimize(); ud.usedVerts -= ud.deadVerts; ud.deadVerts = 0; } catch (_) {}
     }
   }
   _dirtyBuckets.clear();

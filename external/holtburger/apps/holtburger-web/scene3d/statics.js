@@ -1984,7 +1984,7 @@ export async function bakeStaticsForLandblock(
       };
     }
   }
-  // ?statAtlas (default-OFF) — SECOND feed seam: route this LB's plain-Mesh
+  // ?statAtlas (default-ON; ?statAtlas=off escapes) — SECOND feed seam: route this LB's plain-Mesh
   // singletons (walk-in / re-entry) into the SAME global cross-LB size buckets the
   // boot ring feeds, so movement past the boot ring keeps the draw-call win. Keyed
   // on _atlasBakedLbs (hasAtlasLb), INDEPENDENT of staticsBakedLbs/step-6b. LOD /
@@ -1998,7 +1998,7 @@ export async function bakeStaticsForLandblock(
         const m = node && node.material;
         const t = m && m.map;
         const img = t && t.image;
-        if (node && node.isMesh && !node.isLOD && node.geometry && node.geometry.attributes?.uv && t && img && img.data) {
+        if (node && node.isMesh && !node.isBatchedMesh && !node.isLOD && node.geometry && node.geometry.attributes?.uv && t && img && img.data && !node.userData?.__staticBatch) {
           atlasable.push(node);
         } else {
           rest.push(node);
@@ -2478,7 +2478,7 @@ export async function bakeStaticsRing(
   // eviction). Singletons carry `userData.landblockId` and are evicted by
   // the existing per-LB walker, so they are NOT collected here.
   const instancedNodes = [];
-  // ?statAtlas (default-OFF): collect singleton-branch nodes for texture-array
+  // ?statAtlas (default-ON; ?statAtlas=off escapes): collect singleton-branch nodes for texture-array
   // batching after the loop. Flag off => stays empty, singletons add directly.
   const ringSingletons = [];
   // B3 (busted-world load fix) — frame-budget the BOOT RING emit loop.
@@ -2589,7 +2589,7 @@ export async function bakeStaticsRing(
           staticsMatCastsShadow,
           staticsReceiveShadow,
         });
-        if (statAtlasEnabled()) ringSingletons.push(node); // batched after the loop (perf, opt-in)
+        if (statAtlasEnabled()) ringSingletons.push(node); // batched after the loop (perf, default-on; ?statAtlas=off escapes)
         else scene3d.staticsGroup.add(node);
         singletonCount += 1;
         if (isLod) lodCount += 1;
@@ -2609,7 +2609,7 @@ export async function bakeStaticsRing(
       _ringChunkStart = (typeof performance !== "undefined" ? performance.now() : Date.now());
     }
   }
-  // ?statAtlas (default-OFF, opt-in eye-test): collapse the ring's unique-material
+  // ?statAtlas (default-ON; ?statAtlas=off escapes): collapse the ring's unique-material
   // singletons into GLOBAL (cross-LB) size-bucket BatchedMeshes — ~5,400 lone draws
   // -> ~20-30 multidraw calls. The bucket BatchedMeshes self-add to staticsGroup;
   // each LB's per-LB eviction is handled by scene3d._evictStaticAtlasForLb (installed
