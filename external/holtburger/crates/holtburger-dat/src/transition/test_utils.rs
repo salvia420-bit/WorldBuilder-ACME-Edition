@@ -639,6 +639,57 @@ mod tests {
         assert!(t.sphere_path.curr_pos.frame.origin.x > 1.0);
     }
 
+    // B4-B FINDING (2026-06-28): the faithful driver walks a player STRAIGHT
+    // THROUGH a wall end-to-end (final_x = -2, the full target; code=1). The
+    // 250 B2/B3 tests only asserted termination + valid codes, so they missed
+    // this. LOCALIZED:
+    //   - The resolver + transitional_insert DO detect the wall: a direct
+    //     find_collisions / transitional_insert returns COLLIDED=2 (probe C
+    //     below; cf. wall_sidesweep_adjusts_with_horizontal_normal).
+    //   - But transitional_insert returns COLLIDED while leaving check_pos AT
+    //     the penetrating position (probe C: check_x=0, backup_x=0 — not
+    //     backed up), and find_transitional_position's loop only HARD-STOPS on
+    //     `collision_normal && PATH_CLIPPED (0x8)` (driver_validate.rs:471). A
+    //     walker is ON_WALKABLE|IS_PLAYER (not PATH_CLIPPED), so it relies on
+    //     adjust_offset (driver_validate.rs:413) projecting the step onto the
+    //     wall's sliding plane — that slide is NOT engaging, so it walks through.
+    //   FIX (own session): the non-path-clipped collision RESPONSE — ensure a
+    //   wall hit sets the sliding_normal/contact_plane that adjust_offset reads
+    //   (or clamps check_pos), so the X-into-wall step projects to ~0. Un-ignore
+    //   when it lands. (Marshalling/bridge is correct — it maps what the driver
+    //   produces; this is a holtburger-dat driver-fidelity gap.)
+    #[test]
+    #[ignore = "B4-B: faithful driver walks through walls; find_transitional_position slide/clamp not engaging for non-PATH_CLIPPED movers (see comment)"]
+    fn find_transitional_walker_blocked_by_wall_does_not_pass_through() {
+        // Walker starts CLEAR of the wall (x=2, r=0.5; wall plane at x=0, N=+X),
+        // walks to x=-2. A faithful driver must NOT let the sphere center cross
+        // to the wall's far side; it should stop around one radius (x ≈ 0.5).
+        let (code, t) = drive_find(
+            scenes::vertical_wall(),
+            build::walker(0.5, 0.5),
+            v(2.0, 1.0, 1.5),
+            v(-2.0, 1.0, 1.5),
+            0.5,
+        );
+        let x = t.sphere_path.curr_pos.frame.origin.x;
+        println!("DIAG A find_transitional walker: code={code} final_x={x}");
+
+        // B: find_transitional with state=0 (the resolver self-test's state).
+        let mut o0 = build::walker(0.5, 0.5);
+        o0.state = 0;
+        let (cb, tb) = drive_find(scenes::vertical_wall(), o0, v(2.0, 1.0, 1.5), v(-2.0, 1.0, 1.5), 0.5);
+        println!("DIAG B find_transitional state0: code={cb} final_x={}", tb.sphere_path.curr_pos.frame.origin.x);
+
+        // C: transitional_insert directly, sphere swept 1.0 -> 0.0 (crosses wall).
+        let mut o2 = build::walker(0.5, 0.5);
+        o2.state = 0;
+        let (cc, tc) = drive(scenes::vertical_wall(), o2, v(1.0, 1.0, 1.5), v(0.0, 1.0, 1.5), 0.5);
+        println!("DIAG C transitional_insert: code={cc} check_x={} backup_x={}",
+            tc.sphere_path.check_pos.frame.origin.x, tc.sphere_path.backup_check_pos.frame.origin.x);
+
+        assert!(x >= 0.0, "walker passed THROUGH the wall: final x = {x} (code {code})");
+    }
+
     #[test]
     fn find_transitional_no_motion_seeds_cell_array_and_succeeds() {
         // begin == end ⇒ num_steps == 0 ⇒ the no-motion branch seats check_pos,
