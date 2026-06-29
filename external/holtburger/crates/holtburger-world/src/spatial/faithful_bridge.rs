@@ -58,7 +58,7 @@ use std::rc::Rc;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::{Aabb, Quaternion, Sphere, Vector3};
 
-use holtburger_dat::physics::ResolvedPolygon;
+use holtburger_dat::physics::{CellBound, ResolvedPolygon};
 use holtburger_dat::transition::driver_validate::MovingObjectPhysics;
 use holtburger_dat::transition::frame_transform::Frame;
 use holtburger_dat::transition::objcell::{
@@ -96,6 +96,14 @@ fn frame_from(orientation: Quaternion, origin: Vector3) -> Frame {
 }
 
 // ─── SceneObjCell — the per-cell CObjCell adapter ───────────────────────────
+
+/// How many portal levels [`SceneWorld::build_cell`] resolves ahead so the
+/// `find_cell_list` flood can reach multi-hop transit cells (E3.3). Retail's
+/// flood is self-terminating via the sphere-vs-cell gate; this is the build-time
+/// depth that gate operates within. `2` covers a mover crossing two portals in a
+/// single frame (the realistic worst case) while keeping the bounded build cheap;
+/// the gate prunes any neighbour the spheres don't actually reach.
+const MAX_PORTAL_HOPS: u32 = 2;
 
 /// One loaded EnvCell as the faithful driver's `CObjCell`. Owns a CLONE of the
 /// cell's physics BSP (the `Rc<dyn CObjCell>` handle the driver wants is
@@ -138,18 +146,22 @@ pub struct SceneObjCell {
     /// (the cell ring `find_transit_cells` floods). Kept for the
     /// `do_not_load_cells` stab-list prune (`visible_cells()`).
     portal_neighbours: Vec<u32>,
-    /// Phase E2 (cross-portal): the portal neighbours' RESOLVED collision handles
-    /// (`CCellPortal::GetOtherCell` → `CEnvCell::GetVisible`, acclient.c:362341).
-    /// Populated at build time (a SHALLOW build per neighbour — its own
-    /// bsp/statics/aabb/frame, with NO further neighbour resolution, so the
-    /// `find_cell_list` flood stays bounded to depth 1). `find_transit_cells`
-    /// emits these with `Some(handle)` so `check_other_cells` actually collides
-    /// the mover against the neighbour cell across the portal (without this the
-    /// neighbour carried a NULL handle and was silently skipped → cross-portal
-    /// walk-through). Empty for shallow neighbours and outdoor cells. Each cell
-    /// collides in its OWN world frame (non-Euclidean-safe: portal connectivity,
-    /// not spatial overlap — gmriggs/trevis).
-    resolved_neighbours: Vec<(u32, ObjCellHandle)>,
+    /// Phase E2/E3.3 (cross-portal): the portal neighbours' RESOLVED collision
+    /// handles (`CCellPortal::GetOtherCell` → `CEnvCell::GetVisible`,
+    /// acclient.c:362341), each paired with that neighbour's cell-membership BSP
+    /// (`Option<CellMembership>`) for the sphere-vs-cell flood gate. Populated at
+    /// build time; with E3.3 the build is MULTI-HOP (bounded by
+    /// [`MAX_PORTAL_HOPS`]) — a neighbour carries its OWN `resolved_neighbours`, so
+    /// the `find_cell_list` loop (which re-reads `num_cells`) floods transit cells
+    /// across several portals in turn. `find_transit_cells` emits each with
+    /// `Some(handle)` — but only when the moving spheres intersect the neighbour
+    /// (the gate, see there) — so `check_other_cells` collides the mover against
+    /// the reachable neighbour cells across the portal (without this the neighbour
+    /// carried a NULL handle and was silently skipped → cross-portal walk-through).
+    /// Empty for leaf-depth neighbours and outdoor cells. Each cell collides in its
+    /// OWN world frame (non-Euclidean-safe: portal connectivity, not spatial
+    /// overlap — gmriggs/trevis).
+    resolved_neighbours: Vec<(u32, ObjCellHandle, Option<CellMembership>)>,
     /// Phase D / WS3: the OUTDOOR land cell's two collision triangles
     /// (`CLandCell::polygons`), in this cell's LANDBLOCK-local frame (WS2's
     /// [`cell_terrain_polys`]). `Some` ⇒ this is an outdoor `CLandCell` and
@@ -312,20 +324,43 @@ impl CObjCell for SceneObjCell {
     /// resolution happens at build time rather than here). Non-resident /
     /// unloaded neighbours are simply absent (graceful stale-handle handling —
     /// trevis "stale pointer shenanigans"; a NULL-handle entry would be skipped
-    /// by `check_other_cells` anyway and carries no geometry). Bounded to depth 1:
-    /// the resolved neighbours are SHALLOW (empty `resolved_neighbours`), so the
-    /// `find_cell_list` flood does not recurse — iterative flooding + the
-    /// sphere-vs-portal intersection gate (acclient.c:348337) is a follow-up.
+    /// by `check_other_cells` anyway and carries no geometry). Phase E3.3:
+    /// MULTI-HOP — each neighbour carries its own `resolved_neighbours` (built to
+    /// [`MAX_PORTAL_HOPS`]) so the `find_cell_list` loop floods transit cells
+    /// across several portals, GATED by the sphere-vs-cell intersection test
+    /// (acclient.c:348337 / 355502) so only reachable cells enter the ring.
     fn find_transit_cells(
         &self,
         _p: &Position,
-        _num_sphere: u32,
-        _spheres: &[Sphere],
+        num_sphere: u32,
+        spheres: &[Sphere],
         cell_array: &mut dyn CellArrayApi,
         _path: Option<&mut SpherePath>,
     ) {
-        for (id, handle) in &self.resolved_neighbours {
-            cell_array.add_cell(*id, Some(handle.clone()));
+        // `CEnvCell::find_transit_cells` (acclient.c:348250) floods the portal
+        // ring, but only the neighbours the moving spheres actually reach:
+        // `CCellStruct::sphere_intersects_cell` (acclient.c:355502 →
+        // `BSPNODE::sphere_intersects_cell_bsp` 362980, radius+0.01 pad) is the
+        // spatial bound that keeps the flood from cascading through every portal
+        // (gmriggs/trevis). `CellArray::add_cell` dedups by id, and the
+        // `find_cell_list` loop re-reads `num_cells`, so each emitted neighbour is
+        // visited in turn → multi-hop transit (a neighbour carries its OWN
+        // `resolved_neighbours`, bounded by `MAX_PORTAL_HOPS` at build time).
+        for (id, handle, membership) in &self.resolved_neighbours {
+            // Gate: a moving sphere (WORLD space — `SpherePath::global_sphere`)
+            // must intersect the neighbour's cell-membership BSP after being
+            // transformed into the neighbour's local frame. No membership resident
+            // ⇒ add ungated (the E2 depth-1 behaviour — bridge tests/static cells).
+            let reaches = match membership {
+                Some(m) => spheres.iter().take(num_sphere as usize).any(|s| {
+                    let local = m.world_to_local(s.center);
+                    m.tree.sphere_intersects_cell(&local, s.radius) != CellBound::Outside
+                }),
+                None => true,
+            };
+            if reaches {
+                cell_array.add_cell(*id, Some(handle.clone()));
+            }
         }
     }
 
@@ -438,18 +473,21 @@ impl<'a> SceneWorld<'a> {
     /// resident (no physics BSP and not in the portal graph). The handle owns a
     /// CLONE of the cell's physics BSP (`'static` requirement).
     fn build_cell(&self, cell_id: u32) -> Option<Rc<dyn CObjCell>> {
-        self.build_cell_inner(cell_id, true)
+        self.build_cell_inner(cell_id, MAX_PORTAL_HOPS)
     }
 
-    /// `resolve_neighbours`: for the primary/visible cell (`true`), also resolve
-    /// each portal neighbour's collision handle so `find_transit_cells` can emit
-    /// `Some(handle)` and `check_other_cells` collides the mover across the portal
-    /// (Phase E2). Neighbours are built with `resolve_neighbours = false` (SHALLOW
-    /// — their own bsp/statics/aabb/frame, but empty `resolved_neighbours`), which
-    /// bounds the `find_cell_list` flood to depth 1 and prevents recursion. A
+    /// `hops`: how many further portal levels to resolve. The primary/visible cell
+    /// is built with [`MAX_PORTAL_HOPS`]; each portal neighbour is resolved at
+    /// `hops - 1`, so a neighbour built with `hops > 0` carries its OWN
+    /// `resolved_neighbours` and the `find_cell_list` loop (which re-reads
+    /// `num_cells`) floods transit cells across several portals — bounded, because
+    /// at `hops == 0` neighbours are leaves (empty `resolved_neighbours`) and the
+    /// per-cell sphere gate in `find_transit_cells` prunes unreached cells. A
     /// neighbour that is not resident resolves to `None` and is dropped (graceful
-    /// stale-handle handling).
-    fn build_cell_inner(&self, cell_id: u32, resolve_neighbours: bool) -> Option<Rc<dyn CObjCell>> {
+    /// stale-handle handling). The build can revisit a cell across branches; that
+    /// is cheap at `MAX_PORTAL_HOPS == 2` and harmless (handles are independent
+    /// clones, the flood dedups by id).
+    fn build_cell_inner(&self, cell_id: u32, hops: u32) -> Option<Rc<dyn CObjCell>> {
         let bsp = self.scene.cell_physics_bsp(cell_id).cloned();
         let statics = self.scene.cell_static_physics_bsp(cell_id).to_vec();
         let aabb = self.scene.cell_aabb(cell_id);
@@ -469,12 +507,17 @@ impl<'a> SceneWorld<'a> {
             },
         };
         // `CCellPortal::GetOtherCell` → `CEnvCell::GetVisible` (acclient.c:362341)
-        // per neighbour, SHALLOW so the flood is depth-bounded. Each neighbour
-        // carries its OWN world frame (non-Euclidean-safe).
-        let resolved_neighbours: Vec<(u32, ObjCellHandle)> = if resolve_neighbours {
+        // per neighbour, depth-bounded by `hops`. Each neighbour carries its OWN
+        // world frame (non-Euclidean-safe) AND its cell-membership BSP, which
+        // `find_transit_cells` uses to gate the flood (sphere-vs-cell). Resolving
+        // neighbours at `hops - 1` lets the flood reach multi-hop transit cells.
+        let resolved_neighbours: Vec<(u32, ObjCellHandle, Option<CellMembership>)> = if hops > 0 {
             portal_neighbours
                 .iter()
-                .filter_map(|&nb| self.build_cell_inner(nb, false).map(|h| (nb, h)))
+                .filter_map(|&nb| {
+                    self.build_cell_inner(nb, hops - 1)
+                        .map(|h| (nb, h, self.scene.cell_membership(nb).cloned()))
+                })
                 .collect()
         } else {
             Vec::new()
@@ -1782,6 +1825,182 @@ mod drift {
         assert!(
             xn - xp > 1.0,
             "portal stop (x={xp}) must be well short of the no-portal walk-through (x={xn})"
+        );
+    }
+
+    /// Phase E3.3 (cross-portal MULTI-HOP): the wall lives TWO portals away — in
+    /// `FAR_ID`, reachable only through the intermediate `MID_ID`. The flood must
+    /// hop CELL_ID → MID_ID → FAR_ID for the wall to be collision-tested. WITH the
+    /// second portal edge (`MID_ID → FAR_ID`) the multi-hop build gives MID its own
+    /// `resolved_neighbours`, the `find_cell_list` loop visits MID and floods FAR,
+    /// and the mover STOPS at the far wall. WITHOUT that edge FAR is never reached
+    /// and the mover walks THROUGH. Only the 2nd-hop portal differs — depth-1 (E2
+    /// alone) would walk through in BOTH runs, so this is a true multi-hop guard.
+    #[test]
+    fn cross_portal_multihop_far_wall_stops_mover() {
+        const MID_ID: u32 = 0x1234_0101; // 1st hop — passthrough floor
+        const FAR_ID: u32 = 0x1234_0102; // 2nd hop — the wall
+        let o = cell_origin();
+        let wall_lx = FCX + WALL_X_LOCAL; // landblock-local x of the far wall face (11)
+
+        let build = |with_far_portal: bool| -> DriftEnv {
+            let mut scene = SpatialScene::new();
+            // CELL_ID: floor only (keeps the mover grounded) + AABB / flat tris.
+            let mut floor = HashMap::new();
+            floor.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+            scene.insert_cell_physics_bsp(CELL_ID, bsp_from(floor));
+            seed_common(
+                &mut scene,
+                floor_tris_world(o.x - HE, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ),
+            );
+            // MID_ID: passthrough floor — resident in BOTH runs so only the 2nd-hop
+            // portal edge differs (not MID's residency).
+            let mut mid_floor = HashMap::new();
+            mid_floor.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+            scene.insert_cell_physics_bsp(MID_ID, bsp_from(mid_floor));
+            // FAR_ID: the vertical wall (faces −x), framed to world via cell_origin().
+            let mut wall = HashMap::new();
+            wall.insert(
+                1u16,
+                poly(vec![
+                    v(WALL_X_LOCAL, -HE, 0.0),
+                    v(WALL_X_LOCAL, -HE, WALL_H),
+                    v(WALL_X_LOCAL, HE, WALL_H),
+                    v(WALL_X_LOCAL, HE, 0.0),
+                ]),
+            );
+            scene.insert_cell_physics_bsp(FAR_ID, bsp_from(wall));
+            // Chain the portals: CELL → MID always; MID → FAR only in the A run.
+            scene.insert_cell_portal(CELL_ID, MID_ID);
+            if with_far_portal {
+                scene.insert_cell_portal(MID_ID, FAR_ID);
+            }
+            DriftEnv { scene }
+        };
+
+        let flat = |_x: f32| FLOOR_WZ;
+        let start = pose_at(FCX, FCY, FLOOR_WZ);
+        let xp = frame_walk(&build(true), start, 0.3, flat, 20, true)
+            .last()
+            .unwrap()
+            .coords
+            .x;
+        let xn = frame_walk(&build(false), start, 0.3, flat, 20, true)
+            .last()
+            .unwrap()
+            .coords
+            .x;
+
+        assert!(
+            xp < wall_lx - 0.1,
+            "multi-hop: mover must STOP before the 2nd-hop wall (wall_lx={wall_lx}, got x={xp})"
+        );
+        assert!(
+            xn > wall_lx + 0.3,
+            "no-2nd-portal control: mover must WALK THROUGH past the wall (wall_lx={wall_lx}, got x={xn})"
+        );
+        assert!(
+            xn - xp > 1.0,
+            "multi-hop stop (x={xp}) must be well short of the no-portal walk-through (x={xn})"
+        );
+    }
+
+    /// Phase E3.3 (sphere-vs-cell flood gate): a portal neighbour enters the ring
+    /// ONLY when a moving sphere actually reaches it
+    /// (`CCellStruct::sphere_intersects_cell`). `WALL_ID` carries the same wall
+    /// geometry and portal link in both runs; only its cell-membership BSP differs.
+    /// When the membership half-space covers the mover's path the gate PASSES → the
+    /// wall is tested → the mover STOPS. When the half-space starts far ahead of the
+    /// mover (its spheres never cross the plane) the gate PRUNES the neighbour → it
+    /// is never collision-tested → the mover walks THROUGH. Isolates the gate
+    /// decision from geometry/portal presence (both identical across the runs).
+    #[test]
+    fn cross_portal_flood_gate_prunes_unreached_neighbour() {
+        use crate::spatial::scene::CellMembership;
+        use holtburger_dat::physics::InternalNode;
+        const WALL_ID: u32 = 0x1234_0101;
+        let o = cell_origin();
+        let wall_lx = FCX + WALL_X_LOCAL; // 11
+
+        // Cell-membership half-space {x_local >= plane_x}, origin at the wall cell
+        // (identity orientation). The mover's WORLD sphere centres map to cell-local
+        // x ≈ 0..6 over the walk, so plane_x = 0 ⇒ reachable, plane_x = 50 ⇒ never.
+        let membership = |plane_x: f32| CellMembership {
+            tree: BspNode::Internal(InternalNode {
+                tag: [0u8; 4],
+                plane: Plane {
+                    normal: v(1.0, 0.0, 0.0),
+                    d: -plane_x,
+                },
+                pos: Some(Box::new(BspNode::Leaf(BspLeaf {
+                    index: 0,
+                    solid: 0,
+                    sphere: None,
+                    poly_ids: vec![],
+                }))),
+                neg: None,
+                sphere: None,
+                poly_ids: vec![],
+            }),
+            origin: o,
+            orientation: Quaternion::identity(),
+        };
+
+        let build = |plane_x: f32| -> DriftEnv {
+            let mut scene = SpatialScene::new();
+            let mut floor = HashMap::new();
+            floor.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+            scene.insert_cell_physics_bsp(CELL_ID, bsp_from(floor));
+            seed_common(
+                &mut scene,
+                floor_tris_world(o.x - HE, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ),
+            );
+            // WALL_ID: identical wall + portal in both runs; only membership differs.
+            // No AABB → never picked as the start cell (`current_cell` scans AABBs),
+            // so the membership purely drives the flood gate.
+            let mut wall = HashMap::new();
+            wall.insert(
+                1u16,
+                poly(vec![
+                    v(WALL_X_LOCAL, -HE, 0.0),
+                    v(WALL_X_LOCAL, -HE, WALL_H),
+                    v(WALL_X_LOCAL, HE, WALL_H),
+                    v(WALL_X_LOCAL, HE, 0.0),
+                ]),
+            );
+            scene.insert_cell_physics_bsp(WALL_ID, bsp_from(wall));
+            scene.insert_cell_portal(CELL_ID, WALL_ID);
+            scene.insert_cell_membership(WALL_ID, membership(plane_x));
+            DriftEnv { scene }
+        };
+
+        let flat = |_x: f32| FLOOR_WZ;
+        let start = pose_at(FCX, FCY, FLOOR_WZ);
+        // plane_x = 0: half-space covers the whole path → gate PASSES.
+        let xpass = frame_walk(&build(0.0), start, 0.3, flat, 20, true)
+            .last()
+            .unwrap()
+            .coords
+            .x;
+        // plane_x = 50: half-space starts ~50 units ahead → spheres always Outside
+        // → gate PRUNES the neighbour.
+        let xprune = frame_walk(&build(50.0), start, 0.3, flat, 20, true)
+            .last()
+            .unwrap()
+            .coords
+            .x;
+
+        assert!(
+            xpass < wall_lx - 0.1,
+            "gate-pass: reachable neighbour must be flooded and STOP the mover (wall_lx={wall_lx}, got x={xpass})"
+        );
+        assert!(
+            xprune > wall_lx + 0.3,
+            "gate-prune: unreachable neighbour must be pruned → mover WALKS THROUGH (wall_lx={wall_lx}, got x={xprune})"
+        );
+        assert!(
+            xprune - xpass > 1.0,
+            "gate-pass stop (x={xpass}) must be well short of the gate-prune walk-through (x={xprune})"
         );
     }
 
