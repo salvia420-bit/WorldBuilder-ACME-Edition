@@ -129,8 +129,21 @@ pub struct SceneObjCell {
     /// — adequate for the single-cell indoor sweep, refine for cross-portal.
     aabb: Option<Aabb>,
     /// `((CEnvCell*)this)->stab_list` — the portal-visible neighbour cell ids
-    /// (the cell ring `find_transit_cells` floods).
+    /// (the cell ring `find_transit_cells` floods). Kept for the
+    /// `do_not_load_cells` stab-list prune (`visible_cells()`).
     portal_neighbours: Vec<u32>,
+    /// Phase E2 (cross-portal): the portal neighbours' RESOLVED collision handles
+    /// (`CCellPortal::GetOtherCell` → `CEnvCell::GetVisible`, acclient.c:362341).
+    /// Populated at build time (a SHALLOW build per neighbour — its own
+    /// bsp/statics/aabb/frame, with NO further neighbour resolution, so the
+    /// `find_cell_list` flood stays bounded to depth 1). `find_transit_cells`
+    /// emits these with `Some(handle)` so `check_other_cells` actually collides
+    /// the mover against the neighbour cell across the portal (without this the
+    /// neighbour carried a NULL handle and was silently skipped → cross-portal
+    /// walk-through). Empty for shallow neighbours and outdoor cells. Each cell
+    /// collides in its OWN world frame (non-Euclidean-safe: portal connectivity,
+    /// not spatial overlap — gmriggs/trevis).
+    resolved_neighbours: Vec<(u32, ObjCellHandle)>,
     /// Phase D / WS3: the OUTDOOR land cell's two collision triangles
     /// (`CLandCell::polygons`), in this cell's LANDBLOCK-local frame (WS2's
     /// [`cell_terrain_polys`]). `Some` ⇒ this is an outdoor `CLandCell` and
@@ -279,12 +292,17 @@ impl CObjCell for SceneObjCell {
     }
 
     /// `CEnvCell::find_transit_cells` (acclient.c:348250) — flood the portal
-    /// neighbour cell ids into the ring. Phase A appends them with NULL handles:
-    /// the PRIMARY (player's own) cell is collision-tested faithfully via
-    /// `world.get_visible(check_cell)`; cross-portal collision (resolving the
-    /// neighbour handles) needs the scene reference a `'static` cell cannot
-    /// hold — VERIFY(1070): a shared resolver for portal-spanning sweeps (the
-    /// drift harness is single-cell; cross-portal needs the live cell graph).
+    /// neighbour cells into the ring. Phase E2: the neighbour handles were
+    /// resolved at build time (`build_cell_inner` → `GetVisible`), so we emit
+    /// them with `Some(handle)` and `check_other_cells` collides the mover
+    /// across the portal (the `'static` cell can't borrow the scene, so the
+    /// resolution happens at build time rather than here). Non-resident /
+    /// unloaded neighbours are simply absent (graceful stale-handle handling —
+    /// trevis "stale pointer shenanigans"; a NULL-handle entry would be skipped
+    /// by `check_other_cells` anyway and carries no geometry). Bounded to depth 1:
+    /// the resolved neighbours are SHALLOW (empty `resolved_neighbours`), so the
+    /// `find_cell_list` flood does not recurse — iterative flooding + the
+    /// sphere-vs-portal intersection gate (acclient.c:348337) is a follow-up.
     fn find_transit_cells(
         &self,
         _p: &Position,
@@ -293,8 +311,8 @@ impl CObjCell for SceneObjCell {
         cell_array: &mut dyn CellArrayApi,
         _path: Option<&mut SpherePath>,
     ) {
-        for &nb in &self.portal_neighbours {
-            cell_array.add_cell(nb, None);
+        for (id, handle) in &self.resolved_neighbours {
+            cell_array.add_cell(*id, Some(handle.clone()));
         }
     }
 
@@ -407,6 +425,18 @@ impl<'a> SceneWorld<'a> {
     /// resident (no physics BSP and not in the portal graph). The handle owns a
     /// CLONE of the cell's physics BSP (`'static` requirement).
     fn build_cell(&self, cell_id: u32) -> Option<Rc<dyn CObjCell>> {
+        self.build_cell_inner(cell_id, true)
+    }
+
+    /// `resolve_neighbours`: for the primary/visible cell (`true`), also resolve
+    /// each portal neighbour's collision handle so `find_transit_cells` can emit
+    /// `Some(handle)` and `check_other_cells` collides the mover across the portal
+    /// (Phase E2). Neighbours are built with `resolve_neighbours = false` (SHALLOW
+    /// — their own bsp/statics/aabb/frame, but empty `resolved_neighbours`), which
+    /// bounds the `find_cell_list` flood to depth 1 and prevents recursion. A
+    /// neighbour that is not resident resolves to `None` and is dropped (graceful
+    /// stale-handle handling).
+    fn build_cell_inner(&self, cell_id: u32, resolve_neighbours: bool) -> Option<Rc<dyn CObjCell>> {
         let bsp = self.scene.cell_physics_bsp(cell_id).cloned();
         let statics = self.scene.cell_static_physics_bsp(cell_id).to_vec();
         let aabb = self.scene.cell_aabb(cell_id);
@@ -425,6 +455,17 @@ impl<'a> SceneWorld<'a> {
                 frame: Frame::identity(),
             },
         };
+        // `CCellPortal::GetOtherCell` → `CEnvCell::GetVisible` (acclient.c:362341)
+        // per neighbour, SHALLOW so the flood is depth-bounded. Each neighbour
+        // carries its OWN world frame (non-Euclidean-safe).
+        let resolved_neighbours: Vec<(u32, ObjCellHandle)> = if resolve_neighbours {
+            portal_neighbours
+                .iter()
+                .filter_map(|&nb| self.build_cell_inner(nb, false).map(|h| (nb, h)))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let cell = SceneObjCell {
             cell_id,
             pos,
@@ -432,6 +473,7 @@ impl<'a> SceneWorld<'a> {
             statics,
             aabb,
             portal_neighbours,
+            resolved_neighbours,
             // Indoor env cell — no terrain triangles (mutually exclusive with bsp).
             terrain_polys: None,
             landblock_origin: Vector3::zero(),
@@ -693,6 +735,7 @@ fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> O
         statics,
         aabb: Some(aabb),
         portal_neighbours: Vec::new(),
+        resolved_neighbours: Vec::new(),
         terrain_polys,
         landblock_origin,
     }) as ObjCellHandle
@@ -1648,6 +1691,79 @@ mod drift {
         assert_eq!(
             (oon.x, oon.z), (ooff.x, ooff.z),
             "outdoor terrain climb stays flag-independent (WS-C is indoor-BSP only)"
+        );
+    }
+
+    /// Phase E2 (cross-portal collision): a wall lives in a PORTAL-NEIGHBOUR cell
+    /// (`NB_ID`), not the mover's own cell (`CELL_ID`). WITH the portal link the
+    /// faithful driver resolves the neighbour (`find_transit_cells` →
+    /// `build_cell_inner` → `GetVisible`) and collides the mover against the
+    /// neighbour's wall across the portal — it STOPS short. WITHOUT the portal the
+    /// neighbour is never flooded into the ring, so it is not collision-tested and
+    /// the mover walks THROUGH where the wall is. Same geometry both runs; only the
+    /// portal edge differs — proving the portal GRAPH (not spatial overlap) drives
+    /// which cells are tested (non-Euclidean-safe; gmriggs/trevis). Before E2 the
+    /// neighbour carried a NULL handle and was always skipped → the walk-through.
+    #[test]
+    fn cross_portal_neighbour_wall_stops_mover() {
+        const NB_ID: u32 = 0x1234_0101; // same landblock, neighbour cell
+        let o = cell_origin();
+        let wall_lx = FCX + WALL_X_LOCAL; // landblock-local x of the wall face (FCX=10 → 11)
+
+        let build = |with_portal: bool| -> DriftEnv {
+            let mut scene = SpatialScene::new();
+            // CELL_ID: floor only (keeps the mover grounded) + AABB / flat tris.
+            let mut floor = HashMap::new();
+            floor.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+            scene.insert_cell_physics_bsp(CELL_ID, bsp_from(floor));
+            seed_common(
+                &mut scene,
+                floor_tris_world(o.x - HE, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ),
+            );
+            // NB_ID: the vertical wall (faces −x), framed to world via cell_origin().
+            let mut wall = HashMap::new();
+            wall.insert(
+                1u16,
+                poly(vec![
+                    v(WALL_X_LOCAL, -HE, 0.0),
+                    v(WALL_X_LOCAL, -HE, WALL_H),
+                    v(WALL_X_LOCAL, HE, WALL_H),
+                    v(WALL_X_LOCAL, HE, 0.0),
+                ]),
+            );
+            scene.insert_cell_physics_bsp(NB_ID, bsp_from(wall));
+            if with_portal {
+                scene.insert_cell_portal(CELL_ID, NB_ID);
+            }
+            DriftEnv { scene }
+        };
+
+        // Walk +x across frames (the live cadence) on a flat floor so the mover
+        // actually reaches the neighbour wall at landblock-local x = wall_lx.
+        let flat = |_x: f32| FLOOR_WZ;
+        let start = pose_at(FCX, FCY, FLOOR_WZ);
+        let xp = frame_walk(&build(true), start, 0.3, flat, 20, true)
+            .last()
+            .unwrap()
+            .coords
+            .x;
+        let xn = frame_walk(&build(false), start, 0.3, flat, 20, true)
+            .last()
+            .unwrap()
+            .coords
+            .x;
+
+        assert!(
+            xp < wall_lx - 0.1,
+            "cross-portal: mover must STOP before the neighbour wall (wall_lx={wall_lx}, got x={xp})"
+        );
+        assert!(
+            xn > wall_lx + 0.3,
+            "no-portal control: mover must WALK THROUGH past the wall (wall_lx={wall_lx}, got x={xn})"
+        );
+        assert!(
+            xn - xp > 1.0,
+            "portal stop (x={xp}) must be well short of the no-portal walk-through (x={xn})"
         );
     }
 
