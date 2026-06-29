@@ -26,7 +26,7 @@ use super::objcell::CellWorld;
 use super::types::{
     object_info_state, CTransition, InsertType, TransitionState, EPSILON, Z_FOR_LANDING,
 };
-use holtburger_common::{Plane, Vector3};
+use holtburger_common::{Plane, Quaternion, Vector3};
 
 /// Raw resolver `int` codes used by the B3 search loops (1=OK 2=COLLIDED).
 const OK: i32 = TransitionState::Ok as i32;
@@ -574,17 +574,25 @@ fn frame_orient_snap(dst: &mut Frame, src: &Frame) {
     dst.fl2gv = src.fl2gv;
 }
 
-/// SEAM(B4): `Frame::interpolate_rotation` (acclient.c:357258) SLERPs `dst`'s
-/// orientation from `begin`→`end` at fraction `t`. Without the quaternion we
-/// reproduce the exact result for equal begin/end orientation (that shared
-/// basis); a genuine reorientation is approximated by snapping to `end` (B4
-/// owns the real SLERP). `dst`'s origin is untouched.
-fn frame_orient_interp(dst: &mut Frame, begin: &Frame, end: &Frame, _t: f32) {
-    dst.fl2gv = if begin.fl2gv == end.fl2gv {
-        begin.fl2gv
-    } else {
-        end.fl2gv
-    };
+/// `Frame::interpolate_rotation` (acclient.c:357258) — SLERP `dst`'s orientation
+/// from `begin`→`end` at fraction `t` (the driver passes `(step+1)/num_steps`).
+/// The holtburger `Frame` stores only the `fl2gv` basis (no persisted
+/// quaternion), so we recover the endpoint quaternions from their bases, run the
+/// faithful SLERP ([`Quaternion::slerp`]), and write the basis back — bit-exact
+/// to retail for an orthonormal frame, since `from_rotation_matrix` inverts the
+/// `Frame::cache` formula `to_rotation_matrix` reproduces. The equal-basis fast
+/// path skips the round-trip for the pure-translation sweeps that share an
+/// orientation (every current synthetic scene + the upright player capsule).
+/// `dst`'s origin is untouched — retail interpolates rotation only; the step loop
+/// advances the origin separately.
+fn frame_orient_interp(dst: &mut Frame, begin: &Frame, end: &Frame, t: f32) {
+    if begin.fl2gv == end.fl2gv {
+        dst.fl2gv = begin.fl2gv;
+        return;
+    }
+    let q_begin = Quaternion::from_rotation_matrix(&begin.fl2gv);
+    let q_end = Quaternion::from_rotation_matrix(&end.fl2gv);
+    dst.fl2gv = Quaternion::slerp(q_begin, q_end, t).to_rotation_matrix();
 }
 
 #[cfg(test)]
@@ -601,6 +609,40 @@ mod tests {
     const TOL: f32 = 1e-4;
     fn approx(a: Vector3, b: Vector3) -> bool {
         (a.x - b.x).abs() < TOL && (a.y - b.y).abs() < TOL && (a.z - b.z).abs() < TOL
+    }
+
+    /// `frame_orient_interp` (the `Frame::interpolate_rotation` seam) SLERPs the
+    /// basis at `t` and leaves the origin alone. Half-way from identity to a 90°
+    /// yaw is a 45° yaw (the SLERP constant-rate property).
+    #[test]
+    fn frame_orient_interp_slerps_half_rotation() {
+        let yaw = |deg: f32| {
+            let h = (deg as f32).to_radians() * 0.5;
+            Quaternion { w: h.cos(), x: 0.0, y: 0.0, z: h.sin() }
+        };
+        let begin = Frame::identity();
+        let end = Frame { fl2gv: yaw(90.0).to_rotation_matrix(), origin: v(0.0, 0.0, 0.0) };
+        let mut dst = Frame { fl2gv: Frame::identity().fl2gv, origin: v(7.0, -3.0, 2.0) };
+        frame_orient_interp(&mut dst, &begin, &end, 0.5);
+        let want = yaw(45.0).to_rotation_matrix();
+        assert!(
+            dst.fl2gv.iter().zip(want.iter()).all(|(a, b)| (a - b).abs() < 1e-4),
+            "interp not a 45° yaw: got {:?}",
+            dst.fl2gv
+        );
+        assert!(approx(dst.origin, v(7.0, -3.0, 2.0)), "origin must be untouched by rotation interp");
+    }
+
+    /// Equal begin/end orientation (every current synthetic sweep + the upright
+    /// player capsule) takes the exact passthrough — no quaternion round-trip,
+    /// byte-identical basis.
+    #[test]
+    fn frame_orient_interp_equal_basis_is_exact_passthrough() {
+        let begin = Frame::identity();
+        let mut dst = Frame { fl2gv: [9.0; 9], origin: v(1.0, 2.0, 3.0) };
+        frame_orient_interp(&mut dst, &begin, &begin, 0.37);
+        assert_eq!(dst.fl2gv, begin.fl2gv);
+        assert!(approx(dst.origin, v(1.0, 2.0, 3.0)));
     }
 
     struct Phys(bool);

@@ -258,6 +258,127 @@ impl Quaternion {
             z: -self.z,
         }
     }
+
+    /// Quaternion dot product (4-component). The cosine of half the angle
+    /// between the two orientations; the `cosom` of [`Self::slerp`].
+    pub fn dot(self, other: Self) -> f32 {
+        self.w * other.w + self.x * other.x + self.y * other.y + self.z * other.z
+    }
+
+    /// Spherical-linear interpolation, a faithful port of retail
+    /// `Frame::interpolate_rotation` (acclient.c:357258). `t` runs 0→1 (the
+    /// driver supplies `(step+1)/num_steps`). Takes the SHORT arc (negates `to`
+    /// when `cosom < 0`); falls back to linear blend when the endpoints are
+    /// nearly identical (`1 - cosom <= 0.00019999999`) or when a computed scale
+    /// leaves `[0, 1]` (the decomp's range guard), then normalizes — retail
+    /// normalizes via `Frame::set_rotate`. (ACE uses `Quaternion.Lerp`; the
+    /// decomp's true SLERP wins per project policy.)
+    pub fn slerp(from: Self, to: Self, t: f32) -> Self {
+        let mut cosom = from.dot(to);
+        // Short-arc: flip `to` (and the dot sign) when the dot is negative.
+        let to = if cosom < 0.0 {
+            cosom = -cosom;
+            Self {
+                w: -to.w,
+                x: -to.x,
+                y: -to.y,
+                z: -to.z,
+            }
+        } else {
+            to
+        };
+        let (scale0, scale1) = if 1.0 - cosom > 0.000_199_999_99 {
+            let omega = cosom.acos();
+            let inv_sin = 1.0 / omega.sin();
+            let s0 = (omega * (1.0 - t)).sin() * inv_sin;
+            let s1 = (omega * t).sin() * inv_sin;
+            // Decomp range guard: any out-of-[0,1] scale ⇒ linear fallback.
+            if !(0.0..=1.0).contains(&s0) || !(0.0..=1.0).contains(&s1) {
+                (1.0 - t, t)
+            } else {
+                (s0, s1)
+            }
+        } else {
+            (1.0 - t, t)
+        };
+        Self {
+            w: scale0 * from.w + scale1 * to.w,
+            x: scale0 * from.x + scale1 * to.x,
+            y: scale0 * from.y + scale1 * to.y,
+            z: scale0 * from.z + scale1 * to.z,
+        }
+        .normalize()
+    }
+
+    /// Build the column-major local→global rotation basis the physics `Frame`
+    /// stores (`m_fl2gv[0..9]`). Bit-for-bit the retail `Frame::cache` formula
+    /// (acclient.c:356984) — and identical to constructing the basis with
+    /// [`Self::rotate_vector`] on the unit axes (the `frame_from` path), so the
+    /// matrix↔quaternion round-trip is exact for an orthonormal frame.
+    pub fn to_rotation_matrix(self) -> [f32; 9] {
+        let Self { w, x, y, z } = self;
+        let (xx, yy, zz) = (x * x, y * y, z * z);
+        let (xy, xz, yz) = (x * y, x * z, y * z);
+        let (wx, wy, wz) = (w * x, w * y, w * z);
+        [
+            1.0 - 2.0 * (yy + zz),
+            2.0 * (xy + wz),
+            2.0 * (xz - wy),
+            2.0 * (xy - wz),
+            1.0 - 2.0 * (xx + zz),
+            2.0 * (yz + wx),
+            2.0 * (xz + wy),
+            2.0 * (yz - wx),
+            1.0 - 2.0 * (xx + yy),
+        ]
+    }
+
+    /// Recover the unit quaternion from a column-major `m_fl2gv` rotation basis
+    /// (the inverse of [`Self::to_rotation_matrix`]). Shepperd's method: pivot on
+    /// the largest diagonal term for numerical stability. Sign conventions match
+    /// the layout `to_rotation_matrix` writes, so `from_rotation_matrix(q.to_…)`
+    /// recovers `q` (up to the usual q/−q double cover, which `slerp` resolves).
+    pub fn from_rotation_matrix(m: &[f32; 9]) -> Self {
+        // m is column-major: M[row][col] = (m00 m01 m02 / m10 m11 m12 / m20 m21 m22).
+        let (m00, m10, m20) = (m[0], m[1], m[2]);
+        let (m01, m11, m21) = (m[3], m[4], m[5]);
+        let (m02, m12, m22) = (m[6], m[7], m[8]);
+        let trace = m00 + m11 + m22;
+        let q = if trace > 0.0 {
+            let s = (trace + 1.0).sqrt() * 2.0; // 4w
+            Self {
+                w: 0.25 * s,
+                x: (m21 - m12) / s,
+                y: (m02 - m20) / s,
+                z: (m10 - m01) / s,
+            }
+        } else if m00 > m11 && m00 > m22 {
+            let s = (1.0 + m00 - m11 - m22).sqrt() * 2.0; // 4x
+            Self {
+                w: (m21 - m12) / s,
+                x: 0.25 * s,
+                y: (m01 + m10) / s,
+                z: (m02 + m20) / s,
+            }
+        } else if m11 > m22 {
+            let s = (1.0 + m11 - m00 - m22).sqrt() * 2.0; // 4y
+            Self {
+                w: (m02 - m20) / s,
+                x: (m01 + m10) / s,
+                y: 0.25 * s,
+                z: (m12 + m21) / s,
+            }
+        } else {
+            let s = (1.0 + m22 - m00 - m11).sqrt() * 2.0; // 4z
+            Self {
+                w: (m10 - m01) / s,
+                x: (m02 + m20) / s,
+                y: (m12 + m21) / s,
+                z: 0.25 * s,
+            }
+        };
+        q.normalize()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, BinRead, BinWrite, PartialEq)]
@@ -943,5 +1064,98 @@ mod tests {
         let v = yaw_z(90.0).rotate_vector(Vector3::new(1.0, 0.0, 0.0));
         assert!((v.x - 0.0).abs() < 1e-5 && (v.y - 1.0).abs() < 1e-5 && (v.z - 0.0).abs() < 1e-5,
             "got ({:.4},{:.4},{:.4})", v.x, v.y, v.z);
+    }
+
+    fn mat_close(a: &[f32; 9], b: &[f32; 9], eps: f32) -> bool {
+        a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < eps)
+    }
+
+    /// A non-axis-aligned unit quaternion (tilt about (1,1,0)) to exercise the
+    /// non-yaw `from_rotation_matrix` pivots and the full SLERP path.
+    fn tilt() -> Quaternion {
+        let h = 50.0_f32.to_radians() * 0.5;
+        let s = h.sin() / 2.0_f32.sqrt();
+        Quaternion { w: h.cos(), x: s, y: s, z: 0.0 }.normalize()
+    }
+
+    #[test]
+    fn quat_to_matrix_equals_rotate_vector_basis() {
+        // to_rotation_matrix MUST equal the column-major basis built from
+        // rotate_vector on the unit axes — that is exactly `frame_from`'s
+        // construction and retail `Frame::cache` (acclient.c:356984). This is the
+        // faithfulness anchor that lets the bridge round-trip frames losslessly.
+        for q in [Quaternion::identity(), yaw_z(90.0), yaw_z(217.0), tilt()] {
+            let m = q.to_rotation_matrix();
+            let cx = q.rotate_vector(Vector3::new(1.0, 0.0, 0.0));
+            let cy = q.rotate_vector(Vector3::new(0.0, 1.0, 0.0));
+            let cz = q.rotate_vector(Vector3::new(0.0, 0.0, 1.0));
+            let basis = [cx.x, cx.y, cx.z, cy.x, cy.y, cy.z, cz.x, cz.y, cz.z];
+            assert!(mat_close(&m, &basis, 1e-5), "q={q:?} m={m:?} basis={basis:?}");
+        }
+    }
+
+    #[test]
+    fn quat_matrix_roundtrip_preserves_rotation() {
+        // from_rotation_matrix inverts to_rotation_matrix over SO(3) (up to q/−q,
+        // which has the same matrix). Covers trace>0 (yaw) + every diagonal pivot
+        // (180° about X/Y/Z + the tilt).
+        let cases = [
+            Quaternion::identity(),
+            yaw_z(90.0),
+            yaw_z(180.0),
+            Quaternion { w: 0.0, x: 1.0, y: 0.0, z: 0.0 }, // 180° about X (m00 pivot)
+            Quaternion { w: 0.0, x: 0.0, y: 1.0, z: 0.0 }, // 180° about Y (m11 pivot)
+            tilt(),
+        ];
+        for q in cases {
+            let m = q.to_rotation_matrix();
+            let recovered = Quaternion::from_rotation_matrix(&m);
+            assert!(
+                mat_close(&recovered.to_rotation_matrix(), &m, 1e-5),
+                "roundtrip lost rotation: q={q:?} m={m:?} recovered={recovered:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn quat_slerp_hits_endpoints() {
+        // slerp(a,b,0)==a and slerp(a,b,1)==b (compared as matrices: q/−q agnostic).
+        let a = yaw_z(20.0);
+        let b = tilt();
+        assert!(mat_close(&Quaternion::slerp(a, b, 0.0).to_rotation_matrix(), &a.to_rotation_matrix(), 1e-5));
+        assert!(mat_close(&Quaternion::slerp(a, b, 1.0).to_rotation_matrix(), &b.to_rotation_matrix(), 1e-5));
+    }
+
+    #[test]
+    fn quat_slerp_midpoint_is_half_rotation() {
+        // Halfway from identity to a 90° yaw is a 45° yaw (constant angular rate —
+        // the property Lerp lacks and SLERP guarantees).
+        let mid = Quaternion::slerp(Quaternion::identity(), yaw_z(90.0), 0.5);
+        assert!(
+            mat_close(&mid.to_rotation_matrix(), &yaw_z(45.0).to_rotation_matrix(), 1e-5),
+            "slerp midpoint not 45°: {:?}", mid
+        );
+    }
+
+    #[test]
+    fn quat_slerp_takes_short_arc() {
+        // identity → 270° yaw: the short way is −90°. SLERP must negate the target
+        // (cosom<0) and land the midpoint at 315° (−45°), NOT 135°.
+        let mid = Quaternion::slerp(Quaternion::identity(), yaw_z(270.0), 0.5);
+        assert!(
+            mat_close(&mid.to_rotation_matrix(), &yaw_z(315.0).to_rotation_matrix(), 1e-5),
+            "short-arc failed: midpoint {:?} should be 315°, not 135°", mid
+        );
+    }
+
+    #[test]
+    fn quat_slerp_near_identical_linear_fallback_no_nan() {
+        // Nearly equal endpoints take the linear branch (1−cosom ≤ 0.00019999999)
+        // — must stay finite and land between the endpoints.
+        let a = yaw_z(30.0);
+        let b = yaw_z(30.01);
+        let r = Quaternion::slerp(a, b, 0.5);
+        assert!(r.w.is_finite() && r.x.is_finite() && r.y.is_finite() && r.z.is_finite());
+        assert!(quat_close(r, a, 1e-3), "near-identical slerp drifted: {r:?}");
     }
 }
