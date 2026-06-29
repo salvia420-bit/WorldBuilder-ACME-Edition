@@ -260,6 +260,40 @@ export function getAcFont(fontId = UI_FONT_ID) {
  * callers position via CSS) — adding alignment opts without a box is
  * a no-op.
  */
+// Perf gate (F-2026-06-29): default-ON; `?tipPerf=off` disables the
+// hidden-<ac-text> re-render guard in _render() below (A/B baseline).
+const AC_TEXT_VIS_GUARD = !/[?&]tipPerf=off(?:&|$)/i.test(
+  (typeof location !== "undefined" && location.search) || ""
+);
+
+// Perf (F-2026-06-29): reusable scratch canvases for renderAcText's shadow
+// + foreground temp passes. These are internal-only (never returned or
+// inserted into the DOM), and renderAcText is fully synchronous with no
+// reentry, so one module-scope pair is safe. Reassigning width/height
+// clears the bitmap AND resets the 2d context to defaults (Blink), so the
+// output is pixel-identical to a freshly-created canvas while skipping 2
+// canvas allocations per render (the dominant cost for repeated HUD text).
+// Gated on the same ?tipPerf flag (`=off` -> old fresh-canvas path).
+let _acTmpBg = null;
+let _acTmpFg = null;
+function _acTempCanvas(which, w, h) {
+  if (!AC_TEXT_VIS_GUARD) {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    return c;
+  }
+  let c = which === "bg" ? _acTmpBg : _acTmpFg;
+  if (!c) {
+    c = document.createElement("canvas");
+    if (which === "bg") _acTmpBg = c;
+    else _acTmpFg = c;
+  }
+  c.width = w; // assignment resets bitmap + ctx state -> clean scratch
+  c.height = h;
+  return c;
+}
+
 export function renderAcText(text, opts = {}) {
   registerAcText();
   const fontId = opts.fontId ?? UI_FONT_ID;
@@ -331,9 +365,7 @@ export function renderAcText(text, opts = {}) {
 
   // Optional drop shadow first, behind the foreground.
   if (drawShadow) {
-    const tmpBg = document.createElement("canvas");
-    tmpBg.width = w;
-    tmpBg.height = h;
+    const tmpBg = _acTempCanvas("bg", w, h);
     const tbg = tmpBg.getContext("2d");
     if (tbg) {
       tbg.imageSmoothingEnabled = false;
@@ -349,9 +381,7 @@ export function renderAcText(text, opts = {}) {
   }
 
   // Foreground glyphs in the requested color.
-  const tmp = document.createElement("canvas");
-  tmp.width = w;
-  tmp.height = h;
+  const tmp = _acTempCanvas("fg", w, h);
   const tctx = tmp.getContext("2d");
   if (!tctx) return null;
   tctx.imageSmoothingEnabled = false;
@@ -406,12 +436,26 @@ export function setAcText(el, text, opts) {
     inner = el.ownerDocument.createElement("ac-text");
     el.appendChild(inner);
   }
+  const str = String(text ?? "");
+  // Idempotence (F-2026-06-29): per-frame callers (radar coords re-set every
+  // rAF at radar.js:839, combat HUD) re-set IDENTICAL text. Setting
+  // textContent replaces the rendered <canvas> with a text node and forces a
+  // full re-rasterize — ~12 canvases/sec from the radar alone, the dominant
+  // HUD canvas churn in-world. Skip when the inner ac-text already shows this
+  // exact text+opts AND has a live canvas (inner._canvas is set by _render).
+  // The key folds opts so a color/scale/font change still re-renders.
+  // `?tipPerf=off` disables this guard.
+  const key = opts
+    ? `${str} ${opts.color ?? ""} ${opts.scale ?? ""} ${opts.fontId ?? ""}`
+    : str;
+  if (AC_TEXT_VIS_GUARD && inner._acSetKey === key && inner._canvas) return;
+  inner._acSetKey = key;
   if (opts) {
     if (opts.color !== undefined) inner.setAttribute("color", String(opts.color));
     if (opts.scale !== undefined) inner.setAttribute("scale", String(opts.scale));
     if (opts.fontId !== undefined) inner.setAttribute("font-id", String(opts.fontId));
   }
-  inner.textContent = String(text ?? "");
+  inner.textContent = str;
 }
 
 /**
@@ -734,6 +778,23 @@ function _registerAcTextImpl() {
         // Either the observer fired on our own canvas append (textContent
         // is now "") or nothing changed. Skip.
         if (currentText.length === 0) return;
+      }
+      // Perf (F-2026-06-29): don't re-rasterize an already-drawn <ac-text>
+      // while it generates no layout boxes — i.e. it (or an ancestor) is
+      // `display:none` / detached. `getClientRects().length === 0` is exactly
+      // that test; unlike `offsetParent === null` it does NOT false-positive
+      // on `position:fixed` (a visible fixed element still has client rects),
+      // so a visible fixed HUD label is never wrongly skipped. The first
+      // render always proceeds (this._canvas is null) so a shown element is
+      // never blank; leaving _sourceText stale means a later visible text
+      // change re-renders. `?tipPerf=off` disables this.
+      if (
+        AC_TEXT_VIS_GUARD &&
+        this._canvas &&
+        typeof this.getClientRects === "function" &&
+        this.getClientRects().length === 0
+      ) {
+        return;
       }
       this._sourceText = text;
 

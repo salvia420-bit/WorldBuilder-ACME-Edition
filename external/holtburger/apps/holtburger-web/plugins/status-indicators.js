@@ -434,6 +434,12 @@ export function mount(_ctx) {
   const linkTip = linkEl?.querySelector(".hb-indicator-tip");
   let linkLastTier = null;
   let linkLastTipText = null;
+  let linkLastTipTier = null;
+  // Perf gate (F-2026-06-29): default-ON; `?tipPerf=off` restores the
+  // pre-fix per-tick tooltip rebuild for A/B measurement.
+  const TIP_PERF = !/[?&]tipPerf=off(?:&|$)/i.test(
+    (typeof location !== "undefined" && location.search) || ""
+  );
 
   // P2-37 closure (2026-06-05) — walk layout 0x21000071's LinkStatus
   // element (0x100000F8) for its per-state Image media, then resolve
@@ -563,8 +569,24 @@ export function mount(_ctx) {
       const rttStr = rttKnown ? `${rttMs} ms` : "—";
       const ageStr = ageKnown ? `${ageMs} ms` : "—";
       const next = `Link: ${tier}  (rtt ${rttStr} · last recv ${ageStr})`;
-      if (next !== linkLastTipText) {
+      // Perf (F-2026-06-29): `ageStr` (live ms-since-recv) changes almost
+      // every tick, so this diff-gate never held → setAcText rebuilt up to
+      // 3 <canvas> backing stores EVERY second forever. The tooltip is
+      // `opacity:0` until `.hb-indicator:hover` (CSS at the top of this
+      // file), so `offsetParent`/`getClientRects` can't tell it's hidden —
+      // hover state is the real "is anyone looking" signal. Under ?tipPerf
+      // (default-ON) re-rasterize the live ms ONLY while the indicator is
+      // hovered; otherwise rebuild just on tier change (so the next hover is
+      // fresh). First render is unconditional. `?tipPerf=off` = old behavior.
+      const hovered =
+        !!linkEl &&
+        typeof linkEl.matches === "function" &&
+        linkEl.matches(":hover");
+      const renderTip =
+        !TIP_PERF || linkLastTipText === null || hovered || linkLastTipTier !== tier;
+      if (next !== linkLastTipText && renderTip) {
         linkLastTipText = next;
+        linkLastTipTier = tier;
         setAcText(linkTip, next);
       }
     }

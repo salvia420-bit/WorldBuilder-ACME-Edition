@@ -8163,7 +8163,49 @@
             // ClientEvent. Free each EntityUpdate after we're done —
             // wasm-bindgen-allocated structs leak across the boundary
             // until JS releases them.
-            const entityUpdates = handle.pollEntityUpdates();
+            // Perf (F-2026-06-29): per-frame drain budget. pollEntityUpdates
+            // one-shot-drains the WHOLE wasm queue; processing a catastrophic
+            // post-stall burst (1000s of updates) in a single frame is a
+            // multi-hundred-ms stall that grows the next backlog -> death
+            // spiral (reproduced live: one hitch dropped the headless client
+            // to ~3 fps). Stage the drained batch into a cross-frame pending
+            // buffer and process at most __budget per frame. Steady state
+            // (100s/sec) is far below 256*fps, so the pending buffer empties
+            // every frame in normal play (splice takes all) -> byte-identical,
+            // zero added latency; the budget only amortizes bursts across a
+            // few frames instead of one giant frame. The safety valve drains
+            // the whole backlog if it ever exceeds the ceiling (bounds latency
+            // + wasm memory under a pathological sustained flood). The
+            // hook-forward + for-loop + upd.free() below are UNCHANGED — they
+            // just iterate the budgeted slice; deferred items stay alive in
+            // the buffer until a later frame frees them. DEFAULT-OFF (opt-in
+            // via `?entDrainBudget=on`): validated inert in normal play — the
+            // budget never engaged even in populated Holtburg (59 entities,
+            // pendMax 0), so it is kept as an opt-in safety valve for the
+            // tab-background -> refocus backlog case (see ~L598) rather than
+            // always-on hot-path code.
+            const __budgetOn = (window.__entDrainBudgetOn ??=
+              /[?&]entDrainBudget=on(?:&|$)/i.test(location.search || ""));
+            const __fresh = handle.pollEntityUpdates();
+            let entityUpdates;
+            if (!__budgetOn) {
+              entityUpdates = __fresh;
+            } else {
+              // Fast path (the overwhelming common case): nothing pending AND
+              // the whole batch fits in one frame's budget -> use it directly,
+              // zero copy, byte-identical to the unbudgeted drain. Only a real
+              // burst (>256) or an existing backlog takes the buffered path.
+              let __pend = window.__entDrainPending;
+              if ((!__pend || __pend.length === 0) && __fresh.length <= 256) {
+                entityUpdates = __fresh;
+              } else {
+                __pend = (window.__entDrainPending ||= []);
+                for (const __u of __fresh) __pend.push(__u);
+                let __budget = 256;
+                if (__pend.length > 6000) __budget = __pend.length; // safety valve
+                entityUpdates = __pend.splice(0, __budget);
+              }
+            }
             // Phase 7.5: forward the still-alive (pre-.free()) updates
             // array to the 3D EntityManager when `?renderer=3d` is
             // active. The hook (installed by
