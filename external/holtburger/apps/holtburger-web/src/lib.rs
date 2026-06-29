@@ -40111,6 +40111,16 @@ async fn recv_loop(
                         // F4-4: cache per-vertex water flags from the terrain
                         // type codes (no-op when not 81 — fail-soft).
                         w.populate_terrain_water(landblock_id, &terrain_codes);
+                        // Phase E3.6 (2026-06-29): feed the SAME terrain-type codes
+                        // into the spatial scene so the FAITHFUL outdoor path
+                        // classifies per-cell water (build_outdoor_cell →
+                        // SceneObjCell water_type/get_water_depth). The WorldState
+                        // copy above only feeds the legacy ?faithfulOutdoor=off
+                        // path; the faithful (default-on) path reads the scene.
+                        // Fail-soft when not 81 (mirrors populate_terrain_water).
+                        if let Ok(codes) = <[u8; 81]>::try_from(terrain_codes.as_slice()) {
+                            w.scene.populate_terrain_water_codes(landblock_id, codes);
+                        }
                         console_log_str(&format!(
                             "[terrain] populated landblock 0x{landblock_id:08X} ({} cached total)",
                             w.terrain_height_cache_len(),

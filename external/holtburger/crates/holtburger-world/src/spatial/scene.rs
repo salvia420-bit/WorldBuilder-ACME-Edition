@@ -612,6 +612,19 @@ pub struct SpatialScene {
     /// landblock-load feed, mirroring the Phase C BSP staging); cleared per
     /// landblock by [`Self::clear_terrain_heights_for_landblock`] on unload.
     terrain_heights: Arc<HashMap<u32, [f32; 81]>>,
+    /// Phase 3 Phase E3.6 (2026-06-29): per-landblock terrain TYPE codes for the
+    /// faithful OUTDOOR water gate. Same key form (`cell_id & 0xFFFF_0000`) and
+    /// `vx * 9 + vy` layout as [`Self::terrain_heights`]; each entry is the
+    /// landblock's 9×9 grid of `(CellLandblock.terrain >> 2) & 0x1F` terrain-type
+    /// codes — exactly what lib.rs's heightmap parse already computes as
+    /// `terrain_codes`. The faithful outdoor cell builder
+    /// ([`super::faithful_bridge::build_outdoor_cell`]) reads this to classify a
+    /// 24 m cell's water type from its 4 corner codes (retail `CalcCellWater`,
+    /// acclient.c:353608 → water iff `TERRAIN_SURF_CHAR[code] == WATER`, i.e.
+    /// code ∈ `16..=20`; ACE `SurfChar` agrees). `None` ⇒ NotWater (fail-soft).
+    /// Populated by [`Self::populate_terrain_water_codes`], cleared per landblock
+    /// by [`Self::clear_terrain_water_codes_for_landblock`].
+    terrain_water_codes: Arc<HashMap<u32, [u8; 81]>>,
     /// Workstream Sky-B (parametric skybox, 2026-05-11): the parsed
     /// SkyDesc + GameTime for the active Region. `None` until the
     /// wasm bundle's `populateSkyDescFromRegion` lands; populated once
@@ -727,6 +740,7 @@ impl SpatialScene {
             statics_physics_bsp: Arc::new(HashMap::new()),
             building_physics_index: Arc::new(HashMap::new()),
             terrain_heights: Arc::new(HashMap::new()),
+            terrain_water_codes: Arc::new(HashMap::new()),
             sky_desc: None,
             remote_interp_enabled: false,
             remote_stepped_poses: HashMap::new(),
@@ -1483,6 +1497,28 @@ impl SpatialScene {
     /// Phase D / WS1: count of resident terrain landblocks. Diagnostic / tests.
     pub fn terrain_heights_count(&self) -> usize {
         self.terrain_heights.len()
+    }
+
+    /// Phase E3.6: stage a landblock's 9×9 terrain TYPE codes (`vx*9+vy` order,
+    /// `(terrain>>2)&0x1F`) for the faithful outdoor water classifier. Mirrors
+    /// [`Self::populate_terrain_heights`]; the wasm feed passes the same
+    /// `terrain_codes` array it already computes for the render heightmap.
+    pub fn populate_terrain_water_codes(&mut self, landblock_id: u32, codes: [u8; 81]) {
+        Arc::make_mut(&mut self.terrain_water_codes).insert(landblock_id & 0xFFFF_0000, codes);
+    }
+
+    /// Phase E3.6: drop a landblock's terrain water codes on unload (parallel to
+    /// [`Self::clear_terrain_heights_for_landblock`]). `true` if an entry existed.
+    pub fn clear_terrain_water_codes_for_landblock(&mut self, landblock_id: u32) -> bool {
+        Arc::make_mut(&mut self.terrain_water_codes)
+            .remove(&(landblock_id & 0xFFFF_0000))
+            .is_some()
+    }
+
+    /// Phase E3.6: the 9×9 terrain-type-code grid for `cell_id`'s landblock, or
+    /// `None` when the landblock isn't resident (⇒ the outdoor cell is NotWater).
+    pub fn terrain_cell_water_codes(&self, cell_id: u32) -> Option<&[u8; 81]> {
+        self.terrain_water_codes.get(&(cell_id & 0xFFFF_0000))
     }
 
     /// Terrain→EnvCell entry (2026-06-02): register a cell-membership

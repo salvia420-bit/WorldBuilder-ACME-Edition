@@ -176,6 +176,19 @@ pub struct SceneObjCell {
     /// `GetBlockOffset(check_pos, this)` reduction (a pure translation — landblocks
     /// are never rotated) for the same-landblock case the bridge exercises.
     landblock_origin: Vector3,
+    /// Phase E3.6: this cell's water type (`CLandBlockStruct::CalcCellWater`,
+    /// acclient.c:353608), classified from its 4 corner terrain codes. Drives
+    /// [`Self::water_type`] → the unconditional water gate in
+    /// [`Self::find_terrain_collisions`]: EntirelyWater ⇒ `get_water_depth` 0.9 ⇒
+    /// non-walkable; PartiallyWater ⇒ per-corner wading depth. `NotWater` for
+    /// indoor cells and outdoor cells with no resident terrain codes.
+    water_type: WaterType,
+    /// Phase E3.6: per-corner "is water" flags in the SAME order
+    /// [`build_outdoor_cell`] extracts the height corners — `[SW, SE, NW, NE]` =
+    /// `[cx*9+cy, (cx+1)*9+cy, cx*9+cy+1, (cx+1)*9+cy+1]`. Used by
+    /// [`Self::get_water_depth`] for the PartiallyWater corner lookup (retail
+    /// `CLandBlockStruct::calc_water_depth`: 0.45 at a water corner, 0.1 at land).
+    corner_is_water: [bool; 4],
 }
 
 impl SceneObjCell {
@@ -262,10 +275,35 @@ impl CObjCell for SceneObjCell {
     }
 
     fn water_type(&self) -> WaterType {
-        // Phase A: water is handled by the existing pipeline's water gates.
-        // VERIFY(1070): wire EnvCell water_type through the cell adapter (live
-        // EnvCell data; the drift harness has no water fixtures).
-        WaterType::NotWater
+        // Phase E3.6: the cell's classified water type (outdoor land cells carry
+        // it from their corner terrain codes; indoor cells are NotWater). Drives
+        // the unconditional water gate in `find_terrain_collisions`.
+        self.water_type
+    }
+
+    /// `CObjCell::get_water_depth` (acclient.c:347233) — self-contained on the
+    /// outdoor cell (no `myLandBlock_` indirection needed). NotWater ⇒ 0;
+    /// EntirelyWater ⇒ 0.9; PartiallyWater ⇒ the wading depth of the cell corner
+    /// the point falls in (`CLandBlockStruct::calc_water_depth`): 0.45 at a water
+    /// corner, 0.1 at a land corner. `point` is the landblock-local low point (the
+    /// frame `find_terrain_collisions` passes); the within-cell quadrant selects
+    /// the corner exactly as ACE — `% 24 >= 12` on X ⇒ east, on Y ⇒ north.
+    fn get_water_depth(&self, point: Vector3) -> f32 {
+        match self.water_type {
+            WaterType::NotWater => 0.0,
+            WaterType::EntirelyWater => 0.89999998,
+            WaterType::PartiallyWater => {
+                let east = point.x.rem_euclid(CELL_SIZE) >= CELL_SIZE * 0.5;
+                let north = point.y.rem_euclid(CELL_SIZE) >= CELL_SIZE * 0.5;
+                // corner_is_water order is [SW, SE, NW, NE].
+                let idx = east as usize + 2 * north as usize;
+                if self.corner_is_water[idx] {
+                    0.44999999
+                } else {
+                    0.1
+                }
+            }
+        }
     }
 
     fn cur_landblock(&self) -> Option<Rc<dyn LandblockRef>> {
@@ -535,6 +573,9 @@ impl<'a> SceneWorld<'a> {
             // Indoor env cell — no terrain triangles (mutually exclusive with bsp).
             terrain_polys: None,
             landblock_origin: Vector3::zero(),
+            // E3.6: indoor cells are never water.
+            water_type: WaterType::NotWater,
+            corner_is_water: [false; 4],
         };
         Some(Rc::new(cell) as Rc<dyn CObjCell>)
     }
@@ -737,6 +778,34 @@ fn landblock_world_origin(cell_id: u32) -> Vector3 {
 /// corners (padded) so `find_cell_list`'s `point_in_cell` re-seat works.
 /// `gx`/`gy` are the GLOBAL landcell coords (already fold in the landblock
 /// offset).
+/// `CLandBlockStruct::CalcCellWater` (acclient.c:353608) — classify a 24 m cell's
+/// water type from its 4 corner terrain-type codes. A corner is water iff its
+/// code is one of the five retail water terrain types `16..=20`
+/// (`WaterRunning`/`WaterStandingFresh`/`WaterShallowSea`/`WaterShallowStillSea`/
+/// `WaterDeepSea` — the `TERRAIN_SURF_CHAR == WATER` band, acclient.c:41303; ACE
+/// `SurfChar` agrees). All four corners ⇒ EntirelyWater; any ⇒ PartiallyWater;
+/// none ⇒ NotWater. Returns the per-corner flags for the wading-depth lookup.
+///
+/// NOTE: the legacy heightfield path's `WorldState::is_water_terrain_code` also
+/// counts codes 22/23 — but retail `TERRAIN_SURF_CHAR[22/23]` and ACE `SurfChar`
+/// both mark those SOLID, so the faithful path uses only `16..=20`.
+fn classify_cell_water(corner_codes: [u8; 4]) -> (WaterType, [bool; 4]) {
+    let is_water = |c: u8| matches!(c & 0x1f, 16..=20);
+    let flags = [
+        is_water(corner_codes[0]),
+        is_water(corner_codes[1]),
+        is_water(corner_codes[2]),
+        is_water(corner_codes[3]),
+    ];
+    let n = flags.iter().filter(|&&w| w).count();
+    let water_type = match n {
+        0 => WaterType::NotWater,
+        4 => WaterType::EntirelyWater,
+        _ => WaterType::PartiallyWater,
+    };
+    (water_type, flags)
+}
+
 fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> ObjCellHandle {
     let statics = scene.cell_static_physics_bsp(cell_id).to_vec();
 
@@ -786,6 +855,24 @@ fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> O
         // Identity is correct (statics carry their own world frame).
         frame: Frame::identity(),
     };
+
+    // E3.6: classify this cell's water type from its 4 corner terrain codes (the
+    // SAME corner indices as the height corners above). No resident codes (or a
+    // non-water cell) ⇒ NotWater — fail-soft, identical to today's behaviour.
+    let (water_type, corner_is_water) = match scene.terrain_cell_water_codes(cell_id) {
+        Some(codes) => {
+            let cx = cell_x as usize;
+            let cy = cell_y as usize;
+            classify_cell_water([
+                codes[cx * 9 + cy],
+                codes[(cx + 1) * 9 + cy],
+                codes[cx * 9 + cy + 1],
+                codes[(cx + 1) * 9 + cy + 1],
+            ])
+        }
+        None => (WaterType::NotWater, [false; 4]),
+    };
+
     Rc::new(SceneObjCell {
         cell_id,
         pos,
@@ -798,6 +885,8 @@ fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> O
         membership: None,
         terrain_polys,
         landblock_origin,
+        water_type,
+        corner_is_water,
     }) as ObjCellHandle
 }
 
@@ -1056,7 +1145,10 @@ pub fn faithful_find_transitional_position(
 /// grounded-when-on-floor, pose in the cell AABB) and document the divergence.
 #[cfg(test)]
 mod drift {
-    use super::{faithful_find_transitional_position, FaithfulMover, SceneWorld};
+    use super::{
+        classify_cell_water, faithful_find_transitional_position, FaithfulMover, SceneWorld,
+        WaterType,
+    };
     use crate::spatial::entity_collision::EntityCollider;
     use crate::spatial::scene::{CellPhysicsBsp, SpatialScene};
     use crate::spatial::transition::{
@@ -2706,6 +2798,14 @@ mod drift {
         scene
     }
 
+    /// `outdoor_scene` + the E3.6 per-vertex terrain TYPE codes (`vx*9+vy`,
+    /// `(terrain>>2)&0x1F`); water codes are `16..=20`.
+    fn outdoor_scene_with_water(heights: [f32; 81], codes: [u8; 81]) -> SpatialScene {
+        let mut scene = outdoor_scene(heights);
+        scene.populate_terrain_water_codes(OLB, codes);
+        scene
+    }
+
     // ── Phase E1 / WS-C terrain up-slope helpers ──
     //
     // A landblock terrain grid that rises LINEARLY in +x at `rise_per_m` (a plane,
@@ -2813,6 +2913,113 @@ mod drift {
             "feet snapped to terrain {Z}: got {}",
             t.sphere_path.check_pos.frame.origin.z
         );
+    }
+
+    // ── Phase E3.6: outdoor water type / depth ──
+
+    #[test]
+    fn classify_cell_water_matches_calc_cell_water() {
+        // Water terrain codes are 16..=20 (the TERRAIN_SURF_CHAR==WATER band,
+        // acclient.c:41303 / ACE SurfChar). All 4 corners ⇒ EntirelyWater.
+        let (wt, f) = classify_cell_water([19, 19, 19, 19]);
+        assert_eq!(wt, WaterType::EntirelyWater);
+        assert_eq!(f, [true; 4]);
+        // Mixed corners ⇒ PartiallyWater; flags track each corner.
+        let (wt, f) = classify_cell_water([16, 0, 20, 0]);
+        assert_eq!(wt, WaterType::PartiallyWater);
+        assert_eq!(f, [true, false, true, false]);
+        // 15 (Snow) and 21 (Reserved) are SOLID ⇒ NotWater.
+        let (wt, f) = classify_cell_water([0, 1, 15, 21]);
+        assert_eq!(wt, WaterType::NotWater);
+        assert_eq!(f, [false; 4]);
+        // 22/23 are SOLID on the faithful path (retail TERRAIN_SURF_CHAR/ACE
+        // SurfChar), UNLIKE the legacy WorldState classifier which counts them.
+        assert_eq!(classify_cell_water([22, 23, 22, 23]).0, WaterType::NotWater);
+    }
+
+    #[test]
+    fn outdoor_water_cell_type_and_depth() {
+        use holtburger_dat::transition::objcell::CellWorld;
+        const Z: f32 = 50.0;
+        let cell_id = OLB | (4 * 8 + 4 + 1); // cell (4,4)
+
+        // Entirely-water cell: every vertex water ⇒ 0.9 wading depth everywhere.
+        let scene = outdoor_scene_with_water([Z; 81], [19u8; 81]);
+        let world = SceneWorld::new(&scene);
+        let cell = world.get_visible(cell_id).expect("cell");
+        assert_eq!(cell.water_type(), WaterType::EntirelyWater);
+        assert!((cell.get_water_depth(v(100.0, 100.0, Z)) - 0.89999998).abs() < 1e-6);
+
+        // Partially-water cell: only the SW corner (vertex cx*9+cy = 40) is water
+        // ⇒ 0.45 in the SW quadrant, 0.1 in the (dry) NE quadrant.
+        let mut codes = [0u8; 81];
+        codes[4 * 9 + 4] = 19; // SW corner of cell (4,4)
+        let scene = outdoor_scene_with_water([Z; 81], codes);
+        let world = SceneWorld::new(&scene);
+        let cell = world.get_visible(cell_id).expect("cell");
+        assert_eq!(cell.water_type(), WaterType::PartiallyWater);
+        let sw = cell.get_water_depth(v(100.0, 100.0, Z)); // local 96..108 ⇒ SW
+        let ne = cell.get_water_depth(v(114.0, 114.0, Z)); // local 108..120 ⇒ NE
+        assert!((sw - 0.44999999).abs() < 1e-6, "SW (water corner) depth: {sw}");
+        assert!((ne - 0.1).abs() < 1e-6, "NE (dry corner) depth: {ne}");
+
+        // No codes resident ⇒ NotWater / 0 depth (fail-soft, today's behaviour).
+        let scene = outdoor_scene([Z; 81]);
+        let world = SceneWorld::new(&scene);
+        let cell = world.get_visible(cell_id).expect("cell");
+        assert_eq!(cell.water_type(), WaterType::NotWater);
+        assert_eq!(cell.get_water_depth(v(100.0, 100.0, Z)), 0.0);
+    }
+
+    #[test]
+    fn outdoor_entirely_water_cell_denies_walkable_contact() {
+        use holtburger_dat::transition::objcell::CellWorld;
+        use holtburger_dat::transition::types::TransitionState;
+        const Z: f32 = 50.0;
+        let cell_id = OLB | (4 * 8 + 4 + 1);
+        let (cx, cy) = outdoor_cell_center(4, 4);
+        let r = player().radius;
+        let h = player().height;
+
+        // find_collisions on a mover penetrating flat terrain 0.2 below; returns
+        // (code, whether a walkable contact plane was recorded → grounded).
+        let run = |codes: [u8; 81]| -> (i32, bool) {
+            let scene = outdoor_scene_with_water([Z; 81], codes);
+            let world = SceneWorld::new(&scene);
+            let cell = world.get_visible(cell_id).expect("cell");
+            let spheres = [
+                Sphere { center: v(0.0, 0.0, r), radius: r },
+                Sphere { center: v(0.0, 0.0, (h - r).max(r)), radius: r },
+            ];
+            let mut t = CTransition::new();
+            t.object_info.scale = 1.0;
+            t.object_info.state = object_info_state::CONTACT;
+            t.init_sphere(2, &spheres, 1.0);
+            let mut curr = Frame::identity();
+            curr.origin = v(cx, cy, Z);
+            let mut chk = Frame::identity();
+            chk.origin = v(cx, cy, Z - 0.2);
+            t.sphere_path.curr_pos = Position { objcell_id: cell_id, frame: curr };
+            t.sphere_path.check_pos = Position { objcell_id: cell_id, frame: chk };
+            t.sphere_path.curr_cell = Some(cell_id);
+            t.sphere_path.check_cell = Some(cell_id);
+            t.sphere_path.cache_global_sphere(None);
+            let code = cell.find_collisions(&mut t);
+            (code, t.collision_info.contact_plane.is_some())
+        };
+
+        // Dry terrain: the penetrating mover is ADJUSTED up onto a walkable contact.
+        let (dry_code, dry_grounded) = run([0u8; 81]);
+        assert_eq!(dry_code, TransitionState::Adjusted as i32, "dry ⇒ adjusted up");
+        assert!(dry_grounded, "dry terrain records a walkable contact plane");
+
+        // Entirely-water cell: the 0.9 wading depth lifts the support plane above
+        // the mover's feet ⇒ it HOVERS (Ok) with NO walkable contact — the cell
+        // gives no ground to stand on (faithful `validate_walkable` v17 > 0 branch,
+        // acclient.c:314227; the "can't stand on deep water" outcome).
+        let (water_code, water_grounded) = run([19u8; 81]);
+        assert_eq!(water_code, TransitionState::Ok as i32, "all-water ⇒ no adjust");
+        assert!(!water_grounded, "all-water cell records NO walkable contact");
     }
 
     // (a0b) DIRECT cell-body proof on a SLOPED grid: the contact plane the terrain
