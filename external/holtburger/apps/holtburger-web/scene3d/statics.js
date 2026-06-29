@@ -89,7 +89,7 @@ import { particleClockMode, rng } from "./particles/time_rng.js";
 import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees } from "./animated_scenery.js";
 // Tree wind sway (?treeWind, default-OFF). When off, the peel below never runs
 // and `statics` is unchanged → byte-identical frozen instanced path.
-import { treeWindEnabled, isTreeDid, windGeoEnabled } from "./tree_wind.js";
+import { treeWindEnabled, isTreeDid, windGeoEnabled, windSwayGpuEnabled } from "./tree_wind.js";
 import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb } from "./static_atlas.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
@@ -1698,6 +1698,10 @@ export async function bakeStaticsForLandblock(
       statics = statics.filter((p) => ((p?.defaultAnimationId >>> 0) || 0) === 0);
     }
   }
+  // GPU tree sway (?treeWindGpu, default-ON) + the frag suite read the descriptor
+  // catalog at the frag seam below; ensure it's loaded (cached promise; the first
+  // LB cold-load briefly awaits the fetch). ?visual=off or ?treeWindGpu=off skips it.
+  if (windSwayGpuEnabled() && visualEnabled()) { try { await ensureVfxCatalog(); } catch (_) {} }
   // Tree wind (?treeWind) — peel allowlisted tree DIDs out of the frozen path,
   // AFTER the anim peel so the two sets are disjoint. Off ⇒ statics unchanged.
   let windTrees = null;
@@ -2297,6 +2301,10 @@ export async function bakeStaticsRing(
       statics = statics.filter((p) => ((p?.defaultAnimationId >>> 0) || 0) === 0);
     }
   }
+  // GPU tree sway (?treeWindGpu, default-ON) + the frag suite read the descriptor
+  // catalog at the frag seam below; ensure it's loaded (cached promise; the first
+  // LB cold-load briefly awaits the fetch). ?visual=off or ?treeWindGpu=off skips it.
+  if (windSwayGpuEnabled() && visualEnabled()) { try { await ensureVfxCatalog(); } catch (_) {} }
   // Tree wind (?treeWind) — peel allowlisted tree DIDs (ring path), AFTER the
   // anim peel so the sets are disjoint. Off ⇒ statics unchanged.
   let windTrees = null;

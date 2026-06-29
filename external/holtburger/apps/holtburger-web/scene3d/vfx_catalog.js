@@ -40,6 +40,7 @@ export function visualEnabled() {
 // fragment material patch; particle = synthesized emitter. Extended per commit.
 export const COMPONENT_MECH = {
   "deformation.windBend": "A",
+  "deformation.windSwayGpu": "B",        // + 2026-06-29 GPU instanced tree sway (rides the frag/B install path)
   "deformation.tipFlex": "B",
   "emissive.glint": "frag",
   "emissive.magicGlow": "frag",          // + slice 06 (P1.7)

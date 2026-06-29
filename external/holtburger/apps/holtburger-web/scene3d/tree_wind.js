@@ -87,6 +87,30 @@ export function windGeoEnabled() {
   return (_windGeo = on);
 }
 
+let _windGpu;
+/** `?treeWindGpu=off` — GPU INSTANCED tree/foliage wind sway. DEFAULT-ON
+ *  (2026-06-29). This is the cheap replacement for the MECH-A `windGeo` peel:
+ *  instead of de-instancing ~4096 trees into ~17k CPU-driven meshes (1 fps on a
+ *  GTX 1070), it keeps them frozen+instanced and bends each in the VERTEX shader
+ *  (deformation.windSwayGpu, MECH-B) on the SHARED material clone — one draw call,
+ *  one program, ~free. frag_attach injects it for every windResponds() DID (the
+ *  exact set the old default-on peel animated), so the same ~4100 trees sway.
+ *
+ *  MUTUAL EXCLUSION: when the user opts into a CPU peel path (?treeWind or
+ *  ?windGeo), THAT path owns the sway and the GPU path stands down (no double
+ *  bend). `?treeWindGpu=off` disables the GPU path entirely (trees freeze, the
+ *  retail-faithful look); `?visual=off` (the suite master) also disables it since
+ *  the frag seam is gated on visualEnabled(). */
+export function windSwayGpuEnabled() {
+  if (_windGpu !== undefined) return _windGpu;
+  // CPU peel paths own the sway when explicitly requested → GPU path stands down.
+  if (treeWindEnabled() || windGeoEnabled()) return (_windGpu = false);
+  let on = true; // default-on; `?treeWindGpu=off` is the escape to frozen trees
+  const v = _strFlag("treeWindGpu");
+  if (v != null) { const s = v.toLowerCase(); on = s !== "off" && s !== "0" && s !== "false" && s !== "no" && s !== ""; }
+  return (_windGpu = on);
+}
+
 // Phase-1 allowlist of scenery SetupModel DIDs to animate. Seeded from the
 // verified top-placement foliage/trees (client_portal.dat survey 2026-06-23).
 // The bbox base-pivot rig (wind_rig.js) pivots each part about its own vertex
@@ -115,4 +139,5 @@ export function treeWindDids() {
 /** Reset memoized flag readers (tests only). */
 export function _resetTreeWindFlags() {
   _flag = undefined; _strength = undefined; _dirDeg = undefined; _windBake = undefined;
+  _windGeo = undefined; _windGpu = undefined;
 }

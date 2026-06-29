@@ -23,9 +23,12 @@
 // graph) + registry.js (the component contract). frag_install.js is imported by
 // statics.js at the seam, NOT here, so this module + its test stand alone.
 
-import { vfxDescriptorFor } from "../vfx_catalog.js";
+import { vfxDescriptorFor, windResponds } from "../vfx_catalog.js";
 import { getComponent, FAMILY_ORDER } from "./registry.js";
 import { splitConfig as _splitConfig, mergeComponentConfig } from "./config_merge.js";
+// GPU instanced tree sway (?treeWindGpu, default-ON). tree_wind imports nothing
+// from the scene graph, so this stays import-cycle-safe + node-testable.
+import { windSwayGpuEnabled } from "../tree_wind.js";
 
 // The chain-composition order (spec §2.3): deformation < texture < weathering <
 // emissive < particle. A frag plan is sorted by (FAMILY_ORDER[family], id) so the
@@ -73,6 +76,20 @@ export function fragEntriesForDescriptor(descriptor) {
     if (typeof comp.enabled === "function" && !comp.enabled()) return; // per-effect flag (slice 14)
     out.push({ comp, config: mergeComponentConfig(comp, split) });
   });
+  // GPU instanced tree sway (?treeWindGpu, default-ON, MECH-B). The baked catalog
+  // tags wind-responsive foliage with the MECH-A deformation.windBend (the keyframe
+  // peel, which de-instances → 1 fps); we add the MECH-B windSwayGpu component at
+  // RUNTIME (no re-bake) so the SAME windResponds() DIDs the old default-on peel
+  // animated now bend in the vertex shader on the frozen INSTANCED material. The
+  // component's enabled gate stands down under the CPU peel paths / ?treeWindGpu=off,
+  // so this never double-bends. It's a "B" mech → the install path patches the
+  // vertex shader, and FAMILY_ORDER (deformation=0) sorts it first below.
+  if (windSwayGpuEnabled() && windResponds(descriptor)) {
+    const ws = getComponent("deformation.windSwayGpu");
+    if (ws && !out.some((e) => e.comp === ws)) {
+      out.push({ comp: ws, config: mergeComponentConfig(ws, split) });
+    }
+  }
   // FAMILY_ORDER-major, id-minor — stable + matches the chain composition order.
   out.sort((a, b) => {
     const d = _orderKey(a.comp) - _orderKey(b.comp);
