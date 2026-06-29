@@ -287,24 +287,31 @@ check(
     + `beforeSnapX=${beforeSnapX.toFixed(2)}`
 );
 
-// ---- Bullet 4: the A/B lever flips to the legacy independent-advance
-// path. With NO new server pose in __lastEntityWorldPos and W held, the
-// legacy path advances at RUN_SPEED*dt while pure-smoothing would ease
-// toward the (static) integrator pose. Seed a server pose so the legacy
-// reconcile has an anchor, hold W, and assert it advances. -------------
-fakeWindow.__predPureSmooth = false;
+// ---- Bullet 4: the RETIRED legacy independent-advance predictor, called
+// DIRECTLY. As of 2026-06-29 it is no longer reachable via tick()
+// (camera.js tick() always mirrors the integrator); the methods are
+// retained, so we exercise them directly here. With NO new server pose in
+// __lastEntityWorldPos and W held, the legacy path advances at RUN_SPEED*dt
+// while pure-smoothing would ease toward the (static) integrator pose. Seed
+// a server pose so the legacy reconcile has an anchor, hold W, assert it
+// advances. -------------
+const legacyPredictTick = (d) => {
+    switcher._reconcilePrediction();
+    switcher._advancePrediction(d);
+    switcher._applyPredictionLerp(d);
+};
 switcher.predictedPlayerPos = null;
 switcher._predPrevLandblockId = null;
 lastMap.set(TEST_GUID, { x: worldX(), y: worldY(), z: 80, ts: performance.now() });
-switcher.tick(dt); // legacy seed
+legacyPredictTick(dt); // legacy seed
 switcher.keys.w = true;
 switcher.keys.shift = false; // run
 const yBeforeLegacy = switcher.predictedPlayerPos.y;
-switcher.tick(dt); // skipped — first advance tick has no dt baseline
-switcher.tick(dt); // legacy advance: RUN_SPEED * dt along heading=0 (+Y)
+legacyPredictTick(dt); // skipped — first advance tick has no dt baseline
+legacyPredictTick(dt); // legacy advance: RUN_SPEED * dt along heading=0 (+Y)
 const legacyAdvance = switcher.predictedPlayerPos.y - yBeforeLegacy;
 check(
-    "Bullet 4: __predPureSmooth=false restores legacy independent-advance",
+    "Bullet 4: retired legacy predictor (called directly) independent-advances",
     legacyAdvance > 0.05, // ~4.5 * 1/60 ≈ 0.075 m per advancing tick
     `legacyAdvance=${legacyAdvance.toFixed(4)} m (expected ~0.075)`
 );

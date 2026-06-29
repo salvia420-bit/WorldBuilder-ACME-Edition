@@ -57,21 +57,34 @@ pub(crate) fn handle_message(
                     });
                     // B1/D3-SNAP: a force_position OR teleport sequence advance is an
                     // authoritative reposition (retail BlipPlayer/TeleportPlayer,
-                    // acclient.c:145196-145253) -> hard-snap the working pose. A
-                    // position-only update blends/constrains. ACE bumps
-                    // ObjectForcePosition only on the z-hack/PKLite paths, so routine
-                    // play never trips the snap.
+                    // acclient.c:145196-145253) -> hard-snap the working pose. ACE
+                    // bumps ObjectForcePosition only on the z-hack/PKLite paths, so
+                    // routine play never trips the snap.
                     let snap = is_newer_u16(data.pos.teleport_sequence, old_teleport_sequence)
                         || is_newer_u16(
                             data.pos.force_position_sequence,
                             old_force_position_sequence,
                         );
-                    let sync = if snap {
-                        AuthoritativeBodySync::Reset
+                    events.extend(if snap {
+                        // Forced reposition: hard-snap the runtime body.
+                        state.set_player_position_with_sync(
+                            data.pos.pos,
+                            AuthoritativeBodySync::Reset,
+                        )
                     } else {
-                        AuthoritativeBodySync::Snapshot
-                    };
-                    events.extend(state.set_player_position_with_sync(data.pos.pos, sync));
+                        // Routine ~20 Hz self-echo: authoritative BOOKKEEPING ONLY —
+                        // do NOT reconcile the runtime body. Reconciling toward the
+                        // backlog-delayed echo (can land tens of metres behind)
+                        // installs a force_position ease that drags the avatar
+                        // backward: the "outrun then get pulled back, constant
+                        // cadence" rubberband. Wires this canonical
+                        // wireStatePacks=stage1 handler into the SAME guard the legacy
+                        // path already used (set_player_position_authoritative_only /
+                        // the B1 USE_LOCAL_PLAYER_AUTONOMOUS_GUARD,
+                        // state/mutations.rs:736-753); the 2026-06-27 wireStatePacks
+                        // default-on flip had bypassed it.
+                        state.set_player_position_authoritative_only(data.pos.pos)
+                    });
                 }
                 return true;
             }

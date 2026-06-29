@@ -135,12 +135,14 @@ const factory = new Function(
 const TEST_GUID = 0x50000007;
 const lastMap = new Map();
 const fakeWindow = {
-    // GAP 2 (2026-06-02): these bullets validate the LEGACY Workstream-B
-    // independent-advance predictor (flat RUN_SPEED * dt). That path is
-    // now off by default — pure-smoothing-toward-integrator is the
-    // default that collapses the dual-predictor sawtooth. Opt this test
-    // back into the legacy path explicitly; the pure-smoothing path has
-    // its own coverage in test_pure_smooth_prediction.mjs.
+    // GAP 2 (2026-06-02) / RETIRED (2026-06-29): these bullets validate the
+    // LEGACY Workstream-B independent-advance predictor (flat RUN_SPEED * dt).
+    // That predictor was RETIRED from the runtime on 2026-06-29 — camera.js
+    // `tick()` no longer routes `__predPureSmooth=false` to it. The methods
+    // are retained, so this file now drives them DIRECTLY via `predTick`
+    // (defined below); the pure-smoothing default path has its own coverage
+    // in test_pure_smooth_prediction.mjs. `__predPureSmooth` is left here
+    // inert for documentation (no runtime reads it any more).
     __predPureSmooth: false,
     __lastEntityWorldPos: lastMap,
     getLocalPlayerGuid: () => TEST_GUID,
@@ -233,6 +235,18 @@ const switcher = new CameraSwitcher({
     getPlayerWorldPos,
 });
 
+// 2026-06-29: the legacy independent-advance predictor was RETIRED from the
+// runtime (camera.js `tick()` no longer routes `__predPureSmooth=false` to
+// it). The methods are retained; drive them DIRECTLY here so this file keeps
+// its coverage of the predictor math. `predTick` reproduces exactly what the
+// old `tick()` did under `__predPureSmooth=false` — the asserted quantity is
+// `predictedPlayerPos`, which positionCamera/_dispatchMovement don't touch.
+const predTick = (d) => {
+    switcher._reconcilePrediction();
+    switcher._advancePrediction(d);
+    switcher._applyPredictionLerp(d);
+};
+
 // Now expose `liveScene3d` so entities.js's getLocalPlayerWorldPos
 // could find the switcher (this test doesn't drive entities.js but
 // we still expose it for completeness — also, this validates the
@@ -250,7 +264,7 @@ function pushServerPose(x, y, z) {
 pushServerPose(PLAYER_POS_START.x, PLAYER_POS_START.y, PLAYER_POS_START.z);
 
 // First tick — should seed predicted pose to server pose (no lerp).
-switcher.tick(0.016);
+predTick(0.016);
 check(
     "Bullet seed: first tick seeds predictedPlayerPos from server pose",
     switcher.predictedPlayerPos !== null
@@ -273,7 +287,7 @@ const dt = 0.016; // 60 FPS
 // Don't push server poses during this loop — verify pure prediction.
 // (Will validate reconcile separately below.)
 for (let i = 0; i < 120; i += 1) {
-    switcher.tick(dt);
+    predTick(dt);
     positions.push({
         t: (i + 1) * dt * 1000,
         x: switcher.predictedPlayerPos.x,
@@ -326,7 +340,7 @@ switcher._predLastTickMs = null;
 lastMap.clear();
 let simT = 1000.0; // synthetic wall-clock (ms), arbitrary start
 pushServerPoseAtTs(PLAYER_POS_START.x, PLAYER_POS_START.y, PLAYER_POS_START.z, simT);
-switcher.tick(0.016);
+predTick(0.016);
 
 const SIM_S = 10.0;
 const FRAMES = Math.floor(SIM_S / dt);
@@ -351,7 +365,7 @@ for (let i = 0; i < FRAMES; i += 1) {
         nextServerEmit += SERVER_PERIOD_MS;
         serverEmits += 1;
     }
-    switcher.tick(dt);
+    predTick(dt);
     const pred = switcher.predictedPlayerPos;
     const delta = Math.abs(pred.y - serverY);
     maxDelta = Math.max(maxDelta, delta);
@@ -365,7 +379,7 @@ check(
 
 // ---- Bullet 3: teleport (>5 m) snaps predicted cleanly ------------
 switcher.keys.w = false; // stop walking first
-switcher.tick(dt);
+predTick(dt);
 // Snapshot predicted just before teleport.
 const preTeleportY = switcher.predictedPlayerPos.y;
 // Push a server pose 100 m away (using a strictly-greater synthetic ts
@@ -373,7 +387,7 @@ const preTeleportY = switcher.predictedPlayerPos.y;
 // statements).
 simT += 100.0;
 pushServerPoseAtTs(PLAYER_POS_START.x, preTeleportY + 100.0, PLAYER_POS_START.z, simT);
-switcher.tick(dt);
+predTick(dt);
 const postTeleport = switcher.predictedPlayerPos.y;
 check(
     "Bullet 3: 100 m teleport snaps predicted pose cleanly (no lerp)",
@@ -391,15 +405,15 @@ switcher.keys.w = true;
 // Drain any latent lerp first (a few ticks should fully resolve
 // 150 ms of duration at dt=16 ms each).
 for (let i = 0; i < 12; i += 1) {
-    switcher.tick(dt);
+    predTick(dt);
 }
 const beforeRelease = switcher.predictedPlayerPos.y;
-switcher.tick(dt); // one tick under W-hold (no new server pose)
+predTick(dt); // one tick under W-hold (no new server pose)
 const advancedDuringHold = switcher.predictedPlayerPos.y - beforeRelease;
 // Release W and tick once more.
 switcher.keys.w = false;
 const beforeRelTick = switcher.predictedPlayerPos.y;
-switcher.tick(dt); // one tick after release (no new server pose, no lerp)
+predTick(dt); // one tick after release (no new server pose, no lerp)
 const afterReleaseTick = switcher.predictedPlayerPos.y;
 const advancedAfterRelease = Math.abs(afterReleaseTick - beforeRelTick);
 check(
@@ -424,12 +438,12 @@ check(
 switcher.predictedPlayerPos = null;
 lastMap.clear();
 pushServerPose(PLAYER_POS_START.x, PLAYER_POS_START.y, PLAYER_POS_START.z);
-switcher.tick(0.016); // seed
+predTick(0.016); // seed
 mockPoseHeading = Math.PI / 2; // facing +X east
 switcher.keys.w = true;
 const xBefore = switcher.predictedPlayerPos.x;
 const yBefore = switcher.predictedPlayerPos.y;
-for (let i = 0; i < 60; i += 1) switcher.tick(dt);
+for (let i = 0; i < 60; i += 1) predTick(dt);
 const xAfter = switcher.predictedPlayerPos.x;
 const yAfter = switcher.predictedPlayerPos.y;
 check(

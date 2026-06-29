@@ -412,19 +412,28 @@ impl CTransition {
             // Adjust the raw per-step offset against contact/sliding state (313264).
             self.sphere_path.global_offset = self.adjust_offset(offset_per_step);
 
-            // Non-IS_VIEWER: stop the search the moment the adjusted step points
-            // UP (313269-313274). `!(c0|c3)` from `ftst` == `z > 0`.
+            // Non-IS_VIEWER: stop the search once the move offset is FULLY
+            // CONSUMED — its length collapses below EPSILON. The decomp's
+            // 313269-313274 `v13 = global_offset.z` is the last-component-load
+            // artifact of an `x²+y²+z²` length test, NOT a `z > 0` test. Verified
+            // three ways: binja 0050bf9c-0050bfb7 (`x*x+y*y+z*z` vs
+            // `0.000199999995f²`, the `fnstsw`/`test ah,0x41` below-or-equal that
+            // CONTINUES while lengthSq >= EPSILON²) and ACE `Transition.cs:551`
+            // (`GlobalOffset.LengthSquared() < EPSILON*EPSILON`).
             //
-            // E1b/WS-B: this is the VERBATIM faithful decomp early-stop. E1 v1
-            // relaxed it with an `allow_contact_stepup = faithful_stepup && CONTACT`
-            // bypass — that hook was refuted by the recon as a live no-op (the
-            // grounded mover walks dz=0, so `global_offset.z > 0.0` never fires on a
-            // flat-floor frame and the bypass changed nothing; ON==OFF byte-identical
-            // in play). The genuine vertical-lip step-up is restored in WS-C by
-            // fixing the `ON_WALKABLE` precondition so the emergent
-            // `step_sphere_down`/`adjust_sphere_to_plane` chain lifts the mover; the
-            // `?stepUp` / `faithful_stepup` flag now gates THAT fix, not this gate.
-            if state & object_info_state::IS_VIEWER == 0 && self.sphere_path.global_offset.z > 0.0 {
+            // FIX 2026-06-29: the previous `global_offset.z > 0.0` was a MISPORT.
+            // Walking UP a walkable slope injects +Z via the `offseta <= 0` plane
+            // projection (driver_geometry.rs:97-105), so it fired after step 0 and
+            // capped realized horizontal at ~one radius/frame REGARDLESS of run rate
+            // (the "feels like 50 Run uphill" stall; invisible on flat ground where
+            // injected Z ≈ 0). Length-consumed is slope-independent: it fires on a
+            // real wall stop (offset collapses, z ≈ 0 — which the old test MISSED, so
+            // this also restores wall stopping) and never on a walkable climb (the
+            // projected offset keeps length ≫ EPSILON). Walkable-vs-wall is decided
+            // upstream by the FLOOR_Z/`ON_WALKABLE` gate, not here.
+            if state & object_info_state::IS_VIEWER == 0
+                && self.sphere_path.global_offset.length_squared() < EPSILON * EPSILON
+            {
                 if i == 0 {
                     return 0; // LABEL_29
                 }

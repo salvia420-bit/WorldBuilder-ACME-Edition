@@ -417,36 +417,21 @@ export class CameraSwitcher {
     // the spec; tuned by eye-test if drift is visible.
     this._predLastTickMs = null;
 
-    // GAP 2 (2026-06-02) — pure-smoothing mode. The legacy Workstream-B
-    // path (`_advancePrediction`) is a SECOND forward integrator: it
-    // independently advances rendered X/Y at a flat `RUN_SPEED = 4.5`
-    // m/s while the authoritative Rust integrator advances at the real
-    // skill-derived speed (and `getLocalPlayerPose()` carries no
-    // velocity field for JS to read). Three speed sources (JS flat-rate,
-    // Rust integrator, dead wasm path) produce a sustained forward-bias
-    // sawtooth that retail's single CPhysicsObj cannot — JS predicts
-    // ahead, the 150 ms lerp fights it back, repeat. See
-    // `newprompts/physics-deep-dive-2026-06-01/verified-comparison-report.md`
-    // Dimension 5.
+    // Local-rig pose source: the wasm integrator's collided pose, mirrored
+    // by `_smoothToIntegrator` (a direct-assign since the 2026-06-05 FULL
+    // COLLAPSE). The wasm runtime body is the single retail-faithful
+    // CPhysicsObj-equivalent — it predicts locally AND reconciles against
+    // the server — so the JS layer must NOT advance or re-smooth on top.
     //
-    // Pure-smoothing collapses the three sources to ONE by construction:
-    // the JS layer stops independently advancing X/Y and instead, every
-    // frame, exponentially eases `predictedPlayerPos` toward the
-    // integrator's authoritative world-space pose (`getLocalPlayerPose()`
-    // converted landblock-local → world). The integrator already ticks
-    // every frame, so there is no extrapolation to mismatch — the
-    // rendered pose simply lags the authoritative pose by the smoothing
-    // time-constant and converges, never overruns. The 150 ms feel and
-    // the landblock-crossing snap are preserved.
-    //
-    // A/B lever: `window.__predPureSmooth` overrides the default at
-    // runtime (read each tick, so it can be toggled live in the console).
-    //   - `true`/undefined → pure-smoothing (default; sawtooth-free).
-    //   - `false`          → legacy independent-advance predictor.
-    // Default-on because the legacy path is the verified bug; the lever
-    // exists so an off-screen 1070 A/B capture can compare both without
-    // a rebuild.
-    this._pureSmoothDefault = true;
+    // RETIRED (2026-06-29): the legacy Workstream-B JS predictor
+    // (`_reconcilePrediction`/`_advancePrediction`/`_applyPredictionLerp`,
+    // formerly reachable via `window.__predPureSmooth === false`) was a
+    // SECOND forward integrator that marched rendered X/Y at a flat 4.5 m/s
+    // with no collision, fighting the wasm body — the dual-predictor
+    // sawtooth / snap-back. It is no longer wired into `tick()`. The
+    // `_predLastTickMs` / `_lerp*` fields above remain only because the
+    // retired methods (kept for the historical `.mjs` A/B harnesses) read
+    // them; nothing in the runtime path does.
     // Last integrator landblockId seen by `_smoothToIntegrator`. A
     // change between frames means a teleport / LB transition (world
     // coords jump by a multiple of 192 m), so we hard-snap instead of
@@ -746,12 +731,11 @@ export class CameraSwitcher {
 
   /**
    * Per-frame update. Driven from `loop.js` `tickPerFrame`.
-   * - Advances `predictedPlayerPos` from WASD intent + integrator
-   *   heading (Workstream B prediction step). Composes BEFORE
-   *   `positionCamera` so the follow-cam frames the predicted pose,
-   *   not the stashed server pose.
-   * - Reconciles `predictedPlayerPos` against any fresh server pose
-   *   landed in `__lastEntityWorldPos` since the last reconcile.
+   * - Mirrors `predictedPlayerPos` onto the wasm integrator's
+   *   authoritative collided world pose via `_smoothToIntegrator`
+   *   (a direct-assign since the 2026-06-05 FULL COLLAPSE). The rig and
+   *   follow-camera therefore render the physics pose 1:1, exactly as
+   *   retail renders off its single CPhysicsObj.
    * - Positions the active camera (consuming `predictedPlayerPos` via
    *   `getLocalPlayerWorldPos` → cameraSwitcher fallback).
    * - Computes movement input from keystate + camera yaw and forwards
@@ -759,30 +743,16 @@ export class CameraSwitcher {
    * - Calls `controls.update()` for OrbitControls damping (no-op for
    *   other modes).
    *
-   * Order matters:
-   *   1. Reconcile incoming server pose (may snap or start a lerp).
-   *   2. Advance prediction by WASD intent for `dt` seconds.
-   *   3. Apply in-flight lerp toward server pose.
-   *   4. Position camera (reads `_safePlayerPos` → predicted pose).
-   *   5. Dispatch movement input.
+   * The legacy collision-blind JS predictor was retired 2026-06-29
+   * (see the `_advancePrediction` banner); `tick()` no longer has a
+   * predict / reconcile / lerp branch.
    */
   tick(dt) {
-    // GAP 2 — pure-smoothing collapses the dual-predictor sawtooth. When
-    // on (default), the JS layer does NOT independently advance X/Y; it
-    // only eases the rendered pose toward the authoritative integrator
-    // pose. The legacy three-step predictor stays available behind the
-    // `window.__predPureSmooth === false` A/B lever.
-    const pureSmooth = (typeof window !== "undefined"
-      && window.__predPureSmooth !== undefined)
-      ? window.__predPureSmooth !== false
-      : this._pureSmoothDefault;
-    if (pureSmooth) {
-      this._smoothToIntegrator(dt);
-    } else {
-      this._reconcilePrediction();
-      this._advancePrediction(dt);
-      this._applyPredictionLerp(dt);
-    }
+    // Single source of truth: mirror the wasm integrator's collided pose.
+    // Do NOT re-introduce a JS predictor or smoother on top of the wasm
+    // body — that second forward integrator (flat 4.5 m/s, collision-blind)
+    // was the snap-back / dual-predictor sawtooth, retired 2026-06-29.
+    this._smoothToIntegrator(dt);
     this.positionCamera(dt);
     if (this.controls && typeof this.controls.update === "function") {
       try {
@@ -1164,7 +1134,18 @@ export class CameraSwitcher {
     this._inHead = next.inHead;
   }
 
-  // ---- prediction (Workstream B) -----------------------------------
+  // ---- prediction (Workstream B) — RETIRED 2026-06-29 --------------
+  //
+  // The three methods below (`_reconcilePrediction`, `_advancePrediction`,
+  // `_applyPredictionLerp`) are the legacy collision-blind JS predictor: a
+  // second forward integrator that marched rendered X/Y at a flat 4.5 m/s
+  // with no collision and lerped back toward the server pose. It fought the
+  // wasm integrator (the single retail-faithful physics body) and produced
+  // the dual-predictor sawtooth / snap-back. They are NO LONGER WIRED into
+  // `tick()` (see `_smoothToIntegrator`, the sole runtime pose source) and
+  // are retained only so the historical `.mjs` A/B harnesses still link.
+  // DO NOT re-wire them into the runtime — a JS predictor / smoother on top
+  // of the wasm body is exactly the bug that was removed.
 
   /**
    * Workstream B (2026-05-11) — reconcile `predictedPlayerPos` against
@@ -1556,29 +1537,21 @@ export class CameraSwitcher {
   }
 
   /**
-   * GAP 2 (2026-06-02) — pure-smoothing step (replaces the legacy
-   * `_reconcile`/`_advance`/`_applyLerp` trio when
-   * `window.__predPureSmooth !== false`). The JS layer no longer
-   * predicts speed; it just eases `predictedPlayerPos` toward the
-   * integrator's authoritative world pose each frame. This collapses
-   * the dual-predictor speed mismatch (Dimension 5) to a single source
-   * by construction — the rendered pose lags the integrator by the
-   * smoothing time-constant and converges, it never extrapolates ahead,
-   * so the forward-bias sawtooth cannot form.
+   * Local-rig pose source — mirror the wasm integrator's authoritative
+   * collided world pose onto `predictedPlayerPos` each frame. The wasm
+   * runtime body is the single retail-faithful CPhysicsObj-equivalent
+   * (it predicts locally AND reconciles against the server), so the JS
+   * layer only mirrors it; it does NOT predict speed or smooth on top.
    *
-   * Smoothing math: a framerate-independent exponential ease,
-   * `frac = 1 - exp(-dt_ms / tau)`, with `tau = _lerpDurationMs` (150 ms)
-   * so the perceived smoothness matches the legacy reconcile lerp. At a
-   * steady 60 Hz this eases ~10.5% of the gap per frame; the gap to a
-   * monotonically-advancing integrator settles to a small fixed lag
-   * rather than a sawtooth.
-   *
-   * Landblock-crossing snap: when the integrator's `landblockId`
-   * changes (teleport / LB transition) the world-coord delta jumps by a
-   * multiple of 192 m, so we hard-snap instead of easing — preserving
-   * the teleport feel the legacy `> 5 m` reconcile branch gave (and
-   * matching the local-player teleport snap which is LB-crossing-gated
-   * per `index.html:5960-5968`).
+   * Since the 2026-06-05 FULL COLLAPSE this is a DIRECT-ASSIGN, not an
+   * ease: the rendered avatar IS the physics pose (including
+   * teleports / force-positions, which the wasm pose already reflects),
+   * exactly as retail renders off its own CPhysicsObj. The earlier
+   * exponential ease (`frac = 1 - exp(-dt_ms / tau)`) and the manual
+   * landblock-crossing hard-snap were removed — re-smoothing on top of
+   * the wasm body was itself the "slightly off from retail" snap-back.
+   * The `_lerp*` / `_predPrevLandblockId` fields are retained only for the
+   * retired predictor methods + the first-pose seed path below.
    */
   _smoothToIntegrator(dt) {
     if (typeof window === "undefined") return;
@@ -1605,8 +1578,8 @@ export class CameraSwitcher {
     // visible snap-back). Direct-assign so the rendered avatar IS the physics
     // pose, exactly as retail renders off its own CPhysicsObj — including
     // teleports/force-positions, which the wasm pose already reflects.
-    // (Legacy JS WASD predictor still available via `window.__predPureSmooth
-    // === false` for A/B.)
+    // (The legacy JS WASD predictor was RETIRED from the runtime 2026-06-29;
+    // `tick()` always takes this path — see the `_advancePrediction` banner.)
     this.predictedPlayerPos.x = target.x;
     this.predictedPlayerPos.y = target.y;
     this.predictedPlayerPos.z = target.z;
