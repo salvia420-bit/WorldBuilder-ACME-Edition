@@ -12,6 +12,8 @@ template, E2/E3 scope, and the exact commands.
 - **Commits (local, NOT pushed):**
   - `69a782b8` — Phase D: faithful outdoor terrain collision + Option C off-center-building fix (default-ON).
   - `2f181a96` — Phase E1: faithful vertical-lip step-up (curbs/stairs/ledges), default-ON.
+  - `336bd9e5` — docs: this resume handoff.
+  - `7af9273b` — Phase E2: cross-portal collision (resolve portal-neighbour handles, depth-1, default-ON).
 - **Working tree:** clean of our work (only pre-existing untracked junk: `crates_probe_anim_dist.rs`, old
   HANDOFF-*.md, `02000ADC.bin`, `examples/`, etc. — none ours).
 - **`pkg/` wasm** rebuilt at E1b (17.9 MB) so default-ON (C/D/E1) is live for local serve.py.
@@ -22,27 +24,32 @@ template, E2/E3 scope, and the exact commands.
 | C | indoor env-cell BSP + in-cell statics | ✅ (pre-existing, default-ON) |
 | D | outdoor terrain (2-tri/cell) + Option C off-center-building fix | ✅ `69a782b8` |
 | E1 | walkable step-up: vertical-lip climb (curbs/stairs/ledges) via `ON_WALKABLE` precondition | ✅ `2f181a96` |
-| **E2** | **cross-portal / indoor↔outdoor cell transitions** | ⛔ **NEXT** |
-| E3 | precision polish + live headless validation + ship wasm | ⏳ after E2 |
+| E2 | cross-portal cell transitions (portal-neighbour cells collision-tested, depth-1) | ✅ `7af9273b` (implemented directly in-session, not a workflow) |
+| **E3** | **precision polish + live headless validation + ship wasm** | ⛔ **NEXT** |
 
 ### Task list (TaskCreate IDs in this session)
-`#1` wait-D ✅ · `#2` assess-D ✅ · `#3` derive-E ✅ · `#4` E1 (redone as vertical-lip) ✅ ·
-`#5` **E2 cross-portal — pending** · `#6` E3 polish+validate+ship — pending.
+`#1` wait-D ✅ · `#2` assess-D ✅ · `#3` derive-E ✅ · `#4` E1 (vertical-lip) ✅ ·
+`#5` E2 cross-portal ✅ (`7af9273b`) · `#6` **E3 polish+validate+ship — NEXT**.
 
 ---
 
 ## 2. How to RESUME
 
-The `/loop` is **session-scoped** (stops when the session closes). To resume in a new session, re-issue:
+D, E1, and E2 are done + committed (`7af9273b` is HEAD). **E3 is next.** NOTE: the user moved away from
+ultracode workflows for E2 — it was handled **directly in-session** (research agents + manual edits + drift
+tests + commit). Confirm with the user whether E3 should be a workflow or handled directly too. To resume:
 
 ```
-/loop Phase E workflow loop. E1 done+committed (2f181a96). Do E2 (cross-portal cell transitions): send explore
-agents to discord sql (gotchas) + acclient.txt + decomp/ACE/chorizite/holtburger BEFORE writing the E2 plan
-doc, then draft + execute the E2 ultracode workflow (recon-gated, sequential compile-gated impl, build-gate,
-parallel adversarial verify with faithfulness-to-acclient.c lead). Assess (pause+report if material failure),
-checkpoint-commit E2. Then E3 (precision polish + live headless validation of C/D/E + fix the 2 stale
-position_manager tests + ship wasm) the same way. Self-paced; workflows auto-notify, long fallback heartbeat.
-D=69a782b8, E1=2f181a96 on feat/phase3-phaseD-outdoor-terrain.
+Resume Phase E at E3 (D/E1/E2 done+committed; HEAD 7af9273b on feat/phase3-phaseD-outdoor-terrain). FIRST send
+explore agents to discord sql (gotchas) + acclient.txt + decomp/ACE/chorizite/holtburger before any E3 plan.
+E3 scope: (1) precision polish — precise point_in_cell via the cell-membership BSP (CellMembership in scene.rs,
+currently AABB at faithful_bridge.rs point_in_cell); per-static scale; outdoor water_type/depth through the
+cell adapter; quaternion set_rotate/SLERP. (2) the E2 follow-up: iterative multi-hop portal flood + the
+sphere-vs-portal intersection gate (acclient.c:348337) — E2 shipped depth-1 only. (3) fix the 2 stale
+position_manager tests (sticky_flag_default_off_* / facade_flag_off_* assert default-OFF vs flipped consts).
+(4) live headless A/B validation of C/D/E1/E2 (phase4demo harness). (5) rebuild + ship the wasm. Ask the user:
+workflow or direct? capped-build, ground in acclient.c, ACE reference-only, checkpoint-commit, pause on
+material failure.
 ```
 
 A fresh session should first read this doc + the three PLAN docs (§6) to reload context.
