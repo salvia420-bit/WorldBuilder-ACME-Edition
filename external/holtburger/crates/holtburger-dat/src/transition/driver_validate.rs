@@ -414,6 +414,16 @@ impl CTransition {
 
             // Non-IS_VIEWER: stop the search the moment the adjusted step points
             // UP (313269-313274). `!(c0|c3)` from `ftst` == `z > 0`.
+            //
+            // E1b/WS-B: this is the VERBATIM faithful decomp early-stop. E1 v1
+            // relaxed it with an `allow_contact_stepup = faithful_stepup && CONTACT`
+            // bypass — that hook was refuted by the recon as a live no-op (the
+            // grounded mover walks dz=0, so `global_offset.z > 0.0` never fires on a
+            // flat-floor frame and the bypass changed nothing; ON==OFF byte-identical
+            // in play). The genuine vertical-lip step-up is restored in WS-C by
+            // fixing the `ON_WALKABLE` precondition so the emergent
+            // `step_sphere_down`/`adjust_sphere_to_plane` chain lifts the mover; the
+            // `?stepUp` / `faithful_stepup` flag now gates THAT fix, not this gate.
             if state & object_info_state::IS_VIEWER == 0 && self.sphere_path.global_offset.z > 0.0 {
                 if i == 0 {
                     return 0; // LABEL_29

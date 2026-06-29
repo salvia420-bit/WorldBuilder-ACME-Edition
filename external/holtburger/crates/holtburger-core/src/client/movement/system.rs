@@ -601,6 +601,28 @@ const USE_FAITHFUL_TRANSITION: bool = true;
 /// for the Phase D A/B rollback.
 const USE_FAITHFUL_OUTDOOR: bool = true;
 
+/// Phase 3 Phase E1 / WS-D (2026-06-29) — faithful walkable STEP-UP / slope &
+/// ledge climbing. When on, a grounded CONTACT mover that walks into a walkable
+/// up-slope / ramp / stair / ledge CLIMBS it (the decomp `CSphere::step_sphere_up`
+/// → `CTransition::step_up` path, gated by `step_up_height < radsum + EPSILON −
+/// disp.z`) instead of stopping at the base. Read ONLY when the faithful path is
+/// already active ([`MovementSystem::faithful_transition_enabled`]); the climb
+/// only exists inside the faithful `CTransition` driver. The WS-B (indoor BSP)
+/// and WS-C (outdoor terrain) climb seams read it via the
+/// `CTransition::faithful_stepup` carrier threaded through the dispatch.
+///
+/// ONE feature, TWO carriers (mirrors [`USE_FAITHFUL_OUTDOOR`]): this const
+/// (native default) + a runtime carrier
+/// ([`MovementSystem::faithful_stepup_runtime`], the `?stepUp=off` URL flag).
+/// Effective predicate: [`MovementSystem::faithful_stepup_enabled`], threaded as
+/// the `faithful_stepup` dispatch arg.
+///
+/// `true` (DEFAULT, Phase E1): climb walkable up-slopes/ledges.
+///
+/// `false` / `?stepUp=off`: the pre-E1 behavior — a grounded mover stops at the
+/// base of a walkable up-slope (the climb-on vs stop-at-base A/B rollback).
+const USE_FAITHFUL_STEPUP: bool = true;
+
 /// Phase 3 Phase D (2026-06-28, Option C) — register each outdoor
 /// building/static BSP into EVERY land cell its world AABB overlaps, not just
 /// its home cell, so an off-center building can no longer be walked through from
@@ -1151,6 +1173,12 @@ pub(crate) struct MovementSystem {
     /// forces it on. Combined by [`Self::faithful_outdoor_enabled`]. Default
     /// `None`.
     faithful_outdoor_runtime: Option<bool>,
+    /// Phase 3 Phase E1 / WS-D (2026-06-29) — runtime carrier of the
+    /// `?stepUp=off` URL flag. `None` = use the [`USE_FAITHFUL_STEPUP`] const
+    /// default (ON); `Some(false)` forces the pre-E1 stop-at-base behavior
+    /// (the climb A/B rollback escape); `Some(true)` forces it on. Combined by
+    /// [`Self::faithful_stepup_enabled`]. Default `None`.
+    faithful_stepup_runtime: Option<bool>,
     /// Phase 3 Phase D (2026-06-28, Option C) — runtime carrier of the
     /// `?buildingOverlap=off` URL flag. `None` = use the
     /// [`USE_BUILDING_OVERLAP`] const default (ON); `Some(false)` forces
@@ -1359,6 +1387,7 @@ impl MovementSystem {
             unified_transition_runtime: false,
             faithful_transition_runtime: false,
             faithful_outdoor_runtime: None,
+            faithful_stepup_runtime: None,
             building_overlap_runtime: None,
             jump_charge: JumpChargeClock::new(),
             sticky_timeout_pending: std::cell::Cell::new(false),
@@ -1392,6 +1421,16 @@ impl MovementSystem {
     /// [`Self::faithful_outdoor_enabled`].
     pub(crate) fn set_faithful_outdoor(&mut self, on: bool) {
         self.faithful_outdoor_runtime = Some(on);
+    }
+
+    /// Phase 3 Phase E1 / WS-D (2026-06-29) — install the `?stepUp=off` runtime
+    /// carrier (see [`USE_FAITHFUL_STEPUP`]). The wasm recv-loop init calls this
+    /// once with the parsed flag (default-ON; `=off` forces the pre-E1
+    /// stop-at-base behavior). Read by the WS-B/WS-C climb seams via the
+    /// `faithful_stepup` dispatch arg threaded from
+    /// [`Self::faithful_stepup_enabled`].
+    pub(crate) fn set_faithful_stepup(&mut self, on: bool) {
+        self.faithful_stepup_runtime = Some(on);
     }
 
     /// Phase 3 Phase D (2026-06-28, Option C) — install the
@@ -1639,6 +1678,16 @@ impl MovementSystem {
     /// heightfield even while [`USE_FAITHFUL_OUTDOOR`] is `true`.
     pub(crate) fn faithful_outdoor_enabled(&self) -> bool {
         self.faithful_outdoor_runtime.unwrap_or(USE_FAITHFUL_OUTDOOR)
+    }
+
+    /// Phase 3 Phase E1 / WS-D — the effective STEP-UP-climb predicate. Read ONLY
+    /// when [`Self::faithful_transition_enabled`] is also on (the climb only
+    /// exists inside the faithful driver); threaded as the `faithful_stepup`
+    /// dispatch arg. The runtime carrier OVERRIDES the const default, so
+    /// `?stepUp=off` can roll climbing back to stop-at-base even while
+    /// [`USE_FAITHFUL_STEPUP`] is `true`.
+    pub(crate) fn faithful_stepup_enabled(&self) -> bool {
+        self.faithful_stepup_runtime.unwrap_or(USE_FAITHFUL_STEPUP)
     }
 
     /// Phase 3 Phase D (Option C) — the effective building/static OVERLAP
@@ -4565,6 +4614,7 @@ impl MovementSystem {
             &input,
             self.faithful_transition_enabled(),
             self.faithful_outdoor_enabled(),
+            self.faithful_stepup_enabled(),
         );
         let mut pose = outcome.pose;
         // InitLastKnownContactPlane equivalent — a step with no wall

@@ -729,10 +729,16 @@ impl MovingObjectPhysics for FaithfulMover {
 ///   * INDOOR: a pose whose cell has no physics BSP delegates (the academy-
 ///     rubberband pre-bake guard); otherwise the local player's env-cell
 ///     collision routes through the faithful driver.
+///
+/// Phase 3 Phase E1 / WS-D: `faithful_stepup` (`USE_FAITHFUL_STEPUP` /
+/// `?stepUp=off`) is stamped onto `CTransition::faithful_stepup` and read by the
+/// WS-B (indoor BSP) + WS-C (terrain) step-up climb seams. Default-ON; `=off`
+/// rolls climbing back to the pre-E1 stop-at-base behavior.
 pub fn faithful_find_transitional_position(
     env: &dyn TransitionEnv,
     input: &TransitionInput,
     faithful_outdoor: bool,
+    faithful_stepup: bool,
 ) -> TransitionOutcome {
     let scene = env.scene();
     let begin_cell = scene.current_cell(&input.begin);
@@ -800,6 +806,47 @@ pub fn faithful_find_transitional_position(
     t.object_info.step_up_height = input.object.step_up_height;
     t.object_info.step_down_height = input.object.step_down_height;
     t.object_info.ethereal = input.object.ethereal;
+    // Phase 3 Phase E1 / WS-D: thread the `USE_FAITHFUL_STEPUP` / `?stepUp=off`
+    // toggle into the driver. `CTransition::new()` defaults this ON; this honors
+    // the runtime `?stepUp=off` rollback. Read by the WS-B/WS-C climb seams.
+    t.faithful_stepup = faithful_stepup;
+    // Phase 3 Phase E1b / WS-C (2026-06-29) — restore the faithful persistent
+    // `ON_WALKABLE` precondition for a GROUNDED mover (the genuine vertical-lip
+    // step-up fix). Retail's OBJECTINFO carries `ON_WALKABLE` across frames —
+    // recomputed each `validate_transition` from the walkable contact plane
+    // (driver_validate.rs:185-194) — so a mover standing on walkable ground enters
+    // the next transition already `ON_WALKABLE`. holtburger rebuilds OBJECTINFO
+    // fresh every frame from `input.object.state`, which `for_local_player` stamps
+    // CONTACT|EDGE_SLIDE only (no `ON_WALKABLE`), so the persistent grounded latch
+    // is dropped and `CTransition::step_up` falls back to the 0.04 default
+    // step-down budget (driver_spine.rs:418) instead of `step_up_height`
+    // (driver_spine.rs:420-423) — `step_sphere_down` then descends 0.04, never
+    // reaches a curb/stair top, and the mover sticks at `face − radius`. When a
+    // grounded mover (`!airborne`, or `force_grounded`) enters the slice, stamp
+    // `ON_WALKABLE` so `step_up` gets the `step_up_height` budget and the EXISTING
+    // `step_sphere_down` → `CPolygon::adjust_sphere_to_plane` chain lifts the
+    // sphere onto a lip shorter than `step_up_height` (taller stays out of reach —
+    // the emergent height gate, NO hand-coded threshold). `validate_transition`
+    // recomputes the bit each step from the real contact plane, so a non-walkable
+    // entry support (cliff/steep face) self-corrects (no float-up). Gated by
+    // `faithful_stepup` (`?stepUp=off` ⇒ no stamp ⇒ the pre-E1 stuck-at-base A/B).
+    //
+    // INDOOR (env-cell BSP) ONLY: the vertical-lip step-up is the BSP chain
+    // (`step_sphere_up` → `step_down` → `step_sphere_down` →
+    // `CPolygon::adjust_sphere_to_plane`) that ONLY the indoor/static narrow-phase
+    // runs. The OUTDOOR terrain path is the separate Phase-D `find_terrain_collisions`
+    // → `OBJECTINFO::validate_walkable` chain (a height-field, NO vertical lips),
+    // and forcing `ON_WALKABLE` there REGRESSES the cliff stop: `validate_walkable`
+    // only pushes a mover out of WALKABLE surfaces when `ON_WALKABLE` is set
+    // (objectinfo.rs:163-181, `if step_down || !ON_WALKABLE || valid`), and the
+    // faithful cliff stop relies on the per-substep `ON_WALKABLE`-clear oscillation
+    // that a fresh-per-frame entry stamp defeats (→ walk-through). Outdoor
+    // slope-climb / cliff-stop already work via that chain (Phase D) and are
+    // unaffected here.
+    let grounded_entry = !input.airborne || input.force_grounded;
+    if t.faithful_stepup && grounded_entry && input.begin.is_indoors() {
+        t.object_info.state |= object_info_state::ON_WALKABLE;
+    }
     t.init_sphere(2, &spheres, 1.0);
     t.init_path(Some(begin_cell), Some(&begin_pos), &end_pos);
 
@@ -1151,11 +1198,464 @@ mod drift {
         DriftEnv { scene }
     }
 
+    // ── Phase E1 / WS-B: indoor walkable up-slope (RAMP) + a too-tall riser ──
+    //
+    // RAMP_RUN/RISE define a 1:2 up-slope (cell-local): rise 2 over run 4 ⇒ plane
+    // normal (-0.447, 0, 0.894). normal.z 0.894 > FLOOR_Z (0.664) ⇒ WALKABLE, and
+    // the normal faces −x (toward the approaching +x mover). The riser height
+    // RISER_TALL (2.0) is ≫ the player step_up_height (0.6) ⇒ a too-tall riser
+    // that must NOT climb (proves the step_up_height gate).
+    const RAMP_RUN: f32 = 4.0;
+    const RAMP_RISE: f32 = 2.0;
+    const RISER_TALL: f32 = 2.0;
+
+    /// A cell-local sloped quad rising +z along +x from `(x0,0)` to `(x1,rise)`,
+    /// y∈[−HE,HE]. Winding gives a +z, −x-facing normal (front-faces a +x mover).
+    fn ramp_poly_local(x0: f32, x1: f32, z0: f32, z1: f32) -> ResolvedPolygon {
+        poly(vec![
+            v(x0, -HE, z0),
+            v(x1, -HE, z1),
+            v(x1, HE, z1),
+            v(x0, HE, z0),
+        ])
+    }
+
+    /// Indoor scene: flat floor for x<0 (z=0), a RAMP for x∈[0,run] rising to
+    /// z=rise, then a flat top floor for x>run (z=rise). World z = FLOOR_WZ +
+    /// local-z (cell origin z = FLOOR_WZ). A gentle `run:rise` (e.g. 4:2 ⇒
+    /// normal.z 0.894 > FLOOR_Z) is WALKABLE; a steep one (e.g. 2:4 ⇒ normal.z
+    /// 0.447 < FLOOR_Z) is a non-walkable CLIFF the mover must not climb.
+    fn ramp_env_slope(run: f32, rise: f32) -> DriftEnv {
+        let o = cell_origin();
+        let mut polys = HashMap::new();
+        polys.insert(1u16, floor_poly_local(-HE, 0.0, 0.0)); // base flat
+        polys.insert(2u16, ramp_poly_local(0.0, run, 0.0, rise)); // up-slope
+        polys.insert(3u16, floor_poly_local(run, HE, rise)); // top flat
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
+        // World triangles for the approximate path (base + sloped + top).
+        let mut tris = floor_tris_world(o.x - HE, o.x, o.y - HE, o.y + HE, FLOOR_WZ);
+        tris.push(Triangle::new(
+            v(o.x, o.y - HE, FLOOR_WZ),
+            v(o.x + run, o.y - HE, FLOOR_WZ + rise),
+            v(o.x + run, o.y + HE, FLOOR_WZ + rise),
+        ));
+        tris.push(Triangle::new(
+            v(o.x, o.y - HE, FLOOR_WZ),
+            v(o.x + run, o.y + HE, FLOOR_WZ + rise),
+            v(o.x, o.y + HE, FLOOR_WZ),
+        ));
+        tris.extend(floor_tris_world(
+            o.x + run,
+            o.x + HE,
+            o.y - HE,
+            o.y + HE,
+            FLOOR_WZ + rise,
+        ));
+        seed_common(&mut scene, tris);
+        DriftEnv { scene }
+    }
+
+    /// The default WALKABLE ramp (1:2 ⇒ normal.z 0.894).
+    fn ramp_env() -> DriftEnv {
+        ramp_env_slope(RAMP_RUN, RAMP_RISE)
+    }
+
+    /// Indoor scene: flat floor for x<0 (z=0), a VERTICAL riser at x=0 of height
+    /// `riser`, then a flat top floor for x>0 at z=riser. The riser is a
+    /// −x-facing wall (N.z=0). `riser < step_up_height` ⇒ climbable; `riser ≫
+    /// step_up_height` ⇒ the too-tall gate.
+    fn step_env(riser: f32) -> DriftEnv {
+        let o = cell_origin();
+        let mut polys = HashMap::new();
+        polys.insert(1u16, floor_poly_local(-HE, 0.0, 0.0)); // base flat
+        polys.insert(
+            2u16,
+            poly(vec![
+                v(0.0, -HE, 0.0),
+                v(0.0, -HE, riser),
+                v(0.0, HE, riser),
+                v(0.0, HE, 0.0),
+            ]),
+        ); // vertical riser, N=−x
+        polys.insert(3u16, floor_poly_local(0.0, HE, riser)); // top flat
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
+        let mut tris = floor_tris_world(o.x - HE, o.x, o.y - HE, o.y + HE, FLOOR_WZ);
+        tris.push(Triangle::new(
+            v(o.x, o.y - HE, FLOOR_WZ),
+            v(o.x, o.y - HE, FLOOR_WZ + riser),
+            v(o.x, o.y + HE, FLOOR_WZ + riser),
+        ));
+        tris.push(Triangle::new(
+            v(o.x, o.y - HE, FLOOR_WZ),
+            v(o.x, o.y + HE, FLOOR_WZ + riser),
+            v(o.x, o.y + HE, FLOOR_WZ),
+        ));
+        tris.extend(floor_tris_world(
+            o.x,
+            o.x + HE,
+            o.y - HE,
+            o.y + HE,
+            FLOOR_WZ + riser,
+        ));
+        seed_common(&mut scene, tris);
+        DriftEnv { scene }
+    }
+
+    // ── Phase E1b / WS-B: faithful indoor walkable slope climb + cliff/riser stop ──
+    //
+    // WS-B reverted E1 v1's `driver_validate.rs` up-offset early-stop RELAXATION
+    // (the `faithful_stepup && CONTACT` bypass) — the recon refuted it as a live
+    // NO-OP, so the verbatim decomp early-stop (313269-313274) is restored. A
+    // grounded mover still CLIMBS a walkable up-slope under the LIVE horizontal
+    // input model — that climb is a side-effect of the swept-sphere collision
+    // resolution (`step_sphere_up` → `step_up` → `step_down`, gated on the
+    // walkable-Z threshold), NOT the validate gate — and STOPS at a steep cliff /
+    // too-tall riser. The genuine vertical-lip step-up (lifting onto a curb / stair
+    // shorter than step_up_height via the emergent `step_sphere_down` /
+    // `adjust_sphere_to_plane` chain) is the WS-C fix (the `ON_WALKABLE`
+    // precondition); the `?stepUp` flag now gates THAT, not this gate. The tests
+    // below assert the flag-independent slope climb and the cliff/riser stop.
+
+    /// Drive `frames` movement frames up `env`: each frame steps +`dx` in x toward
+    /// `surface_wz(x)` minus a gravity `SINK` (the live movement-controller cadence),
+    /// threading the previous settled pose forward and the `faithful_stepup` flag.
+    /// Returns every settled pose (start first) for monotonic / jitter assertions.
+    fn frame_walk(
+        env: &DriftEnv,
+        start: WorldPosition,
+        dx: f32,
+        surface_wz: impl Fn(f32) -> f32,
+        frames: usize,
+        stepup_on: bool,
+    ) -> Vec<WorldPosition> {
+        let mut pose = start;
+        let mut trail = vec![pose];
+        for _ in 0..frames {
+            let nx = pose.coords.x + dx;
+            let end = pose_at(nx, pose.coords.y, surface_wz(nx) - SINK);
+            let out =
+                faithful_find_transitional_position(env, &input_for(pose, end), true, stepup_on);
+            pose = out.pose;
+            trail.push(pose);
+        }
+        trail
+    }
+
+    // THRESHOLD: a steep CLIFF (2:4 slope ⇒ normal.z 0.447 < FLOOR_Z) is NOT
+    // walkable, and a too-tall VERTICAL riser (≫ step_up_height) has no reachable
+    // walkable top. Walked into HORIZONTALLY (the live `desired_world_delta` model
+    // — forward + gravity, never a pre-computed uphill destination), the mover
+    // STOPS at the base and does NOT climb, with the `?stepUp` flag ON or OFF (the
+    // flag no longer touches this gate). A flat-floor control proves the geometry
+    // — not a stuck driver — is what stops the climb.
+    #[test]
+    fn stepup_steep_cliff_and_tall_riser_do_not_climb() {
+        // Horizontal forward + gravity sink (the live input model). The destination
+        // never points uphill, so the climb only happens if the swept sphere
+        // discovers a WALKABLE up-surface under it — which neither the cliff nor the
+        // wall provides.
+        let horiz = |lx: f32| -> f32 {
+            let _ = lx;
+            FLOOR_WZ
+        };
+        let start = pose_at(FCX - 1.0, FCY, FLOOR_WZ);
+
+        for &on in &[true, false] {
+            // Steep cliff (2:4 ⇒ normal.z 0.447 < FLOOR_Z 0.664).
+            let cliff = ramp_env_slope(2.0, 4.0);
+            let c_end = *frame_walk(&cliff, start, 0.3, horiz, 60, on).last().unwrap();
+            assert!(
+                c_end.coords.z < FLOOR_WZ + 0.5,
+                "steep cliff must NOT be climbed (on={on}): z {}",
+                c_end.coords.z
+            );
+
+            // Too-tall vertical riser (2 m ≫ step_up_height 0.6).
+            let tall = step_env(RISER_TALL);
+            let t_end = *frame_walk(&tall, start, 0.3, horiz, 60, on).last().unwrap();
+            assert!(
+                t_end.coords.z < FLOOR_WZ + 0.5,
+                "too-tall riser must NOT be climbed (on={on}): z {}",
+                t_end.coords.z
+            );
+        }
+    }
+
+    // ── Phase E1b / WS-C/WS-D HEADLINE: the vertical-LIP step-up A/B ──────────
+    //
+    // A grounded mover walks HORIZONTALLY (forward + gravity SINK, the live input
+    // model — NO pre-aimed uphill destination) into a VERTICAL curb shorter than
+    // `step_up_height` (0.6). With `?stepUp` ON (default) the WS-C `ON_WALKABLE`
+    // precondition gives `CTransition::step_up` the `step_up_height` step-down
+    // budget, so the EMERGENT `step_sphere_down` → `CPolygon::adjust_sphere_to_plane`
+    // chain lifts the sphere onto the curb top (feet-z rises ~+curb) — NO invented
+    // raise, NO hand-coded threshold. With `?stepUp=off` the precondition is not
+    // restored, `step_up` falls back to the 0.04 default budget, `step_sphere_down`
+    // never reaches the top, and the mover STICKS at the riser base (`face − radius`)
+    // — the genuine A/B (both feet-z printed). A taller-than-`step_up_height` curb
+    // (1.0 m) STOPS under BOTH ON and OFF: the emergent geometric reach / interp
+    // window can't admit it (the faithful "too tall ⇒ stop", no threshold).
+    #[test]
+    fn stepup_short_curb_climbs_on_stuck_off() {
+        const CURB: f32 = 0.3; // < step_up_height (0.6) ⇒ climbable
+        // The EXACT live grounded model (movement/system.rs): dz = raw_delta.z =
+        // target_velocity.z*dt = 0 for a grounded walk (gravity applies ONLY when
+        // airborne), so each frame the END pose is the begin advanced +dx in x at
+        // the SAME z — NO pre-aimed uphill destination, NO artificial sink. The
+        // lift, if any, is the faithful `step_sphere_up`/`adjust_sphere_to_plane`
+        // chain (the same cadence `stepup_live_horizontal_walk_climbs_walkable_slope`
+        // drives). `step_env`'s riser sits at cell-local x=0 ⇒ landblock-local FCX.
+        fn live_walk(env: &DriftEnv, start: WorldPosition, frames: usize, on: bool) -> Vec<WorldPosition> {
+            let mut pose = start;
+            let mut trail = vec![pose];
+            for _ in 0..frames {
+                let end = pose_at(pose.coords.x + 0.3, pose.coords.y, pose.coords.z);
+                pose = faithful_find_transitional_position(env, &input_for(pose, end), true, on).pose;
+                trail.push(pose);
+            }
+            trail
+        }
+        // Start on the flat base, one metre before the riser at local x=0.
+        let start = pose_at(FCX - 1.0, FCY, FLOOR_WZ);
+        let curb = step_env(CURB);
+
+        let on_trail = live_walk(&curb, start, 40, true);
+        let off_trail = live_walk(&curb, start, 40, false);
+        let on_end = *on_trail.last().unwrap();
+        let off_end = *off_trail.last().unwrap();
+        eprintln!(
+            "[curb-{CURB}] base_wz={:.3} top_wz={:.3} riser_local_x=0 | ON feet=({:.3},{:.3}) OFF feet=({:.3},{:.3})",
+            FLOOR_WZ, FLOOR_WZ + CURB, on_end.coords.x, on_end.coords.z, off_end.coords.x, off_end.coords.z
+        );
+
+        // ON: climbs onto the curb top — feet-z rises ~+CURB onto the walkable top,
+        // and advances past the riser (local x = 0 ⇒ FCX in world-local terms).
+        assert!(
+            on_end.coords.z > FLOOR_WZ + CURB - 0.1,
+            "stepUp ON: mover must CLIMB onto the {CURB} curb top {} (feet-z rises): got z {}",
+            FLOOR_WZ + CURB, on_end.coords.z
+        );
+        assert!(
+            on_end.coords.x > FCX + 0.1,
+            "stepUp ON: mover must advance past the riser (local x>0): got x {}",
+            on_end.coords.x
+        );
+
+        // OFF: stuck at the base — feet-z stays at the floor (no climb), the mover
+        // does not mount the curb top.
+        assert!(
+            off_end.coords.z < FLOOR_WZ + 0.1,
+            "stepUp OFF: mover must STICK at the base {} (no climb): got z {}",
+            FLOOR_WZ, off_end.coords.z
+        );
+        // The genuine A/B: ON climbs strictly higher than OFF (the flag is real).
+        assert!(
+            on_end.coords.z > off_end.coords.z + (CURB - 0.1),
+            "curb A/B: ON ({}) must climb the curb, OFF ({}) must stay at base",
+            on_end.coords.z, off_end.coords.z
+        );
+
+        // NO jitter: feet-z is monotonic non-decreasing on the ON climb (a clean
+        // settle onto the top, no oscillation at the lip), and x never backsteps.
+        for w in on_trail.windows(2) {
+            assert!(
+                w[1].coords.z >= w[0].coords.z - 1e-3,
+                "curb climb jitter: feet-z went backwards {} -> {}",
+                w[0].coords.z, w[1].coords.z
+            );
+            assert!(
+                w[1].coords.x >= w[0].coords.x - 1e-3,
+                "curb climb jitter: x went backwards {} -> {}",
+                w[0].coords.x, w[1].coords.x
+            );
+        }
+        // Settled exactly ON the top (not floating above it): within ~one radius.
+        assert!(
+            (on_end.coords.z - (FLOOR_WZ + CURB)).abs() < radius(),
+            "ON settle is ON the curb top {} (no float): got z {}",
+            FLOOR_WZ + CURB, on_end.coords.z
+        );
+    }
+
+    // The emergent height gate (no hand-coded threshold): a 1.0 m curb (>
+    // step_up_height 0.6) STOPS under BOTH ON and OFF — `step_sphere_down` /
+    // `adjust_sphere_to_plane` can't reach a top that high, so the mover stays at
+    // the base. Brackets the climbable-height feel (0.3 climbs / 1.0 stops).
+    #[test]
+    fn stepup_tall_curb_stops_both() {
+        const CURB: f32 = 1.0; // > step_up_height (0.6) ⇒ out of emergent reach
+        // Same faithful dz=0 live grounded cadence as the headline test.
+        fn live_walk(env: &DriftEnv, start: WorldPosition, frames: usize, on: bool) -> Vec<WorldPosition> {
+            let mut pose = start;
+            for _ in 0..frames {
+                let end = pose_at(pose.coords.x + 0.3, pose.coords.y, pose.coords.z);
+                pose = faithful_find_transitional_position(env, &input_for(pose, end), true, on).pose;
+            }
+            vec![pose]
+        }
+        let start = pose_at(FCX - 1.0, FCY, FLOOR_WZ);
+        let curb = step_env(CURB);
+        for &on in &[true, false] {
+            let end = *live_walk(&curb, start, 40, on).last().unwrap();
+            eprintln!("[curb-1.0] on={on} feet=({:.3},{:.3})", end.coords.x, end.coords.z);
+            assert!(
+                end.coords.z < FLOOR_WZ + 0.5,
+                "1.0 m curb (> step_up_height) must STOP (on={on}): got z {}",
+                end.coords.z
+            );
+        }
+    }
+
+    // ── Phase E1 FAITHFUL HEADLINE PROOF: a grounded mover walking into a
+    // walkable up-slope CLIMBS it under the EXACT live input model — and that
+    // climb comes from the ported `CSphere::step_sphere_up` (indoor BSP) /
+    // `OBJECTINFO::validate_walkable` raise (outdoor terrain), NOT from the WS-B
+    // validate-gate relaxation.
+    //
+    // Unlike the headline climb tests (1)/(2) above — which PRE-AIM the
+    // destination at the surface height, producing an upward per-step offset that
+    // only the validate early-stop relaxation gates — this drives the *live*
+    // grounded model verbatim from `movement/system.rs`:
+    //   `end = (pose.x + planar.x*dt, pose.y + planar.y*dt, pose.z + dz)`
+    // where `planar.z == 0` and `dz = raw_delta.z = target_velocity.z*dt == 0`
+    // for a grounded walk (gravity applies only when `was_airborne`). So the live
+    // per-step offset is PURELY HORIZONTAL; retail's `z > 0` up-offset early-stop
+    // (decomp 313269-313274) never fires, and the climb is a side-effect of the
+    // swept-sphere collision resolution — exactly as retail climbs.
+    //
+    // CONSEQUENCE (Phase E1b / WS-C update): a WALKABLE slope climbs under BOTH
+    // `?stepUp` ON and OFF — the slope poly is itself walkable, so the emergent
+    // `find_walkable` → `adjust_sphere_to_plane` raise lands the sphere on it
+    // regardless of the `step_up` step-down budget (0.6 when `ON_WALKABLE`, else
+    // 0.04 — both reach the gently-penetrated slope). The WS-C `ON_WALKABLE`
+    // precondition fix (which the `?stepUp` flag now gates) is the GENUINE
+    // vertical-LIP step-up — a curb/stair shorter than `step_up_height`, NOT a
+    // continuous slope — so the flag legitimately changes the lip A/B
+    // (`stepup_short_curb_climbs_*`) while leaving the slope climb intact. The
+    // OUTDOOR slope is the Phase-D `validate_walkable` raise (flag-independent;
+    // ON==OFF below). The INDOOR slope climbs both ways but ON advances a hair
+    // further (the lip budget), so we assert "both reach the ramp top", not strict
+    // byte-identity (the pre-WS-C flag-no-op finding is refuted).
+    #[test]
+    fn stepup_live_horizontal_walk_climbs_walkable_slope() {
+        // The EXACT live grounded model (movement/system.rs): each frame the END
+        // pose is the begin pose advanced horizontally by `dx`, with z = pose.z
+        // (dz = raw_delta.z = target_velocity.z*dt = 0 for a grounded walk; gravity
+        // applies only when airborne). NO pre-aimed uphill destination, NO fixed
+        // absolute sink. The climb, if any, must come entirely from the ported
+        // `step_sphere_up` (indoor) / `validate_walkable` raise (outdoor).
+        fn live_indoor(env: &DriftEnv, start: WorldPosition, frames: usize, on: bool) -> Vec<WorldPosition> {
+            let mut pose = start;
+            let mut trail = vec![pose];
+            for _ in 0..frames {
+                let end = pose_at(pose.coords.x + 0.3, pose.coords.y, pose.coords.z);
+                pose = faithful_find_transitional_position(env, &input_for(pose, end), true, on).pose;
+                trail.push(pose);
+            }
+            trail
+        }
+        fn live_outdoor(env: &DriftEnv, start: WorldPosition, frames: usize, on: bool) -> Vec<WorldPosition> {
+            let mut pose = start;
+            let mut trail = vec![pose];
+            for _ in 0..frames {
+                let g = pose.global_coords();
+                let end = outdoor_pose(g.x + 0.3, g.y, g.z);
+                pose = faithful_find_transitional_position(env, &input_for(pose, end), true, on).pose;
+                trail.push(pose);
+            }
+            trail
+        }
+
+        // INDOOR walkable ramp (1:2). Start on the flat floor BEFORE the base.
+        let renv = ramp_env();
+        let rstart = pose_at(FCX - 1.0, FCY, FLOOR_WZ);
+        let r_on = live_indoor(&renv, rstart, 120, true);
+        let r_off = live_indoor(&renv, rstart, 120, false);
+        let ron = r_on.last().unwrap();
+        let roff = r_off.last().unwrap();
+        eprintln!(
+            "[probe-indoor-live] base_wz={:.3} ramp_top_wz={:.3} run_end_x={:.3} | ON end=({:.3},{:.3}) OFF end=({:.3},{:.3})",
+            FLOOR_WZ, FLOOR_WZ + RAMP_RISE, FCX + RAMP_RUN, ron.coords.x, ron.coords.z, roff.coords.x, roff.coords.z
+        );
+        let trace: Vec<String> = r_on.iter().step_by(10)
+            .map(|p| format!("({:.2},{:.2})", p.coords.x, p.coords.z)).collect();
+        eprintln!("[probe-indoor-live] ON trace x,z: {}", trace.join(" "));
+
+        // OUTDOOR walkable terrain slope (1:2). Start low on the grade.
+        let rise = 0.5;
+        let oenv = DriftEnv { scene: outdoor_scene(slope_grid(rise)) };
+        let (sx, sy) = outdoor_cell_center(1, 4);
+        let ostart = outdoor_pose(sx, sy, terrain_wz(sx, rise));
+        let osg = ostart.global_coords();
+        let o_on = live_outdoor(&oenv, ostart, 80, true);
+        let o_off = live_outdoor(&oenv, ostart, 80, false);
+        let oon = o_on.last().unwrap().global_coords();
+        let ooff = o_off.last().unwrap().global_coords();
+        eprintln!(
+            "[probe-outdoor-live] start=({:.2},{:.2}) | ON=({:.2},{:.2}) OFF=({:.2},{:.2})",
+            osg.x, osg.z, oon.x, oon.z, ooff.x, ooff.z
+        );
+        let otr: Vec<String> = o_on.iter().step_by(10)
+            .map(|p| { let g = p.global_coords(); format!("({:.2},{:.2})", g.x, g.z) }).collect();
+        eprintln!("[probe-outdoor-live] ON trace x,z: {}", otr.join(" "));
+
+        // INDOOR: the live walk CLIMBS the full ramp (feet z reaches the top) and
+        // advances past the ramp run onto the flat top — the faithful step_sphere_up
+        // climb, with NO uphill-aimed offset.
+        assert!(
+            ron.coords.z > FLOOR_WZ + RAMP_RISE - 0.2,
+            "live indoor walk must climb to the ramp top {}: got z {}",
+            FLOOR_WZ + RAMP_RISE, ron.coords.z
+        );
+        assert!(
+            ron.coords.x > FCX + RAMP_RUN,
+            "live indoor walk must advance past the ramp run: got x {}", ron.coords.x
+        );
+        // Monotonic climb up the ramp (no jitter): z never drops while on the ramp.
+        for w in r_on.windows(2) {
+            assert!(w[1].coords.x >= w[0].coords.x - 1e-3, "indoor x backwards (jitter)");
+            if w[0].coords.x <= FCX + RAMP_RUN {
+                assert!(w[1].coords.z >= w[0].coords.z - 1e-3, "indoor z backwards on ramp (jitter)");
+            }
+        }
+        // OUTDOOR: the live walk CLIMBS the terrain grade, feet tracking the slope.
+        assert!(oon.z > osg.z + 6.0, "live outdoor walk must climb the grade: z {} (start {})", oon.z, osg.z);
+        assert!(oon.x > osg.x + 12.0, "live outdoor walk must advance up the grade: x {}", oon.x);
+        for p in &o_on {
+            let g = p.global_coords();
+            let want = terrain_wz(g.x, rise);
+            assert!((g.z - want).abs() < 0.05, "outdoor feet must track terrain height: z {} want {}", g.z, want);
+        }
+        // WS-C UPDATE: the INDOOR walkable slope climbs under BOTH ON and OFF
+        // (no regression of the E1 slope behavior) — assert OFF also reaches the
+        // ramp top and advances past the run, rather than strict ON==OFF byte
+        // identity (refuted: the flag now meaningfully gates the vertical-LIP
+        // step-up — see `stepup_short_curb_climbs_*`).
+        assert!(
+            roff.coords.z > FLOOR_WZ + RAMP_RISE - 0.2,
+            "stepUp OFF must STILL climb the walkable slope to the top {}: got z {}",
+            FLOOR_WZ + RAMP_RISE, roff.coords.z
+        );
+        assert!(
+            roff.coords.x > FCX + RAMP_RUN,
+            "stepUp OFF must STILL advance past the ramp run: got x {}", roff.coords.x
+        );
+        // The OUTDOOR slope is the Phase-D `validate_walkable` raise (a height-field
+        // with no vertical lips), which the WS-C indoor-only precondition does not
+        // touch — so it stays flag-INDEPENDENT (ON==OFF), the Phase-D regression guard.
+        assert_eq!(
+            (oon.x, oon.z), (ooff.x, ooff.z),
+            "outdoor terrain climb stays flag-independent (WS-C is indoor-BSP only)"
+        );
+    }
+
     fn run_ab(env: &DriftEnv, input: &TransitionInput) -> (TransitionOutcome, TransitionOutcome) {
         let approx = find_transitional_position(env, input);
         // Indoor scenes: the outdoor flag is irrelevant (the indoor branch is
         // taken regardless); pass the production default (ON).
-        let faithful = faithful_find_transitional_position(env, input, true);
+        let faithful = faithful_find_transitional_position(env, input, true, true);
         (approx, faithful)
     }
 
@@ -1193,6 +1693,11 @@ mod drift {
         let mut t = CTransition::new();
         t.object_info.scale = 1.0;
         t.object_info.state = input.object.state;
+        // Mirror the bridge's WS-C grounded INDOOR `ON_WALKABLE` stamp (default-ON)
+        // so `assert_pose_roundtrips_driver` compares like-for-like driver state.
+        if (!input.airborne || input.force_grounded) && input.begin.is_indoors() {
+            t.object_info.state |= object_info_state::ON_WALKABLE;
+        }
         t.object_info.step_up_height = input.object.step_up_height;
         t.object_info.step_down_height = input.object.step_down_height;
         t.object_info.ethereal = input.object.ethereal;
@@ -1493,11 +1998,11 @@ mod drift {
         scene.insert_cell_static_physics_bsp(CELL_ID, static_wall_bsp());
         assert_eq!(scene.cell_static_physics_bsp_count(), 1);
         let env = DriftEnv { scene };
-        let with = faithful_find_transitional_position(&env, &input, true);
+        let with = faithful_find_transitional_position(&env, &input, true, true);
 
         // CONTROL: no static (env floor only).
         let ctrl = DriftEnv { scene: floor_only_scene() };
-        let without = faithful_find_transitional_position(&ctrl, &input, true);
+        let without = faithful_find_transitional_position(&ctrl, &input, true, true);
 
         eprintln!(
             "static-object: WITH x={:.4}  WITHOUT x={:.4}  wall_x={wall_x}",
@@ -1552,7 +2057,7 @@ mod drift {
             // A long diagonal that, unbounded, would run far — must terminate.
             let end = pose_at(FCX + 5.0, FCY + 5.0, FLOOR_WZ - SINK);
             let input = input_for(begin, end);
-            let f = faithful_find_transitional_position(&env, &input, true);
+            let f = faithful_find_transitional_position(&env, &input, true, true);
             assert_in_cell_aabb(&env, &f);
             assert_no_overshoot(&begin, &end, &f);
             assert_pose_roundtrips_driver(&env, &input, &f);
@@ -1583,7 +2088,7 @@ mod drift {
         let input = input_for(begin, end);
         let a = find_transitional_position(&env, &input);
         // faithful_outdoor = false ⇒ the outdoor branch rolls back to heightfield.
-        let f = faithful_find_transitional_position(&env, &input, false);
+        let f = faithful_find_transitional_position(&env, &input, false, true);
         assert_eq!(a.pose, f.pose, "outdoor flag-off delegates byte-identically");
         assert_eq!(a.grounded, f.grounded);
         assert_eq!(a.cell_changed, f.cell_changed);
@@ -1609,7 +2114,7 @@ mod drift {
         assert!(!begin.is_indoors());
         assert!(!env.scene.terrain_landblock_resident(env.scene.current_cell(&begin)));
         let a = find_transitional_position(&env, &input);
-        let f = faithful_find_transitional_position(&env, &input, true);
+        let f = faithful_find_transitional_position(&env, &input, true, true);
         assert_eq!(a.pose, f.pose, "unbaked outdoor LB delegates byte-identically");
         assert_eq!(a.grounded, f.grounded);
     }
@@ -1633,7 +2138,7 @@ mod drift {
         assert!(begin.is_indoors());
         assert!(env.scene.cell_physics_bsp(env.scene.current_cell(&begin)).is_none());
         let a = find_transitional_position(&env, &input);
-        let f = faithful_find_transitional_position(&env, &input, true);
+        let f = faithful_find_transitional_position(&env, &input, true, true);
         assert_eq!(a.pose, f.pose, "indoor-no-BSP delegates byte-identically");
         assert_eq!(a.grounded, f.grounded);
     }
@@ -1727,6 +2232,59 @@ mod drift {
         let mut scene = SpatialScene::new();
         scene.populate_terrain_heights(OLB, heights);
         scene
+    }
+
+    // ── Phase E1 / WS-C terrain up-slope helpers ──
+    //
+    // A landblock terrain grid that rises LINEARLY in +x at `rise_per_m` (a plane,
+    // so the collision triangle height == the analytic height everywhere). The 9×9
+    // vertices sit every 24 m, so `h[vx*9+vy] = 50 + rise_per_m*24*vx`. A
+    // `rise_per_m` of 0.5 ⇒ a 1:2 up-slope (normal.z 0.894 > FLOOR_Z 0.664 ⇒
+    // WALKABLE), the outdoor twin of the indoor RAMP. `rise_per_m` ≥ ~1.5 (≈ 56°)
+    // is a non-walkable CLIFF.
+    fn slope_grid(rise_per_m: f32) -> [f32; 81] {
+        let mut h = [0.0f32; 81];
+        for vx in 0..9usize {
+            for vy in 0..9usize {
+                h[vx * 9 + vy] = 50.0 + rise_per_m * 24.0 * vx as f32;
+            }
+        }
+        h
+    }
+
+    /// World feet-z of the linear slope surface at WORLD x (landblock-local
+    /// `x − OLB_OX`, planar ⇒ `50 + rise_per_m*(x − OLB_OX)`).
+    fn terrain_wz(world_x: f32, rise_per_m: f32) -> f32 {
+        50.0 + rise_per_m * (world_x - OLB_OX)
+    }
+
+    /// Drive `frames` movement frames up an OUTDOOR slope through the PUBLIC entry
+    /// (`faithful_find_transitional_position`, the WS4 outdoor flip): each frame
+    /// advances +`dx` in WORLD x toward `surface_wz(x)` minus a gravity `SINK`
+    /// (the live movement cadence), threading the settled pose forward and the
+    /// `faithful_stepup` toggle. The outdoor flag is ON; only the climb toggle
+    /// varies. Returns every settled pose (start first) for monotonic/jitter and
+    /// height-tracking assertions.
+    fn outdoor_frame_walk(
+        env: &DriftEnv,
+        start: WorldPosition,
+        dx: f32,
+        surface_wz: impl Fn(f32) -> f32,
+        frames: usize,
+        stepup_on: bool,
+    ) -> Vec<WorldPosition> {
+        let mut pose = start;
+        let mut trail = vec![pose];
+        for _ in 0..frames {
+            let g = pose.global_coords();
+            let nx = g.x + dx;
+            let end = outdoor_pose(nx, g.y, surface_wz(nx) - SINK);
+            let out =
+                faithful_find_transitional_position(env, &input_for(pose, end), true, stepup_on);
+            pose = out.pose;
+            trail.push(pose);
+        }
+        trail
     }
 
     // (a0) DIRECT cell-body proof (the WS3 deliverable in isolation): obtain the
@@ -2019,6 +2577,62 @@ mod drift {
         assert!(feet_c.x > begin.global_coords().x + 0.5, "flat control advanced");
     }
 
+    // ── Phase E1b / WS-B: OUTDOOR terrain cliff still stops under the live walk ──
+    //
+    // The recon verdict (WS-A): retail climbs walkable TERRAIN via
+    // `CLandCell::find_env_collisions` → `find_terrain_poly` →
+    // `OBJECTINFO::validate_walkable` (acclient.c:354992 / 314161), which raises the
+    // mover onto the triangle plane — NOT the validate up-offset early-stop, which
+    // E1 v1 relaxed and WS-B reverted (a live no-op; see the indoor preamble). The
+    // walkable slope climb under the live horizontal model is covered by
+    // `stepup_live_horizontal_walk_climbs_walkable_slope` (which also pins the
+    // flag-no-op finding). The test below is the regression guard that a too-steep
+    // terrain CLIFF still STOPS the mover (Phase D `outdoor_steep_cliff_stops_mover`),
+    // and that the `validate_walkable` walkability gate (`is_valid_walkable`,
+    // normal.z ≥ FLOOR_Z) never lets the mover float up an unwalkable face.
+
+    // CLIFF preservation (HORIZONTAL input, the live forward+gravity model): flat
+    // terrain then a too-steep cliff (cell 6 jumps 50→200 ⇒ ~81°, normal.z 0.16 <
+    // FLOOR_Z). Walked into HORIZONTALLY, the mover STOPS at the cliff base (z stays
+    // ~50). A flat-terrain control advances clearly further, proving the cliff (not a
+    // stuck driver) is what stops it.
+    #[test]
+    fn outdoor_terrain_cliff_horizontal_no_climb_with_stepup_on() {
+        let mut hc = [50.0f32; 81];
+        for vy in 0..9usize {
+            hc[7 * 9 + vy] = 200.0; // cliff at cell 6 (vertices vx 7,8)
+            hc[8 * 9 + vy] = 200.0;
+        }
+        let cliff_env = DriftEnv { scene: outdoor_scene(hc) };
+        let flat_env = DriftEnv { scene: outdoor_scene([50.0f32; 81]) };
+        let (sx, sy) = outdoor_cell_center(5, 4); // flat cell 5; cliff is cell 6 (x>=528)
+        let start = outdoor_pose(sx, sy, 50.0);
+        let start_g = start.global_coords();
+
+        // Horizontal walk (constant surface z; gravity SINK provides the down bias)
+        // with the climb flag ON.
+        let cliff = outdoor_frame_walk(&cliff_env, start, 0.3, |_| 50.0, 60, true);
+        let flat = outdoor_frame_walk(&flat_env, start, 0.3, |_| 50.0, 60, true);
+        let cliff_end = cliff.last().unwrap().global_coords();
+        let flat_end = flat.last().unwrap().global_coords();
+
+        // Did NOT climb the cliff (z stays near the flat base, nowhere near 200).
+        assert!(
+            cliff_end.z < 80.0,
+            "stepUp ON must NOT climb the terrain cliff: z {}",
+            cliff_end.z
+        );
+        // Stopped short of where the unobstructed flat control reached.
+        assert!(
+            cliff_end.x < flat_end.x - 0.25,
+            "cliff did not stop the mover: cliff x {} vs flat x {}",
+            cliff_end.x, flat_end.x
+        );
+        // The flat control advanced clearly past the start (geometry, not a stuck
+        // driver, is what stops the cliff climb).
+        assert!(flat_end.x > start_g.x + 0.5, "flat control advanced east");
+    }
+
     // ── Phase D / WS4: OUTDOOR faithful dispatch FLIP (the public-entry A/B) ────
     //
     // The WS3 tests above drive the driver directly (`outdoor_raw_drive`); these
@@ -2079,9 +2693,9 @@ mod drift {
         let env = OutdoorEnv { scene: outdoor_scene([Z; 81]), ground_z: Z };
 
         // Flag ON (default) → faithful terrain driver.
-        let on = faithful_find_transitional_position(&env, &input, true);
+        let on = faithful_find_transitional_position(&env, &input, true, true);
         // Flag OFF → heightfield path (the rollback regression guard).
-        let off = faithful_find_transitional_position(&env, &input, false);
+        let off = faithful_find_transitional_position(&env, &input, false, true);
 
         eprintln!(
             "[ws4-outdoor-ab] ON pose=({:.3},{:.3},{:.3}) grounded={} | OFF pose=({:.3},{:.3},{:.3}) grounded={}",

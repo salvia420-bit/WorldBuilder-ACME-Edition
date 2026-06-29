@@ -162,6 +162,21 @@ fn parse_faithful_outdoor_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "faithfulOutdoor=off")
 }
 
+/// Phase 3 Phase E1 / WS-D (2026-06-29): parse `?stepUp=off` (or `&stepUp=off`).
+/// DEFAULT-ON, off-escape shape (mirrors `parse_faithful_outdoor_flag`): returns
+/// `true` UNLESS `stepUp=off` is present. When on, a grounded mover CLIMBS
+/// walkable up-slopes / ramps / stairs / ledges (the faithful
+/// `CSphere::step_sphere_up` → `CTransition::step_up` path); read ONLY when
+/// `?faithfulTransition` is also on (the climb lives inside the faithful driver).
+/// `=off` rolls climbing back to the pre-E1 stop-at-base behavior. Native
+/// carrier: `USE_FAITHFUL_STEPUP` (movement/system.rs). Needs a wasm rebuild; NO
+/// manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_faithful_stepup_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "stepUp=off")
+}
+
 /// Phase 3 Phase D (2026-06-28, Option C): parse `?buildingOverlap=off` (or
 /// `&buildingOverlap=off`). DEFAULT-ON, off-escape shape: returns `true` UNLESS
 /// `buildingOverlap=off` is present. When on, each outdoor building/static BSP
@@ -24279,6 +24294,21 @@ mod wire_state_packs_routing_tests {
         ));
     }
 
+    /// Phase 3 Phase E1 / WS-D: `?stepUp=off` DEFAULT-ON off-escape shape.
+    #[test]
+    fn faithful_stepup_flag_defaults_on_off_escape() {
+        use super::parse_faithful_stepup_flag;
+        // Default ON: absent / unrelated / explicit-on all enabled.
+        assert!(parse_faithful_stepup_flag(""));
+        assert!(parse_faithful_stepup_flag("?faithfulTransition=on"));
+        assert!(parse_faithful_stepup_flag("?stepUp=on"));
+        // Only an exact `=off` disables (anywhere in the query string).
+        assert!(!parse_faithful_stepup_flag("?stepUp=off"));
+        assert!(!parse_faithful_stepup_flag(
+            "?renderer=3d&faithfulTransition=on&stepUp=off"
+        ));
+    }
+
     /// Phase 3 Phase D (Option C): `?buildingOverlap=off` DEFAULT-ON off-escape.
     #[test]
     fn building_overlap_flag_defaults_on_off_escape() {
@@ -33308,6 +33338,11 @@ async fn recv_loop(
     // ON). Read only when `?faithfulTransition` is also on; see
     // `parse_faithful_outdoor_flag`.
     movement.set_faithful_outdoor(parse_faithful_outdoor_flag(&js_location_search()));
+    // Phase 3 Phase E1 / WS-D (2026-06-29): `?stepUp=off` — roll walkable
+    // step-up / slope & ledge climbing back to the pre-E1 stop-at-base behavior
+    // (default ON). Read only when `?faithfulTransition` is also on; see
+    // `parse_faithful_stepup_flag`.
+    movement.set_faithful_stepup(parse_faithful_stepup_flag(&js_location_search()));
     // Phase 3 Phase D (2026-06-28, Option C): `?buildingOverlap=off` — register
     // each outdoor building/static BSP into its HOME cell only (the retail
     // walk-through repro) instead of every overlapped cell (default ON, the

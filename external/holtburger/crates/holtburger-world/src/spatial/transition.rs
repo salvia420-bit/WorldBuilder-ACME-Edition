@@ -841,14 +841,27 @@ pub fn find_transitional_position(
 ///     false` (`?faithfulOutdoor=off`) keeps the outdoor branch on the existing
 ///     heightfield path. `faithful_outdoor` is read ONLY when `faithful` is on
 ///     (it gates the outdoor branch INSIDE the bridge).
+///
+/// Phase 3 Phase E1 / WS-D (`USE_FAITHFUL_STEPUP`, `?stepUp=off`): the
+/// `faithful_stepup` arg carries the step-up / slope & ledge climb toggle into
+/// the faithful driver (stored on `CTransition::faithful_stepup`, read by the
+/// WS-B indoor-BSP + WS-C terrain climb seams). Like `faithful_outdoor`, it is
+/// consumed ONLY when `faithful` is on (the climb only exists inside the
+/// faithful driver); the existing pipeline ignores it.
 pub fn find_transitional_position_dispatch(
     env: &dyn TransitionEnv,
     input: &TransitionInput,
     faithful: bool,
     faithful_outdoor: bool,
+    faithful_stepup: bool,
 ) -> TransitionOutcome {
     if faithful {
-        super::faithful_bridge::faithful_find_transitional_position(env, input, faithful_outdoor)
+        super::faithful_bridge::faithful_find_transitional_position(
+            env,
+            input,
+            faithful_outdoor,
+            faithful_stepup,
+        )
     } else {
         find_transitional_position(env, input)
     }

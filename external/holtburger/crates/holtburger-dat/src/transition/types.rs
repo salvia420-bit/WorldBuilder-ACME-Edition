@@ -511,7 +511,7 @@ pub struct CellArray {
 /// leaf predicates. The Phase-2 resolver reads the first three members
 /// (`object_info` / `sphere_path` / `collision_info`); `cell_array` + the
 /// driver loop are filled in by the Phase-3 driver agent.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CTransition {
     pub object_info: ObjectInfo,
     pub sphere_path: SpherePath,
@@ -519,6 +519,33 @@ pub struct CTransition {
     // PHASE3
     pub cell_array: CellArray,
     // PHASE3: new_cell_ptr: Option<CObjCell>.
+    /// Phase 3 Phase E1 / WS-D (`USE_FAITHFUL_STEPUP`, 2026-06-29) —
+    /// holtburger A/B feature toggle (NOT a retail OBJECTINFO field): when
+    /// `true` (DEFAULT), the faithful step-up / slope & ledge climb path is
+    /// live (the WS-B indoor-BSP early-stop relaxation + the WS-C terrain
+    /// climb both read this); when `false` (`?stepUp=off`) the driver keeps
+    /// the pre-E1 behavior (a grounded mover stops at the base of a walkable
+    /// up-slope). Carried from `movement/system.rs`'s `USE_FAITHFUL_STEPUP`
+    /// const / `?stepUp=off` runtime carrier through
+    /// `find_transitional_position_dispatch` →
+    /// `faithful_find_transitional_position` (the `faithful_stepup` arg). The
+    /// hand-written [`Default`] below defaults this ON so every direct
+    /// `CTransition::new()`/`default()` user (the dat-crate unit tests) climbs
+    /// like the live default-ON path.
+    pub faithful_stepup: bool,
+}
+
+impl Default for CTransition {
+    fn default() -> Self {
+        Self {
+            object_info: ObjectInfo::default(),
+            sphere_path: SpherePath::default(),
+            collision_info: CollisionInfo::default(),
+            cell_array: CellArray::default(),
+            // Phase E1 / WS-D: default-ON (mirrors `USE_FAITHFUL_STEPUP`).
+            faithful_stepup: true,
+        }
+    }
 }
 
 // `CTransition::step_up` (acclient.c:312794) is the Phase-3 DRIVER method; its
@@ -559,6 +586,9 @@ mod tests {
         assert_eq!(t.sphere_path.num_sphere, 0);
         assert!(!t.object_info.ethereal);
         assert_eq!(t.object_info.state, object_info_state::DEFAULT);
+        // Phase E1 / WS-D: the step-up climb feature toggle defaults ON
+        // (mirrors `USE_FAITHFUL_STEPUP`); `?stepUp=off` flips it.
+        assert!(t.faithful_stepup);
     }
 
     #[test]

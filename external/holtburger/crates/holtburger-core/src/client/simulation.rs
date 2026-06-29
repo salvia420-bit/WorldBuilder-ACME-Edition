@@ -222,6 +222,7 @@ impl ClientSimulationSystem {
                 &input,
                 movement.faithful_transition_enabled(),
                 movement.faithful_outdoor_enabled(),
+                movement.faithful_stepup_enabled(),
             );
             if let Some(n) = outcome.wall_normal {
                 world.player.last_known_wall_normal = Some(n);

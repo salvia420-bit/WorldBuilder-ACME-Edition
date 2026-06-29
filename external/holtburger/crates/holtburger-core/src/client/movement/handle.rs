@@ -245,6 +245,15 @@ impl MovementSystemHandle {
         self.inner.set_faithful_outdoor(on);
     }
 
+    /// Phase 3 Phase E1 / WS-D (2026-06-29): install the `?stepUp=off` runtime
+    /// carrier (default-ON walkable step-up / slope & ledge climbing; `=off`
+    /// rolls climbing back to the pre-E1 stop-at-base behavior). Read only when
+    /// `?faithfulTransition` is also on. Forwards to
+    /// `MovementSystem::set_faithful_stepup`.
+    pub fn set_faithful_stepup(&mut self, on: bool) {
+        self.inner.set_faithful_stepup(on);
+    }
+
     /// Phase 3 Phase D (2026-06-28, Option C): install the
     /// `?buildingOverlap=off` runtime carrier (default-ON overlap registration;
     /// `=off` = the retail home-cell-only walk-through repro for the A/B proof).
@@ -259,6 +268,13 @@ impl MovementSystemHandle {
     /// carrier.
     pub fn faithful_outdoor_enabled(&self) -> bool {
         self.inner.faithful_outdoor_enabled()
+    }
+
+    /// Phase 3 Phase E1 / WS-D — the effective STEP-UP-climb predicate, threaded
+    /// into the transition dispatch's `faithful_stepup` arm. Combines the
+    /// `USE_FAITHFUL_STEPUP` const default with the `?stepUp` runtime carrier.
+    pub fn faithful_stepup_enabled(&self) -> bool {
+        self.inner.faithful_stepup_enabled()
     }
 
     /// Phase 3 Phase D (Option C) — the effective building/static OVERLAP
