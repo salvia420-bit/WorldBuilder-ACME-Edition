@@ -830,20 +830,25 @@ pub fn find_transitional_position(
 
 /// Phase 3 B4 (2026-06-28) — additive dispatcher between the existing
 /// pipeline and the decomp-faithful `CTransition` driver. Behind the
-/// default-OFF `USE_FAITHFUL_TRANSITION` flag (movement/system.rs):
+/// `USE_FAITHFUL_TRANSITION` flag (movement/system.rs):
 ///   - `faithful == false` (DEFAULT) → the unchanged existing pipeline
 ///     ([`find_transitional_position`]); the live path is byte-identical.
 ///   - `faithful == true` → the faithful driver bridge
 ///     ([`super::faithful_bridge::faithful_find_transitional_position`]):
-///     env-cells faithful, statics identity, outdoor via the existing
-///     heightfield.
+///     env-cells faithful, statics faithful (Phase C), and — when
+///     `faithful_outdoor == true` (Phase D / WS4, `USE_FAITHFUL_OUTDOOR`) —
+///     OUTDOOR poses run the faithful terrain driver too; `faithful_outdoor ==
+///     false` (`?faithfulOutdoor=off`) keeps the outdoor branch on the existing
+///     heightfield path. `faithful_outdoor` is read ONLY when `faithful` is on
+///     (it gates the outdoor branch INSIDE the bridge).
 pub fn find_transitional_position_dispatch(
     env: &dyn TransitionEnv,
     input: &TransitionInput,
     faithful: bool,
+    faithful_outdoor: bool,
 ) -> TransitionOutcome {
     if faithful {
-        super::faithful_bridge::faithful_find_transitional_position(env, input)
+        super::faithful_bridge::faithful_find_transitional_position(env, input, faithful_outdoor)
     } else {
         find_transitional_position(env, input)
     }

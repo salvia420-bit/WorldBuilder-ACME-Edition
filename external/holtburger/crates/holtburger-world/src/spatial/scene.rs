@@ -9,6 +9,7 @@ use crate::entity::EntityMotionSnapshot;
 use holtburger_common::position::{METERS_PER_LANDBLOCK, WorldPosition};
 use holtburger_common::{Aabb, Frustum, Guid, Triangle, Vector3};
 use holtburger_dat::file_type::SkyDesc;
+use holtburger_dat::transition::objcell::{CELL_SIZE, lcoord_to_cellid};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use web_time::Instant;
@@ -345,6 +346,28 @@ impl CellPhysicsBsp {
         };
         inv.rotate_vector(world - self.origin)
     }
+
+    /// Phase D / WS7 (Option C): the WORLD-space AABB bounding this static's
+    /// resolved physics polygons. Each polygon vertex is cell-local, so it is
+    /// lifted to world by `origin + orientation · v` (the same frame
+    /// [`Self::world_to_local`] inverts). Returns [`Aabb::empty`] when the static
+    /// carries no polygons (a tree-only BSP) — the caller skips empty AABBs.
+    ///
+    /// Used by the per-cell overlap bake
+    /// ([`SpatialScene::bake_outdoor_static_overlap_for_landblock`]) to decide
+    /// which land cells a building/static footprint overruns, so it can be
+    /// registered into every overlapped cell (not just its home cell). The
+    /// 8-corner conservative expansion `Aabb::transform_by` does for a part-local
+    /// box is unnecessary here: we bound the ACTUAL world vertices directly.
+    pub fn world_aabb(&self) -> Aabb {
+        let mut aabb = Aabb::empty();
+        for poly in self.polys.values() {
+            for &v in &poly.vertices {
+                aabb.expand_to_include_point(self.orientation.rotate_vector(v) + self.origin);
+            }
+        }
+        aabb
+    }
 }
 
 /// Cell MEMBERSHIP tree (`CellStruct.cell_bsp`) + cell frame. Answers
@@ -569,6 +592,20 @@ pub struct SpatialScene {
     /// same per-part frame transform used for AABBs); cleared per-
     /// landblock alongside the AABB index when the LB unloads.
     building_physics_index: Arc<HashMap<u32, Vec<Triangle>>>,
+    /// Phase D / WS1 (2026-06-28): per-landblock terrain vertex heights for the
+    /// faithful OUTDOOR CTransition path. Keyed by the landblock HIGH WORD
+    /// (`0xXXYY0000` — `cell_id & 0xFFFF_0000`), the same key form
+    /// [`WorldState::terrain_heights`] (`crate::state::types`) uses; the value is
+    /// the landblock's 9×9 corner-height grid in `vx * 9 + vy` order (identical
+    /// layout to `WorldState::terrain_heights` and `terrain_height_at`). This is
+    /// the residency signal [`<SpatialScene as
+    /// holtburger_dat::transition::objcell::Landscape>::get_landcell`] keys on
+    /// (an outdoor land cell exists for the faithful ring only when its landblock
+    /// is loaded) and the corner-height source the WS2/WS3 terrain-triangle build
+    /// reads. Populated by [`Self::populate_terrain_heights`] (the wasm
+    /// landblock-load feed, mirroring the Phase C BSP staging); cleared per
+    /// landblock by [`Self::clear_terrain_heights_for_landblock`] on unload.
+    terrain_heights: Arc<HashMap<u32, [f32; 81]>>,
     /// Workstream Sky-B (parametric skybox, 2026-05-11): the parsed
     /// SkyDesc + GameTime for the active Region. `None` until the
     /// wasm bundle's `populateSkyDescFromRegion` lands; populated once
@@ -683,6 +720,7 @@ impl SpatialScene {
             statics_aabb_index: Arc::new(HashMap::new()),
             statics_physics_bsp: Arc::new(HashMap::new()),
             building_physics_index: Arc::new(HashMap::new()),
+            terrain_heights: Arc::new(HashMap::new()),
             sky_desc: None,
             remote_interp_enabled: false,
             remote_stepped_poses: HashMap::new(),
@@ -1240,6 +1278,205 @@ impl SpatialScene {
     /// Phase C: total registered per-cell static physics-BSP count. Diagnostic.
     pub fn cell_static_physics_bsp_count(&self) -> usize {
         self.cell_static_physics_bsp.values().map(|v| v.len()).sum()
+    }
+
+    /// Phase D / WS7 (Option C — the headline off-center-building fix): bake the
+    /// per-cell OUTDOOR static/building overlap index for one landblock.
+    ///
+    /// For every outdoor static/building physics BSP registered under
+    /// `landblock_high` in [`Self::statics_physics_bsp`] (keyed by landblock high
+    /// word), this computes the static's WORLD AABB ([`CellPhysicsBsp::world_aabb`]),
+    /// converts it to GLOBAL land-cell coords (`world / 24`, the same `floor(/24)`
+    /// the ring uses at `objcell.rs` `add_all_outside_cells_sphere`), and registers
+    /// the static's [`CellPhysicsBsp`] into [`Self::cell_static_physics_bsp`] for
+    /// the land cells it overlaps:
+    /// - `overlap_enabled == true` (DEFAULT — `?buildingOverlap` on — the fix):
+    ///   the `[min..=max]` land-cell rectangle the AABB overlaps (the
+    ///   `add_cell_block` rectangle), so an off-center building whose footprint
+    ///   overruns into a neighbor cell is testable from THAT neighbor cell.
+    /// - `overlap_enabled == false` (`?buildingOverlap=off` — the retail bug
+    ///   repro): the HOME cell only (the cell the AABB CENTER falls into, matching
+    ///   the `building_aabb_index` "bucket by centre" rule), reproducing retail's
+    ///   home-cell-only registration that an off-center building walks through.
+    ///
+    /// This is the ONLY behavioral deviation from retail and it is INDEX-ONLY: it
+    /// widens the per-cell static index that the faithful driver's
+    /// [`super::faithful_bridge::SceneObjCell::find_obj_collisions`] reads; the
+    /// swept-sphere resolver and `find_obj_collisions` itself are untouched. The
+    /// faithful OUTDOOR driver reads statics from `cell_static_physics_bsp` (NOT
+    /// `statics_physics_bsp`), so this bake is also what makes outdoor statics
+    /// testable on the faithful path at all (the outdoor twin of the Phase C
+    /// indoor `insert_cell_static_physics_bsp` feed).
+    ///
+    /// LOADING-VIRUS BOUND (gmriggs): the bake NEVER reads or triggers a load of
+    /// another landblock — the overlap rectangle is clamped to this (resident)
+    /// landblock's own 8×8 cell grid and each target cell is additionally gated on
+    /// terrain residency ([`Self::terrain_landblock_resident`]). A building's
+    /// footprint overruns at most an adjacent cell, so the clamped rectangle stays
+    /// tiny. A static straddling a LANDBLOCK boundary is the carried cross-landblock
+    /// case (plan §8): home-landblock clamping keeps the index idempotent and
+    /// leak-free (every entry is keyed within this landblock, so [`Self::clear_outdoor_static_overlap_for_landblock`]
+    /// / [`Self::clear_cells_for_landblock`] remove ALL of it on rebake/unload — a
+    /// full AABB rectangle spilling into a neighbor landblock would orphan phantom
+    /// entries on this landblock's unload since they'd be keyed in the neighbor),
+    /// and the faithful ring (`add_all_outside_cells_sphere`) still floods this
+    /// landblock's boundary cell — where the static IS registered — when a player
+    /// approaches across the boundary from the resident neighbor.
+    ///
+    /// Idempotent: clears this landblock's prior OUTDOOR per-cell static entries
+    /// (full cell ids whose low word is an outdoor `1..=64`) before re-registering;
+    /// INDOOR per-cell statics (low word `>= 0x100`, the Phase C feed) are left
+    /// untouched. Returns the number of `(cell, static)` registrations made.
+    pub fn bake_outdoor_static_overlap_for_landblock(
+        &mut self,
+        landblock_high: u32,
+        overlap_enabled: bool,
+    ) -> usize {
+        let lb_high = landblock_high & 0xFFFF_0000;
+        // Idempotency: drop this landblock's prior OUTDOOR per-cell entries so a
+        // re-bake (the live STATIC_BSP_PENDING drain runs per landblock load)
+        // never double-registers.
+        self.clear_outdoor_static_overlap_for_landblock(lb_high);
+
+        // Never register into a non-resident landblock (loading-virus bound). The
+        // home landblock must be resident (its terrain heights loaded) for the
+        // faithful ring to ever route a mover here at all.
+        if !self.terrain_landblock_resident(lb_high) {
+            return 0;
+        }
+        // Snapshot the source statics (clone the Arc'd Vec) to release the shared
+        // borrow before the per-cell `Arc::make_mut` insert.
+        let statics = match self.statics_physics_bsp.get(&lb_high) {
+            Some(v) => v.clone(),
+            None => return 0,
+        };
+        if statics.is_empty() {
+            return 0;
+        }
+
+        // This landblock's GLOBAL land-cell range: blockX*8 ..= blockX*8+7
+        // (BlockSide = 8 cells/landblock). The overlap rectangle is clamped to
+        // this so the bake stays inside the resident landblock.
+        let block_x = ((lb_high >> 24) & 0xFF) as i32;
+        let block_y = ((lb_high >> 16) & 0xFF) as i32;
+        let (lb_min_x, lb_max_x) = (block_x * 8, block_x * 8 + 7);
+        let (lb_min_y, lb_max_y) = (block_y * 8, block_y * 8 + 7);
+
+        let mut registrations = 0usize;
+        for bsp in &statics {
+            let aabb = bsp.world_aabb();
+            if aabb.is_empty() {
+                continue;
+            }
+            // The [min..=max] land-cell rectangle (or, when overlap is off, the
+            // single home cell from the AABB centre). `floor(world / 24)` is the
+            // global landcell index (same conversion as the ring's per-sphere
+            // `floor(point/24)`); `lcoord_to_cellid` packs it back to a full id.
+            let (min_gx, max_gx, min_gy, max_gy) = if overlap_enabled {
+                (
+                    (aabb.min.x / CELL_SIZE).floor() as i32,
+                    (aabb.max.x / CELL_SIZE).floor() as i32,
+                    (aabb.min.y / CELL_SIZE).floor() as i32,
+                    (aabb.max.y / CELL_SIZE).floor() as i32,
+                )
+            } else {
+                let c = aabb.center();
+                let gx = (c.x / CELL_SIZE).floor() as i32;
+                let gy = (c.y / CELL_SIZE).floor() as i32;
+                (gx, gx, gy, gy)
+            };
+            // Clamp to this landblock's cell grid (loading-virus bound).
+            let min_gx = min_gx.max(lb_min_x);
+            let max_gx = max_gx.min(lb_max_x);
+            let min_gy = min_gy.max(lb_min_y);
+            let max_gy = max_gy.min(lb_max_y);
+
+            let mut gx = min_gx;
+            while gx <= max_gx {
+                let mut gy = min_gy;
+                while gy <= max_gy {
+                    let cell_id = lcoord_to_cellid(gx, gy);
+                    // Residency gate (always true after the home-landblock clamp,
+                    // but kept as the explicit loading-virus guard the plan calls
+                    // for so the rule survives any future clamp change).
+                    if self.terrain_landblock_resident(cell_id) {
+                        Arc::make_mut(&mut self.cell_static_physics_bsp)
+                            .entry(cell_id)
+                            .or_default()
+                            .push(bsp.clone());
+                        registrations += 1;
+                    }
+                    gy += 1;
+                }
+                gx += 1;
+            }
+        }
+        registrations
+    }
+
+    /// Phase D / WS7: drop this landblock's OUTDOOR per-cell static overlap
+    /// entries from [`Self::cell_static_physics_bsp`] — full cell ids in this
+    /// landblock whose low word is an outdoor cell index (`1..=64`). INDOOR
+    /// per-cell statics (low word `>= 0x100`, the Phase C feed) are preserved, so
+    /// a surface landblock that carries BOTH outdoor terrain statics and indoor
+    /// env-cell statics keeps the latter. Called for idempotency at the head of
+    /// [`Self::bake_outdoor_static_overlap_for_landblock`] (the broader
+    /// [`Self::clear_cells_for_landblock`] also clears these on landblock unload).
+    /// Returns the removed static count.
+    pub fn clear_outdoor_static_overlap_for_landblock(&mut self, landblock_high: u32) -> usize {
+        let lb_high = landblock_high & 0xFFFF_0000;
+        let mut removed = 0usize;
+        Arc::make_mut(&mut self.cell_static_physics_bsp).retain(|cell_id, v| {
+            let low = cell_id & 0xFFFF;
+            if (*cell_id & 0xFFFF_0000) == lb_high && (1..=64).contains(&low) {
+                removed += v.len();
+                false
+            } else {
+                true
+            }
+        });
+        removed
+    }
+
+    /// Phase D / WS1: install a landblock's 9×9 terrain corner-height grid
+    /// (`vx * 9 + vy` order — the same layout `WorldState::terrain_heights` /
+    /// `terrain_height_at` use). `landblock_id` is normalized to the high-word
+    /// key (`& 0xFFFF_0000`) so callers may pass either `0xXXYY0000` or any cell
+    /// id in the landblock. Idempotent — a re-load overwrites. This is the
+    /// residency signal the faithful outdoor ring keys on
+    /// ([`Self::terrain_landblock_resident`]) and the corner source the
+    /// terrain-triangle build (WS2/WS3) reads. Mirrors the Phase C BSP staging
+    /// (fed by the wasm landblock-load path, WS8).
+    pub fn populate_terrain_heights(&mut self, landblock_id: u32, heights: [f32; 81]) {
+        Arc::make_mut(&mut self.terrain_heights).insert(landblock_id & 0xFFFF_0000, heights);
+    }
+
+    /// Phase D / WS1: drop a landblock's terrain heights on unload (parallel to
+    /// `clear_*_for_landblock`). Returns `true` if an entry was removed.
+    pub fn clear_terrain_heights_for_landblock(&mut self, landblock_id: u32) -> bool {
+        Arc::make_mut(&mut self.terrain_heights)
+            .remove(&(landblock_id & 0xFFFF_0000))
+            .is_some()
+    }
+
+    /// Phase D / WS1: is the landblock containing `cell_id` resident (terrain
+    /// heights loaded)? `LScape::get_landcell` returns a live outdoor cell only
+    /// when its landblock is loaded; the faithful ring still adds a NULL entry on
+    /// a non-resident lookup (`add_outside_cell`, objcell.rs:553).
+    pub fn terrain_landblock_resident(&self, cell_id: u32) -> bool {
+        self.terrain_heights.contains_key(&(cell_id & 0xFFFF_0000))
+    }
+
+    /// Phase D / WS1: the 9×9 corner-height grid for `cell_id`'s landblock, or
+    /// `None` when the landblock isn't resident. The corner source the
+    /// terrain-triangle build (WS2/WS3) and the outdoor cell AABB read.
+    pub fn terrain_cell_heights(&self, cell_id: u32) -> Option<&[f32; 81]> {
+        self.terrain_heights.get(&(cell_id & 0xFFFF_0000))
+    }
+
+    /// Phase D / WS1: count of resident terrain landblocks. Diagnostic / tests.
+    pub fn terrain_heights_count(&self) -> usize {
+        self.terrain_heights.len()
     }
 
     /// Terrain→EnvCell entry (2026-06-02): register a cell-membership

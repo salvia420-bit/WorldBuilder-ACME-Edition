@@ -146,6 +146,36 @@ fn parse_faithful_transition_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "faithfulTransition=on")
 }
 
+/// Phase 3 Phase D (2026-06-28): parse `?faithfulOutdoor=off` (or
+/// `&faithfulOutdoor=off`). DEFAULT-ON, off-escape shape (mirrors
+/// `parse_unified_tick_flag`): returns `true` UNLESS `faithfulOutdoor=off` is
+/// present. When on, the faithful `CTransition` driver also covers OUTDOOR
+/// terrain (land-cell triangles + buildings/statics + entities) instead of
+/// delegating outdoor poses to the heightfield pipeline; read ONLY when
+/// `?faithfulTransition` is also on (the outdoor branch lives inside the
+/// faithful bridge). `=off` rolls outdoor back to the heightfield (the Phase D
+/// A/B rollback). Native carrier: `USE_FAITHFUL_OUTDOOR` (movement/system.rs).
+/// Needs a wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_faithful_outdoor_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "faithfulOutdoor=off")
+}
+
+/// Phase 3 Phase D (2026-06-28, Option C): parse `?buildingOverlap=off` (or
+/// `&buildingOverlap=off`). DEFAULT-ON, off-escape shape: returns `true` UNLESS
+/// `buildingOverlap=off` is present. When on, each outdoor building/static BSP
+/// is registered into every land cell its world AABB overlaps (the off-center
+/// walk-through fix); `=off` reproduces the retail home-cell-only behavior (the
+/// A/B bug-repro arm — overlap-on STOPS the mover, overlap-off WALKS THROUGH).
+/// Native carrier: `USE_BUILDING_OVERLAP` (movement/system.rs). Needs a wasm
+/// rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_building_overlap_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "buildingOverlap=off")
+}
+
 /// A9-Stage1 (2026-06-12, unification survey): parse `?placementId=on`
 /// (or `&placementId=on`). Same shape as `parse_unified_tick_flag`.
 /// When on, the static placement-frame resolution follows RETAIL order
@@ -11488,6 +11518,34 @@ thread_local! {
         std::cell::RefCell<Vec<(u32, holtburger_world::CellPhysicsBsp)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
+    /// Phase D / WS8 (2026-06-28, Option C live feed): landblock-high words
+    /// pending an OUTDOOR per-cell static-overlap bake. The OUTDOOR twin of
+    /// `CELL_STATIC_BSP_PENDING` (indoor) — but the per-cell static entries are
+    /// PRODUCED by the WS7 bake
+    /// (`SpatialScene::bake_outdoor_static_overlap_for_landblock`), which reads
+    /// `scene.statics_physics_bsp` + the terrain-residency grid and registers
+    /// each static's `CellPhysicsBsp` into every land cell its world AABB
+    /// overlaps. So there is nothing to stage per-cell — only the landblock id
+    /// that needs (re-)baking.
+    ///
+    /// Filled by `enqueue_outdoor_overlap_bake` from the outdoor static populate
+    /// path (`populate_statics_aabbs_for_landblock_impl`, the same sites that
+    /// stage `STATIC_BSP_PENDING`) and from the `PopulateTerrain` arm, then
+    /// drained in the `TickMovement` arm by
+    /// `drain_pending_outdoor_overlap_bakes_into` AFTER
+    /// `drain_pending_static_bsps_into` has moved this landblock's statics into
+    /// the scene. A landblock stays queued until its terrain is resident, so an
+    /// out-of-order load (statics before terrain) still bakes once the heights
+    /// land. Both the outdoor bake and the indoor drain feed the SAME
+    /// `scene.cell_static_physics_bsp` table (outdoor full cell ids `1..=64`
+    /// never collide with indoor `>= 0x100` ids), and a landblock unload purges
+    /// both via `clear_cells_for_landblock` /
+    /// `clear_outdoor_static_overlap_for_landblock`. HashSet for idempotent
+    /// enqueue (non-const init — `HashSet::new` isn't `const`).
+    static OUTDOOR_OVERLAP_BAKE_PENDING:
+        std::cell::RefCell<std::collections::HashSet<u32>> =
+            std::cell::RefCell::new(std::collections::HashSet::new());
+
     /// Workstream Sky-B (parametric skybox, 2026-05-11): thread-local
     /// holding the parsed SkyDesc + GameTime + per-frame evaluator
     /// state. Populated once per session by `populateSkyDescFromRegion`
@@ -11751,6 +11809,59 @@ fn drain_pending_cell_static_bsps_into(scene: &mut holtburger_world::SpatialScen
             scene.insert_cell_static_physics_bsp(cell_id, bsp);
         }
         count
+    })
+}
+
+/// Phase D / WS8 (2026-06-28, Option C live feed): queue `landblock_high` for an
+/// OUTDOOR per-cell static-overlap bake. Idempotent (HashSet). Called from the
+/// outdoor static populate path (`populate_statics_aabbs_for_landblock_impl`, at
+/// the same sites that stage `STATIC_BSP_PENDING`) and from the `PopulateTerrain`
+/// arm; drained by `drain_pending_outdoor_overlap_bakes_into`.
+#[cfg(target_arch = "wasm32")]
+fn enqueue_outdoor_overlap_bake(landblock_high: u32) {
+    OUTDOOR_OVERLAP_BAKE_PENDING.with(|c| {
+        c.borrow_mut().insert(landblock_high & 0xFFFF_0000);
+    });
+}
+
+/// Phase D / WS8 (2026-06-28, Option C live feed): the OUTDOOR twin of
+/// `drain_pending_cell_static_bsps_into`. For each queued landblock whose terrain
+/// heights are resident in the scene, run the WS7 Option C bake
+/// (`SpatialScene::bake_outdoor_static_overlap_for_landblock`) and dequeue it;
+/// landblocks not yet terrain-resident stay queued for retry next tick (handles
+/// a statics-before-terrain load order). Must run in the `TickMovement` arm
+/// AFTER `drain_pending_static_bsps_into` so the bake reads this landblock's
+/// statics from `scene.statics_physics_bsp` the same tick they land.
+///
+/// The overlap flag is read lazily (only when there's pending work, to avoid
+/// poking `window.location` every idle tick) and mirrors
+/// `MovementSystem::building_overlap_enabled` exactly — both reduce to
+/// `parse_building_overlap_flag` (the const default and the runtime carrier are
+/// both ON, so `?buildingOverlap=off` is the only thing that flips it to the
+/// retail home-cell-only repro). Returns `(landblocks_baked, registrations_made)`.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_outdoor_overlap_bakes_into(
+    scene: &mut holtburger_world::SpatialScene,
+) -> (usize, usize) {
+    OUTDOOR_OVERLAP_BAKE_PENDING.with(|c| {
+        let mut set = c.borrow_mut();
+        if set.is_empty() {
+            return (0, 0);
+        }
+        let overlap_enabled = parse_building_overlap_flag(&js_location_search());
+        let mut baked = 0usize;
+        let mut registrations = 0usize;
+        set.retain(|&lb| {
+            if scene.terrain_landblock_resident(lb) {
+                registrations +=
+                    scene.bake_outdoor_static_overlap_for_landblock(lb, overlap_enabled);
+                baked += 1;
+                false // baked → drop from the queue
+            } else {
+                true // terrain not resident yet → keep for retry next tick
+            }
+        });
+        (baked, registrations)
     })
 }
 
@@ -12385,6 +12496,14 @@ async fn populate_statics_aabbs_for_landblock_impl(
                                         );
                                     if !polys.is_empty() {
                                         has_bsp = true;
+                                        // Phase D / WS8 (Option C live feed):
+                                        // this landblock now carries a physics-
+                                        // BSP static → queue it for the outdoor
+                                        // per-cell overlap bake (deduped). The
+                                        // bake runs once these statics drain into
+                                        // scene.statics_physics_bsp + terrain is
+                                        // resident.
+                                        enqueue_outdoor_overlap_bake(landblock_high);
                                         STATIC_BSP_PENDING.with(|pile| {
                                             pile.borrow_mut().push((
                                                 landblock_high,
@@ -12451,6 +12570,10 @@ async fn populate_statics_aabbs_for_landblock_impl(
                                 let world_orientation =
                                     placement_orientation.multiply(b.rot);
                                 has_bsp = true;
+                                // Phase D / WS8 (Option C live feed): queue this
+                                // landblock for the outdoor per-cell overlap bake
+                                // (deduped) — same rationale as the 0x01 path.
+                                enqueue_outdoor_overlap_bake(landblock_high);
                                 STATIC_BSP_PENDING.with(|pile| {
                                     pile.borrow_mut().push((
                                         landblock_high,
@@ -24140,6 +24263,33 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_faithful_transition_flag("?unifiedTransition=on"));
         assert!(!parse_faithful_transition_flag(""));
     }
+
+    /// Phase 3 Phase D: `?faithfulOutdoor=off` DEFAULT-ON off-escape shape.
+    #[test]
+    fn faithful_outdoor_flag_defaults_on_off_escape() {
+        use super::parse_faithful_outdoor_flag;
+        // Default ON: absent / unrelated / explicit-on all enabled.
+        assert!(parse_faithful_outdoor_flag(""));
+        assert!(parse_faithful_outdoor_flag("?faithfulTransition=on"));
+        assert!(parse_faithful_outdoor_flag("?faithfulOutdoor=on"));
+        // Only an exact `=off` disables (anywhere in the query string).
+        assert!(!parse_faithful_outdoor_flag("?faithfulOutdoor=off"));
+        assert!(!parse_faithful_outdoor_flag(
+            "?renderer=3d&faithfulTransition=on&faithfulOutdoor=off"
+        ));
+    }
+
+    /// Phase 3 Phase D (Option C): `?buildingOverlap=off` DEFAULT-ON off-escape.
+    #[test]
+    fn building_overlap_flag_defaults_on_off_escape() {
+        use super::parse_building_overlap_flag;
+        assert!(parse_building_overlap_flag(""));
+        assert!(parse_building_overlap_flag("?buildingOverlap=on"));
+        assert!(!parse_building_overlap_flag("?buildingOverlap=off"));
+        assert!(!parse_building_overlap_flag(
+            "?renderer=3d&buildingOverlap=off"
+        ));
+    }
 }
 
 /// CMT Wave 16 / Phase 50 (2026-05-26): resolve the entity's
@@ -33153,6 +33303,16 @@ async fn recv_loop(
     // the approximate flat-triangle pipeline, byte-identical; see
     // `parse_faithful_transition_flag`.
     movement.set_faithful_transition(parse_faithful_transition_flag(&js_location_search()));
+    // Phase 3 Phase D (2026-06-28): `?faithfulOutdoor=off` — roll the faithful
+    // driver's OUTDOOR terrain path back to the approximate heightfield (default
+    // ON). Read only when `?faithfulTransition` is also on; see
+    // `parse_faithful_outdoor_flag`.
+    movement.set_faithful_outdoor(parse_faithful_outdoor_flag(&js_location_search()));
+    // Phase 3 Phase D (2026-06-28, Option C): `?buildingOverlap=off` — register
+    // each outdoor building/static BSP into its HOME cell only (the retail
+    // walk-through repro) instead of every overlapped cell (default ON, the
+    // off-center fix); see `parse_building_overlap_flag`.
+    movement.set_building_overlap(parse_building_overlap_flag(&js_location_search()));
     // A1-O1 (2026-06-11): the canonical tick spine's wasm facade — owns
     // the `ClientSimulationSystem` this recv loop otherwise lacks.
     // Constructed unconditionally (cheap empty Vec); driven ONLY when
@@ -39893,6 +40053,20 @@ async fn recv_loop(
                             }
                         };
                         w.populate_terrain_heights(landblock_id, arr);
+                        // Phase D / WS8 (2026-06-28): mirror the 9x9 height grid
+                        // into the spatial scene. The WorldState copy above feeds
+                        // the approximate heightfield path; THIS copy is what the
+                        // faithful OUTDOOR path reads — the ring/dispatch gate on
+                        // `scene.terrain_landblock_resident` (faithful_bridge.rs)
+                        // and the land-cell triangles are built on demand from
+                        // `scene.terrain_cell_heights` (WS2/WS3). `arr` is `[f32;
+                        // 81]` (Copy), so reusing it here is a copy, not a move.
+                        w.scene.populate_terrain_heights(landblock_id, arr);
+                        // NOTE: no overlap-bake enqueue here — the outdoor static
+                        // populate path is the sole enqueuer, and the drain's
+                        // retain-retry keeps a statics-before-terrain landblock
+                        // queued until these heights make it terrain-resident, so
+                        // a terrain-first load still bakes once the statics drain.
                         // F4-4: cache per-vertex water flags from the terrain
                         // type codes (no-op when not 81 — fail-soft).
                         w.populate_terrain_water(landblock_id, &terrain_codes);
@@ -42663,6 +42837,26 @@ async fn recv_loop(
                         if drained_static_cell_bsp > 0 {
                             console_log_str(&format!(
                                 "[bsp] drained {drained_static_cell_bsp} cell STATIC physics BSPs into scene ({} total)",
+                                w.scene.cell_static_physics_bsp_count(),
+                            ));
+                        }
+                        // Phase D / WS8 (2026-06-28, Option C live feed): the
+                        // OUTDOOR twin of the indoor cell-STATIC drain above. For
+                        // each landblock whose terrain + outdoor statics have now
+                        // landed, bake each static's physics BSP into every land
+                        // cell its AABB overlaps (the off-center-building fix).
+                        // Runs AFTER the b4t2 static-BSP drain so the bake reads
+                        // this landblock's statics from scene.statics_physics_bsp
+                        // the same tick they arrive; both feed the SAME
+                        // scene.cell_static_physics_bsp table the indoor drain
+                        // feeds. This is the headless-boot confirmation the
+                        // outdoor populate fired.
+                        let (outdoor_lbs_baked, outdoor_static_regs) =
+                            drain_pending_outdoor_overlap_bakes_into(&mut w.scene);
+                        if outdoor_lbs_baked > 0 {
+                            console_log_str(&format!(
+                                "[bsp] baked {outdoor_static_regs} outdoor cell STATIC physics BSPs \
+                                 across {outdoor_lbs_baked} landblock(s) ({} total)",
                                 w.scene.cell_static_physics_bsp_count(),
                             ));
                         }

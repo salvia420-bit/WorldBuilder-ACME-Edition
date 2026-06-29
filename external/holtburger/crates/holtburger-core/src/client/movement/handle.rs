@@ -237,6 +237,39 @@ impl MovementSystemHandle {
         self.inner.set_faithful_transition(on);
     }
 
+    /// Phase 3 Phase D (2026-06-28): install the `?faithfulOutdoor=off` runtime
+    /// carrier (default-ON outdoor-faithful; `=off` rolls the OUTDOOR terrain
+    /// path back to the heightfield). Read only when `?faithfulTransition` is
+    /// also on. Forwards to `MovementSystem::set_faithful_outdoor`.
+    pub fn set_faithful_outdoor(&mut self, on: bool) {
+        self.inner.set_faithful_outdoor(on);
+    }
+
+    /// Phase 3 Phase D (2026-06-28, Option C): install the
+    /// `?buildingOverlap=off` runtime carrier (default-ON overlap registration;
+    /// `=off` = the retail home-cell-only walk-through repro for the A/B proof).
+    /// Forwards to `MovementSystem::set_building_overlap`.
+    pub fn set_building_overlap(&mut self, on: bool) {
+        self.inner.set_building_overlap(on);
+    }
+
+    /// Phase 3 Phase D — the effective OUTDOOR-faithful predicate, threaded into
+    /// the transition dispatch's `faithful_outdoor` arm (WS4). Combines the
+    /// `USE_FAITHFUL_OUTDOOR` const default with the `?faithfulOutdoor` runtime
+    /// carrier.
+    pub fn faithful_outdoor_enabled(&self) -> bool {
+        self.inner.faithful_outdoor_enabled()
+    }
+
+    /// Phase 3 Phase D (Option C) — the effective building/static OVERLAP
+    /// registration predicate, read by the per-cell static-BSP bake (WS7/WS8):
+    /// the wasm bake calls this on the handle and passes the bool into the scene
+    /// bake. Combines the `USE_BUILDING_OVERLAP` const default with the
+    /// `?buildingOverlap` runtime carrier.
+    pub fn building_overlap_enabled(&self) -> bool {
+        self.inner.building_overlap_enabled()
+    }
+
     /// A14-I3 (2026-06-12, `?retailRunKeys=on`) — public forward for
     /// the wasm `setAutoRun` export: retail
     /// `CommandInterpreter::SetAutoRun` + the `ApplyCurrentMovement`

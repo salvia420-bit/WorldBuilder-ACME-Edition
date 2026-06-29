@@ -58,13 +58,16 @@ use std::rc::Rc;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::{Aabb, Quaternion, Sphere, Vector3};
 
+use holtburger_dat::physics::ResolvedPolygon;
 use holtburger_dat::transition::driver_validate::MovingObjectPhysics;
 use holtburger_dat::transition::frame_transform::Frame;
 use holtburger_dat::transition::objcell::{
-    CObjCell, CellArrayApi, CellWorld, LandblockRef, PhysicsObjRef, WaterType,
+    add_all_outside_cells_sphere, gid_to_lcoord, lcoord_to_cellid, CObjCell, CellArrayApi,
+    CellWorld, Landscape, LandDefsSeam, LandblockRef, PhysicsObjRef, WaterType, CELL_SIZE,
 };
+use holtburger_dat::transition::terrain_collision::{cell_terrain_polys, find_terrain_poly};
 use holtburger_dat::transition::types::{
-    object_info_state, CTransition, LandDefs, ObjCellHandle, Position, SpherePath,
+    object_info_state, CTransition, CellArray, LandDefs, ObjCellHandle, Position, SpherePath,
 };
 
 use super::collision::TransitionState;
@@ -128,6 +131,94 @@ pub struct SceneObjCell {
     /// `((CEnvCell*)this)->stab_list` — the portal-visible neighbour cell ids
     /// (the cell ring `find_transit_cells` floods).
     portal_neighbours: Vec<u32>,
+    /// Phase D / WS3: the OUTDOOR land cell's two collision triangles
+    /// (`CLandCell::polygons`), in this cell's LANDBLOCK-local frame (WS2's
+    /// [`cell_terrain_polys`]). `Some` ⇒ this is an outdoor `CLandCell` and
+    /// [`Self::find_collisions`] runs the terrain `FindEnvCollisions` path
+    /// (`find_terrain_poly` + `validate_walkable`) instead of the indoor env BSP.
+    /// `None` for indoor env cells (mutually exclusive with [`Self::bsp`]).
+    terrain_polys: Option<[ResolvedPolygon; 2]>,
+    /// Phase D / WS3: the WORLD-space origin of this cell's landblock
+    /// (`(blockX·192, blockY·192, 0)`). The terrain polys are landblock-local; the
+    /// driver runs the swept sphere in WORLD space, so the terrain path rebases
+    /// the global sphere into the landblock frame by subtracting this. This is the
+    /// `GetBlockOffset(check_pos, this)` reduction (a pure translation — landblocks
+    /// are never rotated) for the same-landblock case the bridge exercises.
+    landblock_origin: Vector3,
+}
+
+impl SceneObjCell {
+    /// `CLandCell::FindEnvCollisions` (ACE `LandCell.cs:37-65`; decomp
+    /// `find_terrain_poly` acclient.c:354859 + `OBJECTINFO::validate_walkable`
+    /// :314161). The OUTDOOR terrain collision body, run when this cell carries
+    /// terrain triangles ([`SceneObjCell::terrain_polys`]):
+    ///   1. rebase the swept sphere's global low point into the landblock-local
+    ///      frame (`localPoint = GlobalLowPoint − GetBlockOffset`; in the WORLD-
+    ///      space bridge this reduces to `global_low_point − landblock_origin`);
+    ///   2. [`find_terrain_poly`] selects the supporting triangle — `None` (off
+    ///      the cell footprint) is OK and falls through to statics, exactly ACE's
+    ///      `return transitState`;
+    ///   3. an entirely-water landblock blocks a non-viewer mover (`Collided`);
+    ///   4. `OBJECTINFO::validate_walkable` runs the slope/landing gate (walkable
+    ///      allowance, deep-water depth) against the triangle plane and the
+    ///      landblock-local check sphere, recording the contact plane / collision
+    ///      normal and pushing the sphere out of the surface — the driver's
+    ///      `validate_transition` then latches CONTACT / ON_WALKABLE from that
+    ///      plane (the grounded signal the marshalling reads).
+    ///
+    /// The plane and check sphere are both expressed in the landblock-local frame,
+    /// which differs from WORLD only by a translation, so the signed-distance
+    /// (`v17`) and the push-out offset `validate_walkable` computes are identical
+    /// to the WORLD-frame ones and apply correctly to the path's world check_pos.
+    fn find_terrain_collisions(&self, transition: &mut CTransition) -> i32 {
+        let terrain = match self.terrain_polys.as_ref() {
+            Some(t) => t,
+            None => return TransitionState::OK as i32,
+        };
+        // localPoint = GlobalLowPoint − GetBlockOffset(check_pos, this). World
+        // frame ⇒ subtract this cell's landblock origin (same-landblock offset).
+        let local_low = transition.sphere_path.global_low_point - self.landblock_origin;
+        // find_terrain_poly: which triangle sits under the low point? `None` ⇒
+        // off the cell ⇒ OK (proceed to statics) — ACE returns `transitState`.
+        let walkable = match find_terrain_poly(terrain, local_low) {
+            Some(p) => p,
+            None => return TransitionState::OK as i32,
+        };
+        // Entirely-water landblock ⇒ a non-viewer mover is blocked (`Collided`).
+        // (Missile is not a movement mover on this path.) Uses the ported
+        // `CObjCell::get_block_water_type`; `None` landblock ⇒ NotWater today, so
+        // this never fires until live water is wired (WS8). VERIFY(WS8): outdoor
+        // water type/depth via the live `WorldState` samplers.
+        if self.get_block_water_type() == WaterType::EntirelyWater
+            && transition.object_info.state & object_info_state::IS_VIEWER == 0
+        {
+            return TransitionState::Collided as i32;
+        }
+        let water_depth = self.get_water_depth(local_low);
+        let is_water = self.water_type() != WaterType::NotWater;
+        // checkPos = GlobalSphere[0] − GetBlockOffset(check_pos, this).
+        let mut check_pos = transition.sphere_path.global_sphere[0];
+        check_pos.center = check_pos.center - self.landblock_origin;
+        let cell_id = self.cell_id;
+        // ValidateWalkable(checkPos, walkable.Plane, isWater, waterDepth, .., ID).
+        // Disjoint field borrows of `transition` (object_info shared, path /
+        // collision_info mutable).
+        let CTransition {
+            object_info,
+            sphere_path,
+            collision_info,
+            ..
+        } = &mut *transition;
+        object_info.validate_walkable(
+            &check_pos,
+            &walkable.plane,
+            is_water,
+            water_depth,
+            sphere_path,
+            collision_info,
+            cell_id,
+        )
+    }
 }
 
 impl CObjCell for SceneObjCell {
@@ -217,10 +308,17 @@ impl CObjCell for SceneObjCell {
         } else {
             1.0
         };
-        if let Some(bsp) = self.bsp.as_ref() {
-            // SPHEREPATH::cache_localspace_sphere(&this->pos, scale) — the
-            // resolver's localspace_* input — then BSPTREE::find_collisions over
-            // the cell-local environment tree.
+        if self.terrain_polys.is_some() {
+            // OUTDOOR `CLandCell::FindEnvCollisions` (terrain polygon path —
+            // distinct from the indoor env BSP). Phase D / WS3.
+            let env = self.find_terrain_collisions(transition);
+            if env != TransitionState::OK as i32 {
+                return env;
+            }
+        } else if let Some(bsp) = self.bsp.as_ref() {
+            // INDOOR `CEnvCell::FindEnvCollisions`: SPHEREPATH::cache_localspace_
+            // sphere(&this->pos, scale) — the resolver's localspace_* input — then
+            // BSPTREE::find_collisions over the cell-local environment tree.
             transition
                 .sphere_path
                 .cache_localspace_sphere(&self.pos, scale);
@@ -234,7 +332,9 @@ impl CObjCell for SceneObjCell {
                 return env;
             }
         }
-        // Object/static collisions (Phase C).
+        // Object/static collisions (Phase C). Entities are not tested in-cell
+        // here (the cell adapter has no `TransitionEnv`/scene handle — matching
+        // the indoor path; `entity_colliders_near` runs in the live pipeline).
         self.find_obj_collisions(transition)
     }
 
@@ -332,39 +432,270 @@ impl<'a> SceneWorld<'a> {
             statics,
             aabb,
             portal_neighbours,
+            // Indoor env cell — no terrain triangles (mutually exclusive with bsp).
+            terrain_polys: None,
+            landblock_origin: Vector3::zero(),
         };
         Some(Rc::new(cell) as Rc<dyn CObjCell>)
     }
 }
 
 impl CellWorld for SceneWorld<'_> {
+    /// `CObjCell::GetVisible` (acclient.c:346417) — split on the cell id: interior
+    /// env cells (`id & 0xFFFF >= 0x100`) build through [`Self::build_cell`]
+    /// (`CEnvCell::GetVisible`); outdoor land cells route to the `Landscape`
+    /// seam (`CLandCell::Get` / [`SpatialScene::get_landcell`], WS1), so the
+    /// driver's `insert_into_cell(check_cell)` collides the player's CURRENT
+    /// outdoor cell against its terrain (Phase D / WS3). Cached either way.
     fn get_visible(&self, cell_id: u32) -> Option<ObjCellHandle> {
         if let Some(cached) = self.cache.borrow().get(&cell_id) {
             return cached.clone();
         }
-        let built = self.build_cell(cell_id);
+        let built = if (cell_id & 0xFFFF) >= 0x100 {
+            self.build_cell(cell_id)
+        } else {
+            self.scene.get_landcell(cell_id)
+        };
         self.cache.borrow_mut().insert(cell_id, built.clone());
         built
     }
 
-    /// `CLandCell::add_all_outside_cells` — the outdoor terrain ring. Phase A is
-    /// INDOOR-faithful and delegates OUTDOOR poses to the existing heightfield
-    /// pipeline, so `find_cell_list` never takes the outdoor branch on the
-    /// faithful path (an indoor root cell's low u16 is ≥ 0x100). No-op here.
-    /// VERIFY(1070) (Phase D): wire `add_all_outside_cells_sphere` + a scene `Landscape`
-    /// / `LandDefsSeam` when the faithful path covers outdoor sweeps.
+    /// `CLandCell::add_all_outside_cells` (acclient.c:355346) — the outdoor
+    /// terrain ring. Forwards to the ported [`add_all_outside_cells_sphere`]
+    /// using the scene as both the `Landscape` (`get_landcell`) and `LandDefsSeam`
+    /// (`adjust_to_outside`) seams (WS1). Phase D / WS3. The driver always owns
+    /// `self.cell_array` (a concrete [`CellArray`]) and passes it as `&mut dyn
+    /// CellArrayApi`, so the downcast is infallible; a foreign `CellArrayApi`
+    /// (none exists in production) would no-op. Only invoked for OUTDOOR root
+    /// cells (`find_cell_list`'s `< 0x100` branch).
+    ///
+    /// FRAME: the ported ring/`adjust_to_outside` math is ACE's — it expects the
+    /// sphere centre as BLOCK-LOCAL coords (`floor(local/24)` is the in-block cell
+    /// index). The bridge runs the driver in WORLD space, so we localize each
+    /// sphere centre (and `p`'s frame origin) by this landblock's world origin
+    /// before the ring selection. The cells returned are GLOBAL lcoords (correct
+    /// full cell ids), and `find_cell_list`'s separate `point_in_cell` reseat /
+    /// the cell handles keep using WORLD coords against the world-space cell AABBs.
     fn add_all_outside_cells(
         &self,
-        _p: &Position,
-        _num_sphere: u32,
-        _spheres: &[Sphere],
-        _cell_array: &mut dyn CellArrayApi,
+        p: &Position,
+        num_sphere: u32,
+        spheres: &[Sphere],
+        cell_array: &mut dyn CellArrayApi,
     ) {
+        let Some(ca) = cell_array.as_any_mut().downcast_mut::<CellArray>() else {
+            return;
+        };
+        // WORLD → block-local (relative to p's landblock) for the ACE ring math.
+        let lb_origin = landblock_world_origin(p.objcell_id);
+        let mut p_local = *p;
+        p_local.frame.origin = p_local.frame.origin - lb_origin;
+        let spheres_local: Vec<Sphere> = spheres
+            .iter()
+            .take(num_sphere as usize)
+            .map(|s| Sphere {
+                center: s.center - lb_origin,
+                radius: s.radius,
+            })
+            .collect();
+        add_all_outside_cells_sphere(ca, self.scene, self.scene, &p_local, num_sphere, &spheres_local);
     }
 
     fn block_offset(&self, base_cell: u32, other_cell: u32) -> Vector3 {
         LandDefs::get_block_offset(base_cell, other_cell)
     }
+}
+
+// ─── Landscape + LandDefsSeam for SpatialScene (Phase D / WS1) ────────────────
+//
+// The two seams the already-ported outdoor cell-ring machinery
+// (`objcell.rs::add_all_outside_cells_sphere` / `add_outside_cell` /
+// `check_add_cell_boundary`) consumes but was never fed: `LandDefsSeam`
+// (`adjust_to_outside` — snap a sphere centre into the landblock that contains
+// it) and `Landscape` (`get_landcell` — the outdoor cell registry). Ported from
+// ACE `Physics/Common/LandDefs.cs` (REFERENCE ONLY; physics math, no
+// gameplay/DB), cross-checked against the decomp's `LandDefs::adjust_to_outside`
+// (acclient.c:467434) and `LScape::get_landcell`. WS4 wires `SceneWorld::add_all_
+// outside_cells` to `add_all_outside_cells_sphere(.., scene, scene, ..)` using
+// these (the scene is both `Landscape` AND `LandDefsSeam`).
+
+/// `LandDefs::BlockLength` (ACE `LandDefs.cs:102`) — 8 cells × 24 units.
+const BLOCK_LENGTH: f32 = 192.0;
+/// `LandDefs::LandLength` (ACE `LandDefs.cs:104`) — 255 landblocks × 8 cells.
+const LAND_LENGTH_I: i32 = 2040;
+/// `PhysicsGlobals::EPSILON` (ACE `PhysicsGlobals.cs:9`). The pre-snap that
+/// `AdjustToOutside` applies so a near-zero in-block coord lands cleanly on a
+/// cell edge instead of one ULP into the previous cell.
+const ADJUST_EPSILON: f32 = 0.0002;
+/// Vertical pad for the outdoor cell's `point_in_cell` AABB band (WS1). A loose
+/// bound around the cell's terrain-corner Z range — the same role as the indoor
+/// cell AABB (see [`SceneObjCell::aabb`]). VERIFY(WS3): the terrain
+/// `ResolvedPolygon`s + a precise membership test replace this band once the
+/// outdoor `find_collisions` geometry lands.
+const OUTDOOR_AABB_Z_PAD: f32 = 64.0;
+
+/// `LandDefs::cell_in_range` (ACE `LandDefs.cs:220`): is the IN-BLOCK cell id
+/// (`cell_id & 0xFFFF`) a wrappable land / structure / env cell?
+/// (`0xFFFF`, `1..=64`, or `0x100..=0xFFFD`.)
+fn cell_in_range(cell_id_low: u32) -> bool {
+    cell_id_low == 0xFFFF
+        || (1..=64).contains(&cell_id_low)
+        || (0x100..=0xFFFD).contains(&cell_id_low)
+}
+
+/// `LandDefs::blockid_to_lcoord` (ACE `LandDefs.cs:169`): the landblock's
+/// bottom-left corner GLOBAL lcoord `(blockX*8, blockY*8)`. `None` out of range.
+fn blockid_to_lcoord(cell_id: u32) -> Option<(i32, i32)> {
+    // x = ((cellID >> 16 & 0xFF00) >> 8) << 3  == ((cellID >> 24) & 0xFF) * 8
+    // y =  (cellID >> 16 & 0x00FF)        << 3 == ((cellID >> 16) & 0xFF) * 8
+    let x = ((((cell_id >> 16) & 0xFF00) >> 8) << 3) as i32;
+    let y = (((cell_id >> 16) & 0x00FF) << 3) as i32;
+    if x < 0 || y < 0 || x >= LAND_LENGTH_I || y >= LAND_LENGTH_I {
+        None
+    } else {
+        Some((x, y))
+    }
+}
+
+/// `LandDefs::get_outside_lcoord` (ACE `LandDefs.cs:200`): the GLOBAL landcell
+/// `(x, y)` containing the block-local point `(_x, _y)` within `block_cell_id`'s
+/// landblock. `floor(_x / 24)` is the in-block cell index (`<0` / `>=8` when the
+/// point spilled into an adjacent landblock — handled by the bounds gate).
+fn get_outside_lcoord(block_cell_id: u32, _x: f32, _y: f32) -> Option<(i32, i32)> {
+    if !cell_in_range(block_cell_id & 0xFFFF) {
+        return None;
+    }
+    let (ox, oy) = blockid_to_lcoord(block_cell_id)?;
+    let x = ox + (_x / CELL_SIZE).floor() as i32;
+    let y = oy + (_y / CELL_SIZE).floor() as i32;
+    if x < 0 || y < 0 || x >= LAND_LENGTH_I || y >= LAND_LENGTH_I {
+        None
+    } else {
+        Some((x, y))
+    }
+}
+
+impl LandDefsSeam for SpatialScene {
+    /// `LandDefs::adjust_to_outside` (ACE `LandDefs.cs:125`, decomp
+    /// acclient.c:467434). Snap the point into the outdoor landblock that
+    /// actually contains it: returns the wrapped outdoor cell id and rewrites
+    /// `loc` to block-local `[0,192)` coords. `None` when `cell_id` isn't a
+    /// wrappable cell or the point lands out of the world grid (ACE's `return
+    /// false` / `blockCellID = 0` branch — the caller `add_all_outside_cells_sphere`
+    /// breaks on `None`).
+    fn adjust_to_outside(&self, cell_id: u32, loc: &mut Vector3) -> Option<u32> {
+        if !cell_in_range(cell_id & 0xFFFF) {
+            return None;
+        }
+        // Pre-snap near-zero in-block coords (ACE LandDefs.cs:131-134).
+        if loc.x.abs() < ADJUST_EPSILON {
+            loc.x = 0.0;
+        }
+        if loc.y.abs() < ADJUST_EPSILON {
+            loc.y = 0.0;
+        }
+        let (x, y) = get_outside_lcoord(cell_id, loc.x, loc.y)?;
+        let out_id = lcoord_to_cellid(x, y);
+        // Rewrite loc to the NEW landblock's block-local frame [0,192)
+        // (ACE LandDefs.cs:140-141).
+        loc.x -= (loc.x / BLOCK_LENGTH).floor() * BLOCK_LENGTH;
+        loc.y -= (loc.y / BLOCK_LENGTH).floor() * BLOCK_LENGTH;
+        Some(out_id)
+    }
+}
+
+impl Landscape for SpatialScene {
+    /// `CLandCell::Get` → `LScape::get_landcell`: the outdoor land cell for
+    /// `cell_id`, or `None` when that landblock isn't resident. `gid_to_lcoord`
+    /// rejects interior ids (low u16 ≥ 0x100) and out-of-range landblocks
+    /// (LScape only ever resolves OUTDOOR `CLandCell`s); residency keys on
+    /// loaded terrain heights. On `None` the ring still adds a null entry
+    /// (faithful — `add_outside_cell`, objcell.rs:553).
+    fn get_landcell(&self, cell_id: u32) -> Option<ObjCellHandle> {
+        let (gx, gy) = gid_to_lcoord(cell_id)?;
+        if !self.terrain_landblock_resident(cell_id) {
+            return None;
+        }
+        Some(build_outdoor_cell(self, cell_id, gx, gy))
+    }
+}
+
+/// The WORLD-space origin of `cell_id`'s landblock: `(blockX·192, blockY·192, 0)`
+/// where `blockX = (cell_id>>24)&0xFF`, `blockY = (cell_id>>16)&0xFF`. Terrain
+/// triangles are landblock-local; this rebases between that frame and WORLD.
+fn landblock_world_origin(cell_id: u32) -> Vector3 {
+    let block_x = ((cell_id >> 24) & 0xFF) as f32;
+    let block_y = ((cell_id >> 16) & 0xFF) as f32;
+    Vector3::new(block_x * BLOCK_LENGTH, block_y * BLOCK_LENGTH, 0.0)
+}
+
+/// Build an OUTDOOR land cell handle (Phase D / WS1) — the outdoor twin of
+/// [`SceneWorld::build_cell`]. Carries NO env BSP (terrain is its own polygon
+/// path, built in WS2/WS3), the cell's resident statics from
+/// [`SpatialScene::cell_static_physics_bsp`] (the Option C overlap index, WS7),
+/// and a 24×24 world-footprint AABB whose Z band spans the cell's four terrain
+/// corners (padded) so `find_cell_list`'s `point_in_cell` re-seat works.
+/// `gx`/`gy` are the GLOBAL landcell coords (already fold in the landblock
+/// offset).
+fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> ObjCellHandle {
+    let statics = scene.cell_static_physics_bsp(cell_id).to_vec();
+
+    // World XY footprint: [gx*24, gx*24+24] × [gy*24, gy*24+24].
+    let x0 = gx as f32 * CELL_SIZE;
+    let y0 = gy as f32 * CELL_SIZE;
+
+    // In-block cell index (`gx/gy mod 8`) + the landblock's WORLD origin
+    // (`(blockX·192, blockY·192)`; blockX = gx>>3). `x0 == landblock_origin.x +
+    // cell_x*24` by construction, so the terrain polys (landblock-local) frame
+    // back to this cell's world footprint.
+    let cell_x = (gx & 7) as u32;
+    let cell_y = (gy & 7) as u32;
+    let landblock_origin = landblock_world_origin(cell_id);
+
+    // The two collision triangles (WS2) + the Z band from the four corner
+    // heights (`vx*9+vy` layout). Defaults to a flat band at 0 / no terrain when
+    // (impossibly, given the residency gate above) the grid is absent.
+    let (mut zmin, mut zmax) = (0.0f32, 0.0f32);
+    let mut terrain_polys: Option<[ResolvedPolygon; 2]> = None;
+    if let Some(grid) = scene.terrain_cell_heights(cell_id) {
+        let cx = cell_x as usize;
+        let cy = cell_y as usize;
+        let corners = [
+            grid[cx * 9 + cy],
+            grid[(cx + 1) * 9 + cy],
+            grid[cx * 9 + cy + 1],
+            grid[(cx + 1) * 9 + cy + 1],
+        ];
+        zmin = corners.iter().copied().fold(f32::INFINITY, f32::min);
+        zmax = corners.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        terrain_polys = Some(cell_terrain_polys(grid, cell_id & 0xFFFF_0000, cell_x, cell_y));
+    }
+    let aabb = Aabb::new(
+        Vector3::new(x0, y0, zmin - OUTDOOR_AABB_Z_PAD),
+        Vector3::new(
+            x0 + CELL_SIZE,
+            y0 + CELL_SIZE,
+            zmax + OUTDOOR_AABB_Z_PAD,
+        ),
+    );
+
+    let pos = Position {
+        objcell_id: cell_id,
+        // The outdoor cell's terrain polys carry their own landblock-local frame
+        // (rebased via `landblock_origin`); `pos` is unused on the terrain path.
+        // Identity is correct (statics carry their own world frame).
+        frame: Frame::identity(),
+    };
+    Rc::new(SceneObjCell {
+        cell_id,
+        pos,
+        bsp: None,
+        statics,
+        aabb: Some(aabb),
+        portal_neighbours: Vec::new(),
+        terrain_polys,
+        landblock_origin,
+    }) as ObjCellHandle
 }
 
 // ─── FaithfulMover — the MovingObjectPhysics gravity query ───────────────────
@@ -386,28 +717,49 @@ impl MovingObjectPhysics for FaithfulMover {
 /// Phase-3 faithful transition entry — build a `CTransition`, run the decomp
 /// driver, and marshal the result back into a [`TransitionOutcome`].
 ///
-/// Phase A routing: OUTDOOR poses delegate to the existing heightfield pipeline
-/// ([`find_transitional_position`]); an INDOOR pose whose cell has no physics
-/// BSP also delegates (the academy-rubberband pre-bake guard). Otherwise the
-/// local player's env-cell collision routes through the faithful driver.
+/// Routing:
+///   * OUTDOOR (Phase D / WS4): when `faithful_outdoor` is on AND the begin
+///     landblock's terrain is resident, the pose runs the faithful terrain
+///     driver (outdoor cell ring via [`SceneWorld::add_all_outside_cells`] +
+///     the outdoor [`SceneObjCell`] terrain path). Otherwise — `faithful_outdoor
+///     == false` (`?faithfulOutdoor=off`) OR the landblock's terrain not yet
+///     loaded (the unbaked-landblock guard, parallel to the indoor no-BSP guard)
+///     — it delegates to the existing heightfield pipeline
+///     ([`find_transitional_position`]).
+///   * INDOOR: a pose whose cell has no physics BSP delegates (the academy-
+///     rubberband pre-bake guard); otherwise the local player's env-cell
+///     collision routes through the faithful driver.
 pub fn faithful_find_transitional_position(
     env: &dyn TransitionEnv,
     input: &TransitionInput,
+    faithful_outdoor: bool,
 ) -> TransitionOutcome {
-    // OUTDOOR → existing heightfield pipeline (statics identity within it).
-    if !input.begin.is_indoors() {
-        return find_transitional_position(env, input);
-    }
-
     let scene = env.scene();
     let begin_cell = scene.current_cell(&input.begin);
-    let end_cell = scene.current_cell(&input.end);
+    let outdoor = !input.begin.is_indoors();
 
-    // No physics BSP for the begin cell → nothing for the faithful env path to
-    // test. Fall back to the existing pipeline (pre-bake guard parity).
-    if scene.cell_physics_bsp(begin_cell).is_none() {
-        return find_transitional_position(env, input);
+    if outdoor {
+        // OUTDOOR (Phase D / WS4). Run the faithful terrain driver only when the
+        // outdoor flag is ON (WS9) AND the begin landblock's terrain is resident.
+        // The residency guard is the outdoor twin of the indoor no-BSP guard:
+        // `get_landcell` returns `None` for a non-resident landblock, so the ring
+        // would flood NULL cells and `insert_into_cell` would find no terrain to
+        // collide — the mover would free-fall. In both off-cases delegate to the
+        // heightfield pipeline (the `?faithfulOutdoor=off` rollback + pre-load
+        // fallback). `find_cell_list` then routes `begin_cell` (low word < 0x100)
+        // through the outdoor ring/land-cell path inside the driver.
+        if !faithful_outdoor || !scene.terrain_landblock_resident(begin_cell) {
+            return find_transitional_position(env, input);
+        }
+    } else {
+        // INDOOR. No physics BSP for the begin cell → nothing for the faithful env
+        // path to test. Fall back to the existing pipeline (pre-bake guard parity).
+        if scene.cell_physics_bsp(begin_cell).is_none() {
+            return find_transitional_position(env, input);
+        }
     }
+
+    let end_cell = scene.current_cell(&input.end);
 
     // WORLD-space frames (identity player rotation → vertical two-sphere
     // capsule, matching `cell_physics_bsp_solid`). VERIFY(1070): a non-vertical
@@ -471,7 +823,7 @@ pub fn faithful_find_transitional_position(
     let (lb_x, lb_y) = input.begin.landblock_coords();
     let lb_origin_x = lb_x as f32 * METERS_PER_LANDBLOCK;
     let lb_origin_y = lb_y as f32 * METERS_PER_LANDBLOCK;
-    let pose = WorldPosition {
+    let mut pose = WorldPosition {
         landblock_id: input.begin.landblock_id,
         coords: Vector3::new(
             curr.frame.origin.x - lb_origin_x,
@@ -480,6 +832,14 @@ pub fn faithful_find_transitional_position(
         ),
         rotation: input.end.rotation,
     };
+    // OUTDOOR (Phase D / WS4): the faithful sweep can cross a 192 m landblock
+    // boundary, so the begin-relative block-local coords can leave `[0,192)`.
+    // Re-bucket into the correct landblock and re-derive the outdoor cell word —
+    // the per-step rebucket the heightfield path applies (transition.rs:803).
+    // No-op for indoor (single-landblock dungeons) and for in-block walks.
+    if outdoor {
+        pose = pose.rebucket_outdoor_landblock().normalize_outdoor_cell();
+    }
 
     // grounded ← the retail post-transition grounded state: OBJECTINFO's
     // `ON_WALKABLE` bit, which `validate_transition` recomputes each step from
@@ -793,7 +1153,9 @@ mod drift {
 
     fn run_ab(env: &DriftEnv, input: &TransitionInput) -> (TransitionOutcome, TransitionOutcome) {
         let approx = find_transitional_position(env, input);
-        let faithful = faithful_find_transitional_position(env, input);
+        // Indoor scenes: the outdoor flag is irrelevant (the indoor branch is
+        // taken regardless); pass the production default (ON).
+        let faithful = faithful_find_transitional_position(env, input, true);
         (approx, faithful)
     }
 
@@ -1131,11 +1493,11 @@ mod drift {
         scene.insert_cell_static_physics_bsp(CELL_ID, static_wall_bsp());
         assert_eq!(scene.cell_static_physics_bsp_count(), 1);
         let env = DriftEnv { scene };
-        let with = faithful_find_transitional_position(&env, &input);
+        let with = faithful_find_transitional_position(&env, &input, true);
 
         // CONTROL: no static (env floor only).
         let ctrl = DriftEnv { scene: floor_only_scene() };
-        let without = faithful_find_transitional_position(&ctrl, &input);
+        let without = faithful_find_transitional_position(&ctrl, &input, true);
 
         eprintln!(
             "static-object: WITH x={:.4}  WITHOUT x={:.4}  wall_x={wall_x}",
@@ -1190,7 +1552,7 @@ mod drift {
             // A long diagonal that, unbounded, would run far — must terminate.
             let end = pose_at(FCX + 5.0, FCY + 5.0, FLOOR_WZ - SINK);
             let input = input_for(begin, end);
-            let f = faithful_find_transitional_position(&env, &input);
+            let f = faithful_find_transitional_position(&env, &input, true);
             assert_in_cell_aabb(&env, &f);
             assert_no_overshoot(&begin, &end, &f);
             assert_pose_roundtrips_driver(&env, &input, &f);
@@ -1200,14 +1562,15 @@ mod drift {
 
     // ── Delegation routing (pure marshalling, fully RESOLVED on the laptop) ──
     // The dispatcher's faithful arm must be byte-identical to the approximate
-    // path for the cases Phase A delegates: OUTDOOR poses and indoor poses whose
-    // cell has no physics BSP (the pre-bake guard).
+    // path for the cases the bridge delegates: OUTDOOR poses with the outdoor
+    // flag OFF (`?faithfulOutdoor=off`, the Phase D rollback regression guard)
+    // and indoor poses whose cell has no physics BSP (the pre-bake guard).
     #[test]
-    fn outdoor_pose_delegates_to_approximate() {
-        // Outdoor landblock (low word 0 ⇒ !is_indoors): the faithful entry
-        // delegates straight to the approximate pipeline.
+    fn outdoor_flag_off_delegates_to_approximate() {
+        // Outdoor landblock (low word 0 ⇒ !is_indoors): with the outdoor flag
+        // OFF the faithful entry delegates straight to the approximate pipeline.
         let mut scene = SpatialScene::new();
-        // No geometry needed; an empty outdoor scene exercises pure delegation.
+        // No terrain resident; an empty outdoor scene exercises pure delegation.
         let _ = &mut scene;
         let env = DriftEnv { scene };
         let begin = WorldPosition {
@@ -1219,10 +1582,36 @@ mod drift {
         end.coords.x += 1.3;
         let input = input_for(begin, end);
         let a = find_transitional_position(&env, &input);
-        let f = faithful_find_transitional_position(&env, &input);
-        assert_eq!(a.pose, f.pose, "outdoor delegates byte-identically");
+        // faithful_outdoor = false ⇒ the outdoor branch rolls back to heightfield.
+        let f = faithful_find_transitional_position(&env, &input, false);
+        assert_eq!(a.pose, f.pose, "outdoor flag-off delegates byte-identically");
         assert_eq!(a.grounded, f.grounded);
         assert_eq!(a.cell_changed, f.cell_changed);
+    }
+
+    // With the outdoor flag ON but the begin landblock's terrain NOT resident
+    // (unbaked-landblock guard), the faithful entry STILL delegates to the
+    // heightfield path — the parallel of the indoor no-BSP guard. Proves a
+    // pre-load outdoor pose never free-falls through the (absent) terrain.
+    #[test]
+    fn outdoor_flag_on_unbaked_landblock_delegates() {
+        let scene = SpatialScene::new(); // no terrain heights populated
+        let env = DriftEnv { scene };
+        let begin = WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            coords: v(50.0, 50.0, 10.0),
+            rotation: Quaternion::identity(),
+        };
+        let mut end = begin;
+        end.coords.x += 1.3;
+        let input = input_for(begin, end);
+        // Guard precondition: outdoor pose, terrain landblock NOT resident.
+        assert!(!begin.is_indoors());
+        assert!(!env.scene.terrain_landblock_resident(env.scene.current_cell(&begin)));
+        let a = find_transitional_position(&env, &input);
+        let f = faithful_find_transitional_position(&env, &input, true);
+        assert_eq!(a.pose, f.pose, "unbaked outdoor LB delegates byte-identically");
+        assert_eq!(a.grounded, f.grounded);
     }
 
     #[test]
@@ -1244,8 +1633,794 @@ mod drift {
         assert!(begin.is_indoors());
         assert!(env.scene.cell_physics_bsp(env.scene.current_cell(&begin)).is_none());
         let a = find_transitional_position(&env, &input);
-        let f = faithful_find_transitional_position(&env, &input);
+        let f = faithful_find_transitional_position(&env, &input, true);
         assert_eq!(a.pose, f.pose, "indoor-no-BSP delegates byte-identically");
         assert_eq!(a.grounded, f.grounded);
+    }
+
+    // ── Phase D / WS3: OUTDOOR terrain collision (CLandCell::find_collisions) ──
+    //
+    // These exercise the OUTDOOR cell body END-TO-END through the real driver
+    // (`CTransition::find_valid_position`) + the real `SceneWorld`: its
+    // `add_all_outside_cells` floods the terrain ring via the WS1 seams, and its
+    // `get_visible` routes the player's CURRENT outdoor cell to the land-cell
+    // builder so `insert_into_cell` collides it against its terrain triangles.
+    // The dispatcher entry (`faithful_find_transitional_position`) still delegates
+    // OUTDOOR poses to the heightfield path (WS4 owns the flip), so the test
+    // drives the driver directly — the outdoor twin of `raw_drive`.
+
+    // Outdoor landblock (blockX=2, blockY=3) → high word 0x0203_0000; WORLD origin
+    // (384, 576). Terrain math is landblock-local; world = origin + local.
+    const OLB: u32 = 0x0203_0000;
+    const OLB_OX: f32 = 2.0 * 192.0; // 384
+    const OLB_OY: f32 = 3.0 * 192.0; // 576
+
+    /// An OUTDOOR pose: `landblock_id` low word 0 (so `is_indoors()==false` and
+    /// `current_cell` derives the cell from the local XY), `coords` landblock-local.
+    fn outdoor_pose(world_x: f32, world_y: f32, world_z: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(OLB),
+            coords: v(world_x - OLB_OX, world_y - OLB_OY, world_z),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    /// WORLD XY of an in-block cell's centre.
+    fn outdoor_cell_center(cell_x: u32, cell_y: u32) -> (f32, f32) {
+        (
+            OLB_OX + cell_x as f32 * 24.0 + 12.0,
+            OLB_OY + cell_y as f32 * 24.0 + 12.0,
+        )
+    }
+
+    fn player() -> ObjectInfo {
+        ObjectInfo::for_local_player(None, None, true, Guid(0x5000_0002))
+    }
+
+    /// Drive the FULL faithful driver over an OUTDOOR begin→end (the outdoor twin
+    /// of `raw_drive`): build the two-sphere capsule + path in WORLD coords, run
+    /// `find_valid_position` against the real `SceneWorld`. Returns the raw driver
+    /// (settled `curr_pos`, ON_WALKABLE state) and the `found` flag.
+    fn outdoor_raw_drive(
+        scene: &SpatialScene,
+        begin: &WorldPosition,
+        end: &WorldPosition,
+        object: &ObjectInfo,
+    ) -> (CTransition, i32) {
+        let begin_cell = scene.current_cell(begin);
+        let end_cell = scene.current_cell(end);
+        let mut bf = Frame::identity();
+        bf.origin = begin.global_coords();
+        let begin_pos = Position { objcell_id: begin_cell, frame: bf };
+        let mut ef = Frame::identity();
+        ef.origin = end.global_coords();
+        let end_pos = Position { objcell_id: end_cell, frame: ef };
+        let r = object.radius;
+        let h = object.height;
+        let spheres = [
+            Sphere { center: v(0.0, 0.0, r), radius: r },
+            Sphere { center: v(0.0, 0.0, (h - r).max(r)), radius: r },
+        ];
+        let mut t = CTransition::new();
+        t.object_info.scale = 1.0;
+        t.object_info.state = object.state;
+        t.object_info.step_up_height = object.step_up_height;
+        t.object_info.step_down_height = object.step_down_height;
+        t.object_info.ethereal = object.ethereal;
+        t.init_sphere(2, &spheres, 1.0);
+        t.init_path(Some(begin_cell), Some(&begin_pos), &end_pos);
+        let world = SceneWorld::new(scene);
+        let mover = FaithfulMover { has_gravity: true };
+        let found = t.find_valid_position(&world, &mover);
+        (t, found)
+    }
+
+    /// Settled feet position (WORLD) + grounded latch (ON_WALKABLE).
+    fn settled(t: &CTransition) -> (Vector3, bool) {
+        (
+            t.sphere_path.curr_pos.frame.origin,
+            (t.object_info.state & object_info_state::ON_WALKABLE) != 0,
+        )
+    }
+
+    fn outdoor_scene(heights: [f32; 81]) -> SpatialScene {
+        let mut scene = SpatialScene::new();
+        scene.populate_terrain_heights(OLB, heights);
+        scene
+    }
+
+    // (a0) DIRECT cell-body proof (the WS3 deliverable in isolation): obtain the
+    // outdoor land cell via the real `get_visible` routing and call its
+    // `find_collisions` with a mover whose low sphere penetrates FLAT terrain.
+    // The terrain path (find_terrain_poly + validate_walkable) must report a
+    // walkable up-normal contact and snap the sphere up onto the surface — the
+    // grounded source the driver's `validate_transition` latches into ON_WALKABLE.
+    #[test]
+    fn outdoor_terrain_direct_grounds_penetrating_mover() {
+        use holtburger_dat::transition::objcell::CellWorld;
+        const Z: f32 = 50.0;
+        let scene = outdoor_scene([Z; 81]);
+        let world = SceneWorld::new(&scene);
+        let cell_id = OLB | (4 * 8 + 4 + 1); // cell (4,4)
+        let cell = world.get_visible(cell_id).expect("outdoor land cell built");
+        assert_eq!(cell.id(), cell_id, "get_visible routes outdoor → land cell");
+        let (cx, cy) = outdoor_cell_center(4, 4);
+        let r = player().radius;
+        let h = player().height;
+        let spheres = [
+            Sphere { center: v(0.0, 0.0, r), radius: r },
+            Sphere { center: v(0.0, 0.0, (h - r).max(r)), radius: r },
+        ];
+        let mut t = CTransition::new();
+        t.object_info.scale = 1.0;
+        t.object_info.state = object_info_state::CONTACT;
+        t.init_sphere(2, &spheres, 1.0);
+        // curr at the surface, check dipped 0.2 below (penetrating the floor).
+        let mut curr = Frame::identity();
+        curr.origin = v(cx, cy, Z);
+        let mut chk = Frame::identity();
+        chk.origin = v(cx, cy, Z - 0.2);
+        t.sphere_path.curr_pos = Position { objcell_id: cell_id, frame: curr };
+        t.sphere_path.check_pos = Position { objcell_id: cell_id, frame: chk };
+        t.sphere_path.curr_cell = Some(cell_id);
+        t.sphere_path.check_cell = Some(cell_id);
+        t.sphere_path.cache_global_sphere(None);
+        let code = cell.find_collisions(&mut t);
+        let cp = t.collision_info.contact_plane.expect("terrain set a contact plane");
+        eprintln!(
+            "[outdoor-direct] code={code} N={:?} check_z->{:.4}",
+            cp.normal, t.sphere_path.check_pos.frame.origin.z
+        );
+        assert_eq!(code, 3, "penetrating flat terrain ⇒ ADJUSTED");
+        assert!(cp.normal.z > 0.99, "terrain contact normal is up: {:?}", cp.normal);
+        assert!(
+            t.object_info.is_valid_walkable(&cp.normal),
+            "flat terrain is walkable support"
+        );
+        // The sphere was pushed back up out of the surface (feet ≈ Z).
+        assert!(
+            (t.sphere_path.check_pos.frame.origin.z - Z).abs() < 1e-3,
+            "feet snapped to terrain {Z}: got {}",
+            t.sphere_path.check_pos.frame.origin.z
+        );
+    }
+
+    // (a0b) DIRECT cell-body proof on a SLOPED grid: the contact plane the terrain
+    // sets reproduces the WS2 collision-triangle height (≡ the shared height
+    // sampler) at the query XY, and the sphere snaps onto it. Proves "height
+    // tracks terrain_height_at within tolerance" at the cell level.
+    #[test]
+    fn outdoor_terrain_direct_height_tracks_slope() {
+        use holtburger_dat::transition::objcell::CellWorld;
+        // Linear ramp in vx (rise 3 per cell ⇒ ~7° walkable slope).
+        let mut h = [0.0f32; 81];
+        for vx in 0..9usize {
+            for vy in 0..9usize {
+                h[vx * 9 + vy] = 50.0 + 3.0 * vx as f32;
+            }
+        }
+        let scene = outdoor_scene(h);
+        let world = SceneWorld::new(&scene);
+        let cell_id = OLB | (3 * 8 + 4 + 1); // cell (3,4)
+        let cell = world.get_visible(cell_id).expect("outdoor land cell");
+        let (cx, cy) = outdoor_cell_center(3, 4);
+        // Terrain height at this XY: linear ⇒ 50 + (x_local/24)*3 = 50 + x_local/8.
+        let want_z = 50.0 + (cx - OLB_OX) / 8.0;
+        let r = player().radius;
+        let h2 = player().height;
+        let spheres = [
+            Sphere { center: v(0.0, 0.0, r), radius: r },
+            Sphere { center: v(0.0, 0.0, (h2 - r).max(r)), radius: r },
+        ];
+        let mut t = CTransition::new();
+        t.object_info.scale = 1.0;
+        t.object_info.state = object_info_state::CONTACT;
+        t.init_sphere(2, &spheres, 1.0);
+        let mut curr = Frame::identity();
+        curr.origin = v(cx, cy, want_z);
+        let mut chk = Frame::identity();
+        chk.origin = v(cx, cy, want_z - 0.2); // dip below the sloped surface
+        t.sphere_path.curr_pos = Position { objcell_id: cell_id, frame: curr };
+        t.sphere_path.check_pos = Position { objcell_id: cell_id, frame: chk };
+        t.sphere_path.curr_cell = Some(cell_id);
+        t.sphere_path.check_cell = Some(cell_id);
+        t.sphere_path.cache_global_sphere(None);
+        let code = cell.find_collisions(&mut t);
+        let cp = t.collision_info.contact_plane.expect("slope contact plane");
+        let got_z = t.sphere_path.check_pos.frame.origin.z;
+        eprintln!("[outdoor-slope-direct] code={code} N={:?} got_z={got_z:.4} want_z={want_z:.4}", cp.normal);
+        assert_eq!(code, 3, "penetrating walkable slope ⇒ ADJUSTED");
+        assert!(t.object_info.is_valid_walkable(&cp.normal), "gentle slope is walkable");
+        assert!(
+            (got_z - want_z).abs() < 1e-3,
+            "feet track sloped terrain height {want_z}: got {got_z}"
+        );
+    }
+
+    // (a0c) DIRECT cell-body proof of the CLIFF: a steep terrain triangle does
+    // NOT provide walkable support — the contact normal it reports fails
+    // `is_valid_walkable` (slope ≫ 48°). This is the per-cell basis of the
+    // cliff-stop. Off-cell points hit no triangle (find_terrain_poly None ⇒ OK).
+    #[test]
+    fn outdoor_terrain_direct_cliff_not_walkable() {
+        use holtburger_dat::transition::objcell::CellWorld;
+        // Steep wall in cell_x=6 (vx 6→7 jumps 50→200 over 24 m ⇒ ~81°).
+        let mut h = [50.0f32; 81];
+        for vy in 0..9usize {
+            h[7 * 9 + vy] = 200.0;
+            h[8 * 9 + vy] = 200.0;
+        }
+        let scene = outdoor_scene(h);
+        let world = SceneWorld::new(&scene);
+        let cell_id = OLB | (6 * 8 + 4 + 1); // cell (6,4) — the cliff
+        let cell = world.get_visible(cell_id).expect("outdoor land cell");
+        let (cx, cy) = outdoor_cell_center(6, 4);
+        let r = player().radius;
+        let hh = player().height;
+        let spheres = [
+            Sphere { center: v(0.0, 0.0, r), radius: r },
+            Sphere { center: v(0.0, 0.0, (hh - r).max(r)), radius: r },
+        ];
+        let mut t = CTransition::new();
+        t.object_info.scale = 1.0;
+        // NOT yet on walkable support (so validate_walkable records the contact).
+        t.object_info.state = object_info_state::CONTACT;
+        t.init_sphere(2, &spheres, 1.0);
+        // Penetrating the steep face from below.
+        let mut curr = Frame::identity();
+        curr.origin = v(cx, cy, 90.0);
+        let mut chk = Frame::identity();
+        chk.origin = v(cx, cy, 80.0);
+        t.sphere_path.curr_pos = Position { objcell_id: cell_id, frame: curr };
+        t.sphere_path.check_pos = Position { objcell_id: cell_id, frame: chk };
+        t.sphere_path.curr_cell = Some(cell_id);
+        t.sphere_path.check_cell = Some(cell_id);
+        t.sphere_path.cache_global_sphere(None);
+        let _ = cell.find_collisions(&mut t);
+        let cp = t.collision_info.contact_plane.expect("steep contact plane recorded");
+        eprintln!("[outdoor-cliff-direct] N={:?} valid_walkable={}", cp.normal, t.object_info.is_valid_walkable(&cp.normal));
+        assert!(cp.normal.z < 0.664, "steep cliff normal is below WalkableAllowance: {:?}", cp.normal);
+        assert!(
+            !t.object_info.is_valid_walkable(&cp.normal),
+            "steep cliff does NOT provide walkable support (the cliff-stop)"
+        );
+
+        // A point off this cell's footprint hits no triangle ⇒ terrain OK (no
+        // contact), so the mover falls through to statics (none) ⇒ OK.
+        let mut t2 = CTransition::new();
+        t2.object_info.scale = 1.0;
+        t2.object_info.state = object_info_state::CONTACT;
+        t2.init_sphere(2, &spheres, 1.0);
+        let mut off = Frame::identity();
+        off.origin = v(cx - 60.0, cy, 80.0); // well outside cell (6,4)
+        t2.sphere_path.curr_pos = Position { objcell_id: cell_id, frame: off };
+        t2.sphere_path.check_pos = Position { objcell_id: cell_id, frame: off };
+        t2.sphere_path.curr_cell = Some(cell_id);
+        t2.sphere_path.check_cell = Some(cell_id);
+        t2.sphere_path.cache_global_sphere(None);
+        let code_off = cell.find_collisions(&mut t2);
+        assert_eq!(code_off, 1, "off-cell point ⇒ no terrain poly ⇒ OK");
+        assert!(t2.collision_info.contact_plane.is_none(), "no contact off the cell");
+    }
+
+    // (a) FLAT outdoor terrain: a mover walking across stays grounded over the
+    // whole sweep and its feet track the terrain height (z ≈ 50). The mover
+    // routes through the outdoor `CLandCell` terrain path (find_terrain_poly +
+    // validate_walkable), latching ON_WALKABLE from the flat contact plane.
+    #[test]
+    fn outdoor_flat_terrain_stays_grounded() {
+        const Z: f32 = 50.0;
+        let scene = outdoor_scene([Z; 81]);
+        let (sx, sy) = outdoor_cell_center(4, 4); // (492, 684)
+        let begin = outdoor_pose(sx, sy, Z);
+        // Walk +x ~12 (into the neighbour cell), dipping below the surface (a
+        // gravity stand-in) — the terrain must snap the feet back up to Z.
+        let end = outdoor_pose(sx + 12.0, sy, Z - 0.15);
+        let (t, found) = outdoor_raw_drive(&scene, &begin, &end, &player());
+        let (feet, grounded) = settled(&t);
+        eprintln!(
+            "[outdoor-flat] found={found} begin_cell={:#x} feet=({:.3},{:.3},{:.3}) grounded={grounded}",
+            scene.current_cell(&begin), feet.x, feet.y, feet.z
+        );
+        assert_eq!(found, 1, "flat outdoor sweep settles");
+        assert!(feet.x > begin.global_coords().x + 0.5, "mover advanced east");
+        assert!(grounded, "flat terrain latches ON_WALKABLE (grounded)");
+        assert!(
+            (feet.z - Z).abs() < player().radius,
+            "feet track terrain height {Z}: got {}",
+            feet.z
+        );
+    }
+
+    // (b) GENTLE (walkable) slope: the feet track the terrain triangle height.
+    // The grid is linear in vx (rise 3 per 24 m cell ⇒ ~7° slope, normal.z≈0.99 >
+    // WalkableAllowance), so the collision plane height at any local x is exactly
+    // 50 + (x_local/24)*3 = 50 + x_local/8 — the invariant WS2 proved equals the
+    // shared height sampler. The settled feet z must match that at the settled x.
+    //
+    // The mover walks CROSS-slope (+y), where the terrain height is constant (the
+    // grid varies only in vx), so it advances while staying grounded on the TILTED
+    // contact plane and tracking the terrain height. (Walking straight UP a slope
+    // is gated on the resolver's PHASE3 `step_up` port — the same divergence the
+    // indoor wall/ledge tests document — so this test exercises the grounded /
+    // height-tracking axis the WS3 terrain body owns, not the climb.)
+    #[test]
+    fn outdoor_gentle_slope_tracks_terrain_height() {
+        let mut h = [0.0f32; 81];
+        for vx in 0..9usize {
+            for vy in 0..9usize {
+                h[vx * 9 + vy] = 50.0 + 3.0 * vx as f32;
+            }
+        }
+        let scene = outdoor_scene(h);
+        let (sx, sy) = outdoor_cell_center(3, 4);
+        // Terrain height at this XY (constant along +y): 50 + x_local/8.
+        let z0 = 50.0 + (sx - OLB_OX) / 8.0;
+        let begin = outdoor_pose(sx, sy, z0);
+        let end = outdoor_pose(sx, sy + 12.0, z0 - 0.12); // walk cross-slope (+y), dipping
+        let (t, found) = outdoor_raw_drive(&scene, &begin, &end, &player());
+        let (feet, grounded) = settled(&t);
+        // Expected terrain height under the settled feet (linear ⇒ plane-exact).
+        let want = 50.0 + (feet.x - OLB_OX) / 8.0;
+        eprintln!(
+            "[outdoor-slope] found={found} feet=({:.3},{:.3},{:.3}) grounded={grounded} want_z={want:.3}",
+            feet.x, feet.y, feet.z
+        );
+        assert_eq!(found, 1, "cross-slope walk settles");
+        assert!(grounded, "walkable slope latches ON_WALKABLE");
+        assert!(feet.y > begin.global_coords().y + 0.5, "advanced cross-slope (+y)");
+        assert!(
+            (feet.z - want).abs() < 0.1,
+            "feet z {} tracks tilted terrain plane height {want} (dev {})",
+            feet.z,
+            (feet.z - want).abs()
+        );
+    }
+
+    // (c) STEEP cliff: a mover approaching a non-walkable rise (slope ≫ 48°) from
+    // a flat cell STOPS short — it does NOT climb the cliff. Control: the SAME
+    // start on FULLY-flat terrain advances clearly further. The cliff (vx≥7 jumps
+    // 50→200 over 24 m ⇒ ~81°, normal.z≈0.16 < WalkableAllowance) is the wall.
+    #[test]
+    fn outdoor_steep_cliff_stops_mover() {
+        // Flat z=50 for vx 0..6, then a steep wall at vx 7..8 (cell_x=6 is the cliff).
+        let mut h = [50.0f32; 81];
+        for vy in 0..9usize {
+            h[7 * 9 + vy] = 200.0;
+            h[8 * 9 + vy] = 200.0;
+        }
+        let scene = outdoor_scene(h);
+        // Start centred in the flat cell (5,4); cell 6 (world x ∈ [528,552]) is the cliff.
+        let (sx, sy) = outdoor_cell_center(5, 4); // (516, 684)
+        let begin = outdoor_pose(sx, sy, 50.0);
+        let end = outdoor_pose(sx + 20.0, sy, 50.0 - 0.15); // drive toward/into the cliff
+        let (t, found) = outdoor_raw_drive(&scene, &begin, &end, &player());
+        let (feet, grounded) = settled(&t);
+
+        // Control: identical move on fully-flat terrain advances unobstructed.
+        let flat = outdoor_scene([50.0f32; 81]);
+        let (tc, _) = outdoor_raw_drive(&flat, &begin, &end, &player());
+        let (feet_c, _) = settled(&tc);
+
+        eprintln!(
+            "[outdoor-cliff] found={found} feet=({:.3},{:.3},{:.3}) grounded={grounded}  control feet=({:.3},{:.3},{:.3})",
+            feet.x, feet.y, feet.z, feet_c.x, feet_c.y, feet_c.z
+        );
+        // Did NOT climb the cliff (z stays near the flat base, nowhere near 200).
+        assert!(feet.z < 80.0, "mover climbed the cliff: z={}", feet.z);
+        // Stopped short of where the unobstructed flat control reached.
+        assert!(
+            feet.x < feet_c.x - 0.25,
+            "cliff did not stop the mover: cliff x={} vs flat x={}",
+            feet.x,
+            feet_c.x
+        );
+        // And the flat control kept going east past the start.
+        assert!(feet_c.x > begin.global_coords().x + 0.5, "flat control advanced");
+    }
+
+    // ── Phase D / WS4: OUTDOOR faithful dispatch FLIP (the public-entry A/B) ────
+    //
+    // The WS3 tests above drive the driver directly (`outdoor_raw_drive`); these
+    // exercise the FLIP itself — `faithful_find_transitional_position` with the
+    // outdoor flag ON routes an outdoor pose through the faithful terrain driver
+    // (outdoor cell ring + per-cell terrain `find_collisions`), and with the flag
+    // OFF rolls back to the heightfield path. The env supplies a flat
+    // `terrain_height_at` so the OFF (heightfield) arm grounds — the A/B baseline.
+
+    /// An outdoor [`TransitionEnv`] over a resident-terrain scene with a flat
+    /// `terrain_height_at` (so the flag-OFF heightfield path has a floor to snap
+    /// to). The faithful ON path reads the scene's terrain heights, not this.
+    struct OutdoorEnv {
+        scene: SpatialScene,
+        ground_z: f32,
+    }
+
+    impl TransitionEnv for OutdoorEnv {
+        fn scene(&self) -> &SpatialScene {
+            &self.scene
+        }
+        fn terrain_height_at(&self, _x: f32, _y: f32) -> Option<f32> {
+            Some(self.ground_z)
+        }
+        fn terrain_normal_at(&self, _x: f32, _y: f32) -> Option<Vector3> {
+            Some(v(0.0, 0.0, 1.0))
+        }
+        fn water_depth_at(&self, _x: f32, _y: f32) -> f32 {
+            0.0
+        }
+        fn is_entirely_water_cell_at(&self, _x: f32, _y: f32) -> bool {
+            false
+        }
+        fn entity_colliders_near(
+            &self,
+            _pose: &WorldPosition,
+            _prefilter_dist: f32,
+            _exclude: Guid,
+            _skip_parented: bool,
+        ) -> Vec<EntityCollider> {
+            Vec::new()
+        }
+    }
+
+    // FLAG A/B: a flat outdoor walk through the public entry stays grounded with
+    // the outdoor flag ON (faithful terrain driver), 0 fall-through, and the
+    // settled height matches the flag-OFF heightfield path within tolerance; the
+    // flag-OFF arm uses the heightfield (the rollback regression guard).
+    #[test]
+    fn outdoor_faithful_dispatch_grounded_flag_ab() {
+        const Z: f32 = 50.0;
+        let (sx, sy) = outdoor_cell_center(4, 4); // (492, 684)
+        let begin = outdoor_pose(sx, sy, Z);
+        // Walk +x ~8 within the landblock, dipping below the surface (a gravity
+        // stand-in) — the terrain must hold the feet at the surface.
+        let end = outdoor_pose(sx + 8.0, sy, Z - 0.15);
+        let input = input_for(begin, end);
+        let env = OutdoorEnv { scene: outdoor_scene([Z; 81]), ground_z: Z };
+
+        // Flag ON (default) → faithful terrain driver.
+        let on = faithful_find_transitional_position(&env, &input, true);
+        // Flag OFF → heightfield path (the rollback regression guard).
+        let off = faithful_find_transitional_position(&env, &input, false);
+
+        eprintln!(
+            "[ws4-outdoor-ab] ON pose=({:.3},{:.3},{:.3}) grounded={} | OFF pose=({:.3},{:.3},{:.3}) grounded={}",
+            on.pose.coords.x, on.pose.coords.y, on.pose.coords.z, on.grounded,
+            off.pose.coords.x, off.pose.coords.y, off.pose.coords.z, off.grounded
+        );
+
+        // ON: faithful path grounds, advances east, and does NOT fall through the
+        // terrain (feet at/above the surface, within a radius of it).
+        assert!(on.grounded, "faithful outdoor walk stays grounded (ON_WALKABLE)");
+        assert!(
+            on.pose.global_coords().x > begin.global_coords().x + 0.5,
+            "faithful mover advanced east: {} vs {}",
+            on.pose.global_coords().x,
+            begin.global_coords().x
+        );
+        assert!(
+            on.pose.coords.z > Z - player().radius,
+            "no fall-through: feet z {} stays at/above terrain {Z}",
+            on.pose.coords.z
+        );
+        assert!(
+            (on.pose.coords.z - Z).abs() < player().radius,
+            "faithful feet track terrain height {Z}: got {}",
+            on.pose.coords.z
+        );
+
+        // OFF: the heightfield path grounds at the terrain height (regression guard)…
+        assert!(off.grounded, "flag-off heightfield path grounds");
+        // … and the ON (faithful) settled height matches it within tolerance.
+        assert!(
+            (on.pose.coords.z - off.pose.coords.z).abs() < player().radius,
+            "ON height {} matches heightfield OFF {} within tolerance",
+            on.pose.coords.z,
+            off.pose.coords.z
+        );
+    }
+
+    // ── Phase D / WS7: Option C — the off-center-building overlap fix ──────────
+    //
+    // An off-center BUILDING/static: its physics geometry (a west-facing wall) sits
+    // at world x=500, which is inside land cell (4,4) [x∈480..504], but its FOOTPRINT
+    // AABB centre is x=512 → its HOME cell is (5,4) [x∈504..528]. So the building is
+    // "placed in cell (5,4)" but overruns west into cell (4,4) — exactly the
+    // off-center placement Vanquish420 had to force-snap to cell centre to avoid the
+    // retail walk-through. The bake's job: with overlap ON, register the building
+    // into BOTH cells (so it's testable from the neighbor (4,4)); with overlap OFF,
+    // into the home cell (5,4) ONLY (the retail home-cell-only bug).
+
+    /// The off-center building/static, framed to WORLD directly (origin 0 / identity
+    /// orientation, so cell-local == world and [`CellPhysicsBsp::world_aabb`] bounds
+    /// the real world vertices). Two polys:
+    ///   1. the west WALL (the blocker) at world x=500, facing −X (same winding as
+    ///      `static_wall_bsp` ⇒ a +x mover stops), y∈[678,690], z∈[40,60];
+    ///   2. a ROOF at z=60 spanning x∈[500,524] purely to push the footprint AABB
+    ///      centre east into cell (5,4) — 8 m above the capsule head, never collides.
+    /// World AABB ⇒ x∈[500,524] (overlaps land cells (4,4) and (5,4)), centre x=512
+    /// (home cell (5,4)).
+    fn off_center_building_bsp() -> CellPhysicsBsp {
+        let mut polys = HashMap::new();
+        polys.insert(
+            1u16,
+            poly(vec![
+                v(500.0, 678.0, 40.0),
+                v(500.0, 678.0, 60.0),
+                v(500.0, 690.0, 60.0),
+                v(500.0, 690.0, 40.0),
+            ]),
+        );
+        polys.insert(
+            2u16,
+            poly(vec![
+                v(500.0, 678.0, 60.0),
+                v(524.0, 678.0, 60.0),
+                v(524.0, 690.0, 60.0),
+                v(500.0, 690.0, 60.0),
+            ]),
+        );
+        CellPhysicsBsp {
+            tree: one_leaf(&polys),
+            polys,
+            origin: Vector3::zero(),
+            orientation: Quaternion::identity(),
+        }
+    }
+
+    // Land cell ids (low word = cell_y + 8*cell_x + 1, matching `lcoord_to_cellid`).
+    const CELL_44: u32 = OLB | (4 * 8 + 4 + 1); // 0x0203_0025 — the player's approach cell
+    const CELL_54: u32 = OLB | (5 * 8 + 4 + 1); // 0x0203_002D — the building's home cell
+
+    // (a) INDEX proof: with overlap ON the off-center building is present in BOTH
+    // its home cell (5,4) AND the overrun neighbor cell (4,4); with overlap OFF it
+    // is present in its home cell (5,4) ONLY (the exact retail home-cell registration).
+    #[test]
+    fn off_center_building_overlap_index_ab() {
+        let aabb = off_center_building_bsp().world_aabb();
+        let c = aabb.center();
+        eprintln!(
+            "[opt-c-index] aabb x[{:.1}..{:.1}] y[{:.1}..{:.1}] centre=({:.1},{:.1}) home_cell={:#x}",
+            aabb.min.x, aabb.max.x, aabb.min.y, aabb.max.y, c.x, c.y, CELL_54
+        );
+        // The AABB straddles two land cells (its centre is in (5,4)).
+        assert!((aabb.min.x / 24.0).floor() as i32 == 20, "AABB min in global cell 20 (4,4)");
+        assert!((aabb.max.x / 24.0).floor() as i32 == 21, "AABB max in global cell 21 (5,4)");
+        assert_eq!((c.x / 24.0).floor() as i32, 21, "AABB centre cell is (5,4)");
+
+        // Overlap ON (default = the fix): registered into both overlapped cells.
+        let mut on = outdoor_scene([50.0; 81]);
+        on.insert_static_physics_bsp(OLB, off_center_building_bsp());
+        let n_on = on.bake_outdoor_static_overlap_for_landblock(OLB, true);
+        assert_eq!(n_on, 2, "overlap ON registers into both overlapped land cells");
+        assert_eq!(on.cell_static_physics_bsp(CELL_54).len(), 1, "ON: home cell (5,4) has the building");
+        assert_eq!(
+            on.cell_static_physics_bsp(CELL_44).len(),
+            1,
+            "ON: overrun NEIGHBOR cell (4,4) ALSO has the building (the fix)"
+        );
+
+        // Overlap OFF (retail bug repro): home cell (5,4) ONLY.
+        let mut off = outdoor_scene([50.0; 81]);
+        off.insert_static_physics_bsp(OLB, off_center_building_bsp());
+        let n_off = off.bake_outdoor_static_overlap_for_landblock(OLB, false);
+        assert_eq!(n_off, 1, "overlap OFF registers into the home cell only");
+        assert_eq!(off.cell_static_physics_bsp(CELL_54).len(), 1, "OFF: home cell (5,4) has the building");
+        assert_eq!(
+            off.cell_static_physics_bsp(CELL_44).len(),
+            0,
+            "OFF: neighbor cell (4,4) is EMPTY (retail home-cell-only bug)"
+        );
+
+        // Bake is idempotent (a re-bake does not double-register).
+        let n_on2 = on.bake_outdoor_static_overlap_for_landblock(OLB, true);
+        assert_eq!(n_on2, 2, "re-bake registers the same count (idempotent)");
+        assert_eq!(on.cell_static_physics_bsp(CELL_44).len(), 1, "re-bake did not double-register");
+    }
+
+    // (b) DRIFT A/B proof (the headline): a player approaching the off-center
+    // building FROM THE NEIGHBOR CELL (4,4) STOPS at the wall with overlap ON and
+    // WALKS THROUGH with overlap OFF — driven through the full faithful outdoor
+    // driver (terrain ring + per-cell `find_obj_collisions`). Both stop x's printed.
+    #[test]
+    fn off_center_building_drift_ab_stop_vs_walkthrough() {
+        let (sx, sy) = outdoor_cell_center(4, 4); // (492, 684) — neighbor-cell start
+        let wall_x = 500.0_f32; // world x of the building's west wall
+        let begin = outdoor_pose(sx, sy, 50.0);
+        let end = outdoor_pose(sx + 14.0, sy, 50.0 - 0.15); // walk +x: 492 → 506 (into 5,4)
+        let r = player().radius;
+
+        // ON: overlap registers the building into cell (4,4) → the mover STOPS.
+        let mut scene_on = outdoor_scene([50.0; 81]);
+        scene_on.insert_static_physics_bsp(OLB, off_center_building_bsp());
+        scene_on.bake_outdoor_static_overlap_for_landblock(OLB, true);
+        let (t_on, found_on) = outdoor_raw_drive(&scene_on, &begin, &end, &player());
+        let (feet_on, _) = settled(&t_on);
+
+        // OFF: overlap registers into the home cell (5,4) ONLY → the mover WALKS
+        // THROUGH the overrun wall from the neighbor cell (the retail bug).
+        let mut scene_off = outdoor_scene([50.0; 81]);
+        scene_off.insert_static_physics_bsp(OLB, off_center_building_bsp());
+        scene_off.bake_outdoor_static_overlap_for_landblock(OLB, false);
+        let (t_off, found_off) = outdoor_raw_drive(&scene_off, &begin, &end, &player());
+        let (feet_off, _) = settled(&t_off);
+
+        eprintln!(
+            "[opt-c-drift] wall_x={wall_x:.1}  OVERLAP-ON stop x={:.4} (found={found_on})  OVERLAP-OFF stop x={:.4} (found={found_off})  end_x={:.1}",
+            feet_on.x, feet_off.x, end.global_coords().x
+        );
+
+        // ON: stopped at / just short of the wall face (within one sphere radius).
+        assert!(
+            feet_on.x <= wall_x + r + 1e-2,
+            "overlap ON: mover should STOP at the off-center building wall (x={} wall_x={wall_x})",
+            feet_on.x
+        );
+        // OFF: walked clean through, well east of the wall (the bug).
+        assert!(
+            feet_off.x > wall_x + 1.0,
+            "overlap OFF: mover should WALK THROUGH the off-center building (x={} wall_x={wall_x})",
+            feet_off.x
+        );
+        // The proof pair: overlap ON stops strictly short of where overlap OFF reached.
+        assert!(
+            feet_off.x > feet_on.x + 0.5,
+            "Option C proof: overlap ON ({}) must stop short of overlap OFF ({})",
+            feet_on.x,
+            feet_off.x
+        );
+    }
+}
+
+// ─── WS1 tests: Landscape + LandDefsSeam for SpatialScene ────────────────────
+#[cfg(test)]
+mod ws1_outdoor_seam {
+    use crate::spatial::scene::SpatialScene;
+    use holtburger_common::{Sphere, Vector3};
+    use holtburger_dat::transition::objcell::{
+        add_all_outside_cells_sphere, gid_to_lcoord, lcoord_to_cellid, Landscape, LandDefsSeam,
+    };
+    use holtburger_dat::transition::types::{CellArray, Position};
+    use std::collections::HashSet;
+
+    /// Landblock `0x1010` (blockX=0x10, blockY=0x10) → the high-word terrain key.
+    const LB_KEY: u32 = 0x1010_0000;
+
+    fn flat_scene() -> SpatialScene {
+        let mut scene = SpatialScene::new();
+        scene.populate_terrain_heights(LB_KEY, [0.0f32; 81]);
+        assert_eq!(scene.terrain_heights_count(), 1);
+        scene
+    }
+
+    fn sphere_at(x: f32, y: f32, r: f32) -> Sphere {
+        Sphere { center: Vector3::new(x, y, 0.0), radius: r }
+    }
+
+    // 1) A sphere near a cell's +x/+y corner floods the 3 corner neighbours
+    //    (center + +x + +y + diagonal) through the REAL scene seams.
+    #[test]
+    fn outdoor_ring_floods_corner_neighbors() {
+        let scene = flat_scene();
+        // In-block cell (cellX=3, cellY=3) → low word 1 + 8*3 + 3 = 28 (0x1C).
+        let player_cell = 0x1010_001Cu32;
+        // Block-local centre near the cell's +x/+y corner (cell footprint
+        // [72,96)×[72,96); radius 1.0 → within 1.0 of both edges).
+        let p = Position { objcell_id: player_cell, ..Default::default() };
+        let mut ca = CellArray::default();
+        add_all_outside_cells_sphere(
+            &mut ca,
+            &scene,
+            &scene,
+            &p,
+            1,
+            &[sphere_at(95.5, 95.5, 1.0)],
+        );
+
+        let ids: HashSet<u32> = ca.cells.iter().map(|c| c.cell_id).collect();
+        let expect: HashSet<u32> = [
+            lcoord_to_cellid(131, 131), // center  → 0x1010_001C
+            lcoord_to_cellid(132, 131), // +x      → 0x1010_0024
+            lcoord_to_cellid(132, 132), // +x/+y   → 0x1010_0025
+            lcoord_to_cellid(131, 132), // +y      → 0x1010_001D
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(ids, expect, "corner sphere floods center + 3 neighbours");
+        assert_eq!(ca.num_cells, 4);
+        // All four cells are in the resident landblock → real handles attached.
+        for c in &ca.cells {
+            assert!(c.cell.is_some(), "resident cell {:#010x} got a handle", c.cell_id);
+            assert_eq!(c.cell.as_ref().unwrap().id(), c.cell_id);
+        }
+    }
+
+    // A sphere dead-centre in a cell pulls in ONLY that cell (no ring).
+    #[test]
+    fn outdoor_ring_center_only() {
+        let scene = flat_scene();
+        let p = Position { objcell_id: 0x1010_001C, ..Default::default() };
+        let mut ca = CellArray::default();
+        // Cell (3,3) footprint centre = (72+12, 72+12) = (84, 84).
+        add_all_outside_cells_sphere(&mut ca, &scene, &scene, &p, 1, &[sphere_at(84.0, 84.0, 1.0)]);
+        assert_eq!(ca.num_cells, 1);
+        assert_eq!(ca.cells[0].cell_id, lcoord_to_cellid(131, 131));
+    }
+
+    // 2) adjust_to_outside round-trips a known outdoor position to its lcoord.
+    #[test]
+    fn adjust_to_outside_roundtrips_outdoor_position() {
+        let scene = SpatialScene::new();
+        // Landblock (blockX=10, blockY=20) → high word ((10<<8)|20)<<16 = 0x0A14_0000.
+        // In-block cell (cellX=3, cellY=5) → low word 1 + 8*3 + 5 = 30 (0x1E).
+        let cell_id = 0x0A14_001Eu32;
+        // Block-local centre of that cell: (3*24+12, 5*24+12) = (84, 132).
+        let mut loc = Vector3::new(84.0, 132.0, 5.0);
+        let out = scene
+            .adjust_to_outside(cell_id, &mut loc)
+            .expect("in-range outdoor cell adjusts");
+        // Already block-local → maps back to the same cell, loc unchanged (z too).
+        assert_eq!(out, cell_id);
+        assert_eq!(gid_to_lcoord(out), Some((83, 165)));
+        assert!((loc.x - 84.0).abs() < 1e-4);
+        assert!((loc.y - 132.0).abs() < 1e-4);
+        assert!((loc.z - 5.0).abs() < 1e-4);
+    }
+
+    // A point that spilled past the +x landblock edge snaps into the NEXT
+    // landblock and rewrites loc to that block's local [0,192) frame.
+    #[test]
+    fn adjust_to_outside_crosses_landblock_edge() {
+        let scene = SpatialScene::new();
+        let cell_id = 0x0A14_001Eu32; // block (10,20), corner lcoord (80,160)
+        let mut loc = Vector3::new(200.0, 132.0, 0.0); // x spills into block 11
+        let out = scene.adjust_to_outside(cell_id, &mut loc).unwrap();
+        // floor(200/24)=8 → global lcoord (88,165) → landblock 11 (blockX=11).
+        assert_eq!(gid_to_lcoord(out), Some((88, 165)));
+        assert_eq!(out >> 16, 0x0B14); // landblock high word advanced in X
+        assert!((loc.x - 8.0).abs() < 1e-4, "loc.x wrapped to new block-local");
+        assert!((loc.y - 132.0).abs() < 1e-4);
+    }
+
+    // The EPSILON pre-snap zeroes a near-zero in-block coord.
+    #[test]
+    fn adjust_to_outside_epsilon_snaps_near_zero() {
+        let scene = SpatialScene::new();
+        let cell_id = 0x0A14_001Eu32;
+        let mut loc = Vector3::new(0.0001, 0.0001, 0.0); // < EPSILON (0.0002)
+        let out = scene.adjust_to_outside(cell_id, &mut loc).unwrap();
+        // Snapped to (0,0) → block corner cell (lcoord (80,160), low word 1).
+        assert_eq!(gid_to_lcoord(out), Some((80, 160)));
+        assert_eq!(loc.x, 0.0);
+        assert_eq!(loc.y, 0.0);
+    }
+
+    // 3) get_landcell: indoor / out-of-range / non-resident → None; resident
+    //    outdoor cell → Some with the right id.
+    #[test]
+    fn get_landcell_rejects_indoor_and_nonresident() {
+        let mut scene = SpatialScene::new();
+        // Not resident yet → None even for a valid outdoor cell id.
+        assert!(scene.get_landcell(0x1010_0001).is_none());
+
+        scene.populate_terrain_heights(LB_KEY, [0.0f32; 81]);
+        // Resident outdoor cell → handle with the queried id.
+        let h = scene.get_landcell(0x1010_0001).expect("resident outdoor cell");
+        assert_eq!(h.id(), 0x1010_0001);
+
+        // Interior id (low u16 = 0x0101 ≥ 0x100) → None even with LB resident.
+        assert!(scene.get_landcell(0x1010_0101).is_none());
+        // A different, non-resident landblock → None.
+        assert!(scene.get_landcell(0x2020_0001).is_none());
+    }
+
+    // adjust_to_outside rejects an in-block cell id outside the wrappable set.
+    #[test]
+    fn adjust_to_outside_rejects_out_of_range_cell() {
+        let scene = SpatialScene::new();
+        // Low word 0 is not a land (1..=64), structure (0xFFFF) or env
+        // (0x100..=0xFFFD) cell → cell_in_range false → None.
+        let mut loc = Vector3::new(12.0, 12.0, 0.0);
+        assert!(scene.adjust_to_outside(0x1010_0000, &mut loc).is_none());
     }
 }

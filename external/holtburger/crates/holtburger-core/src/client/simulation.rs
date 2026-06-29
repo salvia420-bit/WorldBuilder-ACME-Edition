@@ -221,6 +221,7 @@ impl ClientSimulationSystem {
                 &*world,
                 &input,
                 movement.faithful_transition_enabled(),
+                movement.faithful_outdoor_enabled(),
             );
             if let Some(n) = outcome.wall_normal {
                 world.player.last_known_wall_normal = Some(n);

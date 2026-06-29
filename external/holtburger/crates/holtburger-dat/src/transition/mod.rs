@@ -48,6 +48,13 @@ pub mod spherepath_methods;
 pub mod objcell;
 pub mod objectinfo;
 
+// Phase-D / WS2 — outdoor terrain collision geometry: build a land cell's two
+// collision triangles (`cell_terrain_polys`) and select which one a point sits
+// over (`find_terrain_poly`), fed as `ResolvedPolygon`s through the existing
+// swept-sphere resolver. The per-cell diagonal hash reuses `terrain_subdiv::
+// cell_swto_ne_cut`; winding ported from ACE `LandblockStruct.cs:220-244`.
+pub mod terrain_collision;
+
 // Phase-3 B2b/B2c — the `CTransition` DRIVER on top of the foundation: the
 // recursive spine (transitional_insert/step_up/step_down/check_walkable), the
 // cell-collision dispatch (check_collisions/insert_into_cell/check_other_cells/

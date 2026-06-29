@@ -625,6 +625,20 @@ impl BspNode {
     }
 }
 
+/// ACE `Sidedness` (`ACE.Entity/Enum/Sidedness.cs`) / decomp `Sidedness`
+/// — the side selector for [`ResolvedPolygon::point_in_poly2d`]. Only
+/// `Positive` is exercised by the outdoor terrain path: `CLandCell::find_terrain_poly`
+/// (acclient.c:354869) calls `point_in_poly2D(poly, origin, 0)` with a literal
+/// `0` == `Positive`. The remaining variants are carried for faithfulness with
+/// the decomp signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sidedness {
+    Positive = 0x0,
+    Negative = 0x1,
+    InPlane = 0x2,
+    Crossing = 0x3,
+}
+
 /// A physics polygon with its vertex positions resolved from the cell's
 /// vertex array and its plane computed via ACE's `Polygon.make_plane`
 /// (`Polygon.cs:210-232`). The faithful BSP predicates operate on these
@@ -788,6 +802,53 @@ impl ResolvedPolygon {
         if let Some(other) = other_sphere {
             other.center = other.center + adjusted;
         }
+    }
+
+    /// ACE `Polygon.point_in_poly2D` (`Polygon.cs:234-260`), decomp
+    /// `CPolygon::point_in_poly2D` (acclient.c:359420). 2D (XY-projected)
+    /// point-in-convex-polygon test used by `CLandCell::find_terrain_poly`
+    /// (acclient.c:354859) to pick which of a land cell's two triangles a
+    /// query point sits over. Z is ignored — the test is purely on the
+    /// vertices' XY winding.
+    ///
+    /// The loop walks edges in REVERSE: `prev_idx` starts at `0`, `i` counts
+    /// down from `num_points - 1`, so the first edge is `vertices[n-1] −
+    /// vertices[0]` and each subsequent edge steps backward. For each edge it
+    /// forms the 2D "diff cross" term
+    /// `diff.y*v.x − diff.x*v.y + diff.x*p.y − diff.y*p.x`
+    /// (with `diff = vertices[i] − vertices[prev_idx]`, `v = vertices[i]`) —
+    /// the signed area of the point relative to that edge. For
+    /// `side == Positive` the point fails the moment any term is `> 0`; for the
+    /// other sides it fails on `< 0`. Falling through every edge ⇒ inside.
+    ///
+    /// (For a land triangle wound as ACE `LandblockStruct::ConstructPolygons`
+    /// emits it, interior points yield all-`≤ 0` terms, so `Positive` selects
+    /// them — see `terrain_collision`.)
+    pub fn point_in_poly2d(&self, point: Vector3, side: Sidedness) -> bool {
+        let n = self.num_points.min(self.vertices.len());
+        if n == 0 {
+            // ACE: the `for` never runs and returns true.
+            return true;
+        }
+        let mut prev_idx = 0usize;
+        let mut i = n as isize - 1;
+        while i >= 0 {
+            let prev_vertex = self.vertices[prev_idx];
+            let vertex = self.vertices[i as usize];
+            let diff = vertex - prev_vertex;
+            let diff_cross = diff.y * vertex.x - diff.x * vertex.y + diff.x * point.y
+                - diff.y * point.x;
+            if side != Sidedness::Positive {
+                if diff_cross < 0.0 {
+                    return false;
+                }
+            } else if diff_cross > 0.0 {
+                return false;
+            }
+            prev_idx = i as usize;
+            i -= 1;
+        }
+        true
     }
 }
 

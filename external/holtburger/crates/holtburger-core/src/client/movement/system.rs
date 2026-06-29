@@ -576,6 +576,53 @@ const USE_UNIFIED_TRANSITION: bool = true;
 /// remains for forcing the faithful path on when this const is `false`.
 const USE_FAITHFUL_TRANSITION: bool = true;
 
+/// Phase 3 Phase D (2026-06-28) — extend the faithful `CTransition` driver to
+/// OUTDOOR terrain (land-cell triangle polygons + buildings/statics + entities)
+/// instead of delegating outdoor poses to the approximate heightfield pipeline.
+/// Read ONLY when the faithful path is already active
+/// ([`MovementSystem::faithful_transition_enabled`]); it gates the OUTDOOR
+/// branch INSIDE
+/// [`holtburger_world::spatial::faithful_bridge::faithful_find_transitional_position`]
+/// (WS3/WS4) — the indoor env-cell path is unaffected.
+///
+/// ONE feature, TWO carriers (mirrors [`USE_FAITHFUL_TRANSITION`]): this const
+/// (native default) + a runtime carrier
+/// ([`MovementSystem::faithful_outdoor_runtime`], the `?faithfulOutdoor=off` URL
+/// flag). Effective predicate: [`MovementSystem::faithful_outdoor_enabled`],
+/// threaded as the `faithful_outdoor` dispatch arg (WS4).
+///
+/// `true` (DEFAULT, Phase D): an outdoor pose floods the sphere-radius land-cell
+/// ring (`add_all_outside_cells_sphere`) and collides against each cell's 2
+/// terrain triangles → buildings/statics BSP → entities, mirroring decomp
+/// `CLandCell::find_collisions` (acclient.c:354887).
+///
+/// `false` / `?faithfulOutdoor=off`: outdoor poses delegate to the existing
+/// heightfield pipeline (the Phase A/B/C behavior), byte-identical. The escape
+/// for the Phase D A/B rollback.
+const USE_FAITHFUL_OUTDOOR: bool = true;
+
+/// Phase 3 Phase D (2026-06-28, Option C) — register each outdoor
+/// building/static BSP into EVERY land cell its world AABB overlaps, not just
+/// its home cell, so an off-center building can no longer be walked through from
+/// a neighbor cell. Index-only deviation from retail: the swept-sphere driver +
+/// `find_obj_collisions` stay byte-faithful — only the per-cell static index
+/// (`holtburger_world::spatial::scene` `cell_static_physics_bsp`) is widened.
+/// Read by the bake (WS7 `scene.rs` / WS8 `apps/holtburger-web/src/lib.rs`) via
+/// [`MovementSystem::building_overlap_enabled`].
+///
+/// ONE feature, TWO carriers (mirrors [`USE_FAITHFUL_TRANSITION`]): this const
+/// (native default) + a runtime carrier
+/// ([`MovementSystem::building_overlap_runtime`], the `?buildingOverlap=off` URL
+/// flag). Effective predicate: [`MovementSystem::building_overlap_enabled`].
+///
+/// `true` (DEFAULT, Phase D): full overlap registration — the off-center fix.
+///
+/// `false` / `?buildingOverlap=off`: register each static/building into its HOME
+/// cell only = the exact retail home-cell-only behavior = the off-center
+/// walk-through bug repro. This is the OFF arm of the drift A/B proof (off-center
+/// building: overlap-on STOPS the mover, overlap-off WALKS THROUGH).
+const USE_BUILDING_OVERLAP: bool = true;
+
 /// F4-2 (bughunt 2026-06-09) — outdoor walkable-slope gate.
 ///
 /// `false` (DEFAULT): the legacy behaviour — outdoor grounded movement
@@ -1097,6 +1144,19 @@ pub(crate) struct MovementSystem {
     /// [`USE_FAITHFUL_TRANSITION`] const by
     /// [`Self::faithful_transition_enabled`]. Default `false`.
     faithful_transition_runtime: bool,
+    /// Phase 3 Phase D (2026-06-28) — runtime carrier of the
+    /// `?faithfulOutdoor=off` URL flag. `None` = use the
+    /// [`USE_FAITHFUL_OUTDOOR`] const default (ON); `Some(false)` forces the
+    /// outdoor heightfield fallback (the A/B rollback escape); `Some(true)`
+    /// forces it on. Combined by [`Self::faithful_outdoor_enabled`]. Default
+    /// `None`.
+    faithful_outdoor_runtime: Option<bool>,
+    /// Phase 3 Phase D (2026-06-28, Option C) — runtime carrier of the
+    /// `?buildingOverlap=off` URL flag. `None` = use the
+    /// [`USE_BUILDING_OVERLAP`] const default (ON); `Some(false)` forces
+    /// home-cell-only registration (the retail-bug repro arm of the drift A/B).
+    /// Combined by [`Self::building_overlap_enabled`]. Default `None`.
+    building_overlap_runtime: Option<bool>,
     /// A14-I4 (W3+ S11, 2026-06-12) — the retail jump charge clock
     /// (`ClientCombatSystem` `jump_pending` / `buildStartTime`,
     /// acclient.c:407902-407916). Reached only via the wasm
@@ -1298,6 +1358,8 @@ impl MovementSystem {
             movement_managers: HashMap::new(),
             unified_transition_runtime: false,
             faithful_transition_runtime: false,
+            faithful_outdoor_runtime: None,
+            building_overlap_runtime: None,
             jump_charge: JumpChargeClock::new(),
             sticky_timeout_pending: std::cell::Cell::new(false),
             manual_moveto_cancel_pending: false,
@@ -1320,6 +1382,25 @@ impl MovementSystem {
     /// `parse_faithful_transition_flag`); this is the runtime entry it targets.
     pub(crate) fn set_faithful_transition(&mut self, on: bool) {
         self.faithful_transition_runtime = on;
+    }
+
+    /// Phase 3 Phase D (2026-06-28) — install the `?faithfulOutdoor=off` runtime
+    /// carrier (see [`USE_FAITHFUL_OUTDOOR`]). The wasm recv-loop init calls this
+    /// once with the parsed flag (default-ON; `=off` forces the outdoor
+    /// heightfield fallback). Read by the OUTDOOR branch of the faithful bridge
+    /// via the `faithful_outdoor` dispatch arg threaded from
+    /// [`Self::faithful_outdoor_enabled`].
+    pub(crate) fn set_faithful_outdoor(&mut self, on: bool) {
+        self.faithful_outdoor_runtime = Some(on);
+    }
+
+    /// Phase 3 Phase D (2026-06-28, Option C) — install the
+    /// `?buildingOverlap=off` runtime carrier (see [`USE_BUILDING_OVERLAP`]). The
+    /// wasm recv-loop init calls this once with the parsed flag (default-ON;
+    /// `=off` reproduces the retail home-cell-only walk-through for the A/B
+    /// proof). Read at bake time via [`Self::building_overlap_enabled`].
+    pub(crate) fn set_building_overlap(&mut self, on: bool) {
+        self.building_overlap_runtime = Some(on);
     }
 
     /// A14-I3 (`?retailRunKeys=on`) — overlay the retail autorun
@@ -1548,6 +1629,25 @@ impl MovementSystem {
     /// [`Self::finish_manual_slice_via_transition`]) via the dispatcher.
     pub(crate) fn faithful_transition_enabled(&self) -> bool {
         USE_FAITHFUL_TRANSITION || self.faithful_transition_runtime
+    }
+
+    /// Phase 3 Phase D — the effective OUTDOOR-faithful predicate. Read ONLY
+    /// when [`Self::faithful_transition_enabled`] is also on (it gates the
+    /// outdoor branch INSIDE the faithful bridge); WS4 threads it as the
+    /// `faithful_outdoor` dispatch arg. The runtime carrier OVERRIDES the const
+    /// default, so `?faithfulOutdoor=off` can roll the outdoor path back to the
+    /// heightfield even while [`USE_FAITHFUL_OUTDOOR`] is `true`.
+    pub(crate) fn faithful_outdoor_enabled(&self) -> bool {
+        self.faithful_outdoor_runtime.unwrap_or(USE_FAITHFUL_OUTDOOR)
+    }
+
+    /// Phase 3 Phase D (Option C) — the effective building/static OVERLAP
+    /// registration predicate, read by the per-cell static-BSP bake (WS7/WS8).
+    /// The runtime carrier OVERRIDES the const default, so `?buildingOverlap=off`
+    /// reproduces the retail home-cell-only behavior (the A/B bug-repro arm)
+    /// even while [`USE_BUILDING_OVERLAP`] is `true`.
+    pub(crate) fn building_overlap_enabled(&self) -> bool {
+        self.building_overlap_runtime.unwrap_or(USE_BUILDING_OVERLAP)
     }
 
     pub(crate) fn note_server_controlled_movement_started(&mut self) {
@@ -4464,6 +4564,7 @@ impl MovementSystem {
             &*world,
             &input,
             self.faithful_transition_enabled(),
+            self.faithful_outdoor_enabled(),
         );
         let mut pose = outcome.pose;
         // InitLastKnownContactPlane equivalent — a step with no wall

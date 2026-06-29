@@ -114,6 +114,11 @@ pub trait CellArrayApi {
     fn set_added_outside(&mut self, v: bool);
     /// `cell_array->do_not_load_cells`.
     fn do_not_load_cells(&self) -> bool;
+    /// Downcast hook — recover the concrete [`CellArray`] the driver always owns
+    /// (`CTransition::cell_array`) and passes as `&mut dyn CellArrayApi`, so a
+    /// `CellWorld::add_all_outside_cells` impl can feed it to the concrete
+    /// [`add_all_outside_cells_sphere`] (which the holtburger-world bridge wires).
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 /// Seam — the cell-resolver world (`holtburger-world`'s `SpatialScene` later).
@@ -444,6 +449,9 @@ impl CellArrayApi for CellArray {
     }
     fn do_not_load_cells(&self) -> bool {
         self.do_not_load_cells
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
@@ -978,6 +986,9 @@ mod tests {
         }
         fn do_not_load_cells(&self) -> bool {
             self.do_not_load
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
         }
     }
 
