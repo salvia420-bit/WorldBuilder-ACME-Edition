@@ -28,7 +28,8 @@ use holtburger_common::math::{Quaternion, Vector3};
 use holtburger_common::position::{METERS_PER_LANDBLOCK, WorldPosition};
 use std::collections::VecDeque;
 
-/// A2-P1 queue gate (survey A2 §4 Stage P1) — OFF (default): the
+/// A2-P1 queue gate (survey A2 §4 Stage P1) — Default ON (a7cfb75e, "enable
+/// full unified pipeline"). OFF: the
 /// [`PositionManager`] facade delegates every call to the legacy
 /// single-node [`RetailForcePositionInterpolator`], byte-identical to
 /// the pre-P1 behavior. ON: force-position installs route through the
@@ -38,7 +39,8 @@ use std::collections::VecDeque;
 pub const USE_POSITION_MANAGER_QUEUE: bool = true;
 
 /// A2-P3 sticky gate (survey A2 §4 Stage P3, W3+ S9; RULINGS item 4) —
-/// OFF (default): no caller installs a sticky target, so the
+/// Default ON (a7cfb75e, "enable full unified pipeline"). OFF: no caller
+/// installs a sticky target, so the
 /// [`StickyManager`] slice is inert and every consumer site
 /// (`movement/system.rs` step/unstick, `client/simulation.rs` install,
 /// wasm `lib.rs` install/feed) early-outs — byte-identical to pre-P3.
@@ -1301,15 +1303,12 @@ mod tests {
         assert!(sticky.adjust_offset(&cur, 0.0, 4.0, 0.016).is_none());
     }
 
-    /// Spec S9 §4 test 7 — default-off contract: the const is OFF and a
-    /// fresh facade carries no sticky state (every install site is
-    /// gated, so flag-off behavior is byte-identical by construction).
+    /// Spec S9 §4 test 7 — a fresh facade is inert with no sticky installed:
+    /// every sticky site early-outs regardless of `USE_STICKY_MANAGER` (which
+    /// ships ON since a7cfb75e, "enable full unified pipeline"). This lane
+    /// verifies the no-install inert path (flag-independent by construction).
     #[test]
-    fn sticky_flag_default_off_and_facade_inert_without_install() {
-        assert!(
-            !USE_STICKY_MANAGER,
-            "A2-P3 ships default-off (url-flags.md; pending 1070 eye-test)"
-        );
+    fn sticky_facade_inert_without_install() {
         let mut manager = PositionManager::default();
         assert_eq!(manager.sticky_object_id(), None);
         assert!(!manager.sticky_use_time(10.0));
@@ -1382,14 +1381,14 @@ mod tests {
         assert!((stepped.rotation.to_heading() - expected_heading).abs() < 1e-3);
     }
 
-    /// Flag-off facade byte-identity: install/step through the facade
-    /// matches a bare legacy interpolator step-for-step.
+    /// Facade ↔ legacy byte-identity for a single force-position install:
+    /// stepping the facade matches a bare legacy interpolator step-for-step.
+    /// `USE_POSITION_MANAGER_QUEUE` ships ON since a7cfb75e; for a single
+    /// install with no dedupe/cap pressure the queue delegates to the same
+    /// retail node, so the per-step output stays identical (if a future queue
+    /// change diverges here, gate this lane on the const instead).
     #[test]
-    fn facade_flag_off_matches_legacy_interpolator() {
-        assert!(
-            !USE_POSITION_MANAGER_QUEUE,
-            "this lane asserts the DEFAULT-OFF facade contract"
-        );
+    fn facade_matches_legacy_interpolator_single_install() {
         let start = pose(53.0, 50.0, 0.0);
         let target = pose(50.0, 50.0, 0.0);
 
