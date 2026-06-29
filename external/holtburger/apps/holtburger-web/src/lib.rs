@@ -12527,6 +12527,8 @@ async fn populate_statics_aabbs_for_landblock_impl(
                                                     polys,
                                                     origin: placement_origin,
                                                     orientation: placement_orientation,
+                                                    // E3.4: outdoor static — plumb the real scenery scale here when the feed carries it.
+                                                    scale: 1.0,
                                                 },
                                             ));
                                         });
@@ -12597,6 +12599,7 @@ async fn populate_statics_aabbs_for_landblock_impl(
                                             polys: b.polys,
                                             origin: world_origin,
                                             orientation: world_orientation,
+                                            scale: 1.0, // E3.4: outdoor static (plumb real scenery scale when available)
                                         },
                                     ));
                                 });
@@ -15184,6 +15187,7 @@ pub async fn fetch_env_cells_in_landblock(
                                 polys: resolved,
                                 origin: cell_origin,
                                 orientation: cell_orientation,
+                                scale: 1.0, // E3.4: env-cell room geometry is unscaled
                             };
                             CELL_BSP_PENDING.with(|pending| {
                                 pending.borrow_mut().push((envcell.cell_id, bsp));
@@ -15361,6 +15365,7 @@ pub async fn fetch_env_cells_in_landblock(
                                         polys,
                                         origin: stab_world_origin,
                                         orientation: stab_world_orientation,
+                                        scale: 1.0, // E3.4: stab static (plumb real scenery scale when available)
                                     },
                                 ));
                             });
@@ -15399,6 +15404,7 @@ pub async fn fetch_env_cells_in_landblock(
                                             polys: b.polys,
                                             origin: wo,
                                             orientation: wq,
+                                            scale: 1.0, // E3.4: stab static (plumb real scenery scale when available)
                                         },
                                     ));
                                 });

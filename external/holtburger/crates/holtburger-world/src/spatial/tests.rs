@@ -2579,6 +2579,7 @@ mod bsp_collision {
             polys,
             origin,
             orientation,
+            scale: 1.0,
         }
     }
 

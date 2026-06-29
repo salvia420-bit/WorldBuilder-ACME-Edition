@@ -750,6 +750,7 @@ mod tests {
             polys: std::collections::HashMap::new(),
             origin: Vector3::zero(),
             orientation: Default::default(),
+            scale: 1.0,
         }
     }
 

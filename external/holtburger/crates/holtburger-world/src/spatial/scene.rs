@@ -329,6 +329,12 @@ pub struct CellPhysicsBsp {
     /// Cell orientation (EnvCell `position.orientation`). Unit
     /// quaternion; its conjugate maps world→cell-local.
     pub orientation: holtburger_common::Quaternion,
+    /// Phase E3.4 — the object's uniform scale (retail `gfxobj_scale.z`;
+    /// `CPhysicsPart::find_obj_collisions` caches the swept sphere into the
+    /// PART's frame using the PART's scale, acclient.c:314669, NOT the mover's).
+    /// Env-cell room geometry and unscaled statics are `1.0`; the bake populates
+    /// it from the static/scenery placement scale when non-unit (outdoor scenery).
+    pub scale: f32,
 }
 
 impl CellPhysicsBsp {

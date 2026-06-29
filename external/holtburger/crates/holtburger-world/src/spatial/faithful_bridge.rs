@@ -373,11 +373,11 @@ impl CObjCell for SceneObjCell {
         {
             return TransitionState::OK as i32;
         }
-        let scale = if transition.object_info.scale != 0.0 {
-            transition.object_info.scale
-        } else {
-            1.0
-        };
+        // Phase E3.4: the static pass uses the STATIC's own scale — retail
+        // `CPhysicsPart::find_obj_collisions` caches into the part's frame with
+        // the PART's `gfxobj_scale.z` (acclient.c:314669), NOT the mover's scale
+        // (the mover's size already lives in the sphere radius). Unscaled
+        // env-cell statics are 1.0; scaled outdoor scenery carries its own.
         for st in &self.statics {
             // The static's WORLD frame (origin + orientation basis) — the part
             // pose `CPhysicsPart::find_obj_collisions` caches into (acclient.c:314669).
@@ -387,11 +387,11 @@ impl CObjCell for SceneObjCell {
             };
             transition
                 .sphere_path
-                .cache_localspace_sphere(&st_pos, scale);
+                .cache_localspace_sphere(&st_pos, st.scale);
             let r = holtburger_dat::transition::resolver_find::find_collisions(
                 &st.tree,
                 transition,
-                scale,
+                st.scale,
                 &st.polys,
             );
             // acclient.c:347162 — first object whose result != OK wins.
@@ -1126,6 +1126,7 @@ mod drift {
             polys,
             origin: cell_origin(),
             orientation: Quaternion::identity(),
+            scale: 1.0,
         }
     }
 
@@ -2141,6 +2142,61 @@ mod drift {
         assert_in_cell_aabb(&env, &with);
     }
 
+    /// Phase E3.4: per-static SCALE. The same static wall (local x=WALL_X_LOCAL)
+    /// collides at its SCALED world position — a scale-2 static stops the mover
+    /// ~2× farther than a scale-1 one. Retail caches the sweep into the part's
+    /// frame using the PART's `gfxobj_scale.z` (acclient.c:314669), so the
+    /// static's OWN scale (not the mover's) drives the static sweep.
+    #[test]
+    fn static_object_scale_scales_collision_distance() {
+        let wall_polys = || {
+            let mut p = HashMap::new();
+            p.insert(
+                1u16,
+                poly(vec![
+                    v(WALL_X_LOCAL, -HE, 0.0),
+                    v(WALL_X_LOCAL, -HE, WALL_H),
+                    v(WALL_X_LOCAL, HE, WALL_H),
+                    v(WALL_X_LOCAL, HE, 0.0),
+                ]),
+            );
+            p
+        };
+        let o = cell_origin();
+        let build = |s: f32| -> DriftEnv {
+            let mut scene = SpatialScene::new();
+            let mut floor = HashMap::new();
+            floor.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+            scene.insert_cell_physics_bsp(CELL_ID, bsp_from(floor));
+            seed_common(
+                &mut scene,
+                floor_tris_world(o.x - HE, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ),
+            );
+            let mut wall = bsp_from(wall_polys());
+            wall.scale = s; // the static's own scale (E3.4)
+            scene.insert_cell_static_physics_bsp(CELL_ID, wall);
+            DriftEnv { scene }
+        };
+        // Multi-frame walk so the mover reaches even the scale-2 wall (~FCX+2).
+        let flat = |_x: f32| FLOOR_WZ;
+        let start = pose_at(FCX, FCY, FLOOR_WZ);
+        let x1 = frame_walk(&build(1.0), start, 0.3, flat, 20, true)
+            .last()
+            .unwrap()
+            .coords
+            .x;
+        let x2 = frame_walk(&build(2.0), start, 0.3, flat, 20, true)
+            .last()
+            .unwrap()
+            .coords
+            .x;
+        eprintln!("[E3.4 scale] scale1 stop x={x1:.3}  scale2 stop x={x2:.3}");
+        assert!(
+            x2 > x1 + 0.5,
+            "scaled static must collide farther (its own scale drives the sweep): scale1 x={x1}, scale2 x={x2}"
+        );
+    }
+
     // ── (c) step down a ledge ──
     #[test]
     fn ledge_advances_and_marshals() {
@@ -2895,6 +2951,7 @@ mod drift {
             polys,
             origin: Vector3::zero(),
             orientation: Quaternion::identity(),
+            scale: 1.0,
         }
     }
 
