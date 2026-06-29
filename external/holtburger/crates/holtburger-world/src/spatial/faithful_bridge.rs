@@ -71,7 +71,7 @@ use holtburger_dat::transition::types::{
 };
 
 use super::collision::TransitionState;
-use super::scene::{CellPhysicsBsp, SpatialScene};
+use super::scene::{CellMembership, CellPhysicsBsp, SpatialScene};
 use super::transition::{
     find_transitional_position, TransitionEnv, TransitionInput, TransitionOutcome,
 };
@@ -128,6 +128,12 @@ pub struct SceneObjCell {
     /// [`super::scene::CellMembership`]); the AABB is a looser client-side bound
     /// — adequate for the single-cell indoor sweep, refine for cross-portal.
     aabb: Option<Aabb>,
+    /// Phase E3.2 — the precise cell-membership BSP (`CellStruct.cell_bsp`,
+    /// cloned from [`SpatialScene::cell_membership`]). When present,
+    /// [`Self::point_in_cell`] walks it (`BspNode::point_inside_cell`, the
+    /// faithful `BSPNODE::point_inside_cell_bsp` port, acclient.c:362944) instead
+    /// of the looser AABB — precise cross-portal re-seat. `None` ⇒ AABB fallback.
+    membership: Option<CellMembership>,
     /// `((CEnvCell*)this)->stab_list` — the portal-visible neighbour cell ids
     /// (the cell ring `find_transit_cells` floods). Kept for the
     /// `do_not_load_cells` stab-list prune (`visible_cells()`).
@@ -278,6 +284,13 @@ impl CObjCell for SceneObjCell {
     /// disabling collision after step 0. Uses the cell AABB (see the `aabb`
     /// field's VERIFY note on the precise membership-BSP form).
     fn point_in_cell(&self, point: Vector3) -> bool {
+        // Phase E3.2: precise membership BSP (`CEnvCell::point_in_cell` →
+        // `CCellStruct::point_in_cell`, acclient.c:347935/355496) — rebase the
+        // world point into the cell's local frame and walk the cell_bsp. Falls
+        // back to the AABB when the membership tree isn't resident.
+        if let Some(m) = &self.membership {
+            return m.tree.point_inside_cell(&m.world_to_local(point));
+        }
         match self.aabb {
             Some(a) => {
                 point.x >= a.min.x
@@ -474,6 +487,8 @@ impl<'a> SceneWorld<'a> {
             aabb,
             portal_neighbours,
             resolved_neighbours,
+            // E3.2: precise membership BSP for this cell (falls back to AABB if absent).
+            membership: self.scene.cell_membership(cell_id).cloned(),
             // Indoor env cell — no terrain triangles (mutually exclusive with bsp).
             terrain_polys: None,
             landblock_origin: Vector3::zero(),
@@ -736,6 +751,8 @@ fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> O
         aabb: Some(aabb),
         portal_neighbours: Vec::new(),
         resolved_neighbours: Vec::new(),
+        // Outdoor land cells have no CellStruct.cell_bsp → AABB/terrain membership.
+        membership: None,
         terrain_polys,
         landblock_origin,
     }) as ObjCellHandle
@@ -1765,6 +1782,70 @@ mod drift {
         assert!(
             xn - xp > 1.0,
             "portal stop (x={xp}) must be well short of the no-portal walk-through (x={xn})"
+        );
+    }
+
+    /// Phase E3.2: `point_in_cell` walks the precise cell-membership BSP
+    /// (`CCellStruct::point_in_cell`) when resident, NOT the looser AABB. The
+    /// membership cell is the positive half-space of the local x=0 plane; a point
+    /// on the negative side is OUTSIDE the cell even though the (wide) AABB
+    /// contains it — proving the BSP overrides the bounding box.
+    #[test]
+    fn point_in_cell_uses_membership_bsp_over_aabb() {
+        use crate::spatial::scene::CellMembership;
+        use holtburger_dat::physics::InternalNode;
+        use holtburger_dat::transition::objcell::CellWorld;
+        let o = cell_origin();
+        let tree = BspNode::Internal(InternalNode {
+            tag: [0u8; 4],
+            plane: Plane {
+                normal: v(1.0, 0.0, 0.0),
+                d: 0.0,
+            },
+            pos: Some(Box::new(BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: None,
+                poly_ids: vec![],
+            }))),
+            neg: None,
+            sphere: None,
+            poly_ids: vec![],
+        });
+        let mut scene = SpatialScene::new();
+        // A wide AABB spanning BOTH sides of the membership plane.
+        scene.insert_cell_aabb(
+            CELL_ID,
+            Aabb::new(
+                v(o.x - HE, o.y - HE, o.z - 5.0),
+                v(o.x + HE, o.y + HE, o.z + 5.0),
+            ),
+        );
+        scene.insert_cell_membership(
+            CELL_ID,
+            CellMembership {
+                tree,
+                origin: o,
+                orientation: Quaternion::identity(),
+            },
+        );
+        // Residency: give the cell a physics BSP too (build_cell gate).
+        let mut floor = HashMap::new();
+        floor.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(floor));
+
+        let world = SceneWorld::new(&scene);
+        let cell = world.get_visible(CELL_ID).expect("cell resident");
+        // Positive side (local x>0): inside the membership cell AND the AABB.
+        assert!(
+            cell.point_in_cell(v(o.x + 2.0, o.y, o.z)),
+            "positive side must be inside the membership cell"
+        );
+        // Negative side (local x<0): the AABB contains it, but the membership BSP
+        // excludes it → point_in_cell must report OUTSIDE (BSP wins over AABB).
+        assert!(
+            !cell.point_in_cell(v(o.x - 2.0, o.y, o.z)),
+            "negative side must be excluded by the membership BSP despite the AABB"
         );
     }
 

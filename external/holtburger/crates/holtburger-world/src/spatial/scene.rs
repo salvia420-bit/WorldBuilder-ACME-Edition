@@ -1498,6 +1498,14 @@ impl SpatialScene {
         self.cell_membership.len()
     }
 
+    /// The precise cell-membership BSP (`CellStruct.cell_bsp`) for `cell_id`, if
+    /// resident. Phase E3.2: drives `SceneObjCell::point_in_cell` (replacing the
+    /// looser AABB) so `find_cell_list` re-seats `check_cell` precisely across
+    /// portal boundaries.
+    pub fn cell_membership(&self, cell_id: u32) -> Option<&CellMembership> {
+        self.cell_membership.get(&cell_id)
+    }
+
     /// BSP collision (PASS 1, 2026-06-02): the authoritative "is the
     /// player capsule solid at this world pose" test, using the
     /// faithful ACE `BSPNode.sphere_intersects_solid` walk.
