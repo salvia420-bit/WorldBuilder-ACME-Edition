@@ -537,6 +537,20 @@ const UNIFIED_DOOR = UNIFIED_DEFAULT || UNIFIED_MODE === "door" || UNIFIED_MODE 
 // MotionCommand.On / .Off (door open / close).
 const CMD_DOOR_ON = 0x4000000b;
 const CMD_DOOR_OFF = 0x4000000c;
+// Door/chest On/Off are STATE-change motions: they play once and HOLD the final
+// (open/closed) pose — they are NOT cyclic loops. ACE Door.cs/Chest.cs define
+// `motionOpen = Motion(NonCombat, On)` / `motionClosed = Motion(NonCombat, Off)`
+// as held states, and the open/close transition has a finite GetAnimationLength
+// (a one-shot, not a loop). But On/Off live in the MotionTable CYCLES table, so
+// `classifyMotionCommand` buckets them with the locomotion cycles ("walk") and
+// the cycle-play sites would set LoopRepeat. Looping a closed chest's Off cycle
+// = perpetual open↔close (the 2026-06-29 "all doors/chests opening and closing
+// over and over" bug; confirmed live — a closed chest spawned with Off(0xc) on
+// LoopRepeat). Special-case the LOOP MODE at the play sites via this predicate.
+function isDoorStateMotion(cmd) {
+  const low = (cmd >>> 0) & 0xffff;
+  return low === (CMD_DOOR_ON & 0xffff) || low === (CMD_DOOR_OFF & 0xffff);
+}
 // Locomotion (walk/run/idle cycles) — the WORKING oracle, migrated LAST. Drives
 // a CYCLIC MotionSequence with gait scaling + Rust phase carry across swaps.
 // A one-shot (_unifiedSeq) suppresses _unifiedLoco during a swing, then resumes
@@ -3532,8 +3546,12 @@ export class EntityManager {
         resolvedStance || initialStance
       );
       const action = mixer.clipAction(initialClip);
-      action.setLoop(THREE.LoopRepeat, Infinity);
-      action.clampWhenFinished = false;
+      // Door/chest state motions (On/Off) HOLD their open/closed pose; idle/walk/
+      // run cycles loop. Without this, a chest/door spawning with Off(closed) /
+      // On(open) loops its open↔close cycle forever (see isDoorStateMotion).
+      const _holdState = isDoorStateMotion(initialMotion);
+      action.setLoop(_holdState ? THREE.LoopOnce : THREE.LoopRepeat, _holdState ? 1 : Infinity);
+      action.clampWhenFinished = _holdState;
       action.enabled = true;
       inst.actions.set(cacheKey, action);
       inst.actionLastUsedMs.set(cacheKey, performance.now());
@@ -3559,6 +3577,12 @@ export class EntityManager {
       const cls = classifyMotionCommand(initialMotion);
       if (cls === "walk" || cls === "run" || cls === "idle") {
         action.play();
+        if (_holdState) {
+          // Snap to the final (resting) frame so the door/chest shows its
+          // open/closed pose immediately, without a one-shot swing on spawn.
+          // clampWhenFinished holds it there.
+          action.time = initialClip.duration || 0;
+        }
         inst.currentAction = action;
         inst.currentActionKey = cacheKey;
       }
@@ -7330,6 +7354,11 @@ export class EntityManager {
         action.setLoop(THREE.LoopOnce, 1);
         action.clampWhenFinished = false;
         // (swing/cast vibe-pose tween clears removed — posers retired, WS-B 2026-06-18)
+      } else if (isDoorStateMotion(cmd)) {
+        // Door/chest open/close: play the transition ONCE and HOLD the final
+        // (open/closed) pose — these are state changes, not cyclic loops.
+        action.setLoop(THREE.LoopOnce, 1);
+        action.clampWhenFinished = true;
       } else {
         action.setLoop(THREE.LoopRepeat, Infinity);
         action.clampWhenFinished = false;
@@ -9206,6 +9235,10 @@ export class EntityManager {
     // THREE.BufferGeometry. Otherwise new THREE.Mesh crashes with
     // "Cannot read properties of null (reading 'morphAttributes')".
     const resolveGfxObj = async (hwGfxObjId) => {
+      // Skip id 0 (no building/hardware GfxObj — a detach, or an entity with no
+      // placement model): fetchBuildingPlacement(0) always fails wasm-side and
+      // spammed `[entities/H2] fetchBuildingPlacement(0x0) failed` (2026-06-29).
+      if (!(hwGfxObjId >>> 0)) return null;
       if (!ents_wasm || typeof ents_wasm.fetchBuildingPlacement !== "function") {
         return null;
       }

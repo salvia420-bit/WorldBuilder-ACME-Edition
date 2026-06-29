@@ -745,7 +745,8 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   // there is no visual-vs-collision gap to reconcile — render the rig
   // directly at the authoritative `posZ`. (Removed the per-frame
   // `getTerrainVisualZ` raycast + 0.3 m grounded lift, 2026-06-26.)
-  const renderZ = posZ;
+  // `let` (not `const`): the grounded low-pass below reassigns renderZ.
+  let renderZ = posZ;
 
   // Low-pass the rig Z to kill the ~5-10 Hz vertical reconcile bob (see
   // the note atop this fn). Ease a persisted rig-Z toward `renderZ`; snap

@@ -66,14 +66,21 @@ fn parse_seq_debug_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "seqDebug=1")
 }
 
-/// wieldedSpawn (2026-06-11): parse `?wieldedSpawn=on` (or
-/// `&wieldedSpawn=on`) out of the URL query string. Same shape as
-/// `parse_seq_debug_flag` above — read once at recv_loop start and
-/// stashed as a local `bool`.
+/// wieldedSpawn (2026-06-11): parse `?wieldedSpawn` out of the URL query
+/// string. Read once at recv_loop start and stashed as a local `bool`.
+///
+/// DEFAULT-ON (2026-06-29): reconciled to match the JS reader at
+/// `scene3d/index.js:2342` (`get("wieldedSpawn") !== "off"`), which
+/// already defaults the JS-side `entityManager._wieldedSpawn` to ON. The
+/// WASM side previously defaulted OFF (`== "on"`), so in production the
+/// synthesized KIND_SPAWN for a pack→wield child never fired — its kind=7
+/// ATTACH parked in JS `_pendingAttach` forever and re-equipped items
+/// showed empty hands (bug #4). Only an explicit `wieldedSpawn=off`
+/// disables it now.
 #[cfg(target_arch = "wasm32")]
 fn parse_wielded_spawn_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "wieldedSpawn=on")
+    !trimmed.split('&').any(|kv| kv == "wieldedSpawn=off")
 }
 
 /// A8-M1 (2026-06-11, unification survey): parse `?worldLifecycle=on`
@@ -36941,6 +36948,16 @@ async fn recv_loop(
                                     });
                                     js_spawned_guids.insert(u32::from(data.child_guid));
                                 }
+                            }
+                            // Bug #4 (2026-06-29): on unwield/detach
+                            // (parent_guid == NULL) drop the live-rig ledger
+                            // entry. Unwield arrives as THIS ParentEvent (not an
+                            // ObjectDelete/PickupEvent), so without this the guid
+                            // lingered in `js_spawned_guids` and the wieldedSpawn
+                            // synthesis above was skipped on a later re-wield —
+                            // the re-equipped item then showed empty hands.
+                            if data.parent_guid == holtburger_common::Guid::NULL {
+                                js_spawned_guids.remove(&u32::from(data.child_guid));
                             }
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_ATTACH,
