@@ -7181,6 +7181,24 @@
                     });
                   }
                 }
+              } else if (evt.kind === 49 /* EntityAttached — runtime equip */) {
+                // Held items (weapon/shield/caster) wielded while already
+                // in-world: Rust emits ClientEvent kind=49 (and kind=47 on
+                // unequip) on the Wielder PropertyInstanceId transition, but
+                // this drain had NO arm and no generic kind:N forwarder, so the
+                // scene3d/index.js kind:49/47 subscribers (markWielderDirty →
+                // attachChildToParent — the ONLY runtime channel that attaches
+                // a held mesh to the rig hand) never fired. Login-time wields
+                // ride KIND_SPAWN → _markWielderDirty, so the gap was invisible
+                // until a live equip. Re-emit on the plugin bus, mirroring the
+                // kind:13 re-emit pattern below.
+                if (window.__pluginClient?.events?.emit) {
+                  try { window.__pluginClient.events.emit("kind:49", evt); } catch (_) {}
+                }
+              } else if (evt.kind === 47 /* EntityDetached — runtime unequip */) {
+                if (window.__pluginClient?.events?.emit) {
+                  try { window.__pluginClient.events.emit("kind:47", evt); } catch (_) {}
+                }
               } else if (evt.kind === 50 /* SG-C1b ChessUpdate */) {
                 // SG-C1b (2026-06-09): the 5 chess-minigame GameEvents
                 // decoded in SG-C1a arrive here string-encoded (see

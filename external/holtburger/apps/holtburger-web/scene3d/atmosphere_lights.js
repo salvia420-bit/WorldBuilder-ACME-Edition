@@ -150,7 +150,12 @@ export class AtmosphereLights {
     // LSCAPE_LIGHT_MINIMUM (0.2) floor is re-applied AFTER the scale so nights
     // stay dark-but-visible. worldLightScale=1 → byte-identical original look.
     const s = this.worldLightScale;
-    this.sun.intensity = s;
+    // Indoor cut: lighting.js (tickLightingForCellState) sets `_indoorMute` from
+    // the authoritative isCurrentCellIndoor() flag. Zero the directional sun
+    // indoors so dungeons aren't lit through the ceiling; the sky probe (ambient
+    // fill) is left on for interior legibility, matching the legacy path's
+    // intent that this owns now.
+    this.sun.intensity = this._indoorMute ? 0 : s;
     this.skyProbe.intensity = Math.max(LSCAPE_LIGHT_MINIMUM, baseAmbient * s);
 
     this._lastState = state;

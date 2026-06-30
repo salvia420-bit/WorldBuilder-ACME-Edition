@@ -1775,6 +1775,13 @@ export class CameraSwitcher {
         // Force the next non-orbit dispatch to re-fire even if the keystate
         // signature is unchanged, since the rig is now parked on Ready.
         this.lastRigMotionSig = null;
+        // ...and clear lastInputSig too. The `if (sig === this.lastInputSig)
+        // return` gate below runs BEFORE the rig re-dispatch, so leaving it set
+        // makes the orbit→follow re-press (same key still held) early-return
+        // and the rig re-dispatch the lastRigMotionSig=null reset above was
+        // written to trigger is never reached — the avatar then slides forward
+        // in the idle pose. Nulling both forces the one re-dispatch intended.
+        this.lastInputSig = null;
       }
       return;
     }

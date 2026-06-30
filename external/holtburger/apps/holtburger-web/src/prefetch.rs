@@ -221,18 +221,30 @@ where
     let inner: &ManifestResourceSource = source.as_ref();
     let inner_dyn: &dyn ResourceSource = inner;
     let recorder = RecordingSource::new(inner_dyn);
-    let mut prev_total: usize = 0;
+    let mut prev_misses: Vec<(String, u32)> = Vec::new();
     for _round in 0..8 {
         walk(&recorder);
         let misses = recorder.take_misses();
         if misses.is_empty() {
             break;
         }
-        let new_total = prev_total + misses.len();
-        if new_total == prev_total {
+        // Stall guard: if this round's miss SET is identical to the previous
+        // round's, the prefetch resolved nothing — those keys are permanently
+        // absent from the manifest (the module's "some keys really aren't in
+        // the manifest" case). Stop instead of burning the full round cap
+        // re-walking + re-prefetching the same keys. (The old `prev_total +
+        // misses.len() == prev_total` guard was dead code: `misses` is
+        // non-empty past the check above, so the sum always grew.)
+        let mut this_misses: Vec<(String, u32)> = misses
+            .iter()
+            .map(|(ns, id)| (ns.as_str().to_string(), *id))
+            .collect();
+        this_misses.sort();
+        this_misses.dedup();
+        if this_misses == prev_misses {
             break;
         }
-        prev_total = new_total;
+        prev_misses = this_misses;
         let keys: Vec<ResourceKey<'_>> = misses
             .iter()
             .map(|(ns, id)| ResourceKey::new(ns.as_str(), *id))

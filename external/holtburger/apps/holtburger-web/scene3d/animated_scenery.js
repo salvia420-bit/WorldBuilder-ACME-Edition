@@ -35,7 +35,7 @@
 // distance tick-cull.
 
 import * as THREE from "three";
-import { meshToGeometryGroups } from "./adapter.js";
+import { meshToGeometryGroups, acToThree } from "./adapter.js";
 import { surfacePixelsFetcher } from "./bake_worker_client.js";
 import { treeWindEnabled, treeWindStrength, treeWindDir, windBakeEnabled } from "./tree_wind.js";
 import { buildBboxRig, partBBox, hash01 } from "./wind_rig.js";
@@ -695,6 +695,13 @@ function _ensureRaf() {
       const cam = window.liveScene3d?.camera || window.liveScene3d?.activeCamera || null;
       camPos = (cam && cam.position) || null;
     }
+    // Frame-parity scratch for the distance cull below. `inst.node.position`
+    // is AC-frame (placeNode stores LB-absolute AC coords); `camPos` is a
+    // three.js-frame vector (camera.js sets it via acToThree). They must be
+    // compared in ONE frame or the cull sees a bogus ~34 km gap at every real
+    // Dereth location and freezes every prop in its bind pose. Mirror the audio
+    // listener-sync fix (index.js D4-NEW-1): rotate the node into three-frame.
+    const acThreeScratch = new THREE.Vector3();
     // Iterate backwards so we can splice evicted instances in place.
     for (let i = _instances.length - 1; i >= 0; i--) {
       const inst = _instances[i];
@@ -706,7 +713,12 @@ function _ensureRaf() {
         if (g && --g.refCount <= 0) _disposeDidGroup(inst.animId);
         continue;
       }
-      if (camPos && inst.node.position.distanceToSquared(camPos) > radSq) continue;
+      if (camPos) {
+        const p = inst.node.position;
+        const [tx, ty, tz] = acToThree(p.x, p.y, p.z);
+        acThreeScratch.set(tx, ty, tz);
+        if (acThreeScratch.distanceToSquared(camPos) > radSq) continue;
+      }
       const g = _didGroups.get(inst.animId);
       if (!g) continue;
       const n = Math.min(g.parts.length, inst.parts.length);

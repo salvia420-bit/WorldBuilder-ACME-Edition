@@ -825,6 +825,15 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
         // per-light cap still needs to run.
       }
       if (isIndoor !== null) {
+        // Atmosphere path: the legacy `lighting.sun` toggled below is zeroed at
+        // boot (index.js — atmosphere owns lighting), so the indoor/outdoor
+        // logic here only moves a dead light. The REAL directional sun is
+        // atmosphere_lights.js's SunDirectionalLight, which re-sets its own
+        // intensity every tick and had no indoor handling — so dungeons were lit
+        // by a sun leaking through the ceiling. Mute it via this flag (read back
+        // in AtmosphereLights.tick); leave the sky probe / ambient alone so
+        // interiors keep their legibility fill.
+        if (scene3d.atmosphereLights) scene3d.atmosphereLights._indoorMute = isIndoor;
         const lightPool = scene3d.lighting?.lightPool;
         if (lightPool && lightPool.enabled) {
           // Pool mode: NEVER flip sun.visible — a DirectionalLight count change
@@ -949,7 +958,15 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
     const cam = scene3d?.cameraSwitcher?.activeCamera ?? scene3d?.camera ?? null;
     if (cam) {
       try {
-        updateCsm(lighting.csmState, cam);
+        // Feed the LIVE sun direction so cascade shadows track the sun across
+        // the AC day. Without the 3rd arg, updateCsm falls back to csmState.sunDir
+        // — seeded once from DEFAULT_SUN_POS at setup and never rewritten — so
+        // shadows stayed frozen at the boot heading while the visible sun disc
+        // (atmosphere_lights.js, driven by SkyState.dirHeading/Pitch) moved.
+        // The atmosphere sun already holds that live direction; reuse it. Falls
+        // back to the seeded sunDir on the non-atmosphere / low-quality path.
+        const liveSunDir = scene3d?.atmosphereLights?.sun?.sunDirection ?? undefined;
+        updateCsm(lighting.csmState, cam, liveSunDir);
         refreshCsmUniforms(lighting.csmState);
         // RP5 — updateCsm set `didRefitThisTick` true iff it actually
         // refit the cascades (camera/sun moved past threshold). That IS

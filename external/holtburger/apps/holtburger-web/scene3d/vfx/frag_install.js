@@ -217,6 +217,40 @@ export function resolveFragMaterialForDid({ materialCache, surfaceDid, did, glob
  */
 export function buildFragVariant(materialCache, surfaceDid, entries, deps) {
   if (!materialCache || typeof materialCache.getCachedVariant !== "function") return null;
+  const spec = _fragVariantSpec(entries, deps);
+  if (!spec) return null;
+  return materialCache.getCachedVariant(surfaceDid, spec.setKey, spec.configKey, spec.builder);
+}
+
+/**
+ * Paletted twin of `buildFragVariant`: install the SAME frag SET onto a clone of
+ * a DYED paletted base via `MaterialCache.getCachedVariantFromPaletted`, so
+ * itemFx / catalog effects (magicGlow, enchantShimmer, glint, itemAura) reach
+ * dyed gear — not just surfaceDid-keyed non-paletted entities. `paletteBase` must
+ * be a paletted material tagged `__paletteKey` (installPaletted); otherwise the
+ * cache returns it unchanged (byte-identical). Same setKey/configKey firewall ⇒
+ * one compiled program per component SET regardless of dye.
+ *
+ * @param {object} materialCache  MaterialCache (has getCachedVariantFromPaletted)
+ * @param {object} paletteBase    a dyed paletted base material
+ * @param {Array<{comp:object, config:object}>} entries  frag_attach plan.entries
+ * @param {{globals?:object, installComponentPatch?:Function, sharedPrelude?:object}} [deps]
+ * @returns {object|null} the cloned variant material, or null
+ */
+export function buildPalettedFragVariant(materialCache, paletteBase, entries, deps) {
+  if (!materialCache || typeof materialCache.getCachedVariantFromPaletted !== "function") return null;
+  const spec = _fragVariantSpec(entries, deps);
+  if (!spec) return null;
+  return materialCache.getCachedVariantFromPaletted(paletteBase, spec.setKey, spec.configKey, spec.builder);
+}
+
+/**
+ * Shared SET/config-key + builder computation for buildFragVariant and
+ * buildPalettedFragVariant, so the program-cache firewall is IDENTICAL across the
+ * surfaceDid-keyed and paletteKey-keyed variant paths. Returns null when the plan
+ * is empty or no component installer was supplied (fail-soft ⇒ caller keeps base).
+ */
+function _fragVariantSpec(entries, deps) {
   if (!entries || entries.length === 0) return null;
   const d = deps || {};
   const installComponentPatch = d.installComponentPatch;
@@ -245,13 +279,14 @@ export function buildFragVariant(materialCache, surfaceDid, entries, deps) {
   // configKey: heap-dedup only (two DIDs same SET + same config ⇒ one clone) —
   // NOT in the program key.
   const configKey = entries.map((e) => e.comp.id + "=" + _stableStr(e.config)).join("&") || "default";
-  return materialCache.getCachedVariant(surfaceDid, setKey, configKey, (material) => {
+  const builder = (material) => {
     // Shared prelude FIRST (slice-03 vVfxHash varying) so component injects that
     // read the per-instance hash see it declared; it rides no link bit (setKey
     // intact). Then each entry in FAMILY_ORDER under the one __vfxSetKey.
     if (sharedPrelude) installComponentPatch(material, sharedPrelude, undefined, globals);
     for (const e of entries) installComponentPatch(material, e.comp, e.config, globals);
-  });
+  };
+  return { setKey, configKey, builder };
 }
 
 /** Test-only: reset the one-shot warn latch. */

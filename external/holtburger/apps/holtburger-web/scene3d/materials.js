@@ -1685,6 +1685,12 @@ export class MaterialCache {
     // (surfaceDid|setKey|configKey); CLONES of the base material that share
     // textures. Dormant until a frag/MECH-B component calls getCachedVariant.
     this.vfxVariants = new Map();
+    // Paletted twin of vfxVariants: frag/MECH-B variant clones built ON TOP of a
+    // dyed/recoloured paletted base (the `_entityMaterials` path), so itemFx /
+    // catalog effects (magicGlow, enchantShimmer, glint, itemAura) reach dyed
+    // gear too — not just surfaceDid-keyed non-paletted entities. Keyed by the
+    // exact paletteKey × component-SET so dye stays correct and programs dedup.
+    this.vfxPalettedVariants = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
     this.textures = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
@@ -1924,6 +1930,47 @@ export class MaterialCache {
     return v;
   }
 
+  /**
+   * Paletted twin of `getCachedVariant`: build a frag/MECH-B VFX variant ON TOP
+   * of an already-dyed paletted base (one tagged with `__paletteKey` by
+   * `installPaletted`). This is the fix for dyed/paletted gear getting NO itemFx
+   * aura / catalog glow — the `_entityMaterials` branch previously returned the
+   * base verbatim. Keys by `${paletteKey}|${setKey}|${configKey}` so two items
+   * with the same dye + same effect SET share one clone + one program, while
+   * different dyes (different paletteKey) keep their own colours. Returns the
+   * base unchanged if it isn't a tagged paletted material (e.g. the shared
+   * fallback) so the caller stays byte-identical there.
+   */
+  getCachedVariantFromPaletted(baseMaterial, setKey, configKey, builder) {
+    if (!baseMaterial) return null;
+    if (this.wireframeMode) return baseMaterial;
+    const baseKey = baseMaterial.userData && baseMaterial.userData.__paletteKey;
+    if (!baseKey) return baseMaterial;
+    const key = `${baseKey}|${setKey}|${configKey}`;
+    let v = this.vfxPalettedVariants.get(key);
+    if (!v) {
+      v = baseMaterial.clone();
+      // __vfxSetKey BEFORE the builder runs (program-cache key); __vfxColorPassOnly
+      // keeps the patch off the shadow/depth write — identical contract to
+      // getCachedVariant. The clone shares the paletted base's owned texture
+      // (Material.clone copies the .map reference; dispose() never frees textures).
+      v.userData = { ...(baseMaterial.userData || {}), __cacheOwned: true, __vfxSetKey: setKey, __vfxColorPassOnly: true };
+      try { builder?.(v); } catch (e) { console.warn(`[vfx] getCachedVariantFromPaletted builder failed for ${key}:`, e); }
+      v.needsUpdate = true;
+      this.vfxPalettedVariants.set(key, v);
+      // Insertion-order LRU cap, mirroring installPaletted. Never evict the entry
+      // just inserted this call.
+      while (this.vfxPalettedVariants.size > PALETTED_CACHE_CAP) {
+        const oldestKey = this.vfxPalettedVariants.keys().next().value;
+        if (oldestKey === undefined || oldestKey === key) break;
+        const oldMat = this.vfxPalettedVariants.get(oldestKey);
+        this.vfxPalettedVariants.delete(oldestKey);
+        try { oldMat?.dispose?.(); } catch (_) {}
+      }
+    }
+    return v;
+  }
+
   /** The DoubleSide base material for a surface (original `getCached` body). */
   _getCachedDouble(surfaceDid) {
     if (this.wireframeMode) {
@@ -1974,7 +2021,9 @@ export class MaterialCache {
    */
   installPaletted(surfaceDid, paletteId, subPalettes, material, texture = null) {
     const key = this._paletteKey(surfaceDid, paletteId, subPalettes);
-    material.userData = { ...(material.userData || {}), __cacheOwned: true };
+    // Stash the exact dedup key so `getCachedVariantFromPaletted` can build a
+    // VFX variant of this dyed base without re-plumbing (paletteId, subPalettes).
+    material.userData = { ...(material.userData || {}), __cacheOwned: true, __paletteKey: key };
     if (texture) {
       texture.userData = { ...(texture.userData || {}), __cacheOwned: true };
       this.palettedTextures.set(key, texture);
@@ -3535,6 +3584,9 @@ export class MaterialCache {
     // VFX component-variant clones (share textures, freed above) — dispose the
     // material objects only.
     _disposeEach(this.vfxVariants, (m) => m);
+    // Paletted VFX variant clones (share the paletted base's owned texture,
+    // freed above) — dispose the material objects only.
+    _disposeEach(this.vfxPalettedVariants, (m) => m);
     // Wire-agent buckets + per-DID dominant-colour materials.
     _disposeEach(this.wireframeBuckets, (m) => m);
     _disposeEach(this.wireframeFillBuckets, (m) => m);
