@@ -42,8 +42,8 @@ import { CULL_DIST_SQ } from "./culling.js";
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
-const HOLTBURG_X = 0xa9;
-const HOLTBURG_Y = 0xb4;
+// HOLTBURG_X/HOLTBURG_Y retired (spawn-driven-boot): the buildHoltburgTerrain
+// wrapper that referenced them is gone.
 
 // ----- Phase 1.2 — terrain detail normal mapping --------------------
 //
@@ -3656,9 +3656,9 @@ export async function bakeTerrainRing(
  * call this directly and rely on the 9-LB Holtburg behaviour; the lazy
  * LB-entry / per-LB-baker symbol is the new `bakeTerrainForLandblock`.
  */
-export async function buildHoltburgTerrain(scene3d, wasmExports) {
-  return bakeTerrainRing(scene3d, HOLTBURG_X, HOLTBURG_Y, 1, wasmExports);
-}
+// buildHoltburgTerrain() retired (spawn-driven-boot): the Holtburg-centred
+// back-compat wrapper is gone. Terrain streams per-LB via loadTerrainForLandblock;
+// bakeTerrainRing remains exported for any explicit-centre caller (tests/captures).
 
 // ---------------------------------------------------------------------
 // Visual-vs-collision Z reconciliation was REMOVED 2026-06-26.

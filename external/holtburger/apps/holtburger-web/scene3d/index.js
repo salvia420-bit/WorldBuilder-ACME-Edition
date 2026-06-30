@@ -32,17 +32,14 @@ import * as THREE from "three";
 // wave 1-6 captures that still call them directly.
 import {
   bakeTerrainForLandblock,
-  bakeTerrainRing,
   resolveTerrainRingOpts,
   tickTerrainLodRebake,
 } from "./terrain.js?v=phase-d-batch";
 import {
   bakeBuildingsForLandblock,
-  bakeBuildingsRing,
 } from "./buildings.js?v=phase-d-batch";
 import {
   bakeStaticsForLandblock,
-  bakeStaticsRing,
   getOrCreateMaterialCache,
 } from "./statics.js?v=phase7-par";
 // ?statAtlas cross-LB static atlas per-LB eviction hook. Imported with the SAME
@@ -99,8 +96,8 @@ import { preloadAllIcons as preloadAllIconsShared } from "../ui/ac_icon_cache.js
 import { guardedStreamBake, createStreamGuardState } from "./stream_bake_guard.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
-const HOLTBURG_X = 0xa9;
-const HOLTBURG_Y = 0xb4;
+// HOLTBURG_X / HOLTBURG_Y retired (spawn-driven-boot): no landblock is special
+// at boot — the world streams around the player's real spawn LB.
 // World-expand step 1 Objective 8 (2026-05-14) — initial ring radius
 // around Holtburg flipped from 1 (3×3 = 9 LBs) to 6 (13×13 = 169 LBs).
 // Per `docs/world-expand-step-1-handoff.md` §Intent / §Objective 8 the
@@ -129,19 +126,9 @@ const HOLTBURG_Y = 0xb4;
 // `tickPvsLoadExpansion` still pulls additional LBs as the player
 // walks toward them, so functionality is preserved — just slower
 // horizon-fill the first time the user moves.
-const HOLTBURG_RING_RADIUS = (() => {
-  try {
-    if (typeof window === "undefined") return 6;
-    const ps = new URLSearchParams(window.location.search);
-    const raw = ps.get("ringRadius");
-    if (raw) {
-      const n = Number.parseInt(raw, 10);
-      if (Number.isFinite(n) && n >= 0 && n <= 6) return n;
-    }
-    if (ps.get("agentic") === "low") return 1;
-  } catch (_) { /* fallthrough */ }
-  return 6;
-})();
+// HOLTBURG_RING_RADIUS retired (spawn-driven-boot): the eager boot ring is gone.
+// Statics/buildings draw distance is governed by STATICS_RING_RADIUS /
+// BUILDINGS_RING_RADIUS (LRU sizing) + the live PVS expansion ring below.
 // Statics/scenery and buildings are the two heaviest per-LB content
 // streams (placements + per-model setup/meshes/surface-pixels via
 // F.41 batch). Decoupling their rings from the terrain ring lets us
@@ -1411,60 +1398,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // walks. Both are packed `((lbX << 24) | (lbY << 16)) >>> 0` per
   // the docs/world-expand-step-1-handoff.md §Sketch — distance-keyed
   // LOD shape.
-  scene3dForBuilders.initialCentreLbKey =
-    ((HOLTBURG_X << 24) | (HOLTBURG_Y << 16)) >>> 0;
-  scene3dForBuilders.playerLbKey = scene3dForBuilders.initialCentreLbKey;
-  if (
-    wasmExports &&
-    typeof wasmExports.fetch_landblock_heightmaps === "function" &&
-    typeof wasmExports.fetch_terrain_textures === "function"
-  ) {
-    try {
-      // World-expand step 1 Objective 8 — flip the initial ring from
-      // radius=1 (3×3, 9 LBs) to radius=6 (13×13, 169 LBs) by calling
-      // `bakeTerrainRing` directly instead of the radius=1 back-compat
-      // wrapper `buildHoltburgTerrain`. Same call shape as the wrapper
-      // forwards to, but with the explicit `HOLTBURG_RING_RADIUS`
-      // constant (defined near `HOLTBURG_X` / `HOLTBURG_Y` above) so a
-      // future radius bump is a one-line edit.
-      terrainSummary = await bakeTerrainRing(
-        scene3dForBuilders,
-        HOLTBURG_X,
-        HOLTBURG_Y,
-        HOLTBURG_RING_RADIUS,
-        wasmExports
-      );
-      // Move the hello-cube 100 m off-axis so it doesn't sit in the
-      // middle of Holtburg's terrain. The Phase 7.0 capture's
-      // assertion path doesn't fire here (it calls init3D with empty
-      // wasmExports, so this branch is skipped).
-      cube.position.set(-100, -100, 5);
-
-      // Retarget the camera onto the Holtburg LB centre. lbX*192 +
-      // 96 is the centre of the LB in AC metres; +200 m up gives a
-      // bird's-eye view that takes in all 9 LBs (roughly 576 m
-      // square). Looking down at +80 m (just above Holtburg's typical
-      // terrain elevation) keeps the framed point on the heightfield
-      // surface, not in the air.
-      const cx = HOLTBURG_X * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
-      const cy = HOLTBURG_Y * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
-      // Camera position + lookAt are in three.js world coords. Geometry
-      // inside worldRoot is in AC coords and gets `rotation.x = -π/2`
-      // applied automatically. Apply the same transform here so the
-      // camera looks at where the geometry actually renders. Without
-      // this, the camera ends up 30+km off-axis from the world (Phase
-      // 7.7 audit, frustum capture: 0 vs 153 draw calls).
-      camera.position.set(...acToThree(cx, cy, 200));
-      camera.lookAt(...acToThree(cx, cy, 80));
-    } catch (e) {
-      // Don't kill the page on a terrain build error — log + continue
-      // so the rest of init3D's contract (window.liveScene3d, render
-      // loop) still ships. The Phase 7.1 capture will catch it via
-      // the per-LB assertions.
-      // eslint-disable-next-line no-console
-      console.error("[scene3d] bakeTerrainRing failed:", e);
-    }
-  }
+  // Spawn-driven boot: no hardcoded ring centre. These are set from the
+  // player's real spawn LB on the first streamed terrain load
+  // (loadTerrainForLandblock below), and updated live by the terrain LOD
+  // reconcile + the live rig position. Readers null-guard (LRU getCurrentLbId,
+  // terrain reconcile `if (playerLb != null)`, the camera fallback).
+  scene3dForBuilders.initialCentreLbKey = null;
+  scene3dForBuilders.playerLbKey = null;
+  // Spawn-driven boot: the eager Holtburg terrain ring + camera retarget +
+  // hello-cube reposition are retired. Terrain streams around the player's real
+  // spawn LB via world_stream.js#onPositionUpdate -> loadTerrainForLandblock,
+  // and tickPvsLoadExpansion fills the horizon as the player roams. The camera
+  // tracks the live player rig once a Spawn lands. `terrainSummary` stays null.
 
   // `envCellsLoaded` is the load-result bundle for the eager Phase
   // 7.3 dungeons (Mite Maze + Holtburg Dungeon), populated by the
@@ -1554,56 +1499,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // observe the existing instance and return it as-is.
     getOrCreateMaterialCache(scene3dForBuilders);
 
-    const runBuildings = async () => {
-      try {
-        // 2026-05-16 bandwidth optimisation — buildings ring decoupled
-        // from the terrain ring but, post-2026-05-16 horizon-fill bump,
-        // shares its radius=6 default (13×13 = 169 LBs; BUILDINGS_RING_RADIUS).
-        // PVS-driven expansion in loop.js's tickPvsLoadExpansion fires
-        // `loadBuildingsForLandblock` (idempotent) for any LB whose cell
-        // becomes visible.
-        const s = await bakeBuildingsRing(
-          scene3dForBuilders,
-          HOLTBURG_X,
-          HOLTBURG_Y,
-          BUILDINGS_RING_RADIUS,
-          wasmExports
-        );
-        // eslint-disable-next-line no-console
-        console.log("[phase7.2] buildings:", s);
-        return s;
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error("[scene3d] bakeBuildingsRing failed:", e);
-        return null;
-      }
-    };
-
-    const runStatics = async () => {
-      if (typeof wasmExports.fetch_model_meshes !== "function") return null;
-      try {
-        // 2026-05-16 bandwidth optimisation — statics ring decoupled
-        // from the terrain/buildings ring. Initial radius=6 default
-        // (13×13 = 169 LBs; STATICS_RING_RADIUS). PVS expansion + the
-        // per-LB hook `loadStaticsForLandblock` are idempotent so
-        // concurrent expansion paths converge cleanly.
-        const s = await bakeStaticsRing(
-          scene3dForBuilders,
-          HOLTBURG_X,
-          HOLTBURG_Y,
-          STATICS_RING_RADIUS,
-          wasmExports
-        );
-        // eslint-disable-next-line no-console
-        console.log("[phase7.2] statics:", s);
-        return s;
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error("[scene3d] bakeStaticsRing failed:", e);
-        return null;
-      }
-    };
-
+    // Spawn-driven boot: the eager Holtburg buildings + statics rings are
+    // retired. Buildings and statics now stream around the player's real spawn
+    // LB via world_stream.js#onPositionUpdate -> loadBuildingsForLandblock /
+    // loadStaticsForLandblock, with tickPvsLoadExpansion filling the horizon.
+    // This also collapses the two static ParticleManagers (the abandoned
+    // scene3dForBuilders bake manager is gone) to the single streaming one.
     const runEnvCells = async () => {
       // Mite Maze (0x01F80000) + Holtburg Dungeon (0x01F60000) — known
       // dungeon EnvCells eager-loaded for capture-script verification.
@@ -1663,14 +1564,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       }
     };
 
-    const [bResult, sResult, eResult] = await Promise.all([
-      runBuildings(),
-      runStatics(),
-      runEnvCells(),
-    ]);
-    buildingsSummary = bResult;
-    staticsSummary = sResult;
-    envCellsLoaded = eResult;
+    // Only the (default-deferred) EnvCell dungeon eager-load runs at boot now;
+    // buildings/statics stream per-LB. buildingsSummary/staticsSummary stay null
+    // (consumed via `?.` downstream).
+    envCellsLoaded = await runEnvCells();
 
     // 2026-05-22 — wire-agent: walk the just-baked buildings + statics +
     // cells groups and attach solid-fill companion meshes for every
@@ -2475,12 +2372,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // 2D drainEvents loop at index.html:5733).
       const p = entityManager.getLocalPlayerWorldPos?.();
       if (p) return p;
-      // Fallback: Holtburg LB centre. AC: (0xA9*192 + 96, 0xB4*192 + 96, ~80).
-      return {
-        x: HOLTBURG_X * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2,
-        y: HOLTBURG_Y * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2,
-        z: 80,
-      };
+      // Pre-spawn fallback (no rig yet): the recorded spawn/centre LB if known,
+      // else a neutral origin. Holtburg is no longer special; the live player
+      // pos (above) wins the instant a Spawn lands.
+      const k = scene3dForBuilders.playerLbKey ?? scene3dForBuilders.initialCentreLbKey;
+      if (typeof k === "number") {
+        return {
+          x: ((k >>> 24) & 0xff) * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2,
+          y: ((k >>> 16) & 0xff) * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2,
+          z: 80,
+        };
+      }
+      return { x: 0, y: 0, z: 80 };
     },
     // Follow-on #2 (2026-05-10) — local player heading in the
     // followYaw convention (CW from +Y north). Used by the
@@ -2782,17 +2685,24 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // let its own explicit error surface).
         if (!self.terrainOpts) {
           try {
-            const centreLbKey =
-              typeof self.initialCentreLbKey === "number"
-                ? self.initialCentreLbKey
-                : ((HOLTBURG_X << 24) | (HOLTBURG_Y << 16)) >>> 0;
-            const centreLbX = (centreLbKey >>> 24) & 0xff;
-            const centreLbY = (centreLbKey >>> 16) & 0xff;
+            // Spawn-driven boot: the retired Holtburg ring no longer stashes
+            // terrainOpts, so this lazy resolve is now the PRIMARY path. Centre
+            // the ring opts on the LB being loaded (the spawn LB on the first
+            // call) and record it as the scene's centre/player LB for terrain
+            // LOD + LRU + the camera fallback — replacing the old hardcoded
+            // Holtburg centre. Set on both facades (this loader's `self` is the
+            // liveScene3d facade; readers also hit `scene3dForBuilders`).
+            if (typeof self.initialCentreLbKey !== "number") {
+              self.initialCentreLbKey = lbKeyForLru;
+              self.playerLbKey = lbKeyForLru;
+              scene3dForBuilders.initialCentreLbKey = lbKeyForLru;
+              scene3dForBuilders.playerLbKey = lbKeyForLru;
+            }
             self.terrainOpts = await resolveTerrainRingOpts(
               self,
               self.wasmExports,
-              centreLbX,
-              centreLbY,
+              lbX,
+              lbY,
               self
             );
           } catch (_) {
@@ -4060,7 +3970,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // above the live PVS working set (3×3 bake ≈9 + PVS expansion ≲25) so growth
     // is bounded WITHOUT evict↔re-bake thrash. The 3×3 always-resident floor in
     // LandblockLRU.tickEviction is the hard thrash guard regardless of this cap.
-    const ringMax = Math.max(HOLTBURG_RING_RADIUS, STATICS_RING_RADIUS, BUILDINGS_RING_RADIUS, PVS_RING_RADIUS);
+    const ringMax = Math.max(STATICS_RING_RADIUS, BUILDINGS_RING_RADIUS, PVS_RING_RADIUS);
     // Goal-1 (2026-06-22): the floor is the ring AREA plus a perimeter of
     // headroom. The old floor was the bare ring area ((2N+1)²), which a
     // one-LB roam transiently exceeds — the shifted ring + the trailing edge

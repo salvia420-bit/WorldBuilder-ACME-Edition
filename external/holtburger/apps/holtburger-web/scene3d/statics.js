@@ -141,8 +141,8 @@ function _fragMat(base, materialCache, surfaceDid, fragPlan) {
 }
 
 const METERS_PER_LANDBLOCK = 192.0;
-const HOLTBURG_X = 0xa9;
-const HOLTBURG_Y = 0xb4;
+// HOLTBURG_X/HOLTBURG_Y retired (spawn-driven-boot): the bake-time shadow gate
+// and the buildHoltburg* wrapper that referenced them are gone.
 
 // F13-4 — `?fullPlacementQuat=on`: orient a singleton/instanced static from
 // the FULL AC quaternion (qw/qx/qy/qz, carried on the placement record from
@@ -207,10 +207,9 @@ function applyPlacementOrientation(outQuat, placement, axisZ) {
 // before the gate first ticks.
 export const SHADOW_RECEIVE_RANGE_M = 80.0;
 export const SHADOW_RECEIVE_RANGE_SQ_M = SHADOW_RECEIVE_RANGE_M * SHADOW_RECEIVE_RANGE_M;
-// Spawn point = Holtburg LB centre. Matches the convention used by
-// scene3d/index.js to seed the initial camera at session start.
-const SPAWN_REF_X = HOLTBURG_X * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
-const SPAWN_REF_Y = HOLTBURG_Y * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
+// SPAWN_REF_X/Y retired (spawn-driven-boot): no hardcoded spawn anchor. The live
+// tickShadowReceiveGate (loop.js) culls receive-shadow by distance from the real
+// player position every frame.
 
 /**
  * FU2 — per-placement receive-shadow predicate. Extends C2's
@@ -232,10 +231,11 @@ function staticsReceiveShadowForPlacement(
   worldX,
   worldY
 ) {
-  if (!staticsReceiveShadow) return false;
-  const dx = worldX - SPAWN_REF_X;
-  const dy = worldY - SPAWN_REF_Y;
-  return dx * dx + dy * dy < SHADOW_RECEIVE_RANGE_SQ_M;
+  // Spawn-driven boot: the bake-time Holtburg distance gate is retired. The live
+  // tickShadowReceiveGate (loop.js) re-tags receive-shadow from the real player
+  // position every frame, so just honour the preset bool here. (worldX/worldY
+  // retained for caller/signature parity.)
+  return !!staticsReceiveShadow;
 }
 
 // F#5 — distance at which the renderer swaps from full to degraded
@@ -616,13 +616,24 @@ async function fetchAndDrainScenery(cellIds, wasmExports) {
   try {
     scenery = await wasmExports.fetch_landblock_scenery(cellIds);
   } catch (e) {
+    // A transient `fetch_landblock_scenery` failure (e.g. a dropped/timed-out
+    // shard fetch over a flaky tunnel, or load spike) must NOT be swallowed:
+    // returning [] here lets the bake finish TREELESS and then unconditionally
+    // mark the LB `staticsBakedLbs` (~line 1737), which permanently strips that
+    // LB's scenery (trees/foliage) for the WHOLE session — no retry until a
+    // re-login, since the idempotency guard then short-circuits every re-bake.
+    // Re-throw instead, so the scenery fetch is load-bearing exactly like the
+    // LandblockInfo fetch above: the LB is left un-baked + retryable,
+    // `_guardedStreamBake` cooldowns it, and the next PVS-expansion tick re-bakes
+    // it — so a transient failure self-heals IN-SESSION. (A genuinely-empty LB
+    // is unaffected: the fetch SUCCEEDS and returns an empty array, draining to
+    // [] via the loop below — this catch only fires on a real fetch throw.)
     // eslint-disable-next-line no-console
     console.warn(
-      "[scene3d.statics] fetch_landblock_scenery failed; " +
-        "skipping baked scenery for this batch:",
+      "[scene3d.statics] fetch_landblock_scenery failed; leaving LB retryable:",
       String(e).slice(0, 200)
     );
-    return [];
+    throw e;
   }
   const out = [];
   for (const p of scenery) {
@@ -2754,9 +2765,9 @@ export async function bakeStaticsRing(
  * commit roll-out. Objective 8 flips the init3D call site to
  * `bakeStaticsRing(..., 6, ...)` directly.
  */
-export async function buildHoltburgStatics(scene3d, wasmExports) {
-  return bakeStaticsRing(scene3d, HOLTBURG_X, HOLTBURG_Y, 1, wasmExports);
-}
+// buildHoltburgStatics() retired (spawn-driven-boot): the Holtburg-centred
+// back-compat wrapper is gone. Statics stream per-LB via loadStaticsForLandblock;
+// bakeStaticsRing remains exported for any explicit-centre caller (tests/captures).
 
 // ── G1 — per-frame billboard tick ────────────────────────────────────
 //

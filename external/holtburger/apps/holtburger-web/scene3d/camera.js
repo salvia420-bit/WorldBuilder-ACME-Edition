@@ -2041,12 +2041,10 @@ export class CameraSwitcher {
         return { x: p.x, y: p.y, z: typeof p.z === "number" ? p.z : 80 };
       }
     } catch (_) {}
-    // Holtburg centre fallback.
-    return {
-      x: 0xa9 * 192 + 96,
-      y: 0xb4 * 192 + 96,
-      z: 80,
-    };
+    // Pre-spawn neutral fallback (Holtburg no longer special). Only reached if
+    // getPlayerWorldPos throws/returns nothing before the first Spawn lands; the
+    // live player rig wins immediately after.
+    return { x: 0, y: 0, z: 80 };
   }
 
   // ---- teardown -----------------------------------------------------

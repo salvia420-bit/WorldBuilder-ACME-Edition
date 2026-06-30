@@ -67,8 +67,8 @@ import { surfacePixelsFetcher } from "./bake_worker_client.js";
 import { applyRestPoseFrame } from "./setup_rig.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
-const HOLTBURG_X = 0xa9;
-const HOLTBURG_Y = 0xb4;
+// HOLTBURG_X/HOLTBURG_Y retired (spawn-driven-boot): the bake-time shadow gate
+// and the buildHoltburg* wrapper that referenced them are gone.
 
 // 2026-06-15 — building-floor-vs-terrain z-fight fix. SetupModel buildings
 // (layer 0) sit ON the terrain (layer 0); their floor geometry is coplanar with
@@ -142,8 +142,9 @@ const BUILDINGS_RING_BUILD_BUDGET_MS = 6;
 // 6m/s × ~200ms tick = 1.2m; ample slack).
 export const SHADOW_RECEIVE_RANGE_M = 80.0;
 export const SHADOW_RECEIVE_RANGE_SQ_M = SHADOW_RECEIVE_RANGE_M * SHADOW_RECEIVE_RANGE_M;
-const SPAWN_REF_X = HOLTBURG_X * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
-const SPAWN_REF_Y = HOLTBURG_Y * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
+// SPAWN_REF_X/Y retired (spawn-driven-boot): no hardcoded spawn anchor. The live
+// tickShadowReceiveGate (loop.js) culls receive-shadow by distance from the real
+// player position every frame.
 
 /**
  * FU2 — per-placement receive-shadow predicate. Extends C3's
@@ -166,10 +167,11 @@ function buildingsReceiveShadowForPlacement(
   worldX,
   worldY
 ) {
-  if (!buildingsReceiveShadow) return false;
-  const dx = worldX - SPAWN_REF_X;
-  const dy = worldY - SPAWN_REF_Y;
-  return dx * dx + dy * dy < SHADOW_RECEIVE_RANGE_SQ_M;
+  // Spawn-driven boot: the bake-time Holtburg distance gate is retired. The live
+  // tickShadowReceiveGate (loop.js) re-tags receive-shadow from the real player
+  // position every frame, so just honour the preset bool here. (worldX/worldY
+  // retained for caller/signature parity.)
+  return !!buildingsReceiveShadow;
 }
 
 // ---------------------------------------------------------------------
@@ -622,10 +624,16 @@ export async function bakeBuildingsForLandblock(
       "bakeBuildingsForLandblock: wasmExports missing fetch_landblock_objects / fetchBuildingPlacement / fetch_surfaces_pixels"
     );
   }
+  // Spawn-driven boot: the eager Holtburg boot ring no longer stashes
+  // scene3d.buildingsOpts, so the per-LB streaming path (loadBuildingsForLandblock)
+  // can arrive here with no opts. Lazily resolve + stash them on the first streamed
+  // LB — mirrors the terrain loader's self-heal in index.js#loadTerrainForLandblock.
+  // Idempotent: resolveBuildingsOpts reuses the already-installed MaterialCache +
+  // shared bake cache. (Without this, the bake threw and _guardedStreamBake
+  // swallowed it, leaving buildingsGroup permanently empty.)
   if (!opts || !(opts.bakeCache instanceof Map) || !opts.materialCache) {
-    throw new Error(
-      "bakeBuildingsForLandblock: opts missing bakeCache / materialCache — call resolveBuildingsOpts first"
-    );
+    opts = resolveBuildingsOpts(scene3d);
+    scene3d.buildingsOpts = opts;
   }
 
   if (!(scene3d.buildingsBakedLbs instanceof Set)) {
@@ -1276,9 +1284,10 @@ export async function bakeBuildingsRing(
  * `fetchBuildingPlacement`, `fetch_surfaces_pixels`. If any are
  * missing the function throws.
  */
-export async function buildHoltburgBuildings(scene3d, wasmExports) {
-  return bakeBuildingsRing(scene3d, HOLTBURG_X, HOLTBURG_Y, 1, wasmExports);
-}
+// buildHoltburgBuildings() retired (spawn-driven-boot): the Holtburg-centred
+// back-compat wrapper is gone. Buildings stream per-LB via
+// loadBuildingsForLandblock; bakeBuildingsRing remains exported for any
+// explicit-centre caller (tests/captures).
 
 // TODO(C5): no unload path exists in buildings.js as of 2026-05-18.
 //

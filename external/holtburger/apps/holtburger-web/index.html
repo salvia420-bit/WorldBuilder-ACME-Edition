@@ -2749,19 +2749,9 @@
       // needed. The MANIFEST_URL constant lives in the init block
       // higher in this file.
 
-      // Holtburg = (0xA9, 0xB4). Row-major NW→SE neighbourhood.
-      const HOLTBURG_X = 0xa9;
-      const HOLTBURG_Y = 0xb4;
-      const NEIGHBOURHOOD = [];
-      for (let dy = 1; dy >= -1; dy -= 1) {
-        for (let dx = -1; dx <= 1; dx += 1) {
-          NEIGHBOURHOOD.push({
-            x: HOLTBURG_X + dx,
-            y: HOLTBURG_Y + dy,
-            id: ((HOLTBURG_X + dx) << 24) | ((HOLTBURG_Y + dy) << 16) | 0xffff,
-          });
-        }
-      }
+      // The Holtburg 3×3 NEIGHBOURHOOD const + its 9-LB warmup fetch are retired
+      // (spawn-driven-boot): boot no longer references any landblock coordinate.
+      // The 3D world streams around the player's real spawn LB.
 
       // ----- rendering primitives ----------------------------------
       // (Defined ahead of the render trigger below so the module-level
@@ -4020,55 +4010,13 @@
 
       async function renderHoltburg() {
        try {
-        renderStatus.textContent = "Fetching landblock heightmaps (9 cells)…";
-        const ids = new Uint32Array(NEIGHBOURHOOD.map((n) => n.id >>> 0));
-        const meshes = await fetch_landblock_heightmaps(ids);
-        if (meshes.length !== NEIGHBOURHOOD.length) {
-          throw new Error(
-            `expected ${NEIGHBOURHOOD.length} meshes, got ${meshes.length}`
-          );
-        }
-
-        // Step 4: objects use the XXYYFFFE LandblockInfo records,
-        // not XXYYFFFF (which is the terrain CellLandblock). Same
-        // 3×3 neighbourhood, different cell suffix.
-        // 2026-05-21: skip the PIXI sprite atlas load when ?renderer=3d
-        // — it's 2D-only scaffolding (the explicit free()-then-discard
-        // pattern below at L~5613 already acknowledges 3D mode never
-        // consumes it). Removes one side of the Promise.all without
-        // touching the wasm-side fetch_landblock_objects warmup.
-        const _useRenderer3dFast =
-          new URLSearchParams(window.location.search).get("renderer") !== "2d";
-        renderStatus.textContent = _useRenderer3dFast
-          ? "Fetching object placements…"
-          : "Fetching object placements + sprite atlas…";
-        const objectIds = new Uint32Array(
-          NEIGHBOURHOOD.map((n) => ((n.x << 24) | (n.y << 16) | 0xfffe) >>> 0)
-        );
-        const [objects, spriteMap] = await Promise.all([
-          fetch_landblock_objects(objectIds),
-          _useRenderer3dFast ? Promise.resolve(new Map()) : loadSpriteAtlas(),
-        ]);
-
-        // Step 4.5: per-model real colours from each model's GfxObj/
-        // SetupModel → Surface chain. Dedupe model ids first; the wasm
-        // boundary cost is bounded by unique-id count, not placement
-        // count. ARGB result is 0 for "could not resolve" — JS treats
-        // those as misses and falls back to the 2-bucket category tint.
-        renderStatus.textContent = "Resolving per-model real colours…";
-        const uniqueModels = [...new Set(objects.map((o) => o.modelId))];
-        const colours = await fetch_object_colours(new Uint32Array(uniqueModels));
-        const colourMap = new Map();
-        for (let i = 0; i < uniqueModels.length; i += 1) {
-          if (colours[i] !== 0) colourMap.set(uniqueModels[i], colours[i]);
-        }
-
-        // Phase 7.0 — `?renderer=3d` URL flag gates the three.js
-        // hello-world path. The 2D PIXI path (the `else` block below)
-        // stays default and unchanged; phases 7.1–7.7 grow the 3D
-        // path until parity is reached, then 3D becomes default.
-        // Three.js is dynamically imported so 2D-only users never
-        // pay the bundle cost.
+        // Spawn-driven boot: the 9-LB Holtburg heightmap/object/colour warmup that
+        // used to run here only ever fed the (now-retired) 2D PIXI renderer — the
+        // 3D path fetched it then immediately free()'d it (pure waste). It is gone:
+        // the 3D world streams its terrain/buildings/statics from the player's real
+        // spawn LB (world_stream.js#onPositionUpdate), so boot no longer touches any
+        // Holtburg coordinates. The `if (useRenderer3d)` gate is kept so the retired
+        // ?renderer=2d path still degrades cleanly to blank (skips init3D).
         const useRenderer3d =
           new URLSearchParams(window.location.search).get("renderer") !== "2d";
         if (useRenderer3d) {
@@ -4216,12 +4164,9 @@
             // `skippedNoRegion++`.
             fetchRegion,
           }, window.__preInit3DHandle);
-          // Free the meshes/objects views the 3D path doesn't consume
-          // yet (Phase 7.1 will read them via wasmExports directly).
-          // The HUD panels (vitals, inventory, chat) are DOM and stay
-          // wired by the login/spawn flow regardless of renderer.
-          for (const m of meshes) m.free();
-          for (const o of objects) o.free();
+          // (The 9-LB Holtburg warmup fetch + its free() are retired — see the
+          // spawn-driven-boot note at the top of renderHoltburg. The HUD panels
+          // stay DOM-wired by the login/spawn flow regardless of renderer.)
           // Phase C — 3D click-to-entity picking (melee attack / useObject).
           // Bug 2/3 fix (2026-05-29): MOVED to renderHoltburg's `finally`
           // block (end of this fn) so it survives a terrain/init3D throw

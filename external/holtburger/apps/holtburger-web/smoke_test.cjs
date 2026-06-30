@@ -3338,17 +3338,17 @@ try {
             /TERRAIN_VERTEX_GLSL\s*=/.test(terrainSrc) &&
             /TERRAIN_FRAGMENT_GLSL\s*=/.test(terrainSrc);
         const hasBuildExport =
-            /export\s+(async\s+)?function\s+buildHoltburgTerrain/.test(
+            /export\s+(async\s+)?function\s+bakeTerrainRing/.test(
                 terrainSrc
             );
         check(
-            "Phase 7.1: terrain.js ports bilinear shader + exports buildHoltburgTerrain",
+            "Phase 7.1: terrain.js ports bilinear shader + exports bakeTerrainRing",
             present && hasShaderPort && hasBuildExport,
             `present=${present}, shader=${hasShaderPort}, export=${hasBuildExport}, bytes=${terrainSrc.length}`
         );
     } catch (e) {
         check(
-            "Phase 7.1: terrain.js ports bilinear shader + exports buildHoltburgTerrain",
+            "Phase 7.1: terrain.js ports bilinear shader + exports bakeTerrainRing",
             false,
             String(e?.message ?? e).slice(0, 160)
         );
@@ -3447,7 +3447,7 @@ try {
             "utf8"
         );
         const hasBuildExport =
-            /export\s+(async\s+)?function\s+buildHoltburgBuildings/.test(
+            /export\s+(async\s+)?function\s+bakeBuildingsRing/.test(
                 buildingsSrc
             );
         const hasMaterialCache = /export\s+class\s+MaterialCache/.test(
@@ -4126,12 +4126,8 @@ try {
             /export\s+async\s+function\s+bakeStaticsForLandblock\s*\(/.test(stSrc);
         const hasRingDriver =
             /export\s+async\s+function\s+bakeStaticsRing\s*\(/.test(stSrc);
-        // `buildHoltburgStatics` must remain exported AND delegate to
-        // `bakeStaticsRing(..., 1, ...)` at radius=1 to keep the existing
-        // init3D radius=1 callers (Phase 7.2 + F#5+6 captures) green.
-        const hasBackCompat =
-            /export\s+async\s+function\s+buildHoltburgStatics\s*\(/.test(stSrc) &&
-            /bakeStaticsRing\s*\([^,]+,\s*[^,]+,\s*[^,]+,\s*1\s*,/.test(stSrc);
+        // buildHoltburgStatics back-compat wrapper retired (spawn-driven-boot):
+        // statics stream per-LB; bakeStaticsRing stays for explicit-centre callers.
         // The per-LB-vs-ring divergence comment must live in the file —
         // load-bearing because per-LB lazy adds use plain Mesh while
         // ring bake uses InstancedMesh; future agents reading this need
@@ -4139,14 +4135,14 @@ try {
         const hasDivergenceDoc = /per-LB.*ring.*diverge|diverge.*per-LB.*ring/i
             .test(stSrc);
         check(
-            "Obj-4(a): statics.js exports bakeStaticsForLandblock + bakeStaticsRing + radius=1 back-compat wrapper",
-            hasPerLbBaker && hasRingDriver && hasBackCompat && hasDivergenceDoc,
+            "Obj-4(a): statics.js exports bakeStaticsForLandblock + bakeStaticsRing",
+            hasPerLbBaker && hasRingDriver && hasDivergenceDoc,
             `perLb=${hasPerLbBaker}, ring=${hasRingDriver}, ` +
-                `backCompat=${hasBackCompat}, divergenceDoc=${hasDivergenceDoc}`
+                `divergenceDoc=${hasDivergenceDoc}`
         );
     } catch (e) {
         check(
-            "Obj-4(a): statics.js exports bakeStaticsForLandblock + bakeStaticsRing + radius=1 back-compat wrapper",
+            "Obj-4(a): statics.js exports bakeStaticsForLandblock + bakeStaticsRing",
             false,
             String(e).slice(0, 120)
         );

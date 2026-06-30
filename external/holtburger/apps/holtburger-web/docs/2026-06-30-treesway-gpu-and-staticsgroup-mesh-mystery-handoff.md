@@ -1,10 +1,37 @@
-# Handoff — GPU tree-sway shipped · cross-LB atlas is FINE (feedbug was a misread) · ~12k invisible staticsGroup meshes UNEXPLAINED — 2026-06-30
+# Handoff — GPU tree-sway shipped + eye-test PASSED · cross-LB atlas is FINE (feedbug was a misread) · ~12k invisible staticsGroup meshes RESOLVED (RP6-culled bake-manager particles, NOT a leak) — 2026-06-30
 
 ## TL;DR
 - **SHIPPED + pushed (`21c3ff74`, origin/master):** default-on **GPU instanced tree-sway** (`?treeWindGpu`, `deformation.windSwayGpu`, MECH-B vertex bend). Verified animating on the real GTX 1070 at ultra. No fps cliff (rides the frozen InstancedMesh frag-material patch; no de-instancing).
 - **CORRECTION to the 2026-06-28 cross-LB-atlas "feedbug" handoff: there is NO atlas feedbug.** The atlas works; statics are fully batched. The "~6,136 unbatched singletons" was a **measurement artifact** — the count swept up thousands of unnamed non-static meshes.
 - **OPEN MYSTERY (the real remaining issue):** `staticsGroup` accumulates **~9.7k–18k invisible, unnamed, no-`landblockId` `MeshBasic` meshes** during the boot-ring bake / LB streaming. They are **invisible → zero draw-call / zero fps cost**, but bloat the scene graph + heap. **They are NOT orphaned particle meshes** (proven below). True source still unidentified.
 - **A particle-teardown fix was attempted and REVERTED** — verified ineffective on the 1070.
+
+---
+
+## ✅ RESOLVED (2026-06-30, evening — live diagnosis on the real GTX 1070)
+**The "~12k invisible meshes" are NOT a leak and NOT unexplained. They are the RP6-CULLED active particle meshes of the *bake-side* static `ParticleManager`, owned and accounted for. §3's "NOT particles" conclusion was a measurement artifact from probing the WRONG facade.**
+
+### How it was nailed (off-screen real-GPU chrome on the 1070, `account=tailnet1`, weather off, ultra)
+1. **Lit boot-time `Object3D.prototype.add` source-trace** (wrapped via the staticsGroup prototype before the bake): **11,591 orphan adds, 100% from ONE stack** —
+   `O3D.add ← ParticleEmitter.emitParticle (particle_emitter.js:305) ← updateParticles (:399) ← ParticleManager.tick (particle_manager.js:938) ← _spLoop (statics.js:3814)`, parent group = `"statics"`. So the wire-mode trace §3 *dismissed* was correct all along; the orphans ARE static particle meshes (`MeshBasic`, transparent, 6-vert quad, `__disposable` slot-clone, `visible:false`).
+2. **The blind spot:** a BFS over `window.liveScene3d` finds **THREE** managers, and the orphans are owned by the one nobody was probing:
+
+   | manager path | emitters | culled | storage meshes |
+   |---|---|---|---|
+   | `liveScene3d._staticParticleManager` (what §3 + earlier probes saw) | 24 | 21 | 334 |
+   | `liveScene3d.entityManager._worldParticleManager` | 0 | 0 | 0 |
+   | **`liveScene3d.cameraSwitcher.scene3d._staticParticleManager`** (the real bake manager) | **5,143** | **5,128** | **81,819** |
+
+   `cameraSwitcher.scene3d` **IS** `scene3dForBuilders` — "a DIFFERENT object than the `window.liveScene3d` facade" (the exact footgun the statics.js:3786 comment warns about). Probing `window.liveScene3d._staticParticleManager` (24 emitters / 334 pool meshes) is why §3 saw "408 ≠ 11,850" and concluded "owned by neither manager."
+3. **Membership test across ALL THREE managers' `parts[]`+`partStorage[]`:** of 20,264 invisible orphans, **`orphan_TRULY_unreferenced = 0`** — every single one is a live emitter's mesh. 5,128 / 5,143 bake emitters are RP6-culled (the freshly-baked Holtburg ring is mostly off-screen); the cull's "pure visibility flip — no reparent" (particle_manager.js:856-874) leaves their emitted meshes `visible:false` but parented to the shared `staticsGroup`. ⇒ thousands of invisible-but-owned meshes, **zero draw cost**, exactly as observed. Grows with bake/streaming because more ring LBs → more scripted-static emitters.
+
+### What this means
+- **No correctness leak. Do NOT re-attempt the destroyParticleEmitter/partStorage-removal fix** — it was correctly reverted (nothing is leaking).
+- **Real cost = heap/scene-graph, not draw calls:** ~82k pre-allocated `THREE.Mesh` slot meshes (5,143 emitters × ~16 pool) + ~20k emitted-but-hidden, all in `staticsGroup`. If this bloat matters, the lever is **eager bake-ring emitter allocation**, not teardown: lazily create static emitters for near/on-screen LBs only, shrink pools while culled, or reparent culled emitters' meshes out of the graph (trading the reparent churn RP6 deliberately avoids). Tracking-only; not urgent.
+- **Latent smell:** TWO static `ParticleManager`s tick the same `staticsGroup` (the 24-emitter `liveScene3d` one + the 5,143-emitter `scene3dForBuilders` one). `_ensureStaticParticleManager` keys idempotency on the per-facade `scene3d._staticParticleManager`, so each facade that reaches it spins its own manager. Harmless today (both target the same group) but worth collapsing to one.
+
+### Tree-sway eye-test — PASSED (the §1 "STILL OWED" item)
+Real GTX 1070, `quality=ultra`, weather off, `treeWindStrength=1.5`: 40 materials carry `deformation.windSwayGpu`; boots clean default-on. Frame-diff over 2.5 s isolates motion to the **treeline band only** (1.02% changed) — buildings/terrain/avatar static (0.00–0.03%); the amplified diff heatmap traces individual tree silhouettes swaying. Natural amplitude, no thrash, no slivers, no fps regression. **Amplitude/freq signed off at defaults × 1.5.** (Diagnostic artifacts: `scratchpad/{addtrace,probe,probe2,probe_all,drive3}.json`, `dry_*.png`, `sway_diff_0v5.png`.)
 
 ---
 
