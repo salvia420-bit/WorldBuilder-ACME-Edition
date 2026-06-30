@@ -198,6 +198,22 @@ fn parse_building_overlap_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "buildingOverlap=off")
 }
 
+/// 0x02 multi-part building per-part physics-BSP staging (companion to the
+/// 0x01 building BSP). DEFAULT-ON, off-escape: returns `true` UNLESS
+/// `buildingBsp02=off` is present. CAVEAT (not yet eye-tested): a multi-part
+/// SetupModel may carry a swinging DOOR LEAF as a part, and a static BSP can't
+/// open — if a building blocks an OPEN doorway, `?buildingBsp02=off` isolates
+/// the 0x02 arm without disabling the rest of building/static collision (use
+/// `?buildingOverlap=off` for that). Remaining work before this is fully safe:
+/// honor door-open state on the BSP path (the AABB path's
+/// `set_door_aabb_active` twin). Consumption is also gated by the default-on
+/// `buildingOverlap` flag (the integrator push-out + outdoor overlap bake).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_building_bsp_02_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "buildingBsp02=off")
+}
+
 /// A9-Stage1 (2026-06-12, unification survey): parse `?placementId=on`
 /// (or `&placementId=on`). Same shape as `parse_unified_tick_flag`.
 /// When on, the static placement-frame resolution follows RETAIL order
@@ -12129,6 +12145,11 @@ async fn populate_building_aabbs_for_landblock_impl(
     })?;
 
     let mut total = 0u32;
+    // 0x02 multi-part building per-part BSP — DEFAULT-ON, `?buildingBsp02=off`
+    // to disable (door-leaf caveat — see `parse_building_bsp_02_flag`). Read
+    // once; the 0x01 path stages unconditionally (the doorway gap is baked into
+    // the single GfxObj mesh, so there is no door-leaf part to wrongly block).
+    let stage_bsp_02 = parse_building_bsp_02_flag(&js_location_search());
 
     for (sequence, build_info) in info.buildings.iter().enumerate() {
         let model_id = build_info.model_id;
@@ -12224,6 +12245,52 @@ async fn populate_building_aabbs_for_landblock_impl(
                                         ));
                                     }
                                 }
+                                // B4 Tier-2 building collision (2026-06-30): stage
+                                // this single-GfxObj building's precise physics BSP
+                                // so the integrator's `resolve_static_bsp_pushout`
+                                // (and the outdoor overlap bake) push the player out
+                                // of the building's WALLS, not just the coarse
+                                // per-part AABB. Mirrors the loose-static 0x01 staging
+                                // in `populate_statics_aabbs_for_landblock_impl`; the
+                                // only consumer gate is the default-on `buildingOverlap`
+                                // flag, so `?buildingOverlap=off` disables this too.
+                                // Doorway-safe: a single-GfxObj building carries its
+                                // doorway opening in its own physics mesh (the door
+                                // leaf is a separate placed object), so there is no
+                                // open-door part to wrongly block. (0x02 multi-part
+                                // buildings — with door-leaf skip — are the follow-on.)
+                                if let Some(tree) = &gfx.physics_bsp {
+                                    if !gfx.physics_polygons.is_empty() {
+                                        let polys =
+                                            holtburger_dat::physics::resolve_cell_physics_polygons(
+                                                &gfx.physics_polygons,
+                                                |vid| {
+                                                    gfx.vertex_array.vertices.get(&vid).map(|sw| {
+                                                        holtburger_common::Vector3::new(
+                                                            sw.origin.x,
+                                                            sw.origin.y,
+                                                            sw.origin.z,
+                                                        )
+                                                    })
+                                                },
+                                            );
+                                        if !polys.is_empty() {
+                                            enqueue_outdoor_overlap_bake(landblock_high);
+                                            STATIC_BSP_PENDING.with(|pile| {
+                                                pile.borrow_mut().push((
+                                                    landblock_high,
+                                                    holtburger_world::CellPhysicsBsp {
+                                                        tree: tree.clone(),
+                                                        polys,
+                                                        origin: placement_origin,
+                                                        orientation: placement_orientation,
+                                                        scale: 1.0,
+                                                    },
+                                                ));
+                                            });
+                                        }
+                                    }
+                                }
                                 vec![(aabb, tris)]
                             }
                             Err(_) => continue,
@@ -12268,6 +12335,42 @@ async fn populate_building_aabbs_for_landblock_impl(
                 }
                 _ => continue,
             };
+
+        // 0x02 multi-part building per-part physics BSP (companion to the 0x01
+        // inline staging). DEFAULT-ON; `?buildingBsp02=off` disables (see
+        // `parse_building_bsp_02_flag`): a multi-part SetupModel may include a
+        // swinging DOOR LEAF as a part and a static BSP can't open, so until
+        // the BSP path honors door-open state, staging all parts risks blocking
+        // an open doorway. Composes world = placement ∘ part exactly like the
+        // loose-static 0x02 staging in `populate_statics_aabbs_for_landblock_impl`.
+        if stage_bsp_02 && (model_id >> 24) as u8 == 0x02 {
+            if let Some(parts) = walk_setup_parts_with_geom_and_bsp(source.as_ref(), model_id) {
+                for (_part_aabb, part_bsp) in parts.into_iter() {
+                    if let Some(b) = part_bsp {
+                        let pr = quat_rotate(placement_orientation, b.offset);
+                        let world_origin = holtburger_common::Vector3 {
+                            x: placement_origin.x + pr.x,
+                            y: placement_origin.y + pr.y,
+                            z: placement_origin.z + pr.z,
+                        };
+                        let world_orientation = placement_orientation.multiply(b.rot);
+                        enqueue_outdoor_overlap_bake(landblock_high);
+                        STATIC_BSP_PENDING.with(|pile| {
+                            pile.borrow_mut().push((
+                                landblock_high,
+                                holtburger_world::CellPhysicsBsp {
+                                    tree: b.tree,
+                                    polys: b.polys,
+                                    origin: world_origin,
+                                    orientation: world_orientation,
+                                    scale: 1.0,
+                                },
+                            ));
+                        });
+                    }
+                }
+            }
+        }
 
         for (part_index, (part_local, part_tris)) in part_data.iter().enumerate() {
             if part_local.is_empty() {
