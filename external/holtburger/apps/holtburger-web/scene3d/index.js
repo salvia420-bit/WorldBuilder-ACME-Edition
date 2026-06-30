@@ -4004,7 +4004,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // rather than appends. Fail-soft (`?.`) if the export is absent on a
       // stale wasm bundle.
       onEvictLandblock: (lbKey) => {
-        try { wasmExports.enqueueClearLandblockCollision?.(lbKey >>> 0); } catch (_) {}
+        const lb = lbKey >>> 0;
+        try { wasmExports.enqueueClearLandblockCollision?.(lb); } catch (_) {}
+        // Phase 6 re-entry fix (2026-06-30): the wasm purge above drops this
+        // LB's collision and the LRU clears its own 3D bake-dedup, but the
+        // index.html-side COLLISION/cell populate-dedup sets live in another
+        // module and were add-only — so a revisit would SKIP re-baking
+        // collision (walk-through walls + lost cell collision). Notify
+        // index.html to clear them so the next entry re-populates.
+        try { window.__onLandblockEvicted?.(lb); } catch (_) {}
       },
       // Resolve the player's current LB from the integrator-driven rig
       // position. `applyLocalPlayerPoseFromIntegrator` writes the rig

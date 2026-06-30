@@ -3261,6 +3261,25 @@
       // (capture probe walks the map). Phase D's culling toggles
       // `.visible` per cell, not membership.
       const cellContainerRegistry = new Map();
+      // Phase 6 re-entry fix (2026-06-30): scene3d's LandblockLRU evicts an LB
+      // (purging the wasm collision via enqueueClearLandblockCollision, removing
+      // the 3D meshes, and clearing its OWN bake-dedup in landblock_lru.js). But
+      // the COLLISION/cell populate-dedup sets live in THIS module, so the LRU
+      // can't reach them — and they were add-only. Without this, an
+      // evicted-then-revisited LB stays "populated" forever → the re-entry
+      // triggers (ensureBuildingAabbsAroundLandblock / ensureCellContainersForLandblock)
+      // SKIP it → the player walks through walls + loses cell collision on
+      // revisit. scene3d's onEvictLandblock invokes this hook. Terrain heights
+      // are NOT purged on evict and the 3D bake-dedup is cleared by the LRU
+      // itself, so we touch only the collision + cell sets here. The wasm purge
+      // makes the re-populate REPLACE rather than append.
+      window.__onLandblockEvicted = (lbId) => {
+        const lb = (lbId >>> 0) & 0xffff0000;
+        buildingAabbsPopulatedLbs.delete(lb);
+        buildingAabbsPopulateInFlight.delete(lb);
+        cellContainersPopulatedLbs.delete(lb);
+        cellContainersPopulateInFlight.delete(lb);
+      };
       async function ensureCellContainersForLandblock(centreLb) {
         // Phase 6 step C: lazy-fetch + bake the EnvCells in a single
         // landblock on player entry. Mirrors
@@ -3373,12 +3392,20 @@
           }
         }
         if (targets.length === 0) return;
-        // Run sequentially rather than in parallel — each export
-        // pulls a LandblockInfo + N Setup records through the
-        // manifest source, and a 9-LB barrage on a fresh region can
-        // saturate the catalog HTTP path. Heartbeats remain on the
-        // rAF cadence regardless.
-        for (const lbId of targets) {
+        // Bound-parallel the ring (2026-06-30; was strictly serial). Each
+        // export pulls a LandblockInfo + N Setup records through the manifest
+        // source; a full 9-wide barrage can saturate the catalog HTTP path, but
+        // strictly one-at-a-time made collision lag far behind a sprint into a
+        // fresh region (the walk-through window). Cap concurrency at 3 and do
+        // the player's CURRENT LB first so the cell you're standing in gets
+        // collision before its neighbours. Building+statics stay sequential
+        // WITHIN each LB (a building failure must not disturb static
+        // bookkeeping). Heartbeats remain on the rAF cadence regardless.
+        const CENTRE_LB = (centreLb >>> 0) & 0xffff0000;
+        targets.sort((a, b) => (a === CENTRE_LB ? -1 : b === CENTRE_LB ? 1 : 0));
+        const POPULATE_CONC = 3;
+        let nextIdx = 0;
+        const populateOne = async (lbId) => {
           try {
             const count = await populateBuildingAabbsForLandblock(lbId);
             buildingAabbsPopulatedLbs.add(lbId);
@@ -3408,7 +3435,15 @@
           } finally {
             buildingAabbsPopulateInFlight.delete(lbId);
           }
-        }
+        };
+        const worker = async () => {
+          while (nextIdx < targets.length) {
+            await populateOne(targets[nextIdx++]);
+          }
+        };
+        await Promise.all(
+          Array.from({ length: Math.min(POPULATE_CONC, targets.length) }, worker)
+        );
       }
       // 2026-05-09 follow-up: render building meshes + non-building
       // object sprites for an arbitrary landblock when the local
@@ -6514,6 +6549,33 @@
                 teleportBtn.disabled = false;
                 if (window.__bootState !== "in-world") {
                   setBootState("in-world", `guid=0x${playerGuid}`);
+                }
+                // Spawn-kick (2026-06-30): the ring populate
+                // (ensure*AroundLandblock) is otherwise driven ONLY by the first
+                // inbound kind=0 position update in handlePositionUpdate. That
+                // was assumed to always arrive promptly after spawn, but a
+                // player who spawns/respawns and stands still gets NO collision
+                // or statics beyond the boot pack, and whether the spawn ring
+                // loads at all is racy (it hinges on an early UpdatePosition
+                // landing). EnteredWorld (kind=7) fires on login + death-
+                // respawn, so kick the current landblock's ring here for a
+                // deterministic spawn load. Idempotent: each ensure* is gated by
+                // its own populated/in-flight Set, so this no-ops for an
+                // already-populated LB and composes with the position-update
+                // trigger (which still covers in-world movement + teleports).
+                try {
+                  const spawnPose = handle.getLocalPlayerPose?.();
+                  const spawnLb = (((spawnPose?.landblockId ?? 0) >>> 16) << 16) >>> 0;
+                  if (spawnLb !== 0) {
+                    ensureTerrainAroundLandblock(spawnLb);
+                    ensureBuildingAabbsAroundLandblock(spawnLb);
+                    ensureCellContainersForLandblock(spawnLb);
+                    console.log(
+                      `[spawn-kick] kicked ring populate for spawn landblock 0x${spawnLb.toString(16).padStart(8, "0")}`
+                    );
+                  }
+                } catch (e) {
+                  console.warn("[spawn-kick] initial populate failed:", e);
                 }
                 // Workstream Sky-B (parametric skybox, 2026-05-11):
                 // populate the SkyDesc shadow from Region 0x13000000
