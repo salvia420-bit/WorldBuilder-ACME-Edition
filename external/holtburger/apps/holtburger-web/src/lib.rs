@@ -4695,7 +4695,7 @@ fn lookup_surface_color<S: holtburger_dat::ResourceSource + ?Sized>(
     // mirrors `fetch_terrain_textures` from step 3.5 (which already
     // got this chain right): SurfaceTexture.highest_res() is the
     // top-mip RenderSurface ID we feed to `Texture::unpack`.
-    let (surf_tex_id, _pal_id_in_surface) = surface.textured()?;
+    let (surf_tex_id, surf_pal_id) = surface.textured()?;
     let surf_tex_bytes = source
         .get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id))
         .ok()?;
@@ -4705,12 +4705,11 @@ fn lookup_surface_color<S: holtburger_dat::ResourceSource + ?Sized>(
         .get_file_by_key(ResourceKey::new("eor/portal", render_surface_id))
         .ok()?;
     let tex = Texture::unpack(&tex_bytes).ok()?;
-    // Use the texture's `default_palette_id` for the palette fetch,
-    // not the Surface's `orig_palette_id` — most retail textures embed
-    // the right palette ref in the Texture record itself, while the
-    // Surface's `orig_palette_id` is often 0.
+    // Prefer the Surface's `orig_palette_id` recolour when non-zero (retail
+    // CSurface::SetTextureAndPalette base1pal); fall back to the texture's
+    // `default_palette_id` (the common case — orig_palette_id is usually 0).
     let rgba = tex
-        .to_rgba8(|pal_id| {
+        .to_rgba8_with_palette_override(surf_pal_id, |pal_id| {
             let pal_bytes = source
                 .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
                 .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
@@ -7787,7 +7786,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             has_palette: false,
         };
     }
-    let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
+    let Some((surf_tex_id, surf_pal_id)) = surface.textured() else { return empty; };
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
     let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { return empty; };
     let Some(rs_id) = surf_tex.highest_res() else { return empty; };
@@ -7801,8 +7800,11 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     // 0x0 → empty DataTexture → white default material (the "white door / chest
     // / furniture" class). 2026-05-30.
     let (tex_w, tex_h) = tex.actual_dimensions();
+    // Apply the Surface's `orig_palette_id` recolour over the texture's
+    // `default_palette_id` (retail CSurface::SetTextureAndPalette base1pal);
+    // no-op when the override is 0 (the common case).
     let rgba = tex
-        .to_rgba8(|pal_id| {
+        .to_rgba8_with_palette_override(surf_pal_id, |pal_id| {
             let pb = source
                 .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
                 .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
@@ -7851,7 +7853,47 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 has_palette: tex.format().needs_palette(),
             }
         }
-        Err(_) => empty,
+        Err(e) => {
+            // Diagnostic (2026-06-30): a palettized (P8/Index16) surface whose
+            // palette can't be fetched/decoded was silently swallowed here and
+            // fell back to the grey material in JS — the invisible "patchy
+            // black buildings" symptom. The error `e` carries the failing
+            // palette DID + reason (PaletteFetch / MissingPaletteId /
+            // PaletteIndexOutOfRange). Name the surface + texture so the
+            // culprit self-identifies in the console instead of vanishing.
+            #[cfg(target_arch = "wasm32")]
+            console_warn_str(&format!(
+                "[surface-decode] surface 0x{surface_did:08X} tex 0x{rs_id:08X} fmt {:?}: \
+                 decode FAILED → magenta fallback: {e}",
+                tex.format()
+            ));
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = &e;
+            // Visible fallback: a palette-indexed surface that failed to decode
+            // IS the "patchy black building" bug. Render it 1×1 MAGENTA so it is
+            // obvious in-world (and named in the console above) instead of
+            // silently grey/black. Non-palette decode failures keep the neutral
+            // empty fallback.
+            if tex.format().needs_palette() {
+                SurfacePixels {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![255, 0, 255, 255],
+                    surface_type,
+                    category: generic_cat,
+                    normal_pixels: Vec::new(),
+                    height_pixels: Vec::new(),
+                    roughness_override: f32::NAN,
+                    normal_scale_override: f32::NAN,
+                    translucency: surface.translucency,
+                    luminosity: surface.luminosity,
+                    diffuse: surface.diffuse,
+                    has_palette: true,
+                }
+            } else {
+                empty
+            }
+        }
     }
 }
 
@@ -9408,7 +9450,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             has_palette: false,
         };
     }
-    let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
+    let Some((surf_tex_id, surf_pal_id)) = surface.textured() else { return empty; };
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
     let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { return empty; };
     let Some(rs_id) = surf_tex.highest_res() else { return empty; };
@@ -9423,7 +9465,15 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     // the texture's intrinsic palette id but we may override with
     // the entity's base + apply overlays.
     let rgba = tex.to_rgba8(|tex_palette_id| {
-        let chosen_base = if base_palette_id != 0 { base_palette_id } else { tex_palette_id };
+        // Precedence: clothing/entity base palette > Surface orig_palette_id
+        // recolour (retail base1pal) > the texture's own default palette.
+        let chosen_base = if base_palette_id != 0 {
+            base_palette_id
+        } else if surf_pal_id != 0 {
+            surf_pal_id
+        } else {
+            tex_palette_id
+        };
         let pb = source
             .get_file_by_key(ResourceKey::new("eor/portal", chosen_base))
             .map_err(|e| TextureDecodeError::PaletteFetch(format!("base {chosen_base:#010X}: {e}")))?;

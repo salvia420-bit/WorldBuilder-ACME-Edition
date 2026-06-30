@@ -11,6 +11,48 @@ const WIREFRAME_MODE = (() => {
   } catch (_) { return false; }
 })();
 
+// 2026-06-30 — ground-clamp for placed objects ("appears above then sinks
+// into the ground"). Retail does NOT trust the server/authored Z blindly:
+// CTransition::find_placement_position → step_down (acclient.c) lowers an
+// object's collision sphere onto the walkable terrain polygon. Our entity
+// spawn pinned the raw authored Z with no clamp, so an OUTDOOR object whose
+// authored Z falls below the rendered terrain surface (region-height/diagonal
+// drift on modded data) is buried. `_groundClampZ` lifts a buried outdoor
+// object back onto the surface — LIFT-BURIED-ONLY (never pulls a legitimately
+// elevated object — signs, 2nd-floor items, flying mobs — down), BOUNDED (a
+// gap larger than the cap is left alone — likely an intentional structure
+// floor, not a sink), and OUTDOOR-ONLY (EnvCell interiors have no terrain
+// height; `terrainHeightAt` returns undefined there anyway). `?groundClamp=off`
+// disables → byte-identical legacy placement.
+const GROUND_CLAMP_ON = (() => {
+  try {
+    if (typeof window === "undefined") return true;
+    return new URLSearchParams(window.location.search).get("groundClamp") !== "off";
+  } catch (_) { return true; }
+})();
+const GROUND_CLAMP_EPS = 0.1;        // ignore objects within 10 cm of the surface
+const GROUND_CLAMP_MAX_LIFT = 10.0;  // bound: never lift more than 10 m (structure floors)
+
+// Lift a buried OUTDOOR object onto the terrain surface; return the corrected
+// Z (or the original `z` when no clamp applies). `cellIdx` is the low 16 bits
+// of the landcell (>= 0x0100 ⇒ EnvCell interior ⇒ skip). Returns `z` unchanged
+// when the flag is off, the cell is indoor, terrain isn't resolvable yet
+// (`terrainHeightAt` → undefined), the object is at/above the surface, or the
+// bury depth exceeds the bound.
+function _groundClampZ(wx, wy, z, cellIdx) {
+  if (!GROUND_CLAMP_ON) return z;
+  if ((cellIdx & 0xffff) >= 0x0100) return z; // indoor EnvCell — no terrain
+  const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+  if (!sh || typeof sh.terrainHeightAt !== "function") return z;
+  const groundZ = sh.terrainHeightAt(wx, wy);
+  if (typeof groundZ !== "number" || !Number.isFinite(groundZ)) return z;
+  const buryDepth = groundZ - z;
+  if (buryDepth > GROUND_CLAMP_EPS && buryDepth <= GROUND_CLAMP_MAX_LIFT) {
+    return groundZ;
+  }
+  return z;
+}
+
 // 2026-05-28 — `?spawnTrace=1` opt-in per-stage timing for entity spawn.
 // When set, _spawnImpl captures `performance.now()` deltas around the two
 // dominant async stages (animationCache.get, materialCache.preload /
@@ -575,7 +617,7 @@ import { drainPendingPlayEffects } from "./play_effect_vfx.js";
 // UiEffects bitmask via item_fx.itemFxPlanFor. Lazy frag deps below keep the
 // eval-based harnesses loadable. itemAura self-registers through item_fx's import.
 import { visualEnabled, ensureVfxCatalog, vfxDescriptorFor, descriptorMechs } from "./vfx_catalog.js";
-import { buildFragVariant } from "./vfx/frag_install.js";
+import { buildFragVariant, buildPalettedFragVariant } from "./vfx/frag_install.js";
 import { ensureVfxHashVarying } from "./vfx/per_instance.js";
 import { itemFxPlanFor, itemFxEnabled } from "./vfx/item_fx.js";
 // P2.2 (?tipFlex): the offline catalog descriptor -> frag/MECH-B "plan" for an
@@ -603,6 +645,21 @@ function _entityFragMat(base, materialCache, surfaceDid, fragPlan) {
     };
   }
   return buildFragVariant(materialCache, surfaceDid, fragPlan.entries, _entityVfxFragDeps) || base;
+}
+// Paletted twin of _entityFragMat: layer the SAME frag plan onto a DYED paletted
+// base so itemFx / catalog effects reach dyed gear (the `_entityMaterials` path).
+// Soft-degrades to the base material if the cache method is absent (stale pkg/)
+// or `base` isn't a __paletteKey-tagged paletted material (e.g. shared fallback).
+function _entityFragMatPaletted(base, materialCache, fragPlan) {
+  if (!fragPlan || !materialCache || typeof materialCache.getCachedVariantFromPaletted !== "function") return base;
+  if (!_entityVfxFragDeps) {
+    _entityVfxFragDeps = {
+      globals: VFX_GLOBALS,
+      installComponentPatch: installVfxComponentPatch,
+      sharedPrelude: VFX_HASH_PRELUDE,
+    };
+  }
+  return buildPalettedFragVariant(materialCache, base, fragPlan.entries, _entityVfxFragDeps) || base;
 }
 // Combine two frag plans ({entries,ids}|null) into ONE so a single material variant
 // carries BOTH the offline-catalog SET (e.g. [deformation.tipFlex (MECH-B vertex),
@@ -3341,10 +3398,12 @@ export class EntityManager {
     // #16 (?itemFx): optional NON-RETAIL UiEffects emissive aura. Compute the frag
     // plan ONCE per spawn from the entity's UiEffects bitmask (the entityUiEffects
     // getter; typeof-guarded → a stale pkg/ soft-degrades to 0 / no aura). Gated
-    // `?visual && ?itemFx`; null plan ⇒ base material ⇒ byte-identical. Applied only
-    // to the surfaceDid-keyed `getCached` path (its variant is correctly shared by
-    // surfaceDid); the paletted `_entityMaterials` branch is left as base — per-
-    // palette variant keying is a follow-up (workflow's getCachedPalettedVariant).
+    // `?visual && ?itemFx`; null plan ⇒ base material ⇒ byte-identical. Applied to
+    // BOTH the surfaceDid-keyed `getCached` path (variant shared by surfaceDid) AND
+    // the paletted `_entityMaterials` path (variant shared by exact paletteKey via
+    // MaterialCache.getCachedVariantFromPaletted), so dyed/recoloured gear gets the
+    // aura too — previously the paletted branch returned the base verbatim, which is
+    // why dyed magic items showed no glow despite the effects being default-on.
     let _itemFxPlan = null;
     if (visualEnabled() && itemFxEnabled()) {
       try {
@@ -3376,7 +3435,12 @@ export class EntityManager {
     const resolveEntityMaterial = (g) => {
       const did = g.surfaceDid >>> 0;
       if (inst._entityMaterials && inst._entityMaterials.has(did)) {
-        return inst._entityMaterials.get(did);
+        const pbase = inst._entityMaterials.get(did);
+        // Dyed/paletted gear no longer skips the VFX plan: layer the same
+        // _entityPlan (itemFx aura + catalog effects) onto a clone of the dyed
+        // base. Keyed per dye × effect-SET so colours stay correct and programs
+        // dedup; _entityPlan==null ⇒ returns pbase verbatim (byte-identical).
+        return _entityPlan ? _entityFragMatPaletted(pbase, this.materialCache, _entityPlan) : pbase;
       }
       if (this.materialCache) {
         // T2: g.doubleSided drives FrontSide vs DoubleSide (default true).
@@ -3514,7 +3578,13 @@ export class EntityManager {
     const lbY = (lbId >>> 16) & 0xff;
     const wx = lbX * 192.0 + (meta.x ?? 0);
     const wy = lbY * 192.0 + (meta.y ?? 0);
-    const wz = meta.z ?? 0;
+    // Ground-clamp the authored Z (retail step_down) so a buried outdoor object
+    // rests on the terrain surface instead of sinking. `lbId & 0xffff` is the
+    // landcell index (>= 0x0100 ⇒ indoor ⇒ skipped inside the helper). Stash the
+    // cell index so position updates can re-clamp (covers terrain that streams
+    // in after spawn).
+    inst._outdoorCellIdx = lbId & 0xffff;
+    const wz = _groundClampZ(wx, wy, meta.z ?? 0, inst._outdoorCellIdx);
     inst.setPose(wx, wy, wz, meta.qw ?? 1, meta.qx ?? 0, meta.qy ?? 0, meta.qz ?? 0);
     // #9 (2026-06-07): remember the entity's authored base scale so the
     // generic jump pose can multiply through it instead of stomping x/y/z

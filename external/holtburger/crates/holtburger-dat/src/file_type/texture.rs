@@ -292,7 +292,18 @@ impl Texture {
     /// can lazily fetch palettes from a `ResourceSource` only on demand —
     /// most terrain textures are `CustomLscapeR8G8B8` and never trigger
     /// the palette path.
-    pub fn to_rgba8<F>(&self, palette_for: F) -> std::result::Result<Vec<u8>, TextureDecodeError>
+    ///
+    /// `palette_override` (when `Some(non-zero)`) takes precedence over the
+    /// texture's own `default_palette_id` for the palette-indexed formats —
+    /// this is the surface-level `orig_palette_id` recolour, matching retail's
+    /// `CSurface::SetTextureAndPalette(base1pal)` which applies the Surface's
+    /// palette over the Texture's. `None` (or `Some(0)`) → use the texture's
+    /// `default_palette_id` as before.
+    fn to_rgba8_impl<F>(
+        &self,
+        palette_override: Option<u32>,
+        palette_for: F,
+    ) -> std::result::Result<Vec<u8>, TextureDecodeError>
     where
         F: FnOnce(u32) -> std::result::Result<Palette, TextureDecodeError>,
     {
@@ -356,8 +367,9 @@ impl Texture {
 
             // 8-bit indices into a palette of ARGB colours.
             SurfacePixelFormat::P8 => {
-                let pal_id = self
-                    .default_palette_id
+                let pal_id = palette_override
+                    .filter(|&p| p != 0)
+                    .or(self.default_palette_id)
                     .ok_or(TextureDecodeError::MissingPaletteId)?;
                 let pal = palette_for(pal_id)?;
                 if self.source_data.len() < pixels {
@@ -382,8 +394,9 @@ impl Texture {
 
             // 16-bit indices into a palette. Same as P8 but each index is u16-le.
             SurfacePixelFormat::Index16 => {
-                let pal_id = self
-                    .default_palette_id
+                let pal_id = palette_override
+                    .filter(|&p| p != 0)
+                    .or(self.default_palette_id)
                     .ok_or(TextureDecodeError::MissingPaletteId)?;
                 let pal = palette_for(pal_id)?;
                 if self.source_data.len() < pixels * 2 {
@@ -557,6 +570,31 @@ impl Texture {
 
             other => Err(TextureDecodeError::UnsupportedFormat(other)),
         }
+    }
+
+    /// Decode to RGBA8 using the texture's own `default_palette_id` for
+    /// palette-indexed formats (the common path — terrain, un-recoloured
+    /// statics). Thin wrapper over [`Texture::to_rgba8_impl`].
+    pub fn to_rgba8<F>(&self, palette_for: F) -> std::result::Result<Vec<u8>, TextureDecodeError>
+    where
+        F: FnOnce(u32) -> std::result::Result<Palette, TextureDecodeError>,
+    {
+        self.to_rgba8_impl(None, palette_for)
+    }
+
+    /// Decode to RGBA8 applying a Surface-level `orig_palette_id` recolour
+    /// when non-zero (retail `CSurface::SetTextureAndPalette(base1pal)`),
+    /// falling back to the texture's `default_palette_id` when the override
+    /// is 0. Non-palettized formats ignore the override entirely.
+    pub fn to_rgba8_with_palette_override<F>(
+        &self,
+        surface_palette_id: u32,
+        palette_for: F,
+    ) -> std::result::Result<Vec<u8>, TextureDecodeError>
+    where
+        F: FnOnce(u32) -> std::result::Result<Palette, TextureDecodeError>,
+    {
+        self.to_rgba8_impl((surface_palette_id != 0).then_some(surface_palette_id), palette_for)
     }
 }
 
