@@ -254,6 +254,14 @@ impl MovementSystemHandle {
         self.inner.set_faithful_stepup(on);
     }
 
+    /// (2026-06-30): install the `?roofGrounding=off` runtime carrier (default-ON
+    /// outdoor static/building roof grounding; `=off` rolls back to the
+    /// indoor-only `ON_WALKABLE` latch). Read only when `?faithfulTransition` is
+    /// also on. Forwards to `MovementSystem::set_outdoor_static_grounding`.
+    pub fn set_outdoor_static_grounding(&mut self, on: bool) {
+        self.inner.set_outdoor_static_grounding(on);
+    }
+
     /// Phase 3 Phase D (2026-06-28, Option C): install the
     /// `?buildingOverlap=off` runtime carrier (default-ON overlap registration;
     /// `=off` = the retail home-cell-only walk-through repro for the A/B proof).

@@ -184,6 +184,21 @@ fn parse_faithful_stepup_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "stepUp=off")
 }
 
+/// (2026-06-30): parse `?roofGrounding=off` (or `&roofGrounding=off`).
+/// DEFAULT-ON off-escape shape (mirrors `parse_faithful_stepup_flag`): returns
+/// `true` UNLESS `roofGrounding=off` is present. When on, a grounded mover
+/// standing on an outdoor static/building surface (e.g. a building ROOF) latches
+/// `ON_WALKABLE` and STAYS instead of sliding off + reverting; read ONLY when
+/// `?faithfulTransition` is also on (the latch lives in the faithful driver).
+/// `=off` rolls back to the pre-2026-06-30 indoor-only latch. Native carrier:
+/// `USE_OUTDOOR_STATIC_GROUNDING` (movement/system.rs). Needs a wasm rebuild; NO
+/// manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_roof_grounding_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "roofGrounding=off")
+}
+
 /// Phase 3 Phase D (2026-06-28, Option C): parse `?buildingOverlap=off` (or
 /// `&buildingOverlap=off`). DEFAULT-ON, off-escape shape: returns `true` UNLESS
 /// `buildingOverlap=off` is present. When on, each outdoor building/static BSP
@@ -24475,6 +24490,21 @@ mod wire_state_packs_routing_tests {
         ));
     }
 
+    /// (2026-06-30): `?roofGrounding=off` DEFAULT-ON off-escape shape.
+    #[test]
+    fn roof_grounding_flag_defaults_on_off_escape() {
+        use super::parse_roof_grounding_flag;
+        // Default ON: absent / unrelated / explicit-on all enabled.
+        assert!(parse_roof_grounding_flag(""));
+        assert!(parse_roof_grounding_flag("?faithfulTransition=on"));
+        assert!(parse_roof_grounding_flag("?roofGrounding=on"));
+        // Only an exact `=off` disables (anywhere in the query string).
+        assert!(!parse_roof_grounding_flag("?roofGrounding=off"));
+        assert!(!parse_roof_grounding_flag(
+            "?renderer=3d&faithfulTransition=on&roofGrounding=off"
+        ));
+    }
+
     /// Phase 3 Phase D (Option C): `?buildingOverlap=off` DEFAULT-ON off-escape.
     #[test]
     fn building_overlap_flag_defaults_on_off_escape() {
@@ -33509,6 +33539,11 @@ async fn recv_loop(
     // (default ON). Read only when `?faithfulTransition` is also on; see
     // `parse_faithful_stepup_flag`.
     movement.set_faithful_stepup(parse_faithful_stepup_flag(&js_location_search()));
+    // (2026-06-30): `?roofGrounding=off` — roll the outdoor static/building roof
+    // grounded-latch back to the pre-2026-06-30 indoor-only behavior (default ON,
+    // so jumping onto a building roof STAYS). Read only when `?faithfulTransition`
+    // is also on; see `parse_roof_grounding_flag`.
+    movement.set_outdoor_static_grounding(parse_roof_grounding_flag(&js_location_search()));
     // Phase 3 Phase D (2026-06-28, Option C): `?buildingOverlap=off` — register
     // each outdoor building/static BSP into its HOME cell only (the retail
     // walk-through repro) instead of every overlapped cell (default ON, the

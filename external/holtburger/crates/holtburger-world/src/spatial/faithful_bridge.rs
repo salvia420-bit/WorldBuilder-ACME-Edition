@@ -1036,7 +1036,21 @@ pub fn faithful_find_transitional_position(
     // slope-climb / cliff-stop already work via that chain (Phase D) and are
     // unaffected here.
     let grounded_entry = !input.airborne || input.force_grounded;
-    if t.faithful_stepup && grounded_entry && input.begin.is_indoors() {
+    // 2026-06-30 — extend the persistent `ON_WALKABLE` grounded-latch to OUTDOOR
+    // poses standing on a resident static/building surface. A building ROOF is
+    // outdoor space (`is_indoors() == false`) but is collided by the SAME
+    // static-BSP narrow-phase as indoor cells (`find_obj_collisions` over
+    // `cell_static_physics_bsp`, populated by the 0x01/0x02 building-BSP staging),
+    // so it needs the same entry latch to ground via the `step_sphere_down` chain.
+    // Without it the roof is collided (walls block) but the mover never latches
+    // grounded → gravity slides it off + the pose reverts. Gated on a resident
+    // static BSP in the begin cell so the pure-terrain outdoor path (heightfield
+    // cliff-stop, which `ON_WALKABLE` would regress — see the block above) is
+    // unaffected. Carrier: `gates.outdoor_static_grounding` (`?roofGrounding=off`).
+    let on_outdoor_static = input.gates.outdoor_static_grounding
+        && outdoor
+        && !scene.cell_static_physics_bsp(begin_cell).is_empty();
+    if t.faithful_stepup && grounded_entry && (input.begin.is_indoors() || on_outdoor_static) {
         t.object_info.state |= object_info_state::ON_WALKABLE;
     }
     t.init_sphere(2, &spheres, 1.0);
@@ -1208,6 +1222,7 @@ mod drift {
             ramp_floor_snap_fix: true,
             skip_parented_entities: true,
             walkable_reinsert_probe: false,
+            outdoor_static_grounding: false,
         }
     }
 

@@ -196,7 +196,10 @@ impl ClientSimulationSystem {
             let Some(pose) = world.local_player_runtime_pose() else {
                 return false;
             };
-            let (object, gates) = MovementSystem::transition_profile(world);
+            let (object, mut gates) = MovementSystem::transition_profile(world);
+            // (2026-06-30) — apply the `?roofGrounding=off` runtime carrier over
+            // the const default (mirrors faithful_stepup); see the system.rs twin.
+            gates.outdoor_static_grounding = movement.outdoor_static_grounding_enabled();
             let end = holtburger_common::position::WorldPosition {
                 landblock_id: pose.landblock_id,
                 coords: Vector3::new(

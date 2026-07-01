@@ -623,6 +623,26 @@ const USE_FAITHFUL_OUTDOOR: bool = true;
 /// base of a walkable up-slope (the climb-on vs stop-at-base A/B rollback).
 const USE_FAITHFUL_STEPUP: bool = true;
 
+/// (2026-06-30) — extend the faithful driver's persistent `ON_WALKABLE`
+/// grounded-latch to OUTDOOR poses standing on a resident static/building
+/// surface (e.g. a building ROOF), so jumping onto a roof STAYS instead of
+/// sliding off + reverting to the jump origin. The roof is collided by the same
+/// static-BSP narrow-phase as indoor floors (building physics BSP staged into
+/// `cell_static_physics_bsp` by the 0x01/0x02 building-BSP bake), but the
+/// pre-existing `ON_WALKABLE` entry stamp fired `is_indoors()`-only
+/// (`faithful_bridge.rs`), so an outdoor roof was collided as a wall yet never
+/// grounded. ONE feature, TWO carriers (mirrors [`USE_FAITHFUL_STEPUP`]): this
+/// const (native default) + the `?roofGrounding=off` URL flag
+/// ([`MovementSystem::outdoor_static_grounding_runtime`]). Effective predicate:
+/// [`MovementSystem::outdoor_static_grounding_enabled`], baked into
+/// `TransitionGates::outdoor_static_grounding`. The read site additionally gates
+/// on a resident static BSP in the begin cell so the pure-terrain heightfield
+/// cliff-stop is unaffected.
+///
+/// `true` (DEFAULT): outdoor static/building roofs are walkable + grounded.
+/// `false` / `?roofGrounding=off`: the pre-2026-06-30 indoor-only latch.
+const USE_OUTDOOR_STATIC_GROUNDING: bool = true;
+
 /// Phase 3 Phase D (2026-06-28, Option C) — register each outdoor
 /// building/static BSP into EVERY land cell its world AABB overlaps, not just
 /// its home cell, so an off-center building can no longer be walked through from
@@ -1179,6 +1199,12 @@ pub(crate) struct MovementSystem {
     /// (the climb A/B rollback escape); `Some(true)` forces it on. Combined by
     /// [`Self::faithful_stepup_enabled`]. Default `None`.
     faithful_stepup_runtime: Option<bool>,
+    /// (2026-06-30) — runtime carrier of the `?roofGrounding=off` URL flag.
+    /// `None` = use the [`USE_OUTDOOR_STATIC_GROUNDING`] const default (ON);
+    /// `Some(false)` forces the pre-2026-06-30 indoor-only grounded latch (the
+    /// roof-grounding A/B rollback); `Some(true)` forces it on. Combined by
+    /// [`Self::outdoor_static_grounding_enabled`]. Default `None`.
+    outdoor_static_grounding_runtime: Option<bool>,
     /// Phase 3 Phase D (2026-06-28, Option C) — runtime carrier of the
     /// `?buildingOverlap=off` URL flag. `None` = use the
     /// [`USE_BUILDING_OVERLAP`] const default (ON); `Some(false)` forces
@@ -1388,6 +1414,7 @@ impl MovementSystem {
             faithful_transition_runtime: false,
             faithful_outdoor_runtime: None,
             faithful_stepup_runtime: None,
+            outdoor_static_grounding_runtime: None,
             building_overlap_runtime: None,
             jump_charge: JumpChargeClock::new(),
             sticky_timeout_pending: std::cell::Cell::new(false),
@@ -1431,6 +1458,15 @@ impl MovementSystem {
     /// [`Self::faithful_stepup_enabled`].
     pub(crate) fn set_faithful_stepup(&mut self, on: bool) {
         self.faithful_stepup_runtime = Some(on);
+    }
+
+    /// (2026-06-30) — install the `?roofGrounding=off` runtime carrier (see
+    /// [`USE_OUTDOOR_STATIC_GROUNDING`]). The wasm recv-loop init calls this once
+    /// with the parsed flag (default-ON; `=off` forces the pre-2026-06-30
+    /// indoor-only `ON_WALKABLE` latch). Baked into
+    /// `TransitionGates::outdoor_static_grounding` at the dispatch site.
+    pub(crate) fn set_outdoor_static_grounding(&mut self, on: bool) {
+        self.outdoor_static_grounding_runtime = Some(on);
     }
 
     /// Phase 3 Phase D (2026-06-28, Option C) — install the
@@ -1688,6 +1724,17 @@ impl MovementSystem {
     /// [`USE_FAITHFUL_STEPUP`] is `true`.
     pub(crate) fn faithful_stepup_enabled(&self) -> bool {
         self.faithful_stepup_runtime.unwrap_or(USE_FAITHFUL_STEPUP)
+    }
+
+    /// (2026-06-30) — the effective outdoor static/building grounded-latch
+    /// predicate. Read ONLY when [`Self::faithful_transition_enabled`] is also on
+    /// (the latch lives in the faithful driver); baked into
+    /// `TransitionGates::outdoor_static_grounding` at the dispatch site. The
+    /// runtime carrier OVERRIDES the const, so `?roofGrounding=off` rolls back to
+    /// the indoor-only latch even while [`USE_OUTDOOR_STATIC_GROUNDING`] is `true`.
+    pub(crate) fn outdoor_static_grounding_enabled(&self) -> bool {
+        self.outdoor_static_grounding_runtime
+            .unwrap_or(USE_OUTDOOR_STATIC_GROUNDING)
     }
 
     /// Phase 3 Phase D (Option C) — the effective building/static OVERLAP
@@ -4425,6 +4472,7 @@ impl MovementSystem {
             ramp_floor_snap_fix: USE_RAMP_FLOOR_SNAP_FIX,
             skip_parented_entities: SKIP_PARENTED_ENTITY_COLLISION,
             walkable_reinsert_probe: USE_WALKABLE_REINSERT_PROBE,
+            outdoor_static_grounding: USE_OUTDOOR_STATIC_GROUNDING,
         };
         (object, gates)
     }
@@ -4588,7 +4636,10 @@ impl MovementSystem {
             raw_delta.z
         };
 
-        let (object, gates) = Self::transition_profile(world);
+        let (object, mut gates) = Self::transition_profile(world);
+        // (2026-06-30) — apply the `?roofGrounding=off` runtime carrier over the
+        // const default baked by `transition_profile` (mirrors faithful_stepup).
+        gates.outdoor_static_grounding = self.outdoor_static_grounding_enabled();
         let end = holtburger_common::position::WorldPosition {
             landblock_id: pose.landblock_id,
             coords: Vector3::new(

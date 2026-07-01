@@ -158,6 +158,14 @@ pub struct TransitionGates {
     /// walkable evidence at a step-down's destination (re-insert probe,
     /// `acclient.c:312475-312524`) or the snap is refused → fall.
     pub walkable_reinsert_probe: bool,
+    /// `USE_OUTDOOR_STATIC_GROUNDING` (2026-06-30) — extend the persistent
+    /// `ON_WALKABLE` grounded-latch to OUTDOOR poses standing on a resident
+    /// static/building surface (e.g. a building ROOF), which the faithful
+    /// driver collides via the same static-BSP narrow-phase as indoor floors.
+    /// The read site (`faithful_bridge.rs`) additionally gates on the begin
+    /// cell carrying a static physics BSP so the pure-terrain heightfield
+    /// cliff-stop is unaffected.
+    pub outdoor_static_grounding: bool,
 }
 
 /// Geometry/state reads the pipeline needs — solves the
@@ -1160,6 +1168,7 @@ mod tests {
             ramp_floor_snap_fix: true,
             skip_parented_entities: true,
             walkable_reinsert_probe: false,
+            outdoor_static_grounding: false,
         }
     }
 
