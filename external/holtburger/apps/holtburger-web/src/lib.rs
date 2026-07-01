@@ -680,10 +680,40 @@ pub use global_source::{
 #[cfg(target_arch = "wasm32")]
 use std::net::{IpAddr, SocketAddr};
 
+// F12 (2026-07-01, missile-regression follow-up): route `log::warn!` /
+// `log::error!` from ALL crates to the browser console. Before this, no
+// global logger was installed in the wasm bundle, so every `log::warn!`
+// in holtburger-core / holtburger-world / this crate was a silent no-op —
+// failure paths (send errors, rejected motions, wield conflicts) left no
+// trace, which is exactly how the out-of-ammunition combat-mode bounce
+// went undiagnosed. Warn level and above only; info/debug stay off to
+// keep hot paths quiet.
+#[cfg(target_arch = "wasm32")]
+struct ConsoleWarnLogger;
+#[cfg(target_arch = "wasm32")]
+impl log::Log for ConsoleWarnLogger {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= log::Level::Warn
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            console_log_str(&format!("[rust-{}] {}", r.level(), r.args()));
+        }
+    }
+    fn flush(&self) {}
+}
+#[cfg(target_arch = "wasm32")]
+static CONSOLE_WARN_LOGGER: ConsoleWarnLogger = ConsoleWarnLogger;
+
 #[wasm_bindgen(start)]
 pub fn start() {
     #[cfg(target_arch = "wasm32")]
     console_error_panic_hook::set_once();
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = log::set_logger(&CONSOLE_WARN_LOGGER)
+            .map(|_| log::set_max_level(log::LevelFilter::Warn));
+    }
 }
 
 /// Returns a static identification string. Smoke-tests wasm-bindgen
@@ -38885,6 +38915,41 @@ async fn recv_loop(
                                         });
                                     }
                                 }
+                                holtburger_protocol::messages::GameEvent::InventoryServerSaveFailed(
+                                    data,
+                                ) => {
+                                    // Equip/move rejection (0x00A0). ACE sends
+                                    // this when GetAndWieldItem bounces (slot
+                                    // occupied, weapon collision, ammo-type
+                                    // mismatch — Player_Inventory.cs
+                                    // CheckWeaponCollision). Previously
+                                    // UNHANDLED → silent paperdoll no-ops.
+                                    // kind=13 lets rejection_feedback.js
+                                    // attribute it to the recent inventory
+                                    // action; the transient chat line
+                                    // renders a toast regardless.
+                                    let code = data.error as u32;
+                                    let label = format!("{:?}", data.error);
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_USE_FAILED,
+                                        string_payload: Some(label.clone()),
+                                        u32_payload: Some(code),
+                                        u32_payload_2: Some(data.item_guid.0),
+                                        f32_payload: None,
+                                    });
+                                    let message = if code == 0 {
+                                        "You can't wield that!".to_string()
+                                    } else {
+                                        format!("[Wield failed] {label}")
+                                    };
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(message),
+                                        u32_payload: Some(0),
+                                        u32_payload_2: Some(CHAT_CATEGORY_TRANSIENT),
+                                        f32_payload: None,
+                                    });
+                                }
                                 holtburger_protocol::messages::GameEvent::WeenieError(
                                     data,
                                 ) => {
@@ -40455,6 +40520,31 @@ async fn recv_loop(
                         } else {
                             CombatMode::NonCombat
                         };
+                        // Out-of-ammo pre-check (mirrors ACE
+                        // Player_Combat.cs Missile arm, which would
+                        // bounce this request back to NonCombat ~0.5s
+                        // later with a transient string the user can
+                        // easily miss). Refuse locally with the SAME
+                        // message so the failure is immediate and the
+                        // stance indicator never flickers through a
+                        // doomed missile stance.
+                        if target_mode == CombatMode::Missile
+                            && w.is_missing_missile_ammo()
+                        {
+                            console_log_str(
+                                "[combat-mode] toggle blocked: launcher equipped with no ammunition",
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(
+                                    "You are out of ammunition!".to_string(),
+                                ),
+                                u32_payload: Some(0),
+                                u32_payload_2: Some(CHAT_CATEGORY_TRANSIENT),
+                                f32_payload: None,
+                            });
+                            continue;
+                        }
                         let action = GameAction::ChangeCombatMode(Box::new(
                             ChangeCombatModeActionData { mode: target_mode },
                         ));
@@ -40476,10 +40566,32 @@ async fn recv_loop(
                     Some(SessionCommand::SetCombatMode { mode }) => {
                         // JS plugin computed the desired mode from
                         // the authoritative motion stance. Just send
-                        // it — no world-state lookup.
+                        // it — no world-state lookup (except the
+                        // out-of-ammo pre-check below, mirroring the
+                        // ToggleCombatMode arm).
                         use holtburger_protocol::messages::{
-                            ChangeCombatModeActionData, GameAction,
+                            ChangeCombatModeActionData, CombatMode, GameAction,
                         };
+                        use holtburger_world::context::WorldContextExt;
+                        if mode == CombatMode::Missile
+                            && world
+                                .as_ref()
+                                .is_some_and(|w| w.is_missing_missile_ammo())
+                        {
+                            console_log_str(
+                                "[combat-mode] set(Missile) blocked: launcher equipped with no ammunition",
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(
+                                    "You are out of ammunition!".to_string(),
+                                ),
+                                u32_payload: Some(0),
+                                u32_payload_2: Some(CHAT_CATEGORY_TRANSIENT),
+                                f32_payload: None,
+                            });
+                            continue;
+                        }
                         let action = GameAction::ChangeCombatMode(Box::new(
                             ChangeCombatModeActionData { mode },
                         ));
@@ -42042,7 +42154,104 @@ async fn recv_loop(
                         use holtburger_protocol::messages::inventory::types::EquipMask;
                         use holtburger_protocol::messages::{
                             GameAction, GetAndWieldItemActionData,
+                            PutItemInContainerActionData,
                         };
+                        // Retail parity: the client auto-unequips
+                        // conflicting items BEFORE GetAndWieldItem —
+                        // ACE Player_Inventory.cs:1873 ("Client will
+                        // automatically send any unequip
+                        // (PutItemInContainer) message before the
+                        // GetAndWield") and rejects with
+                        // InventoryServerSaveFailed when the client
+                        // skips it (slot occupied / weapon collision).
+                        // Conflict set mirrors CheckWeaponCollision:
+                        // same-slot, one-weapon-at-a-time, launcher/
+                        // two-hander/caster vs shield (both ways).
+                        if let Some(w) = world.as_ref() {
+                            use holtburger_common::properties::{
+                                EquipMask as PropEquipMask, WorldObjectExt,
+                            };
+                            use holtburger_world::context::WorldContext;
+                            let requested =
+                                PropEquipMask::from_bits_truncate(equip_mask);
+                            let weapon_family = PropEquipMask::MELEE_WEAPON
+                                | PropEquipMask::MISSILE_WEAPON
+                                | PropEquipMask::TWO_HANDED
+                                | PropEquipMask::CASTER;
+                            let new_ammo_type = w
+                                .get_entity(Guid(item_guid))
+                                .and_then(|e| e.ammo_type())
+                                .unwrap_or(0);
+                            let new_is_launcher = requested
+                                .intersects(PropEquipMask::MISSILE_WEAPON)
+                                && new_ammo_type != 0;
+                            let new_blocks_shield = new_is_launcher
+                                || requested.intersects(
+                                    PropEquipMask::TWO_HANDED
+                                        | PropEquipMask::CASTER,
+                                );
+                            let mut to_unequip: Vec<u32> = Vec::new();
+                            for g in w.iter_equipment() {
+                                if g.0 == item_guid {
+                                    continue;
+                                }
+                                let Some(e) = w.get_entity(g) else {
+                                    continue;
+                                };
+                                let loc = e.wield_location();
+                                let same_slot = loc.intersects(requested);
+                                let weapon_swap = requested
+                                    .intersects(weapon_family)
+                                    && loc.intersects(weapon_family);
+                                let shield_clear = new_blocks_shield
+                                    && loc.intersects(PropEquipMask::SHIELD);
+                                let shield_vs_weapon = requested
+                                    .intersects(PropEquipMask::SHIELD)
+                                    && (loc.intersects(
+                                        PropEquipMask::TWO_HANDED
+                                            | PropEquipMask::CASTER,
+                                    ) || (loc.intersects(
+                                        PropEquipMask::MISSILE_WEAPON,
+                                    ) && e.ammo_type().unwrap_or(0) != 0));
+                                // Launcher swap with mismatched equipped
+                                // ammo (e.g. longbow over quarrels) — ACE
+                                // rejects the wield on AmmoType mismatch,
+                                // so pull the stale ammo too.
+                                let ammo_mismatch = new_is_launcher
+                                    && loc.intersects(PropEquipMask::MISSILE_AMMO)
+                                    && e.ammo_type().unwrap_or(0) != 0
+                                    && e.ammo_type().unwrap_or(0)
+                                        != new_ammo_type;
+                                if same_slot
+                                    || weapon_swap
+                                    || shield_clear
+                                    || shield_vs_weapon
+                                    || ammo_mismatch
+                                {
+                                    to_unequip.push(g.0);
+                                }
+                            }
+                            let pack_guid = w.player.guid.0;
+                            for g in to_unequip {
+                                console_log_str(&format!(
+                                    "[paperdoll/wield] auto-unequip 0x{g:08X} → pack (slot conflict)",
+                                ));
+                                let act = GameAction::PutItemInContainer(
+                                    Box::new(PutItemInContainerActionData {
+                                        item_guid: Guid(g),
+                                        container_guid: Guid(pack_guid),
+                                        placement: 0,
+                                    }),
+                                );
+                                if let Err(e) = session.send_action(act).await
+                                {
+                                    log::warn!(
+                                        "recv_loop: wield auto-unequip: {e}"
+                                    );
+                                    break;
+                                }
+                            }
+                        }
                         let action = GameAction::GetAndWieldItem(Box::new(
                             GetAndWieldItemActionData {
                                 item_guid: Guid(item_guid),

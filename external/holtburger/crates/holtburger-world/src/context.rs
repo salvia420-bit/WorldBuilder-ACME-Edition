@@ -737,6 +737,39 @@ pub trait WorldContextExt: WorldContext {
         self.get_suggested_combat_mode() == CombatMode::Magic
     }
 
+    /// True when the equipped missile weapon is an ammo launcher (bow /
+    /// crossbow / atlatl — non-zero `PublicWeenieDesc.ammo_type`, the
+    /// wire mirror of ACE `WorldObject.IsAmmoLauncher`) and nothing is
+    /// equipped in the MISSILE_AMMO slot. Thrown weapons carry
+    /// `ammo_type == 0` (self-launched) and never trip this.
+    ///
+    /// Mirrors the server gate in ACE
+    /// `Player_Combat.cs::HandleActionChangeCombatMode_Inner` (Missile
+    /// arm): launcher + no equipped ammo → ACE briefly enters the
+    /// missile stance, then bounces to NonCombat with the transient
+    /// string "You are out of ammunition!". Checking locally lets the
+    /// client refuse the doomed round-trip with immediate feedback,
+    /// like retail's client-side combat-readiness checks
+    /// (`ClientCombatSystem::PlayerInReadyPosition` family).
+    fn is_missing_missile_ammo(&self) -> bool {
+        let mut launcher_needs_ammo = false;
+        let mut has_ammo = false;
+        for guid in self.iter_equipment() {
+            if let Some(entity) = self.get_entity(guid) {
+                let loc = entity.wield_location();
+                if loc.intersects(EquipMask::MISSILE_WEAPON)
+                    && entity.ammo_type().unwrap_or(0) != 0
+                {
+                    launcher_needs_ammo = true;
+                }
+                if loc.intersects(EquipMask::MISSILE_AMMO) {
+                    has_ammo = true;
+                }
+            }
+        }
+        launcher_needs_ammo && !has_ammo
+    }
+
     fn is_salvage_candidate(&self, guid: Guid) -> bool {
         let Some(entity) = self.get_entity(guid) else {
             return false;

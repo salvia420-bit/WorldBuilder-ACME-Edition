@@ -295,6 +295,20 @@ function _onAttackDone(evt) {
   if (msg) _renderToast(msg);
 }
 
+// Transient strings (kind:2 chat with category 9) — server action
+// feedback like "You are out of ammunition!" (ACE bounces a missile
+// combat-mode request this way when no ammo is equipped, then silently
+// reverts the stance). Retail renders transient strings as prominent
+// action text, not just a chat line — mirror that with the shared
+// toast surface. The chat-log copy still renders independently.
+const CHAT_CATEGORY_TRANSIENT = 9;
+function _onChatReceived(evt) {
+  const payload = evt?.detail ?? evt ?? {};
+  if (((payload.u32Payload2 >>> 0) || 0) !== CHAT_CATEGORY_TRANSIENT) return;
+  const msg = payload.stringPayload;
+  if (msg) _renderToast(msg);
+}
+
 function _attachSubscription() {
   try {
     const client = window.__pluginClient;
@@ -302,6 +316,7 @@ function _attachSubscription() {
     client.events.on("kind:13", _onWeenieError);
     client.events.on("clientActionRejected", _onClientActionRejected);
     client.events.on("attackDone", _onAttackDone);
+    client.events.on("kind:2", _onChatReceived);
     return true;
   } catch (_) { return false; }
 }
