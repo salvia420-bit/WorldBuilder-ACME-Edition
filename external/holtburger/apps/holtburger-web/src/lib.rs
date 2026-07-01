@@ -33070,7 +33070,19 @@ fn publish_cell_scene_snapshot(
     world: &holtburger_world::WorldState,
     snapshot: &std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
 ) {
-    let pose = match world.player_position() {
+    // BUGFIX (interior walk-in): read the client-predicted runtime pose, NOT
+    // the server entity pose (`player_position()`). On a WALKED-IN EnvCell
+    // entry the local transition flips only the runtime body's `landblock_id`
+    // to the interior cell (`set_local_player_runtime_pose`); `entity.position`
+    // keeps the OUTDOOR landblock (the ~20Hz self-echo is `writeLandblock:false`
+    // and ACE rarely sends a self UpdatePosition), so reading it here left
+    // `is_indoor=false` + an outdoor `current_cell` → the outdoor render-set
+    // branch culled every interior cell → floors/walls/furniture stayed hidden
+    // while server-weenie NPCs (separate subtree) still drew. Teleport masked it
+    // by writing `entity.position` to the interior cell directly. The sibling
+    // camera snapshot `publish_local_player_pose` already reads the runtime pose
+    // for the same reason (see its doc note); this call-site was missed.
+    let pose = match world.local_player_runtime_pose() {
         Some(p) => p,
         None => {
             *snapshot.borrow_mut() = CellSceneSnapshot::default();

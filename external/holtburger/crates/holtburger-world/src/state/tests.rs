@@ -856,6 +856,86 @@ fn set_local_player_runtime_pose_only_emits_runtime_body_change() {
     ));
 }
 
+/// REGRESSION GUARD for the interior walk-in render bug fixed at
+/// `apps/holtburger-web/src/lib.rs` `publish_cell_scene_snapshot`.
+///
+/// On a WALKED-IN EnvCell entry the client-local transition
+/// (`USE_LOCAL_ENVCELL_ENTRY`) flips ONLY the runtime body's pose to the
+/// interior cell via `set_local_player_runtime_pose`; there is no server
+/// `UpdatePosition`, so the server-mirrored `entity.position` keeps the
+/// OUTDOOR landblock. The cell-visibility snapshot MUST therefore read
+/// `local_player_runtime_pose()` (indoor) — reading `player_position()`
+/// (outdoor) leaves `is_indoor=false`, takes the outdoor render-set branch,
+/// and hides the entire interior (floors + walls + stab-list furniture) while
+/// server-weenie NPCs (a separate scene subtree) keep rendering. Teleport
+/// masked the bug because it writes `entity.position` to the interior cell
+/// directly. This asserts the exact `is_indoors()` divergence the fix keys
+/// off of.
+#[test]
+fn walked_in_envcell_entry_flips_runtime_pose_indoors_while_entity_pose_stays_outdoors() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0158);
+
+    // Player stands OUTDOORS in Holtburg (landblock 0xA9B4, outdoor cell 0x21).
+    let outdoor_pos = WorldPosition {
+        landblock_id: Guid(0xA9B4_0021),
+        coords: Vector3::new(84.0, 131.5, 66.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state.seed_local_player_entity(player_guid, "Player", outdoor_pos);
+
+    // Arm the integrator like normal outdoor movement (runtime body live).
+    let _ = state.set_local_player_runtime_pose(outdoor_pos);
+    assert!(
+        !state.player_position().expect("entity pose").is_indoors(),
+        "precondition: entity pose starts outdoors"
+    );
+    assert!(
+        !state
+            .local_player_runtime_pose()
+            .expect("runtime pose")
+            .is_indoors(),
+        "precondition: runtime pose starts outdoors"
+    );
+
+    // WALK-IN: local EnvCell entry flips ONLY the runtime body to the interior
+    // EnvCell (low16 >= 0x0100). No server UpdatePosition → entity.position is
+    // left untouched.
+    let interior_pos = WorldPosition {
+        landblock_id: Guid(0xA9B4_0158),
+        ..outdoor_pos
+    };
+    let _ = state.set_local_player_runtime_pose(interior_pos);
+
+    // The runtime pose (what the cell-visibility snapshot + camera must read)
+    // is now INDOORS at the interior EnvCell.
+    let runtime = state.local_player_runtime_pose().expect("runtime pose");
+    assert_eq!(runtime.landblock_id, Guid(0xA9B4_0158));
+    assert!(
+        runtime.is_indoors(),
+        "walk-in must flip the runtime pose indoors"
+    );
+
+    // ...while the server-mirrored entity pose is STILL outdoors. Reading THIS
+    // in publish_cell_scene_snapshot is the bug: is_indoor stays false and the
+    // interior is culled.
+    let entity = state.player_position().expect("entity pose");
+    assert_eq!(entity.landblock_id, Guid(0xA9B4_0021));
+    assert!(
+        !entity.is_indoors(),
+        "walk-in must NOT move the server entity pose"
+    );
+
+    // The two sources diverge on `is_indoors()` — the discriminator that
+    // selects getRenderSetWithFrustum's indoor vs outdoor branch. The fix
+    // reads the runtime pose so the interior renders on a walked-in entry.
+    assert_ne!(
+        runtime.is_indoors(),
+        entity.is_indoors(),
+        "runtime pose (indoor) must diverge from entity pose (outdoor) on walk-in"
+    );
+}
+
 #[test]
 fn solved_remote_runtime_body_only_emits_runtime_body_change() {
     let mut state = WorldState::synthetic();
