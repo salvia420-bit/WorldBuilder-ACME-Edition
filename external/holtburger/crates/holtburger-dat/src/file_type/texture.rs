@@ -299,9 +299,19 @@ impl Texture {
     /// `CSurface::SetTextureAndPalette(base1pal)` which applies the Surface's
     /// palette over the Texture's. `None` (or `Some(0)`) → use the texture's
     /// `default_palette_id` as before.
+    ///
+    /// `clipmap` marks the surface as `Base1ClipMap` (alpha-cutout). For the
+    /// palette-indexed formats (P8 / Index16) this reproduces retail
+    /// `ImgTex::CopyIntoData` (acclient.c:365958/365980): a pixel whose palette
+    /// index is `< 8` is the transparent clip range → emitted as RGBA(0,0,0,0)
+    /// rather than the (opaque) palette colour. Non-clipmap or non-palette
+    /// decodes ignore it. Without this, Index16/P8 clip-map creature bodies
+    /// (dolls, Virindi energy clusters) decode fully opaque and render as
+    /// solid boxes.
     fn to_rgba8_impl<F>(
         &self,
         palette_override: Option<u32>,
+        clipmap: bool,
         palette_for: F,
     ) -> std::result::Result<Vec<u8>, TextureDecodeError>
     where
@@ -378,6 +388,12 @@ impl Texture {
                 let mut out = Vec::with_capacity(pixels * 4);
                 for i in 0..pixels {
                     let idx = self.source_data[i] as usize;
+                    // Retail ImgTex::CopyIntoData (acclient.c:365980): ClipMap
+                    // surface → palette index < 8 is the transparent clip range.
+                    if clipmap && idx < 8 {
+                        out.extend_from_slice(&[0, 0, 0, 0]);
+                        continue;
+                    }
                     let argb = pal
                         .colors
                         .get(idx)
@@ -407,6 +423,12 @@ impl Texture {
                     let lo = self.source_data[i * 2] as u16;
                     let hi = self.source_data[i * 2 + 1] as u16;
                     let idx = (lo | (hi << 8)) as usize;
+                    // Retail ImgTex::CopyIntoData (acclient.c:365958): ClipMap
+                    // surface → palette index < 8 is the transparent clip range.
+                    if clipmap && idx < 8 {
+                        out.extend_from_slice(&[0, 0, 0, 0]);
+                        continue;
+                    }
                     let argb = pal
                         .colors
                         .get(idx)
@@ -579,22 +601,47 @@ impl Texture {
     where
         F: FnOnce(u32) -> std::result::Result<Palette, TextureDecodeError>,
     {
-        self.to_rgba8_impl(None, palette_for)
+        self.to_rgba8_impl(None, false, palette_for)
+    }
+
+    /// Like [`Texture::to_rgba8`] but honouring the `Base1ClipMap` surface bit:
+    /// for P8/Index16 textures, palette index `< 8` decodes to transparent
+    /// (retail `ImgTex::CopyIntoData`). Used by the entity/NPC decode path,
+    /// which composes a dyed palette in the `palette_for` closure and so can't
+    /// use the `orig_palette_id`-override wrapper.
+    pub fn to_rgba8_clipmap<F>(
+        &self,
+        clipmap: bool,
+        palette_for: F,
+    ) -> std::result::Result<Vec<u8>, TextureDecodeError>
+    where
+        F: FnOnce(u32) -> std::result::Result<Palette, TextureDecodeError>,
+    {
+        self.to_rgba8_impl(None, clipmap, palette_for)
     }
 
     /// Decode to RGBA8 applying a Surface-level `orig_palette_id` recolour
     /// when non-zero (retail `CSurface::SetTextureAndPalette(base1pal)`),
     /// falling back to the texture's `default_palette_id` when the override
     /// is 0. Non-palettized formats ignore the override entirely.
+    ///
+    /// `clipmap` marks a `Base1ClipMap` surface — for P8/Index16 textures,
+    /// palette index `< 8` decodes to transparent (retail
+    /// `ImgTex::CopyIntoData`). Pass the surface's ClipMap bit.
     pub fn to_rgba8_with_palette_override<F>(
         &self,
         surface_palette_id: u32,
+        clipmap: bool,
         palette_for: F,
     ) -> std::result::Result<Vec<u8>, TextureDecodeError>
     where
         F: FnOnce(u32) -> std::result::Result<Palette, TextureDecodeError>,
     {
-        self.to_rgba8_impl((surface_palette_id != 0).then_some(surface_palette_id), palette_for)
+        self.to_rgba8_impl(
+            (surface_palette_id != 0).then_some(surface_palette_id),
+            clipmap,
+            palette_for,
+        )
     }
 }
 

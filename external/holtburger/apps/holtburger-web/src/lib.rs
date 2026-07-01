@@ -4723,8 +4723,10 @@ fn lookup_surface_color<S: holtburger_dat::ResourceSource + ?Sized>(
     // Prefer the Surface's `orig_palette_id` recolour when non-zero (retail
     // CSurface::SetTextureAndPalette base1pal); fall back to the texture's
     // `default_palette_id` (the common case — orig_palette_id is usually 0).
+    // clipmap=false here: this is the mean-colour helper, which averages every
+    // texel (the render-path clip transparency lives in fetch_surface_pixels_impl).
     let rgba = tex
-        .to_rgba8_with_palette_override(surf_pal_id, |pal_id| {
+        .to_rgba8_with_palette_override(surf_pal_id, false, |pal_id| {
             let pal_bytes = source
                 .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
                 .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
@@ -7851,8 +7853,17 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     // Apply the Surface's `orig_palette_id` recolour over the texture's
     // `default_palette_id` (retail CSurface::SetTextureAndPalette base1pal);
     // no-op when the override is 0 (the common case).
+    //
+    // Base1ClipMap (surface_type & 0x4): a paletted (P8/Index16) clip-map
+    // texture has NO per-pixel alpha and its palette is opaque, so the cutout
+    // transparency must be synthesized — retail ImgTex::CopyIntoData
+    // (acclient.c:365958/365980) maps palette index < 8 to transparent. Without
+    // this, clip-map creature bodies (dolls, Virindi energy clusters) decode
+    // fully opaque and render as solid boxes. DXT clip-maps are unaffected
+    // (they carry real punch-through alpha in the block data).
+    let clipmap = (surface_type & 0x4) != 0;
     let rgba = tex
-        .to_rgba8_with_palette_override(surf_pal_id, |pal_id| {
+        .to_rgba8_with_palette_override(surf_pal_id, clipmap, |pal_id| {
             let pb = source
                 .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
                 .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
@@ -9512,7 +9523,14 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     // Compose the palette inside `to_rgba8`'s callback — receives
     // the texture's intrinsic palette id but we may override with
     // the entity's base + apply overlays.
-    let rgba = tex.to_rgba8(|tex_palette_id| {
+    //
+    // Base1ClipMap (surface_type & 0x4): paletted (P8/Index16) clip-map bodies
+    // synthesize cutout transparency from palette index < 8 (retail
+    // ImgTex::CopyIntoData). This is the DYED-entity render path (dolls,
+    // Virindi energy clusters) — without the clip flag their bodies decode
+    // fully opaque and render as solid boxes.
+    let clipmap = (surface_type & 0x4) != 0;
+    let rgba = tex.to_rgba8_clipmap(clipmap, |tex_palette_id| {
         // Precedence: clothing/entity base palette > Surface orig_palette_id
         // recolour (retail base1pal) > the texture's own default palette.
         let chosen_base = if base_palette_id != 0 {
