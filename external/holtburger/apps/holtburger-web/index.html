@@ -2089,10 +2089,10 @@
             MANIFEST_URL
           );
           // M2 (worker-based asset bake): register the manifest URL with the
-          // bake worker. Enabled only when `?bakeWorker=1` is in the page URL
-          // (configure() reads the flag). The worker spawns lazily on the
-          // first bake and falls back to the main thread on any error, so
-          // this is a no-op for default loads.
+          // bake worker. DEFAULT-ON as of 2026-07-01 (configure() reads the
+          // flag via urlFlagEnabled(), now opt-OUT with `?bakeWorker=0`). The
+          // worker spawns lazily on the first bake and falls back to the main
+          // thread on any error, so a worker failure degrades to prior behavior.
           try {
             configureBakeWorker({ manifestUrl: MANIFEST_URL });
           } catch (e) {

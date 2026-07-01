@@ -5041,6 +5041,7 @@ pub enum SideKind {
 /// in the C# reference, minus the centroid-Z (we sort painter-style
 /// in JS instead of in Rust — simpler boundary).
 #[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone)]
 struct Tri {
     pos: [[f32; 3]; 3],
     uv: [[f32; 2]; 3],
@@ -7312,6 +7313,20 @@ fn triangulate_model_with_substitutions<S: holtburger_dat::ResourceSource + ?Siz
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
+thread_local! {
+    /// Cross-LB triangulation memo (retail `DBOCache` analogue): a static
+    /// model's substitution-free triangulation is deterministic in `model_id`
+    /// against the immutable DAT, so decode it ONCE per wasm instance and reuse
+    /// it for every landblock it appears in — instead of the JS bake path
+    /// re-decoding the same tree/rock/wall model per LB (the per-LB movement
+    /// jank root cause). The bake worker's wasm instance persists across all
+    /// bakes, so the memo spans the whole session there. Bounded by
+    /// clear-on-overflow to cap wasm linear-memory growth.
+    static MODEL_TRI_CACHE: std::cell::RefCell<std::collections::HashMap<u32, std::rc::Rc<Vec<Tri>>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
 fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     model_id: u32,
@@ -7321,6 +7336,15 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
 ) -> Option<Vec<Tri>> {
     use holtburger_dat::file_type::GfxObj;
     use holtburger_dat::ResourceKey;
+    // Substitution-free triangulations are fully keyed by `model_id` → memoize.
+    // (Character equipment/clothing use substitutions; static scenery does not.)
+    let subst_free =
+        model_changes.is_empty() && texture_changes.is_empty() && mtable_override.is_none();
+    if subst_free {
+        if let Some(cached) = MODEL_TRI_CACHE.with(|c| c.borrow().get(&model_id).cloned()) {
+            return Some((*cached).clone());
+        }
+    }
     let mut tris = Vec::new();
     match (model_id >> 24) as u8 {
         0x01 => {
@@ -7347,6 +7371,15 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
             )?;
         }
         _ => return None,
+    }
+    if subst_free {
+        MODEL_TRI_CACHE.with(|c| {
+            let mut m = c.borrow_mut();
+            if m.len() >= 4096 {
+                m.clear();
+            }
+            m.insert(model_id, std::rc::Rc::new(tris.clone()));
+        });
     }
     Some(tris)
 }

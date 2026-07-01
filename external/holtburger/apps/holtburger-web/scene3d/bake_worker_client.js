@@ -22,9 +22,17 @@ import {
 
 function urlFlagEnabled() {
   try {
-    return new URLSearchParams(globalThis.location?.search || "").has("bakeWorker");
+    // Default-ON (2026-07-01): offloads model-mesh + surface-pixel decode to the worker.
+    // A/B (laptop/SwiftShader, Holtburg settle + 15 westward @teleloc hops) measured
+    // −24% main-thread longtasks total and −34..−37% on the 100–500ms per-LB bake stalls,
+    // with 0 console/page errors and 0 main-thread fallbacks (worker fully engaged). The
+    // decode is byte-identical to the main-thread path — this only moves WHERE it runs — and
+    // failure transparently falls back to the main thread, so default-on is fail-safe.
+    // Opt out with ?bakeWorker=0 (also off/false). Does NOT offload the terrain-atlas build.
+    const v = new URLSearchParams(globalThis.location?.search || "").get("bakeWorker");
+    return v !== "0" && v !== "off" && v !== "false";
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
