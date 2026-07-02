@@ -531,6 +531,40 @@ impl CTransition {
         if (state & object_info_state::ON_WALKABLE) != 0
             && (state & object_info_state::EDGE_SLIDE) != 0
         {
+            // USE_RETAIL_GROUND outdoor lip edge-protection. A mover that reaches
+            // `edge_slide` still `ON_WALKABLE` was, this insert, on WALKABLE ground
+            // (`validate_transition` clears the bit the moment the settled contact
+            // goes too-steep, driver_validate.rs / acclient.c:322598-322604) — so a
+            // too-steep-only contact here is NOT its support; it is the face BELOW a
+            // walkable lip the sweep just ran off (the step-down snap grabbed it,
+            // acclient.c:312961-313009). Retail then takes branch 1 `cliff_slide`
+            // (steep contact ⇒ pushed off/down) because the terrain path never set
+            // `sphere_path.walkable` (`CLandCell::find_env_collisions` →
+            // `validate_walkable` WITHOUT `set_walkable`, acclient.c:354992) so the
+            // precipice arm (branch 2, :312721) is unreachable — and the caller's
+            // `begin_fall` turns that off-push into a free fall down the face.
+            // Clearing the too-steep contact routes the decomp ladder to the
+            // step-down-retest/precipice/block arm (branches 2/4, :312721-:312772):
+            // a walkable ledge within a step-down ⇒ `precipice_slide` (slide ALONG
+            // the lip), else `Collided` — the retail "perpendicular stop". Scoped to
+            // the ON_WALKABLE+EDGE_SLIDE gate, so it cannot fire for a mover already
+            // sliding on a steep face (T2: that mover is NOT ON_WALKABLE ⇒ the outer
+            // `else` rewind arm, never this branch) nor for an airborne jump-over
+            // (T5: OnWalkable cleared ⇒ outer `else`). acclient.c:312710.
+            if self.retail_ground && self.begin_on_walkable {
+                if let Some(cp) = self.collision_info.contact_plane {
+                    if cp.normal.z < z_val {
+                        self.collision_info.contact_plane = None;
+                        self.collision_info.contact_plane_is_water = false;
+                        // Latch: a mover that BEGAN on walkable ground was edge-
+                        // protected at a lip. The marshalling re-plants the grounded
+                        // latch the collide path stripped. Gated on begin_on_walkable
+                        // so a mid-slope slider (begin on the steep face) is NOT
+                        // cleared → keeps `cliff_slide` and slides down (T2).
+                        self.edge_held = true;
+                    }
+                }
+            }
             let contact_valid = self.collision_info.contact_plane.is_some(); // v6
             // 312710: steep contact plane (N.z < z_val) → cliff.
             let steep =

@@ -270,6 +270,24 @@ impl MovementSystemHandle {
         self.inner.set_building_overlap(on);
     }
 
+    /// (2026-07-02): install the `?retailGround=off` runtime carrier
+    /// (default-ON retail outdoor ground movement — FLOOR_Z cliff refusal +
+    /// cliff_slide, step-down downhill stick, lip block/slide; `=off` rolls
+    /// back to the pre-2026-07-02 behavior). Read only when
+    /// `?faithfulTransition` is also on (the chain lives in the faithful
+    /// driver). Forwards to `MovementSystem::set_retail_ground`.
+    pub fn set_retail_ground(&mut self, on: bool) {
+        self.inner.set_retail_ground(on);
+    }
+
+    /// (2026-07-02): install the `?castMove=off` runtime carrier (default-ON
+    /// retail cast-movement arbitration — a server-played cast gesture
+    /// suppresses held locomotion until an input edge / gesture end; `=off`
+    /// disables). Forwards to `MovementSystem::set_cast_move`.
+    pub fn set_cast_move(&mut self, on: bool) {
+        self.inner.set_cast_move(on);
+    }
+
     /// Phase 3 Phase D — the effective OUTDOOR-faithful predicate, threaded into
     /// the transition dispatch's `faithful_outdoor` arm (WS4). Combines the
     /// `USE_FAITHFUL_OUTDOOR` const default with the `?faithfulOutdoor` runtime

@@ -75,7 +75,7 @@ import * as THREE from "three";
 import { BAKE_PREWARM, prewarmSubtree } from "./bake_prewarm.js";
 import { meshToGeometryGroups } from "./adapter.js";
 import { MaterialCache, materialCanCastShadow, VFX_GLOBALS, installVfxComponentPatch } from "./materials.js";
-import { lbKeyOf } from "./landblock_lru.js";
+import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 import { CULL_DIST_SQ } from "./culling.js";
 // A11-S3: `?particleClock` flag parse — when "loop"/"sim" the static
@@ -604,7 +604,7 @@ function drainPlacements(allPlacements) {
  *   - Empty result (LB has 0 baked scenery, 55 of 169 ring LBs per
  *     Phase B.3 oracle) returns `[]` cleanly — no logging.
  */
-async function fetchAndDrainScenery(cellIds, wasmExports) {
+async function fetchAndDrainScenery(cellIds, wasmExports, urgent = false) {
   if (
     !wasmExports ||
     typeof wasmExports.fetch_landblock_scenery !== "function"
@@ -614,7 +614,10 @@ async function fetchAndDrainScenery(cellIds, wasmExports) {
   ensureSceneryInit(wasmExports);
   let scenery;
   try {
-    scenery = await wasmExports.fetch_landblock_scenery(cellIds);
+    // streamFix urgent lane (2026-07-02): `urgent` rides through to the
+    // wasm export's SetupModel-resolve prefetch (see lib.rs). Extra arg is
+    // ignored by a stale wasm bundle — fail-soft.
+    scenery = await wasmExports.fetch_landblock_scenery(cellIds, urgent);
   } catch (e) {
     // A transient `fetch_landblock_scenery` failure (e.g. a dropped/timed-out
     // shard fetch over a flaky tunnel, or load spike) must NOT be swallowed:
@@ -717,6 +720,14 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
   const didDegradeByModel = new Map();
   const allSurfaceDids = new Set();
   let skippedZeroTri = 0;
+  // streamFix retryability (2026-07-02): count the TRANSIENT drop classes —
+  // `decode-starved` (wasm reported record misses even after its retry; the
+  // fetch pipeline was saturated, e.g. mid rapid-teleport backlog) and
+  // `no-mesh` (batch shorter than requested). A `zero-tri` WITHOUT misses is
+  // a genuinely-empty model and stays a permanent skip. The caller uses
+  // `starvedCount > 0` to leave the LB un-marked + retryable instead of
+  // permanently baking a hole into the town.
+  let starvedCount = 0;
 
   if (uniqueModelIds.length === 0) {
     return {
@@ -724,6 +735,7 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
       didDegradeByModel,
       allSurfaceDids,
       skippedZeroTri,
+      starvedCount,
     };
   }
 
@@ -738,6 +750,7 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
       didDegradeByModel,
       allSurfaceDids,
       skippedZeroTri,
+      starvedCount,
       fetchFailed: true,
     };
   }
@@ -750,14 +763,26 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     const m = meshes[i];
     if (!m) {
       droppedModelIds.push({ id: id >>> 0, reason: "no-mesh" });
+      starvedCount += 1;
       continue;
     }
     if (m.triCount === 0) {
       skippedZeroTri += 1;
       const misses = typeof m.decodeMisses === "number" ? m.decodeMisses >>> 0 : -1;
-      droppedModelIds.push({ id: id >>> 0, reason: misses > 0 ? "decode-starved" : "zero-tri" });
+      const starved = misses > 0;
+      if (starved) starvedCount += 1;
+      droppedModelIds.push({ id: id >>> 0, reason: starved ? "decode-starved" : "zero-tri" });
       if (typeof m.free === "function") m.free();
       continue;
+    }
+    // streamFix retryability (2026-07-02): a mesh that decoded with
+    // record misses but non-zero tris is PARTIAL (wasm warned "mesh will
+    // be partial/empty"). Count it starved so the caller leaves the LB
+    // retryable — the throw happens BEFORE any node attach, so the retry
+    // re-bake cannot duplicate nodes. Once the retry cap is exhausted the
+    // caller accepts this partial output as-is.
+    if (((typeof m.decodeMisses === "number" ? m.decodeMisses : 0) >>> 0) > 0) {
+      starvedCount += 1;
     }
     // Snapshot every DID this model references — material cache
     // preloads them in one batch below. Each `surfaces` getter
@@ -797,8 +822,20 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     didDegradeByModel,
     allSurfaceDids,
     skippedZeroTri,
+    starvedCount,
   };
 }
+
+// streamFix retryability (2026-07-02): per-LB starved-decode retry budget.
+// A decode-starved bake un-marks the LB + throws (the stream guard cooldowns
+// it, the PVS expansion re-fires it — the exact self-heal path the scenery
+// re-throw above uses), but ONLY up to this many attempts: a model that is
+// PERMANENTLY undecodable (absent from the manifest — indistinguishable from
+// starvation at this layer) must not turn the LB into an infinite
+// bake→throw→cooldown loop. After the cap, the partial bake is accepted and
+// warned loudly. A fully-clean bake clears the LB's counter.
+const STATICS_STARVED_RETRY_CAP = 3;
+const _staticsStarvedRetries = new Map();
 
 /**
  * RP1 — composite key for the degraded surface-group Map. Mirrors the
@@ -1693,7 +1730,15 @@ export async function bakeStaticsForLandblock(
   // return placements.
   const cellId = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16) | 0xfffe) >>> 0;
   const cellIds = new Uint32Array([cellId]);
-  const allPlacements = await wasmExports.fetch_landblock_objects(cellIds);
+  // streamFix urgent lane (2026-07-02): a bake for the player's current LB
+  // (or its 3×3) is player-blocking — its wasm fetches bypass the shared
+  // fetch semaphore so a rapid-teleport speculative backlog from previous
+  // towns can't starve the town the player is standing in (the measured
+  // "by the third town nothing loads" mechanism, layer 2). Speculative
+  // ring LBs keep the pre-fix normal lane. Snapshot ONCE at bake start so
+  // one bake never mixes lanes mid-flight.
+  const urgent = isNearPlayerLb(scene3d, lbKey);
+  const allPlacements = await wasmExports.fetch_landblock_objects(cellIds, urgent);
   const landblockInfoStatics = drainPlacements(allPlacements);
   // Phase C.3 — fetch baked scenery placements in parallel-ish (after
   // the LandblockInfo drain so the wasm `ObjectPlacement` linear-memory
@@ -1710,7 +1755,7 @@ export async function bakeStaticsForLandblock(
   // codes don't reference any scene). Empty-scenery is the common
   // case; we treat it as "nothing to add" and continue with whatever
   // LandblockInfo placements survived.
-  const sceneryStatics = await fetchAndDrainScenery(cellIds, wasmExports);
+  const sceneryStatics = await fetchAndDrainScenery(cellIds, wasmExports, urgent);
   // Concatenate. The merged array is the single source of truth for
   // the rest of the per-LB bake. Order is LandblockInfo first then
   // scenery — purely for log-readability; the renderer doesn't care.
@@ -1794,14 +1839,55 @@ export async function bakeStaticsForLandblock(
   // bake worker when enabled (`?bakeWorker=1`). When disabled, `mmFetch`
   // IS `wasmExports.fetch_model_meshes` (identical reference) — byte-
   // identical to pre-M2. Worker results are drop-in (same field surface).
-  const mmFetch = modelMeshFetcher(wasmExports);
-  const spFetch = surfacePixelsFetcher(wasmExports);
+  // streamFix urgent lane (2026-07-02): close the bake's `urgent` over the
+  // fetchers so every downstream helper (primary + degraded geometry,
+  // material preload) rides the same lane without signature churn.
+  const mmFetchRaw = modelMeshFetcher(wasmExports);
+  const spFetchRaw = surfacePixelsFetcher(wasmExports);
+  const mmFetch = (ids) => mmFetchRaw(ids, urgent);
+  const spFetch = (dids) => spFetchRaw(dids, urgent);
   const primary = await fetchPrimaryGeometries(uniqueModelIds, mmFetch);
   if (primary.fetchFailed) {
-    return {
-      ...makeEmptySummary(),
-      skippedNoMesh: statics.length,
-    };
+    // streamFix retryability (2026-07-02): the whole model-mesh batch fetch
+    // THREW after the LB was already marked baked above (A2 marks after the
+    // placement drain, but the geometry decode is equally load-bearing).
+    // Returning an empty summary here permanently stripped every static in
+    // the LB for the session. Un-mark + re-throw instead so the guard
+    // cooldowns and the PVS expansion re-bakes it — identical semantics to
+    // the fetchAndDrainScenery re-throw above.
+    scene3d.staticsBakedLbs.delete(lbKey);
+    throw new Error(
+      `bakeStaticsForLandblock 0x${lbKey.toString(16)}: fetch_model_meshes batch failed; leaving LB retryable`
+    );
+  }
+  if (primary.starvedCount > 0) {
+    // streamFix retryability (2026-07-02): one or more models decoded
+    // empty/partial under fetch starvation (decodeMisses>0 / missing batch
+    // entry). Pre-fix these were silently dropped while the LB stayed
+    // marked baked — the permanent missing-buildings/props class the
+    // 12-town portal circuit reproduced. Un-mark + throw (bounded per-LB by
+    // STATICS_STARVED_RETRY_CAP) so the guard cooldown + PVS re-fire retry
+    // the bake once the fetch pipeline drains. No nodes were attached yet,
+    // so the retry cannot duplicate scene content.
+    const attempts = (_staticsStarvedRetries.get(lbKey) || 0) + 1;
+    if (attempts <= STATICS_STARVED_RETRY_CAP) {
+      _staticsStarvedRetries.set(lbKey, attempts);
+      scene3d.staticsBakedLbs.delete(lbKey);
+      throw new Error(
+        `bakeStaticsForLandblock 0x${lbKey.toString(16)}: ${primary.starvedCount}/${uniqueModelIds.length} ` +
+          `models decode-starved; leaving LB retryable (attempt ${attempts}/${STATICS_STARVED_RETRY_CAP})`
+      );
+    }
+    // Cap exhausted — accept the partial bake (visible content beats a bake
+    // loop on a permanently-missing record) and say so loudly.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[geom-audit] statics 0x${lbKey.toString(16)}: accepting PARTIAL bake after ` +
+        `${STATICS_STARVED_RETRY_CAP} starved retries (${primary.starvedCount} models still incomplete)`
+    );
+    _staticsStarvedRetries.delete(lbKey);
+  } else if (_staticsStarvedRetries.has(lbKey)) {
+    _staticsStarvedRetries.delete(lbKey); // clean bake — reset the budget
   }
   const degradedGeomByModel = await fetchDegradedGeometries(
     primary.didDegradeByModel,

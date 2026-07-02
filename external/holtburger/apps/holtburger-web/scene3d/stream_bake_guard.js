@@ -46,7 +46,13 @@ export function createStreamGuardState() {
  * @param {string} kind baker label ("terrain" | "buildings" | "statics")
  * @param {number} lbKey landblock key
  * @param {() => Promise<any>} run the baker thunk (returns the bake promise)
- * @param {{cooldownMs?: number, maxInFlight?: number, now?: () => number, warn?: (msg: string, err: any) => void}} [opts]
+ * @param {{cooldownMs?: number, maxInFlight?: number, urgent?: boolean, now?: () => number, warn?: (msg: string, err: any) => void}} [opts]
+ *   `opts.urgent` (streamFix 2026-07-02): a PLAYER-BLOCKING bake (the
+ *   current LB / its 3×3 after a teleport) is exempt from the GLOBAL
+ *   in-flight cap — it must be able to START even while up to
+ *   `maxInFlight` stale speculative bakes from the previous town are
+ *   still draining. Per-key in-flight dedup and the failure cooldown
+ *   still apply (those protect correctness, the cap protects load).
  * @returns {Promise<any>} the bake result, or null when skipped/failed. Never rejects.
  */
 export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
@@ -76,8 +82,12 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
   // Global concurrency cap: if too many bakes are already running (across all
   // keys), skip STARTING this one. The PVS ring re-fires on later ticks, so a
   // skipped bake is retried, not lost. Checked after the per-key dedup +
-  // cooldown so neither is bypassed by the cap.
-  if (state.inFlight.size >= maxInFlight) return Promise.resolve(null);
+  // cooldown so neither is bypassed by the cap. streamFix (2026-07-02):
+  // urgent (player-blocking, current-LB/3×3) bakes are cap-exempt — see the
+  // opts doc above.
+  if (opts.urgent !== true && state.inFlight.size >= maxInFlight) {
+    return Promise.resolve(null);
+  }
 
   state.inFlight.add(guardKey);
   return Promise.resolve()

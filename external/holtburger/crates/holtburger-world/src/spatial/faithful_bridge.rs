@@ -926,6 +926,29 @@ impl MovingObjectPhysics for FaithfulMover {
 /// `?stepUp=off`) is stamped onto `CTransition::faithful_stepup` and read by the
 /// WS-B (indoor BSP) + WS-C (terrain) step-up climb seams. Default-ON; `=off`
 /// rolls climbing back to the pre-E1 stop-at-base behavior.
+/// USE_RETAIL_GROUND — the faithful terrain normal under a world pose, using the
+/// SAME `cell_terrain_polys` + `find_terrain_poly` the driver's terrain path runs
+/// (so it agrees exactly with the collision plane, not the legacy heightfield
+/// sampler). `None` off resident terrain (indoor cells / non-loaded landblocks).
+/// Drives the walkable-vs-steep discriminator (`begin_on_walkable`) for the lip
+/// edge-protection: a mover on WALKABLE terrain is held at a lip (T4); one on a
+/// too-steep face keeps `cliff_slide` and slides (T2).
+fn faithful_terrain_normal(scene: &SpatialScene, pose: &WorldPosition) -> Option<Vector3> {
+    let cell_id = scene.current_cell(pose);
+    let heights = scene.terrain_cell_heights(cell_id)?;
+    let (lb_x, lb_y) = pose.landblock_coords();
+    let g = pose.global_coords();
+    let local = Vector3::new(
+        g.x - lb_x as f32 * METERS_PER_LANDBLOCK,
+        g.y - lb_y as f32 * METERS_PER_LANDBLOCK,
+        g.z,
+    );
+    let cell_x = (local.x / CELL_SIZE).floor().clamp(0.0, 7.0) as u32;
+    let cell_y = (local.y / CELL_SIZE).floor().clamp(0.0, 7.0) as u32;
+    let polys = cell_terrain_polys(heights, cell_id & 0xFFFF_0000, cell_x, cell_y);
+    find_terrain_poly(&polys, local).map(|p| p.plane.normal)
+}
+
 pub fn faithful_find_transitional_position(
     env: &dyn TransitionEnv,
     input: &TransitionInput,
@@ -1002,6 +1025,15 @@ pub fn faithful_find_transitional_position(
     // toggle into the driver. `CTransition::new()` defaults this ON; this honors
     // the runtime `?stepUp=off` rollback. Read by the WS-B/WS-C climb seams.
     t.faithful_stepup = faithful_stepup;
+    // USE_RETAIL_GROUND — thread the gate into the driver so `edge_slide`'s
+    // outdoor lip edge-protection (driver_spine.rs) engages only under the port,
+    // plus the walkable-vs-steep discriminator: whether the mover BEGAN on walkable
+    // terrain (only then does a run-off get HELD; a mid-slope slider keeps sliding).
+    t.retail_ground = input.gates.retail_ground;
+    if input.gates.retail_ground {
+        t.begin_on_walkable = faithful_terrain_normal(scene, &input.begin)
+            .is_some_and(|n| n.z >= 0.664_174_1);
+    }
     // Phase 3 Phase E1b / WS-C (2026-06-29) — restore the faithful persistent
     // `ON_WALKABLE` precondition for a GROUNDED mover (the genuine vertical-lip
     // step-up fix). Retail's OBJECTINFO carries `ON_WALKABLE` across frames —
@@ -1052,6 +1084,108 @@ pub fn faithful_find_transitional_position(
         && !scene.cell_static_physics_bsp(begin_cell).is_empty();
     if t.faithful_stepup && grounded_entry && (input.begin.is_indoors() || on_outdoor_static) {
         t.object_info.state |= object_info_state::ON_WALKABLE;
+    }
+    // USE_RETAIL_GROUND (2026-07-02, `?retailGround=off`) — the retail
+    // outdoor ground-movement port. Empirically the block above's premise
+    // ("outdoor slope-climb / cliff-stop already work via the per-substep
+    // chain") does NOT hold on the live path: without the entry latch,
+    // `validate_walkable`'s `!ON_WALKABLE` short-circuit (objectinfo.rs:145/
+    // :164) records + pushes the mover out of ANY penetrated terrain plane
+    // regardless of steepness — a cliff face behaves like a floor you climb —
+    // and without `object_info.step_down` the entire step-down snap +
+    // `edge_slide` decision tree (transitional_insert, acclient.c:312961-
+    // 313009) is unreachable, so there is no downhill stick, no FLOOR_Z
+    // slope refusal, no cliff_slide and no lip protection. Retail:
+    //   * `OBJECTINFO::init` (acclient.c:314131): `step_down = !(state &
+    //     Missile)` — always TRUE for the player;
+    //   * `CPhysicsObj::get_object_info` (acclient.c:319074-319099): a
+    //     grounded mover enters the transition CONTACT|ON_WALKABLE (from
+    //     `transient_state` 0x1/0x2) with its stored contact plane seeded
+    //     via `init_contact_plane`; an airborne mover carries NEITHER bit
+    //     (our `for_local_player` stamps CONTACT unconditionally — strip it
+    //     when airborne so landing runs the permissive Z_FOR_LANDING arm);
+    //   * the seeded plane feeds `adjust_offset`'s slope projection
+    //     (downhill offset follows the surface — the feet-planted fix) and
+    //     `cliff_slide`'s `cross(N, lastKnownN)` skid direction.
+    // `validate_transition` recomputes CONTACT/ON_WALKABLE from the real
+    // contact plane every step (driver_validate.rs:185-195), so a steep
+    // support self-corrects — the stamp is the retail carry, not a cheat.
+    //
+    // USE_RETAIL_GROUND edge-hold: the WALKABLE support the mover entered on —
+    // its carried contact plane, iff WALKABLE (`N.z >= FloorZ`). `Some` ⇒ it stood
+    // on walkable ground last frame; drives the walkable-lip re-plant in the
+    // grounded marshalling below. A mid-slope slider (T2) carries a too-steep plane
+    // ⇒ `None` ⇒ EXCLUDED (it keeps sliding). Derived from the NORMAL only (not the
+    // seed's `near` test), because the terrain contact plane's `d` is landblock-
+    // local (find_terrain_collisions rebases into the LB frame) while the seed's
+    // low point is world — so `near` never fires outdoors, but the normal is
+    // frame-independent (LB↔world is a pure translation).
+    let entry_walkable_contact: Option<(holtburger_common::Plane, u32)> = input
+        .last_contact_plane
+        .filter(|(p, _)| p.normal.z >= 0.664_174_1);
+    if input.gates.retail_ground {
+        t.object_info.step_down = true;
+        // Entry contact/walkable bits from the STORED plane — the faithful
+        // mapping of retail's `transient_state` carry + `check_contact`
+        // (acclient.c:319074-319099 / :316536; ACE PhysicsObj.cs:2586/2217):
+        //   * CONTACT ⇔ the mover's last transition ended with a contact
+        //     plane (our exact-clearing `last_contact_plane` store), the
+        //     plane is still LOCAL to the begin pose (retail clears contact
+        //     state on teleports; the nearness guard covers our one-frame
+        //     store lag), and the mover is not moving AWAY from it. Retail's
+        //     `check_contact` tests `m_velocityVector · N > EPSILON` — on
+        //     ground retail locomotion is animation-driven (near-zero physics
+        //     velocity), so the test effectively fires only for the
+        //     jump/launch v_z. Our integrator keeps that same split
+        //     (planar store + `vertical_velocity`), so the faithful proxy is
+        //     the vertical arc: ascending (`!descending`) over an up-facing
+        //     plane = moving away (the retail jump bypass, `CMotionInterp::
+        //     jump` → `set_on_walkable(0)`, acclient.c:344247).
+        //   * ON_WALKABLE ⇔ CONTACT && the stored plane is WALKABLE
+        //     (`N.z >= FloorZ`, retail `SetPositionInternal`
+        //     acclient.c:322598-322604). A too-steep support therefore
+        //     enters CONTACT-only: gravity stays on, `adjust_offset`
+        //     projects the step along the face (the retail cliff slide),
+        //     and the FLOOR_Z gate in `validate_walkable` refuses to treat
+        //     the face as a floor — no more free cliff climbing.
+        let mut live_contact = false;
+        if let Some((plane, cell_id)) = input.last_contact_plane {
+            let feet = input.begin.global_coords();
+            let low_center = Vector3::new(feet.x, feet.y, feet.z + radius);
+            let bottom_dist = plane.normal.dot(&low_center) + plane.d - radius;
+            let near = bottom_dist.abs() <= input.object.step_down_height.max(radius);
+            // Retail `check_contact` (acclient.c:316536): contact is dropped
+            // when the mover moves AWAY from the plane (`velocity·N > EPS`).
+            // Retail ground locomotion is animation-driven (near-zero physics
+            // velocity), so the test effectively fires on the jump/launch
+            // v_z — our faithful proxy is the vertical arc (`!descending`).
+            let moving_away = !input.descending && plane.normal.z > 0.0;
+            if near && !moving_away {
+                t.object_info.state |= object_info_state::CONTACT;
+                t.init_contact_plane(cell_id, plane, false);
+                live_contact = true;
+            } else if near {
+                t.init_last_known_contact_plane(cell_id, plane, false);
+            }
+        }
+        if grounded_entry {
+            // The persistent grounded latch (retail carries CONTACT|ON_WALKABLE
+            // from `transient_state`, acclient.c:319090-319096). Kept for every
+            // walkable-latched entry — CONTACT arms the step-down snap (the
+            // retail downhill stick) and ON_WALKABLE keys the FLOOR_Z slope
+            // gate + `edge_slide`'s lip machine. A stale/echoed latch cannot
+            // stick the mover mid-air: `grounded` below derives from the
+            // transition's FINAL contact plane, not from these entry bits.
+            t.object_info.state |=
+                object_info_state::CONTACT | object_info_state::ON_WALKABLE;
+        } else if !live_contact {
+            // Airborne with no live contact: retail enters with NEITHER bit
+            // (the permissive Z_FOR_LANDING landing arm). Airborne WITH a live
+            // contact (sliding on a too-steep face) keeps CONTACT but not
+            // ON_WALKABLE: gravity stays on and `adjust_offset` projects the
+            // step along the face — the retail slide-down.
+            t.object_info.state &= !object_info_state::CONTACT;
+        }
     }
     t.init_sphere(2, &spheres, 1.0);
     t.init_path(Some(begin_cell), Some(&begin_pos), &end_pos);
@@ -1132,8 +1266,50 @@ pub fn faithful_find_transitional_position(
     // resolver's `CTransition::step_up` / `find_walkable` PHASE3 port (a CONTACT
     // mover's `step_sphere_up` currently falls through to a slide and establishes
     // no contact plane, so neither source latches on flat ground yet — Phase C).
-    let grounded = (t.object_info.state & object_info_state::ON_WALKABLE) != 0
-        || t.sphere_path.walkable.is_some();
+    //
+    // USE_RETAIL_GROUND (2026-07-02): the retail derivation instead — retail
+    // `SetPositionInternal` recomputes on-walkable EVERY frame from the
+    // transition's FINAL contact plane (`contact_plane_valid` +
+    // `N.z >= floor_z ? set_on_walkable(1) : set_on_walkable(0)`,
+    // acclient.c:322586-322615) and a contact-less frame LEAVES GROUND. The
+    // bit-based mapping above echoes the ENTRY stamp through zero-offset
+    // transitions (`num_steps == 0` never runs `validate_transition`), which
+    // let a mover stand planted mid-air / on a too-steep face forever.
+    let grounded = if input.gates.retail_ground {
+        const RETAIL_FLOOR_Z: f32 = 0.664_174_1; // PhysicsGlobals::floor_z
+        match t.collision_info.contact_plane {
+            Some(plane) => plane.normal.z >= RETAIL_FLOOR_Z,
+            None => t.sphere_path.walkable.is_some(),
+        }
+    } else {
+        (t.object_info.state & object_info_state::ON_WALKABLE) != 0
+            || t.sphere_path.walkable.is_some()
+    };
+    // USE_RETAIL_GROUND walkable-lip edge-hold (2026-07-02). A grounded mover
+    // CANNOT walk off a walkable edge — retail edge protection holds it (only a
+    // jump clears OnWalkable → T5). `edge_slide` blocks the POSITION at the lip
+    // (driver_spine.rs edge-protect) and sets `t.edge_held`, but the step-down
+    // snap that grazed the too-steep face below clears the contact AND `last_known`
+    // (the collide path, acclient.c:312897-312935), so `validate_transition`'s
+    // BRANCH-A contact restore (acclient.c:312223-312254) has nothing to re-seat:
+    // the frame ends contact-less ⇒ `grounded == false` ⇒ the caller `begin_fall`s
+    // a planted mover into a free fall off the lip (the T4 bug). Re-plant it on the
+    // DRIVER's `edge_held` latch — set ONLY inside the `ON_WALKABLE && EDGE_SLIDE`
+    // gate, which a mid-slope slider (T2) never enters (too-steep support clears
+    // `ON_WALKABLE`), so T2 keeps sliding. The `entry_walkable_contact` carry keeps
+    // the walkable plane for the next frame's seed; the no-drop test is a belt-and-
+    // braces guard (a genuine descent still falls). Position already held by the
+    // driver — this only restores the grounded latch.
+    let (grounded, edge_hold_plane) = if input.gates.retail_ground
+        && !grounded
+        && t.edge_held
+        && entry_walkable_contact.is_some()
+        && curr.frame.origin.z >= input.begin.global_coords().z - radius
+    {
+        (true, entry_walkable_contact)
+    } else {
+        (grounded, None)
+    };
     // wall_normal ← COLLISIONINFO::last_known_contact_plane normal (Plane and
     // Vector3 are the shared holtburger_common types — no conversion).
     // VERIFY(1070): firing is gated on the same resolver PHASE3 port (no contact
@@ -1160,12 +1336,30 @@ pub fn faithful_find_transitional_position(
         TransitionState::Collided
     };
 
+    // USE_RETAIL_GROUND — surface the settled contact plane for the caller's
+    // cross-frame carry: retail `SetPositionInternal` copies the transition's
+    // CONTACT plane + its validity onto the object (acclient.c:322538-322590)
+    // — NOT the last-known plane. The distinction is load-bearing: the
+    // `edge_slide` cliff branch CLEARS the contact plane (acclient.c:312712-
+    // 312717), so a face-skid frame ends contact-INVALID and the next frame
+    // seeds nothing — `adjust_offset` then cannot re-project the walk input
+    // up the face it was just refused from (the climb-ratchet this fixes).
+    // On a walkable-lip edge-hold the driver ended contact-less (the collide
+    // path cleared it); carry the ENTRY walkable plane forward so the next
+    // frame re-seeds CONTACT and the mover keeps its footing at the lip.
+    let contact_plane = edge_hold_plane.or_else(|| {
+        t.collision_info
+            .contact_plane
+            .map(|plane| (plane, t.collision_info.contact_plane_cell_id))
+    });
+
     TransitionOutcome {
         pose,
         wall_normal,
         grounded,
         cell_changed,
         state,
+        contact_plane,
     }
 }
 
@@ -1252,6 +1446,7 @@ mod drift {
             skip_parented_entities: true,
             walkable_reinsert_probe: false,
             outdoor_static_grounding: false,
+            retail_ground: false,
         }
     }
 
@@ -1266,6 +1461,7 @@ mod drift {
             gates: gates(),
             last_known_wall_normal: None,
             frames_stationary_fall: 0,
+            last_contact_plane: None,
         }
     }
 
@@ -2474,6 +2670,47 @@ mod drift {
         );
     }
 
+    // ── (a') USE_RETAIL_GROUND wiring (2026-07-02) ──
+    // Same flat walk with the retail ground gates on: the entry latch
+    // (CONTACT|ON_WALKABLE), OBJECTINFO step_down and the contact-plane seed
+    // must not regress the grounded indoor walk, and the outcome must carry
+    // the settled contact plane for the caller's cross-frame store (the
+    // retail SetPositionInternal copy). The plane's normal must be the flat
+    // floor's +Z (a walkable plane — FLOOR_Z gate satisfied).
+    #[test]
+    fn retail_ground_flat_walk_stays_grounded_and_carries_plane() {
+        let env = flat_floor_env();
+        let begin = pose_at(FCX, FCY, FLOOR_WZ);
+        let end = pose_at(FCX + 1.3, FCY, FLOOR_WZ - SINK);
+        let mut input = input_for(begin, end);
+        input.gates.retail_ground = true;
+        let f = faithful_find_transitional_position(&env, &input, true, true);
+        assert_in_cell_aabb(&env, &f);
+        assert_no_overshoot(&begin, &end, &f);
+        assert!(f.pose.coords.x > begin.coords.x, "retail_ground still advances");
+        assert!(f.grounded, "grounded latch survives the retail entry stamp");
+        let (plane, _cell) = f
+            .contact_plane
+            .expect("retail_ground surfaces the settled contact plane");
+        assert!(
+            plane.normal.z > 0.9,
+            "flat floor plane carried out: N = {:?}",
+            plane.normal
+        );
+
+        // Round-trip: seeding the carried plane back in (the next slice's
+        // entry) keeps the walk grounded and advancing — the retail
+        // `get_object_info` → `init_contact_plane` carry.
+        let begin2 = f.pose;
+        let end2 = pose_at(begin2.coords.x + 1.0, FCY, begin2.coords.z - SINK);
+        let mut input2 = input_for(begin2, end2);
+        input2.gates.retail_ground = true;
+        input2.last_contact_plane = f.contact_plane;
+        let f2 = faithful_find_transitional_position(&env, &input2, true, true);
+        assert!(f2.grounded, "seeded entry stays grounded");
+        assert!(f2.pose.coords.x > begin2.coords.x, "seeded entry advances");
+    }
+
     // ── (b) walk into a wall ──
     // The approximate path STOPS within a radius of the wall (validated). The
     // faithful path TERMINATES, stays in-bounds, never overshoots, and round-
@@ -3354,6 +3591,350 @@ mod drift {
         // The flat control advanced clearly past the start (geometry, not a stuck
         // driver, is what stops the cliff climb).
         assert!(flat_end.x > start_g.x + 0.5, "flat control advanced east");
+    }
+
+    // ── T4 lip-perpendicular (USE_RETAIL_GROUND): running OFF a walkable cliff
+    //    lip must HOLD at the lip (precipice edge-protect / block), NOT sail off.
+    //
+    //    Faithful multi-frame reproduction of the live manual-drive slice
+    //    (system.rs `finish_manual_slice_via_transition`): grounded frames use a
+    //    small gravity SINK + re-aimed run velocity; a `!grounded` outcome flips
+    //    the mover airborne (`begin_fall`), FREEZING the planar velocity and
+    //    integrating 2nd-order gravity — the exact path that lets a run-off frame
+    //    turn into a plunge. `last_contact_plane` is carried across frames (the
+    //    retail `SetPositionInternal` contact copy-out). retail_ground ON.
+    //
+    //    Terrain: a flat top z=80 (vx≤5) adjoining a 54.8° face dropping to z=46
+    //    (vx≥6) — the face lives in cell_x=5 (vertices vx 5→6), lip at world x=504.
+    //    The real Holtburg T4 face is this same 54.8° grade.
+    fn lip_terrain(north: bool) -> [f32; 81] {
+        let mut h = [80.0f32; 81];
+        for a in 6..9usize {
+            for b in 0..9usize {
+                let idx = if north { b * 9 + a } else { a * 9 + b };
+                h[idx] = 46.0;
+            }
+        }
+        h
+    }
+
+    /// Drive `frames` of the faithful live slice toward/over the lip and return
+    /// `(min_z, max_along, grounded_frac, final_pose)`. `north` runs +Y (the real
+    /// T4 axis); else +X. Mirrors system.rs `finish_manual_slice_via_transition`.
+    fn lip_walk(
+        north: bool,
+        retail_ground: bool,
+        frames: usize,
+        speed: f32,
+    ) -> (f32, f32, f32, WorldPosition) {
+        let env = DriftEnv { scene: outdoor_scene(lip_terrain(north)) };
+        let (sx, sy) = outdoor_cell_center(4, 4); // (492,684): flat top, 12 m before the lip
+        let mut pose = outdoor_pose(sx, sy, 80.0);
+        let dt = 1.0 / 30.0f32;
+        let dir = if north { v(0.0, speed, 0.0) } else { v(speed, 0.0, 0.0) };
+        let mut is_airborne = false;
+        let mut vvel = 0.0f32;
+        let mut planar = dir;
+        let mut last_cp: Option<(Plane, u32)> = None;
+        let mut gg = gates();
+        gg.retail_ground = retail_ground;
+
+        let mut min_z = 80.0f32;
+        let mut max_along = if north { sy } else { sx };
+        let mut grounded_frames = 0usize;
+        for frame in 0..frames {
+            let g = pose.global_coords();
+            let dz = if is_airborne {
+                let az = -9.8f32;
+                let d = vvel * dt + 0.5 * az * dt * dt;
+                vvel += az * dt;
+                d
+            } else {
+                planar = dir; // grounded: re-aim the run each frame
+                -SINK
+            };
+            let descending = if is_airborne { vvel <= 0.0 } else { true };
+            let end = outdoor_pose(g.x + planar.x * dt, g.y + planar.y * dt, g.z + dz);
+            let input = TransitionInput {
+                begin: pose,
+                end,
+                object: player(),
+                airborne: is_airborne,
+                descending,
+                force_grounded: false,
+                gates: gg,
+                last_known_wall_normal: None,
+                frames_stationary_fall: 0,
+                last_contact_plane: last_cp,
+            };
+            let out = faithful_find_transitional_position(&env, &input, true, true);
+            last_cp = out.contact_plane;
+            if !is_airborne && !out.grounded {
+                is_airborne = true;
+                vvel = 0.0;
+            } else if is_airborne && out.grounded {
+                is_airborne = false;
+                vvel = 0.0;
+            }
+            pose = out.pose;
+            if out.grounded {
+                grounded_frames += 1;
+            }
+            let gp = pose.global_coords();
+            if gp.z < min_z {
+                min_z = gp.z;
+            }
+            let along = if north { gp.y } else { gp.x };
+            if along > max_along {
+                max_along = along;
+            }
+            if std::env::var("LIP_DBG").is_ok() && frame % 4 == 0 {
+                eprintln!(
+                    "[lip north={north} rg={retail_ground}] f{frame}: xy=({:.2},{:.2}) z={:.2} grounded={} air={} cp={}",
+                    gp.x, gp.y, gp.z, out.grounded, is_airborne, out.contact_plane.is_some()
+                );
+            }
+        }
+        let frac = grounded_frames as f32 / frames as f32;
+        (min_z, max_along, frac, pose)
+    }
+
+    #[test]
+    fn outdoor_lip_perpendicular_retail_holds() {
+        for north in [false, true] {
+            for speed in [6.0f32, 12.0, 18.0, 24.0] {
+                let frames = (2400.0 / speed) as usize + 30; // ~cross the 12 m gap + hang
+                let (min_z, max_along, frac, pose) = lip_walk(north, true, frames, speed);
+                eprintln!(
+                    "[lip north={north} spd={speed}] min_z={min_z:.2} max_along={max_along:.2} grounded_frac={frac:.2} final=({:.2},{:.2},{:.2})",
+                    pose.global_coords().x, pose.global_coords().y, pose.global_coords().z
+                );
+                // T4 acceptance: the mover must NOT plunge down the 54.8° face — it
+                // holds at the lip (or slides ALONG it). A plunge lands near z=46.
+                assert!(
+                    min_z > 76.0,
+                    "T4 FAIL (north={north}, spd={speed}): ran off the walkable lip (min_z={min_z:.2}, should hold near 80)"
+                );
+            }
+        }
+    }
+
+    // ── REAL Holtburg T4: LB 0xADB1 terrain (dumped from retail client_cell_1.dat
+    //    + region LandHeightTable) at the exact probe spot (33360, 34098..) running
+    //    NORTH off the z=80 lip. This is the faithful in-code twin of
+    //    `movement-probe.mjs T4` — the synthetic clean-lip case above HOLDS, but
+    //    the real irregular grid + real landblock split reproduces the run-off. ──
+    //
+    // h[vx*9+vy], from `holtburger-dat` test `dump_adb1_heights`. At the mover's
+    // column vx=6: flat 80 for vy1..5 then a 54.8° drop to 46 (vy6), 40, 34.
+    #[rustfmt::skip]
+    const ADB1_HEIGHTS: [f32; 81] = [
+        58.0,60.0,62.0,52.0,46.0,42.0,38.0,36.0,34.0,
+        60.0,62.0,62.0,66.0,50.0,44.0,40.0,36.0,34.0,
+        62.0,62.0,66.0,66.0,66.0,46.0,40.0,36.0,34.0,
+        72.0,70.0,70.0,70.0,70.0,70.0,42.0,38.0,34.0,
+        80.0,74.0,74.0,74.0,74.0,74.0,44.0,38.0,34.0,
+        84.0,78.0,78.0,78.0,78.0,78.0,46.0,40.0,34.0,
+        88.0,80.0,80.0,80.0,80.0,80.0,46.0,40.0,34.0,
+        90.0,78.0,78.0,78.0,78.0,78.0,44.0,38.0,34.0,
+        92.0,74.0,74.0,74.0,74.0,74.0,44.0,38.0,32.0,
+    ];
+    const ADB1: u32 = 0xADB1_0000;
+    const ADB1_OX: f32 = 173.0 * 192.0; // blockX 0xAD
+    const ADB1_OY: f32 = 177.0 * 192.0; // blockY 0xB1
+
+    fn adb1_pose(wx: f32, wy: f32, wz: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(ADB1),
+            coords: v(wx - ADB1_OX, wy - ADB1_OY, wz),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    /// Faithful live-slice loop over the REAL LB 0xADB1 terrain, running NORTH
+    /// from the probe's T4 spot. Returns `(min_z, max_dy, grounded_frac, pose)`.
+    fn adb1_t4_walk(retail_ground: bool, frames: usize, speed: f32) -> (f32, f32, f32, WorldPosition) {
+        let mut scene = SpatialScene::new();
+        scene.populate_terrain_heights(ADB1, ADB1_HEIGHTS);
+        let env = DriftEnv { scene };
+        // Probe start: world (33360, 34098), z≈80 (the top, 6 m S of the lip@34104).
+        let mut pose = adb1_pose(33360.0, 34098.0, 80.0);
+        let y0 = 34098.0f32;
+        let dt = 1.0 / 30.0f32;
+        let dir = v(0.0, speed, 0.0);
+        let mut is_airborne = false;
+        let mut vvel = 0.0f32;
+        let mut planar = dir;
+        let mut last_cp: Option<(Plane, u32)> = None;
+        let mut gg = gates();
+        gg.retail_ground = retail_ground;
+
+        let mut min_z = 80.0f32;
+        let mut max_dy = 0.0f32;
+        let mut grounded_frames = 0usize;
+        for frame in 0..frames {
+            let g = pose.global_coords();
+            let dz = if is_airborne {
+                let az = -9.8f32;
+                let d = vvel * dt + 0.5 * az * dt * dt;
+                vvel += az * dt;
+                d
+            } else {
+                planar = dir;
+                -SINK
+            };
+            let descending = if is_airborne { vvel <= 0.0 } else { true };
+            let end = adb1_pose(g.x + planar.x * dt, g.y + planar.y * dt, g.z + dz);
+            let input = TransitionInput {
+                begin: pose,
+                end,
+                object: player(),
+                airborne: is_airborne,
+                descending,
+                force_grounded: false,
+                gates: gg,
+                last_known_wall_normal: None,
+                frames_stationary_fall: 0,
+                last_contact_plane: last_cp,
+            };
+            let out = faithful_find_transitional_position(&env, &input, true, true);
+            last_cp = out.contact_plane;
+            if !is_airborne && !out.grounded {
+                is_airborne = true;
+                vvel = 0.0;
+            } else if is_airborne && out.grounded {
+                is_airborne = false;
+                vvel = 0.0;
+            }
+            pose = out.pose;
+            if out.grounded {
+                grounded_frames += 1;
+            }
+            let gp = pose.global_coords();
+            if gp.z < min_z {
+                min_z = gp.z;
+            }
+            let dy = gp.y - y0;
+            if dy > max_dy {
+                max_dy = dy;
+            }
+            if std::env::var("LIP_DBG").is_ok() && (22..32).contains(&frame) {
+                eprintln!(
+                    "[adb1 rg={retail_ground}] f{frame}: xy=({:.2},{:.2}) z={:.2} grounded={} air={} state={:?} cp={}",
+                    gp.x, gp.y, gp.z, out.grounded, is_airborne, out.state,
+                    out.contact_plane.map(|p| p.0.normal.z).unwrap_or(-9.0)
+                );
+            }
+        }
+        (min_z, max_dy, grounded_frames as f32 / frames as f32, pose)
+    }
+
+    #[test]
+    fn outdoor_lip_holtburg_t4_real_holds() {
+        // ~7 m/s run (probe measured dy≈27.7 over 4 s), 4 s @ 30 fps ≈ 120 frames.
+        let (min_z, max_dy, frac, pose) = adb1_t4_walk(true, 120, 7.0);
+        eprintln!(
+            "[adb1 T4] min_z={min_z:.2} max_dy={max_dy:.2} grounded_frac={frac:.2} final=({:.2},{:.2},{:.2})",
+            pose.global_coords().x, pose.global_coords().y, pose.global_coords().z
+        );
+        // Acceptance (matches the probe bar): HOLD at the lip — no plunge down the
+        // 54.8° face (a plunge reaches z≈46, dz≈−34, like the live T4 failure).
+        // The fixed mover holds at z=80; 76 leaves margin while still catching any
+        // real run-off down the face.
+        assert!(
+            min_z > 76.0,
+            "T4 FAIL: ran off the real Holtburg lip (min_z={min_z:.2}, dy={max_dy:.2}) — should hold near 80"
+        );
+    }
+
+    // T2 REGRESSION GUARD (paired with the T4 fix): a mover STANDING on the 54.8°
+    // face (mid-slope, y=34116 z≈63) with a STALE WALKABLE carried contact plane
+    // (it just teleported/stepped off walkable ground) must SLIDE DOWN under
+    // gravity — the walkable-lip edge-hold must NOT stick it. This is exactly the
+    // shape that the first (heuristic) fix regressed: the stale walkable plane made
+    // `entry_walkable_contact` Some, and a no-drop-only gate then froze the mover
+    // in a feedback loop. The `edge_held` driver latch fixes it: a steep-support
+    // mover never enters `edge_slide`'s ON_WALKABLE gate, so the latch stays off.
+    #[test]
+    fn outdoor_mid_slope_idle_slides_not_stuck() {
+        let mut scene = SpatialScene::new();
+        scene.populate_terrain_heights(ADB1, ADB1_HEIGHTS);
+        let env = DriftEnv { scene };
+        // Mid-face: y_local=132 (y=34116), x_local=144 — the T2 probe spot.
+        let mut pose = adb1_pose(33360.0, 34116.0, 64.0);
+        let dt = 1.0 / 30.0f32;
+        // STALE walkable plane carried in (mover just left walkable ground): (0,0,1).
+        let mut last_cp: Option<(Plane, u32)> =
+            Some((Plane { normal: v(0.0, 0.0, 1.0), d: 0.0 }, ADB1 | 0x2e));
+        let mut gg = gates();
+        gg.retail_ground = true;
+        let mut is_airborne = false;
+        let mut vvel = 0.0f32;
+        let z0 = 64.0f32;
+        let mut min_z = z0;
+        let mut grounded_frames = 0usize;
+        for _frame in 0..90 {
+            let g = pose.global_coords();
+            let dz = if is_airborne {
+                let d = vvel * dt + 0.5 * (-9.8) * dt * dt;
+                vvel += -9.8 * dt;
+                d
+            } else {
+                -SINK
+            };
+            let descending = if is_airborne { vvel <= 0.0 } else { true };
+            let end = adb1_pose(g.x, g.y, g.z + dz); // idle: NO forward input
+            let input = TransitionInput {
+                begin: pose,
+                end,
+                object: player(),
+                airborne: is_airborne,
+                descending,
+                force_grounded: false,
+                gates: gg,
+                last_known_wall_normal: None,
+                frames_stationary_fall: 0,
+                last_contact_plane: last_cp,
+            };
+            let out = faithful_find_transitional_position(&env, &input, true, true);
+            last_cp = out.contact_plane;
+            if out.grounded {
+                grounded_frames += 1;
+            }
+            if !is_airborne && !out.grounded {
+                is_airborne = true;
+                vvel = 0.0;
+            } else if is_airborne && out.grounded {
+                is_airborne = false;
+                vvel = 0.0;
+            }
+            pose = out.pose;
+            if pose.global_coords().z < min_z {
+                min_z = pose.global_coords().z;
+            }
+        }
+        let grounded_frac = grounded_frames as f32 / 90.0;
+        eprintln!(
+            "[adb1 T2] z0={z0} min_z={min_z:.2} final_z={:.2} grounded_frac={grounded_frac:.2}",
+            pose.global_coords().z
+        );
+        // The mover must NOT be edge-held (frozen grounded) on the too-steep face:
+        // it stays UNGROUNDED (grounded_frac ≈ 0), knowing it is on a slide surface.
+        // Before the `begin_on_walkable` discriminator, the walkable-lip edge-hold
+        // froze it grounded at z0 (grounded_frac ≈ 1). The full fall-line descent is
+        // driven by the live loop's `calc_friction` (Sledding), which lives in
+        // holtburger-core and is out of scope for this world-crate model — so this
+        // pins the grounded latch, not the slide distance (the live probe validates
+        // the metres); it still leaves the start height (settles onto the face).
+        assert!(
+            grounded_frac < 0.1,
+            "T2 FAIL: edge-held on the mid-slope (grounded_frac={grounded_frac:.2}) — a too-steep \
+             support must stay UNGROUNDED so the mover slides, not stick"
+        );
+        assert!(
+            min_z < z0 - 0.5,
+            "T2 FAIL: frozen at the top (min_z={min_z:.2}, z0={z0}) — should settle/slide down the face"
+        );
     }
 
     // ── Phase D / WS4: OUTDOOR faithful dispatch FLIP (the public-entry A/B) ────

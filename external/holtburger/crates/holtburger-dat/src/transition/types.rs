@@ -533,6 +533,40 @@ pub struct CTransition {
     /// `CTransition::new()`/`default()` user (the dat-crate unit tests) climbs
     /// like the live default-ON path.
     pub faithful_stepup: bool,
+    /// `USE_RETAIL_GROUND` (2026-07-02) — holtburger A/B toggle (NOT a retail
+    /// field) carried from `TransitionGates::retail_ground` by
+    /// `faithful_find_transitional_position`. Gates the outdoor edge-protection
+    /// deviation in [`CTransition::edge_slide`]: on pure terrain retail never
+    /// sets `sphere_path.walkable` (`CLandCell::find_env_collisions` calls
+    /// `OBJECTINFO::validate_walkable` without `SPHEREPATH::set_walkable`,
+    /// acclient.c:354992), so the precipice arm (`edge_slide` branch 2,
+    /// acclient.c:312721) is unreachable and a mover running off a walkable lip
+    /// onto a too-steep face gets `cliff_slide` (branch 1) — pushed off/down and,
+    /// via the caller's `begin_fall`, launched into a free fall. When this is set,
+    /// a too-steep-only contact at a walkable edge is cleared so the ladder
+    /// reaches the step-down-retest/precipice/block arm (branches 2/4) — the
+    /// "perpendicular stop". DEFAULT-OFF so the dat-crate unit tests (direct
+    /// `CTransition::new()`) keep the byte-faithful retail branch order.
+    pub retail_ground: bool,
+    /// `USE_RETAIL_GROUND` output latch — set by [`CTransition::edge_slide`] when
+    /// the outdoor walkable-lip edge-protection engaged this transition (a mover
+    /// that BEGAN on walkable ground ran off a walkable edge onto a too-steep face
+    /// and was held/blocked rather than `cliff_slide`d off). The marshalling
+    /// (`faithful_bridge.rs`) reads it to re-plant the grounded latch the collide
+    /// path stripped. Reset to `false` each `CTransition::new()` (per-frame).
+    pub edge_held: bool,
+    /// `USE_RETAIL_GROUND` input flag — the mover BEGAN this transition standing on
+    /// WALKABLE terrain (the faithful terrain normal under its begin position has
+    /// `N.z >= FloorZ`), set by `faithful_bridge.rs`. THE walkable-vs-steep
+    /// discriminator for the lip edge-protection in [`CTransition::edge_slide`]:
+    /// only a mover that was on walkable ground gets HELD when it runs off onto a
+    /// too-steep face (T4). A mover already standing ON a too-steep face (T2 mid-
+    /// slope) has `begin_on_walkable == false`, so it keeps the retail `cliff_slide`
+    /// (branch 1) and slides down. The entry `ON_WALKABLE` stamp alone cannot
+    /// separate the two — it is present for BOTH until `validate_transition`
+    /// recomputes it AFTER `edge_slide`. Default-OFF (unit tests keep faithful
+    /// branch order).
+    pub begin_on_walkable: bool,
 }
 
 impl Default for CTransition {
@@ -544,6 +578,10 @@ impl Default for CTransition {
             cell_array: CellArray::default(),
             // Phase E1 / WS-D: default-ON (mirrors `USE_FAITHFUL_STEPUP`).
             faithful_stepup: true,
+            // USE_RETAIL_GROUND: default-OFF (unit tests keep faithful branch order).
+            retail_ground: false,
+            edge_held: false,
+            begin_on_walkable: false,
         }
     }
 }

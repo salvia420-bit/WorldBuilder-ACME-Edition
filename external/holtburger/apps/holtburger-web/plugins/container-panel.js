@@ -492,6 +492,20 @@ function onContainerOpened(ev) {
   const guid = (detail.u32Payload ?? detail.u32_payload ?? 0) >>> 0;
   if (!guid) return;
   const name = detail.stringPayload || "Container";
+  // (2026-07-02) — CORPSE containers route to the horizontal loot bar
+  // (plugins/corpse-loot-bar.js, the vendor-strip pattern the user asked
+  // for); chests/bags keep this grid. Detection = the same ODF Corpse bit
+  // 0x2000 / objectClass check the drop-INTO carve-out uses. Fail-soft: no
+  // bar plugin loaded → the grid opens as before.
+  if (_containerIsCorpse(guid) && typeof window.__corpseLootBar?.openFor === "function") {
+    try {
+      window.__corpseLootBar.openFor(guid, name);
+      hidePanel(); // a stale grid from a prior chest must not linger under the bar
+      return;
+    } catch (e) {
+      console.warn("[container-panel] corpse-loot-bar delegation failed:", e);
+    }
+  }
   openContainer(guid, name);
 }
 

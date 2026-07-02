@@ -50,7 +50,7 @@ use super::scene::SpatialScene;
 use super::types::{BuildingAabbEntry, StaticAabbEntry};
 use crate::WorldState;
 use holtburger_common::position::WorldPosition;
-use holtburger_common::{Aabb, Guid, Vector3};
+use holtburger_common::{Aabb, Guid, Plane, Vector3};
 
 /// Retail `ObjectInfoState` bits (names: ACE
 /// `ACE.Server.Physics/ObjectInfo.cs:8-23`; semantics verified in the
@@ -166,6 +166,20 @@ pub struct TransitionGates {
     /// cell carrying a static physics BSP so the pure-terrain heightfield
     /// cliff-stop is unaffected.
     pub outdoor_static_grounding: bool,
+    /// `USE_RETAIL_GROUND` (2026-07-02, `?retailGround=off`) — the retail
+    /// outdoor ground-movement port in the faithful driver: (a) OBJECTINFO
+    /// `step_down` enabled for a non-missile mover (`OBJECTINFO::init`
+    /// acclient.c:314131 `step_down = !(state & Missile)`), arming the
+    /// per-insert step-down snap + `edge_slide`/`cliff_slide`/
+    /// `precipice_slide` chain (acclient.c:312961-313009); (b) the
+    /// persistent grounded latch stamped for OUTDOOR terrain too — retail
+    /// `get_object_info` carries CONTACT|ON_WALKABLE from `transient_state`
+    /// (acclient.c:319074-319099), which keys `validate_walkable`'s FLOOR_Z
+    /// slope gate + the real step-down budget; (c) the entry contact-plane
+    /// seed (`init_contact_plane`/`init_last_known_contact_plane`,
+    /// acclient.c:315599/315612) so `adjust_offset`'s plane projection and
+    /// `cliff_slide`'s `cross(N, lastKnownN)` see the prior frame's ground.
+    pub retail_ground: bool,
 }
 
 /// Geometry/state reads the pipeline needs — solves the
@@ -270,6 +284,12 @@ pub struct TransitionInput {
     /// acclient.c:320104-320115. Ported for shape; the resolution-side
     /// consumer is spec S7 OPEN QUESTION 1 and stays inert.
     pub frames_stationary_fall: u8,
+    /// `USE_RETAIL_GROUND` — the mover's stored contact plane (+ its cell
+    /// id) carried across slices (`world.player.last_contact_plane`), the
+    /// retail `CPhysicsObj::contact_plane` the transition entry seeds via
+    /// `init_contact_plane` (grounded) / `init_last_known_contact_plane`
+    /// (stale), acclient.c:319085-319099. `None` = no prior ground known.
+    pub last_contact_plane: Option<(Plane, u32)>,
 }
 
 /// Pipeline result. `grounded` is the FINAL contact state: the caller
@@ -284,6 +304,12 @@ pub struct TransitionOutcome {
     pub grounded: bool,
     pub cell_changed: bool,
     pub state: TransitionState,
+    /// `USE_RETAIL_GROUND` — the settled contact plane (+ cell id) the
+    /// caller stores back onto `world.player.last_contact_plane` (the
+    /// retail per-frame `SetPositionInternal` contact-plane copy,
+    /// acclient.c:322538-322590). `None` on the approximate pipeline and
+    /// when the transition ended with no known plane.
+    pub contact_plane: Option<(Plane, u32)>,
 }
 
 /// Retail `CTransition::calc_num_steps` non-viewer arm
@@ -833,6 +859,11 @@ pub fn find_transitional_position(
         grounded: !airborne,
         cell_changed,
         state,
+        // USE_RETAIL_GROUND: the approximate pipeline tracks no retail
+        // COLLISIONINFO contact plane — the carry lives on the faithful
+        // driver only (`faithful_bridge`). `None` keeps the caller's
+        // stored plane untouched.
+        contact_plane: None,
     }
 }
 
@@ -1169,6 +1200,7 @@ mod tests {
             skip_parented_entities: true,
             walkable_reinsert_probe: false,
             outdoor_static_grounding: false,
+            retail_ground: false,
         }
     }
 
@@ -1187,6 +1219,7 @@ mod tests {
             gates: gates_default_on(),
             last_known_wall_normal: None,
             frames_stationary_fall: 0,
+            last_contact_plane: None,
         }
     }
 

@@ -545,6 +545,16 @@ import { poseRigAt } from "./motion/motion_sequence.js";
 // Reused empties for the absent fields of MotionSequence.fromDescriptor.
 const EMPTY_F32 = new Float32Array(0);
 const EMPTY_U32 = new Uint32Array(0);
+// (2026-07-02) — finite fallback for every frames/framerate duration input
+// into MotionSequence.fromDescriptor. Retail framerate-0 AnimData (e.g. the
+// Blood Shreth Dead cycle: anim 0x0300001A, lowFrame 40, framerate 0) means
+// "snap to lowFrame and HOLD, do not advance" (CSequence::update_internal
+// hits neither advance branch at |fr| <= 2e-4, acclient.c:340696-340731) —
+// the wasm bake already emits those as ONE held keyframe at a nominal
+// 30 fps, but any residual `frames/framerate` division upstream would leak
+// Infinity/NaN into the sequence clock. `+v || 0` passes Infinity (truthy);
+// this doesn't.
+const _finiteOr0 = (v) => (Number.isFinite(+v) ? +v : 0);
 // Inline flag read (NOT an imported helper) so module-load works in the
 // source-eval headless harness that doesn't resolve ESM imports — the same
 // inline-read pattern the other URL flags use. The wasm MotionSequence +
@@ -6532,7 +6542,7 @@ export class EntityManager {
     const d = entry?.sequenceDescriptor;
     if (!d) return false;
     const seq = MS.fromDescriptor(
-      d.numFrames >>> 0, +d.framerate || 0, +d.duration || 0,
+      d.numFrames >>> 0, _finiteOr0(d.framerate), _finiteOr0(d.duration),
       d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
       false, // one-shot: play once. clearOnDone=true hands back to the mixer
              // (swing/missile); false HOLDS the final frame (door open/closed).
@@ -7199,6 +7209,20 @@ export class EntityManager {
     // existing read pattern in `setSwingMotion` at line ~1942 which
     // already checks `inst.currentStance ?? inst.lastStance ?? …`.
     inst.currentStance = stance;
+    // (2026-07-02) — death-hold stamp, read by loop.js `_armRemove`: ACE
+    // resolves `deathAnimLength` through `GetAnimData`, which reads the
+    // MotionTable LINKS ONLY (DatLoader MotionTable.cs:130-148) — creature
+    // Dead lives in the CYCLES, so the length is 0 and the server's
+    // corpse-create + creature-delete fire ~immediately after the Dead
+    // motion. Without a client-side grace the rig is disposed before the
+    // collapse (or the framerate-0 frozen pose) ever renders. Stamped
+    // BEFORE the async keyframe fetch so the removal deferral covers the
+    // resolve window (the `entityMap.has` guard below would otherwise
+    // abort the fetch when the delete lands first).
+    if ((cmd & 0xFFFF) === CMD_LOW_DEAD) {
+      inst._deathAt = (typeof performance !== "undefined" && performance.now)
+        ? performance.now() : Date.now();
+    }
     const cls = classifyMotionCommand(cmd);
     if (cls === "stop" || cls === null) {
       inst.fadeOutCurrent(CROSSFADE_S);
@@ -7239,7 +7263,7 @@ export class EntityManager {
         const d = entry?.sequenceDescriptor;
         if (d) {
           const seq = MS.fromDescriptor(
-            d.numFrames >>> 0, +d.framerate || 0, +d.duration || 0,
+            d.numFrames >>> 0, _finiteOr0(d.framerate), _finiteOr0(d.duration),
             d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
             false, // one-shot collapse → latches `done`, holds the final prone frame
           );
@@ -7475,7 +7499,7 @@ export class EntityManager {
         const d = entry.sequenceDescriptor;
         if (MS && d) {
           const seq = MS.fromDescriptor(
-            d.numFrames >>> 0, +d.framerate || 0, +d.duration || 0,
+            d.numFrames >>> 0, _finiteOr0(d.framerate), _finiteOr0(d.duration),
             d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
             true, // cyclic locomotion — loops
           );

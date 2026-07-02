@@ -33,6 +33,8 @@ import {
   getAdapterMaxAnisotropy,
 } from "./adapter.js";
 import { applyWireVertexAOPatch, applyFillDepthBias } from "./materials.js";
+// streamFix urgent lane (2026-07-02) — near-player bake detection.
+import { isNearPlayerLb } from "./landblock_lru.js";
 // FCULL (2026-06-08) — distance horizon for the OPT-IN per-LB terrain cull
 // (`?cullTerrain=on`). Default OFF: three.js already per-mesh frustum-culls
 // terrain LB meshes correctly (plain Meshes with a lazily-computed geometry
@@ -3038,10 +3040,16 @@ export async function bakeTerrainForLandblock(
   // solo callers (lazy hook) issue a single-element batch call to the
   // same wasm export the ring driver uses.
   const cellId = (lbKey | 0xffff) >>> 0;
+  // streamFix urgent lane (2026-07-02): current-LB/3×3 terrain is
+  // player-blocking (the ground the player stands on) — bypass the fetch
+  // semaphore like the statics/buildings twins. Speculative ring LBs keep
+  // the normal lane. Fail-soft false when the LRU isn't wired.
+  const urgent = isNearPlayerLb(scene3d, lbKey);
   let wasmMesh = opts.prefetchedMesh ?? null;
   if (!wasmMesh) {
     const meshes = await wasmExports.fetch_landblock_heightmaps(
-      new Uint32Array([cellId])
+      new Uint32Array([cellId]),
+      urgent
     );
     if (!meshes || meshes.length === 0) {
       throw new Error(
@@ -3061,7 +3069,7 @@ export async function bakeTerrainForLandblock(
   if (!subdivEntry && opts.canSubdivide) {
     const level = pickSubdivLevelForLb(opts, lbX, lbY);
     try {
-      const mesh = await wasmExports.fetch_subdivided_landblock(cellId, level);
+      const mesh = await wasmExports.fetch_subdivided_landblock(cellId, level, urgent);
       subdivEntry = { mesh, level };
     } catch (err) {
       console.warn(

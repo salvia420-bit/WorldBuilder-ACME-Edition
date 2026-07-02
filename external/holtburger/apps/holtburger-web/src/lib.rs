@@ -199,6 +199,38 @@ fn parse_roof_grounding_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "roofGrounding=off")
 }
 
+/// (2026-07-02): parse `?retailGround=off` (or `&retailGround=off`).
+/// DEFAULT-ON off-escape shape (mirrors `parse_roof_grounding_flag`): returns
+/// `true` UNLESS `retailGround=off` is present. When on, the faithful driver
+/// runs the retail outdoor ground-movement chain — OBJECTINFO `step_down` +
+/// the CONTACT|ON_WALKABLE grounded latch + the entry contact-plane seed —
+/// so cliffs steeper than FloorZ (cos 48.4°) refuse/slide instead of being
+/// climbable, downhill runs keep feet planted via the step-down snap, and
+/// cliff lips block or slide per retail `edge_slide` (jump still clears
+/// them). Read ONLY when `?faithfulTransition` is also on. `=off` rolls back
+/// to the pre-2026-07-02 behavior. Native carrier: `USE_RETAIL_GROUND`
+/// (movement/system.rs). Needs a wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_retail_ground_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "retailGround=off")
+}
+
+/// (2026-07-02): parse `?castMove=off` (or `&castMove=off`). DEFAULT-ON
+/// off-escape shape: returns `true` UNLESS `castMove=off` is present. When
+/// on, a server-played Magic cast gesture (windup / cast, non-autonomous)
+/// governs the local player's movement per retail
+/// `CMotionInterp::apply_current_movement` — held WASD stops driving while
+/// the gesture plays ("fighting the cast"); a fresh key EDGE regains
+/// autonomy until the next gesture message. `=off` restores free movement
+/// while casting. Native carrier: `USE_CAST_MOVE` (movement/system.rs).
+/// Needs a wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_cast_move_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "castMove=off")
+}
+
 /// Phase 3 Phase D (2026-06-28, Option C): parse `?buildingOverlap=off` (or
 /// `&buildingOverlap=off`). DEFAULT-ON, off-escape shape: returns `true` UNLESS
 /// `buildingOverlap=off` is present. When on, each outdoor building/static BSP
@@ -1156,7 +1188,7 @@ fn build_terrain_merge_data(terrain_codes: &[u8], road_codes: &[u8]) -> Vec<u8> 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn fetch_landblock_heightmap(cell_id: u32) -> Result<LandblockMesh, JsValue> {
-    let mut meshes = fetch_landblock_heightmaps(vec![cell_id]).await?;
+    let mut meshes = fetch_landblock_heightmaps(vec![cell_id], None).await?;
     Ok(meshes.remove(0))
 }
 
@@ -1182,6 +1214,9 @@ pub async fn fetch_landblock_heightmap(cell_id: u32) -> Result<LandblockMesh, Js
 #[wasm_bindgen]
 pub async fn fetch_landblock_heightmaps(
     cell_ids: Vec<u32>,
+    // streamFix urgent lane (2026-07-02): `Some(true)` = the player's
+    // current-LB/3×3 terrain bake — see `fetch_landblock_objects`.
+    urgent: Option<bool>,
 ) -> Result<Vec<LandblockMesh>, JsValue> {
     use holtburger_dat::landblock::CellLandblock;
     use holtburger_dat::{ResourceKey, ResourceSource};
@@ -1191,10 +1226,17 @@ pub async fn fetch_landblock_heightmaps(
         .iter()
         .map(|id| ResourceKey::new("eor/cell", *id))
         .collect();
-    source
-        .prefetch(&keys)
-        .await
-        .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+    if urgent.unwrap_or(false) {
+        source
+            .prefetch_urgent(&keys)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+    } else {
+        source
+            .prefetch(&keys)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+    }
 
     // F12-4 — table-aware height decode (no-op on retail; `?regionHeightTable=on`).
     let height_table = resolve_region_land_height_table();
@@ -1340,8 +1382,10 @@ const TERRAIN_NOISE_SEED: u64 = 0xAC_5EED_C0FFEE;
 pub async fn fetch_subdivided_landblock(
     cell_id: u32,
     subdiv_factor: u32,
+    // streamFix urgent lane (2026-07-02): see `fetch_landblock_heightmaps`.
+    urgent: Option<bool>,
 ) -> Result<SubdividedLandblockMesh, JsValue> {
-    let mut meshes = fetch_subdivided_landblocks(vec![cell_id], subdiv_factor).await?;
+    let mut meshes = fetch_subdivided_landblocks(vec![cell_id], subdiv_factor, urgent).await?;
     Ok(meshes.remove(0))
 }
 
@@ -1353,6 +1397,8 @@ pub async fn fetch_subdivided_landblock(
 pub async fn fetch_subdivided_landblocks(
     cell_ids: Vec<u32>,
     subdiv_factor: u32,
+    // streamFix urgent lane (2026-07-02): see `fetch_landblock_heightmaps`.
+    urgent: Option<bool>,
 ) -> Result<Vec<SubdividedLandblockMesh>, JsValue> {
     use holtburger_dat::landblock::CellLandblock;
     use holtburger_dat::terrain_subdiv::{AdjacentHeights, subdivide_landblock};
@@ -1369,10 +1415,17 @@ pub async fn fetch_subdivided_landblocks(
         .iter()
         .map(|id| ResourceKey::new("eor/cell", *id))
         .collect();
-    source
-        .prefetch(&keys)
-        .await
-        .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+    if urgent.unwrap_or(false) {
+        source
+            .prefetch_urgent(&keys)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+    } else {
+        source
+            .prefetch(&keys)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+    }
 
     // F12-4 — table-aware height decode (no-op on retail; `?regionHeightTable=on`).
     let height_table = resolve_region_land_height_table();
@@ -1921,19 +1974,33 @@ impl ObjectPlacement {
 #[wasm_bindgen]
 pub async fn fetch_landblock_objects(
     cell_ids: Vec<u32>,
+    // streamFix urgent lane (2026-07-02): `Some(true)` = player-blocking
+    // (current-LB / 3×3) — prefetches bypass the shared fetch semaphore so
+    // a rapid-teleport speculative backlog can't starve the town the player
+    // is standing in. `None`/`Some(false)` = the pre-fix normal lane
+    // (byte-identical for every existing caller, which passes nothing).
+    urgent: Option<bool>,
 ) -> Result<Vec<ObjectPlacement>, JsValue> {
     use holtburger_dat::landblock::LandblockInfo;
     use holtburger_dat::{ResourceKey, ResourceSource};
 
+    let urgent = urgent.unwrap_or(false);
     let source = global_source::global_source();
     let keys: Vec<ResourceKey<'_>> = cell_ids
         .iter()
         .map(|id| ResourceKey::new("eor/cell", *id))
         .collect();
-    source
-        .prefetch(&keys)
-        .await
-        .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+    if urgent {
+        source
+            .prefetch_urgent(&keys)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+    } else {
+        source
+            .prefetch(&keys)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+    }
 
     let mut out = Vec::new();
     let mut setup_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -1974,7 +2041,14 @@ pub async fn fetch_landblock_objects(
             .iter()
             .map(|sid| ResourceKey::new("eor/portal", *sid))
             .collect();
-        let _ = source.prefetch(&setup_keys).await;
+        // streamFix urgent lane (2026-07-02): same lane as the cell prefetch
+        // above — this default_script/default_animation resolve pass is part
+        // of the same player-blocking placement fetch.
+        let _ = if urgent {
+            source.prefetch_urgent(&setup_keys).await
+        } else {
+            source.prefetch(&setup_keys).await
+        };
         let mut script_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
         // Task #7 — resolve default_animation (0x03) in the SAME setup parse.
         let mut anim_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
@@ -2866,7 +2940,13 @@ pub async fn fetch_suite_artifact_by_key(
 #[wasm_bindgen]
 pub async fn fetch_landblock_scenery(
     cell_ids: Vec<u32>,
+    // streamFix urgent lane (2026-07-02): see `fetch_landblock_objects` —
+    // only the SetupModel default_animation resolve pass below rides the
+    // shared fetch semaphore (the per-LB JSONL fetch is a direct HTTP GET),
+    // so that is the only site the flag routes.
+    urgent: Option<bool>,
 ) -> Result<Vec<ScenicPlacementJs>, JsValue> {
+    let urgent = urgent.unwrap_or(false);
     let base_url = scenery_fetch::base_url().ok_or_else(|| {
         JsValue::from_str(
             "init_scenery_base_url must be called before fetch_landblock_scenery",
@@ -2939,7 +3019,13 @@ pub async fn fetch_landblock_scenery(
                 .iter()
                 .map(|&o| ResourceKey::new("eor/portal", o))
                 .collect();
-            let _ = source.prefetch(&keys).await;
+            // streamFix urgent lane (2026-07-02): player-blocking scenery
+            // resolve rides the urgent lane with the rest of the bake.
+            let _ = if urgent {
+                source.prefetch_urgent(&keys).await
+            } else {
+                source.prefetch(&keys).await
+            };
             ANIM_CACHE.with(|cache| {
                 let mut cache = cache.borrow_mut();
                 for &oid in &to_fetch {
@@ -8531,8 +8617,13 @@ pub async fn fetch_icon_pixels(icon_did: u32) -> Result<IconPixels, JsValue> {
 #[wasm_bindgen]
 pub async fn fetch_surfaces_pixels(
     surface_dids: Vec<u32>,
+    // streamFix urgent lane (2026-07-02): `Some(true)` = surfaces for the
+    // player's current-LB/3×3 bake — see `fetch_model_meshes`. Absent/false
+    // = pre-fix normal lane (all existing callers).
+    urgent: Option<bool>,
 ) -> Result<Vec<SurfacePixels>, JsValue> {
     use holtburger_dat::ResourceKey;
+    let urgent = urgent.unwrap_or(false);
     let source = global_source::global_source();
     let initial: Vec<ResourceKey<'_>> = surface_dids
         .iter()
@@ -8545,14 +8636,25 @@ pub async fn fetch_surfaces_pixels(
     // The cache key fully captures the DID list — distinct
     // overlapping sets (e.g. [A,B,C] vs [B,C,D]) still each get
     // their own loop, but identical sets latch.
-    let cache_key = prefetch::WalkCacheKey::new("fetch_surfaces_pixels")
-        .with_u32_slice(&surface_dids);
-    prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
+    // streamFix: distinct key name per lane so an urgent caller can't
+    // latch onto an in-flight normal-lane loop (see fetchBuildingPlacement).
+    let cache_key = prefetch::WalkCacheKey::new(if urgent {
+        "fetch_surfaces_pixels:urgent"
+    } else {
+        "fetch_surfaces_pixels"
+    })
+    .with_u32_slice(&surface_dids);
+    let walk = move |s: &dyn holtburger_dat::ResourceSource| {
         for &id in &dids_for_walk {
             let _ = fetch_surface_pixels_impl(s, id);
         }
-    })
-    .await?;
+    };
+    if urgent {
+        prefetch::ensure_walk_prefetched_keyed_urgent(cache_key, &source, &initial, walk)
+            .await?;
+    } else {
+        prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk).await?;
+    }
     let mut out = Vec::with_capacity(surface_dids.len());
     for &id in &surface_dids {
         out.push(fetch_surface_pixels_impl(source.as_ref(), id));
@@ -10581,20 +10683,33 @@ pub async fn fetch_model_did_degrades(
 /// those.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn fetch_model_meshes(model_ids: Vec<u32>) -> Result<Vec<ModelMesh>, JsValue> {
+pub async fn fetch_model_meshes(
+    model_ids: Vec<u32>,
+    // streamFix urgent lane (2026-07-02): `Some(true)` = the caller is
+    // baking the player's current landblock (or its 3×3) — the geometry
+    // walk bypasses the fetch semaphore so a rapid-teleport speculative
+    // backlog can't ship decode-starved (empty) meshes for the town the
+    // player is looking at. Absent/false = pre-fix normal lane.
+    urgent: Option<bool>,
+) -> Result<Vec<ModelMesh>, JsValue> {
     use holtburger_dat::ResourceKey;
+    let urgent = urgent.unwrap_or(false);
     let source = global_source::global_source();
     let initial: Vec<ResourceKey<'_>> = model_ids
         .iter()
         .map(|id| ResourceKey::new("eor/portal", *id))
         .collect();
     let ids_for_walk = model_ids.clone();
-    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+    let walk = |s: &dyn holtburger_dat::ResourceSource| {
         for &id in &ids_for_walk {
             let _ = triangulate_model(s, id);
         }
-    })
-    .await?;
+    };
+    if urgent {
+        prefetch::ensure_walk_prefetched_urgent(&source, &initial, walk).await?;
+    } else {
+        prefetch::ensure_walk_prefetched(&source, &initial, walk).await?;
+    }
     let mut out = Vec::with_capacity(model_ids.len());
     for &id in &model_ids {
         // geom-audit (2026-07-02): decode with miss accounting. The batch
@@ -10607,10 +10722,15 @@ pub async fn fetch_model_meshes(model_ids: Vec<u32>) -> Result<Vec<ModelMesh>, J
         let (mut tris_opt, mut misses) = triangulate_model_counted(source.as_ref(), id);
         if misses > 0 || (tris_opt.is_none() && matches!((id >> 24) as u8, 0x01 | 0x02)) {
             let retry_keys = [ResourceKey::new("eor/portal", id)];
-            let _ = prefetch::ensure_walk_prefetched(&source, &retry_keys, move |s| {
+            // streamFix (2026-07-02): the per-id retry keeps the caller's lane.
+            let retry_walk = move |s: &dyn holtburger_dat::ResourceSource| {
                 let _ = triangulate_model(s, id);
-            })
-            .await;
+            };
+            let _ = if urgent {
+                prefetch::ensure_walk_prefetched_urgent(&source, &retry_keys, retry_walk).await
+            } else {
+                prefetch::ensure_walk_prefetched(&source, &retry_keys, retry_walk).await
+            };
             let (t2, m2) = triangulate_model_counted(source.as_ref(), id);
             tris_opt = t2;
             misses = m2;
@@ -10666,6 +10786,13 @@ pub async fn fetch_model_meshes(model_ids: Vec<u32>) -> Result<Vec<ModelMesh>, J
 #[wasm_bindgen]
 pub struct BuildingPlacement {
     setup_id: u32,
+    // streamFix retryability (2026-07-02): total record misses the counted
+    // decode reported after the walk retry (0 = complete). JS reads this via
+    // the `decodeMisses` getter to keep INCOMPLETE bakes out of the cross-LB
+    // building bake cache and to leave the LB retryable — pre-fix the count
+    // was logged wasm-side but never crossed the boundary, so a starved
+    // building silently poisoned `buildingBakeCache` for the whole session.
+    decode_misses: u32,
     parts: Vec<ModelMesh>,
     hinge_frames: Vec<HingeFrame>,
 }
@@ -10726,6 +10853,15 @@ impl BuildingPlacement {
         self.parts.len() as u32
     }
 
+    /// streamFix retryability (2026-07-02): record misses left after the
+    /// counted decode + walk retry. 0 = complete; >0 = one or more parts
+    /// are empty/partial (fetch starvation or permanently-absent records).
+    /// JS treats >0 as "do not cache cross-LB; leave the LB retryable".
+    #[wasm_bindgen(getter, js_name = decodeMisses)]
+    pub fn decode_misses(&self) -> u32 {
+        self.decode_misses
+    }
+
     /// Move the per-part meshes out of the bundle into a JS-owned
     /// array. Position in the returned Vec is the `part_index`. One-
     /// shot — second call returns an empty Vec.
@@ -10763,8 +10899,15 @@ impl BuildingPlacement {
 /// door-state lookups.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = fetchBuildingPlacement)]
-pub async fn fetch_building_placement(model_id: u32) -> Result<BuildingPlacement, JsValue> {
+pub async fn fetch_building_placement(
+    model_id: u32,
+    // streamFix urgent lane (2026-07-02): `Some(true)` = the caller is
+    // baking the player's current landblock (or its 3×3) — see
+    // `fetch_model_meshes`. Absent/false = pre-fix normal lane.
+    urgent: Option<bool>,
+) -> Result<BuildingPlacement, JsValue> {
     use holtburger_dat::ResourceKey;
+    let urgent = urgent.unwrap_or(false);
     let source = global_source::global_source();
     let initial = [ResourceKey::new("eor/portal", model_id)];
     // F.37 walk-result dedup. Two concurrent
@@ -10772,12 +10915,27 @@ pub async fn fetch_building_placement(model_id: u32) -> Result<BuildingPlacement
     // adjacent LBs share a model_id and load near-simultaneously)
     // now share a single prefetch loop instead of each spinning up
     // its own RecordingSource + re-walking the SetupModel.
-    let cache_key = prefetch::WalkCacheKey::new("fetchBuildingPlacement")
-        .with_u32(model_id);
-    prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
-        let _ = triangulate_model_per_part_buckets(s, model_id);
+    // streamFix: the urgent lane keys under a DISTINCT name so an urgent
+    // caller can't latch onto an in-flight normal-lane loop (which would
+    // park it in the very semaphore queue it must bypass — the same
+    // rationale as the `urgent:` inflight-key split in manifest_source.rs).
+    let cache_key = prefetch::WalkCacheKey::new(if urgent {
+        "fetchBuildingPlacement:urgent"
+    } else {
+        "fetchBuildingPlacement"
     })
-    .await?;
+    .with_u32(model_id);
+    if urgent {
+        prefetch::ensure_walk_prefetched_keyed_urgent(cache_key, &source, &initial, move |s| {
+            let _ = triangulate_model_per_part_buckets(s, model_id);
+        })
+        .await?;
+    } else {
+        prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
+            let _ = triangulate_model_per_part_buckets(s, model_id);
+        })
+        .await?;
+    }
     // geom-audit (2026-07-02): decode per-part with miss accounting.
     // `walk_setup_parts` soft-skips a part whose GfxObj record is
     // missing (empty bucket at that index) — under fetch starvation
@@ -10796,10 +10954,15 @@ pub async fn fetch_building_placement(model_id: u32) -> Result<BuildingPlacement
     let (mut parts_opt, mut misses) = decode_counted(source.as_ref());
     if misses > 0 || parts_opt.is_none() {
         let retry_keys = [ResourceKey::new("eor/portal", model_id)];
-        let _ = prefetch::ensure_walk_prefetched(&source, &retry_keys, move |s| {
+        // streamFix (2026-07-02): the retry keeps the caller's lane.
+        let retry_walk = move |s: &dyn holtburger_dat::ResourceSource| {
             let _ = triangulate_model_per_part_buckets(s, model_id);
-        })
-        .await;
+        };
+        let _ = if urgent {
+            prefetch::ensure_walk_prefetched_urgent(&source, &retry_keys, retry_walk).await
+        } else {
+            prefetch::ensure_walk_prefetched(&source, &retry_keys, retry_walk).await
+        };
         let (p2, m2) = decode_counted(source.as_ref());
         parts_opt = p2;
         misses = m2;
@@ -10823,6 +10986,7 @@ pub async fn fetch_building_placement(model_id: u32) -> Result<BuildingPlacement
     let hinge_frames = compute_hinge_frames(source.as_ref(), model_id, part_count);
     Ok(BuildingPlacement {
         setup_id: model_id,
+        decode_misses: misses,
         parts,
         hinge_frames,
     })
@@ -25093,6 +25257,22 @@ mod wire_state_packs_routing_tests {
         assert_eq!(sticky_flags, vec![0u8, 1u8], "per-row sticky flags");
     }
 
+    /// (2026-07-02): `?retailGround` / `?castMove` parse shapes — DEFAULT-ON;
+    /// only an explicit `=off` disables (the movement-flag house shape).
+    #[test]
+    fn retail_ground_and_cast_move_flags_default_on_unless_off() {
+        use super::{parse_cast_move_flag, parse_retail_ground_flag};
+        assert!(parse_retail_ground_flag(""));
+        assert!(parse_retail_ground_flag("?faithfulTransition=on"));
+        assert!(parse_retail_ground_flag("?retailGround=on"));
+        assert!(!parse_retail_ground_flag("?retailGround=off"));
+        assert!(!parse_retail_ground_flag("?stepUp=off&retailGround=off"));
+        assert!(parse_cast_move_flag(""));
+        assert!(parse_cast_move_flag("?castMove=on"));
+        assert!(!parse_cast_move_flag("?castMove=off"));
+        assert!(!parse_cast_move_flag("?nosw=1&castMove=off"));
+    }
+
     /// A2-P3 R2 (W3+ S9 Stage R2): `?stickyRetail` parse shape — DEFAULT-ON
     /// (F-2026-06-27); only an explicit `=off` disables.
     #[test]
@@ -34375,6 +34555,17 @@ async fn recv_loop(
     // walk-through repro) instead of every overlapped cell (default ON, the
     // off-center fix); see `parse_building_overlap_flag`.
     movement.set_building_overlap(parse_building_overlap_flag(&js_location_search()));
+    // (2026-07-02): `?retailGround=off` — roll the retail outdoor ground
+    // movement (FLOOR_Z cliff refusal + cliff_slide, step-down downhill
+    // stick, lip block/slide) back to the pre-2026-07-02 behavior (default
+    // ON). Read only when `?faithfulTransition` is also on; see
+    // `parse_retail_ground_flag`.
+    movement.set_retail_ground(parse_retail_ground_flag(&js_location_search()));
+    // (2026-07-02): `?castMove=off` — disable the retail cast-movement
+    // arbitration (default ON: a server-played cast gesture suppresses held
+    // locomotion until an input edge / gesture end); see
+    // `parse_cast_move_flag`.
+    movement.set_cast_move(parse_cast_move_flag(&js_location_search()));
     // A1-O1 (2026-06-11): the canonical tick spine's wasm facade — owns
     // the `ClientSimulationSystem` this recv loop otherwise lacks.
     // Constructed unconditionally (cheap empty Vec); driven ONLY when

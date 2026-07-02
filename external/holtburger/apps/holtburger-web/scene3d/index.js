@@ -80,7 +80,7 @@ import { SoundTableCache } from "./audio/sound_table_cache.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
 import { BakedAmbientSource } from "./audio/baked_ambient_source.js";
 import { WeatherEffectsManager } from "./weather/manager.js";
-import { LandblockLRU, lbKeyFromXY } from "./landblock_lru.js";
+import { LandblockLRU, lbKeyFromXY, isNearPlayerLb } from "./landblock_lru.js";
 import { getQuality, installQualityOnWindow } from "./quality.js";
 import { ACMoons } from "./ac_moons.js";
 import { installDiag } from "./diag.js";
@@ -94,6 +94,35 @@ import { preloadAllIcons as preloadAllIconsShared } from "../ui/ac_icon_cache.js
 // See stream_bake_guard.js: stops a shard-fetch failure from being hammered
 // into an OOM crash by the per-position-update ring driver.
 import { guardedStreamBake, createStreamGuardState } from "./stream_bake_guard.js";
+
+// streamFix (2026-07-02, town-portal streaming): default-ON master gate for the
+// already-baked FAST-PATH in the three per-LB loaders below (`?streamFix=off`
+// escapes back to the pre-fix scheduling). Root cause it closes (measured on
+// the 1070, 12-town @telepoi circuit): the position-update streamer fires
+// NINE 3×3 loadTerrainForLandblock calls + loadStatics + loadBuildings per
+// local position update with the per-domain baked-Set idempotency check
+// INSIDE the async baker — i.e. PAST guardedStreamBake's synchronous
+// in-flight claim. The first 6 already-baked terrain no-ops claimed ALL
+// STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT=6 guard slots within the same task
+// (their null-resolutions only clear at the next microtask checkpoint), so
+// the same-frame PVS stream-queue tick read `inFlight=6 >= target` and fired
+// NOTHING — 51/51 checks blocked while idle at Holtburg, and every
+// world_stream statics/buildings fire was cap-skipped the same way. With
+// position self-echoes (~12.8/s) arriving at least as fast as the PVS
+// throttle (10 Hz), the whole streaming system starved — the "by the third
+// town nothing loads" report. The fix: consult the per-domain baked Set
+// BEFORE claiming a guard slot, so idempotent re-fires never consume the
+// global bake budget. LRU recency for re-touched baked LBs is preserved via
+// landblockLru.touch() (tickEviction already refreshes the player 3×3 floor
+// every frame).
+const STREAM_FIX_ENABLED = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("streamFix");
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+})();
 
 const METERS_PER_LANDBLOCK = 192.0;
 // HOLTBURG_X / HOLTBURG_Y retired (spawn-driven-boot): no landblock is special
@@ -2667,13 +2696,33 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // 2026-06-09 — guard a per-LB streaming baker (`run` returns the bake
     // promise) against the OOM-crash failure mode (see stream_bake_guard.js):
     // in-flight dedup + post-failure cooldown, never rejects.
-    _guardedStreamBake(kind, lbKey, run) {
+    _guardedStreamBake(kind, lbKey, run, opts) {
       if (!this._streamGuardState) this._streamGuardState = createStreamGuardState();
-      return guardedStreamBake(this._streamGuardState, kind, lbKey, run);
+      return guardedStreamBake(this._streamGuardState, kind, lbKey, run, opts);
     },
     loadTerrainForLandblock(lbX, lbY) {
       const lbKeyForLru = lbKeyFromXY(lbX, lbY);
+      // streamFix (2026-07-02): already-baked fast-path BEFORE the guard's
+      // synchronous in-flight claim — an idempotent re-fire (position-update
+      // 3×3 ring, PVS re-sweep) must not consume one of the 6 global bake
+      // slots for a task-long no-op, or same-frame statics/buildings fires
+      // and the PVS stream queue read a full budget and skip (see the
+      // STREAM_FIX_ENABLED note at the top of this file). touch() keeps the
+      // LRU recency the old track()-on-null path provided.
+      if (
+        STREAM_FIX_ENABLED &&
+        this.terrainBakedLbs instanceof Set &&
+        this.terrainBakedLbs.has(lbKeyForLru)
+      ) {
+        try { this.landblockLru?.touch?.(lbKeyForLru); } catch (_) {}
+        return Promise.resolve(null);
+      }
       const self = this;
+      // streamFix (2026-07-02): player-blocking (current-LB/3×3) bakes are
+      // exempt from the guard's global in-flight cap so a fresh town can
+      // start painting while stale far-ring bakes drain. false when
+      // ?streamFix=off (helper reads the flag).
+      const _urgentSlot = { urgent: isNearPlayerLb(this, lbKeyForLru) };
       return this._guardedStreamBake("terrain", lbKeyForLru, async () => {
         // A1-part2 (permanent-barren belt-and-suspenders): if the
         // once-per-ring opts bag is missing (init3D's bakeTerrainRing
@@ -2749,11 +2798,23 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           } catch (_) {}
         }
         return lbMesh;
-      });
+      }, _urgentSlot);
     },
     loadBuildingsForLandblock(lbX, lbY) {
       const lbKeyForLru = lbKeyFromXY(lbX, lbY);
+      // streamFix (2026-07-02): already-baked fast-path before the guard
+      // slot claim — see loadTerrainForLandblock + STREAM_FIX_ENABLED.
+      if (
+        STREAM_FIX_ENABLED &&
+        this.buildingsBakedLbs instanceof Set &&
+        this.buildingsBakedLbs.has(lbKeyForLru)
+      ) {
+        try { this.landblockLru?.touch?.(lbKeyForLru); } catch (_) {}
+        return Promise.resolve(null);
+      }
       const self = this;
+      // streamFix (2026-07-02): see loadTerrainForLandblock.
+      const _urgentSlot = { urgent: isNearPlayerLb(this, lbKeyForLru) };
       return this._guardedStreamBake("buildings", lbKeyForLru, async () => {
         const r = await bakeBuildingsForLandblock(
           self,
@@ -2781,11 +2842,23 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           self.materialCache.addFillCompanions(self.buildingsGroup);
         }
         return r;
-      });
+      }, _urgentSlot);
     },
     loadStaticsForLandblock(lbX, lbY) {
       const lbKeyForLru = lbKeyFromXY(lbX, lbY);
+      // streamFix (2026-07-02): already-baked fast-path before the guard
+      // slot claim — see loadTerrainForLandblock + STREAM_FIX_ENABLED.
+      if (
+        STREAM_FIX_ENABLED &&
+        this.staticsBakedLbs instanceof Set &&
+        this.staticsBakedLbs.has(lbKeyForLru)
+      ) {
+        try { this.landblockLru?.touch?.(lbKeyForLru); } catch (_) {}
+        return Promise.resolve(null);
+      }
       const self = this;
+      // streamFix (2026-07-02): see loadTerrainForLandblock.
+      const _urgentSlot = { urgent: isNearPlayerLb(this, lbKeyForLru) };
       return this._guardedStreamBake("statics", lbKeyForLru, async () => {
         const r = await bakeStaticsForLandblock(
           self,
@@ -2812,7 +2885,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           self.materialCache.addFillCompanions(self.staticsGroup);
         }
         return r;
-      });
+      }, _urgentSlot);
     },
     // === Phase D.1 — per-LB lazy ACE spawn injector ===
     // Third placement stream (per `docs/hypotheticalmethod.md`'s

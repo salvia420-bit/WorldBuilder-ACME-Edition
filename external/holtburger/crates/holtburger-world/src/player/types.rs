@@ -1580,6 +1580,18 @@ pub struct PlayerState {
     /// player Setup `0x02000001` resolves to exactly those values).
     pub step_up_height: Option<f32>,
     pub step_down_height: Option<f32>,
+
+    /// USE_RETAIL_GROUND (2026-07-02) — the mover's stored contact plane
+    /// (+ its cell id), the retail `CPhysicsObj::contact_plane` /
+    /// `contact_plane_cell_id` pair `SetPositionInternal` copies out of
+    /// every transition (acclient.c:322538-322590) and
+    /// `get_object_info` seeds back in at the next transition's entry
+    /// (acclient.c:319085-319099, `init_contact_plane` /
+    /// `init_last_known_contact_plane`). Written by
+    /// `finish_manual_slice_via_transition` from
+    /// `TransitionOutcome::contact_plane`; `None` until the first
+    /// grounded transition (mirrors retail's invalid plane at spawn).
+    pub last_contact_plane: Option<(holtburger_common::Plane, u32)>,
 }
 
 impl Default for PlayerState {
@@ -1649,6 +1661,8 @@ impl PlayerState {
             // A7-R1: unhydrated until the wasm-side Setup read.
             step_up_height: None,
             step_down_height: None,
+            // USE_RETAIL_GROUND: no contact plane tracked at spawn.
+            last_contact_plane: None,
         }
     }
 

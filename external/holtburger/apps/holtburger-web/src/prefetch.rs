@@ -173,6 +173,26 @@ where
     run_walk_loop(source, initial_keys, walk, false).await
 }
 
+/// streamFix urgent lane (2026-07-02): non-keyed urgent variant of
+/// [`ensure_walk_prefetched`] — every prefetch round rides
+/// [`ManifestResourceSource::prefetch_urgent`] (fetch-semaphore bypass +
+/// distinct inflight keys + default browser fetch priority). For
+/// PLAYER-BLOCKING walks only: the current landblock's (and its 3×3
+/// ring's) statics/buildings/terrain bakes, which pre-fix sat behind the
+/// speculative ring bakers' FIFO backlog for tens of seconds after a
+/// rapid multi-town @telepoi run. Mirrors the interiors' urgent lane
+/// (`ensure_walk_prefetched_keyed_urgent`, geom-audit 2026-07-02).
+pub async fn ensure_walk_prefetched_urgent<F>(
+    source: &Arc<ManifestResourceSource>,
+    initial_keys: &[ResourceKey<'_>],
+    walk: F,
+) -> Result<(), JsValue>
+where
+    F: Fn(&dyn ResourceSource),
+{
+    run_walk_loop(source, initial_keys, walk, true).await
+}
+
 /// F.37 walk-result-dedup variant. Concurrent callers passing the
 /// same `cache_key` share a single prefetch loop via a `Shared`
 /// future; the first caller's loop runs once, subsequent callers

@@ -2175,9 +2175,48 @@ function _armSpawn(scene3d, em, upd) {
   }
 }
 
+// (2026-07-02) — death-hold grace: how long a freshly-Dead creature's rig
+// survives its server delete so the collapse / frozen death pose is visible.
+// ACE's `deathAnimLength` resolves through the MotionTable LINKS only
+// (GetAnimData, DatLoader MotionTable.cs:130-148); creature Dead lives in
+// the CYCLES, so the server deletes the creature ~immediately after the
+// Dead motion — the corpse ObjectCreate lands in the same breath. 2 s
+// covers the typical authored collapse (e.g. Broken Fragment Dead cycle at
+// 30 fps) and gives the framerate-0 frozen poses (Blood Shreth, lowFrame 40
+// hold) a visible beat before the corpse takes over.
+const DEATH_HOLD_MS = 2000;
+
 function _armRemove(scene3d, em, upd) {
   // A4 (2026-05-18): prune __lastEntityWorldPos on despawn to bound Map growth.
   const g = upd.guid >>> 0;
+  // (2026-07-02) — defer the visual disposal of a creature that JUST
+  // received its Dead motion (entities.js stamps `_deathAt`), so the
+  // collapse one-shot / frozen death pose renders instead of an instant
+  // vanish. The deferred timer only removes the SAME instance it deferred
+  // (`_removePending` marks it); a guid reused by a fresh spawn in the
+  // window has a new inst without the mark, so it is never clobbered.
+  try {
+    const inst = em?.entityMap?.get?.(g);
+    const deadAt = inst?._deathAt;
+    if (inst && typeof deadAt === "number") {
+      const nowMs = (typeof performance !== "undefined" && performance.now)
+        ? performance.now() : Date.now();
+      const remaining = deadAt + DEATH_HOLD_MS - nowMs;
+      if (remaining > 0 && !inst._removePending) {
+        inst._removePending = true;
+        setTimeout(() => {
+          try {
+            const cur = em?.entityMap?.get?.(g);
+            if (cur && cur._removePending) em.remove(g);
+          } catch (_) {}
+        }, remaining);
+        // Bookkeeping is pruned immediately — only the rig disposal waits.
+        if (window.__lastEntityWorldPos) window.__lastEntityWorldPos.delete(g);
+        _actionStamps.delete(g);
+        return;
+      }
+    }
+  } catch (_) {}
   em.remove(g);
   if (window.__lastEntityWorldPos) window.__lastEntityWorldPos.delete(g);
   // F18-4: prune the multiAction stamp-dedup so a reused guid (a

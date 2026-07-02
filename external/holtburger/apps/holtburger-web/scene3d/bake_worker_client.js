@@ -117,29 +117,40 @@ class BakeWorkerClient {
    * Model meshes off-thread. Returns objects with the SAME field surface a
    * wasm `ModelMesh` exposes (drop-in for `meshToGeometryGroups`). Falls
    * back to the direct main-thread wasm call on inactive / error.
+   *
+   * streamFix urgent lane (2026-07-02): optional `urgent` rides through to
+   * the worker's wasm `fetch_model_meshes(ids, urgent)` (and the main-thread
+   * fallback) so a current-LB bake bypasses the fetch semaphore in WHICHEVER
+   * wasm instance does the decode. `undefined` = pre-fix normal lane.
    */
-  async fetchModelMeshes(wasmExports, ids) {
-    if (!this.active) return wasmExports.fetch_model_meshes(ids);
+  async fetchModelMeshes(wasmExports, ids, urgent) {
+    if (!this.active) return wasmExports.fetch_model_meshes(ids, urgent);
     try {
       await this._ensureWorker();
-      const res = await this._request("fetchModelMeshes", { ids: Array.from(ids) });
+      const res = await this._request("fetchModelMeshes", {
+        ids: Array.from(ids),
+        urgent: urgent === true,
+      });
       return reconstructModelMeshes(res.payload);
     } catch (e) {
       console.warn("[bake_worker_client] model-mesh worker failed; main-thread fallback:", e);
-      return wasmExports.fetch_model_meshes(ids);
+      return wasmExports.fetch_model_meshes(ids, urgent);
     }
   }
 
   /** Surface pixels off-thread. Drop-in for the surface consumers. */
-  async fetchSurfacesPixels(wasmExports, dids) {
-    if (!this.active) return wasmExports.fetch_surfaces_pixels(dids);
+  async fetchSurfacesPixels(wasmExports, dids, urgent) {
+    if (!this.active) return wasmExports.fetch_surfaces_pixels(dids, urgent);
     try {
       await this._ensureWorker();
-      const res = await this._request("fetchSurfacesPixels", { dids: Array.from(dids) });
+      const res = await this._request("fetchSurfacesPixels", {
+        dids: Array.from(dids),
+        urgent: urgent === true,
+      });
       return reconstructSurfacePixelsBatch(res.payload);
     } catch (e) {
       console.warn("[bake_worker_client] surface worker failed; main-thread fallback:", e);
-      return wasmExports.fetch_surfaces_pixels(dids);
+      return wasmExports.fetch_surfaces_pixels(dids, urgent);
     }
   }
 
@@ -168,13 +179,16 @@ export function configureBakeWorker(opts) {
  */
 export function modelMeshFetcher(wasmExports) {
   const client = getBakeWorkerClient();
+  // streamFix (2026-07-02): both branches accept an optional trailing
+  // `urgent` — the raw wasm export takes it natively (`Option<bool>`), the
+  // worker route forwards it in the message body.
   if (!client.active) return wasmExports.fetch_model_meshes;
-  return (ids) => client.fetchModelMeshes(wasmExports, ids);
+  return (ids, urgent) => client.fetchModelMeshes(wasmExports, ids, urgent);
 }
 
 /** Same contract for the surface-pixels decoder. */
 export function surfacePixelsFetcher(wasmExports) {
   const client = getBakeWorkerClient();
   if (!client.active) return wasmExports.fetch_surfaces_pixels;
-  return (dids) => client.fetchSurfacesPixels(wasmExports, dids);
+  return (dids, urgent) => client.fetchSurfacesPixels(wasmExports, dids, urgent);
 }

@@ -5564,3 +5564,106 @@ fn auto_run_default_off_keeps_manual_drive_verbatim() {
         "no overlay without set_auto_run(true)"
     );
 }
+
+// ─── USE_CAST_MOVE (2026-07-02) — retail cast-movement arbitration ───────────
+
+/// Classifier: a Magic-stance (0x49) windup/cast gesture arms the window;
+/// Ready in Magic clears; a gesture low-16 in a NON-Magic stance never arms
+/// (combat-mode/emote motions can't root movement). Covers BOTH ACE wire
+/// shapes: `EnqueueMotionMagic` (gesture as forward_command) and the
+/// FastTick `EnqueueMotionAction` (Ready forward + gesture in the actions
+/// list).
+#[test]
+fn cast_gesture_classifier_matches_ace_wire_shapes() {
+    use holtburger_protocol::messages::movement::{
+        InterpretedMotionCommand, MotionItem, MovementInvalid,
+    };
+    const MAGIC: u16 = 0x0049;
+    const NON_COMBAT: u16 = 0x003D;
+    let invalid_with_forward = |low: u16| MovementInvalid {
+        state: holtburger_protocol::messages::movement::InterpretedMotionState {
+            forward_command: Some(InterpretedMotionCommand(low)),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    // EnqueueMotionMagic shape — windup gesture as ForwardCommand.
+    for low in [0x2Bu16, 0x39, 0x6F, 0x78, 0xD3, 0xE0, 0xE1, 0x12B, 0x134] {
+        assert!(
+            MovementSystem::is_magic_cast_gesture_motion(MAGIC, &invalid_with_forward(low)),
+            "gesture 0x{low:04X} in Magic stance arms"
+        );
+        assert!(
+            !MovementSystem::is_magic_cast_gesture_motion(NON_COMBAT, &invalid_with_forward(low)),
+            "gesture 0x{low:04X} outside Magic stance never arms"
+        );
+    }
+    // FinishCast's returning Ready (0x03) clears.
+    assert!(!MovementSystem::is_magic_cast_gesture_motion(
+        MAGIC,
+        &invalid_with_forward(0x0003)
+    ));
+    // Locomotion commands never arm.
+    assert!(!MovementSystem::is_magic_cast_gesture_motion(
+        MAGIC,
+        &invalid_with_forward(0x0005)
+    ));
+    // FastTick EnqueueMotionAction shape — Ready forward + gesture action.
+    let fasttick = MovementInvalid {
+        state: holtburger_protocol::messages::movement::InterpretedMotionState {
+            forward_command: Some(InterpretedMotionCommand(0x0003)),
+            commands: vec![MotionItem {
+                command: InterpretedMotionCommand(0x0071), // MagicPowerUp03
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert!(MovementSystem::is_magic_cast_gesture_motion(MAGIC, &fasttick));
+}
+
+/// The cast window roots the manual drive state until a fresh input EDGE:
+/// arming sets `cast_gesture_active()`; re-ingesting the IDENTICAL held
+/// state (not an edge) leaves it armed; a CHANGED state (retail `DoMotion`
+/// autonomy regain, acclient.c:317325) clears it; `note(false)` (the
+/// FinishCast returning motion) clears it too.
+#[test]
+fn cast_gesture_window_cleared_by_input_edge_not_resend() {
+    let mut movement = MovementSystem::new();
+    let held = MotionState::builder().run().forward().build();
+    // Establish the held state pre-cast.
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(held),
+        Instant::now(),
+    );
+    movement.note_local_cast_gesture(true);
+    assert!(movement.cast_gesture_active(), "gesture arms the window");
+    // A re-send of the identical held axes is NOT an input edge.
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(held),
+        Instant::now(),
+    );
+    assert!(
+        movement.cast_gesture_active(),
+        "identical re-send does not defeat the gesture"
+    );
+    // A CHANGED state is a fresh DoMotion — autonomy regained.
+    let changed = MotionState::builder().run().forward().strafe_left().build();
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(changed),
+        Instant::now(),
+    );
+    assert!(
+        !movement.cast_gesture_active(),
+        "input edge regains autonomy"
+    );
+    // Re-arm, then the server's returning motion clears.
+    movement.note_local_cast_gesture(true);
+    assert!(movement.cast_gesture_active());
+    movement.note_local_cast_gesture(false);
+    assert!(!movement.cast_gesture_active(), "gesture end clears");
+}

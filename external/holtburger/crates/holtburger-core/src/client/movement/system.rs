@@ -643,6 +643,70 @@ const USE_FAITHFUL_STEPUP: bool = true;
 /// `false` / `?roofGrounding=off`: the pre-2026-06-30 indoor-only latch.
 const USE_OUTDOOR_STATIC_GROUNDING: bool = true;
 
+/// (2026-07-02) — retail outdoor GROUND MOVEMENT in the faithful driver:
+/// enables OBJECTINFO `step_down` (retail `OBJECTINFO::init`,
+/// acclient.c:314131 — always true for a non-missile mover), stamps the
+/// persistent CONTACT|ON_WALKABLE grounded latch for OUTDOOR terrain
+/// (retail `get_object_info`, acclient.c:319074-319099), and seeds/carries
+/// the mover's stored contact plane across slices (`init_contact_plane` /
+/// `init_last_known_contact_plane`, acclient.c:315599/315612 →
+/// `world.player.last_contact_plane`). Together these arm the already-
+/// ported retail chain the live path never reached: the step-down snap
+/// (feet planted downhill, acclient.c:312961-313009 + walk_interp bound
+/// :314259-314280), the FLOOR_Z slope refusal (steep contact → `step_down`
+/// rejects at `N.z < 0.664`, :312666), `edge_slide` → `cliff_slide`
+/// (slide down/along a too-steep face, :312685-312791) and the lip
+/// block/slide (Collided step re-pinned via last-known plane,
+/// `validate_transition` branch A). Jump keeps its retail bypass: an
+/// airborne entry stamps NEITHER bit, so edge protection does not apply
+/// mid-air (retail `CMotionInterp::jump` → `set_on_walkable(0)`,
+/// acclient.c:344247).
+///
+/// ONE feature, TWO carriers (mirrors [`USE_OUTDOOR_STATIC_GROUNDING`]):
+/// this const (native default) + the `?retailGround=off` URL flag
+/// ([`MovementSystem::retail_ground_runtime`]). Effective predicate:
+/// [`MovementSystem::retail_ground_enabled`], baked into
+/// `TransitionGates::retail_ground`.
+///
+/// `true` (DEFAULT): retail ground movement — cliffs refuse/slide, downhill
+/// sticks, lips block/slide, jump clears them.
+/// `false` / `?retailGround=off`: the pre-2026-07-02 behavior (climbable
+/// cliffs, airborne-flicker downhill, emergent edge behavior).
+const USE_RETAIL_GROUND: bool = true;
+
+/// (2026-07-02) — retail CAST-MOVEMENT arbitration. While the LOCAL
+/// player's cast gesture (a SERVER-played, non-autonomous motion — windup
+/// `MagicPowerUp01..10` / the spell cast gesture, sent by ACE
+/// `EnqueueMotionMagic` as `Motion(MotionStance.Magic, gesture)` with
+/// `IsAutonomous=false`) is in flight, the manual drive applies the
+/// INTERPRETED (server) state instead of raw WASD — retail
+/// `CMotionInterp::apply_current_movement` (acclient.c:344305):
+/// `movement_is_autonomous ? apply_raw_movement : apply_interpreted_movement`,
+/// where `last_move_was_autonomous` is cleared by every server-authored
+/// motion (acclient.c:322336 `get_autonomous_movement`) and re-set by any
+/// fresh local `DoMotion` (acclient.c:317325). The server's cast-gesture
+/// state carries no locomotion commands, so held keys stop driving —
+/// "fighting the cast" — while a NEW key edge (a fresh DoMotion) regains
+/// autonomy until the next gesture message re-asserts it: repeated presses
+/// step you forward; a strafe press keeps the slidey diagonal alive. NO
+/// hard root is added — the server's fizzle circle (ACE `Windup_MaxMove`)
+/// stays server-side.
+///
+/// ONE feature, TWO carriers: this const (native default) + the
+/// `?castMove=off` URL flag ([`MovementSystem::cast_move_runtime`]).
+/// Effective predicate: [`MovementSystem::cast_move_enabled`].
+///
+/// `true` (DEFAULT): cast gestures suppress held locomotion per retail.
+/// `false` / `?castMove=off`: casting never affects movement (pre-2026-07-02).
+const USE_CAST_MOVE: bool = true;
+
+/// [`USE_CAST_MOVE`] — failsafe ceiling on how long ONE server gesture
+/// message suppresses movement without a follow-up. ACE windup gestures
+/// arrive ~0.5-1 s apart (CastSpeed 2.0) and `FinishCast` always sends a
+/// returning `Ready` motion, so the deadline normally never expires — it
+/// exists so a dropped packet cannot root the player indefinitely.
+const CAST_GESTURE_FAILSAFE_SECS: f32 = 6.0;
+
 /// Phase 3 Phase D (2026-06-28, Option C) — register each outdoor
 /// building/static BSP into EVERY land cell its world AABB overlaps, not just
 /// its home cell, so an off-center building can no longer be walked through from
@@ -1211,6 +1275,24 @@ pub(crate) struct MovementSystem {
     /// home-cell-only registration (the retail-bug repro arm of the drift A/B).
     /// Combined by [`Self::building_overlap_enabled`]. Default `None`.
     building_overlap_runtime: Option<bool>,
+    /// (2026-07-02) — runtime carrier of the `?retailGround=off` URL flag.
+    /// `None` = the [`USE_RETAIL_GROUND`] const default (ON); `Some(false)`
+    /// rolls the retail outdoor ground-movement port back (the A/B escape).
+    /// Combined by [`Self::retail_ground_enabled`]. Default `None`.
+    retail_ground_runtime: Option<bool>,
+    /// (2026-07-02) — runtime carrier of the `?castMove=off` URL flag.
+    /// `None` = the [`USE_CAST_MOVE`] const default (ON); `Some(false)`
+    /// disables the cast-gesture movement arbitration. Combined by
+    /// [`Self::cast_move_enabled`]. Default `None`.
+    cast_move_runtime: Option<bool>,
+    /// [`USE_CAST_MOVE`] — while `Some(t)` and `now < t`, a server-played
+    /// cast gesture governs the local player's movement (the retail
+    /// non-autonomous window). Armed by [`Self::note_local_cast_gesture`]
+    /// (the `SelfServerControlledMotion` consumption site), cleared by a
+    /// fresh manual-input EDGE (retail `DoMotion` sets
+    /// `last_move_was_autonomous`, acclient.c:317325), a non-gesture
+    /// server motion, or the [`CAST_GESTURE_FAILSAFE_SECS`] deadline.
+    cast_gesture_deadline: Option<Instant>,
     /// A14-I4 (W3+ S11, 2026-06-12) — the retail jump charge clock
     /// (`ClientCombatSystem` `jump_pending` / `buildStartTime`,
     /// acclient.c:407902-407916). Reached only via the wasm
@@ -1416,6 +1498,9 @@ impl MovementSystem {
             faithful_stepup_runtime: None,
             outdoor_static_grounding_runtime: None,
             building_overlap_runtime: None,
+            retail_ground_runtime: None,
+            cast_move_runtime: None,
+            cast_gesture_deadline: None,
             jump_charge: JumpChargeClock::new(),
             sticky_timeout_pending: std::cell::Cell::new(false),
             manual_moveto_cancel_pending: false,
@@ -1476,6 +1561,55 @@ impl MovementSystem {
     /// proof). Read at bake time via [`Self::building_overlap_enabled`].
     pub(crate) fn set_building_overlap(&mut self, on: bool) {
         self.building_overlap_runtime = Some(on);
+    }
+
+    /// (2026-07-02) — install the `?retailGround=off` runtime carrier (see
+    /// [`USE_RETAIL_GROUND`]). The wasm recv-loop init calls this once with
+    /// the parsed flag (default-ON; `=off` rolls the retail outdoor
+    /// ground-movement port back). Baked into
+    /// `TransitionGates::retail_ground` at the dispatch sites.
+    pub(crate) fn set_retail_ground(&mut self, on: bool) {
+        self.retail_ground_runtime = Some(on);
+    }
+
+    /// (2026-07-02) — install the `?castMove=off` runtime carrier (see
+    /// [`USE_CAST_MOVE`]).
+    pub(crate) fn set_cast_move(&mut self, on: bool) {
+        self.cast_move_runtime = Some(on);
+    }
+
+    /// [`USE_RETAIL_GROUND`] effective predicate (const default overridden
+    /// by the `?retailGround=off` runtime carrier).
+    pub(crate) fn retail_ground_enabled(&self) -> bool {
+        self.retail_ground_runtime.unwrap_or(USE_RETAIL_GROUND)
+    }
+
+    /// [`USE_CAST_MOVE`] effective predicate.
+    pub(crate) fn cast_move_enabled(&self) -> bool {
+        self.cast_move_runtime.unwrap_or(USE_CAST_MOVE)
+    }
+
+    /// [`USE_CAST_MOVE`] — arm/clear the server-played cast-gesture window
+    /// (the retail non-autonomous movement state). Called from the
+    /// `SelfServerControlledMotion` consumption site
+    /// ([`Self::apply_self_movement_world_events`]): `true` on a Magic-stance
+    /// windup/cast gesture, `false` on any other non-autonomous self motion
+    /// (e.g. `FinishCast`'s returning `Ready`).
+    pub(crate) fn note_local_cast_gesture(&mut self, active: bool) {
+        self.cast_gesture_deadline = if active {
+            Some(Instant::now() + Duration::from_secs_f32(CAST_GESTURE_FAILSAFE_SECS))
+        } else {
+            None
+        };
+    }
+
+    /// [`USE_CAST_MOVE`] — is a server-played cast gesture currently
+    /// governing the local player's movement?
+    pub(crate) fn cast_gesture_active(&self) -> bool {
+        self.cast_move_enabled()
+            && self
+                .cast_gesture_deadline
+                .is_some_and(|deadline| Instant::now() < deadline)
     }
 
     /// A14-I3 (`?retailRunKeys=on`) — overlay the retail autorun
@@ -1832,6 +1966,17 @@ impl MovementSystem {
     fn ingest_drive_command(&mut self, command: QueuedDriveCommand, now: Instant) {
         match command {
             QueuedDriveCommand::ManualSet(state) => {
+                // USE_CAST_MOVE — a fresh manual-input EDGE is retail's
+                // `CPhysicsObj::DoMotion` (`last_move_was_autonomous = 1`,
+                // acclient.c:317325): raw input takes back over from a
+                // server-played cast gesture until the next gesture message
+                // re-asserts the interpreted state. Only a CHANGED state
+                // counts (a re-send of the identical held axes is not an
+                // input edge), so holding W does not silently defeat the
+                // gesture — you must actively re-press ("fight the cast").
+                if self.cast_gesture_deadline.is_some() && self.last_manual_drive != Some(state) {
+                    self.cast_gesture_deadline = None;
+                }
                 // A14-I2 (S10 A.3) — record EVERY manual set for the
                 // pursuit-end restore. Pure bookkeeping, ungated.
                 self.last_manual_drive = Some(state);
@@ -4512,6 +4657,7 @@ impl MovementSystem {
             skip_parented_entities: SKIP_PARENTED_ENTITY_COLLISION,
             walkable_reinsert_probe: USE_WALKABLE_REINSERT_PROBE,
             outdoor_static_grounding: USE_OUTDOOR_STATIC_GROUNDING,
+            retail_ground: USE_RETAIL_GROUND,
         };
         (object, gates)
     }
@@ -4555,6 +4701,28 @@ impl MovementSystem {
             return false;
         };
         let dt_s = dt.as_secs_f32();
+
+        // USE_CAST_MOVE — retail cast-movement arbitration: while a
+        // server-played cast gesture is in flight the client applies the
+        // INTERPRETED state, not raw WASD (`CMotionInterp::
+        // apply_current_movement`, acclient.c:344305-344311). The gesture
+        // motion carries no locomotion commands (ACE sends
+        // `Motion(Magic, gesture)` — the gesture IS the forward command,
+        // which maps to zero ground velocity in `get_state_velocity`), so
+        // the applied state is locomotion-idle; held keys stop driving
+        // until a fresh input EDGE regains autonomy (ingest_drive_command)
+        // or the gesture window ends. Gait is preserved so stance-speed
+        // bookkeeping is unchanged.
+        let state = if self.cast_gesture_active() {
+            MotionState {
+                forward: None,
+                sidestep: None,
+                turning: None,
+                ..state
+            }
+        } else {
+            state
+        };
 
         let target_velocity = interpreted_velocity_for_state(heading, state, &capabilities);
         // G-7 / F1-6 — StandingLongJump root (turning stays allowed via
@@ -4679,6 +4847,8 @@ impl MovementSystem {
         // (2026-06-30) — apply the `?roofGrounding=off` runtime carrier over the
         // const default baked by `transition_profile` (mirrors faithful_stepup).
         gates.outdoor_static_grounding = self.outdoor_static_grounding_enabled();
+        // (2026-07-02) — apply the `?retailGround=off` runtime carrier.
+        gates.retail_ground = self.retail_ground_enabled();
         let end = holtburger_common::position::WorldPosition {
             landblock_id: pose.landblock_id,
             coords: Vector3::new(
@@ -4698,6 +4868,9 @@ impl MovementSystem {
             gates,
             last_known_wall_normal: world.player.last_known_wall_normal,
             frames_stationary_fall: 0,
+            // USE_RETAIL_GROUND: seed the transition with the mover's stored
+            // contact plane (retail `get_object_info` → `init_contact_plane`).
+            last_contact_plane: world.player.last_contact_plane,
         };
         let outcome = holtburger_world::spatial::transition::find_transitional_position_dispatch(
             &*world,
@@ -4712,6 +4885,15 @@ impl MovementSystem {
         if let Some(n) = outcome.wall_normal {
             world.player.last_known_wall_normal = Some(n);
         }
+        // USE_RETAIL_GROUND — the retail `SetPositionInternal` contact-plane
+        // copy-out (acclient.c:322538-322590): the stored plane mirrors the
+        // transition's result EXACTLY, including clearing when no plane was
+        // touched (retail sets `contact_plane_valid` from the transition every
+        // frame — a jump arc therefore drops the plane on its first airborne
+        // frame and nothing re-seeds mid-air).
+        if gates.retail_ground {
+            world.player.last_contact_plane = outcome.contact_plane;
+        }
         if was_airborne && outcome.grounded {
             world.player.land();
         }
@@ -4720,6 +4902,71 @@ impl MovementSystem {
             // A3-D3-5: retail leave-ground launch velocity
             // (default-off no-op).
             stamp_leave_ground_velocity(world, heading, state, capabilities);
+        }
+        // USE_RETAIL_GROUND — retail contact-frame friction on a SLIDE frame
+        // (in contact with a too-steep plane, not planted): retail
+        // `UpdatePhysicsInternal` applies `calc_friction` on every contact
+        // frame (acclient.c:317726-317783), which (a) projects the velocity
+        // off the surface normal (the into-face component dies — no tunnel
+        // through the base) and (b) decays the along-face speed (the
+        // controlled retail cliff slide; the Sledding table keeps a fast
+        // steep slide alive at base friction and stops a slow one).
+        if gates.retail_ground
+            && !outcome.grounded
+            && let Some((plane, _)) = outcome.contact_plane
+        {
+            let mut v = Vector3::new(
+                world.player.current_planar_velocity.x,
+                world.player.current_planar_velocity.y,
+                world.player.vertical_velocity,
+            );
+            let mag2 = v.dot(&v);
+            calc_friction(
+                &mut v,
+                plane.normal,
+                mag2,
+                PLAYER_GROUND_FRICTION_RETAIL,
+                true, // Sledding — retail sets it on the steep-slide state
+                dt_s,
+            );
+            world.player.current_planar_velocity.x = v.x;
+            world.player.current_planar_velocity.y = v.y;
+            world.player.vertical_velocity = v.z;
+        }
+
+        // Fell-through-world failsafe (2026-07-01, re-homed 2026-07-02).
+        // Originally landed in the LEGACY slice body (commit 0287828f), which
+        // `USE_UNIFIED_TRANSITION` made unreachable — `airborne_secs` never
+        // accumulated and the failsafe never ran (the "@teletome is the only
+        // rescue" symptom). This is the LIVE-path home: accumulate airborne
+        // time each slice; after a freefall longer than any legitimate drop
+        // (6 s) AND a depth well below the outdoor terrain at the mover's
+        // global XY, re-seat the pose on the terrain floor (clear a stale
+        // indoor cell to the outdoor bucket, rebucket, snap z, land()).
+        const FELL_THROUGH_MIN_AIRBORNE_SECS: f32 = 6.0;
+        const FELL_THROUGH_TERRAIN_MARGIN: f32 = 50.0;
+        if world.player.is_airborne {
+            world.player.airborne_secs += dt_s;
+            if world.player.airborne_secs >= FELL_THROUGH_MIN_AIRBORNE_SECS {
+                let global = pose.global_coords();
+                if let Some(tz) = world.terrain_height_at(global.x, global.y)
+                    && pose.coords.z < tz - FELL_THROUGH_TERRAIN_MARGIN
+                {
+                    log::warn!(
+                        "[fell-through-failsafe] airborne {:.1}s at z={:.1} (terrain {:.1}) cell 0x{:08X} — re-seating on terrain",
+                        world.player.airborne_secs,
+                        pose.coords.z,
+                        tz,
+                        pose.landblock_id.0,
+                    );
+                    pose.landblock_id = Guid((pose.landblock_id.0 & 0xFFFF_0000) | 0x0001);
+                    pose.coords.z = tz + 0.005;
+                    pose = pose.rebucket_outdoor_landblock().normalize_outdoor_cell();
+                    world.player.land();
+                }
+            }
+        } else {
+            world.player.airborne_secs = 0.0;
         }
 
         // Legacy tail: local rotation prediction + force-position
@@ -4957,6 +5204,42 @@ impl MovementSystem {
             .record_server_control_sequence(server_control_sequence);
     }
 
+    /// [`USE_CAST_MOVE`] — does this server-played General motion carry a
+    /// Magic cast gesture? ACE authors casts two ways, both covered:
+    /// `EnqueueMotionMagic` sends the gesture as the FORWARD command of a
+    /// `Motion(MotionStance.Magic, gesture)` (Motion.cs `SetForwardCommand`);
+    /// the FastTick `EnqueueMotionAction` path sends `Ready` forward with the
+    /// gesture(s) in the ACTION list. Gesture low-16s (MotionCommand.cs):
+    /// windups `MagicPowerUp01..10` 0x6F..=0x78 (+ purple variants
+    /// 0x12B..=0x134), cast gestures `MagicBlast..MagicPray` 0x2B..=0x39,
+    /// `CastSpell` 0xD3, `UseMagicStaff`/`UseMagicWand` 0xE0/0xE1. Gated on
+    /// the Magic stance (low-16 0x49) so combat-mode/emote motions never
+    /// arm the window.
+    fn is_magic_cast_gesture_motion(
+        current_style: u16,
+        invalid: &holtburger_protocol::messages::movement::MovementInvalid,
+    ) -> bool {
+        const MAGIC_STANCE_LOW16: u16 = 0x0049;
+        fn is_gesture_low16(low: u16) -> bool {
+            matches!(low, 0x2B..=0x39 | 0x6F..=0x78 | 0xD3 | 0xE0 | 0xE1 | 0x12B..=0x134)
+        }
+        if current_style & 0xFFFF != MAGIC_STANCE_LOW16 {
+            return false;
+        }
+        if invalid
+            .state
+            .forward_command
+            .is_some_and(|cmd| is_gesture_low16(cmd.raw()))
+        {
+            return true;
+        }
+        invalid
+            .state
+            .commands
+            .iter()
+            .any(|item| is_gesture_low16(item.command.raw()))
+    }
+
     /// A13-W1 (2026-06-11, unification survey): SINGLE consumption site
     /// for the self-movement sequence `WorldEvent`s the canonical world
     /// handlers emit (`SelfServerControlledMotion` /
@@ -4988,6 +5271,23 @@ impl MovementSystem {
             match event {
                 WorldEvent::SelfServerControlledMotion { data, .. } => {
                     self.record_server_control_sequence(data.server_control_sequence);
+                    // USE_CAST_MOVE — classify the server-played motion: a
+                    // Magic-stance windup/cast gesture arms the cast-movement
+                    // window; any other non-autonomous General motion (e.g.
+                    // FinishCast's returning Ready) clears it. Only General
+                    // (`Invalid`) envelopes carry the gesture; MoveTo/TurnTo
+                    // directives leave the window untouched. The emit site
+                    // (handlers/player.rs) already gates accepted &&
+                    // !is_autonomous, so every event here is server-authored.
+                    if let holtburger_protocol::messages::movement::MovementTypeData::Invalid(
+                        invalid,
+                    ) = &data.data
+                    {
+                        self.note_local_cast_gesture(Self::is_magic_cast_gesture_motion(
+                            data.current_style,
+                            invalid,
+                        ));
+                    }
                 }
                 WorldEvent::SelfUpdatePosition {
                     force_position_sequence,

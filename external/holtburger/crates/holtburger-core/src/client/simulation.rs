@@ -200,6 +200,8 @@ impl ClientSimulationSystem {
             // (2026-06-30) — apply the `?roofGrounding=off` runtime carrier over
             // the const default (mirrors faithful_stepup); see the system.rs twin.
             gates.outdoor_static_grounding = movement.outdoor_static_grounding_enabled();
+            // (2026-07-02) — apply the `?retailGround=off` runtime carrier.
+            gates.retail_ground = movement.retail_ground_enabled();
             let end = holtburger_common::position::WorldPosition {
                 landblock_id: pose.landblock_id,
                 coords: Vector3::new(
@@ -219,6 +221,9 @@ impl ClientSimulationSystem {
                 gates,
                 last_known_wall_normal: world.player.last_known_wall_normal,
                 frames_stationary_fall: 0,
+                // USE_RETAIL_GROUND: same contact-plane carry as the manual
+                // slice (system.rs twin).
+                last_contact_plane: world.player.last_contact_plane,
             };
             let outcome = transition::find_transitional_position_dispatch(
                 &*world,
@@ -229,6 +234,11 @@ impl ClientSimulationSystem {
             );
             if let Some(n) = outcome.wall_normal {
                 world.player.last_known_wall_normal = Some(n);
+            }
+            // USE_RETAIL_GROUND: mirror the settled plane exactly, clearing
+            // when none was touched (system.rs twin).
+            if gates.retail_ground {
+                world.player.last_contact_plane = outcome.contact_plane;
             }
             let mut next_pose = outcome.pose;
             let current_heading = pose.rotation.to_heading();

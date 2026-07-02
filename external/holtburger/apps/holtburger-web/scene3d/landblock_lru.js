@@ -63,6 +63,36 @@ function lbChebyshev(a, b) {
   return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
 }
 
+// streamFix urgent lane (2026-07-02): is `lbKey` within `radius` (Chebyshev,
+// default 1 = the player's 3×3) of the player's CURRENT landblock? Used by
+// the per-LB bakers (terrain/statics/buildings) to route their wasm fetches
+// through the urgent lane (fetch-semaphore bypass — see
+// manifest_source.rs::prefetch_urgent) so the town the player is standing in
+// can't starve behind a rapid-teleport speculative ring backlog. Reads the
+// player LB through the LRU's own `getCurrentLbId` (rig-position-derived —
+// fresh across teleports, unlike `scene3d.playerLbKey` which is stamped by
+// the terrain reconcile). Fail-soft `false` (normal lane) when the LRU/pose
+// isn't wired (unit tests, capture paths) or `?streamFix=off`.
+const STREAM_URGENCY_ENABLED = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("streamFix");
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+})();
+
+function isNearPlayerLb(scene3d, lbKey, radius = 1) {
+  if (!STREAM_URGENCY_ENABLED) return false;
+  try {
+    const cur = scene3d?.landblockLru?.getCurrentLbId?.();
+    if (typeof cur !== "number" || cur === 0) return false;
+    return lbChebyshev(lbKeyOf(cur >>> 0), lbKeyOf(lbKey >>> 0)) <= radius;
+  } catch (_) {
+    return false;
+  }
+}
+
 export class LandblockLRU {
   constructor({ scene3d, maxResident, getCurrentLbId, onEvictLandblock = null, debug = false } = {}) {
     if (!scene3d) throw new Error("LandblockLRU: scene3d required");
@@ -542,4 +572,4 @@ export class LandblockLRU {
 // Helper exported for callers that need the same lb-key shape used
 // internally (e.g. the bake site converting (lbX, lbY) → lbKey for
 // `track`).
-export { lbKeyFromXY, lbKeyOf };
+export { lbKeyFromXY, lbKeyOf, isNearPlayerLb };

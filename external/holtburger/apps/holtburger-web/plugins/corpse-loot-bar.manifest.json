@@ -1,0 +1,13 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "corpse-loot-bar",
+  "name": "Corpse Loot",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Horizontal corpse-loot bar (vendor-strip pattern) — container-panel routes corpse kind=21 ContainerOpened events here",
+  "icon": "💀",
+  "iconHidden": true,
+  "entry": "./corpse-loot-bar.js",
+  "environments": ["browser"],
+  "slots": ["panel"]
+}

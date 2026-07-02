@@ -58,6 +58,7 @@ import {
 } from "./adapter.js";
 import { MaterialCache, materialCanCastShadow } from "./materials.js";
 import { surfacePixelsFetcher } from "./bake_worker_client.js";
+import { isNearPlayerLb } from "./landblock_lru.js";
 // A9-Stage2 (unification survey 2026-06-11): adopt the single-owner
 // part-transform composition. A building's per-part hinge frame is the same
 // rest-pose frame an entity part carries (position + AC-ordered quaternion);
@@ -290,6 +291,15 @@ async function bakeBuildingPlacement(modelId, fetchBuildingPlacement) {
 
   const setupId = bundle.setupId >>> 0;
   const partCount = bundle.partCount | 0;
+  // streamFix retryability (2026-07-02): the wasm walk's record-miss count
+  // (see fetch_building_placement's geom-audit retry). Non-zero = one or
+  // more parts decoded empty under fetch starvation — the bake is
+  // INCOMPLETE and must NOT enter the cross-LB `opts.bakeCache` (a poisoned
+  // entry strips this cottage/shop model from EVERY future LB for the whole
+  // session). Getter is absent on a stale wasm bundle → 0 (fail-soft to the
+  // pre-fix behavior).
+  const decodeMisses =
+    typeof bundle.decodeMisses === "number" ? bundle.decodeMisses >>> 0 : 0;
   if (partCount === 0) {
     if (typeof bundle.free === "function") bundle.free();
     return {
@@ -297,6 +307,7 @@ async function bakeBuildingPlacement(modelId, fetchBuildingPlacement) {
       setupId,
       parts: [],
       surfaceDids: new Set(),
+      incomplete: decodeMisses > 0,
     };
   }
 
@@ -341,8 +352,16 @@ async function bakeBuildingPlacement(modelId, fetchBuildingPlacement) {
     setupId,
     parts,
     surfaceDids,
+    incomplete: decodeMisses > 0,
   };
 }
+
+// streamFix retryability (2026-07-02): per-LB starved-decode retry budget
+// for the buildings baker — same shape + rationale as the statics baker's
+// `_staticsStarvedRetries` (see statics.js): bounded so a permanently-
+// undecodable model can't loop the LB forever, cleared on a clean bake.
+const BUILDINGS_STARVED_RETRY_CAP = 3;
+const _buildingsStarvedRetries = new Map();
 
 /**
  * Instantiate one building from a per-model bake.
@@ -664,12 +683,17 @@ export async function bakeBuildingsForLandblock(
   // stripping its cottages/shops for the session.
   _buildingsInFlight.add(lbKey);
   try {
+    // streamFix urgent lane (2026-07-02): current-LB/3×3 bakes are
+    // player-blocking — their wasm fetches bypass the shared fetch
+    // semaphore (see statics.js twin + lib.rs). Snapshot once per bake.
+    const urgent = isNearPlayerLb(scene3d, lbKey);
     // Step 1 — fetch this LB's placements. The `0xfffe` suffix selects
     // LandblockInfo (objects + buildings); `0xffff` is the terrain
     // CellLandblock and won't return placements.
     const cellId = (lbKey | 0xfffe) >>> 0;
     const allPlacements = await wasmExports.fetch_landblock_objects(
-      new Uint32Array([cellId])
+      new Uint32Array([cellId]),
+      urgent
     );
 
     // Step 2 — filter buildings, snapshot to JS-owned plain objects,
@@ -713,16 +737,55 @@ export async function bakeBuildingsForLandblock(
     // larger ring most LBs hit the cache for every building.
     const uniqueModelIds = [...new Set(buildings.map((b) => b.modelId))];
     const toBake = uniqueModelIds.filter((id) => !opts.bakeCache.has(id));
+    // streamFix retryability (2026-07-02): local (this-call-only) bakes for
+    // models whose decode came back INCOMPLETE — they render this attempt
+    // only once the retry budget is exhausted, and NEVER enter the
+    // cross-LB cache (a poisoned entry would strip the model everywhere
+    // for the whole session).
+    const localBakes = new Map();
     if (toBake.length > 0) {
       const bakeResults = await Promise.all(
         toBake.map((id) =>
-          bakeBuildingPlacement(id, wasmExports.fetchBuildingPlacement)
+          // streamFix urgent lane (2026-07-02): forward the bake's lane to
+          // fetchBuildingPlacement(modelId, urgent).
+          bakeBuildingPlacement(id, (mid) => wasmExports.fetchBuildingPlacement(mid, urgent))
         )
       );
+      let starved = 0;
       for (let i = 0; i < toBake.length; i += 1) {
-        if (bakeResults[i]) {
-          opts.bakeCache.set(toBake[i], bakeResults[i]);
+        const bake = bakeResults[i];
+        if (!bake) {
+          // fetchBuildingPlacement threw (walk failure — transient class).
+          starved += 1;
+          continue;
         }
+        if (bake.incomplete) {
+          starved += 1;
+          localBakes.set(toBake[i], bake);
+          continue;
+        }
+        opts.bakeCache.set(toBake[i], bake);
+      }
+      if (starved > 0) {
+        const attempts = (_buildingsStarvedRetries.get(lbKey) || 0) + 1;
+        if (attempts <= BUILDINGS_STARVED_RETRY_CAP) {
+          _buildingsStarvedRetries.set(lbKey, attempts);
+          // LB is not yet marked baked (A3 marks below) — throwing here
+          // leaves it retryable: the stream guard cooldowns it and the PVS
+          // expansion re-fires once the fetch pipeline drains.
+          throw new Error(
+            `bakeBuildingsForLandblock 0x${lbKey.toString(16)}: ${starved}/${toBake.length} ` +
+              `building models decode-starved; leaving LB retryable (attempt ${attempts}/${BUILDINGS_STARVED_RETRY_CAP})`
+          );
+        }
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[geom-audit] buildings 0x${lbKey.toString(16)}: accepting PARTIAL bake after ` +
+            `${BUILDINGS_STARVED_RETRY_CAP} starved retries (${starved} models still incomplete)`
+        );
+        _buildingsStarvedRetries.delete(lbKey);
+      } else if (_buildingsStarvedRetries.has(lbKey)) {
+        _buildingsStarvedRetries.delete(lbKey); // clean bake — reset budget
       }
     }
 
@@ -732,15 +795,20 @@ export async function bakeBuildingsForLandblock(
     // materials.js:1207 `if (this.materials.has(d)) continue`).
     const lbSurfaceDids = new Set();
     for (const id of uniqueModelIds) {
-      const bake = opts.bakeCache.get(id);
+      // streamFix (2026-07-02): fall back to the this-call-only bake for a
+      // cap-exhausted incomplete model (never cached cross-LB).
+      const bake = opts.bakeCache.get(id) || localBakes.get(id);
       if (!bake) continue;
       for (const did of bake.surfaceDids) lbSurfaceDids.add(did);
     }
     if (lbSurfaceDids.size > 0) {
       try {
+        // streamFix urgent lane (2026-07-02): close the bake's lane over the
+        // surface fetcher (same pattern as statics.js).
+        const spFetchRaw = surfacePixelsFetcher(wasmExports);
         await opts.materialCache.preload(
           [...lbSurfaceDids],
-          surfacePixelsFetcher(wasmExports)
+          (dids) => spFetchRaw(dids, urgent)
         );
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -768,13 +836,16 @@ export async function bakeBuildingsForLandblock(
         x: placementLbX * METERS_PER_LANDBLOCK,
         y: placementLbY * METERS_PER_LANDBLOCK,
       };
-      const bake = opts.bakeCache.get(placement.modelId);
+      const bake = opts.bakeCache.get(placement.modelId) || localBakes.get(placement.modelId);
       if (!bake) {
         // No bake for this modelId — the bake call failed earlier;
         // skip with a warning rather than crash. The 2D path falls
         // back to a fused single-sprite here; the 3D fallback is
         // Phase 7.7 polish (out of scope for the world-expand step 1
-        // refactor).
+        // refactor). (streamFix 2026-07-02: with the starved-retry
+        // throw above, reaching here with a missing bake means the
+        // retry budget is exhausted — the skip is now bounded, not
+        // permanent-silent.)
         continue;
       }
       // Compute placementKey BEFORE constructing the Group so we can

@@ -48,13 +48,18 @@ async function handleInit(msg) {
 }
 
 async function handleModelMeshes(msg) {
-  const meshes = await fetch_model_meshes(Uint32Array.from(msg.ids));
+  // streamFix urgent lane (2026-07-02): `msg.urgent` (player-blocking
+  // current-LB bake) routes the walk's prefetches around THIS worker's own
+  // fetch semaphore — the worker wasm instance has its own FIFO that
+  // otherwise backlogs identically to the main thread's under rapid
+  // teleports. Absent/false = pre-fix normal lane.
+  const meshes = await fetch_model_meshes(Uint32Array.from(msg.ids), msg.urgent === true);
   const { meshes: payload, transfer } = serializeModelMeshes(meshes);
   self.postMessage({ type: "result", id: msg.id, kind: "modelMeshes", payload }, transfer);
 }
 
 async function handleSurfaces(msg) {
-  const surfaces = await fetch_surfaces_pixels(Uint32Array.from(msg.dids));
+  const surfaces = await fetch_surfaces_pixels(Uint32Array.from(msg.dids), msg.urgent === true);
   const { surfaces: payload, transfer } = serializeSurfacePixelsBatch(surfaces);
   self.postMessage({ type: "result", id: msg.id, kind: "surfaces", payload }, transfer);
 }
