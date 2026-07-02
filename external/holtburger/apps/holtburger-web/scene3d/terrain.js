@@ -2218,17 +2218,24 @@ export async function resolveTerrainRingOpts(
   // `if (!atlasTexture)` block (the lazy path reuses the atlas but still
   // wants the detail uniforms). Flag off, fetch missing, or build failure
   // → null state → `uDetailTexEnabled` 0 → shader branch skipped (no-op).
-  // 2026-07-02 — retail default: OPT-IN ONLY (?terrainDetailTex=on). The
-  // detail-diffuse layer is a modern addition with no retail equivalent, and
-  // its per-preset default-on (2026-06-09, "pending eye-test") FAILED the
-  // live 1070 eye-test today: the per-code MODULATE2X wash stamps pale
-  // razor-edged multi-cell blocks over type regions (looked like "terrain
-  // paint stamped landblock by landblock") and its tiling reads as a grid —
-  // it was the blocky layer sitting ON TOP of the (correct) TexMerge
-  // composite. The preset detailFlag no longer force-enables it; the
-  // ?terrainDetailTex=off opt-out still works against an explicit =on.
-  const detailTexFlag =
-    readTerrainDetailTexFlag() && !readTerrainDetailTexOffFlag();
+  // 2026-07-02 (rev 2, decomp-grounded) — RETAIL GLOBAL DETAIL is the
+  // default. Retail DID ship a terrain detail texture, but NOT per-type:
+  // LScape::GenerateDetailSurface(n) only ever reads TerrainDesc[0..3] as
+  // CATEGORY entries (0=landscape, 1=building, 2=environment, 3=object) —
+  // ONE detail texture + tiling for the whole landscape (on retail Dereth:
+  // TerrainDesc[0].detail_tex_gid = 0x05001786, detail_tex_tiling = 4;
+  // detail UV = cell UV x tiling per D3DPolyRender::SetDetailTiling). The
+  // per-TYPE detail fields in the DAT are packed but never consumed
+  // per-type by the shipped client (same fate as min/max_vert_bright —
+  // dead data, Pack/UnPack only, both 2011 + 2013 decomps).
+  //
+  // The earlier per-code default-on (2026-06-09) FAILED its 1070 eye-test
+  // today: per-code switching stamps pale razor-edged multi-cell blocks at
+  // type boundaries. The retail-global mode cannot produce those by
+  // construction (same texture everywhere). ?terrainDetailTex=percode
+  // keeps the modern per-type variant for A/B; =off kills the layer.
+  const detailTexMode = readTerrainDetailTexMode();
+  const detailTexFlag = detailTexMode !== "off";
   let detailTexState = scene3d.terrainDetailTexState ?? null;
   if (
     detailTexFlag &&
@@ -2242,6 +2249,25 @@ export async function resolveTerrainRingOpts(
       const codeToSlice = Array.from(bundle.codeToSlice());
       const codeTiling = Array.from(bundle.codeTiling());
       if (typeof bundle.free === "function") bundle.free();
+
+      // Retail-global mode (default; see the detailTexMode comment above):
+      // every code renders TerrainDesc[0]'s landscape detail slice at its
+      // authored tiling — one texture, one frequency, world-wide, exactly
+      // LScape::GenerateDetailSurface(0). baseScale 1.0 = retail's
+      // detail-UV = cellUV x tiling (tiling 4 → 6 m period); strength 1.0 =
+      // retail's plain second-stage modulate (no lerp).
+      let detailBaseScale = DEFAULT_DETAIL_TEX_BASE_SCALE;
+      let detailStrength = DEFAULT_DETAIL_TEX_STRENGTH;
+      if (detailTexMode !== "percode" && codeToSlice[0] !== 255) {
+        const s0 = codeToSlice[0];
+        const t0 = codeTiling[0];
+        for (let i = 0; i < codeToSlice.length; i++) {
+          codeToSlice[i] = s0;
+          codeTiling[i] = t0;
+        }
+        detailBaseScale = 1.0;
+        detailStrength = 1.0;
+      }
 
       const built = buildTerrainDetailArrayBytes(slices);
       const tex = new THREE.DataArrayTexture(
@@ -2270,6 +2296,8 @@ export async function resolveTerrainRingOpts(
         codeToSlice, // length 33, 255 = no detail
         codeTiling, // length 33
         sliceCount: built.depth,
+        baseScale: detailBaseScale,
+        strength: detailStrength,
       };
       scene3d.terrainDetailTexState = detailTexState;
     } catch (e) {
@@ -2391,6 +2419,10 @@ export async function resolveTerrainRingOpts(
     detailTexCodeTiling: detailTexState?.codeTiling ?? null,
     detailTexSliceCount: detailTexState?.sliceCount ?? 0,
     detailTexEnabled: !!detailTexState,
+    // 2026-07-02 — retail-global detail scale/strength (1.0/1.0) vs the
+    // modern per-code tuning (8.0/0.5); resolved in the state build above.
+    detailTexBaseScale: detailTexState?.baseScale ?? DEFAULT_DETAIL_TEX_BASE_SCALE,
+    detailTexStrength: detailTexState?.strength ?? DEFAULT_DETAIL_TEX_STRENGTH,
     // T1 — TexMerge alpha-mask array + enable flag. Per-LB merge texture is
     // built in bakeTerrainForLandblock (it needs wasmMesh); this provides the
     // shared mask array + the gate. Disabled → bilinear path unchanged.
@@ -2597,38 +2629,28 @@ function readTerrainPaletteFlag() {
 }
 
 /**
- * T7 (2026-05-28) — Parse `?terrainDetailTex=on`. Gates the near-camera
- * detail-diffuse modulation (`uDetailTexEnabled` + the wasm detail-texture
- * fetch). Default OFF — the detail layer is a visual refinement whose
- * tiling/strength/fade are eye-test-tuned, so it ships behind a flag like
- * T2 (`?perPolyCull`) did before defaulting on. Same try/catch shape as the
- * sibling flag readers for the Node test harness.
+ * T7 (2026-05-28) / rev 2026-07-02 — Parse `?terrainDetailTex` as a MODE:
+ *   "global"  (default, any value incl. "on") — retail behaviour: ONE
+ *             landscape detail texture + tiling world-wide, read from
+ *             TerrainDesc[0] exactly like LScape::GenerateDetailSurface(0)
+ *             (decomp: categories 0-3 = landscape/building/env/object; the
+ *             per-TYPE detail fields are dead data in the shipped client).
+ *   "percode" — the modern per-terrain-type variant (razor-edged blocks at
+ *             type boundaries — failed the 2026-07-02 1070 eye-test; kept
+ *             for A/B).
+ *   "off"     — no detail layer.
  */
-function readTerrainDetailTexFlag() {
+function readTerrainDetailTexMode() {
   try {
-    if (typeof window === "undefined" || !window.location) return false;
-    const v = new URLSearchParams(window.location.search).get("terrainDetailTex");
-    return typeof v === "string" && v.toLowerCase() === "on";
+    if (typeof window === "undefined" || !window.location) return "global";
+    const v = (
+      new URLSearchParams(window.location.search).get("terrainDetailTex") || ""
+    ).toLowerCase();
+    if (v === "off") return "off";
+    if (v === "percode") return "percode";
+    return "global";
   } catch (_) {
-    return false;
-  }
-}
-
-/**
- * render-audit Site-2 (2026-06-09) — explicit `?terrainDetailTex=off`
- * opt-out. Returns true ONLY for the literal value `"off"`
- * (case-insensitive); missing / any other value is false. Lets a user
- * force terrain detail textures off even on the mid/high/ultra presets
- * (whose `detailFlag` now defaults the feature on — see the gate in
- * resolveTerrainRingOpts). Same try/catch shape as the sibling readers.
- */
-function readTerrainDetailTexOffFlag() {
-  try {
-    if (typeof window === "undefined" || !window.location) return false;
-    const v = new URLSearchParams(window.location.search).get("terrainDetailTex");
-    return typeof v === "string" && v.toLowerCase() === "off";
-  } catch (_) {
-    return false;
+    return "global";
   }
 }
 
@@ -3218,8 +3240,16 @@ export async function bakeTerrainForLandblock(
           ? opts.detailTexSliceCount
           : 0,
       },
-      uDetailTexBaseScale: { value: DEFAULT_DETAIL_TEX_BASE_SCALE },
-      uDetailTexStrength: { value: DEFAULT_DETAIL_TEX_STRENGTH },
+      uDetailTexBaseScale: {
+        value: Number.isFinite(opts.detailTexBaseScale)
+          ? opts.detailTexBaseScale
+          : DEFAULT_DETAIL_TEX_BASE_SCALE,
+      },
+      uDetailTexStrength: {
+        value: Number.isFinite(opts.detailTexStrength)
+          ? opts.detailTexStrength
+          : DEFAULT_DETAIL_TEX_STRENGTH,
+      },
       uDetailTexFadeStart: { value: DEFAULT_DETAIL_TEX_FADE_START },
       uDetailTexFadeEnd: { value: DEFAULT_DETAIL_TEX_FADE_END },
       uDetailTexEnabled: { value: opts.detailTexEnabled ? 1.0 : 0.0 },
