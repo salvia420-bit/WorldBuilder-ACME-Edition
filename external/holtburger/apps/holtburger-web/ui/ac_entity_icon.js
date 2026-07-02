@@ -63,7 +63,13 @@ function lookupSpellIconId(spellId) {
     const handle = window.__sessionHandle ?? null;
     if (handle?.getSpellRecord) {
       const rec = handle.getSpellRecord(spellId >>> 0);
-      if (rec && typeof rec.iconId === "number") return rec.iconId >>> 0;
+      // getSpellRecord crosses the wasm boundary via serde-wasm-bindgen,
+      // which emits a Map — `rec.iconId` was undefined on it, so EVERY
+      // spell icon (hotbar spell bindings, spell strip) silently fell
+      // back to the placeholder (2026-07-01, same root cause as
+      // spellbook.js spellRecordFromWasm).
+      const iconId = (rec instanceof Map) ? rec.get("iconId") : rec?.iconId;
+      if (typeof iconId === "number") return iconId >>> 0;
     }
   } catch (_) {
     // getSpellRecord throws pre-SpellTable-load; treat as cache-miss

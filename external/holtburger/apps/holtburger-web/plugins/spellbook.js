@@ -104,9 +104,16 @@ const SB_ELEM_LEVEL = {
 const SB_ELEM_ACTION_BTN  = 0x100002A5;  // multi-state action button (Delete/Forget)
 
 const COMBAT_BAR_STORAGE_KEY = "holtburger_combat_bar_v1";
-const SPELL_BAR_SLOTS = 8;
-// Phase I.2 — number of numbered spell-bar tabs (retail had 7).
-const SPELL_BAR_TABS = 7;
+// Task C follow-up (2026-07-01): retail-corrected counts, verified
+// against a live retail capture of the spellcasting panel
+// (Spell-Casting-Panel-Live.jpg): the tab row reads I..VIII = EIGHT
+// tabs (the earlier "retail had 7" note was wrong), and the icon strip
+// holds 18 slot cells (orb ~40px + 18×34px + Cast ≈ the capture's
+// 717px width; hotkey digits 1-9 badge the first nine). Storage
+// migrates transparently — readSpellBars pads every tab to
+// SPELL_BAR_SLOTS and older 8-slot arrays just gain empty cells.
+const SPELL_BAR_SLOTS = 18;
+const SPELL_BAR_TABS = 8;
 
 let catalogPromise = null;
 function loadCatalog() {

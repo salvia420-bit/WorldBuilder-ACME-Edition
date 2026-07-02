@@ -4,8 +4,10 @@ import {
   getActiveSpellBar,
   setActiveSpellBar,
   SPELL_BAR_TABS,
+  SPELL_BAR_SLOTS,
   loadCatalog,
 } from "./spellbook.js";
+import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
 import { setAcText } from "../ui/ac_font.js";
 import {
   classifySpell,
@@ -537,6 +539,7 @@ if (typeof window !== "undefined") {
   installAutoDisarmHooks();
   installAttackLockoutHooks();
   installSpellBarHotkeys();
+  installSpellStrip();
 }
 
 // Subscribe at module-load to the hotbar bus event — when a hotbar
@@ -623,10 +626,10 @@ function installAutoDisarmHooks() {
 // and scope them exactly like retail did — magic stance only:
 //   [ / ]        previous / next spell tab (wraps)
 //   { / }        first / last spell tab (Shift+[ / Shift+])
-//   1..8         fire the Nth slot of the active tab — untargeted
+//   1..9         fire the Nth slot of the active tab — untargeted
 //                spells cast immediately, targeted spells arm/disarm
-//                (retail's CastCurrentSpell + selection model folded
-//                onto the 8 slots our HUD shows).
+//                (retail's CastCurrentSpell + selection model; retail
+//                badges hotkey digits on the strip's first nine slots).
 // Keys are ignored while typing (input/textarea/contenteditable) and
 // with ctrl/alt/meta held. Tab switches go through setActiveSpellBar →
 // `hb-spellbar-changed`, which refreshes any open picker (tab
@@ -657,7 +660,9 @@ function installSpellBarHotkeys() {
         ev.preventDefault();
         return;
       }
-      if (key >= "1" && key <= "8") {
+      if (key >= "1" && key <= "9") {
+        // Retail's spell strip badges hotkey digits on the first NINE
+        // slots (Spell-Casting-Panel-Live capture) — 1-9, not 1-8.
         const slotIdx = key.charCodeAt(0) - 49; // '1' → slot 0
         // Prefer the rendered row — reuses the panel's exact cast/arm
         // click handler (armed-row highlight, classifier events,
@@ -696,6 +701,316 @@ function installSpellBarHotkeys() {
       // Never break global input handling on a hotkey fault.
     }
   });
+}
+
+// ============================================================================
+// Task C follow-up (2026-07-01) — the retail spellcasting STRIP
+// (#hb-spell-strip). Reference: live retail capture
+// (Spell-Casting-Panel-Live.jpg, 717×81): a compact horizontal bar shown
+// ONLY in magic stance, where retail REPLACED the melee/missile
+// High/Med/Low + Recklessness panel (combat-hud.js now hides itself on
+// stance 0x49 to make room — its recomputeVisible keys on
+// stanceIsMeleeOrMissile). Layout matches the capture:
+//
+//   [tab row I..VIII, active lit]
+//   [orb] [18 icon slots — gold hotkey digits on the first 9] [Cast]
+//   selected-spell name label underneath ("Horizon's Blades" spot)
+//
+// The slots are the SAME per-tab storage the side panel, spellbook and
+// digit hotkeys use (spellbook.js spellBars in
+// holtburger_combat_bar_v1), so every surface stays in sync:
+//   - drag a spell icon from the 📖 Spellbook onto any cell to bind it
+//     (application/x-hb-spell-id, the existing drag mime)
+//   - drag cell → cell to move/swap a binding within the strip
+//   - right-click a cell to clear it
+//   - click: self-spell casts immediately, targeted spell arms (then
+//     click an enemy to fire) — identical to the panel rows / hotkeys
+//   - Cast button: fires the armed spell at the selected target
+//     (self-spells just cast) — retail's CastCurrentSpell.
+function installSpellStrip() {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  const STRIP_ID = "hb-spell-strip";
+  if (document.getElementById(STRIP_ID)) return;
+  const ROMAN_TABS = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"];
+  const STANCE_MAGIC = 0x49;
+
+  const style = document.createElement("style");
+  style.id = "hb-spell-strip-style";
+  style.textContent = `
+    #${STRIP_ID} {
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: 96px; z-index: 1400; user-select: none;
+    }
+    #${STRIP_ID} .hb-ss-tabs { display: flex; gap: 2px; margin-left: 42px; }
+    #${STRIP_ID} .hb-ss-tab {
+      width: 42px; height: 17px; padding: 0; cursor: pointer;
+      background: linear-gradient(#3a2f22, #241c12);
+      border: 1px solid #6b5433; border-bottom: none;
+      border-radius: 6px 6px 0 0;
+      color: #c9b27a; font: 600 10px Georgia, serif; line-height: 16px;
+    }
+    #${STRIP_ID} .hb-ss-tab.active {
+      background: linear-gradient(#6e5a35, #4a3a20); color: #ffe9b0;
+    }
+    #${STRIP_ID} .hb-ss-main {
+      display: flex; align-items: center; gap: 3px; padding: 3px 5px;
+      background: linear-gradient(#2a2118, #171108);
+      border: 2px solid #6b5433; border-radius: 4px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+    }
+    #${STRIP_ID} .hb-ss-orb {
+      flex: none; width: 30px; height: 30px; border-radius: 50%;
+      border: 1px solid #0b1e33; margin-right: 3px;
+      background: radial-gradient(circle at 35% 30%, #cfe8ff, #4d86c8 45%, #123055 80%);
+    }
+    #${STRIP_ID} .hb-ss-slots { display: flex; gap: 2px; }
+    #${STRIP_ID} .hb-ss-slot {
+      position: relative; width: 32px; height: 32px; box-sizing: border-box;
+      background: #0d0a06; border: 1px solid #4a3a24; cursor: pointer;
+    }
+    #${STRIP_ID} .hb-ss-slot.bound:hover { border-color: #caa955; }
+    #${STRIP_ID} .hb-ss-slot.armed {
+      border-color: #ffd76a; box-shadow: inset 0 0 6px rgba(255, 215, 106, 0.6);
+    }
+    #${STRIP_ID} .hb-ss-slot.drag-over { border-color: #a06eff; }
+    #${STRIP_ID} .hb-ss-icon {
+      position: absolute; inset: 1px; opacity: 0;
+      background-size: cover; background-position: center;
+      image-rendering: pixelated;
+    }
+    #${STRIP_ID} .hb-ss-slot.bound .hb-ss-icon { opacity: 1; }
+    #${STRIP_ID} .hb-ss-num {
+      position: absolute; top: -1px; left: 1px; z-index: 1;
+      font: 700 9px monospace; color: #ffd76a;
+      text-shadow: 0 1px 2px #000; pointer-events: none;
+    }
+    #${STRIP_ID} .hb-ss-cast {
+      margin-left: 6px; height: 26px; padding: 0 14px; cursor: pointer;
+      background: linear-gradient(#7a1c14, #4b0e09);
+      border: 1px solid #a8623c; border-radius: 3px;
+      color: #f3d9a8; font: 600 12px Georgia, serif;
+    }
+    #${STRIP_ID} .hb-ss-cast:hover { background: linear-gradient(#93261b, #5d130c); }
+    #${STRIP_ID} .hb-ss-name {
+      margin: 2px 0 0 44px; min-height: 15px;
+      color: #fff; font: 12px Georgia, serif; text-shadow: 0 1px 2px #000;
+    }
+  `;
+  document.head.appendChild(style);
+
+  const root = document.createElement("div");
+  root.id = STRIP_ID;
+  root.style.display = "none";
+
+  const tabsEl = document.createElement("div");
+  tabsEl.className = "hb-ss-tabs";
+  const tabEls = [];
+  for (let i = 0; i < SPELL_BAR_TABS; i++) {
+    const t = document.createElement("button");
+    t.type = "button";
+    t.className = "hb-ss-tab";
+    t.textContent = ROMAN_TABS[i] ?? String(i + 1);
+    t.title = `Spell tab ${ROMAN_TABS[i] ?? i + 1}  ( [ / ] to cycle )`;
+    t.addEventListener("click", () => setActiveSpellBar(i));
+    tabEls.push(t);
+    tabsEl.appendChild(t);
+  }
+  root.appendChild(tabsEl);
+
+  const mainEl = document.createElement("div");
+  mainEl.className = "hb-ss-main";
+  const orbEl = document.createElement("div");
+  orbEl.className = "hb-ss-orb";
+  orbEl.title = "Spellcasting";
+  mainEl.appendChild(orbEl);
+
+  const slotsWrap = document.createElement("div");
+  slotsWrap.className = "hb-ss-slots";
+  const slotEls = [];
+
+  let catalog = null;
+  const metaFor = (id) => (catalog ? catalog[String(id)] : null);
+  const armedId = () => (window.__combatBarState?.armedSpellId | 0) || 0;
+
+  const nameEl = document.createElement("div");
+  nameEl.className = "hb-ss-name";
+  const setName = (text) => {
+    try { setAcText(nameEl, text || ""); } catch (_) { nameEl.textContent = text || ""; }
+  };
+
+  // Module-level arm toggle — same storage the panel rows + digit
+  // hotkeys use; the hb-spellbar-changed dispatch re-renders every
+  // spell surface (strip, open panel, spellbook on-bar badges).
+  function toggleArm(spellId) {
+    const st = loadState();
+    st.armedSpellId = st.armedSpellId === spellId ? 0 : spellId;
+    saveState(st);
+    syncWindowState(st);
+    window.dispatchEvent(new CustomEvent("hb-spellbar-changed"));
+  }
+
+  function fireSlot(idx) {
+    const id = (getSpellBarSlots()[idx] | 0);
+    if (!id) return;
+    const meta = metaFor(id);
+    const untargeted = (meta?.untargeted ?? true) === true;
+    if (untargeted) {
+      castSpellViaHandle(id, null);
+      setName(meta?.name ?? `Spell ${id}`);
+    } else {
+      toggleArm(id);
+      setName(armedId() === id ? (meta?.name ?? `Spell ${id}`) : "");
+    }
+  }
+
+  for (let i = 0; i < SPELL_BAR_SLOTS; i++) {
+    const el = document.createElement("div");
+    el.className = "hb-ss-slot";
+    el.dataset.slot = String(i);
+    const icon = document.createElement("div");
+    icon.className = "hb-ss-icon";
+    el.appendChild(icon);
+    if (i < 9) {
+      const num = document.createElement("span");
+      num.className = "hb-ss-num";
+      num.textContent = String(i + 1);
+      el.appendChild(num);
+    }
+    el.addEventListener("click", () => fireSlot(i));
+    el.addEventListener("mouseenter", () => {
+      const id = (getSpellBarSlots()[i] | 0);
+      if (id) setName(metaFor(id)?.name ?? `Spell ${id}`);
+    });
+    el.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      const id = (getSpellBarSlots()[i] | 0);
+      if (!id) return;
+      if (armedId() === id) toggleArm(id); // disarm before unbinding
+      setSpellBarSlot(i, 0);
+    });
+    el.draggable = true;
+    el.addEventListener("dragstart", (ev) => {
+      const id = (getSpellBarSlots()[i] | 0);
+      if (!id) { ev.preventDefault(); return; }
+      ev.dataTransfer.effectAllowed = "copyMove";
+      ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
+      ev.dataTransfer.setData("application/x-hb-ss-slot", String(i));
+    });
+    el.addEventListener("dragover", (ev) => {
+      if (ev.dataTransfer.types.includes("application/x-hb-spell-id")) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "copy";
+        el.classList.add("drag-over");
+      }
+    });
+    el.addEventListener("dragleave", () => el.classList.remove("drag-over"));
+    el.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      el.classList.remove("drag-over");
+      const id = parseInt(ev.dataTransfer.getData("application/x-hb-spell-id"), 10);
+      if (!Number.isFinite(id) || id <= 0) return;
+      const srcRaw = ev.dataTransfer.getData("application/x-hb-ss-slot");
+      const src = srcRaw === "" ? -1 : parseInt(srcRaw, 10);
+      if (Number.isFinite(src) && src >= 0 && src !== i) {
+        // strip-internal move: swap the two cells.
+        const cur = (getSpellBarSlots()[i] | 0);
+        setSpellBarSlot(i, id);
+        setSpellBarSlot(src, cur);
+      } else if (src !== i) {
+        setSpellBarSlot(i, id);
+      }
+    });
+    slotEls.push(el);
+    slotsWrap.appendChild(el);
+  }
+  mainEl.appendChild(slotsWrap);
+
+  const castBtn = document.createElement("button");
+  castBtn.type = "button";
+  castBtn.className = "hb-ss-cast";
+  castBtn.textContent = "Cast";
+  castBtn.title = "Cast the armed spell at your selected target";
+  castBtn.addEventListener("click", () => {
+    const id = armedId();
+    if (!id) { setName("(no spell armed — click a spell first)"); return; }
+    const meta = metaFor(id);
+    const untargeted = (meta?.untargeted ?? true) === true;
+    if (untargeted) {
+      castSpellViaHandle(id, null);
+      setName(meta?.name ?? `Spell ${id}`);
+      return;
+    }
+    const tgt =
+      (window.liveScene3d?.entityManager?.getSelectedTarget?.() >>> 0) || 0;
+    if (!tgt) { setName("(no target selected)"); return; }
+    castSpellViaHandle(id, tgt);
+    setName(meta?.name ?? `Spell ${id}`);
+  });
+  mainEl.appendChild(castBtn);
+  root.appendChild(mainEl);
+  root.appendChild(nameEl);
+  document.body.appendChild(root);
+
+  loadCatalog().then((c) => { catalog = c; render(); }).catch(() => {});
+
+  function render() {
+    const active = getActiveSpellBar();
+    for (let i = 0; i < tabEls.length; i++) {
+      tabEls[i].classList.toggle("active", i === active);
+    }
+    const slots = getSpellBarSlots();
+    const armed = armedId();
+    for (let i = 0; i < slotEls.length; i++) {
+      const el = slotEls[i];
+      const id = (slots[i] | 0);
+      const meta = id ? metaFor(id) : null;
+      el.classList.toggle("bound", !!id);
+      const isTargeted = !!id && !((meta?.untargeted ?? true) === true);
+      el.classList.toggle("armed", !!id && isTargeted && id === armed);
+      el.title = id
+        ? `${meta?.name ?? `Spell ${id}`}${isTargeted ? " — click to arm, then click an enemy" : " — click to cast"}`
+        : "(empty — drag a spell here from the Spellbook)";
+      const icon = el.querySelector(".hb-ss-icon");
+      const key = id ? `spell:${id}` : "";
+      if (icon.dataset.boundKey === key) continue; // no repaint churn
+      icon.dataset.boundKey = key;
+      if (!id) { icon.style.backgroundImage = ""; continue; }
+      // Same shared resolver + in-flight guard as the hotbar slots.
+      resolveBindingIcon({ spellId: id }).then((url) => {
+        if (icon.dataset.boundKey !== key) return;
+        if (url) icon.style.backgroundImage = `url("${url}")`;
+      }).catch(() => { /* resolver logs; cell stays dark */ });
+    }
+  }
+
+  window.addEventListener("hb-spellbar-changed", render);
+
+  // Visibility: magic stance only (retail swaps this strip in where the
+  // melee power panel lived). 500 ms poll mirrors combat-hud's fallback
+  // cadence; the poll also diffs armed/active state so a panel-row arm
+  // (which doesn't dispatch hb-spellbar-changed) still refreshes us.
+  let lastVisible = false;
+  let lastArmed = -1;
+  let lastActive = -1;
+  setInterval(() => {
+    let on = false;
+    try { on = window.__getCurrentStanceLow?.() === STANCE_MAGIC; } catch (_) {}
+    if (on !== lastVisible) {
+      lastVisible = on;
+      root.style.display = on ? "" : "none";
+      if (!on) setName("");
+      if (on) render();
+    }
+    if (on) {
+      const a = armedId();
+      const act = getActiveSpellBar();
+      if (a !== lastArmed || act !== lastActive) {
+        lastArmed = a;
+        lastActive = act;
+        render();
+      }
+    }
+  }, 500);
 }
 
 // F11-3 — attackInProgress lockout lifecycle, owned at module-load.

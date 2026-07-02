@@ -430,14 +430,9 @@ let state = {
   lhIdleTimer: null,
 };
 
-function stanceIsCombat() {
-  try {
-    const fn = window.__getCurrentStanceLow;
-    if (typeof fn !== "function") return false;
-    const low = fn() || 0;
-    return low !== 0 && low !== STANCE_PEACE;
-  } catch { return false; }
-}
+// (stanceIsCombat — any non-peace stance — removed 2026-07-01: its only
+// caller, recomputeVisible, now keys on stanceIsMeleeOrMissile so the
+// magic stance shows the spellcasting strip instead of this meter.)
 
 // True when the player is in a melee OR missile combat stance — i.e.
 // in combat but NOT in the magic-combat stance (0x49). The DR rollup's
@@ -1117,7 +1112,12 @@ export function mount(_ctx) {
   // applyConfirmedStance). 1Hz fallback timer guards against any
   // dropped bus event so the combat-hud always converges.
   const recomputeVisible = () => {
-    const inCombat = stanceIsCombat();
+    // Task C follow-up (2026-07-01): melee/missile ONLY — retail
+    // REPLACES this High/Med/Low + Recklessness panel with the
+    // spellcasting strip in magic stance (see combat-bar.js
+    // installSpellStrip; reference capture Spell-Casting-Panel-Live).
+    // Recklessness/Accuracy have no meaning for casts anyway.
+    const inCombat = stanceIsMeleeOrMissile();
     if (inCombat && !state.visible) show();
     else if (!inCombat && state.visible) hide();
     // HUD rec #97 — stance may have flipped melee↔ranged; refresh the
