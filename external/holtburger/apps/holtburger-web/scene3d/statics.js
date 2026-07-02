@@ -3079,6 +3079,18 @@ export function cullStaticsGroup(scene3d, culler) {
   let culled = 0;
   for (const node of children) {
     if (!node) continue;
+    // BatchedMesh statics (static-batch consolidation, stat-atlas buckets)
+    // sit at the group origin with their placements in per-instance matrices,
+    // so the isMesh sphere derivation below would center the cull sphere at
+    // (0,0,0) — tens of km from any player — and the whole batch is
+    // permanently out-of-frustum (the 2026-07-02 vanished-forests bug).
+    // BatchedMesh already frustum-culls per instance at draw time (r184
+    // perObjectFrustumCulled, default true), so node-level culling adds
+    // nothing — keep the node visible and let the batch cull itself.
+    if (node.isBatchedMesh) {
+      if (node.visible === false) node.visible = true;
+      continue;
+    }
     const sphere = _resolveStaticCullSphere(node);
     if (!sphere) {
       // No derivable bounds — never hide (fail-open).
