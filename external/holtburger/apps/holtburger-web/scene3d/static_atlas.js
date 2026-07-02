@@ -106,13 +106,28 @@ function makeArrayMaterial(diffArray, transparent, alphaTest) {
         "#include <common>\nprecision highp sampler2DArray;\nuniform sampler2DArray uDiffuseArray;\nvarying float vLayer;"
       )
       .replace(
-        "vec4 sampledDiffuseColor = texture2D( map, vMapUv );",
-        "vec4 sampledDiffuseColor = texture( uDiffuseArray, vec3( vMapUv, vLayer ) );"
+        // onBeforeCompile runs BEFORE three resolves #include directives, so the
+        // expanded `vec4 sampledDiffuseColor = texture2D( map, vMapUv );` line
+        // does not exist in the source yet — the old replace never matched, the
+        // array sampler was optimized out of the linked program
+        // (getUniformLocation(uDiffuseArray) === null), and every bucket rendered
+        // its 1x1 white dummy `map` instead (the 2026-07-02 white-trees bug,
+        // exposed once the origin-sphere cull stopped hiding the buckets). Swap
+        // the whole <map_fragment> include at the directive level instead: same
+        // diffuse multiply, sampled from the layer array. sRGB decode is
+        // hardware-side (SRGB8_ALPHA8 upload path), so no manual EOTF here.
+        "#include <map_fragment>",
+        [
+          "#ifdef USE_MAP",
+          "\tvec4 sampledDiffuseColor = texture( uDiffuseArray, vec3( vMapUv, vLayer ) );",
+          "\tdiffuseColor *= sampledDiffuseColor;",
+          "#endif",
+        ].join("\n")
       );
   };
   // All atlas materials share one program; the per-material uDiffuseArray uniform
   // is bound per-draw. Distinct from the stock MeshStandard key so it links once.
-  m.customProgramCacheKey = () => "statAtlasArrayMatV1";
+  m.customProgramCacheKey = () => "statAtlasArrayMatV2";
   m.userData = { __statAtlasMat: true };
   return m;
 }
@@ -373,6 +388,17 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       const img = tex && tex.image;
       if (!n || !n.isMesh || n.isBatchedMesh || n.isLOD || !n.geometry || !n.geometry.attributes?.uv || !tex || !img || !img.data || n.userData?.__staticBatch) {
         passthrough.push(n); continue; // ?staticBatch nodes already batched — never re-feed
+      }
+      // A MECH-B vertex-deformed variant (deformation.windSwayGpu — swaying
+      // trees/foliage) must NOT be consumed: the bucket's array material
+      // replaces the node's variant, silently stripping the deformation. That
+      // produced the 2026-07-02 "trunk sways, foliage frozen" split — the
+      // trunk's surface group hit the ?staticBatch consolidator (variant
+      // material kept) while the foliage singleton landed here. Pass it
+      // through instead; the singleton keeps its swaying variant. Frag-only
+      // (color-effect) sets still atlas — match the deformation prefix only.
+      if (typeof mat.userData?.__vfxSetKey === "string" && mat.userData.__vfxSetKey.includes("deformation.")) {
+        passthrough.push(n); continue;
       }
       const w = img.width | 0, h = img.height | 0;
       if (!w || !h) { passthrough.push(n); continue; }
