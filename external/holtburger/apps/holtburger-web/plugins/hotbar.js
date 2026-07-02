@@ -1012,10 +1012,20 @@ export function mount(ctx) {
   function onKey(ev) {
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
+    // Retail per-mode input-map partition (Task C v2, 2026-07-02): in
+    // MAGIC stance the number row belongs to `UseSpellSlot_1..9`
+    // (MagicCombat map — handled by combat-bar's spell strip), NOT the
+    // quickslots. A hotbar binding on a digit yields there; rebound
+    // non-digit hotbar keys keep working in every stance.
+    const inMagicStance = (() => {
+      try { return window.__getCurrentStanceLow?.() === 0x49; } catch (_) { return false; }
+    })();
+    const digitInMagic = (b) => inMagicStance && /^Digit[1-9]$/.test(b?.code || "");
     // Row 1
     for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
       const binding = resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_${slot}`], `Digit${slot}`);
       if (matchesBinding(ev, binding)) {
+        if (digitInMagic(binding)) return; // spell strip owns digits in magic
         fireSlot(slot - 1);
         return;
       }
@@ -1024,6 +1034,7 @@ export function mount(ctx) {
     for (let slot = 1; slot <= SLOTS_PER_ROW; slot++) {
       const binding = resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_R2_${slot}`], null);
       if (binding && matchesBinding(ev, binding)) {
+        if (digitInMagic(binding)) return;
         fireSlot(SLOTS_PER_ROW + slot - 1);
         return;
       }

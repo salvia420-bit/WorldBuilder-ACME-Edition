@@ -63,6 +63,27 @@ export const LOCAL_ACTIONS = [
   // A14 §8) — default R instead, rebindable here. Consulted by the
   // index.html keydown handler only when ?retailRunKeys=on.
   { labelHash: "0xFF000015", label: "Autorun (toggle)", defaultCode: "KeyR" },
+  // Task C v2 (2026-07-02) — retail MagicCombat input map, verbatim
+  // defaults from the user's acclient.keymap capture:
+  //   CombatPrevSpellTab  Insert     CombatFirstSpellTab  Ctrl+Insert
+  //   CombatNextSpellTab  PageUp     CombatLastSpellTab   Ctrl+PageUp
+  //   CombatPrevSpell     Delete     CombatFirstSpell     Ctrl+Delete
+  //   CombatNextSpell     PageDown   CombatLastSpell      Ctrl+PageDown
+  //   CombatCastCurrentSpell  End
+  //   UseSpellSlot_1..9   Digit1..9 (magic stance takes the digits;
+  //                       the hotbar's quickslots yield — retail's
+  //                       per-mode map partition)
+  // Only the BASE key is stored/rebindable here; the Ctrl+<same key>
+  // first/last variants derive from it in combat-bar.js, exactly like
+  // retail bound First/Last to the same physical key + metakey 0x2
+  // (Ctrl per the MetaKeys table). All handlers are magic-stance-scoped
+  // (ClientCombatSystem::HandleMagicAction scope) and none of them
+  // touch KeyC — C stays reserved.
+  { labelHash: "0xFF000016", label: "Magic: Previous Spell Tab", defaultCode: "Insert" },
+  { labelHash: "0xFF000017", label: "Magic: Next Spell Tab", defaultCode: "PageUp" },
+  { labelHash: "0xFF000018", label: "Magic: Previous Spell", defaultCode: "Delete" },
+  { labelHash: "0xFF000019", label: "Magic: Next Spell", defaultCode: "PageDown" },
+  { labelHash: "0xFF00001A", label: "Magic: Cast Current Spell", defaultCode: "End" },
 ];
 
 /** Stable identifiers for synthetic local actions — handlers call
@@ -90,6 +111,11 @@ export const LOCAL_ACTION_IDS = Object.freeze({
   CLOSE:    "0xFF000010",
   DELETE_SPELL: "0xFF000011",
   AUTORUN:  "0xFF000015",
+  MAGIC_PREV_TAB: "0xFF000016",
+  MAGIC_NEXT_TAB: "0xFF000017",
+  MAGIC_PREV_SPELL: "0xFF000018",
+  MAGIC_NEXT_SPELL: "0xFF000019",
+  MAGIC_CAST: "0xFF00001A",
 });
 
 let cache = null;

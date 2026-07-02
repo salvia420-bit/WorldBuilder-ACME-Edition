@@ -3,11 +3,18 @@ import {
   setSpellBarSlot,
   getActiveSpellBar,
   setActiveSpellBar,
+  addToFirstEmptySlot,
   SPELL_BAR_TABS,
   SPELL_BAR_SLOTS,
   loadCatalog,
 } from "./spellbook.js";
 import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
+import { attachWindowPosition } from "../ui/ac_window_position.js";
+import {
+  resolveLocalBinding,
+  matchesBinding,
+  LOCAL_ACTION_IDS,
+} from "../ui/keymap.js";
 import { setAcText } from "../ui/ac_font.js";
 import {
   classifySpell,
@@ -136,6 +143,14 @@ function clearArmedSpell() {
   saveState(state);
   syncWindowState(state);
 }
+
+// Shared surface between the hotkey handler and the spell strip —
+// installSpellStrip() populates it with {render, fireSlot, selectDelta,
+// selectEdge, castCurrent}. Declared BEFORE the module-load install
+// block below: installSpellStrip() assigns it during module init, so a
+// later declaration would be a temporal-dead-zone ReferenceError that
+// kills the whole module eval.
+let __stripApi = null;
 
 let stylesInjected = false;
 function ensureStyles() {
@@ -637,53 +652,81 @@ function installAutoDisarmHooks() {
 function installSpellBarHotkeys() {
   if (window.__hbSpellBarHotkeysInstalled) return;
   window.__hbSpellBarHotkeysInstalled = true;
+  const cycleTab = (dir) => {
+    const cur = getActiveSpellBar();
+    setActiveSpellBar((cur + dir + SPELL_BAR_TABS) % SPELL_BAR_TABS);
+  };
   window.addEventListener("keydown", (ev) => {
     try {
-      if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+      if (ev.altKey || ev.metaKey) return;
       const t = ev.target;
       const tag = (t?.tagName || "").toUpperCase();
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable) {
         return;
       }
-      // Magic stance only — mirrors retail's HandleMagicAction scope.
-      // (index.html MAGIC_STANCES = {0x49}; helper attaches post-boot.)
+      // Magic stance only — retail scoped the whole MagicCombat input
+      // map to the casting stance (ClientCombatSystem::HandleMagicAction).
       if (window.__getCurrentStanceLow?.() !== 0x49) return;
-      const key = ev.key;
-      if (key === "[" || key === "]" || key === "{" || key === "}") {
-        const cur = getActiveSpellBar();
-        let next;
-        if (key === "{") next = 0;
-        else if (key === "}") next = SPELL_BAR_TABS - 1;
-        else if (key === "[") next = (cur + SPELL_BAR_TABS - 1) % SPELL_BAR_TABS;
-        else next = (cur + 1) % SPELL_BAR_TABS;
-        if (next !== cur) setActiveSpellBar(next);
-        ev.preventDefault();
-        return;
-      }
-      if (key >= "1" && key <= "9") {
-        // Retail's spell strip badges hotkey digits on the first NINE
-        // slots (Spell-Casting-Panel-Live capture) — 1-9, not 1-8.
-        const slotIdx = key.charCodeAt(0) - 49; // '1' → slot 0
-        // Prefer the rendered row — reuses the panel's exact cast/arm
-        // click handler (armed-row highlight, classifier events,
-        // catalog meta) so keyboard and mouse behave identically.
-        const row = document.querySelector(
-          `.hb-cb-spell[data-slot-index="${slotIdx}"]:not(.hb-cb-spell-empty)`,
-        );
-        if (row) {
-          row.click();
+
+      // Retail MagicCombat actions — defaults verbatim from the
+      // acclient.keymap capture, rebindable via Options → Controls
+      // ("Magic: …" rows). Ctrl+<the same key> is the First/Last
+      // variant: retail bound those as <key> + metakey 0x2 (Ctrl per
+      // the MetaKeys table), so deriving from the base binding keeps
+      // user rebinds working for both flavors.
+      const api = __stripApi;
+      const actions = [
+        [LOCAL_ACTION_IDS.MAGIC_PREV_TAB, "Insert",
+          () => cycleTab(-1), () => setActiveSpellBar(0)],
+        [LOCAL_ACTION_IDS.MAGIC_NEXT_TAB, "PageUp",
+          () => cycleTab(+1), () => setActiveSpellBar(SPELL_BAR_TABS - 1)],
+        [LOCAL_ACTION_IDS.MAGIC_PREV_SPELL, "Delete",
+          () => api?.selectDelta(-1), () => api?.selectEdge("first")],
+        [LOCAL_ACTION_IDS.MAGIC_NEXT_SPELL, "PageDown",
+          () => api?.selectDelta(+1), () => api?.selectEdge("last")],
+        [LOCAL_ACTION_IDS.MAGIC_CAST, "End",
+          () => api?.castCurrent(), null],
+      ];
+      for (const [id, def, onPlain, onCtrl] of actions) {
+        const b = resolveLocalBinding(id, def);
+        if (matchesBinding(ev, b)) {
+          onPlain();
           ev.preventDefault();
           return;
         }
-        // Panel closed — storage-level equivalent of the row click.
+        if (onCtrl && matchesBinding(ev, { ...b, ctrl: true })) {
+          onCtrl();
+          ev.preventDefault();
+          return;
+        }
+      }
+      if (ev.ctrlKey) return; // Ctrl+digit = quickslot row-2 territory
+
+      const key = ev.key;
+      // Web-native aliases kept from v1: [ ] cycle, { } first/last.
+      if (key === "[" || key === "]" || key === "{" || key === "}") {
+        if (key === "{") setActiveSpellBar(0);
+        else if (key === "}") setActiveSpellBar(SPELL_BAR_TABS - 1);
+        else cycleTab(key === "[" ? -1 : +1);
+        ev.preventDefault();
+        return;
+      }
+      // UseSpellSlot_1..9 (retail: plain digits belong to the spell
+      // strip in magic mode; the hotbar's quickslot digits yield —
+      // see plugins/hotbar.js onKey).
+      if (key >= "1" && key <= "9") {
+        const slotIdx = key.charCodeAt(0) - 49; // '1' → slot 0
+        ev.preventDefault();
+        if (api) {
+          api.fireSlot(slotIdx);
+          return;
+        }
+        // Strip not mounted (shouldn't happen) — storage-level fallback.
         const spellId = (getSpellBarSlots()[slotIdx] | 0);
         if (!spellId) return;
-        ev.preventDefault();
         loadCatalog()
           .then((catalog) => {
             const meta = catalog?.[String(spellId)];
-            // Same default as renderRows (`untargeted ?? true`) so a
-            // missing catalog row behaves like the visible button.
             const untargeted = (meta?.untargeted ?? true) === true;
             if (untargeted) {
               castSpellViaHandle(spellId, null);
@@ -738,8 +781,10 @@ function installSpellStrip() {
   style.id = "hb-spell-strip-style";
   style.textContent = `
     #${STRIP_ID} {
-      position: fixed; left: 50%; transform: translateX(-50%);
-      bottom: 96px; z-index: 1400; user-select: none;
+      /* left/top (or the centered default) are owned by
+         attachWindowPosition — drag the orb to move, position persists
+         + clamps to the viewport. */
+      position: fixed; z-index: 1400; user-select: none;
     }
     #${STRIP_ID} .hb-ss-tabs { display: flex; gap: 2px; margin-left: 42px; }
     #${STRIP_ID} .hb-ss-tab {
@@ -752,6 +797,10 @@ function installSpellStrip() {
     #${STRIP_ID} .hb-ss-tab.active {
       background: linear-gradient(#6e5a35, #4a3a20); color: #ffe9b0;
     }
+    #${STRIP_ID} .hb-ss-tab.drag-over {
+      border-color: #a06eff; color: #d9c2ff;
+      background: linear-gradient(#54418a, #37285e);
+    }
     #${STRIP_ID} .hb-ss-main {
       display: flex; align-items: center; gap: 3px; padding: 3px 5px;
       background: linear-gradient(#2a2118, #171108);
@@ -760,15 +809,20 @@ function installSpellStrip() {
     }
     #${STRIP_ID} .hb-ss-orb {
       flex: none; width: 30px; height: 30px; border-radius: 50%;
-      border: 1px solid #0b1e33; margin-right: 3px;
+      border: 1px solid #0b1e33; margin-right: 3px; cursor: grab;
       background: radial-gradient(circle at 35% 30%, #cfe8ff, #4d86c8 45%, #123055 80%);
     }
+    #${STRIP_ID} .hb-ss-orb:active { cursor: grabbing; }
     #${STRIP_ID} .hb-ss-slots { display: flex; gap: 2px; }
     #${STRIP_ID} .hb-ss-slot {
       position: relative; width: 32px; height: 32px; box-sizing: border-box;
       background: #0d0a06; border: 1px solid #4a3a24; cursor: pointer;
     }
     #${STRIP_ID} .hb-ss-slot.bound:hover { border-color: #caa955; }
+    /* .selected = retail's current-spell highlight (Delete/PageDown
+       cycling, UseSpellSlot, or a click land here); armed targeted
+       spells share the same ring. */
+    #${STRIP_ID} .hb-ss-slot.selected,
     #${STRIP_ID} .hb-ss-slot.armed {
       border-color: #ffd76a; box-shadow: inset 0 0 6px rgba(255, 215, 106, 0.6);
     }
@@ -810,8 +864,32 @@ function installSpellStrip() {
     t.type = "button";
     t.className = "hb-ss-tab";
     t.textContent = ROMAN_TABS[i] ?? String(i + 1);
-    t.title = `Spell tab ${ROMAN_TABS[i] ?? i + 1}  ( [ / ] to cycle )`;
+    t.title = `Spell tab ${ROMAN_TABS[i] ?? i + 1}  (Insert/PageUp cycle — drop a spell here to move it to this tab)`;
     t.addEventListener("click", () => setActiveSpellBar(i));
+    // Drop a spell on the numeral to move it to that tab (user spec).
+    // From the strip: the source cell empties (move). From the
+    // spellbook: plain add. addToFirstEmptySlot dedupes per-tab.
+    t.addEventListener("dragover", (ev) => {
+      if (ev.dataTransfer.types.includes("application/x-hb-spell-id")) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "copy";
+        t.classList.add("drag-over");
+      }
+    });
+    t.addEventListener("dragleave", () => t.classList.remove("drag-over"));
+    t.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      t.classList.remove("drag-over");
+      const id = parseInt(ev.dataTransfer.getData("application/x-hb-spell-id"), 10);
+      if (!Number.isFinite(id) || id <= 0) return;
+      const srcRaw = ev.dataTransfer.getData("application/x-hb-ss-slot");
+      const src = srcRaw === "" ? -1 : parseInt(srcRaw, 10);
+      const activeTab = getActiveSpellBar();
+      if (src >= 0 && i !== activeTab) {
+        setSpellBarSlot(src, 0); // move: vacate the source cell first
+      }
+      addToFirstEmptySlot(id, i);
+    });
     tabEls.push(t);
     tabsEl.appendChild(t);
   }
@@ -821,7 +899,7 @@ function installSpellStrip() {
   mainEl.className = "hb-ss-main";
   const orbEl = document.createElement("div");
   orbEl.className = "hb-ss-orb";
-  orbEl.title = "Spellcasting";
+  orbEl.title = "Spellcasting — drag the orb to move the bar";
   mainEl.appendChild(orbEl);
 
   const slotsWrap = document.createElement("div");
@@ -838,28 +916,109 @@ function installSpellStrip() {
     try { setAcText(nameEl, text || ""); } catch (_) { nameEl.textContent = text || ""; }
   };
 
-  // Module-level arm toggle — same storage the panel rows + digit
-  // hotkeys use; the hb-spellbar-changed dispatch re-renders every
-  // spell surface (strip, open panel, spellbook on-bar badges).
-  function toggleArm(spellId) {
+  // === Retail selection model (Task C v2, 2026-07-02) ================
+  // One "current spell" per the MagicCombat map: Delete/PageDown cycle
+  // it, End (or the Cast button) casts it, UseSpellSlot digits and
+  // clicks land on it too. Selection is index-based (a tab may show
+  // the same icon art on different spells; index is unambiguous).
+  // Selecting a TARGETED spell also arms it (armedSpellId — the same
+  // storage picking.js's click-to-cast reads); selecting a self spell
+  // clears the armed state so a stale bolt can't fire on entity click.
+  let selectedIdx = -1;
+
+  function writeArmed(spellId) {
     const st = loadState();
-    st.armedSpellId = st.armedSpellId === spellId ? 0 : spellId;
+    if ((st.armedSpellId | 0) === (spellId | 0)) return;
+    st.armedSpellId = spellId | 0;
     saveState(st);
     syncWindowState(st);
-    window.dispatchEvent(new CustomEvent("hb-spellbar-changed"));
   }
 
-  function fireSlot(idx) {
-    const id = (getSpellBarSlots()[idx] | 0);
-    if (!id) return;
+  function selectSlot(idx, { silent = false } = {}) {
+    const slots = getSpellBarSlots();
+    const id = (slots[idx] | 0);
+    if (!id) return false;
+    selectedIdx = idx;
+    if (window.__combatBarState) window.__combatBarState.selectedSlotIdx = idx;
+    const meta = metaFor(id);
+    const targeted = !((meta?.untargeted ?? true) === true);
+    writeArmed(targeted ? id : 0);
+    if (!silent) setName(meta?.name ?? `Spell ${id}`);
+    render();
+    return true;
+  }
+
+  function boundIndexes() {
+    const slots = getSpellBarSlots();
+    const out = [];
+    for (let i = 0; i < slots.length; i++) if ((slots[i] | 0) > 0) out.push(i);
+    return out;
+  }
+
+  // CombatPrevSpell / CombatNextSpell — cycle across BOUND cells, wraps.
+  function selectDelta(dir) {
+    const bound = boundIndexes();
+    if (!bound.length) return;
+    let pos = bound.indexOf(selectedIdx);
+    if (pos === -1) pos = dir > 0 ? -1 : 0;
+    const next = bound[(pos + dir + bound.length) % bound.length];
+    selectSlot(next);
+  }
+
+  // CombatFirstSpell / CombatLastSpell.
+  function selectEdge(which) {
+    const bound = boundIndexes();
+    if (!bound.length) return;
+    selectSlot(which === "last" ? bound[bound.length - 1] : bound[0]);
+  }
+
+  // CombatCastCurrentSpell — cast the selection: self-spells cast on
+  // ourselves, targeted spells fire at the selected target.
+  function castCurrent() {
+    const slots = getSpellBarSlots();
+    const id = (slots[selectedIdx] | 0) || armedId();
+    if (!id) {
+      setName("(no spell selected — Delete/PageDown to choose)");
+      return;
+    }
     const meta = metaFor(id);
     const untargeted = (meta?.untargeted ?? true) === true;
     if (untargeted) {
       castSpellViaHandle(id, null);
       setName(meta?.name ?? `Spell ${id}`);
+      return;
+    }
+    const tgt =
+      (window.liveScene3d?.entityManager?.getSelectedTarget?.() >>> 0) || 0;
+    if (!tgt) {
+      setName("(no target selected)");
+      return;
+    }
+    castSpellViaHandle(id, tgt);
+    setName(meta?.name ?? `Spell ${id}`);
+  }
+
+  // UseSpellSlot_N / cell click: select the cell, then act — self
+  // spells cast immediately; targeted spells cast when a target is
+  // already selected, else stay armed for the click-to-cast flow.
+  function fireSlot(idx) {
+    const id = (getSpellBarSlots()[idx] | 0);
+    if (!id) return;
+    selectSlot(idx, { silent: true });
+    const meta = metaFor(id);
+    const untargeted = (meta?.untargeted ?? true) === true;
+    if (untargeted) {
+      castSpellViaHandle(id, null);
+      setName(meta?.name ?? `Spell ${id}`);
+      return;
+    }
+    const tgt =
+      (window.liveScene3d?.entityManager?.getSelectedTarget?.() >>> 0) || 0;
+    if (tgt) {
+      castSpellViaHandle(id, tgt);
+      setName(meta?.name ?? `Spell ${id}`);
     } else {
-      toggleArm(id);
-      setName(armedId() === id ? (meta?.name ?? `Spell ${id}`) : "");
+      setName(`${meta?.name ?? `Spell ${id}`} — armed, click a target`);
     }
   }
 
@@ -881,12 +1040,16 @@ function installSpellStrip() {
       const id = (getSpellBarSlots()[i] | 0);
       if (id) setName(metaFor(id)?.name ?? `Spell ${id}`);
     });
-    el.addEventListener("contextmenu", (ev) => {
-      ev.preventDefault();
+    const clearCell = () => {
       const id = (getSpellBarSlots()[i] | 0);
       if (!id) return;
-      if (armedId() === id) toggleArm(id); // disarm before unbinding
+      if (armedId() === id) writeArmed(0);
+      if (selectedIdx === i) selectedIdx = -1;
       setSpellBarSlot(i, 0);
+    };
+    el.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      clearCell();
     });
     el.draggable = true;
     el.addEventListener("dragstart", (ev) => {
@@ -895,6 +1058,17 @@ function installSpellStrip() {
       ev.dataTransfer.effectAllowed = "copyMove";
       ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
       ev.dataTransfer.setData("application/x-hb-ss-slot", String(i));
+    });
+    // Dragging a spell OFF the bar removes it (user spec — retail
+    // behavior). If no drop target accepted the drag, the browser
+    // reports dropEffect "none" on dragend: the strip's own cells /
+    // tabs and the hotbar all set copy, so an internal move or a
+    // hotbar shortcut-bind never triggers the removal.
+    el.addEventListener("dragend", (ev) => {
+      if (ev.dataTransfer && ev.dataTransfer.dropEffect === "none") {
+        clearCell();
+        setName("(spell removed from the bar)");
+      }
     });
     el.addEventListener("dragover", (ev) => {
       if (ev.dataTransfer.types.includes("application/x-hb-spell-id")) {
@@ -930,26 +1104,51 @@ function installSpellStrip() {
   castBtn.className = "hb-ss-cast";
   castBtn.textContent = "Cast";
   castBtn.title = "Cast the armed spell at your selected target";
-  castBtn.addEventListener("click", () => {
-    const id = armedId();
-    if (!id) { setName("(no spell armed — click a spell first)"); return; }
-    const meta = metaFor(id);
-    const untargeted = (meta?.untargeted ?? true) === true;
-    if (untargeted) {
-      castSpellViaHandle(id, null);
-      setName(meta?.name ?? `Spell ${id}`);
-      return;
-    }
-    const tgt =
-      (window.liveScene3d?.entityManager?.getSelectedTarget?.() >>> 0) || 0;
-    if (!tgt) { setName("(no target selected)"); return; }
-    castSpellViaHandle(id, tgt);
-    setName(meta?.name ?? `Spell ${id}`);
-  });
+  // Cast button = retail CombatCastCurrentSpell (End key), same code path.
+  castBtn.addEventListener("click", () => castCurrent());
   mainEl.appendChild(castBtn);
   root.appendChild(mainEl);
   root.appendChild(nameEl);
   document.body.appendChild(root);
+
+  // Draggable frame (user spec) — the orb is the grip. Position
+  // persists per the shared hb.window.* store and clamps back into
+  // the viewport on restore. 0x21000031 is a synthetic window id in
+  // the retail gm-UI id space (gmSpellbookUI = 0x21000032 per the
+  // spellbook port; the spellcasting panel's exact retail id is
+  // unverified). Default: centered above the chat/target bars.
+  let posCtl = null;
+  try {
+    posCtl = attachWindowPosition(root, {
+      windowId: 0x21000031,
+      dragHandle: orbEl,
+      defaultPos: { left: "calc(50% - 372px)", bottom: "96px" },
+    });
+  } catch (_) { /* position helper failure must never kill the strip */ }
+
+  // The strip mounts display:none (magic-stance gating), so
+  // attachWindowPosition's restore-time viewport clamp measures a 0×0
+  // element and can't catch a stale/bogus saved position. Re-check on
+  // every show transition with REAL geometry; a strip parked outside
+  // the viewport snaps back to the centered default.
+  function reclampIntoViewport() {
+    try {
+      const r = root.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      const off =
+        r.left < 0 || r.top < 0 ||
+        r.right > window.innerWidth + 4 ||
+        r.bottom > window.innerHeight + 4;
+      if (off) {
+        if (posCtl?.resetPosition) {
+          posCtl.resetPosition();
+        }
+        root.style.left = "calc(50% - 372px)";
+        root.style.top = "auto";
+        root.style.bottom = "96px";
+      }
+    } catch (_) {}
+  }
 
   loadCatalog().then((c) => { catalog = c; render(); }).catch(() => {});
 
@@ -966,9 +1165,12 @@ function installSpellStrip() {
       const meta = id ? metaFor(id) : null;
       el.classList.toggle("bound", !!id);
       const isTargeted = !!id && !((meta?.untargeted ?? true) === true);
+      // Current-spell ring: index selection (keyboard/click) OR the
+      // armed targeted spell (click-to-cast flow).
+      el.classList.toggle("selected", !!id && i === selectedIdx);
       el.classList.toggle("armed", !!id && isTargeted && id === armed);
       el.title = id
-        ? `${meta?.name ?? `Spell ${id}`}${isTargeted ? " — click to arm, then click an enemy" : " — click to cast"}`
+        ? `${meta?.name ?? `Spell ${id}`}${isTargeted ? " — click to cast at your target" : " — click to cast"} (drag off the bar to remove)`
         : "(empty — drag a spell here from the Spellbook)";
       const icon = el.querySelector(".hb-ss-icon");
       const key = id ? `spell:${id}` : "";
@@ -985,13 +1187,19 @@ function installSpellStrip() {
 
   window.addEventListener("hb-spellbar-changed", render);
 
+  // Hotkey handler + any external caller reach the strip through this
+  // module-scope surface (declared above installSpellBarHotkeys).
+  __stripApi = { render, fireSlot, selectDelta, selectEdge, castCurrent };
+
   // Visibility: magic stance only (retail swaps this strip in where the
   // melee power panel lived). 500 ms poll mirrors combat-hud's fallback
-  // cadence; the poll also diffs armed/active state so a panel-row arm
-  // (which doesn't dispatch hb-spellbar-changed) still refreshes us.
+  // cadence; the poll also diffs armed/active/selected state so a
+  // panel-row arm (which doesn't dispatch hb-spellbar-changed) still
+  // refreshes us.
   let lastVisible = false;
   let lastArmed = -1;
   let lastActive = -1;
+  let lastSelected = -2;
   setInterval(() => {
     let on = false;
     try { on = window.__getCurrentStanceLow?.() === STANCE_MAGIC; } catch (_) {}
@@ -999,14 +1207,24 @@ function installSpellStrip() {
       lastVisible = on;
       root.style.display = on ? "" : "none";
       if (!on) setName("");
-      if (on) render();
+      if (on) {
+        render();
+        reclampIntoViewport();
+      }
     }
     if (on) {
       const a = armedId();
       const act = getActiveSpellBar();
-      if (a !== lastArmed || act !== lastActive) {
+      if (act !== lastActive && lastActive !== -1) {
+        // Selection is per-tab — changing tabs drops the current-spell
+        // ring rather than silently pointing at a different spell.
+        selectedIdx = -1;
+        if (window.__combatBarState) window.__combatBarState.selectedSlotIdx = -1;
+      }
+      if (a !== lastArmed || act !== lastActive || selectedIdx !== lastSelected) {
         lastArmed = a;
         lastActive = act;
+        lastSelected = selectedIdx;
         render();
       }
     }

@@ -332,13 +332,24 @@ function writeCombatBarState(merged) {
 // shape (`spellBars: number[][]`) on first read.
 function readSpellBars(state) {
   if (Array.isArray(state.spellBars) && state.spellBars.length > 0) {
-    // Pad each tab to SPELL_BAR_SLOTS for safety.
+    // Pad each tab to SPELL_BAR_SLOTS for safety. Task C v2
+    // (2026-07-02): also dedupe WITHIN each tab — retail never allows
+    // the same spell twice on one tab; earlier builds could stack
+    // duplicates via repeated spellbook double-clicks. First
+    // occurrence wins, later copies become empty cells.
     return state.spellBars.map((tab) => {
       const t = Array.isArray(tab) ? tab : [];
       const padded = [];
+      const seen = new Set();
       for (let i = 0; i < SPELL_BAR_SLOTS; i++) {
         const v = t[i];
-        padded.push(typeof v === "number" && v > 0 ? v : 0);
+        const id = typeof v === "number" && v > 0 ? v : 0;
+        if (id && seen.has(id)) {
+          padded.push(0);
+        } else {
+          if (id) seen.add(id);
+          padded.push(id);
+        }
       }
       return padded;
     }).slice(0, SPELL_BAR_TABS);
@@ -346,9 +357,11 @@ function readSpellBars(state) {
   // Legacy: a single `spellBarSlots` array becomes tab 0.
   const legacy = Array.isArray(state.spellBarSlots) ? state.spellBarSlots : [];
   const tab0 = [];
+  const seen0 = new Set();
   for (let i = 0; i < SPELL_BAR_SLOTS; i++) {
     const v = legacy[i];
-    tab0.push(typeof v === "number" && v > 0 ? v : 0);
+    const id = typeof v === "number" && v > 0 ? v : 0;
+    tab0.push(id && !seen0.has(id) ? (seen0.add(id), id) : 0);
   }
   return [tab0];
 }
@@ -388,7 +401,17 @@ function setSpellBarSlot(slotIndex, spellId, barIdx) {
   while (bars.length <= tab) {
     bars.push(new Array(SPELL_BAR_SLOTS).fill(0));
   }
-  bars[tab][slotIndex] = spellId | 0;
+  const id = spellId | 0;
+  // Task C v2 (2026-07-02) — per-tab uniqueness, enforced structurally:
+  // writing a spell into a cell clears it from any OTHER cell on the
+  // same tab, so "drop a duplicate" degrades to "move the existing
+  // binding". Retail never allowed the same spell twice on one tab.
+  if (id > 0) {
+    for (let i = 0; i < bars[tab].length; i++) {
+      if (i !== slotIndex && (bars[tab][i] | 0) === id) bars[tab][i] = 0;
+    }
+  }
+  bars[tab][slotIndex] = id;
   state.spellBars = bars;
   delete state.spellBarSlots;
   writeCombatBarState(state);
@@ -397,6 +420,10 @@ function setSpellBarSlot(slotIndex, spellId, barIdx) {
 function addToFirstEmptySlot(spellId, barIdx) {
   const tab = (typeof barIdx === "number") ? barIdx : getActiveSpellBar();
   const slots = getSpellBarSlots(tab);
+  // Per-tab uniqueness (Task C v2): if the spell is already on this
+  // tab, keep it where it is and report that index — no duplicate.
+  const existing = slots.findIndex((v) => (v | 0) === (spellId | 0));
+  if (existing !== -1) return existing;
   const empty = slots.findIndex((v) => v === 0);
   const writeIdx = empty === -1 ? SPELL_BAR_SLOTS - 1 : empty;
   setSpellBarSlot(writeIdx, spellId, tab);
@@ -1471,6 +1498,7 @@ export {
   setSpellBarSlot,
   getActiveSpellBar,
   setActiveSpellBar,
+  addToFirstEmptySlot,
   SPELL_BAR_SLOTS,
   SPELL_BAR_TABS,
   loadCatalog,

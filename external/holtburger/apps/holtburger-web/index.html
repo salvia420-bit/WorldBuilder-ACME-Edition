@@ -1534,6 +1534,69 @@
           panelBody: "RynthSuite — combat & navigation (stub)",
         },
         {
+          // Task C v2 (2026-07-02, user request): the spellbook lives in
+          // the main-panel view system (target-bar button / F5), but HUD
+          // position/visibility issues can strand those surfaces — this
+          // sidebar slot is the always-reachable route, plus a rescue
+          // button that clears every persisted hb.window.* position and
+          // un-minimizes the plugin bar.
+          id: "spellbook-shortcut",
+          name: "Spellbook",
+          icon: "📖",
+          iconSprite: "0x06001119",
+          activate: (bodyEl) => {
+            bodyEl.innerHTML = "";
+            const mk = (tag, css, text) => {
+              const el = document.createElement(tag);
+              if (css) el.style.cssText = css;
+              if (text != null) el.textContent = text;
+              bodyEl.appendChild(el);
+              return el;
+            };
+            const status = mk("div", "margin-bottom:8px;color:var(--hb-text-cream,#fff);");
+            const openBtn = mk("button", "padding:6px 12px;background:rgba(120,84,32,0.5);color:#fff;border:1px solid #8a7544;border-radius:3px;cursor:pointer;font-family:inherit;display:block;margin-bottom:10px;", "Open Spellbook");
+            openBtn.type = "button";
+            const refresh = () => {
+              const mp = window.__mainPanel;
+              status.textContent = mp
+                ? (mp.isOpen?.() && mp.currentViewId?.() === "spellbook"
+                    ? "Spellbook is open in the main panel."
+                    : "Opens the spellbook in the main panel.")
+                : "Main panel not ready yet — try again in a moment.";
+            };
+            openBtn.addEventListener("click", () => {
+              try { window.__mainPanel?.toggleView?.("spellbook"); } catch (_) {}
+              setTimeout(refresh, 50);
+            });
+            const rescueBtn = mk("button", "padding:6px 12px;background:rgba(90,32,32,0.5);color:#fff;border:1px solid #8a5544;border-radius:3px;cursor:pointer;font-family:inherit;display:block;", "Reset HUD positions");
+            rescueBtn.type = "button";
+            mk("div", "margin-top:8px;font-size:10px;color:rgba(255,255,255,0.55);font-style:italic;",
+              "Reset clears every saved window position (main panel, chat, spell bar, plugin bar) and reloads — use when a panel is stuck off-screen.");
+            rescueBtn.addEventListener("click", () => {
+              if (!window.confirm("Reset all saved HUD window positions and reload?")) return;
+              try {
+                const doomed = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                  const k = localStorage.key(i);
+                  if (k && k.startsWith("hb.window.")) doomed.push(k);
+                }
+                doomed.forEach((k) => localStorage.removeItem(k));
+                // Un-minimize + re-dock the plugin bar itself.
+                const rawBar = localStorage.getItem("holtburger_ui_bar_v1");
+                if (rawBar) {
+                  const st = JSON.parse(rawBar);
+                  st.minimized = false;
+                  st.left = null;
+                  st.top = null;
+                  localStorage.setItem("holtburger_ui_bar_v1", JSON.stringify(st));
+                }
+              } catch (_) {}
+              location.reload();
+            });
+            refresh();
+          },
+        },
+        {
           // PR-MM 2026-05-23: fullscreen toggle in the (deprecated)
           // plugin bar. Uses the browser Fullscreen API on
           // #canvas-column (the wrapper holding #canvas + keypad),
