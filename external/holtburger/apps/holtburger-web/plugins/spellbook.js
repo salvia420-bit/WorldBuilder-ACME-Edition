@@ -744,9 +744,28 @@ function showSpellDetail(meta, anchorX, anchorY, componentNames) {
   const durStr = meta.duration && meta.duration > 0
     ? ` · ${meta.duration >= 60 ? `${Math.round(meta.duration / 60)}m` : `${meta.duration}s`}`
     : "";
+  // Mana Conversion note (Task C step 3, 2026-07-01): the listed cost
+  // is BaseMana; when the player has Mana Conversion trained+ and the
+  // spell doesn't carry SpellFlags.IgnoresManaConversion, ACE rolls a
+  // per-cast reduction (Creature_Magic.cs GetManaCost) — annotate
+  // rather than fake an exact number. skills[] layout is the flat
+  // [id, current, base, trained_state, xp] × N (character-info.js);
+  // ManaConversion = 16, Trained = 2.
+  let manaNote = "";
+  try {
+    const skills = window.__sessionHandle?.playerStats?.()?.skills;
+    if (skills && skills.length && !(meta?.flags?.ignoresManaConv === true)) {
+      for (let s = 0; s + 4 < skills.length; s += 5) {
+        if (skills[s] === 16) {
+          if (skills[s + 3] >= 2) manaNote = " (Mana Conv. may reduce)";
+          break;
+        }
+      }
+    }
+  } catch (_) {}
   setAcText(
     meta_str,
-    `${schoolName} · Level ${meta.level} · ${meta.mana} mana${durStr}` +
+    `${schoolName} · Level ${meta.level} · ${meta.mana} mana${manaNote}${durStr}` +
       (meta.untargeted ? " · self-cast" : " · targeted"),
   );
   el.appendChild(meta_str);

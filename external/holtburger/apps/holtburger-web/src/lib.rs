@@ -18318,6 +18318,47 @@ const CLIENT_EVENT_KIND_USE_FAILED: u32 = 13;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_USE_DONE: u32 = 14;
 
+/// Retail user-facing strings for the spell-cast `WeenieError` codes
+/// (Task C step 2, 2026-07-01). The retail client rendered these
+/// locally from the error code — the server never sends the text.
+/// Strings verified verbatim against the decomp (`rg -a` over
+/// acclient.c: "Your spell fizzled.\n", "You don't have all the
+/// components for this spell.", …). ACE producer sites:
+/// `Player_Magic.cs` — ValidateSpell (components), CalculateManaUsage
+/// (mana), VerifySpellRange (range), DoCastSpell_Inner (fizzled via
+/// `SendWeenieError`, everything else via `SendUseDoneEvent`).
+///
+/// Consumed by BOTH wire arms: `UseDone(error)` upgrades its
+/// "[Use failed] {Debug}" system line to the retail text as a
+/// TRANSIENT toast-line, and `WeenieError` additionally pushes a
+/// kind=13 event for these codes so the JS cast-cancel hook
+/// (index.html F8-2, `errCode === 0x0402`) can fire — ACE delivers
+/// the fizzle on 0x028A, not on UseDone, so without this the hook
+/// never triggered.
+#[cfg(target_arch = "wasm32")]
+fn spellcast_error_text(code: u32) -> Option<&'static str> {
+    Some(match code {
+        // WeenieError::YouDontHaveAllTheComponents
+        0x0400 => "You don't have all the components for this spell.",
+        // WeenieError::YouDontHaveEnoughManaToCast
+        0x0401 => "You don't have enough Mana to cast this spell.",
+        // WeenieError::YourSpellFizzled
+        0x0402 => "Your spell fizzled.",
+        // WeenieError::YourSpellCannotBeCastOutside
+        0x0407 => "Your spell cannot be cast outside.",
+        // WeenieError::YourSpellCannotBeCastInside
+        0x0408 => "Your spell cannot be cast inside.",
+        // WeenieError::YouHaveMovedTooFar (PK windup move cap)
+        0x0498 => "You have moved too far!",
+        // WeenieError::MissileOutOfRange — ACE reuses this for spell
+        // range (VerifySpellRange). Retail's generic range string.
+        0x0550 => "Out of range!",
+        // WeenieError::YouCantDoThatWhileInTheAir (cast while jumping)
+        0x04EB => "You can't do that while in the air!",
+        _ => return None,
+    })
+}
+
 /// Phase 6 step E: a door's open/closed state flipped. ACE's
 /// `Door.cs::Open()` / `Close()` flip `Ethereal` and broadcast via
 /// `GameMessageSetState`; the recv loop routes the message through
@@ -38897,20 +38938,37 @@ async fn recv_loop(
                                         });
                                     } else {
                                         let label = format!("{:?}", data.error);
+                                        let code = data.error as u32;
                                         queued_events.borrow_mut().push(ClientEvent {
                                             kind: CLIENT_EVENT_KIND_USE_FAILED,
                                             string_payload: Some(label.clone()),
-                                            u32_payload: Some(data.error as u32),
+                                            u32_payload: Some(code),
                                             u32_payload_2: None,
                                             f32_payload: None,
                                         });
+                                        // Spell-cast rejections (components /
+                                        // mana / range / indoors / in-air —
+                                        // ACE Player_Magic SendUseDoneEvent
+                                        // sites) get the retail client text
+                                        // as a transient toast-line; every
+                                        // other use-failure keeps the
+                                        // generic labelled system line.
+                                        let (message, category) =
+                                            match spellcast_error_text(code) {
+                                                Some(text) => (
+                                                    text.to_string(),
+                                                    CHAT_CATEGORY_TRANSIENT,
+                                                ),
+                                                None => (
+                                                    format!("[Use failed] {label}"),
+                                                    CHAT_CATEGORY_SYSTEM,
+                                                ),
+                                            };
                                         queued_events.borrow_mut().push(ClientEvent {
                                             kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                                            string_payload: Some(format!(
-                                                "[Use failed] {label}"
-                                            )),
+                                            string_payload: Some(message),
                                             u32_payload: Some(0),
-                                            u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
+                                            u32_payload_2: Some(category),
                                             f32_payload: None,
                                         });
                                     }
@@ -38967,16 +39025,42 @@ async fn recv_loop(
                                     // come exclusively from
                                     // `UseDone(error != None)` so we
                                     // don't false-positive on
-                                    // info-channel errors.
+                                    // info-channel errors — EXCEPT the
+                                    // spell-cast subset below: ACE's
+                                    // `DoCastSpell_Inner` reports a
+                                    // fizzle via `SendWeenieError`
+                                    // (0x028A), never via UseDone, so
+                                    // these ALSO push kind=13 (the F8-2
+                                    // cast-cancel hook keys on it) and
+                                    // render the retail text as a
+                                    // transient toast-line instead of
+                                    // the raw Debug label.
                                     let label = format!("{:?}", data.error);
                                     let code = data.error as u32;
-                                    queued_events.borrow_mut().push(ClientEvent {
-                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                                        string_payload: Some(label),
-                                        u32_payload: Some(code),
-                                        u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
-                                        f32_payload: None,
-                                    });
+                                    if let Some(text) = spellcast_error_text(code) {
+                                        queued_events.borrow_mut().push(ClientEvent {
+                                            kind: CLIENT_EVENT_KIND_USE_FAILED,
+                                            string_payload: Some(label),
+                                            u32_payload: Some(code),
+                                            u32_payload_2: None,
+                                            f32_payload: None,
+                                        });
+                                        queued_events.borrow_mut().push(ClientEvent {
+                                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                            string_payload: Some(text.to_string()),
+                                            u32_payload: Some(0),
+                                            u32_payload_2: Some(CHAT_CATEGORY_TRANSIENT),
+                                            f32_payload: None,
+                                        });
+                                    } else {
+                                        queued_events.borrow_mut().push(ClientEvent {
+                                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                            string_payload: Some(label),
+                                            u32_payload: Some(code),
+                                            u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
+                                            f32_payload: None,
+                                        });
+                                    }
                                 }
                                 holtburger_protocol::messages::GameEvent::WeenieErrorWithString(
                                     data,
@@ -40573,6 +40657,38 @@ async fn recv_loop(
                             ChangeCombatModeActionData, CombatMode, GameAction,
                         };
                         use holtburger_world::context::WorldContextExt;
+                        // Caster pre-check (mirrors the Missile ammo
+                        // guard below). ACE's
+                        // HandleSwitchToMagicCombatMode returns 0
+                        // when GetEquippedWand() is null — the
+                        // CombatMode property half-flips server-side
+                        // but no stance motion or client update is
+                        // ever sent, so the request dies SILENTLY.
+                        // Refuse locally with immediate feedback
+                        // instead. Retail's UI never offered magic
+                        // mode without a wielded caster, so there is
+                        // no retail string for this; the message
+                        // follows the ammo-guard idiom.
+                        if mode == CombatMode::Magic
+                            && world
+                                .as_ref()
+                                .is_some_and(|w| !w.is_wielding_caster())
+                        {
+                            console_log_str(
+                                "[combat-mode] set(Magic) blocked: no caster (wand/orb/staff) wielded",
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(
+                                    "You must wield a wand, orb, or staff to enter magic combat mode!"
+                                        .to_string(),
+                                ),
+                                u32_payload: Some(0),
+                                u32_payload_2: Some(CHAT_CATEGORY_TRANSIENT),
+                                f32_payload: None,
+                            });
+                            continue;
+                        }
                         if mode == CombatMode::Missile
                             && world
                                 .as_ref()

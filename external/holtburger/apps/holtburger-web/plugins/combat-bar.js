@@ -536,6 +536,7 @@ if (typeof window !== "undefined") {
   syncWindowState(loadState());
   installAutoDisarmHooks();
   installAttackLockoutHooks();
+  installSpellBarHotkeys();
 }
 
 // Subscribe at module-load to the hotbar bus event — when a hotbar
@@ -609,6 +610,92 @@ function installAutoDisarmHooks() {
   // isn't plumbed today; see ui/bar.js:583-584 "TODO: bar teardown
   // not yet plumbed"). If/when bar teardown lands we can surface the
   // disposer back through a return value or a window-scoped handle.
+}
+
+// Task C step 3 (2026-07-01) — spell-bar keyboard cycling, module-load.
+//
+// Retail exposed dedicated input actions for this in the MAGIC-mode
+// input map (`ClientCombatSystem::HandleMagicAction`, acclient.c
+// ~407451): 0x10000063 CombatPrevSpellTab / 0x10000064
+// CombatNextSpellTab / 0x10000104 CombatFirstSpellTab (+ LastSpellTab),
+// plus spell SELECTION cycling and CastCurrentSpell. Retail shipped
+// them user-bindable via Keyboard Config; we pick web-native defaults
+// and scope them exactly like retail did — magic stance only:
+//   [ / ]        previous / next spell tab (wraps)
+//   { / }        first / last spell tab (Shift+[ / Shift+])
+//   1..8         fire the Nth slot of the active tab — untargeted
+//                spells cast immediately, targeted spells arm/disarm
+//                (retail's CastCurrentSpell + selection model folded
+//                onto the 8 slots our HUD shows).
+// Keys are ignored while typing (input/textarea/contenteditable) and
+// with ctrl/alt/meta held. Tab switches go through setActiveSpellBar →
+// `hb-spellbar-changed`, which refreshes any open picker (tab
+// highlight + rows) — and still persist when the panel is closed.
+function installSpellBarHotkeys() {
+  if (window.__hbSpellBarHotkeysInstalled) return;
+  window.__hbSpellBarHotkeysInstalled = true;
+  window.addEventListener("keydown", (ev) => {
+    try {
+      if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+      const t = ev.target;
+      const tag = (t?.tagName || "").toUpperCase();
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable) {
+        return;
+      }
+      // Magic stance only — mirrors retail's HandleMagicAction scope.
+      // (index.html MAGIC_STANCES = {0x49}; helper attaches post-boot.)
+      if (window.__getCurrentStanceLow?.() !== 0x49) return;
+      const key = ev.key;
+      if (key === "[" || key === "]" || key === "{" || key === "}") {
+        const cur = getActiveSpellBar();
+        let next;
+        if (key === "{") next = 0;
+        else if (key === "}") next = SPELL_BAR_TABS - 1;
+        else if (key === "[") next = (cur + SPELL_BAR_TABS - 1) % SPELL_BAR_TABS;
+        else next = (cur + 1) % SPELL_BAR_TABS;
+        if (next !== cur) setActiveSpellBar(next);
+        ev.preventDefault();
+        return;
+      }
+      if (key >= "1" && key <= "8") {
+        const slotIdx = key.charCodeAt(0) - 49; // '1' → slot 0
+        // Prefer the rendered row — reuses the panel's exact cast/arm
+        // click handler (armed-row highlight, classifier events,
+        // catalog meta) so keyboard and mouse behave identically.
+        const row = document.querySelector(
+          `.hb-cb-spell[data-slot-index="${slotIdx}"]:not(.hb-cb-spell-empty)`,
+        );
+        if (row) {
+          row.click();
+          ev.preventDefault();
+          return;
+        }
+        // Panel closed — storage-level equivalent of the row click.
+        const spellId = (getSpellBarSlots()[slotIdx] | 0);
+        if (!spellId) return;
+        ev.preventDefault();
+        loadCatalog()
+          .then((catalog) => {
+            const meta = catalog?.[String(spellId)];
+            // Same default as renderRows (`untargeted ?? true`) so a
+            // missing catalog row behaves like the visible button.
+            const untargeted = (meta?.untargeted ?? true) === true;
+            if (untargeted) {
+              castSpellViaHandle(spellId, null);
+            } else {
+              const state = loadState();
+              state.armedSpellId = state.armedSpellId === spellId ? 0 : spellId;
+              saveState(state);
+              syncWindowState(state);
+              window.dispatchEvent(new CustomEvent("hb-spellbar-changed"));
+            }
+          })
+          .catch(() => { /* catalog fetch failed — drop the keypress */ });
+      }
+    } catch (_) {
+      // Never break global input handling on a hotkey fault.
+    }
+  });
 }
 
 // F11-3 — attackInProgress lockout lifecycle, owned at module-load.
@@ -1329,6 +1416,25 @@ function renderSpellPicker(bodyEl, state) {
       const inv = typeof handle?.playerInventory === "function" ? handle.playerInventory() : [];
       casterWielded = Array.isArray(inv) && inv.some((it) => ((it.equipMask >>> 0) & 0x03000000) !== 0);
     } catch (_) {}
+    // Mana Conversion trained/specialized? Drives the tooltip's cost
+    // note: ACE only rolls the cost reduction when the skill is at
+    // least Trained (Creature_Magic.cs CalculateManaUsage — untrained
+    // or SpellFlags.IgnoresManaConversion → flat BaseMana). skills[]
+    // is the flat [id, current, base, trained_state, xp] × N layout
+    // (see plugins/character-info.js); ManaConversion = 16,
+    // SkillAdvancementClass Trained = 2.
+    let manaConvTrained = false;
+    try {
+      const skills = window.__sessionHandle?.playerStats?.()?.skills;
+      if (skills && skills.length) {
+        for (let s = 0; s + 4 < skills.length; s += 5) {
+          if (skills[s] === 16) {
+            manaConvTrained = skills[s + 3] >= 2;
+            break;
+          }
+        }
+      }
+    } catch (_) {}
 
     const slots = getSpellBarSlots();
     const populated = slots.filter((v) => v > 0);
@@ -1453,12 +1559,27 @@ function renderSpellPicker(bodyEl, state) {
       // the name as before. When no caster is wielded and the spell
       // isn't Item Enchantment (school 3, which casts via components),
       // suffix a hint — informational only; the row still casts.
+      //
+      // Mana suffix (Task C step 3, 2026-07-01): base cost from the
+      // hybrid catalog (DAT-correct `baseMana` post-EnteredWorld). The
+      // actual charge is server-rolled — with Mana Conversion trained,
+      // ACE reduces the cost stochastically per cast
+      // (Creature_Magic.cs GetManaCost) — so the note says "may be
+      // reduced" rather than faking a number.
       const needsCasterHint = !casterWielded && (meta?.school !== 3);
       const casterSuffix = needsCasterHint ? " — no caster wielded" : "";
+      let manaSuffix = "";
+      if (Number.isFinite(+meta?.mana) && +meta.mana > 0) {
+        const mcNote =
+          manaConvTrained && !(meta?.flags?.ignoresManaConv === true)
+            ? " (Mana Conversion may reduce)"
+            : "";
+        manaSuffix = ` — ${+meta.mana} mana${mcNote}`;
+      }
       if (classification && classification.shape) {
-        row.title = `${baseName} (${classification.shape})${casterSuffix}`;
+        row.title = `${baseName} (${classification.shape})${manaSuffix}${casterSuffix}`;
       } else {
-        row.title = `${baseName}${casterSuffix}`;
+        row.title = `${baseName}${manaSuffix}${casterSuffix}`;
       }
 
       row.addEventListener("click", () => {

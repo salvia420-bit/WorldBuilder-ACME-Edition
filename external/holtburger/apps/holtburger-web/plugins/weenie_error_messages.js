@@ -40,6 +40,21 @@ export const WEENIE_ERROR_MESSAGES = Object.freeze({
   // Player_Commerce.cs / Player_Use.cs that PR13's inventory toast may
   // also surface. ---
   0x0024: "You can't jump while in the air.",
+  // --- Spell-cast errors (Task C, 2026-07-01). Retail client texts
+  // verified verbatim against the decomp; ACE producer sites in
+  // Player_Magic.cs (ValidateSpell / CalculateManaUsage /
+  // VerifySpellRange / DoCastSpell_Inner). The wasm recv loop renders
+  // the same strings as transient chat (`spellcast_error_text` in
+  // src/lib.rs — keep the two maps in sync); these entries serve any
+  // JS consumer resolving the kind:13 code directly. ---
+  0x0400: "You don't have all the components for this spell.",
+  0x0401: "You don't have enough Mana to cast this spell.",
+  0x0402: "Your spell fizzled.",
+  0x0407: "Your spell cannot be cast outside.",
+  0x0408: "Your spell cannot be cast inside.",
+  0x0498: "You have moved too far!",
+  0x0550: "Out of range!",
+  0x04EB: "You can't do that while in the air!",
   // --- WeenieErrorWithString (substitution; _ replaced at display time) ---
   // Codes unique to WeenieErrorWithString that surface in inventory
   // contexts are already covered above by entries that already use the

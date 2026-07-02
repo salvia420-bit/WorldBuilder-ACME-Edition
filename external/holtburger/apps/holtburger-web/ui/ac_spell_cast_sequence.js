@@ -123,9 +123,15 @@ async function _loadSequenceAsync(url) {
       return r.json();
     })
     .then((table) => {
-      _sequenceTable = table;
+      // The generator (gen-spell-cast-sequence.cjs) nests the per-spell
+      // entries under `sequences` alongside `_comment`/`_spell_count`
+      // metadata; older synthetic test tables are flat. Storing the
+      // wrapper verbatim made every browser-side lookup miss (spellId
+      // keys aren't top-level), silently killing the whole gesture
+      // chain — unwrap before caching.
+      _sequenceTable = table.sequences ?? table;
       _pendingFetch = null;
-      return table;
+      return _sequenceTable;
     })
     .catch((err) => {
       _pendingFetch = null;
@@ -146,7 +152,10 @@ export function _loadSequenceSync(table) {
   if (!table || typeof table !== "object") {
     throw new Error("_loadSequenceSync: table must be a non-null object");
   }
-  _sequenceTable = table;
+  // Accept both the generator's `{sequences: {...}}` wrapper and the
+  // flat synthetic tables the Node tests build (same unwrap as the
+  // async loader above).
+  _sequenceTable = table.sequences ?? table;
   _pendingFetch = null;
 }
 

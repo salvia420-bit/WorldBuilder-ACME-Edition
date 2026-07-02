@@ -120,6 +120,8 @@
 // (rec #46) so a single canonical mapping owns the heuristic. Plugins
 // that need component data should prefer this helper over rolling
 // their own inventory scan.
+import { selfTargetGuidFor } from "../ui/ac_cast_spell.js";
+
 let _componentCatalog = null;
 let _componentCatalogPromise = null;
 let _componentNameToId = null;
@@ -447,12 +449,28 @@ export function createClient(sessionHandle) {
       sessionHandle.missileAttack(targetGuid, attackHeight, accuracyLevel);
     },
     castSpell(spellId, targetGuid) {
-      // null/undefined targetGuid → untargeted (self-buff / recall /
-      // lifestone tie / portal-summon spells).
-      if (targetGuid == null) {
+      // null/undefined targetGuid → untargeted (recall / dispel /
+      // portal-summon spells) — EXCEPT SelfTargeted spells, which are
+      // promoted to a targeted cast at our own guid. ACE's untargeted
+      // handler threads target=null into DoSpellEffects, so a
+      // self-buff cast on 0x0048 lands its enchantment but never
+      // broadcasts the TargetEffect PlayScript (the buff glow).
+      // Retail cast self-spells targeted at the player's own object —
+      // ACE's TargetCategory.Self path (see
+      // ui/ac_cast_spell.js::selfTargetGuidFor for the full trace;
+      // live-verified 2026-07-01).
+      let resolvedTarget = targetGuid;
+      if (resolvedTarget == null) {
+        try {
+          resolvedTarget = selfTargetGuidFor(spellId >>> 0);
+        } catch (_) {
+          resolvedTarget = null;
+        }
+      }
+      if (resolvedTarget == null) {
         sessionHandle.castUntargetedSpell(spellId);
       } else {
-        sessionHandle.castTargetedSpell(targetGuid, spellId);
+        sessionHandle.castTargetedSpell(resolvedTarget, spellId);
       }
       // F8-3 — play the local cast gesture for ALL non-picking cast paths
       // (untargeted self-buffs/heals/recalls + hotbar / spell-research /
