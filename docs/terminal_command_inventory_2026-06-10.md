@@ -355,3 +355,15 @@ Columns: **Adv** = listed in `help` output; **Dispatch** = registration line in 
 | `wave4-status` | `` | ✗ | :344 | `_ => CmdWave4Status()` |  |
 | `wave4-sweep` | `` | ✗ | :345 | `CmdWave4Sweep` |  |
 
+
+## Addendum 2026-07-02 — UI workspace suite
+
+Ported from the community desktop tools `AC_UI_Asset_Builder` v0.3 (Rust/egui) and `Asherons_Interface` v0.1 (WPF), studied from their binaries + ILSpy decompile under `/mnt/wbterminal2/asheron-ui-tools/`. Engine: `WorldBuilder.Terminal/CommandEngine.UiWorkspace.cs`. All five are advertised in `help`.
+
+| Command | Args | Adv | Handler | Description |
+|---|---|---|---|---|
+| `ui-layout-list` | `datPath?` | ✓ | `CmdUiLayoutList` | List every retail UI LayoutDesc in the local DAT (dims, element/image counts, root element names) |
+| `ui-layout-render` | `layoutId, outPath, datPath?, state?, scale?, annotate?, drawText?, background?, animationFrame?, manifestPath?, includeElements?` | ✓ | `CmdUiLayoutRender` | Headless-render a retail UI layout to PNG: base-element inheritance, per-state media, tiled images, alpha masks, retail bitmap-font text from StringTables (fonts resolved via PassToChildren inheritance + most-used-font fallback); emits a render manifest |
+| `ui-element-edit` | `datPath, layoutId, edits[{elementId, x?, y?, width?, height?, zLevel?}], dryRun?` | ✓ | `CmdUiElementEdit` | Move/resize UI elements in a LayoutDesc and write back to a local-DAT COPY (writes to ~/ac_base_dats refused) |
+| `ui-image-replace` | `datPath, replacements[{did, pngPath}] \| fromDir, dryRun?, allowCreate?` | ✓ | `CmdUiImageReplace` | Write PNGs into a portal-DAT COPY as RenderSurfaces (R8G8B8 preserved for opaque replacements, else A8R8G8B8; batch via a dir of 0x06XXXXXX.png) |
+| `ui-pack-export` | `outDir, layoutIds?, datPath?, includeImages?` | ✓ | `CmdUiPackExport` | Export an AC_UI_Asset_Builder-compatible `reference_pack.json` + `images/` (schema key-identical to the community tool's pack; verified 2026-07-02) |

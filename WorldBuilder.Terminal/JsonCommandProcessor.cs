@@ -318,6 +318,13 @@ public class JsonCommandProcessor {
             // Wave-1 UI-port commands — see CommandEngine.UiSpriteExtract.cs
             ["chorizite-dump-layout-tree"]      = CmdChoriziteDumpLayoutTree,
             ["chorizite-extract-ui-textures"]   = CmdChoriziteExtractUiTextures,
+            // UI workspace suite (2026-07-02, port of the AC_UI_Asset_Builder
+            // + Asherons_Interface community tools) — see CommandEngine.UiWorkspace.cs
+            ["ui-layout-list"]    = CmdUiLayoutList,
+            ["ui-layout-render"]  = CmdUiLayoutRender,
+            ["ui-element-edit"]   = CmdUiElementEdit,
+            ["ui-image-replace"]  = CmdUiImageReplace,
+            ["ui-pack-export"]    = CmdUiPackExport,
             // PR-V Skills view backing dump — see CommandEngine.SkillTableDump.cs
             ["chorizite-dump-skill-table"]      = CmdChoriziteDumpSkillTable,
             // Wave-1 wire-conformance diagnostic commands — see CommandEngine.WireConformance.cs
@@ -619,6 +626,197 @@ public class JsonCommandProcessor {
                 pngPath = rec.PngPath,
                 failureReason = rec.FailureReason,
             }),
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // UI workspace suite — see CommandEngine.UiWorkspace.cs
+    // ─────────────────────────────────────────────────────────────────
+
+    /// <summary>Hex-or-decimal uint from a JSON node value (string or number).</summary>
+    private static uint ParseUIntFlexible(System.Text.Json.Nodes.JsonNode? n, string field) {
+        if (n == null || n.GetValueKind() == System.Text.Json.JsonValueKind.Null) {
+            throw new ArgumentException($"Missing '{field}' field");
+        }
+        if (n.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+            var s = n.GetValue<string>().Trim();
+            return s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                ? Convert.ToUInt32(s.Substring(2), 16)
+                : Convert.ToUInt32(s);
+        }
+        return n.GetValue<uint>();
+    }
+
+    private static uint? ParseUIntFlexibleOpt(System.Text.Json.Nodes.JsonNode? n) {
+        if (n == null || n.GetValueKind() == System.Text.Json.JsonValueKind.Null) return null;
+        if (n.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+            var s = n.GetValue<string>().Trim();
+            if (s.Length == 0) return null;
+            return s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                ? Convert.ToUInt32(s.Substring(2), 16)
+                : Convert.ToUInt32(s);
+        }
+        return n.GetValue<uint>();
+    }
+
+    private string CmdUiLayoutList(System.Text.Json.Nodes.JsonNode node) {
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.UiLayoutList(datPath);
+        return Serialize(new {
+            success = true,
+            command = "ui-layout-list",
+            datPath = r.DatPath,
+            count = r.Count,
+            layouts = r.Layouts.Select(l => new {
+                layoutId = l.LayoutIdHex,
+                width = l.Width,
+                height = l.Height,
+                rootCount = l.RootCount,
+                elementCount = l.ElementCount,
+                imageDidCount = l.ImageDidCount,
+                rootElementIdName = l.RootElementIdName,
+            }),
+        });
+    }
+
+    private string CmdUiLayoutRender(System.Text.Json.Nodes.JsonNode node) {
+        uint layoutId = ParseUIntFlexible(node["layoutId"], "layoutId");
+        string outPath = node["outPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outPath' field (png destination)");
+        string? datPath = node["datPath"]?.GetValue<string>();
+        string? state = node["state"]?.GetValue<string>();
+        int scale = node["scale"]?.GetValue<int>() ?? 1;
+        bool annotate = node["annotate"]?.GetValue<bool>() ?? false;
+        bool drawText = node["drawText"]?.GetValue<bool>() ?? true;
+        string? background = node["background"]?.GetValue<string>();
+        int animationFrame = node["animationFrame"]?.GetValue<int>() ?? 0;
+        string? manifestPath = node["manifestPath"]?.GetValue<string>();
+        // includeElements (default false): the per-element render manifest
+        // can run to hundreds of records for the big panels — opt in when
+        // you want the full breakdown inline rather than via manifestPath.
+        bool includeElements = node["includeElements"]?.GetValue<bool>() ?? false;
+
+        var r = _engine.UiLayoutRender(layoutId, outPath, datPath, state, scale,
+            annotate, drawText, background, animationFrame, manifestPath);
+        return Serialize(new {
+            success = true,
+            command = "ui-layout-render",
+            layoutId = r.LayoutIdHex,
+            width = r.Width,
+            height = r.Height,
+            scale = r.Scale,
+            pngPath = r.PngPath,
+            manifestPath = r.ManifestPath,
+            elementsDrawn = r.ElementsDrawn,
+            imagesDrawn = r.ImagesDrawn,
+            textRuns = r.TextRuns,
+            animationsSeen = r.AnimationsSeen,
+            warnings = r.Warnings,
+            elements = includeElements ? r.Elements : null,
+        });
+    }
+
+    private string CmdUiElementEdit(System.Text.Json.Nodes.JsonNode node) {
+        string datPath = node["datPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'datPath' field (a local-DAT COPY — writes to ~/ac_base_dats are refused)");
+        uint layoutId = ParseUIntFlexible(node["layoutId"], "layoutId");
+        bool dryRun = node["dryRun"]?.GetValue<bool>() ?? false;
+        var editsArr = node["edits"] as System.Text.Json.Nodes.JsonArray
+            ?? throw new ArgumentException("Missing 'edits' array — [{elementId, x?, y?, width?, height?, zLevel?}]");
+        var edits = new List<CommandEngine.UiElementEditSpec>();
+        foreach (var e in editsArr) {
+            if (e == null) continue;
+            edits.Add(new CommandEngine.UiElementEditSpec(
+                ElementId: ParseUIntFlexible(e["elementId"], "edits[].elementId"),
+                X: ParseUIntFlexibleOpt(e["x"]),
+                Y: ParseUIntFlexibleOpt(e["y"]),
+                Width: ParseUIntFlexibleOpt(e["width"]),
+                Height: ParseUIntFlexibleOpt(e["height"]),
+                ZLevel: ParseUIntFlexibleOpt(e["zLevel"])));
+        }
+        var r = _engine.UiElementEdit(datPath, layoutId, edits, dryRun);
+        return Serialize(new {
+            success = true,
+            command = "ui-element-edit",
+            datPath = r.DatPath,
+            layoutId = r.LayoutIdHex,
+            dryRun = r.DryRun,
+            written = r.Written,
+            edits = r.Edits,
+        });
+    }
+
+    private string CmdUiImageReplace(System.Text.Json.Nodes.JsonNode node) {
+        string datPath = node["datPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'datPath' field (a portal-DAT COPY — writes to ~/ac_base_dats are refused)");
+        bool dryRun = node["dryRun"]?.GetValue<bool>() ?? false;
+        bool allowCreate = node["allowCreate"]?.GetValue<bool>() ?? false;
+
+        var specs = new List<CommandEngine.UiImageReplaceSpec>();
+        if (node["replacements"] is System.Text.Json.Nodes.JsonArray arr) {
+            foreach (var e in arr) {
+                if (e == null) continue;
+                specs.Add(new CommandEngine.UiImageReplaceSpec(
+                    Did: ParseUIntFlexible(e["did"] ?? e["didHex"], "replacements[].did"),
+                    PngPath: e["pngPath"]?.GetValue<string>()
+                        ?? throw new ArgumentException("Missing 'replacements[].pngPath'")));
+            }
+        }
+        // fromDir: a directory of 0x06XXXXXX.png files (the community
+        // tools' baked/images layout) — every parseable filename becomes
+        // a replacement pair.
+        string? fromDir = node["fromDir"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(fromDir)) {
+            if (!Directory.Exists(fromDir)) {
+                throw new ArgumentException($"fromDir not found: {fromDir}");
+            }
+            foreach (var f in Directory.EnumerateFiles(fromDir, "0x*.png").OrderBy(f => f)) {
+                var stem = Path.GetFileNameWithoutExtension(f);
+                if (stem.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                    && uint.TryParse(stem.Substring(2),
+                        System.Globalization.NumberStyles.HexNumber, null, out var did)) {
+                    specs.Add(new CommandEngine.UiImageReplaceSpec(did, f));
+                }
+            }
+        }
+
+        var r = _engine.UiImageReplace(datPath, specs, dryRun, allowCreate);
+        return Serialize(new {
+            success = true,
+            command = "ui-image-replace",
+            datPath = r.DatPath,
+            dryRun = r.DryRun,
+            requestedCount = r.RequestedCount,
+            writtenCount = r.WrittenCount,
+            failCount = r.FailCount,
+            records = r.Records,
+        });
+    }
+
+    private string CmdUiPackExport(System.Text.Json.Nodes.JsonNode node) {
+        string outDir = node["outDir"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outDir' field");
+        string? datPath = node["datPath"]?.GetValue<string>();
+        bool includeImages = node["includeImages"]?.GetValue<bool>() ?? true;
+        List<uint>? layoutIds = null;
+        if (node["layoutIds"] is System.Text.Json.Nodes.JsonArray idsArr) {
+            layoutIds = new List<uint>();
+            foreach (var e in idsArr) {
+                if (e != null) layoutIds.Add(ParseUIntFlexible(e, "layoutIds[]"));
+            }
+        }
+        var r = _engine.UiPackExport(outDir, layoutIds, datPath, includeImages);
+        return Serialize(new {
+            success = true,
+            command = "ui-pack-export",
+            outDir = r.OutDir,
+            packJson = r.PackJsonPath,
+            imagesDir = r.ImagesDir,
+            panelCount = r.PanelCount,
+            nodeCount = r.NodeCount,
+            imageCount = r.ImageCount,
+            pngPass = r.PngPass,
+            pngFail = r.PngFail,
         });
     }
 
@@ -2810,6 +3008,11 @@ public class JsonCommandProcessor {
             new { name = "wave4-sweep",        args = "mode?, target?, concurrency?, reset?",  description = "Runs the wave4 parity sweep driver (WORLDBUILDER_WAVE4_SWEEP/WORLDBUILDER_NODE env overrides; 6h timeout; report/cache roots under /mnt/wbterminal1). success requires exitCode 0 + no failed/infra chunks" },
             new { name = "diag-run-all",       args = "wave4Mode?, reportDir?, skipSurfaces?, parallel?", description = "Runs the full diagnostics driver (WORLDBUILDER_DIAG_DRIVER/WORLDBUILDER_NODE env overrides; 2h timeout); success gated on required-failures" },
             new { name = "diag-status",        args = "",                                      description = "Reports the last diagnostics run status (no run)" },
+            new { name = "ui-layout-list",     args = "datPath?",                              description = "List every retail UI LayoutDesc in the local DAT (dims, element/image counts, root element names)" },
+            new { name = "ui-layout-render",   args = "layoutId, outPath, datPath?, state?, scale?, annotate?, drawText?, background?, animationFrame?, manifestPath?, includeElements?", description = "Headless-render a retail UI layout to PNG: base-element inheritance, per-state media, tiled images, alpha masks, retail bitmap-font text from StringTables; emits a render manifest" },
+            new { name = "ui-element-edit",    args = "datPath, layoutId, edits[{elementId, x?, y?, width?, height?, zLevel?}], dryRun?", description = "Move/resize UI elements in a LayoutDesc and write back to a local-DAT COPY (writes to ~/ac_base_dats refused)" },
+            new { name = "ui-image-replace",   args = "datPath, replacements[{did, pngPath}] | fromDir, dryRun?, allowCreate?", description = "Write PNGs into a portal-DAT COPY as RenderSurfaces (format preserved for R8G8B8/A8R8G8B8; batch via a dir of 0x06XXXXXX.png)" },
+            new { name = "ui-pack-export",     args = "outDir, layoutIds?, datPath?, includeImages?", description = "Export an AC_UI_Asset_Builder-compatible reference_pack.json + images/ (panels, nodes, widget kinds, state image sets, usage cross-ref)" },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",
