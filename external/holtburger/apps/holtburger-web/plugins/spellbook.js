@@ -154,6 +154,19 @@ function spellRecordFromWasm(spellId) {
     return null;
   }
   if (!raw) return null;
+  // getSpellRecord crosses the wasm boundary via serde-wasm-bindgen,
+  // which emits JS **Map**s for JSON objects (live-verified
+  // 2026-07-01: `getSpellRecord(6) instanceof Map`, `.get("name") ===
+  // "Heal Self I"`). The plain-object reads below (`raw.name` …)
+  // returned undefined on a Map, so the wasm-preferred hybrid merge
+  // silently produced empty records and every consumer was actually
+  // living off the LSD JSON fallback (masked because the JSON carries
+  // the same core fields). Normalize the Map (+ the nested `flags`
+  // Map) so the DAT-correct record really wins.
+  if (raw instanceof Map) {
+    raw = Object.fromEntries(raw);
+    if (raw.flags instanceof Map) raw.flags = Object.fromEntries(raw.flags);
+  }
   // Coerce to legacy spells-catalog.json shape so existing UI code
   // keeps working without changes.
   return {
