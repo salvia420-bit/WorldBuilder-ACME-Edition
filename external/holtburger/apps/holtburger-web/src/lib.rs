@@ -7845,6 +7845,27 @@ fn classify_with_overrides(
 /// pixels.len()=0) when any step of the chain fails — JS treats that
 /// as "no texture, fall back to flat colour".
 #[cfg(any(target_arch = "wasm32", test))]
+/// 2026-07-02 hardening — name a surface-decode dependency that could not
+/// be fetched at FINAL decode time (post discovery-loop). These early-outs
+/// used to return the `empty` fallback silently, so a broken prefetch round
+/// baked untextured/white props with ZERO console evidence (the JS material
+/// path treats an empty `SurfacePixels` as "no map" → white default
+/// material). Discovery-walk misses stay quiet
+/// ([`prefetch::in_discovery_walk`]) — they are the loop's normal
+/// record-finding mechanism, not failures. `dep_id` is formatted only after
+/// the gate so the hot discovery path allocates nothing.
+#[cfg(target_arch = "wasm32")]
+fn warn_surface_dep_unavailable(surface_did: u32, dep_kind: &str, dep_id: u32) {
+    if crate::prefetch::in_discovery_walk() {
+        return;
+    }
+    console_warn_str(&format!(
+        "[surface-decode] surface 0x{surface_did:08X}: {dep_kind} 0x{dep_id:08X} unavailable → empty fallback (renders untextured/white)"
+    ));
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn warn_surface_dep_unavailable(_surface_did: u32, _dep_kind: &str, _dep_id: u32) {}
+
 fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     surface_did: u32,
@@ -7873,7 +7894,10 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         has_palette: false,
     };
 
-    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else {
+        warn_surface_dep_unavailable(surface_did, "Surface record", surface_did);
+        return empty;
+    };
     let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
     // Capture the raw bitfield BEFORE the solid/textured branch so both
     // 1×1 ARGB synthesized surfaces AND real textures surface the same
@@ -7921,10 +7945,16 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         };
     }
     let Some((surf_tex_id, surf_pal_id)) = surface.textured() else { return empty; };
-    let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
+    let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else {
+        warn_surface_dep_unavailable(surface_did, "SurfaceTexture", surf_tex_id);
+        return empty;
+    };
     let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { return empty; };
     let Some(rs_id) = surf_tex.highest_res() else { return empty; };
-    let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else { return empty; };
+    let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else {
+        warn_surface_dep_unavailable(surface_did, "Texture", rs_id);
+        return empty;
+    };
     let Ok(tex) = Texture::unpack(&tb) else { return empty; };
     // CustomRawJpeg (PFID 500) records carry width=height=0 in the Texture
     // header — the real size lives in the JPEG SOF marker. `actual_dimensions()`
@@ -8004,12 +8034,19 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             // palette DID + reason (PaletteFetch / MissingPaletteId /
             // PaletteIndexOutOfRange). Name the surface + texture so the
             // culprit self-identifies in the console instead of vanishing.
+            // 2026-07-02: quiet during discovery walks — a palette miss there
+            // is the prefetch loop's normal record-finding step (it fetches
+            // the palette next round); warning on it spammed ~40 transient
+            // lines per cold LB. A FINAL (real-source) decode failure still
+            // warns exactly as before.
             #[cfg(target_arch = "wasm32")]
-            console_warn_str(&format!(
-                "[surface-decode] surface 0x{surface_did:08X} tex 0x{rs_id:08X} fmt {:?}: \
-                 decode FAILED → magenta fallback: {e}",
-                tex.format()
-            ));
+            if !crate::prefetch::in_discovery_walk() {
+                console_warn_str(&format!(
+                    "[surface-decode] surface 0x{surface_did:08X} tex 0x{rs_id:08X} fmt {:?}: \
+                     decode FAILED → magenta fallback: {e}",
+                    tex.format()
+                ));
+            }
             #[cfg(not(target_arch = "wasm32"))]
             let _ = &e;
             // Visible fallback: a palette-indexed surface that failed to decode
@@ -9558,7 +9595,10 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         has_palette: false,
     };
 
-    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else {
+        warn_surface_dep_unavailable(surface_did, "Surface record", surface_did);
+        return empty;
+    };
     let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
     let surface_type = surface.surface_type;
     if let Some(argb) = surface.solid_color() {
@@ -9594,10 +9634,16 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         };
     }
     let Some((surf_tex_id, surf_pal_id)) = surface.textured() else { return empty; };
-    let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
+    let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else {
+        warn_surface_dep_unavailable(surface_did, "SurfaceTexture", surf_tex_id);
+        return empty;
+    };
     let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { return empty; };
     let Some(rs_id) = surf_tex.highest_res() else { return empty; };
-    let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else { return empty; };
+    let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else {
+        warn_surface_dep_unavailable(surface_did, "Texture", rs_id);
+        return empty;
+    };
     let Ok(tex) = Texture::unpack(&tb) else { return empty; };
     // CustomRawJpeg (PFID 500) carries width=height=0 in the header — the real
     // size lives in the JPEG SOF marker. `actual_dimensions()` resolves it
@@ -9685,7 +9731,24 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 has_palette: tex.format().needs_palette(),
             }
         }
-        Err(_) => empty,
+        Err(e) => {
+            // 2026-07-02 hardening: this arm was fully silent — a dyed-entity
+            // decode failure (missing/corrupt palette, bad sub-palette splice)
+            // fell back to the grey/white default material with zero console
+            // evidence. Name it like the statics path does; quiet during
+            // discovery walks (expected misses — see prefetch.rs).
+            #[cfg(target_arch = "wasm32")]
+            if !crate::prefetch::in_discovery_walk() {
+                console_warn_str(&format!(
+                    "[entity-surface-decode] surface 0x{surface_did:08X} tex 0x{rs_id:08X} \
+                     base-palette 0x{base_palette_id:08X}: decode FAILED → empty fallback \
+                     (renders untextured/white): {e}"
+                ));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = &e;
+            empty
+        }
     }
 }
 

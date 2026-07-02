@@ -80,6 +80,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use holtburger_dat::{ResourceKey, ResourceSource};
@@ -87,6 +88,49 @@ use holtburger_resource_http::{ManifestResourceSource, RecordingSource};
 use wasm_bindgen::prelude::*;
 
 pub use crate::walk_dedup::WalkDedupMap;
+
+// ============================================================
+// Discovery-walk marker (2026-07-02 hardening)
+// ============================================================
+
+thread_local! {
+    /// Depth of RecordingSource discovery walks currently on the stack.
+    /// wasm32 is single-threaded and `walk` closures are synchronous (no
+    /// `.await` inside a walk), so a plain Cell is race-free; a depth
+    /// counter (not a bool) keeps hypothetical nesting safe.
+    static DISCOVERY_WALK_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// True while [`run_walk_loop`] is running its `walk` closure against the
+/// RecordingSource. Decode impls (`fetch_surface_pixels_impl`,
+/// `fetch_entity_surface_pixels_impl`) consult this to suppress their
+/// per-failure console warns during discovery rounds — a get-miss there is
+/// the loop's NORMAL record-finding mechanism (round N's misses are round
+/// N+1's prefetch list), not an error. Warning on it flooded the console
+/// with transient "palette fetch failed … record not prefetched" noise
+/// (~40 lines per cold LB, 2026-07-02) that drowned real failures; only a
+/// FINAL (post-loop, real-source) decode failure should reach the console.
+pub fn in_discovery_walk() -> bool {
+    DISCOVERY_WALK_DEPTH.with(|d| d.get() > 0)
+}
+
+/// RAII guard so a panicking walk can't leave the flag stuck on.
+struct DiscoveryWalkGuard;
+impl DiscoveryWalkGuard {
+    fn new() -> Self {
+        DISCOVERY_WALK_DEPTH.with(|d| d.set(d.get() + 1));
+        DiscoveryWalkGuard
+    }
+}
+impl Drop for DiscoveryWalkGuard {
+    fn drop(&mut self) {
+        DISCOVERY_WALK_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
+/// Total attempts per prefetch round (1 initial + retries). See the retry
+/// block in [`run_walk_loop`].
+const PREFETCH_ROUND_TRIES: u32 = 3;
 
 thread_local! {
     /// Process-global walk-dedup map. Wasm32 is single-threaded so
@@ -223,7 +267,12 @@ where
     let recorder = RecordingSource::new(inner_dyn);
     let mut prev_misses: Vec<(String, u32)> = Vec::new();
     for _round in 0..8 {
-        walk(&recorder);
+        {
+            // Mark the walk as a discovery run so decode impls keep their
+            // per-failure console warns quiet (see `in_discovery_walk`).
+            let _discovery = DiscoveryWalkGuard::new();
+            walk(&recorder);
+        }
         let misses = recorder.take_misses();
         if misses.is_empty() {
             break;
@@ -249,13 +298,37 @@ where
             .iter()
             .map(|(ns, id)| ResourceKey::new(ns.as_str(), *id))
             .collect();
-        // Permanent-miss tolerance: prefetch may report
-        // `UnknownKey` if a key isn't in the manifest at all.
-        // Stop iterating; the final walk just won't see those
-        // records (matches today's "best-effort" semantics on
-        // legacy HttpResourceSource for missing keys).
-        if let Err(e) = source.prefetch(&keys).await {
-            log::warn!("prefetch round failure (continuing): {e}");
+        // Transient-failure retry (2026-07-02 hardening): a single dropped
+        // shard fetch (serve.py tunnel hiccup, load spike) used to `break`
+        // the WHOLE loop here on the first error, leaving every deeper
+        // record unfetched — the final walk then decoded empty/white and
+        // the statics bake PERMANENTLY cached that output for the session
+        // (the silent-white-props class). Retry the round a bounded number
+        // of times; a retry rides the F.35 inflight/URL dedup so shards
+        // that DID resolve aren't re-fetched. Only after the retries
+        // exhaust do we stop discovering (the pre-hardening behavior —
+        // still correct for the permanent UnknownKey / not-in-manifest
+        // class, which fails every attempt identically).
+        let mut round_ok = false;
+        for attempt in 1..=PREFETCH_ROUND_TRIES {
+            match source.prefetch(&keys).await {
+                Ok(()) => {
+                    round_ok = true;
+                    break;
+                }
+                Err(e) if attempt < PREFETCH_ROUND_TRIES => {
+                    log::warn!(
+                        "prefetch round failed (attempt {attempt}/{PREFETCH_ROUND_TRIES}, retrying): {e}"
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "prefetch round failed after {PREFETCH_ROUND_TRIES} attempts (stopping discovery): {e}"
+                    );
+                }
+            }
+        }
+        if !round_ok {
             break;
         }
     }
