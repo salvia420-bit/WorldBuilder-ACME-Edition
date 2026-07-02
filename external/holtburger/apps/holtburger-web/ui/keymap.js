@@ -84,6 +84,25 @@ export const LOCAL_ACTIONS = [
   { labelHash: "0xFF000018", label: "Magic: Previous Spell", defaultCode: "Delete" },
   { labelHash: "0xFF000019", label: "Magic: Next Spell", defaultCode: "PageDown" },
   { labelHash: "0xFF00001A", label: "Magic: Cast Current Spell", defaultCode: "End" },
+  // First/Last variants — separate rebindable rows like retail's
+  // Configure Keyboard; defaults are the retail Ctrl+<key> combos
+  // (object defaults carry the modifier; resolveLocalBinding +
+  // options-panel buildBindingRow both accept them).
+  { labelHash: "0xFF00001B", label: "Magic: First Spell Tab", defaultCode: { code: "Insert", ctrl: true } },
+  { labelHash: "0xFF00001C", label: "Magic: Last Spell Tab", defaultCode: { code: "PageUp", ctrl: true } },
+  { labelHash: "0xFF00001D", label: "Magic: First Spell", defaultCode: { code: "Delete", ctrl: true } },
+  { labelHash: "0xFF00001E", label: "Magic: Last Spell", defaultCode: { code: "PageDown", ctrl: true } },
+  // UseSpellSlot_1..9 — retail's magic-mode number row (the hotbar's
+  // quickslot digits yield to these in magic stance).
+  { labelHash: "0xFF00001F", label: "Magic: Use Spell Slot 1", defaultCode: "Digit1" },
+  { labelHash: "0xFF000020", label: "Magic: Use Spell Slot 2", defaultCode: "Digit2" },
+  { labelHash: "0xFF000021", label: "Magic: Use Spell Slot 3", defaultCode: "Digit3" },
+  { labelHash: "0xFF000022", label: "Magic: Use Spell Slot 4", defaultCode: "Digit4" },
+  { labelHash: "0xFF000023", label: "Magic: Use Spell Slot 5", defaultCode: "Digit5" },
+  { labelHash: "0xFF000024", label: "Magic: Use Spell Slot 6", defaultCode: "Digit6" },
+  { labelHash: "0xFF000025", label: "Magic: Use Spell Slot 7", defaultCode: "Digit7" },
+  { labelHash: "0xFF000026", label: "Magic: Use Spell Slot 8", defaultCode: "Digit8" },
+  { labelHash: "0xFF000027", label: "Magic: Use Spell Slot 9", defaultCode: "Digit9" },
 ];
 
 /** Stable identifiers for synthetic local actions — handlers call
@@ -116,6 +135,19 @@ export const LOCAL_ACTION_IDS = Object.freeze({
   MAGIC_PREV_SPELL: "0xFF000018",
   MAGIC_NEXT_SPELL: "0xFF000019",
   MAGIC_CAST: "0xFF00001A",
+  MAGIC_FIRST_TAB: "0xFF00001B",
+  MAGIC_LAST_TAB: "0xFF00001C",
+  MAGIC_FIRST_SPELL: "0xFF00001D",
+  MAGIC_LAST_SPELL: "0xFF00001E",
+  MAGIC_SLOT_1: "0xFF00001F",
+  MAGIC_SLOT_2: "0xFF000020",
+  MAGIC_SLOT_3: "0xFF000021",
+  MAGIC_SLOT_4: "0xFF000022",
+  MAGIC_SLOT_5: "0xFF000023",
+  MAGIC_SLOT_6: "0xFF000024",
+  MAGIC_SLOT_7: "0xFF000025",
+  MAGIC_SLOT_8: "0xFF000026",
+  MAGIC_SLOT_9: "0xFF000027",
 });
 
 let cache = null;
@@ -266,6 +298,19 @@ export function matchesBinding(ev, binding) {
 export function resolveLocalBinding(labelHashHex, defaultCode) {
   const b = load()[labelHashHex];
   if (b && b.code) return b;
+  // Task C v2 (2026-07-02): defaults may carry modifiers — accept a
+  // full {code, shift, ctrl, alt, meta} object (retail's MagicCombat
+  // First/Last variants default to Ctrl+<key>), or the legacy bare
+  // KeyboardEvent.code string.
+  if (defaultCode && typeof defaultCode === "object") {
+    return {
+      code: defaultCode.code,
+      shift: !!defaultCode.shift,
+      ctrl: !!defaultCode.ctrl,
+      alt: !!defaultCode.alt,
+      meta: !!defaultCode.meta,
+    };
+  }
   return { code: defaultCode, shift: false, ctrl: false, alt: false, meta: false };
 }
 

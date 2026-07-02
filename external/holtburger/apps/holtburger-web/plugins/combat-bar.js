@@ -668,39 +668,46 @@ function installSpellBarHotkeys() {
       // map to the casting stance (ClientCombatSystem::HandleMagicAction).
       if (window.__getCurrentStanceLow?.() !== 0x49) return;
 
-      // Retail MagicCombat actions — defaults verbatim from the
-      // acclient.keymap capture, rebindable via Options → Controls
-      // ("Magic: …" rows). Ctrl+<the same key> is the First/Last
-      // variant: retail bound those as <key> + metakey 0x2 (Ctrl per
-      // the MetaKeys table), so deriving from the base binding keeps
-      // user rebinds working for both flavors.
+      // Retail MagicCombat actions — every row from the acclient.keymap
+      // capture is its own rebindable entry in Options → Controls
+      // ("Magic: …" rows), defaults verbatim: Insert/PageUp tab cycling,
+      // Delete/PageDown spell selection, Ctrl+<key> First/Last (retail
+      // metakey 0x2 = Ctrl), End casts, Digit1..9 = UseSpellSlot_N.
+      // matchesBinding is exact on modifiers, so plain-Insert (prev)
+      // and Ctrl+Insert (first) rows coexist without special-casing.
       const api = __stripApi;
       const actions = [
-        [LOCAL_ACTION_IDS.MAGIC_PREV_TAB, "Insert",
-          () => cycleTab(-1), () => setActiveSpellBar(0)],
-        [LOCAL_ACTION_IDS.MAGIC_NEXT_TAB, "PageUp",
-          () => cycleTab(+1), () => setActiveSpellBar(SPELL_BAR_TABS - 1)],
-        [LOCAL_ACTION_IDS.MAGIC_PREV_SPELL, "Delete",
-          () => api?.selectDelta(-1), () => api?.selectEdge("first")],
-        [LOCAL_ACTION_IDS.MAGIC_NEXT_SPELL, "PageDown",
-          () => api?.selectDelta(+1), () => api?.selectEdge("last")],
-        [LOCAL_ACTION_IDS.MAGIC_CAST, "End",
-          () => api?.castCurrent(), null],
+        [LOCAL_ACTION_IDS.MAGIC_PREV_TAB, "Insert", () => cycleTab(-1)],
+        [LOCAL_ACTION_IDS.MAGIC_NEXT_TAB, "PageUp", () => cycleTab(+1)],
+        [LOCAL_ACTION_IDS.MAGIC_FIRST_TAB, { code: "Insert", ctrl: true },
+          () => setActiveSpellBar(0)],
+        [LOCAL_ACTION_IDS.MAGIC_LAST_TAB, { code: "PageUp", ctrl: true },
+          () => setActiveSpellBar(SPELL_BAR_TABS - 1)],
+        [LOCAL_ACTION_IDS.MAGIC_PREV_SPELL, "Delete", () => api?.selectDelta(-1)],
+        [LOCAL_ACTION_IDS.MAGIC_NEXT_SPELL, "PageDown", () => api?.selectDelta(+1)],
+        [LOCAL_ACTION_IDS.MAGIC_FIRST_SPELL, { code: "Delete", ctrl: true },
+          () => api?.selectEdge("first")],
+        [LOCAL_ACTION_IDS.MAGIC_LAST_SPELL, { code: "PageDown", ctrl: true },
+          () => api?.selectEdge("last")],
+        [LOCAL_ACTION_IDS.MAGIC_CAST, "End", () => api?.castCurrent()],
       ];
-      for (const [id, def, onPlain, onCtrl] of actions) {
+      for (let n = 1; n <= 9; n++) {
+        const slotIdx = n - 1;
+        actions.push([
+          LOCAL_ACTION_IDS[`MAGIC_SLOT_${n}`],
+          `Digit${n}`,
+          () => api?.fireSlot(slotIdx),
+        ]);
+      }
+      for (const [id, def, run] of actions) {
         const b = resolveLocalBinding(id, def);
         if (matchesBinding(ev, b)) {
-          onPlain();
-          ev.preventDefault();
-          return;
-        }
-        if (onCtrl && matchesBinding(ev, { ...b, ctrl: true })) {
-          onCtrl();
+          run();
           ev.preventDefault();
           return;
         }
       }
-      if (ev.ctrlKey) return; // Ctrl+digit = quickslot row-2 territory
+      if (ev.ctrlKey) return; // unbound Ctrl combos are not ours
 
       const key = ev.key;
       // Web-native aliases kept from v1: [ ] cycle, { } first/last.
@@ -711,17 +718,12 @@ function installSpellBarHotkeys() {
         ev.preventDefault();
         return;
       }
-      // UseSpellSlot_1..9 (retail: plain digits belong to the spell
-      // strip in magic mode; the hotbar's quickslot digits yield —
-      // see plugins/hotbar.js onKey).
-      if (key >= "1" && key <= "9") {
+      // Storage-level digit fallback for the (shouldn't-happen) case
+      // where the strip failed to mount — the MAGIC_SLOT_N rows above
+      // already handled digits when the strip API exists.
+      if (!api && key >= "1" && key <= "9") {
         const slotIdx = key.charCodeAt(0) - 49; // '1' → slot 0
         ev.preventDefault();
-        if (api) {
-          api.fireSlot(slotIdx);
-          return;
-        }
-        // Strip not mounted (shouldn't happen) — storage-level fallback.
         const spellId = (getSpellBarSlots()[slotIdx] | 0);
         if (!spellId) return;
         loadCatalog()
