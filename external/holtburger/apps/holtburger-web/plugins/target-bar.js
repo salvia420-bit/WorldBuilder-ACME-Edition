@@ -1,20 +1,21 @@
 // Target bar — port of retail gmToolbarUI (layout 0x21000016) middle
-// rows: the 5-panel shortcut strip + the [Use | Target | Examine] row
+// rows: the panel-shortcut strip + the [Use | Target | Examine] row
 // with Pack on the right. The existing plugins/hotbar.js renders only
 // the bottom 9-slot row of gmToolbarUI; PR-KK adds the rest.
 //
 // Layout decoded via target_bar_layout_dump (2026-05-24) — root
 // 0x10000191 is 300×122; panel-shortcut + action elements live inside:
-//   Row 1 (y=0,  h=27): 5 panel-shortcut buttons
+//   Row 1 (y=0,  h=27): 6 panel-shortcut buttons
 //     0x10000192-195 combat-stance variants (mutually exclusive,
 //                    each 55×58 at x=0, spans rows 1+2 — left edge)
 //     0x10000196 separator (55,0) 7×27
-//     0x10000197 Allegiance Panel  (55,0)  35×27  (sprite 0x0600111F / 0x06001121)
-//     0x10000198 Spellbook Panel   (85,0)  34×27  (sprite 0x06001119 / 0x0600111B)
-//     0x10000199 Attributes Panel  (115,0) 34×27  (sprite 0x06001122 / 0x06001124)
-//     0x1000055A Map Panel         (145,0) 34×27  (sprite 0x060069AE / 0x060069AF)
-//     0x1000019A Options Panel     (175,0) 34×27  (sprite 0x06001116 / 0x06001118)
-//     0x1000019B extra slot        (204,0) 34×27  (not wired; retail blank/holiday)
+//     (retail names per elementIdName in retail-layouts/0x21000016.json)
+//     0x10000197 PanelButton_Social           (55,0)  35×27  (0x0600111F / 0x06001121)
+//     0x10000198 PanelButton_Magic            (85,0)  34×27  (0x06001119 / 0x0600111B)
+//     0x10000199 PanelButton_SkillManagement  (115,0) 34×27  (0x06001122 / 0x06001124)
+//     0x1000055A PanelButton_QuestManagement  (145,0) 34×27  (0x060069AE / 0x060069AF — quill)
+//     0x1000019A PanelButton_World            (175,0) 34×27  (0x06001116 / 0x06001118 — compass rose)
+//     0x1000019B PanelButton_Options          (204,0) 39×27  (0x0600111C / 0x0600111E)
 //     0x1000019C separator         (236,0) 10×27
 //   Row 2 (y=27, h=31): action row
 //     0x1000019D Use Selected      (55,27)  23×31  (sprite 0x06001129 N / 0x0600112A P / 0x0600120E G)
@@ -72,24 +73,28 @@ const SP = "./data/ui-sprites";
 const COMBAT_MODE_NON_COMBAT = 1; // wasm setCombatMode arg for peace
 const COMBAT_MODE_MELEE_DEFAULT = 2; // wasm setCombatMode arg for combat-ready
 
-// P1-31 (cross-find gap-025): retail's 9-icon panel strip. The first 5
-// are the layout-DAT-positioned originals (gmToolbarUI 0x21000016
-// element IDs 197/198/199/055A/19A); the trailing 4 are the
-// inventory / skills / fellowship / journal shortcuts retail also
-// surfaces here. Sprite IDs for the 4 additions reuse the closest
-// retail icons available in our extracted set (compass disk for any
-// missing — the bar.js img.onerror fallback shows an emoji until a
-// real DAT-sourced icon is wired).
+// P1-31 (cross-find gap-025): 9-icon panel strip. The first 6 wear the
+// retail gmToolbarUI button sprite pairs (normal/hover), assigned by
+// the layout dump's elementIdNames — see the header table. Retail
+// semantics: Social→allegiance, Magic→spellbook, SkillManagement→
+// attributes (Character Info), QuestManagement→journal, World→map,
+// Options→options. The last 3 views have no retail toolbar
+// counterpart; they wear retail art that reads at strip size: the
+// Pack sprite (inventory — same view the Pack button opens), an open
+// tome 0x06004CFB (train-skills), and the paired-heads chat sprites
+// 0x06001366/67 (fellowship).
+// NOTE: these render as CSS background-image — a bad sprite path
+// shows a blank button (no <img>-style onerror fallback fires here).
 const TOP_BUTTONS = [
   { id: "allegiance", view: "allegiance",   title: "Allegiance Panel", sprite: "0x0600111F", hover: "0x06001121" },
   { id: "spellbook",  view: "spellbook",    title: "Spellbook Panel",  sprite: "0x06001119", hover: "0x0600111B" },
   { id: "attributes", view: "character",    title: "Attributes Panel", sprite: "0x06001122", hover: "0x06001124" },
-  { id: "map",        view: "map",          title: "Map Panel",        sprite: "0x060069AE", hover: "0x060069AF" },
-  { id: "options",    view: "options",      title: "Options Panel",    sprite: "0x06001116", hover: "0x06001118" },
-  { id: "inventory",  view: "inventory",    title: "Inventory Panel",  sprite: "0x06004CC1", hover: "0x06004CC1" },
-  { id: "skills",     view: "train-skills", title: "Skills Panel",     sprite: "0x06004CC1", hover: "0x06004CC1" },
-  { id: "fellowship", view: "fellowship",   title: "Fellowship Panel", sprite: "0x06004CC1", hover: "0x06004CC1" },
-  { id: "journal",    view: "journal",      title: "Journal Panel",    sprite: "0x06004CC1", hover: "0x06004CC1" },
+  { id: "journal",    view: "journal",      title: "Journal Panel",    sprite: "0x060069AE", hover: "0x060069AF" },
+  { id: "map",        view: "map",          title: "Map Panel",        sprite: "0x06001116", hover: "0x06001118" },
+  { id: "options",    view: "options",      title: "Options Panel",    sprite: "0x0600111C", hover: "0x0600111E" },
+  { id: "inventory",  view: "inventory",    title: "Inventory Panel",  sprite: "0x06004CF7", hover: "0x06004CF8" },
+  { id: "skills",     view: "train-skills", title: "Skills Panel",     sprite: "0x06004CFB", hover: "0x06004CFB" },
+  { id: "fellowship", view: "fellowship",   title: "Fellowship Panel", sprite: "0x06001366", hover: "0x06001367" },
 ];
 
 function ensureStyles() {
@@ -113,15 +118,20 @@ function ensureStyles() {
     }
     /* ─ Top row: 9 panel-shortcut sprites + combat stance ─
        P1-31 (cross-find gap-025): expanded from the retail-DAT-driven
-       5 to retail's full 9-icon strip. Flex layout because applyTarget-
-       BarLayout's per-element absolute positions only cover the first
-       5 — the 4 trailing icons need a self-distributing container. */
+       5 to a 9-icon strip. Flex layout because applyTargetBarLayout's
+       per-element absolute positions only cover the retail 6 — the
+       trailing icons need a self-distributing container. The padding
+       carves out the stance (0..55) and Pack (238..300) footprints —
+       both span rows 1+2 as absolute overlay children — while the
+       background/border still back the full 300px row. */
     #${OVERLAY_ID} .htb-top {
       position: absolute;
       top: 0;
       left: 0;
       width: 300px;
       height: 27px;
+      box-sizing: border-box;
+      padding: 0 62px 0 55px;
       background: rgba(20, 14, 8, 0.85);
       border: 1px solid var(--hb-border-brass-dim);
       display: flex;
@@ -129,7 +139,11 @@ function ensureStyles() {
       gap: 1px;
     }
     #${OVERLAY_ID} .htb-panel-btn {
-      width: 28px; height: 25px;
+      /* 9 buttons share the 183px between the stance and Pack
+         footprints (~20px each) — flex-distributed, not fixed-width,
+         so none of them lands under those two overlay children. */
+      flex: 1 1 0;
+      width: auto; min-width: 0; height: 25px;
       background-position: center;
       background-size: contain;
       background-repeat: no-repeat;
@@ -139,7 +153,6 @@ function ensureStyles() {
       font-size: 0;
       filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7));
       transition: filter 80ms;
-      flex: 0 0 auto;
       position: static;
     }
     #${OVERLAY_ID} .htb-panel-btn:hover { filter: brightness(1.4) drop-shadow(0 0 3px rgba(255, 220, 120, 0.55)); }
@@ -360,7 +373,7 @@ function build() {
   // Refs we hand to applyTargetBarLayout — one per layout-positioned element.
   const refs = { panelBtns: {} };
 
-  // ── Top row — 5 panel shortcuts + combat-stance toggle ─────
+  // ── Top row — 9 panel shortcuts + combat-stance toggle ─────
   const top = document.createElement("div");
   top.className = "htb-top";
   refs.topRow = top;
@@ -644,7 +657,7 @@ export const manifest = {
   icon: "⊙",
   iconHidden: true,
   version: "0.1.0",
-  description: "Retail gmToolbarUI middle rows — 5 panel shortcuts + Use/Target/Examine + Pack",
+  description: "Retail gmToolbarUI middle rows — 9 panel shortcuts + Use/Target/Examine + Pack",
 };
 
 export function mount(_ctx) {
