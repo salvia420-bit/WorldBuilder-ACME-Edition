@@ -42,11 +42,44 @@ impl std::error::Error for HttpError {}
 /// `Reflect::get`). The Node path is the one the smoke test under
 /// `apps/holtburger-web/smoke_test.cjs` takes.
 pub async fn fetch_bytes(url: &str) -> Result<Vec<u8>, HttpError> {
+    fetch_bytes_with_priority(url, FetchPriority::Auto).await
+}
+
+/// Browser fetch-priority hint (the `priority` member of `RequestInit`
+/// — https://fetch.spec.whatwg.org/#request-priority). Chromium maps
+/// same-origin `fetch()` to HIGH network priority by default, so a
+/// bulk speculative prefetch flood (ring bakers) FIFO-starves player-
+/// blocking loads behind the 6-connection/origin HTTP/1.1 cap. `Low`
+/// demotes the flood so urgent batches (current-LB interior records,
+/// namespace catalogs) schedule first; browsers that don't implement
+/// the member simply ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchPriority {
+    Auto,
+    Low,
+}
+
+/// [`fetch_bytes`] with an explicit browser fetch-priority hint. The
+/// hint is set via `Reflect::set` on the `RequestInit` object (plain
+/// JS member — no unstable `web_sys` API needed); runtimes without
+/// fetch-priority support ignore the extra member.
+pub async fn fetch_bytes_with_priority(
+    url: &str,
+    priority: FetchPriority,
+) -> Result<Vec<u8>, HttpError> {
+    let init = web_sys::RequestInit::new();
+    if priority == FetchPriority::Low {
+        let _ = Reflect::set(
+            init.as_ref(),
+            &JsValue::from_str("priority"),
+            &JsValue::from_str("low"),
+        );
+    }
     let global = js_sys::global();
     let fetch_promise = if let Ok(window) = global.clone().dyn_into::<web_sys::Window>() {
-        window.fetch_with_str(url)
+        window.fetch_with_str_and_init(url, &init)
     } else if let Ok(worker) = global.clone().dyn_into::<web_sys::WorkerGlobalScope>() {
-        worker.fetch_with_str(url)
+        worker.fetch_with_str_and_init(url, &init)
     } else {
         let fetch_fn_value = Reflect::get(&global, &JsValue::from_str("fetch"))
             .map_err(|_| HttpError::NoFetchGlobal)?;

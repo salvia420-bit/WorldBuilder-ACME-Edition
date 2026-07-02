@@ -771,10 +771,23 @@ export function meshToGeometryGroups(wasmMesh, opts) {
   for (const [key, triIndices] of byKey) {
     const surfIdx = perPolyCull ? Math.floor(key / 2) : key;
     const doubleSided = perPolyCull ? key % 2 === 1 : true;
-    // Single-sided polys reverse winding (output vertex order 0,2,1) so THREE
-    // FrontSide shows the same face D3D's CULLMODE_CW does. DoubleSide groups
-    // keep the source order (winding irrelevant — both faces drawn).
-    const order = doubleSided ? [0, 1, 2] : [0, 2, 1];
+    // geom-audit fix (2026-07-02, half-missing-forge): KEEP the source
+    // vertex order for single-sided FrontSide groups. The former
+    // [0, 2, 1] reversal claimed "THREE FrontSide wants it reversed
+    // after worldRoot.rotation.x = -π/2" — but a pure rotation has
+    // det = +1 and NEVER flips winding chirality, and no transform in
+    // the placement chain carries a negative scale (quaternions +
+    // positive scales throughout). Measured on the live Holtburg
+    // cooking forge (setup 0x0200124B → GfxObj 0x01003651): with the
+    // reversal, 231/231 emitted triangles had their winding-derived
+    // facing OPPOSITE the authored SWVertex normals → FrontSide culled
+    // the authored-front faces and the model rendered inside-out
+    // ("upper half missing, black backfaces through the hole"). The
+    // wasm already emits each side of a polygon in that side's correct
+    // order (neg-side tris ship pre-reversed as SideKind::Negative), so
+    // source order IS the front order. Escape hatch unchanged:
+    // ?perPolyCull=off renders everything DoubleSide.
+    const order = [0, 1, 2];
     const n = triIndices.length;
     const groupPositions = new Float32Array(n * 9);
     const groupUvs = new Float32Array(n * 6);

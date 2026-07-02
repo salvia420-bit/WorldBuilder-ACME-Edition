@@ -2649,19 +2649,19 @@ export class EntityManager {
     // off (`_tweenNowMs()` returns `performance.now()`, the legacy clock).
     this._tweenClockMs =
       typeof performance !== "undefined" ? performance.now() : 0;
-    // Wave 7.5 (2026-05-24) — opt-in applyAppearance hot-swap. When
-    // `?clothingHotSwap=1` URL flag is set, applyAppearance attempts
-    // to swap the entity's part-mesh contents in place (preserving
-    // root + mixer + currently-playing action) instead of falling
-    // through to W7.3's despawn+respawn. Falls back to despawn+
-    // respawn when topology mismatch is detected OR when the hot-
-    // swap path throws. Default off — needs manual A/B validation
-    // under combat motion to prove visual parity.
-    this._hotSwapAppearance = false;
+    // Wave 7.5 (2026-05-24) — applyAppearance hot-swap: swaps the entity's
+    // part-mesh contents in place (preserving root + mixer + currently-
+    // playing action) instead of W7.3's despawn+respawn. Falls back to
+    // despawn+respawn when topology mismatch is detected OR when the hot-
+    // swap path throws. DEFAULT-ON (2026-07-02): the manual A/B it was
+    // gated on happened live on the 1070 — equip/unequip with no flash,
+    // weapons staying mounted; user ruling "default clothinghotswap on".
+    // Escape: `?clothingHotSwap=0` (or `off`) reverts to despawn+respawn.
+    this._hotSwapAppearance = true;
     try {
       if (typeof window !== "undefined" && window.location) {
         const flag = new URLSearchParams(window.location.search).get("clothingHotSwap");
-        this._hotSwapAppearance = (flag === "1");
+        if (flag === "0" || flag === "off") this._hotSwapAppearance = false;
       }
     } catch (_) {}
     // FU-1 (2026-06-11): wieldHandAttach — default-OFF opt-in that lets
@@ -3013,6 +3013,7 @@ export class EntityManager {
     // band so the dynamic-LOD recheck (tick) can detect band crossings.
     const lodOriginalSetup = setupId;
     let lodSubstitute = 0;
+    let lodPartSwap = 0;
     const lodFetch = this.wasmExports?.fetch_entity_degrade_for_distance;
     if (typeof lodFetch === "function") {
       try {
@@ -3051,7 +3052,22 @@ export class EntityManager {
                   distance,
                 });
               } catch (_) {}
-              setupId = substitute;
+              if ((setupId >>> 24) === 2 && (substitute >>> 24) === 1) {
+                // Degrade bands swap PART gfxobjs, not whole setups: retail
+                // resolves the band INSIDE the SetupModel, so the Setup's
+                // placement frame still poses the part. Replacing the whole
+                // setup with the raw 0x01 took the wasm's skeleton-less
+                // path, whose rest pose is always identity — placement-posed
+                // props (a town sign's Resting frame lifts its part +4.66 so
+                // the post plants) spawned buried whenever a near band
+                // matched and popped back up when it didn't ("the sign keeps
+                // dropping"). Thread the band pick as a part-0 model change
+                // instead; wire-commanded model changes still win (the wasm
+                // part walk takes the FIRST match per part index).
+                lodPartSwap = substitute;
+              } else {
+                setupId = substitute;
+              }
               lodSubstitute = substitute; // T9 — remember the chosen band
             }
           }
@@ -3062,7 +3078,18 @@ export class EntityManager {
     const mtableId = (meta.mtableId ?? 0) >>> 0;
     const initialMotion = (meta.motionCommand ?? 0) >>> 0;
     const initialStance = (meta.motionStance ?? 0) >>> 0;
-    const modelChanges = meta.modelChanges ?? new Uint32Array(0);
+    let modelChanges = meta.modelChanges ?? new Uint32Array(0);
+    if (lodPartSwap) {
+      // Spawn-time LOD as a per-part substitution (see the band-pick block
+      // above). Appended AFTER wire changes so a wire-commanded part-0
+      // swap keeps precedence. Local copy only — meta stays untouched so
+      // a T9 LOD respawn re-derives from the wire state.
+      const withLod = new Uint32Array(modelChanges.length + 2);
+      withLod.set(modelChanges);
+      withLod[modelChanges.length] = 0;
+      withLod[modelChanges.length + 1] = lodPartSwap >>> 0;
+      modelChanges = withLod;
+    }
     const textureChanges = meta.textureChanges ?? new Uint32Array(0);
     const paletteId = (meta.paletteId ?? 0) >>> 0;
     const subPalettes = meta.subPalettes ?? new Uint32Array(0);
@@ -3633,7 +3660,10 @@ export class EntityManager {
       // per-entity in `actionLastHookTime`).
       if (Array.isArray(animEntry.hooks) && animEntry.hooks.length > 0) {
         inst.hookTimelines.set(cacheKey, animEntry.hooks);
-        inst.actionLastHookTime.set(cacheKey, 0);
+        // -1 epoch (2026-07-02): the range walker fires (last, cur] — a 0
+        // seed permanently skips hooks at t=0.0 (retail fires the entry
+        // frame's hooks on the first advance; door open sounds sit at t=0).
+        inst.actionLastHookTime.set(cacheKey, -1);
       }
       // Auto-play locomotion (walk/run) AND the Ready idle cycle at spawn.
       // Render-completeness audit (2026-05-29): lib.rs now defaults
@@ -3650,8 +3680,16 @@ export class EntityManager {
         if (_holdState) {
           // Snap to the final (resting) frame so the door/chest shows its
           // open/closed pose immediately, without a one-shot swing on spawn.
-          // clampWhenFinished holds it there.
+          // clampWhenFinished holds it there. (Since the 2026-07-02 wasm
+          // hold-bake fix, a framerate-0 state cycle is a single-frame clip
+          // — Off holds the closed frame, On the open frame — so this snap
+          // is a no-op kept for pre-rebuild pkg/ compatibility.)
           action.time = initialClip.duration || 0;
+          // Seed the motion-state memory with the spawn state so the FIRST
+          // server Motion broadcast (e.g. Use → On) resolves its MotionTable
+          // LINK (Off→On = the authored opening swing; On→Off = the same
+          // anim at negative framerate, baked reversed) instead of snapping.
+          inst.lastMotionCommand = initialMotion >>> 0;
         }
         inst.currentAction = action;
         inst.currentActionKey = cacheKey;
@@ -4809,6 +4847,9 @@ export class EntityManager {
     _setEntityStateVisible(c, true);
     c._attachedParentGuid = pGuid;
     c._attachedPlacement = placement >>> 0;
+    // Remembered so an appearance-change respawn of the WIELDER can
+    // re-attach this child faithfully (applyAppearance re-attach loop).
+    c._attachedLocation = location >>> 0;
     if (!p._attachedChildren) p._attachedChildren = new Set();
     p._attachedChildren.add(cGuid);
     this._pendingAttach.delete(cGuid);
@@ -6498,7 +6539,7 @@ export class EntityManager {
     );
     if (!seq) return false;
     if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
-    inst._unifiedSeq = { seq, desc: d, clearOnDone, hooks: entry?.hooks || null, lastHookTime: 0 };
+    inst._unifiedSeq = { seq, desc: d, clearOnDone, hooks: entry?.hooks || null, lastHookTime: -1 };
     return true;
   }
 
@@ -6507,22 +6548,27 @@ export class EntityManager {
   // between playDoorMotion and the legacy instant root-rotation snap.
   usesUnifiedDoor() { return UNIFIED_DOOR; }
 
-  // Animation consolidation (docs/animation-audit §5 Step 3): play a door's real
-  // swing via the Rust authority. Open = On (0x4000000b), close = Off
-  // (0x4000000c) — CYCLE commands the bake resolves (try_resolve_cycle_frames),
-  // with the hinge baked into the keyframes (no SetupModel extraction). Played as
-  // a one-shot that HOLDS the final frame (clearOnDone:false → door stays open/
-  // closed). stance 0 → the bake resolves default_style (doors key under
-  // NonCombat 0x003D). Returns whether it handled the door (caller falls back to
-  // the instant snap on false). @returns {Promise<boolean>}
+  // Animation consolidation (docs/animation-audit §5 Step 3) / rev 2026-07-02:
+  // play a door's real swing. Open = On (0x4000000b), close = Off (0x4000000c).
+  // Routes through setMotion's door-state branch — retail order: play the
+  // MotionTable LINK (the authored swing; On→Off is the same anim baked
+  // reversed, door sounds ride its hooks) then hold the framerate-0 cycle.
+  // Both triggers of a door change (the server Motion broadcast → setMotion,
+  // and the SetState/ethereal flip → kind=15 → here) funnel into that ONE
+  // branch, whose lastMotionCommand dedup makes the second trigger a no-op —
+  // previously this path played the On/Off CYCLE as a unified one-shot, which
+  // (a) raced the mixer link and (b) under the B5 full-range bake rendered a
+  // closed door OPEN (the Off cycle baked the whole open anim; "stuck open").
+  // stance 0 → the bake resolves default_style (doors key under NonCombat
+  // 0x003D). @returns {Promise<boolean>} whether the door was handled (caller
+  // falls back to the instant root-rotation snap on false).
   async playDoorMotion(guid, open) {
     if (!UNIFIED_DOOR) return false;
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return false;
-    const setupId = (inst.meta?.modelId ?? inst.meta?.setupId ?? 0) >>> 0;
-    const mtableId = (inst.meta?.mtableId ?? 0) >>> 0;
     const cmd = open ? CMD_DOOR_ON : CMD_DOOR_OFF;
-    return this._tryUnifiedCycleOneShot(guid, setupId, mtableId, cmd, 0, false);
+    await this.setMotion(guid >>> 0, cmd, 0, 1.0);
+    return true;
   }
 
   // Drain a unified sequence's hook timeline (swoosh/chime/strike/footfall) by
@@ -6682,7 +6728,7 @@ export class EntityManager {
     if (Array.isArray(entry.hooks) && entry.hooks.length > 0) {
       inst.hookTimelines.set(swingKey, entry.hooks);
     }
-    inst.actionLastHookTime.set(swingKey, 0);
+    inst.actionLastHookTime.set(swingKey, -1);
     action.setLoop(THREE.LoopOnce, 1);
     action.clampWhenFinished = true;
     action.enabled = true;
@@ -7200,7 +7246,7 @@ export class EntityManager {
           if (seq) {
             if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
             // clearOnDone:false → keep posing the clamped prone frame (held dead).
-            inst._unifiedSeq = { seq, desc: d, clearOnDone: false, hooks: entry?.hooks || null, lastHookTime: 0 };
+            inst._unifiedSeq = { seq, desc: d, clearOnDone: false, hooks: entry?.hooks || null, lastHookTime: -1 };
             return; // the tick drives the rig; skip the legacy cycle path
           }
         }
@@ -7265,6 +7311,49 @@ export class EntityManager {
       // broadcast should resolve its link transition from the
       // PREVIOUS locomotion cmd, not from this swing.
       return;
+    }
+    // Door/chest/lever STATE motions (On/Off). Retail plays the MotionTable
+    // LINK once on a state change (the authored transition — Off→On is the
+    // opening swing at +framerate, On→Off the SAME anim baked reversed at
+    // -framerate; door sounds + the Ethereal flip ride its anim hooks), then
+    // ENTERS the destination CYCLE — which for state motions is a
+    // framerate-0 single-frame HOLD (see the wasm hold bake). The finished
+    // link clamps on its final frame == the destination hold pose, so the
+    // clamped link IS the held state; the generic cycle path below is only
+    // the no-link fallback (snaps to the commanded state).
+    if (isDoorStateMotion(cmd)) {
+      const fromState = (inst.lastMotionCommand ?? 0) >>> 0;
+      // Dup-suppression: a door change fires up to TWICE (server Motion
+      // broadcast → setMotion, and the SetState/ethereal kind=15 →
+      // playDoorMotion → here). The first trigger stamps lastMotionCommand
+      // synchronously (below, before any await), so the second — and any
+      // re-broadcast of the already-held state — is a clean no-op instead
+      // of a mid-link crossfade to the hold pose. Compare low-16: the spawn
+      // meta carries the bare substate (0xB/0xC) while broadcasts carry the
+      // full 0x4000000B/0C — the MotionTable key masks them identically.
+      if ((fromState & 0xffff) === (cmd & 0xffff)) return;
+      // Stamp BEFORE the async link so the generic link kick below (which
+      // re-reads lastMotionCommand) can never double-play this transition.
+      inst.lastMotionCommand = cmd;
+      if (fromState !== 0) {
+        // The link INNER key is the FULL 32-bit command (the C3 finding),
+        // but the kind-5 Motion broadcast delivers the bare low-16 substate
+        // (0x0B/0x0C) — un-expanded it misses links[0x3d000b][0x4000000c]
+        // and falls back to the 1-frame cycle SNAP (observed live: close
+        // played "b→c ... 0 hooks" instead of the authored reverse swing).
+        // On/Off are class 0x40 (CMD_DOOR_ON/OFF); expand when bare. The
+        // outer (from) key masks low-16, so fromState needs no expansion.
+        const linkToCmd = (cmd >>> 16) !== 0
+          ? cmd
+          : ((0x40000000 | (cmd & 0xffff)) >>> 0);
+        const played = await this._tryPlayLink(
+          inst, setupId, mtableId, fromState, linkToCmd, stance,
+          { stateHold: true },
+        );
+        if (played) return;
+      }
+      // Unknown prior state / no link entry → fall through: the 1-frame
+      // cycle hold below snaps the object to the commanded state.
     }
     // Locomotion. Build the cache key the same way the spawn path did
     // (resolvedStance falls back to the entity's first-bake stance).
@@ -7400,7 +7489,7 @@ export class EntityManager {
             inst._unifiedLoco = {
               seq, desc: d, cacheKey,
               base: inst._locoBaseSpeed || 0,
-              hooks: entry.hooks || null, lastHookTime: 0,
+              hooks: entry.hooks || null, lastHookTime: -1,
             };
             inst._locoCycleKey = cacheKey;
             try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
@@ -7442,7 +7531,7 @@ export class EntityManager {
       // `actionLastHookTime` keeps them independent).
       if (Array.isArray(entry.hooks) && entry.hooks.length > 0) {
         inst.hookTimelines.set(cacheKey, entry.hooks);
-        inst.actionLastHookTime.set(cacheKey, 0);
+        inst.actionLastHookTime.set(cacheKey, -1);
       }
     }
     // Wave 7 Phase 7.1 (2026-05-26): walk-cycle phase preservation.
@@ -7996,8 +8085,35 @@ export class EntityManager {
       });
     } catch (_) {}
 
+    // The wearer's wielded children (weapon/shield) are parented INSIDE
+    // this rig's part nodes — remove(g) would take their roots down with
+    // it, leaving the weapon invisible until the next wield event. Park
+    // them on entitiesGroup first (detach), remember their mount args,
+    // and re-attach to the fresh rig after the respawn.
+    const reattach = [];
+    if (inst._attachedChildren && inst._attachedChildren.size) {
+      for (const cg of [...inst._attachedChildren]) {
+        const c = this.entityMap.get(cg >>> 0);
+        if (!c) continue;
+        reattach.push({
+          guid: cg >>> 0,
+          location: (c._attachedLocation ?? 0) >>> 0,
+          placement: (c._attachedPlacement ?? 0) >>> 0,
+        });
+        this._detachChild(cg);
+      }
+    }
+
     this.remove(g);
     await this.spawn(newMeta);
+    for (const r of reattach) {
+      try {
+        await this.attachChildToParent(r.guid, g, r.location, r.placement);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(`[applyAppearance] re-attach 0x${r.guid.toString(16)} failed:`, e);
+      }
+    }
     // === Wave 6 polish — entityAppearanceChanged emit (2026-05-28) ===
     // Notify the plugin bus that this entity's visible appearance just
     // landed (despawn+respawn path). Wave 3.B's examine-target plugin
@@ -8789,8 +8905,11 @@ export class EntityManager {
    * record) IS already handled by try_resolve_link_frames (T4, lib.rs).
    */
   async _tryPlayLink(inst, setupId, mtableId, fromCmd, toCmd, stance, opts = undefined) {
+    // Returns true when a clip was resolved and played (or handed to the
+    // unified one-shot), false otherwise — the door-state caller falls back
+    // to its 1-frame cycle hold on false. Legacy callers ignore the value.
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
-    if (typeof fetchKeyframes !== "function") return;
+    if (typeof fetchKeyframes !== "function") return false;
     let entry;
     try {
       entry = await this.animationCache.get(
@@ -8808,9 +8927,9 @@ export class EntityManager {
         },
       );
     } catch (_) {
-      return;
+      return false;
     }
-    if (!this.entityMap.has(inst.guid >>> 0)) return;
+    if (!this.entityMap.has(inst.guid >>> 0)) return false;
     const clip = entry?.clip;
     if (!clip) {
       // No link registered for this (stance, from→to) transition. For
@@ -8834,7 +8953,7 @@ export class EntityManager {
           `— swing/cast/eat will not play`,
         );
       }
-      return;
+      return false;
     }
     // Step-1/4 (?unifiedMotion=attack|cast): drive an attack swing or a cast
     // gesture as a FULL-BODY one-shot sequence (retail GetObjectSequence,
@@ -8872,8 +8991,8 @@ export class EntityManager {
           // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
           // clearOnDone: the one-shot swing hands the rig back to the mixer
           // (frozen cycle resumes) on completion.
-          inst._unifiedSeq = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: 0 };
-          return; // skip the mixer overlay; the tick drives the rig
+          inst._unifiedSeq = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: -1 };
+          return true; // skip the mixer overlay; the tick drives the rig
         }
       }
     }
@@ -8888,6 +9007,28 @@ export class EntityManager {
       action.clampWhenFinished = false;
       action.enabled = true;
       inst.actions?.set(linkKey, action);
+    }
+    // Door-state transitions (setMotion's isDoorStateMotion branch): the
+    // link's final frame IS the destination hold pose (Off→On ends open,
+    // On→Off ends closed), so clamp it there — the clamped link is the held
+    // state, exactly retail's "play the link, then enter the framerate-0
+    // hold cycle". SOLO the rig first: a still-applied previous state (the
+    // spawn hold action or a prior clamped link) would otherwise weight-
+    // normalize ~50/50 against this overlay for its whole playback. Door/
+    // chest/lever rigs only ever carry state actions, so the blanket stop
+    // is safe — and it is scoped to opts.stateHold callers only.
+    if (opts?.stateHold) {
+      action.clampWhenFinished = true;
+      if (inst.actions) {
+        for (const a of inst.actions.values()) {
+          if (a !== action) {
+            try { a.stop(); } catch (_) { /* already unbound */ }
+          }
+        }
+      }
+      inst.currentAction = action;
+      inst.currentActionKey = linkKey;
+      inst.actionLastUsedMs?.set(linkKey, performance.now());
     }
     // Register / refresh the hook timeline for this overlay clip so
     // `_tickAnimationHooks` fires Sound (sword swoosh, magic chime),
@@ -8905,7 +9046,7 @@ export class EntityManager {
     if (Array.isArray(entry.hooks) && entry.hooks.length > 0) {
       inst.hookTimelines.set(linkKey, entry.hooks);
     }
-    inst.actionLastHookTime.set(linkKey, 0);
+    inst.actionLastHookTime.set(linkKey, -1);
     // A4-Q2 (?mtQueue=on) — TAGGING CONTRACT: only overlays the wasm
     // pipeline queued may notify `notifyAnimationDone` (counter
     // poisoning guard — acclient.c:329885-329894 is positional). NO
@@ -9012,7 +9153,9 @@ export class EntityManager {
       }
     } catch (e) {
       console.warn(`[motion-link] play failed: ${e?.message ?? e}`);
+      return false;
     }
+    return true;
   }
 
   // F15-1 — make a one-shot overlay (attack/cast/emote) FULL-BODY by ramping

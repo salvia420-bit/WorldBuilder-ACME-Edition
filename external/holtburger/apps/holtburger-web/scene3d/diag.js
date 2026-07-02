@@ -46,6 +46,7 @@ import { attachCombat as _attachCombat } from "./diag/combat.js";
 import { attachPalettes as _attachPalettes } from "./diag/palettes.js";
 import { attachLod as _attachLod } from "./diag/lod.js";
 import { attachClothing as _attachClothing } from "./diag/clothing.js";
+import { attachGeometry as _attachGeometry } from "./diag/geometry.js";
 
 /** @typedef {{ guid: number, wcid: number, name: string, landblockId: number, x: number, y: number, z: number, setupId: number, attemptedAt: number, isLocalPlayer: boolean }} SpawnMeta */
 /** @typedef {{ wcid: number, name: string, x: number, y: number, z: number, cell?: number }} ExpectedNpc */
@@ -468,6 +469,7 @@ export function installDiag() {
     ["palettes",   _attachPalettes],
     ["lod",        _attachLod],
     ["clothing",   _attachClothing],
+    ["geometry",   _attachGeometry],
   ]) {
     try { fn?.(diag); } catch (e) {
       // eslint-disable-next-line no-console
@@ -484,6 +486,10 @@ export function installDiag() {
     try { if (this.placements?.diff) out.surfaces.placements = this.placements.diff(lbId); } catch (e) { out.surfaces.placements = { error: String(e?.message ?? e) }; }
     try { if (this.entityTypes?.coverageByLb) out.surfaces.entityTypes = this.entityTypes.coverageByLb(lbId); } catch (e) { out.surfaces.entityTypes = { error: String(e?.message ?? e) }; }
     try { if (this.events?.diff) out.surfaces.events = this.events.diff(lbId); } catch (e) { out.surfaces.events = { error: String(e?.message ?? e) }; }
+    // geom-audit (2026-07-02): scene-wide geometry completeness (entity
+    // rig parts + envcell stab attachment). Oracle-free — audits the
+    // live scene against the build-time stamps, so it always runs.
+    try { if (this.geometry?.audit) out.surfaces.geometry = this.geometry.audit(); } catch (e) { out.surfaces.geometry = { error: String(e?.message ?? e) }; }
     out.summary = Object.fromEntries(Object.entries(out.surfaces).map(([k, v]) => [k, v?.error ? "INFRA" : (v?.ok === false ? "DRIFT" : "PASS")]));
     return out;
   };

@@ -728,6 +728,13 @@ export class AnimationCache {
                 animData.restOrientations !== null
                     ? animData.restOrientations
                     : new Float32Array(0);
+            // Completeness audit (2026-07-02): a 0x02 Setup entry with an
+            // empty rest pose renders world objects collapsed/buried —
+            // never let that class cache silently; name the key.
+            if ((setupId >>> 24) === 2 && restOrigins.length === 0) {
+                // eslint-disable-next-line no-console
+                console.warn(`[animcache] EMPTY rest pose for setup 0x${setupId.toString(16)} key=${key} partCount=${partCount}`);
+            }
 
             // T3 (2026-06-02): forward the wasm-provided per-frame
             // `frameTimes` + total `duration` to the clip builder. Previously

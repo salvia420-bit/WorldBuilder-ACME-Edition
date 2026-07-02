@@ -5002,6 +5002,14 @@ pub struct ModelMesh {
     /// `tri_count`. Crosses the wasm boundary as a `Uint8Array` (mirrors
     /// `sides_types`). Pairs with `polygon_ids`.
     side_kinds: Vec<u8>,
+    /// geom-audit (2026-07-02): record misses counted during the FINAL
+    /// decode (post-retry). `0` = fully-resident decode; `> 0` = the
+    /// mesh is PARTIAL or EMPTY because records were unavailable —
+    /// consumers (`__diag.geometry`) use this to separate
+    /// "authored-empty" (misses 0, tris 0) from "decode-starved".
+    /// Only `fetch_model_meshes` populates it; other constructors
+    /// leave 0.
+    decode_misses: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -5062,6 +5070,10 @@ impl ModelMesh {
     /// provenance.
     #[wasm_bindgen(getter, js_name = sideKinds)]
     pub fn side_kinds(&self) -> Vec<u8> { self.side_kinds.clone() }
+    /// geom-audit — record misses on the FINAL decode (0 = complete;
+    /// >0 = mesh is decode-starved partial/empty). See the struct field.
+    #[wasm_bindgen(getter, js_name = decodeMisses)]
+    pub fn decode_misses(&self) -> u32 { self.decode_misses }
 }
 
 /// E8 (2026-06-08): per-polygon-side material traceability tag. Mirrors
@@ -5212,11 +5224,15 @@ fn append_gfx_tris_with_tex_swaps(
         // empty `tex_swaps` (the static-placement path) skips the
         // search entirely. NPC parts typically have ≤4 swaps each so
         // a linear find is fine.
+        // Sequential rewrite, retail order: TMChanges apply one after the
+        // other over the part's texture table, so a later entry overrides
+        // an earlier one for the same slot (base skin first, worn item
+        // later — the "naked under armour" sibling of the part-swap bug)
+        // and can chain off a previous entry's output. A first-match
+        // lookup froze the FIRST entry forever.
         let pos_surface_did = tex_swaps
             .iter()
-            .find(|(old, _)| *old == raw_pos_surface_did)
-            .map(|(_, new)| *new)
-            .unwrap_or(raw_pos_surface_did);
+            .fold(raw_pos_surface_did, |did, (old, new)| if did == *old { *new } else { did });
 
         // Two-sided detection. The parser populates `neg_uv_indices`
         // only when `sides_type == 0x2 && (stippling & NoNeg) == 0`.
@@ -5237,11 +5253,10 @@ fn append_gfx_tris_with_tex_swaps(
             0
         };
         let neg_surface_did = if raw_neg_surface_did != 0 {
+            // Same sequential-rewrite semantics as the front face above.
             tex_swaps
                 .iter()
-                .find(|(old, _)| *old == raw_neg_surface_did)
-                .map(|(_, new)| *new)
-                .unwrap_or(raw_neg_surface_did)
+                .fold(raw_neg_surface_did, |did, (old, new)| if did == *old { *new } else { did })
         } else {
             0
         };
@@ -5587,6 +5602,48 @@ fn triangulate_setup_model_per_part_with_rest_pose<
     Some((buckets, rest_poses))
 }
 
+// ObjDesc TMChange (wire texture-change) support. The wire swaps
+// SurfaceTexture (0x05) ids INSIDE a part's Surface — retail rewrites the
+// CSurface's texture slot; the Surface (0x08) id never changes. Our
+// renderer keys materials and pixel fetches by Surface did end-to-end, so
+// a swapped surface is published under a synthetic ALIAS did in a reserved
+// slice of the 0x08 space (real portal.dat surfaces sit far below it). The
+// pixel fetchers resolve an alias to (base Surface record for render-state,
+// overridden SurfaceTexture for pixels). Registry state is per-wasm-
+// instance; aliases are minted and consumed on the same instance (the
+// entity keyframes + entity pixels paths both run on the main thread).
+const TEX_SWAP_ALIAS_BASE: u32 = 0x08F0_0000;
+#[cfg(any(target_arch = "wasm32", test))]
+thread_local! {
+    static TEX_SWAP_ALIASES: std::cell::RefCell<(
+        std::collections::HashMap<u32, (u32, u32)>,
+        std::collections::HashMap<(u32, u32), u32>,
+    )> = std::cell::RefCell::new((
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
+    ));
+}
+#[cfg(any(target_arch = "wasm32", test))]
+fn tex_swap_alias_for(base_surface: u32, tex_override: u32) -> u32 {
+    TEX_SWAP_ALIASES.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some(&a) = c.1.get(&(base_surface, tex_override)) {
+            return a;
+        }
+        let a = TEX_SWAP_ALIAS_BASE + c.0.len() as u32;
+        c.0.insert(a, (base_surface, tex_override));
+        c.1.insert((base_surface, tex_override), a);
+        a
+    })
+}
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_tex_swap_alias(did: u32) -> Option<(u32, u32)> {
+    if (did & 0xFFF0_0000) != TEX_SWAP_ALIAS_BASE {
+        return None;
+    }
+    TEX_SWAP_ALIASES.with(|c| c.borrow().0.get(&did).copied())
+}
+
 /// Shared inner loop for the SetupModel part walk. Loads the setup,
 /// resolves pose priority (`pose_override` → idle → placement →
 /// identity), and invokes `on_part(part_index, &gfx, offset, rot, &tex_swaps)`
@@ -5672,8 +5729,15 @@ where
         // over the setup's default. ACE's `CalculateObjDesc` produces
         // exactly one AnimPartChange per substituted slot, so a linear
         // search is fine (NPCs have at most ~25 substitutions).
+        // LAST match wins: ACE's CalculateObjDesc emits the base body's
+        // part per slot FIRST and each worn item's override for the same
+        // slot LATER in the one APChanges list (retail applies the list
+        // sequentially into the part array — the last write renders).
+        // First-match picked the base skin under every equipped piece:
+        // fully-geared players and NPCs rendered naked.
         let part_id = model_changes
             .iter()
+            .rev()
             .find(|(idx, _)| *idx as usize == pi)
             .map(|(_, gfx)| *gfx)
             .unwrap_or(default_part_id);
@@ -5704,13 +5768,57 @@ where
         ));
 
         // Per-part texture remap table for append_gfx_tris_with_tex_swaps.
-        // Empty for parts without texture changes — the swap is a no-op
-        // path inside the appender, so passing empty stays cheap.
-        let part_tex_swaps_buf: Vec<(u32, u32)> = texture_changes
+        // Wire TMChanges carry SurfaceTexture (0x05) ids — they swap the
+        // texture INSIDE a part's Surface, never the Surface (0x08) id the
+        // appender compares against. (The old code fed the 0x05 pairs to
+        // the appender directly: different id spaces, zero matches — every
+        // wire texture change was a silent no-op, which is why texture-
+        // based armour like chain shirts rendered bare skin while
+        // part-SWAP armour worked.) Resolve each of the part's surfaces to
+        // its SurfaceTexture, apply the change chain sequentially (retail
+        // order), and publish hits as alias dids the pixel fetchers
+        // resolve back to (base render-state, overridden texture). A miss
+        // on a Surface record inside the prefetch-walk closure is recorded
+        // and fetched on the next round, so this stays fail-soft.
+        let tc_pairs: Vec<(u32, u32)> = texture_changes
             .iter()
             .filter(|(p, _, _)| *p as usize == pi)
             .map(|(_, old, new)| (*old, *new))
             .collect();
+        let part_tex_swaps_buf: Vec<(u32, u32)> = if tc_pairs.is_empty() {
+            Vec::new()
+        } else {
+            let mut uniq: Vec<u32> = gfx.surfaces.clone();
+            uniq.sort_unstable();
+            uniq.dedup();
+            let mut v: Vec<(u32, u32)> = Vec::new();
+            for s08 in uniq {
+                let Ok(sb) = source.get_file_by_key(ResourceKey::new("eor/portal", s08))
+                    else { continue };
+                let Ok(surf) =
+                    holtburger_dat::file_type::Surface::unpack(&sb)
+                    else { continue };
+                let Some((t0, _pal)) = surf.textured() else { continue };
+                // ONE mapping per original texture id, LAST write wins — no
+                // chaining. Retail dedupes at add time (ObjDesc::
+                // AddTextureMapChange → RemoveDuplicateTextureMapChange,
+                // acclient.c:469573): a shirt (skin→shirt) and chainmail
+                // (skin→chain) both key off the BASE skin texture, and the
+                // later item's entry REPLACES the earlier one. A sequential
+                // fold let the shirt consume the skin id first, so armour
+                // could never override it — underclothes rendered on top.
+                let t1 = tc_pairs
+                    .iter()
+                    .rev()
+                    .find(|(old, _)| *old == t0)
+                    .map(|(_, new)| *new)
+                    .unwrap_or(t0);
+                if t1 != t0 && t1 != 0 {
+                    v.push((s08, tex_swap_alias_for(s08, t1)));
+                }
+            }
+            v
+        };
 
         // SetupModel per-part default scale (flag 0x02). ACE applies
         // `GfxObjScale = DefaultScale[i]` to the part geometry (PartArray.cs:349,
@@ -6801,20 +6909,56 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
             continue;
         }
 
-        // Per-segment dt from |framerate|. Retail (acclient.c:340705) treats a
-        // ~0 framerate as a HOLD — the cycle snaps to its frame and holds rather
-        // than stepping (ACE/melt: numFrames/|framerate| → infinite duration).
-        // A handful of creature NonCombat Dead cycles (MotionData key 0x3D0011)
-        // author framerate 0; the previous `continue` emitted NO keyframes, so
-        // the death motion baked to an empty clip and creatures never visibly
-        // died (B5). Fall back to a default rate so the dead-pose frames are
-        // still emitted; the UNIFIED_DEATH one-shot then clamps the final prone
-        // frame (clearOnDone:false), matching retail's held pose.
-        let fr = {
-            let f = anim_data.framerate.abs();
-            if f > 0.0 { f } else { 30.0 }
-        };
+        // Per-segment dt from |framerate|. Retail (CSequence::update_internal,
+        // acclient.c:340696-340731) computes frame_quantum = framerate*quantum;
+        // a ~0 framerate (epsilon 2e-4 at :340708) hits NEITHER advance branch,
+        // so the sequence HOLDS its entry frame forever — and because hooks
+        // fire only on frame ADVANCE, a held cycle never fires its hooks.
+        // State-motion cycles are authored exactly this way: door/chest/lever
+        // On = { low_frame: open pose, fr 0 }, Off = { low_frame 0: closed,
+        // fr 0 }, creature Dead = { low_frame 0: prone, fr 0 } (frame 0 of the
+        // Dead-cycle anim == the collapse link's final frame — verified on
+        // 0x09000001/0x09000016). The transition MOTION lives in the LINKS
+        // (signed framerate: On→Off plays the same anim reversed).
+        //
+        // The previous B5 fallback ("play the whole range at 30fps so death
+        // isn't an empty clip") mis-baked every hold: a closed door's Off
+        // cycle became the full 32-frame OPEN anim, whose clamped final frame
+        // is the open pose — the 2026-06-29..07-02 "everything stuck open /
+        // flapping" class (LoopRepeat looped it; the LoopOnce bandaid froze it
+        // open). Bake a hold as exactly ONE hook-stripped keyframe instead:
+        // a static pose clip (nominal 30fps duration so JS timing stays
+        // finite). Death still snaps prone (frame 0 IS prone), so B5 stays
+        // fixed without playing frames retail never played.
+        let is_hold = anim_data.framerate.abs() <= 2.0e-4;
+        let fr = if is_hold { 30.0 } else { anim_data.framerate.abs() };
         let dt = 1.0 / fr;
+        if is_hold {
+            let mut held = anim.part_frames[low].clone();
+            held.hooks.clear();
+            let seg_start = frames.len() as u32;
+            if DIM5_2_ROOT_ORIENT {
+                // Fold the root motion carried from any prior segments into the
+                // held pose (identity/zero on the common single-segment holds).
+                fold_root_motion_into_parts(&mut held.frames, ori_accum, pos_accum);
+                frames.push(held);
+                pos.push(0.0);
+                pos.push(0.0);
+                pos.push(0.0);
+            } else {
+                frames.push(held);
+                pos.push(pos_accum[0]);
+                pos.push(pos_accum[1]);
+                pos.push(pos_accum[2]);
+            }
+            times.push(t);
+            t += dt;
+            segment_starts.push(seg_start);
+            segment_counts.push(1);
+            segment_framerates.push(fr);
+            segment_anim_ids.push(anim_data.anim_id);
+            continue;
+        }
 
         // pos_frames is parallel to part_frames ONLY when the POS_FRAMES
         // flag was set (len == total); otherwise it's empty → push zeros.
@@ -7429,6 +7573,26 @@ impl<S: holtburger_dat::ResourceSource + ?Sized> holtburger_dat::ResourceSource
     }
 }
 
+/// geom-audit (2026-07-02): triangulate `model_id` while counting record
+/// misses at the source. `misses > 0` means `walk_setup_parts` (or the
+/// idle-anim chain) soft-skipped missing children — the result may be
+/// EMPTY or PARTIAL and must never be shipped silently (the
+/// half-missing-forge / no-grocer-furniture class). A memo hit reads no
+/// records (misses 0), which is correct: only complete decodes memoize.
+#[cfg(any(target_arch = "wasm32", test))]
+fn triangulate_model_counted<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+) -> (Option<Vec<Tri>>, u32) {
+    let counting = MissCountingSource {
+        inner: source,
+        misses: std::sync::atomic::AtomicU32::new(0),
+    };
+    let tris = triangulate_model(&counting, model_id);
+    let misses = counting.misses.load(std::sync::atomic::Ordering::Relaxed);
+    (tris, misses)
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
@@ -7657,6 +7821,8 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
         // (`fetch_model_mesh` / `fetch_model_meshes`) post-fills this
         // via a separate GfxObj walk after the pack returns.
         did_degrade: 0,
+        // geom-audit: caller post-fills (fetch_model_meshes only).
+        decode_misses: 0,
         // E8: per-tri (polygon, side) provenance.
         polygon_ids,
         side_kinds,
@@ -7921,6 +8087,13 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         has_palette: false,
     };
 
+    // TMChange alias — resolve to the base Surface record + the swapped
+    // SurfaceTexture. Render-state (flags/translucency/palette recolour)
+    // reads the BASE record; only the texture hop below is overridden.
+    let (surface_did, tex_override) = match resolve_tex_swap_alias(surface_did) {
+        Some((base, tex)) => (base, Some(tex)),
+        None => (surface_did, None),
+    };
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else {
         warn_surface_dep_unavailable(surface_did, "Surface record", surface_did);
         return empty;
@@ -7972,6 +8145,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         };
     }
     let Some((surf_tex_id, surf_pal_id)) = surface.textured() else { return empty; };
+    let surf_tex_id = tex_override.unwrap_or(surf_tex_id);
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else {
         warn_surface_dep_unavailable(surface_did, "SurfaceTexture", surf_tex_id);
         return empty;
@@ -8249,7 +8423,16 @@ pub async fn fetch_surface_anim_frames(surface_did: u32) -> Result<SurfaceAnimFr
 pub async fn fetch_surface_pixels(surface_did: u32) -> Result<SurfacePixels, JsValue> {
     use holtburger_dat::ResourceKey;
     let source = global_source::global_source();
-    let initial = [ResourceKey::new("eor/portal", surface_did)];
+    // TMChange alias dids don't exist as records — seed the prefetch with
+    // the base surface + override texture instead (the impl re-resolves).
+    let mut initial: Vec<ResourceKey<'_>> = Vec::with_capacity(2);
+    match resolve_tex_swap_alias(surface_did) {
+        Some((base, tex)) => {
+            initial.push(ResourceKey::new("eor/portal", base));
+            initial.push(ResourceKey::new("eor/portal", tex));
+        }
+        None => initial.push(ResourceKey::new("eor/portal", surface_did)),
+    }
     prefetch::ensure_walk_prefetched(&source, &initial, |s| {
         let _ = fetch_surface_pixels_impl(s, surface_did);
     })
@@ -9622,6 +9805,12 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         has_palette: false,
     };
 
+    // TMChange alias — resolve to the base Surface record + the swapped
+    // SurfaceTexture (same contract as fetch_surface_pixels_impl above).
+    let (surface_did, tex_override) = match resolve_tex_swap_alias(surface_did) {
+        Some((base, tex)) => (base, Some(tex)),
+        None => (surface_did, None),
+    };
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else {
         warn_surface_dep_unavailable(surface_did, "Surface record", surface_did);
         return empty;
@@ -9661,6 +9850,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         };
     }
     let Some((surf_tex_id, surf_pal_id)) = surface.textured() else { return empty; };
+    let surf_tex_id = tex_override.unwrap_or(surf_tex_id);
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else {
         warn_surface_dep_unavailable(surface_did, "SurfaceTexture", surf_tex_id);
         return empty;
@@ -9808,7 +9998,14 @@ pub async fn fetch_entity_surfaces_pixels(
     // palette walks ride into the surface prefetch already.
     let mut initial: Vec<ResourceKey<'_>> = Vec::with_capacity(surface_dids.len() + 1 + sp.len());
     for &sid in &surface_dids {
-        initial.push(ResourceKey::new("eor/portal", sid));
+        // TMChange aliases aren't records — seed base + override texture.
+        match resolve_tex_swap_alias(sid) {
+            Some((base, tex)) => {
+                initial.push(ResourceKey::new("eor/portal", base));
+                initial.push(ResourceKey::new("eor/portal", tex));
+            }
+            None => initial.push(ResourceKey::new("eor/portal", sid)),
+        }
     }
     if base_palette_id != 0 {
         initial.push(ResourceKey::new("eor/portal", base_palette_id));
@@ -10047,7 +10244,16 @@ pub async fn fetch_entity_surfaces_pixels_batch(
     // accumulate into the RecordingSource for the next round.
     let mut initial_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
     for &did in &flat_surface_dids {
-        initial_set.insert(did);
+        // TMChange aliases aren't records — seed base + override texture.
+        match resolve_tex_swap_alias(did) {
+            Some((base, tex)) => {
+                initial_set.insert(base);
+                initial_set.insert(tex);
+            }
+            None => {
+                initial_set.insert(did);
+            }
+        }
     }
     for &p in &base_palette_ids {
         if p != 0 {
@@ -10391,8 +10597,36 @@ pub async fn fetch_model_meshes(model_ids: Vec<u32>) -> Result<Vec<ModelMesh>, J
     .await?;
     let mut out = Vec::with_capacity(model_ids.len());
     for &id in &model_ids {
-        let tris = triangulate_model(source.as_ref(), id).unwrap_or_default();
+        // geom-audit (2026-07-02): decode with miss accounting. The batch
+        // walk above can terminate with records unfetched (transient shard
+        // failures / stall guard), after which the final decode ships an
+        // EMPTY or PARTIAL mesh that per-LB bakes then cache — the
+        // missing-furniture / half-missing-model class. Retry the walk
+        // once for just this id; if still incomplete, warn LOUDLY and
+        // stamp `decodeMisses` so the JS-side audit can attribute it.
+        let (mut tris_opt, mut misses) = triangulate_model_counted(source.as_ref(), id);
+        if misses > 0 || (tris_opt.is_none() && matches!((id >> 24) as u8, 0x01 | 0x02)) {
+            let retry_keys = [ResourceKey::new("eor/portal", id)];
+            let _ = prefetch::ensure_walk_prefetched(&source, &retry_keys, move |s| {
+                let _ = triangulate_model(s, id);
+            })
+            .await;
+            let (t2, m2) = triangulate_model_counted(source.as_ref(), id);
+            tris_opt = t2;
+            misses = m2;
+        }
+        if misses > 0 {
+            log::warn!(
+                "[geom-audit] fetch_model_meshes 0x{id:08X}: decode INCOMPLETE after retry ({misses} record misses) — mesh will be partial/empty"
+            );
+        } else if tris_opt.is_none() && matches!((id >> 24) as u8, 0x01 | 0x02) {
+            log::warn!(
+                "[geom-audit] fetch_model_meshes 0x{id:08X}: model failed to decode (parse failure) — mesh will be empty"
+            );
+        }
+        let tris = tris_opt.unwrap_or_default();
         let mut mesh = pack_model_mesh(tris);
+        mesh.decode_misses = misses;
         // Follow-on #5 — resolve LOD chain after pack. 0 = no degraded
         // variant; JS uses plain Mesh in that case.
         mesh.did_degrade = resolve_did_degrade(source.as_ref(), id);
@@ -10544,10 +10778,46 @@ pub async fn fetch_building_placement(model_id: u32) -> Result<BuildingPlacement
         let _ = triangulate_model_per_part_buckets(s, model_id);
     })
     .await?;
-    let parts_tris = triangulate_model_per_part_buckets(source.as_ref(), model_id)
-        .ok_or_else(|| {
-            JsValue::from_str(&format!("fetchBuildingPlacement 0x{model_id:08X}: failed"))
-        })?;
+    // geom-audit (2026-07-02): decode per-part with miss accounting.
+    // `walk_setup_parts` soft-skips a part whose GfxObj record is
+    // missing (empty bucket at that index) — under fetch starvation
+    // that ships a building/entity with silently absent parts. Retry
+    // the walk once on any miss; still-incomplete decodes warn with
+    // the affected part indices.
+    let decode_counted = |src: &dyn holtburger_dat::ResourceSource| {
+        let counting = MissCountingSource {
+            inner: src,
+            misses: std::sync::atomic::AtomicU32::new(0),
+        };
+        let parts = triangulate_model_per_part_buckets(&counting, model_id);
+        let misses = counting.misses.load(std::sync::atomic::Ordering::Relaxed);
+        (parts, misses)
+    };
+    let (mut parts_opt, mut misses) = decode_counted(source.as_ref());
+    if misses > 0 || parts_opt.is_none() {
+        let retry_keys = [ResourceKey::new("eor/portal", model_id)];
+        let _ = prefetch::ensure_walk_prefetched(&source, &retry_keys, move |s| {
+            let _ = triangulate_model_per_part_buckets(s, model_id);
+        })
+        .await;
+        let (p2, m2) = decode_counted(source.as_ref());
+        parts_opt = p2;
+        misses = m2;
+    }
+    let parts_tris = parts_opt.ok_or_else(|| {
+        JsValue::from_str(&format!("fetchBuildingPlacement 0x{model_id:08X}: failed"))
+    })?;
+    if misses > 0 {
+        let empty_parts: Vec<usize> = parts_tris
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.is_empty())
+            .map(|(i, _)| i)
+            .collect();
+        log::warn!(
+            "[geom-audit] fetchBuildingPlacement 0x{model_id:08X}: decode INCOMPLETE after retry ({misses} record misses; empty part indices {empty_parts:?}) — parts will be missing"
+        );
+    }
     let part_count = parts_tris.len();
     let parts: Vec<ModelMesh> = parts_tris.into_iter().map(pack_model_mesh).collect();
     let hinge_frames = compute_hinge_frames(source.as_ref(), model_id, part_count);
@@ -13824,6 +14094,7 @@ impl EnvCellPlacement {
             bbox_min: [0.0; 3],
             bbox_max: [0.0; 3],
             did_degrade: 0,
+            decode_misses: 0,
             // E8: empty replacement mesh — no triangles, no provenance.
             polygon_ids: Vec::new(),
             side_kinds: Vec::new(),
@@ -14022,11 +14293,23 @@ fn fetch_environment_mesh<S: holtburger_dat::ResourceSource + ?Sized>(
     use holtburger_dat::ResourceKey;
     let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", environment_id)) {
         Ok(b) => b,
-        Err(_) => return pack_model_mesh(Vec::new()),
+        Err(_) => {
+            // geom-audit (2026-07-02): a missing Environment record means
+            // the whole cell renders with NO walls/floor — never silent.
+            log::warn!(
+                "[geom-audit] fetch_environment_mesh 0x{environment_id:08X}: record unavailable — cell mesh will be EMPTY"
+            );
+            return pack_model_mesh(Vec::new());
+        }
     };
     let env = match Environment::unpack(&mut std::io::Cursor::new(&bytes)) {
         Ok(e) => e,
-        Err(_) => return pack_model_mesh(Vec::new()),
+        Err(e) => {
+            log::warn!(
+                "[geom-audit] fetch_environment_mesh 0x{environment_id:08X}: parse failed ({e}) — cell mesh will be EMPTY"
+            );
+            return pack_model_mesh(Vec::new());
+        }
     };
     let mut tris = Vec::new();
     append_environment_tris(&mut tris, &env, surfaces, cell_structure);
@@ -15251,8 +15534,13 @@ pub async fn fetch_env_cells_in_landblock(
     let landblock_origin_y = lb_y_byte * LB_M;
 
     let source = global_source::global_source();
+    // Urgent lane (2026-07-02 geom-audit): the player is IN or NEXT TO
+    // this LB — interior cells are player-blocking. The normal lane's
+    // FIFO fetch semaphore queues these ~120 small records behind the
+    // speculative ring bakers' shard flood; measured starvation left
+    // interiors (grocer furniture) unbuilt for entire sessions.
     source
-        .prefetch(&[ResourceKey::new("eor/cell", info_cell)])
+        .prefetch_urgent(&[ResourceKey::new("eor/cell", info_cell)])
         .await
         .map_err(|e| JsValue::from_str(&format!(
             "fetchEnvCellsInLandblock: prefetch landblock 0x{landblock_high:08X}: {e}"
@@ -15260,6 +15548,8 @@ pub async fn fetch_env_cells_in_landblock(
 
     let info_bytes = match source.get_file_by_key(ResourceKey::new("eor/cell", info_cell)) {
         Ok(b) => b,
+        // Prefetch resolved but the record isn't served (catalog has no
+        // entry) — the LEGIT no-interior case for open countryside.
         Err(_) => return Ok(Vec::new()),
     };
     let info = LandblockInfo::unpack(&info_bytes).map_err(|e| {
@@ -15275,7 +15565,7 @@ pub async fn fetch_env_cells_in_landblock(
     let cell_keys: Vec<ResourceKey<'_>> = (0..info.num_cells)
         .map(|i| ResourceKey::new("eor/cell", landblock_high | (0x0100 + i)))
         .collect();
-    source.prefetch(&cell_keys).await.map_err(|e| {
+    source.prefetch_urgent(&cell_keys).await.map_err(|e| {
         JsValue::from_str(&format!(
             "fetchEnvCellsInLandblock: prefetch EnvCells for 0x{landblock_high:08X}: {e}"
         ))
@@ -15297,17 +15587,52 @@ pub async fn fetch_env_cells_in_landblock(
         env_id_set.insert(env_did);
         cells_raw.push(envcell);
     }
+    // geom-audit (2026-07-02): LandblockInfo promised num_cells but some
+    // records failed to load/parse — a PARTIAL interior is the
+    // silent-missing-furniture class. Never silent.
+    if cells_raw.len() < info.num_cells as usize {
+        log::warn!(
+            "[geom-audit] fetchEnvCellsInLandblock 0x{landblock_high:08X}: only {}/{} EnvCell records loaded — interior will be INCOMPLETE",
+            cells_raw.len(),
+            info.num_cells
+        );
+    }
 
     let env_keys: Vec<ResourceKey<'_>> = env_id_set
         .iter()
         .map(|&id| ResourceKey::new("eor/portal", id))
         .collect();
     if !env_keys.is_empty() {
-        source.prefetch(&env_keys).await.map_err(|e| {
+        source.prefetch_urgent(&env_keys).await.map_err(|e| {
             JsValue::from_str(&format!(
                 "fetchEnvCellsInLandblock: prefetch Environments: {e}"
             ))
         })?;
+    }
+
+    // geom-audit (2026-07-02): batch-prefetch every stab's top record in
+    // ONE urgent round before the per-cell loop. The loop's per-stab
+    // prefetches (AABB/BSP/default-script resolution) then hit the shard
+    // cache instead of each paying a sequential await round-trip —
+    // ~24 stabs × ~123 cells of round-trips otherwise dominate the build.
+    {
+        let mut stab_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for envcell in &cells_raw {
+            for stab in &envcell.static_objects {
+                if matches!((stab.stab_id >> 24) as u8, 0x01 | 0x02) {
+                    stab_ids.insert(stab.stab_id);
+                }
+            }
+        }
+        if !stab_ids.is_empty() {
+            let stab_keys: Vec<ResourceKey<'_>> = stab_ids
+                .iter()
+                .map(|&id| ResourceKey::new("eor/portal", id))
+                .collect();
+            // Best-effort: individual misses degrade per-stab exactly as
+            // before (the per-stab arms below still prefetch + soft-skip).
+            let _ = source.prefetch_urgent(&stab_keys).await;
+        }
     }
 
     // G16 fix-1 (render audit, 2026-06-09): key the visual-mesh cache by
@@ -15685,19 +16010,20 @@ pub async fn fetch_env_cells_in_landblock(
         let mut static_objects: Vec<StaticObjectPlacement> =
             Vec::with_capacity(envcell.static_objects.len());
         for stab in &envcell.static_objects {
-            // World position = cell_origin + cell_rot * stab.origin.
-            let stab_world_local = cell_orientation.rotate_vector(stab.position.origin);
-            let world_x = cell_origin.x + stab_world_local.x;
-            let world_y = cell_origin.y + stab_world_local.y;
-            let world_z = cell_origin.z + stab_world_local.z;
-            // World orientation = cell_rot * stab.orientation.
+            // Stab frames are landblock-local ALREADY — the same space as the
+            // cell's own frame, NOT cell-relative. Retail applies them
+            // verbatim (CEnvCell::init_static_objects → add_obj_to_cell,
+            // acclient.c:347955), matching the outdoor LandblockInfo stab
+            // path (`stab.frame.origin + landblock_origin`). Only the
+            // landblock corner offset applies here; composing the cell frame
+            // on top double-transformed every interior static (furniture,
+            // script anchors, their collision twins) out of its room and
+            // into the sky.
+            let world_x = stab.position.origin.x + landblock_origin_x;
+            let world_y = stab.position.origin.y + landblock_origin_y;
+            let world_z = stab.position.origin.z;
             let stab_q = stab.position.orientation;
-            let cq = cell_orientation;
-            // Hamilton product (cq * stab_q).
-            let qw = cq.w * stab_q.w - cq.x * stab_q.x - cq.y * stab_q.y - cq.z * stab_q.z;
-            let qx = cq.w * stab_q.x + cq.x * stab_q.w + cq.y * stab_q.z - cq.z * stab_q.y;
-            let qy = cq.w * stab_q.y - cq.x * stab_q.z + cq.y * stab_q.w + cq.z * stab_q.x;
-            let qz = cq.w * stab_q.z + cq.x * stab_q.y - cq.y * stab_q.x + cq.z * stab_q.w;
+            let (qw, qx, qy, qz) = (stab_q.w, stab_q.x, stab_q.y, stab_q.z);
             let aabb_local = static_object_local_aabb(source.as_ref(), stab.stab_id);
             let default_script_id =
                 static_object_default_script(source.as_ref(), stab.stab_id);
@@ -15733,8 +16059,13 @@ pub async fn fetch_env_cells_in_landblock(
                 holtburger_common::Quaternion { w: qw, x: qx, y: qy, z: qz };
             match (stab.stab_id >> 24) as u8 {
                 0x01 => {
+                    // geom-audit (2026-07-02): URGENT — this await sat in the
+                    // normal lane's semaphore FIFO behind the ring bakers'
+                    // flood, stalling the WHOLE interior build at the first
+                    // stab-bearing cell (measured: both live invocations
+                    // parked here forever; no interior ever appeared).
                     source
-                        .prefetch(&[ResourceKey::new("eor/portal", stab.stab_id)])
+                        .prefetch_urgent(&[ResourceKey::new("eor/portal", stab.stab_id)])
                         .await
                         .ok();
                     if let Ok(bytes) =
@@ -15780,7 +16111,10 @@ pub async fn fetch_env_cells_in_landblock(
                     )
                     .with_u32(stab.stab_id);
                     let sid = stab.stab_id;
-                    if prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
+                    // geom-audit (2026-07-02): URGENT walk — same starvation
+                    // as the 0x01 arm above (normal-lane FIFO parked the
+                    // interior build at the first Setup-stab).
+                    if prefetch::ensure_walk_prefetched_keyed_urgent(cache_key, &source, &initial, move |s| {
                         let _ = walk_setup_parts_with_geom(s, sid);
                     })
                     .await
@@ -15942,6 +16276,7 @@ impl ModelMesh {
             bbox_min: self.bbox_min,
             bbox_max: self.bbox_max,
             did_degrade: self.did_degrade,
+            decode_misses: self.decode_misses,
             // E8: per-tri (polygon, side) provenance survives the clone.
             polygon_ids: self.polygon_ids.clone(),
             side_kinds: self.side_kinds.clone(),
@@ -17659,8 +17994,9 @@ pub async fn fetch_entity_animation_keyframes(
             let _ = triangulate_model_per_part_buckets(s, setup_id);
         })
         .await?;
-        let inner = build_entity_animation_data_inner_v2(
-            source.as_ref(),
+        // geom-audit: counted build + one retry (see the wrapper).
+        let inner = build_entity_animation_counted(
+            &source,
             setup_id,
             &mc,
             &tc,
@@ -17670,6 +18006,7 @@ pub async fn fetch_entity_animation_keyframes(
             from_motion_command,
             placement_id,
         )
+        .await
         .map_err(|e| JsValue::from_str(&e))?;
         return Ok(inner_to_wasm_animation_data(inner));
     }
@@ -17736,8 +18073,9 @@ pub async fn fetch_entity_animation_keyframes(
     })
     .await?;
 
-    let inner = build_entity_animation_data_inner_v2(
-        source.as_ref(),
+    // geom-audit: counted build + one retry (see the wrapper).
+    let inner = build_entity_animation_counted(
+        &source,
         setup_id,
         &mc,
         &tc,
@@ -17747,8 +18085,88 @@ pub async fn fetch_entity_animation_keyframes(
         from_motion_command,
         placement_id,
     )
+    .await
     .map_err(|e| JsValue::from_str(&e))?;
     Ok(inner_to_wasm_animation_data(inner))
+}
+
+/// geom-audit (2026-07-02): run the entity rig build with record-miss
+/// accounting; on any miss re-run a fresh discovery walk for the setup
+/// (+ substituted parts) and rebuild ONCE. Still-incomplete builds warn
+/// with the empty part indices — the JS `AnimationCache` otherwise
+/// caches a silently partial rig for the whole session (the
+/// half-missing-forge class: parts of a Setup absent while its
+/// particle chains still emit).
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
+async fn build_entity_animation_counted(
+    source: &std::sync::Arc<holtburger_resource_http::ManifestResourceSource>,
+    setup_id: u32,
+    mc: &[(u8, u32)],
+    tc: &[(u8, u32, u32)],
+    mt_override: Option<u32>,
+    motion_command: u32,
+    stance: u32,
+    from_motion_command: u32,
+    placement_id: u32,
+) -> Result<EntityAnimationKeyframesInner, String> {
+    use holtburger_dat::ResourceKey;
+    let run = |src: &dyn holtburger_dat::ResourceSource| {
+        let counting = MissCountingSource {
+            inner: src,
+            misses: std::sync::atomic::AtomicU32::new(0),
+        };
+        let r = build_entity_animation_data_inner_v2(
+            &counting,
+            setup_id,
+            mc,
+            tc,
+            mt_override,
+            motion_command,
+            stance,
+            from_motion_command,
+            placement_id,
+        );
+        (r, counting.misses.load(std::sync::atomic::Ordering::Relaxed))
+    };
+    let (mut result, mut misses) = run(source.as_ref());
+    if misses > 0 || result.is_err() {
+        let mut retry_keys: Vec<ResourceKey<'_>> = Vec::with_capacity(1 + mc.len());
+        retry_keys.push(ResourceKey::new("eor/portal", setup_id));
+        for (_, gfx_id) in mc {
+            retry_keys.push(ResourceKey::new("eor/portal", *gfx_id));
+        }
+        let _ = prefetch::ensure_walk_prefetched(source, &retry_keys, |s| {
+            if (setup_id >> 24) as u8 == 0x02 {
+                let _ = triangulate_setup_model_per_part(s, setup_id, mc, tc);
+            } else {
+                let _ = triangulate_model_per_part_buckets(s, setup_id);
+            }
+        })
+        .await;
+        let (r2, m2) = run(source.as_ref());
+        result = r2;
+        misses = m2;
+    }
+    if misses > 0 {
+        let empty: Vec<usize> = result
+            .as_ref()
+            .ok()
+            .map(|inner| {
+                inner
+                    .part_tris
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| t.is_empty())
+                    .map(|(i, _)| i)
+                    .collect()
+            })
+            .unwrap_or_default();
+        log::warn!(
+            "[geom-audit] fetchEntityAnimationKeyframes 0x{setup_id:08X}: decode INCOMPLETE after retry ({misses} record misses; empty part indices {empty:?}) — rig will be partial"
+        );
+    }
+    result
 }
 
 /// F.40 (2026-05-14) — wasm-side wrapper that converts the plain

@@ -170,7 +170,7 @@ pub async fn ensure_walk_prefetched<F>(
 where
     F: Fn(&dyn ResourceSource),
 {
-    run_walk_loop(source, initial_keys, walk).await
+    run_walk_loop(source, initial_keys, walk, false).await
 }
 
 /// F.37 walk-result-dedup variant. Concurrent callers passing the
@@ -209,6 +209,36 @@ pub async fn ensure_walk_prefetched_keyed<F>(
 where
     F: Fn(&dyn ResourceSource) + 'static,
 {
+    ensure_walk_prefetched_keyed_impl(cache_key, source, initial_keys, walk, false).await
+}
+
+/// Urgent-lane variant of [`ensure_walk_prefetched_keyed`] — the loop's
+/// prefetch rounds ride [`ManifestResourceSource::prefetch_urgent`]
+/// (semaphore bypass + distinct inflight keys + default fetch priority)
+/// so a player-blocking walk (current-LB interior stab records) is not
+/// FIFO-starved behind the speculative ring bakers' flood.
+pub async fn ensure_walk_prefetched_keyed_urgent<F>(
+    cache_key: WalkCacheKey,
+    source: &Arc<ManifestResourceSource>,
+    initial_keys: &[ResourceKey<'_>],
+    walk: F,
+) -> Result<(), JsValue>
+where
+    F: Fn(&dyn ResourceSource) + 'static,
+{
+    ensure_walk_prefetched_keyed_impl(cache_key, source, initial_keys, walk, true).await
+}
+
+async fn ensure_walk_prefetched_keyed_impl<F>(
+    cache_key: WalkCacheKey,
+    source: &Arc<ManifestResourceSource>,
+    initial_keys: &[ResourceKey<'_>],
+    walk: F,
+    urgent: bool,
+) -> Result<(), JsValue>
+where
+    F: Fn(&dyn ResourceSource) + 'static,
+{
     // Phase 1: latch-or-start. Briefly access the thread-local map
     // to look up an existing future for this key, or insert a new
     // one. The thread-local borrow is dropped before the await.
@@ -229,7 +259,7 @@ where
                     .iter()
                     .map(|(ns, id)| ResourceKey::new(ns.as_str(), *id))
                     .collect();
-                run_walk_loop(&source, &initial_refs, walk).await
+                run_walk_loop(&source, &initial_refs, walk, urgent).await
             })
         })
     });
@@ -252,13 +282,30 @@ async fn run_walk_loop<F>(
     source: &Arc<ManifestResourceSource>,
     initial_keys: &[ResourceKey<'_>],
     walk: F,
+    // Urgent walks (player-blocking interior loads) ride
+    // `prefetch_urgent` for every round — see the keyed-urgent entry.
+    urgent: bool,
 ) -> Result<(), JsValue>
 where
     F: Fn(&dyn ResourceSource),
 {
+    let do_prefetch = |keys: Vec<(String, u32)>| async move {
+        let refs: Vec<ResourceKey<'_>> = keys
+            .iter()
+            .map(|(ns, id)| ResourceKey::new(ns.as_str(), *id))
+            .collect();
+        if urgent {
+            source.prefetch_urgent(&refs).await
+        } else {
+            source.prefetch(&refs).await
+        }
+    };
     if !initial_keys.is_empty() {
-        source
-            .prefetch(initial_keys)
+        let owned: Vec<(String, u32)> = initial_keys
+            .iter()
+            .map(|k| (k.namespace.to_string(), k.file_id))
+            .collect();
+        do_prefetch(owned)
             .await
             .map_err(|e| JsValue::from_str(&format!("prefetch initial: {e}")))?;
     }
@@ -311,7 +358,12 @@ where
         // class, which fails every attempt identically).
         let mut round_ok = false;
         for attempt in 1..=PREFETCH_ROUND_TRIES {
-            match source.prefetch(&keys).await {
+            let round = if urgent {
+                source.prefetch_urgent(&keys).await
+            } else {
+                source.prefetch(&keys).await
+            };
+            match round {
                 Ok(()) => {
                     round_ok = true;
                     break;

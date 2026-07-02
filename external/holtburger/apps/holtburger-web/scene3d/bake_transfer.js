@@ -76,6 +76,10 @@ export function serializeModelMesh(wasmMesh) {
   const surfaces = wasmMesh.surfaces; // Uint32Array
   const bbox = wasmMesh.bbox; // Float32Array(6)
   const didDegrade = wasmMesh.didDegrade >>> 0; // u32
+  // geom-audit — decode-starvation flag (0 = complete decode). typeof-
+  // guarded so a stale pkg without the getter serializes 0.
+  const decodeMisses =
+    typeof wasmMesh.decodeMisses === "number" ? wasmMesh.decodeMisses >>> 0 : 0;
 
   const mesh = {
     positions,
@@ -86,6 +90,7 @@ export function serializeModelMesh(wasmMesh) {
     surfaces,
     bbox,
     didDegrade,
+    decodeMisses,
   };
 
   const seen = new Set();
@@ -146,6 +151,8 @@ export function reconstructModelMesh(p) {
     surfaces: p.surfaces,
     bbox,
     didDegrade: p.didDegrade >>> 0,
+    // geom-audit — decode-starvation flag; absent (older worker) → 0.
+    decodeMisses: (p.decodeMisses ?? 0) >>> 0,
     // Derived — identical to the wasm-bindgen `triCount` / `worldBounds`
     // getters (tri_count = positions.len()/9; world bounds = bbox max-min
     // on X,Y). Recomputed so we never transfer redundant scalars.

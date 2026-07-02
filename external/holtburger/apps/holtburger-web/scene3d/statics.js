@@ -742,12 +742,20 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     };
   }
 
+  // geom-audit (2026-07-02): collect every dropped model id + reason so
+  // the batch warn below makes silent scene holes impossible.
+  const droppedModelIds = [];
   for (let i = 0; i < uniqueModelIds.length; i += 1) {
     const id = uniqueModelIds[i];
     const m = meshes[i];
-    if (!m) continue;
+    if (!m) {
+      droppedModelIds.push({ id: id >>> 0, reason: "no-mesh" });
+      continue;
+    }
     if (m.triCount === 0) {
       skippedZeroTri += 1;
+      const misses = typeof m.decodeMisses === "number" ? m.decodeMisses >>> 0 : -1;
+      droppedModelIds.push({ id: id >>> 0, reason: misses > 0 ? "decode-starved" : "zero-tri" });
       if (typeof m.free === "function") m.free();
       continue;
     }
@@ -772,6 +780,16 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
       groupsByModel.set(id, groups);
     }
     if (typeof m.free === "function") m.free();
+  }
+  // geom-audit: never drop a static model silently — every skipped id
+  // logs with its reason (decode-starved ids were already warned +
+  // retried wasm-side; this surfaces the scene-level consequence).
+  if (droppedModelIds.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[geom-audit] statics: ${droppedModelIds.length}/${uniqueModelIds.length} models dropped from bake: ` +
+        droppedModelIds.map((d) => `0x${d.id.toString(16)}(${d.reason})`).join(" ")
+    );
   }
 
   return {

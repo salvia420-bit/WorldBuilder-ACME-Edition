@@ -612,6 +612,12 @@ const DEFAULT_DETAIL_TEX_BASE_SCALE = 8.0;
 const DEFAULT_DETAIL_TEX_STRENGTH = 0.5;
 const DEFAULT_DETAIL_TEX_FADE_START = 18.0;
 const DEFAULT_DETAIL_TEX_FADE_END = 75.0;
+// 2026-07-02 — retail landscape-detail fade band: ACRender::get_alpha_for_z
+// (acclient.c:719936) returns alpha 255 below 10 m, a LINEAR ramp 10→50 m,
+// 0 beyond. Used by the default "global" (retail crossfade) mode; the
+// modern "percode" A/B mode keeps the 18/75 smoothstep above.
+const RETAIL_DETAIL_TEX_FADE_START = 10.0;
+const RETAIL_DETAIL_TEX_FADE_END = 50.0;
 // Fallback LUTs when the detail-tex flag is off / fetch failed: every code
 // maps to slice 255 (= "none", shader skips) and tiling 1. The int[33]
 // uniforms must still be the right length even when disabled, or three.js
@@ -972,6 +978,11 @@ uniform float uDetailTexStrength;         // 0..1 modulation strength near camer
 uniform float uDetailTexFadeStart;        // metres — full strength nearer than this
 uniform float uDetailTexFadeEnd;          // metres — zero strength beyond this
 uniform float uDetailTexEnabled;          // 0.0 OFF / 1.0 ON (URL flag gate)
+// 2026-07-02 — 1.0 = retail landscape-detail op (alpha CROSSFADE toward the
+// tile, weighted by the tile's own alpha and a linear 10-50 m distance fade;
+// acclient.c:459046/454415/719936). 0.0 = the legacy per-code MODULATE2X
+// grain (?terrainDetailTex=percode A/B mode).
+uniform float uDetailTexCrossfade;
 // T1 (2026-05-28) — retail TexMerge composite. AC's landscape does NOT
 // bilinear-blend between cells: each 24 m cell picks a base terrain texture
 // plus up to 3 alpha-masked overlays (one per differing corner) + up to 2
@@ -1620,11 +1631,33 @@ void main() {
     if (dslice >= 0 && dslice < uDetailTexSliceCount) {
       float tiling = float(uDetailTexTiling[dcode]);
       vec2 dUv = vGridUv * (tiling * uDetailTexBaseScale);
-      vec3 detail = texture(uTerrainDetailTex, vec3(dUv, float(dslice))).rgb;
-      float fade = 1.0 - smoothstep(uDetailTexFadeStart, uDetailTexFadeEnd, vViewDepth);
-      float amt = clamp(uDetailTexStrength, 0.0, 1.0) * fade;
-      vec3 mod2x = clamp(detail * 2.0, 0.0, 2.0);
-      result *= mix(vec3(1.0), mod2x, amt);
+      vec4 detail = texture(uTerrainDetailTex, vec3(dUv, float(dslice)));
+      if (uDetailTexCrossfade > 0.5) {
+        // 2026-07-02 RETAIL OP (default "global" mode). The landscape detail
+        // pass is an ALPHA CROSSFADE toward the detail tile, NOT a modulate:
+        // src_blend=SRCALPHA dst_blend=INVSRCALPHA (acclient.c:459046-459049;
+        // single-pass twin TEXOP_BLENDCURRENTALPHA at :454415). The blend
+        // weight is the tile's own ALPHA channel (authored ~0.21 on retail
+        // 0x06006D57 - the fixed-function stage multiplies texture alpha by
+        // the vertex fade alpha) times the per-vertex distance fade
+        // ACRender::get_alpha_for_z (acclient.c:719936): full inside 10 m,
+        // LINEAR to zero at 50 m. The previous MODULATE2X of an
+        // sRGB-DECODED texel at strength 1.0 multiplied terrain by 0..2x
+        // (tile mean 106/255 decodes to 0.14 linear, x2 = 0.29) - the
+        // 2026-07-02 "washed out + very bright and very dark" speckle.
+        float fadeA = clamp(
+          1.0 - (vViewDepth - uDetailTexFadeStart)
+                / max(uDetailTexFadeEnd - uDetailTexFadeStart, 1e-3),
+          0.0, 1.0);
+        float amtA = detail.a * fadeA * clamp(uDetailTexStrength, 0.0, 1.0);
+        result = mix(result, detail.rgb, amtA);
+      } else {
+        // "percode" A/B mode keeps the modern per-type MODULATE2X grain.
+        float fade = 1.0 - smoothstep(uDetailTexFadeStart, uDetailTexFadeEnd, vViewDepth);
+        float amt = clamp(uDetailTexStrength, 0.0, 1.0) * fade;
+        vec3 mod2x = clamp(detail.rgb * 2.0, 0.0, 2.0);
+        result *= mix(vec3(1.0), mod2x, amt);
+      }
     }
   }
 
@@ -2254,10 +2287,16 @@ export async function resolveTerrainRingOpts(
       // every code renders TerrainDesc[0]'s landscape detail slice at its
       // authored tiling — one texture, one frequency, world-wide, exactly
       // LScape::GenerateDetailSurface(0). baseScale 1.0 = retail's
-      // detail-UV = cellUV x tiling (tiling 4 → 6 m period); strength 1.0 =
-      // retail's plain second-stage modulate (no lerp).
+      // detail-UV = cellUV x tiling (tiling 4 → 6 m period).
+      // 2026-07-02 rev 3 — retail OP is an alpha CROSSFADE, not a modulate
+      // (crossfade: true → uDetailTexCrossfade; see the shader comment):
+      // blend weight = tile alpha (~0.21 authored) × linear 10→50 m fade.
+      // strength stays 1.0 = "authored weight, unscaled".
       let detailBaseScale = DEFAULT_DETAIL_TEX_BASE_SCALE;
       let detailStrength = DEFAULT_DETAIL_TEX_STRENGTH;
+      let detailFadeStart = DEFAULT_DETAIL_TEX_FADE_START;
+      let detailFadeEnd = DEFAULT_DETAIL_TEX_FADE_END;
+      let detailCrossfade = false;
       if (detailTexMode !== "percode" && codeToSlice[0] !== 255) {
         const s0 = codeToSlice[0];
         const t0 = codeTiling[0];
@@ -2267,6 +2306,9 @@ export async function resolveTerrainRingOpts(
         }
         detailBaseScale = 1.0;
         detailStrength = 1.0;
+        detailFadeStart = RETAIL_DETAIL_TEX_FADE_START;
+        detailFadeEnd = RETAIL_DETAIL_TEX_FADE_END;
+        detailCrossfade = true;
       }
 
       const built = buildTerrainDetailArrayBytes(slices);
@@ -2298,6 +2340,9 @@ export async function resolveTerrainRingOpts(
         sliceCount: built.depth,
         baseScale: detailBaseScale,
         strength: detailStrength,
+        fadeStart: detailFadeStart,
+        fadeEnd: detailFadeEnd,
+        crossfade: detailCrossfade,
       };
       scene3d.terrainDetailTexState = detailTexState;
     } catch (e) {
@@ -2423,6 +2468,11 @@ export async function resolveTerrainRingOpts(
     // modern per-code tuning (8.0/0.5); resolved in the state build above.
     detailTexBaseScale: detailTexState?.baseScale ?? DEFAULT_DETAIL_TEX_BASE_SCALE,
     detailTexStrength: detailTexState?.strength ?? DEFAULT_DETAIL_TEX_STRENGTH,
+    // 2026-07-02 rev 3 — retail crossfade op + its 10/50 m linear fade band
+    // (global mode) vs the percode MODULATE2X + 18/75 smoothstep.
+    detailTexCrossfade: detailTexState?.crossfade ?? false,
+    detailTexFadeStart: detailTexState?.fadeStart ?? DEFAULT_DETAIL_TEX_FADE_START,
+    detailTexFadeEnd: detailTexState?.fadeEnd ?? DEFAULT_DETAIL_TEX_FADE_END,
     // T1 — TexMerge alpha-mask array + enable flag. Per-LB merge texture is
     // built in bakeTerrainForLandblock (it needs wasmMesh); this provides the
     // shared mask array + the gate. Disabled → bilinear path unchanged.
@@ -2821,6 +2871,23 @@ function reconcileTerrainLodForCentre(scene3d, newLbKey) {
   // this was never runtime-updated (see the pickSubdivLevelForLb header).
   opts.playerLbKey = newLbKey;
   scene3d.playerLbKey = newLbKey;
+  // The lazy bakers run against the scene3dForBuilders facade — a DIFFERENT
+  // object from window.liveScene3d (the statics.js:3786 footgun) — and
+  // pickSubdivLevelForLb reads playerLbKey off whichever facade the bake was
+  // invoked with. The LOD reference must move on BOTH facades: with only one
+  // updated, every bake measured distance from the session's FIRST region,
+  // so touring far enough (~4-5 towns) degraded every new town to factor-1
+  // stub terrain (81 verts) that the reconcile then agreed never needed an
+  // upgrade — the "world stops loading after portalling around" hollow-town
+  // wedge. Mirror in both directions so it holds regardless of which facade
+  // drives the tick.
+  const _twin =
+    (scene3d.cameraSwitcher && scene3d.cameraSwitcher.scene3d) ||
+    (typeof window !== "undefined" ? window.liveScene3d : null);
+  if (_twin && _twin !== scene3d) {
+    _twin.playerLbKey = newLbKey;
+    if (_twin.terrainOpts) _twin.terrainOpts.playerLbKey = newLbKey;
+  }
   if (!(scene3d._lodRebakeQueue instanceof Set)) scene3d._lodRebakeQueue = new Set();
   for (const c of scene3d.terrainGroup.children) {
     const ud = c.userData;
@@ -3250,9 +3317,19 @@ export async function bakeTerrainForLandblock(
           ? opts.detailTexStrength
           : DEFAULT_DETAIL_TEX_STRENGTH,
       },
-      uDetailTexFadeStart: { value: DEFAULT_DETAIL_TEX_FADE_START },
-      uDetailTexFadeEnd: { value: DEFAULT_DETAIL_TEX_FADE_END },
+      uDetailTexFadeStart: {
+        value: Number.isFinite(opts.detailTexFadeStart)
+          ? opts.detailTexFadeStart
+          : DEFAULT_DETAIL_TEX_FADE_START,
+      },
+      uDetailTexFadeEnd: {
+        value: Number.isFinite(opts.detailTexFadeEnd)
+          ? opts.detailTexFadeEnd
+          : DEFAULT_DETAIL_TEX_FADE_END,
+      },
       uDetailTexEnabled: { value: opts.detailTexEnabled ? 1.0 : 0.0 },
+      // 2026-07-02 rev 3 — retail crossfade op (see the fragment branch).
+      uDetailTexCrossfade: { value: opts.detailTexCrossfade ? 1.0 : 0.0 },
       // T1 — TexMerge composite. uMergeData is per-LB (built just above);
       // uAlphaMasks is the shared ordered mask array from opts. Enabled only
       // when BOTH the flag built a mask array AND this LB got a merge texture

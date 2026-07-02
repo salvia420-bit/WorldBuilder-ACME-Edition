@@ -56,7 +56,7 @@ use holtburger_manifest::{
 };
 
 use crate::concurrency::{DEFAULT_FETCH_CONCURRENCY, Semaphore};
-use crate::http::{HttpError, fetch_bytes, join_url};
+use crate::http::{FetchPriority, HttpError, fetch_bytes, fetch_bytes_with_priority, join_url};
 use crate::inflight::InflightMap;
 use crate::manifest_source_v1::ManifestResourceSourceV1;
 
@@ -295,7 +295,24 @@ impl ManifestResourceSource {
     pub async fn prefetch(&self, keys: &[ResourceKey<'_>]) -> Result<(), PrefetchError> {
         match self {
             Self::V1(s) => s.prefetch(keys).await,
-            Self::V2(s) => s.prefetch(keys).await,
+            Self::V2(s) => s.prefetch_impl(keys, false).await,
+        }
+    }
+
+    /// Urgent-lane variant of [`Self::prefetch`] for player-blocking
+    /// loads (the CURRENT landblock's interior EnvCells). Skips the
+    /// shared `fetch_sem` so the request is NOT queued behind the
+    /// speculative ring bakers' fetch flood — the geom-audit sessions
+    /// (2026-07-02) measured the FIFO fetch-semaphore queue starving
+    /// `fetchEnvCellsInLandblock` for minutes (interior never
+    /// appeared). The browser's per-origin connection cap still
+    /// bounds actual parallelism, and the semaphore's purpose (keep
+    /// the browser queue shallow) is preserved because urgent batches
+    /// are small (~100 records per landblock, one LB at a time).
+    pub async fn prefetch_urgent(&self, keys: &[ResourceKey<'_>]) -> Result<(), PrefetchError> {
+        match self {
+            Self::V1(s) => s.prefetch(keys).await,
+            Self::V2(s) => s.prefetch_impl(keys, true).await,
         }
     }
 
@@ -393,7 +410,12 @@ impl V2Source {
     /// a shard URL via the `shard_url_template` and fetch in
     /// parallel. Verifies sha256 against the catalog entry when
     /// available; convention-URL mode skips verification.
-    async fn prefetch(&self, keys: &[ResourceKey<'_>]) -> Result<(), PrefetchError> {
+    ///
+    /// `urgent` (2026-07-02): bypass the shared `fetch_sem` so a
+    /// player-blocking batch (current-LB interior) is not FIFO-queued
+    /// behind the speculative ring bakers' shard flood. See
+    /// [`ManifestResourceSource::prefetch_urgent`].
+    async fn prefetch_impl(&self, keys: &[ResourceKey<'_>], urgent: bool) -> Result<(), PrefetchError> {
         // Step A: filter out boot-served + already-cached keys.
         let mut work_keys: Vec<OwnedKey> = Vec::new();
         {
@@ -570,15 +592,47 @@ impl V2Source {
             async move {
                 let result = {
                     let url_for_fetch = url.clone();
+                    // Urgent fetches dedup under a DISTINCT inflight key:
+                    // latching onto an existing normal-lane Shared would
+                    // park the urgent caller in the semaphore queue it is
+                    // supposed to bypass (measured: the session's physics
+                    // cell loader had already enqueued the same URLs via
+                    // the slow lane, re-starving the interior build). The
+                    // worst case is one duplicate fetch per record —
+                    // urgent batches are small and the shard cache is
+                    // idempotent.
+                    let dedup_key = if urgent {
+                        format!("urgent:{url}")
+                    } else {
+                        url.clone()
+                    };
                     inflight
-                        .get_or_fetch(&url, move || {
+                        .get_or_fetch(&dedup_key, move || {
                             let u = url_for_fetch.clone();
                             async move {
                                 // F1: hold a global permit only for the
                                 // actual network fetch; deduped waiters
                                 // latch on the Shared future permit-free.
-                                let _permit = fetch_sem.acquire().await;
-                                fetch_bytes(&u).await
+                                // Urgent batches skip the queue (player-
+                                // blocking; browser cap still bounds).
+                                let _permit = if urgent {
+                                    None
+                                } else {
+                                    Some(fetch_sem.acquire().await)
+                                };
+                                // Speculative bulk prefetch rides the LOW
+                                // browser fetch-priority so the ring
+                                // bakers' flood cannot FIFO-starve player-
+                                // blocking urgent batches behind the
+                                // 6-connection/origin cap (measured:
+                                // interiors never loaded). Urgent keeps
+                                // the default (High) priority.
+                                let prio = if urgent {
+                                    FetchPriority::Auto
+                                } else {
+                                    FetchPriority::Low
+                                };
+                                fetch_bytes_with_priority(&u, prio).await
                             }
                         })
                         .await

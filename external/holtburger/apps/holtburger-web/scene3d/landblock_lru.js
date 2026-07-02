@@ -390,6 +390,14 @@ export class LandblockLRU {
     if (s.buildingsBakedLbs instanceof Set) s.buildingsBakedLbs.delete(lbKey);
     if (s.staticsBakedLbs instanceof Set) s.staticsBakedLbs.delete(lbKey);
     if (s.envCellLoadedLbs instanceof Set) s.envCellLoadedLbs.delete(lbKey);
+    // geom-audit (2026-07-02): also cancel any IN-FLIGHT envcell build for
+    // this LB — buildEnvCellsForLandblock's attach guard reads the gen
+    // token (the loaded mark now lands only on success, so it can't carry
+    // the eviction signal any more). Deleting the gen entry mismatches
+    // every in-flight build's token; deleting the marker lets a fresh
+    // re-approach start a new build immediately.
+    if (s.envCellBuildInFlight instanceof Set) s.envCellBuildInFlight.delete(lbKey);
+    if (s.envCellBuildGen instanceof Map) s.envCellBuildGen.delete(lbKey);
     // Spawns idempotency lives in scene3d/spawns.js (its own module-local
     // Set, not on scene3d). It installs `_evictSpawnsInjectedLb` onto
     // scene3d so we can clear its per-LB mark without an import — letting a

@@ -15,10 +15,12 @@
 //     (relative to `cellOrigin`). It must live under a child group
 //     whose transform IS `(cellOrigin, cellOrientation)`.
 //   - Static-object placements (`takeStaticObjects()`) carry
-//     **world-frame** x/y/z + qw/qx/qy/qz (cell rotation × stab
-//     orientation already composed; cell origin already added).
-//     They render as direct children of the cell container with NO
-//     additional transform from the cell.
+//     **world-frame** x/y/z + qw/qx/qy/qz. Stab frames are stored
+//     landblock-local in the DAT — NOT cell-relative (retail applies
+//     them verbatim: CEnvCell::init_static_objects, acclient.c:347955)
+//     — so the wasm side adds ONLY the landblock corner offset, never
+//     the cell frame. They render as direct children of the cell
+//     container with NO additional transform from the cell.
 //   - Surface DIDs in the wasm mesh are pre-OR'd with `0x08000000`
 //     (Phase 6C closure at commit `bc71009`); the existing
 //     `MaterialCache.preload()` chain handles them as ordinary surface
@@ -300,10 +302,53 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       disposables: { geometries: [], materials: [], textures: [] },
     };
   }
-  scene3d.envCellLoadedLbs.add(lbKey);
+  // geom-audit (2026-07-02): the LB used to be marked LOADED before the
+  // wasm fetch — a failed/starved fetch then left the interior empty for
+  // the whole session with no retry (the missing-grocer-furniture class).
+  // Mark loaded only on SUCCESS; dedupe concurrent callers (world_stream
+  // fires this on every position update) via an in-flight set that also
+  // serves as the mid-build eviction signal (landblock_lru clears it).
+  if (!(scene3d.envCellBuildInFlight instanceof Set)) {
+    scene3d.envCellBuildInFlight = new Set();
+  }
+  if (!(scene3d.envCellBuildGen instanceof Map)) {
+    scene3d.envCellBuildGen = new Map();
+  }
+  if (scene3d.envCellBuildInFlight.has(lbKey)) {
+    return {
+      landblockId: lbKey,
+      cellCount: 0,
+      surfaceCount: 0,
+      staticObjectCount: 0,
+      skippedZeroTri: 0,
+      skippedNoMesh: 0,
+      inFlight: true,
+      disposables: { geometries: [], materials: [], textures: [] },
+    };
+  }
+  scene3d.envCellBuildInFlight.add(lbKey);
+  // Generation token: an evict during this build deletes the gen entry
+  // (and the in-flight marker), and any LATER rebuild bumps it — either
+  // way this build's attach guard sees a mismatch and bails instead of
+  // attaching stale duplicates.
+  const buildGen = ((scene3d.envCellBuildGen.get(lbKey) | 0) + 1) | 0;
+  scene3d.envCellBuildGen.set(lbKey, buildGen);
+  try {
 
   const placements = await wasmExports.fetchEnvCellsInLandblock(lbKey);
+  // geom-audit: one bounded breadcrumb per interior LB build so a
+  // stalled/failed interior is diagnosable from the console (the
+  // 2026-07-02 grocer bug ran for whole sessions with zero evidence).
+  // eslint-disable-next-line no-console
+  console.log(
+    `[scene3d.cells] envcells 0x${lbKey.toString(16).padStart(8, "0")}: ` +
+      `${placements ? placements.length : 0} placements fetched`
+  );
   if (!placements || placements.length === 0) {
+    // Legit no-interior LB (open countryside) — mark loaded so the
+    // per-position-update re-fires stay cheap. A prefetch ERROR throws
+    // out of this function instead (not marked → retried).
+    scene3d.envCellLoadedLbs.add(lbKey);
     return {
       landblockId: lbKey,
       cellCount: 0,
@@ -425,6 +470,9 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   const staticMatByDid = new Map();
   let skippedZeroTri = 0;
   let skippedNoMesh = 0;
+  // geom-audit: every dropped stab DID with its reason — surfaced in the
+  // per-build warn below + stamped for __diag.geometry.audit().
+  const droppedStaticDids = [];
   if (uniqueStaticDids.size > 0 && typeof wasmExports.fetch_model_meshes === "function") {
     const ids = [...uniqueStaticDids];
     let staticMeshes;
@@ -434,6 +482,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       // eslint-disable-next-line no-console
       console.warn("[scene3d.cells] fetch_model_meshes (cell statics) failed:", e);
       skippedNoMesh = ids.length;
+      for (const id of ids) droppedStaticDids.push({ did: id >>> 0, reason: "batch-failed" });
     }
     if (staticMeshes) {
       const allStaticSurfaceDids = new Set();
@@ -447,10 +496,16 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         const m = staticMeshes[i];
         if (!m) {
           skippedNoMesh += 1;
+          droppedStaticDids.push({ did: id >>> 0, reason: "no-mesh" });
           continue;
         }
         if (m.triCount === 0) {
           skippedZeroTri += 1;
+          // geom-audit: decodeMisses > 0 = decode-starved (records were
+          // unavailable — wasm already warned + retried); 0 = authored-
+          // empty. typeof-guarded for a stale pkg/worker payload.
+          const misses = typeof m.decodeMisses === "number" ? m.decodeMisses >>> 0 : -1;
+          droppedStaticDids.push({ did: id >>> 0, reason: misses > 0 ? "decode-starved" : "zero-tri" });
           if (typeof m.free === "function") m.free();
           continue;
         }
@@ -516,6 +571,19 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       }
     }
   }
+  // geom-audit (2026-07-02): NOTHING dropped from an interior may be
+  // silent — every skipped stab DID logs with its reason so the class
+  // "furniture missing, no console evidence" cannot recur.
+  if (droppedStaticDids.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[geom-audit] envcells 0x${lbKey.toString(16).padStart(8, "0")}: ` +
+        `${droppedStaticDids.length}/${uniqueStaticDids.size} cell-static models dropped: ` +
+        droppedStaticDids
+          .map((d) => `0x${d.did.toString(16)}(${d.reason})`)
+          .join(" ")
+    );
+  }
 
   // ---- Step D: instantiate each cell from snapshots -----------------
   let cellCount = 0;
@@ -558,6 +626,15 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       environmentId: snap.environmentId,
       portalCellIds: snap.portalCellIds,
       isEnvCell: true,
+      // geom-audit: expected vs attached stab accounting for
+      // __diag.geometry.audit(). `expectedStatics` = the EnvCell's
+      // authored stab count; `peeledAnimated` counts stabs routed to
+      // the animated-scenery builder (attached under this container a
+      // beat later); `missingStaticDids` lists stabs dropped for lack
+      // of geometry (each already console-warned with a reason).
+      expectedStatics: snap.staticSnaps.length,
+      peeledAnimated: 0,
+      missingStaticDids: [],
     };
 
     const meshGroup = new THREE.Group();
@@ -752,10 +829,17 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           landblockId,
           sourceObjIdx: snap.cellId >>> 0,
         });
+        cellContainer.userData.peeledAnimated += 1;
         continue;
       }
       const geom = staticGeomByDid.get(so.did);
-      if (!geom) continue;
+      if (!geom) {
+        // geom-audit: per-cell record of the dropped stab (already
+        // warned per-DID above; the stamp lets __diag.geometry.audit()
+        // attribute the hole to its cell).
+        cellContainer.userData.missingStaticDids.push(so.did >>> 0);
+        continue;
+      }
       const mat = staticMatByDid.get(so.did) || scene3d.materialCache.fallbackMaterial;
       const m = new THREE.Mesh(geom, mat);
       m.name = `cellstatic-${snap.cellId.toString(16).padStart(8, "0")}-${so.did.toString(16).padStart(8, "0")}`;
@@ -846,7 +930,10 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // an eviction tick run before we reach this attach. Guarding only the
   // time-sliced path left the sync path able to re-attach an evicted LB's
   // cells (duplicate cells on re-approach). Always re-check residency.
-  if (!scene3d.envCellLoadedLbs.has(lbKey)) {
+  // geom-audit (2026-07-02): the LOADED mark now lands only on success, so
+  // the mid-build eviction signal is the generation token (landblock_lru's
+  // evict deletes it; a later rebuild bumps it — both mismatch).
+  if (scene3d.envCellBuildGen.get(lbKey) !== buildGen) {
     for (const g of lbDisposableGeometries) {
       try { if (g && typeof g.dispose === "function") g.dispose(); } catch (_) {}
     }
@@ -867,6 +954,8 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     scene3d.cellsGroup.add(container);
     scene3d.cellContainers3d.set(cellId, container);
   }
+  // geom-audit: build reached attach — NOW the LB counts as loaded.
+  scene3d.envCellLoadedLbs.add(lbKey);
 
   // 2026-06-23: light up interior props' default_script particle chains
   // (braziers/torches/fountains) — the indoor twin of the outdoor
@@ -922,6 +1011,18 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       textures: [],
     },
   };
+
+  // geom-audit: the try wraps the whole build (indentation left as-is to
+  // keep the diff reviewable); the finally releases the in-flight marker
+  // on EVERY exit — success, legit-empty, eviction, or thrown error — so
+  // a failed build is retried by the next position-update fire instead
+  // of wedging the LB. Gen-guarded: if an evict cleared the marker and a
+  // NEWER build re-set it, this stale build must not clear the newer one's.
+  } finally {
+    if (scene3d.envCellBuildGen?.get(lbKey) === buildGen) {
+      scene3d.envCellBuildInFlight.delete(lbKey);
+    }
+  }
 }
 
 /**
