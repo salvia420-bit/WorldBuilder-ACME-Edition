@@ -3812,8 +3812,47 @@ impl MovementSystem {
                     world.player.current_planar_velocity.y = vy;
                 }
                 world.player.vertical_velocity = vz;
+                // Fell-through-world failsafe (2026-07-01). A cell-transit
+                // bug can leave the mover airborne with a STALE indoor cell
+                // id (the Holtburg building walk-out catapult): with
+                // `pose.is_indoors()` stuck true, neither the indoor
+                // cell-AABB snap nor the outdoor terrain landing arm below
+                // ever engages, so the fall never ends — and the cascade is
+                // unrecoverable in-game because ACE refuses every teleport
+                // while the client reports airborne ("You're in the air!").
+                // After a freefall longer than any legitimate drop (~4 s
+                // worst case in retail; we require 6 s) AND a depth well
+                // below the outdoor terrain at the mover's global XY,
+                // re-seat the pose on the terrain floor: clear the stale
+                // indoor cell to the outdoor bucket, rebucket across
+                // landblock bounds, snap z, and land().
+                const FELL_THROUGH_MIN_AIRBORNE_SECS: f32 = 6.0;
+                const FELL_THROUGH_TERRAIN_MARGIN: f32 = 50.0;
+                world.player.airborne_secs += dt_s;
+                if world.player.airborne_secs >= FELL_THROUGH_MIN_AIRBORNE_SECS {
+                    let global = pose.global_coords();
+                    if let Some(tz) = world.terrain_height_at(global.x, global.y) {
+                        if pose.coords.z < tz - FELL_THROUGH_TERRAIN_MARGIN {
+                            log::warn!(
+                                "[fell-through-failsafe] airborne {:.1}s at z={:.1} (terrain {:.1}) cell 0x{:08X} — re-seating on terrain",
+                                world.player.airborne_secs,
+                                pose.coords.z,
+                                tz,
+                                pose.landblock_id.0,
+                            );
+                            pose.landblock_id =
+                                Guid((pose.landblock_id.0 & 0xFFFF_0000) | 0x0001);
+                            pose.coords.z = tz + 0.005;
+                            pose = pose
+                                .rebucket_outdoor_landblock()
+                                .normalize_outdoor_cell();
+                            world.player.land();
+                        }
+                    }
+                }
             } else {
                 pose.coords.z += raw_delta.z;
+                world.player.airborne_secs = 0.0;
             }
         }
         // Floor-Z snap. Two paths:

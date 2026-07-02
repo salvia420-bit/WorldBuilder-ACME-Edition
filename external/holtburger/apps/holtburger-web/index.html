@@ -5662,10 +5662,14 @@
               }
             }
 
-            // Unknown slash → don't route; let it fall through to
-            // sendChat so the user sees ACE's "Unknown command"
-            // response (or it just gets said locally if no @ prefix).
-            return { dispatched: false };
+            // Unknown slash → treat as a SERVER command (retail
+            // accepted `/` and `@` interchangeably as command
+            // prefixes; ACE's GameActionTalk only parses `@`). Send
+            // `@cmd rest` so `/telepoi holtburg` works and a typo
+            // draws ACE's "Unknown command" instead of the player
+            // SAYING "/telepoi holtburg" out loud (pre-fix behavior).
+            handle.sendChat(`@${cmd}${rest ? ` ${rest}` : ""}`);
+            return { dispatched: true, echo: `> @${cmd}${rest ? ` ${rest}` : ""}` };
           }
           window.__routeSlashCommand = routeSlashCommand;
 

@@ -1303,6 +1303,12 @@ pub struct PlayerState {
     pub server_control_sequence: u16,
     /// Last non-zero server-reported motion stance/style cached for outbound movement packets.
     pub last_server_motion_style: Option<MotionStance>,
+    /// Continuous airborne time in seconds, accumulated by the local-pose
+    /// integrator and reset by [`Self::land`]. Drives the fell-through-world
+    /// failsafe (a legitimate retail fall lasts a few seconds at most; a
+    /// multi-second freefall far below terrain means a transit bug ate the
+    /// floor and the fall would otherwise never end).
+    pub airborne_secs: f32,
     /// Sequence for teleportation events to ignore stale position updates.
     pub teleport_sequence: u16,
     /// Sequence for server-forced repositions (e.g. rubberbanding or physics corrections).
@@ -1594,6 +1600,7 @@ impl PlayerState {
             instance_sequence: 0,
             server_control_sequence: 0,
             last_server_motion_style: None,
+            airborne_secs: 0.0,
             teleport_sequence: 0,
             force_position_sequence: 0,
             position_sequence: 0,
@@ -1801,6 +1808,7 @@ impl PlayerState {
         self.is_airborne = false;
         self.is_jumping = false;
         self.vertical_velocity = 0.0;
+        self.airborne_secs = 0.0;
         // F1-6 / G-7 — touchdown (or teleport, which routes through land)
         // drops any held standing-long-jump charge, per the field doc.
         self.standing_long_jump_charge = false;
