@@ -926,6 +926,8 @@ uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain code, G = roadC
 uniform sampler2D uRoadTexture;       // retail road tile (RepeatWrap)
 uniform float uRoadTileScale;         // road UV tile rate per LB unit
 uniform float uRoadEnabled;           // 0 = no road overlay (back-compat / disable)
+uniform float uRoadPaintLegacy;       // 1 = pre-2026-07-02 bilinear+smoothstep lane (?roadPaint=legacy)
+uniform float uRoadSlotsEnabled;      // 1 = retail TexMerge road overlay slots 4..5 (?roadSlots=on)
 
 // Wave 2.A — 32x1 RGBA terrain palette LUT. One sRGB triple per retail
 // terrain code 0..31 from TerrainDesc.terrain_types[i].terrain_color
@@ -1239,6 +1241,14 @@ float vertexRoadAt(int iu, int iv) {
   return texelFetch(uVertexTypes, ivec2(iu, iv), 0).g > 0.125 ? 1.0 : 0.0;
 }
 
+// 2026-07-02 — point-to-segment distance (metres, cell frame) for the
+// analytic road lane painter in main(). No backticks in comments here.
+float distToSegment(vec2 p, vec2 a, vec2 b) {
+  vec2 ab = b - a;
+  float t = clamp(dot(p - a, ab) / dot(ab, ab), 0.0, 1.0);
+  return length(p - (a + ab * t));
+}
+
 // Wave 2.A — sample the 32×1 terrain palette LUT at the given code.
 // Codes 0..31 clamp to the palette length; the 32-tile (road) layer
 // has no palette entry and falls through to (1,1,1) so road colour
@@ -1494,33 +1504,40 @@ void main() {
     // the Chorizite FindRoadAlpha all-road semantics and avoids three
     // dead texelFetch / mask samples per all-road fragment).
     if (baseLayer != 32) {
-      // Slots 1..3 = terrain overlays only. 2026-06-21: the road overlay
-      // slots (4..5) are deliberately SKIPPED here (loop stops at s<4). The
-      // retail road alpha masks (0x0500168E/168C/168D) decode to near-full
-      // coverage, so applying them as overlays paints the road across BOTH
-      // cell-columns adjacent to a road vertex-line → a ~2-cell "two-lane
-      // highway" (acclient roads are a single ~5 m lane, _road_width=5.0 at
-      // acclient.c:467318). The narrow smoothstep(0.85,0.95) road painter
-      // below now runs in texMerge mode too (its uTexMergeEnabled<0.5 gate was
-      // removed) and is the single road source — one centred ~5 m lane.
-      // Terrain overlays keep their organic per-cell alpha-mask blend.
-      for (int s = 1; s < 4; s++) {
+      // Slots 1..3 = terrain overlays; slots 4..5 = road overlays. The road
+      // slots were abandoned on 2026-06-21 because the masks "decoded to
+      // near-full coverage" (two-lane highway) — that was the inverted mask
+      // sense (see baseW below), NOT the masks: they are a dark lane on
+      // white. With the retail sense restored they paint a single masked
+      // lane, enabled via ?roadSlots=on (default off pending the 1070
+      // eye-test vs the analytic segment-distance painter below, which
+      // stays the default road source and is gated OFF when slots are on).
+      for (int s = 1; s < 6; s++) {
+        if (s >= 4 && uRoadSlotsEnabled < 0.5) break;
         vec4 t = texelFetch(uMergeData, ivec2(colBase + s, iv), 0);
         if (t.a < 0.5) continue;            // empty slot
         int layer = int(t.r * 255.0 + 0.5);
         int maskIdx = int(t.g * 255.0 + 0.5);
         int rot = int(t.b * 255.0 + 0.5);
         vec2 mUv = rotateCellUv(cellUv, rot);
-        // R4.a — retail mid-point alpha rounding (acclient.c:365787-365798),
-        // gated under uTexMergeEnabled by uTexMergeAlphaRound. No-op (returns
-        // the raw sampled weight) when the sub-flag is 0, so the shipped
-        // composite is byte-identical with rounding off.
-        float alpha = roundMergeAlpha(
+        // 2026-07-02 — RETAIL MASK SENSE. ImgTex::MergeTexture
+        // (acclient.c:365787) computes dst = (a*dst + (256-a)*src) >> 8 where
+        // dst is the composited BASE tile and src the incoming OVERLAY: the
+        // mask byte weights the BASE — white keeps base, black shows overlay
+        // (corner masks are ~75-80 pct white with one dark quadrant; road
+        // masks are a dark lane on white). This mix previously weighted the
+        // OVERLAY by the mask — inverted — flooding boundary cells with the
+        // overlay: the 2026-06-21 "big-blocks"/bars, AND the "near-full road
+        // masks / two-lane highway" that got the road overlay slots
+        // abandoned. R4.a roundMergeAlpha nudges the mask byte up when
+        // a > 0x80 — with the mask now weighting the base, that is exactly
+        // retail's rounding on the same operand.
+        float baseW = roundMergeAlpha(
           texture(uAlphaMasks, vec3(mUv, float(maskIdx))).r,
           uTexMergeAlphaRound
         );
         vec3 overlayCol = texture(uAtlas, atlasUvFor(clamp(layer, 0, 32), cellUv)).rgb;
-        merged = mix(merged, overlayCol, alpha);
+        merged = mix(overlayCol, merged, baseW);
       }
     }
     result = merged;
@@ -1583,8 +1600,22 @@ void main() {
   // fade keep it a near-camera effect; beyond uDetailTexFadeEnd the term
   // collapses to 1.0 (neutral), matching how retail's detail mip averages
   // out at distance.
+  // 2026-07-02 — nearest-corner (max bilinear weight) terrain code for BOTH
+  // detail layers below. They previously keyed off flat vTerrainCode (the
+  // provoking vertex = ONE code per triangle), which stamped razor-edged
+  // triangle-shaped detail patches at every type boundary (user-reported
+  // "triangle" artefact). Nearest-corner keeps one sample per fragment but
+  // moves the switch to the cell midlines, tracking the colour blend above.
+  int nearCode = t00;
+  {
+    float nw = w00;
+    if (w10 > nw) { nw = w10; nearCode = t10; }
+    if (w01 > nw) { nw = w01; nearCode = t01; }
+    if (w11 > nw) { nw = w11; nearCode = t11; }
+  }
+
   if (uDetailTexEnabled > 0.5) {
-    int dcode = clamp(vTerrainCode, 0, 32);
+    int dcode = clamp(nearCode, 0, 32);
     int dslice = uCodeToDetailTexSlice[dcode];
     if (dslice >= 0 && dslice < uDetailTexSliceCount) {
       float tiling = float(uDetailTexTiling[dcode]);
@@ -1613,17 +1644,49 @@ void main() {
   // road masks painted a ~2-cell "two-lane highway"; the bilinear road-bit
   // mask narrowed by smoothstep(0.85,0.95) gives the correct single ~5 m lane
   // (retail _road_width=5.0, acclient.c:467318) on top of either terrain blend.
-  if (uRoadEnabled > 0.5) {
+  // Analytic road lane — the default road source. Gated OFF when the retail
+  // road overlay slots are active (?roadSlots=on composites the road in the
+  // TexMerge loop above instead; double-painting would widen the lane).
+  if (uRoadEnabled > 0.5 && !(uTexMergeEnabled > 0.5 && uRoadSlotsEnabled > 0.5)) {
     float r00 = vertexRoadAt(iu,     iv    );
     float r10 = vertexRoadAt(iu + 1, iv    );
     float r01 = vertexRoadAt(iu,     iv + 1);
     float r11 = vertexRoadAt(iu + 1, iv + 1);
-    float roadMask = r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11;
-    // smoothstep(0.85, 0.95) narrows the paint band to ~5 m, matching
-    // retail's _road_width = 5.0 (acclient.c:467318). The raw bilinear
-    // mask ramps 0..1 across a 24 m cell, so the previous > 0.001 gate
-    // smeared the road across full cells (~10x too wide).
-    float roadWeight = smoothstep(0.85, 0.95, roadMask);
+    float roadWeight = 0.0;
+    if (uRoadPaintLegacy > 0.5) {
+      // Legacy (?roadPaint=legacy): bilinear road-presence mask narrowed by
+      // smoothstep(0.85, 0.95) to a ~5 m band. Correct on straight vertex-line
+      // runs (mask = 1.0 along the shared cell edge) but a DIAGONAL road run
+      // has road bits only on the two diagonal corners: the mask peaks at 0.5
+      // mid-cell, never reaching 0.85 — the lane vanished mid-cell, visibly
+      // amputating every diagonal road (user-reported "road broken").
+      float roadMask = r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11;
+      roadWeight = smoothstep(0.85, 0.95, roadMask);
+    } else if (r00 + r10 + r01 + r11 > 0.5) {
+      // 2026-07-02 — analytic lane: paint within half of retail's
+      // _road_width = 5.0 (acclient.c:467318) of the road POLYLINE. Road
+      // segments connect road-flagged corners along the four cell edges AND
+      // the two diagonals (retail roads step diagonally through the vertex
+      // grid); a road corner also paints its joint disc so L-turns and lane
+      // ends stay capped. ~1 m soft edge outside the 2.5 m half-width.
+      vec2 p = cellUv * 24.0;
+      vec2 k00 = vec2(0.0, 0.0);
+      vec2 k10 = vec2(24.0, 0.0);
+      vec2 k01 = vec2(0.0, 24.0);
+      vec2 k11 = vec2(24.0, 24.0);
+      float d = 1e9;
+      if (r00 > 0.5 && r10 > 0.5) d = min(d, distToSegment(p, k00, k10));
+      if (r01 > 0.5 && r11 > 0.5) d = min(d, distToSegment(p, k01, k11));
+      if (r00 > 0.5 && r01 > 0.5) d = min(d, distToSegment(p, k00, k01));
+      if (r10 > 0.5 && r11 > 0.5) d = min(d, distToSegment(p, k10, k11));
+      if (r00 > 0.5 && r11 > 0.5) d = min(d, distToSegment(p, k00, k11));
+      if (r10 > 0.5 && r01 > 0.5) d = min(d, distToSegment(p, k10, k01));
+      if (r00 > 0.5) d = min(d, length(p - k00));
+      if (r10 > 0.5) d = min(d, length(p - k10));
+      if (r01 > 0.5) d = min(d, length(p - k01));
+      if (r11 > 0.5) d = min(d, length(p - k11));
+      roadWeight = 1.0 - smoothstep(2.0, 3.0, d);
+    }
     if (roadWeight > 0.0) {
       vec3 roadColor = texture(uRoadTexture, vGridUv * uRoadTileScale).rgb;
       result = mix(result, roadColor, roadWeight);
@@ -1681,7 +1744,8 @@ void main() {
 
   float ndotl = 1.0;
   if (uDetailNormalEnabled > 0.5) {
-    int slice = uCodeToSlice[clamp(vTerrainCode, 0, 31)];
+    // 2026-07-02 — nearest-corner code (was flat vTerrainCode; see nearCode).
+    int slice = uCodeToSlice[clamp(nearCode, 0, 31)];
     if (slice < 5) {
       // ----- Phase 1.3 — slope-gated triplanar detail sampling. -----
       //
@@ -2154,16 +2218,17 @@ export async function resolveTerrainRingOpts(
   // `if (!atlasTexture)` block (the lazy path reuses the atlas but still
   // wants the detail uniforms). Flag off, fetch missing, or build failure
   // → null state → `uDetailTexEnabled` 0 → shader branch skipped (no-op).
-  // render-audit Site-2 (2026-06-09) — detailFlag preset now wired. The
-  // per-preset detailFlag (low:false, mid/high/ultra:true) from quality.js
-  // is now consumed for terrain detail textures: detail is ON for the
-  // mid/high/ultra presets and OFF for low, while still honouring an
-  // explicit `?terrainDetailTex=off` opt-out (and the legacy `=on` force).
-  // Effective enable = (preset.detailFlag || ?terrainDetailTex=on) AND NOT
-  // ?terrainDetailTex=off. Pending eye-test.
+  // 2026-07-02 — retail default: OPT-IN ONLY (?terrainDetailTex=on). The
+  // detail-diffuse layer is a modern addition with no retail equivalent, and
+  // its per-preset default-on (2026-06-09, "pending eye-test") FAILED the
+  // live 1070 eye-test today: the per-code MODULATE2X wash stamps pale
+  // razor-edged multi-cell blocks over type regions (looked like "terrain
+  // paint stamped landblock by landblock") and its tiling reads as a grid —
+  // it was the blocky layer sitting ON TOP of the (correct) TexMerge
+  // composite. The preset detailFlag no longer force-enables it; the
+  // ?terrainDetailTex=off opt-out still works against an explicit =on.
   const detailTexFlag =
-    (!!scene3d.quality?.flags?.detailFlag || readTerrainDetailTexFlag()) &&
-    !readTerrainDetailTexOffFlag();
+    readTerrainDetailTexFlag() && !readTerrainDetailTexOffFlag();
   let detailTexState = scene3d.terrainDetailTexState ?? null;
   if (
     detailTexFlag &&
@@ -2313,6 +2378,10 @@ export async function resolveTerrainRingOpts(
     // off). Render-pipeline change → default-off + 1070 eye-test before the
     // default flips, per the loop's flag policy.
     slopeShadingEnabled: readTerrainSlopeShadingFlag(),
+    // 2026-07-02 — ?roadPaint=legacy A/B escape for the analytic road lane.
+    roadPaintLegacy: readRoadPaintLegacyFlag(),
+    // 2026-07-02 — ?roadSlots=on: retail TexMerge road overlay slots.
+    roadSlotsEnabled: readRoadSlotsFlag(),
     // T7 — terrain detail-diffuse array + per-code LUTs (opt-in
     // `?terrainDetailTex=on`). Null array + enabled:false when off/failed →
     // shader branch skipped. codeToSlice/codeTiling are length-33 number
@@ -2577,20 +2646,60 @@ function readTerrainDetailTexOffFlag() {
  * blocks) and (b) runs the legacy road painter, which narrows the road via
  * smoothstep(0.85, 0.95) to retail's _road_width (~5 m, acclient.c:467318) =
  * a single centered lane. Live A/B at 0xcd9d confirmed bilinear fixes both.
- * The SELECTION half of the port is still bit-exact vs the decomp
- * (`holtburger-dat::terrain_merge`); the pixel composite's road-width +
- * rotation conventions (the near-full road masks, cell-boundary hard edges)
- * need real work before it can default on again — keep it opt-in until then.
+ *
+ * 2026-07-02 — ROOT-CAUSED AND DEFAULT ON AGAIN (see readTexMergeFlag). Both
+ * 06-21 symptoms were ONE bug: the shader weighted the OVERLAY by the mask
+ * byte, but retail ImgTex::MergeTexture (acclient.c:365787) weights the BASE
+ * (dst = (a*dst + (256-a)*src) >> 8; white keeps base, black shows overlay).
+ * Corner masks are ~75-80 pct white → inverted, every boundary cell flooded
+ * with overlay = "big blocks"; road masks are a dark lane on white →
+ * inverted, near-full-cell road = "two-lane highway". With the sense fixed
+ * the composite renders organic masked transitions (1070-confirmed live);
+ * the road overlay slots are re-armed behind ?roadSlots=on pending eye-test.
  */
-function readTexMergeFlag() {
-  // 2026-06-21 — DEFAULT OFF (opt-in ?texMerge=on); see docstring. The
-  // bilinear + smoothstep-road path is the smoother, single-lane default.
+function readRoadSlotsFlag() {
+  // 2026-07-02 — ?roadSlots=on composites roads via the retail TexMerge road
+  // overlay slots (4..5) now that the mask sense is corrected (they were
+  // abandoned 2026-06-21 under the inverted read). Default off pending the
+  // 1070 eye-test vs the analytic lane painter.
   try {
     if (typeof window === "undefined" || !window.location) return false;
-    const v = new URLSearchParams(window.location.search).get("texMerge");
+    const v = new URLSearchParams(window.location.search).get("roadSlots");
     return typeof v === "string" && v.toLowerCase() === "on";
   } catch (_) {
     return false;
+  }
+}
+
+function readRoadPaintLegacyFlag() {
+  // 2026-07-02 — ?roadPaint=legacy restores the pre-2026-07-02 bilinear+
+  // smoothstep road lane (breaks on diagonal road runs — mask peaks at 0.5
+  // mid-cell) for A/B against the analytic segment-distance painter.
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const v = new URLSearchParams(window.location.search).get("roadPaint");
+    return typeof v === "string" && v.toLowerCase() === "legacy";
+  } catch (_) {
+    return false;
+  }
+}
+
+function readTexMergeFlag() {
+  // 2026-07-02 — DEFAULT ON again (escape ?texMerge=off). The TexMerge
+  // composite (per-cell base + retail alpha-masked overlays) IS the retail
+  // terrain look; the "smoother" bilinear default chosen on 2026-06-21
+  // (39394a4e) muddied type boundaries world-wide. Independently, the
+  // subdiv mesh path shipped no terrainMergeData until 2026-07-02, so even
+  // ?texMerge=on was a silent no-op on every landblock — flag readers and
+  // uniforms all said "off" with zero console evidence. Both are fixed;
+  // roads still come from the analytic lane painter (see uRoadEnabled
+  // block), NOT the merge road slots (s<4 loop skip unchanged).
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("texMerge");
+    return !(typeof v === "string" && v.toLowerCase() === "off");
+  } catch (_) {
+    return true;
   }
 }
 
@@ -3036,6 +3145,13 @@ export async function bakeTerrainForLandblock(
       uRoadTexture: { value: opts.roadTexture ?? null },
       uRoadTileScale: { value: 4.0 },
       uRoadEnabled: { value: opts.roadTexture ? 1.0 : 0.0 },
+      // 2026-07-02 — ?roadPaint=legacy restores the bilinear+smoothstep lane
+      // (vanishes on diagonal road runs) for A/B against the analytic
+      // segment-distance painter that is now the default.
+      uRoadPaintLegacy: { value: opts.roadPaintLegacy ? 1.0 : 0.0 },
+      // 2026-07-02 — ?roadSlots=on: retail mask-composited road overlays
+      // (TexMerge slots 4..5); analytic lane painter gates off when active.
+      uRoadSlotsEnabled: { value: opts.roadSlotsEnabled ? 1.0 : 0.0 },
       // Wave 2.A — terrain palette LUT (see comment block at the top
       // of this file for the schema + fallback behaviour). Threaded
       // via opts from resolveTerrainRingOpts so the texture is shared

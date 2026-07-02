@@ -1247,6 +1247,7 @@ pub struct SubdividedLandblockMesh {
     grid_size: u32,
     height_min: f32,
     height_max: f32,
+    terrain_merge_data: Vec<u8>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1297,6 +1298,19 @@ impl SubdividedLandblockMesh {
     #[wasm_bindgen(getter, js_name = heightMax)]
     pub fn height_max(&self) -> f32 {
         self.height_max
+    }
+
+    /// T1 — per-cell TexMerge bytes (48×8 RGBA8, same layout as
+    /// [`LandblockMesh::terrain_merge_data`]). Built from the base 9×9
+    /// control-grid codes, NOT the subdivided grid — the shader maps
+    /// vGridUv [0,8] → cell, so one record per 24 m cell is correct at
+    /// every subdiv factor. Missing before 2026-07-02, which silently
+    /// disabled the whole TexMerge path (uTexMergeEnabled stayed 0) on
+    /// any mesh from the subdiv path — i.e. every landblock since the
+    /// base mesh was routed through it (5261caf0).
+    #[wasm_bindgen(getter, js_name = terrainMergeData)]
+    pub fn terrain_merge_data(&self) -> Vec<u8> {
+        self.terrain_merge_data.clone()
     }
 }
 
@@ -1464,6 +1478,18 @@ pub async fn fetch_subdivided_landblocks(
             TERRAIN_NOISE_SEED,
         );
 
+        // T1 — flatten the 9×9 control grids into build_terrain_merge_data's
+        // x*9+y layout (same convention as build_mesh's terrain_codes).
+        let mut tc9 = vec![0u8; 81];
+        let mut rc9 = vec![0u8; 81];
+        for x in 0..9usize {
+            for y in 0..9usize {
+                tc9[x * 9 + y] = codes[x][y];
+                rc9[x * 9 + y] = roads[x][y];
+            }
+        }
+        let terrain_merge_data = build_terrain_merge_data(&tc9, &rc9);
+
         out.push(SubdividedLandblockMesh {
             positions: sub.positions,
             normals: sub.normals,
@@ -1473,6 +1499,7 @@ pub async fn fetch_subdivided_landblocks(
             grid_size: sub.grid_size,
             height_min: sub.height_min,
             height_max: sub.height_max,
+            terrain_merge_data,
         });
     }
     Ok(out)
