@@ -5810,6 +5810,7 @@ struct StaticPartBsp {
 /// (when present), so 0x02 SetupModel statics get per-part precise collision
 /// under `USE_STATIC_BSP` — matching the 0x01 single-GfxObj path. Returns one
 /// `(Aabb, Option<StaticPartBsp>)` per part, index-parallel to `setup.parts`.
+#[cfg(target_arch = "wasm32")]
 fn walk_setup_parts_with_geom_and_bsp<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     setup_id: u32,
@@ -7358,6 +7359,49 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+/// Miss-counting `ResourceSource` adapter for the triangulation memo's
+/// completeness gate. `walk_setup_parts` (and the idle-anim pose chain)
+/// SOFT-tolerate missing child records — during `run_walk_loop`'s dry-run
+/// passes (prefetch.rs), a Setup whose children aren't fetched yet
+/// triangulates "successfully" to an empty/partial/mis-posed result. Caching
+/// that poisons the memo: the next dry-run pass hits the memo, touches no
+/// records, the walk loop concludes there's nothing left to prefetch, and
+/// every later fetch of that model returns the empty triangulation forever
+/// (live symptom 2026-07-02: portal-space donut Setup 0x02000306 →
+/// triCount=0 → no portal animation). Counting misses at the source lets
+/// the memo insert require a fully-resident decode.
+#[cfg(any(target_arch = "wasm32", test))]
+struct MissCountingSource<'a, S: ?Sized> {
+    inner: &'a S,
+    misses: std::sync::atomic::AtomicU32,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl<S: holtburger_dat::ResourceSource + ?Sized> holtburger_dat::ResourceSource
+    for MissCountingSource<'_, S>
+{
+    fn get_file_by_key(
+        &self,
+        key: holtburger_dat::ResourceKey<'_>,
+    ) -> holtburger_dat::Result<Vec<u8>> {
+        let r = self.inner.get_file_by_key(key);
+        if r.is_err() {
+            self.misses
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        r
+    }
+    fn get_metadata_by_key(
+        &self,
+        key: holtburger_dat::ResourceKey<'_>,
+    ) -> Option<holtburger_dat::FileMetadata> {
+        self.inner.get_metadata_by_key(key)
+    }
+    fn has_namespace(&self, namespace: &str) -> bool {
+        self.inner.has_namespace(namespace)
+    }
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
@@ -7368,6 +7412,7 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
 ) -> Option<Vec<Tri>> {
     use holtburger_dat::file_type::GfxObj;
     use holtburger_dat::ResourceKey;
+    use holtburger_dat::ResourceSource as _; // trait method on `counting`
     // Substitution-free triangulations are fully keyed by `model_id` → memoize.
     // (Character equipment/clothing use substitutions; static scenery does not.)
     let subst_free =
@@ -7377,10 +7422,14 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
             return Some((*cached).clone());
         }
     }
+    let counting = MissCountingSource {
+        inner: source,
+        misses: std::sync::atomic::AtomicU32::new(0),
+    };
     let mut tris = Vec::new();
     match (model_id >> 24) as u8 {
         0x01 => {
-            let bytes = source
+            let bytes = counting
                 .get_file_by_key(ResourceKey::new("eor/portal", model_id))
                 .ok()?;
             let gfx = GfxObj::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
@@ -7393,7 +7442,7 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
         }
         0x02 => {
             triangulate_setup_model_at_frame(
-                source,
+                &counting,
                 model_id,
                 model_changes,
                 texture_changes,
@@ -7404,7 +7453,12 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
         }
         _ => return None,
     }
-    if subst_free {
+    // Only memoize FULLY-RESIDENT decodes (see `MissCountingSource`): any
+    // record miss during the walk means this result may be empty, partial,
+    // or mis-posed — legitimate mid-prefetch dry-run states that must be
+    // re-decoded once the records land, never cached.
+    let complete = counting.misses.load(std::sync::atomic::Ordering::Relaxed) == 0;
+    if subst_free && complete {
         MODEL_TRI_CACHE.with(|c| {
             let mut m = c.borrow_mut();
             if m.len() >= 4096 {
@@ -11985,6 +12039,7 @@ fn drain_pending_cell_bsp_into(scene: &mut holtburger_world::SpatialScene) -> us
 /// `scene.cell_static_physics_bsp`. Same `TickMovement` cadence as the cell-env
 /// BSP drain so the faithful driver's `find_obj_collisions` sees a cell's static
 /// walls/doors the same tick the cell loads.
+#[cfg(target_arch = "wasm32")]
 fn drain_pending_cell_static_bsps_into(scene: &mut holtburger_world::SpatialScene) -> usize {
     CELL_STATIC_BSP_PENDING.with(|cell| {
         let mut buf = cell.borrow_mut();
@@ -44647,6 +44702,7 @@ pub async fn fetch_animation(did: u32) -> Result<AnimationJs, JsValue> {
     })
 }
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = fetchPhysicsScript)]
 pub async fn fetch_physics_script(did: u32) -> Result<PhysicsScriptJs, JsValue> {
     use holtburger_dat::file_type::PhysicsScript;
@@ -47041,6 +47097,46 @@ mod tests_animation_keyframes_batch {
             setup_ids.push(setup_id);
         }
         (MockSource { files }, setup_ids)
+    }
+
+    /// Memo-poison regression (2026-07-02, live: portal-space donut
+    /// 0x02000306 → triCount=0 forever). During `run_walk_loop`'s dry-run
+    /// passes a Setup can triangulate while its child GfxObjs aren't
+    /// prefetched yet — `walk_setup_parts` soft-tolerates the misses and
+    /// returns an EMPTY (or partial) triangulation. `MODEL_TRI_CACHE` must
+    /// not memoize that result, or every post-prefetch decode returns the
+    /// poisoned empty mesh for the rest of the wasm instance's life.
+    #[test]
+    fn triangulation_memo_skips_incomplete_decodes() {
+        let setup_id: u32 = 0x02F0_0306; // unique per-test id (memo is thread-local)
+        let part_id: u32 = 0x01F0_0306;
+        let surface: u32 = 0xAAF0_0306;
+
+        // Pass 1 — mid-prefetch state: setup present, child GfxObj missing.
+        let mut files = HashMap::new();
+        files.insert(
+            ("eor/portal".to_string(), setup_id),
+            synth_setup_no_mt(setup_id, &[part_id]),
+        );
+        let mid_prefetch = MockSource { files: files.clone() };
+        let tris = triangulate_model(&mid_prefetch, setup_id).expect("soft-tolerated decode");
+        assert!(tris.is_empty(), "child missing → empty triangulation");
+
+        // Pass 2 — child now resident. The empty pass-1 result must NOT
+        // have been memoized.
+        files.insert(("eor/portal".to_string(), part_id), synth_gfx(part_id, surface, 0.0));
+        let resident = MockSource { files };
+        let tris = triangulate_model(&resident, setup_id).expect("full decode");
+        assert!(
+            !tris.is_empty(),
+            "memo cached the incomplete decode — post-prefetch fetch returns an empty mesh"
+        );
+
+        // Pass 3 — the COMPLETE decode does memoize: dropping back to the
+        // record-less source now serves from the memo.
+        let empty_again = MockSource { files: HashMap::new() };
+        let tris = triangulate_model(&empty_again, setup_id).expect("memoized decode");
+        assert!(!tris.is_empty(), "complete decode should be served from the memo");
     }
 
     /// **T5 — SetupModel per-part default_scale (flag 0x02).** ACE applies

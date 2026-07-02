@@ -7062,14 +7062,15 @@
                 } catch (_) {}
                 // Portal-space donut travel visual (2026-06-09). The retail
                 // engine flies the camera through Setup 0x02000306 (a hollow
-                // purplish ring) during portal transit. Gated behind
-                // `?portalSpace=<scale>` (or `=on` for the default scale);
+                // purplish ring) during portal transit. DEFAULT-ON since
+                // 2026-07-02 (`?portalSpace=off` to disable;
+                // `?portalSpace=<scale>` still overrides the ring scale);
                 // plays on every teleport incl. indoor↔indoor + rapid recalls.
                 // Lazy-import keeps it additive / load-on-first-use.
                 try {
                   const sp = new URLSearchParams(window.location.search);
                   const ps = sp.get('portalSpace');
-                  const enabled = ps !== null && ps !== 'off' && ps !== '0' && ps !== 'false';
+                  const enabled = ps !== 'off' && ps !== '0' && ps !== 'false';
                   if (enabled && window.liveScene3d) {
                     const psf = parseFloat(ps);
                     const scale = (ps === 'on' || ps === '' || !Number.isFinite(psf))

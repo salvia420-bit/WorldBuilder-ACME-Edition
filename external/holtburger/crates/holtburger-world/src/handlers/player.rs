@@ -65,11 +65,40 @@ pub(crate) fn handle_message(
                             data.pos.force_position_sequence,
                             old_force_position_sequence,
                         );
+                    // Teleport-destination landing (2026-07-02): the
+                    // `PlayerTeleport` arm below pre-advances
+                    // `teleport_sequence` AND parks the runtime body
+                    // (`suspend_runtime_bodies` → mode=Suspended, pose at the
+                    // stale authoritative copy). ACE's destination
+                    // `UpdatePosition` then arrives with an EQUAL
+                    // teleport_sequence, so `snap` stays false — and the
+                    // authoritative-only arm would leave the body Suspended at
+                    // the source forever (rig + camera stranded while the
+                    // world streams the destination). A Suspended local body
+                    // means "awaiting the teleport destination": route the
+                    // first accepted position through the Snapshot reconcile —
+                    // with mode ∉ Simulating*, `preserve_local_runtime_pose`
+                    // is false, so `body.pose` snaps and mode lands in
+                    // AuthoritativeOnly (the
+                    // `workstream_g_post_teleport_set_player_position_updates_
+                    // runtime_pose_when_body_suspended` contract,
+                    // state/tests.rs).
+                    let body_suspended = state
+                        .runtime_body_id_for_guid(state.player.guid)
+                        .and_then(|body_id| state.runtime_body_view(body_id))
+                        .is_some_and(|view| {
+                            view.sample_mode == crate::spatial::SpatialSampleMode::Suspended
+                        });
                     events.extend(if snap {
                         // Forced reposition: hard-snap the runtime body.
                         state.set_player_position_with_sync(
                             data.pos.pos,
                             AuthoritativeBodySync::Reset,
+                        )
+                    } else if body_suspended {
+                        state.set_player_position_with_sync(
+                            data.pos.pos,
+                            AuthoritativeBodySync::Snapshot,
                         )
                     } else {
                         // Routine ~20 Hz self-echo: authoritative BOOKKEEPING ONLY —

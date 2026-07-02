@@ -1458,6 +1458,116 @@ fn workstream_g_post_teleport_set_player_position_updates_runtime_pose_when_body
     let _ = AuthoritativeBodySync::Snapshot; // silence unused-import lint without changing public API
 }
 
+/// Teleport-destination landing regression (2026-07-02, live-repro on ACE
+/// `@telepoi`): the canonical `handlers/player.rs` message pair must land
+/// the runtime body at the destination even though `PlayerTeleport`
+/// pre-advances `teleport_sequence` — the destination `UpdatePosition`
+/// arrives with an EQUAL teleport_sequence (only `position_sequence`
+/// advances), so the B1/D3-SNAP `is_newer_u16` gate alone mis-classifies
+/// it as a routine echo and the authoritative-only arm leaves the body
+/// Suspended at the source forever (rig + camera stranded at the source
+/// landblock while the world streams the destination). The sibling
+/// `workstream_g_*` test above exercises `set_player_position` directly;
+/// this one drives the actual wire pair through `handle_message`.
+#[test]
+fn post_teleport_update_position_with_equal_teleport_sequence_snaps_suspended_body() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0008);
+    let source_pos = WorldPosition {
+        landblock_id: Guid(0xC3A8_003A),
+        coords: Vector3::new(186.15, 44.49, 62.19),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state.seed_local_player_entity(player_guid, "Player", source_pos);
+    // Integrator ran at least once (player walked before entering the
+    // portal) — arms SimulatingMotionState, the real pre-teleport mode.
+    let _ = state.set_local_player_runtime_pose(source_pos);
+
+    // 1. PlayerTeleport: pre-advances teleport_sequence + suspends the
+    //    body at its (source) authoritative pose.
+    let _ = state.handle_message(&GameMessage::PlayerTeleport(Box::new(PlayerTeleportData {
+        teleport_sequence: 7,
+    })));
+    let body = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("body registered");
+    assert_eq!(body.sampling.mode, SpatialSampleMode::Suspended);
+    assert_eq!(body.pose, source_pos, "suspend parks the body at the source");
+
+    // 2. Destination UpdatePosition: SAME teleport_sequence (ACE's fake
+    //    SendUpdatePosition from Player_Location.Teleport), only the
+    //    position_sequence advances.
+    let destination_pos = WorldPosition {
+        landblock_id: Guid(0xC98D_0021),
+        coords: Vector3::new(84.0, 7.1, 94.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let _ = state.handle_message(&GameMessage::UpdatePosition(Box::new(UpdatePositionData {
+        guid: player_guid,
+        pos: PositionPack {
+            pos: destination_pos,
+            instance_sequence: 1,
+            position_sequence: 1,
+            teleport_sequence: 7,
+            force_position_sequence: 0,
+            ..PositionPack::default()
+        },
+    })));
+    let body = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("body registered");
+    assert_eq!(
+        body.pose, destination_pos,
+        "destination UpdatePosition must snap the Suspended body out of the source landblock"
+    );
+    assert_eq!(
+        body.sampling.mode,
+        SpatialSampleMode::AuthoritativeOnly,
+        "Snapshot reconcile from Suspended lands in AuthoritativeOnly until the next input"
+    );
+    assert_eq!(
+        state.local_player_runtime_pose(),
+        Some(destination_pos),
+        "getLocalPlayerPose's source must report the destination"
+    );
+
+    // 3. Routine ~20 Hz echo AFTER landing (integrator running again)
+    //    must NOT reconcile the body — the anti-rubberband guard the
+    //    2026-06-29 fix installed stays intact.
+    let integrator_pos = WorldPosition {
+        landblock_id: destination_pos.landblock_id,
+        coords: Vector3::new(90.0, 12.0, 94.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let _ = state.set_local_player_runtime_pose(integrator_pos);
+    let laggy_echo = WorldPosition {
+        landblock_id: destination_pos.landblock_id,
+        coords: Vector3::new(85.0, 8.0, 94.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let _ = state.handle_message(&GameMessage::UpdatePosition(Box::new(UpdatePositionData {
+        guid: player_guid,
+        pos: PositionPack {
+            pos: laggy_echo,
+            instance_sequence: 1,
+            position_sequence: 2,
+            teleport_sequence: 7,
+            force_position_sequence: 0,
+            ..PositionPack::default()
+        },
+    })));
+    let body = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("body registered");
+    assert_eq!(
+        body.pose, integrator_pos,
+        "routine echo after landing keeps following the integrator (no rubberband)"
+    );
+}
+
 #[test]
 fn test_spell_name_resolution() {
     use crate::spell::{SpellCatalog, SpellInfo};
