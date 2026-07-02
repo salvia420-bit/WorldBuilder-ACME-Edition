@@ -1053,6 +1053,22 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     return;
   }
 
+  // Fix B (2026-07-02) — `?outdoorPview=off` rollback escape for the
+  // outdoor portal-clipped interior walk (default ON in the wasm).
+  // One-time, typeof-guarded: a stale pkg without the export degrades
+  // to its built-in behaviour silently (F18-2 policy).
+  if (!scene3d._outdoorPviewFlagSent) {
+    scene3d._outdoorPviewFlagSent = true;
+    try {
+      if (
+        typeof sessionHandle.setOutdoorPview === "function" &&
+        new URLSearchParams(globalThis.location?.search || "").get("outdoorPview") === "off"
+      ) {
+        sessionHandle.setOutdoorPview(false);
+      }
+    } catch (_) {}
+  }
+
   let cellId = 0;
   let renderSetArr = null;
   let isIndoor = false;

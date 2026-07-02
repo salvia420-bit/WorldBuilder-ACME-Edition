@@ -1094,6 +1094,32 @@ pub fn faithful_find_transitional_position(
         pose = pose.rebucket_outdoor_landblock().normalize_outdoor_cell();
     }
 
+    // Cell-transit flip (walk-in fix, 2026-07-02): retail re-derives cell
+    // membership from geometry every transition in BOTH directions
+    // (`check_building_transit` acclient.c:348110 / `find_cell_list`
+    // acclient.c:313300). The legacy chain (system.rs:3070) and the
+    // approximate pipeline (`step_cell_transit_flips`, transition.rs:369)
+    // both carry this flip, but this bridge — the default path since
+    // `USE_FAITHFUL_TRANSITION` went on (Phase 3 B4, 2026-06-28) — pinned
+    // the output `landblock_id` to `input.begin`'s, so a player WALKING
+    // into a building never flipped indoors: `is_indoors()` stayed false,
+    // the indoor render/collision branches never engaged, and interiors
+    // stayed hidden while standing inside the shell. Same gate + capsule
+    // radius as the sibling paths (entry/exit MUST move together).
+    if input.gates.local_envcell_entry {
+        if !pose.is_indoors() {
+            if let Some(entered) =
+                scene.entered_envcell_for_outdoor_pose(&pose, input.object.radius)
+            {
+                pose.landblock_id = holtburger_common::Guid(entered);
+            }
+        } else if let Some(outdoor_cell) =
+            scene.exited_envcell_to_outdoor(&pose, input.object.radius)
+        {
+            pose.landblock_id = holtburger_common::Guid(outdoor_cell);
+        }
+    }
+
     // grounded ← the retail post-transition grounded state: OBJECTINFO's
     // `ON_WALKABLE` bit, which `validate_transition` recomputes each step from
     // the settled contact plane (`is_valid_walkable(contact_plane.normal)`,
@@ -1118,8 +1144,11 @@ pub fn faithful_find_transitional_position(
         .map(|plane| plane.normal);
     // cell_changed ← the settled cell's id differs from begin's. Phase B
     // validated the single-cell case (curr keeps begin_cell → false); a real
-    // portal-spanning sweep is VERIFY(1070) (needs the live cell graph).
-    let cell_changed = curr.objcell_id != begin_cell;
+    // portal-spanning sweep is VERIFY(1070) (needs the live cell graph). The
+    // walk-in flip above also counts: it rebinds the pose's cell even when the
+    // driver's sweep stayed in `begin_cell`.
+    let cell_changed =
+        curr.objcell_id != begin_cell || pose.landblock_id != input.begin.landblock_id;
     // state: `find_valid_position` returns a faithful binary 1 (settled) / 0
     // (none) — the per-step Slid/Adjusted codes are internal to the stepping
     // loop and not surfaced by the driver's public `int` return, so OK/Collided

@@ -308,6 +308,7 @@ https, so a bare URL works remotely — see "Possible hardening" at the bottom.)
 | `profileStatics` | `1` | off | Profile static-geometry baking. | scene3d/statics.js:1528 |
 | `noStaticsTimeSlice` | `1` | timesliced | Disable static-bake timeslicing. | scene3d/statics.js:1296 |
 | `envcellFusion` | `1` | off | EnvCell fusion optimization. | scene3d/statics.js:140 |
+| `outdoorPview` | `off` | **on** | Fix B (2026-07-02): outdoor portal-clipped interior visibility — PView walk seeded from frustum-visible exit cells, so building interiors (upper floors/back rooms) show through doors/windows from outside like retail's block-stablist draw. `=off` reverts to the doorway-only direct-exit filter. | scene3d/cells.js:1061 → wasm `setOutdoorPview` |
 | `noEnvcellTimeSlice` | `1` | timesliced | Disable envcell-load timeslicing. | scene3d/statics.js:161 |
 | `bakeWorker` | present | off | Use a web worker for static-mesh baking. | scene3d/bake_worker_client.js:25 |
 | `shadowStaticGate` / `lightSortInterval` / `shadowMaxStale` | int | default | Shadow/light raster perf levers (recent perf pass). | scene3d/lighting.js:481–494 |

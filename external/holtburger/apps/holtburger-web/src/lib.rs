@@ -26494,6 +26494,12 @@ pub struct SessionHandle {
     /// [`SessionHandle::get_render_set`] on every rAF tick to drive
     /// per-cell `.visible` toggling.
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
+    /// Fix B (2026-07-02): outdoor portal-clipped interior visibility —
+    /// the PView walk seeded from frustum-visible exit cells inside
+    /// [`SessionHandle::get_render_set_with_frustum`]'s outdoor branch.
+    /// Default ON; JS flips it off via [`SessionHandle::set_outdoor_pview`]
+    /// when `?outdoorPview=off` is set (rollback escape).
+    outdoor_pview_enabled: std::cell::Cell<bool>,
     /// Phase 6 step E follow-up (2026-05-09): door GUID → snapshot of
     /// the building part the door was registered against during its
     /// ObjectCreate. Populated incrementally by the recv-loop as
@@ -28588,6 +28594,117 @@ impl SessionHandle {
                     visible.insert(*cell_id);
                 }
             }
+
+            // Fix B (2026-07-02, buildings-missing-interiors): retail's
+            // outdoor pass draws the landblock STABLIST — the union of
+            // every building portal's authored stabList (≈ the whole
+            // interior of every visible building), each cell clipped by
+            // portal view (`CBuildingObj::add_to_stablist`
+            // acclient.c:719041 → `CLandBlock::grab_visible_cells`
+            // acclient.c:351601 + `CEnvCell::calc_clip_planes`). The
+            // direct-exit filter above shows only DOORWAY cells, so the
+            // rooms behind them (upper floors, back rooms — e.g. the
+            // Academy Scrivener cells 0x8588013D-0x0149) never rendered
+            // from outside and server-placed NPCs floated in mid-air.
+            //
+            // Mirror retail with the machinery we already have: seed the
+            // PView screen-space portal walk INWARD from each
+            // frustum-visible exit cell, with the initial clip region =
+            // that cell's outdoor-facing portal polygon (the door/window
+            // aperture) projected and clipped against the viewport. The
+            // walk then admits interior chains only where an aperture
+            // actually shows them — which is also what keeps the
+            // floating-attic satellites dead: they enter the set only
+            // when their window aperture is genuinely on screen (the
+            // retail-correct outcome), never via bare AABB-in-frustum.
+            // Naively admitting the DAT stabList without clipping WOULD
+            // resurrect the artifact: the A9B4 stabList union covers all
+            // 123 cells including 0x158/0x166/0x16B.
+            //
+            // `?outdoorPview=off` escape → `setOutdoorPview(false)`.
+            if self.outdoor_pview_enabled.get() {
+                const PVIEW_MAX_DEPTH: u8 = 8;
+                let mut portal_map: std::collections::HashMap<
+                    u32,
+                    Vec<(u32, Vec<holtburger_common::Vector3>)>,
+                > = std::collections::HashMap::new();
+                for (from, to, flat) in &snap.cell_portal_polygons {
+                    if flat.len() < 9 || flat.len() % 3 != 0 {
+                        continue;
+                    }
+                    let mut verts: Vec<holtburger_common::Vector3> =
+                        Vec::with_capacity(flat.len() / 3);
+                    for chunk in flat.chunks_exact(3) {
+                        verts.push(holtburger_common::Vector3::new(
+                            chunk[0], chunk[1], chunk[2],
+                        ));
+                    }
+                    portal_map.entry(*from).or_default().push((*to, verts));
+                }
+                let viewport: Vec<[f32; 2]> =
+                    vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
+                let mut queue: std::collections::VecDeque<(u32, Vec<[f32; 2]>, u8)> =
+                    std::collections::VecDeque::new();
+                // Seed: each frustum-visible exit cell's outdoor aperture.
+                let exit_seeds: Vec<u32> = visible
+                    .iter()
+                    .copied()
+                    .filter(|c| outdoor_exit_cells.contains(c))
+                    .collect();
+                for exit_cell in exit_seeds {
+                    let Some(portals) = portal_map.get(&exit_cell) else {
+                        continue;
+                    };
+                    for (to, verts) in portals {
+                        if (*to & 0xFFFF) < 0xFFFE {
+                            continue; // interior edge — not an aperture
+                        }
+                        let projected = holtburger_world::pview_project_polygon(verts, &mvp_arr);
+                        if projected.is_empty() {
+                            continue;
+                        }
+                        let clipped = holtburger_world::pview_clip_polygon_against_polygon(
+                            &projected, &viewport,
+                        );
+                        if clipped.len() < 3 {
+                            continue;
+                        }
+                        queue.push_back((exit_cell, clipped, 0));
+                    }
+                }
+                // Standard PView BFS (same shape as
+                // `get_render_set_with_pview_internal`), unioning into
+                // the outdoor visible set.
+                while let Some((cell_id, view_poly, depth)) = queue.pop_front() {
+                    if depth >= PVIEW_MAX_DEPTH {
+                        continue;
+                    }
+                    let Some(portals) = portal_map.get(&cell_id) else {
+                        continue;
+                    };
+                    for (neighbour, verts) in portals {
+                        if (*neighbour & 0xFFFF) >= 0xFFFE {
+                            continue;
+                        }
+                        if visible.contains(neighbour) {
+                            continue;
+                        }
+                        let projected =
+                            holtburger_world::pview_project_polygon(verts, &mvp_arr);
+                        if projected.is_empty() {
+                            continue;
+                        }
+                        let clipped = holtburger_world::pview_clip_polygon_against_polygon(
+                            &projected, &view_poly,
+                        );
+                        if clipped.len() < 3 {
+                            continue;
+                        }
+                        visible.insert(*neighbour);
+                        queue.push_back((*neighbour, clipped, depth + 1));
+                    }
+                }
+            }
         }
 
         let mut out: Vec<u32> = visible.into_iter().collect();
@@ -28601,6 +28718,17 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = isCurrentCellIndoor)]
     pub fn is_current_cell_indoor(&self) -> bool {
         self.cell_scene_snapshot.borrow().is_indoor
+    }
+
+    /// Fix B (2026-07-02) rollback escape: disable the outdoor
+    /// portal-clipped interior walk inside
+    /// [`Self::get_render_set_with_frustum`] (back to the doorway-only
+    /// direct-exit filter). JS calls this once at init when
+    /// `?outdoorPview=off` is present; typeof-guarded so a stale pkg
+    /// degrades silently. ADDITIVE export — no manifest bump.
+    #[wasm_bindgen(js_name = setOutdoorPview)]
+    pub fn set_outdoor_pview(&self, enabled: bool) {
+        self.outdoor_pview_enabled.set(enabled);
     }
 
     /// 2026-06-04 (Phase 4 ambient-sound gate): the SeenOutside bit for
@@ -32238,6 +32366,7 @@ pub async fn start_session(
         // === Wave 4.B — remote enchantments index (2026-05-28) ===
         entity_enchantments_index,
         cell_scene_snapshot,
+        outdoor_pview_enabled: std::cell::Cell::new(true),
         door_part_snapshot,
         local_player_pose,
         local_player_can_jump,
