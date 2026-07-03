@@ -1323,7 +1323,6 @@ impl MotionInterp {
     /// time (`jump_charge.rs:141`, DESIGN.md) — per ADJ-10 the
     /// charge-commence behavior stays per DESIGN.md until a golden
     /// replay says otherwise; this method is the release-gate arm.
-    #[allow(dead_code)] // staged: ADJ-10 single-owner jump gate
     pub(crate) fn jump_charge_is_allowed(&self, can_jump: bool, forward_substate: u32) -> u32 {
         if !can_jump {
             return WEENIE_ERROR_CANT_JUMP_LOADED_DOWN; // 73
@@ -1354,14 +1353,10 @@ impl MotionInterp {
     /// head-only per the decomp (:343948), not ACE's `Count > 1`
     /// (P13 OQ-6).
     ///
-    /// The LOCAL-player gate is already assembled INLINE in
-    /// `MovementSystem::execute_jump_release` (identical order + codes,
-    /// same `pending_jump_error()` head input); this is the consolidated
-    /// per-entity method retail `CMotionInterp::jump` (acclient.c:344224)
-    /// / the registry callers want. ADJ-10: refactor
-    /// `execute_jump_release` onto this method in the next wave — the
-    /// two sites are pinned together by `p13_tail_tests`.
-    #[allow(dead_code)] // staged: ADJ-10 single-owner jump gate
+    /// ADJ-10 (step-5 cleanup, 2026-07-03): `execute_jump_release` now
+    /// calls THIS method — one owner for the release gate (the previous
+    /// inline chain produced identical codes and is deleted); the
+    /// `p13_tail_tests` pins hold both call shapes.
     pub(crate) fn jump_is_allowed(&self, extent: f32, env: &JumpAllowEnv) -> u32 {
         // `extent` flows into the weenie seams (`can_jump`,
         // `jump_stamina_ok`) which the caller has already resolved for

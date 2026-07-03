@@ -49,11 +49,12 @@
 //! (QUALITY-fidelity.md, independently re-derived) is the dispatch
 //! authority; Hex-Rays `vfptr[N].<member>` artifacts are resolved
 //! against it.
-#![allow(dead_code)] // staged: step 4 wired the KeyEdge→on_action entry
-// (system.rs ingest_key_edge) behind ?cmdInterp; the session/lifecycle
-// surface (enable/disable/use_time/logoff), the mouse handlers (M4), and
-// the send ownership stay dark until step 5 (flag migration + the 1070
-// A/B). Narrow this to per-item allows when step 5 wires them.
+// Step 5 (2026-07-03) narrowed the step-4 module-level dead_code allow
+// to per-item allows: the KeyEdge→on_action entry, use_time, the send
+// ownership (row 9), the jump seams (row 8), and the effect stream
+// (rows 12-13) are LIVE; the remaining `#[allow(dead_code)]` items are
+// each tagged with what still needs wiring (lifecycle/logoff, the M4
+// mouse handlers, M7 player options).
 
 use super::list_engine::{CommandList, ListKind, apply_hold_keys_to_command, which_list};
 use super::motion_interp::{
@@ -389,6 +390,7 @@ pub(crate) trait InterpreterSeams {
     fn send_autonomous_position(&mut self) -> bool;
     /// flat 57 `SendAutonomyLevelEvent(level)` → `AutonomyLevelActionData`
     /// (actions.rs:192, GameAction 0xF752).
+    #[allow(dead_code)] // staged: SetAutonomyLevel unwired (autonomy pinned at 2, ADJ-6)
     fn send_autonomy_level(&mut self, level: u32);
     /// flat 58 `SendDoMovementEvent` — LEGACY DEAD ARM (ADJ-6: opcode 0xF61E
     /// disabled; reachable only at autonomy 0, which holtburger never
@@ -705,6 +707,7 @@ impl CommandInterpreter {
     /// `NewPlayer(autonomous_movement)` — acclient.c:716859. Precondition:
     /// SetSmartBox with a non-null box ran first (retail derefs
     /// unconditionally — P08 OQ5).
+    #[allow(dead_code)] // staged: login/enter-world lifecycle wiring (wire-side migration)
     pub(crate) fn new_player(
         &mut self,
         seams: &mut dyn InterpreterSeams,
@@ -725,6 +728,7 @@ impl CommandInterpreter {
 
     /// `Enable` — acclient.c:716912. Reads hold_run BEFORE flipping enabled,
     /// then re-asserts it (flat 8).
+    #[allow(dead_code)] // staged: enable/disable lifecycle wiring
     pub(crate) fn enable(&mut self, seams: &mut dyn InterpreterSeams) {
         let hr = self.hold_run;
         self.enabled = true;
@@ -762,6 +766,7 @@ impl CommandInterpreter {
 
     /// `PlayerTeleported` — acclient.c:716924: SetAutoRun(0,1) then
     /// SendMovementEvent.
+    #[allow(dead_code)] // staged: teleport wiring (PlayerTeleport → interp lane)
     pub(crate) fn player_teleported(&mut self, seams: &mut dyn InterpreterSeams) {
         self.set_auto_run(seams, 0, true);
         self.send_movement_event(seams);
@@ -888,6 +893,7 @@ impl CommandInterpreter {
     /// `LoseControlToServer` — acclient.c:716832. No-op unless there is
     /// autonomy to lose; the flag is raised BEFORE the two dispatches
     /// (order load-bearing).
+    #[allow(dead_code)] // staged: wire-side control-grab migration (the scene mirror carries it today)
     pub(crate) fn lose_control_to_server(&mut self, seams: &mut dyn InterpreterSeams) {
         if self.autonomy_level != 0 {
             self.controlled_by_server = true; // :716841
@@ -930,6 +936,7 @@ impl CommandInterpreter {
 
     /// `SetAutonomyLevel` — acclient.c:717569: range-gate `<= 2`; on accept,
     /// store + broadcast (flat 57). Returns accepted.
+    #[allow(dead_code)] // staged: autonomy pinned at 2 (ADJ-6) — no live caller
     pub(crate) fn set_autonomy_level(
         &mut self,
         seams: &mut dyn InterpreterSeams,

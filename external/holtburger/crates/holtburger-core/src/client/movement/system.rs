@@ -2442,27 +2442,31 @@ impl MovementSystem {
             return Ok(JumpOutcome::NotCharging);
         };
 
-        // Release gates, retail order (`CMotionInterp::jump` →
-        // `jump_is_allowed`, acclient.c:344224-344256,
-        // :343922-343974): in-air → 36; queue-head `jump_error_code`
-        // (A4-Q1 — empty/inert queue yields 0); blocked substate → 72.
-        if world.player.is_airborne {
-            return Ok(JumpOutcome::Refused(JumpRefusal::InAir));
-        }
-        // Retail `jump_is_allowed`: `IsFullyConstrained` → 71, checked
-        // FIRST inside the contact-allowed branch, before the
-        // queue-head error (acclient.c:343947-343951). Inert unless the
-        // `?retailLeash` constraint is armed and its travel budget has
-        // crossed `0.9 * max`.
-        if world.local_player_fully_constrained() {
-            return Ok(JumpOutcome::Refused(JumpRefusal::Constrained));
-        }
-        let pending_error = self.local_motion_interp.pending_jump_error();
-        if pending_error != 0 {
-            return Ok(JumpOutcome::Refused(JumpRefusal::from_code(pending_error)));
-        }
-        if !holtburger_world::player::motion_allows_jump(world.player.current_substate) {
-            return Ok(JumpOutcome::Refused(JumpRefusal::Position));
+        // Release gates — ADJ-10 (step-5 cleanup): ONE owner, retail
+        // `CMotionInterp::jump_is_allowed` (acclient.c:344224-344256 →
+        // :343922-343974), env-resolved for the local player exactly as
+        // the previous inline chain did: grounded ≡ `!is_airborne`
+        // (creature + gravity), constraint from the `?retailLeash`
+        // budget, queue-head `jump_error_code` from the SAME
+        // `pending_jump_error` input, posture from the server-echoed
+        // substate. The weenie seams resolve PERMISSIVE (`can_jump`
+        // true, no stamina refusal) — the zero-stamina FOLD below is
+        // the retail InqJumpVelocity arm (acclient.c:443838-443839),
+        // not a refusal; refusal codes are byte-identical to the old
+        // chain for every input (36/71/head-code/72).
+        let allow_env = super::motion_interp::JumpAllowEnv {
+            weenie_noncreature: false,
+            has_gravity: true,
+            on_walkable_contact: !world.player.is_airborne,
+            fully_constrained: world.local_player_fully_constrained(),
+            forward_substate: world.player.current_substate,
+            can_jump: true,
+            has_weenie: false,
+            jump_stamina_ok: true,
+        };
+        let refusal_code = self.local_motion_interp.jump_is_allowed(extent, &allow_env);
+        if refusal_code != 0 {
+            return Ok(JumpOutcome::Refused(JumpRefusal::from_code(refusal_code)));
         }
 
         // vz / stamina — moved verbatim from the legacy wasm Jump arm.
