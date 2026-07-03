@@ -1,14 +1,18 @@
-# HANDOFF — cmdInterp STEP 5 LANDED (all code items); A/B half-run — finish arms b-cast/c + the 1070 batch, then the default flip (2026-07-03)
+# HANDOFF — cmdInterp STEP 5 COMPLETE: all code items + A/B + **DEFAULT FLIPPED ON** (2026-07-03)
 
 Session 4 of the movement-port arc. Executed the step-5 work order from
-`docs/HANDOFF-cmdinterp-wave1-landing-2026-07-03.md` — **all code items are
-DONE, committed, pushed** (7 commits on master, every commit at the
-regression floor). The live A/B is HALF-RUN: arm (a) bare floor PASSED, arm
-(b) smoke PASSED (and caught+fixed one real bug), the remaining local legs +
-the batched 1070 session + the default flip are the next work order. The
-wasm `--release` rebuild WITH the 5.7 fix is DONE and in place
-(`pkg/holtburger_web_bg.wasm` = 4,700,781 bytes, release+opt) — live tests
-can start immediately; see "resume exactly here".
+`docs/HANDOFF-cmdinterp-wave1-landing-2026-07-03.md` **to completion**: all
+code items landed (9 commits on master incl. the flip, every commit at the
+regression floor), the local A/B ran ALL THREE ARMS GREEN vs live ACE, and
+the 1070 eye test was done BY THE USER personally (a visible chrome was
+booted on their box; **user ruling, verbatim: "its decent"**) — so the
+default flipped the same session (`ba569162`): the retail
+`CommandInterpreter` is now THE keyboard lane; `?cmdInterp=off` = instant
+rollback. The bot 1070 batch (`harness/cmdinterp-1070.mjs`) was stopped
+mid-run to free the box/account for the user's own test (arm-A real-GPU
+screenshots retained in `~/.claude/jobs/333ff13e/tmp/ab1070/`); the human
+eye test supersedes it. Wave-1 wave-level work is DONE — what remains is
+the post-flip wave, below.
 
 ## Commits (this session, oldest first)
 
@@ -115,7 +119,40 @@ Recipe: chrome-devtools MCP page →
   session — `verdict.json` + screenshots land in
   `~/.claude/jobs/333ff13e/tmp/ab1070/`).
 
-## Resume exactly here
+## Post-flip work order (the NEXT session's menu, roughly in value order)
+
+1. **Soak first** — leave the flip in for normal play; the escape is
+   `?cmdInterp=off`. Do NOT start the legacy deletion wave until the flip
+   has survived real use (P14 stage 5 was explicitly "NOT wave 1").
+2. **ADJ-8 ruling** — `?slideCast` default (modern continuous ride vs the
+   authentic burst): the user has now FELT both arms; ask for the ruling
+   and set `slidecast_persist`/`USE_SLIDE_CAST` accordingly.
+3. **AnimationDone → registry `motions_pending` route** (Stage-3) — the
+   one lever that makes `use_time`'s FU-A fully retail (post-anim reclaim
+   of held keys; today's conservative composite only reclaims pure grabs).
+4. **Option (a) raw_state lattice** — seam `do_motion`/`stop_motion` also
+   drive the local minterp `raw_state` via `apply_motion_u32`; M1 reads
+   `inq_raw_motion_state` (SC-17's retail shape). Replaces the
+   `from_motion_state` bridge; property-test both paths equal first.
+5. **Wire-side control migration** — the grabs call
+   `interp.lose_control_to_server` instead of only the scene flag (kills
+   the per-edge mirror); then the FU-C/FU-A arms see control without
+   mirroring. Also decide whether General cast stomps SHOULD transfer
+   control (retail fixtures say yes; vanilla-ACE wire says no — study
+   SmartBox::SetObjectMovement's control path in the decomp before
+   touching; today's latch-carried behavior matches the legacy floor).
+6. **Legacy deletion wave** (after soak): `merge_manual_edge`, the JS
+   sig-diff dispatcher + W3.1/sidestep legacy blocks, the FU5
+   `pending_take_control` lane, the `?castMove`/`?slideCast` legacy
+   carriers (configs become the only knobs).
+7. **Camera lane** (PLAN row 14 tail): camera-relative movement as
+   synthetic on_action edges (today the camera dispatch is silenced
+   flag-on; nobody has missed it — confirm with the user before building).
+8. **Smaller**: M3 emote InputAction ids (91-pair list banked), M4
+   mouse-look consumers, M7 player-options store, movement-refusal toast
+   kind, DoMotion-refusal surfacing, P13 OQ-3 golden replay.
+
+## Resume context (state as of end of session — everything below already done)
 
 1. **Wasm rebuild: DONE** (release+opt, 4,700,781 bytes, includes the 5.7
    fix). Sanity before any live test anyway:
