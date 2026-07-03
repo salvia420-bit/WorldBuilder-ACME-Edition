@@ -6724,15 +6724,22 @@ async fn cmd_interp_key_edges_drive_the_interpreter_lane() {
 
     // FU-C: a release while the scene says server-controlled is SILENT —
     // the drive keeps its last-applied state, but the list pops (mirror
-    // empties). Step 5: every REAL grab arrives with a server-authored
-    // motion whose wire stamp lowers the autonomy latch
-    // (`note_server_authored_motion`, row 1) — stamp it here too, or
-    // the use_time pump would (retail-correctly) treat a bare
-    // control-flag flip as a pure grab and reclaim the held keys next
-    // tick (`cmd_interp_use_time_reclaims_pure_control_grab` pins that
-    // arm).
+    // empties). Post-flip wave: every REAL grab arrives with a
+    // server-authored motion — the wire stamp lowers the latch (row 1)
+    // AND the registry consumer lands the gesture's 1-anim node on
+    // pending_motions (the retail move_to_interpreted_state enqueue).
+    // The node is what gates the use_time pump now (the latch proxy is
+    // retired): without it a bare control-flag flip is a pure grab and
+    // reclaims next tick (`cmd_interp_use_time_reclaims_pure_control_grab`
+    // pins that arm).
     world.scene.set_local_server_controlled(true);
     movement.note_server_authored_motion(false);
+    movement.apply_movement_world_events_ungated(&[holtburger_world::WorldEvent::SelfServerControlledMotion {
+        data: Box::new(cast_gesture_event_for(Guid(0x5000_0123))),
+        target_exists: false,
+        object_radius: 0.0,
+        object_height: 0.0,
+    }]);
     movement.enqueue_key_action(0x2C, false); // release D under control
     movement
         .tick(now, &mut world, &mut session)
@@ -7069,23 +7076,159 @@ async fn cmd_interp_use_time_reclaims_pure_control_grab() {
     );
 }
 
-/// Step 5 — the conservative `player_motions_pending` composite: a
-/// server-AUTHORED motion in flight (wire stamp lowered the latch —
-/// every gesture/directive does) keeps the use_time reclaim gated, so
-/// held-W still dies at the cast gesture (the strafecast floor). A
-/// fresh EDGE still reclaims (HKC TakeControl is edge-driven, not
-/// latch-gated).
+/// Post-flip wave (2026-07-03) — the retail cast-stomp fixture: a
+/// server-authored General pack whose forward command is the MagicBlast
+/// CAST GESTURE (substate low16 0x2B — ACE `EnqueueMotionMagic` shape).
+/// Routed through the REAL registry consumer it lands a 1-anim node on
+/// the local registry minterp (the retail `move_to_interpreted_state`
+/// enqueue).
+fn cast_gesture_event_for(guid: Guid) -> holtburger_protocol::messages::MovementEventData {
+    use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+    use holtburger_protocol::messages::movement::{InterpretedMotionState, MovementStateFlags};
+    use holtburger_protocol::messages::{MovementEventData, MovementType, MovementTypeData};
+
+    MovementEventData {
+        guid,
+        object_instance_sequence: 1,
+        movement_sequence: 2,
+        server_control_sequence: 3,
+        is_autonomous: false,
+        movement_type: MovementType::Invalid,
+        motion_flags: 0,
+        current_style: MotionStance::Magic.interpreted(),
+        data: MovementTypeData::Invalid(MovementInvalid {
+            state: InterpretedMotionState {
+                flags: MovementStateFlags::FORWARD_COMMAND | MovementStateFlags::FORWARD_SPEED,
+                num_commands: 0,
+                current_style: None,
+                forward_command: Some(0x002Bu16.into()),
+                sidestep_command: None,
+                turn_command: None,
+                forward_speed: Some(2.0),
+                sidestep_speed: None,
+                turn_speed: None,
+                commands: Vec::new(),
+            },
+            sticky_object: None,
+        }),
+    }
+}
+
+/// Post-flip wave (2026-07-03) — THE retail post-anim reclaim: a
+/// server-authored CAST stomp lands a REAL 1-anim node on the local
+/// registry minterp; while it pends the use_time reclaim stays gated
+/// (held-W dies at the gesture — the strafecast floor); when the
+/// completion-clock shim drains it (authored length — exactly when the
+/// renderer's AnimationDone would have fired) the pump revives the held
+/// key WITHOUT a fresh edge. The step-5 latch proxy kept this dormant
+/// forever-until-tap; the real queue releases it on gesture completion.
 #[tokio::test]
-async fn cmd_interp_use_time_gated_while_server_motion_in_flight() {
+async fn cmd_interp_use_time_reclaims_after_gesture_node_drains() {
+    use crate::client::movement::motion_table_manager::RENDERER_DONE_FALLBACK_SECS;
+    use holtburger_world::WorldEvent;
+
+    let guid = Guid(0x5000_0128);
     let mut world = WorldState::synthetic();
     world.seed_local_player_entity(
-        Guid(0x5000_0128),
+        guid,
         "Player",
         WorldPosition {
             landblock_id: Guid(0x1234_0000),
             ..Default::default()
         },
     );
+    world.player.guid = guid;
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+
+    movement.enqueue_key_action(0x29, true); // W press, latch raised
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    // The cast stomp: control grab + the latch stamp + the REAL wire
+    // event through the registry consumer (fills pending_motions).
+    world.scene.set_local_server_controlled(true);
+    movement.note_server_authored_motion(false);
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+        data: Box::new(cast_gesture_event_for(guid)),
+        target_exists: false,
+        object_radius: 0.0,
+        object_height: 0.0,
+    }]);
+
+    // Tick 2 (+100 ms): the registry pump stamps the node's deadline;
+    // the gesture pends → no reclaim.
+    let t_stamp = now + Duration::from_millis(100);
+    movement
+        .tick(t_stamp, &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert!(
+        world.scene.local_server_controlled(),
+        "gated while the gesture node pends (strafecast floor: held-W dies at the gesture)"
+    );
+
+    // Tick 3 — still inside the authored budget: still gated.
+    movement
+        .tick(t_stamp + Duration::from_millis(500), &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert!(world.scene.local_server_controlled());
+
+    // Tick 4 — past the budget: the registry pump (which runs AFTER the
+    // use_time pump in the tick) drains the node this tick…
+    let t_expired = t_stamp + Duration::from_secs_f32(RENDERER_DONE_FALLBACK_SECS + 0.05);
+    movement
+        .tick(t_expired, &mut world, &mut session)
+        .await
+        .expect("tick");
+    // …and tick 5 reclaims: the retail post-anim revival, NO fresh edge.
+    movement
+        .tick(t_expired + Duration::from_millis(50), &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert!(
+        !world.scene.local_server_controlled(),
+        "post-anim reclaim: held keys revive when the gesture completes, without a tap"
+    );
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(
+        drive.forward,
+        Some(ForwardLocomotion::Forward),
+        "the held W revived out of the reclaim's ApplyCurrentMovement"
+    );
+}
+
+/// The edge-driven half survives the seam swap: HKC TakeControl is NOT
+/// gated on `motions_pending` — a fresh edge reclaims even while a
+/// gesture node still pends (retail acclient.c:717320 TakeControl rides
+/// the keyboard dispatch, only the use_time AUTO-reclaim consults the
+/// queue).
+#[tokio::test]
+async fn cmd_interp_edge_takecontrol_not_gated_by_pending_gesture() {
+    use holtburger_world::WorldEvent;
+
+    let guid = Guid(0x5000_0129);
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        guid,
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    world.player.guid = guid;
     let mut movement = MovementSystem::new();
     let mut session = Session::new_test();
     let now = Instant::now();
@@ -7097,32 +7240,32 @@ async fn cmd_interp_use_time_gated_while_server_motion_in_flight() {
         .await
         .expect("tick");
 
-    // The grab RIDES a server-authored motion (retail: every gesture /
-    // directive stamps the latch low through the wire).
     world.scene.set_local_server_controlled(true);
     movement.note_server_authored_motion(false);
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+        data: Box::new(cast_gesture_event_for(guid)),
+        target_exists: false,
+        object_radius: 0.0,
+        object_height: 0.0,
+    }]);
     movement
-        .tick(now, &mut world, &mut session)
-        .await
-        .expect("tick");
-    movement
-        .tick(now, &mut world, &mut session)
+        .tick(now + Duration::from_millis(100), &mut world, &mut session)
         .await
         .expect("tick");
     assert!(
         world.scene.local_server_controlled(),
-        "no auto-reclaim while a server-authored motion is in flight"
+        "auto-reclaim gated by the pending gesture"
     );
 
-    // A fresh edge reclaims regardless (FU-A via HKC TakeControl).
+    // A fresh edge reclaims regardless, mid-gesture.
     movement.enqueue_key_action(0x2E, true); // E press
     movement
-        .tick(now, &mut world, &mut session)
+        .tick(now + Duration::from_millis(150), &mut world, &mut session)
         .await
         .expect("tick");
     assert!(
         !world.scene.local_server_controlled(),
-        "the edge-driven TakeControl is not latch-gated"
+        "the edge-driven TakeControl is not queue-gated"
     );
 }
 

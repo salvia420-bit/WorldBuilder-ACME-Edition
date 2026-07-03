@@ -2098,10 +2098,15 @@ impl MovementSystem {
     /// Only pumps an ALREADY-CONSTRUCTED interpreter: before the first
     /// key edge there are no lists and no auto_run — nothing to
     /// reclaim — so a flag-on session that never touches the keyboard
-    /// stays inert. Reclaim timing is gated by the conservative
-    /// `player_motions_pending` composite (see the seam impl): pure
-    /// control grabs reclaim next tick; anything server-authored keeps
-    /// the gate shut.
+    /// stays inert. Reclaim timing is gated by the REAL
+    /// `player_motions_pending` (post-flip wave: the local registry
+    /// minterp queue — see the seam impl): pure control grabs reclaim
+    /// next tick; a server-authored gesture holds the gate until its
+    /// node drains (renderer notify or the completion-clock shim), then
+    /// held keys revive WITHOUT a fresh edge — the retail post-anim
+    /// reclaim. NOTE the tick order: the registry pump runs AFTER this
+    /// pump, so a shim-drained gesture releases FU-A on the FOLLOWING
+    /// tick (≤ one tick of lag, same class as the channel skew).
     fn pump_cmd_interp_use_time(&mut self, now: Instant, world: &mut WorldState) {
         if !self.cmd_interp_enabled() {
             return;
@@ -7254,25 +7259,35 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
         true
     }
     fn player_motions_pending(&self) -> bool {
-        // Step 5 (use_time pump) — the retail gate is
-        // `CMotionInterp::motions_pending` (the anim-completion queue),
-        // which the web build cannot drain yet for the local player
-        // (action-class nodes complete via renderer AnimationDone; the
-        // per-entity route is Stage-3 — gating on the registry queue
-        // would wedge FU-A permanently after the first gesture).
-        // Conservative composite instead: treat ANY server-authored
-        // motion still in flight as pending — the projection window,
-        // the pose-interpolation stream, and a LOW autonomy latch (the
-        // wire lowered it on the last accepted self motion — gestures,
-        // FinishCast, directives). Net: the use_time reclaim fires only
-        // for PURE control grabs (latch high, nothing authored), never
-        // mid-cast — the strafecast floor's held-W-dies-at-the-gesture
-        // feel is preserved. The full retail post-anim reclaim of held
-        // keys needs the local AnimationDone → motions_pending route
-        // (documented follow-up).
-        self.system.server_controlled_projection.is_some()
+        // Post-flip wave (2026-07-03) — the REAL retail gate:
+        // `CMotionInterp::motions_pending` (acclient.c:343728), read off
+        // the local REGISTRY minterp, whose queue the retail
+        // move_to_interpreted_state body now FILLS on every wire stomp
+        // (gesture substates/windup actions → 1-anim nodes) and the
+        // completion-clock shim / renderer notify DRAINS
+        // (`motion_table_manager.rs` module doc — the shim guarantees
+        // drainage, so gating here can no longer wedge). The step-5
+        // latch proxy (`!last_move_was_autonomous`) is RETIRED: it kept
+        // FU-A dormant forever after ANY server-authored motion until a
+        // fresh manual edge; the real queue releases the gate when the
+        // gesture's authored length elapses — the retail post-anim
+        // reclaim of held keys.
+        //
+        // Two carriers retail doesn't have, kept deliberately: the
+        // server-MoveTo projection window and the pose-interpolation
+        // stream are OUR directive-stream representations (retail
+        // expresses directives through is_moving_to + TakeControl,
+        // which the scene mirror only partially carries this wave —
+        // see the wire-side control migration follow-up).
+        let guid = self.world.player.guid;
+        (guid != Guid::NULL
+            && self
+                .system
+                .movement_managers
+                .get(&guid)
+                .is_some_and(|manager| manager.moveto_motions_pending()))
+            || self.system.server_controlled_projection.is_some()
             || self.world.scene.local_player_is_interpolating()
-            || !self.system.last_move_was_autonomous
     }
     fn player_is_moving_to(&self) -> bool {
         // Real predicate (step 5): the local registry manager's MoveTo
