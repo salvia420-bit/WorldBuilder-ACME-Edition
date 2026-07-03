@@ -14,7 +14,7 @@ use super::motion_interp::{
     leave_ground_velocity_for_state,
 };
 use super::motion_table_manager::{MotionTableEvent, MotionTableManager};
-use super::move_to::{MoveToSteer, MoveToView, USE_MOVETO_DRIVER};
+use super::move_to::{MoveToSteer, MoveToView, USE_MOVETO_DRIVER, WE_ACTION_CANCELLED};
 use super::movement_manager::{MovementManager, MovementStruct, USE_UNPACK_MOVEMENT_SEMANTICS};
 use super::params::MovementParameters;
 use crate::client::movement_types::{
@@ -2770,7 +2770,7 @@ impl MovementSystem {
                         continue;
                     };
                     let was_active = manager.is_moveto_active();
-                    let out = manager.cancel_moveto_with_effects(0x36, on_contact, &mut effects);
+                    let out = manager.cancel_moveto_with_effects(WE_ACTION_CANCELLED, on_contact, &mut effects);
                     self.local_pursuit_engaged = false;
                     if was_active {
                         if restore_manual {
@@ -2878,7 +2878,7 @@ impl MovementSystem {
                         // Compose fast-fail: no driver, nothing will
                         // ever steer this directive — latch 0x36 now.
                         let _ =
-                            manager.cancel_moveto_with_effects(0x36, on_contact, &mut effects);
+                            manager.cancel_moveto_with_effects(WE_ACTION_CANCELLED, on_contact, &mut effects);
                         self.local_pursuit_engaged = false;
                     }
                 }
@@ -2975,7 +2975,7 @@ impl MovementSystem {
                 if !(state.is_locomotion_idle() && state.turning.is_none())
         );
         if manual_cancel || manual_active {
-            let _ = manager.cancel_moveto_with_effects(0x36, on_contact, &mut effects);
+            let _ = manager.cancel_moveto_with_effects(WE_ACTION_CANCELLED, on_contact, &mut effects);
             self.local_pursuit_engaged = false;
             return false;
         }

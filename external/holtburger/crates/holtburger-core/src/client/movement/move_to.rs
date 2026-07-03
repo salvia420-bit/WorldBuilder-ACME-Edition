@@ -57,6 +57,37 @@ pub(crate) const USE_MOVETO_DRIVER: bool = true;
 /// acclient.c:344740 et al.) re-exported for the driver tests.
 pub(crate) const MOVETO_EPSILON: f32 = HEADING_EPSILON_DEG;
 
+// ---------------------------------------------------------------------------
+// P12 (movement-port wave 1, 2026-07-03): the moveto WeenieError family,
+// named per ACE `WeenieError.cs` (acclient.c uses raw hex). The family is
+// {0, 8, 0x0B, 0x36, 0x37, 0x38, 0x3D} — the wave-1 spec's "0x40" was the
+// `UseFinalHeading` PARAM bit (`bitfield & 0x40`, acclient.c:345893), NOT a
+// WeenieError (P12 Q1 / P16 Q4 concur; ADJ-9).
+// ---------------------------------------------------------------------------
+/// Arrival / normal completion (`CleanUpAndCallWeenie(v2, 0)`,
+/// acclient.c:346093; BeginNextNode empty-queue path).
+pub(crate) const WE_SUCCESS: u32 = 0x00;
+/// `NoPhysicsObject` — `_StopMotion` null-physics arm (acclient.c:344827) and
+/// every `CancelMoveTo(this, 8u)` guard (:345606,:345949,:346114).
+pub(crate) const WE_NO_PHYSICS_OBJECT: u32 = 0x08;
+/// `NoMotionInterpreter` — `_StopMotion` null-minterp arm (acclient.c:344822).
+#[allow(dead_code)] // the port's lattice is always present; documented for the contract
+pub(crate) const WE_NO_MOTION_INTERPRETER: u32 = 0x0B;
+/// `ActionCancelled` — the pre-empt every new command issues
+/// (`PerformMovement` → `CancelMoveTo(this, 0x36u)`, acclient.c:346125).
+pub(crate) const WE_ACTION_CANCELLED: u32 = 0x36;
+/// `ObjectGone` — target update arrived with `status != 1` while the moveto
+/// was already `initialized` (acclient.c:346086).
+#[allow(dead_code)] // staged: the persistent target-update lane (view refresh today)
+pub(crate) const WE_OBJECT_GONE: u32 = 0x37;
+/// `NoObject` — target update `status != 1` before initialize / not-self
+/// (acclient.c:346108).
+#[allow(dead_code)] // staged: the persistent target-update lane (view refresh today)
+pub(crate) const WE_NO_OBJECT: u32 = 0x38;
+/// `YouChargedTooFar` — start→now displacement exceeded `fail_distance`
+/// (`HandleMoveToPosition` LABEL_24, acclient.c:345691-345692).
+pub(crate) const WE_YOU_CHARGED_TOO_FAR: u32 = 0x3D;
+
 /// `Position::cylinder_distance(r1, h1, p1, r2, h2, p2)`
 /// (acclient.c:467221-467266; ACE `Position.CylinderDistance`): the
 /// radii/height-aware separation the UseSpheres (`0x400`) metric uses
@@ -227,6 +258,15 @@ pub(crate) struct MoveToDriveOutput {
     pub completion: Option<u32>,
     /// Per-tick steering re-supply for the autonomous-drive lane.
     pub steer: Option<MoveToSteer>,
+    /// P12 — retail `CleanUp`'s `CPhysicsObj::clear_target` edge
+    /// (acclient.c:345164-345165), gated `top_level_object_id &&
+    /// movement_type` = "a TARGETED directive was active": tear down the
+    /// TargetManager subscription that fed `HandleUpdateTarget`. Our
+    /// target pose is re-resolved per tick through
+    /// [`MoveToView::target_pos`] (no persistent subscription), so this
+    /// is documented output data with no consumer yet — it becomes live
+    /// when a persistent target-update lane lands.
+    pub clear_target: bool,
 }
 
 fn origin_to_world(origin: &Origin) -> WorldPosition {
@@ -314,6 +354,23 @@ pub(crate) struct MoveToManager {
     aux_command: u32,
     moving_away: bool,
     initialized: bool,
+    /// `MoveToManager::physics_obj` (retail @+340; `CPhysicsObj *`,
+    /// set by `Create`/`SetPhysicsObject`, acclient.c:345040,:344907).
+    /// SEAM HANDLE ONLY: the driver reads live pose/radius/height from
+    /// [`MoveToView`] each tick (single physics source). This stores the
+    /// object *identity* the retail control paths need that the view does
+    /// not carry — `PhysicsObj.ID` for the MoveToObject/TurnToObject
+    /// top-level self-check (acclient.c:319799 / MoveToManager.cs:132,:251)
+    /// and the `unstick_from_object` CleanUp edge (MoveToManager.cs:94).
+    /// `None` = unwired (retail null-physics guards: MoveToObject :345190,
+    /// MoveToPosition :345798, CancelMoveTo :345303). (P10)
+    physics_obj: Option<Guid>,
+    /// `MoveToManager::weenie_obj` (retail @+344; `CWeenieObject *`,
+    /// :345041,:344901). SEAM HANDLE ONLY: completion already flows through
+    /// the read-clear latch (`CleanUpAndCallWeenie` :345171-345181 drops the
+    /// status client-side). Stored for the `ReportExhaustion`/weenie-notify
+    /// seam. (P10)
+    weenie_obj: Option<Guid>,
 }
 
 impl Default for MoveToManager {
@@ -344,6 +401,8 @@ impl Default for MoveToManager {
             aux_command: 0,
             moving_away: false,
             initialized: false,
+            physics_obj: None,
+            weenie_obj: None,
         }
     }
 }
@@ -371,6 +430,53 @@ impl MoveToManager {
         self.moving_away = false;
         self.initialized = false;
         self.pending_entry_stop = false;
+        // physics_obj/weenie_obj deliberately NOT reset — retail
+        // `InitializeLocalVariables` (acclient.c:344913-344959) leaves
+        // both seam handles alone; only the ctor nulls them (:345020-
+        // 345021) and `Destroy` preserves them across the drain. (P10)
+    }
+
+    // ---- P10 seam-handle accessors (private-field bridge for the
+    //      move_to_nodes.rs extension impl) --------------------------------
+
+    /// (P10) raw handle store for [`Self::set_physics_object`].
+    pub(crate) fn set_physics_obj_handle(&mut self, g: Option<Guid>) {
+        self.physics_obj = g;
+    }
+
+    /// (P10) raw handle store for [`Self::set_weenie_object`].
+    pub(crate) fn set_weenie_obj_handle(&mut self, g: Option<Guid>) {
+        self.weenie_obj = g;
+    }
+
+    /// (P10) identity of the wired physics object (retail @+340).
+    #[allow(dead_code)] // staged: top-level self-check / unstick consumers
+    pub(crate) fn physics_object(&self) -> Option<Guid> {
+        self.physics_obj
+    }
+
+    /// (P10) identity of the wired weenie object (retail @+344).
+    #[allow(dead_code)] // staged: ReportExhaustion/weenie-notify seam
+    pub(crate) fn weenie_object(&self) -> Option<Guid> {
+        self.weenie_obj
+    }
+
+    /// (P10) `InitializeLocalVariables`/`Destroy` bridge for the
+    /// extension impl (the body is private to this file).
+    pub(crate) fn reset_driver_state_public(&mut self) {
+        self.reset_driver_state();
+    }
+
+    /// (P10) node-append primitive — `DLListBase::InsertAfter(tail)` ⇒
+    /// `push_back` (acclient.c:345096/:345120 tail-append).
+    pub(crate) fn push_node(&mut self, n: MoveToNode) {
+        self.pending_nodes.push_back(n);
+    }
+
+    /// (P10) test view of the pending node queue.
+    #[cfg(test)]
+    pub(crate) fn pending_nodes_snapshot(&self) -> Vec<MoveToNode> {
+        self.pending_nodes.iter().copied().collect()
     }
 
     /// The CleanUp `_StopMotion` params: FRESH defaults carrying the
@@ -479,6 +585,18 @@ impl MoveToManager {
         out
     }
 
+    /// P12 — the retail `CleanUp` `clear_target` gate
+    /// (acclient.c:345164-345165): `top_level_object_id &&
+    /// movement_type`. In our model: a directive is active AND it is a
+    /// TARGETED one (MoveToObject/TurnToObject store retail's
+    /// `top_level_object_id`; the position/heading forms leave it 0).
+    fn clear_target_gate(&self) -> bool {
+        matches!(
+            self.directive,
+            Some(MoveToDirective::MoveToObject { .. }) | Some(MoveToDirective::TurnToObject { .. })
+        )
+    }
+
     /// Shared cancel body (`CleanUp` :345143-345168 +
     /// `CleanUpAndCallWeenie` :345171-345181).
     fn cancel_into(&mut self, error: u32, out: &mut MoveToDriveOutput) {
@@ -486,6 +604,9 @@ impl MoveToManager {
             self.last_cancel_error = Some(error);
             self.completion = Some(error);
         }
+        // P12: CleanUp's clear_target edge, computed BEFORE the
+        // directive drops (the retail gate reads the live fields).
+        out.clear_target |= self.clear_target_gate();
         let params = self.cleanup_params();
         if self.current_command != 0 {
             out.stop_motions.push((self.current_command, params));
@@ -655,6 +776,13 @@ impl MoveToManager {
         let heading_to_target = heading_deg_between(&view.self_pos, &target);
         let distance = self.current_distance(view);
         let delta = fold_heading_delta(heading_to_target - self_heading_deg(&view.self_pos));
+        // P12/SC-19: retail passes `&move_away` to `get_command` at
+        // `MoveToObject_Internal` (:345859-345908) and DISCARDS it —
+        // `moving_away` is only ever latched in `BeginMoveForward`
+        // (:345424), which re-derives it from a fresh probe. Discarding
+        // here is retail-faithful; do NOT stamp it at node-build time
+        // (the fidelity pass flagged exactly that as p12's one invented
+        // write).
         let (command, _, _) = self.movement_params.get_command(distance, delta);
         if command.is_some() {
             self.pending_nodes
@@ -709,6 +837,10 @@ impl MoveToManager {
                 } else {
                     None
                 };
+                // P12: the arrival CleanUp carries the clear_target
+                // edge too (same body retail-side), gated + computed
+                // before the directive drops.
+                out.clear_target |= self.clear_target_gate();
                 let params = self.cleanup_params();
                 if self.current_command != 0 {
                     out.stop_motions.push((self.current_command, params));
@@ -718,7 +850,7 @@ impl MoveToManager {
                 }
                 out.stop_completely = true;
                 out.stick_to = stick;
-                self.completion = Some(0);
+                self.completion = Some(WE_SUCCESS);
                 self.reset_driver_state();
                 self.directive = None;
                 self.pending_hit_ground_rebegin = false;
@@ -730,7 +862,7 @@ impl MoveToManager {
     fn begin_move_forward(&mut self, view: &MoveToView, out: &mut MoveToDriveOutput) {
         let distance = self.current_distance(view);
         let Some(target) = self.current_target_position else {
-            self.cancel_into(8, out);
+            self.cancel_into(WE_NO_PHYSICS_OBJECT, out);
             return;
         };
         let delta = fold_heading_delta(
@@ -767,7 +899,7 @@ impl MoveToManager {
     fn begin_turn_to_heading(&mut self, view: &MoveToView, out: &mut MoveToDriveOutput) {
         let Some(MoveToNode::TurnToHeading(node_heading)) = self.pending_nodes.front().copied()
         else {
-            self.cancel_into(8, out);
+            self.cancel_into(WE_NO_PHYSICS_OBJECT, out);
             return;
         };
         if view.motions_pending {
@@ -802,7 +934,7 @@ impl MoveToManager {
     /// owns remote interpolation); documented, not ported.
     fn handle_move_to_position(&mut self, view: &MoveToView, out: &mut MoveToDriveOutput) {
         let Some(target) = self.current_target_position else {
-            self.cancel_into(8, out);
+            self.cancel_into(WE_NO_PHYSICS_OBJECT, out);
             return;
         };
         let params = self.cleanup_params();
@@ -868,7 +1000,7 @@ impl MoveToManager {
         } else if let Some(start) = self.starting_position
             && start.distance_to(&view.self_pos) > self.movement_params.fail_distance
         {
-            self.cancel_into(0x3D, out);
+            self.cancel_into(WE_YOU_CHARGED_TOO_FAR, out);
         }
     }
 
@@ -878,7 +1010,7 @@ impl MoveToManager {
     fn handle_turn_to_heading(&mut self, view: &MoveToView, out: &mut MoveToDriveOutput) {
         let Some(MoveToNode::TurnToHeading(node_heading)) = self.pending_nodes.front().copied()
         else {
-            self.cancel_into(8, out);
+            self.cancel_into(WE_NO_PHYSICS_OBJECT, out);
             return;
         };
         if self.current_command != MOTION_TURN_RIGHT && self.current_command != MOTION_TURN_LEFT {
@@ -1652,5 +1784,394 @@ mod quantum_turn_tests {
                 "quantum {quantum}: snapped onto the target heading, got {heading}"
             );
         }
+    }
+}
+
+/// P11 (movement-port wave 1, 2026-07-03) — decomp-primary re-port
+/// tests for the node-walk begin/handle engine. The five method bodies
+/// (`begin_next_node`/`begin_move_forward`/`begin_turn_to_heading`/
+/// `handle_move_to_position`/`handle_turn_to_heading`) were independently
+/// re-derived from acclient.c (:345521/:345371/:345456/:345577/:345712)
+/// by the P11 fan-out packet and CONVERGED with the landed bodies —
+/// zero code changes; the packet lands as this extra branch pinning
+/// (QUALITY-integration.md §1.1 "P10/P11 ↔ move_to.rs"). Same-module
+/// placement for private-field access, mirroring the primary `tests`
+/// mod's fixtures.
+#[cfg(test)]
+mod p11_begin_tests {
+    use super::*;
+    use holtburger_common::{Quaternion, Vector3};
+    use std::time::Duration;
+
+    const LB: u32 = 0xA9B4_0001;
+
+    fn origin(x: f32, y: f32) -> Origin {
+        Origin {
+            cell_id: Guid::from(LB),
+            position: holtburger_common::math::Vector3::new(x, y, 0.0),
+        }
+    }
+    fn pose(x: f32, y: f32, heading_deg: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(LB),
+            coords: Vector3::new(x, y, 0.0),
+            rotation: Quaternion::from_heading(heading_deg.to_radians()),
+        }
+    }
+    fn view(self_pos: WorldPosition, target: Option<WorldPosition>, now: Instant) -> MoveToView {
+        MoveToView {
+            on_walkable_contact: true,
+            self_pos,
+            self_radius: 0.4,
+            self_height: 1.8,
+            target_pos: target,
+            motions_pending: false,
+            is_interpolating: false,
+            now,
+        }
+    }
+
+    /// BeginNextNode dispatch: MoveToPosition head → BeginMoveForward begins a
+    /// walk; TurnToHeading head → BeginTurnToHeading begins a turn.
+    #[test]
+    fn begin_next_node_dispatch() {
+        let now = Instant::now();
+        // Far east target, facing north (AC heading 90) → head is TurnToHeading
+        // (built by move_to_position) → first frame begins the TURN.
+        let mut m = MoveToManager::default();
+        m.move_to_position(origin(50.0, 0.0), MovementParameters::default());
+        let out = m.use_time(&view(pose(0.0, 0.0, 90.0), None, now));
+        assert!(matches!(
+            m.pending_nodes.front(),
+            Some(MoveToNode::TurnToHeading(_))
+        ));
+        assert_eq!(out.do_motions.len(), 1);
+        assert!(
+            out.do_motions[0].0 == MOTION_TURN_RIGHT || out.do_motions[0].0 == MOTION_TURN_LEFT
+        );
+
+        // Head already aligned so the turn node pops immediately and the
+        // MoveToPosition head begins a walk in the SAME frame.
+        let mut m = MoveToManager::default();
+        // heading-to-target for (0,0)->(50,0) is AC-180; face that exactly.
+        m.move_to_position(origin(50.0, 0.0), MovementParameters::default());
+        let out = m.use_time(&view(pose(0.0, 0.0, 180.0), None, now));
+        assert_eq!(m.pending_nodes.front(), Some(&MoveToNode::MoveToPosition));
+        assert_eq!(out.do_motions.len(), 1, "turn popped, walk began same frame");
+        assert!(matches!(
+            out.do_motions[0].0,
+            MOTION_WALK_FORWARD | MOTION_RUN_FORWARD | MOTION_WALK_BACKWARDS
+        ));
+        assert_eq!(m.current_command, out.do_motions[0].0);
+    }
+
+    /// BeginNextNode empty-queue arrival: plain vs sticky handoff.
+    #[test]
+    fn begin_next_node_arrival() {
+        let now = Instant::now();
+        // Already at target → no nodes built → arrival: stop_completely +
+        // completion Some(0) + directive cleared.
+        let mut m = MoveToManager::default();
+        m.move_to_position(origin(0.1, 0.0), MovementParameters::default());
+        let out = m.use_time(&view(pose(0.0, 0.0, 180.0), None, now));
+        assert!(out.stop_completely);
+        assert_eq!(out.completion, Some(0));
+        assert!(out.stick_to.is_none());
+        assert!(!m.is_active());
+
+        // Sticky MoveToObject arrival → StickTo(target, radius, height).
+        let mut sticky = MovementParameters::default();
+        sticky.bitfield |= 0x80; // Sticky (survives — MoveToObject doesn't clear 0x80)
+        let mut m = MoveToManager::default();
+        m.move_to_object(Guid(0x8000_0001), origin(0.1, 0.0), 0.5, 1.8, sticky);
+        let out = m.use_time(&view(pose(0.0, 0.0, 180.0), Some(pose(0.1, 0.0, 0.0)), now));
+        assert_eq!(out.stick_to, Some((Guid(0x8000_0001), 0.5, 1.8)));
+        assert_eq!(out.completion, Some(0));
+    }
+
+    /// BeginMoveForward: no-command (already in band) pops + recurses;
+    /// command present latches state + seeds both progress stamps.
+    #[test]
+    fn begin_move_forward_command_vs_pop() {
+        let now = Instant::now();
+        // Command present: far target, aligned → walk latched, stamps seeded.
+        let mut m = MoveToManager::default();
+        m.pending_nodes.push_back(MoveToNode::MoveToPosition);
+        m.current_target_position = Some(pose(50.0, 0.0, 0.0));
+        m.movement_params = MovementParameters::default();
+        let mut out = MoveToDriveOutput::default();
+        m.begin_move_forward(&view(pose(0.0, 0.0, 180.0), None, now), &mut out);
+        assert_eq!(out.do_motions.len(), 1);
+        assert_ne!(m.current_command, 0);
+        assert!((m.previous_distance - 50.0).abs() < 0.5);
+        assert_eq!(m.previous_distance_time, Some(now));
+        assert_eq!(m.original_distance_time, Some(now));
+        // _DoMotion params: CancelMoveTo bit cleared, stored speed carried.
+        assert_eq!(out.do_motions[0].1.bitfield & 0x8000, 0);
+
+        // No command: inside distance_to_object band → head popped, recurse to
+        // arrival (empty queue) → stop_completely.
+        let mut m = MoveToManager::default();
+        m.pending_nodes.push_back(MoveToNode::MoveToPosition);
+        m.current_target_position = Some(pose(0.1, 0.0, 0.0));
+        m.directive = Some(MoveToDirective::MoveToPosition {
+            origin: origin(0.1, 0.0),
+            params: MovementParameters::default(),
+        });
+        m.movement_params = MovementParameters::default();
+        let mut out = MoveToDriveOutput::default();
+        m.begin_move_forward(&view(pose(0.0, 0.0, 180.0), None, now), &mut out);
+        assert!(out.do_motions.is_empty());
+        assert!(out.stop_completely);
+        // Direct private-method call: the arrival latch lands on the
+        // manager; `out.completion` is mirrored only at the `use_time`
+        // boundary (landed shape — P11's re-derived port mirrored
+        // inline; behavior identical).
+        assert_eq!(m.take_completion(), Some(0));
+    }
+
+    /// BeginTurnToHeading: TurnRight (short CW arc), TurnLeft (long arc wraps to
+    /// CCW), already-there pop, motions_pending bail. `previous_heading` stamps
+    /// the DIFF.
+    #[test]
+    fn begin_turn_arc_selection() {
+        let now = Instant::now();
+        let mk = |node_h: f32, self_h: f32, pending: bool| {
+            let mut m = MoveToManager::default();
+            m.pending_nodes.push_back(MoveToNode::TurnToHeading(node_h));
+            m.movement_params = MovementParameters::default();
+            let mut out = MoveToDriveOutput::default();
+            let mut v = view(pose(0.0, 0.0, self_h), None, now);
+            v.motions_pending = pending;
+            m.begin_turn_to_heading(&v, &mut out);
+            (m, out)
+        };
+
+        // node 100°, self 90° → diff 10° (<=180, >ε) → TurnRight; prev_heading=diff.
+        let (m, out) = mk(100.0, 90.0, false);
+        assert_eq!(out.do_motions[0].0, MOTION_TURN_RIGHT);
+        assert_eq!(m.current_command, MOTION_TURN_RIGHT);
+        assert!(
+            (m.previous_heading - 10.0).abs() < 0.01,
+            "stamps DIFF not abs"
+        );
+
+        // node 10°, self 90° → CW diff wraps 280° (>180, +ε<360) → TurnLeft.
+        let (m, out) = mk(10.0, 90.0, false);
+        assert_eq!(out.do_motions[0].0, MOTION_TURN_LEFT);
+        assert_eq!(m.current_command, MOTION_TURN_LEFT);
+
+        // node == self → diff 0 (<=ε) → pop + BeginNextNode (empty → arrival).
+        let (m, out) = mk(90.0, 90.0, false);
+        assert!(out.do_motions.is_empty());
+        assert!(out.stop_completely);
+        assert_eq!(m.current_command, 0);
+
+        // motions_pending → bail (no emit, node untouched).
+        let (m, out) = mk(100.0, 90.0, true);
+        assert!(out.do_motions.is_empty());
+        assert_eq!(m.pending_nodes.len(), 1);
+        assert_eq!(m.current_command, 0);
+    }
+
+    /// HandleMoveToPosition: aux-turn engage/stop, arrival, fail-distance,
+    /// progress-stall skip.
+    #[test]
+    fn handle_move_to_position_branches() {
+        let t0 = Instant::now();
+        let seed = |m: &mut MoveToManager, dist_stamp: f32, tgt: WorldPosition| {
+            m.pending_nodes.push_back(MoveToNode::MoveToPosition);
+            m.current_target_position = Some(tgt);
+            m.movement_params = MovementParameters::default();
+            m.current_command = MOTION_WALK_FORWARD;
+            m.previous_distance = dist_stamp;
+            m.previous_distance_time = Some(t0);
+            m.original_distance = dist_stamp;
+            m.original_distance_time = Some(t0);
+            m.starting_position = Some(pose(0.0, 0.0, 0.0));
+        };
+
+        // Arrival: within distance_to_object (0.6), progress fresh (<1s) →
+        // pop, stop current, BeginNextNode → arrival stop_completely.
+        let mut m = MoveToManager::default();
+        seed(&mut m, 0.5, pose(0.3, 0.0, 0.0));
+        m.directive = Some(MoveToDirective::MoveToPosition {
+            origin: origin(0.3, 0.0),
+            params: MovementParameters::default(),
+        });
+        let mut out = MoveToDriveOutput::default();
+        m.handle_move_to_position(&view(pose(0.0, 0.0, 180.0), None, t0), &mut out);
+        assert!(
+            out.stop_motions
+                .iter()
+                .any(|(c, _)| *c == MOTION_WALK_FORWARD)
+        );
+        assert!(out.stop_completely);
+        // Latch-side assert (direct call — see begin_move_forward note).
+        assert_eq!(m.take_completion(), Some(0));
+
+        // Aux-turn engage: facing 90° but must face target (~180°) → Δ≈90 in
+        // band → aux TurnRight latched (not yet arrived: far target).
+        let mut m = MoveToManager::default();
+        seed(&mut m, 50.0, pose(50.0, 0.0, 0.0));
+        let mut out = MoveToDriveOutput::default();
+        m.handle_move_to_position(&view(pose(0.0, 0.0, 90.0), None, t0), &mut out);
+        assert_eq!(m.aux_command, MOTION_TURN_RIGHT);
+        assert!(out.do_motions.iter().any(|(c, _)| *c == MOTION_TURN_RIGHT));
+
+        // Aux-turn stop: now aligned (Δ within ±20° band) with aux latched → aux stopped.
+        let mut m = MoveToManager::default();
+        seed(&mut m, 50.0, pose(50.0, 0.0, 0.0));
+        m.aux_command = MOTION_TURN_RIGHT;
+        let mut out = MoveToDriveOutput::default();
+        m.handle_move_to_position(&view(pose(0.0, 0.0, 180.0), None, t0), &mut out);
+        assert_eq!(m.aux_command, 0);
+        assert!(out.stop_motions.iter().any(|(c, _)| *c == MOTION_TURN_RIGHT));
+
+        // Fail-distance: drifted past fail_distance while not arrived → 0x3D.
+        let mut m = MoveToManager::default();
+        seed(&mut m, 50.0, pose(50.0, 0.0, 0.0));
+        m.movement_params.fail_distance = 5.0;
+        m.starting_position = Some(pose(0.0, 0.0, 0.0));
+        m.directive = Some(MoveToDirective::MoveToPosition {
+            origin: origin(50.0, 0.0),
+            params: MovementParameters::default(),
+        });
+        let mut out = MoveToDriveOutput::default();
+        m.handle_move_to_position(&view(pose(20.0, 0.0, 180.0), None, t0), &mut out);
+        assert!(out.stop_completely, "cancel tears down");
+        // Latch-side assert (direct call — see begin_move_forward note).
+        assert_eq!(m.take_completion(), Some(0x3D));
+
+        // Progress stall: >1s window, no distance gain, not interpolating/pending
+        // → fail_progress_count++ and arrival test SKIPPED.
+        let mut m = MoveToManager::default();
+        seed(&mut m, 50.0, pose(50.0, 0.0, 0.0));
+        let mut out = MoveToDriveOutput::default();
+        let later = t0 + Duration::from_millis(1500);
+        let v = view(pose(0.0, 0.0, 180.0), None, later);
+        // Pin the stamps to the EXACT cylinder-metric distance the frame
+        // will compute (the raw 50.0 seed differs by the self radius,
+        // which reads as ~0.27 m/s of false progress over the window).
+        let exact = m.current_distance(&v);
+        m.previous_distance = exact;
+        m.original_distance = exact;
+        m.handle_move_to_position(&v, &mut out);
+        assert_eq!(m.fail_progress_count, 1);
+    }
+
+    /// HandleTurnToHeading: not-yet-turning delegates to begin; overshoot snaps
+    /// + advances; stall increments.
+    #[test]
+    fn handle_turn_to_heading_branches() {
+        let now = Instant::now();
+
+        // current_command not a turn → delegate to BeginTurnToHeading (begins one).
+        let mut m = MoveToManager::default();
+        m.pending_nodes.push_back(MoveToNode::TurnToHeading(100.0));
+        m.movement_params = MovementParameters::default();
+        m.current_command = 0;
+        let mut out = MoveToDriveOutput::default();
+        m.handle_turn_to_heading(&view(pose(0.0, 0.0, 90.0), None, now), &mut out);
+        assert_eq!(out.do_motions.len(), 1, "delegated begin");
+        assert_ne!(m.current_command, 0);
+
+        // Overshoot: TurnRight past node → snap set_heading + pop + stop + next.
+        let mut m = MoveToManager::default();
+        m.pending_nodes.push_back(MoveToNode::TurnToHeading(90.0));
+        m.movement_params = MovementParameters::default();
+        m.current_command = MOTION_TURN_RIGHT;
+        m.previous_heading = 80.0;
+        m.directive = Some(MoveToDirective::TurnToHeading {
+            params: MovementParameters::default(),
+        });
+        let mut out = MoveToDriveOutput::default();
+        // self at 100° (> node 90°) with TurnRight → heading_greater true.
+        m.handle_turn_to_heading(&view(pose(0.0, 0.0, 100.0), None, now), &mut out);
+        assert!(out.set_heading.is_some());
+        assert!((out.set_heading.unwrap() - 90.0f32.to_radians()).abs() < 1e-4);
+        assert_eq!(m.current_command, 0);
+        assert!(out.stop_motions.iter().any(|(c, _)| *c == MOTION_TURN_RIGHT));
+        assert!(out.stop_completely, "empty queue after pop → arrival");
+
+        // Stall: not overshot, no progress since previous_heading, static → count++.
+        let mut m = MoveToManager::default();
+        m.pending_nodes.push_back(MoveToNode::TurnToHeading(200.0));
+        m.movement_params = MovementParameters::default();
+        m.current_command = MOTION_TURN_RIGHT;
+        m.previous_heading = 90.0;
+        let mut out = MoveToDriveOutput::default();
+        m.handle_turn_to_heading(&view(pose(0.0, 0.0, 90.0), None, now), &mut out);
+        assert_eq!(m.fail_progress_count, 1);
+        assert!((m.previous_heading - 90.0).abs() < 1e-4);
+    }
+}
+
+/// P12 (movement-port wave 1, 2026-07-03) — the folded CleanUp
+/// `clear_target` gate + named WeenieError family (the fork itself was
+/// discarded per SC-19; `_StopMotion` refusal feedback already lives in
+/// `MovementManager::use_time_moveto` per ADJ-9).
+#[cfg(test)]
+mod p12_fold_tests {
+    use super::*;
+    use holtburger_common::{Quaternion, Vector3};
+
+    const LB: u32 = 0xA9B4_0001;
+
+    fn origin(x: f32, y: f32) -> Origin {
+        Origin {
+            cell_id: Guid::from(LB),
+            position: holtburger_common::math::Vector3::new(x, y, 0.0),
+        }
+    }
+    fn pose(x: f32, y: f32, heading_deg: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(LB),
+            coords: Vector3::new(x, y, 0.0),
+            rotation: Quaternion::from_heading(heading_deg.to_radians()),
+        }
+    }
+
+    /// Targeted directive (top_level_object_id analog) → CleanUp raises
+    /// clear_target; position directive (top_level 0) → it does not.
+    #[test]
+    fn clear_target_gated_on_targeted_directive() {
+        // MoveToObject → cancel → clear_target.
+        let mut m = MoveToManager::default();
+        m.move_to_object(
+            Guid(0x8000_0001),
+            origin(10.0, 0.0),
+            0.5,
+            1.8,
+            MovementParameters::default(),
+        );
+        let out = m.cancel_moveto(WE_ACTION_CANCELLED);
+        assert!(out.clear_target, "targeted directive clears the target");
+        assert_eq!(out.completion, Some(WE_ACTION_CANCELLED));
+
+        // MoveToPosition → cancel → NO clear_target (retail gate:
+        // top_level_object_id == 0).
+        let mut m = MoveToManager::default();
+        m.move_to_position(origin(10.0, 0.0), MovementParameters::default());
+        let out = m.cancel_moveto(WE_ACTION_CANCELLED);
+        assert!(!out.clear_target, "position directive has no target");
+
+        // Idle manager → cancel is a no-op output.
+        let mut m = MoveToManager::default();
+        let out = m.cancel_moveto(WE_ACTION_CANCELLED);
+        assert!(!out.clear_target);
+    }
+
+    /// The named family carries the retail values (ADJ-9: no 0x40 —
+    /// that was the UseFinalHeading param bit).
+    #[test]
+    fn weenie_error_family_values() {
+        assert_eq!(WE_SUCCESS, 0);
+        assert_eq!(WE_NO_PHYSICS_OBJECT, 8);
+        assert_eq!(WE_NO_MOTION_INTERPRETER, 0x0B);
+        assert_eq!(WE_ACTION_CANCELLED, 0x36);
+        assert_eq!(WE_OBJECT_GONE, 0x37);
+        assert_eq!(WE_NO_OBJECT, 0x38);
+        assert_eq!(WE_YOU_CHARGED_TOO_FAR, 0x3D);
     }
 }

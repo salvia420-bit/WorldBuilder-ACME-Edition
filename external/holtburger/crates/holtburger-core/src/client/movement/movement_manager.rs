@@ -17,6 +17,7 @@
 //! owner is the integrator + JS rig, not a `CPhysicsObj`).
 
 use super::interp_state::InterpretedState;
+use super::raw_state::RawState;
 use super::motion_interp::{
     MotionInterp, MotionMovementStruct, MotionSideEffects, interpreted_state_from_wire,
 };
@@ -174,6 +175,38 @@ impl MovementManager {
     /// `MovementManager.cs:111-115`).
     fn moveto(&mut self) -> &mut MoveToManager {
         self.move_to.get_or_insert_with(MoveToManager::default)
+    }
+
+    /// `MovementManager::InqInterpretedMotionState`
+    /// (acclient.c:339293-339308; ACE `MovementManager.cs:75-84`) —
+    /// lazy-create the interpreter (`minterp()` also runs
+    /// `enter_default_state`), then hand back its interpreted state.
+    /// Retail returns a bare pointer; we return `&mut`. (P13)
+    #[allow(dead_code)] // staged: Stage-3 driver / server UpdateMotion inq lane
+    pub(crate) fn inq_interpreted_motion_state(&mut self) -> &mut InterpretedState {
+        &mut self.minterp().interpreted_state
+    }
+
+    /// `MovementManager::InqRawMotionState` (acclient.c:339274-339289;
+    /// ACE `MovementManager.cs:86-95`) — lazy-create then raw state.
+    /// (P13; the interpreter-native send path's state source — retail
+    /// `SendMovementEvent` builds its pack from
+    /// `CPhysicsObj::InqRawMotionState(player)`, SC-17/M1.)
+    #[allow(dead_code)] // staged: M1 converter feed (Step 4 dark lane)
+    pub(crate) fn inq_raw_motion_state(&mut self) -> &mut RawState {
+        &mut self.minterp().raw_state
+    }
+
+    /// `MovementManager::HandleEnterWorld` (acclient.c:339401-339408) —
+    /// a NO-OP. The decomp's `motion_interpreter` call is a COMDAT-folded
+    /// `gmNoticeHandler::RecvNotice_PrevSpellSelection` thunk that ACE
+    /// confirms is dead (`MovementManager.cs:48-52`, the RecvNotice line
+    /// is commented out). Present for fan-out symmetry with
+    /// `handle_exit_world`; the entity-lifecycle enter path calls it.
+    /// (P13 OQ-9)
+    #[allow(dead_code)] // staged: entity enter-world lifecycle fan-out
+    pub(crate) fn handle_enter_world(&mut self) {
+        // Intentionally empty (retired spell-selection notice only).
     }
 
     /// `MovementManager::PerformMovement` (acclient.c:339175-339218):

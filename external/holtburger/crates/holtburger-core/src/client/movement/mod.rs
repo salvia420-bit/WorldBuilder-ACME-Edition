@@ -5,6 +5,7 @@ mod jump_charge;
 mod motion_interp;
 mod motion_table_manager;
 mod move_to;
+mod move_to_nodes;
 mod movement_manager;
 mod params;
 mod raw_state;

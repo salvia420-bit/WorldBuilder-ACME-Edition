@@ -1175,6 +1175,201 @@ impl MotionInterp {
     }
 }
 
+// ── P13 tails (movement-port wave 1, 2026-07-03) ────────────────────────
+// `CMotionInterp` residual methods the A3/A14 waves never needed: the
+// consolidated jump gates + speed/standstill queries retail dispatches
+// through the interp vtable. Weenie/physics facts arrive as resolved
+// values per the crate's existing `inq_run_rate`/`on_walkable_contact`
+// convention.
+
+/// `WeenieError` ids used by the P13 jump tails (ACE `WeenieError.cs`:
+/// 0x24/0x48/0x49). `WEENIE_ERROR_GENERAL_MOVEMENT_FAILURE` (71) is
+/// reused from `movement_manager.rs`.
+const WEENIE_ERROR_YOU_CANT_JUMP_WHILE_IN_THE_AIR: u32 = 0x24; // 36
+const WEENIE_ERROR_CANT_JUMP_FROM_THIS_POSITION: u32 = 0x48; // 72
+const WEENIE_ERROR_CANT_JUMP_LOADED_DOWN: u32 = 0x49; // 73
+/// Retail `get_jump_v_z` extent floor (acclient.c:343351 literal
+/// `0.00019999999`; ACE `PhysicsGlobals.EPSILON`).
+const JUMP_EXTENT_EPSILON: f32 = 0.000_199_999_99;
+
+/// `CMotionInterp::get_jump_v_z` (acclient.c:343343-343363; ACE
+/// `MotionInterp.cs:634-652`) — launch z-velocity for a charged jump.
+/// Below `EPSILON` → 0.0; clamp `(EPSILON, 1.0]`; NO weenie → 10.0;
+/// weenie present but `InqJumpVelocity` (vfptr[12]) fails → 0.0.
+///
+/// SEAM: `inq_jump_velocity == None` ⇔ no weenie (→ 10.0); `Some(f)`
+/// wires the entity's `InqJumpVelocity`, invoked with the *clamped*
+/// extent (the clamp stays authoritative here). Free fn because the
+/// rust `MotionInterp` does not store `jump_extent` (it lives in
+/// `world.player` / the charge clock). holtburger's local-player
+/// realization of the query is
+/// `holtburger_world::player::PlayerState::compute_jump_velocity_z`
+/// (burden × skill), already called from
+/// `MovementSystem::execute_jump_release` with an extent pre-clamped to
+/// `[MIN_JUMP_EXTENT, 1.0]` by `power()` — so on that path the
+/// clamp/floor here are no-ops (P13 OQ-2).
+#[allow(dead_code)] // staged: registry/remote jump lane (local path pre-clamps upstream)
+pub(crate) fn jump_v_z<F: FnOnce(f32) -> Option<f32>>(
+    jump_extent: f32,
+    inq_jump_velocity: Option<F>,
+) -> f32 {
+    if jump_extent < JUMP_EXTENT_EPSILON {
+        return 0.0;
+    }
+    let extent = jump_extent.min(1.0);
+    match inq_jump_velocity {
+        None => 10.0,
+        Some(query) => query(extent).unwrap_or(0.0),
+    }
+}
+
+/// Resolved-seam inputs for [`MotionInterp::jump_is_allowed`] — the
+/// physics/weenie facts retail reads through vtable dispatch, supplied by
+/// the caller (physics/weenie do not live in `MotionInterp` in this
+/// port). Plain data for testability, per house convention.
+#[allow(dead_code)] // staged: consolidated per-entity jump gate (ADJ-10 single-owner refactor)
+pub(crate) struct JumpAllowEnv {
+    /// `has_weenie && !weenie.is_creature()` (vfptr[11], acclient.c:343937)
+    /// — a non-creature/weenie-less object bypasses the air-gate.
+    pub weenie_noncreature: bool,
+    /// physics `state & Gravity` (BYTE1&4, acclient.c:343939).
+    pub has_gravity: bool,
+    /// physics `transient & (Contact | OnWalkable)` — grounded
+    /// (acclient.c:343940).
+    pub on_walkable_contact: bool,
+    /// `CPhysicsObj::IsFullyConstrained` (acclient.c:343942).
+    pub fully_constrained: bool,
+    /// raw forward command / posture id for the charge + posture gates.
+    pub forward_substate: u32,
+    /// resolved weenie `CanJump(extent)` (`true` when no weenie).
+    pub can_jump: bool,
+    /// weenie present at all (gates the stamina fold, acclient.c:343956).
+    pub has_weenie: bool,
+    /// weenie `JumpStaminaCost(extent, &cost) != 0` (vfptr[16]) — `true`
+    /// == affordability check SUCCEEDED (acclient.c:343957).
+    pub jump_stamina_ok: bool,
+}
+
+impl MotionInterp {
+    /// `CMotionInterp::get_max_speed` (acclient.c:343486-343508; ACE
+    /// `MotionInterp.cs:665-676`) — the UNADJUSTED interp speed base:
+    /// resolved run rate × `RUN_ANIM_SPEED` (4.0), with NO
+    /// interpreted-run override (that override is `adjusted_max_speed`,
+    /// which reads THIS as its `full_base`). Retail: no weenie → 1.0×4;
+    /// `InqRunRate` success → rate×4; fail → `my_run_rate`×4 — the
+    /// existing `run_rate()` helper collapses the no-weenie/fail arms to
+    /// `my_run_rate` (initial 1.0), coinciding with retail at spawn
+    /// (P13 OQ-1). Currently inlined for the local player as
+    /// `capabilities.resolved_manual_run_speed()` then fed to
+    /// `adjusted_max_speed`; this is the per-entity method.
+    #[allow(dead_code)] // staged: per-entity registry speed queries
+    pub(crate) fn max_speed(&self, inq_run_rate: Option<f32>) -> f32 {
+        self.run_rate(inq_run_rate) * RUN_ANIM_SPEED
+    }
+
+    /// `CMotionInterp::is_standing_still` (acclient.c:343716-343725; ACE
+    /// `MotionInterp.cs:702-708`): grounded on walkable contact AND the
+    /// interpreted forward axis is Ready (`None`) AND no sidestep AND no
+    /// turn. `on_walkable_contact` is the physics seam
+    /// `transient_state & (Contact | OnWalkable)` (retail `on_ground`,
+    /// acclient.c:343720-343722) — the same bool the crate already
+    /// threads through the lattice.
+    #[allow(dead_code)] // staged: interpreter seam `minterp_is_standing_still` (Step 3)
+    pub(crate) fn is_standing_still(&self, on_walkable_contact: bool) -> bool {
+        on_walkable_contact
+            && self.interpreted_state.forward_command.is_none()
+            && !self.interpreted_state.sidestep
+            && !self.interpreted_state.turn
+    }
+
+    /// `CMotionInterp::jump_charge_is_allowed` (acclient.c:343318-343339;
+    /// ACE `MotionInterp.cs:729-740`): weenie `CanJump(extent)`
+    /// (vfptr[15]) fail → 73; a jump-blocking forward posture (Fallen
+    /// `0x40000008`, or Crouch..=Sleeping `0x41000012..=0x41000014`) →
+    /// 72; else 0.
+    ///
+    /// `can_jump` = `weenie.map_or(true, |w| w.can_jump(extent))` — retail
+    /// refuses (73) only when a weenie is present AND CanJump is false.
+    /// `forward_substate` is the RAW forward-command id: the rust
+    /// `interpreted_state.forward_command` only ever holds
+    /// Ready/Walk/Run locomotion (postures live in
+    /// `world.player.current_substate`), so the caller passes the
+    /// server-echoed substate — the SAME approximation the charge clock
+    /// makes (`jump_charge.rs:134-140`, spec §6 Q5). NOTE: the charge
+    /// clock deliberately does NOT run this gate at charge-*commence*
+    /// time (`jump_charge.rs:141`, DESIGN.md) — per ADJ-10 the
+    /// charge-commence behavior stays per DESIGN.md until a golden
+    /// replay says otherwise; this method is the release-gate arm.
+    #[allow(dead_code)] // staged: ADJ-10 single-owner jump gate
+    pub(crate) fn jump_charge_is_allowed(&self, can_jump: bool, forward_substate: u32) -> u32 {
+        if !can_jump {
+            return WEENIE_ERROR_CANT_JUMP_LOADED_DOWN; // 73
+        }
+        if forward_substate == 0x4000_0008
+            || (0x4100_0012..=0x4100_0014).contains(&forward_substate)
+        {
+            return WEENIE_ERROR_CANT_JUMP_FROM_THIS_POSITION; // 72
+        }
+        0
+    }
+
+    /// `CMotionInterp::jump_is_allowed` (acclient.c:343922-343971; ACE
+    /// `MotionInterp.cs:742-768`). Order, exactly retail:
+    /// 1. air-gate (else 36): attemptable when non-creature/weenie-less,
+    ///    OR no gravity, OR grounded (acclient.c:343936-343940);
+    /// 2. `IsFullyConstrained` → 71 (:343942);
+    /// 3. queue-head `jump_error_code` (self, via `pending_jump_error`)
+    ///    → that code (:343948-343949);
+    /// 4. `jump_charge_is_allowed` → 73/72 (:343951);
+    /// 5. `motion_allows_jump(forward_substate)` posture → 72 (:343954);
+    /// 6. weenie present AND `JumpStaminaCost==0` (unaffordable) → 71
+    ///    (:343957-343962). `jump_stamina_ok` = query returned non-zero.
+    /// Returns 0 when allowed.
+    ///
+    /// Physics-null → 36 follows the decomp (:343936 outer `&&` fold),
+    /// NOT ACE's early `8 NoPhysicsObject` (P13 OQ-5). Queue-head gate is
+    /// head-only per the decomp (:343948), not ACE's `Count > 1`
+    /// (P13 OQ-6).
+    ///
+    /// The LOCAL-player gate is already assembled INLINE in
+    /// `MovementSystem::execute_jump_release` (identical order + codes,
+    /// same `pending_jump_error()` head input); this is the consolidated
+    /// per-entity method retail `CMotionInterp::jump` (acclient.c:344224)
+    /// / the registry callers want. ADJ-10: refactor
+    /// `execute_jump_release` onto this method in the next wave — the
+    /// two sites are pinned together by `p13_tail_tests`.
+    #[allow(dead_code)] // staged: ADJ-10 single-owner jump gate
+    pub(crate) fn jump_is_allowed(&self, extent: f32, env: &JumpAllowEnv) -> u32 {
+        // `extent` flows into the weenie seams (`can_jump`,
+        // `jump_stamina_ok`) which the caller has already resolved for
+        // this extent; kept in the signature to mirror retail + document
+        // the dependency.
+        let _ = extent;
+        if !(env.weenie_noncreature || !env.has_gravity || env.on_walkable_contact) {
+            return WEENIE_ERROR_YOU_CANT_JUMP_WHILE_IN_THE_AIR; // 36
+        }
+        if env.fully_constrained {
+            return super::movement_manager::WEENIE_ERROR_GENERAL_MOVEMENT_FAILURE; // 71
+        }
+        let head_error = self.pending_jump_error();
+        if head_error != 0 {
+            return head_error;
+        }
+        let charge = self.jump_charge_is_allowed(env.can_jump, env.forward_substate);
+        if charge != 0 {
+            return charge;
+        }
+        let posture = motion_allows_jump(env.forward_substate); // 72 or 0
+        if posture != 0 {
+            return posture;
+        }
+        if env.has_weenie && !env.jump_stamina_ok {
+            return super::movement_manager::WEENIE_ERROR_GENERAL_MOVEMENT_FAILURE; // 71
+        }
+        0
+    }
+}
+
 /// Convert the WIRE `InterpretedMotionState`
 /// (`holtburger-protocol/src/messages/movement/types.rs:226`) into the
 /// runtime [`InterpretedState`] + the stamped server-action list
@@ -2616,5 +2811,118 @@ mod forward_slot_tests {
 
     fn motion_allows_jump_id(id: u32) -> bool {
         holtburger_world::player::motion_allows_jump(id)
+    }
+}
+
+#[cfg(test)]
+mod p13_tail_tests {
+    use super::*;
+
+    fn ready_grounded() -> MotionInterp {
+        // default(): forward_command None (Ready), no sidestep/turn,
+        // my_run_rate 1.0.
+        MotionInterp::default()
+    }
+
+    #[test]
+    fn max_speed_uses_run_rate_times_four() {
+        let mi = ready_grounded();
+        // No weenie query → my_run_rate (1.0) × 4.
+        assert!((mi.max_speed(None) - 4.0).abs() < 1e-6);
+        // Weenie InqRunRate success → queried rate × 4.
+        assert!((mi.max_speed(Some(1.5)) - 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn jump_v_z_floor_clamp_and_weenie_seam() {
+        // Below epsilon → 0.
+        assert_eq!(jump_v_z(0.0, Some(|_e: f32| Some(9.0))), 0.0);
+        // No weenie → 10.
+        assert_eq!(jump_v_z::<fn(f32) -> Option<f32>>(0.5, None), 10.0);
+        // Weenie success → returned vz.
+        assert_eq!(jump_v_z(0.5, Some(|_e: f32| Some(7.5))), 7.5);
+        // Weenie present but query fails → 0.
+        assert_eq!(jump_v_z(0.5, Some(|_e: f32| None)), 0.0);
+        // Extent clamped to 1.0 before the query.
+        assert_eq!(jump_v_z(4.0, Some(|e: f32| Some(e))), 1.0);
+    }
+
+    #[test]
+    fn is_standing_still_all_and_each_falsifier() {
+        let mut mi = ready_grounded();
+        assert!(mi.is_standing_still(true));
+        assert!(!mi.is_standing_still(false)); // airborne
+        mi.interpreted_state.forward_command = Some(InterpretedForwardCommand::RunForward);
+        assert!(!mi.is_standing_still(true));
+        let mut mi = ready_grounded();
+        mi.interpreted_state.sidestep = true;
+        assert!(!mi.is_standing_still(true));
+        let mut mi = ready_grounded();
+        mi.interpreted_state.turn = true;
+        assert!(!mi.is_standing_still(true));
+    }
+
+    #[test]
+    fn jump_charge_is_allowed_gates() {
+        let mi = ready_grounded();
+        assert_eq!(mi.jump_charge_is_allowed(false, 0x4100_0003), 73); // CanJump fail
+        assert_eq!(mi.jump_charge_is_allowed(true, 0x4000_0008), 72); // Fallen
+        assert_eq!(mi.jump_charge_is_allowed(true, 0x4100_0012), 72); // Crouch (lo)
+        assert_eq!(mi.jump_charge_is_allowed(true, 0x4100_0014), 72); // Sleeping (hi)
+        assert_eq!(mi.jump_charge_is_allowed(true, 0x4100_0011), 0); // just below range
+        assert_eq!(mi.jump_charge_is_allowed(true, 0x4100_0003), 0); // Ready
+    }
+
+    fn allow_env() -> JumpAllowEnv {
+        JumpAllowEnv {
+            weenie_noncreature: false,
+            has_gravity: true,
+            on_walkable_contact: true, // grounded creature
+            fully_constrained: false,
+            forward_substate: 0x4100_0003, // Ready
+            can_jump: true,
+            has_weenie: true,
+            jump_stamina_ok: true,
+        }
+    }
+
+    #[test]
+    fn jump_is_allowed_full_order() {
+        let mi = ready_grounded();
+        // Grounded creature, everything clear → allowed.
+        assert_eq!(mi.jump_is_allowed(0.5, &allow_env()), 0);
+        // Airborne creature with gravity → 36.
+        let mut e = allow_env();
+        e.on_walkable_contact = false;
+        assert_eq!(mi.jump_is_allowed(0.5, &e), 36);
+        // Non-creature bypasses the air gate.
+        let mut e = allow_env();
+        e.on_walkable_contact = false;
+        e.weenie_noncreature = true;
+        assert_eq!(mi.jump_is_allowed(0.5, &e), 0);
+        // Fully constrained → 71 (before head/charge/posture).
+        let mut e = allow_env();
+        e.fully_constrained = true;
+        assert_eq!(mi.jump_is_allowed(0.5, &e), 71);
+        // Charge gate: loaded down → 73.
+        let mut e = allow_env();
+        e.can_jump = false;
+        assert_eq!(mi.jump_is_allowed(0.5, &e), 73);
+        // Posture gate: blocking substate → 72.
+        let mut e = allow_env();
+        e.forward_substate = 0x4000_0008; // Fallen
+        assert_eq!(mi.jump_is_allowed(0.5, &e), 72);
+        // Stamina unaffordable (weenie present) → 71.
+        let mut e = allow_env();
+        e.jump_stamina_ok = false;
+        assert_eq!(mi.jump_is_allowed(0.5, &e), 71);
+    }
+
+    #[test]
+    fn jump_is_allowed_queue_head_short_circuits() {
+        let mut mi = ready_grounded();
+        mi.add_to_queue(0, 0x4400_0007, 71); // pending node carries an error
+        // Head error wins over charge/posture (which would pass here).
+        assert_eq!(mi.jump_is_allowed(0.5, &allow_env()), 71);
     }
 }
