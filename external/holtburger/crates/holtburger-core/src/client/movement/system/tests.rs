@@ -6947,3 +6947,58 @@ async fn cmd_interp_slidecast_config_owns_the_stomp_when_flag_on() {
         "interp slidecast_persist=true → held axes ride the stomp (carrier ignored)"
     );
 }
+
+/// Step 5 (row 9) — send ownership: a key edge's MoveToState comes from
+/// the INTERPRETER flush (M1 converter), and the tick's edge-detector
+/// stays silent for it (one sender per edge, pinned on the pulse
+/// counter). A no-edge tick adds nothing; a release edge sends the new
+/// (idle) state exactly once.
+#[tokio::test]
+async fn cmd_interp_send_ownership_one_sender_per_edge() {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_0126),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+
+    movement.enqueue_key_action(0x29, true); // W press
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert_eq!(
+        movement.motion_state_pulses_sent, 1,
+        "press edge: exactly ONE MoveToState (interp flush; detector deduped)"
+    );
+    assert!(
+        movement.server_motion_active,
+        "the interp flush stamped the send bookkeeping"
+    );
+
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert_eq!(
+        movement.motion_state_pulses_sent, 1,
+        "edge-less tick: the detector sees an unchanged intent — no re-send"
+    );
+
+    movement.enqueue_key_action(0x29, false); // W release
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert_eq!(
+        movement.motion_state_pulses_sent, 2,
+        "release edge: ONE idle-state MoveToState (retail sends the release too)"
+    );
+}

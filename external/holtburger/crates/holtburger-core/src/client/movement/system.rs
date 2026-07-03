@@ -3,7 +3,8 @@ use super::common::{
     PHYSICS_ENTRY_EPSILON, PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_GROUND_FRICTION_RETAIL,
     PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC,
     RETAIL_MAX_QUANTUM, build_autonomous_position, build_jump,
-    build_motion_state_raw_motion_state, build_move_to_state, calc_friction,
+    build_motion_state_raw_motion_state, build_move_to_state, build_raw_state_raw_motion_state,
+    calc_friction,
     has_autonomous_position_sync_target, local_omega_for_state, local_velocity_for_state,
     normalize_heading, raw_motion_state_with_motion_style, signed_heading_delta,
 };
@@ -1450,6 +1451,20 @@ pub(crate) struct MovementSystem {
     /// interpreter can be moved OUT during dispatch while the seam
     /// borrows the rest of the system (the SC-15 borrow split).
     command_interpreter: Option<super::command_interpreter::CommandInterpreter>,
+    /// Wave-1 step 5 (row 9) — MoveToState pulses queued by the
+    /// interpreter seam's `send_move_to_state` (the seam is sync,
+    /// `Session::send_action` is async — the same queue-then-flush
+    /// pattern the pulse sends use). Each entry is the composed drive
+    /// at seam-call time; the tick flushes them in order through the
+    /// M1 converter and stamps `note_server_motion_sent`, which is
+    /// exactly what keeps the tick's own edge-detector silent for
+    /// key-driven edges (one sender per edge, zero new suppression
+    /// state).
+    pending_cmd_interp_sends: Vec<MotionState>,
+    /// Diagnostics/test counter — MoveToState motion pulses actually
+    /// sent (the legacy edge-detector site AND the step-5 interpreter
+    /// flush). The row-9 one-sender-per-edge contract is pinned on it.
+    pub(crate) motion_state_pulses_sent: u32,
     /// Physics-parity 2026-07-03 (dossier A F1/F2) — runtime carrier of
     /// the `?retailQuantum=on` URL flag. `None` = the
     /// [`USE_RETAIL_QUANTUM`] const default (OFF — the DECISIONS-A1-O5
@@ -1690,6 +1705,8 @@ impl MovementSystem {
             slide_cast_runtime: None,
             cmd_interp_runtime: None,
             command_interpreter: None,
+            pending_cmd_interp_sends: Vec::new(),
+            motion_state_pulses_sent: 0,
             retail_quantum_runtime: None,
             last_move_was_autonomous: false,
             pending_take_control: false,
@@ -2822,6 +2839,38 @@ impl MovementSystem {
             }
         }
         self.consume_pending_take_control(world);
+
+        // Wave-1 step 5 (row 9) — flush the interpreter lane's queued
+        // MoveToState pulses, in dispatch order. State source: the M1
+        // converter over `RawState::from_motion_state(drive)` — the
+        // handoff's option (b) bridge (byte-equivalent to the legacy
+        // builder for the keyboard alphabet by the M1 parity property;
+        // wire ≡ pose by construction because the composed drive is the
+        // ONE state truth). Option (a) — the live minterp raw_state
+        // driven through the apply_motion lattice (SC-17's
+        // inq_raw_motion_state) — is the retail-faithful endpoint,
+        // deferred to the post-flip cleanup wave so the A/B validates a
+        // single state carrier. `note_server_motion_sent` stamps the
+        // same bookkeeping the legacy sender uses, so the edge-detector
+        // below sees an unchanged intent and stays silent for
+        // key-driven edges; non-key drive changes (FU-A use_time
+        // reclaims, script ManualSets) still ride the detector — same
+        // send the legacy FU5 revival produces.
+        let interp_sends = std::mem::take(&mut self.pending_cmd_interp_sends);
+        for state in interp_sends {
+            let metadata = MovementPacketMetadata::default();
+            let raw = build_raw_state_raw_motion_state(
+                world,
+                &super::raw_state::RawState::from_motion_state(state),
+                metadata.motion_style,
+            );
+            let data = build_move_to_state(world, raw, metadata);
+            session
+                .send_action(GameAction::MoveToState(Box::new(data)))
+                .await?;
+            self.motion_state_pulses_sent = self.motion_state_pulses_sent.wrapping_add(1);
+            self.note_server_motion_sent(server_motion_intent(state, metadata.motion_style));
+        }
 
         // A4-Q1 (2026-06-11): per-frame completion pump for the retail
         // `MotionTableManager` queue, run AFTER drive ingestion —
@@ -6468,6 +6517,7 @@ impl MovementSystem {
         if self.should_send_motion_state_pulse(state, metadata.motion_style) {
             log::info!("movement: sending resolved motion pulse state={:?}", state);
             Self::send_motion_state_pulse(world, session, state, metadata).await?;
+            self.motion_state_pulses_sent = self.motion_state_pulses_sent.wrapping_add(1);
             self.note_server_motion_sent(server_motion_intent(state, metadata.motion_style));
         }
 
@@ -6836,17 +6886,21 @@ impl MovementSystem {
 /// DoMotion/StopMotion stream into the ONE `MotionState` the rest of the
 /// tick/pose/send machinery consumes.
 ///
-/// Wave-1 scoping (each a documented PLAN row, going live at step 5):
-/// - sends (row 9): deferred no-ops — the tick's motion-state-edge
-///   detector remains the single sender in BOTH lanes, so the A/B has
-///   identical send cadence; `send_move_to_state` returns `false` so the
-///   interpreter never stamps its own cadence bookkeeping.
-/// - jump lanes (row 8): the JS spacebar rides the legacy
-///   `jumpCharge*` wasm exports in both lanes this wave; the
-///   `commence_jump`/`do_jump` seams go live when the forwarder routes
-///   action 0x31.
-/// - position-event reads: unreachable (the interpreter's `use_time` is
-///   not pumped this wave — the heartbeat stays with the tick).
+/// Step-5 scoping (PLAN rows; what is LIVE vs still deferred):
+/// - sends (row 9, LIVE step 5): `send_move_to_state` queues the
+///   composed drive on `pending_cmd_interp_sends`; the tick flushes it
+///   through the M1 converter and stamps `note_server_motion_sent`, so
+///   the tick's edge-detector stays silent for key-driven edges (one
+///   sender per edge). Non-key drive changes (FU-A use_time reclaims)
+///   still ride the detector — the same send the legacy FU5 revival
+///   produces (retail sends nothing on a use_time reclaim; the extra
+///   pulse is the documented lane-shared divergence, benign to ACE).
+/// - position-event reads (row 9 heartbeat half): stay stubbed —
+///   the autonomous-position heartbeat REMAINS the tick's
+///   (`maybe_send_autonomous_position_heartbeat`), per the PLAN's
+///   "heartbeat cadence stays with the existing tick in wave 1".
+///   `cur_time` stays 0.0 so the interpreter's windowed position gate
+///   can never open (ONE heartbeat sender).
 struct SystemInterpreterSeams<'a> {
     system: &'a mut MovementSystem,
     world: &'a mut WorldState,
@@ -7011,7 +7065,14 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
         log::debug!("cmdInterp: finish_jump seam (dark this wave)");
     }
     fn send_move_to_state(&mut self) -> bool {
-        false // row 9: the tick's edge-detector is the single sender
+        // Row 9 LIVE (step 5): queue the composed drive for the tick's
+        // async flush (seams are sync, `Session::send_action` is not).
+        // Retail cadence: every SendMovementEvent that passes its
+        // guards emits ONE MoveToState — including an action command's
+        // stop_completely + terminal pair. Returning true lets the
+        // interpreter stamp its cadence bookkeeping.
+        self.system.pending_cmd_interp_sends.push(self.drive);
+        true
     }
     fn send_autonomous_position(&mut self) -> bool {
         false

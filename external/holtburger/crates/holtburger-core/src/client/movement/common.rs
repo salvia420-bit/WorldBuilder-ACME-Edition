@@ -439,7 +439,6 @@ pub(super) fn build_motion_state_raw_motion_state(
 /// sends them (jump rides the dedicated Jump action; transients ride their
 /// own lanes), and emitting them here would be a new wire behavior, not a
 /// port.
-#[allow(dead_code)] // staged: the ?cmdInterp send lane (step-4 wiring)
 pub(super) fn build_raw_state_raw_motion_state(
     world: &WorldState,
     raw: &super::raw_state::RawState,
