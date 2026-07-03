@@ -5858,6 +5858,42 @@
           // local-only, the server/observers still see the full cast).
           let lastForwardAxis = 0;
           const CAST_MOVE_ON = !new URLSearchParams(location.search).getAll("castMove").includes("off");
+          // Movement-port wave 1 step 4 (2026-07-03): `?cmdInterp=on` —
+          // keyboard movement rides the retail CommandInterpreter lane.
+          // JS becomes a RAW EDGE FORWARDER: each physical keydown/keyup
+          // maps to a retail InputAction id (ADJ-4 — the id→motion
+          // resolution and the WhichList routing live wasm-side) and the
+          // legacy __axisValue/sig-diff dispatcher below is silenced for
+          // movement keys. Flag-off: byte-identical legacy behavior.
+          // PENDING eye-test; default OFF until the 1070 A/B.
+          const CMD_INTERP_ON =
+            new URLSearchParams(location.search).get("cmdInterp") === "on";
+          // Retail InputAction ordinals (ACCmdInterp::OnAction switch base
+          // 0x29, acclient.c:435951): our binds → w=WalkForward,
+          // s=WalkBackward, d=SideStepRight, a=SideStepLeft, e=TurnRight,
+          // q=TurnLeft, Shift=HoldRun. Space stays on the legacy
+          // jumpCharge exports this wave (PLAN row 8).
+          const CMD_INTERP_ACTIONS = {
+            w: 0x29,
+            s: 0x2a,
+            d: 0x2c,
+            a: 0x2d,
+            e: 0x2e,
+            q: 0x2f,
+            shift: 0x32,
+          };
+          const __cmdInterpForward = (key, down) => {
+            if (!CMD_INTERP_ON || !handle) return;
+            const action = CMD_INTERP_ACTIONS[key];
+            if (action == null) return;
+            try {
+              if (typeof handle.handleKeyAction === "function") {
+                handle.handleKeyAction(action, down);
+              }
+            } catch (e) {
+              console.warn("[cmdInterp] handleKeyAction failed:", e);
+            }
+          };
           const movementKeys = new Set(["w", "a", "s", "d", "q", "e"]);
           // Skip keystate updates when the user is typing in any text
           // input — login, character creation, future chat box. This
@@ -6105,6 +6141,13 @@
               // FU7 — stamp the press order on the EDGE only (held-key
               // auto-repeat keydowns must not steal the axis head).
               if (!keyState[k]) keyOrder[k] = ++keyOrderCounter;
+              // ?cmdInterp=on: forward the raw press EDGE (ev.repeat
+              // filtered — the retail "held key never re-fires"
+              // invariant); the legacy keystate still updates so
+              // non-movement consumers (jump standstill hints, camera)
+              // keep working, but the sig-diff dispatcher below is
+              // silenced under the flag.
+              if (!ev.repeat) __cmdInterpForward(k, true);
               keyState[k] = true;
               // G-7 (?longJump=on): a movement key pressed DURING a held
               // space charge converts it to a normal moving jump — drop
@@ -6125,6 +6168,10 @@
               return;
             }
             if (ev.key === "Shift") {
+              // ?cmdInterp=on: Shift is the HoldRun modifier edge (retail
+              // OnAction case 9 → SetHoldRun) — the gait XOR lives
+              // wasm-side (run-by-default, Shift=walk).
+              if (!ev.repeat) __cmdInterpForward("shift", true);
               keyState.shift = true;
               return;
             }
@@ -6248,8 +6295,14 @@
             // so a stale "forward" doesn't get re-emitted.
             const k = ev.key.toLowerCase();
             if (movementKeys.has(k)) {
+              // ?cmdInterp=on: releases forward UNCONDITIONALLY — the
+              // silent-release-under-server-control rule (FU-C) is
+              // decided wasm-side, which must see the pop even when it
+              // suppresses the dispatch.
+              __cmdInterpForward(k, false);
               keyState[k] = false;
             } else if (ev.key === "Shift") {
+              __cmdInterpForward("shift", false);
               keyState.shift = false;
             } else if (ev.key === " " && handle && window.__jumpChargeActive === true) {
               // A14-I4 (?jumpParity=on): release → wasm. The extent is
@@ -8645,7 +8698,15 @@
               const run = __resolveRunModifier(keyState.shift, handle);
               const sig = `${forward},${strafe},${turn},${run}`;
               window.__lastInputSig = sig;
-              if (sig !== lastInputSig) {
+              // ?cmdInterp=on (wave-1 rows 11-13): the legacy sig-diff
+              // dispatcher is SILENCED for movement — raw edges already
+              // went to wasm via handleKeyAction, and no movement
+              // DECISION may live in JS on the interpreter lane. The
+              // W3.1 local forward clip + anim-break cut +
+              // setSidestepLayer side-effects inside this block go dark
+              // with it (they become interpreter-event consumers at
+              // step 5 — PENDING eye-test).
+              if (!CMD_INTERP_ON && sig !== lastInputSig) {
                 try {
                   if (__inputFunnelOn) {
                     // A14-I1: route through the shared InputController so this

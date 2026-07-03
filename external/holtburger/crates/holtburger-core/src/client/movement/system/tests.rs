@@ -6642,3 +6642,137 @@ fn take_control_on_input_edge_clears_server_control_and_stops_interp() {
         "leash constraint SURVIVES take-control"
     );
 }
+
+/// Wave-1 step 4 (`?cmdInterp=on`) — the interpreter lane end-to-end
+/// through the tick: input-action edges compose the per-axis drive, raise
+/// the latch, mirror the held-keys truth from the CommandLists, and the
+/// pop-through/silent-release semantics arrive intact. Flag OFF, none of
+/// this machinery is reachable (nothing queues a KeyEdge — pinned by the
+/// legacy suite staying green).
+#[tokio::test]
+async fn cmd_interp_key_edges_drive_the_interpreter_lane() {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_0123),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+
+    // W press (ADJ-4: action 0x29 = WalkForward) + D press (0x2C =
+    // SideStepRight).
+    movement.enqueue_key_action(0x29, true);
+    movement.enqueue_key_action(0x2C, true);
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("interp lane tick");
+
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected manual drive from the interpreter lane, got {other:?}"),
+    };
+    assert_eq!(drive.forward, Some(ForwardLocomotion::Forward));
+    assert_eq!(drive.sidestep, Some(SidestepLocomotion::StrafeRight));
+    assert_eq!(drive.gait, Gait::Run, "M7 run-by-default");
+    assert!(
+        movement.last_move_was_autonomous,
+        "row 1: the edge raised the latch through the seam"
+    );
+    // Row 3: the mirror carries the held-keys truth from the lists.
+    let raw = movement.last_manual_drive.expect("mirror populated");
+    assert_eq!(raw.forward, Some(ForwardLocomotion::Forward));
+    assert_eq!(raw.sidestep, Some(SidestepLocomotion::StrafeRight));
+    assert!(
+        !movement.pending_take_control,
+        "row 2: the interp lane never uses the FU5 deferred bit"
+    );
+
+    // Head-wins pop-through: S press buries W; W release pops through to
+    // S as a fresh press (forward = Backstep, not idle).
+    movement.enqueue_key_action(0x2A, true); // S (WalkBackward)
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    movement.enqueue_key_action(0x29, false); // release W (buried? no — W is under S)
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(
+        drive.forward,
+        Some(ForwardLocomotion::Backstep),
+        "the newest head (S) owns the forward axis after W releases"
+    );
+
+    // FU-C: a release while the scene says server-controlled is SILENT —
+    // the drive keeps its last-applied state, but the list pops (mirror
+    // empties).
+    world.scene.set_local_server_controlled(true);
+    movement.enqueue_key_action(0x2C, false); // release D under control
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(
+        drive.sidestep,
+        Some(SidestepLocomotion::StrafeRight),
+        "silent release: the last-applied sidestep keeps driving (§2.7)"
+    );
+    let raw = movement.last_manual_drive.expect("mirror");
+    assert_eq!(raw.sidestep, None, "yet the list was bookkept (popped)");
+    assert!(
+        world.scene.local_server_controlled(),
+        "a silent release does not reclaim control"
+    );
+
+    // FU-A: a fresh press under control reclaims — the leash drops (scene
+    // flag clears) and the full held pattern (the S under the stack)
+    // revives in the composed drive.
+    movement.enqueue_key_action(0x2E, true); // E (TurnRight) press
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert!(
+        !world.scene.local_server_controlled(),
+        "FU-A: the press reclaimed control through the seam leash drop"
+    );
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(
+        drive.forward,
+        Some(ForwardLocomotion::Backstep),
+        "FU-A: the held S revived out of the SubstateList head"
+    );
+    assert_eq!(drive.turning, Some(Turn::Right), "the tap's own axis drives");
+}

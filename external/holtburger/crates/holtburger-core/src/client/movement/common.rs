@@ -407,6 +407,118 @@ pub(super) fn build_motion_state_raw_motion_state(
     raw_motion_state_with_motion_style(world, raw_motion_state, motion_style)
 }
 
+/// M1 (movement-port wave 1, 2026-07-03 — SC-17): the interpreter-native
+/// send path's state source. Retail `SendMovementEvent` builds its
+/// MoveToStatePack from `CPhysicsObj::InqRawMotionState(player)` — the LIVE
+/// minterp raw state the CommandInterpreter has been mutating through
+/// DoMotion/StopMotion — where today's client builds the wire state from
+/// the JS tristate via [`build_motion_state_raw_motion_state`]. This is the
+/// missing converter: `raw_state::RawState → protocol RawMotionState`,
+/// honoring the SAME wire rules the legacy builder pins (F5-2/F5-1/F1-3),
+/// so the `?cmdInterp` A/B has zero observer-visible wire delta:
+///
+/// - **walk-class forward + HoldKey-carried gait** (F5-2): the wire always
+///   carries `WalkForward`/`WalkBackwards` at unit speed; `RunForward` (a
+///   server-interpreted code that can land in the raw slot via the
+///   UpdateMotion lane) collapses back to `WalkForward` — the Run gait
+///   rides the hold keys, which is the ONLY encoding ACE's broadcast
+///   converter attaches the run rate to (`MovementData.cs:99-117`).
+/// - **a stored `Substate` forward slot emits NO forward fields** — it
+///   contributes zero locomotion (the FU6 gesture-owns-the-slot semantics);
+///   the send never re-broadcasts a server gesture as raw input.
+/// - **real sidestep enum, positive unit speed** (F5-1): ACE derives the
+///   observers' strafe direction from the enum only.
+/// - **turn collapsed to `TurnRight` ± speed** (the raw-wire contract ACE's
+///   own `RawMotionState.cs:38-40` documents for the turn field only).
+/// - **hold keys**: each axis key resolves `Invalid → current` (the
+///   `adjust_motion` rule, applied HERE so the wire matches the legacy
+///   builder byte-for-byte — it stamps the gait key on every axis);
+///   `Run → 2`, everything else → `1` (None).
+///
+/// One-shot `actions` are deliberately NOT packed — the legacy lane never
+/// sends them (jump rides the dedicated Jump action; transients ride their
+/// own lanes), and emitting them here would be a new wire behavior, not a
+/// port.
+#[allow(dead_code)] // staged: the ?cmdInterp send lane (step-4 wiring)
+pub(super) fn build_raw_state_raw_motion_state(
+    world: &WorldState,
+    raw: &super::raw_state::RawState,
+    motion_style: MotionStyle,
+) -> RawMotionState {
+    use super::raw_state::{HoldKey as RawHoldKey, RawForwardCommand, RawSidestepCommand,
+        RawTurnCommand};
+
+    fn wire_hold_key(key: RawHoldKey, current: RawHoldKey) -> u32 {
+        match key.resolve(current) {
+            RawHoldKey::Run => HoldKey::Run as u32,
+            // Invalid (unresolved boot state) and NoKey both ride the wire
+            // as None — the walk gait (byte-identical to the legacy
+            // builder's Walk arm).
+            _ => HoldKey::None as u32,
+        }
+    }
+
+    let current_key = wire_hold_key(raw.current_holdkey, raw.current_holdkey);
+    let mut raw_motion_state = RawMotionState {
+        flags: RawMotionFlags::CURRENT_HOLD_KEY,
+        current_hold_key: Some(current_key),
+        ..Default::default()
+    };
+
+    let forward_command = raw.forward_command.and_then(|command| match command {
+        RawForwardCommand::WalkForward => Some(WALK_FORWARD_MOTION_COMMAND),
+        RawForwardCommand::WalkBackwards => Some(WALK_BACKWARD_MOTION_COMMAND),
+        // F5-2: run rides the hold key; the wire stays walk-class.
+        RawForwardCommand::RunForward => Some(WALK_FORWARD_MOTION_COMMAND),
+        // FU6: a stored substate (cast gesture, crouch…) owns the slot at
+        // zero locomotion — the raw send omits the forward fields.
+        RawForwardCommand::Substate(_) => None,
+    });
+    if let Some(command) = forward_command {
+        raw_motion_state.flags |= RawMotionFlags::FORWARD_COMMAND
+            | RawMotionFlags::FORWARD_HOLD_KEY
+            | RawMotionFlags::FORWARD_SPEED;
+        raw_motion_state.forward_command = Some(command);
+        raw_motion_state.forward_hold_key =
+            Some(wire_hold_key(raw.forward_holdkey, raw.current_holdkey));
+        // Unit speed on the wire (F5-2): server-side apply_run_to_command
+        // re-applies the gait scaling; sending a scaled speed would
+        // double-apply.
+        raw_motion_state.forward_speed = Some(1.0);
+    }
+
+    if let Some(sidestep) = raw.sidestep_command {
+        raw_motion_state.flags |= RawMotionFlags::SIDE_STEP_COMMAND
+            | RawMotionFlags::SIDE_STEP_HOLD_KEY
+            | RawMotionFlags::SIDE_STEP_SPEED;
+        raw_motion_state.sidestep_command = Some(match sidestep {
+            RawSidestepCommand::SideStepLeft => SIDESTEP_LEFT_MOTION_COMMAND,
+            RawSidestepCommand::SideStepRight => SIDESTEP_RIGHT_MOTION_COMMAND,
+        });
+        raw_motion_state.sidestep_hold_key =
+            Some(wire_hold_key(raw.sidestep_holdkey, raw.current_holdkey));
+        raw_motion_state.sidestep_speed = Some(1.0); // F5-1 unit magnitude
+    }
+
+    if let Some(turn) = raw.turn_command {
+        raw_motion_state.flags |= RawMotionFlags::TURN_COMMAND
+            | RawMotionFlags::TURN_HOLD_KEY
+            | RawMotionFlags::TURN_SPEED;
+        let sign = match turn {
+            RawTurnCommand::TurnLeft => -1.0,
+            RawTurnCommand::TurnRight => 1.0,
+        };
+        raw_motion_state.turn_command = Some(TURN_RIGHT_MOTION_COMMAND);
+        raw_motion_state.turn_hold_key =
+            Some(wire_hold_key(raw.turn_holdkey, raw.current_holdkey));
+        // Magnitude from the live raw state (keyboard = 1.0; a camera-lane
+        // override rides through), sign from the collapsed direction.
+        raw_motion_state.turn_speed = Some(raw.turn_speed.abs() * sign);
+    }
+
+    raw_motion_state_with_motion_style(world, raw_motion_state, motion_style)
+}
+
 /// Wave 10 Phase 10.3 (movement-animation overhaul, 2026-05-26):
 /// per-second velocity decay coefficient applied to the player's
 /// lateral (X/Y) velocity each tick when grounded.
@@ -1418,5 +1530,85 @@ mod tests {
     fn ground_friction_coefficients_are_pinned() {
         assert_eq!(PLAYER_GROUND_FRICTION_RETAIL, 0.95);
         assert_eq!(PLAYER_GROUND_FRICTION_PER_SEC, 0.5);
+    }
+
+    /// M1 (wave-1 step 4): byte-parity property — for every effective
+    /// keyboard drive state, the interpreter-native converter
+    /// (`RawState` → wire) emits EXACTLY what the legacy tristate builder
+    /// emits. This is the ownership-row-10 pin: the `?cmdInterp` A/B has
+    /// zero observer-visible wire delta.
+    #[test]
+    fn m1_converter_byte_parity_with_legacy_builder() {
+        use crate::client::movement::raw_state::RawState;
+        use crate::client::movement_types::{
+            ForwardLocomotion, Gait, SidestepLocomotion, Turn,
+        };
+        let world = holtburger_world::WorldState::synthetic();
+        let forwards = [None, Some(ForwardLocomotion::Forward), Some(ForwardLocomotion::Backstep)];
+        let sidesteps = [
+            None,
+            Some(SidestepLocomotion::StrafeLeft),
+            Some(SidestepLocomotion::StrafeRight),
+        ];
+        let turns = [None, Some(Turn::Left), Some(Turn::Right)];
+        let gaits = [Gait::Walk, Gait::Run];
+        for &gait in &gaits {
+            for &forward in &forwards {
+                for &sidestep in &sidesteps {
+                    for &turning in &turns {
+                        let state = MotionState {
+                            gait,
+                            forward,
+                            sidestep,
+                            turning,
+                            ..MotionState::default()
+                        };
+                        let legacy = build_motion_state_raw_motion_state(
+                            &world,
+                            state,
+                            MotionStyle::PreserveServer,
+                        );
+                        let raw = RawState::from_motion_state(state);
+                        let native = build_raw_state_raw_motion_state(
+                            &world,
+                            &raw,
+                            MotionStyle::PreserveServer,
+                        );
+                        assert_eq!(
+                            native, legacy,
+                            "wire divergence for gait={gait:?} fwd={forward:?} side={sidestep:?} turn={turning:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// M1: the raw-state-only shapes the legacy builder can never see —
+    /// a stored Substate forward slot (gesture) emits NO forward fields
+    /// (FU6 zero-locomotion), and a raw RunForward collapses to the
+    /// walk-class wire command (F5-2).
+    #[test]
+    fn m1_converter_substate_omits_and_runforward_collapses() {
+        use crate::client::movement::raw_state::{RawForwardCommand, RawState};
+        let world = holtburger_world::WorldState::synthetic();
+
+        let mut gesture = RawState::default();
+        gesture.forward_command = Some(RawForwardCommand::Substate(0x1300_0001));
+        let wire = build_raw_state_raw_motion_state(&world, &gesture, MotionStyle::PreserveServer);
+        assert!(!wire.flags.contains(RawMotionFlags::FORWARD_COMMAND));
+        assert_eq!(wire.forward_command, None, "gesture never re-broadcast as raw input");
+
+        let mut run = RawState::default();
+        run.forward_command = Some(RawForwardCommand::RunForward);
+        run.current_holdkey = crate::client::movement::raw_state::HoldKey::Run;
+        let wire = build_raw_state_raw_motion_state(&world, &run, MotionStyle::PreserveServer);
+        assert_eq!(
+            wire.forward_command,
+            Some(WALK_FORWARD_MOTION_COMMAND),
+            "F5-2: run gait rides the hold key, wire stays walk-class"
+        );
+        assert_eq!(wire.current_hold_key, Some(HoldKey::Run as u32));
+        assert_eq!(wire.forward_speed, Some(1.0), "unit speed");
     }
 }

@@ -297,6 +297,25 @@ impl MovementSystemHandle {
         self.inner.set_slide_cast(on);
     }
 
+    /// Movement-port wave 1 step 4 (2026-07-03): install the
+    /// `?cmdInterp=on` runtime carrier (default OFF — the retail
+    /// `CommandInterpreter` input lane, dark until the parity harness +
+    /// 1070 live-bot A/B). Forwards to `MovementSystem::set_cmd_interp`.
+    pub fn set_cmd_interp(&mut self, on: bool) {
+        self.inner.set_cmd_interp(on);
+    }
+
+    /// Wave-1 step 4: queue one raw input-action edge for the
+    /// `?cmdInterp=on` interpreter lane (ADJ-4 retail InputAction ids:
+    /// 0x29=WalkForward, 0x2A=WalkBackward, 0x2B=Ready, 0x2C/0x2D=
+    /// SideStepRight/Left, 0x2E/0x2F=TurnRight/Left, 0x30=AutoRun,
+    /// 0x31=Jump, 0x32=HoldRun). The wasm `handleKeyAction` export
+    /// forwards here; JS emits ONLY while the flag is on — flag-off the
+    /// legacy `setMovementInput` lane stays byte-identical.
+    pub fn enqueue_key_action(&mut self, action: u32, down: bool) {
+        self.inner.enqueue_key_action(action, down);
+    }
+
     /// Physics-parity 2026-07-03 (dossier A F1/F2): install the
     /// `?retailQuantum=on` runtime carrier (default OFF — ACE slice
     /// shapes stand per DECISIONS-A1-O5; `=on` runs the retail

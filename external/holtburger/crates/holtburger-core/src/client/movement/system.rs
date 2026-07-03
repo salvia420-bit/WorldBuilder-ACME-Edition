@@ -795,6 +795,29 @@ const USE_CAST_MOVE: bool = true;
 /// tap-to-revive only).
 const USE_SLIDE_CAST: bool = true;
 
+/// Movement-port WAVE 1 step 4 (2026-07-03) — the retail
+/// `CommandInterpreter` INPUT LANE master gate (the strangler flag).
+///
+/// OFF (DEFAULT): the existing input lane (`setMovementInput` →
+/// `ManualSet` → castMove/slideCast) runs byte-identical — the
+/// live-validated strafecast behavior is the regression floor
+/// (docs/HANDOFF-physics-parity-mage-pvp-2026-07-03.md session 2).
+/// ON (`?cmdInterp=on`): key edges arrive as input-action ids →
+/// [`QueuedDriveCommand::KeyEdge`] → the unified
+/// [`super::command_interpreter::CommandInterpreter`] (per-axis
+/// CommandLists, head-wins pop-through, FU-A TakeControl full re-apply,
+/// FU-C silent releases — all INSIDE the interpreter; `?cmdInterp` IS
+/// their gate, no separate flags).
+///
+/// Ownership handover while ON (the conflict contract —
+/// docs/PLAN-cmdinterp-wave1-landing-2026-07-03.md, rows 1-14): exactly
+/// ONE writer per state row; both lanes must never drive in the same
+/// tick (debug-asserted in [`MovementSystem::tick`]).
+///
+/// NO DEFAULT FLIP this wave — that waits for the parity harness + one
+/// batched 1070 live-bot A/B (verdict step 5).
+const USE_COMMAND_INTERPRETER: bool = false;
+
 /// Phase 3 Phase D (2026-06-28, Option C) — register each outdoor
 /// building/static BSP into EVERY land cell its world AABB overlaps, not just
 /// its home cell, so an off-center building can no longer be walked through from
@@ -1418,6 +1441,15 @@ pub(crate) struct MovementSystem {
     /// `?slideCast=off` runtime carrier ([`USE_SLIDE_CAST`]) —
     /// [`Self::slide_cast_enabled`]. Default `None`.
     slide_cast_runtime: Option<bool>,
+    /// `?cmdInterp=on` runtime carrier ([`USE_COMMAND_INTERPRETER`]) —
+    /// [`Self::cmd_interp_enabled`]. Default `None` (OFF).
+    cmd_interp_runtime: Option<bool>,
+    /// Wave-1 step 4 — the unified retail input interpreter (dark lane).
+    /// Lazily constructed at the first [`QueuedDriveCommand::KeyEdge`]
+    /// (which only exists under `?cmdInterp=on`); `Option` so the
+    /// interpreter can be moved OUT during dispatch while the seam
+    /// borrows the rest of the system (the SC-15 borrow split).
+    command_interpreter: Option<super::command_interpreter::CommandInterpreter>,
     /// Physics-parity 2026-07-03 (dossier A F1/F2) — runtime carrier of
     /// the `?retailQuantum=on` URL flag. `None` = the
     /// [`USE_RETAIL_QUANTUM`] const default (OFF — the DECISIONS-A1-O5
@@ -1516,6 +1548,13 @@ enum QueuedDriveCommand {
         state: MotionState,
         duration: Duration,
     },
+    /// Wave-1 step 4 (`?cmdInterp=on` ONLY) — one raw input-action edge
+    /// for the retail interpreter lane (ADJ-4: JS forwards INPUT-ACTION
+    /// ids 0x29-0x32, resolved to motion commands wasm-side by
+    /// `on_action`; the P14 keymap bugs are fixed by construction).
+    /// `down` = press vs release. The legacy `ManualSet` lane never
+    /// carries keyboard edges while the flag is on (ownership row 4).
+    KeyEdge { action: u32, down: bool },
     Autonomous(AutonomousDriveIntent),
     Transient(TransientMotionIntent),
     ArriveAtPose {
@@ -1649,6 +1688,8 @@ impl MovementSystem {
             retail_ground_runtime: None,
             cast_move_runtime: None,
             slide_cast_runtime: None,
+            cmd_interp_runtime: None,
+            command_interpreter: None,
             retail_quantum_runtime: None,
             last_move_was_autonomous: false,
             pending_take_control: false,
@@ -1757,6 +1798,28 @@ impl MovementSystem {
         self.slide_cast_runtime.unwrap_or(USE_SLIDE_CAST)
     }
 
+    /// [`USE_COMMAND_INTERPRETER`] effective predicate.
+    pub(crate) fn cmd_interp_enabled(&self) -> bool {
+        self.cmd_interp_runtime.unwrap_or(USE_COMMAND_INTERPRETER)
+    }
+
+    /// `?cmdInterp=on/off` runtime carrier install (mirrors
+    /// [`Self::set_faithful_outdoor`]'s shape). Wired through
+    /// `MovementSystemHandle::set_cmd_interp` from the wasm recv-loop
+    /// init.
+    pub(crate) fn set_cmd_interp(&mut self, on: bool) {
+        self.cmd_interp_runtime = Some(on);
+    }
+
+    /// Wave-1 step 4 — queue one raw input-action edge for the
+    /// interpreter lane. The wasm `handleKeyAction` export lands here;
+    /// JS calls it ONLY under `?cmdInterp=on` (the flag-off legacy lane
+    /// stays byte-identical because nothing ever queues a KeyEdge).
+    pub(crate) fn enqueue_key_action(&mut self, action: u32, down: bool) {
+        self.queued_drive_commands
+            .push(QueuedDriveCommand::KeyEdge { action, down });
+    }
+
     /// Retail wire-latch write — `SmartBox::SetObjectMovement`
     /// (acclient.c:311185-311193) stamps `last_move_was_autonomous` with
     /// the message's autonomous flag on every accepted self motion that
@@ -1793,6 +1856,142 @@ impl MovementSystem {
                 world.scene.set_local_server_controlled(false);
                 world.stop_local_player_interpolation();
             }
+        }
+    }
+
+    /// Wave-1 step 4 — one input-action edge through the retail
+    /// interpreter (`?cmdInterp=on` only). The interpreter is moved OUT of
+    /// `self` for the call so the seam can borrow the rest of the system +
+    /// the world disjointly (the SC-15 borrow split).
+    ///
+    /// Ownership handover rows implemented here (PLAN table):
+    /// - row 1: the seam's `do_motion`/`stop_motion`/`set_latch` are the
+    ///   ONLY latch raisers on this lane (retail :317325/:317364/:716946);
+    ///   `note_server_authored_motion` stays the wire-side writer.
+    /// - row 2: `pending_take_control` is NEVER set here — the ported
+    ///   `TakeControlFromServer` runs its full FU-A tail synchronously
+    ///   (control return + leash drop through the seam + hold_run
+    ///   re-assert + all-three-heads re-apply); asserted below.
+    /// - row 3: `last_manual_drive` is re-derived from the interpreter's
+    ///   list heads after every edge — the CommandLists ARE held-keys
+    ///   truth; the mirror keeps the existing consumers (slideCast
+    ///   capture, jump standstill root, autorun restore) on one path.
+    /// - row 4: the composed per-axis drive REPLACES `merge_manual_edge`
+    ///   (unreachable on this lane — `ManualSet` never carries keyboard
+    ///   edges while the flag is on).
+    /// - row 9: sends stay with the tick's edge-detector this wave — the
+    ///   seam's send methods are deferred no-ops, so the A/B has identical
+    ///   send cadence; step 5 flips send ownership onto the interpreter's
+    ///   `SendMovementEvent` + the M1 converter.
+    fn ingest_key_edge(&mut self, action: u32, down: bool, world: &mut WorldState) {
+        if !self.cmd_interp_enabled() {
+            // JS only forwards actions under ?cmdInterp=on; a stray edge
+            // here means the gate leaked.
+            debug_assert!(false, "KeyEdge queued while ?cmdInterp off");
+            return;
+        }
+        let mut interp = self.command_interpreter.take().unwrap_or_else(|| {
+            let mut it = super::command_interpreter::CommandInterpreter::new(0.0);
+            // Edges only arrive in-world: smartbox + player present
+            // (retail SetSmartBox/NewPlayer ran during login).
+            it.set_smartbox(true, true);
+            it
+        });
+        // The wire-side control grabs (MoveTo/TurnTo directives, interp
+        // engagement) set the SCENE flag today (they call the legacy
+        // lane's machinery, not interp.lose_control_to_server, until the
+        // step-5 migration) — mirror it IN so the FU-A/FU-C arms see the
+        // real control state at edge time.
+        interp.controlled_by_server = world.scene.local_server_controlled();
+
+        // Base drive: the current effective manual state — unchanged axes
+        // carry (retail: an edge dispatches ONE axis; the others keep
+        // their last-applied slots).
+        let base = match self.active_drive {
+            Some(ActiveDriveState {
+                intent: ActiveDriveIntent::Manual(state),
+                ..
+            }) => state,
+            _ => MotionState {
+                // Fresh lane state: run-by-default (M7 — the seam's
+                // ui_toggles_run is constant-true; a Shift edge routes
+                // action 0x32 → SetHoldRun which re-derives the gait).
+                gait: crate::client::movement_types::Gait::Run,
+                ..MotionState::default()
+            },
+        };
+        let mut seams = SystemInterpreterSeams {
+            system: self,
+            world,
+            drive: base,
+            dispatched: false,
+        };
+        let handled = interp.on_action(&mut seams, action, down);
+        let dispatched = seams.dispatched;
+        let drive = seams.drive;
+        if !handled {
+            log::warn!("cmdInterp: unhandled input action {action:#x} (emote hash dark, M3)");
+        }
+        if dispatched {
+            // Install the composed drive (the per-axis DoMotion/StopMotion
+            // stream replaced merge_manual_edge — row 4).
+            self.active_drive = Some(ActiveDriveState::manual(drive, None));
+            let non_idle = !(drive.is_locomotion_idle() && drive.turning.is_none());
+            // Row 6: non-idle interpreter drive cancels an active MoveTo
+            // through the SAME flag the legacy lane uses (one consumer).
+            if USE_MOVETO_DRIVER && non_idle {
+                self.manual_moveto_cancel_pending = true;
+            }
+        }
+        // Row 3: the CommandLists are held-keys truth — re-derive the raw
+        // record every edge (even silent releases, which pop the lists).
+        self.last_manual_drive = Some(Self::interp_held_snapshot(&interp, drive.gait));
+        // Row 2: this lane never uses the FU5 deferred-TakeControl bit.
+        debug_assert!(
+            !self.pending_take_control,
+            "cmdInterp handover violation: interpreter edge set pending_take_control (row 2)"
+        );
+        self.command_interpreter = Some(interp);
+    }
+
+    /// Row 3 mirror — the interpreter's three list heads as a raw
+    /// [`MotionState`] (held-keys truth for the slideCast capture, the
+    /// jump standstill root, and the autorun restore).
+    fn interp_held_snapshot(
+        interp: &super::command_interpreter::CommandInterpreter,
+        gait: crate::client::movement_types::Gait,
+    ) -> MotionState {
+        use super::motion_interp::{
+            MOTION_RUN_FORWARD, MOTION_SIDESTEP_LEFT, MOTION_SIDESTEP_RIGHT, MOTION_TURN_LEFT,
+            MOTION_TURN_RIGHT, MOTION_WALK_BACKWARDS, MOTION_WALK_FORWARD,
+        };
+        let forward = interp
+            .substate_list
+            .get_head()
+            .and_then(|e| match e.command {
+                MOTION_WALK_FORWARD | MOTION_RUN_FORWARD => Some(ForwardLocomotion::Forward),
+                MOTION_WALK_BACKWARDS => Some(ForwardLocomotion::Backstep),
+                _ => None,
+            });
+        let sidestep = interp
+            .sidestep_list
+            .get_head()
+            .and_then(|e| match e.command {
+                MOTION_SIDESTEP_LEFT => Some(SidestepLocomotion::StrafeLeft),
+                MOTION_SIDESTEP_RIGHT => Some(SidestepLocomotion::StrafeRight),
+                _ => None,
+            });
+        let turning = interp.turn_list.get_head().and_then(|e| match e.command {
+            MOTION_TURN_LEFT => Some(Turn::Left),
+            MOTION_TURN_RIGHT => Some(Turn::Right),
+            _ => None,
+        });
+        MotionState {
+            gait,
+            forward,
+            sidestep,
+            turning,
+            turn_speed: None,
         }
     }
 
@@ -2450,6 +2649,12 @@ impl MovementSystem {
                         restore_manual: true,
                     });
             }
+            QueuedDriveCommand::KeyEdge { .. } => {
+                // Extracted by the tick's drain loop BEFORE this dispatch
+                // (the interpreter lane needs world access); unreachable
+                // here.
+                debug_assert!(false, "KeyEdge reached ingest_drive_command");
+            }
         }
     }
 
@@ -2571,9 +2776,30 @@ impl MovementSystem {
         let explicit_stop_requested = queued
             .iter()
             .any(|command| matches!(command, QueuedDriveCommand::Stop));
+        // Wave-1 step 4 ownership contract (PLAN rows 1-4): when the
+        // interpreter lane is on, keyboard edges arrive ONLY as KeyEdge —
+        // a ManualSet in the same tick means both lanes are driving, which
+        // the handover table forbids.
+        debug_assert!(
+            !(self.cmd_interp_enabled()
+                && queued
+                    .iter()
+                    .any(|c| matches!(c, QueuedDriveCommand::KeyEdge { .. }))
+                && queued
+                    .iter()
+                    .any(|c| matches!(c, QueuedDriveCommand::ManualSet(_)))),
+            "cmdInterp handover violation: KeyEdge and ManualSet in one tick (both lanes driving)"
+        );
         let local_guid = world.player.guid;
         for command in queued {
-            self.ingest_drive_command(command, now, local_guid);
+            if let QueuedDriveCommand::KeyEdge { action, down } = command {
+                // Interpreter lane — needs world access (TakeControl's
+                // leash drop), so it ingests here rather than in
+                // ingest_drive_command.
+                self.ingest_key_edge(action, down, world);
+            } else {
+                self.ingest_drive_command(command, now, local_guid);
+            }
         }
         self.consume_pending_take_control(world);
 
@@ -6567,6 +6793,209 @@ impl MovementSystem {
         session
             .send_action(GameAction::MoveToState(Box::new(data)))
             .await
+    }
+}
+
+/// Wave-1 step 4 — the [`super::command_interpreter::InterpreterSeams`]
+/// binding for the live `MovementSystem` (`?cmdInterp=on` lane). Borrows
+/// the system + world while the interpreter itself is moved out (the
+/// SC-15 borrow split); `drive` accumulates the per-axis
+/// DoMotion/StopMotion stream into the ONE `MotionState` the rest of the
+/// tick/pose/send machinery consumes.
+///
+/// Wave-1 scoping (each a documented PLAN row, going live at step 5):
+/// - sends (row 9): deferred no-ops — the tick's motion-state-edge
+///   detector remains the single sender in BOTH lanes, so the A/B has
+///   identical send cadence; `send_move_to_state` returns `false` so the
+///   interpreter never stamps its own cadence bookkeeping.
+/// - jump lanes (row 8): the JS spacebar rides the legacy
+///   `jumpCharge*` wasm exports in both lanes this wave; the
+///   `commence_jump`/`do_jump` seams go live when the forwarder routes
+///   action 0x31.
+/// - position-event reads: unreachable (the interpreter's `use_time` is
+///   not pumped this wave — the heartbeat stays with the tick).
+struct SystemInterpreterSeams<'a> {
+    system: &'a mut MovementSystem,
+    world: &'a mut WorldState,
+    /// The composed effective drive (base = the pre-edge effective state;
+    /// each dispatched motion rewrites ONE axis — retail
+    /// `InterpretedMotionState::ApplyMotion` shape, acclient.c:332759).
+    drive: MotionState,
+    /// At least one motion was dispatched (the edge was not silent) — the
+    /// caller installs `drive` as the active manual drive iff set.
+    dispatched: bool,
+}
+
+impl SystemInterpreterSeams<'_> {
+    /// Apply one dispatched motion to its axis slot
+    /// (`InterpretedMotionState::ApplyMotion`, acclient.c:332759): the
+    /// forward-slot commands own/clear the forward axis (Ready and
+    /// releases clear); turn/sidestep never touch it; a non-locomotion
+    /// substate press contributes zero locomotion.
+    fn apply_axis(&mut self, cmd: u32, press: bool) {
+        use super::motion_interp::{
+            MOTION_READY, MOTION_RUN_FORWARD, MOTION_SIDESTEP_LEFT, MOTION_SIDESTEP_RIGHT,
+            MOTION_TURN_LEFT, MOTION_TURN_RIGHT, MOTION_WALK_BACKWARDS, MOTION_WALK_FORWARD,
+        };
+        match cmd {
+            MOTION_WALK_FORWARD | MOTION_RUN_FORWARD => {
+                self.drive.forward = press.then_some(ForwardLocomotion::Forward);
+            }
+            MOTION_WALK_BACKWARDS => {
+                self.drive.forward = press.then_some(ForwardLocomotion::Backstep);
+            }
+            MOTION_READY => {
+                // The Ready reset press clears the forward slot.
+                self.drive.forward = None;
+            }
+            MOTION_SIDESTEP_RIGHT => {
+                self.drive.sidestep = press.then_some(SidestepLocomotion::StrafeRight);
+            }
+            MOTION_SIDESTEP_LEFT => {
+                self.drive.sidestep = press.then_some(SidestepLocomotion::StrafeLeft);
+            }
+            MOTION_TURN_RIGHT => {
+                self.drive.turning = press.then_some(Turn::Right);
+            }
+            MOTION_TURN_LEFT => {
+                self.drive.turning = press.then_some(Turn::Left);
+            }
+            _ if cmd & 0x4000_0000 != 0 => {
+                // A stored substate (gesture/crouch/…) owns the forward
+                // slot at ZERO locomotion (FU6).
+                if press {
+                    self.drive.forward = None;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_> {
+    fn cur_time(&self) -> f64 {
+        0.0 // heartbeat cadence stays with the tick this wave (row 9)
+    }
+    fn do_motion(&mut self, cmd: u32, _params: &MovementParameters) -> u32 {
+        // Retail `CPhysicsObj::DoMotion` stamps the autonomy latch
+        // (:317325) — row 1: this seam is the lane's only latch raiser.
+        self.system.last_move_was_autonomous = true;
+        self.apply_axis(cmd, true);
+        self.dispatched = true;
+        0
+    }
+    fn stop_motion(&mut self, cmd: u32, _params: &MovementParameters) {
+        self.system.last_move_was_autonomous = true; // :317364
+        self.apply_axis(cmd, false);
+        self.dispatched = true;
+    }
+    fn phys_stop_completely(&mut self) {
+        // `CPhysicsObj::StopCompletely(player, 1)` — all movement stops;
+        // the reclaim's ApplyCurrentMovement re-owns the slots right after.
+        self.drive = MotionState {
+            gait: self.drive.gait,
+            ..MotionState::default()
+        };
+        self.dispatched = true;
+    }
+    fn stop_interpolating(&mut self) {
+        // The FU-A leash drop — the SAME WorldState calls the legacy
+        // lane's consume_pending_take_control makes (row 2): control
+        // returns to the player and the interpolation queue stops (the
+        // leash constraint itself survives — disarm is UnConstrain only).
+        self.world.scene.set_local_server_controlled(false);
+        self.world.stop_local_player_interpolation();
+    }
+    fn set_latch(&mut self) {
+        self.system.last_move_was_autonomous = true; // :716946
+    }
+    fn minterp_set_hold_run(&mut self, effective_run: bool) {
+        use crate::client::movement_types::Gait;
+        self.drive.gait = if effective_run { Gait::Run } else { Gait::Walk };
+    }
+    fn minterp_is_standing_still(&self) -> bool {
+        self.drive.is_locomotion_idle() && self.drive.turning.is_none()
+    }
+    fn player_forward_command(&self) -> Option<u32> {
+        None // local player death routes through the wire lane; never Dead here
+    }
+    fn player_has_interp_motion_state(&self) -> bool {
+        true
+    }
+    fn player_has_raw_motion_state(&self) -> bool {
+        true
+    }
+    fn player_motions_pending(&self) -> bool {
+        false // use_time is not pumped this wave
+    }
+    fn player_is_moving_to(&self) -> bool {
+        false
+    }
+    fn player_report_exhaustion(&mut self) {}
+    fn player_turn_to_heading(&mut self, _params: &MovementParameters) {
+        // command_turn_to_heading is unwired this wave (server/UI turn
+        // requests ride the MoveTo driver lane).
+    }
+    fn player_position_event_ready(&self) -> bool {
+        false // heartbeat stays with the tick (row 9)
+    }
+    fn player_objcell_id(&self) -> u32 {
+        0
+    }
+    fn player_frame_equals(&self, _last: &super::command_interpreter::FrameView) -> bool {
+        true
+    }
+    fn player_contact_plane_equals(&self, _last: &super::command_interpreter::PlaneView) -> bool {
+        true
+    }
+    fn player_position_view(&self) -> super::command_interpreter::PositionView {
+        super::command_interpreter::PositionView::default()
+    }
+    fn player_contact_plane_view(&self) -> super::command_interpreter::PlaneView {
+        super::command_interpreter::PlaneView::default()
+    }
+    fn ui_toggles_run(&self) -> bool {
+        // M7: holtburger is run-by-default with Shift=walk — exactly
+        // ToggleRun==true; constant until a player-options store exists.
+        true
+    }
+    fn use_mouse_turning(&self) -> bool {
+        false // M4: no mouse-look consumer yet
+    }
+    fn combat_abort_automatic_attack(&mut self) {
+        // No client-side combat system exists — the presence gate is
+        // permanently closed (P09 pre-hook, impl-side no-op).
+    }
+    fn commence_jump(&mut self) {
+        // Row 8: the spacebar rides the legacy jumpCharge exports this
+        // wave; goes live when the forwarder routes action 0x31.
+        log::debug!("cmdInterp: commence_jump seam (dark this wave)");
+    }
+    fn do_jump(&mut self, _autonomous: bool) {
+        log::debug!("cmdInterp: do_jump seam (dark this wave)");
+    }
+    fn finish_jump(&mut self) {
+        log::debug!("cmdInterp: finish_jump seam (dark this wave)");
+    }
+    fn send_move_to_state(&mut self) -> bool {
+        false // row 9: the tick's edge-detector is the single sender
+    }
+    fn send_autonomous_position(&mut self) -> bool {
+        false
+    }
+    fn send_autonomy_level(&mut self, _level: u32) {}
+    fn send_do_movement(&mut self, cmd: u32, _speed: f32, _hold_key: u32) {
+        // ADJ-6 dead arm (opcode 0xF61E disabled; autonomy pinned at 2).
+        log::debug!("cmdInterp: legacy SendDoMovementEvent({cmd:#x}) suppressed (ADJ-6)");
+    }
+    fn send_stop_movement(&mut self, cmd: u32, _hold_key: u32) {
+        log::debug!("cmdInterp: legacy SendStopMovementEvent({cmd:#x}) suppressed (ADJ-6)");
+    }
+    fn display_movement_error(&mut self, err: super::command_interpreter::MovementError) {
+        log::info!("cmdInterp: movement refusal {err:?}");
+    }
+    fn display_autorun_status(&mut self, on: bool) {
+        log::info!("cmdInterp: AutoRun {}", if on { "ON" } else { "OFF" });
     }
 }
 

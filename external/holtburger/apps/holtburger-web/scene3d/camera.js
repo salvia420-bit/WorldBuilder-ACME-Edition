@@ -179,6 +179,14 @@ export const CAMERA_MODES = ["follow", "topDown", "orbit"];
 // camera drop below the player; the new lookAt-with-pitch offset in
 // `positionCamera` redirects the view upward at the same time so the
 // user actually sees the sky.
+// Movement-port wave 1 step 4 (2026-07-03): `?cmdInterp=on` silences THIS
+// dispatcher's wasm boundary too — the camera lane becomes synthetic
+// input-action edges at step 5 (ADJ-4); until then a camera-relative
+// setMovementInput would race the interpreter lane (a both-lanes-drive
+// handover violation, PLAN row 14). Render-side effects keep firing.
+const CMD_INTERP_ON =
+  new URLSearchParams(globalThis.location?.search ?? "").get("cmdInterp") === "on";
+
 const FOLLOW_PITCH_MIN = -0.5;
 const FOLLOW_PITCH_MAX = 1.4;
 // LookAt distance for the camera-direction pitch offset (see
@@ -1809,7 +1817,13 @@ export class CameraSwitcher {
     this._orbitRigStopped = false;
     const sig = `${m.forward},${m.strafe},${m.turn},${m.run}`;
     if (sig === this.lastInputSig) return;
-    if (this._inputFunnelOn) {
+    if (CMD_INTERP_ON) {
+      // ?cmdInterp=on: the raw key edges already reached wasm via
+      // handleKeyAction (index.html forwarder); this camera-relative
+      // dispatch would double-drive (row 14). Advance the sig so the
+      // rig side-effects below keep their edge semantics.
+      this.lastInputSig = sig;
+    } else if (this._inputFunnelOn) {
       // A14-I1 (?inputFunnel=on): route the SINGLE `setMovementInput` call
       // through the shared InputController so the index.html rAF dispatcher
       // and this camera dispatcher dedupe against ONE shared signature (no

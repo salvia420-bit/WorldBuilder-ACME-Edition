@@ -49,10 +49,11 @@
 //! (QUALITY-fidelity.md, independently re-derived) is the dispatch
 //! authority; Hex-Rays `vfptr[N].<member>` artifacts are resolved
 //! against it.
-#![allow(dead_code)] // staged: the ?cmdInterp DARK LANE — the step-4 commit
-// wires the MovementSystem seam impl + the wasm on_action entry; until then
-// the only callers are this module's tests + the P15 dual-run fixtures.
-// Remove this module-level allow when the step-4 wiring lands.
+#![allow(dead_code)] // staged: step 4 wired the KeyEdge→on_action entry
+// (system.rs ingest_key_edge) behind ?cmdInterp; the session/lifecycle
+// surface (enable/disable/use_time/logoff), the mouse handlers (M4), and
+// the send ownership stay dark until step 5 (flag migration + the 1070
+// A/B). Narrow this to per-item allows when step 5 wires them.
 
 use super::list_engine::{CommandList, ListKind, apply_hold_keys_to_command, which_list};
 use super::motion_interp::{

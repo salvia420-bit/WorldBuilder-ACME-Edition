@@ -246,6 +246,22 @@ fn parse_slide_cast_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "slideCast=off")
 }
 
+/// Movement-port wave 1 step 4 (2026-07-03): parse `?cmdInterp=on` (or
+/// `&cmdInterp=on`). DEFAULT-OFF opt-in shape: returns `true` ONLY when
+/// `cmdInterp=on` is present. When on, keyboard movement rides the retail
+/// `CommandInterpreter` lane (per-axis CommandLists, head-wins pop-through,
+/// FU-A TakeControl full re-apply, FU-C silent releases) — the JS key
+/// handlers forward raw input-action ids via `handleKeyAction` and the
+/// legacy `setMovementInput` dispatcher is silenced for movement keys.
+/// Flag-off, the legacy lane is byte-identical (nothing constructs the
+/// interpreter). PENDING eye-test — no default flip before the 1070 A/B.
+/// Native carrier: `USE_COMMAND_INTERPRETER` (movement/system.rs).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_cmd_interp_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "cmdInterp=on")
+}
+
 /// Phase 3 Phase D (2026-06-28, Option C): parse `?buildingOverlap=off` (or
 /// `&buildingOverlap=off`). DEFAULT-ON, off-escape shape: returns `true` UNLESS
 /// `buildingOverlap=off` is present. When on, each outdoor building/static BSP
@@ -20021,6 +20037,13 @@ enum SessionCommand {
         turn: i8,
         run: bool,
     },
+    /// Wave-1 step 4 (`?cmdInterp=on` ONLY) — one raw input-action edge
+    /// for the retail interpreter lane (ADJ-4 ids 0x29-0x32). JS emits
+    /// one per physical keydown/keyup transition (`ev.repeat` filtered —
+    /// the retail "held key never re-fires" invariant); the wasm-side
+    /// `on_action` resolves action → motion command, so the keymap and
+    /// `WhichList` live in one place.
+    KeyAction { action: u32, down: bool },
     /// Player pressed the jump key (default: Space). `power` is the
     /// jump extent in `[0.0, 1.0]` — for retail-like variable-power
     /// jumps the JS side maps `keydown→keyup` hold duration to
@@ -25343,6 +25366,18 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_slide_cast_flag("?castMove=off&slideCast=off"));
     }
 
+    /// Movement-port wave 1 step 4: `?cmdInterp` parse shape — DEFAULT-OFF
+    /// opt-in; only an explicit `=on` enables the interpreter lane.
+    #[test]
+    fn cmd_interp_flag_defaults_off_unless_on() {
+        use super::parse_cmd_interp_flag;
+        assert!(!parse_cmd_interp_flag(""));
+        assert!(!parse_cmd_interp_flag("?cmdInterp=off"));
+        assert!(!parse_cmd_interp_flag("?cmdInterp"));
+        assert!(parse_cmd_interp_flag("?cmdInterp=on"));
+        assert!(parse_cmd_interp_flag("?nosw=1&cmdInterp=on"));
+    }
+
     /// A2-P3 R2 (W3+ S9 Stage R2): `?stickyRetail` parse shape — DEFAULT-ON
     /// (F-2026-06-27); only an explicit `=off` disables.
     #[test]
@@ -29963,6 +29998,26 @@ impl SessionHandle {
             })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("set_movement_input: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Wave-1 step 4 (`?cmdInterp=on` ONLY): forward one raw input-action
+    /// edge to the retail `CommandInterpreter` lane. Action ids are the
+    /// retail InputAction ordinals (ADJ-4): 0x29=WalkForward,
+    /// 0x2A=WalkBackward, 0x2B=Ready, 0x2C=SideStepRight,
+    /// 0x2D=SideStepLeft, 0x2E=TurnRight, 0x2F=TurnLeft, 0x30=AutoRun,
+    /// 0x31=Jump, 0x32=HoldRun. `down` = keydown vs keyup. JS must filter
+    /// `ev.repeat` (a held key never re-fires) and must forward releases
+    /// UNCONDITIONALLY — the silent-release-under-server-control rule
+    /// (FU-C) is decided wasm-side, which needs to see the pop even when
+    /// it suppresses the dispatch.
+    #[wasm_bindgen(js_name = handleKeyAction)]
+    pub fn handle_key_action(&self, action: u32, down: bool) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::KeyAction { action, down })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("handle_key_action: cmd channel closed ({e})"))
             })
     }
 
@@ -34640,6 +34695,10 @@ async fn recv_loop(
     // persistence through ACE's General cast-gesture stomps (default ON:
     // the vanilla-ACE slidecast compensation); see `parse_slide_cast_flag`.
     movement.set_slide_cast(parse_slide_cast_flag(&js_location_search()));
+    // Movement-port wave 1 step 4 (2026-07-03): `?cmdInterp=on` — the
+    // retail CommandInterpreter input lane (default OFF, dark; PENDING
+    // eye-test); see `parse_cmd_interp_flag`.
+    movement.set_cmd_interp(parse_cmd_interp_flag(&js_location_search()));
     // Physics-parity 2026-07-03 (dossier A F1/F2): `?retailQuantum=on` —
     // the retail update_object slice schedule in both integrator shapes
     // (default OFF: ACE 0.1-slice shapes per DECISIONS-A1-O5); see
@@ -44285,6 +44344,18 @@ async fn recv_loop(
                                 "[step3.6-trace] enqueue_drive_intent ManualHeld(forward={forward} strafe={strafe} turn={turn} run={run})",
                             ));
                         }
+                    }
+                    Some(SessionCommand::KeyAction { action, down }) => {
+                        // Wave-1 step 4 — the `?cmdInterp=on` interpreter
+                        // lane: same readiness guards as SetMovementInput
+                        // (the interpreter needs an in-world player).
+                        if world.as_ref().is_none() || !entity_seeded {
+                            console_log_str(
+                                "[cmdInterp] KeyAction before world/player ready — dropping",
+                            );
+                            continue;
+                        }
+                        movement.enqueue_key_action(action, down);
                     }
                     Some(SessionCommand::TickMovement { now }) => {
                         // Phase 4 step 3.6: pumps the cli's
