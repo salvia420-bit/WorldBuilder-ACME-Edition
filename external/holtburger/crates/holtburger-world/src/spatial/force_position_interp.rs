@@ -65,8 +65,9 @@ pub const MAX_INTERPOLATED_VELOCITY: f32 = 7.5;
 /// (ACE `InterpolationManager.cs:48,209,244`).
 pub const RECONCILE_DEADBAND_M: f32 = 0.05;
 
-/// `PhysicsGlobals.EPSILON` (ACE `PhysicsGlobals.cs`).
-const EPSILON: f32 = 1e-4;
+/// `F_EPSILON` (`acclient.c:39545` `0.00019999999`; ACE
+/// `PhysicsGlobals.EPSILON = 0.0002f` — same f32 bits).
+const EPSILON: f32 = 0.0002;
 
 /// Number of frames in the progress-evaluation window
 /// (`InterpolationManager.cs:230` `FrameCounter < 5`).
@@ -335,9 +336,12 @@ impl RetailForcePositionInterpolator {
             } else {
                 offset = Vector3::zero();
             }
-            // The running offset re-evaluates to this frame's applied step
-            // length (ConstraintManager.cs:76).
-            self.constraint_pos_offset = offset.length();
+            // Retail ACCUMULATES the applied step length into the running
+            // travel budget (`constraint_pos_offset = sqrt(...) +
+            // constraint_pos_offset`, acclient.c:389506-389510). ACE
+            // `ConstraintManager.cs:76` REPLACED it, which parked the
+            // budget below `start` forever and disabled the leash.
+            self.constraint_pos_offset += offset.length();
         }
 
         let stepped_global = from + offset;

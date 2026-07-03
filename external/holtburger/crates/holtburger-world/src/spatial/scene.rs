@@ -689,6 +689,23 @@ pub struct SpatialScene {
     /// glue for FLAGGED rows ONLY — the self-degrading compose rule:
     /// no flagged rows ⇒ the glue path stays armed).
     remote_sticky_stepped: HashSet<Guid>,
+    /// Physics-parity 2026-07-03 (dossier A F9/F14) — runtime switch
+    /// for the retail LOCAL position lattice (`?retailLeash`): every
+    /// accepted self position echo re-arms `ConstrainTo`
+    /// (acclient.c:145209-145214), `InterpolateTo` installs only under
+    /// server control WITH contact (:145215-145218), teleports constrain
+    /// + zero velocity (:145196-145207), and the constraint survives
+    /// interp completion ([`PositionManager::set_retail_leash`]).
+    /// Default `false` = the shipped `USE_RETAIL_INTERPOLATE` arm,
+    /// byte-identical.
+    local_retail_leash: bool,
+    /// Retail `CommandInterpreter` server-control predicate for the
+    /// LOCAL player (`cmdinterp->vfptr[8]`, acclient.c:145215) — the
+    /// InterpolateTo install gate. Fed by the movement system on
+    /// control transitions (server MoveTo/TurnTo directives); stays
+    /// `false` for an autonomous player, which is exactly retail's
+    /// no-interp-pull-while-walking behavior.
+    local_server_controlled: bool,
 }
 
 /// A2-P3 (2026-06-12, W3+ S9) — outcome of one
@@ -748,7 +765,51 @@ impl SpatialScene {
             remote_sticky_enabled: false,
             remote_sticky_targets: HashMap::new(),
             remote_sticky_stepped: HashSet::new(),
+            local_retail_leash: false,
+            local_server_controlled: false,
         }
+    }
+
+    /// Physics-parity 2026-07-03: flip the retail LOCAL lattice switch
+    /// (see the field doc). Wasm caller wires `?retailLeash`.
+    pub fn set_local_retail_leash(&mut self, enabled: bool) {
+        self.local_retail_leash = enabled;
+    }
+
+    pub fn local_retail_leash(&self) -> bool {
+        self.local_retail_leash
+    }
+
+    /// Retail `cmdinterp` server-control predicate feed (see the field
+    /// doc) — call on TakeControlFromServer/LoseControl transitions.
+    pub fn set_local_server_controlled(&mut self, controlled: bool) {
+        self.local_server_controlled = controlled;
+    }
+
+    /// Physics-parity 2026-07-03 (dossier A F9b / B rows 31/42): scale
+    /// a LOCAL-player per-slice movement delta through the armed
+    /// constraint — retail's `PositionManager::adjust_offset` runs on
+    /// EVERY frame offset while the leash is armed, walking included
+    /// (acclient.c:388287-388304 chained at :320029); the travel budget
+    /// accumulates each slice (scale gated on contact, accumulation
+    /// not). Passthrough unless `local_retail_leash` AND the body's
+    /// constraint is armed — byte-identical flag-off.
+    pub fn constrain_local_manual_delta(
+        &mut self,
+        body_id: SpatialBodyId,
+        delta: Vector3,
+    ) -> Vector3 {
+        if !self.local_retail_leash {
+            return delta;
+        }
+        let Some(body) = self.body_store.body_mut(body_id) else {
+            return delta;
+        };
+        if !body.position_manager.constraint.is_constrained() {
+            return delta;
+        }
+        let on_contact = body.contact.grounded().unwrap_or(true);
+        body.position_manager.constraint.adjust_offset(delta, on_contact)
     }
 
     /// A2-P2: flip the remote-driver runtime switch (see the field doc).
@@ -2608,7 +2669,51 @@ impl SpatialScene {
             // on the simulating value so the integrator keeps driving;
             // only the working origin is nudged. (Far-enough corrections
             // still hard-blip; see `constrain_local_pose_toward`.)
-            if USE_RETAIL_INTERPOLATE {
+            if self.local_retail_leash {
+                // Physics-parity 2026-07-03 (dossier A F14 / B row 58) —
+                // the retail `HandleReceivedPosition` ROUTINE arm
+                // (acclient.c:145209-145218): `ConstrainTo` the event
+                // position on EVERY accepted echo (the leash re-arms and
+                // re-seeds each time and stays armed between echoes);
+                // `InterpolateTo` ONLY when the command interpreter is
+                // server-controlled AND the player has contact — retail
+                // never interp-pulls an autonomous walking player toward
+                // its own echoes (the reconcile-oscillation source the
+                // JS predictedPlayerPos layer papered over).
+                let indoor = pose.is_indoors();
+                let leash_start = if indoor {
+                    CONSTRAINT_LEASH_INDOOR_M
+                } else {
+                    CONSTRAINT_LEASH_OUTDOOR_M
+                };
+                let leash_max = if indoor {
+                    CONSTRAINT_MAX_INDOOR_M
+                } else {
+                    CONSTRAINT_MAX_OUTDOOR_M
+                };
+                let distance = body.pose.distance_to(&pose);
+                body.position_manager.set_retail_leash(true);
+                body.position_manager
+                    .remote_constrain_to(distance, leash_start, leash_max);
+                // `Unknown` (pre-solve) counts as contact, the remote
+                // lane's S8 OPEN Q6 convention.
+                let has_contact = body.contact.grounded().unwrap_or(true);
+                if self.local_server_controlled && has_contact {
+                    let blip = if indoor {
+                        BLIP_SNAP_DISTANCE_INDOOR_M
+                    } else {
+                        BLIP_SNAP_DISTANCE_OUTDOOR_M
+                    };
+                    // `keep_heading = true` pending the retail
+                    // `cmdinterp->vfptr[15]` resolution (dossier open
+                    // question). A beyond-blip target QUEUES with
+                    // `node_fail_counter = 4` and the next drain blips
+                    // it (acclient.c:389140-389172) — no scene-side
+                    // `stop()` pre-gate in leash mode.
+                    body.position_manager
+                        .remote_interpolate_to(body.pose, pose, true, blip);
+                }
+            } else if USE_RETAIL_INTERPOLATE {
                 // Opt-in faithful path: install the retail
                 // `ConstrainTo` + `InterpolateTo` managers and let the
                 // per-frame integrator ease `body.pose` toward the forced
@@ -2742,6 +2847,37 @@ impl SpatialScene {
                 body.sampling.mode = mode;
             }
         } else {
+            if self.local_retail_leash
+                && matches!(body_id, SpatialBodyId::LocalPlayer(_))
+                && matches!(sync, AuthoritativeBodySync::Reset)
+            {
+                // Physics-parity 2026-07-03 (dossier A F14d) — the retail
+                // TELEPORT arm (acclient.c:145196-145207): TeleportPlayer,
+                // `ConstrainTo` the arrival position (seed 0 — the pose
+                // adopts the arrival below), `set_velocity(0)`. `stop()`
+                // first: a teleport clears pending interpolation before
+                // the re-arm. NOTE: the wire layer maps force-position
+                // events to `Reset` too — retail's force arm (BlipPlayer,
+                // own heading, NO constrain) needs the handler-level
+                // force/teleport split before it can diverge here
+                // (Phase-3 handoff).
+                let indoor = pose.is_indoors();
+                let leash_start = if indoor {
+                    CONSTRAINT_LEASH_INDOOR_M
+                } else {
+                    CONSTRAINT_LEASH_OUTDOOR_M
+                };
+                let leash_max = if indoor {
+                    CONSTRAINT_MAX_INDOOR_M
+                } else {
+                    CONSTRAINT_MAX_OUTDOOR_M
+                };
+                body.position_manager.stop();
+                body.position_manager.set_retail_leash(true);
+                body.position_manager
+                    .remote_constrain_to(0.0, leash_start, leash_max);
+                body.velocity = Vector3::zero();
+            }
             body.pose = pose;
             body.sampling.mode = mode;
         }
@@ -3064,22 +3200,25 @@ impl SpatialScene {
     /// `TransientStateFlags.Contact`.
     ///
     /// Returns the per-frame [`InterpStep`] outcome (`Idle` when nothing
-    /// happened), so the caller can observe completion/failure.
+    /// happened) plus the drain's emitted commands — already applied to
+    /// the BODY here; the state layer routes `SetVelocity` into the
+    /// player's split velocity store for the local body
+    /// (`WorldState::step_local_force_position`, dossier A F8).
     pub fn step_force_position_interpolation(
         &mut self,
         body_id: SpatialBodyId,
         quantum: f32,
         max_speed: f32,
         on_contact: bool,
-    ) -> InterpStep {
+    ) -> (InterpStep, Vec<InterpolationCommand>) {
         if !USE_RETAIL_INTERPOLATE {
-            return InterpStep::Idle;
+            return (InterpStep::Idle, Vec::new());
         }
         let Some(body) = self.body_store.body_mut(body_id) else {
-            return InterpStep::Idle;
+            return (InterpStep::Idle, Vec::new());
         };
         if !body.position_manager.is_interpolating() {
-            return InterpStep::Idle;
+            return (InterpStep::Idle, Vec::new());
         }
         let (outcome, commands) =
             body.position_manager
@@ -3087,8 +3226,8 @@ impl SpatialScene {
         // A2-P1: apply the queue drain's physics side effects (retail
         // `UseTime` calls SetPositionSimple/set_velocity directly,
         // acclient.c:389320-389368). Empty on the default-off legacy path.
-        for command in commands {
-            match command {
+        for command in &commands {
+            match *command {
                 InterpolationCommand::SetPosition(pos) => body.pose = pos,
                 InterpolationCommand::SetVelocity(v) => body.velocity = v,
             }
@@ -3102,7 +3241,7 @@ impl SpatialScene {
             // here (we checked is_interpolating above).
             InterpStep::Failed { .. } | InterpStep::Idle => {}
         }
-        outcome
+        (outcome, commands)
     }
 
     pub fn retire_authoritative_body(&mut self, body_id: SpatialBodyId) -> Option<SpatialBody> {

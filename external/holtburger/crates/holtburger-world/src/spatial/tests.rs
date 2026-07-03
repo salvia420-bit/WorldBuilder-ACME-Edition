@@ -788,7 +788,7 @@ fn force_position_interpolation_stepper_advances_when_flag_on() {
     // The per-frame stepper now ADVANCES (not Idle) and moves the pose
     // toward the target.
     let before = scene.body(body_id).unwrap().pose.distance_to(&forced);
-    let out = scene.step_force_position_interpolation(body_id, 0.016, 36.0, true);
+    let (out, _) = scene.step_force_position_interpolation(body_id, 0.016, 36.0, true);
     assert!(
         matches!(out, InterpStep::Progressed { .. } | InterpStep::Completed { .. }),
         "stepper advances while interpolating"
@@ -838,7 +838,7 @@ fn force_position_interpolation_stepper_is_inert_while_airborne() {
     let before = scene.body(body_id).unwrap().pose;
     // Step with `on_contact = false` (airborne): the no-contact early-out
     // returns the working pose verbatim without advancing or completing.
-    let out = scene.step_force_position_interpolation(body_id, 0.016, 36.0, false);
+    let (out, _) = scene.step_force_position_interpolation(body_id, 0.016, 36.0, false);
     assert!(matches!(out, InterpStep::Progressed { .. }));
     assert_eq!(
         scene.body(body_id).unwrap().pose,
@@ -3592,4 +3592,208 @@ fn local_sticky_uninitialized_noop_unstick_once_and_replace() {
     assert!(scene.unstick_local_player());
     assert!(!scene.unstick_local_player());
     assert_eq!(scene.local_sticky_target(), None);
+}
+
+// === Physics-parity 2026-07-03 (dossier A F14 / B row 58) — the retail
+// LOCAL position lattice behind `?retailLeash` ==========================
+
+fn leash_scene_with_midsim_player(
+    drift_x: f32,
+) -> (SpatialScene, SpatialBodyId, WorldPosition, Instant) {
+    let mut scene = SpatialScene::new();
+    scene.set_local_retail_leash(true);
+    let now = Instant::now();
+    let body_id = SpatialBodyId::LocalPlayer(Guid(0x5000_0031));
+    // Outdoor landblock: leash 10/50, blip 100.
+    let lb = Guid(0x00A9_0000);
+    let make = |x: f32| WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(x, 50.0, 0.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    let authoritative = make(50.0);
+    scene.register_body(SpatialBody::new(body_id, authoritative, now));
+    let mut working = scene.body(body_id).expect("seeded body").clone();
+    working.pose = make(50.0 + drift_x);
+    working.sampling.mode = SpatialSampleMode::SimulatingVelocity;
+    working.contact = ContactState::Grounded;
+    scene.update_body(working);
+    (scene, body_id, authoritative, now)
+}
+
+/// Routine echo, autonomous player (no server control): `ConstrainTo`
+/// re-arms on EVERY accepted echo (acclient.c:145209-145214) but NO
+/// interp installs — retail never pulls an autonomous walker toward its
+/// own echoes (:145215-145218).
+#[test]
+fn retail_leash_routine_echo_constrains_without_interp() {
+    let (mut scene, body_id, target, now) = leash_scene_with_midsim_player(3.0);
+    let start_dist = scene.body(body_id).unwrap().pose.distance_to(&target);
+    scene.reconcile_authoritative_body(
+        body_id,
+        target,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(16),
+    );
+    let body = scene.body(body_id).unwrap();
+    assert!(body.position_manager.constraint.is_constrained(), "leash armed");
+    assert!(body.position_manager.retail_leash(), "manager in leash mode");
+    assert!(
+        !body.position_manager.is_interpolating(),
+        "no interp install while autonomous"
+    );
+    assert!(
+        (body.pose.distance_to(&target) - start_dist).abs() < 1e-4,
+        "working pose untouched by the echo"
+    );
+    // A second echo re-arms (re-seeds) rather than being swallowed.
+    scene.reconcile_authoritative_body(
+        body_id,
+        target,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(32),
+    );
+    assert!(scene.body(body_id).unwrap().position_manager.constraint.is_constrained());
+}
+
+/// Server-controlled + contact: the routine echo ALSO installs the
+/// interp (`InterpolateTo`, :145215-145218); airborne suppresses it.
+#[test]
+fn retail_leash_interp_gates_on_server_control_and_contact() {
+    // Controlled + grounded → installs.
+    let (mut scene, body_id, target, now) = leash_scene_with_midsim_player(3.0);
+    scene.set_local_server_controlled(true);
+    scene.reconcile_authoritative_body(
+        body_id,
+        target,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(16),
+    );
+    assert!(scene.body(body_id).unwrap().position_manager.is_interpolating());
+
+    // Controlled + AIRBORNE → constrain only.
+    let (mut scene, body_id, target, now) = leash_scene_with_midsim_player(3.0);
+    scene.set_local_server_controlled(true);
+    let mut working = scene.body(body_id).unwrap().clone();
+    working.contact = ContactState::Airborne;
+    scene.update_body(working);
+    scene.reconcile_authoritative_body(
+        body_id,
+        target,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(16),
+    );
+    let body = scene.body(body_id).unwrap();
+    assert!(body.position_manager.constraint.is_constrained());
+    assert!(!body.position_manager.is_interpolating(), "airborne gates interp");
+}
+
+/// Teleport (Reset): constrain to the arrival (seed 0) + zero velocity
+/// (acclient.c:145196-145207); the wire velocity is discarded.
+#[test]
+fn retail_leash_reset_constrains_and_zeroes_velocity() {
+    let (mut scene, body_id, _target, now) = leash_scene_with_midsim_player(3.0);
+    let lb = Guid(0x00A9_0000);
+    let arrival = WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(120.0, 80.0, 4.0),
+        rotation: Quaternion::from_heading(1.0),
+    };
+    scene.reconcile_authoritative_body(
+        body_id,
+        arrival,
+        Vector3::new(2.0, 0.0, 0.0),
+        Vector3::zero(),
+        AuthoritativeBodySync::Reset,
+        now + Duration::from_millis(16),
+    );
+    let body = scene.body(body_id).unwrap();
+    assert_eq!(body.pose, arrival, "teleport adopts the arrival pose");
+    assert_eq!(body.velocity, Vector3::zero(), "teleport zeroes velocity");
+    assert!(body.position_manager.constraint.is_constrained(), "leash re-armed");
+    assert!(!body.position_manager.is_interpolating(), "no pending interp");
+    assert_eq!(body.sampling.mode, SpatialSampleMode::Suspended);
+}
+
+/// Beyond-blip echo under server control: retail QUEUES the node with
+/// `node_fail_counter = 4` and the next drain blips to it
+/// (acclient.c:389140-389172) — no scene-side stop() pre-gate.
+#[test]
+fn retail_leash_beyond_blip_queues_then_blips_on_next_step() {
+    let (mut scene, body_id, _t, now) = leash_scene_with_midsim_player(3.0);
+    scene.set_local_server_controlled(true);
+    let lb = Guid(0x00A9_0000);
+    let far = WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(170.0, 50.0, 0.0), // ~117 m > outdoor blip 100
+        rotation: Quaternion::from_heading(0.0),
+    };
+    scene.reconcile_authoritative_body(
+        body_id,
+        far,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(16),
+    );
+    assert!(
+        scene.body(body_id).unwrap().position_manager.is_interpolating(),
+        "beyond-blip queues instead of stopping"
+    );
+    // One step: the drain sees node_fail_counter=4 → blips to the node.
+    scene.step_force_position_interpolation(body_id, 0.016, 36.0, true);
+    let body = scene.body(body_id).unwrap();
+    assert!(
+        body.pose.distance_to(&far) < 1e-4,
+        "recovery blip lands the echo pose, got {:?}",
+        body.pose
+    );
+}
+
+/// F9b: the manual-drive chain slot — with the leash armed, every
+/// per-slice delta burns travel budget (below `start`: passthrough;
+/// in band: scaled by `(max-off)/(max-start)`); leash-off scenes pass
+/// through untouched (acclient.c:388287-388304/:320029).
+#[test]
+fn retail_leash_manual_delta_burns_budget_then_scales() {
+    let (mut scene, body_id, _t, _now) = leash_scene_with_midsim_player(0.0);
+    // Arm the leash directly: seed 3.0, band 5..20.
+    let mut working = scene.body(body_id).unwrap().clone();
+    working.position_manager.set_retail_leash(true);
+    working.position_manager.remote_constrain_to(3.0, 5.0, 20.0);
+    scene.update_body(working);
+
+    let step = Vector3::new(5.0, 0.0, 0.0);
+    // Budget 3.0 < start 5: passthrough, budget → 8.0.
+    let d1 = scene.constrain_local_manual_delta(body_id, step);
+    assert!((d1.x - 5.0).abs() < 1e-6, "below start passes through, got {d1:?}");
+    // Budget 8.0 in band: scale (20-8)/(20-5) = 0.8 → 4.0, budget → 12.0.
+    let d2 = scene.constrain_local_manual_delta(body_id, step);
+    assert!((d2.x - 4.0).abs() < 1e-6, "in-band scales 0.8, got {d2:?}");
+    assert!(
+        scene
+            .body(body_id)
+            .unwrap()
+            .position_manager
+            .constraint
+            .is_constrained(),
+        "leash stays armed"
+    );
+
+    // Leash-off scene: byte-identical passthrough, no budget burn.
+    let (mut scene_off, body_off, _t, _now) = leash_scene_with_midsim_player(0.0);
+    let mut working = scene_off.body(body_off).unwrap().clone();
+    working.position_manager.remote_constrain_to(3.0, 5.0, 20.0);
+    scene_off.update_body(working);
+    scene_off.set_local_retail_leash(false);
+    let d = scene_off.constrain_local_manual_delta(body_off, step);
+    assert_eq!(d, step, "flag-off is a passthrough");
 }

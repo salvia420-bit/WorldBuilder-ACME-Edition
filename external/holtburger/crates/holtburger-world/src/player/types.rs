@@ -1732,6 +1732,18 @@ impl PlayerState {
         }
     }
 
+    /// Retail `CACQualities::InqJumpVelocity` zero-stamina fold
+    /// (acclient.c:443838-443839): after the enchant/aug skill
+    /// composition, `if (!stamina) jumpskill = 0` — an exhausted
+    /// player's jump collapses onto `GetJumpHeight`'s 0.34999999
+    /// min-height clamp (vz = sqrt(0.35 × 19.6) ≈ 2.6192 at any
+    /// power). Mirror of `exhausted_run_skill` (context.rs). Feed the
+    /// result to [`Self::compute_jump_velocity_z`]; the wire Stamina
+    /// `current` is the retail `InqAttribute2nd(4)`+enchant value.
+    pub fn exhausted_jump_skill(jump_skill: u32, stamina_current: u32) -> u32 {
+        if stamina_current == 0 { 0 } else { jump_skill }
+    }
+
     /// Compute the upward Z velocity for a jump with the given
     /// power, burden, and Jump skill. Mirrors ACE's
     /// `WeenieObject.InqJumpVelocity` chain:
@@ -1760,6 +1772,42 @@ impl PlayerState {
         (height * 19.6).sqrt()
     }
 
+    /// Retail `CPhysicsObj::set_velocity` (acclient.c:318578-318615),
+    /// adapted to the split player store (planar x/y +
+    /// [`Self::vertical_velocity`] z): the `!=`-dedupe wraps the store
+    /// and the terminal clamp, and the clamp is retail's two-step
+    /// rounding — `normalize(v)` THEN per-component `*= 50`
+    /// (:318586-318597), not a fused `* (50/|v|)`. Retail's other side
+    /// effects — `jumped_this_frame = 1` and the activate
+    /// (`transient_state |= 0x80` + `update_time` reset) — have no
+    /// consumer in the externally-clocked slice loop; documented no-ops
+    /// (dossier A F8).
+    pub fn set_velocity(&mut self, velocity: Vector3) {
+        const MAX_VELOCITY_M_PER_SEC: f32 = 50.0;
+        let current = Vector3::new(
+            self.current_planar_velocity.x,
+            self.current_planar_velocity.y,
+            self.vertical_velocity,
+        );
+        if velocity == current {
+            return;
+        }
+        let mut v = velocity;
+        let mag2 = v.x * v.x + v.y * v.y + v.z * v.z;
+        if mag2 > MAX_VELOCITY_M_PER_SEC * MAX_VELOCITY_M_PER_SEC {
+            let len = mag2.sqrt();
+            v.x /= len;
+            v.y /= len;
+            v.z /= len;
+            v.x *= MAX_VELOCITY_M_PER_SEC;
+            v.y *= MAX_VELOCITY_M_PER_SEC;
+            v.z *= MAX_VELOCITY_M_PER_SEC;
+        }
+        self.current_planar_velocity.x = v.x;
+        self.current_planar_velocity.y = v.y;
+        self.vertical_velocity = v.z;
+    }
+
     /// Begin a jump locally. Sets [`is_airborne`] and stamps the
     /// initial vertical velocity. No-op when already airborne — ACE
     /// does not allow double-jumps; the recv-loop gate also enforces
@@ -1786,7 +1834,15 @@ impl PlayerState {
         // the JS keyup handler at `index.html:7755`; this flag prevents
         // the parallel Falling emission from clobbering it.
         self.is_jumping = true;
-        self.vertical_velocity = velocity_z;
+        // Physics-parity 2026-07-03 (dossier A F8): the jump vz routes
+        // through the retail set_velocity entry (dedupe + two-step
+        // clamp); the planar components pass the trajectory-locked
+        // launch velocity through unchanged.
+        self.set_velocity(Vector3::new(
+            self.current_planar_velocity.x,
+            self.current_planar_velocity.y,
+            velocity_z,
+        ));
         // Wave 10 Phase 10.2 (2026-05-26) — stamp the substate so the
         // motion_allows_jump gate sees `Jump` after dispatch (Jump
         // itself is not in PhatSDK's blocked set; the is_airborne
@@ -1939,6 +1995,7 @@ impl PlayerState {
 #[cfg(test)]
 mod jump_tests {
     use super::PlayerState;
+    use holtburger_common::Vector3;
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 0.05
@@ -1977,6 +2034,22 @@ mod jump_tests {
         assert!(close(vz, 2.62), "overburden vz: {vz}");
     }
 
+    /// Retail zero-stamina fold (acclient.c:443838-443839): stamina 0
+    /// collapses the composed jump skill to 0 → the exhausted jump
+    /// rides the 0.35m min-height clamp (vz ≈ 2.62) at FULL power.
+    /// Stamina > 0 passes the skill through untouched.
+    #[test]
+    fn exhausted_jump_skill_zero_stamina_folds_to_min_hop() {
+        assert_eq!(PlayerState::exhausted_jump_skill(400, 0), 0);
+        assert_eq!(PlayerState::exhausted_jump_skill(400, 1), 400);
+        let vz = PlayerState::compute_jump_velocity_z(
+            1.0,
+            0.5,
+            PlayerState::exhausted_jump_skill(400, 0),
+        );
+        assert!(close(vz, 2.62), "exhausted full-power jump vz: {vz}");
+    }
+
     #[test]
     fn begin_jump_sets_airborne_and_velocity() {
         let mut p = PlayerState::new();
@@ -1984,6 +2057,29 @@ mod jump_tests {
         p.begin_jump(5.0);
         assert!(p.is_airborne);
         assert_eq!(p.vertical_velocity, 5.0);
+    }
+
+    /// Retail `set_velocity` (acclient.c:318578-318615): the store +
+    /// clamp are wrapped in a `!=`-dedupe, and the terminal clamp is the
+    /// two-step `normalize` THEN `*= 50` rounding — a 90 m/s +x input
+    /// lands on exactly `(1.0f) * 50.0` per component, planar splits to
+    /// x/y and z to `vertical_velocity`.
+    #[test]
+    fn set_velocity_dedupes_and_two_step_clamps() {
+        let mut p = PlayerState::new();
+        p.set_velocity(Vector3::new(3.0, 4.0, 5.0));
+        assert_eq!(p.current_planar_velocity.x, 3.0);
+        assert_eq!(p.current_planar_velocity.y, 4.0);
+        assert_eq!(p.vertical_velocity, 5.0);
+        // Dedupe: identical composite is a no-op (retail `!=` gate).
+        p.set_velocity(Vector3::new(3.0, 4.0, 5.0));
+        assert_eq!(p.current_planar_velocity.x, 3.0);
+        // Over-terminal input clamps to 50 with two rounding steps.
+        p.set_velocity(Vector3::new(90.0, 0.0, 0.0));
+        let expected = (90.0_f32 / 90.0) * 50.0;
+        assert_eq!(p.current_planar_velocity.x, expected);
+        assert_eq!(p.current_planar_velocity.y, 0.0);
+        assert_eq!(p.vertical_velocity, 0.0);
     }
 
     #[test]

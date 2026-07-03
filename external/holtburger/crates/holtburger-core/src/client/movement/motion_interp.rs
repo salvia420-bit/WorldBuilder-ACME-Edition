@@ -173,13 +173,18 @@ pub(crate) const MAX_SIDESTEP_ANIM_RATE: f32 = 3.0;
 
 /// 15-bit server-action-stamp compare (retail packs the stamp + the
 /// autonomous bit into 16 bits; the stamp itself is 15-bit —
-/// `acclient.c:344398-344408`). Directional half-window compare in
-/// 15-bit space: `new` is newer when it leads `old` by 1..=0x3FFF
-/// modulo 0x8000.
+/// `acclient.c:344398-344408`). Retail takes `|new − old|` over the
+/// masked 15-bit values and branches: `<= 0x3FFF` → newer iff
+/// `old < new`, else → newer iff `new < old` — so at exactly delta
+/// `0x4000` the verdict is DIRECTIONAL (the numerically smaller stamp
+/// wins), mirroring `is_newer_u16`'s `0x8000` edge
+/// (`holtburger-common/src/sequence.rs`).
 #[allow(dead_code)] // staged: lib consumer is the stage-3 server UpdateMotion lane
 pub(crate) fn is_newer_action_stamp(new: u16, old: u16) -> bool {
+    let new = new & 0x7FFF;
+    let old = old & 0x7FFF;
     let diff = new.wrapping_sub(old) & 0x7FFF;
-    diff != 0 && diff < 0x4000
+    diff != 0 && (diff < 0x4000 || (diff == 0x4000 && new < old))
 }
 
 /// One pending-motion completion node — retail allocates
@@ -336,6 +341,15 @@ pub(crate) struct MotionInterp {
     /// A3-D3 — retail `CMotionInterp::initted`, set by
     /// [`Self::enter_default_state`] (`acclient.c:344595`).
     pub initted: bool,
+    /// Retail `CWeenieObject` vfptr[5] "player-controlled" — a STATIC
+    /// property of the object, true only for the local player's own
+    /// interpreter. Gates the server-echo skip in
+    /// [`Self::move_to_interpreted_state`] (`acclient.c:344411`): retail
+    /// skips self-echoed autonomous actions even while
+    /// server-controlled, so the skip must NOT key off the dynamic
+    /// `last_move_was_autonomous`. Default `false` (remote/registry
+    /// entities process every newer action).
+    pub player_controlled: bool,
 }
 
 impl Default for MotionInterp {
@@ -348,6 +362,7 @@ impl Default for MotionInterp {
             pending_motions: VecDeque::new(),
             standing_longjump: false,
             initted: false,
+            player_controlled: false,
         }
     }
 }
@@ -497,8 +512,10 @@ impl MotionInterp {
     /// Server `UpdateMotion` lane — `CMotionInterp::move_to_interpreted_state`
     /// (`acclient.c:344372-344426`): copy the movement axes, replay only
     /// actions with NEWER 15-bit stamps (`:344398-344408`), skipping
-    /// self-echoed autonomous actions for the autonomous local player
-    /// (`acclient.c:339543-339562`), then `apply_current_movement` —
+    /// self-echoed autonomous actions for the PLAYER-CONTROLLED object
+    /// (weenie vfptr[5], `acclient.c:344411` — a static object
+    /// property, NOT the dynamic autonomy flag: retail skips echoes
+    /// even while server-controlled), then `apply_current_movement` —
     /// which for the autonomous local player immediately re-derives the
     /// movement from local raw state (the Rust-side formalization of
     /// what B9 does ad-hoc in JS).
@@ -515,11 +532,15 @@ impl MotionInterp {
             if !is_newer_action_stamp(action.stamp, self.server_action_stamp) {
                 continue;
             }
-            self.server_action_stamp = action.stamp & 0x7FFF;
-            if action.autonomous && last_move_was_autonomous {
+            if action.autonomous && self.player_controlled {
                 // Self-echo of an action this client already played.
+                // The stamp is NOT advanced — retail stamps inside the
+                // process branch only (`:344413`), so a later
+                // server-authored action with a stamp between the last
+                // PROCESSED one and the skipped echo still replays.
                 continue;
             }
+            self.server_action_stamp = action.stamp & 0x7FFF;
             self.interpreted_state.apply_action(action.action, action.speed);
         }
         self.apply_current_movement(last_move_was_autonomous, inq_run_rate);
@@ -1592,15 +1613,27 @@ mod tests {
         // 15-bit wraparound: 0 follows 0x7FFF.
         assert!(is_newer_action_stamp(0, 0x7FFF));
         assert!(!is_newer_action_stamp(0x7FFF, 0));
+        // Half-range edge is DIRECTIONAL (acclient.c:344405-344408: at
+        // |delta| == 0x4000 the `new < old` branch decides), mirroring
+        // sequence.rs `u16_half_range_is_directional`.
+        assert!(is_newer_action_stamp(0, 0x4000));
+        assert!(is_newer_action_stamp(0x1000, 0x5000));
+        assert!(!is_newer_action_stamp(0x5000, 0x1000));
+        // The wire 16th bit (autonomous flag) is masked out of the compare.
+        assert!(is_newer_action_stamp(0x8002, 1));
+        assert!(!is_newer_action_stamp(0x8001, 1));
     }
 
     /// Server `UpdateMotion` lane: actions replay only with newer stamps;
-    /// the autonomous local player skips self-echoed autonomous actions
-    /// AND re-derives the movement from local raw state (server movement
-    /// ignored — `acclient.c:344410`, `:339543-339562`).
+    /// the PLAYER-CONTROLLED object skips self-echoed autonomous actions
+    /// WITHOUT advancing the stamp (the update sits inside retail's
+    /// process branch, `acclient.c:344408-344418`), and the autonomous
+    /// local player re-derives the movement from local raw state
+    /// (server movement ignored — `acclient.c:344410`).
     #[test]
     fn move_to_interpreted_state_gates_stamps_and_local_autonomy() {
         let mut interp = interp_for(MotionState::builder().run().forward().build(), Some(2.0));
+        interp.player_controlled = true;
 
         let mut server_state = InterpretedState::default();
         server_state.forward_command = Some(InterpretedForwardCommand::WalkForward);
@@ -1622,20 +1655,52 @@ mod tests {
             Some(InterpretedForwardCommand::RunForward),
             "server movement must be ignored for the autonomous local player"
         );
-        assert_eq!(interp.server_action_stamp, 2);
+        assert_eq!(
+            interp.server_action_stamp, 1,
+            "a skipped echo must NOT advance the stamp (acclient.c:344413)"
+        );
         assert_eq!(
             interp.interpreted_state.actions,
             std::collections::VecDeque::from([(0x1000_0062, 1.0)])
         );
 
-        // Server-controlled object: movement copy TAKES EFFECT.
+        // Because the skipped echo left the stamp at 1, a later
+        // server-authored action re-using stamp 2 still replays.
+        let follow_up = [RawAction {
+            action: 0x1000_0065,
+            speed: 1.0,
+            stamp: 2,
+            autonomous: false,
+        }];
+        interp.move_to_interpreted_state(&server_state, &follow_up, true, Some(2.0));
+        assert_eq!(interp.server_action_stamp, 2);
+        assert_eq!(
+            interp.interpreted_state.actions,
+            std::collections::VecDeque::from([(0x1000_0062, 1.0), (0x1000_0065, 1.0)])
+        );
+
+        // Server-controlled object (player_controlled = false): movement
+        // copy TAKES EFFECT, and even AUTONOMOUS actions replay (retail
+        // processes them for any non-player-controlled weenie,
+        // acclient.c:344411).
         let mut remote = MotionInterp::default();
-        remote.move_to_interpreted_state(&server_state, &[], false, None);
+        let remote_actions = [RawAction {
+            action: 0x1000_0063,
+            speed: 1.0,
+            stamp: 2,
+            autonomous: true,
+        }];
+        remote.move_to_interpreted_state(&server_state, &remote_actions, false, None);
         assert_eq!(
             remote.interpreted_state.forward_command,
             Some(InterpretedForwardCommand::WalkForward)
         );
         assert!((remote.interpreted_state.forward_speed - 1.0).abs() < 1e-6);
+        assert_eq!(remote.server_action_stamp, 2);
+        assert_eq!(
+            remote.interpreted_state.actions,
+            std::collections::VecDeque::from([(0x1000_0063, 1.0)])
+        );
     }
 
     // ------------------------------------------------------------------

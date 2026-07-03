@@ -636,13 +636,169 @@ fn test_stale_non_autonomous_update_motion_is_ignored_for_self() {
     let events = state.handle_message(&msg);
 
     assert!(events.is_empty());
+    // Retail stamps update_times[1] the moment gate 1 passes
+    // (acclient.c:311176) — the gate-2 drop still advances the
+    // movement sequence; everything else stays untouched.
+    assert_eq!(state.player.movement_sequence, 21);
     assert_eq!(state.player.instance_sequence, 10);
-    assert_eq!(state.player.movement_sequence, 20);
     assert_eq!(state.player.server_control_sequence, 30);
     assert_eq!(
         state.player.last_server_motion_style,
         Some(MotionStance::SwordCombat)
     );
+}
+
+/// Row 56 fixtures — a self `UpdateMotion` with a style + forward
+/// command payload, for exercising the retail SetObjectMovement
+/// three-part gate (acclient.c:311149-311196) at the PlayerState level.
+fn self_motion(
+    movement_sequence: u16,
+    server_control_sequence: u16,
+    autonomous: bool,
+) -> MovementEventData {
+    MovementEventData {
+        guid: Guid(0x50000001),
+        object_instance_sequence: 5,
+        movement_sequence,
+        server_control_sequence,
+        is_autonomous: autonomous,
+        movement_type: MovementType::Invalid,
+        motion_flags: 0,
+        current_style: MotionStance::Magic.interpreted(),
+        data: MovementTypeData::Invalid(MovementInvalid {
+            state: InterpretedMotionState {
+                flags: MovementStateFlags::FORWARD_COMMAND,
+                num_commands: 0,
+                forward_command: Some(InterpretedMotionCommand::RUN_FORWARD),
+                ..Default::default()
+            },
+            sticky_object: None,
+        }),
+    }
+}
+
+/// Gate 1 (acclient.c:311169-311176): `movement_sequence` is the
+/// PRIMARY dedupe — equal/older drop untouched, newer accepts, with the
+/// u16 wrap and the directional half-range edge of `is_newer_u16`.
+#[test]
+fn test_self_update_motion_gate1_movement_sequence_dedupe_and_wrap() {
+    let mut player = PlayerState::new();
+    player.movement_sequence = 20;
+    player.server_control_sequence = 30;
+
+    // Equal → drop (a re-sent packet changes nothing at all).
+    assert!(!player.apply_self_update_motion(&self_motion(20, 31, false)));
+    assert_eq!(player.movement_sequence, 20);
+    assert_eq!(
+        player.server_control_sequence, 30,
+        "a gate-1 drop never touches the control epoch"
+    );
+
+    // Older → drop.
+    assert!(!player.apply_self_update_motion(&self_motion(19, 31, false)));
+    assert_eq!(player.movement_sequence, 20);
+
+    // Newer → accept (control 31 is newer too — both stamped).
+    assert!(player.apply_self_update_motion(&self_motion(21, 31, false)));
+    assert_eq!(player.movement_sequence, 21);
+    assert_eq!(player.server_control_sequence, 31);
+
+    // u16 wrap: 0 follows 0xFFFF.
+    let mut player = PlayerState::new();
+    player.movement_sequence = 0xFFFF;
+    player.server_control_sequence = 30;
+    assert!(player.apply_self_update_motion(&self_motion(0, 30, false)));
+    assert_eq!(player.movement_sequence, 0);
+
+    // Directional half-range edge (retail newer_event, acclient.c:143015):
+    // +0x8000 ahead is NOT newer; the numerically smaller base is.
+    let mut player = PlayerState::new();
+    player.movement_sequence = 0;
+    player.server_control_sequence = 30;
+    assert!(!player.apply_self_update_motion(&self_motion(0x8000, 30, false)));
+    assert_eq!(player.movement_sequence, 0);
+    let mut player = PlayerState::new();
+    player.movement_sequence = 0x8000;
+    player.server_control_sequence = 30;
+    assert!(player.apply_self_update_motion(&self_motion(0, 30, false)));
+    assert_eq!(player.movement_sequence, 0);
+}
+
+/// Gate 2 (acclient.c:311177-311186): an EQUAL server-control epoch is
+/// retail-legal and unpacks; only a STRICTLY newer stored epoch drops —
+/// and that drop happens AFTER gate 1 stamped the movement sequence.
+#[test]
+fn test_self_update_motion_gate2_equal_control_accepted_older_drops_after_stamp() {
+    let mut player = PlayerState::new();
+    player.instance_sequence = 3;
+    player.movement_sequence = 20;
+    player.server_control_sequence = 30;
+    let substate_before = player.current_substate;
+
+    // EQUAL control epoch: two UpdateMotion under one epoch both unpack.
+    assert!(player.apply_self_update_motion(&self_motion(21, 30, false)));
+    assert_eq!(player.movement_sequence, 21);
+    assert_eq!(player.server_control_sequence, 30);
+    assert_eq!(player.instance_sequence, 5);
+    assert_eq!(player.last_server_motion_style, Some(MotionStance::Magic));
+    assert_ne!(
+        player.current_substate, substate_before,
+        "a non-autonomous unpack writes the substate"
+    );
+
+    // Stored-newer control → drop, but gate 1 already stamped the
+    // movement sequence (retail :311176).
+    assert!(!player.apply_self_update_motion(&self_motion(22, 29, false)));
+    assert_eq!(player.movement_sequence, 22);
+    assert_eq!(player.server_control_sequence, 30);
+
+    // Control-epoch directional half-range edge: a stored epoch exactly
+    // 0x8000 behind the incoming accepts; the mirrored base drops.
+    let mut player = PlayerState::new();
+    player.movement_sequence = 20;
+    player.server_control_sequence = 0x8000;
+    assert!(player.apply_self_update_motion(&self_motion(21, 0, false)));
+    assert_eq!(player.server_control_sequence, 0);
+    let mut player = PlayerState::new();
+    player.movement_sequence = 20;
+    player.server_control_sequence = 0;
+    assert!(!player.apply_self_update_motion(&self_motion(21, 0x8000, false)));
+    assert_eq!(player.server_control_sequence, 0);
+    assert_eq!(
+        player.movement_sequence, 21,
+        "the gate-1 stamp survives the gate-2 drop"
+    );
+}
+
+/// Gate 3 (acclient.c:311187-311190): an accepted autonomous echo of
+/// the player-controlled object advances the sequences but never
+/// unpacks — style and substate stay untouched.
+#[test]
+fn test_self_update_motion_autonomous_echo_updates_sequences_only() {
+    let mut player = PlayerState::new();
+    player.instance_sequence = 3;
+    player.movement_sequence = 20;
+    player.server_control_sequence = 30;
+    player.last_server_motion_style = Some(MotionStance::SwordCombat);
+    let substate_before = player.current_substate;
+
+    assert!(player.apply_self_update_motion(&self_motion(21, 31, true)));
+    assert_eq!(player.movement_sequence, 21);
+    assert_eq!(player.server_control_sequence, 31);
+    assert_eq!(player.instance_sequence, 5);
+    assert_eq!(
+        player.last_server_motion_style,
+        Some(MotionStance::SwordCombat),
+        "an autonomous echo must not write the style"
+    );
+    assert_eq!(
+        player.current_substate, substate_before,
+        "an autonomous echo must not write the substate"
+    );
+
+    // A replayed echo (equal movement sequence) drops entirely.
+    assert!(!player.apply_self_update_motion(&self_motion(21, 32, true)));
+    assert_eq!(player.server_control_sequence, 31);
 }
 
 #[test]

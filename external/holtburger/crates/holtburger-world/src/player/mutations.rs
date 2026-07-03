@@ -276,32 +276,48 @@ impl PlayerState {
         true
     }
 
-    /// Returns whether a self non-autonomous `UpdateMotion` packet is current.
-    ///
-    /// ACE increments `server_control_sequence` for non-autonomous `UpdateMotion`, so older or
-    /// duplicate epochs must not be re-applied or forwarded into the client heartbeat path.
+    /// Returns whether an inbound self `UpdateMotion`'s server-control
+    /// epoch is current. Retail accepts an EQUAL epoch
+    /// (`CPhysics::SetObjectMovement`, acclient.c:311177-311185: drop
+    /// only when the STORED stamp is STRICTLY newer than the incoming
+    /// one); duplicate-packet dedupe is the movement-sequence gate's
+    /// job ([`Self::apply_self_update_motion`] gate 1).
     pub fn should_accept_server_controlled_motion(&self, server_control_sequence: u16) -> bool {
-        if server_control_sequence == self.server_control_sequence {
-            return false;
-        }
-
         !is_newer_u16(self.server_control_sequence, server_control_sequence)
     }
 
-    /// Applies self `UpdateMotion` sequencing and cached server style only when the packet is
-    /// current.
+    /// Applies self `UpdateMotion` sequencing and cached server style
+    /// under the retail three-part gate (`CPhysics::SetObjectMovement`,
+    /// acclient.c:311149-311196):
+    /// 1. `movement_sequence` must be strictly NEWER (`update_times[1]`,
+    ///    the primary dedupe) or the message is dropped untouched; on a
+    ///    pass the stamp advances IMMEDIATELY (`:311176`) — even when
+    ///    gate 2 drops the message below;
+    /// 2. a strictly-newer STORED `server_control_sequence` drops the
+    ///    message; an EQUAL epoch is ACCEPTED (`:311177-311186`);
+    /// 3. an autonomous echo of the player-controlled object advances
+    ///    the sequences but skips the style/substate unpack
+    ///    (`:311187-311190` — retail never calls `unpack_movement` for
+    ///    it).
+    /// Returns `true` when the sequences were accepted (gates 1+2).
     pub fn apply_self_update_motion(&mut self, data: &MovementEventData) -> bool {
-        if !data.is_autonomous
-            && !self.should_accept_server_controlled_motion(data.server_control_sequence)
-        {
+        if !is_newer_u16(data.movement_sequence, self.movement_sequence) {
             return false;
         }
+        self.movement_sequence = data.movement_sequence;
 
-        self.update_motion_sequences(
-            data.object_instance_sequence,
-            data.server_control_sequence,
-            data.movement_sequence,
-        );
+        if !self.should_accept_server_controlled_motion(data.server_control_sequence) {
+            return false;
+        }
+        self.server_control_sequence = data.server_control_sequence;
+        self.instance_sequence = data.object_instance_sequence;
+
+        if data.is_autonomous {
+            // Self-echo of this client's own motion: sequence
+            // bookkeeping only (acclient.c:311187-311190).
+            return true;
+        }
+
         self.update_last_server_motion_style(data.current_style);
         // Wave 10 Phase 10.2 (2026-05-26) — track the server-confirmed
         // substate for the motion_allows_jump gate. Pulled from

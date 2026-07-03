@@ -69,8 +69,9 @@ pub const BIG_DISTANCE: f32 = 999_999.0;
 /// `>= 0x14` (`acclient.c:389071`).
 pub const INTERPOLATION_QUEUE_CAP: usize = 20;
 
-/// `PhysicsGlobals.EPSILON`.
-const EPSILON: f32 = 1e-4;
+/// `F_EPSILON` (`acclient.c:39545` `0.00019999999`; ACE
+/// `PhysicsGlobals.EPSILON = 0.0002f` — same f32 bits).
+const EPSILON: f32 = 0.0002;
 
 /// `InterpolationManager` 5-frame progress window
 /// (`acclient.c:389243`; ACE `InterpolationManager.cs:230`).
@@ -250,9 +251,9 @@ impl InterpolationManager {
                 } else {
                     target
                 };
-                if self.position_queue.is_empty() {
-                    self.original_distance = current.distance_to(&target);
-                }
+                // `original_distance` stays `BIG_DISTANCE` on a fresh
+                // queue (`:388878`) — the first 5-frame progress window
+                // auto-passes; `NodeCompleted` re-seeds per node.
                 self.position_queue
                     .push_back(InterpolationNode::position_node(node_pose));
                 true
@@ -408,6 +409,7 @@ impl InterpolationManager {
         on_contact: bool,
         constraint: &mut ConstraintManager,
         sticky_active: bool,
+        retail_leash: bool,
     ) -> InterpStep {
         let Some(head) = self.position_queue.front().copied() else {
             return InterpStep::Idle;
@@ -436,13 +438,19 @@ impl InterpolationManager {
         self.progress_quantum += quantum;
         self.frame_counter += 1;
 
-        let progressing = delta > EPSILON
+        let progressing = delta >= EPSILON
             && self.progress_quantum > EPSILON
             && (delta / self.progress_quantum / max_speed) >= MIN_PROGRESS_RATIO;
         let keep_interpolating =
             self.frame_counter < PROGRESS_WINDOW_FRAMES || progressing || sticky_active;
 
         if !keep_interpolating {
+            // Near-complete stall: `curr_distance < 0.2` completes the
+            // node instead of failing it (`:389274-389275`).
+            if dist < 0.2 {
+                self.node_completed(true, current);
+                return InterpStep::Completed { pose: current };
+            }
             // Stall: fail toward recovery (`:389271-389273`) — unlike the
             // single-node port, the queue path RECOVERS via use_time.
             self.node_fail_counter += 1;
@@ -474,12 +482,18 @@ impl InterpolationManager {
 
         // ConstraintManager::adjust_offset chains AFTER interpolation
         // (`PositionManager::adjust_offset`, `acclient.c:388287-388304`).
-        let offset = constraint.adjust_offset(offset);
+        let offset = constraint.adjust_offset(offset, on_contact);
 
         let stepped_global = from + offset;
         let pose = reproject_global_into(stepped_global, target);
         let rotation = if self.keep_heading {
             current.rotation
+        } else if retail_leash {
+            // Retail applies the node's full frame delta in ONE frame —
+            // the heading SNAPS to the node heading while the position
+            // eases (`:389252-389269` subtract2 + combine; keep_heading
+            // zeroes the rotation delta instead).
+            target.rotation
         } else {
             let progress = (max_speed * quantum) / distance.max(1e-6);
             crate::spatial::force_position_interp::slerp_rotation(
@@ -700,32 +714,42 @@ impl ConstraintManager {
         self.constrained
     }
 
-    /// `IsFullyConstrained` — `offset > 0.9 * max`
-    /// (`acclient.c:~389460`; the `jump_is_allowed` error-71 input).
+    /// `IsFullyConstrained` — `0.9 * max < offset`
+    /// (`acclient.c:389417-389420`; the `jump_is_allowed` error-71
+    /// input). Retail has NO `is_constrained` check; the disarmed state
+    /// holds `offset = max = 0.0`, so the result is identical.
     pub fn is_fully_constrained(&self) -> bool {
-        self.constrained && self.constraint_pos_offset > 0.9 * self.constraint_max
+        self.constraint_pos_offset > 0.9 * self.constraint_max
     }
 
     /// `ConstraintManager::adjust_offset` (`acclient.c:389478-389512`):
-    /// scale the offset by `(max - off)/(max - start)` inside the band,
-    /// zero it past `max`, then re-evaluate the running offset to this
-    /// frame's applied step length (retail line `:389506-389510`).
-    pub fn adjust_offset(&mut self, mut offset: Vector3) -> Vector3 {
+    /// on contact, scale the offset by `(max - off)/(max - start)`
+    /// inside the band and zero it past `max`; then ACCUMULATE the
+    /// applied step length into the running travel budget
+    /// (`constraint_pos_offset = sqrt(...) + constraint_pos_offset`,
+    /// `:389506-389510`). The contact gate (`transient_state & 1`,
+    /// `:389488`) wraps ONLY the scale/zero arm — an airborne frame
+    /// still accumulates. ACE `ConstraintManager.cs:76` REPLACED the
+    /// budget with the step length, which parked it below `start`
+    /// forever and disabled the whole leash.
+    pub fn adjust_offset(&mut self, mut offset: Vector3, on_contact: bool) -> Vector3 {
         if !self.constrained {
             return offset;
         }
-        if self.constraint_pos_offset < self.constraint_max {
-            if self.constraint_pos_offset > self.constraint_start {
-                let span = self.constraint_max - self.constraint_start;
-                if span > EPSILON {
-                    let scale = (self.constraint_max - self.constraint_pos_offset) / span;
-                    offset = offset * scale;
+        if on_contact {
+            if self.constraint_pos_offset < self.constraint_max {
+                if self.constraint_pos_offset > self.constraint_start {
+                    let span = self.constraint_max - self.constraint_start;
+                    if span > EPSILON {
+                        let scale = (self.constraint_max - self.constraint_pos_offset) / span;
+                        offset = offset * scale;
+                    }
                 }
+            } else {
+                offset = Vector3::zero();
             }
-        } else {
-            offset = Vector3::zero();
         }
-        self.constraint_pos_offset = offset.length();
+        self.constraint_pos_offset += offset.length();
         offset
     }
 }
@@ -748,6 +772,14 @@ pub struct PositionManager {
     /// stays ungated so tests can exercise it directly, the A2-P1
     /// `pub interpolation` pattern).
     pub sticky: StickyManager,
+    /// Physics-parity 2026-07-03 (dossier A F9/F12): retail-leash mode —
+    /// the constraint stays armed across interp completion
+    /// (`:389417`; disarm is `UnConstrain`/re-`ConstrainTo` only) and
+    /// the interp heading snaps to the node heading in one frame
+    /// (`:389252-389269`). OFF (default) = the shipped auto-release +
+    /// heading-slerp behavior, byte-identical. Runtime flag
+    /// `?retailLeash` (scene install sites set this).
+    retail_leash: bool,
 }
 
 impl Default for PositionManager {
@@ -757,11 +789,22 @@ impl Default for PositionManager {
             interpolation: InterpolationManager::default(),
             constraint: ConstraintManager::default(),
             sticky: StickyManager::default(),
+            retail_leash: false,
         }
     }
 }
 
 impl PositionManager {
+    /// Arm/disarm retail-leash mode (see the field doc). Sticky to the
+    /// manager so both the local facade and the remote surface honor it.
+    pub fn set_retail_leash(&mut self, on: bool) {
+        self.retail_leash = on;
+    }
+
+    pub fn retail_leash(&self) -> bool {
+        self.retail_leash
+    }
+
     pub fn is_interpolating(&self) -> bool {
         if USE_POSITION_MANAGER_QUEUE {
             self.interpolation.is_interpolating()
@@ -864,12 +907,10 @@ impl PositionManager {
         max_speed: f32,
         on_contact: bool,
     ) -> (InterpStep, Vec<InterpolationCommand>) {
-        let commands = self.interpolation.use_time(current);
-        // A drain that blipped (recovery) reports the blip pose as
-        // the step outcome so the owner lands the body there.
-        if let Some(InterpolationCommand::SetPosition(pos)) = commands.first().copied() {
-            return (InterpStep::Completed { pose: pos }, commands);
-        }
+        // Retail frame order: the position pipeline's `adjust_offset`
+        // runs first (`:320029`); `PositionManager::UseTime` drains at
+        // tick END (`:322884`). Step, THEN drain — a recovery blip now
+        // lands in the same frame its fail was scored, not one early.
         let step = self.interpolation.step_position_head(
             current,
             quantum,
@@ -877,8 +918,27 @@ impl PositionManager {
             on_contact,
             &mut self.constraint,
             self.sticky.is_active(),
+            self.retail_leash,
         );
-        if matches!(step, InterpStep::Completed { .. }) && !self.interpolation.is_interpolating() {
+        let stepped = match step {
+            InterpStep::Progressed { pose }
+            | InterpStep::Completed { pose }
+            | InterpStep::Failed { pose } => pose,
+            InterpStep::Idle => current,
+        };
+        let commands = self.interpolation.use_time(stepped);
+        // A drain that blipped (recovery) reports the blip pose as
+        // the step outcome so the owner lands the body there.
+        if let Some(InterpolationCommand::SetPosition(pos)) = commands.first().copied() {
+            return (InterpStep::Completed { pose: pos }, commands);
+        }
+        if !self.retail_leash
+            && matches!(step, InterpStep::Completed { .. })
+            && !self.interpolation.is_interpolating()
+        {
+            // Retail keeps the leash armed until `UnConstrain` /
+            // re-`ConstrainTo` (`:389417`); the auto-release stays the
+            // flag-off behavior pending the retail_leash rollout.
             self.constraint.unconstrain();
         }
         (step, commands)
@@ -1097,7 +1157,8 @@ mod tests {
             // Never move `cur`: stall for the full window each time.
             let mut failed = false;
             for _ in 0..PROGRESS_WINDOW_FRAMES + 1 {
-                match interp.step_position_head(cur, 0.0, MAX_SPEED, true, &mut constraint, false) {
+                match interp.step_position_head(cur, 0.0, MAX_SPEED, true, &mut constraint, false, false)
+                {
                     InterpStep::Failed { .. } => {
                         failed = true;
                         break;
@@ -1152,6 +1213,7 @@ mod tests {
                 true,
                 &mut manager.constraint,
                 false,
+                false,
             ) {
                 InterpStep::Progressed { pose } => cur = pose,
                 InterpStep::Completed { pose } => {
@@ -1174,19 +1236,108 @@ mod tests {
         let mut constraint = ConstraintManager::default();
         // Unconstrained: passthrough.
         let offset = Vector3::new(1.0, 0.0, 0.0);
-        assert_eq!(constraint.adjust_offset(offset), offset);
+        assert_eq!(constraint.adjust_offset(offset, true), offset);
         // In-band: scale = (4-3)/(4-2) = 0.5.
         constraint.constrain_to(3.0, 2.0, 4.0);
-        let scaled = constraint.adjust_offset(offset);
+        let scaled = constraint.adjust_offset(offset, true);
         assert!((scaled.x - 0.5).abs() < 1e-6);
         // Past max: zeroed.
         constraint.constrain_to(5.0, 2.0, 4.0);
-        assert_eq!(constraint.adjust_offset(offset), Vector3::zero());
+        assert_eq!(constraint.adjust_offset(offset, true), Vector3::zero());
         // IsFullyConstrained: offset > 0.9*max.
         constraint.constrain_to(3.9, 2.0, 4.0);
         assert!(constraint.is_fully_constrained());
         constraint.constrain_to(1.0, 2.0, 4.0);
         assert!(!constraint.is_fully_constrained());
+    }
+
+    /// Physics-parity 2026-07-03 (dossier A F9a / B row 43): the budget
+    /// ACCUMULATES applied path length (`:389506-389510`) — with enough
+    /// travel the leash ENGAGES (scale, then zero, then
+    /// `IsFullyConstrained`), which ACE's replace-semantics never did.
+    #[test]
+    fn constraint_budget_accumulates_until_leash_engages() {
+        let mut constraint = ConstraintManager::default();
+        // Seeded at 0 (server pos == current), band 2..4.
+        constraint.constrain_to(0.0, 2.0, 4.0);
+        let step = Vector3::new(1.0, 0.0, 0.0);
+        // Below start: passthrough, budget grows 0→1→2.
+        assert_eq!(constraint.adjust_offset(step, true), step);
+        assert_eq!(constraint.adjust_offset(step, true), step);
+        // Budget 2.0 (== start): still passthrough (`>` gate), → 3.0.
+        assert_eq!(constraint.adjust_offset(step, true), step);
+        // Budget 3.0, in band: scale = (4-3)/(4-2) = 0.5, → 3.5.
+        let scaled = constraint.adjust_offset(step, true);
+        assert!((scaled.x - 0.5).abs() < 1e-6);
+        // Budget 3.5: scale 0.25, → 3.75...
+        let scaled = constraint.adjust_offset(step, true);
+        assert!((scaled.x - 0.25).abs() < 1e-6);
+        assert!(constraint.is_fully_constrained(), "3.75 > 0.9*4 = 3.6");
+        // ...asymptotic to max: never quite zero from scaling alone, but
+        // a seed past max zeroes outright (previous test covers it).
+        assert!(constraint.is_constrained(), "leash stays armed");
+    }
+
+    /// The contact gate (`:389488`) wraps only the scale/zero arm — an
+    /// airborne (no-contact) frame applies UNSCALED but still burns
+    /// budget.
+    #[test]
+    fn constraint_accumulates_without_contact_but_does_not_scale() {
+        let mut constraint = ConstraintManager::default();
+        constraint.constrain_to(3.0, 2.0, 4.0);
+        let step = Vector3::new(1.0, 0.0, 0.0);
+        // Airborne: no scaling despite being in band...
+        assert_eq!(constraint.adjust_offset(step, false), step);
+        // ...but the budget grew 3.0 → 4.0: next contact frame zeroes.
+        assert_eq!(constraint.adjust_offset(step, true), Vector3::zero());
+    }
+
+    /// `original_distance` stays `BIG_DISTANCE` on a fresh queue
+    /// (`:388878`) — a zero-progress stall cannot fail the FIRST 5-frame
+    /// window (the check auto-passes); the fail lands at frame 10.
+    #[test]
+    fn first_progress_window_auto_passes_on_fresh_queue() {
+        let mut interp = InterpolationManager::default();
+        let mut constraint = ConstraintManager::default();
+        let cur = pose(0.0, 0.0, 0.0);
+        interp.interpolate_to(cur, pose(3.0, 0.0, 0.0), true, BLIP);
+        for frame in 1..=9 {
+            match interp.step_position_head(cur, 0.016, MAX_SPEED, true, &mut constraint, false, false)
+            {
+                InterpStep::Progressed { .. } => {}
+                other => panic!("frame {frame} must survive the first window, got {other:?}"),
+            }
+        }
+        assert!(matches!(
+            interp.step_position_head(cur, 0.016, MAX_SPEED, true, &mut constraint, false, false),
+            InterpStep::Failed { .. }
+        ));
+        assert_eq!(interp.node_fail_counter(), 1);
+    }
+
+    /// A stall inside 0.2 m COMPLETES the node instead of failing it
+    /// (`:389274-389275`).
+    #[test]
+    fn stall_within_near_complete_band_completes() {
+        let mut interp = InterpolationManager::default();
+        let mut constraint = ConstraintManager::default();
+        let cur = pose(0.0, 0.0, 0.0);
+        interp.interpolate_to(cur, pose(0.15, 0.0, 0.0), true, BLIP);
+        let mut completed = false;
+        for _ in 0..12 {
+            match interp.step_position_head(cur, 0.016, MAX_SPEED, true, &mut constraint, false, false)
+            {
+                InterpStep::Completed { .. } => {
+                    completed = true;
+                    break;
+                }
+                InterpStep::Progressed { .. } => {}
+                other => panic!("near-complete stall must not fail, got {other:?}"),
+            }
+        }
+        assert!(completed, "stall inside 0.2 m completes");
+        assert_eq!(interp.node_fail_counter(), 0);
+        assert!(!interp.is_interpolating());
     }
 
 
@@ -1330,7 +1481,8 @@ mod tests {
         let cur = pose(0.0, 0.0, 0.0);
         interp.interpolate_to(cur, pose(3.0, 0.0, 0.0), true, BLIP);
         for _ in 0..(PROGRESS_WINDOW_FRAMES * 4) {
-            match interp.step_position_head(cur, 0.016, MAX_SPEED, true, &mut constraint, true) {
+            match interp.step_position_head(cur, 0.016, MAX_SPEED, true, &mut constraint, true, false)
+            {
                 InterpStep::Progressed { .. } => {}
                 other => panic!("sticky-active stall must keep interpolating, got {other:?}"),
             }
@@ -1340,7 +1492,8 @@ mod tests {
         // Legacy path, threaded through the facade: install force-pos +
         // an (ungated, test-driven) sticky target, then stall.
         let mut manager = PositionManager::default();
-        assert!(manager.install_force_position(cur, pose(3.0, 0.0, 0.0), 10.0, 100.0, true));
+        let pose3 = pose(3.0, 0.0, 0.0);
+        assert!(manager.install_force_position(cur, pose3, 10.0, 100.0, true));
         manager.stick_to(guid(1), 0.0);
         for _ in 0..(PROGRESS_WINDOW_FRAMES * 4) {
             let (step, _) = manager.step_force_position(cur, 0.016, MAX_SPEED, true);
@@ -1350,18 +1503,29 @@ mod tests {
             }
         }
         // Unstick → the very next window can fail again (gate restored).
+        // The fail now RECOVERS in the same frame (retail drain order,
+        // `:320029` step then `:322884` UseTime): the emptied queue with
+        // a non-zero fail counter blips to the saved node position, so
+        // the observable is Completed-at-the-blip + a SetPosition
+        // command, not a bare Failed.
         assert!(manager.unstick());
-        let mut failed = false;
+        let mut recovered = false;
         for _ in 0..(PROGRESS_WINDOW_FRAMES * 4) {
-            if matches!(
-                manager.step_force_position(cur, 0.016, MAX_SPEED, true).0,
-                InterpStep::Failed { .. }
-            ) {
-                failed = true;
+            let (step, commands) = manager.step_force_position(cur, 0.016, MAX_SPEED, true);
+            if commands
+                .iter()
+                .any(|c| matches!(c, InterpolationCommand::SetPosition(_)))
+            {
+                assert!(
+                    matches!(step, InterpStep::Completed { pose } if pose.distance_to(&pose3) < 1e-4),
+                    "fail-recovery lands at the failed node's position, got {step:?}"
+                );
+                recovered = true;
                 break;
             }
         }
-        assert!(failed, "without sticky the stall fails the node again");
+        assert!(recovered, "without sticky the stall fails and blip-recovers");
+        assert!(!manager.is_interpolating());
     }
 
     /// Facade sticky step applies XY + heading and leaves z untouched

@@ -288,6 +288,16 @@ impl MovementSystemHandle {
         self.inner.set_cast_move(on);
     }
 
+    /// Physics-parity 2026-07-03 (dossier A F1/F2): install the
+    /// `?retailQuantum=on` runtime carrier (default OFF — ACE slice
+    /// shapes stand per DECISIONS-A1-O5; `=on` runs the retail
+    /// update_object schedule: 0.0002 consume-skip, direct sub-0.2
+    /// entry, 0.2 slices + 1/30-floored carried remainder). Forwards to
+    /// `MovementSystem::set_retail_quantum`.
+    pub fn set_retail_quantum(&mut self, on: bool) {
+        self.inner.set_retail_quantum(on);
+    }
+
     /// Phase 3 Phase D — the effective OUTDOOR-faithful predicate, threaded into
     /// the transition dispatch's `faithful_outdoor` arm (WS4). Combines the
     /// `USE_FAITHFUL_OUTDOOR` const default with the `?faithfulOutdoor` runtime

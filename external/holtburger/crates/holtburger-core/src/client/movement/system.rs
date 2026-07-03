@@ -1,11 +1,11 @@
 use super::common::{
     AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, HUGE_QUANTUM, MAX_QUANTUM, MAX_VELOCITY, MIN_QUANTUM,
-    PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_GROUND_FRICTION_RETAIL,
+    PHYSICS_ENTRY_EPSILON, PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_GROUND_FRICTION_RETAIL,
     PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC,
-    build_autonomous_position, build_jump, build_motion_state_raw_motion_state,
-    build_move_to_state, calc_friction, has_autonomous_position_sync_target, local_omega_for_state,
-    local_velocity_for_state, normalize_heading, raw_motion_state_with_motion_style,
-    signed_heading_delta,
+    RETAIL_MAX_QUANTUM, build_autonomous_position, build_jump,
+    build_motion_state_raw_motion_state, build_move_to_state, calc_friction,
+    has_autonomous_position_sync_target, local_omega_for_state, local_velocity_for_state,
+    normalize_heading, raw_motion_state_with_motion_style, signed_heading_delta,
 };
 use super::jump_charge::{JumpChargeClock, JumpOutcome, JumpRefusal};
 use super::motion_interp::{
@@ -423,6 +423,47 @@ const SERVER_PROJECTION_LANDBLOCK_TOLERANCE: u32 = 1;
 /// flat ground and only correct behaviour on slopes, so they carry the
 /// low-risk fidelity without touching the contested knob.
 const USE_RETAIL_GROUND_FRICTION: bool = true;
+
+/// Physics parity 2026-07-03 (F6) — the pre-parity slide-frame friction:
+/// `calc_friction(sledding=true)` on contact-but-NOT-grounded frames
+/// (the too-steep-plane slide). Retail applies NO friction there —
+/// `calc_friction` is gated on `transient_state & 2` (ON_WALKABLE_TS,
+/// acclient.h:3691; acclient.c:316108), which a too-steep contact plane
+/// never sets — so a fast cliff slide keeps full gravity acceleration
+/// (the SLEDDING 0.2-glide table is only reachable by objects that carry
+/// SLEDDING_PS *and* stand on a walkable plane). The retail placement is
+/// the grounded-frame residual decay in
+/// [`MovementSystem::finish_manual_slice_via_transition`]'s landing tail.
+///
+/// `false` (DEFAULT): retail behavior — no slide-frame friction.
+/// `true`: the documented deviation (a damped "controlled" cliff slide),
+/// kept compiled for A/B.
+const USE_SLIDE_FRAME_FRICTION: bool = false;
+
+/// Physics parity 2026-07-03 (F1/F2) — the retail `update_object` slice
+/// loop (acclient.c:323123-323161; MIN/MAX at :784229/:784235):
+///   - entry `dt <= 0.0002` (f32 bits of retail's 0.00019999999):
+///     time CONSUMED, nothing integrated;
+///   - `dt > 2.0` (HugeQuantum): consumed, nothing integrated;
+///   - `dt <= 0.2` (retail MAX_QUANTUM = 1/5): integrated DIRECTLY as ONE
+///     quantum — there is NO 1/30 floor on the direct path (`goto
+///     LABEL_21`), so a 60 fps client steps physics 16.7 ms EVERY frame;
+///   - else: 0.2-sized slices while remaining > 0.2, then the remainder
+///     is integrated iff > 1/30 (MIN_QUANTUM) else CARRIED to the next
+///     frame (retail advances `update_time` only by the consumed slices).
+///
+/// `false` (DEFAULT): the shipped ACE-shaped loops stay byte-identical —
+/// handle path accumulates-to-1/30 with 0.1 slices ([`quantum_slices`]),
+/// spine path passes any remainder > 0.0 (client/simulation.rs). The
+/// DECISIONS-A1-O5 ruling (0.1 slices to dodge ACE's documented
+/// MoveToManager-turning bug at 0.2) stands until explicitly reopened;
+/// flipping this default needs that ruling revisited plus a move_to.rs
+/// turn-deadband regression check at 0.2 s slices.
+/// `true`: both the handle path
+/// ([`MovementSystem::advance_local_pose_for_manual_drive`]) and the
+/// spine path take the retail shape above via
+/// [`MovementSystem::retail_quantum_schedule`].
+const USE_RETAIL_QUANTUM: bool = false;
 
 /// Unified movement pipeline STAGE 1 (2026-06-11) — interpreted-state
 /// velocity derivation + retail direct-set grounded velocity model.
@@ -943,6 +984,47 @@ fn quantum_slices(dt_secs: f32) -> Option<Vec<f32>> {
     Some(slices)
 }
 
+/// F1/F2 (physics parity 2026-07-03) — the RETAIL `update_object` slice
+/// schedule (acclient.c:323123-323161; constants :784229/:784235), the
+/// [`USE_RETAIL_QUANTUM`] shape. Returns `(slices, carry)`:
+/// - `dt <= 0.0002` ([`PHYSICS_ENTRY_EPSILON`]): `(vec![], 0.0)` — time
+///   CONSUMED, nothing integrated (:323123);
+/// - `dt > 2.0` ([`HUGE_QUANTUM`]): `(vec![], 0.0)` — consumed, dropped
+///   (:323127/:323145);
+/// - `dt <= 0.2` ([`RETAIL_MAX_QUANTUM`]): `(vec![dt], 0.0)` — integrated
+///   DIRECTLY as ONE quantum, no 1/30 floor on the direct path
+///   (:323127 `goto LABEL_21`);
+/// - else: 0.2 slices while remaining > 0.2, then the remainder is a
+///   final slice iff > 1/30 ([`MIN_QUANTUM`]) else returned as `carry`
+///   for the caller to bank (retail advances `update_time` only by the
+///   consumed slices — :323146-323148).
+///
+/// `carry > 0.0` implies `slices` is non-empty (only the post-slicing
+/// remainder banks), so a carrying caller can never starve.
+fn retail_quantum_schedule(dt_secs: f32) -> (Vec<f32>, f32) {
+    if dt_secs <= PHYSICS_ENTRY_EPSILON {
+        return (Vec::new(), 0.0);
+    }
+    if dt_secs > HUGE_QUANTUM {
+        return (Vec::new(), 0.0);
+    }
+    if dt_secs <= RETAIL_MAX_QUANTUM {
+        return (vec![dt_secs], 0.0);
+    }
+    let mut slices = Vec::new();
+    let mut remaining = dt_secs;
+    while remaining > RETAIL_MAX_QUANTUM {
+        slices.push(RETAIL_MAX_QUANTUM);
+        remaining -= RETAIL_MAX_QUANTUM;
+    }
+    if remaining > MIN_QUANTUM {
+        slices.push(remaining);
+        (slices, 0.0)
+    } else {
+        (slices, remaining)
+    }
+}
+
 /// Physics deep-dive 2026-06-01 (gap 3 follow-up: edge_slide Stage-1).
 /// Resolve the lateral delta to apply when a grounded step-up was
 /// REFUSED (the riser blocking the move was taller than the step-up
@@ -1285,6 +1367,13 @@ pub(crate) struct MovementSystem {
     /// disables the cast-gesture movement arbitration. Combined by
     /// [`Self::cast_move_enabled`]. Default `None`.
     cast_move_runtime: Option<bool>,
+    /// Physics-parity 2026-07-03 (dossier A F1/F2) — runtime carrier of
+    /// the `?retailQuantum=on` URL flag. `None` = the
+    /// [`USE_RETAIL_QUANTUM`] const default (OFF — the DECISIONS-A1-O5
+    /// ruling stands); `Some(true)` runs the retail update_object slice
+    /// schedule. Combined by [`Self::retail_quantum_enabled`]. Default
+    /// `None`.
+    retail_quantum_runtime: Option<bool>,
     /// [`USE_CAST_MOVE`] — while `Some(t)` and `now < t`, a server-played
     /// cast gesture governs the local player's movement (the retail
     /// non-autonomous window). Armed by [`Self::note_local_cast_gesture`]
@@ -1500,6 +1589,7 @@ impl MovementSystem {
             building_overlap_runtime: None,
             retail_ground_runtime: None,
             cast_move_runtime: None,
+            retail_quantum_runtime: None,
             cast_gesture_deadline: None,
             jump_charge: JumpChargeClock::new(),
             sticky_timeout_pending: std::cell::Cell::new(false),
@@ -1576,6 +1666,13 @@ impl MovementSystem {
     /// [`USE_CAST_MOVE`]).
     pub(crate) fn set_cast_move(&mut self, on: bool) {
         self.cast_move_runtime = Some(on);
+    }
+
+    /// Physics-parity 2026-07-03 — install the `?retailQuantum=on`
+    /// runtime carrier (see [`USE_RETAIL_QUANTUM`]; default OFF pending
+    /// the DECISIONS-A1-O5 reopen + move_to turn regression at 0.2 s).
+    pub(crate) fn set_retail_quantum(&mut self, on: bool) {
+        self.retail_quantum_runtime = Some(on);
     }
 
     /// [`USE_RETAIL_GROUND`] effective predicate (const default overridden
@@ -1742,6 +1839,14 @@ impl MovementSystem {
         if world.player.is_airborne {
             return Ok(JumpOutcome::Refused(JumpRefusal::InAir));
         }
+        // Retail `jump_is_allowed`: `IsFullyConstrained` → 71, checked
+        // FIRST inside the contact-allowed branch, before the
+        // queue-head error (acclient.c:343947-343951). Inert unless the
+        // `?retailLeash` constraint is armed and its travel budget has
+        // crossed `0.9 * max`.
+        if world.local_player_fully_constrained() {
+            return Ok(JumpOutcome::Refused(JumpRefusal::Constrained));
+        }
         let pending_error = self.local_motion_interp.pending_jump_error();
         if pending_error != 0 {
             return Ok(JumpOutcome::Refused(JumpRefusal::from_code(pending_error)));
@@ -1761,12 +1866,13 @@ impl MovementSystem {
             .map(|s| s.current as u32)
             .unwrap_or(100);
         let burden = world.player_burden().unwrap_or(0.5);
-        // Stamina cost (ACE non-PK formula — PK gate needs
-        // `PKTimerActive`, untracked; default non-PK).
-        let cost = holtburger_world::player::PlayerState::jump_stamina_cost(extent, burden, false);
-        // ACE's active behavior on empty stamina: jumpSkill treated as
-        // 0 in InqJumpVelocity → min-clamp hop, so an exhausted player
-        // still pops a tiny jump.
+        // Retail PK arm (acclient.c:442887): PlayerKillerStatus in
+        // {4, 64} AND LastPkAttackTimestamp + 20 s > server-now.
+        let pk = world.player_pk_jump_stamina_arm(world.current_server_time());
+        let cost = holtburger_world::player::PlayerState::jump_stamina_cost(extent, burden, pk);
+        // Retail's zero-stamina fold (acclient.c:443838-443839):
+        // jumpSkill treated as 0 in InqJumpVelocity → min-clamp hop,
+        // so an exhausted player still pops a tiny jump.
         let stamina_current = world
             .player
             .vitals
@@ -1774,7 +1880,8 @@ impl MovementSystem {
             .map(|v| v.current)
             .unwrap_or(0);
         let exhausted = stamina_current == 0;
-        let effective_skill = if exhausted { 0 } else { jump_skill };
+        let effective_skill =
+            holtburger_world::player::PlayerState::exhausted_jump_skill(jump_skill, stamina_current);
         let vz = holtburger_world::player::PlayerState::compute_jump_velocity_z(
             extent,
             burden,
@@ -2847,6 +2954,8 @@ impl MovementSystem {
     /// fed to [`advance_local_pose_for_manual_drive_slice`], mirroring
     /// ACE's `update_object` timestep gate
     /// (`external/ACE/Source/ACE.Server/Physics/PhysicsObj.cs:4140-4190`).
+    /// Under [`USE_RETAIL_QUANTUM`] the ACE shape is swapped for the
+    /// retail loop ([`retail_quantum_schedule`]).
     /// Gravity, friction (`pow(1-f, q)` composes correctly per-slice),
     /// the terminal-velocity clamp, and collision all run per slice,
     /// so a frame-hitch can no longer over-integrate a fall in one
@@ -2859,6 +2968,24 @@ impl MovementSystem {
             // behind the flag for A/B comparison of the subdivided
             // loop. Consumes the raw, unbounded `dt` in one step.
             self.advance_local_pose_for_manual_drive_slice(world, dt);
+            return;
+        }
+
+        if self.retail_quantum_enabled() {
+            // Retail update_object loop (acclient.c:323123-323161) — the
+            // banked carry rides the same accumulator field; retail's
+            // `dt = cur_time − update_time` includes prior carry the
+            // same way. Consume-skip / huge arms return carry 0.0
+            // (update_time = cur_time).
+            let total = world.player.physics_time_accumulator + dt.as_secs_f32();
+            let (slices, carry) = retail_quantum_schedule(total);
+            for quantum in slices {
+                self.advance_local_pose_for_manual_drive_slice(
+                    world,
+                    Duration::from_secs_f32(quantum),
+                );
+            }
+            world.player.physics_time_accumulator = carry;
             return;
         }
 
@@ -2892,6 +3019,21 @@ impl MovementSystem {
         // this remainder in the timer (`UpdateTime` advanced only by
         // the integrated slices).
         world.player.physics_time_accumulator = (total - consumed).max(0.0);
+    }
+
+    /// F1/F2 — effective predicate for the retail quantum loop shape:
+    /// the [`USE_RETAIL_QUANTUM`] const default overridden by the
+    /// `?retailQuantum=on` runtime carrier. Both call sites (this file
+    /// + client/simulation.rs) read through here.
+    pub(crate) fn retail_quantum_enabled(&self) -> bool {
+        self.retail_quantum_runtime.unwrap_or(USE_RETAIL_QUANTUM)
+    }
+
+    /// F1/F2 — [`retail_quantum_schedule`] surfaced for the tick spine
+    /// (client/simulation.rs), which reaches this module only through
+    /// the `MovementSystem` re-export.
+    pub(crate) fn retail_quantum_schedule(dt_secs: f32) -> (Vec<f32>, f32) {
+        retail_quantum_schedule(dt_secs)
     }
 
     /// One bounded integration slice (`quantum <= MAX_QUANTUM`).
@@ -4571,10 +4713,10 @@ impl MovementSystem {
         // easing on touchdown. (See the Wave-1 adversarial review finding.)
         let pose = if on_contact {
             let snapped_z = pose.coords.z;
-            match world
-                .scene
-                .step_force_position_interpolation(body_id, dt_s, max_speed, on_contact)
-            {
+            // Physics-parity 2026-07-03 (dossier A F8): the state-layer
+            // wrapper routes a drain-applied velocity into the player's
+            // split store via the retail set_velocity entry.
+            match world.step_local_force_position(body_id, dt_s, max_speed, on_contact) {
                 InterpStep::Progressed { mut pose } | InterpStep::Completed { mut pose } => {
                     pose.coords.z = snapped_z;
                     pose
@@ -4738,7 +4880,12 @@ impl MovementSystem {
             world.player.current_planar_velocity
         } else {
             // Retail direct-set + small-velocity snap (the Stage-1
-            // grounded model; see USE_INTERPRETED_VELOCITY).
+            // grounded model; see USE_INTERPRETED_VELOCITY). This snap is
+            // the locomotion-model emulation and deliberately keeps the
+            // slack-less `< 0.0625` planar form; the retail stop check
+            // (full 3D, `mag² − 0.25² < 0.0002`, acclient.c:317750) lives
+            // in the airborne arm and the landing residual tail, where
+            // physics velocity — not the direct-set target — is in play.
             let mut v = target_velocity;
             v.z = 0.0;
             let mag_sq = v.x * v.x + v.y * v.y;
@@ -4816,26 +4963,68 @@ impl MovementSystem {
         }
 
         let was_airborne = world.player.is_airborne;
+        let mut raw_delta = raw_delta;
         let mut descending = true;
         let dz = if was_airborne {
-            // 2nd-order gravity + terminal clamp — identical math to the
-            // legacy airborne arm; stays outside the pipeline.
+            // Retail `UpdatePhysicsInternal` per-quantum order
+            // (acclient.c:317701-317786): entry mag² (:317726) →
+            // terminal clamp (:317740-317748) → friction slot (:317749;
+            // never airborne — gated on ON_WALKABLE_TS, :316108) → stop
+            // check (:317750-317756) → position from the CLAMPED/STOPPED
+            // old velocity + half-step (:317757-317775) → v += a·q
+            // (:317778-317783, unconditional). Stays outside the
+            // transition pipeline; the pipeline consumes the deltas.
             let az = -9.8_f32;
-            let v_old = world.player.vertical_velocity;
-            let d = v_old * dt_s + 0.5 * az * dt_s * dt_s;
-            let v_new = v_old + az * dt_s;
             let mut vx = world.player.current_planar_velocity.x;
             let mut vy = world.player.current_planar_velocity.y;
-            let mut vz = v_new;
-            let speed_sq = vx * vx + vy * vy + vz * vz;
-            if speed_sq > MAX_VELOCITY * MAX_VELOCITY {
-                let scale = MAX_VELOCITY / speed_sq.sqrt();
-                vx *= scale;
-                vy *= scale;
-                vz *= scale;
-                world.player.current_planar_velocity.x = vx;
-                world.player.current_planar_velocity.y = vy;
+            let mut vz = world.player.vertical_velocity;
+            let mut mag2 = vx * vx + vy * vy + vz * vz;
+            let d;
+            if mag2 > 0.0 {
+                if mag2 > MAX_VELOCITY * MAX_VELOCITY {
+                    // Two rounding steps — `normalize(v)` then `v *= 50`
+                    // (:317742-317747), not a fused `v *= 50/|v|`.
+                    let len = mag2.sqrt();
+                    vx /= len;
+                    vy /= len;
+                    vz /= len;
+                    vx *= MAX_VELOCITY;
+                    vy *= MAX_VELOCITY;
+                    vz *= MAX_VELOCITY;
+                    mag2 = MAX_VELOCITY * MAX_VELOCITY;
+                }
+                // Stop check on the ENTRY mag² (post-clamp; retail never
+                // recomputes it): zero the FULL 3D velocity when
+                // mag² − 0.25² < 0.0002 (:317750-317756 — 0.0002_f32
+                // shares bits with retail's 0.00019999999). Fires at a
+                // vertical-jump apex; a running jump's planar component
+                // keeps mag² above it.
+                if mag2 - 0.25 * 0.25 < 0.0002 {
+                    vx = 0.0;
+                    vy = 0.0;
+                    vz = 0.0;
+                }
+                // Position from the clamped/stopped OLD velocity plus the
+                // half-step (:317757-317775); the planar delta replaces
+                // the caller's pre-clamp `smoothed_planar * dt`.
+                d = vz * dt_s + 0.5 * az * dt_s * dt_s;
+                raw_delta.x = vx * dt_s;
+                raw_delta.y = vy * dt_s;
+            } else {
+                // mag² ≤ 0 skips the position add entirely — no lone
+                // half-step term on the first from-rest fall quantum
+                // (:317726-317735); gravity still rebuilds v below.
+                d = 0.0;
+                raw_delta.x = 0.0;
+                raw_delta.y = 0.0;
             }
+            // v += a·q outside the mag² branch (:317778-317783). The
+            // stored speed may exceed MAX_VELOCITY by |a|·q until the
+            // NEXT quantum's entry clamp re-caps it — retail stores the
+            // same overshoot.
+            vz += az * dt_s;
+            world.player.current_planar_velocity.x = vx;
+            world.player.current_planar_velocity.y = vy;
             world.player.vertical_velocity = vz;
             descending = vz <= 0.0;
             d
@@ -4843,6 +5032,19 @@ impl MovementSystem {
             raw_delta.z
         };
 
+        // Physics-parity 2026-07-03 (dossier A F9b / B rows 31/42):
+        // with the ?retailLeash constraint armed, the WHOLE per-slice
+        // movement offset passes through ConstraintManager::adjust_offset
+        // BEFORE the transition validates it — retail scales the frame
+        // offset in PositionManager::adjust_offset (:388287-388304,
+        // chained at :320029), walking included; the travel budget
+        // accumulates every slice. Passthrough (bit-identical) with the
+        // leash off or unarmed.
+        let leash_delta = world.constrain_local_manual_delta(Vector3::new(
+            raw_delta.x,
+            raw_delta.y,
+            dz,
+        ));
         let (object, mut gates) = Self::transition_profile(world);
         // (2026-06-30) — apply the `?roofGrounding=off` runtime carrier over the
         // const default baked by `transition_profile` (mirrors faithful_stepup).
@@ -4852,9 +5054,9 @@ impl MovementSystem {
         let end = holtburger_common::position::WorldPosition {
             landblock_id: pose.landblock_id,
             coords: Vector3::new(
-                pose.coords.x + raw_delta.x,
-                pose.coords.y + raw_delta.y,
-                pose.coords.z + dz,
+                pose.coords.x + leash_delta.x,
+                pose.coords.y + leash_delta.y,
+                pose.coords.z + leash_delta.z,
             ),
             rotation: pose.rotation,
         };
@@ -4895,6 +5097,47 @@ impl MovementSystem {
             world.player.last_contact_plane = outcome.contact_plane;
         }
         if was_airborne && outcome.grounded {
+            // Retail grounded-frame friction on the RESIDUAL physics
+            // velocity: `calc_friction` is gated on ON_WALKABLE_TS
+            // (acclient.c:316108, acclient.h:3691), first true on the
+            // quantum AFTER the transition plants the mover — which is
+            // exactly this landing tail (our slice end == retail's next
+            // quantum start). sledding=false (players never carry
+            // SLEDDING_PS); post-friction, the retail stop slot zeroes
+            // the residual when entry mag² − 0.25² < 0.0002
+            // (:317750-317756). Acts ONLY on the stored physics velocity
+            // (the landing carry / knockback residual) — grounded
+            // locomotion direct-sets the planar store from interpreted
+            // state on the NEXT slice, so normal walking is untouched.
+            // A persistent multi-slice residual channel (retail
+            // set_velocity, F8) is not modeled yet; today the residual
+            // lives from touchdown until the next grounded direct-set.
+            if gates.retail_ground {
+                let mut v = Vector3::new(
+                    world.player.current_planar_velocity.x,
+                    world.player.current_planar_velocity.y,
+                    world.player.vertical_velocity,
+                );
+                let mag2 = v.dot(&v);
+                // Grounded via terrain snap may carry no explicit plane;
+                // flat normal makes the projection a no-op (pure decay).
+                let normal = outcome
+                    .contact_plane
+                    .map(|(plane, _)| plane.normal)
+                    .unwrap_or(Vector3::new(0.0, 0.0, 1.0));
+                let friction = if USE_RETAIL_GROUND_FRICTION {
+                    PLAYER_GROUND_FRICTION_RETAIL
+                } else {
+                    PLAYER_GROUND_FRICTION_PER_SEC
+                };
+                calc_friction(&mut v, normal, mag2, friction, false, dt_s);
+                if mag2 - 0.25 * 0.25 < 0.0002 {
+                    v = Vector3::zero();
+                }
+                world.player.current_planar_velocity.x = v.x;
+                world.player.current_planar_velocity.y = v.y;
+                world.player.vertical_velocity = v.z;
+            }
             world.player.land();
         }
         if !was_airborne && !outcome.grounded {
@@ -4903,15 +5146,15 @@ impl MovementSystem {
             // (default-off no-op).
             stamp_leave_ground_velocity(world, heading, state, capabilities);
         }
-        // USE_RETAIL_GROUND — retail contact-frame friction on a SLIDE frame
-        // (in contact with a too-steep plane, not planted): retail
-        // `UpdatePhysicsInternal` applies `calc_friction` on every contact
-        // frame (acclient.c:317726-317783), which (a) projects the velocity
-        // off the surface normal (the into-face component dies — no tunnel
-        // through the base) and (b) decays the along-face speed (the
-        // controlled retail cliff slide; the Sledding table keeps a fast
-        // steep slide alive at base friction and stops a slow one).
-        if gates.retail_ground
+        // USE_SLIDE_FRAME_FRICTION (DEFAULT OFF — deviation escape hatch):
+        // friction on a contact-but-NOT-grounded slide frame. Retail
+        // applies NO friction here — `calc_friction` is gated on
+        // ON_WALKABLE_TS (acclient.c:316108), never set by a too-steep
+        // plane — so a retail cliff slide keeps full gravity acceleration
+        // while the transition pins the pose to the face. The retail
+        // grounded-residual placement is the landing tail above.
+        if USE_SLIDE_FRAME_FRICTION
+            && gates.retail_ground
             && !outcome.grounded
             && let Some((plane, _)) = outcome.contact_plane
         {
@@ -4982,10 +5225,10 @@ impl MovementSystem {
         let max_speed = capabilities.resolved_manual_run_speed() * 2.0;
         let pose = if on_contact {
             let snapped_z = pose.coords.z;
-            match world
-                .scene
-                .step_force_position_interpolation(body_id, dt_s, max_speed, on_contact)
-            {
+            // Physics-parity 2026-07-03 (dossier A F8): the state-layer
+            // wrapper routes a drain-applied velocity into the player's
+            // split store via the retail set_velocity entry.
+            match world.step_local_force_position(body_id, dt_s, max_speed, on_contact) {
                 InterpStep::Progressed { mut pose } | InterpStep::Completed { mut pose } => {
                     pose.coords.z = snapped_z;
                     pose
@@ -5376,6 +5619,13 @@ impl MovementSystem {
                     // the REAL target_exists + dims (the documented
                     // `false` placeholder is closed).
                     let manager = self.movement_managers.entry(data.guid).or_default();
+                    // Retail weenie vfptr[5] "player-controlled object"
+                    // is a STATIC property of the local player
+                    // (acclient.c:344411) — install it on the local
+                    // registry entry so the autonomous echo-skip
+                    // engages; idempotent per-unpack. The remote lane
+                    // (EntityMovementEvent) must NOT get this.
+                    manager.set_player_controlled(true);
                     let _effects = manager.apply_unpacked_movement(
                         data,
                         *target_exists,

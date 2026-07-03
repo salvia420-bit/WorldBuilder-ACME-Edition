@@ -507,17 +507,22 @@ pub(super) const PLAYER_GROUND_FRICTION_RETAIL: f32 = 0.95;
 /// `1.5625 = 1.25^2` (1.25 m/s).
 pub(super) const SLEDDING_LOW_VELOCITY_SQ: f32 = 1.5625;
 
-/// SLEDDING high-speed override: when sledding *and* on a near-flat slope
-/// (`ContactPlane.Normal.Z > SLEDDING_FLAT_NORMAL_Z`) and `velocity_mag^2` is
-/// at/above this, friction is forced to `0.2` (near-frictionless glide).
-/// Retail `calc_friction` (`PhysicsObj.cs:2135-2136`): `velocity_mag2 >=
-/// 6.25f`. `6.25 = 2.5^2` (2.5 m/s).
+/// SLEDDING high-speed override: when sledding *and* on a STEEP slope
+/// (`ContactPlane.Normal.Z < SLEDDING_STEEP_NORMAL_Z`) and `velocity_mag^2`
+/// is at/above this, friction stays at `0.2` (near-frictionless glide — the
+/// retail mountain-slide). Retail `calc_friction` (acclient.c:316124-316128):
+/// `velocity_mag2 >= 6.25f`. `6.25 = 2.5^2` (2.5 m/s).
 pub(super) const SLEDDING_HIGH_VELOCITY_SQ: f32 = 6.25;
 
-/// Near-flat-slope cutoff gating the SLEDDING high-speed override. Retail
-/// `calc_friction` (`PhysicsObj.cs:2135`): `ContactPlane.Normal.Z >
-/// 0.99999536f` (≈0.17° from horizontal). Verbatim.
-pub(super) const SLEDDING_FLAT_NORMAL_Z: f32 = 0.99999536;
+/// Steep-slope cutoff gating the SLEDDING high-speed override: the glide
+/// survives only when `ContactPlane.Normal.Z <` this (slope steeper than
+/// 10°). Retail `calc_friction` (acclient.c:316127): `if (velocity_mag2 <
+/// 6.25 || cos(0.1745329251994329) <= N.z) frict = this->friction;` — i.e.
+/// friction stays `0.2` iff fast AND `N.z < cos(10°)`. `0.98480775` shares
+/// f32 bits (0x3F7C1C5C) with `cos(10°)` narrowed. ACE inverted this gate
+/// (`PhysicsObj.cs:2135` `N.z > 0.99999536` — glide on DEAD-FLAT ground);
+/// the old `SLEDDING_FLAT_NORMAL_Z = 0.99999536` port inherited the bug.
+pub(super) const SLEDDING_STEEP_NORMAL_Z: f32 = 0.98480775;
 
 /// Into-surface early-return cutoff. Retail `calc_friction`
 /// (`PhysicsObj.cs:2125`): if `dot(Velocity, ContactPlane.Normal) >= 0.25f`
@@ -539,7 +544,8 @@ pub(super) const FRICTION_AWAY_FROM_SURFACE_CUTOFF: f32 = 0.25;
 ///    *before* damping (on flat ground `angle ≈ 0`, so this is a no-op).
 /// 4. SLEDDING overrides (only when `sledding`): force friction to `1.0`
 ///    below [`SLEDDING_LOW_VELOCITY_SQ`], or to `0.2` at/above
-///    [`SLEDDING_HIGH_VELOCITY_SQ`] on a near-flat slope.
+///    [`SLEDDING_HIGH_VELOCITY_SQ`] on a STEEP (>10°) slope
+///    (acclient.c:316124-316131).
 /// 5. `velocity *= pow(1 - friction, quantum)`.
 ///
 /// `normal` must be unit length (the contact-plane normal). `velocity_mag2`
@@ -564,7 +570,10 @@ pub(super) fn calc_friction(
     if sledding {
         if velocity_mag2 < SLEDDING_LOW_VELOCITY_SQ {
             friction = 1.0;
-        } else if velocity_mag2 >= SLEDDING_HIGH_VELOCITY_SQ && normal.z > SLEDDING_FLAT_NORMAL_Z {
+        } else if velocity_mag2 >= SLEDDING_HIGH_VELOCITY_SQ && normal.z < SLEDDING_STEEP_NORMAL_Z {
+            // Fast on a steep slope: the 0.2 glide survives
+            // (acclient.c:316127 — `frict` seeds 0.2 and only resets to
+            // object friction when slow OR `cos(10°) <= N.z`).
             friction = 0.2;
         }
     }
@@ -624,6 +633,21 @@ pub(crate) const HUGE_QUANTUM: f32 = 2.0;
 /// `PhysicsObj.cs:1843-1846`). A long fall would otherwise accelerate
 /// unbounded; retail caps it at 50 m/s.
 pub(super) const MAX_VELOCITY: f32 = 50.0;
+
+/// Retail `update_object` entry epsilon: a frame of `dt <= 0.0002` s is
+/// CONSUMED (update_time = cur_time) and nothing integrates
+/// (acclient.c:323123 `if (v6 > 0.00019999999)`). `0.0002_f32` shares
+/// bits (0x3951B717) with retail's printed 0.00019999999. Read by the
+/// retail quantum loop (`USE_RETAIL_QUANTUM`, system.rs) only.
+pub(super) const PHYSICS_ENTRY_EPSILON: f32 = 0.0002;
+
+/// Retail `MAX_QUANTUM_97 = 1.0 / 5.0` (acclient.c:784235): the slice
+/// size of the RETAIL loop shape — `dt <= 0.2` integrates directly as
+/// ONE quantum (:323127 `goto LABEL_21`), larger frames slice at 0.2.
+/// Distinct from the shipped [`MAX_QUANTUM`] (0.1, the deliberate
+/// DECISIONS-A1-O5 deviation); read by the retail quantum loop
+/// (`USE_RETAIL_QUANTUM`, system.rs) only.
+pub(super) const RETAIL_MAX_QUANTUM: f32 = 0.2;
 
 /// F1-2 (movement bughunt 2026-06-09): retail's `±3.0` sidestep clamp is
 /// an ANIM-RATE cap, NOT a m/s cap. `apply_run_to_command`
@@ -1246,8 +1270,8 @@ mod tests {
         let quantum = 1.0 / 60.0;
         let mut v = Vector3::new(3.0, 1.0, 0.0);
         let mag2 = v.x * v.x + v.y * v.y;
-        // velocity_mag2 = 10.0 — above SLEDDING_HIGH so if sledding were
-        // (wrongly) on, friction would drop to 0.2 and this would fail.
+        // velocity_mag2 = 10.0 — above SLEDDING_HIGH, but sledding is off
+        // (and the flat normal would gate the steep-slope glide anyway).
         calc_friction(
             &mut v,
             FLAT_NORMAL,
@@ -1323,52 +1347,66 @@ mod tests {
         assert!(v.x.abs() < 1e-6 && v.y.abs() < 1e-6, "sledding low: {v:?}");
     }
 
-    /// SLEDDING high-speed override: on a near-flat slope
-    /// (`normal.z > 0.99999536`) with sledding engaged and
-    /// `velocity_mag2 >= 6.25`, friction is forced to `0.2` (glide),
-    /// NOT the passed-in coefficient.
+    /// SLEDDING high-speed override: on a STEEP slope
+    /// (`normal.z < cos(10°) ≈ 0.98480775`) with sledding engaged and
+    /// `velocity_mag2 >= 6.25`, friction stays at `0.2` (glide — the
+    /// retail mountain-slide), NOT the passed-in coefficient
+    /// (acclient.c:316124-316128: `frict` seeds 0.2 and only resets to
+    /// object friction when slow OR `cos(10°) <= N.z`).
     #[test]
-    fn calc_friction_sledding_high_velocity_glides_at_0_2() {
-        // velocity_mag2 = 9.0 >= 6.25; near-flat normal.
-        let normal = Vector3::new(0.0, 0.0, 1.0);
-        assert!(normal.z > SLEDDING_FLAT_NORMAL_Z);
-        let mut v = Vector3::new(3.0, 0.0, 0.0);
-        let mag2 = v.length_squared();
-        assert!(mag2 >= SLEDDING_HIGH_VELOCITY_SQ);
-        // Pass coefficient 0.5; sledding must override to 0.2.
-        calc_friction(&mut v, normal, mag2, 0.5, true, 1.0 / 60.0);
-        let expected_scale = (1.0_f32 - 0.2).powf(1.0 / 60.0);
-        assert!(
-            (v.x - 3.0 * expected_scale).abs() < 1e-6,
-            "sledding high should scale by pow(0.8, q): got {}",
-            v.x
-        );
-    }
-
-    /// SLEDDING high-speed override must NOT fire on a real incline:
-    /// even at high speed, if `normal.z <= 0.99999536` the high-speed
-    /// branch is gated off and the passed-in coefficient applies. (The
-    /// low-speed branch has no normal gate in retail, so it could still
-    /// fire — but at high velocity it doesn't.)
-    #[test]
-    fn calc_friction_sledding_high_velocity_inactive_on_steep_slope() {
-        // A real ramp normal (well below the near-flat cutoff).
+    fn calc_friction_sledding_high_velocity_glides_at_0_2_on_steep_slope() {
+        // A real ramp normal (~23.6° slope — well below the cos(10°) cutoff).
         let normal = Vector3::new(0.4, 0.0, 0.916_515_1).normalize();
-        assert!(normal.z <= SLEDDING_FLAT_NORMAL_Z);
-        // Velocity in the slope plane, high speed (mag2 >= 6.25), moving
-        // up-slope-ish but with into-surface dot < 0.25.
-        let mut v = Vector3::new(0.0, 3.0, 0.0); // along +Y, in-plane (n has no Y)
+        assert!(normal.z < SLEDDING_STEEP_NORMAL_Z);
+        // Velocity in the slope plane, high speed (mag2 >= 6.25):
+        // along +Y, in-plane (n has no Y), into-surface dot < 0.25.
+        let mut v = Vector3::new(0.0, 3.0, 0.0);
         let mag2 = v.length_squared();
         assert!(mag2 >= SLEDDING_HIGH_VELOCITY_SQ);
         let angle = v.dot(&normal);
         assert!(angle < FRICTION_AWAY_FROM_SURFACE_CUTOFF);
+        // Pass coefficient 0.5; the steep-slope glide must keep 0.2.
         calc_friction(&mut v, normal, mag2, 0.5, true, 1.0 / 60.0);
-        // High-speed glide gated off → coefficient 0.5 applies (NOT 0.2).
+        let expected_scale = (1.0_f32 - 0.2).powf(1.0 / 60.0);
+        assert!(
+            (v.y - 3.0 * expected_scale).abs() < 1e-6,
+            "sledding fast on a steep slope should scale by pow(0.8, q): got {}",
+            v.y
+        );
+    }
+
+    /// SLEDDING high-speed override must NOT fire on flat/shallow ground:
+    /// at high speed with `normal.z >= cos(10°)` the glide is gated off
+    /// and the passed-in coefficient applies (acclient.c:316127
+    /// `cos(0.1745329251994329) <= N.z` → object friction). This is the
+    /// arm ACE inverted (`PhysicsObj.cs:2135` glides on dead-flat ground);
+    /// retail glides on the STEEP slope instead.
+    #[test]
+    fn calc_friction_sledding_high_velocity_inactive_on_flat_ground() {
+        let normal = Vector3::new(0.0, 0.0, 1.0);
+        assert!(normal.z >= SLEDDING_STEEP_NORMAL_Z);
+        let mut v = Vector3::new(3.0, 0.0, 0.0);
+        let mag2 = v.length_squared();
+        assert!(mag2 >= SLEDDING_HIGH_VELOCITY_SQ);
+        calc_friction(&mut v, normal, mag2, 0.5, true, 1.0 / 60.0);
+        // Flat ground: glide gated off → coefficient 0.5 applies (NOT 0.2).
         let expected_scale = (1.0_f32 - 0.5).powf(1.0 / 60.0);
         assert!(
-            (v.y - 3.0 * expected_scale).abs() < 1e-5,
-            "steep slope: should damp at 0.5 not 0.2, got {}",
-            v.y
+            (v.x - 3.0 * expected_scale).abs() < 1e-5,
+            "flat ground: should damp at 0.5 not 0.2, got {}",
+            v.x
+        );
+        // A shallow (~5°) slope sits on the object-friction side too:
+        // cos(5°) ≈ 0.9962 >= cos(10°).
+        let shallow = Vector3::new(0.087_155_74, 0.0, 0.996_194_7).normalize();
+        assert!(shallow.z >= SLEDDING_STEEP_NORMAL_Z);
+        let mut v2 = Vector3::new(0.0, 3.0, 0.0);
+        let mag2_2 = v2.length_squared();
+        calc_friction(&mut v2, shallow, mag2_2, 0.5, true, 1.0 / 60.0);
+        assert!(
+            (v2.y - 3.0 * expected_scale).abs() < 1e-5,
+            "shallow slope: should damp at 0.5 not 0.2, got {}",
+            v2.y
         );
     }
 

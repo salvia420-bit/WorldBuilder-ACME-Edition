@@ -4,7 +4,8 @@ use crate::stats::{AttributeType, SkillType, VitalType};
 use crate::vendor::VendorState;
 use holtburger_common::Guid;
 use holtburger_common::properties::{
-    EquipMask, ItemType, PropertyInt, Usable, WorldObjectExt, WorldObjectPropertyAccessors,
+    EquipMask, ItemType, PropertyFloat, PropertyInt, Usable, WorldObjectExt,
+    WorldObjectPropertyAccessors,
 };
 use holtburger_protocol::messages::combat::CombatMode;
 use holtburger_protocol::messages::movement::InterpretedMotionCommand;
@@ -91,8 +92,59 @@ pub fn exhausted_run_skill(run_skill: f32, stamina_current: Option<u32>) -> f32 
     }
 }
 
+/// Which `GetRunRate` special-case arm to use. Retail
+/// `MovementSystem::GetRunRate` (acclient.c:713790) fires the
+/// `18.0/4.0 = 4.5` arm at `runskill == 800` EXACTLY — a discontinuous
+/// spike; skill 801+ falls back to the formula (≈3.20 at 801, →3.75 as
+/// s→∞). ACE inherited `>= 800` (ACE `MovementSystem.cs:24`), plateauing
+/// everything above 800 at 4.5. Default `false` keeps the ACE arm — the
+/// live server re-derives movement ACE-side, so matching ACE avoids a
+/// client/server speed skew above 800; flip only for retail-trace
+/// parity work (dossier row 36).
+pub const RETAIL_RUNRATE_EDGE: bool = false;
+
+/// Retail PK arm of the jump stamina cost — the `bPK` input to
+/// `MovementSystem::JumpStaminaCost` (acclient.c:713830), computed by
+/// `CACQualities::JumpStaminaCost` (acclient.c:442887-442905):
+/// `PlayerKillerStatus` (int 0x86, pre-init 8 when the inquiry fails)
+/// must be 4 (PK) or 64 (PKLite), AND `LastPkAttackTimestamp`
+/// (float 0x91) must be present with `timestamp + 20.0 > now`.
+/// `now` must be in the SAME clock domain the server writes the
+/// timestamp in — for ACE that is Unix seconds
+/// (`WorldState::current_server_time`).
+pub fn pk_jump_stamina_arm(
+    pk_status: Option<i32>,
+    time_last_pk_attack: Option<f64>,
+    now_seconds: f64,
+) -> bool {
+    let status = pk_status.unwrap_or(8);
+    if status != 4 && status != 64 {
+        return false;
+    }
+    match time_last_pk_attack {
+        Some(timestamp) => timestamp + 20.0 > now_seconds,
+        None => false,
+    }
+}
+
 pub fn run_rate_from_skill_and_burden(run_skill: f32, burden: f32) -> f32 {
-    if run_skill >= 800.0 {
+    run_rate_from_skill_and_burden_with_edge(run_skill, burden, RETAIL_RUNRATE_EDGE)
+}
+
+/// [`run_rate_from_skill_and_burden`] with the special-case arm made
+/// explicit (`retail_edge` — see [`RETAIL_RUNRATE_EDGE`]): `true` =
+/// retail `== 800` spike, `false` = ACE `>= 800` plateau.
+pub fn run_rate_from_skill_and_burden_with_edge(
+    run_skill: f32,
+    burden: f32,
+    retail_edge: bool,
+) -> f32 {
+    let spike = if retail_edge {
+        run_skill == 800.0
+    } else {
+        run_skill >= 800.0
+    };
+    if spike {
         18.0 / 4.0
     } else {
         let load_mod = burden_load_modifier(burden);
@@ -222,6 +274,10 @@ pub trait WorldContext {
     fn get_player_int_property(&self, _prop: PropertyInt) -> Option<i32> {
         None
     }
+
+    fn get_player_float_property(&self, _prop: PropertyFloat) -> Option<f64> {
+        None
+    }
 }
 
 impl WorldContext for WorldState {
@@ -266,6 +322,10 @@ impl WorldContext for WorldState {
 
     fn get_player_int_property(&self, prop: PropertyInt) -> Option<i32> {
         self.player_int_property(prop)
+    }
+
+    fn get_player_float_property(&self, prop: PropertyFloat) -> Option<f64> {
+        self.player_float_property(prop)
     }
 }
 
@@ -423,6 +483,22 @@ pub trait WorldContextExt: WorldContext {
             strength,
             num_augs,
         }
+    }
+
+    /// The `bPK` input for `PlayerState::jump_stamina_cost` — retail
+    /// `CACQualities::JumpStaminaCost`'s predicate over the local
+    /// player's wire properties (acclient.c:442887-442905; see
+    /// [`pk_jump_stamina_arm`]). `now_seconds` must be server-clock
+    /// seconds (`WorldState::current_server_time` — ACE writes
+    /// `LastPkAttackTimestamp` in Unix seconds). Both properties ride
+    /// the ordinary property-update lane onto the player entity;
+    /// absence resolves non-PK exactly like retail's failed inquiry.
+    fn player_pk_jump_stamina_arm(&self, now_seconds: f64) -> bool {
+        pk_jump_stamina_arm(
+            self.get_player_int_property(PropertyInt::PlayerKillerStatus),
+            self.get_player_float_property(PropertyFloat::LastPkAttackTimestamp),
+            now_seconds,
+        )
     }
 
     fn combat_target_status(&self, guid: Guid) -> CombatTargetStatus {
@@ -906,7 +982,8 @@ mod tests {
 
     use super::{
         CombatTargetStatus, RunSkillSource, WorldContext, WorldContextExt, burden_load_modifier,
-        exhausted_run_skill, run_rate_from_skill_and_burden,
+        exhausted_run_skill, pk_jump_stamina_arm, run_rate_from_skill_and_burden,
+        run_rate_from_skill_and_burden_with_edge,
     };
     use crate::entity::{Entity, EntityMotionSnapshot};
     use crate::stats::{AttributeType, SkillType, VitalType};
@@ -914,7 +991,7 @@ mod tests {
     use holtburger_common::position::WorldPosition;
     use holtburger_common::properties::EquipMask;
     use holtburger_common::properties::{
-        ItemType, PropertyBool, PropertyInstanceId, PropertyInt, Usable,
+        ItemType, PropertyBool, PropertyFloat, PropertyInstanceId, PropertyInt, Usable,
     };
     use holtburger_protocol::messages::combat::CombatMode;
     use holtburger_protocol::messages::movement::{InterpretedMotionCommand, MotionStance};
@@ -930,6 +1007,7 @@ mod tests {
         player_skills: HashMap<SkillType, u32>,
         player_vitals: HashMap<VitalType, u32>,
         player_int_properties: Vec<(PropertyInt, i32)>,
+        player_float_properties: Vec<(PropertyFloat, f64)>,
     }
 
     impl WorldContext for TestWorld {
@@ -971,6 +1049,12 @@ mod tests {
 
         fn get_player_int_property(&self, prop: PropertyInt) -> Option<i32> {
             self.player_int_properties
+                .iter()
+                .find_map(|(candidate, value)| (*candidate == prop).then_some(*value))
+        }
+
+        fn get_player_float_property(&self, prop: PropertyFloat) -> Option<f64> {
+            self.player_float_properties
                 .iter()
                 .find_map(|(candidate, value)| (*candidate == prop).then_some(*value))
         }
@@ -1034,6 +1118,103 @@ mod tests {
         // survives → 4/4 = 1.0 (the slowest non-zero rate).
         let r_heavy = run_rate_from_skill_and_burden(300.0, 2.5);
         assert!((r_heavy - 1.0).abs() < 1e-6, "r_heavy = {r_heavy}");
+    }
+
+    /// Dossier row 36 — the 800-skill special case differs per source:
+    /// retail `MovementSystem::GetRunRate` (acclient.c:713790) spikes at
+    /// `== 800` EXACTLY and 801+ returns to the formula; ACE
+    /// (`MovementSystem.cs:24`) plateaus `>= 800`. Both arms locked at
+    /// 799/800/801; the default wrapper follows [`RETAIL_RUNRATE_EDGE`]
+    /// (false = ACE).
+    #[test]
+    fn run_rate_800_edge_ace_plateau_vs_retail_spike() {
+        let formula = |skill: f32| (1.0 * (skill / (skill + 200.0) * 11.0) + 4.0) / 4.0;
+
+        // ACE arm (retail_edge = false): plateau from 800 up.
+        assert_eq!(
+            run_rate_from_skill_and_burden_with_edge(799.0, 0.0, false),
+            formula(799.0)
+        );
+        assert_eq!(
+            run_rate_from_skill_and_burden_with_edge(800.0, 0.0, false),
+            4.5
+        );
+        assert_eq!(
+            run_rate_from_skill_and_burden_with_edge(801.0, 0.0, false),
+            4.5
+        );
+
+        // Retail arm (retail_edge = true): discontinuous == 800 spike,
+        // 801 back on the formula (≈3.2005, nowhere near 4.5).
+        assert_eq!(
+            run_rate_from_skill_and_burden_with_edge(799.0, 0.0, true),
+            formula(799.0)
+        );
+        assert_eq!(
+            run_rate_from_skill_and_burden_with_edge(800.0, 0.0, true),
+            4.5
+        );
+        let retail_801 = run_rate_from_skill_and_burden_with_edge(801.0, 0.0, true);
+        assert_eq!(retail_801, formula(801.0));
+        assert!(retail_801 < 3.3, "801 must NOT plateau: {retail_801}");
+
+        // The default wrapper follows the shipped const (ACE arm).
+        assert_eq!(
+            run_rate_from_skill_and_burden(801.0, 0.0),
+            run_rate_from_skill_and_burden_with_edge(801.0, 0.0, super::RETAIL_RUNRATE_EDGE)
+        );
+    }
+
+    /// Dossier row 39 — the retail PK predicate for the jump stamina
+    /// cost (acclient.c:442887-442905): PlayerKillerStatus ∈ {4, 64}
+    /// AND `timeLastPKAttack + 20.0 > now`, with retail's failure
+    /// defaults (status inquiry fail → pre-init 8; timestamp inquiry
+    /// fail → non-PK).
+    #[test]
+    fn pk_jump_stamina_arm_matches_retail_predicate() {
+        // Status gate: only 4 (PK) and 64 (PKLite) qualify.
+        assert!(pk_jump_stamina_arm(Some(4), Some(100.0), 110.0));
+        assert!(pk_jump_stamina_arm(Some(64), Some(100.0), 110.0));
+        assert!(!pk_jump_stamina_arm(Some(8), Some(100.0), 110.0));
+        assert!(!pk_jump_stamina_arm(Some(2), Some(100.0), 110.0));
+        // Inquiry failures → retail defaults (status pre-init 8 /
+        // timestamp arm skipped).
+        assert!(!pk_jump_stamina_arm(None, Some(100.0), 110.0));
+        assert!(!pk_jump_stamina_arm(Some(4), None, 110.0));
+        // 20-second window is STRICT `>`: expires at exactly +20.
+        assert!(pk_jump_stamina_arm(Some(4), Some(100.0), 119.999));
+        assert!(!pk_jump_stamina_arm(Some(4), Some(100.0), 120.0));
+        assert!(!pk_jump_stamina_arm(Some(4), Some(100.0), 200.0));
+    }
+
+    /// [`WorldContextExt::player_pk_jump_stamina_arm`] reads
+    /// PlayerKillerStatus (int 134) + LastPkAttackTimestamp (float 145)
+    /// off the player context — the caller-side composition of the
+    /// row-39 predicate.
+    #[test]
+    fn player_pk_jump_stamina_arm_reads_wire_properties() {
+        let mut world = TestWorld {
+            player_guid: Some(Guid(1)),
+            ..TestWorld::default()
+        };
+        assert!(
+            !world.player_pk_jump_stamina_arm(100.0),
+            "no properties → non-PK"
+        );
+
+        world
+            .player_int_properties
+            .push((PropertyInt::PlayerKillerStatus, 4));
+        assert!(
+            !world.player_pk_jump_stamina_arm(100.0),
+            "PK status without a recent attack timestamp → non-PK"
+        );
+
+        world
+            .player_float_properties
+            .push((PropertyFloat::LastPkAttackTimestamp, 90.0));
+        assert!(world.player_pk_jump_stamina_arm(100.0));
+        assert!(!world.player_pk_jump_stamina_arm(115.0), "window expired");
     }
 
     /// Snapback probe (2026-06-06), updated for unified-pipeline STAGE 1

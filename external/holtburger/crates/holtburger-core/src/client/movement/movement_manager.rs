@@ -124,9 +124,35 @@ pub(crate) struct MovementManager {
     /// move the JS sticky pin (F3-4 stays untouched); this getter is the
     /// future owner's input.
     sticky_target: Option<Guid>,
+    /// Retail CWeenieObject vfptr[5] "player-controlled" (static object
+    /// property) — installed onto the lazily-created interpreter (see
+    /// `MotionInterp::player_controlled`). Set `true` for the local
+    /// player's registry entry only.
+    player_controlled: bool,
+    /// Test seam for the `_DoMotion` failure → `CancelMoveTo(err)`
+    /// routing (retail BeginTurnToHeading acclient.c:345508-345510 /
+    /// BeginMoveForward :345417-345418): models the retail
+    /// `CPhysicsObj::DoInterpretedMotion` inner-body error surface,
+    /// which our `motion_table_manager` enqueue cannot produce (the
+    /// only organic lattice error, contact-fail + action → 36, is
+    /// unreachable through the contact-gated MoveTo driver).
+    #[cfg(test)]
+    forced_do_motion_error: Option<u32>,
 }
 
 impl MovementManager {
+    /// Install the static player-controlled property (retail weenie
+    /// vfptr[5]; gates the `move_to_interpreted_state` echo skip,
+    /// acclient.c:344411). Idempotent — safe to call per-unpack at the
+    /// registry's `entry().or_default()` site.
+    #[allow(dead_code)] // staged: local-player registry entry (system.rs SelfServerControlledMotion lane)
+    pub(crate) fn set_player_controlled(&mut self, player_controlled: bool) {
+        self.player_controlled = player_controlled;
+        if let Some(interp) = self.motion_interp.as_mut() {
+            interp.player_controlled = player_controlled;
+        }
+    }
+
     /// Lazy `CMotionInterp::Create` + `enter_default_state` — retail
     /// ALWAYS default-states a fresh interpreter
     /// (acclient.c:339192-339199, :339221-339236; ACE
@@ -136,6 +162,7 @@ impl MovementManager {
     fn minterp(&mut self) -> &mut MotionInterp {
         if self.motion_interp.is_none() {
             let mut interp = MotionInterp::default();
+            interp.player_controlled = self.player_controlled;
             interp.enter_default_state();
             self.motion_table_manager.initialize_state(0);
             self.motion_interp = Some(interp);
@@ -299,13 +326,20 @@ impl MovementManager {
                 params.hold_key_to_apply,
                 None,
             );
-            if let Err(error) = interp.do_interpreted_motion(
+            let result = interp.do_interpreted_motion(
                 adjusted_motion,
                 &adjusted_params,
                 on_walkable_contact,
                 &mut self.motion_table_manager,
                 effects,
-            ) && first_error.is_none()
+            );
+            #[cfg(test)]
+            let result = match self.forced_do_motion_error.take() {
+                Some(error) => Err(error),
+                None => result,
+            };
+            if let Err(error) = result
+                && first_error.is_none()
             {
                 first_error = Some(error);
             }
@@ -1204,6 +1238,92 @@ mod tests {
             manager.motion_interp_ref().unwrap().pending_motions.is_empty(),
             "no re-seed on the second unpack"
         );
+    }
+
+    /// Row 6 — the static player-controlled property (retail weenie
+    /// vfptr[5], acclient.c:344411) reaches the lazily created
+    /// interpreter in BOTH orders: set-then-create and create-then-set.
+    #[test]
+    fn player_controlled_propagates_across_lazy_create() {
+        let mut manager = MovementManager::default();
+        manager.set_player_controlled(true);
+        manager.apply_unpacked_movement(&case0(0, None, STYLE_NONCOMBAT_LOW16), false, 0.0, 0.0);
+        assert!(manager.motion_interp_ref().unwrap().player_controlled);
+
+        let mut manager = MovementManager::default();
+        manager.apply_unpacked_movement(&case0(0, None, STYLE_NONCOMBAT_LOW16), false, 0.0, 0.0);
+        assert!(
+            !manager.motion_interp_ref().unwrap().player_controlled,
+            "registry default is a remote (non-player) object"
+        );
+        manager.set_player_controlled(true);
+        assert!(manager.motion_interp_ref().unwrap().player_controlled);
+    }
+
+    /// Row 22 — a `_DoMotion` failure inside the driven lattice cancels
+    /// the whole moveto WITH the error code (retail BeginTurnToHeading
+    /// `if (v14) CancelMoveTo(v14)`, acclient.c:345508-345510; same
+    /// routing for BeginMoveForward :345417-345418). End-to-end through
+    /// the facade: `use_time_moveto` → `apply_moveto_lattice` Err →
+    /// `cancel_moveto(err)`, with the error latched as the completion
+    /// and the drive edges suppressed.
+    #[test]
+    fn do_motion_failure_cancels_moveto_with_error() {
+        let mut manager = MovementManager::default();
+        // TurnToHeading 180° with the default pose at heading 90
+        // (identity quat = north) → the first driven frame's
+        // BeginTurnToHeading emits a TurnRight _DoMotion (diff 90°).
+        let turn = envelope(
+            MovementType::TurnToHeading,
+            0,
+            STYLE_NONCOMBAT_LOW16,
+            MovementTypeData::TurnToHeading(TurnToHeading {
+                params: TurnToParameters {
+                    movement_parameters: 0,
+                    speed: 1.0,
+                    desired_heading: 180.0,
+                },
+            }),
+        );
+        manager.apply_unpacked_movement(&turn, false, 0.0, 0.0);
+        assert!(manager.is_moveto_active());
+
+        manager.forced_do_motion_error = Some(69);
+        let view = MoveToView {
+            on_walkable_contact: true,
+            self_pos: holtburger_common::position::WorldPosition::default(),
+            self_radius: 0.4,
+            self_height: 1.8,
+            target_pos: None,
+            motions_pending: false,
+            is_interpolating: false,
+            now: web_time::Instant::now(),
+        };
+        let mut effects = MotionSideEffects::default();
+        let out = manager.use_time_moveto(&view, &mut effects);
+
+        assert_eq!(out.completion, Some(69), "error code mirrors out");
+        assert!(out.stop_completely, "CleanUp stop rides the cancel");
+        assert!(out.steer.is_none(), "no steering survives the cancel");
+        assert!(out.stick_to.is_none() && out.set_heading.is_none());
+        assert!(!manager.is_moveto_active(), "directive torn down");
+        assert_eq!(
+            manager.take_moveto_completion(),
+            Some(69),
+            "completion latch carries the _DoMotion error"
+        );
+        assert_eq!(
+            manager.move_to_ref().unwrap().last_cancel_error(),
+            Some(69)
+        );
+
+        // The failure consumed the injection; a re-issued directive
+        // drives cleanly afterwards.
+        manager.apply_unpacked_movement(&turn, false, 0.0, 0.0);
+        let mut effects = MotionSideEffects::default();
+        let out = manager.use_time_moveto(&view, &mut effects);
+        assert_eq!(out.completion, None);
+        assert!(manager.is_moveto_active(), "clean drive keeps the moveto");
     }
 
     /// A4/SA4F — [`MovementManager::animation_done`] pops BOTH spines

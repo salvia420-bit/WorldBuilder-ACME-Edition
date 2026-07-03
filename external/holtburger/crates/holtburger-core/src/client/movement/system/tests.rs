@@ -2579,6 +2579,116 @@ fn quantum_slices_drops_huge_quantum_hitch() {
     );
 }
 
+/// F1/F2 (physics parity 2026-07-03) — slice shapes of the DEFAULT
+/// (ACE-shaped, `USE_RETAIL_QUANTUM` off) machinery across the probe
+/// dts. Pins the byte-identical default while the retail loop exists
+/// beside it: sub-`MIN_QUANTUM` frames floor to empty (the 30 Hz gate),
+/// slices are 0.1, HugeQuantum drops.
+#[test]
+fn quantum_slice_shapes_default_mode() {
+    let s = quantum_slices(0.0001).expect("under HugeQuantum");
+    assert!(
+        s.is_empty(),
+        "0.0001 s: default floors at MIN_QUANTUM (empty, accumulated), got {s:?}"
+    );
+    let s = quantum_slices(0.016667).expect("under HugeQuantum");
+    assert!(
+        s.is_empty(),
+        "16.667 ms: default floors at MIN_QUANTUM (empty, accumulated), got {s:?}"
+    );
+    let s = quantum_slices(0.15).expect("under HugeQuantum");
+    assert_eq!(s.len(), 2, "0.15 s: [0.1, 0.05], got {s:?}");
+    assert!((s[0] - MAX_QUANTUM).abs() < 1e-6, "{s:?}");
+    assert!((s[1] - 0.05).abs() < 1e-6, "{s:?}");
+    let s = quantum_slices(0.45).expect("under HugeQuantum");
+    assert_eq!(s.len(), 5, "0.45 s: [0.1×4, ~0.05], got {s:?}");
+    assert!((s[4] - 0.05).abs() < 1e-4, "{s:?}");
+    assert!(quantum_slices(2.5).is_none(), "2.5 s: HugeQuantum drop");
+}
+
+/// F1/F2 — slice shapes of the RETAIL loop
+/// ([`retail_quantum_schedule`], acclient.c:323123-323161) across the
+/// same probe dts plus the carried-remainder arm. The key divergences
+/// from the default shape: a 60 fps frame integrates DIRECTLY as one
+/// quantum (no 1/30 floor on the direct path, :323127 `goto LABEL_21`),
+/// slices are 0.2 (`MAX_QUANTUM_97` :784235), a sub-0.0002 frame is
+/// CONSUMED (not accumulated, :323123), and only the post-slicing
+/// remainder banks (:323146-:323148).
+#[test]
+fn quantum_slice_shapes_retail_mode() {
+    // dt = 0.0001 <= 0.0002: consumed (skip) — empty slices, ZERO carry.
+    let (s, carry) = retail_quantum_schedule(0.0001);
+    assert!(s.is_empty(), "sub-epsilon frame integrates nothing, got {s:?}");
+    assert_eq!(carry, 0.0, "sub-epsilon frame is CONSUMED, not carried");
+    // Boundary: exactly 0.0002 still consumes (retail gate is strict `>`).
+    let (s, carry) = retail_quantum_schedule(0.0002);
+    assert!(s.is_empty() && carry == 0.0, "0.0002 boundary consumes");
+    // dt = 0.016667 (60 fps): DIRECT single quantum — no 30 Hz floor.
+    let (s, carry) = retail_quantum_schedule(0.016667);
+    assert_eq!(s, vec![0.016667_f32], "60 fps frame integrates directly");
+    assert_eq!(carry, 0.0);
+    // dt = 0.15 <= 0.2: still one direct quantum (0.1 < dt <= 0.2 is
+    // where the retail 0.2 slice size first diverges from the 0.1 shape).
+    let (s, carry) = retail_quantum_schedule(0.15);
+    assert_eq!(s, vec![0.15_f32], "sub-MAX frame is ONE quantum of dt");
+    assert_eq!(carry, 0.0);
+    // dt = 0.45: [0.2, 0.2] + ~0.05 remainder > 1/30 → integrated.
+    let (s, carry) = retail_quantum_schedule(0.45);
+    assert_eq!(s.len(), 3, "0.45 s: [0.2, 0.2, ~0.05], got {s:?}");
+    assert_eq!(s[0], RETAIL_MAX_QUANTUM);
+    assert_eq!(s[1], RETAIL_MAX_QUANTUM);
+    assert!((s[2] - 0.05).abs() < 1e-4, "{s:?}");
+    assert_eq!(carry, 0.0);
+    // dt = 0.42: [0.2, 0.2] + ~0.02 remainder <= 1/30 → CARRIED, not
+    // consumed (retail advances update_time only by the slices).
+    let (s, carry) = retail_quantum_schedule(0.42);
+    assert_eq!(s.len(), 2, "0.42 s: [0.2, 0.2] + carried tail, got {s:?}");
+    assert!(
+        (carry - 0.02).abs() < 1e-4 && carry > 0.0,
+        "sub-MIN remainder must be carried, got {carry}"
+    );
+    // dt = 2.5 > HugeQuantum: consumed whole — nothing integrated,
+    // nothing carried.
+    let (s, carry) = retail_quantum_schedule(2.5);
+    assert!(s.is_empty() && carry == 0.0, "2.5 s consumed whole");
+    // dt = 2.0 boundary: retail `v6 <= 2.0` still integrates. Exact
+    // slice count is f32-subtraction dependent; pin the invariants.
+    let (s, carry) = retail_quantum_schedule(2.0);
+    assert!(!s.is_empty(), "2.0 s boundary integrates");
+    assert!(
+        s.iter().all(|q| *q <= RETAIL_MAX_QUANTUM + 1e-6),
+        "every slice <= 0.2, got {s:?}"
+    );
+    let total: f32 = s.iter().sum::<f32>() + carry;
+    assert!((total - 2.0).abs() < 1e-4, "slices+carry ≈ dt, got {total}");
+    assert!(carry <= MIN_QUANTUM, "carry can only be the sub-1/30 tail");
+}
+
+/// F1/F2 — the handle-path accumulator under `USE_RETAIL_QUANTUM`:
+/// [`MovementSystem::advance_local_pose_for_manual_drive`] banks the
+/// retail carry in `world.player.physics_time_accumulator`. Exercised
+/// through the schedule function (the loop wiring is a straight
+/// `for`-over-slices; the DEFAULT path's accumulator behavior is pinned
+/// by the pre-existing gap-1 tests). Also pins that the retail carry
+/// can never bank more than `MIN_QUANTUM` (so the accumulator cannot
+/// grow unbounded while the flag is on).
+#[test]
+fn retail_quantum_carry_stays_sub_min_quantum() {
+    let mut bank = 0.0_f32;
+    // A pathological stream of 0.21 s frames: every frame slices one
+    // 0.2 quantum and banks ~0.01, which the NEXT frame absorbs into
+    // its dt (0.22 → [0.2] + 0.02 bank …). The bank must stay < 1/30.
+    for _ in 0..50 {
+        let (slices, carry) = retail_quantum_schedule(bank + 0.21);
+        assert!(!slices.is_empty(), "0.21 s frames always integrate");
+        bank = carry;
+        assert!(
+            bank <= MIN_QUANTUM,
+            "carry must stay <= MIN_QUANTUM, got {bank}"
+        );
+    }
+}
+
 /// Gaps 1 + 7 — a 2.0 s simulated hitch produces a BOUNDED fall, not a
 /// teleport. The subdivided + terminal-clamped loop must drop the
 /// player far LESS than the unclamped 1st-order single step the
@@ -2644,9 +2754,14 @@ fn terminal_velocity_clamps_vertical_speed_at_fifty() {
         vz < 0.0,
         "player should be falling (negative vz), got {vz:.3}"
     );
+    // Retail clamps at quantum ENTRY then adds a·q at quantum end
+    // (acclient.c:317740-317748 then :317778-317783), so the STORED
+    // inter-quantum value legitimately overshoots by up to |a|·q; the
+    // position-driving speed inside every quantum is <= MAX_VELOCITY.
     assert!(
-        vz.abs() <= MAX_VELOCITY + 1e-3,
-        "fall speed must be clamped to terminal velocity {MAX_VELOCITY} m/s, got {:.4}",
+        vz.abs() <= MAX_VELOCITY + 9.8 * MAX_QUANTUM + 1e-3,
+        "stored fall speed may exceed terminal only by the one-quantum \
+         gravity step (retail entry-clamp), got {:.4}",
         vz.abs()
     );
     // And it should have actually REACHED terminal (the planar run
@@ -2687,14 +2802,18 @@ fn second_order_airborne_matches_closed_form_half_a_t_squared() {
         .expect("runtime pose seeded above");
     let t = n as f32 * q; // 1.0 s
     let g = 9.8_f32;
-    // Closed form for a 2nd-order (exact for constant acceleration,
-    // independent of slice count) free fall from rest:
-    //   z(t) = z0 - 0.5·g·t²
-    let expected_z = start_z - 0.5 * g * t * t;
+    // Closed form for the RETAIL 2nd-order fall from EXACT rest: the
+    // first quantum's entry mag² is 0, which skips the position add
+    // entirely (acclient.c:317726-317735 — no lone half-step term)
+    // while `v += a·q` still runs; every later quantum adds
+    // `v·q + 0.5·a·q²`. Summing: drop(n) = 0.5·g·q²·(n²−1), i.e. the
+    // pure closed form 0.5·g·t² minus the skipped first half-step
+    // 0.5·g·q².
+    let expected_z = start_z - 0.5 * g * (t * t - q * q);
     assert!(
         (after.coords.z - expected_z).abs() < 1e-2,
-        "2nd-order fall over {t:.2}s should land at z = z0 - 0.5·g·t² = {expected_z:.4}, \
-         got {:.4} (Δ={:.5})",
+        "retail 2nd-order fall from rest over {t:.2}s should land at \
+         z = z0 - 0.5·g·(t²−q²) = {expected_z:.4}, got {:.4} (Δ={:.5})",
         after.coords.z,
         (after.coords.z - expected_z).abs()
     );
@@ -2707,12 +2826,12 @@ fn second_order_airborne_matches_closed_form_half_a_t_squared() {
     );
 }
 
-/// Gap 7 regression guard — the 2nd-order position term is what
-/// distinguishes the new integrator from the old 1st-order symplectic
-/// Euler. A single 0.1 s slice from rest must drop by the 2nd-order
-/// amount `0.5·g·q²` (≈ 0.049 m), NOT the old symplectic-Euler amount
-/// `(g·q)·q` = `g·q²` (≈ 0.098 m, since the old code updated velocity
-/// first then used the NEW velocity for position).
+/// Gap 7 regression guard, retail-ordered (acclient.c:317726-317783) —
+/// from EXACT rest the first quantum's entry mag² is 0, which skips the
+/// position add entirely (not even the lone half-step) while `v += a·q`
+/// still runs; the SECOND quantum then adds `v·q + 0.5·a·q²` from the
+/// OLD velocity = `1.5·g·q²`. A symplectic-Euler integrator using the
+/// NEW velocity would drop `2·g·q²` on that quantum instead.
 #[test]
 fn second_order_single_slice_uses_half_step_not_full_step() {
     let mut world = WorldState::synthetic();
@@ -2720,19 +2839,168 @@ fn second_order_single_slice_uses_half_step_not_full_step() {
     let (movement, _start_pose) = seed_airborne_player(&mut world, Guid(0x5000_0AD0), start_z);
 
     let q = 0.1_f32;
+    let g = 9.8_f32;
     movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(q));
 
     let after = world
         .local_player_runtime_pose()
         .expect("runtime pose seeded above");
-    let g = 9.8_f32;
-    let drop = start_z - after.coords.z;
-    let second_order = 0.5 * g * q * q; // ~0.049 m
-    let first_order = g * q * q; // ~0.098 m (old behaviour)
+    let drop_1 = start_z - after.coords.z;
     assert!(
-        (drop - second_order).abs() < 1e-4,
-        "single-slice drop should be the 2nd-order 0.5·g·q² = {second_order:.5} m, \
-         got {drop:.5} m (1st-order symplectic Euler would be {first_order:.5} m)"
+        drop_1.abs() < 1e-6,
+        "first from-rest quantum must add NO position (retail mag²≤0 skip, \
+         acclient.c:317726), got drop {drop_1:.5} m"
+    );
+    assert!(
+        (world.player.vertical_velocity - (-g * q)).abs() < 1e-5,
+        "gravity still rebuilds v on the skipped quantum (v += a·q is \
+         unconditional, acclient.c:317778), got {:.5}",
+        world.player.vertical_velocity
+    );
+
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(q));
+    let after_2 = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    let drop_2 = start_z - after_2.coords.z;
+    let second_order = 1.5 * g * q * q; // v_old·q + 0.5·g·q² = g·q² + 0.5·g·q²
+    let new_velocity_euler = 2.0 * g * q * q; // (v_old + g·q)·q + … (wrong order)
+    assert!(
+        (drop_2 - second_order).abs() < 1e-4,
+        "second quantum should drop the 2nd-order OLD-velocity amount \
+         1.5·g·q² = {second_order:.5} m, got {drop_2:.5} m (NEW-velocity \
+         symplectic Euler would be {new_velocity_euler:.5} m)"
+    );
+}
+
+/// F4 (physics parity 2026-07-03) — the retail stop check zeroes the
+/// FULL 3D velocity when the quantum-entry `mag² − 0.25² < 0.0002`,
+/// after the friction slot and BEFORE the position add
+/// (acclient.c:317750-317756). At a vertical-jump apex the rising vz
+/// passes under 0.2504 m/s: that quantum adds only the half-step
+/// `0.5·a·q²` (v was zeroed pre-add) and gravity rebuilds v from
+/// exactly zero (`v += a·q`).
+#[test]
+fn apex_stop_check_zeroes_full_velocity_before_position_add() {
+    let q = 0.1_f32;
+    let g = 9.8_f32;
+
+    // Rising at 0.2 m/s (mag² = 0.04 < 0.0625 + 0.0002): stop fires.
+    let mut world = WorldState::synthetic();
+    let (movement, start) = seed_airborne_player(&mut world, Guid(0x5000_0AE0), 500.0);
+    world.player.vertical_velocity = 0.2;
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(q));
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    let dz = after.coords.z - start.coords.z;
+    let stopped_dz = -0.5 * g * q * q; // −0.049: half-step only
+    let unstopped_dz = 0.2 * q - 0.5 * g * q * q; // −0.029 if the stop missed
+    // Tolerance: pose Z sits near 500 where the f32 ULP is ~3e-5.
+    assert!(
+        (dz - stopped_dz).abs() < 1e-4,
+        "apex quantum must add only 0.5·a·q² = {stopped_dz:.4} (v zeroed \
+         pre-add), got {dz:.4} (no-stop would be {unstopped_dz:.4})"
+    );
+    assert!(
+        (world.player.vertical_velocity - (-g * q)).abs() < 1e-5,
+        "gravity rebuilds v from the zeroed apex: expected {:.4}, got {:.4}",
+        -g * q,
+        world.player.vertical_velocity
+    );
+
+    // Rising at 0.3 m/s (mag² = 0.09 ≥ 0.0625 + 0.0002): NO stop.
+    let mut world = WorldState::synthetic();
+    let (movement, start) = seed_airborne_player(&mut world, Guid(0x5000_0AE1), 500.0);
+    world.player.vertical_velocity = 0.3;
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(q));
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    let dz = after.coords.z - start.coords.z;
+    let expected = 0.3 * q - 0.5 * g * q * q;
+    assert!(
+        (dz - expected).abs() < 1e-4,
+        "above the stop threshold the arc integrates normally: expected \
+         {expected:.4}, got {dz:.4}"
+    );
+    assert!(
+        (world.player.vertical_velocity - (0.3 - g * q)).abs() < 1e-5,
+        "v += a·q from the surviving velocity, got {:.4}",
+        world.player.vertical_velocity
+    );
+
+    // A RUNNING jump near its apex: the planar component keeps mag²
+    // high, so the stop must NOT fire (the planar store survives).
+    let mut world = WorldState::synthetic();
+    let (movement, _start) = seed_airborne_player(&mut world, Guid(0x5000_0AE2), 500.0);
+    world.player.current_planar_velocity = Vector3::new(0.0, 4.0, 0.0);
+    world.player.vertical_velocity = 0.2;
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(q));
+    assert_eq!(
+        world.player.current_planar_velocity.y, 4.0,
+        "a running jump's planar velocity keeps mag² above the stop \
+         threshold — nothing may zero it mid-air"
+    );
+}
+
+/// F6 (physics parity 2026-07-03) — retail grounded-frame friction on
+/// the RESIDUAL physics velocity: on the landing transition
+/// (`was_airborne && outcome.grounded`, retail's first ON_WALKABLE
+/// quantum, acclient.c:316108) the stored velocity decays by
+/// `pow(1 − 0.95, q)` with `sledding = false` before `land()`.
+/// Normal grounded walking is untouched — the direct-set overwrites
+/// the planar store from interpreted state on the next slice.
+#[test]
+fn landing_applies_residual_friction_before_land() {
+    let guid = Guid(0x5000_0AF0);
+    let mut world = WorldState::synthetic();
+    world.player.guid = guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    let terrain_z = 10.0_f32;
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(100.0, 100.0, terrain_z + 0.05),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(&mut world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.populate_terrain_heights(0xA9B4_0000, [terrain_z; 81]);
+
+    // Descending airborne just above the floor with a planar carry —
+    // the post-jump landing shape.
+    world.player.begin_fall();
+    world.player.vertical_velocity = -1.0;
+    world.player.current_planar_velocity = Vector3::new(0.0, 4.0, 0.0);
+
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+    let q = 0.1_f32;
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(q));
+
+    assert!(
+        !world.player.is_airborne,
+        "a 0.05 m descent at −1 m/s must land within one 0.1 s slice"
+    );
+    // Landing tail: entry v = (0, 4, −1.98) (post-arm store: vz picked
+    // up a·q). Flat normal: angle = vz < 0.25 → no early return; the
+    // projection strips the into-ground component, then the along-face
+    // speed scales by pow(0.05, q). land() re-zeroes vz.
+    let friction = if USE_RETAIL_GROUND_FRICTION { 0.95_f32 } else { 0.5_f32 };
+    let expected_y = 4.0 * (1.0 - friction).powf(q);
+    assert!(
+        (world.player.current_planar_velocity.y - expected_y).abs() < 1e-4,
+        "landing residual should decay by pow({:.2}, q): expected \
+         {expected_y:.4}, got {:.4}",
+        1.0 - friction,
+        world.player.current_planar_velocity.y
+    );
+    assert_eq!(
+        world.player.vertical_velocity, 0.0,
+        "land() zeroes vz after the residual friction"
     );
 }
 
@@ -5666,4 +5934,421 @@ fn cast_gesture_window_cleared_by_input_edge_not_resend() {
     assert!(movement.cast_gesture_active());
     movement.note_local_cast_gesture(false);
     assert!(!movement.cast_gesture_active(), "gesture end clears");
+}
+
+// ---------------------------------------------------------------------------
+// Golden-trace fixed-dt harness (physics parity 2026-07-03; dossier §4
+// determinism plan). Scripted fixed-dt timelines drive the SAME seam the
+// tests above use (`advance_local_pose_for_manual_drive`) and every frame's
+// pose/velocity is pinned via `f32::to_bits` against checked-in vectors —
+// bit-determinism across holtburger runs, and a freeze on the retail
+// integrator order (entry clamp → stop check → position → velocity,
+// acclient.c:317701-317786) so any reorder shows up as a bit diff.
+//
+// Goldens are toolchain-hostage only through libm `powf` (the landing
+// friction); IEEE add/mul/div/sqrt are single-rounded everywhere else.
+// REGENERATE after an intentional physics change with:
+//   cargo test -p holtburger-core --lib golden::regen -- --ignored --nocapture
+// then paste the printed consts over the ones below.
+// ---------------------------------------------------------------------------
+mod golden {
+    use super::*;
+
+    /// 60 fps frame dt. Under the DEFAULT quantum shape the handle path
+    /// accumulates two of these to one ~1/30 s slice (frames alternate
+    /// integrate/skip); the goldens pin that cadence too.
+    const FIXED_DT: f32 = 0.016667;
+
+    /// One recorded frame: pose x/y/z, planar vx/vy, vz — as bits.
+    type Frame = [u32; 6];
+
+    fn snapshot(world: &WorldState) -> Frame {
+        let pose = world.local_player_runtime_pose().expect("pose seeded");
+        [
+            pose.coords.x.to_bits(),
+            pose.coords.y.to_bits(),
+            pose.coords.z.to_bits(),
+            world.player.current_planar_velocity.x.to_bits(),
+            world.player.current_planar_velocity.y.to_bits(),
+            world.player.vertical_velocity.to_bits(),
+        ]
+    }
+
+    /// Grounded player on a flat outdoor terrain plane at z = 10.
+    fn seed_flat_world(guid: Guid, state: MotionState) -> (WorldState, MovementSystem) {
+        let mut world = WorldState::synthetic();
+        world.player.guid = guid;
+        let _ = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+        let start_pose = WorldPosition {
+            landblock_id: Guid(0xA9B40001),
+            coords: Vector3::new(100.0, 100.0, 10.0),
+            rotation: Quaternion::identity(),
+        };
+        seed_local_player(&mut world, guid, start_pose);
+        let _ = world.set_player_position(start_pose);
+        world.populate_terrain_heights(0xA9B4_0000, [10.0_f32; 81]);
+        let mut movement = MovementSystem::new();
+        movement.active_drive = Some(ActiveDriveState::manual(state, None));
+        (world, movement)
+    }
+
+    fn drive(world: &mut WorldState, movement: &MovementSystem, frames: usize) -> Vec<Frame> {
+        let mut out = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            movement.advance_local_pose_for_manual_drive(
+                world,
+                Duration::from_secs_f32(FIXED_DT),
+            );
+            out.push(snapshot(world));
+        }
+        out
+    }
+
+    /// Scenario: flat direct-set walk — run-forward on flat ground,
+    /// 24 frames. Pins the grounded direct-set target + snap and the
+    /// 30 Hz accumulate cadence.
+    fn trace_flat_walk() -> Vec<Frame> {
+        let (mut world, movement) =
+            seed_flat_world(Guid(0x5000_0F01), MotionState::builder().run().forward().build());
+        drive(&mut world, &movement, 24)
+    }
+
+    /// Scenario: full standing vertical jump arc — begin_jump(3.0) from
+    /// the flat floor, 48 frames (~0.8 s sim): ascent, the retail apex
+    /// stop-check quantum (entry |v| < 0.2504 → v zeroed, half-step-only
+    /// offset, acclient.c:317750-317756), descent, terrain landing (+ the
+    /// landing residual tail, a no-op at planar 0), grounded tail.
+    fn trace_jump_arc() -> Vec<Frame> {
+        let (mut world, movement) =
+            seed_flat_world(Guid(0x5000_0F02), MotionState::builder().run().build());
+        world.player.begin_jump(3.0);
+        drive(&mut world, &movement, 48)
+    }
+
+    /// Scenario: knockback-shaped landing — descending at −1 m/s with a
+    /// 4 m/s planar carry, no input held. Pins the landing residual
+    /// friction (`pow(0.05, q)` at the retail 0.95 coefficient) + the
+    /// next grounded slice's direct-set-to-zero snap.
+    fn trace_knockback_landing() -> Vec<Frame> {
+        let (mut world, movement) =
+            seed_flat_world(Guid(0x5000_0F03), MotionState::builder().run().build());
+        world.player.begin_fall();
+        world.player.current_planar_velocity = Vector3::new(0.0, 4.0, 0.0);
+        world.player.vertical_velocity = -1.0;
+        // Lift the pose so the fall takes a few slices to land
+        // (~0.23 s at −1 m/s under gravity → lands inside 16 frames).
+        let mut pose = world.local_player_runtime_pose().expect("pose");
+        pose.coords.z = 10.4;
+        let _ = world.set_player_position(pose);
+        drive(&mut world, &movement, 16)
+    }
+
+    /// Scenario: huge-frame drop — mid-fall, one dt = 2.5 s frame is
+    /// consumed WITHOUT integrating (quantum_slices → None, accumulator
+    /// reset; retail :323127/:323145), then normal frames resume.
+    fn trace_huge_frame() -> Vec<Frame> {
+        let (mut world, movement) =
+            seed_flat_world(Guid(0x5000_0F04), MotionState::builder().run().build());
+        world.player.begin_fall();
+        let mut pose = world.local_player_runtime_pose().expect("pose");
+        pose.coords.z = 60.0;
+        let _ = world.set_player_position(pose);
+        let mut out = drive(&mut world, &movement, 4);
+        movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_secs_f32(2.5));
+        out.push(snapshot(&world));
+        out.extend(drive(&mut world, &movement, 4));
+        out
+    }
+
+    /// Schedule-trace word stream: per scripted frame push
+    /// `slice_count`, each slice's bits, then the post-frame bank bits.
+    /// The dt script covers the dossier probe set (sub-epsilon, 60 fps,
+    /// sub-MAX, multi-slice, carry-producing, huge) with the bank
+    /// threaded exactly as the two production paths thread it.
+    const SCHEDULE_SCRIPT: [f32; 8] =
+        [0.0001, 0.016667, 0.016667, 0.15, 0.45, 0.42, 2.5, 0.016667];
+
+    /// DEFAULT (ACE-shaped) machinery: `quantum_slices` + the
+    /// accumulate-to-1/30 bank (`advance_local_pose_for_manual_drive`).
+    fn trace_schedule_default() -> Vec<u32> {
+        let mut out = Vec::new();
+        let mut bank = 0.0_f32;
+        for dt in SCHEDULE_SCRIPT {
+            let total = bank + dt;
+            match quantum_slices(total) {
+                None => {
+                    bank = 0.0;
+                    out.push(0);
+                }
+                Some(slices) => {
+                    let consumed: f32 = slices.iter().sum();
+                    bank = (total - consumed).max(0.0);
+                    out.push(slices.len() as u32);
+                    out.extend(slices.iter().map(|s| s.to_bits()));
+                }
+            }
+            out.push(bank.to_bits());
+        }
+        out
+    }
+
+    /// RETAIL machinery (`USE_RETAIL_QUANTUM` shape): the sub-epsilon
+    /// frame is CONSUMED (bank stays 0 — retail-quantum consume-skip),
+    /// 60 fps frames integrate DIRECTLY, slices are 0.2, the 0.42-frame
+    /// tail banks. Schedule-level because the const default is OFF; the
+    /// path wiring above it is a shared for-over-slices.
+    fn trace_schedule_retail() -> Vec<u32> {
+        let mut out = Vec::new();
+        let mut bank = 0.0_f32;
+        for dt in SCHEDULE_SCRIPT {
+            let (slices, carry) = retail_quantum_schedule(bank + dt);
+            bank = carry;
+            out.push(slices.len() as u32);
+            out.extend(slices.iter().map(|s| s.to_bits()));
+            out.push(bank.to_bits());
+        }
+        out
+    }
+
+    fn print_frames(name: &str, frames: &[Frame]) {
+        println!("    const {name}: [[u32; 6]; {}] = [", frames.len());
+        for f in frames {
+            println!(
+                "        [0x{:08X}, 0x{:08X}, 0x{:08X}, 0x{:08X}, 0x{:08X}, 0x{:08X}],",
+                f[0], f[1], f[2], f[3], f[4], f[5]
+            );
+        }
+        println!("    ];");
+    }
+
+    fn print_words(name: &str, words: &[u32]) {
+        println!("    const {name}: [u32; {}] = [", words.len());
+        for chunk in words.chunks(6) {
+            let row: Vec<String> = chunk.iter().map(|w| format!("0x{w:08X}")).collect();
+            println!("        {},", row.join(", "));
+        }
+        println!("    ];");
+    }
+
+    /// Regeneration one-liner (see module doc): prints every golden as
+    /// paste-ready Rust.
+    #[test]
+    #[ignore]
+    fn regen() {
+        print_frames("GOLDEN_FLAT_WALK", &trace_flat_walk());
+        print_frames("GOLDEN_JUMP_ARC", &trace_jump_arc());
+        print_frames("GOLDEN_KNOCKBACK_LANDING", &trace_knockback_landing());
+        print_frames("GOLDEN_HUGE_FRAME", &trace_huge_frame());
+        print_words("GOLDEN_SCHEDULE_DEFAULT", &trace_schedule_default());
+        print_words("GOLDEN_SCHEDULE_RETAIL", &trace_schedule_retail());
+    }
+
+    fn assert_frames(name: &str, actual: &[Frame], golden: &[[u32; 6]]) {
+        assert_eq!(
+            actual.len(),
+            golden.len(),
+            "{name}: frame count changed — regenerate the goldens (module doc)"
+        );
+        for (i, (a, g)) in actual.iter().zip(golden.iter()).enumerate() {
+            for (j, (ab, gb)) in a.iter().zip(g.iter()).enumerate() {
+                assert_eq!(
+                    ab, gb,
+                    "{name}: frame {i} field {j} drifted: golden {:?} (0x{gb:08X}) \
+                     vs got {:?} (0x{ab:08X}) — an intentional physics change \
+                     must regenerate the goldens (module doc)",
+                    f32::from_bits(*gb),
+                    f32::from_bits(*ab),
+                );
+            }
+        }
+    }
+
+    fn assert_words(name: &str, actual: &[u32], golden: &[u32]) {
+        assert_eq!(
+            actual, golden,
+            "{name}: schedule trace drifted — regenerate (module doc)"
+        );
+    }
+
+    // Checked-in golden vectors (regenerate per the module doc).
+    const GOLDEN_FLAT_WALK: [[u32; 6]; 24] = [
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C84CCD, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42C84CCD, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42C8999A, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42C8999A, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42C8E667, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42C8E667, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42C93334, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42C93334, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42C98001, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42C98001, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42C9CCCE, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42C9CCCE, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42CA199B, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42CA199B, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42CA6668, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42CA6668, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42CAB335, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42CAB335, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42CB0002, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42CB0002, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42CB4CCF, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42CB4CCF, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+        [0x42C80000, 0x42CB999C, 0x41200000, 0x345334D4, 0x40900000, 0x00000000],
+    ];
+    const GOLDEN_JUMP_ARC: [[u32; 6]; 48] = [
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x40400000],
+        [0x42C80000, 0x42C80000, 0x4121834F, 0x00000000, 0x00000000, 0x402B17C9],
+        [0x42C80000, 0x42C80000, 0x4121834F, 0x00000000, 0x00000000, 0x402B17C9],
+        [0x42C80000, 0x42C80000, 0x4122DA03, 0x00000000, 0x00000000, 0x40162F92],
+        [0x42C80000, 0x42C80000, 0x4122DA03, 0x00000000, 0x00000000, 0x40162F92],
+        [0x42C80000, 0x42C80000, 0x4124041D, 0x00000000, 0x00000000, 0x4001475B],
+        [0x42C80000, 0x42C80000, 0x4124041D, 0x00000000, 0x00000000, 0x4001475B],
+        [0x42C80000, 0x42C80000, 0x4125019D, 0x00000000, 0x00000000, 0x3FD8BE49],
+        [0x42C80000, 0x42C80000, 0x4125019D, 0x00000000, 0x00000000, 0x3FD8BE49],
+        [0x42C80000, 0x42C80000, 0x4125D282, 0x00000000, 0x00000000, 0x3FAEEDDC],
+        [0x42C80000, 0x42C80000, 0x4125D282, 0x00000000, 0x00000000, 0x3FAEEDDC],
+        [0x42C80000, 0x42C80000, 0x412676CD, 0x00000000, 0x00000000, 0x3F851D6F],
+        [0x42C80000, 0x42C80000, 0x412676CD, 0x00000000, 0x00000000, 0x3F851D6F],
+        [0x42C80000, 0x42C80000, 0x4126EE7E, 0x00000000, 0x00000000, 0x3F369A04],
+        [0x42C80000, 0x42C80000, 0x4126EE7E, 0x00000000, 0x00000000, 0x3F369A04],
+        [0x42C80000, 0x42C80000, 0x41273995, 0x00000000, 0x00000000, 0x3EC5F253],
+        [0x42C80000, 0x42C80000, 0x41273995, 0x00000000, 0x00000000, 0x3EC5F253],
+        [0x42C80000, 0x42C80000, 0x41275811, 0x00000000, 0x00000000, 0x3D7584F0],
+        [0x42C80000, 0x42C80000, 0x41275811, 0x00000000, 0x00000000, 0x3D7584F0],
+        [0x42C80000, 0x42C80000, 0x412741C4, 0x00000000, 0x00000000, 0xBEA741B5],
+        [0x42C80000, 0x42C80000, 0x412741C4, 0x00000000, 0x00000000, 0xBEA741B5],
+        [0x42C80000, 0x42C80000, 0x4126FEDD, 0x00000000, 0x00000000, 0xBF2741B5],
+        [0x42C80000, 0x42C80000, 0x4126FEDD, 0x00000000, 0x00000000, 0xBF2741B5],
+        [0x42C80000, 0x42C80000, 0x41268F5B, 0x00000000, 0x00000000, 0xBF7AE290],
+        [0x42C80000, 0x42C80000, 0x41268F5B, 0x00000000, 0x00000000, 0xBF7AE290],
+        [0x42C80000, 0x42C80000, 0x4125F33F, 0x00000000, 0x00000000, 0xBFA741B5],
+        [0x42C80000, 0x42C80000, 0x4125F33F, 0x00000000, 0x00000000, 0xBFA741B5],
+        [0x42C80000, 0x42C80000, 0x41252A89, 0x00000000, 0x00000000, 0xBFD11222],
+        [0x42C80000, 0x42C80000, 0x41252A89, 0x00000000, 0x00000000, 0xBFD11222],
+        [0x42C80000, 0x42C80000, 0x41243538, 0x00000000, 0x00000000, 0xBFFAE28F],
+        [0x42C80000, 0x42C80000, 0x41243538, 0x00000000, 0x00000000, 0xBFFAE28F],
+        [0x42C80000, 0x42C80000, 0x4123134D, 0x00000000, 0x00000000, 0xC012597E],
+        [0x42C80000, 0x42C80000, 0x4123134D, 0x00000000, 0x00000000, 0xC012597E],
+        [0x42C80000, 0x42C80000, 0x4121C4C8, 0x00000000, 0x00000000, 0xC02741B5],
+        [0x42C80000, 0x42C80000, 0x4121C4C8, 0x00000000, 0x00000000, 0xC02741B5],
+        [0x42C80000, 0x42C80000, 0x412049A9, 0x00000000, 0x00000000, 0xC03C29EC],
+        [0x42C80000, 0x42C80000, 0x412049A9, 0x00000000, 0x00000000, 0xC03C29EC],
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C80000, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+    ];
+    const GOLDEN_KNOCKBACK_LANDING: [[u32; 6]; 16] = [
+        [0x42C80000, 0x42C80000, 0x41266666, 0x00000000, 0x40800000, 0xBF800000],
+        [0x42C80000, 0x42C84445, 0x4125C790, 0x00000000, 0x40800000, 0xBFA9D06D],
+        [0x42C80000, 0x42C84445, 0x4125C790, 0x00000000, 0x40800000, 0xBFA9D06D],
+        [0x42C80000, 0x42C8888A, 0x4124FC1F, 0x00000000, 0x40800000, 0xBFD3A0DA],
+        [0x42C80000, 0x42C8888A, 0x4124FC1F, 0x00000000, 0x40800000, 0xBFD3A0DA],
+        [0x42C80000, 0x42C8CCCF, 0x41240414, 0x00000000, 0x40800000, 0xBFFD7147],
+        [0x42C80000, 0x42C8CCCF, 0x41240414, 0x00000000, 0x40800000, 0xBFFD7147],
+        [0x42C80000, 0x42C91114, 0x4122DF6F, 0x00000000, 0x40800000, 0xC013A0DA],
+        [0x42C80000, 0x42C91114, 0x4122DF6F, 0x00000000, 0x40800000, 0xC013A0DA],
+        [0x42C80000, 0x42C95559, 0x41218E30, 0x00000000, 0x40800000, 0xC0288911],
+        [0x42C80000, 0x42C95559, 0x41218E30, 0x00000000, 0x40800000, 0xC0288911],
+        [0x42C80000, 0x42C9999E, 0x41201056, 0x00000000, 0x40800000, 0xC03D7148],
+        [0x42C80000, 0x42C9999E, 0x41201056, 0x00000000, 0x40800000, 0xC03D7148],
+        [0x42C80000, 0x42C9DDE3, 0x41200000, 0x00000000, 0x4067ABBE, 0x00000000],
+        [0x42C80000, 0x42C9DDE3, 0x41200000, 0x00000000, 0x4067ABBE, 0x00000000],
+        [0x42C80000, 0x42C9DDE3, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+    ];
+    const GOLDEN_HUGE_FRAME: [[u32; 6]; 9] = [
+        [0x42C80000, 0x42C80000, 0x42700000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C80000, 0x42700000, 0x00000000, 0x00000000, 0xBEA741B5],
+        [0x42C80000, 0x42C80000, 0x42700000, 0x00000000, 0x00000000, 0xBEA741B5],
+        [0x42C80000, 0x42C80000, 0x426FEF46, 0x00000000, 0x00000000, 0xBF2741B5],
+        [0x42C80000, 0x42C80000, 0x426FEF46, 0x00000000, 0x00000000, 0xBF2741B5],
+        [0x42C80000, 0x42C80000, 0x426FEF46, 0x00000000, 0x00000000, 0xBF2741B5],
+        [0x42C80000, 0x42C80000, 0x426FD366, 0x00000000, 0x00000000, 0xBF7AE290],
+        [0x42C80000, 0x42C80000, 0x426FD366, 0x00000000, 0x00000000, 0xBF7AE290],
+        [0x42C80000, 0x42C80000, 0x426FAC5F, 0x00000000, 0x00000000, 0xBFA741B5],
+    ];
+    const GOLDEN_SCHEDULE_DEFAULT: [u32; 28] = [
+        0x00000000, 0x38D1B717, 0x00000000, 0x3C895AF2, 0x00000001, 0x3D08F216,
+        0x00000000, 0x00000002, 0x3DCCCCCD, 0x3D4CCCCE, 0x00000000, 0x00000005,
+        0x3DCCCCCD, 0x3DCCCCCD, 0x3DCCCCCD, 0x3DCCCCCD, 0x3D4CCCCE, 0x00000000,
+        0x00000004, 0x3DCCCCCD, 0x3DCCCCCD, 0x3DCCCCCD, 0x3DCCCCCD, 0x3CA3D700,
+        0x00000000, 0x00000000, 0x00000000, 0x3C88893B,
+    ];
+    const GOLDEN_SCHEDULE_RETAIL: [u32; 25] = [
+        0x00000000, 0x00000000, 0x00000001, 0x3C88893B, 0x00000000, 0x00000001,
+        0x3C88893B, 0x00000000, 0x00000001, 0x3E19999A, 0x00000000, 0x00000003,
+        0x3E4CCCCD, 0x3E4CCCCD, 0x3D4CCCC8, 0x00000000, 0x00000002, 0x3E4CCCCD,
+        0x3E4CCCCD, 0x3CA3D700, 0x00000000, 0x00000000, 0x00000001, 0x3C88893B,
+        0x00000000,
+    ];
+
+    /// Frozen: grounded direct-set run on flat ground at 60 fps input
+    /// cadence (30 Hz integration cadence under the default quantum
+    /// shape — frames alternate integrate/hold).
+    #[test]
+    fn golden_flat_walk() {
+        assert_frames("flat_walk", &trace_flat_walk(), &GOLDEN_FLAT_WALK);
+    }
+
+    /// Frozen: the full vertical jump arc — ascent, the retail apex
+    /// stop-check quantum (F4: entry vz 0.06 → v zeroed → half-step-only
+    /// offset → gravity rebuild at −9.8/30), descent, exact-floor
+    /// landing, grounded tail.
+    #[test]
+    fn golden_jump_arc() {
+        assert_frames("jump_arc", &trace_jump_arc(), &GOLDEN_JUMP_ARC);
+    }
+
+    /// Frozen: knockback-shaped landing — airborne planar carry frozen
+    /// at 4.0, the landing slice's residual friction (F6:
+    /// 4.0 × pow(0.05, q_land) = 3.61986…), then the grounded
+    /// direct-set-to-zero snap.
+    #[test]
+    fn golden_knockback_landing() {
+        assert_frames(
+            "knockback_landing",
+            &trace_knockback_landing(),
+            &GOLDEN_KNOCKBACK_LANDING,
+        );
+    }
+
+    /// Frozen: a 2.5 s hitch mid-fall is consumed without integrating —
+    /// pose AND velocity bit-identical across the huge frame.
+    #[test]
+    fn golden_huge_frame() {
+        assert_frames("huge_frame", &trace_huge_frame(), &GOLDEN_HUGE_FRAME);
+    }
+
+    /// Frozen: the DEFAULT (ACE-shaped) slice schedule over the probe
+    /// script — sub-epsilon frames ACCUMULATE (bank 1e-4), 0.1 slices,
+    /// sub-1/30 floor, HugeQuantum consume.
+    #[test]
+    fn golden_schedule_default() {
+        assert_words(
+            "schedule_default",
+            &trace_schedule_default(),
+            &GOLDEN_SCHEDULE_DEFAULT,
+        );
+    }
+
+    /// Frozen: the RETAIL slice schedule (F1/F2) over the same script —
+    /// sub-epsilon frames CONSUME (bank 0), 60 fps frames integrate
+    /// directly, 0.2 slices, the 0.42-frame tail carries.
+    #[test]
+    fn golden_schedule_retail() {
+        assert_words(
+            "schedule_retail",
+            &trace_schedule_retail(),
+            &GOLDEN_SCHEDULE_RETAIL,
+        );
+    }
 }

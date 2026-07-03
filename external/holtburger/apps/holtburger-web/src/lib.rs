@@ -457,6 +457,33 @@ fn parse_sticky_retail_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "stickyRetail=off")
 }
 
+/// Physics-parity 2026-07-03 (dossier A F9/F14): parse `?retailLeash=on`
+/// (or `&retailLeash=on`). DEFAULT OFF — feel-affecting retail LOCAL
+/// position lattice: `ConstrainTo` re-arms on every accepted self echo,
+/// `InterpolateTo` gates on server-control + contact, teleports
+/// constrain + zero velocity, the leash persists across interp
+/// completion, and the interp heading snaps in one frame (dossier A
+/// F14/F12/F9b-c). 1070 eye-test batched before any default flip.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_retail_leash_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "retailLeash=on")
+}
+
+/// Physics-parity 2026-07-03 (dossier A F1/F2): parse `?retailQuantum=on`
+/// (or `&retailQuantum=on`). DEFAULT OFF — the ACE slice shapes stand
+/// per the DECISIONS-A1-O5 ruling (default flip needs that ruling
+/// reopened + a move_to turn-deadband regression at 0.2 s slices). When
+/// on, BOTH integrator shapes run retail's update_object schedule
+/// (acclient.c:323123-323161): dt <= 0.0002 consume-skip, dt <= 0.2 one
+/// direct quantum, else 0.2 slices with the remainder integrated iff
+/// > 1/30 else carried.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_retail_quantum_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "retailQuantum=on")
+}
+
 /// Map a `GameEvent` variant back to its `GameEventOpcode` discriminant
 /// (the wire opcode read at `game_event.rs:97`). Used by the
 /// `[seq-gap]` observability hook to bucket sequence trackers per
@@ -25214,6 +25241,29 @@ mod wire_state_packs_routing_tests {
         ));
     }
 
+    /// Physics-parity 2026-07-03 (dossier A F9/F14): `?retailLeash`
+    /// parse shape — DEFAULT-OFF; only an explicit `=on` enables.
+    #[test]
+    fn retail_leash_flag_defaults_off_unless_on() {
+        use super::parse_retail_leash_flag;
+        assert!(!parse_retail_leash_flag(""));
+        assert!(!parse_retail_leash_flag("?renderer=3d"));
+        assert!(!parse_retail_leash_flag("?retailLeash=off"));
+        assert!(parse_retail_leash_flag("?retailLeash=on"));
+        assert!(parse_retail_leash_flag("?unifiedTick=on&retailLeash=on"));
+    }
+
+    /// Physics-parity 2026-07-03 (dossier A F1/F2): `?retailQuantum`
+    /// parse shape — DEFAULT-OFF; only an explicit `=on` enables.
+    #[test]
+    fn retail_quantum_flag_defaults_off_unless_on() {
+        use super::parse_retail_quantum_flag;
+        assert!(!parse_retail_quantum_flag(""));
+        assert!(!parse_retail_quantum_flag("?retailQuantum=off"));
+        assert!(parse_retail_quantum_flag("?retailQuantum=on"));
+        assert!(parse_retail_quantum_flag("?retailLeash=on&retailQuantum=on"));
+    }
+
     /// A2-P2 (W3+ S8): export packing — two managed bodies flatten to
     /// parallel arrays 2/2/14, u32 guid round-trips exactly at
     /// 0xFFFFFFFF (the reason guids ride u32 arrays, not f32).
@@ -34566,6 +34616,11 @@ async fn recv_loop(
     // locomotion until an input edge / gesture end); see
     // `parse_cast_move_flag`.
     movement.set_cast_move(parse_cast_move_flag(&js_location_search()));
+    // Physics-parity 2026-07-03 (dossier A F1/F2): `?retailQuantum=on` —
+    // the retail update_object slice schedule in both integrator shapes
+    // (default OFF: ACE 0.1-slice shapes per DECISIONS-A1-O5); see
+    // `parse_retail_quantum_flag`.
+    movement.set_retail_quantum(parse_retail_quantum_flag(&js_location_search()));
     // A1-O1 (2026-06-11): the canonical tick spine's wasm facade — owns
     // the `ClientSimulationSystem` this recv loop otherwise lacks.
     // Constructed unconditionally (cheap empty Vec); driven ONLY when
@@ -34798,6 +34853,15 @@ async fn recv_loop(
     if sticky_retail_requested && !remote_sticky_on {
         console_log_str(
             "[A2-P3 R2] ?stickyRetail=on requires the effective ?remoteInterp=on composite (?unifiedTick=on + ?wireStatePacks=stage1) AND the USE_STICKY_MANAGER const — treating stickyRetail as OFF (F3-4 JS glue keeps remote sticky)",
+        );
+    }
+    // Physics-parity 2026-07-03 (dossier A F9/F14): `?retailLeash=on` —
+    // the retail LOCAL position lattice. Standalone flag (no composite),
+    // default OFF; see `parse_retail_leash_flag`.
+    let retail_leash_on: bool = parse_retail_leash_flag(&js_location_search());
+    if retail_leash_on {
+        console_log_str(
+            "[parity] retailLeash ON — retail local constraint/interp lattice (every-echo ConstrainTo, server-control-gated InterpolateTo, teleport zero-velocity, persistent leash, one-frame interp heading)",
         );
     }
     // wieldedSpawn (2026-06-11): live-rig ledger — guids that currently have
@@ -36513,6 +36577,9 @@ async fn recv_loop(
                                 // (stickyRetail × remoteInterp ×
                                 // USE_STICKY_MANAGER compose rule).
                                 new_world.set_remote_sticky_enabled(remote_sticky_on);
+                                // Physics-parity 2026-07-03: retail
+                                // LOCAL lattice (?retailLeash=on).
+                                new_world.set_local_retail_leash(retail_leash_on);
                                 world = Some(new_world);
                                 console_log_str(&format!(
                                     "[step 3.6] WorldState constructed lazily on PlayerCreate (guid=0x{:08X}) — eager-construct path missed",
@@ -40809,6 +40876,9 @@ async fn recv_loop(
                             // (stickyRetail × remoteInterp ×
                             // USE_STICKY_MANAGER compose rule).
                             new_world.set_remote_sticky_enabled(remote_sticky_on);
+                            // Physics-parity 2026-07-03: retail LOCAL
+                            // lattice (?retailLeash=on).
+                            new_world.set_local_retail_leash(retail_leash_on);
                             world = Some(new_world);
                             console_log_str(&format!(
                                 "[step4-follow-on] WorldState constructed eagerly on SelectCharacter (guid=0x{:08X})",

@@ -45,6 +45,13 @@ fn approximate_move_to_object_projection_target(
 #[derive(Debug, Default)]
 pub(super) struct ClientSimulationSystem {
     tracked_body_ids: Vec<SpatialBodyId>,
+    /// F1/F2 (physics parity 2026-07-03) — the retail-quantum-loop
+    /// remainder bank: the sub-`MIN_QUANTUM` post-slicing tail retail
+    /// carries by advancing `update_time` only by the consumed slices
+    /// (acclient.c:323146-323148). Written ONLY when the retail loop is
+    /// active (`MovementSystem::retail_quantum_enabled`); stays 0.0 —
+    /// and the default path stays byte-identical — otherwise.
+    physics_time_carry: f32,
 }
 
 impl ClientSimulationSystem {
@@ -95,19 +102,34 @@ impl ClientSimulationSystem {
         // floor-to-empty, which would stall the solver at the 30ms cadence —
         // accepted deviation, decision (c2) ibid.
         let dt_secs = dt.as_secs_f32();
-        if dt_secs > HUGE_QUANTUM {
-            return Vec::new();
-        }
-
-        let mut slices = Vec::new();
-        let mut remaining = dt_secs;
-        while remaining > MAX_QUANTUM {
-            slices.push(MAX_QUANTUM);
-            remaining -= MAX_QUANTUM;
-        }
-        if remaining > 0.0 {
-            slices.push(remaining);
-        }
+        let slices = if movement.retail_quantum_enabled() {
+            // USE_RETAIL_QUANTUM (system.rs) — the retail update_object
+            // loop (acclient.c:323123-323161): 0.0002 consume-skip, 0.2
+            // direct entry, 0.2 slices + sub-1/30 remainder banked into
+            // `physics_time_carry`. With zero slices (consumed/skipped)
+            // nothing steps this tick — including the remote position
+            // managers, which retail also only steps inside an integrated
+            // quantum. `carry > 0` implies at least one slice, so the
+            // bank can never starve the loop.
+            let total = self.physics_time_carry + dt_secs;
+            let (slices, carry) = MovementSystem::retail_quantum_schedule(total);
+            self.physics_time_carry = carry;
+            slices
+        } else {
+            if dt_secs > HUGE_QUANTUM {
+                return Vec::new();
+            }
+            let mut slices = Vec::new();
+            let mut remaining = dt_secs;
+            while remaining > MAX_QUANTUM {
+                slices.push(MAX_QUANTUM);
+                remaining -= MAX_QUANTUM;
+            }
+            if remaining > 0.0 {
+                slices.push(remaining);
+            }
+            slices
+        };
 
         let mut events = Vec::new();
         for slice in slices {

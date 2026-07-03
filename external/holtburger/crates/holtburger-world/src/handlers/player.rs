@@ -153,7 +153,13 @@ pub(crate) fn handle_message(
                         object_height,
                     });
                 }
-                return !data.is_autonomous && !accepted;
+                // A message dropped by the sequence gates is dropped at
+                // the MESSAGE level (retail SetObjectMovement never
+                // unpacks it, acclient.c:311168-311185) — consume it so
+                // the entity movement lane does not apply a stale echo.
+                // Accepted messages (autonomous included) fall through
+                // to the shared entity lane exactly as before.
+                return !accepted;
             }
             false
         }

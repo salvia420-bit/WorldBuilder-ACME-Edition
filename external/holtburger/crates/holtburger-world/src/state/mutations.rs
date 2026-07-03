@@ -118,6 +118,66 @@ impl WorldState {
         self.scene.set_remote_sticky_enabled(enabled);
     }
 
+    /// Physics-parity 2026-07-03 (dossier A F9/F14): flip the scene's
+    /// retail LOCAL position lattice (set once at world creation from
+    /// `?retailLeash=on`; default off = shipped behavior).
+    pub fn set_local_retail_leash(&mut self, enabled: bool) {
+        self.scene.set_local_retail_leash(enabled);
+    }
+
+    /// Physics-parity 2026-07-03 (dossier A F8): the LOCAL
+    /// force-position step with retail `UseTime` velocity routing — a
+    /// drain-applied velocity (blip-recovery tail velocity,
+    /// acclient.c:389365-389368) lands in the player's split velocity
+    /// store via `PlayerState::set_velocity` (dedupe + two-step 50
+    /// clamp), not just the spatial-body mirror.
+    pub fn step_local_force_position(
+        &mut self,
+        body_id: SpatialBodyId,
+        quantum: f32,
+        max_speed: f32,
+        on_contact: bool,
+    ) -> crate::spatial::InterpStep {
+        let (step, commands) = self
+            .scene
+            .step_force_position_interpolation(body_id, quantum, max_speed, on_contact);
+        if matches!(body_id, SpatialBodyId::LocalPlayer(_)) {
+            for command in commands {
+                if let crate::spatial::InterpolationCommand::SetVelocity(v) = command {
+                    self.player.set_velocity(v);
+                }
+            }
+        }
+        step
+    }
+
+    /// Physics-parity 2026-07-03 (dossier A F9b): the manual-drive
+    /// constraint chain slot — scales the local player's per-slice
+    /// movement delta through the armed leash (see
+    /// [`SpatialScene::constrain_local_manual_delta`]). Passthrough
+    /// with the leash off or no local body.
+    pub fn constrain_local_manual_delta(&mut self, delta: Vector3) -> Vector3 {
+        let Some(body_id) = self.authoritative_body_id_for_guid(self.player.guid) else {
+            return delta;
+        };
+        self.scene.constrain_local_manual_delta(body_id, delta)
+    }
+
+    /// Physics-parity 2026-07-03 (dossier B row 45): retail
+    /// `CPhysicsObj::IsFullyConstrained` for the LOCAL player body —
+    /// the `jump_is_allowed` error-71 input (acclient.c:343947-343951).
+    /// `false` with no body; a disarmed leash holds budget = max = 0,
+    /// so this only trips once `?retailLeash` arms the constraint and
+    /// the travel budget crosses `0.9 * max`.
+    pub fn local_player_fully_constrained(&self) -> bool {
+        let Some(body_id) = self.authoritative_body_id_for_guid(self.player.guid) else {
+            return false;
+        };
+        self.scene
+            .body(body_id)
+            .is_some_and(|body| body.position_manager.constraint.is_fully_constrained())
+    }
+
     pub(crate) fn retire_authoritative_body_for_guid(&mut self, guid: Guid) {
         let Some(body_id) = self.authoritative_body_id_for_guid(guid) else {
             return;
