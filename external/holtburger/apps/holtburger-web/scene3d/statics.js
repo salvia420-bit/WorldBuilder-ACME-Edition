@@ -94,7 +94,7 @@ import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb } from "./sta
 // ?statBatchCrossLb (default-OFF, 1070 eye-test pending) — cross-LB variant of the
 // per-LB ?staticBatch consolidation: same >=2-per-material groups, persistent
 // per-material BatchedMeshes spanning the ring instead of one per (LB, surface).
-import { statBatchCrossLbEnabled, consolidateStaticSingletonsCrossLb } from "./static_batch_x.js";
+import { statBatchChunkEnabled, consolidateStaticSingletonsCrossLb } from "./static_batch_x.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
@@ -2067,15 +2067,14 @@ export async function bakeStaticsForLandblock(
   let nodesToAdd = addedNodes;
   let staticBatchCount = 0;
   if (readStaticBatchFlag() && addedNodes.length > 1) {
-    // ?statBatchCrossLb (default OFF, 1070 eye-test pending) — feed the SAME
-    // >=2-per-material groups into persistent CROSS-LB per-material
-    // BatchedMeshes (static_batch_x.js) instead of per-(LB, surface) ones
-    // (~3k `static-batch-lb…` nodes at the 203-LB ring → bucket-scale).
+    // ?statBatchChunk (default OFF, moving-A/B pending) — feed the SAME
+    // >=2-per-material groups into REGION-CHUNKED (3x3-LB) per-material
+    // BatchedMeshes (static_batch_x.js v2) instead of per-(LB, surface) ones.
     // consolidateStaticSingletonsCrossLb NEVER throws; it returns null when
     // nothing was consumed, in which case the unchanged per-LB path below
     // runs (no double-render window). Flag-off short-circuits to null →
     // byte-identical legacy behavior.
-    const crossRes = statBatchCrossLbEnabled()
+    const crossRes = statBatchChunkEnabled()
       ? consolidateStaticSingletonsCrossLb(addedNodes, scene3d, lbKey)
       : null;
     if (crossRes) {

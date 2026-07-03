@@ -1,80 +1,52 @@
-// scene3d/static_batch_x.js — ?statBatchCrossLb: cross-LB consolidation of the
-// per-LB ?staticBatch BatchedMeshes.
+// scene3d/static_batch_x.js — ?statBatchChunk: spatially-chunked consolidation
+// of the per-LB ?staticBatch BatchedMeshes (design v2, 2026-07-03).
 //
-// PROBLEM (2026-07-02, measured live on the GTX 1070 at quality=low in forest):
-// the per-LB `consolidateStaticSingletons` (statics.js) emits ONE BatchedMesh
-// per (landblock, surface material) — ~3,008 `static-batch-lb…` nodes across
-// the 203-LB resident ring, the BULK of the remaining ~750 draw calls after the
-// instanced-animated-scenery fix. The structure is GLOBAL: the same surface
-// material (MaterialCache is cross-LB) recurs in nearly every LB, so the same
-// population collapses to ONE persistent BatchedMesh per surface MATERIAL
-// spanning the whole ring — bucket-scale (~tens) instead of 3k-scale.
+// HISTORY: v1 (?statBatchCrossLb) consolidated per-(LB, surface) batches into
+// ONE ring-spanning BatchedMesh per material. CLOSED-NEGATIVE on the 1070:
+// ring-spanning nodes forfeit node-level frustum culling (the per-LB batches
+// only draw the ~10% in view) and pay a per-frame CPU walk over ~36k instances
+// to build multidraw ranges — moving A/B measured 22.5 vs ~29 fps. The fix
+// that survives from v1: re-feed idempotence (re-bake REPLACES an LB's
+// contribution) and the per-LB eviction hook machinery.
 //
-// Design (option b of the Track-D brief): keep each surface's OWN material
-// (identical shading to the per-LB batches — no texture-array involvement, no
-// normal-map/emissive/alphaTest loss like the statAtlas albedo-only trade).
-// Grouping key = material OBJECT identity, exactly the per-LB consolidator's
-// key (visual frag-SET variant clones stay distinct — P1.14 EDIT F). Only
-// groups of >=2 nodes are consumed, so the lone-singleton population keeps
-// flowing to the cross-LB statAtlas seam exactly as before — the off/on
-// population split is identical, only WHERE the >=2 groups land changes.
+// v2: one BatchedMesh per (3x3-LB REGION, surface material). Chunks are
+// spatially bounded, so frustumCulled=true works — off-screen regions cost
+// zero draws AND zero per-instance range-building (three culls the node by
+// its BatchedMesh-level boundingSphere before any instance work). In-frustum
+// chunks still dedupe geometry cross-LB within the region and draw as one
+// multidraw each. Bounds maintenance is lazy: membership changes null
+// `bm.boundingSphere`; three recomputes it at the next cull
+// (Frustum.intersectsObject: `if (object.boundingSphere === null)
+// object.computeBoundingSphere()` — three.core.js r184 :25320).
 //
-// Improvements over the per-LB batches (safe, same-frame):
-//   - geometry dedupe: within one LB's feed all placements of a model share
-//     ONE BufferGeometry object; the per-LB path re-adds it per placement,
-//     this path adds it ONCE per (bucket, geometry) and addInstance()s per
-//     placement (BatchedMesh multi-instance — less vertex-buffer duplication).
-//   - sortObjects only for transparent materials (opaque buckets skip the
-//     per-frame instance depth sort; the statAtlas precedent).
+// Eviction/growth/idempotence are v1 machinery unchanged: per-LB membership
+// gid lists + deleteGeometry cascade via scene3d._evictStaticBatchXForLb
+// (wired at LRU construction AND re-installed per feed), lazy optimize() off
+// the ~10 Hz PVS tick, doubling growth, sources stay in the LB disposables.
 //
-// EVICTION (mirrors static_atlas.js): a cross-LB bucket has NO single
-// landblockId, so the LRU per-LB statics scan (landblock_lru step 3) naturally
-// SKIPS it (and must NEVER dispose it). Per-LB removal is a dedicated hook
-// `scene3d._evictStaticBatchXForLb` — wired deterministically at LRU
-// construction (index.js) AND re-installed by each feed — that
-// `bm.deleteGeometry(gid)`s every geometry this LB contributed. deleteGeometry
-// flips the geometry + ALL its instances inactive the SAME FRAME (a gid is
-// exclusively owned by one LB: geometry objects are per-LB-baked, so the
-// cascade never touches another LB's placements). Freed buffer space is
-// reclaimed LAZILY via `bm.optimize()` off the hot path (~10 Hz PVS tick,
-// loop.js) once >30% of a bucket's used extent is dead; optimize() preserves
-// geometryIds (verified against three r184 BatchedMesh.optimize — inactive
-// ranges are skipped, active infos keep their list index). Re-entry after
-// evict re-feeds with fresh gids (three recycles freed ids internally).
-//
-// Growth (house style, animated_scenery.js `_registerSlot` doubling adapted to
-// BatchedMesh): vertex/index budget grows via setGeometrySize (re-allocates +
-// copies; also upgrades the index array type past 65,535 verts — r184
-// _initializeGeometry re-runs), instance budget via setInstanceCount.
-//
-// Sources are NOT disposed here: node geometries stay in the per-LB
-// `disposables` list exactly like the per-LB batch path (BatchedMesh COPIES
-// vertex data; the LRU disposes the sources on evict → no double-free, and a
-// group member that fails mid-feed can still render as a passthrough Mesh).
-//
-// Gated DEFAULT-OFF behind `?statBatchCrossLb=on` pending the 1070 eye-test.
-// Flag-off: nothing in this module runs; statics.js takes the byte-identical
-// per-LB consolidation path.
+// DEFAULT-ON (2026-07-03 1070 A/B: rest 24->66 fps / 1,057->223 calls; moving
+// ~29->~47 fps). `?statBatchChunk=off` escapes to the per-LB legacy path.
 
 import * as THREE from "three";
 
 let _flag;
-/** `?statBatchCrossLb=on` enables cross-LB per-material consolidation of the
- *  ?staticBatch population. DEFAULT-ON (2026-07-03); `?statBatchCrossLb=off` restores the per-LB legacy path. */
-export function statBatchCrossLbEnabled() {
+/** `?statBatchChunk=off` escapes region-chunked per-material consolidation of
+ *  the ?staticBatch population. DEFAULT-ON (2026-07-03 1070 A/B: rest 24->66 fps
+ *  / 1,057->223 calls; moving ~29->~47 fps / ~630->~270 calls). */
+export function statBatchChunkEnabled() {
   if (_flag !== undefined) return _flag;
-  let on = false; // DEFAULT-OFF (2026-07-03): re-feed idempotence is FIXED (tests 24/25) but the full-ring live run measured ~4k calls / 1.1M tris / 6 fps pre-fix with ~40k legitimate instances — per-instance culling cost + the call-count mystery are unresolved; opt-in via ?statBatchCrossLb=on for the next daytime probe session
+  let on = true; // DEFAULT-ON (2026-07-03, measured 2.7x rest / 1.7x moving); ?statBatchChunk=off escapes
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
-      const v = (new URLSearchParams(globalThis.location.search).get("statBatchCrossLb") || "").toLowerCase();
-      if (v === "on" || v === "1" || v === "true" || v === "yes") on = true;
+      const v = (new URLSearchParams(globalThis.location.search).get("statBatchChunk") || "").toLowerCase();
+      if (v) on = !(v === "off" || v === "0" || v === "false" || v === "no");
     }
-  } catch (_) { on = false; }
+  } catch (_) { on = true; }
   _flag = on;
   return on;
 }
 // Test seams.
-export function __setStatBatchCrossLbForTest(v) { _flag = v; }
+export function __setStatBatchChunkForTest(v) { _flag = v; }
 export function __resetStatBatchXForTest() {
   _buckets.clear();
   _lbMembership.clear();
@@ -82,13 +54,13 @@ export function __resetStatBatchXForTest() {
   _bucketSeq = 0;
 }
 
-const _INIT_VERTS = 1 << 15;      // 32,768; grows via setGeometrySize on demand
-const _INIT_INST = 512;           // grows via setInstanceCount on demand
+const _INIT_VERTS = 1 << 14;      // 16,384 (chunk-scale); grows via setGeometrySize on demand
+const _INIT_INST = 256;           // chunk-scale; grows via setInstanceCount on demand
 const _OPTIMIZE_FRAC = 0.30;      // compact a bucket once >30% of its used extent is dead
 const _GROW_TRIES = 8;            // doubling attempts before a node falls through
 
 // Lazy module state — only ever touched under ?statBatchCrossLb=on.
-const _buckets = new Map();       // material object -> bucket { bm }
+const _buckets = new Map();       // regionKey -> Map<material object, bucket { bm }>
 const _lbMembership = new Map();  // lbKey -> Array<{ bm, gid }>
 const _dirtyBuckets = new Set();  // buckets with freed geometry awaiting optimize()
 let _bucketSeq = 0;
@@ -97,15 +69,27 @@ function _lbKeyOfId(id) {
   return (((id >>> 0) & 0xffff0000) >>> 0);
 }
 
-function _getOrCreateBucket(mat, scene3d, templateNode) {
-  let b = _buckets.get(mat);
+// 3x3-LB region key: spatial chunk this LB's statics batch into. 192 m * 3 =
+// 576 m squares — big enough to dedupe cross-LB, small enough that node-level
+// frustum culling keeps off-screen chunks at zero cost.
+function _regionKeyOfId(id) {
+  const rx = (((id >>> 24) & 0xff) / 3) | 0;
+  const ry = (((id >>> 16) & 0xff) / 3) | 0;
+  return `${rx}x${ry}`;
+}
+
+function _getOrCreateBucket(mat, scene3d, templateNode, regionKey) {
+  let region = _buckets.get(regionKey);
+  if (!region) { region = new Map(); _buckets.set(regionKey, region); }
+  let b = region.get(mat);
   if (b) return b;
   const bm = new THREE.BatchedMesh(_INIT_INST, _INIT_VERTS, _INIT_VERTS * 2, mat);
   // OPAQUE: skip the per-frame instance depth sort (CPU win; statAtlas
   // precedent). Transparent buckets keep the sort for blend order.
   bm.sortObjects = !!mat.transparent;
   bm.perObjectFrustumCulled = true; // per-instance sphere cull trims the multidraw
-  bm.frustumCulled = false;         // the batch spans the ring; never cull as one
+  bm.frustumCulled = true;          // the chunk is spatially bounded — cull the whole
+                                    // node by its lazy boundingSphere (v2 core win)
   // Uniform per-surface shadow flags — the per-LB batch already flattens these
   // per (LB, surface); this widens the same documented trade to per-surface.
   bm.castShadow = !!templateNode.castShadow;
@@ -124,9 +108,9 @@ function _getOrCreateBucket(mat, scene3d, templateNode) {
     gidVerts: new Map(), // gid -> vertexCount (dead-space accounting on delete)
     instances: 0,        // live instance count (diag/census)
   };
-  bm.name = `static-batch-x-s${surf.toString(16).padStart(8, "0")}-m${_bucketSeq++}`;
+  bm.name = `static-batch-c-r${regionKey}-s${surf.toString(16).padStart(8, "0")}-m${_bucketSeq++}`;
   b = { bm };
-  _buckets.set(mat, b);
+  region.set(mat, b);
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
   return b;
 }
@@ -197,6 +181,8 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
       scene3d._evictStaticBatchXForLb = evictStaticBatchXForLb;
     }
     const lbKey = _lbKeyOfId(lbId);
+    const regionKey = _regionKeyOfId(lbId);
+    const touched = new Set();
     // RE-FEED IDEMPOTENCE (2026-07-03 fix): a re-bake of an already-fed LB
     // (LOD/facade re-bakes; any path that re-runs bakeStaticsForLandblock
     // without an LRU evict) used to APPEND duplicate geometry+instances —
@@ -213,7 +199,7 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
       if (group.length < 2) { out.push(...group); continue; } // lone → statAtlas seam, as before
       let bucket;
       try {
-        bucket = _getOrCreateBucket(group[0].material, scene3d, group[0]);
+        bucket = _getOrCreateBucket(group[0].material, scene3d, group[0], regionKey);
       } catch (_) {
         out.push(...group); // bucket creation failed — whole group stays unbatched
         continue;
@@ -245,8 +231,10 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
           out.push(m);
         }
       }
-      if (groupAdded > 0) { consumed += groupAdded; bucketsTouched += 1; }
+      if (groupAdded > 0) { consumed += groupAdded; bucketsTouched += 1; touched.add(bm); }
     }
+    // Membership changed — invalidate node bounds; three recomputes at next cull.
+    for (const bm of touched) bm.boundingSphere = null;
     if (consumed === 0) return null; // nothing landed — let the caller run the legacy path
     return { out, bucketsTouched };
   } catch (e) {
@@ -285,6 +273,7 @@ export function evictStaticBatchXForLb(lbKey) {
     const dead = ud.gidVerts.get(m.gid);
     if (dead) { ud.deadVerts += dead; ud.gidVerts.delete(m.gid); }
     if (removedInstances > 0) ud.instances = Math.max(0, ud.instances - removedInstances);
+    m.bm.boundingSphere = null; // membership changed — lazy bounds recompute
     _dirtyBuckets.add(m.bm);
   }
   _lbMembership.delete(key);
@@ -300,7 +289,7 @@ export function tickStatBatchXOptimize() {
   for (const bm of _dirtyBuckets) {
     const ud = bm.userData;
     if (ud.usedVerts > 0 && ud.deadVerts / ud.usedVerts > _OPTIMIZE_FRAC) {
-      try { bm.optimize(); ud.usedVerts -= ud.deadVerts; ud.deadVerts = 0; } catch (_) { /* fail-soft */ }
+      try { bm.optimize(); ud.usedVerts -= ud.deadVerts; ud.deadVerts = 0; bm.boundingSphere = null; } catch (_) { /* fail-soft */ }
     }
   }
   _dirtyBuckets.clear();
@@ -315,7 +304,7 @@ if (typeof window !== "undefined") {
 export function getStatBatchXStats() {
   const buckets = [];
   let instances = 0;
-  for (const { bm } of _buckets.values()) {
+  for (const region of _buckets.values()) for (const { bm } of region.values()) {
     const ud = bm.userData;
     buckets.push({
       name: bm.name,

@@ -40,7 +40,7 @@ const stripped = src
 const factory = new Function(
   "THREE",
   stripped +
-    "\n; return { statBatchCrossLbEnabled, __setStatBatchCrossLbForTest, __resetStatBatchXForTest, " +
+    "\n; return { statBatchChunkEnabled, __setStatBatchChunkForTest, __resetStatBatchXForTest, " +
     "consolidateStaticSingletonsCrossLb, evictStaticBatchXForLb, tickStatBatchXOptimize, getStatBatchXStats };"
 );
 const M = factory(THREE);
@@ -64,11 +64,12 @@ function singleton(surfaceDid, x, lbId, geom, mat) {
   return m;
 }
 const scene3d = { staticsGroup: new THREE.Group() };
-const LB1 = 0xAABB0000 >>> 0, LB2 = 0xCCDD0000 >>> 0;
+const LB1 = 0x96960000 >>> 0, LB2 = 0x97970000 >>> 0; // (150,150) & (151,151) -> SAME 3x3 region (50,50)
+const LB3 = 0xCCDD0000 >>> 0; // (204,221) -> region (68,73), FAR
 
 // ===== 1. flag default =====
-check("0: flag defaults OFF (fix landed 2026-07-03; live perf at full ring unproven — opt-in)", M.statBatchCrossLbEnabled() === false);
-M.__setStatBatchCrossLbForTest(true);
+check("0: flag defaults ON (v2 chunked, 1070-proven 2026-07-03; =off escapes)", M.statBatchChunkEnabled() === true);
+M.__setStatBatchChunkForTest(true);
 
 // ===== 2. LB1 feed: grouping parity with the per-LB consolidator =====
 const matA = new THREE.MeshBasicMaterial(), matB = new THREE.MeshBasicMaterial();
@@ -89,7 +90,7 @@ check("3: 2 buckets created and self-added to staticsGroup",
 const bmA = scene3d.staticsGroup.children.find((c) => c.material === matA);
 const bmB = scene3d.staticsGroup.children.find((c) => c.material === matB);
 check("4: buckets keep their surface material + carry NO landblockId + named static-batch-x-*",
-  bmA && bmB && bmA.userData.landblockId === undefined && /^static-batch-x-s00000a00/.test(bmA.name),
+  bmA && bmB && bmA.userData.landblockId === undefined && /^static-batch-c-r50x50-s00000a00/.test(bmA.name),
   `nameA=${bmA && bmA.name}`);
 check("5: surf-A bucket holds 5 instances over ONE deduped geometry",
   bmA && bmA.userData.instances === 5 && bmA.userData.gidVerts.size === 1,
@@ -116,12 +117,29 @@ const geomA2 = triGeom(2); // a different LB decodes its own geometry object
 const nodes2 = [];
 for (let i = 0; i < 4; i++) nodes2.push(singleton(0x0A00, 100 + i, LB2, geomA2, matA));
 const r2 = M.consolidateStaticSingletonsCrossLb(nodes2, scene3d, LB2);
-check("10: second LB consumed into the SAME bucket (no new BatchedMesh)",
+check("10: same-region second LB consumed into the SAME chunk bucket (no new BatchedMesh)",
   r2 && r2.out.length === 0 && scene3d.staticsGroup.children.filter((c) => c.isBatchedMesh).length === 2,
   `children=${scene3d.staticsGroup.children.length}`);
 check("11: surf-A bucket now 9 instances over 2 gids (per-LB geometry identity)",
   bmA.userData.instances === 9 && bmA.userData.gidVerts.size === 2,
   `instances=${bmA.userData.instances}, gids=${bmA.userData.gidVerts.size}`);
+
+// ===== 3b. FAR LB (different 3x3 region): NEW chunk bucket, not the LB1 one =====
+{
+  const nodesFar = [];
+  const gF = triGeom(1);
+  for (let i = 0; i < 2; i++) nodesFar.push(singleton(0x0A00, 300 + i, LB3, gF, matA));
+  const rF = M.consolidateStaticSingletonsCrossLb(nodesFar, scene3d, LB3);
+  const bms = scene3d.staticsGroup.children.filter((c) => c.isBatchedMesh);
+  const far = bms.find((c) => /^static-batch-c-r68x73-/.test(c.name));
+  check("11b: far LB lands in its OWN region chunk (3 buckets, r68x73 exists, LB1 bucket untouched)",
+    rF && bms.length === 3 && !!far && far.material === matA && bmA.userData.instances === 9,
+    `buckets=${bms.length} far=${far && far.name}`);
+  check("11c: chunk bounds invalidated on feed (boundingSphere === null, three recomputes at cull)",
+    bmA.boundingSphere === null && far.boundingSphere === null);
+  M.consolidateStaticSingletonsCrossLb([], scene3d, LB3); // no-op feed safe
+  scene3d._evictStaticBatchXForLb(LB3); // clean up so downstream counts hold
+}
 
 // ===== 4. per-LB eviction: LB1's gids go, LB2's instances survive =====
 scene3d._evictStaticBatchXForLb(LB1);
@@ -210,9 +228,10 @@ M.__resetStatBatchXForTest();
     s3, LB1);
   const bO = s3.staticsGroup.children.find((c) => c.material === matOpaque);
   const bT = s3.staticsGroup.children.find((c) => c.material === matTrans);
-  check("23: opaque bucket skips instance sort; transparent keeps it; cull flags set",
+  check("23: opaque bucket skips instance sort; transparent keeps it; chunk node IS frustum-culled",
     bO && bT && bO.sortObjects === false && bT.sortObjects === true &&
-    bO.perObjectFrustumCulled === true && bO.frustumCulled === false);
+    bO.perObjectFrustumCulled === true && bO.frustumCulled === true &&
+    bO.boundingSphere === null);
 }
 
 console.log("=========================");

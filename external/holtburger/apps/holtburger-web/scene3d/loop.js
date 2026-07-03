@@ -41,9 +41,9 @@ import { tickCellVisibility3D, tickPvsLoadExpansion } from "./cells.js";
 // texture-array buckets, driven off the ~10 Hz PVS path (NOT the per-frame
 // eviction tick). Flag-off: statAtlasEnabled() is false → never runs.
 import { statAtlasEnabled, tickStatAtlasOptimize } from "./static_atlas.js";
-// ?statBatchCrossLb (default-OFF) — same lazy buffer-compaction story for the
-// cross-LB per-material ?staticBatch buckets. Flag-off: never runs.
-import { statBatchCrossLbEnabled, tickStatBatchXOptimize } from "./static_batch_x.js";
+// ?statBatchChunk (default-OFF) — same lazy buffer-compaction story for the
+// region-chunked per-material ?staticBatch buckets. Flag-off: never runs.
+import { statBatchChunkEnabled, tickStatBatchXOptimize } from "./static_batch_x.js";
 // ?terrainBatch (default-OFF) — lazy buffer compaction for the cross-LB
 // terrain BatchedMesh; both imports are inert when the flag is off.
 import { terrainBatchEnabled, tickTerrainBatchOptimize } from "./terrain_batch.js";
@@ -1656,9 +1656,9 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
     // ?statAtlas (default-ON; ?statAtlas=off escapes) — compact fragmented cross-LB static buckets here
     // (low-frequency, off the per-frame hot path). No-op flag-off / no churn.
     if (statAtlasEnabled()) tickStatAtlasOptimize();
-    // ?statBatchCrossLb (default-OFF) — same lazy compaction for the cross-LB
+    // ?statBatchChunk (default-OFF) — same lazy compaction for the region-chunked
     // per-material ?staticBatch buckets. No-op flag-off.
-    if (statBatchCrossLbEnabled()) tickStatBatchXOptimize();
+    if (statBatchChunkEnabled()) tickStatBatchXOptimize();
     // ?terrainBatch (default-OFF) — same lazy compaction for the cross-LB
     // terrain BatchedMesh (dead space accrues on LB eviction / LOD re-bake).
     // No-op flag-off (module state never allocates) / no churn.
