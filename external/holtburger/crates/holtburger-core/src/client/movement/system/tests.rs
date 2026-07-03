@@ -568,6 +568,9 @@ fn current_local_solve_body_input_uses_shared_resolved_manual_run_speed() {
     let _ = world.set_player_position(position);
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -600,6 +603,9 @@ fn current_local_solve_body_input_uses_shared_turn_omega_for_turn_in_place() {
     seed_local_player(&mut world, player_guid, position);
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().walk().turn_left().build(),
         None,
@@ -1828,6 +1834,9 @@ fn advance_local_pose_for_manual_drive_applies_velocity_times_dt_once() {
     let _ = world.set_player_position(start_pose);
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -1937,6 +1946,9 @@ fn advance_local_pose_for_manual_drive_ramps_velocity_through_zero_on_direction_
     let mut movement = MovementSystem::new();
     // Drive input: run forward at heading π/2 (identity quat) ⇒
     // target velocity = (0, +4.5, 0) in world space.
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -2035,6 +2047,9 @@ fn advance_local_pose_for_manual_drive_decays_velocity_when_input_released() {
 
     let mut movement = MovementSystem::new();
     // No forward/sidestep/turn → target velocity is zero.
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().build(),
         None,
@@ -2112,6 +2127,9 @@ fn advance_local_pose_for_manual_drive_indoor_pre_bake_gates_motion() {
     world.populate_terrain_heights(0x8602_0000, [99.0_f32; 81]);
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -2203,6 +2221,9 @@ fn advance_local_pose_for_manual_drive_indoor_clamps_to_cell_aabb() {
     world.scene.insert_cell_aabb(cell_id, cell_aabb);
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -2287,6 +2308,9 @@ fn advance_local_pose_for_manual_drive_indoor_floor_snap_lifts_from_below() {
     world.scene.insert_cell_aabb(cell_id, cell_aabb);
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -2358,6 +2382,9 @@ fn indoor_ramp_floor_snap_keeps_retained_z_until_triangles_arrive() {
     world.scene.insert_cell_aabb(cell_id, cell_aabb);
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -2447,6 +2474,9 @@ fn indoor_aabb_only_below_cell_floor_still_gets_safety_snap() {
     world.scene.insert_cell_aabb(cell_id, cell_aabb);
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -2499,6 +2529,9 @@ fn seed_airborne_player(
     assert!(world.player.is_airborne, "begin_fall should set airborne");
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -2974,6 +3007,9 @@ fn landing_applies_residual_friction_before_land() {
     world.player.current_planar_velocity = Vector3::new(0.0, 4.0, 0.0);
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -3050,6 +3086,9 @@ fn run_grounded_step_down_tick(
     );
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -3171,6 +3210,9 @@ fn run_indoor_grounded_step_down_tick(
     );
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -3271,6 +3313,9 @@ fn run_grounded_run_speed(guid: Guid, run_rate: f32, base_run: f32, ticks: u32) 
         "freshly seeded player should be grounded for the run-speed path"
     );
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -3353,6 +3398,9 @@ fn run_uphill_cliff(guid: Guid, ticks: u32) -> (f32, f32, f32, f32) {
         "freshly seeded player should be grounded on the slope"
     );
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -3418,6 +3466,9 @@ fn run_into_water(guid: Guid, ticks: u32) -> (f32, f32) {
     let _ = world.set_player_position(start_pose);
     assert!(!world.player.is_airborne);
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -3919,6 +3970,9 @@ fn run_grounded_step_up_tick(guid: Guid, rise: f32) -> (WorldPosition, WorldPosi
     );
 
     let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state: the latch is up
+    // (retail DoMotion acclient.c:317325; live ingest raises it).
+    movement.last_move_was_autonomous = true;
     movement.active_drive = Some(ActiveDriveState::manual(
         MotionState::builder().run().forward().build(),
         None,
@@ -5835,79 +5889,34 @@ fn auto_run_default_off_keeps_manual_drive_verbatim() {
 
 // ─── USE_CAST_MOVE (2026-07-02) — retail cast-movement arbitration ───────────
 
-/// Classifier: a Magic-stance (0x49) windup/cast gesture arms the window;
-/// Ready in Magic clears; a gesture low-16 in a NON-Magic stance never arms
-/// (combat-mode/emote motions can't root movement). Covers BOTH ACE wire
-/// shapes: `EnqueueMotionMagic` (gesture as forward_command) and the
-/// FastTick `EnqueueMotionAction` (Ready forward + gesture in the actions
-/// list).
+/// The retail autonomy latch (mage-PvP mechanism hunt 2026-07-03): a
+/// non-autonomous server motion LOWERS it (`SetObjectMovement` stamps
+/// the wire flag, acclient.c:311185-311193) and the interpreted state
+/// drives; re-ingesting the IDENTICAL held state is NOT an edge (held
+/// keys never re-fire, :717102/:717429); a CHANGED manual state is a
+/// fresh `DoMotion`/`StopMotion` (:317325/:317364) and RAISES it —
+/// press AND release both count.
 #[test]
-fn cast_gesture_classifier_matches_ace_wire_shapes() {
-    use holtburger_protocol::messages::movement::{
-        InterpretedMotionCommand, MotionItem, MovementInvalid,
-    };
-    const MAGIC: u16 = 0x0049;
-    const NON_COMBAT: u16 = 0x003D;
-    let invalid_with_forward = |low: u16| MovementInvalid {
-        state: holtburger_protocol::messages::movement::InterpretedMotionState {
-            forward_command: Some(InterpretedMotionCommand(low)),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    // EnqueueMotionMagic shape — windup gesture as ForwardCommand.
-    for low in [0x2Bu16, 0x39, 0x6F, 0x78, 0xD3, 0xE0, 0xE1, 0x12B, 0x134] {
-        assert!(
-            MovementSystem::is_magic_cast_gesture_motion(MAGIC, &invalid_with_forward(low)),
-            "gesture 0x{low:04X} in Magic stance arms"
-        );
-        assert!(
-            !MovementSystem::is_magic_cast_gesture_motion(NON_COMBAT, &invalid_with_forward(low)),
-            "gesture 0x{low:04X} outside Magic stance never arms"
-        );
-    }
-    // FinishCast's returning Ready (0x03) clears.
-    assert!(!MovementSystem::is_magic_cast_gesture_motion(
-        MAGIC,
-        &invalid_with_forward(0x0003)
-    ));
-    // Locomotion commands never arm.
-    assert!(!MovementSystem::is_magic_cast_gesture_motion(
-        MAGIC,
-        &invalid_with_forward(0x0005)
-    ));
-    // FastTick EnqueueMotionAction shape — Ready forward + gesture action.
-    let fasttick = MovementInvalid {
-        state: holtburger_protocol::messages::movement::InterpretedMotionState {
-            forward_command: Some(InterpretedMotionCommand(0x0003)),
-            commands: vec![MotionItem {
-                command: InterpretedMotionCommand(0x0071), // MagicPowerUp03
-                ..Default::default()
-            }],
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    assert!(MovementSystem::is_magic_cast_gesture_motion(MAGIC, &fasttick));
-}
-
-/// The cast window roots the manual drive state until a fresh input EDGE:
-/// arming sets `cast_gesture_active()`; re-ingesting the IDENTICAL held
-/// state (not an edge) leaves it armed; a CHANGED state (retail `DoMotion`
-/// autonomy regain, acclient.c:317325) clears it; `note(false)` (the
-/// FinishCast returning motion) clears it too.
-#[test]
-fn cast_gesture_window_cleared_by_input_edge_not_resend() {
+fn autonomy_latch_lowered_by_wire_raised_by_input_edge() {
     let mut movement = MovementSystem::new();
     let held = MotionState::builder().run().forward().build();
-    // Establish the held state pre-cast.
+    // First input edge raises the boot-default-low latch (retail ctor
+    // inits 0, :319552).
     ingest_intent(
         &mut movement,
         PlayerDriveIntent::ManualHeld(held),
         Instant::now(),
     );
-    movement.note_local_cast_gesture(true);
-    assert!(movement.cast_gesture_active(), "gesture arms the window");
+    assert!(
+        !movement.interpreted_movement_active(),
+        "input edge raises the latch — raw drives"
+    );
+    // A server-played cast gesture arrives (non-autonomous unpack).
+    movement.note_server_authored_motion(false);
+    assert!(
+        movement.interpreted_movement_active(),
+        "wire lowers the latch — interpreted drives"
+    );
     // A re-send of the identical held axes is NOT an input edge.
     ingest_intent(
         &mut movement,
@@ -5915,7 +5924,7 @@ fn cast_gesture_window_cleared_by_input_edge_not_resend() {
         Instant::now(),
     );
     assert!(
-        movement.cast_gesture_active(),
+        movement.interpreted_movement_active(),
         "identical re-send does not defeat the gesture"
     );
     // A CHANGED state is a fresh DoMotion — autonomy regained.
@@ -5926,16 +5935,59 @@ fn cast_gesture_window_cleared_by_input_edge_not_resend() {
         Instant::now(),
     );
     assert!(
-        !movement.cast_gesture_active(),
+        !movement.interpreted_movement_active(),
         "input edge regains autonomy"
     );
-    // Re-arm, then the server's returning motion clears.
-    movement.note_local_cast_gesture(true);
-    assert!(movement.cast_gesture_active());
-    movement.note_local_cast_gesture(false);
-    assert!(!movement.cast_gesture_active(), "gesture end clears");
+    // The next server motion (e.g. the following windup) re-lowers it.
+    movement.note_server_authored_motion(false);
+    assert!(movement.interpreted_movement_active());
+    // A key RELEASE (all axes idle) is ALSO an edge — retail StopMotion
+    // sets the latch too (:317364).
+    let idle = MotionState::builder().build();
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(idle),
+        Instant::now(),
+    );
+    assert!(
+        !movement.interpreted_movement_active(),
+        "release edge regains autonomy"
+    );
 }
 
+/// While the latch is low the drive comes from the INTERPRETED slots —
+/// retail `apply_interpreted_movement` (acclient.c:344147): the gesture
+/// occupies the forward slot (mapped to `None` = zero forward velocity)
+/// while the INDEPENDENT sidestep/turn slots keep flowing (slidecast).
+#[test]
+fn interpreted_drive_state_preserves_echoed_sidestep_and_kills_forward() {
+    use crate::client::movement::interp_state::InterpretedState;
+    let manual = MotionState::builder().run().forward().build();
+
+    // Gesture in the forward slot (non-locomotion substate → None) +
+    // echoed left strafe: forward dies, strafe flows.
+    let mut interp = InterpretedState::default();
+    interp.apply_motion(0x4000_0070, 1.0); // MagicPowerUp02 windup
+    interp.apply_motion(0x6500_000F, -1.0); // SideStepRight, negative = left
+    let driven = MovementSystem::interpreted_drive_state(Some(&interp), manual);
+    assert_eq!(driven.forward, None, "gesture owns the forward slot");
+    assert_eq!(
+        driven.sidestep,
+        Some(SidestepLocomotion::StrafeLeft),
+        "echoed strafe keeps flowing — slidecast"
+    );
+
+    // Interpreted locomotion (server-controlled walk) maps with the
+    // signed speed: negative forward = backstep.
+    let mut interp = InterpretedState::default();
+    interp.apply_motion(0x4500_0005, -1.0); // WalkForward, negative speed
+    let driven = MovementSystem::interpreted_drive_state(Some(&interp), manual);
+    assert_eq!(driven.forward, Some(ForwardLocomotion::Backstep));
+
+    // No registry entry yet → locomotion-idle.
+    let driven = MovementSystem::interpreted_drive_state(None, manual);
+    assert!(driven.forward.is_none() && driven.sidestep.is_none() && driven.turning.is_none());
+}
 // ---------------------------------------------------------------------------
 // Golden-trace fixed-dt harness (physics parity 2026-07-03; dossier §4
 // determinism plan). Scripted fixed-dt timelines drive the SAME seam the
@@ -5988,6 +6040,9 @@ mod golden {
         let _ = world.set_player_position(start_pose);
         world.populate_terrain_heights(0xA9B4_0000, [10.0_f32; 81]);
         let mut movement = MovementSystem::new();
+        // Direct drive install = post-first-edge state: the latch is up
+        // (retail DoMotion acclient.c:317325; live ingest raises it).
+        movement.last_move_was_autonomous = true;
         movement.active_drive = Some(ActiveDriveState::manual(state, None));
         (world, movement)
     }

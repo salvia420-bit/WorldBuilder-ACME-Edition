@@ -7,6 +7,7 @@ use super::common::{
     has_autonomous_position_sync_target, local_omega_for_state, local_velocity_for_state,
     normalize_heading, raw_motion_state_with_motion_style, signed_heading_delta,
 };
+use super::interp_state::InterpretedState;
 use super::jump_charge::{JumpChargeClock, JumpOutcome, JumpRefusal};
 use super::motion_interp::{
     MotionInterp, MotionSideEffects, interpreted_velocity_for_state,
@@ -18,7 +19,7 @@ use super::movement_manager::{MovementManager, MovementStruct, USE_UNPACK_MOVEME
 use super::params::MovementParameters;
 use crate::client::movement_types::{
     AutonomousDriveIntent, ForwardLocomotion, MotionState, MotionStyle, MovementPacketMetadata,
-    PlayerDriveIntent, Turn,
+    PlayerDriveIntent, SidestepLocomotion, Turn,
 };
 use anyhow::Result;
 use holtburger_common::sequence::is_newer_u16;
@@ -715,38 +716,45 @@ const USE_OUTDOOR_STATIC_GROUNDING: bool = true;
 /// cliffs, airborne-flicker downhill, emergent edge behavior).
 const USE_RETAIL_GROUND: bool = true;
 
-/// (2026-07-02) — retail CAST-MOVEMENT arbitration. While the LOCAL
-/// player's cast gesture (a SERVER-played, non-autonomous motion — windup
-/// `MagicPowerUp01..10` / the spell cast gesture, sent by ACE
-/// `EnqueueMotionMagic` as `Motion(MotionStance.Magic, gesture)` with
-/// `IsAutonomous=false`) is in flight, the manual drive applies the
-/// INTERPRETED (server) state instead of raw WASD — retail
-/// `CMotionInterp::apply_current_movement` (acclient.c:344305):
-/// `movement_is_autonomous ? apply_raw_movement : apply_interpreted_movement`,
-/// where `last_move_was_autonomous` is cleared by every server-authored
-/// motion (acclient.c:322336 `get_autonomous_movement`) and re-set by any
-/// fresh local `DoMotion` (acclient.c:317325). The server's cast-gesture
-/// state carries no locomotion commands, so held keys stop driving —
-/// "fighting the cast" — while a NEW key edge (a fresh DoMotion) regains
-/// autonomy until the next gesture message re-asserts it: repeated presses
-/// step you forward; a strafe press keeps the slidey diagonal alive. NO
-/// hard root is added — the server's fizzle circle (ACE `Windup_MaxMove`)
-/// stays server-side.
+/// (2026-07-02, mechanism replaced 2026-07-03) — retail MOVEMENT-AUTONOMY
+/// arbitration (the cast-movement feel: slidecast / fastcast / "fighting
+/// the cast"). The engine is retail's `last_move_was_autonomous` LATCH,
+/// not a timed gesture window:
+///
+/// - The latch is LOWERED from the WIRE: `SmartBox::SetObjectMovement`
+///   (acclient.c:311185-311193) stamps it with the message's autonomous
+///   flag before unpacking — and for the LOCAL player only accepted
+///   NON-autonomous messages reach the unpack (autonomous echoes skip
+///   both), so the wire only ever lowers it. ACE plays cast windups /
+///   gestures / MoveTo directives as non-autonomous `UpdateMotion`.
+/// - The latch is RAISED by every fresh local motion command — retail
+///   `CPhysicsObj::DoMotion` (:317325) / `StopMotion` (:317364) — i.e.
+///   any manual-input EDGE (press OR release; identical re-sends are not
+///   edges, matching the edge-driven `CommandInterpreter` stacks
+///   :717102/:717429 where a held key never re-fires) and a successful
+///   jump release (`ClientCombatSystem::DoJump` autonomous branch
+///   :408146; `LeaveGround` re-applies movement, :344457).
+/// - The per-slice drive dispatches on it — retail
+///   `CMotionInterp::apply_current_movement` (:344305):
+///   `latch ? apply_raw_movement : apply_interpreted_movement`. While
+///   LOW, the INTERPRETED (server-echo) state drives: the gesture
+///   occupies the single forward slot (`RawMotionState::ApplyMotion`
+///   default arm :332890, interpreted mirror :332759) at zero
+///   locomotion, so forward dies; sidestep/turn are INDEPENDENT slots
+///   (:344147 drives each separately) and keep flowing — slidecast.
+///   Held keys stop driving until the next edge — fastcast's
+///   tap-to-break and the "fight to move forward" metronome.
+///
+/// NO hard root is added — the server's fizzle circle (ACE
+/// `Windup_MaxMove`) stays server-side.
 ///
 /// ONE feature, TWO carriers: this const (native default) + the
 /// `?castMove=off` URL flag ([`MovementSystem::cast_move_runtime`]).
 /// Effective predicate: [`MovementSystem::cast_move_enabled`].
 ///
-/// `true` (DEFAULT): cast gestures suppress held locomotion per retail.
-/// `false` / `?castMove=off`: casting never affects movement (pre-2026-07-02).
+/// `true` (DEFAULT): the latch governs the drive dispatch per retail.
+/// `false` / `?castMove=off`: raw input always drives (pre-2026-07-02).
 const USE_CAST_MOVE: bool = true;
-
-/// [`USE_CAST_MOVE`] — failsafe ceiling on how long ONE server gesture
-/// message suppresses movement without a follow-up. ACE windup gestures
-/// arrive ~0.5-1 s apart (CastSpeed 2.0) and `FinishCast` always sends a
-/// returning `Ready` motion, so the deadline normally never expires — it
-/// exists so a dropped packet cannot root the player indefinitely.
-const CAST_GESTURE_FAILSAFE_SECS: f32 = 6.0;
 
 /// Phase 3 Phase D (2026-06-28, Option C) — register each outdoor
 /// building/static BSP into EVERY land cell its world AABB overlaps, not just
@@ -1374,14 +1382,17 @@ pub(crate) struct MovementSystem {
     /// schedule. Combined by [`Self::retail_quantum_enabled`]. Default
     /// `None`.
     retail_quantum_runtime: Option<bool>,
-    /// [`USE_CAST_MOVE`] — while `Some(t)` and `now < t`, a server-played
-    /// cast gesture governs the local player's movement (the retail
-    /// non-autonomous window). Armed by [`Self::note_local_cast_gesture`]
-    /// (the `SelfServerControlledMotion` consumption site), cleared by a
-    /// fresh manual-input EDGE (retail `DoMotion` sets
-    /// `last_move_was_autonomous`, acclient.c:317325), a non-gesture
-    /// server motion, or the [`CAST_GESTURE_FAILSAFE_SECS`] deadline.
-    cast_gesture_deadline: Option<Instant>,
+    /// Retail `CPhysicsObj::last_move_was_autonomous` — THE movement
+    /// autonomy latch (see [`USE_CAST_MOVE`] for the full mechanism).
+    /// LOWERED from the wire autonomous flag at the
+    /// `SelfServerControlledMotion` consumption site
+    /// ([`Self::note_server_authored_motion`], retail
+    /// acclient.c:311185-311193); RAISED by every manual-input edge
+    /// ([`Self::ingest_drive_command`], retail :317325/:317364) and a
+    /// successful jump release. Read by
+    /// [`Self::interpreted_movement_active`]. `false` at boot = the
+    /// retail ctor (:319552); the first input edge raises it.
+    last_move_was_autonomous: bool,
     /// A14-I4 (W3+ S11, 2026-06-12) — the retail jump charge clock
     /// (`ClientCombatSystem` `jump_pending` / `buildStartTime`,
     /// acclient.c:407902-407916). Reached only via the wasm
@@ -1590,7 +1601,7 @@ impl MovementSystem {
             retail_ground_runtime: None,
             cast_move_runtime: None,
             retail_quantum_runtime: None,
-            cast_gesture_deadline: None,
+            last_move_was_autonomous: false,
             jump_charge: JumpChargeClock::new(),
             sticky_timeout_pending: std::cell::Cell::new(false),
             manual_moveto_cancel_pending: false,
@@ -1686,27 +1697,77 @@ impl MovementSystem {
         self.cast_move_runtime.unwrap_or(USE_CAST_MOVE)
     }
 
-    /// [`USE_CAST_MOVE`] — arm/clear the server-played cast-gesture window
-    /// (the retail non-autonomous movement state). Called from the
-    /// `SelfServerControlledMotion` consumption site
-    /// ([`Self::apply_self_movement_world_events`]): `true` on a Magic-stance
-    /// windup/cast gesture, `false` on any other non-autonomous self motion
-    /// (e.g. `FinishCast`'s returning `Ready`).
-    pub(crate) fn note_local_cast_gesture(&mut self, active: bool) {
-        self.cast_gesture_deadline = if active {
-            Some(Instant::now() + Duration::from_secs_f32(CAST_GESTURE_FAILSAFE_SECS))
-        } else {
-            None
-        };
+    /// Retail wire-latch write — `SmartBox::SetObjectMovement`
+    /// (acclient.c:311185-311193) stamps `last_move_was_autonomous` with
+    /// the message's autonomous flag on every accepted self motion that
+    /// unpacks. Called from the `SelfServerControlledMotion` consumption
+    /// site, whose emit gate (handlers/player.rs, accepted &&
+    /// !is_autonomous) means this only ever LOWERS the latch for the
+    /// local player — exactly retail's shape (autonomous echoes skip
+    /// both the latch write and the unpack).
+    pub(crate) fn note_server_authored_motion(&mut self, wire_autonomous: bool) {
+        self.last_move_was_autonomous = wire_autonomous;
     }
 
-    /// [`USE_CAST_MOVE`] — is a server-played cast gesture currently
-    /// governing the local player's movement?
-    pub(crate) fn cast_gesture_active(&self) -> bool {
-        self.cast_move_enabled()
-            && self
-                .cast_gesture_deadline
-                .is_some_and(|deadline| Instant::now() < deadline)
+    /// The retail autonomy dispatch predicate —
+    /// `CMotionInterp::apply_current_movement` (acclient.c:344305):
+    /// `true` = the INTERPRETED (server) state drives the local player
+    /// this slice; `false` = raw manual input drives. `?castMove=off`
+    /// forces the raw path (the pre-2026-07-02 escape hatch).
+    pub(crate) fn interpreted_movement_active(&self) -> bool {
+        self.cast_move_enabled() && !self.last_move_was_autonomous
+    }
+
+    /// Build the drive `MotionState` from the local player's INTERPRETED
+    /// motion state — retail `CMotionInterp::apply_interpreted_movement`
+    /// (acclient.c:344147): the forward slot and the INDEPENDENT
+    /// sidestep/turn slots each drive separately, direction carried by
+    /// the signed speeds. A gesture/Ready forward slot maps to `None`
+    /// (zero forward velocity via `get_state_velocity`, :343539); the
+    /// sidestep/turn echo keeps flowing — slidecast. No registry entry
+    /// yet = locomotion-idle. `gait`/`turn_speed` bookkeeping stays from
+    /// the manual state (retail derives run from the style/holdkey;
+    /// stance-speed parity is unaffected while speeds ride the wire as
+    /// 1.0).
+    fn interpreted_drive_state(
+        interp: Option<&InterpretedState>,
+        manual: MotionState,
+    ) -> MotionState {
+        let Some(interp) = interp else {
+            return MotionState {
+                forward: None,
+                sidestep: None,
+                turning: None,
+                ..manual
+            };
+        };
+        let forward = interp.forward_command.map(|_| {
+            if interp.forward_speed < 0.0 {
+                ForwardLocomotion::Backstep
+            } else {
+                ForwardLocomotion::Forward
+            }
+        });
+        let sidestep = interp.sidestep.then(|| {
+            if interp.sidestep_speed < 0.0 {
+                SidestepLocomotion::StrafeLeft
+            } else {
+                SidestepLocomotion::StrafeRight
+            }
+        });
+        let turning = interp.turn.then(|| {
+            if interp.turn_speed < 0.0 {
+                Turn::Left
+            } else {
+                Turn::Right
+            }
+        });
+        MotionState {
+            forward,
+            sidestep,
+            turning,
+            ..manual
+        }
     }
 
     /// A14-I3 (`?retailRunKeys=on`) — overlay the retail autorun
@@ -1887,6 +1948,13 @@ impl MovementSystem {
             burden,
             effective_skill,
         );
+        // A successful jump is a fresh AUTONOMOUS motion — retail
+        // `ClientCombatSystem::DoJump` autonomous branch
+        // (acclient.c:408146) → `CMotionInterp::jump`, and
+        // `LeaveGround`/`HitGround` re-run `apply_current_movement`
+        // in the raw path (:344457/:344429) — "jump resets the
+        // movement lock".
+        self.last_move_was_autonomous = true;
         world.player.begin_jump(vz);
         // Deduct stamina locally (server is canonical; ACE broadcasts a
         // vital update soon after).
@@ -2074,15 +2142,20 @@ impl MovementSystem {
         match command {
             QueuedDriveCommand::ManualSet(state) => {
                 // USE_CAST_MOVE — a fresh manual-input EDGE is retail's
-                // `CPhysicsObj::DoMotion` (`last_move_was_autonomous = 1`,
-                // acclient.c:317325): raw input takes back over from a
-                // server-played cast gesture until the next gesture message
-                // re-asserts the interpreted state. Only a CHANGED state
-                // counts (a re-send of the identical held axes is not an
-                // input edge), so holding W does not silently defeat the
-                // gesture — you must actively re-press ("fight the cast").
-                if self.cast_gesture_deadline.is_some() && self.last_manual_drive != Some(state) {
-                    self.cast_gesture_deadline = None;
+                // `CPhysicsObj::DoMotion` / `StopMotion`
+                // (`last_move_was_autonomous = 1`, acclient.c:317325 /
+                // :317364 — press AND release both count): raw input
+                // takes back over from the server-played interpreted
+                // state until the next non-autonomous motion message
+                // re-lowers the latch. Only a CHANGED state counts (a
+                // re-send of the identical held axes is not an input
+                // edge — retail's CommandInterpreter stacks are
+                // edge-driven, :717102/:717429, a held key never
+                // re-fires), so holding W does not silently defeat a
+                // cast gesture — you must actively re-press ("fight the
+                // cast").
+                if self.last_manual_drive != Some(state) {
+                    self.last_move_was_autonomous = true;
                 }
                 // A14-I2 (S10 A.3) — record EVERY manual set for the
                 // pursuit-end restore. Pure bookkeeping, ungated.
@@ -2119,12 +2192,20 @@ impl MovementSystem {
                 }
             }
             QueuedDriveCommand::ManualPulse { state, duration } => {
+                // Local motion command — retail `DoMotion` raises the
+                // autonomy latch (acclient.c:317325).
+                self.last_move_was_autonomous = true;
                 self.active_drive = Some(ActiveDriveState::manual(state, Some(now + duration)));
             }
             QueuedDriveCommand::Autonomous(intent) => {
+                // Client-side steering (S10 pursuit) issues autonomous
+                // DoMotions in retail — the latch rises with them.
+                self.last_move_was_autonomous = true;
                 self.active_drive = Some(ActiveDriveState::autonomous(intent));
             }
             QueuedDriveCommand::Transient(intent) => {
+                // One-shot local motion — a fresh `DoMotion` (:317325).
+                self.last_move_was_autonomous = true;
                 self.pending_transient_motion = Some(intent);
             }
             QueuedDriveCommand::ArriveAtPose { pose } => {
@@ -2135,6 +2216,9 @@ impl MovementSystem {
                 self.pending_snap_facing = Some(heading);
             }
             QueuedDriveCommand::Stop => {
+                // Local stop — retail `StopMotion`/`StopCompletely`
+                // raise the latch too (acclient.c:317364).
+                self.last_move_was_autonomous = true;
                 self.pending_arrival_pose = None;
                 self.pending_snap_facing = None;
                 self.active_drive = None;
@@ -4844,24 +4928,27 @@ impl MovementSystem {
         };
         let dt_s = dt.as_secs_f32();
 
-        // USE_CAST_MOVE — retail cast-movement arbitration: while a
-        // server-played cast gesture is in flight the client applies the
-        // INTERPRETED state, not raw WASD (`CMotionInterp::
-        // apply_current_movement`, acclient.c:344305-344311). The gesture
-        // motion carries no locomotion commands (ACE sends
-        // `Motion(Magic, gesture)` — the gesture IS the forward command,
-        // which maps to zero ground velocity in `get_state_velocity`), so
-        // the applied state is locomotion-idle; held keys stop driving
-        // until a fresh input EDGE regains autonomy (ingest_drive_command)
-        // or the gesture window ends. Gait is preserved so stance-speed
-        // bookkeeping is unchanged.
-        let state = if self.cast_gesture_active() {
-            MotionState {
-                forward: None,
-                sidestep: None,
-                turning: None,
-                ..state
-            }
+        // USE_CAST_MOVE — the retail autonomy dispatch
+        // (`CMotionInterp::apply_current_movement`, acclient.c:344305):
+        // while the latch is LOW the INTERPRETED (server-echo) state
+        // drives, not raw WASD. The cast gesture occupies the single
+        // forward slot (`RawMotionState::ApplyMotion` default arm
+        // :332890 / interpreted mirror :332759) at zero locomotion, so
+        // forward dies; the sidestep/turn slots are INDEPENDENT
+        // (:344147 drives each separately) and whatever the server echo
+        // carries keeps flowing — slidecast. Held keys stop driving
+        // until a fresh input EDGE raises the latch
+        // (ingest_drive_command) — fastcast's tap-to-break and the
+        // "fight to move forward" metronome. Gait is preserved so
+        // stance-speed bookkeeping is unchanged.
+        let state = if self.interpreted_movement_active() {
+            Self::interpreted_drive_state(
+                self.movement_managers
+                    .get(&world.player.guid)
+                    .and_then(|manager| manager.motion_interp_ref())
+                    .map(|minterp| &minterp.interpreted_state),
+                state,
+            )
         } else {
             state
         };
@@ -5286,9 +5373,12 @@ impl MovementSystem {
         )
     }
 
-    /// A6-T1/T2 test seam: install a Manual active drive directly.
+    /// A6-T1/T2 test seam: install a Manual active drive directly. An
+    /// active manual drive implies the post-first-edge autonomy state
+    /// (retail `DoMotion` acclient.c:317325), so the latch rises too.
     #[cfg(test)]
     pub(crate) fn set_active_manual_drive_for_test(&mut self, state: MotionState) {
+        self.last_move_was_autonomous = true;
         self.active_drive = Some(ActiveDriveState::manual(state, None));
     }
 
@@ -5447,42 +5537,6 @@ impl MovementSystem {
             .record_server_control_sequence(server_control_sequence);
     }
 
-    /// [`USE_CAST_MOVE`] — does this server-played General motion carry a
-    /// Magic cast gesture? ACE authors casts two ways, both covered:
-    /// `EnqueueMotionMagic` sends the gesture as the FORWARD command of a
-    /// `Motion(MotionStance.Magic, gesture)` (Motion.cs `SetForwardCommand`);
-    /// the FastTick `EnqueueMotionAction` path sends `Ready` forward with the
-    /// gesture(s) in the ACTION list. Gesture low-16s (MotionCommand.cs):
-    /// windups `MagicPowerUp01..10` 0x6F..=0x78 (+ purple variants
-    /// 0x12B..=0x134), cast gestures `MagicBlast..MagicPray` 0x2B..=0x39,
-    /// `CastSpell` 0xD3, `UseMagicStaff`/`UseMagicWand` 0xE0/0xE1. Gated on
-    /// the Magic stance (low-16 0x49) so combat-mode/emote motions never
-    /// arm the window.
-    fn is_magic_cast_gesture_motion(
-        current_style: u16,
-        invalid: &holtburger_protocol::messages::movement::MovementInvalid,
-    ) -> bool {
-        const MAGIC_STANCE_LOW16: u16 = 0x0049;
-        fn is_gesture_low16(low: u16) -> bool {
-            matches!(low, 0x2B..=0x39 | 0x6F..=0x78 | 0xD3 | 0xE0 | 0xE1 | 0x12B..=0x134)
-        }
-        if current_style & 0xFFFF != MAGIC_STANCE_LOW16 {
-            return false;
-        }
-        if invalid
-            .state
-            .forward_command
-            .is_some_and(|cmd| is_gesture_low16(cmd.raw()))
-        {
-            return true;
-        }
-        invalid
-            .state
-            .commands
-            .iter()
-            .any(|item| is_gesture_low16(item.command.raw()))
-    }
-
     /// A13-W1 (2026-06-11, unification survey): SINGLE consumption site
     /// for the self-movement sequence `WorldEvent`s the canonical world
     /// handlers emit (`SelfServerControlledMotion` /
@@ -5514,23 +5568,18 @@ impl MovementSystem {
             match event {
                 WorldEvent::SelfServerControlledMotion { data, .. } => {
                     self.record_server_control_sequence(data.server_control_sequence);
-                    // USE_CAST_MOVE — classify the server-played motion: a
-                    // Magic-stance windup/cast gesture arms the cast-movement
-                    // window; any other non-autonomous General motion (e.g.
-                    // FinishCast's returning Ready) clears it. Only General
-                    // (`Invalid`) envelopes carry the gesture; MoveTo/TurnTo
-                    // directives leave the window untouched. The emit site
-                    // (handlers/player.rs) already gates accepted &&
-                    // !is_autonomous, so every event here is server-authored.
-                    if let holtburger_protocol::messages::movement::MovementTypeData::Invalid(
-                        invalid,
-                    ) = &data.data
-                    {
-                        self.note_local_cast_gesture(Self::is_magic_cast_gesture_motion(
-                            data.current_style,
-                            invalid,
-                        ));
-                    }
+                    // USE_CAST_MOVE — the retail wire-latch write
+                    // (`SmartBox::SetObjectMovement`, acclient.c:311185-
+                    // 311193): EVERY accepted self motion that unpacks
+                    // stamps the latch with the message's autonomous flag
+                    // — GENERAL, no gesture classification (the old
+                    // window's classifier missed shapes and let held-W
+                    // drive through casts). Cast windups/gestures,
+                    // FinishCast's returning Ready, and MoveTo/TurnTo
+                    // directives all rightly take interpreted control;
+                    // the emit gate (handlers/player.rs, accepted &&
+                    // !is_autonomous) makes this a LOWER-only write.
+                    self.note_server_authored_motion(data.is_autonomous);
                 }
                 WorldEvent::SelfUpdatePosition {
                     force_position_sequence,

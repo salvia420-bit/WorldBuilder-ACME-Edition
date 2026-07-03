@@ -604,8 +604,10 @@ impl MovementManager {
             .unwrap_or(false)
     }
 
-    /// Test/diagnostic views.
-    #[cfg(test)]
+    /// Read view of the interp core — the local player's slice-drive
+    /// dispatch reads `interpreted_state` from here while the autonomy
+    /// latch is low (retail `apply_interpreted_movement`,
+    /// acclient.c:344147). Also a test/diagnostic view.
     pub(crate) fn motion_interp_ref(&self) -> Option<&MotionInterp> {
         self.motion_interp.as_ref()
     }
