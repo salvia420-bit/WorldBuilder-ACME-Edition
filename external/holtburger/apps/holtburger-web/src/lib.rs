@@ -865,6 +865,11 @@ pub fn build_info() -> String {
 // cycle swap (walk→run no-foot-pop). Additive on the v5 class; index.html's
 // EXPECTED stays 1 (the JS caller is ?unifiedMotion=locomotion-gated and
 // typeof-guards `seekPhase` → a v5 pkg soft-degrades to no phase carry).
+// cmdInterp post-flip (2026-07-03) RIDES v6 (no bump — purely additive,
+// diagnostics-only): + free fn `movementPendingMotionsDiag` (the local
+// registry minterp's pending completion-node count, stored per
+// TickMovement) — live A/B legs assert the retail wire enqueue +
+// completion-clock drain with it; no product JS consumes it.
 pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 6;
 
 /// Returns the export-surface manifest version (F18-2). JS asserts this is
@@ -874,6 +879,20 @@ pub const WASM_EXPORT_MANIFEST_VERSION: u32 = 6;
 #[wasm_bindgen]
 pub fn wasm_export_manifest_version() -> u32 {
     WASM_EXPORT_MANIFEST_VERSION
+}
+
+/// cmdInterp post-flip (2026-07-03) — diagnostics-only mirror of the local
+/// registry minterp's pending completion-node count (the
+/// `player_motions_pending` seam's queue term), stored by the TickMovement
+/// arm each tick. Lets live A/B legs assert the retail wire enqueue +
+/// completion-clock drain against real ACE wire data: a cast stomp raises
+/// it, the authored budget drains it. Not consumed by product JS.
+static MOVEMENT_PENDING_MOTIONS_DIAG: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+#[wasm_bindgen(js_name = movementPendingMotionsDiag)]
+pub fn movement_pending_motions_diag() -> u32 {
+    MOVEMENT_PENDING_MOTIONS_DIAG.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// AC's stateless 32-bit packet header checksum, exposed for callers
@@ -44868,6 +44887,16 @@ async fn recv_loop(
                         };
                         match tick_result {
                             Ok(()) => {
+                                // cmdInterp post-flip diag: mirror the
+                                // local registry minterp's pending
+                                // completion-node count for the
+                                // `movementPendingMotionsDiag` export
+                                // (live A/B assertion surface).
+                                MOVEMENT_PENDING_MOTIONS_DIAG.store(
+                                    movement.local_registry_pending_motions(w.player.guid)
+                                        as u32,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
                                 // Wave-1 step 5 (?cmdInterp=on, rows
                                 // 12-13): forward the interpreter lane's
                                 // event stream to JS — kind 61 for the

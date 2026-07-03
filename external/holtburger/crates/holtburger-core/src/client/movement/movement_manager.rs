@@ -467,11 +467,24 @@ impl MovementManager {
     }
 
     /// Shim input: the lattice's `motions_pending` for the view
-    /// (acclient.c:343728).
+    /// (acclient.c:343728). Also the cmdInterp `player_motions_pending`
+    /// seam's queue term (post-flip wave).
     pub(crate) fn moveto_motions_pending(&self) -> bool {
         self.motion_interp
             .as_ref()
             .is_some_and(|interp| interp.motions_pending())
+    }
+
+    /// Post-flip diag: pending completion-node count (the queue behind
+    /// [`Self::moveto_motions_pending`]) — surfaced through the wasm
+    /// `movementPendingMotionsDiag` export so live A/B legs can assert
+    /// the retail enqueue + completion-clock drain against real ACE
+    /// wire data (cast stomp → count rises → drains by the authored
+    /// budget).
+    pub(crate) fn pending_motions_len(&self) -> usize {
+        self.motion_interp
+            .as_ref()
+            .map_or(0, |interp| interp.pending_motions.len())
     }
 
     /// A4/SA4F (2026-06-12) — the ONE `MotionDone` fan-out for this

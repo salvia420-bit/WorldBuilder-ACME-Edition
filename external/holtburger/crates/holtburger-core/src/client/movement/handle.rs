@@ -404,6 +404,13 @@ impl MovementSystemHandle {
         self.inner.handle_exit_world_for(guid, is_local);
     }
 
+    /// Post-flip diag forward: the local registry minterp's pending
+    /// completion-node count (see
+    /// `MovementSystem::local_registry_pending_motions`).
+    pub fn local_registry_pending_motions(&self, local_guid: Guid) -> usize {
+        self.inner.local_registry_pending_motions(local_guid)
+    }
+
     /// A14-I4 (W3+ S11) — press-time half of the retail jump charge
     /// clock (`ClientCombatSystem::CommenceJump`,
     /// acclient.c:408033-408078). `Err(JumpRefusal::Position)` mirrors

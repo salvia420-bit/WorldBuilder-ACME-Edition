@@ -6652,6 +6652,20 @@ impl MovementSystem {
         &mut self.motion_table_manager
     }
 
+    /// Post-flip diag: the local registry minterp's pending
+    /// completion-node count (the `player_motions_pending` seam's queue
+    /// term). Read per-tick by the wasm TickMovement arm into the
+    /// `movementPendingMotionsDiag` export — live A/B legs assert the
+    /// retail enqueue + completion-clock drain with it.
+    pub(crate) fn local_registry_pending_motions(&self, local_guid: Guid) -> usize {
+        if local_guid == Guid::NULL {
+            return 0;
+        }
+        self.movement_managers
+            .get(&local_guid)
+            .map_or(0, |manager| manager.pending_motions_len())
+    }
+
     /// A3-D3 test seam: registry view.
     #[cfg(test)]
     pub(crate) fn movement_manager_for(&self, guid: Guid) -> Option<&MovementManager> {
