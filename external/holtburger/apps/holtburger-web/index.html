@@ -5871,8 +5871,10 @@
           // Retail InputAction ordinals (ACCmdInterp::OnAction switch base
           // 0x29, acclient.c:435951): our binds → w=WalkForward,
           // s=WalkBackward, d=SideStepRight, a=SideStepLeft, e=TurnRight,
-          // q=TurnLeft, Shift=HoldRun. Space stays on the legacy
-          // jumpCharge exports this wave (PLAN row 8).
+          // q=TurnLeft, Shift=HoldRun, Space=Jump (step 5, PLAN row 8:
+          // press → CommenceJump, release → DoJump — both route onto the
+          // ONE wasm charge clock via the interpreter seams; the legacy
+          // jumpCharge* exports stay the flag-off lane).
           const CMD_INTERP_ACTIONS = {
             w: 0x29,
             s: 0x2a,
@@ -5880,6 +5882,7 @@
             a: 0x2d,
             e: 0x2e,
             q: 0x2f,
+            " ": 0x31,
             shift: 0x32,
           };
           const __cmdInterpForward = (key, down) => {
@@ -6154,7 +6157,8 @@
               // the wasm-side standstill root.
               if (
                 (LONG_JUMP_ON && window.__jumpKeydownTs != null) ||
-                (JUMP_PARITY_ON && window.__jumpChargeActive === true)
+                (JUMP_PARITY_ON && window.__jumpChargeActive === true) ||
+                (CMD_INTERP_ON && window.__jumpChargeActive === true)
               ) {
                 // A14-I4 keeps this as the LEGACY JumpChargeCancel
                 // (root-drop ONLY — the wasm parity clock stays armed, so
@@ -6255,6 +6259,23 @@
             // hold → power 1.0 → full skill-scaled height; a quick tap →
             // ~0.001 (minimal hop). See the JUMP_POWER_FULL_HOLD_MS note.
             if (ev.key === " " && handle && !ev.repeat) {
+              // ?cmdInterp=on (step 5, row 8): space is action 0x31 —
+              // press → interpreter OnAction case 8 → CommenceJump seam
+              // → the SAME wasm charge clock. The bar reads that clock
+              // (jumpChargeLevel), so the parity UI carries over; the
+              // legacy jumpCharge*/jump(power) paths below never run
+              // under the flag (double-drive guard).
+              if (CMD_INTERP_ON) {
+                window.__jumpChargeActive = true;
+                __cmdInterpForward(" ", true);
+                const canJump =
+                  typeof handle.canJumpNow === "function"
+                    ? handle.canJumpNow()
+                    : true;
+                if (canJump) jumpChargeUi.show();
+                ev.preventDefault();
+                return;
+              }
               // A14-I4 (?jumpParity=on): press → wasm clock. No
               // `__jumpKeydownTs` stamp, no JS standstill decision (the
               // root is decided wasm-side from the active manual drive,
@@ -6304,6 +6325,14 @@
             } else if (ev.key === "Shift") {
               __cmdInterpForward("shift", false);
               keyState.shift = false;
+            } else if (ev.key === " " && CMD_INTERP_ON && handle) {
+              // ?cmdInterp=on (step 5, row 8): release → action 0x31 up
+              // → DoJump seam → execute_jump_release (the ONE release
+              // pipeline; refusal text rides the kind-56 event exactly
+              // like the parity lane).
+              window.__jumpChargeActive = false;
+              jumpChargeUi.hide();
+              __cmdInterpForward(" ", false);
             } else if (ev.key === " " && handle && window.__jumpChargeActive === true) {
               // A14-I4 (?jumpParity=on): release → wasm. The extent is
               // the WASM clock's (retail DoJump reads GetPowerBarLevel,

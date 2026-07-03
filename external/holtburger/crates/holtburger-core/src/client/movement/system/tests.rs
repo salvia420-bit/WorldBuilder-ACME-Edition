@@ -7125,3 +7125,47 @@ async fn cmd_interp_use_time_gated_while_server_motion_in_flight() {
         "the edge-driven TakeControl is not latch-gated"
     );
 }
+
+/// Step 5 (row 8/M6) — the jump lane through the interpreter: space
+/// arrives as action 0x31; the press routes CommenceJump onto the ONE
+/// charge clock (via the seam), the release queues DoJump and the tick
+/// flushes it through `execute_jump_release` (gates → vz → begin_jump →
+/// pack → send). Zero new clocks; no MoveToState rides a jump edge
+/// (HKC's terminal is Jump-gated, ADJ-3).
+#[tokio::test]
+async fn cmd_interp_jump_lane_charges_and_releases() {
+    let mut world = seed_jump_world();
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let t0 = Instant::now();
+    movement.set_cmd_interp(true);
+
+    movement.enqueue_key_action(0x31, true); // space press
+    movement
+        .tick(t0, &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert!(
+        movement.jump_charge_power(t0 + Duration::from_millis(500), &world) > 0.0,
+        "0x31 press armed the ONE charge clock through the seam"
+    );
+    assert_eq!(
+        movement.motion_state_pulses_sent, 0,
+        "a jump edge emits no MoveToState (ADJ-3 terminal gate)"
+    );
+
+    movement.enqueue_key_action(0x31, false); // space release
+    movement
+        .tick(t0 + Duration::from_millis(500), &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert!(
+        world.player.is_airborne,
+        "the queued release flushed through execute_jump_release and launched"
+    );
+    assert_eq!(
+        movement.jump_charge_power(t0 + Duration::from_secs(1), &world),
+        0.0,
+        "the charge was consumed by the release"
+    );
+}

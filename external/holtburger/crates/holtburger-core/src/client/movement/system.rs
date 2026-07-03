@@ -1465,6 +1465,10 @@ pub(crate) struct MovementSystem {
     /// sent (the legacy edge-detector site AND the step-5 interpreter
     /// flush). The row-9 one-sender-per-edge contract is pinned on it.
     pub(crate) motion_state_pulses_sent: u32,
+    /// Wave-1 step 5 (row 8) — a jump release queued by the interpreter
+    /// seam's `do_jump(autonomous)` for the tick's async flush
+    /// (`execute_jump_release` sends the Jump pack; seams are sync).
+    pending_cmd_interp_jump_release: bool,
     /// Physics-parity 2026-07-03 (dossier A F1/F2) — runtime carrier of
     /// the `?retailQuantum=on` URL flag. `None` = the
     /// [`USE_RETAIL_QUANTUM`] const default (OFF — the DECISIONS-A1-O5
@@ -1707,6 +1711,7 @@ impl MovementSystem {
             command_interpreter: None,
             pending_cmd_interp_sends: Vec::new(),
             motion_state_pulses_sent: 0,
+            pending_cmd_interp_jump_release: false,
             retail_quantum_runtime: None,
             last_move_was_autonomous: false,
             pending_take_control: false,
@@ -1900,7 +1905,7 @@ impl MovementSystem {
     ///   seam's send methods are deferred no-ops, so the A/B has identical
     ///   send cadence; step 5 flips send ownership onto the interpreter's
     ///   `SendMovementEvent` + the M1 converter.
-    fn ingest_key_edge(&mut self, action: u32, down: bool, world: &mut WorldState) {
+    fn ingest_key_edge(&mut self, action: u32, down: bool, now: Instant, world: &mut WorldState) {
         if !self.cmd_interp_enabled() {
             // JS only forwards actions under ?cmdInterp=on; a stray edge
             // here means the gate leaked.
@@ -1960,6 +1965,7 @@ impl MovementSystem {
         let mut seams = SystemInterpreterSeams {
             system: self,
             world,
+            now,
             drive: base,
             dispatched: false,
         };
@@ -2007,7 +2013,7 @@ impl MovementSystem {
     /// `player_motions_pending` composite (see the seam impl): pure
     /// control grabs reclaim next tick; anything server-authored keeps
     /// the gate shut.
-    fn pump_cmd_interp_use_time(&mut self, world: &mut WorldState) {
+    fn pump_cmd_interp_use_time(&mut self, now: Instant, world: &mut WorldState) {
         if !self.cmd_interp_enabled() {
             return;
         }
@@ -2030,6 +2036,7 @@ impl MovementSystem {
         let mut seams = SystemInterpreterSeams {
             system: self,
             world,
+            now,
             drive: base,
             dispatched: false,
         };
@@ -2898,7 +2905,7 @@ impl MovementSystem {
                 // Interpreter lane — needs world access (TakeControl's
                 // leash drop), so it ingests here rather than in
                 // ingest_drive_command.
-                self.ingest_key_edge(action, down, world);
+                self.ingest_key_edge(action, down, now, world);
             } else {
                 self.ingest_drive_command(command, now, local_guid);
             }
@@ -2910,7 +2917,7 @@ impl MovementSystem {
         // grab). Runs after edge ingestion (fresh edges first, retail
         // message-pump order) and before the send flush so anything it
         // queues flushes this same tick.
-        self.pump_cmd_interp_use_time(world);
+        self.pump_cmd_interp_use_time(now, world);
 
         // Wave-1 step 5 (row 9) — flush the interpreter lane's queued
         // MoveToState pulses, in dispatch order. State source: the M1
@@ -2942,6 +2949,30 @@ impl MovementSystem {
                 .await?;
             self.motion_state_pulses_sent = self.motion_state_pulses_sent.wrapping_add(1);
             self.note_server_motion_sent(server_motion_intent(state, metadata.motion_style));
+        }
+
+        // Wave-1 step 5 (row 8) — flush a queued interpreter-lane jump
+        // release through the ONE release pipeline (gates → vz/stamina
+        // → begin_jump → pack → send). Outcome handling mirrors the
+        // legacy recv arm: refusals log (step-5.5 surfaces them as the
+        // kind-56 toast); send failures propagate as tick errors.
+        if std::mem::take(&mut self.pending_cmd_interp_jump_release) {
+            match self.execute_jump_release(now, world, session).await? {
+                JumpOutcome::NotCharging => {}
+                JumpOutcome::Refused(refusal) => {
+                    log::info!("cmdInterp: jump release refused: {refusal:?}");
+                }
+                JumpOutcome::Jumped {
+                    vz,
+                    jump_skill,
+                    burden,
+                    ..
+                } => {
+                    log::info!(
+                        "cmdInterp: [jump] skill={jump_skill} burden={burden:.2} → vz={vz:.2} m/s"
+                    );
+                }
+            }
         }
 
         // A4-Q1 (2026-06-11): per-frame completion pump for the retail
@@ -6976,6 +7007,9 @@ impl MovementSystem {
 struct SystemInterpreterSeams<'a> {
     system: &'a mut MovementSystem,
     world: &'a mut WorldState,
+    /// The tick's `now` — the jump-charge clock reads it (row 8:
+    /// `commence_jump` → `jump_charge_commence(now, world)`).
+    now: Instant,
     /// The composed effective drive (base = the pre-edge effective state;
     /// each dispatched motion rewrites ONE axis — retail
     /// `InterpretedMotionState::ApplyMotion` shape, acclient.c:332759).
@@ -7153,15 +7187,32 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
         // permanently closed (P09 pre-hook, impl-side no-op).
     }
     fn commence_jump(&mut self) {
-        // Row 8: the spacebar rides the legacy jumpCharge exports this
-        // wave; goes live when the forwarder routes action 0x31.
-        log::debug!("cmdInterp: commence_jump seam (dark this wave)");
+        // Row 8 LIVE (step 5): the interpreter's OnAction case-8 press
+        // routes onto the ONE charge clock (zero new clocks). A
+        // press-time refusal keeps legacy parity semantics (the charge
+        // simply does not arm); surfacing rides the step-5.5 event
+        // stream.
+        if let Err(refusal) = self.system.jump_charge_commence(self.now, self.world) {
+            log::info!("cmdInterp: jump charge refused at commence: {refusal:?}");
+        }
     }
-    fn do_jump(&mut self, _autonomous: bool) {
-        log::debug!("cmdInterp: do_jump seam (dark this wave)");
+    fn do_jump(&mut self, autonomous: bool) {
+        if autonomous {
+            // Row 8 LIVE: queue the release for the tick's async flush
+            // (`execute_jump_release` sends the Jump pack — seams are
+            // sync). Retail: OnAction case-8 release → DoJump(1).
+            self.system.pending_cmd_interp_jump_release = true;
+        } else {
+            // The non-autonomous arm is the dead ADJ-6 server-piloted
+            // path (autonomy pinned at 2).
+            log::debug!("cmdInterp: DoJump(non-autonomous) suppressed (ADJ-6)");
+        }
     }
     fn finish_jump(&mut self) {
-        log::debug!("cmdInterp: finish_jump seam (dark this wave)");
+        // Row 8 LIVE: the blur/lose-control analog — drop the charge +
+        // standstill root without jumping (retail FinishJump,
+        // acclient.c:435853-435863).
+        self.system.jump_charge_abort(self.world);
     }
     fn send_move_to_state(&mut self) -> bool {
         // Row 9 LIVE (step 5): queue the composed drive for the tick's
