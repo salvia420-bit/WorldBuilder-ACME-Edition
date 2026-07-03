@@ -63,4 +63,19 @@ first stomp.
 
 ## Session decisions log
 
-(appended as made)
+Steps 0-4 EXECUTED 2026-07-03 (commits `d2384ba1`/`e218f95c`/`81ca17a2`/
+`ef29882d`/`c374d34f`). The full decision record + step-5 work order lives in
+`docs/HANDOFF-cmdinterp-wave1-landing-2026-07-03.md`. Headlines:
+
+- Rows 1-6 + 9 implemented as specced; rows 7/8/12/13 deliberately deferred
+  to step 5 (documented in `SystemInterpreterSeams`'s doc block, system.rs).
+- Row 9 amendment: wave-1 keeps the TICK's edge-detector as the single
+  sender in BOTH lanes (the seam's sends are deferred no-ops) — identical
+  send cadence for the A/B; the M1 converter is landed + parity-proven and
+  takes over at step 5.
+- Row 2 amendment: `interp.controlled_by_server` is mirrored IN from
+  `world.scene.local_server_controlled()` at each key edge (the wire-side
+  grabs keep their legacy path until step 5); the FU-A tail clears the scene
+  flag through the seam — no double-fire, asserted.
+- The both-lanes-drive debug_assert lives in `tick` (KeyEdge + ManualSet in
+  one queue drain).
