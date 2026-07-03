@@ -96,6 +96,29 @@ pub(crate) const MOTION_TURN_RIGHT: u32 = 0x6500_000D; // 1694498829
 pub(crate) const MOTION_TURN_LEFT: u32 = 0x6500_000E; // 1694498830
 pub(crate) const MOTION_SIDESTEP_RIGHT: u32 = 0x6500_000F; // 1694498831
 pub(crate) const MOTION_SIDESTEP_LEFT: u32 = 0x6500_0010; // 1694498832
+// P01/P02/P09 (movement-port wave 1, 2026-07-03) — the interpreter-lane
+// additions, consolidated HERE per the wave-1 integration checklist
+// (QUALITY-integration.md §3.2: one consts module; ADJ-1 name order
+// verified against retail `command_strings` acclient.c:43468 — 0x0D =
+// TurnRight, 0x0F = SideStepRight; ADJ-16 corrected values).
+/// `MotionCommand.Jump` (0x2500003B) — `Bookkeep` drops it (the jump
+/// path is CommenceJump/DoJump, not the lists — acclient.c:717512), and
+/// `HandleKeyboardCommand`'s terminal send is gated `cmd != Jump`
+/// (:717320, ADJ-3).
+pub(crate) const MOTION_JUMP: u32 = 0x2500_003B; // 620757051
+/// `MotionCommand.HoldRun` (0x85000001) — the run modifier command
+/// (P09 OnAction case 9 → SetHoldRun; ACE MotionCommand.cs:8).
+#[allow(dead_code)] // staged: P09 on_action fold (step 3/4)
+pub(crate) const MOTION_HOLD_RUN: u32 = 0x8500_0001;
+/// `MotionCommand.HoldSidestep` (0x85000002) — the strafe modifier
+/// command (ACE MotionCommand.cs:9).
+#[allow(dead_code)] // staged: P09 on_action fold (step 3/4)
+pub(crate) const MOTION_HOLD_SIDESTEP: u32 = 0x8500_0002;
+/// `MotionCommand.AutoRun` (0x090000C7 = 150995143, acclient.c
+/// HandleKeyboardCommand autorun arm :717258) — ADJ-16: P14's
+/// `0x09000047` was a typo; this is the verified literal.
+#[allow(dead_code)] // staged: P03/P09 on_action fold (step 3/4)
+pub(crate) const MOTION_AUTORUN_TOGGLE: u32 = 0x0900_00C7;
 /// `CommandMask.ChatEmote` (`motion & 0x2000000` →
 /// `CantChatEmoteInCombat`, acclient.c:344648).
 pub(crate) const COMMAND_MASK_CHAT_EMOTE: u32 = 0x0200_0000;
