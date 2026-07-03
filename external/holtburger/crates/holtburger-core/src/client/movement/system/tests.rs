@@ -6724,8 +6724,15 @@ async fn cmd_interp_key_edges_drive_the_interpreter_lane() {
 
     // FU-C: a release while the scene says server-controlled is SILENT —
     // the drive keeps its last-applied state, but the list pops (mirror
-    // empties).
+    // empties). Step 5: every REAL grab arrives with a server-authored
+    // motion whose wire stamp lowers the autonomy latch
+    // (`note_server_authored_motion`, row 1) — stamp it here too, or
+    // the use_time pump would (retail-correctly) treat a bare
+    // control-flag flip as a pure grab and reclaim the held keys next
+    // tick (`cmd_interp_use_time_reclaims_pure_control_grab` pins that
+    // arm).
     world.scene.set_local_server_controlled(true);
+    movement.note_server_authored_motion(false);
     movement.enqueue_key_action(0x2C, false); // release D under control
     movement
         .tick(now, &mut world, &mut session)
@@ -7000,5 +7007,121 @@ async fn cmd_interp_send_ownership_one_sender_per_edge() {
     assert_eq!(
         movement.motion_state_pulses_sent, 2,
         "release edge: ONE idle-state MoveToState (retail sends the release too)"
+    );
+}
+
+/// Step 5 — the retail `UseTime` FU-A trigger (acclient.c:717595): held
+/// keys survive a PURE control grab (no server-authored motion — the
+/// autonomy latch stays high) and the pump reclaims them next tick
+/// WITHOUT a fresh edge. Retail sends nothing on a use_time reclaim —
+/// pinned via the pulse counter (the revived intent matches the last
+/// sent one, so the edge-detector stays silent).
+#[tokio::test]
+async fn cmd_interp_use_time_reclaims_pure_control_grab() {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_0127),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+
+    movement.enqueue_key_action(0x29, true); // W press, latch raised
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let pulses_after_press = movement.motion_state_pulses_sent;
+
+    // A pure grab: the scene flag flips with NO server-authored motion
+    // (latch stays high, no projection, no interpolation).
+    world.scene.set_local_server_controlled(true);
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    assert!(
+        !world.scene.local_server_controlled(),
+        "use_time reclaimed the pure grab without a fresh edge (FU-A)"
+    );
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(
+        drive.forward,
+        Some(ForwardLocomotion::Forward),
+        "the held W revived out of the substate head"
+    );
+    assert_eq!(
+        movement.motion_state_pulses_sent, pulses_after_press,
+        "retail cadence: a use_time reclaim sends NO MoveToState"
+    );
+}
+
+/// Step 5 — the conservative `player_motions_pending` composite: a
+/// server-AUTHORED motion in flight (wire stamp lowered the latch —
+/// every gesture/directive does) keeps the use_time reclaim gated, so
+/// held-W still dies at the cast gesture (the strafecast floor). A
+/// fresh EDGE still reclaims (HKC TakeControl is edge-driven, not
+/// latch-gated).
+#[tokio::test]
+async fn cmd_interp_use_time_gated_while_server_motion_in_flight() {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_0128),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+
+    movement.enqueue_key_action(0x29, true); // W press
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    // The grab RIDES a server-authored motion (retail: every gesture /
+    // directive stamps the latch low through the wire).
+    world.scene.set_local_server_controlled(true);
+    movement.note_server_authored_motion(false);
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert!(
+        world.scene.local_server_controlled(),
+        "no auto-reclaim while a server-authored motion is in flight"
+    );
+
+    // A fresh edge reclaims regardless (FU-A via HKC TakeControl).
+    movement.enqueue_key_action(0x2E, true); // E press
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert!(
+        !world.scene.local_server_controlled(),
+        "the edge-driven TakeControl is not latch-gated"
     );
 }

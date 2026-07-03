@@ -1991,6 +1991,71 @@ impl MovementSystem {
         self.command_interpreter = Some(interp);
     }
 
+    /// Wave-1 step 5 — the per-tick retail `CommandInterpreter::UseTime`
+    /// pump (acclient.c:717595), `?cmdInterp=on` only: the FU-A
+    /// autonomy-latch trigger — queued input (or auto_run) while
+    /// server-controlled and physics-idle reclaims control WITHOUT a
+    /// fresh edge (retail: held keys survive a leash because
+    /// LoseControlToServer never clears the lists). The position-event
+    /// half stays closed (row 9: the heartbeat is the tick's; the seam
+    /// pins `cur_time` 0.0 + `player_position_event_ready` false).
+    ///
+    /// Only pumps an ALREADY-CONSTRUCTED interpreter: before the first
+    /// key edge there are no lists and no auto_run — nothing to
+    /// reclaim — so a flag-on session that never touches the keyboard
+    /// stays inert. Reclaim timing is gated by the conservative
+    /// `player_motions_pending` composite (see the seam impl): pure
+    /// control grabs reclaim next tick; anything server-authored keeps
+    /// the gate shut.
+    fn pump_cmd_interp_use_time(&mut self, world: &mut WorldState) {
+        if !self.cmd_interp_enabled() {
+            return;
+        }
+        let Some(mut interp) = self.command_interpreter.take() else {
+            return;
+        };
+        // Same honor-gated control mirror as the edge ingest.
+        interp.controlled_by_server =
+            interp.honor_autonomy_latch && world.scene.local_server_controlled();
+        let base = match self.active_drive {
+            Some(ActiveDriveState {
+                intent: ActiveDriveIntent::Manual(state),
+                ..
+            }) => state,
+            _ => MotionState {
+                gait: crate::client::movement_types::Gait::Run,
+                ..MotionState::default()
+            },
+        };
+        let mut seams = SystemInterpreterSeams {
+            system: self,
+            world,
+            drive: base,
+            dispatched: false,
+        };
+        interp.use_time(&mut seams);
+        let dispatched = seams.dispatched;
+        let drive = seams.drive;
+        if dispatched {
+            // The FU-A revival installs the composed drive exactly as
+            // an edge does (rows 3/4/6). Retail sends nothing on a
+            // use_time reclaim — and neither do we: the revival rides
+            // the tick's edge-detector, which no-ops when the revived
+            // intent matches the last sent one.
+            self.active_drive = Some(ActiveDriveState::manual(drive, None));
+            let non_idle = !(drive.is_locomotion_idle() && drive.turning.is_none());
+            if USE_MOVETO_DRIVER && non_idle {
+                self.manual_moveto_cancel_pending = true;
+            }
+            self.last_manual_drive = Some(Self::interp_held_snapshot(&interp, drive.gait));
+        }
+        debug_assert!(
+            !self.pending_take_control,
+            "cmdInterp handover violation: use_time set pending_take_control (row 2)"
+        );
+        self.command_interpreter = Some(interp);
+    }
+
     /// Row 3 mirror — the interpreter's three list heads as a raw
     /// [`MotionState`] (held-keys truth for the slideCast capture, the
     /// jump standstill root, and the autorun restore).
@@ -2839,6 +2904,13 @@ impl MovementSystem {
             }
         }
         self.consume_pending_take_control(world);
+
+        // Wave-1 step 5 — the retail per-frame UseTime pump (FU-A
+        // reclaim of held/queued input under a pure server control
+        // grab). Runs after edge ingestion (fresh edges first, retail
+        // message-pump order) and before the send flush so anything it
+        // queues flushes this same tick.
+        self.pump_cmd_interp_use_time(world);
 
         // Wave-1 step 5 (row 9) — flush the interpreter lane's queued
         // MoveToState pulses, in dispatch order. State source: the M1
@@ -7013,10 +7085,37 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
         true
     }
     fn player_motions_pending(&self) -> bool {
-        false // use_time is not pumped this wave
+        // Step 5 (use_time pump) — the retail gate is
+        // `CMotionInterp::motions_pending` (the anim-completion queue),
+        // which the web build cannot drain yet for the local player
+        // (action-class nodes complete via renderer AnimationDone; the
+        // per-entity route is Stage-3 — gating on the registry queue
+        // would wedge FU-A permanently after the first gesture).
+        // Conservative composite instead: treat ANY server-authored
+        // motion still in flight as pending — the projection window,
+        // the pose-interpolation stream, and a LOW autonomy latch (the
+        // wire lowered it on the last accepted self motion — gestures,
+        // FinishCast, directives). Net: the use_time reclaim fires only
+        // for PURE control grabs (latch high, nothing authored), never
+        // mid-cast — the strafecast floor's held-W-dies-at-the-gesture
+        // feel is preserved. The full retail post-anim reclaim of held
+        // keys needs the local AnimationDone → motions_pending route
+        // (documented follow-up).
+        self.system.server_controlled_projection.is_some()
+            || self.world.scene.local_player_is_interpolating()
+            || !self.system.last_move_was_autonomous
     }
     fn player_is_moving_to(&self) -> bool {
-        false
+        // Real predicate (step 5): the local registry manager's MoveTo
+        // driver OR the server-MoveTo projection window.
+        let guid = self.world.player.guid;
+        (guid != Guid::NULL
+            && self
+                .system
+                .movement_managers
+                .get(&guid)
+                .is_some_and(|manager| manager.is_moveto_active()))
+            || self.system.server_controlled_projection.is_some()
     }
     fn player_report_exhaustion(&mut self) {}
     fn player_turn_to_heading(&mut self, _params: &MovementParameters) {
