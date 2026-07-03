@@ -82,10 +82,38 @@ Recipe: chrome-devtools MCP page →
   (2) `__bootState` flips to 'error' ~90 s after in-world under SwiftShader —
   the KNOWN scene-ready watchdog artifact (memory trap c), ignore it and gate
   legs on in-world/mesh-count.
-- **NOT yet run:** arm (b) cast legs (strafecast parity + turn-tap reclaim
-  count + SeqF silent cascade), arm (c) burst (`&slideCast=off`: slide dies
-  at first stomp, ONE tap revives the whole pattern — `__cmdInterpReclaims`
-  must tick), and the **batched 1070 session**.
+- **Arm (b) cast legs — PASS** (throttle-immune driver, see traps): slide
+  continuous through the full 1708 chain (28 clean 250 ms samples, ~3.4-4.0
+  m/s, longestDead=0; one single-sample hitch+leash-blip pair mid-cast —
+  watch it on the 1070). SeqF: release-cascade under the cast left the slide
+  alive (3.86 m over the next 1.3 s), back-owned movement after the taps.
+  0 console errors.
+- **Arm (c) burst — PASS** (rerun with the tap timed INTO the dead window):
+  slide dies at the first bare stomp (0.61→0.08→0 by ~2 s) and stays dead;
+  a SINGLE turn-tap at 5 s revives the held strafe (1.45→4.2 m/s through
+  the cast tail). 0 errors.
+- **FINDING — FU-A is dormant during ACE casts (expected, document, not a
+  bug):** `__cmdInterpReclaims` stayed 0 in every cast leg because vanilla
+  ACE's General motion stomps never raise `scene.local_server_controlled`
+  (only MoveTo/TurnTo DIRECTIVES do, per the retailLeash row-64 wiring), so
+  the interpreter mirror sees "not controlled" and FU-C/FU-A never engage
+  mid-cast. The tap-revive behavior is carried by the AUTONOMY LATCH
+  (exactly like the legacy lane); interpreter FU-A engages on directive
+  grabs (pinned by `cmd_interp_use_time_reclaims_pure_control_grab` + the
+  lane test). ADJ-15 Q3 therefore reads on the 1070 as "does the latch
+  re-raise evict the gesture VISUALLY", and the reclaim counter only ticks
+  on directive-grab scenarios.
+- **Q5 partial:** cast gesture ids do NOT ride `em.setMotion`/KIND_MOTION —
+  they ride the cast-sequence lane (`em.playCastSequence`); the 1070 driver
+  hooks it. Bonus liveness proof: the Ready/walk/run ids in `__motionLog`
+  ARE the kind-61 DriveApplied consumer firing per edge (stream verified
+  end-to-end live). `_castBusyUntilMs` never arms under headless
+  `castTargetedSpell` (the JS cast chain is bypassed), so the row-12 cut
+  cannot fire in headless legs — 1070/spell-bar territory, as the mage-pvp
+  handoff predicted.
+- **NOT yet run:** the **batched 1070 session** (driver launched this
+  session — `verdict.json` + screenshots land in
+  `~/.claude/jobs/333ff13e/tmp/ab1070/`).
 
 ## Resume exactly here
 
@@ -163,6 +191,15 @@ guard + kind-61 consumer arm. `url-flags.md`: ?cmdInterp row rewritten;
 - MCP evaluate legs: the bot-lore rules held (one continuous evaluate per
   leg; `!ev.repeat`-safe synthetic KeyboardEvents on `document` reach the
   index.html listeners fine; call `.free()` on returned poses).
+- **MCP-tab budget throttling invalidated a leg**: ~15 min into the shared
+  MCP chromium's life, `setTimeout(250)` stretched to ~3 s and the netDrain
+  starved (3 samples in 9 s, decaying speeds, no wire events) — NOT a lane
+  bug. Fix that worked: run legs from a SELF-LAUNCHED chromium with
+  `--disable-background-timer-throttling --disable-renderer-backgrounding
+  --disable-backgrounding-occluded-windows` (see
+  `~/.claude/jobs/333ff13e/tmp/local-legs.mjs`, cloned from
+  `scripts/perf-worker/move-probe.mjs`). Treat any "3 samples instead of
+  30" leg as throttled and rerun there.
 
 ## Open questions carried forward
 
