@@ -246,20 +246,21 @@ fn parse_slide_cast_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "slideCast=off")
 }
 
-/// Movement-port wave 1 step 4 (2026-07-03): parse `?cmdInterp=on` (or
-/// `&cmdInterp=on`). DEFAULT-OFF opt-in shape: returns `true` ONLY when
-/// `cmdInterp=on` is present. When on, keyboard movement rides the retail
-/// `CommandInterpreter` lane (per-axis CommandLists, head-wins pop-through,
-/// FU-A TakeControl full re-apply, FU-C silent releases) — the JS key
-/// handlers forward raw input-action ids via `handleKeyAction` and the
-/// legacy `setMovementInput` dispatcher is silenced for movement keys.
-/// Flag-off, the legacy lane is byte-identical (nothing constructs the
-/// interpreter). PENDING eye-test — no default flip before the 1070 A/B.
-/// Native carrier: `USE_COMMAND_INTERPRETER` (movement/system.rs).
+/// Movement-port wave 1 (2026-07-03): parse `?cmdInterp=off` (or
+/// `&cmdInterp=off`). **DEFAULT FLIPPED ON at step 5** (A/B green: three
+/// local protocol arms + the 1070 eye test — user ruling "its decent"):
+/// returns `true` UNLESS `cmdInterp=off` is present. When on, keyboard
+/// movement rides the retail `CommandInterpreter` lane (per-axis
+/// CommandLists, head-wins pop-through, FU-A TakeControl full re-apply,
+/// FU-C silent releases) — the JS key handlers forward raw input-action
+/// ids via `handleKeyAction` and the legacy `setMovementInput` dispatcher
+/// is silenced for movement keys. `=off` restores the legacy lane
+/// byte-identical (nothing constructs the interpreter). Native carrier:
+/// `USE_COMMAND_INTERPRETER` (movement/system.rs).
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_cmd_interp_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "cmdInterp=on")
+    !trimmed.split('&').any(|kv| kv == "cmdInterp=off")
 }
 
 /// Phase 3 Phase D (2026-06-28, Option C): parse `?buildingOverlap=off` (or
@@ -25381,16 +25382,18 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_slide_cast_flag("?castMove=off&slideCast=off"));
     }
 
-    /// Movement-port wave 1 step 4: `?cmdInterp` parse shape — DEFAULT-OFF
-    /// opt-in; only an explicit `=on` enables the interpreter lane.
+    /// Movement-port wave 1 step 5: `?cmdInterp` parse shape — DEFAULT
+    /// FLIPPED ON (2026-07-03 A/B green; user ruling "its decent"); only
+    /// an explicit `=off` restores the legacy lane.
     #[test]
-    fn cmd_interp_flag_defaults_off_unless_on() {
+    fn cmd_interp_flag_defaults_on_unless_off() {
         use super::parse_cmd_interp_flag;
-        assert!(!parse_cmd_interp_flag(""));
+        assert!(parse_cmd_interp_flag(""));
         assert!(!parse_cmd_interp_flag("?cmdInterp=off"));
-        assert!(!parse_cmd_interp_flag("?cmdInterp"));
+        assert!(parse_cmd_interp_flag("?cmdInterp"));
         assert!(parse_cmd_interp_flag("?cmdInterp=on"));
         assert!(parse_cmd_interp_flag("?nosw=1&cmdInterp=on"));
+        assert!(!parse_cmd_interp_flag("?nosw=1&cmdInterp=off"));
     }
 
     /// A2-P3 R2 (W3+ S9 Stage R2): `?stickyRetail` parse shape — DEFAULT-ON

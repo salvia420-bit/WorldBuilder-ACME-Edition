@@ -815,9 +815,11 @@ const USE_SLIDE_CAST: bool = true;
 /// ONE writer per state row; both lanes must never drive in the same
 /// tick (debug-asserted in [`MovementSystem::tick`]).
 ///
-/// NO DEFAULT FLIP this wave — that waits for the parity harness + one
-/// batched 1070 live-bot A/B (verdict step 5).
-const USE_COMMAND_INTERPRETER: bool = false;
+/// DEFAULT FLIPPED ON 2026-07-03 (step-5 A/B green: all three local
+/// protocol arms + the 1070 eye test — user ruling: "its decent").
+/// `?cmdInterp=off` is the escape hatch back to the legacy lane; the
+/// legacy carriers stay intact until the post-flip cleanup wave.
+const USE_COMMAND_INTERPRETER: bool = true;
 
 /// Phase 3 Phase D (2026-06-28, Option C) — register each outdoor
 /// building/static BSP into EVERY land cell its world AABB overlaps, not just

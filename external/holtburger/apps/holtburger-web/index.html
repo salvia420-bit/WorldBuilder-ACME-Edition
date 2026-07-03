@@ -5858,16 +5858,17 @@
           // local-only, the server/observers still see the full cast).
           let lastForwardAxis = 0;
           const CAST_MOVE_ON = !new URLSearchParams(location.search).getAll("castMove").includes("off");
-          // Movement-port wave 1 step 4 (2026-07-03): `?cmdInterp=on` —
-          // keyboard movement rides the retail CommandInterpreter lane.
-          // JS becomes a RAW EDGE FORWARDER: each physical keydown/keyup
-          // maps to a retail InputAction id (ADJ-4 — the id→motion
-          // resolution and the WhichList routing live wasm-side) and the
-          // legacy __axisValue/sig-diff dispatcher below is silenced for
-          // movement keys. Flag-off: byte-identical legacy behavior.
-          // PENDING eye-test; default OFF until the 1070 A/B.
+          // Movement-port wave 1 (2026-07-03): the retail CommandInterpreter
+          // keyboard lane. JS is a RAW EDGE FORWARDER: each physical
+          // keydown/keyup maps to a retail InputAction id (ADJ-4 — the
+          // id→motion resolution and the WhichList routing live wasm-side)
+          // and the legacy __axisValue/sig-diff dispatcher below is
+          // silenced for movement keys. DEFAULT FLIPPED ON at step 5 (A/B
+          // green: three local protocol arms + the 1070 eye test — user
+          // ruling "its decent"); `?cmdInterp=off` restores the legacy
+          // lane byte-identical.
           const CMD_INTERP_ON =
-            new URLSearchParams(location.search).get("cmdInterp") === "on";
+            new URLSearchParams(location.search).get("cmdInterp") !== "off";
           // Retail InputAction ordinals (ACCmdInterp::OnAction switch base
           // 0x29, acclient.c:435951): our binds → w=WalkForward,
           // s=WalkBackward, d=SideStepRight, a=SideStepLeft, e=TurnRight,

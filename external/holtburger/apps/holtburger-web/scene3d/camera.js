@@ -179,13 +179,15 @@ export const CAMERA_MODES = ["follow", "topDown", "orbit"];
 // camera drop below the player; the new lookAt-with-pitch offset in
 // `positionCamera` redirects the view upward at the same time so the
 // user actually sees the sky.
-// Movement-port wave 1 step 4 (2026-07-03): `?cmdInterp=on` silences THIS
-// dispatcher's wasm boundary too — the camera lane becomes synthetic
-// input-action edges at step 5 (ADJ-4); until then a camera-relative
-// setMovementInput would race the interpreter lane (a both-lanes-drive
-// handover violation, PLAN row 14). Render-side effects keep firing.
+// Movement-port wave 1 (2026-07-03): the cmdInterp lane silences THIS
+// dispatcher's wasm boundary too — a camera-relative setMovementInput
+// would race the interpreter lane (a both-lanes-drive handover
+// violation, PLAN row 14); the camera lane becomes synthetic
+// input-action edges in a later wave (ADJ-4). Render-side effects keep
+// firing. DEFAULT FLIPPED ON at step 5 (A/B green; user ruling "its
+// decent"); `?cmdInterp=off` restores the legacy dispatch.
 const CMD_INTERP_ON =
-  new URLSearchParams(globalThis.location?.search ?? "").get("cmdInterp") === "on";
+  new URLSearchParams(globalThis.location?.search ?? "").get("cmdInterp") !== "off";
 
 const FOLLOW_PITCH_MIN = -0.5;
 const FOLLOW_PITCH_MAX = 1.4;
