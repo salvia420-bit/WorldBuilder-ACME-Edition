@@ -47,6 +47,10 @@ import {
 // _lbMembership state. Wired onto liveScene3d at LRU construction so the LRU's
 // evict always finds it (closes the boot-ring-before-first-per-LB-feed identity gap).
 import { evictStaticAtlasForLb } from "./static_atlas.js";
+// ?statBatchCrossLb (default-OFF) — same deterministic-wiring story as
+// evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
+// buckets (plain specifier everywhere → one module instance → shared state).
+import { evictStaticBatchXForLb } from "./static_batch_x.js";
 import { buildEnvCellsForLandblock } from "./cells.js";
 // Phase D.1 — synthetic ACE entity-spawn injector. The third
 // placement stream (after `fetch_landblock_objects` DAT-explicit and
@@ -4068,6 +4072,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // is module-stateful and a no-op for an LB with no atlas membership, so this is safe
     // even with ?statAtlas=off (nothing was ever fed → nothing to excise).
     liveScene3d._evictStaticAtlasForLb = evictStaticAtlasForLb;
+    // ?statBatchCrossLb — same deterministic wiring for the cross-LB per-material
+    // ?staticBatch buckets. evictStaticBatchXForLb is module-stateful and a no-op
+    // for an LB with no membership, so this is safe with the flag off (default —
+    // nothing was ever fed → nothing to excise).
+    liveScene3d._evictStaticBatchXForLb = evictStaticBatchXForLb;
     const landblockLru = new LandblockLRU({
       scene3d: liveScene3d,
       maxResident: lbCap,

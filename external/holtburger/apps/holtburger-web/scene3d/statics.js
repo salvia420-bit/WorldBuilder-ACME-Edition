@@ -91,6 +91,10 @@ import { attachAnimatedScenery, animSceneryEnabled, attachWindTrees } from "./an
 // and `statics` is unchanged → byte-identical frozen instanced path.
 import { treeWindEnabled, isTreeDid, windGeoEnabled, windSwayGpuEnabled } from "./tree_wind.js";
 import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb } from "./static_atlas.js";
+// ?statBatchCrossLb (default-OFF, 1070 eye-test pending) — cross-LB variant of the
+// per-LB ?staticBatch consolidation: same >=2-per-material groups, persistent
+// per-material BatchedMeshes spanning the ring instead of one per (LB, surface).
+import { statBatchCrossLbEnabled, consolidateStaticSingletonsCrossLb } from "./static_batch_x.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
@@ -2063,14 +2067,30 @@ export async function bakeStaticsForLandblock(
   let nodesToAdd = addedNodes;
   let staticBatchCount = 0;
   if (readStaticBatchFlag() && addedNodes.length > 1) {
-    try {
-      const batches = [];
-      nodesToAdd = consolidateStaticSingletons(addedNodes, batches);
-      staticBatchCount = batches.length;
-    } catch (e) {
-      nodesToAdd = addedNodes;
-      // eslint-disable-next-line no-console
-      console.warn("[scene3d.statics/staticBatch] consolidation failed, using unbatched:", e);
+    // ?statBatchCrossLb (default OFF, 1070 eye-test pending) — feed the SAME
+    // >=2-per-material groups into persistent CROSS-LB per-material
+    // BatchedMeshes (static_batch_x.js) instead of per-(LB, surface) ones
+    // (~3k `static-batch-lb…` nodes at the 203-LB ring → bucket-scale).
+    // consolidateStaticSingletonsCrossLb NEVER throws; it returns null when
+    // nothing was consumed, in which case the unchanged per-LB path below
+    // runs (no double-render window). Flag-off short-circuits to null →
+    // byte-identical legacy behavior.
+    const crossRes = statBatchCrossLbEnabled()
+      ? consolidateStaticSingletonsCrossLb(addedNodes, scene3d, lbKey)
+      : null;
+    if (crossRes) {
+      nodesToAdd = crossRes.out;
+      staticBatchCount = crossRes.bucketsTouched;
+    } else {
+      try {
+        const batches = [];
+        nodesToAdd = consolidateStaticSingletons(addedNodes, batches);
+        staticBatchCount = batches.length;
+      } catch (e) {
+        nodesToAdd = addedNodes;
+        // eslint-disable-next-line no-console
+        console.warn("[scene3d.statics/staticBatch] consolidation failed, using unbatched:", e);
+      }
     }
   }
   // Item 4 (2026-06-22): pre-warm this LB's static/scenery nodes (per-DID material program

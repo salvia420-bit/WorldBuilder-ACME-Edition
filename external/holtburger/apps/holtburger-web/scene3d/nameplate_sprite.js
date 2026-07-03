@@ -257,9 +257,13 @@ function _ensureFontReadyWatch() {
 // every entity spawn for the agent fleet's lifetime.
 const _NAMEPLATE_DISABLED = (() => {
   try {
-    if (typeof window === "undefined") return false;
-    return new URLSearchParams(window.location.search).get("hud") === "none";
-  } catch (_) { return false; }
+    if (typeof window === "undefined") return false; // headless tests exercise the bake paths
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("hud") === "none") return true;
+    // 2026-07-03 user directive: nameplates DEFAULT-OFF; `?nameplates=on` enables.
+    const v = (q.get("nameplates") || "").toLowerCase();
+    return !(v === "on" || v === "1" || v === "true" || v === "yes");
+  } catch (_) { return true; }
 })();
 
 // Distance LOD (DEFICIENCY-REPORT #16). Beyond NAMEPLATE_VISIBLE_RANGE_M

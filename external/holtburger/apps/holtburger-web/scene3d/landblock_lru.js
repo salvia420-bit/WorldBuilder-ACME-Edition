@@ -454,6 +454,23 @@ export class LandblockLRU {
     if (typeof s._evictStaticAtlasForLb === "function") {
       try { s._evictStaticAtlasForLb(lbKey); } catch (_) { /* fail-soft */ }
     }
+    // ?statBatchCrossLb (default-OFF) — excise this LB's geometry from the cross-LB
+    // per-material ?staticBatch BatchedMeshes (per-gid deleteGeometry; same-frame,
+    // instances cascade, other LBs' gids untouched). Hook wired at LRU construction
+    // (index.js) and re-installed by each feed; a no-op for an LB that never fed
+    // (flag off ⇒ nothing was ever fed). Mirrors the _evictStaticAtlasForLb facade.
+    if (typeof s._evictStaticBatchXForLb === "function") {
+      try { s._evictStaticBatchXForLb(lbKey); } catch (_) { /* fail-soft */ }
+    }
+    // ?terrainBatch (default-OFF) — excise this LB's terrain geometry from the
+    // cross-LB terrain BatchedMesh (per-instance deleteGeometry; same-frame, no
+    // rebuild). The hidden per-LB proxy mesh was already removed by the terrain
+    // scan in step 1; this drops the batch copy. Hook installed by
+    // terrain_batch.js on first absorb; absent ⇒ flag off ⇒ no-op. Mirrors the
+    // _evictStaticAtlasForLb facade above.
+    if (typeof s._evictTerrainBatchForLb === "function") {
+      try { s._evictTerrainBatchForLb(lbKey); } catch (_) { /* fail-soft */ }
+    }
 
     // 6b. C3 #7 — if a cross-LB InstancedMesh node survived step 5c (it
     //    still covers other resident LBs), this LB's statics are STILL on

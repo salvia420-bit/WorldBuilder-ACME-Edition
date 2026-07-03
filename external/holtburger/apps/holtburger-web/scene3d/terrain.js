@@ -41,6 +41,14 @@ import { isNearPlayerLb } from "./landblock_lru.js";
 // bounding sphere), so app-level terrain culling is redundant in the common
 // case and exists only for A/B eye-test. Only the constant is imported.
 import { CULL_DIST_SQ } from "./culling.js";
+// ?terrainBatch (2026-07-02) — OPT-IN cross-LB terrain draw consolidation
+// (~203 per-LB draws → 1 BatchedMesh multidraw). terrain_batch.js never
+// imports this module back (the GLSL strings are passed as arguments), so
+// there is no cycle. Flag off ⇒ both imports are inert.
+import {
+  terrainBatchEnabled,
+  tryAbsorbTerrainLbIntoBatch,
+} from "./terrain_batch.js";
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
@@ -2937,6 +2945,14 @@ function drainOneTerrainLodRebake(scene3d) {
       try { c.userData && c.userData.mergeDataTexture && c.userData.mergeDataTexture.dispose(); } catch (_) {}
     }
   }
+  // ?terrainBatch — also excise this LB's geometry from the cross-LB terrain
+  // BatchedMesh (the kill loop above only removed the hidden proxy). The hook
+  // is installed by terrain_batch.js only when the flag is on; absent ⇒ this
+  // typeof guard no-ops (flag-off behaviour unchanged). Mirrors the
+  // _evictStaticAtlasForLb idiom in landblock_lru.evict.
+  if (typeof scene3d._evictTerrainBatchForLb === "function") {
+    try { scene3d._evictTerrainBatchForLb(lbKey); } catch (_) { /* fail-soft */ }
+  }
   // Clear the idempotency gate so the lazy baker re-bakes (it short-circuits
   // on terrainBakedLbs.has(lbKey)); opts.playerLbKey was updated in reconcile
   // so the re-bake's pickSubdivLevelForLb picks the upgraded level.
@@ -3566,13 +3582,35 @@ export async function bakeTerrainForLandblock(
     lavaCodeMask: opts.lavaCodeMask,
   };
 
+  // ?terrainBatch (2026-07-02, default OFF) — fold this LB's draw into the
+  // shared cross-LB BatchedMesh (scene3d/terrain_batch.js). The absorber is
+  // synchronous and copies the geometry + the per-LB DataTexture bytes into
+  // the batch; on success it sets lbMesh.visible=false so the mesh below
+  // attaches as a HIDDEN data-carrier (userData still feeds the ambient
+  // sampler / LRU / LOD walkers; a hidden mesh never uploads VBOs, so its
+  // prewarm is skipped). On any failure it returns false having changed
+  // nothing and the legacy visible per-LB draw runs unchanged (fail-soft —
+  // a failed consolidation is never a vanished landblock). Flag off ⇒ the
+  // guard short-circuits before the call.
+  let terrainBatchAbsorbed = false;
+  if (!scene3d.wireframeMode && terrainBatchEnabled()) {
+    terrainBatchAbsorbed = tryAbsorbTerrainLbIntoBatch(scene3d, lbMesh, opts, {
+      vertexGlsl: TERRAIN_VERTEX_GLSL,
+      fragmentGlsl: TERRAIN_FRAGMENT_GLSL,
+      texMergeAlphaRound: TEXMERGE_ALPHA_ROUND,
+    });
+  }
+
   // Item 4 (2026-06-22): pre-warm this LB's shader program + DataTexture uploads
   // (vertexTypes / TexMerge) in the driver background BEFORE attaching, so the
   // first render frame after attach doesn't pay a synchronous compile+upload hitch
   // (the cost the 1070 r10 probe flagged). Safe without a residency re-check: the LB
   // isn't LRU-tracked until this baker resolves and the stream guard holds the
   // in-flight key, so it can't be evicted across this await. `?bakePrewarm=off` skips.
-  await prewarmSubtree(scene3d, lbMesh);
+  // (?terrainBatch: skipped for an absorbed proxy — it never renders.)
+  if (!terrainBatchAbsorbed) {
+    await prewarmSubtree(scene3d, lbMesh);
+  }
 
   scene3d.terrainGroup.add(lbMesh);
 
@@ -3972,6 +4010,11 @@ export function cullTerrainGroup(scene3d, culler) {
     // share geometry with the wire mesh. three's auto per-mesh cull handles
     // them; skip here (they'd resolve a null sphere → fail-open anyway).
     if (mesh.userData.wireFillFor) continue;
+    // ?terrainBatch — batched proxies are HIDDEN data-carriers (the cross-LB
+    // BatchedMesh draws them, with its own per-instance frustum cull); the
+    // visibility flips below would resurrect them into double-draws. The key
+    // only exists when the flag is on, so flag-off this check is always false.
+    if (mesh.userData.__terrainBatchGid != null) continue;
     const sphere = _resolveTerrainCullSphere(mesh);
     if (!sphere) {
       if (mesh.visible === false) mesh.visible = true;
