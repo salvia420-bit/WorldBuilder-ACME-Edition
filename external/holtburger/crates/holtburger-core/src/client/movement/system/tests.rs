@@ -7246,3 +7246,66 @@ async fn cmd_interp_event_stream_feeds_js_consumers() {
         "FU-A reclaim instrumented for the Q3 observation, got {events:?}"
     );
 }
+
+/// Step-5 live-smoke regression (found on the A/B): a bare Shift edge
+/// (HoldRun 0x32) must INSTALL the gait change — retail SetHoldRun
+/// applies to the minterp immediately (:716995) even though the edge
+/// dispatches no motion command.
+#[tokio::test]
+async fn cmd_interp_hold_run_edge_installs_gait() {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_012A),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+
+    movement.enqueue_key_action(0x29, true); // W — run-by-default
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let gait = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state.gait,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(gait, Gait::Run, "M7 run-by-default");
+
+    movement.enqueue_key_action(0x32, true); // Shift press → XOR → walk
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let gait = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state.gait,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(gait, Gait::Walk, "the bare Shift edge installed the walk gait");
+
+    movement.enqueue_key_action(0x32, false); // Shift release → run again
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let gait = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state.gait,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(gait, Gait::Run, "Shift release restores the run gait");
+}

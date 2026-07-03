@@ -7206,6 +7206,13 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
     fn minterp_set_hold_run(&mut self, effective_run: bool) {
         use crate::client::movement_types::Gait;
         self.drive.gait = if effective_run { Gait::Run } else { Gait::Walk };
+        // Retail `SetHoldRun` under autonomy applies to the minterp
+        // IMMEDIATELY (:716995-996) — the gait change must install even
+        // when the edge dispatches no motion (a bare Shift edge), so the
+        // session counts as dispatched. Found by the step-5 live A/B
+        // smoke: without this, the Shift walk-gait was dropped and W
+        // kept the Run gait (`cmd_interp_hold_run_edge_installs_gait`).
+        self.dispatched = true;
     }
     fn minterp_is_standing_still(&self) -> bool {
         self.drive.is_locomotion_idle() && self.drive.turning.is_none()
