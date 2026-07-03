@@ -180,6 +180,17 @@ impl MovementParameters {
         self.bitfield & 0x1_0000 != 0
     }
 
+    /// (P07/SC-11) write half of [`Self::stop_completely`] — retail
+    /// `CommandInterpreter::TurnToHeading` clears the bit via
+    /// `bitfield &= 0xFFFEFFFF` (acclient.c:718090).
+    pub(crate) fn set_stop_completely(&mut self, v: bool) {
+        if v {
+            self.bitfield |= 0x1_0000;
+        } else {
+            self.bitfield &= !0x1_0000;
+        }
+    }
+
     /// `MovementParameters::towards_and_away` (acclient.c:346153-346173)
     /// — the both-bits (MoveTowards|MoveAway) band-following arm.
     /// Spec §7 Q6: transcribed this pass. Inside the band → no command;

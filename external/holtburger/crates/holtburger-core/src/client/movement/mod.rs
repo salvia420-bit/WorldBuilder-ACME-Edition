@@ -1,3 +1,4 @@
+mod command_interpreter;
 mod command_stacks;
 mod common;
 mod handle;
@@ -11,6 +12,8 @@ mod move_to_nodes;
 mod movement_manager;
 mod params;
 mod raw_state;
+#[cfg(test)]
+mod retail_behavior_tests;
 mod system;
 
 pub use handle::MovementSystemHandle;
