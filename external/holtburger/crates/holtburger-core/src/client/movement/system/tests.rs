@@ -6776,3 +6776,174 @@ async fn cmd_interp_key_edges_drive_the_interpreter_lane() {
     );
     assert_eq!(drive.turning, Some(Turn::Right), "the tap's own axis drives");
 }
+
+/// Step 5 (verdict §3.3) — the `?castMove`/`?slideCast` URL flags are
+/// ALIASES for the interpreter configs: construction seeds
+/// `honor_autonomy_latch`/`slidecast_persist` from the runtime carriers.
+#[tokio::test]
+async fn cmd_interp_configs_seed_from_flag_carriers() {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_0124),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    movement.set_cmd_interp(true);
+    movement.set_cast_move(false);
+    movement.set_slide_cast(false);
+
+    movement.enqueue_key_action(0x29, true); // W constructs the interpreter
+    movement
+        .tick(Instant::now(), &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    let interp = movement
+        .command_interpreter
+        .as_ref()
+        .expect("interpreter constructed at first edge");
+    assert!(
+        !interp.honor_autonomy_latch,
+        "?castMove=off seeds honor_autonomy_latch=false"
+    );
+    assert!(
+        !interp.slidecast_persist,
+        "?slideCast=off seeds slidecast_persist=false"
+    );
+}
+
+/// Step 5 (verdict §3.3) — `?castMove=off` on the interpreter lane:
+/// the mirror never raises `controlled_by_server`, so a release under a
+/// server grab STILL dispatches (no FU-C suppression; raw input always
+/// drives) and the leash returns without the retail stomp.
+#[tokio::test]
+async fn cmd_interp_cast_move_off_releases_always_drive() {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_0125),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+    movement.set_cast_move(false);
+
+    movement.enqueue_key_action(0x2C, true); // D press (uncontrolled)
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    world.scene.set_local_server_controlled(true);
+    movement.enqueue_key_action(0x2C, false); // D release under "control"
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(
+        drive.sidestep, None,
+        "castMove=off: the release DISPATCHED (no FU-C silent suppression)"
+    );
+    assert!(
+        !world.scene.local_server_controlled(),
+        "castMove=off: the edge still returns the leash (no stomp)"
+    );
+}
+
+/// Step 5 (verdict §3.3) — flag-on, the stomp-persist predicate is the
+/// INTERPRETER's `slidecast_persist` config, not the legacy carrier:
+/// config=false kills the held axes even with the carrier ON, and
+/// config=true persists them even with the carrier OFF.
+#[tokio::test]
+async fn cmd_interp_slidecast_config_owns_the_stomp_when_flag_on() {
+    use holtburger_protocol::messages::{
+        MovementEventData, MovementInvalid, MovementType, MovementTypeData,
+    };
+    use holtburger_world::WorldEvent;
+
+    async fn arm(carrier_on: bool, config_on: bool) -> (bool, bool) {
+        let guid = Guid(0x5000_0778);
+        let mut world = WorldState::synthetic();
+        world.seed_local_player_entity(
+            guid,
+            "Player",
+            WorldPosition {
+                landblock_id: Guid(0x1234_0000),
+                ..Default::default()
+            },
+        );
+        let mut movement = MovementSystem::new();
+        let mut session = Session::new_test();
+        movement.set_cmd_interp(true);
+        movement.set_slide_cast(carrier_on);
+        // A (StrafeLeft) + E (TurnRight) — the dance keys, via the lane.
+        movement.enqueue_key_action(0x2D, true);
+        movement.enqueue_key_action(0x2E, true);
+        movement
+            .tick(Instant::now(), &mut world, &mut session)
+            .await
+            .expect("tick");
+        // Force the interpreter config apart from the carrier — the
+        // ownership probe (aliasing seeds them equal in production).
+        movement
+            .command_interpreter
+            .as_mut()
+            .expect("interpreter constructed")
+            .slidecast_persist = config_on;
+
+        let motion = MovementEventData {
+            guid,
+            object_instance_sequence: 1,
+            movement_sequence: 1,
+            server_control_sequence: 1,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::Magic.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid::default()),
+        };
+        movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+            data: Box::new(motion),
+            target_exists: false,
+            object_radius: 0.0,
+            object_height: 0.0,
+        }]);
+        let interp = movement
+            .movement_managers
+            .get(&guid)
+            .and_then(|manager| manager.motion_interp_ref())
+            .expect("stomp created the manager");
+        (interp.interpreted_state.sidestep, interp.interpreted_state.turn)
+    }
+
+    // Interpreter config OFF wins over carrier ON: bare stomp.
+    let (sidestep, turn) = arm(true, false).await;
+    assert!(
+        !sidestep && !turn,
+        "interp slidecast_persist=false → the bare retail stomp (carrier ignored)"
+    );
+    // Interpreter config ON wins over carrier OFF: modern persist.
+    let (sidestep, turn) = arm(false, true).await;
+    assert!(
+        sidestep && turn,
+        "interp slidecast_persist=true → held axes ride the stomp (carrier ignored)"
+    );
+}

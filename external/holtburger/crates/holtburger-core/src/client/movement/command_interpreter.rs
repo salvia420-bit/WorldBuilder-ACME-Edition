@@ -449,6 +449,30 @@ pub(crate) struct CommandInterpreter {
     pub(crate) last_sent_contact_plane: PlaneView, // acclient.h:35356
     /// retail `const long double` — set once in ctor (acclient.h:35357).
     pub(crate) time_between_position_events: f64,
+
+    // ── holtburger configs — NOT retail fields (verdict §3.3 flag
+    // migration; QUALITY-integration §3.3 flag-gate map). Seeded from
+    // the `?castMove`/`?slideCast` runtime carriers at construction
+    // (`MovementSystem::ingest_key_edge`) — the URL flags are ALIASES
+    // for these; the legacy carriers stay the `?cmdInterp=off`
+    // predicates. ────────────────────────────────────────────────────
+    /// `?castMove` alias: honor the server-control autonomy latch in
+    /// dispatch. `true` (default) = retail — FU-C silent releases and
+    /// the FU-A reclaim stomp apply while the server owns the player.
+    /// `false` (`?castMove=off` escape) = pre-2026-07-02 behavior: the
+    /// system-side mirror never raises [`Self::controlled_by_server`],
+    /// so no dispatch is suppressed or stomped (raw input always
+    /// drives; the leash still returns on any edge, system-side).
+    pub(crate) honor_autonomy_latch: bool,
+    /// `?slideCast` alias: the SetObjectMovement General stomp keeps
+    /// the held sidestep/turn axes flowing (ADJ-8: deliberately
+    /// smoother-than-retail). `false` = the authentic burst — all axes
+    /// die with the stomp; revival is FU-A reclaim-driven. Consulted by
+    /// the system's stomp arm when `?cmdInterp=on`; the legacy
+    /// `USE_SLIDE_CAST` carrier stays the flag-off predicate. The
+    /// eventual default is an ADJ-8 A/B decision — do not delete the
+    /// modern arm pre-measurement.
+    pub(crate) slidecast_persist: bool,
 }
 
 /// Head-of-list projection the apply/stop tail consumes (P04's
@@ -495,6 +519,8 @@ impl CommandInterpreter {
             },
             last_sent_contact_plane: PlaneView::default(),
             time_between_position_events: 1.0,
+            honor_autonomy_latch: true,
+            slidecast_persist: true,
         }
     }
 
@@ -1969,6 +1995,10 @@ mod tests {
         assert_eq!(s.last_sent_position_time, 100.0);
         assert!(!s.is_active(), "enabled but no player yet");
         assert!(s.is_enabled());
+        // holtburger configs (verdict §3.3): both default ON — retail
+        // latch honoring + the modern slidecast persist (ADJ-8).
+        assert!(s.honor_autonomy_latch);
+        assert!(s.slidecast_persist);
     }
 
     // ---- HKC (P03) --------------------------------------------------------

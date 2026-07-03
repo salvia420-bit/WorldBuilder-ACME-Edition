@@ -1890,19 +1890,39 @@ impl MovementSystem {
             debug_assert!(false, "KeyEdge queued while ?cmdInterp off");
             return;
         }
+        // Step 5 (verdict §3.3): the `?castMove`/`?slideCast` URL flags
+        // are ALIASES for the interpreter configs — seed them from the
+        // runtime carriers once at construction (both parse at boot,
+        // before any key edge can arrive).
+        let honor_autonomy_latch = self.cast_move_enabled();
+        let slidecast_persist = self.slide_cast_enabled();
         let mut interp = self.command_interpreter.take().unwrap_or_else(|| {
             let mut it = super::command_interpreter::CommandInterpreter::new(0.0);
             // Edges only arrive in-world: smartbox + player present
             // (retail SetSmartBox/NewPlayer ran during login).
             it.set_smartbox(true, true);
+            it.honor_autonomy_latch = honor_autonomy_latch;
+            it.slidecast_persist = slidecast_persist;
             it
         });
         // The wire-side control grabs (MoveTo/TurnTo directives, interp
         // engagement) set the SCENE flag today (they call the legacy
         // lane's machinery, not interp.lose_control_to_server, until the
         // step-5 migration) — mirror it IN so the FU-A/FU-C arms see the
-        // real control state at edge time.
-        interp.controlled_by_server = world.scene.local_server_controlled();
+        // real control state at edge time. `?castMove=off`
+        // (honor_autonomy_latch false): the mirror never raises the
+        // flag, so the FU-C release suppression and the FU-A stomp are
+        // inert — raw input always drives (the legacy carrier's
+        // `USE_CAST_MOVE=false` semantic).
+        let scene_controlled = world.scene.local_server_controlled();
+        interp.controlled_by_server = interp.honor_autonomy_latch && scene_controlled;
+        if !interp.honor_autonomy_latch && scene_controlled {
+            // The leash still returns to the player on any edge (the
+            // legacy lane's latch-raising edge arms all take control
+            // too) — just without the retail stomp/revival.
+            world.scene.set_local_server_controlled(false);
+            world.stop_local_player_interpolation();
+        }
 
         // Base drive: the current effective manual state — unchanged axes
         // carry (retail: an edge dispatches ONE axis; the others keep
@@ -6167,7 +6187,20 @@ impl MovementSystem {
                     // USE_SLIDE_CAST — capture the held manual
                     // sidestep/turn BEFORE the manager borrow (normal
                     // form: signed unit speed, negative = left).
-                    let held = self.last_manual_drive.filter(|_| self.slide_cast_enabled());
+                    // Step 5 (verdict §3.3): flag-on, the persist knob
+                    // is the INTERPRETER's `slidecast_persist` config
+                    // (the `?slideCast` alias, seeded at construction);
+                    // the legacy carrier stays the flag-off predicate.
+                    // An unconstructed interpreter (no key edge yet)
+                    // falls back to the carrier — same alias source.
+                    let slidecast_persist = if self.cmd_interp_enabled() {
+                        self.command_interpreter
+                            .as_ref()
+                            .map_or_else(|| self.slide_cast_enabled(), |i| i.slidecast_persist)
+                    } else {
+                        self.slide_cast_enabled()
+                    };
+                    let held = self.last_manual_drive.filter(|_| slidecast_persist);
                     let held_sidestep = held.and_then(|state| state.sidestep).map(|s| match s {
                         SidestepLocomotion::StrafeLeft => -1.0,
                         SidestepLocomotion::StrafeRight => 1.0,
