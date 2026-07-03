@@ -52,8 +52,37 @@
 //! LoopOnce overlays that notify completion); everything else is `0`
 //! (gait-loop realization, no `finished` event — retail itself never
 //! fires AnimDone for the cyclic anim, `acclient.c:340764-340773`).
+//! Post-flip wave (2026-07-03): the MagicGesture substate band joins
+//! the 1-anim class (`renderer_num_anims` doc has the rationale).
+//!
+//! **Completion-clock shim (post-flip wave, 2026-07-03 — a DOCUMENTED
+//! divergence):** retail's 1-anim nodes complete ONLY via the renderer
+//! (`AnimDoneHook::Execute` → … → [`MotionTableManager::animation_done`],
+//! `acclient.c:342336` → `:329873`). Our renderer cannot report
+//! per-entity completion yet — the `?mtQueue` notify lane is landed but
+//! DORMANT (no JS play site tags `mtQueued`; headless `?nullRender`
+//! bots would additionally never play the clip at all) — so a 1-anim
+//! node would pend FOREVER and wedge every `motions_pending` consumer
+//! (the cmdInterp `use_time` FU-A gate, the MoveTo driver lattice).
+//! Until the per-entity renderer route lands, the AUTHORED ANIM LENGTH
+//! is the completion clock: each 1-anim node carries
+//! [`RENDERER_DONE_FALLBACK_SECS`]; the per-tick poll lazy-stamps the
+//! HEAD node's deadline on first sight (serial heads = serial clocks,
+//! matching the renderer's one-at-a-time playback) and completes it at
+//! expiry exactly as a renderer `AnimationDone(success=1)` would —
+//! WITHOUT touching `animation_counter` (a real notify's +1/−num_anims
+//! nets 0 for a satisfied head, so the counter state is identical).
+//! This is ACE's own server-side model (`GetAnimationLength` pacing,
+//! `WorldObject_Networking.cs:1083`): the wire and our queue tick on
+//! the same authored clock. When the renderer route lands, real
+//! notifies win the race and the deadline becomes a pure backstop (the
+//! notify consumer must then clear/extend deadlines — see the field
+//! doc).
 
 use std::collections::VecDeque;
+use std::time::Duration;
+
+use web_time::Instant;
 
 /// Retail MotionCommand class bits (`CommandMask`, ACE
 /// `ACE.Entity/Enum/CommandMasks.cs:6-17`; same masks tested inline by
@@ -74,11 +103,42 @@ pub(crate) const MOTION_READY: u32 = 0x4100_0003;
 /// AnimNode` (`acclient.h:31097-31104`; allocated 0x10 bytes with
 /// `{motion, num_anims}` at `node[1]`, `acclient.c:330155-330161`).
 /// ACE `Physics/Animation/AnimNode.cs`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct AnimNode {
     pub motion: u32,
     pub num_anims: u32,
+    /// Completion-clock shim (module doc): the authored-length budget a
+    /// 1-anim node completes on when no renderer notify arrives. Set by
+    /// [`AnimNode::new`] (`num_anims > 0` →
+    /// [`RENDERER_DONE_FALLBACK_SECS`]); NOT retail (retail nodes have
+    /// no clock — the renderer is the clock).
+    pub anim_seconds: Option<f32>,
+    /// Lazily stamped by [`MotionTableManager::check_for_completed_motions`]
+    /// the first time this node is the polled HEAD (serial heads =
+    /// serial clocks). `None` until then.
+    pub done_deadline: Option<Instant>,
 }
+
+impl AnimNode {
+    pub(crate) fn new(motion: u32, num_anims: u32) -> Self {
+        Self {
+            motion,
+            num_anims,
+            anim_seconds: (num_anims > 0).then_some(RENDERER_DONE_FALLBACK_SECS),
+            done_deadline: None,
+        }
+    }
+}
+
+/// Completion-clock shim budget (module doc). Conservative upper bound
+/// over the gesture class this queue actually sees from live ACE: cast
+/// windups/gestures run ~0.6-1.5 s at `CastSpeed = 2.0`
+/// (`Player_Magic.cs:603`); swings are shorter. Long emotes (10 s
+/// dances) complete EARLY under this shim — accepted until authored
+/// lengths ride in (the named follow-up: resolve real lengths at the
+/// wasm ingest site via the motion-table machinery that already backs
+/// `lookupMotionLinkForSwing`).
+pub(crate) const RENDERER_DONE_FALLBACK_SECS: f32 = 2.0;
 
 /// Side effects the queue fires — retail calls these directly on
 /// `CPhysicsObj`/`CSequence`; headless Rust emits them for the owner to
@@ -197,7 +257,8 @@ impl MotionTableManager {
     /// append an [`AnimNode`] then coalesce
     /// (`acclient.c:330149-330169`; ACE `MotionTableManager.cs:163-167`).
     pub(crate) fn add_to_queue(&mut self, motion: u32, num_anims: u32) {
-        self.pending_animations.push_back(AnimNode { motion, num_anims });
+        self.pending_animations
+            .push_back(AnimNode::new(motion, num_anims));
         self.remove_redundant_links();
     }
 
@@ -322,6 +383,10 @@ impl MotionTableManager {
         for node in self.pending_animations.iter_mut().skip(duplicate_index + 1) {
             total += node.num_anims;
             node.num_anims = 0;
+            // Completion-clock shim: a zeroed node completes through the
+            // plain zero-anim poll — its clock is void.
+            node.anim_seconds = None;
+            node.done_deadline = None;
         }
         // Retail emits even when the sum is 0 (`tail == node` arm,
         // `acclient.c:329853-329856`).
@@ -377,19 +442,57 @@ impl MotionTableManager {
     /// backlog) complete (`acclient.c:329960-330020`; ACE
     /// `MotionTableManager.cs:63-86`). The `animation_counter` is NOT
     /// touched here.
-    pub(crate) fn check_for_completed_motions(&mut self) {
-        while let Some(head) = self.pending_animations.front().copied() {
-            if head.num_anims != 0 {
+    ///
+    /// Completion-clock shim (module doc): with `now`, a 1-anim HEAD
+    /// additionally lazy-stamps its deadline on first sight and, at
+    /// expiry, completes exactly as a renderer
+    /// `AnimationDone(success=1)` would — pop + `MotionDone` +
+    /// action-head drop, `animation_counter` untouched (a real
+    /// notify's `+1` then `-num_anims` nets 0 for a satisfied head).
+    /// `now = None` keeps the pure retail zero-anim poll (the
+    /// non-tick pump sites — same-call drainage of instant motions).
+    pub(crate) fn check_for_completed_motions(&mut self, now: Option<Instant>) {
+        loop {
+            let Some(head) = self.pending_animations.front().copied() else {
                 break;
+            };
+            if head.num_anims == 0 {
+                if head.motion & COMMAND_MASK_ACTION != 0 {
+                    self.state.remove_action_head();
+                }
+                self.events.push(MotionTableEvent::MotionDone {
+                    motion: head.motion,
+                    success: true,
+                });
+                self.pending_animations.pop_front();
+                continue;
             }
-            if head.motion & COMMAND_MASK_ACTION != 0 {
-                self.state.remove_action_head();
+            // 1-anim head: only the shim clock can complete it here.
+            let Some(now) = now else { break };
+            let Some(secs) = head.anim_seconds else { break };
+            match head.done_deadline {
+                None => {
+                    // First poll as head — the clock starts NOW (serial
+                    // heads = serial clocks; a 3-windup pack completes
+                    // one budget at a time, like the renderer would).
+                    if let Some(front) = self.pending_animations.front_mut() {
+                        front.done_deadline =
+                            Some(now + Duration::from_secs_f32(secs.max(0.0)));
+                    }
+                    break;
+                }
+                Some(deadline) if deadline <= now => {
+                    if head.motion & COMMAND_MASK_ACTION != 0 {
+                        self.state.remove_action_head();
+                    }
+                    self.events.push(MotionTableEvent::MotionDone {
+                        motion: head.motion,
+                        success: true,
+                    });
+                    self.pending_animations.pop_front();
+                }
+                Some(_) => break,
             }
-            self.events.push(MotionTableEvent::MotionDone {
-                motion: head.motion,
-                success: true,
-            });
-            self.pending_animations.pop_front();
         }
     }
 
@@ -399,9 +502,10 @@ impl MotionTableManager {
     /// `MotionTableManager.cs:158-161`), reached per-frame via
     /// `CPhysicsObj::update_object_internal` →
     /// `CPartArray::HandleMovement` (`acclient.c:322882` →
-    /// `:325106-325112`).
-    pub(crate) fn use_time(&mut self) {
-        self.check_for_completed_motions();
+    /// `:325106-325112`). Pass `now` from tick-driven pumps to run the
+    /// completion-clock shim; `None` from same-call drain sites.
+    pub(crate) fn use_time(&mut self, now: Option<Instant>) {
+        self.check_for_completed_motions(now);
     }
 
     /// `MotionTableManager::HandleExitWorld` — drain the queue through
@@ -455,7 +559,7 @@ mod tests {
     }
 
     fn node(motion: u32, num_anims: u32) -> AnimNode {
-        AnimNode { motion, num_anims }
+        AnimNode::new(motion, num_anims)
     }
 
     /// Queue FIFO order: `MotionDone` fires head-first in submission
@@ -578,7 +682,7 @@ mod tests {
         m.queue_object_motion(MODIFIER_M, 0);
         m.queue_object_motion(SUBSTATE_A, 1);
 
-        m.use_time();
+        m.use_time(None);
         assert_eq!(
             m.drain_events(),
             vec![MotionTableEvent::MotionDone {
@@ -598,7 +702,7 @@ mod tests {
         let mut m = MotionTableManager::new();
         m.queue_object_motion(SUBSTATE_A, 1);
         m.queue_object_motion(MODIFIER_M, 0);
-        m.use_time();
+        m.use_time(None);
         assert_eq!(m.drain_events(), vec![]);
         assert_eq!(nodes(&m).len(), 2);
     }
@@ -722,7 +826,7 @@ mod tests {
         c.queue_stop_completely(0);
         assert_eq!(nodes(&c), vec![node(MOTION_READY, 0)]);
         // An instant (zero-anim) stop completes on the next poll.
-        c.use_time();
+        c.use_time(None);
         assert_eq!(
             c.drain_events(),
             vec![MotionTableEvent::MotionDone {
@@ -805,5 +909,116 @@ mod tests {
             ]
         );
         assert!(m.pending_animations.is_empty());
+    }
+
+    // ── Completion-clock shim (post-flip wave, 2026-07-03) ──────────────
+
+    /// First poll with `now` stamps the HEAD's deadline (clock starts at
+    /// head-visibility, NOT enqueue) and does not pop; expiry pops with
+    /// `MotionDone(success=1)` and NEVER touches `animation_counter`
+    /// (identical net counter state to a real renderer notify).
+    #[test]
+    fn shim_clock_stamps_head_then_completes_at_expiry() {
+        let mut m = MotionTableManager::new();
+        m.queue_object_motion(SUBSTATE_A, 1);
+        let t0 = Instant::now();
+        m.use_time(Some(t0));
+        assert!(m.drain_events().is_empty(), "stamping poll must not pop");
+        let deadline = m.pending_animations[0].done_deadline.expect("stamped");
+        // Just before the deadline: still pending.
+        m.use_time(Some(deadline - Duration::from_millis(1)));
+        assert!(m.drain_events().is_empty());
+        // At/after the deadline: completes like a renderer AnimationDone.
+        m.use_time(Some(deadline));
+        assert_eq!(
+            m.drain_events(),
+            vec![MotionTableEvent::MotionDone {
+                motion: SUBSTATE_A,
+                success: true
+            }]
+        );
+        assert!(m.pending_animations.is_empty());
+        assert_eq!(m.animation_counter, 0, "shim completion never touches the counter");
+    }
+
+    /// Serial heads = serial clocks: a 3-node windup pack (one wire
+    /// stomp, FastTick action list) completes one budget at a time —
+    /// node 2's clock starts only when node 1 pops.
+    #[test]
+    fn shim_clock_is_serial_across_heads() {
+        let mut m = MotionTableManager::new();
+        // Distinct substates so remove_redundant_links does not coalesce.
+        m.queue_object_motion(SUBSTATE_A, 1);
+        m.queue_object_motion(ACTION_X, 1);
+        let t0 = Instant::now();
+        m.use_time(Some(t0));
+        let first_deadline = m.pending_animations[0].done_deadline.expect("head stamped");
+        assert_eq!(
+            m.pending_animations[1].done_deadline, None,
+            "non-head nodes stay unstamped"
+        );
+        // Expire head 1: head 2 stamps at THIS poll's now, not t0.
+        m.use_time(Some(first_deadline));
+        assert_eq!(m.drain_events().len(), 1);
+        let second_deadline = m.pending_animations[0].done_deadline.expect("new head stamped");
+        assert!(second_deadline >= first_deadline + Duration::from_secs_f32(RENDERER_DONE_FALLBACK_SECS - 0.001));
+        // ACTION_X carries the action bit → its shim completion drops the
+        // action head exactly like animation_done would.
+        m.state.add_action(ACTION_X, 1.0);
+        m.use_time(Some(second_deadline));
+        assert_eq!(m.drain_events().len(), 1);
+        assert!(m.state.actions.is_empty(), "action-bit shim pop drops the action head");
+        assert!(m.pending_animations.is_empty());
+    }
+
+    /// A real renderer notify arriving BEFORE the deadline wins the race
+    /// (the shim is a backstop, not a replacement) — and a truncated
+    /// (zeroed) node completes via the plain zero-anim poll regardless
+    /// of any stamped deadline.
+    #[test]
+    fn shim_clock_yields_to_real_notify_and_truncation() {
+        let mut m = MotionTableManager::new();
+        m.queue_object_motion(SUBSTATE_A, 1);
+        let t0 = Instant::now();
+        m.use_time(Some(t0)); // stamps
+        m.animation_done(true); // renderer wins
+        assert_eq!(
+            m.drain_events(),
+            vec![MotionTableEvent::MotionDone {
+                motion: SUBSTATE_A,
+                success: true
+            }]
+        );
+        assert!(m.pending_animations.is_empty());
+
+        // Truncation path: a duplicate substate re-queue zeroes the
+        // backlog behind the earlier duplicate
+        // (`remove_redundant_links` → `truncate_animation_list`); when
+        // the live head expires, the SAME poll drains the zeroed tail
+        // through the pure zero-anim arm — deadlines are irrelevant to
+        // zeroed nodes.
+        let mut t = MotionTableManager::new();
+        t.queue_object_motion(SUBSTATE_A, 1);
+        let t1 = Instant::now();
+        t.use_time(Some(t1)); // stamp head
+        t.queue_object_motion(SUBSTATE_B, 1); // non-blocking sibling substate
+        t.queue_object_motion(SUBSTATE_A, 1); // truncates: B + new A zeroed
+        let head_deadline = t.pending_animations[0].done_deadline.expect("still stamped");
+        t.use_time(Some(head_deadline));
+        let motions: Vec<u32> = t
+            .drain_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                MotionTableEvent::MotionDone { motion, .. } => Some(motion),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            motions,
+            vec![SUBSTATE_A, SUBSTATE_B, SUBSTATE_A],
+            "expired head + zeroed backlog drain in ONE poll, FIFO order"
+        );
+        assert!(t.pending_animations.is_empty());
+        assert_eq!(t.animation_counter, 0);
     }
 }

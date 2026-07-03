@@ -3098,7 +3098,7 @@ impl MovementSystem {
         // DEFAULT-OFF ([`USE_MOTION_TABLE_QUEUE`]): queue inert, current
         // paths untouched.
         if USE_MOTION_TABLE_QUEUE {
-            self.motion_table_manager.use_time();
+            self.motion_table_manager.use_time(Some(now));
             for event in self.motion_table_manager.drain_events() {
                 if let MotionTableEvent::MotionDone { success, .. } = event {
                     // A2-P3 (2026-06-12, W3+ S9): the unstick hook now
@@ -3112,6 +3112,31 @@ impl MovementSystem {
                         world.scene.unstick_local_player();
                     }
                 }
+            }
+        }
+
+        // Post-flip wave (2026-07-03) — the per-entity registry pump:
+        // retail runs `MotionTableManager::UseTime` for EVERY object
+        // EVERY frame (`CPhysicsObj::update_object_internal` →
+        // `CPartArray::HandleMovement`, acclient.c:322882 →
+        // :325106-325112); ours ran only on new packs / active MoveTo,
+        // so the wire-stomp gesture nodes the retail
+        // `move_to_interpreted_state` body now enqueues would never see
+        // the completion-clock shim (`motion_table_manager.rs` module
+        // doc) between packs. Local unstick bubbles exactly like the
+        // system-level pump above; remote unstick requests are dropped
+        // (spec §7 OQ-3 fallback — remote sticky is the F3-4 JS pin).
+        {
+            let local_guid = world.player.guid;
+            let mut local_unstick = false;
+            for (guid, manager) in self.movement_managers.iter_mut() {
+                let unstick = manager.pump_completions(now);
+                if unstick && *guid == local_guid {
+                    local_unstick = true;
+                }
+            }
+            if local_unstick && USE_STICKY_MANAGER {
+                world.scene.unstick_local_player();
             }
         }
 

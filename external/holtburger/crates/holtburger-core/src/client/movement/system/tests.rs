@@ -4705,7 +4705,7 @@ fn notify_animation_done_empty_queue_is_a_no_op() {
         .motion_table_manager_mut()
         .queue_object_motion(0x4400_0003, 1);
     let _ = system.motion_table_manager_mut().drain_events();
-    system.motion_table_manager_mut().use_time();
+    system.motion_table_manager_mut().use_time(None);
     assert!(
         system.motion_table_manager_mut().drain_events().is_empty(),
         "stray pre-seed notify must not pre-pay the new node's completion"

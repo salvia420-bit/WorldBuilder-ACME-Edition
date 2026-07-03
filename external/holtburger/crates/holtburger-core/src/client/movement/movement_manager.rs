@@ -422,8 +422,10 @@ impl MovementManager {
         // `motion_interp::renderer_num_anims`) complete synchronously
         // so they never wedge the driver's `motions_pending` gate.
         // `num_anims > 0` (action-class) nodes complete via the A4
-        // per-entity [`Self::animation_done`] feed.
-        self.motion_table_manager.use_time();
+        // per-entity [`Self::animation_done`] feed or the tick-driven
+        // completion-clock pump ([`Self::pump_completions`]) — this
+        // same-call site stays `None` (pure zero-anim poll).
+        self.motion_table_manager.use_time(None);
         let _ = self.drain_completions();
         // Re-read the gate post-pump (the caller sampled it pre-pump).
         let mut view = *view;
@@ -508,20 +510,44 @@ impl MovementManager {
         self.drain_completions()
     }
 
+    /// Post-flip wave (2026-07-03) — the per-tick completion pump,
+    /// retail's per-OBJECT `MotionTableManager::UseTime` cadence
+    /// (`CPhysicsObj::update_object_internal` →
+    /// `CPartArray::HandleMovement`, acclient.c:322882 →
+    /// :325106-325112: EVERY object, EVERY frame). Without it a 1-anim
+    /// node enqueued by a wire stomp is only ever polled on the NEXT
+    /// pack or an active-MoveTo pump — the completion-clock shim
+    /// (`motion_table_manager.rs` module doc) needs a tick-driven poll
+    /// to stamp and expire deadlines. Returns the OR-ed unstick-hook
+    /// requests (dropped for remotes by the caller, spec §7 OQ-3).
+    pub(crate) fn pump_completions(&mut self, now: web_time::Instant) -> bool {
+        self.motion_table_manager.use_time(Some(now));
+        self.drain_completions()
+    }
+
     /// `MovementManager::move_to_interpreted_state` — lazy-create-first
-    /// (acclient.c:339221-339236).
+    /// (acclient.c:339221-339236). Post-flip wave (2026-07-03): threads
+    /// this manager's completion spine so the full retail body (the
+    /// `apply_interpreted_movement` re-issue + the action replay) can
+    /// enqueue — a cast-gesture stomp now lands a 1-anim node on
+    /// `pending_motions` exactly like retail.
     pub(crate) fn move_to_interpreted_state(
         &mut self,
         state: &InterpretedState,
         server_actions: &[super::raw_state::RawAction],
         last_move_was_autonomous: bool,
         inq_run_rate: Option<f32>,
+        effects: &mut MotionSideEffects,
     ) {
-        self.minterp().move_to_interpreted_state(
+        self.minterp(); // lazy-create (acclient.c:339228-339235)
+        let interp = self.motion_interp.as_mut().expect("minterp() above");
+        interp.move_to_interpreted_state(
             state,
             server_actions,
             last_move_was_autonomous,
             inq_run_rate,
+            &mut self.motion_table_manager,
+            effects,
         );
     }
 
@@ -777,7 +803,9 @@ impl MovementManager {
                 // the autonomous local player's own re-derive lane stays
                 // with its existing owners.
                 let (state, actions) = interpreted_state_from_wire(&invalid.state);
-                self.move_to_interpreted_state(&state, &actions, false, None);
+                let mut move_effects = MotionSideEffects::default();
+                self.move_to_interpreted_state(&state, &actions, false, None, &mut move_effects);
+                effects.cancel_moveto |= move_effects.cancel_moveto;
                 if let Some(sticky) = invalid.sticky_object {
                     effects.stick_to = Some(sticky);
                     self.sticky_target = Some(sticky);
@@ -840,8 +868,10 @@ impl MovementManager {
         // `PerformMovement` arm (acclient.c:344684-344704; the same
         // cadence the system-level pump documents at `system.rs` tick).
         // Unstick requests are dropped here per spec §7 OQ-3 fallback
-        // (remote sticky is the F3-4 / A2-P3 owner's scope).
-        self.motion_table_manager.use_time();
+        // (remote sticky is the F3-4 / A2-P3 owner's scope). `None`:
+        // same-call zero-anim drainage only — deadline stamping/expiry
+        // belongs to the tick-driven [`Self::pump_completions`].
+        self.motion_table_manager.use_time(None);
         let _ = self.drain_completions();
 
         effects
@@ -860,7 +890,7 @@ mod tests {
         MoveToObject, MoveToParameters, MoveToPosition, MovementInvalid, TurnToHeading,
         TurnToObject, TurnToParameters,
     };
-    use holtburger_protocol::messages::movement::{InterpretedMotionState, MovementStateFlags};
+    use holtburger_protocol::messages::movement::{InterpretedMotionState, MotionItem, MovementStateFlags};
     use holtburger_protocol::traits::{ProtocolPack, ProtocolUnpack};
 
     const STYLE_NONCOMBAT_LOW16: u16 = 0x3D;
@@ -1459,6 +1489,173 @@ mod tests {
         assert!(
             !manager.moveto_motions_pending(),
             "zero-anim style node completed inside the same apply call"
+        );
+    }
+
+    // ── Post-flip wave (2026-07-03): retail enqueue on the wire path ────
+
+    /// THE cast-release stomp: ACE sends the cast gesture as the forward
+    /// SUBSTATE (`new Motion(MotionStance.Magic, castGesture, speed)` →
+    /// `SetForwardCommand`, WorldObject_Networking.cs:1080). The retail
+    /// `move_to_interpreted_state` body re-issues it through
+    /// `apply_interpreted_movement` → `DoInterpretedMotion` → a 1-anim
+    /// node PENDS on both spines (acclient.c:344147 → :343975), carrying
+    /// the retail jump refusal (72 — MagicBlast sits in
+    /// `motion_allows_jump`'s 0x4000001E..=0x40000039 blocked band), and
+    /// completes on the completion-clock shim exactly when a renderer
+    /// AnimationDone would have fired.
+    #[test]
+    fn cast_release_substate_stomp_pends_until_shim_deadline() {
+        use crate::client::movement::motion_table_manager::RENDERER_DONE_FALLBACK_SECS;
+        use std::time::Duration;
+        use web_time::Instant;
+
+        let mut manager = MovementManager::default();
+        let state = InterpretedMotionState {
+            flags: MovementStateFlags::FORWARD_COMMAND | MovementStateFlags::FORWARD_SPEED,
+            num_commands: 0,
+            current_style: None,
+            forward_command: Some(0x002Bu16.into()), // MagicBlast low16
+            sidestep_command: None,
+            turn_command: None,
+            forward_speed: Some(2.0),
+            sidestep_speed: None,
+            turn_speed: None,
+            commands: Vec::new(),
+        };
+        let event = envelope(
+            MovementType::Invalid,
+            0,
+            STYLE_NONCOMBAT_LOW16,
+            MovementTypeData::Invalid(MovementInvalid {
+                state,
+                sticky_object: None,
+            }),
+        );
+        manager.apply_unpacked_movement(&event, false, 0.0, 0.0);
+
+        assert!(
+            manager.moveto_motions_pending(),
+            "the gesture node must survive the same-call zero-anim drain"
+        );
+        let interp = manager.motion_interp_ref().unwrap();
+        assert_eq!(
+            interp.interpreted_state.forward_command,
+            Some(InterpretedForwardCommand::Substate(0x4000_002B)),
+            "FU6: the gesture occupies the forward slot"
+        );
+        let head = interp
+            .pending_motions
+            .iter()
+            .find(|node| node.motion == 0x4000_002B)
+            .expect("the re-issued gesture node rides pending_motions");
+        assert_eq!(
+            head.jump_error_code, 72,
+            "the queue head carries the retail can't-jump-while-casting refusal"
+        );
+
+        // Shim clock: stamped at first tick pump, still pending inside
+        // the budget, drained at expiry (with the trailing zero-anim
+        // stop nodes in the same poll).
+        let t0 = Instant::now();
+        manager.pump_completions(t0);
+        assert!(manager.moveto_motions_pending(), "first pump only stamps");
+        let step = Duration::from_secs_f32(RENDERER_DONE_FALLBACK_SECS);
+        manager.pump_completions(t0 + step - Duration::from_millis(5));
+        assert!(manager.moveto_motions_pending(), "inside the budget: still pending");
+        manager.pump_completions(t0 + step);
+        assert!(
+            !manager.moveto_motions_pending(),
+            "at the authored-length deadline the gesture completes like a renderer AnimationDone"
+        );
+    }
+
+    /// The FastTick windup shape: ONE General pack, forward = Ready,
+    /// PowerUp windups as the ACTION LIST (`EnqueueMotionAction` →
+    /// `MotionState.AddCommand`, WorldObject_Networking.cs:1231-1238).
+    /// Retail replays each through `DoInterpretedMotion`
+    /// (acclient.c:344398-344418): action-class nodes (0x1000006F+) land
+    /// on the interp FIFO + both completion spines, then drain SERIALLY
+    /// on the shim clock — and the FIFO drains WITH them (the pre-wave
+    /// port leaked every wire action into the FIFO forever).
+    #[test]
+    fn fasttick_windup_action_list_enqueues_serial_completion_nodes() {
+        use crate::client::movement::motion_table_manager::RENDERER_DONE_FALLBACK_SECS;
+        use std::time::Duration;
+        use web_time::Instant;
+
+        let mut manager = MovementManager::default();
+        let state = InterpretedMotionState {
+            flags: MovementStateFlags::FORWARD_COMMAND,
+            num_commands: 3,
+            current_style: None,
+            forward_command: Some(0x0003u16.into()), // Ready — empty slot
+            sidestep_command: None,
+            turn_command: None,
+            forward_speed: None,
+            sidestep_speed: None,
+            turn_speed: None,
+            commands: vec![
+                MotionItem::new(0x006Fu16, 1, false, 2.0), // MagicPowerUp01
+                MotionItem::new(0x0070u16, 2, false, 2.0), // MagicPowerUp02
+                MotionItem::new(0x0071u16, 3, false, 2.0), // MagicPowerUp03
+            ],
+        };
+        let event = envelope(
+            MovementType::Invalid,
+            0,
+            STYLE_NONCOMBAT_LOW16,
+            MovementTypeData::Invalid(MovementInvalid {
+                state,
+                sticky_object: None,
+            }),
+        );
+        manager.apply_unpacked_movement(&event, false, 0.0, 0.0);
+
+        {
+            let interp = manager.motion_interp_ref().unwrap();
+            assert_eq!(
+                interp.interpreted_state.actions.len(),
+                3,
+                "each replayed windup lands on the interp action FIFO (apply_motion action arm)"
+            );
+            let pending: Vec<u32> = interp.pending_motions.iter().map(|n| n.motion).collect();
+            assert_eq!(
+                pending,
+                vec![0x1000_006F, 0x1000_0070, 0x1000_0071],
+                "three 1-anim windup nodes pend after the same-call drain"
+            );
+            assert!(
+                interp.pending_motions.iter().all(|n| n.jump_error_code == 72),
+                "PowerUps sit in motion_allows_jump's 0x1000006F..=0x10000078 blocked band"
+            );
+        }
+
+        // Serial shim drain: one authored-length budget per node.
+        let t0 = Instant::now();
+        manager.pump_completions(t0); // stamps windup 1
+        let step = Duration::from_secs_f32(RENDERER_DONE_FALLBACK_SECS);
+        manager.pump_completions(t0 + step); // pops 1, stamps 2
+        {
+            let interp = manager.motion_interp_ref().unwrap();
+            assert_eq!(interp.pending_motions.len(), 2, "serial: one budget, one pop");
+            assert_eq!(
+                interp.interpreted_state.actions.len(),
+                2,
+                "the completion pop drains the FIFO too (leak fixed)"
+            );
+        }
+        manager.pump_completions(t0 + step * 2); // pops 2, stamps 3
+        manager.pump_completions(t0 + step * 3); // pops 3
+        assert!(!manager.moveto_motions_pending());
+        assert!(
+            manager
+                .motion_interp_ref()
+                .unwrap()
+                .interpreted_state
+                .actions
+                .is_empty(),
+            "FIFO fully drained with the completion stream"
         );
     }
 }

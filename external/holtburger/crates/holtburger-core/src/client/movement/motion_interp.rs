@@ -77,8 +77,30 @@ pub(crate) const MOTION_ACTION_BIT: u32 = 0x1000_0000;
 /// caller is already behind default-off gates (`USE_MOVETO_DRIVER` /
 /// `USE_UNPACK_MOVEMENT_SEMANTICS` / `?wasmPursuit` lane), so flag-off
 /// builds are byte-identical.
+///
+/// Post-flip wave (2026-07-03): the SUBSTATE-class cast-gesture band
+/// joins the 1-anim class. ACE sends the cast RELEASE as the forward
+/// substate (`new Motion(MotionStance.Magic, castGesture, speed)` →
+/// `SetForwardCommand`, `WorldObject_Networking.cs:1080` /
+/// `Entity/Motion.cs:103-107`), so it re-issues through
+/// `apply_interpreted_movement`'s forward arm and MUST pend until the
+/// clip would end — these are exactly the substate ids JS realizes as
+/// one-shot overlays (`entities.js` `CAST_COMMANDS`: MagicBlast..
+/// MagicPray + CastSpell; the PowerUp windups are ACTION-class
+/// `0x1000006F..` and were already 1). Held substates (Ready/Crouch/
+/// Sitting `0x41…`), Dead, and Falling stay 0 (cycle/terminal
+/// realizations — no completion clip).
 pub(crate) fn renderer_num_anims(motion: u32) -> u32 {
-    u32::from(motion & MOTION_ACTION_BIT != 0)
+    if motion & MOTION_ACTION_BIT != 0 {
+        return 1;
+    }
+    match motion {
+        // MagicBlast..MagicPray (`0x4000002B..=0x40000039`, chorizite
+        // MotionCommand.cs / lib.rs classify_command_kind band) +
+        // CastSpell (`0x400000D3`).
+        0x4000_002B..=0x4000_0039 | 0x4000_00D3 => 1,
+        _ => 0,
+    }
 }
 
 // A3-D3 (2026-06-12) — motion-id literals the DoMotion lattice tests
@@ -572,24 +594,55 @@ impl MotionInterp {
     }
 
     /// Server `UpdateMotion` lane — `CMotionInterp::move_to_interpreted_state`
-    /// (`acclient.c:344372-344426`): copy the movement axes, replay only
-    /// actions with NEWER 15-bit stamps (`:344398-344408`), skipping
-    /// self-echoed autonomous actions for the PLAYER-CONTROLLED object
-    /// (weenie vfptr[5], `acclient.c:344411` — a static object
-    /// property, NOT the dynamic autonomy flag: retail skips echoes
-    /// even while server-controlled), then `apply_current_movement` —
-    /// which for the autonomous local player immediately re-derives the
-    /// movement from local raw state (the Rust-side formalization of
-    /// what B9 does ad-hoc in JS).
-    #[allow(dead_code)] // staged: stage-2/3 lane (DESIGN.md §3)
+    /// (`acclient.c:344372-344426`, full retail body since the post-flip
+    /// wave 2026-07-03): stamp the raw style (`:344391`), pre-read the
+    /// jump gate off the OUTGOING forward command (`:344393`), copy the
+    /// movement axes, run [`Self::apply_current_movement_reissue`] (the
+    /// server-controlled arm re-ISSUES the state through
+    /// `DoInterpretedMotion` — THE enqueue that makes a cast-gesture
+    /// stomp land a completion node on `pending_motions`), then replay
+    /// only actions with NEWER 15-bit stamps (`:344398-344418`) through
+    /// `DoInterpretedMotion` with the wire speed + autonomous bit
+    /// (`:344414-344417`), skipping self-echoed autonomous actions for
+    /// the PLAYER-CONTROLLED object (weenie vfptr[5], `acclient.c:344411`
+    /// — a static object property, NOT the dynamic autonomy flag: retail
+    /// skips echoes even while server-controlled).
+    ///
+    /// The pre-wave port applied actions straight onto the interpreted
+    /// FIFO (`apply_action`) — which mislocated substate-class windups
+    /// (they belong in the forward slot, `interp_state.rs` `apply_motion`
+    /// substate arm) and leaked FIFO entries (nothing ever popped them:
+    /// the pop is `motion_done`'s `remove_action`, which only fires for
+    /// queue nodes this path never enqueued).
     pub(crate) fn move_to_interpreted_state(
         &mut self,
         state: &InterpretedState,
         server_actions: &[RawAction],
         last_move_was_autonomous: bool,
         inq_run_rate: Option<f32>,
+        motion_table_manager: &mut MotionTableManager,
+        effects: &mut MotionSideEffects,
     ) {
+        // Retail stamps `raw_state.current_style = new_state->current_style`
+        // here (`acclient.c:344391`); our `RawState` deliberately has no
+        // style mirror — `interpreted_state.current_style` is the single
+        // style owner (raw_state.rs field-set decision), and the copy
+        // below carries it.
+        // `disallow_jump = motion_allows_jump(interpreted_state.forward_command) != 0`
+        // (`:344393`) — read off the CURRENT (pre-copy) forward command.
+        let disallow_jump = motion_allows_jump(self.interpreted_forward_motion_id()) != 0;
         self.interpreted_state.copy_movement_from(state);
+        self.apply_current_movement_reissue(
+            true,
+            disallow_jump,
+            last_move_was_autonomous,
+            inq_run_rate,
+            motion_table_manager,
+            effects,
+        );
+        // Action replay (`:344398-344418`) — retail builds ONE default
+        // MovementParameters before the loop and per-action pokes speed
+        // + the autonomous bit (0x1000), then calls DoInterpretedMotion.
         for action in server_actions {
             if !is_newer_action_stamp(action.stamp, self.server_action_stamp) {
                 continue;
@@ -603,9 +656,196 @@ impl MotionInterp {
                 continue;
             }
             self.server_action_stamp = action.stamp & 0x7FFF;
-            self.interpreted_state.apply_action(action.action, action.speed);
+            let mut params = MovementParameters::default();
+            params.speed = action.speed;
+            params.bitfield =
+                (params.bitfield & !0x1000) | (u32::from(action.autonomous) << 12);
+            let _ = self.do_interpreted_motion(
+                action.action,
+                &params,
+                true,
+                motion_table_manager,
+                effects,
+            );
         }
-        self.apply_current_movement(last_move_was_autonomous, inq_run_rate);
+    }
+
+    /// `CMotionInterp::apply_current_movement` (`acclient.c:344301-344315`)
+    /// — the re-issue dispatch: the autonomous PLAYER re-derives from its
+    /// LOCAL raw state; everything else (server-controlled local player,
+    /// remote entities) re-issues the received interpreted state through
+    /// [`Self::apply_interpreted_movement`]. DELIBERATE CUT from retail:
+    /// the autonomous arm stays STATE-ONLY (`apply_raw_movement` — no
+    /// `apply_interpreted_movement` tailcall): the local autonomous lane
+    /// realizes motions through the cmdInterp keyboard lane (M1 wire ≡
+    /// pose, one state truth) and a Rust-side re-issue there would
+    /// double-drive it. The server-controlled arm is where the retail
+    /// enqueue semantics matter (gesture stomps → pending nodes).
+    fn apply_current_movement_reissue(
+        &mut self,
+        cancel_moveto: bool,
+        disallow_jump: bool,
+        last_move_was_autonomous: bool,
+        inq_run_rate: Option<f32>,
+        motion_table_manager: &mut MotionTableManager,
+        effects: &mut MotionSideEffects,
+    ) {
+        if last_move_was_autonomous {
+            self.apply_raw_movement(inq_run_rate);
+        } else {
+            self.apply_interpreted_movement(
+                cancel_moveto,
+                disallow_jump,
+                true,
+                motion_table_manager,
+                effects,
+            );
+        }
+    }
+
+    /// The re-issue's forward-slot motion id. NOT
+    /// [`Self::interpreted_forward_motion_id`] (that one is the JUMP-GATE
+    /// input, where an empty slot defaults to WalkForward's gate class):
+    /// here an empty slot re-issues Ready — retail's
+    /// `InterpretedMotionState` ctor seeds `forward_command = Ready`
+    /// (`0x41000003`), so retail's "no locomotion" re-issue IS a Ready
+    /// `DoInterpretedMotion` (zero-anim node, same-call drain).
+    fn reissue_forward_motion_id(&self) -> u32 {
+        match self.interpreted_state.forward_command {
+            None => MOTION_READY,
+            Some(InterpretedForwardCommand::WalkForward) => MOTION_WALK_FORWARD,
+            Some(InterpretedForwardCommand::RunForward) => MOTION_RUN_FORWARD,
+            Some(InterpretedForwardCommand::Substate(id)) => id,
+        }
+    }
+
+    /// `CMotionInterp::apply_interpreted_movement`
+    /// (`acclient.c:344147-344220`) — re-issue the CURRENT interpreted
+    /// state through `DoInterpretedMotion`, axis by axis. This is the
+    /// retail enqueue chain for every server-authored stomp: style →
+    /// forward (a stored SUBSTATE gesture here lands the 1-anim
+    /// completion node that gates `motions_pending`) → sidestep (or its
+    /// stop) → turn (or its stop). Params are retail's exact
+    /// construction (`:344160`): default bitfield with
+    /// {DisableJumpDuringLink, CancelMoveTo, ModifyInterpretedState,
+    /// SetHoldKey} cleared (`& 0xFFFD37FF`), then CancelMoveTo /
+    /// DisableJumpDuringLink ORed back per the arguments —
+    /// ModifyInterpretedState stays CLEAR: the interpreted state is the
+    /// SOURCE being replayed, so the re-issue is enqueue/realize-only.
+    ///
+    /// Ports of the retail body, in order:
+    /// - `forward_command == RunForward` stamps `my_run_rate` from the
+    ///   forward speed (`:344162-344163`);
+    /// - contact-fail arm issues Falling (`0x40000015`, `:344191-344194`)
+    ///   — unreachable under the manager's server-authoritative
+    ///   `contact = true` diagnostic stance (same as the style step);
+    /// - `standing_longjump` arm: Ready + sidestep stop (`:344168-344173`);
+    /// - turn-stop arm: our `stop_interpreted_motion` already embodies
+    ///   retail's success path (Ready node + RemoveMotion,
+    ///   `:344203-344210`); the cell-null `RemoveLinkAnimations` tail
+    ///   (`:344212-344217`) is renderer-side and cell always exists for
+    ///   us — skipped.
+    pub(crate) fn apply_interpreted_movement(
+        &mut self,
+        cancel_moveto: bool,
+        disallow_jump: bool,
+        on_walkable_contact: bool,
+        motion_table_manager: &mut MotionTableManager,
+        effects: &mut MotionSideEffects,
+    ) {
+        let mut params = MovementParameters::default();
+        params.bitfield = (params.bitfield & 0xFFFD_37FF)
+            | (u32::from(cancel_moveto) << 15)
+            | (u32::from(disallow_jump) << 17);
+
+        if self.interpreted_state.forward_command == Some(InterpretedForwardCommand::RunForward) {
+            self.my_run_rate = self.interpreted_state.forward_speed;
+        }
+
+        let style = self.interpreted_state.current_style;
+        let _ = self.do_interpreted_motion(
+            style,
+            &params,
+            on_walkable_contact,
+            motion_table_manager,
+            effects,
+        );
+
+        let forward_id = self.reissue_forward_motion_id();
+        if Self::contact_allows_move(forward_id, on_walkable_contact) {
+            if self.standing_longjump {
+                params.speed = 1.0;
+                let _ = self.do_interpreted_motion(
+                    MOTION_READY,
+                    &params,
+                    on_walkable_contact,
+                    motion_table_manager,
+                    effects,
+                );
+                let _ = self.stop_interpreted_motion(
+                    MOTION_SIDESTEP_RIGHT,
+                    &params,
+                    on_walkable_contact,
+                    motion_table_manager,
+                    effects,
+                );
+            } else {
+                params.speed = self.interpreted_state.forward_speed;
+                let _ = self.do_interpreted_motion(
+                    forward_id,
+                    &params,
+                    on_walkable_contact,
+                    motion_table_manager,
+                    effects,
+                );
+                if self.interpreted_state.sidestep {
+                    params.speed = self.interpreted_state.sidestep_speed;
+                    let _ = self.do_interpreted_motion(
+                        MOTION_SIDESTEP_RIGHT,
+                        &params,
+                        on_walkable_contact,
+                        motion_table_manager,
+                        effects,
+                    );
+                } else {
+                    let _ = self.stop_interpreted_motion(
+                        MOTION_SIDESTEP_RIGHT,
+                        &params,
+                        on_walkable_contact,
+                        motion_table_manager,
+                        effects,
+                    );
+                }
+            }
+        } else {
+            params.speed = 1.0;
+            let _ = self.do_interpreted_motion(
+                MOTION_FALLING,
+                &params,
+                on_walkable_contact,
+                motion_table_manager,
+                effects,
+            );
+        }
+
+        if self.interpreted_state.turn {
+            params.speed = self.interpreted_state.turn_speed;
+            let _ = self.do_interpreted_motion(
+                MOTION_TURN_RIGHT,
+                &params,
+                on_walkable_contact,
+                motion_table_manager,
+                effects,
+            );
+        } else {
+            let _ = self.stop_interpreted_motion(
+                MOTION_TURN_RIGHT,
+                &params,
+                on_walkable_contact,
+                motion_table_manager,
+                effects,
+            );
+        }
     }
 
     /// `CMotionInterp::StopCompletely` (`acclient.c:343597-343638`):
@@ -1168,7 +1408,10 @@ impl MotionInterp {
                 Ok(())
             }
         };
-        motion_table_manager.check_for_completed_motions();
+        // Same-call sync poll (retail post-arm CheckForCompletedMotions,
+        // acclient.c:344684-344704) — `None`: zero-anim drainage only;
+        // the completion-clock shim runs on the tick-driven pumps.
+        motion_table_manager.check_for_completed_motions(None);
         result
     }
 
@@ -1923,7 +2166,9 @@ mod tests {
 
         // Autonomous local player: movement re-derived from raw (still
         // RunForward × 2.0), echo skipped, fresh server action queued.
-        interp.move_to_interpreted_state(&server_state, &actions, true, Some(2.0));
+        let mut mtm = MotionTableManager::new();
+        let mut effects = MotionSideEffects::default();
+        interp.move_to_interpreted_state(&server_state, &actions, true, Some(2.0), &mut mtm, &mut effects);
         assert_eq!(
             interp.interpreted_state.forward_command,
             Some(InterpretedForwardCommand::RunForward),
@@ -1946,7 +2191,7 @@ mod tests {
             stamp: 2,
             autonomous: false,
         }];
-        interp.move_to_interpreted_state(&server_state, &follow_up, true, Some(2.0));
+        interp.move_to_interpreted_state(&server_state, &follow_up, true, Some(2.0), &mut mtm, &mut effects);
         assert_eq!(interp.server_action_stamp, 2);
         assert_eq!(
             interp.interpreted_state.actions,
@@ -1964,7 +2209,8 @@ mod tests {
             stamp: 2,
             autonomous: true,
         }];
-        remote.move_to_interpreted_state(&server_state, &remote_actions, false, None);
+        let mut remote_mtm = MotionTableManager::new();
+        remote.move_to_interpreted_state(&server_state, &remote_actions, false, None, &mut remote_mtm, &mut effects);
         assert_eq!(
             remote.interpreted_state.forward_command,
             Some(InterpretedForwardCommand::WalkForward)
@@ -2709,7 +2955,7 @@ mod tests {
         interp
             .do_interpreted_motion(ACTION_X, &params, true, &mut mtm, &mut effects)
             .unwrap();
-        mtm.use_time();
+        mtm.use_time(None);
         assert!(
             mtm.drain_events().is_empty(),
             "action node must await the renderer feed"
@@ -2730,7 +2976,7 @@ mod tests {
             interp
                 .do_interpreted_motion(motion, &params, true, &mut mtm, &mut effects)
                 .unwrap();
-            mtm.use_time();
+            mtm.use_time(None);
             assert_eq!(
                 mtm.drain_events(),
                 vec![MotionTableEvent::MotionDone { motion, success: true }],
@@ -2745,7 +2991,7 @@ mod tests {
         interp
             .stop_interpreted_motion(MOTION_WALK_FORWARD, &params, true, &mut mtm, &mut effects)
             .unwrap();
-        mtm.use_time();
+        mtm.use_time(None);
         assert_eq!(
             mtm.drain_events(),
             vec![MotionTableEvent::MotionDone { motion: MOTION_READY, success: true }]
