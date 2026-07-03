@@ -163,6 +163,16 @@ impl WorldState {
         self.scene.constrain_local_manual_delta(body_id, delta)
     }
 
+    /// FU5 (row 64) — retail `TakeControlFromServer`'s
+    /// `StopInterpolating` arm (acclient.c:716950) for the LOCAL player
+    /// body: interp stops, the leash constraint survives.
+    pub fn stop_local_player_interpolation(&mut self) {
+        let Some(body_id) = self.authoritative_body_id_for_guid(self.player.guid) else {
+            return;
+        };
+        self.scene.stop_interpolation_only(body_id);
+    }
+
     /// Physics-parity 2026-07-03 (dossier B row 45): retail
     /// `CPhysicsObj::IsFullyConstrained` for the LOCAL player body —
     /// the `jump_is_allowed` error-71 input (acclient.c:343947-343951).

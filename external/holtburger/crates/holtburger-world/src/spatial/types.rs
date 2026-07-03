@@ -154,6 +154,13 @@ pub enum SelfPlayerDriveProjectionState {
 pub enum AuthoritativeBodySync {
     Snapshot,
     Reset,
+    /// FU4 (2026-07-03) — a FORCE-position reposition (retail
+    /// `SmartBox::BlipPlayer` arm, acclient.c:145236-145243): a hard
+    /// snap that KEEPS the player's own heading and installs NO
+    /// constraint and NO velocity zeroing (unlike the teleport arm
+    /// :145196-145207). With `?retailLeash` off this behaves exactly
+    /// like [`Self::Reset`] — byte-identical shipped behavior.
+    ForceBlip,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

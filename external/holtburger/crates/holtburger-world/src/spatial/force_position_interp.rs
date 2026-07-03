@@ -277,16 +277,24 @@ impl RetailForcePositionInterpolator {
         self.progress_quantum += quantum;
         self.frame_counter += 1;
 
-        // The keep-interpolating gate (ACE InterpolationManager.cs:230-231).
+        // The keep-interpolating gate (ACE InterpolationManager.cs:230-231;
+        // retail `>=` on the epsilon compare, acclient.c:389246).
         // A2-P3: the sticky term is now threaded by the facade (it was
         // hard-false pre-P3; force-position alone is never sticky).
-        let progressing = delta > EPSILON
+        let progressing = delta >= EPSILON
             && self.progress_quantum > EPSILON
             && (delta / self.progress_quantum / max_speed) >= MIN_PROGRESS_RATIO;
         let keep_interpolating =
             self.frame_counter < PROGRESS_WINDOW_FRAMES || progressing || sticky_active;
 
         if !keep_interpolating {
+            // Near-complete stall: `curr_distance < 0.2` COMPLETES the
+            // node instead of failing it (retail :389274-389275) —
+            // parity follow-up FU1 with the queue path.
+            if dist < 0.2 {
+                self.stop();
+                return InterpStep::Completed { pose: current };
+            }
             // Node failed its progress check (ACE InterpolationManager.cs:256-257).
             self.stop();
             return InterpStep::Failed { pose: current };
@@ -671,5 +679,62 @@ mod tests {
         } else {
             panic!("expected progress");
         }
+    }
+}
+
+#[cfg(test)]
+mod near_complete_tests {
+    use super::*;
+    use holtburger_common::math::Quaternion;
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Guid, Vector3};
+
+    fn pose(x: f32, y: f32, z: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(0x0001_0000),
+            coords: Vector3::new(x, y, z),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    /// FU1 (retail :389274-389275): a stall INSIDE 0.2 m completes the
+    /// node instead of failing it — legacy-path mirror of the queue
+    /// path's near-complete arm.
+    #[test]
+    fn legacy_stall_within_near_complete_band_completes() {
+        let mut interp = RetailForcePositionInterpolator::default();
+        let cur = pose(0.0, 0.0, 0.0);
+        // 0.15 m gap: above the 0.05 deadband, inside the 0.2 band.
+        interp.install(cur, pose(0.15, 0.0, 0.0), 10.0, 100.0, true);
+        let mut completed = false;
+        for _ in 0..12 {
+            // Never move `cur` — a hard stall.
+            match interp.step(cur, 0.016, 36.0, true) {
+                InterpStep::Completed { .. } => {
+                    completed = true;
+                    break;
+                }
+                InterpStep::Progressed { .. } => {}
+                other => panic!("near-complete stall must not fail, got {other:?}"),
+            }
+        }
+        assert!(completed, "stall inside 0.2 m completes");
+        assert!(!interp.is_interpolating());
+
+        // Beyond the band the stall still FAILS (unchanged behavior).
+        let mut interp = RetailForcePositionInterpolator::default();
+        interp.install(cur, pose(3.0, 0.0, 0.0), 10.0, 100.0, true);
+        let mut failed = false;
+        for _ in 0..12 {
+            match interp.step(cur, 0.016, 36.0, true) {
+                InterpStep::Failed { .. } => {
+                    failed = true;
+                    break;
+                }
+                InterpStep::Progressed { .. } => {}
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert!(failed, "far stall still fails");
     }
 }

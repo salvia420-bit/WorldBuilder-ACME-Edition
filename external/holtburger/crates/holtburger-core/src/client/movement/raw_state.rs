@@ -57,6 +57,14 @@ pub(crate) enum RawForwardCommand {
     WalkBackwards,
     #[allow(dead_code)]
     RunForward,
+    /// FU6 (row 11) — retail stores ANY 0x40000000-class substate in
+    /// the single forward slot (`RawMotionState::ApplyMotion` default
+    /// arm, acclient.c:332890-332908): gestures, crouch, sit… The
+    /// locomotion variants above are the velocity-bearing forms; a
+    /// stored substate contributes ZERO locomotion. An EMPTY slot
+    /// (`None`) is the canonical form of retail's Ready reset value
+    /// (0x41000003, `:332538`/`:332913`).
+    Substate(u32),
 }
 
 /// Sidestep-axis raw command.
@@ -250,6 +258,7 @@ impl RawState {
         const RUN_FORWARD: u32 = 0x4400_0007;
         const MASK_SUBSTATE: u32 = 0x4000_0000;
         const MASK_ACTION: u32 = 0x1000_0000;
+        const MOTION_READY: u32 = 0x4100_0003;
         let holdkey = if params.set_hold_key() {
             HoldKey::Invalid
         } else {
@@ -279,9 +288,15 @@ impl RawState {
                 // stored in the raw forward slot.
             }
             _ if motion & MASK_SUBSTATE != 0 => {
-                // Non-locomotion substate (Ready, Crouch, …): our raw
-                // enum holds the locomotion survivors only — clear.
-                self.remove_forward();
+                // FU6 (row 11) — retail stores the substate ITSELF in
+                // the forward slot (acclient.c:332890-332908), evicting
+                // any locomotion command; Ready (0x41000003) is the
+                // reset value and canonicalizes to the empty slot.
+                if motion == MOTION_READY {
+                    self.remove_forward();
+                } else {
+                    self.apply_forward(RawForwardCommand::Substate(motion), params.speed, holdkey)
+                }
             }
             _ if motion & MASK_ACTION != 0 => {
                 self.actions.push(RawAction {

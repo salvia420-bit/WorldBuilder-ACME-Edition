@@ -153,6 +153,13 @@ import {
   STIFFNESS_SNAP_DIST_M,
   STIFFNESS_TELEPORT_SNAP_M,
 } from "./camera_math.js";
+// F17 (2026-07-03, physics-parity dossier A row 42) — `?rustPose=on`
+// (default OFF): camera framing reads the wasm integrator pose directly
+// (`_safePlayerPos` short-circuit below), matching loop.js's rig bypass so
+// rig AND camera render off the SAME single pose source, as retail renders
+// m_position (CPhysicsObj::set_frame acclient.c:321328/:321350). Pure
+// import-free module, headless-tested by tests/rust_pose.test.cjs.
+import { parseRustPoseFlag } from "./rust_pose.js";
 
 /**
  * Mode-cycle order on `C` press: follow → topDown → orbit → follow.
@@ -199,6 +206,20 @@ const TOPDOWN_ZOOM_MAX = 8.0;
  * snap so a large correction teleports instead of oozing over ~tau ms.
  */
 const PRED_SMOOTH_SNAP_DIST_M = 5.0;
+
+// F17 (?rustPose=on, default OFF) — read once at module load, same
+// lifecycle as loop.js's RUST_POSE_ON (flags are frozen per page load).
+// ON: `_safePlayerPos` reads `_integratorWorldPose()` (the wasm pose,
+// world-converted) directly instead of the `predictedPlayerPos` mirror
+// chain. OFF: byte-identical legacy behavior.
+const RUST_POSE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return parseRustPoseFlag(window.location.search);
+  } catch (_) {
+    return false;
+  }
+})();
 
 /** Round a real to its sign-clamped int8. */
 function clampSign(v) {
@@ -2042,6 +2063,22 @@ export class CameraSwitcher {
   // ---- helpers ------------------------------------------------------
 
   _safePlayerPos() {
+    // F17 (?rustPose=on) — camera framing comes DIRECTLY from the wasm
+    // integrator pose (world-converted), the same single source loop.js
+    // renders the rig from flag-on. Bypasses the getPlayerWorldPos →
+    // getLocalPlayerWorldPos → getPredictedPlayerWorldPos mirror chain
+    // (whose values are the same pose one mirror-assign removed, via
+    // `_smoothToIntegrator` — which keeps running flag-on to feed the
+    // non-render consumers: lighting/CSM centre, ambient audio, the
+    // shadow-gate walk throttle, diag/physics fallback). Pre-spawn the
+    // pose is null → fall through to the legacy chain so initial framing
+    // (LB-centre fallback) is unchanged.
+    if (RUST_POSE_ON) {
+      try {
+        const ip = this._integratorWorldPose();
+        if (ip) return { x: ip.x, y: ip.y, z: ip.z };
+      } catch (_) {}
+    }
     try {
       const p = this.getPlayerWorldPos?.();
       if (p && typeof p.x === "number" && typeof p.y === "number") {

@@ -6407,3 +6407,67 @@ mod golden {
         );
     }
 }
+
+/// FU5 (row 64) — retail `TakeControlFromServer`
+/// (acclient.c:716934-716953): an input edge while the server holds
+/// control clears `controlled_by_server` and stops the interpolation,
+/// while the LEASH CONSTRAINT survives (disarm is UnConstrain only).
+/// Without server control the pending flag drains as a no-op.
+#[test]
+fn take_control_on_input_edge_clears_server_control_and_stops_interp() {
+    use holtburger_world::spatial::{AuthoritativeBodySync, SpatialBodyId};
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0F05);
+    world.player.guid = player_guid;
+    let start = holtburger_common::position::WorldPosition {
+        landblock_id: Guid(0x00A9_0000),
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(&mut world, player_guid, start);
+
+    // Server takes control (LoseControlToServer analog) + the leash
+    // reconcile installs constraint + interp (server-controlled + the
+    // leash flag + contact default).
+    world.scene.set_local_retail_leash(true);
+    world.scene.set_local_server_controlled(true);
+    let body_id = SpatialBodyId::LocalPlayer(player_guid);
+    let mut body = world.scene.body(body_id).expect("seeded body").clone();
+    body.sampling.mode = holtburger_world::spatial::SpatialSampleMode::SimulatingVelocity;
+    world.scene.update_body(body);
+    let target = holtburger_common::position::WorldPosition {
+        coords: Vector3::new(53.0, 50.0, 0.0),
+        ..start
+    };
+    world.scene.reconcile_authoritative_body(
+        body_id,
+        target,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        Instant::now(),
+    );
+    {
+        let body = world.scene.body(body_id).unwrap();
+        assert!(body.position_manager.is_interpolating(), "directive interp installed");
+        assert!(body.position_manager.constraint.is_constrained(), "leash armed");
+    }
+
+    // Input edge → pending take-control → consumption clears control,
+    // stops interp, keeps the leash.
+    let mut movement = MovementSystem::new();
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(MotionState::builder().run().forward().build()),
+        Instant::now(),
+    );
+    movement.consume_pending_take_control(&mut world);
+    assert!(!world.scene.local_server_controlled(), "control returned to player");
+    let body = world.scene.body(body_id).unwrap();
+    assert!(!body.position_manager.is_interpolating(), "interp stopped");
+    assert!(
+        body.position_manager.constraint.is_constrained(),
+        "leash constraint SURVIVES take-control"
+    );
+}

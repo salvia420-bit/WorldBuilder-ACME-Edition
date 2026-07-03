@@ -242,6 +242,10 @@ fn adjust_forward(command: RawForwardCommand, speed: f32) -> (InterpretedForward
         RawForwardCommand::WalkBackwards => {
             (InterpretedForwardCommand::WalkForward, speed * -BACKWARDS_FACTOR)
         }
+        // FU6 — retail adjust_motion rewrites LOCOMOTION only; a stored
+        // substate passes through unadjusted (acclient.c:343746-343803
+        // has no substate arm).
+        RawForwardCommand::Substate(id) => (InterpretedForwardCommand::Substate(id), speed),
     }
 }
 
@@ -285,7 +289,11 @@ fn apply_run_to_forward(
             (command, speed * run_rate)
         }
         // ACE's switch has no RunForward arm — passes through untouched.
-        InterpretedForwardCommand::RunForward => (command, speed),
+        // FU6: stored substates (gestures) likewise pass through — the
+        // run promotion is a locomotion-only rewrite.
+        InterpretedForwardCommand::RunForward | InterpretedForwardCommand::Substate(_) => {
+            (command, speed)
+        }
     }
 }
 
@@ -350,6 +358,12 @@ pub(crate) struct MotionInterp {
     /// `last_move_was_autonomous`. Default `false` (remote/registry
     /// entities process every newer action).
     pub player_controlled: bool,
+    /// Retail `CMotionInterp::current_speed_factor` — divides the
+    /// interpreted RunForward speed inside
+    /// [`Self::adjusted_max_speed`] (acclient.c:343532-343534). Default
+    /// 1.0; changed by client-side speed-altering enchant handling
+    /// (no producer yet — FU2/row 32).
+    pub current_speed_factor: f32,
 }
 
 impl Default for MotionInterp {
@@ -363,6 +377,7 @@ impl Default for MotionInterp {
             standing_longjump: false,
             initted: false,
             player_controlled: false,
+            current_speed_factor: 1.0,
         }
     }
 }
@@ -372,6 +387,25 @@ impl MotionInterp {
     /// else `my_run_rate` (`MotionInterp.cs:529-537`).
     fn run_rate(&self, inq_run_rate: Option<f32>) -> f32 {
         inq_run_rate.unwrap_or(self.my_run_rate)
+    }
+
+    /// Retail `CMotionInterp::get_adjusted_max_speed`
+    /// (acclient.c:343512-343535) — the INTERP-cap speed source (the
+    /// `fUseAdjustedSpeed_` default is 1, :45657, so the interpolation
+    /// manager reads THIS, not `get_max_speed`, then doubles it,
+    /// :389227-389241). `full_base` is the resolved run-rate speed
+    /// (run_rate × 4); when the INTERPRETED forward command is
+    /// RunForward (a server-driven run), the base is replaced by
+    /// `forward_speed / current_speed_factor` × 4.0 instead.
+    pub(crate) fn adjusted_max_speed(&self, full_base: f32) -> f32 {
+        if matches!(
+            self.interpreted_state.forward_command,
+            Some(InterpretedForwardCommand::RunForward)
+        ) {
+            (self.interpreted_state.forward_speed / self.current_speed_factor) * 4.0
+        } else {
+            full_base
+        }
     }
 
     /// `CMotionInterp::apply_raw_movement` (`acclient.c:344259-344298` /
@@ -452,7 +486,10 @@ impl MotionInterp {
             Some(InterpretedForwardCommand::RunForward) => {
                 velocity.y = RUN_ANIM_SPEED * state.forward_speed;
             }
-            None => {}
+            // FU6: a substate in the slot (gesture/crouch) carries no
+            // locomotion — zero forward, retail get_state_velocity
+            // shape (acclient.c:343539-343594 matches locomotion only).
+            Some(InterpretedForwardCommand::Substate(_)) | None => {}
         }
 
         let max_speed = RUN_ANIM_SPEED * self.run_rate(inq_run_rate);
@@ -489,7 +526,9 @@ impl MotionInterp {
             Some(InterpretedForwardCommand::RunForward) => {
                 velocity.y = run_base_speed * state.forward_speed;
             }
-            None => {}
+            // FU6: substate-in-slot = zero locomotion (see
+            // get_state_velocity above).
+            Some(InterpretedForwardCommand::Substate(_)) | None => {}
         }
         velocity
     }
@@ -621,15 +660,16 @@ impl MotionInterp {
 
     /// The interpreted forward command's motion id — the
     /// `motion_allows_jump(this->interpreted_state.forward_command)`
-    /// input (`acclient.c:344003`, `:343957`). Our normalized enum only
-    /// holds the two post-`adjust_motion` survivors
-    /// (`interp_state.rs:21-28`); both ids fall in `motion_allows_jump`'s
-    /// `> 0x41000014` permit arm, kept symbolic for fidelity.
+    /// input (`acclient.c:344003`, `:343957`). FU6: a stored substate
+    /// (gesture/crouch, row 11) reports its REAL id, so the jump gate
+    /// sees exactly what retail sees — a cast windup in the slot lands
+    /// in `motion_allows_jump`'s blocked band.
     fn interpreted_forward_motion_id(&self) -> u32 {
         match self.interpreted_state.forward_command {
             // Motion_WalkForward / Motion_RunForward (ACE MotionCommand).
             Some(InterpretedForwardCommand::WalkForward) | None => 0x4500_0005,
             Some(InterpretedForwardCommand::RunForward) => 0x4400_0007,
+            Some(InterpretedForwardCommand::Substate(id)) => id,
         }
     }
 
@@ -1161,7 +1201,28 @@ pub(crate) fn interpreted_state_from_wire(
     state.forward_command = match wire.forward_command.map(|c| c.raw()) {
         Some(0x0005) => Some(InterpretedForwardCommand::WalkForward),
         Some(0x0007) => Some(InterpretedForwardCommand::RunForward),
-        _ => None,
+        // FU6 wire completion (2026-07-03): retail expands the wire
+        // low16 through command_ids[] and stores the substate ITSELF
+        // in the forward slot (acclient.c:332759) — ACE's
+        // EnqueueMotionMagic sends the CAST GESTURE (substate-class,
+        // e.g. MagicBlast 0x4000002B) as the forward command. Expand
+        // via the shared table: substate-class results occupy the slot
+        // (zero locomotion; the REAL id feeds motion_allows_jump);
+        // Ready canonicalizes to the empty slot; action-class ids
+        // (windups 0x1000006F+) never belong in the slot — None.
+        Some(low16) => match holtburger_world::player::expand_motion_command_low16(low16) {
+            // Pure-0x40-prefix substates (gestures/poses: MagicBlast
+            // 0x4000002B, Crouch 0x40000018, …) occupy the slot.
+            // Ready (0x41…) canonicalizes to the empty slot; locomotion
+            // (0x44/0x45…) never reaches this arm via the wire's
+            // post-adjust normal form; action-class (0x10…, windups)
+            // rides the action list, never the slot.
+            Some(full) if full >> 24 == 0x40 => {
+                Some(InterpretedForwardCommand::Substate(full))
+            }
+            _ => None,
+        },
+        None => None,
     };
     if let Some(speed) = wire.forward_speed {
         state.forward_speed = speed;
@@ -2476,5 +2537,84 @@ mod tests {
             mtm.drain_events(),
             vec![MotionTableEvent::MotionDone { motion: MOTION_READY, success: true }]
         );
+    }
+}
+
+#[cfg(test)]
+mod adjusted_speed_tests {
+    use super::*;
+
+    /// FU2 (row 32) — retail `get_adjusted_max_speed`
+    /// (acclient.c:343512-343535): the run-rate base passes through
+    /// unless the INTERPRETED forward command is RunForward, in which
+    /// case `forward_speed / current_speed_factor` × 4.0 replaces it.
+    #[test]
+    fn adjusted_max_speed_overrides_only_on_interpreted_run_forward() {
+        let mut minterp = MotionInterp::default();
+        let base = 18.0; // run_rate 4.5 × 4
+
+        // Idle / gesture forward slot: passthrough.
+        assert_eq!(minterp.adjusted_max_speed(base), base);
+        minterp.interpreted_state.apply_motion(0x4000_0070, 1.0); // windup
+        assert_eq!(minterp.adjusted_max_speed(base), base);
+
+        // Interpreted WalkForward: passthrough.
+        minterp.interpreted_state.apply_motion(0x4500_0005, 1.0);
+        assert_eq!(minterp.adjusted_max_speed(base), base);
+
+        // Interpreted RunForward speed 2.0, factor 1.0 → 8.0.
+        minterp.interpreted_state.apply_motion(0x4400_0007, 2.0);
+        assert_eq!(minterp.adjusted_max_speed(base), 8.0);
+
+        // Speed factor divides (retail :343533).
+        minterp.current_speed_factor = 0.5;
+        assert_eq!(minterp.adjusted_max_speed(base), 16.0);
+    }
+}
+
+#[cfg(test)]
+mod forward_slot_tests {
+    use super::*;
+
+    /// FU6 (row 11) — retail stores the gesture ITSELF in the single
+    /// forward slot (acclient.c:332759/:332890): the slot reports the
+    /// REAL motion id to the jump gate (`:344003` — a windup lands in
+    /// motion_allows_jump's blocked band), contributes zero locomotion,
+    /// and Ready (0x41000003) canonicalizes back to the empty slot.
+    #[test]
+    fn forward_slot_stores_gesture_id_with_zero_velocity() {
+        let mut minterp = MotionInterp::default();
+        // MagicBlast — a cast gesture in motion_allows_jump's blocked
+        // SUBSTATE band 0x4000001E..=0x40000039 (windups are
+        // action-class 0x1000006F+ and ride the action queue, never
+        // the forward slot).
+        const CAST_GESTURE: u32 = 0x4000_002B;
+        const READY: u32 = 0x4100_0003;
+
+        minterp.interpreted_state.apply_motion(CAST_GESTURE, 1.0);
+        assert_eq!(
+            minterp.interpreted_state.forward_command,
+            Some(InterpretedForwardCommand::Substate(CAST_GESTURE)),
+            "the gesture occupies the slot"
+        );
+        assert_eq!(
+            minterp.interpreted_forward_motion_id(),
+            CAST_GESTURE,
+            "the jump gate sees the real gesture id"
+        );
+        assert!(
+            !motion_allows_jump_id(minterp.interpreted_forward_motion_id()),
+            "cast-gesture-in-slot blocks jumping (retail blocked band)"
+        );
+        let v = minterp.ground_velocity(2.602, 4.0);
+        assert_eq!(v.y, 0.0, "gesture carries no forward locomotion");
+
+        // Ready resets the slot to the canonical empty form.
+        minterp.interpreted_state.apply_motion(READY, 1.0);
+        assert_eq!(minterp.interpreted_state.forward_command, None);
+    }
+
+    fn motion_allows_jump_id(id: u32) -> bool {
+        holtburger_world::player::motion_allows_jump(id)
     }
 }

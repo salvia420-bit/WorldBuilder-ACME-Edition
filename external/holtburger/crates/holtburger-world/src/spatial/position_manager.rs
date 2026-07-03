@@ -385,47 +385,46 @@ impl InterpolationManager {
         commands
     }
 
-    /// `InterpolationManager::adjust_offset` for a position-type head
-    /// node (`acclient.c:389178-389276`), the queue generalization of
-    /// [`RetailForcePositionInterpolator::step`]'s interpolation half.
-    /// The constraint scaling belongs to [`ConstraintManager`]; the
-    /// [`PositionManager`] facade chains them in retail order
-    /// (`PositionManager::adjust_offset`, `acclient.c:388287-388304`).
+    /// F10 (dossier B row 42) — the offset half of
+    /// `InterpolationManager::adjust_offset` (`acclient.c:389178-389276`)
+    /// with the node bookkeeping (window counters, `NodeCompleted`,
+    /// fail scoring) but WITHOUT the constraint chaining / pose
+    /// reprojection — those belong to the composer
+    /// ([`Self::step_position_head`] for the step path,
+    /// [`PositionManager::adjust_offset_chain`] for the retail-leash
+    /// chain). Exactly one call per frame advances the window.
     ///
     /// On stall: `++node_fail_counter; NodeCompleted(0)` — the node
     /// fails toward blipto recovery instead of silently stopping (the
-    /// §3 row-5 gap this stage closes).
+    /// §3 row-5 gap the queue stage closed).
     ///
     /// A2-P3: `sticky_active` bypasses the 5-frame progress-test abort
     /// while the owner's sticky target is non-zero — retail's interp
     /// sticky exemption (acclient.c:389243-389245; local sticky and
     /// local force-position coexist).
-    #[allow(clippy::too_many_arguments)]
-    fn step_position_head(
+    fn adjust_offset_core(
         &mut self,
         current: WorldPosition,
         quantum: f32,
         max_speed: f32,
         on_contact: bool,
-        constraint: &mut ConstraintManager,
         sticky_active: bool,
-        retail_leash: bool,
-    ) -> InterpStep {
+    ) -> InterpOffsetAdjust {
         let Some(head) = self.position_queue.front().copied() else {
-            return InterpStep::Idle;
+            return InterpOffsetAdjust::Idle;
         };
         if head.node_type != InterpolationNodeType::Position {
-            return InterpStep::Idle;
+            return InterpOffsetAdjust::Idle;
         }
-        // Contact gate (`:389199`).
+        // Contact gate (`:389199`) — offset untouched.
         if !on_contact {
-            return InterpStep::Progressed { pose: current };
+            return InterpOffsetAdjust::NoContact;
         }
         let target = head.position;
         let dist = current.distance_to(&target);
         if dist < RECONCILE_DEADBAND_M {
             self.node_completed(true, current);
-            return InterpStep::Completed { pose: current };
+            return InterpOffsetAdjust::Done;
         }
 
         let max_speed = if max_speed < EPSILON {
@@ -449,13 +448,13 @@ impl InterpolationManager {
             // node instead of failing it (`:389274-389275`).
             if dist < 0.2 {
                 self.node_completed(true, current);
-                return InterpStep::Completed { pose: current };
+                return InterpOffsetAdjust::Done;
             }
             // Stall: fail toward recovery (`:389271-389273`) — unlike the
             // single-node port, the queue path RECOVERS via use_time.
             self.node_fail_counter += 1;
             self.node_completed(false, current);
-            return InterpStep::Failed { pose: current };
+            return InterpOffsetAdjust::Failed;
         }
 
         if self.frame_counter >= PROGRESS_WINDOW_FRAMES {
@@ -470,42 +469,137 @@ impl InterpolationManager {
         let distance = offset.length();
 
         if distance <= RECONCILE_DEADBAND_M {
+            // Retail completes the node and STILL applies the ≤0.05 m
+            // adjustment this frame (`:389258-389260` — NodeCompleted
+            // without a return).
             self.node_completed(true, current);
-            let pose = reproject_global_into(to, target);
-            return InterpStep::Completed { pose };
+            return InterpOffsetAdjust::Replace {
+                offset,
+                distance,
+                max_quantum: max_speed * quantum,
+                node: target,
+                completed: true,
+            };
         }
 
         let max_quantum = max_speed * quantum;
         if distance > max_quantum {
             offset = offset * (max_quantum / distance);
         }
-
-        // ConstraintManager::adjust_offset chains AFTER interpolation
-        // (`PositionManager::adjust_offset`, `acclient.c:388287-388304`).
-        let offset = constraint.adjust_offset(offset, on_contact);
-
-        let stepped_global = from + offset;
-        let pose = reproject_global_into(stepped_global, target);
-        let rotation = if self.keep_heading {
-            current.rotation
-        } else if retail_leash {
-            // Retail applies the node's full frame delta in ONE frame —
-            // the heading SNAPS to the node heading while the position
-            // eases (`:389252-389269` subtract2 + combine; keep_heading
-            // zeroes the rotation delta instead).
-            target.rotation
-        } else {
-            let progress = (max_speed * quantum) / distance.max(1e-6);
-            crate::spatial::force_position_interp::slerp_rotation(
-                current.rotation,
-                target.rotation,
-                progress.min(1.0),
-            )
-        };
-        InterpStep::Progressed {
-            pose: WorldPosition { rotation, ..pose },
+        InterpOffsetAdjust::Replace {
+            offset,
+            distance,
+            max_quantum,
+            node: target,
+            completed: false,
         }
     }
+
+    /// `InterpolationManager::adjust_offset` for a position-type head
+    /// node (`acclient.c:389178-389276`), the queue generalization of
+    /// [`RetailForcePositionInterpolator::step`]'s interpolation half.
+    /// Composition wrapper over [`Self::adjust_offset_core`]: the
+    /// constraint scaling belongs to [`ConstraintManager`]; the
+    /// [`PositionManager`] facade chains them in retail order
+    /// (`PositionManager::adjust_offset`, `acclient.c:388287-388304`).
+    /// Every arm maps 1:1 onto the pre-F10 behavior (byte-identical —
+    /// the F10 chain path composes the core differently).
+    #[allow(clippy::too_many_arguments)]
+    fn step_position_head(
+        &mut self,
+        current: WorldPosition,
+        quantum: f32,
+        max_speed: f32,
+        on_contact: bool,
+        constraint: &mut ConstraintManager,
+        sticky_active: bool,
+        retail_leash: bool,
+    ) -> InterpStep {
+        match self.adjust_offset_core(current, quantum, max_speed, on_contact, sticky_active) {
+            InterpOffsetAdjust::Idle => InterpStep::Idle,
+            InterpOffsetAdjust::NoContact => InterpStep::Progressed { pose: current },
+            InterpOffsetAdjust::Done => InterpStep::Completed { pose: current },
+            InterpOffsetAdjust::Failed => InterpStep::Failed { pose: current },
+            InterpOffsetAdjust::Replace {
+                node,
+                completed: true,
+                ..
+            } => {
+                // Pre-F10 ≤deadband arm: adopt the node origin outright,
+                // SKIPPING the constraint chain (documented step-path
+                // deviation; the F10 chain runs retail's
+                // complete-and-still-constrain instead).
+                let pose = reproject_global_into(node.global_coords(), node);
+                InterpStep::Completed { pose }
+            }
+            InterpOffsetAdjust::Replace {
+                offset,
+                distance,
+                max_quantum,
+                node,
+                completed: false,
+            } => {
+                // ConstraintManager::adjust_offset chains AFTER interpolation
+                // (`PositionManager::adjust_offset`, `acclient.c:388287-388304`).
+                let offset = constraint.adjust_offset(offset, on_contact);
+
+                let stepped_global = current.global_coords() + offset;
+                let pose = reproject_global_into(stepped_global, node);
+                let rotation = if self.keep_heading {
+                    current.rotation
+                } else if retail_leash {
+                    // Retail applies the node's full frame delta in ONE frame —
+                    // the heading SNAPS to the node heading while the position
+                    // eases (`:389252-389269` subtract2 + combine; keep_heading
+                    // zeroes the rotation delta instead).
+                    node.rotation
+                } else {
+                    let progress = max_quantum / distance.max(1e-6);
+                    crate::spatial::force_position_interp::slerp_rotation(
+                        current.rotation,
+                        node.rotation,
+                        progress.min(1.0),
+                    )
+                };
+                InterpStep::Progressed {
+                    pose: WorldPosition { rotation, ..pose },
+                }
+            }
+        }
+    }
+}
+
+/// F10 (dossier B row 42) — outcome of one interpolation offset slice
+/// (`InterpolationManager::adjust_offset`, `acclient.c:389178-389276`)
+/// against the per-frame offset. Every non-`Replace` arm leaves the
+/// caller's offset untouched (retail returns without writing).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InterpOffsetAdjust {
+    /// No head position node (`:389184-389197`).
+    Idle,
+    /// Contact gate (`:389199`).
+    NoContact,
+    /// `NodeCompleted` without an adjustment — the <0.05 m arrival
+    /// (`:389211-389214`) or the <0.2 m stall-complete (`:389274-389275`).
+    Done,
+    /// Stall fail toward blipto recovery (`:389271-389273`).
+    Failed,
+    /// The adjustment REPLACES the offset (`Frame::operator=`,
+    /// `:389269`).
+    Replace {
+        /// Capped world-space replacement (`:389252-389267`).
+        offset: Vector3,
+        /// Pre-cap `|to − from|` (`adjustment_distance`).
+        distance: f32,
+        /// Floored `max_speed × quantum` (`progress_madea`).
+        max_quantum: f32,
+        /// Head-node pose — rotation source for the non-`keep_heading`
+        /// arm.
+        node: WorldPosition,
+        /// The ≤0.05 m arm completed the node THIS call
+        /// (`:389258-389260` — retail continues into the replace).
+        completed: bool,
+    },
 }
 
 /// A2-P3 (2026-06-12, W3+ S9) — the retail `StickyManager`
@@ -712,6 +806,13 @@ impl ConstraintManager {
 
     pub fn is_constrained(&self) -> bool {
         self.constrained
+    }
+
+    /// The running travel budget (retail `constraint_pos_offset`,
+    /// seeded by `ConstrainTo`, accumulated by every `adjust_offset`,
+    /// `acclient.c:389506-389510`) — F10 diag/test surface.
+    pub fn constraint_pos_offset(&self) -> f32 {
+        self.constraint_pos_offset
     }
 
     /// `IsFullyConstrained` — `0.9 * max < offset`
@@ -1053,6 +1154,142 @@ impl PositionManager {
         pose.rotation = Quaternion::from_heading(heading_rad);
         Some(pose)
     }
+
+    // === F10 (2026-07-03, dossier B row 42) — the COMPOSED chain. ========
+
+    /// The full retail `PositionManager::adjust_offset`
+    /// (`acclient.c:388287-388304`, chained at `:320029` on the ONE
+    /// per-frame offset BEFORE the transition validates the move):
+    /// interpolation REPLACES the offset toward the head node
+    /// (`:389178-389276`), sticky REPLACES the planar half + writes the
+    /// heading (`:388519-388601`), constraint scales/zeroes on contact
+    /// and accumulates the FINAL composed offset ONCE
+    /// (`:389478-389512`). The interp `use_time` drain runs after the
+    /// slices (step-then-drain, the [`Self::step_force_position`] queue
+    /// convention — a recovery blip lands in the frame its fail was
+    /// scored) and its side effects come back as `commands`.
+    ///
+    /// `intended_offset` is the WHOLE offset the frame meant to move
+    /// (manual delta + integrated dz); `interp_max_speed` the
+    /// `get_adjusted_max_speed()*2` interp cap (`:389227-389241`);
+    /// `sticky_max_speed` the RAW run speed (sticky applies its own
+    /// `*5`/floor-15 model, `:388569-388579`); `on_contact` the
+    /// pre-move contact bit (retail reads `transient_state & 1` once
+    /// for interp gate and constraint scale alike).
+    ///
+    /// Documented deviations (mirroring the split-site ports):
+    /// - sticky preserves the intended z instead of zeroing it
+    ///   (retail `:388557` zeroes the ANIM offset's z and re-adds
+    ///   vertical motion via velocity integration AFTER the chain,
+    ///   `:320061`; our intended offset already carries that dz).
+    /// - `keep_heading` interp frames return `rotation = None` (keep
+    ///   the mover's live heading, its own-turn omega included) rather
+    ///   than retail's whole-frame replace freezing the heading.
+    /// - sticky heading is the ABSOLUTE target heading (the
+    ///   [`StickyManager`] absolute-adopt equivalence, spec S9 OPEN Q6).
+    #[allow(clippy::too_many_arguments)]
+    pub fn adjust_offset_chain(
+        &mut self,
+        current: WorldPosition,
+        intended_offset: Vector3,
+        quantum: f32,
+        interp_max_speed: f32,
+        sticky_max_speed: f32,
+        my_radius: f32,
+        on_contact: bool,
+    ) -> OffsetChainOutcome {
+        let mut offset = intended_offset;
+        let mut rotation = None;
+
+        // 1) InterpolationManager::adjust_offset (`:389178-389276`) —
+        //    REPLACES the offset; every other arm leaves it untouched
+        //    (retail returns without writing).
+        match self.interpolation.adjust_offset_core(
+            current,
+            quantum,
+            interp_max_speed,
+            on_contact,
+            self.sticky.is_active(),
+        ) {
+            InterpOffsetAdjust::Replace {
+                offset: interp_offset,
+                node,
+                ..
+            } => {
+                offset = interp_offset;
+                if !self.interpolation.keep_heading {
+                    // Full-frame delta apply: the heading snaps to the
+                    // node heading (`:389252-389269`); keep_heading
+                    // zeroes the rotation delta (`:389267-389268`).
+                    rotation = Some(node.rotation);
+                }
+            }
+            InterpOffsetAdjust::Idle
+            | InterpOffsetAdjust::NoContact
+            | InterpOffsetAdjust::Done
+            | InterpOffsetAdjust::Failed => {}
+        }
+
+        // 2) Sticky timeout tick (`PositionManager::UseTime` runs
+        //    sticky's UseTime each frame, `:388283`) then
+        //    StickyManager::adjust_offset (`:388519-388601`) — planar
+        //    REPLACE (retail assigns the offset origin) + heading; the
+        //    intended z is preserved (deviation note above). Inert
+        //    until a gated install site armed a target.
+        let mut sticky_timed_out = false;
+        if self.sticky.is_active() {
+            if self.sticky.use_time(quantum) {
+                sticky_timed_out = true;
+            } else if let Some((step, heading_rad)) =
+                self.sticky
+                    .adjust_offset(&current, my_radius, sticky_max_speed, quantum)
+            {
+                offset.x = step.x;
+                offset.y = step.y;
+                rotation = Some(Quaternion::from_heading(heading_rad));
+            }
+        }
+
+        // 3) ConstraintManager::adjust_offset (`:389478-389512`) —
+        //    scale/zero gated on contact, the travel budget accumulates
+        //    the FINAL composed offset ONCE per frame (the fix for the
+        //    split-site double-accumulate when server-controlled interp
+        //    and held keys coincide). The offset frame's rotation part
+        //    is untouched (retail scales `m_fOrigin` only).
+        let offset = self.constraint.adjust_offset(offset, on_contact);
+
+        // 4) Drain (`PositionManager::UseTime`, `:388267-388284` at
+        //    tick end) — fed the pose the composed offset steps to,
+        //    the same estimate `step_queue` drains with.
+        let stepped = reproject_global_into(current.global_coords() + offset, current);
+        let commands = self.interpolation.use_time(stepped);
+
+        OffsetChainOutcome {
+            offset,
+            rotation,
+            commands,
+            sticky_timed_out,
+        }
+    }
+}
+
+/// F10 (dossier B row 42) — result of one composed
+/// [`PositionManager::adjust_offset_chain`] frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OffsetChainOutcome {
+    /// The composed world-space offset for this frame (post-constraint).
+    pub offset: Vector3,
+    /// Heading adoption: the offset frame's last writer wins — sticky
+    /// target heading (`:388593-388600`) over interp node heading
+    /// (`:389269`); `None` keeps the mover's heading.
+    pub rotation: Option<Quaternion>,
+    /// Interp drain side effects (recovery blip `SetPosition`,
+    /// velocity-node `SetVelocity`) for the owner to apply.
+    pub commands: Vec<InterpolationCommand>,
+    /// The 1.0 s sticky window expired this frame — the owner clears
+    /// the server-controlled projection (the `LocalStickyStep::TimedOut`
+    /// contract).
+    pub sticky_timed_out: bool,
 }
 
 /// Re-express a global-space point in `reference`'s landblock (same
@@ -1585,5 +1822,219 @@ mod tests {
             }
         }
         assert_eq!(manager.is_interpolating(), legacy.is_interpolating());
+    }
+
+    // === F10 (dossier B row 42) — composed adjust_offset chain ==========
+
+    /// Retail order pinned (`acclient.c:388287-388304`): with interp +
+    /// sticky + constraint ALL active in one frame, interp replaces the
+    /// intended offset, sticky then replaces the planar half + heading
+    /// (last writer), and the constraint budget accumulates ONCE — on
+    /// the FINAL composed offset, not on the manual delta plus the
+    /// interp pull separately (the split-site double-accumulate edge).
+    #[test]
+    fn adjust_offset_chain_retail_order_accumulates_once() {
+        let mut manager = PositionManager::default();
+        let cur = pose(50.0, 50.0, 0.0);
+        // Interp node 3 m +X (keep_heading=false → node heading writer).
+        manager
+            .interpolation
+            .interpolate_to(cur, pose(53.0, 50.0, 0.0), false, BLIP);
+        // Leash armed below the band start: passthrough scale, budget
+        // accumulates from 0.
+        manager.constraint.constrain_to(0.0, 5.0, 20.0);
+        // Sticky target 10 m due +Y, fed.
+        manager.stick_to(guid(0x77), 0.0);
+        manager.sticky_handle_update_target(guid(0x77), pose(50.0, 60.0, 0.0));
+
+        // Manual intent: +X planar with a falling dz.
+        let intended = Vector3::new(9.0, 0.0, -0.4);
+        let out = manager.adjust_offset_chain(cur, intended, 0.1, MAX_SPEED, 4.0, 0.0, true);
+
+        // Sticky owns the planar result (chain order interp → sticky):
+        // mag = 10 − 0.3 = 9.7, speed = 4*5 = 20 → step 2.0 due +Y.
+        assert!(
+            out.offset.x.abs() < 1e-4,
+            "sticky replaced planar X, got {:?}",
+            out.offset
+        );
+        assert!(
+            (out.offset.y - 2.0).abs() < 1e-3,
+            "sticky pull +Y, got {:?}",
+            out.offset
+        );
+        // Interp REPLACED the whole intent frame first (retail
+        // `Frame::operator=`, :389269) — the manual dz went with it
+        // (node and mover share z=0 here); sticky then preserved the
+        // interp z (the sticky-only dz case is pinned separately).
+        assert!(out.offset.z.abs() < 1e-6, "interp replaced the frame z");
+        // ONE accumulate, on the composed offset — NOT |manual| +
+        // |interp| (the old split sites burned both).
+        let expected_budget = out.offset.length();
+        assert!(
+            (manager.constraint.constraint_pos_offset() - expected_budget).abs() < 1e-4,
+            "budget accumulates the composed offset once, got {} want {}",
+            manager.constraint.constraint_pos_offset(),
+            expected_budget
+        );
+        // Heading writer: sticky wins over the interp node heading.
+        let heading = out.rotation.expect("sticky writes heading").to_heading();
+        assert!(
+            (heading - cur.heading_to(&pose(50.0, 60.0, 0.0))).abs() < 1e-3,
+            "heading faces the sticky target"
+        );
+        // Interp bookkeeping ran exactly once: window advanced, node kept.
+        assert!(manager.interpolation.is_interpolating());
+        assert!(out.commands.is_empty());
+        assert!(!out.sticky_timed_out);
+    }
+
+    /// Interp-only chain frame: the interp pull REPLACES the manual
+    /// intent (`Frame::operator=`, :389269) and the budget accumulates
+    /// the interp step once.
+    #[test]
+    fn adjust_offset_chain_interp_replaces_intended_offset() {
+        let mut manager = PositionManager::default();
+        let cur = pose(50.0, 50.0, 0.0);
+        let node = pose(53.0, 50.0, 0.0);
+        manager.interpolation.interpolate_to(cur, node, false, BLIP);
+        manager.constraint.constrain_to(0.0, 5.0, 20.0);
+
+        let intended = Vector3::new(10.0, 0.0, 0.0);
+        // quantum 0.016 × 36 = 0.576 cap < 3 m gap → capped pull.
+        let out = manager.adjust_offset_chain(cur, intended, 0.016, MAX_SPEED, 4.0, 0.0, true);
+        let cap = MAX_SPEED * 0.016;
+        assert!(
+            (out.offset.x - cap).abs() < 1e-4,
+            "interp pull replaces the 10 m manual intent, got {:?}",
+            out.offset
+        );
+        assert!(out.offset.y.abs() < 1e-6 && out.offset.z.abs() < 1e-6);
+        assert!(
+            (manager.constraint.constraint_pos_offset() - cap).abs() < 1e-4,
+            "budget = one interp step"
+        );
+        // keep_heading=false → the node heading is adopted.
+        assert_eq!(out.rotation, Some(node.rotation));
+    }
+
+    /// Chain passthrough arms: idle managers leave the intended offset
+    /// untouched (no writers, no budget, no commands); a NO-CONTACT
+    /// frame skips the interp replace and the constraint scale but
+    /// still accumulates budget (:389488 gates only the scale arm).
+    #[test]
+    fn adjust_offset_chain_passthrough_and_airborne_accumulate() {
+        // Fully idle: identity.
+        let mut manager = PositionManager::default();
+        let cur = pose(50.0, 50.0, 0.0);
+        let intended = Vector3::new(0.3, -0.2, -0.1);
+        let out = manager.adjust_offset_chain(cur, intended, 0.016, MAX_SPEED, 4.0, 0.0, true);
+        assert_eq!(out.offset, intended);
+        assert_eq!(out.rotation, None);
+        assert!(out.commands.is_empty());
+        assert!(!out.sticky_timed_out);
+        assert_eq!(manager.constraint.constraint_pos_offset(), 0.0);
+
+        // Airborne with interp queued + constraint in band: interp's
+        // contact gate leaves the manual offset; constraint applies
+        // UNSCALED but burns budget (airborne-still-accumulates).
+        let mut manager = PositionManager::default();
+        manager
+            .interpolation
+            .interpolate_to(cur, pose(53.0, 50.0, 0.0), true, BLIP);
+        manager.constraint.constrain_to(6.0, 5.0, 20.0);
+        let out = manager.adjust_offset_chain(cur, intended, 0.016, MAX_SPEED, 4.0, 0.0, false);
+        assert_eq!(
+            out.offset, intended,
+            "no-contact: interp untouched, no scale despite in-band budget"
+        );
+        assert!(
+            (manager.constraint.constraint_pos_offset() - (6.0 + intended.length())).abs() < 1e-5,
+            "airborne frame still accumulates"
+        );
+    }
+
+    /// Constraint slice pins retail-last: the in-band scale applies to
+    /// whatever the earlier slices composed, and a beyond-blip install
+    /// (fail-counter 4) drains to a recovery blip THROUGH the chain
+    /// (step-then-drain).
+    #[test]
+    fn adjust_offset_chain_scales_composed_offset_and_drains_recovery() {
+        // In-band scale on a manual-only frame: seed 8, band 5..20 →
+        // scale (20−8)/15 = 0.8.
+        let mut manager = PositionManager::default();
+        let cur = pose(50.0, 50.0, 0.0);
+        manager.constraint.constrain_to(8.0, 5.0, 20.0);
+        let out = manager.adjust_offset_chain(
+            cur,
+            Vector3::new(5.0, 0.0, 0.0),
+            0.016,
+            MAX_SPEED,
+            4.0,
+            0.0,
+            true,
+        );
+        assert!(
+            (out.offset.x - 4.0).abs() < 1e-5,
+            "in-band scale 0.8 on the composed offset, got {:?}",
+            out.offset
+        );
+
+        // Beyond-blip install: fail4 node → the chain's drain emits the
+        // recovery SetPosition in the SAME frame.
+        let mut manager = PositionManager::default();
+        let far = pose(160.0, 50.0, 0.0); // 110 m > BLIP 100
+        assert!(manager.interpolation.interpolate_to(cur, far, true, BLIP));
+        assert_eq!(manager.interpolation.node_fail_counter(), 4);
+        let out = manager.adjust_offset_chain(
+            cur,
+            Vector3::new(0.1, 0.0, 0.0),
+            0.016,
+            MAX_SPEED,
+            4.0,
+            0.0,
+            true,
+        );
+        assert_eq!(out.commands, vec![InterpolationCommand::SetPosition(far)]);
+        assert!(!manager.interpolation.is_interpolating(), "recovery stops");
+    }
+
+    /// Sticky-only chain frame: the pull replaces the planar half
+    /// (retail assigns the offset origin, :388531-388591) while the
+    /// intended dz is PRESERVED — the documented deviation from
+    /// retail's z-zero (:388557): our per-slice offset carries the
+    /// integrated velocity dz that retail adds AFTER the chain
+    /// (UpdatePhysicsInternal :320061), and sticky has no contact gate
+    /// so an airborne swing must not freeze the gravity arc.
+    #[test]
+    fn adjust_offset_chain_sticky_preserves_intended_dz() {
+        let mut manager = PositionManager::default();
+        let cur = pose(50.0, 50.0, 0.0);
+        manager.stick_to(guid(0x51), 0.0);
+        manager.sticky_handle_update_target(guid(0x51), pose(50.0, 60.0, 0.0));
+        let intended = Vector3::new(0.7, 0.0, -0.4);
+        // Airborne: sticky still pulls (no contact gate, :388519-388601).
+        let out = manager.adjust_offset_chain(cur, intended, 0.1, MAX_SPEED, 4.0, 0.0, false);
+        assert!(out.offset.x.abs() < 1e-4, "planar X replaced by the pull");
+        assert!((out.offset.y - 2.0).abs() < 1e-3, "pull toward +Y");
+        assert!((out.offset.z + 0.4).abs() < 1e-6, "intended dz preserved");
+        let heading = out.rotation.expect("sticky writes heading").to_heading();
+        assert!((heading - cur.heading_to(&pose(50.0, 60.0, 0.0))).abs() < 1e-3);
+    }
+
+    /// The sticky 1.0 s window expiring inside the chain reports
+    /// `sticky_timed_out` and clears the target without pulling.
+    #[test]
+    fn adjust_offset_chain_reports_sticky_timeout() {
+        let mut manager = PositionManager::default();
+        let cur = pose(50.0, 50.0, 0.0);
+        manager.stick_to(guid(0x31), 0.0);
+        manager.sticky_handle_update_target(guid(0x31), pose(60.0, 50.0, 0.0));
+        let intended = Vector3::new(0.5, 0.0, 0.0);
+        let out = manager.adjust_offset_chain(cur, intended, 1.1, MAX_SPEED, 4.0, 0.0, true);
+        assert!(out.sticky_timed_out);
+        assert_eq!(out.offset, intended, "expired window pulls nothing");
+        assert_eq!(out.rotation, None);
+        assert!(!manager.sticky.is_active());
     }
 }

@@ -786,6 +786,22 @@ impl SpatialScene {
         self.local_server_controlled = controlled;
     }
 
+    /// FU5: the `controlled_by_server` predicate (retail
+    /// `cmdinterp->vfptr[8]`, acclient.c:145215).
+    pub fn local_server_controlled(&self) -> bool {
+        self.local_server_controlled
+    }
+
+    /// FU5 — retail `CPhysicsObj::StopInterpolating` as called by
+    /// `TakeControlFromServer` (acclient.c:716950): stops the body's
+    /// interpolation WITHOUT unconstraining — the leash survives
+    /// (disarm is `UnConstrain`/re-`ConstrainTo` only, :389417).
+    pub fn stop_interpolation_only(&mut self, body_id: SpatialBodyId) {
+        if let Some(body) = self.body_store.body_mut(body_id) {
+            body.position_manager.interpolation.stop_interpolating();
+        }
+    }
+
     /// Physics-parity 2026-07-03 (dossier A F9b / B rows 31/42): scale
     /// a LOCAL-player per-slice movement delta through the armed
     /// constraint — retail's `PositionManager::adjust_offset` runs on
@@ -810,6 +826,56 @@ impl SpatialScene {
         }
         let on_contact = body.contact.grounded().unwrap_or(true);
         body.position_manager.constraint.adjust_offset(delta, on_contact)
+    }
+
+    /// F10 (2026-07-03, dossier B row 42): the LOCAL player's COMPOSED
+    /// per-slice `PositionManager::adjust_offset` chain — interp
+    /// REPLACES the intended offset, sticky replaces the planar half +
+    /// heading, constraint scales and accumulates ONCE on the final
+    /// composed offset, then the interp drain runs
+    /// (acclient.c:388287-388304 chained at :320029, BEFORE the
+    /// transition validates the move). Supersedes the split
+    /// [`Self::constrain_local_manual_delta`] +
+    /// [`Self::step_force_position_interpolation`] +
+    /// [`Self::step_local_sticky`] trio for chain-owned frames — the
+    /// caller must skip those while this returns `Some` (one window
+    /// advance / one budget accumulate / one timeout tick per frame).
+    ///
+    /// `None` (ZERO side effects) unless `local_retail_leash` is armed
+    /// AND the body exists — byte-identical flag-off; the split sites
+    /// keep owning the frame.
+    #[allow(clippy::too_many_arguments)]
+    pub fn adjust_local_offset_chain(
+        &mut self,
+        body_id: SpatialBodyId,
+        current: WorldPosition,
+        intended_offset: Vector3,
+        quantum: f32,
+        interp_max_speed: f32,
+        sticky_max_speed: f32,
+        on_contact: bool,
+    ) -> Option<super::position_manager::OffsetChainOutcome> {
+        if !self.local_retail_leash {
+            return None;
+        }
+        let body = self.body_store.body_mut(body_id)?;
+        let outcome = body.position_manager.adjust_offset_chain(
+            current,
+            intended_offset,
+            quantum,
+            interp_max_speed,
+            sticky_max_speed,
+            // `my_radius = 0.0` fallback (acclient.c:319756-319763;
+            // spec S9 OPEN Q3 — same input `step_local_sticky` feeds).
+            0.0,
+            on_contact,
+        );
+        if outcome.sticky_timed_out {
+            // Mirror `step_local_sticky`'s timeout bookkeeping so the
+            // pose-feed routing compare stays coherent.
+            self.local_sticky_target = None;
+        }
+        Some(outcome)
     }
 
     /// A2-P2: flip the remote-driver runtime switch (see the field doc).
@@ -2636,7 +2702,12 @@ impl SpatialScene {
     ) {
         let mode = match sync {
             AuthoritativeBodySync::Snapshot => SpatialSampleMode::AuthoritativeOnly,
-            AuthoritativeBodySync::Reset => SpatialSampleMode::Suspended,
+            // ForceBlip shares Reset's suspend-then-recover shape (the
+            // next accepted echo un-suspends via the Snapshot arm); the
+            // leash-mode difference is heading/constraint/velocity below.
+            AuthoritativeBodySync::Reset | AuthoritativeBodySync::ForceBlip => {
+                SpatialSampleMode::Suspended
+            }
         };
 
         let mut body = self.body_store.remove_body(body_id);
@@ -2847,36 +2918,50 @@ impl SpatialScene {
                 body.sampling.mode = mode;
             }
         } else {
-            if self.local_retail_leash
-                && matches!(body_id, SpatialBodyId::LocalPlayer(_))
-                && matches!(sync, AuthoritativeBodySync::Reset)
-            {
-                // Physics-parity 2026-07-03 (dossier A F14d) — the retail
-                // TELEPORT arm (acclient.c:145196-145207): TeleportPlayer,
-                // `ConstrainTo` the arrival position (seed 0 — the pose
-                // adopts the arrival below), `set_velocity(0)`. `stop()`
-                // first: a teleport clears pending interpolation before
-                // the re-arm. NOTE: the wire layer maps force-position
-                // events to `Reset` too — retail's force arm (BlipPlayer,
-                // own heading, NO constrain) needs the handler-level
-                // force/teleport split before it can diverge here
-                // (Phase-3 handoff).
-                let indoor = pose.is_indoors();
-                let leash_start = if indoor {
-                    CONSTRAINT_LEASH_INDOOR_M
-                } else {
-                    CONSTRAINT_LEASH_OUTDOOR_M
-                };
-                let leash_max = if indoor {
-                    CONSTRAINT_MAX_INDOOR_M
-                } else {
-                    CONSTRAINT_MAX_OUTDOOR_M
-                };
-                body.position_manager.stop();
-                body.position_manager.set_retail_leash(true);
-                body.position_manager
-                    .remote_constrain_to(0.0, leash_start, leash_max);
-                body.velocity = Vector3::zero();
+            let mut pose = pose;
+            if self.local_retail_leash && matches!(body_id, SpatialBodyId::LocalPlayer(_)) {
+                match sync {
+                    AuthoritativeBodySync::Reset => {
+                        // Physics-parity 2026-07-03 (dossier A F14d) — the
+                        // retail TELEPORT arm (acclient.c:145196-145207):
+                        // TeleportPlayer, `ConstrainTo` the arrival position
+                        // (seed 0 — the pose adopts the arrival below),
+                        // `set_velocity(0)`. `stop()` first: a teleport
+                        // clears pending interpolation before the re-arm.
+                        let indoor = pose.is_indoors();
+                        let leash_start = if indoor {
+                            CONSTRAINT_LEASH_INDOOR_M
+                        } else {
+                            CONSTRAINT_LEASH_OUTDOOR_M
+                        };
+                        let leash_max = if indoor {
+                            CONSTRAINT_MAX_INDOOR_M
+                        } else {
+                            CONSTRAINT_MAX_OUTDOOR_M
+                        };
+                        body.position_manager.stop();
+                        body.position_manager.set_retail_leash(true);
+                        body.position_manager
+                            .remote_constrain_to(0.0, leash_start, leash_max);
+                        body.velocity = Vector3::zero();
+                    }
+                    AuthoritativeBodySync::ForceBlip => {
+                        // FU4 — the retail FORCE arm
+                        // (acclient.c:145236-145243): `set_heading(pos,
+                        // get_heading(player))` BEFORE `BlipPlayer` — the
+                        // hard snap KEEPS the player's own heading; NO
+                        // `ConstrainTo`, NO velocity zeroing (the wire
+                        // velocity assigned above stands). Pending interp
+                        // still clears (a blip replaces the working pose).
+                        body.position_manager.stop();
+                        body.position_manager.set_retail_leash(true);
+                        pose = WorldPosition {
+                            rotation: body.pose.rotation,
+                            ..pose
+                        };
+                    }
+                    AuthoritativeBodySync::Snapshot => {}
+                }
             }
             body.pose = pose;
             body.sampling.mode = mode;

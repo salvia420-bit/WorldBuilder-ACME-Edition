@@ -457,31 +457,39 @@ fn parse_sticky_retail_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "stickyRetail=off")
 }
 
-/// Physics-parity 2026-07-03 (dossier A F9/F14): parse `?retailLeash=on`
-/// (or `&retailLeash=on`). DEFAULT OFF — feel-affecting retail LOCAL
-/// position lattice: `ConstrainTo` re-arms on every accepted self echo,
-/// `InterpolateTo` gates on server-control + contact, teleports
-/// constrain + zero velocity, the leash persists across interp
-/// completion, and the interp heading snaps in one frame (dossier A
-/// F14/F12/F9b-c). 1070 eye-test batched before any default flip.
+/// Physics-parity 2026-07-03 (dossier A F9/F14): parse `?retailLeash`.
+/// F-2026-07-03: DEFAULT-ON (was `=on` to enable); only `=off`
+/// disables. The retail LOCAL position lattice: `ConstrainTo` re-arms
+/// on every accepted self echo, `InterpolateTo` gates on
+/// server-control + contact, teleports constrain + zero velocity, the
+/// force arm keeps own heading, the leash persists across interp
+/// completion, the interp heading snaps in one frame, and the manual
+/// slice runs the offset chain (dossier A F14/F12/F9b-c + F10).
+/// Flipped default-ON per the project's validated-gate precedent after
+/// the headless smoke met the bar (loads/spawns/teleports, 0 errors);
+/// feel A/B stays queued for the 1070 batch — `=off` is the escape.
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_retail_leash_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "retailLeash=on")
+    !trimmed.split('&').any(|kv| kv == "retailLeash=off")
 }
 
-/// Physics-parity 2026-07-03 (dossier A F1/F2): parse `?retailQuantum=on`
-/// (or `&retailQuantum=on`). DEFAULT OFF — the ACE slice shapes stand
-/// per the DECISIONS-A1-O5 ruling (default flip needs that ruling
-/// reopened + a move_to turn-deadband regression at 0.2 s slices). When
-/// on, BOTH integrator shapes run retail's update_object schedule
-/// (acclient.c:323123-323161): dt <= 0.0002 consume-skip, dt <= 0.2 one
-/// direct quantum, else 0.2 slices with the remainder integrated iff
-/// > 1/30 else carried.
+/// Physics-parity 2026-07-03 (dossier A F1/F2): parse `?retailQuantum`.
+/// F-2026-07-03: DEFAULT-ON (was `=on` to enable); only `=off`
+/// disables. When on, BOTH integrator shapes run retail's
+/// update_object schedule (acclient.c:323123-323161): dt <= 0.0002
+/// consume-skip, dt <= 0.2 one direct quantum, else 0.2 slices with
+/// the remainder integrated iff > 1/30 else carried. The A1-O5 ruling
+/// (ACE kept 0.1 to mask ITS MoveToManager turning bug) is DISCHARGED:
+/// the closed-loop turn regression
+/// (`move_to::quantum_turn_tests`) converges with zero oscillation at
+/// 0.2 s slices in this port. NOTE the carrier split: the native
+/// `USE_RETAIL_QUANTUM` const stays FALSE so the test/golden baseline
+/// keeps the ACE shape; the browser rides this flag default.
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_retail_quantum_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "retailQuantum=on")
+    !trimmed.split('&').any(|kv| kv == "retailQuantum=off")
 }
 
 /// Map a `GameEvent` variant back to its `GameEventOpcode` discriminant
@@ -25241,27 +25249,20 @@ mod wire_state_packs_routing_tests {
         ));
     }
 
-    /// Physics-parity 2026-07-03 (dossier A F9/F14): `?retailLeash`
-    /// parse shape — DEFAULT-OFF; only an explicit `=on` enables.
+    /// F-2026-07-03: `?retailLeash` / `?retailQuantum` parse shapes —
+    /// DEFAULT-ON; only an explicit `=off` disables.
     #[test]
-    fn retail_leash_flag_defaults_off_unless_on() {
-        use super::parse_retail_leash_flag;
-        assert!(!parse_retail_leash_flag(""));
-        assert!(!parse_retail_leash_flag("?renderer=3d"));
-        assert!(!parse_retail_leash_flag("?retailLeash=off"));
+    fn retail_leash_and_quantum_flags_default_on_unless_off() {
+        use super::{parse_retail_leash_flag, parse_retail_quantum_flag};
+        assert!(parse_retail_leash_flag(""));
+        assert!(parse_retail_leash_flag("?renderer=3d"));
         assert!(parse_retail_leash_flag("?retailLeash=on"));
-        assert!(parse_retail_leash_flag("?unifiedTick=on&retailLeash=on"));
-    }
-
-    /// Physics-parity 2026-07-03 (dossier A F1/F2): `?retailQuantum`
-    /// parse shape — DEFAULT-OFF; only an explicit `=on` enables.
-    #[test]
-    fn retail_quantum_flag_defaults_off_unless_on() {
-        use super::parse_retail_quantum_flag;
-        assert!(!parse_retail_quantum_flag(""));
-        assert!(!parse_retail_quantum_flag("?retailQuantum=off"));
+        assert!(!parse_retail_leash_flag("?retailLeash=off"));
+        assert!(!parse_retail_leash_flag("?unifiedTick=on&retailLeash=off"));
+        assert!(parse_retail_quantum_flag(""));
         assert!(parse_retail_quantum_flag("?retailQuantum=on"));
-        assert!(parse_retail_quantum_flag("?retailLeash=on&retailQuantum=on"));
+        assert!(!parse_retail_quantum_flag("?retailQuantum=off"));
+        assert!(!parse_retail_quantum_flag("?retailLeash=off&retailQuantum=off"));
     }
 
     /// A2-P2 (W3+ S8): export packing — two managed bodies flatten to

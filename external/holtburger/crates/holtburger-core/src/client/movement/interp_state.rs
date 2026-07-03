@@ -31,6 +31,12 @@ pub(crate) const MOTION_NONCOMBAT_STYLE: u32 = 0x8000_003D;
 pub(crate) enum InterpretedForwardCommand {
     WalkForward,
     RunForward,
+    /// FU6 (row 11) — retail stores ANY 0x40000000-class substate in
+    /// the single forward slot (`InterpretedMotionState::ApplyMotion`
+    /// mirror, acclient.c:332759), evicting locomotion; zero velocity.
+    /// `None` ≡ retail's Ready reset (0x41000003, `RemoveMotion`
+    /// :332538 resets the slot to Ready, never to a held key).
+    Substate(u32),
 }
 
 /// One pending interpreted one-shot action `(motion id, speed)` — the
@@ -180,6 +186,7 @@ impl InterpretedState {
         const MASK_SUBSTATE: u32 = 0x4000_0000;
         const MASK_STYLE: u32 = 0x8000_0000;
         const MASK_ACTION: u32 = 0x1000_0000;
+        const MOTION_READY: u32 = 0x4100_0003;
         match motion {
             TURN_RIGHT => {
                 self.turn = true;
@@ -198,9 +205,14 @@ impl InterpretedState {
                 self.forward_speed = speed;
             }
             _ if motion & MASK_SUBSTATE != 0 => {
-                // Non-locomotion substate occupies the forward slot in
-                // retail; our normal form clears locomotion.
-                self.forward_command = None;
+                // FU6 (row 11) — the substate ITSELF occupies the
+                // forward slot (retail :332759), evicting locomotion;
+                // Ready canonicalizes to the empty slot.
+                self.forward_command = if motion == MOTION_READY {
+                    None
+                } else {
+                    Some(InterpretedForwardCommand::Substate(motion))
+                };
                 self.forward_speed = speed;
             }
             _ if motion & MASK_STYLE != 0 => {

@@ -1554,3 +1554,103 @@ mod tests {
         assert_eq!(manager.last_target_update().map(|(g, _)| *g), Some(target));
     }
 }
+
+#[cfg(test)]
+mod quantum_turn_tests {
+    use super::*;
+    use holtburger_common::{Guid, Quaternion, Vector3};
+    use std::time::Duration;
+
+    /// A1-O5 discharge (2026-07-03) — ACE kept MAX_QUANTUM at 0.1
+    /// because ITS MoveToManager port "was buggy with turning" at
+    /// retail's 0.2 slices. This closed-loop regression drives OUR
+    /// port's TurnToHeading at BOTH quanta with the retail turn omega
+    /// (~1.5 rad/s ≈ 17°/slice at 0.2 s — every slice overshoots the
+    /// 0.0002 epsilon, the exact coarse regime the ruling feared) and
+    /// asserts: convergence with the overshoot SNAP
+    /// (acclient.c:345746), zero direction flapping, success
+    /// completion. Green here = the ruling's stated concern does not
+    /// reproduce in this port.
+    #[test]
+    fn turn_to_heading_converges_without_oscillation_at_retail_quantum() {
+        const LB: u32 = 0xA9B4_0001;
+        let pose = |heading_deg: f32| WorldPosition {
+            landblock_id: Guid(LB),
+            coords: Vector3::new(50.0, 50.0, 0.0),
+            rotation: Quaternion::from_heading(heading_deg.to_radians()),
+        };
+        for &quantum in &[0.1_f32, 0.2] {
+            let omega_deg_per_sec = 1.5_f32.to_degrees();
+            let mut manager = MoveToManager::default();
+            let mut params = MovementParameters::default();
+            params.desired_heading = 90.0;
+            manager.turn_to_heading(params);
+
+            let mut heading = 0.0_f32;
+            let mut now = Instant::now();
+            let mut active_turn: Option<u32> = None;
+            let mut direction_flips = 0;
+            let mut completion: Option<u32> = None;
+            for _ in 0..100 {
+                now += Duration::from_secs_f32(quantum);
+                let v = MoveToView {
+                    on_walkable_contact: true,
+                    self_pos: pose(heading),
+                    self_radius: 0.4,
+                    self_height: 1.8,
+                    target_pos: None,
+                    motions_pending: false,
+                    is_interpolating: false,
+                    now,
+                };
+                let out = manager.use_time(&v);
+                for &(motion, _) in &out.do_motions {
+                    if motion == MOTION_TURN_RIGHT || motion == MOTION_TURN_LEFT {
+                        if let Some(prev) = active_turn
+                            && prev != motion
+                        {
+                            direction_flips += 1;
+                        }
+                        active_turn = Some(motion);
+                    }
+                }
+                for &(motion, _) in &out.stop_motions {
+                    if Some(motion) == active_turn {
+                        active_turn = None;
+                    }
+                }
+                // Integrate the commanded turn across this slice
+                // (right = heading increases, cli omega convention).
+                match active_turn {
+                    Some(MOTION_TURN_RIGHT) => {
+                        heading = (heading + omega_deg_per_sec * quantum).rem_euclid(360.0)
+                    }
+                    Some(MOTION_TURN_LEFT) => {
+                        heading = (heading - omega_deg_per_sec * quantum).rem_euclid(360.0)
+                    }
+                    _ => {}
+                }
+                if let Some(snap) = out.set_heading {
+                    heading = snap.to_degrees().rem_euclid(360.0);
+                }
+                completion = completion.or(out.completion).or(manager.take_completion());
+                if completion.is_some() {
+                    break;
+                }
+            }
+            assert_eq!(
+                completion,
+                Some(0),
+                "quantum {quantum}: turn directive completes successfully"
+            );
+            assert_eq!(
+                direction_flips, 0,
+                "quantum {quantum}: no left/right oscillation (the ACE 0.2 bug)"
+            );
+            assert!(
+                (heading - 90.0).abs() < 0.5,
+                "quantum {quantum}: snapped onto the target heading, got {heading}"
+            );
+        }
+    }
+}

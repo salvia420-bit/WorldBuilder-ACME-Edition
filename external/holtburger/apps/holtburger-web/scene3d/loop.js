@@ -82,6 +82,12 @@ import { cloneEntityUpdate } from "./entity_update_clone.js";
 // installSharedDrainHook; the flag (`?unifiedClientEvent=on`) is read at
 // the call site in index.html so flag-off never invokes it.
 import { createClientEventDispatcher } from "./client_event_dispatch.js";
+// F17 (2026-07-03, physics-parity dossier A row 42) — pure helpers for the
+// `?rustPose=on` render bypass (flag parse + lb-local → world pose
+// conversion). Import-free module so tests/rust_pose.test.cjs runs the
+// unit half under plain node. Consumed only inside
+// `applyLocalPlayerPoseFromIntegrator` behind the default-off flag.
+import { parseRustPoseFlag, rustPoseWorldFromPose } from "./rust_pose.js";
 
 // Wire the per-domain cullers once at module load. Each fn is `(scene3d,
 // culler) => void` and is individually fail-soft (tickFrustumCull also
@@ -685,6 +691,29 @@ function isLocalPlayerGuid(g) {
 // cross / fall landing) bypass the ease so big vertical moves stay crisp.
 const RIG_Z_TAU_MS = 70.0;
 const RIG_Z_SNAP_M = 1.0;
+// F17 (2026-07-03, dossier A row 42) — `?rustPose=on` (default OFF): render
+// the local player rig DIRECTLY from the wasm integrator pose
+// (`getLocalPlayerPose()`), bypassing the JS smoothing stack — the
+// cameraSwitcher `predictedPlayerPos` mirror for X/Y and the RIG_Z
+// exponential ease above for Z. Retail renders m_position, period:
+// `CPhysicsObj::set_frame` (acclient.c:321328) writes `m_position.frame`
+// (:321344) and pushes it straight into the render parts
+// (`CPartArray::SetFrame`, :321350) — interp/constraint mutate m_position
+// INSIDE the sim, never as a render-side layer. The JS layers hid a
+// reconcile oscillation whose Rust-side cause was fixed 2026-07-03
+// (?retailLeash lattice + autonomy latch), so the bypass is viable pending
+// a 1070 A/B (watching for the ~5-10 Hz jitter the banner above
+// describes). The legacy layers are NOT deleted — flag-off is
+// byte-identical; deletion happens after the A/B per the removal plan.
+// camera.js reads the same flag for its `_safePlayerPos` framing read.
+const RUST_POSE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return parseRustPoseFlag(window.location.search);
+  } catch (_) {
+    return false;
+  }
+})();
 function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   if (!scene3d?.entityManager) return;
   if (!scene3d?.cameraSwitcher) return;
@@ -697,6 +726,30 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   const guid = lpg >>> 0;
   const inst = scene3d.entityManager.entityMap.get(guid);
   if (!inst || !inst.root) return;
+
+  // F17 (?rustPose=on) — direct-render the wasm integrator pose (see the
+  // RUST_POSE_ON banner above). X/Y/Z/heading all come from ONE
+  // `getLocalPlayerPose()` read this frame: no predictedPlayerPos mirror,
+  // no RIG_Z ease/snap gate, no isOnGround branch. Pose unavailable
+  // (pre-spawn / read failure / non-finite) → keep the last applied pose,
+  // matching the legacy path's null-`predicted` early return. The
+  // `_rigZSmooth` state is deliberately untouched — nothing reads it
+  // flag-on, and flags are frozen at module load (a reload re-seeds it).
+  if (RUST_POSE_ON) {
+    let pose = null;
+    if (sessionHandle && typeof sessionHandle.getLocalPlayerPose === "function") {
+      try { pose = sessionHandle.getLocalPlayerPose(); } catch (_) { pose = null; }
+    }
+    const world = rustPoseWorldFromPose(pose);
+    if (!world) return;
+    scene3d.entityManager.setPose(
+      guid,
+      world.x, world.y, world.z,
+      world.qw, 0.0, 0.0, world.qz
+    );
+    try { window.__diag?.physics?.onFrame?.(); } catch (_) {}
+    return;
+  }
 
   // Position source: X/Y from Workstream B predicted pose, Z from the
   // wasm integrator. Pre-spawn the predicted pose is null (no server-

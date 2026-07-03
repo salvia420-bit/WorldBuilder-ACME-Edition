@@ -7,7 +7,7 @@ use super::common::{
     has_autonomous_position_sync_target, local_omega_for_state, local_velocity_for_state,
     normalize_heading, raw_motion_state_with_motion_style, signed_heading_delta,
 };
-use super::interp_state::InterpretedState;
+use super::interp_state::{InterpretedForwardCommand, InterpretedState};
 use super::jump_charge::{JumpChargeClock, JumpOutcome, JumpRefusal};
 use super::motion_interp::{
     MotionInterp, MotionSideEffects, interpreted_velocity_for_state,
@@ -1393,6 +1393,11 @@ pub(crate) struct MovementSystem {
     /// [`Self::interpreted_movement_active`]. `false` at boot = the
     /// retail ctor (:319552); the first input edge raises it.
     last_move_was_autonomous: bool,
+    /// FU5 (row 64) — set alongside every latch-raising local command
+    /// edge; the next drive pump consumes it as retail
+    /// `TakeControlFromServer` (acclient.c:716934-716953) when the
+    /// scene's `local_server_controlled` flag is up.
+    pending_take_control: bool,
     /// A14-I4 (W3+ S11, 2026-06-12) — the retail jump charge clock
     /// (`ClientCombatSystem` `jump_pending` / `buildStartTime`,
     /// acclient.c:407902-407916). Reached only via the wasm
@@ -1602,6 +1607,7 @@ impl MovementSystem {
             cast_move_runtime: None,
             retail_quantum_runtime: None,
             last_move_was_autonomous: false,
+            pending_take_control: false,
             jump_charge: JumpChargeClock::new(),
             sticky_timeout_pending: std::cell::Cell::new(false),
             manual_moveto_cancel_pending: false,
@@ -1718,6 +1724,24 @@ impl MovementSystem {
         self.cast_move_enabled() && !self.last_move_was_autonomous
     }
 
+    /// FU5 (row 64) — retail `TakeControlFromServer`
+    /// (acclient.c:716934-716953): a fresh local command while the
+    /// server holds control returns control to the player —
+    /// `controlled_by_server = 0` (the scene's InterpolateTo gate
+    /// input, :145215) + `StopInterpolating` (the leash constraint
+    /// SURVIVES — disarm is `UnConstrain` only, :389417). The autonomy
+    /// latch was already raised by the edge; `StopCompletely`'s
+    /// directive-cancel is the existing manual-moveto-cancel machinery.
+    fn consume_pending_take_control(&mut self, world: &mut WorldState) {
+        if self.pending_take_control {
+            self.pending_take_control = false;
+            if world.scene.local_server_controlled() {
+                world.scene.set_local_server_controlled(false);
+                world.stop_local_player_interpolation();
+            }
+        }
+    }
+
     /// Build the drive `MotionState` from the local player's INTERPRETED
     /// motion state — retail `CMotionInterp::apply_interpreted_movement`
     /// (acclient.c:344147): the forward slot and the INDEPENDENT
@@ -1741,13 +1765,19 @@ impl MovementSystem {
                 ..manual
             };
         };
-        let forward = interp.forward_command.map(|_| {
-            if interp.forward_speed < 0.0 {
+        let forward = match interp.forward_command {
+            // Locomotion commands drive with the signed speed.
+            Some(InterpretedForwardCommand::WalkForward)
+            | Some(InterpretedForwardCommand::RunForward) => Some(if interp.forward_speed < 0.0 {
                 ForwardLocomotion::Backstep
             } else {
                 ForwardLocomotion::Forward
-            }
-        });
+            }),
+            // FU6: a stored substate (cast gesture, crouch…) OWNS the
+            // slot at zero locomotion — forward dies (the slidecast
+            // asymmetry's load-bearing arm).
+            Some(InterpretedForwardCommand::Substate(_)) | None => None,
+        };
         let sidestep = interp.sidestep.then(|| {
             if interp.sidestep_speed < 0.0 {
                 SidestepLocomotion::StrafeLeft
@@ -1953,8 +1983,13 @@ impl MovementSystem {
         // (acclient.c:408146) → `CMotionInterp::jump`, and
         // `LeaveGround`/`HitGround` re-run `apply_current_movement`
         // in the raw path (:344457/:344429) — "jump resets the
-        // movement lock".
+        // movement lock". FU5: it is also an input command — retail
+        // `TakeControlFromServer` (:716934-716953) fires inline.
         self.last_move_was_autonomous = true;
+        if world.scene.local_server_controlled() {
+            world.scene.set_local_server_controlled(false);
+            world.stop_local_player_interpolation();
+        }
         world.player.begin_jump(vz);
         // Deduct stamina locally (server is canonical; ACE broadcasts a
         // vital update soon after).
@@ -2156,6 +2191,7 @@ impl MovementSystem {
                 // cast").
                 if self.last_manual_drive != Some(state) {
                     self.last_move_was_autonomous = true;
+                    self.pending_take_control = true;
                 }
                 // A14-I2 (S10 A.3) — record EVERY manual set for the
                 // pursuit-end restore. Pure bookkeeping, ungated.
@@ -2195,6 +2231,7 @@ impl MovementSystem {
                 // Local motion command — retail `DoMotion` raises the
                 // autonomy latch (acclient.c:317325).
                 self.last_move_was_autonomous = true;
+                self.pending_take_control = true;
                 self.active_drive = Some(ActiveDriveState::manual(state, Some(now + duration)));
             }
             QueuedDriveCommand::Autonomous(intent) => {
@@ -2206,6 +2243,7 @@ impl MovementSystem {
             QueuedDriveCommand::Transient(intent) => {
                 // One-shot local motion — a fresh `DoMotion` (:317325).
                 self.last_move_was_autonomous = true;
+                self.pending_take_control = true;
                 self.pending_transient_motion = Some(intent);
             }
             QueuedDriveCommand::ArriveAtPose { pose } => {
@@ -2219,6 +2257,7 @@ impl MovementSystem {
                 // Local stop — retail `StopMotion`/`StopCompletely`
                 // raise the latch too (acclient.c:317364).
                 self.last_move_was_autonomous = true;
+                self.pending_take_control = true;
                 self.pending_arrival_pose = None;
                 self.pending_snap_facing = None;
                 self.active_drive = None;
@@ -2386,6 +2425,7 @@ impl MovementSystem {
         for command in queued {
             self.ingest_drive_command(command, now);
         }
+        self.consume_pending_take_control(world);
 
         // A4-Q1 (2026-06-11): per-frame completion pump for the retail
         // `MotionTableManager` queue, run AFTER drive ingestion —
@@ -4774,7 +4814,18 @@ impl MovementSystem {
         // carry the stepped pose, applied here before the runtime write-back.
         let body_id = SpatialBodyId::LocalPlayer(world.player.guid);
         let on_contact = !world.player.is_airborne;
-        let max_speed = capabilities.resolved_manual_run_speed() * 2.0;
+        // Retail interp cap: `fUseAdjustedSpeed_ = 1` (acclient.c:45657)
+        // → `get_adjusted_max_speed() * 2.0` (:389227-389241) — a
+        // server-driven interpreted RunForward overrides the run-rate
+        // base with `forward_speed / current_speed_factor` (FU2/row 32).
+        let interp_base = capabilities.resolved_manual_run_speed();
+        let max_speed = self
+            .movement_managers
+            .get(&world.player.guid)
+            .and_then(|manager| manager.motion_interp_ref())
+            .map(|minterp| minterp.adjusted_max_speed(interp_base))
+            .unwrap_or(interp_base)
+            * 2.0;
         // Track B1 — the local floor-Z snap above owns the vertical axis
         // while grounded (it just placed the feet on the terrain/cell
         // floor). The force-position interpolator eases the CONTACT-PLANE
@@ -5119,19 +5170,46 @@ impl MovementSystem {
             raw_delta.z
         };
 
-        // Physics-parity 2026-07-03 (dossier A F9b / B rows 31/42):
-        // with the ?retailLeash constraint armed, the WHOLE per-slice
-        // movement offset passes through ConstraintManager::adjust_offset
-        // BEFORE the transition validates it — retail scales the frame
-        // offset in PositionManager::adjust_offset (:388287-388304,
-        // chained at :320029), walking included; the travel budget
-        // accumulates every slice. Passthrough (bit-identical) with the
-        // leash off or unarmed.
-        let leash_delta = world.constrain_local_manual_delta(Vector3::new(
-            raw_delta.x,
-            raw_delta.y,
-            dz,
-        ));
+        // Physics-parity 2026-07-03 (dossier B row 42, F10): with
+        // ?retailLeash armed the WHOLE intended per-slice offset
+        // (manual planar + integrated dz) passes through the COMPOSED
+        // retail PositionManager::adjust_offset chain — interp-replace
+        // → sticky planar-replace + heading → constraint scale and
+        // accumulate ONCE — BEFORE the transition validates the move
+        // (:388287-388304 chained at :320029). One interp window
+        // advance, one budget burn, one sticky timeout tick per slice;
+        // the interp drain rides along (step-then-drain) and its
+        // commands land in the chain tail below. Contact input is the
+        // PRE-move bit (retail reads `transient_state & 1` before the
+        // frame moves). `None` (leash off / no body): the pre-F10
+        // constrain hook runs verbatim — passthrough, bit-identical —
+        // and the split interp/sticky tail keeps owning the frame.
+        let intended_offset = Vector3::new(raw_delta.x, raw_delta.y, dz);
+        let interp_base = capabilities.resolved_manual_run_speed();
+        // Retail interp cap: `fUseAdjustedSpeed_ = 1` (acclient.c:45657)
+        // → `get_adjusted_max_speed() * 2.0` (:389227-389241) — a
+        // server-driven interpreted RunForward overrides the run-rate
+        // base with `forward_speed / current_speed_factor` (FU2/row 32).
+        let interp_max_speed = self
+            .movement_managers
+            .get(&world.player.guid)
+            .and_then(|manager| manager.motion_interp_ref())
+            .map(|minterp| minterp.adjusted_max_speed(interp_base))
+            .unwrap_or(interp_base)
+            * 2.0;
+        let chain = world.scene.adjust_local_offset_chain(
+            SpatialBodyId::LocalPlayer(world.player.guid),
+            pose,
+            intended_offset,
+            dt_s,
+            interp_max_speed,
+            interp_base,
+            !was_airborne,
+        );
+        let leash_delta = match &chain {
+            Some(out) => out.offset,
+            None => world.constrain_local_manual_delta(intended_offset),
+        };
         let (object, mut gates) = Self::transition_profile(world);
         // (2026-06-30) — apply the `?roofGrounding=off` runtime carrier over the
         // const default baked by `transition_profile` (mirrors faithful_stepup).
@@ -5309,13 +5387,18 @@ impl MovementSystem {
         }
         let body_id = SpatialBodyId::LocalPlayer(world.player.guid);
         let on_contact = !world.player.is_airborne;
-        let max_speed = capabilities.resolved_manual_run_speed() * 2.0;
-        let pose = if on_contact {
+        // (Interp cap `interp_max_speed` hoisted above the F10 chain
+        // call — same value; nothing between mutates the managers or
+        // capabilities.) F10: while the chain owns the frame
+        // (`chain.is_some()`) this split interp step is SKIPPED — the
+        // chain already advanced the window, chained the constraint
+        // and drained; running it again would double-book both.
+        let pose = if on_contact && chain.is_none() {
             let snapped_z = pose.coords.z;
             // Physics-parity 2026-07-03 (dossier A F8): the state-layer
             // wrapper routes a drain-applied velocity into the player's
             // split store via the retail set_velocity entry.
-            match world.step_local_force_position(body_id, dt_s, max_speed, on_contact) {
+            match world.step_local_force_position(body_id, dt_s, interp_max_speed, on_contact) {
                 InterpStep::Progressed { mut pose } | InterpStep::Completed { mut pose } => {
                     pose.coords.z = snapped_z;
                     pose
@@ -5337,8 +5420,10 @@ impl MovementSystem {
         // applies its own `* 5.0` / floor-15 model inside
         // `adjust_offset` (:388569-388579). Z stays with this tick's
         // value (sticky z is zeroed by construction, :388557 — the
-        // grounded floor-snap carve-out is preserved).
-        let pose = if USE_STICKY_MANAGER {
+        // grounded floor-snap carve-out is preserved). F10: skipped on
+        // chain-owned frames (the chain ran sticky's use_time + pull
+        // pre-transition).
+        let pose = if USE_STICKY_MANAGER && chain.is_none() {
             let sticky_speed = capabilities.resolved_manual_run_speed();
             match world.scene.step_local_sticky(pose, dt_s, sticky_speed) {
                 LocalStickyStep::Stepped(mut stepped) => {
@@ -5355,6 +5440,42 @@ impl MovementSystem {
             }
         } else {
             pose
+        };
+
+        // F10 chain tail — the chain-owned frame's side effects:
+        // heading writer (sticky over interp node — the offset frame's
+        // last writer, :388593-388600 over :389269) applied AFTER the
+        // omega turn, the same sticky-wins order the split tail
+        // produced; drain SetVelocity → the player's split store (the
+        // F8 route mutations.rs applies for the split sites); a
+        // recovery blip (SetPosition — retail SetPositionSimple,
+        // :389320-389360) adopts the node pose as the frame's final
+        // pose, heading included.
+        let pose = match chain {
+            Some(out) => {
+                let mut pose = pose;
+                if let Some(rotation) = out.rotation {
+                    pose.rotation = rotation;
+                }
+                if out.sticky_timed_out {
+                    // Deferred ACE `ClearTarget → cancel_moveto` — same
+                    // deferral as the split sticky arm above.
+                    self.sticky_timeout_pending.set(true);
+                }
+                let mut blip = None;
+                for command in out.commands {
+                    match command {
+                        holtburger_world::spatial::InterpolationCommand::SetPosition(p) => {
+                            blip = Some(p);
+                        }
+                        holtburger_world::spatial::InterpolationCommand::SetVelocity(v) => {
+                            world.player.set_velocity(v);
+                        }
+                    }
+                }
+                blip.unwrap_or(pose)
+            }
+            None => pose,
         };
 
         let _ = world.set_local_player_runtime_pose(pose);

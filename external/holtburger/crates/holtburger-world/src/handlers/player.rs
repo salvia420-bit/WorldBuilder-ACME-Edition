@@ -59,12 +59,18 @@ pub(crate) fn handle_message(
                     // authoritative reposition (retail BlipPlayer/TeleportPlayer,
                     // acclient.c:145196-145253) -> hard-snap the working pose. ACE
                     // bumps ObjectForcePosition only on the z-hack/PKLite paths, so
-                    // routine play never trips the snap.
-                    let snap = is_newer_u16(data.pos.teleport_sequence, old_teleport_sequence)
-                        || is_newer_u16(
-                            data.pos.force_position_sequence,
-                            old_force_position_sequence,
-                        );
+                    // routine play never trips the snap. FU4 (2026-07-03): the two
+                    // stamps split — retail's TELEPORT arm (:145196-145207) constrains
+                    // + zeroes velocity; the FORCE arm (:145236-145243) is BlipPlayer
+                    // keeping the player's OWN heading, no constrain — distinguished
+                    // sync variants carry that to the scene (identical flag-off).
+                    let teleport_advance =
+                        is_newer_u16(data.pos.teleport_sequence, old_teleport_sequence);
+                    let force_advance = is_newer_u16(
+                        data.pos.force_position_sequence,
+                        old_force_position_sequence,
+                    );
+                    let snap = teleport_advance || force_advance;
                     // Teleport-destination landing (2026-07-02): the
                     // `PlayerTeleport` arm below pre-advances
                     // `teleport_sequence` AND parks the runtime body
@@ -91,11 +97,34 @@ pub(crate) fn handle_message(
                         });
                     events.extend(if snap {
                         // Forced reposition: hard-snap the runtime body.
+                        // FU4: teleport keeps Reset (constrain + zero-vel
+                        // under ?retailLeash); a force-only advance takes
+                        // the ForceBlip arm (own heading, no constrain) —
+                        // teleport wins when both advanced (retail gate
+                        // order, acclient.c:145156-145171).
                         state.set_player_position_with_sync(
                             data.pos.pos,
-                            AuthoritativeBodySync::Reset,
+                            if teleport_advance {
+                                AuthoritativeBodySync::Reset
+                            } else {
+                                AuthoritativeBodySync::ForceBlip
+                            },
                         )
                     } else if body_suspended {
+                        state.set_player_position_with_sync(
+                            data.pos.pos,
+                            AuthoritativeBodySync::Snapshot,
+                        )
+                    } else if state.scene.local_retail_leash() {
+                        // FU4 / dossier B row 58 — the retail ROUTINE arm
+                        // under ?retailLeash: every accepted echo runs the
+                        // Snapshot leash reconcile (ConstrainTo re-arm +
+                        // server-control-gated InterpolateTo,
+                        // acclient.c:145209-145218). The leash mechanism
+                        // replaces the authoritative-only rubberband guard
+                        // below (safe now that the constraint budget
+                        // ACCUMULATES — the old replace-semantics made
+                        // every reconcile drag). Flag-off keeps the guard.
                         state.set_player_position_with_sync(
                             data.pos.pos,
                             AuthoritativeBodySync::Snapshot,
@@ -140,6 +169,18 @@ pub(crate) fn handle_message(
             {
                 let accepted = state.player.apply_self_update_motion(data);
                 if accepted && !data.is_autonomous {
+                    // FU5 (row 64) — retail `LoseControlToServer`
+                    // (acclient.c:716832-716845): a server MoveTo/TurnTo
+                    // DIRECTIVE for the local player takes control (feeds
+                    // the scene's InterpolateTo gate, :145215). General
+                    // (`Invalid`) envelopes — gestures/poses — only lower
+                    // the autonomy latch, never the control flag.
+                    if !matches!(
+                        data.data,
+                        holtburger_protocol::messages::movement::MovementTypeData::Invalid(_)
+                    ) {
+                        state.scene.set_local_server_controlled(true);
+                    }
                     // A3-D3 driver (M4.3): real target_exists + case-6
                     // target dims, same resolution as the remote lane
                     // (closing the consumer's documented `false`

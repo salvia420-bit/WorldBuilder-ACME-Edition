@@ -5833,6 +5833,22 @@
           // motion state is set, and over-streaming would just churn
           // the recv loop.
           const keyState = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false };
+          // FU7 (2026-07-03) — retail per-axis command STACKS resolve
+          // opposite held keys by LAST-PRESSED-WINS: AddCommand pushes
+          // the new command as the axis head and ApplyListHeadMovement
+          // applies ONLY the head (acclient.c:717429/:717102); releasing
+          // the winner re-applies the survivor (NukeCommand head
+          // re-apply, :717457 — our full-state re-send does the same).
+          // The old `(+1) + (-1)` sum canceled opposite keys to a
+          // freeze retail never had. Order stamps only move on the
+          // false→true edge so OS key auto-repeat cannot steal the win.
+          const keyOrder = { w: 0, a: 0, s: 0, d: 0, q: 0, e: 0 };
+          let keyOrderCounter = 0;
+          const __axisValue = (posKey, negKey) => {
+            const p = keyState[posKey], n = keyState[negKey];
+            if (p && n) return keyOrder[posKey] > keyOrder[negKey] ? 1 : -1;
+            return p ? 1 : n ? -1 : 0;
+          };
           let lastInputSig = "0,0,0,false";
           const movementKeys = new Set(["w", "a", "s", "d", "q", "e"]);
           // Skip keystate updates when the user is typing in any text
@@ -6078,6 +6094,9 @@
             if (!enteredWorld || isTypingInForm()) return;
             const k = ev.key.toLowerCase();
             if (movementKeys.has(k)) {
+              // FU7 — stamp the press order on the EDGE only (held-key
+              // auto-repeat keydowns must not steal the axis head).
+              if (!keyState[k]) keyOrder[k] = ++keyOrderCounter;
               keyState[k] = true;
               // G-7 (?longJump=on): a movement key pressed DURING a held
               // space charge converts it to a normal moving jump — drop
@@ -8465,9 +8484,9 @@
                   // throttling on hidden tabs / paused breakpoints
                   // so we don't teleport across the world on resume.
                   const dt = Math.min((now - lastPredictionTime) / 1000, 0.1);
-                  const forward = (keyState.w ? 1 : 0) + (keyState.s ? -1 : 0);
-                  const strafe = (keyState.d ? 1 : 0) + (keyState.a ? -1 : 0);
-                  const turn = (keyState.e ? 1 : 0) + (keyState.q ? -1 : 0);
+                  const forward = __axisValue("w", "s");
+                  const strafe = __axisValue("d", "a");
+                  const turn = __axisValue("e", "q");
                   if (forward !== 0 || strafe !== 0 || turn !== 0) {
                     window.__predTickCount = (window.__predTickCount || 0) + 1;
                     if (!window.__predFirstPos) window.__predFirstPos = { x: localEntry.sprite.x, y: localEntry.sprite.y };
@@ -8602,9 +8621,9 @@
             // packet per keypress / release, matching the cli's
             // `PlayerDriveIntent::ManualHeld` semantics.
             if (enteredWorld) {
-              const forward = (keyState.w ? 1 : 0) + (keyState.s ? -1 : 0);
-              const strafe = (keyState.d ? 1 : 0) + (keyState.a ? -1 : 0);
-              const turn = (keyState.e ? 1 : 0) + (keyState.q ? -1 : 0);
+              const forward = __axisValue("w", "s");
+              const strafe = __axisValue("d", "a");
+              const turn = __axisValue("e", "q");
               // Run-by-default. Shift = walk modifier (retail AC convention,
               // and a quality-of-life fix because new characters have a
               // low `Run` skill that makes 1.0 m/s walk feel painful at the

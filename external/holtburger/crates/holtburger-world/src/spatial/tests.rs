@@ -3797,3 +3797,225 @@ fn retail_leash_manual_delta_burns_budget_then_scales() {
     let d = scene_off.constrain_local_manual_delta(body_off, step);
     assert_eq!(d, step, "flag-off is a passthrough");
 }
+
+/// FU4 — the retail FORCE arm (acclient.c:145236-145243): a ForceBlip
+/// under `?retailLeash` hard-snaps the position but KEEPS the player's
+/// own heading, installs NO constraint, and does NOT zero the wire
+/// velocity (contrast the teleport/Reset arm).
+#[test]
+fn retail_leash_force_blip_keeps_own_heading_no_constrain() {
+    let (mut scene, body_id, _t, now) = leash_scene_with_midsim_player(0.0);
+    // Give the working pose a distinctive heading.
+    let mut working = scene.body(body_id).unwrap().clone();
+    working.pose.rotation = Quaternion::from_heading(1.25);
+    scene.update_body(working);
+    let own_rotation = scene.body(body_id).unwrap().pose.rotation;
+
+    let lb = Guid(0x00A9_0000);
+    let target = WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(90.0, 60.0, 2.0),
+        rotation: Quaternion::from_heading(0.0), // wire heading — must NOT win
+    };
+    scene.reconcile_authoritative_body(
+        body_id,
+        target,
+        Vector3::new(1.5, 0.0, 0.0),
+        Vector3::zero(),
+        AuthoritativeBodySync::ForceBlip,
+        now + Duration::from_millis(16),
+    );
+    let body = scene.body(body_id).unwrap();
+    assert_eq!(body.pose.coords, target.coords, "blip adopts the position");
+    assert_eq!(body.pose.rotation, own_rotation, "own heading kept");
+    assert!(
+        !body.position_manager.constraint.is_constrained(),
+        "force arm installs NO constraint"
+    );
+    assert_eq!(
+        body.velocity,
+        Vector3::new(1.5, 0.0, 0.0),
+        "wire velocity stands (no zeroing)"
+    );
+
+    // Flag OFF: ForceBlip degrades to the Reset shape — full pose
+    // (including wire heading) adopted, nothing leash-armed.
+    let (mut scene, body_id, _t, now) = leash_scene_with_midsim_player(0.0);
+    scene.set_local_retail_leash(false);
+    scene.reconcile_authoritative_body(
+        body_id,
+        target,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::ForceBlip,
+        now + Duration::from_millis(16),
+    );
+    let body = scene.body(body_id).unwrap();
+    assert_eq!(body.pose, target, "flag-off adopts the wire pose wholesale");
+    assert!(!body.position_manager.constraint.is_constrained());
+}
+
+// === F10 (dossier B row 42) — the composed local adjust_offset chain ====
+
+/// Flag-off: `adjust_local_offset_chain` is `None` with ZERO side
+/// effects — no budget burn, no interp window advance, no drain; the
+/// split sites keep owning the frame byte-identically.
+#[test]
+fn adjust_local_offset_chain_flag_off_is_none_with_zero_side_effects() {
+    let (mut scene, body_id, _t, _now) = leash_scene_with_midsim_player(0.0);
+    scene.set_local_retail_leash(false);
+    let mut working = scene.body(body_id).unwrap().clone();
+    let cur = working.pose;
+    let target = WorldPosition {
+        coords: Vector3::new(cur.coords.x + 3.0, cur.coords.y, cur.coords.z),
+        ..cur
+    };
+    working.position_manager.remote_constrain_to(3.0, 5.0, 20.0);
+    working
+        .position_manager
+        .remote_interpolate_to(cur, target, true, 100.0);
+    scene.update_body(working);
+
+    let out = scene.adjust_local_offset_chain(
+        body_id,
+        cur,
+        Vector3::new(0.5, 0.0, 0.0),
+        0.016,
+        36.0,
+        4.0,
+        true,
+    );
+    assert!(out.is_none(), "flag-off chain is a no-op passthrough");
+    let body = scene.body(body_id).unwrap();
+    assert_eq!(
+        body.position_manager.constraint.constraint_pos_offset(),
+        3.0,
+        "budget untouched"
+    );
+    assert!(body.position_manager.is_interpolating(), "queue untouched");
+    assert_eq!(body.position_manager.interpolation.node_count(), 1);
+}
+
+/// THE dossier B row 42 edge, pinned: a frame where server-controlled
+/// interp and held keys coincide. The SPLIT sites burn the budget
+/// TWICE (manual hook + interp-internal chain); the composed chain
+/// accumulates ONCE, on the final offset (which the interp replaced).
+#[test]
+fn retail_leash_chain_accumulates_once_where_split_sites_burned_twice() {
+    let quantum = 0.016_f32;
+    let max_speed = 36.0_f32;
+    let manual = Vector3::new(0.5, 0.0, 0.0);
+    let cap = max_speed * quantum; // 0.576 — the interp step this frame
+
+    let arm = |scene: &mut SpatialScene, body_id: SpatialBodyId| {
+        let mut working = scene.body(body_id).unwrap().clone();
+        let cur = working.pose;
+        let target = WorldPosition {
+            coords: Vector3::new(cur.coords.x + 3.0, cur.coords.y, cur.coords.z),
+            ..cur
+        };
+        working.position_manager.set_retail_leash(true);
+        working.position_manager.remote_constrain_to(0.0, 5.0, 20.0);
+        working
+            .position_manager
+            .remote_interpolate_to(cur, target, true, 100.0);
+        scene.update_body(working);
+        cur
+    };
+
+    // SPLIT (the pre-F10 flag-on shape): manual hook then interp step.
+    let (mut split, split_id, _t, _now) = leash_scene_with_midsim_player(0.0);
+    let _cur = arm(&mut split, split_id);
+    let _ = split.constrain_local_manual_delta(split_id, manual);
+    let _ = split.step_force_position_interpolation(split_id, quantum, max_speed, true);
+    let split_budget = split
+        .body(split_id)
+        .unwrap()
+        .position_manager
+        .constraint
+        .constraint_pos_offset();
+    assert!(
+        (split_budget - (manual.length() + cap)).abs() < 1e-4,
+        "split sites double-burn |manual| + |interp| = {}, got {split_budget}",
+        manual.length() + cap
+    );
+
+    // CHAIN: one composed frame.
+    let (mut chain, chain_id, _t, _now) = leash_scene_with_midsim_player(0.0);
+    let cur = arm(&mut chain, chain_id);
+    let out = chain
+        .adjust_local_offset_chain(chain_id, cur, manual, quantum, max_speed, 4.0, true)
+        .expect("leash on + body → chain owns the frame");
+    let chain_budget = chain
+        .body(chain_id)
+        .unwrap()
+        .position_manager
+        .constraint
+        .constraint_pos_offset();
+    assert!(
+        (chain_budget - cap).abs() < 1e-4,
+        "chain accumulates ONCE on the composed (interp-replaced) offset {cap}, got {chain_budget}"
+    );
+    assert!(chain_budget < split_budget, "double-accumulate removed");
+    assert!(
+        (out.offset.x - cap).abs() < 1e-4,
+        "interp pull replaced the manual intent, got {:?}",
+        out.offset
+    );
+}
+
+/// Sticky timeout inside the chain clears the scene-level target
+/// mirror (the `step_local_sticky` bookkeeping contract).
+#[test]
+fn retail_leash_chain_sticky_timeout_clears_scene_mirror() {
+    let (mut scene, body_id, _t, _now) = leash_scene_with_midsim_player(0.0);
+    let cur = scene.body(body_id).unwrap().pose;
+    let sticky_guid = Guid(0x9000_1234);
+    scene.stick_local_player_to(sticky_guid, 0.0);
+    let target = WorldPosition {
+        coords: Vector3::new(cur.coords.x, cur.coords.y + 10.0, cur.coords.z),
+        ..cur
+    };
+    scene.sticky_pose_feed(sticky_guid, target);
+    assert_eq!(scene.local_sticky_target(), Some(sticky_guid));
+
+    // A pulling frame first: the chain replaces the planar intent.
+    let out = scene
+        .adjust_local_offset_chain(
+            body_id,
+            cur,
+            Vector3::new(0.4, 0.0, 0.0),
+            0.1,
+            36.0,
+            4.0,
+            true,
+        )
+        .expect("chain active");
+    assert!(!out.sticky_timed_out);
+    assert!(out.offset.y > 0.0, "sticky pull toward +Y, got {:?}", out.offset);
+    assert!(out.rotation.is_some(), "sticky writes the heading");
+
+    // Expire the 1.0 s window: timeout reported + mirror cleared.
+    let out = scene
+        .adjust_local_offset_chain(
+            body_id,
+            cur,
+            Vector3::new(0.4, 0.0, 0.0),
+            1.1,
+            36.0,
+            4.0,
+            true,
+        )
+        .expect("chain active");
+    assert!(out.sticky_timed_out, "1.0 s window expired in-chain");
+    assert_eq!(scene.local_sticky_target(), None, "scene mirror cleared");
+    assert_eq!(
+        scene
+            .body(body_id)
+            .unwrap()
+            .position_manager
+            .sticky_object_id(),
+        None,
+        "manager target cleared"
+    );
+}
