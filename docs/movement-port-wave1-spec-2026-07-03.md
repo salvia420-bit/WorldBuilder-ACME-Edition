@@ -112,7 +112,10 @@ deliverable on STDOUT as one markdown document. Do NOT modify any file.
 - **P12 moveto-progress** — `{CheckProgressMade,GetCurrentDistance,is_moving_to,
   CleanUp,CleanUpAndCallWeenie,RemovePendingActionsHead,_StopMotion,
   MoveToObject_Internal,TurnToObject_Internal}` (fail codes, progress radii,
-  the 0x36/0x37/0x40 WeenieError family).
+  the 0x36/0x37/0x40 WeenieError family). (ERRATUM 2026-07-03 wave-1 ADJ-9/P12
+  Q1: no `CancelMoveTo(0x40)` exists — the moveto WeenieError family is
+  {8, 0x0B, 0x36, 0x37, 0x38, 0x3D}; the "0x40" at MoveToObject_Internal
+  :345893 is the `UseFinalHeading` PARAM bit, not a WeenieError.)
 - **P13 tails** — `CMotionInterp::{get_jump_v_z,get_max_speed,
   jump_charge_is_allowed,jump_is_allowed,is_standing_still,set_hold_run,
   SetPhysicsObject,SetWeenieObject}` + `MovementManager::{Create,get_minterp,

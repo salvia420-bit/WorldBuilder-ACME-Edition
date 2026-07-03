@@ -6,7 +6,9 @@ client decomp that player was running. Derive corner 3: the mechanisms.
 
 Decomp sites available (the four): `$DECOMP/acclient.c` (final-client Hex-Rays C,
 line-cited below), `acclient.h` (typed structs), `acclient.txt` (raw PDB dump),
-`acclient_2013.bndb_pseudo_c.txt` (2013 client, Binary-Ninja, SYMBOLIZED vtables).
+`acclient_2013.bndb_pseudo_c.txt` (Binary-Ninja, SYMBOLIZED vtables — CORRECTION
+2026-07-03 wave-1 ADJ-5: this dump is the SAME binary as acclient.c, VA-identical;
+it is a symbolized NAME RESOLVER, not an era cross-check).
 **Primary pick: `acclient.c`** — the era matches endgame play and every function
 below is recoverable there; the 2013 dump was used exactly twice, where the 2005
 Hex-Rays output hides vtable dispatch (§3.4, §3.5 — it resolves `vfptr[6]` =
@@ -90,8 +92,12 @@ demands a straight path exactly during the gesture-apply window.
    arcane and timing-sensitive.
 8. **`transient_state`** (AddCommand :717429 else-arm / NukeCommand /
    ApplyCurrentMovement): a non-list substate command wedges the forward axis —
-   Ready-stops are suppressed and releases refuse to pop until a FORWARD-AXIS
-   press clears it. (Another reason the forward keys are special.)
+   Ready-stops are suppressed and releases refuse to *dispatch* the pop until a
+   FORWARD-AXIS press clears it. (CORRECTION 2026-07-03 wave-1 ADJ-7: the
+   element IS still popped — `RemoveCommand` runs BEFORE the suppression test,
+   :717469-717474; only the dispatch is swallowed. Consequence for F/F′:
+   wedged/silent releases DO empty the lists.) (Another reason the forward
+   keys are special.)
 9. `controlled_by_server` is set by the cast/position machinery
    (`LoseControlToServer` :716832 — MoveTo/TurnTo directives incl. the cast's
    turn-to-face, and interpolation engagement), and starts =1 at login
@@ -205,9 +211,11 @@ two calls in TakeControlFromServer's body.
   caster-session pcap ever surfaces: check the self UpdateMotion axes during a
   cast (settles §2.4's "no persist" for good) and the presence/cadence of
   self-directed TurnTo during casts (settles the straight-line gate).
-- The 2013 pseudo-C cross-checks used here were vtable resolutions only; a full
-  2013-vs-2005 diff of `CommandInterpreter`/`CMotionInterp` might reveal era
-  drift in the control rules (the caster's prime era vs the final client).
+- The "2013" pseudo-C cross-checks used here were vtable resolutions only.
+  CORRECTION (2026-07-03 wave-1 ADJ-5): that dump is the SAME binary as
+  acclient.c (VA-identical on every function checked) — NO era cross-check
+  exists on this box. The caster-era drift question (the caster's prime era vs
+  the final client) REMAINS OPEN and needs an actual second-era binary.
 - The tap-TIMING itself (his "subjective" part) is not recoverable from code:
   it's the human phase-lock onto the stomp/grab cadence, which varies with spell
   formula, latency, and the turn-to's engagement — exactly the parts he says

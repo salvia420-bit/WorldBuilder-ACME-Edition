@@ -1,5 +1,67 @@
 # HANDOFF — physics parity + mage-PvP mechanics (2026-07-03)
 
+## 2026-07-03 (session 3) — cmdInterp WAVE-1 INTEGRATED (steps 0-4, dark lane)
+
+Executed `docs/PROMPT-cmdinterp-integration-2026-07-03.md` end-to-end. Four
+commits on master (`d2384ba1` → `e218f95c` → `81ca17a2` → `ef29882d`), each
+at the regression floor. The 16-packet fan-out is now LANDED behind
+**`?cmdInterp=on` (default OFF)**:
+
+- **Step 0-1** (`d2384ba1`): leaf packets — P13 tails (jump gates/max_speed/
+  is_standing_still + MovementManager inq methods), P10 moveto-nodes (seam
+  handles + move_to_nodes.rs), P11 as tests-only (bodies verified converged),
+  P12 FOLD (WE_* consts replace raw literals, clear_target gate on
+  MoveToDriveOutput, invented moving_away write NOT ported). PLAN doc with
+  the 14-row ownership handover table.
+- **Step 2** (`e218f95c`): list_engine.rs (P01, ADJ-1 direction names
+  corrected: 0x0D=TurnRight per command_strings :43468) + command_stacks.rs
+  (P02 over P01's concrete types; ADJ-7 pop-before-suppression pinned).
+- **Step 3** (`81ca17a2`): **command_interpreter.rs — the unified
+  interpreter** (P08 base struct + P02 lists + P03-P07 bodies as inherent
+  methods + P09 folded; ONE seam trait; ADJ-2's three P07 vtable fixes +
+  ADJ-3's HKC terminal applied at fold). **retail_behavior_tests.rs: the P15
+  fixtures DUAL-RUN on the oracle AND the real interpreter — all 29 green**
+  (pop-through, wedge, FU-A full revival, FU-C silent releases, sequences
+  A/B/F). The oracle ships permanently as the drift alarm (ADJ-3 terminal
+  patch applied).
+- **Step 4** (`ef29882d`): **M1 converter** (`build_raw_state_raw_motion_state`,
+  byte-parity with the legacy builder proven across the 54-state lattice);
+  MovementSystem KeyEdge lane (tick pre-pass, SC-15 borrow split, ownership
+  rows 1-6+9 implemented, both-lanes-drive debug-asserted); wasm
+  `handleKeyAction` + `?cmdInterp` parse; JS raw-edge forwarder
+  (CMD_INTERP_ACTIONS, ev.repeat filtered, releases unconditional) + the
+  sig-diff/W3.1/sidestep/camera dispatchers silenced under the flag.
+
+Flag-off is BYTE-IDENTICAL legacy (nothing queues a KeyEdge). Floor at
+HEAD: core 553/10/1 (the same 10 pre-existing), world 540/0, web 125/1,
+rust_pose 13/0.
+
+**Wave-1 deliberate scoping (each a PLAN row / step-5 item):**
+- Sends stay with the tick's edge-detector in BOTH lanes (row 9) — the
+  interpreter's SendMovementEvent + M1 converter take send ownership at
+  step 5.
+- Space stays on the legacy jumpCharge exports in both lanes (row 8); the
+  interpreter's commence/do_jump seams are logged no-ops until the
+  forwarder routes action 0x31.
+- The interpreter's use_time (position-event heartbeat + the UseTime FU-A
+  trigger) is not pumped — the tick owns the heartbeat this wave.
+- Renderer reactions (W3.1 forward clip, anim-break cut, sidestep overlay)
+  go DARK under the flag — they become interpreter-event consumers at
+  step 5 (flag-on currently has no local cast-cut visual).
+- M3 emote hash dark (91-pair list banked, numeric ids pending); M4
+  mouse-look dark (use_mouse_turning=false).
+
+**Next session (step 5 per the verdict):** `?castMove`/`?slideCast` become
+interpreter-native configs (honor_autonomy_latch / slidecast_persist),
+interpreter send ownership + use_time pump, wasm --release rebuild, then
+ONE batched 1070 live-bot A/B (bare / `?cmdInterp=on` /
+`?cmdInterp=on&slideCast=off` burst arm + the P15 sequence scripts live —
+ADJ-15 Q3/Q5 observations). Default flip is its own later commit after the
+A/B. NOTE: pkg/ is gitignored — rebuild wasm before ANY live test
+(`env PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin" capped-build
+wasm-pack build --target web --out-dir pkg --release` from
+apps/holtburger-web).
+
 ## 2026-07-03 (session 2) — STRAFECAST landed (uncommitted work tree)
 
 User report: "staffcasting/strafecasting still not there" — the retail mage dance
