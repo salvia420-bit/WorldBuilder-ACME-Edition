@@ -30,7 +30,7 @@ pub use builder::ClientRuntimeBuilder;
 pub use movement::MovementSystemHandle;
 // A14-I4 (W3+ S11): jump release outcome + retail refusal codes for the
 // wasm jump-parity bridge.
-pub use movement::{JumpOutcome, JumpRefusal};
+pub use movement::{CmdInterpEvent, JumpOutcome, JumpRefusal};
 // A1-O1 (2026-06-11): wasm-facing facade over the canonical tick spine
 // (movement → world → simulation). The web bundle constructs one and
 // drives it from the TickMovement arm under `?unifiedTick=on`.

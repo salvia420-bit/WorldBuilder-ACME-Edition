@@ -316,6 +316,16 @@ impl MovementSystemHandle {
         self.inner.enqueue_key_action(action, down);
     }
 
+    /// Wave-1 step 5 (rows 12-13): drain the interpreter lane's
+    /// JS-facing event stream — interpreter effects (forward-slot
+    /// eviction, FU-A reclaims), the installed drive per dispatched
+    /// edge, and jump refusals. The wasm TickMovement arm converts
+    /// these into `ClientEvent`s (kind 61 + the kind-56 toast). Empty
+    /// (and allocation-free) while the lane is off.
+    pub fn take_cmd_interp_events(&mut self) -> Vec<super::system::CmdInterpEvent> {
+        self.inner.take_cmd_interp_events()
+    }
+
     /// Physics-parity 2026-07-03 (dossier A F1/F2): install the
     /// `?retailQuantum=on` runtime carrier (default OFF — ACE slice
     /// shapes stand per DECISIONS-A1-O5; `=on` runs the retail

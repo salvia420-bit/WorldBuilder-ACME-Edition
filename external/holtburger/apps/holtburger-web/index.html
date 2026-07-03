@@ -7809,6 +7809,99 @@
                 if (typeof appendChatLine === "function") {
                   appendChatLine(text, 10);
                 }
+              } else if (evt.kind === 61) {
+                // ?cmdInterp=on (step 5, PLAN rows 12-13): interpreter
+                // event stream → renderer consumers. The legacy sig-diff
+                // side-effects (W3.1 forward clip, anim-break cut,
+                // setSidestepLayer) are silenced under the flag; these
+                // arms are their event-driven replacements, mirroring
+                // the legacy blocks at the sig-diff dispatcher (~8700).
+                // u32Payload: 1 = ForwardSlotEvicted (cut the local cast
+                // gesture), 2 = ControlReclaimed (ADJ-15 Q3
+                // instrumentation for the 1070 A/B), 3 = DriveApplied
+                // (u32Payload2 packs (fwd+1)|(side+1)<<8|(turn+1)<<16|
+                // run<<24 — each axis -1/0/+1).
+                if (!CMD_INTERP_ON) continue; // stream is flag-on only
+                try {
+                  const code61 = evt.u32Payload >>> 0;
+                  const em = window.liveScene3d?.entityManager;
+                  const localGuid =
+                    typeof window.getLocalPlayerGuid === "function"
+                      ? window.getLocalPlayerGuid()
+                      : null;
+                  if (code61 === 1) {
+                    // Row 12 anim-break: a fresh forward intent evicted
+                    // the forward slot — cut the LOCAL cast-gesture
+                    // chain. Same F8-4 busy-window guard + ?castMove
+                    // alias gate as the legacy W3.1 cut (observers still
+                    // watch the full cast — server only rate-checks).
+                    if (
+                      CAST_MOVE_ON &&
+                      em &&
+                      localGuid != null &&
+                      typeof em.cancelCastSequence === "function"
+                    ) {
+                      const inst = em.entityMap?.get?.(localGuid >>> 0);
+                      if (
+                        inst?._castBusyUntilMs &&
+                        performance.now() < inst._castBusyUntilMs
+                      ) {
+                        em.cancelCastSequence(localGuid >>> 0);
+                      }
+                    }
+                  } else if (code61 === 2) {
+                    // FU-A reclaim fired (stomp + all-three-heads
+                    // revival). Counted for the ADJ-15 Q3 observation:
+                    // does a turn-tap reclaim visually evict the
+                    // gesture? The 1070 A/B reads this counter + the
+                    // console line alongside the visuals.
+                    window.__cmdInterpReclaims =
+                      ((window.__cmdInterpReclaims | 0) + 1) | 0;
+                    console.log(
+                      "[cmdInterp] FU-A control reclaim #" +
+                        window.__cmdInterpReclaims
+                    );
+                  } else if (code61 === 3) {
+                    const packed = (evt.u32Payload2 ?? 0x010101) >>> 0;
+                    const fwd = (packed & 0xff) - 1;
+                    const side = ((packed >> 8) & 0xff) - 1;
+                    const run = ((packed >> 24) & 0xff) !== 0;
+                    if (em && localGuid != null) {
+                      const NONCOMBAT_STANCE = 0x8000003d;
+                      const stance =
+                        (typeof em.getStance === "function"
+                          ? em.getStance(localGuid >>> 0) >>> 0
+                          : 0) || NONCOMBAT_STANCE;
+                      // Row 12 (W3.1 replacement): the forward base
+                      // clip from the INSTALLED drive — same command
+                      // choices as the legacy block (backward always
+                      // walks; stopped → Ready idle base).
+                      if (typeof em.setMotion === "function") {
+                        let forwardCmd;
+                        if (fwd > 0) forwardCmd = run ? 0x44000007 : 0x45000005;
+                        else if (fwd < 0) forwardCmd = 0x45000006;
+                        else forwardCmd = 0x41000003;
+                        em.setMotion(localGuid >>> 0, forwardCmd >>> 0, stance);
+                      }
+                      // Row 13 (setSidestepLayer replacement): always
+                      // the SideStepRight clip, sign carries direction
+                      // (Phase 2.5 collapse — see the legacy block's
+                      // rationale).
+                      if (typeof em.setSidestepLayer === "function") {
+                        const sidestepCmd =
+                          side !== 0 ? 0x6500000f /* SideStepRight */ : 0;
+                        em.setSidestepLayer(
+                          localGuid >>> 0,
+                          sidestepCmd,
+                          stance,
+                          side
+                        );
+                      }
+                    }
+                  }
+                } catch (e) {
+                  console.warn("[cmdInterp] kind-61 consumer failed:", e);
+                }
               } else if (evt.kind === 18) {
                 // Wave 1.8 — EntityAirborneChanged for REMOTE players.
                 // Wave 10 Phase 10.1 (2026-05-26) — extended to also

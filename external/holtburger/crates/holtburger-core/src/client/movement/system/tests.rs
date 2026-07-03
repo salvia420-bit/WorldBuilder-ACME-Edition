@@ -7169,3 +7169,80 @@ async fn cmd_interp_jump_lane_charges_and_releases() {
         "the charge was consumed by the release"
     );
 }
+
+/// Step 5 (rows 12-13) — the JS-facing event stream: a fresh W press
+/// emits ForwardSlotEvicted (the HNFM cast-cut moment) then the
+/// installed drive; a strafe edge emits only the drive; an FU-A reclaim
+/// emits ControlReclaimed (the ADJ-15 Q3 instrumentation).
+#[tokio::test]
+async fn cmd_interp_event_stream_feeds_js_consumers() {
+    use super::super::system::CmdInterpEvent;
+
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_0129),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+
+    movement.enqueue_key_action(0x29, true); // W press
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let events = movement.take_cmd_interp_events();
+    assert!(
+        matches!(
+            events.as_slice(),
+            [
+                CmdInterpEvent::ForwardSlotEvicted,
+                CmdInterpEvent::DriveApplied {
+                    forward: 1,
+                    side: 0,
+                    turn: 0,
+                    run: true
+                }
+            ]
+        ),
+        "W press: eviction (HNFM) then the installed drive, got {events:?}"
+    );
+
+    movement.enqueue_key_action(0x2C, true); // D press (sidestep list)
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let events = movement.take_cmd_interp_events();
+    assert!(
+        matches!(
+            events.as_slice(),
+            [CmdInterpEvent::DriveApplied {
+                forward: 1,
+                side: 1,
+                turn: 0,
+                run: true
+            }]
+        ),
+        "strafe edge: no eviction, just the drive, got {events:?}"
+    );
+
+    // Pure grab → the use_time pump reclaims → ControlReclaimed rides
+    // the stream (plus the revived drive).
+    world.scene.set_local_server_controlled(true);
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+    let events = movement.take_cmd_interp_events();
+    assert!(
+        events.contains(&CmdInterpEvent::ControlReclaimed),
+        "FU-A reclaim instrumented for the Q3 observation, got {events:?}"
+    );
+}

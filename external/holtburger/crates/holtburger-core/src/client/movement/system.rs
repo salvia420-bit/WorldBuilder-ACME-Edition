@@ -1469,6 +1469,13 @@ pub(crate) struct MovementSystem {
     /// seam's `do_jump(autonomous)` for the tick's async flush
     /// (`execute_jump_release` sends the Jump pack; seams are sync).
     pending_cmd_interp_jump_release: bool,
+    /// Wave-1 step 5 (rows 12-13) — the interpreter-lane event stream
+    /// for JS consumers: interpreter effects (forward-slot eviction,
+    /// FU-A reclaims) + the installed drive per dispatched edge + jump
+    /// refusals. Drained by [`Self::take_cmd_interp_events`] from the
+    /// wasm TickMovement arm each tick; only interp-lane sites push, so
+    /// flag-off (and the native cli) never accumulates.
+    cmd_interp_events: Vec<CmdInterpEvent>,
     /// Physics-parity 2026-07-03 (dossier A F1/F2) — runtime carrier of
     /// the `?retailQuantum=on` URL flag. `None` = the
     /// [`USE_RETAIL_QUANTUM`] const default (OFF — the DECISIONS-A1-O5
@@ -1599,6 +1606,34 @@ enum QueuedDriveCommand {
     CancelPursuit,
 }
 
+/// Wave-1 step 5 (PLAN rows 12-13) — the `?cmdInterp=on` lane's
+/// JS-facing event stream: what the renderer must react to now that the
+/// legacy sig-diff side-effects (W3.1 forward clip, anim-break cut,
+/// `setSidestepLayer`) are silenced under the flag. Drained per tick by
+/// the wasm TickMovement arm and forwarded as `ClientEvent` kind 61
+/// (+ the existing kind-56 jump-refusal toast).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmdInterpEvent {
+    /// Row 12 — a fresh forward-intent edge evicted the forward slot
+    /// (retail `HandleNewForwardMovement`): cut the local cast gesture.
+    ForwardSlotEvicted,
+    /// FU-A control reclaim actually flipped control (ADJ-15 Q3
+    /// instrumentation for the 1070 A/B).
+    ControlReclaimed,
+    /// Rows 12-13 — the composed drive a dispatched edge/pump installed:
+    /// JS drives the forward base clip + the sidestep overlay from it.
+    /// Axes are -1/0/+1 (`forward`: backstep/idle/forward, `side`:
+    /// left/idle/right, `turn`: left/idle/right).
+    DriveApplied {
+        forward: i8,
+        side: i8,
+        turn: i8,
+        run: bool,
+    },
+    /// Row-8 tail — a jump refusal (retail code) for the kind-56 toast.
+    JumpRefused(u32),
+}
+
 /// A14-I2 (W3+ S10) — a pursuit entry queued at ingest (no world
 /// access) and applied through the `MovementManager` facade in `tick`
 /// (`MoveToManager::PerformMovement` analog, acclient.c:346123-346145).
@@ -1712,6 +1747,7 @@ impl MovementSystem {
             pending_cmd_interp_sends: Vec::new(),
             motion_state_pulses_sent: 0,
             pending_cmd_interp_jump_release: false,
+            cmd_interp_events: Vec::new(),
             retail_quantum_runtime: None,
             last_move_was_autonomous: false,
             pending_take_control: false,
@@ -1989,12 +2025,63 @@ impl MovementSystem {
         // Row 3: the CommandLists are held-keys truth — re-derive the raw
         // record every edge (even silent releases, which pop the lists).
         self.last_manual_drive = Some(Self::interp_held_snapshot(&interp, drive.gait));
+        // Rows 12-13: forward the interpreter's effect stream + the
+        // installed drive to the JS consumers (eviction first — the
+        // renderer cuts, then re-bases on the new drive).
+        self.drain_interp_effects(&mut interp);
+        if dispatched {
+            self.cmd_interp_events
+                .push(Self::drive_applied_event(&drive));
+        }
         // Row 2: this lane never uses the FU5 deferred-TakeControl bit.
         debug_assert!(
             !self.pending_take_control,
             "cmdInterp handover violation: interpreter edge set pending_take_control (row 2)"
         );
         self.command_interpreter = Some(interp);
+    }
+
+    /// Rows 12-13 — map the interpreter's effect ledger into the
+    /// JS-facing event stream (order preserved).
+    fn drain_interp_effects(
+        &mut self,
+        interp: &mut super::command_interpreter::CommandInterpreter,
+    ) {
+        use super::command_interpreter::InterpEffect;
+        for effect in interp.effects.drain(..) {
+            self.cmd_interp_events.push(match effect {
+                InterpEffect::ForwardSlotEvicted => CmdInterpEvent::ForwardSlotEvicted,
+                InterpEffect::ControlReclaimed => CmdInterpEvent::ControlReclaimed,
+            });
+        }
+    }
+
+    /// Rows 12-13 — the installed composed drive as a JS event payload.
+    fn drive_applied_event(drive: &MotionState) -> CmdInterpEvent {
+        CmdInterpEvent::DriveApplied {
+            forward: match drive.forward {
+                Some(ForwardLocomotion::Forward) => 1,
+                Some(ForwardLocomotion::Backstep) => -1,
+                None => 0,
+            },
+            side: match drive.sidestep {
+                Some(SidestepLocomotion::StrafeRight) => 1,
+                Some(SidestepLocomotion::StrafeLeft) => -1,
+                None => 0,
+            },
+            turn: match drive.turning {
+                Some(Turn::Right) => 1,
+                Some(Turn::Left) => -1,
+                None => 0,
+            },
+            run: drive.gait == crate::client::movement_types::Gait::Run,
+        }
+    }
+
+    /// Step 5 — drain the interp-lane event stream (wasm TickMovement
+    /// arm; empty and allocation-free when the lane is off).
+    pub(crate) fn take_cmd_interp_events(&mut self) -> Vec<CmdInterpEvent> {
+        std::mem::take(&mut self.cmd_interp_events)
     }
 
     /// Wave-1 step 5 — the per-tick retail `CommandInterpreter::UseTime`
@@ -2055,6 +2142,13 @@ impl MovementSystem {
                 self.manual_moveto_cancel_pending = true;
             }
             self.last_manual_drive = Some(Self::interp_held_snapshot(&interp, drive.gait));
+        }
+        // Rows 12-13: the pump's effects/drive reach JS the same way an
+        // edge's do.
+        self.drain_interp_effects(&mut interp);
+        if dispatched {
+            self.cmd_interp_events
+                .push(Self::drive_applied_event(&drive));
         }
         debug_assert!(
             !self.pending_take_control,
@@ -2960,7 +3054,10 @@ impl MovementSystem {
             match self.execute_jump_release(now, world, session).await? {
                 JumpOutcome::NotCharging => {}
                 JumpOutcome::Refused(refusal) => {
-                    log::info!("cmdInterp: jump release refused: {refusal:?}");
+                    // Retail release-time scroll text — the same
+                    // kind-56 toast the legacy release arm pushes.
+                    self.cmd_interp_events
+                        .push(CmdInterpEvent::JumpRefused(refusal as u32));
                 }
                 JumpOutcome::Jumped {
                     vz,
@@ -7193,7 +7290,12 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
         // simply does not arm); surfacing rides the step-5.5 event
         // stream.
         if let Err(refusal) = self.system.jump_charge_commence(self.now, self.world) {
-            log::info!("cmdInterp: jump charge refused at commence: {refusal:?}");
+            // Same kind-56 toast the legacy JumpChargeCommence arm
+            // surfaces (retail press-time scroll text,
+            // acclient.c:408050-408059).
+            self.system
+                .cmd_interp_events
+                .push(CmdInterpEvent::JumpRefused(refusal as u32));
         }
     }
     fn do_jump(&mut self, autonomous: bool) {

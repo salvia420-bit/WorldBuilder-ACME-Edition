@@ -19206,6 +19206,21 @@ const CLIENT_EVENT_KIND_SOUND_TRIGGERED: u32 = 16;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_ENVIRON_CHANGE: u32 = 60;
 
+/// Movement-port wave 1 step 5 (`?cmdInterp=on`, PLAN rows 12-13) — one
+/// interpreter-lane event. `u32Payload` = code: 1 = ForwardSlotEvicted
+/// (a fresh forward-intent edge took the forward slot — JS cuts the
+/// local cast gesture, the row-12 anim-break), 2 = ControlReclaimed
+/// (the FU-A stomp actually flipped control — ADJ-15 Q3
+/// instrumentation), 3 = DriveApplied (the composed drive a dispatched
+/// edge/pump installed; `u32Payload2` packs the axes as
+/// `(forward+1) | (side+1)<<8 | (turn+1)<<16 | run<<24`, each axis
+/// -1/0/+1 biased by +1). Jump refusals ride the EXISTING kind-56
+/// event, not this one. Drained from
+/// `MovementSystemHandle::take_cmd_interp_events` in the TickMovement
+/// arm; the stream is empty while the flag is off.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CMD_INTERP: u32 = 61;
+
 /// An entity's draw-gate flipped. ACE's retail client gates rendering
 /// on bits of `PhysicsState` from `~/ac-headers/acclient.h`:
 /// `HIDDEN = 0x4000`, `NO_DRAW = 0x20`, `CLOAKED = 0x100000`. The
@@ -44850,6 +44865,48 @@ async fn recv_loop(
                         };
                         match tick_result {
                             Ok(()) => {
+                                // Wave-1 step 5 (?cmdInterp=on, rows
+                                // 12-13): forward the interpreter lane's
+                                // event stream to JS — kind 61 for the
+                                // renderer consumers (anim-break cut /
+                                // sidestep overlay / Q3 reclaim
+                                // instrumentation), the EXISTING kind-56
+                                // toast for jump refusals. The stream is
+                                // empty while the flag is off (zero
+                                // allocation on the legacy lane).
+                                for interp_event in movement.take_cmd_interp_events() {
+                                    use holtburger_core::CmdInterpEvent;
+                                    let (kind, p1, p2) = match interp_event {
+                                        CmdInterpEvent::JumpRefused(code) => {
+                                            (CLIENT_EVENT_KIND_JUMP_REFUSED, code, None)
+                                        }
+                                        CmdInterpEvent::ForwardSlotEvicted => {
+                                            (CLIENT_EVENT_KIND_CMD_INTERP, 1, None)
+                                        }
+                                        CmdInterpEvent::ControlReclaimed => {
+                                            (CLIENT_EVENT_KIND_CMD_INTERP, 2, None)
+                                        }
+                                        CmdInterpEvent::DriveApplied {
+                                            forward,
+                                            side,
+                                            turn,
+                                            run,
+                                        } => {
+                                            let packed = ((forward + 1) as u32)
+                                                | (((side + 1) as u32) << 8)
+                                                | (((turn + 1) as u32) << 16)
+                                                | ((run as u32) << 24);
+                                            (CLIENT_EVENT_KIND_CMD_INTERP, 3, Some(packed))
+                                        }
+                                    };
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind,
+                                        string_payload: None,
+                                        u32_payload: Some(p1),
+                                        u32_payload_2: p2,
+                                        f32_payload: None,
+                                    });
+                                }
                                 // A8-M2 (2026-06-11, unification survey):
                                 // translate the maint sweep's despawns
                                 // into KIND_REMOVE — retail's 25 s

@@ -13,7 +13,7 @@ pub use client::types::{
     RetryState,
 };
 pub use client::{
-    ClientRuntime, ClientRuntimeBuilder, JumpOutcome, JumpRefusal, MotionStyle,
+    ClientRuntime, ClientRuntimeBuilder, CmdInterpEvent, JumpOutcome, JumpRefusal, MotionStyle,
     MovementSystemHandle, TickSpineHandle,
 };
 pub use soul_emote_motion::motion_command_for_soul_emote_pose;

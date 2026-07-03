@@ -21,5 +21,8 @@ pub use handle::MovementSystemHandle;
 // the wasm `JumpChargeRelease`/`JumpChargeCommence` arms to emit
 // refusal-text ClientEvents.
 pub use jump_charge::{JumpOutcome, JumpRefusal};
+// Wave-1 step 5 (rows 12-13): the ?cmdInterp=on lane's JS-facing event
+// stream, drained by the wasm TickMovement arm (ClientEvent kind 61).
+pub use system::CmdInterpEvent;
 pub(super) use common::{HUGE_QUANTUM, MAX_QUANTUM};
 pub(super) use system::{MovementSystem, ServerControlledProjection};

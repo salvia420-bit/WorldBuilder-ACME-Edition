@@ -473,6 +473,28 @@ pub(crate) struct CommandInterpreter {
     /// eventual default is an ADJ-8 A/B decision — do not delete the
     /// modern arm pre-measurement.
     pub(crate) slidecast_persist: bool,
+    /// Step-5 effect stream (PLAN rows 12-13) — holtburger extension,
+    /// NOT retail state: the dispatch moments the renderer reacts to,
+    /// recorded as they happen and drained by the system after every
+    /// seam session. Behavior-neutral (nothing reads it back); the
+    /// P15 dual-run pins are unaffected (they compare dispatch
+    /// outcomes, not this ledger).
+    pub(crate) effects: Vec<InterpEffect>,
+}
+
+/// Step-5 renderer/effect stream entries (PLAN rows 12-13).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InterpEffect {
+    /// `HandleNewForwardMovement` fired — a fresh forward-intent edge
+    /// took the forward slot (the retail cast-abort pre-hook moment,
+    /// ACCmdInterp acclient.c:435866). JS consumer: the row-12
+    /// anim-break cut.
+    ForwardSlotEvicted,
+    /// `TakeControlFromServer` actually flipped control back to the
+    /// player (the FU-A stomp+revival block, :716942). JS consumer:
+    /// ADJ-15 Q3 instrumentation (does a turn-tap visually evict the
+    /// gesture? — the 1070 A/B reads these).
+    ControlReclaimed,
 }
 
 /// Head-of-list projection the apply/stop tail consumes (P04's
@@ -521,6 +543,7 @@ impl CommandInterpreter {
             time_between_position_events: 1.0,
             honor_autonomy_latch: true,
             slidecast_persist: true,
+            effects: Vec::new(),
         }
     }
 
@@ -886,6 +909,7 @@ impl CommandInterpreter {
         seams.combat_abort_automatic_attack(); // P09 pre-hook (:435803)
         if self.controlled_by_server && self.autonomy_level != 0 && !self.player_is_dead(seams) {
             self.controlled_by_server = false; // :716942
+            self.effects.push(InterpEffect::ControlReclaimed); // rows 12-13 stream
             if self.player_present {
                 seams.set_latch(); // :716946
                 seams.phys_stop_completely(); // :716947
@@ -1448,6 +1472,7 @@ impl CommandInterpreter {
     /// (:717689 = `SetAutoRun(0, 1)`, ADJ-3-verified). Fires ONLY from
     /// AddCommand's two arms — never as the HKC terminal (SC-4).
     fn handle_new_forward_movement(&mut self, seams: &mut dyn InterpreterSeams) {
+        self.effects.push(InterpEffect::ForwardSlotEvicted); // rows 12-13 stream
         seams.combat_abort_automatic_attack();
         self.set_auto_run(seams, 0, true);
     }
