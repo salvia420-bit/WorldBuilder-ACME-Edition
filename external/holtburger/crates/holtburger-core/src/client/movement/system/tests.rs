@@ -5216,7 +5216,7 @@ async fn moveto_driver_target_loss_cancels_0x37() {
 fn ingest_intent(movement: &mut MovementSystem, intent: PlayerDriveIntent, now: Instant) {
     movement.enqueue_drive_intent(intent, now);
     for command in std::mem::take(&mut movement.queued_drive_commands) {
-        movement.ingest_drive_command(command, now);
+        movement.ingest_drive_command(command, now, Guid(0x5000_0123));
     }
 }
 
@@ -5987,6 +5987,177 @@ fn interpreted_drive_state_preserves_echoed_sidestep_and_kills_forward() {
     // No registry entry yet → locomotion-idle.
     let driven = MovementSystem::interpreted_drive_state(None, manual);
     assert!(driven.forward.is_none() && driven.sidestep.is_none() && driven.turning.is_none());
+}
+
+/// USE_CAST_MOVE per-axis edges (2026-07-03, mage-PvP strafecast) — a
+/// strafe/turn tap mid-gesture writes ONLY its own axis (retail
+/// per-axis CommandLists: AddCommand acclient.c:717429 / NukeCommand
+/// :717458 dispatch single-axis DoMotions): a held W does NOT resurrect
+/// on the tap — the gesture keeps the forward slot until a FORWARD
+/// edge.
+#[test]
+fn cast_move_edge_merges_per_axis_held_forward_stays_dead() {
+    let mut movement = MovementSystem::new();
+    let now = Instant::now();
+
+    // Hold W (raw edge — raw drives).
+    let held_w = MotionState::builder().run().forward().build();
+    ingest_intent(&mut movement, PlayerDriveIntent::ManualHeld(held_w), now);
+
+    // A cast windup echo lands (non-autonomous) — interpreted drives,
+    // forward dies (no registry entry in this fixture → all axes idle).
+    movement.note_server_authored_motion(false);
+    assert!(movement.interpreted_movement_active());
+
+    // Strafe tap while STILL holding W: the sidestep axis changed, the
+    // forward axis did not — forward must NOT resurrect.
+    let held_w_and_a = MotionState::builder()
+        .run()
+        .forward()
+        .strafe_left()
+        .build();
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(held_w_and_a),
+        now,
+    );
+    assert!(
+        !movement.interpreted_movement_active(),
+        "the tap regains autonomy"
+    );
+    let effective = match movement.active_drive.map(|a| a.intent) {
+        Some(ActiveDriveIntent::Manual(state)) => state,
+        other => panic!("expected a manual drive, got {other:?}"),
+    };
+    assert_eq!(
+        effective.forward, None,
+        "held W does not resurrect on a strafe tap — the gesture keeps the forward slot"
+    );
+    assert_eq!(
+        effective.sidestep,
+        Some(SidestepLocomotion::StrafeLeft),
+        "the edged axis drives"
+    );
+
+    // W release then re-press: the FORWARD edge takes the slot back
+    // (fastcast's tap-to-break); the held strafe carries over.
+    let strafe_only = MotionState::builder().run().strafe_left().build();
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(strafe_only),
+        now,
+    );
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(held_w_and_a),
+        now,
+    );
+    let effective = match movement.active_drive.map(|a| a.intent) {
+        Some(ActiveDriveIntent::Manual(state)) => state,
+        other => panic!("expected a manual drive, got {other:?}"),
+    };
+    assert_eq!(
+        effective.forward,
+        Some(ForwardLocomotion::Forward),
+        "a fresh forward edge drives forward"
+    );
+    assert_eq!(
+        effective.sidestep,
+        Some(SidestepLocomotion::StrafeLeft),
+        "the un-edged strafe carries across the forward edge"
+    );
+}
+
+/// USE_SLIDE_CAST (2026-07-03, mage-PvP strafecast) — the HELD manual
+/// sidestep/turn survive a General (case-0) stomp for the local player
+/// (ACE echoes every cast gesture with EMPTY axes; retail never
+/// re-stomped the caster). Forward is NEVER persisted. `=off` restores
+/// the bare stomp.
+#[test]
+fn slide_cast_persists_held_strafe_and_turn_through_general_stomp() {
+    use holtburger_protocol::messages::{
+        MovementEventData, MovementInvalid, MovementType, MovementTypeData,
+    };
+    use holtburger_world::WorldEvent;
+
+    let guid = Guid(0x5000_0777);
+    let stomp = |movement: &mut MovementSystem| {
+        let motion = MovementEventData {
+            guid,
+            object_instance_sequence: 1,
+            movement_sequence: 1,
+            server_control_sequence: 1,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::Magic.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid::default()),
+        };
+        movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+            data: Box::new(motion),
+            target_exists: false,
+            object_radius: 0.0,
+            object_height: 0.0,
+        }]);
+    };
+    let interp_axes = |movement: &MovementSystem| {
+        let interp = movement
+            .movement_managers
+            .get(&guid)
+            .and_then(|manager| manager.motion_interp_ref())
+            .expect("stomp created the manager");
+        (
+            interp.interpreted_state.forward_command,
+            interp.interpreted_state.sidestep,
+            interp.interpreted_state.sidestep_speed,
+            interp.interpreted_state.turn,
+            interp.interpreted_state.turn_speed,
+        )
+    };
+
+    // Held left strafe + right turn (the dance keys) at stomp time.
+    let mut movement = MovementSystem::new();
+    let held = MotionState::builder()
+        .run()
+        .strafe_left()
+        .turn_right()
+        .build();
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(held),
+        Instant::now(),
+    );
+    stomp(&mut movement);
+    let (forward, sidestep, sidestep_speed, turn, turn_speed) = interp_axes(&movement);
+    assert_eq!(forward, None, "forward is NEVER persisted");
+    assert!(sidestep, "held strafe rides through the stomp");
+    assert_eq!(sidestep_speed, -1.0, "left = negative normal form");
+    assert!(turn, "held turn rides through the stomp");
+    assert_eq!(turn_speed, 1.0, "right = positive normal form");
+
+    // Nothing held → the stomp's empty axes stand.
+    let mut movement = MovementSystem::new();
+    let idle = MotionState::builder().build();
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(idle),
+        Instant::now(),
+    );
+    stomp(&mut movement);
+    let (_, sidestep, _, turn, _) = interp_axes(&movement);
+    assert!(!sidestep && !turn, "idle keys persist nothing");
+
+    // `?slideCast=off` — the bare stomp (strafe dies per echo).
+    let mut movement = MovementSystem::new();
+    movement.set_slide_cast(false);
+    ingest_intent(
+        &mut movement,
+        PlayerDriveIntent::ManualHeld(held),
+        Instant::now(),
+    );
+    stomp(&mut movement);
+    let (_, sidestep, _, turn, _) = interp_axes(&movement);
+    assert!(!sidestep && !turn, "flag off restores the bare stomp");
 }
 // ---------------------------------------------------------------------------
 // Golden-trace fixed-dt harness (physics parity 2026-07-03; dossier §4

@@ -5850,6 +5850,14 @@
             return p ? 1 : n ? -1 : 0;
           };
           let lastInputSig = "0,0,0,false";
+          // castMove anim-break (2026-07-03, mage-PvP): previous forward
+          // AXIS value, tracked across sig changes so a forward/backstep
+          // PRESS edge mid-cast can cut the LOCAL cast-gesture chain
+          // (retail evicts the gesture from the single forward slot,
+          // acclient.c:332890/:332759 — the "invisible animation break":
+          // local-only, the server/observers still see the full cast).
+          let lastForwardAxis = 0;
+          const CAST_MOVE_ON = !new URLSearchParams(location.search).getAll("castMove").includes("off");
           const movementKeys = new Set(["w", "a", "s", "d", "q", "e"]);
           // Skip keystate updates when the user is typing in any text
           // input — login, character creation, future chat box. This
@@ -8694,6 +8702,32 @@
                     else if (forward < 0) forwardCmd = 0x45000006;
                     else forwardCmd = 0x41000003; // stopped → Ready (idle base pose)
                     em.setMotion(localGuid >>> 0, forwardCmd >>> 0, stance);
+                    // castMove anim-break (2026-07-03): a forward-axis
+                    // PRESS edge mid-cast evicts the gesture from the
+                    // single forward slot (retail :332890/:332759) — cut
+                    // the LOCAL cast-gesture chain so the windup visibly
+                    // breaks on the tap. Local-only (the classic
+                    // "invisible animation break": the server only
+                    // rate-checks and observers still watch the full
+                    // cast). Strafe/turn edges never cut — those slots
+                    // are independent (slidecast). Guarded by the F8-4
+                    // busy window so an idle tap can't recoil-stomp an
+                    // unrelated one-shot.
+                    if (
+                      CAST_MOVE_ON &&
+                      forward !== 0 &&
+                      forward !== lastForwardAxis &&
+                      typeof em.cancelCastSequence === "function"
+                    ) {
+                      const inst = em.entityMap?.get?.(localGuid >>> 0);
+                      if (
+                        inst?._castBusyUntilMs &&
+                        performance.now() < inst._castBusyUntilMs
+                      ) {
+                        em.cancelCastSequence(localGuid >>> 0);
+                      }
+                    }
+                    lastForwardAxis = forward;
                   }
                 } catch (e) {
                   // eslint-disable-next-line no-console

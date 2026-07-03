@@ -492,6 +492,45 @@ impl MovementManager {
         );
     }
 
+    /// USE_SLIDE_CAST (2026-07-03, mage-PvP strafecast) — re-apply the
+    /// locally-HELD manual sidestep/turn onto the interpreted axes after
+    /// a General (case-0) stomp, LOCAL player only. This is ACE's own
+    /// `Motion.Persist` axis set applied client-side
+    /// (`Entity/Motion.cs:162-166` — sidestep + turn, NEVER forward),
+    /// compensating for ACE echoing cast gestures back to the caster
+    /// with empty axes (`EnqueueMotionMagic`/`EnqueueMotionAction`,
+    /// which skip the `persist_movement` dial entirely) where retail
+    /// servers never re-stomped the caster at all. No-op for non-General
+    /// messages (MoveTo/TurnTo directives keep their retail semantics)
+    /// and when no manager/interp exists yet. Speeds are the normalized
+    /// signed unit form (`SideStepRight`/`TurnRight` with negative =
+    /// left) — the same normal form `interpreted_drive_state` reads
+    /// back.
+    pub(crate) fn persist_held_manual_axes(
+        &mut self,
+        data: &MovementEventData,
+        sidestep_speed: Option<f32>,
+        turn_speed: Option<f32>,
+    ) {
+        if !matches!(
+            (&data.movement_type, &data.data),
+            (MovementType::Invalid, MovementTypeData::Invalid(_))
+        ) {
+            return;
+        }
+        let Some(interp) = self.motion_interp.as_mut() else {
+            return;
+        };
+        if let Some(speed) = sidestep_speed {
+            interp.interpreted_state.sidestep = true;
+            interp.interpreted_state.sidestep_speed = speed;
+        }
+        if let Some(speed) = turn_speed {
+            interp.interpreted_state.turn = true;
+            interp.interpreted_state.turn_speed = speed;
+        }
+    }
+
     /// `MovementManager::EnterDefaultState` (acclient.c:339250-339268).
     #[allow(dead_code)] // staged: facade fan-out consumer is the Stage-3 driver / entity lifecycle
     pub(crate) fn enter_default_state(&mut self) {

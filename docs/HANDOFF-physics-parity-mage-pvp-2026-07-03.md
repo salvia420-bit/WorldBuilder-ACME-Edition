@@ -1,5 +1,92 @@
 # HANDOFF — physics parity + mage-PvP mechanics (2026-07-03)
 
+## 2026-07-03 (session 2) — STRAFECAST landed (uncommitted work tree)
+
+User report: "staffcasting/strafecasting still not there" — the retail mage dance
+(locked into the cast, sliding left↔right). Root-caused + fixed + live-validated;
+tree left UNCOMMITTED (no commit instruction given).
+
+**Root cause (three layers, all now closed):**
+1. **ACE self-stomp** — ACE echoes every cast gesture back to the CASTER as a
+   non-autonomous General UpdateMotion with EMPTY sidestep/turn (NPK: one per
+   windup via `EnqueueMotionMagic` WorldObject_Networking.cs:1078 — it IGNORES
+   the `persist_movement` server dial; PK/FastTick: windup-start stomp via
+   `EnqueueMotionAction` :1231 + the cast-gesture stomp). Each stomp killed a
+   held strafe → the community's "slidecasting is completely fixable that ACE
+   refuses to". Retail servers never re-stomped the caster (the caster's cast
+   anim was CLIENT-authored — proven by the "invisible animation break" which
+   only works if nothing re-asserts the gesture).
+2. **Full-state edge install** (ours) — any input edge installed the ENTIRE
+   held manual state, so a strafe tap resurrected a held W. Retail
+   CommandInterpreter is per-axis lists w/ single-axis dispatch (`AddCommand`
+   :717429, `NukeCommand` :717458 head-wins pop-through; full raw re-apply
+   happens ONLY at event boundaries, `apply_raw_movement` :344259).
+3. **No local anim-break** — the JS cast chain ignored movement taps.
+
+**What landed (all default-ON, `=off` escapes; wasm rebuilt --release 4.68MB):**
+- **`?slideCast`** (NEW, `USE_SLIDE_CAST`) — held sidestep/turn re-applied onto
+  the interpreted axes after a General (case-0) self-stomp
+  (`MovementManager::persist_held_manual_axes`, called from the
+  `SelfServerControlledMotion` registry lane). EXACTLY ACE's own
+  `Motion.Persist` axis set (Motion.cs:162-166 — sidestep+turn, NEVER forward;
+  held W stays dead until a forward edge = the castMove core). MoveTo/TurnTo
+  directives untouched.
+- **castMove per-axis edges** — `MovementSystem::merge_manual_edge`: an edge
+  overlays only the CHANGED axes; unchanged axes carry the current effective
+  drive (interpreted mapping while latch low, else previous manual effective).
+  Jump-standstill root now reads the RAW held keys (`jump_charge_commence`).
+- **JS anim-break** (index.html W3.1 block) — a forward-axis PRESS edge
+  mid-cast cuts the LOCAL cast chain (`em.cancelCastSequence`, F8-4
+  busy-window-guarded, castMove-gated). Local-only — observers/server
+  unaffected ("server cant detect animation break").
+
+**Live validation (headless zero-GPU bot vs live ACE, char +Tester2):**
+- Held-strafe self cast (Wedding Bliss 1708 = 3 windups): fix ON → continuous
+  14.96 m @ ~1.54 m/s, ZERO dead windows; `?slideCast=off` → slide died 100 ms
+  after cast start (first windup stomp), 0.05 m total. Perfect A/B.
+- Fix A: held-W cast → 0 m (forward dead vs a REAL cast, not just a stance
+  echo); A-tap while W held → 0.907 m PURE lateral (forward component 0.001);
+  A-release with W held → still 0 m.
+- Targeted war cast (Flame Bolt VI 85 at a `@create 24888` pyreal target
+  drudge): held strafe slid 7.74 m through the whole cast, no dead windows
+  (brief turn-to hitch at cast start only). Backstep mid-windup moved 1.175 m.
+- Tests: core 432/10/1 (+2 new: `cast_move_edge_merges_per_axis_…`,
+  `slide_cast_persists_held_strafe_…`; the 10 = the SAME pre-existing list),
+  world 540/0, web 124/1 (pre-existing), rust_pose 13/0.
+
+**User's retail technique → our binds** (they cast with z/c strafe, x back,
+arrows turn/fwd): strafe=A/D, back=S, forward=W, turn=Q/E. Their tap-per-windup
+metronome maps unchanged (each tap = edge = latch raise). NOTE: held FORWARD
+mid-cast stays dead on ACE cadence by design (retail's between-windup forward
+pulses came from MotionDone raw re-apply; ACE's zero-gap windup chain has no
+such boundary — even retail clients on ACE live this).
+
+**Session-ops notes (bot lore, was hard-won tonight):**
+- autoSpawn needs the ADMIN PREFIX: `autoSpawn=%2BTester2` ("+Tester2").
+- Ghost-wait ORDER: drop the session FIRST (about:blank), THEN wait ~100 s,
+  THEN log in. Waiting before the drop does nothing.
+- MCP/background-tab sessions die ~2m50s after login (Network Timeout) if you
+  leave gaps between evaluate calls — background throttling starves the
+  net-drain keepalive. Run each leg as ONE continuous evaluate.
+- Tester2 (tailnet1) is now a parked mage kit at the LIGHT academy LB
+  (A9B40024): @god'd, Wand wielded, knows 1708 + 85. The Rithwic wall char
+  (Tester, autoSpawn=first) was NEVER touched — use Tester2 for mage smokes.
+- `@create 24888` = pyreal target drudge, 10k hp (user-provided target wcid);
+  two are parked at the academy spot.
+- Wedding Bliss (1708, 3 windups) / Flame Bolt VI (85, 1 windup) = good
+  multi-windup test spells; level I-VI self buffs are lead-only (NO windups).
+
+**Pending from this session:** (a) 1070 eye-test — the strafe DANCE feel
+(alternating held A/D through a war chain), the anim-break VISUAL (needs the
+real spell-bar UI — headless castTargetedSpell bypasses the JS chain, so the
+cut is only unit-plumbed, not end-to-end-verified), rig look during slide (cast
+anim + glide vs strafe-legs — the JS sidestep overlay may fight the cast
+overlay visually; if it does, suppress `setSidestepLayer` while `_castBusyUntilMs`
+is live); (b) observer-side fidelity of a slidecaster (remote clients see the
+gesture + position flow — the "jumping around screens" look) — untested;
+(c) consider `persist_movement=true` on the live server anyway for melee-swing
+strafe parity (ACE covers melee/missile via Persist, just not magic).
+
 Three-commit arc on master: `6197dd38` (dossier A+B parity implementation), `4aeea4dc` (retail
 movement-autonomy latch — the real slidecast/fastcast mechanism), and this commit (follow-ups
 FU1-FU9 + F10 offset chain + F17 rustPose + default flips). Specs that drove it:

@@ -231,6 +231,21 @@ fn parse_cast_move_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "castMove=off")
 }
 
+/// (2026-07-03): parse `?slideCast=off` (or `&slideCast=off`). DEFAULT-ON
+/// off-escape shape: returns `true` UNLESS `slideCast=off` is present. When
+/// on, the local player's HELD sidestep/turn survive ACE's non-autonomous
+/// General cast-gesture stomps (each windup/cast echo arrives with empty
+/// axes and would otherwise kill a held strafe) — the retail strafecast /
+/// slidecast dance vs vanilla ACE. Forward is never persisted (held W stays
+/// dead until a fresh forward edge — the `?castMove` core). `=off` restores
+/// the bare stomp (tap-to-revive only). Native carrier: `USE_SLIDE_CAST`
+/// (movement/system.rs). Needs a wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_slide_cast_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "slideCast=off")
+}
+
 /// Phase 3 Phase D (2026-06-28, Option C): parse `?buildingOverlap=off` (or
 /// `&buildingOverlap=off`). DEFAULT-ON, off-escape shape: returns `true` UNLESS
 /// `buildingOverlap=off` is present. When on, each outdoor building/static BSP
@@ -25312,7 +25327,7 @@ mod wire_state_packs_routing_tests {
     /// only an explicit `=off` disables (the movement-flag house shape).
     #[test]
     fn retail_ground_and_cast_move_flags_default_on_unless_off() {
-        use super::{parse_cast_move_flag, parse_retail_ground_flag};
+        use super::{parse_cast_move_flag, parse_retail_ground_flag, parse_slide_cast_flag};
         assert!(parse_retail_ground_flag(""));
         assert!(parse_retail_ground_flag("?faithfulTransition=on"));
         assert!(parse_retail_ground_flag("?retailGround=on"));
@@ -25322,6 +25337,10 @@ mod wire_state_packs_routing_tests {
         assert!(parse_cast_move_flag("?castMove=on"));
         assert!(!parse_cast_move_flag("?castMove=off"));
         assert!(!parse_cast_move_flag("?nosw=1&castMove=off"));
+        assert!(parse_slide_cast_flag(""));
+        assert!(parse_slide_cast_flag("?slideCast=on"));
+        assert!(!parse_slide_cast_flag("?slideCast=off"));
+        assert!(!parse_slide_cast_flag("?castMove=off&slideCast=off"));
     }
 
     /// A2-P3 R2 (W3+ S9 Stage R2): `?stickyRetail` parse shape — DEFAULT-ON
@@ -34617,6 +34636,10 @@ async fn recv_loop(
     // locomotion until an input edge / gesture end); see
     // `parse_cast_move_flag`.
     movement.set_cast_move(parse_cast_move_flag(&js_location_search()));
+    // (2026-07-03): `?slideCast=off` — disable the held-strafe/turn
+    // persistence through ACE's General cast-gesture stomps (default ON:
+    // the vanilla-ACE slidecast compensation); see `parse_slide_cast_flag`.
+    movement.set_slide_cast(parse_slide_cast_flag(&js_location_search()));
     // Physics-parity 2026-07-03 (dossier A F1/F2): `?retailQuantum=on` —
     // the retail update_object slice schedule in both integrator shapes
     // (default OFF: ACE 0.1-slice shapes per DECISIONS-A1-O5); see

@@ -756,6 +756,45 @@ const USE_RETAIL_GROUND: bool = true;
 /// `false` / `?castMove=off`: raw input always drives (pre-2026-07-02).
 const USE_CAST_MOVE: bool = true;
 
+/// (2026-07-03, mage-PvP strafecast) — HELD sidestep/turn survive the
+/// local player's non-autonomous GENERAL motion stomps (the slidecast
+/// strafe dance vs vanilla ACE).
+///
+/// ACE broadcasts every cast gesture back to the CASTER as a
+/// non-autonomous General `UpdateMotion` whose sidestep/turn axes are
+/// EMPTY — NPK: one full stomp per windup (`EnqueueMotionMagic`,
+/// `WorldObject_Networking.cs:1078-1093`, ignores `persist_movement`);
+/// PK/FastTick: one stomp at windup start (`EnqueueMotionAction`
+/// :1231-1273, forward=Ready + gestures as actions) plus the cast
+/// gesture (`EnqueueMotion` castGesture arm) and the FinishCast return.
+/// Each stomp reaches `move_to_interpreted_state` and zeroes the
+/// interpreted sidestep/turn, so a HELD strafe dies at every echo and
+/// the retail strafecast ("locked into strafing, dancing left-right
+/// while the cast plays") is impossible — the community's "slidecasting
+/// is completely fixable that ACE refuses to". Retail servers never
+/// re-stomped the caster mid-cast: the gesture animation was
+/// client-authored (the "invisible animation break" — a local cut the
+/// server can't detect — only works if the server isn't re-asserting
+/// the gesture), so held sidestep/turn simply kept flowing.
+///
+/// ON: after a General (case-0) stomp for the LOCAL player, the
+/// currently-held manual sidestep/turn are re-applied onto the
+/// interpreted axes — EXACTLY the axis set ACE's own opt-in
+/// `Motion.Persist` carries (`Entity/Motion.cs:162-166`, the
+/// `persist_movement` server dial, default false and NOT wired into the
+/// magic path — `PropertyManager.cs:575`). Forward is NEVER re-applied:
+/// the gesture owns the single forward slot and held-W stays dead until
+/// a fresh forward EDGE ([`USE_CAST_MOVE`]'s core, retail :332759).
+///
+/// ONE feature, TWO carriers: this const (native default) + the
+/// `?slideCast=off` URL flag ([`MovementSystem::slide_cast_runtime`]).
+/// Effective predicate: [`MovementSystem::slide_cast_enabled`].
+///
+/// `true` (DEFAULT): held strafe/turn ride through cast-gesture stomps.
+/// `false` / `?slideCast=off`: the bare stomp (strafe dies per echo,
+/// tap-to-revive only).
+const USE_SLIDE_CAST: bool = true;
+
 /// Phase 3 Phase D (2026-06-28, Option C) — register each outdoor
 /// building/static BSP into EVERY land cell its world AABB overlaps, not just
 /// its home cell, so an off-center building can no longer be walked through from
@@ -1375,6 +1414,10 @@ pub(crate) struct MovementSystem {
     /// disables the cast-gesture movement arbitration. Combined by
     /// [`Self::cast_move_enabled`]. Default `None`.
     cast_move_runtime: Option<bool>,
+
+    /// `?slideCast=off` runtime carrier ([`USE_SLIDE_CAST`]) —
+    /// [`Self::slide_cast_enabled`]. Default `None`.
+    slide_cast_runtime: Option<bool>,
     /// Physics-parity 2026-07-03 (dossier A F1/F2) — runtime carrier of
     /// the `?retailQuantum=on` URL flag. `None` = the
     /// [`USE_RETAIL_QUANTUM`] const default (OFF — the DECISIONS-A1-O5
@@ -1605,6 +1648,7 @@ impl MovementSystem {
             building_overlap_runtime: None,
             retail_ground_runtime: None,
             cast_move_runtime: None,
+            slide_cast_runtime: None,
             retail_quantum_runtime: None,
             last_move_was_autonomous: false,
             pending_take_control: false,
@@ -1701,6 +1745,16 @@ impl MovementSystem {
     /// [`USE_CAST_MOVE`] effective predicate.
     pub(crate) fn cast_move_enabled(&self) -> bool {
         self.cast_move_runtime.unwrap_or(USE_CAST_MOVE)
+    }
+
+    /// `?slideCast=off` runtime carrier install ([`USE_SLIDE_CAST`]).
+    pub(crate) fn set_slide_cast(&mut self, on: bool) {
+        self.slide_cast_runtime = Some(on);
+    }
+
+    /// [`USE_SLIDE_CAST`] effective predicate.
+    pub(crate) fn slide_cast_enabled(&self) -> bool {
+        self.slide_cast_runtime.unwrap_or(USE_SLIDE_CAST)
     }
 
     /// Retail wire-latch write — `SmartBox::SetObjectMovement`
@@ -1800,6 +1854,57 @@ impl MovementSystem {
         }
     }
 
+    /// USE_CAST_MOVE per-axis edges (2026-07-03, mage-PvP strafecast) —
+    /// retail's `CommandInterpreter` keeps ONE `CommandList` per axis
+    /// and a key edge dispatches a SINGLE-axis `DoMotion`/`StopMotion`
+    /// (`AddCommand` acclient.c:717429 pushes onto that axis's list;
+    /// `NukeCommand` :717458 pops and re-dispatches the next stacked
+    /// head of the SAME axis — head-wins; `HandleKeyboardCommand`
+    /// routes one motion). An edge therefore never re-applies the OTHER
+    /// held axes: a strafe/turn tap mid-gesture must NOT resurrect a
+    /// held W — the gesture keeps the single forward slot until a
+    /// FORWARD edge evicts it (`ApplyMotion` :332890/:332759). Only a
+    /// full raw re-apply at EVENT boundaries (`apply_raw_movement`
+    /// :344259 — landing, exhaustion, gesture MotionDone) revives every
+    /// held key, and vanilla ACE's zero-gap windup cadence has no such
+    /// boundary mid-cast.
+    ///
+    /// Merge: axes whose RAW value changed in this edge take the new
+    /// raw value; unchanged axes carry the current effective drive
+    /// (the interpreted mapping while the latch was low, else the
+    /// previous manual effective state). No prior raw state (first
+    /// input ever) = the full new state.
+    fn merge_manual_edge(
+        base: MotionState,
+        prev_raw: Option<MotionState>,
+        new_raw: MotionState,
+    ) -> MotionState {
+        let Some(prev) = prev_raw else {
+            return new_raw;
+        };
+        let turn_edge =
+            prev.turning != new_raw.turning || prev.turn_speed != new_raw.turn_speed;
+        MotionState {
+            forward: if prev.forward != new_raw.forward {
+                new_raw.forward
+            } else {
+                base.forward
+            },
+            sidestep: if prev.sidestep != new_raw.sidestep {
+                new_raw.sidestep
+            } else {
+                base.sidestep
+            },
+            turning: if turn_edge { new_raw.turning } else { base.turning },
+            turn_speed: if turn_edge {
+                new_raw.turn_speed
+            } else {
+                base.turn_speed
+            },
+            ..new_raw
+        }
+    }
+
     /// A14-I3 (`?retailRunKeys=on`) — overlay the retail autorun
     /// command onto a held manual state: `ApplyCurrentMovement`'s
     /// `auto_run` branch issues forward (cmd 0x45000005) with
@@ -1868,7 +1973,19 @@ impl MovementSystem {
     ) -> std::result::Result<(), JumpRefusal> {
         let manual_axes_idle = match self.active_drive.map(|active| active.intent) {
             Some(ActiveDriveIntent::Manual(state)) => {
-                state.is_locomotion_idle() && state.turning.is_none()
+                if self.auto_run {
+                    // Autorun is locomotion (the overlay forces
+                    // forward=Run) — never a standstill.
+                    false
+                } else {
+                    // Retail reads the HELD keys (:343864-343870). The
+                    // castMove per-axis merge can suppress a held key
+                    // from the EFFECTIVE drive (the gesture owns the
+                    // slot), but a physically held key still denies the
+                    // standstill root — read the raw record.
+                    let raw = self.last_manual_drive.unwrap_or(state);
+                    raw.is_locomotion_idle() && raw.turning.is_none()
+                }
             }
             Some(ActiveDriveIntent::Autonomous(_)) => false,
             None => true,
@@ -2173,7 +2290,7 @@ impl MovementSystem {
             }));
     }
 
-    fn ingest_drive_command(&mut self, command: QueuedDriveCommand, now: Instant) {
+    fn ingest_drive_command(&mut self, command: QueuedDriveCommand, now: Instant, local_guid: Guid) {
         match command {
             QueuedDriveCommand::ManualSet(state) => {
                 // USE_CAST_MOVE — a fresh manual-input EDGE is retail's
@@ -2189,7 +2306,11 @@ impl MovementSystem {
                 // re-fires), so holding W does not silently defeat a
                 // cast gesture — you must actively re-press ("fight the
                 // cast").
-                if self.last_manual_drive != Some(state) {
+                let prev_raw = self.last_manual_drive;
+                // Read BEFORE the latch raise below — "was the
+                // interpreted state driving when this edge arrived".
+                let was_interpreted = self.interpreted_movement_active();
+                if prev_raw != Some(state) {
                     self.last_move_was_autonomous = true;
                     self.pending_take_control = true;
                 }
@@ -2210,6 +2331,34 @@ impl MovementSystem {
                 // not abort a MoveTo, acclient.c:345171 CleanUp-only
                 // end). Non-idle still takes over (cancel above).
                 if !(self.local_pursuit_engaged && !non_idle) {
+                    // USE_CAST_MOVE per-axis edges (2026-07-03) — see
+                    // [`Self::merge_manual_edge`]: only the CHANGED
+                    // axes take the new raw value; unchanged held axes
+                    // carry the current effective drive (a strafe tap
+                    // mid-gesture does not resurrect a held W). `=off`
+                    // keeps the full-state install.
+                    let effective = if self.cast_move_enabled() {
+                        let base = if was_interpreted {
+                            Self::interpreted_drive_state(
+                                self.movement_managers
+                                    .get(&local_guid)
+                                    .and_then(|manager| manager.motion_interp_ref())
+                                    .map(|minterp| &minterp.interpreted_state),
+                                state,
+                            )
+                        } else if let Some(ActiveDriveState {
+                            intent: ActiveDriveIntent::Manual(prev_effective),
+                            ..
+                        }) = self.active_drive
+                        {
+                            prev_effective
+                        } else {
+                            state
+                        };
+                        Self::merge_manual_edge(base, prev_raw, state)
+                    } else {
+                        state
+                    };
                     // A14-I3 — while `auto_run`, the effective drive
                     // keeps forward+Run regardless of the held
                     // forward/backstep keys (retail
@@ -2220,9 +2369,9 @@ impl MovementSystem {
                     // `last_manual_drive` above keeps the RAW state so
                     // toggling autorun off restores the actual keys.
                     let effective = if self.auto_run {
-                        Self::overlay_auto_run(state)
+                        Self::overlay_auto_run(effective)
                     } else {
-                        state
+                        effective
                     };
                     self.active_drive = Some(ActiveDriveState::manual(effective, None));
                 }
@@ -2422,8 +2571,9 @@ impl MovementSystem {
         let explicit_stop_requested = queued
             .iter()
             .any(|command| matches!(command, QueuedDriveCommand::Stop));
+        let local_guid = world.player.guid;
         for command in queued {
-            self.ingest_drive_command(command, now);
+            self.ingest_drive_command(command, now, local_guid);
         }
         self.consume_pending_take_control(world);
 
@@ -5788,6 +5938,23 @@ impl MovementSystem {
                     // A3-D3 driver (M4.3): the local lane now carries
                     // the REAL target_exists + dims (the documented
                     // `false` placeholder is closed).
+                    // USE_SLIDE_CAST — capture the held manual
+                    // sidestep/turn BEFORE the manager borrow (normal
+                    // form: signed unit speed, negative = left).
+                    let held = self.last_manual_drive.filter(|_| self.slide_cast_enabled());
+                    let held_sidestep = held.and_then(|state| state.sidestep).map(|s| match s {
+                        SidestepLocomotion::StrafeLeft => -1.0,
+                        SidestepLocomotion::StrafeRight => 1.0,
+                    });
+                    let held_turn = held.and_then(|state| {
+                        state.turning.map(|turn| {
+                            let magnitude = state.turn_speed.unwrap_or(1.0).abs();
+                            match turn {
+                                Turn::Left => -magnitude,
+                                Turn::Right => magnitude,
+                            }
+                        })
+                    });
                     let manager = self.movement_managers.entry(data.guid).or_default();
                     // Retail weenie vfptr[5] "player-controlled object"
                     // is a STATIC property of the local player
@@ -5802,6 +5969,13 @@ impl MovementSystem {
                         *object_radius,
                         *object_height,
                     );
+                    // USE_SLIDE_CAST — the held strafe/turn ride
+                    // through the General stomp (slidecast; see the
+                    // const + `persist_held_manual_axes` docs). Forward
+                    // is never persisted — the gesture keeps the slot.
+                    if held_sidestep.is_some() || held_turn.is_some() {
+                        manager.persist_held_manual_axes(data, held_sidestep, held_turn);
+                    }
                 }
                 WorldEvent::EntityDespawned(guid) => {
                     self.movement_managers.remove(guid);

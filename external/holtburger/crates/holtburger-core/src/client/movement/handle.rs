@@ -288,6 +288,15 @@ impl MovementSystemHandle {
         self.inner.set_cast_move(on);
     }
 
+    /// (2026-07-03): install the `?slideCast=off` runtime carrier (default
+    /// ON — held sidestep/turn survive the local player's General
+    /// cast-gesture stomps, the vanilla-ACE slidecast compensation; `=off`
+    /// restores the bare stomp). Forwards to
+    /// `MovementSystem::set_slide_cast`.
+    pub fn set_slide_cast(&mut self, on: bool) {
+        self.inner.set_slide_cast(on);
+    }
+
     /// Physics-parity 2026-07-03 (dossier A F1/F2): install the
     /// `?retailQuantum=on` runtime carrier (default OFF — ACE slice
     /// shapes stand per DECISIONS-A1-O5; `=on` runs the retail
