@@ -109,6 +109,26 @@ function animSceneryFps() {
   return fps;
 }
 
+// ?animSceneryInstanced (default-ON — 2026-07-02 1070 eye-test + A/B; ?animSceneryInstanced=off
+// escape restores the per-mesh legacy path) — collapse per-placement part Meshes into one
+// InstancedMesh per (setupId, part, surface group). 2026-07-02 GTX-1070 A/B (quality=low
+// forest, cap 4096): legacy 8.5 fps / ~1,620 calls → instanced 18-20 fps / ~750 calls with
+// ALL 4,096 trees animated in 6 draws (beats even ?animScenery=off at 17 fps — the build
+// also deletes per-instance geometry clones and the per-frame Group transform walk).
+let _instancedFlag;
+export function animSceneryInstancedEnabled() {
+  if (_instancedFlag !== undefined) return _instancedFlag;
+  let on = true;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = new URLSearchParams(window.location.search).get("animSceneryInstanced")?.toLowerCase();
+      if (v != null) on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  _instancedFlag = on;
+  return on;
+}
+
 // One shared driver per animation DID: { mixer, template, parts:[Group],
 // numParts, refCount }. The template is NOT added to the scene — it's a pure
 // transform holder the mixer animates; instances copy its part transforms.
@@ -349,8 +369,16 @@ export async function attachAnimatedScenery(scene3d, placements, wasmExports, op
     if (_builtKeys.has(key)) continue;
     if (_instances.length >= maxAnimated()) { dropped += 1; continue; }
     _builtKeys.add(key);
+    // ?animSceneryInstanced: outdoor (staticsGroup-parented) placements take the
+    // instanced builder; interior (resolveParent → cell container) placements
+    // keep the legacy per-mesh path (cell visibility gating needs real children).
+    // Flag OFF ⇒ this branch is never evaluated past the flag read ⇒ byte-identical.
+    const useInstanced = animSceneryInstancedEnabled() && !(resolveParent && resolveParent(p));
     // eslint-disable-next-line no-await-in-loop
-    const r = await buildOne(p, wasmExports, materialCache, spFetch).catch((e) => {
+    const r = await (useInstanced
+      ? buildOneInstanced(p, scene3d, wasmExports, materialCache, spFetch)
+      : buildOne(p, wasmExports, materialCache, spFetch)
+    ).catch((e) => {
       console.warn("[anim-scenery] buildOne threw:", e);
       return null;
     });
@@ -359,7 +387,12 @@ export async function attachAnimatedScenery(scene3d, placements, wasmExports, op
       parent.add(r.node);
       const g = _didGroups.get(r.animId);
       if (g) g.refCount += 1;
-      _instances.push({ node: r.node, parts: r.parts, animId: r.animId, key });
+      if (r.instanced) {
+        r.key = key;
+        _instances.push(r);
+      } else {
+        _instances.push({ node: r.node, parts: r.parts, animId: r.animId, key });
+      }
       _ensureRaf();
       built += 1;
     } else {
@@ -371,6 +404,216 @@ export async function attachAnimatedScenery(scene3d, placements, wasmExports, op
       (dropped > 0 ? `; DROPPED ${dropped} over the ${maxAnimated()} cap (?animSceneryMax)` : ""));
   }
   return built;
+}
+
+// ===========================================================================
+// ?animSceneryInstanced — instanced DAT-anim scenery (2026-07-02).
+//
+// The legacy path gives EVERY placement its own part Meshes (per-instance
+// geometry clones) → one draw per (placement, part, surface group). All
+// placements of a setup share geometry AND (per anim DID) the exact template
+// pose, so the whole population collapses to one InstancedMesh per
+// (setupId, part, surface group): per frame `instanceMatrix[i] =
+// placementMatrix × templatePartPose`, one buffer upload per dirty bucket.
+//
+// Contracts kept from the legacy path:
+//  - The per-placement ANCHOR Group (same name/userData.landblockId) still
+//    parents to staticsGroup, so LRU eviction + the orphan-reclaim rAF work
+//    unchanged; reclaim swap-removes the instance's slots instead of
+//    disposing geometry (bucket geometry is SHARED — never per-instance).
+//  - Beyond-radius instances are simply not rewritten (legacy "freeze at last
+//    pose"); slots are seeded with the HINGE rest pose so a never-ticked
+//    instance is visible, not a zero-matrix degenerate.
+//  - Bucket meshes carry NO userData.landblockId (they span LBs — the LRU
+//    must never evict them) and frustumCulled=false (instances are scattered
+//    far beyond the shared geometry's local bounds).
+// Interior (cell-parented) placements stay on the legacy path.
+// ===========================================================================
+
+const _UNIT3 = new THREE.Vector3(1, 1, 1);
+const _instScratch = new THREE.Matrix4();
+const _geomCache = new Map();   // setupId -> Promise<{partCount, parts:[[{geometry,surfaceDid}]], hingeMats:[Matrix4]}|null>
+const _geomList = [];           // resolved shared geometries (for dispose)
+const _buckets = new Map();     // "setup:part:group" -> Promise<bucket|null>
+const _bucketList = [];         // resolved buckets (for dispose/diag)
+const _dirtyBuckets = new Set();
+let _poseFrame = 0;             // stamps per-DID template pose recompute + bucket dirtying
+
+/** Decode a setup's part geometry ONCE (legacy decodes per placement). */
+function _getSharedSetupGeom(setupId, wasmExports) {
+  let p = _geomCache.get(setupId);
+  if (p) return p;
+  p = (async () => {
+    let bundle;
+    try {
+      bundle = await wasmExports.fetchBuildingPlacement(setupId);
+    } catch (e) {
+      console.warn(`[anim-scenery] shared fetchBuildingPlacement(0x${setupId.toString(16)}) failed:`, e);
+      return null;
+    }
+    const partCount = bundle.partCount | 0;
+    if (partCount === 0) { bundle.free?.(); return null; }
+    const partMeshes = bundle.takePartMeshes();
+    const hinge = (typeof bundle.takePartHingeFrames === "function") ? bundle.takePartHingeFrames() : [];
+    bundle.free?.();
+    const parts = [];
+    const hingeMats = [];
+    for (let i = 0; i < partCount; i++) {
+      const h = hinge[i];
+      const hm = new THREE.Matrix4();
+      if (h) hm.compose(new THREE.Vector3(h.x, h.y, h.z), new THREE.Quaternion(h.qx, h.qy, h.qz, h.qw), _UNIT3);
+      hingeMats.push(hm);
+      const groups = [];
+      const wasmMesh = partMeshes[i];
+      if (wasmMesh) {
+        try {
+          const r = meshToGeometryGroups(wasmMesh);
+          for (let g = 0; g < (r.groups?.length || 0); g++) {
+            const grp = r.groups[g];
+            const sid = grp.surfaceDid || r.surfaceDids?.[g] || 0;
+            if (grp.geometry) { groups.push({ geometry: grp.geometry, surfaceDid: sid }); _geomList.push(grp.geometry); }
+          }
+        } catch (e) {
+          console.warn(`[anim-scenery] shared part ${i} mesh build failed:`, e);
+        }
+        wasmMesh.free?.();
+      }
+      parts.push(groups);
+    }
+    return { partCount, parts, hingeMats };
+  })();
+  _geomCache.set(setupId, p);
+  return p;
+}
+
+function _getOrCreateBucket(scene3d, setupId, partIdx, gIdx, geometry, surfaceDid, materialCache, spFetch) {
+  const key = `${setupId}:${partIdx}:${gIdx}`;
+  let p = _buckets.get(key);
+  if (p) return p;
+  p = (async () => {
+    const mat = await materialCache.get(surfaceDid, spFetch);
+    if (!mat) return null;
+    const mesh = new THREE.InstancedMesh(geometry, mat, 128);
+    mesh.count = 0;
+    mesh.name = `anim-inst-0x${setupId.toString(16)}-p${partIdx}-g${gIdx}`;
+    mesh.userData = { isAnimatedSceneryInstanced: true }; // no landblockId → LRU never evicts
+    mesh.frustumCulled = false;
+    mesh.matrixAutoUpdate = false;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    scene3d.staticsGroup.add(mesh);
+    const bucket = { mesh, members: [], capacity: 128 };
+    _bucketList.push(bucket);
+    return bucket;
+  })();
+  _buckets.set(key, p);
+  return p;
+}
+
+/** members[k] ↔ instanceMatrix slot k (one slot per bucket per instance). */
+function _registerSlot(bucket, inst) {
+  if (bucket.members.length >= bucket.capacity) {
+    const old = bucket.mesh;
+    const cap = bucket.capacity * 2;
+    const nm = new THREE.InstancedMesh(old.geometry, old.material, cap);
+    nm.name = old.name;
+    nm.userData = old.userData;
+    nm.frustumCulled = false;
+    nm.matrixAutoUpdate = false;
+    nm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    nm.instanceMatrix.array.set(old.instanceMatrix.array);
+    nm.count = old.count;
+    const parent = old.parent;
+    if (parent) { parent.add(nm); parent.remove(old); }
+    old.dispose(); // frees old instance buffers only — geometry/material shared
+    bucket.mesh = nm;
+    bucket.capacity = cap;
+  }
+  const index = bucket.members.length;
+  bucket.members.push(inst);
+  bucket.mesh.count = bucket.members.length;
+  return index;
+}
+
+/** Instanced sibling of buildOne: anchor Group + slots instead of part Meshes. */
+async function buildOneInstanced(p, scene3d, wasmExports, materialCache, spFetch) {
+  const setupId = (p.objId ?? p.obj_id ?? p.modelId ?? 0) >>> 0;
+  const animId = (p.defaultAnimationId >>> 0);
+  if (setupId === 0 || animId === 0) return null;
+  const didGroup = await getOrCreateDidGroup(animId, wasmExports);
+  if (!didGroup) return null;
+  const shared = await _getSharedSetupGeom(setupId, wasmExports);
+  if (!shared) return null;
+
+  const node = new THREE.Group();
+  node.name = `anim-scenery-0x${setupId.toString(16)}`;
+  node.userData = { landblockId: (p.landblockId >>> 0), isAnimatedScenery: true, instanced: true };
+  placeNode(node, p);
+  node.updateMatrix();
+  node.matrixAutoUpdate = false; // placement never moves; rAF writes slots, not the anchor
+
+  const inst = { node, parts: [], animId, key: null, nodeMat: node.matrix.clone(), slots: [], instanced: true };
+  for (let i = 0; i < shared.partCount; i++) {
+    const groups = shared.parts[i];
+    for (let g = 0; g < groups.length; g++) {
+      // eslint-disable-next-line no-await-in-loop
+      const bucket = await _getOrCreateBucket(scene3d, setupId, i, g, groups[g].geometry, groups[g].surfaceDid, materialCache, spFetch);
+      if (!bucket) continue;
+      const index = _registerSlot(bucket, inst);
+      _instScratch.multiplyMatrices(inst.nodeMat, shared.hingeMats[i]); // rest pose until first tick
+      bucket.mesh.setMatrixAt(index, _instScratch);
+      bucket.mesh.instanceMatrix.needsUpdate = true;
+      inst.slots.push({ bucket, index, partIdx: i });
+    }
+  }
+  return inst;
+}
+
+/** Per-frame slot write: template part poses composed once per DID per frame. */
+function _writeInstancedPose(inst, g) {
+  if (g._poseStamp !== _poseFrame) {
+    if (!g._partMats) g._partMats = [];
+    for (let j = 0; j < g.parts.length; j++) {
+      (g._partMats[j] || (g._partMats[j] = new THREE.Matrix4()))
+        .compose(g.parts[j].position, g.parts[j].quaternion, _UNIT3);
+    }
+    g._poseStamp = _poseFrame;
+  }
+  for (const s of inst.slots) {
+    const pm = g._partMats[s.partIdx];
+    if (!pm) continue;
+    _instScratch.multiplyMatrices(inst.nodeMat, pm);
+    s.bucket.mesh.setMatrixAt(s.index, _instScratch);
+    _dirtyBuckets.add(s.bucket);
+  }
+}
+
+/** Orphan reclaim for an instanced anchor: swap-remove each slot. */
+function _reclaimInstancedSlots(inst) {
+  for (const s of inst.slots) {
+    const b = s.bucket;
+    const m = b.members;
+    const lastIdx = m.length - 1;
+    if (lastIdx < 0) continue;
+    const last = m[lastIdx];
+    if (last !== inst) {
+      const ls = last.slots.find((x) => x.bucket === b);
+      if (ls) {
+        b.mesh.getMatrixAt(ls.index, _instScratch);
+        b.mesh.setMatrixAt(s.index, _instScratch);
+        ls.index = s.index;
+      }
+      m[s.index] = last;
+    }
+    m.pop();
+    b.mesh.count = m.length;
+    _dirtyBuckets.add(b);
+  }
+  inst.slots.length = 0;
+}
+
+function _flushDirtyBuckets() {
+  for (const b of _dirtyBuckets) b.mesh.instanceMatrix.needsUpdate = true;
+  _dirtyBuckets.clear();
 }
 
 // ===========================================================================
@@ -683,6 +926,7 @@ function _ensureRaf() {
     _rafLastMs = now;
     _tickCalls += 1;
     _lastDt = dt;
+    _poseFrame += 1;
     // Advance each SHARED DID mixer ONCE (a handful, not one-per-placement).
     for (const g of _didGroups.values()) {
       try { g.mixer.update(dt); } catch (_) {}
@@ -706,6 +950,7 @@ function _ensureRaf() {
     for (let i = _instances.length - 1; i >= 0; i--) {
       const inst = _instances[i];
       if (_isOrphaned(inst.node)) {
+        if (inst.instanced) _reclaimInstancedSlots(inst); // shared geometry — reclaim slots, dispose nothing
         try { inst.node.traverse((o) => { if (o.isMesh) o.geometry?.dispose?.(); }); } catch (_) {}
         _builtKeys.delete(inst.key);
         _instances.splice(i, 1);
@@ -721,12 +966,14 @@ function _ensureRaf() {
       }
       const g = _didGroups.get(inst.animId);
       if (!g) continue;
+      if (inst.instanced) { _writeInstancedPose(inst, g); continue; }
       const n = Math.min(g.parts.length, inst.parts.length);
       for (let j = 0; j < n; j++) {
         inst.parts[j].position.copy(g.parts[j].position);
         inst.parts[j].quaternion.copy(g.parts[j].quaternion);
       }
     }
+    _flushDirtyBuckets();
     _rafId = window.requestAnimationFrame(loop);
   };
   _rafId = window.requestAnimationFrame(loop);
@@ -736,26 +983,33 @@ function _ensureRaf() {
  *  self-managed rAF. Advances shared mixers + copies onto ALL instances. */
 export function tickAnimatedScenery(dt) {
   const d = Number.isFinite(dt) ? dt : 0;
+  _poseFrame += 1;
   for (const g of _didGroups.values()) {
     try { g.mixer.update(d); } catch (_) {}
   }
   for (const inst of _instances) {
     const g = _didGroups.get(inst.animId);
     if (!g) continue;
+    if (inst.instanced) { _writeInstancedPose(inst, g); continue; }
     const n = Math.min(g.parts.length, inst.parts.length);
     for (let j = 0; j < n; j++) {
       inst.parts[j].position.copy(g.parts[j].position);
       inst.parts[j].quaternion.copy(g.parts[j].quaternion);
     }
   }
+  _flushDirtyBuckets();
 }
 
 /** Diagnostic snapshot for the local visual A/B. */
 export function animatedSceneryDiag() {
   let maxTime = 0;
   for (const g of _didGroups.values()) if (g.mixer.time > maxTime) maxTime = g.mixer.time;
+  let instanced = 0;
+  for (const inst of _instances) if (inst.instanced) instanced += 1;
   return {
     instances: _instances.length,
+    instanced,
+    buckets: _bucketList.length,
     didGroups: _didGroups.size,
     tickCalls: _tickCalls,
     lastDt: _lastDt,
@@ -783,6 +1037,18 @@ export function disposeAnimatedScenery(_scene3d) {
   _instances.length = 0;
   _didGroups.clear();
   _builtKeys.clear();
+  // Instanced buckets + shared geometry (module-owned, never per-instance).
+  for (const b of _bucketList) {
+    try { b.mesh.parent?.remove(b.mesh); b.mesh.dispose(); } catch (_) {}
+  }
+  _bucketList.length = 0;
+  _buckets.clear();
+  _dirtyBuckets.clear();
+  for (const g of _geomList) {
+    try { g.dispose?.(); } catch (_) {}
+  }
+  _geomList.length = 0;
+  _geomCache.clear();
 }
 
 // ── INERT diag surface (P4.3 rig byte-identity proof) ────────────────────────
