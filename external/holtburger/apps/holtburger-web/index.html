@@ -2070,6 +2070,18 @@
           ...(typeof __hbWasmNs?.MotionSequence === "function"
             ? { MotionSequence: __hbWasmNs.MotionSequence }
             : {}),
+          // cmdInterp post-flip (2026-07-03) — diagnostics-only rider
+          // (rides v6, no manifest bump): the local registry minterp's
+          // pending completion-node count, for live A/B legs + the 1070
+          // Q3 instrumentation. ADDITIVE namespace rider (typeof-guarded
+          // → a stale pkg/ yields `undefined`; nothing in product JS
+          // consumes it — F18-2, mirrors the riders above).
+          ...(typeof __hbWasmNs?.movementPendingMotionsDiag === "function"
+            ? {
+                movementPendingMotionsDiag: () =>
+                  __hbWasmNs.movementPendingMotionsDiag() >>> 0,
+              }
+            : {}),
           hash32,
           has_resource_source,
         };
