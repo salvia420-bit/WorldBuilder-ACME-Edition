@@ -1793,6 +1793,13 @@ export class CameraSwitcher {
       return;
     }
     const m = this.computeMovementFromKeys();
+    // P16-H1 (2026-07-04) — publish the live movement intent for consumers
+    // that must not stomp a held-key drive (picking.js turnToFaceThenAct
+    // gates its face-turn pre-step on this; retail: raw input cancels
+    // MoveTo, acclient.c:339240). Stashed BEFORE the signature early-return
+    // so it stays fresh every tick in both cmdInterp modes. null = orbit-
+    // suppressed (consumers treat as idle).
+    this.lastMoveIntent = m;
     if (!m) {
       // Orbit suppression. Issue 5 (2026-06-03): the rig must not freeze on
       // the last locomotion clip when the user toggles into orbit mid-stride.

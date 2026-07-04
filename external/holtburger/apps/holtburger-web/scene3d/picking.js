@@ -65,8 +65,10 @@ const STICKY_WATCH_OUT_SAMPLES = 2;
 
 // F8-5 — turn the local caster to face the target before a spell cast
 // (ACE Rotate() before the windup), so the bolt doesn't launch sideways/
-// backwards out of a frozen, wrong-facing caster. Same default-off rule
-// as the missile case. (?castFaceTarget=on)
+// backwards out of a frozen, wrong-facing caster. DEFAULT-ON with
+// ?castFaceTarget=off as the escape (the old "default-off" note here was
+// stale — P16 fleet packet, 2026-07-04). While a manual movement key is
+// held the pre-step is skipped entirely (see turnToFaceThenAct).
 const CAST_FACE_TARGET = (() => {
   try {
     return typeof window !== "undefined" &&
@@ -440,6 +442,85 @@ export function setupClickPicking({
     } catch (_) { return false; }
   }
 
+  // P15 (2026-07-04) — ground-item classifier for the click→pickup reroute.
+  // Retail classifies clicks CLIENT-side (ItemHolder::DetermineUseResult,
+  // acclient.c:433086): a loose, un-owned, non-container item ⇒ category 2
+  // ⇒ PlaceInBackpack ⇒ PutItemInContainer 0x0019 (acclient.c:433157/
+  // 400454/708849) — never a UseEvent. Our wire meta carries itemType (ACE
+  // ItemType bits) + objDescFlags, so the conservative port is a positive
+  // list of takeable inventory classes with every world-interactable ODF
+  // bit excluded; anything unknown falls through to the old useObject path
+  // (portals, doors, vendors, chests, lifestones, NPCs keep their feel).
+  const GROUND_ITEM_TYPE_MASK =
+    0x00000001 | // MeleeWeapon
+    0x00000002 | // Armor
+    0x00000004 | // Clothing
+    0x00000008 | // Jewelry
+    0x00000020 | // Food
+    0x00000040 | // Money
+    0x00000080 | // Misc (doors are Misc too — excluded via ODF.Door below)
+    0x00000100 | // MissileWeapon
+    0x00000400 | // Useless (trophies/junk — still takeable)
+    0x00000800 | // Gem
+    0x00001000 | // SpellComponents
+    0x00002000 | // Writable (scrolls / books)
+    0x00004000 | // Key
+    0x00008000 | // Caster
+    0x00040000 | // PromissoryNote
+    0x00080000 | // ManaStone
+    0x00200000 | // MagicWieldable
+    0x00400000 | // CraftCookingBase
+    0x00800000 | // CraftAlchemyBase
+    0x02000000 | // CraftFletchingBase
+    0x04000000 | // CraftAlchemyIntermediate
+    0x08000000 | // CraftFletchingIntermediate
+    0x20000000 | // TinkeringTool
+    0x40000000;  // TinkeringMaterial
+  // Not in the mask (⇒ disqualify): Creature 0x10, Container 0x200,
+  // Portal 0x10000, Lockable 0x20000, Service 0x100000, LifeStone
+  // 0x10000000, Gameboard 0x80000000.
+  // ODF bits that mark a world interactable / actor, never a floor pickup
+  // (ACE ObjectDescriptionFlag.cs): Player|Vendor|Door|Corpse|LifeStone|
+  // Portal. Deliberately NOT Stuck (0x4) / Attackable (0x10): ACE stamps
+  // Attackable on loose ITEMS (live dagger ODF=0x12) and Stuck|Attackable
+  // on creatures — creatures/NPCs are excluded via ItemType.Creature, so
+  // excluding on those bits here just breaks every real pickup
+  // (s7 leg-2 finding, 2026-07-04).
+  const GROUND_ITEM_ODF_EXCLUDE =
+    0x8 | 0x200 | 0x1000 | 0x2000 | 0x4000 | 0x40000;
+  function entityIsGroundItem(guid) {
+    try {
+      const em = liveScene3d?.entityManager;
+      const ent =
+        em?.entityMap?.get?.(guid >>> 0) ||
+        em?.entityMap?.get?.(String(guid >>> 0)) ||
+        null;
+      if (!ent) return false;
+      const meta = ent.meta || ent;
+      const odf = (meta?.objDescFlags >>> 0) || 0;
+      if ((odf & GROUND_ITEM_ODF_EXCLUDE) !== 0) return false;
+      const it = (meta?.itemType >>> 0) || 0;
+      if (!it) return false;
+      // Multi-bit itemTypes exist — ANY disqualifying bit wins even when a
+      // takeable bit is also set (e.g. Lockable|Container chests).
+      if ((it & ~GROUND_ITEM_TYPE_MASK) !== 0) return false;
+      return true;
+    } catch (_) { return false; }
+  }
+
+  // F17-2 double-click bookkeeping, shared by every use-class branch:
+  // consume on the second click inside the window, (re-)arm otherwise.
+  function doubleClickGate(guid) {
+    const g = guid >>> 0;
+    const nowMs = (typeof performance !== "undefined" && performance.now)
+      ? performance.now() : Date.now();
+    const isDouble =
+      lastPeaceClick.guid === g &&
+      (nowMs - lastPeaceClick.t) <= PEACE_USE_DOUBLE_CLICK_MS;
+    lastPeaceClick = isDouble ? { guid: 0, t: 0 } : { guid: g, t: nowMs };
+    return isDouble;
+  }
+
   // A14-I2 — flag-on replacement for the steering chargeTick: the wasm
   // driver steers; JS only polls `pursuitStatus()` through the pure
   // monitor (scene3d/pursuit_monitor.js). NO `setMovementInput` calls
@@ -579,8 +660,29 @@ export function setupClickPicking({
   // rotateTime/Rotate() delay before a missile launch or a spell cast.
   // No-ops to an immediate `act()` when `enabled` is false, the
   // target/pose is unresolvable, or we're already on-bearing.
+  // P16-H1 (2026-07-04) — is a manual movement key held right now? Reads
+  // the camera dispatcher's published intent (camera.js _dispatchMovement
+  // stashes it every tick in both cmdInterp modes; null = orbit/idle).
+  function manualMovementHeld() {
+    try {
+      const mi = liveScene3d?.cameraSwitcher?.lastMoveIntent;
+      return !!mi && (mi.forward !== 0 || mi.strafe !== 0 || mi.turn !== 0);
+    } catch (_) { return false; }
+  }
+
   function turnToFaceThenAct(targetGuid, act, enabled) {
     if (!enabled) {
+      act();
+      return;
+    }
+    // P16-H1 — a held movement key owns the drive: the legacy face loop's
+    // setMovementInput(0,0,turn,0) → (0,0,0,0) sequence would overwrite the
+    // held-key ManualSet with no fresh key edge left to revive it (the
+    // click-cast kite killer — backward dies at the click and stays dead).
+    // Retail parity: raw input cancels MoveTo (acclient.c:339240), so a
+    // held key suppressing the auto-face is the faithful shape; the server
+    // still turns the caster itself (ACE Player_Magic Rotate()/TurnTo).
+    if (manualMovementHeld()) {
       act();
       return;
     }
@@ -818,6 +920,41 @@ export function setupClickPicking({
     try {
       const cb = window.__combatBarState;
 
+      // P12 (2026-07-04) — corpse carve-out hoisted ABOVE the stance
+      // dispatch: retail sends the corpse Use (0x0036) from EVERY stance
+      // (ItemHolder::UseObject, acclient.c:433354); the magic branch had
+      // no corpse path at all, so a caster standing over a fresh kill
+      // either no-oped or cast AT the corpse. Single click still only
+      // selects/assesses; the double-click gate is unchanged.
+      if (entityIsCorpse(guid) && typeof sessionHandle.useObject === "function") {
+        if (doubleClickGate(guid)) {
+          cancelCharge();
+          sessionHandle.useObject(guid >>> 0);
+        }
+        return;
+      }
+
+      // P15 (2026-07-04) — ground-item pickup: retail classifies a loose
+      // item click as PlaceInBackpack and sends PutItemInContainer 0x0019
+      // (container = player, acclient.c:433157/400454/708849) — never a
+      // UseEvent. We sent useObject (0x0036), which ACE services as a
+      // walk-over + OnActivate with no pickup semantics (Player_Use.cs).
+      // Reuse the proven corpse-loot wire (corpse-loot-bar.js moveItem);
+      // ACE owns the walk-to and the pickup animation
+      // (Player_Inventory.cs CreateMoveToChain/StartPickup), so no
+      // client-side charge. Double-click retained — same misclick guard
+      // as every other world action; single click stays select+assess.
+      if (entityIsGroundItem(guid) && typeof sessionHandle.moveItem === "function") {
+        if (doubleClickGate(guid)) {
+          const me = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+          if (me !== 0) {
+            cancelCharge();
+            sessionHandle.moveItem(guid >>> 0, me, 0);
+          }
+        }
+        return;
+      }
+
       if (isInMagicStance?.() && typeof sessionHandle.castTargetedSpell === "function") {
         // Magic doesn't auto-charge — caster stands still to cast.
         // Click on entity with an armed spell fires the cast directly
@@ -926,29 +1063,8 @@ export function setupClickPicking({
         // player swap heights mid-fight (helmet knocked off → Hi for
         // crit) without re-clicking the monster.
         // `setSelectedTarget` already fired above; nothing more to do.
-        //
-        // (2026-07-02) — CORPSE carve-out: looting must not require leaving
-        // combat stance. A double-click on a corpse (ODF bit 0x2000) sends
-        // the same generic Use (0x0036) the peace branch sends — ACE opens
-        // the container (ViewContents → kind=21) regardless of stance.
-        // Single click still only targets; the double-click gate reuses the
-        // peace-mode window so a stray click can't loot.
-        if (entityIsCorpse(guid) && typeof sessionHandle.useObject === "function") {
-          const g = guid >>> 0;
-          const nowMs = (typeof performance !== "undefined" && performance.now)
-            ? performance.now() : Date.now();
-          const isDoubleClick =
-            lastPeaceClick.guid === g &&
-            (nowMs - lastPeaceClick.t) <= PEACE_USE_DOUBLE_CLICK_MS;
-          if (isDoubleClick) {
-            cancelCharge();
-            sessionHandle.useObject(g);
-            lastPeaceClick = { guid: 0, t: 0 };
-          } else {
-            lastPeaceClick = { guid: g, t: nowMs };
-          }
-          return;
-        }
+        // (Corpse looting is handled by the stance-independent carve-out
+        // hoisted above the dispatch — P12, 2026-07-04.)
         //
         // F11-5 — but if a spell is ARMED while in a melee/missile stance,
         // the click silently re-targets and the cast never fires (only the
@@ -985,21 +1101,12 @@ export function setupClickPicking({
         if (!handledByTypedClick) {
           // F17-2 — single click only selects + assesses (selectionChanged
           // already fired above; examine-target requests appraisal off it).
-          // Generic USE (portal teleport, door toggle, vendor open) now
+          // Generic USE (portal teleport, door toggle, vendor open) still
           // requires a double-click within PEACE_USE_DOUBLE_CLICK_MS, so a
           // misclick in town no longer fires an irreversible world action.
-          const g = guid >>> 0;
-          const nowMs = (typeof performance !== "undefined" && performance.now)
-            ? performance.now() : Date.now();
-          const isDoubleClick =
-            lastPeaceClick.guid === g &&
-            (nowMs - lastPeaceClick.t) <= PEACE_USE_DOUBLE_CLICK_MS;
-          if (isDoubleClick) {
+          if (doubleClickGate(guid)) {
             cancelCharge();
-            sessionHandle.useObject(g);
-            lastPeaceClick = { guid: 0, t: 0 }; // consume; next click re-selects
-          } else {
-            lastPeaceClick = { guid: g, t: nowMs };
+            sessionHandle.useObject(guid >>> 0);
           }
         }
       }
