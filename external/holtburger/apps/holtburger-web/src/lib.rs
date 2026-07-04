@@ -895,6 +895,27 @@ pub fn movement_pending_motions_diag() -> u32 {
     MOVEMENT_PENDING_MOTIONS_DIAG.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Bug-A round-2 diag (2026-07-03): reclaim causes, packed
+/// lo16 = edge-driven TakeControl count, hi16 = use_time auto-reclaims.
+static RECLAIMS_EDGE_DIAG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static RECLAIMS_USE_TIME_DIAG: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+#[wasm_bindgen(js_name = reclaimCauseDiag)]
+pub fn reclaim_cause_diag() -> u32 {
+    let edge = RECLAIMS_EDGE_DIAG.load(std::sync::atomic::Ordering::Relaxed) & 0xFFFF;
+    let auto = RECLAIMS_USE_TIME_DIAG.load(std::sync::atomic::Ordering::Relaxed) & 0xFFFF;
+    (auto << 16) | edge
+}
+
+/// Bug-A round-2 diag: local-player pose snap carriers, comma-packed
+/// "publicSnaps,forcedSnaps,lastDeltaCm,lastCarrier" (see
+/// holtburger-world `pose_snap_diag`).
+#[wasm_bindgen(js_name = localPoseSnapDiag)]
+pub fn local_pose_snap_diag() -> String {
+    holtburger_world::pose_snap_diag::read_packed()
+}
+
 /// AC's stateless 32-bit packet header checksum, exposed for callers
 /// that want to verify the protocol crate's deterministic output from
 /// JS. Smoke-tests passing a `&[u8]` from JS into wasm and a `u32`
@@ -44915,8 +44936,18 @@ async fn recv_loop(
                                         CmdInterpEvent::ForwardSlotEvicted => {
                                             (CLIENT_EVENT_KIND_CMD_INTERP, 1, None)
                                         }
-                                        CmdInterpEvent::ControlReclaimed => {
-                                            (CLIENT_EVENT_KIND_CMD_INTERP, 2, None)
+                                        CmdInterpEvent::ControlReclaimed { via_use_time } => {
+                                            let slot = if via_use_time {
+                                                &RECLAIMS_USE_TIME_DIAG
+                                            } else {
+                                                &RECLAIMS_EDGE_DIAG
+                                            };
+                                            slot.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                            (
+                                                CLIENT_EVENT_KIND_CMD_INTERP,
+                                                2,
+                                                Some(u32::from(via_use_time)),
+                                            )
                                         }
                                         CmdInterpEvent::DriveApplied {
                                             forward,

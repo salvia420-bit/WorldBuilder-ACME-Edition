@@ -496,7 +496,12 @@ pub(crate) enum InterpEffect {
     /// player (the FU-A stomp+revival block, :716942). JS consumer:
     /// ADJ-15 Q3 instrumentation (does a turn-tap visually evict the
     /// gesture? — the 1070 A/B reads these).
-    ControlReclaimed,
+    ControlReclaimed {
+        /// Post-flip diag: true when the reclaim came from the per-tick
+        /// `use_time` pump (the post-anim auto-reclaim), false for the
+        /// edge-driven HKC/mouse TakeControl paths.
+        via_use_time: bool,
+    },
 }
 
 /// Head-of-list projection the apply/stop tail consumes (P04's
@@ -828,7 +833,7 @@ impl CommandInterpreter {
                 || self.sidestep_list.get_head().is_some()
                 || self.auto_run)
         {
-            self.take_control_from_server(seams);
+            self.take_control_from_server(seams, true);
         }
     }
 
@@ -911,11 +916,15 @@ impl CommandInterpreter {
     /// technique fire (analysis §2.6/§3; supersedes FU5's
     /// consume_pending_take_control, ownership row 2). ADJ-15 Q8 closed:
     /// hold_run re-assert BEFORE the re-apply.
-    pub(crate) fn take_control_from_server(&mut self, seams: &mut dyn InterpreterSeams) {
+    pub(crate) fn take_control_from_server(
+        &mut self,
+        seams: &mut dyn InterpreterSeams,
+        via_use_time: bool,
+    ) {
         seams.combat_abort_automatic_attack(); // P09 pre-hook (:435803)
         if self.controlled_by_server && self.autonomy_level != 0 && !self.player_is_dead(seams) {
             self.controlled_by_server = false; // :716942
-            self.effects.push(InterpEffect::ControlReclaimed); // rows 12-13 stream
+            self.effects.push(InterpEffect::ControlReclaimed { via_use_time }); // rows 12-13 stream
             if self.player_present {
                 seams.set_latch(); // :716946
                 seams.phys_stop_completely(); // :716947
@@ -1016,7 +1025,7 @@ impl CommandInterpreter {
             self.auto_run = val != 0;
             self.transient_state = false;
             if val != 0 {
-                self.take_control_from_server(seams);
+                self.take_control_from_server(seams, false);
                 seams.display_autorun_status(true);
             } else {
                 seams.display_autorun_status(false);
@@ -1188,7 +1197,7 @@ impl CommandInterpreter {
 
         // :717298 — THE STRAFECAST LATCH (FU-A): any processed press (or any
         // release we didn't nuke) seizes control from the server.
-        self.take_control_from_server(seams);
+        self.take_control_from_server(seams, false);
 
         // :717299 — HoldRun / HoldSidestep modifier writes; a movement event
         // fires only if not already standing still (physics minterp — P03
@@ -1346,7 +1355,7 @@ impl CommandInterpreter {
 
             if do_remap {
                 // :717938 (LABEL_38) — re-seize control, then cancel.
-                self.take_control_from_server(seams);
+                self.take_control_from_server(seams, false);
 
                 let mut cancel_params = MovementParameters::default();
                 cancel_params.hold_key_to_apply = 0;
@@ -1552,7 +1561,7 @@ impl CommandInterpreter {
         let mut command = cmd_struct.command();
         let (mut start, mut speed, mut new_hold_run) = cmd_struct.decode_mouse_args();
 
-        self.take_control_from_server(seams); // ADJ-2: flat 26 (:717378)
+        self.take_control_from_server(seams, false); // ADJ-2: flat 26 (:717378)
         let mut mouse = 1i32;
 
         if self.bookkeep_command_and_modify_if_necessary(
@@ -2460,14 +2469,14 @@ mod tests {
             ..Default::default()
         };
         let mut it = in_world();
-        it.take_control_from_server(&mut m);
+        it.take_control_from_server(&mut m, false);
         assert!(it.controlled_by_server, "dead → reclaim aborted");
         assert!(!m.log.contains(&Op::SetLatch));
 
         let mut m2 = Mock::default();
         let mut it2 = in_world();
         it2.controlled_by_server = false;
-        it2.take_control_from_server(&mut m2);
+        it2.take_control_from_server(&mut m2, false);
         // combat pre-hook fires unconditionally (P09 shape); the tail does not.
         assert!(!m2.log.contains(&Op::SetLatch));
     }

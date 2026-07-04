@@ -7385,8 +7385,8 @@ async fn cmd_interp_event_stream_feeds_js_consumers() {
         .expect("tick");
     let events = movement.take_cmd_interp_events();
     assert!(
-        events.contains(&CmdInterpEvent::ControlReclaimed),
-        "FU-A reclaim instrumented for the Q3 observation, got {events:?}"
+        events.contains(&CmdInterpEvent::ControlReclaimed { via_use_time: true }),
+        "FU-A reclaim instrumented for the Q3 observation (use_time cause tagged), got {events:?}"
     );
 }
 

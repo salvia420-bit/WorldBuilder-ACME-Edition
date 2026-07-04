@@ -983,6 +983,11 @@ impl WorldState {
             // (laggy) pose would tug it back.
             let _ = self.update_player_position_authoritative_only(position);
         } else {
+            if forced {
+                // Bug-A round-2 diag: the retail-legit snap lane
+                // (teleport / force_position sequence advance).
+                crate::pose_snap_diag::record(2, auth_delta_m);
+            }
             events.extend(self.set_player_position(position));
         }
 
@@ -1003,6 +1008,18 @@ impl WorldState {
     ) -> bool {
         if position_type == PositionType::Location {
             if guid == self.player.guid {
+                // Bug-A round-2 diag: this arm applies a server position to
+                // the AUTONOMOUS local player unconditionally — retail's
+                // full-autonomy client ignores these unless forced
+                // (`CommandInterpreter::UsePositionFromServer`,
+                // acclient.c:717529). Counted so live captures can convict
+                // or clear it as the snapback carrier before any gating
+                // change lands.
+                let delta_m = self
+                    .player_position()
+                    .map(|current| current.distance_to(&position))
+                    .unwrap_or_default();
+                crate::pose_snap_diag::record(1, delta_m);
                 events.extend(self.set_player_position(position));
                 return true;
             }

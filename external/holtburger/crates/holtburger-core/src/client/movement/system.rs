@@ -1621,7 +1621,11 @@ pub enum CmdInterpEvent {
     ForwardSlotEvicted,
     /// FU-A control reclaim actually flipped control (ADJ-15 Q3
     /// instrumentation for the 1070 A/B).
-    ControlReclaimed,
+    ControlReclaimed {
+        /// True = the use_time pump's post-anim auto-reclaim; false = an
+        /// edge-driven TakeControl. Diag-only distinction (kind-61 p2).
+        via_use_time: bool,
+    },
     /// Rows 12-13 — the composed drive a dispatched edge/pump installed:
     /// JS drives the forward base clip + the sidestep overlay from it.
     /// Axes are -1/0/+1 (`forward`: backstep/idle/forward, `side`:
@@ -2053,7 +2057,9 @@ impl MovementSystem {
         for effect in interp.effects.drain(..) {
             self.cmd_interp_events.push(match effect {
                 InterpEffect::ForwardSlotEvicted => CmdInterpEvent::ForwardSlotEvicted,
-                InterpEffect::ControlReclaimed => CmdInterpEvent::ControlReclaimed,
+                InterpEffect::ControlReclaimed { via_use_time } => {
+                    CmdInterpEvent::ControlReclaimed { via_use_time }
+                }
             });
         }
     }

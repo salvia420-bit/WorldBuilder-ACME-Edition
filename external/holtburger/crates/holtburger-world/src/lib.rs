@@ -22,6 +22,7 @@ pub mod inspect;
 pub mod magic;
 pub mod player;
 pub mod sky;
+pub mod pose_snap_diag;
 pub mod spatial;
 pub mod spell;
 pub mod state;
