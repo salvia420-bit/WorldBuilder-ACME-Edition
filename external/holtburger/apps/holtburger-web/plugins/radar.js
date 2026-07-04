@@ -38,30 +38,30 @@ const MAX_BLIPS = 32;
 const ODF_PLAYER = 0x00000008;
 const ODF_VENDOR = 0x00000010;
 
-// Category → dot color. Players white, creatures/monsters red,
-// NPCs/Vendors green. Items/containers/statics are filtered out before
-// reaching this map. Matches retail gmRadarUI::GetBlipColor.
+// Category → dot color. Matches retail gmRadarUI::GetBlipColor derived
+// aliases: Default=White, Creature=Gold, Vendor/NPC=Yellow.
 const DOT_COLORS = Object.freeze({
-  player:   "#ffffff",
-  creature: "#ff4040",
-  npc:      "#40d060",
-  vendor:   "#40d060",
+  player:   "#FFFFFF",
+  creature: "#FFAB00",
+  npc:      "#FFFF80",
+  vendor:   "#FFFF80",
 });
 
 // Retail RadarColor enum (RadarColor.cs:3). Default=0 → fall through
 // to per-kind DOT_COLORS so unset entities keep current behaviour.
-// 0x10 = BrightGreen (intentional gap in 0x0A..0x0F).
+// 0x10 = BrightGreen (intentional gap in 0x0A..0x0F). Hex values are
+// the exact retail RGBA triplets (acclient.c:45107-45116).
 const RADAR_COLOR_HEX = Object.freeze({
-  0x01: "#4080ff", // Blue (LifeStone)
-  0x02: "#d4a836", // Gold (Creature)
-  0x03: "#ffffff", // White
-  0x04: "#b060d8", // Purple (Portal)
-  0x05: "#ff4040", // Red (PlayerKiller)
-  0x06: "#ff80b0", // Pink (Advocate, PKLite)
-  0x07: "#40d060", // Green
-  0x08: "#ffd040", // Yellow (NPC, Vendor)
-  0x09: "#40e0e0", // Cyan (Admin, Sentinel)
-  0x10: "#60ff60", // BrightGreen (Fellowship)
+  0x01: "#40A8FF", // Blue (LifeStone)
+  0x02: "#FFAB00", // Gold (Creature)
+  0x03: "#FFFFFF", // White (Default)
+  0x04: "#BF63FF", // Purple (Portal)
+  0x05: "#FF4063", // Red (PlayerKiller)
+  0x06: "#FFA8BF", // Pink (Advocate, PKLite)
+  0x07: "#008040", // Green
+  0x08: "#FFFF80", // Yellow (NPC, Vendor)
+  0x09: "#00FFFF", // Cyan (Admin, Sentinel)
+  0x10: "#00FF00", // BrightGreen (Fellowship)
 });
 
 function getRadarColorHex(rawRadarColor, kind) {
@@ -169,34 +169,21 @@ function ensureStyles() {
                                 background-image: url("./data/ui-sprites/0x0600193A.png"); }
     #${OVERLAY_ID} .hb-radar-w { left: 1px;  top: 50%; transform: translateY(-50%);
                                 background-image: url("./data/ui-sprites/0x0600193C.png"); }
+    /* Player center marker — single small downward-pointing triangle,
+       bright green. Same invtriangle polygon used for blip shape="invtriangle"
+       (see below). Does not rotate with the rotor. */
     #${OVERLAY_ID} .hb-radar-centre {
       position: absolute;
       top: ${DISK_SIZE / 2}px;
       left: ${DISK_SIZE / 2}px;
-      width: 14px;
-      height: 14px;
+      width: 8px;
+      height: 8px;
       transform: translate(-50%, -50%);
-      background: url("./data/ui-sprites/0x060074C9.png") center/contain no-repeat;
+      background: #00FF00;
+      clip-path: polygon(0% 0%, 100% 0%, 50% 100%);
       filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7));
       pointer-events: none;
       z-index: 3;
-    }
-    /* Field-of-view wedge — translucent green cone pointing where the
-       player is looking. Anchored centre, rotates with .hb-radar-rotor
-       (which itself rotates by -heading so the wedge stays world-aligned
-       to the player's facing). */
-    #${OVERLAY_ID} .hb-radar-fov {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      width: 0;
-      height: 0;
-      transform: translate(-50%, -100%);
-      border-left: 24px solid transparent;
-      border-right: 24px solid transparent;
-      border-bottom: ${DISK_SIZE / 2 - 10}px solid rgba(120, 220, 120, 0.18);
-      pointer-events: none;
-      z-index: 2;
     }
     /* Chrome overlays — lock + move handle in the upper corners,
        per retail rect data 0x10000619 + 0x100006A3 (both 27x27 at y=6). */
@@ -460,13 +447,14 @@ function updateRadarBlips(playerPos) {
     if (!pos) continue;
     const dx = pos.x - playerPos.x;
     const dy = pos.y - playerPos.y;
+    const dz = (pos.z ?? 0) - (playerPos.z ?? 0);
     const dist = Math.hypot(dx, dy);
     if (dist > MAX_RADAR_RANGE || dist < 0.01) continue;
     const kind = classifyEntityForRadar(g, inst);
     if (!kind) continue;
     if (_radarHostileOnly && kind !== "creature") continue;
     if (!passesRadarBehavior(inst)) continue;
-    candidates.push({ dx, dy, dist, kind, guid: g, inst });
+    candidates.push({ dx, dy, dz, dist, kind, guid: g, inst });
   }
 
   // Closest first so dot-pool slots go to the nearest entities.
@@ -479,7 +467,9 @@ function updateRadarBlips(playerPos) {
     const b = _blipPool[i];
     const localX = DISK_SIZE / 2 + c.dx * scale;
     const localY = DISK_SIZE / 2 - c.dy * scale;
-    const alpha = Math.max(0.25, 1 - c.dist / MAX_RADAR_RANGE);
+    // Retail DrawObjects/DrawBlip: intensity = |Δz| < 5 ? 1.0 : 0.65
+    // (height difference, not horizontal distance).
+    const alpha = Math.abs(c.dz) >= 5 ? 0.65 : 1.0;
     const shape = resolveRadarShape(c.kind, c.inst);
     b.style.display = "block";
     b.style.left = `${localX}px`;
@@ -687,7 +677,7 @@ export function mount(_ctx) {
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
 
-  // Rotor wraps the disk + cardinals + FOV wedge + entity blips.
+  // Rotor wraps the disk + cardinals + entity blips.
   // We rotate it by `-heading` so that N stays world-north when the
   // player turns; the cardinals counter-rotate to stay readable.
   // The brass-rim disk sprite (north-wedge baked in) lives inside the
@@ -695,20 +685,10 @@ export function mount(_ctx) {
   const rotor = document.createElement("div");
   rotor.className = "hb-radar-rotor";
 
-  // Disk first so cardinals, FOV wedge, and blips stack over it.
+  // Disk first so cardinals and blips stack over it.
   const disk = document.createElement("div");
   disk.className = "hb-radar-disk";
   rotor.appendChild(disk);
-  // Field-of-view wedge — points UP in rotor-local space, which after
-  // rotor's -heading rotation lands in world-space at the player's
-  // facing direction. So this is BOTH player facing + N indicator combined?
-  // No — wedge stays in rotor local frame. As rotor rotates with -heading,
-  // wedge sweeps with player facing in screen-space — exactly what retail
-  // does: the cone shows where you're looking, regardless of how cardinals
-  // are oriented.
-  const fov = document.createElement("div");
-  fov.className = "hb-radar-fov";
-  rotor.appendChild(fov);
   const cardinalEls = {};
   for (const dir of ["n", "e", "s", "w"]) {
     const card = document.createElement("div");
@@ -796,9 +776,9 @@ export function mount(_ctx) {
   });
 
   // ──────────────────────────────────────────────────────────────────
-  // rAF tick — rotate the rotor by -heading so the FOV wedge follows
-  // player facing, counter-rotate cardinals so N/E/S/W stay upright,
-  // and populate the coord strip.
+  // rAF tick — rotate the rotor by -heading so the disk tracks world-north,
+  // counter-rotate cardinals so N/E/S/W stay upright, and populate the
+  // coord strip.
   let rafId = 0;
   // HUD rec #42 — show packed landblock notation matching retail's
   // gmCompassUI display + map-panel.js:358-361. LB_PITCH = 192 units
@@ -831,7 +811,7 @@ export function mount(_ctx) {
           el.dataset.baseTransform = el.style.transform || getComputedStyle(el).transform;
         }
         const base = el.dataset.baseTransform === "none" ? "" : el.dataset.baseTransform;
-        el.style.transform = `${base} rotate(${heading}deg)`;
+        el.style.transform = `${base} rotate(${(heading * 180) / Math.PI}deg)`;
       }
     }
     try {

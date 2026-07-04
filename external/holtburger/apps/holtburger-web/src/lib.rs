@@ -22051,6 +22051,26 @@ pub struct InventoryItem {
     /// absent — JS treats `0` as capacity-unknown and renders the
     /// occupied items only.
     items_capacity: u32,
+    /// HUD bug-pack P1 (2026-07-04): does this item occupy a
+    /// container-slot (bag-tab strip) rather than an item-slot (main
+    /// grid)? Retail's rule (`WorldObject_Properties.cs:2056
+    /// UseBackpackSlot`) is `WeenieType == Container || RequiresPackSlot`.
+    /// `WeenieType` never crosses the live `PublicWeenieDescription` wire
+    /// (verified: no `weenie_type` field on
+    /// `holtburger_protocol::messages::object::messages::description::
+    /// PublicWeenieDescription`), so we use the world crate's existing
+    /// `WorldObjectExt::uses_player_container_slot()` (`crates/
+    /// holtburger-common/src/properties/world_object.rs:274-277`), which
+    /// is `requires_backpack_slot() || can_hold_items()` —
+    /// `can_hold_items()` (`items_capacity() > 0`) is the reachable proxy
+    /// for "is a Container" (only Container-typed weenies carry a
+    /// non-zero ItemsCapacity), so this matches the retail semantic
+    /// without needing a wire field that doesn't exist. Replaces the JS
+    /// `(itemType & 0x200)` classification at `plugins/inventory.js`
+    /// (rebuildBagSlots / rebuildItemsGrid / renderBagTabs / dblclick
+    /// open-container), which mis-handles pack-slot items that aren't
+    /// ItemType.Container (e.g. some foci).
+    requires_backpack_slot: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -22211,6 +22231,15 @@ impl InventoryItem {
     #[wasm_bindgen(getter, js_name = itemsCapacity)]
     pub fn items_capacity(&self) -> u32 {
         self.items_capacity
+    }
+
+    /// HUD bug-pack P1 (2026-07-04): `true` if this item consumes a
+    /// container-slot (bag-tab strip) rather than an item-slot (main
+    /// grid) — see the field doc comment above for the retail-parity
+    /// derivation (`RequiresBackpackSlot || can_hold_items()`).
+    #[wasm_bindgen(getter, js_name = requiresBackpackSlot)]
+    pub fn requires_backpack_slot(&self) -> bool {
+        self.requires_backpack_slot
     }
 }
 
@@ -33807,6 +33836,12 @@ fn publish_player_inventory_snapshot(
             .get_int_prop(PropertyInt::UiEffects)
             .map(|bits| bits as u32)
             .unwrap_or(0);
+        // HUD bug-pack P1 (2026-07-04): retail-parity container-slot
+        // classification (`WorldObjectExt::uses_player_container_slot`
+        // — see the `InventoryItem::requires_backpack_slot` field doc
+        // comment for the derivation and why it stands in for
+        // `WeenieType == Container`).
+        let requires_backpack_slot = entity.uses_player_container_slot();
         items.push(InventoryItem {
             guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
@@ -33829,6 +33864,7 @@ fn publish_player_inventory_snapshot(
             bonded,
             containers_capacity,
             items_capacity,
+            requires_backpack_slot,
         });
     }
     // Sort: equipped first (by mask), then by name. Stable so JS

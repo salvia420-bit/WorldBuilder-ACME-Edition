@@ -1432,7 +1432,10 @@ function renderAttackControls(bodyEl, state) {
   const powerRow = document.createElement("div");
   powerRow.className = "hb-cb-row hb-cb-power-row";
   const powerLabel = document.createElement("label");
-  setAcText(powerLabel, currentStanceIsRanged() ? "Accuracy" : "Power");
+  // bug-effects-text Part B — "Accuracy" is longer than "Power" and can
+  // overflow the row label slot; fit auto-shrinks to the label's own
+  // laid-out width instead of hard-clipping.
+  setAcText(powerLabel, currentStanceIsRanged() ? "Accuracy" : "Power", { fit: true });
   powerRow.appendChild(powerLabel);
   // Slider lives inside a position-relative wrapper so the Recklessness
   // active-band overlay can be positioned absolutely between 10–90% of
@@ -1647,7 +1650,9 @@ function renderAttackControls(bodyEl, state) {
     });
     fastMissileLabel.appendChild(fastMissileBox);
     const fastMissileText = document.createElement("span");
-    setAcText(fastMissileText, "Fast Missiles");
+    // bug-effects-text Part B — "Fast Missiles" is the widest toggle
+    // label in the panel; fit auto-shrinks to the span's laid-out width.
+    setAcText(fastMissileText, "Fast Missiles", { fit: true });
     fastMissileLabel.appendChild(fastMissileText);
     bodyEl.appendChild(fastMissileLabel);
   }

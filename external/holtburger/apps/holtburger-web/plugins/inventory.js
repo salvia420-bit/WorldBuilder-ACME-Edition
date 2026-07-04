@@ -139,6 +139,30 @@ const GRID_COLS = 6;
 // as `InventoryItem.itemType` (src/lib.rs:14263-14266).
 const ITEM_TYPE_CONTAINER = 0x00000200;
 
+// HUD bug-pack P1 (2026-07-04) — retail's real "does this item eat a
+// container-slot (bag-tab strip) vs an item-slot (main grid)" rule is
+// `WeenieType == Container || RequiresPackSlot`
+// (external/ACE/Source/ACE.Server/WorldObjects/WorldObject_Properties.cs:2056
+// UseBackpackSlot), NOT the ItemType.Container bit alone — a pack-slot
+// item that isn't ItemType.Container (e.g. some foci) was previously
+// double-counted against the 102-item main-pack pool and mis-placed
+// into the item grid instead of the bag-tab strip.
+//
+// src/lib.rs now surfaces `InventoryItem.requiresBackpackSlot`, derived
+// Rust-side from `WorldObjectExt::uses_player_container_slot()`
+// (`requires_backpack_slot() || can_hold_items()` — see the field's doc
+// comment in src/lib.rs for why `can_hold_items()` stands in for
+// `WeenieType == Container`: WeenieType never crosses the live
+// PublicWeenieDescription wire, so there's no live `weenieType` to
+// compare against an ordinal here). `usesBackpackSlot()` trusts that
+// field when present and only falls back to the raw ItemType bit test
+// for a stale wasm build (pre-rebuild `requiresBackpackSlot === undefined`).
+function usesBackpackSlot(item) {
+  if (!item) return false;
+  if (typeof item.requiresBackpackSlot === "boolean") return item.requiresBackpackSlot;
+  return ((item.itemType >>> 0) & ITEM_TYPE_CONTAINER) !== 0;
+}
+
 // Bag tabs: 1 main + 7 side packs (per the Inventory Panel wiki article:
 // "The top bag is your main inventory, and below it are slots for 7
 // additional containers."). The Shadow of the Seventh Mule augmentation
@@ -1439,8 +1463,27 @@ function doMount(parentEl, _ctx) {
 
   const bagCol = document.createElement("div");
   bagCol.className = "hb-inv-bagcol";
+  // HUD bug-pack P3 (2026-07-04): "packs used/ContainersCapacity" strip
+  // above the tab column — surfaces the server-driven container-slot
+  // limit (ACE PropertyInt::ContainersCapacity, human default 20 on this
+  // server; classic retail = 7) instead of silently capping at 8.
+  // Updated by renderBagTabs().
+  const bagColHeader = document.createElement("div");
+  bagColHeader.className = "hb-inv-bagcol-header";
+  bagColHeader.style.fontSize = "9px";
+  bagColHeader.style.opacity = "0.7";
+  bagColHeader.style.textAlign = "center";
+  bagColHeader.style.padding = "1px 0 2px";
+  bagColHeader.title = "Packs used / ContainersCapacity";
+  bagCol.appendChild(bagColHeader);
   const bagTabEls = [];
-  for (let i = 0; i < BAG_COUNT; i++) {
+  // HUD bug-pack P3: bagTabEls/bagSlots grow past the BAG_COUNT (8)
+  // default when the server's PropertyInt::ContainersCapacity exceeds 7
+  // (this box's ACE serves 20) — previously rebuildBagSlots() hard-broke
+  // at BAG_COUNT, silently dropping any side pack past index 7. buildBagTab
+  // factors the per-tab DOM+wiring out of the old fixed-length `for` loop
+  // so ensureBagTabCount() can append more tabs on demand.
+  function buildBagTab(i) {
     const tab = document.createElement("div");
     // Initial state: tab 0 (main pack) is selected, tabs 1..7 are empty.
     // renderBagTabs() rebuilds these classes whenever the snapshot
@@ -1506,7 +1549,7 @@ function doMount(parentEl, _ctx) {
       const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
       if (!handle || typeof handle.moveItem !== "function") return;
       const srcItem = getItemByGuid(sourceGuid);
-      const srcIsContainer = !!srcItem && ((srcItem.itemType >>> 0) & ITEM_TYPE_CONTAINER) !== 0;
+      const srcIsContainer = usesBackpackSlot(srcItem);
       const me = (typeof window.getLocalPlayerGuid === "function")
         ? (window.getLocalPlayerGuid() >>> 0) : 0;
       const slotData = bagSlots[i];
@@ -1522,7 +1565,15 @@ function doMount(parentEl, _ctx) {
       if (!srcIsContainer && slotData) {
         const dest = (i === 0) ? me : (slotData.containerId >>> 0);
         if (!dest) return;
-        try { handle.moveItem(sourceGuid, dest, 0); }
+        // HUD bug-pack P4 (2026-07-04): placement = the destination pack's
+        // current item count (append-at-end), not a hardcoded 0 — mirrors
+        // the empty-cell drop path's `placement` (see makeEmptySlot).
+        const destContainerId = (i === 0) ? 0 : (slotData.containerId >>> 0);
+        let placement = 0;
+        for (const it of inventorySnapshot) {
+          if ((it.containerId >>> 0) === destContainerId) placement++;
+        }
+        try { handle.moveItem(sourceGuid, dest, placement); }
         catch (e) { console.warn("[inv-bag-tab] move-into failed:", e); }
         return;
       }
@@ -1534,6 +1585,23 @@ function doMount(parentEl, _ctx) {
     bagCol.appendChild(tab);
     bagTabEls.push({ tabEl: tab, iconEl: tabIcon });
   }
+
+  // HUD bug-pack P3: grow the tab column (and the parallel `bagSlots`
+  // array) to `n` entries if it isn't there already. Never shrinks (a
+  // shrink would have to evict a populated slot — rebuildBagSlots() only
+  // ever asks for max(BAG_COUNT, containersCap + 1), which can't regress
+  // below what's already built in the same session).
+  function ensureBagTabCount(n) {
+    while (bagTabEls.length < n) {
+      buildBagTab(bagTabEls.length);
+    }
+    if (bagSlots.length < bagTabEls.length) {
+      const grown = new Array(bagTabEls.length).fill(null);
+      for (let i = 0; i < bagSlots.length; i++) grown[i] = bagSlots[i];
+      bagSlots = grown;
+    }
+  }
+  ensureBagTabCount(BAG_COUNT);
   overlay.appendChild(bagCol);
 
   // Burden meter (icon) lives in plugins/status-indicators.js — the
@@ -1830,11 +1898,12 @@ function doMount(parentEl, _ctx) {
       })();
       // Dispatcher: dblclick (ev.detail >= 2) OR Ctrl-click → USE / EQUIP / OPEN.
       if ((ev.detail >= 2 || ev.ctrlKey) && guid) {
-        const itemType = (item?.itemType >>> 0) || 0;
         const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
         // Container items open into a side panel rather than equipping.
-        // Per ACE.Entity/Enum/ItemType.cs: Container = 0x00000200.
-        if ((itemType & 0x00000200) !== 0) {
+        // usesBackpackSlot() (retail UseBackpackSlot parity — see the
+        // helper's doc comment) replaces the raw ItemType bit test so a
+        // non-Container pack-slot item (e.g. a focus) also opens correctly.
+        if (usesBackpackSlot(item)) {
           try { window.__openContainerFor?.(guid, item?.name || name); }
           catch (_) { /* container plugin may be down */ }
           return;
@@ -1968,13 +2037,18 @@ function doMount(parentEl, _ctx) {
   // dragged item into the currently selected pack (main pack =
   // selectedPackContainerId 0 → destination is the player guid; a side pack
   // → its containerId). Mirrors the populated slot's dragenter/dragover/drop
-  // wiring but routes through `handle.moveItem(sourceGuid, dest, 0)` (the
-  // same move the bag-tab drop path at L1464 uses for "drop into this pack")
-  // instead of the item-on-item tradeskill event (no target item here).
-  function makeEmptySlot() {
+  // wiring but routes through `handle.moveItem(sourceGuid, dest, placement)`
+  // (the same move the bag-tab drop path at L1464 uses for "drop into this
+  // pack") instead of the item-on-item tradeskill event (no target item
+  // here). HUD bug-pack P4 (2026-07-04): `placement` is this cell's grid
+  // index (its ordinal among `padItemsGridToCapacity`'s `occupied..cap`
+  // loop — see the call site), NOT a hardcoded 0, so the drop preserves a
+  // PlacementPosition sort index instead of always landing at slot 0.
+  function makeEmptySlot(placement) {
     const slot = document.createElement("div");
     slot.className = "hb-inv-slot empty";
     slot.dataset.empty = "1";
+    slot.dataset.placement = String((placement >>> 0) || 0);
     const icon = document.createElement("div");
     icon.className = "hb-inv-icon";
     icon.style.background = "transparent";
@@ -2010,7 +2084,8 @@ function doMount(parentEl, _ctx) {
         if (!me) return;
         dest = me;
       }
-      try { handle.moveItem(sourceGuid, dest, 0); }
+      const placement = (parseInt(slot.dataset.placement, 10) >>> 0) || 0;
+      try { handle.moveItem(sourceGuid, dest, placement); }
       catch (e) { console.warn("[inv-empty] moveItem failed:", e); }
     });
     return slot;
@@ -2165,26 +2240,55 @@ function doMount(parentEl, _ctx) {
     return true;
   }
 
+  // HUD bug-pack P3 (2026-07-04): read the server-driven
+  // PropertyInt::ContainersCapacity off the handle (surfaced as the
+  // `playerContainersCapacity` getter/fn — same shape as
+  // `playerItemsCapacity`) and size the tab column to
+  // max(BAG_COUNT, containersCap + 1) — the +1 accounts for slot 0 being
+  // the main pack, which doesn't consume a container-slot itself. Falls
+  // back to the BAG_COUNT (8) default when the getter/property is
+  // unavailable (pre-spawn / stale wasm).
+  function desiredBagTabCount() {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    let containersCap = 0;
+    try {
+      if (handle && typeof handle.playerContainersCapacity === "number") {
+        containersCap = handle.playerContainersCapacity >>> 0;
+      } else if (handle && typeof handle.playerContainersCapacity === "function") {
+        containersCap = (handle.playerContainersCapacity() >>> 0) || 0;
+      }
+    } catch (_) { containersCap = 0; }
+    return Math.max(BAG_COUNT, containersCap + 1);
+  }
+
   // Wave 13.2 — recompute bagSlots from the wasm snapshot. Index 0 is
-  // always the main pack; indices 1..7 are populated dynamically with
-  // Container items (ItemType bit 0x200) in the player's main inventory
-  // (containerId === 0). Equipped items are excluded — side packs in
-  // retail show up under the main pack regardless of equip state.
-  // Selection survives a rebuild if the previously-selected container
-  // is still present; otherwise we fall back to the main pack.
+  // always the main pack; the remaining indices are populated dynamically
+  // with pack-slot items (usesBackpackSlot()) in the player's main
+  // inventory (containerId === 0). Equipped items are excluded — side
+  // packs in retail show up under the main pack regardless of equip
+  // state. Selection survives a rebuild if the previously-selected
+  // container is still present; otherwise we fall back to the main pack.
+  //
+  // HUD bug-pack P3: previously hard-capped at the hardcoded BAG_COUNT
+  // (8), silently dropping any side pack past index 7 even though this
+  // server's ContainersCapacity is 20. Now grows the tab column via
+  // ensureBagTabCount() before laying out `next`.
   function rebuildBagSlots() {
-    const next = new Array(BAG_COUNT).fill(null);
+    ensureBagTabCount(desiredBagTabCount());
+    const tabCount = bagTabEls.length;
+    const next = new Array(tabCount).fill(null);
     next[0] = { containerId: 0, name: "Main Pack", iconId: 0 };
     let nextIdx = 1;
     for (const it of inventorySnapshot) {
-      // Containers are tagged by ItemType bit 0x200 (Container subclass).
+      // HUD bug-pack P1: usesBackpackSlot() (retail UseBackpackSlot
+      // parity) replaces the raw ItemType 0x200 (Container) bit test.
       // We only list packs that the PLAYER directly owns (containerId 0).
       // Nested packs (a pack inside a pack — rare but legal in retail)
       // are unsupported by this UI; they'll surface as items under their
       // parent pack just like any other inventoried item.
-      if ((it.itemType >>> 0) & ITEM_TYPE_CONTAINER) {
+      if (usesBackpackSlot(it)) {
         if ((it.containerId >>> 0) !== 0) continue;
-        if (nextIdx >= BAG_COUNT) break;
+        if (nextIdx >= tabCount) break;
         next[nextIdx++] = {
           containerId: it.guid >>> 0,
           name: it.name || `Side pack ${nextIdx - 1}`,
@@ -2203,7 +2307,23 @@ function doMount(parentEl, _ctx) {
   }
 
   function renderBagTabs() {
-    for (let i = 0; i < BAG_COUNT; i++) {
+    // HUD bug-pack P3: "packs used/ContainersCapacity" header — used =
+    // count of populated non-main slots in bagSlots (nextIdx - 1
+    // equivalent); cap = the real ContainersCapacity when known, else the
+    // tab column's current length - 1 (BAG_COUNT-derived fallback).
+    const packsUsed = bagSlots.reduce(
+      (n, s, idx) => n + ((idx > 0 && s) ? 1 : 0), 0);
+    let packsCap = bagTabEls.length - 1;
+    try {
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      if (handle && typeof handle.playerContainersCapacity === "number") {
+        packsCap = handle.playerContainersCapacity >>> 0 || packsCap;
+      } else if (handle && typeof handle.playerContainersCapacity === "function") {
+        packsCap = (handle.playerContainersCapacity() >>> 0) || packsCap;
+      }
+    } catch (_) { /* keep fallback */ }
+    bagColHeader.textContent = `packs ${packsUsed}/${packsCap}`;
+    for (let i = 0; i < bagTabEls.length; i++) {
       const { tabEl, iconEl } = bagTabEls[i];
       const slot = bagSlots[i];
       if (!slot) {
@@ -2224,17 +2344,21 @@ function doMount(parentEl, _ctx) {
       // instead of the hardcoded 24 — the same surfacing gap that left the
       // items grid capped at 24. A side pack reads its own per-item
       // `itemsCapacity` (item-slot count), falling back to
-      // `containersCapacity` for older snapshots. The retail default 24 is
-      // kept only as a last-resort when the real value is still 0/unknown.
+      // `containersCapacity` for older snapshots. HUD bug-pack P2
+      // (2026-07-04): the pre-real-value fallback now matches retail per
+      // tab kind — 102 for the main pack (ACE human weenie ItemsCapacity;
+      // see memory/bug-pack findings), 24 for a side pack (standard ACE
+      // side-pack ItemsCapacity) — instead of a flat 24 that under-showed
+      // the main pack's cap before the player snapshot landed.
       const containerId = slot.containerId >>> 0;
-      let cap = 24;
+      let cap = containerId === 0 ? 102 : 24;
       let used = 0;
       if (containerId === 0) {
         // Main pack: count items at containerId 0 that aren't themselves
         // containers (those occupy the side-tab strip, not main-pack capacity).
         for (const it of inventorySnapshot) {
           if ((it.containerId >>> 0) !== 0) continue;
-          if (((it.itemType >>> 0) & ITEM_TYPE_CONTAINER) !== 0) continue;
+          if (usesBackpackSlot(it)) continue;
           used++;
         }
         const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
@@ -2300,7 +2424,7 @@ function doMount(parentEl, _ctx) {
       if (itemContainerId !== selectedPackContainerId) continue;
       if (selectedPackContainerId === 0
           && item
-          && ((item.itemType >>> 0) & ITEM_TYPE_CONTAINER) !== 0) {
+          && usesBackpackSlot(item)) {
         continue;
       }
       itemsGrid.appendChild(makeSlot(li));
@@ -2337,8 +2461,9 @@ function doMount(parentEl, _ctx) {
           cap = (handle.playerItemsCapacity() >>> 0) || 0;
         }
       } catch (_) { cap = 0; }
-      // HUD rec #40 — canonical retail default for the main pack is 120
-      // (ACE.Server/WorldObjects/Player_Inventory.cs). We do NOT auto-fill
+      // HUD rec #40 — canonical retail default for the main pack is 102,
+      // not 120 (fixed HUD bug-pack P2, 2026-07-04 — verified against the
+      // live ACE world DB: human weenie ItemsCapacity = 102). We do NOT auto-fill
       // here: a 0 on the main pack means CreateObject lacked the
       // ITEMS_CAPACITY weenie-flag (a deeper bug), so surface it honestly
       // via the diag stream so the boot harness can flag the anomaly.
@@ -2406,7 +2531,7 @@ function doMount(parentEl, _ctx) {
     }
     const occupied = itemsGrid.querySelectorAll(".hb-inv-slot:not(.empty)").length;
     for (let i = occupied; i < cap; i++) {
-      itemsGrid.appendChild(makeEmptySlot());
+      itemsGrid.appendChild(makeEmptySlot(i));
     }
   }
 

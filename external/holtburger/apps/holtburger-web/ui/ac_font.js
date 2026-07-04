@@ -294,10 +294,15 @@ function _acTempCanvas(which, w, h) {
   return c;
 }
 
+// HUD text-fit ladder (bug-effects-text, Part B). Below this horizontal
+// condense factor the text is judged unreadable and we fall through to
+// ellipsis truncation instead of squeezing further.
+const FIT_CONDENSE_FLOOR = 0.8;
+
 export function renderAcText(text, opts = {}) {
   registerAcText();
-  const fontId = opts.fontId ?? UI_FONT_ID;
-  const runtime = getAcFont(fontId);
+  let fontId = opts.fontId ?? UI_FONT_ID;
+  let runtime = getAcFont(fontId);
   if (!runtime) return null;
   if (typeof text !== "string" || text.length === 0) {
     // Return a 1×1 transparent canvas — callers can size their layout
@@ -310,7 +315,6 @@ export function renderAcText(text, opts = {}) {
 
   const color = opts.color ?? "#FFFFFF";
   const scale = Math.max(1, Math.floor(opts.scale ?? 1));
-  const drawShadow = opts.shadow !== false && runtime.atlasBgCanvas !== null;
   // Rec #185 — drop-shadow tint + offset are now caller-configurable.
   // Defaults match the previous hardcoded rgba(0,0,0,0.85) at +1,+1px,
   // so existing callers see no visual change.
@@ -318,9 +322,74 @@ export function renderAcText(text, opts = {}) {
   const shadowOffsetX = Number.isFinite(opts.shadowOffsetX) ? Math.floor(opts.shadowOffsetX) : 1;
   const shadowOffsetY = Number.isFinite(opts.shadowOffsetY) ? Math.floor(opts.shadowOffsetY) : 1;
 
-  const measured = _measure(runtime, text);
-  const textW = measured.width * scale;
-  const textH = measured.height * scale;
+  // Text-fit ladder (opt-in via opts.maxWidth — default behavior is
+  // byte-identical to before for callers that don't pass it).
+  //   (a) normal raster at the requested font
+  //   (b) if still too wide and the font is UI/HEADING, drop to
+  //       COMPACT_FONT_ID (only if it actually helps)
+  //   (c) horizontally condense the canvas draw (CSS scaleX, floor ~0.8)
+  //   (d) ellipsize glyphs to fit
+  const maxWidth = Number.isFinite(opts.maxWidth) && opts.maxWidth > 0 ? opts.maxWidth : undefined;
+  const fitMode = opts.fitMode ?? "condense";
+  let renderText = text;
+  let condenseScaleX = 1;
+
+  let measured = _measure(runtime, text);
+  let textW = measured.width * scale;
+  let textH = measured.height * scale;
+
+  if (maxWidth !== undefined && fitMode !== "none" && textW > maxWidth) {
+    // (b) compact-font fallback — only for the larger UI/heading fonts,
+    // and only if it's actually loaded + actually narrower.
+    if (fontId === UI_FONT_ID || fontId === HEADING_FONT_ID) {
+      const compact = getAcFont(COMPACT_FONT_ID);
+      if (compact) {
+        const cm = _measure(compact, renderText);
+        const cw = cm.width * scale;
+        if (cw < textW) {
+          fontId = COMPACT_FONT_ID;
+          runtime = compact;
+          measured = cm;
+          textW = cw;
+          textH = cm.height * scale;
+        }
+      }
+    }
+
+    // (c) horizontal condense, floored so glyphs stay legible.
+    if (textW > maxWidth) {
+      const idealFactor = maxWidth / textW;
+      if (idealFactor >= FIT_CONDENSE_FLOOR) {
+        condenseScaleX = idealFactor;
+      } else {
+        // Condense alone can't get there even at the floor — clamp to
+        // the floor and (d) ellipsize the rest of the way: greedily
+        // drop trailing chars until prefix+ellipsis fits maxWidth once
+        // the floor condense is applied.
+        condenseScaleX = FIT_CONDENSE_FLOOR;
+        const hasEllipsisGlyph = runtime.glyphMap?.has(0x2026);
+        const ellipsis = hasEllipsisGlyph ? "…" : "...";
+        const chars = Array.from(renderText);
+        let fitted = renderText;
+        for (let n = chars.length - 1; n >= 0; n--) {
+          const candidate = chars.slice(0, n).join("") + ellipsis;
+          const cm = _measure(runtime, candidate);
+          const cw = (cm.width * scale) * FIT_CONDENSE_FLOOR;
+          if (cw <= maxWidth || n === 0) {
+            fitted = candidate;
+            measured = cm;
+            textW = cm.width * scale;
+            textH = cm.height * scale;
+            break;
+          }
+        }
+        renderText = fitted;
+      }
+    }
+  }
+
+  const drawShadow = opts.shadow !== false && runtime.atlasBgCanvas !== null;
+  text = renderText;
 
   // Alignment box. boxWidth/boxHeight grow the canvas beyond the text;
   // align/vAlign control where the glyphs sit inside. `flags` is the
@@ -394,6 +463,14 @@ export function renderAcText(text, opts = {}) {
   tctx.fillRect(0, 0, w, h);
 
   ctx.drawImage(tmp, 0, 0);
+
+  // (c) horizontal condense — CSS transform only, no re-raster. Left-
+  // anchored so the glyph run still starts at the box's left edge.
+  if (condenseScaleX !== 1 && canvas.style) {
+    canvas.style.transform = `scaleX(${condenseScaleX})`;
+    canvas.style.transformOrigin = "left center";
+  }
+
   return canvas;
 }
 
@@ -446,7 +523,7 @@ export function setAcText(el, text, opts) {
   // The key folds opts so a color/scale/font change still re-renders.
   // `?tipPerf=off` disables this guard.
   const key = opts
-    ? `${str} ${opts.color ?? ""} ${opts.scale ?? ""} ${opts.fontId ?? ""}`
+    ? `${str} ${opts.color ?? ""} ${opts.scale ?? ""} ${opts.fontId ?? ""} ${opts.maxWidth ?? ""} ${opts.fitMode ?? ""} ${opts.fit ?? ""}`
     : str;
   if (AC_TEXT_VIS_GUARD && inner._acSetKey === key && inner._canvas) return;
   inner._acSetKey = key;
@@ -454,6 +531,13 @@ export function setAcText(el, text, opts) {
     if (opts.color !== undefined) inner.setAttribute("color", String(opts.color));
     if (opts.scale !== undefined) inner.setAttribute("scale", String(opts.scale));
     if (opts.fontId !== undefined) inner.setAttribute("font-id", String(opts.fontId));
+    // bug-effects-text Part B — text-fit opt-ins. `maxWidth`/`fitMode`
+    // are explicit pixel constants; `fit` auto-measures the host's own
+    // clientWidth each render (see the <ac-text> `fit` attr below).
+    if (opts.maxWidth !== undefined) inner.setAttribute("max-width", String(opts.maxWidth));
+    if (opts.fitMode !== undefined) inner.setAttribute("fit-mode", String(opts.fitMode));
+    if (opts.fit) inner.setAttribute("fit", "");
+    else if (opts.fit === false) inner.removeAttribute("fit");
   }
   inner.textContent = str;
 }
@@ -732,6 +816,8 @@ function _registerAcTextImpl() {
         "color", "scale", "font-id", "shadow", "align", "v-align",
         "box-width", "box-height",
         "shadow-color", "shadow-offset-x", "shadow-offset-y",
+        // bug-effects-text Part B — text-fit opt-ins.
+        "max-width", "fit-mode", "fit",
       ];
     }
     constructor() {
@@ -818,6 +904,33 @@ function _registerAcTextImpl() {
         const n = Number(this.getAttribute("box-height"));
         if (Number.isFinite(n) && n > 0) opts.boxHeight = n;
       }
+      // bug-effects-text Part B — text-fit. Explicit `max-width` wins;
+      // otherwise, if `fit` is set, auto-measure the host's own laid-out
+      // content width (clientWidth minus padding) so callers don't need
+      // a per-button pixel constant. `clientWidth === 0` means the host
+      // isn't laid out yet (detached / display:none this frame) — skip
+      // fitting for this render rather than clamp to a bogus 0 width;
+      // the font-load listener / next attribute change re-invokes
+      // _render() and picks up real layout then.
+      if (this.hasAttribute("max-width")) {
+        const n = Number(this.getAttribute("max-width"));
+        if (Number.isFinite(n) && n > 0) opts.maxWidth = n;
+      } else if (this.hasAttribute("fit")) {
+        const host = this.parentElement;
+        if (host) {
+          const cw = host.clientWidth;
+          if (cw > 0) {
+            let pad = 0;
+            try {
+              const cs = getComputedStyle(host);
+              pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+            } catch (_) {}
+            const avail = cw - pad;
+            if (avail > 0) opts.maxWidth = avail;
+          }
+        }
+      }
+      if (this.hasAttribute("fit-mode")) opts.fitMode = this.getAttribute("fit-mode");
       // Rec #185 — drop shadow tint + offset attrs. Any subset is fine;
       // unset attrs fall through to renderAcText's defaults.
       if (this.hasAttribute("shadow-color")) {

@@ -951,6 +951,12 @@ export function mount(_ctx) {
     submitChat();
   }
   input.addEventListener("keydown", (ev) => {
+    // Stop the global keydown-driven movement from firing while typing.
+    // (Must run first, in this same bubble-phase listener — a separate
+    // capture-phase stopPropagation() on this node would starve this
+    // very handler, since the DOM dispatch algorithm skips a target's
+    // bubble invocation once its capture invocation stops propagation.)
+    ev.stopPropagation();
     if (ev.key === "Enter") {
       ev.preventDefault();
       submitChatWithHistory();
@@ -958,14 +964,19 @@ export function mount(_ctx) {
     }
     if (ev.key === "ArrowUp")   { ev.preventDefault(); recallHistory("up");   return; }
     if (ev.key === "ArrowDown") { ev.preventDefault(); recallHistory("down"); return; }
+    if (ev.key === "Escape") {
+      // Retail ChatInterface::DeactivateChatEntry — close the entry
+      // without sending.
+      ev.preventDefault();
+      input.blur();
+      return;
+    }
   });
   sendBtn.addEventListener("click", (ev) => {
     ev.preventDefault();
     submitChatWithHistory();
     input.focus();
   });
-  // Stop the global keydown-driven movement from firing while typing.
-  input.addEventListener("keydown", (ev) => ev.stopPropagation(), true);
 
   // P2-29 (cross-find chat-new-messages-badge-missing): retail's
   // m_chatNewNonVisibleTextIndicator (element 0x1000048C, 16×16 at

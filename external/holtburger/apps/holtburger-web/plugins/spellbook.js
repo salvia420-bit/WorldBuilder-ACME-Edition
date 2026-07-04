@@ -75,6 +75,7 @@
 import { setAcText } from "../ui/ac_font.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { getIconImmediate } from "../ui/ac_icon_cache.js";
 
 // gmSpellbookUI — retail layout that drives the spellbook panel.
 // Element-id map confirmed by spellbook_layout_dump 2026-05-24.
@@ -150,7 +151,22 @@ function loadCatalog() {
 // We coerce the wasm record into the legacy shape so existing UI code
 // keeps working without changes. The richer wasm-only fields (flags,
 // duration, recovery, etc.) flow through unchanged for new consumers.
+//
+// Perf fix (2026-07-04, spellbook hang on @addallspells accounts) —
+// spell records are immutable for the life of a session (WorldBootstrap
+// / spell_table is fixed post-EnteredWorld), so every id's coerced
+// record is memoized here. Without this, rerenderList() re-crossed the
+// wasm serde-wasm-bindgen boundary (Map construction) once PER SPELL on
+// every single render — filter-toggle, playerStatsUpdated tick, or
+// re-open — which is what turned a ~2,000-spell dev/Developer-account
+// spellbook into a multi-minute freeze. Only successful lookups (raw
+// truthy) and confirmed misses (handle present, raw falsy) are cached;
+// the "no session handle yet" case is intentionally left uncached so a
+// pre-login/pre-EnteredWorld probe doesn't permanently poison the
+// cache before the wasm session is actually ready.
+const spellRecordCache = new Map(); // spellId (number) -> record | null
 function spellRecordFromWasm(spellId) {
+  if (spellRecordCache.has(spellId)) return spellRecordCache.get(spellId);
   // SessionHandle is exposed by index.html during start_session.
   const handle = window.__sessionHandle;
   if (!handle?.getSpellRecord) return null;
@@ -160,7 +176,10 @@ function spellRecordFromWasm(spellId) {
   } catch (e) {
     return null;
   }
-  if (!raw) return null;
+  if (!raw) {
+    spellRecordCache.set(spellId, null);
+    return null;
+  }
   // getSpellRecord crosses the wasm boundary via serde-wasm-bindgen,
   // which emits JS **Map**s for JSON objects (live-verified
   // 2026-07-01: `getSpellRecord(6) instanceof Map`, `.get("name") ===
@@ -176,7 +195,7 @@ function spellRecordFromWasm(spellId) {
   }
   // Coerce to legacy spells-catalog.json shape so existing UI code
   // keeps working without changes.
-  return {
+  const record = {
     // Legacy keys preserved (UI consumes these in many places):
     name:        raw.name,
     school:      raw.school,
@@ -207,6 +226,8 @@ function spellRecordFromWasm(spellId) {
     recoveryAmount: raw.recoveryAmount,
     displayOrder: raw.displayOrder,
   };
+  spellRecordCache.set(spellId, record);
+  return record;
 }
 
 // Build a catalog-shaped lookup from the union of (a) the legacy JSON
@@ -1145,11 +1166,74 @@ function doMount(parentEl, ctx) {
   // toggle `display` + `on-bar` rather than tearing the list down
   // and re-wiring drag/click/dblclick/contextmenu listeners. The
   // persistent empty-state element below is reused too.
-  const rowMap = new Map(); // id (number) -> { row, meta }
+  //
+  // Perf fix (2026-07-04, spellbook hang on @addallspells accounts) —
+  // `rowMap` used to hold one built row per KNOWN spell (all of them,
+  // simultaneously, in the DOM). On a Developer-account test character
+  // with ~2,000+ known spells that meant ~2,000 wasm lookups (now moot,
+  // see spellRecordCache above) PLUS ~6,000 synchronous <ac-text>
+  // canvas rasters (3 per row) in one microtask — a multi-minute
+  // freeze. `rowMap` now only ever holds rows for the currently
+  // *windowed* (visible + overscan) slice of the filtered id list;
+  // everything else is represented purely as an id in `filteredIds`
+  // and re-materialized into a row on demand as the user scrolls.
+  // Retail's own gmSpellbookUI (0x10000295, 280×224 with a real
+  // scrollbar 0x10000296) only ever paints the rows that fit its fixed
+  // grid area per frame — this mirrors that behavior instead of
+  // retail's "build everything up front" anti-pattern.
+  const rowMap = new Map(); // id (number) -> { row, meta } — WINDOWED rows only
+  let filteredIds = []; // full filtered/sorted id list, recomputed by rerenderList()
+  let rowHeight = 0; // measured from the first built row; 0 = not yet measured
+  const ROW_HEIGHT_FALLBACK = 28; // px incl. the 2px `gap` — matches .hb-sb-row's
+                                  // padding/border/font-size until we can measure
+  const LIST_ROW_GAP = 2; // must match `.hb-sb-list { gap: 2px; }` above
+  const OVERSCAN_ROWS = 10;
+
   const emptyEl = document.createElement("div");
   emptyEl.className = "hb-sb-empty";
   emptyEl.style.display = "none";
   listEl.appendChild(emptyEl);
+
+  // Spacers hold the scroll-height contributed by rows that are NOT
+  // currently built, so `.hb-sb-list`'s native scrollbar stays the
+  // correct length even though only a small window of rows exists in
+  // the DOM at any time. Real rows are always kept between these two.
+  const topSpacerEl = document.createElement("div");
+  topSpacerEl.className = "hb-sb-spacer hb-sb-spacer-top";
+  topSpacerEl.style.flex = "0 0 auto";
+  topSpacerEl.style.height = "0px";
+  listEl.appendChild(topSpacerEl);
+  const bottomSpacerEl = document.createElement("div");
+  bottomSpacerEl.className = "hb-sb-spacer hb-sb-spacer-bottom";
+  bottomSpacerEl.style.flex = "0 0 auto";
+  bottomSpacerEl.style.height = "0px";
+  listEl.appendChild(bottomSpacerEl);
+
+  // Uncatalogued-spell placeholder + filter-pass helpers — pulled out
+  // of rerenderList so updateWindow() can build/refresh a row's meta
+  // on demand (scrolled-out rows aren't recomputed until they scroll
+  // back into the window).
+  function computeMeta(id) {
+    const meta = catalog ? catalog[String(id)] : null;
+    if (meta) return meta;
+    // Uncatalogued (neither wasm DAT nor JSON has a record): show a
+    // placeholder so the user knows they've learned the spell.
+    return {
+      name: `Spell #${id}`,
+      school: 0,
+      level: 0,
+      untargeted: true,
+      mana: 0,
+      _uncatalogued: true,
+    };
+  }
+  function passesFilters(meta) {
+    // Uncatalogued placeholders bypass school/level (school=0/level=0
+    // wouldn't match any active filter set).
+    return meta._uncatalogued
+      ? true
+      : (filters.schools.has(meta.school) && filters.levels.has(meta.level));
+  }
 
   function buildRow(id, meta) {
     const row = document.createElement("div");
@@ -1162,19 +1246,30 @@ function doMount(parentEl, ctx) {
       ev.dataTransfer.effectAllowed = "copy";
       ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
       ev.dataTransfer.setData("text/plain", meta.name);
-      // Wave C / PR9 (2026-06-06): iconId-driven Image ghost so the drag
-      // cursor reads as the spell icon. Source: meta.iconId routed
-      // through the icon cache (already used by spellbook row render).
+      // Wave C / PR9 (2026-06-06): icon-driven Image ghost so the drag
+      // cursor reads as the spell icon. Source: meta.icon (the coerced
+      // wasm/JSON record's icon-DID field — see spellRecordFromWasm
+      // above, which maps raw.iconId -> record.icon) routed through
+      // the icon cache.
+      //
+      // Fix (2026-07-04): this previously called a nonexistent
+      // `window.__iconCache.getUrl` (no such global is ever set — see
+      // ac_icon_cache.js, which exports named functions instead) AND
+      // read the wrong field (`meta.iconId`, which is undefined on the
+      // coerced record; the real field is `meta.icon`), so the guard
+      // always short-circuited and drag ghosts silently never
+      // rendered. Use the real synchronous API — getIconImmediate
+      // returns a cached data-URL or null without kicking off a fetch,
+      // so this stays cheap even when the icon hasn't been decoded
+      // yet (fails soft: no ghost image, drag still works).
       try {
-        const iconDid = (meta?.iconId >>> 0) || 0;
-        if (iconDid && typeof window.__iconCache?.getUrl === "function") {
-          const url = window.__iconCache.getUrl(iconDid);
-          if (url) {
-            const img = new Image();
-            img.src = url;
-            img.width = 32; img.height = 32;
-            ev.dataTransfer.setDragImage(img, 16, 16);
-          }
+        const iconDid = (meta?.icon >>> 0) || 0;
+        const url = iconDid ? getIconImmediate(iconDid) : null;
+        if (url) {
+          const img = new Image();
+          img.src = url;
+          img.width = 32; img.height = 32;
+          ev.dataTransfer.setDragImage(img, 16, 16);
         }
       } catch (_) {}
     });
@@ -1234,80 +1329,122 @@ function doMount(parentEl, ctx) {
     return row;
   }
 
-  function rerenderList() {
-    if (!catalog) {
-      // Loading state — hide all known rows + show the loader.
-      for (const { row } of rowMap.values()) row.style.display = "none";
-      setAcText(emptyEl, "Loading spell catalog…");
-      emptyEl.style.display = "";
+  // Rebuild/refresh the small window of rows that actually intersect
+  // the `.hb-sb-list` viewport (+ OVERSCAN_ROWS above/below), sizing
+  // the top/bottom spacers so the scrollbar length still reflects the
+  // FULL `filteredIds` count. Called by rerenderList() (filters/known-
+  // spells changed) and by the rAF-throttled scroll listener (position
+  // changed only). Cheap either way — bounded by window size, not N.
+  function updateWindow() {
+    const total = filteredIds.length;
+    if (total === 0) {
+      for (const [, slot] of rowMap) slot.row.remove();
+      rowMap.clear();
+      topSpacerEl.style.height = "0px";
+      bottomSpacerEl.style.height = "0px";
       return;
     }
 
-    // 1) Materialize the desired set from the player's known-spells
-    //    list. Wave F.1: we no longer iterate `Object.entries(catalog)`
-    //    — the wasm-record overlay isn't enumerable, and the JSON
-    //    catalog has ~6,266 entries we don't want to scan. Instead,
-    //    look up each known spell ID directly against the hybrid
-    //    catalog (Proxy handles wasm preference + JSON fallback).
-    const desired = new Map(); // id -> meta
-    for (const id of knownIds) {
-      const meta = catalog[String(id)];
-      if (meta) {
-        desired.set(id, meta);
-      } else {
-        // Uncatalogued (neither wasm DAT nor JSON has a record): show
-        // a placeholder so the user knows they've learned the spell.
-        desired.set(id, {
-          name: `Spell #${id}`,
-          school: 0,
-          level: 0,
-          untargeted: true,
-          mana: 0,
-          _uncatalogued: true,
-        });
-      }
-    }
+    const rh = rowHeight || ROW_HEIGHT_FALLBACK;
+    const viewportH = listEl.clientHeight || 202;
+    const scrollTop = listEl.scrollTop;
+    const firstVisible = Math.floor(scrollTop / rh);
+    const visibleCount = Math.ceil(viewportH / rh) + 1;
+    const startIdx = Math.max(0, firstVisible - OVERSCAN_ROWS);
+    const endIdx = Math.min(total, firstVisible + visibleCount + OVERSCAN_ROWS);
 
-    // 2) Drop rows that no longer belong (e.g. spell forgotten).
+    // Drop rows that fell out of the window (or out of filteredIds
+    // entirely — same diffing path covers both a scroll and a
+    // filter/known-spells change).
+    const windowIds = filteredIds.slice(startIdx, endIdx);
+    const windowSet = new Set(windowIds);
     for (const [id, slot] of rowMap) {
-      if (!desired.has(id)) {
+      if (!windowSet.has(id)) {
         slot.row.remove();
         rowMap.delete(id);
       }
     }
 
-    // 3) Build any new rows; toggle display on existing ones.
-    //    `slotsNow` reflects the active spell-bar tab.
+    // `slotsNow` reflects the active spell-bar tab's on-bar highlight.
     const slotsNow = new Set(getSpellBarSlots().filter((v) => v > 0));
-    let visibleCount = 0;
-    for (const [id, meta] of desired) {
+
+    // Build any rows newly entering the window; refresh meta + selected/
+    // on-bar state on ones that were already built. Re-append in the
+    // fragment in id order so DOM order always matches list order
+    // regardless of scroll direction.
+    const frag = document.createDocumentFragment();
+    for (const id of windowIds) {
+      const meta = computeMeta(id);
       let slot = rowMap.get(id);
       if (!slot) {
         const row = buildRow(id, meta);
         slot = { row, meta };
         rowMap.set(id, slot);
-        listEl.appendChild(row);
       } else {
         slot.meta = meta;
       }
       const { row } = slot;
+      row.classList.toggle("selected", id === selectedRowId);
+      row.classList.toggle("on-bar", slotsNow.has(id));
+      frag.appendChild(row); // moves if already in listEl
+    }
+    listEl.insertBefore(frag, bottomSpacerEl);
 
-      // Filter pass — uncatalogued placeholders bypass school/level
-      // (school=0/level=0 wouldn't match any active filter set).
-      const passes = meta._uncatalogued
-        ? true
-        : (filters.schools.has(meta.school) && filters.levels.has(meta.level));
+    topSpacerEl.style.height = `${startIdx * rh}px`;
+    bottomSpacerEl.style.height = `${(total - endIdx) * rh}px`;
 
-      row.style.display = passes ? "" : "none";
-      if (passes) visibleCount++;
+    // Measure the real row height off the first built row once, then
+    // re-run with the corrected height so the window range + spacer
+    // sizes aren't left keyed off the fallback estimate. Guarded by
+    // `rowHeight` being nonzero on the second pass so this can't loop.
+    if (!rowHeight) {
+      const anyRow = rowMap.values().next().value?.row;
+      const measured = anyRow ? anyRow.getBoundingClientRect().height : 0;
+      if (measured > 0) {
+        rowHeight = measured + LIST_ROW_GAP;
+        updateWindow();
+      }
+    }
+  }
 
-      // on-bar class follows the live spell-bar contents.
-      if (slotsNow.has(id)) row.classList.add("on-bar");
-      else row.classList.remove("on-bar");
+  let scrollRafPending = false;
+  function onListScroll() {
+    if (scrollRafPending) return;
+    scrollRafPending = true;
+    requestAnimationFrame(() => {
+      scrollRafPending = false;
+      updateWindow();
+    });
+  }
+  listEl.addEventListener("scroll", onListScroll);
+
+  function rerenderList() {
+    if (!catalog) {
+      // Loading state — tear down any built rows + show the loader.
+      filteredIds = [];
+      updateWindow();
+      setAcText(emptyEl, "Loading spell catalog…");
+      emptyEl.style.display = "";
+      return;
     }
 
-    // 4) Empty-state message.
-    if (visibleCount === 0) {
+    // Materialize the filtered id list from the player's known-spells
+    // set. Wave F.1: we no longer iterate `Object.entries(catalog)` —
+    // the wasm-record overlay isn't enumerable, and the JSON catalog
+    // has ~6,266 entries we don't want to scan. Instead, look up each
+    // known spell ID directly against the hybrid catalog (Proxy
+    // handles wasm preference + JSON fallback; memoized per spellId
+    // via spellRecordCache, so this is O(knownIds) cheap lookups, not
+    // O(knownIds) wasm crossings). Order follows `knownIds`' insertion
+    // order, same as the pre-virtualization DOM order.
+    filteredIds = [];
+    for (const id of knownIds) {
+      const meta = computeMeta(id);
+      if (passesFilters(meta)) filteredIds.push(id);
+    }
+
+    // Empty-state message.
+    if (filteredIds.length === 0) {
       setAcText(
         emptyEl,
         knownIds.size === 0
@@ -1318,6 +1455,14 @@ function doMount(parentEl, ctx) {
     } else {
       emptyEl.style.display = "none";
     }
+
+    // Build/refresh only the rows intersecting the current scroll
+    // window (+ overscan) — see updateWindow() above. This is the fix
+    // for the multi-minute freeze on @addallspells accounts: instead
+    // of ~2,000+ rows (each 3 synchronous <ac-text> canvas rasters),
+    // only the ~15-25 rows that fit the 202px-tall .hb-sb-list plus a
+    // small overscan margin are ever built at once.
+    updateWindow();
   }
 
   function refreshKnown() {
@@ -1488,6 +1633,7 @@ function doMount(parentEl, ctx) {
     window.removeEventListener("keydown", onDeleteKey);
     window.removeEventListener("mousedown", onPopoverMouseDown, true);
     window.removeEventListener("keydown", onPopoverEsc);
+    listEl.removeEventListener("scroll", onListScroll);
     closeDetail();
     root.remove();
   };

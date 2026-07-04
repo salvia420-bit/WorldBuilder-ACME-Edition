@@ -79,12 +79,52 @@ function materialName(id) {
   return MATERIAL_NAMES[id >>> 0] ?? `Material 0x${(id >>> 0).toString(16).toUpperCase()}`;
 }
 
+// ─── Per-item appraisal read-through (material/workmanship/value) ──
+//
+// Gap-analysis addition: the retail salvage panel shows a per-item
+// material/workmanship/value summary before the player commits. The
+// ONLY source of that data on this client is the AppraisalSnapshot
+// `handle.getObjectAppraisal(guid)` already surfaces for tooltips/
+// examine (see examine-target.js, inventory_helpers.js's
+// formatAppraisalTooltip) — `properties.ints.MaterialType` (key 131),
+// `.ItemWorkmanship` (105), `.Value` (19). It is populated once the
+// item has actually been appraised (Identify round-trip); an
+// un-appraised item simply has no snapshot yet, so the row omits the
+// meta/value line entirely for that item rather than guessing.
+//
+// NOT available anywhere in this client: the predicted salvage YIELD
+// (units of material a given item will actually produce). That
+// calculation lives server-authoritatively and, client-side, only in
+// `crates/holtburger-world/src/crafting/salvage.rs`
+// (`predict_salvage_preview` / `SalvageItemInput`) — that module is
+// not wired to a wasm export (no `sessionhandle_*` binding calls it),
+// so JS has no way to invoke it. Per the "no invented fields" rule,
+// this panel does NOT fabricate an estimated-units figure; it shows
+// the item's own appraised Value (in pyreals) instead, which retail
+// also surfaces on the item's tooltip. If/when a preview export lands,
+// wire true predicted-units here instead of Value.
+function getAppraisalIntsFor(guid) {
+  try {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle ?? null;
+    if (typeof handle?.getObjectAppraisal !== "function") return null;
+    const json = handle.getObjectAppraisal(guid >>> 0);
+    if (typeof json !== "string" || json.length === 0) return null;
+    const snapshot = JSON.parse(json);
+    return snapshot?.properties?.ints ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
 const state = {
   overlayEl: null,
   listEl: null,
   emptyEl: null,
   countEl: null,
   toastListEl: null,
+  totalRowEl: null,
+  totalLabelEl: null,
+  totalValueEl: null,
   fireBtn: null,
   closeBtn: null,
   toolGuid: 0,
@@ -182,6 +222,7 @@ function ensureStyles() {
     #${OVERLAY_ID} .hb-sv-row {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 6px;
       padding: 3px 6px;
       border-bottom: 1px solid rgba(120, 90, 50, 0.18);
@@ -195,10 +236,48 @@ function ensureStyles() {
       text-overflow: ellipsis;
       color: var(--hb-text-cream);
     }
+    #${OVERLAY_ID} .hb-sv-row-meta {
+      flex: 1 1 100%;
+      order: 3;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--hb-text-muted);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+      padding-left: 2px;
+    }
+    #${OVERLAY_ID} .hb-sv-row-value {
+      flex: 0 0 auto;
+      color: var(--hb-text-gold);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+    }
     #${OVERLAY_ID} .hb-sv-row-guid {
       flex: 0 0 auto;
       color: var(--hb-text-muted);
       font-size: 10px;
+      font-variant-numeric: tabular-nums;
+    }
+    #${OVERLAY_ID} .hb-sv-total {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 4px 10px;
+      font-size: 11px;
+      color: var(--hb-text-cream);
+      background: rgba(0, 0, 0, 0.2);
+      border-top: 1px solid var(--hb-border-brass-dim);
+      flex: 0 0 auto;
+    }
+    #${OVERLAY_ID} .hb-sv-total-label {
+      color: var(--hb-text-muted);
+      font-size: 10px;
+    }
+    #${OVERLAY_ID} .hb-sv-total-value {
+      color: var(--hb-text-gold);
       font-variant-numeric: tabular-nums;
     }
     #${OVERLAY_ID} .hb-sv-row-rm {
@@ -319,6 +398,20 @@ function ensurePanel() {
   listEl.appendChild(emptyEl);
   overlay.appendChild(listEl);
 
+  // Running-total row — sum of appraised item Value across the queue.
+  // Hidden (no rows / nothing appraised yet) until renderList() has
+  // something to show; see updateTotalRow().
+  const totalRow = document.createElement("div");
+  totalRow.className = "hb-sv-total";
+  totalRow.style.display = "none";
+  const totalLabel = document.createElement("div");
+  totalLabel.className = "hb-sv-total-label";
+  const totalValue = document.createElement("div");
+  totalValue.className = "hb-sv-total-value";
+  totalRow.appendChild(totalLabel);
+  totalRow.appendChild(totalValue);
+  overlay.appendChild(totalRow);
+
   const actions = document.createElement("div");
   actions.className = "hb-sv-actions";
   const count = document.createElement("div");
@@ -347,6 +440,9 @@ function ensurePanel() {
   state.fireBtn = fireBtn;
   state.closeBtn = closeBtn;
   state.toastListEl = results;
+  state.totalRowEl = totalRow;
+  state.totalLabelEl = totalLabel;
+  state.totalValueEl = totalValue;
   return overlay;
 }
 
@@ -362,10 +458,54 @@ function setToolDisplay() {
   }
 }
 
+// Builds the per-item "material · workmanship" secondary line + the
+// right-aligned appraised-value chip from a live AppraisalSnapshot.
+// Returns { metaText, value } where either half may be null when the
+// underlying property isn't present in the snapshot yet — the caller
+// omits whatever half is missing rather than rendering a placeholder
+// number. `value` is the item's own appraised `Value` (pyreals), NOT
+// a predicted salvage yield (see getAppraisalIntsFor's doc comment —
+// that figure has no wasm export to source it from).
+function describeItemAppraisal(guid) {
+  const ints = getAppraisalIntsFor(guid);
+  if (!ints) return { metaText: null, value: null };
+  const bits = [];
+  const mat = ints.MaterialType;
+  if (mat != null) bits.push(materialName(mat));
+  const wkm = Number(ints.ItemWorkmanship);
+  if (Number.isFinite(wkm) && wkm > 0) bits.push(`Wkm ${wkm}`);
+  const val = Number(ints.Value);
+  return {
+    metaText: bits.length > 0 ? bits.join(" · ") : null,
+    value: Number.isFinite(val) ? val : null,
+  };
+}
+
+function updateTotalRow(appraisedCount, totalValue) {
+  const row = state.totalRowEl;
+  if (!row) return;
+  if (state.items.length === 0) {
+    row.style.display = "none";
+    return;
+  }
+  row.style.display = "flex";
+  if (state.totalLabelEl) {
+    const suffix = appraisedCount < state.items.length
+      ? ` (${appraisedCount}/${state.items.length} appraised)`
+      : "";
+    setAcText(state.totalLabelEl, `Est. value${suffix}`, { fit: true });
+  }
+  if (state.totalValueEl) {
+    setAcText(state.totalValueEl, `${totalValue}p`, { fit: true });
+  }
+}
+
 function renderList() {
   const listEl = state.listEl;
   if (!listEl) return;
   while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+  let totalValue = 0;
+  let appraisedCount = 0;
   if (state.items.length === 0) {
     listEl.appendChild(state.emptyEl);
   } else {
@@ -388,6 +528,28 @@ function renderList() {
       row.appendChild(labelEl);
       row.appendChild(guidEl);
       row.appendChild(rm);
+
+      // Material/workmanship/value summary — sourced from the live
+      // AppraisalSnapshot (see describeItemAppraisal). Un-appraised
+      // items (no Examine round-trip yet) get no meta line and don't
+      // count toward the running total, rather than a fabricated "0".
+      const { metaText, value } = describeItemAppraisal(it.guid);
+      if (metaText || value != null) {
+        const metaEl = document.createElement("div");
+        metaEl.className = "hb-sv-row-meta";
+        const parts = [];
+        if (metaText) parts.push(metaText);
+        setAcText(metaEl, parts.join(" · "), { fit: true });
+        row.appendChild(metaEl);
+      }
+      if (value != null) {
+        const valueEl = document.createElement("div");
+        valueEl.className = "hb-sv-row-value";
+        setAcText(valueEl, `${value}p`, { fit: true });
+        row.appendChild(valueEl);
+        totalValue += value;
+        appraisedCount++;
+      }
       listEl.appendChild(row);
     }
   }
@@ -397,6 +559,7 @@ function renderList() {
   if (state.fireBtn) {
     state.fireBtn.disabled = state.items.length === 0 || !state.toolGuid;
   }
+  updateTotalRow(appraisedCount, totalValue);
 }
 
 export function addItem(itemGuid, label) {

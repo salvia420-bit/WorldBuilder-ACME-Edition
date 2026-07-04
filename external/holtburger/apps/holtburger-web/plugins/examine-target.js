@@ -45,7 +45,7 @@
 import { setAcText } from "../ui/ac_font.js";
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
-import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
+import { resolveBindingIcon, resolveSpellIcon } from "../ui/ac_entity_icon.js";
 import {
   uiEffectIconsEnabled,
   uiEffectIconsFor,
@@ -358,6 +358,70 @@ const TYPE_LABEL = {
   "0x10000": "Magic / Scroll",
   "0x20":    "Currency (pyreal)",
 };
+
+// ACE.Entity.Enum.Skill order (Skill.cs) — index = wire skill id. Used to
+// label WeaponProfile.weapon_skill (retail ItemExamineUI weapon-skill row).
+const SKILL_NAMES = [
+  "None", "Axe", "Bow", "Crossbow", "Dagger", "Mace", "Melee Defense",
+  "Missile Defense", "Sling", "Spear", "Staff", "Sword", "Thrown Weapon",
+  "Unarmed Combat", "Arcane Lore", "Magic Defense", "Mana Conversion",
+  "Spellcraft", "Item Tinkering", "Assess Person", "Deception", "Healing",
+  "Jump", "Lockpick", "Run", "Awareness", "Arms and Armor Repair",
+  "Assess Creature", "Weapon Tinkering", "Armor Tinkering",
+  "Magic Item Tinkering", "Creature Enchantment", "Item Enchantment",
+  "Life Magic", "War Magic", "Leadership", "Loyalty", "Fletching",
+  "Alchemy", "Cooking", "Salvaging", "Two Handed Combat", "Gearcraft",
+  "Void Magic", "Heavy Weapons", "Light Weapons", "Finesse Weapons",
+  "Missile Weapons", "Shield", "Dual Wield", "Recklessness",
+  "Sneak Attack", "Dirty Fighting", "Challenge", "Summoning",
+];
+function skillName(id) {
+  const n = Number(id);
+  return SKILL_NAMES[n] || `Skill ${n}`;
+}
+
+// ACE.Entity.Enum.DamageType (DamageType.cs) — bitflags; WeaponProfile.
+// damage_type carries the weapon's dealt-damage type(s). Join set bits
+// (retail weapons are almost always single-bit, but render faithfully).
+const DAMAGE_TYPE_BITS = [
+  [0x1, "Slash"], [0x2, "Pierce"], [0x4, "Bludgeon"], [0x8, "Cold"],
+  [0x10, "Fire"], [0x20, "Acid"], [0x40, "Electric"], [0x400, "Nether"],
+];
+function damageTypeLabel(mask) {
+  const m = (Number(mask) >>> 0);
+  if (!m) return null;
+  const names = DAMAGE_TYPE_BITS.filter(([bit]) => (m & bit) !== 0).map(([, n]) => n);
+  return names.length > 0 ? names.join(" / ") : null;
+}
+
+// Body-location labels for ArmorLevels (per-slot armor level breakdown).
+// Order mirrors the wire struct (types.rs ArmorLevels) — retail's
+// ItemExamineUI armor-level table lists head→foot.
+const ARMOR_LEVEL_SLOTS = [
+  ["head", "Head"], ["chest", "Chest"], ["abdomen", "Abdomen"],
+  ["upper_arm", "Upper Arm"], ["lower_arm", "Lower Arm"], ["hand", "Hand"],
+  ["upper_leg", "Upper Leg"], ["lower_leg", "Lower Leg"], ["foot", "Foot"],
+];
+
+// Sync spell-name lookup mirroring plugins/spellbook.js's wasm-Map
+// normalization (getSpellRecord crosses the wasm boundary as a JS Map —
+// `.name` on the raw object silently returns undefined, per the 2026-07-01
+// fix in that file). Small local cache avoids re-crossing the boundary
+// every render.
+const _spellNameCache = new Map();
+function getSpellName(spellId) {
+  const id = spellId >>> 0;
+  if (_spellNameCache.has(id)) return _spellNameCache.get(id);
+  let name = null;
+  try {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    let rec = handle?.getSpellRecord?.(id);
+    if (rec instanceof Map) rec = Object.fromEntries(rec);
+    if (rec && typeof rec.name === "string") name = rec.name;
+  } catch (_) { /* pre-SpellTable-load — retry next render */ }
+  if (name) _spellNameCache.set(id, name);
+  return name;
+}
 
 function r(parent, label, value) {
   if (value == null || value === "") return;
@@ -832,10 +896,18 @@ function renderAppraisal(wrapEl, guid) {
   // section when the wire identify included CREATURE_PROFILE (0x0100).
   // Without the gate a successful armor identify would leak stale
   // attribute numbers from a prior creature identify.
+  //
+  // Field-name fix (2026-07-04): CreatureProfile (types.rs) has no
+  // `vitals` sub-object — health/health_max are top-level on the
+  // profile itself, and stamina/mana (+ their maxes) live nested under
+  // `attributes`, not a separate vitals struct. The prior `cp?.vitals`
+  // read always missed, so Health/Stamina/Mana silently fell back to
+  // (usually absent) top-level `ints.Max*` — this block effectively
+  // never rendered vitals for a creature identify.
   if (flagBit(IDENTIFY_FLAG_CREATURE_PROFILE)
-      && (cp?.attributes || ints.Strength != null || ints.Endurance != null
-        || ints.Coordination != null || ints.Quickness != null
-        || ints.Focus != null || ints.Self != null)) {
+      && (cp?.attributes || cp?.health != null || ints.Strength != null
+        || ints.Endurance != null || ints.Coordination != null
+        || ints.Quickness != null || ints.Focus != null || ints.Self != null)) {
     sec("Attributes");
     const a = cp?.attributes || {};
     row("Strength",     a.strength     ?? ints.Strength);
@@ -844,34 +916,20 @@ function renderAppraisal(wrapEl, guid) {
     row("Quickness",    a.quickness    ?? ints.Quickness);
     row("Focus",        a.focus        ?? ints.Focus);
     row("Self",         a.self_        ?? a.self ?? ints.Self);
-    const v = cp?.vitals || {};
-    row("Health",       v.health       ?? ints.MaxHealth);
-    row("Stamina",      v.stamina      ?? ints.MaxStamina);
-    row("Mana",         v.mana         ?? ints.MaxMana);
+    row("Health",       cp?.health_max != null ? `${cp.health}/${cp.health_max}` : (cp?.health ?? ints.MaxHealth));
+    row("Stamina",      a.stamina_max != null ? `${a.stamina}/${a.stamina_max}` : (a.stamina ?? ints.MaxStamina));
+    row("Mana",         a.mana_max != null ? `${a.mana}/${a.mana_max}` : (a.mana ?? ints.MaxMana));
   }
 
   // === Skills ===
-  // CreatureProfile.skills is wire-shape (per-skill profile records).
-  // Without a SkillTable lookup in this scope, render each entry's
-  // key + base/current pair. JS-side later may join with the skill
-  // catalog for human labels.
-  if (flagBit(IDENTIFY_FLAG_CREATURE_PROFILE)
-      && cp?.skills && typeof cp.skills === "object") {
-    const entries = Object.entries(cp.skills);
-    if (entries.length > 0) {
-      sec("Skills");
-      for (const [skillKey, skillVal] of entries) {
-        if (!skillVal) continue;
-        const base = skillVal.base ?? skillVal.Base ?? skillVal.init_level;
-        const current = skillVal.current ?? skillVal.Current ?? skillVal.level_from_pp;
-        const label = `Skill ${skillKey}`;
-        const value = (base != null && current != null)
-          ? `${current} (base ${base})`
-          : (base ?? current ?? "—");
-        row(label, value);
-      }
-    }
-  }
+  // Skipped (data-blocked, 2026-07-04): CreatureProfile (types.rs:100)
+  // carries no `skills` field at all on the wire — only
+  // flags/health/health_max/attributes/buffs. The prior code read
+  // `cp.skills` as an object map, which never existed, so this section
+  // was permanently dead. There is no per-skill AppraisalProfile data
+  // to render until the wasm/protocol side adds a SkillProfile — see
+  // `crates/holtburger-protocol/src/messages/object/types.rs` if that
+  // lands later.
 
   // === Equipment / Item profile ===
   // HUD rec #53: each profile sub-section gated by its own
@@ -879,25 +937,47 @@ function renderAppraisal(wrapEl, guid) {
   // from ARMOR_PROFILE (per IdentifyResponseFlags 0x0080 vs 0x4000),
   // so a body-armor identify that only sent ARMOR_PROFILE won't leak
   // chest/head/foot levels from a stale armor-levels payload.
+  //
+  // Field-name fix (2026-07-04): the real wire ArmorProfile (types.rs:38)
+  // has no armor_level/physical_mod/acid_mod/fire_mod/cold_mod/
+  // electric_mod fields — it carries per-damage-type multipliers keyed
+  // `slashing/piercing/bludgeoning/cold/fire/acid/nether/lightning`.
+  // The overall Armor Level (a single number) is a WorldObjectProperties
+  // int (`ints.ArmorLevel`, PropertyInt.ArmorLevel=28), not part of
+  // ArmorProfile at all. Every `ap.*` read below was hitting undefined
+  // keys, so the whole Item/armor block was silently empty before this
+  // fix despite the data being present on the wire.
   const showArmor = flagBit(IDENTIFY_FLAG_ARMOR_PROFILE) && ap;
   const showWeapon = flagBit(IDENTIFY_FLAG_WEAPON_PROFILE) && wp;
   const showHook = flagBit(IDENTIFY_FLAG_HOOK_PROFILE) && hp;
   const showArmorLevels = flagBit(IDENTIFY_FLAG_ARMOR_LEVELS) && al;
-  if (showArmor || showWeapon || showHook || showArmorLevels) {
+  const showArmorLevelInt = flagBit(IDENTIFY_FLAG_ARMOR_PROFILE) && ints.ArmorLevel != null;
+  if (showArmor || showWeapon || showHook || showArmorLevels || showArmorLevelInt) {
     sec("Item");
-    if (showArmor && ap.armor_level != null) row("Armor Level", ap.armor_level);
-    if (showArmor && ap.physical_mod != null) row("Physical Mod", Number(ap.physical_mod).toFixed(2));
-    if (showArmor && ap.acid_mod != null)     row("Acid Mod",     Number(ap.acid_mod).toFixed(2));
-    if (showArmor && ap.fire_mod != null)     row("Fire Mod",     Number(ap.fire_mod).toFixed(2));
-    if (showArmor && ap.cold_mod != null)     row("Cold Mod",     Number(ap.cold_mod).toFixed(2));
-    if (showArmor && ap.electric_mod != null) row("Electric Mod", Number(ap.electric_mod).toFixed(2));
+    if (showArmorLevelInt) row("Armor Level", ints.ArmorLevel);
+    if (showArmor && ap.slashing != null)    row("Slash Mod",    Number(ap.slashing).toFixed(2));
+    if (showArmor && ap.piercing != null)    row("Pierce Mod",   Number(ap.piercing).toFixed(2));
+    if (showArmor && ap.bludgeoning != null) row("Bludgeon Mod", Number(ap.bludgeoning).toFixed(2));
+    if (showArmor && ap.cold != null)         row("Cold Mod",     Number(ap.cold).toFixed(2));
+    if (showArmor && ap.fire != null)         row("Fire Mod",     Number(ap.fire).toFixed(2));
+    if (showArmor && ap.acid != null)         row("Acid Mod",     Number(ap.acid).toFixed(2));
+    if (showArmor && ap.nether != null)       row("Nether Mod",   Number(ap.nether).toFixed(2));
+    if (showArmor && ap.lightning != null)    row("Electric Mod", Number(ap.lightning).toFixed(2));
+    // Weapon block — retail ItemExamineUI weapon row order: damage type,
+    // damage (+variance/mod), speed, skill.
+    if (showWeapon && damageTypeLabel(wp.damage_type)) row("Damage Type", damageTypeLabel(wp.damage_type));
     if (showWeapon && wp.damage != null)       row("Damage",       wp.damage);
     if (showWeapon && wp.damage_variance != null) row("Variance",  Number(wp.damage_variance).toFixed(2));
     if (showWeapon && wp.damage_mod != null)   row("Damage Mod",   Number(wp.damage_mod).toFixed(2));
-    if (showWeapon && wp.attack_skill != null) row("Attack Skill", wp.attack_skill);
-    if (showArmorLevels && al.head_armor_level != null) row("Head Armor",  al.head_armor_level);
-    if (showArmorLevels && al.foot_armor_level != null) row("Foot Armor",  al.foot_armor_level);
-    if (showArmorLevels && al.chest_armor_level != null) row("Chest Armor", al.chest_armor_level);
+    if (showWeapon && wp.weapon_time != null)  row("Weapon Speed", wp.weapon_time);
+    if (showWeapon && wp.weapon_skill != null) row("Weapon Skill", skillName(wp.weapon_skill));
+    // Per-slot armor-level breakdown (types.rs ArmorLevels — 9 body
+    // locations). Only render slots the wire actually populated.
+    if (showArmorLevels) {
+      for (const [key, label] of ARMOR_LEVEL_SLOTS) {
+        if (al[key] != null) row(label + " Armor", al[key]);
+      }
+    }
     if (showHook && hp.hook_type != null)    row("Hook Type",    hp.hook_type);
   }
 
@@ -921,7 +1001,32 @@ function renderAppraisal(wrapEl, guid) {
     if (wh != null) row("Weapon Ench.", `${hex(wh)} / color ${hex(wc ?? 0)}`);
     if (rh != null) row("Resist Ench.", `${hex(rh)} / color ${hex(rc ?? 0)}`);
     if (sb.length > 0) {
-      row("Imbued Spells", `${sb.length} spell${sb.length === 1 ? "" : "s"}`);
+      // Spell list with names + icons — retail's ItemExamineUI spell
+      // strip. `spellBook` is a plain `Vec<u32>` of spell ids on the
+      // wire (types.rs) — no name/icon travels with it, so each is
+      // resolved locally via handle.getSpellRecord (sync name) +
+      // resolveSpellIcon (async icon, same path plugins/spellbook.js
+      // and ui/ac_entity_icon.js use for the hotbar/spellbook icons).
+      const list = document.createElement("div");
+      list.className = "hb-exa-spelllist";
+      list.style.cssText = "display:flex;flex-direction:column;gap:2px;margin:2px 0;";
+      for (const spellId of sb) {
+        const id = spellId >>> 0;
+        const entry = document.createElement("div");
+        entry.className = "hb-exa-spell";
+        entry.style.cssText = "display:flex;align-items:center;gap:6px;font-size:10px;";
+        const ic = document.createElement("span");
+        ic.style.cssText = "width:16px;height:16px;flex:0 0 auto;background:center/contain no-repeat;image-rendering:pixelated;";
+        entry.appendChild(ic);
+        const label = document.createElement("span");
+        setAcText(label, getSpellName(id) || `Spell ${id}`);
+        entry.appendChild(label);
+        list.appendChild(entry);
+        resolveSpellIcon(id).then((url) => {
+          if (url && ic.isConnected) ic.style.backgroundImage = `url("${url}")`;
+        }).catch(() => {});
+      }
+      wrapEl.appendChild(list);
     }
   }
 
@@ -949,10 +1054,15 @@ function renderAppraisal(wrapEl, guid) {
     const diff = ints.WieldDifficulty ?? null;
     if (reqKind || diff != null || skillType != null) {
       const label = WIELD_REQ_LABELS[reqKind] || "Wield req";
-      if (skillType != null && diff != null) {
-        row(label, `id ${skillType} ≥ ${diff}`);
-      } else if (skillType != null) {
-        row(label, `id ${skillType}`);
+      // reqKind 2 (AttribSkill)/1 (RawSkill) key off a Skill id — label
+      // it with the real skill name (mirrors WeaponProfile.weapon_skill
+      // handling above) instead of a bare numeric id.
+      const isSkillReq = reqKind === 1 || reqKind === 2;
+      const skillLabel = skillType != null ? (isSkillReq ? skillName(skillType) : `id ${skillType}`) : null;
+      if (skillLabel != null && diff != null) {
+        row(label, `${skillLabel} ≥ ${diff}`);
+      } else if (skillLabel != null) {
+        row(label, skillLabel);
       } else if (diff != null) {
         row(label, `≥ ${diff}`);
       }
@@ -970,6 +1080,22 @@ function renderAppraisal(wrapEl, guid) {
     if (ints.HeritageGroup != null) row("Heritage", String(ints.HeritageGroup));
   }
 
+  // === Description ===
+  // Retail ItemExamineUI's scrollable description area (armor/weapon
+  // pane 0x10000148/0x10000149 — see the gmFloatyExaminationUI layout
+  // comment at the top of this file). `strings.LongDesc` is
+  // PropertyString.LongDesc (=16) — the item/creature's flavour text.
+  // Previously only surfaced under `?debug=1`; retail always shows it
+  // when present, so it's promoted to a normal always-visible section.
+  if (strings.LongDesc) {
+    sec("Description");
+    const desc = document.createElement("div");
+    desc.className = "hb-exa-desc";
+    desc.style.cssText = "font-size:11px;line-height:1.4;font-style:italic;padding:2px 4px;white-space:pre-wrap;";
+    setAcText(desc, String(strings.LongDesc));
+    wrapEl.appendChild(desc);
+  }
+
   // === Debug (gated) — Type/Class/Wcid/X/Y/Z/Landblock ===
   // Reserved for `?debug=1` per the EX-05 plan; cheap to leave gated.
   try {
@@ -978,7 +1104,6 @@ function renderAppraisal(wrapEl, guid) {
       sec("Debug");
       row("ItemType",    ints.ItemType);
       row("CreatureType", ints.CreatureType);
-      if (strings.LongDesc) row("Long Desc", strings.LongDesc);
       if (strings.PluralName) row("Plural", strings.PluralName);
       const flt = (k) => floats[k] != null ? Number(floats[k]).toFixed(2) : undefined;
       row("Weight",  flt("EncumbranceVal"));

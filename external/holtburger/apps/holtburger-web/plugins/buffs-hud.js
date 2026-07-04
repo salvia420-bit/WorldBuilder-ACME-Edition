@@ -10,8 +10,10 @@
 //   1. Lets PR 4's `Character.applyEnchantment` cooldown discriminator
 //      (`Character.cs:619`, `type & 0x1000000`) route real wire data
 //      (previously only worked on synthetic test payloads).
-//   2. Lets us color buffs vs debuffs by the `EnchantmentTypeFlags.BENEFICIAL`
-//      bit (0x2000000) — the authoritative discriminator from the wire,
+//   2. Lets us color buffs vs debuffs — primarily via the spell record's
+//      own `isBeneficial` bit (retail's actual discriminator, see A3 fix
+//      below), falling back to the `EnchantmentTypeFlags.BENEFICIAL` bit
+//      (0x2000000) from the wire when no spell record is available,
 //      replacing the brittle name-keyword heuristic.
 //   3. Lets us show "+10 STR" / "-5 STR" tooltips from `statKey` + `statValue`.
 //
@@ -84,30 +86,72 @@ const SKILL_NAME = Object.freeze({
 });
 
 // ─── Constants ───
-// Wire's start_time/duration are seconds since the AC Derethian epoch.
-// Sky-system memory pinned this as the Unix epoch of 1999-11-02 — both
-// fields are deltas in seconds, so for "remaining time" purposes we can
-// take Date.now()/1000 - startTime directly without epoch math (the
-// snapshot landed at a wall-clock time, so all deltas come from there).
+// Wire's start_time/duration are seconds since the AC Derethian epoch
+// (see `pkg/holtburger_web.d.ts` — "Server time (seconds, Derethian
+// epoch)"), NOT the Unix epoch `Date.now()` uses. Diffing the two
+// directly (`Date.now()/1000 - startTime`) yields a bogus multi-hundred-
+// -million-second "elapsed" for every timed buff (bug A1). Per
+// `Enchantment.cs:100-104` the correct formula is
+//   ExpiresAt = Duration < 0 ? MaxValue : ClientReceivedAt + Duration - StartTime
+// so instead of trusting the server epoch we stamp our own wall-clock
+// `receivedAt` (Unix seconds) the moment we first observe a given
+// (layeredId, startTime) pair — see `stampReceivedAt` below — and
+// compute remaining purely from our own clock, sidestepping the epoch
+// mismatch entirely.
 function nowSeconds() {
   return Date.now() / 1000;
 }
 
+// ─── receivedAt tracking (Wave F.2 fix — A1/A2) ───
+// Keyed by layeredId for the local player; per-entity buckets keyed by
+// GUID for remote entities (Wave 4.B `entityEnchantments`). Each cache
+// entry is `{ startTime, receivedAt }`: as long as the wire's
+// `startTime` for that layered slot is unchanged we carry the original
+// `receivedAt` forward (monotonic countdown across refreshes); if the
+// server re-sends a new `startTime` for the same slot (recast /
+// refreshed buff) we treat it as a fresh arrival and re-stamp `receivedAt`.
+const receivedAtSelf = new Map();          // layeredId -> {startTime, receivedAt}
+const receivedAtByEntity = new Map();      // guid -> Map(layeredId -> {startTime, receivedAt})
+
+function stampReceivedAt(record, cache) {
+  if (!record) return record;
+  const key = record.layeredId >>> 0;
+  const prior = cache.get(key);
+  if (prior && prior.startTime === record.startTime) {
+    record.receivedAt = prior.receivedAt;
+  } else {
+    record.receivedAt = nowSeconds();
+    cache.set(key, { startTime: record.startTime, receivedAt: record.receivedAt });
+  }
+  return record;
+}
+
+// Drop cache entries for layeredIds no longer present in the active
+// map/bucket so `receivedAtSelf`/per-entity caches don't grow forever.
+function pruneReceivedAtCache(cache, activeMap) {
+  for (const key of cache.keys()) {
+    if (!activeMap.has(key)) cache.delete(key);
+  }
+}
+
 function remainingSeconds(ench) {
-  // Per `Enchantment.cs:100-104` ExpiresAt formula:
-  //   Duration < 0 → MaxValue (permanent)
-  //   else → ClientReceivedAt + Duration - StartTime
-  // We approximate ClientReceivedAt as now() at first observation;
-  // for an actively-decaying buff the wire snapshot updates startTime
-  // as the server re-sends.
+  // Duration < 0 or duration === 0 (cantrip / equipment) → permanent.
   if (!Number.isFinite(ench.duration) || ench.duration < 0) return Infinity;
   if (ench.duration === 0) return Infinity;  // permanent (cantrip / equipment)
-  const elapsed = nowSeconds() - ench.startTime;
+  // `receivedAt` is stamped by `stampReceivedAt` on ingestion; fall back
+  // to "now" (0 elapsed) for records that bypassed that path (e.g. a
+  // raw object handed straight to this function, as in unit tests).
+  const receivedAt = Number.isFinite(ench.receivedAt) ? ench.receivedAt : nowSeconds();
+  const elapsed = nowSeconds() - receivedAt;
   return ench.duration - elapsed;
 }
 
 function fmtRemaining(secs) {
-  if (!Number.isFinite(secs) || secs <= 0) return "∞";
+  // Permanent (∞) — distinct from expired (bug A2: these used to render
+  // identically). Only the actual permanent sentinel gets the glyph.
+  if (secs === Infinity) return "∞";
+  // Expired (or unparseable) — show a zeroed timer rather than ∞.
+  if (!Number.isFinite(secs) || secs <= 0) return "0:00";
   if (secs < 60) return `${Math.ceil(secs)}s`;
   if (secs < 3600) {
     const m = Math.floor(secs / 60);
@@ -125,22 +169,31 @@ function fmtRemaining(secs) {
 // cooldown-flagged entries in the snapshot via the same path. We
 // double-check the bit here as a defensive cross-check.
 //
-// Buff vs debuff: PRIMARY signal is the
-// `EnchantmentTypeFlags.BENEFICIAL = 0x2000000` bit (set by the spell
-// table when it's a positive enchantment). FALLBACK signal is the
-// `statValue` sign for additive (>0 = buff, <0 = debuff) or its
-// distance from 1.0 for multiplicative (>1 = buff, <1 = debuff). The
-// fallback is necessary because the BENEFICIAL bit is occasionally
-// unset on legitimate buffs from older spells (per ACE PRs).
+// Buff vs debuff: PRIMARY signal is the spell record's own
+// `isBeneficial` bit (retail's `gmEffectsUI::SpellEffectMatchesUIType`
+// keys off `CSpellBase._bitfield & 4`, not the enchantment wire flag).
+// We already surface that value via `spellRecord(spellId).isBeneficial`
+// (Wave F.1). FALLBACK (spell record unavailable, e.g. pre-login
+// catalog) is the `EnchantmentTypeFlags.BENEFICIAL = 0x2000000` bit,
+// then the `statValue` sign for additive (>0 = buff, <0 = debuff) or
+// its distance from 1.0 for multiplicative (>1 = buff, <1 = debuff).
+// The wire-flag fallback is necessary because the BENEFICIAL bit is
+// occasionally unset on legitimate buffs from older spells (per ACE PRs).
 export function classifyEnchantment(ench) {
   const type = (ench?.type ?? ench?.statModType ?? 0) | 0;
 
   if ((type & ETF.COOLDOWN) !== 0) return "cooldown";
 
-  // Beneficial bit is the authoritative wire signal.
+  // Authoritative signal: the spell record's own IsBeneficial bit.
+  const record = ench?.spellId != null ? spellRecord(ench.spellId) : null;
+  if (record && typeof record.isBeneficial === "boolean") {
+    return record.isBeneficial ? "buff" : "debuff";
+  }
+
+  // Fallback: enchantment wire flag (unreliable on some older spells).
   if ((type & ETF.BENEFICIAL) !== 0) return "buff";
 
-  // Fallback: stat-mod sign.
+  // Further fallback: stat-mod sign.
   const val = Number(ench?.statValue ?? ench?.statModValue ?? 0);
   if ((type & ETF.ADDITIVE) !== 0) {
     return val >= 0 ? "buff" : "debuff";
@@ -425,6 +478,7 @@ function refreshFromCharacter(character) {
   const winners = character.getActiveEnchantments();
   for (const e of winners) {
     if (!e) continue;
+    stampReceivedAt(e, receivedAtSelf);
     state.enchantments.set(e.layeredId >>> 0, e);
   }
   for (const cd of character.sharedCooldowns.values()) {
@@ -435,6 +489,7 @@ function refreshFromCharacter(character) {
       type: (cd.type ?? 0) | ETF.COOLDOWN,
     });
   }
+  pruneReceivedAtCache(receivedAtSelf, state.enchantments);
 }
 
 function refreshFromSnapshot(snapshot) {
@@ -447,6 +502,7 @@ function refreshFromSnapshot(snapshot) {
     if ((n.type & ETF.COOLDOWN) !== 0) {
       state.cooldowns.set(n.layeredId, n);
     } else {
+      stampReceivedAt(n, receivedAtSelf);
       // Per-category tiebreak: keep the highest-Power entry.
       const prev = [...state.enchantments.values()].find(
         (p) => p.spellCategory === n.spellCategory
@@ -458,6 +514,7 @@ function refreshFromSnapshot(snapshot) {
       state.enchantments.set(n.layeredId, n);
     }
   }
+  pruneReceivedAtCache(receivedAtSelf, state.enchantments);
 }
 
 // === Wave 4.B — per-entity enchantment ingestion (2026-05-28) ===
@@ -471,11 +528,18 @@ function refreshEntityFromSnapshot(guid, snapshot) {
   const g = (guid >>> 0);
   if (!Array.isArray(snapshot) || snapshot.length === 0) {
     state.entityEnchantments.delete(g);
+    receivedAtByEntity.delete(g);
   } else {
     const bucket = new Map();
+    let cache = receivedAtByEntity.get(g);
+    if (!cache) {
+      cache = new Map();
+      receivedAtByEntity.set(g, cache);
+    }
     for (const raw of snapshot) {
       const n = normalizeEnchantment(raw);
       if (!n) continue;
+      stampReceivedAt(n, cache);
       // Cooldowns on remote entities are extremely rare (the cooldown
       // bucket is normally local-player-only via SharedCooldowns), but
       // we route them into the same bucket so the consumer can choose
@@ -492,8 +556,10 @@ function refreshEntityFromSnapshot(guid, snapshot) {
     }
     if (bucket.size === 0) {
       state.entityEnchantments.delete(g);
+      receivedAtByEntity.delete(g);
     } else {
       state.entityEnchantments.set(g, bucket);
+      pruneReceivedAtCache(cache, bucket);
     }
   }
   // Notify listeners (nameplate sprite etc.) so they can refresh just
@@ -572,6 +638,7 @@ export function onEntityEnchantmentsChange(fn) {
  */
 export function clearEntityEnchantments() {
   state.entityEnchantments.clear();
+  receivedAtByEntity.clear();
   for (const fn of state.entityChangeListeners) {
     try { fn(0); } catch (_) {}
   }
@@ -884,6 +951,7 @@ export function mount(ctx) {
     state.character = null;
     state.enchantments.clear();
     state.cooldowns.clear();
+    receivedAtSelf.clear();
   };
 }
 

@@ -268,7 +268,7 @@ function _mountCurrent() {
     // destroying the panel. The caller should have checked first.
     console.warn(`[main-panel] no view registered: ${id} (showing not-yet-built placeholder)`);
     _runCleanup();
-    setAcText(titleName, id.charAt(0).toUpperCase() + id.slice(1), { fontId: HEADING_FONT_ID });
+    setAcText(titleName, id.charAt(0).toUpperCase() + id.slice(1), { fontId: HEADING_FONT_ID, fit: true });
     bodyEl.innerHTML = `<div style="padding:24px;color:var(--hb-text-muted);font-style:italic;text-align:center;font-size:11px;">View "${id}" not built yet.</div>`;
     currentCleanup = null;
     overlay.dataset.stackDepth = String(stack.length);
@@ -277,7 +277,7 @@ function _mountCurrent() {
   }
   _runCleanup();
   const name = (typeof view.nameFor === "function") ? view.nameFor(ctx) : (view.name ?? id);
-  setAcText(titleName, name, { fontId: HEADING_FONT_ID });
+  setAcText(titleName, name, { fontId: HEADING_FONT_ID, fit: true });
   try {
     currentCleanup = view.mount(bodyEl, ctx) || null;
   } catch (e) {
@@ -346,7 +346,7 @@ export function currentViewId() {
 // silently if the panel isn't mounted (titleName=null).
 export function setTitle(text) {
   if (!titleName) return false;
-  setAcText(titleName, text, { fontId: HEADING_FONT_ID });
+  setAcText(titleName, text, { fontId: HEADING_FONT_ID, fit: true });
   return true;
 }
 
@@ -549,7 +549,12 @@ export function mount(_ctx) {
   titleEl.appendChild(backBtn);
   titleName = document.createElement("span");
   titleName.className = "hb-mp-title-name";
-  setAcText(titleName, "Panel", { fontId: HEADING_FONT_ID });
+  // bug-effects-text Part B — `.hb-mp-title-name` is a `flex:1` item
+  // inside `.hb-mp-title` (flex row); its inert `text-overflow:ellipsis`
+  // (CSS can't clip a replaced <canvas>) never actually truncated the
+  // 21-22px HEADING_FONT_ID canvas. `fit` auto-measures the span's own
+  // laid-out width every render and shrinks/ellipsizes to it instead.
+  setAcText(titleName, "Panel", { fontId: HEADING_FONT_ID, fit: true });
   titleEl.appendChild(titleName);
   closeBtn = document.createElement("span");
   closeBtn.className = "hb-mp-close";

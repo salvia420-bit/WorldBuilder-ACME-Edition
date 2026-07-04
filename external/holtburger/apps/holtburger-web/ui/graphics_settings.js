@@ -6,6 +6,8 @@
 // value. Most consumers cache at init, so a "Reload to apply" pill
 // appears after the first persisted change in a session.
 
+import { mountFullscreenControl } from "./fullscreen_toggle.js";
+
 const LS_KEY = "holtburger_graphics_v1";
 const QUALITY_EVENT = "hb-quality-changed";
 
@@ -339,6 +341,13 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
     setExtra(state, "wireframe", v); markDirty();
   }));
 
+  // --- Display ---------------------------------------------------------------
+  containerEl.appendChild(makeSectionHeader("Display"));
+  const fullscreenRow = document.createElement("div");
+  fullscreenRow.className = "hb-graphics-row";
+  const disposeFullscreen = mountFullscreenControl(fullscreenRow);
+  containerEl.appendChild(fullscreenRow);
+
   // --- Reload banner + reset ----------------------------------------------
   const reloadBanner = document.createElement("div");
   reloadBanner.className = "hb-graphics-reload";
@@ -367,9 +376,12 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
   containerEl.appendChild(resetRow);
 
   return function dispose() {
-    // Event listeners are attached to DOM nodes inside containerEl;
-    // they're garbage-collected when the container is emptied or
-    // removed. Nothing further to clean up.
+    // Event listeners on the rows above are attached to DOM nodes inside
+    // containerEl; they're garbage-collected when the container is emptied
+    // or removed. The fullscreen control attaches a document-level
+    // `fullscreenchange` listener that outlives containerEl, so it needs
+    // an explicit dispose to avoid stacking listeners on every re-render.
+    disposeFullscreen();
   };
 }
 

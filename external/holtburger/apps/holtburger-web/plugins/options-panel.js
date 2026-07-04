@@ -25,11 +25,29 @@
 // Tabs:
 //   1. Graphics  — embeds the existing ui/graphics_settings.js form
 //                  (renderer flags + quality preset + subdiv level)
-//   2-8. Audio / Network / Mouse / Controls / Chat / Character / About
-//        — placeholder stubs marked "decoder pending" until each
-//        retail sub-layout is wired (gmConfigUI's 8 tab content
-//        templates each point to layout DataId 0x21000293 which is
-//        a per-tab content layout — port one at a time as needed).
+//   2. Audio     — real AudioManager Master/Effect/Ambient gain
+//                  sliders (scene3d/audio/audio_manager.js), persisted
+//                  to `hb.options.audio.v1`. No CharacterOption exists
+//                  for audio (checked holtburger-common character.rs).
+//   3. Mouse     — the one wire-supported mouse CharacterOption
+//                  (UseMouseTurning, 0x31); sensitivity/invert/FOV are
+//                  honestly flagged as unwired (no plumbing exists).
+//   4. Controls  — full keybind rebind UI (capture + persist + reset
+//                  to retail default); see the Controls-tab block
+//                  below and ui/keymap.js for the storage/lookup layer.
+//   5. Chat      — chat-channel + chat-behavior CharacterOptions
+//                  (Listen to */Stay in chat mode/Timestamps/Filter
+//                  language), split out of the Character tab.
+//   6. Network   — AutoReconnect toggle (rec #199); RTT/loss stats
+//                  still pending a stats-stream wire.
+//   7. Character — the remaining CharacterOption groups (Combat,
+//                  Movement, Interface, Social, Privacy, Inventory,
+//                  Visual).
+//   8. About     — static build/source info.
+// Retail sub-layout positions (gmConfigUI tab content layout DataId
+// 0x21000293) are still not ported — see G3 in
+// docs/layout-port-plan-2026-05-24.md — so all tab bodies use our own
+// flex layout rather than retail-exact widget placement.
 //
 // Apply / OK / Cancel semantics match retail:
 //   - Apply  — persist + keep panel open (so users can preview)
@@ -305,26 +323,14 @@ function ensureStyles() {
 // content lookup.
 const TABS = [
   { id: "graphics", label: "Graphics", render: renderGraphicsTab },
-  { id: "audio",    label: "Audio",    render: stubTab("Audio", "Master volume / SFX / music / ambient / voice / chat sounds. Wires to AudioManager + AmbientRuntime — see scene3d/sound_table.js.") },
-  { id: "mouse",    label: "Mouse",    render: stubTab("Mouse & Camera", "Mouse-turn sensitivity / invert / camera distance / FOV. Plumbing already exists in scene3d/picking.js + ui/graphics_settings.js (FOV slider).") },
+  { id: "audio",    label: "Audio",    render: renderAudioTab },
+  { id: "mouse",    label: "Mouse",    render: renderMouseTab },
   { id: "controls", label: "Controls", render: renderControlsTab },
-  { id: "chat",     label: "Chat",     render: stubTab("Chat", "Channel colours / timestamps / per-channel mute. Plumbing partially in plugins/chat-panel.js (tab filters).") },
+  { id: "chat",     label: "Chat",     render: renderChatTab },
   { id: "network",  label: "Network",  render: renderNetworkTab },
   { id: "char",     label: "Character",render: renderCharacterTab },
   { id: "about",    label: "About",    render: renderAboutTab },
 ];
-
-function stubTab(title, blurb) {
-  return (bodyEl) => {
-    bodyEl.innerHTML = `
-      <div class="hb-opt-stub">
-        <b>${title}</b><br>
-        ${blurb}<br><br>
-        <i>(Retail layout port pending — gmConfigUI tab content layout 0x21000293, decode StringId for tab label.)</i>
-      </div>
-    `;
-  };
-}
 
 // ---------------------------------------------------------------------
 // Controls tab — keybinding capture + persist UI.
@@ -667,10 +673,13 @@ const CHARACTER_OPTION_GROUPS = [
     ],
   },
   {
-    section: "Movement & Camera",
+    // Rec (2026-07-04) — Use mouse turning (0x31) moved to the Mouse
+    // tab (mouse-specific) so it isn't duplicated across two tabs;
+    // Run as default movement stays here (general movement default,
+    // not mouse-specific).
+    section: "Movement",
     options: [
       { idx: 0x0A, label: "Run as default movement" },
-      { idx: 0x31, label: "Use mouse turning" },
     ],
   },
   {
@@ -680,8 +689,6 @@ const CHARACTER_OPTION_GROUPS = [
       { idx: 0x14, label: "Show coordinates by the radar" },
       { idx: 0x15, label: "Display spell durations" },
       { idx: 0x08, label: "Display 3D tooltips" },
-      { idx: 0x21, label: "Display timestamps" },
-      { idx: 0x0B, label: "Stay in chat mode after sending" },
       { idx: 0x33, label: "Lock UI" },
       { idx: 0x1A, label: "Show crafting success dialog" },
       { idx: 0x2D, label: "Confirm use of rare gems" },
@@ -715,19 +722,8 @@ const CHARACTER_OPTION_GROUPS = [
     ],
   },
   {
-    section: "Chat channels",
-    options: [
-      { idx: 0x1B, label: "Listen to allegiance chat" },
-      { idx: 0x23, label: "Listen to general chat" },
-      { idx: 0x24, label: "Listen to trade chat" },
-      { idx: 0x25, label: "Listen to LFG chat" },
-      { idx: 0x26, label: "Listen to roleplay chat" },
-      { idx: 0x2E, label: "Listen to society chat" },
-      { idx: 0x34, label: "Listen to PK death messages" },
-      { idx: 0x2C, label: "Filter language" },
-    ],
-  },
-  {
+    // Rec (2026-07-04) — chat-channel + chat-behavior options moved to
+    // the Chat tab (see CHAT_OPTION_GROUPS below / renderChatTab).
     section: "Inventory",
     options: [
       { idx: 0x22, label: "Salvage multiple materials at once" },
@@ -777,14 +773,20 @@ function readCharacterOption(idx, handle, localCache) {
   return !!localCache[String(idx)];
 }
 
-function renderCharacterTab(bodyEl) {
-  bodyEl.innerHTML = "";
+// Shared context (handle/offline/localCache) for any tab that renders
+// CharacterOption checkbox rows — Character, Chat, Mouse all use this
+// so the offline / local-state banners + persistence stay consistent.
+function getCharacterOptionContext() {
   const localCache = loadCharacterOptions();
   const handle = window.__sessionHandle ?? null;
   const offline = !handle || typeof handle.setCharacterOption !== "function";
   const hasServerState =
     !!handle && typeof handle.isCharacterOptionEnabled === "function";
+  return { localCache, handle, offline, hasServerState };
+}
 
+function renderCharacterOptionBanner(bodyEl, ctx) {
+  const { offline, hasServerState } = ctx;
   if (offline) {
     const banner = document.createElement("div");
     banner.className = "hb-opt-stub";
@@ -800,50 +802,279 @@ function renderCharacterTab(bodyEl) {
       "<b>Local-state mode</b><br>Wasm bundle predates the <code>isCharacterOptionEnabled</code> getter — toggles still sync via <code>setCharacterOption</code> but checkboxes read from localStorage. Refresh after the next wasm rebuild.";
     bodyEl.appendChild(banner);
   }
+}
 
-  for (const group of CHARACTER_OPTION_GROUPS) {
+// Build one CharacterOption checkbox row. Shared by Character / Chat /
+// Mouse tabs — each only differs by which `opt.idx` subset it lists.
+function buildCharacterOptionRow(opt, ctx) {
+  const { handle, localCache, offline } = ctx;
+  const row = document.createElement("label");
+  row.className = "hb-opt-row";
+  row.style.cssText =
+    "display:flex;align-items:center;gap:10px;padding:4px 8px;cursor:pointer;";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = readCharacterOption(opt.idx, handle, localCache);
+  cb.style.cssText = "accent-color: var(--hb-text-gold);";
+  // HUD rec #106 — when offline, the banner above already tells the
+  // player toggles won't sync. Enforce that by disabling the inputs
+  // so flipping a checkbox doesn't write a localStorage row that the
+  // next login could then push to the server unexpectedly.
+  if (offline) {
+    cb.disabled = true;
+    row.style.opacity = "0.6";
+    row.style.cursor = "not-allowed";
+  }
+  cb.addEventListener("change", () => {
+    const value = cb.checked;
+    saveCharacterOption(opt.idx, value);
+    try {
+      handle?.setCharacterOption?.(opt.idx >>> 0, value);
+    } catch (e) {
+      // Wire failure is best-effort — keep local state, log only.
+      console.warn(
+        `[options-panel] setCharacterOption(0x${opt.idx.toString(16)}=${value}) failed:`,
+        e,
+      );
+    }
+  });
+  const label = document.createElement("ac-text");
+  setAcText(label, opt.label, { fit: true });
+  row.appendChild(cb);
+  row.appendChild(label);
+  return row;
+}
+
+// Render a list of {section, options:[{idx,label}]} groups as
+// CharacterOption checkbox rows into bodyEl (no innerHTML reset — the
+// caller owns clearing bodyEl / prepending banners first).
+function renderCharacterOptionGroups(bodyEl, groups, ctx) {
+  for (const group of groups) {
     const sec = document.createElement("div");
     sec.className = "hb-opt-section";
     setAcText(sec, group.section);
     bodyEl.appendChild(sec);
     for (const opt of group.options) {
-      const row = document.createElement("label");
-      row.className = "hb-opt-row";
-      row.style.cssText =
-        "display:flex;align-items:center;gap:10px;padding:4px 8px;cursor:pointer;";
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = readCharacterOption(opt.idx, handle, localCache);
-      cb.style.cssText = "accent-color: var(--hb-text-gold);";
-      // HUD rec #106 — when offline, the banner above already tells the
-      // player toggles won't sync. Enforce that by disabling the inputs
-      // so flipping a checkbox doesn't write a localStorage row that the
-      // next login could then push to the server unexpectedly.
-      if (offline) {
-        cb.disabled = true;
-        row.style.opacity = "0.6";
-        row.style.cursor = "not-allowed";
-      }
-      cb.addEventListener("change", () => {
-        const value = cb.checked;
-        saveCharacterOption(opt.idx, value);
-        try {
-          handle?.setCharacterOption?.(opt.idx >>> 0, value);
-        } catch (e) {
-          // Wire failure is best-effort — keep local state, log only.
-          console.warn(
-            `[options-panel] setCharacterOption(0x${opt.idx.toString(16)}=${value}) failed:`,
-            e,
-          );
-        }
-      });
-      const label = document.createElement("ac-text");
-      label.textContent = opt.label;
-      row.appendChild(cb);
-      row.appendChild(label);
-      bodyEl.appendChild(row);
+      bodyEl.appendChild(buildCharacterOptionRow(opt, ctx));
     }
   }
+}
+
+function renderCharacterTab(bodyEl) {
+  bodyEl.innerHTML = "";
+  const ctx = getCharacterOptionContext();
+  renderCharacterOptionBanner(bodyEl, ctx);
+  renderCharacterOptionGroups(bodyEl, CHARACTER_OPTION_GROUPS, ctx);
+}
+
+// ---------------------------------------------------------------------
+// Chat tab — chat-channel + chat-behavior CharacterOptions. These are
+// real wire-supported options (same setCharacterOption path as the
+// Character tab) that retail groups under its own Chat config page
+// rather than under Character, so we mirror that split here.
+const CHAT_OPTION_GROUPS = [
+  {
+    section: "Channels",
+    options: [
+      { idx: 0x1B, label: "Listen to allegiance chat" },
+      { idx: 0x23, label: "Listen to general chat" },
+      { idx: 0x24, label: "Listen to trade chat" },
+      { idx: 0x25, label: "Listen to LFG chat" },
+      { idx: 0x26, label: "Listen to roleplay chat" },
+      { idx: 0x2E, label: "Listen to society chat" },
+      { idx: 0x34, label: "Listen to PK death messages" },
+    ],
+  },
+  {
+    section: "Behavior",
+    options: [
+      { idx: 0x0B, label: "Stay in chat mode after sending" },
+      { idx: 0x21, label: "Display timestamps" },
+      { idx: 0x2C, label: "Filter language" },
+    ],
+  },
+];
+
+function renderChatTab(bodyEl) {
+  bodyEl.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "hb-opt-section";
+  title.style.marginTop = "0";
+  setAcText(title, "Chat");
+  bodyEl.appendChild(title);
+
+  const ctx = getCharacterOptionContext();
+  renderCharacterOptionBanner(bodyEl, ctx);
+  renderCharacterOptionGroups(bodyEl, CHAT_OPTION_GROUPS, ctx);
+
+  const note = document.createElement("div");
+  note.className = "hb-opt-stub";
+  note.style.marginTop = "10px";
+  note.style.fontStyle = "italic";
+  note.innerHTML =
+    "Per-channel text colours + timestamps formatting are not yet wired — " +
+    "plugins/chat-panel.js owns the tab filters; channel on/off above is " +
+    "real (routes through <code>setCharacterOption</code>).";
+  bodyEl.appendChild(note);
+}
+
+// ---------------------------------------------------------------------
+// Mouse tab — the only wire-supported mouse-specific CharacterOption is
+// UseMouseTurning (0x31). Turn sensitivity / invert-Y / camera distance
+// / FOV have no plumbing in this client yet (checked scene3d/picking.js
+// + ui/graphics_settings.js — neither exposes a sensitivity or FOV
+// control despite an earlier stub claiming otherwise); surfaced here
+// honestly rather than wiring a fake slider.
+const MOUSE_OPTION_GROUPS = [
+  {
+    section: "Camera",
+    options: [
+      { idx: 0x31, label: "Use mouse turning" },
+    ],
+  },
+];
+
+function renderMouseTab(bodyEl) {
+  bodyEl.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "hb-opt-section";
+  title.style.marginTop = "0";
+  setAcText(title, "Mouse & Camera");
+  bodyEl.appendChild(title);
+
+  const ctx = getCharacterOptionContext();
+  renderCharacterOptionBanner(bodyEl, ctx);
+  renderCharacterOptionGroups(bodyEl, MOUSE_OPTION_GROUPS, ctx);
+
+  const note = document.createElement("div");
+  note.className = "hb-opt-stub";
+  note.style.marginTop = "10px";
+  note.style.fontStyle = "italic";
+  note.innerHTML =
+    "Mouse-turn sensitivity / invert / camera distance / FOV are <b>not yet " +
+    "supported</b> — no sensitivity or FOV control exists in scene3d/picking.js " +
+    "or ui/graphics_settings.js today. \"Use mouse turning\" above is real " +
+    "(CharacterOption 0x31, routes through <code>setCharacterOption</code>).";
+  bodyEl.appendChild(note);
+}
+
+// ---------------------------------------------------------------------
+// Audio tab — real AudioManager gain controls (Master / Effect /
+// Ambient buses). AudioManager (scene3d/audio/audio_manager.js) is
+// instantiated by scene3d/index.js as `liveScene3d.audioManager` with
+// setMasterGain/setEffectGain/setAmbientGain already implemented and
+// mirroring retail's effect_sound_volume/ambient_sound_volume. There
+// is no CharacterOption for audio (checked holtburger-common
+// character.rs — the CharacterOption/CharacterOption2 bitflags have no
+// volume bits), so this persists to its own localStorage key instead
+// of the setCharacterOption path used by the other tabs.
+//
+// Seam / known gap: AudioManager is constructed once, early, with a
+// hardcoded `masterGain: 1.0` (scene3d/index.js ~3946) — this file
+// only owns plugins/options-panel.js + new ui/ helpers, so it cannot
+// thread the persisted value into that constructor call. Instead we
+// re-apply the saved gains to the live AudioManager every time this
+// tab is opened (covers "changed this session, reopened panel later")
+// and on slider input (live preview). A full fix would read
+// LS_AUDIO_KEY at AudioManager construction time in scene3d/index.js.
+const LS_AUDIO_KEY = "hb.options.audio.v1";
+const AUDIO_BUSES = [
+  { key: "master", label: "Master volume", setter: "setMasterGain" },
+  { key: "effect", label: "Sound effects",  setter: "setEffectGain" },
+  { key: "ambient", label: "Ambient sound", setter: "setAmbientGain" },
+];
+
+function loadAudioGains() {
+  const defaults = { master: 1.0, effect: 1.0, ambient: 1.0 };
+  try {
+    const raw = localStorage.getItem(LS_AUDIO_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === "object") ? { ...defaults, ...parsed } : defaults;
+  } catch (_) { return defaults; }
+}
+
+function saveAudioGain(key, value) {
+  try {
+    const state = loadAudioGains();
+    state[key] = value;
+    localStorage.setItem(LS_AUDIO_KEY, JSON.stringify(state));
+  } catch (_) {}
+}
+
+function getAudioManager() {
+  return window.liveScene3d?.audioManager ?? null;
+}
+
+function renderAudioTab(bodyEl) {
+  bodyEl.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "hb-opt-section";
+  title.style.marginTop = "0";
+  setAcText(title, "Volume");
+  bodyEl.appendChild(title);
+
+  const manager = getAudioManager();
+  const gains = loadAudioGains();
+
+  if (!manager) {
+    const banner = document.createElement("div");
+    banner.className = "hb-opt-stub";
+    banner.style.marginBottom = "10px";
+    banner.innerHTML =
+      "<b>Audio engine not ready</b><br>Sliders record your preference locally; " +
+      "they'll apply to the live mixer once the world audio context has started " +
+      "(first click/keypress after entering the world).";
+    bodyEl.appendChild(banner);
+  } else {
+    // Re-apply saved preferences to the live mixer every time the tab
+    // opens — see the seam note above for why this can't happen at
+    // AudioManager construction time from this file.
+    for (const bus of AUDIO_BUSES) {
+      try { manager[bus.setter]?.(gains[bus.key]); } catch (_) {}
+    }
+  }
+
+  for (const bus of AUDIO_BUSES) {
+    const row = document.createElement("div");
+    row.className = "hb-settings-row";
+
+    const label = document.createElement("ac-text");
+    setAcText(label, bus.label, { fit: true });
+    row.appendChild(label);
+
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = "0";
+    slider.max = "100";
+    slider.step = "1";
+    slider.value = String(Math.round((gains[bus.key] ?? 1.0) * 100));
+
+    const val = document.createElement("span");
+    val.className = "hb-settings-val";
+    setAcText(val, `${slider.value}%`);
+
+    slider.addEventListener("input", () => {
+      const pct = Number(slider.value);
+      const g = pct / 100;
+      setAcText(val, `${pct}%`);
+      saveAudioGain(bus.key, g);
+      try { getAudioManager()?.[bus.setter]?.(g); } catch (_) {}
+    });
+
+    row.appendChild(slider);
+    row.appendChild(val);
+    bodyEl.appendChild(row);
+  }
+
+  const note = document.createElement("div");
+  note.className = "hb-opt-stub";
+  note.style.marginTop = "10px";
+  note.style.fontStyle = "italic";
+  note.innerHTML =
+    "Music / voice buses don't exist in AudioManager yet — only " +
+    "Master/Effect/Ambient are real (scene3d/audio/audio_manager.js).";
+  bodyEl.appendChild(note);
 }
 
 // Rec #199 — Network tab. AutoReconnect persists today (localStorage,
@@ -1057,7 +1288,11 @@ export const view = {
       b.type = "button";
       b.className = "hb-opt-tab" + (t.id === activeId ? " active" : "");
       b.dataset.tab = t.id;
-      setAcText(b, t.label);
+      // bug-effects-text Part B — tab strip is `flex-wrap:wrap` at
+      // `font-size:10px` (CSS is inert on the canvas); `fit` auto-shrinks
+      // to the button's own laid-out width so the 5 tabs stay one row
+      // instead of wrapping to a 16px-canvas multi-row strip.
+      setAcText(b, t.label, { fit: true });
       b.addEventListener("click", () => switchTo(t.id));
       tabsEl.appendChild(b);
       tabBtns[t.id] = b;
