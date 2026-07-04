@@ -20,6 +20,36 @@ import { currentTime } from "./time_rng.js";
 import { Particle } from "./particle.js";
 import { EmitterType } from "./particle_emitter_info.js";
 
+// Lazy slot allocation (2026-07-04). setInfo used to eagerly build ALL
+// `effectiveMax` per-slot meshes + material clones up front; a live 121-LB
+// Holtburg census measured 3,873 static emitters pre-allocating ~61k slot
+// meshes for only ~15k ever-active / ~4.9k ever-visible particles (96% of the
+// emitters are foliage pollen with ~4 active of 16 slots). Most ambient
+// emitters never approach maxParticles, and quality-capped emitters (up to 256)
+// show a fraction. Pre-create only the initial working set and grow toward
+// `effectiveMax` on demand. Emit into an un-created slot is impossible:
+// getNextParticleIdx only ranges over created slots and kicks a grow when they
+// run out — a spawn deferred by a tick or two is imperceptible for a
+// continuously-emitting ambient, and the opening burst is covered by
+// `initialParticles + SLOT_PREALLOC_HEADROOM`. `?eagerParticleSlots=1` restores
+// the old build-everything path.
+const SLOT_PREALLOC_HEADROOM = 6;   // ready slots kept beyond the initial burst
+const SLOT_PREALLOC_MIN = 6;        // floor on the initial pre-alloc (unless effectiveMax is smaller)
+const SLOT_GROW_STEP = 8;           // slots materialized per on-demand grow
+let _eagerSlotsFlag;
+function _eagerParticleSlots() {
+  if (_eagerSlotsFlag !== undefined) return _eagerSlotsFlag;
+  let on = false;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("eagerParticleSlots") || "").toLowerCase();
+      on = v === "1" || v === "on" || v === "true" || v === "yes";
+    }
+  } catch (_) { on = false; }
+  _eagerSlotsFlag = on;
+  return on;
+}
+
 // E4 (2026-05-18): per-tick scratch for the BirthratePerMeter branch of
 // shouldEmitParticle(). The Vector3 is filled via subVectors(parent.position,
 // lastEmitOffset) and only `.lengthSq()` is read downstream by
@@ -86,10 +116,14 @@ export class ParticleEmitter {
     };
     this.info = null;
 
-    // Slot arrays — same length as info.maxParticles after setInfo().
-    this.particles = []; // Particle | null per slot
+    // Slot arrays — allocated to length info.maxParticles at setInfo(), but the
+    // meshes/Particles are materialized lazily (see _createSlots): entries in
+    // [_createdSlots, maxParticles) are null until an on-demand grow fills them.
+    this.particles = []; // Particle | null per slot (null past _createdSlots)
     this.parts = []; // THREE.Mesh | null per slot (the "Parts" list in ACE)
-    this.partStorage = []; // THREE.Mesh per slot, always non-null (the "PartStorage" array)
+    this.partStorage = []; // THREE.Mesh | null per slot (null past _createdSlots — lazy)
+    this._createdSlots = 0; // count of slots whose mesh+Particle have been built
+    this._growing = false;  // guard: an async _createSlots grow is in flight
 
     this.numParticles = 0;
     this.totalEmitted = 0;
@@ -199,17 +233,53 @@ export class ParticleEmitter {
     this.parts = new Array(n).fill(null);
     this.partStorage = new Array(n).fill(null);
     this.particles = new Array(n).fill(null);
-    for (let i = 0; i < n; i++) {
+    this._createdSlots = 0;
+    this._growing = false;
+    // Lazy: build only the initial working set (opening burst + headroom),
+    // grow toward `n` on demand in getNextParticleIdx. `?eagerParticleSlots=1`
+    // (or a tiny `n`) builds them all up front, byte-identical to the old path.
+    const initialAlloc = _eagerParticleSlots()
+      ? n
+      : Math.min(n, Math.max((this.info.initialParticles | 0) + SLOT_PREALLOC_HEADROOM, SLOT_PREALLOC_MIN));
+    await this._createSlots(initialAlloc);
+    return true;
+  }
+
+  /**
+   * Materialize per-slot meshes + Particles for indices [_createdSlots, target)
+   * (clamped to the maxParticles-sized arrays). Idempotent-safe: never rebuilds
+   * an already-created slot. Awaited by setInfo for the initial batch; called
+   * fire-and-forget by _growSlots for on-demand growth.
+   */
+  async _createSlots(target) {
+    const cap = Math.min(target | 0, this.partStorage.length);
+    for (let i = this._createdSlots; i < cap; i++) {
       const mesh = await this._meshFactory(i);
       this.partStorage[i] = mesh;
       this.particles[i] = new Particle();
-      // Start invisible — meshes only become visible when a particle
-      // claims the slot.
-      if (mesh) {
-        mesh.visible = false;
-      }
+      // Start invisible — meshes only become visible when a particle claims the slot.
+      if (mesh) mesh.visible = false;
+      // Advance the watermark per-slot so a mid-await teardown/read sees a
+      // consistent prefix (never a hole).
+      if (i + 1 > this._createdSlots) this._createdSlots = i + 1;
     }
-    return true;
+  }
+
+  /**
+   * On-demand growth: when every created slot is busy and we're below
+   * maxParticles, materialize the next SLOT_GROW_STEP slots. Async + guarded so
+   * a per-frame emit loop never launches overlapping grows; the current emit is
+   * skipped and the freed slots are picked up on a subsequent tick.
+   */
+  _growSlots() {
+    if (this._growing || !this.info) return;
+    const max = this.info.maxParticles | 0;
+    if (this._createdSlots >= max) return;
+    this._growing = true;
+    const target = Math.min(this._createdSlots + SLOT_GROW_STEP, max);
+    Promise.resolve(this._createSlots(target))
+      .catch(() => {})
+      .finally(() => { this._growing = false; });
   }
 
   /**
@@ -283,11 +353,17 @@ export class ParticleEmitter {
     );
   }
 
-  /** Port of `GetNextParticleIdx` (ParticleEmitter.cs:154-160). */
+  /** Port of `GetNextParticleIdx` (ParticleEmitter.cs:154-160). Lazy-slot aware:
+   *  only hands out a slot whose mesh has actually been built (`_createdSlots`),
+   *  and kicks an async grow when the created slots are exhausted but the emitter
+   *  is still below maxParticles. */
   getNextParticleIdx() {
-    for (let i = 0; i < this.parts.length; i++) {
+    for (let i = 0; i < this._createdSlots; i++) {
       if (this.parts[i] === null) return i;
     }
+    // Created slots all busy — grow toward maxParticles (async). Returning -1
+    // skips this one emit; the next tick(s) find the freshly-built free slots.
+    this._growSlots();
     return -1;
   }
 

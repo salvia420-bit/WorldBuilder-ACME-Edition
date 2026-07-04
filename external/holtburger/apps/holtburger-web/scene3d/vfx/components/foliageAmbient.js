@@ -53,6 +53,43 @@ const EMITTER_PER_SEC = 1;       // EmitterType.BirthratePerSec
 // effect costs exactly what flag-off costs: zero draw calls). Smooth ramp above.
 const GATE_MIN = 0.03;
 
+// Distance draw-cull for foliage ambient (2026-07-04). Foliage motes/sparks are
+// canopy-local and imperceptible past a few tens of metres, yet the streaming
+// ring is 13×13 LBs (~1.15 km) — a live Holtburg census found 3,733 pollen
+// emitters (96% of ALL static emitters), nearly all far from the player. We
+// stamp each foliage emitter with a short `degradeDistanceMeters`; ParticleManager
+// honours it via the RP6/degrade cull (skips BOTH updateParticles + draw beyond
+// the radius, restores on approach — NOT a bake-time skip, so foliage still
+// appears up close and never needs a re-bake). `?foliageParticleRadius=N` scales
+// all three radii (N metres at the reference 90 m pollen tuning; 0 disables the
+// cull → foliage draws to the full ring as before). Additive/night fireflies read
+// further than daytime pollen. NEEDS a 1070 eye-test to tune the pop-in distance.
+const FOLIAGE_DRAW_RADIUS_REF_M = 90;   // reference radius (pollen); per-effect scales off this
+let _foliageRadiusOverride;
+function _foliageRadiusScale() {
+  if (_foliageRadiusOverride !== undefined) return _foliageRadiusOverride;
+  let scale = 1;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const raw = new URLSearchParams(globalThis.location.search).get("foliageParticleRadius");
+      if (raw != null) {
+        const v = Number(raw);
+        if (Number.isFinite(v) && v >= 0) scale = v / FOLIAGE_DRAW_RADIUS_REF_M; // N metres → scale
+      }
+    }
+  } catch (_) { scale = 1; }
+  _foliageRadiusOverride = scale;
+  return scale;
+}
+// Resolve a component's draw radius (metres). `p.drawRadiusM` is the per-effect
+// authored value; the URL override scales it. 0 (or ≤0) ⇒ no cull (Infinity).
+function _foliageDrawRadiusM(baseM) {
+  const scale = _foliageRadiusScale();
+  if (scale === 0) return 0;                       // ?foliageParticleRadius=0 → disable
+  const r = (Number.isFinite(baseM) ? baseM : FOLIAGE_DRAW_RADIUS_REF_M) * scale;
+  return r > 0 ? r : 0;
+}
+
 // Deterministic 32-bit integer hash → [0,1) (identical to flameFlicker.js:48).
 // No Math.random / no Date.now.
 function hash01(n) {
@@ -118,6 +155,10 @@ function buildEmitter(p, anchor, hwGfxObjId, seed, g) {
     scaleRand: p.scaleRand, startScale: p.startScale, finalScale: p.finalScale,
     transRand: p.transRand, startTrans: p.startTrans, finalTrans: p.finalTrans,
     isParentLocal: false,              // spawn at anchor, then drift in world space
+    // Distance draw-cull radius (metres): ParticleManager stamps this onto
+    // emitter.degradeDistance + _forceDegrade so the RP6/degrade cull skips this
+    // emitter's update+draw beyond the radius, flag-independently. 0 ⇒ no cull.
+    degradeDistanceMeters: _foliageDrawRadiusM(p.drawRadiusM),
   };
 
   // Raise the spawn-sphere centre to the canopy centroid (part-local). The
@@ -142,6 +183,15 @@ function emitFor(self, ctx) {
   const g = self.gateFn(ctx && ctx.env);
   if (!(g > GATE_MIN)) return [];                       // gated out → byte-free
   const cfg = { ...self.defaults, ...(ctx && ctx.config) };
+  // Scale-floor (2026-07-04). The classifier's dist/vfx/visual_descriptors.jsonl
+  // bakes a broken `startScale/finalScale: 0.03` into EVERY foliage-pollen entry
+  // (16× below the authored 0.5/0.32 → getRandomStartScale clamps to the 0.1
+  // mesh-scale floor → ~1 cm motes = invisible; this is why pollen was never
+  // seen). The COMPONENT default is the intended mote size, so never let the
+  // descriptor config SHRINK a foliage effect below it — a legitimately-LARGER
+  // descriptor scale still wins. Fixes the size without regenerating the data.
+  cfg.startScale = Math.max(cfg.startScale ?? 0, self.defaults.startScale ?? 0);
+  cfg.finalScale = Math.max(cfg.finalScale ?? 0, self.defaults.finalScale ?? 0);
   const sprites = (ctx && ctx.sprites) || {};
   const hwGfxObjId = (sprites[self.spriteName] || cfg.hwGfxObjId || 0) >>> 0;
   if (hwGfxObjId === 0) return [];                      // no sprite resolved → invisible-guard
@@ -184,6 +234,7 @@ export const foliagePollen = {
     cX: 0, cY: 0, cZ: 0, minC: 1, maxC: 1,
     scaleRand: 0.15, startScale: 0.5, finalScale: 0.32,
     transRand: 0.1, startTrans: 0.25, finalTrans: 1.0,  // fade out at end of life
+    drawRadiusM: 90,                     // daytime motes — short range (see _foliageDrawRadiusM)
   },
   emit(ctx) { return emitFor(this, ctx); },
 };
@@ -219,6 +270,7 @@ export const foliageFireflies = {
     cX: 0.25, cY: 0.18, cZ: 0.25, minC: 0.5, maxC: 1.0,
     scaleRand: 0.1, startScale: 0.22, finalScale: 0.22,  // constant tiny dot
     transRand: 0.2, startTrans: 0.15, finalTrans: 1.0,   // blink out
+    drawRadiusM: 150,                    // additive night sparks — read further than pollen
   },
   emit(ctx) { return emitFor(this, ctx); },
 };
@@ -254,6 +306,7 @@ export const foliageLeaves = {
     cX: 0.2, cY: 0, cZ: 0.2, minC: 0.5, maxC: 1.0,    // sideways flutter
     scaleRand: 0.2, startScale: 0.9, finalScale: 0.9,
     transRand: 0.1, startTrans: 0.0, finalTrans: 1.0, // FADE before reaching ground
+    drawRadiusM: 120,                    // falling leaves — mid range
   },
   emit(ctx) { return emitFor(this, ctx); },
 };

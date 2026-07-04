@@ -125,16 +125,31 @@ export function pollenGate(env) {
 export function firefliesGate(env) {
   if (!env) return 0;
   const night = Number.isFinite(env.nightFactor) ? env.nightFactor : nightFactor(env.sunAlt);
-  let seasonW;
-  switch (env.season) {
-    case SEASON_SUMMER: seasonW = 1.0; break;
-    case SEASON_SPRING: seasonW = 0.5; break;
-    case SEASON_AUTUMN: seasonW = 0.25; break;
-    default: seasonW = 0.0; // winter: none
-  }
-  // Fireflies need warmth: fade across 8°C→14°C.
-  const warm = smoothstep(8, 14, Number.isFinite(env.temperatureC) ? env.temperatureC : 15);
   const calm = clamp01(1 - (Number.isFinite(env.stormness) ? env.stormness : (env.isStorm ? 1 : 0)));
+  const tempC = Number.isFinite(env.temperatureC) ? env.temperatureC : 15;
+  let seasonW, warm;
+  if (env.strictFoliageSeason) {
+    // STRICT (?foliageStrictSeason=1) — the original realism gate: summer-warm only.
+    switch (env.season) {
+      case SEASON_SUMMER: seasonW = 1.0; break;
+      case SEASON_SPRING: seasonW = 0.5; break;
+      case SEASON_AUTUMN: seasonW = 0.25; break;
+      default: seasonW = 0.0; // winter: none
+    }
+    warm = smoothstep(8, 14, tempC);                 // fade across 8°C→14°C
+  } else {
+    // RELAXED (default 2026-07-04) — fireflies are THE night foliage effect, so
+    // keep the defining night + calm gate but drop the summer-warm-ONLY
+    // requirement: Dereth has no reliable summer, and the user wants to see them.
+    // They still ramp brighter in warm summer and thin out in a hard freeze.
+    switch (env.season) {
+      case SEASON_SUMMER: seasonW = 1.0; break;
+      case SEASON_SPRING: seasonW = 0.75; break;
+      case SEASON_AUTUMN: seasonW = 0.65; break;
+      default: seasonW = 0.55; // winter fireflies still show (relaxed)
+    }
+    warm = 0.5 + 0.5 * smoothstep(6, 14, tempC);     // floor 0.5, never fully off by cold
+  }
   return clamp01(night) * seasonW * warm * calm;
 }
 
@@ -147,11 +162,25 @@ export function firefliesGate(env) {
 export function leavesGate(env) {
   if (!env) return 0;
   let seasonW;
-  switch (env.season) {
-    case SEASON_AUTUMN: seasonW = 1.0; break;
-    case SEASON_SUMMER: seasonW = 0.15; break;
-    case SEASON_SPRING: seasonW = 0.10; break;
-    default: seasonW = 0.0; // winter: bare canopy → no shed
+  if (env.strictFoliageSeason) {
+    // STRICT (?foliageStrictSeason=1) — original autumn-shed realism gate.
+    switch (env.season) {
+      case SEASON_AUTUMN: seasonW = 1.0; break;
+      case SEASON_SUMMER: seasonW = 0.15; break;
+      case SEASON_SPRING: seasonW = 0.10; break;
+      default: seasonW = 0.0; // winter: bare canopy → no shed
+    }
+  } else {
+    // RELAXED (default 2026-07-04) — Dereth has no calendar autumn, so gate
+    // canopy leaf-shed YEAR-ROUND (ambient drift from trees/bushes) with an
+    // autumn PEAK rather than an autumn-ONLY window. The user wants to see them.
+    switch (env.season) {
+      case SEASON_AUTUMN: seasonW = 1.0; break;
+      case SEASON_SUMMER: seasonW = 0.6; break;
+      case SEASON_SPRING: seasonW = 0.55; break;
+      case SEASON_WINTER: seasonW = 0.5; break; // winter still sheds a little (relaxed)
+      default: seasonW = 0.5;
+    }
   }
   // Wind drives the loose-leaf rate: calm baseline ~1.0, gusty storm ~1.7
   // (writeWindVector envelope). Map [1.0, 1.6] gust → [0.3, 1.0] shed weight,

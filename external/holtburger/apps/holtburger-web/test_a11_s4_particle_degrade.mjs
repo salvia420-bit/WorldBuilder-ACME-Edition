@@ -277,8 +277,12 @@ check(
   /__hbWasmNs\?\.fetch_particle_degrade_distance === "function"/.test(indexSrc),
 );
 check(
-  "OR-term is flag-gated AND finite-gated inside _rp6ShouldCull",
-  /particleDegradeRetailOn\(\) &&\s*\n\s*Number\.isFinite\(emitter\.degradeDistance\)/.test(pmSrc),
+  // 2026-07-04: the OR-term now also fires when an emitter opts in via
+  // `_forceDegrade` (synthesized foliage ambient carries a short draw radius,
+  // honoured independently of ?particleDegrade). Still finite-gated so a
+  // ctor-Infinity / no-radius emitter is never distance-culled.
+  "OR-term is (flag OR _forceDegrade)-gated AND finite-gated inside _rp6ShouldCull",
+  /\(particleDegradeRetailOn\(\) \|\| emitter\._forceDegrade === true\) &&\s*\n\s*Number\.isFinite\(emitter\.degradeDistance\)/.test(pmSrc),
 );
 check(
   "addEmitter stamp guards table identity (despawn-mid-resolve dropped)",

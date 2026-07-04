@@ -477,7 +477,7 @@ function _rp6ShouldCull(emitter, camera) {
   // on the flag AND a finite stamp so flag-off (ctor Infinity) is
   // inert; RP6 frustum/cap above stays the superset.
   if (
-    particleDegradeRetailOn() &&
+    (particleDegradeRetailOn() || emitter._forceDegrade === true) &&
     Number.isFinite(emitter.degradeDistance) &&
     distSq > emitter.degradeDistance * emitter.degradeDistance
   ) {
@@ -807,6 +807,21 @@ export class ParticleManager {
     emitter.id = id;
     this.particleTable.set(id, emitter);
 
+    // Foliage distance draw-cull (2026-07-04) — synthesized foliage ambient
+    // emitters (pollen/fireflies/leaves) carry an authored `degradeDistanceMeters`
+    // on their emitterInfo POJO. Stamp it onto the emitter with `_forceDegrade`
+    // so the RP6/degrade cull honours the radius INDEPENDENTLY of
+    // ?particleDegrade (which is a separate, retail-fidelity, default-off knob).
+    // Skips update+draw beyond the radius, restores on approach — canopy motes
+    // never render across the 1.15 km ring. 0/absent ⇒ no cull (unchanged).
+    {
+      const rM = emitterInfo && typeof emitterInfo === "object" ? emitterInfo.degradeDistanceMeters : 0;
+      if (Number.isFinite(rM) && rM > 0) {
+        emitter.degradeDistance = rM;
+        emitter._forceDegrade = true;
+      }
+    }
+
     // A11-S4 (?particleDegrade=retail) — the InitEnd analog: stamp the
     // authored degrade radius (retail `degrade_distance =
     // GetMaxDegradeDistance(part_storage[0])`, acclient.c:331265+;
@@ -814,7 +829,7 @@ export class ParticleManager {
     // Fire-and-forget: the field stays at the ctor Infinity (=never
     // degrade-culled) until the cached wasm fetch resolves; a despawned
     // or replaced emitter is skipped via the table identity check.
-    if (particleDegradeRetailOn()) {
+    if (particleDegradeRetailOn() && !emitter._forceDegrade) {
       _degradeDistanceFor(info.hwGfxObjId)
         .then((meters) => {
           if (meters != null && this.particleTable.get(id) === emitter) {

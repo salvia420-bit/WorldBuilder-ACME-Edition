@@ -417,7 +417,34 @@ function lbSetKey(lbX, lbY) {
 // windBend peel which splices). Gated visualEnabled() && gemSparkleEnabled();
 // OFF ⇒ null ⇒ no attach ⇒ byte-identical. The catalog is already loaded by the
 // windBend peel block that runs just before each caller (ensureVfxCatalog()).
-function _collectParticlePlacements(statics) {
+// `?wireParticles=1` — opt static particle emitters BACK IN under ?wireframe=1
+// (default OFF: wireframe skips them, see _collectParticlePlacements). For
+// debugging particle-emitter placement in the wire view. Cached per session.
+let _wireParticlesFlag;
+function _wireParticlesEnabled() {
+  if (_wireParticlesFlag !== undefined) return _wireParticlesFlag;
+  let on = false;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("wireParticles") || "").toLowerCase();
+      on = v === "1" || v === "on" || v === "true" || v === "yes";
+    }
+  } catch (_) { on = false; }
+  _wireParticlesFlag = on;
+  return on;
+}
+
+function _collectParticlePlacements(statics, scene3d) {
+  // Wire-agent (?wireframe=1): a debug/scene-graph/protocol view that already
+  // skips atmosphere/clouds/skydome/CSM/shadows. Static particle emitters are
+  // pure VFX with zero inspection value, and they DOMINATE the wireframe cost —
+  // a live 121-LB Holtburg census measured 3,873 emitters (96% foliagePollen)
+  // pre-allocating ~61k slot meshes (~15k parented, only ~4.9k ever visible).
+  // Each slot clones its base material → in wireframe a unique `wire-did-*`
+  // clone that can't batch and gets no fill companion. Skipping them here drops
+  // the whole population (proven equivalent to ?visual=off: statics scene nodes
+  // 17,459 → 2,532). `?wireParticles=1` re-enables for VFX-placement debugging.
+  if (scene3d && scene3d.wireframeMode && !_wireParticlesEnabled()) return null;
   // Gate on the ?visual master only — the PER-EFFECT flag (gemSparkle / brazier /
   // foliage*) is enforced downstream by particleEntriesForDescriptor (comp.enabled()),
   // so a placement is dropped from the plan when its specific effect is off. Gating
@@ -1808,7 +1835,7 @@ export async function bakeStaticsForLandblock(
   // Phase 3 (?gemSparkle) — collect particle placements to overlay ON TOP of the
   // frozen path (non-destructive: `statics` is unchanged so the mesh still
   // renders). OFF ⇒ null.
-  const particlePlacements = _collectParticlePlacements(statics);
+  const particlePlacements = _collectParticlePlacements(statics, scene3d);
   // A2 — the load-bearing fetch+drain (fetch_landblock_objects +
   // fetchAndDrainScenery) has now SUCCEEDED. Mark the LB permanently
   // baked HERE (not at function entry) so a throw above this line leaves
@@ -2465,7 +2492,7 @@ export async function bakeStaticsRing(
     }
   }
   // Phase 3 (?gemSparkle) — non-destructive particle collect (mesh stays frozen).
-  const particlePlacements = _collectParticlePlacements(statics);
+  const particlePlacements = _collectParticlePlacements(statics, scene3d);
   // Mark every newly-baked LB in the set BEFORE instantiation runs
   // so a concurrent caller observing mid-instantiation state sees the
   // bake-in-progress LBs as baked. Matches the per-LB baker's

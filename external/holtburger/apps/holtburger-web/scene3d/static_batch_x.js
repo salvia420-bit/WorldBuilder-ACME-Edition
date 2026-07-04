@@ -193,10 +193,26 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
     // must be explicit: excise this LB's previous contribution, then feed
     // fresh (same-frame, matches legacy replace semantics).
     if (_lbMembership.has(lbKey)) evictStaticBatchXForLb(lbKey);
+    // Normal mode: a material appearing once in THIS LB feed (group.length < 2)
+    // punts to the downstream statAtlas seam, which absorbs it by baking its
+    // texture into a shared atlas (static_atlas.js ~389 needs mat.map.image.data).
+    // Wireframe mode has NO such atlas — the shared MeshBasicMaterial buckets
+    // carry no `.map`, so a punted loner survives as a plain Mesh AND gains a
+    // wireFill companion: the ~4,100-draw / tripled-node pile-up that pins
+    // wireframe at 4.5 fps (normal ~703 statics draws vs wireframe ~4,708).
+    // Buckets here are PERSISTENT and cross-LB (keyed by region + material
+    // object), and wireframe materials are SHARED cross-LB (per-DID
+    // `didMaterials` / 32-bucket hash in materials._wireframeMaterialFor), so
+    // consuming loners collapses ~121 LBs' worth of them into one BatchedMesh
+    // per (region, material) — reusing the exact machinery that already batches
+    // the >=2 groups in wireframe, and BatchedMesh loses its fill companion
+    // automatically (addFillCompanions skips isBatchedMesh, materials.js ~2213).
+    // Keep the punt untouched when wireframe is off (normal mode byte-identical).
+    const wireframeMode = !!(scene3d && scene3d.wireframeMode);
     let consumed = 0;
     let bucketsTouched = 0;
     for (const group of byMat.values()) {
-      if (group.length < 2) { out.push(...group); continue; } // lone → statAtlas seam, as before
+      if (group.length < 2 && !wireframeMode) { out.push(...group); continue; } // lone → statAtlas seam (normal mode only)
       let bucket;
       try {
         bucket = _getOrCreateBucket(group[0].material, scene3d, group[0], regionKey);

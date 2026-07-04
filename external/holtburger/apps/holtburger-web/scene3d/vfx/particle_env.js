@@ -61,7 +61,30 @@ export function readParticleEnv(scene3d, out = _envScratch) {
   out.isStorm = !!(ws && ws.is_storm);
   out.latitudeDeg = ws && Number.isFinite(ws.latitude_deg) ? ws.latitude_deg : 45;
 
+  // Foliage season gating (2026-07-04). DEFAULT (relaxed): leaves shed year-round
+  // and fireflies show any night (Dereth has no calendar autumn / reliable summer,
+  // and the user wants to see them). `?foliageStrictSeason=1` restores the original
+  // autumn-leaves / summer-warm-fireflies realism gates. Read here (the window-side
+  // producer) and passed via env so particle_env_gates.js stays a pure module.
+  out.strictFoliageSeason = _foliageStrictSeason();
+
   return out;
+}
+
+// `?foliageStrictSeason=1` → strict seasonal foliage gates (leaves=autumn only,
+// fireflies=summer+warm only). Default OFF = relaxed year-round (see the gates).
+let _strictSeasonFlag;
+function _foliageStrictSeason() {
+  if (_strictSeasonFlag !== undefined) return _strictSeasonFlag;
+  let on = false;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("foliageStrictSeason") || "").toLowerCase();
+      on = v === "1" || v === "on" || v === "true" || v === "yes";
+    }
+  } catch (_) { on = false; }
+  _strictSeasonFlag = on;
+  return on;
 }
 
 export default readParticleEnv;

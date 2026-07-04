@@ -52,9 +52,18 @@ check("pollen: night=0", pollenGate(night) === 0);
 check("pollen: storm=0", pollenGate(stormNoon) === 0);
 check("firefly: day=0", firefliesGate(noon) === 0);
 check("firefly: night>0", firefliesGate(night) > 0);
-check("firefly: winter=0", firefliesGate(winterNight) === 0);
+// 2026-07-04: RELAXED default — fireflies show ANY night (night is the defining
+// gate); ?foliageStrictSeason=1 restores summer-warm-only (winter night → 0).
+check("firefly: relaxed winter-night > 0 (default)", firefliesGate(winterNight) > 0);
+check("firefly: strict winter-night = 0", firefliesGate({ ...winterNight, strictFoliageSeason: true }) === 0);
+check("firefly: strict day still = 0", firefliesGate({ ...noon, strictFoliageSeason: true }) === 0);
+check("firefly: relaxed still ramps (summer night ≥ winter night)", firefliesGate(night) >= firefliesGate(winterNight));
 check("leaves: autumn+gust > summer", leavesGate(autumnGust) > leavesGate(noon));
-check("leaves: winter=0", leavesGate(winterNight) === 0);
+// 2026-07-04: RELAXED default — leaves shed year-round (autumn peak);
+// ?foliageStrictSeason=1 restores autumn-only (winter → 0).
+check("leaves: relaxed winter > 0 (default)", leavesGate(winterNight) > 0);
+check("leaves: strict winter = 0", leavesGate({ ...winterNight, strictFoliageSeason: true }) === 0);
+check("leaves: relaxed autumn still peaks (autumn ≥ winter)", leavesGate(autumnGust) >= leavesGate(winterNight));
 check("breath: warm=0", breathFogGate(noon) === 0);
 check("breath: cold>0", breathFogGate(winterNight) > 0);
 // determinism: pure fns return identical for identical input
@@ -81,6 +90,19 @@ check("emitter particleType=Swarm(5)", e.emitterInfo.particleType === 5);
 check("partIndex from anchor", e.partIndex === 7);
 check("parentOffset at canopy centre", e.parentOffset.position.y === 3.2);
 check("birthrate is a finite positive PERIOD", e.emitterInfo.birthrate > 0 && Number.isFinite(e.emitterInfo.birthrate));
+
+// 2026-07-04 scale-floor: the classifier's visual_descriptors.jsonl bakes a
+// broken startScale/finalScale=0.03 for foliage; the emit path must floor to the
+// authored component scale so pollen isn't a ~1cm invisible mote. A LARGER
+// descriptor scale still wins.
+const brokenCfg = { env: noon, anchor, sprites, seed: 1, config: { startScale: 0.03, finalScale: 0.03 } };
+const pf = foliagePollen.emit(brokenCfg)[0].emitterInfo;
+check("scale-floor: broken 0.03 descriptor → authored pollen 0.5/0.32",
+  pf.startScale === 0.5 && pf.finalScale === 0.32, `${pf.startScale}/${pf.finalScale}`);
+const bigCfg = { env: noon, anchor, sprites, seed: 1, config: { startScale: 0.8, finalScale: 0.7 } };
+const pb = foliagePollen.emit(bigCfg)[0].emitterInfo;
+check("scale-floor: LARGER descriptor scale still wins (0.8/0.7)",
+  pb.startScale === 0.8 && pb.finalScale === 0.7, `${pb.startScale}/${pb.finalScale}`);
 
 // unresolved sprite → invisible-guard (no emitter). D6: components import a default
 // sprite from particle_sprites.js, so the guard only fires when hwGfxObjId is forced 0.
