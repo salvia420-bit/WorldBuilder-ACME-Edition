@@ -128,8 +128,8 @@ impl WorldState {
     /// Bug-A leash echo gate (2026-07-03): the local leash arm's
     /// InterpolateTo pull gates on the retail `UsePositionFromServer`
     /// predicate instead of the control mirror (set once at world
-    /// creation from `?leashEchoGate=on`; default off until the 1070
-    /// confirm).
+    /// creation from `?leashEchoGate`; browser DEFAULT-ON since
+    /// F-2026-07-04, `=off` escape).
     pub fn set_leash_echo_gate(&mut self, enabled: bool) {
         self.scene.set_leash_echo_gate(enabled);
     }

@@ -231,19 +231,24 @@ fn parse_cast_move_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "castMove=off")
 }
 
-/// (2026-07-03): parse `?slideCast=off` (or `&slideCast=off`). DEFAULT-ON
-/// off-escape shape: returns `true` UNLESS `slideCast=off` is present. When
-/// on, the local player's HELD sidestep/turn survive ACE's non-autonomous
-/// General cast-gesture stomps (each windup/cast echo arrives with empty
-/// axes and would otherwise kill a held strafe) — the retail strafecast /
-/// slidecast dance vs vanilla ACE. Forward is never persisted (held W stays
-/// dead until a fresh forward edge — the `?castMove` core). `=off` restores
-/// the bare stomp (tap-to-revive only). Native carrier: `USE_SLIDE_CAST`
-/// (movement/system.rs). Needs a wasm rebuild; NO manifest bump.
+/// (2026-07-03): parse `?slideCast`. ADJ-8 (2026-07-04): DEFAULT
+/// FLIPPED OFF — the authentic burst is the default; `=on` is the
+/// modern opt-in. User ruling, verbatim: "slideCast=off feels more
+/// authentic however there are some catches". Flipped only after the
+/// bug-A leash echo gate was 1070-confirmed (the ordering the work
+/// order demanded). When ON, the local player's HELD sidestep/turn
+/// survive ACE's non-autonomous General cast-gesture stomps (each
+/// windup/cast echo arrives with empty axes and would otherwise kill a
+/// held strafe) — the retail strafecast / slidecast dance vs vanilla
+/// ACE. Forward is never persisted (held W stays dead until a fresh
+/// forward edge — the `?castMove` core). Default (OFF) = the bare
+/// stomp (tap-to-revive only). Native carrier: `USE_SLIDE_CAST`
+/// (movement/system.rs, flipped in the same commit). Needs a wasm
+/// rebuild; NO manifest bump.
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_slide_cast_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    !trimmed.split('&').any(|kv| kv == "slideCast=off")
+    trimmed.split('&').any(|kv| kv == "slideCast=on")
 }
 
 /// Movement-port wave 1 (2026-07-03): parse `?cmdInterp=off` (or
@@ -506,10 +511,12 @@ fn parse_retail_leash_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "retailLeash=off")
 }
 
-/// Bug-A leash echo gate (2026-07-03): parse `?leashEchoGate`. Default
-/// OFF, `=on` enables (the pre-flip opt-in shape — flip to default-ON
-/// after the 1070 confirm capture, the `retailLeash` precedent). When
-/// on, the reconcile leash arm's InterpolateTo pull gates on retail's
+/// Bug-A leash echo gate (2026-07-03): parse `?leashEchoGate`.
+/// F-2026-07-04: DEFAULT-ON (was `=on` to enable); only `=off`
+/// disables — flipped after the user's 2-minute 1070 confirm capture
+/// (applied +0 / gated +344 / wire carriers 0 / z flat across ~6 min
+/// of hill casting; user verdict "no snapback"). When on, the
+/// reconcile leash arm's InterpolateTo pull gates on retail's
 /// `UsePositionFromServer` (autonomy != 2, acclient.c:145213 →
 /// :717529) instead of the `controlled_by_server` mirror — a
 /// fully-autonomous player (pinned 2, ADJ-6) ignores its own ~20 Hz
@@ -519,7 +526,7 @@ fn parse_retail_leash_flag(search: &str) -> bool {
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_leash_echo_gate_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "leashEchoGate=on")
+    !trimmed.split('&').any(|kv| kv == "leashEchoGate=off")
 }
 
 /// Physics-parity 2026-07-03 (dossier A F1/F2): parse `?retailQuantum`.
@@ -25375,13 +25382,13 @@ mod wire_state_packs_routing_tests {
     /// F-2026-07-03: `?retailLeash` / `?retailQuantum` parse shapes —
     /// DEFAULT-ON; only an explicit `=off` disables.
     #[test]
-    fn leash_echo_gate_flag_default_off_unless_on() {
+    fn leash_echo_gate_flag_default_on_unless_off() {
         use super::parse_leash_echo_gate_flag;
-        assert!(!parse_leash_echo_gate_flag(""));
-        assert!(!parse_leash_echo_gate_flag("?renderer=3d"));
-        assert!(!parse_leash_echo_gate_flag("?leashEchoGate=off"));
+        assert!(parse_leash_echo_gate_flag(""));
+        assert!(parse_leash_echo_gate_flag("?renderer=3d"));
         assert!(parse_leash_echo_gate_flag("?leashEchoGate=on"));
-        assert!(parse_leash_echo_gate_flag("?retailLeash=on&leashEchoGate=on"));
+        assert!(!parse_leash_echo_gate_flag("?leashEchoGate=off"));
+        assert!(!parse_leash_echo_gate_flag("?retailLeash=on&leashEchoGate=off"));
     }
 
     #[test]
@@ -25455,7 +25462,8 @@ mod wire_state_packs_routing_tests {
         assert!(parse_cast_move_flag("?castMove=on"));
         assert!(!parse_cast_move_flag("?castMove=off"));
         assert!(!parse_cast_move_flag("?nosw=1&castMove=off"));
-        assert!(parse_slide_cast_flag(""));
+        // ADJ-8 (2026-07-04): slideCast default OFF; `=on` opts in.
+        assert!(!parse_slide_cast_flag(""));
         assert!(parse_slide_cast_flag("?slideCast=on"));
         assert!(!parse_slide_cast_flag("?slideCast=off"));
         assert!(!parse_slide_cast_flag("?castMove=off&slideCast=off"));
@@ -34788,9 +34796,10 @@ async fn recv_loop(
     // locomotion until an input edge / gesture end); see
     // `parse_cast_move_flag`.
     movement.set_cast_move(parse_cast_move_flag(&js_location_search()));
-    // (2026-07-03): `?slideCast=off` — disable the held-strafe/turn
-    // persistence through ACE's General cast-gesture stomps (default ON:
-    // the vanilla-ACE slidecast compensation); see `parse_slide_cast_flag`.
+    // (2026-07-03): `?slideCast` — held-strafe/turn persistence through
+    // ACE's General cast-gesture stomps. ADJ-8 (2026-07-04): default
+    // OFF (authentic burst, user ruling); `=on` is the modern opt-in;
+    // see `parse_slide_cast_flag`.
     movement.set_slide_cast(parse_slide_cast_flag(&js_location_search()));
     // Movement-port wave 1 step 4 (2026-07-03): `?cmdInterp=on` — the
     // retail CommandInterpreter input lane (default OFF, dark; PENDING
@@ -35044,14 +35053,15 @@ async fn recv_loop(
             "[parity] retailLeash ON — retail local constraint/interp lattice (every-echo ConstrainTo, server-control-gated InterpolateTo, teleport zero-velocity, persistent leash, one-frame interp heading)",
         );
     }
-    // Bug-A leash echo gate (2026-07-03): `?leashEchoGate=on` — the
-    // leash arm's InterpolateTo pull gates on UsePositionFromServer
-    // instead of the control mirror. Standalone flag, default OFF
-    // until the 1070 confirm; see `parse_leash_echo_gate_flag`.
+    // Bug-A leash echo gate (2026-07-03): the leash arm's InterpolateTo
+    // pull gates on UsePositionFromServer instead of the control
+    // mirror. Standalone flag, DEFAULT-ON since F-2026-07-04 (1070
+    // confirm capture green); `?leashEchoGate=off` is the escape — see
+    // `parse_leash_echo_gate_flag`.
     let leash_echo_gate_on: bool = parse_leash_echo_gate_flag(&js_location_search());
-    if leash_echo_gate_on {
+    if !leash_echo_gate_on {
         console_log_str(
-            "[bug-A] leashEchoGate ON — routine self-echo InterpolateTo gated on UsePositionFromServer (autonomy pinned 2 => no echo pull; Reset/ForceBlip corrections untouched)",
+            "[bug-A] leashEchoGate OFF (escape) — routine self-echo InterpolateTo re-gated on the legacy controlled_by_server mirror; expect the targeted-cast snapback on vanilla ACE",
         );
     }
     // wieldedSpawn (2026-06-11): live-rig ledger — guids that currently have

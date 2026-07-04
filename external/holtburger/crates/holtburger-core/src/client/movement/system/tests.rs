@@ -6116,7 +6116,11 @@ fn slide_cast_persists_held_strafe_and_turn_through_general_stomp() {
     };
 
     // Held left strafe + right turn (the dance keys) at stomp time.
+    // ADJ-8 (2026-07-04): slidecast is default-OFF now (authentic
+    // burst) — this pin tests the FEATURE's ON behavior, so opt in
+    // explicitly (the `?slideCast=on` runtime carrier).
     let mut movement = MovementSystem::new();
+    movement.set_slide_cast(true);
     let held = MotionState::builder()
         .run()
         .strafe_left()

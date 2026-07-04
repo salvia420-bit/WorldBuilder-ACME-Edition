@@ -788,13 +788,20 @@ const USE_CAST_MOVE: bool = true;
 /// a fresh forward EDGE ([`USE_CAST_MOVE`]'s core, retail :332759).
 ///
 /// ONE feature, TWO carriers: this const (native default) + the
-/// `?slideCast=off` URL flag ([`MovementSystem::slide_cast_runtime`]).
+/// `?slideCast` URL flag ([`MovementSystem::slide_cast_runtime`]).
 /// Effective predicate: [`MovementSystem::slide_cast_enabled`].
 ///
-/// `true` (DEFAULT): held strafe/turn ride through cast-gesture stomps.
-/// `false` / `?slideCast=off`: the bare stomp (strafe dies per echo,
-/// tap-to-revive only).
-const USE_SLIDE_CAST: bool = true;
+/// ADJ-8 (2026-07-04) — DEFAULT FLIPPED to `false` (the authentic
+/// burst) per the user's ruling, verbatim: "slideCast=off feels more
+/// authentic however there are some catches". Landed only after bug A
+/// (the leash echo gate) was confirmed dead on the 1070 — the work
+/// order's ordering constraint.
+///
+/// `false` (DEFAULT): the bare stomp (strafe dies per echo,
+/// tap-to-revive only — the authentic vanilla-ACE burst feel).
+/// `true` / `?slideCast=on`: held strafe/turn ride through
+/// cast-gesture stomps (the modern opt-in).
+const USE_SLIDE_CAST: bool = false;
 
 /// Movement-port WAVE 1 step 4 (2026-07-03) — the retail
 /// `CommandInterpreter` INPUT LANE master gate (the strangler flag).
