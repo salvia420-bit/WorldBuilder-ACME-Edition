@@ -506,6 +506,22 @@ fn parse_retail_leash_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "retailLeash=off")
 }
 
+/// Bug-A leash echo gate (2026-07-03): parse `?leashEchoGate`. Default
+/// OFF, `=on` enables (the pre-flip opt-in shape — flip to default-ON
+/// after the 1070 confirm capture, the `retailLeash` precedent). When
+/// on, the reconcile leash arm's InterpolateTo pull gates on retail's
+/// `UsePositionFromServer` (autonomy != 2, acclient.c:145213 →
+/// :717529) instead of the `controlled_by_server` mirror — a
+/// fully-autonomous player (pinned 2, ADJ-6) ignores its own ~20 Hz
+/// broadcast position echoes even inside vanilla-ACE TurnTo control
+/// windows, killing the targeted-cast snapback (bug A). Teleport/force
+/// sequence corrections are untouched (Reset/ForceBlip arms).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_leash_echo_gate_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "leashEchoGate=on")
+}
+
 /// Physics-parity 2026-07-03 (dossier A F1/F2): parse `?retailQuantum`.
 /// F-2026-07-03: DEFAULT-ON (was `=on` to enable); only `=off`
 /// disables. When on, BOTH integrator shapes run retail's
@@ -910,7 +926,10 @@ pub fn reclaim_cause_diag() -> u32 {
 
 /// Bug-A round-2 diag: local-player pose snap carriers, comma-packed
 /// "publicSnaps,forcedSnaps,lastDeltaCm,lastCarrier" (see
-/// holtburger-world `pose_snap_diag`).
+/// holtburger-world `pose_snap_diag`). cfg-gated: `holtburger-world`
+/// is a wasm32-only dependency of this crate — landed ungated in the
+/// round-2 commit, which broke the NATIVE `--lib` test build (E0433).
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = localPoseSnapDiag)]
 pub fn local_pose_snap_diag() -> String {
     holtburger_world::pose_snap_diag::read_packed()
@@ -920,6 +939,7 @@ pub fn local_pose_snap_diag() -> String {
 /// comma-packed "seen,mirrorSeen,applied,gated,lastDeltaCm" (see
 /// holtburger-world `leash_echo_diag`). RIDES v6 — additive,
 /// diagnostics-only, same precedent as the round-2 riders.
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = leashEchoDiag)]
 pub fn leash_echo_diag() -> String {
     holtburger_world::leash_echo_diag::read_packed()
@@ -25355,6 +25375,16 @@ mod wire_state_packs_routing_tests {
     /// F-2026-07-03: `?retailLeash` / `?retailQuantum` parse shapes —
     /// DEFAULT-ON; only an explicit `=off` disables.
     #[test]
+    fn leash_echo_gate_flag_default_off_unless_on() {
+        use super::parse_leash_echo_gate_flag;
+        assert!(!parse_leash_echo_gate_flag(""));
+        assert!(!parse_leash_echo_gate_flag("?renderer=3d"));
+        assert!(!parse_leash_echo_gate_flag("?leashEchoGate=off"));
+        assert!(parse_leash_echo_gate_flag("?leashEchoGate=on"));
+        assert!(parse_leash_echo_gate_flag("?retailLeash=on&leashEchoGate=on"));
+    }
+
+    #[test]
     fn retail_leash_and_quantum_flags_default_on_unless_off() {
         use super::{parse_retail_leash_flag, parse_retail_quantum_flag};
         assert!(parse_retail_leash_flag(""));
@@ -35014,6 +35044,16 @@ async fn recv_loop(
             "[parity] retailLeash ON — retail local constraint/interp lattice (every-echo ConstrainTo, server-control-gated InterpolateTo, teleport zero-velocity, persistent leash, one-frame interp heading)",
         );
     }
+    // Bug-A leash echo gate (2026-07-03): `?leashEchoGate=on` — the
+    // leash arm's InterpolateTo pull gates on UsePositionFromServer
+    // instead of the control mirror. Standalone flag, default OFF
+    // until the 1070 confirm; see `parse_leash_echo_gate_flag`.
+    let leash_echo_gate_on: bool = parse_leash_echo_gate_flag(&js_location_search());
+    if leash_echo_gate_on {
+        console_log_str(
+            "[bug-A] leashEchoGate ON — routine self-echo InterpolateTo gated on UsePositionFromServer (autonomy pinned 2 => no echo pull; Reset/ForceBlip corrections untouched)",
+        );
+    }
     // wieldedSpawn (2026-06-11): live-rig ledger — guids that currently have
     // a JS-side rig (KIND_SPAWN emitted, no KIND_REMOVE since). Maintained
     // unconditionally (cheap set ops at the existing emission sites), but
@@ -36730,6 +36770,8 @@ async fn recv_loop(
                                 // Physics-parity 2026-07-03: retail
                                 // LOCAL lattice (?retailLeash=on).
                                 new_world.set_local_retail_leash(retail_leash_on);
+                                // Bug-A (2026-07-03): ?leashEchoGate=on.
+                                new_world.set_leash_echo_gate(leash_echo_gate_on);
                                 world = Some(new_world);
                                 console_log_str(&format!(
                                     "[step 3.6] WorldState constructed lazily on PlayerCreate (guid=0x{:08X}) — eager-construct path missed",
@@ -41029,6 +41071,8 @@ async fn recv_loop(
                             // Physics-parity 2026-07-03: retail LOCAL
                             // lattice (?retailLeash=on).
                             new_world.set_local_retail_leash(retail_leash_on);
+                            // Bug-A (2026-07-03): ?leashEchoGate=on.
+                            new_world.set_leash_echo_gate(leash_echo_gate_on);
                             world = Some(new_world);
                             console_log_str(&format!(
                                 "[step4-follow-on] WorldState constructed eagerly on SelectCharacter (guid=0x{:08X})",

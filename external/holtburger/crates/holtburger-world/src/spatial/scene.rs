@@ -66,6 +66,13 @@ const USE_LOCAL_FORCE_POSITION_CONSTRAINT: bool = true;
 /// remaining work is purely the integrator call-site.
 const USE_RETAIL_INTERPOLATE: bool = true;
 
+/// Bug-A leash echo gate (2026-07-03) — native baseline for
+/// [`SpatialScene::set_leash_echo_gate`]. `false` keeps the test/golden
+/// baseline on the pre-gate arm (the `retailQuantum` carrier-split
+/// precedent); the browser rides `?leashEchoGate`. Flip AFTER the 1070
+/// confirm capture.
+const USE_LEASH_ECHO_GATE: bool = false;
+
 /// Physics deep-dive 2026-06-01 (gap 4) — retail autonomy-blip /
 /// constraint-leash distances for the local-player force-position
 /// reconcile. Mirrors the decompiled client:
@@ -699,13 +706,29 @@ pub struct SpatialScene {
     /// Default `false` = the shipped `USE_RETAIL_INTERPOLATE` arm,
     /// byte-identical.
     local_retail_leash: bool,
-    /// Retail `CommandInterpreter` server-control predicate for the
-    /// LOCAL player (`cmdinterp->vfptr[8]`, acclient.c:145215) — the
-    /// InterpolateTo install gate. Fed by the movement system on
-    /// control transitions (server MoveTo/TurnTo directives); stays
-    /// `false` for an autonomous player, which is exactly retail's
-    /// no-interp-pull-while-walking behavior.
+    /// Retail `CommandInterpreter` server-control MIRROR for the LOCAL
+    /// player (`controlled_by_server`, raised by LoseControlToServer on
+    /// MoveTo/TurnTo directives, dropped by TakeControl). Bug-A
+    /// correction (2026-07-03): this is NOT the routine-arm
+    /// InterpolateTo gate — retail's ctor pins `controlled_by_server`
+    /// TRUE from login (0x6b3e46) and gates the echo pull on
+    /// `UsePositionFromServer` instead (vtable slot 8 = 0x803d20 at
+    /// acclient.c:145213). The mirror stays load-bearing for FU-A/FU-C
+    /// and, until the gate flips, for the legacy pull arm.
     local_server_controlled: bool,
+    /// Bug-A leash echo gate (2026-07-03): when `true`, the local
+    /// leash arm's InterpolateTo pull gates on
+    /// [`Self::local_use_position_from_server`] (the retail predicate,
+    /// acclient.c:145213 → :717529) instead of the control mirror.
+    /// Seeded from [`USE_LEASH_ECHO_GATE`]; the browser rides
+    /// `?leashEchoGate`.
+    leash_echo_gate: bool,
+    /// The interp's `CommandInterpreter::UsePositionFromServer` mirror
+    /// (`autonomy_level != 2`, acclient.c:717529). Autonomy is pinned 2
+    /// (ADJ-6) so this stays `false` — a fully-autonomous retail player
+    /// ignores routine broadcast position echoes even while the control
+    /// mirror is up. The setter is the autonomy lattice's landing pad.
+    local_use_position_from_server: bool,
 }
 
 /// A2-P3 (2026-06-12, W3+ S9) — outcome of one
@@ -767,6 +790,8 @@ impl SpatialScene {
             remote_sticky_stepped: HashSet::new(),
             local_retail_leash: false,
             local_server_controlled: false,
+            leash_echo_gate: USE_LEASH_ECHO_GATE,
+            local_use_position_from_server: false,
         }
     }
 
@@ -786,10 +811,24 @@ impl SpatialScene {
         self.local_server_controlled = controlled;
     }
 
-    /// FU5: the `controlled_by_server` predicate (retail
-    /// `cmdinterp->vfptr[8]`, acclient.c:145215).
+    /// FU5: the `controlled_by_server` mirror (see the field doc — NOT
+    /// the routine-arm echo-pull gate; that is `UsePositionFromServer`).
     pub fn local_server_controlled(&self) -> bool {
         self.local_server_controlled
+    }
+
+    /// Bug-A leash echo gate switch (see the field doc). Wasm caller
+    /// wires `?leashEchoGate`.
+    pub fn set_leash_echo_gate(&mut self, enabled: bool) {
+        self.leash_echo_gate = enabled;
+    }
+
+    /// Feed for the interp's `UsePositionFromServer` mirror
+    /// (acclient.c:717529). No live caller sets `true` today — autonomy
+    /// is pinned 2 (ADJ-6); wire this from `SetAutonomyLevel` when the
+    /// autonomy lattice lands.
+    pub fn set_local_use_position_from_server(&mut self, use_server: bool) {
+        self.local_use_position_from_server = use_server;
     }
 
     /// FU5 — retail `CPhysicsObj::StopInterpolating` as called by
@@ -2770,7 +2809,31 @@ impl SpatialScene {
                 // lane's S8 OPEN Q6 convention.
                 let has_contact = body.contact.grounded().unwrap_or(true);
                 crate::leash_echo_diag::record_echo(self.local_server_controlled);
-                if self.local_server_controlled && has_contact {
+                // Bug-A leash echo gate (2026-07-03): retail gates this
+                // pull on `UsePositionFromServer()` — vtable slot 8
+                // (0x803cc0+0x60 = 0x803d20, call site acclient.c:145213)
+                // = `autonomy_level != 2` (:717529) — NOT on
+                // `controlled_by_server` (ctor-pinned TRUE, 0x6b3e46).
+                // Pre-gate we used the control mirror, so every
+                // vanilla-ACE TurnTo window (targeted casting) let the
+                // leash consume our own ~20 Hz broadcast echoes and drag
+                // the runtime body to ACE's anchored, z-offset cast
+                // position — the 4-7 m snapback. Autonomy pinned 2
+                // (ADJ-6) ⇒ gated arm never echo-pulls; teleport/force
+                // corrections ride the Reset/ForceBlip arms untouched.
+                let echo_pull_allowed = if self.leash_echo_gate {
+                    self.local_use_position_from_server
+                } else {
+                    self.local_server_controlled
+                };
+                if self.leash_echo_gate && self.local_server_controlled && has_contact
+                    && !echo_pull_allowed
+                {
+                    // The legacy arm would have pulled here; the gate
+                    // suppressed it (round-3 "goes quiet" evidence).
+                    crate::leash_echo_diag::record_gated(distance);
+                }
+                if echo_pull_allowed && has_contact {
                     let blip = if indoor {
                         BLIP_SNAP_DISTANCE_INDOOR_M
                     } else {

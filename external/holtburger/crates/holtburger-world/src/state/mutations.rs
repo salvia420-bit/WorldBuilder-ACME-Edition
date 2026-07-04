@@ -125,6 +125,15 @@ impl WorldState {
         self.scene.set_local_retail_leash(enabled);
     }
 
+    /// Bug-A leash echo gate (2026-07-03): the local leash arm's
+    /// InterpolateTo pull gates on the retail `UsePositionFromServer`
+    /// predicate instead of the control mirror (set once at world
+    /// creation from `?leashEchoGate=on`; default off until the 1070
+    /// confirm).
+    pub fn set_leash_echo_gate(&mut self, enabled: bool) {
+        self.scene.set_leash_echo_gate(enabled);
+    }
+
     /// Physics-parity 2026-07-03 (dossier A F8): the LOCAL
     /// force-position step with retail `UseTime` velocity routing — a
     /// drain-applied velocity (blip-recovery tail velocity,

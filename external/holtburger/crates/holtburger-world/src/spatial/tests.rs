@@ -3696,6 +3696,78 @@ fn retail_leash_interp_gates_on_server_control_and_contact() {
     assert!(!body.position_manager.is_interpolating(), "airborne gates interp");
 }
 
+/// Bug-A leash echo gate: with the gate ON, the routine-echo pull gates
+/// on `UsePositionFromServer` (autonomy != 2, acclient.c:145213 →
+/// :717529), NOT the control mirror — a mirror-up Snapshot echo
+/// constrains but never interp-pulls at pinned autonomy 2 (ADJ-6). The
+/// pull returns only if the autonomy mirror drops below full (the
+/// landing-pad setter), exactly retail's sub-autonomy debug modes.
+#[test]
+fn leash_echo_gate_blocks_mirror_up_snapshot_pull() {
+    // Gate on + mirror up + grounded: constrain only — the bug-A arm
+    // goes quiet.
+    let (mut scene, body_id, target, now) = leash_scene_with_midsim_player(3.0);
+    scene.set_leash_echo_gate(true);
+    scene.set_local_server_controlled(true);
+    scene.reconcile_authoritative_body(
+        body_id,
+        target,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(16),
+    );
+    let body = scene.body(body_id).unwrap();
+    assert!(body.position_manager.constraint.is_constrained(), "leash still re-arms");
+    assert!(
+        !body.position_manager.is_interpolating(),
+        "gate blocks the echo pull while the mirror is up"
+    );
+
+    // Gate on + UsePositionFromServer true (autonomy < 2): the retail
+    // sub-autonomy pull returns.
+    let (mut scene, body_id, target, now) = leash_scene_with_midsim_player(3.0);
+    scene.set_leash_echo_gate(true);
+    scene.set_local_server_controlled(true);
+    scene.set_local_use_position_from_server(true);
+    scene.reconcile_authoritative_body(
+        body_id,
+        target,
+        Vector3::zero(),
+        Vector3::zero(),
+        AuthoritativeBodySync::Snapshot,
+        now + Duration::from_millis(16),
+    );
+    assert!(scene.body(body_id).unwrap().position_manager.is_interpolating());
+}
+
+/// Bug-A leash echo gate: the Reset (teleport) arm is untouched by the
+/// gate — forced corrections still constrain + zero velocity.
+#[test]
+fn leash_echo_gate_leaves_reset_arm_untouched() {
+    let (mut scene, body_id, _target, now) = leash_scene_with_midsim_player(3.0);
+    scene.set_leash_echo_gate(true);
+    scene.set_local_server_controlled(true);
+    let lb = Guid(0x00A9_0000);
+    let arrival = WorldPosition {
+        landblock_id: lb,
+        coords: Vector3::new(120.0, 80.0, 4.0),
+        rotation: Quaternion::from_heading(1.0),
+    };
+    scene.reconcile_authoritative_body(
+        body_id,
+        arrival,
+        Vector3::new(2.0, 0.0, 0.0),
+        Vector3::zero(),
+        AuthoritativeBodySync::Reset,
+        now + Duration::from_millis(16),
+    );
+    let body = scene.body(body_id).unwrap();
+    assert!(body.position_manager.constraint.is_constrained(), "arrival leash armed");
+    assert!(body.pose.distance_to(&arrival) < 1e-4, "pose adopts the arrival");
+    assert_eq!(body.velocity, Vector3::zero(), "teleport zeroes wire velocity");
+}
+
 /// Teleport (Reset): constrain to the arrival (seed 0) + zero velocity
 /// (acclient.c:145196-145207); the wire velocity is discarded.
 #[test]
