@@ -1,10 +1,13 @@
-# Movement-port WAVE 2 — buildbox research fan-out spec (2026-07-03)
+# Movement-port WAVE 2 — buildbox research fan-out spec (2026-07-03; +P11-P16 2026-07-04)
 
-You are ONE of 10 Opus agents mapping the retail AC client's POSITION
-ARBITRATION + CAST/TARGETING layer. Your packet id (P01-P10) is in your
-prompt. This wave is RESEARCH ONLY: produce your ENTIRE deliverable on
-STDOUT as one markdown document. Do NOT modify any file. Do NOT write
-Rust/JS code beyond short illustrative excerpts of EXISTING code.
+You are ONE of 16 Opus agents. Packets P01-P10 map the retail AC
+client's POSITION ARBITRATION + CAST/TARGETING layer (decomp research);
+packets P11-P16 are LIVE-BUG DIAGNOSES on the current tree (user-reported
+defects — root-cause hunts through OUR code + ACE + the decomp). Your
+packet id is in your prompt. This wave is RESEARCH/DIAGNOSIS ONLY:
+produce your ENTIRE deliverable on STDOUT as one markdown document. Do
+NOT modify any file. Do NOT write Rust/JS code beyond short illustrative
+excerpts of EXISTING code.
 
 ## Why this wave (context you need, then stop reading context)
 
@@ -228,3 +231,124 @@ was SELECT-only.
   Context for the leash gate's directive-consistency arm + our S8
   remote sticky (`remote_sticky_*` in scene.rs, `stick_local_player_to`).
   Diff vs position_manager.rs sticky surface.
+
+## Live-bug diagnosis packets (P11-P16, added 2026-07-04)
+
+USER-REPORTED defects from live 1070 play (real render, vanilla ACE).
+You have no live client — diagnose by tracing code: our client
+(holtburger crates + scene3d JS), ACE server source, decomp for the
+retail-correct shape. Deliverable per packet: the root-cause hypothesis
+chain (ranked if multiple), symbol-anchored cites at every hop, the
+SMALLEST fix direction (no code), and a concrete live-verification
+recipe the laptop integrator can run (what to click/watch, which diag
+counters or console lines confirm/refute).
+
+**Session-6 context (2026-07-04) you should weigh as candidate
+mechanisms — verify, don't assume:**
+- Mid-session spawn hydration gap: an `@create`-spawned creature landed
+  server-side (audit line) but NEVER entered the JS `EntityManager`
+  (`entityMap`/`findGuidByName` empty of it) on a
+  `?nullRender=1&renderOnDemand=1&netDrainHz=30` bot page — login-time
+  entities hydrated fine. Unknown whether flag-specific or a general
+  mid-session CreateObject path defect. (scene3d/loop.js drain →
+  `dispatchEntityUpdate` → entities.js `_spawnImpl` — spawn success and
+  the name index land only after the async mesh fetch.)
+- The completion-clock shim: every 1-anim motion node drains at
+  `RENDERER_DONE_FALLBACK_SECS = 2.0` (motion_table_manager.rs, session
+  5) — anything that "reverts after ~2 seconds" should be checked
+  against it FIRST.
+- Defaults flipped 2026-07-04: `?slideCast` now DEFAULT-OFF (authentic
+  burst — held strafe/turn die at cast-gesture stomps, tap revives;
+  forward is NEVER persisted), `?leashEchoGate` DEFAULT-ON,
+  `?cmdInterp` has been default-ON since step 5. The user's "there are
+  some catches" note on slideCast=off is unexplored — P16 likely
+  touches it.
+- Backward walk (S) is a FORWARD-slot command: `WalkBackwards` is
+  REWRITTEN to `WalkForward` with negative speed by `adjust_motion`
+  (interp_state.rs:12/:27/:58) — interpreter stomps and forward-slot
+  rules apply to it verbatim.
+
+- **P11 corpse drops missing for some creatures (e.g. tuskers)** — the
+  user sees fragments (e.g. Obsidian/crystal fragment creatures) leave
+  corpses but tuskers do not. ACE side: `Creature_Death.cs` corpse
+  creation (`CreateCorpse`), the no-corpse conditions
+  (`TreasureType`/NoCorpse property, destroy-on-death), corpse setup
+  id/scale inheritance from the source creature. Client side: corpse
+  CreateObject → EntityManager spawn — could SPECIFIC setups fail the
+  async mesh/palette fetch (spawn-success gate = invisible entity), and
+  does the mid-session hydration gap (context above) apply on a REAL
+  render page? Deliver: the decision tree "creature dies → corpse
+  visible on our client", where tusker-class corpses diverge, and what
+  distinguishes them (setup DID, palette ops, scale) from fragment
+  corpses. Cross-check the tusker + fragment weenies in
+  `external/LSD-Partial-2025-02-23_16-15/` for corpse-relevant
+  properties.
+- **P12 corpses not lootable (no loot panel on click)** — clicking a
+  corpse should open the container HUD to collect items. Trace our
+  click → action path (scene3d/picking.js entity-click branches; does a
+  CORPSE class object even get a use/open action or only select?), the
+  wire action retail used (GameAction Use 0x0036 / UseWithTarget —
+  confirm via chorizite + decomp `CM_Inventory`/UseManager), ACE's
+  `Corpse.Open`/looting permission gates (killer/fellowship,
+  `CorpseGeneratedRarity`, kill-task), and the client's ViewContents
+  (0x0196) → container-panel wiring (a vendor/chest panel path exists —
+  diff corpse vs vendor container flows). Deliver: where the chain
+  breaks (no action sent? action rejected? ViewContents unhandled for
+  corpse containers? panel not wired?), with the fix direction per
+  break point.
+- **P13 animation drops to peace/idle ~2 s after walking backwards** —
+  repro: hold S (most reliable), also A+S / S+D, in-world on vanilla
+  ACE; ~2 s in, the character's ANIM reverts to peace-mode idle while
+  still moving. PRIME SUSPECT: the 2.0 s completion-clock shim draining
+  a backward-walk motion node and the anim lane re-resolving to stance
+  idle (motion_table_manager.rs + the renderer consumers in
+  entities.js/loop.js — who re-picks the clip when a node drains?).
+  Also weigh: ACE's motion echo for backward walk (stance field on the
+  echo), the M1 wire shape for WalkBackwards (forward slot, negative
+  speed?), and what retail plays for sustained backward walk
+  (MotionTable walk_backward loop — confirm the retail loop exists via
+  the 0x09 MotionTable for the human setup, DatReaderWriter dats.xml
+  field order). Deliver: the exact 2 s clock owner, the anim re-resolve
+  path, and the smallest correction (real authored lengths? loop-class
+  nodes exempt from the shim? echo stance handling?).
+- **P14 portals not appearing** — portal objects (swirling purple
+  vortices) are not visible in-world. They arrive as landblock-static
+  CreateObjects (verify: ACE LandblockInstances → CreateObject on
+  login-time streaming vs mid-session). Trace: does the portal object
+  reach the client entity stream (wire category "spawn"), does its
+  setup (portal gfx = particle-heavy, possibly zero solid parts +
+  alpha/additive surfaces) survive `_spawnImpl`'s mesh fetch and the
+  spawn-success gate, do the portal particle emitters attach
+  (particle_manager.js + fetchPhysicsScript/emitter path), or is the
+  mesh there but the MATERIAL invisible (additive/alpha surface decode
+  — RenderSurfaceExtensions PFID paths)? Diff vs static objects that DO
+  render (signs, lifestones). Deliver: the first broken hop + fix
+  direction; note whether the P11 hydration gap is the same defect.
+- **P15 ground items cannot be picked up** — clicking an item on the
+  ground does nothing (expected: pickup into inventory, or at least an
+  attempt + animation). Trace picking.js's item-vs-creature click
+  branches (is there a pickup action at all, or select-only?), the
+  retail action (`PutItemInContainer` 0x0019 with the player as
+  container — confirm opcode via chorizite GameActionType), our wasm
+  action surface (does SessionHandle expose a pickup/move-item call?
+  Is the inventory HUD's pickup path wired only for container-to-
+  container?), ACE's `HandleActionPutItemInContainer` distance/motion
+  gates. Deliver: whether the client never SENDS, sends wrong, or
+  drops the response; fix direction per case.
+- **P16 move-backward misbehavior in casting (magic) mode** — the user
+  reports backward movement (S) misbehaving in magic stance ("move
+  backward bug in casting mode"); likely one of the ADJ-8 "catches".
+  Backward walk rides the FORWARD slot, so every ACE cast-gesture
+  stomp kills held-S, and with slideCast now DEFAULT-OFF nothing
+  persists it; `?castMove`'s rule = held FORWARD-slot commands stay
+  dead until a fresh forward EDGE. Map the full interplay: held-S
+  through a cast chain under (a) burst default, (b) slideCast=on
+  (persistence never covered forward — confirm), (c) what RETAIL did
+  (client-authored gestures never stomped the caster — held backward
+  kept flowing, cf. P06). Also check backward-specific stance motion
+  (walk_backward in Magic stance — does the magic-stance MotionTable
+  even carry it, or does the client fall to NonCombat for the clip —
+  ties into P13's revert). Deliver: the precise mechanism the user
+  feels, whether it is a DEFECT or the authentic-burst tradeoff, and
+  the retail-faithful fix direction (e.g. backward exempt from
+  gesture-stomp? edge-revive parity?).

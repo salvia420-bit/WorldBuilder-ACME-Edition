@@ -13,7 +13,8 @@
 #   sha256sum -c wave2.tgz.sha256
 #   rm -f ~/.keep-awake && sudo poweroff    # on the box
 #
-# 10 packets, CAP 16 not reached — all launch up front, 4 s stagger.
+# 16 packets (P01-P10 decomp research + P11-P16 live-bug diagnoses),
+# exactly AT the CAP-16 — all launch up front, 4 s stagger.
 # stdout of each agent IS the deliverable (parts/pNN.md).
 set -u
 ROOT="$HOME/WorldBuilder-ACME-Edition"
@@ -27,7 +28,7 @@ command -v rg >/dev/null 2>&1 || sudo apt-get install -y ripgrep
 [ -r "$SPEC" ] || { echo "spec missing: $SPEC"; exit 1; }
 PRE="$(cat "$SPEC")"
 
-for i in 01 02 03 04 05 06 07 08 09 10; do
+for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16; do
   TASK="You are packet P${i}. Execute ONLY packet P${i} of the spec below, honoring its Sources, EXCLUSION LIST, Rules and Output contract. Begin your stdout with '# P${i}'."
   timeout 2400 claude -p --model "$MODEL" --dangerously-skip-permissions \
     "${TASK}
