@@ -568,6 +568,18 @@ export async function preInit3D(canvas) {
       return new URLSearchParams(window.location.search).get("diag") === "1";
     } catch (_) { return false; }
   })();
+  // 2026-07-04 — wire-agent solid-fill companion pass toggle. Default ON
+  // (preserves the depth-occluded wireframe look): `addFillCompanions`
+  // attaches a second solid draw per wire mesh so wireframe lines don't
+  // bleed through geometry. `?wireFill=0` disables the whole companion
+  // pass for the cheapest possible wireframe (half the draw submissions
+  // on a CPU-submission-bound frame). Only meaningful under ?wireframe=1.
+  const wireFill = (() => {
+    try {
+      if (typeof window === "undefined") return true;
+      return new URLSearchParams(window.location.search).get("wireFill") !== "0";
+    } catch (_) { return true; }
+  })();
   const audioConstructable = !wireframeMode || diagMode;
   if (wireframeMode) {
     // eslint-disable-next-line no-console
@@ -1146,6 +1158,7 @@ export async function preInit3D(canvas) {
     forceDetail,
     atmosphereRuntimePromise,
     wireframeMode,
+    wireFill,
     targetFps,
     renderOnDemand,
     netDrainHz,
@@ -1190,6 +1203,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     forceDetail,
     atmosphereRuntimePromise,
     wireframeMode,
+    wireFill,
     targetFps,
     renderOnDemand,
     netDrainHz,
@@ -1341,6 +1355,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // the MaterialCache returns wireframe MeshBasicMaterial bundles
     // instead of standard textured materials.
     wireframeMode,
+    // Wire-agent solid-fill companion toggle (?wireFill=0 → off). Threaded
+    // into getOrCreateMaterialCache so `addFillCompanions` can no-op the
+    // whole second-draw pass. Default ON; only consulted under wireframeMode.
+    wireFill,
     // Phase X.1 — resolved quality preset (`{ preset, flags, source }`)
     // mirrored onto every builder's scene3d arg so per-phase gates can
     // read `scene3d.quality.flags.<feature>` without re-parsing the URL.
@@ -2201,6 +2219,86 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         }
       };
     }
+  }
+
+  // O4-d (2026-07-04) — net-drain watchdog (default-ON safety net).
+  // Under `?singleDriver` the SOLE rAF loop drives the network drain via
+  // `window.__netFramePump` (loop.js phase #0). When Chrome clamps rAF
+  // (occluded/backgrounded tab, heavy throttle) that pump — and thus the
+  // net drain — stops entirely, so world updates stall and the server
+  // used to drop the session. The O4-c watchdog (index.html ~9062) only
+  // HOLDS the claim on a >4 s stall; post-2D-retire it deliberately does
+  // NOT re-drive the pump (there is no 2D driver to resume). This gap is
+  // what this fills: a low-frequency (500 ms) interval that, when the
+  // pump heartbeat (`window.__lastPumpMs`, stamped by pumpNetFrame) is
+  // stale >1 s, calls `window.__netFramePump()` directly — the SAME net
+  // drain the rAF loop and the `?netDrainHz` interval run, NOT the full
+  // render `tickPerFrame`. Complements the wasm-level 2.5 s keepalive
+  // (index.html `__hbKeepaliveInterval`): the keepalive keeps the socket
+  // up, this keeps actual message DRAIN alive. ALL added work is gated
+  // behind the >1 s staleness check, so a healthy rAF cadence sees zero
+  // behaviour change (one clock read + subtraction per 500 ms tick) and
+  // it stays quiet while the `?netDrainHz` interval keeps the heartbeat
+  // fresh. `__netFramePump()` re-stamps `__lastPumpMs`, so it goes quiet
+  // again the instant the rAF loop recovers. Escape hatch:
+  // `?netWatchdog=off`. Single-instance guarded (safe across
+  // reconnect/re-init); cleared on `beforeunload`.
+  const netWatchdogOn = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return (new URLSearchParams(window.location.search).get("netWatchdog") ?? "") !== "off";
+    } catch (_) { return true; }
+  })();
+  if (
+    netWatchdogOn &&
+    typeof setInterval === "function" &&
+    typeof window !== "undefined" &&
+    !window.__netWatchdogInterval
+  ) {
+    const STALE_MS = 1000;
+    const netWatchdogInterval = setInterval(() => {
+      try {
+        // No-op before the pump (and thus the session handle) exists —
+        // pumpNetFrame is exposed as window.__netFramePump only once the
+        // boot flow reaches index.html ~9123.
+        if (typeof window.__netFramePump !== "function") return;
+        const now = (typeof performance !== "undefined" && performance.now)
+          ? performance.now() : Date.now();
+        const last = window.__lastPumpMs ?? 0;
+        // Staleness gate — the SINGLE condition that arms every line
+        // below. While rAF pumps at cadence __lastPumpMs is <1 s old and
+        // the watchdog does nothing.
+        if (now - last <= STALE_MS) return;
+        window.__netFramePump();
+        if (!window.__netWatchdogFiredWarned) {
+          window.__netWatchdogFiredWarned = true;
+          // eslint-disable-next-line no-console
+          console.log("[net-watchdog] rAF pump stalled >1 s — draining net directly (backgrounded/throttled tab)");
+        }
+      } catch (e) {
+        if (!window.__netWatchdogWarned) {
+          window.__netWatchdogWarned = true;
+          // eslint-disable-next-line no-console
+          console.warn("[net-watchdog] drain threw:", e);
+        }
+      }
+    }, 500);
+    window.__netWatchdogInterval = netWatchdogInterval;
+    if (typeof window.addEventListener === "function") {
+      window.addEventListener("beforeunload", () => {
+        if (window.__netWatchdogInterval) {
+          clearInterval(window.__netWatchdogInterval);
+          window.__netWatchdogInterval = null;
+        }
+      });
+    }
+    // Expose for capture-script teardown + test inspection.
+    window.__stopNetWatchdog = () => {
+      if (window.__netWatchdogInterval) {
+        clearInterval(window.__netWatchdogInterval);
+        window.__netWatchdogInterval = null;
+      }
+    };
   }
 
   // Follow-on #10 (3D port state doc) — DOM-projected nameplate overlay.

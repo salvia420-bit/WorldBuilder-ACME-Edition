@@ -1743,6 +1743,11 @@ export class MaterialCache {
     // shader, no fragment fill, no texture sampling. Composable with
     // any quality preset; orthogonal to `agentic=low`.
     this.wireframeMode = !!opts.wireframeMode;
+    // 2026-07-04 — solid-fill companion pass toggle (?wireFill URL flag).
+    // Default ON (undefined → true) so wireframe keeps its depth-occluded
+    // look; `?wireFill=0` sets it false to skip the second-draw pass for
+    // the cheapest wireframe. Only consulted while wireframeMode is on.
+    this.wireFill = opts.wireFill !== false;
     /** @type {Map<number, THREE.MeshBasicMaterial>} */
     this.wireframeBuckets = new Map();
     // 2026-05-22 — companion solid-fill materials for the wire buckets,
@@ -2187,7 +2192,9 @@ export class MaterialCache {
    * Returns the number of companions added.
    */
   addFillCompanions(group) {
-    if (!this.wireframeMode || !group || typeof group.traverse !== "function") {
+    // ?wireFill=0 disables the whole companion pass — cheapest wireframe
+    // (halves draw submissions). Default ON preserves the current look.
+    if (!this.wireframeMode || !this.wireFill || !group || typeof group.traverse !== "function") {
       return 0;
     }
     /** @type {Array<{source: any, fillMat: any, kind: "mesh"|"instanced"|"skinned"}>} */
@@ -2195,7 +2202,25 @@ export class MaterialCache {
     group.traverse((obj) => {
       if (!obj || obj.userData?.__wireFillCompanion) return;
       if (obj.userData?.__wireFillSource) return; // skip already-attached fills
+      // Defect 1 (2026-07-04): BatchedMesh is `.isMesh` in three r184, so it
+      // fell into the plain-Mesh branch — `new THREE.Mesh(source.geometry,
+      // …)` draws the batch's whole concatenated vertex buffer at the group
+      // origin, ignoring per-instance matrices (a misplaced oversized blob
+      // and a heavy wasted draw). Statics consolidate into BatchedMesh per
+      // material identity in wireframe mode, so this fired routinely. A
+      // correct fill would require cloning the batch — not worth it for a
+      // debug mode; the wireframe BatchedMesh itself still draws.
+      if (obj.isBatchedMesh) return;
       if (!obj.isMesh && !obj.isInstancedMesh) return;
+      // Defect 3 (2026-07-04): animated instanced-scenery buckets
+      // (animated_scenery.js) rewrite `instanceMatrix` + `count` per frame
+      // and swap the whole InstancedMesh on capacity doubling. A companion
+      // copies instanceMatrix ONCE at creation → a frozen ghost fill at the
+      // seed pose, plus dead instances when count shrinks and a dangling
+      // attribute after a capacity swap. Skip their companions entirely —
+      // the wireframe bucket still draws; there is simply no fill for
+      // animated scenery in this debug mode (cheaper, and never stale).
+      if (obj.isInstancedMesh && obj.userData?.isAnimatedSceneryInstanced) return;
       // Material may be a single material or an array (for grouped geometries).
       const mat = obj.material;
       if (!mat) return;

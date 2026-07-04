@@ -508,6 +508,10 @@ export function getOrCreateMaterialCache(scene3d) {
     // true, cache returns shared MeshBasicMaterial({wireframe:true})
     // and preload no-ops the surface-pixel fetch.
     wireframeMode: !!scene3d.wireframeMode,
+    // 2026-07-04 — ?wireFill=0 disables the solid-fill companion pass
+    // (`addFillCompanions`). Default ON when unset (scene3d.wireFill
+    // undefined on legacy/capture flows that bypass index.js).
+    wireFill: scene3d.wireFill,
     // 2026-05-22 — wire-agent per-DID dominant-colour map. When non-
     // null, `_wireframeMaterialFor` mints a per-DID material pair
     // using the manifest's RGB instead of the 32-bucket HSL hash.
@@ -2751,12 +2755,56 @@ export async function bakeStaticsRing(
       _ringChunkStart = (typeof performance !== "undefined" ? performance.now() : Date.now());
     }
   }
-  // ?statAtlas (default-ON; ?statAtlas=off escapes): collapse the ring's unique-material
-  // singletons into GLOBAL (cross-LB) size-bucket BatchedMeshes — ~5,400 lone draws
-  // -> ~20-30 multidraw calls. The bucket BatchedMeshes self-add to staticsGroup;
-  // each LB's per-LB eviction is handled by scene3d._evictStaticAtlasForLb (installed
-  // by addSingletonsToCrossLbAtlas). Fail-soft: on error add the singletons unbatched.
-  if (statAtlasEnabled() && ringSingletons.length > 0) {
+  // Wire-agent (?wireframe=1): the texture-array atlas below rejects wireframe
+  // MeshBasic materials (no `.map`/image.data — static_atlas.js gate ~389), so
+  // EVERY ring singleton would fall through UNBATCHED (measured live: ~4,200
+  // plain Mesh draws, each then doubled by the wireFill companion pass →
+  // statics node count tripled). Wireframe materials are the ~32 SHARED bucket
+  // objects (materials._wireframeMaterialFor), so material-identity
+  // consolidation batches them trivially — the SAME cross-LB machinery the
+  // per-LB walk-in path (consolidateStaticSingletonsCrossLb) already uses in
+  // wireframe. That function keys region + per-LB eviction membership off ONE
+  // lbId per feed, so we must group the ring's cross-LB singletons by their
+  // landblockId and feed one LB at a time (mixed-LB feeds would misattribute
+  // eviction → orphaned batches). Batched nodes are BatchedMeshes → the
+  // wireFill companion pass skips them (materials.js ~2213), so no fills, no
+  // node explosion. Lone-by-material leftovers come back in `.out` and are
+  // added as plain Meshes carrying userData.landblockId (per-LB walker evicts
+  // them, exactly as today). Fail-soft: any miss adds the node unbatched.
+  if (scene3d.wireframeMode && ringSingletons.length > 0) {
+    try {
+      const byLb = new Map();
+      for (const n of ringSingletons) {
+        const lbId = (n.userData?.landblockId ?? 0) >>> 0;
+        let arr = byLb.get(lbId);
+        if (!arr) { arr = []; byLb.set(lbId, arr); }
+        arr.push(n);
+      }
+      let batchedGroups = 0;
+      for (const [lbId, group] of byLb) {
+        const res = statBatchChunkEnabled()
+          ? consolidateStaticSingletonsCrossLb(group, scene3d, lbId)
+          : null;
+        if (res) {
+          batchedGroups += res.bucketsTouched;
+          for (const n of res.out) scene3d.staticsGroup.add(n);
+        } else {
+          // flag off, or nothing consumed for this LB — add its singletons as-is
+          for (const n of group) scene3d.staticsGroup.add(n);
+        }
+      }
+      mark(`stage3: wire ring ${ringSingletons.length} singletons -> ${batchedGroups} cross-LB wire batches (${byLb.size} LBs)`);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[scene3d.statics/wireRingBatch] failed, adding singletons unbatched:", String(e?.message ?? e));
+      for (const n of ringSingletons) { if (!n.parent) scene3d.staticsGroup.add(n); }
+    }
+  } else if (statAtlasEnabled() && ringSingletons.length > 0) {
+    // ?statAtlas (default-ON; ?statAtlas=off escapes): collapse the ring's unique-material
+    // singletons into GLOBAL (cross-LB) size-bucket BatchedMeshes — ~5,400 lone draws
+    // -> ~20-30 multidraw calls. The bucket BatchedMeshes self-add to staticsGroup;
+    // each LB's per-LB eviction is handled by scene3d._evictStaticAtlasForLb (installed
+    // by addSingletonsToCrossLbAtlas). Fail-soft: on error add the singletons unbatched.
     try {
       const { passthrough } = addSingletonsToCrossLbAtlas(ringSingletons, scene3d);
       for (const n of passthrough) scene3d.staticsGroup.add(n);
@@ -2767,6 +2815,8 @@ export async function bakeStaticsRing(
       for (const n of ringSingletons) scene3d.staticsGroup.add(n);
     }
   }
+  // (statAtlas off, non-wire: ringSingletons is never populated — line ~2738
+  //  adds those nodes inline during the build loop — so no trailing branch.)
   mark(`stage3: build+add ${placementsByModel.size} groups (inst=${instancedGroupCount}, single=${singletonCount})`);
 
   // V1 (2026-05-29) — run each scenery placement's `default_script`

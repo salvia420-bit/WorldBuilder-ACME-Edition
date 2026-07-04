@@ -19989,6 +19989,19 @@ const CLIENT_EVENT_KIND_LOCALIZATION: u32 = 59;
 /// `recv_message` polls.
 #[cfg(target_arch = "wasm32")]
 enum SessionCommand {
+    /// `SessionHandle.sendKeepalive()` — force an immediate
+    /// `GameAction::PingRequest` REGARDLESS of the recv loop's 5s
+    /// keepalive gate. Robustness mitigation (2026-07-04): ACE drops a
+    /// session after 60s with no inbound packet ("Network Timeout"),
+    /// and the recv loop's own 5s ping is only serviced when the rAF
+    /// net pump runs — which pauses on tab-occlusion / main-thread
+    /// saturation. A JS `setInterval` drives this on the wall clock so
+    /// packets keep flowing. GATED server-side of the channel: the recv
+    /// arm only sends when `state` is `LoopState::InWorld` (mirrors
+    /// `should_send_keepalive_ping`'s InWorld check), so pre-login /
+    /// charlist calls are silent no-ops. The 5s gate is intentionally
+    /// bypassed here — the JS interval already paces at ~2.5s.
+    ForceKeepalive,
     /// `SessionHandle.select_character(id)` — sends
     /// `CharacterEnterWorldRequest(guid)` to the server. The loop
     /// auto-handles the subsequent `CharacterEnterWorldServerReady`
@@ -29907,6 +29920,27 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::SendChat { message })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("send_chat: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Force an immediate keepalive `PingRequest`, bypassing the recv
+    /// loop's 5s ping gate. Robustness mitigation (2026-07-04): ACE
+    /// drops a session after 60s with no inbound packet, and the recv
+    /// loop's own 5s ping only fires when the rAF-driven net pump runs —
+    /// which pauses on tab-occlusion / main-thread saturation. A JS
+    /// `setInterval` (~2.5s) drives this on the wall clock so packets
+    /// keep flowing regardless of rAF. The actual send is gated
+    /// `InWorld` inside the recv loop's `ForceKeepalive` arm, so calls
+    /// made before EnteredWorld are silent no-ops (safe to fire from a
+    /// page-lifetime interval that starts at session connect). Enqueue
+    /// only — the send happens asynchronously in the recv loop.
+    #[wasm_bindgen(js_name = sendKeepalive)]
+    pub fn send_keepalive(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::ForceKeepalive)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("send_keepalive: cmd channel closed ({e})"))
             })
     }
 
@@ -41330,6 +41364,40 @@ async fn recv_loop(
                         // Handle was dropped → JS side is gone → exit.
                         log::info!("recv_loop: cmd channel closed, exiting");
                         return;
+                    }
+                    Some(SessionCommand::ForceKeepalive) => {
+                        // Robustness mitigation (2026-07-04): forced
+                        // PingRequest driven by a JS wall-clock
+                        // setInterval, bypassing the 5s gate above so
+                        // packets keep flowing when the rAF net pump is
+                        // paused (tab occluded / main thread saturated).
+                        // Gated InWorld here — mirrors
+                        // `should_send_keepalive_ping`'s state check — so
+                        // pre-login / charlist calls are silent no-ops.
+                        // Failures are logged, never fatal, so the loop
+                        // keeps running and JS can observe an eventual
+                        // real disconnect through `recv_message`.
+                        if matches!(state, LoopState::InWorld { .. }) {
+                            use holtburger_protocol::messages::misc::actions::PingRequestActionData;
+                            use holtburger_protocol::messages::GameAction;
+                            // Stamp send time so the PingResponse arm can
+                            // compute RTT (same bookkeeping as the 5s
+                            // gate above); cleared on send failure.
+                            PING_SEND_INSTANT.with(|c| {
+                                *c.borrow_mut() = Some(web_time::Instant::now());
+                            });
+                            if let Err(e) = session
+                                .send_action(GameAction::PingRequest(Box::new(
+                                    PingRequestActionData,
+                                )))
+                                .await
+                            {
+                                PING_SEND_INSTANT.with(|c| { *c.borrow_mut() = None; });
+                                log::warn!(
+                                    "recv_loop: forced keepalive PingRequest send failed: {e}"
+                                );
+                            }
+                        }
                     }
                     Some(SessionCommand::SelectCharacter { guid }) => {
                         let guid = holtburger_common::Guid::from(guid);

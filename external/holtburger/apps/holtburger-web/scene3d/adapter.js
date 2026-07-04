@@ -354,7 +354,7 @@ export function buildTerrainAtlasArrayBytes(terrainTextures) {
     layerCanvas = document.createElement("canvas");
     layerCanvas.width = ATLAS_TILE_PX;
     layerCanvas.height = ATLAS_TILE_PX;
-    lctx = layerCanvas.getContext("2d");
+    lctx = layerCanvas.getContext("2d", { willReadFrequently: true });
   };
 
   let roadCanvas = null;
@@ -475,7 +475,7 @@ export function buildTerrainDetailArrayBytes(slices) {
     layerCanvas = document.createElement("canvas");
     layerCanvas.width = DETAIL_TILE_PX;
     layerCanvas.height = DETAIL_TILE_PX;
-    lctx = layerCanvas.getContext("2d");
+    lctx = layerCanvas.getContext("2d", { willReadFrequently: true });
   };
 
   for (const tex of slices) {
@@ -552,7 +552,7 @@ export function buildAlphaMaskArrayBytes(orderedMasks) {
     layerCanvas = document.createElement("canvas");
     layerCanvas.width = ALPHA_MASK_TILE_PX;
     layerCanvas.height = ALPHA_MASK_TILE_PX;
-    lctx = layerCanvas.getContext("2d");
+    lctx = layerCanvas.getContext("2d", { willReadFrequently: true });
   };
 
   for (let i = 0; i < depth; i++) {

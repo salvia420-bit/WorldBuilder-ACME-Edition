@@ -5075,6 +5075,37 @@
           // and method surfaces. Bump that schema's `version` whenever
           // a new load-bearing global is added/renamed (HUD rec #184).
           window.__sessionHandle = handle;
+          // Keepalive interval (robustness fix 2026-07-04, always-on —
+          // no URL flag per project convention for robustness fixes).
+          // ACE drops a session after 60s with no inbound packet
+          // ("Network Timeout"). The recv loop's own 5s PingRequest gate
+          // only fires from the rAF-driven net pump, which pauses when
+          // the tab is occluded or the main thread saturates → no
+          // packets for >60s → server drop. This wall-clock setInterval
+          // forces an immediate PingRequest every 2.5s independent of
+          // rAF. It reads window.__sessionHandle DYNAMICALLY each tick
+          // (same survives-disconnect pattern as getLocalPlayerPose
+          // above), so a single page-lifetime interval covers every
+          // session: a null handle → skip, a replaced handle on
+          // reconnect → picked up automatically, no per-session teardown
+          // needed. sendKeepalive is a server-side-gated no-op unless
+          // the session is InWorld, so firing pre-EnteredWorld is
+          // harmless. try/catch so a dead handle can't throw every 2.5s.
+          // Guarded by a window flag so it is created EXACTLY ONCE even
+          // across reconnects (double submit / autoLogin re-fire).
+          // NOTE: setInterval is itself throttled/paused under extreme
+          // background-tab or main-thread saturation — the robust fix is
+          // moving the transport to a Web Worker (follow-up).
+          if (!window.__hbKeepaliveInterval) {
+            window.__hbKeepaliveInterval = setInterval(() => {
+              try {
+                const kh = window.__sessionHandle;
+                if (kh && typeof kh.sendKeepalive === "function") {
+                  kh.sendKeepalive();
+                }
+              } catch (_) {}
+            }, 2500);
+          }
           // A4-Q2 (2026-06-12, W3+ S5, ?mtQueue=on) — wasm-boundary bridge
           // for renderer AnimationDone (entities.js holds module exports,
           // NOT the SessionHandle; this window seam matches the
