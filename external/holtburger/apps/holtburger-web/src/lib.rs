@@ -916,6 +916,15 @@ pub fn local_pose_snap_diag() -> String {
     holtburger_world::pose_snap_diag::read_packed()
 }
 
+/// Bug-A round-3 diag: the reconcile leash arm's self-echo counters,
+/// comma-packed "seen,mirrorSeen,applied,gated,lastDeltaCm" (see
+/// holtburger-world `leash_echo_diag`). RIDES v6 — additive,
+/// diagnostics-only, same precedent as the round-2 riders.
+#[wasm_bindgen(js_name = leashEchoDiag)]
+pub fn leash_echo_diag() -> String {
+    holtburger_world::leash_echo_diag::read_packed()
+}
+
 /// AC's stateless 32-bit packet header checksum, exposed for callers
 /// that want to verify the protocol crate's deterministic output from
 /// JS. Smoke-tests passing a `&[u8]` from JS into wasm and a `u32`

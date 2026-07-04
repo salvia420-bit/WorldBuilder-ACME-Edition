@@ -2769,18 +2769,23 @@ impl SpatialScene {
                 // `Unknown` (pre-solve) counts as contact, the remote
                 // lane's S8 OPEN Q6 convention.
                 let has_contact = body.contact.grounded().unwrap_or(true);
+                crate::leash_echo_diag::record_echo(self.local_server_controlled);
                 if self.local_server_controlled && has_contact {
                     let blip = if indoor {
                         BLIP_SNAP_DISTANCE_INDOOR_M
                     } else {
                         BLIP_SNAP_DISTANCE_OUTDOOR_M
                     };
-                    // `keep_heading = true` pending the retail
-                    // `cmdinterp->vfptr[15]` resolution (dossier open
-                    // question). A beyond-blip target QUEUES with
+                    // `keep_heading = true` — RESOLVED 2026-07-03: the
+                    // routine arm's `vfptr[15]` is `GetAutonomyLevel`
+                    // (vtable 0x803cc0 + 0xB4 = 0x803d74, binja dump),
+                    // so retail keeps heading iff autonomy != 0; pinned
+                    // autonomy 2 (ADJ-6) ⇒ `true` is exact. A
+                    // beyond-blip target QUEUES with
                     // `node_fail_counter = 4` and the next drain blips
                     // it (acclient.c:389140-389172) — no scene-side
                     // `stop()` pre-gate in leash mode.
+                    crate::leash_echo_diag::record_pull(distance);
                     body.position_manager
                         .remote_interpolate_to(body.pose, pose, true, blip);
                 }

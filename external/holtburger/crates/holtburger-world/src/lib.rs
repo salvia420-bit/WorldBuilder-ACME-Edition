@@ -19,6 +19,7 @@ pub mod handlers;
 pub mod hydration;
 mod identify;
 pub mod inspect;
+pub mod leash_echo_diag;
 pub mod magic;
 pub mod player;
 pub mod sky;

@@ -2090,6 +2090,12 @@
           ...(typeof __hbWasmNs?.reclaimCauseDiag === "function"
             ? { reclaimCauseDiag: () => __hbWasmNs.reclaimCauseDiag() >>> 0 }
             : {}),
+          // Bug-A round-3 diag (2026-07-03) — the reconcile leash arm's
+          // self-echo counters ("seen,mirrorSeen,applied,gated,lastDeltaCm");
+          // same diagnostics-only rider contract as round 2.
+          ...(typeof __hbWasmNs?.leashEchoDiag === "function"
+            ? { leashEchoDiag: () => String(__hbWasmNs.leashEchoDiag()) }
+            : {}),
           hash32,
           has_resource_source,
         };
