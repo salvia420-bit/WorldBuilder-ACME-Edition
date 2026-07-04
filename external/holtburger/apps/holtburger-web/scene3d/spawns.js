@@ -347,7 +347,9 @@ function deriveItemType(category, weenieType) {
     case 12:  return ITEM_TYPE.CREATURE;  // NPC
     case 19:  return 0;                   // Door — no glyph mapping
     case 20:  return ITEM_TYPE.CONTAINER;
-    case 7:   return 0;                   // Surface (sign / portal frame)
+    case 7:   return ITEM_TYPE.PORTAL;    // WeenieType.Portal (the old
+                                          // "Surface" label was wrong —
+                                          // P14 fleet packet 2026-07-04)
     case 44:  return ITEM_TYPE.WRITABLE;  // Book
     default:  return 0;
   }

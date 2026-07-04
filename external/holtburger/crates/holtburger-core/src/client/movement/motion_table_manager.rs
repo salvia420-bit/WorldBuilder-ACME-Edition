@@ -121,10 +121,22 @@ pub(crate) struct AnimNode {
 
 impl AnimNode {
     pub(crate) fn new(motion: u32, num_anims: u32) -> Self {
+        Self::new_with_len(motion, num_anims, None)
+    }
+
+    /// P13/P16-H2 (2026-07-04) — authored-length aware constructor: a
+    /// 1-anim node completes on its REAL authored clip length when the
+    /// enqueue site resolved one ([`authored_len_for`]), and only falls
+    /// back to [`RENDERER_DONE_FALLBACK_SECS`] when no length is known
+    /// (table not ingested yet, motion with no from-Ready link, missing
+    /// Animation record). Loop-class motions never get a clock at all
+    /// (`num_anims == 0` — the structural exemption).
+    pub(crate) fn new_with_len(motion: u32, num_anims: u32, authored_secs: Option<f32>) -> Self {
         Self {
             motion,
             num_anims,
-            anim_seconds: (num_anims > 0).then_some(RENDERER_DONE_FALLBACK_SECS),
+            anim_seconds: (num_anims > 0)
+                .then(|| authored_secs.unwrap_or(RENDERER_DONE_FALLBACK_SECS)),
             done_deadline: None,
         }
     }
@@ -133,12 +145,66 @@ impl AnimNode {
 /// Completion-clock shim budget (module doc). Conservative upper bound
 /// over the gesture class this queue actually sees from live ACE: cast
 /// windups/gestures run ~0.6-1.5 s at `CastSpeed = 2.0`
-/// (`Player_Magic.cs:603`); swings are shorter. Long emotes (10 s
-/// dances) complete EARLY under this shim — accepted until authored
-/// lengths ride in (the named follow-up: resolve real lengths at the
-/// wasm ingest site via the motion-table machinery that already backs
-/// `lookupMotionLinkForSwing`).
+/// (`Player_Magic.cs:603`); swings are shorter. P13/P16-H2 (2026-07-04):
+/// this is now the FALLBACK only — the enqueue chokepoint
+/// (`motion_interp::do_interpreted_motion`) resolves the REAL authored
+/// length via [`authored_len_for`] (fed from the wasm ingest,
+/// [`set_authored_motion_lengths`]) so gestures/emotes complete at their
+/// authored time instead of a flat 2.0 s (the "S-walk reverts to idle at
+/// ~2 s / moonwalk-slide during casts" clip-drain class).
 pub(crate) const RENDERER_DONE_FALLBACK_SECS: f32 = 2.0;
+
+thread_local! {
+    /// P13/P16-H2 (2026-07-04) — authored one-shot lengths for the LOCAL
+    /// player's MotionTable, keyed `(stance & 0xFFFF, full motion id)`,
+    /// value = BASE seconds at speed 1.0 (the enqueue divides by the
+    /// live `params.speed`, mirroring retail
+    /// `AnimSequenceNode::multiply_framerate`). Fed by the wasm layer
+    /// once the local player's table is cached
+    /// (`SessionHandle::ingestMotionLengths` → [`set_authored_motion_lengths`];
+    /// resolution machinery shared with `lookupMotionLinkForSwing`).
+    ///
+    /// thread_local by design (matches the wasm triangulation memo
+    /// precedent): wasm is single-threaded, and `cargo test` threads get
+    /// isolated maps. Remote entities' managers consult the same map —
+    /// harmless: only the LOCAL guid's queue feeds
+    /// `player_motions_pending`, and a miss just keeps the 2.0 s
+    /// fallback.
+    static AUTHORED_MOTION_LENGTHS: std::cell::RefCell<std::collections::HashMap<(u16, u32), f32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Replace the authored-length table (wasm ingest; re-ingest on mtable
+/// change replaces wholesale so stale entries can't linger).
+pub(crate) fn set_authored_motion_lengths(entries: &[(u32, u32, f32)]) {
+    AUTHORED_MOTION_LENGTHS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        for &(stance, motion, secs) in entries {
+            if secs > 0.0 && secs.is_finite() {
+                m.insert(((stance & 0xFFFF) as u16, motion), secs);
+            }
+        }
+    });
+}
+
+/// Authored completion budget for `(stance, motion)` at `speed`, or
+/// `None` (→ [`RENDERER_DONE_FALLBACK_SECS`]). Speed scales playback
+/// exactly as retail scales framerate (`AnimSequenceNode::
+/// multiply_framerate`, acclient.c:340968-340979): effective seconds =
+/// base / |speed|. Clamped to a sane band so a degenerate wire speed
+/// can neither wedge the queue (30 s cap) nor complete instantly
+/// (50 ms floor).
+pub(crate) fn authored_len_for(stance: u32, motion: u32, speed: f32) -> Option<f32> {
+    let base = AUTHORED_MOTION_LENGTHS
+        .with(|m| m.borrow().get(&((stance & 0xFFFF) as u16, motion)).copied())?;
+    let divisor = if speed.is_finite() && speed.abs() > 1.0e-3 {
+        speed.abs()
+    } else {
+        1.0
+    };
+    Some((base / divisor).clamp(0.05, 30.0))
+}
 
 /// Side effects the queue fires — retail calls these directly on
 /// `CPhysicsObj`/`CSequence`; headless Rust emits them for the owner to
@@ -257,8 +323,20 @@ impl MotionTableManager {
     /// append an [`AnimNode`] then coalesce
     /// (`acclient.c:330149-330169`; ACE `MotionTableManager.cs:163-167`).
     pub(crate) fn add_to_queue(&mut self, motion: u32, num_anims: u32) {
+        self.add_to_queue_with_len(motion, num_anims, None);
+    }
+
+    /// P13/P16-H2 — [`Self::add_to_queue`] carrying the authored clip
+    /// length the completion-clock shim should use instead of the flat
+    /// [`RENDERER_DONE_FALLBACK_SECS`] (see [`AnimNode::new_with_len`]).
+    pub(crate) fn add_to_queue_with_len(
+        &mut self,
+        motion: u32,
+        num_anims: u32,
+        authored_secs: Option<f32>,
+    ) {
         self.pending_animations
-            .push_back(AnimNode::new(motion, num_anims));
+            .push_back(AnimNode::new_with_len(motion, num_anims, authored_secs));
         self.remove_redundant_links();
     }
 
@@ -274,6 +352,19 @@ impl MotionTableManager {
     #[allow(dead_code)]
     pub(crate) fn queue_object_motion(&mut self, motion: u32, num_anims: u32) {
         self.add_to_queue(motion, num_anims);
+    }
+
+    /// P13/P16-H2 — [`Self::queue_object_motion`] with the authored
+    /// completion budget resolved at the enqueue site
+    /// (`do_interpreted_motion` passes the interp's `current_style` +
+    /// the live `params.speed` through [`authored_len_for`]).
+    pub(crate) fn queue_object_motion_with_len(
+        &mut self,
+        motion: u32,
+        num_anims: u32,
+        authored_secs: Option<f32>,
+    ) {
+        self.add_to_queue_with_len(motion, num_anims, authored_secs);
     }
 
     /// `PerformMovement` type-4 (StopObjectMotion) arm: every stop
@@ -1020,5 +1111,71 @@ mod tests {
         );
         assert!(t.pending_animations.is_empty());
         assert_eq!(t.animation_counter, 0);
+    }
+
+    /// P13/P16-H2 — an ingested authored length replaces the flat 2.0 s
+    /// budget: the node is still pending inside the authored window and
+    /// completes at its expiry. thread_local isolation: each test thread
+    /// gets its own map, so the global-ish state can't leak across tests.
+    #[test]
+    fn authored_length_overrides_fallback_clock() {
+        const MAGIC_STANCE: u32 = 0x8000_0049;
+        set_authored_motion_lengths(&[(MAGIC_STANCE, ACTION_X, 0.8)]);
+        let authored = authored_len_for(MAGIC_STANCE, ACTION_X, 1.0);
+        assert_eq!(authored, Some(0.8));
+
+        let mut m = MotionTableManager::new();
+        m.queue_object_motion_with_len(ACTION_X, 1, authored);
+        assert_eq!(m.pending_animations[0].anim_seconds, Some(0.8));
+
+        let t0 = Instant::now();
+        m.use_time(Some(t0)); // lazy-stamp the head's deadline
+        m.use_time(Some(t0 + Duration::from_millis(700)));
+        assert_eq!(m.drain_events(), vec![], "inside the authored window: pending");
+        m.use_time(Some(t0 + Duration::from_millis(801)));
+        assert_eq!(
+            m.drain_events(),
+            vec![MotionTableEvent::MotionDone { motion: ACTION_X, success: true }],
+            "completes at the authored expiry, not the 2.0 s fallback"
+        );
+        set_authored_motion_lengths(&[]); // leave the thread map clean
+    }
+
+    /// P13/P16-H2 — no ingested entry → the node keeps the 2.0 s
+    /// fallback budget (the pre-wave behaviour, wedge protection intact).
+    #[test]
+    fn missing_authored_length_keeps_fallback() {
+        let mut m = MotionTableManager::new();
+        let authored = authored_len_for(0x8000_003D, ACTION_X, 1.0);
+        assert_eq!(authored, None);
+        m.queue_object_motion_with_len(ACTION_X, 1, authored);
+        assert_eq!(
+            m.pending_animations[0].anim_seconds,
+            Some(RENDERER_DONE_FALLBACK_SECS)
+        );
+    }
+
+    /// P13/P16-H2 — speed scales the budget exactly as retail scales
+    /// framerate (`AnimSequenceNode::multiply_framerate`,
+    /// acclient.c:340968-340979): CastSpeed 2.0 halves a 1.6 s gesture;
+    /// degenerate speeds fall back to 1.0; results clamp to
+    /// [0.05, 30.0]; stance keys mask to the low 16 bits (interpreted
+    /// u16 and full 0x8000_xxxx forms hit the same entry).
+    #[test]
+    fn authored_len_scales_by_speed_and_clamps() {
+        const STANCE: u32 = 0x8000_0049;
+        set_authored_motion_lengths(&[(STANCE, ACTION_X, 1.6)]);
+        assert_eq!(authored_len_for(STANCE, ACTION_X, 2.0), Some(0.8));
+        assert_eq!(authored_len_for(STANCE & 0xFFFF, ACTION_X, 2.0), Some(0.8));
+        assert_eq!(authored_len_for(STANCE, ACTION_X, -2.0), Some(0.8));
+        assert_eq!(authored_len_for(STANCE, ACTION_X, 0.0), Some(1.6));
+        assert_eq!(authored_len_for(STANCE, ACTION_X, f32::NAN), Some(1.6));
+        assert_eq!(authored_len_for(STANCE, ACTION_X, 1000.0), Some(0.05));
+        set_authored_motion_lengths(&[(STANCE, ACTION_X, 500.0)]);
+        assert_eq!(authored_len_for(STANCE, ACTION_X, 1.0), Some(30.0));
+        // Wholesale replacement: the previous entry set is gone.
+        set_authored_motion_lengths(&[(STANCE, SUBSTATE_A, 1.0)]);
+        assert_eq!(authored_len_for(STANCE, ACTION_X, 1.0), None);
+        set_authored_motion_lengths(&[]);
     }
 }

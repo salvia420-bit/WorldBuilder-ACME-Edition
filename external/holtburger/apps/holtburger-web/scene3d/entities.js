@@ -1143,8 +1143,10 @@ const MT_QUEUE_ON = (() => {
   }
 })();
 
-// A11-S5 / G14 (2026-06-12, W3+ remainder) — `?defaultScriptSpawn=on`
-// (default OFF) closes the spawn-time DefaultScript auto-resolve gap
+// A11-S5 / G14 (2026-06-12, W3+ remainder) — `?defaultScriptSpawn`
+// (DEFAULT-ON since the flip waves; `=off` opts out — the "(default OFF)"
+// note below predates the flip, P14 fleet packet 2026-07-04) closes the
+// spawn-time DefaultScript auto-resolve gap
 // (survey A11 §3 row 9): the wire PhysicsDesc `default_script` is usually a
 // PScriptType ENUM (+ `default_script_intensity` mod weight), NOT a 0x33
 // DID — the wasm spawn payload filters it out (`physicsScriptDid` = raw
@@ -1180,7 +1182,9 @@ const DEFAULT_SCRIPT_SPAWN_ON = (() => {
   }
 })();
 
-// Track B (2026-06-24) — `?setupDefaultScript` (default OFF) honors the
+// Track B (2026-06-24) — `?setupDefaultScript` (DEFAULT-ON, `=off` opts
+// out — see the 2026-06-24 note in the reader below; the old "(default
+// OFF)" here was stale, P14 fleet packet 2026-07-04) honors the
 // entity's SetupModel `default_script_id` (a 0x33 PhysicsScript DID baked in
 // the Setup DAT), the DAT-driven ambient particle chain dynamic entities
 // currently ignore. Statics already honor it (`statics.js`
@@ -3001,6 +3005,12 @@ export class EntityManager {
     if (!setupId) {
       // No real setup yet (PrivateUpdatePosition before ObjectCreate).
       // Skip — the next ObjectCreate will retry with a real setup_id.
+      // P14 (2026-07-04): countable, not silent — a wire entity whose
+      // setup never hydrates (portal-family suspect) shows up here.
+      this.nullSetupSkips = (this.nullSetupSkips | 0) + 1;
+      if (typeof window !== "undefined" && window.__diag?.onSpawnFailed) {
+        try { window.__diag.onSpawnFailed(meta, new Error("setupId=0 (skip)")); } catch (_) {}
+      }
       return null;
     }
 
@@ -3123,20 +3133,72 @@ export class EntityManager {
     }
     const _spawnTraceT0 = SPAWN_TRACE ? performance.now() : 0;
     const _spawnTraceAnimStart = _spawnTraceT0;
-    const animEntry = await this.animationCache.get(
-      setupId,
-      mtableId,
-      initialMotion,
-      initialStance,
-      fetchKeyframes,
-      {
-        modelChanges,
-        textureChanges,
-        paletteId,
-        paletteSubsFlat: subPalettes,
-        placementId,
-      }
-    );
+    const bakeOpts = {
+      modelChanges,
+      textureChanges,
+      paletteId,
+      paletteSubsFlat: subPalettes,
+      placementId,
+    };
+    // P11 (2026-07-04) — the spawn-time bake used to be FATAL on reject: a
+    // corpse CreateObject ships motionCommand=Dead, and a Dead-pose bake
+    // failure propagated to spawn()'s catch → the corpse never entered
+    // entityMap (invisible AND unclickable, which also fed P12's "can't
+    // loot"). The live creature's later Dead via setMotion is caught and
+    // non-fatal — align the two: on a non-idle initial-motion bake reject,
+    // fall back to the rest-pose bake (motion 0, stance 0) so the entity
+    // COMMITS (standing beats absent), log it, and count it
+    // (spawnBakeFallbacks). Same fallback for a degenerate 0-part bake.
+    let animEntry;
+    try {
+      animEntry = await this.animationCache.get(
+        setupId,
+        mtableId,
+        initialMotion,
+        initialStance,
+        fetchKeyframes,
+        bakeOpts
+      );
+    } catch (e) {
+      // Rest-pose bake failing too is the genuinely fatal case — rethrow.
+      if (initialMotion === 0 && initialStance === 0) throw e;
+      this.spawnBakeFallbacks = (this.spawnBakeFallbacks | 0) + 1;
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[entities/P11] spawn(0x${guid.toString(16)}) bake failed ` +
+        `(motion=0x${initialMotion.toString(16)} stance=0x${initialStance.toString(16)} ` +
+        `setup=0x${setupId.toString(16)} mtable=0x${mtableId.toString(16)}) ` +
+        `— rest-pose fallback:`,
+        e?.message ?? e
+      );
+      animEntry = await this.animationCache.get(
+        setupId, mtableId, 0, 0, fetchKeyframes, bakeOpts
+      );
+    }
+    if (
+      animEntry &&
+      (animEntry.partCount >>> 0) === 0 &&
+      (initialMotion !== 0 || initialStance !== 0)
+    ) {
+      // Degenerate non-idle bake (no parts) — retry rest pose; keep the
+      // degenerate entry if the retry also fails (commit-invisible matches
+      // the old behaviour, never worse).
+      try {
+        const rest = await this.animationCache.get(
+          setupId, mtableId, 0, 0, fetchKeyframes, bakeOpts
+        );
+        if (rest && (rest.partCount >>> 0) > 0) {
+          this.spawnBakeFallbacks = (this.spawnBakeFallbacks | 0) + 1;
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[entities/P11] spawn(0x${guid.toString(16)}) non-idle bake ` +
+            `degenerate (0 parts, motion=0x${initialMotion.toString(16)}) ` +
+            `— using rest-pose bake`
+          );
+          animEntry = rest;
+        }
+      } catch (_) { /* keep the degenerate entry */ }
+    }
     const _spawnTraceAnimMs = SPAWN_TRACE ? (performance.now() - _spawnTraceAnimStart) : 0;
     // 2026-05-16 — `AnimationCache.get()` now returns `partGroups`
     // pre-converted to `{ groups: [{geometry, surfaceDid}], surfaceDids }`
@@ -3748,6 +3810,21 @@ export class EntityManager {
       root.traverse((o) => o.layers.set(1));
     }
     this.entityMap.set(guid, inst);
+    // P13/P16-H2 (2026-07-04) — once the LOCAL player's spawn bake commits
+    // (its MotionTable is in the wasm source cache by construction), feed
+    // the authored one-shot link lengths to the completion-clock shim so
+    // cast gestures/emotes complete at their REAL clip length instead of
+    // the flat 2.0 s. typeof-guarded: a stale pkg/ keeps the fallback.
+    try {
+      const lpgFn = (typeof window !== "undefined") ? window.getLocalPlayerGuid : null;
+      const lpg = typeof lpgFn === "function" ? lpgFn() : null;
+      if (lpg != null && (lpg >>> 0) === guid && mtableId) {
+        const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+        if (sh && typeof sh.ingestMotionLengths === "function") {
+          sh.ingestMotionLengths(mtableId >>> 0);
+        }
+      }
+    } catch (_) { /* length ingest must never break spawn */ }
     // F3-1 (bughunt 2026-06-09) — ballistic projectile seed. PhysicsState::Missile
     // entities (war/void/life bolts, arrows/bolts/thrown weapons) are the one
     // class ACE never streams in-flight UpdatePosition for: the only motion datum

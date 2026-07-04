@@ -1200,7 +1200,26 @@ impl MotionInterp {
         if motion == MOTION_DEAD {
             effects.remove_link_animations = true;
         }
-        motion_table_manager.queue_object_motion(motion, renderer_num_anims(motion));
+        // P13/P16-H2 (2026-07-04) — 1-anim nodes carry their REAL
+        // authored clip length (base secs / |params.speed|, retail
+        // framerate scaling) so the completion-clock shim drains at the
+        // authored time, not a flat 2.0 s (cast gestures ~0.6-1.5 s at
+        // CastSpeed 2.0 completed LATE and long emotes EARLY; the late
+        // drain re-resolved the rendered clip to stance idle — the
+        // "moonwalk-slide backward under an idle anim" class). Loop
+        // cycles stay structurally exempt: `renderer_num_anims == 0`
+        // → no clock, same-poll drain.
+        let num_anims = renderer_num_anims(motion);
+        let authored = if num_anims > 0 {
+            super::motion_table_manager::authored_len_for(
+                self.interpreted_state.current_style,
+                motion,
+                params.speed,
+            )
+        } else {
+            None
+        };
+        motion_table_manager.queue_object_motion_with_len(motion, num_anims, authored);
         let jump_error = if params.disable_jump_during_link() {
             72
         } else {

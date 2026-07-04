@@ -7128,15 +7128,24 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         }
 
         let total = anim.part_frames.len();
-        let low = (anim_data.low_frame.max(0) as usize).min(total);
-        let high = if anim_data.high_frame < 0 {
-            total
+        // Retail frame-range clamp (AnimSequenceNode::set_animation_id,
+        // acclient.c:341108-341127): high<0 → last frame; low>=N → last;
+        // high>=N → last; high<low → low. Creature Dead/Fallen freeze-
+        // frames are authored PAST the end — tusker 0x0900000C Dead =
+        // {low:40, high:-1, fr:0} over the 40-frame anim 0x0300001A (the
+        // prone slump IS the clamped last frame). The old exclusive-slice
+        // `.min(total)` + `low >= high → skip` made those cycles vanish
+        // (P11: no death pose; empty corpse bake). total >= 1 here — the
+        // part_frames emptiness check above already `continue`d.
+        let last = total - 1;
+        let low = (anim_data.low_frame.max(0) as usize).min(last);
+        let high_incl = if anim_data.high_frame < 0 {
+            last
         } else {
-            ((anim_data.high_frame as usize).saturating_add(1)).min(total)
-        };
-        if low >= high {
-            continue;
+            (anim_data.high_frame as usize).min(last)
         }
+        .max(low);
+        let high = high_incl + 1; // exclusive slice end for the loops below
 
         // Per-segment dt from |framerate|. Retail (CSequence::update_internal,
         // acclient.c:340696-340731) computes frame_quantum = framerate*quantum;
@@ -7145,9 +7154,11 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         // fire only on frame ADVANCE, a held cycle never fires its hooks.
         // State-motion cycles are authored exactly this way: door/chest/lever
         // On = { low_frame: open pose, fr 0 }, Off = { low_frame 0: closed,
-        // fr 0 }, creature Dead = { low_frame 0: prone, fr 0 } (frame 0 of the
-        // Dead-cycle anim == the collapse link's final frame — verified on
-        // 0x09000001/0x09000016). The transition MOTION lives in the LINKS
+        // fr 0 }, creature Dead = a prone freeze-frame — authored either as
+        // { low_frame 0, fr 0 } (frame 0 == the collapse link's final frame;
+        // verified on 0x09000001/0x09000016) or PAST-END { low_frame N, fr 0 }
+        // clamped to the last frame by retail (tusker 0x0900000C — see the
+        // clamp above). The transition MOTION lives in the LINKS
         // (signed framerate: On→Off plays the same anim reversed).
         //
         // The previous B5 fallback ("play the whole range at 30fps so death
@@ -7511,6 +7522,84 @@ fn classify_motion_link_for_swing(
         duration_sec,
         resolved_command: command,
     })
+}
+
+/// P13/P16-H2 (2026-07-04) — resolve the AUTHORED one-shot length of
+/// every from-Ready link in `mtable_id`, as `(stance, full command id,
+/// base seconds at speed 1.0)` entries for the completion-clock shim
+/// (`MovementSystemHandle::ingest_authored_motion_lengths`). Same table
+/// walk as [`classify_motion_link_for_swing`], but over ALL stances and
+/// ALL commands, summing every `AnimData` segment:
+/// - explicit ranges: `(high - low + 1) / |framerate|`;
+/// - freeze-frame holds (|fr| ≤ 2e-4): one keyframe at the nominal
+///   30 fps (`build_concatenated_motion_frames` is_hold semantics);
+/// - play-to-end (`high == -1`): the Animation's frame count with the
+///   retail clamp (`AnimSequenceNode::set_animation_id`,
+///   acclient.c:341108-341127) — resolved from the source cache
+///   synchronously; a cache miss skips that command entirely so the
+///   2.0 s fallback keeps covering it (never a hard error).
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_authored_motion_lengths<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    mtable_id: u32,
+) -> Vec<(u32, u32, f32)> {
+    use holtburger_dat::file_type::{Animation, MotionTable};
+    use holtburger_dat::ResourceKey;
+
+    if (mtable_id >> 24) != 0x09 {
+        return Vec::new();
+    }
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", mtable_id)) else {
+        return Vec::new();
+    };
+    let Ok(mtable) = MotionTable::read(&mut std::io::Cursor::new(&bytes)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(u32, u32, f32)> = Vec::new();
+    // Memoized anim frame counts for the high == -1 resolves (one anim
+    // asset backs many commands across stances).
+    let mut frame_counts: std::collections::HashMap<u32, Option<usize>> =
+        std::collections::HashMap::new();
+    for (outer_key, cmds) in &mtable.links {
+        if outer_key & 0xFFFF != (MOTION_LINK_FROM_READY & 0xFFFF) {
+            continue; // from-Ready groups only (the DoMotion enqueue class)
+        }
+        let stance = outer_key >> 16;
+        'cmds: for (command, md) in cmds {
+            let mut total = 0.0f32;
+            for ad in &md.anims {
+                let fr = ad.framerate.abs();
+                if fr <= 2.0e-4 {
+                    total += 1.0 / 30.0;
+                    continue;
+                }
+                let frames = if ad.high_frame >= 0 {
+                    (ad.high_frame - ad.low_frame + 1).max(1) as f32
+                } else {
+                    let count = *frame_counts.entry(ad.anim_id).or_insert_with(|| {
+                        if (ad.anim_id >> 24) != 0x03 {
+                            return None;
+                        }
+                        let bytes = source
+                            .get_file_by_key(ResourceKey::new("eor/portal", ad.anim_id))
+                            .ok()?;
+                        let anim =
+                            Animation::read(&mut std::io::Cursor::new(&bytes)).ok()?;
+                        Some(anim.part_frames.len())
+                    });
+                    let Some(n) = count else { continue 'cmds };
+                    let last = n.saturating_sub(1) as i32;
+                    let low = ad.low_frame.clamp(0, last);
+                    (last - low + 1).max(1) as f32
+                };
+                total += frames / fr;
+            }
+            if total > 0.0 && total.is_finite() {
+                out.push((stance, *command, total));
+            }
+        }
+    }
+    out
 }
 
 /// Native-shaped result struct (no wasm-bindgen). The wasm wrapper
@@ -20214,6 +20303,17 @@ enum SessionCommand {
     /// held manual state. JS sends this only under the default-off
     /// flag; same-value sends no-op crate-side.
     SetAutoRun { on: bool },
+    /// P13/P16-H2 (2026-07-04) — resolve the local player's MotionTable
+    /// from-Ready link lengths (the machinery behind
+    /// `lookupMotionLinkForSwing`) and install them as the
+    /// completion-clock shim's authored budgets
+    /// (`MovementSystemHandle::ingest_authored_motion_lengths`), so
+    /// 1-anim queue nodes complete at their REAL clip length instead of
+    /// the flat `RENDERER_DONE_FALLBACK_SECS = 2.0`. JS fires this once
+    /// the local player's spawn bake commits (the bake prefetch
+    /// guarantees the table is in the source cache); re-fired on an
+    /// mtable change, replacing the table wholesale.
+    IngestMotionLengths { mtable_id: u32 },
     /// A4-Q2 (2026-06-12, W3+ S5, `?mtQueue=on`) — the renderer reports a
     /// one-shot overlay clip's end (`success=true`) or a cancellation on
     /// eviction/stop of a tagged, not-yet-completed overlay
@@ -30147,6 +30247,23 @@ impl SessionHandle {
             })
     }
 
+    /// P13/P16-H2 (2026-07-04) — resolve + install the local player's
+    /// authored one-shot motion lengths for the completion-clock shim
+    /// (see `SessionCommand::IngestMotionLengths`). JS calls this once
+    /// the local player's spawn bake commits (entities.js), passing the
+    /// spawn meta's `mtableId`; safe to re-fire (wholesale replace).
+    /// ADDITIVE export — typeof-guarded JS-side so a stale pkg/
+    /// degrades to the 2.0 s fallback silently.
+    #[wasm_bindgen(js_name = ingestMotionLengths)]
+    pub fn ingest_motion_lengths(&self, mtable_id: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::IngestMotionLengths { mtable_id })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("ingest_motion_lengths: cmd channel closed ({e})"))
+            })
+    }
+
     /// Combat-mode toggle — flip the local player between
     /// NonCombat and a combat mode (Melee / Missile / Magic) chosen
     /// from equipped items. Mirrors the retail AC `~` (backtick)
@@ -35396,6 +35513,65 @@ async fn recv_loop(
                             // republished snapshot is None and JS won't
                             // see this field — Full(1) is safe as the
                             // default for the next rejoin.
+                            // P15 self-pickup direct (2026-07-04) — the
+                            // TODAY-live ground-rig removal. ACE tells the
+                            // PICKER an item entered a container only via
+                            // ItemServerSaysContainId (THIS event, 0x0022) —
+                            // the other-players lanes (PickupEvent /
+                            // ObjectDelete) already map to KIND_REMOVE, and
+                            // the canonical world-state lane (the
+                            // PropertiesUpdated arm in the post-route drain)
+                            // is inert under live defaults: mid-session
+                            // ObjectCreates only enter state.entities under
+                            // ?worldLifecycle=on, so move_entity_into_container
+                            // bails before emitting. Push the removal
+                            // directly; a rig-less guid (login inventory
+                            // hydrate, pack→pack move, stowed hand rig
+                            // already removed by the dequip PickupEvent) is
+                            // a JS _armRemove no-op. Live legs 3/4: without
+                            // this the picked-up dagger's ground mesh stayed
+                            // clickable while the item sat in the pack.
+                            GameEvent::InventoryPutObjInContainer(data) => {
+                                js_spawned_guids.remove(&u32::from(data.item_guid));
+                                entity_updates.borrow_mut().push(EntityUpdate {
+                                    kind: ENTITY_UPDATE_KIND_REMOVE,
+                                    guid: u32::from(data.item_guid),
+                                    model_id: 0,
+                                    landblock_id: 0,
+                                    x: 0.0,
+                                    y: 0.0,
+                                    z: 0.0,
+                                    qw: 1.0,
+                                    qx: 0.0,
+                                    qy: 0.0,
+                                    qz: 0.0,
+                                    wcid: 0,
+                                    item_type: 0,
+                                    name: String::new(),
+                                    obj_scale: 1.0,
+                                    icon_id: 0,
+                                    palette_id: 0,
+                                    mtable_id: 0,
+                                    model_changes: Vec::new(),
+                                    texture_changes: Vec::new(),
+                                    sub_palettes: Vec::new(),
+                                    placement_id: 0,
+                                    portal_destination: String::new(),
+                                    vx: 0.0,
+                                    vy: 0.0,
+                                    vz: 0.0,
+                                    omega_z: 0.0,
+                                    motion_command: 0,
+                                    motion_stance: 0,
+                                    physics_script_did: 0,
+                                    sound_table_did: 0,
+                                    obj_desc_flags: 0,
+                                    weenie_flags: 0,
+                                    motion_speed: 1.0,
+                                    physics_translucency: 0.0,
+                                    is_autonomous: false,
+                                });
+                            }
                             GameEvent::FellowshipFullUpdate(_) => {
                                 fellowship_update_type = 1;
                             }
@@ -35646,13 +35822,104 @@ async fn recv_loop(
                                 WorldEvent::EntitySpawned(_)
                                 | WorldEvent::EntityReplaced(_)
                                 | WorldEvent::EntityDespawned(_)
-                                | WorldEvent::ContainerOpened(_)
-                                | WorldEvent::PropertiesUpdated { .. } => {
+                                | WorldEvent::ContainerOpened(_) => {
                                     // Could affect inventory if the entity
                                     // is owned by the player; the snapshot
                                     // builder filters by ownership so a
                                     // false positive here just refreshes
                                     // the panel one extra time.
+                                    inventory_changed = true;
+                                }
+                                WorldEvent::PropertiesUpdated { guid, updates } => {
+                                    // P15 (2026-07-04) — SELF-pickup ground-rig
+                                    // removal. ACE tells the PICKER an item
+                                    // entered a container only via
+                                    // GameEventItemServerSaysContainId (the
+                                    // InventoryPutObjInContainer event) — no
+                                    // PickupEvent / ObjectDelete arrives for
+                                    // self (those are the other-players lanes,
+                                    // already mapped to KIND_REMOVE above). The
+                                    // world crate clears the entity's world
+                                    // presence and surfaces the contain as
+                                    // PropertiesUpdated{InstanceId(Container,
+                                    // != NULL)} — mirror the PickupEvent arm so
+                                    // the ground mesh despawns the moment the
+                                    // item becomes contained (live leg 3: the
+                                    // dagger reached the pack, InventoryUpdated
+                                    // ×3, but its world rig lingered clickable).
+                                    // UNGATED emit: `js_spawned_guids` is the
+                                    // WIELDED-CHILD ledger only (sole insert =
+                                    // the ParentEvent arm), so ground rigs are
+                                    // never in it (leg-4 finding). A spurious
+                                    // KIND_REMOVE for a rig-less contained item
+                                    // (login inventory hydrates, pack→pack
+                                    // moves) is a JS `_armRemove` no-op, and
+                                    // the dequip lane's PickupEvent already
+                                    // removed hand rigs before this arrives.
+                                    // NOTE: under live defaults this arm fires
+                                    // only for entities the world dispatcher
+                                    // TRACKS — mid-session ObjectCreates route
+                                    // only under ?worldLifecycle=on (see
+                                    // should_route_message_to_world), so the
+                                    // TODAY-live self-pickup removal is the
+                                    // direct GameEvent hook in the pre-route
+                                    // block (search "P15 self-pickup direct").
+                                    // This arm is the canonical lane once
+                                    // lifecycle routing flips on; both are
+                                    // idempotent (JS _armRemove no-ops).
+                                    let contained = updates.iter().any(|u| {
+                                        matches!(
+                                            u,
+                                            holtburger_common::properties::PropertyUpdate::InstanceId(
+                                                holtburger_common::properties::PropertyInstanceId::Container,
+                                                c,
+                                            ) if *c != holtburger_common::Guid::NULL
+                                        )
+                                    });
+                                    if contained {
+                                        let guid_u32 = u32::from(*guid);
+                                        js_spawned_guids.remove(&guid_u32);
+                                        {
+                                            entity_updates.borrow_mut().push(EntityUpdate {
+                                                kind: ENTITY_UPDATE_KIND_REMOVE,
+                                                guid: guid_u32,
+                                                model_id: 0,
+                                                landblock_id: 0,
+                                                x: 0.0,
+                                                y: 0.0,
+                                                z: 0.0,
+                                                qw: 1.0,
+                                                qx: 0.0,
+                                                qy: 0.0,
+                                                qz: 0.0,
+                                                wcid: 0,
+                                                item_type: 0,
+                                                name: String::new(),
+                                                obj_scale: 1.0,
+                                                icon_id: 0,
+                                                palette_id: 0,
+                                                mtable_id: 0,
+                                                model_changes: Vec::new(),
+                                                texture_changes: Vec::new(),
+                                                sub_palettes: Vec::new(),
+                                                placement_id: 0,
+                                                portal_destination: String::new(),
+                                                vx: 0.0,
+                                                vy: 0.0,
+                                                vz: 0.0,
+                                                omega_z: 0.0,
+                                                motion_command: 0,
+                                                motion_stance: 0,
+                                                physics_script_did: 0,
+                                                sound_table_did: 0,
+                                                obj_desc_flags: 0,
+                                                weenie_flags: 0,
+                                                motion_speed: 1.0,
+                                                physics_translucency: 0.0,
+                                                is_autonomous: false,
+                                            });
+                                        }
+                                    }
                                     inventory_changed = true;
                                 }
                                 WorldEvent::EntityDetached {
@@ -44170,6 +44437,36 @@ async fn recv_loop(
                         // and the drive only emits once ticks run.
                         movement.set_auto_run(on);
                     }
+                    Some(SessionCommand::IngestMotionLengths { mtable_id }) => {
+                        // P13/P16-H2 — authored one-shot lengths for the
+                        // completion-clock shim (variant doc above). The
+                        // table is in the source cache by construction
+                        // (the local player's spawn bake prefetched it);
+                        // a cache miss just logs and keeps the 2.0 s
+                        // fallback — never an error path.
+                        match global_source::try_global_source() {
+                            Some(source) => {
+                                let entries = resolve_authored_motion_lengths(
+                                    source.as_ref(),
+                                    mtable_id,
+                                );
+                                if entries.is_empty() {
+                                    console_log_str(&format!(
+                                        "[mtlen] 0x{mtable_id:08X}: no from-Ready link lengths resolved — keeping 2.0s fallback",
+                                    ));
+                                } else {
+                                    console_log_str(&format!(
+                                        "[mtlen] 0x{mtable_id:08X}: ingested {} authored one-shot lengths",
+                                        entries.len(),
+                                    ));
+                                    movement.ingest_authored_motion_lengths(&entries);
+                                }
+                            }
+                            None => console_log_str(
+                                "[mtlen] resource source not ready — keeping 2.0s fallback",
+                            ),
+                        }
+                    }
                     Some(SessionCommand::CancelPursuit) => {
                         // A14-I2 — abort (retail CancelMoveTo(0x36)).
                         // The failure latch (3 | 0x36<<16) publishes on
@@ -52152,3 +52449,133 @@ impl SessionHandle {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// P11 (2026-07-04) — Dead-pose bake probe against the REAL base DATs.
+//
+// User-broadened corpse defect: MOST creatures show no death animation and
+// their corpses never render; the visible-death set is simple/particle
+// setups (fragments). DAT divider found via WB.Terminal: the tusker
+// MotionTable 0x0900000C Dead cycle is a FREEZE-FRAME
+// `{low_frame:40, high_frame:-1, framerate:0}` while the fragment table
+// 0x09000099 Dead cycle is a real 30 fps clip. This probe runs the exact
+// spawn-time bake tuple natively over the full portal.dat so a decode
+// failure separates from a web-bundle fetch gap. Skips (passes) when the
+// base DATs aren't on the box.
+#[cfg(test)]
+mod tests_p11_dead_pose_bake {
+    use super::*;
+
+    fn portal_db() -> Option<holtburger_dat::DatDatabase> {
+        let home = std::env::var("HOME").ok()?;
+        let p = std::path::PathBuf::from(home).join("ac_base_dats/client_portal.dat");
+        if !p.exists() {
+            eprintln!("[p11] SKIP — {} missing", p.display());
+            return None;
+        }
+        holtburger_dat::DatDatabase::new(&p).ok()
+    }
+
+    fn probe(
+        db: &holtburger_dat::DatDatabase,
+        label: &str,
+        setup: u32,
+        mt: u32,
+        cmd: u32,
+        stance: u32,
+    ) -> Option<EntityAnimationKeyframesInner> {
+        match build_entity_animation_data_inner(db, setup, &[], &[], Some(mt), cmd, stance) {
+            Ok(inner) => {
+                eprintln!(
+                    "[p11] {label}: OK parts={} frames={} dur={:.3}s seg_counts={:?} seg_fr={:?} stance=0x{:X}",
+                    inner.part_count,
+                    inner.num_frames,
+                    inner.duration,
+                    inner.segment_counts,
+                    inner.segment_framerates,
+                    inner.resolved_stance
+                );
+                Some(inner)
+            }
+            Err(e) => {
+                eprintln!("[p11] {label}: ERR {e}");
+                None
+            }
+        }
+    }
+
+    /// P13/P16-H2 — the authored-length resolver over the REAL human
+    /// MotionTable 0x09000001: from-Ready links must resolve to sane
+    /// per-command budgets (cast gestures are authored 15-43 frames at
+    /// 30 fps per the swing spec — so well inside (0, 30] s), and the
+    /// magic-band commands the completion shim actually clocks
+    /// (MagicBlast..MagicPray band / CastSpell) must be present for the
+    /// Magic stance when the table carries them.
+    #[test]
+    fn authored_motion_lengths_resolve_from_real_human_table() {
+        let Some(db) = portal_db() else { return };
+        let entries = resolve_authored_motion_lengths(&db, 0x0900_0001);
+        assert!(
+            !entries.is_empty(),
+            "human table 0x09000001 must yield from-Ready link lengths"
+        );
+        for &(stance, motion, secs) in &entries {
+            assert!(
+                secs > 0.0 && secs <= 60.0,
+                "implausible authored length: stance=0x{stance:X} motion=0x{motion:08X} secs={secs}"
+            );
+        }
+        let magic_band: Vec<_> = entries
+            .iter()
+            .filter(|(_, m, _)| (0x4000_002B..=0x4000_0039).contains(m) || *m == 0x4000_00D3)
+            .collect();
+        eprintln!(
+            "[mtlen] human table: {} entries total, {} magic-band; sample: {:?}",
+            entries.len(),
+            magic_band.len(),
+            &entries[..entries.len().min(5)]
+        );
+        assert!(
+            !magic_band.is_empty(),
+            "expected magic-band cast gestures among the from-Ready links"
+        );
+    }
+
+    #[test]
+    fn dead_pose_bake_tusker_vs_fragment() {
+        let Some(db) = portal_db() else { return };
+        let idle = probe(&db, "tusker idle    ", 0x0200_0964, 0x0900_000C, 0, 0);
+        let dead = probe(&db, "tusker Dead    ", 0x0200_0964, 0x0900_000C, 0x11, 0x3D);
+        let dead_full = probe(&db, "tusker Dead(fs)", 0x0200_0964, 0x0900_000C, 0x11, 0x8000_003D);
+        let frag = probe(&db, "frag   Dead    ", 0x0200_0702, 0x0900_0099, 0x11, 0x3D);
+        probe(&db, "frag2  Dead    ", 0x0200_147D, 0x0900_00A3, 0x11, 0x3D);
+        // Pin the invariant the corpse path depends on: every one of these
+        // must resolve with parts (the freeze-frame Dead cycle included).
+        for (name, r) in [
+            ("tusker idle", &idle),
+            ("tusker Dead", &dead),
+            ("tusker Dead full-stance", &dead_full),
+            ("fragment Dead", &frag),
+        ] {
+            let inner = r.as_ref().unwrap_or_else(|| panic!("{name} bake errored"));
+            assert!(inner.part_count > 0, "{name} bake returned 0 parts");
+        }
+        // The past-end freeze-frame Dead cycle {low:40, high:-1, fr:0} over
+        // the 40-frame anim 0x0300001A must clamp to a single-frame hold of
+        // the LAST frame (retail AnimSequenceNode::set_animation_id,
+        // acclient.c:341108-341127) — NOT silently drop to a 0-frame rest
+        // pose (the pre-fix P11 behaviour: no death pose, invisible corpse).
+        for (name, r) in [("tusker Dead", &dead), ("tusker Dead full-stance", &dead_full)] {
+            let inner = r.as_ref().unwrap();
+            assert_eq!(inner.num_frames, 1, "{name}: expected 1-frame hold clip");
+            assert_eq!(
+                inner.segment_counts,
+                vec![1u32],
+                "{name}: expected a single 1-frame hold segment"
+            );
+        }
+        // The fragment's Dead is a real 30 fps collapse clip — must stay one.
+        let frag = frag.as_ref().unwrap();
+        assert!(frag.num_frames > 1, "fragment Dead lost its collapse clip");
+    }
+}

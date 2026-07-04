@@ -384,6 +384,17 @@ impl MovementSystemHandle {
         self.inner.notify_animation_done(success);
     }
 
+    /// P13/P16-H2 (2026-07-04) — install the local player's authored
+    /// one-shot motion lengths for the completion-clock shim. `entries`
+    /// = `(stance, full motion id, base seconds at speed 1.0)`, resolved
+    /// by the wasm layer from the cached MotionTable (the same machinery
+    /// behind `lookupMotionLinkForSwing`). Replaces the table wholesale —
+    /// re-ingest on an mtable change. See
+    /// `motion_table_manager::set_authored_motion_lengths`.
+    pub fn ingest_authored_motion_lengths(&mut self, entries: &[(u32, u32, f32)]) {
+        super::motion_table_manager::set_authored_motion_lengths(entries);
+    }
+
     /// A4/SA4F (2026-06-12) — the PER-GUID `notifyAnimationDone` forward
     /// (retail per-OBJECT chain, no local filter: acclient.c:342336 →
     /// :317087 → :325080 → :329873). `is_local` keeps the landed
