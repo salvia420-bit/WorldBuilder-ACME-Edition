@@ -2082,6 +2082,14 @@
                   __hbWasmNs.movementPendingMotionsDiag() >>> 0,
               }
             : {}),
+          // Bug-A round-2 diags (2026-07-03) — same contract as above:
+          // diagnostics-only riders for capture harnesses.
+          ...(typeof __hbWasmNs?.localPoseSnapDiag === "function"
+            ? { localPoseSnapDiag: () => String(__hbWasmNs.localPoseSnapDiag()) }
+            : {}),
+          ...(typeof __hbWasmNs?.reclaimCauseDiag === "function"
+            ? { reclaimCauseDiag: () => __hbWasmNs.reclaimCauseDiag() >>> 0 }
+            : {}),
           hash32,
           has_resource_source,
         };
