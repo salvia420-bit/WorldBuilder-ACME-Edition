@@ -1079,11 +1079,18 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   if (!scene3d._stablistFlagSent) {
     scene3d._stablistFlagSent = true;
     try {
-      if (
-        typeof sessionHandle.setStablistRender === "function" &&
-        new URLSearchParams(globalThis.location?.search || "").get("stablist") === "on"
-      ) {
-        sessionHandle.setStablistRender(true);
+      if (typeof sessionHandle.setStablistRender === "function") {
+        // DEFAULT ON (user-validated 2026-07-05): a building's interior static
+        // content renders from an outdoor camera. Off-escape: `?stablist=off`.
+        // The wasm setter's own default is false, so JS drives the default here
+        // each session (the conservative floating-satellite cull in
+        // get_render_set_with_frustum keeps sky-floaters out). Typeof-guarded so
+        // a stale pkg without the export degrades to the wasm default (off).
+        const on =
+          new URLSearchParams(globalThis.location?.search || "").get(
+            "stablist",
+          ) !== "off";
+        sessionHandle.setStablistRender(on);
       }
     } catch (_) {}
   }
