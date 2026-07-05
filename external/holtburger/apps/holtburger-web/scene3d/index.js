@@ -3667,8 +3667,24 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // 2026-05-21 stutter fix — lensFlare default OFF (see
               // atmosphere_pipeline.js). Opt in via `?lensFlare=on`.
               lensFlare: !!quality.flags.lensFlare,
+              // Portal-stencil cell renderer (?portalStencil, default OFF) —
+              // retail-faithful building-interior visibility through door/window
+              // apertures. See portal_stencil.js.
+              portalStencil:
+                new URLSearchParams(window.location.search).get("portalStencil") === "on",
+              // Portal-punch cell renderer (?portalPunch, default OFF) — retail
+              // per-aperture depth punch so building interiors show through
+              // door/window apertures from an outdoor camera. See portal_punch.js.
+              portalPunch:
+                new URLSearchParams(window.location.search).get("portalPunch") === "on",
             });
             liveScene3d.atmospherePipeline = atmospherePipeline;
+            // Expose the portal-stencil pass (null when the flag is off) so
+            // cells.js tickPortalStencil can feed it; null → that tick no-ops.
+            liveScene3d._portalStencilPass = atmospherePipeline.portalStencilPass ?? null;
+            // Expose the portal-punch pass (null when the flag is off) so
+            // cells.js tickPortalPunch can feed it apertures; null → tick no-ops.
+            liveScene3d._portalPunchPass = atmospherePipeline.portalPunchPass ?? null;
             // eslint-disable-next-line no-undef
             if (typeof window !== "undefined") {
               // eslint-disable-next-line no-undef

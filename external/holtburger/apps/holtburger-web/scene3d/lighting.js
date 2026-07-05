@@ -266,6 +266,15 @@ export function setupSceneLighting(scene, opts = {}) {
     lightPool = allocateLightPool(lightsGroup, lpCfg);
   }
 
+  // Enable RENDER_LAYER_INDOOR (1) on every scene light so interiors are lit in
+  // the ?portalPunch cells pass (camera masked to layer 1; three drops
+  // layer-mismatched lights in projectObject) — interior lighting matches the
+  // outdoor view (open-door buildings lit by the same sun/sky in or out; see
+  // tickLightingForCellState's SeenOutside gate). Layer 0 stays on → the default
+  // combined pass is unchanged. (RENDER_LAYER_INDOOR = 1; see index.js.)
+  lightsGroup.traverse((o) => {
+    if (o.isLight) o.layers.enable(1);
+  });
   scene.add(lightsGroup);
 
   // Visual-fidelity Phase 3.3 — when caller opts into CSM, instantiate
@@ -825,6 +834,22 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
         // per-light cap still needs to run.
       }
       if (isIndoor !== null) {
+        // 2026-07-05 — interior lighting must MATCH the outdoor view: an
+        // open-door building is lit by the same sun/sky whether the camera is
+        // inside or outside it, so stepping through a big doorway isn't a
+        // jarring dark cut. Retail marks exactly those cells `SeenOutside`
+        // (every building interior cell is SeenOutside; enclosed dungeon cells
+        // are not). So treat a SeenOutside indoor cell as OUTDOOR for lighting —
+        // keep the sun on — and mute the sun only for genuinely enclosed
+        // (non-SeenOutside) cells where no daylight reaches. Fail-soft: a stale
+        // pkg without the export leaves the prior indoor-mute behaviour.
+        let seenOutside = false;
+        try {
+          if (typeof sessionHandle.isCurrentCellSeenOutside === "function") {
+            seenOutside = !!sessionHandle.isCurrentCellSeenOutside();
+          }
+        } catch (_) {}
+        if (seenOutside) isIndoor = false;
         // Atmosphere path: the legacy `lighting.sun` toggled below is zeroed at
         // boot (index.js — atmosphere owns lighting), so the indoor/outdoor
         // logic here only moves a dead light. The REAL directional sun is
@@ -1955,6 +1980,13 @@ function createLightFromTemplate(template, transform) {
     const t = light.userData.spotTargetLocal;
     light.target.position.set(t.x, t.y, t.z);
   }
+  // Enable RENDER_LAYER_INDOOR (1) so these setup-model / cell accent lights
+  // (forge glows, torches) survive the ?portalPunch / indoor cells-pass camera
+  // mask and illuminate the interior EnvCells drawn there — three drops
+  // layer-mismatched lights in projectObject, so a layer-0-only accent light
+  // would leave night interiors dim/black in that pass. Layer 0 stays on → the
+  // default combined pass and the outdoor world pass are unchanged.
+  light.layers.enable(1);
   return light;
 }
 
@@ -2127,6 +2159,10 @@ function makeThreeLightForSetupLight(sl) {
     // Object3D, and `releaseLight` detaches it on eviction.
     spotTargetLocal,
   };
+  // RENDER_LAYER_INDOOR (1) so setup-model accent lights survive the
+  // ?portalPunch / indoor cells-pass camera mask (see createLightFromTemplate);
+  // layer 0 stays on → default + world pass unchanged.
+  lightObj.layers.enable(1);
   return lightObj;
 }
 

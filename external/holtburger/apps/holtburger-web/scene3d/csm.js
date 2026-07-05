@@ -209,6 +209,11 @@ export function setupCsm(scene, opts = {}) {
     light.shadow.camera.near = 0.1;
     light.shadow.camera.far = splits[i] * 6 + BACK_DIST_M * 2;
     light.shadow.camera.updateProjectionMatrix();
+    // Enable RENDER_LAYER_INDOOR (1) so the CSM cascade sun lights interior
+    // EnvCells in the ?portalPunch cells pass too (three drops layer-mismatched
+    // lights in projectObject) — interior lighting matches the outdoor view.
+    // Layer 0 stays on → terrain/world pass unchanged.
+    light.layers.enable(1);
     csmGroup.add(light);
     csmGroup.add(light.target);
     lights.push(light);

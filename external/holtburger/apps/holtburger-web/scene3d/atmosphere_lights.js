@@ -91,6 +91,18 @@ export class AtmosphereLights {
     scene.add(this.sun.target);
     scene.add(this.skyProbe);
 
+    // Interior lighting for the ?portalPunch cells pass (camera masked to
+    // RENDER_LAYER_INDOOR = layer 1): three.js only collects a light when
+    // light.layers.test(camera.layers) passes (WebGLRenderer.projectObject), so
+    // the sun + sky probe — the active illuminators — must be on layer 1 too, or
+    // interiors render UNLIT (black) in that pass. Interior lighting should MATCH
+    // the outdoor view (an open-door building is lit by the same sun/sky in or
+    // out — see tickLightingForCellState's SeenOutside gate), so we keep the SUN
+    // on the interior, NOT mute it. Layer 0 stays enabled → terrain + the default
+    // combined pass unchanged. (RENDER_LAYER_INDOOR = 1; see scene3d/index.js.)
+    this.sun.layers.enable(1);
+    this.skyProbe.layers.enable(1);
+
     // World-light calibration (2026-06-27). takram's sun/probe emit physical
     // radiance that, at the composer's exposure=5 + AGX tone map, pushes lit
     // SURFACES (buildings/terrain/statics) past AGX's ~3.3 white point so their

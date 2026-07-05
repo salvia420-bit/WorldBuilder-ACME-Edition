@@ -671,6 +671,50 @@ const TEXMERGE_ALPHA_ROUND = true;
 const TRIPLANAR_SLOPE_HI = 0.5;
 const DEFAULT_TRIPLANAR_SHARPNESS = 6.0;
 
+// ----- Retail zFightTerrainAdjust (terrain drawn ~1 cm below grade) --
+//
+// Verified against the decomp: `float zFightTerrainAdjust = 0.0099999998;`
+// (acclient.c:46689) and applied in BOTH `ACRender::landPolyDraw` overloads
+// as `vertex.z - zFightTerrainAdjust` written into the D3D vertex buffer
+// BEFORE projection — i.e. every terrain vertex is drawn ~1 cm below its true
+// elevation so building-interior floors and at-grade cell/dungeon-entrance
+// geometry win the depth test cleanly. This is retail's ENTIRE solution to the
+// terrain-vs-floor z-fight: runtime depth bias is NOT used (RenderDeviceD3D::
+// SetDepthBias is only ever called with 0.0), and polygonOffset is dead under
+// logarithmicDepthBuffer anyway. gmriggs did the identical hack in ACViewer
+// ("similar with building interior floors, so they don't clash with the
+// overworld ground, i bumped them up like 0.01" — worldbuilder, 2026-02-13).
+//
+// Applied in the SHARED TERRAIN_VERTEX_GLSL below, so it covers the per-LB
+// ShaderMaterial, the ?terrainBatch BatchedMesh path, and the wireframe fill
+// alike. Modifies only displacedPos.z (→ vWorldPos / gl_Position / log depth);
+// the texture-coordinate paths read `position` and are untouched. Physics /
+// collision grade is unaffected (this is a visual draw-time lower, exactly as
+// retail does it — the heightfield data is not changed).
+//
+// Override live for an A/B on a real GPU with `?terrainLower=<metres>`
+// (0 disables; e.g. ?terrainLower=0.05 for a bigger margin at buried
+// dungeon/cave entrances). Default = retail 1 cm. Re-read requires a reload
+// (the value is baked into the GLSL template at module load); use ?nosw=1.
+const ZFIGHT_TERRAIN_ADJUST_M = (() => {
+  const DEFAULT = 0.0099999998;
+  try {
+    const raw = new URLSearchParams(globalThis.location?.search || "").get(
+      "terrainLower",
+    );
+    if (raw == null) return DEFAULT;
+    const v = Number.parseFloat(raw);
+    return Number.isFinite(v) && v >= 0 ? v : DEFAULT;
+  } catch (_) {
+    return DEFAULT;
+  }
+})();
+try {
+  globalThis.__terrainLowerMeters = ZFIGHT_TERRAIN_ADJUST_M;
+} catch (_) {
+  /* non-browser */
+}
+
 // ----- Phase 2.2 — animated vertex displacement (water + lava) -----
 //
 // Per-vertex Y-axis (AC Z-axis) displacement driven by `uTime` in the
@@ -834,6 +878,12 @@ float valueNoise2D(vec2 p) {
 
 void main() {
   vec3 displacedPos = position;
+  // Retail zFightTerrainAdjust — lower every terrain vertex ~1 cm so at-grade
+  // floors / cell / dungeon-entrance geometry win the shared-depth test (see
+  // ZFIGHT_TERRAIN_ADJUST_M in terrain.js; acclient.c ACRender::landPolyDraw
+  // writes vertex.z - zFightTerrainAdjust). Constant subtract → identical
+  // effect whether applied before or after the water/lava wave below.
+  displacedPos.z -= ${ZFIGHT_TERRAIN_ADJUST_M.toFixed(10)};
   int code = int(terrainCode + 0.5);
   int isWater = 0;
   // World-frame XY = per-LB origin + LB-local position. Hoisted out of

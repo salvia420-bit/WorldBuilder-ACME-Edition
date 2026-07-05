@@ -27032,6 +27032,16 @@ pub struct SessionHandle {
     /// Default ON; JS flips it off via [`SessionHandle::set_outdoor_pview`]
     /// when `?outdoorPview=off` is set (rollback escape).
     outdoor_pview_enabled: std::cell::Cell<bool>,
+    /// 2026-07-05 (stablist / SeenOutside outdoor visibility): when set,
+    /// [`SessionHandle::get_render_set_with_frustum`]'s outdoor branch admits
+    /// every frustum-visible interior cell authored `SeenOutside=true` (retail
+    /// `CLandBlock::grab_visible_cells` → `CEnvCell::grab_visible` stablist), so
+    /// a building's interior STATIC content renders from an outdoor camera
+    /// instead of only the always-present server NPCs. Default OFF (the DAT
+    /// SeenOutside set is admitted UNCLIPPED, so multi-story satellite cells can
+    /// appear floating until the portal clip lands — hence the `?stablist` gate).
+    /// JS flips it via [`SessionHandle::set_stablist_render`].
+    stablist_render_enabled: std::cell::Cell<bool>,
     /// Phase 6 step E follow-up (2026-05-09): door GUID → snapshot of
     /// the building part the door was registered against during its
     /// ObjectCreate. Populated incrementally by the recv-loop as
@@ -27192,6 +27202,12 @@ struct CellSceneSnapshot {
     /// per TickMovement; data only changes on landblock load/unload
     /// so this could be cached by-LB-key in a future pass.
     cell_portal_polygons: Vec<(u32, u32, Vec<f32>)>,
+    /// 2026-07-05 (stablist / SeenOutside): per-cell SeenOutside bit, parallel
+    /// to `cell_aabbs`, so the outdoor branch of `get_render_set_with_frustum`
+    /// can admit building-interior cells (authored SeenOutside=true) from an
+    /// outdoor camera. `(cell_id, seen_outside)`. Sourced from
+    /// `scene.cell_seen_outside` (same map that feeds the ambient gate).
+    cell_seen_outside_map: Vec<(u32, bool)>,
 }
 
 /// Phase 6 step E follow-up (2026-05-09): JS-facing payload for a door
@@ -29005,6 +29021,83 @@ impl SessionHandle {
         (out, max_depth_reached)
     }
 
+    /// Portal-stencil renderer (2026-07-05, milestone 1): the world-space
+    /// (AC Z-up) aperture polygons that JS should rasterize into the stencil
+    /// buffer to render building interiors through their door/window openings
+    /// from an OUTDOOR camera — the GPU realization of retail's
+    /// `D3DPolyRender::DrawPortalPolyInternal` depth-punch + `PView::GetClip`
+    /// screen-space clip (see docs/RETAIL-PORTAL-RENDERER-AND-CELL-TERRAIN-
+    /// WATER-RELATIONSHIPS.md).
+    ///
+    /// Scope (milestone 1): OUTDOOR player, depth==1 — the outdoor-facing
+    /// portal polygons (`to & 0xFFFF >= 0xFFFE`, the AC outdoor sentinel) of
+    /// every frustum-visible EnvCell (the room the door reveals). `max_depth`
+    /// is reserved for the future inward-BFS extension (nested rooms).
+    ///
+    /// Wire shape — flat `Vec<f32>`, all values plain f32 (no bit-packing;
+    /// vertex counts and coords are all exactly representable):
+    ///   `[ aperture_count, (nverts, x0,y0,z0, x1,y1,z1, …) × aperture_count ]`
+    /// JS reads `count`, then for each aperture reads `nverts` and that many
+    /// xyz triples, builds a world-space polygon under `worldRoot`, marks it
+    /// into stencil (depth-TESTED so occluded doorways don't mark → no
+    /// see-through), resets depth to far within the mask, and draws the
+    /// portal-visible interior cells masked to it.
+    ///
+    /// Read-only; does not mutate snapshot state.
+    #[wasm_bindgen(js_name = getVisiblePortalApertures)]
+    pub fn get_visible_portal_apertures(&self, mvp: &[f32], _max_depth: u8) -> Vec<f32> {
+        if mvp.len() != 16 {
+            return Vec::new();
+        }
+        let mut mvp_arr = [0.0f32; 16];
+        mvp_arr.copy_from_slice(mvp);
+        let frustum =
+            holtburger_common::Frustum::from_view_projection_matrix(&mvp_arr);
+        let snap = self.cell_scene_snapshot.borrow();
+        if snap.current_cell == 0 {
+            return Vec::new();
+        }
+
+        // cell_id → AABB (linear scan; ~140 entries), matching the
+        // get_render_set_with_frustum helper.
+        let aabb_for = |cell_id: u32| -> Option<holtburger_common::Aabb> {
+            snap.cell_aabbs.iter().find_map(|(id, ext)| {
+                if *id == cell_id {
+                    Some(holtburger_common::Aabb::new(
+                        holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
+                        holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
+                    ))
+                } else {
+                    None
+                }
+            })
+        };
+
+        let mut out: Vec<f32> = Vec::new();
+        out.push(0.0); // aperture_count placeholder (patched below)
+        let mut count: u32 = 0;
+        for (from, to, flat) in &snap.cell_portal_polygons {
+            // Outdoor-facing apertures only (doors/windows to the landscape).
+            if (*to & 0xFFFF) < 0xFFFE {
+                continue;
+            }
+            if flat.len() < 9 || flat.len() % 3 != 0 {
+                continue;
+            }
+            // Only reveal rooms actually in view (the room = the portal's
+            // owning cell `from`); skip off-screen buildings.
+            match aabb_for(*from) {
+                Some(aabb) if frustum.intersects_aabb(&aabb) => {}
+                _ => continue,
+            }
+            out.push((flat.len() / 3) as f32);
+            out.extend_from_slice(flat);
+            count += 1;
+        }
+        out[0] = count as f32;
+        out
+    }
+
     /// Phase 4 PView port (2026-05-25): frustum-aware visibility.
     /// Takes a 16-float **column-major** view-projection matrix (same
     /// memory layout as `THREE.Matrix4.elements` — pass it directly
@@ -29124,6 +29217,70 @@ impl SessionHandle {
                 );
                 if frustum.intersects_aabb(&aabb) {
                     visible.insert(*cell_id);
+                }
+            }
+
+            // 2026-07-05 (stablist / SeenOutside): retail's outdoor pass makes
+            // the WHOLE building interior a draw candidate — CLandBlock::
+            // grab_visible_cells → CEnvCell::grab_visible admits every cell in
+            // the building stablist unconditionally, and building interior cells
+            // are authored SeenOutside=true (gmriggs: "every building indoor
+            // cell in the game will always be SeenOutside"). The doorway
+            // portal-walk above only reaches cells visible THROUGH an on-screen
+            // aperture, so interior static content (furniture/fountains) whose
+            // room has no such aperture in view — e.g. open-topped courtyard
+            // buildings seen over the walls — never renders from outside, and
+            // only the always-present server NPCs show. When `?stablist` is on,
+            // admit every frustum-visible SeenOutside cell so its cell-owned
+            // static objects draw. NOTE: this is UNCLIPPED (no PView::GetClip
+            // yet), so a multi-story building's upper/satellite cells can appear
+            // floating; that's why it's gated OFF by default until the portal
+            // clip lands. See docs/RETAIL-PORTAL-RENDERER-*.
+            if self.stablist_render_enabled.get() {
+                // Conservative floating-satellite cull (the "hybrid" clip's one
+                // job the depth buffer can't do). The depth buffer already gives
+                // the retail-like result for admitted cells — a building's facade
+                // occludes its interior where the wall is in front (closed
+                // buildings), the interior shows over open-topped courtyard
+                // walls, and the punch reveals it through doorways. What depth
+                // CANNOT cull is an interior cell that projects only against the
+                // SKY (an upper/satellite cell floating above the roofline, e.g.
+                // Holtburg 0xA9B40158 at ~195 m): nothing is in front of it, so
+                // it wins depth and floats. Those sit FAR above the buildings in
+                // view. Pass 1: find the lowest frustum-visible SeenOutside cell
+                // (≈ the ground/building base in view). Pass 2: admit SeenOutside
+                // cells within a generous band above it. The band is 100 m — no
+                // AC building is remotely that tall, so a real multi-story floor
+                // is never culled, while the sky-floaters (100 m+ up) are. AC
+                // Z-up world coords, so ext[2] = min_z = the cell's floor
+                // altitude.
+                const FLOAT_CULL_BAND_M: f32 = 100.0;
+                let mut floor_z = f32::INFINITY;
+                for (cell_id, is_seen) in &snap.cell_seen_outside_map {
+                    if !*is_seen {
+                        continue;
+                    }
+                    if let Some(aabb) = aabb_for(*cell_id) {
+                        if frustum.intersects_aabb(&aabb) && aabb.min.z < floor_z {
+                            floor_z = aabb.min.z;
+                        }
+                    }
+                }
+                let z_ceiling = floor_z + FLOAT_CULL_BAND_M;
+                for (cell_id, is_seen) in &snap.cell_seen_outside_map {
+                    if !*is_seen || visible.contains(cell_id) {
+                        continue;
+                    }
+                    if let Some(aabb) = aabb_for(*cell_id) {
+                        // Cull only cells whose entire footprint floats far above
+                        // the ground/building base in view (sky satellites).
+                        if aabb.min.z > z_ceiling {
+                            continue;
+                        }
+                        if frustum.intersects_aabb(&aabb) {
+                            visible.insert(*cell_id);
+                        }
+                    }
                 }
             }
 
@@ -29261,6 +29418,17 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = setOutdoorPview)]
     pub fn set_outdoor_pview(&self, enabled: bool) {
         self.outdoor_pview_enabled.set(enabled);
+    }
+
+    /// 2026-07-05 (stablist / SeenOutside): enable admitting frustum-visible
+    /// `SeenOutside=true` interior cells to the OUTDOOR render set, so building
+    /// interior static content renders from an outdoor camera (retail
+    /// `grab_visible_cells` stablist) instead of only the always-present server
+    /// NPCs. JS calls this once at init when `?stablist=on`. ADDITIVE export;
+    /// default OFF (unclipped — see field doc). No manifest bump.
+    #[wasm_bindgen(js_name = setStablistRender)]
+    pub fn set_stablist_render(&self, enabled: bool) {
+        self.stablist_render_enabled.set(enabled);
     }
 
     /// 2026-06-04 (Phase 4 ambient-sound gate): the SeenOutside bit for
@@ -32957,6 +33125,7 @@ pub async fn start_session(
         entity_enchantments_index,
         cell_scene_snapshot,
         outdoor_pview_enabled: std::cell::Cell::new(true),
+        stablist_render_enabled: std::cell::Cell::new(false),
         door_part_snapshot,
         local_player_pose,
         local_player_can_jump,
@@ -34488,6 +34657,14 @@ fn publish_cell_scene_snapshot(
         }
     }
 
+    // 2026-07-05 (stablist / SeenOutside): snapshot each loaded cell's
+    // SeenOutside bit parallel to `cell_aabbs`, so the outdoor render-set gate
+    // can admit building interiors (SeenOutside=true) from an outdoor camera.
+    let cell_seen_outside_map: Vec<(u32, bool)> = cell_aabbs
+        .iter()
+        .map(|(id, _)| (*id, world.scene.cell_seen_outside(*id)))
+        .collect();
+
     *snapshot.borrow_mut() = CellSceneSnapshot {
         current_cell: current,
         is_indoor: pose.is_indoors(),
@@ -34501,6 +34678,7 @@ fn publish_cell_scene_snapshot(
         render_set: render_vec,
         cell_aabbs,
         cell_portal_polygons,
+        cell_seen_outside_map,
     };
 }
 

@@ -36,7 +36,7 @@
 // frame, BEFORE `renderer.render(scene, camera)`.
 
 import * as THREE from "three";
-import { tickCellVisibility3D, tickPvsLoadExpansion } from "./cells.js";
+import { tickCellVisibility3D, tickPortalStencil, tickPortalPunch, tickPvsLoadExpansion } from "./cells.js";
 // ?statAtlas (default-ON; ?statAtlas=off escapes) — lazy buffer-compaction for the cross-LB static
 // texture-array buckets, driven off the ~10 Hz PVS path (NOT the per-frame
 // eviction tick). Flag-off: statAtlasEnabled() is false → never runs.
@@ -1683,6 +1683,12 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
 
   // ── CRITICAL #1 — cell visibility (gates the whole scene). ───────────
   tickCellVisibility3D(scene3d, sessionHandle);
+  // Portal-stencil feed (?portalStencil) — after the visibility tick so
+  // container.visible reflects this frame's render set. No-ops when off.
+  tickPortalStencil(scene3d, sessionHandle);
+  // Portal-punch feed (?portalPunch) — same ordering; hands the punch pass this
+  // frame's visible door/window apertures. No-ops when off.
+  tickPortalPunch(scene3d, sessionHandle);
   // ── CRITICAL #1.5 — FCULL app-level frustum + distance render cull. ──
   // Runs AFTER cell-visibility (#1) so the world GROUPS already carry their
   // correct `.visible` state, and BEFORE lighting (#5). It only gates per-

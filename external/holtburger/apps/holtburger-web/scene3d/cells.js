@@ -39,6 +39,7 @@
 // the per-cell mesh and the per-static-object children blink in unison.
 
 import * as THREE from "three";
+import { RENDER_LAYER_PORTAL_CELL } from "./portal_stencil.js";
 import {
   meshToGeometryGroups,
   meshToFusedGeometry,
@@ -1069,6 +1070,24 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     } catch (_) {}
   }
 
+  // 2026-07-05 (?stablist) — retail SeenOutside outdoor visibility: admit
+  // frustum-visible SeenOutside interior cells to the outdoor render set so a
+  // building's static content (furniture/fountains) renders from an outdoor
+  // camera, not just the server NPCs. One-time, typeof-guarded (stale pkg
+  // degrades silently). Default OFF in the wasm — unclipped, so multi-story
+  // satellite cells can float until the portal clip lands.
+  if (!scene3d._stablistFlagSent) {
+    scene3d._stablistFlagSent = true;
+    try {
+      if (
+        typeof sessionHandle.setStablistRender === "function" &&
+        new URLSearchParams(globalThis.location?.search || "").get("stablist") === "on"
+      ) {
+        sessionHandle.setStablistRender(true);
+      }
+    } catch (_) {}
+  }
+
   let cellId = 0;
   let renderSetArr = null;
   let isIndoor = false;
@@ -1248,6 +1267,163 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   // against the just-applied visibility state. Reuses `cellId` resolved
   // above — no extra wasm call. Optional-chained throughout; never throws.
   try { window.__diag?.pvs?.onCellTick?.(cellId); } catch (_) { /* swallow */ }
+}
+
+// Portal-stencil feed (2026-07-05, ?portalStencil). Runs each frame AFTER
+// tickCellVisibility3D: when OUTDOORS, hands the PortalStencilPass (a) the
+// wasm-computed door/window aperture polygons for the current view and (b) the
+// portal-visible interior cell containers to draw through them. The pass is
+// null when the flag is off → this whole function no-ops. Milestone 1: outdoor
+// only (indoor cells render normally in the world pass). See portal_stencil.js
+// + docs/RETAIL-PORTAL-RENDERER-AND-CELL-TERRAIN-WATER-RELATIONSHIPS.md.
+const _psMvp = new THREE.Matrix4();
+const _psMvpArr = new Float32Array(16);
+// Move an interior cell container's whole subtree between its home layer
+// (RENDER_LAYER_INDOOR=1, drawn by the world pass) and the portal-cell layer
+// (RENDER_LAYER_PORTAL_CELL=2, drawn ONLY by the stencil pass, masked).
+function _setCellLayer(container, layer) {
+  container.traverse((o) => o.layers.set(layer));
+}
+export function tickPortalStencil(scene3d, sessionHandle) {
+  const pass = scene3d?._portalStencilPass;
+  if (!pass || !sessionHandle) return;
+  if (typeof sessionHandle.getVisiblePortalApertures !== "function") return;
+
+  // Containers currently parked on the portal-cell layer, so we can move them
+  // back to layer 1 when they leave the set / the player goes indoors.
+  const moved = scene3d._portalMovedCells ?? (scene3d._portalMovedCells = new Set());
+  const restoreAll = () => {
+    if (moved.size) {
+      for (const c of moved) _setCellLayer(c, 1); // RENDER_LAYER_INDOOR
+      moved.clear();
+    }
+  };
+
+  // The pass disabled itself after a render error → behave as if the flag were
+  // off: un-park every cell (the world pass draws them again — interiors stay
+  // visible via the default path) and stop feeding the pass.
+  if (pass._errored) {
+    pass.setApertures(null);
+    pass.setCells([]);
+    restoreAll();
+    return;
+  }
+
+  let indoor = false;
+  try {
+    indoor = !!sessionHandle.isCurrentCellIndoor?.();
+  } catch (_) {}
+  const camera = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+  const worldRoot = scene3d.worldRoot ?? null;
+  // Keep the pass drawing with the ACTIVE camera (ortho/persp switch safe).
+  if (camera) pass.mainCamera = camera;
+
+  // Milestone: outdoor only. Indoor (or no camera) → clear + un-park all cells
+  // so the world pass draws them normally again.
+  if (indoor || !camera?.projectionMatrix || !camera.matrixWorldInverse || !worldRoot) {
+    pass.setApertures(null);
+    pass.setCells([]);
+    restoreAll();
+    return;
+  }
+
+  try {
+    // Same MVP composition tickCellVisibility3D uses: fold worldRoot's AC→three
+    // rotation in so the AC-space aperture verts project correctly.
+    _psMvp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _psMvp.multiply(worldRoot.matrixWorld);
+    for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
+
+    const flat = sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
+    pass.setApertures(flat);
+
+    // Portal-visible interior cells (idx >= 0x100): PARK each on the portal-cell
+    // layer (so the world pass skips it → no terrain-occluded double draw), and
+    // un-park any that dropped out of the set this frame.
+    const registry = scene3d.cellContainers3d;
+    const cells = [];
+    const wanted = new Set();
+    if (registry instanceof Map) {
+      for (const [cid, container] of registry) {
+        if (!container?.visible) continue;
+        if (((cid >>> 0) & 0xffff) < 0x100) continue; // interior cells only
+        cells.push(container);
+        wanted.add(container);
+        if (!moved.has(container)) {
+          _setCellLayer(container, RENDER_LAYER_PORTAL_CELL);
+          moved.add(container);
+        }
+      }
+    }
+    if (moved.size > wanted.size) {
+      for (const c of moved) {
+        if (!wanted.has(c)) {
+          _setCellLayer(c, 1); // RENDER_LAYER_INDOOR
+          moved.delete(c);
+        }
+      }
+    }
+    pass.setCells(cells);
+  } catch (_) {
+    pass.setApertures(null);
+    pass.setCells([]);
+    restoreAll();
+  }
+}
+
+// Portal-punch feed (2026-07-05, ?portalPunch). Runs each frame AFTER
+// tickCellVisibility3D: when OUTDOORS, hands the PortalPunchPass the wasm-computed
+// door/window aperture polygons for the current view. The pass punches depth to
+// FAR inside them so the interior EnvCells (already on layer 1 and set visible by
+// tickCellVisibility3D) win depth through the doorway when the atmosphere
+// pipeline draws them in the INDOOR_ONLY cells pass. Unlike tickPortalStencil,
+// this does NOT re-layer cells — the world/cells split does the masking. The pass
+// is null when the flag is off → this whole function no-ops. Milestone: outdoor
+// only (indoor cells render normally in the shared world pass).
+export function tickPortalPunch(scene3d, sessionHandle) {
+  const pass = scene3d?._portalPunchPass;
+  if (!pass || !sessionHandle) return;
+  if (typeof sessionHandle.getVisiblePortalApertures !== "function") return;
+  // Pass disabled itself after a render error → stop feeding it; interiors fall
+  // back to the default (occluded) world-pass draw and preFrameSkySync stops
+  // splitting (its punchActive gate reads pass.hasApertures, cleared below).
+  if (pass._errored) {
+    pass.setApertures(null);
+    return;
+  }
+
+  let indoor = false;
+  try {
+    indoor = !!sessionHandle.isCurrentCellIndoor?.();
+  } catch (_) {}
+  const camera = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+  const worldRoot = scene3d.worldRoot ?? null;
+  if (camera) pass.mainCamera = camera;
+
+  // Outdoor only. Indoor / no camera → clear apertures so the split disarms and
+  // the shared world pass draws interiors normally again.
+  if (
+    indoor ||
+    !camera?.projectionMatrix ||
+    !camera.matrixWorldInverse ||
+    !worldRoot
+  ) {
+    pass.setApertures(null);
+    return;
+  }
+
+  try {
+    // Same MVP composition tickCellVisibility3D / tickPortalStencil use: fold
+    // worldRoot's AC→three rotation in so the AC-space aperture verts project
+    // correctly.
+    _psMvp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _psMvp.multiply(worldRoot.matrixWorld);
+    for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
+    const flat = sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
+    pass.setApertures(flat);
+  } catch (_) {
+    pass.setApertures(null);
+  }
 }
 
 /**

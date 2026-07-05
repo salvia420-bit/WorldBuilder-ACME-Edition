@@ -44,6 +44,8 @@ import {
 } from "postprocessing";
 import { AerialPerspectiveEffect, AtmosphereParameters } from "@takram/three-atmosphere";
 import { DitheringEffect, LensFlareEffect } from "@takram/three-geospatial-effects";
+import { PortalStencilPass } from "./portal_stencil.js";
+import { PortalPunchPass } from "./portal_punch.js";
 
 // Phase 5 PView render-order fix (2026-05-25) — layer-mask constants.
 // Mirrors `scene3d/index.js` (RENDER_LAYER_WORLD/RENDER_LAYER_INDOOR).
@@ -114,6 +116,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     bloom: bloomOpt = true,
     vignette: vignetteOpt = false,
     lensFlare: lensFlareOpt = false,
+    portalStencil = false,
+    portalPunch = false,
   } = opts ?? {};
   if (!atmosphereRuntime) {
     throw new Error("createAtmospherePipeline: atmosphereRuntime is required");
@@ -131,6 +135,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // recover. Takram's vanilla example uses HalfFloatType explicitly.
   const composer = new EffectComposer(renderer, {
     frameBufferType: THREE.HalfFloatType,
+    // Portal-stencil pass needs a stencil attachment. Off → pmndrs default
+    // (false) → byte-identical to the pre-feature composer.
+    stencilBuffer: !!portalStencil,
   });
   composer.setSize(width, height);
 
@@ -153,8 +160,16 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // "other" buffer during the chain. setSize below rebuilds it at the
   // new dimensions.
   const sceneDepthTexture = new THREE.DepthTexture(width, height);
-  sceneDepthTexture.format = THREE.DepthFormat;
-  sceneDepthTexture.type = THREE.UnsignedIntType;
+  if (portalStencil) {
+    // Depth + stencil must share ONE packed attachment when stencil is on;
+    // a depth-only texture can't coexist with a stencil buffer. AerialPerspective
+    // reads `.r`, which still returns the depth component of a packed texture.
+    sceneDepthTexture.format = THREE.DepthStencilFormat;
+    sceneDepthTexture.type = THREE.UnsignedInt248Type;
+  } else {
+    sceneDepthTexture.format = THREE.DepthFormat;
+    sceneDepthTexture.type = THREE.UnsignedIntType;
+  }
   composer.inputBuffer.depthTexture = sceneDepthTexture;
   composer.outputBuffer.depthTexture = sceneDepthTexture;
   composer.inputBuffer.depthBuffer = true;
@@ -185,6 +200,30 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     worldRenderPass.clearDepth = true;
   }
   composer.addPass(worldRenderPass);
+
+  // Portal-stencil pass (2026-07-05, ?portalStencil, default OFF). Runs on the
+  // world pass's shared color+depth+stencil buffer, before the dead depth-clear
+  // slot and fxPass. Feed via portalStencilPass.setApertures(flat) each frame
+  // (cells.js). Only added when the flag is on → the composer's pass list is
+  // byte-identical when off.
+  let portalStencilPass = null;
+  if (portalStencil) {
+    portalStencilPass = new PortalStencilPass(scene, camera);
+    composer.addPass(portalStencilPass);
+  }
+
+  // Portal-punch pass (2026-07-05, ?portalPunch, default OFF). Runs right after
+  // the world pass and BEFORE the cells pass: for each visible door/window
+  // aperture it punches depth to FAR (retail DrawPortalPolyInternal), so the
+  // interior cells the cells pass draws next win depth inside the doorway. Feed
+  // via portalPunchPass.setApertures(flat) each frame (cells.js tickPortalPunch).
+  // The split it needs (WORLD_ONLY world pass → INDOOR_ONLY cells pass) is armed
+  // in preFrameSkySync only when outdoor + this pass hasApertures.
+  let portalPunchPass = null;
+  if (portalPunch) {
+    portalPunchPass = new PortalPunchPass(scene, camera);
+    composer.addPass(portalPunchPass);
+  }
 
   // Phase 5 PView render-order fix (2026-05-25) — indoor depth-clear +
   // cells pass. Both are `enabled=false` by default (outdoor steady state);
@@ -333,6 +372,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     dithering,
     skyRenderPass,
     worldRenderPass,
+    portalStencilPass,
+    portalPunchPass,
     // Phase 5 PView render-order fix (2026-05-25) — exposed for diag
     // probes + the zfighting harness, which reads `depthClearPass.enabled`
     // to confirm the indoor split is wired.
@@ -406,10 +447,35 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       //   Trade-off given back: the cottage-floor-vs-terrain Z-fight the clear
       //   masked. If it resurfaces it gets a TARGETED polygon-offset on the
       //   cell floor — never a destructive global depth wipe again.
-      worldMaskPass.mask = CAM_LAYER_MASK_BOTH;
-      depthClearPass.enabled = false;
-      cellsMaskPass.enabled = false;
-      cellsRenderPass.enabled = false;
+      // ?portalPunch (default off): retail per-aperture depth punch so building
+      // interiors are visible from an OUTDOOR camera through door/window
+      // apertures. Arm the world/cells split ONLY when outdoor AND the punch
+      // pass has visible apertures this frame — otherwise fall through to the
+      // default shared BOTH pass (zero change when the flag is off, and no
+      // wasted split on frames with no doorway in view).
+      const punchActive =
+        portalPunch &&
+        !isIndoor &&
+        !!portalPunchPass &&
+        portalPunchPass.hasApertures;
+      if (punchActive) {
+        // (1) world pass → terrain + facade + outdoor statics only (layer 0).
+        worldMaskPass.mask = CAM_LAYER_MASK_WORLD_ONLY;
+        // (2) portalPunchPass (already sequenced after the world pass) punches
+        //     depth to FAR inside each aperture. NOT the global depth wipe (that
+        //     caused the 2026-05-29 see-through); the punch is bounded to doorways.
+        depthClearPass.enabled = false;
+        // (3) cells pass → interior EnvCells + entities (layer 1) with the world
+        //     depth + punches intact (clear=false/clearDepth=false). Interior
+        //     wins inside the punched doorways, loses behind the facade.
+        cellsMaskPass.enabled = true;
+        cellsRenderPass.enabled = true;
+      } else {
+        worldMaskPass.mask = CAM_LAYER_MASK_BOTH;
+        depthClearPass.enabled = false;
+        cellsMaskPass.enabled = false;
+        cellsRenderPass.enabled = false;
+      }
       // cellsPostMaskPass is always enabled — mask=BOTH no matter what,
       // so steady-state outdoor consumers observe the unsplit mask. The
       // single mask write is ~free.
@@ -435,6 +501,11 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         cellsPostMaskPass.setCamera(cam);
         activeCamera = cam;
       }
+      // Portal-stencil pass draws with the CURRENT render camera — set every
+      // frame (not only on a switch) so its mainCamera can never be undefined
+      // when it has work (the "reading 'layers' of undefined" freeze).
+      if (portalStencilPass && cam) portalStencilPass.mainCamera = cam;
+      if (portalPunchPass && cam) portalPunchPass.mainCamera = cam;
       composer.render(dt);
     },
 
