@@ -2271,9 +2271,23 @@ function _armRemove(scene3d, em, upd) {
     const inst = em?.entityMap?.get?.(g);
     const deadAt = inst?._deathAt;
     if (inst && typeof deadAt === "number") {
+      // (2026-07-06) If a corpse handoff has claimed this creature, the corpse's
+      // own reveal timer removes it exactly when the collapse ends (and reveals
+      // the corpse in the same beat) — don't also schedule our own disposal.
+      if (inst._corpseHandoffGuid) {
+        if (window.__lastEntityWorldPos) window.__lastEntityWorldPos.delete(g);
+        _actionStamps.delete(g);
+        return;
+      }
       const nowMs = (typeof performance !== "undefined" && performance.now)
         ? performance.now() : Date.now();
-      const remaining = deadAt + DEATH_HOLD_MS - nowMs;
+      // (2026-07-06) Hold the rig for the REAL authored collapse length
+      // (entities.js stamps `_deathDurationMs` from the Ready→Dead link bake —
+      // it varies per creature), falling back to the flat DEATH_HOLD_MS when the
+      // creature had no collapse link (bake gave the 1-frame cycle hold).
+      const holdMs = (typeof inst._deathDurationMs === "number" && inst._deathDurationMs > 0)
+        ? inst._deathDurationMs : DEATH_HOLD_MS;
+      const remaining = deadAt + holdMs - nowMs;
       if (remaining > 0 && !inst._removePending) {
         inst._removePending = true;
         setTimeout(() => {

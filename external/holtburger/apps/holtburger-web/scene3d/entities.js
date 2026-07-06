@@ -237,6 +237,23 @@ function readRootMotionObjectFlag() {
   }
 }
 
+// (2026-07-06) `?deathAnim=off` escape for the death-collapse + corpse-handoff
+// behaviour: bake the Ready→Dead LINK collapse (not just the settled cycle),
+// size the creature's death-hold to the REAL authored collapse length, and hand
+// the collapsing rig off to the corpse (hide corpse → collapse → reveal corpse
+// at the authoritative death transform → remove creature) so position AND
+// orientation line up. Default ON; `=off` restores the flat cycle-hold path.
+// Same reader shape as readDeadReckonFlag; read once in the constructor into
+// `this._deathAnimOn`.
+function readDeathAnimFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search).get("deathAnim") !== "off";
+  } catch (_) {
+    return true;
+  }
+}
+
 // === Wave R3.B — transparency depth-sort via AC's authored sort center
 // (2026-05-29) ===
 // `?sortCenter=on` opt-in. Default OFF → no `renderOrder` writes on entity
@@ -1257,6 +1274,36 @@ const CMD_LOW_RUN_FORWARD = 0x0007;
 const CMD_LOW_READY = 0x0003;
 // Dead (0x0011, MotionCommand.cs L24) — the post-death collapse/prone motion.
 const CMD_LOW_DEAD = 0x0011;
+// (2026-07-06) Death-collapse handoff constants. Retail resolves Dead in two
+// pieces (CMotionTable::GetObjectSequence, acclient.c:337763): the
+// (stance,Ready)→Dead LINK carries the COLLAPSE (falls down), the (stance,Dead)
+// CYCLE is the settled prone HOLD. Our Dead bake only baked the cycle (via the
+// from=0 cycle path), so creatures snapped straight to prone and never played
+// the collapse — the "death animation not playing for many monsters" bug. To
+// bake the collapse we resolve the LINK: pass the FULL Dead command as the
+// to-motion (the link inner-key is UNMASKED — motion_table.rs:164 — so the wire
+// low-16 0x0011 misses; only 0x40000011 matches the on-disk key) with Ready as
+// the from-motion. `expand_motion_command_low16` (player/types.rs:100) has no
+// 0x0011 arm, so the wire delivers Dead as a bare 0x0011 (lib.rs:39399) — hence
+// the explicit full constants here.
+const CMD_DEAD_FULL = 0x40000011;   // full cyclic Dead command (link inner-key)
+const CMD_READY_FULL = 0x41000003;  // Ready — the from-motion for the collapse link
+// ObjectDescriptionFlag.Corpse (protocol ObjectDescriptionFlag.generated.cs:87);
+// the on-wire "this object is a corpse" marker on a CreateObject.
+const ODF_CORPSE = 0x00002000;
+// Corpse↔creature death-handoff: a spawning corpse correlates to a creature
+// that received Dead within this horizontal/vertical radius (m) and is still
+// mid-collapse. Wide enough to absorb any residual dead-reckon overshoot.
+const DEATH_COLLAPSE_RADIUS_M = 4.0;
+const DEATH_COLLAPSE_RADIUS_SQ = DEATH_COLLAPSE_RADIUS_M * DEATH_COLLAPSE_RADIUS_M;
+// Corpse grace when no authored collapse length resolved (mirrors loop.js
+// DEATH_HOLD_MS): the creature has no Ready→Dead link (bake fell back to the
+// 1-frame cycle hold), so there is no real collapse to wait on.
+const DEATH_HOLD_FALLBACK_MS = 2000;
+// Monotonic-ish wall clock shared by the death stamps (same source as the
+// `_deathAt` stamp and loop.js `_armRemove`, so their arithmetic is coherent).
+const _entityNowMs = () =>
+  (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
 // Sidestep / turn-in-place locomotion. Values from
 // `external/ACE/Source/ACE.Entity/Enum/MotionCommand.cs:20-23`:
 // TurnRight=0x6500000D, TurnLeft=0x6500000E, SideStepRight=0x6500000F,
@@ -2740,6 +2787,8 @@ export class EntityManager {
     // `setPose` runs exactly as before (byte-identical), no target stored, no
     // tick smoothing.
     this._deadReckonOn = readDeadReckonFlag();
+    // (2026-07-06) `?deathAnim=off` escape — death-collapse + corpse handoff.
+    this._deathAnimOn = readDeathAnimFlag();
     // A2-P2 (2026-06-12, W3+ S8) — `?remoteInterp=on` (default OFF). Read
     // once HERE; consumed in `applyManagedPose` / `setPose` / `tick`.
     this._remoteInterpOn = readRemoteInterpFlag();
@@ -3810,6 +3859,14 @@ export class EntityManager {
       root.traverse((o) => o.layers.set(1));
     }
     this.entityMap.set(guid, inst);
+    // (2026-07-06) A corpse CreateObject (ODF Corpse bit) arrives right after a
+    // creature's Dead motion + delete. Correlate it to the collapsing creature
+    // so the corpse stays hidden until the death animation finishes and reveals
+    // at the exact death transform (fixes the "corpse in a slightly different
+    // spot" + "corpse appears before the animation is done" pair).
+    if (this._deathAnimOn && ((meta.objDescFlags >>> 0) & ODF_CORPSE) !== 0) {
+      try { this._tryCorpseDeathHandoff(inst); } catch (_) { /* handoff is best-effort */ }
+    }
     // P13/P16-H2 (2026-07-04) — once the LOCAL player's spawn bake commits
     // (its MotionTable is in the wasm source cache by construction), feed
     // the authored one-shot link lengths to the completion-clock shim so
@@ -7329,12 +7386,25 @@ export class EntityManager {
       if (MS && typeof fetchKeyframes === "function") {
         let entry = null;
         try {
-          entry = await this.animationCache.get(setupId, mtableId, cmd, stance, fetchKeyframes, {
+          // (2026-07-06) When `?deathAnim` is on (default), bake the COLLAPSE
+          // via the Ready→Dead LINK, not the settled Dead CYCLE. Retail's
+          // GetObjectSequence adds the transition-into-dead (get_link) THEN the
+          // cyclic hold (acclient.c:337763); the transition is the fall-down
+          // motion (tusker Ready→Dead = anim 0x0300001a frames 0→39 @ 30fps).
+          // Passing `fromMotion` routes the wasm dispatcher (lib.rs:18151) to
+          // try_resolve_link_frames; a creature with no such link falls back to
+          // the cycle path (the legacy 1-frame prone hold — no regression). The
+          // link inner-key is UNMASKED, so we must pass the FULL Dead command
+          // (CMD_DEAD_FULL), not the wire low-16 `cmd`.
+          const bakeCmd = this._deathAnimOn ? CMD_DEAD_FULL : cmd;
+          const bakeOpts = {
             modelChanges: inst.meta?.modelChanges ?? new Uint32Array(0),
             textureChanges: inst.meta?.textureChanges ?? new Uint32Array(0),
             paletteId: (inst.meta?.paletteId ?? 0) >>> 0,
             paletteSubsFlat: inst.meta?.subPalettes ?? new Uint32Array(0),
-          });
+          };
+          if (this._deathAnimOn) bakeOpts.fromMotion = CMD_READY_FULL;
+          entry = await this.animationCache.get(setupId, mtableId, bakeCmd, stance, fetchKeyframes, bakeOpts);
         } catch (_) { entry = null; }
         if (!this.entityMap.has(guid >>> 0)) return; // despawned mid-resolve
         const d = entry?.sequenceDescriptor;
@@ -7348,6 +7418,19 @@ export class EntityManager {
             if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
             // clearOnDone:false → keep posing the clamped prone frame (held dead).
             inst._unifiedSeq = { seq, desc: d, clearOnDone: false, hooks: entry?.hooks || null, lastHookTime: -1 };
+            // (2026-07-06) Stamp the REAL collapse length so loop.js `_armRemove`
+            // holds the rig for exactly this creature's authored death animation
+            // (they vary — tusker ~1.3s, others longer) instead of the flat
+            // DEATH_HOLD_MS, and the corpse handoff reveals on the same clock.
+            // Freeze remote dead-reckon so the collapsing rig settles at the
+            // authoritative death spot rather than coasting on its last velocity.
+            if (this._deathAnimOn) {
+              const durMs = (Number.isFinite(d.duration) && d.duration > 0)
+                ? d.duration * 1000 : DEATH_HOLD_FALLBACK_MS;
+              inst._deathDurationMs = durMs;
+              inst._deathEndAt = (inst._deathAt ?? _entityNowMs()) + durMs;
+              this._freezeDeadReckon(inst);
+            }
             return; // the tick drives the rig; skip the legacy cycle path
           }
         }
@@ -8463,6 +8546,80 @@ export class EntityManager {
   /**
    * Remove an entity by GUID. Tears down geometries, textures, mixer.
    */
+  // (2026-07-06) Stop a freshly-dead remote creature from coasting. The
+  // dead-reckon ease (tick, ~line 11300) extrapolates the last VectorUpdate
+  // velocity forward between position packets; a monster that died mid-charge
+  // keeps sliding, so the authoritative corpse (server death spot) lands behind
+  // the rig. Clearing the target + velocity settles the rig; `_deadFrozen` is a
+  // belt-and-braces guard the ease also checks.
+  _freezeDeadReckon(inst) {
+    if (!inst) return;
+    inst._deadFrozen = true;
+    inst._serverTargetPos = null;   // position-ease guard requires this → skips
+    inst.lastVel = null;            // stop velocity extrapolation
+    inst._headingEaseInit = false;  // stop heading slerp toward a stale target
+  }
+
+  // (2026-07-06) Corpse↔creature death handoff. On death ACE sends three
+  // independent objects with no linkage: the creature's Dead motion, a separate
+  // corpse CreateObject at the server death spot, then the creature's delete.
+  // Played naively the prone corpse pops in while the creature is still
+  // collapsing, and at a slightly different spot (dead-reckon overshoot +
+  // ground-clamp skew). Correlate them: find the just-died creature under this
+  // fresh corpse, snap it onto the corpse's AUTHORITATIVE transform (position AND
+  // orientation line up), hide the corpse, let the collapse play, then reveal the
+  // corpse and remove the creature on the collapse's own clock. Called from
+  // _spawnImpl right after commit when the spawn carries the ODF Corpse bit.
+  _tryCorpseDeathHandoff(corpseInst) {
+    if (!corpseInst || !corpseInst.root) return;
+    const cp = corpseInst.root.position;
+    const now = _entityNowMs();
+    // Nearest still-collapsing, unclaimed creature within the correlation radius.
+    let best = null;
+    let bestD2 = DEATH_COLLAPSE_RADIUS_SQ;
+    for (const inst of this.entityMap.values()) {
+      if (inst === corpseInst) continue;
+      if (typeof inst._deathAt !== "number") continue;
+      if (inst._corpseHandoffGuid) continue; // already owns a corpse
+      const endAt = inst._deathEndAt ?? (inst._deathAt + DEATH_HOLD_FALLBACK_MS);
+      if (now >= endAt) continue; // its collapse already finished
+      const p = inst.root?.position;
+      if (!p) continue;
+      const dx = p.x - cp.x, dy = p.y - cp.y, dz = p.z - cp.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < bestD2) { bestD2 = d2; best = inst; }
+    }
+    if (!best) return; // no dying creature here → corpse shows normally
+
+    // Align the collapsing rig with the corpse's authoritative transform so the
+    // reveal is seamless in BOTH position and heading (the corpse's server
+    // orientation is the creature's death orientation), then hide the corpse.
+    best.root.position.copy(cp);
+    best.root.quaternion.copy(corpseInst.root.quaternion);
+    this._freezeDeadReckon(best);
+    best._corpseHandoffGuid = corpseInst.guid >>> 0; // _armRemove yields to us
+    corpseInst.root.visible = false;
+    corpseInst._hiddenForHandoff = true;
+
+    const revealAt = best._deathEndAt ?? (best._deathAt + DEATH_HOLD_FALLBACK_MS);
+    const remaining = Math.max(0, revealAt - now);
+    const corpseGuid = corpseInst.guid >>> 0;
+    const creatureGuid = best.guid >>> 0;
+    setTimeout(() => {
+      try {
+        const corpse = this.entityMap.get(corpseGuid);
+        if (corpse && corpse._hiddenForHandoff && corpse.root) {
+          corpse.root.visible = true;
+          corpse._hiddenForHandoff = false;
+        }
+        // Remove the collapsed creature now that the corpse has taken over. The
+        // creature's own KIND_REMOVE deferral yielded to us (_corpseHandoffGuid);
+        // remove() no-ops if it already went.
+        this.remove(creatureGuid);
+      } catch (_) { /* handoff must never throw into a timer */ }
+    }, remaining);
+  }
+
   remove(guid) {
     const g = guid >>> 0;
     // Batch 9 #2 (2026-06-07): bump the spawn generation FIRST — even on
@@ -11270,7 +11427,7 @@ export class EntityManager {
       // projectile and a sticky-glued mob own their own motion above and must
       // never also be dragged by the dead-reckon ease (ACE sends no position
       // for either, so _serverTargetPos is normally absent/stale anyway).
-      if (runSmoothing && this._deadReckonOn && inst._serverTargetPos && !inst._ballistic && !stickyGlued && !wasmDriven) {
+      if (runSmoothing && this._deadReckonOn && inst._serverTargetPos && !inst._ballistic && !stickyGlued && !wasmDriven && !inst._deadFrozen) {
         const tgt = inst._serverTargetPos;
         // B5/QW2/REMOTE-3: extrapolate the server target forward by the last
         // VectorUpdate velocity while it's fresh — retail integrates
