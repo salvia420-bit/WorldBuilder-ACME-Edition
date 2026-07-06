@@ -28878,8 +28878,48 @@ impl SessionHandle {
     /// omit the arg or pass `0` and inherit the default.
     #[wasm_bindgen(js_name = getRenderSetWithPView)]
     pub fn get_render_set_with_pview(&self, mvp: &[f32], max_depth: u8) -> Vec<u32> {
-        let (cells, _) = self.get_render_set_with_pview_internal(mvp, max_depth);
+        let (cells, _, _) = self.get_render_set_with_pview_internal(mvp, max_depth);
         cells
+    }
+
+    /// Milestone W (2026-07-06) — indoor portal-clip export. Runs the SAME
+    /// retail `PView::ClipPortals` walk as `getRenderSetWithPView` (nested to
+    /// `PVIEW_MAX_DEPTH`), but RETURNS the per-cell clipped screen-space (NDC)
+    /// aperture polygon the walk computes and otherwise discards — so JS can
+    /// stencil-clip each visible cell to the doorway it is seen through.
+    /// Foundation for indoor→indoor portal clipping (the cross-cell two-sided
+    /// wall z-fight). See docs/DESIGN-indoor-portal-clip-2026-07-06.md.
+    ///
+    /// One record per visible cell (first-reached aperture path; a cell seen
+    /// through two doorways emits only its first clip — full multi-view is a
+    /// follow-up). The current cell is emitted at `depth == 0` with the full
+    /// NDC viewport `[-1,1]²` (draw it unclipped).
+    ///
+    /// Wire shape — flat `Vec<u32>` (NOT f32: AC cell ids exceed 2^24 and would
+    /// lose precision as f32). Header fields are native u32; NDC coords are the
+    /// IEEE-754 bit pattern of each f32 (`f32::to_bits`) — NDC values are in
+    /// [-1,1], always normal (never NaN), so JS can alias the same ArrayBuffer
+    /// as a `Float32Array` and read the coords back exactly:
+    ///   `[ view_count,
+    ///      (cell_id, depth, nverts, bits(x0),bits(y0), …)  × view_count ]`
+    ///
+    /// Read-only; does not mutate snapshot state.
+    #[wasm_bindgen(js_name = getPViewCellClips)]
+    pub fn get_pview_cell_clips(&self, mvp: &[f32], max_depth: u8) -> Vec<u32> {
+        let (_cells, _max_depth_reached, clips) =
+            self.get_render_set_with_pview_internal(mvp, max_depth);
+        let mut out: Vec<u32> = Vec::with_capacity(1 + clips.len() * 8);
+        out.push(clips.len() as u32);
+        for (cell_id, depth, poly) in &clips {
+            out.push(*cell_id);
+            out.push(*depth as u32);
+            out.push(poly.len() as u32);
+            for v in poly {
+                out.push(v[0].to_bits());
+                out.push(v[1].to_bits());
+            }
+        }
+        out
     }
 
     /// Phase 5 PView depth-instrumentation tap (2026-05-25). Same as
@@ -28899,7 +28939,7 @@ impl SessionHandle {
         mvp: &[f32],
         max_depth: u8,
     ) -> Vec<u32> {
-        let (cells, max_depth_reached) =
+        let (cells, max_depth_reached, _) =
             self.get_render_set_with_pview_internal(mvp, max_depth);
         let mut out: Vec<u32> = Vec::with_capacity(cells.len() + 2);
         out.push(max_depth_reached as u32);
@@ -28920,9 +28960,9 @@ impl SessionHandle {
         &self,
         mvp: &[f32],
         max_depth: u8,
-    ) -> (Vec<u32>, u8) {
+    ) -> (Vec<u32>, u8, Vec<(u32, u8, Vec<[f32; 2]>)>) {
         if mvp.len() != 16 {
-            return (Vec::new(), 0);
+            return (Vec::new(), 0, Vec::new());
         }
         let mvp_arr: [f32; 16] = {
             let mut a = [0.0f32; 16];
@@ -28931,7 +28971,7 @@ impl SessionHandle {
         };
         let snap = self.cell_scene_snapshot.borrow();
         if snap.current_cell == 0 {
-            return (Vec::new(), 0);
+            return (Vec::new(), 0, Vec::new());
         }
         // Hard cap on portal-traversal depth — see method doc.
         // `max_depth=0` → use the default (production callers + JS
@@ -28964,6 +29004,18 @@ impl SessionHandle {
             portal_map.entry(*from).or_default().push((*to, verts));
         }
 
+        let initial_view: Vec<[f32; 2]> = vec![
+            [-1.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ];
+        // Milestone W (2026-07-06): collect the per-cell clipped NDC aperture
+        // polygon the walk produces. The current cell gets the full viewport
+        // (drawn unclipped); each neighbour gets its `clipped` poly below.
+        let mut cell_clips: Vec<(u32, u8, Vec<[f32; 2]>)> = Vec::new();
+        cell_clips.push((snap.current_cell, 0, initial_view.clone()));
+
         let mut visible: std::collections::HashSet<u32> = std::collections::HashSet::new();
         visible.insert(snap.current_cell);
         let mut max_depth_reached: u8 = 0;
@@ -28972,15 +29024,9 @@ impl SessionHandle {
             // Snapshot hasn't seen portal polygons yet (recv loop may
             // not have published). Return just current_cell — JS
             // unions with Phase 4 frustum-cull fallback.
-            return (vec![snap.current_cell], 0);
+            return (vec![snap.current_cell], 0, cell_clips);
         }
 
-        let initial_view: Vec<[f32; 2]> = vec![
-            [-1.0, -1.0],
-            [1.0, -1.0],
-            [1.0, 1.0],
-            [-1.0, 1.0],
-        ];
         let mut queue: std::collections::VecDeque<(u32, Vec<[f32; 2]>, u8)> =
             std::collections::VecDeque::new();
         queue.push_back((snap.current_cell, initial_view, 0));
@@ -29012,13 +29058,14 @@ impl SessionHandle {
                 if neighbour_depth > max_depth_reached {
                     max_depth_reached = neighbour_depth;
                 }
+                cell_clips.push((*neighbour, neighbour_depth, clipped.clone()));
                 queue.push_back((*neighbour, clipped, neighbour_depth));
             }
         }
 
         let mut out: Vec<u32> = visible.into_iter().collect();
         out.sort_unstable();
-        (out, max_depth_reached)
+        (out, max_depth_reached, cell_clips)
     }
 
     /// Portal-stencil renderer (2026-07-05, milestone 1): the world-space

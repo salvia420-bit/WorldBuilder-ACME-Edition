@@ -436,6 +436,31 @@ export function applyFloorDepthBias(material) {
   material.userData.__floorBiased = true;
 }
 
+// 2026-07-06 — cell-static décor z-fight fix. Wall/floor décor props (tapestries,
+// sconces, signs, rugs) are separate SetupModels placed FLUSH against an EnvCell
+// wall or floor, so the prop face and the cell surface write the IDENTICAL
+// logarithmic gl_FragDepth and tie under GL_LESS → per-pixel flicker (the
+// "z-fight near walls" seen in dungeon hallways + building interiors). Same
+// log-depth trick as applyFloorDepthBias, OPPOSITE of terrain, but a STRONGER
+// pull (−4e-4 vs the floor's −2e-4) so the décor wins even over a surface that
+// itself already carries the floor bias. The epsilon only breaks exact coplanar
+// ties — far too small to visibly detach a prop from its wall. Applied via
+// getCachedStaticBias (cache-owned CLONE) so the shared base is never mutated.
+export function applyStaticDepthBias(material) {
+  if (!material || material.userData?.__staticBiased) return;
+  _chainBeforeCompile(material, (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <logdepthbuf_fragment>",
+      `#include <logdepthbuf_fragment>
+      #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+        gl_FragDepth -= 4.0e-4;
+      #endif`,
+    );
+  });
+  material.userData = material.userData ?? {};
+  material.userData.__staticBiased = true;
+}
+
 function _installDetailShaderPatch(material, detailTexture, opts = {}) {
   const detailScale = opts.scale ?? DETAIL_UNIFORM_DEFAULTS.scale;
   const detailBlend = opts.blend ?? DETAIL_UNIFORM_DEFAULTS.blend;
@@ -1681,6 +1706,12 @@ export class MaterialCache {
     // of flickering against the grass. Clones SHARE textures (THREE clone copies
     // map refs); cache-owned; lazily minted; mirrors frontSideMaterials lifecycle.
     this.floorBiasMaterials = new Map();
+    // 2026-07-06 — cell-static décor bias variants, keyed by surfaceDid. A
+    // .clone() of the DoubleSide base with a log-depth `gl_FragDepth -= 4e-4`
+    // patch (applyStaticDepthBias) so wall/floor-flush interior props win the
+    // coplanar depth tie against the cell surface behind them. Clones SHARE
+    // textures; cache-owned; lazily minted; mirrors floorBiasMaterials lifecycle.
+    this.staticBiasMaterials = new Map();
     // VFX component-variant clones (Visual-Behavior Suite). Keyed by
     // (surfaceDid|setKey|configKey); CLONES of the base material that share
     // textures. Dormant until a frag/MECH-B component calls getCachedVariant.
@@ -1895,6 +1926,27 @@ export class MaterialCache {
       v.userData = { ...(base.userData || {}), __cacheOwned: true };
       applyFloorDepthBias(v);
       this.floorBiasMaterials.set(key, v);
+    }
+    return v;
+  }
+
+  /**
+   * Static-bias variant of `getCached`: the DoubleSide base with a STRONGER
+   * log-depth `gl_FragDepth` nudge toward the camera (applyStaticDepthBias) than
+   * getCachedFloorBias, so an EnvCell décor prop coplanar with the wall/floor it
+   * sits flush against deterministically wins the GL_LESS depth tie instead of
+   * flickering. Clone shares textures; cache-owned. Wire mode returns the base.
+   */
+  getCachedStaticBias(surfaceDid) {
+    const base = this._getCachedDouble(surfaceDid);
+    if (this.wireframeMode) return base;
+    const key = surfaceDid >>> 0;
+    let v = this.staticBiasMaterials.get(key);
+    if (!v) {
+      v = base.clone();
+      v.userData = { ...(base.userData || {}), __cacheOwned: true };
+      applyStaticDepthBias(v);
+      this.staticBiasMaterials.set(key, v);
     }
     return v;
   }
@@ -2377,6 +2429,7 @@ export class MaterialCache {
       this._applyRough(mat, t);
       this.frontSideMaterials.delete(did >>> 0);
       this.floorBiasMaterials.delete(did >>> 0);
+      this.staticBiasMaterials.delete(did >>> 0);
     });
   }
 
@@ -2853,6 +2906,7 @@ export class MaterialCache {
       // meshes keep the fallback clone forever even after the texture arrives.
       this.frontSideMaterials.delete(did);
       this.floorBiasMaterials.delete(did); // twin of the FrontSide invalidation
+      this.staticBiasMaterials.delete(did); // twin of the FrontSide invalidation
       // Render-completeness audit (2026-05-29) — kick animated-frame setup.
       this._maybeSetupSurfaceAnimation(did, mat, tex);
       return mat;
@@ -3490,6 +3544,7 @@ export class MaterialCache {
     // textured base after a spawn-race fallback.
     this.frontSideMaterials.delete(did);
     this.floorBiasMaterials.delete(did); // twin of the FrontSide invalidation
+    this.staticBiasMaterials.delete(did); // twin of the FrontSide invalidation
     // Render-completeness audit (2026-05-29) — kick animated-frame setup.
     this._maybeSetupSurfaceAnimation(did, mat, tex);
     return mat;
@@ -3606,6 +3661,8 @@ export class MaterialCache {
     // 2026-06-15 floor-bias variants — clones of base materials (share textures,
     // freed above), so dispose only the material objects.
     _disposeEach(this.floorBiasMaterials, (m) => m);
+    // 2026-07-06 static-bias variants — clones (share textures, freed above).
+    _disposeEach(this.staticBiasMaterials, (m) => m);
     // VFX component-variant clones (share textures, freed above) — dispose the
     // material objects only.
     _disposeEach(this.vfxVariants, (m) => m);

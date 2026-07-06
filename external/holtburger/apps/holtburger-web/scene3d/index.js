@@ -3672,11 +3672,23 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // apertures. See portal_stencil.js.
               portalStencil:
                 new URLSearchParams(window.location.search).get("portalStencil") === "on",
-              // Portal-punch cell renderer (?portalPunch, default ON; ?portalPunch=off
-              // to disable) — retail per-aperture depth punch so building/cave
-              // interiors show through door/window/cave-mouth apertures from an
-              // outdoor camera. Fixed 2026-07-05 (was a no-op: stored its camera on
-              // the empty pmndrs `mainCamera` setter). See portal_punch.js.
+              // Portal-punch cell renderer (?portalPunch=off to disable; default ON).
+              // Retail per-aperture depth punch so building/cave interiors show
+              // through door/window/cave-mouth apertures from an outdoor camera — this
+              // is what stops terrain covering env-cell entrances. Fixed 2026-07-05 to
+              // actually execute (was a no-op: stored its camera on the empty pmndrs
+              // `mainCamera` setter). 2026-07-06: enabling it surfaced a real bug on
+              // real GPUs — `get_visible_portal_apertures` emits RAW world-space
+              // aperture polygons with NO near-plane/sidedness clip (unlike retail's
+              // `ConstructView` sidedness + `DrawPortalPolyInternal` `polyClipFinish`,
+              // and unlike our near-plane-clipped `getRenderSetWithPView`). Close to a
+              // doorway some apertures straddle the near plane (verified live: 2/14
+              // behind near at 0.4 m); the punch (`depthFunc=Always`, `frustumCulled=
+              // false`) then over-covered a huge screen area → near terrain/statics
+              // vanished (R9 290; SwiftShader clipped the degenerate poly and hid it).
+              // FIXED by `nearPlaneCullApertures` in cells.js (drops straddling
+              // apertures — the sidedness/polyClipFinish equivalent), validated on the
+              // R9 290. See portal_punch.js + cells.js.
               portalPunch:
                 new URLSearchParams(window.location.search).get("portalPunch") !== "off",
             });

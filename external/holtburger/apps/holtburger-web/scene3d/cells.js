@@ -64,6 +64,22 @@ const CELL_BUG_PARITY = (() => {
   return false;
 })();
 
+// ?cellStaticBias — default-ON (2026-07-06). Nudge EnvCell décor props (wall/
+// floor-flush SetupModels — tapestries, sconces, signs, rugs) a hair toward the
+// camera in log-depth space via getCachedStaticBias, so they win the coplanar
+// depth tie against the cell wall/floor they sit on instead of z-fighting it
+// (the "z-fight near walls" seen in dungeon hallways + building interiors). The
+// biased material is a cache-owned CLONE — the shared getCached base is never
+// mutated. `=off` restores the plain shared getCached material (A/B escape).
+const CELL_STATIC_BIAS = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      return new URLSearchParams(globalThis.location.search).get("cellStaticBias") !== "off";
+    }
+  } catch (_) {}
+  return true;
+})();
+
 // C1 (2026-06-20 busted-world load fix): cap the per-frame PVS-ring bake
 // fan-out. `tickPvsLoadExpansion` otherwise fires the whole radius-N ring
 // (~363 hooks at radius 5) on every LB-crossing all at once, saturating the
@@ -207,7 +223,9 @@ function buildFusedMultiSurfaceStatic(groups, materialCache) {
     fused.addGroup(vertexOffset, vertCount, i);
     vertexOffset += vertCount;
     materials.push(
-      materialCache.getCached(groups[i].surfaceDid >>> 0) || materialCache.fallbackMaterial,
+      (CELL_STATIC_BIAS
+        ? materialCache.getCachedStaticBias(groups[i].surfaceDid >>> 0)
+        : materialCache.getCached(groups[i].surfaceDid >>> 0)) || materialCache.fallbackMaterial,
     );
   }
   fused.setAttribute("position", new THREE.BufferAttribute(mergedPos, 3, false));
@@ -561,7 +579,12 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         if (staticMatByDid.has(id)) continue;
         const dom = dominantByDid.get(id);
         if (typeof dom === "number" && dom !== 0) {
-          staticMatByDid.set(id, scene3d.materialCache.getCached(dom));
+          staticMatByDid.set(
+            id,
+            CELL_STATIC_BIAS
+              ? scene3d.materialCache.getCachedStaticBias(dom)
+              : scene3d.materialCache.getCached(dom),
+          );
         } else {
           staticMatByDid.set(id, scene3d.materialCache.fallbackMaterial);
         }
@@ -1285,6 +1308,48 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
 // + docs/RETAIL-PORTAL-RENDERER-AND-CELL-TERRAIN-WATER-RELATIONSHIPS.md.
 const _psMvp = new THREE.Matrix4();
 const _psMvpArr = new Float32Array(16);
+
+// Near-plane aperture cull (2026-07-06). `getVisiblePortalApertures` emits RAW
+// world-space aperture polygons with no near-plane clip and no sidedness check
+// (unlike retail's `ConstructView` sidedness + `DrawPortalPolyInternal`
+// `polyClipFinish`, and unlike our own near-plane-clipped `getRenderSetWithPView`).
+// When the camera is close to / past a doorway some aperture vertices fall behind
+// the near plane; the punch pass (`depthFunc=Always`, `frustumCulled=false`) then
+// rasterizes the near-plane-straddling polygon over a HUGE screen area → near
+// terrain/statics get FAR-punched and the cells pass overdraws them → geometry
+// DISAPPEARS as you walk up to a building (real GPUs; SwiftShader clipped the
+// degenerate poly and hid the bug — verified live: 2/14 apertures behind near at
+// 0.4 m). Drop any aperture with a vertex within the near plane so the punch only
+// covers well-formed, fully-in-front doorways; distant apertures (the actual
+// terrain-over-entrance reveal) are untouched. `clip.w` = view-forward metres.
+const _APERTURE_NEAR_CULL_M = 0.2; // > camera.near (0.1); margin for fp slop
+function nearPlaneCullApertures(flat, mvpArr) {
+  if (!flat || flat.length < 1) return flat;
+  const e = mvpArr;
+  let k = 0;
+  const count = flat[k++] | 0;
+  if (count <= 0) return flat;
+  const out = [0];
+  let kept = 0;
+  for (let a = 0; a < count; a++) {
+    const nv = flat[k++] | 0;
+    const start = k;
+    let minW = Infinity;
+    for (let v = 0; v < nv; v++) {
+      const x = flat[k], y = flat[k + 1], z = flat[k + 2];
+      k += 3;
+      const w = e[3] * x + e[7] * y + e[11] * z + e[15];
+      if (w < minW) minW = w;
+    }
+    if (nv >= 3 && minW > _APERTURE_NEAR_CULL_M) {
+      out.push(nv);
+      for (let i = 0; i < nv * 3; i++) out.push(flat[start + i]);
+      kept++;
+    }
+  }
+  out[0] = kept;
+  return out;
+}
 // Move an interior cell container's whole subtree between its home layer
 // (RENDER_LAYER_INDOOR=1, drawn by the world pass) and the portal-cell layer
 // (RENDER_LAYER_PORTAL_CELL=2, drawn ONLY by the stencil pass, masked).
@@ -1342,7 +1407,7 @@ export function tickPortalStencil(scene3d, sessionHandle) {
     for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
 
     const flat = sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
-    pass.setApertures(flat);
+    pass.setApertures(nearPlaneCullApertures(flat, _psMvpArr));
 
     // Portal-visible interior cells (idx >= 0x100): PARK each on the portal-cell
     // layer (so the world pass skips it → no terrain-occluded double draw), and
@@ -1427,7 +1492,7 @@ export function tickPortalPunch(scene3d, sessionHandle) {
     _psMvp.multiply(worldRoot.matrixWorld);
     for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
     const flat = sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
-    pass.setApertures(flat);
+    pass.setApertures(nearPlaneCullApertures(flat, _psMvpArr));
   } catch (_) {
     pass.setApertures(null);
   }
