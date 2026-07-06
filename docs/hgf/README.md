@@ -5,6 +5,22 @@ at the **Cave of the Escaped Thief**, landblock `0x40D8` (71.1N, 50.2W), outdoor
 cell `0x40D8002C`, terrain height ≈ 4 m. Captures are geometry/occlusion
 (SwiftShader), not pixel fidelity.
 
+## ✅ RESOLVED (2026-07-05) — the portal punch never executed
+The real fix is **not** a terrain cut (that was too coarse — it removed terrain
+the crater rock doesn't cover). The retail-faithful `?portalPunch` was already
+the right mechanism (per-aperture depth punch = `DrawPortalPolyInternal`) — it
+just **never ran**. `PortalPunchPass` stored/read its render camera as
+`this.mainCamera`, but the pmndrs base `Pass` in this version has
+`set mainCamera(value) {}` (an **empty no-op setter, no getter**), so the camera
+was silently dropped and `render()` read `undefined` and bailed every frame
+(confirmed in source `postprocessing/build/index.js:115` and at runtime:
+`{fired:1, mcAfter:false, isOwnProp:false}`). Fix = use `this.camera` (the real
+field) at all sites; same one-liner applied to `PortalStencilPass`. `?portalPunch`
+now defaults **ON**. Result: capture `08` — the mouth shows the cave, terrain
+untouched, no over-cut. Everything else was already correct (cave cells drawn,
+mouth aperture detected ~13 m, split armed). The terrain-cut section below is
+kept as the (rejected) intermediate hypothesis.
+
 ## What the entrance actually is (DAT oracle)
 `LandBlockInfo 0x40D8FFFE` → the entrance is a **building**, not terrain and not
 a bare cell:

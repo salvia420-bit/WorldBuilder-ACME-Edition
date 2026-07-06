@@ -3672,11 +3672,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // apertures. See portal_stencil.js.
               portalStencil:
                 new URLSearchParams(window.location.search).get("portalStencil") === "on",
-              // Portal-punch cell renderer (?portalPunch, default OFF) — retail
-              // per-aperture depth punch so building interiors show through
-              // door/window apertures from an outdoor camera. See portal_punch.js.
+              // Portal-punch cell renderer (?portalPunch, default ON; ?portalPunch=off
+              // to disable) — retail per-aperture depth punch so building/cave
+              // interiors show through door/window/cave-mouth apertures from an
+              // outdoor camera. Fixed 2026-07-05 (was a no-op: stored its camera on
+              // the empty pmndrs `mainCamera` setter). See portal_punch.js.
               portalPunch:
-                new URLSearchParams(window.location.search).get("portalPunch") === "on",
+                new URLSearchParams(window.location.search).get("portalPunch") !== "off",
             });
             liveScene3d.atmospherePipeline = atmospherePipeline;
             // Expose the portal-stencil pass (null when the flag is off) so

@@ -138,7 +138,9 @@ export class PortalStencilPass extends Pass {
     this.needsSwap = false;
 
     this.mainScene = scene;
-    this.mainCamera = camera;
+    // `this.camera`, not `this.mainCamera` — the pmndrs base Pass `set mainCamera`
+    // is an empty no-op (same bug that made PortalPunchPass never execute).
+    this.camera = camera;
 
     // Aperture geometry lives in its own tiny scene, transformed to match
     // worldRoot (AC Z-up → three Y-up is the -pi/2 X rotation at index.js).
@@ -247,7 +249,7 @@ export class PortalStencilPass extends Pass {
     // doorway, the far-depth hole would let atmosphere/cloud haze through it.
     if (this._errored || !this.hasWork) return;
 
-    const cam = this.mainCamera;
+    const cam = this.camera;
     // Camera not wired for this frame yet (tickPortalStencil sets it) → skip,
     // NEVER crash. `hasWork` can be true from a prior tick before mainCamera is
     // current; touching `cam.layers` on an undefined cam froze the frame.

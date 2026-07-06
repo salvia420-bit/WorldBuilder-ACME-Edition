@@ -76,7 +76,12 @@ export class PortalPunchPass extends Pass {
     // We render the aperture mesh into the composer's input buffer ourselves and
     // do not consume/produce a full-screen quad → keep buffers across the pass.
     this.needsSwap = false;
-    this.mainCamera = camera;
+    // Store on `this.camera` (the real pmndrs Pass field), NOT `this.mainCamera`
+    // — the base Pass in this postprocessing version exposes `set mainCamera`
+    // as an EMPTY no-op with no getter, so assigning `this.mainCamera` silently
+    // drops the camera and `render()` would read `undefined` and bail forever
+    // (the reason this punch never executed / shipped UNVALIDATED).
+    this.camera = camera;
 
     // Aperture geometry lives in its own tiny scene, rotated to match worldRoot
     // (AC Z-up → three Y-up is the -pi/2 X rotation applied in index.js).
@@ -155,7 +160,7 @@ export class PortalPunchPass extends Pass {
 
   render(renderer, inputBuffer /*, outputBuffer, dt, maskActive */) {
     if (this._errored || !this.hasApertures) return;
-    const cam = this.mainCamera;
+    const cam = this.camera;
     if (!cam || !cam.layers) return; // camera not wired yet → skip, never crash
 
     const prevAutoClear = renderer.autoClear;

@@ -504,8 +504,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // Portal-stencil pass draws with the CURRENT render camera — set every
       // frame (not only on a switch) so its mainCamera can never be undefined
       // when it has work (the "reading 'layers' of undefined" freeze).
-      if (portalStencilPass && cam) portalStencilPass.mainCamera = cam;
-      if (portalPunchPass && cam) portalPunchPass.mainCamera = cam;
+      if (portalStencilPass && cam) portalStencilPass.camera = cam;
+      // `.camera`, not `.mainCamera` — the pmndrs base Pass `set mainCamera` is
+      // an empty no-op, so the punch reads its render camera off `this.camera`.
+      if (portalPunchPass && cam) portalPunchPass.camera = cam;
       composer.render(dt);
     },
 
