@@ -590,8 +590,24 @@ function getRp5Config() {
 // human-verified 2026-06-22. Retail had 8 fixed HW light slots. Still a FIXED count, so
 // it compiles ONCE and never relinks (the spell-freeze fix holds). The exact prior look
 // is one flag away: `?lightPoolSize=32&lightPoolSpot=8`.
-const LIGHT_POOL_DEFAULT_POINT = 8;
+// 2026-07-05 (torch-immersion) — point default raised 8 → 16. With the
+// nearest-set now sorted against the PLAYER instead of the orbiting camera
+// (capActiveLightsByDistance) PLUS selection hysteresis (below), torches no
+// longer pop as you turn the view / step, but a small pool still leaves a
+// torch-dense corridor with only the nearest few lit at once; 16 roughly
+// doubles the simultaneously-lit props. Cost is real on a COLD gpu — each slot
+// unrolls one more RE_Direct site into every lit-surface fragment, lengthening
+// first-load shader link on the 1070: 6 dir + 16 pt + 2 spot = 24 sites vs the
+// prior 16. `?lightPoolSize=8` restores the perf-min; `=32` restores full
+// retail-era density.
+const LIGHT_POOL_DEFAULT_POINT = 16;
 const LIGHT_POOL_DEFAULT_SPOT = 2;
+// Selection hysteresis (0 < h ≤ 1): an already-selected source's squared sort
+// distance is scaled by `h`, so a challenger must be ~√h closer to evict it.
+// Kills the boundary flicker where the Nth / (N+1)th torch trade the last slot
+// as you move. 1.0 disables. 0.64 → challenger must be within 0.8× the
+// incumbent's distance (a ~20 % stick band). Tunable via `?lightHysteresis=`.
+const LIGHT_POOL_HYSTERESIS_DEFAULT = 0.64;
 
 let _lightPoolConfig;
 function getLightPoolConfig() {
@@ -606,6 +622,7 @@ function getLightPoolConfig() {
     enabled: true,
     pointCount: LIGHT_POOL_DEFAULT_POINT,
     spotCount: LIGHT_POOL_DEFAULT_SPOT,
+    hysteresis: LIGHT_POOL_HYSTERESIS_DEFAULT,
   };
   const ps = _rp5ReadParams();
   if (ps) {
@@ -616,6 +633,10 @@ function getLightPoolConfig() {
     if (Number.isFinite(sz) && sz >= 1) cfg.pointCount = Math.min(128, sz);
     const sp = parseInt(ps.get("lightPoolSpot"), 10);
     if (Number.isFinite(sp) && sp >= 0) cfg.spotCount = Math.min(32, sp);
+    // `?lightHysteresis=1` disables the stick band (pure nearest-N); lower
+    // values stick harder. Clamp to (0, 1].
+    const hy = parseFloat(ps.get("lightHysteresis"));
+    if (Number.isFinite(hy) && hy > 0 && hy <= 1) cfg.hysteresis = hy;
   }
   _lightPoolConfig = cfg;
   return _lightPoolConfig;
@@ -683,6 +704,13 @@ function zeroLightPool(pool) {
 // spot sources. Type-separated budgets (vs the legacy combined 32-cap) are
 // identical on shipped data where spots are absent. Throttled (sort cadence).
 function pickSelectedSources(pool, scratch) {
+  // Hysteresis bookkeeping: clear last cycle's stickiness tags before we
+  // re-select, then re-tag the new selection. `capActiveLightsByDistance`
+  // reads `__lightPoolSel` to bias a currently-lit source's sort distance so a
+  // marginally-closer challenger can't evict it (anti-flicker). Tagging is a
+  // no-op on selection itself — it only affects the NEXT sort's ordering.
+  for (let i = 0; i < pool.selPoint.length; i += 1) pool.selPoint[i].__lightPoolSel = false;
+  for (let i = 0; i < pool.selSpot.length; i += 1) pool.selSpot[i].__lightPoolSel = false;
   pool.selPoint.length = 0;
   pool.selSpot.length = 0;
   for (let i = 0; i < scratch.length; i += 1) {
@@ -699,6 +727,8 @@ function pickSelectedSources(pool, scratch) {
       break;
     }
   }
+  for (let i = 0; i < pool.selPoint.length; i += 1) pool.selPoint[i].__lightPoolSel = true;
+  for (let i = 0; i < pool.selSpot.length; i += 1) pool.selSpot[i].__lightPoolSel = true;
 }
 
 // Copy the currently-selected sources' LIVE world-position + colour + intensity
@@ -1351,9 +1381,35 @@ function capActiveLightsByDistance(scene3d) {
     return;
   }
 
-  const camX = camera.position.x;
-  const camY = camera.position.y;
-  const camZ = camera.position.z;
+  // Reference point for the nearest-light sort. Prefer the followed PLAYER's
+  // world position over the camera's: in third-person the camera ORBITS the
+  // player, so sorting against `camera.position` reshuffles the nearest-N set
+  // every time the view rotates → torches pop on/off as you merely turn
+  // (reported 2026-07-05). The player point is rotation-invariant. Falls back
+  // to the camera position pre-spawn / when no switcher is present (e.g. the
+  // headless test harness and editor cameras) so that path stays unchanged.
+  const switcher = scene3d?.cameraSwitcher ?? null;
+  let refPos = scene3d._lightRefPos;
+  if (!refPos || typeof refPos.set !== "function") {
+    refPos = new THREE.Vector3();
+    scene3d._lightRefPos = refPos;
+  }
+  let haveRef = false;
+  if (switcher && typeof switcher.getPlayerWorldPosition === "function") {
+    haveRef = switcher.getPlayerWorldPosition(refPos) != null;
+  }
+  if (!haveRef) refPos.copy(camera.position);
+  const refX = refPos.x;
+  const refY = refPos.y;
+  const refZ = refPos.z;
+
+  // Selection hysteresis factor (pool mode only — the legacy `.visible`-cap
+  // path never tags sources, so `__lightPoolSel` is always falsy there and the
+  // bias is inert → byte-identical legacy selection). <1 scales an already-lit
+  // source's squared distance down so it keeps its slot until a challenger is
+  // √factor closer, killing last-slot flicker as you walk a torch-dense hall.
+  const hysteresis =
+    lightPool && lightPool.enabled ? getLightPoolConfig().hysteresis ?? 1 : 1;
 
   // Build a small scratch array of { light, distSq } for sorting.
   // Reuses an existing scratch buffer when length matches to keep
@@ -1383,10 +1439,14 @@ function capActiveLightsByDistance(scene3d) {
     } else {
       tmp.set(0, 0, 0);
     }
-    const dx = tmp.x - camX;
-    const dy = tmp.y - camY;
-    const dz = tmp.z - camZ;
-    const distSq = dx * dx + dy * dy + dz * dz;
+    const dx = tmp.x - refX;
+    const dy = tmp.y - refY;
+    const dz = tmp.z - refZ;
+    let distSq = dx * dx + dy * dy + dz * dz;
+    // Stick band: a source that held a pool slot last cycle sorts as if it
+    // were `√hysteresis` nearer, so it isn't kicked out by a barely-closer
+    // rival. Inert when hysteresis === 1 or the source was unselected.
+    if (hysteresis !== 1 && light.__lightPoolSel) distSq *= hysteresis;
     let slot = scratch[i];
     if (!slot) {
       slot = { light, distSq };

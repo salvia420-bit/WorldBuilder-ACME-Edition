@@ -2085,6 +2085,25 @@ export class CameraSwitcher {
 
   // ---- helpers ------------------------------------------------------
 
+  /**
+   * World-space (three.js, post-`worldRoot` rotation) position of the player
+   * this camera is following, written into `out` (a THREE.Vector3); returns
+   * `out`. This point is rotation-INVARIANT: orbiting / turning the view moves
+   * `activeCamera.position` but NOT the player, so `lighting.js` sorts its
+   * nearest-light pool against this instead of the swinging camera — otherwise
+   * torches / lanterns pop on and off as you merely turn the view (torch-
+   * immersion fix, 2026-07-05). Uses the same `_safePlayerPos()` pose the
+   * camera frames against, mapped through `acToThree`, so it is exactly the
+   * frame the lights' world positions live in.
+   */
+  getPlayerWorldPosition(out) {
+    const p = this._safePlayerPos();
+    if (!p) return null;
+    const [x, y, z] = acToThree(p.x, p.y, p.z);
+    out.set(x, y, z);
+    return out;
+  }
+
   _safePlayerPos() {
     // F17 (?rustPose=on) — camera framing comes DIRECTLY from the wasm
     // integrator pose (world-converted), the same single source loop.js
