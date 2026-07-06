@@ -37,7 +37,26 @@ import { AtmosphereParameters } from '@takram/three-atmosphere';
 // W3 (2026-05-29): the weather-state UPDATE (updateFromDayGroup /
 // weatherForState) moved to loop.js::tickWeatherState (clouds-independent).
 // This module only READS the shared state for the opt-in cloud-layer config.
-import { getWeatherState as wxGetState } from './weather_state.js';
+import { getWeatherState as wxGetState, getWeatherRevision } from './weather_state.js';
+
+// Auto-apply weather → cloud layers on weather change (default ON;
+// `?cloudWeather=off` keeps takram's default layers — escape hatch pending the
+// 1070 look-pass on the weather-driven config). Cached; read once.
+let _cloudWeatherAutoCache;
+function readCloudWeatherAutoFlag() {
+  if (_cloudWeatherAutoCache !== undefined) return _cloudWeatherAutoCache;
+  try {
+    if (typeof window === 'undefined' || !window.location?.search) {
+      _cloudWeatherAutoCache = true;
+    } else {
+      const v = new URLSearchParams(window.location.search).get('cloudWeather');
+      _cloudWeatherAutoCache = !(typeof v === 'string' && v.toLowerCase() === 'off');
+    }
+  } catch (_) {
+    _cloudWeatherAutoCache = true;
+  }
+  return _cloudWeatherAutoCache;
+}
 
 /**
  * @typedef {Object} SkyState
@@ -195,14 +214,23 @@ export class CloudVolume {
 
     this._lastState = state;
 
-    // Clouds-E.3 / W3 (2026-05-29) — the WMO-anchored weather-state update
-    // (`weatherForState` → `updateFromDayGroup`) MOVED to the clouds-
-    // independent per-frame hook `loop.js::tickWeatherState` so weather
-    // refreshes on the DEFAULT path (not only when `?clouds=on`). Calling
-    // it here too would double-drive the state every frame clouds are on,
-    // so this tick no longer touches weather_state. The cloud LAYER config
-    // (`_applyWeatherToCloudLayers`) stays opt-in via
-    // `window.__applyCloudWeather()` and still reads the shared state.
+    // Clouds-E.3 / W3 — the weather STATE update (`weatherForState` →
+    // `updateFromDayGroup`) lives in `loop.js::tickWeatherState` (default path,
+    // every frame); driving it here too would double-drive it, so we don't.
+    // But we DO auto-apply the cloud LAYER config when the weather CHANGES, so
+    // the sky actually tracks the weather in normal play instead of only when
+    // `window.__applyCloudWeather()` is called from the console. `getWeather
+    // Revision()` bumps only on a real change (T/Td/storm/étage band), so this
+    // re-applies on DayGroup transitions + `__setWeather` — never per-frame.
+    // `?cloudWeather=off` keeps takram's default layers; manual
+    // `__applyCloudWeather()` still forces a re-apply.
+    if (readCloudWeatherAutoFlag()) {
+      const rev = getWeatherRevision();
+      if (rev !== this._lastWeatherRev) {
+        this._lastWeatherRev = rev;
+        this._applyWeatherToCloudLayers();
+      }
+    }
 
     // Cloud-shadow push to terrain moved to CloudOverlay.preRender so
     // it runs AFTER composer.render fills the cascade matrices for
@@ -279,7 +307,18 @@ export class CloudVolume {
     // Coverage stays near takram's 0.3 default. Humidity nudges in
     // a narrow visual-quality-preserving band.
     const spread = Math.max(0, w.temperature_C - w.dewpoint_C);
-    const coverage = THREE.MathUtils.clamp(0.25 + (10 - spread) * 0.01, 0.2, 0.4);
+    let coverage = THREE.MathUtils.clamp(0.25 + (10 - spread) * 0.01, 0.2, 0.4);
+    // Storms are heavily overcast. A saturated storm has spread≈0, so the
+    // formula above already pins it at the 0.4 fair-weather ceiling — lift it
+    // well past that so the sky reads dense/brooding around the Cb tower.
+    // `coverage` is GLOBAL (scales all 4 layers), so the low cumulus deck
+    // fills in too. NOT 1.0 — a solid ceiling erases the towering structure;
+    // ~0.7 keeps the drama. EYE-TEST CONSTANT (1070, batched with the Cb
+    // density). If the 0.4→0.7 jump pops on storm onset, that's for the
+    // weather-transition smoother, not this target.
+    if (w.is_storm) {
+      coverage = 0.7;
+    }
 
     // R: low cumulus. Base = max(LCL, 600m) so we never drop below the
     // visually-tuned default. height stays default 650m. Density and
@@ -308,18 +347,44 @@ export class CloudVolume {
     layers[1].shapeAlteringBias = 0.35;
     layers[1].coverageFilterWidth = 0.6;
 
-    // B: altocumulus, lower-middle étage (~3 km), water-droplet patches.
-    // Sits well BELOW cirrus so they read as separate layers in the
-    // sky. shapeAmount 0.4 + low density for thin texture.
+    // B slot: altocumulus in drier air — OR low stratus fractus (ragged
+    // "scud") when the air is humid / the LCL is low. Only 4 layers exist and
+    // the a-slot is the cumulus/Cb, so fractus borrows the altocumulus slot;
+    // a genuinely humid low-stratus sky hides the mid étage anyway, so it's
+    // the right one to lend. The switch happens only across a humidity
+    // threshold — and `spread` is piecewise-constant per DayGroup, so it
+    // changes at most at DayGroup boundaries (a smoother altitude morph is a
+    // refinement if the transition ever pops on the 1070).
+    const FRACTUS_SPREAD_C = 3.5;               // T−Td below this → humid, scud forms
     layers[2].channel = 'b';
-    layers[2].altitude = e.middle.min + (e.middle.max - e.middle.min) * 0.25;
-    layers[2].height = 800;
-    layers[2].densityScale = 0.005;
-    layers[2].shapeAmount = 0.4;
-    layers[2].shapeDetailAmount = 0;
-    layers[2].weatherExponent = 1.0;
-    layers[2].shapeAlteringBias = 0.35;
-    layers[2].coverageFilterWidth = 0.5;
+    if (spread < FRACTUS_SPREAD_C) {
+      // Low stratus fractus — takram's ground-fog recipe adapted: base hugs
+      // the ground WELL below the cumulus base (scud lives in the moist
+      // sub-cloud layer), thin soft density (≤0.05 ceiling), no shape detail
+      // (wispy sheet, not billows), wide coverage filter (broken ragged
+      // edges). Density scales with how saturated the air is.
+      const humid01 = THREE.MathUtils.clamp((FRACTUS_SPREAD_C - spread) / FRACTUS_SPREAD_C, 0, 1);
+      layers[2].altitude = Math.max(120, w.lcl_m * 0.4);
+      layers[2].height = 350;
+      layers[2].densityScale = THREE.MathUtils.lerp(0.015, 0.045, humid01);
+      layers[2].shapeAmount = 0.35;
+      layers[2].shapeDetailAmount = 0;
+      layers[2].weatherExponent = 1.0;
+      layers[2].shapeAlteringBias = 0.5;
+      layers[2].coverageFilterWidth = 1.0;
+    } else {
+      // Altocumulus, lower-middle étage (~3 km), water-droplet patches. Sits
+      // well BELOW cirrus so they read as separate layers. shapeAmount 0.4 +
+      // low density for thin texture.
+      layers[2].altitude = e.middle.min + (e.middle.max - e.middle.min) * 0.25;
+      layers[2].height = 800;
+      layers[2].densityScale = 0.005;
+      layers[2].shapeAmount = 0.4;
+      layers[2].shapeDetailAmount = 0;
+      layers[2].weatherExponent = 1.0;
+      layers[2].shapeAlteringBias = 0.35;
+      layers[2].coverageFilterWidth = 0.5;
+    }
 
     // A: cirrus — TRUE high-étage, ice crystals. Place mid-way through
     // the high étage (~9 km mid-lat) so it's clearly above altocumulus
@@ -327,9 +392,22 @@ export class CloudVolume {
     // cumulonimbus convective column.
     layers[3].channel = 'a';
     if (w.is_storm) {
-      layers[3].altitude = e.low.min + 600;
-      layers[3].height = e.high.max - e.low.min - 600;
-      layers[3].densityScale = 0.35;
+      // Cumulonimbus — a genuinely tall convective tower: base at the
+      // LCL-aware cumulus base (low étage), anvil reaching mid-way into the
+      // high étage (~9-10 km mid-lat). It STAYS tall for drama, but density
+      // sits at the soft-alpha ceiling (0.05 — the probe finding at the top
+      // of this method: "densityScale > 0.05 kills soft alpha") instead of
+      // 0.35. Optical depth is density × height, so the old 0.35 over a
+      // full-troposphere (~12 km) column was ~4300 density·m — ~33× a
+      // fair-weather cumulus (0.2 × 650) — which rendered as one opaque,
+      // edge-hard, sky-filling slab. At 0.05 over ~8.5 km the tower is
+      // ~3-4× a cumulus: a dense towering mass with soft edges, not a wall.
+      // (Want a darker core? push density up, but per the probe that hardens
+      // ALL edges, not just the core — verify that trade on the 1070.)
+      const cbTop = e.high.min + (e.high.max - e.high.min) * 0.5;
+      layers[3].altitude = cumulusBase;
+      layers[3].height = Math.max(3000, cbTop - cumulusBase);
+      layers[3].densityScale = 0.05;
       layers[3].shapeAmount = 1.0;
       layers[3].shapeDetailAmount = 1.0;
       layers[3].weatherExponent = 1.2;
@@ -346,8 +424,31 @@ export class CloudVolume {
       layers[3].coverageFilterWidth = 0.4;
     }
 
-    if (this.effect.clouds && 'coverage' in this.effect.clouds) {
-      this.effect.clouds.coverage = coverage;
+    // Coverage is a TOP-LEVEL CloudsEffect property (`this.effect.coverage`),
+    // NOT on the `this.effect.clouds` material-uniform proxy. The old
+    // `'coverage' in this.effect.clouds` guard was ALWAYS false, so coverage
+    // (the humidity base AND the storm bump) silently never applied — the
+    // clouds sat at takram's 0.3 default regardless of weather. Write the real
+    // property. (Verified in-browser 2026-07-06: `eff.clouds.coverage` is
+    // undefined; `eff.coverage` is the live number backing the uniform.)
+    if (typeof this.effect.coverage === 'number') {
+      this.effect.coverage = coverage;
+    }
+
+    // Job B — cheap ground haze (takram's built-in `haze`: sparse fog near the
+    // ground, near-free). The define is already on via the quality preset, but
+    // it sits at the near-invisible 3e-5 default and nothing modulates it.
+    // Ensure it's on (idempotent — one recompile at most, then a no-op), then
+    // drive its density by humidity: takram's subtle 3e-5 in dry air up to ~10×
+    // in saturated air for a visible brooding ground haze. This is what makes
+    // haze "denser in some areas" as the player moves through DayGroups /
+    // latitudes (the weather state is DayGroup+latitude-driven, not per-LB, so
+    // the variation is temporal/regional, not per-landblock). hazeExponent
+    // (vertical falloff) stays at takram's default. EYE-TEST CONSTANTS (1070).
+    if (this.effect.haze !== true) this.effect.haze = true;
+    const humidHaze01 = THREE.MathUtils.clamp((6 - spread) / 6, 0, 1);
+    if (this.effect.clouds && 'hazeDensityScale' in this.effect.clouds) {
+      this.effect.clouds.hazeDensityScale = THREE.MathUtils.lerp(3e-5, 3e-4, humidHaze01);
     }
   }
 

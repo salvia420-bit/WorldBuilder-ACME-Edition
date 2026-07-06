@@ -146,9 +146,38 @@ export function latLonFromWorld(worldX, worldZ) {
  * Recompute derived fields (LCL, étage ranges) from current temperature,
  * dewpoint, and latitude. Called automatically after any mutator.
  */
+// Cloud-config change revision — bumped by recompute() ONLY when a field that
+// `_applyWeatherToCloudLayers` reads actually changes, so cloud_volume can
+// re-apply the layer config on change rather than every frame. Zero-alloc
+// scalar compares (recompute runs per-frame via updateFromPosition/DayGroup).
+let _cloudConfigRevision = 0;
+let _sigT = NaN, _sigTd = NaN, _sigStorm = -1, _sigEtageHigh = NaN;
+
 function recompute() {
   state.lcl_m = lclMeters(state.temperature_C, state.dewpoint_C);
   state.etage_m = etageRanges(state.latitude_deg);
+  // etageRanges is banded (25°/60°), so etage_m.high.max only shifts at a
+  // latitude-band boundary — signing on it (not raw latitude) means walking
+  // within a band doesn't bump the revision every frame.
+  const storm = state.is_storm ? 1 : 0;
+  if (state.temperature_C !== _sigT || state.dewpoint_C !== _sigTd ||
+      storm !== _sigStorm || state.etage_m.high.max !== _sigEtageHigh) {
+    _sigT = state.temperature_C;
+    _sigTd = state.dewpoint_C;
+    _sigStorm = storm;
+    _sigEtageHigh = state.etage_m.high.max;
+    _cloudConfigRevision++;
+  }
+}
+
+/**
+ * Monotonic revision that increments whenever a cloud-layer-config-relevant
+ * weather field (T, Td, is_storm, or the latitude étage band) changes. Lets
+ * cloud_volume re-apply `_applyWeatherToCloudLayers` only on change (DayGroup
+ * transitions, storm onset, __setWeather). Zero-alloc.
+ */
+export function getWeatherRevision() {
+  return _cloudConfigRevision;
 }
 
 /**

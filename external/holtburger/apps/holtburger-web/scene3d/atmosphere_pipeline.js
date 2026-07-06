@@ -33,6 +33,8 @@ import * as THREE from "three";
 import {
   BloomEffect,
   ClearPass,
+  Effect,
+  EffectAttribute,
   EffectComposer,
   EffectPass,
   Pass,
@@ -88,6 +90,123 @@ class CameraLayerMaskPass extends Pass {
   }
 }
 
+// Job A — horizon edge-dissolve band, in AC metres of eye-forward distance.
+// The terrain stream ring is ~radius-6 (6 LB × 192 m ≈ 1152 m) so geometry is
+// fully dissolved into the sky by END; START keeps the inner ~4-LB view crisp
+// (the user wants to still "see far", just not the hard ring edge). Tunable
+// live on the 1070 via `window.__horizonFade.{start,end}` (no rebuild).
+const HORIZON_DISSOLVE_START_M = 820;
+const HORIZON_DISSOLVE_END_M = 1150;
+
+// pmndrs Effect fragment. Runs inside fxPass in HDR (before ToneMapping) so the
+// blend is in the same radiance space as the captured sky. Depth arrives RAW
+// from the logarithmicDepthBuffer (index.js:768) — decoded to metres here;
+// treating it as linear would place the band at a wildly wrong distance.
+const HORIZON_DISSOLVE_FRAG = /* glsl */ `
+uniform sampler2D hbSkyBuffer;
+uniform float hbDissolveStart;
+uniform float hbDissolveEnd;
+uniform float hbLogDepthFC;
+uniform float hbEnabled;
+
+void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
+  // Gated OFF indoors (set by preFrameSkySync): the sky pass is disabled and
+  // the world pass clears colour, so there is no visible sky to dissolve into.
+  if (hbEnabled < 0.5) {
+    outputColor = inputColor;
+    return;
+  }
+  // Cleared-far / sky pixels (depth == 1.0 under the log buffer) are left
+  // EXACTLY as the aerial-perspective pass produced them. We only dissolve
+  // real geometry into the sky behind it, never re-touch the sky itself.
+  if (depth >= 0.9999) {
+    outputColor = inputColor;
+    return;
+  }
+  // Decode three.js logarithmic depth → eye-forward distance (metres):
+  // forward is gl_FragDepth = log2(1.0 + (-viewZ)) * logDepthBufFC * 0.5, so
+  // the inverse recovers (-viewZ) directly. Verified: depth==1.0 ⇒ dist==far.
+  float dist = exp2(2.0 * depth / hbLogDepthFC) - 1.0;
+  float f = smoothstep(hbDissolveStart, hbDissolveEnd, dist);
+  if (f <= 0.0) {
+    outputColor = inputColor;
+    return;
+  }
+  // hbSkyBuffer holds the physical sky rendered behind everything, so the
+  // sample at this uv IS the sky in this pixel's exact view direction —
+  // seam-free, no fog colour, time-of-day-correct for free.
+  vec3 skyColor = texture2D(hbSkyBuffer, uv).rgb;
+  outputColor = vec4(mix(inputColor.rgb, skyColor, f), inputColor.a);
+}
+`;
+
+/**
+ * Job A — horizon edge-dissolve (2026-07-06). Fades distant geometry into the
+ * captured physical takram sky so the terrain stream ring stops silhouetting
+ * against the horizon ("walking toward the ocean"). NOT AC fog: there is no
+ * authored fog colour — the dissolve target is the real sky. `?horizonFade=off`
+ * removes the effect (and its capture pass) entirely.
+ */
+class HorizonDissolveEffect extends Effect {
+  constructor({ skyTexture, cameraFar, start, end }) {
+    super("HorizonDissolveEffect", HORIZON_DISSOLVE_FRAG, {
+      attributes: EffectAttribute.DEPTH,
+      uniforms: new Map([
+        ["hbSkyBuffer", new THREE.Uniform(skyTexture ?? null)],
+        ["hbDissolveStart", new THREE.Uniform(start)],
+        ["hbDissolveEnd", new THREE.Uniform(end)],
+        ["hbLogDepthFC", new THREE.Uniform(2.0 / Math.log2(cameraFar + 1.0))],
+        ["hbEnabled", new THREE.Uniform(1.0)],
+      ]),
+    });
+  }
+  setCameraFar(far) {
+    this.uniforms.get("hbLogDepthFC").value = 2.0 / Math.log2(far + 1.0);
+  }
+  setEnabled(on) {
+    this.uniforms.get("hbEnabled").value = on ? 1.0 : 0.0;
+  }
+  get start() { return this.uniforms.get("hbDissolveStart").value; }
+  set start(v) { this.uniforms.get("hbDissolveStart").value = v; }
+  get end() { return this.uniforms.get("hbDissolveEnd").value; }
+  set end(v) { this.uniforms.get("hbDissolveEnd").value = v; }
+}
+
+/**
+ * Re-renders the (single fullscreen-plane) sky scene into a private HDR target
+ * so HorizonDissolveEffect can sample the sky behind opaque geometry.
+ * needsSwap=false — it never touches the composer's ping-pong buffers, so it
+ * is robust against buffer-swap timing (no CopyPass assumptions). Cost is one
+ * extra fullscreen sky draw; negligible, and we have GPU headroom. `setSize`
+ * is driven automatically by `composer.setSize`; `dispose` by the composer's
+ * pass sweep.
+ */
+class SkyCapturePass extends Pass {
+  constructor(skyScene, skyCamera, renderTarget) {
+    super("SkyCapturePass");
+    this.needsSwap = false;
+    this.skyScene = skyScene;
+    this.skyCamera = skyCamera;
+    this.renderTarget = renderTarget;
+  }
+  render(renderer, _inputBuffer, _outputBuffer) {
+    if (!this.skyScene || !this.skyCamera || !this.renderTarget) return;
+    const prevTarget = renderer.getRenderTarget();
+    const prevAutoClear = renderer.autoClear;
+    renderer.setRenderTarget(this.renderTarget);
+    renderer.autoClear = true;
+    renderer.render(this.skyScene, this.skyCamera);
+    renderer.autoClear = prevAutoClear;
+    renderer.setRenderTarget(prevTarget);
+  }
+  setSize(width, height) {
+    this.renderTarget?.setSize(width, height);
+  }
+  dispose() {
+    this.renderTarget?.dispose();
+  }
+}
+
 /**
  * Construct an atmosphere-enabled composer over the existing renderer.
  *
@@ -122,6 +241,21 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   if (!atmosphereRuntime) {
     throw new Error("createAtmospherePipeline: atmosphereRuntime is required");
   }
+
+  // Job A — horizon edge-dissolve toggle. Default ON; `?horizonFade=off`
+  // disables it (composer pass list + fxPass become byte-identical to the
+  // pre-feature pipeline). `opts.horizonFade` (boolean) overrides the URL so
+  // headless tests can force either state.
+  const horizonFadeEnabled = (() => {
+    if (typeof opts?.horizonFade === "boolean") return opts.horizonFade;
+    try {
+      if (typeof window === "undefined" || !window.location?.search) return true;
+      const v = new URLSearchParams(window.location.search).get("horizonFade");
+      return !(typeof v === "string" && v.toLowerCase() === "off");
+    } catch (_) {
+      return true;
+    }
+  })();
 
   const atm = atmosphereParams ?? AtmosphereParameters.DEFAULT;
   const size = renderer.getSize(new THREE.Vector2());
@@ -179,6 +313,29 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   if (skyScene && skyCamera) {
     skyRenderPass = new RenderPass(skyScene, skyCamera);
     composer.addPass(skyRenderPass);
+  }
+
+  // Job A — capture the physical sky the instant after it is drawn and BEFORE
+  // the world pass paints over it, so HorizonDissolveEffect (built below, runs
+  // in fxPass) can fade distant geometry back into the exact sky behind it.
+  // Only created when enabled → pass list is byte-identical when `?horizonFade=off`.
+  let skyDissolveRT = null;
+  let skyCapturePass = null;
+  let horizonDissolve = null;
+  if (horizonFadeEnabled && skyScene && skyCamera) {
+    skyDissolveRT = new THREE.WebGLRenderTarget(width, height, {
+      type: THREE.HalfFloatType,
+      depthBuffer: true,
+      stencilBuffer: false,
+    });
+    skyCapturePass = new SkyCapturePass(skyScene, skyCamera, skyDissolveRT);
+    composer.addPass(skyCapturePass);
+    horizonDissolve = new HorizonDissolveEffect({
+      skyTexture: skyDissolveRT.texture,
+      cameraFar: camera.far,
+      start: HORIZON_DISSOLVE_START_M,
+      end: HORIZON_DISSOLVE_END_M,
+    });
   }
 
   // Phase 5 PView render-order fix (2026-05-25) — pre-world layer mask.
@@ -356,15 +513,32 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // slots without leaving holes in the pass.
   const fxPass = new EffectPass(
     camera,
-    ...[aerialPerspective, lensFlare, bloom, vignette, toneMapping, dithering].filter(Boolean),
+    // horizonDissolve sits right after aerialPerspective and before
+    // lensFlare/bloom/vignette/toneMapping so the terrain→sky blend happens
+    // in HDR (matching the captured sky's radiance space); null when
+    // `?horizonFade=off` and dropped by filter(Boolean).
+    ...[aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, dithering].filter(Boolean),
   );
   composer.addPass(fxPass);
+
+  // Live tuning handle for the 1070 eye-test — adjust the band without a
+  // rebuild, e.g. `__horizonFade.start = 700; __horizonFade.end = 1050`.
+  if (typeof window !== "undefined" && horizonDissolve) {
+    window.__horizonFade = {
+      get start() { return horizonDissolve.start; },
+      set start(v) { horizonDissolve.start = v; },
+      get end() { return horizonDissolve.end; },
+      set end(v) { horizonDissolve.end = v; },
+    };
+  }
 
   let activeCamera = camera;
 
   return {
     composer,
     aerialPerspective,
+    horizonDissolve,
+    skyCapturePass,
     lensFlare,
     bloom,
     vignette,
@@ -417,6 +591,13 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
           skyDome.syncSkyCamera(mainCamera);
         }
       }
+
+      // Job A — the horizon dissolve only makes sense when the sky is visible.
+      // Indoors (sky pass off, world clears colour) skip the capture and no-op
+      // the effect so distant indoor geometry is never tinted sky-colour.
+      const skyVisible = !!skyDome && !isIndoor;
+      if (skyCapturePass) skyCapturePass.enabled = skyVisible;
+      if (horizonDissolve) horizonDissolve.setEnabled(skyVisible);
 
       // World pass clear flags. The world pass is the first GEOMETRY pass, so
       // it always starts from a FRESH depth buffer; it keeps the COLOR the sky
