@@ -7,11 +7,6 @@ import {
 import { getAimLevelForVelocity, getAimLevelForBallisticArc } from "../ui/ac_aim_level_for_velocity.js";
 import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
 import { classifySpell } from "../ui/ac_spell_shape.js";
-import {
-  createPursuitMonitor,
-  createTurnMonitor,
-  readWasmPursuitFlag,
-} from "./pursuit_monitor.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -32,35 +27,19 @@ const PEACE_USE_DOUBLE_CLICK_MS = 400;
 // a side/behind target before the missile shot). JS, live on reload. Was the
 // default-OFF `?missileFaceTarget=on` gate.
 const MISSILE_FACE_TARGET = true;
-// (2026-07-02) — melee twin of MISSILE_FACE_TARGET: an in-range melee swing
-// turns the LOCAL player to face the target BEFORE firing. Retail rotates
-// the attacker before the swing (ACE Player_Melee.cs:181-189 `Rotate(target)`
-// when `!IsFacing`; decomp `MoveToManager::TurnToObject_Internal`
-// acclient.c:345859 re-faces on every update) — the missile path already
-// does this via the same validated turnToFaceThenAct mechanism; melee fired
-// blind. INTEGRATED always-on (HUD-adjacent facing fix, same treatment as
-// the eye-test-passed missile const).
-const MELEE_FACE_TARGET_SELF = true;
 // Cap the turn-to-face pre-step so a bad bearing can't stall the shot.
 const FACE_TURN_TIMEOUT_MS = 800;
 
-// (2026-07-02) — stay-on-target re-engage cadence. Retail keeps a fight
-// glued via StickyManager (0.30 gap, re-faced EVERY frame, 1 s
-// self-refreshing timeout, acclient.c:388519-388691) + MoveToManager
-// re-approach on every target update (HandleUpdateTarget,
-// acclient.c:346051). Our client fired ONE charge then dropped the
-// engagement — a kiting mob left ACE auto-repeating at a target the player
-// never re-closed ("Out of range!" spam). The sticky watch samples the live
-// target distance and RE-ENGAGES the existing charge machinery (wasm
-// MoveToManager under ?wasmPursuit, legacy chargeTick otherwise) when the
-// target moves out of range mid-engagement. Ends on stance exit, deselect,
-// target death, or a manual movement key (retail: raw input cancels MoveTo,
-// acclient.c:339240).
+// Sticky-melee re-engage threshold: the StickyManager follows a moving target
+// on its own, so the JS watch only re-engages if the mob is past this range
+// (a sticky timeout on a stationary target that then moved). The original
+// 2.5 m — NOT re-tuned. Inside ACE's melee reach (MeleeDistance 0.6 /
+// StickyDistance 4.0, Player_Melee.cs:166-174).
+const MELEE_RANGE_M = 2.5;
+// Stay-on-target sampling cadence + hysteresis (2 consecutive out-of-range
+// samples before re-engaging, so ACE's own in-range auto-repeat isn't fought
+// at the boundary).
 const STICKY_WATCH_INTERVAL_MS = 250;
-// Hysteresis so ACE's own in-range auto-repeat isn't fought at the range
-// boundary: re-engage only after 2 consecutive out-of-range samples ~15%
-// beyond the engage range.
-const STICKY_WATCH_RANGE_SLACK = 1.15;
 const STICKY_WATCH_OUT_SAMPLES = 2;
 
 // F8-5 — turn the local caster to face the target before a spell cast
@@ -73,21 +52,6 @@ const CAST_FACE_TARGET = (() => {
   try {
     return typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("castFaceTarget") !== "off";
-  } catch { return false; }
-})();
-
-// F6-5 — 3D / cylinder-aware melee range gate. Default-OFF (touches the
-// combat motion pipeline: changes when the client auto-pursue engages vs
-// when an immediate in-place swing fires). When ON, the melee reach check
-// is a cylinder distance instead of a flat horizontal circle, so a target
-// on a ledge / raised platform — a Z offset the flat 2.5m check was blind
-// to — reads as out of range and the existing charge engages (run cycle +
-// steering) instead of firing a "phantom" swing that ACE then services with
-// an invisible force-position walk. (?melee3dRange=on)
-const MELEE_3D_RANGE = (() => {
-  try {
-    return typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("melee3dRange") !== "off";
   } catch { return false; }
 })();
 
@@ -108,27 +72,6 @@ const SERVER_SWING = (() => {
   } catch { return false; }
 })();
 
-// A14-I2 (W3+ S10) — wasm pursuit / turn-to intents. Default-OFF.
-// When ON (and the wasm exports exist — typeof-guarded, F18-2 spirit),
-// the charge pursuit + turn-to-face steering moves WASM-side
-// (`pursueEntity`/`turnToEntity` → the A3-D3 MoveToManager driver):
-// JS keeps only a status monitor rAF (scene3d/pursuit_monitor.js) and
-// NEVER calls `setMovementInput` on the pursuit path — the (0,0,0)
-// charge-end stomp sites are bypassed and a held WASD drive is
-// restored wasm-side (the charge-end WASD-stomp fix). Arrival still
-// invokes the SAME `charge.fireAttack` closure with the windup release
-// first, identical order to the legacy arrival — F6-6 (live lockout
-// read inside `fireOnce`) preserved verbatim. Requires a wasm build
-// with `USE_MOVETO_DRIVER` flipped (compose rule, docs/url-flags.md);
-// on a driver-off build the intent fast-fails (status 3) and the
-// monitor cancels without firing. (?wasmPursuit=on)
-const WASM_PURSUIT = (() => {
-  try {
-    return typeof window !== "undefined" &&
-      readWasmPursuitFlag(window.location.search);
-  } catch { return false; }
-})();
-
 // Fallback AttackType for the CombatManeuverTable lookup when the
 // per-weapon inference (Wave 1 Phase 3, 2026-05-26) returns
 // `ATTACK_TYPE.Undef` — e.g. shield-only, ranged before Phase 6
@@ -146,12 +89,6 @@ const ATTACK_TYPE_SLASH = ATTACK_TYPE.Slash;
 // Promise map).
 try { loadCombatManeuverTable(); } catch (_) {}
 
-// Phase I.1 — charge-attack tuning. Retail melee range is ~2.5m, missile
-// range varies by weapon (we approximate at 25m). These constants
-// drive both the "in range now" gate and the auto-pursue stop condition.
-const MELEE_RANGE_M = 2.5;
-const MISSILE_RANGE_M = 25.0;
-const MAX_CHARGE_DURATION_MS = 10_000; // safety net so we don't pursue forever
 
 // Wave 7 / Phase 19 (2026-05-26) — default projectile speed for the
 // gravity-arc aim predictor. Per ACE's
@@ -199,25 +136,7 @@ function horizontalDistance(a, b) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-// F6-5 — melee reach as a cylinder distance. Within a humanoid-height
-// vertical band the horizontal distance governs (normal flat combat is
-// unchanged); beyond it the vertical excess folds in Pythagorean-style so a
-// raised/sunken target is correctly judged far. Full radius subtraction
-// (reach a large monster at its cylinder edge) needs the per-entity physics
-// radius from the DAT, which isn't surfaced to JS yet — deferred, same as
-// F14-6's per-entity objcell_id. Only consulted under `?melee3dRange=on`.
-const MELEE_VERTICAL_REACH_M = 2.0; // ~one humanoid height of vertical slack
-function meleeCylinderDistance(a, b) {
-  const horiz = horizontalDistance(a, b);
-  const vExcess = Math.max(0, Math.abs(a.z - b.z) - MELEE_VERTICAL_REACH_M);
-  return vExcess > 0 ? Math.sqrt(horiz * horiz + vExcess * vExcess) : horiz;
-}
-// The metric the melee gate + charge use: cylinder when the flag is on,
-// flat horizontal (byte-identical to pre-F6-5) when off.
-function meleeGateDistance(a, b) {
-  return MELEE_3D_RANGE ? meleeCylinderDistance(a, b) : horizontalDistance(a, b);
-}
-
+// Fold an angle into (-π, π] so a turn delta picks the short way round.
 function normalizeAngle(a) {
   while (a > Math.PI) a -= 2 * Math.PI;
   while (a < -Math.PI) a += 2 * Math.PI;
@@ -294,10 +213,6 @@ export function setupClickPicking({
   raycaster.layers.enable(1);
   const ndc = new THREE.Vector2();
 
-  // Phase I.1 — charge-attack state machine. One pursuit in flight at
-  // a time; clicking a different target replaces the current charge.
-  let charge = null; // { guid, range, fireAttack, startMs, rafId }
-
   // F17-2 — last peace-mode click, for double-click-to-Use detection.
   let lastPeaceClick = { guid: 0, t: 0 };
 
@@ -317,53 +232,18 @@ export function setupClickPicking({
   // alternation path at `CombatManeuverTable.cs:90-102`.
   let prevMeleeMotion = 0;
 
-  // Wave 4 / Phase 4.2 (2026-05-26) — release any in-flight windup
-  // hold on the local player. Called from cancelCharge and on
-  // successful arrival-then-fire so the held swing clip can play out
-  // to its release frames (peak → strike → recovery).
-  function _releaseLocalWindupHold() {
-    try {
-      const em = liveScene3d?.entityManager;
-      const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
-      if (em && localGuid !== 0 && typeof em.releaseSwingHold === "function") {
-        em.releaseSwingHold(localGuid);
-      }
-    } catch (_) {}
-  }
-
-  // A14-I2 — effective-on check for the wasm pursuit path: the URL
-  // flag AND every load-bearing export (a stale pkg/ soft-degrades to
-  // the legacy chargeTick/turnToFaceThenAct, F18-2 spirit).
-  function wasmPursuitReady() {
-    return WASM_PURSUIT &&
-      typeof sessionHandle.pursueEntity === "function" &&
-      typeof sessionHandle.turnToEntity === "function" &&
-      typeof sessionHandle.cancelPursuit === "function" &&
-      typeof sessionHandle.pursuitStatus === "function";
-  }
-
-  function cancelCharge() {
-    if (!charge) return;
-    if (charge.rafId) cancelAnimationFrame(charge.rafId);
-    if (charge.wasmPursuit) {
-      // A14-I2 — abort the wasm-side pursuit instead of the legacy
-      // (0,0,0) stomp; a held WASD drive is restored wasm-side.
-      try { sessionHandle.cancelPursuit?.(); } catch {}
-    } else {
-      try {
-        sessionHandle.setMovementInput?.(0, 0, 0, false);
-      } catch {}
-    }
-    // Wave 4 / Phase 4.2 — release the windup if the charge is being
-    // cancelled (target died mid-pursuit, stance flip, key abort).
-    // Otherwise the held arm pose lingers until the next swing fires.
-    _releaseLocalWindupHold();
-    charge = null;
-  }
-
-  // (2026-07-02) — stay-on-target watch (see the STICKY_WATCH_* consts).
-  // One watch per engagement; a new fire dispatch replaces it.
-  let stickyWatch = null; // { guid, range, engage, cylinderReach, outCount, timer }
+  // ─── "Sticky melee" — the LOCAL StickyManager (retail StickTo) ──────────
+  // Melee combat IS the StickyManager. A melee attack engages it on the target
+  // (`stickToEntity` → `stick_local_player_to`, retail
+  // `PositionManager::StickTo` → `StickyManager`, acclient.c:388519); the
+  // per-frame `step_local_sticky` (system.rs) then runs the player UP to the
+  // target (closing the 0.30 edge gap) AND holds + re-faces it every frame —
+  // approach + stick as ONE thing, coordinate-correct (target + self both
+  // landblock-local → `global_coords()` consistent). The client just engages
+  // the stick and sends the attack once; ACE auto-repeats the swing when in
+  // range. Needs the target resident in the spatial scene (worldLifecycle
+  // default-on). No client MoveToManager / setMovementInput run-up.
+  let stickyWatch = null; // { guid, range, engage, outCount, timer }
 
   function cancelStickyWatch() {
     if (!stickyWatch) return;
@@ -371,54 +251,49 @@ export function setupClickPicking({
     stickyWatch = null;
   }
 
-  function armStickyWatch(guid, range, engage, cylinderReach) {
+  // Release the sticky melee + abort the missile/magic optimistic turn (retail
+  // CancelMoveTo on fresh input / world action, acclient.c:339240). Does NOT
+  // end the sticky watch — combat-abort paths call cancelStickyWatch.
+  function cancelClientMove() {
+    try { sessionHandle.stopStick?.(); } catch {}
+    try { sessionHandle.cancelPursuit?.(); } catch {}
+  }
+
+  // Engage the StickyManager on `guid` — the whole run-up + stick. Idempotent
+  // (re-engaging just refreshes the target). No-op when the export is missing.
+  function stickToTarget(guid) {
+    if (typeof sessionHandle.stickToEntity !== "function") return;
+    try { sessionHandle.stickToEntity(guid >>> 0); } catch (e) {
+      console.warn(`[picking] stickToEntity failed: ${e?.message ?? e}`);
+    }
+  }
+
+  // Stay-on-target net: re-engage the stick if the mob is beyond `range` (e.g.
+  // the sticky's 1 s timeout fired on a stationary target that then moved — the
+  // StickyManager follows a moving target on its own while engaged). Ends on
+  // stance exit, deselect, or target death.
+  function armStickyWatch(guid, range, engage) {
     cancelStickyWatch();
     const g = guid >>> 0;
-    const w = {
-      guid: g,
-      range,
-      engage,
-      cylinderReach: !!cylinderReach,
-      outCount: 0,
-      timer: 0,
-    };
+    const w = { guid: g, range, engage, outCount: 0, timer: 0 };
     w.timer = setInterval(() => {
       if (stickyWatch !== w) { clearInterval(w.timer); return; }
-      // Engagement over: stance left, target swapped/deselected, or the
-      // target despawned (death → KIND_REMOVE). ACE ends its loop on
-      // target death server-side; this is the client mirror.
       const inCombat = !!(isInMeleeStance?.() || isInRangedStance?.());
-      const selected =
-        (liveScene3d.entityManager?.getSelectedTarget?.() ?? 0) >>> 0;
+      const selected = (liveScene3d.entityManager?.getSelectedTarget?.() ?? 0) >>> 0;
       const alive = !!liveScene3d.entityManager?.entityMap?.has?.(g);
-      if (!inCombat || selected !== g || !alive) {
-        cancelStickyWatch();
-        return;
-      }
-      // A pursuit is already closing distance — let it finish.
-      if (charge) { w.outCount = 0; return; }
+      if (!inCombat || selected !== g || !alive) { cancelStickyWatch(); return; }
       const targetAc = entityAcPosition(liveScene3d.entityManager, g);
       const pose = playerWorldPose(sessionHandle);
       if (!targetAc || !pose) return;
-      const dist = w.cylinderReach
-        ? meleeCylinderDistance(targetAc, pose)
-        : horizontalDistance(targetAc, pose);
-      if (dist > w.range * STICKY_WATCH_RANGE_SLACK) {
-        w.outCount += 1;
+      if (horizontalDistance(targetAc, pose) > w.range) {
+        if (++w.outCount >= STICKY_WATCH_OUT_SAMPLES) {
+          w.outCount = 0;
+          try { w.engage(); } catch (e) {
+            console.warn(`[picking] sticky re-engage failed: ${e?.message ?? e}`);
+          }
+        }
       } else {
         w.outCount = 0;
-        return;
-      }
-      if (w.outCount >= STICKY_WATCH_OUT_SAMPLES) {
-        w.outCount = 0;
-        // Re-close + re-face + re-fire through the SAME engage closure the
-        // original dispatch used (wasm MoveToManager under ?wasmPursuit,
-        // legacy chargeTick otherwise). Never submits an attack beyond
-        // range — the charge fires only on arrival (retail closes BEFORE
-        // submitting, so "Out of range!" never fires).
-        try { w.engage(); } catch (e) {
-          console.warn(`[picking] sticky re-engage failed: ${e?.message ?? e}`);
-        }
       }
     }, STICKY_WATCH_INTERVAL_MS);
     stickyWatch = w;
@@ -521,145 +396,12 @@ export function setupClickPicking({
     return isDouble;
   }
 
-  // A14-I2 — flag-on replacement for the steering chargeTick: the wasm
-  // driver steers; JS only polls `pursuitStatus()` through the pure
-  // monitor (scene3d/pursuit_monitor.js). NO `setMovementInput` calls
-  // anywhere on this path. Arrival handler order is IDENTICAL to the
-  // legacy in-range branch: `_releaseLocalWindupHold()` then
-  // `charge.fireAttack()` then clear — `fireAttack`/`fireOnce` are
-  // untouched, so the F6-6 live lockout read happens inside `fireOnce`
-  // at execution time exactly as today.
-  function pursuitMonitorTick() {
-    if (!charge || !charge.monitor) return;
-    let statusRaw = 0;
-    try { statusRaw = sessionHandle.pursuitStatus() >>> 0; } catch {}
-    const result = charge.monitor({
-      statusRaw,
-      elapsedMs: performance.now() - charge.startMs,
-      inCombatStance: !!(isInMeleeStance?.() || isInRangedStance?.()),
-    });
-    if (result.action === "arrive") {
-      _releaseLocalWindupHold();
-      try { charge.fireAttack(); } catch (e) {
-        console.warn(`[picking] charge attack fire failed: ${e?.message ?? e}`);
-      }
-      charge = null;
-      return;
-    }
-    if (result.action === "cancel") {
-      if (result.reason === "timeout") {
-        console.warn("[picking] wasm pursuit timed out");
-      } else if (result.reason === "failed") {
-        console.warn(
-          `[picking] wasm pursuit failed (werror=0x${(result.werror ?? 0).toString(16)})`,
-        );
-      }
-      // For "failed" the wasm side already ended the pursuit; the
-      // cancelPursuit inside cancelCharge is then a harmless no-op
-      // (CancelMoveTo acts only while a movement is active).
-      cancelCharge();
-      return;
-    }
-    if (result.action === "continue") {
-      charge.rafId = requestAnimationFrame(pursuitMonitorTick);
-    }
-  }
-
-  function chargeTick() {
-    if (!charge) return;
-
-    // Safety net — bail after a fixed wall-clock to prevent forever-pursuit.
-    if (performance.now() - charge.startMs > MAX_CHARGE_DURATION_MS) {
-      console.warn("[picking] charge attack timed out");
-      cancelCharge();
-      return;
-    }
-
-    // Abort if user left a combat stance while we were chasing.
-    const inMelee = !!isInMeleeStance?.();
-    const inRanged = !!isInRangedStance?.();
-    if (!inMelee && !inRanged) {
-      cancelCharge();
-      return;
-    }
-
-    // Read target + player positions — both must be in world coords.
-    // `entityAcPosition` returns world coords directly (entities are
-    // stored in AC world frame; see entities.js:420 setPose). The
-    // player pose needs landblock offset added via `playerWorldPose`.
-    const targetAc = entityAcPosition(liveScene3d.entityManager, charge.guid);
-    const pose = playerWorldPose(sessionHandle);
-    if (!targetAc || !pose) {
-      cancelCharge();
-      return;
-    }
-
-    // F6-5 — stop on the cylinder metric for melee charges (so a ledge
-    // target keeps the pursuit running until genuinely in reach), flat
-    // horizontal for missile charges and when `?melee3dRange` is off.
-    const dist = charge.cylinderReach
-      ? meleeCylinderDistance(targetAc, pose)
-      : horizontalDistance(targetAc, pose);
-    if (dist <= charge.range) {
-      // In range — stop, fire attack, clear state.
-      try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
-      // Wave 4 / Phase 4.2 — release the windup hold BEFORE the real
-      // swing fires. The fire path will call `setSwingMotion(...)`
-      // without `holdAtPeak`, which arms a fresh restore timer; the
-      // release flips action.paused=false so the held windup clip's
-      // remaining frames complete naturally as the new fire-time
-      // swing starts. Net result: smooth wind-up → strike →
-      // recovery instead of a snap at the moment of arrival.
-      _releaseLocalWindupHold();
-      try { charge.fireAttack(); } catch (e) {
-        console.warn(`[picking] charge attack fire failed: ${e?.message ?? e}`);
-      }
-      charge = null;
-      return;
-    }
-
-    // Compute compass bearing from player to target — `pose.heading`
-    // is in COMPASS convention (`yaw=0 → +Y north`, `yaw=π/2 → +X east`
-    // per `lib.rs:12706`). For compass bearings, `atan2(dx, dy)` (note
-    // the swap from the math-convention `atan2(dy, dx)`) gives
-    // `0 = north`, `π/2 = east`. Subtracting `pose.heading` then yields
-    // the correct local turn delta.
-    const dx = targetAc.x - pose.x;
-    const dy = targetAc.y - pose.y;
-    const bearing = Math.atan2(dx, dy);
-    const turnDelta = normalizeAngle(bearing - pose.heading);
-    let turn = 0;
-    if (Math.abs(turnDelta) > 0.05) turn = turnDelta > 0 ? 1 : -1;
-    // 2026-05-19 — one-shot debug log on the first tick of each
-    // charge so we can verify the math after the entityAcPosition
-    // coord fix. If `bearing - pose.heading` doesn't produce a
-    // turn that actually faces the player toward `targetAc`, there
-    // may be a `pose.heading` convention mismatch (compass vs math)
-    // that needs a π/2 + sign-flip correction.
-    if (!charge._debugLogged) {
-      charge._debugLogged = true;
-      console.log(
-        `[charge/debug] target=0x${charge.guid.toString(16)} ` +
-        `playerAc=(${pose.x.toFixed(1)}, ${pose.y.toFixed(1)}, ${pose.z.toFixed(1)}) ` +
-        `targetAc=(${targetAc.x.toFixed(1)}, ${targetAc.y.toFixed(1)}, ${targetAc.z.toFixed(1)}) ` +
-        `dist=${dist.toFixed(2)}m range=${charge.range}m ` +
-        `bearing=${bearing.toFixed(3)} heading=${pose.heading?.toFixed?.(3) ?? "?"} ` +
-        `turnDelta=${turnDelta.toFixed(3)} turn=${turn}`
-      );
-    }
-    try {
-      sessionHandle.setMovementInput(1 /* forward */, 0 /* strafe */, turn, true /* run */);
-    } catch {}
-
-    charge.rafId = requestAnimationFrame(chargeTick);
-  }
-
   // F7-3 / F8-5 — turn the local player to face `targetGuid`, then run
-  // `act`. Reuses chargeTick's bearing math but turns IN PLACE (forward=0)
-  // until the heading delta is within ~0.05 rad, mirroring ACE's
-  // rotateTime/Rotate() delay before a missile launch or a spell cast.
-  // No-ops to an immediate `act()` when `enabled` is false, the
-  // target/pose is unresolvable, or we're already on-bearing.
+  // `act` (the optimistic pre-swing/pre-cast facing). The turn is a wasm
+  // MoveToManager TurnToObject (turn-only); no client-side forward drive.
+  // No-ops to an immediate `act()` when `enabled` is false or a manual
+  // movement key is held (raw input owns the drive — retail cancels MoveTo
+  // on raw input, acclient.c:339240).
   // P16-H1 (2026-07-04) — is a manual movement key held right now? Reads
   // the camera dispatcher's published intent (camera.js _dispatchMovement
   // stashes it every tick in both cmdInterp modes; null = orbit/idle).
@@ -686,44 +428,15 @@ export function setupClickPicking({
       act();
       return;
     }
-    // A14-I2 — wasm-side rate-limited TurnToObject (retail case 8)
-    // instead of the JS bang-bang ±1 turn. Monitor-only: status 2/3
-    // OR the legacy FACE_TURN_TIMEOUT_MS (timeout also cancels the
-    // still-running turn) → act(). An unresolvable target fails
-    // wasm-side (status 3 next poll — retail CancelMoveTo on missing
-    // object), which maps to the same act-anyway fallback as legacy.
-    if (wasmPursuitReady()) {
-      try {
-        sessionHandle.turnToEntity(targetGuid >>> 0);
-      } catch {
-        act();
-        return;
-      }
-      const monitor = createTurnMonitor({ timeoutMs: FACE_TURN_TIMEOUT_MS });
-      const startMs = performance.now();
-      const poll = () => {
-        let statusRaw = 0;
-        try { statusRaw = sessionHandle.pursuitStatus() >>> 0; } catch {}
-        const result = monitor({
-          statusRaw,
-          elapsedMs: performance.now() - startMs,
-        });
-        if (result.action === "act") {
-          if (result.cancel) {
-            try { sessionHandle.cancelPursuit?.(); } catch {}
-          }
-          act();
-          return;
-        }
-        if (result.action === "continue") requestAnimationFrame(poll);
-      };
-      poll();
-      return;
-    }
-    if (typeof sessionHandle.setMovementInput !== "function") {
-      act();
-      return;
-    }
+    // Turn the local player to face the target FIRST, THEN act (fire/cast).
+    // Uses the PROVEN manual drive (setMovementInput turn — the same path
+    // keyboard turning uses, and the F7-3/F8-5 missile/cast face-target that
+    // passed the 2026-06-11 eye-test). Turns IN PLACE (forward=0) until the
+    // bearing is within ~0.05 rad or FACE_TURN_TIMEOUT_MS elapses, so a bad
+    // bearing can't stall the shot. (The wasm TurnToObject path was tried but,
+    // like pursueEntity, didn't reliably drive the local rig — the input path
+    // is the one that actually rotates.)
+    if (typeof sessionHandle.setMovementInput !== "function") { act(); return; }
     const startMs = performance.now();
     const step = () => {
       const targetAc = entityAcPosition(liveScene3d.entityManager, targetGuid);
@@ -735,96 +448,17 @@ export function setupClickPicking({
       }
       const dx = targetAc.x - pose.x;
       const dy = targetAc.y - pose.y;
-      const bearing = Math.atan2(dx, dy);
-      const turnDelta = normalizeAngle(bearing - pose.heading);
+      const turnDelta = normalizeAngle(Math.atan2(dx, dy) - pose.heading);
       if (Math.abs(turnDelta) <= 0.05 ||
           (performance.now() - startMs) > FACE_TURN_TIMEOUT_MS) {
         try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
         act();
         return;
       }
-      const turn = turnDelta > 0 ? 1 : -1;
-      try { sessionHandle.setMovementInput(0 /* forward */, 0 /* strafe */, turn, false /* run */); } catch {}
+      try { sessionHandle.setMovementInput(0, 0, turnDelta > 0 ? 1 : -1, false); } catch {}
       requestAnimationFrame(step);
     };
     step();
-  }
-
-  /**
-   * Wave 4 / Phase 4.2 (2026-05-26) — startCharge with optional
-   * windup motion. Callers pass `motionForWindup` (the same swing
-   * MotionCommand they intend to fire on arrival) to drive a held
-   * pose during pursuit. Backwards-compat: omit the param and the
-   * pursuit runs without a windup pose (pre-Wave-4 behaviour).
-   *
-   * Hold-at-peak is the windup feel: from charge-start, the swing
-   * clip plays through its first half (~50% of `durationSec`), then
-   * pauses at the peak frame until arrival. The arrival path in
-   * `chargeTick` releases the hold and fires the real swing — the
-   * remaining clip frames (strike + recovery) play out via the
-   * release-armed restore timer in `releaseSwingHold`.
-   *
-   * If `motionForWindup` is 0 / unresolvable, or the local
-   * entity manager isn't ready, the hold is silently skipped and
-   * the pursuit runs without a windup pose. Telemetry: a
-   * `[entities/swingMotion] HOLD ...` log line on the hold-armed
-   * path.
-   */
-  function startCharge(guid, range, fireAttack, motionForWindup, cylinderReach) {
-    cancelCharge();
-    const useWasmPursuit = wasmPursuitReady();
-    charge = {
-      guid: guid >>> 0,
-      range,
-      fireAttack,
-      startMs: performance.now(),
-      rafId: 0,
-      // F6-5 — melee charges pass true under `?melee3dRange=on` so the
-      // pursuit stop-condition uses the SAME cylinder metric as the gate
-      // that started it (else it would over- or under-shoot the stop).
-      // Missile charges leave it false → flat horizontal as before.
-      cylinderReach: !!cylinderReach,
-      // A14-I2 — wasm-steered pursuit: monitor only, no JS steering.
-      wasmPursuit: useWasmPursuit,
-      monitor: useWasmPursuit
-        ? createPursuitMonitor({ maxDurationMs: MAX_CHARGE_DURATION_MS })
-        : null,
-    };
-    try {
-      const em = liveScene3d?.entityManager;
-      const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
-      const cmd = (motionForWindup >>> 0) || 0;
-      if (em && localGuid !== 0 && cmd !== 0 && typeof em.setSwingMotion === "function") {
-        em.setSwingMotion(localGuid, cmd, { holdAtPeak: true });
-      }
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[picking] charge windup setSwingMotion failed:", e);
-    }
-    if (useWasmPursuit) {
-      // A14-I2 — hand the steering to the wasm MoveTo driver: range
-      // rides retail's native object_radius arg, the F6-5 vertical
-      // reach rides object_height (0 for the flat metric), run=true
-      // matches today's charge gait. Arrival authority is the wasm
-      // status, not the JS distance math.
-      try {
-        sessionHandle.pursueEntity(
-          charge.guid,
-          range,
-          charge.cylinderReach ? MELEE_VERTICAL_REACH_M : 0,
-          true,
-        );
-      } catch (e) {
-        console.warn("[picking] pursueEntity failed — falling back to legacy charge:", e);
-        charge.wasmPursuit = false;
-        charge.monitor = null;
-        chargeTick();
-        return;
-      }
-      pursuitMonitorTick();
-      return;
-    }
-    chargeTick();
   }
 
   function pickEntityAt(clientX, clientY) {
@@ -889,14 +523,9 @@ export function setupClickPicking({
 
   function onPointerDown(ev) {
     if (ev.button !== 0) return;
-    // Phase I.1 follow-on: any left-click ends an in-flight charge.
-    // Without this, a click that misses the entity (clicking past
-    // it, clicking on terrain) silently leaves the rAF loop running
-    // and the player keeps walking toward the original target. Even
-    // a click that DOES hit an entity should cancel first, so the
-    // new target's charge starts from rest rather than overlapping
-    // the previous one.
-    cancelCharge();
+    // Any left-click cancels an in-flight optimistic turn (retail cancels
+    // MoveTo on fresh input) so a new action starts clean.
+    cancelClientMove();
     const guid = pickEntityAt(ev.clientX, ev.clientY);
     if (guid == null) return;
     ev.stopPropagation();
@@ -928,7 +557,7 @@ export function setupClickPicking({
       // selects/assesses; the double-click gate is unchanged.
       if (entityIsCorpse(guid) && typeof sessionHandle.useObject === "function") {
         if (doubleClickGate(guid)) {
-          cancelCharge();
+          cancelClientMove();
           sessionHandle.useObject(guid >>> 0);
         }
         return;
@@ -948,7 +577,7 @@ export function setupClickPicking({
         if (doubleClickGate(guid)) {
           const me = (getLocalPlayerGuid?.() ?? 0) >>> 0;
           if (me !== 0) {
-            cancelCharge();
+            cancelClientMove();
             sessionHandle.moveItem(guid >>> 0, me, 0);
           }
         }
@@ -1105,7 +734,7 @@ export function setupClickPicking({
           // requires a double-click within PEACE_USE_DOUBLE_CLICK_MS, so a
           // misclick in town no longer fires an irreversible world action.
           if (doubleClickGate(guid)) {
-            cancelCharge();
+            cancelClientMove();
             sessionHandle.useObject(guid >>> 0);
           }
         }
@@ -1169,10 +798,10 @@ export function setupClickPicking({
   // stance still uses click-on-entity to release armed spells; it
   // does NOT route through this helper.
   //
-  // Out-of-range = auto-pursue via the existing `startCharge` rAF
-  // loop, then fire on arrival. In-range = fire immediately. The
-  // lockout (`cb.attackInProgress`) gates rapid clicks; the
-  // `combatCommenceAttack` event seeds the combat-bar power meter.
+  // Melee RUNS UP to the target (turn-first-then-run) and swings on arrival;
+  // missile/magic turn-to-face and fire in place. The lockout
+  // (`cb.attackInProgress`) gates rapid clicks; `combatCommenceAttack` seeds
+  // the combat-bar meter.
   function fireAttackOnSelectedTarget(height) {
     const targetGuid = (liveScene3d.entityManager?.getSelectedTarget?.() ?? 0) >>> 0;
     if (targetGuid === 0) {
@@ -1227,18 +856,12 @@ export function setupClickPicking({
       return true;
     };
 
-    // 2026-05-19 — charge re-enabled now that `entityAcPosition` no
-    // longer double-transforms the target's position. If still out
-    // of range after manual walking, the rAF chargeTick takes over
-    // (auto-pursues until in range, then fires). chargeAttack=false
-    // in the bar disables the auto-pursue per-click.
-    const chargeEnabled = cb?.chargeAttack !== false;
     const inMelee = !!isInMeleeStance?.();
     const inRanged = !!isInRangedStance?.();
     // Both world-coord — see playerWorldPose comment above for the
-    // landblock-local → world conversion. Without this, `dist` would
-    // be dominated by the landblock offset (~32000m) and every target
-    // would look out-of-range.
+    // landblock-local → world conversion. `pose`/`targetAc` feed the missile
+    // ballistic-arc aim predictor below; `dist` is diagnostics only (the
+    // server owns range now — no client range gate).
     const pose = playerWorldPose(sessionHandle);
     const targetAc = entityAcPosition(liveScene3d.entityManager, targetGuid);
     const dist = (pose && targetAc) ? horizontalDistance(pose, targetAc) : -1;
@@ -1357,7 +980,7 @@ export function setupClickPicking({
       // the 13 AimMotions for any finite input).
       const finalMotion = motionCmd || aimMotion;
       try { window.__diag?.combat?.onAimLevel?.({ scope: "local", motion: aimMotion }); } catch (_) {}
-      console.log(`[fire-attack] missile height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m attackType=0x${attackType.toString(16)} motionCmd=${motionCmd ? "0x" + motionCmd.toString(16) : "none"} aimMotion=0x${aimMotion.toString(16)} (range=${MISSILE_RANGE_M}m)`);
+      console.log(`[fire-attack] missile height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m attackType=0x${attackType.toString(16)} motionCmd=${motionCmd ? "0x" + motionCmd.toString(16) : "none"} aimMotion=0x${aimMotion.toString(16)}`);
       const fire = () => fireOnce(() => {
         // Wave 5 / Phase 9 (2026-05-26) — Sneak Attack prediction. Re-
         // sample target position + defender heading at the actual fire
@@ -1397,26 +1020,19 @@ export function setupClickPicking({
           }
         }
       });
-      // (2026-07-02) — stay on target: the engage closure the sticky watch
-      // re-runs when the target kites out of range mid-engagement.
-      const missileEngage = () =>
-        startCharge(targetGuid, MISSILE_RANGE_M, fire, finalMotion);
-      if (chargeEnabled && dist > MISSILE_RANGE_M) {
-        // Wave 4 / Phase 4.2 — pass `finalMotion` (the aim-level /
-        // CMT-picked missile motion) as the windup so the local
-        // player holds at peak windup during the pursuit. Released
-        // at arrival just before the real swing fires.
-        missileEngage();
-      } else {
-        // F7-3 — in range: face the target first (flag-gated), then fire.
-        // The out-of-range charge path above already turns during pursuit.
-        turnToFaceThenAct(targetGuid, fire, MISSILE_FACE_TARGET);
-      }
-      if (chargeEnabled) armStickyWatch(targetGuid, MISSILE_RANGE_M, missileEngage, false);
+      // Server-authoritative combat (2026-07-06): send the shot ONCE with an
+      // optimistic turn-to-face; NO client-side pursuit. Retail's
+      // `ClientCombatSystem::ExecuteAttack` (acclient.c:408626) sends
+      // Event_TargetedMissileAttack immediately regardless of range and lets
+      // the server own range/approach; ACE `Player_Missile.cs` `Rotate()`s to
+      // face and either launches or rejects with `MissileOutOfRange`, and
+      // auto-repeats server-side. The old client-side chargeTick pursuit
+      // (run-forward + bang-bang turn) ran off-heading and is deleted.
+      turnToFaceThenAct(targetGuid, fire, MISSILE_FACE_TARGET);
       return;
     }
     if (inMelee && typeof sessionHandle.attack === "function") {
-      console.log(`[fire-attack] melee height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m (range=${MELEE_RANGE_M}m)`);
+      console.log(`[fire-attack] melee height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m`);
       const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
       // CombatManeuverTable lookup — picks the retail MotionCommand for
       // (stance, height, type, powerLevel). Used for diag observability
@@ -1512,33 +1128,13 @@ export function setupClickPicking({
           }
         }
       }, { swingDurationMs });
-      // F6-5 — gate on the cylinder distance under `?melee3dRange=on` so a
-      // target the flat 2D check thought was in reach (but is on a ledge /
-      // raised platform) instead engages the charge: run cycle + steering
-      // pursue it rather than firing an in-place swing the server then
-      // services with an invisible force-position walk. Flat horizontal
-      // (== pre-F6-5) when off.
-      const meleeDist = meleeGateDistance(pose, targetAc);
-      // (2026-07-02) — stay on target: the engage closure the sticky watch
-      // re-runs when the target kites out of range mid-engagement.
-      const meleeEngage = () =>
-        startCharge(targetGuid, MELEE_RANGE_M, fire, motionCmd, MELEE_3D_RANGE /* cylinderReach */);
-      if (chargeEnabled && meleeDist > MELEE_RANGE_M) {
-        // Wave 4 / Phase 4.2 — pass the CMT-picked melee motion as
-        // the windup so the local player holds at peak windup during
-        // the pursuit. Released at arrival just before the real
-        // swing fires.
-        meleeEngage();
-      } else {
-        // (2026-07-02) — retail turns the attacker to face BEFORE the swing
-        // lands (ACE Player_Melee Rotate/IsFacing; decomp TurnToObject).
-        // Mirrors the missile in-range path above — previously melee fired
-        // blind at an off-bearing target.
-        turnToFaceThenAct(targetGuid, fire, MELEE_FACE_TARGET_SELF);
-      }
-      if (chargeEnabled) {
-        armStickyWatch(targetGuid, MELEE_RANGE_M, meleeEngage, MELEE_3D_RANGE);
-      }
+      // "Sticky melee": engage the StickyManager (it runs the player UP to the
+      // target + sticks, per-frame) and send the attack once — ACE auto-repeats
+      // the swing when in range. The watch re-engages if the mob kites past
+      // range after a sticky timeout.
+      stickToTarget(targetGuid);
+      fire();
+      armStickyWatch(targetGuid, MELEE_RANGE_M, () => stickToTarget(targetGuid));
       return;
     }
     console.log(`[fire-attack] not in melee/missile stance — currentStanceLow=0x${(window.__getCurrentStanceLow?.() ?? 0).toString(16)}`);
@@ -1574,9 +1170,10 @@ export function setupClickPicking({
     // (chat input, login fields).
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    if (charge) cancelCharge();
-    // (2026-07-02) — manual movement also ends the stay-on-target watch
-    // (retail: raw input cancels MoveTo, acclient.c:339240-339246).
+    // Raw movement input cancels the in-flight run-up/turn AND the
+    // stay-on-target watch (retail: raw input cancels MoveTo,
+    // acclient.c:339240-339246) — the player takes over the drive.
+    cancelClientMove();
     cancelStickyWatch();
     // F6-4 — moving stops the server-side attack loop (retail). ACE
     // defaults AutoRepeatAttacks ON, so a single attack otherwise keeps
@@ -1614,8 +1211,8 @@ export function setupClickPicking({
   if (bus && typeof bus.on === "function") {
     onSelectionCleared = (ev) => {
       if (((ev?.guid >>> 0) || 0) !== 0) return; // only on clear
-      // (2026-07-02) — deselect ends the stay-on-target watch immediately
-      // (it would also self-cancel on its next sample).
+      // Deselect cancels the in-flight run-up/turn and the stay-on-target watch.
+      cancelClientMove();
       cancelStickyWatch();
       if (!(isInMeleeStance?.() || isInRangedStance?.())) return;
       if (typeof sessionHandle.cancelAttack !== "function") return;
@@ -1630,11 +1227,8 @@ export function setupClickPicking({
 
   return {
     destroy() {
-      // Stop any in-flight charge: cancels the rAF chargeTick loop,
-      // zeroes movement input, and releases a held windup pose. Without
-      // this, destroy() left the pursuit rAF running (and the player
-      // walking) after the picking subsystem was torn down.
-      cancelCharge();
+      // Cancel any in-flight run-up/turn and the stay-on-target watch on teardown.
+      cancelClientMove();
       cancelStickyWatch();
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("dragover", onCanvasDragOver);

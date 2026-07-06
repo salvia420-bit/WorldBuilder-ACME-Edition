@@ -83,18 +83,29 @@ fn parse_wielded_spawn_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "wieldedSpawn=off")
 }
 
-/// A8-M1 (2026-06-11, unification survey): parse `?worldLifecycle=on`
-/// (or `&worldLifecycle=on`). Same shape as `parse_seq_debug_flag` —
-/// read once at recv_loop start, stashed as a local `bool`. When on,
-/// the entity-lifecycle message family (ObjectCreate / ObjectDelete /
-/// InventoryRemoveObject / ParentEvent / PickupEvent) is routed through
-/// the canonical `holtburger_world` dispatcher instead of the
-/// `apply_inventory_object_*` spatial-bypass copies — see
+/// A8-M1 (2026-06-11, unification survey): parse `?worldLifecycle`.
+/// When on, the entity-lifecycle message family (ObjectCreate /
+/// ObjectDelete / InventoryRemoveObject / ParentEvent / PickupEvent) is
+/// routed through the canonical `holtburger_world` dispatcher instead of
+/// the `apply_inventory_object_*` spatial-bypass copies — see
 /// `should_route_message_to_world` for the root-cause history.
+///
+/// F-2026-07-06: **DEFAULT-ON** (was `== "worldLifecycle=on"`); only
+/// `=off` disables. Rationale: mid-session ObjectCreates (monsters) must
+/// become resident in `world.entities` so the Rust `MoveToManager` driver
+/// can resolve combat targets — `pursueEntity`/`turnToEntity` on a target
+/// missing from `world.entities` cancel `0x37` (target-lost) and the rig
+/// never turns/runs up (the "melee attacks from range / missile+magic
+/// don't face the target" report). The historical `unreachable` blocker
+/// was a `std::time::SystemTime::now()` wasm panic, fixed 2026-06-06
+/// (`web_time::SystemTime` swap), and every dependency
+/// (`unifiedTick`/`wireStatePacks`/`remoteInterp`) is already default-on,
+/// so the canonical path — and remote position updates that keep a
+/// resident target's pose live for a kiting follow — is supported.
 #[cfg(target_arch = "wasm32")]
 fn parse_world_lifecycle_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "worldLifecycle=on")
+    !trimmed.split('&').any(|kv| kv == "worldLifecycle=off")
 }
 
 /// A1-O1 (2026-06-11, unification survey): parse `?unifiedTick=on`
@@ -20306,6 +20317,17 @@ enum SessionCommand {
     /// A14-I2 — abort the in-flight pursuit/turn (retail
     /// `MovementManager::CancelMoveTo(0x36)`, acclient.c:339240-339246).
     CancelPursuit,
+    /// 2026-07-06 — engage the LOCAL StickyManager on `target_guid`
+    /// (retail `PositionManager::StickTo` → `StickyManager`,
+    /// acclient.c:388519). This is the whole of client melee: once stuck,
+    /// the per-frame `step_local_sticky` (`system.rs`) runs the player UP
+    /// to the target closing the 0.30 edge gap AND holds it there,
+    /// re-facing every frame — approach + stick as ONE thing. Needs the
+    /// target resident in the spatial scene (`worldLifecycle` default-on).
+    StickToObject { target_guid: u32 },
+    /// 2026-07-06 — release the LOCAL StickyManager (retail
+    /// `unstick_from_object`, acclient.c:343659 / :339518-339519).
+    StopStick,
     /// A14-I3 (`?retailRunKeys=on`) — toggle the retail autorun state
     /// (retail bound-key chain: MovePlayer AutoRun cmd 0x09000047 →
     /// `ToggleAutoRun` → `SetAutoRun`, acclient.c:717248-717268 /
@@ -30812,6 +30834,35 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::CancelPursuit)
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("cancelPursuit: cmd channel closed ({e})"))
+            })
+    }
+
+    /// 2026-07-06 — engage the LOCAL StickyManager on `target_guid`: the
+    /// client melee run-up + stick as ONE thing (retail
+    /// `PositionManager::StickTo` → `StickyManager`, acclient.c:388519).
+    /// Once stuck, the per-frame `step_local_sticky` runs the player UP to
+    /// the target (closing the 0.30 edge gap) and holds + re-faces it every
+    /// frame. Requires the target resident in the spatial scene
+    /// (`worldLifecycle` default-on). Additive — manifest stays v4.
+    #[wasm_bindgen(js_name = stickToEntity)]
+    pub fn stick_to_entity(&self, target_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::StickToObject { target_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("stickToEntity: cmd channel closed ({e})"))
+            })
+    }
+
+    /// 2026-07-06 — release the LOCAL StickyManager (retail
+    /// `unstick_from_object`). Additive — manifest stays v4.
+    #[wasm_bindgen(js_name = stopStick)]
+    pub fn stop_stick(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::StopStick)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("stopStick: cmd channel closed ({e})"))
             })
     }
 
@@ -44805,6 +44856,35 @@ async fn recv_loop(
                             holtburger_core::client::movement_types::PlayerDriveIntent::CancelPursuit,
                             web_time::Instant::now(),
                         );
+                    }
+                    Some(SessionCommand::StickToObject { target_guid }) => {
+                        // 2026-07-06 — client melee = engage the LOCAL
+                        // StickyManager on the target. Once armed, the
+                        // per-frame `step_local_sticky` (system.rs) runs the
+                        // player UP to it (closing the 0.30 edge gap) and holds
+                        // + re-faces it — approach + stick as one. Radius 0.0
+                        // (no client-side physics radius source yet, spec S9
+                        // OPEN Q3 — the standoff degrades to the −0.3 clamp).
+                        // Needs the target resident in the spatial scene
+                        // (worldLifecycle default-on).
+                        if let Some(w) = world.as_mut() {
+                            if w.player.guid != holtburger_common::Guid::NULL {
+                                w.scene.stick_local_player_to(
+                                    holtburger_common::Guid(target_guid),
+                                    0.0,
+                                );
+                            } else {
+                                console_log_str(
+                                    "[sticky-melee] stickToEntity before player seeded — dropping",
+                                );
+                            }
+                        }
+                    }
+                    Some(SessionCommand::StopStick) => {
+                        // 2026-07-06 — release the LOCAL StickyManager.
+                        if let Some(w) = world.as_mut() {
+                            w.scene.unstick_local_player();
+                        }
                     }
                     Some(SessionCommand::AnimationDone { guid, success }) => {
                         // A4-Q2 (W3+ S5) + A4/SA4F (per-entity feed) —
