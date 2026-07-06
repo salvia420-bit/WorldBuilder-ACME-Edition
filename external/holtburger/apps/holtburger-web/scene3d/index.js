@@ -940,23 +940,23 @@ export async function preInit3D(canvas) {
   if (typeof window !== "undefined") {
     window.__particleSortObjects = !particleSortObjectsOff;
   }
-  // T2 (2026-05-28) — per-poly back-face culling, default ON. Single-sided
-  // polygons (sides_type != 1) render FrontSide with reversed winding (acclient
-  // D3DPolyRender @455346: only sides_type==1 is two-sided). Was opt-in until a
-  // 1070 headless eye-test (2026-05-28) confirmed object winding: Holtburg
-  // buildings, the player character, NPCs, and the lifestone all render solid
-  // (no inside-out faces, no vanished geometry) with the reversed winding —
-  // which mirrors terrain's proven F#27 convention. Disable with
-  // `?perPolyCull=off`.
+  // T2 (2026-05-28) — per-poly back-face culling. Single-sided polygons
+  // (sides_type != 1) render FrontSide with reversed winding (acclient
+  // D3DPolyRender @455346: only sides_type==1 is two-sided). A 1070 headless
+  // eye-test (2026-05-28) had flipped this default-ON, but on the R9 290 real
+  // GPU it drops wrongly-wound building/static polys (invisible / inside-out),
+  // the same class as the 2026-07-02 "half-missing forge" bug. Reverted to
+  // default-OFF (2026-07-06) pending a real-GPU re-validation — off = DoubleSide
+  // (historically safe). Opt in with `?perPolyCull=on`.
   try {
     if (typeof window !== "undefined" && window.location) {
       const v = new URLSearchParams(window.location.search).get("perPolyCull");
-      globalThis.__perPolyCull = v == null ? true : v.toLowerCase() !== "off";
+      globalThis.__perPolyCull = v != null && v.toLowerCase() === "on";
     } else {
-      globalThis.__perPolyCull = true;
+      globalThis.__perPolyCull = false;
     }
   } catch (_) {
-    globalThis.__perPolyCull = true;
+    globalThis.__perPolyCull = false;
   }
   if (wireframeMode) {
     // 2026-05-22 — vertical sky gradient via a 1×256 CanvasTexture in
@@ -2326,8 +2326,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       return new URLSearchParams(window.location.search).get("hud") === "none";
     } catch (_) { return false; }
   })();
+  // 2026-07-06 user directive — the DOM-projected nameplate overlay (this
+  // NameplateLayer, `#nameplate-layer-3d`) is the SECOND nameplate system,
+  // distinct from the THREE.Sprite overhead names in nameplate_sprite.js
+  // (`?nameplates`, already default-OFF). It shipped always-on (only `?hud=none`
+  // skipped it). Now DEFAULT-OFF: overhead names off unless opted in with
+  // `?nameplateDom=on`. Null layer → the `?.setNameplate` / `?.tick` call sites
+  // no-op via optional chaining. `?hud=none` still forces off.
+  const _nameplateDomEnabled = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return new URLSearchParams(window.location.search).get("nameplateDom") === "on";
+    } catch (_) { return false; }
+  })();
   let nameplateLayer = null;
-  if (!_hudDisabled) {
+  if (!_hudDisabled && _nameplateDomEnabled) {
     try {
       const overlay = createNameplateOverlay(canvas);
       if (overlay) {
@@ -3672,7 +3685,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // apertures. See portal_stencil.js.
               portalStencil:
                 new URLSearchParams(window.location.search).get("portalStencil") === "on",
-              // Portal-punch cell renderer (?portalPunch=off to disable; default ON).
+              // Portal-punch cell renderer (?portalPunch=on to enable; default OFF).
               // Retail per-aperture depth punch so building/cave interiors show
               // through door/window/cave-mouth apertures from an outdoor camera — this
               // is what stops terrain covering env-cell entrances. Fixed 2026-07-05 to
@@ -3681,16 +3694,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // real GPUs — `get_visible_portal_apertures` emits RAW world-space
               // aperture polygons with NO near-plane/sidedness clip (unlike retail's
               // `ConstructView` sidedness + `DrawPortalPolyInternal` `polyClipFinish`,
-              // and unlike our near-plane-clipped `getRenderSetWithPView`). Close to a
-              // doorway some apertures straddle the near plane (verified live: 2/14
-              // behind near at 0.4 m); the punch (`depthFunc=Always`, `frustumCulled=
-              // false`) then over-covered a huge screen area → near terrain/statics
-              // vanished (R9 290; SwiftShader clipped the degenerate poly and hid it).
-              // FIXED by `nearPlaneCullApertures` in cells.js (drops straddling
-              // apertures — the sidedness/polyClipFinish equivalent), validated on the
-              // R9 290. See portal_punch.js + cells.js.
+              // and unlike our near-plane-clipped `getRenderSetWithPView`). The punch
+              // (`depthFunc=Always`, `frustumCulled=false`, no occlusion test) stamps
+              // far-Z over any aperture that straddles the near plane OR sits behind a
+              // hill in the frustum → terrain/statics lose the depth test and the whole
+              // world can vanish (R9 290; SwiftShader clipped the degenerate poly and
+              // hid it). `nearPlaneCullApertures` (cells.js) only drops near-plane
+              // straddlers, not occluded-but-in-front apertures, so the over-punch is
+              // NOT fully fixed. Reverted to default-OFF (2026-07-06) until the
+              // occlusion/clip gap is closed and it re-passes a real-GPU eye-test.
+              // Off = byte-identical (no pass, no split). See portal_punch.js + cells.js.
               portalPunch:
-                new URLSearchParams(window.location.search).get("portalPunch") !== "off",
+                new URLSearchParams(window.location.search).get("portalPunch") === "on",
             });
             liveScene3d.atmospherePipeline = atmospherePipeline;
             // Expose the portal-stencil pass (null when the flag is off) so

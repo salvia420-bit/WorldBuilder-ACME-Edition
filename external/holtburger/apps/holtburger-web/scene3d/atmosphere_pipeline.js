@@ -242,18 +242,22 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     throw new Error("createAtmospherePipeline: atmosphereRuntime is required");
   }
 
-  // Job A — horizon edge-dissolve toggle. Default ON; `?horizonFade=off`
-  // disables it (composer pass list + fxPass become byte-identical to the
-  // pre-feature pipeline). `opts.horizonFade` (boolean) overrides the URL so
-  // headless tests can force either state.
+  // Job A — horizon edge-dissolve toggle. Default OFF; `?horizonFade=on`
+  // enables it. Reverted from default-ON (2026-07-06): it inserts
+  // HorizonDissolveEffect into the shared fxPass and is UNVALIDATED on a real
+  // GPU — if its log-depth decode diverges from the pmndrs depth on the R9 290
+  // the dissolve band lands on near geometry and fades the world to sky, and a
+  // shader-link failure takes the whole post-frame blank. Off = composer pass
+  // list + fxPass byte-identical to the pre-feature pipeline. `opts.horizonFade`
+  // (boolean) overrides the URL so headless tests can force either state.
   const horizonFadeEnabled = (() => {
     if (typeof opts?.horizonFade === "boolean") return opts.horizonFade;
     try {
-      if (typeof window === "undefined" || !window.location?.search) return true;
+      if (typeof window === "undefined" || !window.location?.search) return false;
       const v = new URLSearchParams(window.location.search).get("horizonFade");
-      return !(typeof v === "string" && v.toLowerCase() === "off");
+      return typeof v === "string" && v.toLowerCase() === "on";
     } catch (_) {
-      return true;
+      return false;
     }
   })();
 
