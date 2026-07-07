@@ -106,6 +106,29 @@ const PVS_BAKE_CAP = (() => {
   return { enabled: true, k: PVS_BAKE_DEFAULT_K };
 })();
 
+// Step 1a (2026-07-07) — indoor PVS-ring radius. Indoors (a dungeon / cell
+// interior) there is no line-of-sight to the surface landblocks the radius-N
+// prefetch ring pulls in, so `tickPvsLoadExpansion` collapses the ring to this
+// small skirt when `isCurrentCellIndoor()` is true. Default 1 (a 1-LB skirt =
+// 3×3, vs the outdoor 121-LB radius-5 ring) — the render-set (`getRenderSet`)
+// already bakes everything the PVS can actually see (incl. surface visible
+// through a dungeon mouth), so the ring is pure outdoor-roam prefetch. This
+// trims residency at the SOURCE (Town Network 68 LBs → single digits), which
+// shrinks every downstream per-frame statics walk proportionally. `=0` = most
+// aggressive (render-set only); `=N >= pvsRingRadius` disables the gate.
+const INDOOR_PVS_RING_RADIUS = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      const raw = new URLSearchParams(globalThis.location.search).get("indoorPvsRing");
+      if (raw != null) {
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n) && n >= 0) return n;
+      }
+    }
+  } catch (_) {}
+  return 1;
+})();
+
 // Goal-1 draw-distance throttle (2026-06-22): a bounded distance-priority
 // bake-START gate that supersedes PVS_BAKE_CAP's "K new starts per frame".
 // The K-per-frame cap fires a FIXED number of new LBs each frame regardless
@@ -1584,10 +1607,30 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   // ring's "full visible horizon" intent as the player roams away from the
   // Holtburg-hardcoded boot bake. Falls back to 1 (the legacy 3×3) when the
   // property is absent (older build / capture path).
-  const ringRadius =
+  let ringRadius =
     Number.isFinite(scene3d.pvsRingRadius) && scene3d.pvsRingRadius >= 0
       ? scene3d.pvsRingRadius | 0
       : 1;
+  // Step 1a (2026-07-07) — indoor gate: a dungeon/interior can't see the
+  // surface LBs the ring would pull, so at a hub dungeon the outdoor radius-5
+  // ring (121 LBs) makes ~68 LBs resident and the per-frame statics tick O(that).
+  // Collapse to INDOOR_PVS_RING_RADIUS indoors. The render-set (`seen`) is baked
+  // regardless of ring radius, so anything the PVS actually sees (incl. surface
+  // through a dungeon mouth) still loads. `isCurrentCellIndoor` is a cheap wasm
+  // bool; only consulted when the gate could tighten the ring. Zero effect
+  // outdoors (isIndoor=false). Fold into the fireSig below so an indoor↔outdoor
+  // transition re-fires the sweep at the new radius.
+  if (ringRadius > INDOOR_PVS_RING_RADIUS) {
+    let indoor = false;
+    try {
+      if (typeof sessionHandle.isCurrentCellIndoor === "function") {
+        indoor = !!sessionHandle.isCurrentCellIndoor();
+      }
+    } catch (_) {
+      indoor = false;
+    }
+    if (indoor) ringRadius = INDOOR_PVS_RING_RADIUS;
+  }
   // Per-frame fire-storm guard: the fire loop below makes
   // (ringSize × 3-domain) idempotent hook calls — at radius 5 that is
   // 121×3 ≈ 363 calls/frame, each allocating a guarded-bake Promise even
