@@ -109,3 +109,13 @@ Build (memory-constrained laptop, OOM jail):
 - Keepalive heartbeat fix (this repo, 2026-07-07): `scene3d/keepalive_worker*.js`, `src/lib.rs`, `docs/url-flags.md` (the `?keepaliveWorker` flag).
 - Prior perf/lag analysis: `docs/handoff-perf-lag-wireframe-2026-07-04.md` (documents the client-side keepalive starvation and the transport-worker as the intended follow-up).
 - ACE side (do NOT edit — vanilla): timeout at `ace-server/.../Network/NetworkSession.cs:~331`, `Config.js` `DefaultSessionTimeout`.
+
+---
+
+## 8. Open investigation — "slow down while running" (unverified; may be related or a distinct bug)
+
+Reported by the project owner: the character **slows down while running** — a network/lag symptom. Not yet investigated (deferred; flagged here so the transport work accounts for it). Stay paranoid — confirm it's *explained* by the keepalive/transport work rather than assuming. Hypotheses to test:
+
+- Running emits frequent movement/position updates; the per-tick **outbound send + ACK cost** may add main-thread pressure — possibly the *same* main-thread-coupling family this port addresses (in which case the worker transport should relieve it), or a *distinct* bug (unbounded position-update send rate, missing client-side throttle/dead-reckoning, or ACK/retransmit backlog building under sustained movement).
+- Is the `Unsolicited Packet with Id 0` spam merely a **symptom** of an already-reaped session, or a real sequencing / connection-id defect that also degrades throughput under load? (Prior analysis leaned "symptom"; not proven.)
+- If the slowdown **persists after** the worker-transport port, it is its own bug: profile the movement send path (movement-action cadence in `src/lib.rs` / the `Session` send layer) and the inbound `poll_events`/entity drain (`scene3d/index.js:~637`) under sustained WASD, and compare send/recv rates walking vs running.
