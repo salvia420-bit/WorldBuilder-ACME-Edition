@@ -1,5 +1,18 @@
 # HANDOFF — statics / residency perf, next pass (2026-07-07)
 
+> **STATUS (updated 2026-07-07, next-pass session): §5 levers resolved.**
+> **Lever 2 (missing-surface negative cache) — SHIPPED** as a Rust *in-wasm*
+> `thread_local` cache in `fetch_surface(s)_pixels` (the JS-only
+> `MaterialCache` cache was measured ineffective — the spam is the bake_worker's
+> own wasm instance). Validated: warn-once-per-DID, silent on warmed revisit, 0
+> errors, zero visual change; `?surfaceNegCache=off`. **Lever 1 (outdoor
+> residency cap) — MEASURED, NO ROI, NOT implemented**: real outdoor statics
+> consolidate to ~3.2k nodes (Arwic: 121 LBs, `cullStaticsGroup` 0.17 ms); the
+> 52k-node/7.7 ms cull was the *dungeon* case, already fixed by Step 1a. Full
+> write-up + numbers in **`docs/statics-cull-2026-07-07.md` § "2026-07-07
+> follow-up outcomes"**. Levers 3/4/5 (coarser nodes, spatial hash, 1070
+> eye-test for Step 1a) remain open.
+
 You are continuing a town-load performance effort on branch
 **`feat/net-worker-transport`**. The *reported* bug (a ~10-minute freeze when
 teleporting to the "Town Network" hub dungeon) is **already fixed and pushed**

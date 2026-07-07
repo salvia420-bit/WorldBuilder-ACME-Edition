@@ -1338,6 +1338,31 @@ export function readSurfaceUnifiedFlag() {
   }
 }
 
+// === Missing-surface negative cache (2026-07-07) ============================
+// A surface DID that resolves to zero pixels is a GENUINE absence from the
+// manifest catalog (e.g. the contiguous 0x08F0xxxx gap in the base DATs), not a
+// transient miss: the manifest (boot+catalog+shards) is session-immutable, and
+// a zero-dim result only lands AFTER the wasm discovery-prefetch has run — a
+// transient shard error on a CATALOGED key propagates as an Err/throw, never as
+// zero-dim. Without a memo, every per-LB / ring `preload`/`get` re-issues the
+// wasm fetch + re-warns (measured 162 re-decodes / 90 s across 58 absent DIDs,
+// stationary; far worse while roaming). `MaterialCache.missingSurfaces` records
+// each such DID so subsequent bakes skip it. A successful install still clears
+// the entry (belt-and-suspenders for the concurrent grey-surface race), and
+// `materials.has(did)` is always checked first so a real material wins. Default
+// ON; `?surfaceNegCache=off` (or `=0`) reverts to the re-hammer path.
+export function surfaceNegCacheEnabled() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("surfaceNegCache");
+    if (typeof v !== "string") return true;
+    const lv = v.toLowerCase();
+    return !(lv === "off" || lv === "0" || lv === "false");
+  } catch (_) {
+    return true;
+  }
+}
+
 // === R1 (2026-06-24) — `?luminousEmissiveMap` opt-in ========================
 // Narrow sibling of `?surfaceUnified`: on the DYED/paletted luminous path,
 // attach the (recoloured) diffuse map as `emissiveMap` so a COLOURED
@@ -1665,6 +1690,13 @@ export class MaterialCache {
   constructor(opts = {}) {
     /** @type {Map<number, THREE.MeshStandardMaterial>} */
     this.materials = new Map();
+    // Missing-surface negative cache (2026-07-07). DIDs that resolve to zero
+    // pixels (permanent catalog absence) — see surfaceNegCacheEnabled() for the
+    // safety argument. Short-circuits get()/preload() so absent surfaces are not
+    // re-fetched + re-warned every bake. Default ON (`?surfaceNegCache=off`).
+    /** @type {Set<number>} */
+    this.missingSurfaces = new Set();
+    this._negCacheEnabled = surfaceNegCacheEnabled();
     // Phase-5 — baked material-detail (texchan roughnessMap). DEFAULT-ON via
     // `materialBakeEnabled()` (`?material=off` escape). The wasm namespace is
     // threaded in for the by-key suite fetch; the SuiteAssetSource + manifest
@@ -2821,6 +2853,12 @@ export class MaterialCache {
     if (this.materials.has(did)) {
       return this.materials.get(did);
     }
+    // Negative cache: a DID known to be catalog-absent renders the shared
+    // fallback without re-issuing the wasm fetch. Checked AFTER materials.has so
+    // a real material (or a same-session un-poison) always wins.
+    if (this._negCacheEnabled && this.missingSurfaces.has(did)) {
+      return this.fallbackMaterial;
+    }
     if (this.pendingFetches.has(did)) {
       return this.pendingFetches.get(did);
     }
@@ -2828,11 +2866,12 @@ export class MaterialCache {
       const results = await fetchSurfacesPixels(new Uint32Array([did]));
       const sp = results[0];
       if (!sp || sp.width === 0 || sp.height === 0) {
-        // Free the empty wasm-bindgen handle and return the shared
-        // fallback. NOT cached — a future preload that resolves the
-        // same DID via a different code path can still install a real
-        // material.
+        // Free the empty wasm-bindgen handle and return the shared fallback.
+        // Zero-dim post-prefetch = permanent catalog absence → record it so this
+        // DID is not re-fetched. `materials.set` on any real resolve un-poisons
+        // (below), so a surface reaching a real material via another path wins.
         if (sp && typeof sp.free === "function") sp.free();
+        if (this._negCacheEnabled) this.missingSurfaces.add(did);
         return this.fallbackMaterial;
       }
       const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
@@ -2899,6 +2938,7 @@ export class MaterialCache {
       if (normalTex) this.normalTextures.set(did, normalTex);
       if (heightTex) this.heightTextures.set(did, heightTex);
       this.materials.set(did, mat);
+      if (this._negCacheEnabled) this.missingSurfaces.delete(did);
       // 2026-05-30 — a real (textured) material just landed for this surface;
       // drop any stale FrontSide clone that getCached(did,false) minted from
       // the mapless fallback during a spawn-race, so the next getCached
@@ -3008,6 +3048,9 @@ export class MaterialCache {
       const d = did >>> 0;
       if (d === FALLBACK_SURFACE_DID) continue;
       if (this.materials.has(d)) continue;
+      // Negative cache: skip a known catalog-absent DID (no wasm fetch, no
+      // re-warn). Checked after materials.has so a real material always wins.
+      if (this._negCacheEnabled && this.missingSurfaces.has(d)) continue;
       const inflight = this.pendingFetches.get(d);
       if (inflight) { alreadyPending.push(inflight); continue; }
       need.push(d);
@@ -3473,6 +3516,11 @@ export class MaterialCache {
         });
       } catch (_) {}
       try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
+      // Permanent catalog absence (post-prefetch zero-dim) → negative-cache so
+      // the per-LB/ring preload path stops re-fetching + re-warning it. NOT set
+      // in the throw case above: that is a freed-handle double-consume race
+      // (F4), not an absence, so it must never poison a live DID.
+      if (this._negCacheEnabled) this.missingSurfaces.add(did);
       return this.fallbackMaterial;
     }
     try {
@@ -3539,6 +3587,7 @@ export class MaterialCache {
     if (normalTex) this.normalTextures.set(did, normalTex);
     if (heightTex) this.heightTextures.set(did, heightTex);
     this.materials.set(did, mat);
+    if (this._negCacheEnabled) this.missingSurfaces.delete(did);
     // 2026-05-30 — invalidate the stale fallback-derived FrontSide clone (see
     // the 6-space twin in get()) so getCached(did,false) re-clones from this
     // textured base after a spawn-race fallback.

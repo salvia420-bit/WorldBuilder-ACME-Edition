@@ -8394,6 +8394,60 @@ fn warn_surface_dep_unavailable(surface_did: u32, dep_kind: &str, dep_id: u32) {
 #[cfg(not(target_arch = "wasm32"))]
 fn warn_surface_dep_unavailable(_surface_did: u32, _dep_kind: &str, _dep_id: u32) {}
 
+// === Missing-surface negative cache (2026-07-07) ===========================
+// Surface DIDs proven ABSENT at final-decode time (post-prefetch) are memoised
+// so `fetch_surface(s)_pixels` short-circuits the re-decode + re-warn on every
+// subsequent per-LB / ring bake. The manifest (boot + catalog + shards) is
+// session-immutable, so a DID that resolves absent AFTER the discovery walk is
+// permanently absent — a transient shard error on a CATALOGED key surfaces as
+// an `Err`, never as this first-hop miss (confirmed genuinely absent for the
+// 0x08F0xxxx block via the base DAT: `chorizite-parse-dat-record` → "not
+// present"). This memo is per-wasm-instance, so the bake_worker — which decodes
+// statics surfaces in ITS OWN wasm and is the dominant source of the
+// "unavailable → empty fallback" spam — self-dedups. The JS-side
+// `MaterialCache.missingSurfaces` twin (materials.js) only gates main-thread
+// callers, so it cannot reach the worker; this is the durable backstop. Only
+// populated / consulted when `!in_discovery_walk()`, matching the warn gate: a
+// discovery-phase miss may still be prefetched, so it is never memoised.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static MISSING_SURFACES: std::cell::RefCell<std::collections::HashSet<u32>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+#[cfg(target_arch = "wasm32")]
+fn surface_neg_cache_contains(did: u32) -> bool {
+    MISSING_SURFACES.with(|s| s.borrow().contains(&did))
+}
+#[cfg(target_arch = "wasm32")]
+fn surface_neg_cache_insert(did: u32) {
+    MISSING_SURFACES.with(|s| {
+        s.borrow_mut().insert(did);
+    });
+}
+// The exact `empty` fallback both surface impls return on absence. Factored so
+// the negative-cache short-circuit returns a byte-identical value without
+// moving the impl's local `empty` (SurfacePixels is a `wasm_bindgen` struct and
+// is not `Clone`).
+#[cfg(target_arch = "wasm32")]
+fn empty_surface_pixels() -> SurfacePixels {
+    use holtburger_dat::surface_classify::SurfaceCategory;
+    SurfacePixels {
+        width: 0,
+        height: 0,
+        pixels: Vec::new(),
+        surface_type: 0,
+        category: SurfaceCategory::Generic.as_u8(),
+        normal_pixels: Vec::new(),
+        height_pixels: Vec::new(),
+        roughness_override: f32::NAN,
+        normal_scale_override: f32::NAN,
+        translucency: 0.0,
+        luminosity: 0.0,
+        diffuse: 0.0,
+        has_palette: false,
+    }
+}
+
 fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     surface_did: u32,
@@ -8429,8 +8483,19 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         Some((base, tex)) => (base, Some(tex)),
         None => (surface_did, None),
     };
+    // Negative-cache short-circuit: a DID proven absent at a prior final decode
+    // returns the identical empty fallback without re-walking or re-warning.
+    #[cfg(target_arch = "wasm32")]
+    if !crate::prefetch::in_discovery_walk() && surface_neg_cache_contains(surface_did) {
+        return empty_surface_pixels();
+    }
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else {
         warn_surface_dep_unavailable(surface_did, "Surface record", surface_did);
+        // Memoise the genuine (post-prefetch) absence so later bakes skip it.
+        #[cfg(target_arch = "wasm32")]
+        if !crate::prefetch::in_discovery_walk() {
+            surface_neg_cache_insert(surface_did);
+        }
         return empty;
     };
     let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
@@ -10162,8 +10227,18 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         Some((base, tex)) => (base, Some(tex)),
         None => (surface_did, None),
     };
+    // Negative-cache short-circuit (shared memo with the static path — same
+    // Surface record; palette state is irrelevant to a first-hop absence).
+    #[cfg(target_arch = "wasm32")]
+    if !crate::prefetch::in_discovery_walk() && surface_neg_cache_contains(surface_did) {
+        return empty_surface_pixels();
+    }
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else {
         warn_surface_dep_unavailable(surface_did, "Surface record", surface_did);
+        #[cfg(target_arch = "wasm32")]
+        if !crate::prefetch::in_discovery_walk() {
+            surface_neg_cache_insert(surface_did);
+        }
         return empty;
     };
     let Ok(surface) = Surface::unpack(&bytes) else { return empty; };

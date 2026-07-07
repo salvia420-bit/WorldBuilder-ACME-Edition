@@ -64,3 +64,42 @@ design's per-LB-bucket premise was false for the real node structure.**
    (`0x08F00001` warned 569×/90s — `FINAL_DESIGN` agent 11).
 
 Full design corpus: `~/from-vm/statics-cull-wf/` (`FINAL_DESIGN.md` + 16 parts).
+
+## ✅ 2026-07-07 follow-up outcomes (next-pass session)
+
+Both remaining OUTDOOR levers were investigated **measure-first**. That overturned
+the premise for each — one produced a shipped fix, one was declined.
+
+### "Missing-surface negative cache" (lever 4 / secondary) — SHIPPED, as a Rust in-wasm cache
+Surfaces confirmed GENUINELY absent (base DAT `chorizite-parse-dat-record` →
+`0x08F00001` / `0x08F0000A` / `0x08F000B3` "not present"), so memoising them is
+safe. **The JS-only `MaterialCache.missingSurfaces` cache (the corpus / agent-11
+recommendation) is measured INEFFECTIVE:** the dominant spam is the
+**bake_worker decoding statics in its OWN wasm instance**, which the main-thread
+cache structurally cannot reach (isolated `surfaceNegCache` ON: 162 warns /
+`missingSize 0`, identical to OFF). Instrumentation: **673 worker warns vs only
+~12 zero-dim results reaching main-thread `_installFromPixels`**. Root fix: an
+in-wasm `thread_local HashSet<u32>` in `fetch_surface(s)_pixels`, populated only
+at final decode (`!in_discovery_walk()`), so it fires **per-wasm-instance —
+worker included**. Validated (worker on, release wasm): warns now **equal
+distinct-DIDs** (once each; was 2.8× avg / 14× max), **0 warns on a warmed
+revisit**, 0 errors, **zero visual change** (byte-identical empty fallback for
+DAT-absent records). Landed in `src/lib.rs` (`MISSING_SURFACES` +
+`surface_neg_cache_contains`/`_insert` in both surface impls) and
+`scene3d/materials.js` (the JS twin, kept as the main-thread/entity complement);
+`?surfaceNegCache=off` escape. The Rust memo is unconditional (provably safe).
+**Needed a wasm rebuild.**
+
+### Lever 1 "outdoor residency cap" — MEASURED, NO ROI, declined
+**The O(total-resident) / ~7.7 ms cull is a Town-Network-DUNGEON artifact**
+(indoor un-consolidated cell statics — 52,766 nodes, only 3.3% with
+`landblockId`), already resolved by Step 1a. A REAL outdoor town (Arwic,
+isolated single-teleport) stabilises at **121 resident LBs / ~3,230 nodes** (500
+cross-LB `BatchedMesh` + 736 plain + ~2k containers; 68% carry `landblockId`)
+with `cullStaticsGroup` = **0.17 ms** — reproducible, no thrash, 0 errors.
+Outdoor statics CONSOLIDATE, so the outdoor cull is already negligible; the
+handoff's "outdoor → ~50k nodes → ~9 ms" was an untested extrapolation from the
+dungeon census. Capping outdoor residency below the radius-5 (121-LB) ring would
+trim an already-negligible 0.17 ms while risking visible pop, and the F2/Goal-1
+`lbCap` already self-sizes to 203. **Not implemented** — same
+`verify-agent-leads` outcome as the Step-2 dead-end.
