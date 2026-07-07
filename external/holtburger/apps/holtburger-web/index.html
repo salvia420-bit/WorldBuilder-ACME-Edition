@@ -1294,6 +1294,10 @@
       // pixi.js import REMOVED 2026-06-18 (item 8) — the 2D PIXI renderer is
       // retired to legacy/. Zero live PIXI.* references remain in index.html.
       import { configureBakeWorker } from "./scene3d/bake_worker_client.js";
+      // keepaliveFix (2026-07-07): dedicated-worker heartbeat that keeps a
+      // keepalive packet flowing even when the tab is hidden/occluded (main-
+      // thread timers get throttled/paused → ACE 60s "Network Timeout").
+      import { startKeepaliveWorker } from "./scene3d/keepalive_worker_client.js";
       import { createClient } from "./plugins/api.js";
       import { mountBar } from "./ui/bar.js";
       // Polish A (2026-05-27) + J1.C (2026-05-27): PR 8 plugin loader
@@ -5202,6 +5206,32 @@
                 }
               } catch (_) {}
             }, 2500);
+          }
+          // keepaliveFix (2026-07-07): the setInterval above is throttled to
+          // >=1s (and ~1/min after ~5 min hidden, and paused on some
+          // occluded/frozen tabs) when this tab is backgrounded, and starves
+          // under main-thread bake jank — so a hidden/headless tab stops
+          // sending keepalives and ACE reaps the session at 60s (the
+          // "Network Timeout" that hits real backgrounded players and bots).
+          // A dedicated Web Worker's timers are NOT throttled that way, so we
+          // ALSO drive sendKeepalive from a worker heartbeat. Started exactly
+          // once per page (guard flag). Reads window.__sessionHandle
+          // dynamically each pulse (same live-handle pattern as the interval)
+          // so a replaced handle on reconnect is picked up automatically.
+          // Runs alongside the 2.5s interval as belt-and-suspenders —
+          // sendKeepalive is a server-gated idempotent no-op unless the
+          // session is InWorld/EnteringWorld, so double-firing is harmless.
+          // Default-ON; ?keepaliveWorker=0 falls back to the interval only.
+          if (!window.__hbKeepaliveWorkerStarted) {
+            window.__hbKeepaliveWorkerStarted = true;
+            startKeepaliveWorker(() => {
+              try {
+                const kh = window.__sessionHandle;
+                if (kh && typeof kh.sendKeepalive === "function") {
+                  kh.sendKeepalive();
+                }
+              } catch (_) {}
+            }, 2000);
           }
           // A4-Q2 (2026-06-12, W3+ S5, ?mtQueue=on) — wasm-boundary bridge
           // for renderer AnimationDone (entities.js holds module exports,

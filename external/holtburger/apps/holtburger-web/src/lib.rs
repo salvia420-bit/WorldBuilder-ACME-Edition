@@ -35665,6 +35665,20 @@ async fn recv_loop(
     // arm wakes every 5s via `gloo_timers::future::TimeoutFuture` (the
     // wasm-safe equivalent of `tokio::time::sleep`, which panics on
     // wasm32 — see [[project_emit_dynamic_site]] tokio split notes).
+    //
+    // keepaliveFix (2026-07-07): the proactive keepalive is now driven by a
+    // single `IntervalStream` HOISTED OUTSIDE the loop, not a fresh
+    // `TimeoutFuture::new(5_000)` per iteration. `tokio::select!` rebuilds
+    // each arm's future every iteration, so the old per-iteration timer was
+    // reset to a full 5s whenever ANY other arm (recv/cmd) completed —
+    // steady inbound traffic therefore perpetually reset it and it rarely
+    // fired during active play. `IntervalStream` is backed by an unbounded
+    // mpsc channel fed by a live `setInterval`, so its ticks buffer even
+    // while another arm is being polled → a true fixed 5s cadence. (This is
+    // still a MAIN-THREAD timer, so a hidden/throttled tab is covered by the
+    // dedicated keepalive Web Worker poking `ForceKeepalive`, not by this
+    // arm — this arm is the active-play / EnteringWorld-load backstop.)
+    let mut keepalive_interval = gloo_timers::future::IntervalStream::new(5_000);
 
     loop {
         tokio::select! {
@@ -41726,10 +41740,19 @@ async fn recv_loop(
             // arm. Failures are logged but never panic — the rest of the
             // loop must keep running so the JS side can observe the
             // eventual disconnect through `recv_message`.
-            _ = gloo_timers::future::TimeoutFuture::new(5_000) => {
-                if matches!(state, LoopState::InWorld { .. })
-                    && session.last_send_time.elapsed()
-                        > std::time::Duration::from_secs(5)
+            _ = keepalive_interval.next() => {
+                // keepaliveFix (2026-07-07): also cover EnteringWorld so a
+                // long portal/dungeon load (state == EnteringWorld until
+                // PlayerCreate) doesn't suppress keepalives. Safe: a
+                // PingRequest before the player exists is silently dropped by
+                // ACE's inbound state gate (InboundMessageManager.cs:100-101,
+                // 132-133) while the packet arriving still resets the 60s
+                // server timeout (NetworkSession.cs:331, upstream of dispatch).
+                if matches!(
+                    state,
+                    LoopState::InWorld { .. } | LoopState::EnteringWorld { .. }
+                ) && session.last_send_time.elapsed()
+                    > std::time::Duration::from_secs(5)
                 {
                     use holtburger_protocol::messages::misc::actions::PingRequestActionData;
                     use holtburger_protocol::messages::GameAction;
@@ -41770,13 +41793,20 @@ async fn recv_loop(
                         // setInterval, bypassing the 5s gate above so
                         // packets keep flowing when the rAF net pump is
                         // paused (tab occluded / main thread saturated).
-                        // Gated InWorld here — mirrors
-                        // `should_send_keepalive_ping`'s state check — so
-                        // pre-login / charlist calls are silent no-ops.
-                        // Failures are logged, never fatal, so the loop
-                        // keeps running and JS can observe an eventual
+                        // Gated to InWorld OR EnteringWorld (keepaliveFix
+                        // 2026-07-07 relaxed this from InWorld-only) so the
+                        // worker heartbeat also keeps packets flowing during
+                        // long portal/dungeon loads. Pre-login / charlist
+                        // calls (Idle) remain silent no-ops. A PingRequest
+                        // sent before the player exists is dropped by ACE's
+                        // inbound state gate yet still resets the 60s server
+                        // timeout. Failures are logged, never fatal, so the
+                        // loop keeps running and JS can observe an eventual
                         // real disconnect through `recv_message`.
-                        if matches!(state, LoopState::InWorld { .. }) {
+                        if matches!(
+                            state,
+                            LoopState::InWorld { .. } | LoopState::EnteringWorld { .. }
+                        ) {
                             use holtburger_protocol::messages::misc::actions::PingRequestActionData;
                             use holtburger_protocol::messages::GameAction;
                             // Stamp send time so the PingResponse arm can
