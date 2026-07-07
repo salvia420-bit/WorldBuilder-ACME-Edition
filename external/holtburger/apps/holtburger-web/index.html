@@ -1298,6 +1298,12 @@
       // keepalive packet flowing even when the tab is hidden/occluded (main-
       // thread timers get throttled/paused → ACE 60s "Network Timeout").
       import { startKeepaliveWorker } from "./scene3d/keepalive_worker_client.js";
+      // Transport-in-worker port (2026-07-07): `?netWorker=1` runs the socket
+      // + the whole Session state machine (crypto/sequencing/ACK/keepalive)
+      // in a dedicated worker, so the session survives even a fully frozen
+      // main thread — the case the keepalive heartbeat above cannot cover.
+      // Default OFF; transparently falls back to the direct `start_session`.
+      import { startNetWorkerSession, netWorkerEnabled } from "./scene3d/net_worker_client.js";
       import { createClient } from "./plugins/api.js";
       import { mountBar } from "./ui/bar.js";
       // Polish A (2026-05-27) + J1.C (2026-05-27): PR 8 plugin loader
@@ -5162,7 +5168,12 @@
         try { localStorage.setItem(LOGIN_LAST_ACCOUNT_KEY, account); } catch {}
 
         try {
-          const handle = await start_session(bridgeUrl, serverHost, serverPort, account, password);
+          // `?netWorker=1` → socket + Session run in a dedicated worker
+          // (survives a frozen main thread); default → direct main-thread
+          // path. Same SessionHandle either way.
+          const handle = netWorkerEnabled()
+            ? await startNetWorkerSession(bridgeUrl, serverHost, serverPort, account, password)
+            : await start_session(bridgeUrl, serverHost, serverPort, account, password);
           activeHandle = handle;
           // Phase 4 step 3 capture-script debug hook (alongside
           // `window.entityMap` / `window.liveScene`). Lets the

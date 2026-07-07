@@ -94,6 +94,16 @@ wasm-bindgen-futures = "0.4"
 # arm. `tokio::time::sleep` panics on wasm32 ("time not implemented")
 # so this is the canonical wasm-side timer.
 gloo-timers = { version = "0.3", features = ["futures"] }
+# Transport-in-worker port (net_worker.rs): `js_sys::{Function, Uint8Array}`
+# for the wasm↔JS postMessage sinks that bridge the main-thread
+# `RemoteSessionProxy` and the net_worker's own wasm instance. Kept in the
+# wasm32-only block — like the rest of the recv-loop deps, it never enters
+# the native graph.
+js-sys = "0.3"
+# `async-trait` to implement `holtburger_session::ActionSink` for
+# `LoopSession` (the recv loop's pluggable session) — the movement
+# integrator takes `&mut dyn ActionSink`, so `LoopSession` must impl it.
+async-trait = { workspace = true }
 
 # Phase 4 step 6 Phase A native tests for triangulate_setup_model_with_substitutions:
 # the substituting triangulator helpers are gated cfg(any(target_arch = "wasm32",

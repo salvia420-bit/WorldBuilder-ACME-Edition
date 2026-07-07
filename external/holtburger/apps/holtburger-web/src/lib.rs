@@ -805,6 +805,12 @@ mod surface_overrides;
 #[cfg(any(target_arch = "wasm32", test))]
 mod motion_sequence;
 
+// Transport-in-worker port (2026-07-07 follow-up to the keepalive
+// heartbeat). `RemoteSessionProxy` + `LoopSession` (the recv loop's
+// pluggable session) + the net_worker's own wasm entry. See net_worker.rs.
+#[cfg(target_arch = "wasm32")]
+mod net_worker;
+
 #[cfg(target_arch = "wasm32")]
 pub use global_source::{
     cached_shard_count, has_resource_source, init_resource_source,
@@ -32811,25 +32817,39 @@ pub async fn start_session(
 ) -> Result<SessionHandle, JsValue> {
     use futures::channel::{mpsc, oneshot};
 
-    let transport = holtburger_transport_ws::WsTransport::connect(
-        &bridge_url,
-        &server_host,
-        server_port,
-        None,
-    )
-    .await
-    .map_err(|e| JsValue::from_str(&format!("WsTransport::connect: {e}")))?;
-    let ip: IpAddr = transport.server_ip();
-
-    let mut session = holtburger_session::Session::new_with_transport(
-        Box::new(transport),
-        SocketAddr::new(ip, server_port),
-    );
-
-    session
-        .send_login_request(&username, &password)
+    // Transport-in-worker port (2026-07-07): if `net_worker_client.js` armed
+    // worker mode for this call (`?netWorker=1`), the net_worker owns the
+    // socket + `Session` + login on its own thread, and we drive the recv
+    // loop here through a `RemoteSessionProxy` that shuttles
+    // `recv_message`/`send_action`/`send_message` across `postMessage`.
+    // Otherwise the socket + `Session` live here on the main thread — the
+    // default, byte-for-byte unchanged path. Either way `loop_session`
+    // presents the same surface to `recv_loop`.
+    let loop_session = if let Some(outbound_sink) = net_worker::take_worker_arm() {
+        net_worker::LoopSession::Proxy(net_worker::RemoteSessionProxy::new(outbound_sink))
+    } else {
+        let transport = holtburger_transport_ws::WsTransport::connect(
+            &bridge_url,
+            &server_host,
+            server_port,
+            None,
+        )
         .await
-        .map_err(|e| JsValue::from_str(&format!("send_login_request: {e}")))?;
+        .map_err(|e| JsValue::from_str(&format!("WsTransport::connect: {e}")))?;
+        let ip: IpAddr = transport.server_ip();
+
+        let mut session = holtburger_session::Session::new_with_transport(
+            Box::new(transport),
+            SocketAddr::new(ip, server_port),
+        );
+
+        session
+            .send_login_request(&username, &password)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("send_login_request: {e}")))?;
+
+        net_worker::LoopSession::Direct(session)
+    };
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded::<SessionCommand>();
     let (charlist_tx, charlist_rx) = oneshot::channel::<CharListReady>();
@@ -33184,7 +33204,7 @@ pub async fn start_session(
         let turbine_chat_state_inner = turbine_chat_state.clone();
         wasm_bindgen_futures::spawn_local(async move {
             recv_loop(
-                session,
+                loop_session,
                 cmd_rx,
                 queued_events,
                 character_list,
@@ -35206,7 +35226,10 @@ fn publish_local_player_can_jump(
 
 #[cfg(target_arch = "wasm32")]
 async fn recv_loop(
-    mut session: holtburger_session::Session,
+    // Direct `Session` (default) or a `RemoteSessionProxy` bridging to the
+    // net_worker (`?netWorker=1`). Same `recv_message`/`send_action`/
+    // `send_message` surface either way, so the loop body is unchanged.
+    mut session: net_worker::LoopSession,
     mut cmd_rx: futures::channel::mpsc::UnboundedReceiver<SessionCommand>,
     queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>>,
     character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>>,
@@ -41751,7 +41774,7 @@ async fn recv_loop(
                 if matches!(
                     state,
                     LoopState::InWorld { .. } | LoopState::EnteringWorld { .. }
-                ) && session.last_send_time.elapsed()
+                ) && session.last_send_time().elapsed()
                     > std::time::Duration::from_secs(5)
                 {
                     use holtburger_protocol::messages::misc::actions::PingRequestActionData;

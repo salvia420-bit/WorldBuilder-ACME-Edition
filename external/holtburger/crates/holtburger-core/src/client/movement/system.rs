@@ -28,7 +28,7 @@ use holtburger_common::{Guid, Quaternion, Vector3};
 use holtburger_protocol::messages::game_action::*;
 use holtburger_protocol::messages::game_message::RawMotionState;
 use holtburger_protocol::messages::movement::{InterpretedMotionCommand, MotionItem};
-use holtburger_session::Session;
+use holtburger_session::{ActionSink, Session};
 use holtburger_world::SolveBodyInput;
 use holtburger_world::spatial::{
     InterpStep, LocalDriveControl, LocalDriveGait, LocalStickyStep, PLAYER_CAPSULE_HEIGHT,
@@ -2444,7 +2444,7 @@ impl MovementSystem {
         &mut self,
         now: Instant,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
     ) -> Result<JumpOutcome> {
         use holtburger_common::stats::SkillType;
         use holtburger_world::context::WorldContextExt;
@@ -2967,7 +2967,7 @@ impl MovementSystem {
         &mut self,
         now: Instant,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
     ) -> Result<Vec<WorldEvent>> {
         self.reconcile_server_controlled_projection(world, now);
 
@@ -6727,7 +6727,7 @@ impl MovementSystem {
         &mut self,
         state: MotionState,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
         now: Instant,
     ) -> Result<Vec<WorldEvent>> {
         self.execute_motion_state_with_metadata_at(
@@ -6744,7 +6744,7 @@ impl MovementSystem {
         &mut self,
         now: Instant,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
         metadata: MovementPacketMetadata,
         had_active_local_motion: bool,
     ) -> Result<Vec<WorldEvent>> {
@@ -6772,7 +6772,7 @@ impl MovementSystem {
         state: MotionState,
         metadata: MovementPacketMetadata,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
         _now: Instant,
     ) -> Result<Vec<WorldEvent>> {
         let state_events = Vec::new();
@@ -6791,7 +6791,7 @@ impl MovementSystem {
         &mut self,
         intent: TransientMotionIntent,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
     ) -> Result<()> {
         let movement_sequence = world.player.next_move_seq();
         let raw_motion_state = raw_motion_state_with_motion_style(
@@ -6817,7 +6817,7 @@ impl MovementSystem {
         now: Instant,
         desired_heading: f32,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
         metadata: MovementPacketMetadata,
     ) -> Result<Vec<WorldEvent>> {
         let normalized_heading = normalize_heading(desired_heading);
@@ -6851,7 +6851,7 @@ impl MovementSystem {
         now: Instant,
         pose: holtburger_common::position::WorldPosition,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
         metadata: MovementPacketMetadata,
     ) -> Result<Vec<WorldEvent>> {
         log::info!("movement: applying arrival pose {:?}", pose);
@@ -6870,7 +6870,7 @@ impl MovementSystem {
         &mut self,
         intent: AutonomousDriveIntent,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
         now: Instant,
     ) -> Result<Vec<WorldEvent>> {
         let world_events = Vec::new();
@@ -6979,7 +6979,7 @@ impl MovementSystem {
         &mut self,
         now: Instant,
         world: &WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
         metadata: MovementPacketMetadata,
     ) -> Result<bool> {
         if !has_autonomous_position_sync_target(world) {
@@ -7059,7 +7059,7 @@ impl MovementSystem {
         &mut self,
         now: Instant,
         world: &WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
         metadata: MovementPacketMetadata,
     ) -> Result<bool> {
         let Some(pulse) = build_autonomous_position(world, metadata) else {
@@ -7094,7 +7094,7 @@ impl MovementSystem {
 
     async fn send_motion_state_pulse(
         world: &WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
         state: MotionState,
         metadata: MovementPacketMetadata,
     ) -> Result<()> {
@@ -7111,7 +7111,7 @@ impl MovementSystem {
 
     async fn send_transient_motion_pulse(
         world: &WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
         raw_motion_state: RawMotionState,
     ) -> Result<()> {
         let data = build_move_to_state(world, raw_motion_state, MovementPacketMetadata::default());
@@ -7123,7 +7123,7 @@ impl MovementSystem {
 
     async fn send_stop_pulse(
         world: &WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
         metadata: MovementPacketMetadata,
     ) -> Result<()> {
         let data = build_move_to_state(

@@ -7,4 +7,4 @@ mod send;
 mod tests;
 mod types;
 
-pub use types::{MockTransport, PendingMessage, Session, SessionEvent, Transport};
+pub use types::{ActionSink, MockTransport, PendingMessage, Session, SessionEvent, Transport};

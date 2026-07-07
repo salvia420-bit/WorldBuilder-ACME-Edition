@@ -4,7 +4,7 @@ use crate::client::movement_types::{MotionStyle, PlayerDriveIntent};
 use anyhow::Result;
 use holtburger_common::Guid;
 use holtburger_protocol::messages::movement::InterpretedMotionCommand;
-use holtburger_session::Session;
+use holtburger_session::{ActionSink, Session};
 use holtburger_world::{WorldEvent, WorldState};
 use std::time::Duration;
 use web_time::Instant;
@@ -105,7 +105,7 @@ impl MovementSystemHandle {
         &mut self,
         now: Instant,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
     ) -> Result<Vec<WorldEvent>> {
         let dt = match self.last_tick_at {
             Some(prev) => now.saturating_duration_since(prev),
@@ -459,7 +459,7 @@ impl MovementSystemHandle {
         &mut self,
         now: Instant,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
     ) -> Result<JumpOutcome> {
         self.inner.execute_jump_release(now, world, session).await
     }

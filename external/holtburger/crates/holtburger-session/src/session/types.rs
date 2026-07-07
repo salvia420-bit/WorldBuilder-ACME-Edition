@@ -43,6 +43,48 @@ pub trait Transport {
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)>;
 }
 
+// `ActionSink` — the minimal "can send a `GameAction`" capability the
+// client-side movement/prediction integrator (`holtburger-core`'s
+// `MovementSystem`/`TickSpine`) needs from a session. Introduced for the
+// transport-in-worker port: the movement methods used to take a concrete
+// `&mut Session`, but under `?netWorker` the real `Session` lives in a Web
+// Worker and the main-thread recv loop drives a `RemoteSessionProxy`
+// instead. Both implement `ActionSink`, so the movement methods take
+// `&mut dyn ActionSink` and neither cares which is behind it. The movement
+// runtime path uses ONLY `send_action` (verified: no `Session` field reads
+// in `movement/system.rs`, `tick_spine.rs`, `simulation.rs`,
+// `movement/handle.rs`), so a one-method trait suffices. Cfg-split Send
+// exactly like `Transport`: native futures stay `Send` (the CLI's tokio
+// runtime), wasm is single-threaded `?Send`.
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+pub trait ActionSink: Send {
+    async fn send_action(&mut self, action: GameAction) -> Result<()>;
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+pub trait ActionSink {
+    async fn send_action(&mut self, action: GameAction) -> Result<()>;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+impl ActionSink for Session {
+    async fn send_action(&mut self, action: GameAction) -> Result<()> {
+        // Inherent `Session::send_action` (send.rs), not this trait method.
+        Session::send_action(self, action).await
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+impl ActionSink for Session {
+    async fn send_action(&mut self, action: GameAction) -> Result<()> {
+        Session::send_action(self, action).await
+    }
+}
+
 // UDP-backed Transport is native-only — wasm32 builds plug in their own
 // (e.g. `WsTransport` in Phase 2 of emit-dynamic-site) via
 // `Session::new_with_transport`.

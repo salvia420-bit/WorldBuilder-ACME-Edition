@@ -29,7 +29,7 @@ use super::movement::{MovementSystem, MovementSystemHandle};
 use super::simulation::ClientSimulationSystem;
 use anyhow::Result;
 use holtburger_common::Guid;
-use holtburger_session::Session;
+use holtburger_session::{ActionSink, Session};
 use holtburger_world::{SpatialBodyId, WorldEvent, WorldState};
 use std::time::Duration;
 use web_time::Instant;
@@ -64,7 +64,7 @@ pub(super) async fn tick_frame<F>(
     world: &mut WorldState,
     movement: &mut MovementSystem,
     simulation: &mut ClientSimulationSystem,
-    session: &mut Session,
+    session: &mut dyn ActionSink,
     mut on_event: F,
 ) -> Result<()>
 where
@@ -202,7 +202,7 @@ impl TickSpineHandle {
         now: Instant,
         world: &mut WorldState,
         movement: &mut MovementSystemHandle,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
     ) -> Result<Vec<Guid>> {
         let dt = match self.last_tick_at {
             Some(prev) => now.saturating_duration_since(prev),

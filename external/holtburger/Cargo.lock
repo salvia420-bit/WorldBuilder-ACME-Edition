@@ -1685,6 +1685,7 @@ name = "holtburger-web"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "console_error_panic_hook",
  "futures",
  "gloo-timers",
@@ -1698,6 +1699,7 @@ dependencies = [
  "holtburger-session",
  "holtburger-transport-ws",
  "holtburger-world",
+ "js-sys",
  "log",
  "serde",
  "serde-wasm-bindgen",

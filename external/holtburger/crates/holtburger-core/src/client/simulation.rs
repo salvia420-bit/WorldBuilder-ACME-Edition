@@ -4,7 +4,7 @@ use holtburger_common::position::WorldPosition;
 use holtburger_common::properties::WorldObjectExt;
 use holtburger_common::{Guid, Quaternion, Vector3};
 use holtburger_protocol::messages::*;
-use holtburger_session::Session;
+use holtburger_session::ActionSink;
 use holtburger_world::spatial::USE_STICKY_MANAGER;
 use holtburger_world::{
     ContactState, SolveBodyInput, SolvedBodyKinematics, SpatialBodyId, SpatialSolveBatch,
@@ -472,7 +472,7 @@ impl ClientSimulationSystem {
         data: MovementEventData,
         movement: &mut MovementSystem,
         world: &mut WorldState,
-        session: &mut Session,
+        session: &mut dyn ActionSink,
     ) -> Result<Vec<WorldEvent>> {
         log::info!(
             ">>> Processing server-initiated movement: {:?}. Control Sequence: {}",
