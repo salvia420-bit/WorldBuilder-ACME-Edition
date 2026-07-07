@@ -2225,26 +2225,118 @@ function _wireDiagTap(upd) {
 // module-scope. None of them ever calls `upd.free()` or throws past
 // its caller's try/catch.
 
-function _armSpawn(scene3d, em, upd) {
-  // Snapshot before async — the wasm-bindgen handle may be
-  // .free()'d by the owner right after dispatch, but the spawn
-  // is async + may await the keyframe fetch. The meta is held
-  // locally for the FU-1 nudge below.
-  const meta = toMeta(upd);
+// ===========================================================================
+// Item #2 (2026-07-07) — time-slice the ObjectCreate → spawn dispatch.
+// ===========================================================================
+// A town-load / teleport burst delivers dozens of ObjectCreate spawns that,
+// dispatched in one pass, materialise their geometry in one giant synchronous
+// task (the "~9 s dev / fraction on release" freeze; the ~90-spawn backlog
+// replay is the login twin). Every non-legacy spawn route — the live array
+// hook + single hook, the pre-init3D backlog replay, the synthetic
+// spawns.js injector, and the standalone drain — funnels through `_armSpawn`,
+// so deferring HERE spreads the burst across frames from one seam.
+//
+// `em.spawn` is ALREADY async fire-and-forget (nothing downstream may assume
+// a synchronous spawn — `_armPosition` already stashes pose for a not-yet-
+// spawned guid and `setPose` no-ops), so deferring the kick-off is a change
+// of degree, not kind. The queued metas are plain `toMeta` snapshots — safe
+// to hold across frames w.r.t. the wasm-handle `.free()` the drain owner does
+// after the tick. Default ON; `?noSpawnTimeSlice=1` reverts to inline
+// dispatch, `?spawnDispatchPerTick=N` tunes the per-tick kick-off count.
+//
+// The per-tick COUNT (not a time budget like statics F3) is the lever: each
+// kicked-off `em.spawn` schedules its own heavy geometry-assembly continuation
+// when its async fetches resolve, so bounding kick-offs/tick bounds how many
+// continuations land per yield-interval. setTimeout(0) between ticks (NOT
+// rIC — `_ric_shim` poisons it; NOT rAF — dies under renderOnDemand), same
+// rationale as the statics F3 time-slice.
+const _deferredSpawns = new Map(); // guid → {scene3d, em, meta}; FIFO + dedup + O(1) cancel
+let _spawnPumpArmed = false;
+function _readSpawnSliceFlag(name, dflt, max) {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search || "").get(name);
+    if (name === "noSpawnTimeSlice") return v !== "1";
+    const n = v == null ? NaN : parseInt(v, 10);
+    if (Number.isFinite(n) && n > 0) return Math.min(n, max);
+  } catch (_) { /* SSR / no location */ }
+  return dflt;
+}
+const _SPAWN_TIMESLICE = _readSpawnSliceFlag("noSpawnTimeSlice", true);
+const _SPAWN_PER_TICK = _readSpawnSliceFlag("spawnDispatchPerTick", 6, 64);
+
+// The actual spawn + FU-1 wield nudge, run at real dispatch time (inline or
+// pumped) so the wield re-sync still fires per spawned guid.
+function _doSpawn(em, meta) {
   em.spawn(meta);
   // D2 (Q3.2, rides existing ?wieldHandAttach, default-off ⇒ inert):
   // FU-1 (2026-06-11) — LOGIN-time wielded items never get a kind=49
-  // Wielder-transition event (the wield predates the session), so no
-  // attach is ever requested and the weapon renders "dropped" at the
-  // feet. Nudge the wielder re-sync for every spawned guid: if it
-  // wields anything, flushWieldedDirty enumerates
-  // entityWieldedItems() and requests the attaches
-  // (child-not-yet-spawned ordering is handled by _pendingAttach).
-  // Covers the local player on login AND NPCs spawning pre-armed.
-  // No-op for non-wielders.
+  // Wielder-transition event (the wield predates the session), so no attach
+  // is ever requested and the weapon renders "dropped" at the feet. Nudge the
+  // wielder re-sync for every spawned guid: if it wields anything,
+  // flushWieldedDirty enumerates entityWieldedItems() and requests the
+  // attaches (child-not-yet-spawned ordering is handled by _pendingAttach).
+  // Covers the local player on login AND NPCs spawning pre-armed. No-op for
+  // non-wielders.
   if (em._wieldHandAttach) {
     try { em._markWielderDirty?.(meta.guid); } catch (_) {}
   }
+}
+
+function _pumpDeferredSpawns() {
+  _spawnPumpArmed = false;
+  let n = 0;
+  const done = [];
+  for (const [guid, entry] of _deferredSpawns) {
+    if (n >= _SPAWN_PER_TICK) break;
+    // Drop silently if the scene was torn down / the EntityManager was swapped
+    // (renderer hot-swap) between enqueue and pump — spawning into a detached
+    // EM would orphan the rig.
+    if (entry.scene3d.entityManager === entry.em) {
+      try { _doSpawn(entry.em, entry.meta); }
+      catch (e) { /* eslint-disable-next-line no-console */ console.warn("[loop] deferred spawn threw:", e); }
+    }
+    done.push(guid);
+    n += 1;
+  }
+  for (const g of done) _deferredSpawns.delete(g);
+  if (_deferredSpawns.size > 0) {
+    _spawnPumpArmed = true;
+    setTimeout(_pumpDeferredSpawns, 0);
+  }
+}
+
+function _enqueueDeferredSpawn(scene3d, em, meta) {
+  // Map.set on an existing key keeps its FIFO position but updates the value,
+  // so a re-spawn of a still-queued guid supersedes with the latest meta.
+  _deferredSpawns.set(meta.guid >>> 0, { scene3d, em, meta });
+  if (!_spawnPumpArmed) {
+    _spawnPumpArmed = true;
+    setTimeout(_pumpDeferredSpawns, 0);
+  }
+}
+
+// A KIND_REMOVE for a guid whose spawn is still queued must drop the queued
+// spawn — else the pump would later create an entity that should have been
+// removed (spawn-then-despawn in the same burst → orphan). No-op once the
+// spawn has already kicked off (the in-flight case is the pre-existing async
+// race, unchanged by this deferral).
+function _cancelDeferredSpawn(guid) {
+  _deferredSpawns.delete(guid >>> 0);
+}
+
+function _armSpawn(scene3d, em, upd) {
+  // Snapshot before async — the wasm-bindgen handle may be `.free()`'d by the
+  // owner right after dispatch, but the spawn is async + may await the
+  // keyframe fetch. The plain meta is safe to hold across the deferral.
+  const meta = toMeta(upd);
+  // Dispatch the LOCAL PLAYER immediately so the camera latches onto its rig
+  // without a few-frame delay (mirrors the backlog replay's local-first
+  // priority). All other spawns time-slice across frames unless disabled.
+  if (!_SPAWN_TIMESLICE || isLocalPlayerGuid(meta.guid >>> 0)) {
+    _doSpawn(em, meta);
+    return;
+  }
+  _enqueueDeferredSpawn(scene3d, em, meta);
 }
 
 // (2026-07-02) — death-hold grace: how long a freshly-Dead creature's rig
@@ -2261,6 +2353,9 @@ const DEATH_HOLD_MS = 2000;
 function _armRemove(scene3d, em, upd) {
   // A4 (2026-05-18): prune __lastEntityWorldPos on despawn to bound Map growth.
   const g = upd.guid >>> 0;
+  // Item #2 — drop a still-queued (not-yet-dispatched) spawn for this guid so
+  // a spawn-then-despawn in the same burst can't later materialise an orphan.
+  _cancelDeferredSpawn(g);
   // (2026-07-02) — defer the visual disposal of a creature that JUST
   // received its Dead motion (entities.js stamps `_deathAt`), so the
   // collapse one-shot / frozen death pose renders instead of an instant
