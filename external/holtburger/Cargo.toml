@@ -123,3 +123,42 @@ debug = true
 strip = "none"
 debug-assertions = false
 incremental = false
+
+# Dev-build performance (2026-07-07). The terrain/DAT bake pipeline
+# (`holtburger_dat::normal_gen` normal-map generation, texture decode, DAT
+# parsing) and the collision/scene build are compute-heavy tight numeric
+# loops. At the default dev `opt-level = 0` (plus debug bounds/overflow
+# checks) they run several times slower, and because they execute on the
+# browser main thread that surfaced as a regular multi-hundred-ms landblock-
+# bake STUTTER that made the dev build effectively unusable (CPU-profiled:
+# `holtburger_dat::normal_gen::*` + `Texture::to_rgba8` + DAT `read_exact`
+# dominate dev self-time, plus ~2% in debug-only `precondition_check`).
+#
+# Fix (verified by CPU profiling, 2026-07-07):
+#  • Optimize all DEPENDENCIES at opt-level 3 in dev — the `"*"` glob. The DAT
+#    bake path leans on `binrw` (deserialization), `sha2` (content hashing) and
+#    the image/decoder deps, which the default dev profile leaves at
+#    `opt-level = 0`. Deps are cached, so this is a one-time compile cost.
+#  • Optimize the stable, compute-heavy WORKSPACE crates (`holtburger-dat`'s
+#    `normal_gen`/texture decode, plus `holtburger-world`/`-core`
+#    collision/scene build) and turn OFF debug-assertions + overflow-checks in
+#    them — the per-pixel normal-map loops paid a large tax in debug bounds/
+#    overflow checks (`from_raw_parts::precondition_check` was ~2% of dev
+#    self-time). Verified effect on the dev bake stutter: worst main-thread
+#    long task 1374ms → 525ms → (with deps + checks) far lower.
+# The application crate (`holtburger-web`) stays at `opt-level = 0`, so editing
+# app/scene code keeps fast incremental rebuilds. Release is unaffected.
+[profile.dev.package."*"]
+opt-level = 3
+[profile.dev.package.holtburger-dat]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.holtburger-world]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.holtburger-core]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
