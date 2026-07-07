@@ -224,6 +224,12 @@ export function serializeSurfacePixels(sp) {
     luminosity: sp.luminosity,
     diffuse: sp.diffuse,
   };
+  // A10-M3a — carry the palettedness bit ONLY when the getter exists
+  // (strict boolean; older pkg lacks it). The consumers key on
+  // `typeof sp.hasPalette === "boolean"` and otherwise keep the legacy
+  // alphaTest 0.5, so leaving the key absent on a stale pkg preserves
+  // the exact `undefined` fallback semantics across the worker boundary.
+  if (typeof sp.hasPalette === "boolean") surface.hasPalette = sp.hasPalette;
 
   const seen = new Set();
   const transfer = [];
@@ -275,10 +281,100 @@ export function reconstructSurfacePixels(p) {
     translucency: p.translucency,
     luminosity: p.luminosity,
     diffuse: p.diffuse,
+    // `undefined` when the payload omitted it (stale pkg) — matches the
+    // consumers' `typeof … === "boolean" ? … : undefined` contract.
+    hasPalette: p.hasPalette,
   };
 }
 
 /** @param {SurfacePixelsPayload[]} payload */
 export function reconstructSurfacePixelsBatch(payload) {
   return payload.map(reconstructSurfacePixels);
+}
+
+// ---------------------------------------------------------------------------
+// EntitySurfacesPixelsBatch — `fetchEntitySurfacesPixelsBatch` decoder output
+// ---------------------------------------------------------------------------
+//
+// The batched entity-surface decoder (F.41) returns an
+// `EntitySurfacesPixelsBatch` wasm handle whose `payloadAt(i)` MOVES out
+// one group's `Vec<SurfacePixels>` (single-shot; `wasDrained(i)` after).
+// To cross the worker boundary we drain every group into a plain
+// array-of-arrays of `SurfacePixelsPayload` (reusing the single-surface
+// serializer, so the pixel/normal/height `ArrayBuffer`s transfer zero-copy
+// and dedupe across the whole batch), then free the handle in the worker.
+// The reconstructed main-thread object re-implements the SAME consumer
+// surface the wasm handle exposed — `len`, `payloadAt(i)` (single-shot),
+// `wasDrained(i)`, `free()` — so `materials.js::preloadBatch` is a drop-in.
+
+/**
+ * Serialize a wasm `EntitySurfacesPixelsBatch` handle by draining every
+ * group. Frees each drained `SurfacePixels` handle (their pixels were
+ * already copied into JS-owned typed arrays by `serializeSurfacePixels`)
+ * and the batch handle itself. `null` groups (drained/out-of-range) round-
+ * trip as `null`.
+ * @param {*} batch wasm `EntitySurfacesPixelsBatch`
+ * @returns {{ groups: (SurfacePixelsPayload[]|null)[], transfer: ArrayBuffer[] }}
+ */
+export function serializeEntitySurfacesBatch(batch) {
+  const groups = [];
+  const seen = new Set();
+  const transfer = [];
+  const n = batch.len >>> 0;
+  for (let i = 0; i < n; i += 1) {
+    const payload = batch.payloadAt(i); // Array<SurfacePixels> | undefined
+    if (!payload) {
+      groups.push(null);
+      continue;
+    }
+    const { surfaces, transfer: t } = serializeSurfacePixelsBatch(payload);
+    groups.push(surfaces);
+    for (const buf of t) {
+      if (!seen.has(buf)) {
+        seen.add(buf);
+        transfer.push(buf);
+      }
+    }
+    // Pixels are copied out; the wasm handles can go now.
+    for (const sp of payload) {
+      try {
+        if (sp && typeof sp.free === "function") sp.free();
+      } catch (_) {
+        /* best-effort */
+      }
+    }
+  }
+  try {
+    if (batch && typeof batch.free === "function") batch.free();
+  } catch (_) {
+    /* best-effort */
+  }
+  return { groups, transfer };
+}
+
+/**
+ * Reconstruct a drop-in for the wasm `EntitySurfacesPixelsBatch` handle.
+ * Mirrors its `len` / `payloadAt(i)` (single-shot MOVE) / `wasDrained(i)` /
+ * `free()` surface so `materials.js::preloadBatch` consumes it unchanged.
+ * @param {(SurfacePixelsPayload[]|null)[]} groups
+ */
+export function reconstructEntitySurfacesBatch(groups) {
+  const rebuilt = groups.map((g) => (g ? reconstructSurfacePixelsBatch(g) : null));
+  return {
+    get len() {
+      return rebuilt.length;
+    },
+    payloadAt(i) {
+      if (i < 0 || i >= rebuilt.length) return null;
+      const g = rebuilt[i];
+      rebuilt[i] = null; // single-shot MOVE, matching the wasm handle
+      return g;
+    },
+    wasDrained(i) {
+      return i < 0 || i >= rebuilt.length || rebuilt[i] === null;
+    },
+    free() {
+      /* plain object — nothing wasm-backed to release */
+    },
+  };
 }

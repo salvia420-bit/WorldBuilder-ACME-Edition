@@ -550,6 +550,14 @@ import {
   acToThree,
 } from "./adapter.js";
 import { AnimationCache, cycleTimeScale, hasRootMotion } from "./animation.js";
+// Routes the dyed/paletted entity-surface decode through the bake worker
+// (off the main thread) with a transparent main-thread fallback.
+// `surfacePixelsFetcher` does the same for the non-dyed entity surface
+// preloads (statics decoder), matching the statics/buildings/cells offload.
+import {
+  entitySurfacePixelsFetcher,
+  surfacePixelsFetcher,
+} from "./bake_worker_client.js";
 // Animation consolidation (docs/animation-audit §5): route attack swings through
 // the RUST MotionSequence interpreter (full-body, retail-faithful, cargo-tested —
 // src/motion_sequence.rs) instead of the mixer overlay that the locomotion cycle
@@ -3407,7 +3415,7 @@ export class EntityManager {
           let results = null;
           if (missDids.length > 0) {
             const fetchDids = new Uint32Array(missDids);
-            results = await this.wasmExports.fetchEntitySurfacesPixels(
+            results = await entitySurfacePixelsFetcher(this.wasmExports)(
               fetchDids,
               paletteId,
               subPalettes
@@ -3521,7 +3529,7 @@ export class EntityManager {
       try {
         await this.materialCache.preload(
           [...allSurfaceDids],
-          this.wasmExports.fetch_surfaces_pixels
+          surfacePixelsFetcher(this.wasmExports)
         );
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -8385,7 +8393,7 @@ export class EntityManager {
             subPaletteTripleCount: (subPalettes.length / 3) | 0,
           });
         } catch (_) {}
-        const results = await this.wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes);
+        const results = await entitySurfacePixelsFetcher(this.wasmExports)(dids, paletteId, subPalettes);
         entityMaterials = new Map();
         const newOwnedMaterials = [];
         const newOwnedTextures = [];
@@ -8428,7 +8436,7 @@ export class EntityManager {
       }
     } else if (allSurfaceDids.size > 0 && this.materialCache) {
       try {
-        await this.materialCache.preload([...allSurfaceDids], this.wasmExports.fetch_surfaces_pixels);
+        await this.materialCache.preload([...allSurfaceDids], surfacePixelsFetcher(this.wasmExports));
       } catch (e) {
         try { window.__diag?.assets?.onMaterialError?.({ guid, dids: allSurfaceDids, error: e, source: "hot-swap" }); } catch (_) {}
       }

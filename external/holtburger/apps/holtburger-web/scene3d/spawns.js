@@ -30,6 +30,11 @@
 // removed the only reader. Re-introduce if a future dispatch path
 // needs the constant.
 
+// Routes the F.41 batched entity-surface decode through the bake worker
+// (off the main thread) with a transparent main-thread fallback — mirrors
+// the statics `surfacePixelsFetcher` offload.
+import { entitySurfacesBatchFetcher } from "./bake_worker_client.js";
+
 // Phase D.1 — base URL for the staged ACE spawn JSONL files. Mirrors
 // `scene3d/statics.js`'s SCENERY_BASE_URL. The dev server's
 // `/dist/...` → `/mnt/wbterminal1/holtburger-dist-v2/...` mapping
@@ -675,7 +680,12 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
     // entities.js::_spawnImpl remains the correctness floor.
     const matCache = scene3d?.materialCache;
     const collectDidsFn = wasmExports?.collectSurfaceDidsForSetups;
-    const fetchSurfBatch = wasmExports?.fetchEntitySurfacesPixelsBatch;
+    // Off-thread when the bake worker is active; the fetcher returns the raw
+    // wasm export (or undefined on a stale pkg) otherwise, so the
+    // `typeof … === "function"` guard below still gates correctly.
+    const fetchSurfBatch = wasmExports
+      ? entitySurfacesBatchFetcher(wasmExports)
+      : undefined;
     if (
       matCache &&
       typeof matCache.preloadBatch === "function" &&

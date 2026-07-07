@@ -18,6 +18,7 @@
 import {
   reconstructModelMeshes,
   reconstructSurfacePixelsBatch,
+  reconstructEntitySurfacesBatch,
 } from "./bake_transfer.js";
 
 function urlFlagEnabled() {
@@ -154,6 +155,81 @@ class BakeWorkerClient {
     }
   }
 
+  /**
+   * Entity (dyed/paletted) surface pixels off-thread. Returns a plain
+   * `Array<SurfacePixels-like>` — drop-in for the `fetchEntitySurfacesPixels`
+   * consumers in `entities.js` (they read `.width/.pixels/.translucency/…`
+   * and guard `.free()`). Falls back to the direct main-thread wasm call.
+   */
+  async fetchEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes) {
+    if (!this.active) {
+      return wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes);
+    }
+    try {
+      await this._ensureWorker();
+      const res = await this._request("fetchEntitySurfacesPixels", {
+        dids: Array.from(dids),
+        paletteId: paletteId >>> 0,
+        subPalettes: Array.from(subPalettes || []),
+      });
+      return reconstructSurfacePixelsBatch(res.payload);
+    } catch (e) {
+      console.warn(
+        "[bake_worker_client] entity-surface worker failed; main-thread fallback:",
+        e,
+      );
+      return wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes);
+    }
+  }
+
+  /**
+   * F.41 batched entity surfaces off-thread. Returns a drop-in for the wasm
+   * `EntitySurfacesPixelsBatch` handle (`len` / `payloadAt(i)` single-shot /
+   * `wasDrained(i)` / `free()`) so `materials.js::preloadBatch` is unchanged.
+   * Falls back to the direct main-thread wasm call.
+   */
+  async fetchEntitySurfacesPixelsBatch(
+    wasmExports,
+    flatDids,
+    lens,
+    basePals,
+    flatSubs,
+    tripleCounts,
+  ) {
+    if (!this.active) {
+      return wasmExports.fetchEntitySurfacesPixelsBatch(
+        flatDids,
+        lens,
+        basePals,
+        flatSubs,
+        tripleCounts,
+      );
+    }
+    try {
+      await this._ensureWorker();
+      const res = await this._request("fetchEntitySurfacesPixelsBatch", {
+        flatDids: Array.from(flatDids),
+        lens: Array.from(lens),
+        basePals: Array.from(basePals),
+        flatSubs: Array.from(flatSubs || []),
+        tripleCounts: Array.from(tripleCounts || []),
+      });
+      return reconstructEntitySurfacesBatch(res.payload);
+    } catch (e) {
+      console.warn(
+        "[bake_worker_client] entity-surface-batch worker failed; main-thread fallback:",
+        e,
+      );
+      return wasmExports.fetchEntitySurfacesPixelsBatch(
+        flatDids,
+        lens,
+        basePals,
+        flatSubs,
+        tripleCounts,
+      );
+    }
+  }
+
   terminate() {
     if (this._worker) this._worker.terminate();
     this._failAll(new Error("bake worker terminated"));
@@ -191,4 +267,39 @@ export function surfacePixelsFetcher(wasmExports) {
   const client = getBakeWorkerClient();
   if (!client.active) return wasmExports.fetch_surfaces_pixels;
   return (dids, urgent) => client.fetchSurfacesPixels(wasmExports, dids, urgent);
+}
+
+/**
+ * Same contract for the single-call entity (dyed) surface decoder. Returns
+ * the EXACT `wasmExports.fetchEntitySurfacesPixels` reference when the
+ * worker is inactive (byte-identical to pre-offload), OR when the wasm
+ * bundle predates the export (so callers' `typeof … === "function"` guards
+ * still gate correctly). When active, routes through the worker.
+ */
+export function entitySurfacePixelsFetcher(wasmExports) {
+  if (typeof wasmExports.fetchEntitySurfacesPixels !== "function") {
+    return wasmExports.fetchEntitySurfacesPixels;
+  }
+  const client = getBakeWorkerClient();
+  if (!client.active) return wasmExports.fetchEntitySurfacesPixels;
+  return (dids, paletteId, subPalettes) =>
+    client.fetchEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes);
+}
+
+/** Same contract for the F.41 batched entity-surface decoder. */
+export function entitySurfacesBatchFetcher(wasmExports) {
+  if (typeof wasmExports.fetchEntitySurfacesPixelsBatch !== "function") {
+    return wasmExports.fetchEntitySurfacesPixelsBatch;
+  }
+  const client = getBakeWorkerClient();
+  if (!client.active) return wasmExports.fetchEntitySurfacesPixelsBatch;
+  return (flatDids, lens, basePals, flatSubs, tripleCounts) =>
+    client.fetchEntitySurfacesPixelsBatch(
+      wasmExports,
+      flatDids,
+      lens,
+      basePals,
+      flatSubs,
+      tripleCounts,
+    );
 }

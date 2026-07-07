@@ -14,18 +14,26 @@
 //   in : {type:'init', id, manifestUrl, sceneryBaseUrl}
 //        {type:'fetchModelMeshes', id, ids:[u32,...]}
 //        {type:'fetchSurfacesPixels', id, dids:[u32,...]}
+//        {type:'fetchEntitySurfacesPixels', id, dids:[u32,...], paletteId, subPalettes:[u32,...]}
+//        {type:'fetchEntitySurfacesPixelsBatch', id, flatDids, lens, basePals, flatSubs, tripleCounts}
 //   out: {type:'ready', id}
-//        {type:'result', id, kind:'modelMeshes'|'surfaces', payload:[...]}  (+ transferables)
+//        {type:'result', id, kind:'modelMeshes'|'surfaces'|'entitySurfaces'|'entitySurfacesBatch', payload:[...]}  (+ transferables)
 //        {type:'error', id, message}
 
 import init, {
   fetch_model_meshes,
   fetch_surfaces_pixels,
+  fetchEntitySurfacesPixels,
+  fetchEntitySurfacesPixelsBatch,
   init_resource_source,
   init_scenery_base_url,
 } from "../pkg/holtburger_web.js";
 
-import { serializeModelMeshes, serializeSurfacePixelsBatch } from "./bake_transfer.js";
+import {
+  serializeModelMeshes,
+  serializeSurfacePixelsBatch,
+  serializeEntitySurfacesBatch,
+} from "./bake_transfer.js";
 
 let ready = false;
 
@@ -64,6 +72,34 @@ async function handleSurfaces(msg) {
   self.postMessage({ type: "result", id: msg.id, kind: "surfaces", payload }, transfer);
 }
 
+// Entity surface decode — the dyed/paletted path (`fetch_entity_surface_
+// pixels_impl`). Runs the same per-pixel `to_rgba8` + `normal_gen` the
+// statics path does, plus the per-entity palette/sub-palette overlay, in
+// THIS worker's wasm instance so it stays off the main thread.
+async function handleEntitySurfaces(msg) {
+  const surfaces = await fetchEntitySurfacesPixels(
+    Uint32Array.from(msg.dids),
+    msg.paletteId >>> 0,
+    Uint32Array.from(msg.subPalettes || []),
+  );
+  const { surfaces: payload, transfer } = serializeSurfacePixelsBatch(surfaces);
+  self.postMessage({ type: "result", id: msg.id, kind: "entitySurfaces", payload }, transfer);
+}
+
+// F.41 batch — N entity groups in one prefetch loop, one postMessage back.
+async function handleEntitySurfacesBatch(msg) {
+  const batch = await fetchEntitySurfacesPixelsBatch(
+    Uint32Array.from(msg.flatDids || []),
+    Uint32Array.from(msg.lens || []),
+    Uint32Array.from(msg.basePals || []),
+    Uint32Array.from(msg.flatSubs || []),
+    Uint32Array.from(msg.tripleCounts || []),
+  );
+  // Drains + frees the batch (and per-group SurfacePixels) handles.
+  const { groups: payload, transfer } = serializeEntitySurfacesBatch(batch);
+  self.postMessage({ type: "result", id: msg.id, kind: "entitySurfacesBatch", payload }, transfer);
+}
+
 self.onmessage = async (ev) => {
   const msg = ev.data;
   try {
@@ -76,6 +112,12 @@ self.onmessage = async (ev) => {
       case "fetchSurfacesPixels":
         if (!ready) throw new Error("bake_worker: fetchSurfacesPixels before init");
         return await handleSurfaces(msg);
+      case "fetchEntitySurfacesPixels":
+        if (!ready) throw new Error("bake_worker: fetchEntitySurfacesPixels before init");
+        return await handleEntitySurfaces(msg);
+      case "fetchEntitySurfacesPixelsBatch":
+        if (!ready) throw new Error("bake_worker: fetchEntitySurfacesPixelsBatch before init");
+        return await handleEntitySurfacesBatch(msg);
       default:
         throw new Error(`bake_worker: unknown message type ${msg && msg.type}`);
     }
