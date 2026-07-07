@@ -162,3 +162,35 @@ overflow-checks = false
 opt-level = 3
 debug-assertions = false
 overflow-checks = false
+# Asset load/decode pipeline (added 2026-07-07 after CPU-profiling a town
+# teleport on the dev build): the biggest single self-time cost of loading a
+# dense area was `holtburger_manifest::catalog::crc32_ieee` (~19%) — per-record
+# CRC32 integrity checking — running unoptimized at dev `opt-level = 0` with
+# debug bounds checks. The record/catalog load + scenery/suite bake crates sit
+# on the same main-thread hot path. Optimizing them (release already does)
+# cuts the dev town-load freeze. Still library crates → amortized cached
+# compile; the app crate stays at opt-level 0.
+[profile.dev.package.holtburger-manifest]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.holtburger-content]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.holtburger-common]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.holtburger-resource-http]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.holtburger-scenery-bake]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.holtburger-suite-bake]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false

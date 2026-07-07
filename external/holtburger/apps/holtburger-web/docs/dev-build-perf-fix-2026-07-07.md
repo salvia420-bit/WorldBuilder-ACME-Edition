@@ -56,9 +56,20 @@ Net: worst-case hitch ~2.8× smaller, moderate hitches ~2.4× fewer, main thread
 
 **Build-time cost:** a one-time ~6.5 min cold rebuild (recompiling the dep tree + 3 crates at opt3). Deps + those crates are then cached, so incremental **app-code** rebuilds (the common iteration case) recompile only `holtburger-web` at opt0 — **measured ~17 s** (`touch src/lib.rs` → `wasm-pack build --dev`), i.e. iteration speed is preserved (faster, even, than the old ~1 min opt0 cold build).
 
-## Remaining (follow-up — would also help RELEASE)
+## The "bake burst" — profiled 2026-07-07 (what it actually is)
 
-The residual ~488 ms hitches are the **bake burst**: many landblocks baking in one synchronous chunk on the main thread. `opt-level` shrinks each unit of work but doesn't spread the burst. Two algorithmic fixes, both of which would smooth dev further AND raise release headroom (the reporter's intuition that "fixing dev could help release" is correct here — release just absorbs the burst better):
+A follow-up investigation drilled into the residual burst with CPU profiling (CDP `Profiler`, parent-chain attribution, `?nullRender` to isolate CPU from GPU) and an in-wasm timing probe. Findings **corrected two wrong hypotheses** (a multi-agent design pass first blamed the collision drain; the terrain bake was also a suspect):
 
-1. **Time-slice the landblock bake** — bake a bounded number of landblocks per frame with a yield, instead of draining the whole queue in one `TickMovement` arm pass. (There is already `?frameBudget` machinery for render-side deferrables and a terrain ring-bake; extend that discipline to the wasm-side terrain/AABB/BSP build.)
-2. **Offload terrain normal-map + texture decode to the `bake_worker`** — the model-mesh/surface-pixel decoders already run there; the terrain-atlas/normal build does not. Moving `normal_gen` + `to_rgba8` off the main thread removes them from the frame budget entirely.
+- **NOT the collision drain.** An in-wasm timer around the whole `TickMovement` `drain_pending_*_into(&mut w.scene)` block (`lib.rs:~45445-45603`) never exceeded **8 ms/tick** even during bursts. Collision draining is not the hitch.
+- **NOT terrain.** `terrain-mesh` was ~0 % of burst samples; the terrain atlas normal-gen is a one-time boot cost.
+- **It is main-thread ASSET MATERIALISATION** — decode + integrity-check of world content as it streams/loads:
+  - `holtburger_manifest::catalog::crc32_ieee` — per-record CRC32 — was **~19 %** of a town-load profile, running unoptimised (manifest was not in the opt3 list). **Fixed** by adding `holtburger-manifest` (+ `-content`, `-common`, `-resource-http`, `-scenery-bake`, `-suite-bake`) to the dev opt3 list above — CRC32 dropped off the profile.
+  - The rest is inherent decode: surface `Texture::to_rgba8` + `normal_gen` (entity/statics surface pixels), `sha2` hashing, and heavy `Vec` alloc/free churn for the decoded pixel/normal buffers.
+- **The worst case — teleporting into a dense town — is a single ~9 s synchronous freeze on dev** (a fraction of that on release). It is the whole town's `ObjectCreate` burst materialised in one JS task: many entities' surfaces decoded + geometry assembled synchronously. `opt-level` shrinks each unit but cannot spread one giant synchronous task. Notably, entity surface decode (`fetch_entity_surfaces_pixels`) runs on the **main thread** — unlike statics decode, which is already offloaded to the `bake_worker` (0 fallbacks observed).
+
+## Remaining (the real residency work — would also help RELEASE)
+
+The opt-level fixes cut per-unit cost (and made dev streaming much better), but the town-teleport freeze is a **synchronous-materialisation** problem — the residency item on the roadmap. Two changes, both of which raise release headroom too:
+
+1. **Offload entity surface decode to the `bake_worker`** — mirror the existing statics offload (`bake_worker.js fetchSurfacesPixels` → `fetch_surfaces_pixels`). Add a `fetchEntitySurfacesPixels(Batch)` handler that runs `fetch_entity_surfaces_pixels[_batch]` in the worker's wasm and returns transferable pixel/normal/height buffers (carry the per-entity palette/`sub_palettes` dye params across the boundary). This moves `normal_gen` + `to_rgba8` for entities off the main thread entirely — the single biggest lever for the town freeze, and it helps release.
+2. **Time-slice the `ObjectCreate`/spawn dispatch** — the per-landblock spawn pre-warm (`spawns.js` F.41 batch, `pendingDispatches` path) and the per-spawn `_spawnImpl` decode both materialise in one synchronous pass. Dispatch a bounded number of objects per frame with a yield so a town's burst spreads across frames (mirror the proven statics `F3` time-slice at `statics.js:~1986-2075`). This is what actually flattens the teleport freeze; it must target the `ObjectCreate` dispatch, not the collision drain or the streaming pre-warm (both verified off-target).
