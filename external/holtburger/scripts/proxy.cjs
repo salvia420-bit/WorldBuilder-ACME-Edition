@@ -13,6 +13,30 @@
 // WorldBuilder-ACME-Edition root). Survives reboots when launched
 // from this canonical location; the previous deployment lived under
 // /tmp/holtburger_proxy.cjs and was lost on reboot.
+//
+// ── Remote-test URL pattern (2026-07-07) ──────────────────────────────
+// The app page is served over the tunnel's HTTPS origin, so the game
+// bridge MUST be wss:// — a `ws://127.0.0.1:8080` resolves to the REMOTE
+// browser's OWN localhost and is blocked as mixed content. Point
+// `bridge_url` at THIS proxy's `/wsbridge` route on the SAME tunnel host;
+// `server_host`/`server_port` stay the laptop-local ACE (the bridge, not
+// the browser, dials them over UDP):
+//
+//   https://<tunnel-host>/apps/holtburger-web/index.html
+//     ?nosw=1&wireframe=1&autoLogin=1&account=X&password=X&autoSpawn=first
+//     &bridge_url=wss://<tunnel-host>/wsbridge
+//     &server_host=127.0.0.1&server_port=9000
+//
+// The quick-tunnel <tunnel-host> ROTATES on every cloudflared restart —
+// recover the current one from the cloudflared `--url` log, e.g.
+// /mnt/wbterminal1/tmp/cloudflared-tunnels/proxy-tunnel-*.log. Example
+// host seen 2026-07-07: determine-aurora-dental-tactics.trycloudflare.com
+//
+// Tailscale-direct alternative (avoids Cloudflare resetting long-lived
+// game WebSockets; plain ws:// is fine since the origin is http://):
+//   http://<laptop-tailnet-ip>:7080/apps/holtburger-web/index.html?...
+//     &bridge_url=ws://<laptop-tailnet-ip>:7080/wsbridge
+// ──────────────────────────────────────────────────────────────────────
 
 const http = require("http");
 const net = require("net");

@@ -159,6 +159,19 @@
       #stage { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; margin-top: 0.5rem; }
       #stage canvas { border: 1px solid #ccc; background: #101010; image-rendering: pixelated; cursor: grab; touch-action: none; }
       #stage canvas.dragging { cursor: grabbing; }
+      /* Group C: "use item on target" targeting mode — retail's choose-a-target cursor. */
+      body.use-targeting #stage canvas { cursor: crosshair; }
+      /* Group C hover reticule — green when the hovered target is legal (Rust
+         canUseWith), red circle-slash when not. Mirrors retail cursor 40/41. */
+      body.use-targeting #stage canvas.use-target-ok {
+        cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26"><circle cx="13" cy="13" r="10" fill="none" stroke="%2340e070" stroke-width="2"/><line x1="13" y1="1" x2="13" y2="8" stroke="%2340e070" stroke-width="2"/><line x1="13" y1="18" x2="13" y2="25" stroke="%2340e070" stroke-width="2"/><line x1="1" y1="13" x2="8" y2="13" stroke="%2340e070" stroke-width="2"/><line x1="18" y1="13" x2="25" y2="13" stroke="%2340e070" stroke-width="2"/></svg>') 13 13, crosshair;
+      }
+      body.use-targeting #stage canvas.use-target-bad {
+        cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26"><circle cx="13" cy="13" r="10" fill="none" stroke="%23ff5555" stroke-width="2"/><line x1="6" y1="6" x2="20" y2="20" stroke="%23ff5555" stroke-width="2"/></svg>') 13 13, not-allowed;
+      }
+      /* Group C inventory-target hover: outline legal/illegal item targets. */
+      body.use-targeting #inv-equipped li.use-target-ok, body.use-targeting #inv-pack li.use-target-ok { outline: 2px solid #40e070; outline-offset: -2px; }
+      body.use-targeting #inv-equipped li.use-target-bad, body.use-targeting #inv-pack li.use-target-bad { outline: 2px solid #ff5555; outline-offset: -2px; }
       /* Canvas-column wraps the canvas + the virtual keypad in a
          single flex item so the keypad sits directly under the
          viewport (not at the bottom of the page). stage-info
@@ -4487,10 +4500,69 @@
         }
       }
       selectedItemClearBtn.addEventListener("click", () => setSelectedItem(0));
+
+      // Group C (2026-07-07): client-side "use item on target" targeting flow.
+      // Rust decides (classifyUse.needsTarget + canUseWith legality); JS only
+      // holds the transient pending-target UI state and renders the prompt +
+      // crosshair cursor. Mirrors retail ItemHolder::UseObject / TargetAcquired
+      // (acclient.c:433354 / :433578). Pending state lives on window so
+      // scene3d/picking.js (world targets) shares the same flow.
+      window.__useTargeting = window.__useTargeting || {
+        pending: null, // { itemGuid, itemName } while awaiting a target click
+        begin(itemGuid, itemName) {
+          this.pending = { itemGuid: itemGuid >>> 0, itemName: itemName || "item" };
+          document.body.classList.add("use-targeting");
+          window.__pluginClient?.events?.emit?.("clientActionRejected", {
+            message: `Choose a target for ${this.pending.itemName} (Esc to cancel)`,
+          });
+        },
+        cancel() {
+          if (!this.pending) return;
+          this.pending = null;
+          document.body.classList.remove("use-targeting");
+          // clear any lingering hover-reticule outlines (canvas + inventory)
+          for (const el of document.querySelectorAll(".use-target-ok, .use-target-bad")) {
+            el.classList.remove("use-target-ok", "use-target-bad");
+          }
+        },
+        // Consume a target click. Returns true iff a use was pending (caller
+        // swallows the click). Rust's canUseWith is the legality gate; the
+        // server re-validates, so an approximate client answer is safe.
+        resolve(targetGuid) {
+          if (!this.pending) return false;
+          const h = window.__sessionHandle;
+          const { itemGuid, itemName } = this.pending;
+          let ok = false;
+          try { ok = !!(h && typeof h.canUseWith === "function" && h.canUseWith(itemGuid >>> 0, targetGuid >>> 0)); } catch (_) {}
+          if (ok) {
+            try { h.useWithTarget(itemGuid >>> 0, targetGuid >>> 0); }
+            catch (e) { console.warn(`[use-target] useWithTarget: ${e?.message ?? e}`); }
+          } else {
+            window.__pluginClient?.events?.emit?.("clientActionRejected", {
+              message: `You cannot use the ${itemName} on that.`,
+            });
+          }
+          this.cancel();
+          return true;
+        },
+      };
+
       selectedItemUseBtn.addEventListener("click", () => {
         if (!selectedItemGuid) return;
         const h = window.__sessionHandle;
         try {
+          // Group C: if the item requires a target (Rust classifyUse), enter
+          // targeting mode instead of firing a bare Use (0x0036).
+          if (h && typeof h.classifyUse === "function") {
+            let needsTarget = false;
+            let intent = null;
+            try { intent = h.classifyUse(selectedItemGuid); needsTarget = !!intent.needsTarget; }
+            finally { if (intent && typeof intent.free === "function") intent.free(); }
+            if (needsTarget) {
+              window.__useTargeting.begin(selectedItemGuid, selectedItemName?.textContent);
+              return;
+            }
+          }
           if (h && typeof h.useObject === "function") h.useObject(selectedItemGuid);
         } catch (e) {
           console.warn(`[selected-item] Use(0x${selectedItemGuid.toString(16)}): ${e?.message ?? e}`);
@@ -4520,7 +4592,32 @@
             if (!li) return;
             const guid = Number(li.dataset.guid) >>> 0;
             const name = li.querySelector(".name")?.textContent ?? "";
+            // Group C: while a use-on-target is pending, clicking an inventory
+            // item selects it as the TARGET (e.g. oil/dye on a weapon/armor)
+            // rather than changing the selection.
+            if (window.__useTargeting?.pending && window.__useTargeting.pending.itemGuid !== guid) {
+              window.__useTargeting.resolve(guid);
+              return;
+            }
             setSelectedItem(guid, name);
+          });
+          // Group C hover reticule for inventory-item targets: outline legal
+          // (Rust canUseWith) vs illegal items while a use-on-target is pending.
+          ul.addEventListener("mouseover", (ev) => {
+            const T = window.__useTargeting;
+            if (!T?.pending) return;
+            const li = ev.target.closest("li[data-guid]");
+            if (!li) return;
+            const g = Number(li.dataset.guid) >>> 0;
+            const h = window.__sessionHandle;
+            let ok = false;
+            try { ok = !!(h && typeof h.canUseWith === "function" && g !== T.pending.itemGuid && h.canUseWith(T.pending.itemGuid >>> 0, g)); } catch (_) {}
+            li.classList.toggle("use-target-ok", ok);
+            li.classList.toggle("use-target-bad", !ok);
+          });
+          ul.addEventListener("mouseout", (ev) => {
+            const li = ev.target.closest("li[data-guid]");
+            if (li) li.classList.remove("use-target-ok", "use-target-bad");
           });
           ul.addEventListener("dragstart", (ev) => {
             const li = ev.target.closest("li[data-guid]");

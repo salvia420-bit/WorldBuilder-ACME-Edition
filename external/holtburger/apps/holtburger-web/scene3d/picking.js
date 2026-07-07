@@ -522,7 +522,14 @@ export function setupClickPicking({
   }
 
   function onPointerDown(ev) {
-    if (ev.button !== 0) return;
+    if (ev.button !== 0) {
+      // Group C: right-click cancels an in-flight use-on-target selection.
+      if (ev.button === 2 && window.__useTargeting?.pending) {
+        window.__useTargeting.cancel();
+        ev.preventDefault();
+      }
+      return;
+    }
     // Any left-click cancels an in-flight optimistic turn (retail cancels
     // MoveTo on fresh input) so a new action starts clean.
     cancelClientMove();
@@ -530,6 +537,14 @@ export function setupClickPicking({
     if (guid == null) return;
     ev.stopPropagation();
     ev.preventDefault();
+    // Group C: if a use-on-target is pending (inventory "Use" of a
+    // target-requiring item), this world click picks the target. Rust's
+    // canUseWith is the legality gate; we only dispatch. Retail
+    // ItemHolder::TargetAcquired (acclient.c:433578).
+    if (window.__useTargeting?.pending) {
+      window.__useTargeting.resolve(guid >>> 0);
+      return;
+    }
     // Phase D — mark the clicked entity as the current target so
     // subsequent clicks (or the future combat-bar HUD) can read it.
     // Selection persists until another entity is picked.
@@ -745,6 +760,29 @@ export function setupClickPicking({
   }
 
   canvas.addEventListener("pointerdown", onPointerDown);
+
+  // Group C hover reticule: while a use-on-target is pending, tint the cursor
+  // green/red by asking Rust canUseWith about the hovered entity (retail cursor
+  // 40/41). Throttled; pure render feedback — the click re-checks legality.
+  let lastUseHoverMs = 0;
+  function onPointerMoveUseTarget(ev) {
+    const pending = window.__useTargeting?.pending;
+    const cl = canvas.classList;
+    if (!pending) {
+      if (cl.contains("use-target-ok") || cl.contains("use-target-bad")) cl.remove("use-target-ok", "use-target-bad");
+      return;
+    }
+    const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+    if (now - lastUseHoverMs < 50) return;
+    lastUseHoverMs = now;
+    const guid = pickEntityAt(ev.clientX, ev.clientY);
+    if (guid == null) { cl.remove("use-target-ok", "use-target-bad"); return; }
+    let ok = false;
+    try { ok = !!(typeof sessionHandle.canUseWith === "function" && sessionHandle.canUseWith(pending.itemGuid >>> 0, guid >>> 0)); } catch (_) {}
+    cl.toggle("use-target-ok", ok);
+    cl.toggle("use-target-bad", !ok);
+  }
+  canvas.addEventListener("pointermove", onPointerMoveUseTarget);
 
   // PR-LL 2026-05-23: drag-drop give from inventory onto an NPC.
   // The inventory plugin's <slot> elements set dataTransfer with
@@ -1201,6 +1239,14 @@ export function setupClickPicking({
   }
   document.addEventListener("keydown", onKeyDownAbortCharge);
 
+  // Group C: Esc cancels an in-flight use-on-target selection.
+  function onKeyDownCancelUseTarget(ev) {
+    if (ev.key === "Escape" && window.__useTargeting?.pending) {
+      window.__useTargeting.cancel();
+    }
+  }
+  document.addEventListener("keydown", onKeyDownCancelUseTarget);
+
   // F6-4 — also stop the server attack loop when the target is cleared
   // (explicit deselect, or the target despawning mid-fight). ACE already
   // ends the loop on target death, so this is mostly belt-and-suspenders
@@ -1231,9 +1277,12 @@ export function setupClickPicking({
       cancelClientMove();
       cancelStickyWatch();
       canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMoveUseTarget);
       canvas.removeEventListener("dragover", onCanvasDragOver);
       canvas.removeEventListener("drop", onCanvasDrop);
       document.removeEventListener("keydown", onKeyDownAbortCharge);
+      document.removeEventListener("keydown", onKeyDownCancelUseTarget);
+      if (window.__useTargeting?.pending) window.__useTargeting.cancel();
       if (onSelectionCleared && bus && typeof bus.off === "function") {
         try { bus.off("selectionChanged", onSelectionCleared); } catch (_) {}
       }

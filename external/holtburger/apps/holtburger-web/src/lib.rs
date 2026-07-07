@@ -26734,6 +26734,12 @@ pub struct SessionHandle {
     /// Separate from `queued_events` (the lifecycle stream) — see
     /// [`EntityUpdate`]'s doc comment for the rationale.
     entity_updates: std::rc::Rc<std::cell::RefCell<Vec<EntityUpdate>>>,
+    /// Option C (live use-predicates): the SAME WorldState the recv loop
+    /// mutates, shared by Rc clone. `None` until PlayerCreate/SelectCharacter
+    /// builds it. Read-only from JS via canUseObject/canBeginUseWith/canUseWith,
+    /// each of which uses `try_borrow` so a call landing while the loop holds a
+    /// borrow_mut fails safe to `false` instead of panicking.
+    world: std::rc::Rc<std::cell::RefCell<Option<holtburger_world::WorldState>>>,
     /// Phase 4 step 4 follow-on (vitals + inventory panels): latest
     /// player-stat snapshot, refreshed by the recv loop whenever the
     /// canonical world handler dispatcher reports
@@ -27641,6 +27647,30 @@ struct LatestStats {
     // treats `0` as capacity-unknown and degrades to occupied-only.
     items_capacity: u32,
     containers_capacity: u32,
+}
+
+// === Option C — live use-predicates (2026-07-07) ===
+// One-shot classification of a click/hover on an item: both flags read from a
+// SINGLE world borrow (see `SessionHandle::classify_use`) so they cannot
+// straddle a tick edge.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct UseIntent {
+    needs_target: bool,
+    can_use_now: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl UseIntent {
+    #[wasm_bindgen(getter, js_name = needsTarget)]
+    pub fn needs_target(&self) -> bool {
+        self.needs_target
+    }
+    #[wasm_bindgen(getter, js_name = canUseNow)]
+    pub fn can_use_now(&self) -> bool {
+        self.can_use_now
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -30441,6 +30471,80 @@ impl SessionHandle {
             })
     }
 
+    // === Option C — live use-predicates (2026-07-07) ===
+    // Read-only getters over the SAME WorldState the recv loop mutates,
+    // shared by Rc clone. `try_borrow` (NOT `borrow`) is load-bearing: the recv
+    // loop holds a `borrow_mut` across several integrator/send awaits
+    // (TickMovement, JumpChargeRelease, Jump); a JS call landing in any such
+    // window must fail-safe to `false`, never panic. `None` (pre-spawn) also
+    // yields `false`, matching the predicates' missing-entity semantics.
+
+    /// Gate for `useObject(guid)`: is `guid` usable right now (no target)?
+    #[wasm_bindgen(js_name = canUseObject)]
+    pub fn can_use(&self, guid: u32) -> bool {
+        use holtburger_world::context::WorldContextExt;
+        self.world
+            .try_borrow()
+            .ok()
+            .and_then(|w| w.as_ref().map(|world| world.can_use(holtburger_common::Guid(guid))))
+            .unwrap_or(false)
+    }
+
+    /// Does `item_guid` require a target before it can be used
+    /// (i.e. begins a use-with-target interaction)?
+    #[wasm_bindgen(js_name = canBeginUseWith)]
+    pub fn can_begin_use_with(&self, item_guid: u32) -> bool {
+        use holtburger_world::context::WorldContextExt;
+        self.world
+            .try_borrow()
+            .ok()
+            .and_then(|w| {
+                w.as_ref()
+                    .map(|world| world.can_begin_use_with(holtburger_common::Guid(item_guid)))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Gate for `useWithTarget(item, target)`: is applying `item_guid`
+    /// to `target_guid` currently legal?
+    #[wasm_bindgen(js_name = canUseWith)]
+    pub fn can_use_with(&self, item_guid: u32, target_guid: u32) -> bool {
+        use holtburger_world::context::WorldContextExt;
+        self.world
+            .try_borrow()
+            .ok()
+            .and_then(|w| {
+                w.as_ref().map(|world| {
+                    world.can_use_with(
+                        holtburger_common::Guid(item_guid),
+                        holtburger_common::Guid(target_guid),
+                    )
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    /// One-shot classification for a click/hover on `item_guid`. Both flags
+    /// read from a SINGLE world borrow so they cannot straddle a tick edge.
+    #[wasm_bindgen(js_name = classifyUse)]
+    pub fn classify_use(&self, item_guid: u32) -> UseIntent {
+        use holtburger_world::context::WorldContextExt;
+        let g = holtburger_common::Guid(item_guid);
+        self.world
+            .try_borrow()
+            .ok()
+            .and_then(|w| {
+                w.as_ref().map(|world| UseIntent {
+                    needs_target: world.can_begin_use_with(g),
+                    can_use_now: world.can_use(g),
+                })
+            })
+            .unwrap_or(UseIntent {
+                needs_target: false,
+                can_use_now: false,
+            })
+    }
+
     /// R14: batch-salvage the given item GUIDs into the tinkering tool —
     /// GameActionCreateTinkeringTool (0x027D). Named `createTinkeringTool` to
     /// match salvage-panel.js's existing feature-detect (no JS change).
@@ -32747,6 +32851,11 @@ pub async fn start_session(
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
     let entity_updates: std::rc::Rc<std::cell::RefCell<Vec<EntityUpdate>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Option C (live use-predicates): the SAME WorldState the recv loop
+    // mutates, shared by Rc clone (cloned into recv_loop, outer binding
+    // populates the SessionHandle field). `None` until the world is built.
+    let world_state: std::rc::Rc<std::cell::RefCell<Option<holtburger_world::WorldState>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
     // Phase 4 step 3.6: WorldBootstrap is loaded in parallel with the
     // catalog so it's ready before EnteredWorld fires. Recv loop reads
     // the cell on EnteredWorld to construct a `WorldState` for the
@@ -33031,6 +33140,7 @@ pub async fn start_session(
         // HUD rec #68 (2026-06-16) — clone for recv_loop param.
         let latest_localization_inner = latest_localization.clone();
         let entity_updates = entity_updates.clone();
+        let world_state = world_state.clone();
         let world_bootstrap = world_bootstrap.clone();
         let latest_stats = latest_stats.clone();
         let latest_inventory = latest_inventory.clone();
@@ -33127,6 +33237,7 @@ pub async fn start_session(
                 collision_scene_inner,
                 terrain_heights_shadow_inner,
                 turbine_chat_state_inner,
+                world_state,
             )
             .await;
         });
@@ -33195,6 +33306,7 @@ pub async fn start_session(
         account_name,
         catalog,
         entity_updates,
+        world: world_state,
         latest_stats,
         latest_inventory,
         latest_vendor_state,
@@ -35194,6 +35306,11 @@ async fn recv_loop(
     turbine_chat_state: std::rc::Rc<
         std::cell::RefCell<holtburger_core::client::types::TurbineChatState>,
     >,
+    // Option C (live use-predicates): the SAME WorldState this loop mutates,
+    // shared by Rc clone with the SessionHandle. Named `world` so the ~50
+    // in-loop access sites keep their identifier; only the access form changes
+    // (`world.borrow()` / `world.borrow_mut()`).
+    world: std::rc::Rc<std::cell::RefCell<Option<holtburger_world::WorldState>>>,
 ) {
     use futures::StreamExt;
     use holtburger_protocol::messages::{
@@ -35214,7 +35331,6 @@ async fn recv_loop(
     // seeded on the first PrivateUpdatePosition (when we first know
     // the spawn pose); the AutonomousPosition heartbeat is armed at
     // the same point. See `docs/phase-4-step-3.6-movement-system.md`.
-    let mut world: Option<holtburger_world::WorldState> = None;
     let mut movement = holtburger_core::MovementSystemHandle::new();
     // A6-T1/T2 (2026-06-12, W3+ S7): `?unifiedTransition=on` — route the
     // local player's movement (legacy handle slices AND the unified
@@ -35679,7 +35795,7 @@ async fn recv_loop(
                     // doesn't depend on it.
                     let mut entity_enchantments_changed: Option<u32> = None;
                     if let GameMessage::GameEvent(event_msg) = &message {
-                        let self_guid: Option<u32> = world
+                        let self_guid: Option<u32> = world.borrow()
                             .as_ref()
                             .map(|w| u32::from(w.player.guid))
                             .filter(|&g| g != 0);
@@ -35972,7 +36088,7 @@ async fn recv_loop(
                         world_lifecycle_on,
                         wire_state_packs_stage1_on,
                         remote_interp_on,
-                    ) && let Some(w) = world.as_mut()
+                    ) && let Some(w) = world.borrow_mut().as_mut()
                     {
                         let mut world_events: Vec<holtburger_world::WorldEvent> = Vec::new();
                         holtburger_world::handlers::routing::handle_message(
@@ -36705,7 +36821,7 @@ async fn recv_loop(
                     // `state.player.equipment` stay current and
                     // `publish_player_inventory_snapshot` produces a
                     // populated snapshot.
-                    if let Some(w) = world.as_mut() {
+                    if let Some(w) = world.borrow_mut().as_mut() {
                         match &message {
                             // A8-M1 (2026-06-11): under `?worldLifecycle=on`
                             // the canonical world dispatcher (routed above via
@@ -36857,7 +36973,7 @@ async fn recv_loop(
                             _ => {}
                         }
                     }
-                    if stats_changed && let Some(w) = world.as_ref() {
+                    if stats_changed && let Some(w) = world.borrow().as_ref() {
                         publish_player_stats_snapshot(w, &latest_stats);
                         // Phase G: piggyback known-spells refresh on
                         // stats_changed. The local-player biota only
@@ -36941,7 +37057,7 @@ async fn recv_loop(
                             f32_payload: None,
                         });
                     }
-                    if inventory_changed && let Some(w) = world.as_ref() {
+                    if inventory_changed && let Some(w) = world.borrow().as_ref() {
                         publish_player_inventory_snapshot(w, &latest_inventory);
                         queued_events.borrow_mut().push(ClientEvent {
                             kind: CLIENT_EVENT_KIND_INVENTORY_UPDATED,
@@ -36951,7 +37067,7 @@ async fn recv_loop(
                             f32_payload: None,
                         });
                     }
-                    if fellowship_changed && let Some(w) = world.as_ref() {
+                    if fellowship_changed && let Some(w) = world.borrow().as_ref() {
                         // Wave D (2026-05-25): the world dispatcher's
                         // fellowship handler fires `FellowshipStateUpdated`
                         // for all 5 fellowship GameEvents (FullUpdate,
@@ -36980,7 +37096,7 @@ async fn recv_loop(
                             f32_payload: None,
                         });
                     }
-                    if trade_changed && let Some(w) = world.as_ref() {
+                    if trade_changed && let Some(w) = world.borrow().as_ref() {
                         // AC Trade (2026-05-25): the world dispatcher's
                         // trade handler fires `TradeStateUpdated` for all
                         // 9 trade GameEvent arms (RegisterTrade,
@@ -37000,7 +37116,7 @@ async fn recv_loop(
                             f32_payload: None,
                         });
                     }
-                    if let (Some(book_guid), Some(w)) = (book_changed, world.as_ref()) {
+                    if let (Some(book_guid), Some(w)) = (book_changed, world.borrow().as_ref()) {
                         // AC Books (2026-05-25): world dispatcher's
                         // inventory handler folded BookDataResponse /
                         // BookPageDataResponse into entity.book and
@@ -37179,7 +37295,7 @@ async fn recv_loop(
                             // duplicated-mirror class this whole workstream
                             // retires; survey A13 §3 row 3).
                             if !wire_state_packs_stage1_on
-                                && let Some(w) = world.as_mut()
+                                && let Some(w) = world.borrow_mut().as_mut()
                             {
                                 w.player.set_teleport_sequence(data.teleport_sequence);
                                 let _ = w.suspend_runtime_bodies(
@@ -37214,7 +37330,7 @@ async fn recv_loop(
                             // overlay stop itself is JS-owned (entities.js
                             // `_cancelOneShotOverlays`, the
                             // `remove_all_link_animations` analogue).
-                            if let Some(w) = world.as_ref() {
+                            if let Some(w) = world.borrow().as_ref() {
                                 movement.handle_exit_world_for(w.player.guid, true);
                             }
                             // F2-3 (movement bughunt 2026-06-09): sending
@@ -37372,7 +37488,13 @@ async fn recv_loop(
                             // — bootstrap wasn't loaded yet, or
                             // SelectCharacter took a different path —
                             // construct here as a fallback.
-                            if world.is_none()
+                            // Option C: edition-2024 temp-scoping is load-bearing
+                            // here — the `world.borrow()` condition temp drops
+                            // BEFORE this block runs, so the body's
+                            // `*world.borrow_mut() = Some(new_world)` below does not
+                            // double-borrow. Under edition 2021 this would panic
+                            // `already borrowed`.
+                            if world.borrow().is_none()
                                 && let Some(bootstrap) = world_bootstrap.borrow().clone()
                             {
                                 let mut new_world =
@@ -37395,7 +37517,7 @@ async fn recv_loop(
                                 new_world.set_local_retail_leash(retail_leash_on);
                                 // Bug-A (2026-07-03): ?leashEchoGate=on.
                                 new_world.set_leash_echo_gate(leash_echo_gate_on);
-                                world = Some(new_world);
+                                *world.borrow_mut() = Some(new_world);
                                 console_log_str(&format!(
                                     "[step 3.6] WorldState constructed lazily on PlayerCreate (guid=0x{:08X}) — eager-construct path missed",
                                     player_guid_raw,
@@ -37412,7 +37534,7 @@ async fn recv_loop(
                                 // can derive the real, skill-accurate run
                                 // rate instead of the 4.5 fallback.
                                 if let (Some(cached), Some(w)) =
-                                    (cached_player_description.as_ref(), world.as_mut())
+                                    (cached_player_description.as_ref(), world.borrow_mut().as_mut())
                                 {
                                     let mut replay_events: Vec<
                                         holtburger_world::WorldEvent,
@@ -37437,7 +37559,7 @@ async fn recv_loop(
                                         );
                                     }
                                 }
-                            } else if world.is_some() {
+                            } else if world.borrow().is_some() {
                                 console_log_str(&format!(
                                     "[step 3.6] WorldState already constructed (eager path); PlayerCreate guid=0x{:08X} confirms",
                                     player_guid_raw,
@@ -37523,7 +37645,7 @@ async fn recv_loop(
                                 // in this flow). Seed the WorldState entity
                                 // here so MovementSystem::tick has a pose
                                 // and sequences to work with.
-                                if let Some(w) = world.as_mut() {
+                                if let Some(w) = world.borrow_mut().as_mut() {
                                     let pose = data.pos.pos;
                                     if !entity_seeded {
                                         let entity =
@@ -37825,7 +37947,7 @@ async fn recv_loop(
                                 // through `set_player_position` so the
                                 // outbound MovementSystem tick reads
                                 // current sequences + pose.
-                                if let Some(w) = world.as_mut() {
+                                if let Some(w) = world.borrow_mut().as_mut() {
                                     if !entity_seeded {
                                         let entity = holtburger_world::entity::Entity::new(
                                             guid,
@@ -37968,7 +38090,7 @@ async fn recv_loop(
                             // acclient.c:388691-388720). One inert compare
                             // unless sticky is active (never, with
                             // USE_STICKY_MANAGER off).
-                            if let Some(w) = world.as_mut()
+                            if let Some(w) = world.borrow_mut().as_mut()
                                 && w.scene.local_sticky_target() == Some(data.guid)
                             {
                                 w.scene.sticky_pose_feed(data.guid, data.pos);
@@ -38059,7 +38181,7 @@ async fn recv_loop(
                             // the entity_updates push below still
                             // fires so the local-player sprite
                             // renders.
-                            if let Some(w) = world.as_mut()
+                            if let Some(w) = world.borrow_mut().as_mut()
                                 && !entity_seeded
                                 && data.public_weenie_desc.guid == w.player.guid
                                 && w.player.guid != holtburger_common::Guid::NULL
@@ -38138,7 +38260,7 @@ async fn recv_loop(
                             // after seeding above), so the operator
                             // can sanity-check the spawn cell without
                             // log spam.
-                            if let Some(w) = world.as_ref()
+                            if let Some(w) = world.borrow().as_ref()
                                 && entity_seeded
                                 && data.public_weenie_desc.guid == w.player.guid
                                 && let Some(seed_pos) = data.pos
@@ -38273,7 +38395,7 @@ async fn recv_loop(
                             // `Guid::NULL` and the comparison is false, so
                             // pre-spawn ObjectCreates (rare in this flow)
                             // still emit unconditionally.
-                            let is_local_player = world
+                            let is_local_player = world.borrow()
                                 .as_ref()
                                 .map(|w| {
                                     w.player.guid != holtburger_common::Guid::NULL
@@ -38636,7 +38758,7 @@ async fn recv_loop(
                             // - door for an admin-spawned dynamic
                             //   dungeon (no `LandblockInfo.buildings`
                             //   entry → no AABB candidates).
-                            if let Some(w) = world.as_mut() {
+                            if let Some(w) = world.borrow_mut().as_mut() {
                                 use holtburger_common::properties::{
                                     ObjectDescriptionFlag, PhysicsState,
                                 };
@@ -38944,7 +39066,7 @@ async fn recv_loop(
                             if wielded_spawn_on
                                 && data.parent_guid != holtburger_common::Guid::NULL
                                 && !js_spawned_guids.contains(&u32::from(data.child_guid))
-                                && let Some(w) = world.as_ref()
+                                && let Some(w) = world.borrow().as_ref()
                                 && let Some(entity) = w.entities.get(data.child_guid)
                             {
                                 use holtburger_common::properties::{
@@ -39353,7 +39475,7 @@ async fn recv_loop(
                             // wasm pose getters (spec S9 §3 L1 step 2).
                             // Radius fallback 0.0 (spec S9 OPEN Q3).
                             if holtburger_world::spatial::USE_STICKY_MANAGER
-                                && let Some(w) = world.as_mut()
+                                && let Some(w) = world.borrow_mut().as_mut()
                                 && w.player.guid != holtburger_common::Guid::NULL
                                 && data.guid == w.player.guid
                             {
@@ -39381,7 +39503,7 @@ async fn recv_loop(
                             // glue path. Inert unless the full compose
                             // rule holds (remote_sticky_on).
                             if remote_sticky_on
-                                && let Some(w) = world.as_mut()
+                                && let Some(w) = world.borrow_mut().as_mut()
                                 && w.player.guid != holtburger_common::Guid::NULL
                                 && data.guid != w.player.guid
                             {
@@ -39723,7 +39845,7 @@ async fn recv_loop(
                             // terrain produces vz ≈ 0; even up/down a
                             // slope wouldn't reach 1.0 m/s vertical.
                             let remote_guid = u32::from(data.guid);
-                            let local_guid = world.as_ref()
+                            let local_guid = world.borrow().as_ref()
                                 .map(|w| u32::from(w.player.guid))
                                 .unwrap_or(0);
                             if remote_guid != local_guid && remote_guid != 0 {
@@ -40431,7 +40553,7 @@ async fn recv_loop(
                                     // existing teleport / motion arms
                                     // overwrite via `set_player_position`
                                     // once `entity_seeded` is true.
-                                    if let Some(w) = world.as_mut() {
+                                    if let Some(w) = world.borrow_mut().as_mut() {
                                         // Gate on `w.player.guid` (set at
                                         // SelectCharacter time, before
                                         // PlayerDescription arrives) rather
@@ -40517,7 +40639,7 @@ async fn recv_loop(
                                     // doesn't clobber the first.
                                     {
                                         let vendor_guid_u32 = u32::from(data.vendor_guid);
-                                        let vendor_name_for_cache = world
+                                        let vendor_name_for_cache = world.borrow()
                                             .as_ref()
                                             .and_then(|w| {
                                                 w.entities.get(data.vendor_guid).map(|entity| {
@@ -40594,7 +40716,7 @@ async fn recv_loop(
                                     // list); the cli looks it up via
                                     // `state.entities.get(vendor_guid).name()`.
                                     let vendor_guid = u32::from(data.vendor_guid);
-                                    let vendor_name = world
+                                    let vendor_name = world.borrow()
                                         .as_ref()
                                         .and_then(|w| {
                                             w.entities.get(data.vendor_guid).map(
@@ -40655,7 +40777,8 @@ async fn recv_loop(
                                     // drops them before entityMap.set() — this
                                     // is the only reliable icon_id source for
                                     // the container-panel.
-                                    if let Some(ref w) = world {
+                                    let world_guard = world.borrow();
+                                    if let Some(ref w) = *world_guard {
                                         let mut icons = latest_object_icons.borrow_mut();
                                         for i in data.items.iter() {
                                             let ig = u32::from(i.guid);
@@ -40664,7 +40787,7 @@ async fn recv_loop(
                                             }
                                         }
                                     }
-                                    let container_name = world
+                                    let container_name = world.borrow()
                                         .as_ref()
                                         .and_then(|w| {
                                             w.entities.get(data.container).map(|entity| {
@@ -40969,7 +41092,7 @@ async fn recv_loop(
                                     // WorldState is up — AllegianceUpdate
                                     // only fires post-EnteredWorld, so
                                     // pre-world is unreachable in practice.
-                                    let own_guid = world
+                                    let own_guid = world.borrow()
                                         .as_ref()
                                         .map(|w| u32::from(w.player.guid))
                                         .unwrap_or(0);
@@ -41701,7 +41824,12 @@ async fn recv_loop(
                         // bookkeeping that don't depend on WorldState
                         // having been constructed in PlayerCreate
                         // specifically.
-                        if world.is_none()
+                        // Option C: edition-2024 temp-scoping is load-bearing here —
+                        // the `world.borrow()` condition temp drops BEFORE this block
+                        // runs, so the body's `*world.borrow_mut() = Some(new_world)`
+                        // below does not double-borrow. Under edition 2021 this would
+                        // panic `already borrowed`.
+                        if world.borrow().is_none()
                             && let Some(bootstrap) = world_bootstrap.borrow().clone()
                         {
                             let mut new_world =
@@ -41730,7 +41858,7 @@ async fn recv_loop(
                             new_world.set_local_retail_leash(retail_leash_on);
                             // Bug-A (2026-07-03): ?leashEchoGate=on.
                             new_world.set_leash_echo_gate(leash_echo_gate_on);
-                            world = Some(new_world);
+                            *world.borrow_mut() = Some(new_world);
                             console_log_str(&format!(
                                 "[step4-follow-on] WorldState constructed eagerly on SelectCharacter (guid=0x{:08X})",
                                 u32::from(guid),
@@ -41747,7 +41875,7 @@ async fn recv_loop(
                             // freshly built world and clears the fallback caps
                             // when the real biota resolves.
                             if let (Some(cached), Some(w)) =
-                                (cached_player_description.as_ref(), world.as_mut())
+                                (cached_player_description.as_ref(), world.borrow_mut().as_mut())
                             {
                                 let mut replay_events: Vec<
                                     holtburger_world::WorldEvent,
@@ -41974,7 +42102,8 @@ async fn recv_loop(
                         // side gates `routeSlashCommand` on
                         // `enteredWorld` already so this is just
                         // belt-and-suspenders.
-                        let Some(w) = world.as_ref() else {
+                        let world_guard = world.borrow();
+                        let Some(w) = world_guard.as_ref() else {
                             console_log_str(
                                 "[wave9.5] BroadcastEmoteMotion before WorldState ready — dropping",
                             );
@@ -42296,7 +42425,8 @@ async fn recv_loop(
                         // just terrain following so heartbeats carry
                         // a Z that ACE physics doesn't interpret as
                         // "player floating above ground").
-                        let Some(w) = world.as_mut() else {
+                        let mut world_guard = world.borrow_mut();
+                        let Some(w) = world_guard.as_mut() else {
                             console_log_str(
                                 "[terrain] PopulateTerrain before WorldState ready — dropping",
                             );
@@ -42364,7 +42494,8 @@ async fn recv_loop(
                             ChangeCombatModeActionData, CombatMode, GameAction,
                         };
                         use holtburger_world::context::WorldContextExt;
-                        let Some(w) = world.as_ref() else {
+                        let world_guard = world.borrow();
+                        let Some(w) = world_guard.as_ref() else {
                             console_log_str(
                                 "[combat-mode] ToggleCombatMode before WorldState ready — dropping",
                             );
@@ -42433,6 +42564,7 @@ async fn recv_loop(
                             });
                             continue;
                         }
+                        drop(world_guard);
                         let action = GameAction::ChangeCombatMode(Box::new(
                             ChangeCombatModeActionData { mode: target_mode },
                         ));
@@ -42474,7 +42606,7 @@ async fn recv_loop(
                         // no retail string for this; the message
                         // follows the ammo-guard idiom.
                         if mode == CombatMode::Magic
-                            && world
+                            && world.borrow()
                                 .as_ref()
                                 .is_some_and(|w| !w.is_wielding_caster())
                         {
@@ -42494,7 +42626,7 @@ async fn recv_loop(
                             continue;
                         }
                         if mode == CombatMode::Missile
-                            && world
+                            && world.borrow()
                                 .as_ref()
                                 .is_some_and(|w| w.is_missing_missile_ammo())
                         {
@@ -42784,7 +42916,7 @@ async fn recv_loop(
                             });
                             return;
                         }
-                        if let Some(w) = world.as_mut() {
+                        if let Some(w) = world.borrow_mut().as_mut() {
                             w.player.set_character_option_enabled(option, value);
                             publish_player_stats_snapshot(w, &latest_stats);
                         }
@@ -43379,7 +43511,7 @@ async fn recv_loop(
                             AcceptTradeActionData, GameAction,
                         };
                         let (partner_guid, initiator_guid, trade_stamp,
-                             initiator_accepts, partner_accepts) = world
+                             initiator_accepts, partner_accepts) = world.borrow()
                             .as_ref()
                             .and_then(|w| w.trade.as_ref().map(|t| (
                                 t.partner_guid,
@@ -44087,7 +44219,7 @@ async fn recv_loop(
                         // Conflict set mirrors CheckWeaponCollision:
                         // same-slot, one-weapon-at-a-time, launcher/
                         // two-hander/caster vs shield (both ways).
-                        if let Some(w) = world.as_ref() {
+                        if let Some(w) = world.borrow().as_ref() {
                             use holtburger_common::properties::{
                                 EquipMask as PropEquipMask, WorldObjectExt,
                             };
@@ -44264,7 +44396,8 @@ async fn recv_loop(
                         use holtburger_protocol::messages::{
                             GameAction, PutItemInContainerActionData,
                         };
-                        let Some(w) = world.as_ref() else {
+                        let world_guard = world.borrow();
+                        let Some(w) = world_guard.as_ref() else {
                             console_log_str(
                                 "[inventory/unwield] before WorldState ready — dropping",
                             );
@@ -44277,6 +44410,7 @@ async fn recv_loop(
                             );
                             continue;
                         }
+                        drop(world_guard);
                         let action = GameAction::PutItemInContainer(Box::new(
                             PutItemInContainerActionData {
                                 item_guid: Guid(item_guid),
@@ -44631,7 +44765,7 @@ async fn recv_loop(
                         // verified no movement keys are held; re-check
                         // grounded so a mid-air space press can't root the
                         // landing.
-                        if let Some(w) = world.as_mut()
+                        if let Some(w) = world.borrow_mut().as_mut()
                             && entity_seeded
                             && !w.player.is_airborne
                         {
@@ -44639,7 +44773,7 @@ async fn recv_loop(
                         }
                     }
                     Some(SessionCommand::JumpChargeCancel) => {
-                        if let Some(w) = world.as_mut() {
+                        if let Some(w) = world.borrow_mut().as_mut() {
                             w.player.standing_long_jump_charge = false;
                         }
                     }
@@ -44653,7 +44787,7 @@ async fn recv_loop(
                         // JUMP_REFUSED event (retail
                         // acclient.c:408050-408059); the legacy arms
                         // above stay byte-untouched.
-                        if let Some(w) = world.as_mut()
+                        if let Some(w) = world.borrow_mut().as_mut()
                             && entity_seeded
                             && let Err(code) =
                                 movement.jump_charge_commence(web_time::Instant::now(), w)
@@ -44675,7 +44809,8 @@ async fn recv_loop(
                         // the pack built by `movement/common.rs::
                         // build_jump` (the A13 single-builder boundary).
                         use holtburger_core::JumpOutcome;
-                        let Some(w) = world.as_mut() else {
+                        let mut world_guard = world.borrow_mut();
+                        let Some(w) = world_guard.as_mut() else {
                             console_log_str(
                                 "[jumpParity] release before WorldState ready — dropping",
                             );
@@ -44734,7 +44869,7 @@ async fn recv_loop(
                         // A14-I4 — blur analog (retail FinishJump,
                         // acclient.c:435853-435863): drop the charge +
                         // standstill root without jumping.
-                        if let Some(w) = world.as_mut() {
+                        if let Some(w) = world.borrow_mut().as_mut() {
                             movement.jump_charge_abort(w);
                         }
                     }
@@ -44751,7 +44886,7 @@ async fn recv_loop(
                         // intent is applied (and the manager preamble
                         // CancelMoveTo(0x36) runs) on the next
                         // TickMovement.
-                        if world.is_none() || !entity_seeded {
+                        if world.borrow().is_none() || !entity_seeded {
                             console_log_str(
                                 "[wasmPursuit] PursueObject before player seeded — dropping",
                             );
@@ -44774,7 +44909,7 @@ async fn recv_loop(
                     Some(SessionCommand::PursuitTurnToObject { target_guid }) => {
                         // A14-I2 — TurnToObject (retail case 8,
                         // acclient.c:346137-346139).
-                        if world.is_none() || !entity_seeded {
+                        if world.borrow().is_none() || !entity_seeded {
                             console_log_str(
                                 "[wasmPursuit] TurnToObject before player seeded — dropping",
                             );
@@ -44792,7 +44927,7 @@ async fn recv_loop(
                         // A14-I2 — TurnToHeading (retail case 9,
                         // acclient.c:346141-346143). RADIANS here;
                         // degrees at the core ingest boundary.
-                        if world.is_none() || !entity_seeded {
+                        if world.borrow().is_none() || !entity_seeded {
                             console_log_str(
                                 "[wasmPursuit] TurnToHeading before player seeded — dropping",
                             );
@@ -44867,7 +45002,7 @@ async fn recv_loop(
                         // OPEN Q3 — the standoff degrades to the −0.3 clamp).
                         // Needs the target resident in the spatial scene
                         // (worldLifecycle default-on).
-                        if let Some(w) = world.as_mut() {
+                        if let Some(w) = world.borrow_mut().as_mut() {
                             if w.player.guid != holtburger_common::Guid::NULL {
                                 w.scene.stick_local_player_to(
                                     holtburger_common::Guid(target_guid),
@@ -44882,7 +45017,7 @@ async fn recv_loop(
                     }
                     Some(SessionCommand::StopStick) => {
                         // 2026-07-06 — release the LOCAL StickyManager.
-                        if let Some(w) = world.as_mut() {
+                        if let Some(w) = world.borrow_mut().as_mut() {
                             w.scene.unstick_local_player();
                         }
                     }
@@ -44912,7 +45047,7 @@ async fn recv_loop(
                         // via process_hooks, acclient.c:320035).
                         // Empty-queue notifies no-op on both routes
                         // (acclient.c:329884 head-null guard).
-                        if let Some(w) = world.as_ref()
+                        if let Some(w) = world.borrow().as_ref()
                             && entity_seeded
                         {
                             let is_local = w.player.guid.0 == guid;
@@ -44941,7 +45076,8 @@ async fn recv_loop(
                             GameAction, movement::actions::JumpActionData,
                         };
                         use holtburger_common::Vector3;
-                        let Some(w) = world.as_mut() else {
+                        let mut world_guard = world.borrow_mut();
+                        let Some(w) = world_guard.as_mut() else {
                             console_log_str(
                                 "[jump] before WorldState ready — dropping",
                             );
@@ -45106,6 +45242,7 @@ async fn recv_loop(
                                 .map(|(_, v, _)| Vector3::new(v.x, v.y, vz))
                                 .unwrap_or(Vector3::new(0.0, 0.0, vz))
                         };
+                        drop(world_guard);
                         let action = GameAction::Jump(Box::new(JumpActionData {
                             extent: power,
                             velocity: lateral_velocity,
@@ -45145,7 +45282,8 @@ async fn recv_loop(
                         // `MovementSystemHandle::tick`. Pre-3.6 the recv
                         // loop built MoveToState here directly and never
                         // sent AutonomousPosition — the bug fixed by 3.6.
-                        let Some(w) = world.as_ref() else {
+                        let world_guard = world.borrow();
+                        let Some(w) = world_guard.as_ref() else {
                             console_log_str(
                                 "[step 3.6] SetMovementInput before WorldState ready — dropping",
                             );
@@ -45176,7 +45314,7 @@ async fn recv_loop(
                         // Wave-1 step 4 — the `?cmdInterp=on` interpreter
                         // lane: same readiness guards as SetMovementInput
                         // (the interpreter needs an in-world player).
-                        if world.as_ref().is_none() || !entity_seeded {
+                        if world.borrow().is_none() || !entity_seeded {
                             console_log_str(
                                 "[cmdInterp] KeyAction before world/player ready — dropping",
                             );
@@ -45194,7 +45332,8 @@ async fn recv_loop(
                         // making server-side player position actually
                         // advance. Pre-EnteredWorld / pre-entity-seeded
                         // ticks are no-ops (nothing to read poses from).
-                        let Some(w) = world.as_mut() else { continue };
+                        let mut world_guard = world.borrow_mut();
+                        let Some(w) = world_guard.as_mut() else { continue };
                         if !entity_seeded {
                             continue;
                         }
