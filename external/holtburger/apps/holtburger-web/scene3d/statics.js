@@ -3449,6 +3449,26 @@ const STATIC_CALL_PES_ON = (() => {
   return true;
 })();
 
+// Perf (2026-07-08) — time-slice the default_script ambient-emitter attach.
+// A dense town has hundreds of scripted statics per landblock (torches /
+// braziers / fountains); building their emitter chains ran as ONE macrotask
+// (the per-emitter `await` only yields microtasks, which don't let the browser
+// render or process input), so arriving at a town froze the main thread ~2 s
+// (a battery measured Linvak Tukal/Fiun/Lytelthorpe ~57k static nodes → ~1.9 s
+// teleport freeze). When on, the attach loop yields a macrotask whenever a
+// synchronous chunk exceeds STATIC_SCRIPT_SLICE_MS, spreading the emitters
+// across frames — same content, no freeze. `?staticScriptSlice=off` reverts.
+const STATIC_SCRIPT_SLICE_ON = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      return new URLSearchParams(globalThis.location.search)
+        .get("staticScriptSlice")?.toLowerCase() !== "off";
+    }
+  } catch (_) {}
+  return true;
+})();
+const STATIC_SCRIPT_SLICE_MS = 6;
+
 // Survey A11-S0 (2026-06-11): default-off `?blockingParticleParity=on`.
 // When on, hook 26 (CreateBlockingParticle) takes retail blocking
 // semantics (acclient.c:329528-329565: no-replace if emitter id already
@@ -3840,6 +3860,7 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
 
   let anchorCount = 0;
   let emitterCount = 0;
+  let _sliceStart = performance.now();
   for (const p of scripted) {
     const lbX = (p.landblockId >>> 24) & 0xff;
     const lbY = (p.landblockId >>> 16) & 0xff;
@@ -3882,6 +3903,18 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
       wasmExports,
       ownerKey
     );
+    // Perf time-slice (2026-07-08): the per-emitter `await` above only yields
+    // microtasks, so a town's hundreds of emitters would build in one macrotask
+    // and freeze the frame. Yield a real macrotask once a synchronous chunk
+    // exceeds the budget, spreading the attach across frames (no visual change,
+    // just progressive pop-in instead of a stall). `?staticScriptSlice=off`.
+    if (
+      STATIC_SCRIPT_SLICE_ON &&
+      performance.now() - _sliceStart > STATIC_SCRIPT_SLICE_MS
+    ) {
+      await new Promise((r) => setTimeout(r, 0));
+      _sliceStart = performance.now();
+    }
   }
   if (anchorCount > 0) {
     // eslint-disable-next-line no-console
@@ -3936,6 +3969,7 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
 
   let anchorCount = 0;
   let emitterCount = 0;
+  let _sliceStart = performance.now();
   for (const it of scripted) {
     const anchor = new THREE.Group();
     anchor.name = `cellstatic-script-anchor-0x${(it.defaultScriptId >>> 0)
@@ -3976,6 +4010,14 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
       wasmExports,
       ownerKey
     );
+    // Perf time-slice (2026-07-08) — see attachStaticDefaultScripts.
+    if (
+      STATIC_SCRIPT_SLICE_ON &&
+      performance.now() - _sliceStart > STATIC_SCRIPT_SLICE_MS
+    ) {
+      await new Promise((r) => setTimeout(r, 0));
+      _sliceStart = performance.now();
+    }
   }
   if (anchorCount > 0) {
     // eslint-disable-next-line no-console
