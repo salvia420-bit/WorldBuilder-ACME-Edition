@@ -297,7 +297,13 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // by both world-write passes — sharing avoids stale depth from the
   // "other" buffer during the chain. setSize below rebuilds it at the
   // new dimensions.
-  const sceneDepthTexture = new THREE.DepthTexture(width, height);
+  // 2026-07-08 — size the depth texture to the DRAWING-BUFFER resolution to
+  // match the composer's color buffers (composer.setSize used
+  // renderer.getDrawingBufferSize above); a CSS-sized depth texture mismatches
+  // whenever pixelRatio ≠ 1 (HiDPI or an explicit ?renderScale at boot) → an
+  // incomplete FBO. See the setSize() note for the full failure mode.
+  const _depthBufSize = renderer.getDrawingBufferSize(new THREE.Vector2());
+  const sceneDepthTexture = new THREE.DepthTexture(_depthBufSize.x, _depthBufSize.y);
   if (portalStencil) {
     // Depth + stencil must share ONE packed attachment when stencil is on;
     // a depth-only texture can't coexist with a stencil buffer. AerialPerspective
@@ -700,17 +706,29 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       composer.setSize(w, h);
       // Rebuild the shared depth texture at the new size — Three.js
       // doesn't auto-resize DepthTextures attached to composer RTs.
-      // Dispose the old one to release GPU memory.
-      const old = sceneDepthTexture;
-      const next = new THREE.DepthTexture(w, h);
-      next.format = THREE.DepthFormat;
-      next.type = THREE.UnsignedIntType;
+      //
+      // 2026-07-08 FRAMEBUFFER-INCOMPLETE FIX: size it to the DRAWING-BUFFER
+      // resolution (w × pixelRatio), NOT the raw CSS w/h. `composer.setSize`
+      // sizes the ping-pong COLOR buffers to `renderer.getDrawingBufferSize()`
+      // (postprocessing.js:1458), so a CSS-sized depth texture is a DIFFERENT
+      // size than the color attachment whenever pixelRatio ≠ 1 — which the
+      // adaptive render-scale controller makes routine (it drives pixelRatio
+      // below 1 under load). The mismatched attachments make the composer FBO
+      // incomplete → "Framebuffer is incomplete: Attachments are not all the
+      // same size" spam on every glClear/glDraw/glBlit → a broken/white frame.
+      // Also read the LIVE current texture (not the stale `sceneDepthTexture`
+      // const, which is never reassigned) so repeated resizes dispose the
+      // right object + preserve the packed depth-stencil format when the
+      // portal-stencil pass is on.
+      const old = composer.inputBuffer.depthTexture || sceneDepthTexture;
+      const dbs = renderer.getDrawingBufferSize(new THREE.Vector2());
+      const next = new THREE.DepthTexture(dbs.x, dbs.y);
+      next.format = old.format;
+      next.type = old.type;
       composer.inputBuffer.depthTexture = next;
       composer.outputBuffer.depthTexture = next;
-      // Mutate the cached reference so getSceneDepthTexture stays valid.
-      // (We can't `sceneDepthTexture = next` from inside this closure
-      // because it's a `const` in the enclosing scope, so the API hands
-      // out the live `composer.inputBuffer.depthTexture` instead.)
+      // getSceneDepthTexture() reads the live composer.inputBuffer.depthTexture,
+      // so swapping the reference above keeps it valid.
       old.dispose();
     },
 
