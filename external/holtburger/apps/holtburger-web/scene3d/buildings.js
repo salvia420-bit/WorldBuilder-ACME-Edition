@@ -890,7 +890,7 @@ export async function bakeBuildingsForLandblock(
     if (_pendingGroups.length > 0) {
       const _tmp = new THREE.Group();
       for (const g of _pendingGroups) _tmp.add(g);
-      await prewarmSubtree(scene3d, _tmp);
+      await prewarmSubtree(scene3d, _tmp, lbKey);
       for (const g of [..._tmp.children]) _tmp.remove(g);
       for (const g of _pendingGroups) scene3d.buildingsGroup.add(g);
     }

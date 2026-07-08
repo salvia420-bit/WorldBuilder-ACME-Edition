@@ -41,13 +41,18 @@ export const BAKE_PREWARM = (() => {
  * @param {import("three").Object3D} object subtree to compile (a Mesh, Group, or temp parent)
  * @returns {Promise<void>}
  */
-export async function prewarmSubtree(scene3d, object) {
+export async function prewarmSubtree(scene3d, object, lbKey = 0) {
   if (!BAKE_PREWARM || !object) return;
-  const renderer = scene3d && scene3d.renderer;
-  const camera = scene3d && scene3d.camera;
-  if (!renderer || !camera || typeof renderer.compileAsync !== "function") return;
+  // Non-blocking link + completion poll (scene3d/program_warm.js), replacing the
+  // old blocking `await compileAsync` — which linked a program variant the lit
+  // render often missed, so the ~1s ACTIVE_UNIFORMS fetch still landed on the
+  // first visible frame (the Marketplace freeze). `markLb:false`: these bakes
+  // count toward the teleport gate's pendingWarmCount() but must not flip the
+  // per-cell reveal flag (cells warm on their own schedule). The subtree still
+  // lazy-links safely on first render if warm is unavailable.
   try {
-    await renderer.compileAsync(object, camera, scene3d.scene);
+    const { warmSubtree } = await import("./program_warm.js");
+    warmSubtree(scene3d, object, lbKey >>> 0, { markLb: false });
   } catch (_) {
     /* fail-soft: the subtree lazy-compiles on first render */
   }

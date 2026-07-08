@@ -452,6 +452,10 @@ export class LandblockLRU {
     if (s.buildingsBakedLbs instanceof Set) s.buildingsBakedLbs.delete(lbKey);
     if (s.staticsBakedLbs instanceof Set) s.staticsBakedLbs.delete(lbKey);
     if (s.envCellLoadedLbs instanceof Set) s.envCellLoadedLbs.delete(lbKey);
+    // Program-warm flag (scene3d/program_warm.js): drop it so a re-bake re-warms
+    // its freshly-rebuilt programs instead of the reveal gate passing on a stale
+    // flag (which could first-render an un-linked program → the ~1s stall back).
+    if (s.prewarmedLbs instanceof Set) s.prewarmedLbs.delete(lbKey);
     // geom-audit (2026-07-02): also cancel any IN-FLIGHT envcell build for
     // this LB — buildEnvCellsForLandblock's attach guard reads the gen
     // token (the loaded mark now lands only on success, so it can't carry

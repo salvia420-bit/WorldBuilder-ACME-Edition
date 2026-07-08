@@ -71,7 +71,16 @@ import { tickFrustumCull, setCullers } from "./culling.js";
 import { tickEntityRenderVisibility } from "./entities.js";
 // Portal-space donut (0x02000306) travel visual. No-op unless a teleport has
 // armed it via `startPortalSpace` (gated behind `?portalSpace=`).
-import { tickPortalSpace } from "./portal_space.js";
+import {
+  tickPortalSpace,
+  startPortalSpace,
+  isPortalSpaceActive,
+  prewarmPortalDonut,
+} from "./portal_space.js";
+// Async shader-program warm: polls newly-linked programs to completion so a new
+// landblock's cells/buildings can be revealed without a first-render link stall
+// (the Marketplace-freeze fix, 2026-07-08). No-op unless a warm job is pending.
+import { tickProgramWarm } from "./program_warm.js";
 // A15-Q2 (2026-06-11 unification survey) — single EntityUpdate clone/field
 // schema shared with index.html's 2D path. Pure function, no DOM/wasm.
 // Wired into `toMeta` behind `?unifiedClone=on` (default-off, see below).
@@ -714,6 +723,106 @@ const RUST_POSE_ON = (() => {
     return false;
   }
 })();
+// `?portalSpace=off/0/false` disables the donut + gate entirely (default on).
+const PORTAL_SPACE_ENABLED = (() => {
+  try {
+    if (typeof window !== "undefined" && window.location && window.location.search) {
+      const v = new URLSearchParams(window.location.search).get("portalSpace");
+      return v !== "off" && v !== "0" && v !== "false";
+    }
+  } catch (_) {}
+  return true;
+})();
+
+// `?lookahead=off` disables the boundary pre-warm (default on).
+const LOOKAHEAD_ENABLED = (() => {
+  try {
+    if (typeof window !== "undefined" && window.location && window.location.search) {
+      return new URLSearchParams(window.location.search).get("lookahead") !== "off";
+    }
+  } catch (_) {}
+  return true;
+})();
+
+const LB_UNITS = 192; // one landblock is 192×192 units (8 cells × 24)
+const LOOKAHEAD_MARGIN = 48; // pre-load the neighbour once within this of an edge
+
+// Pre-load a neighbouring landblock's visual layers so their programs link in
+// the driver background BEFORE the player crosses in on foot — retail
+// LScape::PreFetchCells (acclient.c:307068), which prefetches a radius of blocks
+// around the player. All loaders are idempotent (per-LB Sets), so repeated
+// calls are cheap Set-membership checks.
+function preloadNeighbourLb(s3d, nx, ny) {
+  if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) return;
+  const lbKey = (((nx << 24) >>> 0) | ((ny << 16) >>> 0)) >>> 0;
+  try { s3d.loadTerrainForLandblock && s3d.loadTerrainForLandblock(nx, ny); } catch (_) {}
+  try { s3d.loadBuildingsForLandblock && s3d.loadBuildingsForLandblock(nx, ny); } catch (_) {}
+  try { s3d.loadStaticsForLandblock && s3d.loadStaticsForLandblock(nx, ny); } catch (_) {}
+  try { s3d.loadEnvCellsForLandblock && s3d.loadEnvCellsForLandblock(lbKey); } catch (_) {}
+}
+
+// Per-frame, off ONE pose read: (1) arm the portal gate on an immediate LB-jump
+// (a teleport — the kind=33 event lands ~hundreds of ms late, after the
+// destination has already rendered/stalled); (2) pre-warm the neighbour LB the
+// player is walking toward so an on-foot crossing hits an already-linked town.
+function tickPortalGateAndLookahead(scene3d, sessionHandle) {
+  if (!PORTAL_SPACE_ENABLED && !LOOKAHEAD_ENABLED) return;
+  if (!sessionHandle || typeof sessionHandle.getLocalPlayerPose !== "function") {
+    return;
+  }
+  let lb = 0;
+  let px = NaN;
+  let py = NaN;
+  try {
+    const pose = sessionHandle.getLocalPlayerPose();
+    if (pose) {
+      lb = pose.landblockId >>> 0;
+      px = pose.x;
+      py = pose.y;
+      if (typeof pose.free === "function") pose.free();
+    }
+  } catch (_) {
+    return;
+  }
+  if (!lb) return;
+  const lbTop = ((lb >>> 16) << 16) >>> 0;
+  const cx = (lb >>> 24) & 0xff;
+  const cy = (lb >>> 16) & 0xff;
+
+  // (1) Teleport gate on non-adjacent LB jump.
+  if (PORTAL_SPACE_ENABLED) {
+    const prev = scene3d._gateLastLb || 0;
+    scene3d._gateLastLb = lbTop;
+    if (prev && lbTop !== prev) {
+      const jdx = Math.abs(cx - ((prev >>> 24) & 0xff));
+      const jdy = Math.abs(cy - ((prev >>> 16) & 0xff));
+      if ((jdx > 1 || jdy > 1) && !isPortalSpaceActive()) {
+        try { startPortalSpace(scene3d); } catch (_) { /* kind=33 backup */ }
+      }
+    }
+  }
+
+  // (2) Boundary look-ahead pre-warm — skip while a teleport gate is up (the
+  // gate already streams the destination; don't also prefetch the source edge).
+  if (
+    LOOKAHEAD_ENABLED &&
+    !isPortalSpaceActive() &&
+    Number.isFinite(px) &&
+    Number.isFinite(py) &&
+    typeof scene3d.loadTerrainForLandblock === "function"
+  ) {
+    let dx = 0;
+    let dy = 0;
+    if (px > LB_UNITS - LOOKAHEAD_MARGIN) dx = 1;
+    else if (px < LOOKAHEAD_MARGIN) dx = -1;
+    if (py > LB_UNITS - LOOKAHEAD_MARGIN) dy = 1;
+    else if (py < LOOKAHEAD_MARGIN) dy = -1;
+    if (dx) preloadNeighbourLb(scene3d, cx + dx, cy);
+    if (dy) preloadNeighbourLb(scene3d, cx, cy + dy);
+    if (dx && dy) preloadNeighbourLb(scene3d, cx + dx, cy + dy); // corner
+  }
+}
+
 function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   if (!scene3d?.entityManager) return;
   if (!scene3d?.cameraSwitcher) return;
@@ -1963,6 +2072,34 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       }
     }
   }
+  // One-shot: build + warm the portal donut behind the boot screen so the first
+  // teleport of the session doesn't show ~1s of hidden world while it links.
+  if (
+    !scene3d._donutPrewarmed &&
+    PORTAL_SPACE_ENABLED &&
+    scene3d.wasmExports &&
+    scene3d.materialCache &&
+    scene3d.renderer &&
+    scene3d.camera
+  ) {
+    // Require renderer+camera too: without them warmSubtree can't compile, so
+    // the donut would build un-warmed and stall on the first teleport's render.
+    scene3d._donutPrewarmed = true;
+    try { prewarmPortalDonut(scene3d); } catch (_) { /* fail-soft */ }
+  }
+  // Detect a teleport from the IMMEDIATE pose LB-jump and arm the gate before
+  // the destination can first-render (the kind=33 event is too late); also
+  // pre-warm the neighbour LB a walking player is approaching. Must run before
+  // tickPortalSpace so the same frame's gate tick sees it armed.
+  try {
+    tickPortalGateAndLookahead(scene3d, sessionHandle);
+  } catch (e) {
+    if (!scene3d._portalGateTriggerWarned) {
+      scene3d._portalGateTriggerWarned = true;
+      // eslint-disable-next-line no-console
+      console.warn("[portalSpace] gate/lookahead threw:", e);
+    }
+  }
   // Portal-space donut: stream the ring tunnel around the camera while a
   // teleport transition is active. AFTER cameraSwitcher.tick so the rig reads
   // the final camera pose this frame; no-op unless armed via startPortalSpace.
@@ -1973,6 +2110,17 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       scene3d._portalSpaceTickWarned = true;
       // eslint-disable-next-line no-console
       console.warn("[portalSpace] tickPortalSpace threw:", e);
+    }
+  }
+  // Advance async program-warm jobs (poll newly-linked shader programs to
+  // completion). Cheap no-op unless a landblock warm is in flight.
+  try {
+    tickProgramWarm();
+  } catch (e) {
+    if (!scene3d._programWarmTickWarned) {
+      scene3d._programWarmTickWarned = true;
+      // eslint-disable-next-line no-console
+      console.warn("[programWarm] tickProgramWarm threw:", e);
     }
   }
   // Render-completeness audit (2026-05-29) — advance animated SurfaceTextures

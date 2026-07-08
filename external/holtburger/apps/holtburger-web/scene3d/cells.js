@@ -48,6 +48,7 @@ import {
 } from "./adapter.js";
 import { materialCanCastShadow } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
+import { warmSubtree, isLbPrewarmed } from "./program_warm.js";
 import { STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT } from "./stream_bake_guard.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 import { attachStaticDefaultScriptsWorld } from "./statics.js";
@@ -999,24 +1000,30 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     }
   }
 
-  // Pre-warm GPU programs + texture uploads for all new cells before
-  // they hit the scene graph. compileAsync walks the subtree, finds
-  // every material, and dispatches shader compile + texture upload
-  // requests. With KHR_parallel_shader_compile (real GPUs), the work
-  // happens in the driver background while JS continues. Without it
-  // (SwiftShader), compileAsync falls back to sync compile but still
-  // returns a Promise so the call shape is identical. Use a temp
-  // parent so we hand compileAsync a single subtree.
-  const renderer = scene3d.renderer;
-  const camera = scene3d.camera;
-  if (newCells.length > 0 && renderer && camera && typeof renderer.compileAsync === "function") {
+  // Pre-warm the new cells' GPU programs WITHOUT blocking, then gate their
+  // reveal on completion. `warmSubtree` links every material's program now
+  // (renderer.compile → gl.linkProgram, non-blocking under
+  // KHR_parallel_shader_compile) and polls each to COMPLETION_STATUS_KHR across
+  // frames; the BFS reveal below only flips a cell visible once
+  // `isLbPrewarmed(lbKey)` is true. So the blocking first-render uniform fetch
+  // (getProgramParameter(ACTIVE_UNIFORMS), ~1s/program on a weak iGPU — the
+  // Marketplace freeze, 2026-07-08) never lands on a visible frame. Replaces the
+  // old `await compileAsync(tempParent)`, whose resolution didn't reliably
+  // precede the cells' first render, so the link stalled the frame they showed.
+  if (newCells.length > 0) {
     const tempParent = new THREE.Group();
     for (const { container } of newCells) tempParent.add(container);
     try {
-      await renderer.compileAsync(tempParent, camera, scene3d.scene);
+      // Always call warmSubtree — it self-guards on a missing renderer/camera and
+      // marks the LB prewarmed immediately in that case, so the reveal gate can
+      // never permanently hide cells when we cannot warm.
+      warmSubtree(scene3d, tempParent, lbKey);
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.warn("[envcell-compileAsync] failed (cells will lazy-compile on first render):", e);
+      console.warn("[envcell-warm] prewarm failed (cells lazy-compile on first render):", e);
+      // Fail-open: never let a warm exception strand the cells hidden forever.
+      if (!(scene3d.prewarmedLbs instanceof Set)) scene3d.prewarmedLbs = new Set();
+      scene3d.prewarmedLbs.add(lbKey >>> 0);
     }
   }
 
@@ -1400,9 +1407,14 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   // mode wants every EnvCell visible regardless of the diff.
   if (CELL_BUG_PARITY) {
     for (const [thisCellId, container] of registry) {
-      const want = container?.userData?.isEnvCell
+      const wantRaw = container?.userData?.isEnvCell
         ? true
         : visibleSet.has(thisCellId >>> 0);
+      // Reveal-gate (program_warm): never first-render a cell until its LB's
+      // shader programs are link-complete, else getProgramParameter(
+      // ACTIVE_UNIFORMS) stalls the frame ~1s/program. Hides are never gated.
+      const want =
+        wantRaw && isLbPrewarmed(scene3d, (thisCellId >>> 0) & 0xffff0000);
       if (container.visible !== want) {
         container.visible = want;
       }
@@ -1416,7 +1428,14 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     // bounded by visibleSet.size (~11 typically).
     for (const cellId of visibleSet) {
       const container = registry.get(cellId);
-      if (container && container.visible !== true) {
+      // Reveal-gate on program warm (see program_warm.js): keep the cell hidden
+      // until its LB's shader programs are link-complete, so the first-render
+      // ACTIVE_UNIFORMS fetch never stalls a visible frame.
+      if (
+        container &&
+        container.visible !== true &&
+        isLbPrewarmed(scene3d, (cellId >>> 0) & 0xffff0000)
+      ) {
         container.visible = true;
       }
     }

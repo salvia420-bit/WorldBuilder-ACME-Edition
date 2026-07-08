@@ -2132,7 +2132,7 @@ export async function bakeStaticsForLandblock(
   if (BAKE_PREWARM && nodesToAdd.length > 0) {
     const _tmp = new THREE.Group();
     for (const n of nodesToAdd) _tmp.add(n);
-    await prewarmSubtree(scene3d, _tmp);
+    await prewarmSubtree(scene3d, _tmp, lbKey);
     for (const n of [..._tmp.children]) _tmp.remove(n);
     if (staticsTimeSlice && !scene3d.staticsBakedLbs.has(lbKey)) {
       // Evicted while the prewarm await was outstanding — dispose this LB's per-surface

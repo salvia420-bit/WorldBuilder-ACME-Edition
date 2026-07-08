@@ -3703,7 +3703,7 @@ export async function bakeTerrainForLandblock(
   // in-flight key, so it can't be evicted across this await. `?bakePrewarm=off` skips.
   // (?terrainBatch: skipped for an absorbed proxy — it never renders.)
   if (!terrainBatchAbsorbed) {
-    await prewarmSubtree(scene3d, lbMesh);
+    await prewarmSubtree(scene3d, lbMesh, ((lbX << 24) | (lbY << 16)) >>> 0);
   }
 
   scene3d.terrainGroup.add(lbMesh);

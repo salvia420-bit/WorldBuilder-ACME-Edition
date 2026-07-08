@@ -26,6 +26,7 @@
 
 import * as THREE from "three";
 import { meshToGeometryGroups } from "./adapter.js";
+import { lbWarmPending, warmSubtree } from "./program_warm.js";
 
 // Setup (0x02…) for the portal-space donut. Confirmed donut geometry via
 // WorldBuilder.Terminal get-object-detail + obj-export (hollow ring about Z).
@@ -66,6 +67,30 @@ const PORTAL_EXIT_WAVE = 0x0a000245;  // UI_ExitPortal — one-shot on close
 const SOUND_REF_DISTANCE = 60; // large → ~full volume even with tiny offset
 const SOUND_FADE_S = 0.35;     // close-out gain ramp on the optional loop
 
+// ── Loading GATE (retail `blocking_for_cells`, acclient.c SmartBox::UseTime
+// :146268). While portalling we HIDE the destination world groups and hold the
+// donut until the destination is resident AND its shader programs are
+// link-complete (program_warm), then reveal. So the world never renders
+// half-built — nor stalls ~1s/program on the first-render ACTIVE_UNIFORMS fetch
+// (the Marketplace freeze, 2026-07-08) — in front of the player: that link
+// happens off-screen, behind the tunnel. `?portalGate=off` keeps the donut as a
+// pure visual (legacy time-driven close).
+// Wall-clock (performance.now) driven so the gate is robust to rAF throttling
+// (a backgrounded/hidden tab drops to ~1 Hz; a frame-counted streak would then
+// stretch to seconds and the `_elapsed` envelope would stall).
+const GATE_MIN_MS = 500; // ms — always show the tunnel at least this long
+const GATE_READY_MS = 200; // ms — destination must stay resident+warmed this long
+const GATE_MAX_MS = 8000; // ms — hard safety cap: reveal even if never "ready"
+// World groups hidden during transit (all on `scene3d`). Hiding the GROUP (not
+// per-mesh) is what suppresses the first-render program link across every layer
+// at once; program_warm links them in the driver background meanwhile.
+const WORLD_GROUP_KEYS = [
+  "terrainGroup",
+  "buildingsGroup",
+  "staticsGroup",
+  "cellsGroup",
+];
+
 // Module-level cache: the geometry + materials are built ONCE (one wasm round
 // trip) and the rig is reused across teleports. `_rig` is detached from the
 // scene while idle, so it costs nothing when not portaling.
@@ -84,6 +109,13 @@ let _enterDid = PORTAL_ENTER_WAVE; // one-shot on open (0 = muted)
 let _exitDid = PORTAL_EXIT_WAVE;   // one-shot on close (0 = muted)
 let _loopDid = 0;           // optional loop bed (0 = none)
 let _exitFired = false;     // one-shot guard for the close whoosh
+// Gate state.
+let _gating = false;        // world hidden, holding the tunnel for readiness
+let _gateEnabled = true;    // `?portalGate=off` → visual-only (no world hide/hold)
+let _hiddenGroups = null;   // [{ group, prev }] captured to restore on reveal
+let _gateStartWall = 0;     // performance.now() when the gate began
+let _readySinceWall = 0;    // performance.now() the destination first looked ready (0 = not)
+let _startWall = 0;         // performance.now() of the last accepted start (re-entry guard)
 
 function smoothstep(a, b, x) {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -109,6 +141,72 @@ function normaliseGeometries(geoms) {
     if (minAxis === "x") g.rotateY(Math.PI / 2);
     else if (minAxis === "y") g.rotateX(-Math.PI / 2);
   }
+}
+
+// Hide the destination world groups so nothing first-renders (and stalls on the
+// program link) while the tunnel is up. Idempotent — a rapid re-teleport keeps
+// the already-captured `prev` flags.
+function hideWorld(scene3d) {
+  if (_hiddenGroups) return; // already hidden (re-teleport mid-gate)
+  const captured = [];
+  for (const key of WORLD_GROUP_KEYS) {
+    const group = scene3d && scene3d[key];
+    if (group && typeof group.visible === "boolean") {
+      captured.push({ group, prev: group.visible });
+      group.visible = false;
+    }
+  }
+  _hiddenGroups = captured;
+}
+
+// Restore the world groups to their pre-gate visibility. Their per-mesh /
+// per-cell visibility logic (BFS reveal, frustum cull) resumes from here.
+function revealWorld() {
+  if (!_hiddenGroups) return;
+  for (const { group, prev } of _hiddenGroups) {
+    try {
+      group.visible = prev;
+    } catch (_) {
+      /* group torn down mid-gate — ignore */
+    }
+  }
+  _hiddenGroups = null;
+}
+
+// Destination readiness: the terrain under the player is baked (streaming has
+// reached the destination LB) and no shader-program warm is still in flight (so
+// every newly-linked program is COMPLETION_STATUS-ready — revealing now cannot
+// land a first-render link stall). Cells/buildings/statics are covered by
+// `pendingWarmCount` (each registers a warm job while loading).
+function gateReady(scene3d) {
+  let curLb = 0;
+  try {
+    const sh = typeof window !== "undefined" ? window.__sessionHandle : null;
+    const pose = sh && sh.getLocalPlayerPose ? sh.getLocalPlayerPose() : null;
+    if (pose) {
+      curLb = ((pose.landblockId >>> 16) << 16) >>> 0;
+      if (typeof pose.free === "function") pose.free();
+    }
+  } catch (_) {
+    return false;
+  }
+  if (!curLb) return false;
+  const terrainOk =
+    scene3d.terrainBakedLbs instanceof Set
+      ? scene3d.terrainBakedLbs.has(curLb)
+      : true;
+  // Cells for the destination must have been processed (their attach adds the LB
+  // to envCellLoadedLbs and registers the cell warm) — guards against a
+  // premature "no pending warm" the instant before streaming reaches the dest.
+  const cellsOk =
+    scene3d.envCellLoadedLbs instanceof Set
+      ? scene3d.envCellLoadedLbs.has(curLb)
+      : true;
+  // Wait on THIS landblock's programs only — NOT the whole neighbourhood's
+  // (which now includes look-ahead prefetches). That is the reveal-speed fix:
+  // the gate no longer holds the world hidden until every prefetched neighbour
+  // has also finished linking.
+  return terrainOk && cellsOk && !lbWarmPending(curLb);
 }
 
 async function ensureRig(scene3d) {
@@ -172,11 +270,36 @@ async function ensureRig(scene3d) {
       _rings.push(ring);
     }
     _rig.visible = false;
+    // Warm the donut's OWN programs before it is ever shown — otherwise its
+    // materials link on the tunnel's first render (first teleport of the
+    // session), stalling the very loading screen meant to hide such stalls.
+    // Awaited (resolves via tickProgramWarm on the running loop), so the rig is
+    // returned only once its shaders are COMPLETION_STATUS-ready.
+    try {
+      await warmSubtree(scene3d, _rig, 0, { markLb: false });
+    } catch (_) {
+      /* fail-soft: donut lazy-links on first render */
+    }
     return _rig;
   })();
   const built = await _building;
   _building = null;
   return built;
+}
+
+/**
+ * Build + warm the donut rig ahead of the first teleport (call once at boot,
+ * behind the loading screen). Without this, the FIRST teleport of a session
+ * shows ~1s of hidden world while the donut's mesh is fetched and its programs
+ * link; pre-warming moves that cost to boot where a wait is already expected.
+ * Fail-soft and idempotent (ensureRig caches the rig).
+ */
+export async function prewarmPortalDonut(scene3d) {
+  try {
+    await ensureRig(scene3d);
+  } catch (_) {
+    /* fail-soft: the donut lazy-builds on first teleport */
+  }
 }
 
 /**
@@ -193,11 +316,47 @@ async function ensureRig(scene3d) {
  */
 export async function startPortalSpace(scene3d, scale, enterDid, loopDid) {
   if (!scene3d?.scene || !scene3d?.cameraSwitcher) return;
+  // Re-entry guard: the gate is triggered by BOTH the loop.js LB-jump detector
+  // (early, jitter-free) and the kind=33 PortalSpaceEntered event (later, after
+  // event-drain latency). Ignore the duplicate so the second call can't
+  // restart/extend an in-flight transit. `gateReady` reads the LIVE pose, so a
+  // genuine rapid re-teleport still re-targets without a restart.
+  const nowW0 = typeof performance !== "undefined" ? performance.now() : 0;
+  // `_gating` flips synchronously below (before the rig-build await), so this
+  // also dedups a kind=33 call that lands mid-build on the first teleport.
+  if ((_active || _gating) && nowW0 - _startWall < 3000) return;
+  _startWall = nowW0;
   _scale = Number.isFinite(scale) && scale > 0 ? scale : DEFAULT_SCALE;
   _enterDid = enterDid === undefined ? PORTAL_ENTER_WAVE : enterDid >>> 0;
   _loopDid = loopDid ? loopDid >>> 0 : 0;
+  // Gate setup FIRST — hide the destination world SYNCHRONOUSLY, before the async
+  // rig build. `ensureRig` fetches the donut mesh on the first teleport (a wasm
+  // round-trip); if we hid the world only after that await, the destination would
+  // render + stall (~1s/program) in the gap. `?portalGate=off` = visual-only.
+  try {
+    const sp = new URLSearchParams(
+      typeof window !== "undefined" && window.location
+        ? window.location.search
+        : "",
+    );
+    _gateEnabled = sp.get("portalGate") !== "off";
+  } catch (_) {
+    _gateEnabled = true;
+  }
+  _readySinceWall = 0;
+  _gating = false;
+  if (_gateEnabled) {
+    hideWorld(scene3d);
+    _gating = true;
+    _gateStartWall = performance.now();
+  }
   const rig = await ensureRig(scene3d);
-  if (!rig) return;
+  if (!rig) {
+    // No donut (headless / build failed): never strand the world hidden.
+    revealWorld();
+    _gating = false;
+    return;
+  }
   _scene = scene3d.scene;
   if (rig.parent !== _scene) _scene.add(rig);
   rig.visible = true;
@@ -259,6 +418,10 @@ function stopLoop() {
 /** Optional: signal the destination is loaded (begin closing immediately). */
 export function signalPortalArrived() {
   _arrived = true;
+  if (_gating) {
+    revealWorld();
+    _gating = false;
+  }
 }
 
 /** True while the sequence is on-screen. */
@@ -274,8 +437,29 @@ export function tickPortalSpace(scene3d, dt) {
   if (!cam) return;
   _elapsed += dt;
 
-  // Phase envelope. open → travel (until arrival / cap) → close.
-  const travelEnd = (_arrived ? 0 : TRAVEL_DUR);
+  // Gate driver: hold the tunnel (world hidden) until the destination has been
+  // resident + warmed for GATE_READY_MS straight, then reveal. GATE_MAX_MS is the
+  // hard safety cap so a stuck stream can never trap the player in transit.
+  if (_gating) {
+    const nowW = performance.now();
+    const held = nowW - _gateStartWall;
+    if (held >= GATE_MIN_MS && gateReady(scene3d)) {
+      if (_readySinceWall === 0) _readySinceWall = nowW;
+    } else {
+      _readySinceWall = 0;
+    }
+    const settled =
+      _readySinceWall !== 0 && nowW - _readySinceWall >= GATE_READY_MS;
+    if (settled || held >= GATE_MAX_MS) {
+      revealWorld();
+      _gating = false;
+      _arrived = true; // begin the iris-close as the world comes back
+    }
+  }
+
+  // Phase envelope. open → travel (until arrival / cap) → close. While gating we
+  // hold up to MAX_HOLD (not TRAVEL_DUR) so a slow destination keeps the tunnel.
+  const travelEnd = _arrived ? 0 : _gating ? MAX_HOLD : TRAVEL_DUR;
   const closeStart = OPEN_DUR + Math.min(MAX_HOLD, travelEnd);
   const openEnv = smoothstep(0, OPEN_DUR, _elapsed);          // 0→1
   const closeEnv = 1 - smoothstep(closeStart, closeStart + CLOSE_DUR, _elapsed);
@@ -335,6 +519,10 @@ export function tickPortalSpace(scene3d, dt) {
 export function endPortalSpace() {
   if (!_active) return;
   _active = false;
+  // Safety: a teardown mid-gate must never leave the destination world hidden.
+  revealWorld();
+  _gating = false;
+  _readySinceWall = 0;
   if (_rig) {
     _rig.visible = false;
     if (_rig.parent) _rig.parent.remove(_rig);

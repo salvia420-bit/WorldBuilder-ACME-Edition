@@ -744,6 +744,7 @@ const RIG_MODULE_ON = readRigModuleFlag();
 // cull. Only the constant is imported; the cull pass is driven from loop.js
 // via `tickEntityRenderVisibility`.
 import { CULL_DIST_SQ } from "./culling.js";
+import { warmSubtree } from "./program_warm.js";
 // A8-M4 (2026-06-12) — generic pre-create event buffer (retail null-object
 // analog, `?preCreateBuffer=on`). Pure dependency-free module; ALL wiring
 // and flag gating lives in this file (see readPreCreateBufferFlag above).
@@ -1795,8 +1796,48 @@ function _applyEntityVisible(inst) {
   if (!inst || !inst.root) return;
   const stateVisible = inst._stateVisible !== false; // undefined → visible
   const cullHidden = inst._renderCullHidden === true;
-  const want = stateVisible && !cullHidden;
+  // Third producer (program-warm reveal gate): a freshly-spawned NPC/creature is
+  // held hidden until its shader programs report link-complete, so its first
+  // render can't stall the frame (getProgramParameter(ACTIVE_UNIFORMS)) at a busy
+  // destination. `_programWarm === false` = explicitly waiting; undefined (the
+  // local player, or any entity that never went through the warm) → not gated.
+  const warmPending = inst._programWarm === false;
+  const want = stateVisible && !cullHidden && !warmPending;
   if (inst.root.visible !== want) inst.root.visible = want;
+}
+
+// Hold a freshly-spawned entity hidden until its shader programs link, then
+// reveal (via the warm producer in _applyEntityVisible). The local player is
+// exempt — it is already warm from the source landblock and the cull tick never
+// hides it. Fail-open: any error, or the warm's MAX_WARM cap, reveals it.
+function _warmEntityReveal(scene3d, inst, root, guid) {
+  try {
+    let localGuid = null;
+    if (
+      typeof window !== "undefined" &&
+      typeof window.getLocalPlayerGuid === "function"
+    ) {
+      const lpg = window.getLocalPlayerGuid();
+      if (lpg != null) localGuid = lpg >>> 0;
+    }
+    if (localGuid !== null && (guid >>> 0) === localGuid) return; // never gate the player
+    inst._programWarm = false;
+    _applyEntityVisible(inst); // hide until warmed
+    const done = () => {
+      inst._programWarm = true;
+      _applyEntityVisible(inst);
+    };
+    const p = warmSubtree(scene3d, root, 0, { markLb: false });
+    if (p && typeof p.then === "function") p.then(done, done);
+    else done();
+  } catch (_) {
+    inst._programWarm = true; // never strand an entity hidden
+    try {
+      _applyEntityVisible(inst);
+    } catch (_) {
+      /* ignore */
+    }
+  }
 }
 
 /** Set the STATE-authoritative visibility (producer #1) + recompose. */
@@ -3842,6 +3883,10 @@ export class EntityManager {
     // Step E: parent under entitiesGroup + register.
     if (this.scene3d?.entitiesGroup) {
       this.scene3d.entitiesGroup.add(root);
+      // Hide this NPC/creature until its shader programs link, so its first
+      // render can't stall a busy destination's frame (the local player is
+      // exempt). Composes with the cull/state visibility producers.
+      _warmEntityReveal(this.scene3d, inst, root, guid);
     }
     // 2026-05-22 — wire-agent: walk THIS entity's subtree and add solid-
     // fill companion meshes for every wire-bucket-materialed
