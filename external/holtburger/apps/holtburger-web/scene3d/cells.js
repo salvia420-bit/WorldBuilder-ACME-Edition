@@ -170,6 +170,27 @@ const SEALED_EVICT_ENABLED = (() => {
   return true;
 })();
 
+// Step 1 perf (2026-07-08) — freeze static EnvCell matrices. Default ON;
+// `?freezeStaticMatrix=off` restores per-frame matrix updates. Interior cell
+// geometry (walls/floors/props + fixed torch point lights) never moves, but
+// three's per-frame `updateMatrixWorld` still traversed all of it — ~8% of the
+// frame at a dense hub (a CPU profile at Town Network: `updateMatrixWorld` 7.7%,
+// cellsGroup ≈ 1,100 of ~2,900 scene nodes). When ON, each cell container's
+// world matrix is computed once at attach (ancestor-safe via
+// updateWorldMatrix(true,true)) then `matrixWorldAutoUpdate=false` makes three
+// skip the whole subtree every frame. SAFE: interior animated scenery +
+// default-script particles live in `staticsGroup` (world-frame), NOT under the
+// cell container, so they still animate.
+const FREEZE_STATIC_MATRIX = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      const raw = new URLSearchParams(globalThis.location.search).get("freezeStaticMatrix");
+      if (raw === "off" || raw === "0" || raw === "false") return false;
+    }
+  } catch (_) {}
+  return true;
+})();
+
 // Goal-1 draw-distance throttle (2026-06-22): a bounded distance-priority
 // bake-START gate that supersedes PVS_BAKE_CAP's "K new starts per frame".
 // The K-per-frame cap fires a FIXED number of new LBs each frame regardless
@@ -1045,6 +1066,18 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     container.traverse((o) => o.layers.set(1));
     scene3d.cellsGroup.add(container);
     scene3d.cellContainers3d.set(cellId, container);
+    // Step 1 perf (2026-07-08) — freeze the static interior's matrices. The
+    // cell walls/floors/props + fixed torch lights never move, so skip their
+    // per-frame updateMatrixWorld (see FREEZE_STATIC_MATRIX). Compute the world
+    // matrix ONCE now — updateWorldMatrix(true,…) walks ancestors first, so this
+    // is correct regardless of whether the render loop has updated worldRoot yet
+    // this frame — then stop three from re-composing the subtree each frame.
+    // Cell VISIBILITY still toggles freely (that never touches the matrix), and
+    // animated scenery/particles live in staticsGroup, not here.
+    if (FREEZE_STATIC_MATRIX) {
+      container.updateWorldMatrix(true, true);
+      container.matrixWorldAutoUpdate = false;
+    }
   }
   // geom-audit: build reached attach — NOW the LB counts as loaded.
   scene3d.envCellLoadedLbs.add(lbKey);
