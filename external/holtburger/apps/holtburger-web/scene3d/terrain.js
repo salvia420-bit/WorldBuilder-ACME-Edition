@@ -1129,6 +1129,14 @@ uniform float uTriplanarSlopeLo;
 // stay quiet at subdivLevel=1 (matches the vertex-shader gate).
 uniform float uTime;
 uniform float uDisplacementEnabled;
+// 2026-07-08 — water UV scroll gate, DECOUPLED from uDisplacementEnabled.
+// The vertex displacement (rise/fall) needs subdivided geometry so it stays
+// gated on uDisplacementEnabled (subdivLevel>=2); the per-pixel surface SCROLL
+// does NOT, but it used to share that gate — so the batched ring + distance>=2
+// LODs + low/mid quality left open water frozen ("moves far, freezes close").
+// This uniform (default 1.0) drives the scroll independently; ?waterScroll=off
+// sets it 0.0 (fully static) as a rollback escape.
+uniform float uWaterScrollEnabled;
 // F12-5 — same water-code bitmask the vertex shader uses for displacement
 // (bit i = terrain code i is animated water). The per-corner UV-scroll test
 // below reads it so the displacement / scroll / tint sites share ONE water
@@ -1427,8 +1435,14 @@ void main() {
   // already scrolls only the water-typed corners, so computing the drifted UV
   // unconditionally (still under the displacement quality gate) makes the flow
   // bilinear-continuous across the land/water seam — no provoking-vertex block.
+  // 2026-07-08 — gate the scroll on uWaterScrollEnabled (default 1), NOT
+  // uDisplacementEnabled. The scroll is a per-pixel fragment effect with no
+  // geometry dependency, so coupling it to the subdiv/displacement LOD froze
+  // open water on the batched ring + distance>=2 LODs + low/mid quality. The
+  // per-corner uWaterCodeMask test below still restricts the scrolled UV to
+  // water corners, so land stays static regardless.
   vec2 waterCellUv = cellUv;
-  if (uDisplacementEnabled > 0.5) {
+  if (uWaterScrollEnabled > 0.5) {
     waterCellUv = fract(cellUv + vec2(uTime * 0.05, uTime * 0.02));
   }
 
@@ -2474,6 +2488,10 @@ export async function resolveTerrainRingOpts(
     subdivLevel,
     canSubdivide,
     displacementEnabled,
+    // 2026-07-08 — surface UV-scroll independent of the subdiv/displacement
+    // LOD. Default on (`?waterScroll=off` → static water). Read once per ring;
+    // toggling at runtime needs a reload.
+    waterScrollEnabled: readWaterScrollFlag(),
     waterCodeMask,
     lavaCodeMask,
     atlasTexture,
@@ -2695,6 +2713,25 @@ function readTerrainModulationFlag() {
     return typeof v === "string" && v.toLowerCase() === "on";
   } catch (_) {
     return false;
+  }
+}
+
+/**
+ * 2026-07-08 — Parse `?waterScroll` from the page URL. Default ON: the water
+ * surface UV scroll animates at every subdiv/LOD level (the fix that decouples
+ * it from `uDisplacementEnabled`). `?waterScroll=off` (or `0`/`false`) sets the
+ * shader gate to 0 → fully static water, a rollback escape. Any other/missing
+ * value is on. try/catch for the non-browser Node harness, like the siblings.
+ */
+function readWaterScrollFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("waterScroll");
+    if (typeof v !== "string") return true;
+    const lv = v.toLowerCase();
+    return !(lv === "off" || lv === "0" || lv === "false");
+  } catch (_) {
+    return true;
   }
 }
 
@@ -3458,6 +3495,13 @@ export async function bakeTerrainForLandblock(
       uLavaCodeMask: { value: opts.lavaCodeMask },
       uDisplacementEnabled: {
         value: opts.displacementEnabled ? 1.0 : 0.0,
+      },
+      // 2026-07-08 — surface UV-scroll gate, independent of the subdiv/
+      // displacement LOD (opts.waterScrollEnabled defaults true; `?waterScroll=off`
+      // → 0.0 = fully static). Cloned into the batched material by
+      // terrain_batch._buildBatchMaterial, so both paths animate.
+      uWaterScrollEnabled: {
+        value: opts.waterScrollEnabled === false ? 0.0 : 1.0,
       },
       uLbOriginXy: {
         value: new THREE.Vector2(

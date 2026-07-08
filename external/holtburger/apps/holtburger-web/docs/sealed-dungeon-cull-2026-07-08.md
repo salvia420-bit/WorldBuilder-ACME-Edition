@@ -76,19 +76,35 @@ outdoor case. **0 error-level console messages.**
   arrival) — the cull only stops the per-frame *draw*. Skipping the bake when sealed
   would also reclaim memory + the per-frame statics walk. Pairs with `indoorPvsRing`.
 
-## Separate open bug (appended per request): water surface animation freezes up close
-The ocean surface "moving effect" (UV scroll `waterCellUv`, terrain.js:1432) and the
-vertical rise/fall (uTime vertex displacement, terrain.js:~896) are both driven by the
-per-frame `uTime` push in `loop.js tickTerrainUTime` (line 880), which iterates
-`scene3d.terrainMaterials`. "Animates far, freezes close" ⇒ the near water LB's
-material is missing from that registry. Prime suspects: (1) the eviction filter
-**reassigns** the array — `landblock_lru.js:494 s.terrainMaterials =
-s.terrainMaterials.filter(...)` — which can split producer/consumer references; (2) the
-`scene3d` vs `window.liveScene3d` **dual-registry** push in `terrain_batch.js:406–414`;
-(3) an LOD re-bake at higher subdivLevel producing a material that never re-registers.
-Next step: teleport to open ocean, walk near, and check
-`window.liveScene3d.terrainMaterials` membership + whether the near water material's
-`uniforms.uTime.value` advances vs the batched material's.
+## Second bug (appended per request): water surface animation freezes — FIXED (`?waterScroll`)
+Ruled OUT the registry hypothesis by live probe: `scene3d.terrainMaterials ===
+liveScene3d.terrainMaterials` (same ref), all terrain materials registered, and `uTime`
+advances 7.0 s over 8 real rAF frames (the earlier "frozen" read was a sub-frame sample
+at SwiftShader ~1 fps). The real cause is in the shader: the water UV scroll
+`waterCellUv = fract(cellUv + uTime*(.05,.02))` was **gated behind
+`if (uDisplacementEnabled > 0.5)`** (terrain.js, was ~L1431), and `uDisplacementEnabled`
+is 1.0 only at `subdivLevel ≥ 2`. `pickSubdivLevelForLb` (terrain.js:~2839) gives the LB
+underfoot full subdiv but drops distance≥2 rings — and the whole batched ring — to
+subdiv 1 (`disp=0`). So the scroll shared the vertex-displacement LOD gate even though a
+per-pixel scroll needs no subdivided geometry → open water froze wherever `disp=0`
+(measured `disp:0` on the ocean LB 0x0007 underfoot). Both the per-LB and batched paths
+share this fragment source (terrain_batch string-adapts it and doesn't touch the gate).
+
+**Fix:** decouple the scroll onto a dedicated `uWaterScrollEnabled` uniform (default
+1.0), independent of subdiv. Vertex displacement (rise/fall) stays gated on
+`uDisplacementEnabled` — it genuinely needs the verts. The per-corner `uWaterCodeMask`
+test still restricts the scrolled UV to water corners (land unaffected). The uniform
+propagates to the batched material via `_buildBatchMaterial`'s uniform clone.
+`?waterScroll=off` sets it 0.0 (fully static). Files: terrain.js frag-shader gate +
+`uWaterScrollEnabled` material uniform + `waterScrollEnabled` opts + `readWaterScrollFlag`.
+
+**Validated (headless, Town Network ocean, live terrain.js — no wasm rebuild):** all 7
+terrain materials carry the uniform (0 missing); all 7 water materials
+`uWaterScrollEnabled=1` while `uDisplacementEnabled=0` — the exact previously-frozen case
+now scrolls — uTime advancing; 0 GL/shader errors. Owed: 1070 pixel eye-test of the
+actual motion. Minor follow-up: the water tint "breath" (`sin(uTime*0.3)`, vertex shader)
+is still `uDisplacementEnabled`-gated, so it stays static at low subdiv — decouple it the
+same way if it reads as inconsistent on the 1070.
 
 ## Artifacts
 `pkg/` rebuilt to release with the new export (validated). `pkg-bak-preseal/` = the
