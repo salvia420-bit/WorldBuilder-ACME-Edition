@@ -129,6 +129,28 @@ const INDOOR_PVS_RING_RADIUS = (() => {
   return 1;
 })();
 
+// Step 1b (2026-07-08) — sealed-dungeon outdoor cull. Default ON;
+// `?sealedCull=off` (or `0`/`false`) restores the Phase 5 unconditional
+// "outdoor groups always visible indoors" behaviour. When ON,
+// `tickCellVisibility3D` hides terrainGroup / buildingsGroup / staticsGroup
+// whenever the current indoor dungeon has zero outdoor-facing portals — a
+// fully-enclosed hub like Town Network (LB 0x0007: 205 cells, PVS
+// interior-only, 0 exterior portals, sitting on flat deep-sea ocean beside
+// the 416 m world-edge mountain wall). Retail's PVS from such a cell is
+// interior-only, so that ocean + mountain paint is drawn every frame and
+// never seen. Mouthed dungeons / cottages (any outdoor-facing portal) keep
+// the current always-visible behaviour. Detection: `sessionHandle
+// .currentDungeonHasOutdoorPortal()` (see src/lib.rs).
+const SEALED_CULL_ENABLED = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      const raw = new URLSearchParams(globalThis.location.search).get("sealedCull");
+      if (raw === "off" || raw === "0" || raw === "false") return false;
+    }
+  } catch (_) {}
+  return true;
+})();
+
 // Goal-1 draw-distance throttle (2026-06-22): a bounded distance-priority
 // bake-START gate that supersedes PVS_BAKE_CAP's "K new starts per frame".
 // The K-per-frame cap fires a FIXED number of new LBs each frame regardless
@@ -1259,14 +1281,40 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   // We explicitly force visible=true here so any prior frame's hidden
   // state (from before this fix or from a transitional flip) is cleared.
   // Cost is one comparison per group per tick — negligible.
-  if (scene3d.terrainGroup && !scene3d.terrainGroup.visible) {
-    scene3d.terrainGroup.visible = true;
+  //
+  // Step 1b (2026-07-08) — sealed-dungeon exception. The Phase 5 keep-
+  // visible rule exists for the cottage-DOORWAY case: an opening through
+  // which the landscape is seen. A fully-enclosed hub dungeon (Town
+  // Network et al.) has no opening, so keeping terrain/buildings/statics
+  // visible draws its ocean + 416 m mountain-wall skirt every frame for
+  // nothing (retail's PVS from a sealed cell is interior-only — proven:
+  // pvs-visibility-snapshot 0x00070143 = 205 interior / 0 surface cells).
+  // Hide the outdoor groups when indoor AND the dungeon has no outdoor-
+  // facing portal. Re-checked per frame while indoor: the wasm side is a
+  // ~140-entry integer scan, far cheaper than a single terrain draw call,
+  // and it returns "keep visible" until the cell set loads (no entry-time
+  // flicker at a mouthed dungeon). `?sealedCull=off` disables. When the
+  // export is missing (stale pkg) the typeof guard leaves terrain visible.
+  let wantOutdoorVisible = true;
+  if (
+    SEALED_CULL_ENABLED &&
+    isIndoor &&
+    typeof sessionHandle.currentDungeonHasOutdoorPortal === "function"
+  ) {
+    try {
+      wantOutdoorVisible = !!sessionHandle.currentDungeonHasOutdoorPortal();
+    } catch (_) {
+      wantOutdoorVisible = true;
+    }
   }
-  if (scene3d.buildingsGroup && !scene3d.buildingsGroup.visible) {
-    scene3d.buildingsGroup.visible = true;
+  if (scene3d.terrainGroup && scene3d.terrainGroup.visible !== wantOutdoorVisible) {
+    scene3d.terrainGroup.visible = wantOutdoorVisible;
   }
-  if (scene3d.staticsGroup && !scene3d.staticsGroup.visible) {
-    scene3d.staticsGroup.visible = true;
+  if (scene3d.buildingsGroup && scene3d.buildingsGroup.visible !== wantOutdoorVisible) {
+    scene3d.buildingsGroup.visible = wantOutdoorVisible;
+  }
+  if (scene3d.staticsGroup && scene3d.staticsGroup.visible !== wantOutdoorVisible) {
+    scene3d.staticsGroup.visible = wantOutdoorVisible;
   }
 
   // Per-cell: build a Set out of the renderSet array for O(1) lookups.

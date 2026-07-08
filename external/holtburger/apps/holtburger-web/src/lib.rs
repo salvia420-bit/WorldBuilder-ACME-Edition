@@ -29589,6 +29589,59 @@ impl SessionHandle {
         self.cell_scene_snapshot.borrow().is_indoor
     }
 
+    /// Sealed-dungeon terrain gate (2026-07-08). Reports whether the
+    /// current indoor dungeon has ANY outdoor-facing portal — a "mouth",
+    /// door, or window to the landscape — among the cells of its own
+    /// landblock. Detected via the AC outdoor sentinel `to & 0xFFFF >=
+    /// 0xFFFE` (the same sentinel `get_render_set_with_pview_internal`
+    /// skips at line ~29174 and `get_visible_portal_apertures` collects).
+    ///
+    /// Why JS needs it: the Phase 5 indoor render keeps terrain /
+    /// buildings / statics VISIBLE while indoors so the landscape shows
+    /// through a cottage doorway (cells.js `tickCellVisibility3D`). But a
+    /// fully-enclosed hub dungeon (e.g. Town Network — LB 0x0007, 205
+    /// cells, PVS = interior-only, 0 exterior portals) has NO opening, so
+    /// that outdoor paint — the deep-sea ocean of 0x0007 plus the 416 m
+    /// world-edge mountain wall in the skirt LBs — is drawn every frame
+    /// and never seen. When this returns false for an indoor pose, JS may
+    /// hide those outdoor groups (retail renders zero surface from such a
+    /// cell).
+    ///
+    /// Returns `true` (⇒ "don't cull") for: outdoor / no current cell;
+    /// and for an indoor landblock whose portal polygons haven't been
+    /// published yet (no portal has `from` in the current landblock) —
+    /// i.e. "unknown, assume a mouth" so terrain stays visible until the
+    /// cell set loads. Only a fully-loaded, mouthless indoor dungeon
+    /// returns `false`. Cheap: one linear scan of the snapshot's per-cell
+    /// portal list (~140 × a few portals); JS memoises per landblock so it
+    /// runs once per dungeon entry. ADDITIVE export — no manifest bump.
+    #[wasm_bindgen(js_name = currentDungeonHasOutdoorPortal)]
+    pub fn current_dungeon_has_outdoor_portal(&self) -> bool {
+        let snap = self.cell_scene_snapshot.borrow();
+        if snap.current_cell == 0 {
+            return true; // no pose yet → unknown, keep terrain visible
+        }
+        let lb_high = snap.current_cell & 0xFFFF_0000;
+        let mut saw_dungeon_portal = false;
+        for (from, to, _flat) in &snap.cell_portal_polygons {
+            // Restrict to THIS dungeon's landblock: the snapshot can also
+            // hold adjacent outdoor-landblock cells whose own exits are not
+            // this dungeon's mouth.
+            if (*from & 0xFFFF_0000) != lb_high {
+                continue;
+            }
+            saw_dungeon_portal = true;
+            if (*to & 0xFFFF) >= 0xFFFE {
+                return true; // an outdoor-facing aperture exists → keep terrain
+            }
+        }
+        // Portals present for this landblock but none outdoor-facing → the
+        // dungeon is sealed → cull. No portals seen yet → not loaded →
+        // treat as unknown (keep terrain visible) to avoid an entry-time
+        // flicker at a mouthed dungeon.
+        !saw_dungeon_portal
+    }
+
     /// Fix B (2026-07-02) rollback escape: disable the outdoor
     /// portal-clipped interior walk inside
     /// [`Self::get_render_set_with_frustum`] (back to the doorway-only
