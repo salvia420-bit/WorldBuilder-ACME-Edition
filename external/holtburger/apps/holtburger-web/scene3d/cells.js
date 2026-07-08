@@ -151,6 +151,25 @@ const SEALED_CULL_ENABLED = (() => {
   return true;
 })();
 
+// Step 1c (2026-07-08) — sealed-dungeon residency reclaim. Default ON;
+// `?sealedEvict=off` keeps the visibility cull but leaves the outdoor
+// terrain/statics RESIDENT (baked + walked per frame). When ON, a fully-
+// enclosed indoor dungeon (detected by ?sealedCull) both (a) drops the PVS
+// prefetch skirt to radius 0 so no outdoor LB re-bakes and (b) evicts every
+// resident LB except the dungeon's own via the LRU — reclaiming the ~127
+// resident LBs / millions of triangles that pegged the main thread. Requires
+// SEALED_CULL_ENABLED (the sealed detection); independent escape so the
+// aggressive dispose/re-bake half can be rolled back without losing the cull.
+const SEALED_EVICT_ENABLED = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      const raw = new URLSearchParams(globalThis.location.search).get("sealedEvict");
+      if (raw === "off" || raw === "0" || raw === "false") return false;
+    }
+  } catch (_) {}
+  return true;
+})();
+
 // Goal-1 draw-distance throttle (2026-06-22): a bounded distance-priority
 // bake-START gate that supersedes PVS_BAKE_CAP's "K new starts per frame".
 // The K-per-frame cap fires a FIXED number of new LBs each frame regardless
@@ -1317,6 +1336,21 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     scene3d.staticsGroup.visible = wantOutdoorVisible;
   }
 
+  // Step 1c (2026-07-08) — sealed-dungeon RESIDENCY reclaim. Hiding the
+  // outdoor groups (above) kills the DRAW cost, but the surrounding ocean-
+  // skirt + mountain-wall terrain/statics stay BAKED and are walked every
+  // frame (a sealed hub kept ~127 LBs / millions of resident tris → the main
+  // thread pegged, the "still very bad in Town Network" report). Publish the
+  // sealed state so the two residency systems reclaim it: `tickPvsLoadExpansion`
+  // drops its prefetch skirt to radius 0 (nothing outdoor re-bakes) and the
+  // LRU eviction tick (index.js) purges every resident LB except the dungeon's
+  // own. `_sealedEvictLbKey` is the dungeon's LB key when the reclaim should
+  // run (0 = don't). Gated by ?sealedEvict (default on); requires the
+  // ?sealedCull detection (`wantOutdoorVisible === false` ⇒ sealed).
+  const sealed = SEALED_CULL_ENABLED && isIndoor && !wantOutdoorVisible;
+  scene3d._sealedEvictLbKey =
+    sealed && SEALED_EVICT_ENABLED ? (cellId & 0xffff0000) >>> 0 : 0;
+
   // Per-cell: build a Set out of the renderSet array for O(1) lookups.
   const visibleSet = new Set();
   if (renderSetArr) {
@@ -1672,7 +1706,16 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   // bool; only consulted when the gate could tighten the ring. Zero effect
   // outdoors (isIndoor=false). Fold into the fireSig below so an indoor↔outdoor
   // transition re-fires the sweep at the new radius.
-  if (ringRadius > INDOOR_PVS_RING_RADIUS) {
+  // Step 1c (2026-07-08) — sealed dungeon: NOTHING outdoor is visible (no
+  // exterior portal), so prefetch nothing beyond the interior render-set.
+  // Collapse the ring to 0 so the ocean-skirt / mountain-wall LBs never bake
+  // (the LRU eviction tick reclaims any already resident). `_sealedEvictLbKey`
+  // is published by `tickCellVisibility3D` (runs earlier this frame) and is
+  // non-zero only when ?sealedCull + ?sealedEvict are on and the dungeon is
+  // sealed. Takes precedence over the radius-1 indoor skirt below.
+  if (scene3d._sealedEvictLbKey) {
+    ringRadius = 0;
+  } else if (ringRadius > INDOOR_PVS_RING_RADIUS) {
     let indoor = false;
     try {
       if (typeof sessionHandle.isCurrentCellIndoor === "function") {

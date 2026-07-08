@@ -2016,7 +2016,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       try {
         const lru = liveScene3dRef.landblockLru;
         const currentLbKey = lru.getCurrentLbId();
-        lru.tickEviction(currentLbKey);
+        // Step 1c (2026-07-08) — sealed-dungeon residency purge. When
+        // `tickCellVisibility3D` flags a fully-enclosed dungeon it publishes
+        // the dungeon's LB key here (0 otherwise); tickEviction then evicts
+        // every OTHER resident LB, reclaiming the surrounding outdoor
+        // terrain/statics that pegged the main thread at hub dungeons.
+        const sealedKeepLbKey = liveScene3dRef._sealedEvictLbKey || 0;
+        lru.tickEviction(currentLbKey, sealedKeepLbKey);
         // F12-6 — per-LB subdiv LOD re-bake on approach. Shares the LRU's
         // current-LB read; no-op unless ?lodRebake=on. Detects the LB change,
         // re-points the LOD reference, and drains one queued re-bake/frame.

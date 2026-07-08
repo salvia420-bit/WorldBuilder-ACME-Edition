@@ -26,6 +26,12 @@
 
 const LB_KEY_MASK = 0xffff_0000 >>> 0;
 
+// Sealed-dungeon purge budget (2026-07-08): max LBs evicted per frame when
+// entering a fully-enclosed dungeon (see tickEviction's sealedKeepLbKey path).
+// Bounds the one-time dispose cost — a ~127-LB backlog drains in ~5-6 frames
+// rather than one big hitch; nothing re-bakes (radius-0 prefetch), so it sticks.
+const SEALED_EVICT_PER_TICK = 24;
+
 function lbKeyFromXY(lbX, lbY) {
   return (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
 }
@@ -181,10 +187,36 @@ export class LandblockLRU {
   // Per-frame eviction tick. Touches the player's LB + 3×3 ring (the
   // always-resident floor), then evicts the oldest entries beyond
   // `maxResident` until the resident count is ≤ maxResident.
-  tickEviction(currentLbKeyArg) {
+  tickEviction(currentLbKeyArg, sealedKeepLbKeyArg = 0) {
     const currentLbKey = currentLbKeyArg != null
       ? lbKeyOf(currentLbKeyArg >>> 0)
       : null;
+
+    // Sealed-dungeon residency purge (2026-07-08). When the player is in a
+    // fully-enclosed indoor dungeon (isCurrentCellIndoor && no exterior
+    // portal — see cells.js `_sealedEvictLbKey`), NO outdoor landblock is
+    // ever visible, so evict every resident LB except the dungeon's OWN —
+    // bypassing both `maxResident` and the 3×3 always-resident ring (which
+    // only exists to keep the surface you can see, and here you can't). This
+    // reclaims the surrounding ocean-skirt + mountain-wall terrain/statics
+    // that otherwise stay baked and get walked every frame, pegging the main
+    // thread at a hub dungeon. The dungeon LB itself is kept: its EnvCells are
+    // the interior, and its flat outdoor terrain is cheap + already hidden by
+    // the render cull. Time-sliced (SEALED_EVICT_PER_TICK/frame) so a ~127-LB
+    // backlog drains over a few frames instead of one big dispose hitch;
+    // `tickPvsLoadExpansion`'s radius-0 gate means nothing re-bakes, so the
+    // purge sticks. `sealedKeepLbKeyArg === 0` disables (normal path below).
+    if (sealedKeepLbKeyArg) {
+      const keep = lbKeyOf(sealedKeepLbKeyArg >>> 0);
+      const victims = [];
+      for (const key of this.entries.keys()) {
+        if (key === keep) continue;
+        victims.push(key);
+        if (victims.length >= SEALED_EVICT_PER_TICK) break;
+      }
+      for (const key of victims) this.evict(key);
+      return;
+    }
 
     // lru-null-lb (2026-06-07): bail out entirely when we don't know the
     // player's current LB yet (getCurrentLbId() returned null during
