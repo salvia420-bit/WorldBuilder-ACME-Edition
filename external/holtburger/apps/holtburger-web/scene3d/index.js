@@ -67,6 +67,11 @@ import { ownerRegistry as particleOwnerRegistry } from "./particles/owner_regist
 import { EntityManager } from "./entities.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
+import {
+  adaptiveResEnabled,
+  computeInitialRenderScale,
+  AdaptiveRenderScaleController,
+} from "./adaptive_render_scale.js";
 import { SkyLightingController } from "./sky_lighting.js";
 import { SkyDome } from "./sky_dome.js";
 import { CloudOverlay } from "./cloud_overlay.js";
@@ -803,12 +808,32 @@ export async function preInit3D(canvas) {
   // Cap DPR at 2 — beyond that the cost outpaces the visual gain on
   // a textured-mesh scene of this complexity.
   let _renderScale = 1;
+  let _explicitRenderScale = false;
   try {
     const _params = new URLSearchParams(window.location.search);
     const _raw = parseFloat(_params.get("renderScale") ?? "");
-    if (Number.isFinite(_raw) && _raw > 0 && _raw <= 2) _renderScale = _raw;
+    if (Number.isFinite(_raw) && _raw > 0 && _raw <= 2) {
+      _renderScale = _raw;
+      _explicitRenderScale = true; // user override → no adaptive / smart default
+    }
   } catch (_) { /* default 1 */ }
   const _basePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  // Adaptive-resolution SMART DEFAULT (2026-07-08): cap the INITIAL rendered
+  // pixels so a HiDPI / OS-scaled display (devicePixelRatio 2 → 4K on a 1080p
+  // monitor at 200%) starts near 1080p instead of 4K — the R9 290 "~4 s per
+  // turn" case. The adaptive controller (below) then refines from here. Skipped
+  // for an explicit ?renderScale and in headless (?nullRender) mode.
+  if (!_explicitRenderScale && adaptiveResEnabled() && !nullRender) {
+    try {
+      const _init = computeInitialRenderScale({
+        basePixelRatio: _basePixelRatio,
+        cssW: canvas.clientWidth || cssW,
+        cssH: canvas.clientHeight || cssH,
+        maxScale: 1,
+      });
+      if (_init < _renderScale) _renderScale = _init;
+    } catch (_) { /* keep default */ }
+  }
   renderer.setPixelRatio(_basePixelRatio * _renderScale);
   // Expose a live setter so the user can sweep render scale from
   // devtools without reloading. Re-applies pixel ratio and re-fires
@@ -837,6 +862,34 @@ export async function preInit3D(canvas) {
   }
   renderer.setSize(cssW, cssH, false);
   renderer.setClearColor(0x101418, 1);
+  // Adaptive-resolution controller (2026-07-08): drives `__setRenderScale` from
+  // its own rAF loop — lowers renderScale when the GPU drops frames, raises it
+  // back when it has headroom (hysteresis + cooldown). Kills the "4 s per turn"
+  // on weak/HiDPI GPUs without the user knowing `?renderScale` exists. Skipped
+  // for an explicit ?renderScale (fixed) and headless/agent modes (no render).
+  if (
+    !_explicitRenderScale &&
+    adaptiveResEnabled() &&
+    !nullRender &&
+    !renderOnDemand &&
+    typeof window !== "undefined"
+  ) {
+    try {
+      const _adaptive = new AdaptiveRenderScaleController({
+        getScale: () => _renderScale,
+        applyScale: (s) => {
+          try { window.__setRenderScale(s); } catch (_) { /* best-effort */ }
+        },
+        minScale: 0.35,
+        maxScale: 1,
+        log: (m) => {
+          try { console.log(m); } catch (_) { /* best-effort */ }
+        },
+      });
+      _adaptive.start();
+      window.__adaptiveRenderScale = _adaptive;
+    } catch (_) { /* controller is best-effort; never break boot */ }
+  }
 
   // Texture quality — anisotropic texture filtering. The 2026-05-20
   // hardcoded `setAdapterMaxAnisotropy(1)` (≡ OFF) disabled anisotropy on
