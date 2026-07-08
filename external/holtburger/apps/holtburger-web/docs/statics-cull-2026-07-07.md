@@ -103,3 +103,46 @@ dungeon census. Capping outdoor residency below the radius-5 (121-LB) ring would
 trim an already-negligible 0.17 ms while risking visible pop, and the F2/Goal-1
 `lbCap` already self-sizes to 203. **Not implemented** — same
 `verify-agent-leads` outcome as the Step-2 dead-end.
+
+## 🔴 THE REAL leak — default_script particle billboards (found by a POI battery, FIXED)
+
+A follow-up **62-POI `@telepoi` battery** (one continuous session, per-stop
+main-thread-freeze + residency + cull diagnostics; script kept at
+`scripts/perf-worker/` / scratchpad `poi_battery.mjs`) surfaced the true
+pathology the earlier per-frame-cull analysis had circled: **a statics-node
+LEAK**. As you roam, resident landblocks stay pinned at the LRU cap (203) but
+`scene3d.staticsGroup.children` grows **MONOTONICALLY, 573 → ~114,000**, driving
+`cullStaticsGroup` **1 → 25 ms/frame** and the teleport freeze **150 ms → 5.2 s**
+— and it keeps worsening the longer you play (revisiting a town did NOT reclaim:
+Holtburg 573 → 70,672 on revisit).
+
+**Root cause (workflow-mapped, live-probe-confirmed — NOT the initial guesses of
+plain Meshes / cross-LB BatchedMesh buckets):** the leaked nodes are 100%
+`particle-unlit-*` billboard quads from **`default_script` ambient emitters**
+(braziers/torches/fountains/gemSparkle). The static `ParticleManager`'s scene IS
+`staticsGroup` (statics.js:3579), so emitter billboards are direct
+`staticsGroup` children; `attachStaticDefaultScripts` / `…World` registered them
+under a per-anchor monotonic owner key `static:${++_staticOwnerSeq}` instead of
+`staticOwnerKeyForLb(landblockId)`. The per-LB teardown `_evictStaticParticlesForLb`
+destroys owner `static:<lbKey>`, which **never matches** `static:<seq>` → billboards
+never reaped. (The sibling `attachParticleEmitters` seam already keys correctly.)
+
+**Fix (SHIPPED, default-on `?staticParticleEvict`):** re-key the `default_script`
+emitters to `staticOwnerKeyForLb(landblockId)` (statics.js outdoor + interior;
+`cells.js` threads `landblockId` into the interior data) so LB eviction reaps them
+via the tested `destroyAllForOwner` → `destroyParticleEmitter` path (which disposes
+the per-slot material + syncs the particle table — a raw `staticsGroup.remove`
+would leak both, so approaches A/B were rejected). An adversarial review
+(ship-with-fixes) caught one production gap: emitter registration into
+`ownerRegistry` was gated by `particleOwnerOn()`, which is **false on a bare URL**
+(empty `location.search`) → fix inert in production; closed by also routing through
+the registry when `_staticParticleEvictEnabled()` is on.
+
+**Verified (headless, both `particleOwner` on AND off):** node growth now RISES
+AND FALLS with the per-town working set (reclaims to ~5–10k) instead of the
+monotonic ratchet; 62-POI battery bounded at 5–14k (was stuck 70k+ climbing to
+114k), cull 0.17–1.4 ms (was 15–25 ms), 0 particle-teardown errors, revisit
+bounded. Residual: transient dense-town spikes (~30–59k) during *rapid* back-to-back
+teleports (eviction lag before old LBs roll out of the 203-window) that drop the
+moment you move on — much smaller in real walking play, and the peak freeze
+(~1.9 s transient) is well under the pre-fix 5.2 s that kept worsening.

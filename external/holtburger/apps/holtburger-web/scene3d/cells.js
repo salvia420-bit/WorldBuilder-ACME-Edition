@@ -860,6 +860,10 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           defaultScriptId: so.defaultScriptId >>> 0,
           x: so.x, y: so.y, z: so.z,
           qw: so.qw, qx: so.qx, qy: so.qy, qz: so.qz,
+          // 2026-07-07 leak fix: thread the LB (as the animated sibling does at
+          // :876) so the interior owner key can be `static:<lbKey>` and LB
+          // eviction reaps these emitters via `_evictStaticParticlesForLb`.
+          landblockId,
         });
       }
       // Task #9 — peel animated interior props (flag-gated) to the world-frame

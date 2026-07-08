@@ -3482,6 +3482,31 @@ function _staticScriptsEnabled() {
   return true;
 }
 
+// Statics-node leak fix (2026-07-07): default_script ambient emitters
+// (braziers/torches/fountains/gemSparkle) registered their staticsGroup
+// billboards under a per-anchor monotonic owner key `static:<seq>`, which the
+// per-LB teardown `_evictStaticParticlesForLb` (owner `static:<lbKey>`) could
+// never match — so the billboards leaked as you roamed (measured: staticsGroup
+// grew 573 -> ~114k nodes, cull 1 -> 25 ms/frame, teleport freeze 150 ms -> 5 s).
+// Default ON keys them by landblock via `staticOwnerKeyForLb(landblockId)` — the
+// same contract the sibling `attachParticleEmitters` seam already uses — so LB
+// eviction reaps them through the tested `destroyAllForOwner` path (which routes
+// each billboard through `destroyParticleEmitter`, correctly disposing the
+// per-slot material + syncing the particle table; a raw `staticsGroup.remove`
+// would leak both). `?staticParticleEvict=off` reverts to the old seq key.
+function _staticParticleEvictEnabled() {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      return (
+        new URLSearchParams(globalThis.location.search).get(
+          "staticParticleEvict"
+        ) !== "off"
+      );
+    }
+  } catch (_) {}
+  return true;
+}
+
 /**
  * Lazy-construct `scene3d._staticParticleManager` on first use. Mirrors
  * `entities.js:_ensureWorldParticleManager` (the geometry/material
@@ -3500,7 +3525,10 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
   // synthesized emitters on eviction. Mirrors spawns.js `_evictSpawnsInjectedLb`
   // (spawns.js:508). Persistent (totalSeconds:0) emitters never auto-finish and
   // the RP6 220m cull only stops DRAWING them — without this they leak per LB.
-  // Idempotent assignment; flag-independent (the Phase-3 path always owner-scopes).
+  // Idempotent assignment. Owner-scoped teardown holds while the emitters are
+  // registered in ownerRegistry — i.e. when `particleOwnerOn()` OR (for static
+  // default_script emitters) `_staticParticleEvictEnabled()` is on (the gate in
+  // `_runStaticParticleChain`). Not literally flag-independent, but default-on.
   if (scene3d._evictStaticParticlesForLb !== _evictStaticParticlesForLb) {
     scene3d._evictStaticParticlesForLb = _evictStaticParticlesForLb;
   }
@@ -3719,9 +3747,16 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
       // statics walker auto-assigns ids (no explicit handle), so the
       // facade's win here is the scoped teardown (`destroyAllForOwner`
       // per anchor) replacing the whole-table nuke.
-      const id = (ownerKey !== null && particleOwnerOn())
-        ? await ownerRegistry.addEmitter(ownerKey, manager, req)
-        : await manager.addEmitter(req);
+      // Leak fix (2026-07-07): ALSO route through ownerRegistry whenever the
+      // static-particle eviction fix is on, so owner-scoped teardown works on a
+      // BARE URL too. `particleOwnerOn()` returns false on an empty
+      // location.search (its empty-search default disagrees with this fix's
+      // default-on gate); without this, the re-key to `static:<lbKey>` would be
+      // inert in production (no query string) and the billboards would leak.
+      const id =
+        (ownerKey !== null && (particleOwnerOn() || _staticParticleEvictEnabled()))
+          ? await ownerRegistry.addEmitter(ownerKey, manager, req)
+          : await manager.addEmitter(req);
       if (id !== 0) attached += 1;
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -3824,7 +3859,13 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
     // A11-S2: one owner key per anchor (the static placement IS the
     // retail CPhysicsObj analog here). Stashed on userData so a future
     // per-landblock eviction can `destroyAllForOwner` per anchor.
-    const ownerKey = `static:${++_staticOwnerSeq}`;
+    // Leak fix (2026-07-07): key by LANDBLOCK so `_evictStaticParticlesForLb`
+    // (owner `static:<lbKey>`) reaps these emitters' billboards on LB eviction
+    // — placements in one LB share the key, reaped together (retail-correct).
+    // `?staticParticleEvict=off` reverts to the old (leaky) per-anchor seq key.
+    const ownerKey = _staticParticleEvictEnabled()
+      ? staticOwnerKeyForLb(p.landblockId)
+      : `static:${++_staticOwnerSeq}`;
     anchor.userData = {
       isStaticScriptAnchor: true,
       defaultScriptId: p.defaultScriptId >>> 0,
@@ -3911,7 +3952,14 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
     anchor.quaternion.set(qx, qy, qz, qw);
     const s = typeof it.scale === "number" && it.scale > 0 ? it.scale : 1;
     if (s !== 1) anchor.scale.set(s, s, s);
-    const ownerKey = `static:${++_staticOwnerSeq}`;
+    // Leak fix (2026-07-07): key interior emitters by LANDBLOCK too so LB
+    // eviction reaps them. Dormant until the wasm exposes EnvCell
+    // defaultScriptId; cells.js now threads `it.landblockId`. Falls back to the
+    // seq key if landblockId is absent (keeps the dormant path harmless).
+    const ownerKey =
+      _staticParticleEvictEnabled() && it.landblockId != null
+        ? staticOwnerKeyForLb(it.landblockId >>> 0)
+        : `static:${++_staticOwnerSeq}`;
     anchor.userData = {
       isStaticScriptAnchor: true,
       isCellStaticScriptAnchor: true,
@@ -3947,9 +3995,11 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
  * ((lbX<<24)|(lbY<<16)) or a full landblockId — both normalize to the same key
  * via the 0xffff0000 mask, matching `lbSetKey` and the attach-side owner key.
  * No-op for an LB that placed no particles (empty-owner fast path in the facade).
- * Flag-independent: the Phase-3 attach always routes through ownerRegistry, so
- * teardown must too (this is its ONLY per-LB teardown path — disposeStaticParticles
- * is whole-scene only).
+ * This is the ONLY per-LB teardown path (disposeStaticParticles is whole-scene
+ * only). It reaps whatever the attach seams registered in ownerRegistry under
+ * `static:<lbKey>` — which the default_script seams do whenever `particleOwnerOn()`
+ * OR `_staticParticleEvictEnabled()` is on (default-on; see the `_runStaticParticleChain`
+ * gate). If neither is on, those emitters bypass the registry and this reaps nothing.
  */
 export function _evictStaticParticlesForLb(lbKeyOrId) {
   // D7 — the SAME single-source helper the attach seams use, so the teardown key
