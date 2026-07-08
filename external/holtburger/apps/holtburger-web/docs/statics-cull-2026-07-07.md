@@ -146,3 +146,21 @@ bounded. Residual: transient dense-town spikes (~30–59k) during *rapid* back-t
 teleports (eviction lag before old LBs roll out of the 203-window) that drop the
 moment you move on — much smaller in real walking play, and the peak freeze
 (~1.9 s transient) is well under the pre-fix 5.2 s that kept worsening.
+
+### Sibling: the wireframe `wireFill` companion leak (also FIXED)
+
+The review flagged a second, **wireframe-only** node leak of the same shape:
+`MaterialCache.addFillCompanions` (materials.js) mints one solid-fill companion
+`THREE.Mesh` per static (sharing `source.geometry`) as a **sibling** in
+`staticsGroup` with `userData = { __wireFillSource: true }` — **no `landblockId`**,
+so no eviction path reached it and companions accumulated under `?wireframe=1`.
+Fixed by copying `source.userData?.landblockId` onto the companion so the LRU
+step-3 statics sweep reaps it; the sweep removes plain Meshes **without** calling
+`dispose()` (only `isBatchedMesh` nodes are disposed there), so the shared
+geometry stays valid for the source. **Verified (headless, `?wireframe=1&wireFill=1`,
+both fixes on):** node growth reclaims (revisit bounded — Holtburg 2626 → 8026,
+Yaraq 3006 → 5853, ~3× vs the pre-fix leak's ~123×), `noLandblockId` plateaus low
+(~3.8k). Known residual: sources carrying only `coversLbKeys` (cross-LB
+InstancedMesh, ~absent in this build) would still leak their companion — the
+refcount eviction path tracks a list, not a scene walk, so a `userData` tag alone
+can't reach them; left as a documented follow-up.

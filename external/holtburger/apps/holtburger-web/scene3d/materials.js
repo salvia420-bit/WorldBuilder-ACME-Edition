@@ -2376,7 +2376,22 @@ export class MaterialCache {
       // gives reliable wire-on-top across hardware (SwiftShader's
       // depth precision in particular benefits).
       fillMesh.renderOrder = (source.renderOrder ?? 0) - 1;
-      fillMesh.userData = { __wireFillSource: true };
+      // Leak fix (2026-07-08): inherit the source's landblock so the LRU
+      // step-3 statics sweep (landblock_lru.js) reaps this companion on LB
+      // eviction. It shares `source.geometry`, but the sweep removes plain
+      // Meshes WITHOUT disposing geometry (only `isBatchedMesh` nodes are
+      // disposed there), so the shared buffer stays valid for the source and
+      // its own disposables list. Without this tag the wireFill companions —
+      // plain Meshes with no landblockId/coversLbKeys — hit none of the three
+      // eviction paths and accumulate in staticsGroup as you roam (the
+      // wireframe-mode analogue of the default_script particle leak). Sources
+      // carrying only `coversLbKeys` (cross-LB InstancedMesh) are ~absent in
+      // this build and left as a known residual (the refcount path tracks a
+      // list, not a scene walk, so a tag alone wouldn't reach them).
+      fillMesh.userData = {
+        __wireFillSource: true,
+        landblockId: source.userData?.landblockId,
+      };
       source.userData = source.userData ?? {};
       source.userData.__wireFillCompanion = true;
       const parent = source.parent;
