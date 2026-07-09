@@ -36,7 +36,7 @@ import init, {
   net_worker_arm,
   net_proxy_push_inbound,
   net_proxy_push_disconnect,
-} from "../pkg/holtburger_web.js";
+} from "../pkg/holtburger_web.js?v=netrev-20260709";
 
 const READY_TIMEOUT_MS = 12000;
 

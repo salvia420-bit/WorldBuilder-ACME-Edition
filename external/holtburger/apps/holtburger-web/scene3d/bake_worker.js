@@ -27,7 +27,7 @@ import init, {
   fetchEntitySurfacesPixelsBatch,
   init_resource_source,
   init_scenery_base_url,
-} from "../pkg/holtburger_web.js";
+} from "../pkg/holtburger_web.js?v=netrev-20260709";
 
 import {
   serializeModelMeshes,

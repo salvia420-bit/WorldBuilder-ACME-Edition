@@ -31,7 +31,7 @@ import init, {
   net_worker_run,
   net_worker_submit_outbound,
   net_worker_set_sink,
-} from "../pkg/holtburger_web.js";
+} from "../pkg/holtburger_web.js?v=netrev-20260709";
 
 // Must match the RX_KIND_* tags in net_worker.rs.
 const RX_KIND_MESSAGE = 0;
