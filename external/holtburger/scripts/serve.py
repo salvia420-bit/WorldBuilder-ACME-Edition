@@ -47,6 +47,7 @@ import argparse
 import datetime
 import json
 import os
+import subprocess
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -65,6 +66,13 @@ DEFAULT_ROOT = "/mnt/wbterminal2/holtburger-dist"
 REQUIRED_FILE = ["manifest.json"]
 REQUIRED_DIRS = ["shards", "scenery", "spawns"]
 RECOMMENDED_DIRS = ["events"]
+
+# pkg/ is gitignored (wasm-pack self-ignore) so every checkout serves a wasm of
+# unknown profile and age; an accidental --dev build (~17-19MB vs ~4.2-4.7MB
+# release) already cost days once (2026-07-01 incident). Warn, never refuse —
+# serving a dev build deliberately is legitimate.
+WASM_PKG = HOLT_ROOT / "apps/holtburger-web/pkg/holtburger_web_bg.wasm"
+DEV_WASM_BYTES = 8 * 1024 * 1024
 
 # Counting 885k tiny shard files on every launch is wasteful; for big/opaque
 # layers we only need "is it non-empty". For the small per-LB layers the page's
@@ -143,6 +151,32 @@ def ensure_dist_symlink(root: Path, allow_missing: bool) -> None:
     print(f"created dist symlink -> {root}", file=sys.stderr)
 
 
+def wasm_health() -> dict:
+    """Provenance for the served wasm: size (dev-profile tell) + staleness vs
+    the last Rust-touching commit. Log-only — see WASM_PKG comment."""
+    try:
+        st = WASM_PKG.stat()
+    except OSError:
+        return {"present": False}
+    info = {
+        "present": True,
+        "bytes": st.st_size,
+        "mtime": datetime.datetime.fromtimestamp(st.st_mtime).astimezone().isoformat(timespec="seconds"),
+        "profile_guess": "DEV-SUSPECT" if st.st_size > DEV_WASM_BYTES else "release-shaped",
+    }
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(HOLT_ROOT), "log", "-1", "--format=%ct",
+             "--", "apps/holtburger-web/src", "crates"],
+            capture_output=True, text=True, timeout=10)
+        last_rust = int(out.stdout.strip() or 0)
+        if last_rust:
+            info["stale_vs_rust_commit"] = st.st_mtime < last_rust
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return info
+
+
 def build_health():
     """Inspect every layer through the dist link; return (health_dict, failures)."""
     layers: dict[str, dict] = {}
@@ -192,6 +226,7 @@ def build_health():
         "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         "root": str(canonical_root()),
         "layers": layers,
+        "wasm": wasm_health(),
     }
     # `failures` is always the raw truth; --allow-missing is applied by the caller
     # so the one-line summary + _health.json never lie about what's actually there.
@@ -312,6 +347,21 @@ def main() -> None:
         for name, info in health["layers"].items()
     )
     print(f"[serve] root={root}\n[serve] layers: {summary}", file=sys.stderr)
+
+    w = health["wasm"]
+    if w.get("present"):
+        print(f"[serve] wasm: {w['bytes'] / 1e6:.1f} MB ({w['profile_guess']}, mtime {w['mtime']})",
+              file=sys.stderr)
+        if w["profile_guess"] == "DEV-SUSPECT":
+            print("[serve] WARNING: pkg wasm is DEV-sized (~4x slower runtime). If unintended:\n"
+                  "[serve]   wasm-pack build --target web --out-dir pkg --release", file=sys.stderr)
+        if w.get("stale_vs_rust_commit"):
+            print("[serve] WARNING: pkg wasm predates the last Rust-touching commit — REBUILD before\n"
+                  "[serve]   trusting any measurement (pkg/ is gitignored; stale = silent boot fail).",
+                  file=sys.stderr)
+    else:
+        print("[serve] WARNING: no pkg wasm found — the app cannot boot until wasm-pack builds pkg/.",
+              file=sys.stderr)
 
     if failures and not args.allow_missing:
         die_loud(failures, root)
