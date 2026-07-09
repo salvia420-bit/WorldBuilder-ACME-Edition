@@ -22,6 +22,7 @@ const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 
 const RECORD_S = Number(arg("record", "60"));
 const BASELINE_S = Number(arg("baseline", "10"));
 const OUT = arg("out", "");
+const EXTRA_QUERY = arg("query", "");
 const TN_LB_HIGH16 = 0x0007;
 const TELE_CANDIDATES = ["Town Network", "TN", "TownNetwork"];
 const TELELOC_FALLBACK = "@teleloc 0x00070143 70 -60 0";
@@ -103,7 +104,9 @@ const stopRecorder = () => {
 };
 
 const boot = await import(pathToFileURL(BOOT_MJS).href);
-const { page, helpers, inWorld } = await boot.launchAndEnter({ query: { nosw: "1" }, timeoutMs: 120_000 });
+const query = { nosw: "1" };
+if (EXTRA_QUERY) for (const [k, v] of new URLSearchParams(EXTRA_QUERY)) query[k] = v;
+const { page, helpers, inWorld } = await boot.launchAndEnter({ query, timeoutMs: 120_000 });
 if (!inWorld) {
   console.log(JSON.stringify({ ok: false, reason: "boot-stalled" }));
   console.log("TN-PROBE SUMMARY: SKIP boot-stalled");
@@ -164,7 +167,7 @@ const stages = {
                    longTaskTotalMs: raw.longTasks.reduce((a, e) => a + e.ms, 0),
                    longTaskMaxMs: raw.longTasks.reduce((a, e) => Math.max(a, e.ms), 0) },
 };
-const payload = { ok: landed, landed, stages, timeline: buckets, longTasks: raw.longTasks,
+const payload = { ok: landed, landed, query: EXTRA_QUERY || null, stages, timeline: buckets, longTasks: raw.longTasks,
                   marks: raw.marks, consoleErrorCount: errors.length,
                   consoleErrors: errors.slice(0, 20) };
 const json = JSON.stringify(payload, null, 2);

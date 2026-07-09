@@ -13,7 +13,7 @@ FAIL=0
 # ── S0: wasm size + staleness (A15-F1/F2) ──
 if [ -f "$WASM" ]; then
   SZ=$(stat -c%s "$WASM"); MT=$(stat -c%Y "$WASM")
-  LAST_RUST=$(git -C "$HOLT" log -1 --format=%ct -- apps/holtburger-web/src crates 2>/dev/null || echo 0)
+  LAST_RUST=$(git -C "$HOLT" log -1 --format=%ct -- apps/holtburger-web/src crates ":(exclude)crates/*/examples/*" 2>/dev/null || echo 0)
   S0="PASS"
   [ "$SZ" -ge 6000000 ] && { S0="FAIL-dev-sized"; FAIL=1; }
   if [ "$LAST_RUST" -gt 0 ] && [ "$MT" -lt "$LAST_RUST" ]; then S0="WARN-stale-predates-rust-commit"; fi

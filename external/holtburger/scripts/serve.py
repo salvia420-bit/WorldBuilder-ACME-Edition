@@ -167,7 +167,7 @@ def wasm_health() -> dict:
     try:
         out = subprocess.run(
             ["git", "-C", str(HOLT_ROOT), "log", "-1", "--format=%ct",
-             "--", "apps/holtburger-web/src", "crates"],
+             "--", "apps/holtburger-web/src", "crates", ":(exclude)crates/*/examples/*"],
             capture_output=True, text=True, timeout=10)
         last_rust = int(out.stdout.strip() or 0)
         if last_rust:
