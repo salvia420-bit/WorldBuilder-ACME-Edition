@@ -645,3 +645,7 @@ pipeline_data/models/_delete_list.txt
 pipeline_data/models/_deleted_*.log
 pipeline_data/reference/*.npz
 pipeline_data/output/
+
+# agent worktrees + fleet job artifacts (net-review A15 §4)
+.claude/worktrees/
+fleet-out/

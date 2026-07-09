@@ -50,3 +50,9 @@ dist-manifest.json
 .vscode/
 # self-signed dev cert for scripts/serve-http2.mjs
 scripts/.http2-cert/
+
+# raw DAT-record / capture dumps + probe outputs — regenerable, never in git (net-review A15 §4)
+/*.bin
+/go.html
+apps/holtburger-web/harness/*.json
+apps/holtburger-web/scratchpad/
