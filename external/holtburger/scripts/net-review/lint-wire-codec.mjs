@@ -106,4 +106,78 @@ for (const [enumName, ref] of Object.entries(tables)) {
       `${missing} chorizite values not enumerated (INFO — dispatch fallthrough covers them)`,
   );
 }
+
+// ── A15 (net-review 2026-07-09, landed 2026-07-10): frame.rs copy-sync ──
+// crates/holtburger-transport-ws/src/frame.rs is a DELIBERATE copy of
+// apps/holtburger-wsbridge/src/frame.rs (the wsbridge crate is native-only;
+// depending on it would drag tokio/mio into the wasm32 build). Its header
+// says "keep this file in sync" — this check makes that comment enforceable:
+// the wire-shape consts must match by value, and the decode_frame bodies
+// must match token-for-token (comments/whitespace/doc-comments ignored).
+const FRAME_A = path.join(ROOT, "apps/holtburger-wsbridge/src/frame.rs");
+const FRAME_B = path.join(ROOT, "crates/holtburger-transport-ws/src/frame.rs");
+// Known, waived divergences (same spirit as KNOWN_EXTENSIONS above).
+// encode_frame's guard drift was fixed 2026-07-10 (session 6) — the set is
+// empty; add entries only with a written reason and a removal condition.
+const FRAME_FN_WAIVERS = new Set([]);
+
+function stripRustComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .split("\n")
+    .filter((l) => !/^\s*\/\//.test(l))
+    .map((l) => l.replace(/\/\/.*$/, ""))
+    .join("\n");
+}
+function rustConsts(src) {
+  const out = new Map();
+  for (const m of src.matchAll(/pub const (\w+):\s*\w+\s*=\s*([0-9_a-fx]+)/gi)) {
+    out.set(m[1], m[2].replace(/_/g, ""));
+  }
+  return out;
+}
+function rustFnBody(src, name) {
+  // From `pub fn name` to the matching close brace at column 0.
+  const re = new RegExp(`pub fn ${name}\\b[\\s\\S]*?\\n\\}`, "m");
+  const m = stripRustComments(src).match(re);
+  return m ? m[0].replace(/\s+/g, " ").trim() : null;
+}
+
+try {
+  const a = fs.readFileSync(FRAME_A, "utf8");
+  const b = fs.readFileSync(FRAME_B, "utf8");
+  const [ca, cb] = [rustConsts(a), rustConsts(b)];
+  for (const [name, val] of ca) {
+    if (!cb.has(name)) {
+      console.log(`FAIL  frame.rs sync: const ${name} missing from transport-ws copy`);
+      failures += 1;
+    } else if (cb.get(name) !== val) {
+      console.log(`FAIL  frame.rs sync: const ${name} drifted (${val} vs ${cb.get(name)})`);
+      failures += 1;
+    }
+  }
+  const fnNames = [...a.matchAll(/pub fn (\w+)/g)].map((m) => m[1]);
+  let synced = 0;
+  for (const fn of fnNames) {
+    if (FRAME_FN_WAIVERS.has(fn)) continue;
+    const [ba, bb] = [rustFnBody(a, fn), rustFnBody(b, fn)];
+    if (bb == null) {
+      console.log(`FAIL  frame.rs sync: fn ${fn} missing from transport-ws copy`);
+      failures += 1;
+    } else if (ba !== bb) {
+      console.log(`FAIL  frame.rs sync: fn ${fn} bodies drifted (normalize+diff the two files)`);
+      failures += 1;
+    } else {
+      synced += 1;
+    }
+  }
+  console.log(
+    `frame.rs copy-sync: ${ca.size} consts + ${synced} fn bodies in sync, ` +
+      `${FRAME_FN_WAIVERS.size} waived`,
+  );
+} catch (e) {
+  console.log(`FAIL  frame.rs sync check errored: ${e.message}`);
+  failures += 1;
+}
+
 process.exit(failures ? 1 : 0);

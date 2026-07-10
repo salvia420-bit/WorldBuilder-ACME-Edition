@@ -78,6 +78,7 @@ pub struct WsTransport {
     _on_message: Closure<dyn FnMut(MessageEvent)>,
     _on_close: Closure<dyn FnMut(CloseEvent)>,
     _on_error: Closure<dyn FnMut(Event)>,
+    _on_open: Closure<dyn FnMut(Event)>,
 }
 
 impl WsTransport {
@@ -159,12 +160,11 @@ impl WsTransport {
             })
         };
         ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
-        // onopen fires exactly once; let the closure drop after the
-        // browser invokes it. `forget` here intentionally leaks ~24
-        // bytes per WsTransport — acceptable in exchange for not
-        // having to keep an Open closure on the struct that's only
-        // useful during connect.
-        on_open.forget();
+        // A13 (net-review 2026-07-09, landed 2026-07-10): keep the Open
+        // closure on the struct like the other three handlers instead of
+        // `forget()`ing it. The forget-leak was per-CONNECT, not per-page —
+        // reconnect loops (net drops, "Account In Use" boots, soak runs)
+        // accumulate it. Drop already detaches onopen.
 
         let on_error = {
             let tx_err = tx.clone();
@@ -243,6 +243,7 @@ impl WsTransport {
             _on_message: on_message,
             _on_close: on_close,
             _on_error: on_error,
+            _on_open: on_open,
         })
     }
 
@@ -276,7 +277,7 @@ impl Transport for WsTransport {
                 frame::MAX_PACKET_BYTES
             ));
         }
-        let frame = frame::encode_frame(addr.port(), buf);
+        let frame = frame::encode_frame(addr.port(), buf)?;
         self.ws
             .send_with_u8_array(&frame)
             .map_err(|e| anyhow!("ws send: {}", jsval_string(&e)))?;

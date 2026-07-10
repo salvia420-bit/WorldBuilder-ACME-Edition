@@ -418,6 +418,11 @@ async fn test_piggybacked_ack_still_queues_ack_for_ordered_packet() {
 
     let events = session.recv_message().await.unwrap();
     assert_eq!(events.len(), 1);
+    // A02 Opt-2: the queued ACK sits on the coalesce deadline; force it due
+    // (this test asserts the ACK is QUEUED at all, not its timing).
+    for p in session.pending_control_packets.iter_mut() {
+        p.ready_at = web_time::Instant::now();
+    }
     assert!(session.flush_pending_control_packets().await.unwrap());
 
     let sent_packets = sent_handle.sent_packets().await;
@@ -825,6 +830,9 @@ async fn test_queued_ack_uses_latest_client_sequence_when_flushed() {
     session.client_id = 0x123;
 
     session.queue_ack(0x55).unwrap();
+    // A02 Opt-2: the queued ACK is deferred by the coalesce window; force it
+    // due so this test still exercises the flush-time sequence stamping.
+    session.pending_control_packets[0].ready_at = web_time::Instant::now();
 
     let header = PacketHeader {
         sequence: session.packet_sequence,
@@ -844,6 +852,79 @@ async fn test_queued_ack_uses_latest_client_sequence_when_flushed() {
     let ack_header = unpack_header(&sent_packets[1]);
     assert_eq!(ack_header.flags, packet_flags::ACK_SEQUENCE);
     assert_eq!(ack_header.sequence, 2);
+}
+
+#[tokio::test]
+async fn test_queue_ack_coalesces_into_one_pending_packet_with_latest_sequence() {
+    // A02 Opt-2 (2026-07-10): back-to-back ordered packets must produce ONE
+    // pending cleartext ACK carrying the newest (cumulative) sequence, and
+    // the first ACK's deadline must survive later queue_ack calls (a steady
+    // stream can't starve the ACK past one coalesce window).
+    let transport = ScriptedTransport::new(vec![], "127.0.0.1:9000".parse().unwrap());
+    let sent_handle = transport.clone();
+
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.packet_sequence = 2;
+    session.client_id = 0x123;
+
+    session.queue_ack(0x10).unwrap();
+    let first_deadline = session.pending_control_packets[0].ready_at;
+    session.queue_ack(0x11).unwrap();
+    session.queue_ack(0x12).unwrap();
+
+    assert_eq!(session.pending_control_packets.len(), 1);
+    assert_eq!(session.pending_control_packets[0].ready_at, first_deadline);
+
+    // Not due yet: flush sends nothing.
+    assert!(!session.flush_pending_control_packets().await.unwrap());
+
+    // Force it due; the flushed ACK must carry the LATEST sequence (0x12).
+    session.pending_control_packets[0].ready_at = web_time::Instant::now();
+    assert!(session.flush_pending_control_packets().await.unwrap());
+
+    let sent_packets = sent_handle.sent_packets().await;
+    assert_eq!(sent_packets.len(), 1);
+    let ack_header = unpack_header(&sent_packets[0]);
+    assert_eq!(ack_header.flags, packet_flags::ACK_SEQUENCE);
+    let payload = &sent_packets[0][transport::HEADER_SIZE..];
+    assert_eq!(LittleEndian::read_u32(&payload[0..4]), 0x12);
+}
+
+#[test]
+fn test_fragment_reassembler_evicts_oldest_abandoned_group_at_cap() {
+    // A13 (2026-07-10): never-completed fragment groups must not accumulate
+    // for the session's lifetime. Feed 300 distinct 2-fragment groups their
+    // first fragment only: the map must hold the cap (256), the oldest
+    // sequences must be gone, and the newest group must still assemble.
+    let mut session = Session::new_test();
+
+    for seq in 0u32..300 {
+        let header = FragmentHeader {
+            sequence: seq,
+            count: 2,
+            index: 0,
+            ..Default::default()
+        };
+        assert!(session.process_fragment(&header, &[0xAB]).is_none());
+    }
+
+    assert_eq!(session.fragment_reassembler.len(), 256);
+    assert!(!session.fragment_reassembler.contains_key(&0));
+    assert!(!session.fragment_reassembler.contains_key(&43));
+    assert!(session.fragment_reassembler.contains_key(&44));
+    assert!(session.fragment_reassembler.contains_key(&299));
+
+    // The surviving newest group still completes normally.
+    let closing = FragmentHeader {
+        sequence: 299,
+        count: 2,
+        index: 1,
+        ..Default::default()
+    };
+    let assembled = session.process_fragment(&closing, &[0xCD]).unwrap();
+    assert_eq!(assembled, vec![0xAB, 0xCD]);
+    assert!(!session.fragment_reassembler.contains_key(&299));
 }
 
 #[test]

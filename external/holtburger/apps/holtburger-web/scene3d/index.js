@@ -4308,11 +4308,24 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     const span = 2 * ringMax + 1;
     let lbCap = Math.max(span * span + 2 * span + 8, 32);
     let lbLruDebug = false;
+    // ?lbRingFloor=N|ringMax — reclaim-exclusion radius around the player
+    // (LandblockLRU ringFloor). Default 1 (the 3×3). The 2026-07-10 battery
+    // A/B'd ringMax as a hard edit and got a NEGATIVE result (stale reclaim
+    // center — see the construction note below); the param exists so the
+    // re-A/B AFTER the ?reclaimGate center-freshness fix is a query arm,
+    // not a source edit.
+    let lbRingFloor = 1;
     if (typeof window !== "undefined" && window.location?.search) {
       const ps = new URLSearchParams(window.location.search);
       const v = parseInt(ps.get("lbCap") ?? "", 10);
       if (Number.isFinite(v) && v > 0) lbCap = v;
       lbLruDebug = ps.get("lbLruDebug") === "1";
+      const rf = ps.get("lbRingFloor");
+      if (rf === "ringMax") lbRingFloor = ringMax;
+      else {
+        const n = parseInt(rf ?? "", 10);
+        if (Number.isFinite(n) && n >= 1) lbRingFloor = n;
+      }
     }
     // ?statAtlas — deterministically wire the cross-LB atlas eviction hook onto the
     // object the LRU reads (liveScene3d), independent of feed timing. evictStaticAtlasForLb
@@ -4331,13 +4344,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     const landblockLru = new LandblockLRU({
       scene3d: liveScene3d,
       maxResident: lbCap,
-      // ringFloor deliberately left at its default (1). The full-telepoi
-      // battery (2026-07-10) A/B'd ringFloor=ringMax and it made the
-      // at-cap reclaim churn WORSE (park ops 4144→8515, saturated settle
-      // 13.2→16.0 s): right after a teleport the reclaim center can be
-      // STALE (pose.landblockId freeze), so a big floor protects the OLD
-      // ring while the arriving ring's bakes get reclaimed. Fix the center
-      // freshness first, then revisit the floor.
+      // ringFloor defaults to 1 (?lbRingFloor overrides — see above). The
+      // full-telepoi battery (2026-07-10) A/B'd ringFloor=ringMax and it
+      // made the at-cap reclaim churn WORSE (park ops 4144→8515, saturated
+      // settle 13.2→16.0 s): right after a teleport the reclaim center can
+      // be STALE (pose.landblockId freeze), so a big floor protects the OLD
+      // ring while the arriving ring's bakes get reclaimed. The
+      // ?reclaimGate center-freshness hold (landblock_lru.js, default ON)
+      // addresses the stale window; re-A/B the floor against it.
+      ringFloor: lbRingFloor,
       // Phase 6 collision-leak fix (2026-05-29): on evict, enqueue a wasm-side
       // purge of this LB's SpatialScene collision (cell/building AABBs +
       // physics triangles + portal graph) so a re-entry re-bake REPLACES

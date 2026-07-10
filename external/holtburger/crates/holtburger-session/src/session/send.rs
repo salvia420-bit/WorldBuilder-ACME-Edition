@@ -8,6 +8,12 @@ use holtburger_protocol::messages::*;
 use holtburger_protocol::traits::{ProtocolPack, ProtocolUnpack};
 use web_time::Instant;
 
+// A02 Opt-2 (net-review 2026-07-09): cleartext-ACK coalesce window. Retail
+// acks on a 2 s timer; 500 ms sits comfortably inside every peer-side
+// resend timeout while collapsing burst-time ACK traffic (>90% of C2S
+// packets during a town-load burst were per-packet ACKs).
+pub(crate) const ACK_COALESCE_MS: u64 = 500;
+
 impl Session {
     fn unpack_packet_header(packet: &[u8]) -> Result<PacketHeader> {
         let mut offset = 0;
@@ -376,6 +382,29 @@ impl Session {
         let mut payload = vec![0u8; 4];
         LittleEndian::write_u32(&mut payload[0..4], sequence);
 
+        // A02 Opt-2 (landed 2026-07-10): coalesce — one deferred ACK per
+        // ACK_COALESCE_MS window instead of one per ordered packet. Safe
+        // because the ACK stream is CUMULATIVE (ACE prunes its retransmit
+        // cache at `< sequence`, NetworkSession.cs:669) and
+        // finalize_ordered_server_packet calls this in strict delivery
+        // order — overwriting the pending ACK's payload with the newer
+        // sequence acknowledges strictly more. The pending entry keeps its
+        // ORIGINAL ready_at, so a steady packet stream cannot starve the
+        // ACK past one window.
+        if let Some(pending) = self.pending_control_packets.iter_mut().find(|p| {
+            matches!(&p.data,
+                PendingControlPacketData::DeferredCleartext { header, .. }
+                    if header.flags == packet_flags::ACK_SEQUENCE)
+        }) {
+            if let PendingControlPacketData::DeferredCleartext {
+                payload: existing, ..
+            } = &mut pending.data
+            {
+                existing.copy_from_slice(&payload);
+            }
+            return Ok(());
+        }
+
         self.queue_deferred_cleartext_control_packet(
             PacketHeader {
                 flags: packet_flags::ACK_SEQUENCE,
@@ -384,7 +413,7 @@ impl Session {
             },
             &payload,
             self.server_addr,
-            Instant::now(),
+            Instant::now() + std::time::Duration::from_millis(ACK_COALESCE_MS),
             true,
         )
     }
@@ -396,6 +425,28 @@ impl Session {
     ) -> Option<Vec<u8>> {
         if header.count == 1 {
             return Some(data.to_vec());
+        }
+
+        // A13 (net-review 2026-07-09, landed 2026-07-10): a group whose
+        // fragments never all arrive was unevictable — its entry (and every
+        // buffered fragment) lived for the whole session. Blob sequences are
+        // server-monotonic, so when the map exceeds the cap the SMALLEST
+        // keys are the oldest abandoned groups; drop them (never the group
+        // being assembled right now). A healthy stream keeps a handful of
+        // in-flight groups, so the cap only ever bites leaked ones.
+        const MAX_PENDING_FRAGMENT_GROUPS: usize = 256;
+        while !self.fragment_reassembler.contains_key(&header.sequence)
+            && self.fragment_reassembler.len() >= MAX_PENDING_FRAGMENT_GROUPS
+        {
+            let Some(&oldest) = self.fragment_reassembler.keys().min() else {
+                break;
+            };
+            log::warn!(
+                "fragment reassembler at {} pending groups; dropping stale incomplete group {}",
+                MAX_PENDING_FRAGMENT_GROUPS,
+                oldest
+            );
+            self.fragment_reassembler.remove(&oldest);
         }
 
         let entry = self

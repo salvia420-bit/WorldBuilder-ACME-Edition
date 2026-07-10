@@ -117,6 +117,12 @@ check("ring fixture has 9 keys (centre + 8 neighbours)", ringKeys.length === 9, 
   lru.tickEviction(null);
   check("over-cap null tick still evicts nothing", lru.entries.size === 10, `size=${lru.entries.size}`);
 
+  // Age the far entry past the reclaim hysteresis window (A11-F7,
+  // 2026-07-10): a just-tracked LB is deliberately NOT a victim in the
+  // same instant it lands — that same-second reclaim was the battery's
+  // ping-pong bug. Backdating models "old, untouched, outside the ring".
+  lru.entries.get(farKey).lastTouchMs = -10_000;
+
   // real tick: the far LB (only non-ring candidate) is evicted; ring stays.
   lru.tickEviction(centreKey);
   check("real tick evicts the far (non-ring) LB", !lru.entries.has(farKey));

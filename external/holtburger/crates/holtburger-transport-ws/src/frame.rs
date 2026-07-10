@@ -36,9 +36,16 @@ pub fn decode_frame(buf: &[u8]) -> Result<(u16, &[u8])> {
     Ok((port, payload))
 }
 
-pub fn encode_frame(port: u16, payload: &[u8]) -> Vec<u8> {
+pub fn encode_frame(port: u16, payload: &[u8]) -> Result<Vec<u8>> {
+    if payload.len() > MAX_PACKET_BYTES {
+        return Err(anyhow!(
+            "udp datagram {} bytes exceeds MAX_PACKET_BYTES={}",
+            payload.len(),
+            MAX_PACKET_BYTES
+        ));
+    }
     let mut out = Vec::with_capacity(PORT_PREFIX_LEN + payload.len());
     out.extend_from_slice(&port.to_be_bytes());
     out.extend_from_slice(payload);
-    out
+    Ok(out)
 }

@@ -438,7 +438,17 @@ class BakeWorkerClient {
 let _singleton = null;
 /** Lazily-created process singleton (default disabled until configured). */
 export function getBakeWorkerClient() {
-  if (!_singleton) _singleton = new BakeWorkerClient().configure({});
+  if (!_singleton) {
+    _singleton = new BakeWorkerClient().configure({});
+    // Diag global: monotone request counter (battery "streamed-work"
+    // column — settle-stability alone can't tell a settled page from a
+    // streaming-starved one; see battery-findings-2026-07-10.md §5).
+    try {
+      if (typeof window !== "undefined") {
+        window.__bakeWorkerSeq = () => (_singleton ? _singleton._seq : 0);
+      }
+    } catch (_) {}
+  }
   return _singleton;
 }
 /** Configure (and enable) the singleton — call once during boot. */

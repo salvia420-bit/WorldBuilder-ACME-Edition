@@ -139,12 +139,20 @@ const sample = () => raced(helpers.evalInPage(() => {
   const st = s?.landblockLru?.getStats?.() ?? {};
   return {
     lb: pose?.landblockId != null ? (pose.landblockId >>> 0) : null,
+    // In-LB position: lets a same-LB teleport (Hotel → Hotel Swank) count
+    // as landed-no-move instead of a land-timeout failure.
+    px: Number.isFinite(pose?.x) ? Math.round(pose.x * 10) / 10 : null,
+    py: Number.isFinite(pose?.y) ? Math.round(pose.y * 10) / 10 : null,
     terr: s?.terrainBakedLbs?.size ?? 0,
     stat: s?.staticsGroup?.children?.length ?? 0,
     cells: s?.cellContainers3d?.size ?? 0,
     lru: st.resident ?? null, parked: st.parked ?? null,
     parkedTotal: st.parkedTotal ?? null, unparkedTotal: st.unparkedTotal ?? null,
     evicted: st.evicted ?? null,
+    // Streamed-work + reclaim-gate telemetry (2026-07-10 follow-up #4):
+    // settle-stability alone can't tell settled from streaming-starved.
+    work: (typeof window.__bakeWorkerSeq === "function") ? window.__bakeWorkerSeq() : null,
+    centerJumps: st.centerJumps ?? null, gateHeldTicks: st.gateHeldTicks ?? null,
   };
 }));
 const chat = (c) => raced(helpers.evalInPage((cmd) => { try { window.__sessionHandle.sendChat(cmd); } catch (_) {} }, c));
@@ -158,12 +166,24 @@ for (const poi of POIS) {
   const t0 = Date.now();
   await chat("@telepoi " + poi);
   // land = landblock changed (high-16 OR full id — dungeons can share hi16)
-  let landed = false, landMs = null;
+  // OR the in-LB position moved >8 units (a same-LB hop). Duplicate POIs
+  // (Hotel / Hotel Swank / HotelSwank, Night Club / NightClub) are IDENTICAL
+  // destinations in points_of_interest (verified in ace_world 2026-07-10),
+  // so a back-to-back duplicate produces ZERO observable movement — the
+  // land window expiring with no movement is recorded as noMove (a
+  // landed-no-move duplicate, NOT a failure; every name on the list comes
+  // from `@telepoi list`, so an unknown-POI no-op can't be the cause).
+  let landed = false, landMs = null, sameLb = false, noMove = false;
   for (let i = 0; i < 48; i++) {
     await page.waitForTimeout(250);
     const s = await sample();
     if (s.lb != null && before.lb != null && s.lb !== before.lb) { landed = true; landMs = Date.now() - t0; break; }
+    if (s.px != null && before.px != null
+        && Math.hypot(s.px - before.px, s.py - before.py) > 8) {
+      landed = true; sameLb = true; landMs = Date.now() - t0; break;
+    }
   }
+  if (!landed) noMove = true;
   let settleMs = null, last = null, stable = 0, endStats = null;
   if (landed) {
     const s0 = Date.now();
@@ -183,8 +203,19 @@ for (const poi of POIS) {
       } catch (_) {}
     }
   }
-  rows.push({ poi, landed, landMs, settleMs, ...(endStats ?? {}) });
-  console.error(`[battery] ${poi}: landed=${landed} land=${landMs}ms settle=${settleMs}ms lru=${endStats?.lru} parked=${endStats?.parked}`);
+  // Per-stop deltas (before → settled): streamed-work = bake-worker requests
+  // issued; reclaimOps = evictions + parks (the ping-pong metric — baseline
+  // ~75/stop pre-gate, target <10).
+  const workDelta = (endStats?.work != null && before.work != null)
+    ? endStats.work - before.work : null;
+  const reclaimDelta = (endStats?.evicted != null && before.evicted != null)
+    ? (endStats.evicted - before.evicted)
+      + ((endStats.parkedTotal ?? 0) - (before.parkedTotal ?? 0))
+    : null;
+  rows.push({ poi, landed, sameLb, noMove, landMs, settleMs, workDelta, reclaimDelta, ...(endStats ?? {}) });
+  console.error(`[battery] ${poi}: landed=${landed}${sameLb ? " (same-LB)" : ""}${noMove ? " (no-move dup)" : ""} ` +
+    `land=${landMs}ms settle=${settleMs}ms ` +
+    `lru=${endStats?.lru} parked=${endStats?.parked} work+${workDelta} reclaim+${reclaimDelta}`);
   } catch (e) {
     aborted = `${poi}: ${e?.message ?? e}`;
     console.error(`[battery] ABORT at ${poi}: ${aborted} — writing partial results`);
@@ -207,13 +238,19 @@ const summary = {
   landMedianMs: med(ok.map((r) => r.landMs)),
   settleMedianMs: med(ok.map((r) => r.settleMs)),
   settleCapped: ok.filter((r) => r.settleMs >= DWELL_MAX_S * 1000).length,
+  sameLb: ok.filter((r) => r.sameLb).length,
+  noMove: allRows.filter((r) => r.noMove).length,
+  workDeltaMedian: med(ok.map((r) => r.workDelta).filter((v) => v != null)),
+  reclaimDeltaMedian: med(ok.map((r) => r.reclaimDelta).filter((v) => v != null)),
   final: allRows[allRows.length - 1] ?? null,
 };
 if (OUT) fs.writeFileSync(OUT, JSON.stringify({ summary, rows: allRows }, null, 2));
 console.log(JSON.stringify(summary));
 console.log(`BATTERY SUMMARY: ${LABEL} pois=${summary.landed}/${summary.pois} ` +
   `active=${(summary.activeMsSum / 1000).toFixed(1)}s landMed=${summary.landMedianMs}ms ` +
-  `settleMed=${summary.settleMedianMs}ms capped=${summary.settleCapped}` +
+  `settleMed=${summary.settleMedianMs}ms capped=${summary.settleCapped} ` +
+  `sameLb=${summary.sameLb} noMove=${summary.noMove} workMed=${summary.workDeltaMedian} reclaimMed=${summary.reclaimDeltaMedian}` +
   (aborted ? ` ABORTED(${aborted})` : ""));
 try { await raced(closeFn()); } catch (_) { /* dead browser — exit anyway */ }
-process.exit(aborted ? 3 : summary.landed === summary.pois ? 0 : 1);
+// no-move duplicates are accounted-for stops, not misses (see the land loop).
+process.exit(aborted ? 3 : (summary.landed + summary.noMove) === summary.pois ? 0 : 1);

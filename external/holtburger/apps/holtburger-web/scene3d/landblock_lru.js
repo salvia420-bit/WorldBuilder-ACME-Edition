@@ -96,6 +96,59 @@ const WARM_PARK_SUPPORTED = (() => {
   }
 })();
 
+// Reclaim-center freshness gate (battery follow-up #1, 2026-07-10).
+// `getCurrentLbId` is rig-position-derived and can stay STALE through the
+// post-teleport window (the documented `pose.landblockId` freeze): the ring
+// loaders are already baking the ARRIVING ring while the reclaim center
+// still points at the OLD one, so at-cap reclaim victimizes the fresh bakes
+// (the ringFloor=ringMax A/B amplified it to 8515 park ops by protecting
+// the OLD ring wholesale). The gate: when the center JUMPS ≥2 LBs (a
+// teleport — a walk moves 1), hold the normal at-cap reclaim until the new
+// center LB's own bake is tracked (its `entries` mark is the "loaders have
+// caught up" signal), with a hard timeout so a never-tracked center (e.g.
+// sealed-dungeon POI whose LB routes through the sealed path) can't starve
+// eviction forever. Sealed purge + park-pool byte pressure are NOT gated.
+//
+// DEFAULT FOLLOWS ?warmPark (session-6 7-arm battery, findings s6 doc):
+// under warm-park the gate+hysteresis pair is a clear win (588 vs 682 s
+// active, capped 10 vs 15) because a reclaim is a cheap re-attach; in
+// CLASSIC mode the same pair REGRESSES the cycle (805 vs 688 s) — plain
+// LRU recency already protects the arriving ring when reclaim means
+// dispose+re-bake. `?reclaimGate=on|off` overrides either way.
+const RECLAIM_GATE_ON = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("reclaimGate");
+    if (v === "on" || v === "1" || v === "true") return true;
+    if (v === "off" || v === "0" || v === "false") return false;
+    return WARM_PARK_ON && WARM_PARK_SUPPORTED;
+  } catch (_) {
+    return false;
+  }
+})();
+const RECLAIM_GATE_MAX_HOLD_MS = 10_000;
+
+// Park hysteresis (A11-F7, battery follow-up #2, 2026-07-10): the normal
+// at-cap candidate filter skips entries touched less than this many ms ago,
+// so a freshly-baked ring LB can't be reclaimed in the same second it lands
+// (the park↔unpark ping-pong half that the gate alone doesn't cover:
+// mid-stream, cap exceeded, center already fresh). The cap is soft — a
+// tick where every candidate is young simply evicts nothing; candidates
+// age in within seconds. `?reclaimMinAgeMs=N` overrides (0 disables);
+// DEFAULT FOLLOWS ?warmPark exactly like the gate above (2000 under
+// warm-park, 0 classic — same session-6 battery verdict).
+const RECLAIM_MIN_AGE_MS = (() => {
+  try {
+    const v = parseInt(
+      new URLSearchParams(window.location?.search || "").get("reclaimMinAgeMs") ?? "",
+      10,
+    );
+    if (Number.isFinite(v) && v >= 0) return v;
+    return WARM_PARK_ON && WARM_PARK_SUPPORTED ? 2000 : 0;
+  } catch (_) {
+    return 0;
+  }
+})();
+
 function lbKeyFromXY(lbX, lbY) {
   return (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
 }
@@ -199,6 +252,12 @@ export class LandblockLRU {
     this.parkBudgetBytes = WARM_PARK_BUDGET_BYTES;
     this._parkedTotal = 0;
     this._unparkedTotal = 0;
+
+    // Reclaim-center freshness gate state (see the RECLAIM_GATE_ON note).
+    this._lastCenterKey = null;
+    this._centerJumpAtMs = 0;
+    this._centerJumpsTotal = 0;
+    this._gateHeldTicks = 0;
   }
 
   get warmParkEnabled() {
@@ -360,20 +419,53 @@ export class LandblockLRU {
     // tick keeps everything resident until a real current LB resolves.
     if (currentLbKey == null) return;
 
+    const nowMs = (typeof performance !== "undefined")
+      ? performance.now()
+      : Date.now();
+
+    // Reclaim-center freshness gate (see RECLAIM_GATE_ON). A ≥2-LB center
+    // jump = teleport (a walk transition moves exactly 1); from that moment
+    // hold the at-cap reclaim below until the NEW center's own bake lands
+    // in `entries` (the "loaders caught up" mark) or the hard timeout runs
+    // out. The always-resident floor touch + park-pool byte pressure still
+    // run every tick — the gate only pauses victim selection while the
+    // arriving ring and the (possibly still stale) center disagree.
+    if (RECLAIM_GATE_ON) {
+      if (this._lastCenterKey != null
+          && lbChebyshev(currentLbKey, this._lastCenterKey) >= 2) {
+        this._centerJumpAtMs = nowMs;
+        this._centerJumpsTotal += 1;
+      }
+      this._lastCenterKey = currentLbKey;
+    }
+
     // Refresh the always-resident floor's timestamps so they're never
     // candidates for eviction even under adversarial maxResident < 9.
     this.touch(currentLbKey);
     for (const k of ringKeysAround(currentLbKey)) this.touch(k);
+
+    if (RECLAIM_GATE_ON && this._centerJumpAtMs > 0) {
+      if (nowMs - this._centerJumpAtMs < RECLAIM_GATE_MAX_HOLD_MS
+          && !this.entries.has(currentLbKey)) {
+        this._gateHeldTicks += 1;
+        this._tickParkPoolPressure(currentLbKey);
+        return;
+      }
+      this._centerJumpAtMs = 0; // released (center tracked, or timed out)
+    }
 
     if (this.entries.size <= this.maxResident) return;
 
     // Collect eviction candidates: every tracked LB OUTSIDE the streaming
     // ring (`lbChebyshev(currentLbKey, key) > ringFloor` — see the
     // constructor note; was 1, which made the live ring self-cannibalize at
-    // cap). Sort ascending by lastTouchMs → oldest evicted first.
+    // cap) AND older than the hysteresis window (RECLAIM_MIN_AGE_MS — a
+    // fresh bake can't be a victim in the same second it lands). Sort
+    // ascending by lastTouchMs → oldest evicted first.
     const candidates = [];
     for (const [key, entry] of this.entries) {
       if (currentLbKey != null && lbChebyshev(currentLbKey, key) <= this.ringFloor) continue;
+      if (RECLAIM_MIN_AGE_MS > 0 && nowMs - entry.lastTouchMs < RECLAIM_MIN_AGE_MS) continue;
       candidates.push({ key, ts: entry.lastTouchMs });
     }
     candidates.sort((a, b) => a.ts - b.ts);
@@ -1181,6 +1273,12 @@ export class LandblockLRU {
       parkedBytes: this.parkedBytes,
       parkedTotal: this._parkedTotal,
       unparkedTotal: this._unparkedTotal,
+      // Reclaim-center gate + hysteresis telemetry (battery columns).
+      ringFloor: this.ringFloor,
+      reclaimGate: RECLAIM_GATE_ON,
+      reclaimMinAgeMs: RECLAIM_MIN_AGE_MS,
+      centerJumps: this._centerJumpsTotal,
+      gateHeldTicks: this._gateHeldTicks,
     };
   }
 }
