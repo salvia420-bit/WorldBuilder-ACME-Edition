@@ -1004,3 +1004,106 @@ async fn test_retransmit_uses_cached_packet_with_piggybacked_ack() {
         original_header.flags | packet_flags::RETRANSMISSION
     );
 }
+
+#[tokio::test]
+async fn test_oversize_message_refused_without_parking_session() {
+    // R-14 stopgap: a C2S game message whose packed payload exceeds the
+    // single-fragment limit (ACE rejects fragment header size > 464 B, i.e.
+    // payload > 448 B, discarding the packet and permanently deafening the
+    // server via a fragment-sequence gap). `send_message` must refuse it:
+    // drop the message, keep the session live (return Ok, not Err), and
+    // consume NO packet/fragment sequence so every later message still flows.
+    use holtburger_protocol::messages::chat::actions::TalkActionData;
+    use holtburger_protocol::messages::game_action::{GameAction, GameActionMessage};
+
+    let transport = ScriptedTransport::new(vec![], "127.0.0.1:9000".parse().unwrap());
+    let sent_handle = transport.clone();
+
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+
+    let frag_seq_before = session.fragment_sequence;
+    let pkt_seq_before = session.packet_sequence;
+    let frag_id_before = session.fragment_id;
+
+    // ~500 WINDOWS-1252 chars → ~514 B packed Talk payload, well over 448.
+    let oversize = GameMessage::GameAction(Box::new(GameActionMessage {
+        sequence: 1,
+        action: GameAction::Talk(Box::new(TalkActionData {
+            message: "x".repeat(500),
+        })),
+    }));
+    // Refused gracefully (Ok, not Err — an Err trips the recv loop's
+    // disconnect arm).
+    session.send_message(&oversize).await.unwrap();
+
+    // No wire packet emitted, and the wire-critical counters are untouched
+    // (no fragment-sequence gap → the server never goes deaf).
+    assert!(
+        sent_handle.sent_packets().await.is_empty(),
+        "oversize message must not be transmitted"
+    );
+    assert_eq!(session.fragment_sequence, frag_seq_before);
+    assert_eq!(session.packet_sequence, pkt_seq_before);
+    assert_eq!(session.fragment_id, frag_id_before);
+
+    // Control: an in-bounds message still sends and advances the counters,
+    // proving the session was left fully usable.
+    let ok_msg = GameMessage::GameAction(Box::new(GameActionMessage {
+        sequence: 2,
+        action: GameAction::Talk(Box::new(TalkActionData {
+            message: "hello".to_string(),
+        })),
+    }));
+    session.send_message(&ok_msg).await.unwrap();
+    assert_eq!(sent_handle.sent_packets().await.len(), 1);
+    assert_eq!(session.fragment_sequence, frag_seq_before + 1);
+    assert_eq!(session.packet_sequence, pkt_seq_before + 1);
+    assert_eq!(session.fragment_id, frag_id_before + 1);
+}
+
+#[tokio::test]
+async fn test_max_size_message_at_boundary_still_sends() {
+    // Bisect guard for the 448/449 boundary. A payload of exactly 448 B must
+    // send; 449 B must be refused. We size the Talk string so the *packed*
+    // GameMessage payload lands on each side of the limit and assert the
+    // transmit / drop decision flips.
+    use holtburger_protocol::messages::chat::actions::TalkActionData;
+    use holtburger_protocol::messages::game_action::{GameAction, GameActionMessage};
+    use holtburger_protocol::messages::transport::MAX_FRAGMENT_PAYLOAD;
+
+    fn packed_len(message: &GameMessage) -> usize {
+        let mut buf = Vec::new();
+        ProtocolPack::pack(message, &mut buf);
+        buf.len()
+    }
+    fn talk(msg: String) -> GameMessage {
+        GameMessage::GameAction(Box::new(GameActionMessage {
+            sequence: 1,
+            action: GameAction::Talk(Box::new(TalkActionData { message: msg })),
+        }))
+    }
+
+    // Grow the ASCII body until the packed payload is exactly MAX_FRAGMENT_PAYLOAD.
+    let mut n = 0usize;
+    while packed_len(&talk("a".repeat(n))) < MAX_FRAGMENT_PAYLOAD {
+        n += 1;
+    }
+    let at_limit = talk("a".repeat(n));
+    assert_eq!(packed_len(&at_limit), MAX_FRAGMENT_PAYLOAD);
+    let over_limit = talk("a".repeat(n + 4)); // +4: string16 grows in 4-byte pad steps
+
+    let transport = ScriptedTransport::new(vec![], "127.0.0.1:9000".parse().unwrap());
+    let sent_handle = transport.clone();
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+
+    // Exactly at the limit → sent.
+    session.send_message(&at_limit).await.unwrap();
+    assert_eq!(sent_handle.sent_packets().await.len(), 1);
+
+    // Just over the limit → refused, no second packet.
+    assert!(packed_len(&over_limit) > MAX_FRAGMENT_PAYLOAD);
+    session.send_message(&over_limit).await.unwrap();
+    assert_eq!(sent_handle.sent_packets().await.len(), 1);
+}

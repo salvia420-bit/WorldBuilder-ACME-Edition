@@ -5,6 +5,16 @@ pub const HEADER_SIZE: usize = 20;
 pub const FRAGMENT_HEADER_SIZE: usize = 16;
 pub const MAX_PACKET_SIZE: usize = 1024;
 
+/// Maximum game-message payload that fits in a single wire fragment.
+///
+/// Retail chunks blobs at 448 data bytes per fragment (`NetBlob::Fragmentize`,
+/// acclient.c: `v8 = 448; if (v3 <= 0x1C0) v8 = v3;`). With the 16-byte
+/// fragment header that yields a 464-byte fragment, which is exactly ACE's
+/// cutoff: `ClientPacketFragment.Unpack` rejects `Header.Size > 464` and
+/// discards the whole packet before sequence tracking. Until outbound
+/// fragmentation is implemented, `send_message` refuses payloads above this.
+pub const MAX_FRAGMENT_PAYLOAD: usize = 448;
+
 // Protocol Magic Numbers
 pub const CHECKSUM_SEED: u32 = 0xBADD70DD;
 pub const ACE_HANDSHAKE_RACE_DELAY_MS: u64 = 200;

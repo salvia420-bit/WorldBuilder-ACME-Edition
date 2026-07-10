@@ -292,6 +292,33 @@ impl Session {
         let mut payload = Vec::new();
         ProtocolPack::pack(message, &mut payload);
 
+        // R-14 stopgap (net-fixwave-20260709): outbound fragmentation is not
+        // implemented — every message ships as a single fragment (`count: 1`
+        // below). ACE's `ClientPacketFragment.Unpack` rejects any fragment
+        // whose header size exceeds 464 B (payload > 448 B) and discards the
+        // whole packet *before* sequence tracking; the resulting
+        // fragment-sequence gap then parks every subsequent C2S game message
+        // forever (`ProcessFragment` only advances on
+        // `lastReceivedFragmentSequence + 1`) while raw packets keep resetting
+        // the timeout — the server goes silently deaf. Until retail-faithful
+        // 448 B chunking lands, refuse the oversize message loudly rather than
+        // emit the poison packet: drop it, return `Ok` (an `Err` would trip the
+        // recv loop's disconnect arm), and consume no packet/fragment sequence
+        // (the counters below are untouched by this early return), so the
+        // session stays live and in-order for the next in-bounds message.
+        if payload.len() > transport::MAX_FRAGMENT_PAYLOAD {
+            log::error!(
+                ">>> REFUSED oversize C2S message: {} B payload exceeds the {} B \
+                 single-fragment limit; sending it would permanently deafen the \
+                 server (outbound fragmentation not implemented — see R-14). \
+                 Message dropped, session left intact. Message: {:?}",
+                payload.len(),
+                transport::MAX_FRAGMENT_PAYLOAD,
+                message,
+            );
+            return Ok(());
+        }
+
         let frag_header = FragmentHeader {
             sequence: self.fragment_sequence,
             id: self.fragment_id,
