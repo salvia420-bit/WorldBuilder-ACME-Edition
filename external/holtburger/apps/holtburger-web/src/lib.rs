@@ -46013,19 +46013,22 @@ async fn recv_loop(
                         let purged_lbs = LANDBLOCK_CLEAR_PENDING.with(|c| {
                             let mut buf = c.borrow_mut();
                             let n = buf.len();
-                            for lb in buf.drain(..) {
-                                w.scene.clear_cells_for_landblock(lb);
-                                w.scene.clear_building_aabbs_for_landblock(lb);
-                                // Track B4: purge outdoor-static AABBs for
-                                // the evicted landblock too (mirror of the
-                                // building purge) so an evict+re-enter
-                                // re-bake REPLACES rather than appends —
-                                // `insert_static_aabb` is append-only.
-                                w.scene.clear_static_aabbs_for_landblock(lb);
-                                // B4 Tier-2 (2026-06-09): purge the per-
-                                // static physics BSPs alongside their AABBs
-                                // (same append-only lifetime).
-                                w.scene.clear_static_physics_bsps_for_landblock(lb);
+                            if n > 0 {
+                                // P5/R-12 (2026-07-10): ONE batched clear for
+                                // the whole drain — one Arc-COW clone + one
+                                // retain scan per table regardless of how many
+                                // LBs this tick evicted (the sealed purge's
+                                // first-burst tick can carry 100+; the per-LB
+                                // forms paid a full clone-eligible scan each).
+                                // Covers the same four families the per-LB
+                                // loop did: cells (portal graph/AABBs/physics/
+                                // BSPs/membership/polygons), building AABBs +
+                                // origins + interior physics, static AABBs
+                                // (Track B4), static physics BSPs (B4 Tier-2)
+                                // — all append-only, so evict+re-enter must
+                                // REPLACE rather than append.
+                                let lbs: Vec<u32> = buf.drain(..).collect();
+                                let _ = w.scene.clear_landblocks_collision(&lbs);
                             }
                             n
                         });

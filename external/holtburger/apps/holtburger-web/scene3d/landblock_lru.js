@@ -30,7 +30,26 @@ const LB_KEY_MASK = 0xffff_0000 >>> 0;
 // entering a fully-enclosed dungeon (see tickEviction's sealedKeepLbKey path).
 // Bounds the one-time dispose cost — a ~127-LB backlog drains in ~5-6 frames
 // rather than one big hitch; nothing re-bakes (radius-0 prefetch), so it sticks.
+// R-12 (net-fixwave P5, 2026-07-10): the count-per-FRAME budget inverted its
+// own premise — it assumed frames are cheap, but the purge exists because
+// frames are seconds apart at TN entry, so a ~127-LB backlog @24/frame meant
+// ~6 near-frozen frames (a 10+ s crawl) instead of one accepted hitch. The
+// default is now a TIME-budgeted drain: the first sealed tick gets a generous
+// burst (~250 ms — one visible loading blip that clears most/all of the
+// backlog, and lands every wasm collision clear in ONE TickMovement drain =
+// one Arc-COW clone per table instead of six), subsequent ticks a few ms.
+// This constant remains as the `?sealedEvictBurst=off` legacy arm.
 const SEALED_EVICT_PER_TICK = 24;
+const SEALED_FIRST_BURST_MS = 250;
+const SEALED_STEADY_BUDGET_MS = 6;
+const SEALED_EVICT_BURST_ON = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("sealedEvictBurst");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
 
 function lbKeyFromXY(lbX, lbY) {
   return (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
@@ -208,15 +227,51 @@ export class LandblockLRU {
     // purge sticks. `sealedKeepLbKeyArg === 0` disables (normal path below).
     if (sealedKeepLbKeyArg) {
       const keep = lbKeyOf(sealedKeepLbKeyArg >>> 0);
+      if (!SEALED_EVICT_BURST_ON) {
+        // Legacy `?sealedEvictBurst=off` arm — the 2026-07-08 24/frame
+        // count staircase, byte-identical.
+        const victims = [];
+        for (const key of this.entries.keys()) {
+          if (key === keep) continue;
+          victims.push(key);
+          if (victims.length >= SEALED_EVICT_PER_TICK) break;
+        }
+        for (const key of victims) this.evict(key);
+        return;
+      }
+      // R-12 time-budgeted drain. First tick after seal gets the big
+      // burst; later ticks (stragglers that completed their bake after
+      // the purge and re-tracked) a few ms. Measure ELAPSED, not count —
+      // at least one eviction always runs so the drain can't starve.
       const victims = [];
       for (const key of this.entries.keys()) {
-        if (key === keep) continue;
-        victims.push(key);
-        if (victims.length >= SEALED_EVICT_PER_TICK) break;
+        if (key !== keep) victims.push(key);
       }
-      for (const key of victims) this.evict(key);
+      if (victims.length === 0) {
+        this._sealedDrainActive = false;
+        return;
+      }
+      const budgetMs = this._sealedDrainActive
+        ? SEALED_STEADY_BUDGET_MS
+        : SEALED_FIRST_BURST_MS;
+      this._sealedDrainActive = true;
+      // O5 (A11): bucket the four scene groups' children by lb-key in ONE
+      // pass for the whole tick — the per-victim rescans were K×4 full
+      // group walks (~100k userData reads on a town backlog).
+      const buckets = this._bucketGroupChildren(victims);
+      const t0 = performance.now();
+      let evicted = 0;
+      for (const key of victims) {
+        this.evict(key, buckets);
+        evicted += 1;
+        if (performance.now() - t0 > budgetMs) break;
+      }
+      if (evicted >= victims.length) this._sealedDrainActive = false;
       return;
     }
+    // Not sealed (or no longer sealed): re-arm the first-burst budget for
+    // the next sealed entry.
+    this._sealedDrainActive = false;
 
     // lru-null-lb (2026-06-07): bail out entirely when we don't know the
     // player's current LB yet (getCurrentLbId() returned null during
@@ -253,10 +308,67 @@ export class LandblockLRU {
     }
   }
 
+  // O5 (A11, net-fixwave P5 2026-07-10): ONE pass over the four scene
+  // groups bucketing children by owning lb-key. A multi-victim sealed
+  // drain tick previously rescanned every group per victim — K victims ×
+  // 4 O(total-children) walks. The buckets feed `evict(key, buckets)`,
+  // which then removes exactly the same nodes in exactly the same
+  // per-victim order (dispose-order semantics unchanged). Children with
+  // no owning-LB tag (cross-LB InstancedMesh, registry-owned billboards)
+  // are skipped here exactly as the per-victim scans skipped them.
+  _bucketGroupChildren(victimKeys) {
+    const want = victimKeys instanceof Set ? victimKeys : new Set(victimKeys);
+    const buckets = new Map();
+    const bucketFor = (key) => {
+      let b = buckets.get(key);
+      if (!b) {
+        b = { terrain: [], buildings: [], statics: [], cells: [] };
+        buckets.set(key, b);
+      }
+      return b;
+    };
+    const s = this.scene3d;
+    if (s.terrainGroup?.children) {
+      for (const c of s.terrainGroup.children) {
+        const ud = c.userData;
+        if (!ud || ud.lbX == null || ud.lbY == null) continue;
+        const key = lbKeyFromXY(ud.lbX, ud.lbY);
+        if (want.has(key)) bucketFor(key).terrain.push(c);
+      }
+    }
+    if (s.buildingsGroup?.children) {
+      for (const c of s.buildingsGroup.children) {
+        const lb = c.userData?.landblockId;
+        if (lb == null) continue;
+        const key = lbKeyOf(lb >>> 0);
+        if (want.has(key)) bucketFor(key).buildings.push(c);
+      }
+    }
+    if (s.staticsGroup?.children) {
+      for (const c of s.staticsGroup.children) {
+        const lb = c.userData?.landblockId;
+        if (lb == null) continue;
+        const key = lbKeyOf(lb >>> 0);
+        if (want.has(key)) bucketFor(key).statics.push(c);
+      }
+    }
+    if (s.cellContainers3d instanceof Map) {
+      for (const [cellId, container] of s.cellContainers3d) {
+        const key = lbKeyOf(cellId >>> 0);
+        if (want.has(key)) bucketFor(key).cells.push([cellId, container]);
+      }
+    }
+    return buckets;
+  }
+
   // Remove the LB's containers from the scene + dispose the per-LB
   // resources we own. Cross-LB shares (MaterialCache surfaces, statics
   // InstancedMesh, terrain atlas / road texture) are NEVER touched.
-  evict(lbKeyArg) {
+  // `_buckets` (optional, O5): a `_bucketGroupChildren` result — when
+  // provided, steps 1–4 read this LB's pre-bucketed children instead of
+  // rescanning the groups (same nodes, same order; a missing bucket means
+  // the LB simply had no tagged children this tick).
+  evict(lbKeyArg, _buckets = null) {
     const lbKey = lbKeyOf(lbKeyArg >>> 0);
     const entry = this.entries.get(lbKey);
     if (!entry) return false;
@@ -264,11 +376,16 @@ export class LandblockLRU {
     const s = this.scene3d;
     const lbX = (lbKey >>> 24) & 0xff;
     const lbY = (lbKey >>> 16) & 0xff;
+    const bucket = _buckets
+      ? _buckets.get(lbKey) || { terrain: [], buildings: [], statics: [], cells: [] }
+      : null;
 
     // 1. Terrain — every child of terrainGroup whose userData.lbX/lbY
     //    matches. Wire-fill companion meshes (userData.lbX/lbY also
     //    set) are caught by the same filter.
-    if (s.terrainGroup?.children) {
+    if (bucket) {
+      for (const c of bucket.terrain) s.terrainGroup?.remove(c);
+    } else if (s.terrainGroup?.children) {
       const kill = [];
       for (const c of s.terrainGroup.children) {
         const ud = c.userData;
@@ -281,14 +398,19 @@ export class LandblockLRU {
     // 2. Buildings — per-placement Groups with userData.landblockId
     //    (full 32-bit; mask to lb-key). Each Group's child Meshes
     //    reference cached materials/geometries — DO NOT dispose those.
-    if (s.buildingsGroup?.children) {
+    if (bucket || s.buildingsGroup?.children) {
       const kill = [];
-      for (const c of s.buildingsGroup.children) {
-        const lb = c.userData?.landblockId;
-        if (lb == null) continue;
-        if (lbKeyOf(lb >>> 0) === lbKey) kill.push(c);
+      if (bucket) {
+        kill.push(...bucket.buildings);
+        for (const c of kill) s.buildingsGroup?.remove(c);
+      } else {
+        for (const c of s.buildingsGroup.children) {
+          const lb = c.userData?.landblockId;
+          if (lb == null) continue;
+          if (lbKeyOf(lb >>> 0) === lbKey) kill.push(c);
+        }
+        for (const c of kill) s.buildingsGroup.remove(c);
       }
-      for (const c of kill) s.buildingsGroup.remove(c);
       if (s.buildingMap3d instanceof Map) {
         for (const c of kill) {
           const k = c.userData?.placementKey;
@@ -300,15 +422,19 @@ export class LandblockLRU {
     // 3. Statics — singletons (Mesh / LOD) AND per-LB BatchedMesh consolidations
     //    (?staticBatch) carry userData.landblockId. InstancedMesh nodes have NO
     //    landblockId (they batch across all LBs in the ring) and are skipped.
-    if (s.staticsGroup?.children) {
+    if (bucket || s.staticsGroup?.children) {
       const kill = [];
-      for (const c of s.staticsGroup.children) {
-        const lb = c.userData?.landblockId;
-        if (lb == null) continue;
-        if (lbKeyOf(lb >>> 0) === lbKey) kill.push(c);
+      if (bucket) {
+        kill.push(...bucket.statics);
+      } else {
+        for (const c of s.staticsGroup.children) {
+          const lb = c.userData?.landblockId;
+          if (lb == null) continue;
+          if (lbKeyOf(lb >>> 0) === lbKey) kill.push(c);
+        }
       }
       for (const c of kill) {
-        s.staticsGroup.remove(c);
+        s.staticsGroup?.remove(c);
         // A per-LB BatchedMesh owns a GPU vertex buffer + per-instance
         // DataTextures that the geometry-disposables list does NOT cover (its
         // source group geoms are tracked separately). Dispose it here so
@@ -322,14 +448,21 @@ export class LandblockLRU {
     // 4. EnvCells — cellContainers3d is keyed by full cellId. Remove
     //    every container whose cellId & 0xffff_0000 === lbKey.
     if (s.cellContainers3d instanceof Map && s.cellsGroup) {
-      const killIds = [];
-      for (const [cellId, container] of s.cellContainers3d) {
-        if (lbKeyOf(cellId >>> 0) === lbKey) {
-          killIds.push(cellId);
+      if (bucket) {
+        for (const [cellId, container] of bucket.cells) {
           s.cellsGroup.remove(container);
+          s.cellContainers3d.delete(cellId);
         }
+      } else {
+        const killIds = [];
+        for (const [cellId, container] of s.cellContainers3d) {
+          if (lbKeyOf(cellId >>> 0) === lbKey) {
+            killIds.push(cellId);
+            s.cellsGroup.remove(container);
+          }
+        }
+        for (const id of killIds) s.cellContainers3d.delete(id);
       }
-      for (const id of killIds) s.cellContainers3d.delete(id);
     }
 
     // NOTE: world ENTITIES (EntityManager objects — players/creatures/items)

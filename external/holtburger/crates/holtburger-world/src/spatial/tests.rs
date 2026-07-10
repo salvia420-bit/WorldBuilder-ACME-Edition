@@ -4091,3 +4091,110 @@ fn retail_leash_chain_sticky_timeout_clears_scene_mirror() {
         "manager target cleared"
     );
 }
+
+// ---- P5/R-12 (net-fixwave 2026-07-10): batched collision clear ----
+
+#[cfg(test)]
+mod clear_landblocks_collision_equivalence {
+    // `super::*` re-imports the spatial module surface (SpatialScene +
+    // types::*) the parent tests file already pulled in.
+    use super::*;
+    use holtburger_common::Aabb;
+
+    fn unit_aabb() -> Aabb {
+        Aabb::new(Vector3::zero(), Vector3::new(1.0, 1.0, 1.0))
+    }
+
+    /// Three landblocks' worth of every table family the clear touches,
+    /// plus a cross-LB portal edge from a KEPT landblock into a cleared
+    /// one (exercises the retain's edge half, not just whole-cell drops).
+    fn populated() -> SpatialScene {
+        let mut scene = SpatialScene::new();
+        let lbs = [0xA9B4_0000u32, 0x8602_0000, 0x1122_0000];
+        for (i, lb) in lbs.into_iter().enumerate() {
+            scene.insert_cell_portal(lb | 0x0100, lb | 0x0101);
+            scene.insert_cell_portal(lb | 0x0101, lb | 0x0100);
+            // Kept-LB cell with an edge INTO this landblock.
+            scene.insert_cell_portal(0x7777_0000 | (0x0100 + i as u32), lb | 0x0100);
+            scene.insert_cell_aabb(lb | 0x0100, unit_aabb());
+            scene.insert_building_aabb(
+                lb | 0x0100,
+                BuildingAabbEntry {
+                    building_id: BuildingId::new(lb, 0x0200_0001 + i as u32, 0),
+                    part_index: 0,
+                    aabb: unit_aabb(),
+                    active: true,
+                },
+            );
+            scene.register_building_origin(
+                BuildingId::new(lb, 0x0200_0001 + i as u32, 0),
+                10.0,
+                20.0,
+            );
+            scene.insert_static_aabb(
+                lb,
+                StaticAabbEntry {
+                    did: 0x0100_0001 + i as u32,
+                    aabb: unit_aabb(),
+                    has_bsp: false,
+                },
+            );
+        }
+        scene
+    }
+
+    #[test]
+    fn batched_clear_matches_sequential_per_lb_clears() {
+        let victims = [0xA9B4_1234u32, 0x8602_0000]; // one full id (masked inside), one high word
+        let mut sequential = populated();
+        let mut batched = populated();
+
+        let mut seq_edges = 0usize;
+        let mut seq_cell_aabbs = 0usize;
+        let mut seq_building = 0usize;
+        let mut seq_static = 0usize;
+        let mut seq_bsps = 0usize;
+        for lb in victims {
+            let lb = lb & 0xFFFF_0000;
+            let (e, a) = sequential.clear_cells_for_landblock(lb);
+            seq_edges += e;
+            seq_cell_aabbs += a;
+            seq_building += sequential.clear_building_aabbs_for_landblock(lb);
+            seq_static += sequential.clear_static_aabbs_for_landblock(lb);
+            seq_bsps += sequential.clear_static_physics_bsps_for_landblock(lb);
+        }
+
+        let (edges, cell_aabbs, building, statics, bsps) =
+            batched.clear_landblocks_collision(&victims);
+
+        assert_eq!(edges, seq_edges, "portal edges removed");
+        assert_eq!(cell_aabbs, seq_cell_aabbs, "cell AABBs removed");
+        assert_eq!(building, seq_building, "building AABBs removed");
+        assert_eq!(statics, seq_static, "static AABBs removed");
+        assert_eq!(bsps, seq_bsps, "static BSPs removed");
+
+        // Survivors identical (the un-evicted LB + the kept cross-LB cell).
+        assert_eq!(
+            batched.cell_portal_graph_len(),
+            sequential.cell_portal_graph_len()
+        );
+        assert_eq!(batched.cell_aabb_count(), sequential.cell_aabb_count());
+        assert_eq!(batched.building_aabb_count(), sequential.building_aabb_count());
+        assert_eq!(batched.static_aabb_count(), sequential.static_aabb_count());
+        assert_eq!(
+            batched.static_physics_bsp_count(),
+            sequential.static_physics_bsp_count()
+        );
+        // And something genuinely survived — the test isn't vacuous.
+        assert!(batched.cell_aabb_count() > 0, "kept LB survives");
+        assert!(batched.building_aabb_count() > 0, "kept LB's building survives");
+    }
+
+    #[test]
+    fn batched_clear_empty_input_is_noop() {
+        let mut scene = populated();
+        let before = scene.cell_aabb_count();
+        assert_eq!(scene.clear_landblocks_collision(&[]), (0, 0, 0, 0, 0));
+        assert_eq!(scene.cell_aabb_count(), before);
+    }
+}

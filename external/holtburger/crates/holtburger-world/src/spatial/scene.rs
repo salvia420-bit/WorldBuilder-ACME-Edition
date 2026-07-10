@@ -2465,6 +2465,99 @@ impl SpatialScene {
         }
     }
 
+    /// R-12/A11-F2 (net-fixwave P5, 2026-07-10): batched multi-landblock
+    /// collision clear — semantically identical to calling
+    /// `clear_cells_for_landblock` + `clear_building_aabbs_for_landblock` +
+    /// `clear_static_aabbs_for_landblock` +
+    /// `clear_static_physics_bsps_for_landblock` once per landblock, but
+    /// each Arc-wrapped table is `Arc::make_mut`ed and retain-scanned ONCE
+    /// for the whole batch. The per-LB forms pay one COW deep-clone per
+    /// mutated table per `TickMovement` drain (the per-tick
+    /// `collision_scene` snapshot always shares the Arc) plus one full
+    /// retain pass per LB — a sealed-dungeon purge draining N landblocks
+    /// in one tick paid N scans where one suffices. Landblock ids are
+    /// masked to their high words internally. Returns
+    /// `(edges_removed, cell_aabbs_removed, building_aabbs_removed,
+    /// static_aabbs_removed, static_bsps_removed)` for diagnostic logging.
+    pub fn clear_landblocks_collision(
+        &mut self,
+        landblocks: &[u32],
+    ) -> (usize, usize, usize, usize, usize) {
+        if landblocks.is_empty() {
+            return (0, 0, 0, 0, 0);
+        }
+        let lbs: HashSet<u32> = landblocks.iter().map(|lb| lb & 0xFFFF_0000).collect();
+        let in_set = |id: u32| lbs.contains(&(id & 0xFFFF_0000));
+
+        // Cells family (mirrors clear_cells_for_landblock).
+        let mut edges_removed = 0usize;
+        Arc::make_mut(&mut self.cell_portal_graph).retain(|from, edges| {
+            if in_set(*from) {
+                edges_removed += edges.len();
+                return false;
+            }
+            let before = edges.len();
+            edges.retain(|to| !in_set(*to));
+            edges_removed += before - edges.len();
+            !edges.is_empty()
+        });
+        let aabbs_before = self.cell_aabbs.len();
+        Arc::make_mut(&mut self.cell_aabbs).retain(|cell_id, _| !in_set(*cell_id));
+        let cell_aabbs_removed = aabbs_before - self.cell_aabbs.len();
+        Arc::make_mut(&mut self.cell_seen_outside).retain(|cell_id, _| !in_set(*cell_id));
+        Arc::make_mut(&mut self.cell_physics_index).retain(|cell_id, _| !in_set(*cell_id));
+        Arc::make_mut(&mut self.cell_physics_bsp).retain(|cell_id, _| !in_set(*cell_id));
+        Arc::make_mut(&mut self.cell_static_physics_bsp).retain(|cell_id, _| !in_set(*cell_id));
+        Arc::make_mut(&mut self.cell_membership).retain(|cell_id, _| !in_set(*cell_id));
+        Arc::make_mut(&mut self.cell_portal_polygons).retain(|cell_id, _| !in_set(*cell_id));
+
+        // Buildings family (mirrors clear_building_aabbs_for_landblock —
+        // building_id.landblock_id is stored as the masked high word).
+        let mut building_aabbs_removed = 0usize;
+        Arc::make_mut(&mut self.building_aabb_index).retain(|_cell, entries| {
+            let before = entries.len();
+            entries.retain(|e| !in_set(e.building_id.landblock_id));
+            building_aabbs_removed += before - entries.len();
+            !entries.is_empty()
+        });
+        Arc::make_mut(&mut self.building_origins)
+            .retain(|building_id, _| !in_set(building_id.landblock_id));
+        {
+            let idx = Arc::make_mut(&mut self.building_physics_index);
+            for lb in &lbs {
+                idx.remove(lb);
+            }
+        }
+
+        // Statics family (keyed directly by landblock high word).
+        let mut static_aabbs_removed = 0usize;
+        {
+            let idx = Arc::make_mut(&mut self.statics_aabb_index);
+            for lb in &lbs {
+                if let Some(v) = idx.remove(lb) {
+                    static_aabbs_removed += v.len();
+                }
+            }
+        }
+        let mut static_bsps_removed = 0usize;
+        {
+            let idx = Arc::make_mut(&mut self.statics_physics_bsp);
+            for lb in &lbs {
+                if let Some(v) = idx.remove(lb) {
+                    static_bsps_removed += v.len();
+                }
+            }
+        }
+
+        (
+            edges_removed,
+            cell_aabbs_removed,
+            building_aabbs_removed,
+            static_aabbs_removed,
+            static_bsps_removed,
+        )
+    }
+
     /// B4 Tier-2: total registered static physics-BSP count. Diagnostic.
     pub fn static_physics_bsp_count(&self) -> usize {
         self.statics_physics_bsp.values().map(|v| v.len()).sum()
