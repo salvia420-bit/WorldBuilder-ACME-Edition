@@ -9,6 +9,16 @@ use holtburger_protocol::messages::*;
 use holtburger_protocol::traits::ProtocolUnpack;
 use web_time::Instant;
 
+// A02 Opt-1 (net-review, fixed 2026-07-10): the recv scratch was
+// `[0u8; 1024 * 128]` — 128 KB zeroed per inbound packet on the hot path
+// (tens of MB of memset across a teleport burst). Nothing larger than 4 KB
+// can arrive: ACE caps client/server packets at 1024 B
+// (`ClientPacket.MaxPacketSize`) and the wsbridge kills any WS frame over
+// its 4096 B `frame::MAX_PACKET_BYTES`. A hypothetical oversized native-UDP
+// datagram truncates, fails the checksum, and is dropped — same outcome as
+// before (the old buffer would merely have failed later, at parse).
+const RECV_SCRATCH_BYTES: usize = 4096;
+
 impl Session {
     async fn recv_raw_packet_with_addr(
         &mut self,
@@ -277,7 +287,7 @@ impl Session {
                         continue;
                     }
                     result = async {
-                        let mut buf = [0u8; 1024 * 128];
+                        let mut buf = [0u8; RECV_SCRATCH_BYTES];
                         self.recv_raw_packet_with_addr(&mut buf).await
                     } => {
                         let (header, data, _) = result?;
@@ -333,7 +343,7 @@ impl Session {
                 }
             }
 
-            let mut buf = [0u8; 1024 * 128];
+            let mut buf = [0u8; RECV_SCRATCH_BYTES];
             let (header, data, _) = self.recv_raw_packet_with_addr(&mut buf).await?;
 
             if !self.validate_received_packet_checksum(&header, &data)? {

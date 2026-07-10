@@ -38,6 +38,21 @@ impl ProtocolUnpack for GameMessage {
 
         match op.unwrap() {
             GameOpcode::None => Some(GameMessage::None),
+            // W2 coverage (2026-07-10): sent by ACE as the Terminate payload
+            // on a banned-account login (AuthenticationHandler.cs:220).
+            // Payload: u32 seconds-until-unban + OPTIONAL String16L reason —
+            // the tail is grabbed raw (the string is written only when a
+            // reason exists, and the server is terminating the session
+            // either way), wrapped as Unknown until a semantic variant is
+            // needed. Previously this hit the Unknown-Opcode warn above.
+            GameOpcode::AccountBanned => {
+                let secs = (data.len() - *offset >= 4)
+                    .then(|| LittleEndian::read_u32(&data[*offset..*offset + 4]));
+                log::warn!("<<< AccountBanned: ban expires in {secs:?} s");
+                let remaining = data[*offset..].to_vec();
+                *offset = data.len();
+                Some(GameMessage::Unknown(opcode_raw, remaining))
+            }
             GameOpcode::CharacterList => Some(GameMessage::CharacterList(Box::new(
                 CharacterListData::unpack(data, offset)?,
             ))),

@@ -630,6 +630,7 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::FellowshipFellowUpdateDone => 0x01C9,
         GameEvent::FellowshipFellowStatsDone => 0x01CA,
         GameEvent::AllegianceUpdate(_) => 0x0020,
+        GameEvent::AllegianceUpdateDone { .. } => 0x01C8,
         // Wave-F3 (2026-05-27): allegiance presence + info-response.
         GameEvent::AllegianceLoginNotification(_) => 0x027A,
         GameEvent::AllegianceInfoResponse(_) => 0x027C,

@@ -334,8 +334,13 @@ pub enum GameOpcode {
     DddEndDdd = 0xF7EA,
 
     // --- Server & Account Status ---
-    // /// S2C: Account has been banned.
-    // AccountBanned = 0xF7C1,
+    /// S2C: Account has been banned. W2 coverage (2026-07-10): ACE sends this
+    /// as the Terminate payload on a banned-account login
+    /// (`AuthenticationHandler.cs:220` → `GameMessageAccountBanned`).
+    /// Payload: u32 seconds-until-unban + OPTIONAL String16L reason (written
+    /// only when non-null) — consumed as a raw tail in unpack; the server is
+    /// terminating the session either way.
+    AccountBanned = 0xF7C1,
     /// S2C: Kick player from server.
     /// Sent when the account is logged out or banned.
     AccountBoot = 0xF7DC,
@@ -846,8 +851,12 @@ pub enum GameEventOpcode {
     CharacterTitle = 0x0029,
     /// S2C: Update to the current active title.
     UpdateTitle = 0x002B,
-    // /// S2C: Confirms that an allegiance data update is finished.
-    // AllegianceAllegianceUpdateDone = 0x01C8,
+    /// S2C: Confirms that an allegiance data update is finished. W2 coverage
+    /// (2026-07-10): ACE SENDS this on every allegiance join/update push
+    /// (`GameEventAllegianceAllegianceUpdateDone` — AllegianceManager.cs:398,
+    /// Player_Allegiance.cs:134/260, Allegiance.cs:361; previously hit our
+    /// Unknown-GameEvent warn). Payload: u32 WeenieError (None=0 on success).
+    AllegianceUpdateDone = 0x01C8,
     /// S2C: Notifies the player that an allegiance member has logged in/out.
     /// Wave-F3 (2026-05-27): port of
     /// `Chorizite.ACProtocol/Messages/S2C/Events/Allegiance_AllegianceLoginNotificationEvent.generated.cs`.

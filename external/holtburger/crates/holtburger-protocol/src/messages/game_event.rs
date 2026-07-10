@@ -97,6 +97,9 @@ pub enum GameEvent {
     FellowshipFellowUpdateDone,
     FellowshipFellowStatsDone,
     AllegianceUpdate(Box<AllegianceUpdateEventData>),
+    /// W2 coverage (2026-07-10): ACE-sent completion marker after every
+    /// allegiance update push. Payload: u32 WeenieError raw (0 = None).
+    AllegianceUpdateDone { error_raw: u32 },
     /// Wave-F3 (2026-05-27): S2C notification that a member of the
     /// player's allegiance logged in/out.
     /// Opcode `AllegianceLoginNotification = 0x027A`.
@@ -401,6 +404,14 @@ impl ProtocolUnpack for GameEventMessage {
                 GameEventOpcode::AllegianceUpdate => GameEvent::AllegianceUpdate(Box::new(
                     AllegianceUpdateEventData::unpack(data, offset)?,
                 )),
+                GameEventOpcode::AllegianceUpdateDone => {
+                    if *offset + 4 > data.len() {
+                        return None;
+                    }
+                    let error_raw = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+                    *offset += 4;
+                    GameEvent::AllegianceUpdateDone { error_raw }
+                }
                 GameEventOpcode::AllegianceLoginNotification => {
                     GameEvent::AllegianceLoginNotification(Box::new(
                         AllegianceLoginNotificationEventData::unpack(data, offset)?,
@@ -827,6 +838,11 @@ impl ProtocolPack for GameEventMessage {
             GameEvent::FellowshipFellowUpdateDone => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::FellowshipFellowUpdateDone as u32)
                     .unwrap();
+            }
+            GameEvent::AllegianceUpdateDone { error_raw } => {
+                buf.write_u32::<LittleEndian>(GameEventOpcode::AllegianceUpdateDone as u32)
+                    .unwrap();
+                buf.write_u32::<LittleEndian>(*error_raw).unwrap();
             }
             GameEvent::FellowshipFellowStatsDone => {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::FellowshipFellowStatsDone as u32)

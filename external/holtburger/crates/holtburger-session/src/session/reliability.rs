@@ -37,6 +37,13 @@ impl Session {
         }
     }
 
+    // A02-F8 verify (2026-07-10): ACE stamps its outgoing AckSequence with
+    // `lastReceivedPacketSequence` (NetworkSession.cs:929 — INCLUSIVE
+    // received), so strictly-greater retention would suffice. Kept at `>=`
+    // deliberately: ACE's own retransmit-cache prune uses the identical rule
+    // (`cachedPackets.Keys.Where(x => x < sequence)` removed,
+    // NetworkSession.cs:669) — we mirror the reference implementation at the
+    // cost of retaining at most ONE already-acked packet (≤1 KB).
     pub(crate) fn acknowledge_sequence(&mut self, sequence: u32) {
         self.cached_packets
             .retain(|cached_sequence, _| *cached_sequence >= sequence);
