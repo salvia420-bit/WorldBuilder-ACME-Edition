@@ -49,6 +49,7 @@ import {
 import { materialCanCastShadow } from "./materials.js";
 import { lbKeyOf } from "./landblock_lru.js";
 import { STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT } from "./stream_bake_guard.js";
+import { guardedCompileAsync } from "./bake_prewarm.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 import { attachStaticDefaultScriptsWorld } from "./statics.js";
 // Task #9 — interior animated scenery (banners/flags via default_animation 0x03).
@@ -1015,11 +1016,15 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // parent so we hand compileAsync a single subtree.
   const renderer = scene3d.renderer;
   const camera = scene3d.camera;
-  if (newCells.length > 0 && renderer && camera && typeof renderer.compileAsync === "function") {
+  if (newCells.length > 0 && renderer && camera && typeof renderer.compile === "function") {
     const tempParent = new THREE.Group();
     for (const { container } of newCells) tempParent.add(container);
     try {
-      await renderer.compileAsync(tempParent, camera, scene3d.scene);
+      // guardedCompileAsync (bake_prewarm.js, P6 hardening 2026-07-10): same
+      // semantics as renderer.compileAsync but a material disposed mid-link
+      // (sealed purge racing the warm) counts as done instead of throwing an
+      // uncatchable TypeError inside three's own ready-poll timer.
+      await guardedCompileAsync(renderer, tempParent, camera, scene3d.scene);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[envcell-compileAsync] failed (cells will lazy-compile on first render):", e);

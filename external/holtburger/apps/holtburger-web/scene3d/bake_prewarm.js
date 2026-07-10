@@ -32,8 +32,54 @@ export const BAKE_PREWARM = (() => {
 })();
 
 /**
+ * P6 hardening (2026-07-10, ci-smoke S2) — guarded re-implementation of
+ * three's `WebGLRenderer.compileAsync` ready-poll. The stock helper's
+ * `checkMaterialsReady` runs in a setTimeout chain and reads
+ * `properties.get(material).currentProgram.isReady()` unguarded — a material
+ * disposed while its program is still linking (spawn-burst churn: appearance
+ * re-decode / despawn / sealed purge) leaves `currentProgram` undefined and
+ * the poll throws an UNCAUGHT TypeError ("reading 'isReady'") that no caller
+ * try/catch can reach (it fires inside three's own timer callback). Same
+ * semantics + same 10 ms poll, but a vanished/never-assigned program counts
+ * as done. Sync-compile backends (SwiftShader) resolve on the first check.
+ *
+ * @returns {Promise<void>} rejects only if the synchronous compile() throws
+ */
+export function guardedCompileAsync(renderer, object, camera, targetScene) {
+  let materials;
+  try {
+    materials = renderer.compile(object, camera, targetScene);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+  if (!materials || typeof materials.forEach !== "function" || materials.size === 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const check = () => {
+      try {
+        materials.forEach((material) => {
+          let program = null;
+          try {
+            program = renderer.properties.get(material).currentProgram;
+          } catch (_) { /* disposed → treat as done */ }
+          if (!program || typeof program.isReady !== "function" || program.isReady()) {
+            materials.delete(material);
+          }
+        });
+      } catch (_) {
+        return resolve(); // never leak an uncaught throw out of the poll
+      }
+      if (materials.size === 0) return resolve();
+      setTimeout(check, 10);
+    };
+    check();
+  });
+}
+
+/**
  * Pre-warm one Object3D subtree's shader programs + texture uploads.
- * Fail-soft: never throws — on a missing renderer/camera/compileAsync or any compile error
+ * Fail-soft: never throws — on a missing renderer/camera/compile or any compile error
  * the subtree simply lazy-compiles on first render (legacy behaviour). The caller awaits
  * this BEFORE attaching the subtree to the live scene graph.
  *
@@ -46,9 +92,9 @@ export async function prewarmSubtree(scene3d, object) {
   const host = _renderHost(scene3d);
   const renderer = host && host.renderer;
   const camera = host && host.camera;
-  if (!renderer || !camera || typeof renderer.compileAsync !== "function") return;
+  if (!renderer || !camera || typeof renderer.compile !== "function") return;
   try {
-    await renderer.compileAsync(object, camera, host.scene);
+    await guardedCompileAsync(renderer, object, camera, host.scene);
   } catch (_) {
     /* fail-soft: the subtree lazy-compiles on first render */
   }
@@ -191,7 +237,7 @@ async function _runArchetypeWarm(scene3d) {
   );
   push(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
   try {
-    await renderer.compileAsync(group, camera, host.scene);
+    await guardedCompileAsync(renderer, group, camera, host.scene);
   } catch (_) {
     /* fail-soft */
   }

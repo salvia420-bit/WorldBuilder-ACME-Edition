@@ -51,6 +51,11 @@ else
   if [ "$DET_RC" -eq 0 ]; then S3="PASS"; else S3="FAIL-whiteNow>0"; FAIL=1; fi
 fi
 
+# ACE ghost-session window: a boot ~60s after the previous session's close
+# reliably stalls at enter-world (reconfirmed 2026-07-10); 130s is the proven
+# safe spacing for serial headless boots on the same account.
+sleep 130
+
 # ── S4+S5: keepalive survival + dat-decode diag (second short boot, 60s idle) ──
 # S5 (A16 art.5 / A07 §3.6, 2026-07-10): __diag.datDecode() ABI liveness on the
 # SAME session — main-thread wasm counters non-null, bake-worker relay non-null
