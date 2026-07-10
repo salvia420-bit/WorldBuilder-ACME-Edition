@@ -164,7 +164,7 @@ function isNearPlayerLb(scene3d, lbKey, radius = 1) {
 }
 
 export class LandblockLRU {
-  constructor({ scene3d, maxResident, getCurrentLbId, onEvictLandblock = null, debug = false } = {}) {
+  constructor({ scene3d, maxResident, getCurrentLbId, onEvictLandblock = null, ringFloor = 1, debug = false } = {}) {
     if (!scene3d) throw new Error("LandblockLRU: scene3d required");
     this.scene3d = scene3d;
     // Phase 6 collision-leak fix (2026-05-29): optional hook fired in evict()
@@ -174,6 +174,13 @@ export class LandblockLRU {
     // tickEviction's candidate filter (Chebyshev distance ≤ 1 skipped),
     // so `?lbCap=1` still keeps the 9-LB floor cleanly.
     this.maxResident = Math.max(1, maxResident | 0);
+    // Battery finding (2026-07-10, full-telepoi cycle): at cap, reclaim
+    // ping-pongs with the ring loaders (~75 reclaims/stop — evict↔re-bake
+    // in classic mode, park↔unpark under ?warmPark). A ringFloor=ringMax
+    // A/B made it WORSE (see index.js construction note: stale reclaim
+    // center right after a teleport). Default stays 1 (the 3×3); the param
+    // remains for the follow-up once the center-freshness issue is fixed.
+    this.ringFloor = Math.max(1, ringFloor | 0);
     this.getCurrentLbId = typeof getCurrentLbId === "function"
       ? getCurrentLbId
       : () => null;
@@ -360,12 +367,13 @@ export class LandblockLRU {
 
     if (this.entries.size <= this.maxResident) return;
 
-    // Collect eviction candidates: every tracked LB OUTSIDE the 3×3
-    // always-resident ring (`lbChebyshev(currentLbKey, key) > 1`).
-    // Sort ascending by lastTouchMs → oldest evicted first.
+    // Collect eviction candidates: every tracked LB OUTSIDE the streaming
+    // ring (`lbChebyshev(currentLbKey, key) > ringFloor` — see the
+    // constructor note; was 1, which made the live ring self-cannibalize at
+    // cap). Sort ascending by lastTouchMs → oldest evicted first.
     const candidates = [];
     for (const [key, entry] of this.entries) {
-      if (currentLbKey != null && lbChebyshev(currentLbKey, key) <= 1) continue;
+      if (currentLbKey != null && lbChebyshev(currentLbKey, key) <= this.ringFloor) continue;
       candidates.push({ key, ts: entry.lastTouchMs });
     }
     candidates.sort((a, b) => a.ts - b.ts);

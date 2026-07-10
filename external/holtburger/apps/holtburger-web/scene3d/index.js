@@ -4331,6 +4331,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     const landblockLru = new LandblockLRU({
       scene3d: liveScene3d,
       maxResident: lbCap,
+      // ringFloor deliberately left at its default (1). The full-telepoi
+      // battery (2026-07-10) A/B'd ringFloor=ringMax and it made the
+      // at-cap reclaim churn WORSE (park ops 4144→8515, saturated settle
+      // 13.2→16.0 s): right after a teleport the reclaim center can be
+      // STALE (pose.landblockId freeze), so a big floor protects the OLD
+      // ring while the arriving ring's bakes get reclaimed. Fix the center
+      // freshness first, then revisit the floor.
       // Phase 6 collision-leak fix (2026-05-29): on evict, enqueue a wasm-side
       // purge of this LB's SpatialScene collision (cell/building AABBs +
       // physics triangles + portal graph) so a re-entry re-bake REPLACES
