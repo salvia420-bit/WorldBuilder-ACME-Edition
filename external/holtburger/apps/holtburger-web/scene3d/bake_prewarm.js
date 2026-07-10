@@ -52,3 +52,131 @@ export async function prewarmSubtree(scene3d, object) {
     /* fail-soft: the subtree lazy-compiles on first render */
   }
 }
+
+// ============================================================================
+// P6/R-6 (net-fixwave 2026-07-10) — ENTITY program warm
+// ============================================================================
+// World bakes (terrain/buildings/statics/envcells) were compileAsync'd before
+// attach, but ENTITY materials never were: every player arrival in a hub
+// could link a not-yet-seen variant synchronously at first draw (~1–2 s per
+// link at the 16/2 light pool on the 1070 — A10-F1, A08-1, the recurring
+// never-fixed S2 slice). Two layers land here:
+//   1. per-spawn rig warm (entities.js Step E) — reuses `prewarmSubtree` on
+//      the fully-built rig, `?entityWarm=off`;
+//   2. the one-shot login-idle archetype matrix below, `?archetypeWarm=off`.
+
+import * as THREE from "three";
+
+function _defaultOnFlag(name) {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = new URLSearchParams(globalThis.location.search).get(name)?.toLowerCase();
+      return !(v === "off" || v === "0" || v === "false");
+    }
+  } catch (_) {}
+  return true;
+}
+export const ENTITY_WARM_ON = _defaultOnFlag("entityWarm");
+export const ARCHETYPE_WARM_ON = _defaultOnFlag("archetypeWarm");
+
+// A10-O1 — login-idle archetype-matrix warm. Once per session, shortly after
+// the LOCAL player's rig commits (the in-world signal; the delay lets the
+// boot flood + async AtmosphereLights attach settle first — A10-F3),
+// compileAsync ONE offscreen proxy mesh per distinct ENTITY-family program
+// variant so later per-spawn warms and first draws become program-cache
+// hits. Axes derive from the entities.js mint sites (raw UN-patched
+// MeshStandardMaterial — a SEPARATE program population from the "hb|"-keyed
+// world materials, which the world bakes already warm): {map, mapless} ×
+// {alphaTest 0/0.5 — the clipmap USE_ALPHATEST fork} × {transparent on/off},
+// plus the two particle-unlit MeshBasic blends (additive/alpha). Skinning is
+// NOT an axis (rigid part rigs — zero SkinnedMesh), and the paletted
+// luminous path sets only the emissive COLOR (a uniform, not a define) on
+// default flags, so no emissiveMap variant is needed; novel cache-path
+// ("hb|") variants stay covered by the per-spawn rig warm. NOTE: the proxies
+// are PARKED on `scene3d._archetypeWarmGroup`, never disposed — three's
+// program cache refcounts by material, so disposing them would release the
+// very programs this warmed. Cost: ~9 tiny materials + one 3-vert geometry +
+// a 1×1 DataTexture, held for the session.
+let _archetypeWarmState = "idle"; // "idle" | "scheduled" | "done"
+
+export function scheduleArchetypeWarm(scene3d, delayMs = 4000) {
+  if (!ARCHETYPE_WARM_ON || _archetypeWarmState !== "idle") return;
+  if (typeof setTimeout !== "function") return;
+  _archetypeWarmState = "scheduled";
+  setTimeout(() => {
+    _runArchetypeWarm(scene3d).catch(() => {
+      /* fail-soft: variants lazy-compile on first draw (legacy) */
+    });
+  }, delayMs);
+}
+
+async function _runArchetypeWarm(scene3d) {
+  _archetypeWarmState = "done";
+  const renderer = scene3d && scene3d.renderer;
+  const camera = scene3d && scene3d.camera;
+  if (!renderer || !camera || typeof renderer.compileAsync !== "function") return;
+  const t0 = performance.now();
+  const group = new THREE.Group();
+  group.name = "archetype-warm-proxies";
+  const tex = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  tex.needsUpdate = true;
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute(
+    "position",
+    new THREE.BufferAttribute(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), 3)
+  );
+  geom.setAttribute(
+    "normal",
+    new THREE.BufferAttribute(new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]), 3)
+  );
+  geom.setAttribute("uv", new THREE.BufferAttribute(new Float32Array([0, 0, 1, 0, 0, 1]), 2));
+  let count = 0;
+  const push = (mat) => {
+    group.add(new THREE.Mesh(geom, mat));
+    count += 1;
+  };
+  // Entity-lit family — the exact entities.js mint shape.
+  for (const alphaTest of [0, 0.5]) {
+    for (const transparent of [false, true]) {
+      const m = new THREE.MeshStandardMaterial({
+        map: tex,
+        roughness: 0.9,
+        metalness: 0.0,
+        side: THREE.DoubleSide,
+        transparent,
+      });
+      if (alphaTest) m.alphaTest = alphaTest;
+      push(m);
+    }
+  }
+  // Mapless (the shared grey-fallback / no-texture class).
+  push(
+    new THREE.MeshStandardMaterial({
+      roughness: 0.9,
+      metalness: 0.0,
+      side: THREE.DoubleSide,
+    })
+  );
+  // Particle-unlit family (entity VFX billboards — never previously warmed).
+  push(
+    new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+  push(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+  try {
+    await renderer.compileAsync(group, camera, scene3d.scene);
+  } catch (_) {
+    /* fail-soft */
+  }
+  // Park (never dispose) — see the refcount note above.
+  scene3d._archetypeWarmGroup = group;
+  // eslint-disable-next-line no-console
+  console.info(
+    `[bake_prewarm] archetype warm: ${count} proxy materials compiled in ` +
+      `${Math.round(performance.now() - t0)} ms`
+  );
+}

@@ -84,6 +84,23 @@ const PLACEMENT_ID_ON = (() => {
   } catch (_) { return false; }
 })();
 
+// P6/A08-1b (net-fixwave 2026-07-10) — slice the paletted-material
+// continuation loop in `_spawnImpl`. After the worker decode resolves, the
+// loop runs texture copy + material mint + render-state apply per missed
+// DID in ONE macrotask — bunched exactly when many spawn continuations
+// resolve together (hub arrival). When on, the loop yields a real macrotask
+// every ~6 ms (the statics-slicer shape) and re-checks the spawn generation
+// across each yield. `?palettedSlice=off` (also 0/false) reverts.
+const PALETTED_SLICE_ON = (() => {
+  try {
+    if (typeof window === "undefined") return true;
+    const v = new URLSearchParams(window.location.search)
+      .get("palettedSlice")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+})();
+const PALETTED_SLICE_MS = 6;
+
 // === Wave R2.A — entity-attached dynamic lights (SetLight hook 25) (2026-05-28) ===
 // `?entityLights=on` opt-in. Default OFF → no entity lights are created and
 // the SetLight (25) hook stays a logged no-op, so the rendered output is
@@ -637,6 +654,10 @@ const UNIFIED_LOCO = UNIFIED_MODE === "locomotion" || UNIFIED_MODE === "on";
 // (class 0x40, in MotionTable.cycles) the links-only swing resolver can't reach.
 const UNIFIED_MISSILE = UNIFIED_DEFAULT || UNIFIED_MODE === "missile" || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
+// P6/R-6 (net-fixwave 2026-07-10) — entity program warm: per-spawn rig
+// compileAsync (Step E) + the one-shot archetype-matrix warm armed on the
+// local player's commit. See bake_prewarm.js for flags + rationale.
+import { prewarmSubtree, scheduleArchetypeWarm, ENTITY_WARM_ON } from "./bake_prewarm.js";
 import {
   materialCanCastShadow,
   SURFACE_TYPE,
@@ -3443,7 +3464,33 @@ export class EntityManager {
             }
           }
 
+          let _palSliceStart = performance.now();
           for (let mi = 0; mi < missDids.length; mi += 1) {
+            // P6/A08-1b — yield a real macrotask once a synchronous chunk
+            // exceeds the budget (texture copy + material mint per DID used
+            // to run bunched in ONE task after the worker decode resolved).
+            // Across the yield, re-check the spawn generation — a despawned
+            // or superseded rig must not keep minting materials; free the
+            // still-unconsumed wasm handles before bailing (the loop tail
+            // frees consumed ones). The Step-E guard still runs after.
+            if (
+              PALETTED_SLICE_ON &&
+              mi > 0 &&
+              performance.now() - _palSliceStart > PALETTED_SLICE_MS
+            ) {
+              // eslint-disable-next-line no-await-in-loop
+              await new Promise((r) => setTimeout(r, 0));
+              _palSliceStart = performance.now();
+              if (this._disposed || (this._spawnGen.get(guid) | 0) !== gen) {
+                for (let rest = mi; rest < missDids.length; rest += 1) {
+                  const rsp = results ? results[rest] : null;
+                  try {
+                    if (rsp && typeof rsp.free === "function") rsp.free();
+                  } catch (_) { /* best-effort */ }
+                }
+                break;
+              }
+            }
             const did = missDids[mi] >>> 0;
             const sp = results ? results[mi] : null;
             if (!sp || sp.width === 0 || sp.height === 0) {
@@ -3846,6 +3893,30 @@ export class EntityManager {
       }
     }
 
+    // P6/R-6 (net-fixwave 2026-07-10) — per-spawn rig program warm:
+    // compileAsync the fully-built rig BEFORE it becomes visible. The
+    // surface pixels resolved in Step B and the maps are already installed
+    // on the materials, so this warms the POST-`USE_MAP` program variant —
+    // warming pre-install would link a mapless program and the later map
+    // attach would relink on a VISIBLE frame (the A09-6 branch failure
+    // mode). Entities are invisible until Step E anyway, so the warm rides
+    // the existing latency window; on real GPUs the link runs on driver
+    // threads (KHR_parallel_shader_compile) — SwiftShader links are ~free,
+    // so laptop probes measure COVERAGE (Δprograms), not the latency win.
+    // The spawn-race guard below doubles as the post-await liveness
+    // re-check. Console tell only for real links (>8 ms) so hub bursts of
+    // cache-hit warms stay silent. `?entityWarm=off` skips.
+    if (ENTITY_WARM_ON) {
+      const _warmT0 = performance.now();
+      await prewarmSubtree(this.scene3d, root);
+      const _warmMs = performance.now() - _warmT0;
+      if (_warmMs > 8) {
+        // eslint-disable-next-line no-console
+        console.info(
+          `[entities] rig warm 0x${guid.toString(16)}: ${Math.round(_warmMs)} ms (program link)`
+        );
+      }
+    }
     // Batch 9 #2 (2026-06-07): spawn-race liveness guard. Between this
     // spawn's generation capture and now, a remove(guid)/re-spawn (or
     // manager dispose()) may have run while `_spawnImpl` awaited the
@@ -3888,6 +3959,14 @@ export class EntityManager {
       root.traverse((o) => o.layers.set(1));
     }
     this.entityMap.set(guid, inst);
+    // P6/A10-O1 — the LOCAL player's rig committing is the in-world signal:
+    // arm the one-shot archetype-matrix warm (self-guarded; later calls and
+    // `?archetypeWarm=off` no-op). The delay inside lets the boot flood +
+    // async AtmosphereLights attach settle so the warmed programs compile
+    // against the final light state (A10-F3).
+    if (this._isLocalPlayerGuid(guid)) {
+      try { scheduleArchetypeWarm(this.scene3d); } catch (_) { /* diag-only */ }
+    }
     // (2026-07-06) A corpse CreateObject (ODF Corpse bit) arrives right after a
     // creature's Dead motion + delete. Correlate it to the collapsing creature
     // so the corpse stays hidden until the death animation finishes and reveals
