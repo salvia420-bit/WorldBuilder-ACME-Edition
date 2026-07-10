@@ -58,7 +58,7 @@ import { buildEnvCellsForLandblock } from "./cells.js";
 // header for the dispatch-surface contract.
 import { ensureSpawnsForLandblock } from "./spawns.js";
 import { getBakeWorkerClient } from "./bake_worker_client.js"; // __diag.datDecode worker relay (A07 §3.6)
-import { tickPerFrame, installSharedDrainHook } from "./loop.js";
+import { tickPerFrame, installSharedDrainHook, noteLocalPlayerLandblockForSpawnFlush } from "./loop.js";
 // A11-S3 (`?particleClock=sim`): install the loop-owned sim clock into the
 // shared particle/script time hook (one clock for mixers + particles +
 // script queues, mirroring retail's single Timer::cur_time static,
@@ -2017,6 +2017,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       try {
         const lru = liveScene3dRef.landblockLru;
         const currentLbKey = lru.getCurrentLbId();
+        // P4/R-10 — teleport spawn-flush: on a local-player LB discontinuity
+        // drop queued deferred spawns for the departed area (A03-F3). Cheap
+        // per-frame no-op while walking (one key compare inside).
+        noteLocalPlayerLandblockForSpawnFlush(currentLbKey);
         // Step 1c (2026-07-08) — sealed-dungeon residency purge. When
         // `tickCellVisibility3D` flags a fully-enclosed dungeon it publishes
         // the dungeon's LB key here (0 otherwise); tickEviction then evicts

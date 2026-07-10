@@ -8700,14 +8700,17 @@
             // + wasm memory under a pathological sustained flood). The
             // hook-forward + for-loop + upd.free() below are UNCHANGED — they
             // just iterate the budgeted slice; deferred items stay alive in
-            // the buffer until a later frame frees them. DEFAULT-OFF (opt-in
-            // via `?entDrainBudget=on`): validated inert in normal play — the
-            // budget never engaged even in populated Holtburg (59 entities,
-            // pendMax 0), so it is kept as an opt-in safety valve for the
-            // tab-background -> refocus backlog case (see ~L598) rather than
-            // always-on hot-path code.
+            // the buffer until a later frame frees them. DEFAULT-ON since
+            // 2026-07-10 (P4/A03-F4): with `?netWorker=1` the worker ACKs
+            // through any main-thread stall (no natural backpressure), so
+            // the full post-stall burst always arrives and one-shot-draining
+            // it is the documented death-spiral. The <=256 zero-copy fast
+            // path below keeps steady state byte-identical (validated inert
+            // in normal play — populated Holtburg 59 entities, pendMax 0);
+            // the buffered path only engages in exactly the bursts it exists
+            // for. `?entDrainBudget=off` (also 0/false) reverts.
             const __budgetOn = (window.__entDrainBudgetOn ??=
-              /[?&]entDrainBudget=on(?:&|$)/i.test(location.search || ""));
+              !/[?&]entDrainBudget=(?:off|0|false)(?:&|$)/i.test(location.search || ""));
             const __fresh = handle.pollEntityUpdates();
             let entityUpdates;
             if (!__budgetOn) {

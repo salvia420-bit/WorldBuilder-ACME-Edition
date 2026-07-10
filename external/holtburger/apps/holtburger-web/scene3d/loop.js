@@ -61,6 +61,7 @@ import {
 // dedicated manager phase (below) at the retail point in frame; "sim"
 // additionally drives the shared particle clock from the loop's clamped dt
 // (install in scene3d/index.js). time_rng.js is dependency-free.
+import { lbKeyOf, lbChebyshev } from "./landblock_lru.js"; // P4 teleport spawn-flush
 import { particleClockMode } from "./particles/time_rng.js";
 // FCULL (2026-06-08) — app-level frustum + distance render cull. loop.js
 // owns the import graph: it wires the per-domain cull fns into culling.js
@@ -2322,6 +2323,60 @@ function _enqueueDeferredSpawn(scene3d, em, meta) {
 // race, unchanged by this deferral).
 function _cancelDeferredSpawn(guid) {
   _deferredSpawns.delete(guid >>> 0);
+}
+
+// P4/R-10 (A03-F3 ≡ A13-L2) — teleport spawn-flush. A portal hop leaves the
+// departed area's queued spawns at the FRONT of the FIFO, so the pump spends
+// its first ~N/6 ticks building rigs the player just left — at full Step A–E
+// cost, exactly while the destination is loading. On a local-player landblock
+// DISCONTINUITY (Chebyshev > _SPAWN_FLUSH_RADIUS in LB coords — walking moves
+// one LB at a time; only a teleport jumps), drop queued spawns whose OWN
+// landblock is outside that radius of the NEW position. Safe against ACE's
+// visibility contract (A03-F3): anything dropped is far outside the ~1-LB
+// outdoor vis range, so the server's ObjMaint sweep is already destroying
+// those objects for us — their KIND_REMOVEs hit `_cancelDeferredSpawn`
+// (no-op once flushed) — and a return trip re-sends ObjectCreate (fresh
+// visibility). In-flight (already-kicked) spawns remain covered by the
+// pre-existing generation token in `_spawnImpl` (A03 "verified-good" list).
+// Default ON; `?spawnTeleportFlush=off` (also 0/false) reverts.
+const _SPAWN_FLUSH_ON = (() => {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search || "")
+      .get("spawnTeleportFlush")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
+const _SPAWN_FLUSH_RADIUS = 2; // Chebyshev LBs; > this = teleport AND out-of-range
+let _lastSpawnFlushLbKey = null;
+
+/** Per-frame hook (index.js LRU tick): note the local player's current LB
+ * and flush the departed area's queued spawns on a discontinuity. Returns
+ * how many queued spawns were dropped (0 on the common no-jump path). */
+export function noteLocalPlayerLandblockForSpawnFlush(lbIdOrKey) {
+  if (!_SPAWN_FLUSH_ON || !lbIdOrKey) return 0;
+  const key = lbKeyOf(lbIdOrKey >>> 0);
+  const prev = _lastSpawnFlushLbKey;
+  _lastSpawnFlushLbKey = key;
+  if (prev == null || key === prev) return 0;
+  if (lbChebyshev(prev, key) <= _SPAWN_FLUSH_RADIUS) return 0; // walking
+  let flushed = 0;
+  for (const [g, entry] of _deferredSpawns) {
+    const mLb = entry?.meta?.landblockId;
+    if (mLb == null) continue;
+    if (lbChebyshev(lbKeyOf(mLb >>> 0), key) > _SPAWN_FLUSH_RADIUS) {
+      _deferredSpawns.delete(g);
+      flushed += 1;
+    }
+  }
+  if (flushed > 0) {
+    // eslint-disable-next-line no-console
+    console.info(
+      `[loop] teleport spawn-flush: dropped ${flushed} queued spawn(s) from the departed area`
+    );
+  }
+  return flushed;
 }
 
 function _armSpawn(scene3d, em, upd) {

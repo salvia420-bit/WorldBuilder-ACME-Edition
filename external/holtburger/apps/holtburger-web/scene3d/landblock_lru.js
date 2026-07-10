@@ -620,5 +620,5 @@ export class LandblockLRU {
 
 // Helper exported for callers that need the same lb-key shape used
 // internally (e.g. the bake site converting (lbX, lbY) → lbKey for
-// `track`).
-export { lbKeyFromXY, lbKeyOf, isNearPlayerLb };
+// `track`; lbChebyshev for loop.js's teleport spawn-flush distance test).
+export { lbKeyFromXY, lbKeyOf, lbChebyshev, isNearPlayerLb };

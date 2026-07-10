@@ -3461,8 +3461,11 @@ const STATIC_CALL_PES_ON = (() => {
 const STATIC_SCRIPT_SLICE_ON = (() => {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
-      return new URLSearchParams(globalThis.location.search)
-        .get("staticScriptSlice")?.toLowerCase() !== "off";
+      // P4/A03-F6: honor all three OFF spellings (docs promised 0/false;
+      // the reader only matched "off" — probes using =0 silently ran ON).
+      const v = new URLSearchParams(globalThis.location.search)
+        .get("staticScriptSlice")?.toLowerCase();
+      return !(v === "off" || v === "0" || v === "false");
     }
   } catch (_) {}
   return true;
@@ -3861,7 +3864,31 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
   let anchorCount = 0;
   let emitterCount = 0;
   let _sliceStart = performance.now();
+  // P4/R-10 residency guard (mirrors the F3 build guard at the
+  // `staticsBakedLbs.has(lbKey)` check before the batch step): the slice
+  // yields + per-emitter awaits let LRU eviction interleave with this loop,
+  // and an attach into an evicted LB orphans anchors+emitters that tick
+  // every frame and are only reaped by a SECOND eviction of that LB — which
+  // a sealed dungeon's radius-0 residency never delivers (A03-F1 ≡ A13-L1).
+  // Guard per PLACEMENT (ring calls span many LBs) on the same set
+  // eviction clears; both bake paths mark the LB baked BEFORE this attach
+  // runs, so a first attach never spuriously skips. Gated on the slice flag
+  // like F3 — `?staticScriptSlice=off` restores the pre-slice burst attach.
+  const _lbLive = (lbId) =>
+    !STATIC_SCRIPT_SLICE_ON ||
+    !(scene3d.staticsBakedLbs instanceof Set) ||
+    scene3d.staticsBakedLbs.has(lbKeyOf(lbId >>> 0));
+  const _deadLbs = new Set();
   for (const p of scripted) {
+    // Abort the whole remaining run for an LB that went non-resident —
+    // don't just skip one emitter (the rest of its placements are equally
+    // dead, and re-entry re-runs the attach from scratch).
+    const pLbKey = lbKeyOf(p.landblockId >>> 0);
+    if (_deadLbs.has(pLbKey)) continue;
+    if (!_lbLive(p.landblockId)) {
+      _deadLbs.add(pLbKey);
+      continue;
+    }
     const lbX = (p.landblockId >>> 24) & 0xff;
     const lbY = (p.landblockId >>> 16) & 0xff;
     const worldX = lbX * METERS_PER_LANDBLOCK + p.x;
@@ -3903,6 +3930,18 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
       wasmExports,
       ownerKey
     );
+    // P4/R-10 late-completion re-check: the chain's OWN awaits (script +
+    // emitter fetches) can straddle an eviction too — the LRU's one-shot
+    // reap already ran, so tear down what this anchor just registered and
+    // stop attaching into that LB. Removing the anchor also breaks the
+    // CallPES self-loop (`!anchor.parent` bail in _scheduleStaticCallPes).
+    if (!_lbLive(p.landblockId)) {
+      _deadLbs.add(pLbKey);
+      try { ownerRegistry.destroyAllForOwner(ownerKey); } catch (_) {}
+      try { scene3d.staticsGroup.remove(anchor); } catch (_) {}
+      anchorCount -= 1;
+      continue;
+    }
     // Perf time-slice (2026-07-08): the per-emitter `await` above only yields
     // microtasks, so a town's hundreds of emitters would build in one macrotask
     // and freeze the frame. Yield a real macrotask once a synchronous chunk
@@ -3970,7 +4009,24 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
   let anchorCount = 0;
   let emitterCount = 0;
   let _sliceStart = performance.now();
+  // P4/R-10 residency guard — interior twin of the outdoor guard above,
+  // keyed on `envCellLoadedLbs` (set by the envcell build at cells.js:1083
+  // BEFORE this attach fires; cleared by LRU eviction). Items without a
+  // landblockId (the dormant pre-wasm-defaultScriptId path) can't be
+  // guarded and keep the old behavior.
+  const _cellLbLive = (it) =>
+    !STATIC_SCRIPT_SLICE_ON ||
+    it.landblockId == null ||
+    !(scene3d.envCellLoadedLbs instanceof Set) ||
+    scene3d.envCellLoadedLbs.has(lbKeyOf(it.landblockId >>> 0));
+  const _deadLbs = new Set();
   for (const it of scripted) {
+    const itLbKey = it.landblockId != null ? lbKeyOf(it.landblockId >>> 0) : null;
+    if (itLbKey != null && _deadLbs.has(itLbKey)) continue;
+    if (!_cellLbLive(it)) {
+      _deadLbs.add(itLbKey);
+      continue;
+    }
     const anchor = new THREE.Group();
     anchor.name = `cellstatic-script-anchor-0x${(it.defaultScriptId >>> 0)
       .toString(16)
@@ -4000,6 +4056,13 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
       defaultScriptId: it.defaultScriptId >>> 0,
       particleOwnerKey: ownerKey,
     };
+    // P4/R-10: stamp the owning LB (when known) so the LRU's
+    // staticsGroup sweep-by-landblockId reaps interior anchors exactly
+    // like outdoor ones (previously only the registry half was reaped —
+    // the detached-anchor CallPES bail never fired for interiors).
+    if (it.landblockId != null) {
+      anchor.userData.landblockId = it.landblockId >>> 0;
+    }
     scene3d.staticsGroup.add(anchor);
     anchorCount += 1;
     // eslint-disable-next-line no-await-in-loop
@@ -4010,6 +4073,14 @@ export async function attachStaticDefaultScriptsWorld(scene3d, items, wasmExport
       wasmExports,
       ownerKey
     );
+    // P4/R-10 late-completion re-check — see the outdoor twin above.
+    if (!_cellLbLive(it)) {
+      _deadLbs.add(itLbKey);
+      try { ownerRegistry.destroyAllForOwner(ownerKey); } catch (_) {}
+      try { scene3d.staticsGroup.remove(anchor); } catch (_) {}
+      anchorCount -= 1;
+      continue;
+    }
     // Perf time-slice (2026-07-08) — see attachStaticDefaultScripts.
     if (
       STATIC_SCRIPT_SLICE_ON &&
