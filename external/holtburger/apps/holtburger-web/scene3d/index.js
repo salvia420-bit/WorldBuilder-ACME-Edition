@@ -107,7 +107,7 @@ import { preloadAllIcons as preloadAllIconsShared } from "../ui/ac_icon_cache.js
 // 2026-06-09 — per-LB streaming-bake resilience (terrain/buildings/statics).
 // See stream_bake_guard.js: stops a shard-fetch failure from being hammered
 // into an OOM crash by the per-position-update ring driver.
-import { guardedStreamBake, createStreamGuardState } from "./stream_bake_guard.js";
+import { guardedStreamBake, createStreamGuardState, summarizeStreamBakeWait } from "./stream_bake_guard.js";
 
 // streamFix (2026-07-02, town-portal streaming): default-ON master gate for the
 // already-baked FAST-PATH in the three per-LB loaders below (`?streamFix=off`
@@ -2880,7 +2880,21 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // promise) against the OOM-crash failure mode (see stream_bake_guard.js):
     // in-flight dedup + post-failure cooldown, never rejects.
     _guardedStreamBake(kind, lbKey, run, opts) {
-      if (!this._streamGuardState) this._streamGuardState = createStreamGuardState();
+      if (!this._streamGuardState) {
+        this._streamGuardState = createStreamGuardState();
+        // Session 7 (1114 §3) — teleport-window starvation surface:
+        // window.__diag.bakeWait() summarizes per-(kind,LB) guard waits
+        // (pre-admission skips/cap vs in-run duration, urgent-lane
+        // engagement). Read-only, on-demand; installed with the state bag
+        // so it exists from the first guarded bake.
+        try {
+          if (typeof window !== "undefined") {
+            if (!window.__diag) window.__diag = {};
+            const state = this._streamGuardState;
+            window.__diag.bakeWait = (opts2) => summarizeStreamBakeWait(state, opts2);
+          }
+        } catch (_) { /* fail-soft */ }
+      }
       return guardedStreamBake(this._streamGuardState, kind, lbKey, run, opts);
     },
     loadTerrainForLandblock(lbX, lbY) {

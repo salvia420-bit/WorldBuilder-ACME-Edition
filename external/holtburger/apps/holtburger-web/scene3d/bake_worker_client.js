@@ -150,8 +150,35 @@ class BakeWorkerClient {
 
   _request(type, body) {
     const id = this._seq++;
+    // Session 7 (1114 §3) — per-request latency + queue depth, aggregated
+    // by message type. The bake worker serializes requests, so a deep
+    // `_pending` at enqueue time IS the in-worker FIFO wait the teleport
+    // investigation needs to see (the JS-visible half of the wasm
+    // fetch-semaphore backlog). O(1) per request; read via
+    // window.__diag.bakeWorkerStats().
+    const t0 = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    const depth = this._pending.size;
+    const done = (ok) => {
+      try {
+        const s = this._stats || (this._stats = { byType: {}, maxPending: 0 });
+        const b = s.byType[type] || (s.byType[type] = {
+          count: 0, failed: 0, totalMs: 0, maxMs: 0, totalDepth: 0, maxDepth: 0,
+        });
+        const dt = ((typeof performance !== "undefined") ? performance.now() : Date.now()) - t0;
+        b.count += 1;
+        if (!ok) b.failed += 1;
+        b.totalMs += dt;
+        if (dt > b.maxMs) b.maxMs = dt;
+        b.totalDepth += depth;
+        if (depth > b.maxDepth) b.maxDepth = depth;
+        if (depth > s.maxPending) s.maxPending = depth;
+      } catch (_) { /* stats must never affect the request */ }
+    };
     return new Promise((resolve, reject) => {
-      this._pending.set(id, { resolve, reject });
+      this._pending.set(id, {
+        resolve: (v) => { done(true); resolve(v); },
+        reject: (e) => { done(false); reject(e); },
+      });
       this._worker.postMessage({ type, id, ...body });
     });
   }
@@ -446,6 +473,27 @@ export function getBakeWorkerClient() {
     try {
       if (typeof window !== "undefined") {
         window.__bakeWorkerSeq = () => (_singleton ? _singleton._seq : 0);
+        // Session 7 (1114 §3) — request latency/queue-depth aggregates
+        // (avgMs/avgDepth derived at read time). Pairs with
+        // __diag.bakeWait(): guard-level pre-admission waits there,
+        // worker-FIFO + decode time here.
+        if (!window.__diag) window.__diag = {};
+        window.__diag.bakeWorkerStats = () => {
+          const s = _singleton?._stats;
+          if (!s) return { active: !!_singleton?.active, byType: {}, maxPending: 0 };
+          const byType = {};
+          for (const [type, b] of Object.entries(s.byType)) {
+            byType[type] = {
+              count: b.count,
+              failed: b.failed,
+              avgMs: b.count ? Math.round(b.totalMs / b.count) : 0,
+              maxMs: Math.round(b.maxMs),
+              avgDepth: b.count ? Math.round((b.totalDepth / b.count) * 10) / 10 : 0,
+              maxDepth: b.maxDepth,
+            };
+          }
+          return { active: !!_singleton?.active, pendingNow: _singleton?._pending?.size ?? 0, maxPending: s.maxPending, byType };
+        };
       }
     } catch (_) {}
   }

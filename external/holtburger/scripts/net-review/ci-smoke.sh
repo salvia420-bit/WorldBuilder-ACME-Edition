@@ -93,8 +93,8 @@ case "$S5" in PASS*) ;; SKIP) ;; *) FAIL=1 ;; esac
 # ── S6: warm-park functional round-trip (third boot; W4 §3.1 default-ON
 # gate, wired 2026-07-10 session 6). Parks the TN backlog, keeps marks,
 # unparks + re-attaches on return, 0 non-benign errors. The probe's
-# noDisposeStorm threshold is BOUNDED (≤500) until the TN-transition
-# park↔unpark storm regression is fixed — see the probe's note.
+# noDisposeStorm threshold is back to the strict +5 (session 7: the
+# TN-transition park↔unpark storm is fixed — see the probe's note).
 sleep 130
 if node "$HERE/warmpark-roundtrip-probe.mjs" > "$TMP/warmpark.log" 2>&1; then
   S6="PASS"

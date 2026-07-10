@@ -5,6 +5,7 @@
 import {
   createStreamGuardState,
   guardedStreamBake,
+  summarizeStreamBakeWait,
   STREAM_BAKE_RETRY_COOLDOWN_MS,
 } from "./scene3d/stream_bake_guard.js";
 
@@ -112,11 +113,68 @@ async function testKindAndLbIsolation() {
     `independent guard keys all ran (${JSON.stringify(runs)})`);
 }
 
+// Session 7 (1114 §3) — bake-wait instrumentation: skip reasons, urgent
+// tracking, pre-admission wait vs in-run duration, cycle restart.
+async function testWaitLogInstrumentation() {
+  console.log("wait log: skips/urgent/wait/dur recorded; guard semantics untouched");
+  const state = createStreamGuardState();
+  const lb = 0xa9b40000;
+
+  // Fill the global cap with 6 held non-urgent bakes on other LBs.
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const fillers = [];
+  for (let i = 0; i < 6; i += 1) {
+    fillers.push(guardedStreamBake(state, "terrain", 0x01000000 + (i << 16), async () => gate, opts()));
+  }
+  // Non-urgent ask at cap → skipCap; urgent ask → admitted.
+  clock += 40;
+  await guardedStreamBake(state, "statics", lb, async () => ({}), { ...opts() });
+  let s = summarizeStreamBakeWait(state);
+  const capRec = s.slowestToStart.concat(s.slowestInRun).length; // settled below
+  ok(s.totals.skipCap === 1, `cap skip recorded (skipCap=${s.totals.skipCap})`);
+  clock += 60;
+  await guardedStreamBake(state, "statics", lb, async () => ({}), { ...opts(), urgent: true });
+  s = summarizeStreamBakeWait(state);
+  const rec = state.waitLog.get(`statics:${lb}`);
+  ok(rec.asks === 2 && rec.urgentAsks === 1, `asks/urgentAsks counted (${rec.asks}/${rec.urgentAsks})`);
+  ok(rec.waitMs === 60, `pre-admission wait = firstAsk→start (waitMs=${rec.waitMs})`);
+  ok(rec.ok === true && rec.durMs != null, `in-run settle recorded (durMs=${rec.durMs})`);
+  ok(rec.inFlightAtStart === 6, `queue depth at admission recorded (${rec.inFlightAtStart})`);
+  ok(s.totals.urgentAsks === 1 && s.totals.started >= 1, "summary totals aggregate");
+  void capRec;
+  release();
+  await Promise.all(fillers); // drain the cap-fillers' finally handlers
+
+  // A fresh ask after settle starts a NEW cycle on the same key.
+  clock += 10;
+  await guardedStreamBake(state, "statics", lb, async () => ({}), opts());
+  const rec2 = state.waitLog.get(`statics:${lb}`);
+  ok(rec2.cycles === 2 && rec2.asks === 1, `settled key restarts as cycle 2 (cycles=${rec2.cycles})`);
+
+  // In-flight dedup + cooldown skips are attributed.
+  let rel2;
+  const gate2 = new Promise((r) => (rel2 = r));
+  const held = guardedStreamBake(state, "buildings", lb, async () => gate2, opts());
+  await guardedStreamBake(state, "buildings", lb, async () => ({}), opts());
+  ok(state.waitLog.get(`buildings:${lb}`).skipInFlight === 1, "in-flight skip attributed");
+  rel2();
+  await held;
+  await guardedStreamBake(state, "terrain", 0x0f0f0000, async () => { throw new Error("x"); }, opts());
+  // The failed cycle settled (ok=false), so the cooldown-skipped retry
+  // rotates onto a cycle-2 record and is attributed there.
+  await guardedStreamBake(state, "terrain", 0x0f0f0000, async () => ({}), opts());
+  const recF = state.waitLog.get(`terrain:${0x0f0f0000}`);
+  ok(recF.cycles === 2 && recF.skipCooldown === 1 && recF.startMs == null,
+    `cooldown skip attributed on the retry cycle (cycles=${recF.cycles} skipCooldown=${recF.skipCooldown})`);
+}
+
 async function main() {
   await testInFlightDedup();
   await testFailureCooldown();
   await testSuccessClearsCooldown();
   await testKindAndLbIsolation();
+  await testWaitLogInstrumentation();
   if (failed > 0) {
     console.error(`\n${failed} assertion(s) FAILED`);
     process.exit(1);

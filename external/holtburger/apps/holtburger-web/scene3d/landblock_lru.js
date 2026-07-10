@@ -62,10 +62,11 @@ const SEALED_EVICT_BURST_ON = (() => {
 // controls, capped stops 10 vs 15/17), the 1070 real-render screenshot
 // pairs (shots-wp-on vs -off, Eastham/Eastwatch at cap) are
 // content-identical, and the functional round-trip probe (ci-smoke S6)
-// parks/keeps-marks/unparks/re-attaches with 0 errors. Known owed fix:
-// the TN-entry park↔unpark storm can true-dispose a bounded slice of the
-// pool under transient byte pressure (see the S6 threshold note) — still
-// ~60× fewer disposes than classic eviction. `?warmPark=off` escape;
+// parks/keeps-marks/unparks/re-attaches with 0 errors. The TN-entry
+// park↔unpark storm (1114 §2b: track() after park → dual state → the next
+// park() true-disposed the pool copy) is FIXED in session 7 by the
+// in-flight-bake reclaim deferral + the track-while-parked merge (see
+// _hasInFlightBake and track()). `?warmPark=off` escape;
 // `?warmParkBudgetMb=N` tunes the pool (default 256 MB — counts CPU *and*
 // GPU residency: detached objects keep their GL buffers until dispose()).
 const WARM_PARK_ON = (() => {
@@ -268,6 +269,33 @@ export class LandblockLRU {
     this._centerJumpAtMs = 0;
     this._centerJumpsTotal = 0;
     this._gateHeldTicks = 0;
+
+    // TN-storm fix telemetry (session 7, 1114 §2b/§5): dual-state
+    // near-misses resolved by the track()-while-parked merge, and reclaim
+    // victims deferred because a guarded bake was still in flight.
+    this._trackMergedWhileParked = 0;
+    this._reclaimDeferredInFlight = 0;
+  }
+
+  // TN-storm fix (2026-07-10 session 7, 1114 §2b root cause): an LB with an
+  // in-flight guarded bake must not be parked — the bake's completion calls
+  // track() AFTER park() detached the containers, leaving the LB in
+  // `entries` AND `parkPool` (dual state), and the next park() of that key
+  // true-disposes the pool copy (the measured 74–614 disposes/run behind
+  // the S6 noDisposeStorm bound). The stream guard's in-flight set
+  // (scene3d._streamGuardState — stream_bake_guard.js; keys
+  // `<kind>:<decimal lbKey>`) is the authoritative "a track() is coming"
+  // signal, and the three loaders call track() INSIDE the guarded run, so
+  // membership here exactly brackets the race window. Victims skipped on
+  // this signal are reclaimed a tick or two later once the bake lands.
+  // Applied under warm-park only: classic evict+re-bake never had the
+  // dual-state hazard, and its battery baseline stays byte-identical.
+  _hasInFlightBake(lbKey) {
+    const inFlight = this.scene3d?._streamGuardState?.inFlight;
+    if (!(inFlight instanceof Set) || inFlight.size === 0) return false;
+    return inFlight.has(`terrain:${lbKey}`)
+      || inFlight.has(`buildings:${lbKey}`)
+      || inFlight.has(`statics:${lbKey}`);
   }
 
   get warmParkEnabled() {
@@ -286,6 +314,25 @@ export class LandblockLRU {
     const now = (typeof performance !== "undefined")
       ? performance.now()
       : Date.now();
+    // TN-storm fix, defensive half (see _hasInFlightBake): a track() that
+    // still lands while the LB is parked (a bake the deferral couldn't see —
+    // an envcell build resolving past its park-time cancellation, a
+    // setup-lights rescan fanning in, a bake that STARTED against a parked
+    // LB's unset kind-mark) must NOT create an `entries` entry next to the
+    // pool copy. Merge the incoming disposables into the parked copy
+    // instead: any containers the caller attached carry this LB's userData
+    // tag, so BOTH pool exits stay consistent — unpark() re-attaches the
+    // stashed containers alongside them and restores the merged disposables
+    // as the entry, while disposeParked()→evict() removes them from the
+    // scene groups by tag and disposes the merged lists. No attach/detach
+    // happens here — the rejected unpark-on-track alternative (1114 §2b)
+    // could duplicate same-kind scene content.
+    const parked = this.parkPool.get(key);
+    if (parked && !this.entries.has(key)) {
+      this._trackMergedWhileParked += 1;
+      this._appendDisposables(parked.disposables, options);
+      return;
+    }
     let entry = this.entries.get(key);
     if (!entry) {
       entry = {
@@ -301,29 +348,36 @@ export class LandblockLRU {
       if (!Array.isArray(entry.disposables.lights)) entry.disposables.lights = [];
       if (!Array.isArray(entry.disposables.instancedNodes)) entry.disposables.instancedNodes = [];
     }
+    this._appendDisposables(entry.disposables, options);
+  }
+
+  // Shared disposable-append for track()'s normal path and its
+  // track-while-parked merge branch. C3 #6 — per-LB SetupModel light
+  // instances so eviction can splice/detach/dispose them synchronously.
+  // C3 #7 — the cross-LB statics InstancedMesh / LOD nodes that cover this
+  // LB so eviction can refcount them (each node carries a
+  // `userData.coversLbKeys` Set; the node's geometry is disposed only when
+  // the LAST covered LB evicts); dedup so re-tracking the same LB
+  // (idempotent re-bake / re-walk) doesn't list a node twice under one
+  // key. Callers omitting any bucket behave exactly as before
+  // (back-compatible).
+  _appendDisposables(d, options) {
+    if (!Array.isArray(d.lights)) d.lights = [];
+    if (!Array.isArray(d.instancedNodes)) d.instancedNodes = [];
     if (Array.isArray(options.geometries)) {
-      for (const g of options.geometries) if (g) entry.disposables.geometries.push(g);
+      for (const g of options.geometries) if (g) d.geometries.push(g);
     }
     if (Array.isArray(options.materials)) {
-      for (const m of options.materials) if (m) entry.disposables.materials.push(m);
+      for (const m of options.materials) if (m) d.materials.push(m);
     }
     if (Array.isArray(options.textures)) {
-      for (const t of options.textures) if (t) entry.disposables.textures.push(t);
+      for (const t of options.textures) if (t) d.textures.push(t);
     }
-    // C3 #6 — track per-LB SetupModel light instances so eviction can
-    // splice/detach/dispose them synchronously. Callers omitting
-    // `options.lights` behave exactly as before (back-compatible).
     if (Array.isArray(options.lights)) {
-      for (const l of options.lights) if (l) entry.disposables.lights.push(l);
+      for (const l of options.lights) if (l) d.lights.push(l);
     }
-    // C3 #7 — track the cross-LB statics InstancedMesh / LOD nodes that
-    // cover this LB so eviction can refcount them (each node carries a
-    // `userData.coversLbKeys` Set; the node's geometry is disposed only
-    // when the LAST covered LB evicts). Dedup so re-tracking the same LB
-    // (idempotent re-bake / re-walk) doesn't list a node twice under one
-    // key. Callers omitting `options.instancedNodes` behave as before.
     if (Array.isArray(options.instancedNodes)) {
-      const bucket = entry.disposables.instancedNodes;
+      const bucket = d.instancedNodes;
       for (const n of options.instancedNodes) {
         if (n && !bucket.includes(n)) bucket.push(n);
       }
@@ -370,6 +424,14 @@ export class LandblockLRU {
         const victims = [];
         for (const key of this.entries.keys()) {
           if (key === keep) continue;
+          // TN-storm fix (see _hasInFlightBake): the sealed purge at TN
+          // entry is exactly where the park↔unpark storm was measured —
+          // an in-flight bake's LB is skipped this tick and purged as a
+          // normal straggler once its completion track() lands.
+          if (this.warmParkEnabled && this._hasInFlightBake(key)) {
+            this._reclaimDeferredInFlight += 1;
+            continue;
+          }
           victims.push(key);
           if (victims.length >= SEALED_EVICT_PER_TICK) break;
         }
@@ -383,7 +445,14 @@ export class LandblockLRU {
       // at least one eviction always runs so the drain can't starve.
       const victims = [];
       for (const key of this.entries.keys()) {
-        if (key !== keep) victims.push(key);
+        if (key === keep) continue;
+        // TN-storm fix (see _hasInFlightBake + the legacy arm above):
+        // defer in-flight-bake LBs to the straggler flow.
+        if (this.warmParkEnabled && this._hasInFlightBake(key)) {
+          this._reclaimDeferredInFlight += 1;
+          continue;
+        }
+        victims.push(key);
       }
       if (victims.length === 0) {
         this._sealedDrainActive = false;
@@ -476,6 +545,13 @@ export class LandblockLRU {
     for (const [key, entry] of this.entries) {
       if (currentLbKey != null && lbChebyshev(currentLbKey, key) <= this.ringFloor) continue;
       if (RECLAIM_MIN_AGE_MS > 0 && nowMs - entry.lastTouchMs < RECLAIM_MIN_AGE_MS) continue;
+      // TN-storm fix: never park an LB whose guarded bake is still in
+      // flight (its completion track() would land next to the pool copy —
+      // see _hasInFlightBake). It ages into a victim a tick or two later.
+      if (this.warmParkEnabled && this._hasInFlightBake(key)) {
+        this._reclaimDeferredInFlight += 1;
+        continue;
+      }
       candidates.push({ key, ts: entry.lastTouchMs });
     }
     candidates.sort((a, b) => a.ts - b.ts);
@@ -958,8 +1034,11 @@ export class LandblockLRU {
     const entry = this.entries.get(lbKey);
     if (!entry) return false;
     if (this.parkPool.has(lbKey)) {
-      // Shouldn't happen (parked LBs have no entries entry) — resolve by
-      // true-disposing the stale pool copy first, then park fresh.
+      // Shouldn't happen (an LB lives in `entries` XOR `parkPool`; the
+      // session-7 TN-storm fix enforces it at both ends — in-flight-bake
+      // victims are deferred and a late track() merges into the pool copy).
+      // Last-resort resolution: true-dispose the stale pool copy first,
+      // then park fresh.
       this.disposeParked(lbKey);
     }
 
@@ -1289,6 +1368,9 @@ export class LandblockLRU {
       reclaimMinAgeMs: RECLAIM_MIN_AGE_MS,
       centerJumps: this._centerJumpsTotal,
       gateHeldTicks: this._gateHeldTicks,
+      // TN-storm fix telemetry (session 7): dual-state near-misses.
+      trackMergedWhileParked: this._trackMergedWhileParked,
+      reclaimDeferredInFlight: this._reclaimDeferredInFlight,
     };
   }
 }

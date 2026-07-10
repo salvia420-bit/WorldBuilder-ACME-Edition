@@ -153,6 +153,12 @@ const sample = () => raced(helpers.evalInPage(() => {
     // settle-stability alone can't tell settled from streaming-starved.
     work: (typeof window.__bakeWorkerSeq === "function") ? window.__bakeWorkerSeq() : null,
     centerJumps: st.centerJumps ?? null, gateHeldTicks: st.gateHeldTicks ?? null,
+    // Session 7 TN-storm-fix telemetry (passive; null on a pre-fix page):
+    // dual-state merges + in-flight reclaim deferrals — a nonzero merge
+    // count with evicted flat is the fix WORKING (the merge replaced a
+    // would-have-been true-dispose).
+    trackMerged: st.trackMergedWhileParked ?? null,
+    reclaimDeferred: st.reclaimDeferredInFlight ?? null,
   };
 }));
 const chat = (c) => raced(helpers.evalInPage((cmd) => { try { window.__sessionHandle.sendChat(cmd); } catch (_) {} }, c));
