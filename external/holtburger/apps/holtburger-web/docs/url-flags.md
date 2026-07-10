@@ -430,6 +430,133 @@ eye-test before being flipped on. Line numbers drift — grep the const name.
 
 ---
 
+## 7. 2026-07-10 backfill — previously-undocumented readers (W3 lint ratchet)
+
+These 78 flags all had live JS readers but no docs row (they predate the docs
+contract; `scripts/lint-url-flags.mjs --strict` now fails on any new one).
+Values columns list exactly the spellings each reader tests — a flag whose
+Values cell says only `off` really does ignore `=0`/`=false`.
+
+### Render / statics / streaming
+
+| Flag | Values | Default | Effect | Where |
+|------|--------|---------|--------|-------|
+| `animScenery` | `off` (escape) | **on** (2026-06-23) | Mesh-animated scenery driver (flags/banners/foliage); off = static scenery only. | scene3d/animated_scenery.js:90 |
+| `animSceneryFps` | N (fps) | 30 | Playback rate for the shared animated-scenery mixers. | scene3d/animated_scenery.js:103 |
+| `animSceneryInstanced` | `off`/`0`/`false`/`no` | **on** | Instanced rendering for animated scenery (one draw per animation DID). | scene3d/animated_scenery.js:124 |
+| `statAtlas` | `off`/`0`/`false`/`no` | **on** | Texture-array atlas for cross-LB static batches (USE_MAP array sampler). | scene3d/static_atlas.js:41 |
+| `statBatchChunk` | `off`/`0`/`false`/`no` | **on** (2026-07-03; measured 2.7× rest / 1.7× moving) | Chunked cross-LB static-batch consolidation. | scene3d/static_batch_x.js:41 |
+| `staticBatch` | `off`/`0`/`false`/`no` | **on** | Per-LB static batching — one Mesh per placement-group-per-surface instead of per placement (~4.5–10× resident-node cut). | scene3d/statics.js:1631 |
+| `staticCallPes` | `off` (escape) | **on** | Ambient CallPES loop on scripted statics (torch/brazier/fountain emitter re-fire). | scene3d/statics.js:3446 |
+| `staticsRingTimeSlice` | `off` (escape) | **on** | ~6 ms time-slice for the statics ring build (macrotask yield). | scene3d/statics.js:2672 |
+| `buildingsRingTimeSlice` | `off` (escape) | **on** | ~6 ms time-slice for the buildings ring build (mirrors the statics F3 slice). | scene3d/buildings.js:118 |
+| `buildingFloorBias` | `off` (escape) | **on** | Coplanar building-floor z-fight bias. SwiftShader resolves coplanar depth deterministically — A/B needs a real GPU. | scene3d/buildings.js:92 |
+| `staticsRadius` | N (0..6) | 6 (`agentic=low` → 1) | Statics streaming ring radius. | scene3d/index.js:197 |
+| `buildingsRadius` | N (0..6) | 6 (`agentic=low` → 1) | Buildings streaming ring radius. | scene3d/index.js:210 |
+| `pvsRingRadius` | N (0..12) | 5 (`agentic=low` → 1) | Indoor/EnvCell PVS streaming ring radius (resident geometry grows as (2N+1)²). | scene3d/index.js:247 |
+| `pvsBakeCap` | N \| `off` | 4 | Cap on concurrent PVS cell bakes; `off` = legacy uncapped fan-out. | scene3d/cells.js:98 |
+| `pvsStreamQueue` | N \| `off` | 6 | Target in-flight depth for the PVS stream-bake queue; `off` = uncapped. | scene3d/cells.js:225 |
+| `bakePrewarm` | `off` (escape) | **on** | Pre-warm shader programs + texture uploads for baked subtrees before attach (legacy = attach-then-lazy-compile). | scene3d/bake_prewarm.js:28 |
+| `anisotropy` | N (≥1) | quality preset (low:1, mid:4, high/ultra:16), clamped to GPU max | Texture-anisotropy cap override for on-device A/B (`=1` reproduces the old smeared look). | scene3d/index.js:907 |
+
+### Materials / surfaces
+
+| Flag | Values | Default | Effect | Where |
+|------|--------|---------|--------|-------|
+| `lightClamp` | `off`/`physical` | **on** (render-audit T1b) | Retail linear light falloff + per-channel colour clamp (colored torches stop washing to white); `off`/`physical` = inverse-square. | scene3d/materials.js:1114 |
+| `flatDiffuse` | `retail` | off | Opts metal/lava surface classes into a non-specular flat PBR look (metalness 0, roughness ~1). | scene3d/materials.js:1136 |
+| `luminousEmissiveMap` | `off`/`0`/`false`/`no` | **on** (2026-06-24) | Dyed-luminous glow-in-colour (emissive map on luminous surfaces). | scene3d/materials.js:1430 |
+| `particleUnlit` | `off`/`0`/`false` | **on** | Unlit particle materials — fixes the flat-lit "white box instead of a particle effect" symptom. | scene3d/materials.js:1473 |
+| `surfaceWrapClamp` | `on` | off (repeat wrap) | Restores the old clamp-to-edge surface-wide texture default for A/B. | scene3d/materials.js:103 |
+
+### Terrain paint / detail
+
+| Flag | Values | Default | Effect | Where |
+|------|--------|---------|--------|-------|
+| `terrainPalette` | `off` (escape) | **on** (2026-06-15) | Subtle per-biome tint from the radar palette (0.25 strength; not the true retail palette). | scene3d/terrain.js:2771 |
+| `terrainDetailTex` | `global`/`percode`/`off` | `global` | Terrain detail-texture layer mode. | scene3d/terrain.js:2794 |
+| `texMerge` | `off` (escape) | **on** | Retail-style terrain texture-merge lane (roads still come from the analytic lane painter). | scene3d/terrain.js:2868 |
+| `texMergeRot` | `flip` | off | Flip variant of the texMerge mask rotation. | scene3d/terrain.js:2638 |
+| `paintMode` | `winner`/`warp` | off (bilinear) | Per-vertex stochastic winner-take-all terrain paint; `warp` adds domain-warped noise with tuned defaults. | scene3d/terrain.js:2569 |
+| `paintNoiseFreq` | N | 8.0 | Paint-noise pattern frequency. | scene3d/terrain.js:2578 |
+| `paintNoiseStrength` | N | 0.4 | How aggressively paint noise overrides bilinear position weight. | scene3d/terrain.js:2588 |
+| `warpAmp` | N | 0.6 under `paintMode=warp`, else 0.0 | Domain-warp amplitude (0 = legacy winner). | scene3d/terrain.js:2601 |
+| `warpFreq` | N | 1.0 | Domain-warp frequency. | scene3d/terrain.js:2614 |
+| `winnerSoftness` | N | 0.3 under `paintMode=warp`, else 0.0 | Softness of the winner-take-all blend. | scene3d/terrain.js:2624 |
+
+### Sky / weather
+
+| Flag | Values | Default | Effect | Where |
+|------|--------|---------|--------|-------|
+| `skyBirds` | `off` (escape) | **on** | Ambient sky-object Swarm particles ("birds in the sky"). | scene3d/sky_dome.js:148 |
+| `skyBirdAlt` | N (m) | 40 | Sky-bird flight altitude. | scene3d/sky_dome.js:160 |
+| `rain` | `on`/`off` | auto (region weather) | Force the rain layer. | scene3d/weather/manager.js:44 |
+| `snow` | `on`/`off` | auto (region weather) | Force the snow layer. | scene3d/weather/manager.js:47 |
+| `lightning` | `on`/`off` | auto (region weather) | Force the lightning layer. | scene3d/weather/manager.js:50 |
+| `skytime` | `accel` | wall-clock UTC | Accelerated sky time-of-day lerp (a full AC day in ~5 min) for e2e sky capture. | index.html:6841 |
+
+### Camera / input
+
+| Flag | Values | Default | Effect | Where |
+|------|--------|---------|--------|-------|
+| `retailCamZoom` | `off` (escape) | **on** | Retail camera zoom continuum / in-head / near-fade (A12-C2/C3). | scene3d/camera.js:503 |
+| `camStiffness` | float 0–1 | built-in | Camera follow-stiffness override. | scene3d/camera.js:504 |
+| `mouseSmooth` | float 0–1 | built-in | Mouse-filter smoothing override. | scene3d/camera.js:507 |
+| `mouseSens` | float (>0) | 1.0 | Mouse-sensitivity multiplier. | scene3d/camera.js:510 |
+| `cmdInterp` | `off` (escape) | **on** | Retail CommandInterpreter input lane — movement keys become InputAction ordinals (ACCmdInterp::OnAction). | scene3d/camera.js:190, index.html:6090 |
+| `retailRunKeys` | `off` (escape) | **on** | Retail ToggleRun XOR Shift + autorun key semantics (A14-I3). | scene3d/input.js:103 |
+
+### Movement / entities / animation
+
+| Flag | Values | Default | Effect | Where |
+|------|--------|---------|--------|-------|
+| `remoteInterp` | `off` (escape) | **on** (2026-06-27, unvalidated — see §banner) | Wasm-side remote-entity interpolation; JS lerp + velocity extrapolation skipped, heading stays JS-owned. | scene3d/entities.js:199, scene3d/loop.js:455 |
+| `rustPose` | `off` (escape) | **on** | Render the local player from the Rust wasm pose (direct-assign mirror + RIG_Z ease). | scene3d/rust_pose.js:40 |
+| `groundClamp` | `off` (escape) | **on** | Lift buried OUTDOOR objects onto the terrain surface (10 cm epsilon, ≤10 m lift; interiors skipped). | scene3d/entities.js:30 |
+| `placementId` | `off` (escape) | **on** (2026-06-27) | Retail wire-placement rest-pose chain (a corpse lies rather than stands; pairs with the B5 death fix). | scene3d/entities.js:82 |
+| `deathAnim` | `off` (escape) | **on** | Bake the Ready→Dead LINK collapse, size the death-hold to the authored collapse length, hand off to the corpse. | scene3d/entities.js:268 |
+| `rootMotionObject` | `off` (escape) | **on** | Root-motion metadata drives the entity anchor (A5-P3). | scene3d/entities.js:251 |
+| `renderRootMotion` | `on` | off (in-place) | Restores baked root motion inside render clips (old behaviour) for A/B. | scene3d/animation.js:114 |
+| `unifiedMotion` | `off`/`shadow`/`attack`/`death`/`door`/`cast`/`missile`/`locomotion`/`on` | all classes EXCEPT locomotion (W6 flip) | Rust `CSequence` motion authority per class — full semantics in the W6 note at the top of this file. | scene3d/animation.js:72, scene3d/entities.js:615, scene3d/motion/motion_sequence.js:60 |
+| `turnOmega` | `off` (escape) | **on** | Retail turn-rate cap toward motion targets (KIND_POSITION heading stash clears the cap). | scene3d/entities.js:432 |
+| `turnOmegaBase` | N (rad/s) | 3.0 | Base turn rate for the `turnOmega` cap. | scene3d/entities.js:441 |
+| `serverSwing` | `off` (escape) | **on** | Play the melee swing at the server-timed (post-MoveTo) echo instead of at click. | scene3d/loop.js:284, scene3d/picking.js:71 |
+| `jumpParity` | `off` (escape) | **on** | Retail jump-charge clock wasm-side + A13 single-send boundary (rides manifest v4; a stale pkg/ degrades to legacy). | index.html:6200 |
+| `longJump` | `off` (escape) | **on** | StandingLongJump charge (soft-guarded; a stale pkg/ degrades to the flat jump). | index.html:6180 |
+| `projectileGravity` | `off` (escape) | **on** | Projectile gravity arc (−9.8 m/s², z-up; soft-guarded on the wasm export). | scene3d/entities.js:996 |
+| `clothingHotSwap` | `off`/`0` | **on** (user ruling) | In-place appearance re-decode on equip/unequip — no despawn+respawn flash. | scene3d/entities.js:2760 |
+| `wieldedSpawn` | `off` (escape) | **on** (index.js overwrites the constructor's off default) | Synthetic KIND_SPAWN + hand-mount for wielded items with no world presence; hides the rig until the attach lands. | scene3d/index.js:2447, scene3d/entities.js:2791 |
+| `spawnHiddenState` | `on` | off | Spawn-hidden kind=17 handling for no-instance rig spawns (pairs with the wasm gate of the same name). | scene3d/entities.js:130 |
+| `preCreateBuffer` | `on` | off | Generic pre-create event buffer — the retail null-object analog (A8-M4). | scene3d/entities.js:155 |
+| `mtQueue` | `off` (escape) | **on** | One-shot overlay COMPLETION across the wasm boundary (AnimationDone, A4-Q2; pre-v4 pkg soft-degrades). | scene3d/entities.js:1187 |
+| `scriptQueue` | `off` (escape) | **on** | Shared PhysicsScript executor queue (A11-S1). | scene3d/entities.js:1127 |
+| `hookDrain` | `off` (escape) | **on** | Retail queue-then-drain for animation-timeline hooks (A5-P1). | scene3d/entities.js:1155 |
+| `defaultScriptSpawn` | `off` (escape) | **on** | Default-script fallback on spawn beyond the 0x33 path (A11-S5/G14). | scene3d/entities.js:1226 |
+| `setupDefaultScript` | `off`/`0`/`false`/`no` | **on** (2026-06-24) | Setup-level `default_script` particle chain on entities (anchored on root, so wield carries it). | scene3d/entities.js:1253 |
+
+### Particles / VFX
+
+| Flag | Values | Default | Effect | Where |
+|------|--------|---------|--------|-------|
+| `particleOwner` | `off` (escape) | **on** | Particle owner registry — retail blocking/replace bookkeeping per owner+script. | scene3d/particles/owner_registry.js:59 |
+| `blockingParticleParity` | `off` (escape) | **on** | Retail blocking semantics for hook-26 emitters (`CreateBlockingParticleEmitter` returns 0, does NOT replace). | scene3d/entities.js:1016, scene3d/play_effect_vfx.js:1677, scene3d/statics.js:3488 |
+| `particleDegrade` | `retail` | off | Authored degrade radii feed the RP6 particle cull (A11-S4). | scene3d/particles/particle_manager.js:183 |
+| `swarmAce` | `on` | off | Legacy ACE-port Swarm trajectory (C demoted to a static offset) for a side-by-side eye-test. | scene3d/particles/particle.js:53 |
+| `itemFx` | `off`/`0`/`false`/`no` | **on** (2026-06-24; still gated by `?visual`) | Authored UiEffects emissive weapon aura (NON-RETAIL). | scene3d/vfx/item_fx.js:25 |
+| `uiEffectIcons` | `off`/`0`/`false`/`no` | **on** (2026-06-24) | UiEffects icon badges. | scene3d/vfx/ui_effects_registry.js:108 |
+
+### Diag / dev
+
+| Flag | Values | Default | Effect | Where |
+|------|--------|---------|--------|-------|
+| `eventLog` | `on`/`off` | off (`?diag=1` implies on) | Diag event ring buffer (scene3d/diag/events.js); explicit `=off` still suppresses under diag. | scene3d/index.js:1293 |
+| `shaderErrorCheck` | `on` | off (perf) | three.js shader error checking — a broken shader logs the GLSL info log instead of a raw GL error. | scene3d/index.js:788 |
+| `syncPhysicsTick` | `off` (escape) | **on** | Frame-top tickMovement enqueue + microtask flush before tickPerFrame (A1-O3). | scene3d/index.js:736 |
+| `syncTickDiag` | `1` | off | Sync-tick diag counters (adds two extra wasm boundary crossings per frame). | scene3d/index.js:746 |
+| `posePublishPostTick` | `on` | off | Publish the local pose after the integrator tick — the same-frame contract needs it alongside `syncPhysicsTick` (A1-O2). | scene3d/index.js:753 |
+
+---
+
 ## Possible hardening (not yet implemented)
 
 The remote-bridge failure above is a footgun: omit `bridge_url` and it silently
