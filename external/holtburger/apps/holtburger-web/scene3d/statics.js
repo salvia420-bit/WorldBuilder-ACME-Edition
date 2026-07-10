@@ -3562,6 +3562,14 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
   ) {
     return null;
   }
+  // Phase 9a warm-park: expose the anchor-driven emitter rebuild for
+  // landblock_lru.unpark() (zero-import leaf — same facade pattern as the
+  // evictor above). Installed only past the wasm check: the rebuild replays
+  // `_runStaticParticleChain`, which needs live wasm fetchers. Idempotent.
+  if (typeof scene3d._rebuildStaticParticlesForAnchors !== "function") {
+    scene3d._rebuildStaticParticlesForAnchors = (anchors) =>
+      rebuildStaticScriptEmittersForAnchors(scene3d, anchors, wasmExports);
+  }
   const { ParticleManager } = await import("./particles/index.js");
   const adapter = await import("./adapter.js");
   const meshToGeometryGroups = adapter.meshToGeometryGroups;
@@ -4119,6 +4127,56 @@ export function _evictStaticParticlesForLb(lbKeyOrId) {
   // is char-for-char identical to the attach key (no drift → no persistent leak).
   const key = staticOwnerKeyForLb(lbKeyOrId);
   try { ownerRegistry.destroyAllForOwner(key); } catch (_) { /* fail-soft */ }
+}
+
+/**
+ * Phase 9a warm-park unpark seam (W4 §3.3 item 4): rebuild static
+ * default_script emitters from STASHED anchors. park() destroys an LB's
+ * emitters (they tick per frame) but the anchors — Groups stamped with
+ * `{ isStaticScriptAnchor, defaultScriptId, landblockId, particleOwnerKey }`
+ * — ride the detached subtrees into the pool; unpark re-attaches them and
+ * calls this to re-run `_runStaticParticleChain` per anchor. Time-sliced
+ * like the bake-time attach, and carries the R-10 residency guard (an
+ * unpark can race a re-park/evict: a re-detached anchor or a no-longer-
+ * resident LB is skipped, matching the attach path's drop semantics).
+ */
+export async function rebuildStaticScriptEmittersForAnchors(scene3d, anchors, wasmExports) {
+  if (!Array.isArray(anchors) || anchors.length === 0) return 0;
+  const manager = await _ensureStaticParticleManager(scene3d, wasmExports);
+  if (!manager) return 0;
+  const lbLive = (lbId) => {
+    const key = lbKeyOf(lbId >>> 0);
+    return (
+      (scene3d.staticsBakedLbs instanceof Set && scene3d.staticsBakedLbs.has(key)) ||
+      (scene3d.envCellLoadedLbs instanceof Set && scene3d.envCellLoadedLbs.has(key))
+    );
+  };
+  let emitters = 0;
+  let sliceStart = performance.now();
+  for (const anchor of anchors) {
+    const ud = anchor?.userData;
+    if (!ud?.isStaticScriptAnchor) continue;
+    const pesId = ud.defaultScriptId >>> 0;
+    if (!pesId) continue;
+    if (!anchor.parent || !lbLive(ud.landblockId >>> 0)) continue; // R-10
+    // eslint-disable-next-line no-await-in-loop
+    emitters += await _runStaticParticleChain(
+      manager,
+      anchor,
+      pesId,
+      wasmExports,
+      ud.particleOwnerKey ?? null
+    );
+    if (
+      STATIC_SCRIPT_SLICE_ON &&
+      performance.now() - sliceStart > STATIC_SCRIPT_SLICE_MS
+    ) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 0));
+      sliceStart = performance.now();
+    }
+  }
+  return emitters;
 }
 
 /** Tear down the static ParticleManager + its rAF. Idempotent. */

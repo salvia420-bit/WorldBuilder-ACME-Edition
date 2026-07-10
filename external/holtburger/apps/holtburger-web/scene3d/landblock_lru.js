@@ -51,6 +51,51 @@ const SEALED_EVICT_BURST_ON = (() => {
   }
 })();
 
+// Phase 9a warm-park eviction (W4 residency design §3, 2026-07-10).
+// `?warmPark=on`: eviction PARKS instead of disposing — containers detach
+// from the scene groups into a byte-budgeted pool, baked marks and the wasm
+// collision stay, and re-entry re-ATTACHES instead of re-baking (retail's
+// DBOCache freelist applied at our built-render-state layer). True dispose
+// happens only under pool budget pressure, farthest/oldest first, amortized.
+// Default OFF until the 1070 eye-test gate passes (house default-ON bar);
+// `?warmParkBudgetMb=N` tunes the pool (default 256 MB — counts CPU *and*
+// GPU residency: detached objects keep their GL buffers until dispose()).
+const WARM_PARK_ON = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("warmPark");
+    return v === "on" || v === "1" || v === "true";
+  } catch (_) {
+    return false;
+  }
+})();
+const WARM_PARK_BUDGET_BYTES = (() => {
+  try {
+    const v = parseInt(
+      new URLSearchParams(window.location?.search || "").get("warmParkBudgetMb") ?? "",
+      10,
+    );
+    return (Number.isFinite(v) && v > 0 ? v : 256) * 1024 * 1024;
+  } catch (_) {
+    return 256 * 1024 * 1024;
+  }
+})();
+// Amortize true-dispose from the pool (retail §1.3 style: eviction work per
+// tick is bounded; the pool absorbs the burst).
+const WARM_PARK_MAX_DISPOSE_PER_TICK = 2;
+// The two cross-LB consolidators (both default-OFF) excise per-LB geometry
+// destructively — park has no hide/show seam for them in v1, so their
+// presence downgrades park to classic evict (correctness first; see W4
+// §3.6 risk table).
+const WARM_PARK_SUPPORTED = (() => {
+  try {
+    const ps = new URLSearchParams(window.location?.search || "");
+    const on = (v) => v === "on" || v === "1" || v === "true";
+    return !(on(ps.get("statBatchCrossLb")) || on(ps.get("terrainBatch")));
+  } catch (_) {
+    return true;
+  }
+})();
+
 function lbKeyFromXY(lbX, lbY) {
   return (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
 }
@@ -140,6 +185,21 @@ export class LandblockLRU {
 
     this._evictedTotal = 0;
     this._lastEvictedLbKey = null;
+
+    // Phase 9a warm-park pool: Map<lbKey, ParkedLb> (see park() for shape).
+    this.parkPool = new Map();
+    this.parkedBytes = 0;
+    this.parkBudgetBytes = WARM_PARK_BUDGET_BYTES;
+    this._parkedTotal = 0;
+    this._unparkedTotal = 0;
+  }
+
+  get warmParkEnabled() {
+    return WARM_PARK_ON && WARM_PARK_SUPPORTED;
+  }
+
+  isParked(lbKey) {
+    return this.parkPool.has(lbKeyOf(lbKey >>> 0));
   }
 
   // Register an LB as resident. Idempotent — re-tracking the same lbKey
@@ -229,14 +289,16 @@ export class LandblockLRU {
       const keep = lbKeyOf(sealedKeepLbKeyArg >>> 0);
       if (!SEALED_EVICT_BURST_ON) {
         // Legacy `?sealedEvictBurst=off` arm — the 2026-07-08 24/frame
-        // count staircase, byte-identical.
+        // count staircase, byte-identical (park substitutes per-victim
+        // reclaim under ?warmPark=on; order unchanged).
         const victims = [];
         for (const key of this.entries.keys()) {
           if (key === keep) continue;
           victims.push(key);
           if (victims.length >= SEALED_EVICT_PER_TICK) break;
         }
-        for (const key of victims) this.evict(key);
+        for (const key of victims) this._reclaim(key);
+        this._tickParkPoolPressure(keep);
         return;
       }
       // R-12 time-budgeted drain. First tick after seal gets the big
@@ -249,7 +311,14 @@ export class LandblockLRU {
       }
       if (victims.length === 0) {
         this._sealedDrainActive = false;
+        this._tickParkPoolPressure(keep);
         return;
+      }
+      // Phase 9a (W4 §3.4): under warm-park, reclaim in DESCENDING Chebyshev
+      // distance from the keep-LB — under later budget pressure the LBs
+      // nearest the hub (the return path) park last and dispose last.
+      if (this.warmParkEnabled) {
+        victims.sort((a, b) => lbChebyshev(keep, b) - lbChebyshev(keep, a));
       }
       const budgetMs = this._sealedDrainActive
         ? SEALED_STEADY_BUDGET_MS
@@ -262,11 +331,12 @@ export class LandblockLRU {
       const t0 = performance.now();
       let evicted = 0;
       for (const key of victims) {
-        this.evict(key, buckets);
+        this._reclaim(key, buckets);
         evicted += 1;
         if (performance.now() - t0 > budgetMs) break;
       }
       if (evicted >= victims.length) this._sealedDrainActive = false;
+      this._tickParkPoolPressure(keep);
       return;
     }
     // Not sealed (or no longer sealed): re-arm the first-burst budget for
@@ -303,8 +373,38 @@ export class LandblockLRU {
     let toEvict = this.entries.size - this.maxResident;
     for (const c of candidates) {
       if (toEvict <= 0) break;
-      this.evict(c.key);
+      this._reclaim(c.key);
       toEvict -= 1;
+    }
+    this._tickParkPoolPressure(currentLbKey);
+  }
+
+  // Phase 9a: one reclaim = park (warm) or evict (classic), by flag.
+  _reclaim(lbKey, buckets = null) {
+    if (this.warmParkEnabled) return this.park(lbKey, buckets);
+    return this.evict(lbKey, buckets);
+  }
+
+  // Phase 9a pool-pressure pass: true-dispose parked LBs until the pool fits
+  // the byte budget — farthest-from-player first, oldest breaking ties,
+  // amortized to ≤ WARM_PARK_MAX_DISPOSE_PER_TICK per tick (retail §1.3
+  // style: bounded eviction work per frame).
+  _tickParkPoolPressure(refLbKey) {
+    if (this.parkPool.size === 0 || this.parkedBytes <= this.parkBudgetBytes) return;
+    const ref = refLbKey != null ? lbKeyOf(refLbKey >>> 0) : null;
+    const order = [...this.parkPool.entries()].sort((a, b) => {
+      if (ref != null) {
+        const d = lbChebyshev(ref, b[0]) - lbChebyshev(ref, a[0]);
+        if (d !== 0) return d;
+      }
+      return a[1].parkedAtMs - b[1].parkedAtMs;
+    });
+    let disposed = 0;
+    for (const [key] of order) {
+      if (this.parkedBytes <= this.parkBudgetBytes) break;
+      if (disposed >= WARM_PARK_MAX_DISPOSE_PER_TICK) break;
+      this.disposeParked(key);
+      disposed += 1;
     }
   }
 
@@ -514,7 +614,12 @@ export class LandblockLRU {
     //    `__cacheOwned` (shared MaterialCache surfaces) defensively
     //    even though track() callers shouldn't be passing those in.
     for (const g of entry.disposables.geometries) {
-      try { g?.dispose && g.dispose(); } catch (_) {}
+      if (!g) continue;
+      // A11-F3 (landed with Phase 9a): honor the __cacheOwned tag on
+      // geometries too — the comment above always claimed it, and park
+      // widens the population flowing through this loop.
+      if (g.userData?.__cacheOwned === true) continue;
+      try { g.dispose && g.dispose(); } catch (_) {}
     }
     for (const m of entry.disposables.materials) {
       if (!m) continue;
@@ -692,6 +797,321 @@ export class LandblockLRU {
     return true;
   }
 
+  // ── Phase 9a warm-park (W4 §3) ────────────────────────────────────────────
+
+  // Byte estimate for a ParkedLb: geometry attribute arrays (deduped by
+  // uuid) across every stashed subtree + tracked DataTexture payloads. This
+  // counts CPU *and* GPU residency — detached three.js objects keep their GL
+  // buffers until dispose(), so the pool budget is a VRAM budget too.
+  _estimateParkedBytes(p) {
+    let bytes = 0;
+    const seenGeom = new Set();
+    const addGeom = (g) => {
+      if (!g || seenGeom.has(g.uuid)) return;
+      seenGeom.add(g.uuid);
+      try {
+        for (const name of Object.keys(g.attributes || {})) {
+          bytes += g.attributes[name]?.array?.byteLength || 0;
+        }
+        bytes += g.index?.array?.byteLength || 0;
+      } catch (_) {}
+    };
+    const walk = (root) => {
+      try {
+        root.traverse((o) => {
+          if (o.geometry) addGeom(o.geometry);
+          if (Array.isArray(o.levels)) {
+            for (const lvl of o.levels) if (lvl?.object?.geometry) addGeom(lvl.object.geometry);
+          }
+        });
+      } catch (_) {}
+    };
+    for (const c of p.terrain) walk(c);
+    for (const c of p.buildings) walk(c);
+    for (const c of p.statics) walk(c);
+    for (const [, container] of p.cells) walk(container);
+    for (const g of p.disposables?.geometries || []) addGeom(g);
+    for (const t of p.disposables?.textures || []) {
+      try { bytes += t?.image?.data?.byteLength || 0; } catch (_) {}
+    }
+    return bytes;
+  }
+
+  // Park an LB: detach its containers from the scene groups (evict steps
+  // ①–④ minus every dispose), stash the refs in the pool, KEEP the baked
+  // marks / spawns idempotency / wasm collision. Re-entry re-attaches via
+  // unpark() (the loaders' baked-mark fast-path is the seam). Per-frame
+  // tickers that can't be frozen (static script emitters) are destroyed and
+  // rebuilt on unpark from the stashed anchors.
+  park(lbKeyArg, _buckets = null) {
+    const lbKey = lbKeyOf(lbKeyArg >>> 0);
+    const entry = this.entries.get(lbKey);
+    if (!entry) return false;
+    if (this.parkPool.has(lbKey)) {
+      // Shouldn't happen (parked LBs have no entries entry) — resolve by
+      // true-disposing the stale pool copy first, then park fresh.
+      this.disposeParked(lbKey);
+    }
+
+    const s = this.scene3d;
+    const lbX = (lbKey >>> 24) & 0xff;
+    const lbY = (lbKey >>> 16) & 0xff;
+    const bucket = _buckets
+      ? _buckets.get(lbKey) || { terrain: [], buildings: [], statics: [], cells: [] }
+      : null;
+
+    const p = {
+      parkedAtMs: (typeof performance !== "undefined") ? performance.now() : Date.now(),
+      bytes: 0,
+      terrain: [],
+      buildings: [],
+      statics: [],
+      cells: [],
+      detachedLights: [], // [light, parent] for lights parented OUTSIDE the stashed subtrees
+      parkedTerrainMats: [],
+      disposables: entry.disposables,
+    };
+
+    // ① terrain (incl. wire-fill companions — same lbX/lbY tag).
+    if (bucket) {
+      p.terrain = [...bucket.terrain];
+    } else if (s.terrainGroup?.children) {
+      for (const c of s.terrainGroup.children) {
+        const ud = c.userData;
+        if (ud && ud.lbX === lbX && ud.lbY === lbY) p.terrain.push(c);
+      }
+    }
+    for (const c of p.terrain) { try { s.terrainGroup?.remove(c); } catch (_) {} }
+
+    // ② buildings (+ buildingMap3d bookkeeping, restored on unpark).
+    if (bucket) {
+      p.buildings = [...bucket.buildings];
+    } else if (s.buildingsGroup?.children) {
+      for (const c of s.buildingsGroup.children) {
+        const lb = c.userData?.landblockId;
+        if (lb != null && lbKeyOf(lb >>> 0) === lbKey) p.buildings.push(c);
+      }
+    }
+    for (const c of p.buildings) {
+      try { s.buildingsGroup?.remove(c); } catch (_) {}
+      const k = c.userData?.placementKey;
+      if (k && s.buildingMap3d instanceof Map) s.buildingMap3d.delete(k);
+    }
+
+    // ③ statics — singletons, ?staticBatch BatchedMesh consolidations AND
+    //   the static-script anchors (all carry userData.landblockId). NOTHING
+    //   is disposed; the BatchedMesh keeps its GPU buffers (that's the point).
+    if (bucket) {
+      p.statics = [...bucket.statics];
+    } else if (s.staticsGroup?.children) {
+      for (const c of s.staticsGroup.children) {
+        const lb = c.userData?.landblockId;
+        if (lb != null && lbKeyOf(lb >>> 0) === lbKey) p.statics.push(c);
+      }
+    }
+    for (const c of p.statics) { try { s.staticsGroup?.remove(c); } catch (_) {} }
+
+    // ④ EnvCells.
+    if (s.cellContainers3d instanceof Map && s.cellsGroup) {
+      if (bucket) {
+        p.cells = [...bucket.cells];
+      } else {
+        for (const [cellId, container] of s.cellContainers3d) {
+          if (lbKeyOf(cellId >>> 0) === lbKey) p.cells.push([cellId, container]);
+        }
+      }
+      for (const [cellId, container] of p.cells) {
+        try { s.cellsGroup.remove(container); } catch (_) {}
+        s.cellContainers3d.delete(cellId);
+      }
+    }
+    // Cancel any in-flight envcell build exactly like evict does — a build
+    // resolving after park would attach cells the pool also holds.
+    if (s.envCellBuildInFlight instanceof Set) s.envCellBuildInFlight.delete(lbKey);
+    if (s.envCellBuildGen instanceof Map) s.envCellBuildGen.delete(lbKey);
+
+    // ⑤b lights: splice from activeLights (the capper must not sort parked
+    // lights) but do NOT dispose. A light parented inside a stashed subtree
+    // rides along; one parented elsewhere is detached and remembered.
+    const stashRoots = new Set([...p.terrain, ...p.buildings, ...p.statics]);
+    for (const [, container] of p.cells) stashRoots.add(container);
+    const insideStash = (obj) => {
+      for (let o = obj; o; o = o.parent) if (stashRoots.has(o)) return true;
+      return false;
+    };
+    const tracked = entry.disposables.lights;
+    if (Array.isArray(tracked)) {
+      for (const light of tracked) {
+        if (!light) continue;
+        try {
+          const idx = Array.isArray(s.activeLights) ? s.activeLights.indexOf(light) : -1;
+          if (idx !== -1) s.activeLights.splice(idx, 1);
+        } catch (_) {}
+        try {
+          if (light.parent && !insideStash(light)) {
+            p.detachedLights.push([light, light.parent]);
+            light.parent.remove(light);
+          }
+        } catch (_) {}
+      }
+    }
+
+    // ⑦ terrainMaterials registry: parked ShaderMaterials must not receive
+    // the per-rAF uTime push; remember exactly which ones we filtered.
+    if (Array.isArray(s.terrainMaterials) && entry.disposables.materials.length > 0) {
+      const mine = new Set(entry.disposables.materials);
+      p.parkedTerrainMats = s.terrainMaterials.filter((m) => mine.has(m));
+      if (p.parkedTerrainMats.length > 0) {
+        s.terrainMaterials = s.terrainMaterials.filter((m) => !mine.has(m));
+      }
+    }
+
+    // Static script emitters tick per frame — destroy now (same as evict),
+    // rebuild on unpark from the stashed anchors (they carry
+    // defaultScriptId + particleOwnerKey + landblockId in userData).
+    if (typeof s._evictStaticParticlesForLb === "function") {
+      try { s._evictStaticParticlesForLb(lbKey); } catch (_) {}
+    }
+    // ?statAtlas members: hide, keep membership (nothing deleted → the
+    // optimize() compactor is untouched). Facade installed by index.js.
+    if (typeof s._parkStaticAtlasForLb === "function") {
+      try { s._parkStaticAtlasForLb(lbKey); } catch (_) {}
+    }
+
+    // KEPT deliberately (the whole point of park): baked marks (step ⑥),
+    // spawns idempotency, wasm collision (`_onEvictLandblock` NOT fired).
+
+    p.bytes = this._estimateParkedBytes(p);
+    this.entries.delete(lbKey);
+    this.parkPool.set(lbKey, p);
+    this.parkedBytes += p.bytes;
+    this._parkedTotal += 1;
+    if (this.debug) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[lbLru/park] id=0x${lbKey.toString(16).padStart(8, "0")} ` +
+        `bytes=${p.bytes} pool=${this.parkPool.size} poolBytes=${this.parkedBytes}`
+      );
+    }
+    return true;
+  }
+
+  // Re-attach a parked LB. The baked marks never cleared, so the loaders'
+  // fast-path (which calls this) short-circuits the re-bake; this is a pure
+  // re-attach — no decode, no geometry build, no wasm collision insert.
+  unpark(lbKeyArg) {
+    const lbKey = lbKeyOf(lbKeyArg >>> 0);
+    const p = this.parkPool.get(lbKey);
+    if (!p) return false;
+    const s = this.scene3d;
+
+    for (const c of p.terrain) { try { s.terrainGroup?.add(c); } catch (_) {} }
+    for (const c of p.buildings) {
+      try { s.buildingsGroup?.add(c); } catch (_) {}
+      const k = c.userData?.placementKey;
+      if (k && s.buildingMap3d instanceof Map) s.buildingMap3d.set(k, c);
+    }
+    for (const c of p.statics) { try { s.staticsGroup?.add(c); } catch (_) {} }
+    if (s.cellContainers3d instanceof Map && s.cellsGroup) {
+      for (const [cellId, container] of p.cells) {
+        try { s.cellsGroup.add(container); } catch (_) {}
+        s.cellContainers3d.set(cellId, container);
+      }
+    }
+    for (const [light, parent] of p.detachedLights) {
+      try { parent.add(light); } catch (_) {}
+    }
+    // Re-register the LB's lights with the capper.
+    const lights = p.disposables?.lights;
+    if (Array.isArray(lights) && Array.isArray(s.activeLights)) {
+      for (const light of lights) {
+        if (light && !s.activeLights.includes(light)) s.activeLights.push(light);
+      }
+    }
+    if (p.parkedTerrainMats.length > 0 && Array.isArray(s.terrainMaterials)) {
+      for (const m of p.parkedTerrainMats) {
+        if (!s.terrainMaterials.includes(m)) s.terrainMaterials.push(m);
+      }
+    }
+    if (typeof s._unparkStaticAtlasForLb === "function") {
+      try { s._unparkStaticAtlasForLb(lbKey); } catch (_) {}
+    }
+    // Rebuild the static script emitters from the stashed anchors (statics
+    // children AND interior anchors inside cell containers — both stamp
+    // userData.isStaticScriptAnchor). Fire-and-forget: the rebuild is
+    // time-sliced in statics.js and carries the R-10 residency guard.
+    if (typeof s._rebuildStaticParticlesForAnchors === "function") {
+      const anchors = [];
+      const collect = (root) => {
+        try {
+          root.traverse((o) => { if (o.userData?.isStaticScriptAnchor) anchors.push(o); });
+        } catch (_) {}
+      };
+      for (const c of p.statics) collect(c);
+      for (const [, container] of p.cells) collect(container);
+      if (anchors.length > 0) {
+        try { s._rebuildStaticParticlesForAnchors(anchors); } catch (_) {}
+      }
+    }
+
+    this.parkPool.delete(lbKey);
+    this.parkedBytes = Math.max(0, this.parkedBytes - p.bytes);
+    this._unparkedTotal += 1;
+    const now = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    this.entries.set(lbKey, { lastTouchMs: now, disposables: p.disposables });
+    if (this.debug) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[lbLru/unpark] id=0x${lbKey.toString(16).padStart(8, "0")} ` +
+        `pool=${this.parkPool.size} poolBytes=${this.parkedBytes}`
+      );
+    }
+    return true;
+  }
+
+  // True-dispose a parked LB (pool budget pressure / flushParked). Re-enters
+  // the pool copy as a normal entry and runs today's evict against it — the
+  // scene-group scans find nothing (already detached), and every teardown
+  // contract (disposables, 5c refcount, mark clears, facades, wasm collision
+  // clear) fires exactly as a classic eviction. Park is strictly an
+  // interposed state (W4 §3.2).
+  disposeParked(lbKeyArg) {
+    const lbKey = lbKeyOf(lbKeyArg >>> 0);
+    const p = this.parkPool.get(lbKey);
+    if (!p) return false;
+    // The stashed ?staticBatch BatchedMesh consolidations are detached, so
+    // evict's staticsGroup scan can't dispose them — do it here.
+    for (const c of p.statics) {
+      if (c?.isBatchedMesh && typeof c.dispose === "function") {
+        try { c.dispose(); } catch (_) {}
+      }
+    }
+    // Detached lights outside stash roots were already removed from their
+    // parents at park; evict's 5b dispose covers them via disposables.lights.
+    this.parkPool.delete(lbKey);
+    this.parkedBytes = Math.max(0, this.parkedBytes - p.bytes);
+    this.entries.set(lbKey, { lastTouchMs: 0, disposables: p.disposables });
+    const ok = this.evict(lbKey);
+    // cellContainers3d entries were removed at park; per-LB envcell
+    // geometry disposal rode disposables, matching classic evict.
+    if (this.debug && ok) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[lbLru/disposeParked] id=0x${lbKey.toString(16).padStart(8, "0")} ` +
+        `pool=${this.parkPool.size} poolBytes=${this.parkedBytes}`
+      );
+    }
+    return ok;
+  }
+
+  // WorldBuilder live-rebake analog of retail KeepFreeObjects(false):
+  // true-dispose the whole pool (parked state would be stale after a
+  // manifest change; sessions are manifest-immutable so this is only for
+  // explicit flows).
+  flushParked() {
+    for (const key of [...this.parkPool.keys()]) this.disposeParked(key);
+  }
+
   /**
    * Snapshot the WebGLRenderer's program cache + memory counters to
    * `window.__diag.renderer.evictionProgramSnapshots` (ring buffer cap
@@ -737,6 +1157,7 @@ export class LandblockLRU {
   }
 
   dispose() {
+    this.flushParked();
     const keys = [...this.entries.keys()];
     for (const k of keys) this.evict(k);
   }
@@ -747,6 +1168,11 @@ export class LandblockLRU {
       evicted: this._evictedTotal,
       lastEvictedLbId: this._lastEvictedLbKey,
       maxResident: this.maxResident,
+      warmPark: this.warmParkEnabled,
+      parked: this.parkPool.size,
+      parkedBytes: this.parkedBytes,
+      parkedTotal: this._parkedTotal,
+      unparkedTotal: this._unparkedTotal,
     };
   }
 }

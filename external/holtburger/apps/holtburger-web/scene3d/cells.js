@@ -402,6 +402,12 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
 
   const lbKey = (landblockId & 0xffff_0000) >>> 0;
   if (scene3d.envCellLoadedLbs.has(lbKey)) {
+    // Phase 9a warm-park: the loaded mark stays set while parked, so this
+    // idempotent short-circuit is the envcell unpark seam (mirrors the
+    // terrain/buildings/statics fast-paths in index.js).
+    try {
+      if (scene3d.landblockLru?.isParked?.(lbKey)) scene3d.landblockLru.unpark(lbKey);
+    } catch (_) {}
     return {
       landblockId: lbKey,
       cellCount: 0,

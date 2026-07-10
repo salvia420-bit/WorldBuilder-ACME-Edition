@@ -457,6 +457,9 @@ Values cell says only `off` really does ignore `=0`/`=false`.
 | `pvsBakeCap` | N \| `off` | 4 | Cap on concurrent PVS cell bakes; `off` = legacy uncapped fan-out. | scene3d/cells.js:98 |
 | `pvsStreamQueue` | N \| `off` | 6 | Target in-flight depth for the PVS stream-bake queue; `off` = uncapped. | scene3d/cells.js:225 |
 | `bakePrewarm` | `off` (escape) | **on** | Pre-warm shader programs + texture uploads for baked subtrees before attach (legacy = attach-then-lazy-compile). | scene3d/bake_prewarm.js:28 |
+| `warmPark` | `on`/`1`/`true` | off (pending 1070 eye-gate) | Phase 9a warm-park eviction (W4 residency design §3): eviction detaches an LB's containers into a byte-budgeted pool instead of disposing; baked marks + wasm collision kept; re-entry re-attaches instead of re-baking. Requires streamFix (default-on); auto-downgrades to classic evict if `statBatchCrossLb`/`terrainBatch` are on. | scene3d/landblock_lru.js |
+| `warmParkBudgetMb` | N (MB) | 256 | Byte budget for the warm-park pool (counts CPU **and** GPU residency — detached objects keep GL buffers). Over budget → true-dispose farthest/oldest, ≤2 per tick. | scene3d/landblock_lru.js |
+| `statBatchCrossLb` | `on`/`1`/`true` | off | Cross-LB consolidation of the per-LB `?staticBatch` batches (Track D — full semantics in the 2026-07-02 section below). Also read by warm-park, which downgrades to classic evict while this is on. | scene3d/static_batch_x.js, scene3d/landblock_lru.js |
 | `anisotropy` | N (≥1) | quality preset (low:1, mid:4, high/ultra:16), clamped to GPU max | Texture-anisotropy cap override for on-device A/B (`=1` reproduces the old smeared look). | scene3d/index.js:907 |
 
 ### Materials / surfaces

@@ -456,7 +456,7 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       const lbKey = _lbKeyOfId(n.userData?.landblockId);
       let list = _lbMembership.get(lbKey);
       if (!list) { list = []; _lbMembership.set(lbKey, list); }
-      list.push({ bucketKey, gid, texUuid: uuid });
+      list.push({ bucketKey, gid, iid, texUuid: uuid }); // iid: Phase 9a park hide/show seam
       fedLbs.add(lbKey);
       // free the consumed source geometry's GPU buffer (mirrors the merge path).
       try { n.geometry?.dispose?.(); } catch (_) {}
@@ -499,6 +499,42 @@ export function evictStaticAtlasForLb(lbKey) {
   }
   _lbMembership.delete(key);
   _atlasBakedLbs.delete(key);
+}
+
+/**
+ * Phase 9a warm-park (W4 §3.2): hide an LB's atlas instances WITHOUT
+ * deleting geometry — `setVisibleAt(iid, false)` per membership entry.
+ * Membership, gids and texture-layer refs are all retained, and the bucket
+ * is NOT marked dirty (nothing deleted → the optimize() compactor stays
+ * untouched). Pre-iid membership entries (a live session that fed before
+ * this landed) are skipped fail-soft — worst case those instances stay
+ * visible while parked, never the reverse.
+ */
+export function parkStaticAtlasForLb(lbKey) {
+  const list = _lbMembership.get(lbKey >>> 0);
+  if (!list) return 0;
+  let hidden = 0;
+  for (const m of list) {
+    if (m.iid == null) continue;
+    const b = _buckets.get(m.bucketKey);
+    if (!b) continue;
+    try { b.bm.setVisibleAt(m.iid, false); hidden += 1; } catch (_) {}
+  }
+  return hidden;
+}
+
+/** Phase 9a: show a parked LB's atlas instances again (see parkStaticAtlasForLb). */
+export function unparkStaticAtlasForLb(lbKey) {
+  const list = _lbMembership.get(lbKey >>> 0);
+  if (!list) return 0;
+  let shown = 0;
+  for (const m of list) {
+    if (m.iid == null) continue;
+    const b = _buckets.get(m.bucketKey);
+    if (!b) continue;
+    try { b.bm.setVisibleAt(m.iid, true); shown += 1; } catch (_) {}
+  }
+  return shown;
 }
 
 /**

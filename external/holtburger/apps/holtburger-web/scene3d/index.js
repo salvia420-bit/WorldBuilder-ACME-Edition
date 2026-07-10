@@ -46,7 +46,11 @@ import {
 // specifier statics.js uses (no ?v=) so it is the SAME module instance → shares
 // _lbMembership state. Wired onto liveScene3d at LRU construction so the LRU's
 // evict always finds it (closes the boot-ring-before-first-per-LB-feed identity gap).
-import { evictStaticAtlasForLb } from "./static_atlas.js";
+import {
+  evictStaticAtlasForLb,
+  parkStaticAtlasForLb,
+  unparkStaticAtlasForLb,
+} from "./static_atlas.js";
 // ?statBatchCrossLb (default-OFF) — same deterministic-wiring story as
 // evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
 // buckets (plain specifier everywhere → one module instance → shared state).
@@ -2893,6 +2897,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         this.terrainBakedLbs instanceof Set &&
         this.terrainBakedLbs.has(lbKeyForLru)
       ) {
+        // Phase 9a warm-park: marks stay set while parked, so this
+        // fast-path IS the unpark seam — re-attach instead of re-bake.
+        try {
+          if (this.landblockLru?.isParked?.(lbKeyForLru)) this.landblockLru.unpark(lbKeyForLru);
+        } catch (_) {}
         try { this.landblockLru?.touch?.(lbKeyForLru); } catch (_) {}
         return Promise.resolve(null);
       }
@@ -2988,6 +2997,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         this.buildingsBakedLbs instanceof Set &&
         this.buildingsBakedLbs.has(lbKeyForLru)
       ) {
+        // Phase 9a warm-park: see loadTerrainForLandblock.
+        try {
+          if (this.landblockLru?.isParked?.(lbKeyForLru)) this.landblockLru.unpark(lbKeyForLru);
+        } catch (_) {}
         try { this.landblockLru?.touch?.(lbKeyForLru); } catch (_) {}
         return Promise.resolve(null);
       }
@@ -3032,6 +3045,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         this.staticsBakedLbs instanceof Set &&
         this.staticsBakedLbs.has(lbKeyForLru)
       ) {
+        // Phase 9a warm-park: see loadTerrainForLandblock.
+        try {
+          if (this.landblockLru?.isParked?.(lbKeyForLru)) this.landblockLru.unpark(lbKeyForLru);
+        } catch (_) {}
         try { this.landblockLru?.touch?.(lbKeyForLru); } catch (_) {}
         return Promise.resolve(null);
       }
@@ -4302,6 +4319,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // is module-stateful and a no-op for an LB with no atlas membership, so this is safe
     // even with ?statAtlas=off (nothing was ever fed → nothing to excise).
     liveScene3d._evictStaticAtlasForLb = evictStaticAtlasForLb;
+    // Phase 9a warm-park: hide/show seam for parked LBs' atlas instances
+    // (setVisibleAt; membership retained — see static_atlas.js).
+    liveScene3d._parkStaticAtlasForLb = parkStaticAtlasForLb;
+    liveScene3d._unparkStaticAtlasForLb = unparkStaticAtlasForLb;
     // ?statBatchCrossLb — same deterministic wiring for the cross-LB per-material
     // ?staticBatch buckets. evictStaticBatchXForLb is module-stateful and a no-op
     // for an LB with no membership, so this is safe with the flag off (default —
