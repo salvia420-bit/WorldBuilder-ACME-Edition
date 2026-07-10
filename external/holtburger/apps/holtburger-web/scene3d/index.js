@@ -57,6 +57,7 @@ import { buildEnvCellsForLandblock } from "./cells.js";
 // `fetch_landblock_scenery` DAT-baked). See `scene3d/spawns.js`'s
 // header for the dispatch-surface contract.
 import { ensureSpawnsForLandblock } from "./spawns.js";
+import { getBakeWorkerClient } from "./bake_worker_client.js"; // __diag.datDecode worker relay (A07 §3.6)
 import { tickPerFrame, installSharedDrainHook } from "./loop.js";
 // A11-S3 (`?particleClock=sim`): install the loop-owned sim clock into the
 // shared particle/script time hook (one clock for mixers + particles +
@@ -3302,6 +3303,29 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         sampleMaterial: { blending: mat.blending, depthWrite: mat.depthWrite, hasMap: !!mat.map, name: mat.name },
         diag: { allEmitters, hasBillboardProp, sparkleSprites, hwHistTop },
       };
+    };
+
+    // A07 §3.6 (P2 negcache hardening, 2026-07-10) — dat-decode failure
+    // counters + negative-cache state from BOTH wasm instances (the bake
+    // worker's tier was previously invisible from the main thread), plus
+    // the JS `MaterialCache.missingSurfaces` twin. On-demand, read-only;
+    // each half degrades to null on a stale pkg / inactive worker.
+    window.__diag.datDecode = async () => {
+      const parse = (s) => {
+        try { return s ? JSON.parse(s) : null; } catch (_) { return null; }
+      };
+      let main = null;
+      try {
+        main = typeof wasmExports.dat_decode_diag === "function"
+          ? parse(wasmExports.dat_decode_diag())
+          : null;
+      } catch (_) { /* diagnostic only — never throw */ }
+      const worker = parse(await getBakeWorkerClient().datDecodeDiag());
+      const mc = scene3dForBuilders && scene3dForBuilders.materialCache;
+      const jsMissing = [...(mc?.missingSurfaces ?? [])].map(
+        (d) => "0x" + (d >>> 0).toString(16).padStart(8, "0").toUpperCase(),
+      );
+      return { main, worker, jsMissing };
     };
   }
 

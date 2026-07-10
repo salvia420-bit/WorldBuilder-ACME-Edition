@@ -20,6 +20,8 @@
 // results stitched back in input order (`?aliasSplit=0` reverts).
 
 import {
+  applySurfaceAudit,
+  extractSurfaceAudit,
   reconstructModelMeshes,
   reconstructSurfacePixelsBatch,
   reconstructEntitySurfacesBatch,
@@ -201,6 +203,27 @@ class BakeWorkerClient {
     for (let k = 0; k < split.aliasIdx.length; k += 1) {
       out[split.aliasIdx[k]] = mainRes.value[k] ?? null;
     }
+    // P2↔P3 ABI: merge the call-level decode audits from the two legs onto
+    // the stitched result. A leg without the fields (legacy wasm)
+    // contributes nothing; when BOTH legs lack them the stitched result
+    // stays legacy-shaped and the materials.js readers never poison.
+    const wAudit = extractSurfaceAudit(workerRes.value);
+    const mAudit = extractSurfaceAudit(mainRes.value);
+    if (wAudit || mAudit) {
+      const audit = {};
+      if (
+        typeof wAudit?.decodeMisses === "number" ||
+        typeof mAudit?.decodeMisses === "number"
+      ) {
+        audit.decodeMisses = (wAudit?.decodeMisses ?? 0) + (mAudit?.decodeMisses ?? 0);
+      }
+      if (Array.isArray(wAudit?.provenAbsent) || Array.isArray(mAudit?.provenAbsent)) {
+        audit.provenAbsent = [
+          ...new Set([...(wAudit?.provenAbsent ?? []), ...(mAudit?.provenAbsent ?? [])]),
+        ];
+      }
+      applySurfaceAudit(out, audit);
+    }
     return out;
   }
 
@@ -246,7 +269,9 @@ class BakeWorkerClient {
           ? this._request("fetchSurfacesPixels", {
               dids: split.realIdx.map((i) => split.arr[i]),
               urgent: urgent === true,
-            }).then((res) => reconstructSurfacePixelsBatch(res.payload))
+            }).then((res) =>
+              applySurfaceAudit(reconstructSurfacePixelsBatch(res.payload), res.audit),
+            )
           : Promise.resolve([]);
         // Main-thread wasm owns the alias registry — identical decode to
         // the known-correct ?bakeWorker=0 arm for exactly these DIDs.
@@ -260,7 +285,7 @@ class BakeWorkerClient {
         dids: Array.from(dids),
         urgent: urgent === true,
       });
-      return reconstructSurfacePixelsBatch(res.payload);
+      return applySurfaceAudit(reconstructSurfacePixelsBatch(res.payload), res.audit);
     } catch (e) {
       console.warn("[bake_worker_client] surface worker failed; main-thread fallback:", e);
       return wasmExports.fetch_surfaces_pixels(dids, urgent);
@@ -293,7 +318,9 @@ class BakeWorkerClient {
               dids: split.realIdx.map((i) => split.arr[i]),
               paletteId: paletteId >>> 0,
               subPalettes: Array.from(subPalettes || []),
-            }).then((res) => reconstructSurfacePixelsBatch(res.payload))
+            }).then((res) =>
+              applySurfaceAudit(reconstructSurfacePixelsBatch(res.payload), res.audit),
+            )
           : Promise.resolve([]);
         const mainPromise = wasmExports.fetchEntitySurfacesPixels(
           Uint32Array.from(split.aliasIdx, (i) => split.arr[i]),
@@ -307,7 +334,7 @@ class BakeWorkerClient {
         paletteId: paletteId >>> 0,
         subPalettes: Array.from(subPalettes || []),
       });
-      return reconstructSurfacePixelsBatch(res.payload);
+      return applySurfaceAudit(reconstructSurfacePixelsBatch(res.payload), res.audit);
     } catch (e) {
       console.warn(
         "[bake_worker_client] entity-surface worker failed; main-thread fallback:",
@@ -368,7 +395,7 @@ class BakeWorkerClient {
         flatSubs: Array.from(flatSubs || []),
         tripleCounts: Array.from(tripleCounts || []),
       });
-      return reconstructEntitySurfacesBatch(res.payload);
+      return applySurfaceAudit(reconstructEntitySurfacesBatch(res.payload), res.audit);
     } catch (e) {
       console.warn(
         "[bake_worker_client] entity-surface-batch worker failed; main-thread fallback:",
@@ -381,6 +408,24 @@ class BakeWorkerClient {
         flatSubs,
         tripleCounts,
       );
+    }
+  }
+
+  /**
+   * A07 §3.6 — fetch the WORKER wasm instance's `dat_decode_diag()` JSON
+   * (decode-failure counters + negative-cache contents; otherwise invisible
+   * from the main thread). Returns the raw JSON string, or null when the
+   * worker is inactive / not yet ready / stale-pkg (never throws — this is
+   * a diagnostic, not a dependency).
+   */
+  async datDecodeDiag() {
+    if (!this.active || !this._worker) return null;
+    try {
+      await this._ensureWorker();
+      const res = await this._request("datDecodeDiag", {});
+      return res.payload ?? null;
+    } catch (_) {
+      return null;
     }
   }
 

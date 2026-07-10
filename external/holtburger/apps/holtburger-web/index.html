@@ -4259,6 +4259,14 @@
             clear_suite_cache,
             fetch_model_meshes,
             fetch_surfaces_pixels,
+            // P2 net-fixwave (2026-07-10) — decode-diag + negative-cache
+            // lifecycle for `__diag.datDecode` / the recovery ladders
+            // (A07 §3.6, R-7). NAMESPACE access (not a named import) so a
+            // stale pkg yields `undefined` — the diag degrades to null
+            // instead of a module-link error (same rationale as F18-2).
+            dat_decode_diag: __hbWasmNs.dat_decode_diag,
+            surface_neg_cache_remove: __hbWasmNs.surface_neg_cache_remove,
+            surface_neg_cache_clear: __hbWasmNs.surface_neg_cache_clear,
             fetchEntityModelRender,
             fetchEntityCycleFrames,
             fetchEntityAnimationKeyframes,

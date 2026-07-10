@@ -5856,8 +5856,14 @@ fn triangulate_setup_model_per_part_with_rest_pose<
 // slice of the 0x08 space (real portal.dat surfaces sit far below it). The
 // pixel fetchers resolve an alias to (base Surface record for render-state,
 // overridden SurfaceTexture for pixels). Registry state is per-wasm-
-// instance; aliases are minted and consumed on the same instance (the
-// entity keyframes + entity pixels paths both run on the main thread).
+// instance: aliases are MINTED on the main thread (the rig-bake path,
+// `fetchEntityAnimationKeyframes`), but pixel decode may run in the bake
+// worker's SEPARATE wasm instance, whose registry never minted them
+// (0947f41e moved entity surface decode there; R-1/A06-F1). The worker
+// therefore cannot resolve an alias — `bake_worker_client` splits alias
+// DIDs back to the main-thread wasm (fix R-1, 2026-07-10), and
+// `surface_neg_cache_insert` refuses the whole alias block so an
+// unresolvable alias can never be memoised as "absent".
 const TEX_SWAP_ALIAS_BASE: u32 = 0x08F0_0000;
 #[cfg(any(target_arch = "wasm32", test))]
 thread_local! {
@@ -5884,10 +5890,19 @@ fn tex_swap_alias_for(base_surface: u32, tex_override: u32) -> u32 {
 }
 #[cfg(any(target_arch = "wasm32", test))]
 fn resolve_tex_swap_alias(did: u32) -> Option<(u32, u32)> {
-    if (did & 0xFFF0_0000) != TEX_SWAP_ALIAS_BASE {
+    if !is_tex_swap_alias(did) {
         return None;
     }
     TEX_SWAP_ALIASES.with(|c| c.borrow().0.get(&did).copied())
+}
+
+/// True when `did` sits in the reserved tex-swap alias slice of the 0x08
+/// Surface space. Pure range predicate — an alias may test true here yet be
+/// unresolvable in THIS wasm instance (minted by the other one); that is
+/// exactly why the negative cache must never memoise the block.
+#[cfg(any(target_arch = "wasm32", test))]
+fn is_tex_swap_alias(did: u32) -> bool {
+    (did & 0xFFF0_0000) == TEX_SWAP_ALIAS_BASE
 }
 
 /// Shared inner loop for the SetupModel part walk. Loads the setup,
@@ -8387,28 +8402,49 @@ fn warn_surface_dep_unavailable(surface_did: u32, dep_kind: &str, dep_id: u32) {
     if crate::prefetch::in_discovery_walk() {
         return;
     }
+    // Census bump (dat_decode_diag): the first-hop call passes the Surface
+    // record itself as its own "dep"; everything else is a dependency miss.
+    if dep_kind == "Surface record" {
+        decode_diag_first_hop_miss(surface_did);
+    } else {
+        DECODE_DIAG.with(|d| d.borrow_mut().dep_miss += 1);
+    }
+    // R-18: the shared JS fallback material is GREY 0x888888, not white —
+    // pure white comes from a mapless/luminous material, a different class.
     console_warn_str(&format!(
-        "[surface-decode] surface 0x{surface_did:08X}: {dep_kind} 0x{dep_id:08X} unavailable → empty fallback (renders untextured/white)"
+        "[surface-decode] surface 0x{surface_did:08X}: {dep_kind} 0x{dep_id:08X} unavailable → empty fallback (renders grey-fallback)"
     ));
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn warn_surface_dep_unavailable(_surface_did: u32, _dep_kind: &str, _dep_id: u32) {}
 
-// === Missing-surface negative cache (2026-07-07) ===========================
-// Surface DIDs proven ABSENT at final-decode time (post-prefetch) are memoised
-// so `fetch_surface(s)_pixels` short-circuits the re-decode + re-warn on every
-// subsequent per-LB / ring bake. The manifest (boot + catalog + shards) is
-// session-immutable, so a DID that resolves absent AFTER the discovery walk is
-// permanently absent — a transient shard error on a CATALOGED key surfaces as
-// an `Err`, never as this first-hop miss (confirmed genuinely absent for the
-// 0x08F0xxxx block via the base DAT: `chorizite-parse-dat-record` → "not
-// present"). This memo is per-wasm-instance, so the bake_worker — which decodes
-// statics surfaces in ITS OWN wasm and is the dominant source of the
-// "unavailable → empty fallback" spam — self-dedups. The JS-side
-// `MaterialCache.missingSurfaces` twin (materials.js) only gates main-thread
-// callers, so it cannot reach the worker; this is the durable backstop. Only
-// populated / consulted when `!in_discovery_walk()`, matching the warn gate: a
-// discovery-phase miss may still be prefetched, so it is never memoised.
+// === Missing-surface negative cache (2026-07-07; hardened 2026-07-10 R-7) ==
+// Surface DIDs PROVEN absent (catalog-authoritative `key_known_absent`) are
+// memoised so `fetch_surface(s)_pixels` short-circuits the re-decode +
+// re-warn on every subsequent per-LB / ring bake. The original (2026-07-07)
+// insert trigger — ANY first-hop `get_file_by_key` Err outside a discovery
+// walk — rested on a FALSE safety premise: `run_walk_loop` swallows 3×-failed
+// dependency rounds into `Ok(())`, and the final decode's Err is
+// byte-identical for "absent" and "cataloged but unhydrated"
+// (manifest_source.rs `get_file_by_key`), so a transient shard failure
+// latched a surface grey for the whole session per wasm instance (R-7,
+// A07-F1). The 0x08F0xxxx block cited in the old comment was never evidence
+// of genuine absence either — those are OUR synthetic tex-swap aliases
+// (A06-F2), unresolvable in the bake worker's instance; the insert path now
+// refuses the whole alias block outright.
+//
+// Insert sites therefore gate on `source.key_known_absent(...)`: memoise
+// only when a loaded namespace catalog proves the record does not exist. In
+// convention-URL mode (no catalog) nothing is ever memoised. The memo is
+// per-wasm-instance (main + bake worker each own one); it is cleared on
+// `init_resource_source` re-init (a new manifest invalidates old proofs —
+// A07-F4) and exposed for surgical invalidation via the
+// `surface_neg_cache_remove` / `surface_neg_cache_clear` exports. Only
+// populated / consulted when `!in_discovery_walk()`, matching the warn gate:
+// a discovery-phase miss may still be prefetched, so it is never memoised.
+// Observability: `dat_decode_diag()` (below) reports size, hit/insert
+// counters, and the last-N missing DIDs — including from inside the worker
+// via the bake_worker `datDecodeDiag` message.
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     static MISSING_SURFACES: std::cell::RefCell<std::collections::HashSet<u32>> =
@@ -8416,13 +8452,367 @@ thread_local! {
 }
 #[cfg(target_arch = "wasm32")]
 fn surface_neg_cache_contains(did: u32) -> bool {
-    MISSING_SURFACES.with(|s| s.borrow().contains(&did))
+    let hit = MISSING_SURFACES.with(|s| s.borrow().contains(&did));
+    if hit {
+        DECODE_DIAG.with(|d| d.borrow_mut().neg_cache_hits += 1);
+    }
+    hit
 }
 #[cfg(target_arch = "wasm32")]
 fn surface_neg_cache_insert(did: u32) {
+    // R-7/A06-F2: tex-swap alias DIDs are our own synthetic mints, not
+    // records — never memoise them as absent (the worker instance simply
+    // can't resolve them; bake_worker_client routes them to the main
+    // thread instead).
+    if is_tex_swap_alias(did) {
+        return;
+    }
     MISSING_SURFACES.with(|s| {
-        s.borrow_mut().insert(did);
+        if s.borrow_mut().insert(did) {
+            DECODE_DIAG.with(|d| d.borrow_mut().neg_cache_inserts += 1);
+        }
     });
+}
+/// Clear the whole memo. Shared by the wasm export and the
+/// `init_resource_source` re-init hook (global_source.rs). Returns the
+/// number of entries dropped.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn surface_neg_cache_clear_all() -> u32 {
+    MISSING_SURFACES.with(|s| {
+        let mut s = s.borrow_mut();
+        let n = s.len() as u32;
+        s.clear();
+        n
+    })
+}
+
+/// Surgically un-poison surface DIDs from THIS wasm instance's negative
+/// cache (the JS recovery ladders clear their JS twin themselves; this is
+/// the wasm-tier analog). Returns how many of `dids` were actually present.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn surface_neg_cache_remove(dids: Vec<u32>) -> u32 {
+    MISSING_SURFACES.with(|s| {
+        let mut s = s.borrow_mut();
+        dids.iter().filter(|d| s.remove(d)).count() as u32
+    })
+}
+
+/// Drop every entry in THIS wasm instance's negative cache. Returns the
+/// prior size. (`init_resource_source` re-init calls the internal twin
+/// automatically; this export is for consoles/probes.)
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn surface_neg_cache_clear() -> u32 {
+    surface_neg_cache_clear_all()
+}
+
+// --- dat-decode diag (A07 §3.6, landed 2026-07-10) --------------------------
+// Cheap per-instance counters over the surface-decode failure census, plus
+// the negative-cache state — the previously-invisible half lives in the bake
+// worker's wasm instance, reachable via the worker's `datDecodeDiag`
+// message. All bumps are single thread_local increments on failure paths
+// (the hot success path touches nothing); `recent_missing` is a small ring
+// of the last first-hop-missing DIDs.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct DecodeDiag {
+    /// Surface (0x08) record itself missing at final decode.
+    first_hop_miss: u32,
+    /// SurfaceTexture/Texture dependency record missing at final decode.
+    dep_miss: u32,
+    /// Record fetched but `unpack`/structure failed (any hop).
+    parse_fail: u32,
+    /// Pixel decode (`to_rgba8*`) failed.
+    decode_fail: u32,
+    neg_cache_hits: u32,
+    neg_cache_inserts: u32,
+    /// Sum of call-level `decodeMisses` stamped on batch results (P2↔P3 ABI).
+    decode_misses_total: u32,
+    /// Last first-hop-missing DIDs, newest last (ring, cap below).
+    recent_missing: std::collections::VecDeque<u32>,
+}
+#[cfg(target_arch = "wasm32")]
+const DECODE_DIAG_RECENT_CAP: usize = 32;
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static DECODE_DIAG: std::cell::RefCell<DecodeDiag> =
+        std::cell::RefCell::new(DecodeDiag::default());
+}
+#[cfg(target_arch = "wasm32")]
+fn decode_diag_first_hop_miss(did: u32) {
+    DECODE_DIAG.with(|d| {
+        let mut d = d.borrow_mut();
+        d.first_hop_miss += 1;
+        if d.recent_missing.len() == DECODE_DIAG_RECENT_CAP {
+            d.recent_missing.pop_front();
+        }
+        d.recent_missing.push_back(did);
+    });
+}
+#[cfg(target_arch = "wasm32")]
+fn decode_diag_parse_fail() {
+    if crate::prefetch::in_discovery_walk() {
+        return; // discovery rounds re-run the walk; only final decodes count
+    }
+    DECODE_DIAG.with(|d| d.borrow_mut().parse_fail += 1);
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_diag_parse_fail() {}
+#[cfg(target_arch = "wasm32")]
+fn decode_diag_decode_fail() {
+    if crate::prefetch::in_discovery_walk() {
+        return;
+    }
+    DECODE_DIAG.with(|d| d.borrow_mut().decode_fail += 1);
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_diag_decode_fail() {}
+
+/// JSON snapshot of THIS wasm instance's decode-failure counters +
+/// negative-cache state. Field names are stable (probes parse them):
+/// `firstHopMiss depMiss parseFail decodeFail negCacheHits negCacheInserts
+/// decodeMissesTotal negCacheSize recentMissing negCache`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn dat_decode_diag() -> String {
+    let (size, entries) = MISSING_SURFACES.with(|s| {
+        let s = s.borrow();
+        let mut v: Vec<u32> = s.iter().copied().collect();
+        v.sort_unstable();
+        (s.len() as u32, v)
+    });
+    DECODE_DIAG.with(|d| {
+        let d = d.borrow();
+        let hex_list = |ids: &mut dyn Iterator<Item = u32>| {
+            ids.map(|id| format!("\"0x{id:08X}\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        format!(
+            "{{\"firstHopMiss\":{},\"depMiss\":{},\"parseFail\":{},\"decodeFail\":{},\
+             \"negCacheHits\":{},\"negCacheInserts\":{},\"decodeMissesTotal\":{},\
+             \"negCacheSize\":{},\"recentMissing\":[{}],\"negCache\":[{}]}}",
+            d.first_hop_miss,
+            d.dep_miss,
+            d.parse_fail,
+            d.decode_fail,
+            d.neg_cache_hits,
+            d.neg_cache_inserts,
+            d.decode_misses_total,
+            size,
+            hex_list(&mut d.recent_missing.iter().copied()),
+            hex_list(&mut entries.iter().copied()),
+        )
+    })
+}
+
+// --- P2↔P3 ABI (net-fixwave 2026-07-10): call-level decode audit -----------
+// The batch surface exports stamp two OPTIONAL fields on their CALL-level
+// result (the returned JS Array; getters on EntitySurfacesPixelsBatch):
+//   decodeMisses : number — records that failed to hydrate during the final
+//                  decode, EXCLUDING catalog-proven absences (0 = a complete
+//                  decode of everything that exists);
+//   provenAbsent : Array<"0x%08X"> — requested surface DIDs the catalog
+//                  authority PROVES absent (never tex-swap aliases).
+// materials.js (`surfaceResultProvenAbsent`/`surfaceResultDecodeMisses`)
+// reads exactly these names off the call-level object; a missing field means
+// "legacy wasm" and the JS tier never poisons. bake_transfer.js carries the
+// fields across the worker boundary.
+
+/// Counts final-decode `get_file_by_key` misses that are NOT catalog-proven
+/// absences — keys that SHOULD have hydrated but didn't (transient fetch
+/// failure, swallowed walk round; R-9's partial rounds land here). Forwards
+/// `key_known_absent` so the negative-cache insert gate inside the decode
+/// impls still consults the real authority.
+#[cfg(any(target_arch = "wasm32", test))]
+struct DecodeAuditSource<'a, S: ?Sized> {
+    inner: &'a S,
+    misses: std::sync::atomic::AtomicU32,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl<'a, S: holtburger_dat::ResourceSource + ?Sized> DecodeAuditSource<'a, S> {
+    fn new(inner: &'a S) -> Self {
+        Self {
+            inner,
+            misses: std::sync::atomic::AtomicU32::new(0),
+        }
+    }
+    fn misses(&self) -> u32 {
+        self.misses.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl<S: holtburger_dat::ResourceSource + ?Sized> holtburger_dat::ResourceSource
+    for DecodeAuditSource<'_, S>
+{
+    fn get_file_by_key(
+        &self,
+        key: holtburger_dat::ResourceKey<'_>,
+    ) -> holtburger_dat::Result<Vec<u8>> {
+        let r = self.inner.get_file_by_key(key);
+        if r.is_err() && !self.inner.key_known_absent(key) {
+            self.misses
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        r
+    }
+    fn get_metadata_by_key(
+        &self,
+        key: holtburger_dat::ResourceKey<'_>,
+    ) -> Option<holtburger_dat::FileMetadata> {
+        self.inner.get_metadata_by_key(key)
+    }
+    fn has_namespace(&self, namespace: &str) -> bool {
+        self.inner.has_namespace(namespace)
+    }
+    fn key_known_absent(&self, key: holtburger_dat::ResourceKey<'_>) -> bool {
+        self.inner.key_known_absent(key)
+    }
+}
+
+/// Requested-DID absences provable by the catalog authority. Aliases are
+/// never listed (synthetic mints, not records — see `is_tex_swap_alias`).
+#[cfg(any(target_arch = "wasm32", test))]
+fn proven_absent_dids<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    dids: &[u32],
+) -> Vec<u32> {
+    let mut out: Vec<u32> = dids
+        .iter()
+        .copied()
+        .filter(|&d| !is_tex_swap_alias(d))
+        .filter(|&d| source.key_known_absent(holtburger_dat::ResourceKey::new("eor/portal", d)))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+// P2 (net-fixwave 2026-07-10) host tests: the negative-cache gate logic that
+// doesn't need a browser — alias-range predicate, provability filtering, and
+// the audit source's "count only non-provable misses" contract.
+#[cfg(test)]
+mod surface_neg_cache_gate_tests {
+    use super::{is_tex_swap_alias, proven_absent_dids, DecodeAuditSource, TEX_SWAP_ALIAS_BASE};
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    /// Stub source: `absent` keys are catalog-PROVEN absent; `hydrated` keys
+    /// resolve; everything else errs like an unhydrated cataloged key.
+    struct StubSource {
+        hydrated: Vec<u32>,
+        absent: Vec<u32>,
+    }
+    impl ResourceSource for StubSource {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> holtburger_dat::Result<Vec<u8>> {
+            if self.hydrated.contains(&key.file_id) {
+                Ok(vec![0])
+            } else {
+                Err(holtburger_dat::DatError::Other(format!(
+                    "record not prefetched: {}:0x{:08X}",
+                    key.namespace, key.file_id
+                )))
+            }
+        }
+        fn get_metadata_by_key(&self, _key: ResourceKey<'_>) -> Option<holtburger_dat::FileMetadata> {
+            None
+        }
+        fn has_namespace(&self, _namespace: &str) -> bool {
+            true
+        }
+        fn key_known_absent(&self, key: ResourceKey<'_>) -> bool {
+            self.absent.contains(&key.file_id)
+        }
+    }
+
+    #[test]
+    fn alias_range_predicate_matches_registry_mask() {
+        assert!(is_tex_swap_alias(TEX_SWAP_ALIAS_BASE));
+        assert!(is_tex_swap_alias(TEX_SWAP_ALIAS_BASE + 0x1234));
+        assert!(is_tex_swap_alias(0x08F0_FFFF));
+        assert!(!is_tex_swap_alias(0x0800_0001), "real low Surface DID");
+        assert!(!is_tex_swap_alias(0x08E0_0000), "below the alias slice");
+        assert!(!is_tex_swap_alias(0x0600_0000), "texture namespace");
+    }
+
+    #[test]
+    fn proven_absent_lists_only_catalog_proven_non_alias_dids() {
+        // NB: the alias mask 0xFFF0_0000 covers ALL of 0x08F00000–0x08FFFFFF,
+        // so the proven-absent probe DID must sit outside that whole block.
+        let src = StubSource {
+            hydrated: vec![0x0800_0001],
+            absent: vec![0x0801_0002, TEX_SWAP_ALIAS_BASE + 7],
+        };
+        // Requested: one hydrated, one proven-absent (twice — dedup), one
+        // unhydrated-unproven (transient), one alias (proven per the stub
+        // but must be excluded by the alias filter).
+        let got = proven_absent_dids(
+            &src,
+            &[
+                0x0800_0001,
+                0x0801_0002,
+                0x0801_0002,
+                0x0800_0003,
+                TEX_SWAP_ALIAS_BASE + 7,
+            ],
+        );
+        assert_eq!(got, vec![0x0801_0002]);
+    }
+
+    /// Default-trait sources can never prove absence → nothing is listed.
+    #[test]
+    fn default_key_known_absent_is_false() {
+        struct NoAuthority;
+        impl ResourceSource for NoAuthority {
+            fn get_file_by_key(&self, _k: ResourceKey<'_>) -> holtburger_dat::Result<Vec<u8>> {
+                Err(holtburger_dat::DatError::Other("nope".into()))
+            }
+            fn get_metadata_by_key(&self, _k: ResourceKey<'_>) -> Option<holtburger_dat::FileMetadata> {
+                None
+            }
+            fn has_namespace(&self, _ns: &str) -> bool {
+                true
+            }
+        }
+        assert!(proven_absent_dids(&NoAuthority, &[0x0800_0001, 0x0800_0002]).is_empty());
+    }
+
+    #[test]
+    fn audit_source_counts_only_non_provable_misses() {
+        let src = StubSource {
+            hydrated: vec![0x0800_0001],
+            absent: vec![0x0800_0002],
+        };
+        let audit = DecodeAuditSource::new(&src);
+        let k = |id| ResourceKey::new("eor/portal", id);
+        let _ = audit.get_file_by_key(k(0x0800_0001)); // hit → no miss
+        let _ = audit.get_file_by_key(k(0x0800_0002)); // proven absent → no miss
+        let _ = audit.get_file_by_key(k(0x0800_0003)); // transient → miss
+        let _ = audit.get_file_by_key(k(0x0800_0003)); // counted per access
+        assert_eq!(audit.misses(), 2);
+        // And the wrapper forwards provability (the insert gate reads
+        // through it during the final decode).
+        assert!(audit.key_known_absent(k(0x0800_0002)));
+        assert!(!audit.key_known_absent(k(0x0800_0003)));
+    }
+}
+
+/// Stamp the two ABI fields onto a call-level JS result object.
+#[cfg(target_arch = "wasm32")]
+fn stamp_surface_audit(target: &JsValue, decode_misses: u32, proven_absent: &[u32]) {
+    DECODE_DIAG.with(|d| d.borrow_mut().decode_misses_total += decode_misses);
+    let pa = js_sys::Array::new();
+    for did in proven_absent {
+        pa.push(&JsValue::from_str(&format!("0x{did:08X}")));
+    }
+    let _ = js_sys::Reflect::set(
+        target,
+        &JsValue::from_str("decodeMisses"),
+        &JsValue::from_f64(f64::from(decode_misses)),
+    );
+    let _ = js_sys::Reflect::set(target, &JsValue::from_str("provenAbsent"), &pa);
 }
 // The exact `empty` fallback both surface impls return on absence. Factored so
 // the negative-cache short-circuit returns a byte-identical value without
@@ -8491,14 +8881,20 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     }
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else {
         warn_surface_dep_unavailable(surface_did, "Surface record", surface_did);
-        // Memoise the genuine (post-prefetch) absence so later bakes skip it.
+        // R-7: memoise ONLY a catalog-proven absence — a transient
+        // unhydrated key errs identically here and must stay retryable.
         #[cfg(target_arch = "wasm32")]
-        if !crate::prefetch::in_discovery_walk() {
+        if !crate::prefetch::in_discovery_walk()
+            && source.key_known_absent(ResourceKey::new("eor/portal", surface_did))
+        {
             surface_neg_cache_insert(surface_did);
         }
         return empty;
     };
-    let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
+    let Ok(surface) = Surface::unpack(&bytes) else {
+        decode_diag_parse_fail();
+        return empty;
+    };
     // Capture the raw bitfield BEFORE the solid/textured branch so both
     // 1×1 ARGB synthesized surfaces AND real textures surface the same
     // flags to JS (e.g. a solid translucent overlay still wants
@@ -8544,19 +8940,31 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             has_palette: false,
         };
     }
-    let Some((surf_tex_id, surf_pal_id)) = surface.textured() else { return empty; };
+    let Some((surf_tex_id, surf_pal_id)) = surface.textured() else {
+        decode_diag_parse_fail();
+        return empty;
+    };
     let surf_tex_id = tex_override.unwrap_or(surf_tex_id);
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else {
         warn_surface_dep_unavailable(surface_did, "SurfaceTexture", surf_tex_id);
         return empty;
     };
-    let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { return empty; };
-    let Some(rs_id) = surf_tex.highest_res() else { return empty; };
+    let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else {
+        decode_diag_parse_fail();
+        return empty;
+    };
+    let Some(rs_id) = surf_tex.highest_res() else {
+        decode_diag_parse_fail();
+        return empty;
+    };
     let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else {
         warn_surface_dep_unavailable(surface_did, "Texture", rs_id);
         return empty;
     };
-    let Ok(tex) = Texture::unpack(&tb) else { return empty; };
+    let Ok(tex) = Texture::unpack(&tb) else {
+        decode_diag_parse_fail();
+        return empty;
+    };
     // CustomRawJpeg (PFID 500) records carry width=height=0 in the Texture
     // header — the real size lives in the JPEG SOF marker. `actual_dimensions()`
     // resolves it (no-op for every other format, returning width/height as-is) —
@@ -8628,6 +9036,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             }
         }
         Err(e) => {
+            decode_diag_decode_fail();
             // Diagnostic (2026-06-30): a palettized (P8/Index16) surface whose
             // palette can't be fetched/decoded was silently swallowed here and
             // fell back to the grey material in JS — the invisible "patchy
@@ -8925,8 +9334,10 @@ pub async fn fetch_icon_pixels(icon_did: u32) -> Result<IconPixels, JsValue> {
 }
 
 /// Batch form: fetch decoded pixels for many surfaces in one HTTP
-/// fetch. Returns `Vec<SurfacePixels>` in input order; per-id
-/// failures yield empty entries (no batch fail).
+/// fetch. Returns a JS `Array<SurfacePixels>` in input order; per-id
+/// failures yield empty entries (no batch fail). The Array additionally
+/// carries the call-level `decodeMisses`/`provenAbsent` audit fields
+/// (P2↔P3 ABI — see `stamp_surface_audit`).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn fetch_surfaces_pixels(
@@ -8935,7 +9346,7 @@ pub async fn fetch_surfaces_pixels(
     // player's current-LB/3×3 bake — see `fetch_model_meshes`. Absent/false
     // = pre-fix normal lane (all existing callers).
     urgent: Option<bool>,
-) -> Result<Vec<SurfacePixels>, JsValue> {
+) -> Result<js_sys::Array, JsValue> {
     use holtburger_dat::ResourceKey;
     let urgent = urgent.unwrap_or(false);
     let source = global_source::global_source();
@@ -8969,10 +9380,18 @@ pub async fn fetch_surfaces_pixels(
     } else {
         prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk).await?;
     }
-    let mut out = Vec::with_capacity(surface_dids.len());
+    // Final decode under the audit wrapper: count non-provable misses and
+    // stamp the call-level ABI fields on the returned Array (P2↔P3).
+    let audit = DecodeAuditSource::new(source.as_ref());
+    let out = js_sys::Array::new();
     for &id in &surface_dids {
-        out.push(fetch_surface_pixels_impl(source.as_ref(), id));
+        out.push(&fetch_surface_pixels_impl(&audit, id).into());
     }
+    stamp_surface_audit(
+        &out,
+        audit.misses(),
+        &proven_absent_dids(source.as_ref(), &surface_dids),
+    );
     Ok(out)
 }
 
@@ -10235,13 +10654,20 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     }
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else {
         warn_surface_dep_unavailable(surface_did, "Surface record", surface_did);
+        // R-7: memoise ONLY a catalog-proven absence — a transient
+        // unhydrated key errs identically here and must stay retryable.
         #[cfg(target_arch = "wasm32")]
-        if !crate::prefetch::in_discovery_walk() {
+        if !crate::prefetch::in_discovery_walk()
+            && source.key_known_absent(ResourceKey::new("eor/portal", surface_did))
+        {
             surface_neg_cache_insert(surface_did);
         }
         return empty;
     };
-    let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
+    let Ok(surface) = Surface::unpack(&bytes) else {
+        decode_diag_parse_fail();
+        return empty;
+    };
     let surface_type = surface.surface_type;
     if let Some(argb) = surface.solid_color() {
         // Solid surfaces ignore palette substitutions — the base
@@ -10275,19 +10701,31 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             has_palette: false,
         };
     }
-    let Some((surf_tex_id, surf_pal_id)) = surface.textured() else { return empty; };
+    let Some((surf_tex_id, surf_pal_id)) = surface.textured() else {
+        decode_diag_parse_fail();
+        return empty;
+    };
     let surf_tex_id = tex_override.unwrap_or(surf_tex_id);
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else {
         warn_surface_dep_unavailable(surface_did, "SurfaceTexture", surf_tex_id);
         return empty;
     };
-    let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { return empty; };
-    let Some(rs_id) = surf_tex.highest_res() else { return empty; };
+    let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else {
+        decode_diag_parse_fail();
+        return empty;
+    };
+    let Some(rs_id) = surf_tex.highest_res() else {
+        decode_diag_parse_fail();
+        return empty;
+    };
     let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else {
         warn_surface_dep_unavailable(surface_did, "Texture", rs_id);
         return empty;
     };
-    let Ok(tex) = Texture::unpack(&tb) else { return empty; };
+    let Ok(tex) = Texture::unpack(&tb) else {
+        decode_diag_parse_fail();
+        return empty;
+    };
     // CustomRawJpeg (PFID 500) carries width=height=0 in the header — the real
     // size lives in the JPEG SOF marker. `actual_dimensions()` resolves it
     // (no-op for other formats). See fetch_surface_pixels_impl note. 2026-05-30.
@@ -10375,6 +10813,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             }
         }
         Err(e) => {
+            decode_diag_decode_fail();
             // 2026-07-02 hardening: this arm was fully silent — a dyed-entity
             // decode failure (missing/corrupt palette, bad sub-palette splice)
             // fell back to the grey/white default material with zero console
@@ -10385,7 +10824,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 console_warn_str(&format!(
                     "[entity-surface-decode] surface 0x{surface_did:08X} tex 0x{rs_id:08X} \
                      base-palette 0x{base_palette_id:08X}: decode FAILED → empty fallback \
-                     (renders untextured/white): {e}"
+                     (renders grey-fallback): {e}"
                 ));
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -10400,14 +10839,16 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
 /// `surface_dids` — appropriate for an NPC where one entity's palette
 /// state composes onto every body-part surface uniformly. The JS
 /// caller picks the surfaces from a single mesh's `surfaces` array
-/// and passes the entity's `palette_id` + `sub_palettes`.
+/// and passes the entity's `palette_id` + `sub_palettes`. The returned
+/// JS `Array<SurfacePixels>` carries the call-level
+/// `decodeMisses`/`provenAbsent` audit fields (P2↔P3 ABI).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = fetchEntitySurfacesPixels)]
 pub async fn fetch_entity_surfaces_pixels(
     surface_dids: Vec<u32>,
     base_palette_id: u32,
     sub_palettes: Vec<u32>,
-) -> Result<Vec<SurfacePixels>, JsValue> {
+) -> Result<js_sys::Array, JsValue> {
     use holtburger_dat::ResourceKey;
     if sub_palettes.len() % 3 != 0 {
         return Err(JsValue::from_str(
@@ -10459,15 +10900,18 @@ pub async fn fetch_entity_surfaces_pixels(
         }
     })
     .await?;
-    let mut out = Vec::with_capacity(surface_dids.len());
+    // Final decode under the audit wrapper: count non-provable misses and
+    // stamp the call-level ABI fields on the returned Array (P2↔P3).
+    let audit = DecodeAuditSource::new(source.as_ref());
+    let out = js_sys::Array::new();
     for &id in &surface_dids {
-        out.push(fetch_entity_surface_pixels_impl(
-            source.as_ref(),
-            id,
-            base_palette_id,
-            &sp,
-        ));
+        out.push(&fetch_entity_surface_pixels_impl(&audit, id, base_palette_id, &sp).into());
     }
+    stamp_surface_audit(
+        &out,
+        audit.misses(),
+        &proven_absent_dids(source.as_ref(), &surface_dids),
+    );
     Ok(out)
 }
 
@@ -10542,6 +10986,12 @@ pub async fn fetch_entity_surfaces_pixels(
 #[wasm_bindgen]
 pub struct EntitySurfacesPixelsBatch {
     payloads: Vec<Option<Vec<SurfacePixels>>>,
+    /// P2↔P3 ABI — call-level decode audit across the whole batch (records
+    /// that failed to hydrate at final decode, excluding proven absences).
+    decode_misses: u32,
+    /// P2↔P3 ABI — requested DIDs the catalog proves absent (raw u32s;
+    /// the getter formats them per the ABI).
+    proven_absent: Vec<u32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -10551,6 +11001,22 @@ impl EntitySurfacesPixelsBatch {
     #[wasm_bindgen(getter)]
     pub fn len(&self) -> usize {
         self.payloads.len()
+    }
+
+    /// P2↔P3 ABI — 0 means everything that exists hydrated + decoded.
+    /// materials.js `surfaceResultDecodeMisses` reads this off the handle.
+    #[wasm_bindgen(getter, js_name = decodeMisses)]
+    pub fn decode_misses(&self) -> u32 {
+        self.decode_misses
+    }
+
+    /// P2↔P3 ABI — `"0x%08X"` strings for `surfaceResultProvenAbsent`.
+    #[wasm_bindgen(getter, js_name = provenAbsent)]
+    pub fn proven_absent(&self) -> Vec<String> {
+        self.proven_absent
+            .iter()
+            .map(|d| format!("0x{d:08X}"))
+            .collect()
     }
 
     /// Whether `payload_at(i)` would return None (out of range OR
@@ -10659,7 +11125,11 @@ pub async fn fetch_entity_surfaces_pixels_batch(
 
     // Early no-op for empty batch.
     if n == 0 {
-        return Ok(EntitySurfacesPixelsBatch { payloads: Vec::new() });
+        return Ok(EntitySurfacesPixelsBatch {
+            payloads: Vec::new(),
+            decode_misses: 0,
+            proven_absent: Vec::new(),
+        });
     }
 
     let source = global_source::global_source();
@@ -10735,7 +11205,10 @@ pub async fn fetch_entity_surfaces_pixels_batch(
     .await?;
 
     // Post-prefetch: build one Vec<SurfacePixels> per input group in
-    // input order. Each per-DID call is sync — every record is warm.
+    // input order. Each per-DID call is sync — every record is warm. The
+    // audit wrapper counts non-provable misses across the WHOLE batch for
+    // the call-level `decodeMisses` getter (P2↔P3 ABI).
+    let audit = DecodeAuditSource::new(source.as_ref());
     let mut payloads: Vec<Option<Vec<SurfacePixels>>> = Vec::with_capacity(n);
     for i in 0..n {
         let off = dids_offset[i];
@@ -10745,17 +11218,18 @@ pub async fn fetch_entity_surfaces_pixels_batch(
         let mut out: Vec<SurfacePixels> = Vec::with_capacity(len);
         for j in 0..len {
             let did = flat_surface_dids[off + j];
-            out.push(fetch_entity_surface_pixels_impl(
-                source.as_ref(),
-                did,
-                base_pal,
-                sp,
-            ));
+            out.push(fetch_entity_surface_pixels_impl(&audit, did, base_pal, sp));
         }
         payloads.push(Some(out));
     }
 
-    Ok(EntitySurfacesPixelsBatch { payloads })
+    let decode_misses = audit.misses();
+    DECODE_DIAG.with(|d| d.borrow_mut().decode_misses_total += decode_misses);
+    Ok(EntitySurfacesPixelsBatch {
+        payloads,
+        decode_misses,
+        proven_absent: proven_absent_dids(source.as_ref(), &flat_surface_dids),
+    })
 }
 
 /// F.41 (2026-05-15) — companion helper for the

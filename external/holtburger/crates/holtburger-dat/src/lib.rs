@@ -156,6 +156,18 @@ pub trait ResourceSource: Send + Sync {
     fn exists_by_key(&self, key: ResourceKey<'_>) -> bool {
         self.get_metadata_by_key(key).is_some()
     }
+
+    /// Provability probe (R-7, 2026-07-10): `true` ONLY when this source can
+    /// PROVE the record does not exist — e.g. a loaded per-namespace catalog
+    /// that authoritatively lists every record and lacks this key. A source
+    /// that merely hasn't hydrated the key yet (`get_file_by_key` erring with
+    /// "not prefetched") must return `false`: absence and not-fetched-yet err
+    /// identically there, and negative caches keyed on this probe must never
+    /// latch a transient. Default `false` = "cannot prove"; wrappers forward
+    /// to their inner source.
+    fn key_known_absent(&self, _key: ResourceKey<'_>) -> bool {
+        false
+    }
 }
 
 pub trait ResourceProvider: Send + Sync {

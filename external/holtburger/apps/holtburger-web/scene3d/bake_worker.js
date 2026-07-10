@@ -16,11 +16,19 @@
 //        {type:'fetchSurfacesPixels', id, dids:[u32,...]}
 //        {type:'fetchEntitySurfacesPixels', id, dids:[u32,...], paletteId, subPalettes:[u32,...]}
 //        {type:'fetchEntitySurfacesPixelsBatch', id, flatDids, lens, basePals, flatSubs, tripleCounts}
+//        {type:'datDecodeDiag', id}
 //   out: {type:'ready', id}
-//        {type:'result', id, kind:'modelMeshes'|'surfaces'|'entitySurfaces'|'entitySurfacesBatch', payload:[...]}  (+ transferables)
+//        {type:'result', id, kind:'modelMeshes'|'surfaces'|'entitySurfaces'|'entitySurfacesBatch', payload:[...], audit?}  (+ transferables)
+//        {type:'result', id, kind:'diag', payload: <dat_decode_diag() JSON string|null>}
 //        {type:'error', id, message}
+//
+// `audit` (P2↔P3 ABI, 2026-07-10) is the call-level decode audit
+// (`{decodeMisses, provenAbsent}`) extracted from THIS worker instance's
+// wasm result; the client re-applies it onto the reconstructed result so
+// materials.js sees the same fields as on the main-thread path.
 
 import init, {
+  dat_decode_diag,
   fetch_model_meshes,
   fetch_surfaces_pixels,
   fetchEntitySurfacesPixels,
@@ -68,8 +76,8 @@ async function handleModelMeshes(msg) {
 
 async function handleSurfaces(msg) {
   const surfaces = await fetch_surfaces_pixels(Uint32Array.from(msg.dids), msg.urgent === true);
-  const { surfaces: payload, transfer } = serializeSurfacePixelsBatch(surfaces);
-  self.postMessage({ type: "result", id: msg.id, kind: "surfaces", payload }, transfer);
+  const { surfaces: payload, transfer, audit } = serializeSurfacePixelsBatch(surfaces);
+  self.postMessage({ type: "result", id: msg.id, kind: "surfaces", payload, audit }, transfer);
 }
 
 // Entity surface decode — the dyed/paletted path (`fetch_entity_surface_
@@ -82,8 +90,8 @@ async function handleEntitySurfaces(msg) {
     msg.paletteId >>> 0,
     Uint32Array.from(msg.subPalettes || []),
   );
-  const { surfaces: payload, transfer } = serializeSurfacePixelsBatch(surfaces);
-  self.postMessage({ type: "result", id: msg.id, kind: "entitySurfaces", payload }, transfer);
+  const { surfaces: payload, transfer, audit } = serializeSurfacePixelsBatch(surfaces);
+  self.postMessage({ type: "result", id: msg.id, kind: "entitySurfaces", payload, audit }, transfer);
 }
 
 // F.41 batch — N entity groups in one prefetch loop, one postMessage back.
@@ -96,8 +104,11 @@ async function handleEntitySurfacesBatch(msg) {
     Uint32Array.from(msg.tripleCounts || []),
   );
   // Drains + frees the batch (and per-group SurfacePixels) handles.
-  const { groups: payload, transfer } = serializeEntitySurfacesBatch(batch);
-  self.postMessage({ type: "result", id: msg.id, kind: "entitySurfacesBatch", payload }, transfer);
+  const { groups: payload, transfer, audit } = serializeEntitySurfacesBatch(batch);
+  self.postMessage(
+    { type: "result", id: msg.id, kind: "entitySurfacesBatch", payload, audit },
+    transfer,
+  );
 }
 
 self.onmessage = async (ev) => {
@@ -118,6 +129,18 @@ self.onmessage = async (ev) => {
       case "fetchEntitySurfacesPixelsBatch":
         if (!ready) throw new Error("bake_worker: fetchEntitySurfacesPixelsBatch before init");
         return await handleEntitySurfacesBatch(msg);
+      case "datDecodeDiag":
+        // A07 §3.6 — expose THIS instance's decode counters + negative-cache
+        // state (otherwise invisible from the main thread). Init-gated like
+        // the fetchers; typeof-guarded so a stale pkg without the export
+        // answers null instead of throwing.
+        if (!ready) throw new Error("bake_worker: datDecodeDiag before init");
+        return self.postMessage({
+          type: "result",
+          id: msg.id,
+          kind: "diag",
+          payload: typeof dat_decode_diag === "function" ? dat_decode_diag() : null,
+        });
       default:
         throw new Error(`bake_worker: unknown message type ${msg && msg.type}`);
     }

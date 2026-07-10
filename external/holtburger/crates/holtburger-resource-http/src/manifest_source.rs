@@ -168,6 +168,17 @@ pub enum PrefetchError {
     /// layer but the binary body failed magic / version / CRC /
     /// truncation checks.
     CatalogParse { namespace: String, message: String },
+    /// (v2 only, R-9 2026-07-10) A shard round completed per-key
+    /// tolerantly: every fetch that succeeded (and hash-verified) was
+    /// inserted into the cache; `failed` lists exactly the keys that
+    /// did NOT land (fetch error or hash mismatch). `detail` carries
+    /// the first failure's message as a representative. Pre-R-9 a
+    /// single bad shard URL discarded the WHOLE round (`try_join_all`
+    /// fail-fast) — the mass-poison feeder for the negative caches.
+    PartialRound {
+        failed: Vec<(String, u32)>,
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for PrefetchError {
@@ -194,6 +205,20 @@ impl std::fmt::Display for PrefetchError {
                 f,
                 "catalog parse failed for namespace {namespace}: {message}"
             ),
+            PrefetchError::PartialRound { failed, detail } => {
+                write!(
+                    f,
+                    "prefetch round partial: {} shard(s) failed (first: {detail}):",
+                    failed.len()
+                )?;
+                for (ns, id) in failed.iter().take(8) {
+                    write!(f, " {ns}:0x{id:08X}")?;
+                }
+                if failed.len() > 8 {
+                    write!(f, " …+{}", failed.len() - 8)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -365,6 +390,14 @@ impl ResourceSource for ManifestResourceSource {
         match self {
             Self::V1(s) => s.has_namespace(namespace),
             Self::V2(s) => s.has_namespace(namespace),
+        }
+    }
+
+    fn key_known_absent(&self, key: ResourceKey<'_>) -> bool {
+        match self {
+            // v1 has no per-namespace catalogs — absence is unprovable.
+            Self::V1(_) => false,
+            Self::V2(s) => s.key_known_absent(key),
         }
     }
 }
@@ -651,35 +684,63 @@ impl V2Source {
                 }
             }
         });
-        let bytes_vec = futures::future::try_join_all(fetches)
-            .await
-            .map_err(PrefetchError::Http)?;
+        // R-9 (2026-07-10): per-key tolerant round. `try_join_all` fail-fast
+        // used to discard EVERY successfully-fetched sibling when one shard
+        // URL failed — a single bad URL emptied an 80+ surface pre-warm batch
+        // and fed the negative caches en masse. Now every completed fetch is
+        // awaited (`join_all`), successes are verified + inserted, and the
+        // round's `Err` carries ONLY the keys that did not land, so a retry
+        // round shrinks to the stubborn keys (step A skips cached ones).
+        let results = futures::future::join_all(fetches).await;
 
-        // Step E: verify + insert. Skip None results (404s). The per-shard sha256
-        // verify is gated by `__hbVerifyShards` (default ON) — at large draw distance
-        // it dominates fill CPU (~71% on the 1070 r10 probe); see shard_verify_enabled.
+        // Step E: verify + insert successes; collect failures. Skip None
+        // results (tolerated 404s). The per-shard sha256 verify is gated by
+        // `__hbVerifyShards` (default ON) — at large draw distance it
+        // dominates fill CPU (~71% on the 1070 r10 probe); see
+        // shard_verify_enabled. A hash mismatch counts as a failed key (not
+        // inserted) rather than aborting the round.
         let verify = shard_verify_enabled();
-        let mut cache = self.shards.lock().expect("shard cache mutex poisoned");
-        for (task, bytes_opt) in shard_tasks.into_iter().zip(bytes_vec) {
-            let Some(bytes) = bytes_opt else {
-                continue;
-            };
-            if verify {
-                if let Some(expected_trunc) = task.expected_trunc {
-                    let got_full = sha256_hex(&bytes);
-                    let got_trunc = &got_full[..32];
-                    let expected_str = hex_encode_16(&expected_trunc);
-                    if got_trunc != expected_str {
-                        return Err(PrefetchError::HashMismatch {
-                            namespace: task.key.0,
-                            file_id: task.key.1,
-                            expected: expected_str,
-                            got: got_trunc.to_owned(),
-                        });
+        let mut failed: Vec<(String, u32)> = Vec::new();
+        let mut first_detail: Option<String> = None;
+        {
+            let mut cache = self.shards.lock().expect("shard cache mutex poisoned");
+            for (task, result) in shard_tasks.into_iter().zip(results) {
+                let bytes = match result {
+                    Ok(Some(bytes)) => bytes,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        if first_detail.is_none() {
+                            first_detail = Some(e.to_string());
+                        }
+                        failed.push(task.key);
+                        continue;
+                    }
+                };
+                if verify {
+                    if let Some(expected_trunc) = task.expected_trunc {
+                        let got_full = sha256_hex(&bytes);
+                        let got_trunc = &got_full[..32];
+                        let expected_str = hex_encode_16(&expected_trunc);
+                        if got_trunc != expected_str {
+                            if first_detail.is_none() {
+                                first_detail = Some(format!(
+                                    "shard {}:0x{:08X} hash mismatch: expected {expected_str}, got {got_trunc}",
+                                    task.key.0, task.key.1
+                                ));
+                            }
+                            failed.push(task.key);
+                            continue;
+                        }
                     }
                 }
+                cache.insert(task.key, bytes);
             }
-            cache.insert(task.key, bytes);
+        }
+        if !failed.is_empty() {
+            return Err(PrefetchError::PartialRound {
+                failed,
+                detail: first_detail.unwrap_or_default(),
+            });
         }
         Ok(())
     }
@@ -749,6 +810,29 @@ impl V2Source {
         // v2: declared namespaces are authoritative since per-shard
         // listings live in lazy catalogs we may not have fetched.
         self.manifest.namespaces.iter().any(|n| n == namespace)
+    }
+
+    /// R-7 provability probe. A record's absence is PROVEN only in catalog
+    /// mode, with the key's namespace catalog loaded, when that catalog —
+    /// which authoritatively lists every record in the namespace — has no
+    /// entry for it. Everything else (boot-served, convention-URL mode,
+    /// catalog not yet fetched, 404-empty namespace) is unprovable → false.
+    /// This is what gates the wasm/JS negative caches: a transient
+    /// unhydrated key errs identically to an absent one in
+    /// [`Self::get_file_by_key`], so only this probe may authorize a
+    /// permanent memo.
+    fn key_known_absent(&self, key: ResourceKey<'_>) -> bool {
+        if self.boot_serves(key) {
+            return false;
+        }
+        if self.manifest.catalog_url_template.is_none() {
+            return false;
+        }
+        let catalogs = self.catalogs.lock().expect("catalog cache mutex poisoned");
+        match catalogs.get(key.namespace) {
+            Some(catalog) => catalog.lookup(key.file_id).is_none(),
+            None => false,
+        }
     }
 }
 
@@ -845,4 +929,9 @@ impl<'a> ResourceSource for RecordingSource<'a> {
     fn has_namespace(&self, namespace: &str) -> bool {
         self.inner.has_namespace(namespace)
     }
+
+    fn key_known_absent(&self, key: ResourceKey<'_>) -> bool {
+        self.inner.key_known_absent(key)
+    }
 }
+

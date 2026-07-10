@@ -172,6 +172,54 @@ export function reconstructModelMeshes(payload) {
 }
 
 // ---------------------------------------------------------------------------
+// Call-level surface decode audit (P2↔P3 ABI, net-fixwave 2026-07-10)
+// ---------------------------------------------------------------------------
+//
+// The wasm surface exports stamp two OPTIONAL fields on their CALL-level
+// result — `decodeMisses` (number) + `provenAbsent` (Array<"0x%08X">) — as
+// properties on the returned Array (`fetch_surfaces_pixels`,
+// `fetchEntitySurfacesPixels`) or getters on the batch handle
+// (`fetchEntitySurfacesPixelsBatch`). materials.js poisons its negative
+// cache ONLY from these fields (`surfaceResultProvenAbsent`). These helpers
+// carry the audit across the worker boundary: extract before postMessage,
+// re-apply onto the reconstructed result. A result without the fields
+// (legacy wasm) yields `null`, `applySurfaceAudit` is then a no-op, and the
+// readers treat the reconstructed result as legacy → never poison.
+
+/** Read the call-level audit off a wasm result (Array props or handle
+ * getters). Returns `{decodeMisses?, provenAbsent?}` or null (legacy). */
+export function extractSurfaceAudit(result) {
+  if (!result || (typeof result !== "object" && typeof result !== "function")) {
+    return null;
+  }
+  let decodeMisses;
+  let provenAbsent;
+  try {
+    const n = result.decodeMisses;
+    if (typeof n === "number" && Number.isFinite(n)) decodeMisses = n >>> 0;
+    const pa = result.provenAbsent;
+    if (Array.isArray(pa)) provenAbsent = pa.map(String);
+  } catch (_) {
+    return null; // throwing getter (freed wasm handle) → treat as legacy
+  }
+  if (decodeMisses === undefined && provenAbsent === undefined) return null;
+  return { decodeMisses, provenAbsent };
+}
+
+/** Stamp an extracted audit back onto a reconstructed result. No-op when
+ * `audit` is null/absent (legacy wasm on the other side). Returns target. */
+export function applySurfaceAudit(target, audit) {
+  if (!target || !audit) return target;
+  if (typeof audit.decodeMisses === "number") {
+    target.decodeMisses = audit.decodeMisses >>> 0;
+  }
+  if (Array.isArray(audit.provenAbsent)) {
+    target.provenAbsent = audit.provenAbsent.map(String);
+  }
+  return target;
+}
+
+// ---------------------------------------------------------------------------
 // SurfacePixels — `fetch_surfaces_pixels` decoder output
 // ---------------------------------------------------------------------------
 //
@@ -242,8 +290,10 @@ export function serializeSurfacePixels(sp) {
 
 /**
  * Serialize a `Vec<SurfacePixels>` into one payload + deduped transfer list.
+ * Also extracts the call-level decode audit (P2↔P3 ABI) off the input
+ * Array so the worker can post it alongside the payload.
  * @param {Iterable<*>} surfaces
- * @returns {{ surfaces: SurfacePixelsPayload[], transfer: ArrayBuffer[] }}
+ * @returns {{ surfaces: SurfacePixelsPayload[], transfer: ArrayBuffer[], audit: ({decodeMisses?: number, provenAbsent?: string[]}|null) }}
  */
 export function serializeSurfacePixelsBatch(surfaces) {
   const out = [];
@@ -259,7 +309,7 @@ export function serializeSurfacePixelsBatch(surfaces) {
       }
     }
   }
-  return { surfaces: out, transfer };
+  return { surfaces: out, transfer, audit: extractSurfaceAudit(surfaces) };
 }
 
 /**
@@ -314,9 +364,11 @@ export function reconstructSurfacePixelsBatch(payload) {
  * and the batch handle itself. `null` groups (drained/out-of-range) round-
  * trip as `null`.
  * @param {*} batch wasm `EntitySurfacesPixelsBatch`
- * @returns {{ groups: (SurfacePixelsPayload[]|null)[], transfer: ArrayBuffer[] }}
+ * @returns {{ groups: (SurfacePixelsPayload[]|null)[], transfer: ArrayBuffer[], audit: ({decodeMisses?: number, provenAbsent?: string[]}|null) }}
  */
 export function serializeEntitySurfacesBatch(batch) {
+  // Read the call-level audit getters BEFORE draining/freeing the handle.
+  const audit = extractSurfaceAudit(batch);
   const groups = [];
   const seen = new Set();
   const transfer = [];
@@ -349,7 +401,7 @@ export function serializeEntitySurfacesBatch(batch) {
   } catch (_) {
     /* best-effort */
   }
-  return { groups, transfer };
+  return { groups, transfer, audit };
 }
 
 /**

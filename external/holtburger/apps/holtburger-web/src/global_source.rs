@@ -64,6 +64,13 @@ pub async fn init_resource_source(manifest_url: String) -> Result<(), JsValue> {
     SOURCE.with(|cell| {
         *cell.borrow_mut() = Some(Arc::new(source));
     });
+    // R-7/A07-F4: a (re-)init invalidates every absence proof from the old
+    // manifest — the negative cache must not outlive the source it was
+    // proven against. No-op on the normal first init (memo is empty).
+    let dropped = crate::surface_neg_cache_clear_all();
+    if dropped > 0 {
+        log::info!("init_resource_source: cleared {dropped} negative-cache entries from prior source");
+    }
     Ok(())
 }
 
