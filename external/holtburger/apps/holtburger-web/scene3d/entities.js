@@ -3910,11 +3910,19 @@ export class EntityManager {
       const _warmT0 = performance.now();
       await prewarmSubtree(this.scene3d, root);
       const _warmMs = performance.now() - _warmT0;
+      // Tell only for real links (>8 ms), capped at 20 lines per session —
+      // under SwiftShader every compile crosses the threshold and a hub
+      // burst would print hundreds of lines (177 measured); the first 20 +
+      // the closing summary carry the field signal.
       if (_warmMs > 8) {
-        // eslint-disable-next-line no-console
-        console.info(
-          `[entities] rig warm 0x${guid.toString(16)}: ${Math.round(_warmMs)} ms (program link)`
-        );
+        EntityManager._rigWarmTells = (EntityManager._rigWarmTells | 0) + 1;
+        if (EntityManager._rigWarmTells <= 20) {
+          // eslint-disable-next-line no-console
+          console.info(
+            `[entities] rig warm 0x${guid.toString(16)}: ${Math.round(_warmMs)} ms (program link)` +
+              (EntityManager._rigWarmTells === 20 ? " — further rig-warm tells suppressed" : "")
+          );
+        }
       }
     }
     // Batch 9 #2 (2026-06-07): spawn-race liveness guard. Between this
@@ -3959,14 +3967,15 @@ export class EntityManager {
       root.traverse((o) => o.layers.set(1));
     }
     this.entityMap.set(guid, inst);
-    // P6/A10-O1 — the LOCAL player's rig committing is the in-world signal:
-    // arm the one-shot archetype-matrix warm (self-guarded; later calls and
-    // `?archetypeWarm=off` no-op). The delay inside lets the boot flood +
-    // async AtmosphereLights attach settle so the warmed programs compile
-    // against the final light state (A10-F3).
-    if (this._isLocalPlayerGuid(guid)) {
-      try { scheduleArchetypeWarm(this.scene3d); } catch (_) { /* diag-only */ }
-    }
+    // P6/A10-O1 — the FIRST rig committing is the in-world signal: arm the
+    // one-shot archetype-matrix warm (self-guarded; later calls and
+    // `?archetypeWarm=off` no-op). Any-entity, NOT local-player-gated: the
+    // wasm eager-WorldState path suppresses the local player's KIND_SPAWN on
+    // SelectCharacter (see _armPosition's note), so a local-only trigger
+    // never fires on exactly the default boot. The delay inside lets the
+    // boot flood + async AtmosphereLights attach settle so the warmed
+    // programs compile against the final light state (A10-F3).
+    try { scheduleArchetypeWarm(this.scene3d); } catch (_) { /* diag-only */ }
     // (2026-07-06) A corpse CreateObject (ODF Corpse bit) arrives right after a
     // creature's Dead motion + delete. Correlate it to the collapsing creature
     // so the corpse stays hidden until the death animation finishes and reveals

@@ -62,13 +62,34 @@ try {
 
   out.archetypeWarmTells = consoleTells.filter((t) => t.includes("archetype warm"));
   out.rigWarmLinkTells = consoleTells.filter((t) => t.includes("rig warm")).length;
+  // Race-free fired-check: the warm PARKS its proxy group on scene3d — the
+  // console tell can fire before this probe attaches its tap (first spawn
+  // + 4 s is usually pre-in-world), so read the parked state directly.
+  out.archetypeWarmParked = await page.evaluate(
+    () => window.liveScene3d?._archetypeWarmGroup?.children?.length ?? 0,
+  );
 
   if (out.programsAtSettle == null || out.programsAfterTeleport == null) {
     out.status = "SKIP";
     out.error = "renderer.info.programs unavailable (renderDiag path changed?)";
   } else {
     out.deltaPrograms = out.programsAfterTeleport - out.programsAtSettle;
-    out.status = out.deltaPrograms <= BOUND ? "PASS" : "FAIL";
+    // Gate 1: Δprograms bound. NOTE under ?nullRender (the headless boot
+    // contract) lazy first-draw links NEVER happen (render() is skipped),
+    // so programs only grow via compileAsync — i.e. the warms themselves.
+    // The delta therefore measures what the warms DISCOVER post-teleport,
+    // not what lazy rendering would have linked; the warms-off arm can
+    // legitimately read lower here. Real-GPU (1070) runs measure both.
+    // Gate 2 (warms-on arms only): the archetype warm must actually FIRE —
+    // its console tell is the field signal the one-shot armed correctly.
+    const warmsOn = !/archetypeWarm=(?:off|0|false)/.test(EXTRA_QUERY);
+    const boundOk = out.deltaPrograms <= BOUND;
+    const firedOk =
+      !warmsOn ||
+      (out.archetypeWarmParked || 0) > 0 ||
+      (out.archetypeWarmTells || []).length >= 1;
+    out.status = boundOk && firedOk ? "PASS" : "FAIL";
+    if (!firedOk) out.error = "archetype warm never fired (no parked proxies, no tell)";
   }
 } catch (e) {
   out.status = "SKIP";
@@ -78,6 +99,7 @@ try {
   console.log(
     `ENTITY-WARM SUMMARY: ${out.status} settle=${out.programsAtSettle} ` +
       `afterTeleport=${out.programsAfterTeleport} delta=${out.deltaPrograms}` +
+      ` archetypeParked=${out.archetypeWarmParked ?? "?"}` +
       ` archetypeTells=${(out.archetypeWarmTells || []).length}` +
       ` rigLinkTells=${out.rigWarmLinkTells ?? 0}` +
       (out.error ? ` (${out.error})` : ""),

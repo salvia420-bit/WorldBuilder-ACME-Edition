@@ -43,14 +43,32 @@ export const BAKE_PREWARM = (() => {
  */
 export async function prewarmSubtree(scene3d, object) {
   if (!BAKE_PREWARM || !object) return;
-  const renderer = scene3d && scene3d.renderer;
-  const camera = scene3d && scene3d.camera;
+  const host = _renderHost(scene3d);
+  const renderer = host && host.renderer;
+  const camera = host && host.camera;
   if (!renderer || !camera || typeof renderer.compileAsync !== "function") return;
   try {
-    await renderer.compileAsync(object, camera, scene3d.scene);
+    await renderer.compileAsync(object, camera, host.scene);
   } catch (_) {
     /* fail-soft: the subtree lazy-compiles on first render */
   }
+}
+
+// P6 fixup (2026-07-10): several callers hold the BUILDERS scene3d bag
+// (`scene3dForBuilders` — wasmExports + groups + caches), which carries NO
+// renderer/camera; only the `liveScene3d` facade does. A warm handed the
+// builders bag would silently no-op (exactly what the entity-warm probe
+// caught: archetypeParked=0). Resolve the render host with a fallback to
+// `window.liveScene3d` — set at init3D's end, i.e. before any entity spawn
+// can dispatch (the shared drain hook installs after it). Non-browser
+// contexts (workers/tests) keep the old no-op behavior.
+function _renderHost(scene3d) {
+  if (scene3d && scene3d.renderer && scene3d.camera) return scene3d;
+  try {
+    const ls = typeof window !== "undefined" ? window.liveScene3d : null;
+    if (ls && ls.renderer && ls.camera) return ls;
+  } catch (_) {}
+  return scene3d;
 }
 
 // ============================================================================
@@ -112,9 +130,14 @@ export function scheduleArchetypeWarm(scene3d, delayMs = 4000) {
 
 async function _runArchetypeWarm(scene3d) {
   _archetypeWarmState = "done";
-  const renderer = scene3d && scene3d.renderer;
-  const camera = scene3d && scene3d.camera;
-  if (!renderer || !camera || typeof renderer.compileAsync !== "function") return;
+  const host = _renderHost(scene3d);
+  const renderer = host && host.renderer;
+  const camera = host && host.camera;
+  if (!renderer || !camera || typeof renderer.compileAsync !== "function") {
+    // eslint-disable-next-line no-console
+    console.info("[bake_prewarm] archetype warm skipped: no renderer/camera on any host");
+    return;
+  }
   const t0 = performance.now();
   const group = new THREE.Group();
   group.name = "archetype-warm-proxies";
@@ -168,12 +191,14 @@ async function _runArchetypeWarm(scene3d) {
   );
   push(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
   try {
-    await renderer.compileAsync(group, camera, scene3d.scene);
+    await renderer.compileAsync(group, camera, host.scene);
   } catch (_) {
     /* fail-soft */
   }
-  // Park (never dispose) — see the refcount note above.
-  scene3d._archetypeWarmGroup = group;
+  // Park (never dispose) — see the refcount note above. Parked on the HOST
+  // (the facade probes read) as well as the caller's bag.
+  host._archetypeWarmGroup = group;
+  if (scene3d && scene3d !== host) scene3d._archetypeWarmGroup = group;
   // eslint-disable-next-line no-console
   console.info(
     `[bake_prewarm] archetype warm: ${count} proxy materials compiled in ` +
