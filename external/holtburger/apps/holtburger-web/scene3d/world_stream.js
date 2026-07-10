@@ -88,6 +88,10 @@ export function createWorldStreamer(deps) {
       const lpg = getLocalPlayerGuid();
       if (lpg === null || lpg === undefined || guid !== (lpg >>> 0)) return;
       const lbId = ((upd.landblockId >>> 16) << 16) >>> 0;
+      // Session 8: stamp the server-authoritative LB BEFORE the load hooks
+      // fire — teleport-destination urgent lane (see landblock_lru.js
+      // noteServerLb / isNearPlayerLb; lockstep with the legacy copy).
+      try { getLiveScene3d()?.landblockLru?.noteServerLb?.(lbId); } catch (_) {}
       // A15-Q4-SYNC: begin streaming sequence (keep in lockstep with
       // the legacy block in index.html#handlePositionUpdate).
       // Emit `landblockChanged` on the first known LB and on any

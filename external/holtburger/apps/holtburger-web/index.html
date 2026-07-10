@@ -3630,8 +3630,14 @@
         }
         if (fetchIds.length === 0) return;
         try {
+          // Session 8: URGENT lane (fetch-semaphore bypass). This is the
+          // rig-blocking collision fetch — the integrator freezes pose Z
+          // until it lands, so the player's teleport/LB-entry cannot
+          // complete behind speculative ring fetches (s8 capture: first-hop
+          // rig flip waited 17.5s in the normal lane under a saturated pipe).
           const meshes = await fetch_landblock_heightmaps(
-            new Uint32Array(fetchIds.map(f => f.cellId))
+            new Uint32Array(fetchIds.map(f => f.cellId)),
+            true
           );
           for (let i = 0; i < fetchIds.length; i += 1) {
             const { lbId } = fetchIds[i];
@@ -3762,6 +3768,11 @@
           // A15-Q4-SYNC: begin streaming sequence (keep in lockstep with
           // scene3d/world_stream.js#onPositionUpdate).
           const lbId = ((upd.landblockId >>> 16) << 16) >>> 0;
+          // Session 8: stamp the server-authoritative LB BEFORE the load
+          // hooks fire so the destination 3×3 rides the urgent lane from
+          // its first ask (the rig-derived urgency center can lag a
+          // teleport by seconds under bake saturation — s8 capture).
+          try { window.liveScene3d?.landblockLru?.noteServerLb?.(lbId); } catch (_) {}
           // Emit `landblockChanged` on the first known LB and on any
           // subsequent LB transition. Plugins subscribe to clear
           // zone-scoped state (e.g. combat-bar's armed spell).

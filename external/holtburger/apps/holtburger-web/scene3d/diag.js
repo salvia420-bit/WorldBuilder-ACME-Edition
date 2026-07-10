@@ -445,6 +445,19 @@ export function installDiag() {
     },
   };
 
+  // Session 8 fix: surfaces installed BEFORE init3D reaches here (e.g.
+  // `configureBakeWorker()` stamps `__diag.bakeWorkerStats` at boot) were
+  // wiped by this wholesale assignment — the s8 capture read null worker
+  // stats all session. Graft pre-existing keys onto the new bag; diag.js
+  // keys win on collision so this stays the single installation point.
+  try {
+    const prev = window.__diag;
+    if (prev && typeof prev === "object") {
+      for (const k of Object.keys(prev)) {
+        if (!(k in diag)) diag[k] = prev[k];
+      }
+    }
+  } catch (_) { /* fail-soft: never block diag install */ }
   window.__diag = diag;
 
   // Wave-1 surfaces: each new module attaches its own namespace via

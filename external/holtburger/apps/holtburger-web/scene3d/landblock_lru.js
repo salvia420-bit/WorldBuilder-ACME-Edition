@@ -219,9 +219,27 @@ const STREAM_URGENCY_ENABLED = (() => {
 function isNearPlayerLb(scene3d, lbKey, radius = 1) {
   if (!STREAM_URGENCY_ENABLED) return false;
   try {
-    const cur = scene3d?.landblockLru?.getCurrentLbId?.();
-    if (typeof cur !== "number" || cur === 0) return false;
-    return lbChebyshev(lbKeyOf(cur >>> 0), lbKeyOf(lbKey >>> 0)) <= radius;
+    const lru = scene3d?.landblockLru;
+    const key = lbKeyOf(lbKey >>> 0);
+    const cur = lru?.getCurrentLbId?.();
+    if (
+      typeof cur === "number" &&
+      cur !== 0 &&
+      lbChebyshev(lbKeyOf(cur >>> 0), key) <= radius
+    ) {
+      return true;
+    }
+    // Session 8 teleport-destination lane (1115 §4): the rig-derived
+    // current LB flips only when the wasm rig actually moves, which under
+    // bake saturation lags the teleport by many seconds (s8 capture: 17.5s
+    // first-hop, destination 3×3 cap-skipped 299× in the normal lane the
+    // whole time). The server position update names the destination ~1s
+    // after the teleport — `noteServerLb` stamps it below, and urgency
+    // honors EITHER center so destination bakes go urgent before the rig
+    // catches up. The two keys agree outside the teleport window, so this
+    // is a no-op for walking.
+    const srv = lru?._serverLbKey;
+    return typeof srv === "number" && srv !== 0 && lbChebyshev(srv, key) <= radius;
   } catch (_) {
     return false;
   }
@@ -231,6 +249,9 @@ export class LandblockLRU {
   constructor({ scene3d, maxResident, getCurrentLbId, onEvictLandblock = null, ringFloor = 1, debug = false } = {}) {
     if (!scene3d) throw new Error("LandblockLRU: scene3d required");
     this.scene3d = scene3d;
+    // Server-authoritative player LB (see noteServerLb) — null until the
+    // first position update stamps it.
+    this._serverLbKey = null;
     // Phase 6 collision-leak fix (2026-05-29): optional hook fired in evict()
     // to purge the evicted LB's wasm-side SpatialScene collision (see evict()).
     this._onEvictLandblock = typeof onEvictLandblock === "function" ? onEvictLandblock : null;
@@ -304,6 +325,16 @@ export class LandblockLRU {
 
   isParked(lbKey) {
     return this.parkPool.has(lbKeyOf(lbKey >>> 0));
+  }
+
+  // Session 8 teleport-destination lane — stamp the server-authoritative
+  // player LB (from the position-update stream, both A15-Q4-SYNC copies).
+  // Consumed only by `isNearPlayerLb` as a second urgency center; eviction
+  // and reclaim keep reading the rig-derived `getCurrentLbId` unchanged.
+  // Accepts a full landblockId or an lb-key; 0/invalid clears the note.
+  noteServerLb(landblockId) {
+    const k = lbKeyOf((landblockId ?? 0) >>> 0);
+    this._serverLbKey = k === 0 ? null : k;
   }
 
   // Register an LB as resident. Idempotent — re-tracking the same lbKey
