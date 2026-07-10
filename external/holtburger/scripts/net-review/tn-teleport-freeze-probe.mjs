@@ -116,6 +116,43 @@ for (let i = 0; i < 90; i++) {
   if (await helpers.evalInPage(() => !!(window.liveScene3d && window.liveScene3d.scene))) break;
   await page.waitForTimeout(1000);
 }
+
+// ── S2 accumulated-residency precondition (2026-07-10) ──
+// Fresh-boot TN runs peak at lru≈13-15 (only the boot ring is resident), so
+// the sealed purge drains almost nothing and P5's burst can't be judged
+// under real backlog. `--accumulate "Rithwic,Eastham,..."` hops the player
+// through towns BEFORE the baseline/TN legs, dwelling `--dwell` seconds per
+// stop so the streaming ring bakes; the LRU (cap self-sizes to ~200 at the
+// default ring) accumulates every visited region. Uses the same @telepoi
+// mechanism as the TN leg; a POI that never lands is skipped after 10 s.
+const ACCUMULATE = (arg("accumulate", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
+const DWELL_S = Number(arg("dwell", "25"));
+const accumStats = [];
+if (ACCUMULATE.length) {
+  const lbHigh = () => helpers.evalInPage(() => {
+    try { const p = window.__sessionHandle.getLocalPlayerPose();
+          return p && p.landblockId != null ? (p.landblockId >>> 16) & 0xFFFF : null; }
+    catch (_) { return null; }
+  });
+  const lruSize = () => helpers.evalInPage(() => {
+    try { return window.liveScene3d?.landblockLru?.entries?.size ?? null; } catch (_) { return null; }
+  });
+  for (const poi of ACCUMULATE) {
+    const before = await lbHigh();
+    await helpers.evalInPage((c) => { try { window.__sessionHandle.sendChat(c); } catch (_) {} },
+      "@telepoi " + poi);
+    let moved = false;
+    for (let i = 0; i < 20; i++) {
+      await page.waitForTimeout(500);
+      const now = await lbHigh();
+      if (now != null && now !== before) { moved = true; break; }
+    }
+    if (moved) await page.waitForTimeout(DWELL_S * 1000); // let the ring stream
+    accumStats.push({ poi, moved, lru: await lruSize() });
+  }
+  console.error(`[tn-probe] accumulate: ${accumStats.map((a) => `${a.poi}:${a.moved ? a.lru : "SKIP"}`).join(" ")}`);
+}
+
 await helpers.evalInPage(installRecorder);
 await page.waitForTimeout(BASELINE_S * 1000);
 
@@ -167,13 +204,16 @@ const stages = {
                    longTaskTotalMs: raw.longTasks.reduce((a, e) => a + e.ms, 0),
                    longTaskMaxMs: raw.longTasks.reduce((a, e) => Math.max(a, e.ms), 0) },
 };
-const payload = { ok: landed, landed, query: EXTRA_QUERY || null, stages, timeline: buckets, longTasks: raw.longTasks,
+const payload = { ok: landed, landed, query: EXTRA_QUERY || null, accumulate: accumStats,
+                  stages, timeline: buckets, longTasks: raw.longTasks,
                   marks: raw.marks, consoleErrorCount: errors.length,
                   consoleErrors: errors.slice(0, 20) };
 const json = JSON.stringify(payload, null, 2);
 if (OUT) fs.writeFileSync(OUT, json);
 console.log(json);
 console.log(`TN-PROBE SUMMARY: landed=${landed} via=${usedCmd} ` +
+  `accum=${accumStats.length ? accumStats.filter((a) => a.moved).length + "/" + accumStats.length +
+    " lruPre=" + (accumStats[accumStats.length - 1]?.lru ?? "?") : "none"} ` +
   `land→recovered=${tRecovered != null && tLand != null ? tRecovered - tLand : "NEVER"}ms ` +
   `lruPeak=${peak} drained@=${tDrained} worstNoFrameGap=${worstGap}ms ` +
   `longTaskMax=${stages.sustainedSlow.longTaskMaxMs}ms errors=${errors.length}`);
