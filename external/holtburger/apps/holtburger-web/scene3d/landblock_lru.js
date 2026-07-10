@@ -52,19 +52,29 @@ const SEALED_EVICT_BURST_ON = (() => {
 })();
 
 // Phase 9a warm-park eviction (W4 residency design §3, 2026-07-10).
-// `?warmPark=on`: eviction PARKS instead of disposing — containers detach
-// from the scene groups into a byte-budgeted pool, baked marks and the wasm
-// collision stay, and re-entry re-ATTACHES instead of re-baking (retail's
-// DBOCache freelist applied at our built-render-state layer). True dispose
-// happens only under pool budget pressure, farthest/oldest first, amortized.
-// Default OFF until the 1070 eye-test gate passes (house default-ON bar);
+// Eviction PARKS instead of disposing — containers detach from the scene
+// groups into a byte-budgeted pool, baked marks and the wasm collision
+// stay, and re-entry re-ATTACHES instead of re-baking (retail's DBOCache
+// freelist applied at our built-render-state layer). True dispose happens
+// only under pool budget pressure, farthest/oldest first, amortized.
+// DEFAULT ON (2026-07-10 session 6, W4 §3.1 flip): two consecutive
+// full-telepoi batteries won on every axis (best arm 588 s vs 682/688 s
+// controls, capped stops 10 vs 15/17), the 1070 real-render screenshot
+// pairs (shots-wp-on vs -off, Eastham/Eastwatch at cap) are
+// content-identical, and the functional round-trip probe (ci-smoke S6)
+// parks/keeps-marks/unparks/re-attaches with 0 errors. Known owed fix:
+// the TN-entry park↔unpark storm can true-dispose a bounded slice of the
+// pool under transient byte pressure (see the S6 threshold note) — still
+// ~60× fewer disposes than classic eviction. `?warmPark=off` escape;
 // `?warmParkBudgetMb=N` tunes the pool (default 256 MB — counts CPU *and*
 // GPU residency: detached objects keep their GL buffers until dispose()).
 const WARM_PARK_ON = (() => {
   try {
     const v = new URLSearchParams(window.location?.search || "").get("warmPark");
-    return v === "on" || v === "1" || v === "true";
+    return !(v === "off" || v === "0" || v === "false");
   } catch (_) {
+    // No window/URLSearchParams = headless unit-test env: keep CLASSIC
+    // eviction so the LRU suites keep exercising the dispose paths.
     return false;
   }
 })();

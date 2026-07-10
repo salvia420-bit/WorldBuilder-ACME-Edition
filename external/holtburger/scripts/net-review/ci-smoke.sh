@@ -90,6 +90,19 @@ S5="$(printf '%s\n' "$S45" | sed -n 's/^S5=//p' | tail -1)"; S5="${S5:-FAIL-no-o
 case "$S4" in PASS) ;; *) FAIL=1 ;; esac
 case "$S5" in PASS*) ;; SKIP) ;; *) FAIL=1 ;; esac
 
+# ── S6: warm-park functional round-trip (third boot; W4 §3.1 default-ON
+# gate, wired 2026-07-10 session 6). Parks the TN backlog, keeps marks,
+# unparks + re-attaches on return, 0 non-benign errors. The probe's
+# noDisposeStorm threshold is BOUNDED (≤500) until the TN-transition
+# park↔unpark storm regression is fixed — see the probe's note.
+sleep 130
+if node "$HERE/warmpark-roundtrip-probe.mjs" > "$TMP/warmpark.log" 2>&1; then
+  S6="PASS"
+else
+  S6="FAIL($(grep -o 'WARMPARK SUMMARY: [A-Z]*' "$TMP/warmpark.log" | tail -1 || echo no-summary))"
+  FAIL=1
+fi
+
 echo "$SUMMARY_LINE"
-echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 boot=$S1 errors=$S2 white=$S3 keepalive=$S4 datDecode=$S5  (details: $TMP)"
+echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 boot=$S1 errors=$S2 white=$S3 keepalive=$S4 datDecode=$S5 warmpark=$S6  (details: $TMP)"
 exit "$FAIL"

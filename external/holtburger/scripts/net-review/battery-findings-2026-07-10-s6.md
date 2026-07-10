@@ -62,6 +62,19 @@ artifacts.)
   the day's second-lowest churn — no regression; promising. Worst
   saturated tail (satMed 19.6 s) needs a look before promoting it.
 
+## DECISION 2 (landed, late session): warmPark DEFAULT-ON (W4 §3.1)
+
+Flipped on the strength of this table + the 1070 shots-wp-on parity pairs
++ the round-trip probe (wired as ci-smoke S6). The flip pulls the
+gate/hysteresis pair on with it (conditional defaults below). While
+gating, found the TN-transition park↔unpark storm REGRESSION (1112
+landing measured evicted=0; now 74/299/614 across runs). Root cause: a
+bake completing after its LB parked re-tracks it (track() doesn't check
+parkPool) → dual-state → the next park() true-disposes the pool copy.
+Bounded, correctness-clean, S6 threshold temporarily 1500, fix owed
+(1114 §5 — rides the transition-window/teleport-flush work; the naive
+unpark-on-track fix risks duplicated scene content, don't ship blind).
+
 ## DECISION (landed): gate + hysteresis defaults FOLLOW ?warmPark
 
 `RECLAIM_GATE_ON` and `RECLAIM_MIN_AGE_MS` now default to on/2000 when
