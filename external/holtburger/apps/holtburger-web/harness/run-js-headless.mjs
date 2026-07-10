@@ -122,6 +122,7 @@ const TIER4 = [
   { flag: "blockingParticleParity", file: "test_a11_s0_blocking_particle.mjs" },
   { flag: "defaultScriptSpawn", file: "test_a11_s5_default_script_spawn.mjs" },
   { flag: "acWindowPositionMerge(R11)", file: "test_ac_window_position_merge.mjs" },
+  { flag: "aliasSplit(JS)", file: "test_p1_alias_split.mjs" },
 ].map((t) => ({ ...t, tier: 4 }));
 
 const PLAN = [...TIER1, ...TIER4];
