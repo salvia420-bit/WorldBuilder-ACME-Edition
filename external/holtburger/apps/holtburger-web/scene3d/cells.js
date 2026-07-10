@@ -351,24 +351,30 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     scene3d.envCellLoadedLbs = new Set();
   }
 
-  // Perf C1 — flag-gated EnvCell surface-mesh fusion. When `?envcellFusion=1`
-  // is set, fuse all surface BufferGeometries within a cell into a single
-  // (or two — split when the cell mixes opaque + transparent) `THREE.Mesh`
-  // with a parallel materials array and `addGroup(start, count, materialIndex)`.
-  // Three.js binds the correct material per group automatically. Each cell
-  // drops from N draws to 1 (or 2) draws, killing the 96–832 per-frame
-  // material binds indoor measurements report at Academy PVS depth.
+  // Perf C1 — EnvCell surface-mesh fusion: fuse all surface BufferGeometries
+  // within a cell into a single (or two — split when the cell mixes opaque +
+  // transparent) `THREE.Mesh` with a parallel materials array and
+  // `addGroup(start, count, materialIndex)`. Three.js binds the correct
+  // material per group automatically. Each cell drops from N draws to 1 (or
+  // 2), killing the 96–832 per-frame material binds indoor measurements
+  // report at Academy PVS depth.
   //
-  // Default OFF until SSIM-validated against the per-surface baseline. See
-  // `docs/fps-perf-plan-2026-05-18.md` § C1 for the briefing.
-  let envcellFusion = false;
+  // W3 net-fixwave (2026-07-10, A08-5): default-ON for EVERY url, including
+  // BARE ones. The old reader defaulted the `let` to false and only read the
+  // flag inside an `if (location.search)` PRESENCE guard — so fusion was ON
+  // whenever ANY query string was present (every fleet A/B and probe ran it)
+  // but OFF on a bare field URL: every prior bare-URL measurement ran a
+  // config no probe ever exercised. `?envcellFusion=off` (also 0/false)
+  // disables.
+  let envcellFusion = true;
   try {
-    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
-      envcellFusion =
-        new URLSearchParams(globalThis.location.search).get("envcellFusion") !== "off";
+    if (typeof globalThis !== "undefined" && globalThis.location) {
+      const v = new URLSearchParams(globalThis.location.search || "")
+        .get("envcellFusion")?.toLowerCase();
+      envcellFusion = !(v === "off" || v === "0" || v === "false");
     }
   } catch (_) {
-    envcellFusion = false;
+    envcellFusion = true;
   }
 
   // F3 (2026-06-01): time-slice the Step-D per-cell instantiation loop so a
