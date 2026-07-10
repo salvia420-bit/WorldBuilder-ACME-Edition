@@ -1338,19 +1338,27 @@ export function readSurfaceUnifiedFlag() {
   }
 }
 
-// === Missing-surface negative cache (2026-07-07) ============================
-// A surface DID that resolves to zero pixels is a GENUINE absence from the
-// manifest catalog (e.g. the contiguous 0x08F0xxxx gap in the base DATs), not a
-// transient miss: the manifest (boot+catalog+shards) is session-immutable, and
-// a zero-dim result only lands AFTER the wasm discovery-prefetch has run — a
-// transient shard error on a CATALOGED key propagates as an Err/throw, never as
-// zero-dim. Without a memo, every per-LB / ring `preload`/`get` re-issues the
-// wasm fetch + re-warns (measured 162 re-decodes / 90 s across 58 absent DIDs,
-// stationary; far worse while roaming). `MaterialCache.missingSurfaces` records
-// each such DID so subsequent bakes skip it. A successful install still clears
-// the entry (belt-and-suspenders for the concurrent grey-surface race), and
-// `materials.has(did)` is always checked first so a real material wins. Default
-// ON; `?surfaceNegCache=off` (or `=0`) reverts to the re-hammer path.
+// === Missing-surface negative cache (2026-07-07; provenance-gated 2026-07-09) =
+// `MaterialCache.missingSurfaces` records surface DIDs PROVEN absent from the
+// manifest catalog (e.g. the contiguous 0x08F0xxxx gap in the base DATs) so
+// per-LB / ring `preload`/`get` bakes stop re-issuing the wasm fetch +
+// re-warning for them (measured 162 re-decodes / 90 s across 58 absent DIDs,
+// stationary; far worse while roaming).
+//
+// R-2 (net-fixwave 2026-07-09): the original insert trigger — ANY zero-dim
+// result — was NOT proof of absence. The wasm walk loop swallows exhausted
+// dependency-fetch rounds into Ok(()) (prefetch.rs run_walk_loop), so a
+// transient shard failure ALSO decodes zero-dim; a DID poisoned that way was
+// then skipped by preload() BEFORE fetching, which silently disabled the
+// 2026-05-30 white-surface recovery ladder (its preload() retries no-op'd —
+// session-permanent grey/white). Inserts are now gated on the decode-audit
+// fields the wasm stamps on each fetch result (surfaceResultProvenAbsent
+// below): only DIDs the catalog AUTHORITATIVELY lacks are memoised; zero-dims
+// without proof stay retryable (the pre-negcache contract), and a legacy wasm
+// without the fields never poisons at all. A successful install still clears
+// the entry, and `materials.has(did)` is always checked first so a real
+// material wins. Default ON; `?surfaceNegCache=off` (or `=0`) disables even
+// the proven-absent memoisation (the re-hammer path).
 export function surfaceNegCacheEnabled() {
   try {
     if (typeof window === "undefined" || !window.location) return true;
@@ -1360,6 +1368,48 @@ export function surfaceNegCacheEnabled() {
     return !(lv === "off" || lv === "0" || lv === "false");
   } catch (_) {
     return true;
+  }
+}
+
+// --- P2↔P3 ABI (net-fixwave 2026-07-09): surface decode-audit readers -------
+// The wasm surface-pixels exports stamp two OPTIONAL fields on each CALL-level
+// result (the returned array / batch object; carried verbatim through the
+// bake-worker serialization):
+//   decodeMisses : number — count of dependency keys that failed to hydrate
+//                  during this call's prefetch walk (0 = complete decode);
+//   provenAbsent : Array<"0x%08X"> — surface DIDs the catalog authority PROVES
+//                  absent (the only DIDs eligible for the negative cache).
+// Both readers treat a missing field as "legacy wasm" → null; callers must
+// then never poison and may retry freely. The absent-set is memoised per
+// result object so preload()'s per-DID chains don't re-parse the same batch.
+const _provenAbsentMemo = new WeakMap();
+export function surfaceResultProvenAbsent(result) {
+  if (result === null || (typeof result !== "object" && typeof result !== "function")) {
+    return null;
+  }
+  if (_provenAbsentMemo.has(result)) return _provenAbsentMemo.get(result);
+  let set = null;
+  try {
+    const pa = result.provenAbsent;
+    if (Array.isArray(pa)) {
+      set = new Set();
+      for (const s of pa) {
+        const v = typeof s === "string" ? parseInt(s, 16) : Number(s);
+        if (Number.isFinite(v)) set.add(v >>> 0);
+      }
+    }
+  } catch (_) {
+    set = null; // a throwing getter (freed wasm handle) must never poison
+  }
+  _provenAbsentMemo.set(result, set);
+  return set;
+}
+export function surfaceResultDecodeMisses(result) {
+  try {
+    const n = result ? result.decodeMisses : undefined;
+    return typeof n === "number" && Number.isFinite(n) ? n : null;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -2882,11 +2932,15 @@ export class MaterialCache {
       const sp = results[0];
       if (!sp || sp.width === 0 || sp.height === 0) {
         // Free the empty wasm-bindgen handle and return the shared fallback.
-        // Zero-dim post-prefetch = permanent catalog absence → record it so this
-        // DID is not re-fetched. `materials.set` on any real resolve un-poisons
-        // (below), so a surface reaching a real material via another path wins.
+        // R-2 (net-fixwave 2026-07-09): a zero-dim is NOT proof of absence —
+        // memoise only DIDs the call-level `provenAbsent` audit lists (legacy
+        // wasm without the field never poisons; transient zero-dims stay
+        // retryable). `materials.set` on any real resolve un-poisons (below).
         if (sp && typeof sp.free === "function") sp.free();
-        if (this._negCacheEnabled) this.missingSurfaces.add(did);
+        const absent = surfaceResultProvenAbsent(results);
+        if (this._negCacheEnabled && absent && absent.has(did)) {
+          this.missingSurfaces.add(did);
+        }
         return this.fallbackMaterial;
       }
       const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
@@ -3087,10 +3141,12 @@ export class MaterialCache {
         d,
         sharedFetch.then((all) => {
           // Each parallel slot has the matching SurfacePixels; bind
-          // by index in `need`.
+          // by index in `need`. The call-level decode-audit rides along
+          // so only proven-absent DIDs are memoised (R-2; the WeakMap
+          // memo makes the per-DID extraction O(1) per batch).
           const i = need.indexOf(d);
           const sp = all[i];
-          return this._installFromPixels(d, sp);
+          return this._installFromPixels(d, sp, surfaceResultProvenAbsent(all));
         })
       );
       this.pendingStartTimes.set(d, _batchStart);
@@ -3314,6 +3370,8 @@ export class MaterialCache {
     // Distribute per-group results. payloadAt(i) MOVES the i-th
     // Vec<SurfacePixels> out — JS now owns each SurfacePixels' wasm
     // handle and is responsible for sp.free() per pixels item.
+    // R-2: batch-level decode-audit, read once for every group below.
+    const batchAbsent = surfaceResultProvenAbsent(batch);
     const resultGroups = new Array(groups.length);
     let payloadIdx = 0;
     for (let gi = 0; gi < groupMeta.length; gi += 1) {
@@ -3353,7 +3411,7 @@ export class MaterialCache {
           // Cache-installed path. _installFromPixels keys by DID
           // and installs into this.materials. Future getCached(did)
           // returns the same material across all callers.
-          const mat = this._installFromPixels(did, sp);
+          const mat = this._installFromPixels(did, sp, batchAbsent);
           if (mat !== this.fallbackMaterial) {
             materials.set(did, mat);
           }
@@ -3487,7 +3545,7 @@ export class MaterialCache {
     return mat;
   }
 
-  _installFromPixels(did, sp) {
+  _installFromPixels(did, sp, provenAbsent = null) {
     if (!sp) return this.fallbackMaterial;
     // Idempotency / free-once guard (F4, 2026-06-01): if this DID is already
     // installed, a second consumer reached us with the SAME (already-freed)
@@ -3531,11 +3589,15 @@ export class MaterialCache {
         });
       } catch (_) {}
       try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
-      // Permanent catalog absence (post-prefetch zero-dim) → negative-cache so
-      // the per-LB/ring preload path stops re-fetching + re-warning it. NOT set
-      // in the throw case above: that is a freed-handle double-consume race
-      // (F4), not an absence, so it must never poison a live DID.
-      if (this._negCacheEnabled) this.missingSurfaces.add(did);
+      // R-2 (net-fixwave 2026-07-09): negative-cache only on PROVEN absence —
+      // the caller passes the call-level `provenAbsent` audit set (see
+      // surfaceResultProvenAbsent). A zero-dim without proof is a transient
+      // (swallowed dependency round) and must stay retryable. NOT set in the
+      // throw case above: that is a freed-handle double-consume race (F4),
+      // not an absence, so it must never poison a live DID.
+      if (this._negCacheEnabled && provenAbsent && provenAbsent.has(did)) {
+        this.missingSurfaces.add(did);
+      }
       return this.fallbackMaterial;
     }
     try {

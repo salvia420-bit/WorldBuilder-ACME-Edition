@@ -645,6 +645,8 @@ import {
   readLuminousEmissiveMapFlag,
   VFX_GLOBALS,
   installVfxComponentPatch,
+  surfaceResultDecodeMisses,
+  surfaceResultProvenAbsent,
 } from "./materials.js";
 import { drainPendingPlayEffects } from "./play_effect_vfx.js";
 // #16 (?itemFx) — the optional non-retail UiEffects 3D item-aura. Mirrors the
@@ -2629,11 +2631,16 @@ class EntityInstance {
   dispose() {
     // 2026-05-30 — mark disposed + cancel any pending spawn-race surface
     // refresh (see EntityManager._scheduleEntitySurfaceRefresh) so a late
-    // re-decode can't touch a torn-down rig.
+    // re-decode can't touch a torn-down rig. R-8 (2026-07-09): ditto for the
+    // dyed twin (_scheduleDyedSurfaceRefresh).
     this._disposed = true;
     if (this._surfaceRefreshTimer) {
       try { clearTimeout(this._surfaceRefreshTimer); } catch (_) {}
       this._surfaceRefreshTimer = null;
+    }
+    if (this._dyedRefreshTimer) {
+      try { clearTimeout(this._dyedRefreshTimer); } catch (_) {}
+      this._dyedRefreshTimer = null;
     }
     try {
       this.mixer.stopAllAction();
@@ -3349,6 +3356,12 @@ export class EntityManager {
     const hasPaletteSubs =
       paletteId !== 0 ||
       (subPalettes && subPalettes.length > 0);
+    // R-8 (net-fixwave 2026-07-09) — decode-audit capture for the dyed-path
+    // recovery ladder armed at the bottom of this function. `decodeMisses`
+    // (P2↔P3 ABI; 0 on legacy wasm) flags an incomplete walk even when every
+    // part decoded non-empty: a soft-skipped palette overlay is TEXTURED but
+    // undyed, invisible to the mapless-mesh probe.
+    let dyedDecodeMisses = 0;
     const _spawnTraceMatStart = SPAWN_TRACE ? performance.now() : 0;
     // 2026-05-28 perf: wire-agent mode discards the texture from
     // fetchEntitySurfacesPixels anyway (per-DID wireframe materials
@@ -3420,6 +3433,14 @@ export class EntityManager {
               paletteId,
               subPalettes
             );
+            // R-8 — call-level decode audit (both fields null/0 on legacy
+            // wasm). Proven-absent DIDs seed the per-entity skip set so the
+            // dyed ladder never re-hammers a catalog-confirmed absence.
+            dyedDecodeMisses = surfaceResultDecodeMisses(results) ?? 0;
+            const absent = surfaceResultProvenAbsent(results);
+            if (absent && absent.size) {
+              inst._dyedSurfaceAbsent = new Set(absent);
+            }
           }
 
           for (let mi = 0; mi < missDids.length; mi += 1) {
@@ -3950,6 +3971,37 @@ export class EntityManager {
       });
       if (needsRefresh) this._scheduleEntitySurfaceRefresh(inst, 0);
     }
+    // R-8 (net-fixwave 2026-07-09) — dyed-path twin of the recovery arm above.
+    // Players/dyed NPCs take the fetchEntitySurfacesPixels path, which the
+    // `!hasPaletteSubs` gate excludes — one swallowed prefetch round (empty
+    // parts) or an incomplete walk (`decodeMisses > 0`) whitened the whole
+    // outfit with no recovery until respawn. A parameter-preserving refetch
+    // (identical DIDs + palette state) cannot strip the dye, so schedule one
+    // on the same backoff ladder. Mapless probe mirrors the plain arm; the
+    // decodeMisses arm additionally catches textured-but-undyed parts.
+    if (
+      hasPaletteSubs &&
+      !WIREFRAME_MODE &&
+      typeof this.wasmExports?.fetchEntitySurfacesPixels === "function"
+    ) {
+      let needsRefresh = dyedDecodeMisses > 0;
+      if (!needsRefresh) {
+        root.traverse((o) => {
+          if (!needsRefresh && o.isMesh && o.material && !o.material.map &&
+              o.userData && o.userData.surfaceDid != null) {
+            needsRefresh = true;
+          }
+        });
+      }
+      if (needsRefresh) {
+        this._scheduleDyedSurfaceRefresh(inst, {
+          paletteId,
+          subPalettes,
+          dids: new Uint32Array([...allSurfaceDids]),
+          missArmed: dyedDecodeMisses > 0,
+        }, 0);
+      }
+    }
     // wieldedSpawn (2026-06-11) — this rig is a wielded child whose attach
     // is already parked (the wasm emits its synthetic KIND_SPAWN and the
     // kind=7 attach in one drain batch). The mount in attachChildToParent
@@ -4415,6 +4467,14 @@ export class EntityManager {
       });
       if (pending.length === 0) return; // every surface resolved
       const dids = [...new Set(pending.map((m) => m.userData.surfaceDid >>> 0))];
+      // R-2 (net-fixwave 2026-07-09): this ladder IS an explicit retry — a DID
+      // negative-cached by a transient zero-dim (exactly the class it exists
+      // to heal) made preload() below skip the fetch entirely, burning every
+      // attempt as a no-op. Un-poison our targets first; a genuine catalog
+      // absence just re-poisons via the provenAbsent-gated insert.
+      if (cache.missingSurfaces) {
+        for (const d of dids) cache.missingSurfaces.delete(d);
+      }
       try {
         await cache.preload(dids, this.wasmExports.fetch_surfaces_pixels);
       } catch (_) { /* transient — covered by the retry below */ }
@@ -4428,6 +4488,189 @@ export class EntityManager {
       // Anything still untextured? the resource hasn't arrived — back off + retry.
       if (pending.some((m) => needsTex(m.material))) {
         this._scheduleEntitySurfaceRefresh(inst, attempt + 1);
+      }
+    }, DELAYS_MS[attempt]);
+  }
+
+  /**
+   * R-8 (net-fixwave 2026-07-09) — cancel a pending dyed-surface refresh.
+   * Called on appearance change (`_applyAppearanceHotSwap`): the captured
+   * palette state is stale then, and the swap re-fetches + re-arms itself.
+   * Despawn/respawn cancels via `EntityInstance.dispose()` (timer clear) +
+   * the ladder's `entityMap.get(guid) !== inst` guard.
+   */
+  _cancelDyedSurfaceRefresh(inst) {
+    if (!inst) return;
+    if (inst._dyedRefreshTimer) {
+      try { clearTimeout(inst._dyedRefreshTimer); } catch (_) {}
+      inst._dyedRefreshTimer = null;
+    }
+    inst._dyedRefreshKey = null;
+  }
+
+  /**
+   * R-8 (net-fixwave 2026-07-09) — dyed-path twin of
+   * `_scheduleEntitySurfaceRefresh` above. The plain ladder is gated
+   * `!hasPaletteSubs` (a plain re-decode would strip a dye), so every player
+   * (skin/hair subPalettes) and recoloured NPC had NO recovery: one transient
+   * empty decode in the single fetchEntitySurfacesPixels call painted the
+   * whole outfit with the mapless grey fallback until respawn. The safe
+   * retry is a PARAMETER-PRESERVING refetch — identical DIDs + (paletteId,
+   * subPalettes) — which by construction cannot strip the dye.
+   *
+   * `spec` = { paletteId, subPalettes, dids: Uint32Array (the spawn's full
+   * surface-DID set), missArmed: bool }. Normally only the still-mapless
+   * DIDs are refetched (checking the shared paletted cache first); the one
+   * `missArmed` sweep — armed when the spawn/hot-swap fetch reported
+   * `decodeMisses > 0` (P2↔P3 ABI) — refetches the full set and, once a
+   * COMPLETE decode lands (refetch decodeMisses === 0), also swaps textured
+   * meshes: a soft-skipped palette overlay leaves a textured-but-undyed
+   * material the mapless probe can't see. Same backoff schedule, liveness
+   * guards, and stop-when-healed shape as the plain ladder, plus:
+   *   - per-entity dedupe (`_dyedRefreshTimer` — one ladder per rig);
+   *   - appearance supersession (`_dyedRefreshKey` — hot-swap cancels);
+   *   - `_dyedSurfaceAbsent` skip set (catalog-proven absences never retry).
+   * Healed materials install via `installPaletted` so every later entity
+   * with the same dye signature is a cache hit (and a signature poisoned by
+   * an incomplete decode is replaced for future spawns).
+   */
+  _scheduleDyedSurfaceRefresh(inst, spec, attempt = 0) {
+    const DELAYS_MS = [600, 1500, 3500, 8000, 16000, 32000, 60000, 90000];
+    if (!inst || !inst.root || !spec || attempt >= DELAYS_MS.length) return;
+    if (typeof this.wasmExports?.fetchEntitySurfacesPixels !== "function") return;
+    if (inst._dyedRefreshTimer) return; // per-entity dedupe — one ladder at a time
+    const paletteId = (spec.paletteId ?? 0) >>> 0;
+    const subPalettes = spec.subPalettes ?? new Uint32Array(0);
+    const key = `${paletteId}|${Array.from(subPalettes).join(",")}`;
+    if (attempt === 0) inst._dyedRefreshKey = key;
+    const needsTex = (mat) => !!mat && !mat.map;
+    const skipAbsent = (did) =>
+      !!(inst._dyedSurfaceAbsent && inst._dyedSurfaceAbsent.has(did >>> 0));
+    inst._dyedRefreshTimer = setTimeout(async () => {
+      inst._dyedRefreshTimer = null;
+      // Same liveness guards as the plain ladder, plus appearance
+      // supersession: a hot-swap cleared/replaced the key meanwhile.
+      if (inst._disposed || this.entityMap.get(inst.guid) !== inst) return;
+      if (inst._dyedRefreshKey !== key) return;
+      const cache = this.materialCache;
+      const pendingDids = new Set();
+      inst.root.traverse((o) => {
+        if (o.isMesh && needsTex(o.material) && o.userData &&
+            o.userData.surfaceDid != null && !skipAbsent(o.userData.surfaceDid)) {
+          pendingDids.add(o.userData.surfaceDid >>> 0);
+        }
+      });
+      const sweep = !!spec.missArmed;
+      if (pendingDids.size === 0 && !sweep) {
+        inst._dyedRefreshKey = null; // every dyed surface resolved
+        return;
+      }
+      // Refetch set: mapless DIDs always; the missArmed sweep takes the full
+      // spawn set (minus proven absences). A shared-cache hit heals a mapless
+      // DID without a fetch — except under the sweep, where the cached entry
+      // is exactly what the incomplete decode may have poisoned.
+      const healed = new Map();
+      const fetchDids = [];
+      const wantDids = new Set(pendingDids);
+      if (sweep) for (const d of spec.dids) { if (!skipAbsent(d)) wantDids.add(d >>> 0); }
+      for (const d of wantDids) {
+        const hit = (!sweep && cache)
+          ? cache.getCachedPaletted(d, paletteId, subPalettes)
+          : null;
+        if (hit && hit.map) healed.set(d, hit);
+        else fetchDids.push(d);
+      }
+      let results = null;
+      if (fetchDids.length > 0) {
+        try {
+          results = await this.wasmExports.fetchEntitySurfacesPixels(
+            new Uint32Array(fetchDids),
+            paletteId,
+            subPalettes
+          );
+        } catch (_) { /* transient — covered by the retry below */ }
+      }
+      // Re-check liveness across the await (mirrors the plain ladder).
+      if (inst._disposed || this.entityMap.get(inst.guid) !== inst) return;
+      if (inst._dyedRefreshKey !== key) return;
+      const refetchMisses = surfaceResultDecodeMisses(results);
+      const absent = surfaceResultProvenAbsent(results);
+      if (absent && absent.size) {
+        if (!inst._dyedSurfaceAbsent) inst._dyedSurfaceAbsent = new Set();
+        for (const d of absent) inst._dyedSurfaceAbsent.add(d >>> 0);
+      }
+      // Only a COMPLETE refetch (misses === 0; null = legacy wasm, in which
+      // case the sweep can never have been armed) may swap textured meshes.
+      const sweepComplete = sweep && !!results && (refetchMisses ?? 0) === 0;
+      for (let i = 0; i < fetchDids.length; i += 1) {
+        const did = fetchDids[i] >>> 0;
+        const sp = results ? results[i] : null;
+        if (!sp || sp.width === 0 || sp.height === 0) {
+          if (sp && typeof sp.free === "function") sp.free();
+          continue; // still empty — the retry below backs off
+        }
+        const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
+        // C1 — snapshot Surface (0x08) render-state BEFORE `sp.free()`
+        // (mirrors the spawn-path twin).
+        const palSurfaceState = {
+          surfaceType: (sp.surfaceType ?? 0) >>> 0,
+          translucency: typeof sp.translucency === "number" ? sp.translucency : 0.0,
+          luminosity: typeof sp.luminosity === "number" ? sp.luminosity : 0.0,
+          diffuse: typeof sp.diffuse === "number" ? sp.diffuse : 0.0,
+          hasPalette: typeof sp.hasPalette === "boolean" ? sp.hasPalette : undefined,
+        };
+        if (typeof sp.free === "function") sp.free();
+        const mat = new THREE.MeshStandardMaterial({
+          map: tex,
+          roughness: 0.9,
+          metalness: 0.0,
+          side: THREE.DoubleSide,
+          transparent: false,
+        });
+        this._applyPalettedSurfaceRenderState(mat, palSurfaceState);
+        mat.name = `paletted-${did.toString(16)}-${paletteId.toString(16)}`;
+        if (cache) {
+          cache.installPaletted(did, paletteId, subPalettes, mat, tex);
+        } else {
+          mat.userData = { ...(mat.userData || {}), __disposable: true };
+          inst.registerOwnedTexture(tex);
+          inst.registerOwnedMaterial(mat);
+        }
+        healed.set(did, mat);
+      }
+      if (healed.size > 0) {
+        inst.root.traverse((o) => {
+          if (!o.isMesh || !o.userData || o.userData.surfaceDid == null) return;
+          const mat = healed.get(o.userData.surfaceDid >>> 0);
+          if (!mat || !mat.map) return;
+          if (needsTex(o.material)) {
+            o.material = mat;
+          } else if (sweepComplete && !o.material?.userData?.__vfxSetKey) {
+            // Sweep: replace possibly-undyed textured parts too — but never
+            // a VFX variant clone (would drop the aura; colour staleness is
+            // the lesser evil there).
+            o.material = mat;
+          }
+        });
+        if (!inst._entityMaterials) inst._entityMaterials = new Map();
+        for (const [d, m] of healed) inst._entityMaterials.set(d, m);
+      }
+      // Anything still mapless (or the sweep still incomplete)? back off +
+      // retry; otherwise the ladder is done — release the supersession key.
+      let stillPending = false;
+      inst.root.traverse((o) => {
+        if (!stillPending && o.isMesh && needsTex(o.material) && o.userData &&
+            o.userData.surfaceDid != null && !skipAbsent(o.userData.surfaceDid)) {
+          stillPending = true;
+        }
+      });
+      const missStill = sweep && !sweepComplete;
+      if (stillPending || missStill) {
+        this._scheduleDyedSurfaceRefresh(
+          inst, { ...spec, missArmed: missStill }, attempt + 1
+        );
+      } else {
+        inst._dyedRefreshKey = null;
       }
     }, DELAYS_MS[attempt]);
   }
@@ -8378,6 +8621,11 @@ export class EntityManager {
     const paletteId = (newMeta.paletteId ?? 0) >>> 0;
     const subPalettes = newMeta.subPalettes ?? new Uint32Array(0);
     const hasPaletteSubs = paletteId !== 0 || subPalettes.length > 0;
+    // R-8 (net-fixwave 2026-07-09) — an appearance change supersedes any
+    // pending dyed-surface refresh (its captured palette state is stale);
+    // the arm at the bottom of this swap re-schedules against the new state.
+    this._cancelDyedSurfaceRefresh(inst);
+    let hotSwapDecodeMisses = 0;
 
     let entityMaterials = null;
     if (hasPaletteSubs && typeof this.wasmExports?.fetchEntitySurfacesPixels === "function") {
@@ -8394,6 +8642,14 @@ export class EntityManager {
           });
         } catch (_) {}
         const results = await entitySurfacePixelsFetcher(this.wasmExports)(dids, paletteId, subPalettes);
+        // R-8 — decode audit (see the spawn-path twin): misses arm the
+        // ladder's sweep; proven absences join the per-entity skip set.
+        hotSwapDecodeMisses = surfaceResultDecodeMisses(results) ?? 0;
+        const hotSwapAbsent = surfaceResultProvenAbsent(results);
+        if (hotSwapAbsent && hotSwapAbsent.size) {
+          if (!inst._dyedSurfaceAbsent) inst._dyedSurfaceAbsent = new Set();
+          for (const d of hotSwapAbsent) inst._dyedSurfaceAbsent.add(d >>> 0);
+        }
         entityMaterials = new Map();
         const newOwnedMaterials = [];
         const newOwnedTextures = [];
@@ -8547,6 +8803,36 @@ export class EntityManager {
     try {
       window.__pluginClient?.events?.emit?.("entityAppearanceChanged", { guid });
     } catch (_) {}
+
+    // R-8 (net-fixwave 2026-07-09) — hot-swap twin of the spawn-commit
+    // recovery arms: a transient empty decode during an appearance change
+    // otherwise leaves the new outfit on the mapless fallback until the next
+    // respawn (the spawn-path arms never see hot-swapped meshes). Dyed swaps
+    // arm the dyed ladder; plain swaps arm the 2026-05-30 plain ladder.
+    if (!WIREFRAME_MODE && inst.root) {
+      let needsRefresh = hasPaletteSubs && hotSwapDecodeMisses > 0;
+      if (!needsRefresh) {
+        inst.root.traverse((o) => {
+          if (!needsRefresh && o.isMesh && o.material && !o.material.map &&
+              o.userData && o.userData.surfaceDid != null) {
+            needsRefresh = true;
+          }
+        });
+      }
+      if (needsRefresh) {
+        if (hasPaletteSubs) {
+          this._scheduleDyedSurfaceRefresh(inst, {
+            paletteId,
+            subPalettes,
+            dids: new Uint32Array([...allSurfaceDids]),
+            missArmed: hotSwapDecodeMisses > 0,
+          }, 0);
+        } else if (this.materialCache &&
+                   typeof this.wasmExports?.fetch_surfaces_pixels === "function") {
+          this._scheduleEntitySurfaceRefresh(inst, 0);
+        }
+      }
+    }
 
     return true;
   }
