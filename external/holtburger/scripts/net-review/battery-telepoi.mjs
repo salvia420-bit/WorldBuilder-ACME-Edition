@@ -133,6 +133,7 @@ let aborted = null;
 let stopsCapped = false;
 let cycleT0 = Date.now();   // reset at the POI-loop start; guards finalize pre-loop
 const med = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
+const mx = (a) => (a.length ? Math.max(...a) : null);
 
 function finalize() {
   const allRows = [...priorRows, ...rows];
@@ -158,6 +159,13 @@ function finalize() {
     noMove: stopRows.filter((r) => r.noMove).length,
     workDeltaMedian: med(ok.map((r) => r.workDelta).filter((v) => v != null)),
     reclaimDeltaMedian: med(ok.map((r) => r.reclaimDelta).filter((v) => v != null)),
+    // wasm linear-memory per-stop residency (docs/1122.md §5.6, S15): med/max
+    // over landed stops, both instances; null when no stop reported a value
+    // (legacy pkg / worker absent).
+    wasmMemMainMedMB: med(ok.map((r) => r.wasmMemMainMB).filter((v) => v != null)),
+    wasmMemMainMaxMB: mx(ok.map((r) => r.wasmMemMainMB).filter((v) => v != null)),
+    wasmMemWorkerMedMB: med(ok.map((r) => r.wasmMemWorkerMB).filter((v) => v != null)),
+    wasmMemWorkerMaxMB: mx(ok.map((r) => r.wasmMemWorkerMB).filter((v) => v != null)),
     settleWorkMin: SETTLE_WORK_MIN, settleFloorMs: SETTLE_FLOOR_MS,
     lowWorkSettles: ok.filter((r) => r.lowWork).length,
     settleGuardWork: ok.filter((r) => r.settleGuard === "work").length,
@@ -337,6 +345,41 @@ const sample = () => raced(helpers.evalInPage(() => {
 }));
 const chat = (c) => raced(helpers.evalInPage((cmd) => { try { window.__sessionHandle.sendChat(cmd); } catch (_) {} }, c));
 
+// wasm linear-memory per-stop sample (docs/1122.md §5.6, S15): both wasm
+// instances via the `__diag.datDecode()` relay — the SAME accessor ci-smoke
+// S5b reads (main instance = `r.main.wasmMemoryBytes`, worker instance =
+// `r.worker.wasmMemoryBytes` through the bake-worker relay). Fully fail-soft
+// and MUST NOT abort or slow a stop: a legacy pkg (field absent), an absent
+// worker (`r.worker == null`), an evaluate error, or a wedged main thread all
+// yield {main:null, worker:null}. Bounded by its OWN short race (not the 15 s
+// eval guard) so a hang here can't stretch a stop; the timeout resolves to
+// nulls rather than rejecting, so it never enters the arm-abort path. Rounded
+// to whole MB to match the S5b report.
+const WASM_MEM_TIMEOUT_MS = 3000;
+async function sampleWasmMemMB() {
+  try {
+    const ev = helpers.evalInPage(async () => {
+      try {
+        if (typeof window.__diag?.datDecode !== "function") return { main: null, worker: null };
+        const r = await window.__diag.datDecode();
+        const toMb = (b) => (typeof b === "number" && Number.isFinite(b)) ? Math.round(b / 1048576) : null;
+        return { main: toMb(r?.main?.wasmMemoryBytes), worker: toMb(r?.worker?.wasmMemoryBytes) };
+      } catch (_) { return { main: null, worker: null }; }
+    });
+    // Swallow a LATE rejection (evalInPage failing after the timeout already
+    // won the race) — otherwise it is an unhandledRejection, which kills the
+    // whole driver on modern node. A rejection BEFORE the timeout still
+    // rejects the race and lands in the catch below.
+    ev.catch(() => {});
+    return await Promise.race([
+      ev,
+      new Promise((res) => setTimeout(() => res({ main: null, worker: null }), WASM_MEM_TIMEOUT_MS)),
+    ]);
+  } catch (_) {
+    return { main: null, worker: null };
+  }
+}
+
 // <settle-guard> (session 11, 2026-07-10 — extends 1113 finding 5; docs/1118.md
 // §2 false-settle finding). Pure per-sample reducer for the settle window,
 // factored out so /tmp harnesses can drive it with synthetic sample sequences.
@@ -423,6 +466,14 @@ for (const poi of POIS) {
       } catch (_) {}
     }
   }
+  // wasm linear-memory per-stop column (docs/1122.md §5.6, S15). Sampled once
+  // AFTER settle for a landed stop; null for an unlanded (no-move) stop. Fully
+  // fail-soft — never aborts or slows the stop (see sampleWasmMemMB).
+  let wasmMemMainMB = null, wasmMemWorkerMB = null;
+  if (landed) {
+    const wm = await sampleWasmMemMB();
+    wasmMemMainMB = wm.main; wasmMemWorkerMB = wm.worker;
+  }
   // Per-stop deltas (before → settled): streamed-work = bake-worker requests
   // issued; reclaimOps = evictions + parks (the ping-pong metric — baseline
   // ~75/stop pre-gate, target <10).
@@ -433,7 +484,8 @@ for (const poi of POIS) {
       + ((endStats.parkedTotal ?? 0) - (before.parkedTotal ?? 0))
     : null;
   rows.push({ kind: "stop", poi, sessionIdx: SESSION_IDX, landed, sameLb, noMove, landMs, settleMs,
-    settleGuard, lowWork, workDelta, reclaimDelta, ...(endStats ?? {}) });
+    settleGuard, lowWork, workDelta, reclaimDelta, ...(endStats ?? {}),
+    wasmMemMainMB, wasmMemWorkerMB });
   console.error(`[battery] ${poi}: landed=${landed}${sameLb ? " (same-LB)" : ""}${noMove ? " (no-move dup)" : ""} ` +
     `land=${landMs}ms settle=${settleMs}ms guard=${settleGuard}${lowWork ? " (lowWork)" : ""} ` +
     `lru=${endStats?.lru} parked=${endStats?.parked} work+${workDelta} reclaim+${reclaimDelta}`);

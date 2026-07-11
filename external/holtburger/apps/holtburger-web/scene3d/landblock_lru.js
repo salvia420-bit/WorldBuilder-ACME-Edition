@@ -130,6 +130,39 @@ const WARM_PARK_BUDGET_BYTES = (() => {
 // Amortize true-dispose from the pool (retail §1.3 style: eviction work per
 // tick is bounded; the pool absorbs the burst).
 const WARM_PARK_MAX_DISPOSE_PER_TICK = 2;
+
+// park→DBOCache UseTime floor (S15a, PLAN-fixed-slot-grid-residency §2/§5,
+// 2026-07-11). Retail's DBOCache (acclient.c:83485 `GetIfUsing`) holds decoded
+// resources behind a ~30 s `UseTime` freelist floor: release ≠ free. Applied at
+// our park layer — a parked slot younger than this floor is NOT true-disposed
+// by park-pool byte PRESSURE (_tickParkPoolPressure), so a short-hop re-entry
+// within the window is a pointer re-adopt (unpark), zero decode, zero bake.
+// This generalizes sealedKeepRing ("keep the sealed ring") to "keep ANY
+// recently-parked slot". The byte-budget LRU stays the memory backstop BEHIND
+// the floor: pressure disposes only entries OLDER than the floor; if the budget
+// is still exceeded with everything young, the overage is RECORDED (getStats
+// useTimeDeferred* counters) and entries age out on later ticks — pressure
+// never violates the floor. Explicit dispose paths that are NOT pressure-driven
+// (evict-on-teleport whole-LB invalidation, flushParked, dispose()) are
+// unchanged — the floor gates only pressure reclaim. `?parkUseTimeMs=N`
+// overrides (0/off/false disables the floor entirely = pre-S15 behavior);
+// absent → 30000. Footgun-safe: only an explicit numeric or the off-tokens
+// change behavior.
+const PARK_USE_TIME_MS = (() => {
+  try {
+    const raw = new URLSearchParams(window.location?.search || "").get("parkUseTimeMs");
+    if (raw == null) return 30_000;
+    if (raw === "off" || raw === "false") return 0;
+    const v = parseInt(raw, 10);
+    if (Number.isFinite(v) && v >= 0) return v;
+    return 30_000;
+  } catch (_) {
+    // No window/URLSearchParams (headless unit-test env): keep the floor at
+    // its default so the pressure path exercises the retention gate; suites
+    // that need it off import with an explicit ?parkUseTimeMs=0 window stub.
+    return 30_000;
+  }
+})();
 // The two cross-LB consolidators (both default-OFF) excise per-LB geometry
 // destructively — park has no hide/show seam for them in v1, so their
 // presence downgrades park to classic evict (correctness first; see W4
@@ -321,6 +354,14 @@ export class LandblockLRU {
     this.parkBudgetBytes = WARM_PARK_BUDGET_BYTES;
     this._parkedTotal = 0;
     this._unparkedTotal = 0;
+
+    // park→DBOCache UseTime floor telemetry (S15a): how much reclaim the
+    // floor deferred because the victim was younger than PARK_USE_TIME_MS.
+    // Cumulative event counters (one bump per deferred parked entry per
+    // pressure tick), sibling to _parkedTotal. Stay 0 when the floor is
+    // disabled (?parkUseTimeMs=0) — the pre-S15 pressure path never defers.
+    this._useTimeDeferredCount = 0;
+    this._useTimeDeferredBytes = 0;
 
     // Reclaim-center freshness gate state (see the RECLAIM_GATE_ON note).
     this._lastCenterKey = null;
@@ -650,9 +691,21 @@ export class LandblockLRU {
   // the byte budget — farthest-from-player first, oldest breaking ties,
   // amortized to ≤ WARM_PARK_MAX_DISPOSE_PER_TICK per tick (retail §1.3
   // style: bounded eviction work per frame).
+  //
+  // S15a park→DBOCache UseTime floor (PLAN §2/§5): a parked slot younger than
+  // PARK_USE_TIME_MS since its parkedAtMs is NOT eligible for pressure
+  // disposal — release ≠ free within the floor window (retail's DBOCache
+  // freelist floor). The byte LRU stays the backstop BEHIND the floor: we
+  // dispose only entries older than the floor; if the budget is still exceeded
+  // once every eligible entry is gone, we DO NOT violate the floor — the
+  // overage is recorded (_useTimeDeferred*) and the young entries age into
+  // eligibility on later ticks. `?parkUseTimeMs=0` sets the floor to 0 → the
+  // young-skip below is never taken → byte-identical to the pre-S15 path.
   _tickParkPoolPressure(refLbKey) {
     if (this.parkPool.size === 0 || this.parkedBytes <= this.parkBudgetBytes) return;
     const ref = refLbKey != null ? lbKeyOf(refLbKey >>> 0) : null;
+    const nowMs = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    const floorMs = PARK_USE_TIME_MS;
     const order = [...this.parkPool.entries()].sort((a, b) => {
       if (ref != null) {
         const d = lbChebyshev(ref, b[0]) - lbChebyshev(ref, a[0]);
@@ -661,9 +714,17 @@ export class LandblockLRU {
       return a[1].parkedAtMs - b[1].parkedAtMs;
     });
     let disposed = 0;
-    for (const [key] of order) {
+    for (const [key, p] of order) {
       if (this.parkedBytes <= this.parkBudgetBytes) break;
       if (disposed >= WARM_PARK_MAX_DISPOSE_PER_TICK) break;
+      // UseTime floor: keep a recently-parked slot re-adoptable (unpark =
+      // zero decode). Record the deferral and move on — a later tick reclaims
+      // it once it ages past the floor. floorMs === 0 disables the gate.
+      if (floorMs > 0 && (nowMs - p.parkedAtMs) < floorMs) {
+        this._useTimeDeferredCount += 1;
+        this._useTimeDeferredBytes += p.bytes || 0;
+        continue;
+      }
       this.disposeParked(key);
       disposed += 1;
     }
@@ -1437,6 +1498,11 @@ export class LandblockLRU {
       parkedBytes: this.parkedBytes,
       parkedTotal: this._parkedTotal,
       unparkedTotal: this._unparkedTotal,
+      // park→DBOCache UseTime floor (S15a): the floor value in effect + how
+      // much pressure reclaim it deferred (young slots kept re-adoptable).
+      parkUseTimeMs: PARK_USE_TIME_MS,
+      useTimeDeferredCount: this._useTimeDeferredCount,
+      useTimeDeferredBytes: this._useTimeDeferredBytes,
       // Reclaim-center gate + hysteresis telemetry (battery columns).
       ringFloor: this.ringFloor,
       reclaimGate: RECLAIM_GATE_ON,

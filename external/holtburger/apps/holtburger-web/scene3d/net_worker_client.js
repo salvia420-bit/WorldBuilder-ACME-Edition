@@ -53,16 +53,25 @@ function terminateActiveWorker() {
   _activeWorker = null;
 }
 
-// Promotion seam (2026-07-11 s13, 1120-appendix A8): flip this ONE constant
-// to promote netWorker to default-ON once the Tier-1 workDelta A/B reads
-// clean (S15 decision). The explicit off-values below are the
-// `?netWorker=off` escape promotion requires — without them a default-ON
-// flag would be impossible to disable.
+// Promotion seam (2026-07-11 s13, 1120-appendix A8). DECISION TAKEN s15
+// (2026-07-11): stays false — netWorker is NOT promoted. The Tier-1 A/B
+// (docs/1121.md §4) measured workDelta +17% (109 vs 93) AND settle +24%
+// (13,765 vs 11,056 ms) on the worker arm — genuinely more streamed work per
+// stop on every cold load, not a churn artifact; the only benefit is
+// freeze-survival 8/8 vs 7/8 (§5). A +24% settle tax on every user's cold
+// load to insure a 1-in-8 pathological-freeze case is the wrong default
+// trade, so netWorker remains the opt-in resilience flag (`?netWorker=1`) for
+// bot/agent sessions where main-thread freezes are common. Revisit ONLY if
+// A15 residency erases the settle delta. (loginDefer / A9 stays dormant by
+// design — its 20 s defer only activates under ?netWorker=1.) This ONE
+// constant remains the promotion seam if that revisit ever flips it; the
+// explicit off-values below are the `?netWorker=off` escape that a default-ON
+// flip would require.
 const NET_WORKER_DEFAULT = false;
 
 /** `?netWorker=1|on|true` forces ON; `?netWorker=0|off|false` forces OFF;
- * absent → NET_WORKER_DEFAULT (currently OFF — still earning its default-on
- * stripes; the shipped keepalive heartbeat remains the default keepalive). */
+ * absent → NET_WORKER_DEFAULT (OFF — s15 decided NOT to promote; see the seam
+ * note above. The shipped keepalive heartbeat remains the default keepalive). */
 export function netWorkerEnabled() {
   try {
     const v = new URLSearchParams(globalThis.location?.search || "").get("netWorker");

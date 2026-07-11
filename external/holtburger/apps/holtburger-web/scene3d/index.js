@@ -112,6 +112,11 @@ import { guardedStreamBake, createStreamGuardState, summarizeStreamBakeWait } fr
 // A4 / Conflict C2). Pure injected-deps core; the loadTerrainRing facade below
 // wraps it. See terrain_ring.js for the ownership + F1-fallback contract.
 import { runTerrainRingBatch } from "./terrain_ring.js";
+// S15b (2026-07-11) — ?fixedGrid player-centered TERRAIN slot-grid residency
+// driver (docs/PLAN-fixed-slot-grid-residency-2026-07-11.md §2, landing §5.3).
+// Pure injected-deps core; the loadTerrainRing facade below injects the live
+// deps (fetch → runTerrainRingBatch; release → the existing LRU path).
+import { FixedSlotGrid, FIXED_GRID_TERRAIN_RADIUS } from "./fixed_grid.js";
 
 // streamFix (2026-07-02, town-portal streaming): default-ON master gate for the
 // already-baked FAST-PATH in the three per-LB loaders below (`?streamFix=off`
@@ -154,6 +159,50 @@ const TERRAIN_RING_BATCH_ENABLED = (() => {
     return true;
   }
 })();
+
+// S15b (2026-07-11): ?fixedGrid player-centered terrain slot-grid residency
+// driver. DEFAULT-OFF (pre-validation — plan §2: default-off until an A/B soak
+// validates the walk/short-hop settle drop, then flip default-on + `=off`).
+// Explicit opt-in ONLY (1/on/true → ON; absent/anything-else → OFF) — the repo's
+// flag-default footgun is that a `!== "off"` reader reads ON when absent, so a
+// default-OFF flag must test the on-values, never the off-values. See
+// docs/PLAN-fixed-slot-grid-residency-2026-07-11.md.
+const FIXED_GRID_ENABLED = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("fixedGrid");
+    return v === "1" || v === "on" || v === "true";
+  } catch (_) {
+    return false;
+  }
+})();
+// ?diag=1 AND ?fixedGrid on → the grid periodically asserts its resident record
+// against terrainBakedLbs and warns loudly on divergence (plan §2). Cheap; only
+// runs on steady (no-move) ticks and only when both flags are set.
+const FIXED_GRID_DIAG = (() => {
+  try {
+    return new URLSearchParams(window.location?.search || "").get("diag") === "1";
+  } catch (_) {
+    return false;
+  }
+})();
+
+// Extract the lb-keys with an in-flight TERRAIN bake from the stream guard's
+// in-flight set (keys shaped `terrain:<decimal lbKey>` — stream_bake_guard.js /
+// landblock_lru.js `_hasInFlightBake`). Feeds the fixedGrid derived-view
+// assertion so a just-dispatched (not-yet-baked) edge LB isn't mis-flagged as
+// an over-claim. Returns null when the guard isn't wired (unit/capture paths).
+function terrainInFlightLbKeys(streamGuardState) {
+  const inFlight = streamGuardState?.inFlight;
+  if (!(inFlight instanceof Set) || inFlight.size === 0) return null;
+  const out = new Set();
+  for (const s of inFlight) {
+    if (typeof s === "string" && s.startsWith("terrain:")) {
+      const n = Number.parseInt(s.slice("terrain:".length), 10);
+      if (Number.isFinite(n)) out.add(n >>> 0);
+    }
+  }
+  return out;
+}
 
 const METERS_PER_LANDBLOCK = 192.0;
 // HOLTBURG_X / HOLTBURG_Y retired (spawn-driven-boot): no landblock is special
@@ -3046,6 +3095,48 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // → pure solo loop. All ownership + all-or-nothing-fallback (F1) logic
     // lives in runTerrainRingBatch (terrain_ring.js).
     loadTerrainRing(cx, cy) {
+      // S15b ?fixedGrid (docs/PLAN-fixed-slot-grid-residency-2026-07-11.md §2):
+      // route the two position-update ring drivers (world_stream.js + the legacy
+      // index.html A15-Q4-SYNC block — this facade is their shared terrain
+      // call-site, so BOTH are routed here with zero driver edits) through the
+      // player-centered slot grid. The grid decides WHAT terrain should be
+      // resident (shift-in-place; interior untouched; steady-state = no work;
+      // teleport = whole-grid invalidate == today) and calls BACK into
+      // `_runTerrainRingBatch` for the FETCH, so the HOW stays byte-identical to
+      // the flag-off path below. DEFAULT-OFF: the `&&` short-circuits on the
+      // false const before any grid access, leaving the flag-off path
+      // byte-identical (the ship gate).
+      if (FIXED_GRID_ENABLED && this._fixedGrid) {
+        const res = this._fixedGrid.update(cx, cy);
+        // Steady tick under ?diag=1: assert the grid's resident record against
+        // the real bake state (the async bake window from the last crossing has
+        // passed on a no-move tick, so a still-unbacked block LB is a true
+        // divergence, not an in-flight transient). Warns loudly with the diff.
+        if (FIXED_GRID_DIAG && !res.moved) {
+          try {
+            this._fixedGrid.assertResidency({
+              baked: this.terrainBakedLbs instanceof Set ? this.terrainBakedLbs : new Set(),
+              inFlight: terrainInFlightLbKeys(this._streamGuardState),
+            });
+          } catch (_) { /* diag is best-effort */ }
+        }
+        return;
+      }
+      return this._runTerrainRingBatch(cx, cy);
+    },
+    // The batched-fetch dispatch, factored out of loadTerrainRing so the
+    // fixedGrid driver (above) and the flag-off path share ONE fetch path
+    // (grid decides WHAT, this decides HOW). A4 (2026-07-11 s13) — batched 3×3
+    // terrain-ring facade: replaces the 9-solo loadTerrainForLandblock loop
+    // (each a single-element fetch_landblock_heightmaps N+1). Batch-fetches the
+    // ring's not-yet-baked heightmaps in ONE wasm call, then fans out through
+    // the SAME guarded loadTerrainForLandblock path (guard + LRU + warm-park +
+    // subdiv) passing each prefetched base mesh, so per-LB behavior is
+    // byte-identical to solo. Do NOT route through bakeTerrainRing — it lacks
+    // that machinery (docs/1120-appendix.md Conflict C2). ?terrainRingBatch=off
+    // → pure solo loop. All ownership + all-or-nothing-fallback (F1) logic lives
+    // in runTerrainRingBatch (terrain_ring.js).
+    _runTerrainRingBatch(cx, cy) {
       return runTerrainRingBatch({
         cx,
         cy,
@@ -4477,6 +4568,36 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     scene3dForBuilders.landblockLru = landblockLru;
     if (typeof window !== "undefined") {
       window.__landblockLru = landblockLru;
+    }
+    // S15b ?fixedGrid (docs/PLAN-fixed-slot-grid-residency-2026-07-11.md §2,
+    // §5.3): construct the player-centered TERRAIN slot grid ONLY when the flag
+    // is on — flag-off leaves `_fixedGrid` undefined so loadTerrainRing's
+    // `FIXED_GRID_ENABLED && this._fixedGrid` guard short-circuits with zero new
+    // work (the ship gate). The grid drives WHAT terrain is resident; the
+    // injected deps keep the HOW on the existing guarded path:
+    //   - fetchEdge → `_runTerrainRingBatch` on the new centre (the SAME batched
+    //     call the flag-off facade makes; its already-baked pre-filter narrows
+    //     the wasm fetch to exactly the incoming edge).
+    //   - releaseEdge → the vacated edge is DE-ASSERTED from the grid and left to
+    //     the LRU's existing positional (Chebyshev + recency) eviction — the
+    //     same reclaim the flag-off trailing edge already relies on. S15b does
+    //     NOT proactively park here: the only public release primitive
+    //     (LandblockLRU.park) parks the WHOLE LB (buildings/statics/cells), which
+    //     exceeds S15b's TERRAIN-only scope and would perturb the teleport-
+    //     dominated battery. The exact vacated set is computed + handed through
+    //     this seam so S15c can wire a real whole-LB park once buildings/statics
+    //     join the grid — zero core change. (Plan §5.3 → §5.4.)
+    if (FIXED_GRID_ENABLED) {
+      liveScene3d._fixedGrid = new FixedSlotGrid({
+        radius: FIXED_GRID_TERRAIN_RADIUS,
+        lbKeyFromXY,
+        fetchEdge: (_edgeKeys, cx, cy) => liveScene3d._runTerrainRingBatch(cx, cy),
+        releaseEdge: (_vacatedKeys) => { /* S15b: LRU positional eviction owns release (see note) */ },
+      });
+      scene3dForBuilders._fixedGrid = liveScene3d._fixedGrid;
+      if (typeof window !== "undefined") {
+        window.__fixedGrid = liveScene3d._fixedGrid;
+      }
     }
     // Bulk-track the initial ring (terrain ring 13×13 + buildings/statics
     // ring 5×5 already baked above). Walk terrainGroup.children once to
