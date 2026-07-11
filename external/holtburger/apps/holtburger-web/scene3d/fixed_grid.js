@@ -1,6 +1,10 @@
-// scene3d/fixed_grid.js — S15b (2026-07-11) `?fixedGrid` player-centered
-// TERRAIN slot-grid residency DRIVER
-// (docs/PLAN-fixed-slot-grid-residency-2026-07-11.md §2, landing order §5.3).
+// scene3d/fixed_grid.js — `?fixedGrid` player-centered slot-grid residency
+// DRIVER (docs/PLAN-fixed-slot-grid-residency-2026-07-11.md §2, landing §5.3/§5.4).
+//   S15b: TERRAIN slot grid (shift-in-place; the FixedSlotGrid below).
+//   S15c: the vacated edge → real whole-LB park (buildings/statics/scenery/cells
+//         ride park()'s existing per-layer detach) via the hysteresis-gated
+//         EdgeParkScheduler at the bottom of this file, + a post-crossing diag
+//         grace on the derived-view assert.
 //
 // Pure, injected-deps core (the scene3d/terrain_ring.js + scene3d/world_stream.js
 // pattern): no `three`, no `window`, no wasm import — so it unit-tests without a
@@ -55,6 +59,17 @@ export const FIXED_GRID_TERRAIN_RADIUS = 1;
 // world_stream / legacy-index.html ring clamp.
 function inMap(v) {
   return v >= 0 && v <= 0xff;
+}
+
+// Monotonic-ish clock for the diag grace window / park hysteresis. performance
+// is preferred; Date.now is the node/older-env fallback. Injected in tests.
+function defaultNow() {
+  try {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") {
+      return performance.now();
+    }
+  } catch (_) { /* fall through */ }
+  return Date.now();
 }
 
 /**
@@ -133,18 +148,36 @@ export class FixedSlotGrid {
    *   wiring maps this to runTerrainRingBatch on the new centre.
    * @param {(edgeKeys:Set<number>)=>any} deps.releaseEdge
    *   Route the vacated edge to the existing release/park path. NOT called on a
-   *   teleport (today's behavior: the LRU reclaims the old block).
+   *   teleport (today's behavior: the LRU reclaims the old block). S15c wires
+   *   this to the EdgeParkScheduler's `onVacated` so the vacated set schedules a
+   *   hysteresis-gated whole-LB park (see the index.js grid construction).
+   * @param {()=>number} [deps.now]  monotonic clock (ms) — ONLY used for the
+   *   `?diag=1` post-crossing grace window (§ assertResidency). Defaults to
+   *   performance.now()/Date.now(); tests inject a controllable clock.
+   * @param {()=>object} [deps.parkStatsProvider]  optional accessor merged into
+   *   getStats() under a `park` key so the ONE `window.__fixedGrid.getStats()`
+   *   the wave-2D probe reads carries the S15c EdgeParkScheduler counters too
+   *   (the grid stays pure — it just calls the injected function).
    * @param {(msg:string, detail?:any)=>void} [deps.warn]
    */
-  constructor({ radius, lbKeyFromXY, fetchEdge, releaseEdge, warn } = {}) {
+  constructor({ radius, lbKeyFromXY, fetchEdge, releaseEdge, now, parkStatsProvider, warn } = {}) {
     this.radius = Math.max(1, radius | 0);
     this.width = 2 * this.radius + 1;
     this.lbKeyFromXY = lbKeyFromXY;
     this.fetchEdge = typeof fetchEdge === "function" ? fetchEdge : () => {};
     this.releaseEdge = typeof releaseEdge === "function" ? releaseEdge : () => {};
+    this.now = typeof now === "function" ? now : defaultNow;
+    this._parkStatsProvider = typeof parkStatsProvider === "function" ? parkStatsProvider : null;
     this.warn = typeof warn === "function"
       ? warn
       : (m, d) => { try { console.warn(m, d); } catch (_) {} };
+
+    // Timestamp (via `now()`) of the last MOVED crossing (seed/teleport/shift).
+    // The `?diag=1` derived-view assert uses it to grace the async bake window:
+    // an `unbacked` block LB seen within FIXED_GRID_DIAG_GRACE_MS of a crossing
+    // is the in-flight bake catching up, not a true divergence (docs/1123.md §3
+    // known noise — 13 transient warns). null until the first crossing.
+    this._lastCrossingAtMs = null;
 
     this.center = null; // { cx, cy } once seeded
     // slots[row * W + col] = lb-key or -1 (off-map). Slot (r,c) represents the
@@ -159,6 +192,12 @@ export class FixedSlotGrid {
     this._stats = {
       updates: 0, crossings: 0, shifts: 0, teleports: 0, seeds: 0, noMoves: 0,
       fetchCalls: 0, releaseCalls: 0, assertRuns: 0, assertWarns: 0,
+      // S15c grace telemetry: unbacked block LBs suppressed inside the
+      // post-crossing bake-window grace (transient, NOT a divergence), and how
+      // many assert runs did any grace suppression. A wave-2D diag battery can
+      // gate on "0 non-transient warns" = assertWarns stays flat while these
+      // absorb the boot/teleport bake ramp.
+      transientUnbackedSuppressed: 0, graceSuppressedRuns: 0,
       lastDx: 0, lastDy: 0,
     };
   }
@@ -169,13 +208,21 @@ export class FixedSlotGrid {
   }
 
   getStats() {
-    return {
+    const base = {
       radius: this.radius,
       width: this.width,
       center: this.center ? { ...this.center } : null,
       resident: this._resident.size,
+      lastCrossingAtMs: this._lastCrossingAtMs,
       ...this._stats,
     };
+    // Merge the S15c park scheduler counters (parksIssued, parkSkippedInEntriesMiss,
+    // pending, …) so the probe reads ONE object. Null when park wiring is off
+    // (?fixedGridPark=off) or absent (unit/capture paths).
+    if (this._parkStatsProvider) {
+      try { base.park = this._parkStatsProvider(); } catch (_) { base.park = null; }
+    }
+    return base;
   }
 
   // Recompute slots + resident from the block geometry, recording which slots
@@ -233,6 +280,7 @@ export class FixedSlotGrid {
       this._stats.seeds += 1;
       this._placeBlock(cxi, cyi, null);
       this.center = { cx: cxi, cy: cyi };
+      this._lastCrossingAtMs = this.now();
       this._stats.fetchCalls += 1;
       this.fetchEdge(newBlock, cxi, cyi);
       return { moved: true, teleport: false, seed: true, incoming: new Set(newBlock), vacated: new Set() };
@@ -253,6 +301,7 @@ export class FixedSlotGrid {
     }
 
     this._stats.crossings += 1;
+    this._lastCrossingAtMs = this.now(); // grace anchor (teleport + shift alike)
     const oldBlock = this._resident;
     const incoming = setDiff(newBlock, oldBlock);
     const vacated = setDiff(oldBlock, newBlock);
@@ -299,30 +348,192 @@ export class FixedSlotGrid {
    * window after a crossing has passed, so a still-`unbacked` block LB is a
    * true divergence, not an in-flight transient.
    *
+   * S15c post-crossing grace (docs/1123.md §3 known noise): right after a
+   * seed/teleport/shift the incoming edge is dispatched but its bake has not
+   * landed yet, so it reads `unbacked` for a few hundred ms. Under `graceMs>0`
+   * an `unbacked` LB seen within `graceMs` of the last crossing is reclassified
+   * as `transientUnbacked` — counted, NOT warned — so a full-battery diag run
+   * can gate on "0 non-transient warns". Anything that PERSISTS past the grace
+   * (still-unbacked, or any untracked/offBlock which are real bookkeeping bugs,
+   * not bake-window transients) stays loud. graceMs defaults to 0 (no grace) so
+   * direct/unit callers keep the pre-S15c behavior byte-identically.
+   *
    * @param {object} p
    * @param {Set<number>} p.baked        the derived view (terrainBakedLbs)
    * @param {Set<number>|null} [p.inFlight] terrain bakes still in flight
-   * @returns {{unbacked:number[], untracked:number[], offBlock:number[]}}
+   * @param {number} [p.graceMs=0]  post-crossing grace window (ms); 0 = off
+   * @param {number|null} [p.nowMs=null]  clock override (tests); else this.now()
+   * @returns {{unbacked:number[], untracked:number[], offBlock:number[], transientUnbacked:number[]}}
    */
-  assertResidency({ baked, inFlight = null }) {
+  assertResidency({ baked, inFlight = null, graceMs = 0, nowMs = null }) {
     this._stats.assertRuns += 1;
     const block = this.center
       ? computeBlockKeys(this.center.cx, this.center.cy, this.radius, this.lbKeyFromXY)
       : new Set();
-    const diff = diffResidency({ resident: this._resident, baked, inFlight, block });
-    if (diff.unbacked.length || diff.untracked.length || diff.offBlock.length) {
+    const raw = diffResidency({ resident: this._resident, baked, inFlight, block });
+
+    // Grace classification: only `unbacked` is a bake-window transient (an edge
+    // whose bake is still catching up). untracked/offBlock are real divergences
+    // and are NEVER graced.
+    let unbacked = raw.unbacked;
+    let transientUnbacked = [];
+    const t = (nowMs != null) ? nowMs : this.now();
+    const withinGrace = graceMs > 0
+      && this._lastCrossingAtMs != null
+      && (t - this._lastCrossingAtMs) < graceMs;
+    if (withinGrace && unbacked.length) {
+      transientUnbacked = unbacked;
+      unbacked = [];
+      this._stats.transientUnbackedSuppressed += transientUnbacked.length;
+      this._stats.graceSuppressedRuns += 1;
+    }
+
+    const diff = { unbacked, untracked: raw.untracked, offBlock: raw.offBlock, transientUnbacked };
+    if (unbacked.length || diff.untracked.length || diff.offBlock.length) {
       this._stats.assertWarns += 1;
       const hex = (arr) => arr.map((k) => `0x${(k >>> 0).toString(16).padStart(8, "0")}`);
       this.warn(
         "[fixedGrid] derived-view divergence: grid resident set ≠ terrainBakedLbs∩block",
         {
           center: this.center ? { ...this.center } : null,
-          unbacked: hex(diff.unbacked),   // grid claims resident, bake path doesn't have it
-          untracked: hex(diff.untracked), // baked in-block, grid lost track of it
-          offBlock: hex(diff.offBlock),   // grid resident outside its own block
+          unbacked: hex(unbacked),                 // persistent past grace — grid claims resident, bake path lacks it
+          untracked: hex(diff.untracked),          // baked in-block, grid lost track of it
+          offBlock: hex(diff.offBlock),            // grid resident outside its own block
+          transientUnbacked: hex(transientUnbacked), // in-grace bake-window LBs (context only, not part of the warn trigger)
         },
       );
     }
     return diff;
+  }
+}
+
+/**
+ * S15c — hysteresis-gated whole-LB park scheduler for the fixed-grid VACATED
+ * edge (docs/PLAN-fixed-slot-grid-residency-2026-07-11.md §5.4).
+ *
+ * The plan's release-≠-free tie-in: on an LB crossing the grid's trailing edge
+ * is vacated. S15b left `releaseEdge` a no-op (terrain-only scope); S15c routes
+ * that exact vacated set to `landblockLru.park(key)` so a whole LB's residency
+ * (terrain + buildings + statics + scenery + cells — every layer park() detaches)
+ * goes WARM, kept re-adoptable behind the S15a 30 s UseTime floor instead of
+ * LRU-reclaimed and re-decoded on return. Pure/injected-deps (no `three`, no
+ * `window`, no lru import) so it unit-tests headless.
+ *
+ * The churn hazard (the session-11 sealedKeepRing park↔unpark storm class): at
+ * terrain radius 1 the vacated row sits only ~2 LBs behind the player, so a
+ * zig-zag walk that re-crosses a boundary would park-then-immediately-unpark the
+ * same row every packet — even though the S15a UseTime floor makes the unpark a
+ * cheap pointer re-adopt, park() itself does per-crossing DETACH work. So park
+ * is HYSTERESIS-GATED: a vacated key is only parked once it has stayed
+ * continuously vacated for `hysteresisMs`. The instant it re-enters the block
+ * (the grid's incoming edge → `onResident`) its pending park is cancelled — a
+ * zig-zag never issues a park. Committed walk-away parks after the window.
+ *
+ * Teleport (constraint #3 / plan §2): the grid does NOT fire releaseEdge on a
+ * teleport, and the wiring calls `reset()` on teleport/seed so any pre-teleport
+ * pending keys are dropped — the whole-grid-invalidate path stays owned by the
+ * LRU's evict-on-teleport reclaim, never routed through park.
+ */
+export class EdgeParkScheduler {
+  /**
+   * @param {object} deps
+   * @param {(lbKey:number)=>boolean} deps.park  whole-LB park; returns true when
+   *   parked, false when the key wasn't in the LRU's `entries` (already parked /
+   *   evicted) — the false case is counted as parkSkippedInEntriesMiss, not an error.
+   * @param {number} [deps.hysteresisMs=2000]  continuous-vacated dwell before a
+   *   park is issued. ~one LB crossing's worth; a quick zig-zag re-crosses well
+   *   inside it and cancels. 0 = park on the next drain (no hysteresis).
+   * @param {()=>number} [deps.now]  monotonic clock (ms); tests inject.
+   * @param {(msg:string, detail?:any)=>void} [deps.warn]
+   */
+  constructor({ park, hysteresisMs = 2000, now, warn } = {}) {
+    this.park = typeof park === "function" ? park : () => false;
+    this.hysteresisMs = Math.max(0, hysteresisMs | 0);
+    this.now = typeof now === "function" ? now : defaultNow;
+    this.warn = typeof warn === "function"
+      ? warn
+      : (m, d) => { try { console.warn(m, d); } catch (_) {} };
+    // lb-key → vacatedAtMs (the timestamp it FIRST went vacated; re-observing a
+    // still-vacated key does NOT refresh it — dwell is measured from first exit).
+    this._pending = new Map();
+    this._stats = {
+      parksIssued: 0,            // park() returned true
+      parkSkippedInEntriesMiss: 0, // park() returned false (not in entries)
+      reAdoptCancels: 0,         // pending park cancelled by a re-entering edge (zig-zag saved)
+      vacatedObserved: 0,        // distinct keys that entered the pending queue
+      drains: 0,
+      resets: 0,                 // teleport/seed clears
+      maxPending: 0,
+    };
+  }
+
+  /** The trailing edge went vacated — schedule each key for a hysteresis-gated park. */
+  onVacated(keys) {
+    if (!keys) return;
+    const t = this.now();
+    for (const k of keys) {
+      const key = k >>> 0;
+      if (!this._pending.has(key)) {
+        this._pending.set(key, t);
+        this._stats.vacatedObserved += 1;
+      }
+    }
+    if (this._pending.size > this._stats.maxPending) this._stats.maxPending = this._pending.size;
+  }
+
+  /**
+   * A key re-entered the block (the incoming edge) — cancel its pending park.
+   * This is the anti-storm guard: a vacated key can only return via the incoming
+   * edge, so cancelling on incoming means a zig-zag never parks/unparks.
+   */
+  onResident(keys) {
+    if (!keys) return;
+    for (const k of keys) {
+      if (this._pending.delete(k >>> 0)) this._stats.reAdoptCancels += 1;
+    }
+  }
+
+  /**
+   * Issue parks for every pending key whose continuous-vacated dwell has reached
+   * `hysteresisMs`. Called every position packet (INCLUDING no-move ticks) so a
+   * player who walks then stands still still parks the trailing edge once it ages
+   * out. Cheap: a bounded map scan.
+   * @returns {{parked:number[], skipped:number[]}}
+   */
+  drain(nowMs = null) {
+    this._stats.drains += 1;
+    const parked = [];
+    const skipped = [];
+    if (this._pending.size === 0) return { parked, skipped };
+    const t = (nowMs != null) ? nowMs : this.now();
+    // Deleting the current key during Map iteration is spec-safe (the iterator
+    // continues over the remaining entries).
+    for (const [key, at] of this._pending) {
+      if (t - at < this.hysteresisMs) continue; // not aged out yet
+      let ok = false;
+      try { ok = this.park(key) === true; } catch (_) { ok = false; }
+      if (ok) { this._stats.parksIssued += 1; parked.push(key); }
+      else { this._stats.parkSkippedInEntriesMiss += 1; skipped.push(key); }
+      this._pending.delete(key);
+    }
+    return { parked, skipped };
+  }
+
+  /**
+   * Drop all pending parks (teleport/seed). Keeps the whole-grid-invalidate path
+   * owned by the LRU's evict-on-teleport reclaim (constraint #3): a key vacated
+   * during a walk that is then interrupted by a teleport is NOT parked.
+   */
+  reset() {
+    this._stats.resets += 1;
+    this._pending.clear();
+  }
+
+  getStats() {
+    return {
+      pending: this._pending.size,
+      hysteresisMs: this.hysteresisMs,
+      ...this._stats,
+    };
   }
 }

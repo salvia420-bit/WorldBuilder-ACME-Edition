@@ -116,7 +116,7 @@ import { runTerrainRingBatch } from "./terrain_ring.js";
 // driver (docs/PLAN-fixed-slot-grid-residency-2026-07-11.md §2, landing §5.3).
 // Pure injected-deps core; the loadTerrainRing facade below injects the live
 // deps (fetch → runTerrainRingBatch; release → the existing LRU path).
-import { FixedSlotGrid, FIXED_GRID_TERRAIN_RADIUS } from "./fixed_grid.js";
+import { FixedSlotGrid, EdgeParkScheduler, FIXED_GRID_TERRAIN_RADIUS } from "./fixed_grid.js";
 
 // streamFix (2026-07-02, town-portal streaming): default-ON master gate for the
 // already-baked FAST-PATH in the three per-LB loaders below (`?streamFix=off`
@@ -161,18 +161,21 @@ const TERRAIN_RING_BATCH_ENABLED = (() => {
 })();
 
 // S15b (2026-07-11): ?fixedGrid player-centered terrain slot-grid residency
-// driver. DEFAULT-OFF (pre-validation — plan §2: default-off until an A/B soak
-// validates the walk/short-hop settle drop, then flip default-on + `=off`).
-// Explicit opt-in ONLY (1/on/true → ON; absent/anything-else → OFF) — the repo's
-// flag-default footgun is that a `!== "off"` reader reads ON when absent, so a
-// default-OFF flag must test the on-values, never the off-values. See
+// driver. DEFAULT-ON since the S16 flip (2026-07-11) — the A/B soak
+// (battery-s16soak-20260711T154025Z: paired 62-POI median delta 0 ms
+// teleport-parity, 12/12 live shifts, steady-state zero terrain work, deaths
+// 3v3 arm-equal) cleared the plan §4 flip gates; the 1070 seam/LOD eye-test is
+// still owed but the `?fixedGrid=off` escape covers the interim. Reader mirrors
+// FIXED_GRID_PARK_ENABLED's default-ON shape: absent → ON; only the explicit
+// off-spellings (off/0/false) disable (that is the escape restoring the pre-S15
+// path). Accepts 1/on/true as explicit-on for symmetry. See
 // docs/PLAN-fixed-slot-grid-residency-2026-07-11.md.
 const FIXED_GRID_ENABLED = (() => {
   try {
     const v = new URLSearchParams(window.location?.search || "").get("fixedGrid");
-    return v === "1" || v === "on" || v === "true";
+    return v !== "off" && v !== "0" && v !== "false";
   } catch (_) {
-    return false;
+    return true;
   }
 })();
 // ?diag=1 AND ?fixedGrid on → the grid periodically asserts its resident record
@@ -185,6 +188,35 @@ const FIXED_GRID_DIAG = (() => {
     return false;
   }
 })();
+
+// S15c (2026-07-11): sub-escape for the fixedGrid vacated-edge PARK wiring.
+// ONLY meaningful when ?fixedGrid is on (the scheduler is constructed only under
+// FIXED_GRID_ENABLED). DEFAULT-ON-WITHIN-fixedGrid per the house footgun rule:
+// absent → on; only the explicit off-spellings (off/0/false) disable. This lets
+// the A/B soak isolate the grid RESIDENCY change (S15b) from the grid+PARK
+// change (S15c): park alters reclaim timing + park-pool size, a distinct risk
+// surface worth its own on/off. `?fixedGrid=1&fixedGridPark=off` = S15b behavior
+// exactly (releaseEdge no-op, LRU positional eviction owns the trailing edge).
+const FIXED_GRID_PARK_ENABLED = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("fixedGridPark");
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+})();
+// Hysteresis dwell before the vacated edge is parked (EdgeParkScheduler). ~one
+// LB crossing so a zig-zag over a boundary re-adopts (cancels) instead of
+// park/unpark-storming (the session-11 sealedKeepRing failure class); a
+// committed walk-away parks after this window. Not URL-exposed (kept off the
+// flag surface); the scheduler takes it as an injected dep so tests can vary it.
+const FIXED_GRID_PARK_HYSTERESIS_MS = 2000;
+// Post-crossing grace for the ?diag=1 derived-view assert (docs/1123.md §3):
+// an `unbacked` block LB seen within this window of a seed/teleport/shift is the
+// async bake catching up, classified transient (counted, not warned) so a full
+// diag battery can gate on "0 non-transient warns". Anything still unbacked past
+// it — or any untracked/offBlock — stays loud.
+const FIXED_GRID_DIAG_GRACE_MS = 3000;
 
 // Extract the lb-keys with an in-flight TERRAIN bake from the stream guard's
 // in-flight set (keys shaped `terrain:<decimal lbKey>` — stream_bake_guard.js /
@@ -3103,20 +3135,43 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // resident (shift-in-place; interior untouched; steady-state = no work;
       // teleport = whole-grid invalidate == today) and calls BACK into
       // `_runTerrainRingBatch` for the FETCH, so the HOW stays byte-identical to
-      // the flag-off path below. DEFAULT-OFF: the `&&` short-circuits on the
-      // false const before any grid access, leaving the flag-off path
-      // byte-identical (the ship gate).
+      // the flag-off path below. DEFAULT-ON since the S16 flip (2026-07-11);
+      // `?fixedGrid=off` short-circuits the `&&` on the false const before any
+      // grid access, leaving the flag-off path byte-identical to the pre-S15
+      // ring driver (the escape / ship gate).
       if (FIXED_GRID_ENABLED && this._fixedGrid) {
         const res = this._fixedGrid.update(cx, cy);
+        // S15c vacated-edge → whole-LB park (docs/PLAN §5.4). The grid's
+        // releaseEdge seam already fed `res.vacated` to the scheduler's
+        // onVacated INSIDE update() (see the grid construction wiring). Here we
+        // close the lifecycle:
+        //   - teleport/seed → reset(): drop pending; the whole-grid-invalidate
+        //     path stays owned by the LRU's evict-on-teleport reclaim (the grid
+        //     never fires releaseEdge on a teleport either) — constraint #3.
+        //   - shift → onResident(res.incoming): a re-entering edge cancels its
+        //     scheduled park (the anti zig-zag-storm guard, s11 failure class).
+        //   - drain() EVERY tick (incl. no-move) issues parks for keys that have
+        //     stayed continuously vacated ≥ hysteresis — so a walk-then-stand
+        //     still parks the trailing edge once it ages out.
+        const sched = this._edgeParkScheduler;
+        if (sched) {
+          try {
+            if (res.seed || res.teleport) sched.reset();
+            else if (res.moved) sched.onResident(res.incoming);
+            sched.drain();
+          } catch (_) { /* park scheduling is best-effort — never break streaming */ }
+        }
         // Steady tick under ?diag=1: assert the grid's resident record against
-        // the real bake state (the async bake window from the last crossing has
-        // passed on a no-move tick, so a still-unbacked block LB is a true
-        // divergence, not an in-flight transient). Warns loudly with the diff.
+        // the real bake state. The post-crossing grace (FIXED_GRID_DIAG_GRACE_MS)
+        // classifies the async bake-window `unbacked` as transient so a full diag
+        // battery gates on "0 non-transient warns"; real/persistent divergence
+        // still warns loudly with the diff.
         if (FIXED_GRID_DIAG && !res.moved) {
           try {
             this._fixedGrid.assertResidency({
               baked: this.terrainBakedLbs instanceof Set ? this.terrainBakedLbs : new Set(),
               inFlight: terrainInFlightLbKeys(this._streamGuardState),
+              graceMs: FIXED_GRID_DIAG_GRACE_MS,
             });
           } catch (_) { /* diag is best-effort */ }
         }
@@ -4578,21 +4633,52 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     //   - fetchEdge → `_runTerrainRingBatch` on the new centre (the SAME batched
     //     call the flag-off facade makes; its already-baked pre-filter narrows
     //     the wasm fetch to exactly the incoming edge).
-    //   - releaseEdge → the vacated edge is DE-ASSERTED from the grid and left to
-    //     the LRU's existing positional (Chebyshev + recency) eviction — the
-    //     same reclaim the flag-off trailing edge already relies on. S15b does
-    //     NOT proactively park here: the only public release primitive
-    //     (LandblockLRU.park) parks the WHOLE LB (buildings/statics/cells), which
-    //     exceeds S15b's TERRAIN-only scope and would perturb the teleport-
-    //     dominated battery. The exact vacated set is computed + handed through
-    //     this seam so S15c can wire a real whole-LB park once buildings/statics
-    //     join the grid — zero core change. (Plan §5.3 → §5.4.)
+    //   - releaseEdge → S15c (docs/PLAN §5.4): the exact vacated set flows through
+    //     this seam into the EdgeParkScheduler, which — after a hysteresis dwell
+    //     (anti zig-zag-storm; the LRU's positional eviction no longer needs to
+    //     reclaim the trailing edge) — issues `landblockLru.park(key)`. park()
+    //     detaches the WHOLE LB (terrain + buildings + statics + outdoor scenery
+    //     [animated_scenery nodes are staticsGroup children tagged by
+    //     userData.landblockId] + EnvCells), kept re-adoptable behind the S15a
+    //     30 s UseTime floor (a walk-back within the floor = pointer re-adopt,
+    //     zero decode). Teleport does NOT fire releaseEdge (grid) and the facade
+    //     reset()s the scheduler, so the whole-grid-invalidate stays owned by the
+    //     LRU's evict-on-teleport reclaim (constraint #3). `?fixedGridPark=off`
+    //     restores the S15b no-op release (LRU positional eviction owns the edge).
     if (FIXED_GRID_ENABLED) {
+      const gridNow = () => {
+        try {
+          if (typeof performance !== "undefined" && performance.now) return performance.now();
+        } catch (_) {}
+        return Date.now();
+      };
+      let edgeParkScheduler = null;
+      if (FIXED_GRID_PARK_ENABLED) {
+        edgeParkScheduler = new EdgeParkScheduler({
+          // park() returns true only when the key was in `entries` (resident);
+          // false (already parked / evicted) is counted, not an error.
+          park: (lbKey) => liveScene3d.landblockLru?.park?.(lbKey) === true,
+          hysteresisMs: FIXED_GRID_PARK_HYSTERESIS_MS,
+          now: gridNow,
+        });
+        liveScene3d._edgeParkScheduler = edgeParkScheduler;
+        scene3dForBuilders._edgeParkScheduler = edgeParkScheduler;
+        if (typeof window !== "undefined") {
+          window.__fixedGridPark = edgeParkScheduler;
+        }
+      }
       liveScene3d._fixedGrid = new FixedSlotGrid({
         radius: FIXED_GRID_TERRAIN_RADIUS,
         lbKeyFromXY,
         fetchEdge: (_edgeKeys, cx, cy) => liveScene3d._runTerrainRingBatch(cx, cy),
-        releaseEdge: (_vacatedKeys) => { /* S15b: LRU positional eviction owns release (see note) */ },
+        // The seam: the vacated set schedules a hysteresis-gated whole-LB park.
+        // No-op (S15b behavior) when the park sub-escape is off.
+        releaseEdge: (vacatedKeys) => { if (edgeParkScheduler) edgeParkScheduler.onVacated(vacatedKeys); },
+        // Merge the scheduler counters into __fixedGrid.getStats() so the
+        // wave-2D probe reads ONE object (parksIssued / parkSkippedInEntriesMiss
+        // / pending / reAdoptCancels). Null when park is off.
+        parkStatsProvider: edgeParkScheduler ? () => edgeParkScheduler.getStats() : null,
+        now: gridNow, // diag-grace clock
       });
       scene3dForBuilders._fixedGrid = liveScene3d._fixedGrid;
       if (typeof window !== "undefined") {

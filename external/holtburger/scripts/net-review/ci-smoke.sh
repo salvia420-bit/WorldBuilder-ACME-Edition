@@ -95,6 +95,16 @@ else console.log(`S5=PASS(negCacheSize=${dd.main.negCacheSize} misses=${dd.main.
 // (fields absent). Small-sample guards: amp needs ≥20 decodes, hist ≥8 calls.
 if (dd?.main || dd?.worker) {
   const AMP_MAX = 1.15, SOLO_MAX = 0.25;
+  // wasm linear-memory ceilings (docs/1123.md §5.3, wired S16 2026-07-11 once
+  // the soak banked baselines). SMOKE-TIME sample = one Holtburg boot + 60s
+  // idle, NOT the 21-stop battery. Smoke baseline (docs/1123.md §3): main
+  // 382 MB / worker 104 MB. Thresholds are baseline + generous headroom so the
+  // gate FAILs only on egregious runaway, never on normal drift: main 600 MB
+  // (~1.57x the 382 baseline), worker 300 MB (~2.9x the 104 smoke baseline and
+  // clear of the 21-stop soak worker med 180/206 MB from
+  // battery-s16soak-20260711T154025Z). Additive + fail-soft: legacy pkg with no
+  // wasmMemoryBytes reports memMb=-1 and is SKIPPED by the memMb>0 guard.
+  const MEM_MAIN_MAX = 600, MEM_WORKER_MAX = 300;
   const judge = (side) => {
     if (!side || side.surfaceDecodeTotal == null) return null; // legacy pkg
     const total = side.surfaceDecodeTotal, dids = side.surfaceDecodeDids;
@@ -103,11 +113,22 @@ if (dd?.main || dd?.worker) {
     // 1-solo-current-LB + one 8-LB ring batch is 1/9 LBs solo (0.11),
     // while the pre-A4 9-solo storm is 9/9 (1.0). Call-weighting read
     // the healthy shape as 50% solo (first S5b run).
+    // S16 (2026-07-11, fixedGrid default-ON): soloShare ALONE is no longer a
+    // storm proxy. fixedGrid removes the redundant per-packet ring re-runs, so
+    // the batched denominator collapses and soloShare rises WITHOUT any new solo
+    // work. A/B on the live tree (battery-s16soak-20260711T154025Z/batchshape-ab):
+    // bare fixedGrid ON hist [[1,114],[9,5]] soloShare 0.72; fixedGrid=off hist
+    // [[1,114],[9,238]] soloShare 0.05 — solo LBs IDENTICAL (114), only the 9-LB
+    // batch count differs (5 vs 238 = the eliminated re-runs). The true N+1
+    // signature is high soloShare AND ZERO multi-LB batches (no batching at all);
+    // both healthy shapes keep multi-LB batches, the pre-A4 storm has none. So we
+    // gate soloShare on multiBatch==0 (batching absent), not on the ratio alone.
     const hist = side.hmBatchHist ?? [];
     const lbs = hist.reduce((a, [n, c]) => a + n * c, 0);
     const soloLbs = hist.filter(([n]) => n === 1).reduce((a, [, c]) => a + c, 0);
+    const multiBatch = hist.filter(([n]) => n >= 2).reduce((a, [, c]) => a + c, 0);
     const soloShare = lbs >= 16 ? soloLbs / lbs : null;
-    return { amp, soloShare, memMb: side.wasmMemoryBytes != null ? Math.round(side.wasmMemoryBytes / 1048576) : -1,
+    return { amp, soloShare, multiBatch, memMb: side.wasmMemoryBytes != null ? Math.round(side.wasmMemoryBytes / 1048576) : -1,
              hits: side.surfaceCacheHits, misses: side.surfaceCacheMisses };
   };
   const m = judge(dd.main), w = judge(dd.worker);
@@ -117,9 +138,10 @@ if (dd?.main || dd?.worker) {
     for (const [tag, j] of [["main", m], ["worker", w]]) {
       if (!j) continue;
       if (j.amp != null && j.amp > AMP_MAX) bad.push(`${tag}Amp=${j.amp.toFixed(2)}>${AMP_MAX}`);
-      if (j.soloShare != null && j.soloShare > SOLO_MAX) bad.push(`${tag}Solo=${j.soloShare.toFixed(2)}>${SOLO_MAX}`);
+      if (j.soloShare != null && j.soloShare > SOLO_MAX && j.multiBatch === 0) bad.push(`${tag}Solo=${j.soloShare.toFixed(2)}>${SOLO_MAX}&noBatch`);
+      if (j.memMb > 0) { const cap = tag === "main" ? MEM_MAIN_MAX : MEM_WORKER_MAX; if (j.memMb > cap) bad.push(`${tag}Mem=${j.memMb}MB>${cap}`); }
     }
-    const fmt = (tag, j) => j ? `${tag}[amp=${j.amp == null ? "n/a" : j.amp.toFixed(2)} solo=${j.soloShare == null ? "n/a" : j.soloShare.toFixed(2)} cache=${j.hits}/${j.hits + j.misses} mem=${j.memMb}MB]` : `${tag}[legacy]`;
+    const fmt = (tag, j) => j ? `${tag}[amp=${j.amp == null ? "n/a" : j.amp.toFixed(2)} solo=${j.soloShare == null ? "n/a" : j.soloShare.toFixed(2)} batch=${j.multiBatch} cache=${j.hits}/${j.hits + j.misses} mem=${j.memMb}MB]` : `${tag}[legacy]`;
     console.log((bad.length ? `S5b=FAIL(${bad.join(" ")}) ` : "S5b=PASS ") + fmt("main", m) + " " + fmt("worker", w));
   }
 }

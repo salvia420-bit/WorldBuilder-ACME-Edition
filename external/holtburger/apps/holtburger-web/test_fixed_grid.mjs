@@ -20,8 +20,9 @@
 //   7. teleport (|delta| ≥ W) — whole-grid invalidate: fetch the whole new
 //      block, releaseEdge NEVER called (today's behavior exactly).
 //   8. map-edge clamp — a 0xffff corner seed batches only the in-range LBs.
-//   9. flag parsing truth table (absent/0/off/"" → OFF; 1/on/true → ON) —
-//      locks the default-OFF opt-in reader contract (mirrors FIXED_GRID_ENABLED).
+//   9. flag parsing truth table (S16 flip: absent + non-off → ON; only the
+//      exact off-spellings off/0/false → OFF) — locks the DEFAULT-ON off-escape
+//      reader contract (mirrors FIXED_GRID_ENABLED / FIXED_GRID_PARK_ENABLED).
 //  10. diffResidency + assertResidency — sync → silent; forced divergence
 //      (unbacked / untracked / offBlock) → warns with the diff; in-flight edge
 //      LB is NOT mis-flagged as an over-claim.
@@ -266,15 +267,16 @@ function makeGrid({ radius = 1 } = {}) {
 // 9 — flag parsing truth table (mirrors FIXED_GRID_ENABLED in index.js)
 // ---------------------------------------------------------------------
 {
-  // The default-OFF opt-in reader: ONLY explicit on-values enable it; absent or
-  // any off-spelling stays OFF (the repo's flag-default footgun is a `!== "off"`
-  // reader that reads ON when the param is absent — this must NOT do that).
-  const readFixedGrid = (v) => v === "1" || v === "on" || v === "true";
-  const onVals = ["1", "on", "true"];
-  const offVals = [null, "", "0", "off", "false", "yes", "2", "On", "TRUE"];
-  check("(9) on-values (1/on/true) → ON",
+  // S16 flip (2026-07-11): DEFAULT-ON with an off-escape (mirrors
+  // FIXED_GRID_PARK_ENABLED). Absent → ON; ONLY the explicit off-spellings
+  // (off/0/false) disable; every other value (incl. 1/on/true and unrelated
+  // strings) reads ON.
+  const readFixedGrid = (v) => v !== "off" && v !== "0" && v !== "false";
+  const onVals = [null, "", "1", "on", "true", "yes", "2", "On", "TRUE", "Off", "FALSE"];
+  const offVals = ["off", "0", "false"];
+  check("(9) absent + explicit on-values + non-off strings → ON",
     onVals.every((v) => readFixedGrid(v) === true));
-  check("(9) absent + every off-spelling → OFF (no footgun)",
+  check("(9) only the exact off-spellings (off/0/false) → OFF",
     offVals.every((v) => readFixedGrid(v) === false));
 }
 

@@ -7920,7 +7920,7 @@ thread_local! {
     /// shared refcount-aware `ByteBudgetLru` (was clear-on-overflow at 4096
     /// entries) so wasm linear-memory growth is byte-accounted and eviction
     /// sheds the coldest entries instead of flushing everything.
-    static MODEL_TRI_CACHE: std::cell::RefCell<ByteBudgetLru<std::rc::Rc<Vec<Tri>>>> =
+    static MODEL_TRI_CACHE: std::cell::RefCell<ByteBudgetLru<u32, std::rc::Rc<Vec<Tri>>>> =
         std::cell::RefCell::new(ByteBudgetLru::new(
             MODEL_TRI_CACHE_BUDGET_BYTES,
             MODEL_TRI_CACHE_ENTRY_CAP_BYTES,
@@ -8006,7 +8006,7 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
     let subst_free =
         model_changes.is_empty() && texture_changes.is_empty() && mtable_override.is_none();
     if subst_free {
-        if let Some(cached) = MODEL_TRI_CACHE.with(|c| c.borrow_mut().get(model_id)) {
+        if let Some(cached) = MODEL_TRI_CACHE.with(|c| c.borrow_mut().get(&model_id)) {
             return Some((*cached).clone());
         }
     }
@@ -8575,13 +8575,48 @@ pub fn surface_neg_cache_clear() -> u32 {
 // (the `MODEL_TRI_CACHE` poison-guard lesson). Cleared on
 // `init_resource_source` re-init; observable via `dat_decode_diag()`
 // (surfaceCache* fields) and disabled wholesale with `?surfaceCache=off`.
+//
+// S16 (B-executor): the SAME store now also memoises palette-COMPOSED
+// (dyed-entity) decodes under an exact `(did, base, subs)` composite key
+// (`SurfaceCacheKey::Composed`), sharing the one 96 MiB byte budget/LRU with
+// the palette-free class. Composed admission rides its OWN escape
+// `?palSurfaceCache=off` (the master `?surfaceCache=off` still disables both);
+// composed hit/miss/insert land in the additive `surfaceCachePal*` diag
+// fields, and the old `surfaceCache*` fields keep counting the palette-free
+// class ONLY (derived as whole-store − composed). The completeness/sentinel
+// insert gate is identical for both classes.
 
 /// B1 (S14): parse `?surfaceCache`. DEFAULT-ON; only `surfaceCache=off`
-/// disables the positive surface-pixel cache (debug escape).
-#[cfg(target_arch = "wasm32")]
+/// disables the positive surface-pixel cache (debug escape). This is the
+/// MASTER switch — off disables BOTH the palette-free and (S16) the
+/// palette-composed class.
+#[cfg(any(target_arch = "wasm32", test))]
 fn parse_surface_cache_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| kv == "surfaceCache=off")
+}
+
+/// S16 (B-executor): parse `?palSurfaceCache`. DEFAULT-ON; independent escape
+/// for the palette-COMPOSED (dyed-entity) admission class only. Any of
+/// `palSurfaceCache=off` / `=0` / `=false` disables composed get+insert; the
+/// palette-free class is untouched. House flag-footgun rule: ABSENT reads ON,
+/// only an explicit off-form is OFF.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_pal_surface_cache_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        kv == "palSurfaceCache=off" || kv == "palSurfaceCache=0" || kv == "palSurfaceCache=false"
+    })
+}
+
+// Test-only overrides so the host flag-matrix test can drive the gates that
+// on wasm read `window.location.search`. `None` = default (ON on host).
+#[cfg(test)]
+thread_local! {
+    static SURFACE_CACHE_ENABLED_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+    static PAL_SURFACE_CACHE_ENABLED_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -8591,7 +8626,27 @@ fn surface_cache_enabled() -> bool {
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn surface_cache_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(v) = SURFACE_CACHE_ENABLED_OVERRIDE.with(|c| c.get()) {
+        return v;
+    }
     true
+}
+
+/// Composed-class admission gate: the master switch AND the composed escape.
+#[cfg(target_arch = "wasm32")]
+fn pal_surface_cache_enabled() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    surface_cache_enabled()
+        && *FLAG.get_or_init(|| parse_pal_surface_cache_flag(&js_location_search()))
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn pal_surface_cache_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(v) = PAL_SURFACE_CACHE_ENABLED_OVERRIDE.with(|c| c.get()) {
+        return surface_cache_enabled() && v;
+    }
+    surface_cache_enabled()
 }
 
 /// A11 (S14, owed since 1117 §4): parse `?batchSplit`. DEFAULT-ON; only
@@ -8629,9 +8684,16 @@ fn freeze_hash_gate_enabled() -> bool {
 /// refcount predicate says no outstanding holder exists, until the total is
 /// back under budget (an entry larger than `entry_cap` is never cached —
 /// one pathological texture must not flush the whole cache).
+//
+// S16 (B-executor): generalised from `u32`-keyed to a generic `K` so the
+// surface store can key on an exact `SurfaceCacheKey` enum
+// (`PaletteFree(did)` | `Composed{did, base, subs}`) with no hash/collision
+// class, while `MODEL_TRI_CACHE` keeps `K = u32`. `insert` now RETURNS
+// whether a genuinely new key was admitted, so the surface accessors can
+// split per-class insert counts without a second `contains` probe.
 #[cfg(any(target_arch = "wasm32", test))]
-struct ByteBudgetLru<V> {
-    map: std::collections::HashMap<u32, (V, u64, usize)>,
+struct ByteBudgetLru<K, V> {
+    map: std::collections::HashMap<K, (V, u64, usize)>,
     total_bytes: usize,
     budget: usize,
     entry_cap: usize,
@@ -8643,7 +8705,7 @@ struct ByteBudgetLru<V> {
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-impl<V: Clone> ByteBudgetLru<V> {
+impl<K: Clone + Eq + std::hash::Hash, V: Clone> ByteBudgetLru<K, V> {
     fn new(budget: usize, entry_cap: usize) -> Self {
         Self {
             map: std::collections::HashMap::new(),
@@ -8657,10 +8719,10 @@ impl<V: Clone> ByteBudgetLru<V> {
             evictions: 0,
         }
     }
-    fn get(&mut self, key: u32) -> Option<V> {
+    fn get(&mut self, key: &K) -> Option<V> {
         self.tick += 1;
         let tick = self.tick;
-        match self.map.get_mut(&key) {
+        match self.map.get_mut(key) {
             Some((v, last_use, _)) => {
                 *last_use = tick;
                 self.hits += 1;
@@ -8672,27 +8734,36 @@ impl<V: Clone> ByteBudgetLru<V> {
             }
         }
     }
-    fn contains(&self, key: u32) -> bool {
-        self.map.contains_key(&key)
+    fn contains(&self, key: &K) -> bool {
+        self.map.contains_key(key)
     }
-    fn insert(&mut self, key: u32, value: V, bytes: usize, evictable: impl Fn(&V) -> bool) {
+    /// Returns `true` iff a NEW key was inserted (`false` = overwrite of an
+    /// existing key, or refused because `bytes > entry_cap`).
+    fn insert(&mut self, key: K, value: V, bytes: usize, evictable: impl Fn(&V) -> bool) -> bool {
         if bytes > self.entry_cap {
-            return;
+            return false;
         }
         self.tick += 1;
-        if let Some((_, _, old_bytes)) = self.map.insert(key, (value, self.tick, bytes)) {
+        // Exclude the just-inserted key from eviction victims. Clone is cheap
+        // (a `u32` for MODEL_TRI; a small enum for the surface store) and only
+        // matters when the store already holds other entries.
+        let just_inserted = key.clone();
+        let newly = if let Some((_, _, old_bytes)) = self.map.insert(key, (value, self.tick, bytes))
+        {
             self.total_bytes -= old_bytes;
+            false
         } else {
             self.inserts += 1;
-        }
+            true
+        };
         self.total_bytes += bytes;
         while self.total_bytes > self.budget {
             let victim = self
                 .map
                 .iter()
-                .filter(|(k, (v, _, _))| **k != key && evictable(v))
+                .filter(|(k, (v, _, _))| **k != just_inserted && evictable(v))
                 .min_by_key(|(_, (_, last_use, _))| *last_use)
-                .map(|(&k, _)| k);
+                .map(|(k, _)| k.clone());
             match victim {
                 Some(k) => {
                     if let Some((_, _, b)) = self.map.remove(&k) {
@@ -8705,6 +8776,11 @@ impl<V: Clone> ByteBudgetLru<V> {
                 None => break,
             }
         }
+        newly
+    }
+    /// Count entries whose key satisfies `f` (per-class `palEntries` split).
+    fn count_keys(&self, f: impl Fn(&K) -> bool) -> usize {
+        self.map.keys().filter(|k| f(k)).count()
     }
     fn clear(&mut self) -> u32 {
         let n = self.map.len() as u32;
@@ -8725,13 +8801,66 @@ const SURFACE_CACHE_BUDGET_BYTES: usize = 96 * 1024 * 1024;
 #[cfg(any(target_arch = "wasm32", test))]
 const SURFACE_CACHE_ENTRY_CAP_BYTES: usize = 16 * 1024 * 1024;
 
+/// S16 (B-executor): exact composite key for the shared surface store.
+///
+/// DESIGN — SHARED store, not a sibling. The one `ByteBudgetLru` (single
+/// 96 MiB budget, one LRU/eviction discipline) now holds both classes under
+/// this enum so a town's palette-free landscape decodes and its dyed-NPC
+/// composed decodes compete for the SAME byte budget and evict each other
+/// by true recency — exactly the retail `DBOCache` invariant. A sibling
+/// store would need its own budget (double the discipline, and two caches
+/// racing to OOM independently). Widening the key to an enum was chosen over
+/// a `u32` hash because the composite `(did, base, subs)` MUST be collision-
+/// free: two dye variants of the same surface DID differ only in the sub-
+/// palette triples, and a hash collision would bleed one entity's colour
+/// onto another. The `PaletteFree(did)` variant is byte-for-byte the old B1
+/// key identity — the palette-free accessors are UNCHANGED at the API
+/// boundary (`did: u32` in/out), so no palette-free call site moved.
+///
+/// `sub_palettes` is stored AS GIVEN (input order), never sorted: the decode
+/// applies each sub-palette splice sequentially (`Palette::Modify` order is
+/// load-bearing), so two different orderings can produce different pixels and
+/// MUST key distinctly.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum SurfaceCacheKey {
+    PaletteFree(u32),
+    Composed {
+        surface_did: u32,
+        base_palette_id: u32,
+        sub_palettes: Vec<(u32, u8, u8)>,
+    },
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl SurfaceCacheKey {
+    fn is_composed(&self) -> bool {
+        matches!(self, SurfaceCacheKey::Composed { .. })
+    }
+}
+
+/// S16: composed-class hit/miss/insert counters (the palette-free class is
+/// derived as `LRU_total − composed` in `surface_cache_stats`, so the old
+/// `surfaceCache*` diag fields stay byte-for-byte identical whenever no
+/// composed traffic occurs — the ci-smoke S5b amp gate's precondition).
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Default, Clone, Copy)]
+struct ComposedCacheCounters {
+    hits: u64,
+    misses: u64,
+    inserts: u64,
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 thread_local! {
-    static SURFACE_PIXEL_CACHE: std::cell::RefCell<ByteBudgetLru<std::sync::Arc<SurfacePixels>>> =
-        std::cell::RefCell::new(ByteBudgetLru::new(
-            SURFACE_CACHE_BUDGET_BYTES,
-            SURFACE_CACHE_ENTRY_CAP_BYTES,
-        ));
+    static SURFACE_PIXEL_CACHE: std::cell::RefCell<
+        ByteBudgetLru<SurfaceCacheKey, std::sync::Arc<SurfacePixels>>,
+    > = std::cell::RefCell::new(ByteBudgetLru::new(
+        SURFACE_CACHE_BUDGET_BYTES,
+        SURFACE_CACHE_ENTRY_CAP_BYTES,
+    ));
+    static COMPOSED_CACHE_COUNTERS: std::cell::Cell<ComposedCacheCounters> =
+        const { std::cell::Cell::new(ComposedCacheCounters { hits: 0, misses: 0, inserts: 0 }) };
 }
 
 /// Manual deep clone — `SurfacePixels` is a `wasm_bindgen` struct and is
@@ -8783,7 +8912,7 @@ fn surface_memo_get(did: u32) -> Option<SurfacePixels> {
         return None;
     }
     SURFACE_PIXEL_CACHE
-        .with(|c| c.borrow_mut().get(did))
+        .with(|c| c.borrow_mut().get(&SurfaceCacheKey::PaletteFree(did)))
         .map(|arc| clone_surface_pixels(&arc))
 }
 
@@ -8794,7 +8923,7 @@ fn surface_memo_contains(did: u32) -> bool {
     if !surface_cache_enabled() {
         return false;
     }
-    SURFACE_PIXEL_CACHE.with(|c| c.borrow().contains(did))
+    SURFACE_PIXEL_CACHE.with(|c| c.borrow().contains(&SurfaceCacheKey::PaletteFree(did)))
 }
 
 /// Completeness-gated insert (see module comment). `decode_misses` is the
@@ -8810,12 +8939,84 @@ fn surface_memo_insert(did: u32, sp: &SurfacePixels, decode_misses: u32) {
     let bytes = surface_pixels_bytes(sp);
     SURFACE_PIXEL_CACHE.with(|c| {
         c.borrow_mut().insert(
-            did,
+            SurfaceCacheKey::PaletteFree(did),
             std::sync::Arc::new(clone_surface_pixels(sp)),
             bytes,
             |v| std::sync::Arc::strong_count(v) == 1,
         )
     });
+}
+
+/// S16 (B-executor): composed-class twin of `surface_memo_get`. Keyed on the
+/// exact `(did, base_palette_id, sub_palettes)` composite, gated on the
+/// independent `palSurfaceCache` escape (which also folds in the master
+/// `surfaceCache` switch). A hit clones the `Arc` payload out — no pixel
+/// deep-copy on the hot path, matching the palette-free path exactly.
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_memo_get_composed(
+    surface_did: u32,
+    base_palette_id: u32,
+    sub_palettes: &[(u32, u8, u8)],
+) -> Option<SurfacePixels> {
+    if !pal_surface_cache_enabled() {
+        return None;
+    }
+    let key = SurfaceCacheKey::Composed {
+        surface_did,
+        base_palette_id,
+        sub_palettes: sub_palettes.to_vec(),
+    };
+    let hit = SURFACE_PIXEL_CACHE.with(|c| c.borrow_mut().get(&key));
+    COMPOSED_CACHE_COUNTERS.with(|c| {
+        let mut v = c.get();
+        if hit.is_some() {
+            v.hits += 1;
+        } else {
+            v.misses += 1;
+        }
+        c.set(v);
+    });
+    hit.map(|arc| clone_surface_pixels(&arc))
+}
+
+/// Composed-class completeness-gated insert. Same discipline as B1: memoise
+/// ONLY a complete decode (audit misses == 0, width > 0, not the magenta
+/// sentinel). Shares the one byte budget/LRU with the palette-free class.
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_memo_insert_composed(
+    surface_did: u32,
+    base_palette_id: u32,
+    sub_palettes: &[(u32, u8, u8)],
+    sp: &SurfacePixels,
+    decode_misses: u32,
+) {
+    if !pal_surface_cache_enabled() {
+        return;
+    }
+    if decode_misses != 0 || sp.width == 0 || is_magenta_sentinel(sp) {
+        return;
+    }
+    let key = SurfaceCacheKey::Composed {
+        surface_did,
+        base_palette_id,
+        sub_palettes: sub_palettes.to_vec(),
+    };
+    let bytes = surface_pixels_bytes(sp);
+    let newly = SURFACE_PIXEL_CACHE.with(|c| {
+        c.borrow_mut().insert(
+            key,
+            std::sync::Arc::new(clone_surface_pixels(sp)),
+            bytes,
+            |v| std::sync::Arc::strong_count(v) == 1,
+        )
+    });
+    if newly {
+        COMPOSED_CACHE_COUNTERS.with(|c| {
+            let mut v = c.get();
+            v.inserts += 1;
+            c.set(v);
+        });
+    }
 }
 
 /// Drop every positive-cache entry. Shared by the wasm export and the
@@ -8832,12 +9033,32 @@ pub fn surface_cache_clear() -> u32 {
     surface_pixel_cache_clear_all()
 }
 
-/// (hits, misses, inserts, evictions, bytes, entries) — for `dat_decode_diag`.
+/// For `dat_decode_diag`. Tuple (S16-extended, internal ABI):
+///   (pf_hits, pf_misses, pf_inserts,        // palette-free class (old names)
+///    comp_hits, comp_misses, comp_inserts,  // composed class (new palXxx)
+///    evictions, bytes, entries,             // shared, whole store
+///    pal_entries)                           // composed-key count
+/// The palette-free triple is the whole-store LRU counter MINUS the composed
+/// counter, so the old `surfaceCache*` fields are byte-for-byte identical to
+/// B1 whenever no composed traffic has occurred.
 #[cfg(any(target_arch = "wasm32", test))]
-fn surface_cache_stats() -> (u64, u64, u64, u64, usize, usize) {
+fn surface_cache_stats() -> (u64, u64, u64, u64, u64, u64, u64, usize, usize, usize) {
+    let comp = COMPOSED_CACHE_COUNTERS.with(|c| c.get());
     SURFACE_PIXEL_CACHE.with(|c| {
         let c = c.borrow();
-        (c.hits, c.misses, c.inserts, c.evictions, c.total_bytes, c.len())
+        let pal_entries = c.count_keys(|k| k.is_composed());
+        (
+            c.hits.saturating_sub(comp.hits),
+            c.misses.saturating_sub(comp.misses),
+            c.inserts.saturating_sub(comp.inserts),
+            comp.hits,
+            comp.misses,
+            comp.inserts,
+            c.evictions,
+            c.total_bytes,
+            c.len(),
+            pal_entries,
+        )
     })
 }
 
@@ -8860,11 +9081,16 @@ fn fetch_surface_pixels_cached<S: holtburger_dat::ResourceSource + ?Sized>(
     (sp, misses)
 }
 
-/// Entity-path twin. The shared cache is only consulted for PALETTE-FREE
-/// requests (`base_palette_id == 0` and no sub-palettes) — exactly the case
-/// host-proven byte-identical to the static path
+/// Entity-path twin. PALETTE-FREE requests (`base_palette_id == 0` and no
+/// sub-palettes) share the palette-free class of the store — host-proven
+/// byte-identical to the static path
 /// (`tests_surface_cache::entity_palette_free_parity_with_static_path`).
-/// Palette-composed decodes bypass the cache entirely.
+///
+/// S16 (B-executor): palette-COMPOSED (dyed-entity) requests now memoise too,
+/// under the exact `(did, base, subs)` composite key in the SAME store, gated
+/// on the independent `palSurfaceCache` escape. A hit for a given dye variant
+/// is a zero-record `Arc` clone-out; distinct dye variants of one DID key
+/// distinctly and never cross-contaminate.
 #[cfg(any(target_arch = "wasm32", test))]
 fn fetch_entity_surface_pixels_cached<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
@@ -8877,12 +9103,16 @@ fn fetch_entity_surface_pixels_cached<S: holtburger_dat::ResourceSource + ?Sized
         if let Some(sp) = surface_memo_get(surface_did) {
             return (sp, 0);
         }
+    } else if let Some(sp) = surface_memo_get_composed(surface_did, base_palette_id, sub_palettes) {
+        return (sp, 0);
     }
     let audit = DecodeAuditSource::new(source);
     let sp = fetch_entity_surface_pixels_impl(&audit, surface_did, base_palette_id, sub_palettes);
     let misses = audit.misses();
     if palette_free {
         surface_memo_insert(surface_did, &sp, misses);
+    } else {
+        surface_memo_insert_composed(surface_did, base_palette_id, sub_palettes, &sp, misses);
     }
     (sp, misses)
 }
@@ -9040,8 +9270,18 @@ pub fn dat_decode_diag() -> String {
     });
     // S14 additive fields (B1 / G2 / G3 / 5b canary). All probes parse by
     // name — existing fields keep their exact names and positions.
-    let (sc_hits, sc_misses, sc_inserts, sc_evictions, sc_bytes, sc_entries) =
-        surface_cache_stats();
+    let (
+        sc_hits,
+        sc_misses,
+        sc_inserts,
+        sc_pal_hits,
+        sc_pal_misses,
+        sc_pal_inserts,
+        sc_evictions,
+        sc_bytes,
+        sc_entries,
+        sc_pal_entries,
+    ) = surface_cache_stats();
     let hm_hist = HM_BATCH_HIST.with(|h| {
         h.borrow()
             .iter()
@@ -9062,6 +9302,8 @@ pub fn dat_decode_diag() -> String {
              \"negCacheSize\":{},\"recentMissing\":[{}],\"negCache\":[{}],\
              \"surfaceCacheHits\":{},\"surfaceCacheMisses\":{},\"surfaceCacheInserts\":{},\
              \"surfaceCacheEvictions\":{},\"surfaceCacheBytes\":{},\"surfaceCacheEntries\":{},\
+             \"surfaceCachePalHits\":{},\"surfaceCachePalMisses\":{},\"surfaceCachePalInserts\":{},\
+             \"surfaceCachePalEntries\":{},\
              \"surfaceDecodeTotal\":{},\"surfaceDecodeDids\":{},\
              \"hmBatchHist\":[{}],\"wasmMemoryBytes\":{}}}",
             d.first_hop_miss,
@@ -9080,6 +9322,10 @@ pub fn dat_decode_diag() -> String {
             sc_evictions,
             sc_bytes,
             sc_entries,
+            sc_pal_hits,
+            sc_pal_misses,
+            sc_pal_inserts,
+            sc_pal_entries,
             d.surface_decode_total,
             d.surface_decode_dids.len(),
             hm_hist,
@@ -54669,31 +54915,257 @@ mod tests_surface_cache {
         surface_pixel_cache_clear_all();
     }
 
+    // S16 helpers: add an extra palette record to a fixture, and count reads.
+    fn add_palette(source: &mut MockSource, id: u32, colour: u32) {
+        source
+            .files
+            .insert((NS.to_string(), id), pack_palette(id, &[colour]));
+    }
+    fn counting(source: &MockSource) -> ReadCountingSource<'_> {
+        ReadCountingSource {
+            inner: source,
+            reads: std::sync::atomic::AtomicU32::new(0),
+        }
+    }
+    fn reads_of(c: &ReadCountingSource) -> u32 {
+        c.reads.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    // S16 (B-executor): composed-class cache tests. The palette-free entity
+    // path (`base==0, subs empty`) keeps its own coexisting entries; a
+    // palette-composed request memoises under the exact `(did, base, subs)`
+    // composite so dye variants of one DID never cross-contaminate.
+
     #[test]
-    fn entity_palette_requests_bypass_the_shared_cache() {
+    fn composed_cached_result_is_byte_identical_to_uncached_compose() {
         surface_pixel_cache_clear_all();
         let did = 0x0810_0004u32;
         let mut source = textured_fixture(did, 0xFF0A_0B0C);
-        // A second palette an entity can override with.
-        let override_pal = 0x0400_2002u32;
-        source.files.insert(
-            (NS.to_string(), override_pal),
-            pack_palette(override_pal, &[0xFFD0_E0F0]),
-        );
-        // Prime the shared cache with the palette-free decode.
-        let (base_sp, m) = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
-        assert_eq!(m, 0);
-        assert!(surface_memo_contains(did));
-        // Palette-composed request must NOT return the memoised pixels.
-        let (dyed, m2) = fetch_entity_surface_pixels_cached(&source, did, override_pal, &[]);
+        let dye = 0x0400_2002u32;
+        add_palette(&mut source, dye, 0xFFD0_E0F0);
+        // Reference: straight through the impl, no cache.
+        let reference = fetch_entity_surface_pixels_impl(&source, did, dye, &[]);
+        assert_eq!(reference.width, 1, "composed fixture decodes");
+        // Cached path: first call decodes + memoises, second is a hit.
+        let (first, m1) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        assert_eq!(m1, 0, "complete composed decode");
+        assert_pixels_eq(&first, &reference, "composed cached vs impl");
+        let (second, m2) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
         assert_eq!(m2, 0);
-        assert_ne!(
-            dyed.pixels, base_sp.pixels,
-            "override palette produced distinct pixels (cache bypassed)"
+        assert_pixels_eq(&second, &reference, "composed memo hit vs impl");
+        surface_pixel_cache_clear_all();
+    }
+
+    #[test]
+    fn composed_hit_reads_zero_records() {
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0007u32;
+        let mut source = textured_fixture(did, 0xFF01_0203);
+        let dye = 0x0400_2004u32;
+        add_palette(&mut source, dye, 0xFF77_2211);
+        let c = counting(&source);
+        let (_first, m1) = fetch_entity_surface_pixels_cached(&c, did, dye, &[]);
+        assert_eq!(m1, 0);
+        assert!(reads_of(&c) > 0, "first composed call decodes");
+        c.reads.store(0, std::sync::atomic::Ordering::Relaxed);
+        let (_second, m2) = fetch_entity_surface_pixels_cached(&c, did, dye, &[]);
+        assert_eq!(m2, 0, "composed memo hit reports zero misses");
+        assert_eq!(reads_of(&c), 0, "composed memo hit reads ZERO records");
+        surface_pixel_cache_clear_all();
+    }
+
+    #[test]
+    fn composed_distinct_palettes_do_not_cross_contaminate() {
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0008u32;
+        let mut source = textured_fixture(did, 0xFF0A_0B0C);
+        let dye_a = 0x0400_2005u32;
+        let dye_b = 0x0400_2006u32;
+        add_palette(&mut source, dye_a, 0xFFAA_1111);
+        add_palette(&mut source, dye_b, 0xFFBB_2222);
+        let (a1, _) = fetch_entity_surface_pixels_cached(&source, did, dye_a, &[]);
+        let (b1, _) = fetch_entity_surface_pixels_cached(&source, did, dye_b, &[]);
+        assert_ne!(a1.pixels, b1.pixels, "different dyes → different pixels");
+        // Both are distinct cache entries; re-request each returns ITS OWN
+        // colour (no bleed) with zero reads.
+        let c = counting(&source);
+        let (a2, _) = fetch_entity_surface_pixels_cached(&c, did, dye_a, &[]);
+        let (b2, _) = fetch_entity_surface_pixels_cached(&c, did, dye_b, &[]);
+        assert_eq!(reads_of(&c), 0, "both dye variants are hits");
+        assert_eq!(a2.pixels, a1.pixels, "dye A entry unchanged by dye B");
+        assert_eq!(b2.pixels, b1.pixels, "dye B entry unchanged by dye A");
+        surface_pixel_cache_clear_all();
+    }
+
+    #[test]
+    fn composed_and_palette_free_coexist_independently() {
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0009u32;
+        let mut source = textured_fixture(did, 0xFF12_3456);
+        let dye = 0x0400_2007u32;
+        add_palette(&mut source, dye, 0xFF65_4321);
+        // Prime BOTH classes for the same DID.
+        let (pf, _) = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
+        let (comp, _) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        assert!(surface_memo_contains(did), "palette-free entry present");
+        assert_ne!(pf.pixels, comp.pixels, "the two classes hold different pixels");
+        // Both are independent hits; neither poisons the other.
+        let c = counting(&source);
+        let (pf2, _) = fetch_entity_surface_pixels_cached(&c, did, 0, &[]);
+        let (comp2, _) = fetch_entity_surface_pixels_cached(&c, did, dye, &[]);
+        assert_eq!(reads_of(&c), 0, "both classes hit for the same DID");
+        assert_eq!(pf2.pixels, pf.pixels, "palette-free entry intact");
+        assert_eq!(comp2.pixels, comp.pixels, "composed entry intact");
+        surface_pixel_cache_clear_all();
+    }
+
+    #[test]
+    fn composed_incomplete_and_sentinel_never_memoised() {
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_000Au32;
+        let full = textured_fixture(did, 0xFF44_5566);
+        let dye = 0x0400_2008u32;
+        let mut src = MockSource { files: full.files.clone() };
+        add_palette(&mut src, dye, 0xFF10_2030);
+        // Break the chain: drop the Texture record → dep miss → empty out.
+        let mut broken = MockSource { files: src.files.clone() };
+        broken.files.retain(|(_, id), _| *id >> 24 != 0x06);
+        let (sp, misses) = fetch_entity_surface_pixels_cached(&broken, did, dye, &[]);
+        assert_eq!(sp.width, 0, "broken composed chain → empty fallback");
+        assert!(misses > 0, "audit counted the missing dep");
+        // Not memoised: a re-request re-decodes (reads records again).
+        let c = counting(&broken);
+        let (_sp2, _m2) = fetch_entity_surface_pixels_cached(&c, did, dye, &[]);
+        assert!(reads_of(&c) > 0, "incomplete composed decode NOT memoised");
+        // Direct insert of an empty and a magenta sentinel are both refused.
+        let mut empty = empty_fixture_pixels();
+        surface_memo_insert_composed(did, dye, &[], &empty, 0);
+        assert!(
+            surface_memo_get_composed(did, dye, &[]).is_none(),
+            "empty (width 0) refused on composed path"
         );
-        // And the dyed decode did not poison the shared entry.
-        let (again, _) = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
-        assert_eq!(again.pixels, base_sp.pixels, "shared entry unchanged");
+        empty.width = 1;
+        empty.height = 1;
+        empty.pixels = vec![255, 0, 255, 255];
+        empty.has_palette = true;
+        surface_memo_insert_composed(did, dye, &[], &empty, 0);
+        assert!(
+            surface_memo_get_composed(did, dye, &[]).is_none(),
+            "magenta sentinel refused on composed path"
+        );
+        surface_pixel_cache_clear_all();
+    }
+
+    #[test]
+    fn composed_entries_participate_in_byte_budget() {
+        // Local store mirroring the shared LRU's config so eviction is
+        // exercised without allocating ~96 MiB. Mixed classes compete for one
+        // budget; composed entries are evictable and counted.
+        let mut lru: ByteBudgetLru<SurfaceCacheKey, std::sync::Arc<Vec<u8>>> =
+            ByteBudgetLru::new(100, 60);
+        let evictable = |v: &std::sync::Arc<Vec<u8>>| std::sync::Arc::strong_count(v) == 1;
+        let composed = |n: u32| SurfaceCacheKey::Composed {
+            surface_did: 0x0810_0000 + n,
+            base_palette_id: 0x0400_0000 + n,
+            sub_palettes: vec![(0x0400_9000 + n, 0, 0)],
+        };
+        // One palette-free + two composed = 120 B > 100 B budget → an eviction.
+        assert!(lru.insert(SurfaceCacheKey::PaletteFree(1), std::sync::Arc::new(vec![0; 40]), 40, evictable));
+        assert!(lru.insert(composed(1), std::sync::Arc::new(vec![0; 40]), 40, evictable));
+        assert!(lru.get(&SurfaceCacheKey::PaletteFree(1)).is_some()); // PaletteFree(1) now MRU
+        lru.insert(composed(2), std::sync::Arc::new(vec![0; 40]), 40, evictable);
+        assert!(lru.total_bytes <= 100, "back under budget");
+        assert!(lru.evictions >= 1, "a composed entry was evicted, not the whole store");
+        assert!(!lru.contains(&composed(1)), "coldest (composed(1)) evicted");
+        assert!(lru.contains(&SurfaceCacheKey::PaletteFree(1)), "recently-used pf survives");
+        assert_eq!(
+            lru.count_keys(|k| k.is_composed()),
+            1,
+            "palEntries counts only composed keys"
+        );
+        assert_eq!(lru.count_keys(|k| !k.is_composed()), 1, "one palette-free key");
+    }
+
+    #[test]
+    fn flag_matrix_pal_off_bypasses_composed_only_master_off_bypasses_all() {
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_000Bu32;
+        let mut source = textured_fixture(did, 0xFF0A_0B0C);
+        let dye = 0x0400_2009u32;
+        add_palette(&mut source, dye, 0xFFC0_FFEE);
+
+        // --- palSurfaceCache=off: composed bypassed, palette-free untouched.
+        PAL_SURFACE_CACHE_ENABLED_OVERRIDE.with(|c| c.set(Some(false)));
+        SURFACE_CACHE_ENABLED_OVERRIDE.with(|c| c.set(Some(true)));
+        surface_pixel_cache_clear_all();
+        let (_c1, _) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        assert!(
+            surface_memo_get_composed(did, dye, &[]).is_none(),
+            "palSurfaceCache=off: composed NOT cached"
+        );
+        let (_pf, _) = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
+        assert!(surface_memo_contains(did), "palette-free class still caches");
+
+        // --- surfaceCache=off (master): both classes bypassed.
+        SURFACE_CACHE_ENABLED_OVERRIDE.with(|c| c.set(Some(false)));
+        PAL_SURFACE_CACHE_ENABLED_OVERRIDE.with(|c| c.set(None));
+        surface_pixel_cache_clear_all();
+        let (_pf2, _) = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
+        assert!(!surface_memo_contains(did), "master off: palette-free bypassed");
+        let (_c2, _) = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        assert!(
+            surface_memo_get_composed(did, dye, &[]).is_none(),
+            "master off: composed bypassed"
+        );
+
+        // Restore defaults for the thread.
+        SURFACE_CACHE_ENABLED_OVERRIDE.with(|c| c.set(None));
+        PAL_SURFACE_CACHE_ENABLED_OVERRIDE.with(|c| c.set(None));
+        surface_pixel_cache_clear_all();
+    }
+
+    #[test]
+    fn pal_surface_cache_flag_parses_off_forms() {
+        // Default-ON: absent reads ON.
+        assert!(parse_pal_surface_cache_flag(""));
+        assert!(parse_pal_surface_cache_flag("?foo=bar"));
+        assert!(parse_pal_surface_cache_flag("?palSurfaceCache=on"));
+        // Only explicit off-forms disable.
+        assert!(!parse_pal_surface_cache_flag("?palSurfaceCache=off"));
+        assert!(!parse_pal_surface_cache_flag("?palSurfaceCache=0"));
+        assert!(!parse_pal_surface_cache_flag("?palSurfaceCache=false"));
+        assert!(!parse_pal_surface_cache_flag("?a=b&palSurfaceCache=off&c=d"));
+        // Master switch is independent.
+        assert!(parse_surface_cache_flag("?palSurfaceCache=off"));
+        assert!(!parse_surface_cache_flag("?surfaceCache=off"));
+    }
+
+    #[test]
+    fn composed_stats_split_keeps_palette_free_fields_intact() {
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_000Cu32;
+        let mut source = textured_fixture(did, 0xFF33_4455);
+        let dye = 0x0400_200Au32;
+        add_palette(&mut source, dye, 0xFF99_8877);
+        // Palette-free traffic: one miss+insert, then one hit.
+        let _ = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
+        let _ = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
+        let (pf_h, pf_m, pf_i, ph, pm, pi, _ev, _by, ent, pal_ent) = surface_cache_stats();
+        assert_eq!((pf_h, pf_m, pf_i), (1, 1, 1), "palette-free hit/miss/insert");
+        assert_eq!((ph, pm, pi), (0, 0, 0), "no composed traffic yet");
+        assert_eq!((ent, pal_ent), (1, 0), "one entry, zero composed");
+        // Composed traffic: one miss+insert, then one hit.
+        let _ = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        let _ = fetch_entity_surface_pixels_cached(&source, did, dye, &[]);
+        let (pf_h2, pf_m2, pf_i2, ph2, pm2, pi2, _ev2, _by2, ent2, pal_ent2) =
+            surface_cache_stats();
+        assert_eq!(
+            (pf_h2, pf_m2, pf_i2),
+            (1, 1, 1),
+            "palette-free fields UNCHANGED by composed traffic"
+        );
+        assert_eq!((ph2, pm2, pi2), (1, 1, 1), "composed hit/miss/insert counted");
+        assert_eq!((ent2, pal_ent2), (2, 1), "two entries, one composed");
         surface_pixel_cache_clear_all();
     }
 
@@ -54783,24 +55255,32 @@ mod tests_surface_cache {
 
     #[test]
     fn byte_budget_lru_evicts_lru_first_and_respects_refcount() {
-        let mut lru: ByteBudgetLru<std::sync::Arc<Vec<u8>>> = ByteBudgetLru::new(100, 60);
+        let mut lru: ByteBudgetLru<u32, std::sync::Arc<Vec<u8>>> = ByteBudgetLru::new(100, 60);
         let evictable = |v: &std::sync::Arc<Vec<u8>>| std::sync::Arc::strong_count(v) == 1;
-        lru.insert(1, std::sync::Arc::new(vec![0; 40]), 40, evictable);
-        lru.insert(2, std::sync::Arc::new(vec![0; 40]), 40, evictable);
+        assert!(lru.insert(1, std::sync::Arc::new(vec![0; 40]), 40, evictable), "new key");
+        assert!(lru.insert(2, std::sync::Arc::new(vec![0; 40]), 40, evictable), "new key");
         // Touch 1 → 2 becomes LRU.
-        assert!(lru.get(1).is_some());
+        assert!(lru.get(&1).is_some());
         lru.insert(3, std::sync::Arc::new(vec![0; 40]), 40, evictable);
-        assert!(lru.contains(1), "recently-used survives");
-        assert!(!lru.contains(2), "LRU evicted");
-        assert!(lru.contains(3));
+        assert!(lru.contains(&1), "recently-used survives");
+        assert!(!lru.contains(&2), "LRU evicted");
+        assert!(lru.contains(&3));
         assert!(lru.total_bytes <= 100);
-        // Oversized entry (> entry_cap 60) is never admitted.
-        lru.insert(4, std::sync::Arc::new(vec![0; 80]), 80, evictable);
-        assert!(!lru.contains(4), "over-cap entry refused");
+        // Oversized entry (> entry_cap 60) is never admitted; insert reports false.
+        assert!(
+            !lru.insert(4, std::sync::Arc::new(vec![0; 80]), 80, evictable),
+            "over-cap entry refused"
+        );
+        assert!(!lru.contains(&4), "over-cap entry refused");
+        // Overwrite of an existing key reports false (not a new key).
+        assert!(
+            !lru.insert(3, std::sync::Arc::new(vec![0; 40]), 40, evictable),
+            "overwrite is not a new key"
+        );
         // A held (refcounted) entry survives eviction pressure.
-        let held = lru.get(1).expect("still cached");
+        let held = lru.get(&1).expect("still cached");
         lru.insert(5, std::sync::Arc::new(vec![0; 40]), 40, evictable);
-        assert!(lru.contains(1), "held entry not evicted (strong_count > 1)");
+        assert!(lru.contains(&1), "held entry not evicted (strong_count > 1)");
         drop(held);
         // Once released it becomes evictable again under pressure.
         lru.insert(6, std::sync::Arc::new(vec![0; 40]), 40, evictable);
