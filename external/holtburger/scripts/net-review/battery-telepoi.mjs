@@ -12,10 +12,28 @@
 // Common: --pois <file> (one name per line) --query "warmPark=on"
 //         --label armA --out out.json --dwellMax 25 --shots <dir> (cdp only)
 //         --cdp http://127.0.0.1:9333 --account tailnet1
+//         --settleWorkMin 5 --settleFloorMs 3000 (settle-guard knobs, below)
 //
 // Settle criterion: (terrainBakedLbs.size, staticsGroup.children.length,
 // cellContainers3d.size) unchanged across 3 consecutive 500 ms samples —
 // covers outdoor towns AND indoor dungeon POIs. Max --dwellMax s per stop.
+//
+// Settle-GUARD (session 11, 2026-07-10 — extends 1113 finding 5 + the s10
+// false-settle finding, docs/1118.md §2): the 3×500 ms stability window is
+// gated so it can only START counting once the bake pipe has actually
+// delivered work (workDelta≥--settleWorkMin) OR a grace floor
+// (--settleFloorMs) has elapsed with work still ≈0 — a cold/backlogged pipe
+// no longer "settles" in ~0.5 s before its first delta. Each row records
+// settleGuard ("work"|"floor"|null-when-work-telemetry-absent) + lowWork.
+// ⚠ settleMs under the guard is NOT comparable to pre-guard arms — a
+// genuinely-idle stop now floors at ~settleFloorMs+1.5 s instead of ~0.5 s;
+// filter/segment by settleGuard (and sessionIdx, below) when A/Bing across
+// the s11 boundary. See the reducer block above the main loop.
+//
+// sessionIdx (session 11): every row is stamped with the 0-based index of
+// the driver invocation that produced it; --resume continues from
+// (max prior sessionIdx)+1, so renderer-death relaunches segment cleanly and
+// arm medians can be compared session-age-matched (summary.settleMedBySession).
 import { pathToFileURL } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
@@ -30,6 +48,13 @@ const SHOTS = arg("shots", "");
 const DWELL_MAX_S = Number(arg("dwellMax", "25"));
 const CDP_URL = arg("cdp", "http://127.0.0.1:9333");
 const ACCOUNT = arg("account", "tailnet1");
+// Settle-guard knobs (session 11, 2026-07-10 — see header + the reducer block
+// before the main loop). WORK_MIN = streamed-work deltas that count as "the
+// pipe has started"; FLOOR_MS = grace before a still-work≈0 stop is accepted
+// as genuinely idle (same-LB / no-move-dup destinations stream ~zero work and
+// must still settle, just not instantly-and-falsely).
+const SETTLE_WORK_MIN = Number(arg("settleWorkMin", "5"));
+const SETTLE_FLOOR_MS = Number(arg("settleFloorMs", "3000"));
 
 if (!POIS_FILE) { console.error("--pois <file> required"); process.exit(2); }
 let POIS = fs.readFileSync(POIS_FILE, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
@@ -49,6 +74,13 @@ if (RESUME && OUT && fs.existsSync(OUT)) {
     console.error(`[battery] resume: ${priorRows.length} prior rows kept, ${POIS.length} POIs remain`);
   } catch (_) { priorRows = []; }
 }
+// sessionIdx (session 11, 2026-07-10): 0-based index of THIS driver invocation
+// / browser session. A renderer death aborts the arm (exit 3) and the wrapper
+// re-invokes with --resume, so one invocation == one session and this stamp is
+// constant for the whole run. Pre-feature prior rows (no sessionIdx) are the
+// session-0 bucket; a fresh (non-resume) run is 0. See summary.settleMedBySession.
+for (const r of priorRows) if (r.sessionIdx == null) r.sessionIdx = 0;
+const SESSION_IDX = priorRows.length ? Math.max(...priorRows.map((r) => r.sessionIdx)) + 1 : 0;
 if (POIS.length === 0) {
   console.log("BATTERY SUMMARY: nothing to do (all POIs already recorded)");
   process.exit(0);
@@ -163,6 +195,36 @@ const sample = () => raced(helpers.evalInPage(() => {
 }));
 const chat = (c) => raced(helpers.evalInPage((cmd) => { try { window.__sessionHandle.sendChat(cmd); } catch (_) {} }, c));
 
+// <settle-guard> (session 11, 2026-07-10 — extends 1113 finding 5; docs/1118.md
+// §2 false-settle finding). Pure per-sample reducer for the settle window,
+// factored out so /tmp harnesses can drive it with synthetic sample sequences.
+// state = {stable, last, guard}; returns {state, settledMs|null}. The GATE:
+// the stability counter may only accumulate once the bake pipe has actually
+// begun (workDelta since teleport ≥ workMin) OR a grace floor (floorMs) has
+// elapsed with work still ≈0 (a genuinely-idle same-LB / no-move-dup stop —
+// those stream ~zero work and must still settle, just not falsely-at-0.5s).
+// Fail-soft: when work telemetry is null (pre-__bakeWorkerSeq page, or a
+// null-work before/after sample) the gate opens immediately → today's
+// pre-guard behavior, unchanged. gate.reason ("work"|"floor") is null on the
+// fail-soft path; callers latch the last non-null reason as the row's
+// settleGuard, and lowWork := settleGuard === "floor".
+function settleStep(state, s, beforeWork, elapsedMs, opts) {
+  const gate =
+    (beforeWork == null || s.work == null) ? { open: true, reason: null }        // fail-soft
+    : (s.work - beforeWork) >= opts.workMin ? { open: true, reason: "work" }
+    : elapsedMs >= opts.floorMs             ? { open: true, reason: "floor" }
+    : { open: false, reason: null };
+  // Window not open yet: reset the run so the counter starts fresh once it is.
+  if (!gate.open) return { state: { stable: 0, last: null, guard: null }, settledMs: null };
+  const key = `${s.terr}|${s.stat}|${s.cells}`;
+  const stable = key === state.last ? state.stable + 1 : 0;
+  const next = { stable, last: key, guard: gate.reason };
+  // Same 3-consecutive-stable-sample criterion; the −1500 backs out the dwell.
+  if (stable >= 3) return { state: next, settledMs: elapsedMs - 1500 };
+  return { state: next, settledMs: null };
+}
+// </settle-guard>
+
 const rows = [];
 let aborted = null;
 const cycleT0 = Date.now();
@@ -190,19 +252,25 @@ for (const poi of POIS) {
     }
   }
   if (!landed) noMove = true;
-  let settleMs = null, last = null, stable = 0, endStats = null;
+  let settleMs = null, endStats = null, settleGuard = null, lowWork = false;
   if (landed) {
     const s0 = Date.now();
+    let st = { stable: 0, last: null, guard: null };
     for (let i = 0; i < (DWELL_MAX_S * 2); i++) {
       await page.waitForTimeout(500);
       const s = await sample();
-      const key = `${s.terr}|${s.stat}|${s.cells}`;
-      stable = key === last ? stable + 1 : 0;
-      last = key;
       endStats = s;
-      if (stable >= 3) { settleMs = Date.now() - s0 - 1500; break; }
+      const step = settleStep(st, s, before.work, Date.now() - s0,
+        { workMin: SETTLE_WORK_MIN, floorMs: SETTLE_FLOOR_MS });
+      st = step.state;
+      // Latch the last non-fail-soft gate reason as the row's settleGuard, so
+      // a stop that settled work-starved reads "floor" (lowWork) and a real
+      // streamed stop reads "work"; null == guard inactive (no work telemetry).
+      if (st.guard != null) settleGuard = st.guard;
+      if (step.settledMs != null) { settleMs = step.settledMs; break; }
     }
     if (settleMs == null) settleMs = DWELL_MAX_S * 1000; // never settled: cap
+    lowWork = settleGuard === "floor";
     if (SHOTS && page.screenshot) {
       try {
         await page.screenshot({ path: path.join(SHOTS, `${poi.replace(/[^A-Za-z0-9-]/g, "_")}.png`) });
@@ -218,9 +286,10 @@ for (const poi of POIS) {
     ? (endStats.evicted - before.evicted)
       + ((endStats.parkedTotal ?? 0) - (before.parkedTotal ?? 0))
     : null;
-  rows.push({ poi, landed, sameLb, noMove, landMs, settleMs, workDelta, reclaimDelta, ...(endStats ?? {}) });
+  rows.push({ poi, sessionIdx: SESSION_IDX, landed, sameLb, noMove, landMs, settleMs,
+    settleGuard, lowWork, workDelta, reclaimDelta, ...(endStats ?? {}) });
   console.error(`[battery] ${poi}: landed=${landed}${sameLb ? " (same-LB)" : ""}${noMove ? " (no-move dup)" : ""} ` +
-    `land=${landMs}ms settle=${settleMs}ms ` +
+    `land=${landMs}ms settle=${settleMs}ms guard=${settleGuard}${lowWork ? " (lowWork)" : ""} ` +
     `lru=${endStats?.lru} parked=${endStats?.parked} work+${workDelta} reclaim+${reclaimDelta}`);
   } catch (e) {
     aborted = `${poi}: ${e?.message ?? e}`;
@@ -248,6 +317,28 @@ const summary = {
   noMove: allRows.filter((r) => r.noMove).length,
   workDeltaMedian: med(ok.map((r) => r.workDelta).filter((v) => v != null)),
   reclaimDeltaMedian: med(ok.map((r) => r.reclaimDelta).filter((v) => v != null)),
+  // Settle-guard provenance + accounting (session 11, additive). ⚠ settleMs /
+  // settleMedianMs here are guarded and NOT comparable to pre-guard arms —
+  // use settleMedBySession to compare session-age-matched.
+  settleWorkMin: SETTLE_WORK_MIN, settleFloorMs: SETTLE_FLOOR_MS,
+  lowWorkSettles: ok.filter((r) => r.lowWork).length,
+  settleGuardWork: ok.filter((r) => r.settleGuard === "work").length,
+  settleGuardFloor: ok.filter((r) => r.settleGuard === "floor").length,
+  // Session segmentation (session 11): one entry per distinct browser session
+  // (0-based invocation index; --resume relaunches increment it), so arm
+  // medians can be compared session-age-matched (renderer deaths confounded
+  // s10 — fresh vs mature sessions have very different medians; docs/1118.md §2).
+  sessions: [...new Set(allRows.map((r) => r.sessionIdx ?? 0))].length,
+  settleMedBySession: [...new Set(allRows.map((r) => r.sessionIdx ?? 0))]
+    .sort((a, b) => a - b)
+    .map((sidx) => {
+      const seg = ok.filter((r) => (r.sessionIdx ?? 0) === sidx);
+      return {
+        sessionIdx: sidx, n: seg.length,
+        settleMedMs: med(seg.map((r) => r.settleMs)),
+        reclaimMedMs: med(seg.map((r) => r.reclaimDelta).filter((v) => v != null)),
+      };
+    }),
   final: allRows[allRows.length - 1] ?? null,
 };
 if (OUT) fs.writeFileSync(OUT, JSON.stringify({ summary, rows: allRows }, null, 2));
@@ -255,7 +346,8 @@ console.log(JSON.stringify(summary));
 console.log(`BATTERY SUMMARY: ${LABEL} pois=${summary.landed}/${summary.pois} ` +
   `active=${(summary.activeMsSum / 1000).toFixed(1)}s landMed=${summary.landMedianMs}ms ` +
   `settleMed=${summary.settleMedianMs}ms capped=${summary.settleCapped} ` +
-  `sameLb=${summary.sameLb} noMove=${summary.noMove} workMed=${summary.workDeltaMedian} reclaimMed=${summary.reclaimDeltaMedian}` +
+  `sameLb=${summary.sameLb} noMove=${summary.noMove} workMed=${summary.workDeltaMedian} reclaimMed=${summary.reclaimDeltaMedian} ` +
+  `sessions=${summary.sessions} sessionIdx=${SESSION_IDX} lowWork=${summary.lowWorkSettles}` +
   (aborted ? ` ABORTED(${aborted})` : ""));
 try { await raced(closeFn()); } catch (_) { /* dead browser — exit anyway */ }
 // no-move duplicates are accounted-for stops, not misses (see the land loop).

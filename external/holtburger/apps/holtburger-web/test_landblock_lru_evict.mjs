@@ -206,5 +206,58 @@ import { lbKeyOf } from "./scene3d/landblock_lru.js";
     `raw=${0xA9B40000 & 0xffff0000}`);
 }
 
+// --- Test 8 (session 11, 1118 §4 — sealed keep-ring): the sealed purge must
+//     keep the dungeon LB's 3×3 always-resident floor (SEALED_KEEP_RING_ON,
+//     default-on) instead of parking it, because onPositionUpdate re-streams
+//     that ring every position packet and the loaders' fast-path would unpark
+//     it — the measured park↔unpark storm. Headless = classic evict + default
+//     flags (SEALED_KEEP_RING_ON true). Purge every resident LB EXCEPT keep +
+//     its 3×3; steady state produces no further churn.
+{
+  const scene3d = makeStubScene3d();
+  const keep = lbKeyFromXY(0x40, 0x40);
+  const lru = new LandblockLRU({ scene3d, maxResident: 1, getCurrentLbId: () => keep });
+  // keep, its 8 neighbours (Chebyshev 1), one at Chebyshev 2, two far LBs.
+  const neighbours = [];
+  for (let dx = -1; dx <= 1; dx += 1) {
+    for (let dy = -1; dy <= 1; dy += 1) {
+      if (dx === 0 && dy === 0) continue;
+      neighbours.push(lbKeyFromXY(0x40 + dx, 0x40 + dy));
+    }
+  }
+  const cheb2 = lbKeyFromXY(0x42, 0x40); // exactly 2 LBs east — a purge victim
+  const far1 = lbKeyFromXY(0x10, 0x10);
+  const far2 = lbKeyFromXY(0x60, 0x60);
+  lru.track(keep);
+  for (const k of neighbours) lru.track(k);
+  lru.track(cheb2);
+  lru.track(far1);
+  lru.track(far2);
+  check("Test8: 12 LBs tracked (keep + 8 ring + cheb2 + 2 far)", lru.entries.size === 12, `size=${lru.entries.size}`);
+
+  // Sealed purge keyed on `keep`. Bypasses maxResident; keeps keep + 3×3.
+  lru.tickEviction(keep, keep);
+  check("Test8: keep LB retained", lru.entries.has(keep));
+  check("Test8: all 8 Chebyshev-1 neighbours retained (not parked)",
+    neighbours.every((k) => lru.entries.has(k)),
+    `resident=${neighbours.filter((k) => lru.entries.has(k)).length}/8`);
+  check("Test8: Chebyshev-2 LB evicted (beyond the floor)", !lru.entries.has(cheb2));
+  check("Test8: far LBs evicted", !lru.entries.has(far1) && !lru.entries.has(far2));
+  check("Test8: resident is exactly keep + 3×3 (9)", lru.entries.size === 9, `size=${lru.entries.size}`);
+  const evictedAfterFirst = lru.getStats().evicted;
+  check("Test8: exactly 3 LBs reclaimed (cheb2 + 2 far)", evictedAfterFirst === 3, `evicted=${evictedAfterFirst}`);
+
+  // Steady state: re-fire the ring loaders (onPositionUpdate analog) then tick
+  // the sealed purge again — the ring stays resident, NOTHING new is reclaimed
+  // (this is exactly the ping-pong the fix eliminates).
+  for (const k of neighbours) lru.track(k); // idempotent re-track (re-stream)
+  lru.tickEviction(keep, keep);
+  check("Test8: second sealed tick reclaims nothing more (no churn)",
+    lru.getStats().evicted === evictedAfterFirst, `evicted=${lru.getStats().evicted}`);
+  check("Test8: ring still fully resident after re-stream + re-purge",
+    neighbours.every((k) => lru.entries.has(k)) && lru.entries.size === 9,
+    `size=${lru.entries.size}`);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -51,6 +51,43 @@ const SEALED_EVICT_BURST_ON = (() => {
   }
 })();
 
+// Sealed-purge keep-ring (session 11, 1118 §4 — the measured TN park↔unpark
+// storm root cause). The sealed purge parks EVERY resident LB except the
+// dungeon's own, bypassing the 3×3 always-resident floor "because no outdoor
+// LB is visible" (tickEviction's sealed path). But `world_stream.js::
+// onPositionUpdate` fires `loadTerrainForLandblock` for the player's FULL 3×3
+// on every local-player position packet, and the loaders' already-baked
+// fast-path (index.js loadTerrainForLandblock) UNPARKS any parked LB it hits.
+// So the two systems fight over the keep LB's own 3×3 outdoor ring: the purge
+// parks it, the very next position packet unparks it, the next purge tick
+// re-parks it — a ping-pong that ran the whole sealed dwell. Measured (s11
+// diagnostic, `s11-tn-storm-*/tn-storm-PRE.json`, ~9 ring LBs, stable sealed
+// key = flaps 0-1 over 25 s): Town Network 3459 park / 3445 unpark, Underground
+// 3027/3018, Storage 5961/5952 — i.e. park≈unpark, a pure re-attach ping-pong
+// (matches the 1118 §4 battery's 3–4k TN reclaims; classic mode is WORSE — an
+// evict clears the baked mark so onPositionUpdate re-DECODES instead of
+// re-attaching). Fix: exempt the keep LB's 3×3 (Chebyshev ≤ 1) from the sealed
+// purge — exactly the always-resident floor the normal path and the streaming
+// layer already honor, so the two stop disagreeing. The purge still reclaims
+// everything BEYOND the 3×3 (the ~118-of-127 backlog that motivated
+// `sealedEvict`); the 9 kept LBs are flat ocean/mountain-skirt terrain already
+// hidden by `sealedCull` (zero draw) — a ~1.4 MB residency concession for a
+// 3–6k-op/stop storm. DEFAULT ON (matches the sealed family: `sealedCull`,
+// `sealedEvict`, `sealedEvictBurst` are all unconditional default-on); applies
+// in classic and warm-park alike since the fight exists in both.
+// `?sealedKeepRing=off` restores the park-everything-but-keep behavior.
+const SEALED_KEEP_RING_ON = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("sealedKeepRing");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
+// The keep LB's exempted radius (Chebyshev): 1 = its 3×3 (what onPositionUpdate
+// re-streams) when the fix is on, 0 = keep only (legacy) when off.
+const SEALED_KEEP_RING_FLOOR = SEALED_KEEP_RING_ON ? 1 : 0;
+
 // Phase 9a warm-park eviction (W4 residency design §3, 2026-07-10).
 // Eviction PARKS instead of disposing — containers detach from the scene
 // groups into a byte-budgeted pool, baked marks and the wasm collision
@@ -454,7 +491,11 @@ export class LandblockLRU {
         // reclaim under ?warmPark=on; order unchanged).
         const victims = [];
         for (const key of this.entries.keys()) {
-          if (key === keep) continue;
+          // Keep the dungeon LB AND (unless ?sealedKeepRing=off) its 3×3
+          // always-resident floor — the ring onPositionUpdate re-streams
+          // every position packet (see SEALED_KEEP_RING_ON: parking it just
+          // feeds the loaders' unpark fast-path, the s11 storm).
+          if (lbChebyshev(keep, key) <= SEALED_KEEP_RING_FLOOR) continue;
           // TN-storm fix (see _hasInFlightBake): the sealed purge at TN
           // entry is exactly where the park↔unpark storm was measured —
           // an in-flight bake's LB is skipped this tick and purged as a
@@ -476,7 +517,10 @@ export class LandblockLRU {
       // at least one eviction always runs so the drain can't starve.
       const victims = [];
       for (const key of this.entries.keys()) {
-        if (key === keep) continue;
+        // Keep the dungeon LB + its 3×3 floor (see SEALED_KEEP_RING_ON /
+        // the legacy arm above) — parking the ring onPositionUpdate
+        // re-streams is the s11 park↔unpark storm.
+        if (lbChebyshev(keep, key) <= SEALED_KEEP_RING_FLOOR) continue;
         // TN-storm fix (see _hasInFlightBake + the legacy arm above):
         // defer in-flight-bake LBs to the straggler flow.
         if (this.warmParkEnabled && this._hasInFlightBake(key)) {
