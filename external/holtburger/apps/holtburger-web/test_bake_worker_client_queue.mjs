@@ -5,9 +5,11 @@
 // and the worker runs async handlers concurrently, so under rapid teleports
 // the current LB's surface decodes queued behind up to 58 stale-town
 // requests. The fix adds a client-side three-lane dispatch queue with an
-// in-flight cap: lane 0 = init + urgent (isNearPlayerLb-tagged surface/mesh
-// fetches), lane 1 = normal surface/mesh, lane 2 = entity-surface types
-// (no urgency signal exists for them at any layer) + diagnostics.
+// in-flight cap: lane 0 = init + urgent (isNearPlayerLb-tagged fetches),
+// lane 1 = normal surface/mesh, lane 2 = non-urgent entity-surface types
+// + diagnostics.
+// Session 10: the entity-surface ABI gained a trailing urgent arg, so
+// urgent-tagged entity fetches now promote to lane 0 like surface/mesh.
 // `?bakeQueue=off` restores the pre-queue post-immediately behavior;
 // `?bakeQueueCap=N` tunes the in-flight cap.
 //
@@ -65,9 +67,12 @@ const postedTypes = (c) => c._worker.posted.map((m) => m.urgent === true ? m.typ
   check("(1c) urgent model meshes → lane 0", laneForBakeMessage("fetchModelMeshes", { urgent: true }) === 0);
   check("(1d) normal surfaces → lane 1", laneForBakeMessage("fetchSurfacesPixels", {}) === 1);
   check("(1e) normal model meshes → lane 1", laneForBakeMessage("fetchModelMeshes", { urgent: false }) === 1);
-  check("(1f) entity surfaces → lane 2 (no urgency signal exists)", laneForBakeMessage("fetchEntitySurfacesPixels", {}) === 2);
-  check("(1g) entity batch → lane 2", laneForBakeMessage("fetchEntitySurfacesPixelsBatch", {}) === 2);
+  check("(1f) non-urgent entity surfaces → lane 2", laneForBakeMessage("fetchEntitySurfacesPixels", {}) === 2);
+  check("(1g) non-urgent entity batch → lane 2", laneForBakeMessage("fetchEntitySurfacesPixelsBatch", {}) === 2);
   check("(1h) datDecodeDiag → lane 2", laneForBakeMessage("datDecodeDiag", {}) === 2);
+  // Session 10 — entity-surface urgency (decode-side priority).
+  check("(1i) urgent entity surfaces → lane 0", laneForBakeMessage("fetchEntitySurfacesPixels", { urgent: true }) === 0);
+  check("(1j) urgent entity batch → lane 0", laneForBakeMessage("fetchEntitySurfacesPixelsBatch", { urgent: true }) === 0);
 }
 
 // (2) in-flight cap + urgent-first dispatch across lanes.
@@ -176,6 +181,34 @@ const postedTypes = (c) => c._worker.posted.map((m) => m.urgent === true ? m.typ
   check("(8a) in-flight never exceeded cap", maxInFlight <= 3, `max=${maxInFlight}`);
   check("(8b) burst fully drained", c._worker.posted.length === 10,
     `posted=${c._worker.posted.length}`);
+}
+
+// (9) Session 10 — urgent entity-surface requests jump the storm and the
+// body flag survives to the posted message (the worker forwards it as the
+// trailing wasm-ABI arg).
+{
+  const c = makeClient({ cap: 1 });
+  const swallow = (p) => p.catch(() => {});
+  swallow(c._request("fetchEntitySurfacesPixels", { dids: [1] })); // posted (cap 1)
+  swallow(c._request("fetchEntitySurfacesPixels", { dids: [2] })); // queued lane 2
+  swallow(c._request("fetchSurfacesPixels", { dids: [3] })); // queued lane 1
+  swallow(c._request("fetchEntitySurfacesPixelsBatch", { flatDids: [4], urgent: true })); // queued lane 0
+  reply(c, c._worker.posted[0].id);
+  check("(9a) urgent entity batch dispatches before both normal lanes",
+    c._worker.posted[1].type === "fetchEntitySurfacesPixelsBatch" &&
+      c._worker.posted[1].urgent === true,
+    postedTypes(c).join(","));
+  reply(c, c._worker.posted[1].id);
+  check("(9b) then normal surface (lane 1)",
+    c._worker.posted[2].type === "fetchSurfacesPixels");
+  reply(c, c._worker.posted[2].id);
+  check("(9c) non-urgent entity (lane 2) drains last",
+    c._worker.posted[3].type === "fetchEntitySurfacesPixels" && c._worker.posted[3].dids[0] === 2);
+  const c2 = makeClient({ cap: 4 });
+  c2._request("fetchEntitySurfacesPixels", { dids: [9], paletteId: 5, urgent: true }).catch(() => {});
+  const m = c2._worker.posted[0];
+  check("(9d) urgent body flag survives the queue for entity singles",
+    m.urgent === true && m.dids[0] === 9 && m.paletteId === 5);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

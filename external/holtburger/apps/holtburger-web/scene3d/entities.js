@@ -575,6 +575,10 @@ import {
   entitySurfacePixelsFetcher,
   surfacePixelsFetcher,
 } from "./bake_worker_client.js";
+// decode-priority (2026-07-10): tag current/server-LB entity-surface decodes
+// urgent — lane-0 dispatch in the bake-worker queue + fetch-semaphore bypass
+// in the decoding wasm instance, same signal statics/buildings/terrain use.
+import { isNearPlayerLb } from "./landblock_lru.js";
 // Animation consolidation (docs/animation-audit §5): route attack swings through
 // the RUST MotionSequence interpreter (full-body, retail-faithful, cargo-tested —
 // src/motion_sequence.rs) instead of the mixer overlay that the locomotion cycle
@@ -3452,7 +3456,8 @@ export class EntityManager {
             results = await entitySurfacePixelsFetcher(this.wasmExports)(
               fetchDids,
               paletteId,
-              subPalettes
+              subPalettes,
+              isNearPlayerLb(this.scene3d, (meta.landblockId ?? 0) >>> 0)
             );
             // R-8 — call-level decode audit (both fields null/0 on legacy
             // wasm). Proven-absent DIDs seed the per-entity skip set so the
@@ -8729,7 +8734,12 @@ export class EntityManager {
             subPaletteTripleCount: (subPalettes.length / 3) | 0,
           });
         } catch (_) {}
-        const results = await entitySurfacePixelsFetcher(this.wasmExports)(dids, paletteId, subPalettes);
+        const results = await entitySurfacePixelsFetcher(this.wasmExports)(
+          dids,
+          paletteId,
+          subPalettes,
+          isNearPlayerLb(this.scene3d, (newMeta.landblockId ?? 0) >>> 0),
+        );
         // R-8 — decode audit (see the spawn-path twin): misses arm the
         // ladder's sweep; proven absences join the per-entity skip set.
         hotSwapDecodeMisses = surfaceResultDecodeMisses(results) ?? 0;

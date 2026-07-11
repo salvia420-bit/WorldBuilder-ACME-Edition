@@ -34,6 +34,9 @@
 // (off the main thread) with a transparent main-thread fallback — mirrors
 // the statics `surfacePixelsFetcher` offload.
 import { entitySurfacesBatchFetcher } from "./bake_worker_client.js";
+// decode-priority (2026-07-10): current/server-LB spawn pre-warms tag their
+// batch decode urgent (lane-0 dispatch + fetch-semaphore bypass).
+import { isNearPlayerLb } from "./landblock_lru.js";
 
 // Phase D.1 — base URL for the staged ACE spawn JSONL files. Mirrors
 // `scene3d/statics.js`'s SCENERY_BASE_URL. The dev server's
@@ -683,9 +686,24 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
     // Off-thread when the bake worker is active; the fetcher returns the raw
     // wasm export (or undefined on a stale pkg) otherwise, so the
     // `typeof … === "function"` guard below still gates correctly.
-    const fetchSurfBatch = wasmExports
+    const fetchSurfBatchRaw = wasmExports
       ? entitySurfacesBatchFetcher(wasmExports)
       : undefined;
+    // Bind the urgency signal here (lbKey + scene3d are in scope) so
+    // materials.js::preloadBatch keeps its 5-arg fetcher contract. Evaluated
+    // at call time — a teleport between dispatch and fetch reads fresh.
+    const fetchSurfBatch =
+      typeof fetchSurfBatchRaw === "function"
+        ? (flatDids, lens, basePals, flatSubs, tripleCounts) =>
+            fetchSurfBatchRaw(
+              flatDids,
+              lens,
+              basePals,
+              flatSubs,
+              tripleCounts,
+              isNearPlayerLb(scene3d, lbKey),
+            )
+        : fetchSurfBatchRaw;
     if (
       matCache &&
       typeof matCache.preloadBatch === "function" &&

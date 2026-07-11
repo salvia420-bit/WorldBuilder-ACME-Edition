@@ -79,8 +79,10 @@ function aliasSplitFlagEnabled() {
 //            the same signal that rides `msg.urgent` to the worker's wasm
 //            fetch-semaphore bypass),
 //   lane 1 — normal surface/mesh,
-//   lane 2 — entity-surface types (no urgency signal exists for them at
-//            any layer — wasm ABI has no urgent arg) + diagnostics.
+//   lane 2 — non-urgent entity-surface types + diagnostics.
+// Session 10 (1117 §4): the entity-surface ABI gained a trailing urgent
+// arg (wasm + worker + here), so a current-LB entity fetch tagged by the
+// same `isNearPlayerLb` signal now promotes to lane 0 like surface/mesh.
 // `?bakeQueue=off` (also 0/false) restores post-immediately; `?bakeQueueCap=N`
 // tunes the cap. Observe via `__diag.bakeWorkerStats().queue`.
 const DEFAULT_BAKE_QUEUE_CAP = 4;
@@ -428,10 +430,14 @@ export class BakeWorkerClient {
    * `Array<SurfacePixels-like>` — drop-in for the `fetchEntitySurfacesPixels`
    * consumers in `entities.js` (they read `.width/.pixels/.translucency/…`
    * and guard `.free()`). Falls back to the direct main-thread wasm call.
+   *
+   * decode-priority (2026-07-10): optional `urgent` rides through to the
+   * worker's wasm (and both fallbacks) exactly like fetchSurfacesPixels —
+   * lane-0 dispatch here, fetch-semaphore bypass in whichever wasm decodes.
    */
-  async fetchEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes) {
+  async fetchEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes, urgent) {
     if (!this.active) {
-      return wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes);
+      return wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes, urgent);
     }
     try {
       await this._ensureWorker();
@@ -449,6 +455,7 @@ export class BakeWorkerClient {
               dids: split.realIdx.map((i) => split.arr[i]),
               paletteId: paletteId >>> 0,
               subPalettes: Array.from(subPalettes || []),
+              urgent: urgent === true,
             }).then((res) =>
               applySurfaceAudit(reconstructSurfacePixelsBatch(res.payload), res.audit),
             )
@@ -457,6 +464,7 @@ export class BakeWorkerClient {
           Uint32Array.from(split.aliasIdx, (i) => split.arr[i]),
           paletteId,
           subPalettes,
+          urgent,
         );
         return await this._stitchSplit(split, workerPromise, mainPromise);
       }
@@ -464,6 +472,7 @@ export class BakeWorkerClient {
         dids: Array.from(dids),
         paletteId: paletteId >>> 0,
         subPalettes: Array.from(subPalettes || []),
+        urgent: urgent === true,
       });
       return applySurfaceAudit(reconstructSurfacePixelsBatch(res.payload), res.audit);
     } catch (e) {
@@ -471,7 +480,7 @@ export class BakeWorkerClient {
         "[bake_worker_client] entity-surface worker failed; main-thread fallback:",
         e,
       );
-      return wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes);
+      return wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes, urgent);
     }
   }
 
@@ -488,6 +497,7 @@ export class BakeWorkerClient {
     basePals,
     flatSubs,
     tripleCounts,
+    urgent,
   ) {
     if (!this.active) {
       return wasmExports.fetchEntitySurfacesPixelsBatch(
@@ -496,6 +506,7 @@ export class BakeWorkerClient {
         basePals,
         flatSubs,
         tripleCounts,
+        urgent,
       );
     }
     try {
@@ -517,6 +528,7 @@ export class BakeWorkerClient {
           basePals,
           flatSubs,
           tripleCounts,
+          urgent,
         );
       }
       const res = await this._request("fetchEntitySurfacesPixelsBatch", {
@@ -525,6 +537,7 @@ export class BakeWorkerClient {
         basePals: Array.from(basePals),
         flatSubs: Array.from(flatSubs || []),
         tripleCounts: Array.from(tripleCounts || []),
+        urgent: urgent === true,
       });
       return applySurfaceAudit(reconstructEntitySurfacesBatch(res.payload), res.audit);
     } catch (e) {
@@ -538,6 +551,7 @@ export class BakeWorkerClient {
         basePals,
         flatSubs,
         tripleCounts,
+        urgent,
       );
     }
   }
@@ -661,9 +675,12 @@ export function entitySurfacePixelsFetcher(wasmExports) {
     return wasmExports.fetchEntitySurfacesPixels;
   }
   const client = getBakeWorkerClient();
+  // decode-priority (2026-07-10): both branches accept an optional trailing
+  // `urgent`, same as modelMeshFetcher — the raw wasm export takes it
+  // natively (`Option<bool>`), the worker route forwards it in the body.
   if (!client.active) return wasmExports.fetchEntitySurfacesPixels;
-  return (dids, paletteId, subPalettes) =>
-    client.fetchEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes);
+  return (dids, paletteId, subPalettes, urgent) =>
+    client.fetchEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes, urgent);
 }
 
 /** Same contract for the F.41 batched entity-surface decoder. */
@@ -673,7 +690,7 @@ export function entitySurfacesBatchFetcher(wasmExports) {
   }
   const client = getBakeWorkerClient();
   if (!client.active) return wasmExports.fetchEntitySurfacesPixelsBatch;
-  return (flatDids, lens, basePals, flatSubs, tripleCounts) =>
+  return (flatDids, lens, basePals, flatSubs, tripleCounts, urgent) =>
     client.fetchEntitySurfacesPixelsBatch(
       wasmExports,
       flatDids,
@@ -681,5 +698,6 @@ export function entitySurfacesBatchFetcher(wasmExports) {
       basePals,
       flatSubs,
       tripleCounts,
+      urgent,
     );
 }

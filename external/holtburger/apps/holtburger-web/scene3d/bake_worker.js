@@ -14,8 +14,8 @@
 //   in : {type:'init', id, manifestUrl, sceneryBaseUrl}
 //        {type:'fetchModelMeshes', id, ids:[u32,...]}
 //        {type:'fetchSurfacesPixels', id, dids:[u32,...]}
-//        {type:'fetchEntitySurfacesPixels', id, dids:[u32,...], paletteId, subPalettes:[u32,...]}
-//        {type:'fetchEntitySurfacesPixelsBatch', id, flatDids, lens, basePals, flatSubs, tripleCounts}
+//        {type:'fetchEntitySurfacesPixels', id, dids:[u32,...], paletteId, subPalettes:[u32,...], urgent?}
+//        {type:'fetchEntitySurfacesPixelsBatch', id, flatDids, lens, basePals, flatSubs, tripleCounts, urgent?}
 //        {type:'datDecodeDiag', id}
 //   out: {type:'ready', id}
 //        {type:'result', id, kind:'modelMeshes'|'surfaces'|'entitySurfaces'|'entitySurfacesBatch', payload:[...], audit?}  (+ transferables)
@@ -85,10 +85,13 @@ async function handleSurfaces(msg) {
 // statics path does, plus the per-entity palette/sub-palette overlay, in
 // THIS worker's wasm instance so it stays off the main thread.
 async function handleEntitySurfaces(msg) {
+  // decode-priority (2026-07-10): `msg.urgent` = entity on the player's
+  // current/server LB — same semaphore bypass as handleModelMeshes.
   const surfaces = await fetchEntitySurfacesPixels(
     Uint32Array.from(msg.dids),
     msg.paletteId >>> 0,
     Uint32Array.from(msg.subPalettes || []),
+    msg.urgent === true,
   );
   const { surfaces: payload, transfer, audit } = serializeSurfacePixelsBatch(surfaces);
   self.postMessage({ type: "result", id: msg.id, kind: "entitySurfaces", payload, audit }, transfer);
@@ -102,6 +105,7 @@ async function handleEntitySurfacesBatch(msg) {
     Uint32Array.from(msg.basePals || []),
     Uint32Array.from(msg.flatSubs || []),
     Uint32Array.from(msg.tripleCounts || []),
+    msg.urgent === true,
   );
   // Drains + frees the batch (and per-group SurfacePixels) handles.
   const { groups: payload, transfer, audit } = serializeEntitySurfacesBatch(batch);

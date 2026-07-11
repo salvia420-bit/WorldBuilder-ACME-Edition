@@ -10849,8 +10849,14 @@ pub async fn fetch_entity_surfaces_pixels(
     surface_dids: Vec<u32>,
     base_palette_id: u32,
     sub_palettes: Vec<u32>,
+    // decode-priority urgent lane (2026-07-10): `Some(true)` = entity on the
+    // player's current/server LB — routes the walk's prefetches around the
+    // fetch semaphore, same as `fetch_surfaces_pixels`. Absent/false = the
+    // pre-fix normal lane (all existing callers).
+    urgent: Option<bool>,
 ) -> Result<js_sys::Array, JsValue> {
     use holtburger_dat::ResourceKey;
+    let urgent = urgent.unwrap_or(false);
     if sub_palettes.len() % 3 != 0 {
         return Err(JsValue::from_str(
             "fetch_entity_surfaces_pixels: sub_palettes must be flat [id, offset, length, ...] triples (length % 3 == 0)",
@@ -10891,16 +10897,28 @@ pub async fn fetch_entity_surfaces_pixels(
         .iter()
         .flat_map(|(id, off, len)| [*id, *off as u32, *len as u32])
         .collect();
-    let cache_key = prefetch::WalkCacheKey::new("fetchEntitySurfacesPixels")
-        .with_u32(base_palette_id)
-        .with_u32_slice(&surface_dids)
-        .with_u32_slice(&sp_flat);
-    prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
+    // Distinct key name per lane so an urgent caller can't latch onto an
+    // in-flight normal-lane loop (see fetch_surfaces_pixels). Urgency is NOT
+    // part of the hashed args — decode output is lane-independent.
+    let cache_key = prefetch::WalkCacheKey::new(if urgent {
+        "fetchEntitySurfacesPixels:urgent"
+    } else {
+        "fetchEntitySurfacesPixels"
+    })
+    .with_u32(base_palette_id)
+    .with_u32_slice(&surface_dids)
+    .with_u32_slice(&sp_flat);
+    let walk = move |s: &dyn holtburger_dat::ResourceSource| {
         for &id in &dids_for_walk {
             let _ = fetch_entity_surface_pixels_impl(s, id, base_palette_id, &sp_for_walk);
         }
-    })
-    .await?;
+    };
+    if urgent {
+        prefetch::ensure_walk_prefetched_keyed_urgent(cache_key, &source, &initial, walk)
+            .await?;
+    } else {
+        prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk).await?;
+    }
     // Final decode under the audit wrapper: count non-provable misses and
     // stamp the call-level ABI fields on the returned Array (P2↔P3).
     let audit = DecodeAuditSource::new(source.as_ref());
@@ -11066,9 +11084,12 @@ pub async fn fetch_entity_surfaces_pixels_batch(
     base_palette_ids: Vec<u32>,
     flat_sub_palettes: Vec<u32>,
     sub_palettes_triple_counts: Vec<u32>,
+    // decode-priority urgent lane (2026-07-10): see fetch_entity_surfaces_pixels.
+    urgent: Option<bool>,
 ) -> Result<EntitySurfacesPixelsBatch, JsValue> {
     use holtburger_dat::ResourceKey;
 
+    let urgent = urgent.unwrap_or(false);
     let n = surface_dids_lens.len();
     if base_palette_ids.len() != n {
         return Err(JsValue::from_str(&format!(
@@ -11171,12 +11192,18 @@ pub async fn fetch_entity_surfaces_pixels_batch(
     // fingerprint over every input array. Two concurrent callers
     // requesting the same set of groups (in the same order) share
     // one prefetch loop.
-    let cache_key = prefetch::WalkCacheKey::new("fetchEntitySurfacesPixelsBatch")
-        .with_u32_slice(&surface_dids_lens)
-        .with_u32_slice(&flat_surface_dids)
-        .with_u32_slice(&base_palette_ids)
-        .with_u32_slice(&sub_palettes_triple_counts)
-        .with_u32_slice(&flat_sub_palettes);
+    // Distinct key name per lane (see fetch_entity_surfaces_pixels) — urgency
+    // rides the export string only, never the hashed args.
+    let cache_key = prefetch::WalkCacheKey::new(if urgent {
+        "fetchEntitySurfacesPixelsBatch:urgent"
+    } else {
+        "fetchEntitySurfacesPixelsBatch"
+    })
+    .with_u32_slice(&surface_dids_lens)
+    .with_u32_slice(&flat_surface_dids)
+    .with_u32_slice(&base_palette_ids)
+    .with_u32_slice(&sub_palettes_triple_counts)
+    .with_u32_slice(&flat_sub_palettes);
 
     // Closure inputs need owned data (move semantics) — clone the
     // per-group slices into a walk-owned Vec the closure can iterate.
@@ -11192,7 +11219,7 @@ pub async fn fetch_entity_surfaces_pixels_batch(
         })
         .collect();
 
-    prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
+    let walk = move |s: &dyn holtburger_dat::ResourceSource| {
         // Visit every group in one walk round. RecordingSource
         // accumulates misses across ALL groups; the next prefetch
         // round resolves them in one shared HTTP batch — that's the
@@ -11202,8 +11229,13 @@ pub async fn fetch_entity_surfaces_pixels_batch(
                 let _ = fetch_entity_surface_pixels_impl(s, id, *base_pal, sp);
             }
         }
-    })
-    .await?;
+    };
+    if urgent {
+        prefetch::ensure_walk_prefetched_keyed_urgent(cache_key, &source, &initial, walk)
+            .await?;
+    } else {
+        prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk).await?;
+    }
 
     // Post-prefetch: build one Vec<SurfacePixels> per input group in
     // input order. Each per-DID call is sync — every record is warm. The
