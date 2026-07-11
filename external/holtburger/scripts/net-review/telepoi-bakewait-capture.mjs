@@ -18,7 +18,9 @@ const BOOT_MJS = process.env.BOOT_MJS ||
   "/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/harness/lib/boot.mjs";
 const OUT = process.env.OUT || "telepoi-bakewait.json";
 
-const HOPS = [
+// HOPS env (JSON array) overrides the default sweep — session 9 uses it for
+// the TN-cluster arm (1116 §4) without disturbing the s8-comparable default.
+const HOPS = process.env.HOPS ? JSON.parse(process.env.HOPS) : [
   "Holtburg", "Rithwic", "Eastham", "Cragstone", "Arwic",
   "Glenden Wood", "Zaikhal", "Yaraq", "Samsur", "Nanto",
 ];

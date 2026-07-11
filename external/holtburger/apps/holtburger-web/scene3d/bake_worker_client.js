@@ -68,6 +68,52 @@ function aliasSplitFlagEnabled() {
   }
 }
 
+// Session 9 (1116 §4) — urgent-first dispatch queue. Pre-queue, every
+// message posted to the worker immediately and the worker runs its async
+// `onmessage` handlers CONCURRENTLY (nothing on either side queues), so
+// under rapid teleports the current LB's surface decodes queued behind
+// dozens of stale-town requests (s9 TN-cluster baseline: maxPending 123,
+// fetchSurfacesPixels avgDepth 43.4 / avgMs 6.7s). The queue dispatches
+// through three lanes with an in-flight cap:
+//   lane 0 — `init` + urgent (`isNearPlayerLb`-tagged surface/mesh fetches;
+//            the same signal that rides `msg.urgent` to the worker's wasm
+//            fetch-semaphore bypass),
+//   lane 1 — normal surface/mesh,
+//   lane 2 — entity-surface types (no urgency signal exists for them at
+//            any layer — wasm ABI has no urgent arg) + diagnostics.
+// `?bakeQueue=off` (also 0/false) restores post-immediately; `?bakeQueueCap=N`
+// tunes the cap. Observe via `__diag.bakeWorkerStats().queue`.
+const DEFAULT_BAKE_QUEUE_CAP = 4;
+
+function queueFlagEnabled() {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search || "").get("bakeQueue");
+    return v !== "0" && v !== "off" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+}
+
+function queueCapFlag() {
+  try {
+    const v = parseInt(
+      new URLSearchParams(globalThis.location?.search || "").get("bakeQueueCap") || "",
+      10,
+    );
+    return Number.isFinite(v) && v >= 1 ? v : DEFAULT_BAKE_QUEUE_CAP;
+  } catch (_) {
+    return DEFAULT_BAKE_QUEUE_CAP;
+  }
+}
+
+/** Dispatch lane for a worker message. Exported for the unit suite. */
+export function laneForBakeMessage(type, body) {
+  if (type === "init") return 0;
+  if (body && body.urgent === true) return 0;
+  if (type === "fetchModelMeshes" || type === "fetchSurfacesPixels") return 1;
+  return 2;
+}
+
 function isTexSwapAlias(did) {
   return ((did & TEX_SWAP_ALIAS_MASK) >>> 0) === TEX_SWAP_ALIAS_BASE;
 }
@@ -94,7 +140,7 @@ export function partitionTexSwapAliasDids(dids) {
   return { arr, aliasIdx, realIdx };
 }
 
-class BakeWorkerClient {
+export class BakeWorkerClient {
   constructor() {
     this.enabled = false;
     this.aliasSplit = true;
@@ -104,6 +150,11 @@ class BakeWorkerClient {
     this._readyPromise = null;
     this._seq = 1;
     this._pending = new Map();
+    // Session 9 (1116 §4) — urgent-first dispatch queue (see laneForBakeMessage).
+    this._queueEnabled = queueFlagEnabled();
+    this._queueCap = queueCapFlag();
+    this._lanes = [[], [], []];
+    this._inFlightPosted = 0;
   }
 
   /**
@@ -150,12 +201,11 @@ class BakeWorkerClient {
 
   _request(type, body) {
     const id = this._seq++;
-    // Session 7 (1114 §3) — per-request latency + queue depth, aggregated
-    // by message type. The bake worker serializes requests, so a deep
-    // `_pending` at enqueue time IS the in-worker FIFO wait the teleport
-    // investigation needs to see (the JS-visible half of the wasm
-    // fetch-semaphore backlog). O(1) per request; read via
-    // window.__diag.bakeWorkerStats().
+    // Session 7 (1114 §3) — per-request latency + backlog depth, aggregated
+    // by message type. `_pending` holds queued AND posted requests, so the
+    // depth at enqueue time IS the JS-visible backlog the teleport
+    // investigation needs to see (dispatch-queue wait + in-worker decode).
+    // O(1) per request; read via window.__diag.bakeWorkerStats().
     const t0 = (typeof performance !== "undefined") ? performance.now() : Date.now();
     const depth = this._pending.size;
     const done = (ok) => {
@@ -179,14 +229,64 @@ class BakeWorkerClient {
         resolve: (v) => { done(true); resolve(v); },
         reject: (e) => { done(false); reject(e); },
       });
-      this._worker.postMessage({ type, id, ...body });
+      // Session 9 (1116 §4) — urgent-first dispatch. `?bakeQueue=off`
+      // restores the pre-queue post-immediately behavior (the s8 arm).
+      if (!this._queueEnabled) {
+        this._worker.postMessage({ type, id, ...body });
+        return;
+      }
+      const lane = laneForBakeMessage(type, body);
+      this._lanes[lane].push({ type, id, body, lane, tq: t0 });
+      this._noteQueueLen();
+      this._pump();
     });
+  }
+
+  /** Post queued messages urgent-lane-first while under the in-flight cap. */
+  _pump() {
+    while (this._worker && this._inFlightPosted < this._queueCap) {
+      const entry =
+        this._lanes[0].shift() ?? this._lanes[1].shift() ?? this._lanes[2].shift();
+      if (!entry) return;
+      this._inFlightPosted += 1;
+      try {
+        const q = this._stats?.queue;
+        if (q) {
+          const nowMs =
+            (typeof performance !== "undefined") ? performance.now() : Date.now();
+          const qMs = nowMs - entry.tq;
+          const b = q.byLane[entry.lane];
+          q.posted += 1;
+          b.count += 1;
+          b.totalQueueMs += qMs;
+          if (qMs > b.maxQueueMs) b.maxQueueMs = qMs;
+        }
+      } catch (_) { /* stats must never affect dispatch */ }
+      this._worker.postMessage({ type: entry.type, id: entry.id, ...entry.body });
+    }
+  }
+
+  _noteQueueLen() {
+    try {
+      const s = this._stats || (this._stats = { byType: {}, maxPending: 0 });
+      const q = s.queue || (s.queue = {
+        posted: 0,
+        maxQueuedLen: 0,
+        byLane: [0, 1, 2].map(() => ({ count: 0, totalQueueMs: 0, maxQueueMs: 0 })),
+      });
+      const len = this._lanes[0].length + this._lanes[1].length + this._lanes[2].length;
+      if (len > q.maxQueuedLen) q.maxQueuedLen = len;
+    } catch (_) { /* stats must never affect dispatch */ }
   }
 
   _onMessage(msg) {
     const entry = this._pending.get(msg && msg.id);
     if (!entry) return;
     this._pending.delete(msg.id);
+    if (this._queueEnabled) {
+      this._inFlightPosted = Math.max(0, this._inFlightPosted - 1);
+      this._pump();
+    }
     if (msg.type === "ready") return entry.resolve(true);
     if (msg.type === "error") return entry.reject(new Error(msg.message));
     if (msg.type === "result") return entry.resolve(msg);
@@ -196,6 +296,10 @@ class BakeWorkerClient {
   _failAll(err) {
     for (const { reject } of this._pending.values()) reject(err);
     this._pending.clear();
+    // Queued-but-unposted entries were rejected via `_pending` above; drop
+    // their lane records and the posted counter so a respawn starts clean.
+    this._lanes = [[], [], []];
+    this._inFlightPosted = 0;
     // Drop the dead worker so a later call can respawn.
     this._worker = null;
     this._readyPromise = null;
@@ -480,7 +584,21 @@ export function getBakeWorkerClient() {
         if (!window.__diag) window.__diag = {};
         window.__diag.bakeWorkerStats = () => {
           const s = _singleton?._stats;
-          if (!s) return { active: !!_singleton?.active, byType: {}, maxPending: 0 };
+          const lanes = _singleton?._lanes || [[], [], []];
+          const queue = {
+            enabled: _singleton?._queueEnabled === true,
+            cap: _singleton?._queueCap ?? null,
+            queuedNow: lanes[0].length + lanes[1].length + lanes[2].length,
+            inFlightPosted: _singleton?._inFlightPosted ?? 0,
+            posted: s?.queue?.posted ?? 0,
+            maxQueuedLen: s?.queue?.maxQueuedLen ?? 0,
+            byLane: (s?.queue?.byLane ?? []).map((b) => ({
+              count: b.count,
+              avgQueueMs: b.count ? Math.round(b.totalQueueMs / b.count) : 0,
+              maxQueueMs: Math.round(b.maxQueueMs),
+            })),
+          };
+          if (!s) return { active: !!_singleton?.active, byType: {}, maxPending: 0, queue };
           const byType = {};
           for (const [type, b] of Object.entries(s.byType)) {
             byType[type] = {
@@ -490,9 +608,14 @@ export function getBakeWorkerClient() {
               maxMs: Math.round(b.maxMs),
               avgDepth: b.count ? Math.round((b.totalDepth / b.count) * 10) / 10 : 0,
               maxDepth: b.maxDepth,
+              // Session 9 (1116 §4) — raw accumulators so a capture can diff
+              // two snapshots into a per-window mean (avgMs/avgDepth alone
+              // can't be windowed; count-deltas + total-deltas can).
+              totalMs: Math.round(b.totalMs),
+              totalDepth: b.totalDepth,
             };
           }
-          return { active: !!_singleton?.active, pendingNow: _singleton?._pending?.size ?? 0, maxPending: s.maxPending, byType };
+          return { active: !!_singleton?.active, pendingNow: _singleton?._pending?.size ?? 0, maxPending: s.maxPending, byType, queue };
         };
       }
     } catch (_) {}
