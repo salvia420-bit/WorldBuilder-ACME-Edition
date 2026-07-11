@@ -172,7 +172,7 @@ let phase = 'boot';
   });
 
   const url = `http://127.0.0.1:8765/apps/holtburger-web/index.html`
-    + `?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&kickDance=1`
+    + `?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first`
     + `&renderer=3d&quality=${QUALITY}&agentic=${AGENTIC}&pvsRingRadius=${PVS}&nosw=1&renderDiag=on`
     + (BAKE_WORKER ? '&bakeWorker=1' : '')
     + (WIREFRAME ? '&wireframe=1' : '');

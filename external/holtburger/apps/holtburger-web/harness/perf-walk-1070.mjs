@@ -23,7 +23,7 @@ const APP = "http://127.0.0.1:18765/apps/holtburger-web/index.html"; // via -R t
 const SCRATCH = (() => { for (const d of ["/mnt/wbterminal1/tmp/claude-scratch", "/tmp/claude-scratch"]) { try { mkdirSync(d, { recursive: true }); return d; } catch {} } return "/tmp"; })();
 
 const FLAGS = process.env.PERF_FLAGS ? process.env.PERF_FLAGS.split(",").map(s => s.trim()).filter(Boolean) : [
-  "renderer=3d", "autoLogin=1", "account=tailnet1", "password=tailnet1", "autoSpawn=first", "kickDance=1",
+  "renderer=3d", "autoLogin=1", "account=tailnet1", "password=tailnet1", "autoSpawn=first",
   "server_host=127.0.0.1", "server_port=9000", "bridge_url=ws://100.116.47.66:8080/",
   "renderDiag=on", "syncTickDiag=1",
   "unifiedTick=on", "posePublishPostTick=on", "syncPhysicsTick=on", "wireStatePacks=stage1",
@@ -63,8 +63,7 @@ function gpu1070() {
 async function main() {
   console.log(`[1070] all-flags-on perf walk, ${DURATION_S}s, REAL GTX 1070. scratch=${SCRATCH}`);
   // Clear the FF first (drop any prior tailnet1 session) + wait out ACE's
-  // ~25s single-session grace so the next login can claim the slot cleanly
-  // (kickDance alone is flaky over this path).
+  // ~25s single-session grace so the next login can claim the slot cleanly.
   console.log("[1070] about:blank + 35s grace for ACE to free tailnet1…");
   await gotoFF("about:blank").catch(() => {});
   await sleep(35000);

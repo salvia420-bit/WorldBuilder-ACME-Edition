@@ -65,7 +65,7 @@ await mkdir(OUT, { recursive: true });
 // Worker-fleet preset: composes wire-agent with all five companion flags.
 // Caller can extend or override via --flags="...".
 const PRESET = "autoLogin=1&autoSpawn=first&renderer=3d&quality=low"
-  + "&kickDance=1&agentic=low&wireframe=1&hud=none&plugins=none"
+  + "&agentic=low&wireframe=1&hud=none&plugins=none"
   + "&renderOnDemand=1&netDrainHz=30";
 
 // Rotating accounts to avoid ACE's 45s logout window on rapid relogin

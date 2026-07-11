@@ -563,7 +563,13 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
 
   // First-call init — at most one each per page.
   ensureSpawnsInit(wasmExports);
-  const wcidToSetup = await loadWcidToSetupMap();
+  // A7-F4 (2026-07-11 s13): the page-wide wcid→setup map load and the per-LB
+  // spawns fetch are independent (the map isn't consumed until the record loop
+  // below) — kick the map off HERE and await it alongside fetch_landblock_spawns
+  // via Promise.all inside the try, instead of serializing map-then-fetch. Also
+  // brings the map load under the try's cooldown/finally (previously a map-load
+  // throw leaked the in-flight marker).
+  const wcidToSetupPromise = loadWcidToSetupMap();
 
   try {
     // `fetch_landblock_spawns` takes a Vec<u32> of LandblockInfo
@@ -571,9 +577,12 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
     // strips the low 16 bits to derive the LB key for the cache
     // lookup, then fetches `<base>/0xXXXX.spawns.jsonl`.
     const cellId = (lbKey | 0x0000fffe) >>> 0;
-    const records = await wasmExports.fetch_landblock_spawns(
-      new Uint32Array([cellId])
-    );
+    // A7-F4: await the concurrently-started map load together with the spawns
+    // fetch (both in flight since function entry).
+    const [records, wcidToSetup] = await Promise.all([
+      wasmExports.fetch_landblock_spawns(new Uint32Array([cellId])),
+      wcidToSetupPromise,
+    ]);
     const fetched = records?.length ?? 0;
 
     let injected = 0;

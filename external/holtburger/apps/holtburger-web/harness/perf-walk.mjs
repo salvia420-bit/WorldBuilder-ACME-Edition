@@ -40,7 +40,7 @@ const SCRATCH = (() => {
 // ── Every unified-pipeline flag ON + renderDiag/syncTickDiag. NO nullRender. ──
 const FLAGS = [
   "renderer=3d", "autoLogin=1", "account=tailnet1", "password=tailnet1",
-  "autoSpawn=first", "kickDance=1", "server_host=127.0.0.1", "server_port=9000",
+  "autoSpawn=first", "server_host=127.0.0.1", "server_port=9000",
   "renderDiag=on", "syncTickDiag=1",
   // A1/A2/A6/A8/A13 spine
   "unifiedTick=on", "posePublishPostTick=on", "syncPhysicsTick=on", "wireStatePacks=stage1",

@@ -59,6 +59,10 @@ import {
 import { MaterialCache, materialCanCastShadow } from "./materials.js";
 import { surfacePixelsFetcher } from "./bake_worker_client.js";
 import { isNearPlayerLb } from "./landblock_lru.js";
+// A7-F1 (2026-07-11 s13) — shared per-cellId LandblockInfo fetch. statics.js
+// runs the SAME fetch_landblock_objects for this LB; both route through this
+// so the wasm unpack + setup-resolution happens ONCE. See lb_objects_shared.js.
+import { fetchLandblockObjectsShared } from "./lb_objects_shared.js";
 // A9-Stage2 (unification survey 2026-06-11): adopt the single-owner
 // part-transform composition. A building's per-part hinge frame is the same
 // rest-pose frame an entity part carries (position + AC-ordered quaternion);
@@ -691,14 +695,18 @@ export async function bakeBuildingsForLandblock(
     // LandblockInfo (objects + buildings); `0xffff` is the terrain
     // CellLandblock and won't return placements.
     const cellId = (lbKey | 0xfffe) >>> 0;
-    const allPlacements = await wasmExports.fetch_landblock_objects(
-      new Uint32Array([cellId]),
+    // A7-F1 (2026-07-11 s13): shared drained snapshot — statics.js fetches the
+    // SAME cellId. The wasm records are drained+freed once inside the shared
+    // module, so `allPlacements` here are plain JS records (no `.free`).
+    const allPlacements = await fetchLandblockObjectsShared(
+      wasmExports,
+      cellId,
       urgent
     );
 
-    // Step 2 — filter buildings, snapshot to JS-owned plain objects,
-    // and free the wasm side. The statics path filters !isBuilding from
-    // a separate wasm call (no shared state across the two readers).
+    // Step 2 — filter buildings, reshape into the JS-owned building record
+    // this baker consumes. statics.js filters !isBuilding from the same
+    // shared snapshot; neither mutates it.
     const buildings = [];
     for (const p of allPlacements) {
       if (p.isBuilding) {
@@ -712,7 +720,6 @@ export async function bakeBuildingsForLandblock(
           isBuilding: true,
         });
       }
-      if (typeof p.free === "function") p.free();
     }
 
     if (buildings.length === 0) {

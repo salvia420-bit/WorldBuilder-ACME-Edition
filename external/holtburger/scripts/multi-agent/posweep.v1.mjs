@@ -14,7 +14,7 @@ const done=new Set(readdirSync(STATE).filter(f=>f.endsWith(".json")).map(f=>f.re
 const all=readFileSync("/home/wbterminal/out/sweep_queue.txt","utf8").split("\n").map(s=>s.trim()).filter(Boolean);
 let queue=all.filter((_,i)=>i%sn===si).filter(base=>!done.has(((parseInt(base,16)>>>16)&0xffff).toString(16)));
 if(limit) queue=queue.slice(0,limit);
-const PRESET="renderer=3d&wireframe=1&quality=low&agentic=low&eagerDungeons=on&hud=none&plugins=none&diag=1&nosw=1&renderOnDemand=1&autoLogin=1&autoSpawn=first&kickDance=1&server_host=127.0.0.1&server_port=9000&bridge_url=ws://127.0.0.1:8080/";
+const PRESET="renderer=3d&wireframe=1&quality=low&agentic=low&eagerDungeons=on&hud=none&plugins=none&diag=1&nosw=1&renderOnDemand=1&autoLogin=1&autoSpawn=first&server_host=127.0.0.1&server_port=9000&bridge_url=ws://127.0.0.1:8080/";
 const U=`http://127.0.0.1:8765/apps/holtburger-web/index.html?${PRESET}&account=${account}&password=${account}`;
 const b=await chromium.launch({headless:true,args:["--use-gl=swiftshader","--enable-unsafe-swiftshader","--no-sandbox","--disable-dev-shm-usage"]});
 process.on("SIGTERM",async()=>{try{await b.close()}catch{};process.exit(143)});
@@ -23,7 +23,7 @@ let dl=Date.now()+150000;
 while(Date.now()<dl){const s=await p.evaluate(()=>window.__bootState).catch(()=>null);
   if(["ready","in-world"].includes(s)&&(await p.evaluate(()=>(window.liveScene3d?.entitiesGroup?.children?.length||0)>0)))break;
   if(s==="error"||s==="ready"){await p.evaluate((nm)=>{try{window.__sessionHandle.createTestCharacter(nm);}catch(e){}},"P"+account.slice(-3)+Date.now().toString().slice(-5));
-    await p.waitForTimeout(8000); await p.evaluate(()=>{try{window.__runAutonomousLogin({autoSpawn:"first",kickDance:0});}catch(e){}});} await p.waitForTimeout(2500);}
+    await p.waitForTimeout(8000); await p.evaluate(()=>{try{window.__runAutonomousLogin({autoSpawn:"first"});}catch(e){}});} await p.waitForTimeout(2500);}
 await p.evaluate(()=>{try{window.__sessionHandle.sendChat("@god");}catch(e){}}); await p.waitForTimeout(2000);
 const readScene=(lbId)=>p.evaluate((lbId)=>{const L=window.liveScene3d||{};
   let walk=[]; try{const w=window.__diag?.placements?.walk?.(lbId); walk=Array.isArray(w)?w.map(o=>({m:o.modelId>>>0,p:o.position})):[];}catch(e){}

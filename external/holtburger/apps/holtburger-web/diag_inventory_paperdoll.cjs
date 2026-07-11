@@ -29,7 +29,7 @@ const PAGE_URL =
   `${BASE}/apps/holtburger-web/index.html` +
   `?renderer=3d&wireframe=1` +
   `&autoLogin=1&account=${encodeURIComponent(ACCOUNT)}&password=${encodeURIComponent(PASSWORD)}` +
-  `&autoSpawn=first&kickDance=1`;
+  `&autoSpawn=first`;
 
 const OUT_JSON = process.env.HB_DIAG_OUT ||
   "/mnt/wbterminal1/tmp/claude-scratch/diag-inventory-paperdoll.json";

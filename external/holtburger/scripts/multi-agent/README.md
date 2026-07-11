@@ -60,7 +60,7 @@ Every agent boots with:
 
 ```
 autoLogin=1&autoSpawn=first&renderer=3d&quality=low
-&kickDance=1&agentic=low&wireframe=1&hud=none&plugins=none
+&agentic=low&wireframe=1&hud=none&plugins=none
 &renderOnDemand=1&netDrainHz=30
 ```
 

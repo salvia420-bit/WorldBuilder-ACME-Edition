@@ -11,7 +11,7 @@ catch (_) { ({ chromium } = require(path.join(PLAYWRIGHT_CACHE, "playwright")));
 
 const PAGE_URL = "http://127.0.0.1:7080/apps/holtburger-web/index.html"
   + "?renderer=3d&wireframe=1"
-  + "&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&kickDance=1";
+  + "&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first";
 
 (async () => {
   const browser = await chromium.launch({

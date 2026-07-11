@@ -45,18 +45,33 @@ const PLAYWRIGHT_CACHE =
 const SERVER_BASE =
   process.env.HARNESS_BASE_URL || "http://127.0.0.1:8765/apps/holtburger-web/";
 
+// Grace-gap constants (2026-07-11 s13). A back-to-back reconnect on the same
+// account lands mid-grace and never reaches in-world. The grace is NOT the
+// "~25s" the old comments cited: an abruptly-closed browser session (this
+// harness's close()) never tells ACE goodbye — the wsbridge is WS↔UDP and UDP
+// has no close — so ACE holds the session until its 60s network-timeout reap.
+// Live-measured 2026-07-11 (10-boot gate): gap=25s → every boot AFTER an
+// in-world session stalled (alternating PASS/FAIL); 65s (60s reap + margin)
+// → 10/10 green. Rather than the old destructive connect→kick→reconnect
+// self-race (retired from the client and here), launchAndEnter waits out the
+// remainder of this window since the last session in this process closed
+// before navigating the next one (see lastSessionEndAt below). Override with
+// HARNESS_INTER_ARM_GAP_MS.
+const INTER_ARM_GAP_MS = Number(process.env.HARNESS_INTER_ARM_GAP_MS || 65000);
+// Wall-clock stamp of the most recent helpers.close() in THIS process; null
+// until the first session closes so the first launch waits nothing.
+let lastSessionEndAt = null;
+
 // Mandatory query that every flag run inherits. Caller-supplied `query` is
 // merged on top (and may override e.g. server_host for a remote run).
 const BASE_QUERY = {
   renderer: "3d",
   nullRender: "1",
   autoLogin: "1",
-  // The driver launches one fresh session per flag group with the SAME account.
-  // ACE keeps the account "in world" for a ~25s grace after the prior session's
-  // socket closes ("2nd connect boots 1st"), so a back-to-back reconnect lands
-  // mid-grace and never reaches in-world. kickDance does connect→kick→reconnect
-  // so each group can claim the world. Disable with HARNESS_KICKDANCE=0.
-  ...(process.env.HARNESS_KICKDANCE === "0" ? {} : { kickDance: "1" }),
+  // Stale-recovery fallback (default-OFF, 2026-07-11 s13). The grace-gap above
+  // makes the account claimable without the destructive self-race; only enable
+  // this last-resort reconnect (maxRetries=1) for a wedged ACE ghost-session.
+  ...(process.env.HARNESS_STALE_RECOVERY === "1" ? { maxRetries: "1" } : {}),
   account: process.env.HARNESS_ACCOUNT || "tailnet1",
   password: process.env.HARNESS_PASSWORD || "tailnet1",
   autoSpawn: "first",
@@ -158,7 +173,9 @@ function buildUrl(query) {
  * @param {string|object} [opts.query] extra URL query (string fragment or
  *   key/value object) appended to the base headless+autoLogin query.
  * @param {number} [opts.timeoutMs=60000] hard cap on reaching in-world.
- * @returns {Promise<{browser:import('playwright').Browser, page:import('playwright').Page, helpers:object, url:string, inWorld:boolean}>}
+ * @returns {Promise<{browser:import('playwright').Browser, page:import('playwright').Page, helpers:object, url:string, inWorld:boolean, inWorldMs:number|null}>}
+ *   inWorldMs is the boot wall-clock (navigation → truly-in-world) in ms, or
+ *   null on a boot stall.
  * @throws Error('SERVER_DOWN') (code='SERVER_DOWN') if the dev server is
  *   unreachable; Error('PLAYWRIGHT_MISSING') if playwright can't be loaded.
  *   Does NOT throw on in-world timeout — returns inWorld:false so the driver
@@ -203,14 +220,26 @@ export async function launchAndEnter({ query, timeoutMs = 60000 } = {}) {
     pageErrors.push({ t: Date.now() - t0, message: err.message });
   });
 
-  // 3) Navigate. domcontentloaded is enough — autoLogin fires from the page.
+  // 3) Inter-arm grace-gap: wait out the remainder of the ACE session grace
+  //    since the previous session in THIS process closed (see INTER_ARM_GAP_MS).
+  //    First launch (lastSessionEndAt==null) waits nothing.
+  if (lastSessionEndAt != null) {
+    const remaining = INTER_ARM_GAP_MS - (Date.now() - lastSessionEndAt);
+    if (remaining > 0) {
+      await new Promise((r) => setTimeout(r, remaining));
+    }
+  }
+
+  // 4) Navigate. domcontentloaded is enough — autoLogin fires from the page.
+  const navT0 = Date.now();
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
 
-  // 4) Wait for truly-in-world: __bootState==='in-world' (now OR anywhere in
+  // 5) Wait for truly-in-world: __bootState==='in-world' (now OR anywhere in
   //    __bootStateHistory, to catch the in-world->ready slip) AND a
   //    non-undefined local-player pose. Bounded by timeoutMs; on stall we
   //    resolve inWorld:false rather than throwing.
   let inWorld = false;
+  let inWorldMs = null;
   try {
     await page.waitForFunction(
       () => {
@@ -236,12 +265,13 @@ export async function launchAndEnter({ query, timeoutMs = 60000 } = {}) {
     );
     // Confirm we didn't resolve solely on a terminal 'error' state.
     inWorld = await page.evaluate(() => window.__bootState !== "error");
+    if (inWorld) inWorldMs = Date.now() - navT0;
   } catch (_) {
     inWorld = false; // boot stalled — driver decides (SKIP), never FAIL.
   }
 
   const helpers = makeHelpers(page, { consoleLog, pageErrors, browser, url });
-  return { browser, page, helpers, url, inWorld };
+  return { browser, page, helpers, url, inWorld, inWorldMs };
 }
 
 /**
@@ -428,13 +458,15 @@ function makeHelpers(page, ctx) {
   /** Sleep `ms` driven by the page clock (a real awaited delay). */
   const waitMs = (ms) => page.waitForTimeout(ms);
 
-  /** Tear down the browser. Idempotent; swallows close errors. */
+  /** Tear down the browser. Idempotent; swallows close errors. Stamps the
+   *  process-wide session-end clock that gates the next launch's grace-gap. */
   const close = async () => {
     try {
       await ctx.browser.close();
     } catch (_) {
       /* already closed */
     }
+    lastSessionEndAt = Date.now();
   };
 
   return {

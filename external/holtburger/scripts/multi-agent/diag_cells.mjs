@@ -8,7 +8,7 @@ const acct = process.env.WB_ACCT || "tailnet1"; // account=password test convent
 const BOOT =
   "http://127.0.0.1:8765/apps/holtburger-web/index.html" +
   "?renderer=3d&quality=low&agentic=low&hud=none&plugins=none" +
-  "&diag=1&nosw=1&targetFps=3&portalStencil=on&autoLogin=1&autoSpawn=first&kickDance=1" +
+  "&diag=1&nosw=1&targetFps=3&portalStencil=on&autoLogin=1&autoSpawn=first" +
   "&server_host=127.0.0.1&server_port=9000&bridge_url=ws://127.0.0.1:8080/" +
   `&account=${acct}&password=${acct}`;
 

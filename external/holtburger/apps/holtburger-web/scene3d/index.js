@@ -108,6 +108,10 @@ import { preloadAllIcons as preloadAllIconsShared } from "../ui/ac_icon_cache.js
 // See stream_bake_guard.js: stops a shard-fetch failure from being hammered
 // into an OOM crash by the per-position-update ring driver.
 import { guardedStreamBake, createStreamGuardState, summarizeStreamBakeWait } from "./stream_bake_guard.js";
+// A4 (2026-07-11 s13) — batched 3×3 terrain-ring planner (docs/1120-appendix.md
+// A4 / Conflict C2). Pure injected-deps core; the loadTerrainRing facade below
+// wraps it. See terrain_ring.js for the ownership + F1-fallback contract.
+import { runTerrainRingBatch } from "./terrain_ring.js";
 
 // streamFix (2026-07-02, town-portal streaming): default-ON master gate for the
 // already-baked FAST-PATH in the three per-LB loaders below (`?streamFix=off`
@@ -132,6 +136,19 @@ import { guardedStreamBake, createStreamGuardState, summarizeStreamBakeWait } fr
 const STREAM_FIX_ENABLED = (() => {
   try {
     const v = new URLSearchParams(window.location?.search || "").get("streamFix");
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+})();
+
+// A4 (2026-07-11 s13): default-ON gate for the batched 3×3 terrain-ring
+// facade (loadTerrainRing). ?terrainRingBatch=off|0|false restores the 9-solo
+// loadTerrainForLandblock loop (one single-element fetch_landblock_heightmaps
+// per LB). See docs/1120-appendix.md §1 A4.
+const TERRAIN_RING_BATCH_ENABLED = (() => {
+  try {
+    const v = new URLSearchParams(window.location?.search || "").get("terrainRingBatch");
     return v !== "off" && v !== "0" && v !== "false";
   } catch (_) {
     return true;
@@ -2897,7 +2914,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       }
       return guardedStreamBake(this._streamGuardState, kind, lbKey, run, opts);
     },
-    loadTerrainForLandblock(lbX, lbY) {
+    // `prefetchedMesh` (3rd arg, A4 2026-07-11 s13 — loadTerrainRing only):
+    // a base heightmap mesh the ring facade batch-fetched. The CALLER owns
+    // freeing it — this loader threads it into bakeTerrainForLandblock's
+    // `opts.prefetchedMesh` (which skips its own single-element fetch AND
+    // never frees a prefetched mesh, terrain.js:3738), and the already-baked
+    // fast-path / guard-skip below also never free it. runTerrainRingBatch
+    // frees every prefetched mesh after the whole ring settles.
+    loadTerrainForLandblock(lbX, lbY, prefetchedMesh) {
       const lbKeyForLru = lbKeyFromXY(lbX, lbY);
       // streamFix (2026-07-02): already-baked fast-path BEFORE the guard's
       // synchronous in-flight claim — an idempotent re-fire (position-update
@@ -2964,11 +2988,19 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // per LB sharing geometry, added directly to terrainGroup by
         // `bakeTerrainForLandblock` — see scene3d/terrain.js:1335ish).
         // No post-bake walk needed.
+        // A4: when the ring facade handed us a batched base mesh, pass it
+        // through as opts.prefetchedMesh so the baker skips its single-element
+        // fetch_landblock_heightmaps. Shallow-spread so the once-per-ring
+        // terrainOpts stay shared by reference (matches bakeTerrainRing's
+        // per-LB perLbOpts). No prefetch → the original terrainOpts (solo).
+        const bakeOpts = prefetchedMesh
+          ? { ...self.terrainOpts, prefetchedMesh }
+          : self.terrainOpts;
         const lbMesh = await bakeTerrainForLandblock(
           self,
           lbX,
           lbY,
-          self.terrainOpts,
+          bakeOpts,
           self.wasmExports
         );
         const lru = self.landblockLru;
@@ -3001,6 +3033,31 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         }
         return lbMesh;
       }, _urgentSlot);
+    },
+    // A4 (2026-07-11 s13) — batched 3×3 terrain-ring facade. Replaces the
+    // 9-solo loadTerrainForLandblock loop (each a single-element
+    // fetch_landblock_heightmaps N+1) that world_stream + the legacy
+    // index.html block fired per position update. Batch-fetches the ring's
+    // not-yet-baked heightmaps in ONE wasm call, then fans out through the
+    // SAME guarded loadTerrainForLandblock path (guard + LRU + warm-park +
+    // subdiv) passing each prefetched base mesh, so per-LB behavior is
+    // byte-identical to solo. Do NOT route through bakeTerrainRing — it lacks
+    // that machinery (docs/1120-appendix.md Conflict C2). ?terrainRingBatch=off
+    // → pure solo loop. All ownership + all-or-nothing-fallback (F1) logic
+    // lives in runTerrainRingBatch (terrain_ring.js).
+    loadTerrainRing(cx, cy) {
+      return runTerrainRingBatch({
+        cx,
+        cy,
+        ringBatchEnabled: TERRAIN_RING_BATCH_ENABLED,
+        wasmExports: this.wasmExports,
+        terrainBakedLbs: this.terrainBakedLbs,
+        isNearPlayerLb,
+        scene3d: this,
+        lbKeyFromXY,
+        loadTerrainForLandblock: (lbX, lbY, pm) =>
+          this.loadTerrainForLandblock(lbX, lbY, pm),
+      });
     },
     loadBuildingsForLandblock(lbX, lbY) {
       const lbKeyForLru = lbKeyFromXY(lbX, lbY);

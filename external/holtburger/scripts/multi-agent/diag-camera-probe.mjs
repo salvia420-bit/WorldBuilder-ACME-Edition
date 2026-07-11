@@ -10,7 +10,7 @@ const b = await chromium.launch({ executablePath: CHROME, headless: true,
 const ctx = await b.newContext({ viewport: { width: 1280, height: 720 } });
 const page = await ctx.newPage();
 page.setDefaultTimeout(60000);
-const url = `http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&kickDance=1&renderer=3d&quality=low&agentic=low&pvsRingRadius=${PVS}&nosw=1&renderDiag=on`;
+const url = `http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&renderer=3d&quality=low&agentic=low&pvsRingRadius=${PVS}&nosw=1&renderDiag=on`;
 console.log('goto', url);
 await page.goto(url, { waitUntil: 'commit', timeout: 60000 });
 // wait ready

@@ -9,7 +9,7 @@ const ctx = await b.newContext({ viewport: { width: 1280, height: 720 } });
 const page = await ctx.newPage();
 page.setDefaultTimeout(60000);
 page.on('console', (m) => { const t = m.text(); if (/move|stuck|error|heading/i.test(t)) console.log('  [page]', t.slice(0,160)); });
-const url = `http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&kickDance=1&renderer=3d&quality=low&agentic=low&pvsRingRadius=2&nosw=1`;
+const url = `http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&renderer=3d&quality=low&agentic=low&pvsRingRadius=2&nosw=1`;
 await page.goto(url, { waitUntil: 'commit', timeout: 60000 });
 for (let i = 0; i < 120; i++) { const s = await page.evaluate(() => window.__bootState).catch(()=>null); if (s === 'in-world' || s === 'ready') break; await sleep(1500); }
 await page.evaluate(() => { try { window.__sessionHandle.sendChat('@telepoi Holtburg'); } catch(e){} });

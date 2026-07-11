@@ -17,7 +17,7 @@ for i in $(seq 1 "$N"); do
     node "$MJS" --net-worker "$ARM" --run-id "$RID" \
       --out "$OUT_DIR/$RID.json" > "$OUT_DIR/$RID.log" 2>&1
     echo "[ab]   $(grep 'NETWORKER-AB SUMMARY' "$OUT_DIR/$RID.log" || echo 'NO SUMMARY (crashed?)')"
-    sleep 5                      # let ACE's session grace fully clear (+kickDance)
+    sleep 65                     # wait out ACE's 60s network-timeout session reap (abrupt close never tells ACE goodbye; live-measured s13)
   done
 done
 

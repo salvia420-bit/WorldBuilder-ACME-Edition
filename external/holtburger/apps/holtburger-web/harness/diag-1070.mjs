@@ -2,7 +2,7 @@
 // dump console tail to see why autoLogin doesn't reach in-world.
 const DRIVER = "http://127.0.0.1:9224";
 const FLAGS = [
-  "renderer=3d","autoLogin=1","account=tailnet1","password=tailnet1","autoSpawn=first","kickDance=1",
+  "renderer=3d","autoLogin=1","account=tailnet1","password=tailnet1","autoSpawn=first",
   "server_host=127.0.0.1","server_port=9000","bridge_url=ws://100.116.47.66:8080/",
   "renderDiag=on","unifiedTick=on","surfaceUnified=on",
 ];

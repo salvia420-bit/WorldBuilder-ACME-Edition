@@ -1293,7 +1293,7 @@
 
       // pixi.js import REMOVED 2026-06-18 (item 8) — the 2D PIXI renderer is
       // retired to legacy/. Zero live PIXI.* references remain in index.html.
-      import { configureBakeWorker } from "./scene3d/bake_worker_client.js";
+      import { configureBakeWorker, getBakeWorkerClient } from "./scene3d/bake_worker_client.js";
       // keepaliveFix (2026-07-07): dedicated-worker heartbeat that keeps a
       // keepalive packet flowing even when the tab is hidden/occluded (main-
       // thread timers get throttled/paused → ACE 60s "Network Timeout").
@@ -2232,6 +2232,27 @@
             configureBakeWorker({ manifestUrl: MANIFEST_URL });
           } catch (e) {
             console.warn("[M2] configureBakeWorker failed (non-fatal):", e);
+          }
+
+          // Bake-worker prewarm (2026-07-11 s13, 1120-appendix A6): without
+          // this the worker lazy-spawns on the FIRST bake, putting its wasm
+          // compile + boot.hba (~1.9 MB) re-fetch/sha256 on the
+          // player-blocking critical path. Kick spawn+init now so it runs
+          // concurrently with the rest of boot's I/O. `.active` gate is
+          // MANDATORY — `_ensureWorker` does not self-check `active`, so an
+          // unguarded call would spawn a worker under `?bakeWorker=0`.
+          // Fail-soft: the rejection is swallowed; `_failAll` resets the
+          // client so the first real bake retries or falls back to the main
+          // thread. Opt out with `?bakeWorkerPrewarm=off`.
+          try {
+            const bwp = new URLSearchParams(window.location.search).get(
+              "bakeWorkerPrewarm"
+            );
+            const prewarmOn = bwp !== "0" && bwp !== "off" && bwp !== "false";
+            const bwc = getBakeWorkerClient();
+            if (prewarmOn && bwc.active) bwc._ensureWorker().catch(() => {});
+          } catch (e) {
+            console.warn("[M2] bake-worker prewarm failed (non-fatal):", e);
           }
 
           // Data-layer health gate (single-root consolidation, 2026-05-30).
@@ -3802,7 +3823,18 @@
           // building. Phase 6 step D's per-frame `tickCellVisibility`
           // toggles the per-cell `.visible` once the player's cell
           // graph + render set lands.
-          if (lbId !== 0 && !cellContainersPopulatedLbs.has(lbId)) {
+          // s13 gate (2026-07-11, 1120-appendix A5/T08): 2D renderer ONLY
+          // (seventh `renderer` parse site; the others read `!== "2d"`).
+          // Under ?renderer=3d the 2D `liveScene` is permanently null, so
+          // this path fetched the LB's EnvCells only to DISCARD them at the
+          // `!app` gate — while cells.js buildEnvCellsForLandblock
+          // re-fetches the same cells under its own dedup set. That made
+          // every cold indoor LB decode 2×.
+          if (
+            lbId !== 0
+            && !cellContainersPopulatedLbs.has(lbId)
+            && new URLSearchParams(window.location.search).get("renderer") === "2d"
+          ) {
             ensureCellContainersForLandblock(lbId);
           }
           if (lbId !== 0 && window.liveScene3d?.loadEnvCellsForLandblock) {
@@ -3822,14 +3854,24 @@
           if (lbId !== 0 && window.liveScene3d?.loadTerrainForLandblock) {
             const cx = (lbId >>> 24) & 0xff;
             const cy = (lbId >>> 16) & 0xff;
-            for (let dy = -1; dy <= 1; dy += 1) {
-              for (let dx = -1; dx <= 1; dx += 1) {
-                const nx = cx + dx;
-                const ny = cy + dy;
-                if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) continue;
-                // Fire-and-forget; per-LB baker is idempotent via
-                // terrainBakedLbs.
-                window.liveScene3d.loadTerrainForLandblock(nx, ny);
+            // A4 (2026-07-11 s13): collect-then-handoff to the batched
+            // loadTerrainRing facade — ONE fetch_landblock_heightmaps for the
+            // ring's not-yet-baked LBs (?terrainRingBatch=off restores 9-solo
+            // inside the facade). Fall back to the solo loop when the facade is
+            // absent (older scene3d bundle). Keep byte-parallel to the
+            // world_stream.js copy — the A15-Q4-SYNC drift guard enforces it.
+            if (window.liveScene3d.loadTerrainRing) {
+              window.liveScene3d.loadTerrainRing(cx, cy);
+            } else {
+              for (let dy = -1; dy <= 1; dy += 1) {
+                for (let dx = -1; dx <= 1; dx += 1) {
+                  const nx = cx + dx;
+                  const ny = cy + dy;
+                  if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) continue;
+                  // Fire-and-forget; per-LB baker is idempotent via
+                  // terrainBakedLbs.
+                  window.liveScene3d.loadTerrainForLandblock(nx, ny);
+                }
               }
             }
           }
@@ -9330,23 +9372,24 @@
       // ────────────────────────────────────────────────────────────
       // Autonomous Connect+Spawn orchestrator.
       //
-      // Drives the form when `?autoLogin=1` is set. Mirrors the human
-      // flow the user described: first Connect kicks any in-world
-      // character (ACE-side side effect when the same character is
-      // already logged in elsewhere), wait ~5.5 s for the kick to
-      // propagate, second Connect succeeds against a now-out-of-game
-      // character, then Spawn fires.
+      // Drives the form when `?autoLogin=1` is set: one clean warm
+      // Connect (a single connect also clears a stale session — ACE
+      // boots it "in favor of new connection"), then Spawn. The old
+      // connect→kick→reconnect "dance" param was retired 2026-06-14 and
+      // its dead URL key removed from every harness emitter in s13
+      // (2026-07-11, 1120-appendix A1) — stale-session recovery is
+      // opt-in via `?maxRetries=N`; harnesses avoid colliding with
+      // ACE's session reap (60 s network timeout after an abrupt
+      // close; live-measured s13) with an inter-arm quiet-gap instead.
       //
       // URL params honored:
       //   - `?autoLogin=1`         — run the orchestrator
-      //   - `?kickDance=0`         — skip the first-Connect kick + 5.5 s wait
-      //                              (use when the character is known to
-      //                              be out of game already)
       //   - `?autoSpawn=first`     — click Spawn on the first character
       //   - `?autoSpawn=Name`      — click Spawn on a named character
       //   - `?autoSpawn=0`         — skip Spawn (stop at char-list-ready)
+      //   - `?maxRetries=N`        — opt-in stale-session retry (default 0)
       //
-      // Defaults: kickDance=1, autoSpawn=first.
+      // Defaults: autoSpawn=first, maxRetries=0.
       //
       // The orchestrator is idempotent — calling it twice is a no-op
       // unless the prior run errored out. Agents can re-trigger via
@@ -9412,7 +9455,7 @@
         // longer than baseKickWaitMs (which is sized for session-level
         // kick) before re-attempting. Empirical lower bound is ~5s.
         const charInWorldWaitMs = opts.charInWorldWaitMs ?? 7000;
-        // Preemptive kick (`?kickFirst=1` or opts.kickFirst=true): fire
+        // Preemptive kick (opts.kickFirst=true — NOT URL-exposed): fire
         // a throwaway Connect immediately to trigger ACE's
         // session-already-in-use kick, wait `baseKickWaitMs` for it to
         // propagate, THEN run the normal attempt loop. Agents in a
@@ -9766,9 +9809,9 @@
           kickWaitMs:
             parseInt(bootParams.get("kickWaitMs") ?? "", 10) || undefined,
           // `|| undefined` would coerce a legitimate 0 back to the
-          // default (3) — so `?maxRetries=0` (single clean attempt, no
-          // retry-dance) was impossible to request. Preserve 0; only
-          // fall back to the default on a non-numeric value.
+          // default (0 since 2026-06-14 — single clean attempt; the
+          // retry-dance is opt-in via `?maxRetries=N`). Preserve explicit
+          // 0; only fall back to the default on a non-numeric value.
           maxRetries: (() => {
             const n = parseInt(bootParams.get("maxRetries") ?? "", 10);
             return Number.isFinite(n) ? n : undefined;
@@ -9788,9 +9831,28 @@
         // (post-bake) instead of force-firing mid-bake; it still fires by
         // 20s if the thread never fully quiesces. The non-idle fallback uses
         // a fixed warm-up delay rather than 0.
+        // `?loginDefer=` revisit (2026-07-11 s13, 1120-appendix A9) — lands
+        // DORMANT. The 20 s idle-defer exists only because the direct-path
+        // login send is main-thread-starved during the cold-bake storm;
+        // under `?netWorker=1` the socket + Session run in a worker, so
+        // Connect can fire at a short idle. The knob is therefore honored
+        // ONLY when netWorkerEnabled() — the bare default stays
+        // byte-identical to before and the knob auto-activates if/when the
+        // worker is promoted (A8/S15).
+        //   short → 2000 ms idle timeout · idle20 → 20000 (explicit default)
+        //   formshown → 0 (first idle slot) · <ms> → numeric timeout
+        const loginDeferRaw = bootParams.get("loginDefer");
+        const loginIdleTimeoutMs = (() => {
+          if (!loginDeferRaw || !netWorkerEnabled()) return 20000;
+          if (loginDeferRaw === "short") return 2000;
+          if (loginDeferRaw === "idle20") return 20000;
+          if (loginDeferRaw === "formshown") return 0;
+          const n = parseInt(loginDeferRaw, 10);
+          return Number.isFinite(n) && n >= 0 ? n : 20000;
+        })();
         const launch = () => runAutonomousLogin(opts);
         if (typeof window.requestIdleCallback === "function") {
-          window.requestIdleCallback(launch, { timeout: 20000 });
+          window.requestIdleCallback(launch, { timeout: loginIdleTimeoutMs });
         } else {
           setTimeout(launch, 6000);
         }

@@ -30,7 +30,7 @@ function urlFor(portalStencil) {
   const q = new URLSearchParams({
     renderer: "3d", quality: "low", agentic: "low", hud: "none", plugins: "none",
     diag: "1", nosw: "1", renderOnDemand: "1", netDrainHz: "30",
-    autoLogin: "1", autoSpawn: "first", kickDance: "1",
+    autoLogin: "1", autoSpawn: "first",
     server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://127.0.0.1:8080/",
     account: ACCT, password: ACCT,
   });

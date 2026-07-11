@@ -132,14 +132,25 @@ export function createWorldStreamer(deps) {
       if (lbId !== 0 && s3d?.loadTerrainForLandblock) {
         const cx = (lbId >>> 24) & 0xff;
         const cy = (lbId >>> 16) & 0xff;
-        for (let dy = -1; dy <= 1; dy += 1) {
-          for (let dx = -1; dx <= 1; dx += 1) {
-            const nx = cx + dx;
-            const ny = cy + dy;
-            if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) continue;
-            // Fire-and-forget; per-LB baker is idempotent via
-            // terrainBakedLbs.
-            s3d.loadTerrainForLandblock(nx, ny);
+        // A4 (2026-07-11 s13): collect-then-handoff to the batched
+        // loadTerrainRing facade — ONE fetch_landblock_heightmaps for the
+        // ring's not-yet-baked LBs (the per-LB guard/LRU/warm-park path is
+        // reused unchanged; ?terrainRingBatch=off restores 9-solo inside the
+        // facade). Fall back to the solo loop when the facade is absent
+        // (older scene3d bundle). Keep this block byte-parallel to the legacy
+        // index.html copy — the A15-Q4-SYNC drift guard enforces it.
+        if (s3d.loadTerrainRing) {
+          s3d.loadTerrainRing(cx, cy);
+        } else {
+          for (let dy = -1; dy <= 1; dy += 1) {
+            for (let dx = -1; dx <= 1; dx += 1) {
+              const nx = cx + dx;
+              const ny = cy + dy;
+              if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) continue;
+              // Fire-and-forget; per-LB baker is idempotent via
+              // terrainBakedLbs.
+              s3d.loadTerrainForLandblock(nx, ny);
+            }
           }
         }
       }

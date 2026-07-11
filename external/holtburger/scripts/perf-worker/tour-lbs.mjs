@@ -41,7 +41,7 @@ const log = (...args) => {
 const URL =
   "http://127.0.0.1:8765/apps/holtburger-web/index.html?" +
   "autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&" +
-  "renderer=3d&quality=low&kickDance=1&agentic=low&wireframe=1";
+  "renderer=3d&quality=low&agentic=low&wireframe=1";
 
 const t0 = Date.now();
 log("OUT_DIR =", HOLT_DOCS);

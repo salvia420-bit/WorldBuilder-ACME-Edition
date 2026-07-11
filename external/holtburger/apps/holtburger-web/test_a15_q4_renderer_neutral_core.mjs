@@ -46,7 +46,7 @@ console.log("PART 1a: world_stream.js (renderer-neutral streaming core)");
 const LOCAL_GUID = 0x50000001;
 const REMOTE_GUID = 0x80000123;
 
-function makeDeps({ liveScene3d = undefined } = {}) {
+function makeDeps({ liveScene3d = undefined, noRing = false } = {}) {
   const calls = [];
   const sets = {
     terrainPrefetchedLbs: new Set(),
@@ -57,15 +57,20 @@ function makeDeps({ liveScene3d = undefined } = {}) {
   // The real ensure* helpers mutate the shared Sets internally — the
   // recording stubs mimic that so the call-site fast-path gating is
   // exercised exactly as in production.
-  const s3d = liveScene3d === undefined
-    ? {
-        loadEnvCellsForLandblock: (lb) => calls.push(["loadEnvCellsForLandblock", lb]),
-        loadTerrainForLandblock: (x, y) => calls.push(["loadTerrainForLandblock", x, y]),
-        loadBuildingsForLandblock: (x, y) => calls.push(["loadBuildingsForLandblock", x, y]),
-        loadStaticsForLandblock: (x, y) => calls.push(["loadStaticsForLandblock", x, y]),
-        loadSpawnsForLandblock: (x, y) => calls.push(["loadSpawnsForLandblock", x, y]),
-      }
-    : liveScene3d;
+  const s3dBase = {
+    loadEnvCellsForLandblock: (lb) => calls.push(["loadEnvCellsForLandblock", lb]),
+    loadTerrainForLandblock: (x, y) => calls.push(["loadTerrainForLandblock", x, y]),
+    loadBuildingsForLandblock: (x, y) => calls.push(["loadBuildingsForLandblock", x, y]),
+    loadStaticsForLandblock: (x, y) => calls.push(["loadStaticsForLandblock", x, y]),
+    loadSpawnsForLandblock: (x, y) => calls.push(["loadSpawnsForLandblock", x, y]),
+  };
+  // A4 (2026-07-11 s13): the batched-ring facade world_stream now prefers.
+  // Omitted when `noRing` → exercises world_stream's facade-absent 9-solo
+  // fallback (the older-scene3d-bundle path).
+  if (!noRing) {
+    s3dBase.loadTerrainRing = (x, y) => calls.push(["loadTerrainRing", x, y]);
+  }
+  const s3d = liveScene3d === undefined ? s3dBase : liveScene3d;
   let localGuid = LOCAL_GUID;
   const deps = {
     calls,
@@ -134,8 +139,9 @@ const posUpd = (guid, landblockId) => ({ kind: 0, guid, landblockId });
     count("ensureBuildingAabbsAroundLandblock") === 1 &&
     count("ensureCellContainersForLandblock") === 1 &&
     count("ensureLandblockObjectsForLandblock") === 1);
-  check("(iii) loadTerrainForLandblock called exactly 9× (3×3 ring)",
-    count("loadTerrainForLandblock") === 9, `got ${count("loadTerrainForLandblock")}`);
+  check("(iii) loadTerrainRing called exactly 1× (batched facade, NOT 9 solo)",
+    count("loadTerrainRing") === 1 && count("loadTerrainForLandblock") === 0,
+    `ring=${count("loadTerrainRing")} solo=${count("loadTerrainForLandblock")}`);
   check("(iii) envcells/buildings/statics/spawns 1× each",
     count("loadEnvCellsForLandblock") === 1 &&
     count("loadBuildingsForLandblock") === 1 &&
@@ -149,7 +155,7 @@ const posUpd = (guid, landblockId) => ({ kind: 0, guid, landblockId });
     "ensureBuildingAabbsAroundLandblock",
     "ensureCellContainersForLandblock",
     "loadEnvCellsForLandblock",
-    "loadTerrainForLandblock",
+    "loadTerrainRing",
     "loadBuildingsForLandblock",
     "loadStaticsForLandblock",
     "loadSpawnsForLandblock",
@@ -173,7 +179,7 @@ const posUpd = (guid, landblockId) => ({ kind: 0, guid, landblockId });
     !names2.includes("ensureCellContainersForLandblock") &&
     !names2.includes("ensureLandblockObjectsForLandblock"));
   check("(iv) heartbeat → per-update 3D loaders still fire (legacy parity)",
-    names2.filter((x) => x === "loadTerrainForLandblock").length === 9 &&
+    names2.filter((x) => x === "loadTerrainRing").length === 1 &&
     names2.includes("loadSpawnsForLandblock"));
 
   // (v) LB transition → second emit(prev → new)
@@ -185,22 +191,34 @@ const posUpd = (guid, landblockId) => ({ kind: 0, guid, landblockId });
     JSON.stringify(emits2));
 }
 
-// (vi) corner/edge LB → terrain ring clamped at the 0x00/0xff map edge
+// (vi) corner/edge LB → A4: world_stream hands the corner to the batched
+// facade ONCE (clamping moved INTO the facade — proven in
+// test_terrain_ring_batch.mjs). The facade-ABSENT fallback still clamps the
+// 9-solo loop to 4 at the 0x00/0xff map edge (this is the flag-off / older-
+// bundle arm re-proving the solo path).
 {
   const deps = makeDeps();
   const ws = createWorldStreamer(deps);
   ws.onPositionUpdate(posUpd(LOCAL_GUID, 0xffff0021)); // cx=0xff, cy=0xff corner
-  const ring = deps.calls.filter((c) => c[0] === "loadTerrainForLandblock");
-  check("(vi) 0xFFFF corner → ring clamped to 4 calls", ring.length === 4,
-    `got ${ring.length}`);
-  check("(vi) clamped ring stays in-range",
-    ring.every((c) => c[1] >= 0 && c[1] <= 0xff && c[2] >= 0 && c[2] <= 0xff));
-  const deps2 = makeDeps();
+  const ring = deps.calls.filter((c) => c[0] === "loadTerrainRing");
+  check("(vi) facade present → loadTerrainRing called ONCE with corner coords",
+    ring.length === 1 && ring[0][1] === 0xff && ring[0][2] === 0xff,
+    JSON.stringify(ring));
+  check("(vi) facade present → no solo loadTerrainForLandblock at corner",
+    deps.calls.filter((c) => c[0] === "loadTerrainForLandblock").length === 0);
+
+  // Facade ABSENT (older scene3d bundle) → world_stream's solo fallback
+  // clamps the ring to 4 at the corner.
+  const deps2 = makeDeps({ noRing: true });
   const ws2 = createWorldStreamer(deps2);
   ws2.onPositionUpdate(posUpd(LOCAL_GUID, 0x00ff0021)); // cx=0x00, cy=0xff corner
   const ring2 = deps2.calls.filter((c) => c[0] === "loadTerrainForLandblock");
-  check("(vi) 0x00FF corner → ring clamped to 4 calls", ring2.length === 4,
+  check("(vi) facade absent → solo fallback clamps corner ring to 4",
+    ring2.length === 4 &&
+      deps2.calls.filter((c) => c[0] === "loadTerrainRing").length === 0,
     `got ${ring2.length}`);
+  check("(vi) clamped fallback ring stays in-range",
+    ring2.every((c) => c[1] >= 0 && c[1] <= 0xff && c[2] >= 0 && c[2] <= 0xff));
 }
 
 // (vii) getLiveScene3d() null → no throw, wasm-bake deps still called
@@ -376,7 +394,14 @@ function extractSeq(src, { emitPattern }) {
     ["ensureBuildingAabbsAroundLandblock", /ensureBuildingAabbsAroundLandblock\(/g],
     ["ensureCellContainersForLandblock", /ensureCellContainersForLandblock\(/g],
     ["loadEnvCellsForLandblock", /\.loadEnvCellsForLandblock\(/g],
-    ["loadTerrainForLandblock", /\.loadTerrainForLandblock\(/g],
+    // A4 (2026-07-11 s13): the terrain step is now the batched
+    // `.loadTerrainRing(` facade with a `.loadTerrainForLandblock(` solo
+    // fallback in the same block. Match EITHER spelling → one "loadTerrain"
+    // token; the consecutive-dedupe below collapses the primary+fallback pair
+    // so a converted block and an un-converted (still-solo) copy both reduce
+    // to a single canonical step — the drift guard stays green through the
+    // coordinator's index.html conversion either way.
+    ["loadTerrain", /\.loadTerrain(?:Ring|ForLandblock)\(/g],
     ["loadBuildingsForLandblock", /\.loadBuildingsForLandblock\(/g],
     ["loadStaticsForLandblock", /\.loadStaticsForLandblock\(/g],
     ["loadSpawnsForLandblock", /\.loadSpawnsForLandblock\(/g],
@@ -389,7 +414,10 @@ function extractSeq(src, { emitPattern }) {
     while ((m = re.exec(block)) !== null) hits.push([m.index, tok]);
   }
   hits.sort((a, b) => a[0] - b[0]);
-  return hits.map((h) => h[1]);
+  const ordered = hits.map((h) => h[1]);
+  // Collapse consecutive duplicates (the batched-facade primary + solo-loop
+  // fallback both count as the single "loadTerrain" streaming step).
+  return ordered.filter((t, i) => t !== ordered[i - 1]);
 }
 const legacySeq = extractSeq(indexHtml, {
   emitPattern: /\.emit\("landblockChanged"/g,
@@ -409,7 +437,7 @@ check("drift guard: sequence is the canonical 10-step streaming order",
     "ensureBuildingAabbsAroundLandblock",
     "ensureCellContainersForLandblock",
     "loadEnvCellsForLandblock",
-    "loadTerrainForLandblock",
+    "loadTerrain",
     "loadBuildingsForLandblock",
     "loadStaticsForLandblock",
     "loadSpawnsForLandblock",

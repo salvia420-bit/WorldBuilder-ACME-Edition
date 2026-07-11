@@ -26,7 +26,7 @@ const PAGE_URL =
   `${BASE}/apps/holtburger-web/index.html` +
   `?renderer=3d&wireframe=1` +
   `&autoLogin=1&account=${encodeURIComponent(ACCOUNT)}&password=${encodeURIComponent(PASSWORD)}` +
-  `&autoSpawn=first&kickDance=1`;
+  `&autoSpawn=first`;
 
 const OUT = process.env.HB_OUT ||
   path.join(__dirname, "docs", "inventory-wire-agent-hud-2026-05-30.png");

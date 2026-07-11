@@ -35,7 +35,7 @@ const PRESET = [
   // statics/buildings under-populate → false DRIFT. Do NOT add it.)
   "renderer=3d", "wireframe=1", "quality=low", "agentic=low", "eagerDungeons=on",
   "hud=none", "plugins=none", "diag=1", "nosw=1", "renderOnDemand=1", "autoLogin=1",
-  "autoSpawn=first", "kickDance=1", "server_host=127.0.0.1", "server_port=9000",
+  "autoSpawn=first", "server_host=127.0.0.1", "server_port=9000",
   "bridge_url=ws://127.0.0.1:8080/",
 ].join("&");
 

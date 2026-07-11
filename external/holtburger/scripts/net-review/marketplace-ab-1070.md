@@ -24,7 +24,7 @@ Record `git rev-parse HEAD` into each run's meta.json (drive-perf.sh provenance 
 - Drive via playwright-core: `const b = await chromium.connectOverCDP("http://127.0.0.1:9333")`.
   NEVER `browser.close()` — end scripts with `process.exit(0)`.
 - URL (real render, NOT nullRender):
-  http://localhost:7080/apps/holtburger-web/index.html?nosw=1&renderer=3d&quality=low&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&kickDance=1&renderDiag=on
+  http://localhost:7080/apps/holtburger-web/index.html?nosw=1&renderer=3d&quality=low&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&renderDiag=on
 - Gate: __bootState 'in-world' in __bootStateHistory AND getLocalPlayerPose()!=null
   (never gate on 'ready'). Then poll window.liveScene3d non-null.
 

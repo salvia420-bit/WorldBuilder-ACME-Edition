@@ -55,7 +55,7 @@ const BASE_URL =
 const URL =
   `${BASE_URL}/apps/holtburger-web/index.html?` +
   "autoLogin=1&account=acadmp1ge522&password=acadmp1ge522&autoSpawn=first" +
-  "&renderer=3d&quality=low&kickDance=0&agentic=low" +
+  "&renderer=3d&quality=low&agentic=low" +
   "&wireframe=1&hud=none&plugins=none&netDrainHz=30&diag=1";
 const CHROME =
   process.env.CHROME_PATH ||

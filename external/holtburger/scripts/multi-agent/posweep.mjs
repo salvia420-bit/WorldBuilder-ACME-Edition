@@ -83,7 +83,7 @@ if (limit) queue = queue.slice(0, limit);
 const attempts = new Map();
 const tally = {};
 
-const PRESET = "renderer=3d&wireframe=1&quality=low&agentic=low&eagerDungeons=on&hud=none&plugins=none&diag=1&nosw=1&renderOnDemand=1&autoLogin=1&autoSpawn=first&kickDance=1&server_host=127.0.0.1&server_port=9000&bridge_url=ws://127.0.0.1:8080/";
+const PRESET = "renderer=3d&wireframe=1&quality=low&agentic=low&eagerDungeons=on&hud=none&plugins=none&diag=1&nosw=1&renderOnDemand=1&autoLogin=1&autoSpawn=first&server_host=127.0.0.1&server_port=9000&bridge_url=ws://127.0.0.1:8080/";
 const urlFor = (acct) => `http://127.0.0.1:8765/apps/holtburger-web/index.html?${PRESET}&account=${acct}&password=${acct}`;
 
 // Wall-clock guard around any page.evaluate: a wedged/crashed page can hang
@@ -116,7 +116,7 @@ async function openAndLogin(acct) {
     if (s === "error" || s === "ready") {
       await page.evaluate((nm) => { try { window.__sessionHandle.createTestCharacter(nm); } catch {} }, "P" + acct.slice(-4) + Date.now().toString().slice(-4)).catch(() => {});
       await page.waitForTimeout(8000);
-      await page.evaluate(() => { try { window.__runAutonomousLogin({ autoSpawn: "first", kickDance: 0 }); } catch {} }).catch(() => {});
+      await page.evaluate(() => { try { window.__runAutonomousLogin({ autoSpawn: "first" }); } catch {} }).catch(() => {});
     }
     await page.waitForTimeout(2500);
   }

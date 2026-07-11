@@ -41,7 +41,6 @@ const WAIVERS = {
     password: "boot credential param",
     autoSpawn: "boot param (headless-login contract)",
     autoLogin: "boot param (headless-login contract)",
-    kickDance: "boot param (headless-login contract)",
     character: "boot param (character picker)",
     server: "boot param (server picker)",
     agent: "boot param (wire-agent mode)",

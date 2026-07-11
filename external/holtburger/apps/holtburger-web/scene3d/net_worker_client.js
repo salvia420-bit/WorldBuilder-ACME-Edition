@@ -53,13 +53,22 @@ function terminateActiveWorker() {
   _activeWorker = null;
 }
 
-/** `?netWorker=1|on|true` (default OFF — this is the newer, deeper fix and
- * still earning its default-on stripes; the shipped keepalive heartbeat
- * remains the default keepalive). */
+// Promotion seam (2026-07-11 s13, 1120-appendix A8): flip this ONE constant
+// to promote netWorker to default-ON once the Tier-1 workDelta A/B reads
+// clean (S15 decision). The explicit off-values below are the
+// `?netWorker=off` escape promotion requires — without them a default-ON
+// flag would be impossible to disable.
+const NET_WORKER_DEFAULT = false;
+
+/** `?netWorker=1|on|true` forces ON; `?netWorker=0|off|false` forces OFF;
+ * absent → NET_WORKER_DEFAULT (currently OFF — still earning its default-on
+ * stripes; the shipped keepalive heartbeat remains the default keepalive). */
 export function netWorkerEnabled() {
   try {
     const v = new URLSearchParams(globalThis.location?.search || "").get("netWorker");
-    return v === "1" || v === "on" || v === "true";
+    if (v === "0" || v === "off" || v === "false") return false;
+    if (v === "1" || v === "on" || v === "true") return true;
+    return NET_WORKER_DEFAULT;
   } catch (_) {
     return false;
   }

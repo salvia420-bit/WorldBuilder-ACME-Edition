@@ -76,6 +76,9 @@ import { BAKE_PREWARM, prewarmSubtree } from "./bake_prewarm.js";
 import { meshToGeometryGroups } from "./adapter.js";
 import { MaterialCache, materialCanCastShadow, VFX_GLOBALS, installVfxComponentPatch } from "./materials.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
+// A7-F1 (2026-07-11 s13) — shared per-cellId LandblockInfo fetch (buildings.js
+// runs the SAME fetch_landblock_objects for this LB). See lb_objects_shared.js.
+import { fetchLandblockObjectsShared } from "./lb_objects_shared.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 import { CULL_DIST_SQ } from "./culling.js";
 // A11-S3: `?particleClock` flag parse — when "loop"/"sim" the static
@@ -1773,7 +1776,15 @@ export async function bakeStaticsForLandblock(
   // ring LBs keep the pre-fix normal lane. Snapshot ONCE at bake start so
   // one bake never mixes lanes mid-flight.
   const urgent = isNearPlayerLb(scene3d, lbKey);
-  const allPlacements = await wasmExports.fetch_landblock_objects(cellIds, urgent);
+  // A7-F1 (2026-07-11 s13): shared drained snapshot — buildings.js fetches the
+  // SAME cellId. The wasm records are drained+freed once inside the shared
+  // module, so `allPlacements` are plain JS records; drainPlacements' p.free()
+  // guard is a harmless no-op on them and its field reads are unchanged.
+  const allPlacements = await fetchLandblockObjectsShared(
+    wasmExports,
+    cellId,
+    urgent
+  );
   const landblockInfoStatics = drainPlacements(allPlacements);
   // Phase C.3 — fetch baked scenery placements in parallel-ish (after
   // the LandblockInfo drain so the wasm `ObjectPlacement` linear-memory
@@ -1924,29 +1935,34 @@ export async function bakeStaticsForLandblock(
   } else if (_staticsStarvedRetries.has(lbKey)) {
     _staticsStarvedRetries.delete(lbKey); // clean bake — reset the budget
   }
-  const degradedGeomByModel = await fetchDegradedGeometries(
-    primary.didDegradeByModel,
-    mmFetch,
-    wasmExports.fetch_gfx_obj_degrade_info
-  );
-
-  // Per-LB surface preload. The ring driver preloads ALL ring DIDs in
-  // a single batch (Phase 7.2 buildings.js pattern); the lazy-add
-  // path only sees this LB's DIDs so the preload is local.
-  if (primary.allSurfaceDids.size > 0) {
-    try {
-      await materialCache.preload(
-        [...primary.allSurfaceDids],
-        spFetch
-      );
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[scene3d.statics] per-LB materialCache.preload failed:",
-        e
-      );
-    }
-  }
+  // A7-F2 (2026-07-11 s13): fetchDegradedGeometries (LOD-mesh batch) and the
+  // per-LB materialCache.preload (surface decode) both depend only on
+  // `primary`, not on each other — run them concurrently so the LOD-mesh
+  // batch hides under the surface decode instead of serializing behind it.
+  const [degradedGeomByModel] = await Promise.all([
+    fetchDegradedGeometries(
+      primary.didDegradeByModel,
+      mmFetch,
+      wasmExports.fetch_gfx_obj_degrade_info
+    ),
+    // Per-LB surface preload. The ring driver preloads ALL ring DIDs in a
+    // single batch (Phase 7.2 buildings.js pattern); the lazy-add path only
+    // sees this LB's DIDs so the preload is local. Self-contained IIFE so its
+    // own try/catch keeps a preload failure from rejecting the Promise.all.
+    (async () => {
+      if (primary.allSurfaceDids.size > 0) {
+        try {
+          await materialCache.preload([...primary.allSurfaceDids], spFetch);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[scene3d.statics] per-LB materialCache.preload failed:",
+            e
+          );
+        }
+      }
+    })(),
+  ]);
 
   // === Per-LB instantiation — plain Mesh per placement PER SURFACE GROUP,
   //     no InstancedMesh ===

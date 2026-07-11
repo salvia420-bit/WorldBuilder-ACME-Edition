@@ -14,7 +14,7 @@ const done = new Set(readdirSync(STATE).filter(f => f.endsWith(".json")).map(f =
 const all = readFileSync("/home/wbterminal/out/sweep_queue.txt", "utf8").split("\n").map(s => s.trim()).filter(Boolean);
 let queue = all.filter((_, i) => i % sn === si).filter(base => !done.has(((parseInt(base, 16) >>> 16) & 0xffff).toString(16)));
 if (limit) queue = queue.slice(0, limit);
-const PRESET = "renderer=3d&wireframe=1&quality=low&agentic=low&eagerDungeons=on&hud=none&plugins=none&diag=1&nosw=1&renderOnDemand=1&autoLogin=1&autoSpawn=first&kickDance=1&server_host=127.0.0.1&server_port=9000&bridge_url=ws://127.0.0.1:8080/";
+const PRESET = "renderer=3d&wireframe=1&quality=low&agentic=low&eagerDungeons=on&hud=none&plugins=none&diag=1&nosw=1&renderOnDemand=1&autoLogin=1&autoSpawn=first&server_host=127.0.0.1&server_port=9000&bridge_url=ws://127.0.0.1:8080/";
 const U = `http://127.0.0.1:8765/apps/holtburger-web/index.html?${PRESET}&account=${account}&password=${account}`;
 const b = await chromium.launch({ headless: true, args: ["--use-gl=swiftshader", "--enable-unsafe-swiftshader", "--no-sandbox", "--disable-dev-shm-usage"] });
 process.on("SIGTERM", async () => { try { await b.close(); } catch {} process.exit(143); });
@@ -27,7 +27,7 @@ while (Date.now() < dl) {
   if (s === "error" || s === "ready") {
     await p.evaluate((nm) => { try { window.__sessionHandle.createTestCharacter(nm); } catch (e) {} }, "S" + account.slice(-3) + Date.now().toString().slice(-5));
     await p.waitForTimeout(8000);
-    await p.evaluate(() => { try { window.__runAutonomousLogin({ autoSpawn: "first", kickDance: 0 }); } catch (e) {} });
+    await p.evaluate(() => { try { window.__runAutonomousLogin({ autoSpawn: "first" }); } catch (e) {} });
   }
   await p.waitForTimeout(2500);
 }

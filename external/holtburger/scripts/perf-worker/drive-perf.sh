@@ -20,7 +20,6 @@ APP_PATH="/apps/holtburger-web/index.html"
 ACCOUNT="tailnet1"
 PASSWORD="tailnet1"
 SPAWN="first"
-KICK_DANCE=1
 EXTRA_FLAGS=""  # no clouds/aurora by default — "low" means low
 AGENTIC_LOW=1   # default ON — fast-boot mode for A/B iteration (commit 2000e67)
 WIRE_MODE=0     # --wire = wire-agent (?wireframe=1) — skips atmosphere/composer/clouds/skydome/CSM, all materials wireframe
@@ -46,7 +45,6 @@ Optional:
   --account NAME         (default: tailnet1)
   --password PW          (default: tailnet1)
   --spawn NAME|first|0   autoSpawn param (default: first)
-  --no-kick-dance        disable kickDance=1
   --extra-flags 'a=1&b=2' append to URL (default: '' — pass 'clouds=on&aurora=on' to opt in)
   --full-ring            disable ?agentic=low (use full 13×13 horizon, ~48s boot)
   --wire                 wire-agent mode (?wireframe=1 — strips atmosphere/composer/clouds/skydome/CSM, materials → MeshBasicMaterial wireframe)
@@ -70,7 +68,6 @@ while [[ $# -gt 0 ]]; do
     --account) ACCOUNT="$2"; shift 2 ;;
     --password) PASSWORD="$2"; shift 2 ;;
     --spawn) SPAWN="$2"; shift 2 ;;
-    --no-kick-dance) KICK_DANCE=0; shift ;;
     --extra-flags) EXTRA_FLAGS="$2"; shift 2 ;;
     --full-ring) AGENTIC_LOW=0; shift ;;
     --wire) WIRE_MODE=1; shift ;;
@@ -162,7 +159,6 @@ GIT_BRANCH="$(cd "$HOLT_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null || e
 GIT_DIRTY="$(cd "$HOLT_DIR" && [ -n "$(git status --porcelain 2>/dev/null)" ] && echo true || echo false)"
 URL_QUERY="autoLogin=1&account=${ACCOUNT}&password=${PASSWORD}&autoSpawn=${SPAWN}&renderer=3d&quality=${QUALITY}"
 [[ -n "$EXTRA_FLAGS" ]] && URL_QUERY="${URL_QUERY}&${EXTRA_FLAGS}"
-[[ "$KICK_DANCE" -eq 1 ]] && URL_QUERY="${URL_QUERY}&kickDance=1"
 [[ "$AGENTIC_LOW" -eq 1 ]] && URL_QUERY="${URL_QUERY}&agentic=low"
 [[ "$WIRE_MODE" -eq 1 ]] && URL_QUERY="${URL_QUERY}&wireframe=1"
 APP_URL="http://${APP_HOST_PORT}${APP_PATH}?${URL_QUERY}"

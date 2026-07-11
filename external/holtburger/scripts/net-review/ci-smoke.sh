@@ -28,11 +28,16 @@ fi
 # flag reader is a regression from here on (the W3 ratchet).
 if node "$HOLT/scripts/lint-url-flags.mjs" --strict > /dev/null 2>&1; then L1="PASS"; else L1="FAIL"; FAIL=1; fi
 if node "$HERE/lint-wire-codec.mjs" > /dev/null 2>&1; then L2="PASS"; else L2="FAIL"; FAIL=1; fi
+# L3 (A10 G1, 2026-07-11 s13): harness-param tripwire — every URL key the
+# drivers emit must have a client reader (JS .get / wasm parse / docs row).
+# Would have caught the dead kick-dance param.
+if node "$HOLT/scripts/lint-harness-params.mjs" > /dev/null 2>&1; then L3="PASS"; else L3="FAIL"; FAIL=1; fi
 echo "L1 url-flag lint (--strict) => $L1"
 echo "L2 wire-codec lint => $L2"
+echo "L3 harness-param lint => $L3"
 
 if [ "$FULL" != "--full" ]; then
-  echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 (static only; pass --full for S1–S5 boot chain)"
+  echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 harnesslint=$L3 (static only; pass --full for S1–S5 boot chain)"
   exit "$FAIL"
 fi
 
@@ -64,7 +69,9 @@ sleep 130
 S45="$(node --input-type=module -e '
 const BOOT = process.env.BOOT_MJS || process.argv[1];
 const boot = await import("file://" + BOOT);
-const { page, helpers, inWorld } = await boot.launchAndEnter({ query: { nosw: "1" }, timeoutMs: 90000 });
+const { page, helpers, inWorld, inWorldMs } = await boot.launchAndEnter({ query: { nosw: "1" }, timeoutMs: 90000 });
+// G4 (A10, 2026-07-11 s13): boot wall-clock to in-world (null on stall).
+console.log("BOOT=" + (inWorldMs == null ? -1 : inWorldMs));
 if (!inWorld) { console.log("S4=FAIL-boot"); console.log("S5=SKIP"); await helpers.close(); process.exit(0); }
 await page.waitForTimeout(60000);
 const pumpAge = await helpers.evalInPage(() => window.__lastPumpMs != null ? performance.now() - window.__lastPumpMs : null);
@@ -90,6 +97,19 @@ S5="$(printf '%s\n' "$S45" | sed -n 's/^S5=//p' | tail -1)"; S5="${S5:-FAIL-no-o
 case "$S4" in PASS) ;; *) FAIL=1 ;; esac
 case "$S5" in PASS*) ;; SKIP) ;; *) FAIL=1 ;; esac
 
+# G4 (A10, 2026-07-11 s13): boot-time budget. WARN-only (never FAIL) when the
+# in-world wall-clock exceeds CI_BOOT_BUDGET_MS, if that env is set.
+BOOT_MS="$(printf '%s\n' "$S45" | sed -n 's/^BOOT=//p' | tail -1)"
+if [ -n "$BOOT_MS" ] && [ "$BOOT_MS" != "-1" ]; then
+  BOOT_STATUS="boot=PASS(${BOOT_MS}ms)"
+  if [ -n "${CI_BOOT_BUDGET_MS:-}" ] && [ "$BOOT_MS" -gt "$CI_BOOT_BUDGET_MS" ]; then
+    BOOT_STATUS="boot=WARN(${BOOT_MS}ms>budget ${CI_BOOT_BUDGET_MS}ms)"
+  fi
+else
+  BOOT_STATUS="boot=FAIL-no-inWorldMs"
+fi
+echo "$BOOT_STATUS"
+
 # ── S6: warm-park functional round-trip (third boot; W4 §3.1 default-ON
 # gate, wired 2026-07-10 session 6). Parks the TN backlog, keeps marks,
 # unparks + re-attaches on return, 0 non-benign errors. The probe's
@@ -104,5 +124,5 @@ else
 fi
 
 echo "$SUMMARY_LINE"
-echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 boot=$S1 errors=$S2 white=$S3 keepalive=$S4 datDecode=$S5 warmpark=$S6  (details: $TMP)"
+echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 harnesslint=$L3 boot=$S1 errors=$S2 white=$S3 keepalive=$S4 datDecode=$S5 warmpark=$S6 ${BOOT_STATUS}  (details: $TMP)"
 exit "$FAIL"

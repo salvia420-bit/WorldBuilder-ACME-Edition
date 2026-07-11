@@ -111,7 +111,6 @@ streaming hitches reproduce reliably.
 --account NAME         autoLogin account                                [tailnet1]
 --password PW                                                           [tailnet1]
 --spawn NAME|first|0   autoSpawn param                                  [first]
---no-kick-dance        disable kickDance=1
 --extra-flags STR      appended to URL                                  [''  → pass 'clouds=on&aurora=on' to opt in]
 --no-clear-cache       skip /clear-cache before navigate
 --reload-only          /reload instead of full nav (preserves session)
