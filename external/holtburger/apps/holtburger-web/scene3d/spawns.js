@@ -37,6 +37,13 @@ import { entitySurfacesBatchFetcher } from "./bake_worker_client.js";
 // decode-priority (2026-07-10): current/server-LB spawn pre-warms tag their
 // batch decode urgent (lane-0 dispatch + fetch-semaphore bypass).
 import { isNearPlayerLb } from "./landblock_lru.js";
+// A12 (S14): wave-level LOD degrade pre-warm memo — _spawnImpl consults it
+// instead of awaiting fetch_entity_degrade_for_distance per entity.
+import {
+  lodPrewarmEnabled,
+  lodPrewarmHas,
+  lodPrewarmSet,
+} from "./lod_prewarm.js";
 
 // Phase D.1 — base URL for the staged ACE spawn JSONL files. Mirrors
 // `scene3d/statics.js`'s SCENERY_BASE_URL. The dev server's
@@ -776,6 +783,61 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
         // eslint-disable-next-line no-console
         console.warn(
           `[scene3d.spawns] F.41 surfaces pre-warm threw (${String(e).slice(0, 200)}); ` +
+            `continuing with per-spawn lazy fetch`
+        );
+      }
+    }
+
+    // A12 (S14): LOD degrade pre-warm. _spawnImpl's per-entity
+    // `await fetch_entity_degrade_for_distance` escaped the F.40/F.41
+    // batches — warm the whole wave in ONE wasm batch call keyed by
+    // (setupId, 25 m distance bucket); _spawnImpl reads the memo
+    // synchronously and falls back to its per-entity call on any miss.
+    // Same distance formula as entities.js::_spawnImpl (THREE frame:
+    // hypot(cam.x − wx, cam.z − (−wy))). Skipped when no camera is
+    // positioned — _spawnImpl skips LOD entirely in that case too.
+    const lodBatchFn = wasmExports?.fetch_entity_degrade_for_distance_batch;
+    if (
+      typeof lodBatchFn === "function" &&
+      lodPrewarmEnabled() &&
+      pendingDispatches.length > 0
+    ) {
+      try {
+        const cameraPos = window.liveScene3d?.camera?.position;
+        if (cameraPos) {
+          const lodSetupIds = [];
+          const lodDistances = [];
+          const seenKeys = new Set();
+          for (const pending of pendingDispatches) {
+            const setupDid = pending.setupDid >>> 0;
+            if ((setupDid >>> 24) !== 2 && (setupDid >>> 24) !== 1) continue;
+            const lbId = (pending.upd.landblockId ?? 0) >>> 0;
+            const lbX = (lbId >>> 24) & 0xff;
+            const lbY = (lbId >>> 16) & 0xff;
+            const wx = lbX * 192 + (pending.upd.x ?? 0);
+            const wy = lbY * 192 + (pending.upd.y ?? 0);
+            const distance = Math.hypot(cameraPos.x - wx, cameraPos.z - -wy);
+            if (!(distance > 0)) continue;
+            const k = `${setupDid}|${Math.floor(distance / 25)}`;
+            if (seenKeys.has(k) || lodPrewarmHas(setupDid, distance)) continue;
+            seenKeys.add(k);
+            lodSetupIds.push(setupDid);
+            lodDistances.push(distance);
+          }
+          if (lodSetupIds.length > 0) {
+            const bands = await lodBatchFn(
+              new Uint32Array(lodSetupIds),
+              new Float32Array(lodDistances)
+            );
+            for (let i = 0; i < lodSetupIds.length; i += 1) {
+              lodPrewarmSet(lodSetupIds[i], lodDistances[i], bands[i] >>> 0);
+            }
+          }
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[scene3d.spawns] A12 LOD pre-warm threw (${String(e).slice(0, 200)}); ` +
             `continuing with per-spawn lazy fetch`
         );
       }

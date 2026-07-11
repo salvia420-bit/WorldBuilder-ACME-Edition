@@ -579,6 +579,9 @@ import {
 // urgent — lane-0 dispatch in the bake-worker queue + fetch-semaphore bypass
 // in the decoding wasm instance, same signal statics/buildings/terrain use.
 import { isNearPlayerLb } from "./landblock_lru.js";
+// A12 (S14): spawns.js pre-warms LOD degrade bands per wave; _spawnImpl
+// consults this memo before paying a per-entity wasm await.
+import { lodPrewarmGet, lodPrewarmSet } from "./lod_prewarm.js";
 // Animation consolidation (docs/animation-audit §5): route attack swings through
 // the RUST MotionSequence interpreter (full-body, retail-faithful, cargo-tested —
 // src/motion_sequence.rs) instead of the mixer overlay that the locomotion cycle
@@ -3143,7 +3146,16 @@ export class EntityManager {
           const dz = cameraPos.z - -wy;
           const distance = Math.hypot(dx, dz);
           if (distance > 0) {
-            const substitute = (await lodFetch(setupId, distance)) >>> 0;
+            // A12 (S14): memo hit (spawns.js wave pre-warm) resolves
+            // synchronously; a miss falls back to the per-entity wasm
+            // call and back-fills the memo for wave-mates.
+            let substitute = lodPrewarmGet(setupId, distance);
+            if (substitute === undefined) {
+              substitute = (await lodFetch(setupId, distance)) >>> 0;
+              lodPrewarmSet(setupId, distance, substitute);
+            } else {
+              substitute >>>= 0;
+            }
             try {
               window.__diag?.lod?.onSpawnAttempt?.({
                 guid,

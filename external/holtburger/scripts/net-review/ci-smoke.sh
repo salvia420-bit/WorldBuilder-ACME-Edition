@@ -82,7 +82,7 @@ const dd = await helpers.evalInPage(async () => {
   try {
     if (typeof window.__diag?.datDecode !== "function") return { err: "no __diag.datDecode" };
     const r = await window.__diag.datDecode();
-    return { main: r.main, workerNull: r.worker == null, jsMissing: (r.jsMissing ?? []).length };
+    return { main: r.main, worker: r.worker, workerNull: r.worker == null, jsMissing: (r.jsMissing ?? []).length };
   } catch (e) { return { err: String(e) }; }
 });
 if (dd?.err) console.log(`S5=FAIL(${dd.err})`);
@@ -90,12 +90,50 @@ else if (dd.main == null) console.log("S5=FAIL(main-diag-null — stale pkg?)");
 else if (dd.workerNull) console.log("S5=FAIL(worker-diag-null — bake worker on main-thread fallback?)");
 else if (dd.main.parseFail > 0 || dd.main.decodeFail > 0 || dd.jsMissing > 0) console.log(`S5=FAIL(parseFail=${dd.main.parseFail} decodeFail=${dd.main.decodeFail} jsMissing=${dd.jsMissing})`);
 else console.log(`S5=PASS(negCacheSize=${dd.main.negCacheSize} misses=${dd.main.decodeMissesTotal})`);
+// S5b (A10 G2/G3 + 5b canary, S14): decode-once amp, heightmap batch shape,
+// wasm linear-memory report — BOTH wasm instances. Auto-SKIP on a legacy pkg
+// (fields absent). Small-sample guards: amp needs ≥20 decodes, hist ≥8 calls.
+if (dd?.main || dd?.worker) {
+  const AMP_MAX = 1.15, SOLO_MAX = 0.25;
+  const judge = (side) => {
+    if (!side || side.surfaceDecodeTotal == null) return null; // legacy pkg
+    const total = side.surfaceDecodeTotal, dids = side.surfaceDecodeDids;
+    const amp = total >= 20 && dids > 0 ? total / dids : null;
+    // LB-WEIGHTED solo share (not call-weighted): a healthy boot shape of
+    // 1-solo-current-LB + one 8-LB ring batch is 1/9 LBs solo (0.11),
+    // while the pre-A4 9-solo storm is 9/9 (1.0). Call-weighting read
+    // the healthy shape as 50% solo (first S5b run).
+    const hist = side.hmBatchHist ?? [];
+    const lbs = hist.reduce((a, [n, c]) => a + n * c, 0);
+    const soloLbs = hist.filter(([n]) => n === 1).reduce((a, [, c]) => a + c, 0);
+    const soloShare = lbs >= 16 ? soloLbs / lbs : null;
+    return { amp, soloShare, memMb: side.wasmMemoryBytes != null ? Math.round(side.wasmMemoryBytes / 1048576) : -1,
+             hits: side.surfaceCacheHits, misses: side.surfaceCacheMisses };
+  };
+  const m = judge(dd.main), w = judge(dd.worker);
+  if (!m && !w) console.log("S5b=SKIP(legacy-pkg — no G2/G3 fields)");
+  else {
+    const bad = [];
+    for (const [tag, j] of [["main", m], ["worker", w]]) {
+      if (!j) continue;
+      if (j.amp != null && j.amp > AMP_MAX) bad.push(`${tag}Amp=${j.amp.toFixed(2)}>${AMP_MAX}`);
+      if (j.soloShare != null && j.soloShare > SOLO_MAX) bad.push(`${tag}Solo=${j.soloShare.toFixed(2)}>${SOLO_MAX}`);
+    }
+    const fmt = (tag, j) => j ? `${tag}[amp=${j.amp == null ? "n/a" : j.amp.toFixed(2)} solo=${j.soloShare == null ? "n/a" : j.soloShare.toFixed(2)} cache=${j.hits}/${j.hits + j.misses} mem=${j.memMb}MB]` : `${tag}[legacy]`;
+    console.log((bad.length ? `S5b=FAIL(${bad.join(" ")}) ` : "S5b=PASS ") + fmt("main", m) + " " + fmt("worker", w));
+  }
+}
 await helpers.close();
 ' "$HOLT/apps/holtburger-web/harness/lib/boot.mjs" 2>/dev/null)"
 S4="$(printf '%s\n' "$S45" | sed -n 's/^S4=//p' | tail -1)"; S4="${S4:-FAIL-no-output}"
 S5="$(printf '%s\n' "$S45" | sed -n 's/^S5=//p' | tail -1)"; S5="${S5:-FAIL-no-output}"
+# S5b (S14): decode-once + batch-shape canaries; SKIP-tolerant (legacy pkg /
+# boot-stall path emits nothing → treated as SKIP, mirroring S5's SKIP arm).
+S5B="$(printf '%s\n' "$S45" | sed -n 's/^S5b=//p' | tail -1)"; S5B="${S5B:-SKIP}"
 case "$S4" in PASS) ;; *) FAIL=1 ;; esac
 case "$S5" in PASS*) ;; SKIP) ;; *) FAIL=1 ;; esac
+case "$S5B" in PASS*|SKIP*) ;; *) FAIL=1 ;; esac
+echo "S5b => $S5B"
 
 # G4 (A10, 2026-07-11 s13): boot-time budget. WARN-only (never FAIL) when the
 # in-world wall-clock exceeds CI_BOOT_BUDGET_MS, if that env is set.
@@ -124,5 +162,5 @@ else
 fi
 
 echo "$SUMMARY_LINE"
-echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 harnesslint=$L3 boot=$S1 errors=$S2 white=$S3 keepalive=$S4 datDecode=$S5 warmpark=$S6 ${BOOT_STATUS}  (details: $TMP)"
+echo "CI-SMOKE: wasm=$S0 flaglint=$L1 codeclint=$L2 harnesslint=$L3 boot=$S1 errors=$S2 white=$S3 keepalive=$S4 datDecode=$S5 canaries=$S5B warmpark=$S6 ${BOOT_STATUS}  (details: $TMP)"
 exit "$FAIL"

@@ -1397,6 +1397,18 @@ impl SpatialScene {
         Arc::make_mut(&mut self.cell_physics_index).entry(cell_id).or_default().push(tri);
     }
 
+    /// S14 (1120-appendix A5): REPLACE a cell's physics triangles wholesale.
+    /// `insert_cell_triangle` is append-only, so the historical double
+    /// `fetchEnvCellsInLandblock` per cold indoor LB (independent dedup
+    /// namespaces upstream) DOUBLED `cell_physics_index` — inflating every
+    /// per-tick `scene.clone()`. The drain now hands a cell's complete
+    /// fan-triangulated set over in one call; a duplicate bake replaces
+    /// byte-identical content instead of appending it (idempotent, matching
+    /// every sibling insert — `insert_cell_physics_bsp` et al.).
+    pub fn replace_cell_triangles(&mut self, cell_id: u32, tris: Vec<Triangle>) {
+        Arc::make_mut(&mut self.cell_physics_index).insert(cell_id, tris);
+    }
+
     /// 2026-05-10 indoor collision: read access to the world-space
     /// physics triangles for `cell_id`. Returned slice may be empty
     /// when the cell hasn't been baked yet, or when the cell exists

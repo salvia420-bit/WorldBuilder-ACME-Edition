@@ -71,6 +71,15 @@ pub async fn init_resource_source(manifest_url: String) -> Result<(), JsValue> {
     if dropped > 0 {
         log::info!("init_resource_source: cleared {dropped} negative-cache entries from prior source");
     }
+    // S14 (B1): same rule for the POSITIVE caches — decoded pixels and
+    // triangulations from the old manifest are stale against a new one.
+    let dropped_pixels = crate::surface_pixel_cache_clear_all();
+    let dropped_tris = crate::model_tri_cache_clear_all();
+    if dropped_pixels > 0 || dropped_tris > 0 {
+        log::info!(
+            "init_resource_source: cleared {dropped_pixels} surface-cache + {dropped_tris} tri-memo entries from prior source"
+        );
+    }
     Ok(())
 }
 

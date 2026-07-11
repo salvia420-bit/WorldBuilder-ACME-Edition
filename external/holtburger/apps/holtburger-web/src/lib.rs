@@ -1382,6 +1382,9 @@ pub async fn fetch_landblock_heightmaps(
     use holtburger_dat::landblock::CellLandblock;
     use holtburger_dat::{ResourceKey, ResourceSource};
 
+    // A10 G3 (S14): record the batch shape — ci-smoke S5b fails if solo
+    // (size-1) calls dominate (the pre-A4 9-solo ring storm signature).
+    hm_batch_record(cell_ids.len());
     let source = global_source::global_source();
     let keys: Vec<ResourceKey<'_>> = cell_ids
         .iter()
@@ -2711,7 +2714,22 @@ mod scenery_fetch {
         // guards bake-logic drift only. Best-effort: if the sidecar is
         // missing or carries no `placements-hash` line (pre-E5 bake) we
         // stay silent.
-        maybe_gate_freeze_hash(base_url, lb_hex.as_str(), &out).await;
+        //
+        // A13a (S14): FIRE-AND-FORGET — the sidecar GET was awaited
+        // inline, an extra blocking HTTP round-trip per cold LB on the
+        // player-blocking path for a purely advisory WARN. The hash is
+        // folded synchronously (cheap, pure CPU); only the sidecar
+        // fetch + compare ride a detached task. `?freezeHash=off`
+        // skips even that.
+        if crate::freeze_hash_gate_enabled() {
+            let base_url_owned = base_url.to_owned();
+            let lb_hex_owned = lb_hex.clone();
+            let records_for_gate = out.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                maybe_gate_freeze_hash(&base_url_owned, &lb_hex_owned, &records_for_gate)
+                    .await;
+            });
+        }
 
         // Insert into cache. Clone is shallow (CachedRecord is Copy)
         // but rustc still needs the explicit `.clone()` for the
@@ -7867,6 +7885,29 @@ fn triangulate_model_with_substitutions<S: holtburger_dat::ResourceSource + ?Siz
     triangulate_model_with_substitutions_and_mtable(source, model_id, model_changes, texture_changes, None)
 }
 
+/// 64 MiB triangulation-memo budget (S14, T13): the old 4096-entry
+/// clear-on-overflow bound was entry-COUNT based — 4096 × a many-KB
+/// triangulation is hundreds of MiB of unaccounted wasm linear memory
+/// (the renderer-RSS growth class 1121 §5b root-caused), and overflow
+/// dropped the ENTIRE memo instead of the coldest entries.
+#[cfg(any(target_arch = "wasm32", test))]
+const MODEL_TRI_CACHE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+#[cfg(any(target_arch = "wasm32", test))]
+const MODEL_TRI_CACHE_ENTRY_CAP_BYTES: usize = 8 * 1024 * 1024;
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn model_tri_bytes(tris: &[Tri]) -> usize {
+    tris.len() * std::mem::size_of::<Tri>() + 64
+}
+
+/// Drop the whole triangulation memo. Called by `init_resource_source`
+/// re-init (S14 — a new manifest invalidates decodes; the memo previously
+/// survived re-init, a latent staleness hole) and available to probes.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn model_tri_cache_clear_all() -> u32 {
+    MODEL_TRI_CACHE.with(|c| c.borrow_mut().clear())
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 thread_local! {
     /// Cross-LB triangulation memo (retail `DBOCache` analogue): a static
@@ -7875,10 +7916,15 @@ thread_local! {
     /// it for every landblock it appears in — instead of the JS bake path
     /// re-decoding the same tree/rock/wall model per LB (the per-LB movement
     /// jank root cause). The bake worker's wasm instance persists across all
-    /// bakes, so the memo spans the whole session there. Bounded by
-    /// clear-on-overflow to cap wasm linear-memory growth.
-    static MODEL_TRI_CACHE: std::cell::RefCell<std::collections::HashMap<u32, std::rc::Rc<Vec<Tri>>>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// bakes, so the memo spans the whole session there. S14: bounded by the
+    /// shared refcount-aware `ByteBudgetLru` (was clear-on-overflow at 4096
+    /// entries) so wasm linear-memory growth is byte-accounted and eviction
+    /// sheds the coldest entries instead of flushing everything.
+    static MODEL_TRI_CACHE: std::cell::RefCell<ByteBudgetLru<std::rc::Rc<Vec<Tri>>>> =
+        std::cell::RefCell::new(ByteBudgetLru::new(
+            MODEL_TRI_CACHE_BUDGET_BYTES,
+            MODEL_TRI_CACHE_ENTRY_CAP_BYTES,
+        ));
 }
 
 /// Miss-counting `ResourceSource` adapter for the triangulation memo's
@@ -7960,7 +8006,7 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
     let subst_free =
         model_changes.is_empty() && texture_changes.is_empty() && mtable_override.is_none();
     if subst_free {
-        if let Some(cached) = MODEL_TRI_CACHE.with(|c| c.borrow().get(&model_id).cloned()) {
+        if let Some(cached) = MODEL_TRI_CACHE.with(|c| c.borrow_mut().get(model_id)) {
             return Some((*cached).clone());
         }
     }
@@ -8001,12 +8047,14 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
     // re-decoded once the records land, never cached.
     let complete = counting.misses.load(std::sync::atomic::Ordering::Relaxed) == 0;
     if subst_free && complete {
+        let bytes = model_tri_bytes(&tris);
         MODEL_TRI_CACHE.with(|c| {
-            let mut m = c.borrow_mut();
-            if m.len() >= 4096 {
-                m.clear();
-            }
-            m.insert(model_id, std::rc::Rc::new(tris.clone()));
+            c.borrow_mut().insert(
+                model_id,
+                std::rc::Rc::new(tris.clone()),
+                bytes,
+                |v| std::rc::Rc::strong_count(v) == 1,
+            );
         });
     }
     Some(tris)
@@ -8508,6 +8556,392 @@ pub fn surface_neg_cache_clear() -> u32 {
     surface_neg_cache_clear_all()
 }
 
+// === B1 surface positive cache (S14 2026-07-11, 1120-appendix A3) ===========
+// The inverse of MISSING_SURFACES above: COMPLETE surface decodes are memoised
+// per wasm instance so the 2–3× cold re-decode T12 confirmed (discovery walk +
+// final loop + every later LB/ring bake re-requesting the same DID) collapses
+// to one decode. Keyed on the ORIGINAL requested DID (lane-omitted; tex-swap
+// aliases are refused, mirroring the neg-cache — synthetic mints can remap).
+// Values are `Arc<SurfacePixels>` behind `surface_memo_get/insert` accessors —
+// the threads session converts the container to `Arc<RwLock<…>>` without
+// touching call sites (T14 seam). Eviction is refcount-aware LRU on a byte
+// budget (retail DBOCache discipline, T13); `MODEL_TRI_CACHE` below shares the
+// same `ByteBudgetLru` (upgraded from clear-on-overflow this session).
+// Insert gate = COMPLETENESS, not phase: only a decode whose
+// `DecodeAuditSource` counted zero non-provable misses, with real pixels
+// (width>0) and not the magenta decode-fail sentinel, is memoised — so the
+// discovery walk's terminating full decode is harvested (removes the
+// guaranteed +1 final decode) while partial dry-run rounds stay uncached
+// (the `MODEL_TRI_CACHE` poison-guard lesson). Cleared on
+// `init_resource_source` re-init; observable via `dat_decode_diag()`
+// (surfaceCache* fields) and disabled wholesale with `?surfaceCache=off`.
+
+/// B1 (S14): parse `?surfaceCache`. DEFAULT-ON; only `surfaceCache=off`
+/// disables the positive surface-pixel cache (debug escape).
+#[cfg(target_arch = "wasm32")]
+fn parse_surface_cache_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "surfaceCache=off")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn surface_cache_enabled() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| parse_surface_cache_flag(&js_location_search()))
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn surface_cache_enabled() -> bool {
+    true
+}
+
+/// A11 (S14, owed since 1117 §4): parse `?batchSplit`. DEFAULT-ON; only
+/// `batchSplit=off` disables normal-lane surface-batch splitting.
+#[cfg(target_arch = "wasm32")]
+fn parse_batch_split_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "batchSplit=off")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn batch_split_enabled() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| parse_batch_split_flag(&js_location_search()))
+}
+
+/// A13a (S14): parse `?freezeHash`. DEFAULT-ON; only `freezeHash=off`
+/// skips the advisory E5 sidecar fetch entirely. (The fetch itself is
+/// fire-and-forget as of S14 — see `maybe_gate_freeze_hash`'s caller.)
+#[cfg(target_arch = "wasm32")]
+fn parse_freeze_hash_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "freezeHash=off")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn freeze_hash_gate_enabled() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| parse_freeze_hash_flag(&js_location_search()))
+}
+
+/// Refcount-aware LRU over a byte budget — the retail `DBOCache` analogue
+/// shared by the B1 surface cache and `MODEL_TRI_CACHE`. `get` bumps a
+/// monotonic use-tick; `insert` evicts least-recently-used entries whose
+/// refcount predicate says no outstanding holder exists, until the total is
+/// back under budget (an entry larger than `entry_cap` is never cached —
+/// one pathological texture must not flush the whole cache).
+#[cfg(any(target_arch = "wasm32", test))]
+struct ByteBudgetLru<V> {
+    map: std::collections::HashMap<u32, (V, u64, usize)>,
+    total_bytes: usize,
+    budget: usize,
+    entry_cap: usize,
+    tick: u64,
+    hits: u64,
+    misses: u64,
+    inserts: u64,
+    evictions: u64,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl<V: Clone> ByteBudgetLru<V> {
+    fn new(budget: usize, entry_cap: usize) -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+            total_bytes: 0,
+            budget,
+            entry_cap,
+            tick: 0,
+            hits: 0,
+            misses: 0,
+            inserts: 0,
+            evictions: 0,
+        }
+    }
+    fn get(&mut self, key: u32) -> Option<V> {
+        self.tick += 1;
+        let tick = self.tick;
+        match self.map.get_mut(&key) {
+            Some((v, last_use, _)) => {
+                *last_use = tick;
+                self.hits += 1;
+                Some(v.clone())
+            }
+            None => {
+                self.misses += 1;
+                None
+            }
+        }
+    }
+    fn contains(&self, key: u32) -> bool {
+        self.map.contains_key(&key)
+    }
+    fn insert(&mut self, key: u32, value: V, bytes: usize, evictable: impl Fn(&V) -> bool) {
+        if bytes > self.entry_cap {
+            return;
+        }
+        self.tick += 1;
+        if let Some((_, _, old_bytes)) = self.map.insert(key, (value, self.tick, bytes)) {
+            self.total_bytes -= old_bytes;
+        } else {
+            self.inserts += 1;
+        }
+        self.total_bytes += bytes;
+        while self.total_bytes > self.budget {
+            let victim = self
+                .map
+                .iter()
+                .filter(|(k, (v, _, _))| **k != key && evictable(v))
+                .min_by_key(|(_, (_, last_use, _))| *last_use)
+                .map(|(&k, _)| k);
+            match victim {
+                Some(k) => {
+                    if let Some((_, _, b)) = self.map.remove(&k) {
+                        self.total_bytes -= b;
+                        self.evictions += 1;
+                    }
+                }
+                // Nothing evictable (every entry still refcounted by a live
+                // consumer) — run over budget rather than break holders.
+                None => break,
+            }
+        }
+    }
+    fn clear(&mut self) -> u32 {
+        let n = self.map.len() as u32;
+        self.map.clear();
+        self.total_bytes = 0;
+        n
+    }
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
+/// ~96 MiB positive-cache budget (T01: ≈9 B/px incl. normal+height maps —
+/// roughly 11 M cached pixels, comfortably a town's working set) + a
+/// per-entry cap that admits a 1024² RGBA8 with its derived maps.
+#[cfg(any(target_arch = "wasm32", test))]
+const SURFACE_CACHE_BUDGET_BYTES: usize = 96 * 1024 * 1024;
+#[cfg(any(target_arch = "wasm32", test))]
+const SURFACE_CACHE_ENTRY_CAP_BYTES: usize = 16 * 1024 * 1024;
+
+#[cfg(any(target_arch = "wasm32", test))]
+thread_local! {
+    static SURFACE_PIXEL_CACHE: std::cell::RefCell<ByteBudgetLru<std::sync::Arc<SurfacePixels>>> =
+        std::cell::RefCell::new(ByteBudgetLru::new(
+            SURFACE_CACHE_BUDGET_BYTES,
+            SURFACE_CACHE_ENTRY_CAP_BYTES,
+        ));
+}
+
+/// Manual deep clone — `SurfacePixels` is a `wasm_bindgen` struct and is
+/// intentionally not `Clone` (JS holds handles). Cache-internal only.
+#[cfg(any(target_arch = "wasm32", test))]
+fn clone_surface_pixels(sp: &SurfacePixels) -> SurfacePixels {
+    SurfacePixels {
+        width: sp.width,
+        height: sp.height,
+        pixels: sp.pixels.clone(),
+        surface_type: sp.surface_type,
+        category: sp.category,
+        normal_pixels: sp.normal_pixels.clone(),
+        height_pixels: sp.height_pixels.clone(),
+        roughness_override: sp.roughness_override,
+        normal_scale_override: sp.normal_scale_override,
+        translucency: sp.translucency,
+        luminosity: sp.luminosity,
+        diffuse: sp.diffuse,
+        has_palette: sp.has_palette,
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_pixels_bytes(sp: &SurfacePixels) -> usize {
+    sp.pixels.len() + sp.normal_pixels.len() + sp.height_pixels.len() + 64
+}
+
+/// The decode-fail visible fallback (`fetch_*_pixels_impl` Err arm for
+/// palette formats) — must never be memoised (retryable failure state).
+#[cfg(any(target_arch = "wasm32", test))]
+fn is_magenta_sentinel(sp: &SurfacePixels) -> bool {
+    sp.width == 1 && sp.height == 1 && sp.has_palette && sp.pixels.as_slice() == [255, 0, 255, 255]
+}
+
+// Alias DIDs (0x08F0xxxx) ARE positively cached — unlike the negative
+// cache, which refuses the block because "absent" can't be proven for a
+// synthetic mint. The positive gate is different: `TEX_SWAP_ALIASES` is
+// append-only per wasm instance (an alias's (base, tex) pair never remaps
+// once minted), so a COMPLETE alias decode is as deterministic as a real
+// record's; an alias unresolvable in THIS instance decodes to the empty
+// fallback and the width>0 gate already refuses that. This matters
+// post-R-1 aliasSplit: the main thread's decode load is MOSTLY aliases
+// (the worker routes them here) — the first ci-smoke S5b run measured
+// mainAmp 4.66 with aliases excluded, pure per-bake re-decode waste.
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_memo_get(did: u32) -> Option<SurfacePixels> {
+    if !surface_cache_enabled() {
+        return None;
+    }
+    SURFACE_PIXEL_CACHE
+        .with(|c| c.borrow_mut().get(did))
+        .map(|arc| clone_surface_pixels(&arc))
+}
+
+/// Cheap presence probe for walk closures — no LRU bump, no hit/miss count
+/// (a walk-round skip is not a cache *request*).
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_memo_contains(did: u32) -> bool {
+    if !surface_cache_enabled() {
+        return false;
+    }
+    SURFACE_PIXEL_CACHE.with(|c| c.borrow().contains(did))
+}
+
+/// Completeness-gated insert (see module comment). `decode_misses` is the
+/// per-DID `DecodeAuditSource` count for exactly this decode.
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_memo_insert(did: u32, sp: &SurfacePixels, decode_misses: u32) {
+    if !surface_cache_enabled() {
+        return;
+    }
+    if decode_misses != 0 || sp.width == 0 || is_magenta_sentinel(sp) {
+        return;
+    }
+    let bytes = surface_pixels_bytes(sp);
+    SURFACE_PIXEL_CACHE.with(|c| {
+        c.borrow_mut().insert(
+            did,
+            std::sync::Arc::new(clone_surface_pixels(sp)),
+            bytes,
+            |v| std::sync::Arc::strong_count(v) == 1,
+        )
+    });
+}
+
+/// Drop every positive-cache entry. Shared by the wasm export and the
+/// `init_resource_source` re-init hook (a new manifest invalidates decodes).
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn surface_pixel_cache_clear_all() -> u32 {
+    SURFACE_PIXEL_CACHE.with(|c| c.borrow_mut().clear())
+}
+
+/// Console/probe escape hatch, mirroring `surface_neg_cache_clear`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn surface_cache_clear() -> u32 {
+    surface_pixel_cache_clear_all()
+}
+
+/// (hits, misses, inserts, evictions, bytes, entries) — for `dat_decode_diag`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_cache_stats() -> (u64, u64, u64, u64, usize, usize) {
+    SURFACE_PIXEL_CACHE.with(|c| {
+        let c = c.borrow();
+        (c.hits, c.misses, c.inserts, c.evictions, c.total_bytes, c.len())
+    })
+}
+
+/// B1 memo-through decode of one surface DID: memo hit → clone out (zero
+/// record reads); miss → decode under a per-DID audit and memoise iff
+/// complete. Returns the pixels + this decode's non-provable miss count
+/// (0 on a memo hit — a hit reads no records by construction).
+#[cfg(any(target_arch = "wasm32", test))]
+fn fetch_surface_pixels_cached<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    surface_did: u32,
+) -> (SurfacePixels, u32) {
+    if let Some(sp) = surface_memo_get(surface_did) {
+        return (sp, 0);
+    }
+    let audit = DecodeAuditSource::new(source);
+    let sp = fetch_surface_pixels_impl(&audit, surface_did);
+    let misses = audit.misses();
+    surface_memo_insert(surface_did, &sp, misses);
+    (sp, misses)
+}
+
+/// Entity-path twin. The shared cache is only consulted for PALETTE-FREE
+/// requests (`base_palette_id == 0` and no sub-palettes) — exactly the case
+/// host-proven byte-identical to the static path
+/// (`tests_surface_cache::entity_palette_free_parity_with_static_path`).
+/// Palette-composed decodes bypass the cache entirely.
+#[cfg(any(target_arch = "wasm32", test))]
+fn fetch_entity_surface_pixels_cached<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    surface_did: u32,
+    base_palette_id: u32,
+    sub_palettes: &[(u32, u8, u8)],
+) -> (SurfacePixels, u32) {
+    let palette_free = base_palette_id == 0 && sub_palettes.is_empty();
+    if palette_free {
+        if let Some(sp) = surface_memo_get(surface_did) {
+            return (sp, 0);
+        }
+    }
+    let audit = DecodeAuditSource::new(source);
+    let sp = fetch_entity_surface_pixels_impl(&audit, surface_did, base_palette_id, sub_palettes);
+    let misses = audit.misses();
+    if palette_free {
+        surface_memo_insert(surface_did, &sp, misses);
+    }
+    (sp, misses)
+}
+
+/// A11 (S14): split a batch of `len` items into contiguous chunk ranges of at
+/// most `chunk` items. `chunk == 0` degrades to one whole-batch range. Pure —
+/// pinned by `tests_surface_cache::batch_split_ranges_cover_exactly`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn batch_split_ranges(len: usize, chunk: usize) -> Vec<(usize, usize)> {
+    if len == 0 {
+        return Vec::new();
+    }
+    if chunk == 0 {
+        return vec![(0, len)];
+    }
+    let mut out = Vec::with_capacity(len.div_ceil(chunk));
+    let mut start = 0;
+    while start < len {
+        let end = (start + chunk).min(len);
+        out.push((start, end));
+        start = end;
+    }
+    out
+}
+
+/// Normal-lane surface batches are walked/decoded in chunks of this many
+/// DIDs so an urgent (player-LB) caller preempts at the next await boundary
+/// instead of behind a whole background batch (A11; urgent lane never splits).
+#[cfg(any(target_arch = "wasm32", test))]
+const SURFACE_BATCH_SPLIT_CHUNK: usize = 16;
+
+// --- A10 G3 (S14): heightmap batch-shape histogram --------------------------
+// `fetch_landblock_heightmaps` records its per-call batch size; ci-smoke S5b
+// FAILs when solo (size-1) calls dominate — the 9-solo ring storm A4 fixed
+// must not regress. Exposed via `dat_decode_diag()` as `hmBatchHist`.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static HM_BATCH_HIST: std::cell::RefCell<std::collections::BTreeMap<u32, u32>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+#[cfg(target_arch = "wasm32")]
+fn hm_batch_record(n: usize) {
+    HM_BATCH_HIST.with(|h| {
+        *h.borrow_mut().entry(n as u32).or_insert(0) += 1;
+    });
+}
+
+/// 5b canary (S14): THIS wasm instance's linear-memory size. The renderer
+/// RSS growth that kills late battery sessions lives outside the JS heap —
+/// this is the observable half (`dat_decode_diag().wasmMemoryBytes`; the
+/// bake worker's instance reports through the worker relay).
+#[cfg(target_arch = "wasm32")]
+fn wasm_memory_bytes() -> f64 {
+    use wasm_bindgen::JsCast;
+    let mem: js_sys::WebAssembly::Memory = wasm_bindgen::memory().unchecked_into();
+    let buf: js_sys::ArrayBuffer = mem.buffer().unchecked_into();
+    f64::from(buf.byte_length())
+}
+
 // --- dat-decode diag (A07 §3.6, landed 2026-07-10) --------------------------
 // Cheap per-instance counters over the surface-decode failure census, plus
 // the negative-cache state — the previously-invisible half lives in the bake
@@ -8532,6 +8966,13 @@ struct DecodeDiag {
     decode_misses_total: u32,
     /// Last first-hop-missing DIDs, newest last (ring, cap below).
     recent_missing: std::collections::VecDeque<u32>,
+    /// A10 G2 (S14): FULL surface decodes reaching the `Ok(pixels)` arm —
+    /// bumped unconditionally (walk waste included). `decodeAmp =
+    /// surface_decode_total / surface_decode_dids.len()` is the ci-smoke
+    /// S5b decode-once canary (>1.15 FAILs; pre-B1 this ran ~2–3×).
+    surface_decode_total: u32,
+    /// Distinct requested DIDs behind `surface_decode_total`.
+    surface_decode_dids: std::collections::HashSet<u32>,
 }
 #[cfg(target_arch = "wasm32")]
 const DECODE_DIAG_RECENT_CAP: usize = 32;
@@ -8570,6 +9011,20 @@ fn decode_diag_decode_fail() {
 #[cfg(not(target_arch = "wasm32"))]
 fn decode_diag_decode_fail() {}
 
+/// A10 G2 (S14): one FULL texture decode completed for `did` — bumped in
+/// both surface impls' `Ok(pixels)` arm, in EVERY phase (discovery walk
+/// included: counting the walk's re-decodes is the point of the canary).
+#[cfg(target_arch = "wasm32")]
+fn decode_diag_surface_decoded(did: u32) {
+    DECODE_DIAG.with(|d| {
+        let mut d = d.borrow_mut();
+        d.surface_decode_total += 1;
+        d.surface_decode_dids.insert(did);
+    });
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_diag_surface_decoded(_did: u32) {}
+
 /// JSON snapshot of THIS wasm instance's decode-failure counters +
 /// negative-cache state. Field names are stable (probes parse them):
 /// `firstHopMiss depMiss parseFail decodeFail negCacheHits negCacheInserts
@@ -8583,6 +9038,17 @@ pub fn dat_decode_diag() -> String {
         v.sort_unstable();
         (s.len() as u32, v)
     });
+    // S14 additive fields (B1 / G2 / G3 / 5b canary). All probes parse by
+    // name — existing fields keep their exact names and positions.
+    let (sc_hits, sc_misses, sc_inserts, sc_evictions, sc_bytes, sc_entries) =
+        surface_cache_stats();
+    let hm_hist = HM_BATCH_HIST.with(|h| {
+        h.borrow()
+            .iter()
+            .map(|(&n, &count)| format!("[{n},{count}]"))
+            .collect::<Vec<_>>()
+            .join(",")
+    });
     DECODE_DIAG.with(|d| {
         let d = d.borrow();
         let hex_list = |ids: &mut dyn Iterator<Item = u32>| {
@@ -8593,7 +9059,11 @@ pub fn dat_decode_diag() -> String {
         format!(
             "{{\"firstHopMiss\":{},\"depMiss\":{},\"parseFail\":{},\"decodeFail\":{},\
              \"negCacheHits\":{},\"negCacheInserts\":{},\"decodeMissesTotal\":{},\
-             \"negCacheSize\":{},\"recentMissing\":[{}],\"negCache\":[{}]}}",
+             \"negCacheSize\":{},\"recentMissing\":[{}],\"negCache\":[{}],\
+             \"surfaceCacheHits\":{},\"surfaceCacheMisses\":{},\"surfaceCacheInserts\":{},\
+             \"surfaceCacheEvictions\":{},\"surfaceCacheBytes\":{},\"surfaceCacheEntries\":{},\
+             \"surfaceDecodeTotal\":{},\"surfaceDecodeDids\":{},\
+             \"hmBatchHist\":[{}],\"wasmMemoryBytes\":{}}}",
             d.first_hop_miss,
             d.dep_miss,
             d.parse_fail,
@@ -8604,6 +9074,16 @@ pub fn dat_decode_diag() -> String {
             size,
             hex_list(&mut d.recent_missing.iter().copied()),
             hex_list(&mut entries.iter().copied()),
+            sc_hits,
+            sc_misses,
+            sc_inserts,
+            sc_evictions,
+            sc_bytes,
+            sc_entries,
+            d.surface_decode_total,
+            d.surface_decode_dids.len(),
+            hm_hist,
+            wasm_memory_bytes(),
         )
     })
 }
@@ -8870,6 +9350,9 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     // TMChange alias — resolve to the base Surface record + the swapped
     // SurfaceTexture. Render-state (flags/translucency/palette recolour)
     // reads the BASE record; only the texture hop below is overridden.
+    // A10 G2 (S14): the decode census keys on the REQUESTED DID — two
+    // aliases of one base are distinct decodes, not amplification.
+    let g2_requested_did = surface_did;
     let (surface_did, tex_override) = match resolve_tex_swap_alias(surface_did) {
         Some((base, tex)) => (base, Some(tex)),
         None => (surface_did, None),
@@ -8997,6 +9480,8 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         });
     match rgba {
         Ok(pixels) => {
+            // A10 G2 (S14): count the full decode, every phase (see fn doc).
+            decode_diag_surface_decoded(g2_requested_did);
             // Phase 1.4 — compute heuristic category at decode time
             // (per §11 open question #1 — decode-time, not bake-time).
             // Phase 1.5 — consult `data/surface_overrides.json` first;
@@ -9232,6 +9717,10 @@ pub async fn fetch_surface_anim_frames(surface_did: u32) -> Result<SurfaceAnimFr
 #[wasm_bindgen]
 pub async fn fetch_surface_pixels(surface_did: u32) -> Result<SurfacePixels, JsValue> {
     use holtburger_dat::ResourceKey;
+    // B1 (S14): memo hit → no prefetch walk, no record reads.
+    if let Some(sp) = surface_memo_get(surface_did) {
+        return Ok(sp);
+    }
     let source = global_source::global_source();
     // TMChange alias dids don't exist as records — seed the prefetch with
     // the base surface + override texture instead (the impl re-resolves).
@@ -9244,10 +9733,12 @@ pub async fn fetch_surface_pixels(surface_did: u32) -> Result<SurfacePixels, JsV
         None => initial.push(ResourceKey::new("eor/portal", surface_did)),
     }
     prefetch::ensure_walk_prefetched(&source, &initial, |s| {
-        let _ = fetch_surface_pixels_impl(s, surface_did);
+        // B1: the terminating (complete) walk decode is memoised; the
+        // final decode below then hits the memo (kills the +1).
+        let _ = fetch_surface_pixels_cached(s, surface_did);
     })
     .await?;
-    Ok(fetch_surface_pixels_impl(source.as_ref(), surface_did))
+    Ok(fetch_surface_pixels_cached(source.as_ref(), surface_did).0)
 }
 
 /// One icon's decoded pixels — output of [`fetch_icon_pixels`].
@@ -9351,46 +9842,95 @@ pub async fn fetch_surfaces_pixels(
     use holtburger_dat::ResourceKey;
     let urgent = urgent.unwrap_or(false);
     let source = global_source::global_source();
-    let initial: Vec<ResourceKey<'_>> = surface_dids
-        .iter()
-        .map(|id| ResourceKey::new("eor/portal", *id))
-        .collect();
-    let dids_for_walk = surface_dids.clone();
-    // F.37 walk-result dedup. Two entities with the same setup
-    // requesting the same DID-set in the same tick (via
-    // `materialCache.preload`) now share a single prefetch loop.
-    // The cache key fully captures the DID list — distinct
-    // overlapping sets (e.g. [A,B,C] vs [B,C,D]) still each get
-    // their own loop, but identical sets latch.
-    // streamFix: distinct key name per lane so an urgent caller can't
-    // latch onto an in-flight normal-lane loop (see fetchBuildingPlacement).
-    let cache_key = prefetch::WalkCacheKey::new(if urgent {
-        "fetch_surfaces_pixels:urgent"
-    } else {
-        "fetch_surfaces_pixels"
-    })
-    .with_u32_slice(&surface_dids);
-    let walk = move |s: &dyn holtburger_dat::ResourceSource| {
-        for &id in &dids_for_walk {
-            let _ = fetch_surface_pixels_impl(s, id);
+
+    // B1 (S14): serve memo hits up front; only the residue walks/decodes.
+    // `results` is positional (input order, duplicates preserved).
+    let mut results: Vec<Option<SurfacePixels>> =
+        surface_dids.iter().map(|&id| surface_memo_get(id)).collect();
+    // Positions still owed per uncached DID (dedup: each DID decodes once).
+    let mut owed_positions: std::collections::HashMap<u32, Vec<usize>> =
+        std::collections::HashMap::new();
+    let mut uncached: Vec<u32> = Vec::new();
+    for (i, &id) in surface_dids.iter().enumerate() {
+        if results[i].is_none() {
+            let e = owed_positions.entry(id).or_default();
+            if e.is_empty() {
+                uncached.push(id);
+            }
+            e.push(i);
         }
-    };
-    if urgent {
-        prefetch::ensure_walk_prefetched_keyed_urgent(cache_key, &source, &initial, walk)
-            .await?;
-    } else {
-        prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk).await?;
     }
-    // Final decode under the audit wrapper: count non-provable misses and
-    // stamp the call-level ABI fields on the returned Array (P2↔P3).
-    let audit = DecodeAuditSource::new(source.as_ref());
+    let mut total_misses = 0u32;
+
+    // A11 (S14): the NORMAL lane walks + decodes in chunks so an urgent
+    // (player-LB) caller preempts at the next await boundary instead of
+    // behind the whole background batch. The urgent lane never splits.
+    let chunk = if urgent || !batch_split_enabled() {
+        uncached.len()
+    } else {
+        SURFACE_BATCH_SPLIT_CHUNK
+    };
+    for (lo, hi) in batch_split_ranges(uncached.len(), chunk) {
+        let chunk_dids: Vec<u32> = uncached[lo..hi].to_vec();
+        let initial: Vec<ResourceKey<'_>> = chunk_dids
+            .iter()
+            .map(|id| ResourceKey::new("eor/portal", *id))
+            .collect();
+        // F.37 walk-result dedup. Two entities with the same setup
+        // requesting the same DID-set in the same tick (via
+        // `materialCache.preload`) now share a single prefetch loop.
+        // The cache key fully captures the (post-memo) DID list.
+        // streamFix: distinct key name per lane so an urgent caller can't
+        // latch onto an in-flight normal-lane loop (see fetchBuildingPlacement).
+        let cache_key = prefetch::WalkCacheKey::new(if urgent {
+            "fetch_surfaces_pixels:urgent"
+        } else {
+            "fetch_surfaces_pixels"
+        })
+        .with_u32_slice(&chunk_dids);
+        let dids_for_walk = chunk_dids.clone();
+        let walk = move |s: &dyn holtburger_dat::ResourceSource| {
+            for &id in &dids_for_walk {
+                // B1: skip DIDs a prior round completed; the terminating
+                // round's complete decode memoises (kills the walk's
+                // 2–8× re-decodes AND the final loop's +1).
+                if !surface_memo_contains(id) {
+                    let _ = fetch_surface_pixels_cached(s, id);
+                }
+            }
+        };
+        if urgent {
+            prefetch::ensure_walk_prefetched_keyed_urgent(cache_key, &source, &initial, walk)
+                .await?;
+        } else {
+            prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk).await?;
+        }
+        // Decode this chunk now (memo hit for the common complete case) —
+        // per-DID audits sum into the call-level ABI misses field.
+        for &id in &chunk_dids {
+            let (sp, misses) = fetch_surface_pixels_cached(source.as_ref(), id);
+            total_misses += misses;
+            if let Some(positions) = owed_positions.remove(&id) {
+                let mut sp_opt = Some(sp);
+                let last = positions.len() - 1;
+                for (k, &pos) in positions.iter().enumerate() {
+                    results[pos] = if k == last {
+                        sp_opt.take()
+                    } else {
+                        Some(clone_surface_pixels(sp_opt.as_ref().expect("consumed only at last")))
+                    };
+                }
+            }
+        }
+    }
+
     let out = js_sys::Array::new();
-    for &id in &surface_dids {
-        out.push(&fetch_surface_pixels_impl(&audit, id).into());
+    for r in results {
+        out.push(&r.expect("every position filled by memo or chunk decode").into());
     }
     stamp_surface_audit(
         &out,
-        audit.misses(),
+        total_misses,
         &proven_absent_dids(source.as_ref(), &surface_dids),
     );
     Ok(out)
@@ -10541,6 +11081,43 @@ pub async fn fetch_entity_degrade_for_distance(
     setup_id: u32,
     distance: f32,
 ) -> Result<u32, JsValue> {
+    fetch_entity_degrade_for_distance_inner(setup_id, distance).await
+}
+
+/// A12 (S14, 1120-appendix): batch form of
+/// [`fetch_entity_degrade_for_distance`] — `_spawnImpl`'s per-entity await
+/// escaped the F.40/F.41 spawns batches (entities.js:3146); spawns.js now
+/// pre-warms a whole wave in ONE call. Parallel arrays (`setup_ids[i]`,
+/// `distances[i]`); per-item failures yield 0 ("no LOD chain") so one bad
+/// setup never fails the wave. Records are warm post-F.40, so the inner
+/// walks are cheap re-checks.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_entity_degrade_for_distance_batch(
+    setup_ids: Vec<u32>,
+    distances: Vec<f32>,
+) -> Result<Vec<u32>, JsValue> {
+    if setup_ids.len() != distances.len() {
+        return Err(JsValue::from_str(
+            "fetch_entity_degrade_for_distance_batch: setup_ids/distances length mismatch",
+        ));
+    }
+    let mut out = Vec::with_capacity(setup_ids.len());
+    for (&setup_id, &distance) in setup_ids.iter().zip(distances.iter()) {
+        out.push(
+            fetch_entity_degrade_for_distance_inner(setup_id, distance)
+                .await
+                .unwrap_or(0),
+        );
+    }
+    Ok(out)
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn fetch_entity_degrade_for_distance_inner(
+    setup_id: u32,
+    distance: f32,
+) -> Result<u32, JsValue> {
     use holtburger_dat::{ResourceKey, ResourceSource};
     use holtburger_dat::file_type::GfxObjDegradeInfo;
     if !distance.is_finite() || distance <= 0.0 {
@@ -10643,6 +11220,8 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
 
     // TMChange alias — resolve to the base Surface record + the swapped
     // SurfaceTexture (same contract as fetch_surface_pixels_impl above).
+    // A10 G2 (S14): census keys on the REQUESTED DID (see static impl).
+    let g2_requested_did = surface_did;
     let (surface_did, tex_override) = match resolve_tex_swap_alias(surface_did) {
         Some((base, tex)) => (base, Some(tex)),
         None => (surface_did, None),
@@ -10780,6 +11359,14 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     });
     match rgba {
         Ok(pixels) => {
+            // A10 G2 (S14): census counts PALETTE-FREE decodes only — a
+            // palette-composed decode of the same DID is per-combo work
+            // with a distinct output, not amplification (the first S5b
+            // run read dyed-NPC re-decodes as workerAmp 2.19). The
+            // palette-free class is exactly what B1 dedupes.
+            if base_palette_id == 0 && sub_palettes.is_empty() {
+                decode_diag_surface_decoded(g2_requested_did);
+            }
             // Phase 1.5 — overrides applied via classify_with_overrides.
             let stats = compute_stats(&pixels, tex_w, tex_h);
             let (category, roughness_override, normal_scale_override) =
@@ -10908,27 +11495,43 @@ pub async fn fetch_entity_surfaces_pixels(
     .with_u32(base_palette_id)
     .with_u32_slice(&surface_dids)
     .with_u32_slice(&sp_flat);
-    let walk = move |s: &dyn holtburger_dat::ResourceSource| {
-        for &id in &dids_for_walk {
-            let _ = fetch_entity_surface_pixels_impl(s, id, base_palette_id, &sp_for_walk);
+    // B1 (S14): palette-free requests share the static path's positive
+    // cache (host-proven byte-identical). Skip the walk entirely when
+    // every DID is already memoised.
+    let palette_free = base_palette_id == 0 && sp.is_empty();
+    let all_memoised = palette_free && surface_dids.iter().all(|&d| surface_memo_contains(d));
+    if !all_memoised {
+        let walk = move |s: &dyn holtburger_dat::ResourceSource| {
+            for &id in &dids_for_walk {
+                // B1: cached twin — memoises complete palette-free decodes
+                // and skips re-decoding memoised DIDs across walk rounds.
+                if base_palette_id == 0 && sp_for_walk.is_empty() && surface_memo_contains(id) {
+                    continue;
+                }
+                let _ =
+                    fetch_entity_surface_pixels_cached(s, id, base_palette_id, &sp_for_walk);
+            }
+        };
+        if urgent {
+            prefetch::ensure_walk_prefetched_keyed_urgent(cache_key, &source, &initial, walk)
+                .await?;
+        } else {
+            prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk).await?;
         }
-    };
-    if urgent {
-        prefetch::ensure_walk_prefetched_keyed_urgent(cache_key, &source, &initial, walk)
-            .await?;
-    } else {
-        prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk).await?;
     }
-    // Final decode under the audit wrapper: count non-provable misses and
-    // stamp the call-level ABI fields on the returned Array (P2↔P3).
-    let audit = DecodeAuditSource::new(source.as_ref());
+    // Final decode through the memo (palette-free) / under a per-DID audit:
+    // misses sum into the call-level ABI field (P2↔P3).
+    let mut total_misses = 0u32;
     let out = js_sys::Array::new();
     for &id in &surface_dids {
-        out.push(&fetch_entity_surface_pixels_impl(&audit, id, base_palette_id, &sp).into());
+        let (pixels, misses) =
+            fetch_entity_surface_pixels_cached(source.as_ref(), id, base_palette_id, &sp);
+        total_misses += misses;
+        out.push(&pixels.into());
     }
     stamp_surface_audit(
         &out,
-        audit.misses(),
+        total_misses,
         &proven_absent_dids(source.as_ref(), &surface_dids),
     );
     Ok(out)
@@ -11226,7 +11829,12 @@ pub async fn fetch_entity_surfaces_pixels_batch(
         // F.41 round-trip-reduction win.
         for (dids, base_pal, sp) in &walk_groups {
             for &id in dids {
-                let _ = fetch_entity_surface_pixels_impl(s, id, *base_pal, sp);
+                // B1 (S14): palette-free decodes memo-through — memoised
+                // DIDs skip; the terminating complete decode inserts.
+                if *base_pal == 0 && sp.is_empty() && surface_memo_contains(id) {
+                    continue;
+                }
+                let _ = fetch_entity_surface_pixels_cached(s, id, *base_pal, sp);
             }
         }
     };
@@ -11238,10 +11846,11 @@ pub async fn fetch_entity_surfaces_pixels_batch(
     }
 
     // Post-prefetch: build one Vec<SurfacePixels> per input group in
-    // input order. Each per-DID call is sync — every record is warm. The
-    // audit wrapper counts non-provable misses across the WHOLE batch for
-    // the call-level `decodeMisses` getter (P2↔P3 ABI).
-    let audit = DecodeAuditSource::new(source.as_ref());
+    // input order. Each per-DID call is sync — every record is warm.
+    // B1 (S14): palette-free DIDs resolve through the positive cache;
+    // per-DID audit misses sum into the call-level `decodeMisses`
+    // getter (P2↔P3 ABI — a memo hit contributes 0 by construction).
+    let mut decode_misses = 0u32;
     let mut payloads: Vec<Option<Vec<SurfacePixels>>> = Vec::with_capacity(n);
     for i in 0..n {
         let off = dids_offset[i];
@@ -11251,12 +11860,13 @@ pub async fn fetch_entity_surfaces_pixels_batch(
         let mut out: Vec<SurfacePixels> = Vec::with_capacity(len);
         for j in 0..len {
             let did = flat_surface_dids[off + j];
-            out.push(fetch_entity_surface_pixels_impl(&audit, did, base_pal, sp));
+            let (pixels, misses) =
+                fetch_entity_surface_pixels_cached(source.as_ref(), did, base_pal, sp);
+            decode_misses += misses;
+            out.push(pixels);
         }
         payloads.push(Some(out));
     }
-
-    let decode_misses = audit.misses();
     DECODE_DIAG.with(|d| d.borrow_mut().decode_misses_total += decode_misses);
     Ok(EntitySurfacesPixelsBatch {
         payloads,
@@ -13008,8 +13618,13 @@ thread_local! {
     /// per-tick swept-capsule kernel doesn't re-do the rotation
     /// every frame. Cleared together with `CELL_GRAPH_PENDING` —
     /// triangles and AABBs share the EnvCell's lifetime.
+    /// S14 (A5): one entry per CELL per fetch — the cell's COMPLETE
+    /// fan-triangulated set — drained via `replace_cell_triangles` so a
+    /// duplicate `fetchEnvCellsInLandblock` (independent dedup namespaces
+    /// upstream) replaces instead of appending (the doubled
+    /// `cell_physics_index` that inflated every per-tick `scene.clone()`).
     static CELL_PHYSICS_PENDING:
-        std::cell::RefCell<Vec<(u32, holtburger_common::Triangle)>> =
+        std::cell::RefCell<Vec<(u32, Vec<holtburger_common::Triangle>)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
     /// BSP collision (PASS 1, 2026-06-02): pending physics-BSP inserts
@@ -13365,9 +13980,12 @@ fn drain_pending_cell_graph_into(scene: &mut holtburger_world::SpatialScene) -> 
 fn drain_pending_cell_physics_into(scene: &mut holtburger_world::SpatialScene) -> usize {
     CELL_PHYSICS_PENDING.with(|cell| {
         let mut buf = cell.borrow_mut();
-        let count = buf.len();
-        for (cell_id, tri) in buf.drain(..) {
-            scene.insert_cell_triangle(cell_id, tri);
+        let mut count = 0usize;
+        // S14 (A5): REPLACE per cell — a later duplicate bake of the same
+        // cell overwrites byte-identical content instead of appending.
+        for (cell_id, tris) in buf.drain(..) {
+            count += tris.len();
+            scene.replace_cell_triangles(cell_id, tris);
         }
         count
     })
@@ -16649,6 +17267,17 @@ pub async fn fetch_env_cells_in_landblock(
     let mut env_mesh_cache: std::collections::HashMap<(u32, u16, u64), ModelMesh> =
         std::collections::HashMap::new();
 
+    // S14 (A5): per-call memo of the PARSED Environment record, keyed by
+    // env DID — the physics-polygon loop below used to re-fetch + re-parse
+    // the same Environment for every sibling cell sharing an
+    // environment_id (self-documented waste, 2026-05-10 comment). `None`
+    // memoises a fetch/parse failure so a broken record isn't re-tried
+    // per cell either.
+    let mut env_record_cache: std::collections::HashMap<
+        u32,
+        Option<std::rc::Rc<holtburger_dat::file_type::Environment>>,
+    > = std::collections::HashMap::new();
+
     let mut out: Vec<EnvCellPlacement> = Vec::with_capacity(cells_raw.len());
     for envcell in cells_raw {
         let env_did = 0x0D00_0000 | (envcell.environment_id as u32);
@@ -16789,23 +17418,26 @@ pub async fn fetch_env_cells_in_landblock(
         // on the next TickMovement, where the integrator's indoor
         // wall-clamp + floor-raycast paths read them.
         //
-        // Re-parses the Environment record per cell, which is wasted
-        // work when several cells share an environment_id (a Hold-
-        // burg dungeon sub-section uses one Environment for many
-        // cells). The `env_mesh_cache` HashMap above already memo-
-        // izes the visual mesh; a future commit can extend it to
-        // also cache the parsed Environment so this loop reads
-        // physics polygons without a re-parse. For now: correctness
-        // first, the dat-source cache layer absorbs the cost.
+        // S14 (A5): the Environment parse is memoised per env DID in
+        // `env_record_cache` above — sibling cells sharing an
+        // environment_id (a Holtburg dungeon sub-section uses one
+        // Environment for many cells) no longer re-fetch + re-parse it.
         {
             use holtburger_dat::ResourceKey;
             use holtburger_dat::file_type::Environment;
-            let env_bytes = source
-                .get_file_by_key(ResourceKey::new("eor/portal", env_did))
-                .ok();
-            if let Some(env_bytes) = env_bytes {
-                if let Ok(env) =
-                    Environment::unpack(&mut std::io::Cursor::new(&env_bytes))
+            let env_parsed = env_record_cache
+                .entry(env_did)
+                .or_insert_with(|| {
+                    source
+                        .get_file_by_key(ResourceKey::new("eor/portal", env_did))
+                        .ok()
+                        .and_then(|b| {
+                            Environment::unpack(&mut std::io::Cursor::new(&b)).ok()
+                        })
+                        .map(std::rc::Rc::new)
+                })
+                .clone();
+            if let Some(env) = env_parsed {
                 {
                     if let Some(cell_struct) =
                         env.cells.get(&(envcell.cell_structure as u32))
@@ -16815,6 +17447,11 @@ pub async fn fetch_env_cells_in_landblock(
                         // / missing-vertex polygons silently — a
                         // stray bad polygon shouldn't break the rest
                         // of the cell.
+                        // S14 (A5): accumulate the cell's COMPLETE set
+                        // and push ONE pending entry — the drain
+                        // replaces per cell (idempotent re-bake).
+                        let mut cell_phys_tris: Vec<holtburger_common::Triangle> =
+                            Vec::new();
                         for poly in cell_struct.physics_polygons.values() {
                             if poly.num_pts < 3 {
                                 continue;
@@ -16851,18 +17488,21 @@ pub async fn fetch_env_cells_in_landblock(
                             // (v0, v2, v3), … ; correct for convex
                             // polys, which AC physics polygons are
                             // (the BSP tree only emits convex).
+                            for i in 1..(world_verts.len() - 1) {
+                                cell_phys_tris.push(
+                                    holtburger_common::Triangle::new(
+                                        world_verts[0],
+                                        world_verts[i],
+                                        world_verts[i + 1],
+                                    ),
+                                );
+                            }
+                        }
+                        if !cell_phys_tris.is_empty() {
                             CELL_PHYSICS_PENDING.with(|pending| {
-                                let mut pending = pending.borrow_mut();
-                                for i in 1..(world_verts.len() - 1) {
-                                    pending.push((
-                                        envcell.cell_id,
-                                        holtburger_common::Triangle::new(
-                                            world_verts[0],
-                                            world_verts[i],
-                                            world_verts[i + 1],
-                                        ),
-                                    ));
-                                }
+                                pending
+                                    .borrow_mut()
+                                    .push((envcell.cell_id, cell_phys_tris));
                             });
                         }
 
@@ -53816,5 +54456,425 @@ mod tests_p11_dead_pose_bake {
         // The fragment's Dead is a real 30 fps collapse clip — must stay one.
         let frag = frag.as_ref().unwrap();
         assert!(frag.num_frames > 1, "fragment Dead lost its collapse clip");
+    }
+}
+
+// S14 (2026-07-11, 1120-appendix A3/A11): host tests for the B1 surface
+// positive cache — completeness gate, byte-identical memo-through decode,
+// static↔entity(palette-free) parity (the shared-cache safety proof),
+// ByteBudgetLru eviction discipline, and the A11 split-boundary helper.
+#[cfg(test)]
+mod tests_surface_cache {
+    use super::*;
+    use holtburger_dat::{
+        DatError, FileMetadata, ResourceKey, ResourceSource, Result as DatResult,
+    };
+    use std::collections::HashMap;
+
+    struct MockSource {
+        files: HashMap<(String, u32), Vec<u8>>,
+    }
+
+    impl ResourceSource for MockSource {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.files
+                .get(&(key.namespace.to_string(), key.file_id))
+                .cloned()
+                .ok_or(DatError::NotFound(key.file_id))
+        }
+        fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+            self.files.get(&(key.namespace.to_string(), key.file_id)).map(
+                |data| FileMetadata {
+                    id: key.file_id,
+                    size: data.len() as u32,
+                    is_pruned: false,
+                },
+            )
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            self.files.keys().any(|(ns, _)| ns == namespace)
+        }
+    }
+
+    /// Counts every record READ (hit or miss) — proves a memo hit touches
+    /// zero records.
+    struct ReadCountingSource<'a> {
+        inner: &'a MockSource,
+        reads: std::sync::atomic::AtomicU32,
+    }
+    impl ResourceSource for ReadCountingSource<'_> {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.inner.get_file_by_key(key)
+        }
+        fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+            self.inner.get_metadata_by_key(key)
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            self.inner.has_namespace(namespace)
+        }
+    }
+
+    // Wire-format packers, mirroring tests_a10_m3a_has_palette's fixtures
+    // (test mods can't cross-import private helpers).
+    fn pack_palette(id: u32, colours: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&(colours.len() as i32).to_le_bytes());
+        for &c in colours {
+            buf.extend_from_slice(&c.to_le_bytes());
+        }
+        buf
+    }
+    fn pack_p8_texture_1x1(id: u32, pixel_idx: u8, default_pal_id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&41u32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.push(pixel_idx);
+        buf.extend_from_slice(&default_pal_id.to_le_bytes());
+        buf
+    }
+    fn pack_surface_texture(id: u32, mip_chain: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.push(0u8);
+        buf.extend_from_slice(&(mip_chain.len() as i32).to_le_bytes());
+        for &t in mip_chain {
+            buf.extend_from_slice(&t.to_le_bytes());
+        }
+        buf
+    }
+    fn pack_textured_surface(surface_type: u32, tex_id: u32, pal_id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&surface_type.to_le_bytes());
+        buf.extend_from_slice(&tex_id.to_le_bytes());
+        buf.extend_from_slice(&pal_id.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&1.0f32.to_le_bytes());
+        buf
+    }
+
+    const NS: &str = "eor/portal";
+
+    /// Textured (0x2, non-clipmap) P8 fixture: Surface → SurfaceTexture →
+    /// P8 Texture → Palette. `pal_colour` is the palette's single entry.
+    fn textured_fixture(surface_did: u32, pal_colour: u32) -> MockSource {
+        let st_did = 0x0500_2001u32;
+        let tex_did = 0x0600_2001u32;
+        let pal_did = 0x0400_2001u32;
+        let mut files = HashMap::new();
+        files.insert(
+            (NS.to_string(), surface_did),
+            pack_textured_surface(0x2, st_did, 0),
+        );
+        files.insert((NS.to_string(), st_did), pack_surface_texture(st_did, &[tex_did]));
+        files.insert(
+            (NS.to_string(), tex_did),
+            pack_p8_texture_1x1(tex_did, 0, pal_did),
+        );
+        files.insert((NS.to_string(), pal_did), pack_palette(pal_did, &[pal_colour]));
+        files
+            .into_iter()
+            .fold(MockSource { files: HashMap::new() }, |mut s, (k, v)| {
+                s.files.insert(k, v);
+                s
+            })
+    }
+
+    fn assert_pixels_eq(a: &SurfacePixels, b: &SurfacePixels, what: &str) {
+        assert_eq!(a.width, b.width, "{what}: width");
+        assert_eq!(a.height, b.height, "{what}: height");
+        assert_eq!(a.pixels, b.pixels, "{what}: pixels");
+        assert_eq!(a.surface_type, b.surface_type, "{what}: surface_type");
+        assert_eq!(a.category, b.category, "{what}: category");
+        assert_eq!(a.normal_pixels, b.normal_pixels, "{what}: normal_pixels");
+        assert_eq!(a.height_pixels, b.height_pixels, "{what}: height_pixels");
+        assert_eq!(a.has_palette, b.has_palette, "{what}: has_palette");
+        assert_eq!(a.translucency, b.translucency, "{what}: translucency");
+        assert_eq!(a.luminosity, b.luminosity, "{what}: luminosity");
+        assert_eq!(a.diffuse, b.diffuse, "{what}: diffuse");
+    }
+
+    #[test]
+    fn memo_hit_is_byte_identical_and_reads_zero_records() {
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0001u32;
+        let source = textured_fixture(did, 0xFF11_2233);
+        // Reference decode straight through the impl (no cache).
+        let reference = fetch_surface_pixels_impl(&source, did);
+        assert_eq!(reference.width, 1, "fixture decodes");
+        let counting = ReadCountingSource {
+            inner: &source,
+            reads: std::sync::atomic::AtomicU32::new(0),
+        };
+        let (first, misses1) = fetch_surface_pixels_cached(&counting, did);
+        assert_eq!(misses1, 0, "complete decode");
+        assert!(
+            counting.reads.load(std::sync::atomic::Ordering::Relaxed) > 0,
+            "first call decodes"
+        );
+        assert_pixels_eq(&first, &reference, "cached vs impl");
+        assert!(surface_memo_contains(did), "complete decode memoised");
+        counting
+            .reads
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let (second, misses2) = fetch_surface_pixels_cached(&counting, did);
+        assert_eq!(misses2, 0, "memo hit reports zero misses");
+        assert_eq!(
+            counting.reads.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "memo hit reads ZERO records"
+        );
+        assert_pixels_eq(&second, &reference, "memo hit vs impl");
+        surface_pixel_cache_clear_all();
+    }
+
+    #[test]
+    fn incomplete_decode_is_not_memoised_then_recovers() {
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0002u32;
+        let full = textured_fixture(did, 0xFF44_5566);
+        // Break the chain: drop the Texture record → dep miss → empty out.
+        let mut broken = MockSource { files: full.files.clone() };
+        broken.files.retain(|(_, id), _| *id >> 24 != 0x06);
+        let (sp, misses) = fetch_surface_pixels_cached(&broken, did);
+        assert_eq!(sp.width, 0, "broken chain → empty fallback");
+        assert!(misses > 0, "audit counted the missing dep");
+        assert!(!surface_memo_contains(did), "incomplete decode NOT memoised");
+        // Records land → the next decode completes and memoises.
+        let (sp2, misses2) = fetch_surface_pixels_cached(&full, did);
+        assert_eq!(misses2, 0);
+        assert_eq!(sp2.width, 1);
+        assert!(surface_memo_contains(did), "recovered decode memoised");
+        surface_pixel_cache_clear_all();
+    }
+
+    #[test]
+    fn entity_palette_free_parity_with_static_path() {
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0003u32;
+        let source = textured_fixture(did, 0xFF77_8899);
+        let via_static = fetch_surface_pixels_impl(&source, did);
+        let via_entity = fetch_entity_surface_pixels_impl(&source, did, 0, &[]);
+        // The shared-cache safety proof: palette-free entity decode is
+        // byte-identical to the static decode for the same DID.
+        assert_pixels_eq(&via_entity, &via_static, "entity(0,[]) vs static");
+        surface_pixel_cache_clear_all();
+    }
+
+    #[test]
+    fn entity_palette_requests_bypass_the_shared_cache() {
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0004u32;
+        let mut source = textured_fixture(did, 0xFF0A_0B0C);
+        // A second palette an entity can override with.
+        let override_pal = 0x0400_2002u32;
+        source.files.insert(
+            (NS.to_string(), override_pal),
+            pack_palette(override_pal, &[0xFFD0_E0F0]),
+        );
+        // Prime the shared cache with the palette-free decode.
+        let (base_sp, m) = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
+        assert_eq!(m, 0);
+        assert!(surface_memo_contains(did));
+        // Palette-composed request must NOT return the memoised pixels.
+        let (dyed, m2) = fetch_entity_surface_pixels_cached(&source, did, override_pal, &[]);
+        assert_eq!(m2, 0);
+        assert_ne!(
+            dyed.pixels, base_sp.pixels,
+            "override palette produced distinct pixels (cache bypassed)"
+        );
+        // And the dyed decode did not poison the shared entry.
+        let (again, _) = fetch_entity_surface_pixels_cached(&source, did, 0, &[]);
+        assert_eq!(again.pixels, base_sp.pixels, "shared entry unchanged");
+        surface_pixel_cache_clear_all();
+    }
+
+    #[test]
+    fn alias_dids_are_positively_cached() {
+        surface_pixel_cache_clear_all();
+        let base_did = 0x0810_0006u32;
+        let mut source = textured_fixture(base_did, 0xFF31_4159);
+        // A second SurfaceTexture → texture chain for the swap target.
+        let st2 = 0x0500_2002u32;
+        let tex2 = 0x0600_2002u32;
+        let pal2 = 0x0400_2003u32;
+        source.files.insert((NS.to_string(), st2), pack_surface_texture(st2, &[tex2]));
+        source
+            .files
+            .insert((NS.to_string(), tex2), pack_p8_texture_1x1(tex2, 0, pal2));
+        source
+            .files
+            .insert((NS.to_string(), pal2), pack_palette(pal2, &[0xFF27_1828]));
+        let alias = tex_swap_alias_for(base_did, st2);
+        assert!(is_tex_swap_alias(alias));
+        let counting = ReadCountingSource {
+            inner: &source,
+            reads: std::sync::atomic::AtomicU32::new(0),
+        };
+        let (first, m1) = fetch_surface_pixels_cached(&counting, alias);
+        assert_eq!(m1, 0);
+        assert_eq!(first.width, 1, "alias decodes via the override texture");
+        assert!(
+            surface_memo_contains(alias),
+            "complete alias decode memoised (registry is append-only per instance)"
+        );
+        counting.reads.store(0, std::sync::atomic::Ordering::Relaxed);
+        let (second, _) = fetch_surface_pixels_cached(&counting, alias);
+        assert_eq!(
+            counting.reads.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "alias memo hit reads zero records"
+        );
+        assert_pixels_eq(&second, &first, "alias memo hit");
+        // The base DID keeps its own (different) entry space.
+        assert!(!surface_memo_contains(base_did), "base not implicitly cached");
+        surface_pixel_cache_clear_all();
+    }
+
+    #[test]
+    fn empty_and_magenta_sentinel_never_memoised() {
+        surface_pixel_cache_clear_all();
+        let did = 0x0810_0005u32;
+        let mut empty = empty_fixture_pixels();
+        surface_memo_insert(did, &empty, 0);
+        assert!(!surface_memo_contains(did), "empty (width 0) refused");
+        // Magenta decode-fail sentinel: 1×1 [255,0,255,255] + has_palette.
+        empty.width = 1;
+        empty.height = 1;
+        empty.pixels = vec![255, 0, 255, 255];
+        empty.has_palette = true;
+        surface_memo_insert(did, &empty, 0);
+        assert!(!surface_memo_contains(did), "magenta sentinel refused");
+        // Non-zero audit misses refuse even real-looking pixels.
+        empty.pixels = vec![1, 2, 3, 255];
+        empty.has_palette = false;
+        surface_memo_insert(did, &empty, 1);
+        assert!(!surface_memo_contains(did), "missy decode refused");
+        surface_memo_insert(did, &empty, 0);
+        assert!(surface_memo_contains(did), "clean decode admitted");
+        surface_pixel_cache_clear_all();
+    }
+
+    fn empty_fixture_pixels() -> SurfacePixels {
+        SurfacePixels {
+            width: 0,
+            height: 0,
+            pixels: Vec::new(),
+            surface_type: 0,
+            category: 12,
+            normal_pixels: Vec::new(),
+            height_pixels: Vec::new(),
+            roughness_override: f32::NAN,
+            normal_scale_override: f32::NAN,
+            translucency: 0.0,
+            luminosity: 0.0,
+            diffuse: 0.0,
+            has_palette: false,
+        }
+    }
+
+    #[test]
+    fn byte_budget_lru_evicts_lru_first_and_respects_refcount() {
+        let mut lru: ByteBudgetLru<std::sync::Arc<Vec<u8>>> = ByteBudgetLru::new(100, 60);
+        let evictable = |v: &std::sync::Arc<Vec<u8>>| std::sync::Arc::strong_count(v) == 1;
+        lru.insert(1, std::sync::Arc::new(vec![0; 40]), 40, evictable);
+        lru.insert(2, std::sync::Arc::new(vec![0; 40]), 40, evictable);
+        // Touch 1 → 2 becomes LRU.
+        assert!(lru.get(1).is_some());
+        lru.insert(3, std::sync::Arc::new(vec![0; 40]), 40, evictable);
+        assert!(lru.contains(1), "recently-used survives");
+        assert!(!lru.contains(2), "LRU evicted");
+        assert!(lru.contains(3));
+        assert!(lru.total_bytes <= 100);
+        // Oversized entry (> entry_cap 60) is never admitted.
+        lru.insert(4, std::sync::Arc::new(vec![0; 80]), 80, evictable);
+        assert!(!lru.contains(4), "over-cap entry refused");
+        // A held (refcounted) entry survives eviction pressure.
+        let held = lru.get(1).expect("still cached");
+        lru.insert(5, std::sync::Arc::new(vec![0; 40]), 40, evictable);
+        assert!(lru.contains(1), "held entry not evicted (strong_count > 1)");
+        drop(held);
+        // Once released it becomes evictable again under pressure.
+        lru.insert(6, std::sync::Arc::new(vec![0; 40]), 40, evictable);
+        assert!(lru.total_bytes <= 100 || lru.len() >= 2);
+    }
+
+    #[test]
+    fn batch_split_ranges_cover_exactly() {
+        for (len, chunk) in [
+            (0usize, 16usize),
+            (1, 16),
+            (15, 16),
+            (16, 16),
+            (17, 16),
+            (32, 16),
+            (33, 16),
+            (5, 2),
+            (7, 0),
+        ] {
+            let ranges = batch_split_ranges(len, chunk);
+            if len == 0 {
+                assert!(ranges.is_empty(), "len 0 → no ranges");
+                continue;
+            }
+            // Contiguous, ordered, exactly covering [0, len).
+            assert_eq!(ranges.first().unwrap().0, 0);
+            assert_eq!(ranges.last().unwrap().1, len);
+            for w in ranges.windows(2) {
+                assert_eq!(w[0].1, w[1].0, "contiguous");
+            }
+            for &(lo, hi) in &ranges {
+                assert!(lo < hi, "non-empty range");
+                if chunk > 0 {
+                    assert!(hi - lo <= chunk, "chunk bound");
+                }
+            }
+            if chunk == 0 {
+                assert_eq!(ranges.len(), 1, "chunk 0 → whole batch");
+            }
+        }
+    }
+
+    #[test]
+    fn model_tri_cache_byte_budget_eviction() {
+        model_tri_cache_clear_all();
+        let tri = Tri {
+            pos: [[0.0; 3]; 3],
+            uv: [[0.0; 2]; 3],
+            normals: [[0.0; 3]; 3],
+            surface_did: 0,
+            sides_type: 0,
+            polygon_id: 0,
+            side_kind: SideKind::Positive,
+        };
+        let per_entry_tris = 1000usize;
+        let bytes = model_tri_bytes(&vec![tri.clone(); per_entry_tris]);
+        let fit = MODEL_TRI_CACHE_BUDGET_BYTES / bytes;
+        MODEL_TRI_CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            for k in 0..(fit as u32 + 3) {
+                c.insert(
+                    k,
+                    std::rc::Rc::new(vec![tri.clone(); per_entry_tris]),
+                    bytes,
+                    |v| std::rc::Rc::strong_count(v) == 1,
+                );
+            }
+            assert!(
+                c.total_bytes <= MODEL_TRI_CACHE_BUDGET_BYTES,
+                "stays under byte budget (was clear-on-overflow at 4096 ENTRIES)"
+            );
+            assert!(c.evictions > 0, "evicted the coldest, not everything");
+            assert!(c.len() > 0, "did not flush the whole memo");
+        });
+        model_tri_cache_clear_all();
     }
 }
