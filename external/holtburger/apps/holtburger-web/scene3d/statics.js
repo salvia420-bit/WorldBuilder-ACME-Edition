@@ -2088,7 +2088,15 @@ export async function bakeStaticsForLandblock(
   // attaching now would orphan these nodes and let a re-approach rebuild
   // duplicates. Dispose the per-LB geometries and bail. The nodes were never
   // added to the scene graph, so nothing is GPU-resident to leak.
-  if (staticsTimeSlice && !scene3d.staticsBakedLbs.has(lbKey)) {
+  //
+  // sealedStaticsSkip extension: a build that started BEFORE the sealed
+  // purge engaged (the TN probe measured sealed detection ~5 s after
+  // landing) aborts here the same way — the content is invisible under
+  // sealedCull and the only exit is a portal. Clear the baked mark so a
+  // future non-sealed approach rebuilds.
+  const _sealedAbort = SEALED_STATICS_SKIP_ON && _sealedNow(scene3d);
+  if (_sealedAbort) { try { scene3d.staticsBakedLbs.delete(lbKey); } catch (_) {} }
+  if ((staticsTimeSlice && !scene3d.staticsBakedLbs.has(lbKey)) || _sealedAbort) {
     // RP1 — dispose every per-surface group geometry (full + degraded)
     // for this LB's models. groupsByModel: modelId → [{geometry,...}];
     // R-JS-T4a — degradedGeomByModel: modelId → Map<surfaceKey, [{geometry,
@@ -3486,6 +3494,31 @@ const STATIC_SCRIPT_SLICE_ON = (() => {
   } catch (_) {}
   return true;
 })();
+
+// sealedStaticsSkip (2026-07-11, TN portal-entry probe campaign): while the
+// player is inside a SEALED dungeon (cells.js `_sealedEvictLbKey` nonzero —
+// same signal the sealed purge keys on), every outdoor statics build is
+// invisible (`sealedCull` hides staticsGroup) and the only exit is a portal
+// (a sealed dungeon has no mouth), so the arrival LB streams its own ring
+// fresh. Skipping the build entirely removes a measured ~2,500-child
+// mountain-wall/ocean-skirt scenery build (plus its script-anchor attach
+// chain) that landed on the main thread right when the player wants chat
+// input at Town Network. Skipped LBs are NOT marked baked, so any future
+// non-sealed approach builds normally. `?sealedStaticsSkip=off|0|false`
+// escapes.
+export const SEALED_STATICS_SKIP_ON = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = new URLSearchParams(globalThis.location.search)
+        .get("sealedStaticsSkip")?.toLowerCase();
+      return !(v === "off" || v === "0" || v === "false");
+    }
+  } catch (_) {}
+  return true;
+})();
+const _sealedNow = (scene3d) => {
+  try { return !!scene3d?._sealedEvictLbKey; } catch (_) { return false; }
+};
 const STATIC_SCRIPT_SLICE_MS = 6;
 
 // Survey A11-S0 (2026-06-11): default-off `?blockingParticleParity=on`.

@@ -41,6 +41,7 @@ import {
 import {
   bakeStaticsForLandblock,
   getOrCreateMaterialCache,
+  SEALED_STATICS_SKIP_ON,
 } from "./statics.js?v=phase7-par";
 // ?statAtlas cross-LB static atlas per-LB eviction hook. Imported with the SAME
 // specifier statics.js uses (no ?v=) so it is the SAME module instance → shares
@@ -3255,6 +3256,17 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     },
     loadStaticsForLandblock(lbX, lbY) {
       const lbKeyForLru = lbKeyFromXY(lbX, lbY);
+      // sealedStaticsSkip (2026-07-11, see statics.js SEALED_STATICS_SKIP_ON):
+      // inside a sealed dungeon every outdoor statics build is invisible
+      // (sealedCull) and unreachable on foot (no mouth) — skip the build
+      // BEFORE the fetch/guard-slot claim. Not marked baked, so the
+      // per-position-packet re-fires stay a cheap boolean and any future
+      // non-sealed approach builds normally. Measured at Town Network:
+      // removes a ~2,500-child mountain-wall scenery build + script-anchor
+      // attach landing exactly in the player's first-input window.
+      if (SEALED_STATICS_SKIP_ON && this._sealedEvictLbKey) {
+        return Promise.resolve(null);
+      }
       // streamFix (2026-07-02): already-baked fast-path before the guard
       // slot claim — see loadTerrainForLandblock + STREAM_FIX_ENABLED.
       if (
