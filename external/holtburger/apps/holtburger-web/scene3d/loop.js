@@ -229,6 +229,35 @@ function isLocalGaitLocomotionCmd(cmd) {
   return _LOCAL_GAIT_LOCOMOTION_LOWS.has(low);
 }
 
+// WS02 (2026-07-12) — `?castGestureParity` (default ON, `=off` = byte-identical).
+// The FINAL cast GESTURE is a class-0x40 magic substate (MagicBlast..MagicPray,
+// low16 0x2B..0x39; ACE puts it in the wire forward_command slot —
+// Player_Magic.cs DoCastGesture EnqueueMotionMagic / WorldObject_Networking.cs
+// new Motion(Magic,cmd,speed)). It is NOT action-class
+// (is_action_motion_command=false for that band — crates/.../player/types.rs), so
+// the lib.rs forward_command filter does NOT divert it to KIND_MOTION_ACTION — it
+// rides KIND_MOTION as the locomotion motion_command with a RAW low16 and (being
+// server-forced ⇒ !isAuto) reaches the local rig via forceLocal. But
+// playCastSequence ALREADY predicts that gesture (setSwingMotion) and notes it
+// (noteLocalSwingPrediction), so the echo is a redundant SECOND play with NO dedup
+// (the swing-echo dedup only runs on the KIND_MOTION_ACTION path used by the
+// windups). Consume the note here to swallow the local echo. Remote casters are
+// untouched (they need the echo to animate). Empirically the band 0x2B..0x39
+// covers EVERY cast gesture and NO windup across all 6,266 spells
+// (tests/test_ws02_cast_echo_dedup.mjs T6).
+const CAST_GESTURE_PARITY_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return (
+      new URLSearchParams(window.location.search).get("castGestureParity")?.toLowerCase() !== "off"
+    );
+  } catch (_) {
+    return true; // non-browser (headless source-eval harness): default ON
+  }
+})();
+// Magic cast-gesture substate low-16 band (MagicBlast 0x2B .. MagicPray 0x39).
+function isLocalPredictedCastGestureLow(low) { return low >= 0x2b && low <= 0x39; }
+
 // A2 (perf plan 2026-05-18) — module-scratch object passed to
 // `em.setVelocity` so we don't allocate a fresh `{guid,vx,vy,vz,omegaZ}`
 // on every KIND_VELOCITY event. `setVelocity` copies the fields into
@@ -236,13 +265,14 @@ function isLocalGaitLocomotionCmd(cmd) {
 // single shared scratch is safe across both drain paths.
 const _velScratch = { guid: 0, vx: 0, vy: 0, vz: 0, omegaZ: 0 };
 
-// Multi-action motion queue (2026-06-06, approach B) — `?multiAction=on` (default
-// OFF) FIFO-plays the Action-class `commands` list (emotes / gestures) that the
+// Multi-action motion queue (2026-06-06, approach B) — `?multiAction`
+// FIFO-plays the Action-class `commands` list (emotes / gestures) that the
 // single motion_command path drops, drained from the wasm `pollMotionActions`
-// side-channel. Default OFF: needs a 1070 eye-test + a reachability confirmation
-// (the wasm side logs `commands.len() > 1`). NOTE: cosmetic actions, NOT the
-// strafe-cast / cast-break tech (those are SubState ForwardCommand + the sidestep
-// axis — a separate gap).
+// side-channel. DEFAULT-ON (the reader below is `!== "off"`; listed in the
+// default-ON block at the top of docs/url-flags.md — the old "default OFF, needs
+// a 1070 eye-test" note here was stale, WS07 2026-07-12). `?multiAction=off` to
+// disable. NOTE: cosmetic actions, NOT the strafe-cast / cast-break tech (those
+// are SubState ForwardCommand + the sidestep axis — a separate gap).
 const MULTI_ACTION_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -361,7 +391,7 @@ function actionStampIsNewer(seq, stamp) {
 
 // Drain the wasm multi-action side-channel (`pollMotionActions`, flat 4-u32
 // groups: [guid, command_low, packed_sequence, stance]) and FIFO-play each NEW
-// action per entity. No-op unless `?multiAction=on`. Plays via `em.setMotion`
+// action per entity. No-op only when `?multiAction=off` (default-ON). Plays via `em.setMotion`
 // (same path the single motion_command uses) — Action-class commands resolve to
 // their one-shot clip; unresolved ones no-op harmlessly. Local guid is skipped.
 function drainMotionActions(scene3d, sessionHandle) {
@@ -389,13 +419,16 @@ function drainMotionActions(scene3d, sessionHandle) {
   }
 }
 
-// Casting-ingredient axes (2026-06-06) — `?castAxes=on` (default OFF) surfaces
-// the remote sidestep + turn axes the single forward_command path drops, so a
-// remote strafe-casting shows footwork and a remote turning in place shows the
-// turn cycle. These are the retail casting *ingredients* (acclient
+// Casting-ingredient axes (2026-06-06) — `?castAxes` surfaces the remote
+// sidestep + turn axes the single forward_command path drops, so a remote
+// strafe-casting shows footwork and a remote turning in place shows the turn
+// cycle. These are the retail casting *ingredients* (acclient
 // get_state_velocity uses all three axes); built so a retail-faithful cast
-// sequence renders fully, NOT forcing anything. Default OFF (needs a 1070
-// eye-test). Drains the wasm `pollMotionAxes` side-channel.
+// sequence renders fully, NOT forcing anything. DEFAULT-ON (the reader below is
+// `!== "off"`; listed in the default-ON block at the top of docs/url-flags.md —
+// the old "default OFF, needs a 1070 eye-test" note here was stale, WS06
+// 2026-07-12). `?castAxes=off` to disable. Drains the wasm `pollMotionAxes`
+// side-channel.
 const CAST_AXES_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -2539,6 +2572,31 @@ function _armMotion(scene3d, em, upd) {
   // pose (apply under FORCE_MOTION_LOCAL). ACE semantics in the
   // FORCE_MOTION_LOCAL comment block above.
   const isAuto = !!upd.isAutonomous;
+  // WS02 (`?castGestureParity`, default ON): swallow the LOCAL player's own
+  // cast-gesture KIND_MOTION echo — the client already predicted it
+  // (playCastSequence → setSwingMotion + noteLocalSwingPrediction). The 0x40
+  // cast-gesture substate rides KIND_MOTION (is_action_motion_command=false),
+  // NOT the deduped KIND_MOTION_ACTION path the windups use, so nothing else
+  // swallows this echo → double-play/restart + over-held clamped frame. See the
+  // CAST_GESTURE_PARITY_ON block above.
+  if (CAST_GESTURE_PARITY_ON && isLocalPlayerGuid(motionGuid)) {
+    const low = motionCmd & 0xffff;
+    if (isLocalPredictedCastGestureLow(low)) {
+      // KIND_MOTION delivers the raw low16; the chain noted the FULL 0x40-class
+      // command — expand to match (crates/.../player/types.rs same mapping).
+      const fullGesture = (0x40000000 | low) >>> 0;
+      if (em.consumeLocalSwingEcho?.(motionGuid, fullGesture)) {
+        // Predicted → drop the redundant echo (no double-play/restart/clamp).
+        // Keep the server stance authoritative like the skip-branch below.
+        em._castDiag?.("echoSwallowed");
+        if (st !== 0) em.setLocalStance?.(motionGuid, st);
+        return;
+      }
+      // No prediction (playCastSequence early-returned: table-not-loaded first
+      // frame / F8-4 busy window / note expired at very high RTT) → fall
+      // through so the echo is the single animation source. Fail-open.
+    }
+  }
   // FORCE_MOTION_LOCAL (B5#2 + SG-B): when ON, a server-FORCED
   // (`!isAuto`) NON-LOCOMOTION pose/action passes through to the
   // local rig; an autonomous echo OR a locomotion-class command is
@@ -2608,6 +2666,11 @@ function _armMotionAction(scene3d, em, upd) {
     // noteLocalSwingPrediction); swallow the server echo instead of
     // double-playing / restarting the same clip ~RTT later. Remote
     // guids and non-matching commands are unaffected.
+    // WS01: count how often the echo is deduped (diag-only) — measures the
+    // window where the local prediction is the SOLE animator (RC-1).
+    em._castDiag?.("echoSwallowed");
+    // WS16 diag: echo-vs-prediction dedup counter (the server echo was swallowed).
+    try { window.__diag?.cast?.onEchoConsume?.({ cmd: actionCmd, hit: true }); } catch (_) {}
   } else if (actionCmd !== 0 && typeof em.setMotion === "function") {
     em.setMotion(actionGuid, actionCmd, actionStance, +(upd.motionSpeed ?? 1.0));
     // D4 (Q3.2, rides existing ?serverSwing, default-off ⇒ inert):

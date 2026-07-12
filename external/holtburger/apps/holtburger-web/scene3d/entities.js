@@ -899,7 +899,9 @@ const MELEE_FACE_TARGET = (() => {
 // launches and recoil happen while the character is still mid-windup. When
 // ON, each gesture's clip timeScale ×2 and its sleep ÷2, and the matching
 // wire echo is suppressed (F6-2 stamp-dedup) so the server's 2× windup doesn't
-// fight the prediction. Default OFF pending a 1070 eye-test (cast timing/feel).
+// fight the prediction. Default ON (ACE CastSpeed=2.0); `?castSpeed=off` = legacy
+// 1× (broken: the server echoes double the local 1× chain — escape hatch only,
+// not a default), pending the batched 1070 eye-test.
 const CAST_SPEED = (() => {
   try {
     return (typeof window !== "undefined" && window.location &&
@@ -907,6 +909,31 @@ const CAST_SPEED = (() => {
       ? 2.0 : 1.0;
   } catch (_) {
     return 1.0;
+  }
+})();
+// WS14 — expose CAST_SPEED so HUD consumers (combat-bar cast-busy sweep) can
+// size a cooldown off totalDurationS/CAST_SPEED without re-reading the URL flag
+// (default 2.0; a non-default ?castSpeed=off run reads 1.0 here too).
+try { if (typeof window !== "undefined") window.__castSpeed = CAST_SPEED; } catch (_) {}
+
+// WS11 (2026-07-12) — `?castGestureLen=on` (DEFAULT-OFF, strict `=== "on"`
+// opt-in per the flag footgun, pending the batched 1070 eye-test). Pace the
+// local cast chain's per-gesture SLEEP off the MotionTable link length
+// (`classifyMotionCommandTyped().durationSec` — the SAME value setSwingMotion
+// uses to drive the on-screen gesture, == ACE `GetAnimationLength`) instead of
+// the JSON `durationS`. `durationS` is authored from SpellComponentTable._time,
+// which equals GetAnimationLength for the round-trip WINDUP gestures but is
+// ~1.7-3x too long for the single-throw CAST gesture (talisman _time), so
+// today's chain-end (CasterEffect / busy-clear / recoil) drifts +0.35..0.76s
+// past the server's projectile launch (ACE paces GAL/CastSpeed — see
+// WS11-timing-parity.md F1/F3). ON => chain-end == on-screen gesture == server
+// cadence (within ~40ms). OFF => byte-identical to today (uses durationS).
+const CAST_GESTURE_LEN = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("castGestureLen")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
   }
 })();
 
@@ -923,6 +950,118 @@ const CAST_STATE_MACHINE = (() => {
       new URLSearchParams(window.location.search).get("castStateMachine")?.toLowerCase() !== "off";
   } catch (_) {
     return false;
+  }
+})();
+
+// WS01 (2026-07-12) — `?castReliability=on` (DEFAULT-OFF pending a batched 1070
+// eye-test; flip to default-ON once E1/E2 pass, per the castSpeed/castStateMachine/
+// castFizzle workflow). Bundles three correctness fixes to the LOCAL cast
+// prediction so the arms actually rise: (a) look the gesture up under the Magic
+// stance explicitly so a stale `inst.currentStance` (e.g. NonCombat, which carries
+// ZERO magic gestures — DAT-verified vs player MT 0x09000001) can't silently miss;
+// (b) prefetch/warm every chain clip up front (await-capped) so the fire-and-forget
+// bake can't outlive a min-50ms windup sleep; (c) only note the swing-echo dedup
+// when the prediction will actually animate, so the default-ON dispatchParity echo
+// dedup can't swallow the server echo after a silent no-op. `=off`/absent = today.
+const CAST_RELIABILITY = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("castReliability")?.toLowerCase() === "on";
+  } catch (_) { return false; }
+})();
+// WS01 — `?castBusyScope=on` (DEFAULT-OFF, feel): scope the F8-4 busy drop to the
+// SAME spellId so a different-spell weave the server will accept still animates
+// locally. Rides `?castStateMachine`. Pending a 1070 recast-feel eye-test.
+const CAST_BUSY_SCOPE = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("castBusyScope")?.toLowerCase() === "on";
+  } catch (_) { return false; }
+})();
+// WS03 (2026-07-12, S2) — `?castOverlayGuard=on` (default OFF pending 1070 eye-test).
+// Make mid-cast MOVEMENT stop breaking the cast VISUAL, mirroring retail's single-
+// playhead splice: (a) a locomotion base-cycle swap under an ACTIVE cast/swing overlay
+// installs the new base UNDER it (weight 0) instead of crossFadeTo-.stop()'ing the
+// overlay (= currentAction); (b) the base-weight restore is swap-safe (restores whatever
+// _locoCycleKey points at on completion, not the originally-captured baseAction); (c) a
+// forward-edge anim-break (cancelCastSequence) HARD-CUTS the overlay + restores the base,
+// instead of relying on the incidental crossFadeTo stop (which misses link-keyed
+// _tryPlayLink overlays). A FORWARD edge still breaks the cast (retail fastcast); a
+// slidecast / steady hold / pump reclaim keeps it playing full-body. Default OFF: every
+// flag-off branch below is a verbatim copy of the shipped path.
+const CAST_OVERLAY_GUARD = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search)
+      .get("castOverlayGuard")?.toLowerCase() === "on";
+  } catch (_) { return false; }
+})();
+// WS12 (2026-07-12) — `?castCancelStops=on` (DEFAULT-OFF, strict `=== "on"` per
+// the flag footgun; feel/visual change → batched 1070 eye-test). On
+// cancelCastSequence (fizzle 0x0402 / UseDone / recast preempt), STOP the
+// running cast/swing LoopOnce overlay so its trailing windup-hum SoundTweaked
+// hooks (wave 0x0A000390, frames 53/57) don't keep firing AFTER the cast was
+// cancelled — retail REPLACES the spliced gesture on interrupt
+// (acclient.c GetObjectSequence remove_cyclic_anims), so the trailing 0.2→0.6
+// hum ramp should cut, not finish. Complements WS03's `?castOverlayGuard`
+// (which stops the suppressor + currentAction swing overlay); this covers the
+// link-keyed `_tryPlayLink` overlays that aren't currentAction. Default OFF:
+// the flag-off branch is byte-identical to today. Audio-only variant (zero
+// visual risk, could ship default-ON): swap `action.stop()` for
+// `inst.hookTimelines?.delete(key)` — mutes the trailing hum, leaves the clamp.
+const CAST_CANCEL_STOPS = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search)
+      .get("castCancelStops")?.toLowerCase() === "on";
+  } catch (_) { return false; }
+})();
+// WS01 — the only magic stance retail uses (low16; the wasm masks &0xFFFF, and the
+// DAT bake helpers mask &0xFFFF too, so low16 resolves the identical clip as the
+// full 0x80000049). index.html stance consts.
+const CAST_MAGIC_STANCE = 0x0049;
+
+// WS02 (2026-07-12) — `?castGestureParity` (default ON, `=off` = byte-identical).
+// Mirrors the loop.js flag of the same name (see CAST_GESTURE_PARITY_ON there for
+// the full rationale). Used only by the swing/cast Ready-restore timer below: the
+// clip plays at `swingSpeed` (CAST_SPEED=2.0 for casts) so it FINISHES at
+// dur/swingSpeed real seconds; restoring at the un-scaled `dur` held the clamped
+// final cast frame ~dur/2 too long. Behind the same flag so one toggle rolls both
+// the loop.js dedup and this timing fix back to byte-identical.
+const CAST_GESTURE_PARITY_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return (
+      new URLSearchParams(window.location.search).get("castGestureParity")?.toLowerCase() !== "off"
+    );
+  } catch (_) {
+    return true; // non-browser (headless source-eval harness): default ON
+  }
+})();
+
+// WS09 (2026-07-12) — `?castSyntheticCasterVfx=off` = the fix (DEFAULT ON =
+// today's behavior). ACE broadcasts the CasterEffect GameMessageScript to the
+// LOCAL caster too (EnqueueBroadcast sendSelf=true, WorldObject_Networking.cs:
+// 1428), so the wire already delivers it via 0xF755→kind=30→playEffect at cast
+// RELEASE. The chain-end synthetic emit below therefore DOUBLE-FIRES the glow
+// (and too early — local chain end, no RTT) for the ~74 caster_effect≠0 spells
+// (portals/lifestones/recalls/life-buffs; ALL war+void spells are
+// caster_effect=0, so this never affects a war/void cast). The wire-only fix is
+// `=off`: it suppresses the synthetic so the wire is the SOLE CasterEffect
+// source (retail timing; auto-suppressed on fizzle since ACE sends
+// PlayScript.Fizzle, not CasterEffect). Per foundation §4.3 (WS09-verify mustFix
+// #3) this risky feel change is DEFAULT-OFF-as-fix: the un-eye-tested
+// suppression is the opt-in (`=off`) and E1/E2 are the merge gate for flipping
+// the default. Default/absent = synthetic fires (byte-identical to today); the
+// wire copy renders through the identical resolver, so if E1 confirms the wire
+// paints on the local rig, flip this to `!== "on"`.
+const CAST_SYNTHETIC_CASTER_VFX = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search)
+      .get("castSyntheticCasterVfx")?.toLowerCase() !== "off";
+  } catch (_) {
+    return true; // non-browser (headless source-eval harness): default ON
   }
 })();
 
@@ -992,10 +1131,10 @@ const IDLE_FIDGET_ON = (() => {
 // MISSILE 0x40; war-magic bolts fly flat in retail and are untouched).
 // When on, tick()'s ballistic branch applies -9.8 z" (AC world frame,
 // ACE PhysicsGlobals gravity) to `lastVel` before integrating, so the
-// flight curves instead of flying constant-velocity. Default OFF
-// (motion-adjacent visual) pending a 1070 GPU eye-test; inert for any
-// pkg/ predating the `entityProjectileHasGravity` export (soft-guarded,
-// wasm manifest v2).
+// flight curves instead of flying constant-velocity. DEFAULT-ON
+// (flipped in the default-ON wave; url-flags.md row `projectileGravity`,
+// `=off` escape). Inert for any pkg/ predating the
+// `entityProjectileHasGravity` export (soft-guarded, wasm manifest v2).
 const PROJECTILE_GRAVITY_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -1007,6 +1146,29 @@ const PROJECTILE_GRAVITY_ON = (() => {
   }
 })();
 const PROJECTILE_GRAVITY_Z = -9.8; // m/s^2, AC frame (z up)
+// WS10 (2026-07-12): `?projectileImpactStop` (DEFAULT-ON, `=off` escape) — a ballistic
+// projectile that receives a VectorUpdate has impacted (ACE sends none in-flight for a
+// PhysicsState::MISSILE — the ONLY VectorUpdate a projectile gets is the zero-velocity
+// impact stop, SpellProjectile.ProjectileImpact), so stop self-integrating. Prevents an
+// arc husk from accruing gravity during its 5 s NoDraw pre-Destroy window. Off = legacy
+// (masked by the NoDraw hide).
+const PROJECTILE_IMPACT_STOP_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search).get("projectileImpactStop")?.toLowerCase() !== "off";
+  } catch (_) { return true; }
+})();
+// WS10 (2026-07-12): `?projectileGroundClampSkip` (DEFAULT-ON, `=off` escape) — exempt an
+// airborne MISSILE projectile from the spawn ground-clamp. Its launch Z is server-authored
+// to ~2/3 caster height (WorldObject_Magic.CalculatePreOffset); clamping a bolt spawned
+// below the terrain at its (wx,wy) — e.g. firing across a rise — would jump the launch
+// point onto the hillside. Off = legacy (projectiles clamped like any outdoor object).
+const PROJECTILE_GROUND_CLAMP_SKIP_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search).get("projectileGroundClampSkip")?.toLowerCase() !== "off";
+  } catch (_) { return true; }
+})();
 // Survey A11-S0 (2026-06-11): retail `CreateBlockingParticleEmitter`
 // (acclient.c:329528-329565) returns 0 and does NOT replace when the
 // emitter id is already live — the opposite of the non-blocking
@@ -3825,7 +3987,15 @@ export class EntityManager {
     // cell index so position updates can re-clamp (covers terrain that streams
     // in after spawn).
     inst._outdoorCellIdx = lbId & 0xffff;
-    const wz = _groundClampZ(wx, wy, meta.z ?? 0, inst._outdoorCellIdx);
+    // WS10 (2026-07-12): never ground-clamp a MISSILE projectile — it is airborne by
+    // definition and its launch Z is server-authored to ~2/3 caster height
+    // (WorldObject_Magic.CalculatePreOffset). Clamping a bolt spawned below the terrain at
+    // its (wx,wy) — e.g. firing across a rise — would jump the launch point onto the
+    // hillside. Dedicated `?projectileGroundClampSkip=off` reverts just this exemption
+    // (leaving `?groundClamp` intact for all other entities).
+    const wz = (PROJECTILE_GROUND_CLAMP_SKIP_ON && this.isProjectile(guid))
+      ? (meta.z ?? 0)
+      : _groundClampZ(wx, wy, meta.z ?? 0, inst._outdoorCellIdx);
     inst.setPose(wx, wy, wz, meta.qw ?? 1, meta.qx ?? 0, meta.qy ?? 0, meta.qz ?? 0);
     // #9 (2026-06-07): remember the entity's authored base scale so the
     // generic jump pose can multiply through it instead of stomping x/y/z
@@ -6621,6 +6791,7 @@ export class EntityManager {
     if (c === 0) return;
     if (!this._localSwingEchoes) this._localSwingEchoes = new Map();
     this._localSwingEchoes.set(c, performance.now() + 500);
+    try { window.__diag?.cast?.onEchoNote?.(c); } catch (_) {}
   }
 
   // F6-2 — returns true (and consumes the record) when `guid` is the
@@ -6725,16 +6896,19 @@ export class EntityManager {
    * @returns {Promise<void>} resolves when the full chain completes
    *   or aborts (cancelled / fell through to fallback).
    */
-  async playCastSequence(guid, spellId) {
+  async playCastSequence(guid, spellId, opts) {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return;
+    // WS16 diag: open the cast record BEFORE any early return (spellId may be 0).
+    try { window.__diag?.cast?.onCastRequested?.({ guid: g, spellId }); } catch (_) {}
     // Fallback path A: missing spellId → vibe-pose.
     if (!spellId) {
       // WS-B teardown (2026-06-18): setCastPose vibe-pose fallback removed.
       // The real path is playCastSequence's ACE-derived gesture chain; when
       // it falls through (no spellId / table not loaded / no setSwingMotion),
       // the entity plays NO fallback gesture (the pose was a placeholder).
+      try { window.__diag?.cast?.onCastSuppressed?.({ guid: g, spellId, reason: "noSpell" }); } catch (_) {}
       return;
     }
     // Fallback path B: table not loaded yet (first-frame race) OR
@@ -6747,6 +6921,7 @@ export class EntityManager {
       // The real path is playCastSequence's ACE-derived gesture chain; when
       // it falls through (no spellId / table not loaded / no setSwingMotion),
       // the entity plays NO fallback gesture (the pose was a placeholder).
+      try { window.__diag?.cast?.onCastSuppressed?.({ guid: g, spellId, reason: "tableNotLoaded" }); } catch (_) {}
       return;
     }
     // Fallback path C: setSwingMotion not available (defensive — the
@@ -6756,6 +6931,7 @@ export class EntityManager {
       // The real path is playCastSequence's ACE-derived gesture chain; when
       // it falls through (no spellId / table not loaded / no setSwingMotion),
       // the entity plays NO fallback gesture (the pose was a placeholder).
+      try { window.__diag?.cast?.onCastSuppressed?.({ guid: g, spellId, reason: "noSetSwing" }); } catch (_) {}
       return;
     }
     // F8-4 — cast-state-machine gate. While a cast is in flight, ignore a
@@ -6763,19 +6939,94 @@ export class EntityManager {
     // window is sized to the chain's own duration (capped) so it can't wedge.
     if (CAST_STATE_MACHINE) {
       const nowMs = performance.now();
-      if (inst._castBusyUntilMs && nowMs < inst._castBusyUntilMs) {
-        return; // already casting — ignore the recast
+      // WS01: `?castBusyScope=on` restricts the drop to a repeat of the SAME
+      // spell (spam-click protection); a different-spell weave the server will
+      // accept still animates its windup locally.
+      const sameSpell = !CAST_BUSY_SCOPE || (inst._castBusySpellId === (spellId >>> 0));
+      if (sameSpell && inst._castBusyUntilMs && nowMs < inst._castBusyUntilMs) {
+        this._castDiag("busyDropped");
+        try { window.__diag?.cast?.onCastSuppressed?.({ guid: g, spellId, reason: "busyWindow" }); } catch (_) {}
+        return; // already casting this spell — ignore the recast
       }
       let estMs = 0;
-      for (const gz of (seq.windupGestures || [])) estMs += (+gz.durationS || 0.6) * 1000;
-      if (seq.castGesture) estMs += (+seq.castGesture.durationS || 0.6) * 1000;
+      // WS11: size the busy window off the same source the chain sleeps on
+      // (link length under ?castGestureLen, else JSON durationS) so the cap
+      // tracks the actual chain length. Byte-identical when the flag is off.
+      const mt0 = (inst.meta?.mtableId ?? 0) >>> 0;
+      const gLen = (gz) => {
+        if (CAST_GESTURE_LEN) {
+          try {
+            const m = (typeof gz.motion === "string" ? parseInt(gz.motion, 16) : gz.motion) >>> 0;
+            const r = window.__classifyMotionCommandTyped?.(mt0, CAST_MAGIC_STANCE, m);
+            if (r && r.source === "wasm-link" && Number.isFinite(+r.durationSec) && +r.durationSec > 0)
+              return +r.durationSec * 1000;
+          } catch (_) { /* fall back to durationS */ }
+        }
+        return (+gz.durationS || 0.6) * 1000;
+      };
+      for (const gz of (seq.windupGestures || [])) estMs += gLen(gz);
+      if (seq.castGesture) estMs += gLen(seq.castGesture);
       inst._castBusyUntilMs = nowMs + Math.min(12000, estMs / CAST_SPEED);
+      inst._castBusySpellId = (spellId >>> 0);
     }
     // Cancellation token. Bump on every chain start; subsequent
     // awaits compare against this snapshot to detect "a newer cast
     // started, bail out".
     const token = ((inst._castSequenceToken | 0) + 1) | 0;
     inst._castSequenceToken = token;
+    // WS16 diag: chain committed past all early returns.
+    try {
+      window.__diag?.cast?.onChainStart?.({
+        guid: g, spellId, token,
+        busyUntilMs: inst._castBusyUntilMs ?? null,
+        windupCount: (seq.windupGestures || []).length,
+        hasCast: !!seq.castGesture,
+        fastCast: seq.fastCast, leadOnly: seq.leadOnly,
+      });
+    } catch (_) {}
+    // WS04 (?castHoldReclaim) — mark the LOCAL cast chain in flight so the
+    // movement system holds the forward slot dead across the WHOLE chain
+    // (not per-windup-node). Local-player only: `window.getLocalPlayerGuid()`
+    // is the canonical accessor this file uses (the SessionHandle has no
+    // per-instance local-guid export). Degrades silently if the global or the
+    // `noteLocalCastWindow` export is missing (stale pkg/ → the feature just
+    // no-ops; the flag is default-OFF anyway).
+    const __ws04sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    let __ws04local = false;
+    if (
+      __ws04sh &&
+      typeof window !== "undefined" &&
+      typeof window.getLocalPlayerGuid === "function" &&
+      typeof __ws04sh.noteLocalCastWindow === "function"
+    ) {
+      const __lpg = window.getLocalPlayerGuid();
+      __ws04local = (__lpg != null) && (g === (__lpg >>> 0));
+    }
+    const __ws04setWindow = (active) => {
+      if (!__ws04local) return;
+      try { __ws04sh.noteLocalCastWindow(active); } catch (_) {}
+    };
+    // Token-guarded close: only clears if THIS chain still owns the window (a
+    // newer cast — which re-stamped true — must not be cleared by an older
+    // chain's tail/despawn path).
+    const __ws04clear = () => {
+      if (!__ws04local || inst._castSequenceToken !== token) return;
+      if (inst._ws04WindowTimer) { clearTimeout(inst._ws04WindowTimer); inst._ws04WindowTimer = 0; }
+      __ws04setWindow(false);
+    };
+    if (__ws04local) {
+      // Belt (WS04 verify must-fix #2): a self-clearing watchdog guarantees
+      // the window can NEVER stick TRUE if the chain is abandoned without
+      // cancelCastSequence — e.g. entity despawn mid-windup, which returns
+      // early below without bumping the token. Mirrors the F8-4
+      // `_castBusyUntilMs` cap (max chain estimate, 12 s ceiling).
+      if (inst._ws04WindowTimer) { clearTimeout(inst._ws04WindowTimer); inst._ws04WindowTimer = 0; }
+      __ws04setWindow(true);
+      inst._ws04WindowTimer = setTimeout(() => {
+        inst._ws04WindowTimer = 0;
+        if (inst._castSequenceToken === token) __ws04setWindow(false);
+      }, 12000);
+    }
     // (vibe-pose _castTween clear removed — setCastPose retired, WS-B 2026-06-18)
     // Helper: play one gesture (windup or cast) and sleep for its
     // duration. Returns false if cancelled mid-flight (caller breaks
@@ -6800,6 +7051,10 @@ export class EntityManager {
       } else {
         return true; // skip malformed entry rather than aborting chain
       }
+      // WS11: default sleep source = the JSON durationS (== SpellComponentTable
+      // ._time). Under ?castGestureLen the try below overwrites this with the
+      // MotionTable link length for cast/swing gestures (see the A2 comment).
+      let durS = +gesture.durationS || 0.6;
       try {
         // setSwingMotion is async (animation cache fetch) but we don't
         // `await` it — the per-gesture sleep below is what paces the
@@ -6808,12 +7063,44 @@ export class EntityManager {
         // F8-1: pace the clip at CastSpeed (×2 under ?castSpeed), and record
         // the prediction so the server's matching 2× windup echo is skipped
         // (consumeLocalSwingEcho in loop.js) instead of fighting/restarting it.
-        this.setSwingMotion(g, motionU32, { speed: CAST_SPEED });
-        if (CAST_SPEED !== 1.0) this.noteLocalSwingPrediction?.(motionU32);
+        // WS01: mirror canPlayReal synchronously (a cheap in-memory HashMap walk,
+        // no bake) so we only note the swing-echo dedup when the prediction will
+        // actually animate. Otherwise the default-ON dispatchParity echo dedup
+        // swallows the server echo too and NOTHING raises the arms.
+        const mtableId = (inst.meta?.mtableId ?? 0) >>> 0;
+        // WS11 also needs `c` (for the link length), so classify when EITHER
+        // flag wants it. The Magic stance (0x49) is the correct one to resolve
+        // under — WS01 DAT-verified that a stale inst.currentStance (e.g.
+        // NonCombat, which carries ZERO magic gestures) silently misses.
+        const c = (CAST_RELIABILITY || CAST_GESTURE_LEN)
+          ? window.__classifyMotionCommandTyped?.(mtableId, CAST_MAGIC_STANCE, motionU32)
+          : null;
+        const willPlay = !CAST_RELIABILITY ||
+          !!(c && (c.kind === "swing" || c.kind === "cast") && (c.resolvedCommand >>> 0) !== 0 && c.source === "wasm-link");
+        this._castDiag("attempts");
+        if (!willPlay) this._castDiag("linkOrStanceMiss");
+        this.setSwingMotion(g, motionU32, CAST_RELIABILITY
+          ? { speed: CAST_SPEED, stance: CAST_MAGIC_STANCE }
+          : { speed: CAST_SPEED });
+        if (CAST_SPEED !== 1.0 && willPlay) this.noteLocalSwingPrediction?.(motionU32);
+        // WS11: prefer the MotionTable link length (== ACE GetAnimationLength ==
+        // the on-screen gesture setSwingMotion just started) over the JSON
+        // durationS. Only the single-throw CAST gesture actually diverges
+        // (talisman _time is ~1.7-3x its throw length); windups shift only
+        // ~+30-40ms/gesture because durationSec is the Rust baked-INCLUSIVE
+        // frame sum ((high-low+1) frames, src/lib.rs), ~1 frame/segment longer
+        // than ACE's exclusive GAL — within the ±100ms target, and it aligns
+        // the windup sleep to its OWN on-screen visual (which was ~1 frame
+        // short before). Falls back to durationS on a cache/link miss.
+        if (CAST_GESTURE_LEN && c && c.source === "wasm-link" &&
+            (c.kind === "swing" || c.kind === "cast") &&
+            Number.isFinite(+c.durationSec) && +c.durationSec > 0) {
+          durS = +c.durationSec;
+        }
       } catch (_) { /* never block the chain on a single gesture fail */ }
       // F8-1: shorten each gesture's wall-clock by CastSpeed so the chain's
       // total duration matches the 2× server cast.
-      const ms = Math.max(50, Math.round(((+gesture.durationS || 0.6) * 1000) / CAST_SPEED));
+      const ms = Math.max(50, Math.round((durS * 1000) / CAST_SPEED));
       await new Promise((resolve) => setTimeout(resolve, ms));
       // Recheck cancellation after the sleep — a newer cast may have
       // started while we slept.
@@ -6821,12 +7108,42 @@ export class EntityManager {
       if (!this.entityMap.has(g)) return false;
       return true;
     };
+    // WS01: warm the animationCache for EVERY gesture up front, in parallel, so
+    // the fire-and-forget bake in setSwingMotion can't outlive a min-50ms windup
+    // sleep and leave the arms unraised. Await-capped so a slow/hung bake never
+    // blocks the cast. Idempotent (promise-keyed cache) — the per-gesture
+    // setSwingMotion below reuses these exact warm entries.
+    if (CAST_RELIABILITY) {
+      try { await this._prefetchCastClips(g, seq); } catch (_) {}
+      if (inst._castSequenceToken !== token) return; // a newer cast preempted us
+    }
     // Chain: windup gestures in order, then the cast gesture.
-    for (const gesture of (seq.windupGestures || [])) {
+    const _windups = seq.windupGestures || [];
+    for (let _i = 0; _i < _windups.length; _i++) {
+      const gesture = _windups[_i];
+      // WS16 diag: stamp the windup gesture BEFORE it plays (index-threaded).
+      try { window.__diag?.cast?.onGesture?.({ guid: g, index: _i, motion: gesture.motion, name: gesture.name, isCast: false }); } catch (_) {}
       const ok = await playGesture(gesture);
-      if (!ok) return; // cancelled or entity vanished
+      if (!ok) {
+        // WS04 — cancelled or entity vanished. Token-guarded, so a newer
+        // cast's window survives; a despawn (token still ours) closes it.
+        __ws04clear();
+        return;
+      }
     }
     if (seq.castGesture) {
+      // WS16 diag: stamp the final cast gesture.
+      try { window.__diag?.cast?.onGesture?.({ guid: g, index: _windups.length, motion: seq.castGesture.motion, name: seq.castGesture.name, isCast: true }); } catch (_) {}
+      // WS06 (2026-07-12): client re-face at the FINAL gesture (ACE's second
+      // Rotate before the cast gesture, Player_Magic.cs "do second rotate").
+      // Fire-and-forget so the turn runs CONCURRENTLY with the gesture overlay.
+      // No-op unless the caller supplied a hook (flag-gated in picking.js). Token-
+      // guarded so a preempted/fizzled chain doesn't re-face; wrapped so a hook
+      // fault never breaks the chain.
+      if (inst._castSequenceToken === token &&
+          typeof opts?.onBeforeCastGesture === "function") {
+        try { opts.onBeforeCastGesture(); } catch (_) { /* never break the chain */ }
+      }
       await playGesture(seq.castGesture);
     }
 
@@ -6862,19 +7179,18 @@ export class EntityManager {
     // when the chain succeeded end-to-end. No further token check
     // needed.
     //
-    // TargetEffect deferred: ACE fires TargetEffect on the TARGET via
-    // a separate `GameMessageScript(target.Guid, spell.TargetEffect,
-    // spell.Formula.Scale)` broadcast at `WorldObject_Magic.cs:361-365`,
-    // gated on `projectileHit` for projectile spells. Wiring this in
-    // the client requires attributing `damageDealt` events back to
-    // the SpellId that produced them; per the Wave 13/14 audit ACE's
-    // `damageDealt` payload does NOT carry SpellId. TODO follow-on:
-    // either (a) thread SpellId through the missile entity's
-    // `prj_spell_id` field (acclient.h cites this exists on retail
-    // ProjectileObject), or (b) consume `GameMessageScript` events
-    // landing on remote-entity targets and correlate by time-window.
-    // See entities.js:2421 (`playCastSequence`) for where this hookup
-    // would land.
+    // TargetEffect needs NO client synthesis (WS09 2026-07-12): ACE broadcasts
+    // `GameMessageScript(target.Guid, spell.TargetEffect, spell.Formula.Scale)`
+    // at `WorldObject_Magic.cs:361-365` with sendSelf=true (via the
+    // target.Wielder ?? target broadcaster), so the wire already delivers it to
+    // the LOCAL victim (self-buff / self-cast promoted per foundation §1.1) AND
+    // — via the known-players broadcast — to observers of a REMOTE victim, on
+    // the victim's guid. It arrives as 0xF755 → kind=30 → playEffect and renders
+    // through the same resolver (system.rs applies no self-filter). The
+    // projectile-hit gating (`!IsProjectile || projectileHit`) is server-side,
+    // so a bolt's TargetEffect fires at impact and arrives on the wire then. Do
+    // NOT synthesize it here — the earlier `damageDealt`-attribution TODO is
+    // moot (F3). Live render on both rigs still verified in the eye-test queue.
     // F8-2: don't fire the spell's success CasterEffect glow if the chain
     // was cancelled while the cast gesture was playing — a recast preempted
     // it, or a fizzle/UseDone bumped the token via cancelCastSequence().
@@ -6882,7 +7198,11 @@ export class EntityManager {
     // gesture's playGesture result isn't checked above, so control reaches
     // here even after a mid-cast cancel).
     if (inst._castSequenceToken !== token) return;
-    if ((seq.casterEffect | 0) !== 0) {
+    // WS09: the wire GameMessageScript already delivers CasterEffect to the
+    // local caster at server RELEASE; the synthetic chain-end emit is a
+    // double-fire. Gate it behind CAST_SYNTHETIC_CASTER_VFX (default ON =
+    // today; `?castSyntheticCasterVfx=off` = wire-only fix, pending E1/E2).
+    if (CAST_SYNTHETIC_CASTER_VFX && (seq.casterEffect | 0) !== 0) {
       try {
         if (
           typeof window !== "undefined" &&
@@ -6895,6 +7215,8 @@ export class EntityManager {
             scriptId: (seq.casterEffect | 0) >>> 0,
             speed: Number.isFinite(seq.formulaScale) ? +seq.formulaScale : 1.0,
           });
+          // WS16 diag: CasterEffect PlayScript emitted at chain end.
+          try { window.__diag?.cast?.onCasterEffect?.({ guid: g, scriptId: (seq.casterEffect | 0) >>> 0, scale: seq.formulaScale }); } catch (_) {}
         }
       } catch (err) {
         // Never let a CasterEffect spawn failure unwind the cast
@@ -6909,6 +7231,20 @@ export class EntityManager {
     // F8-4 — chain completed: clear the cast-busy window so the next cast
     // isn't gated.
     if (inst) inst._castBusyUntilMs = 0;
+    // WS16 diag: chain reached the cast-gesture end normally.
+    try { window.__diag?.cast?.onChainComplete?.({ guid: g }); } catch (_) {}
+    // WS14 — cast-lifecycle resolved (chain reached the cast-gesture end).
+    // Emitted for ANY caster; consumers filter on casterGuid === localGuid
+    // (mirrors spellCastInitiated.attackerGuid). Additive + no-op without a
+    // bus; clears the combat-bar cast-busy sweep. (Event names → WS16.)
+    try {
+      window.__pluginClient?.events?.emit?.("spellCastResolved", {
+        spellId: spellId >>> 0, casterGuid: guid >>> 0,
+      });
+    } catch (_) {}
+    // WS04 — chain completed naturally: close the local cast window so held-W
+    // resumes. Token-guarded (a preempting recast that re-stamped true wins).
+    __ws04clear();
   }
 
   // F8-4 — clear the cast-busy window for `guid` (a UseDone / WeenieError
@@ -6924,17 +7260,91 @@ export class EntityManager {
   // next token check breaks out (and the success CasterEffect glow is
   // suppressed via the guard before the synthetic emit), then drops the rig
   // back to its stance-Ready recoil so it doesn't freeze mid-windup.
-  cancelCastSequence(guid) {
+  cancelCastSequence(guid, cause) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return false;
     inst._castSequenceToken = ((inst._castSequenceToken | 0) + 1) | 0;
     inst._castBusyUntilMs = 0; // F8-4 — cancelled cast frees the busy window
+    // WS16 diag: tag the cancel cause (anim-break / fizzle / UseDone / recast).
+    try { window.__diag?.cast?.onChainCancel?.({ guid: guid >>> 0, cause: cause ?? "cancel" }); } catch (_) {}
+    // WS14 — cast-lifecycle rejected (fizzle / UseDone / recast preempt).
+    // Clears the combat-bar cast-busy sweep early. The server-side WeenieError
+    // toast (§1.4) is unchanged; this is the structured lifecycle signal.
+    try {
+      window.__pluginClient?.events?.emit?.("spellCastRejected", {
+        casterGuid: guid >>> 0, reason: "cancelled",
+      });
+    } catch (_) {}
+    // WS03 (?castOverlayGuard): a forward-edge anim-break HARD-CUTS the overlay and
+    // restores the base I suppressed (retail splice-replacement), instead of relying
+    // on the setMotion(Ready) crossFadeTo below — which misses a link-keyed
+    // _tryPlayLink overlay (not currentAction) and leaves stale suppression
+    // bookkeeping. Mirrors _cancelOneShotOverlays' teardown.
+    if (CAST_OVERLAY_GUARD) {
+      const ov = inst._baseSuppressAction;
+      if (ov) {
+        if (typeof ov.isRunning === "function" && ov.isRunning()) { try { ov.stop(); } catch (_) {} }
+        inst._baseSuppressAction = null;
+        const saved = inst._baseSuppressSaved; inst._baseSuppressSaved = null;
+        const cur = inst.actions?.get(inst._locoCycleKey);
+        if (cur && (typeof cur.isRunning !== "function" || cur.isRunning())) {
+          try { cur.setEffectiveWeight(saved && saved.savedWeight > 0 ? saved.savedWeight : 1.0); } catch (_) {}
+        }
+      }
+      // also stop a currentAction swing overlay that wasn't the suppressor (defensive).
+      if (
+        inst.currentActionKey && inst.currentActionKey.startsWith("swing:") &&
+        inst.currentAction && inst.currentAction !== inst._baseSuppressAction &&
+        typeof inst.currentAction.isRunning === "function" && inst.currentAction.isRunning()
+      ) {
+        try { inst.currentAction.stop(); } catch (_) {}
+      }
+    }
+    // WS12 (?castCancelStops, default OFF): retail REPLACES the spliced gesture on
+    // interrupt; our overlay otherwise keeps running and its trailing SoundTweaked
+    // windup-hum hooks (0x0A000390, frames 53/57) fire AFTER the fizzle. Stop the
+    // running cast/swing LoopOnce overlays so their hooks stop draining. Unlike the
+    // WS03 block above (suppressor + currentAction only) this walks EVERY action so
+    // it also catches link-keyed `_tryPlayLink` overlays that aren't currentAction.
+    // The base-cycle weight restore + tagged cancel-notify ride `_completeOverlay`
+    // (same path hookDrain / _cancelOneShotOverlays use). Already-stopped actions
+    // are skipped, so double-running with the WS03 block is a no-op.
+    if (CAST_CANCEL_STOPS && inst.actions && inst.mixer) {
+      for (const [key, action] of inst.actions) {
+        try {
+          if (!action || action.loop !== THREE.LoopOnce) continue;
+          if (typeof action.isRunning === "function" && !action.isRunning()) continue;
+          if (!(key.startsWith("swing:") || key.startsWith("link:"))) continue; // cast/attack overlays only
+          this._completeOverlay(inst, key, action, false);
+          action.stop();
+        } catch (_) { /* never block the cancel on overlay teardown */ }
+      }
+    }
     try {
       const stance = ((inst.currentStance ?? inst.lastStance ??
         (typeof window !== "undefined" ? window.__getCurrentStanceLow?.() : 0)) ?? 0) >>> 0;
       // CMD_LOW_READY (0x0003) high-bits preserved like setMotion's substitution.
       this.setMotion?.(guid >>> 0, 0x0003, stance, 1.0);
     } catch (_) { /* recoil is best-effort */ }
+    // WS04 (?castHoldReclaim) — the local cast window closes on fizzle /
+    // UseDone / recast preempt. The token bump at the top means any in-flight
+    // chain's token-guarded clear won't double-fire; this unconditionally
+    // closes the window for the LOCAL player (a following new cast re-stamps
+    // true after its own token bump). Clears the watchdog too. Placed at the
+    // tail so it doesn't push the overlay-guard block down the function.
+    const __ws04g = guid >>> 0;
+    if (
+      typeof window !== "undefined" &&
+      window.__sessionHandle &&
+      typeof window.getLocalPlayerGuid === "function" &&
+      typeof window.__sessionHandle.noteLocalCastWindow === "function"
+    ) {
+      const __lpg = window.getLocalPlayerGuid();
+      if (__lpg != null && (__ws04g === (__lpg >>> 0))) {
+        if (inst._ws04WindowTimer) { clearTimeout(inst._ws04WindowTimer); inst._ws04WindowTimer = 0; }
+        try { window.__sessionHandle.noteLocalCastWindow(false); } catch (_) {}
+      }
+    }
     return true;
   }
 
@@ -7124,24 +7534,82 @@ export class EntityManager {
     return Number.isFinite(signed) && signed !== 0 ? signed : 1.0;
   }
 
+  // WS01 (2026-07-12) — cheap link-miss / reliability counters. WS16 owns the
+  // final `window.__diag.cast` schema; this lazy-inits and merges so multiple
+  // workstreams can attach. Diag-only (no flag).
+  _castDiag(field) {
+    try {
+      if (typeof window === "undefined") return;
+      const d = (window.__diag || (window.__diag = {}));
+      const c = (d.cast || (d.cast = { attempts: 0, linkOrStanceMiss: 0, busyDropped: 0, echoSwallowed: 0 }));
+      c[field] = (c[field] | 0) + 1;
+    } catch (_) { /* diag must never break casting */ }
+  }
+
+  // WS01 (2026-07-12) — pre-bake every clip a cast chain will need so the
+  // per-gesture setSwingMotion hits a warm, promise-keyed cache (animation.js
+  // AnimationCache.get) instead of racing a cold bake against a 50ms sleep. Uses
+  // the SAME (setupId, mtableId, resolvedCommand, CAST_MAGIC_STANCE, fromMotion:
+  // Ready, subs) key the cast-path setSwingMotion will use, so the entries are
+  // reused verbatim. Await-capped so a slow/hung bake never blocks casting.
+  async _prefetchCastClips(guid, seq) {
+    const inst = this.entityMap.get(guid >>> 0);
+    const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
+    if (!inst || typeof fetchKeyframes !== "function" || !this.animationCache) return;
+    const setupId  = (inst.meta?.modelId ?? inst.meta?.setupId ?? 0) >>> 0;
+    const mtableId = (inst.meta?.mtableId ?? 0) >>> 0;
+    const opts = {
+      modelChanges:   inst.meta?.modelChanges ?? new Uint32Array(0),
+      textureChanges: inst.meta?.textureChanges ?? new Uint32Array(0),
+      paletteId:      (inst.meta?.paletteId ?? 0) >>> 0,
+      paletteSubsFlat: inst.meta?.subPalettes ?? new Uint32Array(0),
+      fromMotion: READY_SUBSTATE,
+    };
+    const gestures = [...(seq.windupGestures || [])];
+    if (seq.castGesture) gestures.push(seq.castGesture);
+    const toU32 = (m) => {
+      if (typeof m === "number") return m >>> 0;
+      const s = String(m); const p = (s.startsWith("0x") || s.startsWith("0X")) ? parseInt(s, 16) : parseInt(s, 10);
+      return Number.isFinite(p) && p >= 0 ? (p >>> 0) : 0;
+    };
+    const warms = [];
+    for (const gz of gestures) {
+      const c = window.__classifyMotionCommandTyped?.(mtableId, CAST_MAGIC_STANCE, toU32(gz.motion));
+      if (c && c.source === "wasm-link" && (c.resolvedCommand >>> 0) !== 0) {
+        warms.push(this.animationCache.get(setupId, mtableId, c.resolvedCommand >>> 0, CAST_MAGIC_STANCE, fetchKeyframes, opts).catch(() => {}));
+      }
+    }
+    if (!warms.length) return;
+    // Cap so a hung bake never blocks casting (~200ms is imperceptible vs a ~2s cast).
+    await Promise.race([Promise.all(warms), new Promise((r) => setTimeout(r, 200))]);
+  }
+
   /**
    * @param {number} guid
    * @param {number} motionCmd
-   * @param {{ holdAtPeak?: boolean }} [opts]
+   * @param {{ holdAtPeak?: boolean, speed?: number, stance?: number }} [opts]
    *   When `holdAtPeak` is true (Wave 4 / Phase 4.2), the clip plays
    *   from frame 0 to its peak frame (`durationSec * 0.5`), then
    *   pauses. Call `releaseSwingHold(guid)` to resume from peak to
    *   end. If `durationSec` isn't available (cache miss / coarse
    *   classification), the hold is silently downgraded to a normal
    *   one-shot swing — the visual still plays, just without the hold.
+   *   `opts.stance` (WS01) pins the MotionTable link lookup stance; a
+   *   falsy/absent value falls through to the entity's derived stance.
    */
   async setSwingMotion(guid, motionCmd, opts) {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return;
     const holdAtPeak = !!(opts && opts.holdAtPeak);
+    // WS01: a caller may pin the stance (the cast chain always uses Magic 0x0049)
+    // so a stale `inst.currentStance` (e.g. NonCombat, which carries NO magic
+    // gestures — DAT-verified vs player MT 0x09000001) can't make the from-Ready
+    // link lookup silently miss. A falsy/absent opts.stance falls through to the
+    // existing derivation, so every non-cast caller is byte-identical.
     const stance =
-      ((inst.currentStance ?? inst.lastStance ?? (typeof window !== "undefined" ? window.__getCurrentStanceLow?.() : 0)) ?? 0) >>> 0;
+      (((opts && opts.stance) ? (opts.stance >>> 0) : 0) ||
+       ((inst.currentStance ?? inst.lastStance ?? (typeof window !== "undefined" ? window.__getCurrentStanceLow?.() : 0)) ?? 0)) >>> 0;
     const setupId = (inst.meta?.modelId ?? inst.meta?.setupId ?? 0) >>> 0;
     const mtableId = (inst.meta?.mtableId ?? 0) >>> 0;
     const result = classifyMotionCommandTyped(mtableId, stance, motionCmd >>> 0);
@@ -7166,6 +7634,24 @@ export class EntityManager {
       (result.resolvedCommand >>> 0) !== 0 &&
       result.source === "wasm-link";
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
+    // WS16 diag: record the link outcome per (stance, gesture-id). Miss-reason
+    // is derived from the same predicate the play-gate uses — no behavior change.
+    try {
+      if (window.__diag?.cast?.onLinkResolve) {
+        let reason = null;
+        if (canPlayReal && typeof fetchKeyframes === "function") reason = null;         // hit (pending fetch)
+        else if (!stance) reason = "stance-falsy";
+        else if (result?.source !== "wasm-link") reason = "not-wasm-link";
+        else if (result?.kind !== "swing" && result?.kind !== "cast") reason = "kind-mismatch";
+        else if ((result?.resolvedCommand >>> 0) === 0) reason = "resolved-zero";
+        else if (typeof fetchKeyframes !== "function") reason = "no-fetchKeyframes";
+        window.__diag.cast.onLinkResolve({
+          guid: g, cmd: (motionCmd >>> 0), stance, mtableId,
+          outcome: (canPlayReal && typeof fetchKeyframes === "function") ? "hit" : "miss",
+          reason,
+        });
+      }
+    } catch (_) {}
     if (!canPlayReal || typeof fetchKeyframes !== "function") {
       // Missile / aim-level fire is a CYCLE (class 0x40) the links-only gate
       // above can't resolve. Under ?unifiedMotion, route it through the Rust
@@ -7322,9 +7808,19 @@ export class EntityManager {
         " dur=" + dur.toFixed(2) + "s (pause at " + (peakMs / 1000).toFixed(2) + "s)",
       );
     } else {
+      // WS02: the clip plays at `swingSpeed` (CAST_SPEED=2.0 for casts, above),
+      // so it FINISHES at dur/swingSpeed real seconds. Restoring at the
+      // un-scaled `dur` held the clamped final cast frame ~dur/2 too long (a
+      // mushy half-blend vs the restored base once the clip actually ended).
+      // Divide by the effective speed so Ready-restore fires when the clip ends
+      // (retail returns to Ready ~one cast-gesture-length after the gesture
+      // starts — FinishCast). Melee (swingSpeed=1.0) is byte-identical. Gated
+      // with the loop.js dedup for one-toggle rollback.
+      const _effSpeed = (CAST_GESTURE_PARITY_ON && Number.isFinite(swingSpeed) && swingSpeed > 0)
+        ? swingSpeed : 1.0;
       const restoreDelayMs = Math.max(
         80,
-        Math.round(((Number.isFinite(dur) && dur > 0) ? dur : (clip.duration || 0.4)) * 1000),
+        Math.round((((Number.isFinite(dur) && dur > 0) ? dur : (clip.duration || 0.4)) * 1000) / _effSpeed),
       );
       inst._swingRestoreTimer = setTimeout(() => {
         inst._swingRestoreTimer = null;
@@ -8140,6 +8636,44 @@ export class EntityManager {
       && prevStance !== 0
       && stance !== prevStance;
     const crossfadeDuration = isStanceReadyChange ? 0.15 : CROSSFADE_S;
+    // WS03 (?castOverlayGuard): a locomotion base swap must not STOP an in-flight
+    // cast/swing overlay (= movement breaks the cast). When an overlay is actively
+    // suppressing the base, install the new base UNDER it at weight 0 and keep the
+    // overlay (= currentAction) untouched, then return WITHOUT crossFadeTo (whose
+    // hard-cut would .stop() the overlay). A same-cycle re-issue (pump reclaim of
+    // the held gait) is a clean no-op. A forward-edge anim-break stops the overlay
+    // via cancelCastSequence (H3) BEFORE this runs (Rust evict-before-drive, F9), so
+    // by the time a real forward re-base reaches here the overlay is already gone.
+    if (
+      CAST_OVERLAY_GUARD &&
+      inst._baseSuppressAction &&
+      typeof inst._baseSuppressAction.isRunning === "function" &&
+      inst._baseSuppressAction.isRunning() &&
+      inst._baseSuppressAction !== action &&
+      (cls === "walk" || cls === "run" || cls === "idle")
+    ) {
+      if (cacheKey === inst._locoCycleKey) {
+        // same base cycle still driving under the overlay — leave it suppressed.
+        try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
+        return;
+      }
+      const prevKey = inst._locoCycleKey;
+      if (prevKey && prevKey !== cacheKey) {
+        const prev = inst.actions?.get(prevKey);
+        if (prev && prev !== action) { try { prev.stop(); } catch (_) {} }
+      }
+      try { action.reset(); } catch (_) {}
+      action.enabled = true;
+      action.setEffectiveWeight(0);               // suppressed under the overlay
+      action.play();
+      inst._locoCycleKey = cacheKey;              // restore (H1) will target this
+      if (!VEL_SCALE_ON) {
+        const ms = (inst._motionSpeed ?? 1.0) * (inst._motionSpeedSign ?? 1);
+        if (ms !== 1.0) { try { action.setEffectiveTimeScale(ms); } catch (_) {} }
+      }
+      try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
+      return;
+    }
     inst.crossFadeTo(action, cacheKey, crossfadeDuration);
     // A1 (2026-05-29): apply the server's per-motion playback speed to the
     // locomotion cycle. When ?velScale=on, the per-frame T11 tick owns
@@ -8457,6 +8991,19 @@ export class EntityManager {
       omegaZ: upd.omegaZ ?? 0,
     };
     inst.lastVelMs = typeof performance !== "undefined" ? performance.now() : 0;
+    // WS10 (2026-07-12): ACE streams NO in-flight UpdatePosition/VectorUpdate for a
+    // PhysicsState::MISSILE object — the ONLY VectorUpdate a projectile ever receives is
+    // the impact zero-velocity stop (SpellProjectile.ProjectileImpact →
+    // GameMessageVectorUpdate, SpellProjectile.cs:237-238). So any VectorUpdate on a
+    // ballistic projectile IS the impact: stop self-integrating, else _ballisticGravity
+    // keeps decaying vz and the (NoDraw'd) husk sinks through the world for its 5 s
+    // pre-Destroy window. Gated on the projectile classification so a normal remote-entity
+    // dead-reckon VectorUpdate is untouched. `?projectileImpactStop=off` restores the
+    // (masked-by-NoDraw) legacy behavior byte-identically.
+    if (PROJECTILE_IMPACT_STOP_ON && inst._ballistic && this.isProjectile(upd.guid >>> 0)) {
+      inst._ballistic = false;
+      inst._ballisticGravity = false;
+    }
   }
 
   /**
@@ -9855,13 +10402,27 @@ export class EntityManager {
       const onFinished = (e) => {
         if (e.action !== overlayAction) return;
         try { mixer.removeEventListener("finished", onFinished); } catch (_) {}
-        if (inst._baseSuppressAction === overlayAction) inst._baseSuppressAction = null;
-        // Restore only if the loco cycle is still this same action (a motion
-        // change may have swapped it; the old action is then irrelevant and
-        // already faded out).
-        const cur = inst.actions?.get(inst._locoCycleKey);
-        if (cur === baseAction) {
-          try { baseAction.setEffectiveWeight(savedWeight > 0 ? savedWeight : 1.0); } catch (_) {}
+        if (CAST_OVERLAY_GUARD) {
+          // WS03 (?castOverlayGuard): only THIS overlay's still-active suppression
+          // may restore — an anim-break or a superseding overlay already cleared
+          // the marker, so a late/stale `finished` is inert (no double-touch).
+          if (inst._baseSuppressAction !== overlayAction) return;
+          inst._baseSuppressAction = null;
+          // Swap-safe: restore whatever loco cycle is CURRENT (a mid-cast base
+          // swap repointed _locoCycleKey via H2), not the captured baseAction.
+          const cur = inst.actions?.get(inst._locoCycleKey);
+          if (cur && (typeof cur.isRunning !== "function" || cur.isRunning())) {
+            try { cur.setEffectiveWeight(savedWeight > 0 ? savedWeight : 1.0); } catch (_) {}
+          }
+        } else {
+          if (inst._baseSuppressAction === overlayAction) inst._baseSuppressAction = null;
+          // Restore only if the loco cycle is still this same action (a motion
+          // change may have swapped it; the old action is then irrelevant and
+          // already faded out).
+          const cur = inst.actions?.get(inst._locoCycleKey);
+          if (cur === baseAction) {
+            try { baseAction.setEffectiveWeight(savedWeight > 0 ? savedWeight : 1.0); } catch (_) {}
+          }
         }
       };
       mixer.addEventListener("finished", onFinished);
@@ -10005,13 +10566,27 @@ export class EntityManager {
         const saved = inst._baseSuppressSaved;
         inst._baseSuppressSaved = null;
         if (saved && saved.baseAction) {
-          const cur = inst.actions?.get(inst._locoCycleKey);
-          if (cur === saved.baseAction) {
-            try {
-              saved.baseAction.setEffectiveWeight(
-                saved.savedWeight > 0 ? saved.savedWeight : 1.0
-              );
-            } catch (_) {}
+          if (CAST_OVERLAY_GUARD) {
+            // WS03 (?castOverlayGuard): swap-safe — restore whatever loco cycle
+            // is CURRENT (H2 may have installed a new base under the overlay and
+            // repointed _locoCycleKey), not the originally-captured baseAction.
+            const cur = inst.actions?.get(inst._locoCycleKey);
+            if (cur && (typeof cur.isRunning !== "function" || cur.isRunning())) {
+              try {
+                cur.setEffectiveWeight(
+                  saved.savedWeight > 0 ? saved.savedWeight : 1.0
+                );
+              } catch (_) {}
+            }
+          } else {
+            const cur = inst.actions?.get(inst._locoCycleKey);
+            if (cur === saved.baseAction) {
+              try {
+                saved.baseAction.setEffectiveWeight(
+                  saved.savedWeight > 0 ? saved.savedWeight : 1.0
+                );
+              } catch (_) {}
+            }
           }
         }
       }
@@ -10343,6 +10918,60 @@ export class EntityManager {
       let bucket = this._particleEmittersForGuid.get(guid);
       if (!bucket) { bucket = []; this._particleEmittersForGuid.set(guid, bucket); }
       for (const id of ids) bucket.push(id);
+    }
+  }
+
+  // WS09 (2026-07-12) — fire ONE decoded audio hook from a wire PlayEffect
+  // (play_effect_vfx.js `_tryResolveRealVfx`) through the SAME sound sink the
+  // H2 gesture/spawn walker uses (this method's sibling above,
+  // entities.js:~10762 Sound/SoundTweaked + ~10857 SoundTable). The resolver
+  // decodes the PhysicsScriptEntryJs into a plain `desc` synchronously (the
+  // wasm entry object may be reclaimed before a deferred fire) and hands it
+  // here; this method owns the StartTime scheduling + the audioManager /
+  // soundTableCache lookups so the wire path reuses the validated sink instead
+  // of duplicating it. `desc`:
+  //   { hookType, startTime, soundWaveId, soundEnum, soundProbability,
+  //     soundVolume }  (hookType ∈ {1 Sound, 2 SoundTable, 21 SoundTweaked}).
+  // Guarded so the entity vanishing mid-delay drops the fire (no ghost sound).
+  _firePlayEffectSoundHook(guid, desc) {
+    if (!desc) return;
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst) return;
+    const rig = inst.root;
+    const audioMgr = this.scene3d?.audioManager;
+    const ht = desc.hookType | 0;
+    const delayMs = Math.max(0, (+desc.startTime || 0) * 1000);
+    if (ht === 1 || ht === 21) {
+      if (!audioMgr) return;
+      const waveId = (desc.soundWaveId >>> 0);
+      if (waveId === 0) return;
+      const probability = Number.isFinite(desc.soundProbability)
+        ? desc.soundProbability : 1.0;
+      const volume = desc.soundVolume > 0 ? desc.soundVolume : 1.0;
+      // Coin-flip on probability (only SoundTweaked carries != 1.0).
+      if (!(probability >= 1.0 || Math.random() < probability)) return;
+      setTimeout(() => {
+        if (!this.entityMap.has(guid >>> 0)) return;
+        // Transform the entity's RAW AC-frame position into the three.js frame
+        // the AudioContext listener lives in (acToThree), same as the H2 arm.
+        const pos = rig?.position ?? { x: 0, y: 0, z: 0 };
+        const a4t = acToThree(pos.x, pos.y, pos.z);
+        audioMgr
+          .play(waveId, { x: a4t[0], y: a4t[1], z: a4t[2] }, { gain: volume, followGuid: (guid >>> 0) })
+          .catch(() => {});
+      }, delayMs);
+      return;
+    }
+    if (ht === 2) {
+      const soundEnum = (desc.soundEnum >>> 0);
+      if (soundEnum === 0) return;
+      const cache = this.scene3d?.soundTableCache ?? null;
+      setTimeout(() => {
+        if (!this.entityMap.has(guid >>> 0)) return;
+        // Adapter mirrors the AnimationHookJs shape `_fireHook` reads (same as
+        // the H2 SoundTable arm), resolving inst.soundTableDid via the cache.
+        this._fireHook(inst, { hookType: 2, soundEnum, time: +desc.startTime }, audioMgr, cache);
+      }, delayMs);
     }
   }
 
@@ -12763,7 +13392,23 @@ export class EntityManager {
       // SoundTable to get a Wave DID + per-row volume.
       const soundEnum = hook.soundEnum >>> 0;
       if (soundEnum === 0 || !cache || !audioMgr) return;
-      const stbDid = inst.soundTableDid >>> 0;
+      let stbDid = inst.soundTableDid >>> 0;
+      // WS12 (2026-07-12): mirror the 0xF750 GMSound + wasm-spawn local-player
+      // fallback (index.html local-player 0x20000001 backfill / lib.rs
+      // is_local_player humanoid default) — the local player's Setup is a
+      // clothing composite that often omits default_sound_table, so a stale pkg
+      // (or a spawn path that seeds 0) leaves player SoundTable(2) anim hooks
+      // (emotes etc.) silent until the first GMSound. Backfill to the canonical
+      // humanoid table for the LOCAL player ONLY; remote entities keep 0 =
+      // genuinely no SoundTable. Cannot regress a non-zero table (guarded on 0).
+      if (stbDid === 0) {
+        const lpg = (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function")
+          ? (window.getLocalPlayerGuid() >>> 0) : 0;
+        if (lpg && (inst.guid >>> 0) === lpg) {
+          inst.soundTableDid = 0x20000001;
+          stbDid = 0x20000001;
+        }
+      }
       if (stbDid === 0) {
         // No SoundTable on this entity's weenie. Silent no-op — this
         // is a normal outcome for entities whose animations carry

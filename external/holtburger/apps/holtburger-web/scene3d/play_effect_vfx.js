@@ -923,11 +923,19 @@ function _spawnCubeBurst(
 /**
  * Weighted-mod pick: from a list of `{mod, scriptDid}` entries in
  * ascending `mod` order, return the FIRST entry where
- * `speed <= entry.mod`. If no entry satisfies that condition (the
- * incoming `speed` exceeds every mod threshold), clamp to the LAST
- * entry (greatest mod) — this matches retail's overflow behavior at
- * `acclient.c:336552 PhysicsScriptTableData::GetScript`, which returns
- * the final entry when the linear walk runs off the end.
+ * `speed <= entry.mod`. This is the retail script-SELECTION walk at
+ * `acclient.c:336552 PhysicsScriptTableData::GetScript` — `speed` is the
+ * `mod` THRESHOLD selector (spell.Formula.Scale, one grade per spell
+ * level), NOT a playback rate. WS09 (2026-07-12) re-verified 27/27
+ * decomp-parity over the reachable domain.
+ *
+ * Overflow: if the incoming `speed` exceeds every mod threshold we clamp
+ * to the LAST entry (greatest mod). This DIVERGES from the decomp, which
+ * returns the global default id 0 ("no script") when the walk runs off the
+ * end — but the divergence is UNREACHABLE for real casts: every DAT ladder
+ * tops out at mod 1.0 and the max spell Formula.Scale is 1.0, so `speed`
+ * never exceeds the tail. The clamp is kept intentionally: a non-empty
+ * burst is a friendlier failure than silence for the unreachable case.
  *
  * @param {Array<{mod: number, scriptDid: number}>} entries — ascending
  *   by `mod`; caller is responsible for sort invariant (the Rust-side
@@ -1156,6 +1164,9 @@ const _realVfxStats = {
   missNoParticleManager: 0,
   // Track B7 — resolver exceeded the hard deadline; placeholder kept.
   timedOut: 0,
+  // WS09 — audio hooks (Sound/SoundTable/SoundTweaked) routed to the entity
+  // sound sink from a wire PlayScript (only bumped when `?playEffectSound=on`).
+  soundHooksFired: 0,
 };
 
 /**
@@ -1275,8 +1286,10 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
     return false;
   }
 
-  // 5. Weighted pick — acclient.c:336552. `speed` is the incoming
-  //    wire mod-weight (Phase 53; was discarded prior to this phase).
+  // 5. Weighted pick — acclient.c:336552. `speed` is the incoming wire
+  //    mod-weight (Phase 53; was discarded prior to this phase). WS09 note:
+  //    `speed` is the GetScript SELECTION mod (spell.Formula.Scale), NOT a
+  //    playback rate — the name is a misnomer; it is used ONLY for selection.
   const picked = pickScriptEntry(entries, speed);
   if (!picked || (picked.scriptDid >>> 0) === 0) {
     _realVfxStats.missNoScriptId += 1;
@@ -1304,13 +1317,57 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed) {
   }
 
   // 7. Iterate hooks; only CreateParticle (hook_type 13) and
-  //    CreateBlockingParticle (hook_type 26) spawn particles. The other
-  //    hook types (Sound=1, SoundTweaked=21, etc.) are handled by the
-  //    H2 entity chain walker, not the PlayEffect one-shot path.
+  //    CreateBlockingParticle (hook_type 26) spawn particles. Audio hooks
+  //    (Sound=1, SoundTable=2, SoundTweaked=21) are fired by the WS09
+  //    `?playEffectSound` branch just below (the H2 entity chain walker only runs
+  //    for entity-SPAWN scripts, NOT this wire PlayEffect one-shot path — the
+  //    old "handled by H2" claim here was wrong for wire PlayEffects).
   //
   //    `PhysicsScriptJs.takeEntries()` drains the entry list across
   //    the wasm boundary — call once and iterate the JS-side array.
   const entriesJs = ps.takeEntries();
+
+  // WS09 (2026-07-12) — fire the script's AUDIO hooks (Sound 1 / SoundTable 2 /
+  // SoundTweaked 21) alongside the particles. Retail wire PlayScripts carry
+  // these (Fizzle 0x33000103 = CreateParticle + SoundTable), but this resolver
+  // historically spawned particle hooks only, so fizzle / cast cues / projectile
+  // Launch+Explode all played SILENT. Run this ABOVE the `particleHookCount ===
+  // 0` early-return below (WS09-verify mustFix #2) so a SOUND-ONLY wire
+  // PlayScript still plays. Decode the primitives synchronously (the wasm entry
+  // object may be reclaimed before the deferred fire) and hand a plain `desc` to
+  // the EntityManager helper, which owns StartTime scheduling + the sound sink
+  // (same path as the H2 gesture/spawn walker). Default OFF (`?playEffectSound=
+  // on`); off = byte-identical (whole branch skipped).
+  if (PLAY_EFFECT_SOUND_ON && typeof em._firePlayEffectSoundHook === "function") {
+    for (const e of entriesJs) {
+      const ht = e.hookType | 0;
+      if (ht !== 1 && ht !== 2 && ht !== 21) continue;
+      const desc = {
+        hookType: ht,
+        startTime: +e.startTime || 0,
+        soundWaveId: (e.soundWaveId >>> 0),
+        soundProbability: Number.isFinite(e.soundProbability) ? e.soundProbability : 1.0,
+        soundVolume: e.soundVolume > 0 ? e.soundVolume : 1.0,
+        soundEnum: 0,
+      };
+      if (ht === 2) {
+        // SoundTable: soundEnum = u32 LE @ hook_data[0..4]. PhysicsScriptEntryJs
+        // exposes no soundEnum getter, so decode from the raw body exactly as
+        // the H2 walker does (entities.js:~10858).
+        const bytes = e.hookData;
+        if (bytes && bytes.byteLength >= 4) {
+          const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+          desc.soundEnum = dv.getUint32(0, true) >>> 0;
+        }
+        if (desc.soundEnum === 0) continue;
+      } else if (desc.soundWaveId === 0) {
+        continue;
+      }
+      _realVfxStats.soundHooksFired += 1;
+      em._firePlayEffectSoundHook(targetGuid >>> 0, desc);
+    }
+  }
+
   let particleHookCount = 0;
   for (const e of entriesJs) {
     if (e.hookType === 13 || e.hookType === 26) {
@@ -1662,6 +1719,28 @@ const CAST_VFX_DEDUP_ON = (() => {
   }
 })();
 const _CAST_VFX_DEDUP_MS = 2000;
+// WS09 (2026-07-12) — `?playEffectSound=on` (DEFAULT OFF). The PlayEffect
+// resolver spawned particle hooks (13/26) ONLY, dropping the Sound(1)/
+// SoundTable(2)/SoundTweaked(21) hooks carried by wire PlayScripts — so fizzle
+// (0x33000103 = CreateParticle + SoundTable), cast cues, and projectile
+// Launch/Explode all played SILENT. When on, those hooks fire through the
+// entity's soundTableCache / audioManager via
+// `EntityManager._firePlayEffectSoundHook` — the SAME sink the H2 gesture/
+// spawn walker uses (entities.js:~10762/~10857). Runs ABOVE the
+// `particleHookCount === 0` early-return below so a SOUND-ONLY script still
+// plays (WS09-verify mustFix #2). Default OFF pending an ear-test; off =
+// byte-identical (the whole branch is skipped). Coordinate WS08 — WS08 owns
+// the fizzle cancel+toast (kind=13), WS09 owns the fizzle particle+sound from
+// the wire Fizzle script (kind=30); WS08 must NOT double the fizzle sound.
+const PLAY_EFFECT_SOUND_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search)
+      .get("playEffectSound")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+})();
 // Survey A11-S0 (2026-06-11): default-off `?blockingParticleParity=on`.
 // Mirrors entities.js BLOCKING_PARTICLE_PARITY_ON. When on, hook 26
 // (CreateBlockingParticle) takes retail blocking semantics

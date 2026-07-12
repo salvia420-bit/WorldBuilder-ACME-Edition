@@ -1,3 +1,5 @@
+import { castPrecheckMode, preCheckSpell } from "./ac_cast_precheck.js";
+
 // Spell-cast dispatcher (Rec #13, 2026-06-16). Tries the plugin-client
 // path first (window.__pluginClient.player.castSpell) and falls back to
 // the wasm SessionHandle's castUntargetedSpell / castTargetedSpell when
@@ -49,6 +51,25 @@ export function castSpellViaHandle(spellId, targetGuid) {
   const sid = (spellId >>> 0) || 0;
   if (!sid) return false;
   const tgt = (targetGuid == null) ? null : ((targetGuid >>> 0) || 0);
+  // WS14 — optional client pre-cast checks (?castPrecheck, default-OFF). Retail
+  // gated COMPONENTS client-side before the send (acclient.c:404710); mana was
+  // server-only, so the mana arm (=on) is a deliberate non-retail add. Fail-open
+  // (missing data → allow the send): only a POSITIVELY-determined miss blocks.
+  // When OFF (default) this is a no-op and behaviour is byte-identical.
+  try {
+    const pc = castPrecheckMode();
+    if (pc !== "off") {
+      const fail = preCheckSpell(sid, pc);
+      if (fail) {
+        const bus = (typeof window !== "undefined") ? window.__pluginClient?.events : null;
+        // clientActionRejected → rejection_feedback.js renders the retail
+        // string on the shared toast surface (same as the server-reject path).
+        try { bus?.emit?.("clientActionRejected", { message: fail }); } catch (_) {}
+        try { bus?.emit?.("spellCastRejected", { spellId: sid, casterGuid: (window.getLocalPlayerGuid?.() ?? 0) >>> 0, reason: fail }); } catch (_) {}
+        return false; // do NOT send — send stays authoritative only when the flag is off
+      }
+    }
+  } catch (_) { /* a precheck fault never blocks the cast — fail-open */ }
   try {
     const client = (typeof window !== "undefined") ? window.__pluginClient : null;
     if (typeof client?.player?.castSpell === "function") {

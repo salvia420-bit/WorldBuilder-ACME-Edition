@@ -324,6 +324,16 @@ pub(crate) trait InterpreterSeams {
     fn player_motions_pending(&self) -> bool;
     /// `CPhysicsObj::IsMovingTo(player)` (acclient.c:717608).
     fn player_is_moving_to(&self) -> bool;
+    /// WS04 (`?castHoldReclaim`) — true while a known LOCAL cast chain is in
+    /// flight AND grounded AND the flag is on; the `use_time` FU-A reclaim
+    /// then holds the FORWARD axis dead across the whole chain (strafe/turn
+    /// still reclaim). NOT a retail seam — a holtburger extension over the
+    /// JS-stamped cast window. Default impl is `false` (the const-default
+    /// OFF and the non-system test seams); the system seam reads the cast
+    /// window. Default OFF ⇒ byte-identical to today.
+    fn local_cast_forward_lock_active(&self) -> bool {
+        false
+    }
     /// `CPhysicsObj::report_exhaustion(player)` (acclient.c:717623).
     fn player_report_exhaustion(&mut self);
     /// `CPhysicsObj::TurnToHeading(player, &params)` (P07, decl :6459 →
@@ -482,6 +492,13 @@ pub(crate) struct CommandInterpreter {
     /// P15 dual-run pins are unaffected (they compare dispatch
     /// outcomes, not this ledger).
     pub(crate) effects: Vec<InterpEffect>,
+    /// WS04 (`?castHoldReclaim`) — set true ONLY around the `use_time` FU-A
+    /// reclaim while the cast forward lock is active; read by
+    /// [`Self::apply_current_movement`]'s forward axis to hold Ready instead
+    /// of replaying the held substate head. Never persists past the scoped
+    /// reclaim (reset immediately after). Default false ⇒ off ⇒
+    /// byte-identical to today.
+    pub(crate) forward_reclaim_locked: bool,
 }
 
 /// Step-5 renderer/effect stream entries (PLAN rows 12-13).
@@ -551,6 +568,7 @@ impl CommandInterpreter {
             honor_autonomy_latch: true,
             slidecast_persist: true,
             effects: Vec::new(),
+            forward_reclaim_locked: false,
         }
     }
 
@@ -833,7 +851,13 @@ impl CommandInterpreter {
                 || self.sidestep_list.get_head().is_some()
                 || self.auto_run)
         {
+            // WS04 (?castHoldReclaim) — hold the FORWARD axis dead across the
+            // whole cast chain; the reclaim still returns control + revives
+            // turn/sidestep. Scoped to this single reclaim (reset right
+            // after). Default OFF ⇒ seam returns false ⇒ no-op.
+            self.forward_reclaim_locked = seams.local_cast_forward_lock_active();
             self.take_control_from_server(seams, true);
+            self.forward_reclaim_locked = false;
         }
     }
 
@@ -1054,7 +1078,16 @@ impl CommandInterpreter {
             return;
         }
         // ── forward axis ──
-        if self.auto_run {
+        if self.forward_reclaim_locked {
+            // WS04 (?castHoldReclaim): the cast chain owns the forward slot
+            // at zero locomotion — keep it dead (Ready), do NOT replay the
+            // held substate head (nor the auto_run re-issue). The substate
+            // head stays in the list for later revival (a fresh forward edge
+            // or window end). Turn/sidestep below re-apply normally. This
+            // Ready emit is byte-identical to the `!transient_state` fallback
+            // just below (`apply_axis(MOTION_READY) → drive.forward = None`).
+            self.move_player(seams, MOTION_READY, 1, 1.0, 0, 0);
+        } else if self.auto_run {
             let speed = self.autorun_speed;
             self.move_player(seams, MOTION_WALK_FORWARD, 1, speed, 1, 1);
         } else if self.substate_list.get_head().is_some() {
@@ -1858,6 +1891,7 @@ mod tests {
         objcell_id: u32,
         frame_equals: bool,
         plane_equals: bool,
+        cast_forward_lock: bool,
     }
 
     impl Default for Mock {
@@ -1880,6 +1914,7 @@ mod tests {
                 objcell_id: 0,
                 frame_equals: true,
                 plane_equals: true,
+                cast_forward_lock: false,
             }
         }
     }
@@ -1933,6 +1968,9 @@ mod tests {
         }
         fn player_is_moving_to(&self) -> bool {
             self.is_moving_to
+        }
+        fn local_cast_forward_lock_active(&self) -> bool {
+            self.cast_forward_lock
         }
         fn player_report_exhaustion(&mut self) {
             self.log.push(Op::ReportExhaustion);
@@ -2791,5 +2829,82 @@ mod tests {
     #[test]
     fn emote_pair_list_is_the_verified_91() {
         assert_eq!(EMOTE_INPUT_ACTION_PAIRS.len(), 91);
+    }
+
+    // ---- WS04 (?castHoldReclaim) ------------------------------------------
+
+    /// WS04 — with the cast forward lock active, the `use_time` reclaim
+    /// returns control + revives held turn/sidestep BUT holds the forward
+    /// axis at Ready (dead). The seam reports the lock via `cast_forward_lock`.
+    #[test]
+    fn cast_hold_reclaim_suppresses_forward_revival_only() {
+        let mut it = CommandInterpreter::new(0.0);
+        it.set_smartbox(true, true);
+        it.controlled_by_server = true;
+        // Held W (forward substate head) + held strafe-right (an edge press
+        // seeds each list head).
+        it.substate_list.add_command(MOTION_WALK_FORWARD, 1.0, false, 0);
+        it.sidestep_list.add_command(MOTION_SIDESTEP_RIGHT, 1.0, false, 0);
+        let mut m = Mock {
+            motions_pending: false,
+            cast_forward_lock: true,
+            ..Default::default()
+        };
+        it.use_time(&mut m);
+        // Forward axis: NO held forward key revives — the substate head is
+        // NOT replayed as a WalkForward press.
+        let fwd_revived = m.log.iter().any(|op| {
+            matches!(op, Op::DoMotion { cmd, .. } if *cmd == MOTION_WALK_FORWARD)
+        });
+        assert!(
+            !fwd_revived,
+            "forward held key must NOT revive under the cast lock"
+        );
+        // The forward axis instead emits a Ready press (dead).
+        let ready = m
+            .log
+            .iter()
+            .any(|op| matches!(op, Op::DoMotion { cmd, .. } if *cmd == MOTION_READY));
+        assert!(ready, "forward axis emits Ready (dead) under the lock");
+        // Held strafe still revives (slidecast semantics preserved).
+        let side = m.log.iter().any(|op| {
+            matches!(op, Op::DoMotion { cmd, .. } if *cmd == MOTION_SIDESTEP_RIGHT)
+        });
+        assert!(
+            side,
+            "held strafe still reclaims (slidecast semantics preserved)"
+        );
+        // Control still returns to the player.
+        assert!(
+            !it.controlled_by_server,
+            "control still returns to the player"
+        );
+        // The scoped flag never persists past the reclaim.
+        assert!(
+            !it.forward_reclaim_locked,
+            "forward_reclaim_locked resets immediately after the scoped reclaim"
+        );
+    }
+
+    /// WS04 — lock OFF (no window / flag off) → the existing per-node revival
+    /// stands (regression floor: byte-identical to today when the flag is off).
+    #[test]
+    fn cast_hold_reclaim_off_preserves_use_time_revival() {
+        let mut it = CommandInterpreter::new(0.0);
+        it.set_smartbox(true, true);
+        it.controlled_by_server = true;
+        it.substate_list.add_command(MOTION_WALK_FORWARD, 1.0, false, 0);
+        let mut m = Mock {
+            motions_pending: false,
+            cast_forward_lock: false,
+            ..Default::default()
+        };
+        it.use_time(&mut m);
+        assert!(
+            m.log.iter().any(|op| {
+                matches!(op, Op::DoMotion { cmd, .. } if *cmd == MOTION_WALK_FORWARD)
+            }),
+            "flag-off: held-W revives via use_time exactly as today"
+        );
     }
 }

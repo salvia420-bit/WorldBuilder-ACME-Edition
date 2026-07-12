@@ -1370,6 +1370,7 @@
       import { getCombatManeuver } from "./ui/ac_combat_maneuver.js";
       import { inferAttackTypeForWeapon, ATTACK_TYPE } from "./ui/ac_attack_type_for_weapon.js";
       import { getAimLevelForVelocity } from "./ui/ac_aim_level_for_velocity.js";
+      import { isTerminalCastReject } from "./ui/cast_reject_policy.js";
       // D4-NEW-1 (2026-06-05): AC(Z-up)→three(Y-up) frame transform for the
       // SoundTriggered (0xF750 GameMessageSound) positional-audio handler below.
       // `inst.root.position` holds RAW AC-frame coords (the worldRoot -π/2
@@ -2120,6 +2121,13 @@
                 movementPendingMotionsDiag: () =>
                   __hbWasmNs.movementPendingMotionsDiag() >>> 0,
               }
+            : {}),
+          // WS16 diag rider (2026-07-12; rides v6, no manifest bump): autonomy
+          // latch + interpreter forward-slot occupancy packed into one u32.
+          // Consumed by __diag.cast.movementSnapshot(); typeof-guarded so a
+          // stale pkg/ yields `undefined` and the JS surface reads null.
+          ...(typeof __hbWasmNs?.castArbitrationDiag === "function"
+            ? { castArbitrationDiag: () => __hbWasmNs.castArbitrationDiag() >>> 0 }
             : {}),
           // Bug-A round-2 diags (2026-07-03) — same contract as above:
           // diagnostics-only riders for capture harnesses.
@@ -7630,7 +7638,7 @@
                 // touching the local-player path.
                 if (window.__pluginClient?.events) {
                   const guid = (evt.u32Payload ?? 0) >>> 0;
-                  const count = (evt.u32Payload_2 ?? 0) >>> 0;
+                  const count = (evt.u32Payload2 ?? 0) >>> 0;
                   if (guid !== 0) {
                     window.__pluginClient.events.emit("entityEnchantmentsUpdated", {
                       guid,
@@ -7827,15 +7835,44 @@
                 }
                 // F8-2: a fizzle (YourSpellFizzled = 0x0402) cancels the
                 // local cast-gesture chain so the character doesn't finish
-                // the windup and flash the spell's success glow. Default-off
-                // (?castFizzle=on), pending a 1070 eye-test.
+                // the windup and flash the spell's success glow. Default-ON
+                // (`?castFizzle=off` escape).
                 if (errCode === 0x0402) {
                   try {
                     if (new URLSearchParams(window.location.search).get("castFizzle") !== "off") {
                       const em = window.liveScene3d?.entityManager;
                       const lg = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+                      // WS16 diag: fizzle (WeenieError 0x0402) landed.
+                      try { window.__diag?.cast?.onFizzle?.({ guid: lg }); } catch (_) {}
                       if (em && lg && typeof em.cancelCastSequence === "function") {
-                        em.cancelCastSequence(lg);
+                        em.cancelCastSequence(lg, "fizzle");
+                      }
+                    }
+                  } catch (_) {}
+                }
+                // F8-6 (WS08 2026-07-12): a server cast-REJECT (UseDone(error) ->
+                // kind=13) ends the cast. Retail's UseDone handler decrements the
+                // busy count for ANY error (acclient.c:401931 m_cBusy--), so a
+                // rejected cast must (a) stop finishing its optimistic windup /
+                // self-buff glow and (b) free the F8-4 busy window so a CORRECTED
+                // recast isn't eaten. Excludes 0x0402 (fizzle, handled above) and
+                // 0x001D YoureTooBusy (the PREVIOUS cast is still live). Only acts
+                // when a local cast prediction is actually in flight
+                // (_castBusyUntilMs active) so a door/melee reuse of e.g.
+                // MissileOutOfRange can't cut a non-existent cast. DEFAULT-OFF
+                // (strict `?castRejectClears=on` opt-in) pending the batched 1070
+                // eye-test (E1-E4); flip to default-ON per the castFizzle /
+                // castStateMachine workflow once it passes.
+                else if (isTerminalCastReject(errCode)) {
+                  try {
+                    if (new URLSearchParams(window.location.search).get("castRejectClears") === "on") {
+                      const em = window.liveScene3d?.entityManager;
+                      const lg = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+                      const inst = em?.entityMap?.get?.(lg);
+                      if (em && lg && inst && inst._castBusyUntilMs &&
+                          performance.now() < inst._castBusyUntilMs &&
+                          typeof em.cancelCastSequence === "function") {
+                        em.cancelCastSequence(lg, "reject");
                       }
                     }
                   } catch (_) {}
@@ -7854,9 +7891,18 @@
                 try {
                   const em = window.liveScene3d?.entityManager;
                   const lg = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+                  // WS16 diag: UseDone landed — server finished the action.
+                  try { window.__diag?.cast?.onUseDone?.({ guid: lg }); } catch (_) {}
                   if (em && lg && typeof em.clearCastBusy === "function") {
                     em.clearCastBusy(lg);
                   }
+                  // WS14 — cast-lifecycle resolved on UseDone so the combat-bar
+                  // cast-busy sweep clears even for fast/instant casts whose
+                  // gesture chain the server outran. Additive + no-op without a
+                  // bus / consumer (a non-cast UseDone just clears an idle sweep).
+                  try {
+                    window.__pluginClient?.events?.emit?.("spellCastResolved", { casterGuid: lg });
+                  } catch (_) {}
                 } catch (_) {}
               } else if (evt.kind === 15) {
                 // Phase 6 step E: DoorStateChanged — ACE has
@@ -8119,7 +8165,7 @@
                         inst?._castBusyUntilMs &&
                         performance.now() < inst._castBusyUntilMs
                       ) {
-                        em.cancelCastSequence(localGuid >>> 0);
+                        em.cancelCastSequence(localGuid >>> 0, "anim-break");
                       }
                     }
                   } else if (code61 === 2) {
@@ -8622,39 +8668,23 @@
                       // CMT lookup. RANGED_STANCES set defined above at
                       // line ~1949 (shared with `isInRangedStance`).
                       let resolvedMotion = null;
-                      // Wave 13 / Phase 42 (2026-05-26) — magic-stance
-                      // remote attackers (wizards casting at the local
-                      // player) get the `setCastPose` arms-up vibe pose
-                      // instead of CMT/aim-level lookup. Magic doesn't
-                      // have CMT rows (no AttackType, no AttackHeight),
-                      // and the cast clip arrives via UpdateMotion just
-                      // like melee/missile. The local `sneakAttackPredicted`
-                      // emit lives in `picking.js`'s magic branch
-                      // (Phase 16) — we deliberately don't emit it here
-                      // because dispatchRemoteSwing handles the OTHER
-                      // side (someone casting AT us). Returns early
-                      // because there's no `setSwingMotion` fallback for
-                      // magic — the real cast clip wins via setMotion's
-                      // `cls === "cast"` branch.
-                      //
-                      // Wave 14 / Phase 45 (2026-05-26) — the LOCAL cast
-                      // path (`picking.js` magic branch) was upgraded to
-                      // `playCastSequence(guid, spellId)` so each spell
-                      // plays its real scarab-windup chain. We keep
-                      // `setCastPose` here on the REMOTE-caster path
-                      // because the `damageTaken` / `evadedAttacker`
-                      // event payload doesn't carry a SpellId — the
-                      // chain runner can't look up the sequence without
-                      // it. Real remote-cast gestures arrive via
-                      // `UpdateMotion` (kind=5) events anyway (handled
-                      // by the motion-table classifier in `setMotion`'s
-                      // `cls === "cast"` branch), so this vibe-pose is
-                      // the right placeholder until the wire-side spell
-                      // identification lands.
+                      // WS07 (2026-07-12): remote cast gestures render entirely
+                      // via the UpdateMotion path — windups arrive as
+                      // KIND_MOTION_ACTION (Action-class 0x10) → `_armMotionAction`
+                      // and the final 0x40 gesture as KIND_MOTION → `_armMotion`,
+                      // both routing through `setMotion`'s `cls === "cast"` branch
+                      // → `_tryPlayLink(Magic, Ready, fullCmd)`. This
+                      // `dispatchRemoteSwing` reaction (a `damageTaken` /
+                      // `evadedAttacker` melee echo) has NO role for magic.
+                      // `setCastPose` (the both-arms-up vibe-pose one-shot) was
+                      // retired to a no-op 2026-06-18 (see entities.js) — the old
+                      // `typeof em.setCastPose === "function"` guard was already
+                      // false (the method is `undefined`), so the guarded call was
+                      // dead; removed. The early `return` STAYS and is
+                      // LOAD-BEARING: without it a Magic-stance attacker falls
+                      // through to the melee `getCombatManeuver` branch below and
+                      // would dispatch a sword-swing maneuver on a caster.
                       if (MAGIC_STANCES.has(stance)) {
-                        if (typeof em.setCastPose === "function") {
-                          em.setCastPose(g);
-                        }
                         return;
                       }
                       if (RANGED_STANCES.has(stance)) {
@@ -9183,7 +9213,7 @@
                         inst?._castBusyUntilMs &&
                         performance.now() < inst._castBusyUntilMs
                       ) {
-                        em.cancelCastSequence(localGuid >>> 0);
+                        em.cancelCastSequence(localGuid >>> 0, "anim-break");
                       }
                     }
                     lastForwardAxis = forward;

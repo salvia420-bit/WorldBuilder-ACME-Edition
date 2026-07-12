@@ -50,6 +50,22 @@ mod tests {
         assert!(!is_newer_u16(0x8000, 0));
     }
 
+    /// WS07 (2026-07-12, F11) — the exact windup-dedup invariant for remote
+    /// casters: three windups carrying INCREASING stamps (outcome (a), the
+    /// SAFE non-PK path) each pass `is_newer`, so all three render; a REPEATED
+    /// stamp (outcome (b), the disfavored drop path) is rejected. This pins the
+    /// behavior our `MOTION_ACTION_STAMPS` / JS `_actionStamps` dedup relies on.
+    #[test]
+    fn three_increasing_stamps_all_pass_then_a_repeat_is_dropped() {
+        let (n0, n1, n2) = (40u16, 41u16, 42u16);
+        assert!(is_newer_u16(n1, n0), "windup 2 (seq N+1) is newer than windup 1");
+        assert!(is_newer_u16(n2, n1), "windup 3 (seq N+2) is newer than windup 2");
+        assert!(
+            !is_newer_u16(n2, n2),
+            "a repeated stamp (outcome b) is NOT newer → the windup is dropped"
+        );
+    }
+
     #[test]
     fn u32_basic_ordering() {
         assert!(is_newer_u32(11, 10));

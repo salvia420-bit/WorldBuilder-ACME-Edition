@@ -666,6 +666,144 @@ mod tests {
         );
     }
 
+    /// WS07 (2026-07-12, F11-a) — a NON-PK remote cast windup rides in the
+    /// wire `forward_command` slot (ACE `EnqueueMotionMagic` uses the same
+    /// 3-arg `new Motion(stance, cmd, speed)` forward-command constructor as
+    /// the VERIFIED Eat path above). MagicPowerUp01 (0x6F) is Action-class
+    /// 0x10, so it must surface on `action_command` expanded to 0x1000006F,
+    /// deduped on the per-broadcast `movement_sequence` (which ACE increments
+    /// per `UpdateMotion`) — this is why the three separate non-PK windup
+    /// broadcasts each pass `is_newer_u16` and all render (arms rise 3×).
+    #[test]
+    fn magic_windup_in_forward_command_surfaces_as_action_with_movement_seq() {
+        use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+        use holtburger_protocol::messages::movement::types::{
+            InterpretedMotionCommand, InterpretedMotionState,
+        };
+
+        let windup_fwd = InterpretedMotionState {
+            forward_command: Some(InterpretedMotionCommand::from(0x006Fu16)),
+            ..InterpretedMotionState::default()
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&MovementEventData {
+            guid: Guid(0x5000_0007),
+            object_instance_sequence: 1,
+            movement_sequence: 88,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::Magic.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid {
+                state: windup_fwd,
+                sticky_object: None,
+            }),
+        })
+        .expect("a magic windup in forward_command must yield a snapshot");
+        assert_eq!(
+            snapshot.action_command,
+            Some(0x1000_006F),
+            "MagicPowerUp01 must surface as the Action-class windup command"
+        );
+        assert_eq!(
+            snapshot.action_sequence,
+            Some(88),
+            "forward-command windup dedups on the per-broadcast movement_sequence (the F11-a SAFE path)"
+        );
+        assert_eq!(
+            snapshot.current_style,
+            Some(MotionStance::Magic),
+            "the cast broadcast stamps the Magic stance so _tryPlayLink gets 0x49"
+        );
+    }
+
+    /// WS07 (2026-07-12, F3) — the final cast gesture MagicBlast (0x2B) is a
+    /// 0x40-class SubState (low-16 0x2B in the blocked 0x1E..0x39 magic-
+    /// gesture range), so `is_action_motion_command` returns FALSE and it must
+    /// NOT surface as an action. It stays on the locomotion `forward_command`
+    /// axis → KIND_MOTION → `_armMotion` → `setMotion` cast branch, the
+    /// deliberate F3 route (distinct from the KIND_MOTION_ACTION windup path).
+    #[test]
+    fn magic_final_gesture_stays_out_of_action_slot() {
+        use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+        use holtburger_protocol::messages::movement::types::{
+            InterpretedMotionCommand, InterpretedMotionState,
+        };
+
+        let blast_fwd = InterpretedMotionState {
+            forward_command: Some(InterpretedMotionCommand::from(0x002Bu16)),
+            ..InterpretedMotionState::default()
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&MovementEventData {
+            guid: Guid(0x5000_0008),
+            object_instance_sequence: 1,
+            movement_sequence: 12,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::Magic.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid {
+                state: blast_fwd,
+                sticky_object: None,
+            }),
+        })
+        .expect("a magic final gesture yields a snapshot");
+        assert_eq!(
+            snapshot.action_command, None,
+            "MagicBlast is a 0x40 SubState gesture, never a one-shot action"
+        );
+        assert_eq!(
+            snapshot.motion_command().map(|c| c.raw()),
+            Some(0x002B),
+            "MagicBlast stays on the locomotion forward axis (the F3 KIND_MOTION route)"
+        );
+    }
+
+    /// WS07 (2026-07-12, F12) — a PK/FastTick caster batches ALL windups into
+    /// one broadcast's `commands` list (ACE `EnqueueMotionAction`).
+    /// `newest_action_command` keeps only the highest-stamp item, so the three
+    /// windups collapse to the newest (0x71, seq 7). This PINS the known PK
+    /// collapse so a future `mtQueue` sequencing fix has a baseline; it is not
+    /// a regression the non-PK live box exhibits.
+    #[test]
+    fn magic_windups_batched_in_commands_collapse_to_newest() {
+        use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+        use holtburger_protocol::messages::movement::types::{
+            InterpretedMotionState, MotionItem,
+        };
+
+        let state = InterpretedMotionState {
+            commands: vec![
+                MotionItem::new(0x006Fu16, 5, false, 1.0), // MagicPowerUp01, seq 5
+                MotionItem::new(0x0070u16, 6, false, 1.0), // MagicPowerUp02, seq 6
+                MotionItem::new(0x0071u16, 7, false, 1.0), // MagicPowerUp03, seq 7 (newest)
+            ],
+            ..InterpretedMotionState::default()
+        };
+        let snapshot = EntityMotionSnapshot::from_movement_event(&MovementEventData {
+            guid: Guid(0x5000_0009),
+            object_instance_sequence: 1,
+            movement_sequence: 2,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: MotionStance::Magic.interpreted(),
+            data: MovementTypeData::Invalid(MovementInvalid {
+                state,
+                sticky_object: None,
+            }),
+        })
+        .expect("a batched-windup broadcast must yield a snapshot");
+        assert_eq!(
+            snapshot.action_command,
+            Some(0x1000_0071),
+            "batched windups collapse to the newest (F12 PK-only gap, pinned)"
+        );
+        assert_eq!(snapshot.action_sequence, Some(7));
+    }
+
     /// Wave 2 (2026-06-08, review B6) — co-pack: RunForward on the
     /// locomotion `forward_command` axis AND Eat in the `commands` action
     /// list. The `commands` action takes priority for `action_command`

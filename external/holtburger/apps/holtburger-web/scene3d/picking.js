@@ -7,6 +7,7 @@ import {
 import { getAimLevelForVelocity, getAimLevelForBallisticArc } from "../ui/ac_aim_level_for_velocity.js";
 import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
 import { classifySpell } from "../ui/ac_spell_shape.js";
+import { pickSkillLevel, determineSpellRange } from "./spell_range.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -52,6 +53,39 @@ const CAST_FACE_TARGET = (() => {
   try {
     return typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("castFaceTarget") !== "off";
+  } catch { return false; }
+})();
+
+// F8-6 (WS06, 2026-07-12) — re-face the local caster at the FINAL cast gesture.
+// Vanilla ACE re-rotates the caster before the cast gesture if the target moved
+// beyond spellcast_max_angle (Player_Magic.cs Rotate()/TurnTo_Magic, "do second
+// rotate") and broadcasts TurnToObject to the caster HIMSELF (self-inclusive
+// EnqueueBroadcast, WorldObject_Networking.cs sendSelf). Our wasm surfaces that
+// as KIND_TURN for the local guid, but loop.js _armTurn drops it (remote-only)
+// and the local rig heading is integrator-owned (applyLocalPlayerPoseFromIntegrator)
+// — so only setMovementInput can rotate it. We re-run the proven turn-in-place
+// drive right before the final gesture (same path as castFaceTarget/missileFaceTarget).
+// Default-OFF (strict `=on`): it touches the motion pipeline mid-cast (a turn edge
+// could trip an FU-A control reclaim, ADJ-15 Q3) → 1070 eye-test. `?castReface=on`.
+const CAST_REFACE = (() => {
+  try {
+    return typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("castReface") === "on";
+  } catch { return false; }
+})();
+
+// WS05 (2026-07-12) — pre-cast out-of-range WARNING toast. Purely proactive
+// feedback (a client ENHANCEMENT retail lacked — retail's DetermineSpellRange
+// fed the examine tooltip, never a pre-cast toast). It NEVER blocks the cast:
+// the send stays authoritative, and the server still rejects + toasts
+// out-of-range casts on its own (UseDone 0x0550). Default-OFF (strict `=on`)
+// pending a 1070 eye-test — it adds a toast on every out-of-range cast click
+// (a feel change) and can briefly double up with the server's own reject
+// toast. `?castRangeWarn=on` to enable.
+const CAST_RANGE_WARN = (() => {
+  try {
+    return typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("castRangeWarn") === "on";
   } catch { return false; }
 })();
 
@@ -183,6 +217,37 @@ function emitActionRejected(message) {
   try {
     window.__pluginClient?.events?.emit?.("clientActionRejected", { message });
   } catch (_) { /* never block input handling on feedback */ }
+}
+
+// WS05 (2026-07-12) — pre-cast out-of-range WARNING (feedback only; NEVER
+// blocks the cast). Mirrors retail SpellExamineUI::DetermineSpellRange
+// (scene3d/spell_range.js) and ACE VerifySpellRange's 2D horizontal-distance
+// test: range = baseRangeMod * (init+ranks skill) + baseRangeConstant, cap 75.
+// Self / untargeted spells (range 0) are skipped. Gated behind
+// `?castRangeWarn=on` (default-OFF). Wrapped so a feedback fault can never
+// stop the cast from firing.
+function maybeWarnOutOfRange(sessionHandle, entityManager, guid, spellId, localGuid) {
+  if (!CAST_RANGE_WARN) return;
+  try {
+    if ((guid >>> 0) === (localGuid >>> 0)) return; // self: always in range
+    const rec = sessionHandle.getSpellRecord?.(spellId >>> 0);
+    if (!rec || typeof rec.get !== "function") return;
+    if (rec.get("isSelfTargeted") || rec.get("isUntargeted")) return;
+    const mod = +rec.get("baseRangeMod");
+    const konst = +rec.get("baseRangeConstant");
+    const school = +rec.get("school");
+    if (!Number.isFinite(mod) || !Number.isFinite(konst)) return;
+    const getRaw = (s) => (sessionHandle.playerMagicSkillRaw?.(s >>> 0) >>> 0) || 0;
+    const skill = pickSkillLevel(school, getRaw);
+    const range = determineSpellRange(mod, konst, skill);
+    if (!(range > 0)) return; // 0 / self / bad data -> no warning
+    const pose = playerWorldPose(sessionHandle);
+    const tpos = entityAcPosition(entityManager, guid);
+    if (!pose || !tpos) return;
+    if (horizontalDistance(pose, tpos) > range) {
+      emitActionRejected("Out of Range!");
+    }
+  } catch (_) { /* never block the cast on range-feedback faults */ }
 }
 
 export function setupClickPicking({
@@ -666,6 +731,15 @@ export function setupClickPicking({
               fire(classification);
             }
           } catch (_) { /* event emission never blocks the cast */ }
+          // WS05 — pre-cast out-of-range WARNING (feedback only; ?castRangeWarn=on).
+          // The cast still fires below regardless (server stays authoritative).
+          maybeWarnOutOfRange(
+            sessionHandle,
+            liveScene3d.entityManager,
+            guid,
+            spellId,
+            (getLocalPlayerGuid?.() ?? 0) >>> 0,
+          );
           // F8-5 — turn to face the target before casting (ACE Rotate()),
           // flag-gated, so the bolt doesn't launch out of a wrong-facing
           // caster. The caster stands still otherwise (no auto-charge),
@@ -691,7 +765,16 @@ export function setupClickPicking({
               if (localGuid !== 0) {
                 const em = liveScene3d?.entityManager;
                 if (em?.playCastSequence) {
-                  em.playCastSequence(localGuid, spellId);
+                  // WS06 (2026-07-12): re-face toward the target's CURRENT
+                  // position right before the final gesture. turnToFaceThenAct
+                  // reads the live target pos each frame and skips if a movement
+                  // key is held (kite-safe); the `act` is a no-op. Flag-off
+                  // (CAST_REFACE=false) makes turnToFaceThenAct return
+                  // immediately — a single no-op call, byte-identical.
+                  em.playCastSequence(localGuid, spellId, {
+                    onBeforeCastGesture: () =>
+                      turnToFaceThenAct(guid, () => {}, CAST_REFACE),
+                  });
                 } else {
                   em?.setCastPose?.(localGuid);
                 }
@@ -718,6 +801,16 @@ export function setupClickPicking({
           emitActionRejected("Enter magic mode to cast that spell.");
         }
       } else if (typeof sessionHandle.useObject === "function") {
+        // WS14 / F11-5 extension — an armed targeted spell in PEACE mode (no
+        // combat stance) also can't fire (only the Magic-stance branch above
+        // casts). The melee/ranged branch already rejects this; pure PEACE fell
+        // through to useObject, silently eating the click. Reject with feedback
+        // instead — matches the melee/ranged wording verbatim — and return so
+        // the world useObject (portal/door/vendor) isn't also fired.
+        if (cb && typeof cb.armedSpellId === "number" && cb.armedSpellId > 0) {
+          emitActionRejected("Enter magic mode to cast that spell.");
+          return;
+        }
         // Wave 6.B (2026-05-28) — typed-class click precedence for
         // Lifestone. The Chorizite-port WorldObjectManager
         // (window.__wom) holds typed subclasses (Lifestone extends

@@ -43,6 +43,7 @@ import { attachFonts as _attachFonts } from "./diag/fonts.js";
 import { attachStrings as _attachStrings } from "./diag/strings.js";
 import { attachInput as _attachInput } from "./diag/input.js";
 import { attachCombat as _attachCombat } from "./diag/combat.js";
+import { attachCast as _attachCast } from "./diag/cast.js";
 import { attachPalettes as _attachPalettes } from "./diag/palettes.js";
 import { attachLod as _attachLod } from "./diag/lod.js";
 import { attachClothing as _attachClothing } from "./diag/clothing.js";
@@ -479,6 +480,7 @@ export function installDiag() {
     ["strings",    _attachStrings],
     ["input",      _attachInput],
     ["combat",     _attachCombat],
+    ["cast",       _attachCast],
     ["palettes",   _attachPalettes],
     ["lod",        _attachLod],
     ["clothing",   _attachClothing],

@@ -40,6 +40,7 @@
 
 import * as THREE from "three";
 import { SPELL_SHAPE, SPELL_SCHOOL } from "../ui/ac_spell_shape.js";
+import { pickSkillLevel, determineSpellRange } from "./spell_range.js";
 
 // === Wave R3.C — projectile mechanics fidelity (2026-05-29) ===
 // `?projectileArc=on` opt-in. Default OFF → the Arc preview keeps its
@@ -679,6 +680,134 @@ function _tryBind() {
       }
     }
   }, 200);
+})();
+
+// =====================================================================
+// WS05 (2026-07-12) — armed-spell cast-range RING (persistent lane)
+// =====================================================================
+//
+// Separate from the transient shape-preview registry above: while a
+// TARGETED spell is armed in Magic stance, draw a flat ground torus at the
+// caster's feet sized to the spell's cast range (retail
+// SpellExamineUI::DetermineSpellRange, scene3d/spell_range.js; cap 75m),
+// school-coloured. Purely a visual reach hint — no gating. Default-OFF
+// (strict `?castRangeRing=on`) pending a 1070 eye-test (a large 75m torus
+// raises z-fighting / legibility questions on terrain). Self / untargeted
+// spells (range 0) draw nothing. Runs its OWN rAF loop (only when the flag
+// is on) so it tracks the running player; the ring geometry is rebuilt only
+// when the armed spell or its range changes.
+const CAST_RANGE_RING_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search).get("castRangeRing") === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+
+// { root, geom, mat, range, spellId } or null.
+let _rangeRing = null;
+let _rangeRingRafId = 0;
+
+function _disposeRangeRing() {
+  if (!_rangeRing) return;
+  try {
+    if (_rangeRing.root && _rangeRing.root.parent) {
+      _rangeRing.root.parent.remove(_rangeRing.root);
+    }
+    _rangeRing.geom?.dispose?.();
+    _rangeRing.mat?.dispose?.();
+  } catch (_) { /* never leak on a disposal fault */ }
+  _rangeRing = null;
+}
+
+// Resolve the armed spell's cast range + school, or null when there's no
+// ring to draw (untargeted/self spell, missing record, zero range). Mirrors
+// the picking.js warning math exactly.
+function _armedSpellRange(sh, spellId) {
+  try {
+    const rec = sh.getSpellRecord?.(spellId >>> 0);
+    if (!rec || typeof rec.get !== "function") return null;
+    if (rec.get("isSelfTargeted") || rec.get("isUntargeted")) return null;
+    const mod = +rec.get("baseRangeMod");
+    const konst = +rec.get("baseRangeConstant");
+    const school = +rec.get("school");
+    if (!Number.isFinite(mod) || !Number.isFinite(konst)) return null;
+    const getRaw = (s) => (sh.playerMagicSkillRaw?.(s >>> 0) >>> 0) || 0;
+    const range = determineSpellRange(mod, konst, pickSkillLevel(school, getRaw));
+    if (!(range > 0)) return null;
+    return { range, school };
+  } catch (_) {
+    return null;
+  }
+}
+
+function _rangeRingTick() {
+  _rangeRingRafId = 0;
+  try {
+    const cb = (typeof window !== "undefined") ? window.__combatBarState : null;
+    const armed =
+      cb && typeof cb.armedSpellId === "number" && cb.armedSpellId > 0
+        ? (cb.armedSpellId >>> 0)
+        : 0;
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    const ls = (typeof window !== "undefined") ? window.liveScene3d : null;
+    const em = ls?.entityManager;
+    const localGuid =
+      typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function"
+        ? (window.getLocalPlayerGuid() >>> 0)
+        : 0;
+    const localInst = em && localGuid ? em.entityMap?.get(localGuid) : null;
+
+    const info = armed && sh ? _armedSpellRange(sh, armed) : null;
+    if (!info || !localInst?.root) {
+      _disposeRangeRing();
+    } else {
+      // Rebuild only when the armed spell or its computed range changes.
+      if (
+        !_rangeRing ||
+        _rangeRing.spellId !== armed ||
+        Math.abs(_rangeRing.range - info.range) > 1e-3
+      ) {
+        _disposeRangeRing();
+        const parent = ls.entitiesGroup ?? localInst.root.parent ?? null;
+        if (parent) {
+          // TorusGeometry default lies in the XY plane (hole axis = +Z) =
+          // the AC ground plane in entitiesGroup local space (same as
+          // _buildRing). Tube radius 0.08m; renderOrder just under the
+          // transient previews so those still read on top.
+          const geom = new THREE.TorusGeometry(info.range, 0.08, 8, 64);
+          const mat = new THREE.MeshBasicMaterial({
+            color: colorForSchool(info.school),
+            transparent: true,
+            opacity: 0.35,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          });
+          const mesh = new THREE.Mesh(geom, mat);
+          mesh.renderOrder = 955;
+          const root = new THREE.Group();
+          root.name = "spell-range-ring";
+          root.add(mesh);
+          parent.add(root);
+          _rangeRing = { root, geom, mat, range: info.range, spellId: armed };
+        }
+      }
+      if (_rangeRing) {
+        // Track the local player's feet each frame.
+        _rangeRing.root.position.copy(localInst.root.position);
+      }
+    }
+  } catch (_) { /* never throw out of the rAF loop */ }
+  if (CAST_RANGE_RING_ON && typeof requestAnimationFrame === "function") {
+    _rangeRingRafId = requestAnimationFrame(_rangeRingTick);
+  }
+}
+
+(function _startRangeRing() {
+  if (!CAST_RANGE_RING_ON) return;
+  if (typeof window === "undefined" || typeof requestAnimationFrame !== "function") return;
+  _rangeRingRafId = requestAnimationFrame(_rangeRingTick);
 })();
 
 // Test / diag re-exports. Importing modules can drive the dispatch

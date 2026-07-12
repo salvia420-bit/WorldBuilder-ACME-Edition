@@ -157,8 +157,8 @@ const INDEX_SRC = fs.readFileSync(
   'utf8'
 );
 
-check('index.html parses the ?jumpParity flag', () => {
-  assert.match(INDEX_SRC, /get\("jumpParity"\)\?\.toLowerCase\(\) === "on"/);
+check('index.html parses the ?jumpParity flag (default-ON, ?jumpParity=off escape)', () => {
+  assert.match(INDEX_SRC, /get\("jumpParity"\)\?\.toLowerCase\(\) !== "off"/);
 });
 
 check('index.html guards all four parity exports (stale-pkg degrade)', () => {

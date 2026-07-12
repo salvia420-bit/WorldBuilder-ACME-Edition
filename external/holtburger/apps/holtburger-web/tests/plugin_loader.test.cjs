@@ -11,7 +11,7 @@
 //   [E] applyDevManifest — manifest.dev.json sidecar
 //   [F] createEatableBus — .eat() stops propagation
 //   [G] loadPlugins — full orchestration with 5-stage lifecycle hooks
-//   [H] Per-plugin manifest.json files — all 33 bundled manifests
+//   [H] Per-plugin manifest.json files — all 49 bundled manifests
 //       parse + validate
 //
 // Run from apps/holtburger-web/:
@@ -591,7 +591,7 @@ async function checkAsync(name, fn) {
     assert.equal(out, 'ok');
   });
 
-  // ─── [H] Per-plugin manifest.json files — schema parse for all 33 ───
+  // ─── [H] Per-plugin manifest.json files — schema parse for all 49 ───
   console.log('\n[H] all bundled manifests parse + validate');
 
   check('schemas/plugin-manifest.json is well-formed JSON', () => {
@@ -602,19 +602,19 @@ async function checkAsync(name, fn) {
     assert.deepEqual(j.required, ['id', 'name', 'version']);
   });
 
-  check('index.json is well-formed and lists 33 plugins', () => {
+  check('index.json is well-formed and lists 49 plugins', () => {
     const txt = fs.readFileSync(INDEX_PATH, 'utf8');
     const j = JSON.parse(txt);
     assert.ok(Array.isArray(j.plugins), 'plugins must be array');
-    assert.equal(j.plugins.length, 33, `expected 33, got ${j.plugins.length}`);
+    assert.equal(j.plugins.length, 49, `expected 49, got ${j.plugins.length}`);
   });
 
   const manifestFiles = fs.readdirSync(PLUGINS_DIR)
     .filter((f) => f.endsWith('.manifest.json'))
     .sort();
 
-  check(`found ${manifestFiles.length} manifest files (expected 33)`, () => {
-    assert.equal(manifestFiles.length, 33);
+  check(`found ${manifestFiles.length} manifest files (expected 49)`, () => {
+    assert.equal(manifestFiles.length, 49);
   });
 
   const seenIds = new Set();
@@ -634,12 +634,12 @@ async function checkAsync(name, fn) {
     });
   }
 
-  check('all 33 manifests resolve as a single dependency graph (cycle-free)', () => {
+  check('all 49 manifests resolve as a single dependency graph (cycle-free)', () => {
     const manifests = manifestFiles.map((f) =>
       JSON.parse(fs.readFileSync(path.join(PLUGINS_DIR, f), 'utf8'))
     );
     const { started, skipped } = resolveDependencies(manifests);
-    assert.equal(started.length, 33, `expected 33 started, got ${started.length}: ${started}`);
+    assert.equal(started.length, 49, `expected 49 started, got ${started.length}: ${started}`);
     assert.equal(skipped.length, 0,
       `expected 0 skipped, got ${skipped.length}: ${JSON.stringify(skipped)}`);
   });

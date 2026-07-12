@@ -190,6 +190,13 @@ export function classifyEnchantment(ench) {
     return record.isBeneficial ? "buff" : "debuff";
   }
 
+  // WS15 (2026-07-12): DoT PropertyInts (NetherOverTime 330 / DamageOverTime
+  // 318) are always debuffs. Their positive per-tick "value" would otherwise
+  // trip the additive-sign heuristic below into a false "buff" whenever the
+  // spell record is unavailable (pre-login catalog / record-lookup miss).
+  const dotKey = (ench?.statKey ?? ench?.statModKey ?? 0) | 0;
+  if (dotKey === 330 || dotKey === 318) return "debuff";
+
   // Fallback: enchantment wire flag (unreliable on some older spells).
   if ((type & ETF.BENEFICIAL) !== 0) return "buff";
 
@@ -215,6 +222,16 @@ export function formatStatMod(ench) {
   const type = (ench.type ?? ench.statModType ?? 0) | 0;
   const key = (ench.statKey ?? ench.statModKey ?? 0) | 0;
   const val = Number(ench.statValue ?? ench.statModValue ?? 0);
+
+  // WS15 (2026-07-12): void/life damage-over-time enchantments modify the
+  // NetherOverTime (330) / DamageOverTime (318) PropertyInts. The stat
+  // "value" is damage-per-tick, not a stat delta — render a DoT label
+  // instead of the misleading "+N id 330" (the "+" reads as a buff).
+  const DOT_KEY_NAME = { 318: "DoT", 330: "Nether DoT" };
+  if (DOT_KEY_NAME[key]) {
+    const perTick = Math.abs(Math.round(val));
+    return perTick > 0 ? `${perTick}/tick ${DOT_KEY_NAME[key]}` : DOT_KEY_NAME[key];
+  }
 
   // Stat-name lookup keyed by the type flags.
   let name = null;

@@ -7213,6 +7213,162 @@ async fn cmd_interp_use_time_reclaims_after_gesture_node_drains() {
     );
 }
 
+/// WS04 (?castHoldReclaim) — clone of the reclaim pin with the flag ON and a
+/// KNOWN local cast window in flight: the post-anim `use_time` reclaim STILL
+/// returns control (turn/sidestep would still revive) but HOLDS the forward
+/// slot DEAD across the whole chain — held-W does NOT revive per windup-node.
+#[tokio::test]
+async fn cast_hold_reclaim_holds_forward_dead_across_gesture_node() {
+    use crate::client::movement::motion_table_manager::RENDERER_DONE_FALLBACK_SECS;
+    use holtburger_world::WorldEvent;
+
+    let guid = Guid(0x5000_012A);
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        guid,
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    world.player.guid = guid;
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+    // WS04: arm the flag + stamp the local cast window in flight.
+    movement.set_cast_hold_reclaim(true);
+    movement.note_local_cast_window(true);
+
+    movement.enqueue_key_action(0x29, true); // W press, latch raised
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    world.scene.set_local_server_controlled(true);
+    movement.note_server_authored_motion(false);
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+        data: Box::new(cast_gesture_event_for(guid)),
+        target_exists: false,
+        object_radius: 0.0,
+        object_height: 0.0,
+    }]);
+
+    let t_stamp = now + Duration::from_millis(100);
+    movement
+        .tick(t_stamp, &mut world, &mut session)
+        .await
+        .expect("tick");
+    assert!(
+        world.scene.local_server_controlled(),
+        "gated while the gesture node pends"
+    );
+
+    // Drain the node past its budget, then let the pump reclaim.
+    let t_expired = t_stamp + Duration::from_secs_f32(RENDERER_DONE_FALLBACK_SECS + 0.05);
+    movement
+        .tick(t_expired, &mut world, &mut session)
+        .await
+        .expect("tick");
+    movement
+        .tick(t_expired + Duration::from_millis(50), &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    // Control STILL returns to the player (the reclaim fires) …
+    assert!(
+        !world.scene.local_server_controlled(),
+        "the reclaim still returns control (only the forward re-apply is suppressed)"
+    );
+    // … but the forward slot stays DEAD across the chain (the fix).
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(
+        drive.forward, None,
+        "castHoldReclaim: held-W stays dead across the whole cast chain (no per-node revival)"
+    );
+}
+
+/// WS04 — a JUMP mid-cast clears the lock: with the flag+window on but the
+/// player AIRBORNE, the forward lock releases (retail LeaveGround re-applies
+/// held movement) so held-W revives out of the reclaim exactly as today.
+#[tokio::test]
+async fn cast_hold_reclaim_jump_clears_the_forward_lock() {
+    use crate::client::movement::motion_table_manager::RENDERER_DONE_FALLBACK_SECS;
+    use holtburger_world::WorldEvent;
+
+    let guid = Guid(0x5000_012B);
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        guid,
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    world.player.guid = guid;
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+    movement.set_cast_hold_reclaim(true);
+    movement.note_local_cast_window(true);
+
+    movement.enqueue_key_action(0x29, true); // W press
+    movement
+        .tick(now, &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    world.scene.set_local_server_controlled(true);
+    movement.note_server_authored_motion(false);
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+        data: Box::new(cast_gesture_event_for(guid)),
+        target_exists: false,
+        object_radius: 0.0,
+        object_height: 0.0,
+    }]);
+
+    let t_stamp = now + Duration::from_millis(100);
+    movement
+        .tick(t_stamp, &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    // Jump mid-cast: airborne clears the forward lock for the reclaim tick.
+    let t_expired = t_stamp + Duration::from_secs_f32(RENDERER_DONE_FALLBACK_SECS + 0.05);
+    movement
+        .tick(t_expired, &mut world, &mut session)
+        .await
+        .expect("tick");
+    world.player.is_airborne = true;
+    movement
+        .tick(t_expired + Duration::from_millis(50), &mut world, &mut session)
+        .await
+        .expect("tick");
+
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(
+        drive.forward,
+        Some(ForwardLocomotion::Forward),
+        "jump (airborne) clears the lock → held-W revives out of the reclaim"
+    );
+}
+
 /// The edge-driven half survives the seam swap: HKC TakeControl is NOT
 /// gated on `motions_pending` — a fresh edge reclaims even while a
 /// gesture node still pends (retail acclient.c:717320 TakeControl rides

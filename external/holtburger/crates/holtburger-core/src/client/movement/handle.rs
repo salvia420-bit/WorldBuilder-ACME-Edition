@@ -288,6 +288,21 @@ impl MovementSystemHandle {
         self.inner.set_cast_move(on);
     }
 
+    /// (2026-07-12, WS04): install the `?castHoldReclaim=on` runtime carrier
+    /// (default OFF — the FU-A `use_time` reclaim holds the FORWARD slot dead
+    /// across a whole known cast chain instead of reviving held-W per
+    /// windup-node). Forwards to `MovementSystem::set_cast_hold_reclaim`.
+    pub fn set_cast_hold_reclaim(&mut self, on: bool) {
+        self.inner.set_cast_hold_reclaim(on);
+    }
+
+    /// WS04 — the JS cast chain stamps the local cast window (true at windup
+    /// start, false at chain completion/fizzle/cancel). Forwards to
+    /// `MovementSystem::note_local_cast_window`.
+    pub fn note_local_cast_window(&mut self, active: bool) {
+        self.inner.note_local_cast_window(active);
+    }
+
     /// (2026-07-03): install the `?slideCast=off` runtime carrier (default
     /// ON — held sidestep/turn survive the local player's General
     /// cast-gesture stomps, the vanilla-ACE slidecast compensation; `=off`
@@ -420,6 +435,13 @@ impl MovementSystemHandle {
     /// `MovementSystem::local_registry_pending_motions`).
     pub fn local_registry_pending_motions(&self, local_guid: Guid) -> usize {
         self.inner.local_registry_pending_motions(local_guid)
+    }
+
+    /// WS16 diag forward: packed autonomy-latch + interpreter forward-slot
+    /// occupancy for the cast surface (see
+    /// `MovementSystem::cast_arbitration_diag`).
+    pub fn cast_arbitration_diag(&self, local_guid: Guid) -> u32 {
+        self.inner.cast_arbitration_diag(local_guid)
     }
 
     /// A14-I4 (W3+ S11) — press-time half of the retail jump charge

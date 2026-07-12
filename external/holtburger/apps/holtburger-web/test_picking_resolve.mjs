@@ -98,7 +98,10 @@ function loadPicking() {
         // multi-line braced form) and replace the named bindings with
         // module-scope no-op stubs.
         .replace(/^\s*import\s+\{[^}]*\}\s+from\s+["']\.\.\/ui\/[^"']+["'];?\s*$/gms, "")
-        .replace(/^\s*import\s+\{[^}]*\}\s+from\s+["']\.\.\/ui\/[^"']+["'];?\s*$/gm, "");
+        .replace(/^\s*import\s+\{[^}]*\}\s+from\s+["']\.\.\/ui\/[^"']+["'];?\s*$/gm, "")
+        // WS05: strip the sibling `./spell_range.js` import too (its bindings
+        // are stubbed below; the range-warn path isn't exercised here).
+        .replace(/^\s*import\s+\{[^}]*\}\s+from\s+["']\.\/[^"']+["'];?\s*$/gm, "");
     return src;
 }
 
@@ -115,6 +118,8 @@ const getAimLevelForVelocity = () => 0;
 const getAimLevelForBallisticArc = () => 0;
 const isAttackerBehindDefender = () => false;
 const classifySpell = () => null;
+const pickSkillLevel = () => 0;
+const determineSpellRange = () => 0;
 `;
 
 const pickingComposite =

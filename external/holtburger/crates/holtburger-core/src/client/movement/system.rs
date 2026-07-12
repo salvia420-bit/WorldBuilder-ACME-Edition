@@ -803,6 +803,36 @@ const USE_CAST_MOVE: bool = true;
 /// cast-gesture stomps (the modern opt-in).
 const USE_SLIDE_CAST: bool = false;
 
+/// (2026-07-12, WS04 S3a) — `?castHoldReclaim`: while a KNOWN local cast
+/// chain is in flight, the FU-A `use_time` reclaim keeps the FORWARD slot
+/// dead across the WHOLE chain instead of reviving held-W per-windup-node.
+///
+/// The leak: for a TARGETED cast the server's turn-to-target
+/// (`Player_Magic.cs` `Rotate`/`TurnTo_Magic`) sets `local_server_controlled`,
+/// so FU-A is LIVE; each windup node holds `player_motions_pending` for its
+/// authored length then drops it, and the very next `use_time` pump reclaims
+/// control WITHOUT a fresh edge and re-drives the held forward substate head
+/// (`command_interpreter.rs::apply_current_movement`) — held-W revives in the
+/// gap before the next windup stomp re-lowers the latch. Multi-windup ⇒
+/// multiple revive windows ⇒ net forward travel.
+///
+/// Strafe/turn still reclaim (slidecast untouched — orthogonal to
+/// [`USE_SLIDE_CAST`]); a jump clears the lock (retail `LeaveGround`
+/// re-applies held movement, acclient.c:344457/:344484); a fresh FORWARD
+/// edge is untouched (fastcast anim-break preserved — the edge path never
+/// arms the lock, only the edgeless `use_time` reclaim is gated). Signal
+/// source: the JS chain stamps `SessionHandle::noteLocalCastWindow(active)`.
+///
+/// ONE feature, TWO carriers: this const (native default) + the
+/// `?castHoldReclaim=on` URL flag ([`MovementSystem::cast_hold_reclaim_runtime`]).
+/// Effective predicate: [`MovementSystem::cast_hold_reclaim_enabled`].
+///
+/// `false` (DEFAULT): today's per-windup forward revival (regression floor).
+/// `true` / `?castHoldReclaim=on`: hold the forward slot dead across the
+/// whole cast chain. Default OFF — eye-test gated (the leak is
+/// targeted-cast-only, FU-A-dormant for self buffs).
+const USE_CAST_HOLD_RECLAIM: bool = false;
+
 /// Movement-port WAVE 1 step 4 (2026-07-03) — the retail
 /// `CommandInterpreter` INPUT LANE master gate (the strangler flag).
 ///
@@ -1448,6 +1478,16 @@ pub(crate) struct MovementSystem {
     /// [`Self::cast_move_enabled`]. Default `None`.
     cast_move_runtime: Option<bool>,
 
+    /// (2026-07-12, WS04) — runtime carrier of the `?castHoldReclaim=on` URL
+    /// flag. `None` = the [`USE_CAST_HOLD_RECLAIM`] const default (OFF);
+    /// `Some(true)` holds the forward slot dead across a whole cast chain.
+    /// Combined by [`Self::cast_hold_reclaim_enabled`]. Default `None`.
+    cast_hold_reclaim_runtime: Option<bool>,
+    /// WS04 — set by the JS cast chain via [`Self::note_local_cast_window`];
+    /// `true` from windup start to chain completion/fizzle/cancel. Read by
+    /// the interpreter seam [`SystemInterpreterSeams::local_cast_forward_lock_active`].
+    local_cast_window_active: bool,
+
     /// `?slideCast=off` runtime carrier ([`USE_SLIDE_CAST`]) —
     /// [`Self::slide_cast_enabled`]. Default `None`.
     slide_cast_runtime: Option<bool>,
@@ -1754,6 +1794,8 @@ impl MovementSystem {
             building_overlap_runtime: None,
             retail_ground_runtime: None,
             cast_move_runtime: None,
+            cast_hold_reclaim_runtime: None,
+            local_cast_window_active: false,
             slide_cast_runtime: None,
             cmd_interp_runtime: None,
             command_interpreter: None,
@@ -1857,6 +1899,24 @@ impl MovementSystem {
     /// [`USE_CAST_MOVE`] effective predicate.
     pub(crate) fn cast_move_enabled(&self) -> bool {
         self.cast_move_runtime.unwrap_or(USE_CAST_MOVE)
+    }
+
+    /// (2026-07-12, WS04) — install the `?castHoldReclaim=on` runtime
+    /// carrier (see [`USE_CAST_HOLD_RECLAIM`]).
+    pub(crate) fn set_cast_hold_reclaim(&mut self, on: bool) {
+        self.cast_hold_reclaim_runtime = Some(on);
+    }
+
+    /// [`USE_CAST_HOLD_RECLAIM`] effective predicate.
+    pub(crate) fn cast_hold_reclaim_enabled(&self) -> bool {
+        self.cast_hold_reclaim_runtime.unwrap_or(USE_CAST_HOLD_RECLAIM)
+    }
+
+    /// WS04 — the JS cast chain stamps its local cast window here (true at
+    /// windup start, false at chain completion/fizzle/cancel). Consulted by
+    /// the interpreter seam's forward lock while `?castHoldReclaim=on`.
+    pub(crate) fn note_local_cast_window(&mut self, active: bool) {
+        self.local_cast_window_active = active;
     }
 
     /// `?slideCast=off` runtime carrier install ([`USE_SLIDE_CAST`]).
@@ -6679,6 +6739,44 @@ impl MovementSystem {
             .map_or(0, |manager| manager.pending_motions_len())
     }
 
+    /// WS16 diag (2026-07-12): pack the movement-arbitration snapshot the cast
+    /// surface reads (`__diag.cast.movementSnapshot()`). The autonomy latch is
+    /// always meaningful; the forward-slot occupancy is the local registry
+    /// minterp's interpreted forward slot — a cast gesture parks a Substate
+    /// there at zero locomotion (the SLIDECAST mechanism, interp_state.rs:34).
+    /// The minterp is lazily created, so occupancy reads `none` until the
+    /// player first moves/casts — acceptable for a diagnostic. Bit layout
+    /// documented on `lib::CAST_ARBITRATION_DIAG`.
+    pub(crate) fn cast_arbitration_diag(&self, local_guid: Guid) -> u32 {
+        let mut out: u32 = 0;
+        if self.last_move_was_autonomous {
+            out |= 0x1;
+        }
+        if self.cast_move_enabled() {
+            out |= 0x2;
+        }
+        if self.slide_cast_enabled() {
+            out |= 0x4;
+        }
+        // Reach the interpreted forward command exactly as the drive path does
+        // (`&minterp.interpreted_state`, system.rs:2831) — the field lives on
+        // InterpretedState, NOT on CommandInterpreter.
+        let fwd = self
+            .movement_managers
+            .get(&local_guid)
+            .and_then(|manager| manager.motion_interp_ref())
+            .and_then(|minterp| minterp.interpreted_state.forward_command);
+        let (occ, sub) = match fwd {
+            Some(InterpretedForwardCommand::WalkForward) => (1u32, 0u32),
+            Some(InterpretedForwardCommand::RunForward) => (2u32, 0u32),
+            Some(InterpretedForwardCommand::Substate(cmd)) => (3u32, cmd & 0xffff),
+            None => (0u32, 0u32),
+        };
+        out |= (occ & 0x3) << 4;
+        out |= (sub & 0xffff) << 16;
+        out
+    }
+
     /// A3-D3 test seam: registry view.
     #[cfg(test)]
     pub(crate) fn movement_manager_for(&self, guid: Guid) -> Option<&MovementManager> {
@@ -7327,6 +7425,18 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
                 .get(&guid)
                 .is_some_and(|manager| manager.is_moveto_active()))
             || self.system.server_controlled_projection.is_some()
+    }
+    fn local_cast_forward_lock_active(&self) -> bool {
+        // WS04 (?castHoldReclaim) — the forward lock: flag on + a known
+        // local cast chain in flight (JS-stamped) + grounded. The
+        // `!is_airborne` gate yields the retail jump reset (LeaveGround
+        // re-applies held movement, acclient.c:344457/:344484): a jump
+        // mid-cast clears the lock for the airborne window and the landing
+        // revives held-W. Default OFF ⇒ always false ⇒ byte-identical to
+        // today when the flag is off.
+        self.system.cast_hold_reclaim_enabled()
+            && self.system.local_cast_window_active
+            && !self.world.player.is_airborne
     }
     fn player_report_exhaustion(&mut self) {}
     fn player_turn_to_heading(&mut self, _params: &MovementParameters) {

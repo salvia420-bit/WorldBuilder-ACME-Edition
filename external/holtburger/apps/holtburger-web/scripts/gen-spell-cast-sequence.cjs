@@ -40,11 +40,17 @@
 //     Built by `gen-spell-shapes.cjs`. Joined here for downstream
 //     convenience (the cast-pose runtime + shape-preview overlay both
 //     consume both joins; emitting once saves a fetch).
-//   * `../LSD-Partial-2025-02-23_16-15/spells.json` — per-spell
-//     `bitfield` (= SpellFlags). The catalog generator strips this; we
-//     re-read it directly to detect FastCast (0x4000). This is the
-//     same LSD file `build_spells_catalog.py` consumes, just for the
-//     one additional field.
+//   * `data/spell-table-attrs.json` — per-spell DECRYPTED `formula`,
+//     `bitfield` (= SpellFlags), `casterEffect`/`targetEffect`
+//     (PlayScript ints), `formulaVersion`. Built by
+//     `scripts/build-spell-table-attrs.cjs` straight from the retail
+//     `client_portal.dat` SpellTable (DID 0x0E00000E) — the SAME record
+//     the client loads. This is the source of truth for gesture-identity
+//     data (WS13). It REPLACES the old LSD `spells.json` source, which
+//     was 6,264/6,266 correct but silently corrupt on a few rows
+//     (high-word/formula_version leak on 4024, mis-decoded comps on
+//     4904, stale targetEffect on 5174). The catalog's `components`
+//     field is no longer used for the formula.
 //
 // ## Output schema
 //
@@ -102,18 +108,21 @@ const ROOT = path.resolve(__dirname, "..");
 const CATALOG_PATH = path.join(ROOT, "data", "spells-catalog.json");
 const COMPONENTS_PATH = path.join(ROOT, "data", "spell-components.json");
 const SHAPES_PATH = path.join(ROOT, "data", "spell-shapes.json");
+const DAT_ATTRS_PATH = path.join(ROOT, "data", "spell-table-attrs.json");
 const OUT_PATH = path.join(ROOT, "data", "spell-cast-sequence.json");
-const LSD_PATH = path.resolve(
-  ROOT,
-  "..",
-  "..",
-  "..",
-  "LSD-Partial-2025-02-23_16-15",
-  "spells.json",
-);
 
 // ACE SpellFlags (`ACE.Entity/Enum/SpellFlags.cs`).
 const SPELL_FLAGS_FAST_CAST = 0x4000;
+
+// WS13 Patch B (OPTIONAL, default OFF) — emit MotionCommand.Ready
+// (0x40000003) as the cast gesture for the 10 no-talisman AoE spells
+// (Exploding/Ring/Acid series), matching ACE Player_Magic.DoCastGesture
+// Invalid→Ready (Player_Magic.cs:678-679). Kept OFF (regenerate off by
+// default) until the batched 1070 eye-test confirms 0x40000003 renders
+// in the overlay classifier rather than being a no-op (see
+// docs/url-flags.md `castReadyFallback` / packet §2.4/§5). Set the
+// GEN_CAST_READY_FALLBACK=1 env var to regenerate with it ON.
+const EMIT_READY_FALLBACK = process.env.GEN_CAST_READY_FALLBACK === "1";
 
 // MotionCommand.Invalid — the canonical no-op encoded into Lead Scarab's
 // Gesture field in the retail SpellComponentsTable. Cast-pipeline must
@@ -160,56 +169,23 @@ function loadJson(p) {
   return JSON.parse(fs.readFileSync(p, "utf8"));
 }
 
-function parseComponentIdRef(ref) {
-  // Catalog stores "Comp_1", "Comp_15", etc. Map back to numeric id.
-  if (typeof ref !== "string") return null;
-  if (!ref.startsWith("Comp_")) return null;
-  const n = parseInt(ref.slice(5), 10);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-function loadLsdSpellExtras() {
-  if (!fs.existsSync(LSD_PATH)) {
-    console.error(
-      `missing LSD source: ${LSD_PATH}\n` +
-      `(needed for SpellFlags.FastCast detection + Wave 18 caster/target effect + formula)`,
-    );
-    process.exit(1);
-  }
-  const src = JSON.parse(fs.readFileSync(LSD_PATH, "utf8"));
-  const sbh = src && src.table && src.table.spellBaseHash;
-  if (!Array.isArray(sbh)) {
-    console.error("LSD spellBaseHash not a list");
-    process.exit(1);
-  }
-  const map = new Map();
-  for (const ent of sbh) {
-    const sid = ent && ent.key;
-    const v = ent && ent.value;
-    if (typeof sid !== "number" || !v) continue;
-    // formula is u32[8]; zero entries are unused slots — preserve the
-    // raw array here, the caller filters by component-table lookup.
-    const formula = Array.isArray(v.formula)
-      ? v.formula.map((n) => (n | 0))
-      : [];
-    map.set(sid, {
-      bitfield: (v.bitfield | 0) || 0,
-      // Wave 18 / Phase 52 — SpellBase fields per ACE.DatLoader
-      // `Entity/SpellBase.cs:36-37`. PlayScript enum values
-      // (uint), 0 = no effect.
-      casterEffect: (v.caster_effect | 0) || 0,
-      targetEffect: (v.target_effect | 0) || 0,
-      formula,
-    });
-  }
-  return map;
-}
-
 function main() {
   const catalog = loadJson(CATALOG_PATH);
   const comps = loadJson(COMPONENTS_PATH);
   const shapes = loadJson(SHAPES_PATH);
-  const lsdSpellExtras = loadLsdSpellExtras();
+  // DAT-authoritative attrs (formula/bitfield/effects), keyed by spell id
+  // string. This is `client_portal.dat` 0x0E00000E, decrypted — the
+  // source of truth (WS13). See build-spell-table-attrs.cjs.
+  const datAttrs = loadJson(DAT_ATTRS_PATH).attrs;
+  if (!datAttrs || typeof datAttrs !== "object") {
+    console.error("spell-table-attrs has no attrs map");
+    process.exit(1);
+  }
+  // WS13 §A3 — surface any spell whose formula can't be fully resolved
+  // (would have caught the corrupt LSD rows 4024/4904 at generation
+  // time) or whose formula legitimately has no talisman terminal (the
+  // ACE Invalid→Ready cast-gesture gap, §2.4). Emitted as _data_warnings.
+  const dataWarnings = [];
 
   if (!catalog.spells || typeof catalog.spells !== "object") {
     console.error("catalog has no spells map");
@@ -238,49 +214,56 @@ function main() {
     const sp = catalog.spells[sidStr];
     if (!sp || typeof sp !== "object") continue;
 
-    const componentIds = (sp.components || [])
-      .map(parseComponentIdRef)
-      .filter((n) => n !== null);
-
-    const lsdExtras = lsdSpellExtras.get(sid) || null;
-    const bitfield = lsdExtras ? lsdExtras.bitfield : 0;
+    const attrs = datAttrs[sidStr] || null;
+    if (!attrs) {
+      dataWarnings.push({ spell: sid, reason: "no-dat-attrs" });
+    }
+    // DAT decrypted formula is the source of truth (WS13). Mask to
+    // low-16 defensively (belt-and-suspenders against any high-word /
+    // formula_version leak like the old LSD spell 4024); drop any zero
+    // slot. The DAT source is already clean, so the mask is a no-op on
+    // real data.
+    const componentIds = attrs
+      ? attrs.formula.map((n) => n & 0xffff).filter((n) => n > 0)
+      : [];
+    const bitfield = attrs ? (attrs.bitfield | 0) : 0;
     const fastCast = (bitfield & SPELL_FLAGS_FAST_CAST) !== 0;
     // Wave 18 — caster/target effect (PlayScript enum values). 0 = no
     // effect, do not fire the resolver chain on the caster/target.
-    const casterEffect = lsdExtras ? (lsdExtras.casterEffect >>> 0) : 0;
-    const targetEffect = lsdExtras ? (lsdExtras.targetEffect >>> 0) : 0;
+    const casterEffect = attrs ? (attrs.casterEffect >>> 0) : 0;
+    const targetEffect = attrs ? (attrs.targetEffect >>> 0) : 0;
     // formulaScale — derived from the FIRST scarab in the spell's
-    // formula via ACE's ScarabScale map (`SpellFormula.cs:293-313`).
-    // The formula u32[8] is encrypted in the DAT but LSD ships the
-    // decrypted values; we walk the array looking for the first
-    // SpellComponentsTable entry whose Type == Scarab (1) and grab the
-    // matching ScarabScale value.
+    // formula via ACE's ScarabScale map (`SpellFormula.cs:293-313`). We
+    // walk the DECODED DAT formula (componentIds, in order) looking for
+    // the first SpellComponentsTable entry whose Type == Scarab (1) and
+    // grab the matching ScarabScale value.
     let formulaScale = DEFAULT_FORMULA_SCALE;
-    if (lsdExtras && Array.isArray(lsdExtras.formula)) {
-      for (const compId of lsdExtras.formula) {
-        if ((compId | 0) === 0) continue;
-        const c = compById[compId | 0];
-        if (c && c.type === TYPE_SCARAB) {
-          const scale = SCARAB_SCALE[compId | 0];
-          if (typeof scale === "number") {
-            formulaScale = scale;
-          }
-          // First scarab wins per ACE `FirstScarab => Scarabs.First()`.
-          break;
+    for (const compId of componentIds) {
+      if ((compId | 0) === 0) continue;
+      const c = compById[compId | 0];
+      if (c && c.type === TYPE_SCARAB) {
+        const scale = SCARAB_SCALE[compId | 0];
+        if (typeof scale === "number") {
+          formulaScale = scale;
         }
+        // First scarab wins per ACE `FirstScarab => Scarabs.First()`.
+        break;
       }
     }
 
     // Find scarabs + talisman in formula order.
     const scarabs = [];
     let talisman = null;
+    const unresolvedIds = [];
     for (const cid of componentIds) {
       const c = compById[cid];
       if (!c) {
-        // Component not in our table — count it but don't error
-        // (LSD sometimes references components that aren't in the
-        // EOR-era SpellComponentsTable).
+        // Component not in our table. With the DAT-authoritative source
+        // this should never happen for retail data — surface it loudly
+        // (WS13 §A3: this check would have caught the corrupt LSD rows
+        // 4024/4904 that leaked bogus component ids).
         missingCompCount += 1;
+        unresolvedIds.push(cid);
         continue;
       }
       if (c.type === TYPE_SCARAB) {
@@ -289,6 +272,13 @@ function main() {
         // Last talisman wins (ACE: "assumed to be the last spell component").
         talisman = { id: cid, comp: c };
       }
+    }
+    if (unresolvedIds.length > 0) {
+      dataWarnings.push({
+        spell: sid,
+        reason: "unresolved-components",
+        ids: unresolvedIds,
+      });
     }
 
     // leadOnly: only-scarab in formula is Lead (id=1).
@@ -312,15 +302,45 @@ function main() {
       }
     }
 
-    // castGesture — last talisman in formula, per
-    // SpellFormula.cs:271-287.
+    // castGesture — ACE `CastGesture => PlayerFormula.Last()` is a
+    // talisman only when the formula's LAST component is a talisman
+    // (SpellFormula.cs:271-287). Our detection keeps the last talisman
+    // seen; guard that it's actually the terminal component so we match
+    // ACE's `.Last()` exactly.
+    const lastCompId = componentIds.length
+      ? componentIds[componentIds.length - 1]
+      : 0;
+    const lastComp = compById[lastCompId];
+    const lastIsTalisman = !!(lastComp && lastComp.type === TYPE_TALISMAN);
     let castGesture = null;
-    if (talisman) {
+    if (talisman && lastIsTalisman) {
       castGesture = {
         motion: talisman.comp.gesture,
         name: talisman.comp.gestureName || null,
         durationS: talisman.comp.time || 0,
       };
+    } else if (EMIT_READY_FALLBACK && componentIds.length && !fastCast) {
+      // WS13 §2.4 / Patch B — ACE Player_Magic.DoCastGesture: when
+      // CastGesture resolves to Invalid (no talisman terminal), ACE
+      // substitutes MotionCommand.Ready (0x40000003) as the cast beat
+      // (Player_Magic.cs:678-679). Gated OFF by default (see the
+      // EMIT_READY_FALLBACK constant / castReadyFallback flag) until an
+      // eye-test confirms 0x40000003 actually renders in the overlay
+      // model. durationS is left 0 → WS11 sources the real Ready anim
+      // length from the Magic-stance MotionTable.
+      castGesture = { motion: "0x40000003", name: "Ready", durationS: 0 };
+    }
+    // §2.4 fidelity note — non-fast formula that ends in a non-talisman
+    // (Potion/Taper) → ACE substitutes Ready as the cast beat (Patch B).
+    // Surfaced for coordination; not a corruption. leadOnly is NOT
+    // excluded: it only suppresses the WINDUP, so a lead-only no-talisman
+    // spell (e.g. 1781/2976) still hits the ACE Invalid→Ready cast path.
+    if (!lastIsTalisman && !fastCast && componentIds.length) {
+      dataWarnings.push({
+        spell: sid,
+        reason: "no-talisman-terminal",
+        lastComponent: lastCompId,
+      });
     }
 
     const totalDurationS =
@@ -358,9 +378,9 @@ function main() {
   const doc = {
     _comment:
       "Generated by `node apps/holtburger-web/scripts/gen-spell-cast-sequence.cjs`. " +
-      "Sources: spells-catalog.json + spell-components.json + spell-shapes.json + " +
-      "../LSD-Partial-2025-02-23_16-15/spells.json (for SpellFlags bitfield + " +
-      "Wave 18 caster_effect / target_effect / formula). " +
+      "Sources: spells-catalog.json (school/level/shape) + spell-components.json + " +
+      "spell-shapes.json + spell-table-attrs.json (DAT-AUTHORITATIVE formula / SpellFlags " +
+      "bitfield / caster+target effects, decrypted from client_portal.dat 0x0E00000E — WS13). " +
       "Algorithm per ACE.Server SpellFormula.cs:245-287 + Player_Magic.cs:605-689: " +
       "for each scarab in formula, play scarab.gesture (Magic stance); then play " +
       "talisman.gesture (Magic stance). Edge cases: " +
@@ -375,13 +395,14 @@ function main() {
       "data/spells-catalog.json",
       "data/spell-components.json",
       "data/spell-shapes.json",
-      "../LSD-Partial-2025-02-23_16-15/spells.json",
+      "data/spell-table-attrs.json",
     ],
     _spell_count: spellIds.length,
     _fast_cast_count: fastCastCount,
     _lead_only_count: leadOnlyCount,
     _missing_component_lookups: missingCompCount,
     _missing_shape_lookups: missingShapeCount,
+    _data_warnings: dataWarnings,
     _caster_effect_count: casterEffectCount,
     _target_effect_count: targetEffectCount,
     sequences: out,

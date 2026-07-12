@@ -242,6 +242,26 @@ fn parse_cast_move_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "castMove=off")
 }
 
+/// (2026-07-12, WS04 S3a): parse `?castHoldReclaim`. DEFAULT-OFF strict
+/// opt-in (the flag footgun escape): returns `true` ONLY when
+/// `castHoldReclaim=on` (or the bare `castHoldReclaim`) is present — a bare
+/// param never accidentally reads ON, and `castHoldReclaim=off` is OFF. When
+/// on, the FU-A `use_time` reclaim holds the local player's FORWARD slot dead
+/// across a whole KNOWN cast chain (the JS chain stamps
+/// `SessionHandle::noteLocalCastWindow`) instead of reviving held-W per
+/// windup-node — the multi-windup war/void forward leak. Strafe/turn still
+/// reclaim (slidecast untouched); a jump clears the lock; a fresh forward
+/// edge is untouched (fastcast preserved). Native carrier:
+/// `USE_CAST_HOLD_RECLAIM` (movement/system.rs). Needs a wasm rebuild; NO
+/// manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_cast_hold_reclaim_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed
+        .split('&')
+        .any(|kv| kv == "castHoldReclaim" || kv == "castHoldReclaim=on")
+}
+
 /// (2026-07-03): parse `?slideCast`. ADJ-8 (2026-07-04): DEFAULT
 /// FLIPPED OFF — the authentic burst is the default; `=on` is the
 /// modern opt-in. User ruling, verbatim: "slideCast=off feels more
@@ -934,6 +954,23 @@ static MOVEMENT_PENDING_MOTIONS_DIAG: std::sync::atomic::AtomicU32 =
 #[wasm_bindgen(js_name = movementPendingMotionsDiag)]
 pub fn movement_pending_motions_diag() -> u32 {
     MOVEMENT_PENDING_MOTIONS_DIAG.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// WS16 diag (2026-07-12) — packed movement-arbitration snapshot for the
+/// cast surface (`__diag.cast.movementSnapshot()`). Rides v6 (additive,
+/// diagnostics-only; same contract as MOVEMENT_PENDING_MOTIONS_DIAG). Stored
+/// per-tick by the TickMovement arm. Bit layout:
+///   bit0  last_move_was_autonomous (latch: 1=raw keyboard drives)
+///   bit1  cast_move_enabled
+///   bit2  slide_cast_enabled
+///   bits4-5 forward-slot occupancy: 0=none 1=walk 2=run 3=substate
+///   bits16-31 low16 of the held substate cmd (when occupancy==3)
+static CAST_ARBITRATION_DIAG: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+#[wasm_bindgen(js_name = castArbitrationDiag)]
+pub fn cast_arbitration_diag() -> u32 {
+    CAST_ARBITRATION_DIAG.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Bug-A round-2 diag (2026-07-03): reclaim causes, packed
@@ -20788,15 +20825,31 @@ fn spellcast_error_text(code: u32) -> Option<&'static str> {
         0x0401 => "You don't have enough Mana to cast this spell.",
         // WeenieError::YourSpellFizzled
         0x0402 => "Your spell fizzled.",
-        // WeenieError::YourSpellCannotBeCastOutside
-        0x0407 => "Your spell cannot be cast outside.",
-        // WeenieError::YourSpellCannotBeCastInside
-        0x0408 => "Your spell cannot be cast inside.",
+        // WeenieError::YourSpellCannotBeCastOutside (retail string has no
+        // trailing period — acclient.c:416024).
+        0x0407 => "Your spell cannot be cast outside",
+        // WeenieError::YourSpellCannotBeCastInside (retail string has no
+        // trailing period — acclient.c:415814).
+        0x0408 => "Your spell cannot be cast inside",
+        // WeenieError::YourSpellTargetIsMissing — retail's spell-target-loss
+        // string (acclient.c:416007). Vanilla ACE routes target loss as
+        // TargetNotAcquired (0x042C, below) instead, but keep 0x0403 for any
+        // server that sends the retail code. (WS05.)
+        0x0403 => "Your spell's target is missing!",
         // WeenieError::YouHaveMovedTooFar (PK windup move cap)
         0x0498 => "You have moved too far!",
+        // WeenieError::TargetNotAcquired — what our live vanilla ACE actually
+        // sends when the spell target dies/teleports before or during windup
+        // (Player_Magic.cs:139/177/201/755). 0x042C is used ONLY by
+        // Player_Magic in ACE (rg-verified across external/ACE), so mapping it
+        // to the retail spell-target-loss string is unambiguous against our
+        // server. Without this, target-loss rendered an ugly
+        // `[Use failed] TargetNotAcquired` system line. (WS05.)
+        0x042C => "Your spell's target is missing!",
         // WeenieError::MissileOutOfRange — ACE reuses this for spell
-        // range (VerifySpellRange). Retail's generic range string.
-        0x0550 => "Out of range!",
+        // range (VerifySpellRange). Retail's generic range string
+        // (capital R — acclient.c:414017).
+        0x0550 => "Out of Range!",
         // WeenieError::YouCantDoThatWhileInTheAir (cast while jumping)
         0x04EB => "You can't do that while in the air!",
         _ => return None,
@@ -21812,6 +21865,10 @@ enum SessionCommand {
     /// held manual state. JS sends this only under the default-off
     /// flag; same-value sends no-op crate-side.
     SetAutoRun { on: bool },
+    /// WS04 (`?castHoldReclaim`) — the JS cast chain's local cast-window
+    /// signal (true at windup start, false at chain completion/fizzle/cancel).
+    /// Drives `MovementSystemHandle::note_local_cast_window`.
+    NoteLocalCastWindow { active: bool },
     /// P13/P16-H2 (2026-07-04) — resolve the local player's MotionTable
     /// from-Ready link lengths (the machinery behind
     /// `lookupMotionLinkForSwing`) and install them as the
@@ -29121,6 +29178,18 @@ struct LatestStats {
     // treats `0` as capacity-unknown and degrades to occupied-only.
     items_capacity: u32,
     containers_capacity: u32,
+    // WS05 (2026-07-12): raw `init_level + points_raised` (retail
+    // `CACQualities::InqSkillLevel`, acclient.c:443063) for the 5 magic
+    // skills, keyed by SkillType u32 (31/32/33/34/43 = CreatureEnch /
+    // ItemEnch / Life / War / Void). This is the value
+    // `SpellExamineUI::DetermineSpellRange` (acclient.c:228504) feeds the
+    // cast-range formula — NOT the buffed/"current" nor the attribute-formula
+    // "base" skill (both of which the stride-6 `skills` array carries).
+    // ACE's own `VerifySpellRange` overrides its `magicSkill` to
+    // `InitLevel + Ranks` for player self-casts (Player_Magic.cs:492-497), so
+    // the client range preview fed by this map matches the server reject
+    // boundary. Absent magic skills are simply not inserted (getter reads 0).
+    magic_skill_raw: std::collections::HashMap<u32, u32>,
 }
 
 // === Option C — live use-predicates (2026-07-07) ===
@@ -29298,6 +29367,25 @@ impl SessionHandle {
             skills: stats.skills,
             level_info: stats.level_info,
         }
+    }
+
+    /// WS05 (2026-07-12): retail `CACQualities::InqSkillLevel`
+    /// (acclient.c:443063) = raw `init_level + points_raised` for a magic
+    /// skill (0 if the skill is untrained/absent). This is the value
+    /// `SpellExamineUI::DetermineSpellRange` (acclient.c:228504) feeds the
+    /// cast-range formula — NOT the buffed/"current" nor the attribute-formula
+    /// "base" skill that `playerStats().skills` carries. `skill_type` is the
+    /// SkillType u32 (34=War, 33=Life, 32=ItemEnch, 31=CreatureEnch,
+    /// 43=Void). Cached on each `publish_player_stats_snapshot` (same trigger
+    /// as `playerStats`). Consumed by the JS spell-range preview
+    /// (`scene3d/spell_range.js`). Returns 0 for non-magic or absent skills.
+    #[wasm_bindgen(js_name = playerMagicSkillRaw)]
+    pub fn player_magic_skill_raw(&self, skill_type: u32) -> u32 {
+        self.latest_stats
+            .borrow()
+            .as_ref()
+            .and_then(|s| s.magic_skill_raw.get(&skill_type).copied())
+            .unwrap_or(0)
     }
 
     /// Wave-D4 (paperdoll): current player burden as a 0.0..N float
@@ -32175,6 +32263,26 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::SetAutoRun { on })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("set_auto_run: cmd channel closed ({e})"))
+            })
+    }
+
+    /// WS04 (`?castHoldReclaim`) — mark the LOCAL cast chain in flight. The
+    /// JS cast chain stamps `true` at windup start and `false` at chain
+    /// completion / fizzle / cancel; while active + grounded and the flag is
+    /// on, the interpreter's `use_time` FU-A reclaim holds the FORWARD axis
+    /// dead across the whole chain (strafe/turn still reclaim; a jump clears
+    /// the lock; a fresh forward edge is untouched). JS typeof-guards the
+    /// method (a stale pkg/ degrades silently — the feature no-ops).
+    /// ADDITIVE export — no manifest bump.
+    #[wasm_bindgen(js_name = noteLocalCastWindow)]
+    pub fn note_local_cast_window(&self, active: bool) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::NoteLocalCastWindow { active })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "note_local_cast_window: cmd channel closed ({e})"
+                ))
             })
     }
 
@@ -35508,6 +35616,20 @@ fn publish_player_stats_snapshot(
         };
         skills.push(next_cost);
     }
+    // WS05 (2026-07-12): raw `init + ranks` (retail InqSkillLevel) for the 5
+    // magic skills, feeding the JS cast-range preview via
+    // `playerMagicSkillRaw`. Kept separate from the stride-6 `skills` array
+    // (which carries the buffed `current` + attribute-formula `base`) because
+    // `DetermineSpellRange` uses this raw value, not those. SkillType ids:
+    // 31 CreatureEnch, 32 ItemEnch, 33 Life, 34 War, 43 Void.
+    let mut magic_skill_raw: std::collections::HashMap<u32, u32> =
+        std::collections::HashMap::new();
+    for skill in world.player.skill_snapshot() {
+        let id = skill.skill_type as u32;
+        if matches!(id, 31 | 32 | 33 | 34 | 43) {
+            magic_skill_raw.insert(id, skill.init.saturating_add(skill.ranks));
+        }
+    }
     let lvl = world.get_level_info();
     let level_info: Vec<u32> = vec![
         lvl.level,
@@ -35675,6 +35797,7 @@ fn publish_player_stats_snapshot(
         shortcuts,
         items_capacity,
         containers_capacity,
+        magic_skill_raw,
     });
 }
 
@@ -36919,6 +37042,11 @@ async fn recv_loop(
     // locomotion until an input edge / gesture end); see
     // `parse_cast_move_flag`.
     movement.set_cast_move(parse_cast_move_flag(&js_location_search()));
+    // (2026-07-12, WS04 S3a): `?castHoldReclaim=on` — hold the FORWARD slot
+    // dead across a whole known cast chain (default OFF, eye-test gated); the
+    // JS cast chain stamps `noteLocalCastWindow`. See
+    // `parse_cast_hold_reclaim_flag`.
+    movement.set_cast_hold_reclaim(parse_cast_hold_reclaim_flag(&js_location_search()));
     // (2026-07-03): `?slideCast` — held-strafe/turn persistence through
     // ACE's General cast-gesture stomps. ADJ-8 (2026-07-04): default
     // OFF (authentic burst, user ruling); `=on` is the modern opt-in;
@@ -46526,6 +46654,13 @@ async fn recv_loop(
                         // and the drive only emits once ticks run.
                         movement.set_auto_run(on);
                     }
+                    Some(SessionCommand::NoteLocalCastWindow { active }) => {
+                        // WS04 (?castHoldReclaim) — the JS cast chain's local
+                        // cast-window signal. Pure movement-crate bookkeeping
+                        // (the forward lock reads it in the use_time reclaim);
+                        // no world/seed guard needed.
+                        movement.note_local_cast_window(active);
+                    }
                     Some(SessionCommand::IngestMotionLengths { mtable_id }) => {
                         // P13/P16-H2 — authored one-shot lengths for the
                         // completion-clock shim (variant doc above). The
@@ -47401,6 +47536,13 @@ async fn recv_loop(
                                 MOVEMENT_PENDING_MOTIONS_DIAG.store(
                                     movement.local_registry_pending_motions(w.player.guid)
                                         as u32,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                                // WS16 diag: pack the autonomy latch +
+                                // interpreter forward-slot occupancy for the
+                                // cast surface (rides v6, no manifest bump).
+                                CAST_ARBITRATION_DIAG.store(
+                                    movement.cast_arbitration_diag(w.player.guid),
                                     std::sync::atomic::Ordering::Relaxed,
                                 );
                                 // Wave-1 step 5 (?cmdInterp=on, rows

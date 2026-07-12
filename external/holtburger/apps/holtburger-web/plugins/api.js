@@ -121,6 +121,7 @@
 // that need component data should prefer this helper over rolling
 // their own inventory scan.
 import { selfTargetGuidFor } from "../ui/ac_cast_spell.js";
+import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 
 let _componentCatalog = null;
 let _componentCatalogPromise = null;
@@ -472,6 +473,33 @@ export function createClient(sessionHandle) {
       } else {
         sessionHandle.castTargetedSpell(resolvedTarget, spellId);
       }
+      // WS14 — cast-lifecycle begin for the non-picking paths (combat-bar /
+      // hotbar / spell-research). Mirrors picking.js's spellCastInitiated
+      // payload so spell_shape_preview + the combat-bar cast-busy sweep get one
+      // uniform signal (combat-bar/hotbar casts get shape-preview as a bonus).
+      // Does NOT double-fire the picking path — picking casts via sessionHandle
+      // directly, never through here (§1.3). estDurationMs lets the UI size its
+      // cooldown without importing the cast-sequence table. Never blocks the cast.
+      try {
+        const bus = window.__pluginClient?.events;
+        if (bus?.emit) {
+          const lg = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+          const seq = getCastSequence((spellId >>> 0)) ?? null;
+          const speed = Number(window.__castSpeed) || 2.0;
+          const estDurationMs = seq && Number.isFinite(+seq.totalDurationS) && +seq.totalDurationS > 0
+            ? Math.max(400, Math.round((+seq.totalDurationS * 1000) / speed))
+            : undefined;
+          bus.emit("spellCastInitiated", {
+            spellId: spellId >>> 0,
+            targetGuid: resolvedTarget == null ? null : (resolvedTarget >>> 0),
+            attackerGuid: lg,
+            school: seq?.school ?? null,
+            shape: seq?.shape ?? null,
+            level: seq?.level ?? null,
+            estDurationMs,
+          });
+        }
+      } catch (_) { /* events never block the cast */ }
       // F8-3 — play the local cast gesture for ALL non-picking cast paths
       // (untargeted self-buffs/heals/recalls + hotbar / spell-research /
       // combat-bar targeted casts). The picking.js armed-targeted path

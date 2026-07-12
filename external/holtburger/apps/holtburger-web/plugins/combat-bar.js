@@ -23,6 +23,12 @@ import {
 } from "../ui/ac_spell_shape.js";
 import { setUseFastMissiles, setAutoRepeatAttacks, isCharacterOptionEnabled, CHARACTER_OPTION } from "../ui/ac_character_options.js";
 import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
+import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
+import {
+  wrongStanceForArmed,
+  castCooldownMs,
+  castSweepReducer,
+} from "../ui/ac_cast_ui_logic.js";
 import { suggestedCombatModeFromInventory } from "./inventory_helpers.js";
 
 // Wave 6 / Phase 17 — spell-shape badge mapping.
@@ -555,6 +561,120 @@ if (typeof window !== "undefined") {
   installAttackLockoutHooks();
   installSpellBarHotkeys();
   installSpellStrip();
+  installCastBusySweep();
+}
+
+// WS14 (patch A/B) — cast-busy grey + cooldown sweep (HUD-only, no flag).
+//
+// Greys the armed/selected spell-picker rows AND the spell-strip slots for the
+// duration of the LOCAL player's cast, driven by the cast-lifecycle events
+// (spellCastInitiated → on; spellCastResolved/Rejected → off). Self-expiring:
+// the CSS keyframe animation ends on its own even if a resolve event is dropped.
+//
+// Runs at module-load (mirrors installSpellStrip / installAutoDisarmHooks) so
+// the strip sweep works whether or not the combat PANEL is open, and injects
+// its own <style> here (NOT ensureStyles, which only runs on panel-open) so the
+// CSS exists whenever the sweep can fire. Queries the DOCUMENT — the strip
+// (.hb-ss-slot) and the panel rows (.hb-cb-spell) live in SEPARATE DOM subtrees
+// (no shared `root`), so a document query is the only one that greys both.
+function installCastBusySweep() {
+  if (window.__hbCastBusySweepInstalled) return;
+  window.__hbCastBusySweepInstalled = true;
+
+  // Self-contained style — panel `.armed`-adjacent CSS lives in ensureStyles(),
+  // but that only injects on panel-open; the sweep + wrong-stance rules must be
+  // available at module-load for the always-present strip.
+  try {
+    if (!document.getElementById("hb-ws14-cast-style")) {
+      const st = document.createElement("style");
+      st.id = "hb-ws14-cast-style";
+      st.textContent = `
+    /* WS14 — cast-busy grey + cooldown sweep. HUD-only; no flag.
+       --hb-cast-ms is set inline from the spell's totalDurationS/CAST_SPEED. */
+    .hb-cb-spell.casting,
+    .hb-ss-slot.casting {
+      pointer-events: none;
+      filter: grayscale(0.7) brightness(0.7);
+      position: relative;
+      overflow: hidden;
+    }
+    .hb-cb-spell.casting::after,
+    .hb-ss-slot.casting::after {
+      content: "";
+      position: absolute; inset: 0;
+      transform-origin: left center;
+      background: rgba(160, 110, 255, 0.28);
+      animation: hb-cast-cooldown var(--hb-cast-ms, 2000ms) linear 1 forwards;
+      pointer-events: none;
+    }
+    @keyframes hb-cast-cooldown {
+      from { transform: scaleX(1); }
+      to   { transform: scaleX(0); }
+    }
+    /* WS14 (patch B) — armed but NOT in Magic stance: amber cue instead of the
+       ready-purple, so the player sees the spell won't fire until they enter
+       Magic mode. */
+    .hb-cb-spell.armed.wrong-stance {
+      background: rgba(200, 140, 40, 0.28);
+      border-color: rgba(220, 160, 60, 0.7);
+    }
+    .hb-cb-spell.armed.wrong-stance .hb-cb-spell-action { color: #ffd98a; }`;
+      (document.head ?? document.documentElement).appendChild(st);
+    }
+  } catch (_) { /* style injection is best-effort */ }
+
+  const _durationMsFor = (spellId) => {
+    try {
+      const seq = getCastSequence((spellId >>> 0) || 0);
+      return castCooldownMs(seq?.totalDurationS, Number(window.__castSpeed) || 2.0);
+    } catch (_) { return 2000; }
+  };
+  const _setCasting = (on, ms) => {
+    try {
+      const nodes = document.querySelectorAll(".hb-cb-spell, .hb-ss-slot");
+      for (const n of nodes) {
+        if (on) {
+          n.style.setProperty("--hb-cast-ms", `${ms}ms`);
+          n.classList.add("casting");
+        } else {
+          n.classList.remove("casting");
+          n.style.removeProperty("--hb-cast-ms");
+        }
+      }
+    } catch (_) { /* never throw out of an event handler */ }
+  };
+
+  let pollTimer = null;
+  function tryHook() {
+    const client = window.__pluginClient ?? null;
+    if (!client?.events?.on) return false;
+    const localGuid = () => (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+    const onInitiated = (e) => {
+      const d = e?.detail ?? e ?? {};
+      const r = castSweepReducer({
+        type: "spellCastInitiated",
+        attackerGuid: d.attackerGuid,
+        localGuid: localGuid(),
+        estDurationMs: d.estDurationMs,
+        fallbackMs: _durationMsFor(d.spellId),
+      });
+      if (r.ignored) return;
+      _setCasting(r.casting, r.ms);
+    };
+    const onResolved = () => _setCasting(false);
+    const onRejected = () => _setCasting(false);
+    client.events.on("spellCastInitiated", onInitiated);
+    client.events.on("spellCastResolved", onResolved);
+    client.events.on("spellCastRejected", onRejected);
+    return true;
+  }
+  if (typeof window !== "undefined") {
+    if (!tryHook()) {
+      pollTimer = setInterval(() => {
+        if (tryHook()) { clearInterval(pollTimer); pollTimer = null; }
+      }, 500);
+    }
+  }
 }
 
 // Subscribe at module-load to the hotbar bus event — when a hotbar
@@ -994,6 +1114,15 @@ function installSpellStrip() {
       (window.liveScene3d?.entityManager?.getSelectedTarget?.() >>> 0) || 0;
     if (!tgt) {
       setName("(no target selected)");
+      // WS14 — surface the retail client string (acclient.c:404772) on the
+      // shared toast surface, not just the strip name label. This is the
+      // End-key / Cast-button path (no click-to-cast follow-up implied); the
+      // fireSlot() armed-no-target path keeps its "click a target" name hint.
+      try {
+        window.__pluginClient?.events?.emit?.("clientActionRejected", {
+          message: "You must select a suitable target before casting this spell.",
+        });
+      } catch (_) {}
       return;
     }
     castSpellViaHandle(id, tgt);
@@ -1199,12 +1328,22 @@ function installSpellStrip() {
   // panel-row arm (which doesn't dispatch hb-spellbar-changed) still
   // refreshes us.
   let lastVisible = false;
+  let lastPanelMagic = null;
   let lastArmed = -1;
   let lastActive = -1;
   let lastSelected = -2;
   setInterval(() => {
     let on = false;
     try { on = window.__getCurrentStanceLow?.() === STANCE_MAGIC; } catch (_) {}
+    // WS14 (patch B) — refresh the OPEN spellbook panel's armed/wrong-stance
+    // amber cue on any Magic-stance transition. The panel is a separate closure
+    // from this strip and may be open while not in Magic stance; its cue only
+    // updates on re-render, so drive one here. (Strip visibility below is
+    // separate.) No-op when the panel is closed (hook nulled on dispose).
+    if (on !== lastPanelMagic) {
+      lastPanelMagic = on;
+      try { window.__combatBarPanelRerender?.(); } catch (_) {}
+    }
     if (on !== lastVisible) {
       lastVisible = on;
       root.style.display = on ? "" : "none";
@@ -2041,8 +2180,18 @@ function renderSpellPicker(bodyEl, state) {
       row.dataset.spellId = String(spellId);
       row.dataset.slotIndex = String(i);
       const isUntargeted = meta?.untargeted ?? true;
+      // WS14 (patch B) — surface the firing precondition. A targeted armed
+      // spell only fires from Magic stance (picking.js dispatch); flag the
+      // mismatch with an amber cue so the player knows it won't cast until they
+      // enter Magic mode. The tooltip hint is folded into row.title below
+      // (which is re-assigned later, so setting it here would be clobbered).
+      let rowWrongStance = false;
       if (state.armedSpellId === spellId && !isUntargeted) {
         row.classList.add("armed");
+        let stanceLow = 0;
+        try { stanceLow = window.__getCurrentStanceLow?.() | 0; } catch (_) {}
+        rowWrongStance = wrongStanceForArmed(state.armedSpellId, isUntargeted, stanceLow);
+        if (rowWrongStance) row.classList.add("wrong-stance");
       }
       // Phase H.5 — accept dragged spells from the Spellbook plugin.
       row.addEventListener("dragover", (ev) => {
@@ -2116,10 +2265,14 @@ function renderSpellPicker(bodyEl, state) {
             : "";
         manaSuffix = ` — ${+meta.mana} mana${mcNote}`;
       }
+      // WS14 (patch B, MN1) — append the wrong-stance hint into the tooltip
+      // HERE (not at the .wrong-stance class site above), because row.title is
+      // re-assigned on this line and would clobber an earlier set.
+      const stanceHint = rowWrongStance ? " — enter Magic mode to cast" : "";
       if (classification && classification.shape) {
-        row.title = `${baseName} (${classification.shape})${manaSuffix}${casterSuffix}`;
+        row.title = `${baseName} (${classification.shape})${manaSuffix}${casterSuffix}${stanceHint}`;
       } else {
-        row.title = `${baseName}${manaSuffix}${casterSuffix}`;
+        row.title = `${baseName}${manaSuffix}${casterSuffix}${stanceHint}`;
       }
 
       row.addEventListener("click", () => {
@@ -2148,6 +2301,12 @@ function renderSpellPicker(bodyEl, state) {
     catalog = c;
     renderRows();
   });
+
+  // WS14 (patch B, MF4) — expose this panel's renderRows so the module-level
+  // strip poll can refresh the open picker's armed/wrong-stance amber cue on a
+  // Magic-stance transition (the panel isn't necessarily open in Magic stance,
+  // and arming doesn't dispatch hb-spellbar-changed). Cleared on dispose.
+  window.__combatBarPanelRerender = renderRows;
 
   // Wave 6 / Phase 17 — poll for the spell-shape table to land, then
   // re-render once so the badges + tooltip suffixes appear. The first
@@ -2188,6 +2347,11 @@ function renderSpellPicker(bodyEl, state) {
   // We store this so the outer activate() can include it in dispose.
   bodyEl.__spellPickerDispose = () => {
     window.removeEventListener("hb-spellbar-changed", onSpellbarChanged);
+    // WS14 — drop the panel-rerender hook so the strip poll no-ops when the
+    // picker is closed (renderRows would touch a detached `list` otherwise).
+    if (window.__combatBarPanelRerender === renderRows) {
+      window.__combatBarPanelRerender = null;
+    }
     if (shapePollId) {
       clearInterval(shapePollId);
       shapePollId = 0;
