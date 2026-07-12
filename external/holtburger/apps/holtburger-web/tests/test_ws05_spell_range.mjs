@@ -19,6 +19,7 @@ import {
   inqSkillForSchool,
   pickSkillLevel,
   determineSpellRange,
+  resolveRangeRingSpec,
   RADAR_OUTDOOR_RADIUS,
 } from "../scene3d/spell_range.js";
 
@@ -74,6 +75,55 @@ eq(pickSkillLevel(0, (s) => (s === 14 ? 999 : (raw[s] || 0))), 250,
   eq(64 <= range, true, "e2e 64m target is in range (<=65)");
   eq(70 <= range, false, "e2e 70m target is out of range (>65)");
 }
+
+// =====================================================================
+// WS05b (2026-07-12) — resolveRangeRingSpec: the cast-range RING decision
+// core. Pins the regression the 1070 eye-test caught: the ring never drew
+// because the tick resolved the local player from entityMap.get(localGuid),
+// but the wasm eager-WorldState path suppresses the local player's KIND_SPAWN
+// so it has NO rig in entityMap on the default boot. The fix sources the
+// player position from getLocalPlayerWorldPos() instead — so the ring spec
+// MUST be non-null when a targeted spell is armed and getLocalPlayerWorldPos
+// returns a pose, EVEN WITH the local player absent from entityMap.
+// =====================================================================
+const truthy = (got, label) => (got ? ok(label) : bad(`${label}: got ${JSON.stringify(got)}`));
+const nullish = (got, label) => (got == null ? ok(label) : bad(`${label}: expected null, got ${JSON.stringify(got)}`));
+
+const warInfo = { range: 65, school: 1 };   // War, in-range
+const voidInfo = { range: 60, school: 5 };   // Void
+const feet = { x: 12345.5, y: 678.25, z: 82.0 };
+
+// (a) THE REGRESSION — armed war spell + a valid getLocalPlayerWorldPos pose
+//     (from the last-server fallback, NOT entityMap) => ring spec renders.
+{
+  const spec = resolveRangeRingSpec(27, warInfo, feet);
+  truthy(spec, "resolveRangeRingSpec: armed war spell + world pose (no entityMap rig) -> ring spec");
+  eq(spec?.spellId, 27, "  spec.spellId");
+  eq(spec?.range, 65, "  spec.range (school reach)");
+  eq(spec?.school, 1, "  spec.school (War -> blue)");
+  eq(spec?.x, 12345.5, "  spec.x tracks the player world pose");
+  eq(spec?.y, 678.25, "  spec.y tracks the player world pose");
+  eq(spec?.z, 82.0, "  spec.z tracks the player world pose");
+}
+
+// (b) Void spell -> purple school carried through.
+eq(resolveRangeRingSpec(5349, voidInfo, feet)?.school, 5, "resolveRangeRingSpec: void spell -> school 5 (purple)");
+
+// (c) No spell armed (0 / negative / non-number) -> no ring.
+nullish(resolveRangeRingSpec(0, warInfo, feet), "resolveRangeRingSpec: armedSpellId 0 -> null");
+nullish(resolveRangeRingSpec(-1, warInfo, feet), "resolveRangeRingSpec: negative armedSpellId -> null");
+nullish(resolveRangeRingSpec(null, warInfo, feet), "resolveRangeRingSpec: null armedSpellId -> null");
+
+// (d) Self / untargeted / zero-range spell (rangeInfo null or range<=0) -> no
+//     ring. This is the selfbuff_no_ring case (spell 2331): _armedSpellRange
+//     returns null for self-targeted, so the spec is null.
+nullish(resolveRangeRingSpec(2331, null, feet), "resolveRangeRingSpec: self-buff (rangeInfo null) -> null");
+nullish(resolveRangeRingSpec(2331, { range: 0, school: 2 }, feet), "resolveRangeRingSpec: range 0 -> null");
+
+// (e) No known player pose yet (getLocalPlayerWorldPos returned null / garbage)
+//     -> no ring (don't draw at the origin).
+nullish(resolveRangeRingSpec(27, warInfo, null), "resolveRangeRingSpec: no player pose -> null");
+nullish(resolveRangeRingSpec(27, warInfo, { x: NaN, y: 0, z: 0 }), "resolveRangeRingSpec: NaN pose -> null");
 
 console.log(fail ? `FAIL — ${fail} failure(s)` : "PASS — 0 failure(s)");
 process.exit(fail ? 1 : 0);

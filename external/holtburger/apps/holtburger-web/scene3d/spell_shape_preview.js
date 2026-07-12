@@ -40,7 +40,7 @@
 
 import * as THREE from "three";
 import { SPELL_SHAPE, SPELL_SCHOOL } from "../ui/ac_spell_shape.js";
-import { pickSkillLevel, determineSpellRange } from "./spell_range.js";
+import { pickSkillLevel, determineSpellRange, resolveRangeRingSpec } from "./spell_range.js";
 
 // === Wave R3.C — projectile mechanics fidelity (2026-05-29) ===
 // `?projectileArc=on` opt-in. Default OFF → the Arc preview keeps its
@@ -753,32 +753,42 @@ function _rangeRingTick() {
     const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
     const ls = (typeof window !== "undefined") ? window.liveScene3d : null;
     const em = ls?.entityManager;
-    const localGuid =
-      typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function"
-        ? (window.getLocalPlayerGuid() >>> 0)
-        : 0;
-    const localInst = em && localGuid ? em.entityMap?.get(localGuid) : null;
+    // The local player has NO rig in entityMap on the default boot — the wasm
+    // eager-WorldState path suppresses its KIND_SPAWN on SelectCharacter
+    // (entities.js#getLocalPlayerWorldPos), so `entityMap.get(localGuid)`
+    // returns undefined and the OLD gate disposed the ring every frame (the
+    // WS05b defect: no torus ever drew). Use the manager's robust
+    // getLocalPlayerWorldPos() — the same predicted / last-server pose the
+    // follow camera + lighting read — which is defined regardless of whether a
+    // local-player rig ever spawned, and returns a world position in the same
+    // (landblockX*192 + x) frame entity roots use (loop.js:2500 / entitiesGroup
+    // at origin), so the ring lands at the caster's feet.
+    const feet =
+      em && typeof em.getLocalPlayerWorldPos === "function"
+        ? em.getLocalPlayerWorldPos()
+        : null;
 
     const info = armed && sh ? _armedSpellRange(sh, armed) : null;
-    if (!info || !localInst?.root) {
+    const spec = resolveRangeRingSpec(armed, info, feet);
+    if (!spec || !ls) {
       _disposeRangeRing();
     } else {
       // Rebuild only when the armed spell or its computed range changes.
       if (
         !_rangeRing ||
-        _rangeRing.spellId !== armed ||
-        Math.abs(_rangeRing.range - info.range) > 1e-3
+        _rangeRing.spellId !== spec.spellId ||
+        Math.abs(_rangeRing.range - spec.range) > 1e-3
       ) {
         _disposeRangeRing();
-        const parent = ls.entitiesGroup ?? localInst.root.parent ?? null;
+        const parent = ls.entitiesGroup ?? null;
         if (parent) {
           // TorusGeometry default lies in the XY plane (hole axis = +Z) =
           // the AC ground plane in entitiesGroup local space (same as
           // _buildRing). Tube radius 0.08m; renderOrder just under the
           // transient previews so those still read on top.
-          const geom = new THREE.TorusGeometry(info.range, 0.08, 8, 64);
+          const geom = new THREE.TorusGeometry(spec.range, 0.08, 8, 64);
           const mat = new THREE.MeshBasicMaterial({
-            color: colorForSchool(info.school),
+            color: colorForSchool(spec.school),
             transparent: true,
             opacity: 0.35,
             depthWrite: false,
@@ -790,12 +800,12 @@ function _rangeRingTick() {
           root.name = "spell-range-ring";
           root.add(mesh);
           parent.add(root);
-          _rangeRing = { root, geom, mat, range: info.range, spellId: armed };
+          _rangeRing = { root, geom, mat, range: spec.range, spellId: spec.spellId };
         }
       }
       if (_rangeRing) {
-        // Track the local player's feet each frame.
-        _rangeRing.root.position.copy(localInst.root.position);
+        // Track the local player's feet each frame (world-space pose).
+        _rangeRing.root.position.set(spec.x, spec.y, spec.z);
       }
     }
   } catch (_) { /* never throw out of the rAF loop */ }

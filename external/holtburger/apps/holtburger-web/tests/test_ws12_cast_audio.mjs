@@ -74,9 +74,9 @@ console.log("PART 1: windup-hum drain (real hook_windows.js planner)");
 console.log("PART 2: static source shape");
 const ent = readFileSync(join(ROOT, "scene3d/entities.js"), "utf8");
 
-// P1 — flag is strict `=== "on"` opt-in (default-OFF; flag footgun).
-check("entities.js defines CAST_CANCEL_STOPS (strict =='on' opt-in)",
-  /CAST_CANCEL_STOPS[\s\S]{0,400}get\("castCancelStops"\)\s*\?\.\s*toLowerCase\(\)\s*===\s*"on"/.test(ent));
+// P1 — flag is DEFAULT-ON with a `!== "off"` escape (eye-tested GTX-1070 2026-07-12).
+check("entities.js defines CAST_CANCEL_STOPS (default-ON, `!=='off'` escape)",
+  /CAST_CANCEL_STOPS[\s\S]{0,400}get\("castCancelStops"\)\s*\?\.\s*toLowerCase\(\)\s*!==\s*"off"/.test(ent));
 // P1 — cancelCastSequence stops the running cast/swing LoopOnce overlay under the flag,
 //      restricted to swing:/link: keys, routed through _completeOverlay then .stop().
 check("cancelCastSequence stops cast/swing overlays under CAST_CANCEL_STOPS",
@@ -101,8 +101,8 @@ check("P2 backfill has NO flag gate (zero-risk audio backfill, default-ON)",
   !/if \([A-Z_]+\)[\s\S]{0,120}inst\.soundTableDid = 0x20000001;/.test(ent));
 
 const flags = readFileSync(join(ROOT, "docs/url-flags.md"), "utf8");
-check("url-flags.md documents ?castCancelStops with default off",
-  /\|\s*`castCancelStops`\s*\|[^|]*\|\s*\*\*off\*\*\s*\|/.test(flags));
+check("url-flags.md documents ?castCancelStops with default on",
+  /\|\s*`castCancelStops`\s*\|[^|]*\|\s*\*\*on\*\*\s*\|/.test(flags));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

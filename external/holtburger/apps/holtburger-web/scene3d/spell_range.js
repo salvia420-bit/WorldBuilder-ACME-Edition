@@ -53,3 +53,43 @@ export function determineSpellRange(baseRangeMod, baseRangeConstant, skillLevel)
   const r = baseRangeMod * skillLevel + baseRangeConstant;
   return r > RADAR_OUTDOOR_RADIUS ? RADAR_OUTDOOR_RADIUS : r;
 }
+
+// WS05b (2026-07-12) — pure decision core for the armed-spell cast-range RING
+// (scene3d/spell_shape_preview.js#_rangeRingTick). Extracted here so it stays
+// import-free / node-testable (no THREE, no live scene). Given the armed spell
+// id, the resolved range info ({range,school} or null), and the local player's
+// world position `feet` ({x,y,z}), return the ring spec
+// { spellId, range, school, x, y, z } or null when NO ring should draw
+// (nothing armed, self/untargeted/zero-range spell, or no known player pose).
+//
+// LOAD-BEARING (this fixes the WS05b defect): `feet` MUST be sourced from the
+// EntityManager's getLocalPlayerWorldPos() — the predicted / last-server pose —
+// NOT from entityMap.get(localGuid).root. The wasm eager-WorldState path
+// suppresses the local player's KIND_SPAWN on SelectCharacter, so on the
+// default boot the local player has NO rig in entityMap and an entityMap
+// lookup returns undefined. The original tick gated the ring on that missing
+// rig, so `_disposeRangeRing()` ran every frame and the torus never rendered
+// even with a targeted spell armed (armedSpellId > 0). getLocalPlayerWorldPos()
+// is defined regardless of whether a rig ever spawned (see entities.js).
+export function resolveRangeRingSpec(armedSpellId, rangeInfo, feet) {
+  const armed =
+    typeof armedSpellId === "number" && armedSpellId > 0 ? (armedSpellId >>> 0) : 0;
+  if (!armed) return null;
+  if (!rangeInfo || !(rangeInfo.range > 0)) return null;
+  if (
+    !feet ||
+    !Number.isFinite(feet.x) ||
+    !Number.isFinite(feet.y) ||
+    !Number.isFinite(feet.z)
+  ) {
+    return null;
+  }
+  return {
+    spellId: armed,
+    range: rangeInfo.range,
+    school: rangeInfo.school,
+    x: feet.x,
+    y: feet.y,
+    z: feet.z,
+  };
+}

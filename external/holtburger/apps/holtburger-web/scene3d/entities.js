@@ -916,8 +916,8 @@ const CAST_SPEED = (() => {
 // (default 2.0; a non-default ?castSpeed=off run reads 1.0 here too).
 try { if (typeof window !== "undefined") window.__castSpeed = CAST_SPEED; } catch (_) {}
 
-// WS11 (2026-07-12) — `?castGestureLen=on` (DEFAULT-OFF, strict `=== "on"`
-// opt-in per the flag footgun, pending the batched 1070 eye-test). Pace the
+// WS11 (2026-07-12) — `?castGestureLen=off` to disable (DEFAULT-ON, `!== "off"`
+// escape per the flag footgun; eye-tested GTX-1070 2026-07-12). Pace the
 // local cast chain's per-gesture SLEEP off the MotionTable link length
 // (`classifyMotionCommandTyped().durationSec` — the SAME value setSwingMotion
 // uses to drive the on-screen gesture, == ACE `GetAnimationLength`) instead of
@@ -931,7 +931,7 @@ try { if (typeof window !== "undefined") window.__castSpeed = CAST_SPEED; } catc
 const CAST_GESTURE_LEN = (() => {
   try {
     return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("castGestureLen")?.toLowerCase() === "on";
+      new URLSearchParams(window.location.search).get("castGestureLen")?.toLowerCase() !== "off";
   } catch (_) {
     return false;
   }
@@ -953,30 +953,31 @@ const CAST_STATE_MACHINE = (() => {
   }
 })();
 
-// WS01 (2026-07-12) — `?castReliability=on` (DEFAULT-OFF pending a batched 1070
-// eye-test; flip to default-ON once E1/E2 pass, per the castSpeed/castStateMachine/
-// castFizzle workflow). Bundles three correctness fixes to the LOCAL cast
+// WS01 (2026-07-12) — `?castReliability=off` to disable (DEFAULT-ON, `!== "off"`
+// escape per the castSpeed/castStateMachine/castFizzle workflow; eye-tested
+// GTX-1070 2026-07-12). Bundles three correctness fixes to the LOCAL cast
 // prediction so the arms actually rise: (a) look the gesture up under the Magic
 // stance explicitly so a stale `inst.currentStance` (e.g. NonCombat, which carries
 // ZERO magic gestures — DAT-verified vs player MT 0x09000001) can't silently miss;
 // (b) prefetch/warm every chain clip up front (await-capped) so the fire-and-forget
 // bake can't outlive a min-50ms windup sleep; (c) only note the swing-echo dedup
 // when the prediction will actually animate, so the default-ON dispatchParity echo
-// dedup can't swallow the server echo after a silent no-op. `=off`/absent = today.
+// dedup can't swallow the server echo after a silent no-op. `=off` = pre-WS01.
 const CAST_RELIABILITY = (() => {
   try {
     return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("castReliability")?.toLowerCase() === "on";
+      new URLSearchParams(window.location.search).get("castReliability")?.toLowerCase() !== "off";
   } catch (_) { return false; }
 })();
-// WS01 — `?castBusyScope=on` (DEFAULT-OFF, feel): scope the F8-4 busy drop to the
-// SAME spellId so a different-spell weave the server will accept still animates
-// locally. Rides `?castStateMachine`. Pending a 1070 recast-feel eye-test.
+// WS01 — `?castBusyScope` (DEFAULT-ON, `?castBusyScope=off` escape): scope the F8-4
+// busy drop to the SAME spellId so a different-spell weave the server will accept
+// still animates locally. Rides `?castStateMachine`. Eye-tested GTX-1070 2026-07-12
+// (suppress.busyWindow=1 on same-spell spam, different-spell recast animated).
 const CAST_BUSY_SCOPE = (() => {
   try {
-    return typeof window !== "undefined" && window.location &&
-      new URLSearchParams(window.location.search).get("castBusyScope")?.toLowerCase() === "on";
-  } catch (_) { return false; }
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search).get("castBusyScope")?.toLowerCase() !== "off";
+  } catch (_) { return true; }
 })();
 // WS03 (2026-07-12, S2) — `?castOverlayGuard=on` (default OFF pending 1070 eye-test).
 // Make mid-cast MOVEMENT stop breaking the cast VISUAL, mirroring retail's single-
@@ -996,24 +997,22 @@ const CAST_OVERLAY_GUARD = (() => {
       .get("castOverlayGuard")?.toLowerCase() === "on";
   } catch (_) { return false; }
 })();
-// WS12 (2026-07-12) — `?castCancelStops=on` (DEFAULT-OFF, strict `=== "on"` per
-// the flag footgun; feel/visual change → batched 1070 eye-test). On
-// cancelCastSequence (fizzle 0x0402 / UseDone / recast preempt), STOP the
-// running cast/swing LoopOnce overlay so its trailing windup-hum SoundTweaked
-// hooks (wave 0x0A000390, frames 53/57) don't keep firing AFTER the cast was
-// cancelled — retail REPLACES the spliced gesture on interrupt
+// WS12 (2026-07-12) — `?castCancelStops=off` to disable (DEFAULT-ON, `!== "off"`
+// escape per the flag footgun; feel/visual change, eye-tested GTX-1070
+// 2026-07-12). On cancelCastSequence (fizzle 0x0402 / UseDone / recast preempt),
+// STOP the running cast/swing LoopOnce overlay so its trailing windup-hum
+// SoundTweaked hooks (wave 0x0A000390, frames 53/57) don't keep firing AFTER the
+// cast was cancelled — retail REPLACES the spliced gesture on interrupt
 // (acclient.c GetObjectSequence remove_cyclic_anims), so the trailing 0.2→0.6
 // hum ramp should cut, not finish. Complements WS03's `?castOverlayGuard`
 // (which stops the suppressor + currentAction swing overlay); this covers the
-// link-keyed `_tryPlayLink` overlays that aren't currentAction. Default OFF:
-// the flag-off branch is byte-identical to today. Audio-only variant (zero
-// visual risk, could ship default-ON): swap `action.stop()` for
-// `inst.hookTimelines?.delete(key)` — mutes the trailing hum, leaves the clamp.
+// link-keyed `_tryPlayLink` overlays that aren't currentAction. `=off` =
+// byte-identical to pre-WS12 (the trailing hum finishes its ramp on cancel).
 const CAST_CANCEL_STOPS = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return new URLSearchParams(window.location.search)
-      .get("castCancelStops")?.toLowerCase() === "on";
+      .get("castCancelStops")?.toLowerCase() !== "off";
   } catch (_) { return false; }
 })();
 // WS01 — the only magic stance retail uses (low16; the wasm masks &0xFFFF, and the
