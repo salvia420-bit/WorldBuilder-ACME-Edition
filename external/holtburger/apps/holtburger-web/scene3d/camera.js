@@ -203,6 +203,38 @@ const LOOK_LIFT_DIST_M = 4.0;
 const POINTER_YAW_SENS = 0.0025;
 const POINTER_PITCH_SENS = 0.0020;
 
+/**
+ * Autofollow (`?autoFollow=on`, default OFF) — soft "trailing" camera: while
+ * the player is driving the character (WASD/QE) and NOT actively right-drag
+ * free-looking, ease `followYaw` toward the character's heading so the camera
+ * settles BEHIND the character. Safe here because follow-mode movement is
+ * player-LOCAL (tank controls; camera.js:1753+), so heading is driven only by
+ * Q/E/server — the camera trailing heading has no feedback loop to fight.
+ *
+ * Heading CONVENTION (resolved 2026-07-12 from the retail decomp + ACE, two
+ * independent Opus studies, cross-confirmed by a worked cardinal example):
+ *   - Our integrator yaw is θ = pose.heading = atan2(2(qw·qz+qx·qy),
+ *     1−2(qy²+qz²)) — the plain right-handed CCW-about-+Z angle (radians).
+ *   - AC's forward vector for that facing is (east,north) = (−sinθ, +cosθ).
+ *     Retail `Frame::set_heading`/`get_heading` and ACE `Position.InFrontOf`
+ *     (`dx=−sin(h), dy=+cos(h)`) both state this; the "450°" that appears in
+ *     `to_heading` is ONLY the degrees-compass readout, not the camera path.
+ *   - This camera parametrises forward as (sinh, cosh), so to look along AC
+ *     forward it needs h = −θ. i.e. followYaw = −pose.heading.
+ *   - Retail confirms the SHAPE too: the camera looks the SAME way the player
+ *     faces (`camera_yaw == player_heading`) and encodes "behind" purely as a
+ *     negative-forward position offset — exactly what positionCamera already
+ *     does — and it AUTO-follows (offset is player-frame-relative, re-evaluated
+ *     each frame, damped by stiffness). So this trailing feature is retail-
+ *     authentic; only the sign was wrong before.
+ * `getPlayerHeading()` (entities.getLocalPlayerHeading) already returns −θ.
+ * `window.__setAutoFollowInvert(true)` remains a debug escape only.
+ */
+const AUTOFOLLOW_RATE_DEFAULT = 4.0; // exp-ease rate (1/s): ~0.4 s to close 90%
+const AUTOFOLLOW_GRACE_MS = 350; // suppress trailing this long after a right-drag
+const AUTOFOLLOW_MOVE_EPS = 1e-3; // metres of pos-delta below which we call it idle
+const AUTOFOLLOW_DEADZONE = 0.02; // rad: within this of heading, stop easing
+
 /** Top-down ortho view: metres visible vertically at zoom=1. */
 const TOPDOWN_FRUSTUM_HEIGHT_M = 100.0;
 const TOPDOWN_HEIGHT_M = 300.0;
@@ -512,7 +544,25 @@ export class CameraSwitcher {
         Number.isFinite(msens) && msens > 0 ? msens : 1.0;
       this._mouseInvertY =
         params?.get("mouseInvertY")?.toLowerCase() === "on";
+      // Autofollow trailing camera + indoor-collision gate. Both default ON
+      // (?autoFollow=off / ?indoorCam=off to disable). Autofollow is the
+      // retail behind-the-character behaviour (retail auto-follows, damped);
+      // the indoor gate is a correctness fix (outdoor terrain floor must not
+      // apply in dungeons). The Camera options tab + window.__set* hooks
+      // toggle both live. See the AUTOFOLLOW_* constants and the indoor gate
+      // in _clipCameraAgainstWorld.
+      this._autoFollowOn = params?.get("autoFollow")?.toLowerCase() !== "off";
+      const afr = params ? parseFloat(params.get("autoFollowRate")) : NaN;
+      this._autoFollowRate =
+        Number.isFinite(afr) && afr > 0 ? afr : AUTOFOLLOW_RATE_DEFAULT;
+      this._indoorCamOn = params?.get("indoorCam")?.toLowerCase() !== "off";
     }
+    // Autofollow runtime state.
+    this._followDragging = false; // true while right-mouse HELD (free-look)
+    this._lastUserYawMs = null; // performance.now() of the last right-drag yaw edit
+    this._lastFollowPos = null; // {x,y} last frame, for the "is moving" test
+    this._autoFollowDiagCount = 0; // one-time heading-convention diag budget
+    this._autoFollowInvert = false; // negate heading if it trails the wrong way
     // C2 state: first-person latch (followDistance keeps its third-person
     // value while in-head so bookkeeping survives the round trip).
     this._inHead = false;
@@ -547,6 +597,99 @@ export class CameraSwitcher {
 
     // Initial mode entry.
     this.switchMode("follow");
+
+    // Live toggles for R9-290 A/B (paste in console; no reload needed):
+    //   window.__setAutoFollow(true)      — trailing camera on/off
+    //   window.__setAutoFollowRate(6)     — ease speed (1/s; higher = snappier)
+    //   window.__setAutoFollowInvert(true)— debug escape (default sign is proven)
+    //   window.__setIndoorCam(true)       — dungeon outdoor-collision gate
+    //   window.__setCamStiffness/__setMouseSens/__setMouseSmooth/
+    //   __setMouseInvertY/__setCamDistance — retail prefs (Camera options tab)
+    if (typeof window !== "undefined") {
+      window.__setAutoFollow = (on) => {
+        this._autoFollowOn = !!on;
+        this._autoFollowDiagCount = 0; // re-arm the convention diag
+        return this._autoFollowOn;
+      };
+      window.__setAutoFollowRate = (r) => {
+        const v = parseFloat(r);
+        if (Number.isFinite(v) && v > 0) this._autoFollowRate = v;
+        return this._autoFollowRate;
+      };
+      window.__setAutoFollowInvert = (on) => {
+        this._autoFollowInvert = !!on; // flip if the camera trails to the wrong side
+        this._autoFollowDiagCount = 0; // re-log the convention diag
+        return this._autoFollowInvert;
+      };
+      window.__setIndoorCam = (on) => {
+        this._indoorCamOn = !!on;
+        return this._indoorCamOn;
+      };
+      // Retail-preference live setters (wired to the Camera options tab —
+      // ui/camera_settings.js). Stiffness null = hard-lock (retail stiffness
+      // 1.0 ≈ snap, so we map ≥1 → null). mouseSmooth 0 = off.
+      window.__setCamStiffness = (v) => {
+        const f = parseFloat(v);
+        this._camStiffness =
+          Number.isFinite(f) && f > 0 && f < 1.0 ? f : null;
+        this._stiffSeeded = false; // re-seed the smoother on the next frame
+        return this._camStiffness;
+      };
+      window.__setMouseSens = (v) => {
+        const f = parseFloat(v);
+        this._mouseSensMult = Number.isFinite(f) && f > 0 ? f : 1.0;
+        return this._mouseSensMult;
+      };
+      window.__setMouseSmooth = (v) => {
+        const f = parseFloat(v);
+        this._mouseSmooth =
+          Number.isFinite(f) && f > 0 ? Math.min(f, 1.0) : null;
+        return this._mouseSmooth;
+      };
+      window.__setMouseInvertY = (on) => {
+        this._mouseInvertY = !!on;
+        return this._mouseInvertY;
+      };
+      window.__setCamDistance = (v) => {
+        const f = parseFloat(v);
+        if (Number.isFinite(f) && f > 0) this.followDistance = f;
+        return this.followDistance;
+      };
+    }
+
+    // Layer saved Camera-tab preferences over the URL-param defaults. Only
+    // keys the user actually saved are applied, so a fresh install (no
+    // localStorage) keeps the exact pre-existing defaults. Written by
+    // ui/camera_settings.js (`holtburger_camera_v1`).
+    try {
+      if (typeof localStorage !== "undefined") {
+        const raw = localStorage.getItem("holtburger_camera_v1");
+        if (raw) {
+          const c = JSON.parse(raw) || {};
+          if (typeof c.stiffness === "number") {
+            this._camStiffness =
+              c.stiffness > 0 && c.stiffness < 1.0 ? c.stiffness : null;
+          }
+          if (typeof c.mouseSens === "number" && c.mouseSens > 0) {
+            this._mouseSensMult = c.mouseSens;
+          }
+          if (typeof c.mouseSmooth === "number") {
+            this._mouseSmooth =
+              c.mouseSmooth > 0 ? Math.min(c.mouseSmooth, 1.0) : null;
+          }
+          if (typeof c.invertY === "boolean") this._mouseInvertY = c.invertY;
+          if (typeof c.autoFollow === "boolean") this._autoFollowOn = c.autoFollow;
+          if (typeof c.autoFollowRate === "number" && c.autoFollowRate > 0) {
+            this._autoFollowRate = c.autoFollowRate;
+          }
+          if (typeof c.distance === "number" && c.distance > 0) {
+            this.followDistance = c.distance;
+          }
+        }
+      }
+    } catch (_) {
+      /* corrupt payload — ignore, keep URL-param defaults */
+    }
   }
 
   // ---- mode switcher ------------------------------------------------
@@ -606,6 +749,7 @@ export class CameraSwitcher {
         const onMouseDown = (ev) => {
           if (ev.button !== 2) return;
           dragging = true;
+          this._followDragging = true; // suppress autofollow while free-looking
           lastX = ev.clientX;
           lastY = ev.clientY;
           downX = ev.clientX;
@@ -642,6 +786,11 @@ export class CameraSwitcher {
           if (this._mouseInvertY) my = -my;
           this.followYaw += mx * POINTER_YAW_SENS * this._mouseSensMult;
           this.followPitch += my * POINTER_PITCH_SENS * this._mouseSensMult;
+          // Mark a user yaw edit so autofollow yields for AUTOFOLLOW_GRACE_MS
+          // after the drag (and holds entirely while dragging).
+          if (mx !== 0 && typeof performance !== "undefined") {
+            this._lastUserYawMs = performance.now();
+          }
           if (this.followPitch < FOLLOW_PITCH_MIN)
             this.followPitch = FOLLOW_PITCH_MIN;
           if (this.followPitch > FOLLOW_PITCH_MAX)
@@ -650,6 +799,10 @@ export class CameraSwitcher {
         const onMouseUp = (ev) => {
           if (ev.button !== 2) return;
           dragging = false;
+          this._followDragging = false;
+          if (typeof performance !== "undefined") {
+            this._lastUserYawMs = performance.now(); // start the post-drag grace
+          }
           const dx = ev.clientX - downX;
           const dy = ev.clientY - downY;
           // 5px² — small enough to not eat deliberate orbits
@@ -784,6 +937,7 @@ export class CameraSwitcher {
     // body — that second forward integrator (flat 4.5 m/s, collision-blind)
     // was the snap-back / dual-predictor sawtooth, retired 2026-06-29.
     this._smoothToIntegrator(dt);
+    this._updateAutoFollow(dt);
     this.positionCamera(dt);
     if (this.controls && typeof this.controls.update === "function") {
       try {
@@ -791,6 +945,112 @@ export class CameraSwitcher {
       } catch (_) {}
     }
     this._dispatchMovement();
+  }
+
+  // ---- autofollow (trailing camera) --------------------------------
+
+  /**
+   * `?autoFollow=on` — ease `followYaw` toward the character's heading so the
+   * camera trails BEHIND them, tank-control style. No-op unless the flag is on,
+   * mode is follow, and third-person (in-head yaw IS the look direction).
+   *
+   * Suppression: holds entirely while right-drag free-looking, and for
+   * AUTOFOLLOW_GRACE_MS after the drag ends, so the user's manual aim isn't
+   * immediately yanked back. Only trails while the character is actually being
+   * driven (position moved this frame OR a drive/turn key is held) — idle holds
+   * the camera where the user left it, matching the requested feel.
+   */
+  _updateAutoFollow(dt) {
+    if (!this._autoFollowOn) return;
+    if (this.mode !== "follow") return;
+    if (this._retailZoomOn && this._inHead) return; // first-person: yaw = look dir
+    if (this._followDragging) return; // user is actively free-looking
+    const now = typeof performance !== "undefined" ? performance.now() : 0;
+    if (
+      this._lastUserYawMs != null &&
+      now - this._lastUserYawMs < AUTOFOLLOW_GRACE_MS
+    ) {
+      return; // post-drag grace: let the manual aim settle
+    }
+    if (!this._isPlayerDriving()) return;
+    const h = this._playerHeadingForFollow();
+    if (h == null) return;
+    // Shortest-arc error, wrapped to [-π, π].
+    let err = h - this.followYaw;
+    err = Math.atan2(Math.sin(err), Math.cos(err));
+    if (Math.abs(err) < AUTOFOLLOW_DEADZONE) return;
+    // Exponential ease — frame-rate independent (frac→1 as dt grows).
+    const frac = 1 - Math.exp(-this._autoFollowRate * (dt > 0 ? dt : 0));
+    this.followYaw += err * frac;
+  }
+
+  /**
+   * True when the character is being driven this frame — either its world
+   * position moved beyond AUTOFOLLOW_MOVE_EPS (covers server-driven autorun)
+   * or a movement/turn key is held. Updates `_lastFollowPos` as a side effect.
+   */
+  _isPlayerDriving() {
+    let moved = false;
+    try {
+      const p = this._safePlayerPos();
+      if (p) {
+        const last = this._lastFollowPos;
+        if (last) {
+          const dx = p.x - last.x;
+          const dy = p.y - last.y;
+          moved = dx * dx + dy * dy > AUTOFOLLOW_MOVE_EPS * AUTOFOLLOW_MOVE_EPS;
+        }
+        this._lastFollowPos = { x: p.x, y: p.y };
+      }
+    } catch (_) {}
+    const k = this.keys || {};
+    const keyed = !!(k.w || k.a || k.s || k.d || k.q || k.e);
+    return moved || keyed;
+  }
+
+  /**
+   * Character heading intended to match the followYaw convention, or null.
+   * Prefers `getLocalPlayerPose().heading` (authoritative, always-available);
+   * falls back to `getPlayerHeading()` (rig quaternion). The sign is confirmed
+   * live via `window.__setAutoFollowInvert(true)` — see the AUTOFOLLOW_*
+   * doc block for why the convention is unresolved in code. The first few
+   * calls log BOTH sources vs followYaw so the sign can be pinned empirically.
+   */
+  _playerHeadingForFollow() {
+    let poseH = null;
+    try {
+      const pose = this._getSessionHandle?.()?.getLocalPlayerPose?.();
+      if (pose && typeof pose.heading === "number" && Number.isFinite(pose.heading)) {
+        poseH = pose.heading;
+      }
+    } catch (_) {}
+    let rigH = null;
+    try {
+      if (typeof this.getPlayerHeading === "function") {
+        const v = this.getPlayerHeading();
+        if (typeof v === "number" && Number.isFinite(v)) rigH = v;
+      }
+    } catch (_) {}
+    if (this._autoFollowDiagCount < 5 && typeof console !== "undefined") {
+      this._autoFollowDiagCount++;
+      // eslint-disable-next-line no-console
+      console.log(
+        "[autofollow] pose.heading=%s  getPlayerHeading=%s  followYaw=%s  invert=%s",
+        poseH == null ? "n/a" : poseH.toFixed(3),
+        rigH == null ? "n/a" : rigH.toFixed(3),
+        this.followYaw.toFixed(3),
+        this._autoFollowInvert,
+      );
+    }
+    // RESOLVED via retail decomp + ACE (see the AUTOFOLLOW_* doc block): for an
+    // integrator yaw θ = pose.heading, AC forward = (−sinθ, +cosθ), and the
+    // camera's (sinh, cosh) forward convention requires h = −θ. So NEGATE
+    // pose.heading. getPlayerHeading() already returns −θ (entities negates the
+    // rig yaw), so it's used as-is. `_autoFollowInvert` remains only as a
+    // debug escape — default false is the proven-correct behind-the-character.
+    let h = poseH != null ? -poseH : rigH;
+    if (h == null) return null;
+    return this._autoFollowInvert ? -h : h;
   }
 
   // ---- camera positioning ------------------------------------------
@@ -942,18 +1202,39 @@ export class CameraSwitcher {
       return { x: finalX, y: finalY, z: finalZ };
     }
 
-    // ---- 1. Continuous heightfield clamp ----
+    // Player's current landblock id (full packed value: high 16 bits = block,
+    // low 16 bits = cell). Cell >= 0x0100 == an indoor EnvCell (dungeon /
+    // building interior / apartment). Read once, used by every sweep below.
+    let landblockId = 0;
     try {
-      if (typeof handle.terrainHeightAt === "function") {
-        const terrainZ = handle.terrainHeightAt(finalX, finalY);
-        if (typeof terrainZ === "number" && Number.isFinite(terrainZ)) {
-          const minZ = terrainZ + CAM_RADIUS + BACKOFF;
-          if (finalZ < minZ) {
-            finalZ = minZ;
-          }
-        }
+      const pose = handle.getLocalPlayerPose?.();
+      if (pose && typeof pose.landblockId === "number") {
+        landblockId = pose.landblockId;
       }
     } catch (_) {}
+    // `?indoorCam=on`: when indoors, the outdoor collision layers (terrain
+    // heightfield floor + building/static AABB sweeps) are WRONG — the terrain
+    // sample returns the OUTDOOR surface height above the dungeon, which floors
+    // the camera up toward/through the ceiling ("angled too high, unlike the
+    // overworld"). Indoors the EnvCell triangle sweep (step 5) is the correct
+    // collider, so skip the outdoor layers entirely. Default OFF pending live
+    // A/B on a real GPU (window.__setIndoorCam to toggle without a reload).
+    const indoor = this._indoorCamOn && (landblockId & 0xffff) >= 0x0100;
+
+    // ---- 1. Continuous heightfield clamp (outdoor only) ----
+    if (!indoor) {
+      try {
+        if (typeof handle.terrainHeightAt === "function") {
+          const terrainZ = handle.terrainHeightAt(finalX, finalY);
+          if (typeof terrainZ === "number" && Number.isFinite(terrainZ)) {
+            const minZ = terrainZ + CAM_RADIUS + BACKOFF;
+            if (finalZ < minZ) {
+              finalZ = minZ;
+            }
+          }
+        }
+      } catch (_) {}
+    }
 
     // The chain of sweep sweeps operates against (start, end) =
     // (headPos, finalCamPos). When a hit lands at parametric `t`,
@@ -975,16 +1256,7 @@ export class CameraSwitcher {
       finalZ = startZ + dz * t;
     };
 
-    // Get the player's current landblock id from the session handle.
-    let landblockId = 0;
-    try {
-      const pose = handle.getLocalPlayerPose?.();
-      if (pose && typeof pose.landblockId === "number") {
-        landblockId = pose.landblockId;
-      }
-    } catch (_) {}
-
-    if (landblockId !== 0) {
+    if (landblockId !== 0 && !indoor) {
       // ---- 2. Outdoor building AABB sweep ----
       try {
         if (typeof handle.cameraSweepCollision === "function") {

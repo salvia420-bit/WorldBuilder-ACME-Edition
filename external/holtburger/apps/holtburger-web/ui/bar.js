@@ -1,4 +1,5 @@
 import { renderGraphicsTab } from "./graphics_settings.js";
+import { renderCameraTab } from "./camera_settings.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "./keymap.js";
 
 const STYLE_ID = "hb-bar-style";
@@ -811,8 +812,13 @@ export function mountBar({ client, root, slots: slotsOpt }) {
     tabGraphics.type = "button";
     tabGraphics.className = "hb-settings-tab";
     tabGraphics.textContent = "Graphics";
+    const tabCamera = document.createElement("button");
+    tabCamera.type = "button";
+    tabCamera.className = "hb-settings-tab";
+    tabCamera.textContent = "Camera";
     tabs.appendChild(tabBar);
     tabs.appendChild(tabGraphics);
+    tabs.appendChild(tabCamera);
 
     // Content area — holds whichever tab is active. Per-tab subtrees
     // are built lazily on first activation.
@@ -919,6 +925,15 @@ export function mountBar({ client, root, slots: slotsOpt }) {
       return dispose;
     }
 
+    // --- Camera tab body --------------------------------------------------
+    function buildCameraTab() {
+      content.innerHTML = "";
+      const dispose = renderCameraTab(content, {
+        onAnyChange: () => { positionSettings(el); },
+      });
+      return dispose;
+    }
+
     let activeTabDispose = null;
     function activate(tab) {
       if (activeTabDispose) {
@@ -927,9 +942,13 @@ export function mountBar({ client, root, slots: slotsOpt }) {
       }
       tabBar.classList.toggle("active", tab === "bar");
       tabGraphics.classList.toggle("active", tab === "graphics");
+      tabCamera.classList.toggle("active", tab === "camera");
       if (tab === "graphics") {
         el.classList.add("hb-settings-wide");
         activeTabDispose = buildGraphicsTab();
+      } else if (tab === "camera") {
+        el.classList.add("hb-settings-wide");
+        activeTabDispose = buildCameraTab();
       } else {
         el.classList.remove("hb-settings-wide");
         activeTabDispose = buildBarTab();
@@ -939,6 +958,7 @@ export function mountBar({ client, root, slots: slotsOpt }) {
 
     tabBar.addEventListener("click", () => activate("bar"));
     tabGraphics.addEventListener("click", () => activate("graphics"));
+    tabCamera.addEventListener("click", () => activate("camera"));
     activate("bar");
 
     positionSettings(el);

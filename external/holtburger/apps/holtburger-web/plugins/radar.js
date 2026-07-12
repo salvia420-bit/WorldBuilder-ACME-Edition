@@ -9,10 +9,10 @@
 //   N/E/S/W       ~10x9 each at disk edges
 //   coords strip  120x18  at y=120    (text — TODO)
 //
-// Heading rotation: planned. window.getLocalPlayerPose is not yet
-// exposed globally — once it is (or once we hook the camera tick), the
-// .hb-radar-disk wrapper rotates by `-heading` and the cardinals
-// counter-rotate so they stay upright relative to the screen.
+// Orientation: NORTH-UP, matching retail gmRadarUI::DrawObjects
+// (acclient.c:264115 — blips placed by raw world delta east→right/north→up,
+// no heading rotation; N/E/S/W cardinals fixed at the disk edges). The rotor
+// is not spun by heading.
 
 import { setAcText } from "../ui/ac_font.js";
 import { applyLayoutRegions } from "../ui/ac_layout.js";
@@ -141,16 +141,14 @@ function ensureStyles() {
       /* image-rendering: pixelated preserves the brass rim detail when scaled. */
       image-rendering: pixelated;
     }
-    /* Heading-rotated layer: cardinals + centre cross live in here so
-       they stay aligned to world-space when we wire up pose.heading. */
+    /* North-up container for cardinals + blips. Not rotated (retail radar is
+       north-up); kept as a stacking wrapper over the disk sprite. */
     #${OVERLAY_ID} .hb-radar-rotor {
       position: absolute;
       top: 0; left: 0;
       width: ${DISK_SIZE}px;
       height: ${DISK_SIZE}px;
-      transform: rotate(0deg);
       transform-origin: 50% 50%;
-      transition: transform 80ms linear;
     }
     #${OVERLAY_ID} .hb-radar-cardinal {
       position: absolute;
@@ -225,10 +223,9 @@ function ensureStyles() {
       background: transparent;
     }
     #${OVERLAY_ID} .hb-radar-coords:empty::before { content: ""; }
-    /* Entity blips — children of .hb-radar-rotor so they rotate with
-       the disk. World-frame deltas project to rotor-local pixel
-       offsets; the rotor's -heading rotation then puts each blip at
-       the correct screen position relative to the player's facing. */
+    /* Entity blips — children of .hb-radar-rotor. World-frame deltas project
+       directly to disk pixel offsets (north-up; the rotor is not rotated), so
+       each blip's north-relative position is its final screen position. */
     #${OVERLAY_ID} .hb-radar-blip {
       position: absolute;
       width: 4px;
@@ -418,11 +415,10 @@ function ensureBlipPool() {
   }
 }
 
-// Project entities to rotor-local pixel coordinates. Because the rotor
-// is later rotated by -heading, a blip placed in rotor-local "world
-// frame" (centerX + dx*scale, centerY - dy*scale) ends up at the right
-// screen position automatically — no manual heading rotation needed
-// for the blip placement step.
+// Project entities to disk pixel coordinates in the world (north-up) frame:
+// (centerX + dx*scale, centerY - dy*scale). The rotor is not rotated, so this
+// screen position is final — north stays at the top of the disk, matching
+// retail gmRadarUI::DrawObjects.
 //
 // World delta uses entity.root.position.{x,y} treated as AC (east, north)
 // in line with the existing compass-hud blip code. The entityManager's
@@ -506,12 +502,9 @@ function ensureTooltip() {
 
 function fillTooltipContent(ref) {
   const t = ensureTooltip();
-  // Bearing reported relative to player facing: a blip directly in
-  // front shows 0°, +right, −left. Since the blip's rotor-local
-  // offset (cx, cy) is already in player-facing frame after the
-  // rotor's -heading rotation cancels out the world-frame placement,
-  // we recompute the bearing here directly from world-deltas to keep
-  // the math one-source-of-truth.
+  // World compass bearing to the blip, computed from world deltas:
+  // atan2(east, north) → 0° = due north, +east (right), −west (left).
+  // Matches the north-up disk (a blip drawn straight up is 0°).
   const bearingDeg = Math.round(
     (Math.atan2(ref.dx, ref.dy) * 180) / Math.PI,
   );
@@ -525,23 +518,19 @@ function fillTooltipContent(ref) {
   t.appendChild(tagEl);
 }
 
-// Position the tooltip at the blip's screen-space location. The blip
-// lives inside .hb-radar-rotor which is rotated by -heading every
-// frame, so we compute the blip's screen position analytically from
-// its rotor-local offset + the current heading. Cheaper than reading
-// getBoundingClientRect on each frame (no layout reflow).
-function updateTooltipPosition(headingRad) {
+// Position the tooltip at the blip's screen-space location. The disk is
+// north-up (rotor not rotated), so the blip's screen offset from the disk
+// centre is just its stored pixel offset — computed analytically to avoid a
+// getBoundingClientRect layout read each frame.
+function updateTooltipPosition() {
   if (_hoveredBlipIdx < 0 || !_tooltipEl || _tooltipEl.hidden) return;
   const ref = _blipRefs[_hoveredBlipIdx];
   if (!ref || !_overlayEl) return;
   const overlayRect = _overlayEl.getBoundingClientRect();
-  const theta = -headingRad;
-  const lx = ref.localX - DISK_SIZE / 2;
-  const ly = ref.localY - DISK_SIZE / 2;
-  const cos = Math.cos(theta);
-  const sin = Math.sin(theta);
-  const screenX = cos * lx - sin * ly;
-  const screenY = sin * lx + cos * ly;
+  // North-up radar: the rotor is not rotated, so the blip's screen offset
+  // from the disk centre IS its rotor-local offset (no heading rotation).
+  const screenX = ref.localX - DISK_SIZE / 2;
+  const screenY = ref.localY - DISK_SIZE / 2;
   // HUD rec #70 — clamp to viewport so the tooltip doesn't slide off
   // the right edge or below the visible area when a blip sits near the
   // border of the radar disk. Measure actual rendered tooltip dims; on
@@ -677,11 +666,10 @@ export function mount(_ctx) {
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
 
-  // Rotor wraps the disk + cardinals + entity blips.
-  // We rotate it by `-heading` so that N stays world-north when the
-  // player turns; the cardinals counter-rotate to stay readable.
-  // The brass-rim disk sprite (north-wedge baked in) lives inside the
-  // rotor so it tracks world-north too — retail behavior.
+  // Rotor wraps the disk + cardinals + entity blips. It is NOT rotated:
+  // retail's radar is north-up (N fixed at top), so the cardinals keep their
+  // fixed edge positions and blips are placed by raw world delta. (The wrapper
+  // is retained as a stacking container.)
   const rotor = document.createElement("div");
   rotor.className = "hb-radar-rotor";
 
@@ -776,9 +764,8 @@ export function mount(_ctx) {
   });
 
   // ──────────────────────────────────────────────────────────────────
-  // rAF tick — rotate the rotor by -heading so the disk tracks world-north,
-  // counter-rotate cardinals so N/E/S/W stay upright, and populate the
-  // coord strip.
+  // rAF tick — north-up radar: keep the rotor at identity, place blips by
+  // world delta, and populate the coord strip.
   let rafId = 0;
   // HUD rec #42 — show packed landblock notation matching retail's
   // gmCompassUI display + map-panel.js:358-361. LB_PITCH = 192 units
@@ -793,37 +780,25 @@ export function mount(_ctx) {
   }
   function tick() {
     const sw = window.liveScene3d?.cameraSwitcher;
-    let heading = 0;
-    try { heading = sw?.getPlayerHeading?.() ?? 0; } catch (_) {}
-    // CSS rotation is clockwise; AC heading is compass bearing (0 = north,
-    // 90 = east). To make N world-stay (player turning rotates the disk
-    // counter-clockwise relative to screen), apply `-heading`.
-    rotor.style.transform = `rotate(${(-heading * 180) / Math.PI}deg)`;
-    // Counter-rotate each cardinal so the letters stay screen-upright.
-    for (const dir of ["n", "e", "s", "w"]) {
-      const el = cardinalEls[dir];
-      if (el) {
-        // Each cardinal already has translateX/Y(-50%) baked in; chain
-        // the counter-rotation onto that. position:absolute placement
-        // is unaffected by the rotation.
-        const existing = el.dataset.baseTransform ?? "";
-        if (!existing) {
-          el.dataset.baseTransform = el.style.transform || getComputedStyle(el).transform;
-        }
-        const base = el.dataset.baseTransform === "none" ? "" : el.dataset.baseTransform;
-        el.style.transform = `${base} rotate(${(heading * 180) / Math.PI}deg)`;
-      }
+    // NORTH-UP, matching retail gmRadarUI::DrawObjects (acclient.c:264115):
+    // blips are placed by raw world delta (east→right, north→up) with NO
+    // heading rotation, and the N/E/S/W cardinals are FIXED at the disk edges.
+    // The rotor therefore stays at identity — a previous heading-up build spun
+    // it by -heading and counter-rotated the cardinals, which made N/E/S/W
+    // swivel as the player turned (not retail behaviour). Blips already use the
+    // world-frame formula in updateRadarBlips, so no rotor transform is needed.
+    if (rotor.style.transform && rotor.style.transform !== "none") {
+      rotor.style.transform = "none";
     }
     try {
       const pos = sw?.getPlayerWorldPos?.();
       if (pos) setAcText(coords, fmtCoord(pos.x, pos.z));
     } catch (_) {}
-    // Entity blips — placed in rotor-local coords each frame; the
-    // rotor's -heading rotation (above) carries them to the correct
-    // screen position. Tooltip follows the hovered blip analytically.
+    // Entity blips — placed in world-frame (north-up) pixel coords each frame.
+    // Tooltip follows the hovered blip analytically (no rotation to undo now).
     const playerPos = getLocalPlayerAcPos();
     updateRadarBlips(playerPos);
-    updateTooltipPosition(heading);
+    updateTooltipPosition();
     rafId = requestAnimationFrame(tick);
   }
   rafId = requestAnimationFrame(tick);
