@@ -1952,11 +1952,26 @@ void main() {
     sclip /= sclip.w;
     vec2 suv = sclip.xy * 0.5 + 0.5;
     if (suv.x >= 0.0 && suv.x <= 1.0 && suv.y >= 0.0 && suv.y <= 1.0) {
-      float density = texture(uCloudShadowMap, vec3(suv, 0.0)).r;
-      // Beer-Lambert: transmittance = exp(-density * strength).
-      // Clamp to 0.3 so shadowed terrain never goes pure black (sky
-      // ambient still fills in even under thick cloud).
-      cloudShadow = max(0.3, exp(-density * uCloudShadowStrength));
+      // takram shadow buffer channels (vendor shadow.frag):
+      //   .r = frontDepth (DISTANCE to the cloud front, metres — up to
+      //        maxRayDistance ~1e6 when the column is clear),
+      //   .g = meanExtinction, .b = maxOpticalDepth, .a = opticalDepthTail.
+      // The prior code sampled .r and fed that DISTANCE into
+      // exp(-density*strength) as if it were a cloud density — which could
+      // never produce a correct shadow (and a garbage/oversized sample made
+      // exp() explode above 1 → a full-frame milky wash on a real GPU; it
+      // stayed hidden because SwiftShader zero-bakes the cloud pass).
+      //
+      // Terrain sits BELOW the whole cloud column, so its extinction is the
+      // full-column optical depth = .b + .a — exactly takram's own
+      // readShadowOpticalDepth() min-branch for a fully-below receiver
+      // (clouds.frag:172-183). Clear column → sampleCount==0 → .b=.a=0 →
+      // exp(0)=1 (fully lit, no false shadow, no wash).
+      vec4 csSample = texture(uCloudShadowMap, vec3(suv, 0.0));
+      float csOpticalDepth = max(0.0, csSample.b + csSample.a);
+      // Beer-Lambert transmittance, floored to 0.3 (sky ambient still fills
+      // thick cloud) and capped at 1.0 (a shadow must NEVER brighten ground).
+      cloudShadow = clamp(exp(-csOpticalDepth * uCloudShadowStrength), 0.3, 1.0);
     }
   }
 

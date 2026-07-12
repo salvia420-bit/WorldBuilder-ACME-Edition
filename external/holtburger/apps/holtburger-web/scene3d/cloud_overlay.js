@@ -386,16 +386,51 @@ export class CloudOverlay {
       return tex;
     };
 
-    const [localWeather, turbulence, shape, shapeDetail] = await Promise.all([
+    // Non-cubic 3D R8 volume loader — for the STBN blue-noise (128×128×64,
+    // NOT cubic). NearestFilter per takram's own STBNLoader: blue noise must
+    // NOT be interpolated or it loses the spectral properties that make it
+    // blue. (The synchronous placeholder synthesises WHITE noise with
+    // LinearFilter — both wrong; this replaces it with the real asset.)
+    const load3DWHD = async (name, w, h, d) => {
+      const res = await fetch(url(name));
+      if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
+      const data = new Uint8Array(await res.arrayBuffer());
+      if (data.length !== w * h * d) {
+        throw new Error(`${name}: ${data.length} bytes, expected ${w * h * d}`);
+      }
+      const tex = new THREE.Data3DTexture(data, w, h, d);
+      tex.format = THREE.RedFormat;
+      tex.type = THREE.UnsignedByteType;
+      tex.minFilter = THREE.NearestFilter;
+      tex.magFilter = THREE.NearestFilter;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.wrapR = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.NoColorSpace;
+      tex.generateMipmaps = false;
+      tex.unpackAlignment = 1;
+      tex.needsUpdate = true;
+      return tex;
+    };
+
+    const [localWeather, turbulence, shape, shapeDetail, stbn] = await Promise.all([
       load2D('local_weather.png'),
       load2D('turbulence.png'),
       load3D('shape.bin', 128),
       load3D('shape_detail.bin', 32),
+      // takram's canonical spatio-temporal blue-noise (128×128×64). Its own
+      // failure keeps the white-noise placeholder rather than dropping the
+      // whole prebaked set back to procedural.
+      load3DWHD('stbn.bin', 128, 128, 64).catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn('[clouds] STBN blue-noise load failed → keeping white-noise fallback:', e);
+        return null;
+      }),
     ]);
 
     // The overlay may have been disposed during the async load.
     if (!this.volume || !this.volume.effect) {
-      [localWeather, turbulence, shape, shapeDetail].forEach((t) => t && t.dispose && t.dispose());
+      [localWeather, turbulence, shape, shapeDetail, stbn].forEach((t) => t && t.dispose && t.dispose());
       return;
     }
     const effect = this.volume.effect;
@@ -403,6 +438,19 @@ export class CloudOverlay {
     effect.turbulenceTexture = turbulence;
     effect.shapeTexture = shape;
     effect.shapeDetailTexture = shapeDetail;
+    // Swap the synchronous white-noise STBN placeholder for real blue noise.
+    // The white noise made the shader's deterministic `frame % 64` STBN-slice
+    // cycle VISIBLE — a ~3s "video loop" at low fps (64 frames / ~20fps) —
+    // because its low-frequency energy never converged under the temporal
+    // resolve (temporalAlpha 0.1). True blue noise converges, so the cycle
+    // averages out, and the sun forward-scatter rings the white noise was
+    // masking stay suppressed too.
+    if (stbn) {
+      const oldStbn = effect.stbnTexture;
+      effect.stbnTexture = stbn;
+      if (oldStbn && oldStbn !== stbn && oldStbn.dispose) oldStbn.dispose();
+      this._stbnTex = stbn;
+    }
     this._prebakedLoaded = true;
   }
 
