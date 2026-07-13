@@ -1370,7 +1370,7 @@
       import { getCombatManeuver } from "./ui/ac_combat_maneuver.js";
       import { inferAttackTypeForWeapon, ATTACK_TYPE } from "./ui/ac_attack_type_for_weapon.js";
       import { getAimLevelForVelocity } from "./ui/ac_aim_level_for_velocity.js";
-      import { isTerminalCastReject } from "./ui/cast_reject_policy.js";
+      import { isTerminalCastReject, shouldClearCastOnReject } from "./ui/cast_reject_policy.js";
       // D4-NEW-1 (2026-06-05): AC(Z-up)→three(Y-up) frame transform for the
       // SoundTriggered (0xF750 GameMessageSound) positional-audio handler below.
       // `inst.root.position` holds RAW AC-frame coords (the worldRoot -π/2
@@ -3022,14 +3022,32 @@
       // new selection info; `__getSelectedTarget()` snapshots the current
       // selection as `{guid, name, dist}`. Both resolve the entityManager
       // lazily so they work before/after init3D assigns liveScene3d.
-      window.__selectNextTarget = (type) => {
+      window.__selectNextTarget = (type, mode) => {
         try {
           const em = window.liveScene3d?.entityManager;
           if (!em || typeof em.cycleTarget !== "function") return { guid: 0, name: null, dist: -1 };
-          em.cycleTarget("next", type || "monster");
+          // `mode` (default "next") lets a harness reach the retail
+          // ClosestMonster path — mode "closest" = the absolute nearest live
+          // target, IGNORING the current selection — WITHOUT a keydown. Bare
+          // `__selectNextTarget()` stays NextMonster for keybind parity. This
+          // matters because NextMonster cycles by weighted distance FROM the
+          // current selection and WRAPS TO THE FARTHEST once the nearest is
+          // already held (acclient.c:399717 / target_cycle.js). A driver that
+          // wants to "lock the nearest mob" must therefore ask for "closest",
+          // not "next" — "next" from the near drudge jumps to the far stray.
+          em.cycleTarget(mode || "next", type || "monster");
           return em.selectedTargetInfo?.() ?? { guid: 0, name: null, dist: -1 };
         } catch (_) { return { guid: 0, name: null, dist: -1 }; }
       };
+      // Harness convenience: select the absolute NEAREST target of `type`
+      // (retail ClosestMonster), independent of the current selection and of
+      // any keydown. This is the hook a centering / click-cast driver should
+      // call to lock a freshly-spawned near target — unlike the
+      // farthest-wrapping NextMonster cycle, repeated calls converge on the
+      // nearest live mob the instant it enters `entityMap` (mesh baked), so a
+      // caller can poll it to absorb the async-spawn race.
+      window.__selectClosestTarget = (type) =>
+        window.__selectNextTarget(type, "closest");
       window.__getSelectedTarget = () => {
         try {
           const em = window.liveScene3d?.entityManager;
@@ -7919,15 +7937,27 @@
                 // castStateMachine workflow once it passes.
                 else if (isTerminalCastReject(errCode)) {
                   try {
-                    if (new URLSearchParams(window.location.search).get("castRejectClears") === "on") {
-                      const em = window.liveScene3d?.entityManager;
-                      const lg = (getLocalPlayerGuid?.() ?? 0) >>> 0;
-                      const inst = em?.entityMap?.get?.(lg);
-                      if (em && lg && inst && inst._castBusyUntilMs &&
-                          performance.now() < inst._castBusyUntilMs &&
-                          typeof em.cancelCastSequence === "function") {
-                        em.cancelCastSequence(lg, "reject");
-                      }
+                    const flagOn = new URLSearchParams(window.location.search).get("castRejectClears")?.toLowerCase() !== "off";
+                    const em = window.liveScene3d?.entityManager;
+                    const lg = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+                    const inst = em?.entityMap?.get?.(lg);
+                    // WS08b (2026-07-13): gate on a DURABLE in-flight signal
+                    // (inst._castChainActive) rather than the busy-window ESTIMATE
+                    // alone — the round-4c defect was a genuine reject arriving
+                    // after `_castBusyUntilMs` (a short durationS estimate) lapsed
+                    // but while the windup was still running, so the old
+                    // `now < _castBusyUntilMs` gate silently dropped it and the
+                    // false success glow finished. `chainActive` stays true for the
+                    // whole chain; the busy window is now only an OR-fallback.
+                    if (em && lg && inst && typeof em.cancelCastSequence === "function" &&
+                        shouldClearCastOnReject({
+                          flagOn,
+                          code: errCode,
+                          chainActive: !!inst._castChainActive,
+                          busyUntilMs: inst._castBusyUntilMs || 0,
+                          nowMs: performance.now(),
+                        })) {
+                      em.cancelCastSequence(lg, "reject");
                     }
                   } catch (_) {}
                 }

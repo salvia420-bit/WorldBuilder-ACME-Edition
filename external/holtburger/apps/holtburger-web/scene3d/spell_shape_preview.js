@@ -40,7 +40,7 @@
 
 import * as THREE from "three";
 import { SPELL_SHAPE, SPELL_SCHOOL } from "../ui/ac_spell_shape.js";
-import { pickSkillLevel, determineSpellRange, resolveRangeRingSpec, resolveCasterFeet } from "./spell_range.js";
+import { pickSkillLevel, determineSpellRange, resolveRangeRingSpec, resolveCasterFeet, isProjectileSpellType } from "./spell_range.js";
 
 // === Wave R3.C — projectile mechanics fidelity (2026-05-29) ===
 // `?projectileArc=on` opt-in. Default OFF → the Arc preview keeps its
@@ -699,7 +699,7 @@ function _tryBind() {
 const CAST_RANGE_RING_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
-    return new URLSearchParams(window.location.search).get("castRangeRing") === "on";
+    return new URLSearchParams(window.location.search).get("castRangeRing")?.toLowerCase() !== "off";
   } catch (_) {
     return false;
   }
@@ -729,6 +729,13 @@ function _armedSpellRange(sh, spellId) {
     const rec = sh.getSpellRecord?.(spellId >>> 0);
     if (!rec || typeof rec.get !== "function") return null;
     if (rec.get("isSelfTargeted") || rec.get("isUntargeted")) return null;
+    // WS05c (2026-07-13): the reach ring is for AIMED PROJECTILE spells only.
+    // A targeted-but-non-projectile spell (Enchantment/Boost/Transfer/Dispel/
+    // Portal — e.g. spell 2331 "Health to Mana Other VII", SpellType=Transfer,
+    // server range 5) passes the self/untargeted gate above but fires no
+    // projectile, so it must draw NO ring. Gate on the authoritative
+    // metaSpellType (SpellType), not on range>0.
+    if (!isProjectileSpellType(+rec.get("metaSpellType"))) return null;
     const mod = +rec.get("baseRangeMod");
     const konst = +rec.get("baseRangeConstant");
     const school = +rec.get("school");
@@ -786,7 +793,7 @@ function _rangeRingTick() {
           : !sh
             ? "no-session"
             : !info
-              ? "self-untargeted-or-no-range"
+              ? "self-untargeted-nonprojectile-or-no-range"
               : !feet
                 ? "no-caster-pose"
                 : !ls

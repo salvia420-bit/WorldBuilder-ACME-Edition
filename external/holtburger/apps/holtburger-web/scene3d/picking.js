@@ -8,7 +8,7 @@ import { getAimLevelForVelocity, getAimLevelForBallisticArc } from "../ui/ac_aim
 import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
 import { classifySpell } from "../ui/ac_spell_shape.js";
 import { pickSkillLevel, determineSpellRange, decideRangeWarn } from "./spell_range.js";
-import { faceDeadzoneRad } from "./camera_math.js";
+import { faceDeadzoneRad, faceTurnStep } from "./camera_math.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -579,13 +579,19 @@ export function setupClickPicking({
       const dx = targetAc.x - pose.x;
       const dy = targetAc.y - pose.y;
       const turnDelta = normalizeAngle(Math.atan2(dx, dy) - pose.heading);
-      if (Math.abs(turnDelta) <= FACE_DEADZONE_RAD ||
-          (performance.now() - startMs) > FACE_TURN_TIMEOUT_MS) {
+      // C1 — the pure gate decision (camera_math.faceTurnStep, unit-pinned):
+      // within FACE_DEADZONE_RAD (0.05 rad legacy; 0.349 rad = ACE's 20°
+      // spellcast_max_angle under ?castFacing20=on) or past FACE_TURN_TIMEOUT_MS
+      // ⇒ done (a neutral stop, NEVER a turn command); else keep turning ±1.
+      const gate = faceTurnStep(
+        turnDelta, FACE_DEADZONE_RAD,
+        performance.now() - startMs, FACE_TURN_TIMEOUT_MS);
+      if (gate.done) {
         try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
         act();
         return;
       }
-      try { sessionHandle.setMovementInput(0, 0, turnDelta > 0 ? 1 : -1, false); } catch {}
+      try { sessionHandle.setMovementInput(0, 0, gate.turn, false); } catch {}
       requestAnimationFrame(step);
     };
     step();

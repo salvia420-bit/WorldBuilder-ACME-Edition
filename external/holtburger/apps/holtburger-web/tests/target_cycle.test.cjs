@@ -173,6 +173,59 @@ async function main() {
     assert.equal(computeSelectNext(tied, 0, SELF, true, false), 0xA);
   });
 
+  // ── (4b) round-4c far-stray regression (the selectNext bug) ─────────────
+  // Real r4c world (journal wf_68abc3df-e11): a freshly @create'd Pyreal
+  // Target Drudge at ~5yd next to two far strays the cycle kept locking —
+  // "The Chicken" 0x8000967b @~100yd (HIGHEST guid) and "Drudge Slinker"
+  // 0x8000920d @~121yd (FARTHEST). centerSetup called __selectNextTarget
+  // ("monster") = NextMonster, which wrapped to the far stray instead of the
+  // near drudge. These pin WHY, and that ClosestMonster is the fix.
+  const R4C = {
+    self: 0x50000001,
+    drudge: 0x8000941e,   // Pyreal Target Drudge, ~5yd — the wanted target
+    chicken: 0x8000967b,  // The Chicken, ~100yd — highest guid
+    slinker: 0x8000920d,  // Drudge Slinker, ~121yd — farthest
+  };
+  const R4C_WORLD = [
+    { guid: R4C.self, dist: 0.4 },
+    { guid: R4C.drudge, dist: 5 },
+    { guid: R4C.chicken, dist: 100 },
+    { guid: R4C.slinker, dist: 121 },
+  ];
+  const r4cSel = (cur, closer, extreme) =>
+    computeSelectNext(R4C_WORLD, cur, R4C.self, closer, extreme);
+  const r4cCycle = (mode, cur) => {
+    if (mode === 'closest') return r4cSel(cur, true, true) || cur;
+    let g = r4cSel(cur, true, false);
+    if (!g) g = r4cSel(cur, false, true);
+    return g || cur;
+  };
+  check('r4c: NextMonster from the near drudge WRAPS to the farthest stray (the bug)', () => {
+    // Drudge already selected (the nearest) → "next" finds nothing closer →
+    // wraps to farthest = Drudge Slinker @121yd. This is the observed defect:
+    // a cycle re-issued after the near drudge is held jumps to a far mob.
+    assert.equal(r4cCycle('next', R4C.drudge), R4C.slinker);
+  });
+  check('r4c: NextMonster with NO selection does pick the near drudge (clean-slate step)', () => {
+    // From an empty selection the first "next" IS the nearest; the failure only
+    // bites once a stale selection exists OR the drudge is not yet a candidate.
+    assert.equal(r4cCycle('next', 0), R4C.drudge);
+  });
+  check('r4c: ClosestMonster locks the near drudge from ANY prior selection (the fix)', () => {
+    assert.equal(r4cCycle('closest', 0), R4C.drudge);
+    assert.equal(r4cCycle('closest', R4C.drudge), R4C.drudge); // holds; never wraps
+    assert.equal(r4cCycle('closest', R4C.chicken), R4C.drudge);
+    assert.equal(r4cCycle('closest', R4C.slinker), R4C.drudge);
+  });
+  check('r4c: while the drudge is mid-bake (absent), closest reaches only the nearer stray', () => {
+    // The async-spawn race: spawn() commits to entityMap only after the mesh
+    // bakes, so a just-@create'd drudge is briefly NOT a candidate. closest
+    // then reaches the nearer stray (chicken@100 < slinker@121) — which is why
+    // the harness must POLL closest until the near drudge goes live.
+    const noDrudge = R4C_WORLD.filter((c) => c.guid !== R4C.drudge);
+    assert.equal(computeSelectNext(noDrudge, 0, R4C.self, true, true), R4C.chicken);
+  });
+
   // ── (5) cycleTarget wrap sequences (acclient.c:399692-399746) ───────────
   check('NextMonster sequence: nearest, then farthest, descending, wrap', () => {
     // A(nearest) → C(wrap to farthest) → B → A → C … (the retail quirk).
@@ -261,6 +314,20 @@ async function main() {
     assert.match(INDEX_SRC, /window\.__selectNextTarget = /);
     assert.match(INDEX_SRC, /window\.__getSelectedTarget = /);
     assert.match(INDEX_SRC, /selectedTargetInfo/);
+  });
+  check('index.html __selectNextTarget forwards a mode + exposes __selectClosestTarget', () => {
+    // The harness must be able to reach ClosestMonster (nearest, ignores the
+    // current selection) without a keydown — the fix for the far-stray lock.
+    assert.match(INDEX_SRC, /window\.__selectNextTarget = \(type, mode\)/);
+    assert.match(INDEX_SRC, /em\.cycleTarget\(mode \|\| "next", type \|\| "monster"\)/);
+    assert.match(INDEX_SRC, /window\.__selectClosestTarget = /);
+    assert.match(INDEX_SRC, /__selectNextTarget\(type, "closest"\)/);
+  });
+  check('entities.js selectNext reports only the guid it actually committed', () => {
+    // A pick that despawned between gather and commit is refused by
+    // setSelectedTarget; selectNext must not return it as "selected".
+    assert.match(ENTITIES_SRC, /const committed = \(this\._commitSelection\(pick\) >>> 0\) \|\| 0;/);
+    assert.match(ENTITIES_SRC, /return committed === \(pick >>> 0\) \? pick : 0;/);
   });
 
   // ── (9) url-flags row present ───────────────────────────────────────────

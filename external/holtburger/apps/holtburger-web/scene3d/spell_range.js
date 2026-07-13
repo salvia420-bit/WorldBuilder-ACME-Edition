@@ -17,6 +17,33 @@
 
 export const RADAR_OUTDOOR_RADIUS = 75.0;
 
+// WS05c (2026-07-13) — the cast-range RING is a REACH hint for spells you AIM
+// and FIRE at a distant target: projectile-family spells ONLY. A spell's
+// authoritative kind is its SpellType (`metaSpellType` on getSpellRecord;
+// Chorizite.Common SpellType == crates/holtburger-common combat::SpellType).
+// Exactly three variants launch a bolt across a distance —
+//   Projectile(2), LifeProjectile(10), EnchantmentProjectile(15).
+// Enchantment(1), Boost(3), Transfer(4), Portal*(5..8), Dispel(9),
+// Fellow*(11..14) apply their effect on a touched/self target with NO flight,
+// so a reach ring is meaningless noise.
+//
+// This is the gate that suppresses the round-4c FALSE ring on spell 2331
+// "Health to Mana Other VII": it is metaSpellType=Transfer(4) with a nonzero
+// server range (5 m), and it is a TARGETED spell (neither self-targeted nor
+// untargeted), so the pre-existing self/untargeted gate lets it through — yet
+// it fires no projectile, so no ring. Gating on the projectile SpellType (not
+// on range>0) is the "target-requiring spell semantics" the fix calls for.
+export const PROJECTILE_SPELL_TYPES = Object.freeze([2, 10, 15]);
+
+// True when `metaSpellType` (SpellType u32) is one of the three projectile
+// variants — the only spells for which the cast-range ring should draw.
+// Non-numeric / missing types coerce to 0 (not projectile) → no ring, which is
+// the safe default for the cosmetic, default-OFF ring.
+export function isProjectileSpellType(metaSpellType) {
+  const t = metaSpellType >>> 0;
+  return t === 2 || t === 10 || t === 15;
+}
+
 // The 5 magic skills queried by DetermineSpellRange's skill-less branch, by
 // SkillType u32: CreatureEnchantment 31, ItemEnchantment 32, LifeMagic 33,
 // WarMagic 34, VoidMagic 43 (0x2B — NOT ArcaneLore 0x0E; the retail else-branch

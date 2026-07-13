@@ -74,6 +74,57 @@ async function main() {
     assert.ok(err10 <= m.faceDeadzoneRad(true));
   });
 
+  // ── (2b) GATE DECISION — instrument-quality proof (flag on + 8.9° ⇒ no turn)
+  // The confounded eye-test metric (getLocalPlayerPose().heading, the SERVER-
+  // overwritten shadow) showed headingDelta=26.89° for on@10 and read it as a
+  // FAIL. It is not: the flag gates the CLIENT rig turn only, and the drudge's
+  // projected ndc.x stayed 0.42→0.42 (no rig turn). This block pins what the
+  // flag actually decides: the pure gate step turnToFaceThenAct runs each frame.
+  const DEG = (d) => (d * Math.PI) / 180;
+  const T0 = 0; // first frame, elapsed 0 (timeout branch inert)
+  const TIMEOUT = 800; // FACE_TURN_TIMEOUT_MS (picking.js:33)
+  check('flag ON + 8.9° bearing ⇒ NO turn command (done, turn===0)', () => {
+    // The exact on@10 geometry: preOff = 8.9° off-axis, castFacing20=on.
+    const g = m.faceTurnStep(DEG(8.9), m.faceDeadzoneRad(true), T0, TIMEOUT);
+    assert.equal(g.done, true);   // early-exit
+    assert.equal(g.turn, 0);      // NEVER issues a turn — this is the whole flag
+    // sign-symmetric: a target 8.9° to the OTHER side is equally suppressed.
+    assert.equal(m.faceTurnStep(DEG(-8.9), m.faceDeadzoneRad(true), T0, TIMEOUT).turn, 0);
+  });
+  check('flag OFF + 8.9° bearing ⇒ the client DOES turn (the old behaviour)', () => {
+    // Same 8.9° with the legacy 2.86° band ⇒ outside dead-zone ⇒ a real turn.
+    const g = m.faceTurnStep(DEG(8.9), m.faceDeadzoneRad(false), T0, TIMEOUT);
+    assert.equal(g.done, false);
+    assert.equal(g.turn, 1);      // +bearing ⇒ +1 turn input
+    assert.equal(m.faceTurnStep(DEG(-8.9), m.faceDeadzoneRad(false), T0, TIMEOUT).turn, -1);
+  });
+  check('gate invariant: done ⇒ turn===0 across the band boundary', () => {
+    // Just inside the 20° band ⇒ no turn; just outside ⇒ turn.
+    assert.equal(m.faceTurnStep(DEG(19.9), m.faceDeadzoneRad(true), T0, TIMEOUT).turn, 0);
+    assert.equal(m.faceTurnStep(DEG(20.1), m.faceDeadzoneRad(true), T0, TIMEOUT).done, false);
+    // Just inside the legacy band ⇒ no turn; just outside ⇒ turn.
+    assert.equal(m.faceTurnStep(DEG(2.8), m.faceDeadzoneRad(false), T0, TIMEOUT).turn, 0);
+    assert.equal(m.faceTurnStep(DEG(2.9), m.faceDeadzoneRad(false), T0, TIMEOUT).done, false);
+  });
+  check('timeout branch stops WITHOUT a turn even outside the band', () => {
+    // Past FACE_TURN_TIMEOUT_MS a huge bearing error still yields a neutral
+    // stop (the stall-cap), never a turn command.
+    const g = m.faceTurnStep(DEG(120), m.faceDeadzoneRad(true), TIMEOUT + 1, TIMEOUT);
+    assert.equal(g.done, true);
+    assert.equal(g.turn, 0);
+  });
+  check('faceTurnStep never returns done with a nonzero turn (safety)', () => {
+    for (const dz of [m.faceDeadzoneRad(true), m.faceDeadzoneRad(false)]) {
+      for (const deg of [-180, -90, -20, -8.9, -2.9, 0, 2.9, 8.9, 20, 90, 180]) {
+        for (const el of [0, TIMEOUT + 1]) {
+          const g = m.faceTurnStep(DEG(deg), dz, el, TIMEOUT);
+          if (g.done) assert.equal(g.turn, 0, `done@${deg}°/dz${dz}/el${el} must be turn 0`);
+          else assert.ok(g.turn === 1 || g.turn === -1);
+        }
+      }
+    }
+  });
+
   // ── (3) autoFollow default TRUTH (default-ON) ────────────────────────────
   check('autoFollowDefaultOn is default-ON (only "off" disables)', () => {
     assert.equal(m.autoFollowDefaultOn(undefined), true); // param absent
@@ -108,8 +159,10 @@ async function main() {
   });
 
   // ── (5) picking.js wiring (dead-zone gate uses the selection) ────────────
-  check('picking.js imports faceDeadzoneRad from camera_math', () => {
-    assert.ok(/import\s*\{\s*faceDeadzoneRad\s*\}\s*from\s*["']\.\/camera_math\.js["']/
+  check('picking.js imports faceDeadzoneRad + faceTurnStep from camera_math', () => {
+    assert.ok(/import\s*\{[^}]*\bfaceDeadzoneRad\b[^}]*\}\s*from\s*["']\.\/camera_math\.js["']/
+      .test(PICKING_SRC));
+    assert.ok(/import\s*\{[^}]*\bfaceTurnStep\b[^}]*\}\s*from\s*["']\.\/camera_math\.js["']/
       .test(PICKING_SRC));
   });
   check('castFacing20 flag is strict ===\"on\" (default-OFF opt-in)', () => {
@@ -119,8 +172,12 @@ async function main() {
     assert.ok(/FACE_DEADZONE_RAD\s*=\s*faceDeadzoneRad\(CAST_FACING_20\)/
       .test(PICKING_SRC));
   });
-  check('turn-to-face gate uses FACE_DEADZONE_RAD, not a bare 0.05', () => {
-    assert.ok(/Math\.abs\(turnDelta\)\s*<=\s*FACE_DEADZONE_RAD/.test(PICKING_SRC));
+  check('turn-to-face gate runs faceTurnStep with FACE_DEADZONE_RAD', () => {
+    // The decision is now the pure faceTurnStep, fed the selected dead-zone.
+    assert.ok(/faceTurnStep\(\s*[\s\S]*?FACE_DEADZONE_RAD/.test(PICKING_SRC));
+    // and it drives setMovementInput with the gate's turn (not a bare literal).
+    assert.ok(/gate\.done/.test(PICKING_SRC));
+    assert.ok(/setMovementInput\(0,\s*0,\s*gate\.turn/.test(PICKING_SRC));
     // the old hard-coded 0.05 gate is gone
     assert.ok(!/Math\.abs\(turnDelta\)\s*<=\s*0\.05/.test(PICKING_SRC));
   });

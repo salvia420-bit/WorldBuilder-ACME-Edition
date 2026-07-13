@@ -231,6 +231,33 @@ export function faceDeadzoneRad(castFacing20) {
 }
 
 /**
+ * C1 — the per-frame turn-to-face gate DECISION, extracted pure so a unit test
+ * can pin it directly (the instrument the `?castFacing20` flag actually gates).
+ *
+ * `turnDelta` = signed bearing error (rad) between the caster heading and the
+ * bearing to the target. `deadzoneRad` = the selected early-exit band
+ * (`faceDeadzoneRad(castFacing20)`). `elapsedMs`/`timeoutMs` = the stall-cap so
+ * a bad bearing can't loop forever.
+ *
+ * Returns `{ done, turn }` where `turn ∈ {-1, 0, +1}`:
+ *  - inside the dead-zone (|turnDelta| ≤ deadzoneRad) OR past the timeout ⇒
+ *    `{ done: true, turn: 0 }` — the caller issues the NEUTRAL
+ *    `setMovementInput(0,0,0)` stop and casts; it NEVER issues a turn command.
+ *  - otherwise ⇒ `{ done: false, turn: ±1 }` — keep turning toward the target.
+ *
+ * The load-bearing invariant: `done === true ⇒ turn === 0`. So under
+ * `?castFacing20=on` (deadzone = 20°) a bearing error inside 20° yields
+ * `turn === 0` — the client issues no turn, matching ACE's `spellcast_max_angle`
+ * early-exit. Behaviour-identical to the old inline gate (picking.js).
+ */
+export function faceTurnStep(turnDelta, deadzoneRad, elapsedMs, timeoutMs) {
+  if (Math.abs(turnDelta) <= deadzoneRad || elapsedMs > timeoutMs) {
+    return { done: true, turn: 0 };
+  }
+  return { done: false, turn: turnDelta > 0 ? 1 : -1 };
+}
+
+/**
  * Autofollow default truth. The `?autoFollow` reader is `!== "off"`, so
  * autofollow is DEFAULT-ON — absent/any-value ⇒ on, only the literal "off"
  * disables it. (The old camera.js docstring wrongly said "default OFF"; this

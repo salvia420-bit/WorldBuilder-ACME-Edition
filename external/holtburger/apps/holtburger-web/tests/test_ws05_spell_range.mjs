@@ -22,6 +22,8 @@ import {
   resolveRangeRingSpec,
   resolveCasterFeet,
   decideRangeWarn,
+  isProjectileSpellType,
+  PROJECTILE_SPELL_TYPES,
   RANGE_WARN_DEDUP_MS,
   RADAR_OUTDOOR_RADIUS,
 } from "../scene3d/spell_range.js";
@@ -117,10 +119,11 @@ nullish(resolveRangeRingSpec(0, warInfo, feet), "resolveRangeRingSpec: armedSpel
 nullish(resolveRangeRingSpec(-1, warInfo, feet), "resolveRangeRingSpec: negative armedSpellId -> null");
 nullish(resolveRangeRingSpec(null, warInfo, feet), "resolveRangeRingSpec: null armedSpellId -> null");
 
-// (d) Self / untargeted / zero-range spell (rangeInfo null or range<=0) -> no
-//     ring. This is the selfbuff_no_ring case (spell 2331): _armedSpellRange
-//     returns null for self-targeted, so the spec is null.
-nullish(resolveRangeRingSpec(2331, null, feet), "resolveRangeRingSpec: self-buff (rangeInfo null) -> null");
+// (d) Self / untargeted / non-projectile / zero-range spell (rangeInfo null or
+//     range<=0) -> no ring. `_armedSpellRange` returns null in all those cases
+//     (see the WS05c isProjectileSpellType section below for the spell-2331
+//     non-projectile case), so the spec is null here regardless of the reason.
+nullish(resolveRangeRingSpec(2331, null, feet), "resolveRangeRingSpec: null rangeInfo -> null");
 nullish(resolveRangeRingSpec(2331, { range: 0, school: 2 }, feet), "resolveRangeRingSpec: range 0 -> null");
 
 // (e) No known player pose yet (getLocalPlayerWorldPos returned null / garbage)
@@ -231,6 +234,57 @@ eq(decideRangeWarn({ distance: NaN, range: 75, key: "x", lastWarn: null, nowMs: 
   // A DIFFERENT target within the window is NOT suppressed (per-key de-dup).
   eq(decideRangeWarn({ distance: 138.43, range: 75, key: "27:999", lastWarn: persisted, nowMs: 1200 }).warn,
     true, "rangewarn: different target within window -> warns (per-key de-dup)");
+}
+
+// =====================================================================
+// WS05c (2026-07-13) — isProjectileSpellType: the reach ring draws ONLY for
+// AIMED projectile spells. Pins the round-4c false ring on spell 2331 "Health
+// to Mana Other VII" (metaSpellType=Transfer(4), server range 5): it is a
+// TARGETED spell (neither self-targeted nor untargeted) so the pre-existing
+// self/untargeted gate lets it through — but it fires no projectile, so the
+// new SpellType gate suppresses it. Authoritative field == metaSpellType
+// (Chorizite.Common SpellType). Projectile variants: 2 / 10 / 15.
+// =====================================================================
+{
+  // The three projectile SpellTypes draw a ring.
+  eq(isProjectileSpellType(2), true, "isProjectileSpellType(Projectile=2) -> true (Flame/Nether Bolt)");
+  eq(isProjectileSpellType(10), true, "isProjectileSpellType(LifeProjectile=10) -> true (Drain Health Other)");
+  eq(isProjectileSpellType(15), true, "isProjectileSpellType(EnchantmentProjectile=15) -> true (Imperil Other)");
+  eq(JSON.stringify([...PROJECTILE_SPELL_TYPES]), "[2,10,15]", "PROJECTILE_SPELL_TYPES == [2,10,15]");
+
+  // Non-projectile SpellTypes draw NO ring — including 2331's Transfer(4).
+  eq(isProjectileSpellType(4), false, "isProjectileSpellType(Transfer=4) -> false (spell 2331 Health-to-Mana Other)");
+  eq(isProjectileSpellType(1), false, "isProjectileSpellType(Enchantment=1) -> false (Strength Other)");
+  eq(isProjectileSpellType(3), false, "isProjectileSpellType(Boost=3) -> false (Heal Other)");
+  eq(isProjectileSpellType(9), false, "isProjectileSpellType(Dispel=9) -> false");
+  eq(isProjectileSpellType(7), false, "isProjectileSpellType(PortalSummon=7) -> false");
+  eq(isProjectileSpellType(0), false, "isProjectileSpellType(None=0) -> false");
+  // Robustness — missing / non-numeric type coerces to 0 (not projectile).
+  eq(isProjectileSpellType(undefined), false, "isProjectileSpellType(undefined) -> false (safe no-ring default)");
+  eq(isProjectileSpellType(NaN), false, "isProjectileSpellType(NaN) -> false");
+
+  // Model of _armedSpellRange's gate order (spell_shape_preview.js): a spell
+  // draws a ring iff NOT self-targeted, NOT untargeted, IS a projectile type,
+  // and has range>0. Proves 2331 is dropped by the projectile gate even though
+  // it clears self/untargeted with a nonzero range.
+  const ringDraws = (rec) =>
+    !rec.isSelfTargeted &&
+    !rec.isUntargeted &&
+    isProjectileSpellType(rec.metaSpellType) &&
+    determineSpellRange(rec.baseRangeMod, rec.baseRangeConstant, 50) > 0;
+  // Flame Bolt I (27): Projectile, targeted, ranged -> ring.
+  eq(ringDraws({ isSelfTargeted: false, isUntargeted: false, metaSpellType: 2, baseRangeMod: 0.7, baseRangeConstant: 30 }),
+    true, "gate: Flame Bolt I (Projectile, targeted) -> ring");
+  // Nether Bolt I (5349): Projectile -> ring.
+  eq(ringDraws({ isSelfTargeted: false, isUntargeted: false, metaSpellType: 2, baseRangeMod: 0.7, baseRangeConstant: 30 }),
+    true, "gate: Nether Bolt I (Projectile) -> ring");
+  // Spell 2331 Health-to-Mana Other VII: Transfer, TARGETED, range 5 -> NO ring
+  // (the round-4c defect). Suppressed by the projectile gate, not by range.
+  eq(ringDraws({ isSelfTargeted: false, isUntargeted: false, metaSpellType: 4, baseRangeMod: 0, baseRangeConstant: 5 }),
+    false, "gate: spell 2331 (Transfer, targeted, range 5) -> NO ring (round-4c fix)");
+  // A genuine self-buff (Strength Self): self-targeted -> no ring (unchanged).
+  eq(ringDraws({ isSelfTargeted: true, isUntargeted: false, metaSpellType: 1, baseRangeMod: 0, baseRangeConstant: 0 }),
+    false, "gate: Strength Self (self-targeted) -> no ring");
 }
 
 console.log(fail ? `FAIL — ${fail} failure(s)` : "PASS — 0 failure(s)");

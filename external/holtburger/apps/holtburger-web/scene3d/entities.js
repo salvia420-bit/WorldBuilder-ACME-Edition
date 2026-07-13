@@ -6735,8 +6735,14 @@ export class EntityManager {
     const cur = (this._selectedGuid >>> 0) || 0;
     const pick = computeSelectNext(candidates, cur, selfGuid, !!closer, !!extreme);
     if (!pick || pick === cur) return 0;
-    this._commitSelection(pick);
-    return pick;
+    // `_commitSelection` → `setSelectedTarget` refuses a guid that isn't a
+    // live, ringable entity (one that despawned between the candidate gather
+    // above and this commit — an async-spawn/despawn race). Report the guid
+    // that was ACTUALLY committed, not the raw pick, so a caller (e.g. the
+    // `__selectClosestTarget` harness poll) never chases a target the
+    // selection ring never took and can retry cleanly.
+    const committed = (this._commitSelection(pick) >>> 0) || 0;
+    return committed === (pick >>> 0) ? pick : 0;
   }
 
   /**
@@ -7168,6 +7174,16 @@ export class EntityManager {
     // started, bail out".
     const token = ((inst._castSequenceToken | 0) + 1) | 0;
     inst._castSequenceToken = token;
+    // WS08b (2026-07-13) — durable "a local cast chain is in flight" flag.
+    // Set at chain commit and cleared on natural completion / cancel /
+    // clearCastBusy (below). Unlike `_castBusyUntilMs` (a SHORT durationS-based
+    // debounce estimate that can expire mid-windup), this stays true for the
+    // WHOLE visible chain, so a genuine terminal reject arriving after the busy
+    // estimate lapsed but during the windup is still honored (read by the
+    // index.html kind=13 handler via shouldClearCastOnReject). Purely additive:
+    // only the `?castRejectClears=on` handler reads it, so default behavior is
+    // unchanged.
+    inst._castChainActive = true;
     // WS16 diag: chain committed past all early returns.
     try {
       window.__diag?.cast?.onChainStart?.({
@@ -7425,6 +7441,11 @@ export class EntityManager {
     // F8-4 — chain completed: clear the cast-busy window so the next cast
     // isn't gated.
     if (inst) inst._castBusyUntilMs = 0;
+    // WS08b — chain completed naturally: drop the durable in-flight flag. Only
+    // reached when this chain still owns the token (guarded above at line
+    // `inst._castSequenceToken !== token` return), so a preempting recast that
+    // re-set the flag is not cleared here.
+    if (inst) inst._castChainActive = false;
     // WS16 diag: chain reached the cast-gesture end normally.
     try { window.__diag?.cast?.onChainComplete?.({ guid: g }); } catch (_) {}
     // WS14 — cast-lifecycle resolved (chain reached the cast-gesture end).
@@ -7446,7 +7467,7 @@ export class EntityManager {
   // immediately instead of waiting out the capped busy window.
   clearCastBusy(guid) {
     const inst = this.entityMap.get(guid >>> 0);
-    if (inst) inst._castBusyUntilMs = 0;
+    if (inst) { inst._castBusyUntilMs = 0; inst._castChainActive = false; } // WS08b: server done → chain no longer in flight
   }
 
   // F8-2 — cancel an in-flight cast-gesture chain for `guid` (a fizzle /
@@ -7459,6 +7480,7 @@ export class EntityManager {
     if (!inst) return false;
     inst._castSequenceToken = ((inst._castSequenceToken | 0) + 1) | 0;
     inst._castBusyUntilMs = 0; // F8-4 — cancelled cast frees the busy window
+    inst._castChainActive = false; // WS08b — cancelled cast is no longer in flight
     // WS16 diag: tag the cancel cause (anim-break / fizzle / UseDone / recast).
     try { window.__diag?.cast?.onChainCancel?.({ guid: guid >>> 0, cause: cause ?? "cancel" }); } catch (_) {}
     // WS14 — cast-lifecycle rejected (fizzle / UseDone / recast preempt).

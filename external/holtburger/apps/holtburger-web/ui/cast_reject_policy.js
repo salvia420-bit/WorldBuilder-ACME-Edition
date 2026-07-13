@@ -47,3 +47,41 @@ const CAST_TERMINAL_REJECTS = new Set([
 export function isTerminalCastReject(code) {
   return CAST_TERMINAL_REJECTS.has(code >>> 0);
 }
+
+// WS08b (2026-07-13) — pure decision for the index.html kind=13 reject handler:
+// should a terminal cast-reject cancel the local optimistic cast prediction?
+//
+// Round-4c defect: a GENUINE terminal reject (TargetNotAcquired 0x042C, via a
+// removed target) reached the client mid-windup, but `cancelCastSequence` never
+// fired — the handler gated on `nowMs < inst._castBusyUntilMs`, and that busy
+// window is sized from the gesture's JSON `durationS` ESTIMATE (~600 ms), which
+// is SHORTER than the actual on-screen windup (the diag showed the cast gesture
+// at 482 ms and natural completion at 1224 ms). The reject landed at +874 ms —
+// after the busy-window estimate expired but WHILE the windup was still visibly
+// running — so `nowMs < busyUntilMs` was false and the windup ran to completion
+// (chainsCancelled=0), flashing the false success glow the flag exists to
+// suppress.
+//
+// Fix: gate on a DURABLE in-flight signal — `chainActive`, which entities.js
+// holds true for the whole chain (commit → natural end / cancel / clearCastBusy)
+// and does NOT expire with the estimate. The busy-window check is kept only as
+// an OR-fallback (belt-and-suspenders) so the handler still works if a future
+// path sets the window but not the flag. The "in-flight required" gate is what
+// keeps a door/melee reuse of a shared code (e.g. 0x0550 MissileOutOfRange) from
+// cutting a phantom cast.
+//
+// @param {object} p
+// @param {boolean} p.flagOn        `?castRejectClears=on` (strict opt-in; DEFAULT-OFF)
+// @param {number}  p.code          the WeenieError code from UseFailed (kind=13)
+// @param {boolean} p.chainActive   inst._castChainActive — a local cast chain is live
+// @param {number}  p.busyUntilMs   inst._castBusyUntilMs (0 when unset/cleared)
+// @param {number}  p.nowMs         performance.now()
+// @returns {boolean} true iff cancelCastSequence(lg,"reject") should fire.
+export function shouldClearCastOnReject({ flagOn, code, chainActive, busyUntilMs, nowMs }) {
+  if (!flagOn) return false;                       // strict default-OFF opt-in
+  if (!isTerminalCastReject(code)) return false;   // not a terminal cast reject (e.g. fizzle 0x0402)
+  if (chainActive) return true;                    // durable in-flight signal (the fix)
+  // Fallback: the busy window is still open (works even if chainActive was
+  // never set by an older/alternate cast path).
+  return !!(busyUntilMs && Number.isFinite(nowMs) && nowMs < busyUntilMs);
+}
