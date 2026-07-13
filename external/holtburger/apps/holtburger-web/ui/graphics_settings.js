@@ -47,6 +47,12 @@ const EXTRA_DEFAULTS = Object.freeze({
   fpsCounter: false,
   showRenderStats: false,
   wireframe: false,
+  // Combat aids (consumed by scene3d/spell_shape_preview.js, not the renderer).
+  // Cast-stability ring: a 6 m ground circle frozen where you begin a cast
+  // (ACE Windup_MaxMove; leaving it fizzles the cast for PK chars). Off by
+  // default — an opt-in aid, no retail equivalent (retail only toasted the
+  // server's "You have moved too far!" WeenieError, drew no circle).
+  castStabilityRing: false,
 });
 
 export function loadGraphicsState() {
@@ -339,6 +345,14 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
   }));
   containerEl.appendChild(boolRow("Wireframe", "wireframe", state.extras.wireframe, (v) => {
     setExtra(state, "wireframe", v); markDirty();
+  }));
+
+  // --- Combat --------------------------------------------------------------
+  // Cast-stability ring applies live (no reload) — spell_shape_preview.js
+  // re-reads the persisted value on the hb-quality-changed event.
+  containerEl.appendChild(makeSectionHeader("Combat"));
+  containerEl.appendChild(boolRow("Cast-stability ring", "castStabilityRing", state.extras.castStabilityRing, (v) => {
+    setExtra(state, "castStabilityRing", v);
   }));
 
   // --- Display ---------------------------------------------------------------

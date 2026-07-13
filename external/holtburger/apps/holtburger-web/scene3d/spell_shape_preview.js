@@ -41,6 +41,7 @@
 import * as THREE from "three";
 import { SPELL_SHAPE, SPELL_SCHOOL } from "../ui/ac_spell_shape.js";
 import { pickSkillLevel, determineSpellRange, resolveRangeRingSpec, resolveCasterFeet, isProjectileSpellType } from "./spell_range.js";
+import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 
 // === Wave R3.C — projectile mechanics fidelity (2026-05-29) ===
 // `?projectileArc=on` opt-in. Default OFF → the Arc preview keeps its
@@ -565,6 +566,16 @@ const _SHAPE_BUILDERS = Object.freeze({
  */
 function _onSpellCastInitiated(evt) {
   const detail = evt?.detail ?? {};
+  // Cast-stability ring: freeze the 6 m anchor for the LOCAL caster only (this
+  // ring tracks MY movement). Done BEFORE the shape early-returns so shapeless
+  // casts (self-buffs) still get a ring. attackerGuid is the local guid on
+  // every local send path (picking / hotbar / combat-bar); remote casts (which
+  // also emit this event for the shape preview) are filtered out here.
+  try {
+    const lg = (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function")
+      ? (window.getLocalPlayerGuid() >>> 0) : 0;
+    if (lg && (detail.attackerGuid >>> 0) === lg) _noteCastStability(detail.spellId >>> 0);
+  } catch (_) { /* a stability-ring fault never affects the shape preview */ }
   const shape = detail.shape;
   if (!shape) {
     // Classifier returned null/undefined — no shape, no overlay. Logged
@@ -656,6 +667,13 @@ function _tryBind() {
   const pc = window.__pluginClient;
   if (!pc || !pc.events || typeof pc.events.on !== "function") return false;
   pc.events.on("spellCastInitiated", _onSpellCastInitiated);
+  // Cast-stability ring: drop the frozen anchor early when the cast finishes or
+  // is rejected/fizzled. The duration-based expiry in _stabilityRingTick is the
+  // fallback for any path that emits neither event.
+  try {
+    pc.events.on("spellCastResolved", _clearCastStability);
+    pc.events.on("spellCastRejected", _clearCastStability);
+  } catch (_) { /* older bus without these events — expiry still cleans up */ }
   window.__spellShapePreviewBound = true;
   // eslint-disable-next-line no-console
   console.log("[spell-shape-preview] bound to __pluginClient.events");
@@ -864,6 +882,166 @@ function _rangeRingTick() {
   if (!CAST_RANGE_RING_ON) return;
   if (typeof window === "undefined" || typeof requestAnimationFrame !== "function") return;
   _rangeRingRafId = requestAnimationFrame(_rangeRingTick);
+})();
+
+// =====================================================================
+// Cast-stability ring (2026-07-13) — HUD graphics option, default-OFF
+// =====================================================================
+//
+// A flat 6 m ground circle FROZEN at the spot where the local player BEGINS
+// a cast, persisting until the cast's estimated duration elapses (or the cast
+// resolves / is rejected). It visualises ACE's windup move cap: a caster who
+// walks more than `Windup_MaxMove` from `StartPos` during the windup fizzles
+// (Player_Magic.cs VerifyCastRadius, `dist > 6.0 && PlayerKillerStatus != NPK`
+// — i.e. only PK/PKL chars actually fizzle). Retail drew NO such ring; it only
+// toasted the server's "You have moved too far!" WeenieError (acclient.c:415039),
+// so this is a purely opt-in client aid, controlled by the "Cast-stability
+// ring" checkbox in the Graphics settings (persisted under
+// holtburger_graphics_v1 → extras.castStabilityRing, default false).
+//
+// Anchoring off the CENTRALISED `spellCastInitiated` event (same bus the shape
+// preview binds) gets every local cast path — click-cast, hotbar, combat-bar —
+// without touching each send site. The center is the caster's CURRENT feet at
+// cast start (getLocalPlayerWorldPos, the send-moment proxy for the server's
+// StartPos); the anchor is then frozen so the ring stays put while the player
+// runs, which is the whole point.
+const WINDUP_MAX_MOVE = 6.0;                 // ACE Player_Magic.Windup_MaxMove (m)
+const STABILITY_GRACE_MS = 300;              // small tail past the estimated cast end
+const GRAPHICS_LS_KEY = "holtburger_graphics_v1";
+
+// { x, y, z, untilMs } | null — frozen cast-start anchor + auto-expiry.
+let _stabilityAnchor = null;
+// { root, geom, mat } | null — the live torus.
+let _stabilityRing = null;
+let _stabilityRafId = 0;
+// Cached HUD-option state; refreshed on the hb-quality-changed event.
+let _stabilityOptOn = _readStabilityOpt();
+
+// Read the persisted "Cast-stability ring" checkbox (default false). Cheap but
+// not free, so we cache it and only re-read on the settings-changed event.
+function _readStabilityOpt() {
+  try {
+    if (typeof localStorage === "undefined") return false;
+    const raw = localStorage.getItem(GRAPHICS_LS_KEY);
+    if (!raw) return false;
+    const p = JSON.parse(raw);
+    return !!(p && p.extras && p.extras.castStabilityRing);
+  } catch (_) {
+    return false;
+  }
+}
+
+function _disposeStabilityRing() {
+  if (!_stabilityRing) return;
+  try {
+    if (_stabilityRing.root && _stabilityRing.root.parent) {
+      _stabilityRing.root.parent.remove(_stabilityRing.root);
+    }
+    _stabilityRing.geom?.dispose?.();
+    _stabilityRing.mat?.dispose?.();
+  } catch (_) { /* never leak on a disposal fault */ }
+  _stabilityRing = null;
+}
+
+// Stamp the frozen anchor for a local cast. `spellId` sizes the auto-expiry off
+// the ACE-derived cast-sequence duration (windup + cast); a missing/short entry
+// falls back to a sane default so the ring never sticks forever.
+function _noteCastStability(spellId) {
+  try {
+    if (!_stabilityOptOn) return;
+    const ls = (typeof window !== "undefined") ? window.liveScene3d : null;
+    const feet = resolveCasterFeet(ls?.entityManager);
+    if (!feet) return;
+    let durS = 3.0;
+    try {
+      const seq = getCastSequence(spellId >>> 0);
+      if (seq && Number.isFinite(+seq.totalDurationS) && +seq.totalDurationS > 0) {
+        durS = +seq.totalDurationS;
+      }
+    } catch (_) { /* fall back to the 3 s default */ }
+    _stabilityAnchor = {
+      x: feet.x, y: feet.y, z: feet.z,
+      untilMs: performance.now() + durS * 1000 + STABILITY_GRACE_MS,
+    };
+  } catch (_) { /* an anchor fault never affects the cast */ }
+}
+
+// Clear early when the cast resolves or is rejected/fizzled (the duration
+// expiry is the fallback for any path that emits neither). spellCastResolved /
+// spellCastRejected fire for ANY caster (entities.js), so only drop OUR anchor.
+function _clearCastStability(evt) {
+  try {
+    const casterGuid = (evt?.detail?.casterGuid >>> 0) || 0;
+    const lg = (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function")
+      ? (window.getLocalPlayerGuid() >>> 0) : 0;
+    if (lg && casterGuid && casterGuid !== lg) return; // a different caster — keep our ring
+  } catch (_) { /* on any doubt, fall through and clear */ }
+  _stabilityAnchor = null;
+}
+
+function _stabilityRingTick() {
+  _stabilityRafId = 0;
+  try {
+    const ls = (typeof window !== "undefined") ? window.liveScene3d : null;
+    const now = performance.now();
+    if (_stabilityAnchor && now >= _stabilityAnchor.untilMs) _stabilityAnchor = null;
+    const active = _stabilityOptOn && _stabilityAnchor && ls;
+    if (typeof window !== "undefined") {
+      window.__castStabilityDiag = {
+        optOn: _stabilityOptOn,
+        anchored: !!_stabilityAnchor,
+        drawn: !!(active && _stabilityRing),
+        radius: WINDUP_MAX_MOVE,
+      };
+    }
+    if (!active) {
+      _disposeStabilityRing();
+    } else {
+      if (!_stabilityRing) {
+        const parent = ls.entitiesGroup ?? null;
+        if (parent) {
+          // TorusGeometry lies in the XY plane (hole axis +Z) = the AC ground
+          // plane in entitiesGroup-local space, same as the range ring.
+          const geom = new THREE.TorusGeometry(WINDUP_MAX_MOVE, 0.1, 8, 96);
+          const mat = new THREE.MeshBasicMaterial({
+            color: 0xffcc66,        // warm amber — distinct from the school-coloured range ring
+            transparent: true,
+            opacity: 0.5,
+            depthTest: false,       // draw over terrain instead of z-fighting it (matches range ring)
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          });
+          const mesh = new THREE.Mesh(geom, mat);
+          mesh.position.set(0, 0, 0.05); // hair off the ground, like the selection ring
+          mesh.renderOrder = 954;
+          const root = new THREE.Group();
+          root.name = "cast-stability-ring";
+          root.add(mesh);
+          parent.add(root);
+          _stabilityRing = { root, geom, mat };
+        }
+      }
+      if (_stabilityRing) {
+        // The anchor is FROZEN — set once per (re)build and each frame in case
+        // the entitiesGroup transform shifts under a streaming re-anchor.
+        _stabilityRing.root.position.set(_stabilityAnchor.x, _stabilityAnchor.y, _stabilityAnchor.z);
+      }
+    }
+  } catch (_) { /* never throw out of the rAF loop */ }
+  if (typeof requestAnimationFrame === "function") {
+    _stabilityRafId = requestAnimationFrame(_stabilityRingTick);
+  }
+}
+
+// The stability loop ALWAYS runs (unlike the range ring's flag-gated loop) so
+// the HUD checkbox can toggle it live; it's a no-op each frame when idle.
+(function _startStabilityRing() {
+  if (typeof window === "undefined" || typeof requestAnimationFrame !== "function") return;
+  // Keep the cached option in sync with the settings panel without a reload.
+  try {
+    window.addEventListener("hb-quality-changed", () => { _stabilityOptOn = _readStabilityOpt(); });
+  } catch (_) { /* addEventListener unavailable — option is read once at load */ }
+  _stabilityRafId = requestAnimationFrame(_stabilityRingTick);
 })();
 
 // Test / diag re-exports. Importing modules can drive the dispatch

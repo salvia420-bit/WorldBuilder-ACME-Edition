@@ -66,12 +66,16 @@ const CAST_FACE_TARGET = (() => {
 // and the local rig heading is integrator-owned (applyLocalPlayerPoseFromIntegrator)
 // — so only setMovementInput can rotate it. We re-run the proven turn-in-place
 // drive right before the final gesture (same path as castFaceTarget/missileFaceTarget).
-// Default-OFF (strict `=on`): it touches the motion pipeline mid-cast (a turn edge
-// could trip an FU-A control reclaim, ADJ-15 Q3) → 1070 eye-test. `?castReface=on`.
+// DEFAULT-ON (`!== "off"`) as of 2026-07-13: PASSED r4c (via=click, 37° off-axis,
+// turned + cast); the flip was blocked ONLY by the harness's turn-metric isolation
+// (root.quaternion follows the server pose), which the manual 1070 casting eye-test
+// (2026-07-13, user-confirmed "great") substitutes for. It still touches the motion
+// pipeline mid-cast (a turn edge could trip an FU-A control reclaim, ADJ-15 Q3), so
+// keep the `?castReface=off` escape. `?castReface=off` to disable.
 const CAST_REFACE = (() => {
   try {
-    return typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("castReface") === "on";
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search).get("castReface")?.toLowerCase() !== "off";
   } catch { return false; }
 })();
 

@@ -12,12 +12,12 @@ Session span: 2026-07-12 → 2026-07-13. Four commits, all pushed to `origin/mas
 ## 1. Flag state after this session
 
 **Default-ON, eye-test validated** (all keep `?flag=off` escapes):
-`castReliability` `castGestureLen` `castCancelStops` (r2, GTX-1070) · `castBusyScope` (r3, GTX) · `targetCycle` (r4a, GTX) · `castRejectClears` `castRangeRing` (r4d, local HD520) · plus `castGestureParity` `projectileImpactStop` `projectileGroundClampSkip` (d577a059).
+`castReliability` `castGestureLen` `castCancelStops` (r2, GTX-1070) · `castBusyScope` (r3, GTX) · `targetCycle` (r4a, GTX) · `castRejectClears` `castRangeRing` (r4d, local HD520) · `castReface` (r4c behavior-pass, flipped 2026-07-13 on the manual 1070 casting eye-test that substitutes for the harness's turn-metric isolation) · plus `castGestureParity` `projectileImpactStop` `projectileGroundClampSkip` (d577a059).
 
 **Still default-OFF — exact blocker per flag:**
 - `castRangeWarn` — REAL DEFECT REMAINS: r4d far-leg had clean preconditions (via==click, Magic stance, far dist) and the "Out of Range!" toast still did not fire. In-range half (no toast) is proven. Mechanism notes in the r4d judge journal (see §5 paths).
 - `castFacing20` — behavior unmeasured, not disproven. The turn metric is contaminated: the local rig `root.quaternion` follows the SERVER pose, and ACE rotates the caster server-side unconditionally on every targeted cast (`Player_Magic.cs` Rotate at cast start; only re-rotates pre-gesture outside the 20° `spellcast_max_angle`). `camAzimuthDelta` (`cameraSwitcher.followYaw`) and `clientTurnInputs` read flat 0. NEXT: instrument `turnToFaceThenAct`'s turn-decision branch in-page (count "turn issued" directly) — do not diff poses.
-- `castReface` — behavior PASSED r4c (via=click, 37° off-axis, turned + cast); flip blocked only by the same metric-isolation problem as castFacing20.
+- `castReface` — FLIPPED default-ON 2026-07-13 (see the default-ON list above); the r4c behavior pass + manual 1070 casting eye-test cleared the metric-isolation block. Kept `?castReface=off` escape.
 - `castCamBias` — scenario blocked: CDP `page.mouse.click` at the projected entity origin deterministically misses the small drudge mesh at ~25 m (correct 20–28 m geometry was achieved in r4d). Harness aiming problem (project a BODY point / use pickEntityAt screen sweep), possibly also a real player-facing pick-difficulty datum.
 - `castHoldReclaim` — same click-aiming blocker (close range, ndcx ~1.26 off-frame at click).
 
@@ -56,6 +56,7 @@ Session span: 2026-07-12 → 2026-07-13. Four commits, all pushed to `origin/mas
 
 ## 6. Next-step queue (in rough value order)
 
+0. **Cast-stability ring (LANDED 2026-07-13)** — new Graphics-settings option "Cast-stability ring" (default unticked, `holtburger_graphics_v1.extras.castStabilityRing`). Draws a 6 m amber ground circle (ACE `Windup_MaxMove`) frozen at the local caster's feet on cast start, auto-expiring at the cast's estimated duration (or `spellCastResolved`/`Rejected`). Hooks the centralised `spellCastInitiated` event in `scene3d/spell_shape_preview.js` (gated to the local `attackerGuid`); `window.__castStabilityDiag` surfaces optOn/anchored/drawn. NOTE: the fizzle it visualises only bites PK/PKL chars (ACE `PlayerKillerStatus != NPK`); the ring itself draws for any local caster once ticked. NEXT: 1070 eye-test for size/legibility; consider a PK-status draw-gate.
 1. castRangeWarn far-leg defect — root-cause with the clean r4d diag (toast plumbing beyond the position fallback).
 2. In-page turn-decision instrumentation → unblock castFacing20 + castReface flips.
 3. Harness click aiming (body-point projection) → unblock castCamBias + castHoldReclaim.
