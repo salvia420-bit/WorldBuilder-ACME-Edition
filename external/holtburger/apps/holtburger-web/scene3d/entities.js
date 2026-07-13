@@ -661,6 +661,15 @@ const UNIFIED_LOCO = UNIFIED_MODE === "locomotion" || UNIFIED_MODE === "on";
 // (class 0x40, in MotionTable.cycles) the links-only swing resolver can't reach.
 const UNIFIED_MISSILE = UNIFIED_DEFAULT || UNIFIED_MODE === "missile" || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
+// C2 (2026-07-12) — retail target-cycling ordering math (CPlayerSystem::
+// SelectNext, acclient.c:397944). Import-free helper so the ordering logic
+// is unit-testable under plain node (tests/target_cycle.test.cjs).
+import {
+  SELECTION_TYPE,
+  computeSelectNext,
+  matchesSelectionType,
+  weightedDistance,
+} from "./target_cycle.js";
 // P6/R-6 (net-fixwave 2026-07-10) — entity program warm: per-spawn rig
 // compileAsync (Step E) + the one-shot archetype-matrix warm armed on the
 // local player's commit. See bake_prewarm.js for flags + rationale.
@@ -2958,6 +2967,20 @@ export class EntityManager {
       if (typeof window !== "undefined" && window.location) {
         const flag = new URLSearchParams(window.location.search).get("wieldedSpawn");
         this._wieldedSpawn = (flag?.toLowerCase() === "on");
+      }
+    } catch (_) {}
+    // C2 (2026-07-12) — retail keybind TARGET CYCLING (CPlayerSystem::
+    // SelectNext, acclient.c:397944). Input-triggered only (no passive
+    // behavior change), so it ships ENABLED; `?targetCycle=off` is the
+    // escape. `!== "off"` = default-ON (the intentional flag-default
+    // footgun here — an absent param reads ON). Consumed by `selectNext`
+    // / `cycleTarget` / `selectSelf`; the keydown dispatch in index.html
+    // also honours it before calling in.
+    this._targetCycleEnabled = true;
+    try {
+      if (typeof window !== "undefined" && window.location) {
+        const flag = new URLSearchParams(window.location.search).get("targetCycle");
+        if ((flag ?? "").toLowerCase() === "off") this._targetCycleEnabled = false;
       }
     } catch (_) {}
     // === Wave R2.A (2026-05-28) — entity-attached dynamic lights.
@@ -6601,6 +6624,178 @@ export class EntityManager {
     ring.name = "selection-ring";
     inst._selectionRing = ring;
     inst.root.add(ring);
+  }
+
+  // === C2 (2026-07-12) — retail keybind TARGET CYCLING ==================
+  // CPlayerSystem::SelectNext (acclient.c:397944) + its keybind dispatch
+  // (acclient.c:399692-399746). Reuses the `_selectedGuid` selection ring
+  // and emits `selectionChanged` on the plugin bus so the existing
+  // target-bar HUD name display (plugins/target-bar.js) surfaces the pick
+  // — the SAME path the click-selection in picking.js uses. Pure ordering
+  // lives in scene3d/target_cycle.js (unit-tested); this method only
+  // gathers live candidates + commits the selection.
+
+  /**
+   * The local player's guid, or 0 if not resolved yet. Same global the rest
+   * of this file consults (`_isLocalPlayerGuid`, spawn diag).
+   */
+  _localPlayerGuid() {
+    try {
+      if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+        const lpg = window.getLocalPlayerGuid();
+        if (lpg !== null && lpg !== undefined) return (lpg >>> 0) || 0;
+      }
+    } catch (_) {}
+    return 0;
+  }
+
+  /**
+   * The local player's world pose `{x, y, z}` in AC world coords, or null.
+   * Mirrors picking.js `playerWorldPose`: the wasm LocalPlayerPose carries
+   * landblock-local x/y + a separate landblockId, so fold the landblock
+   * offset in to match entity world positions (`inst.root.position`).
+   */
+  _localPlayerWorldPose() {
+    try {
+      const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+      const pose = sh?.getLocalPlayerPose?.();
+      if (!pose) return null;
+      const lbId = (pose.landblockId ?? 0) >>> 0;
+      const lbX = (lbId >>> 24) & 0xff;
+      const lbY = (lbId >>> 16) & 0xff;
+      return { x: pose.x + lbX * 192, y: pose.y + lbY * 192, z: pose.z };
+    } catch (_) { return null; }
+  }
+
+  /**
+   * Gather the live candidate list for a selection type: every entity in
+   * `entityMap` that passes the type filter, is not the local player, is
+   * not mid-death (`_deadFrozen`, set by the collapse handoff), and has a
+   * world position to rank by. Dead/destroyed entities never reach here —
+   * they're removed from `entityMap` (or become corpses, excluded by the
+   * ODF_CORPSE filter) — so they drop out of the cycle.
+   *
+   * @param {string} type — a SELECTION_TYPE value
+   * @param {{x:number,y:number,z:number}} pose — player world pose
+   * @returns {Array<{guid:number, dist:number}>}
+   */
+  _gatherCycleCandidates(type, pose) {
+    const out = [];
+    for (const [guid, inst] of this.entityMap) {
+      if (!inst || !inst.root || !inst.root.position) continue;
+      if (inst._deadFrozen) continue; // dead/collapsing — out of the cycle
+      if (!matchesSelectionType(inst.meta, type)) continue;
+      const p = inst.root.position;
+      out.push({
+        guid: (guid >>> 0) || 0,
+        dist: weightedDistance(pose, { x: p.x, y: p.y, z: p.z }),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Commit a selection change: update the ring, fire `selectionChanged` on
+   * the plugin bus (the target-bar HUD listens), return the new guid.
+   * No-op emit when the guid is unchanged.
+   */
+  _commitSelection(newGuid) {
+    const next = (newGuid >>> 0) || 0;
+    const prev = (this._selectedGuid >>> 0) || 0;
+    if (next === prev) return prev;
+    this.setSelectedTarget(next);
+    try {
+      window.__pluginClient?.events?.emit?.("selectionChanged", {
+        guid: (this._selectedGuid >>> 0) || 0,
+        prevGuid: prev,
+      });
+    } catch (_) { /* never block cycling on a subscriber fault */ }
+    return (this._selectedGuid >>> 0) || 0;
+  }
+
+  /**
+   * Retail CPlayerSystem::SelectNext primitive (acclient.c:397944). Selects
+   * the next candidate of `type` in the given direction and commits it.
+   *
+   * @param {boolean} closer — step toward the nearer neighbour (extreme:
+   *        nearest). false = toward the farther neighbour (extreme: farthest).
+   * @param {boolean} extreme — ignore the current selection, jump to the
+   *        absolute nearest/farthest (the wrap-around fallback).
+   * @param {string} [type] — SELECTION_TYPE.MONSTER (default) / PLAYER / ANY.
+   * @returns {number} the guid selected this call, or 0 when nothing changed
+   *        (retail leaves selectedID untouched; the caller then wraps).
+   */
+  selectNext(closer, extreme, type = SELECTION_TYPE.MONSTER) {
+    if (this._targetCycleEnabled === false) return 0;
+    const pose = this._localPlayerWorldPose();
+    if (!pose) return 0; // can't rank without a player position
+    const selfGuid = this._localPlayerGuid();
+    const candidates = this._gatherCycleCandidates(type, pose);
+    if (candidates.length === 0) return 0;
+    const cur = (this._selectedGuid >>> 0) || 0;
+    const pick = computeSelectNext(candidates, cur, selfGuid, !!closer, !!extreme);
+    if (!pick || pick === cur) return 0;
+    this._commitSelection(pick);
+    return pick;
+  }
+
+  /**
+   * Keybind-level cycle: mirrors the retail dispatch's "try the incremental
+   * step; if the selection didn't move, re-issue with extreme=1 to wrap"
+   * pattern (acclient.c:399717-399746).
+   *
+   * @param {"next"|"previous"|"closest"} mode
+   * @param {string} [type] — SELECTION_TYPE.MONSTER (default) / PLAYER / ANY.
+   * @returns {number} the guid now selected (0 if nothing selectable).
+   */
+  cycleTarget(mode, type = SELECTION_TYPE.MONSTER) {
+    if (this._targetCycleEnabled === false) return (this._selectedGuid >>> 0) || 0;
+    if (mode === "closest") {
+      // ClosestMonster (1, 1) — absolute nearest.
+      const g = this.selectNext(true, true, type);
+      return g || ((this._selectedGuid >>> 0) || 0);
+    }
+    if (mode === "previous") {
+      // PreviousMonster (0, 0); if unchanged → wrap (1, 1) = nearest.
+      let g = this.selectNext(false, false, type);
+      if (!g) g = this.selectNext(true, true, type);
+      return g || ((this._selectedGuid >>> 0) || 0);
+    }
+    // "next" — NextMonster (1, 0); if unchanged → wrap (0, 1) = farthest.
+    let g = this.selectNext(true, false, type);
+    if (!g) g = this.selectNext(false, true, type);
+    return g || ((this._selectedGuid >>> 0) || 0);
+  }
+
+  /**
+   * Retail SelectSelf — select the local player. Returns the guid (0 if the
+   * local player isn't resolved yet).
+   */
+  selectSelf() {
+    if (this._targetCycleEnabled === false) return (this._selectedGuid >>> 0) || 0;
+    const self = this._localPlayerGuid();
+    if (!self) return 0;
+    return this._commitSelection(self);
+  }
+
+  /**
+   * Harness-friendly snapshot of the current selection: `{guid, name, dist}`
+   * (dist = weighted distance to the local player, or -1 when unknown).
+   * Used by `window.__getSelectedTarget` for the eye-test driver.
+   */
+  selectedTargetInfo() {
+    const guid = (this._selectedGuid >>> 0) || 0;
+    if (!guid) return { guid: 0, name: null, dist: -1 };
+    const inst = this.entityMap.get(guid);
+    let name = null;
+    try { name = inst?.meta?.name ?? inst?.name ?? null; } catch (_) {}
+    let dist = -1;
+    try {
+      const pose = this._localPlayerWorldPose();
+      const p = inst?.root?.position;
+      if (pose && p) dist = weightedDistance(pose, { x: p.x, y: p.y, z: p.z });
+    } catch (_) {}
+    return { guid, name, dist };
   }
 
   /**

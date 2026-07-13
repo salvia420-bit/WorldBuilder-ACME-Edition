@@ -983,6 +983,14 @@ impl ClientRuntime {
                     target.0
                 );
                 if !self.arm_busy_operation(BusyOperationKind::SpellCast) {
+                    // C3-wire-send: the cast is declined here (server is
+                    // authoritative on busy state; a native re-cast while an op
+                    // is pending is a duplicate). Count + log it so the drop is
+                    // observable instead of silent.
+                    let blocked = self
+                        .active_busy_operation()
+                        .unwrap_or(BusyOperationKind::SpellCast);
+                    self.note_cast_wire_dropped(blocked);
                     return Ok(());
                 }
                 self.send_game_action(GameAction::CastTargetedSpell(Box::new(
@@ -993,6 +1001,11 @@ impl ClientRuntime {
             NormalizedSpellCast::Untargeted { spell_id } => {
                 log::info!(">>> Casting untargeted spell {}", spell_id);
                 if !self.arm_busy_operation(BusyOperationKind::SpellCast) {
+                    // C3-wire-send: observable drop (see the targeted branch).
+                    let blocked = self
+                        .active_busy_operation()
+                        .unwrap_or(BusyOperationKind::SpellCast);
+                    self.note_cast_wire_dropped(blocked);
                     return Ok(());
                 }
                 self.send_game_action(GameAction::CastUntargetedSpell(Box::new(
@@ -2190,6 +2203,46 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn overlapping_spell_cast_is_dropped_but_counted() {
+        // C3-wire-send: a second cast while the first busy-op is still pending
+        // is declined at the wire (no duplicate game action), and the drop is
+        // now OBSERVABLE via `cast_wire_dropped_count()` rather than silent.
+        let mut client = build_test_client();
+        assert_eq!(client.cast_wire_dropped_count(), 0);
+
+        // First cast: arms SpellCast + transmits (one game action on the wire).
+        client
+            .handle_command(ClientCommand::CastUntargetedSpell { spell_id: 27 })
+            .await
+            .unwrap();
+        assert_eq!(client.session.game_action_sequence, 1);
+        assert_eq!(client.cast_wire_dropped_count(), 0);
+        assert!(matches!(
+            client.active_busy_operation,
+            Some(crate::client::PendingBusyOperation {
+                operation: BusyOperationKind::SpellCast,
+                ..
+            })
+        ));
+
+        // Second cast while still busy: dropped (sequence unchanged) + counted.
+        client
+            .handle_command(ClientCommand::CastUntargetedSpell { spell_id: 27 })
+            .await
+            .unwrap();
+        assert_eq!(client.session.game_action_sequence, 1);
+        assert_eq!(client.cast_wire_dropped_count(), 1);
+
+        // A third overlapping cast increments the counter again (saturating).
+        client
+            .handle_command(ClientCommand::CastUntargetedSpell { spell_id: 27 })
+            .await
+            .unwrap();
+        assert_eq!(client.session.game_action_sequence, 1);
+        assert_eq!(client.cast_wire_dropped_count(), 2);
     }
 
     #[tokio::test]

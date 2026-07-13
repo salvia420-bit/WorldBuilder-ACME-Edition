@@ -20,6 +20,9 @@ import {
   pickSkillLevel,
   determineSpellRange,
   resolveRangeRingSpec,
+  resolveCasterFeet,
+  decideRangeWarn,
+  RANGE_WARN_DEDUP_MS,
   RADAR_OUTDOOR_RADIUS,
 } from "../scene3d/spell_range.js";
 
@@ -124,6 +127,111 @@ nullish(resolveRangeRingSpec(2331, { range: 0, school: 2 }, feet), "resolveRange
 //     -> no ring (don't draw at the origin).
 nullish(resolveRangeRingSpec(27, warInfo, null), "resolveRangeRingSpec: no player pose -> null");
 nullish(resolveRangeRingSpec(27, warInfo, { x: NaN, y: 0, z: 0 }), "resolveRangeRingSpec: NaN pose -> null");
+
+// =====================================================================
+// C5-rangering (2026-07-12) — resolveCasterFeet: pin the ring's CENTER
+// SOURCE. The round-3 defect report read "no torus at the caster's feet — a
+// misplaced small ellipse near the target instead". Root cause of the *center*
+// question: the ring must anchor on the CASTER's ground pose (the same
+// getLocalPlayerWorldPos() the follow camera / nameplate / selection ring use),
+// never on the target. These pins prove resolveCasterFeet reads the caster
+// pose and is unaffected by any target rig position.
+// =====================================================================
+{
+  const casterPose = { x: 1000.5, y: 2000.25, z: 42.0 };
+  const targetPose = { x: 1060.5, y: 2000.25, z: 44.0 }; // 60 m east — a bolt target
+
+  // (i) The anchor is the caster's getLocalPlayerWorldPos() — verbatim.
+  const emCaster = { getLocalPlayerWorldPos: () => ({ ...casterPose }) };
+  const feetC = resolveCasterFeet(emCaster);
+  truthy(feetC, "resolveCasterFeet: caster pose present -> feet");
+  eq(feetC?.x, 1000.5, "  feet.x == caster world x (NOT the target)");
+  eq(feetC?.y, 2000.25, "  feet.y == caster world y");
+  eq(feetC?.z, 42.0, "  feet.z == caster ground z");
+
+  // (ii) The RADIUS is the resolved spell reach and the CENTER is the caster —
+  //      not the target. Feed the caster feet + a Flame Bolt I reach into the
+  //      full spec and confirm the torus centers on the caster with radius =
+  //      spell range, even though a target sits 60 m away.
+  const reach = determineSpellRange(0.7, 30, pickSkillLevel(1, () => 50)); // 65 m
+  const spec = resolveRangeRingSpec(27, { range: reach, school: 1 }, feetC);
+  truthy(spec, "resolveCasterFeet -> resolveRangeRingSpec: ring spec built");
+  eq(spec?.range, 65, "  spec.range == spell reach (radius = spell range)");
+  eq(spec?.x, casterPose.x, "  ring CENTER x == caster (not target)");
+  eq(spec?.y, casterPose.y, "  ring CENTER y == caster (not target)");
+  eq(spec?.z, casterPose.z, "  ring CENTER z == caster (not target)");
+  eq(spec?.x === targetPose.x, false, "  ring is NOT centered on the target");
+
+  // (iii) Robustness — the resolver never invents a pose.
+  nullish(resolveCasterFeet(null), "resolveCasterFeet: null manager -> null");
+  nullish(resolveCasterFeet({}), "resolveCasterFeet: manager without getLocalPlayerWorldPos -> null");
+  nullish(resolveCasterFeet({ getLocalPlayerWorldPos: () => null }),
+    "resolveCasterFeet: pre-spawn (null pose) -> null");
+  nullish(resolveCasterFeet({ getLocalPlayerWorldPos: () => ({ x: NaN, y: 0, z: 0 }) }),
+    "resolveCasterFeet: non-finite pose component -> null");
+}
+
+// =====================================================================
+// WS05 (C4-rangewarn, 2026-07-12) — decideRangeWarn: the fire/suppress +
+// no-double-toast rule for the pre-cast "Out of Range!" toast. Pins the
+// round-3 eye-test defect (cast-eyetest/castRangeWarn_diag.json): a genuine
+// click-path cast at dist3d=138.43 m with a 75 m cap fired NO toast. The
+// decision is now pure + here; the caller (picking.js) sources the target pose
+// from window.__lastEntityWorldPos (authoritative) instead of the render rig.
+// =====================================================================
+
+// (1) THE DEFECT — 138.43 m target, Flame Bolt I at max reach (cap 75 m) =>
+//     MUST warn. This is the exact scenario the eye-test proved silent.
+{
+  const range = determineSpellRange(0.7, 30, 100); // Flame Bolt I, high War -> capped 75
+  eq(range, 75, "rangewarn: Flame Bolt I reach capped at 75");
+  const d = decideRangeWarn({
+    distance: 138.43, range, key: "27:2147523120", lastWarn: null, nowMs: 1000,
+  });
+  eq(d.warn, true, "rangewarn: 138.43 m > 75 m cap -> WARN (the round-3 defect)");
+  eq(d.key, "27:2147523120", "rangewarn: warn carries the (spell,target) de-dup key");
+}
+
+// Also warn when the target sits just past a sub-cap reach (0.7*50+30 = 65).
+eq(decideRangeWarn({ distance: 70, range: 65, key: "27:a", lastWarn: null, nowMs: 0 }).warn,
+  true, "rangewarn: 70 m > 65 m reach -> WARN");
+
+// (2) IN-RANGE — the diag's first cast was 23.79 m (in reach) and correctly
+//     produced no toast. distance <= range must NOT warn.
+eq(decideRangeWarn({ distance: 23.79, range: 65, key: "27:a", lastWarn: null, nowMs: 0 }).warn,
+  false, "rangewarn: 23.79 m <= 65 m reach -> no warn (in range)");
+// Boundary: distance exactly == range is IN range (ACE uses `distance > max`).
+eq(decideRangeWarn({ distance: 75, range: 75, key: "27:a", lastWarn: null, nowMs: 0 }).warn,
+  false, "rangewarn: distance == range -> no warn (boundary is in-range)");
+// Zero / self / bad-data range never warns even at huge distance.
+eq(decideRangeWarn({ distance: 500, range: 0, key: "x", lastWarn: null, nowMs: 0 }).warn,
+  false, "rangewarn: range 0 (self/untargeted) -> no warn");
+// No target position (distance non-finite) -> can't decide, no warn.
+eq(decideRangeWarn({ distance: NaN, range: 75, key: "x", lastWarn: null, nowMs: 0 }).warn,
+  false, "rangewarn: NaN distance (no target pos) -> no warn");
+
+// (3) NO-DOUBLE-TOAST — the same (spell,target) must not warn twice within the
+//     de-dup window (guards the client warn stacking on the server's own 0x0550
+//     reject toast, and re-clicks). After the window, it may warn again.
+{
+  const key = "27:2147523120";
+  const first = decideRangeWarn({ distance: 138.43, range: 75, key, lastWarn: null, nowMs: 1000 });
+  eq(first.warn, true, "rangewarn: first out-of-range cast warns");
+  const persisted = { key: first.key, t: first.t }; // caller stores this on a warn
+
+  // Immediate re-decision for the same key -> suppressed (no double toast).
+  eq(decideRangeWarn({ distance: 138.43, range: 75, key, lastWarn: persisted, nowMs: 1200 }).warn,
+    false, "rangewarn: same (spell,target) within window -> SUPPRESSED (no double toast)");
+  // Just inside the window boundary -> still suppressed.
+  eq(decideRangeWarn({ distance: 138.43, range: 75, key, lastWarn: persisted, nowMs: 1000 + RANGE_WARN_DEDUP_MS - 1 }).warn,
+    false, "rangewarn: within dedup window -> suppressed");
+  // Past the window -> warns again (the target is still out of range).
+  eq(decideRangeWarn({ distance: 138.43, range: 75, key, lastWarn: persisted, nowMs: 1000 + RANGE_WARN_DEDUP_MS + 1 }).warn,
+    true, "rangewarn: after dedup window -> warns again");
+  // A DIFFERENT target within the window is NOT suppressed (per-key de-dup).
+  eq(decideRangeWarn({ distance: 138.43, range: 75, key: "27:999", lastWarn: persisted, nowMs: 1200 }).warn,
+    true, "rangewarn: different target within window -> warns (per-key de-dup)");
+}
 
 console.log(fail ? `FAIL — ${fail} failure(s)` : "PASS — 0 failure(s)");
 process.exit(fail ? 1 : 0);

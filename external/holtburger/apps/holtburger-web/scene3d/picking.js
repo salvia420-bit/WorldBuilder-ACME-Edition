@@ -7,7 +7,8 @@ import {
 import { getAimLevelForVelocity, getAimLevelForBallisticArc } from "../ui/ac_aim_level_for_velocity.js";
 import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
 import { classifySpell } from "../ui/ac_spell_shape.js";
-import { pickSkillLevel, determineSpellRange } from "./spell_range.js";
+import { pickSkillLevel, determineSpellRange, decideRangeWarn } from "./spell_range.js";
+import { faceDeadzoneRad } from "./camera_math.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -73,6 +74,26 @@ const CAST_REFACE = (() => {
       new URLSearchParams(window.location.search).get("castReface") === "on";
   } catch { return false; }
 })();
+
+// C1 (2026-07-12) — widen the turn-to-face early-exit dead-zone to ACE's
+// spellcast_max_angle (20° ≈ 0.349 rad) so the client only turns the caster
+// when the SERVER would. Retail/ACE early-exits the whole turn when the caster
+// is already within spellcast_max_angle of the target (Player_Magic.cs
+// TurnTo_Magic/IsWithinAngle, default 20°); our turnToFaceThenAct dead-zone was
+// 0.05 rad (~2.86°, ~7× tighter), so casts inside 2.86°–20° still turned the
+// rig and swung the (default-ON) follow camera when the server would have stood
+// still. Default-OFF (strict `=on`): it's a feel change to the auto-face — 1070
+// round-4 eye-test pending. Flag-off keeps the legacy 0.05 rad, byte-identical.
+// `?castFacing20=on`.
+const CAST_FACING_20 = (() => {
+  try {
+    return typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("castFacing20") === "on";
+  } catch { return false; }
+})();
+// The selected early-exit band, in radians (0.349 when on, 0.05 when off).
+// Selection logic lives in camera_math.faceDeadzoneRad (pure, unit-pinned).
+const FACE_DEADZONE_RAD = faceDeadzoneRad(CAST_FACING_20);
 
 // WS05 (2026-07-12) — pre-cast out-of-range WARNING toast. Purely proactive
 // feedback (a client ENHANCEMENT retail lacked — retail's DetermineSpellRange
@@ -219,13 +240,45 @@ function emitActionRejected(message) {
   } catch (_) { /* never block input handling on feedback */ }
 }
 
+// WS05 (C4-rangewarn, 2026-07-12) — de-dup state for the pre-cast range
+// warning (one local player / session). Persists across clicks so a re-click
+// on the same out-of-range target — or the server's own 0x0550 reject landing
+// a windup later — doesn't stack a second identical toast. See
+// spell_range.js#decideRangeWarn.
+let lastRangeWarn = null; // { key, t } | null
+
+// WS05 (C4-rangewarn) — authoritative target world position for the range
+// test. Prefer the per-guid KIND_POSITION pose in window.__lastEntityWorldPos
+// (seeded by the net drain for ANY entity regardless of whether a render rig
+// ever spawned, and the SAME authoritative pose ACE VerifySpellRange checks
+// against — `wx = lbX*192 + localX`, matching playerWorldPose's frame), and
+// fall back to the render rig (entityAcPosition) only when the stream hasn't
+// stamped this guid yet.
+//
+// The rig-only source was the round-3 defect: a distant target's rig is either
+// absent from entityMap (→ entityAcPosition null → the whole warn silently
+// no-oped) or lags the authoritative pose, so the 138 m cast never toasted.
+function targetWorldPos(entityManager, guid) {
+  const g = guid >>> 0;
+  try {
+    const p = (typeof window !== "undefined")
+      ? window.__lastEntityWorldPos?.get?.(g)
+      : null;
+    if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+      return { x: p.x, y: p.y, z: Number.isFinite(p.z) ? p.z : 0 };
+    }
+  } catch (_) { /* fall through to the render rig */ }
+  return entityAcPosition(entityManager, g);
+}
+
 // WS05 (2026-07-12) — pre-cast out-of-range WARNING (feedback only; NEVER
 // blocks the cast). Mirrors retail SpellExamineUI::DetermineSpellRange
 // (scene3d/spell_range.js) and ACE VerifySpellRange's 2D horizontal-distance
 // test: range = baseRangeMod * (init+ranks skill) + baseRangeConstant, cap 75.
 // Self / untargeted spells (range 0) are skipped. Gated behind
 // `?castRangeWarn=on` (default-OFF). Wrapped so a feedback fault can never
-// stop the cast from firing.
+// stop the cast from firing. The fire/suppress + no-double-toast rule is the
+// pure decideRangeWarn (spell_range.js); this fn just resolves its inputs.
 function maybeWarnOutOfRange(sessionHandle, entityManager, guid, spellId, localGuid) {
   if (!CAST_RANGE_WARN) return;
   try {
@@ -242,9 +295,20 @@ function maybeWarnOutOfRange(sessionHandle, entityManager, guid, spellId, localG
     const range = determineSpellRange(mod, konst, skill);
     if (!(range > 0)) return; // 0 / self / bad data -> no warning
     const pose = playerWorldPose(sessionHandle);
-    const tpos = entityAcPosition(entityManager, guid);
+    const tpos = targetWorldPos(entityManager, guid);
     if (!pose || !tpos) return;
-    if (horizontalDistance(pose, tpos) > range) {
+    const distance = horizontalDistance(pose, tpos);
+    const nowMs = (typeof performance !== "undefined" && performance.now)
+      ? performance.now() : Date.now();
+    const decision = decideRangeWarn({
+      distance,
+      range,
+      key: `${spellId >>> 0}:${guid >>> 0}`,
+      lastWarn: lastRangeWarn,
+      nowMs,
+    });
+    if (decision.warn) {
+      lastRangeWarn = { key: decision.key, t: decision.t };
       emitActionRejected("Out of Range!");
     }
   } catch (_) { /* never block the cast on range-feedback faults */ }
@@ -497,7 +561,8 @@ export function setupClickPicking({
     // Uses the PROVEN manual drive (setMovementInput turn — the same path
     // keyboard turning uses, and the F7-3/F8-5 missile/cast face-target that
     // passed the 2026-06-11 eye-test). Turns IN PLACE (forward=0) until the
-    // bearing is within ~0.05 rad or FACE_TURN_TIMEOUT_MS elapses, so a bad
+    // bearing is within FACE_DEADZONE_RAD (0.05 rad legacy; 0.349 rad = ACE's
+    // 20° spellcast_max_angle under ?castFacing20=on) or FACE_TURN_TIMEOUT_MS elapses, so a bad
     // bearing can't stall the shot. (The wasm TurnToObject path was tried but,
     // like pursueEntity, didn't reliably drive the local rig — the input path
     // is the one that actually rotates.)
@@ -514,7 +579,7 @@ export function setupClickPicking({
       const dx = targetAc.x - pose.x;
       const dy = targetAc.y - pose.y;
       const turnDelta = normalizeAngle(Math.atan2(dx, dy) - pose.heading);
-      if (Math.abs(turnDelta) <= 0.05 ||
+      if (Math.abs(turnDelta) <= FACE_DEADZONE_RAD ||
           (performance.now() - startMs) > FACE_TURN_TIMEOUT_MS) {
         try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
         act();
@@ -746,6 +811,17 @@ export function setupClickPicking({
           // so an in-place turn is correct.
           const doCast = () => {
             sessionHandle.castTargetedSpell(guid, spellId);
+            // C1 (2026-07-12) — bias the follow-camera lookAt toward the cast
+            // target while the cast is in flight (?castCamBias=on; the camera
+            // self-expires the hold and lerps back). No-op when the flag is
+            // off (setCastBiasTarget guards on the flag) or when the active
+            // camera lacks the hook (older bundle / ortho). Never blocks the
+            // cast on a camera fault.
+            try {
+              const cam =
+                liveScene3d?.cameraSwitcher?.getActive?.() ?? liveScene3d?.camera;
+              cam?.setCastBiasTarget?.(guid >>> 0);
+            } catch (_) { /* camera bias is cosmetic — never block the cast */ }
             // Wave 14 / Phase 45 (2026-05-26) — per-spell scarab-windup
             // chain replaces Phase 42's `setCastPose` vibe-pose. The
             // chain runner lives in

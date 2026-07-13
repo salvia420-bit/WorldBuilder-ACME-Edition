@@ -152,6 +152,10 @@ import {
   CAMERA_DEFAULT_PIVOT_Z,
   STIFFNESS_SNAP_DIST_M,
   STIFFNESS_TELEPORT_SNAP_M,
+  autoFollowDefaultOn,
+  castBiasStep,
+  CAST_CAM_BIAS_MAX,
+  CAST_CAM_BIAS_TTL_MS,
 } from "./camera_math.js";
 // F17 (2026-07-03, physics-parity dossier A row 42) — `?rustPose=on`
 // (default OFF): camera framing reads the wasm integrator pose directly
@@ -204,9 +208,10 @@ const POINTER_YAW_SENS = 0.0025;
 const POINTER_PITCH_SENS = 0.0020;
 
 /**
- * Autofollow (`?autoFollow=on`, default OFF) — soft "trailing" camera: while
- * the player is driving the character (WASD/QE) and NOT actively right-drag
- * free-looking, ease `followYaw` toward the character's heading so the camera
+ * Autofollow (`?autoFollow=off` to disable — DEFAULT-ON) — soft "trailing"
+ * camera: while the player is driving the character (WASD/QE) and NOT actively
+ * right-drag free-looking, ease `followYaw` toward the character's heading so
+ * the camera
  * settles BEHIND the character. Safe here because follow-mode movement is
  * player-LOCAL (tank controls; camera.js:1753+), so heading is driven only by
  * Q/E/server — the camera trailing heading has no feedback loop to fight.
@@ -551,11 +556,21 @@ export class CameraSwitcher {
       // apply in dungeons). The Camera options tab + window.__set* hooks
       // toggle both live. See the AUTOFOLLOW_* constants and the indoor gate
       // in _clipCameraAgainstWorld.
-      this._autoFollowOn = params?.get("autoFollow")?.toLowerCase() !== "off";
+      // DEFAULT-ON: `!== "off"` ⇒ absent/any value enables it, only the
+      // literal "off" disables. autoFollowDefaultOn (camera_math.js) is the
+      // single source of truth for this default, pinned by the unit test.
+      this._autoFollowOn = autoFollowDefaultOn(params?.get("autoFollow"));
       const afr = params ? parseFloat(params.get("autoFollowRate")) : NaN;
       this._autoFollowRate =
         Number.isFinite(afr) && afr > 0 ? afr : AUTOFOLLOW_RATE_DEFAULT;
       this._indoorCamOn = params?.get("indoorCam")?.toLowerCase() !== "off";
+      // C1 (2026-07-12) — camera cast-bias: while a targeted cast is in flight,
+      // blend the follow lookAt toward the cast target so a close target stays
+      // framed (the follow lookAt anchors the PLAYER, so a short-range target
+      // sits at a large lateral offset and can leave the frustum at cast time).
+      // Default-OFF (strict `=on`): it moves the view during a cast (a feel
+      // change) → 1070 round-4 eye-test pending. `?castCamBias=on`.
+      this._castCamBiasOn = params?.get("castCamBias")?.toLowerCase() === "on";
     }
     // Autofollow runtime state.
     this._followDragging = false; // true while right-mouse HELD (free-look)
@@ -563,6 +578,10 @@ export class CameraSwitcher {
     this._lastFollowPos = null; // {x,y} last frame, for the "is moving" test
     this._autoFollowDiagCount = 0; // one-time heading-convention diag budget
     this._autoFollowInvert = false; // negate heading if it trails the wrong way
+    // C1 cast-bias runtime state.
+    this._castBiasGuid = null; // active cast target guid (>>>0) or null
+    this._castBiasExpiry = 0; // performance.now() past which the bias releases
+    this._castBiasAmt = 0; // eased blend amount 0..1 (0 = no bias)
     // C2 state: first-person latch (followDistance keeps its third-person
     // value while in-head so bookkeeping survives the round trip).
     this._inHead = false;
@@ -1116,7 +1135,32 @@ export class CameraSwitcher {
       // `(p.x, p.y, p.z + 1.6)`; sky/building tops were unreachable
       // because the view always pointed at the player's head.
       const lookLift = -Math.sin(this.followPitch) * LOOK_LIFT_DIST_M;
-      const lookX = p.x, lookY = p.y, lookZ = p.z + 1.6 + lookLift;
+      let lookX = p.x, lookY = p.y;
+      const lookZ = p.z + 1.6 + lookLift;
+      // C1 (?castCamBias=on) — bias the lookAt toward the active cast target
+      // while a targeted cast is in flight, easing back after it releases. The
+      // follow lookAt normally anchors the PLAYER, so a close target sits at a
+      // large lateral world offset and can fall out of frame at cast time; the
+      // partial pull toward the target (CAST_CAM_BIAS_MAX < 1) keeps the player
+      // framed while recentering the target. Flag-off ⇒ untouched (amt stays 0).
+      if (this._castCamBiasOn) {
+        const now =
+          typeof performance !== "undefined" ? performance.now() : Date.now();
+        const active =
+          this._castBiasGuid != null && now < this._castBiasExpiry;
+        this._castBiasAmt = castBiasStep(this._castBiasAmt, active, dt);
+        if (!active && this._castBiasAmt < 1e-3) {
+          this._castBiasAmt = 0;
+          this._castBiasGuid = null;
+        } else if (this._castBiasAmt > 1e-3) {
+          const tp = this._castBiasTargetPos();
+          if (tp) {
+            const b = this._castBiasAmt * CAST_CAM_BIAS_MAX;
+            lookX += (tp.x - lookX) * b;
+            lookY += (tp.y - lookY) * b;
+          }
+        }
+      }
       if (this._camStiffness != null) {
         // A12-C3 (?camStiffness=): exponential interpolation of the camera
         // frame toward the sought (clipped) frame instead of the hard-set.
@@ -1422,6 +1466,42 @@ export class CameraSwitcher {
       em.setLocalPlayerCameraOpacity(localGuid >>> 0, q);
       this._camFadeLastOpacity = q;
     } catch (_) {}
+  }
+
+  /**
+   * C1 (2026-07-12) — mark a targeted cast in flight so the follow lookAt
+   * biases toward `guid` (see positionCamera). Self-expires after `ttlMs`
+   * (covers the turn + windup); the blend eases back on its own. No-op unless
+   * `?castCamBias=on`. Callers (picking.js doCast) fire-and-forget.
+   */
+  setCastBiasTarget(guid, ttlMs = CAST_CAM_BIAS_TTL_MS) {
+    if (!this._castCamBiasOn) return;
+    if (guid == null) return;
+    this._castBiasGuid = guid >>> 0;
+    const now =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+    this._castBiasExpiry = now + (ttlMs > 0 ? ttlMs : CAST_CAM_BIAS_TTL_MS);
+  }
+
+  /** C1 — release the cast-bias hold now (the blend still eases back). */
+  clearCastBiasTarget() {
+    this._castBiasExpiry = 0;
+  }
+
+  /**
+   * C1 — resolve the active cast-bias target's AC-world position from the
+   * entity map (same frame as picking.entityAcPosition). Null when there's no
+   * target / no entityManager / the entity has despawned. AC-native coords, to
+   * match the lookX/lookY the follow camera works in before acToThree.
+   */
+  _castBiasTargetPos() {
+    const guid = this._castBiasGuid;
+    if (guid == null) return null;
+    const em = this.scene3d && this.scene3d.entityManager;
+    const inst = em?.entityMap?.get?.(guid >>> 0);
+    const pos = inst?.root?.position;
+    if (!pos) return null;
+    return { x: pos.x, y: pos.y, z: pos.z };
   }
 
   /**

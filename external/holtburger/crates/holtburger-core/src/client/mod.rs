@@ -115,6 +115,18 @@ pub struct ClientRuntime {
     /// `LoginComplete` is sent on the next `WorldEvent::SelfUpdatePosition`
     /// (the destination pose), then this clears.
     pending_post_teleport_login_complete: bool,
+    /// C3-wire-send (2026-07-12): count of spell-cast game actions that
+    /// [`send_normalized_spell_cast`] *declined to transmit* because
+    /// [`arm_busy_operation`] found an op already pending. This makes the
+    /// busy-lock drop OBSERVABLE (it was previously a silent `return Ok(())`
+    /// after only a `log::warn`). Read via [`cast_wire_dropped_count`].
+    ///
+    /// NOTE: this counter is native-`ClientRuntime`-only. The wasm/web
+    /// `SessionHandle` skips `ClientRuntime` entirely (see
+    /// `apps/holtburger-web/src/lib.rs` — "The wasm path skips `ClientRuntime`
+    /// entirely") and transmits every cast unconditionally via
+    /// `session.send_action`, so the web UI has no busy-drop desync.
+    cast_wire_dropped: u64,
 }
 
 impl ClientRuntime {
@@ -147,6 +159,25 @@ impl ClientRuntime {
         self.active_busy_operation
             .as_ref()
             .map(|pending| pending.operation)
+    }
+
+    /// C3-wire-send: number of spell-cast game actions dropped by the
+    /// busy-op lock (diagnostic; see the `cast_wire_dropped` field).
+    pub fn cast_wire_dropped_count(&self) -> u64 {
+        self.cast_wire_dropped
+    }
+
+    /// C3-wire-send: record + log a busy-lock spell-cast drop. Converts the
+    /// previously-silent drop into an observable, greppable event
+    /// (`castWireDropped`) so a visual/wire desync can be detected rather
+    /// than swallowed. Returns nothing; the caller still declines to send.
+    fn note_cast_wire_dropped(&mut self, blocked_by: BusyOperationKind) {
+        self.cast_wire_dropped = self.cast_wire_dropped.saturating_add(1);
+        log::warn!(
+            "castWireDropped: spell-cast game action not transmitted (busy-op {:?} pending); total dropped = {}",
+            blocked_by,
+            self.cast_wire_dropped
+        );
     }
 
     fn emit_busy_state_updated(&self) {

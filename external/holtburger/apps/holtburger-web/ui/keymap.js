@@ -103,6 +103,17 @@ export const LOCAL_ACTIONS = [
   { labelHash: "0xFF000025", label: "Magic: Use Spell Slot 7", defaultCode: "Digit7" },
   { labelHash: "0xFF000026", label: "Magic: Use Spell Slot 8", defaultCode: "Digit8" },
   { labelHash: "0xFF000027", label: "Magic: Use Spell Slot 9", defaultCode: "Digit9" },
+  // C2 (2026-07-12) — retail target-cycling binds (CPlayerSystem::SelectNext,
+  // acclient.c:397944; action names NextMonster/PreviousMonster/
+  // ClosestMonster at acclient.c:43724-43730). Retail binds NextMonster to
+  // Tab; PreviousMonster to Shift+Tab. ClosestMonster has no retail default,
+  // so we bind KeyT ("Target") — free in our map (movement uses WASDQE;
+  // digits are hotbar/magic slots; T is only a chat command alias). All
+  // three consult liveScene3d.entityManager.cycleTarget via the index.html
+  // keydown dispatch; input-triggered only, gated by `?targetCycle` (off).
+  { labelHash: "0xFF000028", label: "Next Monster",     defaultCode: "Tab" },
+  { labelHash: "0xFF000029", label: "Previous Monster", defaultCode: { code: "Tab", shift: true } },
+  { labelHash: "0xFF00002A", label: "Closest Monster",  defaultCode: "KeyT" },
 ];
 
 /** Stable identifiers for synthetic local actions — handlers call
@@ -148,6 +159,10 @@ export const LOCAL_ACTION_IDS = Object.freeze({
   MAGIC_SLOT_7: "0xFF000025",
   MAGIC_SLOT_8: "0xFF000026",
   MAGIC_SLOT_9: "0xFF000027",
+  // C2 (2026-07-12) — target cycling.
+  NEXT_MONSTER: "0xFF000028",
+  PREV_MONSTER: "0xFF000029",
+  CLOSEST_MONSTER: "0xFF00002A",
 });
 
 let cache = null;

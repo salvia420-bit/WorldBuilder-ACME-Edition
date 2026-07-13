@@ -3016,6 +3016,27 @@
       window.getLocalPlayerGuid = getLocalPlayerGuid;
       window.entityMap = entityMap;
 
+      // C2 (2026-07-12) — target-cycling harness hooks for the eye-test
+      // driver. `__selectNextTarget(type?)` cycles to the next monster
+      // (default "monster") click-free/frustum-independent and returns the
+      // new selection info; `__getSelectedTarget()` snapshots the current
+      // selection as `{guid, name, dist}`. Both resolve the entityManager
+      // lazily so they work before/after init3D assigns liveScene3d.
+      window.__selectNextTarget = (type) => {
+        try {
+          const em = window.liveScene3d?.entityManager;
+          if (!em || typeof em.cycleTarget !== "function") return { guid: 0, name: null, dist: -1 };
+          em.cycleTarget("next", type || "monster");
+          return em.selectedTargetInfo?.() ?? { guid: 0, name: null, dist: -1 };
+        } catch (_) { return { guid: 0, name: null, dist: -1 }; }
+      };
+      window.__getSelectedTarget = () => {
+        try {
+          const em = window.liveScene3d?.entityManager;
+          return em?.selectedTargetInfo?.() ?? { guid: 0, name: null, dist: -1 };
+        } catch (_) { return { guid: 0, name: null, dist: -1 }; }
+      };
+
       // A15-Q1 (2026-06-11 unification): module-scope renderer-mode
       // constant + entity-buffer caps. Both `__scene3dEntityBacklog`
       // (3D-consumed) and `deferredSpawns` (2D-consumed) are unbounded
@@ -6501,6 +6522,39 @@
                 }
                 ev.preventDefault();
                 return;
+              }
+            }
+            // C2 (2026-07-12) — retail keybind TARGET CYCLING. Tab =
+            // NextMonster, Shift+Tab = PreviousMonster, KeyT =
+            // ClosestMonster (rebindable LOCAL_ACTIONS; retail
+            // CPlayerSystem::SelectNext dispatch acclient.c:399692-399746).
+            // Input-triggered only; the entityManager's `?targetCycle=off`
+            // gate makes `cycleTarget` a no-op when disabled, so no extra
+            // flag check is needed here. Emits `selectionChanged` (reused
+            // by the target-bar HUD) via cycleTarget. Guarded by the
+            // enteredWorld + isTypingInForm early-return at the top so Tab
+            // still tabs through form fields when typing.
+            if (!ev.repeat) {
+              const em = window.liveScene3d?.entityManager;
+              if (em && typeof em.cycleTarget === "function") {
+                const nextBind = __resolveLocalBinding(
+                  __LOCAL_ACTION_IDS.NEXT_MONSTER, "Tab");
+                const prevBind = __resolveLocalBinding(
+                  __LOCAL_ACTION_IDS.PREV_MONSTER, { code: "Tab", shift: true });
+                const closeBind = __resolveLocalBinding(
+                  __LOCAL_ACTION_IDS.CLOSEST_MONSTER, "KeyT");
+                // Shift+Tab first — it's a stricter match than bare Tab.
+                let cycled = null;
+                if (__matchesKeyBinding(ev, prevBind)) cycled = "previous";
+                else if (__matchesKeyBinding(ev, nextBind)) cycled = "next";
+                else if (__matchesKeyBinding(ev, closeBind)) cycled = "closest";
+                if (cycled) {
+                  try { em.cycleTarget(cycled, "monster"); } catch (e) {
+                    console.warn("[targetCycle] cycleTarget failed:", e);
+                  }
+                  ev.preventDefault();
+                  return;
+                }
               }
             }
             // Combat-mode toggle — backtick (`) mirrors retail

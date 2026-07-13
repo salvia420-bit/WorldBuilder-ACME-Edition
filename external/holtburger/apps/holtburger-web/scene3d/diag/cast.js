@@ -22,6 +22,8 @@
 // Devtools entry points exposed on `__diag.cast`:
 //   state(guid?)          — live chain state {spellId, gestureIndex, token,
 //                           busyUntilMs, phase} for one guid or all
+//   busyRemainMs(guid)    — remaining cast busy-window ms, domain-correct
+//                           (subtracts performance.now(), NOT Date.now())
 //   timelineTail(n=10)    — last N per-cast timeline records (armed→sent→
 //                           windup_n→cast→casterEffect→UseDone/fizzle)
 //   lastTimeline(guid?)   — most recent record with computed deltas (ms)
@@ -313,6 +315,32 @@ export function attachCast(diag) {
       const out = {};
       for (const [g, c] of this.chains) out[_hex(g)] = { ...c, _rec: undefined };
       return out;
+    },
+
+    /**
+     * C3-wire-send (2026-07-12): remaining busy-window time (ms) for `guid`,
+     * clamped to ≥ 0.
+     *
+     * CLOCK DOMAIN — the footgun this fixes: `chain.busyUntilMs` is an
+     * ABSOLUTE `performance.now()` timestamp (stamped in entities.js
+     * `playCastSequence`: `inst._castBusyUntilMs = performance.now() + est`).
+     * `performance.now()` and `Date.now()` share NO epoch, so a consumer that
+     * computed `busyUntilMs - Date.now()` got a value off by the whole Unix
+     * epoch (~1.7e12 ms) → after clamping it read "always ~0 remaining"
+     * (SLIDECAST report Gap 4). This accessor subtracts the CORRECT clock
+     * (`_now()`, which is `performance.now()` when available — the same source
+     * the window was stamped with) so callers never mix domains. Read this
+     * instead of doing the subtraction yourself.
+     *
+     * Returns 0 when: no live chain for `guid`, no busy window set, or the
+     * window has already elapsed.
+     */
+    busyRemainMs(guid) {
+      if (guid == null) return 0;
+      const c = this.chains.get(guid >>> 0);
+      const until = c && c.busyUntilMs != null ? +c.busyUntilMs : 0;
+      if (!(until > 0)) return 0;
+      return Math.max(0, until - _now());
     },
 
     /** Add computed inter-stamp deltas (ms) to a raw timeline record. */

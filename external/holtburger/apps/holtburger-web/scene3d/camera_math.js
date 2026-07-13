@@ -199,3 +199,70 @@ export function clampInHeadDirZ(z) {
   if (z < -IN_HEAD_DIR_Z_CLAMP) return -IN_HEAD_DIR_Z_CLAMP;
   return z;
 }
+
+// ---- C1: cast facing dead-zone + camera cast-bias (2026-07-12) ------------
+//
+// Retail/ACE only re-turns a caster toward a targeted-spell target when the
+// caster is OUTSIDE `spellcast_max_angle` (Player_Magic.cs IsWithinAngle /
+// TurnTo_Magic; PropertyManager default = 20°). Within that band ACE early-
+// exits the turn and just casts. Our turn-to-face loop (picking.js
+// turnToFaceThenAct) historically early-exited at only 0.05 rad (~2.86°) —
+// ~7× tighter — so it turned (and swung the follow camera) for headings ACE
+// would have left alone. `?castFacing20=on` widens the client dead-zone to
+// ACE's 20° so the client only turns when the server would.
+
+/** Legacy tight turn-to-face early-exit (~2.86°). Flag-OFF behaviour. */
+export const FACE_DEADZONE_TIGHT_RAD = 0.05;
+
+/**
+ * ACE `spellcast_max_angle` default = 20° (Player_Magic.cs IsWithinAngle,
+ * Managers/PropertyManager.cs "retail seemed to default to value of around
+ * 20"). 20° = 0.34906585… rad ("~0.349 rad" in the dossier).
+ */
+export const FACE_DEADZONE_WIDE_RAD = (20 * Math.PI) / 180;
+
+/**
+ * Pick the turn-to-face early-exit dead-zone. `castFacing20` true → ACE's
+ * 20° band (only turn when the server would); false → legacy 0.05 rad.
+ * Pure selection logic pinned by tests/test_c1_facing_camera.cjs.
+ */
+export function faceDeadzoneRad(castFacing20) {
+  return castFacing20 ? FACE_DEADZONE_WIDE_RAD : FACE_DEADZONE_TIGHT_RAD;
+}
+
+/**
+ * Autofollow default truth. The `?autoFollow` reader is `!== "off"`, so
+ * autofollow is DEFAULT-ON — absent/any-value ⇒ on, only the literal "off"
+ * disables it. (The old camera.js docstring wrongly said "default OFF"; this
+ * function is the single source of truth the test pins.)
+ */
+export function autoFollowDefaultOn(flagVal) {
+  return String(flagVal ?? "").toLowerCase() !== "off";
+}
+
+/**
+ * Camera cast-bias (`?castCamBias=on`) — max fraction to blend the follow
+ * lookAt from the player toward the active cast target while a targeted cast
+ * is in flight (0 = no bias, 1 = look straight at the target). Kept partial so
+ * the player stays framed; the target is only pulled toward center.
+ */
+export const CAST_CAM_BIAS_MAX = 0.5;
+
+/** Exponential ease rate (per second) for the cast-bias blend in/out. */
+export const CAST_CAM_BIAS_RATE = 6.0;
+
+/**
+ * How long a single `setCastBiasTarget` call holds before it self-expires and
+ * the lookAt lerps back (covers the turn + windup of a normal cast).
+ */
+export const CAST_CAM_BIAS_TTL_MS = 2200;
+
+/**
+ * Advance the cast-bias blend amount one frame toward its goal (1 while a cast
+ * is active, 0 otherwise) with an exponential ease. Pure — pinned by tests.
+ */
+export function castBiasStep(amt, active, dt, rate = CAST_CAM_BIAS_RATE) {
+  const goal = active ? 1 : 0;
+  const frac = 1 - Math.exp(-rate * (dt > 0 ? dt : 0));
+  return amt + (goal - amt) * frac;
+}

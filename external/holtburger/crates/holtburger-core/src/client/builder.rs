@@ -163,6 +163,7 @@ impl ClientRuntimeBuilder {
             character_selection: CharacterSelectionState::new(self.account_name),
             turbine_chat: TurbineChatState::default(),
             pending_post_teleport_login_complete: false,
+            cast_wire_dropped: 0,
         })
     }
 }
@@ -186,6 +187,7 @@ pub(crate) fn build_test_client(initial_state: ClientState) -> ClientRuntime {
         character_selection: CharacterSelectionState::new("test".to_string()),
         turbine_chat: TurbineChatState::default(),
         pending_post_teleport_login_complete: false,
+        cast_wire_dropped: 0,
     };
     client.state = initial_state;
     client
