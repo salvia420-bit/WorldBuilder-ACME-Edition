@@ -101,7 +101,8 @@ const BUILDING_FLOOR_BIAS = (() => {
   }
 })();
 
-// ?buildingBatch (default-OFF, opt-in) — feed static building surfaces into the SAME
+// ?buildingBatch (default-ON, user decision 2026-07-14; ?buildingBatch=off escapes) —
+// feed static building surfaces into the SAME
 // cross-LB size-bucket atlas statics use (static_atlas.js), collapsing the per-placement
 // building draw calls (measured ~59-60% of building draws are duplicate geom+material
 // across placements — RESULTS-taskL2 sizing, Cragstone+Holtburg). SAFE because building
@@ -116,9 +117,9 @@ const BUILDING_FLOOR_BIAS = (() => {
 // through to buildingsGroup unchanged, so props NEVER vanish. Requires ?statAtlas on (default).
 const BUILDING_BATCH = (() => {
   try {
-    return new URLSearchParams(window.location.search).get("buildingBatch") === "on";
+    return new URLSearchParams(window.location.search).get("buildingBatch") !== "off";
   } catch (_) {
-    return false;
+    return true;
   }
 })();
 
