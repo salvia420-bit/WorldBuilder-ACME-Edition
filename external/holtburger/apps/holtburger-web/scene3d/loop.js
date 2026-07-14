@@ -55,6 +55,7 @@ import {
   SHADOW_RECEIVE_RANGE_SQ_M as STATICS_SHADOW_RANGE_SQ_M,
   cullStaticsGroup,
   tickStaticParticles,
+  tickLodBandDiag,
 } from "./statics.js";
 // A11-S3 (2026-06-12 unification survey) — `?particleClock=off|loop|sim`.
 // "loop"/"sim" move the particle/script manager ticks into tickPerFrame's
@@ -2080,6 +2081,11 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       try { tickStaticParticles(scene3d); } catch (_) {}
     }
   }
+  // #14 — LOD band hit/miss telemetry. Armed by `?lodBandDiag=on`
+  // (default OFF): returns on its first line when unarmed, so the
+  // production per-frame path is byte-identical. Under the flag it
+  // observes THREE.LOD active-level transitions into the diag counters.
+  try { tickLodBandDiag(scene3d); } catch (_) {}
   // Task #7 — animated-scenery mixers are driven by a self-managed rAF in
   // animated_scenery.js (mirrors the static-particle _spLoop), because this
   // function's `dt` arrives as 0 on the net-drain path. No tick here.

@@ -3107,6 +3107,105 @@ export function tickStaticsBillboards(scene3d) {
   return oriented;
 }
 
+// ── #14 — LOD band hit/miss telemetry (?lodBandDiag=on, default OFF) ──
+//
+// The explicit-band reader (`ui/ac_lod.js pickDegradeBand`, which fires
+// the diag `onBandHit/onBandMiss` counters) has NO callers — statics do
+// their LOD via `THREE.LOD`, whose `.update(camera)` picks the active
+// level internally at render each frame. So without an observer the
+// band counters never move. This walk OBSERVES that render-time
+// selection and drives the counters, emitting ONLY on a level
+// TRANSITION (not every frame) so the counts are meaningful event
+// tallies rather than frame-rate noise.
+//
+// Mapping to the ac_lod band semantics: active level 0 is the
+// full-detail leaf (nearest LOD band = "no degrade applied") → a
+// bandMiss; any active level > 0 is a degraded band → a bandHit.
+//
+// Cost discipline: `window.__diag` is installed EAGERLY+UNCONDITIONALLY
+// at boot (index.js installDiag), so its mere presence is NOT a gate.
+// This surface is measurement-only telemetry (for the outdoor-run band
+// analysis), so it sits behind a default-OFF url flag `?lodBandDiag=on`
+// cached in a lazy module flag — when unarmed (the production default)
+// `tickLodBandDiag` returns on its first line and the per-frame statics
+// walk is byte-identical to before (mirrors `_renderDiagArmed`).
+let _lodBandDiagArmed;
+function _lodBandDiagEnabled() {
+  if (_lodBandDiagArmed === undefined) {
+    try {
+      _lodBandDiagArmed =
+        typeof globalThis !== "undefined" &&
+        /(?:^|[?&])lodBandDiag=(on|1|true|yes)(?:&|$)/i.test(
+          globalThis.location?.search || ""
+        );
+    } catch (_) {
+      _lodBandDiagArmed = false;
+    }
+  }
+  return _lodBandDiagArmed;
+}
+const _lodDiagCamWorld = new THREE.Vector3();
+const _lodDiagNodeWorld = new THREE.Vector3();
+
+/**
+ * Observe THREE.LOD active-level transitions across the statics group
+ * and drive the diag band counters (diag/lod.js). No-op unless armed by
+ * `?lodBandDiag=on`. Returns the number of transitions emitted this call
+ * (for tests).
+ */
+export function tickLodBandDiag(scene3d) {
+  if (!_lodBandDiagEnabled()) return 0;
+  const diagLod =
+    typeof window !== "undefined" ? window.__diag?.lod : null;
+  if (!diagLod || !scene3d || !scene3d.staticsGroup) return 0;
+  const children = scene3d.staticsGroup.children;
+  if (!children || children.length === 0) return 0;
+
+  const camera =
+    scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+  let camWorld = null;
+  if (camera) {
+    camera.getWorldPosition(_lodDiagCamWorld);
+    camWorld = _lodDiagCamWorld;
+  }
+
+  let emitted = 0;
+  for (const child of children) {
+    if (!child || !child.isLOD) continue;
+    const lvls = child.levels;
+    if (!Array.isArray(lvls) || lvls.length < 2) continue;
+    // Active level = the first visible leaf. `THREE.LOD.update()`
+    // toggles `levels[i].object.visible`; reading it is version-robust
+    // (matches the billboard tick) and needs no private `_currentLevel`.
+    let active = -1;
+    for (let i = 0; i < lvls.length; i++) {
+      const o = lvls[i] && lvls[i].object;
+      if (o && o.visible !== false) { active = i; break; }
+    }
+    if (active < 0) continue;
+    const prev = child.userData.__lodBandPrev;
+    if (prev === active) continue; // steady state — no event.
+    child.userData.__lodBandPrev = active;
+    emitted += 1;
+
+    let dist = 0;
+    if (camWorld) {
+      dist = child
+        .getWorldPosition(_lodDiagNodeWorld)
+        .distanceTo(camWorld);
+    }
+    const meta = {
+      degradeId: child.userData.modelId ?? 0,
+      distance: dist,
+      gfxObjId: child.userData.modelId ?? 0,
+      bandCount: lvls.length,
+    };
+    if (active > 0) diagLod.onBandHit(meta);
+    else diagLod.onBandMiss(meta);
+  }
+  return emitted;
+}
+
 // ── FCULL — per-node frustum + distance render cull (2026-06-08) ──────
 //
 // Walks `scene3d.staticsGroup.children` once per frame and gates each

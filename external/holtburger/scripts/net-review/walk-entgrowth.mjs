@@ -177,6 +177,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   await page.keyboard.up("w").catch(() => {});
   const bigFrames = await page.evaluate(() => (window.__reapProbe && window.__reapProbe.bigFrames) || []).catch(() => []);
+  // #20 — capture upload-throttle engagement (null when the module/flag is absent).
+  const throttleStats = await page.evaluate(() => { try { return window.__uploadThrottleStats ? window.__uploadThrottleStats() : null; } catch (_) { return null; } }).catch(() => null);
+  console.error(`[walk] uploadThrottle: ${JSON.stringify(throttleStats)}`);
 
   // distance from start (planar), and distinct LBs visited
   const lbs = new Set();
@@ -193,6 +196,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     terrStart: s0.terr, terrEnd: last2.terr,
     riGeomsStart: s0.riGeoms, riGeomsEnd: last2.riGeoms,
     heapStart: s0.heapMB, heapEnd: last2.heapMB,
+    throttleStats,
     bigFrames,
     samples,
   };
