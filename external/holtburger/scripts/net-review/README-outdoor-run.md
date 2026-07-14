@@ -69,9 +69,10 @@ node battery-outdoor-run.mjs --mode cdp --cdp http://127.0.0.1:9333 \
 | `--sampleMs` | `2000` | Perf-sample interval. |
 | `--dwellMax` | `25` | Max settle seconds per stop. |
 | `--label` / `--out` | | Arm label / results JSON. |
-| `--samplesOut` | dir of `--out` | Dir for `<label>-samples.jsonl`. |
-| `--maxStops` | `0` | Fixed-length sessions: after K run-stops close + exit 3 for relaunch. |
-| `--resume` | off | Continue an aborted arm; keeps prior rows, skips already-recorded POIs. |
+| `--samplesOut` | dir of `--out` | Dir for the samples file. Filename is `<label>-samples-<UTC-stamp>-<pid>.jsonl`, **unique per run** so a re-run never concatenates onto a prior arm (the old fixed `<label>-samples.jsonl` mixed arms). A `--resume` session reuses the first session's exact file (read back from the prior `--out`'s `summary.samplesPath`), so one arm = one samples file across all its sessions. |
+| `--maxStops` | `3` | Fixed-length sessions: after K run-stops close + exit 3 for relaunch. Lowered from 0/unlimited — POI 4-5 already degrade within a session. |
+| `--maxHeapMB` | `0` (off) | Heap-adaptive recycle: after a run-stop whose `heapEndMB` exceeds this, close + exit 3 for relaunch — fires *before* the 256 MB park-pool cliff turns into a bulk-dispose stall. |
+| `--resume` | off | Continue an aborted arm; keeps prior rows, skips already-recorded POIs, reuses the samples file. |
 | `--shots` | — | Screenshot dir (per-POI, post-run). |
 | `--landPollMs` `--quietGapMs` | `100` / `65000` | Land-poll granularity / inter-session resume gap. |
 | `--settleWorkMin` `--settleFloorMs` | `5` / `3000` | Settle-guard knobs (verbatim from battery-telepoi). |
@@ -95,9 +96,14 @@ node battery-outdoor-run.mjs --mode cdp --cdp http://127.0.0.1:9333 \
 ### Exit codes / resume
 
 `0` all landed · `1` some misses · `2` boot stall / not-real-GPU · `3`
-renderer-death abort **or** clean `--maxStops` cap with POIs remaining → wrapper
-should relaunch with `--resume` (same `--out`) until exit ≠ 3. Partial JSON is
-always written on abort.
+renderer-death abort **or** clean `--maxStops`/`--maxHeapMB` cap with POIs
+remaining → wrapper should relaunch with `--resume` (same `--out`) until exit ≠ 3.
+
+`--out` is **flushed after every POI** (run or skip), and a `SIGINT`/`SIGTERM`
+finalizes + writes `--out` + exits 3 (resumable). So killing the driver — the
+common recycle/abort path — leaves a complete, resumable `--out` with no
+log-reconstruction needed (the original arm A had to be rebuilt from the log
+because only the end-of-run wrote `--out`).
 
 ## Laptop vs 1070
 
@@ -109,6 +115,52 @@ always written on abort.
   heap / wire / wasm-mem counts ARE. Keep ≤3 headless chromium (~1.5 GB each).
 - **1070 (real GPU)**: `--mode cdp`, textured (no wireframe), real fps. Never
   closes the person's browser — only our page. Run off-screen / headless.
+
+### 1070 CDP full setup — tunnels + recycling wrapper
+
+The 1070 (`young@100.127.215.75`, tailscale) is a person's Windows box with the
+fleet's only real GPU. Run **off-screen / headless only**, in an isolated
+`cdpwb-wls` user-data-dir; never `taskkill /IM chrome.exe`.
+
+1. **Off-screen real-GPU Chrome via an INTERACTIVE-session scheduled task** (an
+   SSH session-0 launch has NO GL context). `C:\Temp\launch-wls.bat`:
+   ```
+   chrome --remote-debugging-port=9333 --use-angle=d3d11 --ignore-gpu-blocklist \
+     --user-data-dir=C:\Temp\cdpwb-wls --window-position=-32000,-32000 about:blank
+   ```
+   then `schtasks /create /tn cdpwb /tr C:\Temp\launch-wls.bat /sc once /st 00:00 /it /f && schtasks /run /tn cdpwb`.
+   Assert `UNMASKED_RENDERER` contains `NVIDIA ... GTX 1070 ... Direct3D11` (the
+   driver's real-GPU gate; a SwiftShader attach exits 2).
+
+2. **Three tunnels from the laptop** (detached, survive the session):
+   ```
+   ssh -o ExitOnForwardFailure=yes -fN -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 young@100.127.215.75
+   ssh -o ExitOnForwardFailure=yes -fN -R 8080:127.0.0.1:8080 young@100.127.215.75
+   ```
+   - `-L 9333` = CDP control · `-R 8765` = serve.py (the client) ·
+   - ⚠ **`-R 8080` (ws→UDP bridge `holtburger-wsbr` → ACE) is REQUIRED** — without
+     it boot fails `WsTransport::connect: ws handshake failed`. This one is easy
+     to forget; it cost hours.
+
+3. **Run the recycling wrapper** (detached):
+   ```
+   setsid nohup ./battery-outdoor-run-wrapper.sh >/dev/null 2>&1 &
+   ```
+   It loops on exit 3, and — crucially — **waits for ACE to RELEASE the
+   single-login `tailnet1` account** (polls `ACE_Log.txt` for `[LOGOUT] Account
+   tailnet1 exited` after the last `[LOGIN]`) before each re-login, so the
+   recycle never hits "Account In Use". Tune `MAXSTOPS` / `MAXHEAP` at the top.
+
+**Kill/cleanup gotchas:**
+- Killing the driver leaves its page **open** on the 1070 Chrome, and its
+  keepalive worker holds the ACE session alive forever → all later logins
+  collide. After a kill you MUST close that page via CDP (playwright
+  `connectOverCDP`, close pages whose url matches `holtburger-web`;
+  `browser.close()` only detaches CDP, does not kill Chrome). The
+  SIGTERM-finalize path (above) exits cleanly, but a `kill -9` skips it.
+- Only Stop-Process the 1070 Chrome by CommandLine match on `*cdpwb-wls*`.
+- `pgrep -f <pat>` / `pkill -f <pat>` self-kill (exit 144) if `<pat>` is in your
+  own command line — kill by explicit PID.
 
 ## Notes / gotchas
 

@@ -104,8 +104,10 @@ const SEALED_KEEP_RING_FLOOR = SEALED_KEEP_RING_ON ? 1 : 0;
 // park() true-disposed the pool copy) is FIXED in session 7 by the
 // in-flight-bake reclaim deferral + the track-while-parked merge (see
 // _hasInFlightBake and track()). `?warmPark=off` escape;
-// `?warmParkBudgetMb=N` tunes the pool (default 256 MB — counts CPU *and*
-// GPU residency: detached objects keep their GL buffers until dispose()).
+// `?warmParkBudgetMb=N` tunes the pool (default 160 MB, lowered from 256 in the
+// #7 outdoor-tour fix — counts CPU *and* GPU residency: detached objects keep
+// their GL buffers until dispose(); the MAX_LIVE_GEOM governor below is the
+// primary heap bound, this byte budget a secondary backstop).
 const WARM_PARK_ON = (() => {
   try {
     const v = new URLSearchParams(window.location?.search || "").get("warmPark");
@@ -122,14 +124,60 @@ const WARM_PARK_BUDGET_BYTES = (() => {
       new URLSearchParams(window.location?.search || "").get("warmParkBudgetMb") ?? "",
       10,
     );
-    return (Number.isFinite(v) && v > 0 ? v : 256) * 1024 * 1024;
+    return (Number.isFinite(v) && v > 0 ? v : 160) * 1024 * 1024;
   } catch (_) {
-    return 256 * 1024 * 1024;
+    return 160 * 1024 * 1024;
   }
 })();
 // Amortize true-dispose from the pool (retail §1.3 style: eviction work per
 // tick is bounded; the pool absorbs the burst).
 const WARM_PARK_MAX_DISPOSE_PER_TICK = 2;
+
+// ── R-outdoor residency governor (2026-07-14, tasks #6/#7/#8/#10) ──────────────
+// The resident set has NO byte budget: `maxResident` is an LB COUNT cap (~203 at
+// the full ring) that index.js says "effectively never fires", so a continuous
+// multi-POI tour accumulates live GPU geometry unbounded (battery: geometries
+// 6.5k→48.6k, heap→7 GB, a 22.6 s bulk-dispose stall). We govern directly on
+// `renderer.info.memory.geometries` — the ACCURATE live-geometry counter
+// (three.js ++ on first GPU use, -- in onGeometryDispose; verified). Crucially it
+// responds to disposeParked (true dispose) but NOT to park (park detaches, keeps
+// the GL buffer), so it is the right pool-pressure trigger: dispose parked LBs
+// until live geometry ≤ MAX_LIVE_GEOM. `?maxLiveGeom=N` overrides; `off` disables
+// (pre-fix count-cap-only). Default ON, 8000 — VALIDATED on the 2026-07-14 1070
+// A/B (8-town continuous slice, gov-off vs cap=8000): it eliminated the mid-run
+// stalls (OFF had a 34,106 ms freeze + 4541/2866 ms; ON's only >1 s frames were
+// the first-POI cold-shader compile), lifted late-run fps 1.4-2.4× (Rithwic
+// 13→32), and cut resident LBs 200→35 — while a single area stays ~few-hundred
+// geometries (≪8000, so normal one-area play never engages it) and eviction is
+// oldest-first (trailing edge), protecting the visible working set. `?maxLiveGeom=N`
+// tunes; `off` disables. (The absolute heap floor is still #11-limited — a large
+// fraction of geometry is untracked entities/atlas the LRU can't evict.)
+const MAX_LIVE_GEOM = (() => {
+  try {
+    const raw = new URLSearchParams(window.location?.search || "").get("maxLiveGeom");
+    if (raw == null) return 8000;
+    if (raw === "off" || raw === "false" || raw === "0") return Infinity;
+    const v = parseInt(raw, 10);
+    return (Number.isFinite(v) && v > 0) ? v : 8000;
+  } catch (_) { return 8000; }
+})();
+// #7/#10 resident→pool feed: when live geometry is over MAX_LIVE_GEOM, park this
+// many EXTRA oldest-beyond-ring resident LBs per tick (beyond the count cap) to
+// feed the pool — pool pressure then disposes them. Bounded so a big overage
+// drains over a few ticks, not one hitch.
+const GEOM_PRESSURE_PARK_PER_TICK = 6;
+// #8 dispose-rate time budget for pool pressure. The flat 2/tick couldn't keep up
+// with the ~2.5k-geom/POI inflow (dispose clumped → the 22.6 s Cragstone frame).
+// Dispose parked LBs until this elapsed budget is spent (min 1/tick so it always
+// makes progress). `?parkDisposeBudgetMs=0` restores the legacy 2/tick count.
+const PARK_DISPOSE_BUDGET_MS = (() => {
+  try {
+    const raw = new URLSearchParams(window.location?.search || "").get("parkDisposeBudgetMs");
+    if (raw == null) return 6;
+    const v = parseInt(raw, 10);
+    return (Number.isFinite(v) && v >= 0) ? v : 6;
+  } catch (_) { return 6; }
+})();
 
 // park→DBOCache UseTime floor (S15a, PLAN-fixed-slot-grid-residency §2/§5,
 // 2026-07-11). Retail's DBOCache (acclient.c:83485 `GetIfUsing`) holds decoded
@@ -374,6 +422,18 @@ export class LandblockLRU {
     // victims deferred because a guarded bake was still in flight.
     this._trackMergedWhileParked = 0;
     this._reclaimDeferredInFlight = 0;
+
+    // #7/#10 geom-pressure telemetry: extra oldest-beyond-ring resident LBs
+    // parked to feed the pool because live geometry was over MAX_LIVE_GEOM.
+    this._geomPressureParks = 0;
+  }
+
+  // #10 — the accurate live-geometry counter (three.js renderer.info; ++ on
+  // first GPU use, -- on geometry.dispose). Responds to disposeParked, not to
+  // park. Fail-soft 0 (headless unit-test env / pre-render).
+  _liveGeometries() {
+    try { return this.scene3d?.renderer?.info?.memory?.geometries ?? 0; }
+    catch (_) { return 0; }
   }
 
   // TN-storm fix (2026-07-10 session 7, 1114 §2b root cause): an LB with an
@@ -649,7 +709,18 @@ export class LandblockLRU {
       this._centerJumpAtMs = 0; // released (center tracked, or timed out)
     }
 
-    if (this.entries.size <= this.maxResident) return;
+    // Always drain the park pool (byte + live-geometry pressure) even when the
+    // resident COUNT is under maxResident — parked LBs must flow out
+    // continuously, not only when the count cap is exceeded (the pre-fix early
+    // return skipped pressure on every under-cap tick, so parked geometry only
+    // drained once resident > ~203). `overGeom` also forces candidate selection
+    // below so resident LBs feed the pool when live geometry is over budget even
+    // though the count cap hasn't fired.
+    const overGeom = this._liveGeometries() > MAX_LIVE_GEOM;
+    if (this.entries.size <= this.maxResident && !overGeom) {
+      this._tickParkPoolPressure(currentLbKey);
+      return;
+    }
 
     // Collect eviction candidates: every tracked LB OUTSIDE the streaming
     // ring (`lbChebyshev(currentLbKey, key) > ringFloor` — see the
@@ -672,12 +743,29 @@ export class LandblockLRU {
     }
     candidates.sort((a, b) => a.ts - b.ts);
 
-    let toEvict = this.entries.size - this.maxResident;
+    // Victims = the count overage (oldest first) PLUS, when live geometry is
+    // over MAX_LIVE_GEOM, up to GEOM_PRESSURE_PARK_PER_TICK extra oldest LBs to
+    // feed the pool (#7/#10). One bucketed group scan for the whole tick (#6)
+    // instead of a full 4-group rescan per victim.
+    const victims = [];
+    let toEvict = Math.max(0, this.entries.size - this.maxResident);
     for (const c of candidates) {
       if (toEvict <= 0) break;
-      this._reclaim(c.key);
+      victims.push(c.key);
       toEvict -= 1;
     }
+    if (overGeom) {
+      let extra = GEOM_PRESSURE_PARK_PER_TICK;
+      for (const c of candidates) {
+        if (extra <= 0) break;
+        if (victims.includes(c.key)) continue;
+        victims.push(c.key);
+        this._geomPressureParks += 1;
+        extra -= 1;
+      }
+    }
+    const buckets = victims.length > 1 ? this._bucketGroupChildren(victims) : null;
+    for (const key of victims) this._reclaim(key, buckets);
     this._tickParkPoolPressure(currentLbKey);
   }
 
@@ -702,10 +790,24 @@ export class LandblockLRU {
   // eligibility on later ticks. `?parkUseTimeMs=0` sets the floor to 0 → the
   // young-skip below is never taken → byte-identical to the pre-S15 path.
   _tickParkPoolPressure(refLbKey) {
-    if (this.parkPool.size === 0 || this.parkedBytes <= this.parkBudgetBytes) return;
+    if (this.parkPool.size === 0) return;
+    // Fire when EITHER the byte backstop OR the live-geometry governor is
+    // exceeded. Re-evaluated each iteration so we stop the instant enough
+    // parked LBs have been disposed to bring live geometry back under cap.
+    const overBudget = () =>
+      this.parkedBytes > this.parkBudgetBytes || this._liveGeometries() > MAX_LIVE_GEOM;
+    if (!overBudget()) return;
     const ref = refLbKey != null ? lbKeyOf(refLbKey >>> 0) : null;
     const nowMs = (typeof performance !== "undefined") ? performance.now() : Date.now();
-    const floorMs = PARK_USE_TIME_MS;
+    // The live-geometry governor is a HARD resource ceiling: when we're over it,
+    // the DBOCache UseTime floor (a re-adoptability nicety) MUST yield — during a
+    // continuous run every parked LB is "young", so an honored floor defers them
+    // all and the pool can never free geometry (measured: 72 parked, 3 disposed,
+    // liveGeom stuck 2.7× over cap). Byte-only pressure still honors the floor;
+    // only a genuine geometry-ceiling breach bypasses it (normal play, under the
+    // high default cap, never engages this).
+    const overGeomAtEntry = this._liveGeometries() > MAX_LIVE_GEOM;
+    const floorMs = overGeomAtEntry ? 0 : PARK_USE_TIME_MS;
     const order = [...this.parkPool.entries()].sort((a, b) => {
       if (ref != null) {
         const d = lbChebyshev(ref, b[0]) - lbChebyshev(ref, a[0]);
@@ -713,10 +815,19 @@ export class LandblockLRU {
       }
       return a[1].parkedAtMs - b[1].parkedAtMs;
     });
+    // #8 — time-budget the dispose rate (min 1/tick) so a heavy inflow can't
+    // outrun the flat 2/tick and clump into a multi-second stall.
+    const useTimeBudget = PARK_DISPOSE_BUDGET_MS > 0;
+    const nowPerf = () => (typeof performance !== "undefined") ? performance.now() : Date.now();
+    const t0 = nowPerf();
     let disposed = 0;
     for (const [key, p] of order) {
-      if (this.parkedBytes <= this.parkBudgetBytes) break;
-      if (disposed >= WARM_PARK_MAX_DISPOSE_PER_TICK) break;
+      if (!overBudget()) break;
+      if (useTimeBudget) {
+        if (disposed >= 1 && (nowPerf() - t0) > PARK_DISPOSE_BUDGET_MS) break;
+      } else if (disposed >= WARM_PARK_MAX_DISPOSE_PER_TICK) {
+        break;
+      }
       // UseTime floor: keep a recently-parked slot re-adoptable (unpark =
       // zero decode). Record the deferral and move on — a later tick reclaims
       // it once it ages past the floor. floorMs === 0 disables the gate.
@@ -1496,8 +1607,15 @@ export class LandblockLRU {
       warmPark: this.warmParkEnabled,
       parked: this.parkPool.size,
       parkedBytes: this.parkedBytes,
+      parkBudgetBytes: this.parkBudgetBytes,
       parkedTotal: this._parkedTotal,
       unparkedTotal: this._unparkedTotal,
+      // #10 residency governor: the accurate live-geometry counter + its cap,
+      // and how many extra resident LBs the geom-pressure feed parked (#7).
+      liveGeom: this._liveGeometries(),
+      maxLiveGeom: Number.isFinite(MAX_LIVE_GEOM) ? MAX_LIVE_GEOM : null,
+      geomPressureParks: this._geomPressureParks,
+      parkDisposeBudgetMs: PARK_DISPOSE_BUDGET_MS,
       // park→DBOCache UseTime floor (S15a): the floor value in effect + how
       // much pressure reclaim it deferred (young slots kept re-adoptable).
       parkUseTimeMs: PARK_USE_TIME_MS,

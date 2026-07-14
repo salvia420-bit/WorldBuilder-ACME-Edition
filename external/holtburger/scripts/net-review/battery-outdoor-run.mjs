@@ -46,7 +46,7 @@
 // Flags:
 //   --mode local|cdp   --plans <outdoor-run-plans.json>  --pois <name-subset>
 //   --query "wireframe=1"  --label armA  --out out.json  --samplesOut <dir>
-//   --runS 300  --sampleMs 2000  --dwellMax 25  --maxStops 0  --shots <dir>
+//   --runS 300  --sampleMs 2000  --dwellMax 25  --maxStops 3  --maxHeapMB 0  --shots <dir>
 //   --resume  --landPollMs 100  --quietGapMs 65000
 //   --settleWorkMin 5  --settleFloorMs 3000
 //   --cdp http://127.0.0.1:9333  --account tailnet1
@@ -72,7 +72,14 @@ const SETTLE_WORK_MIN = Number(arg("settleWorkMin", "5"));
 const SETTLE_FLOOR_MS = Number(arg("settleFloorMs", "3000"));
 const LAND_POLL_MS = Number(arg("landPollMs", "100"));
 const QUIET_GAP_MS = Number(arg("quietGapMs", "65000"));
-const MAX_STOPS = Number(arg("maxStops", "0"));
+// #17 — recycle tuning. maxStops default 3 (was 0/unlimited): battery finding
+// #6 showed POI 4-5 already degrade within a session, so a 5-stop session ran
+// well past the useful window. maxHeapMB (default 0 = off) closes the session
+// for relaunch as soon as a run-phase heapEndMB crosses the cap — a heap-adaptive
+// recycle that fires before the 256 MB park-pool cliff turns into a bulk-dispose
+// stall (see AUDIT-task1 §2/§3). Either trigger returns exit 3 → wrapper resumes.
+const MAX_STOPS = Number(arg("maxStops", "3"));
+const MAX_HEAP_MB = Number(arg("maxHeapMB", "0"));
 
 const LB_M = 192.0;
 const PING_PONG_MARGIN_M = 40.0;   // flip when s >= corridorM - this
@@ -99,20 +106,36 @@ if (POIS_FILE) {
 
 const OUT_DIR = SAMPLES_OUT || (OUT ? path.dirname(OUT) : ".");
 if (OUT_DIR) fs.mkdirSync(OUT_DIR, { recursive: true });
-const SAMPLES_PATH = path.join(OUT_DIR, `${LABEL.replace(/[^A-Za-z0-9_-]/g, "_")}-samples.jsonl`);
 
 // --resume: continue an aborted arm. Keep prior rows, skip POIs already recorded
 // (kind run|skip). Wrapper re-invokes with the same --out until exit != 3.
 const RESUME = process.argv.includes("--resume");
 let priorRows = [];
+let priorSamplesPath = null;
 if (RESUME && OUT && fs.existsSync(OUT)) {
   try {
     const prev = JSON.parse(fs.readFileSync(OUT, "utf8"));
     priorRows = Array.isArray(prev.rows) ? prev.rows : [];
+    priorSamplesPath = prev.summary?.samplesPath ?? null;
     const done = new Set(priorRows.filter((r) => r.kind === "run" || r.kind === "skip").map((r) => r.poi));
     PLANS = PLANS.filter((p) => !done.has(p.poi));
     console.error(`[outdoor] resume: ${priorRows.length} prior rows kept, ${PLANS.length} POIs remain`);
   } catch (_) { priorRows = []; }
+}
+// #15 — per-run samples filename so a re-run never concatenates onto a prior arm
+// (the append bug that mixed arm A's samples into arm B's 1070-samples.jsonl). A
+// resumed arm reuses the exact file its first session created (recorded in the
+// prior OUT's summary.samplesPath); a fresh run gets a unique timestamp+pid name
+// opened truncating ('w'). One samples file per arm, spanning all its sessions.
+const SAFE_LABEL = LABEL.replace(/[^A-Za-z0-9_-]/g, "_");
+let SAMPLES_PATH, SAMPLES_APPEND;
+if (RESUME && priorSamplesPath && fs.existsSync(priorSamplesPath)) {
+  SAMPLES_PATH = priorSamplesPath;
+  SAMPLES_APPEND = true;
+} else {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
+  SAMPLES_PATH = path.join(OUT_DIR, `${SAFE_LABEL}-samples-${stamp}-${process.pid}.jsonl`);
+  SAMPLES_APPEND = false;
 }
 for (const r of priorRows) if (r.sessionIdx == null) r.sessionIdx = 0;
 const SESSION_IDX = priorRows.length ? Math.max(...priorRows.map((r) => r.sessionIdx ?? 0)) + 1 : 0;
@@ -130,12 +153,12 @@ const rows = [];
 let aborted = null;
 let stopsCapped = false;
 let cycleT0 = Date.now();
-const jsonl = fs.createWriteStream(SAMPLES_PATH, { flags: "a" });
+const jsonl = fs.createWriteStream(SAMPLES_PATH, { flags: SAMPLES_APPEND ? "a" : "w" });
 const med = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
 const mx = (a) => (a.length ? Math.max(...a) : null);
 const avg = (a) => (a.length ? +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(2) : null);
 
-function finalize() {
+function finalize({ quiet = false } = {}) {
   const allRows = [...priorRows, ...rows];
   const runRows = allRows.filter((r) => r.kind === "run");
   const skipRows = allRows.filter((r) => r.kind === "skip");
@@ -184,6 +207,9 @@ function finalize() {
     final: allRows[allRows.length - 1] ?? null,
   };
   if (OUT) fs.writeFileSync(OUT, JSON.stringify({ summary, rows: allRows }, null, 2));
+  // #16 — quiet path: OUT is flushed above; skip the console summary so the
+  // per-POI incremental persist doesn't spam the wrapper log.
+  if (quiet) return summary;
   console.log(JSON.stringify(summary));
   console.log(`BATTERY SUMMARY: ${LABEL} run=${summary.landed}/${summary.attempted} skip=${summary.skipped} ` +
     `teleOk=${summary.teleOk} fpsMed=${summary.fpsMedian} p95Med=${summary.fpsP95Median} worstMs=${summary.worstFrameMsMax} ` +
@@ -194,6 +220,26 @@ function finalize() {
     (stopsCapped ? ` STOPS-CAPPED(${MAX_STOPS})` : "") + (aborted ? ` ABORTED(${aborted})` : ""));
   return summary;
 }
+
+// #16 — flush the accumulated rows to OUT after every POI (quiet) so a killed
+// driver leaves a complete, resumable OUT instead of forcing log reconstruction.
+const flushOut = () => { try { finalize({ quiet: true }); } catch (_) {} };
+
+// #16 — SIGINT/SIGTERM finalize: killing the driver (the common recycle/abort
+// path) now writes a full OUT + closes the samples stream + exits 3 so the
+// wrapper's --resume loop picks up cleanly. Guarded against re-entrancy and
+// against racing the normal end-of-run shutdown.
+let shuttingDown = false;
+const onSignal = (sig) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.error(`[outdoor] ${sig} received — finalizing partial results (exit 3, resumable)`);
+  try { jsonl.end(); } catch (_) {}
+  try { finalize(); } catch (_) {}
+  process.exit(3);
+};
+process.on("SIGINT", () => onSignal("SIGINT"));
+process.on("SIGTERM", () => onSignal("SIGTERM"));
 
 // ── boot (same shape as battery-telepoi) ──
 const bootT0 = Date.now();
@@ -421,6 +467,10 @@ const snapshot = () => raced(helpers.evalInPage(() => {
     cells: ls?.cellContainers3d?.size ?? 0,
     lru: stt.resident ?? null, parked: stt.parked ?? null, parkedTotal: stt.parkedTotal ?? null,
     unparkedTotal: stt.unparkedTotal ?? null, evicted: stt.evicted ?? null,
+    // R-outdoor geom governor (#7/#10): liveGeom == ri.geometries; geomPressureParks
+    // = extra resident LBs the governor parked; parkBudgetBytes for the byte backstop.
+    liveGeom: stt.liveGeom ?? null, maxLiveGeom: stt.maxLiveGeom ?? null,
+    geomPressureParks: stt.geomPressureParks ?? null,
     work: (typeof window.__bakeWorkerSeq === "function") ? window.__bakeWorkerSeq() : null,
   };
 }));
@@ -482,6 +532,7 @@ for (const plan of PLANS) {
   if (!plan.usable) {
     rows.push({ kind: "skip", poi, sessionIdx: SESSION_IDX, reason: plan.reason ?? "not usable" });
     console.error(`[outdoor] ${poi}: SKIP (${plan.reason ?? "not usable"})`);
+    flushOut();
     continue;
   }
   try {
@@ -645,9 +696,17 @@ for (const plan of PLANS) {
       `dist=${distanceM.toFixed(0)}m spd=${avgSpeedMps} flips=${flips} stuck=${stuckEvents} nudges=${nudges} ` +
       `fps=${avg(fpsArr)} p95=${med(p95Arr)} worst=${worstFrameMs}ms lt=${ltOverRun.length} heap=${heapStartMB}->${heapEndMB}MB`);
 
+    flushOut(); // #16 — persist after every POI so a mid-run kill stays resumable
+
     if (MAX_STOPS && rows.filter((r) => r.kind === "run").length >= MAX_STOPS) {
       stopsCapped = true;
       console.error(`[outdoor] maxStops=${MAX_STOPS} reached — closing session for relaunch`);
+      break;
+    }
+    // #17 — heap-adaptive recycle: bail for relaunch before the park-pool cliff.
+    if (MAX_HEAP_MB && heapEndMB != null && heapEndMB > MAX_HEAP_MB) {
+      stopsCapped = true;
+      console.error(`[outdoor] heapEndMB=${heapEndMB} > maxHeapMB=${MAX_HEAP_MB} — closing session for relaunch`);
       break;
     }
   } catch (e) {
@@ -658,6 +717,7 @@ for (const plan of PLANS) {
   }
 }
 
+shuttingDown = true; // #16 — claim shutdown so a late signal can't double-finalize
 try { jsonl.end(); } catch (_) {}
 const summary = finalize();
 try { await raced(closeFn()); } catch (_) { /* dead browser — exit anyway */ }

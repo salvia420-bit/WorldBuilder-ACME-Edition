@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Recycling wrapper for the 1070 real-GPU outdoor-run battery (v2).
+# Recycling wrapper for the 1070 real-GPU outdoor-run battery (v3).
 # The continuous single-session run collapsed to <1 fps by ~POI 13 as the JS/wasm
 # heap grew unbounded (no eviction). This version bounds each session to
 # MAXSTOPS POIs (heap resets on the fresh page), and — crucially — waits for ACE
@@ -15,7 +15,8 @@ LOG=/mnt/wbterminal2/tmp/outdoor-1070-wrapper.log
 ACELOG=/home/wbterminal/ace-server/Source/ACE.Server/bin/Release/net10.0/ACE_Log.txt
 CDP=http://127.0.0.1:9333
 PLANS=$ND/outdoor-run-plans.json
-MAXSTOPS=5
+MAXSTOPS=3      # v3: was 5 — POI 4-5 already degrade within a session (finding #6)
+MAXHEAP=3500   # MB; heap-adaptive recycle before the park-pool bulk-dispose cliff (0=off)
 FREE_CAP=220   # seconds to wait for ACE to release the account
 
 mkdir -p "$SHOTS"
@@ -61,7 +62,7 @@ while [ "$i" -lt "$MAX_ITERS" ]; do
   node battery-outdoor-run.mjs \
     --mode cdp --cdp "$CDP" \
     --plans "$PLANS" \
-    --runS 300 --label 1070 --maxStops "$MAXSTOPS" \
+    --runS 300 --label 1070 --maxStops "$MAXSTOPS" --maxHeapMB "$MAXHEAP" \
     --out "$OUT" --shots "$SHOTS" \
     $RESUME >> "$LOG" 2>&1
   ec=$?
