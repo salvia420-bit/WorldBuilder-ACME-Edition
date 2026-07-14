@@ -433,6 +433,24 @@ const snapshot = () => raced(helpers.evalInPage(() => {
     });
     mesh = { total, visChain };
   }
+  // Task #11a — entity-geometry growth. Entities are untracked (not LRU-evicted);
+  // this counts distinct entity BufferGeometry, entity roots, and unique wcids so
+  // the analysis can plot entity geometry vs distance walked (bounded residency).
+  let entGeom = null;
+  const eg = ls && ls.entitiesGroup;
+  if (eg && eg.children) {
+    const geoms = new Set(), wcids = new Set();
+    let roots = 0, emeshes = 0;
+    for (const er of eg.children) {
+      roots++;
+      const w = er.userData && er.userData.modelId != null ? (er.userData.modelId >>> 0) : 0;
+      wcids.add(w);
+      er.traverse((o) => {
+        if (o.isMesh || o.isInstancedMesh) { emeshes++; if (o.geometry) geoms.add(o.geometry.uuid); }
+      });
+    }
+    entGeom = { roots, meshes: emeshes, distinctGeoms: geoms.size, uniqueWcids: wcids.size };
+  }
   let wire = null, pvsVis = null, lod = null, pose = null;
   try { wire = d.wire && d.wire.summary ? d.wire.summary() : null; } catch (_) {}
   try { pvsVis = d.pvs && d.pvs.visibleCells ? d.pvs.visibleCells().size : null; } catch (_) {}
@@ -461,7 +479,7 @@ const snapshot = () => raced(helpers.evalInPage(() => {
   return {
     t: Date.now(), boot: window.__bootState,
     heapMB: performance.memory ? +(performance.memory.usedJSHeapSize / 1048576).toFixed(1) : null,
-    frame, ri, mesh, wire, pvsVis, lod, pose,
+    frame, ri, mesh, entGeom, wire, pvsVis, lod, pose,
     ltLen: (window.__perf && window.__perf.longtasks) ? window.__perf.longtasks.length : 0,
     terr: ls?.terrainBakedLbs?.size ?? 0, stat: ls?.staticsGroup?.children?.length ?? 0,
     cells: ls?.cellContainers3d?.size ?? 0,

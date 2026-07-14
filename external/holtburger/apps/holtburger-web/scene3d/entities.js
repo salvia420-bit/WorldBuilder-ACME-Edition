@@ -366,9 +366,58 @@ const REAP_GRACE_MS = 30000; // > ACE DestructionTime (25 s) + skew/throttle mar
 // (~1-2 LBs) so nothing ACE still tracks is ever beyond it; only cross-world
 // porting leftovers (tens of LBs away — e.g. academy gear left resident after
 // porting to Holtburg, ~178 LBs) age out and get reaped.
-const REAP_PVS_RADIUS = 8;
+//
+// #11b (2026-07-14): radius 8 keeps a 17×17 = 289-LB window and refreshes the
+// grace clock for every entity inside it, so a walked trail can balloon before
+// it reaps. A 1070 corridor walk (RESULTS-task11b) measured the r=8 entity
+// working set PEAK at ~3875 distinct BufferGeometry (town→wilderness transit)
+// with a late ~2500-geom bulk reap once the town fell 8 LBs behind; an
+// (unpaired, spawn-noise-confounded) r=3 arm peaked ~1636 and reaped
+// continuously (no bulk drop). The reaper DOES work at r=8 — the earlier
+// "unbounded / zero-eviction" reading was a stuck-character + backlog-drain
+// artifact (corrected in RESULTS-task11a). So the tighter radius is a
+// DIRECTIONAL smoothness/peak win, NOT a validated default change — left OPT-IN
+// pending a multi-run A/B + live eye-test for creature pop-out. Default stays 8;
+// `?entityReapRadius=N` opts into a tighter (or wider) window.
+function readReapRadius() {
+  try {
+    if (typeof window === "undefined" || !window.location) return 8;
+    const v = new URLSearchParams(window.location.search).get("entityReapRadius");
+    if (v == null || v.toLowerCase() === "off") return 8;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 1 && n <= 64 ? Math.floor(n) : 8;
+  } catch (_) {
+    return 8;
+  }
+}
+const REAP_PVS_RADIUS = readReapRadius();
 // Self-throttle for the full-entityMap scan (cheap, but no need per-frame).
 const REAP_SCAN_INTERVAL_MS = 4000;
+// #11b continuous reap (2026-07-14): the old "remove every stale rig in one loop"
+// disposed the whole backlog in a single scan-frame — when a dense town fell out
+// of the keep-radius a 1070 corridor walk saw ~2500 entity geometries disposed in
+// one ~15 s window (3784→1226), the same bulk-dispose latency spike the landblock
+// governor's `parkDisposeBudgetMs` smooths for landblocks. So budget the reap:
+// most-stale-first, dispose up to REAP_DISPOSE_BUDGET_MS of wall-clock (with a
+// per-scan count backstop) and let the rest age out on later scans. Steady
+// traversal only makes a few entities stale per 4 s scan — far below the budget —
+// so nothing backs up; only a one-off town-exit backlog gets spread out.
+// `?entityReapBudgetMs=N` tunes it; `?entityReapBudgetMs=off` (or 0) restores the
+// legacy unbudgeted bulk reap for A/B.
+function readReapBudgetMs() {
+  try {
+    if (typeof window === "undefined" || !window.location) return 3;
+    const v = new URLSearchParams(window.location.search).get("entityReapBudgetMs");
+    if (v == null) return 3;
+    if (v.toLowerCase() === "off") return 0; // 0 = unbudgeted (legacy bulk reap)
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 && n <= 100 ? n : 3;
+  } catch (_) {
+    return 3;
+  }
+}
+const REAP_DISPOSE_BUDGET_MS = readReapBudgetMs();
+const REAP_MAX_PER_SCAN = 48; // hard per-scan backstop even under a fat time budget
 
 // A2-P2 (2026-06-12, W3+ S8, ?remoteInterp=on) — frames of per-entity
 // position ownership granted by each wasm-managed pose row. While the Rust
@@ -15015,12 +15064,28 @@ export class EntityManager {
       if (inst._lastNearMs == null) { inst._lastNearMs = now; continue; }
       if (now - inst._lastNearMs > REAP_GRACE_MS) {
         if (!kill) kill = [];
-        kill.push(guid);
+        kill.push({ guid, age: now - inst._lastNearMs });
       }
     }
     if (kill) {
-      for (const guid of kill) {
-        try { this.remove(guid); } catch (_) {}
+      if (REAP_DISPOSE_BUDGET_MS > 0) {
+        // Continuous reap: most-stale-first, bounded by a wall-clock budget +
+        // a count backstop; the remainder ages out on the next scan.
+        kill.sort((a, b) => b.age - a.age);
+        const start = (typeof performance !== "undefined") ? performance.now() : Date.now();
+        let removed = 0;
+        for (const { guid } of kill) {
+          try { this.remove(guid); } catch (_) {}
+          removed += 1;
+          if (removed >= REAP_MAX_PER_SCAN) break;
+          const nowMs = (typeof performance !== "undefined") ? performance.now() : Date.now();
+          if (nowMs - start > REAP_DISPOSE_BUDGET_MS) break;
+        }
+      } else {
+        // Legacy unbudgeted bulk reap (`?entityReapBudgetMs=off`).
+        for (const { guid } of kill) {
+          try { this.remove(guid); } catch (_) {}
+        }
       }
     }
   }
