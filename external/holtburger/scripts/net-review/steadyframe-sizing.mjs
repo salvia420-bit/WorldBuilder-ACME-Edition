@@ -23,6 +23,25 @@ const POI = process.env.POI || "Cragstone";
 const SAMPLE_INTERVAL_US = 200;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+// Rotate the player in place (forward=0, strafe=0, turn=±1, no translation → residency unchanged).
+const spin = (page, on) => page.evaluate((v) => { try { window.__sessionHandle.setMovementInput(0, 0, v ? 1 : 0, false); } catch (_) {} }, on).catch(() => {});
+const headingOf = (page) => page.evaluate(() => { try { const p = window.__sessionHandle.getLocalPlayerPose(); const h = p ? p.heading : null; if (p && p.free) p.free(); return h; } catch (_) { return null; } }).catch(() => null);
+// Facing-averaged draw calls: caller has spin ON; sample autoReset=false over `seconds`, with
+// per-500ms windows → overall mean (facing-independent) + per-heading min/max spread.
+async function drawCallsSpinning(page, seconds) {
+  await page.evaluate(() => { const rr = window.liveScene3d.renderer; rr.info.autoReset = false; rr.info.reset(); });
+  const snap = () => page.evaluate(() => ({ c: window.liveScene3d.renderer.info.render.calls, t: window.liveScene3d.renderer.info.render.triangles, f: window.__sz.frames }));
+  const h0 = await headingOf(page);
+  let prev = await snap(); const first = prev; const wins = [];
+  const steps = Math.max(2, Math.round(seconds * 2));
+  for (let i = 0; i < steps; i++) { await sleep(500); const cur = await snap(); const df = cur.f - prev.f; if (df > 0) wins.push((cur.c - prev.c) / df); prev = cur; }
+  const h1 = await headingOf(page);
+  await page.evaluate(() => { window.liveScene3d.renderer.info.autoReset = true; });
+  const tf = Math.max(1, prev.f - first.f);
+  return { mean: +((prev.c - first.c) / tf).toFixed(1), tris: Math.round((prev.t - first.t) / tf),
+    min: wins.length ? Math.round(Math.min(...wins)) : null, max: wins.length ? Math.round(Math.max(...wins)) : null,
+    windows: wins.map((w) => Math.round(w)), frames: tf, headingStart: h0, headingEnd: h1 };
+}
 
 (async () => {
   const { createRequire } = await import("node:module");
@@ -99,13 +118,28 @@ const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y)
         kGuid.add(`${guid}|${part}|${surf}`); kWcid.add(`${wcid}|${part}|${surf}`); }); }
     // statics + buildings draw-collapse ceiling: key visible meshes by (geometry,material);
     // count how many are ALREADY batched/instanced (1 node = many draws) vs individual.
+    const hasLodAncestor = (o) => { let p = o; while (p) { if (p.isLOD) return true; p = p.parent; } return false; };
     const staticCollapse = (name) => {
-      const g = scene.getObjectByName(name); const gm = new Set(); let total = 0, batched = 0, instanced = 0, indiv = 0;
+      const g = scene.getObjectByName(name); const gm = new Set(); let batched = 0, instanced = 0, indiv = 0;
+      // exclusion reasons mirroring static_atlas.js:389 (why an individual static can't atlas)
+      const reason = { lod: 0, "no-uv": 0, "no-map": 0, "no-pixels": 0, deformed: 0, "staticbatch-tagged": 0, eligible: 0 };
+      const eligibleGm = new Set();
       if (g) g.traverse((o) => { if (o.visible === false) return;
         if (o.isBatchedMesh) { batched++; return; } if (o.isInstancedMesh) { instanced++; return; }
-        if (!o.isMesh) return; total++; indiv++;
-        const gid = o.geometry?.uuid ?? "n"; const mid = Array.isArray(o.material) ? o.material.map((m) => m.uuid).join(",") : (o.material?.uuid ?? "n"); gm.add(`${gid}|${mid}`); });
-      return { individualMeshes: indiv, distinctGeomMat: gm.size, collapsible: indiv - gm.size, batchedNodes: batched, instancedNodes: instanced };
+        if (!o.isMesh) return; indiv++;
+        const gid = o.geometry?.uuid ?? "n"; const mid = Array.isArray(o.material) ? o.material.map((m) => m.uuid).join(",") : (o.material?.uuid ?? "n"); gm.add(`${gid}|${mid}`);
+        const mat = Array.isArray(o.material) ? o.material[0] : o.material;
+        const tex = mat && mat.map; const img = tex && tex.image;
+        if (hasLodAncestor(o)) reason.lod++;
+        else if (!o.geometry || !o.geometry.attributes?.uv) reason["no-uv"]++;
+        else if (!tex) reason["no-map"]++;
+        else if (!img || !img.data) reason["no-pixels"]++;
+        else if (typeof mat.userData?.__vfxSetKey === "string" && mat.userData.__vfxSetKey.includes("deformation.")) reason.deformed++;
+        else if (o.userData?.__staticBatch) reason["staticbatch-tagged"]++;
+        else { reason.eligible++; eligibleGm.add(`${gid}|${mid}`); }
+      });
+      return { individualMeshes: indiv, distinctGeomMat: gm.size, collapsible: indiv - gm.size, batchedNodes: batched, instancedNodes: instanced,
+        excludeReasons: reason, eligibleDistinctGeomMat: eligibleGm.size };
     };
     const rr = ls.renderer;
     return { split, totalEntMeshes: totalEnt, distinctGuidKeys: kGuid.size, distinctWcidKeys: kWcid.size,
@@ -116,18 +150,22 @@ const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y)
   console.error(`[sz] staticsCollapse: ${JSON.stringify(census.staticsCollapse)}`);
   console.error(`[sz] buildingsCollapse: ${JSON.stringify(census.buildingsCollapse)}`);
   if (process.env.CENSUS_ONLY === "1") {
-    // draw-calls/frame (autoReset=false) — the validation number.
-    await page.evaluate(() => { const rr = window.liveScene3d.renderer; rr.info.autoReset = false; rr.info.reset(); });
-    const d0 = await page.evaluate(() => ({ c: window.liveScene3d.renderer.info.render.calls, f: window.__sz.frames }));
-    await sleep(2500);
-    const d1 = await page.evaluate(() => ({ c: window.liveScene3d.renderer.info.render.calls, f: window.__sz.frames }));
-    const drawCalls = +((d1.c - d0.c) / Math.max(1, d1.f - d0.f)).toFixed(1);
-    await page.evaluate(() => { window.liveScene3d.renderer.info.autoReset = true; });
+    // facing-averaged draw-calls/frame: spin in place so FCULL variance cancels.
+    await spin(page, true);
+    const dc = await drawCallsSpinning(page, 8);
+    await spin(page, false);
+    const drawCalls = dc.mean;
+    console.error(`[sz] draw calls/frame (spin-avg) = ${dc.mean} | per-heading min ${dc.min}/max ${dc.max} (spread ${dc.max != null ? dc.max - dc.min : "?"}) frames=${dc.frames}`);
     const bgChildren = await page.evaluate(() => window.liveScene3d?.buildingsGroup?.children?.length ?? -1).catch(() => -1);
+    const atlasStats = await page.evaluate(() => (typeof window.__atlasStats === "function" ? window.__atlasStats() : null)).catch(() => null);
+    if (atlasStats) {
+      const full = (atlasStats.buckets || []).filter((b) => b.full).length;
+      console.error(`[sz] atlasStats: atlased=${atlasStats.atlased} nodesIn=${atlasStats.nodesIn} ptLayerFull=${atlasStats.ptLayerFull} ptDeformed=${atlasStats.ptDeformed} ptFiltered=${atlasStats.ptFiltered} ptNorm/Geom/Inst=${atlasStats.ptNormFail}/${atlasStats.ptGeomFail}/${atlasStats.ptInstFail} | buckets=${atlasStats.bucketCount} full=${full} atlasBakedLbs=${atlasStats.atlasBakedLbs}`);
+    }
     const diagC = await page.evaluate(() => { const d = window.__diag || {}; const pick = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (_) { return null; } }; return { vfxGauge: pick(d.vfxGauge), render: pick(d.render) }; }).catch(() => ({}));
     const shot = OUT.replace(/\.json$/, ".png");
     try { await page.screenshot({ path: shot }); } catch (_) {}
-    fs.writeFileSync(OUT, JSON.stringify({ censusOnly: true, generatedAtMs: Date.now(), poi: POI, query: q.toString(), steadyEntRoots: prevE, steadyTerr: lastT, drawCallsPerFrame: drawCalls, buildingsGroupChildren: bgChildren, census, consoleErrors, vfxGauge: diagC.vfxGauge, renderDiag: diagC.render }, null, 2));
+    fs.writeFileSync(OUT, JSON.stringify({ censusOnly: true, generatedAtMs: Date.now(), poi: POI, query: q.toString(), steadyEntRoots: prevE, steadyTerr: lastT, drawCallsPerFrame: drawCalls, drawSpread: { min: dc.min, max: dc.max, windows: dc.windows, frames: dc.frames }, buildingsGroupChildren: bgChildren, atlasStats, census, consoleErrors, vfxGauge: diagC.vfxGauge, renderDiag: diagC.render }, null, 2));
     console.error(`[sz] CENSUS_ONLY: drawCalls=${drawCalls} buildingsGroupChildren=${bgChildren} consoleErrors=${consoleErrors.length} shot=${shot}`);
     if (consoleErrors.length) console.error(`[sz] ERRORS: ${JSON.stringify(consoleErrors.slice(0, 8))}`);
     console.error(`[sz] wrote ${OUT}`);
@@ -135,16 +173,13 @@ const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y)
   }
   console.error(`[sz] split(meshNodes): ${JSON.stringify(census.split)} | entMeshes=${census.totalEntMeshes} distinctGuid=${census.distinctGuidKeys} distinctWcid=${census.distinctWcidKeys}`);
 
-  // ── B: real draw-calls/frame (autoReset=false). ────────────────────────────
-  await page.evaluate(() => { const rr = window.liveScene3d.renderer; rr.info.autoReset = false; rr.info.reset(); });
-  const dc0 = await page.evaluate(() => ({ calls: window.liveScene3d.renderer.info.render.calls, tris: window.liveScene3d.renderer.info.render.triangles, frames: window.__sz.frames }));
-  await sleep(2500);
-  const dc1 = await page.evaluate(() => ({ calls: window.liveScene3d.renderer.info.render.calls, tris: window.liveScene3d.renderer.info.render.triangles, frames: window.__sz.frames }));
-  const dcFrames = Math.max(1, dc1.frames - dc0.frames);
-  const drawCallsPerFrame = +((dc1.calls - dc0.calls) / dcFrames).toFixed(1);
-  const trisPerFrame = Math.round((dc1.tris - dc0.tris) / dcFrames);
-  await page.evaluate(() => { window.liveScene3d.renderer.info.autoReset = true; }); // restore
-  console.error(`[sz] draw calls/frame = ${drawCallsPerFrame}  tris/frame = ${trisPerFrame}  (over ${dcFrames} frames)`);
+  // ── B: facing-averaged draw-calls. Spin in place (no translation → residency ──
+  // unchanged) so FCULL frustum-cull variance cancels; keep spinning through the CPU
+  // profile + matrix A/B below so tCpu is facing-averaged too. Stopped before detach.
+  await spin(page, true);
+  const dc = await drawCallsSpinning(page, 8);
+  const drawCallsPerFrame = dc.mean; const trisPerFrame = dc.tris;
+  console.error(`[sz] draw calls/frame (spin-avg) = ${drawCallsPerFrame} tris=${trisPerFrame} | per-heading min ${dc.min}/max ${dc.max} (spread ${dc.max != null ? dc.max - dc.min : "?"}) frames=${dc.frames}`);
 
   // ── G: light-count variance (relink churn signal). ─────────────────────────
   const lightSamples = [];
@@ -174,6 +209,7 @@ const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y)
   await sleep(500);
   const frozenAB = await collect(2500);
   const restored = await page.evaluate(() => { const t = window.__szTouched || []; for (const o of t) o.matrixWorldAutoUpdate = true; const n = t.length; window.__szTouched = null; return n; });
+  await spin(page, false); // stop rotating
   const baseCpu = median(baseAB.cpu), frozenCpu = median(frozenAB.cpu);
   console.error(`[sz] matrix A/B: froze ${froze} nodes; tCpu median base=${baseCpu?.toFixed?.(2)}ms frozen=${frozenCpu?.toFixed?.(2)}ms Δ=${baseCpu && frozenCpu ? (baseCpu - frozenCpu).toFixed(2) : "?"}ms (restored ${restored})`);
 
@@ -199,7 +235,8 @@ const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y)
 
   const result = {
     generatedAtMs: Date.now(), gpu: String(gpu), realGpu, poi: POI, steadyEntRoots: prevE, steadyTerr: lastT,
-    B_drawCallsPerFrame: drawCallsPerFrame, B_trisPerFrame: trisPerFrame, B_overFrames: dcFrames,
+    B_drawCallsPerFrame: drawCallsPerFrame, B_trisPerFrame: trisPerFrame, B_overFrames: dc.frames,
+    B_drawSpread: { min: dc.min, max: dc.max, windows: dc.windows, headingStart: dc.headingStart, headingEnd: dc.headingEnd },
     D_meshNodeSplit: census.split,
     L1_totalEntMeshes: census.totalEntMeshes, L1_distinctGuidKeys: census.distinctGuidKeys, L1_distinctWcidKeys: census.distinctWcidKeys,
     L1_collapsibleDraws_byGuid: census.totalEntMeshes - census.distinctGuidKeys,
