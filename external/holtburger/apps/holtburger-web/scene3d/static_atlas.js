@@ -271,6 +271,24 @@ const _ATLAS_OPTIMIZE_FRAC = 0.30; // compact a bucket once >30% of its buffer i
 const _buckets = new Map();        // bucketKey -> { bm, w, h, transparent, alphaTest }
 const _lbMembership = new Map();   // lbKey -> Array<{ bucketKey, gid, texUuid }>
 const _atlasBakedLbs = new Set();  // lbKeys whose singletons are live in the buckets
+
+// Diagnostic (2026-07-14): cumulative passthrough-reason tally + per-bucket fullness, so a
+// census can see WHY a static stays individual — layer-pool-full (capacity) vs never-fed
+// (routing) vs merge-fail. Cheap counters, no behaviour change. Read via window.__atlasStats().
+const _atlasStats = { feeds: 0, nodesIn: 0, atlased: 0, ptFiltered: 0, ptDeformed: 0, ptNoWH: 0, ptLayerFull: 0, ptNormFail: 0, ptGeomFail: 0, ptInstFail: 0, ptError: 0 };
+if (typeof window !== "undefined") {
+  window.__atlasStats = () => ({
+    ..._atlasStats,
+    bucketCount: _buckets.size,
+    atlasBakedLbs: _atlasBakedLbs.size,
+    buckets: [..._buckets.entries()].map(([k, b]) => {
+      const ud = (b.bm && b.bm.userData) || {};
+      return { key: k, w: b.w, h: b.h, transparent: b.transparent, nextLayer: ud.nextLayer ?? null,
+        capacity: ud.capacity ?? null, layersUsed: ud.layerOf ? ud.layerOf.size : null,
+        full: (ud.nextLayer != null && ud.capacity != null) ? ud.nextLayer >= ud.capacity : null };
+    }),
+  });
+}
 const _dirtyBuckets = new Set();   // buckets with freed geometry awaiting optimize()
 
 function _lbKeyOfId(id) {
@@ -380,14 +398,16 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
   }
   const touchedDiff = new Set();
   const fedLbs = new Set();
+  _atlasStats.feeds++;
   for (const n of nodes) {
     let handled = false;
+    _atlasStats.nodesIn++;
     try {
       const mat = n && n.material;
       const tex = mat && mat.map;
       const img = tex && tex.image;
       if (!n || !n.isMesh || n.isBatchedMesh || n.isLOD || !n.geometry || !n.geometry.attributes?.uv || !tex || !img || !img.data || n.userData?.__staticBatch) {
-        passthrough.push(n); continue; // ?staticBatch nodes already batched — never re-feed
+        _atlasStats.ptFiltered++; passthrough.push(n); continue; // ?staticBatch nodes already batched — never re-feed
       }
       // A MECH-B vertex-deformed variant (deformation.windSwayGpu — swaying
       // trees/foliage) must NOT be consumed: the bucket's array material
@@ -398,10 +418,10 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       // through instead; the singleton keeps its swaying variant. Frag-only
       // (color-effect) sets still atlas — match the deformation prefix only.
       if (typeof mat.userData?.__vfxSetKey === "string" && mat.userData.__vfxSetKey.includes("deformation.")) {
-        passthrough.push(n); continue;
+        _atlasStats.ptDeformed++; passthrough.push(n); continue;
       }
       const w = img.width | 0, h = img.height | 0;
-      if (!w || !h) { passthrough.push(n); continue; }
+      if (!w || !h) { _atlasStats.ptNoWH++; passthrough.push(n); continue; }
       const transparent = !!mat.transparent;
       const alphaTest = (mat.alphaTest || 0) > 0 ? 0.5 : 0;
       const bucketKey = _bucketKeyFor(w, h, transparent, alphaTest);
@@ -417,7 +437,7 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
         let layer;
         if (ud.freeLayers.length > 0) layer = ud.freeLayers.pop();
         else if (ud.nextLayer < ud.capacity) layer = ud.nextLayer++;
-        else { passthrough.push(n); continue; } // layer pool full → unbatched (fail-soft)
+        else { _atlasStats.ptLayerFull++; passthrough.push(n); continue; } // layer pool full → unbatched (fail-soft)
         const stride = w * h * 4;
         const src = img.data;
         if (src && src.length === stride) ud.diffArray.image.data.set(src, layer * stride);
@@ -428,7 +448,7 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       const g = normalizeForMerge(n.geometry, entry.layer);
       if (!g) {
         if (--entry.refs <= 0) { ud.freeLayers.push(entry.layer); ud.layerOf.delete(uuid); }
-        passthrough.push(n); continue;
+        _atlasStats.ptNormFail++; passthrough.push(n); continue;
       }
       const vcount = g.attributes.position.count;
       let gid;
@@ -437,7 +457,7 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       } catch (_) {
         g.dispose?.();
         if (--entry.refs <= 0) { ud.freeLayers.push(entry.layer); ud.layerOf.delete(uuid); }
-        passthrough.push(n); continue;
+        _atlasStats.ptGeomFail++; passthrough.push(n); continue;
       }
       let iid;
       try {
@@ -446,7 +466,7 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
         try { bm.deleteGeometry(gid); } catch (_2) {}
         g.dispose?.();
         if (--entry.refs <= 0) { ud.freeLayers.push(entry.layer); ud.layerOf.delete(uuid); }
-        passthrough.push(n); continue;
+        _atlasStats.ptInstFail++; passthrough.push(n); continue;
       }
       n.updateMatrix();
       bm.setMatrixAt(iid, n.matrix); // world transform (node is staticsGroup-relative)
@@ -460,8 +480,10 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       fedLbs.add(lbKey);
       // free the consumed source geometry's GPU buffer (mirrors the merge path).
       try { n.geometry?.dispose?.(); } catch (_) {}
+      _atlasStats.atlased++;
       handled = true;
     } catch (e) {
+      _atlasStats.ptError++;
       // per-node fail-soft: fall through to passthrough below.
     }
     if (!handled && n && !passthrough.includes(n)) passthrough.push(n);
