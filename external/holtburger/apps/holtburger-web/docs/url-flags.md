@@ -495,6 +495,7 @@ Values cell says only `off` really does ignore `=0`/`=false`.
 | `staticsRingTimeSlice` | `off` (escape) | **on** | ~6 ms time-slice for the statics ring build (macrotask yield). | scene3d/statics.js:2672 |
 | `buildingsRingTimeSlice` | `off` (escape) | **on** | ~6 ms time-slice for the buildings ring build (mirrors the statics F3 slice). | scene3d/buildings.js:118 |
 | `buildingFloorBias` | `off` (escape) | **on** | Coplanar building-floor z-fight bias. SwiftShader resolves coplanar depth deterministically — A/B needs a real GPU. | scene3d/buildings.js:92 |
+| `buildingBatch` | `on` (opt-in) | **off** | Feed static building surfaces into the cross-LB `?statAtlas` (buildings never articulate in 3D — doors are entities). Big draw-call cut (1070 paired: 1853→279 draws, dir. large; exact # is FCULL-facing-noisy). Trade-off: batched buildings lose the per-placement distance receive-shadow gate. Needs a 1070 eye-test (walls/roofs/shadows) before default-on. Requires `?statAtlas` on. | scene3d/buildings.js:117 |
 | `staticsRadius` | N (0..6) | 6 (`agentic=low` → 1) | Statics streaming ring radius. | scene3d/index.js:197 |
 | `buildingsRadius` | N (0..6) | 6 (`agentic=low` → 1) | Buildings streaming ring radius. | scene3d/index.js:210 |
 | `pvsRingRadius` | N (0..12) | 5 (`agentic=low` → 1) | Indoor/EnvCell PVS streaming ring radius (resident geometry grows as (2N+1)²). | scene3d/index.js:247 |

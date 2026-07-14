@@ -70,6 +70,8 @@ import { fetchLandblockObjectsShared } from "./lb_objects_shared.js";
 // (`scene3d/setup_rig.js`). Byte-identical to the prior inline
 // `hingeWrapper.position.set(...)` + `acQuatToThree(...)`.
 import { applyRestPoseFrame } from "./setup_rig.js";
+// ?buildingBatch (default-OFF) — reuse the SAME cross-LB static atlas statics feed.
+import { statAtlasEnabled, addSingletonsToCrossLbAtlas } from "./static_atlas.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 // HOLTBURG_X/HOLTBURG_Y retired (spawn-driven-boot): the bake-time shadow gate
@@ -98,6 +100,54 @@ const BUILDING_FLOOR_BIAS = (() => {
     return true;
   }
 })();
+
+// ?buildingBatch (default-OFF, opt-in) — feed static building surfaces into the SAME
+// cross-LB size-bucket atlas statics use (static_atlas.js), collapsing the per-placement
+// building draw calls (measured ~59-60% of building draws are duplicate geom+material
+// across placements — RESULTS-taskL2 sizing, Cragstone+Holtburg). SAFE because building
+// setup parts never articulate in the 3D client: the door-part rotation path was RETIRED
+// 2026-06-18 (index.html:4005 "Zero 3D readers") — doors are separate ENTITIES animated by
+// the Rust door-swing (entities.js:683), so every building surface is static and batchable.
+// Trade-off (documented, loop.js:1240): a batched bucket shares ONE receiveShadow, so
+// batched buildings lose the per-placement distance receive-shadow gate (tickShadowReceiveGate
+// walks buildingsGroup.children — batched surfaces move under staticsGroup and follow the
+// atlas's uniform gate). castShadow is preserved per-bucket (walls still shadow the ground).
+// Fail-soft: any surface the atlas can't take (no map/uv/image.data, layer overflow) passes
+// through to buildingsGroup unchanged, so props NEVER vanish. Requires ?statAtlas on (default).
+const BUILDING_BATCH = (() => {
+  try {
+    return new URLSearchParams(window.location.search).get("buildingBatch") === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+
+// Flatten built placementGroups' surface meshes into staticsGroup-relative singletons and
+// feed them to the cross-LB atlas. Each placementGroup is DETACHED (no parent) here, so
+// `updateMatrixWorld(true)` makes every leaf mesh's `matrixWorld` equal its transform in the
+// worldRoot-child space that staticsGroup and buildingsGroup share (both sit at identity
+// under worldRoot). Decomposing that into the mesh's local TRS is exactly what the atlas
+// reads (`n.updateMatrix()` → setMatrixAt). Stamps `landblockId` so the per-LB eviction hook
+// (evictStaticAtlasForLb, keyed by node.userData.landblockId) excises them on LB evict.
+// Returns the count of passthrough meshes added to buildingsGroup (fail-soft, unbatched).
+function _feedBuildingGroupsToAtlas(groups, scene3d) {
+  const singletons = [];
+  for (const g of groups) {
+    g.updateMatrixWorld(true); // detached → subtree matrixWorld == staticsGroup-relative
+    const lbId = (g.userData?.landblockId ?? 0) >>> 0;
+    g.traverse((o) => {
+      if (!o.isMesh || !o.geometry) return;
+      o.matrixWorld.decompose(o.position, o.quaternion, o.scale); // bake chain into local TRS
+      o.matrixAutoUpdate = true;
+      if (!o.userData) o.userData = {};
+      o.userData.landblockId = lbId;
+      singletons.push(o);
+    });
+  }
+  const { passthrough } = addSingletonsToCrossLbAtlas(singletons, scene3d);
+  for (const n of passthrough) scene3d.buildingsGroup.add(n); // world-baked TRS → correct under buildingsGroup
+  return passthrough.length;
+}
 
 // A3 (busted-world load fix 2026-06-20) — concurrent-call dedup for the
 // per-LB buildings baker. The permanent `scene3d.buildingsBakedLbs.add(lbKey)`
@@ -899,7 +949,11 @@ export async function bakeBuildingsForLandblock(
       for (const g of _pendingGroups) _tmp.add(g);
       await prewarmSubtree(scene3d, _tmp);
       for (const g of [..._tmp.children]) _tmp.remove(g);
-      for (const g of _pendingGroups) scene3d.buildingsGroup.add(g);
+      if (BUILDING_BATCH && statAtlasEnabled()) {
+        _feedBuildingGroupsToAtlas(_pendingGroups, scene3d);
+      } else {
+        for (const g of _pendingGroups) scene3d.buildingsGroup.add(g);
+      }
     }
 
     // A3: placement build succeeded — NOW mark the LB permanently baked.
@@ -1169,6 +1223,7 @@ export async function bakeBuildingsRing(
       }
       let partCount = 0;
       let surfaceMeshCount = 0;
+      const lbBatchGroups = BUILDING_BATCH && statAtlasEnabled() ? [] : null;
       for (const placement of buildings) {
         const placementLbX = (placement.landblockId >>> 24) & 0xff;
         const placementLbY = (placement.landblockId >>> 16) & 0xff;
@@ -1195,10 +1250,15 @@ export async function bakeBuildingsRing(
           opts.shadowsEnabled,
           opts.buildingsReceiveShadow
         );
-        scene3d.buildingsGroup.add(group);
+        if (lbBatchGroups) lbBatchGroups.push(group);
+        else scene3d.buildingsGroup.add(group);
         partCount += bake.parts.length;
         surfaceMeshCount += smc;
         opts.buildingMap3d.set(group.userData.placementKey, group);
+      }
+      // ?buildingBatch — feed this LB's static building surfaces into the cross-LB atlas.
+      if (lbBatchGroups && lbBatchGroups.length > 0) {
+        _feedBuildingGroupsToAtlas(lbBatchGroups, scene3d);
       }
       // A3: this LB's placements are instantiated — mark it permanently baked
       // now (AFTER the ring's awaits + this LB's synchronous build succeeded).
