@@ -1,0 +1,2235 @@
+{
+ "generated": "2026-07-13T21:44:35",
+ "params": {
+  "maxCorridorM": 2200.0,
+  "gradeBlock": 0.85,
+  "waterTypes": [
+   16,
+   17,
+   18,
+   19,
+   20
+  ],
+  "staticClearM": 10.0,
+  "startClearM": 25.0,
+  "minCorridorM": 250.0
+ },
+ "plans": [
+  {
+   "poi": "Ahurenga",
+   "usable": false,
+   "reason": "no corridor >= 250m clear of water/slope/statics",
+   "source": {
+    "name": "Ahurenga",
+    "cell": 263782409,
+    "cellHex": "0x0FB90009",
+    "x": 43.0,
+    "y": 8.6,
+    "z": 0.005,
+    "qw": -0.980098,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.198513,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Al-Arqas",
+   "usable": true,
+   "headingDeg": 337.5,
+   "quat": {
+    "w": -0.980785,
+    "x": 0,
+    "y": 0,
+    "z": -0.19509
+   },
+   "flipQuat": {
+    "w": -0.19509,
+    "x": 0,
+    "y": 0,
+    "z": 0.980785
+   },
+   "clearStart": {
+    "cell": "0x8F58003D",
+    "x": 168.544,
+    "y": 97.138,
+    "z": 26.194,
+    "worldX": 27624.5,
+    "worldY": 16993.1,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 26817.1,
+    "worldY": 18942.5
+   },
+   "climbM": 102.2,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Al-Arqas",
+    "cell": 2404909115,
+    "cellHex": "0x8F58003B",
+    "x": 183.851,
+    "y": 60.183,
+    "z": 9.326,
+    "qw": 0.707107,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.707107,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Al-Jalima",
+   "usable": true,
+   "headingDeg": 101.2,
+   "quat": {
+    "w": 0.634393,
+    "x": 0,
+    "y": 0,
+    "z": -0.77301
+   },
+   "flipQuat": {
+    "w": -0.77301,
+    "x": 0,
+    "y": 0,
+    "z": -0.634393
+   },
+   "clearStart": {
+    "cell": "0x85880034",
+    "x": 159.59,
+    "y": 87.666,
+    "z": 94.037,
+    "worldX": 25695.6,
+    "worldY": 26199.7,
+    "offsetM": 40.0
+   },
+   "corridorM": 542.0,
+   "corridorEnd": {
+    "worldX": 26227.2,
+    "worldY": 26093.9
+   },
+   "climbM": 20.7,
+   "roadFrac": 0.013,
+   "source": {
+    "name": "Al-Jalima",
+    "cell": 2240282668,
+    "cellHex": "0x8588002C",
+    "x": 120.359,
+    "y": 95.47,
+    "z": 90.049,
+    "qw": 1.0,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": 0.0,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Arwic",
+   "usable": true,
+   "headingDeg": 236.2,
+   "quat": {
+    "w": -0.471397,
+    "x": 0,
+    "y": 0,
+    "z": -0.881921
+   },
+   "flipQuat": {
+    "w": -0.881921,
+    "x": 0,
+    "y": 0,
+    "z": 0.471397
+   },
+   "clearStart": {
+    "cell": "0xC6A80008",
+    "x": 13.546,
+    "y": 173.996,
+    "z": 42.05,
+    "worldX": 38029.5,
+    "worldY": 32430.0,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 36275.1,
+    "worldY": 31257.7
+   },
+   "climbM": 48.7,
+   "roadFrac": 0.065,
+   "source": {
+    "name": "Arwic",
+    "cell": 3332964361,
+    "cellHex": "0xC6A90009",
+    "x": 46.805,
+    "y": 4.219,
+    "z": 42.005,
+    "qw": 1.0,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": 0.0,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Ayan Baqur",
+   "usable": true,
+   "headingDeg": 45.0,
+   "quat": {
+    "w": 0.92388,
+    "x": 0,
+    "y": 0,
+    "z": -0.382683
+   },
+   "flipQuat": {
+    "w": -0.382683,
+    "x": 0,
+    "y": 0,
+    "z": -0.92388
+   },
+   "clearStart": {
+    "cell": "0x11340021",
+    "x": 116.384,
+    "y": 2.484,
+    "z": 46.728,
+    "worldX": 3380.4,
+    "worldY": 9986.5,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 4872.4,
+    "worldY": 11478.5
+   },
+   "climbM": 142.8,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Ayan Baqur",
+    "cell": 288555039,
+    "cellHex": "0x1133001F",
+    "x": 88.1,
+    "y": 166.2,
+    "z": 64.8,
+    "qw": 1.0,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": 0.0,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Baishi",
+   "usable": true,
+   "headingDeg": 33.8,
+   "quat": {
+    "w": 0.95694,
+    "x": 0,
+    "y": 0,
+    "z": -0.290285
+   },
+   "flipQuat": {
+    "w": -0.290285,
+    "x": 0,
+    "y": 0,
+    "z": -0.95694
+   },
+   "clearStart": {
+    "cell": "0xCE410010",
+    "x": 34.823,
+    "y": 186.059,
+    "z": 54.952,
+    "worldX": 39586.8,
+    "worldY": 12666.1,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 40759.1,
+    "worldY": 14420.5
+   },
+   "climbM": 31.2,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Baishi",
+    "cell": 3460366343,
+    "cellHex": "0xCE410007",
+    "x": 12.6,
+    "y": 152.8,
+    "z": 55.1,
+    "qw": -0.544639,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.838671,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Bandit Castle",
+   "usable": true,
+   "headingDeg": 315.0,
+   "quat": {
+    "w": -0.92388,
+    "x": 0,
+    "y": 0,
+    "z": -0.382683
+   },
+   "flipQuat": {
+    "w": -0.382683,
+    "x": 0,
+    "y": 0,
+    "z": 0.92388
+   },
+   "clearStart": {
+    "cell": "0xBCD0003F",
+    "x": 180.616,
+    "y": 148.784,
+    "z": 110.703,
+    "worldX": 36276.6,
+    "worldY": 40084.8,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 34784.6,
+    "worldY": 41576.8
+   },
+   "climbM": 50.8,
+   "roadFrac": 0.04,
+   "source": {
+    "name": "Bandit Castle",
+    "cell": 3184525318,
+    "cellHex": "0xBDD00006",
+    "x": 16.9,
+    "y": 120.5,
+    "z": 115.1,
+    "qw": 0.707107,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.707107,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Beach Fort",
+   "usable": true,
+   "headingDeg": 180.0,
+   "quat": {
+    "w": 0.0,
+    "x": 0,
+    "y": 0,
+    "z": -1.0
+   },
+   "flipQuat": {
+    "w": -1.0,
+    "x": 0,
+    "y": 0,
+    "z": -0.0
+   },
+   "clearStart": {
+    "cell": "0x42DE000A",
+    "x": 25.0,
+    "y": 28.5,
+    "z": 0.05,
+    "worldX": 12697.0,
+    "worldY": 42652.5,
+    "offsetM": 56.0
+   },
+   "corridorM": 2094.0,
+   "corridorEnd": {
+    "worldX": 12697.0,
+    "worldY": 40558.5
+   },
+   "climbM": 179.0,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Beach Fort",
+    "cell": 1121845260,
+    "cellHex": "0x42DE000C",
+    "x": 25.0,
+    "y": 84.5,
+    "z": 0.005,
+    "qw": -0.681998,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.731354,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Bluespire",
+   "usable": true,
+   "headingDeg": 56.2,
+   "quat": {
+    "w": 0.881921,
+    "x": 0,
+    "y": 0,
+    "z": -0.471397
+   },
+   "flipQuat": {
+    "w": -0.471397,
+    "x": 0,
+    "y": 0,
+    "z": -0.881921
+   },
+   "clearStart": {
+    "cell": "0x21B10019",
+    "x": 88.101,
+    "y": 0.557,
+    "z": 0.05,
+    "worldX": 6424.1,
+    "worldY": 33984.6,
+    "offsetM": 48.0
+   },
+   "corridorM": 2102.0,
+   "corridorEnd": {
+    "worldX": 8171.8,
+    "worldY": 35152.4
+   },
+   "climbM": 89.7,
+   "roadFrac": 0.029,
+   "source": {
+    "name": "Bluespire",
+    "cell": 565182487,
+    "cellHex": "0x21B00017",
+    "x": 48.19,
+    "y": 165.89,
+    "z": 0.005,
+    "qw": -0.083617,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.996498,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Cragstone",
+   "usable": true,
+   "headingDeg": 213.8,
+   "quat": {
+    "w": -0.290285,
+    "x": 0,
+    "y": 0,
+    "z": -0.95694
+   },
+   "flipQuat": {
+    "w": -0.95694,
+    "x": 0,
+    "y": 0,
+    "z": 0.290285
+   },
+   "clearStart": {
+    "cell": "0xBB9F0036",
+    "x": 147.135,
+    "y": 134.992,
+    "z": 63.542,
+    "worldX": 36051.1,
+    "worldY": 30663.0,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 34878.9,
+    "worldY": 28908.6
+   },
+   "climbM": 92.3,
+   "roadFrac": 0.018,
+   "source": {
+    "name": "Cragstone",
+    "cell": 3147759680,
+    "cellHex": "0xBB9F0040",
+    "x": 169.358,
+    "y": 168.251,
+    "z": 54.005,
+    "qw": 0.578683,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.815552,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Dryreach",
+   "usable": true,
+   "headingDeg": 0.0,
+   "quat": {
+    "w": 1.0,
+    "x": 0,
+    "y": 0,
+    "z": -0.0
+   },
+   "flipQuat": {
+    "w": 0.0,
+    "x": 0,
+    "y": 0,
+    "z": -1.0
+   },
+   "clearStart": {
+    "cell": "0xDA75002F",
+    "x": 132.0,
+    "y": 164.0,
+    "z": 18.05,
+    "worldX": 41988.0,
+    "worldY": 22628.0,
+    "offsetM": 104.0
+   },
+   "corridorM": 2046.0,
+   "corridorEnd": {
+    "worldX": 41988.0,
+    "worldY": 24674.0
+   },
+   "climbM": 25.7,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Dryreach",
+    "cell": 3665100843,
+    "cellHex": "0xDA75002B",
+    "x": 132.0,
+    "y": 60.0,
+    "z": 18.005,
+    "qw": 1.0,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": 0.0,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Eastham",
+   "usable": true,
+   "headingDeg": 135.0,
+   "quat": {
+    "w": 0.382683,
+    "x": 0,
+    "y": 0,
+    "z": -0.92388
+   },
+   "flipQuat": {
+    "w": -0.92388,
+    "x": 0,
+    "y": 0,
+    "z": -0.382683
+   },
+   "clearStart": {
+    "cell": "0xCE94003C",
+    "x": 179.337,
+    "y": 84.326,
+    "z": 15.105,
+    "worldX": 39731.3,
+    "worldY": 28500.3,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 41223.3,
+    "worldY": 27008.3
+   },
+   "climbM": 35.0,
+   "roadFrac": 0.24,
+   "source": {
+    "name": "Eastham",
+    "cell": 3465805877,
+    "cellHex": "0xCE940035",
+    "x": 151.053,
+    "y": 112.61,
+    "z": 17.417,
+    "qw": -0.936577,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.350461,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Eastwatch",
+   "usable": true,
+   "headingDeg": 247.5,
+   "quat": {
+    "w": -0.55557,
+    "x": 0,
+    "y": 0,
+    "z": -0.83147
+   },
+   "flipQuat": {
+    "w": -0.83147,
+    "x": 0,
+    "y": 0,
+    "z": 0.55557
+   },
+   "clearStart": {
+    "cell": "0x49F0000B",
+    "x": 33.045,
+    "y": 54.693,
+    "z": 161.326,
+    "worldX": 14049.0,
+    "worldY": 46134.7,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 12099.7,
+    "worldY": 45327.2
+   },
+   "climbM": 75.9,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Eastwatch",
+    "cell": 1240465427,
+    "cellHex": "0x49F00013",
+    "x": 70.0,
+    "y": 70.0,
+    "z": 170.005,
+    "qw": 0.67559,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.737277,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Fiun",
+   "usable": true,
+   "headingDeg": 112.5,
+   "quat": {
+    "w": 0.55557,
+    "x": 0,
+    "y": 0,
+    "z": -0.83147
+   },
+   "flipQuat": {
+    "w": -0.83147,
+    "x": 0,
+    "y": 0,
+    "z": -0.55557
+   },
+   "clearStart": {
+    "cell": "0x38F7002A",
+    "x": 127.955,
+    "y": 38.693,
+    "z": 0.826,
+    "worldX": 10880.0,
+    "worldY": 47462.7,
+    "offsetM": 40.0
+   },
+   "corridorM": 318.0,
+   "corridorEnd": {
+    "worldX": 11173.7,
+    "worldY": 47341.0
+   },
+   "climbM": 3.7,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Fiun",
+    "cell": 955711515,
+    "cellHex": "0x38F7001B",
+    "x": 91.0,
+    "y": 54.0,
+    "z": -0.095,
+    "qw": -0.48481,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.87462,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Fort Tethana",
+   "usable": true,
+   "headingDeg": 247.5,
+   "quat": {
+    "w": -0.55557,
+    "x": 0,
+    "y": 0,
+    "z": -0.83147
+   },
+   "flipQuat": {
+    "w": -0.83147,
+    "x": 0,
+    "y": 0,
+    "z": 0.55557
+   },
+   "clearStart": {
+    "cell": "0x2681000C",
+    "x": 40.745,
+    "y": 92.793,
+    "z": 227.027,
+    "worldX": 7336.7,
+    "worldY": 24860.8,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 5387.4,
+    "worldY": 24053.3
+   },
+   "climbM": 205.8,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Fort Tethana",
+    "cell": 645988381,
+    "cellHex": "0x2681001D",
+    "x": 77.7,
+    "y": 108.1,
+    "z": 240.0,
+    "qw": -0.522498,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.85264,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Freehold",
+   "usable": false,
+   "reason": "no corridor >= 250m clear of water/slope/statics",
+   "source": {
+    "name": "Freehold",
+    "cell": 4062445594,
+    "cellHex": "0xF224001A",
+    "x": 81.8,
+    "y": 33.0,
+    "z": 0.0,
+    "qw": 0.241075,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.970506,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Glenden Wood",
+   "usable": true,
+   "headingDeg": 22.5,
+   "quat": {
+    "w": 0.980785,
+    "x": 0,
+    "y": 0,
+    "z": -0.19509
+   },
+   "flipQuat": {
+    "w": -0.19509,
+    "x": 0,
+    "y": 0,
+    "z": -0.980785
+   },
+   "clearStart": {
+    "cell": "0xA0A40027",
+    "x": 111.609,
+    "y": 156.802,
+    "z": 62.083,
+    "worldX": 30831.6,
+    "worldY": 31644.8,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 31639.1,
+    "worldY": 33594.2
+   },
+   "climbM": 64.3,
+   "roadFrac": 0.004,
+   "source": {
+    "name": "Glenden Wood",
+    "cell": 2695102501,
+    "cellHex": "0xA0A40025",
+    "x": 96.302,
+    "y": 119.847,
+    "z": 59.955,
+    "qw": 0.707107,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.707107,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Greenspire",
+   "usable": true,
+   "headingDeg": 258.8,
+   "quat": {
+    "w": -0.634393,
+    "x": 0,
+    "y": 0,
+    "z": -0.77301
+   },
+   "flipQuat": {
+    "w": -0.77301,
+    "x": 0,
+    "y": 0,
+    "z": 0.634393
+   },
+   "clearStart": {
+    "cell": "0x2BB5002C",
+    "x": 139.727,
+    "y": 78.766,
+    "z": 4.358,
+    "worldX": 8395.7,
+    "worldY": 34830.8,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 6326.3,
+    "worldY": 34419.1
+   },
+   "climbM": 80.2,
+   "roadFrac": 0.069,
+   "source": {
+    "name": "Greenspire",
+    "cell": 733282364,
+    "cellHex": "0x2BB5003C",
+    "x": 178.958,
+    "y": 86.57,
+    "z": 0.005,
+    "qw": 0.352348,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.935869,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Hebian-to",
+   "usable": true,
+   "headingDeg": 270.0,
+   "quat": {
+    "w": -0.707107,
+    "x": 0,
+    "y": 0,
+    "z": -0.707107
+   },
+   "flipQuat": {
+    "w": -0.707107,
+    "x": 0,
+    "y": 0,
+    "z": 0.707107
+   },
+   "clearStart": {
+    "cell": "0xE64E0027",
+    "x": 98.304,
+    "y": 161.905,
+    "z": 15.734,
+    "worldX": 44258.3,
+    "worldY": 15137.9,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 42148.3,
+    "worldY": 15137.9
+   },
+   "climbM": 33.0,
+   "roadFrac": 0.011,
+   "source": {
+    "name": "Hebian-to",
+    "cell": 3863871535,
+    "cellHex": "0xE64E002F",
+    "x": 138.304,
+    "y": 161.905,
+    "z": 20.04,
+    "qw": 0.92388,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.382683,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Holtburg",
+   "usable": true,
+   "headingDeg": 225.0,
+   "quat": {
+    "w": -0.382683,
+    "x": 0,
+    "y": 0,
+    "z": -0.92388
+   },
+   "flipQuat": {
+    "w": -0.92388,
+    "x": 0,
+    "y": 0,
+    "z": 0.382683
+   },
+   "clearStart": {
+    "cell": "0xA9B30018",
+    "x": 55.716,
+    "y": 170.816,
+    "z": 94.224,
+    "worldX": 32503.7,
+    "worldY": 34538.8,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 31011.7,
+    "worldY": 33046.8
+   },
+   "climbM": 67.6,
+   "roadFrac": 0.029,
+   "source": {
+    "name": "Holtburg",
+    "cell": 2847146009,
+    "cellHex": "0xA9B40019",
+    "x": 84.0,
+    "y": 7.1,
+    "z": 94.0,
+    "qw": 0.996917,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.078459,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Kara",
+   "usable": true,
+   "headingDeg": 202.5,
+   "quat": {
+    "w": -0.19509,
+    "x": 0,
+    "y": 0,
+    "z": -0.980785
+   },
+   "flipQuat": {
+    "w": -0.980785,
+    "x": 0,
+    "y": 0,
+    "z": 0.19509
+   },
+   "clearStart": {
+    "cell": "0xBA160037",
+    "x": 165.893,
+    "y": 158.245,
+    "z": 173.786,
+    "worldX": 35877.9,
+    "worldY": 4382.2,
+    "offsetM": 40.0
+   },
+   "corridorM": 846.0,
+   "corridorEnd": {
+    "worldX": 35554.1,
+    "worldY": 3600.6
+   },
+   "climbM": 76.9,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Kara",
+    "cell": 3122069561,
+    "cellHex": "0xBA170039",
+    "x": 181.2,
+    "y": 3.2,
+    "z": 167.7,
+    "qw": -0.848048,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.529919,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Khayyaban",
+   "usable": true,
+   "headingDeg": 101.2,
+   "quat": {
+    "w": 0.634393,
+    "x": 0,
+    "y": 0,
+    "z": -0.77301
+   },
+   "flipQuat": {
+    "w": -0.77301,
+    "x": 0,
+    "y": 0,
+    "z": -0.634393
+   },
+   "clearStart": {
+    "cell": "0x9F440029",
+    "x": 129.231,
+    "y": 16.749,
+    "z": 40.819,
+    "worldX": 30657.2,
+    "worldY": 13072.7,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 32726.7,
+    "worldY": 12661.1
+   },
+   "climbM": 70.2,
+   "roadFrac": 0.12,
+   "source": {
+    "name": "Khayyaban",
+    "cell": 2672033810,
+    "cellHex": "0x9F440012",
+    "x": 90.0,
+    "y": 24.553,
+    "z": 31.885,
+    "qw": -0.782608,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.622514,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Kryst",
+   "usable": true,
+   "headingDeg": 270.0,
+   "quat": {
+    "w": -0.707107,
+    "x": 0,
+    "y": 0,
+    "z": -0.707107
+   },
+   "flipQuat": {
+    "w": -0.707107,
+    "x": 0,
+    "y": 0,
+    "z": 0.707107
+   },
+   "clearStart": {
+    "cell": "0xE8220012",
+    "x": 68.7,
+    "y": 37.9,
+    "z": 23.733,
+    "worldX": 44612.7,
+    "worldY": 6565.9,
+    "offsetM": 64.0
+   },
+   "corridorM": 462.0,
+   "corridorEnd": {
+    "worldX": 44150.7,
+    "worldY": 6565.9
+   },
+   "climbM": 32.7,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Kryst",
+    "cell": 3894542378,
+    "cellHex": "0xE822002A",
+    "x": 132.7,
+    "y": 37.9,
+    "z": 20.1,
+    "qw": -0.866025,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.5,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Lin",
+   "usable": true,
+   "headingDeg": 22.5,
+   "quat": {
+    "w": 0.980785,
+    "x": 0,
+    "y": 0,
+    "z": -0.19509
+   },
+   "flipQuat": {
+    "w": -0.19509,
+    "x": 0,
+    "y": 0,
+    "z": -0.980785
+   },
+   "clearStart": {
+    "cell": "0xDC3C001A",
+    "x": 75.027,
+    "y": 47.729,
+    "z": 19.775,
+    "worldX": 42315.0,
+    "worldY": 11567.7,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 43122.5,
+    "worldY": 13517.1
+   },
+   "climbM": 55.5,
+   "roadFrac": 0.011,
+   "source": {
+    "name": "Lin",
+    "cell": 3694919697,
+    "cellHex": "0xDC3C0011",
+    "x": 59.72,
+    "y": 10.774,
+    "z": 18.958,
+    "qw": -0.358368,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.933581,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Linvak Tukal",
+   "usable": false,
+   "reason": "no corridor >= 250m clear of water/slope/statics",
+   "source": {
+    "name": "Linvak Tukal",
+    "cell": 2719875098,
+    "cellHex": "0xA21E001A",
+    "x": 83.0,
+    "y": 38.0,
+    "z": 560.4,
+    "qw": 1.0,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": 0.0,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Lytelthorpe",
+   "usable": true,
+   "headingDeg": 56.2,
+   "quat": {
+    "w": 0.881921,
+    "x": 0,
+    "y": 0,
+    "z": -0.471397
+   },
+   "flipQuat": {
+    "w": -0.471397,
+    "x": 0,
+    "y": 0,
+    "z": -0.881921
+   },
+   "clearStart": {
+    "cell": "0xC0800010",
+    "x": 44.982,
+    "y": 177.783,
+    "z": 32.05,
+    "worldX": 36909.0,
+    "worldY": 24753.8,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 38663.4,
+    "worldY": 25926.0
+   },
+   "climbM": 78.1,
+   "roadFrac": 0.018,
+   "source": {
+    "name": "Lytelthorpe",
+    "cell": 3229614087,
+    "cellHex": "0xC0800007",
+    "x": 11.723,
+    "y": 155.56,
+    "z": 33.028,
+    "qw": -0.402363,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.91548,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Mayoi",
+   "usable": true,
+   "headingDeg": 247.5,
+   "quat": {
+    "w": -0.55557,
+    "x": 0,
+    "y": 0,
+    "z": -0.83147
+   },
+   "flipQuat": {
+    "w": -0.83147,
+    "x": 0,
+    "y": 0,
+    "z": 0.55557
+   },
+   "clearStart": {
+    "cell": "0xE6310018",
+    "x": 70.462,
+    "y": 187.456,
+    "z": 29.565,
+    "worldX": 44230.5,
+    "worldY": 9595.5,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 42281.1,
+    "worldY": 8788.0
+   },
+   "climbM": 224.8,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Mayoi",
+    "cell": 3862036513,
+    "cellHex": "0xE6320021",
+    "x": 107.417,
+    "y": 10.763,
+    "z": 29.908,
+    "qw": -0.642788,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.766044,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Nanto",
+   "usable": true,
+   "headingDeg": 315.0,
+   "quat": {
+    "w": -0.92388,
+    "x": 0,
+    "y": 0,
+    "z": -0.382683
+   },
+   "flipQuat": {
+    "w": -0.382683,
+    "x": 0,
+    "y": 0,
+    "z": 0.92388
+   },
+   "clearStart": {
+    "cell": "0xE63E0013",
+    "x": 68.676,
+    "y": 66.006,
+    "z": 67.825,
+    "worldX": 44228.7,
+    "worldY": 11970.0,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 42736.7,
+    "worldY": 13462.0
+   },
+   "climbM": 40.8,
+   "roadFrac": 0.007,
+   "source": {
+    "name": "Nanto",
+    "cell": 3862822946,
+    "cellHex": "0xE63E0022",
+    "x": 96.96,
+    "y": 37.722,
+    "z": 74.542,
+    "qw": 0.0,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -1.0,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Neydisa",
+   "usable": true,
+   "headingDeg": 78.8,
+   "quat": {
+    "w": 0.77301,
+    "x": 0,
+    "y": 0,
+    "z": -0.634393
+   },
+   "flipQuat": {
+    "w": -0.634393,
+    "x": 0,
+    "y": 0,
+    "z": -0.77301
+   },
+   "clearStart": {
+    "cell": "0x95D6003C",
+    "x": 186.131,
+    "y": 79.104,
+    "z": 98.05,
+    "worldX": 28794.1,
+    "worldY": 41167.1,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 30863.6,
+    "worldY": 41578.7
+   },
+   "climbM": 95.9,
+   "roadFrac": 0.055,
+   "source": {
+    "name": "Neydisa",
+    "cell": 2513829939,
+    "cellHex": "0x95D60033",
+    "x": 146.9,
+    "y": 71.3,
+    "z": 99.8,
+    "qw": -0.731354,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.681998,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Outpost",
+   "usable": true,
+   "headingDeg": 101.2,
+   "quat": {
+    "w": 0.634393,
+    "x": 0,
+    "y": 0,
+    "z": -0.77301
+   },
+   "flipQuat": {
+    "w": -0.77301,
+    "x": 0,
+    "y": 0,
+    "z": -0.634393
+   },
+   "clearStart": {
+    "cell": "0x5A9C0013",
+    "x": 62.731,
+    "y": 69.296,
+    "z": 4.05,
+    "worldX": 17342.7,
+    "worldY": 30021.3,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 19412.2,
+    "worldY": 29609.7
+   },
+   "climbM": 89.8,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Outpost",
+    "cell": 1520173060,
+    "cellHex": "0x5A9C0004",
+    "x": 23.5,
+    "y": 77.1,
+    "z": 6.0,
+    "qw": 0.0,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -1.0,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Plateau",
+   "usable": true,
+   "headingDeg": 168.8,
+   "quat": {
+    "w": 0.098017,
+    "x": 0,
+    "y": 0,
+    "z": -0.995185
+   },
+   "flipQuat": {
+    "w": -0.995185,
+    "x": 0,
+    "y": 0,
+    "z": -0.098017
+   },
+   "clearStart": {
+    "cell": "0x49B60028",
+    "x": 107.904,
+    "y": 173.569,
+    "z": 240.05,
+    "worldX": 14123.9,
+    "worldY": 35117.6,
+    "offsetM": 40.0
+   },
+   "corridorM": 846.0,
+   "corridorEnd": {
+    "worldX": 14289.0,
+    "worldY": 34287.8
+   },
+   "climbM": 20.6,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Plateau",
+    "cell": 1236729889,
+    "cellHex": "0x49B70021",
+    "x": 100.1,
+    "y": 20.8,
+    "z": 238.6,
+    "qw": -0.587785,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.809017,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Qalabar",
+   "usable": true,
+   "headingDeg": 33.8,
+   "quat": {
+    "w": 0.95694,
+    "x": 0,
+    "y": 0,
+    "z": -0.290285
+   },
+   "flipQuat": {
+    "w": -0.290285,
+    "x": 0,
+    "y": 0,
+    "z": -0.95694
+   },
+   "clearStart": {
+    "cell": "0x9722003B",
+    "x": 190.577,
+    "y": 57.877,
+    "z": 102.05,
+    "worldX": 29182.6,
+    "worldY": 6585.9,
+    "offsetM": 40.0
+   },
+   "corridorM": 1606.0,
+   "corridorEnd": {
+    "worldX": 30074.8,
+    "worldY": 7921.2
+   },
+   "climbM": 222.7,
+   "roadFrac": 0.005,
+   "source": {
+    "name": "Qalabar",
+    "cell": 2535587898,
+    "cellHex": "0x9722003A",
+    "x": 168.354,
+    "y": 24.618,
+    "z": 102.005,
+    "qw": -0.92279,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.385302,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Redspire",
+   "usable": true,
+   "headingDeg": 348.8,
+   "quat": {
+    "w": -0.995185,
+    "x": 0,
+    "y": 0,
+    "z": -0.098017
+   },
+   "flipQuat": {
+    "w": -0.098017,
+    "x": 0,
+    "y": 0,
+    "z": 0.995185
+   },
+   "clearStart": {
+    "cell": "0x17B20025",
+    "x": 117.016,
+    "y": 104.272,
+    "z": 44.739,
+    "worldX": 4533.0,
+    "worldY": 34280.3,
+    "offsetM": 80.0
+   },
+   "corridorM": 2070.0,
+   "corridorEnd": {
+    "worldX": 4129.2,
+    "worldY": 36310.5
+   },
+   "climbM": 71.3,
+   "roadFrac": 0.004,
+   "source": {
+    "name": "Redspire",
+    "cell": 397541418,
+    "cellHex": "0x17B2002A",
+    "x": 132.623,
+    "y": 25.809,
+    "z": 44.005,
+    "qw": 0.998483,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.055063,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Refuge",
+   "usable": true,
+   "headingDeg": 168.8,
+   "quat": {
+    "w": 0.098017,
+    "x": 0,
+    "y": 0,
+    "z": -0.995185
+   },
+   "flipQuat": {
+    "w": -0.995185,
+    "x": 0,
+    "y": 0,
+    "z": -0.098017
+   },
+   "clearStart": {
+    "cell": "0xF6810037",
+    "x": 164.429,
+    "y": 147.7,
+    "z": 56.348,
+    "worldX": 47396.4,
+    "worldY": 24915.7,
+    "offsetM": 96.0
+   },
+   "corridorM": 1894.0,
+   "corridorEnd": {
+    "worldX": 47765.9,
+    "worldY": 23058.1
+   },
+   "climbM": 120.7,
+   "roadFrac": 0.016,
+   "source": {
+    "name": "Refuge",
+    "cell": 4135714867,
+    "cellHex": "0xF6820033",
+    "x": 145.7,
+    "y": 49.855,
+    "z": 58.005,
+    "qw": -0.467544,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.88397,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Rithwic",
+   "usable": true,
+   "headingDeg": 0.0,
+   "quat": {
+    "w": 1.0,
+    "x": 0,
+    "y": 0,
+    "z": -0.0
+   },
+   "flipQuat": {
+    "w": 0.0,
+    "x": 0,
+    "y": 0,
+    "z": -1.0
+   },
+   "clearStart": {
+    "cell": "0xC98D0022",
+    "x": 113.666,
+    "y": 38.259,
+    "z": 22.05,
+    "worldX": 38705.7,
+    "worldY": 27110.3,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 38705.7,
+    "worldY": 29220.3
+   },
+   "climbM": 43.5,
+   "roadFrac": 0.004,
+   "source": {
+    "name": "Rithwic",
+    "cell": 3381395496,
+    "cellHex": "0xC98C0028",
+    "x": 113.666,
+    "y": 190.259,
+    "z": 22.005,
+    "qw": -0.707107,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.707107,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Samsur",
+   "usable": true,
+   "headingDeg": 146.2,
+   "quat": {
+    "w": 0.290285,
+    "x": 0,
+    "y": 0,
+    "z": -0.95694
+   },
+   "flipQuat": {
+    "w": -0.95694,
+    "x": 0,
+    "y": 0,
+    "z": -0.290285
+   },
+   "clearStart": {
+    "cell": "0x977B0012",
+    "x": 48.034,
+    "y": 40.594,
+    "z": 0.078,
+    "worldX": 29040.0,
+    "worldY": 23656.6,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 30212.3,
+    "worldY": 21902.2
+   },
+   "climbM": 68.0,
+   "roadFrac": 0.029,
+   "source": {
+    "name": "Samsur",
+    "cell": 2541420556,
+    "cellHex": "0x977B000C",
+    "x": 25.811,
+    "y": 73.853,
+    "z": 0.005,
+    "qw": 0.92995,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.367686,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Sanamar",
+   "usable": true,
+   "headingDeg": 348.8,
+   "quat": {
+    "w": -0.995185,
+    "x": 0,
+    "y": 0,
+    "z": -0.098017
+   },
+   "flipQuat": {
+    "w": -0.098017,
+    "x": 0,
+    "y": 0,
+    "z": 0.995185
+   },
+   "clearStart": {
+    "cell": "0x33D90010",
+    "x": 45.053,
+    "y": 170.917,
+    "z": 52.05,
+    "worldX": 9837.1,
+    "worldY": 41834.9,
+    "offsetM": 72.0
+   },
+   "corridorM": 2038.0,
+   "corridorEnd": {
+    "worldX": 9439.5,
+    "worldY": 43833.8
+   },
+   "climbM": 62.0,
+   "roadFrac": 0.004,
+   "source": {
+    "name": "Sanamar",
+    "cell": 869859349,
+    "cellHex": "0x33D90015",
+    "x": 59.1,
+    "y": 100.3,
+    "z": 52.005,
+    "qw": 0.0,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -1.0,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Sawato",
+   "usable": true,
+   "headingDeg": 236.2,
+   "quat": {
+    "w": -0.471397,
+    "x": 0,
+    "y": 0,
+    "z": -0.881921
+   },
+   "flipQuat": {
+    "w": -0.881921,
+    "x": 0,
+    "y": 0,
+    "z": 0.471397
+   },
+   "clearStart": {
+    "cell": "0xC85A0040",
+    "x": 173.541,
+    "y": 170.077,
+    "z": 12.05,
+    "worldX": 38573.5,
+    "worldY": 17450.1,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 36819.1,
+    "worldY": 16277.8
+   },
+   "climbM": 60.4,
+   "roadFrac": 0.105,
+   "source": {
+    "name": "Sawato",
+    "cell": 3378184193,
+    "cellHex": "0xC95B0001",
+    "x": 14.8,
+    "y": 0.3,
+    "z": 12.0,
+    "qw": 0.930418,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.366501,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Shoushi",
+   "usable": true,
+   "headingDeg": 157.5,
+   "quat": {
+    "w": 0.19509,
+    "x": 0,
+    "y": 0,
+    "z": -0.980785
+   },
+   "flipQuat": {
+    "w": -0.980785,
+    "x": 0,
+    "y": 0,
+    "z": -0.19509
+   },
+   "clearStart": {
+    "cell": "0xDA540030",
+    "x": 133.783,
+    "y": 172.743,
+    "z": 20.05,
+    "worldX": 41989.8,
+    "worldY": 16300.7,
+    "offsetM": 128.0
+   },
+   "corridorM": 2022.0,
+   "corridorEnd": {
+    "worldX": 42763.6,
+    "worldY": 14432.7
+   },
+   "climbM": 30.8,
+   "roadFrac": 0.011,
+   "source": {
+    "name": "Shoushi",
+    "cell": 3663003677,
+    "cellHex": "0xDA55001D",
+    "x": 84.8,
+    "y": 99.0,
+    "z": 20.0,
+    "qw": 1.0,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": 0.0,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Silyun",
+   "usable": true,
+   "headingDeg": 168.8,
+   "quat": {
+    "w": 0.098017,
+    "x": 0,
+    "y": 0,
+    "z": -0.995185
+   },
+   "flipQuat": {
+    "w": -0.995185,
+    "x": 0,
+    "y": 0,
+    "z": -0.098017
+   },
+   "clearStart": {
+    "cell": "0x27EC0001",
+    "x": 4.216,
+    "y": 8.332,
+    "z": 80.05,
+    "worldX": 7492.2,
+    "worldY": 45320.3,
+    "offsetM": 104.0
+   },
+   "corridorM": 1478.0,
+   "corridorEnd": {
+    "worldX": 7780.6,
+    "worldY": 43870.7
+   },
+   "climbM": 27.1,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Silyun",
+    "cell": 653000765,
+    "cellHex": "0x26EC003D",
+    "x": 175.927,
+    "y": 110.334,
+    "z": 80.005,
+    "qw": 0.673993,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.738738,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Stonehold",
+   "usable": true,
+   "headingDeg": 213.8,
+   "quat": {
+    "w": -0.290285,
+    "x": 0,
+    "y": 0,
+    "z": -0.95694
+   },
+   "flipQuat": {
+    "w": -0.95694,
+    "x": 0,
+    "y": 0,
+    "z": 0.290285
+   },
+   "clearStart": {
+    "cell": "0x64D50001",
+    "x": 7.777,
+    "y": 16.741,
+    "z": 74.741,
+    "worldX": 19207.8,
+    "worldY": 40912.7,
+    "offsetM": 40.0
+   },
+   "corridorM": 1494.0,
+   "corridorEnd": {
+    "worldX": 18377.8,
+    "worldY": 39670.5
+   },
+   "climbM": 130.5,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Stonehold",
+    "cell": 1691680779,
+    "cellHex": "0x64D5000B",
+    "x": 30.0,
+    "y": 50.0,
+    "z": 78.0,
+    "qw": 0.843391,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.5373,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Timaru",
+   "usable": true,
+   "headingDeg": 33.8,
+   "quat": {
+    "w": 0.95694,
+    "x": 0,
+    "y": 0,
+    "z": -0.290285
+   },
+   "flipQuat": {
+    "w": -0.290285,
+    "x": 0,
+    "y": 0,
+    "z": -0.95694
+   },
+   "clearStart": {
+    "cell": "0x1DB6001F",
+    "x": 93.61,
+    "y": 167.55,
+    "z": 89.851,
+    "worldX": 5661.6,
+    "worldY": 35111.5,
+    "offsetM": 40.0
+   },
+   "corridorM": 1110.0,
+   "corridorEnd": {
+    "worldX": 6278.3,
+    "worldY": 36034.5
+   },
+   "climbM": 20.1,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Timaru",
+    "cell": 498466838,
+    "cellHex": "0x1DB60016",
+    "x": 71.3873,
+    "y": 134.291,
+    "z": 90.005,
+    "qw": 0.707107,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.707107,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Tou-Tou",
+   "usable": true,
+   "headingDeg": 191.2,
+   "quat": {
+    "w": -0.098017,
+    "x": 0,
+    "y": 0,
+    "z": -0.995185
+   },
+   "flipQuat": {
+    "w": -0.995185,
+    "x": 0,
+    "y": 0,
+    "z": 0.098017
+   },
+   "clearStart": {
+    "cell": "0xF5590032",
+    "x": 144.786,
+    "y": 41.569,
+    "z": 20.05,
+    "worldX": 47184.8,
+    "worldY": 17129.6,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 46773.1,
+    "worldY": 15060.1
+   },
+   "climbM": 166.6,
+   "roadFrac": 0.018,
+   "source": {
+    "name": "Tou-Tou",
+    "cell": 4116250676,
+    "cellHex": "0xF5590034",
+    "x": 152.59,
+    "y": 80.8,
+    "z": 20.005,
+    "qw": 0.92388,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.382683,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Tufa",
+   "usable": true,
+   "headingDeg": 191.2,
+   "quat": {
+    "w": -0.098017,
+    "x": 0,
+    "y": 0,
+    "z": -0.995185
+   },
+   "flipQuat": {
+    "w": -0.995185,
+    "x": 0,
+    "y": 0,
+    "z": 0.098017
+   },
+   "clearStart": {
+    "cell": "0x866C003E",
+    "x": 181.514,
+    "y": 124.13,
+    "z": 12.302,
+    "worldX": 25909.5,
+    "worldY": 20860.1,
+    "offsetM": 64.0
+   },
+   "corridorM": 2086.0,
+   "corridorEnd": {
+    "worldX": 25502.6,
+    "worldY": 18814.2
+   },
+   "climbM": 75.3,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Tufa",
+    "cell": 2272002056,
+    "cellHex": "0x876C0008",
+    "x": 2.0,
+    "y": 186.9,
+    "z": 18.0,
+    "qw": -0.707107,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.707107,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Uziz",
+   "usable": true,
+   "headingDeg": 56.2,
+   "quat": {
+    "w": 0.881921,
+    "x": 0,
+    "y": 0,
+    "z": -0.471397
+   },
+   "flipQuat": {
+    "w": -0.471397,
+    "x": 0,
+    "y": 0,
+    "z": -0.881921
+   },
+   "clearStart": {
+    "cell": "0xA360000D",
+    "x": 24.178,
+    "y": 110.157,
+    "z": 20.05,
+    "worldX": 31320.2,
+    "worldY": 18542.2,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 33074.6,
+    "worldY": 19714.4
+   },
+   "climbM": 69.8,
+   "roadFrac": 0.029,
+   "source": {
+    "name": "Uziz",
+    "cell": 2724200508,
+    "cellHex": "0xA260003C",
+    "x": 182.919,
+    "y": 87.934,
+    "z": 20.005,
+    "qw": -0.363463,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.931609,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Westwatch",
+   "usable": true,
+   "headingDeg": 0.0,
+   "quat": {
+    "w": 1.0,
+    "x": 0,
+    "y": 0,
+    "z": -0.0
+   },
+   "flipQuat": {
+    "w": 0.0,
+    "x": 0,
+    "y": 0,
+    "z": -1.0
+   },
+   "clearStart": {
+    "cell": "0x23DA0030",
+    "x": 140.9,
+    "y": 190.0,
+    "z": 11.275,
+    "worldX": 6860.9,
+    "worldY": 42046.0,
+    "offsetM": 104.0
+   },
+   "corridorM": 2046.0,
+   "corridorEnd": {
+    "worldX": 6860.9,
+    "worldY": 44092.0
+   },
+   "climbM": 142.0,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Westwatch",
+    "cell": 601489452,
+    "cellHex": "0x23DA002C",
+    "x": 140.9,
+    "y": 86.0,
+    "z": 2.005,
+    "qw": -0.406737,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.913545,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Xarabydun",
+   "usable": true,
+   "headingDeg": 213.8,
+   "quat": {
+    "w": -0.290285,
+    "x": 0,
+    "y": 0,
+    "z": -0.95694
+   },
+   "flipQuat": {
+    "w": -0.95694,
+    "x": 0,
+    "y": 0,
+    "z": 0.290285
+   },
+   "clearStart": {
+    "cell": "0x934A001F",
+    "x": 86.077,
+    "y": 164.841,
+    "z": 13.787,
+    "worldX": 28310.1,
+    "worldY": 14372.8,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 27137.8,
+    "worldY": 12618.4
+   },
+   "climbM": 87.4,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Xarabydun",
+    "cell": 2471165985,
+    "cellHex": "0x934B0021",
+    "x": 108.3,
+    "y": 6.1,
+    "z": 18.1,
+    "qw": -0.964557,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.263873,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Yanshi",
+   "usable": true,
+   "headingDeg": 157.5,
+   "quat": {
+    "w": 0.19509,
+    "x": 0,
+    "y": 0,
+    "z": -0.980785
+   },
+   "flipQuat": {
+    "w": -0.980785,
+    "x": 0,
+    "y": 0,
+    "z": -0.19509
+   },
+   "clearStart": {
+    "cell": "0xB46F001C",
+    "x": 90.507,
+    "y": 87.145,
+    "z": 28.508,
+    "worldX": 34650.5,
+    "worldY": 21399.1,
+    "offsetM": 40.0
+   },
+   "corridorM": 2110.0,
+   "corridorEnd": {
+    "worldX": 35458.0,
+    "worldY": 19449.8
+   },
+   "climbM": 47.1,
+   "roadFrac": 0.025,
+   "source": {
+    "name": "Yanshi",
+    "cell": 3027173406,
+    "cellHex": "0xB46F001E",
+    "x": 75.2,
+    "y": 124.1,
+    "z": 34.69,
+    "qw": 1.0,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": 0.0,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Yaraq",
+   "usable": true,
+   "headingDeg": 33.8,
+   "quat": {
+    "w": 0.95694,
+    "x": 0,
+    "y": 0,
+    "z": -0.290285
+   },
+   "flipQuat": {
+    "w": -0.290285,
+    "x": 0,
+    "y": 0,
+    "z": -0.95694
+   },
+   "clearStart": {
+    "cell": "0x7D640017",
+    "x": 67.456,
+    "y": 157.814,
+    "z": 12.05,
+    "worldX": 24067.5,
+    "worldY": 19357.8,
+    "offsetM": 64.0
+   },
+   "corridorM": 1340.0,
+   "corridorEnd": {
+    "worldX": 24811.9,
+    "worldY": 20472.0
+   },
+   "climbM": 97.7,
+   "roadFrac": 0.018,
+   "source": {
+    "name": "Yaraq",
+    "cell": 2103705613,
+    "cellHex": "0x7D64000D",
+    "x": 31.9,
+    "y": 104.6,
+    "z": 11.9,
+    "qw": 0.577145,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.816642,
+    "outdoor": true
+   }
+  },
+  {
+   "poi": "Zaikhal",
+   "usable": true,
+   "headingDeg": 225.0,
+   "quat": {
+    "w": -0.382683,
+    "x": 0,
+    "y": 0,
+    "z": -0.92388
+   },
+   "flipQuat": {
+    "w": -0.92388,
+    "x": 0,
+    "y": 0,
+    "z": 0.382683
+   },
+   "clearStart": {
+    "cell": "0x7F8F0037",
+    "x": 160.696,
+    "y": 151.52,
+    "z": 124.05,
+    "worldX": 24544.7,
+    "worldY": 27607.5,
+    "offsetM": 136.0
+   },
+   "corridorM": 1478.0,
+   "corridorEnd": {
+    "worldX": 23499.6,
+    "worldY": 26562.4
+   },
+   "climbM": 129.2,
+   "roadFrac": 0.0,
+   "source": {
+    "name": "Zaikhal",
+    "cell": 2156920851,
+    "cellHex": "0x80900013",
+    "x": 64.863,
+    "y": 55.687,
+    "z": 124.005,
+    "qw": -0.929883,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": -0.367857,
+    "outdoor": true
+   }
+  }
+ ]
+}
