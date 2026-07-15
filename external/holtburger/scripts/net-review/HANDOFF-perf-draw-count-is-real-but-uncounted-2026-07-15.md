@@ -1,4 +1,9 @@
-# HANDOFF — the frame IS draw-bound. The counter we measured it with is blind to 78% of the draws.
+# HANDOFF — the draw counter was blind (3.9×). Fixing it did NOT make draws the cause: the frame is bound by PER-OBJECT work.
+
+> **Read §4c first.** This document's original title said "the frame IS draw-bound". A profile then killed that:
+> cutting TRUE draws **−63%** bought only **−10.5%** CPU, and the top self-time item is **`getParameters` (10.2%)** —
+> three's program-resolve path (~19%), not draw submission. The **counter really was blind** (that stands), but
+> **a better metric is not a mechanism.** The title is kept in the filename for continuity; the thesis is corrected below.
 
 **Date:** 2026-07-15 · **Box:** wbterminal laptop → 1070 (tailscale, CDP :9333, real GPU) · **Self-contained.**
 Supersedes `HANDOFF-perf-cpu-bound-submission-2026-07-15.md` (`94e357f2`/`fb212e4d`). Its §3.1 directive
@@ -18,19 +23,29 @@ net-review=`$REPO/external/holtburger/scripts/net-review`.
 - **⭐ `statics` is 78% of the REAL draws (5,791/frame) while `info.calls` reported 9.5% (183/frame).**
   It is also 59% of render CPU. Those two facts only agree once the counter is corrected — and they now
   agree exactly. §2.
-- **The predecessor's thesis SURVIVES, but its aim does not.** "The next lever is draw-call COUNT" is
-  RIGHT: at ~7,500 real draws and ~2.4-12 µs each, submission is the frame. But a census taken through
-  `info.calls` — which is what §3.1 asked for — points at `cells` (39.9% of counted draws, 12.8% of CPU)
-  and away from `statics`. **The instrument the plan specified cannot see the target the plan wanted.** §1.
-- **`BatchedMesh` is NOT the bug. It is the cheapest path in the frame** — 2.4 µs per real draw, vs 4.7 µs
-  (cells), 7.9 µs (entities), 11.7 µs (plain statics). It is working as designed. What it does *not* do is
-  reduce the number of real draws: it saves state binds, not draws. §3.
+- **⚠ The predecessor's "draw-call COUNT is the lever" thesis is now REFUTED — by building it (§4b).**
+  `?walkInInstance` cut TRUE draws **7,563 → 2,761 (−63%)** and renderCPU moved only **28.14 → 25.19 ms
+  (−10.5%)**; the ~2.4 µs/real-draw model predicted ~11.5 ms. What survives is narrower and still useful:
+  a census read through `info.calls` **cannot see the target at all** (it ranks `cells` 4× above `statics`,
+  which owns 78% of real draws). **The instrument was broken AND the thesis was wrong** — two separate
+  errors that happened to point the same way. §2, §4b, §4c.
+- **`BatchedMesh` is NOT the bug** — it is working as designed: it saves state binds, not draws (one
+  multiDraw range per instance). ⚠ The per-draw µs figures this document derived from it (2.4 / 4.7 / 7.9 /
+  11.7) are **NOT a cost model** — dividing a subtree's CPU by its draws assumes draws cause that CPU, and
+  §4b proved they mostly do not. Do not plan with them. §3, §4b.
 - **⭐ THE LEAD: INSTANCE the batched statics. ~17,774 → ~375 real draws.** The "singletons" are not
   singletons: **17,774 instances share only 324 distinct geometries (54.9×)**, and the top geometry is drawn
   **1,736 times**. Root cause: the **walk-in/streaming baker never instances anything** — it emits one plain
   Mesh per placement (`statics.js:2023`), and only the ring-wide baker groups by modelId (`:2723`). §4.
-- **Two hypotheses died here, both mine, both by measurement.** The `needsUpdate`/program-churn suspect and
-  the `BatchedMesh.onBeforeRender` per-frame-walk suspect. §1. Neither should be re-inherited.
+- **⭐⭐ THE PROFILE SETTLES IT (§4c): the frame is bound by PER-OBJECT work, not draws.** Program resolve
+  **~19%** of main-thread samples (`getParameters` alone **10.2%**, the #1 item), matrix updates ~9%, scene
+  walk ~4%, BatchedMesh walk ~5%; ~72% is inside three, only ~6% is app JS. **`?walkInInstance` won its
+  −10.5% by removing OBJECTS to resolve programs for — not by removing draws.**
+- **I owe the predecessor an apology: its ⭐⭐ §3.2 `needsUpdate`→program-churn lead is REAL.** I killed it
+  because its *evidence* (the 66 µs anomaly) was a denominator artifact — but the MECHANISM it named is the
+  biggest cost in the frame. **Refuting a claim's evidence is not refuting the claim.** §4c, §1.
+- **One hypothesis genuinely died:** the `BatchedMesh.onBeforeRender` per-frame-walk suspect (mine, refuted
+  by its own A/B at 1.60 ms = noise). §1.
 - **`?perPolyCull` (predecessor §3.3) and the §4 backlog are UNTOUCHED and still owed.** I did not go near
   them; the user's account of perPolyCull and the portalStencil coupling stand exactly as recorded.
 
@@ -39,7 +54,7 @@ net-review=`$REPO/external/holtburger/scripts/net-review`.
 | Claim (and where it came from) | Verdict |
 |---|---|
 | "**the next lever is draw-call COUNT**" (predecessor §3.1, its ⭐ headline) | **RIGHT, AND AIMED WRONG.** The frame is draw-bound — but at **~7,500** real draws, not 1,920, and the group that owns them (`statics`, 78%) is the one `info.calls` makes look smallest (9.5%). §3.1 said "pick the target from a census"; the census it specified, read through `info.calls`, ranks `cells` (768 counted draws) **4× above** `statics` (183). Following the instruction with the specified instrument selects the wrong target. The thesis is kept; the instrument is replaced. §2. |
-| "**~66 µs per draw is ~10× what a draw costs** — something per-object per-frame is expensive in three's submission; prime suspect `needsUpdate` → program re-resolve; **this may be a WHOLE-CODEBASE lever**" (predecessor §3.2, its ⭐⭐) | **DISSOLVED — there was never an anomaly.** 66 µs was ~26 real draws wearing one number's clothing. Corrected for the undercount, every path lands at 2.4–11.7 µs/draw, i.e. **ordinary**. The per-object-cost mystery that this whole lead existed to explain **does not exist**, so the `needsUpdate` refactor it proposed has no motivating measurement. §2/§3. (Its rule — *isolate before refactoring* — is what killed it. It was right to demand that.) |
+| "**~66 µs per draw is ~10× what a draw costs** — something per-object per-frame is expensive in three's submission; prime suspect `needsUpdate` → program re-resolve; **this may be a WHOLE-CODEBASE lever**" (predecessor §3.2, its ⭐⭐) | **HALF RIGHT — AND I KILLED THE RIGHT HALF. ⚠ SEE §4c.** The 66 µs *number* was a denominator artifact (~26 real draws counted as one), so I declared the whole lead dead — including its MECHANISM, which a CPU profile then found to be **the single largest self-time item in the frame** (`getParameters` 10.2%; the program-resolve path ~19%). Its sentence "something per-object per-frame is expensive in three's submission" is **CORRECT**, and `needsUpdate` → `getProgram` → `getParameters` + cache-key-string was the **right suspect**, confirmed in three r184 source (§4c). **Refuting a claim's evidence is not refuting the claim.** The original verdict below is kept so the error is legible: | **DISSOLVED — there was never an anomaly.** 66 µs was ~26 real draws wearing one number's clothing. Corrected for the undercount, every path lands at 2.4–11.7 µs/draw, i.e. **ordinary**. The per-object-cost mystery that this whole lead existed to explain **does not exist**, so the `needsUpdate` refactor it proposed has no motivating measurement. §2/§3. (Its rule — *isolate before refactoring* — is what killed it. It was right to demand that.) |
 | "the 508 BatchedMesh cost 13.93 ms because `onBeforeRender` walks every instance every frame (`perObjectFrustumCulled`/`sortObjects` default ON, `three.core.js:27218`)" (**MINE**, this session, from a source read) | **REFUTED BY ITS OWN A/B — and the source read was also wrong about our app.** `batchedmesh-flags-ab.mjs` found the live defaults are **`{pofc: true, sort: FALSE}`** — our code already disables sorting, so my "both default ON" was true of three and false of us. Killing the walk **entirely** (both flags off) saves **1.60 ms** (reps 2.6 / 0.61) against a **1.62 ms** baseline spread and a **±2.8 ms** placebo swing: **inside noise**. The walk is not the cost. §3. |
 | "hiding `statics` gives **+96% fps**" (`draw-budget-probe.mjs` first run) | **A VSYNC ARTIFACT, not a 2× win.** Every p50 in this chain is a multiple of ~8.3 ms (33.4 / 16.7 / 8.3 = 4 / 2 / 1 intervals of a **120 Hz** rAF). fps is a STEP function of frame cost, so an arm reads +96% or +0% for the same ms saved depending on which side of a step it lands. The predecessor's §5.5 ("use draws and renderCPU; fps is only safe when the effect dwarfs the drift") is CORRECT and this is the mechanism behind it. |
 | "`GROUPS=statics,entities,terrain,worldRoot`" (the default in `draw-budget-probe.mjs`) | **INCOMPLETE — it silently omitted 40% of the budget.** `worldRoot`'s children are terrain, buildings, statics, **cells**, entities (`index.js:1162-1167`). The arms summed to 1,133 draws against worldRoot's 1,901; the missing ~768 were `cells`, and nothing in the output said so. `draw-budget-cpu.mjs` enumerates the children from the LIVE graph and prints a parts-vs-whole reconciliation, which now closes to **−1.8 draws**. |
@@ -236,10 +251,58 @@ inferred ~2.4 µs/real-draw it predicted **~11.5 ms**; it delivered **2.95**. So
 - **Do NOT extrapolate the remaining 2,761 draws to another ~7 ms.** That is the same arithmetic that just
   failed by 4×.
 
-**So where IS the ~25 ms?** UNKNOWN, and it should be answered by a PROFILE, not a fifth story.
-`cpu-profile-probe.mjs` (committed, `c83535d9`) takes a V8 CPU profile (CDP Profiler, 100 µs) of a settled
-Holtburg and buckets self-time — submission vs the scene walk (which scales with NODE count, not draws) vs
-program resolve vs app JS. **Run it before proposing any further lever.**
+## 4c. ⭐⭐ THE PROFILE — and I OWE THE PREDECESSOR AN APOLOGY: its §3.2 lead is REAL
+
+`cpu-profile-probe.mjs` was run on both arms (settled Holtburg, 1070, CDP Profiler @100 µs, 14 s). **Top
+SELF-time, share of all main-thread samples:**
+
+| | OFF (default) | ON (`?walkInInstance`) |
+|---|---|---|
+| **`getParameters`** three.module.js:7431 | **10.2%** ← #1 | 4.8% |
+| `setProgram` :18266 | 4.7% | 5.9% |
+| `getProgram` :18087 | 4.0% | 2.2% |
+| **program-resolve path (sum)** | **~18.9%** | **~12.9%** |
+| `updateMatrixWorld` + `multiplyMatrices` | 9.3% | 11.4% |
+| `onBeforeRender` (BatchedMesh walk) | 4.7% | *falls out of the top* |
+| `projectObject` (scene walk) | 3.6% | 5.4% |
+| bucket: three (render/submit) | 71.7% | 69.2% |
+| bucket: app scene3d | 6.1% | 7.7% |
+
+**I WAS WRONG TO KILL §3.2 WHOLESALE (see §1).** The predecessor guessed: *"`needsUpdate` bumps
+`material.version`, which forces `getProgram` to re-resolve — a path that builds a program cache-key STRING
+per call."* I dissolved that lead because its *evidence* (the "66 µs/draw anomaly") was a denominator
+artifact. **The anomaly was fake; the MECHANISM is real, and it is the single largest self-time item in the
+frame.** Confirmed in three r184 source, not inferred:
+```js
+// three.module.js:18420  setProgram
+if ( material.version === materialProperties.__version ) { /* …many other triggers… */ }
+else { needsProgramChange = true; materialProperties.__version = material.version; }  // version bump ⇒ ALWAYS
+if ( needsProgramChange === true ) program = getProgram( material, scene, object );
+// three.module.js:18098-18099  getProgram — BOTH run BEFORE the "identical program" early-out at :18127
+const parameters      = programCache.getParameters( … );        // ← 10.2% SELF
+const programCacheKey = programCache.getProgramCacheKey( parameters );   // builds a STRING
+```
+`getProgram` pays `getParameters` + a cache-key **string build** on EVERY call, and only *then* checks
+whether the program even changed. So a per-frame `needsUpdate = true` writer is expensive exactly as the
+predecessor claimed — and the two-pass it originally blamed is already FIXED (`?surfaceSinglePass`), yet
+`getParameters` is STILL #1. **Something else is still bumping `material.version` per frame.**
+
+**⭐ THAT IS THE NEXT LEVER, and it is now MOTIVATED BY A PROFILE rather than by arithmetic.** The
+predecessor's own instruction stands and should finally be carried out: `rg -n 'needsUpdate\s*=\s*true'
+scene3d/` (**65 hits**; the material-bearing ones cluster in `materials.js` — :509, :718, :1070, :1253,
+:1289, :1383, :1767 — and `entities.js` :5173, :14668) **and ask of each: does this run per FRAME, or
+once?** Then micro-bench before refactoring (its rule, and it was right). Note `play_effect_vfx.js:523`
+already documents *not* setting it per frame — precedent that this class of bug was found here before.
+
+**Why `?walkInInstance` won −10.5%, mechanically:** `getParameters` 10.2 → 4.8% and the BatchedMesh
+`onBeforeRender` walk drops out — i.e. **the win came from fewer OBJECTS to resolve programs for, not from
+fewer draws.** That is the same conclusion the draw-mismatch forced, arrived at independently.
+
+**Where the ~25 ms goes, finally:** three's per-object submission machinery — **program resolve ~19%**,
+scene-graph matrix updates ~9%, scene walk ~4%, BatchedMesh walk ~5%, plus buffer binds and uniform
+uploads. **There is no single dominant draw cost.** ~72% of samples are inside three; only ~6% is app JS.
+The frame is bound by **per-object work**, and both `updateMatrixWorld` and `projectObject` scale with NODE
+count — which is why draw-count levers keep underdelivering.
 
 **Whether to flip `?walkInInstance` default-ON is NOT settled, and I recommend against it on this evidence:**
 −10.5% CPU is bought with **+23% tris** and two visual regressions (§4: one LOD level per LB-spanning node;
@@ -309,17 +372,28 @@ matters most: distance), not a bare-default flip.
 6. **A CENSUS MUST RECONCILE PARTS TO WHOLE.** The first probe's arms summed to 1,133 of worldRoot's 1,901
    and said nothing. Enumerate children from the LIVE graph (never a hardcoded list) and PRINT the residual;
    `unattributed −1.8 draws` is a passing test, `unattributed 768` is a missing group named `cells`.
-7. **fps here is vsync-quantized to ~8.3 ms steps (120 Hz rAF).** It is a step function of frame cost: the
+7. **REFUTING A CLAIM'S EVIDENCE IS NOT REFUTING THE CLAIM.** THE rule of this session's second half. The
+   predecessor's ⭐⭐ lead ("something per-object per-frame is expensive in three's submission; suspect
+   `needsUpdate` → program re-resolve") rested on a 66 µs figure that was a denominator artifact. I killed
+   the number — correctly — and threw the mechanism out with it, writing "no motivating measurement". A
+   profile then found that exact mechanism is the **single largest self-time item in the frame**
+   (`getParameters` 10.2%). **When you refute the evidence for a claim, the claim returns to UNKNOWN, not to
+   FALSE.** Say which one you killed. §4c.
+8. **A PROFILE BEFORE A FIFTH STORY.** Four sessions named this frame's cost from deltas — fill rate
+   (refuted), `needsUpdate` churn (dissolved, then vindicated), the BatchedMesh walk (refuted), draw count
+   (refuted by building it). One 14-second CDP `Profiler` run answered it. Nobody had taken one.
+   `cpu-profile-probe.mjs` costs one page load; a wrong lever costs a session. **Profile first.**
+9. **fps here is vsync-quantized to ~8.3 ms steps (120 Hz rAF).** It is a step function of frame cost: the
    same ms saved reads +96% or +0% depending on where it lands. This is the *mechanism* behind the
    predecessor's "use draws and renderCPU, not fps" — it is not conservatism, it is quantization.
-8. **HASH THE DATA; DO NOT TRUST THE NAME.** Everything called these nodes "singletons" — the function name
+10. **HASH THE DATA; DO NOT TRUST THE NAME.** Everything called these nodes "singletons" — the function name
    (`consolidateStaticSingletons`), the comments, memory's "5,400-singleton wall", and my own §4 draft.
    They are 54.9× duplicated. **One probe that hashed vertex data beat four sessions of a plausible name.**
    When a name asserts a property that decides your fix (unique / cached / deduped / singleton), measure
    the property. And when a code read tells you a dedupe exists (`static_batch_x.js:16` "chunks still
    dedupe geometry cross-LB"), check what it is keyed on — `gidOf` keys on **object identity**, and 2,786
    distinct objects carried 324 distinct datasets.
-9. **IF AN ARM CAN'T HOLD A RESOURCE THE OTHER ARM ALSO NEEDS, ORDER IS A VARIABLE — BALANCE IT.** The
+11. **IF AN ARM CAN'T HOLD A RESOURCE THE OTHER ARM ALSO NEEDS, ORDER IS A VARIABLE — BALANCE IT.** The
    single-login gap made "did this arm settle?" depend on *the previous arm's outcome*, so strict `off,on`
    alternation pinned every ON arm to the post-success slot and manufactured 2/2 ON failures that read as
    "the flag breaks the world" (§8). A fixed gap is not a fixed condition. **Balance the order across reps,
@@ -327,7 +401,7 @@ matters most: distance), not a bare-default flip.
    effects are rarely that tidy.** The tell was that the same flag had settled fine in a manual run minutes
    earlier; a 100%-clean split between "my code" and "not my code" should prompt a look at the harness
    before the code.
-10. **A FLAG CAN ROUTE AROUND THE FILE YOU ARE READING.** I cited `statics.js:1650` as the live batcher; the
+12. **A FLAG CAN ROUTE AROUND THE FILE YOU ARE READING.** I cited `statics.js:1650` as the live batcher; the
    default-ON `?statBatchChunk` routes to `static_batch_x.js` instead, and the live node names said so
    (`static-batch-c-r57x61-…`). **Read the object names out of the settled scene before citing a builder** —
    same family as the predecessor's §6.1 ("grepping creation sites tells you what you PATCHED, not what
@@ -353,7 +427,7 @@ matters most: distance), not a bare-default flip.
   abort-if-not-settled; hide-via-accessor so the per-frame cullers cannot re-assert `visible`.
 - Inherited and unchanged: `forcesinglepass-{ab,parity}.mjs`, `singlepass-eyetest.mjs`,
   `particle-{k-probe,pass-attrib,instancing-ab}.mjs`, `settle.mjs` (read its header), `town-fps-probe.mjs`.
-- **Artifacts:** `/mnt/wbterminal2/tmp/{draw-budget,draw-budget-cpu,statics-cpu,bm-flags,multidraw-truth,singleton-dedupe,singleton-dedupe-exact}.json`
+- **Artifacts:** `/mnt/wbterminal2/tmp/{draw-budget,draw-budget-cpu,statics-cpu,bm-flags,multidraw-truth,singleton-dedupe,w2-{off,on}-*,prof-{off,on}}.json`
   + `.log`.
 
 ## 8. OPS / GIT
