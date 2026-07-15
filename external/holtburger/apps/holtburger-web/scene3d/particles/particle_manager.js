@@ -130,6 +130,106 @@ const _RP6 = {
 };
 const _RP6_MAX_DIST_SQ = _RP6.maxDistance * _RP6.maxDistance;
 
+// ── Particle instancing (2026-07-14, `?particleInstancing=on`, default OFF) ──
+//
+// Measured at Cragstone on the 1070: static default_script particle billboards
+// (fountains/braziers/torches) cost ~627 of 808 draws/frame — ONE draw per live
+// particle, because each particle is its own THREE.Mesh under `staticsGroup`
+// (emitParticle → `_scene.add(mesh)`) and RP6 only culls whole emitters, so
+// every particle of an on-screen emitter submits. This collapses all live
+// particles sharing a gfxobj into ONE InstancedMesh → 1 draw per gfxobj,
+// town-wide (see the bucket note below for why per-gfxobj, not per-emitter).
+//
+// ADDITIVE-ONLY, and that restriction is load-bearing. Additive blending is
+// (srcAlpha, ONE), so a particle contributes `rgb * a`. The per-slot material
+// clone exists solely to carry per-particle `opacity` (particle.js:107,111),
+// and for additive we can fold that opacity into a per-instance COLOR scale:
+//   before: (color*tex.rgb) * (tex.a * opacity)
+//   after:  (color*tex.rgb * opacity) * (tex.a * 1)
+// — algebraically identical, no custom shader, no per-instance
+// customProgramCacheKey (the known #1 cold-load cost). For NormalBlending the
+// alpha is the blend WEIGHT, so this identity does NOT hold and those emitters
+// keep the per-mesh path untouched (measured: only 12 of 700 at Cragstone).
+//
+// The per-slot meshes are still built and still driven by particle.js — they
+// are kept OUT of the scene graph (onMeshActive/onMeshFree noops) and used
+// purely as transform+opacity carriers we read back each tick. That keeps
+// particle.js/particle_emitter.js byte-identical on this path.
+let _INST_ON = null;
+function particleInstancingEnabled() {
+  if (_INST_ON === null) {
+    try {
+      // Strict opt-in: ONLY `=on` enables. A `!== "off"` test would read ON
+      // when the param is absent — the documented flag-default footgun.
+      _INST_ON = new URLSearchParams(location.search).get("particleInstancing") === "on";
+    } catch (_) {
+      _INST_ON = false;
+    }
+  }
+  return _INST_ON;
+}
+
+// three's color_fragment only applies vColor under USE_COLOR (`vertexColors`),
+// and USE_COLOR with NO `color` attribute reads the default generic attribute
+// (0,0,0,1) → black particles. So the instanced geometry is a one-time clone of
+// the shared (cache-owned, never-mutated) source geometry carrying a unit
+// `color` attribute; then vColor == instanceColor exactly. Cached per source
+// geometry so emitters sharing a gfxobj share one clone.
+const _instGeomCache = new Map();
+function _instGeometryFor(geometry) {
+  if (!geometry) return null;
+  const hit = _instGeomCache.get(geometry.uuid);
+  if (hit) return hit;
+  const n = geometry.attributes?.position?.count ?? 0;
+  if (!n) return null;
+  const g = geometry.clone();
+  g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(n * 3).fill(1), 3));
+  _instGeomCache.set(geometry.uuid, g);
+  return g;
+}
+
+const _instColor = new THREE.Color();
+
+// Buckets are keyed by gfxobj (⇒ shared geometry + texture), NOT by emitter.
+// Measured at Cragstone: 2182 live static emitters holding 8492 particles —
+// ~4 particles each. A per-EMITTER bucket therefore collapses only ~4 draws
+// into 1 and still pays one draw per on-screen emitter (measured: 808 → 476).
+// Bucketing by gfxobj instead lets every torch/brazier in the town share ONE
+// draw. Each tick the manager rewrites every bucket from scratch (reset →
+// append live particles of every non-culled emitter → finalize), which also
+// makes RP6 culling free: a culled emitter simply contributes no instances,
+// so no per-bucket visibility bookkeeping is needed.
+const _INST_BUCKET_MIN_CAP = 256;
+
+/** Grow a bucket's InstancedMesh in place (double until it fits). */
+function _growBucket(bucket, need, scene) {
+  let cap = bucket.im.instanceMatrix.count;
+  while (cap < need) cap *= 2;
+  const old = bucket.im;
+  const im = new THREE.InstancedMesh(old.geometry, old.material, cap);
+  im.count = 0;
+  im.name = old.name;
+  im.frustumCulled = false;
+  im.matrixAutoUpdate = false;
+  im.updateMatrix();
+  im.userData = old.userData;
+  im.setColorAt(0, _instColor.setRGB(1, 1, 1));
+  // CRITICAL: growth happens MID-TICK, after earlier emitters already wrote
+  // `bucket.n` instances into the old buffer. `bucket.n` survives the swap, so
+  // without carrying those writes over, slots [0, n) would render whatever the
+  // fresh Float32Array holds. Mirrors animated_scenery.js:523.
+  im.instanceMatrix.array.set(old.instanceMatrix.array);
+  if (old.instanceColor && im.instanceColor) {
+    im.instanceColor.array.set(old.instanceColor.array);
+  }
+  scene.add(im);
+  try { old.parent?.remove(old); } catch (_) {}
+  // Material + geometry are shared with the replacement — dispose ONLY the
+  // old instance buffers.
+  try { old.dispose?.(); } catch (_) {}
+  bucket.im = im;
+}
+
 // =====================================================================
 // A11-S4 (2026-06-12, `?particleDegrade=retail`) — authored degrade
 // radii folded into the RP6 predicate as an OR-term.
@@ -534,6 +634,11 @@ export class ParticleManager {
     this._scene = opts.scene;
     this._geometryFactory = opts.geometryFactory;
     this._materialFactory = opts.materialFactory;
+    // Opt-in per manager (see `particleInstancingEnabled`); still gated by the
+    // URL flag, so a manager that opts in stays byte-identical until asked.
+    this._instancing = opts.instancing === true;
+    /** @type {Map<number, {im: THREE.InstancedMesh, n: number}>} gfxobj → bucket */
+    this._instBuckets = new Map();
     // RP6 (2026-06-08) — off-screen emitter culling. `_rp6Frame`
     // counts ticks so the frustum/distance set is only re-evaluated
     // every `_RP6.recheckInterval` ticks; between re-checks each
@@ -717,9 +822,24 @@ export class ParticleManager {
       }
     }
 
+    // Instanced path decision — additive-only (see the header note); every
+    // other emitter keeps the per-mesh path verbatim.
+    const useInst =
+      this._instancing &&
+      particleInstancingEnabled() &&
+      baseIsAdditive &&
+      !!geometry &&
+      !!baseMaterial &&
+      !!this._scene;
+
     const emitter = new ParticleEmitter({
       parent,
       scene: this._scene,
+      // Instanced: keep slot meshes OUT of the scene graph (they stay pure
+      // transform/opacity carriers that _appendInstances reads back).
+      // These seams are why particle.js / particle_emitter.js need no edits.
+      onMeshActive: useInst ? (() => {}) : undefined,
+      onMeshFree: useInst ? (() => {}) : undefined,
       meshFactory: async (_slotIdx) => {
         // Per-slot mesh: shared geometry, cloned material so per-particle
         // opacity lerps don't stomp neighbors. Perf (2026-06-27): reuse a
@@ -803,6 +923,26 @@ export class ParticleManager {
     }
     emitter.initEnd();
 
+    // Attach this emitter to its gfxobj bucket (created lazily on first tick).
+    // Fail-soft: on ANY miss we must ALSO restore the per-mesh path, because
+    // the seams above already detached the slot meshes from the scene — an
+    // emitter with no bucket and no scene.add would render nothing.
+    if (useInst) {
+      try {
+        const instGeom = _instGeometryFor(geometry);
+        if (!instGeom) throw new Error("no instanced geometry");
+        emitter._instKey = info.hwGfxObjId >>> 0;
+        emitter._instGeom = instGeom;
+        emitter._instBaseMat = baseMaterial;
+      } catch (e) {
+        emitter._instKey = null;
+        emitter._onMeshActive = null;
+        emitter._onMeshFree = null;
+        // eslint-disable-next-line no-console
+        console.warn("[particles/instancing] bucket attach failed; per-mesh fallback:", String(e?.message ?? e));
+      }
+    }
+
     const id = (emitterId !== 0) ? emitterId : this.nextEmitterId++;
     emitter.id = id;
     this.particleTable.set(id, emitter);
@@ -860,6 +1000,14 @@ export class ParticleManager {
     // quads toward the viewer after their per-particle walk. null when disabled
     // (?particleBillboard=off) or no camera is resolvable → leave orientations.
     const bbCamera = BILLBOARD_DISABLED ? null : _rp6ResolveCamera();
+
+    // Instanced buckets are rebuilt from scratch every tick: reset the write
+    // cursors here, append below, finalize after the loop. An emitter that is
+    // RP6-culled / removed / stopped simply never appends, so its instances
+    // vanish this frame with no per-emitter bookkeeping.
+    if (this._instBuckets.size > 0) {
+      for (const b of this._instBuckets.values()) b.n = 0;
+    }
 
     for (const [id, emitter] of this.particleTable) {
       if (recheck) {
@@ -952,12 +1100,19 @@ export class ParticleManager {
 
       if (!emitter.updateParticles()) {
         removeIds.push(id);
-      } else if (bbCamera && emitter.info && emitter.info.billboard) {
-        // On-screen, still live, opted-in: face its flat sprite quads at the
-        // camera so they aren't edge-on invisible (HANDOFF Bug 3).
-        _billboardEmitter(emitter, bbCamera);
+      } else {
+        if (bbCamera && emitter.info && emitter.info.billboard) {
+          // On-screen, still live, opted-in: face its flat sprite quads at the
+          // camera so they aren't edge-on invisible (HANDOFF Bug 3).
+          _billboardEmitter(emitter, bbCamera);
+        }
+        // AFTER the billboard pass — transforms are final for this frame.
+        if (emitter._instKey !== null && emitter._instKey !== undefined) {
+          this._appendInstances(emitter);
+        }
       }
     }
+    this._finalizeInstBuckets();
     for (const id of removeIds) {
       const e = this.particleTable.get(id);
       // Free remaining meshes from the scene (the slot loop in
@@ -982,6 +1137,72 @@ export class ParticleManager {
         }
       }
       this.particleTable.delete(id);
+    }
+  }
+
+  /**
+   * Append one emitter's live particles to its gfxobj bucket (created on first
+   * use). The slot meshes are scene-detached, so `mesh.matrix` is already in
+   * `_scene`-local space — the same space the bucket (identity, child of
+   * `_scene`) instances live in, so the matrix copies straight across.
+   */
+  _appendInstances(emitter) {
+    const parts = emitter.parts;
+    if (!parts || !parts.length) return;
+    const key = emitter._instKey >>> 0;
+    let bucket = this._instBuckets.get(key);
+    if (!bucket) {
+      const mat = emitter._instBaseMat.clone();
+      mat.transparent = true;
+      mat.blending = THREE.AdditiveBlending;
+      mat.depthWrite = false;
+      mat.opacity = 1; // folded into the per-instance color
+      mat.vertexColors = true; // required for vColor (== instanceColor) to reach diffuse
+      mat.userData.__cacheOwned = false;
+      mat.userData.__disposable = true;
+      const im = new THREE.InstancedMesh(emitter._instGeom, mat, _INST_BUCKET_MIN_CAP);
+      im.count = 0;
+      im.name = `particle-inst-0x${key.toString(16)}`;
+      // RP6 culls per emitter by contribution; three's per-object test would
+      // measure the bucket's identity-placed bounds, not the particles'.
+      im.frustumCulled = false;
+      im.matrixAutoUpdate = false;
+      im.updateMatrix();
+      im.userData = { isParticleInstanced: true, gfxObjId: key };
+      im.setColorAt(0, _instColor.setRGB(1, 1, 1));
+      this._scene.add(im);
+      bucket = { im, n: 0 };
+      this._instBuckets.set(key, bucket);
+    }
+    // Grow before writing if this emitter could overflow the buffer.
+    const need = bucket.n + emitter.numParticles;
+    if (need > bucket.im.instanceMatrix.count) _growBucket(bucket, need, this._scene);
+    const im = bucket.im;
+    const cap = im.instanceMatrix.count;
+    let n = bucket.n;
+    for (let i = 0; i < parts.length && n < cap; i++) {
+      const m = parts[i];
+      if (!m || m.visible === false) continue;
+      m.updateMatrix();
+      im.setMatrixAt(n, m.matrix);
+      // Fold per-particle opacity into the instance color (additive-exact).
+      const op = m.material?.opacity ?? 1;
+      _instColor.setRGB(op, op, op);
+      im.setColorAt(n, _instColor);
+      n += 1;
+    }
+    bucket.n = n;
+  }
+
+  /** Publish this tick's instance counts + buffer uploads. */
+  _finalizeInstBuckets() {
+    if (this._instBuckets.size === 0) return;
+    for (const b of this._instBuckets.values()) {
+      const im = b.im;
+      if (im.count === 0 && b.n === 0) continue; // already empty, nothing uploaded
+      im.count = b.n;
+      im.instanceMatrix.needsUpdate = true;
+      if (im.instanceColor) im.instanceColor.needsUpdate = true;
     }
   }
 
