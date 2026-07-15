@@ -122,30 +122,30 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const m = Array.isArray(b.material) ? b.material[0] : b.material;
       return m && (classes.get(m)?.size || 0) === 1;
     });
-    D.clone = (list) => {
+    // v1 of this probe CLONED on every arm and DISPOSED on restore. That churned
+    // three's program cache 512 materials at a time and drove a MONOTONIC
+    // baseline climb (29.93 -> 31.89 -> 33.96 ms across one page load, +4ms) that
+    // was larger than the effect and systematically favoured whichever arm ran
+    // first. The measurement, not the hypothesis, was broken.
+    //
+    // v2: build every clone ONCE, up front, and warm it. Arms then only SWAP A
+    // REFERENCE (orig <-> pre-made clone) — no allocation, no dispose, no cache
+    // churn inside the measured window.
+    for (const b of [...D.sharedBatches, ...D.cleanBatches]) {
+      const m = Array.isArray(b.material) ? b.material[0] : b.material;
+      if (!m) continue;
+      b.__dcOrig = b.material;
+      const c = m.clone();
+      c.name = (m.name || "") + "#batched";
+      b.__dcClone = c;
+    }
+    D.apply = (list) => {
       let n = 0;
-      for (const b of list) {
-        if (b.__dcOrig) continue;
-        const m = Array.isArray(b.material) ? b.material[0] : b.material;
-        if (!m) continue;
-        b.__dcOrig = b.material;
-        const c = m.clone();
-        c.name = (m.name || "") + "#batched";
-        b.material = c;
-        D.swapped.push(b);
-        n++;
-      }
+      for (const b of [...D.sharedBatches, ...D.cleanBatches]) b.material = b.__dcOrig;
+      for (const b of list) { if (b.__dcClone) { b.material = b.__dcClone; n++; } }
       return n;
     };
-    D.restore = () => {
-      for (const b of D.swapped) {
-        const c = Array.isArray(b.material) ? b.material[0] : b.material;
-        b.material = b.__dcOrig;
-        delete b.__dcOrig;
-        try { c.dispose(); } catch (_) {}
-      }
-      D.swapped.length = 0;
-    };
+    D.restore = () => { for (const b of [...D.sharedBatches, ...D.cleanBatches]) b.material = b.__dcOrig; };
     return { batches: batches.length, shared: D.sharedBatches.length, clean: D.cleanBatches.length };
   });
   console.error(`[dc] ${setup.batches} BatchedMesh: ${setup.shared} share their material with a non-batched object, ${setup.clean} do not`);
@@ -155,9 +155,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const arm = async (label, action) => {
     const n = await page.evaluate((act) => {
       const D = window.__dc;
+      if (act === "shared") return D.apply(D.sharedBatches);
+      if (act === "clean") return D.apply(D.cleanBatches);
       D.restore();
-      if (act === "shared") return D.clone(D.sharedBatches);
-      if (act === "clean") return D.clone(D.cleanBatches);
       return 0;
     }, action);
     await sleep(2500); // let the first-use program lookup settle out of the sample
@@ -181,13 +181,36 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     return o;
   };
 
+  // WARM-UP: run each arm once, unmeasured, so the first-use program lookup for
+  // the clones is never inside a measured window (it would land entirely on
+  // whichever arm happened to go first).
+  console.error(`[dc] warming clones (unmeasured) …`);
+  await page.evaluate(() => window.__dc.apply(window.__dc.sharedBatches));
+  await sleep(2000);
+  await page.evaluate(() => window.__dc.apply(window.__dc.cleanBatches));
+  await sleep(2000);
+  await page.evaluate(() => window.__dc.restore());
+  await sleep(2000);
+
   const rows = [];
   const bases = [];
+  const seq = [];   // every arm in time order, for drift correction
   bases.push(await arm("A-baseline#1", "none"));
+  seq.push({ kind: "A", r: bases[0] });
   for (let rep = 1; rep <= +(process.env.REPS || 2); rep++) {
-    rows.push({ ...(await arm(`B-declone-SHARED#${rep}`, "shared")), tag: "B-shared" });
-    rows.push({ ...(await arm(`P-declone-CLEAN#${rep}`, "clean")), tag: "P-placebo" });
-    bases.push(await arm(`A-baseline#${rep + 1}`, "none"));
+    // ORDER SWAPS EACH REP: v1 always ran B before P, so the monotonic baseline
+    // climb flattered B. Alternating means drift cannot sit on one arm.
+    const order = rep % 2 === 1 ? ["shared", "clean"] : ["clean", "shared"];
+    for (const act of order) {
+      const tag = act === "shared" ? "B-shared" : "P-placebo";
+      const label = act === "shared" ? `B-declone-SHARED#${rep}` : `P-declone-CLEAN#${rep}`;
+      const r = { ...(await arm(label, act)), tag };
+      rows.push(r);
+      seq.push({ kind: tag, r });
+    }
+    const a = await arm(`A-baseline#${rep + 1}`, "none");
+    bases.push(a);
+    seq.push({ kind: "A", r: a });
   }
 
   const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -195,12 +218,33 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const spread = Math.max(...bases.map((b) => b.renderMsPerFrame)) - Math.min(...bases.map((b) => b.renderMsPerFrame));
   console.error(`[dc] ==========================================================`);
   console.error(`[dc] baseline mean ${baseMs.toFixed(2)}ms (n=${bases.length}, spread ${spread.toFixed(2)}ms = NOISE FLOOR)`);
+  // DRIFT-CORRECTED delta: with a baseline that climbs monotonically, comparing an
+  // arm to the MEAN baseline is wrong — it charges early arms too little and late
+  // arms too much. Each arm is compared to the baseline LINEARLY INTERPOLATED
+  // between the A arms that bracket it in time.
+  const idxOfA = seq.map((e, i) => (e.kind === "A" ? i : -1)).filter((i) => i >= 0);
+  const interpBase = (i) => {
+    const before = idxOfA.filter((j) => j < i).pop();
+    const after = idxOfA.find((j) => j > i);
+    if (before === undefined) return seq[after].r.renderMsPerFrame;
+    if (after === undefined) return seq[before].r.renderMsPerFrame;
+    const b0 = seq[before].r.renderMsPerFrame, b1 = seq[after].r.renderMsPerFrame;
+    return b0 + (b1 - b0) * ((i - before) / (after - before));
+  };
   const byTag = {};
-  for (const r of rows) (byTag[r.tag] ||= []).push(r);
-  for (const [tag, rs] of Object.entries(byTag)) {
-    const ms = rs.map((r) => +(baseMs - r.renderMsPerFrame).toFixed(2));
-    console.error(`[dc]   ${tag.padEnd(10)} cloned=${rs[0].cloned}  saves ${mean(ms).toFixed(2)}ms (${(100 * mean(ms) / baseMs).toFixed(1)}%)  [reps: ${ms.join(", ")}]`);
+  seq.forEach((e, i) => {
+    if (e.kind === "A") return;
+    (byTag[e.kind] ||= []).push(+(interpBase(i) - e.r.renderMsPerFrame).toFixed(2));
+  });
+  const drift = bases[bases.length - 1].renderMsPerFrame - bases[0].renderMsPerFrame;
+  console.error(`[dc] baseline DRIFT across the run: ${drift >= 0 ? "+" : ""}${drift.toFixed(2)}ms (first ${bases[0].renderMsPerFrame} -> last ${bases[bases.length - 1].renderMsPerFrame})`);
+  console.error(`[dc] ---- drift-corrected (each arm vs the baseline interpolated to ITS moment) ----`);
+  for (const [tag, ms] of Object.entries(byTag)) {
+    console.error(`[dc]   ${tag.padEnd(10)} saves ${mean(ms).toFixed(2)}ms  [arms: ${ms.join(", ")}]`);
   }
+  const b = byTag["B-shared"] || [], p = byTag["P-placebo"] || [];
+  const bm = b.length ? mean(b) : 0, pm = p.length ? mean(p) : 0;
+  console.error(`[dc] B - P (the placebo-subtracted effect) = ${(bm - pm).toFixed(2)}ms`);
   console.error(`[dc] VERDICT RULE (stated before the run): B counts only if it beats the baseline`);
   console.error(`[dc] spread AND the P placebo (which clones non-shared batches) stays ~0.`);
 
