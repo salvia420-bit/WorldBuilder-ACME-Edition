@@ -1,5 +1,11 @@
 # HANDOFF — the ⭐ lead is CLOSED: every particle WAS drawn twice. It was three's DoubleSide two-pass.
 
+> # ⛔ SUPERSEDED by `HANDOFF-perf-cpu-bound-submission-2026-07-15.md` — START THERE.
+> Both two-passes are fixed; that handoff restates every number that matters, corrects the ones this file
+> got wrong (notably: the win is **CPU submission**, not fill rate), and carries the live lead — **the frame
+> is CPU-bound inside three's submission, ~25 ms of a ~33 ms frame**. This file is kept for its reasoning
+> trail only.
+
 ---
 > ## ✅ UPDATE (2026-07-15, same session) — §5.1 IS ALSO DONE. Read this box before the body.
 >
