@@ -20,10 +20,11 @@ net-review=`$REPO/external/holtburger/scripts/net-review`. Tree clean; all on `o
 - **A second, possibly bigger lead falls out of the same measurement: ~66 µs per draw is ~10× what a draw
   call costs.** Something per-object per-frame is expensive in three's submission, and the prime suspect
   (`needsUpdate` → program re-resolve) is a pattern that may exist ELSEWHERE in this codebase. §3.2.
-- **A parity gap worth real fps, with the fix already written and REVERTED: `?perPolyCull`.** We draw every
-  surface `DoubleSide` while retail culls per polygon. The flag exists and its semantics match the decomp —
-  but it was reverted 2026-07-06 for dropping wrongly-wound polys. The blocker is winding correctness, and
-  the new instant-A/B diff harness is what would localize it. §3.3.
+- **A parity gap worth real fps, already written and REVERTED — `?perPolyCull`. Treat it as the HARD one.**
+  We draw every surface `DoubleSide` while retail culls per polygon; the flag exists and its semantics match
+  the decomp, but per the **user, first-hand: it "breaks the rendering of the inside of buildings viewed from
+  the outside"**. That may mean our winding is wrong — or that the cull is RIGHT and retail pairs it with
+  something we lack. Settle that before chasing the fps. §3.3.
 - **`draw-budget-probe.mjs` is committed and UNRUN.** It is the first thing to run. §3.1.
 
 ## 1. WHAT WAS REFUTED / CORRECTED (do not re-inherit any of it)
@@ -131,20 +132,40 @@ each pair gets its own geometry + material side. **Its semantics already match t
 `adapter.js:758` `dbl = sidesTypes[t] === 1` against retail's `p->sides_type == 1 → CULLMODE_NONE` (§2).
 Same reading, arrived at independently.
 
-**⚠ IT IS NOT A FREE FLIP — IT WAS ALREADY TRIED AND REVERTED. READ THIS BEFORE TOUCHING IT.** A
-2026-05-28 1070 **headless** eye-test flipped it default-ON; it was **reverted 2026-07-06** because on the
-**R9 290** it drops wrongly-wound building/static polys — they render **invisible or inside-out** — the
-same class as the 2026-07-02 "half-missing forge" bug. So the blocker is **winding CORRECTNESS in the
-data/triangulation**, not a missing eye-test signature. Off = everything `DoubleSide` (historically safe).
+**⚠⚠ IT IS NOT A FREE FLIP — IT WAS TRIED, IT WAS REVERTED, AND THE USER HAS SEEN IT BREAK. READ THIS
+BEFORE TOUCHING IT.**
 
-**Note the asymmetry, because it is the lesson:** a headless 1070 eye-test PASSED it and a HUMAN on
-another GPU caught it. The eye-test wasn't insufficient because of the GPU — it was insufficient because
-nobody diffed the two arms pixel-for-pixel. **That is now cheap and is the concrete next step:**
-`singlepass-eyetest.mjs` renders both arms in ONE synchronous instant (scene state identical BY
-CONSTRUCTION, 0-px control at both ends) and writes an ×8 diff heatmap + cluster coordinates — so
-"perPolyCull ON vs OFF" would show **exactly which polys vanish, at which POI, as pixels**, instead of
-relying on someone noticing a missing forge. Point it at `EXTRA_Q="perPolyCull=on"` vs off, tour POIs,
-and the dropped geometry localizes itself. Fix the winding, then re-measure with `renderCPU`.
+**USER, 2026-07-15 (first-hand, and the most specific account we have):** *"perpolycull breaks the
+rendering of the inside of buildings viewed from the outside etc."* Take this as the primary description
+of the failure — it is sharper than the url-flags row's "wrongly-wound building/static polys", and it
+points at a MECHANISM rather than at bad data: with everything `DoubleSide` you see a building's interior
+surfaces through/from outside, and per-poly culling removes exactly those back faces. **So before writing
+this off as "winding is broken", establish which it is:**
+- **(a) our winding/triangulation is wrong** for those polys (the url-flags reading), OR
+- **(b) the culling is CORRECT and something else was relying on those back faces being drawn.**
+  **There is real evidence for (b), and it names the missing partner: `?portalStencil`.** That flag
+  (default-OFF, milestone 1, 2026-07-05) is described as *"draws building interiors through their
+  door/window apertures from an OUTDOOR camera — the GPU realization of retail's screen-space portal clip
+  (`PView::GetClip`) + per-aperture depth-punch (`DrawPortalPolyInternal`)"*. So **retail's mechanism for
+  seeing inside a building from outside is the PORTAL CLIP — not two-sided back faces.** Today we are
+  DoubleSide everywhere and portalStencil is off, so whatever interior visibility we currently get from
+  outside is not the retail mechanism; per-poly culling removes it and the interiors break.
+  ⇒ **The two flags are probably COUPLED and should be evaluated TOGETHER, not one at a time.** That would
+  explain why it reads as "geometry went missing" while each individual poly is drawn exactly as retail
+  draws it. **Do not conflate "the picture got worse" with "the cull is wrong."** (Coupling is inferred
+  from the two rows + the decomp, NOT measured — test it, do not inherit it.)
+
+History: a 2026-05-28 1070 **headless** eye-test flipped it default-ON; **reverted 2026-07-06** after the
+**R9 290** showed dropped/inside-out building+static polys — the 2026-07-02 "half-missing forge" class.
+Off = everything `DoubleSide` (historically safe).
+
+**Note the asymmetry, because it is the lesson:** a headless eye-test PASSED it; a HUMAN looking at a
+screen caught it. It failed not because of the GPU but because nobody diffed the arms pixel-for-pixel.
+**That is now cheap:** `singlepass-eyetest.mjs` renders both arms in ONE synchronous instant (scene state
+identical BY CONSTRUCTION, 0-px control at both ends) + an ×8 diff heatmap + cluster coordinates, so
+`EXTRA_Q="perPolyCull=on"` vs off would localize **exactly which polys vanish, at which POI, as pixels** —
+and, per the user's account, **frame a building from outside**, which is where it is known to show.
+Settle the (a)/(b) question first; the fps is worthless if the cull is right for the wrong picture.
 ⚠ Do NOT reason about the enum from its name: `dats.xml` reads `NegUVIndices` only
 `if SidesType == CullMode.Clockwise`, so a `Clockwise` poly is a genuinely two-textured polygon while
 `None`(1) means "cull nothing". Confirm against retail + ACE's DatLoader before trusting any mapping.
