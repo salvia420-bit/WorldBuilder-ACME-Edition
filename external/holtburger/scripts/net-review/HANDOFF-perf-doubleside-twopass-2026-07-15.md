@@ -1,5 +1,42 @@
 # HANDOFF — the ⭐ lead is CLOSED: every particle WAS drawn twice. It was three's DoubleSide two-pass.
 
+---
+> ## ✅ UPDATE (2026-07-15, same session) — §5.1 IS ALSO DONE. Read this box before the body.
+>
+> The ⭐ open lead below (§5.1, the 451 non-particle transparent DoubleSide meshes) was **taken and
+> shipped** in `446e5b4c` behind `?surfaceSinglePass` (**default ON**, `=off` escapes). It is a
+> **parity fix, not a trade**: retail's `D3DPolyRender::DrawPolyInternal` (acclient.c:455306) picks ONE
+> cull mode and issues ONE draw, so the back-then-front two-pass is our deviation and single-pass is
+> what the retail client put on screen. §5.1's "possibly a parity FIX" guess is now **confirmed from the
+> decomp**.
+>
+> **Measured (1070, settled Holtburg, A/B/A in one page load):** −11% draws, 461k→444k tris,
+> **20.75 → 30.16 fps**, p50 50 → 33.3 ms. Reproduced at +54.8% and +40.5%.
+>
+> **Three corrections to the body below — do not re-inherit them:**
+> 1. **§5.1's "+32% fps" was measured against the UNFIXED baseline and included the particle fix.** The
+>    honest incremental figure is the one above, and it is **scene-dependent**: Cragstone's two paths
+>    differ by 22 px (max delta **1**), i.e. nothing translucent in frame ⇒ ~0 to save. **Never quote a
+>    single POI's % as the general win.**
+> 2. **The mechanism is CPU, not fill.** This handoff's own framing implied overdraw; it is wrong. Both
+>    paths rasterize the SAME fragments. Wall time inside `renderer.render()` falls **39.94 → 24.26
+>    ms/frame** while the frame falls 49.9 → 33.3 — **~95% of the win is CPU submission**. ~66 µs per
+>    removed draw is an order of magnitude above a draw call, implicating three's
+>    twice-per-object-per-frame `needsUpdate` program re-resolve (NOT isolated; not claimed).
+> 3. **⚠ THE REAL HEADLINE FOR WHOEVER IS NEXT: `renderCPU` is ~25 ms of a ~33 ms frame EVEN NOW.** This
+>    client is **CPU-bound inside three's submission**, at ~1,920 draws/frame. The next fps lever is
+>    **fewer draw calls (batching/instancing)** — not shaders, not fill, not particles. §5.2's 19
+>    render() calls and the 1112x619 world re-render are still unexplained and now sit on top of a
+>    known-CPU-bound frame.
+>
+> **New rule learned the hard way (see §6 rule 9): FIELD-VERIFY A FIX, DO NOT ASSUME THE SITES.** Patching
+> only the `applySurfaceRenderState` funnel left **403 of 451** meshes still double-submitted, because
+> `readSurfaceUnifiedFlag()` is default-OFF and entities.js takes a legacy inline ladder that never
+> reaches that funnel — the probe still found 26 materials to flip and still gained +40% fps *after* the
+> fix had "landed". `forcesinglepass-ab.mjs` now carries a COVERAGE ASSERTION that asks the live scene
+> which materials still meet three's condition and names them: **now 1, was 451**.
+---
+
 **Date:** 2026-07-15 · **Box:** wbterminal laptop → 1070 (tailscale, CDP :9333, real GPU) · **Self-contained.**
 Supersedes `HANDOFF-perf-particles-second-pass-2026-07-15.md` (its ⭐ lead is DONE; k=2 was REAL, and it was
 not a second pass — §1). REPO=`/home/wbterminal/WorldBuilder-ACME-Edition`,
@@ -84,8 +121,16 @@ flat quad. If particles ever gain real 3D geometry, guard 5 fails and the pixel-
 
 ## 4. REMAINING TASKS
 
-1. **⭐ §5.1 — the scene-wide two-pass.** Biggest measured fps lever available (+32%). Needs judgment, not a
-   flag flip.
+0. **⭐ THE NEXT LEVER — the frame is CPU-BOUND IN SUBMISSION.** After both fixes, a settled Holtburg is
+   ~1,920 draws/frame with **~25 ms of a ~33 ms frame spent inside `renderer.render()`** (measured;
+   `forcesinglepass-ab.mjs` reports `renderCPU`). That is the whole game now — not shaders, not fill,
+   not particles. Attack draw-call COUNT: `draw-budget-probe.mjs` (on master, unrun) hides one subtree
+   at a time inside one page load and reports what each costs, plus a census of plain `Mesh` vs
+   `BatchedMesh` vs `InstancedMesh` — the gap between "2,266 plain meshes" and "what they'd cost
+   batched" IS the prize. Memory's standing lead ("instanced anim-scenery, 2×fps live-proven 07-02")
+   points the same way. **Run the census first; do not pick a batching target by intuition.**
+1. ~~**⭐ §5.1 — the scene-wide two-pass.**~~ **DONE** — `446e5b4c`, `?surfaceSinglePass` (default ON).
+   See the UPDATE box at the top; §5.1 below is kept for its reasoning, with its numbers corrected there.
 2. **Decide `?particleInstancing` at HOLTBURG, pinned** (inherited, unchanged). Its prize is now 1 draw per
    particle — re-measure on top of the correct cull AND the single-pass fix before deciding.
 3. **`?staticScripts=off` is broken** (inherited). `anchors=0` but 586 emitters survive → 5,925 draws/f,
@@ -155,7 +200,21 @@ three.module.js:17632 — and it is NOT reset by `info.reset()`). Per-pass attri
 7. **A unit test can reproduce a RENDERER bug without a renderer** — encode three's predicate verbatim
    (`transparent && side===DoubleSide && !forceSinglePass ? 2 : 1`) and assert over the real manager's real
    materials. It reported `submits/frame: 2,2` on pre-fix source. No GPU, no page, no flake.
-8. **`particleInstancingEnabled()` reads BARE `location.search`** (particle_manager.js:164) — that is
+9. **FIELD-VERIFY A FIX; NEVER TRUST THE SITE LIST.** The surface fix "landed", tests were green — and
+   the probe still found **26 materials to flip and +40% fps** waiting, because 403 of 451 meshes took a
+   legacy ladder (default-OFF of the funnel I patched) that I never saw. Grepping creation sites tells
+   you what you patched; it cannot tell you what RUNS. Ask the LIVE SCENE the renderer's own question
+   ("which materials still satisfy three's condition?") and make the probe NAME them. That coverage
+   assertion is 15 lines and it is the only reason this is not still broken.
+10. **A fix behind a default-ON flag needs its OFF arm tested too.** `?surfaceSinglePass=off` restoring
+   the two-pass is a guard in `test_surface_single_pass.mjs` precisely because an escape hatch that
+   silently does nothing is worse than no hatch — it invites "just turn it off" as a rollback that
+   doesn't roll back.
+11. **Import the constant; do not retype the bit.** `test_surface_single_pass.mjs` first hardcoded
+   `TRANSLUCENT = 0x4` — that is `Base1ClipMap`, which decodes to `transparent = FALSE`, so its
+   "translucent" material was never transparent and the double-submit guard passed VACUOUSLY (a
+   non-transparent material trivially submits once). Preconditions caught it. Import `SURFACE_TYPE`.
+12. **`particleInstancingEnabled()` reads BARE `location.search`** (particle_manager.js:164) — that is
    `globalThis.location`, NOT `window.location`, and node defines neither. Unset, it throws, is swallowed,
    and memoizes `_INST_ON = false` **at module scope for the whole process**. Set `globalThis.location`
    BEFORE the first import or any instancing test silently tests nothing. (Guard 6 caught this only because
