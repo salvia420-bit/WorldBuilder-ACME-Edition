@@ -23,6 +23,7 @@
 // See scene3d/_ric_shim.js header for the full rationale.
 import "./_ric_shim.js";
 import * as THREE from "three";
+import { applyBatchedMeshColorTextureFix } from "./three_batchedmesh_colortexture_fix.js";
 // World-expand step 1 Objective 8 — `bakeXRing` are imported here +
 // called at radius=6 below; `bakeXForLandblock` are exposed via
 // `liveScene3d.loadXForLandblock` (Objective 5) and used by the lazy
@@ -1076,6 +1077,18 @@ export async function preInit3D(canvas) {
       `[visfid] shadow path: ${csmEnabled ? "CSM (Phase 3.3)" : "single-shadow (Phase 0.1)"}`
     );
   }
+
+  // Upstream three r184 bug (2026-07-15): BatchedMesh has no `colorTexture`
+  // property (its field is `_colorsTexture`), but WebGLRenderer's two BatchedMesh
+  // colour branches read `object.colorTexture` — so `undefined !== null` is TRUE
+  // and EVERY BatchedMesh re-resolves its program EVERY frame, to arrive back at
+  // the identical program. Aliasing the real field makes both branches inert.
+  // MEASURED on the 1070 at a settled Holtburg (net-review/npc-counter-probe.mjs,
+  // counting inside three's own source): that branch 179/frame -> 0, getProgram
+  // 258/frame -> 78, renderCPU 28.29 -> 24.95 ms (-11.8%, A spread 1.70 ms).
+  // Must run BEFORE any BatchedMesh is constructed. `?bmColorTextureFix=off`
+  // escapes. No visual surface — see the module header.
+  applyBatchedMeshColorTextureFix(THREE);
 
   const scene = new THREE.Scene();
   // Wave 3 / L2 fix (2026-05-28) — particle_manager.js was the original
