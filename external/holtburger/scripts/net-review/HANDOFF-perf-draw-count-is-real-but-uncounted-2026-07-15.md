@@ -341,16 +341,31 @@ every node by the region its ancestor chain puts it in, then sum self-samples). 
 `?walkInInstance` really does halve the in-frame program-resolve cost (14.7% → 7.3%), which is what its
 −10.5% renderCPU win actually was.
 
+**THE CONTRADICTION, QUANTIFIED (do not re-derive this — it is the whole open question):**
+- The profiler ran at **799 µs/sample, not the 100 µs requested** (V8 could not keep up: 18,065 samples in
+  14.4 s). Shares are still sound (1,835 samples for `getParameters`), but the profile is COARSE — ~35
+  samples per frame. Convert before reasoning: **`getParameters` alone ≈ 3.91 ms of a ~28 ms frame.**
+- Fixing the class thrash — the ONLY trigger measured to exist (440 objects flipping `batching` every
+  frame) — saved **0.10 ms**. So those 440 objects are ~2.5% of the getParameters cost. To spend 3.91 ms,
+  `getProgram` must run for something on the order of ALL ~2,986 visible meshes, every frame.
+- **Nothing found so far can do that.** Every scene-wide trigger is stable, no material's version churns
+  (except the 1 known residual mesh), and **new-material creation is 2 over 378 frames** (v2 of
+  `version-churn-probe` — my best guess at the hole, and it is dead).
+
 **⚠⚠ WHICH LEAVES A LIVE CONTRADICTION — HAND THIS TO THE NEXT SESSION AS THE OPEN QUESTION.** The profile
 says `getProgram` runs inside `render()` for a large share of the frame, i.e. `needsProgramChange` fires
 per object per frame. The table above says **every trigger that can set it is stable**. Both cannot be
-right. The likeliest hole is MINE: `version-churn-probe` v1 rescanned the scene ONCE, so it could only see
-version bumps on materials that ALREADY EXISTED — a **brand-new material** has
-`materialProperties.__version === undefined`, takes the `else` at :18420, and forces a `getProgram`.
-Material CREATION is a per-frame program resolve and v1 was structurally blind to it (v2 now counts new
-materials per frame). If that is not it either, the remaining move is to **vendor a patched
-`three.module.js` behind an importmap override and count which condition fires** — three is loaded from
-`cdn.jsdelivr.net` (`index.html:951`), which is why it could not be instrumented in place this session.
+right. I suspected my own probe: v1 rescanned ONCE, so it could only see version bumps on PRE-EXISTING materials,
+and a brand-new material (`__version === undefined`) forces a `getProgram`. **v2 counts new materials per
+frame: 2 over 378 frames. That hole is closed and it was not the answer.**
+
+**THE ONE MOVE LEFT, and it is a real one — stop guessing and instrument three itself:** vendor
+`three.module.js` locally, add a counter on each `needsProgramChange` branch (:18321 lights / :18325
+colorSpace / :18332 batching / :18348 instancing / :18364 envMap / :18366 fog / :18378 vertexAlphas /
+… / :18420 version) plus a call counter on `getProgram`, and point the importmap at it behind a URL flag.
+three is CDN-loaded (`index.html:951` → `cdn.jsdelivr.net`), which is the ONLY reason this session could
+not instrument it in place — it is a ~20-line change to a vendored copy, and it converts the last
+guessing game in this chain into a printed number. **Do that before proposing any further mechanism.**
 
 **Until that lands: the frame is ~25-28 ms of renderCPU, ~15% of it in-frame program resolve, and WHY the
 resolve happens is UNKNOWN.**

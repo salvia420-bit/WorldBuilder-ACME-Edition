@@ -173,6 +173,7 @@ process.on("unhandledRejection", async (e) => {
     const D = window.__vc;
     return {
       frames: D.frames, changed: D.changed, objectsAffected: D.objectsAffected,
+      newMats: D.newMats || 0, liveMats: D.liveMats || 0,
       byMat: [...D.byMat.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12),
       writers: [...D.writers.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12),
     };
