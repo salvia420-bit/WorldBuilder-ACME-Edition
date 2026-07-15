@@ -25,8 +25,10 @@ net-review=`$REPO/external/holtburger/scripts/net-review`.
 - **`BatchedMesh` is NOT the bug. It is the cheapest path in the frame** — 2.4 µs per real draw, vs 4.7 µs
   (cells), 7.9 µs (entities), 11.7 µs (plain statics). It is working as designed. What it does *not* do is
   reduce the number of real draws: it saves state binds, not draws. §3.
-- **⭐ THE LEAD: merge the singleton batches. ~5,791 → ~512 real draws, worth ~12.7 ms of a ~28 ms frame.**
-  The evidence that it is nearly free is already measured, not assumed. §4.
+- **⭐ THE LEAD: INSTANCE the batched statics. ~17,774 → ~375 real draws.** The "singletons" are not
+  singletons: **17,774 instances share only 324 distinct geometries (54.9×)**, and the top geometry is drawn
+  **1,736 times**. Root cause: the **walk-in/streaming baker never instances anything** — it emits one plain
+  Mesh per placement (`statics.js:2023`), and only the ring-wide baker groups by modelId (`:2723`). §4.
 - **Two hypotheses died here, both mine, both by measurement.** The `needsUpdate`/program-churn suspect and
   the `BatchedMesh.onBeforeRender` per-frame-walk suspect. §1. Neither should be re-inherited.
 - **`?perPolyCull` (predecessor §3.3) and the §4 backlog are UNTOUCHED and still owed.** I did not go near
@@ -42,6 +44,9 @@ net-review=`$REPO/external/holtburger/scripts/net-review`.
 | "hiding `statics` gives **+96% fps**" (`draw-budget-probe.mjs` first run) | **A VSYNC ARTIFACT, not a 2× win.** Every p50 in this chain is a multiple of ~8.3 ms (33.4 / 16.7 / 8.3 = 4 / 2 / 1 intervals of a **120 Hz** rAF). fps is a STEP function of frame cost, so an arm reads +96% or +0% for the same ms saved depending on which side of a step it lands. The predecessor's §5.5 ("use draws and renderCPU; fps is only safe when the effect dwarfs the drift") is CORRECT and this is the mechanism behind it. |
 | "`GROUPS=statics,entities,terrain,worldRoot`" (the default in `draw-budget-probe.mjs`) | **INCOMPLETE — it silently omitted 40% of the budget.** `worldRoot`'s children are terrain, buildings, statics, **cells**, entities (`index.js:1162-1167`). The arms summed to 1,133 draws against worldRoot's 1,901; the missing ~768 were `cells`, and nothing in the output said so. `draw-budget-cpu.mjs` enumerates the children from the LIVE graph and prints a parts-vs-whole reconciliation, which now closes to **−1.8 draws**. |
 | "**2,271 plain meshes** … the gap between that and what they would cost batched IS the prize" (predecessor §3.1) | **BACKWARDS.** Batching is where the draws ALREADY are (5,791 of 7,500). Plain meshes are 297 draws / 3.48 ms in statics. The prize is not *more* BatchedMesh — it is making the batches we have stop emitting one real draw per instance. §4. |
+| "the batched nodes are **true singletons** — models placed once — so instancing cannot help them and a MERGE is the only option" (**MINE**, first draft of this document's §4, from a code read) | **FALSE, AND IT NAMED THE WRONG FIX.** `singleton-dedupe-probe.mjs` hashed the actual vertex data: **17,774 instances share 324 distinct geometries (54.9×)**; only **82** geometries appear once. **17,692 instances sit on repeated geometry.** So instancing — measured FREE, 1 real draw for N — beats the merge I proposed: **~375 draws vs ~511**, and against a truer baseline (17,774, not 5,791). Verified against a hash-collision artifact by re-running with **every float hashed (no subsampling): identical, 324/82/375.** §4. |
+| "the live batcher is `consolidateStaticSingletons` (`statics.js:1650`)" (**MINE**, same draft) | **WRONG FILE.** `?statBatchChunk` is **DEFAULT-ON** (`static_batch_x.js:38`), so the live path is `consolidateStaticSingletonsCrossLb` — per-(3×3-LB region, material) buckets. The live batch names say so plainly (`static-batch-c-r57x61-s08000007-m221`) and I quoted a path the flag routes around. **Read the node names out of the live scene before citing a builder.** |
+| "`static_batch_x.js` chunks **dedupe geometry cross-LB within the region**" (its own header, `:16`/`:73`) | **OVERSTATED — and it would not have mattered anyway.** The dedupe is `gidOf`, keyed by **BufferGeometry object identity** and scoped **"this feed only"** (`:227`), so two LBs decoding the same model get different objects → different gids → duplicated vertex data (2,786 gids for 324 distinct datasets, ~8.6× vertex bloat). But gid dedupe saves **MEMORY, NOT DRAWS**: every *instance* still emits its own multiDraw range. Do not chase it as a perf fix. |
 
 ## 2. ⭐ THE COUNTER IS BLIND — and it is the reason this chain kept mis-aiming
 
@@ -132,58 +137,86 @@ Two things fall out, and the second one matters more than the first:
 **DEAD END (inherited): `needsUpdate` → program churn.** Never isolated, and now unmotivated — see §1. Do
 not refactor on it. If someone still wants it, it needs its own micro-bench and its own reason.
 
-## 4. ⭐ THE LEAD — merge the singleton batches (~5,791 → ~512 real draws, ~12.7 ms)
+## 4. ⭐ THE LEAD — the "singletons" are 54.9× duplicated. INSTANCE them (~17,774 → ~375 real draws).
 
-**What the batches actually are.** `statics.js` already instances the repeats: `buildInstancedStaticNode`
-(`:1428`) keys by **(modelId, surfaceDid)** — "a tree modelId only appears in scenery" — and those are the
-14 free InstancedMesh. What is left are the **singletons**, the models placed exactly once, which
-instancing cannot help by definition (memory's known "**5,400-singleton wall**"). `consolidateStaticSingletons`
-(`:1650`) sweeps them into a BatchedMesh per **material**:
+**This section replaced a wrong one.** Its first draft said the batched nodes were true singletons and
+proposed a geometry MERGE. That rested on a code read I never measured. Measured, it is false — and the
+right fix is both simpler and bigger. The dead version is kept in §1 so nobody re-derives it.
 
+**`singleton-dedupe-probe.mjs` — hashing the ACTUAL vertex data of every geometry range under `statics`:**
+
+| | |
+|---|---|
+| BatchedMesh / active instances | 511 / **17,774** |
+| geometry entries (gids) in those batches | 2,786 |
+| **DISTINCT geometries (by vertex data)** | **324** |
+| of which appear exactly once (true singletons) | **82** |
+| instances sitting on REPEATED geometry | **17,692** |
+| **dedupe ratio** | **54.9× instances per distinct model** |
+| top repeat counts | **1,736**, 1,736, 1,372, 1,370, 760, 707, 707, 655, … |
+| worst single batch | **277 instances / 1 distinct geometry** |
+
+**Verified against the obvious artifact:** a subsampled hash could collide two models into one "distinct"
+and fake the whole win. Re-run with `SAMPLES=0` — **every float hashed, no subsampling** — the numbers are
+**identical** (324 / 82 / 375). The duplication is real.
+
+**ROOT CAUSE — the walk-in baker never instances anything.** `statics.js` has two bakers and only one of
+them groups:
 ```js
-// statics.js:1678-1685 — one addGeometry PER NODE, so N nodes => N geometries => N instances => N ranges.
-try { bm = new THREE.BatchedMesh(group.length, maxVerts, maxIdx, mat); } catch (_) { … }
-for (const m of group) {
-  const gid = bm.addGeometry(m.geometry);   // never deduped — each node gets its own geometry entry
-  const iid = bm.addInstance(gid);
-  bm.setMatrixAt(iid, m.matrix);
-}
+// :2023  WALK-IN / STREAMING PATH — one plain Mesh PER PLACEMENT. No grouping. No instancing.
+for (const placement of statics) { … buildSingletonNode({ placement, … }) }   // :2057
+// :2723  RING-WIDE PATH — the only caller of buildInstancedNode (:2756).
+const isInstanced = group.length >= 2;                                         // grouped by modelId
 ```
-That is a correct use of BatchedMesh, and BatchedMesh honestly delivers what it promises: **fewer state
-binds, one material, one buffer, 2.4 µs/draw — the best per-draw number in the frame.** It just never
-promised *fewer draws*, and it is the draws that are left.
+Streaming is how you arrive anywhere, so in practice **almost every static is built un-instanced**, then
+swept into the chunk buckets by material — one multiDraw range per placement. That is the 5,791 visible
+real draws, and it is why the 14 InstancedMesh (2,992 instances, from the ring bake) are a rounding error
+next to 17,774 batched ones. The "**5,400-singleton wall**" in memory is not a wall of unique models; it is
+**324 models drawn 17,774 times**.
 
-**THE FIX: a real geometry MERGE, not a batch.** For each (material, LB) group, bake each singleton's world
-matrix into its vertices and concatenate into ONE geometry (`BufferGeometryUtils.mergeGeometries`) → **one
-draw per group**, ~512 total, replacing ~5,791. At the measured 2.4 µs/real-draw that is **~12.7 ms of a
-~28 ms frame** — larger than every other lever in this chain combined, and ~2× the entire surface
-single-pass win the predecessor shipped.
+**THE FIX: group by geometry and emit InstancedMesh.** Draw floor by (material, geometry) is **~375**, vs
+~511 for the merge I originally proposed and ~17,774 today. InstancedMesh is **1 real draw for N
+instances** and is **measured free in this very scene** (14 nodes / 2,992 instances = **−0.28 ms**), which
+is the strongest evidence in this document because it is the same frame, same GPU, same probe.
+Two viable places, and the choice is a real design question — measure, do not pick from taste:
+- **(a) give the walk-in path the ring path's grouping** (group placements by (modelId, surface) per feed
+  → `buildInstancedNode`). Fixes it at the source; the ring baker already proves the shape works.
+- **(b) instance inside the chunk batcher** (`static_batch_x.js`), keying by **geometry data**, not
+  BufferGeometry identity. Catches cross-LB repeats the per-feed `gidOf` map structurally cannot — and note
+  **324 distinct data vs 2,786 gids** means distinct *objects* often carry identical *data*, so identity
+  keying is not enough. Also reclaims the ~8.6× vertex bloat.
 
-**What a merge gives up, and why the cost is already measured to be ~nothing:**
-- **Per-instance frustum culling** → **arm C measured this at 2.9% of tris.** Not a guess.
-- **Per-instance visibility/matrix updates** → statics are static; they do not move. Eviction is already
-  per-LB (`coversLbKeys`, the LRU refcount at `:1408`), and a per-(material, **LB**) merge keeps that
-  granularity intact — do NOT merge across LBs.
-- **Memory:** merged geometry duplicates vertex data for repeated geometry. Singletons are unique by
-  definition, so there is little to duplicate — but MEASURE it, do not assume it.
+**What instancing gives up, and why it is cheap here:**
+- **Per-instance frustum culling** → **already measured at 2.9% of tris** (`batchedmesh-flags-ab.mjs` arm
+  C). We are paying ~5,791 draws to skip 2.9% of triangles.
+- **Per-instance shadow/receive flags** → `InstancedMesh.receiveShadow` is per-mesh, not per-instance —
+  `buildInstancedNode` already documents and accepts this trade (`:2652`). Same trade, wider.
+- **Eviction granularity** → the chunk buckets already solved per-LB excision (`_lbMembership` +
+  `evictStaticBatchXForLb`, incl. the re-feed idempotence fix that cured a 41k-instance leak). An
+  instanced bucket needs the same treatment; do not hand-roll a new one.
 
-**⚠ THE TRAP THIS EXACT IDEA ALREADY FELL INTO — read `static_batch_x.js`'s header before writing a line.**
-`?statBatchCrossLb` (v1) consolidated batches **across** landblocks and is **CLOSED-NEGATIVE on the 1070**:
-ring-spanning nodes forfeit *node-level* frustum culling (per-LB batches only draw the ~10% in view) and it
-measured **22.5 vs ~29 fps**. Node-level culling is real and load-bearing; **per-instance** culling (2.9%)
-is not. A per-(material, LB) merge keeps node-level culling and drops only the per-instance kind. That
-distinction is the whole design, and v1 died by blurring it.
+⚠ **THE TRAP THIS AREA ALREADY FELL INTO — read `static_batch_x.js`'s header first.** `?statBatchCrossLb`
+(v1) consolidated **across** landblocks and is **CLOSED-NEGATIVE on the 1070**: ring-spanning nodes forfeit
+*node-level* frustum culling (per-LB batches only draw the ~10% in view) and it measured **22.5 vs ~29
+fps**. v2 (`?statBatchChunk`, the default-ON path) fixed that with 3×3-LB regions. Any instancing work must
+stay **region-scoped** for the same reason: node-level culling is real and load-bearing; per-instance
+culling (2.9%) is not. v1 died by blurring exactly that distinction.
 
-**How to measure it (the instrument problem is now the easy part):** `info.calls` cannot see this win —
-merging 5,791 ranges into 512 draws BARELY MOVES `info.calls` (183 → 512, it goes **UP**). Use
-`multidraw-truth-probe.mjs`'s true count and **renderCPU**. A merge that halves the frame while raising
-`info.calls` is exactly what success looks like here.
+**How to score it — the instrument is the easy part now, but it is still a trap.** `info.calls` **cannot
+see this win**: collapsing 5,791 visible ranges into ~375 instanced draws moves `info.calls` from 183 to
+~375 — it goes **UP**. Score with `multidraw-truth-probe.mjs`'s true count + **renderCPU**. *A change that
+halves the frame while raising `info.calls` is exactly what success looks like here.* Also watch **tris**:
+instancing draws every instance in a bucket that survives node-level culling, so expect roughly the +2.9%
+arm C measured — if tris jump far more than that, the bucket scope is wrong.
 
 ## 5. RESIDUALS / UNKNOWNS (honest loose ends)
 
-1. **Nothing was shipped this session.** No source change, no flag, no default flip. Four probes and a
-   corrected map. The 12.7 ms is a PROJECTION from a measured per-draw cost, not a measured win — it stands
-   or falls on someone building the merge and A/B-ing it.
+1. **Nothing was shipped this session.** No source change, no flag, no default flip. Five probes and a
+   corrected map. **The draw counts are measured; the ms saving is NOT.** "375 vs 17,774 real draws" and
+   "54.9× duplication" are measurements. What they are worth in ms is a projection from 2.4 µs/real-draw
+   and from InstancedMesh measuring free at 2,992 instances — plausible, unvalidated, and it stands or
+   falls on someone building the instancing and A/B-ing it. **Do not quote a ms figure for this lead.**
+   (The superseded merge draft quoted "~12.7 ms". It should not have.)
 2. **Arm noise is ~±2.8 ms** (the accidental placebo in `batchedmesh-flags-ab.mjs`), and baseline spread
    was 1.62–2.74 ms across runs, though A-vs-A2 drift within `draw-budget-cpu` was 0.01 ms. **Treat any
    single-arm result under ~3 ms as noise.** The 13.93 ms and 5,791-draw findings clear it by 5×+; the
@@ -240,11 +273,27 @@ merging 5,791 ranges into 512 draws BARELY MOVES `info.calls` (183 → 512, it g
 7. **fps here is vsync-quantized to ~8.3 ms steps (120 Hz rAF).** It is a step function of frame cost: the
    same ms saved reads +96% or +0% depending on where it lands. This is the *mechanism* behind the
    predecessor's "use draws and renderCPU, not fps" — it is not conservatism, it is quantization.
+8. **HASH THE DATA; DO NOT TRUST THE NAME.** Everything called these nodes "singletons" — the function name
+   (`consolidateStaticSingletons`), the comments, memory's "5,400-singleton wall", and my own §4 draft.
+   They are 54.9× duplicated. **One probe that hashed vertex data beat four sessions of a plausible name.**
+   When a name asserts a property that decides your fix (unique / cached / deduped / singleton), measure
+   the property. And when a code read tells you a dedupe exists (`static_batch_x.js:16` "chunks still
+   dedupe geometry cross-LB"), check what it is keyed on — `gidOf` keys on **object identity**, and 2,786
+   distinct objects carried 324 distinct datasets.
+9. **A FLAG CAN ROUTE AROUND THE FILE YOU ARE READING.** I cited `statics.js:1650` as the live batcher; the
+   default-ON `?statBatchChunk` routes to `static_batch_x.js` instead, and the live node names said so
+   (`static-batch-c-r57x61-…`). **Read the object names out of the settled scene before citing a builder** —
+   same family as the predecessor's §6.1 ("grepping creation sites tells you what you PATCHED, not what
+   RUNS"), which that session learned the hard way and I then repeated.
 
 ## 7. HARNESS (all in `net-review/`)
 
 - **`multidraw-truth-probe.mjs`** — ⭐ the corrected draw counter (`Σ _multiDrawCount` per rAF, per group,
   vs `info.calls`). **Run this before and after any batching/merge work; `info.calls` cannot score it.**
+- **`singleton-dedupe-probe.mjs`** — ⭐ hashes the real vertex data of every batched geometry range and
+  reports distinct-vs-instances + the draw floor for each candidate fix. `SAMPLES=0` hashes every float
+  (the collision control). This is what proved the "singletons" are 54.9× duplicated. Re-run it at a
+  dungeon / Shoushi before generalizing.
 - **`draw-budget-cpu.mjs`** — per-subtree attribution in ONE page load with **renderCPU in ms** + a
   runtime-enumerated group list + a parts-vs-whole reconciliation. Supersedes `draw-budget-probe.mjs`
   (which is left in place as the predecessor's artifact — its GROUPS default is incomplete; prefer this).
@@ -257,7 +306,7 @@ merging 5,791 ranges into 512 draws BARELY MOVES `info.calls` (183 → 512, it g
   abort-if-not-settled; hide-via-accessor so the per-frame cullers cannot re-assert `visible`.
 - Inherited and unchanged: `forcesinglepass-{ab,parity}.mjs`, `singlepass-eyetest.mjs`,
   `particle-{k-probe,pass-attrib,instancing-ab}.mjs`, `settle.mjs` (read its header), `town-fps-probe.mjs`.
-- **Artifacts:** `/mnt/wbterminal2/tmp/{draw-budget,draw-budget-cpu,statics-cpu,bm-flags,multidraw-truth}.json`
+- **Artifacts:** `/mnt/wbterminal2/tmp/{draw-budget,draw-budget-cpu,statics-cpu,bm-flags,multidraw-truth,singleton-dedupe,singleton-dedupe-exact}.json`
   + `.log`.
 
 ## 8. OPS / GIT
