@@ -13,6 +13,7 @@
 //
 // Usage: POI=Cragstone node steadyframe-sizing.mjs [outJson] [profileS]
 import fs from "node:fs";
+import { settleAt, WEATHER_OFF } from "./settle.mjs";
 
 const CDP_URL = "http://127.0.0.1:9333";
 const SERVE = "http://127.0.0.1:8765/apps/holtburger-web/index.html";
@@ -55,7 +56,7 @@ async function drawCallsSpinning(page, seconds) {
   const browser = await pw.chromium.connectOverCDP(CDP_URL);
   const ctx = browser.contexts()[0] ?? (await browser.newContext());
   const page = await ctx.newPage();
-  const q = new URLSearchParams({ renderer: "3d", autoLogin: "1", account: ACCOUNT, password: ACCOUNT, autoSpawn: "first", nosw: "1", vfxGauge: "on", renderDiag: "on" });
+  const q = new URLSearchParams({ renderer: "3d", autoLogin: "1", account: ACCOUNT, password: ACCOUNT, autoSpawn: "first", nosw: "1", vfxGauge: "on", renderDiag: "on", ...WEATHER_OFF });
   if (process.env.EXTRA_QUERY) for (const [k, v] of new URLSearchParams(process.env.EXTRA_QUERY)) q.set(k, v);
   console.error(`[sz] query: ${q}`);
   const consoleErrors = [];
@@ -89,20 +90,19 @@ async function drawCallsSpinning(page, seconds) {
   for (let i = 0; i < 90; i++) { if (await page.evaluate(() => !!(window.liveScene3d && window.liveScene3d.scene)).catch(() => false)) break; await sleep(1000); }
   const chat = (c) => page.evaluate((cmd) => { try { window.__sessionHandle.sendChat(cmd); } catch (_) {} }, c).catch(() => {});
 
-  const entRootsNow = () => page.evaluate(() => window.liveScene3d?.entitiesGroup?.children?.length ?? 0).catch(() => 0);
-  const terrNow = () => page.evaluate(() => window.liveScene3d?.terrainBakedLbs?.size ?? 0).catch(() => 0);
-
-  // ── Teleport + settle to TRUE steady (terrain stable AND entRoots stable). ──
-  console.error(`[sz] @telepoi ${POI}`);
-  await chat(`@telepoi ${POI}`);
-  await sleep(4000);
-  let lastT = -1, tStable = 0;
-  for (let i = 0; i < 30; i++) { await sleep(1500); const t = await terrNow(); if (t > 0 && t === lastT) { if (++tStable >= 3) break; } else tStable = 0; lastT = t; }
-  // entRoots steady: within ±2 across 4 consecutive 2s reads.
-  let prevE = await entRootsNow(), eStable = 0;
-  for (let i = 0; i < 30; i++) { await sleep(2000); const e = await entRootsNow();
-    if (Math.abs(e - prevE) <= 2) { if (++eStable >= 4) { prevE = e; break; } } else eStable = 0; prevE = e; }
-  console.error(`[sz] TRUE-steady: terr=${lastT} entRoots≈${prevE}`);
+  // ── Teleport + settle HARD (shared predicate — see settle.mjs). ────────────
+  // The old settle here was terrain-stable + entRoots-within-±2 and did NOT
+  // look at the static emitter count at all. Emitters attach on a time-sliced
+  // ramp that only reaches its plateau ~t+34s, so this returned mid-ramp and
+  // reported wildly different "steady" scenes for the SAME POI (emitters
+  // 213/1954/2454/2579, draws 574.9/808.1/1574) — which is how a whole session
+  // of draw numbers ended up non-comparable. settleAt demands EXACT emitter+terr
+  // equality held for 10s behind a 40s floor, and REPORTS the plateau.
+  const settle = await settleAt(page, POI, { log: (m) => console.error(`[sz] ${m}`), pinPose: process.env.PIN_POSE || null });
+  if (!settle.settled) console.error(`[sz] !! proceeding UNSETTLED — do not compare these numbers to another run`);
+  const lastT = settle.state?.terrEverBaked ?? 0;   // CUMULATIVE ("ever baked"), not residency
+  const prevE = settle.state?.entRoots ?? 0;
+  const settleState = settle.state;
 
   // ── D + 1: scene census (instant) — split + entity instancing ceiling. ─────
   const census = await page.evaluate(() => {
@@ -187,7 +187,7 @@ async function drawCallsSpinning(page, seconds) {
     const diagC = await page.evaluate(() => { const d = window.__diag || {}; const pick = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (_) { return null; } }; return { vfxGauge: pick(d.vfxGauge), render: pick(d.render) }; }).catch(() => ({}));
     const shot = OUT.replace(/\.json$/, ".png");
     try { await page.screenshot({ path: shot }); } catch (_) {}
-    fs.writeFileSync(OUT, JSON.stringify({ censusOnly: true, generatedAtMs: Date.now(), poi: POI, query: q.toString(), steadyEntRoots: prevE, steadyTerr: lastT, drawCallsPerFrame: drawCalls, drawSpread: { min: dc.min, max: dc.max, windows: dc.windows, frames: dc.frames }, buildingsGroupChildren: bgChildren, atlasStats, census, consoleErrors, vfxGauge: diagC.vfxGauge, renderDiag: diagC.render }, null, 2));
+    fs.writeFileSync(OUT, JSON.stringify({ censusOnly: true, generatedAtMs: Date.now(), poi: POI, query: q.toString(), settled: settle.settled, settleState, settleElapsedS: settle.elapsedS, plateauAtS: settle.plateauAtS, steadyEntRoots: prevE, steadyTerr: lastT, drawCallsPerFrame: drawCalls, drawSpread: { min: dc.min, max: dc.max, windows: dc.windows, frames: dc.frames }, buildingsGroupChildren: bgChildren, atlasStats, census, consoleErrors, vfxGauge: diagC.vfxGauge, renderDiag: diagC.render }, null, 2));
     console.error(`[sz] CENSUS_ONLY: drawCalls=${drawCalls} buildingsGroupChildren=${bgChildren} consoleErrors=${consoleErrors.length} shot=${shot}`);
     if (consoleErrors.length) console.error(`[sz] ERRORS: ${JSON.stringify(consoleErrors.slice(0, 8))}`);
     console.error(`[sz] wrote ${OUT}`);
@@ -256,7 +256,7 @@ async function drawCallsSpinning(page, seconds) {
   const getParams = rows.find((r) => r.fn === "getParameters");
 
   const result = {
-    generatedAtMs: Date.now(), gpu: String(gpu), realGpu, poi: POI, steadyEntRoots: prevE, steadyTerr: lastT,
+    generatedAtMs: Date.now(), gpu: String(gpu), realGpu, poi: POI, settled: settle.settled, settleState, settleElapsedS: settle.elapsedS, plateauAtS: settle.plateauAtS, steadyEntRoots: prevE, steadyTerr: lastT,
     B_drawCallsPerFrame: drawCallsPerFrame, B_trisPerFrame: trisPerFrame, B_overFrames: dc.frames,
     B_drawSpread: { min: dc.min, max: dc.max, windows: dc.windows, headingStart: dc.headingStart, headingEnd: dc.headingEnd },
     D_meshNodeSplit: census.split,
