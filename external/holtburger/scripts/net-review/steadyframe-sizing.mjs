@@ -124,7 +124,21 @@ async function drawCallsSpinning(page, seconds) {
       // exclusion reasons mirroring static_atlas.js:389 (why an individual static can't atlas)
       const reason = { lod: 0, "no-uv": 0, "no-map": 0, "no-pixels": 0, deformed: 0, "staticbatch-tagged": 0, eligible: 0 };
       const eligibleGm = new Set();
+      let particleMeshes = 0, particleBuckets = 0, particleInstances = 0;
       if (g) g.traverse((o) => { if (o.visible === false) return;
+        // Particles are NOT batchable statics — count them in their own bucket.
+        // The static ParticleManager's scene IS staticsGroup (statics.js ~464),
+        // so every live particle billboard is a direct child of `statics`. A
+        // billboard is a textured quad, so it passes the whole eligibility
+        // ladder below and used to be reported as an atlas-batchable static —
+        // that is precisely what produced the phantom "~1000 eligible statics
+        // bypassing the atlas" lead (refuted in 9baa72b2: with
+        // ?staticScripts=off the eligible count was EXACTLY 0). Keyed on the
+        // explicit userData.__particle stamp (particle_manager meshFactory),
+        // NOT on depthWrite/frustumCulled — that heuristic misses the alpha
+        // (NormalBlending, depthWrite=true) particles.
+        if (o.userData?.isParticleInstanced) { particleBuckets++; particleInstances += o.count | 0; return; }
+        if (o.userData?.__particle) { particleMeshes++; return; }
         if (o.isBatchedMesh) { batched++; return; } if (o.isInstancedMesh) { instanced++; return; }
         if (!o.isMesh) return; indiv++;
         const gid = o.geometry?.uuid ?? "n"; const mid = Array.isArray(o.material) ? o.material.map((m) => m.uuid).join(",") : (o.material?.uuid ?? "n"); gm.add(`${gid}|${mid}`);
@@ -139,7 +153,11 @@ async function drawCallsSpinning(page, seconds) {
         else { reason.eligible++; eligibleGm.add(`${gid}|${mid}`); }
       });
       return { individualMeshes: indiv, distinctGeomMat: gm.size, collapsible: indiv - gm.size, batchedNodes: batched, instancedNodes: instanced,
-        excludeReasons: reason, eligibleDistinctGeomMat: eligibleGm.size };
+        excludeReasons: reason, eligibleDistinctGeomMat: eligibleGm.size,
+        // reported, not silently dropped: particles ARE real draws (one per live
+        // billboard, frustumCulled=false) — they are just not ATLAS-batchable.
+        // See ?particleInstancing for the lever that actually collapses them.
+        particleMeshes, particleBuckets, particleInstances };
     };
     const rr = ls.renderer;
     return { split, totalEntMeshes: totalEnt, distinctGuidKeys: kGuid.size, distinctWcidKeys: kWcid.size,
@@ -149,6 +167,10 @@ async function drawCallsSpinning(page, seconds) {
   });
   console.error(`[sz] staticsCollapse: ${JSON.stringify(census.staticsCollapse)}`);
   console.error(`[sz] buildingsCollapse: ${JSON.stringify(census.buildingsCollapse)}`);
+  // Particles are draws but NOT atlas-batchable — keep them beside `eligible`
+  // so the two are never conflated again (see 9baa72b2).
+  const _sp = census.staticsCollapse;
+  console.error(`[sz] statics particles: meshes=${_sp.particleMeshes} (each = 1 draw, frustumCulled=false) | instancedBuckets=${_sp.particleBuckets} instances=${_sp.particleInstances} — NOT counted in eligible=${_sp.excludeReasons.eligible}`);
   if (process.env.CENSUS_ONLY === "1") {
     // facing-averaged draw-calls/frame: spin in place so FCULL variance cancels.
     await spin(page, true);

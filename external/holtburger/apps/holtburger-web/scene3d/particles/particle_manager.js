@@ -908,8 +908,24 @@ export class ParticleManager {
         // would substitute its default white MeshBasicMaterial (the white
         // box). Render nothing instead via the shared invisible material.
         const mesh = new THREE.Mesh(geometry, mat || noSurfaceParticleMaterial());
-        mesh.frustumCulled = false; // sky-cell particles always render
+        // RP6 culls per EMITTER (see tick()), so three's per-object frustum test
+        // is redundant here. (The old comment said "sky-cell particles always
+        // render" — misleading: this factory serves BOTH world-anchored static
+        // default_script emitters AND the camera-following sky chain
+        // (statics.js attachSkyParticleChain), which share this one manager.)
+        mesh.frustumCulled = false;
         mesh.visible = false;
+        // Diagnostic stamp (2026-07-14): the ONE creation point for every
+        // particle mesh, so census/probes can tell particles from statics.
+        // A particle billboard is a textured quad, so it passes every
+        // "atlas-batchable static" gate (uv + map + image.data + not-LOD/
+        // deformed/__staticBatch) — that miscount is what manufactured the
+        // phantom "statics atlas-starvation" lead (refuted in 9baa72b2).
+        // Must be an EXPLICIT stamp: the tempting inferred test
+        // (frustumCulled===false && material.depthWrite===false) matches only
+        // ADDITIVE particles — the alpha branch above sets depthWrite=true, so
+        // it silently misses them (measured: 12 of 700 at Cragstone).
+        mesh.userData.__particle = true;
         return mesh;
       },
     });
