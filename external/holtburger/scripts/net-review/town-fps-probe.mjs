@@ -21,6 +21,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const q = new URLSearchParams({
     renderer: "3d", autoLogin: "1", account: "tailnet1", password: "tailnet1",
     autoSpawn: "first", nosw: "1", particleInstancing: "off", ...WEATHER_OFF,
+    ...(process.env.EXTRA_Q ? Object.fromEntries(new URLSearchParams(process.env.EXTRA_Q)) : {}),
   });
   // EVERY early exit must close the page first — tailnet1 is single-login, so a
   // page left open by a bail stays logged in and the next run boots into a

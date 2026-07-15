@@ -59,13 +59,39 @@ Yaraq is the one battery POI with a big move (fps 22.57→38.17, draws 744→288
 trustworthy pairing in the set: its arm-A run came after a session abort, with 232 long-tasks vs 153 and
 a different heap trajectory. **Unattributed — do not quote it.**
 
-**Residual (unverified hypothesis).** Draws fell 337 but staticsGroup particles only 168, so ~169
-draws/frame came off something else. Note `_setPartsVisible` lives in `ParticleManager`, which BOTH
-managers use — `_staticParticleManager` (scene: staticsGroup) and `entities.js _worldParticleManager`
-(scene: entitiesGroup) — and `loop.js` registers an entities culler too (`tickEntityRenderVisibility`).
-So the per-tick authority fix may be closing the SAME two-writer race for ENTITY particles, which the
-`drawableParticles` counter (staticsGroup only) never counted. **Not measured. Do not claim it.** To
-settle it, extend `town-fps-probe.mjs` to count `__particle` meshes scene-wide, split by group.
+### 0c. The "337 vs 168" residual — resolved to a candidate, and my first hypothesis was WRONG
+
+Draws fell 337 but staticsGroup drawable particles only fell 168 (192 → 24), so ~169 draws/frame came
+off something the particle counter did not count.
+
+- **REFUTED — "it's entity particles."** I first guessed that `_setPartsVisible` (which lives in
+  `ParticleManager`, shared by `_staticParticleManager` and `entities.js _worldParticleManager`) was
+  closing the same two-writer race in `entitiesGroup`, since `loop.js` registers an entities culler.
+  **Code says no:** `tickEntityRenderVisibility` (entities.js:2134) iterates `entityMap` and writes
+  visibility ONLY via `_applyEntityVisible` → `inst.root.visible` — the rig root. It never touches
+  particle meshes parented into `entitiesGroup`. Not a second writer. (Worth stealing from that file,
+  though: it composes `_stateVisible` and `_renderCullHidden` into one `want` — "producer #1" per its
+  own comment. That is the pattern statics/particles lacked, and is exactly this bug's cure.)
+- **CANDIDATE (fits, not independently confirmed): each drawable particle mesh costs ~2 draws/frame.**
+  Reconciling the three legs as `draws = k*particles + nonParticle`:
+  - k=1 → nonParticle = 212.9 / **381.9** / 217.0 — the PREFIX leg is ~169 out. Inconsistent.
+  - k=2 → nonParticle = 188.9 / **189.9** / 197.0 — all three agree within ~4%. Consistent.
+  - and the arm delta implies k = (573.9−236.9)/(192−24) = **2.01**.
+  Caveat: three points fitting one free parameter is weak, and the FIXED↔FIXED2 pair (Δparticles=4)
+  does not resolve k locally. A k≈2 would mean each visible particle is submitted in TWO passes per
+  displayed frame — which would RE-OPEN the "second world render" that the `?particleInstancing` row
+  ruled out, because that ruling used the per-object `onBeforeRender` hook the handoff itself later
+  flagged as MIS-FIRING (§5.4: it attributed only 118 of 1574 draws). Do not treat either as settled.
+
+**⚠ `?staticScripts=off` DOES NOT DO WHAT url-flags SAYS — do not use it as a "floor".** The row claims
+it "deletes the effects entirely" with a draw floor of 181. Measured at the pinned Cragstone on the fixed
+build, it is a PESSIMISATION: `anchors=0` (static-script emitters really are gone) but **586 emitters
+survive, 2872 particle meshes draw, 5925 draws/frame, 5.86 fps** — ~8× worse than the default config's
+237 draws / 46 fps. It is not the sky chain (`attachSkyParticleChain` honours the same kill switch,
+statics.js:4017). Likely mechanism, unverified: `_rp6ShouldCull` BAILS OPEN (`if (!parent) return false`)
+for an emitter with no usable anchor, so whatever survives the flag is never culled and every particle
+draws. This voids the "floor is 181 ⇒ instancing captures 95% of the available win" claim in that row.
+Attempted as the decisive test of k above; it cannot serve as one, since it changes the scene wholesale.
 
 ## 1. THE FIX (2 files, always-on, no flag)
 
@@ -199,6 +225,15 @@ these as a property of a POI.
    alternative is measuring the wrong path.
 5. **Not done from handoff §4:** task #4 (brazier hero shot + 62-town walk) and task #6 (anchor leak).
    Untouched.
+6. **`?staticScripts=off` is broken as a measurement floor** (§0c) — 5925 draws / 5.86 fps where the doc
+   promises a 181-draw floor. Its own row's "instancing captures 95% of the available win" rests on that
+   number. Worth its own look; not chased here.
+7. **Is k≈2 real?** (§0c) If each visible particle really is submitted twice per displayed frame, there is
+   a second pass nobody has accounted for, and the cheap prize is halving it. The clean way to settle k
+   without a page reload: at a pinned pose, sample draws, then force every `__particle` mesh invisible
+   in-page and re-sample — a WITHIN-page-load A/B, immune to every confound in settle.mjs's header.
+   (Naive `visible=false` will be undone for un-culled emitters by `particle.js setTranslucency`, so gate
+   it at the manager or stub the tick for the sample window.)
 
 ## 6. HARNESS ADDED (`net-review/`)
 
