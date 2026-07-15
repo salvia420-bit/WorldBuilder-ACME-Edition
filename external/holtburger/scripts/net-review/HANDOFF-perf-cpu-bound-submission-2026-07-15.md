@@ -1,3 +1,13 @@
+> ⚠ **SUPERSEDED by `HANDOFF-perf-draw-count-is-real-but-uncounted-2026-07-15.md`.** §3.1's directive was
+> followed — `draw-budget-probe.mjs` was run — and the census RE-AIMED this document's headline. Its
+> "the next lever is draw-call COUNT" thesis SURVIVES, but `renderer.info.render.calls` undercounts the
+> frame by **~3.9×** (a BatchedMesh multiDraw of N ranges reports `1`), so every draw number below is an
+> undercount and the group that looks smallest (`statics`, 9.5% of counted draws) actually owns **78% of
+> the real draws**. §3.2's ⭐⭐ "66 µs per draw" anomaly is **DISSOLVED** — it was ~26 real draws counted as
+> one; there is no per-object mystery and the `needsUpdate` refactor it proposed is unmotivated. §3.3
+> (`?perPolyCull` + the `?portalStencil` coupling, incl. the user's first-hand account) and §4 are
+> UNTOUCHED and still owed — read them here. Read the successor first.
+
 # HANDOFF — both DoubleSide two-passes are FIXED. The frame is now CPU-BOUND IN three's SUBMISSION.
 
 **Date:** 2026-07-15 · **Box:** wbterminal laptop → 1070 (tailscale, CDP :9333, real GPU) · **Self-contained.**
