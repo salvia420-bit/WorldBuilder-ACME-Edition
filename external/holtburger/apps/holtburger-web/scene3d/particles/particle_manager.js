@@ -367,6 +367,21 @@ const _rp6Frustum = new THREE.Frustum();
 const _rp6Sphere = new THREE.Sphere();
 const _rp6WorldPos = new THREE.Vector3();
 
+/**
+ * Set `visible` on an emitter's OCCUPIED slot meshes (`parts[i]` non-null);
+ * free slots are already invisible and must stay so. Reads before writing, so
+ * re-asserting an unchanged state costs a compare and dirties nothing.
+ * The one place RP6's cull decision reaches the meshes — see tick().
+ */
+function _setPartsVisible(emitter, visible) {
+  const parts = emitter.parts;
+  if (!parts || !parts.length) return;
+  for (let i = 0; i < parts.length; i++) {
+    const m = parts[i];
+    if (m && m.visible !== visible) m.visible = visible;
+  }
+}
+
 /** Resolve the active camera off the existing liveScene3d global. */
 function _rp6ResolveCamera() {
   if (typeof window === "undefined") return null;
@@ -1056,24 +1071,23 @@ export class ParticleManager {
         const wasCulled = emitter._rp6Culled === true;
         const nowCulled = camera ? _rp6ShouldCull(emitter, camera) : false;
         emitter._rp6Culled = nowCulled;
-        if (nowCulled !== wasCulled) {
-          // Transition: toggle visibility of the currently-ACTIVE part
-          // meshes so frozen off-screen particles aren't still submitted
-          // to the GPU (the per-slot meshes are `frustumCulled = false`,
-          // so three.js won't cull them for us). Only touch occupied
-          // slots (`emitter.parts[i]` non-null) — free slots are already
-          // invisible and must stay so. On re-entry we restore visible;
-          // the normal emit/kill path keeps it consistent afterward.
-          // This is a pure visibility flip — no reparent, no geometry/
-          // material churn, fully reversible.
-          const parts = emitter.parts;
-          if (parts && parts.length) {
-            const vis = !nowCulled;
-            for (let i = 0; i < parts.length; i++) {
-              const m = parts[i];
-              if (m) m.visible = vis;
-            }
-          }
+        if (nowCulled !== wasCulled && !nowCulled) {
+          // RE-ENTRY only (culled → visible): restore the currently-ACTIVE
+          // part meshes. Only touch occupied slots (`emitter.parts[i]`
+          // non-null) — free slots are already invisible and must stay so.
+          // The normal emit/kill path keeps it consistent afterward. Pure
+          // visibility flip — no reparent, no geometry/material churn.
+          //
+          // The culled direction is NOT handled here any more: hiding on the
+          // TRANSITION only was the RP6 visibility leak (2026-07-15). A
+          // transition fires once and then trusts the meshes to stay hidden,
+          // which is not a property this manager owns — `mesh.visible` is
+          // plain shared state on an object parented into staticsGroup, and
+          // any per-frame writer (statics.js cullStaticsGroup did exactly
+          // this) silently wins against a write that happens every
+          // `_RP6.recheckInterval` ticks. Enforcing "culled ⇒ hidden" EVERY
+          // tick below makes the cull authoritative instead of hoping.
+          _setPartsVisible(emitter, true);
         }
       }
 
@@ -1112,29 +1126,27 @@ export class ParticleManager {
         try {
           if (typeof emitter.stopEmitter === "function") emitter.stopEmitter();
         } catch (_) {}
+        let drained = false;
         if (emitter.stopped === true) {
           // Drain the stopped emitter's remaining particles instead of
           // waiting for numParticles to reach 0 organically (it can't,
           // while the full walk is skipped). updateParticles() does no
           // emission when stopped — just the kill-walk.
-          const drained = !emitter.updateParticles();
-          if (drained) {
-            removeIds.push(id);
-          } else {
-            // The kill-walk's particle.update() can flip a still-living
-            // slot mesh back to visible (particle.js setTranslucency:95).
-            // This emitter is off-screen, so re-hide any occupied slots
-            // to keep the cull's GPU-submission savings during the
-            // (few-frame) drain window. Free slots are already invisible.
-            const parts = emitter.parts;
-            if (parts && parts.length) {
-              for (let i = 0; i < parts.length; i++) {
-                const m = parts[i];
-                if (m) m.visible = false;
-              }
-            }
-          }
+          drained = !emitter.updateParticles();
+          if (drained) removeIds.push(id);
         }
+        // AUTHORITATIVE (2026-07-15): culled ⇒ hidden, re-asserted EVERY tick
+        // for EVERY culled emitter — not once on the transition, and not only
+        // on the stopped-drain path (which is where this used to live: its
+        // comment already named the reason, that the kill-walk's
+        // particle.update() flips a still-living slot back to visible via
+        // particle.js setTranslucency, but scoped the cure to the drain
+        // window). Any writer of `mesh.visible` that runs per-frame beats a
+        // per-transition write; re-asserting per tick is what actually holds
+        // the cull's GPU-submission savings. Free slots are already invisible;
+        // `_setPartsVisible` reads before it writes, so the steady state is a
+        // compare per occupied slot and no property churn.
+        if (!drained) _setPartsVisible(emitter, false);
         continue;
       }
 

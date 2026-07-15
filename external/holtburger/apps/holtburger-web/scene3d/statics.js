@@ -3402,6 +3402,24 @@ export function cullStaticsGroup(scene3d, culler) {
   let culled = 0;
   for (const node of children) {
     if (!node) continue;
+    // RP6 owns particle visibility — this pass must not be a second writer.
+    // `_staticParticleManager` is built with `scene: staticsGroup`, so
+    // emitParticle() adds every per-slot particle mesh as a DIRECT CHILD here,
+    // and the `node.visible = want` below would compete with RP6's own cull
+    // (particles/particle_manager.js tick). RP6 wins on paper and loses in
+    // practice: it culls per EMITTER on a TRANSITION, from its own rAF
+    // (`_spLoop`) every `_RP6.recheckInterval` ticks, while this pass rewrites
+    // `visible` EVERY frame from tickPerFrame. So a particle whose emitter RP6
+    // culled gets resurrected on the next frame by a plain frustum "want=true"
+    // — measured 140 of 152 drawn particles (92%) at a settled Cragstone.
+    // The two tests are not equivalent and this one cannot stand in: RP6 also
+    // applies a distance cap (`_RP6.maxDistance`) that this pass does not
+    // (`CULL_DIST_SQ` is Infinity unless ?cullDist=N), which is exactly the
+    // population that leaks — in frustum, far past the cap, frozen mid-air.
+    // Skipping BEFORE `tested` also keeps the diag counts about real statics,
+    // consistent with the census particle fix (de24059d).
+    const ud = node.userData;
+    if (ud && (ud.__particle === true || ud.isParticleInstanced === true)) continue;
     // BatchedMesh statics (static-batch consolidation, stat-atlas buckets)
     // sit at the group origin with their placements in per-instance matrices,
     // so the isMesh sphere derivation below would center the cull sphere at
