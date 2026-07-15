@@ -387,6 +387,64 @@ been run**, and the +23% is a GPU cost this CPU-side probe cannot price — on a
 net loss. It needs `singlepass-eyetest.mjs` at 3 POIs and a moving A/B (the trade is worst where LOD
 matters most: distance), not a bare-default flip.
 
+## 4e. ⭐⭐ RESOLVED — IT WAS AN UPSTREAM three.js BUG. SHIPPED, AND REPORTED.
+
+**The `getParameters` hunt ended by COUNTING, not by arguing.** `npc-counter-probe.mjs` serves a
+counter-instrumented `three.module.js` to the page via `page.route()` (three is CDN-pinned at
+`index.html:951`; our `node_modules` copy is the same 0.184.0 build, and `three.module.js` imports
+`three.core.js` RELATIVELY, so only the module half is swapped — no vendored file, no importmap edit,
+nothing to forget to revert). It counts all 26 `needsProgramChange = true;` sites plus
+getProgram/setProgram/prepareMaterial calls, in three's OWN source:
+
+| per frame (settled Holtburg, 419 frames) | |
+|---|---|
+| `CALLS: setProgram` | 1,941 |
+| `CALLS: getProgram` | **262** — 13.5% of objects re-resolve, every frame |
+| **`05:` isBatchedMesh && batchingColor === false && object.colorTexture !== null** | **182** ⭐ |
+| `02:`/`03:` the batching flip (material shared across classes) | 39 + 39 |
+| `25:` VERSION MISMATCH | 2 — the known §5.1 residual mesh |
+
+262 × ~15 µs ≈ **3.9 ms**, which is exactly the `getParameters` cost §4c measured. **The dominant trigger
+was one nobody in this chain suspected, and it is an UPSTREAM BUG:**
+
+`WebGLRenderer` reads **`object.colorTexture`** (`three.module.js:18340/:18344`; unbundled
+`src/renderers/WebGLRenderer.js:2418/:2422` on `dev`) — but **`BatchedMesh` has no such property.** Its
+field is `_colorsTexture` (serialized `colorsTexture`, *plural*). So `undefined !== null` is permanently
+true and **every BatchedMesh re-resolves its program every frame**, landing back on the identical program
+(the "identical program" early-out at `:2205` is only reached AFTER `getParameters` + the cache-key
+**string build** at `:2176-2177`). The sibling branch can never fire at all. The same file uses
+`object._colorsTexture` CORRECTLY at `:2683`, and both lines arrived together in three PR #28255 — a typo,
+not a design. **Reported: [mrdoob/three.js#34054](https://github.com/mrdoob/three.js/issues/34054)**
+(still on `dev` and r185.1).
+
+**SHIPPED — `?bmColorTextureFix` (DEFAULT-ON, `=off` escapes)**, `scene3d/three_batchedmesh_colortexture_fix.js`:
+aliases `BatchedMesh.prototype.colorTexture` → `_colorsTexture` once at `init3D`, before any batch exists,
+covering every creation site and self-retiring if three ships the property.
+
+| | stock | fixed |
+|---|---|---|
+| branch `:18344` | 179/frame | **0** |
+| `getProgram` | 258/frame | **78** (−70%) |
+| renderCPU (instrumented A/B/A/B/A, one page load) | 28.29 ms | **24.95 ms** (**−3.35 ms, −11.8%**; A spread 1.70) |
+| renderCPU (shipped path, stock CDN three + our alias) | 28.31 ms (`=off`) | **24.63 ms** (default) |
+| console errors | 0 | 0 |
+
+⚠ **It must be a GETTER, not `colorTexture = null`** — a bare null silences `:18344` today but INVERTS the
+bug the moment anything calls `setColorAt()` (`_colorsTexture` non-null ⇒ `batchingColor` true ⇒ `:18340`
+fires every frame instead). `test_bm_colortexture_fix.mjs` (13/13) pins both colour states, and its test 1
+asserts the bug still EXISTS in the three we ship — so the test itself says when the workaround can retire.
+
+**AND IT VINDICATES A RESULT THAT LOOKED LIKE A FAILURE.** `material-declone-ab`'s **B − P = 0.10 ms** was
+CORRECT, not a broken measurement: branch 05 is per-OBJECT, so no amount of material cloning could ever
+have fixed it. The placebo arm was right and I should have believed it sooner.
+
+**WHAT THIS LEAVES.** §4b's mismatch stands and is now explained: `?walkInInstance`'s −10.5% was never a
+draw-count win — it removed OBJECTS, and fewer objects meant fewer of these bogus per-frame re-resolves.
+With #34054 worked around, **the draw-count thesis has no remaining evidence at all.** The frame is now
+~24.6 ms; `02:`/`03:` (78/frame, the real class thrash) and `updateMatrixWorld`/`projectObject` (~9-11%,
+both scaling with NODE count) are what is left. **Re-run `cpu-profile-probe` + `profile-split-render` on
+the FIXED default before picking the next lever** — every number in §4c predates this fix.
+
 ## 5. RESIDUALS / UNKNOWNS (honest loose ends)
 
 1. **Nothing was shipped this session.** No source change, no flag, no default flip. Five probes and a

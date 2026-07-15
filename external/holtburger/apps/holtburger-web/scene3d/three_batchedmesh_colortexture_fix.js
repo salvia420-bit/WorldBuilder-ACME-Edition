@@ -1,6 +1,16 @@
 // three_batchedmesh_colortexture_fix — work around an UPSTREAM three.js r184 bug
 // that makes EVERY BatchedMesh re-resolve its shader program EVERY frame.
 //
+// UPSTREAM: reported as mrdoob/three.js#34054 (2026-07-15).
+//   https://github.com/mrdoob/three.js/issues/34054
+// Introduced by three PR #28255 ("BatchedMesh: add getColorAt and setColorAt"),
+// which added `object.colorTexture` in these two branches and the CORRECT
+// `object._colorsTexture` for the uniform, in the same file. Still present on
+// `dev` and in r185.1 as of 2026-07-15. ⇒ RETIRE THIS FILE once the upstream fix
+// ships and we bump three: `applyBatchedMeshColorTextureFix` already no-ops when
+// three defines the property itself, so the retirement is safe but the module,
+// its flag, and its test should go.
+//
 // THE BUG (three r184; present in the bundled build AND in the unbundled source,
 // so it is genuine upstream, not a build artifact):
 //
