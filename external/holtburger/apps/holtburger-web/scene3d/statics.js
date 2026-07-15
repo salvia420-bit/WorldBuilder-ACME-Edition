@@ -1642,6 +1642,46 @@ function readStaticBatchFlag() {
 // Test seam.
 export function __setStaticBatchForTest(v) { _staticBatchFlag = v; }
 
+let _walkInInstanceFlag;
+// ?walkInInstance (DEFAULT-OFF, 2026-07-15) — group the WALK-IN baker's
+// placements by modelId and emit an InstancedMesh for any model with >= 2
+// placements in this LB, exactly as the ring-wide baker already does (~:2723).
+//
+// WHY. The walk-in baker builds one plain Mesh PER PLACEMENT with no grouping
+// (`for (const placement of statics)` -> buildSingletonNode), and walk-in is how
+// you arrive anywhere, so almost every static in a streamed town is
+// un-instanced. Those nodes fall through to the chunk batcher, where BatchedMesh
+// emits ONE multiDraw range PER INSTANCE. Measured at settled Holtburg on the
+// 1070 (net-review/singleton-dedupe-probe.mjs): 17,774 batched instances share
+// only 324 DISTINCT geometries (54.9x), the top geometry is drawn 1,736 times,
+// and one bucket holds 277 instances of a SINGLE model. `info.render.calls`
+// cannot see any of it — it counts a whole multiDraw as 1
+// (three.module.js:4449), which is why four sessions optimized a 1,920-draw
+// number for a ~7,562-draw frame.
+//
+// The draw floor by (material, geometry) is ~375 vs ~17,774 today, and
+// InstancedMesh is ONE real draw for N instances — measured FREE in this very
+// scene (14 nodes / 2,992 instances cost -0.28ms).
+//
+// DEFAULT-OFF until A/B'd on the 1070. Score it with
+// net-review/multidraw-truth-probe.mjs + renderCPU, NOT with info.calls:
+// collapsing ranges into instanced draws makes info.calls go UP (183 -> ~375)
+// while the frame gets faster. That inversion is the whole trap.
+function walkInInstanceEnabled() {
+  if (_walkInInstanceFlag !== undefined) return _walkInInstanceFlag;
+  let on = false; // opt-IN only: === "on"/"1"/"true"/"yes" enables.
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("walkInInstance") || "").toLowerCase();
+      on = v === "on" || v === "1" || v === "true" || v === "yes";
+    }
+  } catch (_) { on = false; }
+  _walkInInstanceFlag = on;
+  return on;
+}
+// Test seam.
+export function __setWalkInInstanceForTest(v) { _walkInInstanceFlag = v; }
+
 // Consolidate a per-LB list of built static nodes: plain-Mesh singletons sharing
 // a surface material → one BatchedMesh per surfaceDid; LOD wrappers, lone
 // singletons, and any member that won't fit the batch fall through as-is.
@@ -1651,7 +1691,12 @@ export function consolidateStaticSingletons(nodes, outBatches) {
   const out = [];
   const bySurf = new Map(); // material identity -> Mesh[]
   for (const n of nodes) {
-    if (n && n.isMesh && !n.isLOD && n.geometry && n.material && n.userData) {
+    // !isInstancedMesh (2026-07-15, ?walkInInstance): an InstancedMesh is
+    // `isMesh === true`, so without this guard it would be swept in here and
+    // addGeometry/addInstance'd ONCE — silently collapsing N placements to one
+    // and deleting scenery. Harmless before ?walkInInstance (this path had never
+    // been handed an InstancedMesh); load-bearing now.
+    if (n && n.isMesh && !n.isInstancedMesh && !n.isLOD && n.geometry && n.material && n.userData) {
       // P1.14 (kit §7 EDIT F): key by the MATERIAL OBJECT, not the surfaceDid.
       // With ?visual on, two DIDs sharing a surfaceDid but carrying different frag
       // SETs resolve to different (surfaceDid|setKey|configKey) variant clones —
@@ -1995,6 +2040,10 @@ export async function bakeStaticsForLandblock(
   const staticsReceiveShadow = scene3d.quality?.preset !== "low";
   let objectCount = 0;
   let singletonCount = 0;
+  // ?walkInInstance pass 2 only; both stay 0 on the default path, which keeps
+  // every existing count (and the flag-off summary) unchanged.
+  let instancedGroupCount = 0;
+  let _walkInInstanceSavedNodes = 0;
   let lodCount = 0;
   let skippedNoMesh = 0;
   let sceneryObjectCount = 0;
@@ -2020,12 +2069,36 @@ export async function bakeStaticsForLandblock(
   const STATICS_BUILD_BUDGET_MS = 6;
   const addedNodes = [];
   let _chunkStart = performance.now();
+  // ?walkInInstance (default-OFF) — pre-group this LB's placements by modelId so
+  // a model placed >= 2 times here emits ONE InstancedMesh instead of N plain
+  // Meshes (each of which becomes its own multiDraw range downstream). The
+  // grouped models are SKIPPED by the per-placement loop below and emitted in
+  // pass 2, which keeps the singleton loop's iteration order — and therefore
+  // flag-off — byte-identical.
+  const _walkInInstance = walkInInstanceEnabled();
+  const _instanceable = new Set();
+  const _placementsByModel = new Map();
+  if (_walkInInstance) {
+    for (const p of statics) {
+      if (!primary.groupsByModel.has(p.modelId)) continue;
+      let arr = _placementsByModel.get(p.modelId);
+      if (!arr) { arr = []; _placementsByModel.set(p.modelId, arr); }
+      arr.push(p);
+    }
+    for (const [modelId, group] of _placementsByModel) {
+      // >= 2 mirrors the ring baker's `isInstanced` threshold (~:2723): at 1
+      // placement an InstancedMesh is still 1 draw and costs an extra
+      // instanceMatrix buffer, so a lone placement stays a plain Mesh.
+      if (group.length >= 2) _instanceable.add(modelId);
+    }
+  }
   for (const placement of statics) {
     const groups = primary.groupsByModel.get(placement.modelId);
     if (!groups || groups.length === 0) {
       skippedNoMesh += 1;
       continue;
     }
+    if (_instanceable.has(placement.modelId)) continue; // emitted grouped, in pass 2
     // RP1 — degraded surface groups keyed by surfaceDid for this model.
     const degradedBySurface =
       degradedGeomByModel.get(placement.modelId) || null;
@@ -2080,6 +2153,71 @@ export async function bakeStaticsForLandblock(
     if (staticsTimeSlice && (performance.now() - _chunkStart) > STATICS_BUILD_BUDGET_MS) {
       await new Promise((r) => setTimeout(r, 0));
       _chunkStart = performance.now();
+    }
+  }
+
+  // ?walkInInstance PASS 2 — one InstancedMesh per (model, surface) for the
+  // models placed >= 2 times in this LB. Mirrors the ring baker's instanced
+  // branch (~:2756); the only differences are per-LB scope:
+  //   - every placement here shares ONE landblockId, so the node covers exactly
+  //     one lb-key and carries `userData.landblockId` -> the EXISTING per-LB
+  //     eviction walker (landblock_lru.js ~:955, "kill by userData.landblockId")
+  //     removes it. The ring baker's nodes span LBs and must instead be
+  //     refcounted into the LRU via `coversLbKeys`; we deliberately do NOT use
+  //     that contract here, because a per-LB node needs no refcount.
+  //   - nodes go into `addedNodes` (attached after the loop) rather than
+  //     straight into staticsGroup, so the time-slice / prewarm cancellation
+  //     guards below can still drop this LB cleanly.
+  if (_walkInInstance && _instanceable.size > 0) {
+    const placementMatrix = makePlacementMatrixHelper();
+    for (const modelId of _instanceable) {
+      const group = _placementsByModel.get(modelId);
+      const surfaceGroups = primary.groupsByModel.get(modelId);
+      if (!group || !surfaceGroups || surfaceGroups.length === 0) continue;
+      const degradedBySurface = degradedGeomByModel.get(modelId) || null;
+      const fragPlan = visualEnabled() ? fragPlanForDid(modelId) : null;
+      for (const sg of surfaceGroups) {
+        let mat = _fragMat(materialCache.getCached(sg.surfaceDid), materialCache, sg.surfaceDid, fragPlan);
+        const staticsMatCastsShadow = materialCanCastShadow(mat);
+        const degradedLevels =
+          (degradedBySurface &&
+            degradedBySurface.get(degradedSurfaceKey(sg.surfaceDid, sg.doubleSided))) ||
+          null;
+        const { node, isLod } = buildInstancedNode({
+          modelId,
+          surfaceDid: sg.surfaceDid >>> 0,
+          group,
+          geom: sg.geometry,
+          degradedLevels,
+          mat,
+          placementMatrix,
+          staticsShadow,
+          staticsMatCastsShadow,
+          staticsReceiveShadow,
+        });
+        // The per-LB eviction contract (see above). buildInstancedNode sets
+        // `coversLbKeys` for the ring path's refcount; stamping landblockId
+        // routes this node to the per-LB walker instead. Both leaves of an LOD
+        // wrapper are covered because the walker removes the WRAPPER.
+        // Read off the placement (not lbX/lbY) so it is the SAME value
+        // buildSingletonNode stamps (`landblockId: placement.landblockId`) —
+        // every placement in this group came from this LB's own `statics`.
+        node.userData.landblockId = group[0].landblockId >>> 0;
+        addedNodes.push(node);
+        instancedGroupCount += 1;
+        // This node replaces `group.length` plain Meshes with 1.
+        _walkInInstanceSavedNodes += group.length - 1;
+        if (isLod) lodCount += 1;
+      }
+      objectCount += group.length;
+      for (const p of group) {
+        if (p.source === "scenery") sceneryObjectCount += 1;
+        else landblockInfoObjectCount += 1;
+      }
+      if (staticsTimeSlice && (performance.now() - _chunkStart) > STATICS_BUILD_BUDGET_MS) {
+        await new Promise((r) => setTimeout(r, 0));
+        _chunkStart = performance.now();
+      }
     }
   }
 
@@ -2191,7 +2329,11 @@ export async function bakeStaticsForLandblock(
         const m = node && node.material;
         const t = m && m.map;
         const img = t && t.image;
-        if (node && node.isMesh && !node.isBatchedMesh && !node.isLOD && node.geometry && node.geometry.attributes?.uv && t && img && img.data && !node.userData?.__staticBatch) {
+        // !isInstancedMesh (2026-07-15, ?walkInInstance) — the atlas re-emits an
+        // atlasable node as a single batched entry, so an InstancedMesh routed
+        // here would lose every placement but one. Same guard, same reason, as
+        // the two consolidators above.
+        if (node && node.isMesh && !node.isInstancedMesh && !node.isBatchedMesh && !node.isLOD && node.geometry && node.geometry.attributes?.uv && t && img && img.data && !node.userData?.__staticBatch) {
           atlasable.push(node);
         } else {
           rest.push(node);
@@ -2264,22 +2406,29 @@ export async function bakeStaticsForLandblock(
     }
   }
 
-  // Draw-call savings for the per-LB path: every placement becomes
-  // its own draw call (plain Mesh, no instancing). So the count is
-  // identical to `objectCount`; the "savings" relative to per-Mesh
-  // is zero. That's by design for the lazy-walk path — see the
-  // comment block above.
+  // Draw-call savings for the per-LB path: by default every placement becomes
+  // its own draw call (plain Mesh, no instancing), so the count is identical to
+  // `objectCount` and the "savings" relative to per-Mesh is zero — by design for
+  // the lazy-walk path (see the comment block above).
+  //
+  // ?walkInInstance (2026-07-15) changes that for models placed >= 2 times in
+  // this LB: each emits ONE InstancedMesh. `instancedGroupCount` is no longer
+  // unconditionally 0 — it was hardcoded because this path could not produce an
+  // instanced node, and a hardcoded 0 would now under-report the flag's whole
+  // effect to every caller and diag that reads this summary.
+  // `drawCallReductionEstimate` stays a per-node estimate: each instanced group
+  // replaces `group.length` plain Meshes with 1 node.
   return {
     objectCount,
     modelCount: primary.groupsByModel.size,
     surfaceCount: primary.allSurfaceDids.size,
     skippedZeroTri: primary.skippedZeroTri,
     skippedNoMesh,
-    instancedGroupCount: 0,
+    instancedGroupCount,
     staticBatchGroupCount: staticBatchCount,
     singletonCount,
     lodCount,
-    drawCallReductionEstimate: 0,
+    drawCallReductionEstimate: _walkInInstanceSavedNodes,
     sceneryObjectCount,
     landblockInfoObjectCount,
     disposables: {

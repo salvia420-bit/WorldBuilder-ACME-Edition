@@ -165,7 +165,14 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
     const out = [];
     const byMat = new Map(); // material identity -> Mesh[] (same key as per-LB)
     for (const n of nodes) {
-      if (n && n.isMesh && !n.isLOD && n.geometry && n.material && n.userData) {
+      // !isInstancedMesh (2026-07-15, ?walkInInstance): an InstancedMesh is
+      // `isMesh === true`. Un-guarded, a walk-in instanced node would be
+      // consumed here and re-added as a SINGLE instance (addGeometry once,
+      // addInstance once, setMatrixAt(m.matrix) — the InstancedMesh's own
+      // per-instance matrices are never read), silently deleting every
+      // placement but one. This path had never seen an InstancedMesh before
+      // that flag, which is exactly why the guard did not exist.
+      if (n && n.isMesh && !n.isInstancedMesh && !n.isLOD && n.geometry && n.material && n.userData) {
         const key = n.material;
         let arr = byMat.get(key);
         if (!arr) { arr = []; byMat.set(key, arr); }

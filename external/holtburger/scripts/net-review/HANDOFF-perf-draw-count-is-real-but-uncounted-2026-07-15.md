@@ -280,7 +280,15 @@ arm C measured — if tris jump far more than that, the bucket scope is wrong.
    the property. And when a code read tells you a dedupe exists (`static_batch_x.js:16` "chunks still
    dedupe geometry cross-LB"), check what it is keyed on — `gidOf` keys on **object identity**, and 2,786
    distinct objects carried 324 distinct datasets.
-9. **A FLAG CAN ROUTE AROUND THE FILE YOU ARE READING.** I cited `statics.js:1650` as the live batcher; the
+9. **IF AN ARM CAN'T HOLD A RESOURCE THE OTHER ARM ALSO NEEDS, ORDER IS A VARIABLE — BALANCE IT.** The
+   single-login gap made "did this arm settle?" depend on *the previous arm's outcome*, so strict `off,on`
+   alternation pinned every ON arm to the post-success slot and manufactured 2/2 ON failures that read as
+   "the flag breaks the world" (§8). A fixed gap is not a fixed condition. **Balance the order across reps,
+   retry a lost arm instead of scoring it, and be suspicious of any arm that fails 100% of the time — real
+   effects are rarely that tidy.** The tell was that the same flag had settled fine in a manual run minutes
+   earlier; a 100%-clean split between "my code" and "not my code" should prompt a look at the harness
+   before the code.
+10. **A FLAG CAN ROUTE AROUND THE FILE YOU ARE READING.** I cited `statics.js:1650` as the live batcher; the
    default-ON `?statBatchChunk` routes to `static_batch_x.js` instead, and the live node names said so
    (`static-batch-c-r57x61-…`). **Read the object names out of the settled scene before citing a builder** —
    same family as the predecessor's §6.1 ("grepping creation sites tells you what you PATCHED, not what
@@ -314,11 +322,28 @@ arm C measured — if tris jump far more than that, the bucket scope is wrong.
 - **1070:** `schtasks /run /tn cdpwbclaude` (headless, muted, off-screen, `--user-data-dir=C:\Temp\cdpwb-claude`);
   tunnel `ssh -fN -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 young@100.127.215.75`. Kill test chrome by
   `cdpwb-claude` cmdline match ONLY — **a person uses that box** — and verify with `Get-Process chrome`.
-- **`tailnet1` is single-login and the gap is REAL (predecessor §6.8, re-confirmed twice here):** two
-  back-to-back runs died — one `boot error`, one that logged in but streamed NOTHING (`pose: null`,
-  `terrEverBaked: 0`, everything 0, and it burned the full 240 s settle timeout before aborting). **Wait
-  45-60 s between runs.** The silent-empty-world failure is the nastier of the two; it looks like a settle
-  problem, not a login one.
+- **⚠⚠ `tailnet1`'s single-login gap CAN FORGE AN ARM EFFECT. The 45-60 s figure (predecessor §6.8) is only
+  true after a FAILED run.** A run that reaches the world holds the account in-world for ~90 s; a run that
+  fails never held it at all. So in a fixed-gap A/B the gap is effectively *conditional on the previous
+  arm's outcome*, and with strict `off,on` alternation **every ON arm inherits the post-success slot**:
+  ```
+  off-1 SUCCESS -> +60s -> on-1  FAIL (pose:null, terrEverBaked:0 — nothing streamed)
+  on-1  FAIL    -> +60s -> off-2 SUCCESS   (a failed arm never held the account)
+  off-2 SUCCESS -> +60s -> on-2  FAIL
+  ```
+  That is **2/2 ON failures and 2/2 OFF successes from a login artifact**, and it reads exactly like "the
+  flag breaks the world" — the same flag whose own manual run had settled fine minutes earlier (it followed
+  a long idle). **Use a 150 s gap, BALANCE the order so the post-success slot alternates between arms, and
+  retry a lost arm rather than scoring it** (`scratchpad/walkin-ab2.sh`). The silent-empty-world failure
+  (`pose: null`, everything 0, burns the full 240 s settle timeout) is the nastier of the two failure modes
+  because it presents as a settle/content problem, not a login one.
+- **Do NOT `pkill -f <pattern>` where the pattern appears in your own command line** — including inside an
+  `echo`. It matches your own shell and self-kills (exit 144). Memory warns about this; I hit it anyway
+  while cleaning up the contaminated run. Kill by PID.
+- **Do not `git show HEAD:<path> > <path>` to A/B source while a probe is running.** The redirect truncates
+  before writing, so a page fetching that module mid-write gets a PARTIAL file and the world never streams
+  — indistinguishable from the login failure above. Copy to a scratch path and swap, or run it when the box
+  is idle.
 - No wasm rebuild needed for any of this: JS is served LIVE by `scripts/serve.py` → :8765. `dist` is a
   symlink to `/mnt/wbterminal2/holtburger-dist`.
 - Do **NOT** `git stash` in this repo (3 pre-existing entries). A/B with `git show <sha>:<path> > <path>`.

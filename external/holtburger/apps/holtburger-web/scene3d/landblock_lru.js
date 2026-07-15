@@ -972,9 +972,21 @@ export class LandblockLRU {
         // DataTextures that the geometry-disposables list does NOT cover (its
         // source group geoms are tracked separately). Dispose it here so
         // ?staticBatch consolidations don't leak GPU memory on eviction.
-        if (c.isBatchedMesh && typeof c.dispose === "function") {
-          try { c.dispose(); } catch (_) { /* fail-soft */ }
-        }
+        //
+        // isInstancedMesh (2026-07-15, ?walkInInstance): a walk-in InstancedMesh
+        // is per-LB, so it arrives here carrying userData.landblockId — unlike
+        // the RING baker's instanced nodes, which span LBs, carry no
+        // landblockId, and are refcount-evicted via coversLbKeys (they never
+        // reach this loop; the comment above still describes them correctly).
+        // Its instanceMatrix is an InstancedBufferAttribute holding a GPU
+        // buffer that the geometry-disposables list does not cover either, so
+        // it needs the same explicit dispose. Traverse: an LOD-wrapped node is
+        // a Group whose LEAVES are the InstancedMeshes.
+        c.traverse((n) => {
+          if ((n.isBatchedMesh || n.isInstancedMesh) && typeof n.dispose === "function") {
+            try { n.dispose(); } catch (_) { /* fail-soft */ }
+          }
+        });
       }
     }
 
