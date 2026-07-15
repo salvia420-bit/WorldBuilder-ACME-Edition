@@ -190,6 +190,20 @@ function _instGeometryFor(geometry) {
 
 const _instColor = new THREE.Color();
 
+// Shared seam noops — identity-comparable, so a runtime toggle can tell "we
+// installed these" from "the caller supplied their own onMeshActive".
+const _NOOP = () => {};
+
+/**
+ * Runtime flip of the module gate (diagnostic; see `window.__setParticleInstancing`).
+ * Exists because a cross-page-load A/B here is NOT reproducible: two runs with the
+ * same pinned pose, same flags, both properly settled still differ ~25% (draws
+ * 1590.3 vs 1996) — the emitter plateau is stochastic (2451/2502/2505/2579 from a
+ * constant 138 anchors) and emission is RNG-driven. Measuring BOTH arms in ONE
+ * settled page load is the only way to hold the scene identical by construction.
+ */
+export function setParticleInstancingFlag(on) { _INST_ON = !!on; }
+
 // Buckets are keyed by gfxobj (⇒ shared geometry + texture), NOT by emitter.
 // Measured at Cragstone: 2182 live static emitters holding 8492 particles —
 // ~4 particles each. A per-EMITTER bucket therefore collapses only ~4 draws
@@ -639,6 +653,16 @@ export class ParticleManager {
     this._instancing = opts.instancing === true;
     /** @type {Map<number, {im: THREE.InstancedMesh, n: number}>} gfxobj → bucket */
     this._instBuckets = new Map();
+    // Diagnostic seam for the runtime A/B (see setParticleInstancingFlag). Only
+    // the opted-in manager installs it, and it mutates nothing until called —
+    // the URL flag still decides the initial state.
+    if (this._instancing && typeof window !== "undefined") {
+      window.__setParticleInstancing = (on) => {
+        setParticleInstancingFlag(on);   // future addEmitter calls follow suit
+        return this.setInstancing(on);   // existing emitters re-point now
+      };
+      window.__particleInstancingDiag = () => this.instancingDiag();
+    }
     // RP6 (2026-06-08) — off-screen emitter culling. `_rp6Frame`
     // counts ticks so the frustum/distance set is only re-evaluated
     // every `_RP6.recheckInterval` ticks; between re-checks each
@@ -838,8 +862,8 @@ export class ParticleManager {
       // Instanced: keep slot meshes OUT of the scene graph (they stay pure
       // transform/opacity carriers that _appendInstances reads back).
       // These seams are why particle.js / particle_emitter.js need no edits.
-      onMeshActive: useInst ? (() => {}) : undefined,
-      onMeshFree: useInst ? (() => {}) : undefined,
+      onMeshActive: useInst ? _NOOP : undefined,
+      onMeshFree: useInst ? _NOOP : undefined,
       meshFactory: async (_slotIdx) => {
         // Per-slot mesh: shared geometry, cloned material so per-particle
         // opacity lerps don't stomp neighbors. Perf (2026-06-27): reuse a
@@ -1208,6 +1232,92 @@ export class ParticleManager {
       n += 1;
     }
     bucket.n = n;
+  }
+
+  /**
+   * Re-point ONE existing emitter at the instanced or the per-mesh path.
+   * Diagnostic only (runtime A/B) — addEmitter already routes new emitters.
+   *
+   * Toggling ON needs the geometry + a blend-configured material, which
+   * addEmitter captured from locals long out of scope. Both are recoverable
+   * from any partStorage slot mesh: geometry is SHARED across slots, and the
+   * per-slot clone already carries this emitter's additive/alpha branch — which
+   * also gives us the additive test without re-reading the surface flags.
+   * (The clone's `opacity` is per-particle mutated, but the bucket material
+   * pins opacity=1 and folds opacity into the instance colour anyway.)
+   */
+  _applyInstancing(emitter, on) {
+    try {
+      const wasOn = emitter._instKey !== null && emitter._instKey !== undefined;
+      if (on === wasOn) return wasOn;
+      if (on) {
+        const probe = (emitter.partStorage || []).find(Boolean);
+        if (!probe || !probe.geometry || !probe.material) return false;
+        if (probe.material.blending !== THREE.AdditiveBlending) return false; // additive-only, as ever
+        const g = _instGeometryFor(probe.geometry);
+        if (!g) return false;
+        emitter._instKey = (emitter.info?.hwGfxObjId ?? 0) >>> 0;
+        emitter._instGeom = g;
+        emitter._instBaseMat = probe.material;
+        emitter._onMeshActive = _NOOP;
+        emitter._onMeshFree = _NOOP;
+        // The bucket represents these particles now — pull the meshes out of the
+        // scene or they would draw TWICE (once per mesh, once per instance).
+        for (const m of (emitter.parts || [])) { if (m && m.parent) m.parent.remove(m); }
+        return true;
+      }
+      // OFF: restore the per-mesh path. Only clear seams WE installed.
+      emitter._instKey = null; emitter._instGeom = null; emitter._instBaseMat = null;
+      if (emitter._onMeshActive === _NOOP) emitter._onMeshActive = null;
+      if (emitter._onMeshFree === _NOOP) emitter._onMeshFree = null;
+      // Re-attach live particles; RP6 owns their visibility, so mirror its
+      // current decision rather than forcing them visible.
+      const vis = emitter._rp6Culled !== true;
+      for (const m of (emitter.parts || [])) {
+        if (!m) continue;
+        if (!m.parent && this._scene) this._scene.add(m);
+        m.visible = vis;
+      }
+      return false;
+    } catch (_) { return false; }
+  }
+
+  /**
+   * Flip every emitter of THIS manager between the instanced and per-mesh
+   * paths, in place, without a reload. Returns a diag snapshot.
+   */
+  setInstancing(on) {
+    const want = !!on && this._instancing;
+    let flipped = 0;
+    for (const [, e] of this.particleTable) {
+      const before = e._instKey !== null && e._instKey !== undefined;
+      const after = this._applyInstancing(e, want);
+      if (before !== after) flipped++;
+    }
+    if (!want) {
+      // Drop the buckets so nothing stale draws; they rebuild on the next tick
+      // if we flip back.
+      for (const b of this._instBuckets.values()) {
+        try { b.im.parent?.remove(b.im); } catch (_) {}
+        try { b.im.material?.dispose?.(); } catch (_) {}
+        try { b.im.dispose?.(); } catch (_) {}
+      }
+      this._instBuckets.clear();
+    }
+    return { on: want, flipped, ...this.instancingDiag() };
+  }
+
+  /** Diagnostic counters for the runtime A/B. */
+  instancingDiag() {
+    let instEmitters = 0, liveParticles = 0, meshesInScene = 0;
+    for (const [, e] of this.particleTable) {
+      if (e._instKey !== null && e._instKey !== undefined) instEmitters++;
+      liveParticles += e.numParticles | 0;
+      for (const m of (e.parts || [])) if (m && m.parent) meshesInScene++;
+    }
+    let buckets = 0, instances = 0;
+    for (const b of this._instBuckets.values()) { buckets++; instances += b.im.count | 0; }
+    return { emitters: this.particleTable.size, instEmitters, liveParticles, meshesInScene, buckets, instances };
   }
 
   /** Publish this tick's instance counts + buffer uploads. */
