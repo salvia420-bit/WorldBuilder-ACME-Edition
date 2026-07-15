@@ -209,6 +209,45 @@ halves the frame while raising `info.calls` is exactly what success looks like h
 instancing draws every instance in a bucket that survives node-level culling, so expect roughly the +2.9%
 arm C measured — if tris jump far more than that, the bucket scope is wrong.
 
+## 4b. ⚠ IT WAS BUILT AND MEASURED — AND THE RESULT BREAKS THE DRAW-COUNT MODEL
+
+`?walkInInstance` (default-OFF, `f6d617dd`) implements §4(a): the walk-in baker now groups by modelId and
+emits an InstancedMesh at >=2 placements/LB, like the ring baker. **Clean A/B, 1070, settled Holtburg,
+balanced order (rep1 ON-first, rep2 OFF-first), `walkin-ab.sh` + `multidraw-truth-probe.mjs`:**
+
+| arm | renderCPU | TRUE draws | info.calls | tris/f |
+|---|---|---|---|---|
+| OFF | 27.62, 28.66 → **28.14 ms** (spread 1.04) | 7,563 | 1,921 | 443,767 |
+| ON | 25.04, 25.34 → **25.19 ms** (spread 0.30) | **2,761 (−63%)** | **2,571 (UP)** | **546,596 (+23%)** |
+
+**Verdict by the rule stated BEFORE the run** (a delta under the OFF spread is not a win): **−2.95 ms,
+−10.5% — a WIN**, and both reps agree so the login-slot confound (§8) cannot carry it. `info.calls` went
+UP while the frame got faster, exactly as predicted — that inversion is now demonstrated, not argued.
+
+**⭐ BUT THE REAL FINDING IS THE MISMATCH: −63% of the frame's TRUE draws bought −10.5% of its CPU.**
+If draws were the frame, removing 4,800 of 7,563 would have removed far more than 3 ms. At the previously
+inferred ~2.4 µs/real-draw it predicted **~11.5 ms**; it delivered **2.95**. So:
+- **The ~2.4 µs/real-draw figure is REFUTED as a cost model.** It was derived by dividing a subtree's CPU
+  by its draws — which silently assumes draws cause that CPU. They largely do not.
+- **§2's "the frame IS draw-bound" survives only as far as the counter goes.** The counter was genuinely
+  blind (that stands, 3.94×), but fixing the count did NOT make the count the cause. **A better metric is
+  not a mechanism.** This document's own headline is now the fourth casualty of measuring a delta and
+  narrating a cause from it.
+- **Do NOT extrapolate the remaining 2,761 draws to another ~7 ms.** That is the same arithmetic that just
+  failed by 4×.
+
+**So where IS the ~25 ms?** UNKNOWN, and it should be answered by a PROFILE, not a fifth story.
+`cpu-profile-probe.mjs` (committed, `c83535d9`) takes a V8 CPU profile (CDP Profiler, 100 µs) of a settled
+Holtburg and buckets self-time — submission vs the scene walk (which scales with NODE count, not draws) vs
+program resolve vs app JS. **Run it before proposing any further lever.**
+
+**Whether to flip `?walkInInstance` default-ON is NOT settled, and I recommend against it on this evidence:**
+−10.5% CPU is bought with **+23% tris** and two visual regressions (§4: one LOD level per LB-spanning node;
+billboarding lost on degraded leaves — `tickStaticsBillboards` skips `isInstancedLod`). **No eye-test has
+been run**, and the +23% is a GPU cost this CPU-side probe cannot price — on a GPU-bound box it could be a
+net loss. It needs `singlepass-eyetest.mjs` at 3 POIs and a moving A/B (the trade is worst where LOD
+matters most: distance), not a bare-default flip.
+
 ## 5. RESIDUALS / UNKNOWNS (honest loose ends)
 
 1. **Nothing was shipped this session.** No source change, no flag, no default flip. Five probes and a
