@@ -921,6 +921,31 @@ export class ParticleManager {
             mat.alphaTest = 0.1;
             mat.depthWrite = true;
           }
+          // Perf (2026-07-15) — THE second draw call per particle. three r184
+          // submits a material TWICE, BackSide then FrontSide with a
+          // `needsUpdate` program re-resolve between them, when
+          // `transparent && side === DoubleSide && !forceSinglePass`
+          // (three.module.js:18065, renderObject). BOTH branches above set
+          // `transparent = true` and the base surface material is DoubleSide
+          // (materials.js), so every particle cost two draws: measured 2.01
+          // draws per visible particle at a settled Holtburg on the 1070
+          // (A/B/A within ONE page load, 0.1% drift — particle-k-probe.mjs).
+          //
+          // Safe here because a particle is a FLAT QUAD (census: 222/222 live
+          // meshes, 6 vertices): back and front never overlap, so one of the two
+          // passes is entirely face-culled and emits no fragments — it is a draw
+          // call that draws nothing. Verified, not assumed: two renders in one
+          // synchronous moment with identical scene state differ by EXACTLY 0
+          // pixels (forcesinglepass-parity.mjs). Retail agrees — it draws a
+          // two-sided surface ONCE with CULLMODE_NONE (acclient.h:5296 via
+          // RenderDeviceD3D::SetCullMode); the back-then-front two-pass is a
+          // three-ism with no retail counterpart.
+          //
+          // Do NOT lift this to non-particle transparent DoubleSide materials
+          // (there are 451 live at Holtburg): the same probe measured 5,245 px
+          // (1.0%, max delta 113) of change scene-wide, because world/entity
+          // surfaces are closed geometry where back-then-front ordering is real.
+          mat.forceSinglePass = true;
           // Perf E3 (2026-05-18): tag the clone so destroyParticleEmitter()
           // can dispose it. The base material from materialFactory may be
           // cache-owned — only the per-slot CLONE is owned by this emitter.
@@ -1210,6 +1235,12 @@ export class ParticleManager {
       mat.depthWrite = false;
       mat.opacity = 1; // folded into the per-instance color
       mat.vertexColors = true; // required for vColor (== instanceColor) to reach diffuse
+      // Same three r184 two-pass as the per-slot path above (see meshFactory):
+      // transparent + DoubleSide submits the mesh twice. Cheaper here — it costs
+      // 2 draws per BUCKET, not per particle — but it is the same flat-quad
+      // geometry (`emitter._instGeom`), so the second pass is equally wasted and
+      // equally pixel-identical to drop.
+      mat.forceSinglePass = true;
       mat.userData.__cacheOwned = false;
       mat.userData.__disposable = true;
       const im = new THREE.InstancedMesh(emitter._instGeom, mat, _INST_BUCKET_MIN_CAP);
