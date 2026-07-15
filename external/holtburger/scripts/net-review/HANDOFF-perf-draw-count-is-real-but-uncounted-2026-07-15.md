@@ -37,12 +37,16 @@ net-review=`$REPO/external/holtburger/scripts/net-review`.
   singletons: **17,774 instances share only 324 distinct geometries (54.9×)**, and the top geometry is drawn
   **1,736 times**. Root cause: the **walk-in/streaming baker never instances anything** — it emits one plain
   Mesh per placement (`statics.js:2023`), and only the ring-wide baker groups by modelId (`:2723`). §4.
-- **⚠ WHAT THE FRAME'S ~25-28 ms ACTUALLY IS: STILL UNKNOWN. Everything below says only what it is NOT.**
-  The profile's top item is `getParameters` (10.2% of MAIN-THREAD samples; program-resolve path ~19%), but
-  **`renderCPU` wraps `render()` while the profile samples the whole thread** — and `getProgram`'s other
-  caller is `prepareMaterial`, i.e. `renderer.compile()` ← `prewarmSubtree` ← the BAKE path. A settled
-  scene is a plateau, not a finished bake. **§4c read a whole-thread profile as if it were a frame profile;
-  §4d retracts it.** Next: profile INSIDE `render()` only. Do not build on §4c until then.
+- **⭐⭐ THE FRAME IS PER-OBJECT WORK, AND IT IS IN-FRAME — VERIFIED BY SPLITTING THE PROFILE BY ANCESTOR.**
+  `profile-split-render.mjs`: **78.8% of samples are inside `render()`; BAKE/compile is 0.0%** — so the
+  profile IS the frame, and the program-resolve path is **14.7% in-frame** (halved to 7.3% by
+  `?walkInInstance`, which is what its −10.5% win actually was). I retracted this in §4d fearing bake
+  contamination; **the retraction was wrong and is withdrawn.** §4c/§4d.
+- **⚠ THE OPEN QUESTION (hand this over): the profile says `getProgram` runs per object per frame; §4d
+  measured every trigger that can cause that as STABLE. Both cannot be true.** Likeliest hole is mine —
+  `version-churn-probe` v1 saw only PRE-EXISTING materials, and a NEW material forces a resolve
+  (`__version === undefined`). Else: vendor a patched three behind an importmap override and count which
+  condition fires (three is CDN-loaded, `index.html:951` — that is why it was not instrumented in place).
 - **Five triggers for a per-frame program re-resolve were each MEASURED and each is dead** (§4d): version
   churn (1 obj/frame — the known §5.1 residual mesh), class thrash (B−P = 0.10 ms), lights-state version
   (0 changes/430f), env/fog/toneMapping/clipping (0/339f), vertexAlphas (impossible for statics). **Nothing
@@ -319,20 +323,37 @@ function prepareMaterial( material, scene, object ) { … getProgram( material, 
 and the app calls `renderer.compile()` via `prewarmSubtree` from **statics.js:2297, terrain.js:3721,
 terrain_batch.js:431** — i.e. the BAKE path.
 
-**⚠ THE MEASUREMENT ERROR THAT MAKES §4c SUSPECT: `renderCPU` wraps `renderer.render()`; the CPU PROFILE
-samples the WHOLE MAIN THREAD.** They are not the same quantity. A settled scene is a *plateau*, not a
-finished bake — statics baking is time-sliced and continues past `settleAt`'s plateau. So the profile's
-`getParameters` (10.2%) may be **bake-time compile that was never inside the frame at all**, and §4c's
-"the frame is bound by per-object work: program resolve ~19%" would be an artifact of reading a
-whole-thread profile as if it were a frame profile. It also explains `?walkInInstance` taking
-getParameters 10.2% → 4.8% with emitters held equal (811 vs 807): **fewer nodes to PREWARM**, not fewer
-per-frame resolves.
+**I SUSPECTED A MEASUREMENT ERROR HERE AND RETRACTED §4c. THEN I MEASURED, AND THE RETRACTION WAS WRONG.**
+The worry was legitimate: `renderCPU` wraps `renderer.render()` while the CPU profile samples the WHOLE
+MAIN THREAD, and `getProgram`'s other caller (`prepareMaterial` ← `renderer.compile()` ← `prewarmSubtree`)
+is the BAKE path, so the 10.2% could have been bake-time compile that was never in the frame.
 
-**THE NEXT MEASUREMENT — and do not skip it, the last five leads all died from skipping this kind of
-step:** profile ONLY the inside of `render()` (wrap it and start/stop the sampler around it, or diff a
-profile taken with baking definitively finished — e.g. sit at a pinned pose until `staticsBaked` stops
-advancing, then profile). Until that is done, **the honest statement is: the frame costs ~25-28 ms of
-renderCPU and WE DO NOT KNOW WHAT IT IS.** Everything above says only what it is NOT.
+**`profile-split-render.mjs` settles it by ANCESTOR** (no clock alignment: a V8 profile is a tree, so tag
+every node by the region its ancestor chain puts it in, then sum self-samples). Both arms:
+
+| | OFF | ON (`?walkInInstance`) |
+|---|---|---|
+| **inside `render()`** | **78.8%** of samples | 75.3% |
+| **BAKE (compile / prewarm)** | **0.0%** | **0.0%** |
+| program-resolve (getParameters+getProgramCacheKey+getProgram) | **14.7%, ALL in-frame** | **7.3%, all in-frame** |
+
+**There is no bake contamination — zero samples.** So **§4c STANDS, §4d's retraction is WITHDRAWN**, and
+`?walkInInstance` really does halve the in-frame program-resolve cost (14.7% → 7.3%), which is what its
+−10.5% renderCPU win actually was.
+
+**⚠⚠ WHICH LEAVES A LIVE CONTRADICTION — HAND THIS TO THE NEXT SESSION AS THE OPEN QUESTION.** The profile
+says `getProgram` runs inside `render()` for a large share of the frame, i.e. `needsProgramChange` fires
+per object per frame. The table above says **every trigger that can set it is stable**. Both cannot be
+right. The likeliest hole is MINE: `version-churn-probe` v1 rescanned the scene ONCE, so it could only see
+version bumps on materials that ALREADY EXISTED — a **brand-new material** has
+`materialProperties.__version === undefined`, takes the `else` at :18420, and forces a `getProgram`.
+Material CREATION is a per-frame program resolve and v1 was structurally blind to it (v2 now counts new
+materials per frame). If that is not it either, the remaining move is to **vendor a patched
+`three.module.js` behind an importmap override and count which condition fires** — three is loaded from
+`cdn.jsdelivr.net` (`index.html:951`), which is why it could not be instrumented in place this session.
+
+**Until that lands: the frame is ~25-28 ms of renderCPU, ~15% of it in-frame program resolve, and WHY the
+resolve happens is UNKNOWN.**
 
 **Why `?walkInInstance` won −10.5%, mechanically:** `getParameters` 10.2 → 4.8% and the BatchedMesh
 `onBeforeRender` walk drops out — i.e. **the win came from fewer OBJECTS to resolve programs for, not from

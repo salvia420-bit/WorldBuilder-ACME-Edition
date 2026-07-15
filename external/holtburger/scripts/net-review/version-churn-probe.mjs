@@ -36,6 +36,12 @@ import fs from "node:fs";
 import { settleAt, WEATHER_OFF } from "./settle.mjs";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+let __page = null;
+process.on("unhandledRejection", async (e) => {
+  console.error(`[vc] CRASH: ${e && e.message}`);
+  try { await __page?.close(); } catch (_) {}
+  process.exit(1);
+});
 (async () => {
   const { createRequire } = await import("node:module");
   const require = createRequire(import.meta.url);
@@ -46,6 +52,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const browser = await pw.chromium.connectOverCDP("http://127.0.0.1:9333");
   const ctx = browser.contexts()[0];
   const page = await ctx.newPage();
+  __page = page;
 
   const q = new URLSearchParams({
     renderer: "3d", autoLogin: "1", account: "tailnet1", password: "tailnet1",
@@ -113,6 +120,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // 2) Per-rAF: how many materials' .version moved since last frame, and how
     //    many OBJECTS are drawn with such a material (that is the cost multiplier).
     const last = new Map();
+    const seenUuids = new Set();
     const matObjects = new Map();
     const rescan = () => {
       matObjects.clear();
@@ -126,6 +134,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     D.rescan = rescan;
     const tick = () => {
       D.raf++;
+      // ⭐ THE GAP IN v1: it rescanned ONCE, so it could only see version bumps on
+      // materials that already existed. A BRAND-NEW material has
+      // materialProperties.__version === undefined, so `material.version ===
+      // __version` is false -> the else branch at :18420 -> needsProgramChange ->
+      // getProgram -> getParameters. Material CREATION is a per-frame program
+      // resolve too, and v1 was structurally blind to it. Rescan every frame.
+      rescan();
+      let fresh = 0;
+      for (const m of matObjects.keys()) {
+        if (!seenUuids.has(m.uuid)) { seenUuids.add(m.uuid); fresh++; }
+      }
+      D.newMats = (D.newMats || 0) + fresh;
       let ch = 0, objs = 0;
       for (const [m, n] of matObjects) {
         const v = m.version;
@@ -137,7 +157,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         }
         last.set(m, v);
       }
-      D.changed += ch; D.objectsAffected += objs; D.frames++;
+      D.changed += ch; D.objectsAffected += objs; D.frames++; D.liveMats = matObjects.size;
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -146,7 +166,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   console.error(`[vc] tracking ${setup.materials} live materials; needsUpdate setter wrapped: ${setup.wrapped}`);
 
   await sleep(2000);
-  await page.evaluate(() => { const D = window.__vc; D.changed = 0; D.frames = 0; D.objectsAffected = 0; D.byMat.clear(); D.writers.clear(); });
+  await page.evaluate(() => { const D = window.__vc; D.changed = 0; D.frames = 0; D.objectsAffected = 0; D.newMats = 0; D.byMat.clear(); D.writers.clear(); });
   await sleep(+(process.env.ARM_S || 14) * 1000);
 
   const r = await page.evaluate(() => {
@@ -161,6 +181,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   console.error(`[vc] ==========================================================`);
   console.error(`[vc] over ${r.frames} frames:`);
   console.error(`[vc]   material .version CHANGES : ${r.changed}  (${(r.changed / Math.max(1, r.frames)).toFixed(1)} per frame)`);
+  console.error(`[vc]   NEW materials created      : ${r.newMats}  (${(r.newMats / Math.max(1, r.frames)).toFixed(1)} per frame)  <- each is a FIRST program resolve`);
+  console.error(`[vc]   live materials now         : ${r.liveMats}`);
   console.error(`[vc]   objects drawn with a churning material: ${(r.objectsAffected / Math.max(1, r.frames)).toFixed(1)} per frame`);
   console.error(`[vc]   ^ each of those is a getProgram -> getParameters + cache-key STRING BUILD`);
   console.error(`[vc] top churning materials:`);
