@@ -25,6 +25,48 @@ Executes the ⭐ open lead of `HANDOFF-perf-particles-rp6-leak-2026-07-15.md` §
 - **Draw win at the pinned pose: 152 → 24 drawable particle meshes.**
 - **⚠ The handoff's expectation that `?particleInstancing` is now worth ~nothing DOES NOT HOLD.** See §4.
 
+## 0b. DOES IT MOVE FPS? YES — IN TOWN. (added 2026-07-15, after the first writeup)
+
+**Settled, pinned Cragstone (`0xbb9f0040 169.36 168.25 54.01`), 1070 real GPU, release wasm, weather
+off, shipping defaults (NOTE: `buildingBatch` ON — the older probes passed `buildingBatch=off`, which is
+why their totals are ~1600 and these are ~240). `town-fps-probe.mjs`, 40 s of rAF deltas each:**
+
+| leg | fps | p50 frame | p95 frame | draws/frame | culled-but-drawing | drawable particles | emitters / liveParticles |
+|---|---|---|---|---|---|---|---|
+| FIXED | 45.94 | 24.9 ms | 25.1 ms | 236.9 | 0 | 24 | 2451 / 9037 |
+| **PREFIX** | **32.28** | **33.3 ms** | **41.7 ms** | **573.9** | **180** | 192 | 2158 / 7864 |
+| FIXED2 (return-to-A) | 47.04 | 24.9 ms | 25.1 ms | 237.0 | 0 | 20 | 2125 / — |
+
+**fps 32.3 → ~46 (+42%), draws/frame 574 → 237 (−59%), median frame 33.3 ms → 24.9 ms (30 → 40 fps).**
+
+Why this is callable despite being a cross-page-load A/B (§2 rule 2): it is an **A/B/A** (rule 3) and the
+two FIXED legs agree to **0.04%** on draws (236.9 vs 237.0) with identical p50/p95 — the scene did not
+drift under us. And the confound cuts the WRONG way for a false positive: FIXED had MORE particles than
+PREFIX (2451/9037 vs 2158/7864) and FIXED2 had FEWER emitters than PREFIX (2125 vs 2158), yet both FIXED
+legs drew 2.4× less. A stochastic-plateau explanation would have to make the heavier scene cheaper.
+
+**⚠ THE 5-TOWN OUTDOOR-RUN BATTERY SHOWS ~NOTHING — AND THAT IS EXPECTED, NOT A CONTRADICTION.**
+`battery-outdoor-run.mjs` over Yaraq/Samsur/Holtburg/Sawato/Nanto (`--runS 60`, weather off, real GPU):
+fps median across POIs 38.63 → 38.17, i.e. flat; per-POI Holtburg +9.2%, Nanto +4.7%, Samsur −7.5%,
+Yaraq +69% (see below), Sawato unpaired (arm A hung: eval-timeout). Draws/frame were FLAT or slightly up
+at 3 of 4 paired POIs (261→276, 310→311, 227→244). **The battery cannot see this fix by construction:**
+its generator picks a clear start "≥40 m out with no static within 25 m" and a 1–2 km obstacle-free
+corridor, and static `default_script` emitters hang off statics — so the RUN phase deliberately traverses
+empty terrain. Measured: ~260–310 draws/frame out there vs ~574 (pre-fix) at the settled town centre.
+It is a terrain-streaming instrument and it barely contains particles. **Do not use it to A/B a particle
+change; use `town-fps-probe.mjs` at a pinned town pose.**
+Yaraq is the one battery POI with a big move (fps 22.57→38.17, draws 744→288) and it is also the LEAST
+trustworthy pairing in the set: its arm-A run came after a session abort, with 232 long-tasks vs 153 and
+a different heap trajectory. **Unattributed — do not quote it.**
+
+**Residual (unverified hypothesis).** Draws fell 337 but staticsGroup particles only 168, so ~169
+draws/frame came off something else. Note `_setPartsVisible` lives in `ParticleManager`, which BOTH
+managers use — `_staticParticleManager` (scene: staticsGroup) and `entities.js _worldParticleManager`
+(scene: entitiesGroup) — and `loop.js` registers an entities culler too (`tickEntityRenderVisibility`).
+So the per-tick authority fix may be closing the SAME two-writer race for ENTITY particles, which the
+`drawableParticles` counter (staticsGroup only) never counted. **Not measured. Do not claim it.** To
+settle it, extend `town-fps-probe.mjs` to count `__particle` meshes scene-wide, split by group.
+
 ## 1. THE FIX (2 files, always-on, no flag)
 
 1. **`statics.js cullStaticsGroup`** — skip `userData.__particle === true` /
@@ -118,9 +160,18 @@ particle meshes (= particle draw calls) on the FIXED build, one page load, `orph
 
 At Cragstone's pinned pose the remaining batching prize really is ~24 draws → "retire it" looks right.
 **At Holtburg 225 particle meshes still draw**, and instancing would collapse those to ~1 per gfxobj. So
-the prize is POSE/POI-DEPENDENT and NOT zero. Deciding the flag's fate from the Cragstone pose alone would
-be the exact error this whole handoff chain is about. **Re-measure at Holtburg** (single-page-load A/B/A,
-pinned pose) before retiring anything.
+the prize is NOT zero. Deciding the flag's fate from the Cragstone pose alone would be the exact error
+this whole handoff chain is about. **Re-measure at Holtburg** (single-page-load A/B/A, pinned pose)
+before retiring anything.
+
+**⚠ CAVEAT ON THAT TABLE — the tour stops were NOT pinned.** Only the Cragstone row above comes from a
+`pinPose` run; Holtburg/Shoushi/the second Cragstone were `@telepoi` landings, and §2 rule 6 says player
+placement dominates VISIBLE particles (73% spread) and draws (186% spread) at a FIXED POI. So "225" is a
+real settled measurement — a scene DID draw 225 particle meshes, which is all the "don't retire it" claim
+needs — but **the attribution to Holtburg-the-place is NOT established**: it could be where `@telepoi`
+happened to drop the camera. Travel also reaps emitters (1879 → 1060 → 847 → 864 across these stops), so
+the later rows carry a smaller emitter population than the first. Pin the pose before quoting any of
+these as a property of a POI.
 
 ## 5. RESIDUALS / HONEST LOOSE ENDS
 
@@ -151,6 +202,12 @@ pinned pose) before retiring anything.
 
 ## 6. HARNESS ADDED (`net-review/`)
 
+- **`town-fps-probe.mjs`** — frame time + draws at a SETTLED, PINNED town-centre pose. THE instrument for
+  a particle change; the outdoor-run battery is NOT (§0b). Every early exit closes the page first:
+  tailnet1 is single-login, so a page leaked by a bail starves the next run (measured: emitters 563 /
+  liveParticles 197 vs 1893 / 5764 at the same pinned pose) or gets it rejected outright as
+  `__bootState === "error"` — an abort that manufactures the next abort. Both of its bails leaked a page
+  before this was fixed, and both symptoms were observed.
 - **`orphan-particle-probe.mjs`** — classifies every drawable particle mesh in staticsGroup by owner
   (occupied slot / free slot left visible / no owner). Answers a question; prints no verdict.
 - **`orphan-growth-probe.mjs`** — the same count across a POI tour in ONE page load. Orphan count is a
