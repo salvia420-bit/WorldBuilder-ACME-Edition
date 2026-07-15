@@ -113,7 +113,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       return n;
     };
     F.restore = () => { let n = 0; for (const m of F.touched) { if (m.forceSinglePass !== false) { m.forceSinglePass = false; m.needsUpdate = true; n++; } } F.touched.clear(); return n; };
-    F.mark = () => ({ raf: F.raf, calls: r.info.render.calls, tris: r.info.render.triangles });
+    // CPU-vs-GPU discriminator. renderer.render() returns once the commands are
+    // SUBMITTED, so its wall time is CPU-side cost (draw submission + three's
+    // per-object program resolve), not GPU execution. If the two-pass's cost is
+    // three's `needsUpdate = true`-per-submit program re-resolve
+    // (three.module.js:18068/18072 — it fires TWICE per object per frame in that
+    // branch), this drops hard in the single-pass arm. If instead the frame gets
+    // faster while render() CPU stays flat, the win is GPU-side and the program
+    // -churn story is wrong. Do not guess between them — measure.
+    F.renderMs = 0; F.renderCalls = 0;
+    const origRender = r.render.bind(r);
+    r.render = function (sc, cam) {
+      const t0 = performance.now();
+      try { return origRender(sc, cam); }
+      finally { F.renderMs += performance.now() - t0; F.renderCalls++; }
+    };
+    F.mark = () => ({ raf: F.raf, calls: r.info.render.calls, tris: r.info.render.triangles, renderMs: F.renderMs, renderCalls: F.renderCalls });
     // THREE.DoubleSide === 2; read it off a real material rather than importing.
     window.THREE_DOUBLE = 2;
   });
@@ -138,9 +153,32 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         for (const m of ms) if (m && m.transparent === true && m.side === 2) seen.add(m.name || m.type);
       }
     });
+    // COVERAGE ASSERTION — the "did I miss a creation path?" instrument.
+    // Site-chasing invites exactly one bug: a ladder that sets `transparent`
+    // somewhere you did not look. Chasing sites and then declaring victory is
+    // how the first cut of the surface fix shipped while 403 of 451 meshes
+    // (`paletted-*`, whose entities.js ladder is default-OFF of the
+    // applySurfaceRenderState funnel) were still double-submitted. So do not
+    // ask "which sites did I patch" — ask the LIVE SCENE which materials still
+    // meet three's condition, and name them.
+    const stillTwoPass = new Map();
+    ls.scene.traverse((o) => {
+      if (!o.isMesh || o.visible === false) return;
+      const ms = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of ms) {
+        if (m && m.transparent === true && m.side === 2 && m.forceSinglePass === false) {
+          const k = m.name || m.type;
+          stillTwoPass.set(k, (stillTwoPass.get(k) || 0) + 1);
+        }
+      }
+    });
     return { partMeshes, partDblTrans, otherMeshes, otherDblTrans, particleVertexHistogram: vertHist,
-      nonParticleDoubleTransMaterialNames: [...seen].slice(0, 25) };
+      nonParticleDoubleTransMaterialNames: [...seen].slice(0, 25),
+      stillTwoPass: [...stillTwoPass.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20),
+      stillTwoPassMeshes: [...stillTwoPass.values()].reduce((a, b) => a + b, 0) };
   });
+  console.error(`[fsp] COVERAGE: ${census.stillTwoPassMeshes} meshes still double-submitted at runtime` +
+    (census.stillTwoPass.length ? ` -> ${census.stillTwoPass.map(([n, c]) => `${n} x${c}`).join(", ")}` : " (none — full coverage)"));
   console.error(`[fsp] census: particles ${census.partDblTrans}/${census.partMeshes} are transparent+DoubleSide; ` +
     `non-particle ${census.otherDblTrans}/${census.otherMeshes}`);
   console.error(`[fsp] particle geometry vertex histogram: ${JSON.stringify(census.particleVertexHistogram)}`);
@@ -165,8 +203,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const out = { label, materialsFlipped: n, rafFrames: dRaf,
       drawsPerFrame: +((b.calls - a.calls) / dRaf).toFixed(1),
       trisPerFrame: Math.round((b.tris - a.tris) / dRaf),
+      // CPU ms spent INSIDE renderer.render() per rAF (submission, not GPU).
+      renderMsPerFrame: +((b.renderMs - a.renderMs) / dRaf).toFixed(2),
       parts: b.parts, fps: b.fps, p50: b.p50, p95: b.p95 };
-    console.error(`[fsp] ${label.padEnd(16)} mats=${String(n).padStart(4)}  draws/f=${String(out.drawsPerFrame).padStart(7)}  parts=${String(out.parts).padStart(4)}  fps=${String(out.fps).padStart(6)}  p50=${out.p50}ms  p95=${out.p95}ms`);
+    console.error(`[fsp] ${label.padEnd(16)} mats=${String(n).padStart(4)}  draws/f=${String(out.drawsPerFrame).padStart(7)}  tris/f=${String(out.trisPerFrame).padStart(7)}  renderCPU=${String(out.renderMsPerFrame).padStart(6)}ms  fps=${String(out.fps).padStart(6)}  p50=${out.p50}ms`);
     return out;
   };
 

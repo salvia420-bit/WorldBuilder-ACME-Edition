@@ -727,6 +727,7 @@ import {
   materialCanCastShadow,
   SURFACE_TYPE,
   applySurfaceRenderState,
+  applyRetailSinglePass,
   readSurfaceUnifiedFlag,
   readLuminousEmissiveMapFlag,
   VFX_GLOBALS,
@@ -5158,6 +5159,17 @@ export class EntityManager {
     if (sfDiffuse > 0 && Math.abs(sfDiffuse - 1.0) > 0.01) {
       mat.color = new THREE.Color(sfDiffuse, sfDiffuse, sfDiffuse);
     }
+    // Retail draws a surface ONCE (`?surfaceSinglePass`, materials.js
+    // `applyRetailSinglePass`). THIS LADDER IS THE PATH THAT ACTUALLY RUNS:
+    // `readSurfaceUnifiedFlag()` is default-OFF, so the `applySurfaceRenderState`
+    // delegate above is NOT taken and dyed/paletted entity materials never reach
+    // that funnel. Putting the parity call only on the funnel left the dominant
+    // population (403 of 451 transparent DoubleSide meshes at Holtburg are
+    // `paletted-*`) still double-submitted — caught by field verification, where
+    // the scene-wide arm still found 26 materials to flip and still gained +40%
+    // fps AFTER the "fix" had supposedly landed. A no-op unless the ladder above
+    // actually made this material transparent.
+    applyRetailSinglePass(mat);
     mat.needsUpdate = true;
   }
 

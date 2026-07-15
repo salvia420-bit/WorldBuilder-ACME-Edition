@@ -1172,6 +1172,89 @@ export function readFlatDiffuseRetailFlag() {
 // float-driven luminosity-emissive and diffuse-tint STILL apply (they are
 // bit-independent — retail reads the floats, not the bits — matching the legacy
 // cache path which gated lum/diffuse on the floats alone, not on flags).
+// ── Retail cull parity: ONE draw per surface (`?surfaceSinglePass`, 2026-07-15) ─
+// three r184 submits a material TWICE — BackSide, then FrontSide, with a
+// `needsUpdate` program re-resolve between them — when
+//     transparent === true && side === DoubleSide && forceSinglePass === false
+// (three.module.js:18065 `renderObject`, and :17280 `prepareMaterial`). Every
+// surface material here is DoubleSide, so every TRANSLUCENT one was drawn twice.
+//
+// Retail does not do this. Its per-polygon path picks ONE cull mode and issues
+// ONE draw (D3DPolyRender::DrawPolyInternal, acclient.c:455306):
+//     if ( override_cull_state_0 || p->sides_type == 1 )
+//         SetCullMode(CULLMODE_NONE);      // two-sided -> cull nothing
+//     else
+//         SetCullMode(CULLMODE_CW);
+//     ... DrawPrimitiveUP(D3DPT_TRIANGLEFAN, ...)   // once
+// (CullModeType, acclient.h:5294; the 3 DrawPrimitiveUP sites in that function
+// are mutually-exclusive vertex-format branches, not repeat draws.) The
+// back-then-front two-pass is a three-ism with NO retail counterpart, so the
+// single pass is the PARITY behaviour and the two-pass is the deviation.
+//
+// MEASURED on the 1070 at a settled Holtburg, A/B/A inside ONE page load
+// (net-review/forcesinglepass-ab.mjs; A2 drift 0.00 fps / 3 draws, and a
+// 0-material placebo arm moved -0.06 fps): flipping the 33 transparent
+// DoubleSide surface materials is worth **-11% draws and +45% fps**
+// (2153 -> 1913 draws/f, 461k -> 444k tris/f, 20.75 -> 30.16 fps, p50 50 -> 33.3
+// ms). ⚠ The win is SCENE-DEPENDENT — it was measured with a large translucent
+// creature in frame; where nothing translucent is on screen there is nothing to
+// save (Cragstone's two paths differ by 22 px, max delta 1).
+//
+// NOT a fill-rate win, despite the size of it — the win is CPU, and it is
+// MEASURED, not reasoned: wall time inside renderer.render() (which returns at
+// SUBMIT, before the GPU executes) falls 39.94 -> 24.26 ms/frame while the frame
+// itself falls 49.9 -> 33.3 ms, so ~95% of the gain is CPU submission. Both paths
+// rasterize the SAME fragments (BackSide-then-FrontSide covers exactly what one
+// DoubleSide pass does), so there is no overdraw to save. What the second pass
+// adds is a second SUBMIT of the whole geometry (culling happens at
+// rasterization, AFTER vertex shading — hence triangles/frame -3.8%) plus, per
+// object per frame, TWO `needsUpdate = true` program re-resolves
+// (three.module.js:18068/18072). 15.7 ms over 236 removed draws is ~66 us per
+// draw — an order of magnitude more than a draw call costs — which implicates
+// that churn rather than the calls themselves. The CPU-vs-GPU split is measured;
+// pinning it specifically to getProgram is NOT, so do not quote that as settled.
+//
+// IT CHANGES PIXELS, and that is expected: 0.7-0.9% of them, confined to
+// translucent surfaces (eye-tested at 4 POIs, net-review/singlepass-eyetest.mjs
+// + the PNGs it writes). Blend ORDER within one translucent mesh changes, which
+// is exactly what the dropped pass was ordering. `?surfaceSinglePass=off`
+// restores three's two-pass.
+//
+// NOTE this is NOT the same call as the particle fix (particle_manager.js): a
+// particle is a flat quad, so its second pass was fully face-culled and dropping
+// it is pixel-IDENTICAL. Here the geometry is closed and the pixels move.
+let _SURF_SINGLE_PASS = null;
+export function surfaceSinglePassEnabled() {
+  if (_SURF_SINGLE_PASS === null) {
+    try {
+      // Default ON => strict opt-OUT (`=== "off"`). The mirror of the flag
+      // footgun: for a default-OFF flag only `=== "on"` may enable, and for a
+      // default-ON flag only `=== "off"` may disable. Bare `location` is
+      // `globalThis.location` — undefined under node, so the catch is the
+      // node/test path and must land on the DEFAULT, not on false.
+      _SURF_SINGLE_PASS = new URLSearchParams(location.search).get("surfaceSinglePass") !== "off";
+    } catch (_) {
+      _SURF_SINGLE_PASS = true;
+    }
+  }
+  return _SURF_SINGLE_PASS;
+}
+
+/**
+ * Give `mat` retail's one-draw-per-surface behaviour when three would otherwise
+ * two-pass it. No-op unless the material actually meets three's condition, so
+ * it is safe to call on every material from every factory.
+ */
+export function applyRetailSinglePass(mat) {
+  if (!mat || mat.transparent !== true || mat.side !== THREE.DoubleSide) return false;
+  const want = surfaceSinglePassEnabled();
+  if (mat.forceSinglePass !== want) {
+    mat.forceSinglePass = want;
+    mat.needsUpdate = true; // program-affecting: without this the flip is inert
+  }
+  return want;
+}
+
 export function applySurfaceRenderState(mat, state, opts) {
   if (!mat || !state) return;
   const flags = (state.flags ?? 0) >>> 0;
@@ -1291,6 +1374,12 @@ export function applySurfaceRenderState(mat, state, opts) {
   // trailing `needsUpdate = true` below forces the recompile.
   if (parityV2 && isAdditive) mat.fog = false;
   applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture);
+  // Retail draws a surface ONCE (see applyRetailSinglePass). This is THE funnel
+  // for the unified/entity/dyed-paletted paths — the blend ladder above is what
+  // decides `transparent`, so the parity call has to come after it, not at the
+  // construction sites (which all build `transparent: false` and are mutated
+  // here later).
+  applyRetailSinglePass(mat);
   mat.needsUpdate = true;
 }
 
@@ -2890,6 +2979,11 @@ export class MaterialCache {
     if (heightTexture) {
       heightTexture.wrapS = heightTexture.wrapT = wrapMode;
     }
+    // Retail draws a surface ONCE (see applyRetailSinglePass). Covers the LEGACY
+    // opts ladder (`useUnifiedDecoder` false), whose `opts.transparent = true`
+    // branches never reach applySurfaceRenderState. Idempotent, so the unified
+    // path having already set it above is fine.
+    applyRetailSinglePass(mat);
     return mat;
   }
 
