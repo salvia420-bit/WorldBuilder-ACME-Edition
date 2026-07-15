@@ -37,13 +37,21 @@ net-review=`$REPO/external/holtburger/scripts/net-review`.
   singletons: **17,774 instances share only 324 distinct geometries (54.9×)**, and the top geometry is drawn
   **1,736 times**. Root cause: the **walk-in/streaming baker never instances anything** — it emits one plain
   Mesh per placement (`statics.js:2023`), and only the ring-wide baker groups by modelId (`:2723`). §4.
-- **⭐⭐ THE PROFILE SETTLES IT (§4c): the frame is bound by PER-OBJECT work, not draws.** Program resolve
-  **~19%** of main-thread samples (`getParameters` alone **10.2%**, the #1 item), matrix updates ~9%, scene
-  walk ~4%, BatchedMesh walk ~5%; ~72% is inside three, only ~6% is app JS. **`?walkInInstance` won its
-  −10.5% by removing OBJECTS to resolve programs for — not by removing draws.**
-- **I owe the predecessor an apology: its ⭐⭐ §3.2 `needsUpdate`→program-churn lead is REAL.** I killed it
-  because its *evidence* (the 66 µs anomaly) was a denominator artifact — but the MECHANISM it named is the
-  biggest cost in the frame. **Refuting a claim's evidence is not refuting the claim.** §4c, §1.
+- **⚠ WHAT THE FRAME'S ~25-28 ms ACTUALLY IS: STILL UNKNOWN. Everything below says only what it is NOT.**
+  The profile's top item is `getParameters` (10.2% of MAIN-THREAD samples; program-resolve path ~19%), but
+  **`renderCPU` wraps `render()` while the profile samples the whole thread** — and `getProgram`'s other
+  caller is `prepareMaterial`, i.e. `renderer.compile()` ← `prewarmSubtree` ← the BAKE path. A settled
+  scene is a plateau, not a finished bake. **§4c read a whole-thread profile as if it were a frame profile;
+  §4d retracts it.** Next: profile INSIDE `render()` only. Do not build on §4c until then.
+- **Five triggers for a per-frame program re-resolve were each MEASURED and each is dead** (§4d): version
+  churn (1 obj/frame — the known §5.1 residual mesh), class thrash (B−P = 0.10 ms), lights-state version
+  (0 changes/430f), env/fog/toneMapping/clipping (0/339f), vertexAlphas (impossible for statics). **Nothing
+  forces a per-frame re-resolve**, which is itself evidence the §4c reading was wrong.
+- **On the predecessor's ⭐⭐ §3.2 lead I was wrong TWICE, in opposite directions.** I killed it for the
+  wrong reason (its 66 µs evidence was a denominator artifact — but *refuting a claim's evidence is not
+  refuting the claim*, §6.7). Then the profile appeared to vindicate it, and I over-claimed AGAIN — §4d
+  measured all five of its possible triggers and every one is dead. **Current status: its mechanism is
+  real in three's source and appears to cost ~nothing per frame here.** §4c/§4d.
 - **One hypothesis genuinely died:** the `BatchedMesh.onBeforeRender` per-frame-walk suspect (mine, refuted
   by its own A/B at 1.60 ms = noise). §1.
 - **`?perPolyCull` (predecessor §3.3) and the §4 backlog are UNTOUCHED and still owed.** I did not go near
@@ -287,12 +295,44 @@ whether the program even changed. So a per-frame `needsUpdate = true` writer is 
 predecessor claimed — and the two-pass it originally blamed is already FIXED (`?surfaceSinglePass`), yet
 `getParameters` is STILL #1. **Something else is still bumping `material.version` per frame.**
 
-**⭐ THAT IS THE NEXT LEVER, and it is now MOTIVATED BY A PROFILE rather than by arithmetic.** The
-predecessor's own instruction stands and should finally be carried out: `rg -n 'needsUpdate\s*=\s*true'
-scene3d/` (**65 hits**; the material-bearing ones cluster in `materials.js` — :509, :718, :1070, :1253,
-:1289, :1383, :1767 — and `entities.js` :5173, :14668) **and ask of each: does this run per FRAME, or
-once?** Then micro-bench before refactoring (its rule, and it was right). Note `play_effect_vfx.js:523`
-already documents *not* setting it per frame — precedent that this class of bug was found here before.
+**⚠⚠ AND THEN THE HUNT KILLED ITS OWN PREMISE — READ §4d BEFORE CHASING `getParameters`.**
+
+## 4d. THE `getParameters` HUNT: every trigger is dead, and the profile may not be measuring the FRAME
+
+`getProgram` (the only caller of `getParameters`) runs from `setProgram` ONLY when `needsProgramChange`
+(:18440). I measured every condition that can set it. **All are stable at a settled Holtburg:**
+
+| candidate trigger | measured | verdict |
+|---|---|---|
+| per-frame `material.version` bump (the predecessor's §3.2 suspect) | **1.0 object/frame** — and it is the KNOWN §5.1 residual double-submitted mesh, written by three's own two-pass at `:18068/:18072` (`version-churn-probe`, setter wrapped, writer named) | **dead** (negligible) |
+| class thrash — `batching`/`instancing` flip (:18332/:18348) | 37 materials / 440 meshes (14.7%) DO span classes, but decloning them: **B − P = 0.10 ms** (`material-declone-ab`, placebo-controlled, drift-corrected) | **dead** (real mechanism, ~zero cost) |
+| `lights.state.version` (:18321 — the FIRST condition, which I missed twice by reading the branch from its middle) | light-count signature `3/16/2/1/0/1/0/0/0`, **0 changes / 430 frames** (`lights-churn-probe`) | **dead** |
+| `envMap` / `fog` / `toneMapping` / `clipping` / colorSpace | **0 changes / 339 frames**; the app never sets `scene.environment` or `envMap` at all (`env-churn-probe` + source) | **dead** |
+| `vertexAlphas` / `vertexTangents` / `morph*` | `vertexColors: true` exists ONLY in particles + terrain — never on the `scene3d-surface-*` statics materials, so `vertexAlphas` is permanently false there | **dead** for statics |
+
+**So nothing forces a per-frame program re-resolve — which means the premise of this hunt (and of §4c) is
+probably WRONG.** `getProgram` has a SECOND caller I did not check until the end:
+```js
+// three.module.js:17283  prepareMaterial — the COMPILE path, reached from renderer.compile()
+function prepareMaterial( material, scene, object ) { … getProgram( material, scene, object ); … }
+```
+and the app calls `renderer.compile()` via `prewarmSubtree` from **statics.js:2297, terrain.js:3721,
+terrain_batch.js:431** — i.e. the BAKE path.
+
+**⚠ THE MEASUREMENT ERROR THAT MAKES §4c SUSPECT: `renderCPU` wraps `renderer.render()`; the CPU PROFILE
+samples the WHOLE MAIN THREAD.** They are not the same quantity. A settled scene is a *plateau*, not a
+finished bake — statics baking is time-sliced and continues past `settleAt`'s plateau. So the profile's
+`getParameters` (10.2%) may be **bake-time compile that was never inside the frame at all**, and §4c's
+"the frame is bound by per-object work: program resolve ~19%" would be an artifact of reading a
+whole-thread profile as if it were a frame profile. It also explains `?walkInInstance` taking
+getParameters 10.2% → 4.8% with emitters held equal (811 vs 807): **fewer nodes to PREWARM**, not fewer
+per-frame resolves.
+
+**THE NEXT MEASUREMENT — and do not skip it, the last five leads all died from skipping this kind of
+step:** profile ONLY the inside of `render()` (wrap it and start/stop the sampler around it, or diff a
+profile taken with baking definitively finished — e.g. sit at a pinned pose until `staticsBaked` stops
+advancing, then profile). Until that is done, **the honest statement is: the frame costs ~25-28 ms of
+renderCPU and WE DO NOT KNOW WHAT IT IS.** Everything above says only what it is NOT.
 
 **Why `?walkInInstance` won −10.5%, mechanically:** `getParameters` 10.2 → 4.8% and the BatchedMesh
 `onBeforeRender` walk drops out — i.e. **the win came from fewer OBJECTS to resolve programs for, not from
