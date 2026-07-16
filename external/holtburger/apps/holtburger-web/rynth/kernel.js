@@ -25,24 +25,35 @@ export class RynthBotKernel {
     this.log = opts.log || ((m) => console.log(`[kernel] ${m}`));
     this.action = "Idle"; // the B14 BotAction pin, observable
     this._running = false;
+    this._tickInstalled = false;
   }
 
   start() {
     this._running = true;
     if (this.buff && !this.buff.startedAt) this.buff.startedAt = Date.now();
-    this.host.onTick(() => {
-      if (this._running) {
-        try {
-          this.tick();
-        } catch (e) {
-          this.log(`tick threw: ${e.message}`);
+    // Register the host closure ONCE — host.onTick has no removal API, so a
+    // per-start() registration would stack one extra kernel tick per
+    // stop/start cycle (goto and pause/resume both cycle). The single
+    // closure gates on _running, so stop() makes it inert.
+    if (!this._tickInstalled) {
+      this._tickInstalled = true;
+      this.host.onTick(() => {
+        if (this._running) {
+          try {
+            this.tick();
+          } catch (e) {
+            this.log(`tick threw: ${e.message}`);
+          }
         }
-      }
-    });
+      });
+    }
     this.log("started");
   }
   stop() {
     this._running = false;
+  }
+  get running() {
+    return this._running;
   }
 
   _threatAvailable() {

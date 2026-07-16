@@ -28,6 +28,7 @@ const FAST = [
   "rynth_router_smoke.cjs",    // multi-leg route
   "rynth_sidecar_smoke.cjs",   // rynthnav sidecar HTTP contract (node-only)
   "rynth_supervisor_smoke.cjs",// fleet lifecycle
+  "rynth_netbrain_test.cjs",   // .NET-wasm brain loader + shadow harness (node-only)
 ];
 const FULL = [
   "rynth_combat_smoke.cjs",

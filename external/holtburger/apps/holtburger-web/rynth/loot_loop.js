@@ -50,6 +50,48 @@ export class RynthLootLoop {
     this.stateSince = Date.now();
   }
 
+  // ── netBrain (D1 path A′) — .NET-wasm LootScoring shadow ────────────────
+  // The JS rule model is a single Value(19) floor, so the shadow feeds the
+  // C# evaluator the equivalent one-rule VTank profile (NodeType 3
+  // LongValKeyGE, DataLines [min,"19"] — the fixtures' ValueFloor shape) and
+  // compares the PICKUP plane: C# keep/salvage => pickup, no-loot => skip.
+  attachNetBrain(brain, mode, nbModule) {
+    this._nb = { brain, mode, m: nbModule };
+  }
+
+  _nbShadowItem(item, value, jsPickup) {
+    const nb = this._nb;
+    if (!nb?.brain?.evaluateLoot) return;
+    const h = this.host;
+    nb.m.shadowTick(nb.brain, "loot", () => ({
+      Item: {
+        Id: item | 0,
+        Name: h.TryGetObjectName(item) || "",
+        ObjectClass: 0,
+        // Mirror the JS read exactly: an absent Value(19) stays absent —
+        // C#'s Values(19, 0) default matches the JS `?? 0`.
+        IntValues: value == null ? {} : { 19: value },
+        DoubleValues: {}, StringValues: {}, BoolValues: {}, DataValues: {},
+        Spells: [], HostHasSpellIds: true, HostHasPalettes: true, PaletteSubIds: [],
+      },
+      Character: null,
+      Vtank: {
+        Rules: [{
+          Name: "value floor", Priority: 0, Action: 1, KeepCount: null,
+          Conditions: [{ NodeType: 3, DataLines: [String(this.minValue), "19"] }],
+        }],
+      },
+      Native: null,
+    }), (out) => {
+      const csPickup = out.Verdict === "keep" || out.Verdict === "salvage";
+      return {
+        agree: csPickup === jsPickup,
+        jsVal: jsPickup ? "pickup" : "skip",
+        csVal: `${out.Verdict}${out.RuleName ? ":" + out.RuleName : ""}`,
+      };
+    });
+  }
+
   _findCorpse() {
     const h = this.host;
     const me = h.TryGetPlayerPose();
@@ -160,7 +202,9 @@ export class RynthLootLoop {
         const me = h.GetPlayerId();
         while (this.items.length) {
           const item = this.items.shift();
-          const value = h.TryGetObjectIntProperty(item, 19) ?? 0; // Value
+          const raw = h.TryGetObjectIntProperty(item, 19); // Value
+          const value = raw ?? 0;
+          if (this._nb) this._nbShadowItem(item, raw, value >= this.minValue);
           if (value < this.minValue) continue;
           h.s.moveItem(item, me, 0); // MoveItemExternal parity (0x0019)
           this.pendingItem = item;

@@ -1,0 +1,6 @@
+AppBundle/
+AppBundle.new/
+AppBundle.new.*/
+AppBundle.old.*/
+obj/
+bin/

@@ -43,3 +43,12 @@ BuffManager scheduling), each validated against the JS behavior.
 
 Full AppBundle not committed (7.9 MB); reproduce with the two source files
 + the workload install above.
+
+## 2026-07-16 (later session): A′ DELIVERED
+
+Three slices exist (`CombatScoring/`, `BuffScoring/`, `LootScoring/` — each with
+fixtures + JS parity + wasm parity) and consolidate into the production bundle
+at `apps/holtburger-web/netbrain/` (unified `[JSExport]` surface, ICU-free,
+`replay_fixtures.mjs` 269/269 vs native C#), loaded in-page behind the same
+seam via `rynth/netbrain.js` + `?netBrain=shadow|on`. The slice SOURCES stay
+here with their harnesses; the netbrain csproj `Compile Include`s them.

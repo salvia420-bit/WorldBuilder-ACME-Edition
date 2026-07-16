@@ -73,9 +73,19 @@ Bot code: `apps/holtburger-web/rynth/` (9 modules). Entry point:
    Holtburg region A7–AB×B2–B6 is baked; buildbox fan-out job), indoor cell-graph
    A* (dungeon walls aren't baked — upstream gap), portal-arrival re-validation
    vs our ACE, sidecar lifecycle (manual setsid-nohup today).
-4. Incremental **.NET-wasm lift** of RynthAi's pure-tier C# behind the same WebHost seam
-   (D1 path A′ — de-risked, `netwasm-spike/`), if preserving the C# investment is
-   prioritized over the JS reimplementation.
+4. ~~Incremental **.NET-wasm lift**~~ **DELIVERED 2026-07-16** (D1 path A′): the three
+   pure slices (CombatScoring TargetScoring, BuffScoring BuffScheduling, LootScoring —
+   the last authored + parity-run this session, 94 fixtures, 8 genuine cross-evaluator
+   findings) consolidate into ONE production AppBundle (`apps/holtburger-web/netbrain/`,
+   4.3 MB, ICU-free, unified replay gate **269/269** vs native C#) loaded in-page behind
+   the same seam via `rynth/netbrain.js` + `?netBrain=shadow|on` (url-flags.md).
+   `shadow` runs the C# brain beside JS at each decision point with divergence
+   accounting on `__diag.netbrain` (live-verified headless: `rynth_netbrain_smoke` —
+   the C#-vs-JS T7 scoring-formula divergence is now *measured live*); `on` lets the
+   C# selection drive the combat lock. Node gate: `rynth_netbrain_test.cjs` (18
+   checks, real loops + real bundle). Remaining A′ depth: buff/loot live soak (their
+   shadows are node-pinned but saw no live kernel routing yet), the P-rule cast
+   serializer slice, and an `on`-mode ruling once shadow data accumulates.
 
 ## Verdict
 

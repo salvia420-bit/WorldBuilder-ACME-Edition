@@ -205,7 +205,158 @@ export class RynthCombatLoop {
     return best;
   }
 
+  // ── netBrain (D1 path A′) — .NET-wasm TargetScoring behind the same seam ──
+  // Attached by bot.js when ?netBrain=shadow|on. shadow: the C# slice is
+  // called beside the JS selection and divergences are counted on
+  // __diag.netbrain; on: the C# selection DRIVES the lock (the JS pass still
+  // runs so the comparison metrics keep their baseline). Every failure path
+  // degrades to the JS decision — the brain can never wedge the loop.
+  attachNetBrain(brain, mode, nbModule, opts = {}) {
+    this._nb = { brain, mode, m: nbModule };
+    this._nbGraceMs = -1; // C#-side TargetLostScanAtMs, threaded call-to-call
+    this._nbPrevLock = 0;
+    this._nbCtx = null;
+    this._nbLastAt = 0;
+    this._nbMinIntervalMs = opts.minIntervalMs ?? 250;
+  }
+
+  // ScoringInput from LIVE host state — the exact inverse of the parity
+  // harness's makeHost (netwasm-spike/CombatScoring/parity_check.cjs:25-61).
+  // DTO Id fields are C# int32: guids ride two's-complement (g|0) and come
+  // back via >>>0 (live ACE dynamic guids sit above 2^31).
+  _nbBuildInput(preLock, now) {
+    const h = this.host;
+    const me = h.TryGetPlayerPose();
+    if (!me) return null;
+    const hasFlagsFn = typeof h.HasObjectDescFlags === "function";
+    // Cost bound (review finding): the 60 m NearbyGuids snapshot in a town
+    // includes items/NPCs/doors far beyond anything the C# filter can select
+    // (range 40, disengage 43). Skip positioned entities beyond 50 m —
+    // EXCEPT the lock, whose transient-miss semantics must survive — and
+    // hard-cap the row count, keeping the nearest.
+    const NB_RANGE_M = 50;
+    const NB_MAX_ENTITIES = 64;
+    const entities = [];
+    for (const g of h.NearbyGuids()) {
+      // Fold the JS guid-range player check (:172) into IsPlayer, and force
+      // ObjectClass!=5 for those (the C# path filters on ObjectClass only).
+      const isPlayer = h.ObjectIsPlayer(g) || (g >= PLAYER_GUID_MIN && g <= PLAYER_GUID_MAX);
+      const itemType = h.TryGetObjectIntProperty(g, 1);
+      const pos = h.TryGetObjectPosition(g);
+      let dist = -1;
+      if (pos && g !== preLock) {
+        dist = Math.hypot(pos.x - me.x, pos.y - me.y, pos.z - me.z);
+        if (dist > NB_RANGE_M) continue;
+      }
+      const killedAt = this.recentlyKilled.get(g);
+      // One desc-flags read feeds Attackable + AttackableUnknown (both sides
+      // now fail OPEN on unknown flags — webhost.js ObjectIsAttackable / C# T4).
+      const flags = hasFlagsFn ? h._live("GetObjectDescFlags", g) : null;
+      entities.push({
+        _d: dist < 0 ? 0 : dist, // transient sort key for the cap, stripped below
+        Id: g | 0,
+        Name: h.TryGetObjectName(g) || "",
+        // C#'s T2 monster filter runs on ObjectClass (5 = Monster); derive it
+        // from the same protocol facts the JS filter uses.
+        ObjectClass: isPlayer ? 7 : itemType === ITEM_TYPE_CREATURE ? 5 : 0,
+        IsPlayer: isPlayer,
+        ItemType: itemType ?? 0,
+        HasPosition: !!pos,
+        ObjCellId: pos ? pos.objCellId >>> 0 : 0,
+        X: pos?.x ?? 0,
+        Y: pos?.y ?? 0,
+        Z: pos?.z ?? 0,
+        HealthRatio: h.TryGetTargetHealthFraction(g),
+        Attackable: flags == null ? true : (flags & 0x10) !== 0,
+        AttackableUnknown: flags == null,
+        HostHasIsAttackable: hasFlagsFn,
+        LosBlocked: false, // no live LOS input (documented gap)
+        Blacklisted: false,
+        UserNeverAttack: false,
+        KilledMsAgo: killedAt ? now - killedAt : -1,
+      });
+    }
+    // Cap: keep the nearest rows (lock included via _d=0 for the preLock row).
+    let rows = entities;
+    if (rows.length > NB_MAX_ENTITIES) {
+      rows = rows.sort((a, b) => a._d - b._d).slice(0, NB_MAX_ENTITIES);
+      this._nb.m.diag().truncated++;
+    }
+    for (const r of rows) delete r._d;
+    // Heading -> z-rot quaternion, inverse of parity_check.cjs headingRad():
+    // physYawDeg = 2*atan2(QZ,QW) = -headingDeg  =>  QW=cos(h/2), QZ=-sin(h/2).
+    const hasPose = me.heading != null;
+    return {
+      NowMs: now,
+      PlayerId: (h.GetPlayerId() || 0) | 0,
+      Player: {
+        HasPose: hasPose,
+        ObjCellId: me.objCellId >>> 0,
+        X: me.x, Y: me.y, Z: me.z,
+        QW: hasPose ? Math.cos(me.heading / 2) : 1.0,
+        QZ: hasPose ? -Math.sin(me.heading / 2) : 0.0,
+      },
+      // MonsterRange 40 matches the JS hardcoded perimeter (:187) — feeding
+      // C#'s default 50 would make every 40-50m mob a guaranteed filter
+      // divergence and drown the real signal (the T2 range delta is already
+      // documented in the spike README).
+      Config: {
+        MonsterRange: 40.0,
+        MonsterDisengageRange: 0.0,
+        MonsterRules: Object.entries(this.priorities).map(([k, v]) => ({ Name: k, Priority: v })),
+      },
+      Lock: {
+        LockedTargetId: preLock | 0,
+        ActiveTargetId: preLock | 0,
+        TargetLostScanAtMs: this._nbGraceMs,
+      },
+      Entities: rows,
+    };
+  }
+
   _selectTarget() {
+    // Pre-lock preference: the value tick() captured BEFORE its kill-confirm
+    // block (C#'s SelectTargetTick performs its own hp==0 drop and must see
+    // the pre-kill lock); fall back to the current lock for direct callers.
+    const preLock = this._nbCtx?.preLock ?? this.locked;
+    this._nbCtx = null;
+    const jsSel = this._selectTargetJs();
+    const nb = this._nb;
+    if (!nb?.brain) return jsSel;
+    const now = Date.now();
+    if (now - this._nbLastAt < this._nbMinIntervalMs) return jsSel;
+    this._nbLastAt = now;
+    // Grace state is only meaningful for the lock it was armed on.
+    if (preLock !== this._nbPrevLock) this._nbGraceMs = -1;
+    this._nbPrevLock = preLock;
+    const out = nb.m.shadowTick(
+      nb.brain,
+      "combat",
+      () => this._nbBuildInput(preLock, now),
+      (csOut) => ({
+        agree: (csOut.SelectedTargetId | 0) === (jsSel | 0),
+        jsVal: jsSel ? (jsSel >>> 0).toString(16) : "-",
+        csVal: csOut.SelectedTargetId ? (csOut.SelectedTargetId >>> 0).toString(16) : "-",
+      })
+    );
+    if (!out) return jsSel;
+    this._nbGraceMs = out.TargetLostScanAtMs;
+    if (nb.mode !== "on") return jsSel;
+    // mode "on": the C# selection drives the lock.
+    const csSel = out.SelectedTargetId ? out.SelectedTargetId >>> 0 : 0;
+    if (csSel !== this.locked) {
+      if (csSel) this.log(`netbrain lock ${csSel.toString(16)}${this.locked ? ` (was ${this.locked.toString(16)})` : ""}`);
+      else if (this.locked) this.log(`netbrain drop ${this.locked.toString(16)}${out.DropReason ? ` (${out.DropReason})` : ""}`);
+      this.locked = csSel;
+      this.lockedScore = csSel
+        ? out.Scanned.find((s) => (s.Id >>> 0) === csSel)?.Score ?? this.lockedScore
+        : -1;
+      if (csSel) this.lastSeenLockedAt = now;
+    }
+    return this.locked;
+  }
+
+  _selectTargetJs() {
     const now = Date.now();
     const targets = this._scanTargets();
     const lockedEntry = targets.find((t) => t.guid === this.locked);
@@ -323,6 +474,11 @@ export class RynthCombatLoop {
     const h = this.host;
     if (!h.IsPlayerReady()) return;
     const now = Date.now();
+
+    // netBrain shadow context: the C# slice must see the PRE-kill-confirm
+    // lock (its SelectTargetTick does its own hp==0 drop, so both sides'
+    // drop+re-lock land inside the same compared tick).
+    if (this._nb?.brain) this._nbCtx = { preLock: this.locked, now };
 
     // Kill detection — validate the lock BEFORE re-selection (C# Think order,
     // CombatManager.cs:1717-1744) so the same tick can re-lock an alternative.

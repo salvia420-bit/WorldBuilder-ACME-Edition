@@ -438,7 +438,196 @@ export class RynthBuffLoop {
     };
   }
 
+  // ── netBrain (D1 path A′) — .NET-wasm BuffScheduling shadow ─────────────
+  // SNAPSHOT mode (the dto-map ruling): SchedulerState is rebuilt from this
+  // loop's live fields on every shadowed tick — a threaded C#-side mirror
+  // would drift into pure noise after the first differing decision (its
+  // PendingSpellId would track a cast that never physically happened).
+  // Comparison is EVENT-level only: "would C# cast the same spell right
+  // now" — cadence actions (login-wait/interval-wait/idle/mode-switch/...)
+  // never count as divergence. Item-enchant ticks are skipped entirely
+  // (JS B7 is a chat-confirmed mechanism the slice deliberately excludes).
+  attachNetBrain(brain, mode, nbModule, opts = {}) {
+    this._nb = { brain, mode, m: nbModule };
+    this._nbVitals = opts.vitals || null;
+    this._nbCombat = opts.combat || null;
+    this._nbLastAt = 0;
+    this._nbMinIntervalMs = opts.minIntervalMs ?? 250;
+  }
+
+  _nbRoman(t) {
+    return ["I", "I", "II", "III", "IV", "V", "VI", "VII", "VIII"][Math.max(1, Math.min(8, t || 1))];
+  }
+
+  // C# drops registry rows with an empty Name and parses the trailing roman
+  // numeral for the tier — resolve via the live catalog when present, else
+  // synthesize from the ladder meta (headless has no SpellCatalog).
+  _nbSpellName(id, famHint) {
+    const s = this.host.s;
+    if (s.getSpellRecord) {
+      try {
+        const r = s.getSpellRecord(id >>> 0);
+        if (r?.name) return r.name;
+      } catch (_) { /* fall through */ }
+    }
+    const meta = this._spellMeta(id);
+    const fam = meta?.category ?? famHint;
+    return `Fam${fam ?? 0} Self ${this._nbRoman(meta?.tier)}`;
+  }
+
+  _nbBuildInput(now) {
+    const h = this.host;
+    const s = h.s;
+    const v = this._nbVitals;
+    const nowS = now / 1000;
+    // RAW wire rows (C# does its own last-wins family collapse), reusing the
+    // exact _readRegistry receivedAt bookkeeping (the Derethian-epoch trap).
+    const registry = [];
+    if (typeof s.playerEnchantments === "function") {
+      if (!this._receivedAt) this._receivedAt = new Map();
+      for (const e of s.playerEnchantments() || []) {
+        const spellId = Number(e.spellId ?? e.spell_id);
+        const family = Number(e.spellCategory ?? e.spell_category);
+        const start = Number(e.startTime ?? e.start_time);
+        const duration = Number(e.duration);
+        const permanent = duration < 0 || duration > PERMANENT_SENTINEL_S;
+        let remainingS = 0;
+        if (!permanent) {
+          const prior = this._receivedAt.get(`${spellId}`);
+          const receivedAt = prior && prior.start === start ? prior.at : nowS;
+          this._receivedAt.set(`${spellId}`, { start, at: receivedAt });
+          remainingS = receivedAt + duration - start - nowS;
+          if (remainingS <= 0) continue;
+        }
+        registry.push({
+          SpellId: spellId, Name: this._nbSpellName(spellId, family),
+          Family: family, RemainingS: permanent ? 0 : remainingS, Permanent: permanent,
+        });
+      }
+    }
+    // Desired ladders from the known book (same source as _buildLadders).
+    const known = s.playerKnownSpells ? Array.from(s.playerKnownSpells() || []).map(Number) : [];
+    const desired = [];
+    for (const rawId of this.rawDesired) {
+      const meta = this._spellMeta(rawId);
+      const fam = meta?.category ?? this._familyOfSpell.get(rawId);
+      const ladder = [];
+      for (const id of known) {
+        const m = this._spellMeta(id);
+        if (!m || m.category !== fam) continue;
+        ladder.push({
+          Id: id, Name: this._nbSpellName(id, fam), Family: fam, Tier: m.tier,
+          Known: !this._unresolvable.has(id), // folds the B9 walk-down blacklist
+        });
+      }
+      desired.push({
+        BaseName: this._nbSpellName(rawId, fam), SkillUsable: true,
+        MaxTier: 8, Ladder: ladder, // no GetHighestBuffSpellTier live (documented gap)
+      });
+    }
+    const fr = v && typeof v._fractions === "function" ? v._fractions() : null;
+    const vid = (id) => (v && id && (!v._known || v._known(id)) ? id : 0);
+    return {
+      NowMs: now,
+      Config: {
+        EnableBuffing: true,
+        RebuffSecondsRemaining: REBUFF_SECONDS_REMAINING,
+        SpellCastIntervalMs: SPELL_CAST_INTERVAL_MS,
+        HealAt: v?.cfg?.healAtCombat ?? 60, RestamAt: v?.cfg?.restamAtCombat ?? 30,
+        GetManaAt: v?.cfg?.getManaAtCombat ?? 40,
+        TopOffHP: v?.cfg?.topOffHp ?? 95, TopOffStam: v?.cfg?.topOffStam ?? 95,
+        TopOffMana: v?.cfg?.topOffMana ?? 95,
+      },
+      Vitals: {
+        HealthPct: fr ? Math.round(fr.hp * 100) : 100,
+        StaminaPct: fr ? Math.round(fr.stam * 100) : 100,
+        ManaPct: fr ? Math.round(fr.mana * 100) : 100,
+        // Approximation of C#'s HasCloseThreat (a full _scanTargets here
+        // would double the scan cost) — threshold-band ticks are cadence.
+        InCombat: !!(this._nbCombat && this._nbCombat.locked !== 0),
+        HasHealthKit: false, // no JS kit plane (documented gap)
+        StamToHealthId: vid(v?.spells?.stamToHealth), HealSelfId: vid(v?.spells?.healSelf),
+        StamToManaId: vid(v?.spells?.stamToMana), RevitalizeId: vid(v?.spells?.revitalize),
+      },
+      HasRegistryApi: typeof s.playerEnchantments === "function",
+      Registry: registry,
+      KnownSnapshotWarm: true,
+      Desired: desired,
+      InMagicMode: h.GetCurrentCombatMode() === 8,
+      CanCastNow: h.GetCastBusyState() === 0,
+      BusyCount: h.GetBusyState(),
+      State: {
+        RegistryReady: this.registryReady,
+        LoginStartAtMs: this.startedAt || -1,
+        LastLoginCount: this.lastCount,
+        LastLiveRefreshAttemptMs: this.lastCountAt || -1e15,
+        LastPeriodicRefreshMs: this.lastRefreshAt || -1e15,
+        LastCastAttemptMs: this.lastCastAt || -1e15,
+        LastSelfBuffPollAtMs: -1e15, // no JS mirror (cadence-only)
+        PendingSpellId: this.pending?.spellId ?? 0,
+        PendingSpellName: this.pending ? this._nbSpellName(this.pending.spellId) : "",
+        PendingFamily: this.pending ? this._familyForSpell(this.pending.spellId) ?? 0 : 0,
+        PendingKnown: true,
+        ForceRebuffing: this._forceRebuffing,
+        ForceRebuffCastFamilies: [...this._forceRebuffCast],
+        NoShowCounts: [...this.noShows].map(([id, n]) => ({ Family: this._familyForSpell(id) ?? 0, Value: n })),
+        FailCooldownUntil: [...this._rejectParkedUntil].map(([f, t]) => ({ Family: f, UntilMs: t })),
+        AchievedTier: [...this._familyAchievedTier].map(([f, t]) => ({ Family: f, Value: t })),
+        UnresolvableIds: [...this._unresolvable],
+        RamTimers: [...this.families].map(([f, e]) => ({
+          Family: f, SpellName: this._nbSpellName(e.spellId, f),
+          Level: this._tierOf(e.spellId) ?? 0,
+          // Infinity is not JSON — a permanent timer rides the flag + a far
+          // finite expiry.
+          ExpiresAtMs: e.permanent ? now + 1e12 : e.expiresAtMs,
+          Permanent: !!e.permanent,
+        })),
+        ItemTimers: [], // JS B7 is out of the slice's scope by design
+      },
+    };
+  }
+
+  // C# actions that are pure cadence — never a divergence when JS is quiet.
+  static _NB_CADENCE = new Set([
+    "login-wait", "login-ready", "interval-wait", "gate-blocked", "hold-pending",
+    "idle", "buffing-disabled", "confirmed", "no-show-retry", "no-show-parked",
+    "no-chat-timeout", "mode-switch",
+  ]);
+
   tick() {
+    const nb = this._nb;
+    const now = Date.now();
+    const doShadow = !!nb?.brain && now - this._nbLastAt >= this._nbMinIntervalMs;
+    let input = null;
+    if (doShadow) {
+      this._nbLastAt = now;
+      try {
+        input = this._nbBuildInput(now); // PRE-tick snapshot (both sides decide from it)
+      } catch (_) {
+        nb.m.diag().errors.buff++;
+      }
+    }
+    const preLastCastAt = this.lastCastAt;
+    this._tickJs();
+    if (!input) return;
+    // JS event this tick: a self-buff cast (pending stamped at `now`), an
+    // item-enchant cast (skip — out of slice scope), or nothing.
+    if (this.lastCastAt !== preLastCastAt && this._itemPending) return;
+    const jsCast = this.lastCastAt !== preLastCastAt && this.pending ? this.pending.spellId : 0;
+    nb.m.shadowTick(nb.brain, "buff", () => input, (out) => {
+      const csCast = out.Action === "cast-buff" || out.Action === "vital-cast" ? out.SpellId : 0;
+      const agree = jsCast
+        ? csCast === jsCast
+        : csCast === 0 && (RynthBuffLoop._NB_CADENCE.has(out.Action) || out.Action === "");
+      return {
+        agree,
+        jsVal: jsCast ? `cast:${jsCast}` : "quiet",
+        csVal: `${out.Action}${out.SpellId ? ":" + out.SpellId : ""}`,
+      };
+    });
+  }
+
+  _tickJs() {
     const h = this.host;
     if (!h.IsPlayerReady()) return;
     const now = Date.now();

@@ -51,6 +51,26 @@ export async function createGrindBot(sessionHandle, config = {}) {
 
   const kernel = new kn.RynthBotKernel(host, { combat, buff, loot, vitals });
 
+  // netBrain (D1 path A′): opt-in .NET-wasm brain slices behind the same
+  // seam — config.netBrain ("shadow"|"on") wins over the ?netBrain URL flag;
+  // anything else stays off with zero cost. The AppBundle loads lazily and
+  // attaches when ready; load failure leaves the JS brain untouched.
+  const nbModule = await import(`${base}/netbrain.js`);
+  const nbMode = config.netBrain ?? nbModule.netBrainModeFromUrl();
+  if (nbMode === "shadow" || nbMode === "on") {
+    nbModule.diag().mode = nbMode;
+    nbModule
+      .loadNetBrain(config.netBrainBundleUrl ? { bundleUrl: config.netBrainBundleUrl } : {})
+      .then((brain) => {
+        if (!brain) return;
+        // The buff shadow's C# spine includes the vitals policy — it needs
+        // the live vitals config/fractions and the combat lock for InCombat.
+        const nbOpts = { vitals, combat };
+        for (const loop of [combat, buff, loot, vitals])
+          loop?.attachNetBrain?.(brain, nbMode, nbModule, nbOpts);
+      });
+  }
+
   // Router is on-demand travel, NOT a kernel priority — the caller drives a
   // route explicitly (pausing the grind while travelling is the caller's
   // choice). Ticked off the same host heartbeat. config.router passes
@@ -78,7 +98,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
     if (rs === "WALK" || rs === "PORTAL") {
       router.cancel();
     }
-    const wasRunning = kernel._running === true; // kernel's is-running signal
+    const wasRunning = kernel.running === true; // kernel's is-running signal
     kernel.stop();
     try {
       return await globalRouter.goto(router, to, opts);

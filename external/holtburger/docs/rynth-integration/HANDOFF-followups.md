@@ -66,16 +66,31 @@ with the **fixed + sealed** GeomExtract, so global routing works beyond the 5×5
 - After baking: raise the served `--max-tiles` (coverage ≫ 256 tiles), GeomCheck-gate, restart
   the sidecar, spot-check a cross-region portal route.
 
-### #18 — LootEvaluator netwasm parity lift  (subagent-scale; token-heavy)
-B5's recommended next slice: lift `Loot/VTankLootEvaluator.cs` + `LootEvaluator.cs`
-(`/mnt/wbterminal1/ac-refs/rynthsuite/Plugins/RynthCore.Plugin.RynthAi/`) to a netwasm parity
-harness vs `rynth/loot_loop.js`, mirroring `netwasm-spike/CombatScoring` + `BuffScoring`. Pure
-predicates, no clock, wide item-property DTO. Expect it to surface real loot_loop bugs (the
-pattern found 4 combat + several buff bugs). Best run as a focused subagent.
+### ~~#18 — LootEvaluator netwasm parity lift~~ ✅ DONE 2026-07-16 (later session, with item B)
+`netwasm-spike/LootScoring/` exists (94 deterministic fixtures, wasm 94/94, JS parity 65
+agree / 28 expected-by-design). 8 genuine findings in its README — headline: **F1, loot_loop
+has no appraisal gate** (Value(19) read once at enumeration; a late-appraising item is
+permanently skipped when minValue>0 — webhost already exposes HasAppraisalData/GetLastIdTime,
+loot_loop never calls them) and **F2, opposite zero-config polarity** (JS default loots
+everything, C# empty profile loots nothing). F1 is a real JS bug worth a fix pass.
+
+### ITEM B (HANDOFF-remaining §2B) — incremental .NET-wasm lift: ✅ DELIVERED 2026-07-16
+The production consolidation shipped: `apps/holtburger-web/netbrain/` (one 4.3 MB ICU-free
+AppBundle: scoreTargets + scheduleBuffs + evaluateLoot; `build.sh`; **`replay_fixtures.mjs`
+= the 269/269 byte-for-byte gate vs native C#**), `rynth/netbrain.js` loader + shadow
+harness, `?netBrain=shadow|on` wiring in combat/buff/loot loops (dto-map spec agent-derived,
+field-by-field cited; combat's live builder is the exact inverse of the parity harness's
+makeHost). Live-verified: `rynth_netbrain_smoke` (bundle in-page beside the Rust wasm,
+~0.5–1.5 s lazy load, first call ~300–400 ms warmup, ~20 ms/call steady in-tab, 4 Hz
+throttle; T7 scoring divergence measured live). Node gate `rynth_netbrain_test.cjs` (18
+checks). AppBundle is **gitignored like pkg/ — rebuild via netbrain/build.sh after pulling**.
+Kernel smaller item also closed: `running` getter + single tick-closure install (leak fixed),
+50×start/stop leak-proofed. Follow-ups: live soak for buff/loot shadows, P-rule cast
+serializer as the next slice, `on`-mode ruling once shadow data accumulates.
 
 ### Smaller open items (from batch-2 synthesis §3; not yet tasked)
-- `kernel.js`: verify the `_running` public getter + the per-start closure leak (synth §3 #4) were
-  addressed — the buff work added `heartbeat()` but the getter/leak may be untouched.
+- ~~`kernel.js`: verify the `_running` public getter + the per-start closure leak~~ ✅ DONE
+  2026-07-16 (both were real; fixed + 50-cycle leak-proofed, suites green).
 - `CombatScoring/parity_check.cjs` harness was corrected this session; BuffScoring's residual 9
   divergences are all intentional (documented in-file).
 - Portal-arrival re-validation: `rynth_portalcheck.cjs` exists (dry-run verified) but the live
