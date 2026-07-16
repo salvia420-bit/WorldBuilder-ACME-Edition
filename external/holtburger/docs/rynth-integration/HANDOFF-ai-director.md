@@ -1,5 +1,32 @@
 # Handoff — netBrain default-on + AI director (2026-07-16, evening session)
 
+> **EXECUTED 2026-07-16 (late session).** §4's residuals and next-slices 1-3
+> are done and live-verified:
+> - **F1 fixed** — `wireAiDirector` call is try/caught in bot.js; a broken ai
+>   module warns and grinds on.
+> - **F2 fixed** — `goto_lb` catalog says full objCellId with a pos-line
+>   example; executor refuses `lb <= 0xFFFF` with an actionable error; x/y
+>   bounded to [0,192) in the validator (actions test 100/100, safety 128/128).
+> - **Extensions wired default-on** — new `rynth/ai/extensions.js`
+>   (`composeAiExtensions`) plugs safety `guardPlan`, `enrichObservation`,
+>   knowledge `lookup`, dungeon `dungeon_suggest` and the providers→ui model
+>   datalist into the director's injectable deps; `config.ai.extensions =
+>   false` reverts to plain v1; wiring failure degrades to v1. New unit suite
+>   `rynth_ai_extensions_test.cjs` (27 checks).
+> - **Real acpedia provider** — `rynth/ai/tools/bake_knowledge_acpedia.py`
+>   streams the 1.4 GB wikidump into `knowledge.acpedia.json` (24,488
+>   articles, 6.0 MB, gitignored; infobox stats + prose; rebake ~3 min);
+>   `FetchKnowledgeProvider` (extensions.js) lazy-fetches it in-page with
+>   `knowledge.sample.json` as fallback. knowledge.js gained an exact-title
+>   ranking tier.
+> - **Verified live** — all 13 unit suites green (724 checks);
+>   `rynth_ai_smoke.cjs` 11/11 with extensions active, 0 console errors; a
+>   live probe confirmed the extended prompt on the director, a real corpus
+>   `lookup` (Olthoi Soldier w/ stats), and `dungeon_suggest` degrading
+>   cleanly outdoors.
+> Remaining from §4: real-LLM live soak (needs a real key) and the netBrain
+> buff/loot shadow soak — both unchanged below.
+
 Continuation of `HANDOFF-followups.md`. This session finished the netBrain
 (.NET-wasm) work and built a new layer on top of the rynth grind bot: an **LLM
 director** that checks in every few minutes and steers the bot. Everything
