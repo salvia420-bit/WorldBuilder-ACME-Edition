@@ -7,9 +7,10 @@ live-verified them (including a real-GPU onscreen run on the 1070), and pushed.
 This handoff carries the **remaining task list** and the context to execute it.
 
 Repo: `WorldBuilder-ACME-Edition`, submodule `external/holtburger`, branch **master** (pushed).
-Head at handoff: **`6ff0080a`**. This session's commits: `3fa89988` (sidecar scale +
-input hardening + building-seal + lifecycle), `bd50a633` (nav-stack + goto + indoor A*),
-`f08c6128` (combat + buff + vitals parity fixes), `6ff0080a` (netwasm spikes).
+Head at handoff: **`3b41eb39`** (item B + #18 + kernel item delivered — see the DELIVERED
+sections below). Earlier commits this day: `3fa89988` (sidecar scale + input hardening +
+building-seal + lifecycle), `bd50a633` (nav-stack + goto + indoor A*), `f08c6128`
+(combat + buff + vitals parity fixes), `6ff0080a` (netwasm spikes), `5aa48fc7` (this handoff).
 
 ## 0. Read first
 - `/mnt/wbterminal2/rynthnav-handoff/` — durable artifacts this handoff points at:
