@@ -16,9 +16,29 @@
 //       (30 min contract value; configurable for tests).
 //   B13 30 s periodic full re-sync (death/dispel recovery).
 //   B14 pacing: 400 ms cast interval + the cast/busy gates.
-// Omitted for now (documented, not forgotten): B4/B5 tier ladders (needs a
-// spell-family tier table), B7 item enchants (chat confirmation), B10-B12
-// batch semantics, B15/B16 vital policy.
+//   B4  tier-upgrade: a desired buff is resolved to the highest-tier spell
+//       in its family the character knows (via spell_ladders.json).
+//   B5  incantation tier-cap: cap the target at the highest tier OBSERVED
+//       landing for the family (skill-capped incantations don't recast
+//       forever chasing their nominal tier).
+// Omitted for now (documented, not forgotten): B7 item enchants (chat
+// confirmation), B10-B12 batch semantics (B15/B16 vital policy lives in
+// vitals.js).
+
+// Lazy-loaded family tier ladder (id -> [category, tier], self-beneficial
+// buffs, baked from the spell DAT). Shared across all buff-loop instances.
+let LADDER_TABLE = null;
+let LADDER_PROMISE = null;
+export function loadSpellLadders(base = "/apps/holtburger-web/rynth") {
+  if (LADDER_TABLE) return Promise.resolve(LADDER_TABLE);
+  if (!LADDER_PROMISE) {
+    LADDER_PROMISE = fetch(`${base}/spell_ladders.json`)
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((t) => (LADDER_TABLE = t))
+      .catch(() => (LADDER_TABLE = {}));
+  }
+  return LADDER_PROMISE;
+}
 
 const LOGIN_REFRESH_MAX_WAIT_MS = 20_000; // B1
 const REBUFF_SECONDS_REMAINING = 300; // B3
@@ -38,7 +58,17 @@ export class RynthBuffLoop {
    */
   constructor(host, desiredSpellIds, opts = {}) {
     this.host = host;
-    this.desired = desiredSpellIds.slice();
+    // The caller names a buff by ANY spell in its family (e.g. "Strength
+    // Self I"); B4/B5 upgrade it to the highest known+castable tier at
+    // start. `tierLadders` OFF (opts.tierLadders===false) keeps the exact
+    // ids (pre-B4 behavior).
+    this.rawDesired = desiredSpellIds.slice();
+    this.tierLadders = opts.tierLadders !== false;
+    this.desired = desiredSpellIds.slice(); // resolved lazily on first tick
+    this._laddersBuilt = false;
+    this._familyOfSpell = new Map(); // spellId -> category
+    this._familyAchievedTier = new Map(); // category -> highest landed tier (B5)
+    this._spellTier = new Map(); // spellId -> roughLevel
     this.log = opts.log || ((m) => console.log(`[buff] ${m}`));
     this.noShowCooldownMs = opts.noShowCooldownMs ?? SILENT_NO_SHOW_COOLDOWN_MS;
     // B1 state
@@ -62,6 +92,7 @@ export class RynthBuffLoop {
   startOn(host) {
     this._running = true;
     this.startedAt = Date.now();
+    if (this.tierLadders) loadSpellLadders(); // kick off the ladder fetch
     host.onTick(() => {
       if (this._running) {
         try {
@@ -74,6 +105,87 @@ export class RynthBuffLoop {
   }
   stop() {
     this._running = false;
+  }
+
+  // Resolve a spell to { category, tier }. Prefers the static ladder table
+  // (spell_ladders.json — id -> [category, tier], self-beneficial buffs,
+  // baked from the spell DAT) because the live SpellCatalog (getSpellRecord)
+  // is NOT loaded in a lightweight headless session. Falls back to
+  // getSpellRecord when the catalog IS present (full render session).
+  _spellMeta(id) {
+    const key = String(id >>> 0);
+    const t = LADDER_TABLE;
+    if (t && t[key]) return { category: t[key][0], tier: t[key][1] };
+    const s = this.host.s;
+    if (s.getSpellRecord) {
+      try {
+        const r = s.getSpellRecord(id >>> 0);
+        if (r && r.category != null) return { category: r.category, tier: Number(r.roughLevel) || 0 };
+      } catch (_) {
+        /* fall through */
+      }
+    }
+    return null;
+  }
+
+  // B4/B5 — build family tier ladders from the known-spell book. For each
+  // raw desired buff, find its family (category) and the highest-tier spell
+  // in that family the character actually knows; that becomes the target.
+  // B5: cap at the highest tier we've OBSERVED landing for the family (an
+  // Incantation nominally tier 8 that lands skill-capped at 6 must not
+  // recast forever chasing 8).
+  _buildLadders() {
+    this._laddersBuilt = true;
+    const s = this.host.s;
+    const known = s.playerKnownSpells ? Array.from(s.playerKnownSpells() || []).map(Number) : [];
+    // Index every known spell by family with its tier.
+    const byFamily = new Map(); // category -> [{id, tier}]
+    for (const id of known) {
+      const meta = this._spellMeta(id);
+      if (!meta || meta.category == null) continue;
+      this._familyOfSpell.set(id, meta.category);
+      this._spellTier.set(id, meta.tier);
+      if (!byFamily.has(meta.category)) byFamily.set(meta.category, []);
+      byFamily.get(meta.category).push({ id, tier: meta.tier });
+    }
+    // Resolve each raw desired buff to the best known tier in its family.
+    const resolved = [];
+    for (const rawId of this.rawDesired) {
+      const meta = this._spellMeta(rawId);
+      const fam = meta ? meta.category : this._familyOfSpell.get(rawId);
+      if (fam == null || !byFamily.has(fam)) {
+        resolved.push(rawId); // no ladder data — keep as-is
+        continue;
+      }
+      const cap = this._familyAchievedTier.get(fam) ?? 8;
+      const ladder = byFamily
+        .get(fam)
+        .filter((e) => e.tier <= cap)
+        .sort((a, b) => b.tier - a.tier);
+      const best = ladder[0] ? ladder[0].id : rawId;
+      if (best !== rawId) {
+        this.log(`ladder: ${rawId} -> ${best} (family ${fam}, tier ${this._spellTier.get(best)})`);
+      }
+      resolved.push(best);
+    }
+    this.desired = resolved;
+  }
+
+  // B5 — record the tier a family actually landed at (from the registry),
+  // and if a capped tier changes, rebuild ladders.
+  _recordAchievedTiers(reg) {
+    if (!reg) return;
+    let changed = false;
+    for (const [family, entry] of reg) {
+      const tier = this._spellTier.get(entry.spellId);
+      if (tier == null) continue;
+      const prev = this._familyAchievedTier.get(family) ?? 0;
+      if (tier > prev) {
+        this._familyAchievedTier.set(family, tier);
+        changed = true;
+      }
+    }
+    if (changed && this.tierLadders) this._buildLadders();
   }
 
   _readRegistry() {
@@ -124,6 +236,7 @@ export class RynthBuffLoop {
     const reg = this._readRegistry();
     if (reg) this.families = reg;
     this.lastRefreshAt = Date.now();
+    this._recordAchievedTiers(reg); // B5
     return reg;
   }
 
@@ -158,6 +271,12 @@ export class RynthBuffLoop {
     const h = this.host;
     if (!h.IsPlayerReady()) return;
     const now = Date.now();
+
+    // B4/B5 — resolve desired buffs to their best known+castable tier once
+    // the ladder table has loaded (or the live catalog is available).
+    if (this.tierLadders && !this._laddersBuilt && (LADDER_TABLE || this.host.s.getSpellRecord)) {
+      this._buildLadders();
+    }
 
     // B1 — login stabilization: registry count stable on two consecutive
     // ~1 s reads, or the 20 s max wait.

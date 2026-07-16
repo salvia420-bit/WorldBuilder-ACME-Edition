@@ -48,7 +48,8 @@ Bot code: `apps/holtburger-web/rynth/` (9 modules). Entry point:
 | P3 magic face-settle (15°/140ms/2500ms cap) | ✅ | `combat_loop.js` |
 | P12 kill prediction (learn MaxHP, 0.80 confidence, ≥3 samples) | ✅ | `combat_loop.js` (dual-source: severity + hf-delta) |
 | B1/B2/B3/B6/B8/B9/B13/B14 self-buff | ✅ | `buff_loop.js` |
-| B4/B5 tier ladders, B7 item enchants, B10-B12 batch | ⬜ TODO | needs a spell-family tier table |
+| B4 tier-upgrade + B5 incantation cap | ✅ | `buff_loop.js` + `spell_ladders.json` |
+| B7 item enchants, B10-B12 batch | ⬜ TODO | chat-confirm + batch semantics |
 | B15 emergency HP + B16 in-combat/idle thresholds + give-up valve | ✅ | `vitals.js` |
 
 ## Beyond the reports (built because it was needed)

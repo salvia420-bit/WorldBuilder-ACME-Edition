@@ -41,6 +41,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
 
   const combat = new cl.RynthCombatLoop(host, { priorities: config.priorities || {} });
   const buff = buffIds.length ? new bl.RynthBuffLoop(host, buffIds) : null;
+  if (buff) bl.loadSpellLadders(); // B4/B5 — preload the family tier table
   const loot = config.loot === false ? null : new ll.RynthLootLoop(host, config.loot || {});
   const vitals = config.vitals === false ? null : new vt.RynthVitals(host, { thresholds: config.vitals || {} });
 
