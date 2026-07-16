@@ -25,8 +25,12 @@
 //       the batch respects it. B11 auto batch-rebuff: any buff below
 //       threshold recasts ALL buffs in one pass (aligned timers). B12 force
 //       rebuff ignores live timers (recast everything to a common start).
-// Omitted (documented): B7 item enchants (chat confirmation). B15/B16 vital
-// policy lives in vitals.js.
+//   B7  item enchants (Impen/Banes): live on the item, absent from the
+//       player registry, duration not client-readable — recast on an
+//       interval, confirmed ONLY by the "You cast <spell> on <item>" chat
+//       line off the push-event plane (never optimistic).
+// B15/B16 vital policy lives in vitals.js. The report-11 buff contract is
+// complete.
 
 // Lazy-loaded family tier ladder (id -> [category, tier], self-beneficial
 // buffs, baked from the spell DAT). Shared across all buff-loop instances.
@@ -94,6 +98,16 @@ export class RynthBuffLoop {
     this._forceRebuffing = false; // B11 — recast everything this pass
     this._forceRebuffCast = new Set(); // B12 — families recast this cycle
     this._rejectParkedUntil = new Map(); // family -> ts (B10, 120s)
+    // B7 item enchants — [{ spellId, itemGuid }]. Item buffs live on the
+    // item, are ABSENT from the player enchantment registry, and their true
+    // duration is not client-readable (VTank couldn't read it either), so
+    // they are recast on an interval and confirmed ONLY by chat ("You cast
+    // <spell> on <item>") — never optimistically (an optimistic timer left a
+    // phantom "active" buff whenever a cast silently failed).
+    this.itemBuffs = (opts.itemBuffs || []).slice();
+    this.itemRecastMs = opts.itemRecastMs ?? 25 * 60_000; // conservative
+    this._itemLastCast = new Map(); // "spellId:itemGuid" -> confirmed ts
+    this._itemPending = null; // { spellId, itemGuid, issuedAt }
     this._running = false;
   }
 
@@ -101,6 +115,8 @@ export class RynthBuffLoop {
     this._running = true;
     this.startedAt = Date.now();
     if (this.tierLadders) loadSpellLadders(); // kick off the ladder fetch
+    // B7 — chat-confirm item enchants off the push-event plane.
+    if (host.onEvent) host.onEvent((e) => this._onChat(e));
     host.onTick(() => {
       if (this._running) {
         try {
@@ -110,6 +126,20 @@ export class RynthBuffLoop {
         }
       }
     });
+  }
+
+  // B7 — confirm an item enchant by the server's "You cast <spell> on
+  // <target>" line (kind=2 Magic chat). The "on <target>" form is the
+  // item/other-target cast; the self form is "You cast X and ...". Only a
+  // matching confirmation stamps the timer — never optimistic.
+  _onChat(e) {
+    if (e.kind !== 2 || !e.text || !this._itemPending) return;
+    if (/^You cast .+ on /.test(e.text)) {
+      const key = `${this._itemPending.spellId}:${this._itemPending.itemGuid}`;
+      this._itemLastCast.set(key, Date.now());
+      this.log(`item enchant confirmed: ${e.text.slice(0, 60)}`);
+      this._itemPending = null;
+    }
   }
   stop() {
     this._running = false;
@@ -294,6 +324,9 @@ export class RynthBuffLoop {
       active: active.length,
       parked: [...this.parkedUntil.keys()],
       pending: this.pending ? this.pending.spellId : 0,
+      itemBuffs: this.itemBuffs.length,
+      itemConfirmed: this._itemLastCast.size,
+      itemPending: this._itemPending ? this._itemPending.spellId : 0,
     };
   }
 
@@ -415,10 +448,37 @@ export class RynthBuffLoop {
       this._forceRebuffing = false;
       this.log("batch rebuff complete");
     }
+
+    // B7 — item enchants after self-buffs are settled.
+    if (this._maintainItemBuffs(now, h)) return;
+
     if (!this.allActiveSince) {
       this.allActiveSince = now;
       this.log(`all ${this.desired.length} desired buffs active`);
     }
+  }
+
+  // B7 — returns true if it issued/awaits an item-enchant cast this tick.
+  _maintainItemBuffs(now, h) {
+    if (!this.itemBuffs.length) return false;
+    // Awaiting chat confirmation? Time it out (no-chat = retry next pass).
+    if (this._itemPending) {
+      if (now - this._itemPending.issuedAt > 5000) {
+        this.log(`item enchant no-chat timeout (${this._itemPending.spellId})`);
+        this._itemPending = null;
+      }
+      return true;
+    }
+    for (const ib of this.itemBuffs) {
+      const key = `${ib.spellId}:${ib.itemGuid}`;
+      const last = this._itemLastCast.get(key) ?? 0;
+      if (now - last < this.itemRecastMs) continue; // still fresh (by interval)
+      h.CastSpell(ib.itemGuid, ib.spellId); // targeted at the item
+      this._itemPending = { spellId: ib.spellId, itemGuid: ib.itemGuid, issuedAt: now };
+      this.lastCastAt = now;
+      return true;
+    }
+    return false;
   }
 }
 

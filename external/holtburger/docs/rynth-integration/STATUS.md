@@ -49,8 +49,7 @@ Bot code: `apps/holtburger-web/rynth/` (9 modules). Entry point:
 | P12 kill prediction (learn MaxHP, 0.80 confidence, ≥3 samples) | ✅ | `combat_loop.js` (dual-source: severity + hf-delta) |
 | B1/B2/B3/B6/B8/B9/B13/B14 self-buff | ✅ | `buff_loop.js` |
 | B4 tier-upgrade + B5 incantation cap | ✅ | `buff_loop.js` + `spell_ladders.json` |
-| B10-B12 batch rebuff (align timers) | ✅ | `buff_loop.js` |
-| B7 item enchants | ⬜ TODO | needs chat-confirmation wiring |
+| B7 item enchants (chat-confirmed) + B10-B12 batch rebuff | ✅ | `buff_loop.js` |
 | B15 emergency HP + B16 in-combat/idle thresholds + give-up valve | ✅ | `vitals.js` |
 
 ## Beyond the reports (built because it was needed)
@@ -63,13 +62,11 @@ Bot code: `apps/holtburger-web/rynth/` (9 modules). Entry point:
 
 ## Open work (feasibility proven; remaining is depth)
 
-1. Buff tier ladders (B4/B5), item enchants (B7), batch rebuff (B10-B12) — needs a
-   spell-family/tier data table (RynthAi ships one; port or regenerate it).
-2. Missile ammo handling; melee-mode kill path (needs an unwielded test character).
-3. VTank meta-scripting (ExpressionEngine) — deferred by report 03; gate on real need.
-4. RynthNav global router **sidecar** (offline navmesh bake + Detour + portal Dijkstra) —
+1. Missile ammo handling; melee-mode kill path (needs an unwielded test character).
+2. VTank meta-scripting (ExpressionEngine) — deferred by report 03; gate on real need.
+3. RynthNav global router **sidecar** (offline navmesh bake + Detour + portal Dijkstra) —
    report 09's XL endgame; the `router.js` local half consumes its output.
-5. Incremental **.NET-wasm lift** of RynthAi's pure-tier C# behind the same WebHost seam
+4. Incremental **.NET-wasm lift** of RynthAi's pure-tier C# behind the same WebHost seam
    (D1 path A′ — de-risked, `netwasm-spike/`), if preserving the C# investment is
    prioritized over the JS reimplementation.
 
