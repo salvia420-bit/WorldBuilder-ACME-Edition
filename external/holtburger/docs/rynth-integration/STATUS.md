@@ -47,6 +47,7 @@ Bot code: `apps/holtburger-web/rynth/` (9 modules). Entry point:
 | P2/P5/E4 cast serializer (UseDoneSeq + 2500ms self-clear) | ✅ | `combat_loop.js` + busy trio |
 | P3 magic face-settle (15°/140ms/2500ms cap) | ✅ | `combat_loop.js` |
 | P12 kill prediction (learn MaxHP, 0.80 confidence, ≥3 samples) | ✅ | `combat_loop.js` (dual-source: severity + hf-delta) |
+| Melee / missile / magic attack branches | ✅ | `combat_loop.js` (melee live-verified via unwield) |
 | B1/B2/B3/B6/B8/B9/B13/B14 self-buff | ✅ | `buff_loop.js` |
 | B4 tier-upgrade + B5 incantation cap | ✅ | `buff_loop.js` + `spell_ladders.json` |
 | B7 item enchants (chat-confirmed) + B10-B12 batch rebuff | ✅ | `buff_loop.js` |
@@ -62,7 +63,7 @@ Bot code: `apps/holtburger-web/rynth/` (9 modules). Entry point:
 
 ## Open work (feasibility proven; remaining is depth)
 
-1. Missile ammo handling; melee-mode kill path (needs an unwielded test character).
+1. Missile ammo-out fallback (mode auto-reverts to Melee server-side; a bot-side pre-check is a nicety).
 2. VTank meta-scripting (ExpressionEngine) — deferred by report 03; gate on real need.
 3. RynthNav global router **sidecar** (offline navmesh bake + Detour + portal Dijkstra) —
    report 09's XL endgame; the `router.js` local half consumes its output.
