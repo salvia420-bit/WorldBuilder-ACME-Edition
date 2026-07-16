@@ -231,11 +231,21 @@ export class RynthCombatLoop {
     const hasFlagsFn = typeof h.HasObjectDescFlags === "function";
     // Cost bound (review finding): the 60 m NearbyGuids snapshot in a town
     // includes items/NPCs/doors far beyond anything the C# filter can select
-    // (range 40, disengage 43). Skip positioned entities beyond 50 m —
-    // EXCEPT the lock, whose transient-miss semantics must survive — and
-    // hard-cap the row count, keeping the nearest.
+    // (range 40, disengage 43). Skip entities beyond 50 m — EXCEPT the lock,
+    // which C# must see to run its own out-of-range/disengage handling — and
+    // hard-cap the row count, keeping the nearest. Distances are computed in
+    // the GLOBAL frame (lb-index*192 + local), exactly like
+    // TargetScoring.Distance — local deltas would drop every cross-LB mob
+    // (review finding). A positionless entity gets NO row: absence is C#'s
+    // transient-miss encoding (target==null keeps the lock through the scan
+    // grace); a HasPosition:false row would read as an immediate
+    // "out of range" drop instead.
     const NB_RANGE_M = 50;
     const NB_MAX_ENTITIES = 64;
+    const gX = (cell, x) => ((cell >>> 24) & 0xff) * 192 + x;
+    const gY = (cell, y) => ((cell >>> 16) & 0xff) * 192 + y;
+    const meGx = gX(me.objCellId >>> 0, me.x);
+    const meGy = gY(me.objCellId >>> 0, me.y);
     const entities = [];
     for (const g of h.NearbyGuids()) {
       // Fold the JS guid-range player check (:172) into IsPlayer, and force
@@ -243,17 +253,16 @@ export class RynthCombatLoop {
       const isPlayer = h.ObjectIsPlayer(g) || (g >= PLAYER_GUID_MIN && g <= PLAYER_GUID_MAX);
       const itemType = h.TryGetObjectIntProperty(g, 1);
       const pos = h.TryGetObjectPosition(g);
-      let dist = -1;
-      if (pos && g !== preLock) {
-        dist = Math.hypot(pos.x - me.x, pos.y - me.y, pos.z - me.z);
-        if (dist > NB_RANGE_M) continue;
-      }
+      if (!pos) continue; // absence = C# transient-miss encoding (keeps the lock via grace)
+      const cell = pos.objCellId >>> 0;
+      const dist = Math.hypot(gX(cell, pos.x) - meGx, gY(cell, pos.y) - meGy, pos.z - me.z);
+      if (g !== preLock && dist > NB_RANGE_M) continue;
       const killedAt = this.recentlyKilled.get(g);
       // One desc-flags read feeds Attackable + AttackableUnknown (both sides
       // now fail OPEN on unknown flags — webhost.js ObjectIsAttackable / C# T4).
       const flags = hasFlagsFn ? h._live("GetObjectDescFlags", g) : null;
       entities.push({
-        _d: dist < 0 ? 0 : dist, // transient sort key for the cap, stripped below
+        _d: g === preLock ? 0 : dist, // transient sort key for the cap (lock always survives), stripped below
         Id: g | 0,
         Name: h.TryGetObjectName(g) || "",
         // C#'s T2 monster filter runs on ObjectClass (5 = Monster); derive it
@@ -261,11 +270,11 @@ export class RynthCombatLoop {
         ObjectClass: isPlayer ? 7 : itemType === ITEM_TYPE_CREATURE ? 5 : 0,
         IsPlayer: isPlayer,
         ItemType: itemType ?? 0,
-        HasPosition: !!pos,
-        ObjCellId: pos ? pos.objCellId >>> 0 : 0,
-        X: pos?.x ?? 0,
-        Y: pos?.y ?? 0,
-        Z: pos?.z ?? 0,
+        HasPosition: true,
+        ObjCellId: cell,
+        X: pos.x,
+        Y: pos.y,
+        Z: pos.z,
         HealthRatio: h.TryGetTargetHealthFraction(g),
         Attackable: flags == null ? true : (flags & 0x10) !== 0,
         AttackableUnknown: flags == null,
@@ -320,11 +329,25 @@ export class RynthCombatLoop {
     // the pre-kill lock); fall back to the current lock for direct callers.
     const preLock = this._nbCtx?.preLock ?? this.locked;
     this._nbCtx = null;
-    const jsSel = this._selectTargetJs();
     const nb = this._nb;
+    const onMode = !!nb?.brain && nb.mode === "on";
+    // mode "on": C# owns the lock. The JS pass still runs — but only as the
+    // comparison baseline — so its lock mutations are snapshot/restored;
+    // without this, throttled ticks returned the raw JS selection and the
+    // two scoring models fought a StickToObject tug-of-war whenever they
+    // persistently disagreed (review finding, 2026-07-16).
+    const snap = onMode
+      ? { locked: this.locked, score: this.lockedScore, seen: this.lastSeenLockedAt }
+      : null;
+    const jsSel = this._selectTargetJs();
+    if (snap) {
+      this.locked = snap.locked;
+      this.lockedScore = snap.score;
+      this.lastSeenLockedAt = snap.seen;
+    }
     if (!nb?.brain) return jsSel;
     const now = Date.now();
-    if (now - this._nbLastAt < this._nbMinIntervalMs) return jsSel;
+    if (now - this._nbLastAt < this._nbMinIntervalMs) return onMode ? this.locked : jsSel;
     this._nbLastAt = now;
     // Grace state is only meaningful for the lock it was armed on.
     if (preLock !== this._nbPrevLock) this._nbGraceMs = -1;
@@ -339,9 +362,9 @@ export class RynthCombatLoop {
         csVal: csOut.SelectedTargetId ? (csOut.SelectedTargetId >>> 0).toString(16) : "-",
       })
     );
-    if (!out) return jsSel;
+    if (!out) return onMode ? this.locked : jsSel; // brain error: keep C#'s last word in "on"
     this._nbGraceMs = out.TargetLostScanAtMs;
-    if (nb.mode !== "on") return jsSel;
+    if (!onMode) return jsSel;
     // mode "on": the C# selection drives the lock.
     const csSel = out.SelectedTargetId ? out.SelectedTargetId >>> 0 : 0;
     if (csSel !== this.locked) {

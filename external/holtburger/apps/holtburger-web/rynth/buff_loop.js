@@ -607,13 +607,15 @@ export class RynthBuffLoop {
         nb.m.diag().errors.buff++;
       }
     }
-    const preLastCastAt = this.lastCastAt;
+    const prePending = this.pending;
+    const preItemPending = this._itemPending;
     this._tickJs();
     if (!input) return;
-    // JS event this tick: a self-buff cast (pending stamped at `now`), an
-    // item-enchant cast (skip — out of slice scope), or nothing.
-    if (this.lastCastAt !== preLastCastAt && this._itemPending) return;
-    const jsCast = this.lastCastAt !== preLastCastAt && this.pending ? this.pending.spellId : 0;
+    // JS event this tick, classified by WHICH pending was newly set — an
+    // outstanding item confirm can coexist with a fresh self-buff cast, so
+    // "_itemPending is non-null" is not an item-cast marker (review finding).
+    if (this._itemPending && this._itemPending !== preItemPending) return; // item cast: out of slice scope
+    const jsCast = this.pending && this.pending !== prePending ? this.pending.spellId : 0;
     nb.m.shadowTick(nb.brain, "buff", () => input, (out) => {
       const csCast = out.Action === "cast-buff" || out.Action === "vital-cast" ? out.SpellId : 0;
       const agree = jsCast

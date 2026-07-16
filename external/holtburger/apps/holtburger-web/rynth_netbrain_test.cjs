@@ -93,6 +93,44 @@ function check(name, ok, detail) {
         check("buff shadow no DTO errors", d.errors.buff === e0, `errors=${d.errors.buff - e0}`);
       }
 
+      // mode "on" authority: a scenario where the two scoring models disagree
+      // (JS 100-d + priority picks the far "olthoi"; C# 2.5pt/yd + unknown-HP
+      // +50 + threat<3m +30 picks the near mob). C# must drive the lock, and
+      // a throttled tick must RETURN that lock instead of the JS selection
+      // (the tug-of-war review finding).
+      {
+        const cl = await import(pathToFileURL(path.join(__dirname, "rynth", "combat_loop.js")).href);
+        const A = 0x80000a01, B = 0x80000b02; // >2^31: pins the int32 round-trip too
+        const ents = {
+          [A]: { name: "drudge skulker", x: 50, y: 52.5 },
+          [B]: { name: "olthoi soldier", x: 50, y: 80 },
+        };
+        const host = {
+          IsPlayerReady: () => true,
+          GetPlayerId: () => 0x50000001,
+          TryGetPlayerPose: () => ({ objCellId: 0xa9b40015, x: 50, y: 50, z: 0, heading: null }),
+          NearbyGuids: () => [A, B],
+          ObjectIsPlayer: () => false,
+          TryGetObjectIntProperty: (_g, k) => (k === 1 ? 16 : undefined),
+          TryGetObjectPosition: (g) => (ents[g] ? { objCellId: 0xa9b40015, x: ents[g].x, y: ents[g].y, z: 0 } : null),
+          TryGetObjectName: (g) => ents[g]?.name ?? null,
+          TryGetTargetHealthFraction: () => -1,
+          ObjectIsAttackable: () => true,
+          HasObjectDescFlags: () => true,
+          _live: () => 0x10,
+          has: () => false,
+        };
+        const loop = new cl.RynthCombatLoop(host, { log: () => {}, priorities: { olthoi: 10 } });
+        loop.attachNetBrain(brain, "on", nb, { minIntervalMs: 0 });
+        const sel1 = loop._selectTarget();
+        check("mode on: C# drives lock", sel1 === A && loop.locked === A,
+          `sel=${sel1?.toString(16)} locked=${loop.locked?.toString(16)} (JS alone would pick ${B.toString(16)})`);
+        loop._nbMinIntervalMs = 1e9; // force the throttled path
+        const sel2 = loop._selectTarget();
+        check("mode on: throttled tick holds C# lock", sel2 === A && loop.locked === A,
+          `sel=${sel2?.toString(16)} locked=${loop.locked?.toString(16)}`);
+      }
+
       // Loot shadow end-to-end: real RynthLootLoop in the LOOT state, real
       // bundle — pickup-plane agreement on the shared value-floor domain.
       {

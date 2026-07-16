@@ -78,7 +78,10 @@ export class RynthLootLoop {
       Vtank: {
         Rules: [{
           Name: "value floor", Priority: 0, Action: 1, KeepCount: null,
-          Conditions: [{ NodeType: 3, DataLines: [String(this.minValue), "19"] }],
+          // The slice parses slot 0 with int.Parse — a float minValue would
+          // throw and read as permanent divergence. For integer Value(19),
+          // value >= min is equivalent to value >= ceil(min).
+          Conditions: [{ NodeType: 3, DataLines: [String(Math.ceil(Number(this.minValue) || 0)), "19"] }],
         }],
       },
       Native: null,

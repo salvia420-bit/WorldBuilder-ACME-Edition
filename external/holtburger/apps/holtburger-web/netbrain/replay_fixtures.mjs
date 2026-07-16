@@ -30,6 +30,15 @@ const stable = (v) => JSON.stringify(canon(v));
 
 let totalPass = 0, totalFail = 0;
 
+// The bundle must be the one the in-page loader expects — same skew trap.
+const { EXPECTED_VERSION } = await import(
+  pathToFileURL(path.join(here, "../rynth/netbrain.js")).href
+);
+if (E.Version() !== EXPECTED_VERSION) {
+  console.log(`version: FAIL — bundle ${E.Version()} != loader ${EXPECTED_VERSION}`);
+  totalFail++;
+}
+
 // ---- CombatScoring: scenario inputs -> expected ScoringOutput (float-tolerant
 // score compare, mirroring CombatScoring/run_wasm.mjs) ----
 {
@@ -72,7 +81,9 @@ let totalPass = 0, totalFail = 0;
   totalPass += pass; totalFail += fail;
 }
 
-// ---- LootScoring (present once the #18 slice lands): single-call scenarios ----
+// ---- LootScoring: single-call scenarios. The slice is LANDED — a bundle
+// without the export is exactly the stale-AppBundle trap this gate exists
+// to catch, so it FAILS instead of skipping (review finding). ----
 {
   const lootFx = path.join(spike, "LootScoring/fixtures.json");
   if (existsSync(lootFx) && typeof E.EvaluateLoot === "function") {
@@ -86,7 +97,8 @@ let totalPass = 0, totalFail = 0;
     console.log(`loot: ${pass}/${fx.scenarios.length}`);
     totalPass += pass; totalFail += fail;
   } else {
-    console.log("loot: skipped (slice not present in bundle/fixtures yet)");
+    console.log("loot: FAIL — EvaluateLoot export or fixtures missing (stale AppBundle? rebuild with build.sh)");
+    totalFail++;
   }
 }
 
