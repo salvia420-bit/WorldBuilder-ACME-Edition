@@ -16,11 +16,12 @@
 // moment a threat appears (survival beats inventory).
 
 export class RynthBotKernel {
-  constructor(host, { combat, buff, loot }, opts = {}) {
+  constructor(host, { combat, buff, loot, vitals }, opts = {}) {
     this.host = host;
     this.combat = combat;
     this.buff = buff;
     this.loot = loot;
+    this.vitals = vitals; // B15/B16 vital-emergency policy (optional)
     this.log = opts.log || ((m) => console.log(`[kernel] ${m}`));
     this.action = "Idle"; // the B14 BotAction pin, observable
     this._running = false;
@@ -59,6 +60,20 @@ export class RynthBotKernel {
 
   tick() {
     if (!this.host.IsPlayerReady()) return;
+
+    // Vitals FIRST — survival preempts everything (B15/B16). inCombat =
+    // combat currently has a locked target or a threat is present.
+    if (this.vitals) {
+      const inCombat = (this.combat && this.combat.locked !== 0) || this._threatAvailable();
+      if (this.vitals.step(inCombat)) {
+        if (this.action !== "Vitals") {
+          this.log(`${this.action} -> Vitals`);
+          if (this.action === "Combat") this.host.StopStick();
+          this.action = "Vitals";
+        }
+        return;
+      }
+    }
 
     // Ownership pins (mid-transaction loops keep the tick)…
     const combatPinned = this.combat && this.combat.locked !== 0;
@@ -104,6 +119,7 @@ export class RynthBotKernel {
       kills: this.combat ? this.combat.kills : 0,
       looted: this.loot ? this.loot.lootedCount : 0,
       buffs: this.buff ? this.buff.status : null,
+      vitals: this.vitals ? this.vitals.status : null,
     };
   }
 }

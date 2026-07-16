@@ -165,8 +165,18 @@ kills in <10s**, lock→kill→re-acquire→kill, zero external driving. PASS.
   after ≥3 samples. Verified: MaxHP=100 learned from 3 severity-0.1/dmg-10 hits,
   prediction fires at hf=0.05. Live run confirmed real kind-19 combat events flow
   through the tap (33 in one fight).
-- Remaining Phase-2 items: P3 face-settle for magic at range, vital/mana policy
-  (B15/B16), missile ammo handling, melee-mode kill path (needs unwielded char).
+- **B15/B16 vital-emergency policy landed 2026-07-16** (`rynth/vitals.js`,
+  `rynth_vitals_smoke.cjs`): B15 emergency HP override (hp<30% && stam>20% →
+  Stamina-to-Health, below all configurable thresholds) + B16 in-combat/idle
+  threshold sets (combat HealAt=60/GetManaAt=40/RestamAt=30, idle TopOff=95;
+  strict `<`; mana-recharge needs stam>15). Reads `playerStats().vitals` (flat
+  [type,cur,base,buffedMax], Health=1/Stam=3/Mana=5), casts self-recovery
+  war spells behind the Magic-mode + cast/busy gates. Wired into the kernel as
+  the TOP priority (survival preempts combat). Verified: the full 8-case
+  threshold matrix (emergency/heal/restam/getmana/topoff/mana-floor-block/
+  all-full) exact, and a live `@sethealth 5` drove kernel Idle→Vitals→Heal Self.
+- Remaining Phase-2 items: P3 face-settle for magic at range, missile ammo
+  handling, melee-mode kill path (needs unwielded char).
 
 ### Phase 3 — buff loop: PASS (2026-07-16)
 `rynth/buff_loop.js` — report 11 B-rules subset, constants verbatim: B1 login
