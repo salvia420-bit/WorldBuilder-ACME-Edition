@@ -18,13 +18,16 @@ export class RynthControlChannel {
   /**
    * @param host RynthWebHost
    * @param kernel RynthBotKernel (paused/resumed by commands)
-   * @param opts { prefix="!bot", owner=null (name allow-list), log }
+   * @param opts { prefix="!bot", owner=null (name allow-list), log,
+   *               onGoto=null (async ({ns,ew}) => {ok,...} — bot.js wires
+   *               this when config.nav is set) }
    */
   constructor(host, kernel, opts = {}) {
     this.host = host;
     this.kernel = kernel;
     this.prefix = opts.prefix || "!bot";
     this.owner = opts.owner || null; // if set, only this sender is obeyed
+    this.onGoto = opts.onGoto || null; // global-nav hook ("goto <ns> <ew>")
     this.log = opts.log || ((m) => console.log(`[ctl] ${m}`));
     this.commands = [];
     this.paused = false;
@@ -77,9 +80,34 @@ export class RynthControlChannel {
         // Walk to the sender if they're a nearby tracked entity.
         this._comeToSender(sender);
         break;
+      case "goto": {
+        // "goto <ns> <ew>" — /loc degrees (floats), routed via the RynthNav
+        // sidecar when bot.js wired an onGoto (config.nav).
+        const ns = parseFloat(args[0]);
+        const ew = parseFloat(args[1]);
+        if (!Number.isFinite(ns) || !Number.isFinite(ew)) {
+          this._reply(sender, "usage: goto <ns> <ew> (/loc degrees)");
+          break;
+        }
+        if (!this.onGoto) {
+          this._reply(sender, "goto unavailable — nav not configured");
+          break;
+        }
+        this._reply(sender, `goto ${ns.toFixed(2)}ns ${ew.toFixed(2)}ew — routing`);
+        this.log(`${sender}: goto ${ns} ${ew}`);
+        Promise.resolve(this.onGoto({ ns, ew }))
+          .then((r) =>
+            this._reply(
+              sender,
+              r && r.ok ? `arrived (${r.legsWalked} legs, ${r.replans} replans)` : `route failed: ${(r && r.error) || "?"}`
+            )
+          )
+          .catch((e) => this._reply(sender, `route failed: ${e.message}`));
+        break;
+      }
       default: {
         const extra = args.length ? ` (args: ${args.join(" ")})` : "";
-        this._reply(sender, `unknown cmd '${cmd}'${extra} — try: status | pause | resume | come`);
+        this._reply(sender, `unknown cmd '${cmd}'${extra} — try: status | pause | resume | come | goto`);
       }
     }
   }

@@ -12,6 +12,7 @@
 //     loot: { minValue: 0 },          // Value(19) loot threshold
 //     control: { prefix: "!bot" },    // in-game tell control ("!bot status")
 //     vitals: { healAtCombat: 60 },   // B16 threshold overrides
+//     nav: { endpoint: "http://127.0.0.1:8767" }, // RynthNav sidecar -> bot.goto(to)
 //     hz: 10,                          // tick rate
 //   });
 //   // bot.host, bot.kernel, bot.channel, bot.status(); bot.stop()
@@ -46,10 +47,33 @@ export async function createGrindBot(sessionHandle, config = {}) {
   const vitals = config.vitals === false ? null : new vt.RynthVitals(host, { thresholds: config.vitals || {} });
 
   const kernel = new kn.RynthBotKernel(host, { combat, buff, loot, vitals });
+
+  // Global nav (report 09 sidecar): config.nav = { endpoint } wires a
+  // GlobalRouter so bot.goto(to) plans a cross-world route via the RynthNav
+  // sidecar and walks it. Unlike travel(), goto() restarts the kernel when
+  // the walk completes (or fails).
+  let globalRouter = null;
+  if (config.nav) {
+    const gr = await import(`${base}/global_router.js`);
+    globalRouter = new gr.GlobalRouter(host, { endpoint: config.nav.endpoint });
+  }
+  const doGoto = async (to, opts) => {
+    if (!globalRouter) return { ok: false, error: "nav not configured (config.nav)" };
+    kernel.stop();
+    try {
+      return await globalRouter.goto(router, to, opts);
+    } finally {
+      kernel.start();
+    }
+  };
+
   const channel =
     config.control === false
       ? null
-      : new cc.RynthControlChannel(host, kernel, config.control || {});
+      : new cc.RynthControlChannel(host, kernel, {
+          ...(config.control || {}),
+          ...(globalRouter ? { onGoto: (to) => doGoto(to) } : {}),
+        });
 
   // Router is on-demand travel, NOT a kernel priority — the caller drives a
   // route explicitly (pausing the grind while travelling is the caller's
@@ -69,11 +93,18 @@ export async function createGrindBot(sessionHandle, config = {}) {
     loot,
     vitals,
     router,
-    /** Travel a route ([{lb,x,y,z}]) — pauses the grind, walks it, resumes. */
+    globalRouter,
+    /** Travel a raw route ([{lb,x,y,z}]) — pauses the grind; caller resumes. */
     travel: (route) => {
       kernel.stop();
       router.follow(route);
     },
+    /**
+     * Sidecar-planned travel to {lb,x,y,z} or {ns,ew} (/loc degrees) —
+     * pauses the grind, plans+walks+replans, restarts the kernel on
+     * completion. Resolves {ok, state, legsWalked, replans}.
+     */
+    goto: (to, opts) => doGoto(to, opts),
     status: () => ({ ...kernel.status, router: router.status }),
     capabilities: () => host.capabilities,
     stop: () => {

@@ -33,16 +33,18 @@ bot.stop();
 | `vitals.js` | B15 emergency HP override + B16 in-combat/idle heal/mana/stam thresholds. | report 11 B15/B16 |
 | `loot_loop.js` | Corpse scan → approach (MoveToPosition + progress watchdog) → open → Value-rule → moveItem → confirm. | report 03 Tier-4 |
 | `kernel.js` | **BotKernel** — one loop-tick per kernel-tick (gates never contended), priority Vitals > Combat > Loot > Buff, ownership pinning + combat preemption. | report 12 |
-| `router.js` | Local leg executor — walk a route ([{lb,x,y,z}]) as `moveToPosition` legs with arrival detection + portal (landblock-change) recognition. The in-page half of report 09's nav; the global navmesh router is the deferred sidecar. |
-| `control_channel.js` | Remote control over in-game tells (`!bot status\|pause\|resume\|come`), parsed off the push-event plane, replies via `InvokeChatParser`. | report 04 push plane |
-| `bot.js` | `createGrindBot()` — wires all of the above on a SessionHandle. | — |
+| `router.js` | Local leg executor — walk a route ([{lb,x,y,z,portal?}]) as `moveToPosition` legs with world-frame arrival detection; distinguishes on-foot seam crossings (<30 m world jump on a landblock change → keep walking) from real portals/teleports (≥30 m → settle + advance). The in-page half of report 09's nav. |
+| `global_router.js` | **GlobalRouter** — JS client for the RynthNav sidecar (`../../rynthnav-sidecar`, :8767): `route(from,to)` HTTP contract + the plan→walk→replan loop over `router.js` (fresh route from current pose on a FAILED leg). | report 09 Option A |
+| `control_channel.js` | Remote control over in-game tells (`!bot status\|pause\|resume\|come\|goto <ns> <ew>`), parsed off the push-event plane, replies via `InvokeChatParser`. `goto` needs `config.nav`. | report 04 push plane |
+| `bot.js` | `createGrindBot()` — wires all of the above on a SessionHandle. `config.nav = { endpoint }` adds `bot.goto(to)` (pauses the grind, plans+walks via the sidecar, restarts the kernel on completion — unlike `travel()`, which leaves it stopped). | — |
 
 ## Regression suite
 
 `../rynth_test_all.cjs` runs the smokes in sequence with reap-window pacing:
 `NODE_PATH=<playwright> node rynth_test_all.cjs` (fast set) or `--full` (adds the
 long grind/loot/kernel/fullstack runs); `--only=a,b` for a subset. Prereqs: ACE +
-serve.py + wsbridge + a **release** wasm build in `pkg/`.
+serve.py + wsbridge + the rynthnav sidecar (:8767, `../../rynthnav-sidecar`) + a
+**release** wasm build in `pkg/`.
 
 ## Live-verified traps (all encoded)
 
@@ -56,6 +58,10 @@ serve.py + wsbridge + a **release** wasm build in `pkg/`.
   tax destabilizes the tab.
 - Pose for the brain comes from wasm world state (AC Z-up, landblock-local) — never
   three.js render coords.
+- The MoveTo servo has **no obstacle avoidance** — a route through un-baked geometry
+  grinds on walls forever with `pursuitStatus` stuck ACTIVE (live-proven at Holtburg).
+  Avoidance comes from the sidecar's navmesh: bake with `--geom` (statics+scenery),
+  never trust terrain-only tiles in towns.
 
 ## Language-fork note (D1)
 

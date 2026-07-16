@@ -6,8 +6,9 @@
 // PASS/FAIL table + exit code.
 //
 // Prereqs (all local): ACE server (UDP 9000/9001), serve.py (:8765),
-// holtburger-wsbridge (:8080), a RELEASE wasm build in pkg/, and playwright
-// on NODE_PATH. Run from apps/holtburger-web/:
+// holtburger-wsbridge (:8080), rynthnav sidecar (:8767) — apps/rynthnav-sidecar,
+// a RELEASE wasm build in pkg/, and playwright on NODE_PATH.
+// Run from apps/holtburger-web/:
 //   NODE_PATH=<playwright> node rynth_test_all.cjs [--full]
 //
 // Default set is the fast + representative smokes. --full adds the
@@ -25,6 +26,7 @@ const FAST = [
   "rynth_vitals_smoke.cjs",    // B15/B16 matrix + live heal
   "rynth_control_smoke.cjs",   // control channel (injected events)
   "rynth_router_smoke.cjs",    // multi-leg route
+  "rynth_sidecar_smoke.cjs",   // rynthnav sidecar HTTP contract (node-only)
   "rynth_supervisor_smoke.cjs",// fleet lifecycle
 ];
 const FULL = [
@@ -33,6 +35,7 @@ const FULL = [
   "rynth_loot_smoke.cjs",
   "rynth_buff_smoke.cjs",
   "rynth_kernel_smoke.cjs",
+  "rynth_globalroute_smoke.cjs", // sidecar-planned goto, end to end
   "rynth_fullstack_smoke.cjs",
 ];
 

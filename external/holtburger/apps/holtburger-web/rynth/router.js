@@ -4,9 +4,17 @@
 // Dijkstra) is the sidecar's job (deferred XL, report 09 §sidecar). This is
 // the in-page half report 09 assigns to the web client: given a route as an
 // ordered list of legs, walk each via the proven `moveToPosition` primitive,
-// detect arrival (pursuitStatus latch + a distance check), advance, and
-// recognize portal hops (landblock change) so a leg that ends at a portal
-// resumes on the far side. A route is just [{ lb, x, y, z, portal? }, ...].
+// detect arrival (pursuitStatus latch + a world-frame distance check), advance,
+// and recognize REAL portal hops so a leg that ends at a portal resumes on the
+// far side. A route is just [{ lb, x, y, z, portal? }, ...].
+//
+// Portal vs seam: a landblock-word change alone is NOT a portal — on-foot
+// legs cross outdoor seams all the time. We track last tick's world-frame
+// position (wx = lbX*192 + x, wy = lbY*192 + y) and only treat a landblock
+// change as a portal/teleport when the world-frame jump since last tick is
+// >= SEAM_JUMP_M; smaller = seam crossing on foot, keep walking the leg.
+// Arrival distance is world-frame against the leg's own lb, so cross-seam
+// legs can arrive.
 //
 // This is what makes moveToPosition useful for travel: the combat/loot loops
 // move a few metres; a route moves across the world.
@@ -14,7 +22,13 @@
 const ARRIVE_M = 3.0; // within this of a leg target = arrived
 const LEG_TIMEOUT_MS = 30_000; // per-leg watchdog
 const REISSUE_MS = 3000; // re-issue moveTo if not closing
-const PORTAL_SETTLE_MS = 4000; // after a landblock change, let streaming catch up
+const PORTAL_SETTLE_MS = 4000; // after a real portal hop, let streaming catch up
+const SEAM_JUMP_M = 30; // world-frame jump/tick >= this on a lb change = portal
+
+// World-frame (metres) from a full objCellId + landblock-local x,y.
+function worldXY(objCellId, x, y) {
+  return [((objCellId >>> 24) & 0xff) * 192 + x, ((objCellId >>> 16) & 0xff) * 192 + y];
+}
 
 export class RynthRouter {
   constructor(host, opts = {}) {
@@ -27,6 +41,8 @@ export class RynthRouter {
     this.lastD = Infinity;
     this.lastReissueAt = 0;
     this.lastLb = 0;
+    this.lastWx = 0; // last tick's world-frame position (seam vs portal)
+    this.lastWy = 0;
     this.onArrive = opts.onArrive || null;
   }
 
@@ -58,6 +74,7 @@ export class RynthRouter {
     }
     const pose = this.host.TryGetPlayerPose();
     this.lastLb = pose ? pose.objCellId >>> 16 : 0;
+    if (pose) [this.lastWx, this.lastWy] = worldXY(pose.objCellId, pose.x, pose.y);
     this.legStartAt = Date.now();
     this.lastReissueAt = Date.now();
     this.lastD = Infinity;
@@ -84,28 +101,37 @@ export class RynthRouter {
     }
 
     const curLb = pose.objCellId >>> 16;
-    // Portal detection: an unexpected landblock change means we traversed
-    // a portal. If the leg was flagged as a portal leg, that's success;
-    // either way, settle then advance.
+    const [wx, wy] = worldXY(pose.objCellId, pose.x, pose.y);
+    // Portal vs seam: only a landblock change WITH a discontinuous world-frame
+    // jump is a portal/teleport; a small jump is an on-foot seam crossing —
+    // update lastLb and keep walking the same leg.
     if (curLb !== this.lastLb) {
-      this.log(`landblock ${this.lastLb.toString(16)} -> ${curLb.toString(16)} (portal?)`);
+      const jump = Math.hypot(wx - this.lastWx, wy - this.lastWy);
       this.lastLb = curLb;
-      this.state = "PORTAL";
-      this.legStartAt = now;
-      h.StopCompletely();
-      return;
+      if (jump >= SEAM_JUMP_M) {
+        this.log(`landblock -> ${curLb.toString(16)}, jump ${jump.toFixed(0)}m (portal)`);
+        this.lastWx = wx;
+        this.lastWy = wy;
+        this.state = "PORTAL";
+        this.legStartAt = now;
+        h.StopCompletely();
+        return;
+      }
+      this.log(`seam -> ${curLb.toString(16)} (${jump.toFixed(1)}m, walking on)`);
     }
+    this.lastWx = wx;
+    this.lastWy = wy;
 
-    // Same-landblock arrival check.
-    const sameLb = curLb === (l.lb >>> 16);
-    const d = sameLb ? Math.hypot(pose.x - l.x, pose.y - l.y) : Infinity;
-    if (sameLb && d <= ARRIVE_M) {
+    // World-frame arrival check against the leg's own lb (cross-seam safe).
+    const [lwx, lwy] = worldXY(l.lb, l.x, l.y);
+    const d = Math.hypot(wx - lwx, wy - lwy);
+    if (d <= ARRIVE_M) {
       this._advance();
       return;
     }
     // pursuitStatus arrival latch (2) is a secondary completion signal.
     const ps = h.GetPursuitStatus ? h.GetPursuitStatus() : { last: 0 };
-    if (ps.last === 2 && sameLb && d <= ARRIVE_M * 2) {
+    if (ps.last === 2 && d <= ARRIVE_M * 2) {
       this._advance();
       return;
     }
