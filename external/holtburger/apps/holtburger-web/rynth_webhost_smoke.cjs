@@ -7,6 +7,11 @@ const URL = "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&nullRen
   if (!page) { console.log("FAIL boot"); await browser.close(); process.exit(1); }
   await sleep(3000);
 
+  // Normalize position — the character's saved pose drifts across test runs
+  // and can land in a spot where the short test-move is blocked.
+  await page.evaluate(() => window.__sessionHandle.sendChat("@telepoi Holtburg"));
+  await sleep(8000);
+
   const result = await page.evaluate(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const mod = await import("/apps/holtburger-web/rynth/webhost.js");

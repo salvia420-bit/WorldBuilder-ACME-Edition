@@ -256,6 +256,16 @@ grind, walks the route). Live smoke (`rynth_router_smoke.cjs`): a 4-leg square
 route walked to completion, all 4 arrivals fired. The global navmesh router
 (offline bake + Detour + portal Dijkstra) remains the deferred sidecar (09).
 
+### Regression baseline — GREEN 2026-07-16
+`rynth_test_all.cjs` fast set: **7/7** (webhost, phase1, trio, p12, giveup, control,
+router) after two test-robustness fixes surfaced by the suite: (1) the give-up test
+must set `emergencyHp:0` to isolate the valve from a low-HP account (low HP routes
+through the B15 emergency, correctly valve-exempt); (2) movement smokes must
+normalize the character's DRIFTING saved position (`@telepoi Holtburg`) — across
+test runs the saved pose drifts into cells where a short test-move is blocked, which
+is a test artifact, not a moveToPosition bug (the primitive works from any open
+spot, proven repeatedly). Both are bot-environment lessons, not code defects.
+
 ### Next arcs — contract completions, the D1 fork, the sidecar
 1. RynthNav router sidecar (09) for long-range routing over moveToPosition legs.
 2. Contract completions: T8 priorities, P3/P12, B4/B5/B7/B10-12, B15/B16 vital
