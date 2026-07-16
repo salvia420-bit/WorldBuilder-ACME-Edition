@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RynthNav.GeomExtract</RootNamespace>
+    <AssemblyName>GeomExtract</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      DAT parsing lives HERE, not in RynthNav.Sidecar — the serve path stays
+      dependency-free and consumes only the pre-extracted geom_{LB}.jsonl files.
+
+      NOTE: this is a PackageReference (NuGet cache), not a ProjectReference to
+      external/DatReaderWriter — that checkout is unbuildable standalone: its
+      csproj references ..\DatReaderWriter.SourceGenerator\ which is not present
+      in the tree. 2.1.2 is the exact version WorldBuilder.Shared pins, so the
+      parse behavior is identical to the rest of the toolchain.
+    -->
+    <PackageReference Include="Chorizite.DatReaderWriter" Version="2.1.2" />
+  </ItemGroup>
+
+</Project>
