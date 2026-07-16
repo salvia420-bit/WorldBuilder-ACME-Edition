@@ -19,20 +19,38 @@ const QUERY_HEALTH_INTERVAL_MS = 1000;
 const MELEE_SWING_PATIENCE_MS = 9000; // melee has no UseDone; re-issue window
 const WAR_BOLTS = [27, 28, 58, 64, 75, 86, 92]; // level-1 war spells
 
+const KILL_CONFIDENCE = 0.8; // P12 — predict kill if remHP <= avgDmg*0.80
+const KILL_MIN_SAMPLES = 3; // P12 — need >=3 learned hits first
+
 const ITEM_TYPE_CREATURE = 16;
 const PLAYER_GUID_MIN = 0x50000000;
 const PLAYER_GUID_MAX = 0x5fffffff;
+
+const CLIENT_EVENT_COMBAT = 19; // CLIENT_EVENT_KIND_COMBAT_EVENT
+const CLIENT_EVENT_DEATH = 29; // CLIENT_EVENT_KIND_DEATH
 
 export class RynthCombatLoop {
   constructor(host, opts = {}) {
     this.host = host;
     this.log = opts.log || ((m) => console.log(`[combat] ${m}`));
+    // T8 — opt-in monster priority: name-substring (lowercase) -> priority.
+    // priorityScore = max(0, priority-1)*5 (report 11 T8 formula); a target
+    // whose name contains a key gets that bias. Default rules add 0.
+    this.priorities = opts.priorities || {}; // { "olthoi": 10, "rat": 0 }
     this.state = "IDLE"; // IDLE | ACQUIRE | ENGAGE | ATTACK
     this.locked = 0; // T9 lock
     this.lockedScore = -1;
     this.lastSeenLockedAt = 0; // T10
     this.recentlyKilled = new Map(); // guid -> diedAt (T2)
     this.kills = 0;
+    // P12 — damage learning, keyed by target guid:
+    //   { hits, totalDamage, maxHp } ; maxHp learned as damage/severity.
+    this.damageModel = new Map();
+    this.predictedKill = false; // armed when remHP <= avgDmg*confidence
+    // Lifetime learning telemetry (survives per-target model deletion).
+    this.lifetimeHits = 0;
+    this.lifetimeMaxHpLearned = 0;
+    this.predictionsMade = 0;
     this.mode = 1;
     this.modeRequestedAt = 0;
     // P5 mark-on-issue
@@ -56,6 +74,76 @@ export class RynthCombatLoop {
         }
       }
     });
+    // P12 — subscribe to the push-event plane for confirmed per-hit damage.
+    if (host.onEvent) host.onEvent((e) => this._onCombatEvent(e));
+  }
+
+  // Report 11 P12, web-native: learn per-hit damage from BOTH sources —
+  // melee/missile carry severity (=damage/MaxHP) directly in the kind=19
+  // `damageDealt` payload; magic damage arrives as a combat-category chat
+  // line ("You singe X for N points with SPELL") with no severity. For the
+  // latter (and as a cross-check for the former) MaxHP is learned from the
+  // polled health-fraction DELTA: dealing `dmg` that drops the fraction by
+  // Δf implies MaxHP ≈ dmg/Δf. This uses the QueryHealth stream the web
+  // client gives us for the selected target — the constraint report 11 was
+  // written around (no unselected-mob HP) is relaxed here.
+  _learnDamage(dmg, severity) {
+    if (!this.locked || !(dmg > 0)) return;
+    const m = this.damageModel.get(this.locked) || { hits: 0, totalDamage: 0, maxHp: 0 };
+    m.hits += 1;
+    m.totalDamage += dmg;
+    let learnedMax = 0;
+    if (severity > 0) {
+      learnedMax = dmg / severity; // direct (melee/missile)
+    } else {
+      // Fraction-delta learn against the last poll.
+      const hf = this.host.TryGetTargetHealthFraction(this.locked);
+      if (hf >= 0 && this._lastHf >= 0 && this._lastHf > hf) {
+        learnedMax = dmg / (this._lastHf - hf);
+      }
+    }
+    if (learnedMax > 0) {
+      m.maxHp = m.maxHp ? Math.max(m.maxHp, learnedMax) : learnedMax;
+      this.lifetimeMaxHpLearned = Math.max(this.lifetimeMaxHpLearned, learnedMax);
+    }
+    this.lifetimeHits += 1;
+    this.damageModel.set(this.locked, m);
+  }
+
+  _onCombatEvent(e) {
+    if (e.kind === CLIENT_EVENT_DEATH) {
+      this.damageModel.delete(e.u32); // KillerNotification for our victim
+      return;
+    }
+    // Magic damage: combat-category chat line ("You <verb> <name> for N
+    // points with <spell>").
+    if (e.kind === 2 && e.text) {
+      const m = /^You \w+ .+? for (\d+) points? with /.exec(e.text);
+      if (m) this._learnDamage(Number(m[1]), 0);
+      return;
+    }
+    if (e.kind !== CLIENT_EVENT_COMBAT || !e.text) return;
+    let d;
+    try {
+      d = JSON.parse(e.text);
+    } catch (_) {
+      return;
+    }
+    if (d.type !== "damageDealt") return;
+    this._learnDamage(d.damage || 0, d.severity || 0);
+  }
+
+  // P12 — arm a kill prediction when learned remaining HP is within one
+  // average hit (× confidence). Uses the live health fraction (web streams
+  // it for the queried target) against the learned MaxHP.
+  _predictKill() {
+    const m = this.damageModel.get(this.locked);
+    if (!m || m.hits < KILL_MIN_SAMPLES || !m.maxHp) return false;
+    const hf = this.host.TryGetTargetHealthFraction(this.locked);
+    if (hf < 0) return false;
+    const remainingHp = hf * m.maxHp;
+    const avgDmg = m.totalDamage / m.hits;
+    return remainingHp <= avgDmg * KILL_CONFIDENCE;
   }
   stop() {
     this._running = false;
@@ -82,13 +170,24 @@ export class RynthCombatLoop {
       if (!pos || pos.objCellId >>> 16 !== me.objCellId >>> 16) continue; // same LB only (v1 distance gate)
       const d = Math.hypot(pos.x - me.x, pos.y - me.y, pos.z - me.z);
       if (d > 40) continue;
-      // Natural "fastest-to-attack" scoring: nearer = higher (T8's
-      // priority term is 0 for default rules — omitted until monster
-      // rules exist).
-      out.push({ guid: g, score: 100 - d, dist: d });
+      // Natural "fastest-to-attack" scoring: nearer = higher, plus T8's
+      // opt-in monster-priority term: (priority-1)*5 when the name
+      // substring-matches a configured rule.
+      out.push({ guid: g, score: 100 - d + this._priorityTerm(g), dist: d });
     }
     out.sort((a, b) => b.score - a.score);
     return out;
+  }
+
+  _priorityTerm(guid) {
+    const keys = Object.keys(this.priorities);
+    if (!keys.length) return 0;
+    const name = (this.host.TryGetObjectName(guid) || "").toLowerCase();
+    let best = 0;
+    for (const k of keys) {
+      if (name.includes(k)) best = Math.max(best, Math.max(0, this.priorities[k] - 1) * 5);
+    }
+    return best;
   }
 
   _selectTarget() {
@@ -173,11 +272,24 @@ export class RynthCombatLoop {
       this.log(`kill confirmed ${target.toString(16)} (${this.kills + 1})`);
       this.kills++;
       this.recentlyKilled.set(target, now);
+      this.damageModel.delete(target);
       this.locked = 0;
       this.lockedScore = -1;
+      this.predictedKill = false;
       h.StopStick();
       this.state = "ACQUIRE";
       return;
+    }
+
+    // P12 — kill anticipation. When the learned model says this target is
+    // one hit from death, note it (observable) and let target selection
+    // pre-warm: the next _selectTarget already ranks alternatives, so on
+    // the confirmed kill next tick there's a ready lock. We don't abandon
+    // the current swing (that would waste the finishing blow) — just flag.
+    if (!this.predictedKill && this._predictKill()) {
+      this.predictedKill = true;
+      this.predictionsMade += 1;
+      this.log(`predicted kill on ${target.toString(16)} — pre-scanning next`);
     }
 
     // ENGAGE: equipment-derived combat mode (the live-confirmed trap) +

@@ -154,9 +154,19 @@ kills in <10s**, lock→kill→re-acquire→kill, zero external driving. PASS.
   seam's `ObjectIsAttackable`/`ObjectIsPlayer` — added after the loop live-locked
   onto **Alcott the vendor** (NPCs are ItemType Creature; report 11 T2's
   `!ObjectIsAttackable` class is load-bearing, now proven).
-- Remaining Phase-2 items: T8 monster-rule priorities, P3 face-settle for magic at
-  range, P12 kill prediction, vital/mana policy (B15/B16), missile ammo handling,
-  melee-mode kill path (needs unwielded char).
+- **T8 + P12 landed 2026-07-16** (`rynth_p12_smoke.cjs`): T8 monster priorities —
+  name-substring rules bias scoring by `(priority-1)*5` (Olthoi@20→95, Rat@5→20,
+  unlisted→0, all exact). P12 kill-anticipation — the combat loop subscribes to
+  the push-event plane and learns per-hit damage from BOTH sources (melee/missile
+  `damageDealt` severity=damage/MaxHP directly; magic damage parsed from the
+  combat-chat "for N points with SPELL" line, with MaxHP learned from the polled
+  health-fraction delta — web relaxes report 11's "no unselected-mob HP"
+  constraint via QueryHealth). Predicts a kill when learned remHP ≤ avgDmg×0.80
+  after ≥3 samples. Verified: MaxHP=100 learned from 3 severity-0.1/dmg-10 hits,
+  prediction fires at hf=0.05. Live run confirmed real kind-19 combat events flow
+  through the tap (33 in one fight).
+- Remaining Phase-2 items: P3 face-settle for magic at range, vital/mana policy
+  (B15/B16), missile ammo handling, melee-mode kill path (needs unwielded char).
 
 ### Phase 3 — buff loop: PASS (2026-07-16)
 `rynth/buff_loop.js` — report 11 B-rules subset, constants verbatim: B1 login
