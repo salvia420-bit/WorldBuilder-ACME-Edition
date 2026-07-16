@@ -1,0 +1,24 @@
+[
+  {
+    "title": "Aerlinthe Recall Quest",
+    "aliases": ["aerlinthe island", "olthoi island run"],
+    "text": "Mid-level quest chain. Travel to Aerlinthe Island via the Sea Temple portal, recover the amulet from the matron hive, and speak to the collector in Eastham to learn Aerlinthe Recall. Bring acid protection: the hive guards use corrosive spit.",
+    "url": "https://acpedia.example/wiki/Aerlinthe_Recall_Quest"
+  },
+  {
+    "title": "Olthoi Soldier",
+    "aliases": ["soldier"],
+    "text": "Insectoid creature, level ~65. Weak to slashing and fire; resists piercing. Drops olthoi weapons and infected paws used in several quests. Found in olthoi tunnels and around the Arwic ruins.",
+    "url": "https://acpedia.example/wiki/Olthoi_Soldier"
+  },
+  {
+    "title": "Drudge Ravener",
+    "text": "Low-level drudge variant, level ~12. Common around starter towns; sometimes wanders near olthoi tunnel mouths. Drops trade notes and cheap trinkets — good early loot value is rare."
+  },
+  {
+    "title": "Sawato Bandit Cave",
+    "aliases": ["bandit cave quest"],
+    "text": "Short low-level dungeon quest north of Sawato. Clear the bandit leader for a small XP reward and the copper key used by the Sawato blacksmith.",
+    "url": "https://acpedia.example/wiki/Sawato_Bandit_Cave"
+  }
+]
