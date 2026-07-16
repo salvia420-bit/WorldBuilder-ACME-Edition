@@ -75,7 +75,10 @@ function check(name, ok, detail) {
     }
     check("bot.ai exposed", s.hasAi);
     check("window.rynthAI.status present", !!s.status, "rynthAI.status() returned nothing");
-    check("director enabled+running", !!s.status?.enabled && !!s.status?.running, JSON.stringify(s.status));
+    // `running` is true only DURING a check-in (a ~ms transient, cleared in
+    // checkNow's finally); between the setTimeout-scheduled checks it is
+    // correctly false. "director is active" = enabled + it has actually run.
+    check("director enabled + checked in", !!s.status?.enabled && (s.status?.calls | 0) >= 1, JSON.stringify(s.status));
     check("first check-in happened", (s.status?.calls ?? 0) >= 1, `calls=${s.status?.calls}`);
     check("plan executed: loot.minValue=4321", s.lootMin === 4321, `minValue=${s.lootMin}`);
     check("journal has plan entry", s.journalKinds.includes("plan"), s.journalKinds.join(","));
