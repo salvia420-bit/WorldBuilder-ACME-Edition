@@ -31,6 +31,23 @@
 //       line off the push-event plane (never optimistic).
 // B15/B16 vital policy lives in vitals.js. The report-11 buff contract is
 // complete.
+//
+// netwasm-parity fixes (b5.md, 2026-07-16) — each cites C# BuffManager.cs:
+//   finding 1  B11: _anyBelowThreshold now SKIPS parked families (:824-827)
+//              so a can't-land parked buff no longer livelocks the batch.
+//   finding 2  B13/B3: families store ABSOLUTE expiry timestamps (live
+//              remaining, :1216) + kernel-driven heartbeat() re-sync, so the
+//              kernel gate no longer starves rebuffs on expiry/death.
+//   finding 3  B4: _isActiveReal upgrade-recasts an active LOWER-tier family
+//              (:1207-1215).
+//   finding 4  B8: pending casts confirm by FAMILY, not spell id (:555-556) —
+//              a skill-capped incantation landing lower no longer no-shows.
+//   finding 5  B9: a silent no-show tier-WALKS-DOWN to the next known tier
+//              (:566-573) instead of parking unbuffed.
+//   finding 9  B8×B3: a sub-threshold-duration buff confirms (no false
+//              no-show) and is held active (no infinite rebatch).
+//   finding 10 B2: same-family wire rows keep the LATER expiry (JS-defensible;
+//              C# keeps last, :1374) — CONFIRMED no change.
 
 // Lazy-loaded family tier ladder (id -> [category, tier], self-beneficial
 // buffs, baked from the spell DAT). Shared across all buff-loop instances.
@@ -76,6 +93,14 @@ export class RynthBuffLoop {
     this._familyOfSpell = new Map(); // spellId -> category
     this._familyAchievedTier = new Map(); // category -> highest landed tier (B5)
     this._spellTier = new Map(); // spellId -> roughLevel
+    // B9 tier-walk-down (finding 5): spell ids that silently no-showed are
+    // marked unresolvable and excluded from the ladder, so the family
+    // re-resolves to the next lower known tier instead of parking unbuffed.
+    this._unresolvable = new Set();
+    // B8×B3 (finding 9): families whose buff confirmed landing but whose
+    // natural duration is below the rebuff threshold — held "active" while
+    // present so the batch doesn't rebatch them forever.
+    this._shortDurationFamilies = new Set();
     this.log = opts.log || ((m) => console.log(`[buff] ${m}`));
     this.noShowCooldownMs = opts.noShowCooldownMs ?? SILENT_NO_SHOW_COOLDOWN_MS;
     // B1 state
@@ -179,6 +204,7 @@ export class RynthBuffLoop {
     // Index every known spell by family with its tier.
     const byFamily = new Map(); // category -> [{id, tier}]
     for (const id of known) {
+      if (this._unresolvable.has(id)) continue; // finding 5: skip blacklisted tiers
       const meta = this._spellMeta(id);
       if (!meta || meta.category == null) continue;
       this._familyOfSpell.set(id, meta.category);
@@ -247,10 +273,17 @@ export class RynthBuffLoop {
       const family = Number(e.spellCategory ?? e.spell_category);
       const start = Number(e.startTime ?? e.start_time);
       const duration = Number(e.duration);
-      let remainingS;
+      // Finding 2: store an ABSOLUTE expiry timestamp (wall-clock ms), NOT a
+      // remaining-seconds SNAPSHOT. _isActiveReal/status recompute remaining
+      // live against Date.now() every read, so expiry is detected even when
+      // the loop hasn't ticked/refreshed in a while (the kernel-gate
+      // starvation this fixes: once all-active the loop stops ticking, and a
+      // frozen remainingS never crossed the rebuff threshold — BuffManager
+      // stores expiry timestamps, BuffManager.cs:1216 `timer.Expiration`).
+      let expiresAtMs;
       let permanent = false;
       if (duration < 0 || duration > PERMANENT_SENTINEL_S) {
-        remainingS = Infinity; // B6 presence-only
+        expiresAtMs = Infinity; // B6 presence-only
         permanent = true;
       } else {
         const key = `${spellId}`;
@@ -258,12 +291,16 @@ export class RynthBuffLoop {
         const receivedAt =
           prior && prior.start === start ? prior.at : nowS;
         this._receivedAt.set(key, { start, at: receivedAt });
-        remainingS = receivedAt + duration - start - nowS;
-        if (remainingS <= 0) continue; // B2: drop expired
+        expiresAtMs = (receivedAt + duration - start) * 1000;
+        if (expiresAtMs - nowS * 1000 <= 0) continue; // B2: drop expired
       }
       const prev = out.get(family);
-      if (!prev || remainingS > prev.remainingS) {
-        out.set(family, { spellId, remainingS, permanent });
+      // B2 last-wins quirk (finding 10): C# keeps the LAST wire row for a
+      // family (BuffManager.cs:1374); JS deliberately keeps the entry with the
+      // LATER expiry (max-remaining) — more defensible against reordered/stale
+      // rows. CONFIRMED-no-change: the JS choice stands.
+      if (!prev || expiresAtMs > prev.expiresAtMs) {
+        out.set(family, { spellId, expiresAtMs, permanent });
       }
       this.spellFamily.set(spellId, family);
     }
@@ -275,7 +312,30 @@ export class RynthBuffLoop {
     if (reg) this.families = reg;
     this.lastRefreshAt = Date.now();
     this._recordAchievedTiers(reg); // B5
+    // finding 9 cleanup: a short-duration family that has fully dropped from
+    // the registry is eligible to recast again — forget its "held active" mark.
+    if (reg) {
+      for (const fam of this._shortDurationFamilies) {
+        const entry = reg.get(fam);
+        if (!entry || this._remainingS(entry) <= 0) this._shortDurationFamilies.delete(fam);
+      }
+    }
     return reg;
+  }
+
+  // Finding 2 — UNCONDITIONAL heartbeat driven by the kernel EVERY tick,
+  // independent of whether "Buffing" is the selected action. It runs only the
+  // B13 death/dispel re-sync (self-throttled to the 30 s cadence), so a death
+  // that silently empties the enchantment registry is detected even while the
+  // kernel is busy with combat/loot and never routes to Buffing. Without it,
+  // once all buffs read active the kernel's _buffNeeded gate goes false,
+  // buff.tick() (which owns the periodic refresh) never runs, and the bot
+  // fights on unbuffed forever. Buff EXPIRY is handled separately by the live
+  // expiry timestamps in _isActiveReal, so this only closes the "registry
+  // emptied while our timers still say active" gap.
+  heartbeat() {
+    if (!this.registryReady) return; // login gate owns the pre-ready window
+    if (Date.now() - this.lastRefreshAt > PERIODIC_REFRESH_INTERVAL_MS) this._refresh();
   }
 
   _familyForSpell(spellId) {
@@ -284,19 +344,52 @@ export class RynthBuffLoop {
     return meta ? meta.category : undefined;
   }
 
-  // B3 real-timer test (ignores the force-rebuff view).
+  _tierOf(id) {
+    if (this._spellTier.has(id)) return this._spellTier.get(id);
+    const m = this._spellMeta(id);
+    return m ? m.tier : null;
+  }
+
+  // Live remaining seconds from the stored absolute expiry (finding 2).
+  _remainingS(entry) {
+    return entry.permanent ? Infinity : (entry.expiresAtMs - Date.now()) / 1000;
+  }
+
+  // Resolve the registry entry backing a desired spell id: by family first
+  // (so a skill-capped Incantation that landed as a lower-tier id in the SAME
+  // family still resolves — finding 4), else by exact spell id.
+  _entryForSpell(spellId) {
+    const family = this._familyForSpell(spellId);
+    if (family !== undefined && this.families.has(family)) return { family, entry: this.families.get(family) };
+    for (const [fam, entry] of this.families) if (entry.spellId === spellId) return { family: fam, entry };
+    return { family, entry: null };
+  }
+
+  // B3 real-timer test (ignores the force-rebuff view). Remaining is computed
+  // live from the absolute expiry (finding 2), so this is correct even if the
+  // registry hasn't been refreshed recently.
   _isActiveReal(spellId) {
-    const family = this.spellFamily.get(spellId);
-    if (family !== undefined) {
-      const entry = this.families.get(family);
-      return !!entry && (entry.permanent || entry.remainingS > REBUFF_SECONDS_REMAINING);
+    const { family, entry } = this._entryForSpell(spellId);
+    if (!entry) return false;
+    const remainingS = this._remainingS(entry);
+    if (remainingS <= 0) return false;
+    // B4 tier-upgrade (BuffManager.cs:1207-1215): a family holding a LOWER
+    // tier than desired (capped by the highest tier we've seen land — B5) is
+    // treated inactive so it upgrade-recasts regardless of time left. Was
+    // absent — a friend-cast / older lower tier never upgraded (finding 3).
+    const desiredTier = this._tierOf(spellId);
+    const landedTier = this._tierOf(entry.spellId);
+    if (family !== undefined && desiredTier != null && landedTier != null) {
+      const cap = this._familyAchievedTier.get(family);
+      const effectiveTarget = cap != null ? Math.min(desiredTier, cap) : desiredTier;
+      if (landedTier < effectiveTarget) return false; // upgrade
     }
-    for (const entry of this.families.values()) {
-      if (entry.spellId === spellId) {
-        return entry.permanent || entry.remainingS > REBUFF_SECONDS_REMAINING;
-      }
-    }
-    return false;
+    if (entry.permanent) return true;
+    // B8×B3 (finding 9): a family confirmed landing below the rebuff threshold
+    // is held active while present so the batch doesn't rebatch it forever;
+    // it's recast only once it fully drops from the registry.
+    if (family !== undefined && this._shortDurationFamilies.has(family)) return true;
+    return remainingS > REBUFF_SECONDS_REMAINING;
   }
 
   _isActive(spellId) {
@@ -310,10 +403,25 @@ export class RynthBuffLoop {
     return this._isActiveReal(spellId);
   }
 
+  // A desired buff is "parked" if the spell itself is in the no-show park
+  // (B9) or its family is in the hard-reject/no-show cooldown (B10).
+  _isParked(spellId, now) {
+    const sp = this.parkedUntil.get(spellId);
+    if (sp && now < sp) return true;
+    const fam = this._familyForSpell(spellId);
+    return fam !== undefined && (this._rejectParkedUntil.get(fam) ?? 0) > now;
+  }
+
   // B11 — any desired buff below threshold (real timers) means the set has
-  // drifted; recast everything so the timers realign.
+  // drifted; recast everything so the timers realign. PARKED families are
+  // SKIPPED (finding 1): C# AnyBuffBelowThreshold ignores families in the
+  // fail cooldown (BuffManager.cs:824-827), otherwise a can't-land parked
+  // buff keeps re-triggering the batch forever (batch -> cast -> no-show ->
+  // re-park -> batch, the /god loop). The prior code counted parked buffs as
+  // "below threshold" and livelocked the healthy set into perpetual recasts.
   _anyBelowThreshold() {
-    return this.desired.some((id) => !this._isActiveReal(id));
+    const now = Date.now();
+    return this.desired.some((id) => !this._isParked(id, now) && !this._isActiveReal(id));
   }
 
   get status() {
@@ -371,29 +479,69 @@ export class RynthBuffLoop {
       const age = now - this.pending.issuedAt;
       if (age < SELF_BUFF_CONFIRM_MS) return;
       this._refresh();
-      if (this._isActiveReal(this.pending.spellId)) {
-        this.noShows.delete(this.pending.spellId);
+      const spellId = this.pending.spellId;
+      const fam = this._familyForSpell(spellId);
+      // B8 confirm by FAMILY, not spell id (BuffManager.cs:555-556): a
+      // skill-capped Incantation lands as a LOWER-tier spell in the SAME
+      // family, so confirming by the exact cast id phantom-no-shows every
+      // incantation (finding 4). Confirm = the family is present in the live
+      // registry with remaining > 0 (C# tests `st.Expiration > now`, NOT the
+      // rebuff threshold — so a short-duration buff still confirms, finding 9).
+      const famEntry = fam !== undefined ? this.families.get(fam) : null;
+      const landed = famEntry ? this._remainingS(famEntry) > 0 : this._isActiveReal(spellId);
+      if (landed) {
+        this.noShows.delete(spellId);
         // B12 — mark the family recast this cycle so the force-rebuff pass
         // stops re-selecting it.
-        const fam = this._familyForSpell(this.pending.spellId);
-        if (fam !== undefined) this._forceRebuffCast.add(fam);
-        this.log(`confirmed ${this.pending.spellId}`);
+        if (fam !== undefined) {
+          this._forceRebuffCast.add(fam);
+          // finding 9: landed BELOW the rebuff threshold -> hold it active so
+          // the batch doesn't rebatch this short-duration buff forever (the
+          // deliberate improvement over C#, which rebatches endlessly here).
+          if (famEntry && !famEntry.permanent && this._remainingS(famEntry) <= REBUFF_SECONDS_REMAINING) {
+            if (!this._shortDurationFamilies.has(fam)) {
+              this.log(`family ${fam} lands below rebuff threshold — holding active (finding 9, no rebatch)`);
+            }
+            this._shortDurationFamilies.add(fam);
+          }
+        }
+        this.log(`confirmed ${spellId}`);
         this.pending = null;
       } else if (age > SELF_BUFF_GIVE_UP_MS) {
+        // B9 tier-walk-down FIRST (finding 5): a silently-dropped cast means
+        // this tier won't land (skill-capped / unknown real tier). Mark it
+        // unresolvable and re-resolve the family to the next lower KNOWN tier
+        // so the bot ends up buffed at a reachable tier instead of parking
+        // unbuffed for 30 min (BuffManager.cs:566-573 cold-snapshot
+        // MarkSpellUnresolvable + FindBestSpellId tier-drop). Only when NO
+        // lower tier remains do we fall through to the silent-no-show park.
+        let walked = false;
+        if (this.tierLadders && fam !== undefined && !this._unresolvable.has(spellId)) {
+          this._unresolvable.add(spellId);
+          this._buildLadders(); // re-resolve desired excluding unresolvable ids
+          walked = this.desired.some(
+            (id) => id !== spellId && !this._unresolvable.has(id) && this._familyForSpell(id) === fam
+          );
+          if (!walked) this._unresolvable.delete(spellId); // no lower tier — undo, let B9 park
+        }
+        if (walked) {
+          this.log(`tier-down ${spellId} unresolvable -> family ${fam} walking to a lower tier`);
+          this.pending = null;
+          return;
+        }
         // B9 — silent no-show valve.
-        const n = (this.noShows.get(this.pending.spellId) || 0) + 1;
-        this.noShows.set(this.pending.spellId, n);
-        this.log(`no-show ${this.pending.spellId} (${n}/${SILENT_NO_SHOW_THRESHOLD})`);
+        const n = (this.noShows.get(spellId) || 0) + 1;
+        this.noShows.set(spellId, n);
+        this.log(`no-show ${spellId} (${n}/${SILENT_NO_SHOW_THRESHOLD})`);
         if (n >= SILENT_NO_SHOW_THRESHOLD) {
-          this.parkedUntil.set(this.pending.spellId, now + this.noShowCooldownMs);
+          this.parkedUntil.set(spellId, now + this.noShowCooldownMs);
           // B10/B12 — also park the FAMILY and mark it "done this cycle" so
           // a can't-land buff doesn't respin the whole batch forever.
-          const fam = this._familyForSpell(this.pending.spellId);
           if (fam !== undefined) {
             this._rejectParkedUntil.set(fam, now + 120_000);
             this._forceRebuffCast.add(fam);
           }
-          this.log(`parked ${this.pending.spellId}`);
+          this.log(`parked ${spellId}`);
         }
         this.pending = null;
       }

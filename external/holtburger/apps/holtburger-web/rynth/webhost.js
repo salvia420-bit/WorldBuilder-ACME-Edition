@@ -340,11 +340,31 @@ export class RynthWebHost {
     const location = this._live("GetObjectIntProperty", guid, 10) ?? 0;
     return { container, wielder, location };
   }
-  /// Report 11 T2 filter class: attackable per the spawn description
-  /// flags (0x10). false when unknown — fail closed, never engage an
-  /// unverifiable target. RynthCoreHost parity: `ObjectIsAttackable`.
+  /// True iff the object's description flags have actually been received.
+  /// The wasm read returns undefined/null (not 0) for an object whose
+  /// ObjectDescriptionEvent hasn't landed yet, OR when the host lacks the
+  /// GetObjectDescFlags capability at all — either way the flags are
+  /// unavailable. This is the web analogue of C#'s `HasObjectIsAttackable`
+  /// capability guard (CombatManager.cs:610), which lets attackability
+  /// degrade-open rather than fail-closed on missing data.
+  HasObjectDescFlags(guid) {
+    const flags = this._live("GetObjectDescFlags", guid);
+    return flags !== undefined && flags !== null;
+  }
+  /// Report 11 T2 filter class: attackable per the spawn description flags
+  /// (0x10). FAIL-OPEN when the flags are GENUINELY ABSENT (not yet streamed)
+  /// — RynthAi's anti-stall discipline: `if (HasObjectIsAttackable &&
+  /// !ObjectIsAttackable(id)) continue;` (CombatManager.cs:610) only excludes
+  /// a target when the flags ARE present AND the attackable bit is clear; an
+  /// object with no desc yet is treated attackable so the bot doesn't "stare
+  /// at a monster for 3s" through the post-spawn/post-login window (report 11
+  /// T4; b5.md combat T4). The prior code coalesced absent flags to 0 and
+  /// failed CLOSED, stalling on any not-yet-described creature. When flags ARE
+  /// present (a number, even 0) we still honour a clear attackable bit ->
+  /// false, so vendors/NPCs stay excluded.
   ObjectIsAttackable(guid) {
-    const flags = this._live("GetObjectDescFlags", guid) ?? 0;
+    const flags = this._live("GetObjectDescFlags", guid);
+    if (flags === undefined || flags === null) return true; // flags absent -> fail-open
     return (flags & ODF_ATTACKABLE) !== 0;
   }
   ObjectIsPlayer(guid) {

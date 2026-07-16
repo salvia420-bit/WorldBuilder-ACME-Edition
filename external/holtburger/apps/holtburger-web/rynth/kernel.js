@@ -61,8 +61,30 @@ export class RynthBotKernel {
   tick() {
     if (!this.host.IsPlayerReady()) return;
 
+    // Finding 2 (b5.md) — UNCONDITIONAL buff heartbeat. The kernel selects
+    // ONE loop's tick per kernel-tick; buff.tick() (which owns the B13 30 s
+    // death/dispel re-sync) only runs when "Buffing" is the selected action.
+    // Once all buffs read active, _buffNeeded() below goes false, buff.tick()
+    // never runs, the re-sync never fires, and a death that silently empties
+    // the enchantment registry is never noticed -> the bot fights on unbuffed
+    // forever (kernel-gate starvation). Pump a cheap self-throttled re-sync
+    // EVERY tick, independent of the selected action, so death/dispel is
+    // caught on the B13 cadence. Buff expiry is handled separately by
+    // buff_loop's live expiry timestamps (_isActiveReal), so this only has to
+    // catch the "registry emptied while our timers still say active" gap.
+    if (this.buff && this.buff.heartbeat) this.buff.heartbeat();
+
     // Vitals FIRST — survival preempts everything (B15/B16). inCombat =
     // combat currently has a locked target or a threat is present.
+    //
+    // Finding 8 (b5.md) — CONFIRMED-no-change, do NOT regress: C# CheckVitals
+    // sits BEHIND the pending-cast hold in OnHeartbeat (BuffManager.cs:599),
+    // so a self-buff in flight blocks even an emergency heal for up to ~2.5 s
+    // (the SelfBuffGiveUp window). Running vitals FIRST here, ahead of the
+    // buff/combat pins, means a dying character heals immediately regardless
+    // of a pending buff. This is deliberately SAFER than the C# ordering
+    // ("arguably fix C#, not JS"); the kernel's vitals-first placement is the
+    // correct behavior and must not be reordered behind buffing.
     if (this.vitals) {
       const inCombat = (this.combat && this.combat.locked !== 0) || this._threatAvailable();
       if (this.vitals.step(inCombat)) {

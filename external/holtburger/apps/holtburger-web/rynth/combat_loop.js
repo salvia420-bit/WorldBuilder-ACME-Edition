@@ -11,10 +11,18 @@
 //   equipment-derived suggested-mode toggle, never a blind SetCombatMode.
 // - objectHealthFraction is QueryHealth-fed — poll the locked target.
 
-const TARGET_SWITCH_STICKINESS = 25.0; // T9 — alt must beat locked+25
-const TARGET_SCAN_GRACE_MS = 1500; // T10 — keep lock through scan gaps
+// T9 — alt must beat locked+stickiness. C#'s 25.0 (CombatManager.cs:344) is
+// on ScoreCandidate's 2-pts-per-yard distance scale ((maxDist-d)/maxDist*100,
+// MonsterRange default 50 — CombatManager.cs:2215); our score is 1 pt/yd
+// (100-d), so the scale-equivalent threshold is 12.5. 25 here made the lock
+// ~2x stickier than the tuned behavior (netwasm parity finding 1).
+const TARGET_SWITCH_STICKINESS = 12.5;
+const TARGET_SCAN_GRACE_MS = 1500; // T10 — retain lock through an EMPTY scan gap
 const CAST_RESOLUTION_TIMEOUT_MS = 2500; // P2/E4 — UseDone fallback
-const RECENTLY_KILLED_TTL_MS = 30_000; // T2 — corpse re-engage guard
+// T2/T13 — confirmed-kill re-engage suppression. C# RECENTLY_KILLED_SUPPRESS_MS
+// = 4000.0 (CombatManager.cs:234); the 30s previously here ignored mobs that
+// respawn/survive inside 4-30s which C# re-engages (netwasm parity finding 5).
+const RECENTLY_KILLED_TTL_MS = 4000;
 const QUERY_HEALTH_INTERVAL_MS = 1000;
 const MELEE_SWING_PATIENCE_MS = 9000; // melee has no UseDone; re-issue window
 const WAR_BOLTS = [27, 28, 58, 64, 75, 86, 92]; // level-1 war spells
@@ -166,7 +174,11 @@ export class RynthCombatLoop {
       if (killedAt && now - killedAt < RECENTLY_KILLED_TTL_MS) continue;
       const itemType = h.TryGetObjectIntProperty(g, 1);
       if (itemType !== ITEM_TYPE_CREATURE) continue; // not Monster class
-      if (!h.ObjectIsAttackable(g)) continue; // T2: vendors/NPCs are creatures too
+      // T2: vendors/NPCs are creatures too. ObjectIsAttackable now FAILS OPEN
+      // when the desc flags haven't streamed yet (webhost.js), matching C#'s
+      // `HasObjectIsAttackable` anti-stall guard (CombatManager.cs:610), so a
+      // not-yet-described spawn is engaged instead of stared at (combat T4).
+      if (!h.ObjectIsAttackable(g)) continue;
       const hf = h.TryGetTargetHealthFraction(g);
       if (hf === 0) continue; // dead-not-corpse
       const pos = h.TryGetObjectPosition(g);
@@ -202,7 +214,21 @@ export class RynthCombatLoop {
       this.lockedScore = lockedEntry.score;
     }
     if (this.locked && !lockedEntry) {
-      // T10 scan grace: keep the lock briefly through a scan gap.
+      // T10 scan grace, C# semantics: the grace only RETAINS the lock while
+      // the scan is EMPTY. An absent lock is not a candidate in
+      // HandleCombatTrigger — it gets no +stickiness — so with an alternative
+      // visible the best candidate re-locks IMMEDIATELY
+      // (CombatManager.cs:2170-2189; grace drop: :1774-1783). Holding the
+      // lock through the full 1500ms here blocked legitimate re-locks
+      // (netwasm parity finding 2).
+      if (targets.length) {
+        const best = targets[0];
+        this.log(`relock ${this.locked.toString(16)} -> ${best.guid.toString(16)} (lock left scan)`);
+        this.locked = best.guid;
+        this.lockedScore = best.score;
+        this.lastSeenLockedAt = now;
+        return this.locked;
+      }
       if (now - this.lastSeenLockedAt < TARGET_SCAN_GRACE_MS) return this.locked;
       this.log(`drop target ${this.locked.toString(16)} (scan grace expired)`);
       this.locked = 0;
@@ -297,6 +323,27 @@ export class RynthCombatLoop {
     const h = this.host;
     if (!h.IsPlayerReady()) return;
     const now = Date.now();
+
+    // Kill detection — validate the lock BEFORE re-selection (C# Think order,
+    // CombatManager.cs:1717-1744) so the same tick can re-lock an alternative.
+    // hp=0 is the ONLY kill confirm (DropTarget("hp=0"), CombatManager.cs:1733);
+    // a vanished/positionless lock is a transient world-filter miss, NOT a
+    // kill — C# keeps the lock and lets the T10 scan grace drop a truly
+    // vanished mob kill-free (CombatManager.cs:1739-1741, :1786). Previously
+    // `!pos` here counted a phantom kill and TTL-suppressed a live mob on a
+    // one-tick entity-stream miss (netwasm parity finding 3).
+    if (this.locked && h.TryGetTargetHealthFraction(this.locked) === 0) {
+      this.log(`kill confirmed ${this.locked.toString(16)} (${this.kills + 1})`);
+      this.kills++;
+      this.recentlyKilled.set(this.locked, now);
+      this.damageModel.delete(this.locked);
+      this.locked = 0;
+      this.lockedScore = -1;
+      this.predictedKill = false;
+      h.StopStick();
+      this.state = "ACQUIRE"; // re-stick if selection re-locks below
+    }
+
     const target = this._selectTarget();
 
     if (!target) {
@@ -304,21 +351,10 @@ export class RynthCombatLoop {
       return;
     }
 
-    // Kill / disappearance detection.
+    // T12 — transient world-filter miss: skip the tick, keep the lock
+    // (CombatManager.cs:1786 "transient miss — skip tick, keep lock").
     const pos = h.TryGetObjectPosition(target);
-    const hf = h.TryGetTargetHealthFraction(target);
-    if (!pos || hf === 0) {
-      this.log(`kill confirmed ${target.toString(16)} (${this.kills + 1})`);
-      this.kills++;
-      this.recentlyKilled.set(target, now);
-      this.damageModel.delete(target);
-      this.locked = 0;
-      this.lockedScore = -1;
-      this.predictedKill = false;
-      h.StopStick();
-      this.state = "ACQUIRE";
-      return;
-    }
+    if (!pos) return;
 
     // P12 — kill anticipation. When the learned model says this target is
     // one hit from death, note it (observable) and let target selection
@@ -362,8 +398,13 @@ export class RynthCombatLoop {
       return; // wait for the mode to complete before attacking
     }
     this._modeAttempts = 0; // established — reset the guard
-    if (this.state !== "ATTACK") {
+    // Re-stick whenever the lock CHANGED, not only on state transition —
+    // a T9 switch / T10 re-lock lands while state is already "ATTACK" and
+    // would otherwise leave the stick chasing the previous target (C#
+    // re-targets through its per-tick attack path).
+    if (this.state !== "ATTACK" || this._stuckTo !== target) {
       h.StickToObject(target);
+      this._stuckTo = target;
       this.state = "ATTACK";
     }
 

@@ -3,11 +3,18 @@
 // A faithful subset of RynthAi's OnHeartbeat vital rules (report 11 §B15/B16):
 //   B15 Emergency HP override — HP <= 30% && stam > 20% -> Stamina-to-Health
 //       Self, regardless of mode/config (sits below the configurable
-//       thresholds so a "do nothing" config still survives).
+//       thresholds so a "do nothing" config still survives). The HP bound is
+//       INCLUSIVE (<=), matching C# CheckVitals (BuffManager.cs:733
+//       `curHealthPct <= 30`) — a character at exactly 30% is in emergency,
+//       not top-off (b5.md finding 7).
 //   B16 In-combat vs idle threshold sets — inCombat reacts at LOW thresholds
 //       (HealAt=60, GetManaAt=40, RestamAt=30); idle tops up to HIGH
 //       (TopOff*=95). Strict `<`; 0 disables a vital. Mana-recharge
-//       (Stam->Mana) additionally requires stam > 15.
+//       (Stam->Mana) additionally requires stam > 15. Priority order is
+//       HP -> Mana -> Stamina: C# CheckVitals checks mana-recharge BEFORE
+//       stamina-recharge (BuffManager.cs:759-760); the earlier stam-first
+//       ordering here picked the wrong spell when both were low (b5.md
+//       finding 6).
 //
 // Vital fractions come from playerStats().vitals: flat [type, current, base,
 // buffedMax] with VitalType Health=1 / Stamina=3 / Mana=5 (holtburger_common
@@ -119,7 +126,9 @@ export class RynthVitals {
     // B15 — emergency HP override (below all configurable thresholds).
     // The emergency ALWAYS fires regardless of the give-up valve — a
     // dying character never gives up, even if the conversion is slow.
-    if (f.hp < c.emergencyHp && f.stam > c.emergencyStamFloor && this._known(this.spells.stamToHealth)) {
+    // INCLUSIVE bound (<=) per C# BuffManager.cs:733 `curHealthPct <= 30`
+    // (was `<`, which handed hp==30 to the top-off arm — b5.md finding 7).
+    if (f.hp <= c.emergencyHp && f.stam > c.emergencyStamFloor && this._known(this.spells.stamToHealth)) {
       return { spell: this.spells.stamToHealth, reason: "EMERGENCY hp->stam" };
     }
     const healAt = inCombat ? c.healAtCombat : c.topOffHp;
@@ -129,11 +138,10 @@ export class RynthVitals {
     if (healAt > 0 && f.hp < healAt && !this._parked("hp", now) && this._known(this.spells.healSelf)) {
       return { spell: this.spells.healSelf, reason: `heal hp<${healAt}` };
     }
-    // Stamina.
-    if (stamAt > 0 && f.stam < stamAt && !this._parked("stam", now) && this._known(this.spells.revitalize)) {
-      return { spell: this.spells.revitalize, reason: `restam stam<${stamAt}` };
-    }
-    // Mana recharge (Stam->Mana) — needs stamina headroom.
+    // Mana recharge (Stam->Mana) — needs stamina headroom. C# checks mana
+    // BEFORE stamina (BuffManager.cs:759-760); the two were flipped here, so
+    // a character both low on mana and stamina restam'd instead of recharging
+    // mana (b5.md finding 6).
     if (
       manaAt > 0 &&
       f.mana < manaAt &&
@@ -142,6 +150,10 @@ export class RynthVitals {
       this._known(this.spells.stamToMana)
     ) {
       return { spell: this.spells.stamToMana, reason: `getmana mana<${manaAt}` };
+    }
+    // Stamina (Revitalize) — after mana per the C# order above.
+    if (stamAt > 0 && f.stam < stamAt && !this._parked("stam", now) && this._known(this.spells.revitalize)) {
+      return { spell: this.spells.revitalize, reason: `restam stam<${stamAt}` };
     }
     return null;
   }
