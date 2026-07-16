@@ -30224,6 +30224,165 @@ impl SessionHandle {
         self.latest_object_icons.borrow().get(&guid).copied().unwrap_or(0)
     }
 
+    // ─── rynth-integration Phase 1 (2026-07-16) ─────────────────────────
+    // RynthCoreHost seam getters — the S-effort read backlog from
+    // docs/rynth-integration/workflow-reports/14.md (§ranked build list).
+    // Read-plane parity with the native scripting host's entity_*_prop ops
+    // (crates/holtburger-scripting/src/host.rs:1257 idiom) so both bot
+    // surfaces answer identically. All reads use `try_borrow` on the shared
+    // WorldState and fail safe to the documented sentinel when a call lands
+    // while the recv loop holds a borrow_mut.
+
+    /// Shared entity-read plumbing for the rynth Phase-1 getters: borrow
+    /// the live WorldState (fail-safe), look up the entity by GUID, apply
+    /// `f`. `None` = no session / borrow contention / unknown GUID.
+    fn with_entity<T>(
+        &self,
+        guid: u32,
+        f: impl FnOnce(&holtburger_world::entity::Entity) -> Option<T>,
+    ) -> Option<T> {
+        let world = self.world.try_borrow().ok()?;
+        let world = world.as_ref()?;
+        world.entities.get(holtburger_common::Guid(guid)).and_then(f)
+    }
+
+    /// Continuous server time in seconds (last `ServerTimeSync` base +
+    /// locally elapsed; wall-clock fallback before the first TimeSync —
+    /// see `WorldState::current_server_time`). `0.0` only pre-session.
+    /// RynthCoreHost parity: `GetServerTime`.
+    #[wasm_bindgen(js_name = serverTime)]
+    pub fn server_time(&self) -> f64 {
+        match self.world.try_borrow() {
+            Ok(world) => world
+                .as_ref()
+                .map(|w| w.current_server_time())
+                .unwrap_or(0.0),
+            Err(_) => 0.0,
+        }
+    }
+
+    /// Local player's GUID; `0` pre-spawn. RynthCoreHost parity:
+    /// `GetPlayerId`.
+    #[wasm_bindgen(js_name = playerGuid)]
+    pub fn player_guid(&self) -> u32 {
+        match self.world.try_borrow() {
+            Ok(world) => world.as_ref().map(|w| w.player.guid.0).unwrap_or(0),
+            Err(_) => 0,
+        }
+    }
+
+    /// Weenie class id for any tracked object; `0` when the GUID is
+    /// unknown or the spawn carried no wcid. RynthCoreHost parity:
+    /// `TryGetObjectWcid`.
+    #[wasm_bindgen(js_name = objectWcid)]
+    pub fn object_wcid(&self, guid: u32) -> u32 {
+        self.with_entity(guid, |e| e.wcid).unwrap_or(0)
+    }
+
+    /// Display name for any tracked object (`PropertyString::Name` from
+    /// the entity's property bag — populated at spawn). `undefined` when
+    /// the GUID is unknown. RynthCoreHost parity: `TryGetObjectName`.
+    #[wasm_bindgen(js_name = objectName)]
+    pub fn object_name(&self, guid: u32) -> Option<String> {
+        use holtburger_common::properties::PropertyString;
+        self.with_entity(guid, |e| {
+            e.properties.strings.get(&PropertyString::Name).cloned()
+        })
+    }
+
+    /// Raw `PhysicsState` bitfield last received for the object (e.g.
+    /// 0x100 = Open door); `0` when the GUID is unknown. RynthCoreHost
+    /// parity: `TryGetObjectState`.
+    #[wasm_bindgen(js_name = objectPhysicsState)]
+    pub fn object_physics_state(&self, guid: u32) -> u32 {
+        self.with_entity(guid, |e| Some(e.physics_state.bits()))
+            .unwrap_or(0)
+    }
+
+    /// Last observed health fraction (0.0–1.0) for the object, fed by
+    /// QueryHealth responses / combat messages; `-1.0` when unknown or
+    /// never observed. Synchronous read of the cached value — the wire
+    /// query stays `query_health`. RynthCoreHost parity:
+    /// `TryGetTargetVitals` (health axis).
+    #[wasm_bindgen(js_name = objectHealthFraction)]
+    pub fn object_health_fraction(&self, guid: u32) -> f32 {
+        self.with_entity(guid, |e| e.health_fraction).unwrap_or(-1.0)
+    }
+
+    /// Typed IntProperty read (`stype` = raw PropertyInt id, e.g. 25 =
+    /// Level). `undefined` when the GUID/stype is unknown or the value
+    /// was never hydrated (spawn + identify are the population paths).
+    /// RynthCoreHost parity: `TryGetObjectIntProperty`.
+    #[wasm_bindgen(js_name = objectIntProperty)]
+    pub fn object_int_property(&self, guid: u32, stype: u32) -> Option<i32> {
+        use holtburger_common::properties::PropertyInt;
+        let prop = PropertyInt::from_repr(stype)?;
+        self.with_entity(guid, |e| e.properties.ints.get(&prop).copied())
+    }
+
+    /// Typed Int64Property read, returned as f64 (JS number — exact to
+    /// 2^53, which covers every retail Int64 in practice). `undefined`
+    /// when unknown. RynthCoreHost parity: `TryGetObjectQuadProperty`.
+    #[wasm_bindgen(js_name = objectInt64Property)]
+    pub fn object_int64_property(&self, guid: u32, stype: u32) -> Option<f64> {
+        use holtburger_common::properties::PropertyInt64;
+        let prop = PropertyInt64::from_repr(stype)?;
+        self.with_entity(guid, |e| {
+            e.properties.int64s.get(&prop).map(|v| *v as f64)
+        })
+    }
+
+    /// Typed BoolProperty read. `undefined` when unknown. RynthCoreHost
+    /// parity: `TryGetObjectBoolProperty`.
+    #[wasm_bindgen(js_name = objectBoolProperty)]
+    pub fn object_bool_property(&self, guid: u32, stype: u32) -> Option<bool> {
+        use holtburger_common::properties::PropertyBool;
+        let prop = PropertyBool::from_repr(stype)?;
+        self.with_entity(guid, |e| e.properties.bools.get(&prop).copied())
+    }
+
+    /// Typed FloatProperty read. `undefined` when unknown. RynthCoreHost
+    /// parity: `TryGetObjectDoubleProperty`.
+    #[wasm_bindgen(js_name = objectFloatProperty)]
+    pub fn object_float_property(&self, guid: u32, stype: u32) -> Option<f64> {
+        use holtburger_common::properties::PropertyFloat;
+        let prop = PropertyFloat::from_repr(stype)?;
+        self.with_entity(guid, |e| e.properties.floats.get(&prop).copied())
+    }
+
+    /// Typed StringProperty read. `undefined` when unknown. RynthCoreHost
+    /// parity: `TryGetObjectStringProperty`.
+    #[wasm_bindgen(js_name = objectStringProperty)]
+    pub fn object_string_property(&self, guid: u32, stype: u32) -> Option<String> {
+        use holtburger_common::properties::PropertyString;
+        let prop = PropertyString::from_repr(stype)?;
+        self.with_entity(guid, |e| e.properties.strings.get(&prop).cloned())
+    }
+
+    /// Typed DataIdProperty read (DID, e.g. stype 8 = Icon). `undefined`
+    /// when unknown. RynthCoreHost parity: `TryGetObjectDataIdProperty`.
+    #[wasm_bindgen(js_name = objectDataIdProperty)]
+    pub fn object_data_id_property(&self, guid: u32, stype: u32) -> Option<u32> {
+        use holtburger_common::properties::PropertyDataId;
+        let prop = PropertyDataId::from_repr(stype)?;
+        self.with_entity(guid, |e| {
+            e.properties.dids.get(&prop).map(|g| g.0)
+        })
+    }
+
+    /// Typed InstanceIdProperty read (IID, e.g. stype 2 = Container —
+    /// the ownership axis). `undefined` when unknown. RynthCoreHost
+    /// parity: `TryGetObjectOwnershipInfo` / `TryGetObjectWielderInfo`
+    /// building block.
+    #[wasm_bindgen(js_name = objectInstanceIdProperty)]
+    pub fn object_instance_id_property(&self, guid: u32, stype: u32) -> Option<u32> {
+        use holtburger_common::properties::PropertyInstanceId;
+        let prop = PropertyInstanceId::from_repr(stype)?;
+        self.with_entity(guid, |e| {
+            e.properties.iids.get(&prop).map(|g| g.0)
+        })
+    }
+
     /// PR-JJ 2026-05-23: the local player's active enchantments — full
     /// snapshot refreshed by the recv loop on every
     /// `WorldEvent::PlayerEnchantmentsUpdated`. Empty pre-spawn /
