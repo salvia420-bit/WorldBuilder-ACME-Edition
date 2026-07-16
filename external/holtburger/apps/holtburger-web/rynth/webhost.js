@@ -71,6 +71,10 @@ const CAPABILITY_CANDIDATES = {
   RequestId: ["assessEntity", "identifyObject", "requestId"],
   NearbyEntityGuids: ["nearbyEntityGuids"],
   GetObjectDescFlags: ["objectDescFlags"],
+  GetFellowship: ["playerFellowship"],
+  FellowshipCreate: ["fellowshipCreate"],
+  FellowshipQuit: ["fellowshipQuit"],
+  FellowshipRecruit: ["fellowshipRecruit"],
 };
 
 const ODF_PLAYER = 0x08;
@@ -313,6 +317,37 @@ export class RynthWebHost {
   ObjectIsPlayer(guid) {
     const flags = this._live("GetObjectDescFlags", guid) ?? 0;
     return (flags & ODF_PLAYER) !== 0;
+  }
+  /// FellowshipTracker replacement (report 07): the whole 272-line
+  /// memory-reader collapses to this adapter over the protocol-fed
+  /// snapshot. null when not in a fellowship.
+  TryGetFellowship() {
+    const snap = this._live("GetFellowship");
+    if (!snap) return null;
+    const members = [];
+    try {
+      for (const m of snap.members || []) {
+        members.push({
+          guid: Number(m.guid ?? 0),
+          name: m.name ?? "",
+          level: Number(m.level ?? 0),
+          health: Number(m.currentHealth ?? m.health ?? 0),
+          maxHealth: Number(m.maxHealth ?? 0),
+          stamina: Number(m.currentStamina ?? m.stamina ?? 0),
+          mana: Number(m.currentMana ?? m.mana ?? 0),
+          sharePercent: Number(m.sharePercent ?? 0),
+        });
+      }
+    } catch (_) {
+      /* defensive: partial snapshot shapes degrade to fewer fields */
+    }
+    return {
+      name: snap.name ?? "",
+      leaderGuid: Number(snap.leaderGuid ?? 0),
+      shareXp: !!snap.shareXp,
+      open: !!snap.open,
+      members,
+    };
   }
   HasAppraisalData(guid) {
     return this._live("HasAppraisalData", guid) ?? false;

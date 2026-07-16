@@ -93,6 +93,8 @@ export class RynthLootLoop {
         this.log(`corpse ${c.guid.toString(16)} d=${c.d.toFixed(1)}`);
         if (c.d > REACH_M) {
           h.MoveToPosition(c.pos.objCellId, c.pos.x, c.pos.y, c.pos.z, true);
+          this._lastApproachD = undefined;
+          this._lastApproachIssue = Date.now();
           this._setState("APPROACH");
         } else {
           h.UseObject(this.corpse);
@@ -112,9 +114,25 @@ export class RynthLootLoop {
           h.StopCompletely();
           h.UseObject(this.corpse);
           this._setState("OPEN");
-        } else if (age > 15_000) {
+          return;
+        }
+        // Progress watchdog: a MoveToPosition issued right after a combat
+        // stick-release can be eaten by the in-flight cancel — if we're
+        // not closing distance, re-issue rather than waiting out the
+        // full timeout (the grind-bot smoke's "approach timeout" case).
+        if (this._lastApproachD !== undefined && d >= this._lastApproachD - 0.2) {
+          if (now - (this._lastApproachIssue || 0) > 3000) {
+            h.MoveToPosition(pos.objCellId, pos.x, pos.y, pos.z, true);
+            this._lastApproachIssue = now;
+          }
+        } else {
+          this._lastApproachIssue = this._lastApproachIssue || now;
+        }
+        this._lastApproachD = d;
+        if (age > 20_000) {
           this.log("approach timeout");
           this.looted.set(this.corpse, now); // park it
+          this._lastApproachD = undefined;
           this._setState("SCAN");
         }
         return;

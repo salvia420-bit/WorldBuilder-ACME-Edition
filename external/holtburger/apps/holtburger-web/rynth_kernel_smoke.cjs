@@ -49,8 +49,20 @@ let browser;
     console.log(`t+${((Date.now() - t0) / 1000).toFixed(0)}s ${JSON.stringify(st)}`);
     if (st && st.kills >= 2 && st.looted >= 1 && st.action === "Idle" && st.buffs && st.buffs.active === st.buffs.desired) break;
   }
+  // Fellowship DTO check (report 07): create a solo fellowship, read the DTO.
+  const fellow = await page.evaluate(async () => {
+    const h = window.__rh;
+    const before = h.TryGetFellowship();
+    h.s.fellowshipCreate("RynthTest", true);
+    await new Promise((r) => setTimeout(r, 3000));
+    const after = h.TryGetFellowship();
+    h.s.fellowshipQuit(true);
+    return { before, after };
+  }).catch((e) => ({ error: e.message }));
+  console.log("FELLOWSHIP: " + JSON.stringify(fellow));
+  const fPass = fellow && fellow.before === null && fellow.after && fellow.after.members && fellow.after.members.length >= 1;
   const pass = st && st.kills >= 2 && st.looted >= 1 && st.buffs && st.buffs.active === st.buffs.desired;
-  console.log(`GRIND BOT (kernel): ${pass ? "PASS" : "FAIL/PARTIAL"}`);
+  console.log(`GRIND BOT (kernel): ${pass ? "PASS" : "FAIL/PARTIAL"} · FELLOWSHIP DTO: ${fPass ? "PASS" : "FAIL"}`);
   await page.evaluate(() => { window.__kn.stop(); window.__rh.WriteToChat("@smite all"); window.__rh.stop(); }).catch(() => null);
   await browser.close();
   process.exit(pass ? 0 : 1);

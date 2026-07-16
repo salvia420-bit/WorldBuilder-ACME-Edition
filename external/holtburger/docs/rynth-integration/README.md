@@ -196,9 +196,15 @@ correctly, recovered on the second) → **3 items looted** → Idle with buffs
 2/2 active. ~25 s, fully unattended. This is the synthesis Phase-2/3 core
 delivered: an autonomous grind bot on holtburger-web through the
 RynthCoreHost seam.
-- Known rough edge: corpse APPROACH can time out when MoveToPosition is
-  issued right after combat stick-release; the park-and-retry path recovers,
-  but the first corpse can be skipped. Investigate stick→moveTo handoff.
+- ~~Known rough edge: corpse APPROACH timeout after stick-release~~ FIXED
+  2026-07-16: progress watchdog in the loot APPROACH state re-issues
+  MoveToPosition when distance stops closing (3 s), instead of waiting out
+  the full timeout.
+- **Fellowship DTO landed + live-verified** (report 07 complete): the 272-line
+  memory-reading FellowshipTracker is a ~30-line `TryGetFellowship()` adapter
+  over `playerFellowship()` — create→snapshot(name/leader/members with live
+  per-member vitals)→quit proven in the kernel smoke. Fellowship ACTIONS
+  (create/quit/recruit) also probed into the capability plane.
 
 ### Next arcs — nav router, contract completions, the D1 fork
 1. RynthNav router sidecar (09) for long-range routing over moveToPosition legs.
