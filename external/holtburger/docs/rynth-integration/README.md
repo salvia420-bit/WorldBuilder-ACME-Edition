@@ -175,8 +175,13 @@ kills in <10s**, lock→kill→re-acquire→kill, zero external driving. PASS.
   the TOP priority (survival preempts combat). Verified: the full 8-case
   threshold matrix (emergency/heal/restam/getmana/topoff/mana-floor-block/
   all-full) exact, and a live `@sethealth 5` drove kernel Idle→Vitals→Heal Self.
-- Remaining Phase-2 items: P3 face-settle for magic at range, missile ammo
-  handling, melee-mode kill path (needs unwielded char).
+- **P3 magic face-settle landed 2026-07-16** (`rynth_p3_smoke.cjs`): a magic cast now
+  waits until facing is within 15° of the target AND held 140ms (turn-stop reaches the
+  server before the cast packet), turning via `TurnToHeading` while off-angle, with a
+  2500ms safety cap — report 11 P3, the fire-while-turning bug prevented. Verified:
+  facing east vs a north target -> turn to yaw 0 -> settle -> cast; a 10° offset still
+  settles. Live combat kills 2/2 unchanged with the gate active.
+- Remaining Phase-2 items: missile ammo handling, melee-mode kill path (needs unwielded char).
 
 ### Phase 3 — buff loop: PASS (2026-07-16)
 `rynth/buff_loop.js` — report 11 B-rules subset, constants verbatim: B1 login

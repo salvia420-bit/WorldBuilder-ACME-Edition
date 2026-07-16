@@ -21,6 +21,9 @@ const WAR_BOLTS = [27, 28, 58, 64, 75, 86, 92]; // level-1 war spells
 
 const KILL_CONFIDENCE = 0.8; // P12 — predict kill if remHP <= avgDmg*0.80
 const KILL_MIN_SAMPLES = 3; // P12 — need >=3 learned hits first
+const FACE_TOLERANCE_RAD = (15 * Math.PI) / 180; // P3 — 15° facing window
+const FACE_SETTLE_MS = 140; // P3 — turn-stop -> cast settle (>=1 server tick)
+const FACE_MAX_WAIT_MS = 2500; // P3 — magic facing safety cap
 
 const ITEM_TYPE_CREATURE = 16;
 const PLAYER_GUID_MIN = 0x50000000;
@@ -246,6 +249,42 @@ export class RynthCombatLoop {
     this.useDoneAtIssue = this.host.has("GetUseDoneSeq") ? this.host.GetUseDoneSeq() : 0;
   }
 
+  // P3 — magic face-settle. Returns "cast" when facing is within tolerance
+  // AND held FACE_SETTLE_MS (turn-stop reached the server before the cast);
+  // "turn" while still turning; "cast" also on the FACE_MAX_WAIT_MS cap so a
+  // jittery target can't block casting forever. Heading convention: pose yaw
+  // 0 -> +Y (north), pi/2 -> +X (east); forward = (sin yaw, cos yaw), so the
+  // bearing to (dx,dy) is atan2(dx, dy).
+  _faceGate(target) {
+    const h = this.host;
+    const me = h.TryGetPlayerPose();
+    const pos = h.TryGetObjectPosition(target);
+    if (!me || !pos || me.heading == null) return "cast"; // no facing data -> don't block
+    const dx = pos.x - me.x;
+    const dy = pos.y - me.y;
+    const desired = Math.atan2(dx, dy);
+    let err = desired - me.heading;
+    while (err > Math.PI) err -= 2 * Math.PI;
+    while (err < -Math.PI) err += 2 * Math.PI;
+    const now = Date.now();
+    if (Math.abs(err) > FACE_TOLERANCE_RAD) {
+      // Keep turning; do NOT cast while turning (the P3 bug this prevents).
+      if (h.has("TurnToHeading")) h.TurnToHeading(desired);
+      this._faceInWindowSince = 0;
+      this._faceStartedAt = this._faceStartedAt || now;
+      // Safety cap: after FACE_MAX_WAIT_MS, cast anyway.
+      if (now - this._faceStartedAt > FACE_MAX_WAIT_MS) {
+        this._faceStartedAt = 0;
+        return "cast";
+      }
+      return "turn";
+    }
+    // Within angle — release turns, settle, then cast.
+    this._faceStartedAt = 0;
+    if (!this._faceInWindowSince) this._faceInWindowSince = now;
+    return now - this._faceInWindowSince >= FACE_SETTLE_MS ? "cast" : "turn";
+  }
+
   _pickWarSpell() {
     if (this.warSpell) return this.warSpell;
     const s = this.host.s;
@@ -319,6 +358,8 @@ export class RynthCombatLoop {
     if (this.mode === 8) {
       if (!this._castResolved()) return; // P2: one cast in flight
       if (h.GetCastBusyState() !== 0) return; // local cast gesture gate
+      // P3 — settle facing before the cast (don't fire while turning).
+      if (this._faceGate(target) !== "cast") return;
       const spell = this._pickWarSpell();
       if (!spell) {
         this.log("no war spell known — cannot fight in magic mode");

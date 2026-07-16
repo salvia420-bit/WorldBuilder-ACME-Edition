@@ -28,7 +28,7 @@ bot.stop();
 | File | Role | Contract source |
 |---|---|---|
 | `webhost.js` | The **seam** — `RynthCoreHost` reimplemented in-page: frozen per-tick snapshot on a Web-Worker heartbeat, `has()` capability plane, per-decision reads pass-through, actions fire-and-forget, the push-event plane (`onEvent`). ~45 members. | synthesis §2, reports 04/05 |
-| `combat_loop.js` | Target select (T9 lock+stickiness, T10 scan-grace, T2 filter incl. `ObjectIsAttackable`), cast serializer (P2/P5/E4), T8 priorities, P12 damage-learning + kill prediction, equipment-derived mode. | report 11 T/P/E rules |
+| `combat_loop.js` | Target select (T9 lock+stickiness, T10 scan-grace, T2 filter incl. `ObjectIsAttackable`), cast serializer (P2/P5/E4), P3 magic face-settle, T8 priorities, P12 damage-learning + kill prediction, equipment-derived mode. | report 11 T/P/E rules |
 | `buff_loop.js` | Self-buff maintenance — B1 login gate, B2 family-keyed registry truth, B3 rebuff 300s, B6 permanent, B8 confirm, B9 no-show valve, B13 re-sync, B14 pacing. | report 11 B-rules |
 | `vitals.js` | B15 emergency HP override + B16 in-combat/idle heal/mana/stam thresholds. | report 11 B15/B16 |
 | `loot_loop.js` | Corpse scan → approach (MoveToPosition + progress watchdog) → open → Value-rule → moveItem → confirm. | report 03 Tier-4 |
