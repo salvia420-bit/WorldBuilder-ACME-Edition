@@ -43,6 +43,14 @@ const SPELLS = {
 };
 
 const CAST_INTERVAL_MS = 400;
+// Give-up valve (B9-analogue for vitals): if a vital's recovery spell fires
+// this many times without the fraction improving by MIN_PROGRESS_PCT, the
+// spell is too weak vs this character's pool (the Heal-Self-I-vs-99999-HP
+// livelock) — park that vital for the cooldown so the bot stops looping and
+// resumes other work. Parked vitals still yield to a true B15 emergency.
+const NO_PROGRESS_LIMIT = 6;
+const MIN_PROGRESS_PCT = 0.5;
+const VITAL_PARK_MS = 60_000;
 
 export class RynthVitals {
   constructor(host, opts = {}) {
@@ -53,6 +61,21 @@ export class RynthVitals {
     this.lastCastAt = 0;
     this.actions = 0;
     this.lastReason = null;
+    // Give-up valve state, per vital axis ("hp"/"stam"/"mana").
+    this._noProgress = { hp: 0, stam: 0, mana: 0 };
+    this._lastPct = { hp: -1, stam: -1, mana: -1 };
+    this._parkedUntil = { hp: 0, stam: 0, mana: 0 };
+  }
+
+  _vitalAxis(reason) {
+    if (reason.startsWith("EMERGENCY") || reason.startsWith("heal")) return "hp";
+    if (reason.startsWith("restam")) return "stam";
+    if (reason.startsWith("getmana")) return "mana";
+    return null;
+  }
+
+  _parked(axis, now) {
+    return axis && this._parkedUntil[axis] > now;
   }
 
   _fractions() {
@@ -92,25 +115,29 @@ export class RynthVitals {
   /** Decide the next vital action from the fractions, or null. */
   _decide(f, inCombat) {
     const c = this.cfg;
+    const now = Date.now();
     // B15 — emergency HP override (below all configurable thresholds).
+    // The emergency ALWAYS fires regardless of the give-up valve — a
+    // dying character never gives up, even if the conversion is slow.
     if (f.hp < c.emergencyHp && f.stam > c.emergencyStamFloor && this._known(this.spells.stamToHealth)) {
       return { spell: this.spells.stamToHealth, reason: "EMERGENCY hp->stam" };
     }
     const healAt = inCombat ? c.healAtCombat : c.topOffHp;
     const manaAt = inCombat ? c.getManaAtCombat : c.topOffMana;
     const stamAt = inCombat ? c.restamAtCombat : c.topOffStam;
-    // Health first (survival).
-    if (healAt > 0 && f.hp < healAt && this._known(this.spells.healSelf)) {
+    // Health first (survival). Parked axes are skipped (give-up valve).
+    if (healAt > 0 && f.hp < healAt && !this._parked("hp", now) && this._known(this.spells.healSelf)) {
       return { spell: this.spells.healSelf, reason: `heal hp<${healAt}` };
     }
     // Stamina.
-    if (stamAt > 0 && f.stam < stamAt && this._known(this.spells.revitalize)) {
+    if (stamAt > 0 && f.stam < stamAt && !this._parked("stam", now) && this._known(this.spells.revitalize)) {
       return { spell: this.spells.revitalize, reason: `restam stam<${stamAt}` };
     }
     // Mana recharge (Stam->Mana) — needs stamina headroom.
     if (
       manaAt > 0 &&
       f.mana < manaAt &&
+      !this._parked("mana", now) &&
       f.stam > c.manaRechargeStamFloor &&
       this._known(this.spells.stamToMana)
     ) {
@@ -147,12 +174,33 @@ export class RynthVitals {
     this.lastCastAt = now;
     this.actions += 1;
     this.lastReason = action.reason;
+
+    // Give-up valve: track whether this axis's fraction is actually
+    // improving. The EMERGENCY axis is exempt (never give up on survival).
+    const axis = this._vitalAxis(action.reason);
+    if (axis && !action.reason.startsWith("EMERGENCY")) {
+      const pct = f[axis];
+      if (this._lastPct[axis] >= 0 && pct <= this._lastPct[axis] + MIN_PROGRESS_PCT) {
+        this._noProgress[axis] += 1;
+        if (this._noProgress[axis] >= NO_PROGRESS_LIMIT) {
+          this._parkedUntil[axis] = now + VITAL_PARK_MS;
+          this._noProgress[axis] = 0;
+          this.log(`give up ${axis} — no progress after ${NO_PROGRESS_LIMIT} casts (spell too weak vs pool); parked ${VITAL_PARK_MS / 1000}s`);
+        }
+      } else {
+        this._noProgress[axis] = 0; // real progress resets the counter
+      }
+      this._lastPct[axis] = pct;
+    }
+
     this.log(`${action.reason} (hp=${Math.round(f.hp)} stam=${Math.round(f.stam)} mana=${Math.round(f.mana)})`);
     return true;
   }
 
   get status() {
-    return { actions: this.actions, lastReason: this.lastReason, ...(this._fractions() || {}) };
+    const now = Date.now();
+    const parked = Object.keys(this._parkedUntil).filter((a) => this._parkedUntil[a] > now);
+    return { actions: this.actions, lastReason: this.lastReason, parked, ...(this._fractions() || {}) };
   }
 }
 

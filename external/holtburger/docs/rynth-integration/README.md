@@ -239,6 +239,13 @@ MaxHealth (Heal Self I vs 99999 HP) can **livelock** the vitals policy
 (perpetual healing, never reaching the topOff threshold) — a future
 B9-style no-show/give-up valve for vitals would bound it, and a grind config
 should size heal thresholds/spells to the character.
+- **Give-up valve landed 2026-07-16** (`rynth/vitals.js`, `rynth_giveup_smoke.cjs`):
+  the B9-analogue for vitals — a recovery spell that fires NO_PROGRESS_LIMIT(6)
+  times without improving its axis by MIN_PROGRESS_PCT(0.5) parks that axis for
+  60s, so the weak-heal/huge-HP livelock resolves and the bot resumes other work.
+  The B15 true emergency (hp<30%) is exempt — survival never gives up. Verified:
+  a stubbed non-improving 50% HP heal parks "hp" at cast 6 and `step()` then
+  yields; the base B15/B16 matrix + live heal still pass unchanged.
 
 ### Next arcs — nav router, contract completions, the D1 fork
 1. RynthNav router sidecar (09) for long-range routing over moveToPosition legs.
