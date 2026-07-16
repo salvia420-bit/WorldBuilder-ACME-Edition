@@ -33,7 +33,10 @@ export class RynthControlChannel {
    * @param kernel RynthBotKernel (paused/resumed by commands)
    * @param opts { prefix="!bot", owner=null (name allow-list), log,
    *               onGoto=null (async ({ns,ew}) => {ok,...} — bot.js wires
-   *               this when config.nav is set) }
+   *               this when config.nav is set),
+   *               getAi=null (() => RynthAiDirector|undefined — bot.js wires
+   *               () => bot.ai?.director; lazy so the channel can be built
+   *               before the AI director exists) }
    */
   constructor(host, kernel, opts = {}) {
     this.host = host;
@@ -41,6 +44,7 @@ export class RynthControlChannel {
     this.prefix = opts.prefix || "!bot";
     this.owner = opts.owner || null; // if set, only this sender is obeyed
     this.onGoto = opts.onGoto || null; // global-nav hook ("goto <ns> <ew>")
+    this.getAi = opts.getAi || null; // lazy AI-director hook ("ai ...")
     this.log = opts.log || ((m) => console.log(`[ctl] ${m}`));
     this.commands = [];
     this.paused = false;
@@ -130,9 +134,54 @@ export class RynthControlChannel {
           .catch((e) => this._reply(sender, `route failed: ${e.message}`));
         break;
       }
+      case "ai": {
+        // "ai status|on|off|now" — the LLM director (rynth/ai/SPEC.md §Wiring).
+        let director = null;
+        try {
+          director = this.getAi ? this.getAi() : null;
+        } catch { director = null; }
+        const sub = (args[0] || "status").toLowerCase();
+        if (!director) {
+          this._reply(sender, sub === "status" ? "ai off" : "ai unavailable — no key/config (rynth/ai/README.md)");
+          break;
+        }
+        switch (sub) {
+          case "status": {
+            const s = director.status;
+            const next = s.nextCheckAt ? `${Math.max(0, Math.round((s.nextCheckAt - Date.now()) / 60000))}m` : "-";
+            this._reply(
+              sender,
+              s.enabled
+                ? `ai on calls=${s.calls} errs=${s.consecutiveErrors} next=${next}${s.lastSummary ? ` | ${String(s.lastSummary).slice(0, 80)}` : ""}`
+                : "ai off"
+            );
+            break;
+          }
+          case "on":
+            director.start();
+            this._reply(sender, "ai on");
+            this.log(`${sender}: ai on`);
+            break;
+          case "off":
+            director.stop();
+            this._reply(sender, "ai off");
+            this.log(`${sender}: ai off`);
+            break;
+          case "now":
+            // Fire-and-forget: checkNow() never rejects (director contract);
+            // the catch is belt-and-braces so a chat command can't crash.
+            Promise.resolve(director.checkNow()).catch(() => {});
+            this._reply(sender, "ai check started");
+            this.log(`${sender}: ai now`);
+            break;
+          default:
+            this._reply(sender, "usage: ai status | on | off | now");
+        }
+        break;
+      }
       default: {
         const extra = args.length ? ` (args: ${args.join(" ")})` : "";
-        this._reply(sender, `unknown cmd '${cmd}'${extra} — try: status | pause | resume | come | goto`);
+        this._reply(sender, `unknown cmd '${cmd}'${extra} — try: status | pause | resume | come | goto | ai`);
       }
     }
   }

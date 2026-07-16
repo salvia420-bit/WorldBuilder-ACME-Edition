@@ -13,6 +13,8 @@
 //     control: { prefix: "!bot" },    // in-game tell control ("!bot status")
 //     vitals: { healAtCombat: 60 },   // B16 threshold overrides
 //     nav: { endpoint: "http://127.0.0.1:8767" }, // RynthNav sidecar -> bot.goto(to)
+//     ai: { apiKey: "sk-or-..." },    // LLM director (rynth/ai/README.md) —
+//                                     // also key-activated via window.rynthAI.setKey
 //     hz: 10,                          // tick rate
 //   });
 //   // bot.host, bot.kernel, bot.channel, bot.status(); bot.stop()
@@ -113,12 +115,16 @@ export async function createGrindBot(sessionHandle, config = {}) {
       : new cc.RynthControlChannel(host, kernel, {
           ...(config.control || {}),
           ...(globalRouter ? { onGoto: (to) => doGoto(to) } : {}),
+          // Lazy: the AI director is constructed AFTER the bot object below
+          // (it observes the whole bot surface); events only pump once the
+          // host heartbeat runs, so this closure never fires before `bot`.
+          getAi: () => bot.ai?.director,
         });
 
   host.start(config.hz ?? 10);
   kernel.start();
 
-  return {
+  const bot = {
     host,
     kernel,
     channel,
@@ -128,6 +134,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
     vitals,
     router,
     globalRouter,
+    startedAt: Date.now(), // uptime anchor — ai/observe.js prefers bot.startedAt
     /** Travel a raw route ([{lb,x,y,z}]) — pauses the grind; caller resumes.
      *  Returns {ok}; refused while a goto() owns the router (a raw follow
      *  would clobber the goto's walk loop). A later goto() cancels a raw
@@ -154,6 +161,97 @@ export async function createGrindBot(sessionHandle, config = {}) {
       host.stop();
     },
   };
+
+  // AI director (rynth/ai/SPEC.md §Wiring) — opt-in by key presence or an
+  // explicit config.ai object; config.ai === false skips even the key probe.
+  if (config.ai !== false) await wireAiDirector(bot, config.ai, base);
+
+  return bot;
+}
+
+// = ai/llm_client.js KEY_STORAGE, inlined so the no-key/no-config path never
+// imports an ai module (SPEC §Wiring "zero cost when unused").
+const AI_KEY_STORAGE = "holtburger_ai_key_v1";
+
+// ui.js takes its key ops duck-typed (it does not import llm_client.js).
+const aiKeyOps = (LlmClient) => ({
+  loadKey: () => LlmClient.loadKey(),
+  saveKey: (k) => LlmClient.saveKey(k),
+  clearKey: () => LlmClient.clearKey(),
+});
+
+async function wireAiDirector(bot, aiConfig, base) {
+  const aiCfg = aiConfig && typeof aiConfig === "object" ? aiConfig : null;
+  let storedKey = null;
+  try {
+    storedKey = globalThis.localStorage?.getItem(AI_KEY_STORAGE) ?? null;
+  } catch { /* blocked storage -> treat as no key */ }
+  const apiKey = aiCfg?.apiKey ?? storedKey;
+  const wantPanel = (() => {
+    try {
+      return typeof location !== "undefined" && new URLSearchParams(location.search).get("aiPanel") === "1";
+    } catch { return false; }
+  })();
+
+  if (!apiKey && !aiCfg) {
+    // Bootstrap only: let a page user seed the key from the console and
+    // reload. No ai module is imported on this path.
+    if (typeof window === "undefined") return;
+    window.rynthAI = {
+      setKey(key) {
+        try { localStorage.setItem(AI_KEY_STORAGE, String(key)); } catch { /* blocked */ }
+        console.log("[rynthAI] key saved — reload to activate the AI director");
+      },
+    };
+    // ?aiPanel=1 is an explicit UI request: mount the key-entry panel around
+    // a null director (ui.js degrades cleanly) so the key can be saved by
+    // GUI, then activated by reload.
+    if (wantPanel) {
+      const [lc, ui] = await Promise.all([import(`${base}/ai/llm_client.js`), import(`${base}/ai/ui.js`)]);
+      ui.mountAiPanel(null, { client: aiKeyOps(lc.LlmClient) });
+    }
+    return;
+  }
+
+  const [lc, jn, dr] = await Promise.all([
+    import(`${base}/ai/llm_client.js`),
+    import(`${base}/ai/journal.js`),
+    import(`${base}/ai/director.js`),
+  ]);
+  const client = new lc.LlmClient({
+    apiKey,
+    baseUrl: aiCfg?.baseUrl, // undefined -> client defaults (OpenRouter)
+    model: aiCfg?.model,
+    referer: "https://holtburger.local",
+    title: "holtburger-rynth",
+  });
+  const journal = new jn.AiJournal();
+  const director = new dr.RynthAiDirector(bot, {
+    client,
+    journal,
+    intervalMinutes: aiCfg?.intervalMinutes, // undefined -> director defaults
+    dryRun: aiCfg?.dryRun,
+  });
+  bot.ai = { director, client, journal };
+
+  if (typeof window !== "undefined") {
+    let panel = null; // mount-once: the handle promise is cached; ui.js is imported only here
+    const openPanel = () =>
+      (panel ??= import(`${base}/ai/ui.js`).then((ui) => ui.mountAiPanel(director, { client: aiKeyOps(lc.LlmClient) })));
+    window.rynthAI = {
+      setKey: (key) => lc.LlmClient.saveKey(key),
+      clearKey: () => lc.LlmClient.clearKey(),
+      start: () => director.start(),
+      stop: () => director.stop(),
+      checkNow: () => director.checkNow(),
+      status: () => director.status,
+      journal,
+      panel: () => openPanel(),
+    };
+    if (wantPanel) openPanel();
+  }
+
+  if (aiCfg?.autoStart !== false) director.start();
 }
 
 export default createGrindBot;
