@@ -9,6 +9,14 @@ the **remaining** work.
 Repo: `WorldBuilder-ACME-Edition`, submodule `external/holtburger`, branch **master** (pushed).
 Head at handoff: `464d552b`. 31 `rynth-integration` commits this session.
 
+> **2026-07-16 (later session): item A is DELIVERED.** The RynthNav global router
+> sidecar exists (`apps/rynthnav-sidecar` — Recast bake with real collision geometry,
+> Detour query, portal Dijkstra, HTTP `route()` on :8767), `rynth/global_router.js` +
+> `bot.goto()` + `!bot goto` consume it, and `rynth_globalroute_smoke` walked 9 legs
+> around Holtburg's buildings live (0 replans, 2.6 m final error). See §2A below for
+> what replaced it as remaining nav depth, and `apps/rynthnav-sidecar/README.md` for
+> run/bake/traps.
+
 ---
 
 ## 0. Read these first (all in the repo, version-controlled)
@@ -36,14 +44,25 @@ the push-event plane, ~20 new wasm getters in `apps/holtburger-web/src/lib.rs` (
 
 ## 2. Remaining work (ranked; none are open feasibility questions)
 
-### A. RynthNav GLOBAL router sidecar — the biggest, report 09
-`router.js` is the **in-page local leg executor** (walks a `[{lb,x,y,z}]` route via
-`moveToPosition`, done). Missing is the **global router** that PRODUCES routes: offline
-navmesh bake + Detour query + portal-graph Dijkstra. Report 09 recommends a **sidecar process**
-(reuse RynthSuite's C# `Tools/RynthNav.Baker` + `PortalGraph` + Detour, which have no wasm
-target) beside `holtburger-wsbridge`, exposing `route(from,to) -> legs[]` that `router.js`
-consumes. RynthNav source: `/mnt/wbterminal1/ac-refs/rynthsuite/{Plugins/RynthCore.Plugin.RynthNav,
-Tools/RynthNav.*}`. Effort: XL. This is the one genuinely large build.
+### A. RynthNav GLOBAL router sidecar — ✅ DELIVERED 2026-07-16 (later session)
+Built as report 09's Option A: `apps/rynthnav-sidecar` (net10.0) vendors PortalRoute +
+TerrainSampler/DatDatabase + NavBake from rynthsuite@bf1fb52, lifts the Detour query layer
+from `RynthNavPlugin.cs`, and serves `POST /route -> legs[{lb,x,y,z,portal}]` (CORS'd,
+127.0.0.1:8767) in `router.js`'s exact frame. The bake is obstacle-aware: `tools/GeomExtract`
+(NuGet Chorizite.DatReaderWriter) extracts cell.dat `LandBlockInfo` statics/buildings +
+the dist bake's per-LB scenery jsonl into collision triangles — **including the trap that
+scenery Setups carry no physics polys; retail collides their CylSphere list** (emitted as
+prisms). Terrain-only tiles are a proven failure mode (servo grinds on Holtburg's walls,
+pursuitStatus stuck ACTIVE). A9B4 bakes 183 polys (upstream datum 265). Live-verified:
+`rynth_globalroute_smoke` PASS. What REMAINS of nav (all M-or-smaller except the bake):
+- **Full-map bake** — only A7–AB × B2–B6 is baked; elsewhere = straight-line fallback
+  legs. Buildbox fan-out job; raise DetourRouter `maxTiles` (256) + add eviction first.
+- **Indoor routing** — dungeon walls aren't baked (upstream Phase-3 gap); needs the
+  report-09 §1b cell-graph A* path over `getRenderSet`/`takePortalCellIds`.
+- **Portal-arrival re-validation** — portals.tsv is retail GoArrow data (~0.1° rounded);
+  spot-check `portal:true` legs against our ACE beyond the Holtburg region.
+- **Sidecar lifecycle** — manual `setsid nohup`, dies on reboot (sysvinit box): cron
+  `@reboot` or a supervisor.cjs spawn block.
 
 ### B. Incremental .NET-wasm lift (D1 path A′) — strategic, large
 The bot is JS today. `netwasm-spike/` PROVED a RynthAi-shaped C# slice compiles to and runs in
@@ -72,6 +91,7 @@ Prereqs, all already running/available here:
 - ACE server: `dotnet ACE.Server.dll` (UDP 9000/9001). Check `ss -ulpn | grep 900`.
 - `external/holtburger/scripts/serve.py` on :8765 (live JS tree).
 - `holtburger-wsbridge` on :8080 (WS↔UDP).
+- rynthnav sidecar on :8767 (`apps/rynthnav-sidecar/README.md` has the launch + bake recipes).
 - **RELEASE** wasm in `apps/holtburger-web/pkg/` — `env PATH=".../.cargo/bin:..." capped-build
   wasm-pack build --target web --out-dir pkg --release` (dev wasm's memory tax destabilizes
   headless tabs — this cost hours; always release before a headless campaign).

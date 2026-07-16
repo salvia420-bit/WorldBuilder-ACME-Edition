@@ -29,7 +29,7 @@ Bot code: `apps/holtburger-web/rynth/` (9 modules). Entry point:
 | 06 | Bot-harness / multi-account | ✅ | `supervisor.cjs` (login-retry, health, auto-relogin) |
 | 07 | FellowshipTracker rewrite | ✅ | `webhost.js` `TryGetFellowship` (~30-line adapter) |
 | 08 | Win32 excision | n/a for JS brain | islands never compiled; relevant only to the .NET-wasm path |
-| 09 | RynthNav integration | 🟡 in-page half done | `router.js` (local leg executor); global navmesh sidecar deferred |
+| 09 | RynthNav integration | ✅ (Holtburg region) | `router.js` (leg executor) + `global_router.js` + `apps/rynthnav-sidecar` (Detour + portal Dijkstra + statics/scenery bake); `rynth_globalroute_smoke` walked 9 legs around Holtburg live |
 | 11 | Combat/buff behavioral contract | ✅ substantially | see the contract table below |
 | 12 | God-class decomposition → BotKernel | ✅ | `kernel.js` |
 | 13 | Chorizite prior-art / readiness gate | ✅ applied | `__bootState`/`in-world` gating in every harness |
@@ -57,7 +57,10 @@ Bot code: `apps/holtburger-web/rynth/` (9 modules). Entry point:
 
 - **BotKernel** priority arbitration (Vitals > Combat > Loot > Buff) — `kernel.js`.
 - **Remote control channel** over in-game tells — `control_channel.js`.
-- **RynthRouter** waypoint follower with portal recognition — `router.js`.
+- **RynthRouter** waypoint follower with seam-vs-portal recognition — `router.js`.
+- **GlobalRouter + RynthNav sidecar** — sidecar-planned `bot.goto(to)` / `!bot goto`
+  (`global_router.js` + `apps/rynthnav-sidecar`: Recast bake with real collision
+  geometry, Detour query, portal Dijkstra over 817 GoArrow edges).
 - **Vitals give-up valve** — resolves the weak-heal/huge-HP livelock.
 - **Regression suite** — `rynth_test_all.cjs`.
 
@@ -65,8 +68,11 @@ Bot code: `apps/holtburger-web/rynth/` (9 modules). Entry point:
 
 (none load-bearing — the combat + buff contracts are complete)
 2. VTank meta-scripting (ExpressionEngine) — deferred by report 03; gate on real need.
-3. RynthNav global router **sidecar** (offline navmesh bake + Detour + portal Dijkstra) —
-   report 09's XL endgame; the `router.js` local half consumes its output.
+3. ~~RynthNav global router sidecar~~ **DONE 2026-07-16** (`apps/rynthnav-sidecar`,
+   live-verified end to end). Remaining nav depth: full-map bake (only the 5×5
+   Holtburg region A7–AB×B2–B6 is baked; buildbox fan-out job), indoor cell-graph
+   A* (dungeon walls aren't baked — upstream gap), portal-arrival re-validation
+   vs our ACE, sidecar lifecycle (manual setsid-nohup today).
 4. Incremental **.NET-wasm lift** of RynthAi's pure-tier C# behind the same WebHost seam
    (D1 path A′ — de-risked, `netwasm-spike/`), if preserving the C# investment is
    prioritized over the JS reimplementation.
