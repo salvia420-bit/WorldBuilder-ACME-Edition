@@ -21835,6 +21835,19 @@ enum SessionCommand {
         object_height: f32,
         run: bool,
     },
+    /// rynth-integration Phase 1 (2026-07-16) — walk/run to an absolute
+    /// pose through the wasm MoveTo driver (retail `MoveToPosition =
+    /// 0x7`, acclient.c:345790-345857). The nav keystone: a router leg
+    /// is "go to this pose", no target object. Same recv-arm guards and
+    /// pursuit-status latch as `PursueObject`; completion/failure land
+    /// in [`SessionHandle::pursuit_status`].
+    MoveToPosition {
+        landblock_id: u32,
+        x: f32,
+        y: f32,
+        z: f32,
+        run: bool,
+    },
     /// A14-I2 — rate-limited turn-to-face an entity (retail
     /// `TurnToObject = 0x8`, acclient.c:346137-346139). NOT a snap.
     PursuitTurnToObject { target_guid: u32 },
@@ -30410,6 +30423,36 @@ impl SessionHandle {
             Ok(world) => world.as_ref().map(|w| w.player.guid.0 != 0).unwrap_or(false),
             Err(_) => false,
         }
+    }
+
+    /// Walk/run to an absolute pose through the wasm MoveTo driver
+    /// (retail `MoveToPosition = 0x7`). `landblock_id` + landblock-local
+    /// AC coords (Z-up) — the same frame `getLocalPlayerPose` reads.
+    /// Poll [`Self::pursuit_status`] for arrival(2)/failure(3); issuing
+    /// a new movement command replaces the in-flight one (retail
+    /// CancelMoveTo preamble). The nav keystone for router-driven
+    /// long-range movement (docs/rynth-integration README §Phase 1).
+    #[wasm_bindgen(js_name = moveToPosition)]
+    pub fn move_to_position(
+        &self,
+        landblock_id: u32,
+        x: f32,
+        y: f32,
+        z: f32,
+        run: bool,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::MoveToPosition {
+                landblock_id,
+                x,
+                y,
+                z,
+                run,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("moveToPosition: cmd channel closed ({e})"))
+            })
     }
 
     /// PR-JJ 2026-05-23: the local player's active enchantments — full
@@ -46794,6 +46837,35 @@ async fn recv_loop(
                         // Optimistic ACTIVE so a JS poll between this arm
                         // and the next tick's publish can't read a stale
                         // completion from a previous pursuit.
+                        *local_player_pursuit_status.borrow_mut() = 1;
+                    }
+                    Some(SessionCommand::MoveToPosition {
+                        landblock_id,
+                        x,
+                        y,
+                        z,
+                        run,
+                    }) => {
+                        // rynth Phase-1 — input-lane MoveToPosition
+                        // (retail PerformMovement case 7,
+                        // acclient.c:346133-346135). Same WorldState /
+                        // player-seeded guards as PursueObject.
+                        if world.borrow().is_none() || !entity_seeded {
+                            console_log_str(
+                                "[rynth] MoveToPosition before player seeded — dropping",
+                            );
+                            continue;
+                        }
+                        movement.enqueue_drive_intent(
+                            holtburger_core::client::movement_types::PlayerDriveIntent::MoveToPosition {
+                                cell_id: holtburger_common::Guid(landblock_id),
+                                position: holtburger_common::math::Vector3::new(x, y, z),
+                                run,
+                            },
+                            web_time::Instant::now(),
+                        );
+                        // Optimistic ACTIVE — same latch rationale as
+                        // the PursueObject arm.
                         *local_player_pursuit_status.borrow_mut() = 1;
                     }
                     Some(SessionCommand::PursuitTurnToObject { target_guid }) => {

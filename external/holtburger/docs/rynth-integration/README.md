@@ -41,14 +41,19 @@ compile spike; everything below is fork-independent.
   (14 #5, risk R1). Degrade-open per report 11 contract 0.1.
 - [ ] `groundContainerId`, `objectWielderInfo`/`ownershipInfo` composites (14 #11/#15),
   appraisal-time stamps `hasAppraisalData`/`getLastIdTime` (14 #7).
-- [ ] `moveToPosition` SessionCommand — the nav keystone (report 09). Threading map
-  (scouted 2026-07-16): add a variant to `PlayerDriveIntent` (`movement_types.rs:184`)
-  → `QueuedDriveCommand` → `PendingPursuitCommand` (`movement/system.rs:1694`) →
-  call `MoveToManager::move_to_position` (`movement/move_to.rs:530`, `pub(crate)`,
-  takes `Origin` + `MovementParameters`); then `SessionCommand` variant + recv arm
-  (copy the `PursueObject` arm at lib.rs ~46737) + wasm method. NOTE:
-  `PlayerDriveIntent::ArriveAtPose` is a pose-SNAP (portal arrival), NOT steering —
-  do not use it for walk-to.
+- [x] **2026-07-16 — `moveToPosition(landblockId, x, y, z, run)`** — the nav keystone
+  (report 09) landed. Even cheaper than scouted: `MovementStruct::MoveToPosition`
+  (retail type 7) and its `perform_movement` dispatch already existed
+  (`movement_manager.rs:74/273`); the missing piece was pure intent plumbing —
+  `PlayerDriveIntent::MoveToPosition` → `QueuedDriveCommand` → `PendingPursuitCommand`
+  → drain arm building the type-7 struct, plus the `SessionCommand` variant, recv arm
+  (PursueObject-style guards + pursuit-status latch), and the wasm export. Completion
+  polls via `pursuitStatus()` (2=arrived, 3=failed). NOT yet live-smoke-tested.
+  NOTE kept: `PlayerDriveIntent::ArriveAtPose` is a pose-SNAP (portal arrival), NOT
+  steering — do not use it for walk-to.
+- [ ] **Live smoke test of the Phase-1 surface** against local ACE
+  (§ace-live): headless `?nullRender=1` boot, read every new getter, drive
+  `moveToPosition` across a landblock, verify pursuitStatus transitions 1→2.
 
 ### Movement-family coverage discovered 2026-07-16 (better than the reports implied)
 Already shipped in the web runtime — RynthCoreHost members these cover:

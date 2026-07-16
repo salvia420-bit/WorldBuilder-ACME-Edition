@@ -1653,6 +1653,12 @@ enum QueuedDriveCommand {
     PursuitTurnToHeading { heading: f32 },
     /// A14-I2 mirror of [`PlayerDriveIntent::CancelPursuit`].
     CancelPursuit,
+    /// rynth Phase-1 mirror of [`PlayerDriveIntent::MoveToPosition`].
+    MoveToPosition {
+        cell_id: Guid,
+        position: holtburger_common::math::Vector3,
+        run: bool,
+    },
 }
 
 /// Wave-1 step 5 (PLAN rows 12-13) — the `?cmdInterp=on` lane's
@@ -1709,6 +1715,13 @@ enum PendingPursuitCommand {
     /// does not (the player asked for an all-stop).
     Cancel {
         restore_manual: bool,
+    },
+    /// rynth Phase-1 — retail `MoveToPosition` type 7. The origin is the
+    /// command's own pose (no target lookup, no zero-fallback risk).
+    MoveToPosition {
+        cell_id: Guid,
+        position: holtburger_common::math::Vector3,
+        run: bool,
     },
 }
 
@@ -2759,6 +2772,15 @@ impl MovementSystem {
                 QueuedDriveCommand::PursuitTurnToHeading { heading }
             }
             PlayerDriveIntent::CancelPursuit => QueuedDriveCommand::CancelPursuit,
+            PlayerDriveIntent::MoveToPosition {
+                cell_id,
+                position,
+                run,
+            } => QueuedDriveCommand::MoveToPosition {
+                cell_id,
+                position,
+                run,
+            },
         };
 
         self.queued_drive_commands.push(command);
@@ -2928,6 +2950,18 @@ impl MovementSystem {
                 self.pending_pursuit_commands
                     .push(PendingPursuitCommand::TurnToHeading {
                         heading_rad: heading,
+                    });
+            }
+            QueuedDriveCommand::MoveToPosition {
+                cell_id,
+                position,
+                run,
+            } => {
+                self.pending_pursuit_commands
+                    .push(PendingPursuitCommand::MoveToPosition {
+                        cell_id,
+                        position,
+                        run,
                     });
             }
             QueuedDriveCommand::CancelPursuit => {
@@ -3466,6 +3500,24 @@ impl MovementSystem {
                             params.desired_heading =
                                 heading_rad.to_degrees().rem_euclid(360.0);
                             MovementStruct::TurnToHeading { params }
+                        }
+                        PendingPursuitCommand::MoveToPosition {
+                            cell_id,
+                            position,
+                            run,
+                        } => {
+                            // rynth Phase-1 — retail case 7
+                            // (acclient.c:346133-346135). Origin comes
+                            // from the command itself, not the entity
+                            // lookup above.
+                            let mut params = MovementParameters::default();
+                            if run {
+                                params.bitfield |= 0x10;
+                            }
+                            MovementStruct::MoveToPosition {
+                                origin: Origin { cell_id, position },
+                                params,
+                            }
                         }
                         PendingPursuitCommand::Cancel { .. } => unreachable!("handled above"),
                     };

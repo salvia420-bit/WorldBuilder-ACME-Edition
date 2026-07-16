@@ -224,6 +224,18 @@ pub enum PlayerDriveIntent {
     /// A14-I2 — retail `MovementManager::CancelMoveTo(0x36)`
     /// (acclient.c:339240-339246), the JS charge-abort entry.
     CancelPursuit,
+    /// rynth-integration Phase 1 (2026-07-16) — retail
+    /// `MovementTypes::MoveToPosition = 0x7` (acclient.c:345790-345857)
+    /// through the same MoveToManager driver as `PursueObject`. The nav
+    /// keystone (docs/rynth-integration README §Phase 1): a router leg
+    /// is "walk to this pose", no target object. `cell_id`/`position`
+    /// are AC-native landblock + local coords (Z-up); `run` forces the
+    /// Run hold key exactly like `PursueObject`.
+    MoveToPosition {
+        cell_id: Guid,
+        position: Vector3,
+        run: bool,
+    },
 }
 
 #[cfg(test)]
