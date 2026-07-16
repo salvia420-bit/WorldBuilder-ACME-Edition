@@ -67,7 +67,7 @@ let browser;
     if (healed) break;
   }
   console.log(`hp trace: ${JSON.stringify(hpTrace)} healActions=${healed}`);
-  await page.evaluate(() => { window.__kn.stop(); window.__rh.stop(); }).catch(() => null);
+  await page.evaluate(() => { window.__rh.WriteToChat("@sethealth 65535"); window.__kn.stop(); window.__rh.stop(); }).catch(() => null); await sleep(1500);
   const livePass = known ? healed : true; // if char can't heal, live test is N/A
   console.log(`B15/B16 MATRIX: ${mPass ? "PASS" : "FAIL"} · LIVE HEAL: ${known ? (healed ? "PASS" : "FAIL") : "N/A (no Heal Self)"}`);
   await browser.close();

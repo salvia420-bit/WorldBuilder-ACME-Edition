@@ -226,6 +226,20 @@ RynthCoreHost seam.
   per-member vitals)→quit proven in the kernel smoke. Fellowship ACTIONS
   (create/quit/recruit) also probed into the capability plane.
 
+### Capstone — one-call grind bot + full-stack integration PASS (2026-07-16)
+`rynth/bot.js` `createGrindBot(sessionHandle, config)` wires the whole port
+(webhost + combat + buff + loot + vitals + kernel + control) in one call;
+`rynth/README.md` documents the module surface. Full-stack live smoke
+(`rynth_fullstack_smoke.cjs`): one entrypoint → 2 kills + 14 items looted +
+buffs 2/2 + tell-control pause/resume + every module wired. PASS.
+Two live findings recorded: (a) ACE `@sethealth` is `ushort` (max 65535) —
+values above silently no-op, and `@heal` (Envoy) was a near no-op on this
+char, so use `@sethealth <=65535`; (b) a heal spell too weak relative to
+MaxHealth (Heal Self I vs 99999 HP) can **livelock** the vitals policy
+(perpetual healing, never reaching the topOff threshold) — a future
+B9-style no-show/give-up valve for vitals would bound it, and a grind config
+should size heal thresholds/spells to the character.
+
 ### Next arcs — nav router, contract completions, the D1 fork
 1. RynthNav router sidecar (09) for long-range routing over moveToPosition legs.
 2. Contract completions: T8 priorities, P3/P12, B4/B5/B7/B10-12, B15/B16 vital
