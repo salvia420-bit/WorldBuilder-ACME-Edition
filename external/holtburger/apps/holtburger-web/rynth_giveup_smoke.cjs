@@ -21,7 +21,7 @@ let browser;
     host.GetBusyState = () => 0;
     host.IsPlayerReady = () => true;
     host.CastSpell = () => { casts++; };
-    const v = new vt.RynthVitals(host, { thresholds: { topOffHp: 95, topOffStam: 0, topOffMana: 0, healAtCombat: 0, getManaAtCombat: 0, restamAtCombat: 0 } });
+    const v = new vt.RynthVitals(host, { thresholds: { topOffHp: 95, topOffStam: 0, topOffMana: 0, healAtCombat: 0, getManaAtCombat: 0, restamAtCombat: 0, emergencyHp: 0 } });
     v._knownSet = new Set([6, 1177, 1664, 1676]);
     const trace = [];
     for (let i = 0; i < 10; i++) {

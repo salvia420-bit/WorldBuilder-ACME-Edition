@@ -37,6 +37,13 @@ bot.stop();
 | `control_channel.js` | Remote control over in-game tells (`!bot status\|pause\|resume\|come`), parsed off the push-event plane, replies via `InvokeChatParser`. | report 04 push plane |
 | `bot.js` | `createGrindBot()` — wires all of the above on a SessionHandle. | — |
 
+## Regression suite
+
+`../rynth_test_all.cjs` runs the smokes in sequence with reap-window pacing:
+`NODE_PATH=<playwright> node rynth_test_all.cjs` (fast set) or `--full` (adds the
+long grind/loot/kernel/fullstack runs); `--only=a,b` for a subset. Prereqs: ACE +
+serve.py + wsbridge + a **release** wasm build in `pkg/`.
+
 ## Live-verified traps (all encoded)
 
 - ACE silently reverts a Melee-mode request when a bow/wand is wielded → use the
