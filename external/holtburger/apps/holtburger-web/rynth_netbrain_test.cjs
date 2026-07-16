@@ -20,11 +20,14 @@ function check(name, ok, detail) {
 (async () => {
   const nb = await import(pathToFileURL(path.join(__dirname, "rynth", "netbrain.js")).href);
 
-  // Flag parsing — only the exact strings opt in (flag-default footgun).
+  // Flag parsing — DEFAULT-ON in a page context; explicit "off" escapes;
+  // no page URL at all (node harness) stays off.
   check("mode shadow", nb.netBrainModeFromUrl("?netBrain=shadow") === "shadow");
   check("mode on", nb.netBrainModeFromUrl("?netBrain=on") === "on");
-  check("mode 1 is off", nb.netBrainModeFromUrl("?netBrain=1") === "off");
-  check("mode absent is off", nb.netBrainModeFromUrl("") === "off");
+  check("mode off escape", nb.netBrainModeFromUrl("?netBrain=off") === "off");
+  check("mode absent is on (default-on)", nb.netBrainModeFromUrl("") === "on");
+  check("mode garbage is on (repo idiom)", nb.netBrainModeFromUrl("?netBrain=1") === "on");
+  check("no page URL is off", nb.netBrainModeFromUrl(undefined) === "off");
 
   // Diag surface shape.
   const d = nb.diag();

@@ -5,14 +5,16 @@
 // runs in-page behind the same RynthWebHost seam as the JS brain.
 //
 // Modes (URL ?netBrain=... or createGrindBot config.netBrain):
-//   off     (default) — nothing loads; zero cost.
+//   on      (DEFAULT, 2026-07-16 soak-validated) — the C# output drives the
+//             decision where a slice's live input coverage is trusted (combat
+//             target selection); everything else still shadows.
 //   shadow  — JS decides; the C# slice is ALSO called at each decision point
 //             and divergences are counted/logged on window.__diag.netbrain.
-//   on      — where a slice's live input coverage is trusted (combat target
-//             selection), the C# output drives the decision; everything else
-//             still shadows.
-// Only the exact strings "shadow"/"on" opt in (absent/other = off — see the
-// flag-default footgun note in docs/url-flags.md).
+//   off     — nothing loads; zero cost. `?netBrain=off` is the escape hatch.
+// A missing/stale AppBundle degrades to the JS brain (version gate + warn),
+// so bare-default still boots clean on a fresh clone. Outside a page (node
+// harnesses, no `location`) the default stays off — loops under unit tests
+// must not fetch bundles unless the test attaches one explicitly.
 //
 // The AppBundle is ~3.9 MB raw (InvariantGlobalization), loads once, lazily,
 // off the critical boot path. Exports are synchronous string->string JSON
@@ -21,10 +23,12 @@
 
 export function netBrainModeFromUrl(search) {
   try {
-    const v = new URLSearchParams(
-      search ?? (typeof location !== "undefined" ? location.search : "")
-    ).get("netBrain");
-    return v === "shadow" || v === "on" ? v : "off";
+    const src = search ?? (typeof location !== "undefined" ? location.search : null);
+    if (src == null) return "off"; // no page URL (node harness) — stay off
+    const v = new URLSearchParams(src).get("netBrain");
+    if (v === "off") return "off";
+    if (v === "shadow") return "shadow";
+    return "on"; // DEFAULT-ON; matches the repo idiom (explicit "off" escapes)
   } catch {
     return "off";
   }
