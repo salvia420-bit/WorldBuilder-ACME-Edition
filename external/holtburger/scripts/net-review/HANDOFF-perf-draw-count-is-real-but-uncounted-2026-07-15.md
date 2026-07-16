@@ -445,6 +445,38 @@ With #34054 worked around, **the draw-count thesis has no remaining evidence at 
 both scaling with NODE count) are what is left. **Re-run `cpu-profile-probe` + `profile-split-render` on
 the FIXED default before picking the next lever** — every number in §4c predates this fix.
 
+## 4f. THE NEXT LEADS — ranked, each with the measurement that motivates it
+
+**⚠ FIRST: re-profile the FIXED default.** Every number in §4c/§4d predates `?bmColorTextureFix`, which
+removed 70% of `getProgram` calls. `cpu-profile-probe.mjs` + `profile-split-render.mjs`, one page load.
+Do not pick from the stale table below without re-reading it.
+
+**1. ⭐ Freeze the static subtrees' matrix walk — `matrixWorldAutoUpdate = false`. (~9-11% of the frame.)**
+`updateMatrixWorld` (6.7-7.9% self) + `multiplyMatrices` (2.4-3.5%) are the biggest in-frame items after
+the program resolve, and both scale with NODE count. three's `Object3D.updateMatrixWorld`
+(`three.core.js:12853`) recurses into a child only `if ( child.matrixWorldAutoUpdate === true || force )`,
+so setting it false on a baked subtree skips the whole walk — and **`rg matrixWorldAutoUpdate scene3d/`
+returns NOTHING today**: we walk ~2,986 nodes every frame to recompute matrices for statics that never
+move. (`matrixAutoUpdate = false`, which IS used in animated_scenery/portal_stencil, only skips the LOCAL
+compose — the world walk still happens. Different flag, different cost.)
+⚠ **NOT a blanket flip:** `tickStaticsBillboards` rotates billboard leaves inside `staticsGroup`, and a
+freeze would pin them. Freeze per-node at bake time (skipping billboard/LOD-animated leaves), and call
+`updateMatrixWorld(true)` once on each newly-baked subtree — a new LB's nodes must resolve once before the
+freeze. Measure with `renderCPU`; verify with a billboard-in-frame eye test, not a draw count.
+
+**2. Re-run `material-declone-ab.mjs` — it is now a DIFFERENT experiment.** Its B−P = 0.10 ms was correct
+but it was measuring a signal drowned by branch 05 (182/frame). With that gone, the class thrash
+(`02:`/`03:`, **78 getProgram/frame ≈ 1.2 ms**) is the only material-sharing trigger left, and decloning
+should now isolate it cleanly. Cheap: the probe already exists and takes one page load.
+
+**3. ⚠ RE-EVALUATE `?walkInInstance` — this fix may have RETIRED ITS JUSTIFICATION.** Its −10.5% almost
+certainly came from removing OBJECTS, and each removed object was mostly a bogus branch-05 re-resolve
+(getParameters 10.2% → 4.8% across its arms). **With #34054 worked around, that win should largely
+evaporate — while its +23% tris and its two visual regressions (one LOD level per LB-spanning node;
+billboarding lost on degraded leaves) remain.** If a re-run on the fixed default shows the CPU delta gone,
+the honest move is to DELETE the flag, not leave it default-OFF as a tempting trap. **Do not ship it on the
+strength of its old number.** (It stays OFF by user directive either way.)
+
 ## 5. RESIDUALS / UNKNOWNS (honest loose ends)
 
 1. **Nothing was shipped this session.** No source change, no flag, no default flip. Five probes and a
