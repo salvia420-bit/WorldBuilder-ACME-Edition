@@ -1,0 +1,5492 @@
+{
+  "meta": {
+    "generator": "CombatScoring.Fixtures (netwasm-spike lift slice 1)",
+    "seed": 12345,
+    "count": 46,
+    "contract": "expected = C# TargetScoring.SelectTargetTick via ScoreTargetsJson (the wasm boundary)",
+    "playerId": 251658241,
+    "nowMs": 1000000
+  },
+  "scenarios": [
+    {
+      "name": "wounded-far-vs-healthy-near",
+      "rules": [
+        "T7"
+      ],
+      "note": "C# hpScore(0-50) prefers the wounded far mob; JS 100-d has no hp term.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435457,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 116,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435458,
+            "Name": "Drudge Lurker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 126,
+            "Z": 0,
+            "HealthRatio": 0.15,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435458,
+        "LockedTargetId": 268435458,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435457,
+            "Name": "Drudge Skulker",
+            "Distance": 20,
+            "Angle": 0,
+            "Score": 70
+          },
+          {
+            "Id": 268435458,
+            "Name": "Drudge Lurker",
+            "Distance": 30,
+            "Angle": 0,
+            "Score": 92.49999970197678
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "facing-behind-vs-ahead",
+      "rules": [
+        "T7"
+      ],
+      "note": "Equal-ish distance; C# facingScore(0-10) prefers the mob ahead; JS prefers strictly nearer.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435459,
+            "Name": "Mite Snippet",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 106,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435460,
+            "Name": "Mite Crawler",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96.5,
+            "Y": 86.4,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435459,
+        "LockedTargetId": 268435459,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435459,
+            "Name": "Mite Snippet",
+            "Distance": 10,
+            "Angle": 0,
+            "Score": 90
+          },
+          {
+            "Id": 268435460,
+            "Name": "Mite Crawler",
+            "Distance": 9.613012014970753,
+            "Angle": 177.0185387800178,
+            "Score": 80.93961270450195
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "threat-range-bonus",
+      "rules": [
+        "T7"
+      ],
+      "note": "Both in melee band; agreement expected (threat bonus applies to the nearer one anyway).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435461,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 98.5,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435462,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 100,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435461,
+        "LockedTargetId": 268435461,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435461,
+            "Name": "Rat",
+            "Distance": 2.5,
+            "Angle": 0,
+            "Score": 135
+          },
+          {
+            "Id": 268435462,
+            "Name": "Rat",
+            "Distance": 4,
+            "Angle": 0,
+            "Score": 102
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "priority-rule-shared",
+      "rules": [
+        "T8"
+      ],
+      "note": "olthoi rule priority 10 -\u003E \u002B45 on both sides; both should pick the Olthoi over the nearer Drudge.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": [
+            {
+              "Name": "olthoi",
+              "Priority": 10
+            }
+          ]
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435463,
+            "Name": "Olthoi Warrior",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 131,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435464,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 111,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435463,
+        "LockedTargetId": 268435463,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435464,
+            "Name": "Drudge Skulker",
+            "Distance": 15,
+            "Angle": 0,
+            "Score": 80
+          },
+          {
+            "Id": 268435463,
+            "Name": "Olthoi Warrior",
+            "Distance": 35,
+            "Angle": 0,
+            "Score": 85
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "priority-first-match-vs-max",
+      "rules": [
+        "T8"
+      ],
+      "note": "Two rules match \u0027Olthoi Soldier\u0027. C# FirstOrDefault takes list-order first (p3 -\u003E \u002B10); JS takes max (p10 -\u003E \u002B45).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": [
+            {
+              "Name": "olthoi",
+              "Priority": 3
+            },
+            {
+              "Name": "olthoi soldier",
+              "Priority": 10
+            }
+          ]
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435465,
+            "Name": "Olthoi Soldier",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 134,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435466,
+            "Name": "Drudge Sneaker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 121,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435466,
+        "LockedTargetId": 268435466,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435466,
+            "Name": "Drudge Sneaker",
+            "Distance": 25,
+            "Angle": 0,
+            "Score": 60
+          },
+          {
+            "Id": 268435465,
+            "Name": "Olthoi Soldier",
+            "Distance": 38,
+            "Angle": 0,
+            "Score": 44
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "stickiness-hold",
+      "rules": [
+        "T9"
+      ],
+      "note": "Locked target; alternative better by \u003C25 -\u003E both hold the lock.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 268435467,
+          "ActiveTargetId": 268435467,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435467,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 116,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435468,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 110,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435467,
+        "LockedTargetId": 268435467,
+        "Switched": false,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435468,
+            "Name": "Shreth",
+            "Distance": 14,
+            "Angle": 0,
+            "Score": 82
+          },
+          {
+            "Id": 268435467,
+            "Name": "Shreth",
+            "Distance": 20,
+            "Angle": 0,
+            "Score": 70
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "stickiness-switch",
+      "rules": [
+        "T9"
+      ],
+      "note": "SCALE-MISMATCH PROBE: 23yd-closer alt. C# distScore is 2pts/yd so \u002B46 beats stickiness 25 -\u003E switch; JS 100-d is 1pt/yd so \u002B23 \u003C 25 -\u003E hold. The tuned constant 25 assumed the C# score scale.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 268435469,
+          "ActiveTargetId": 268435469,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435469,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 131,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435470,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 108,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435470,
+        "LockedTargetId": 268435470,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435470,
+            "Name": "Shreth",
+            "Distance": 12,
+            "Angle": 0,
+            "Score": 86
+          },
+          {
+            "Id": 268435469,
+            "Name": "Shreth",
+            "Distance": 35,
+            "Angle": 0,
+            "Score": 40
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "stickiness-switch-both",
+      "rules": [
+        "T9"
+      ],
+      "note": "33yd-closer alt: clears the stickiness threshold on BOTH scales -\u003E both switch (control for the scale-mismatch probe).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 268435521,
+          "ActiveTargetId": 268435521,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435521,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 134,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435522,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 101,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435522,
+        "LockedTargetId": 268435522,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435522,
+            "Name": "Shreth",
+            "Distance": 5,
+            "Angle": 0,
+            "Score": 100
+          },
+          {
+            "Id": 268435521,
+            "Name": "Shreth",
+            "Distance": 38,
+            "Angle": 0,
+            "Score": 34
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "stickiness-exact-tie",
+      "rules": [
+        "T9"
+      ],
+      "note": "Alt exactly locked\u002B25 (hasPose=false so facing is uniform). C# argmax: strict \u0027\u003E\u0027 resolves by scan order (nearer alt first) -\u003E switch; JS strict \u0027\u003E\u0027 -\u003E hold.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": false,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 268435471,
+          "ActiveTargetId": 268435471,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435471,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 126,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435472,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 113.5,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435472,
+        "LockedTargetId": 268435472,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435472,
+            "Name": "Gromnie",
+            "Distance": 17.5,
+            "Angle": 180,
+            "Score": 65
+          },
+          {
+            "Id": 268435471,
+            "Name": "Gromnie",
+            "Distance": 30,
+            "Angle": 180,
+            "Score": 40
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "scan-grace-hold-no-alternative",
+      "rules": [
+        "T10",
+        "T12"
+      ],
+      "note": "Locked target vanished from the world snapshot entirely. C# treats a world-filter null as a transient miss and holds through the 1500ms grace; the shipped JS tick() kill-confirms on !pos IMMEDIATELY (combat_loop.js:308-321) -\u003E false kill \u002B 30s suppression on a transient entity-stream miss.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 268435473,
+          "ActiveTargetId": 268435473,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": []
+      },
+      "expected": {
+        "SelectedTargetId": 268435473,
+        "LockedTargetId": 268435473,
+        "Switched": false,
+        "DropReason": null,
+        "TargetLostScanAtMs": 1000000,
+        "Scanned": [],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "scan-grace-expired",
+      "rules": [
+        "T10"
+      ],
+      "note": "Locked target lost 2000ms ago (\u003E1500) -\u003E both drop; nothing to re-acquire.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 268435474,
+          "ActiveTargetId": 268435474,
+          "TargetLostScanAtMs": 998000
+        },
+        "Entities": []
+      },
+      "expected": {
+        "SelectedTargetId": 0,
+        "LockedTargetId": 0,
+        "Switched": false,
+        "DropReason": "scan grace expired",
+        "TargetLostScanAtMs": -1,
+        "Scanned": [],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "scan-grace-with-alternative",
+      "rules": [
+        "T10"
+      ],
+      "note": "Locked target LOS-blocked this tick, alternative visible. C# re-locks the alternative IMMEDIATELY (lock absent from argmax); JS holds the lock through the full 1500ms grace.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 268435475,
+          "ActiveTargetId": 268435475,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435475,
+            "Name": "Tumerok Scout",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 114,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": true,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435476,
+            "Name": "Tumerok Warrior",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 118,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435476,
+        "LockedTargetId": 268435476,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435476,
+            "Name": "Tumerok Warrior",
+            "Distance": 22,
+            "Angle": 0,
+            "Score": 66
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 268435475,
+            "Rule": "los-blocked"
+          }
+        ]
+      }
+    },
+    {
+      "name": "recently-killed-6s",
+      "rules": [
+        "T13",
+        "T2"
+      ],
+      "note": "Kill signal 6s ago: C# TTL is 4000ms -\u003E re-acquirable (and nearest wins); JS TTL is 30000ms -\u003E excluded.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435477,
+            "Name": "Drudge Ravener",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 106,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": 6000
+          },
+          {
+            "Id": 268435478,
+            "Name": "Drudge Ravener",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 121,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435477,
+        "LockedTargetId": 268435477,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435477,
+            "Name": "Drudge Ravener",
+            "Distance": 10,
+            "Angle": 0,
+            "Score": 90
+          },
+          {
+            "Id": 268435478,
+            "Name": "Drudge Ravener",
+            "Distance": 25,
+            "Angle": 0,
+            "Score": 60
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "recently-killed-3s",
+      "rules": [
+        "T13",
+        "T2"
+      ],
+      "note": "Kill signal 3s ago: suppressed on both sides.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435479,
+            "Name": "Drudge Ravener",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 106,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": 3000
+          },
+          {
+            "Id": 268435480,
+            "Name": "Drudge Ravener",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 121,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435480,
+        "LockedTargetId": 268435480,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435480,
+            "Name": "Drudge Ravener",
+            "Distance": 25,
+            "Angle": 0,
+            "Score": 60
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 268435479,
+            "Rule": "recently-killed"
+          }
+        ]
+      }
+    },
+    {
+      "name": "recently-killed-35s",
+      "rules": [
+        "T13",
+        "T2"
+      ],
+      "note": "Kill signal 35s ago: past both TTLs -\u003E both re-acquire.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435481,
+            "Name": "Drudge Ravener",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 106,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": 35000
+          },
+          {
+            "Id": 268435482,
+            "Name": "Drudge Ravener",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 121,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435481,
+        "LockedTargetId": 268435481,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435481,
+            "Name": "Drudge Ravener",
+            "Distance": 10,
+            "Angle": 0,
+            "Score": 90
+          },
+          {
+            "Id": 268435482,
+            "Name": "Drudge Ravener",
+            "Distance": 25,
+            "Angle": 0,
+            "Score": 60
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "dead-not-corpse",
+      "rules": [
+        "T2"
+      ],
+      "note": "hp==0 excluded on both sides; both pick the live mob.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435483,
+            "Name": "Mosswart",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 104,
+            "Z": 0,
+            "HealthRatio": 0,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435484,
+            "Name": "Mosswart",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 116,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435484,
+        "LockedTargetId": 268435484,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435484,
+            "Name": "Mosswart",
+            "Distance": 20,
+            "Angle": 0,
+            "Score": 70
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 268435483,
+            "Rule": "dead-not-corpse"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown-hp-full-bonus",
+      "rules": [
+        "T7",
+        "T2"
+      ],
+      "note": "HealthRatio -1 (no update yet) passes the ==0 filter and C# clamps -1-\u003E0 =\u003E FULL 50pt wounded bonus for an unknown-HP mob. JS ignores hp in scoring.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435485,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 116,
+            "Z": 0,
+            "HealthRatio": -1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435486,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 111,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435485,
+        "LockedTargetId": 268435485,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435486,
+            "Name": "Banderling",
+            "Distance": 15,
+            "Angle": 0,
+            "Score": 80
+          },
+          {
+            "Id": 268435485,
+            "Name": "Banderling",
+            "Distance": 20,
+            "Angle": 0,
+            "Score": 120
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "players-excluded",
+      "rules": [
+        "T2"
+      ],
+      "note": "Players in the mix (nearer than the mob) -\u003E both exclude, pick the monster.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 1342177571,
+            "Name": "Xerxes",
+            "ObjectClass": 24,
+            "IsPlayer": true,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 101,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 1342178390,
+            "Name": "Salvia",
+            "ObjectClass": 24,
+            "IsPlayer": true,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 99,
+            "Y": 96,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435487,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 108,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435487,
+        "LockedTargetId": 268435487,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435487,
+            "Name": "Rat",
+            "Distance": 12,
+            "Angle": 0,
+            "Score": 86
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 1342177571,
+            "Rule": "not-monster-class"
+          },
+          {
+            "Id": 1342178390,
+            "Rule": "not-monster-class"
+          }
+        ]
+      }
+    },
+    {
+      "name": "monster-in-player-guid-range",
+      "rules": [
+        "T2"
+      ],
+      "note": "Monster whose guid falls in 0x50000000-0x5FFFFFFF: C# classifies by ObjectClass -\u003E includes; JS guid-range heuristic excludes it.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 1509998319,
+            "Name": "Shadow Sliver",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 104,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435488,
+            "Name": "Shadow Sliver",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 111,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 1509998319,
+        "LockedTargetId": 1509998319,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 1509998319,
+            "Name": "Shadow Sliver",
+            "Distance": 8,
+            "Angle": 0,
+            "Score": 94
+          },
+          {
+            "Id": 268435488,
+            "Name": "Shadow Sliver",
+            "Distance": 15,
+            "Angle": 0,
+            "Score": 80
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "cross-landblock-neighbor",
+      "rules": [
+        "T2"
+      ],
+      "note": "Mob in the adjacent LB, global distance 30: C# global-frame distance includes it; JS same-LB gate excludes it.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435489,
+            "Name": "Auroch",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2863923217,
+            "X": -66,
+            "Y": 96,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435490,
+            "Name": "Auroch",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 131,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435489,
+        "LockedTargetId": 268435489,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435489,
+            "Name": "Auroch",
+            "Distance": 30,
+            "Angle": 90,
+            "Score": 45
+          },
+          {
+            "Id": 268435490,
+            "Name": "Auroch",
+            "Distance": 35,
+            "Angle": 0,
+            "Score": 40
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "distance-45",
+      "rules": [
+        "T2",
+        "T3"
+      ],
+      "note": "Mob at 45: inside C# MonsterRange(50), outside JS\u0027s hardcoded 40 -\u003E C# picks it, JS sees nothing.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435491,
+            "Name": "Reedshark",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 141,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435491,
+        "LockedTargetId": 268435491,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435491,
+            "Name": "Reedshark",
+            "Distance": 45,
+            "Angle": 0,
+            "Score": 20
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "engaged-hysteresis-52",
+      "rules": [
+        "T3"
+      ],
+      "note": "Locked target stepped back to 52 (disengage = MonsterRange\u002B3 = 53): C# retains via hysteresis; JS excludes \u003E40 but holds via scan grace -\u003E same chosen id by different mechanisms.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 268435492,
+          "ActiveTargetId": 268435492,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435492,
+            "Name": "Zefir",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 148,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435492,
+        "LockedTargetId": 268435492,
+        "Switched": false,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435492,
+            "Name": "Zefir",
+            "Distance": 52,
+            "Angle": 0,
+            "Score": 10
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "engaged-hysteresis-55-with-alt",
+      "rules": [
+        "T3",
+        "T12"
+      ],
+      "note": "Locked target at 55 (\u003E disengage 53): C# validation drops \u0027out of range\u0027 and re-locks the alternative same tick; JS holds the stale lock through grace.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 268435493,
+          "ActiveTargetId": 268435493,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435493,
+            "Name": "Zefir",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 151,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435494,
+            "Name": "Zefir",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 126,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435494,
+        "LockedTargetId": 268435494,
+        "Switched": true,
+        "DropReason": "out of range",
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435494,
+            "Name": "Zefir",
+            "Distance": 30,
+            "Angle": 0,
+            "Score": 50
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 268435493,
+            "Rule": "distance"
+          }
+        ]
+      }
+    },
+    {
+      "name": "spell-projectile-excluded",
+      "rules": [
+        "T5"
+      ],
+      "note": "\u0027Flame Bolt\u0027 misclassified as Monster: C# name-excludes it (T5); JS has no projectile-name filter and will target it.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435495,
+            "Name": "Flame Bolt",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 102,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435496,
+            "Name": "Scalded Wisp",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 110,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435496,
+        "LockedTargetId": 268435496,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435496,
+            "Name": "Scalded Wisp",
+            "Distance": 14,
+            "Angle": 0,
+            "Score": 82
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 268435495,
+            "Rule": "spell-projectile"
+          }
+        ]
+      }
+    },
+    {
+      "name": "not-attackable-vendor",
+      "rules": [
+        "T2"
+      ],
+      "note": "Attackable=false (vendor/NPC with Monster class): both exclude.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435497,
+            "Name": "Aun Ralirea",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 101,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": false,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435498,
+            "Name": "Sclavus",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 114,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435498,
+        "LockedTargetId": 268435498,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435498,
+            "Name": "Sclavus",
+            "Distance": 18,
+            "Angle": 0,
+            "Score": 74
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 268435497,
+            "Rule": "not-attackable"
+          }
+        ]
+      }
+    },
+    {
+      "name": "attackable-unknown-t4",
+      "rules": [
+        "T4"
+      ],
+      "note": "Desc-flags/weenie not yet populated: RynthAi T4 fails OPEN (attackable) -\u003E C# targets it; webhost.js:346-349 fails CLOSED -\u003E JS excludes it.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435499,
+            "Name": "Olthoi Grub",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 105,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": true,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435500,
+            "Name": "Olthoi Grub",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 112,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435499,
+        "LockedTargetId": 268435499,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435499,
+            "Name": "Olthoi Grub",
+            "Distance": 9,
+            "Angle": 0,
+            "Score": 92
+          },
+          {
+            "Id": 268435500,
+            "Name": "Olthoi Grub",
+            "Distance": 16,
+            "Angle": 0,
+            "Score": 78
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "blacklisted-mob",
+      "rules": [
+        "T15",
+        "T2"
+      ],
+      "note": "Blacklisted (confirmed-miss) mob: C# excludes; the shipped JS loop has no blacklist input at all and targets it.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435501,
+            "Name": "Ruschk Sadist",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 103,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": true,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435502,
+            "Name": "Ruschk Warder",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 117,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435502,
+        "LockedTargetId": 268435502,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435502,
+            "Name": "Ruschk Warder",
+            "Distance": 21,
+            "Angle": 0,
+            "Score": 68
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 268435501,
+            "Rule": "blacklisted"
+          }
+        ]
+      }
+    },
+    {
+      "name": "user-never-attack",
+      "rules": [
+        "T2"
+      ],
+      "note": "User never-attack list: C# excludes; the shipped JS loop has no such input and targets it.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435503,
+            "Name": "Paroxysm Wisp",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 103,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": true,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435504,
+            "Name": "Wisp",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 117,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435504,
+        "LockedTargetId": 268435504,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435504,
+            "Name": "Wisp",
+            "Distance": 21,
+            "Angle": 0,
+            "Score": 68
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 268435503,
+            "Rule": "user-never-attack"
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty-world",
+      "rules": [
+        "T2"
+      ],
+      "note": "No entities at all -\u003E both select nothing.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": []
+      },
+      "expected": {
+        "SelectedTargetId": 0,
+        "LockedTargetId": 0,
+        "Switched": false,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "locked-validation-corpse",
+      "rules": [
+        "T12"
+      ],
+      "note": "Locked target reclassified to corpse (ObjectClass!=Monster): C# drops \u0027became corpse\u0027 and re-locks the alt same tick; JS excludes it from scan (itemType filter) and holds via grace.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 268435505,
+          "ActiveTargetId": 268435505,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435505,
+            "Name": "Drudge Prowler",
+            "ObjectClass": 8,
+            "IsPlayer": false,
+            "ItemType": 1,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 106,
+            "Z": 0,
+            "HealthRatio": 0,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435506,
+            "Name": "Drudge Prowler",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 114,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435506,
+        "LockedTargetId": 268435506,
+        "Switched": true,
+        "DropReason": "became corpse",
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435506,
+            "Name": "Drudge Prowler",
+            "Distance": 18,
+            "Angle": 0,
+            "Score": 74
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 268435505,
+            "Rule": "not-monster-class"
+          }
+        ]
+      }
+    },
+    {
+      "name": "locked-died-hp0-with-alt",
+      "rules": [
+        "T12"
+      ],
+      "note": "Locked target hp-\u003E0 (dead-not-corpse): C# validation drops \u0027hp=0\u0027 and re-locks the alt same tick; JS _selectTarget holds it (its kill-check lives in tick(), one tick later).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 268435507,
+          "ActiveTargetId": 268435507,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 268435507,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 106,
+            "Z": 0,
+            "HealthRatio": 0,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 268435508,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96,
+            "Y": 120,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 268435508,
+        "LockedTargetId": 268435508,
+        "Switched": true,
+        "DropReason": "hp=0",
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 268435508,
+            "Name": "Gromnie",
+            "Distance": 24,
+            "Angle": 0,
+            "Score": 62
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 268435507,
+            "Rule": "dead-not-corpse"
+          }
+        ]
+      }
+    },
+    {
+      "name": "grind-random-00",
+      "rules": [
+        "T7",
+        "T9"
+      ],
+      "note": "Randomized shared-domain grind scene; disagreements isolate the scoring-formula gap (C# multi-term vs JS 100-d).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 285212672,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 109.18098714304071,
+            "Y": 123.9383092205959,
+            "Z": 0,
+            "HealthRatio": 0.60891145,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285212673,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 88.0635779990482,
+            "Y": 100.18988718040934,
+            "Z": 0,
+            "HealthRatio": 0.7889045,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285212674,
+            "Name": "Mite Snippet",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 95.57413946750471,
+            "Y": 84.71818072199365,
+            "Z": 0,
+            "HealthRatio": 0.5097124,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 285212674,
+        "LockedTargetId": 285212674,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 285212673,
+            "Name": "Gromnie",
+            "Distance": 8.974516631091664,
+            "Angle": 62.16901523162102,
+            "Score": 99.15190815394716
+          },
+          {
+            "Id": 285212674,
+            "Name": "Mite Snippet",
+            "Distance": 11.289854003248298,
+            "Angle": 177.83825361069213,
+            "Score": 102.05476911252084
+          },
+          {
+            "Id": 285212672,
+            "Name": "Banderling",
+            "Distance": 30.891544865395236,
+            "Angle": 25.257423196573477,
+            "Score": 66.36814735774303
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "grind-random-01",
+      "rules": [
+        "T7",
+        "T9"
+      ],
+      "note": "Randomized shared-domain grind scene; disagreements isolate the scoring-formula gap (C# multi-term vs JS 100-d).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 285212930,
+          "ActiveTargetId": 285212930,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 285212928,
+            "Name": "Reedshark",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 118.23522608225285,
+            "Y": 115.64434278808702,
+            "Z": 0,
+            "HealthRatio": 0.35607284,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285212929,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 83.80455460522325,
+            "Y": 106.23182305818777,
+            "Z": 0,
+            "HealthRatio": 0.28296182,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285212930,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 118.07795022198039,
+            "Y": 78.0245653855144,
+            "Z": 0,
+            "HealthRatio": 0.6643799,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 285212929,
+        "LockedTargetId": 285212929,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 285212929,
+            "Name": "Shreth",
+            "Distance": 15.919142296965521,
+            "Angle": 50.00377912540165,
+            "Score": 111.23563689709864
+          },
+          {
+            "Id": 285212930,
+            "Name": "Shreth",
+            "Distance": 28.470197322531074,
+            "Angle": 129.151806071937,
+            "Score": 62.66551028093657
+          },
+          {
+            "Id": 285212928,
+            "Name": "Reedshark",
+            "Distance": 29.669942408180386,
+            "Angle": 48.54009682710287,
+            "Score": 80.15980098394914
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "grind-random-02",
+      "rules": [
+        "T7",
+        "T9"
+      ],
+      "note": "Randomized shared-domain grind scene; disagreements isolate the scoring-formula gap (C# multi-term vs JS 100-d).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 285213184,
+            "Name": "Mite Snippet",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 103.17654098128162,
+            "Y": 86.59634822261033,
+            "Z": 0,
+            "HealthRatio": 0.74907607,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213185,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 93.74848554084005,
+            "Y": 75.65010026367628,
+            "Z": 0,
+            "HealthRatio": 0.40224436,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213186,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96.33088380041406,
+            "Y": 116.41815524252164,
+            "Z": 0,
+            "HealthRatio": 0.55836636,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213187,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 77.31317824625866,
+            "Y": 91.39896027057921,
+            "Z": 0,
+            "HealthRatio": 0.4159619,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213188,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 85.77582356718881,
+            "Y": 87.01369868688309,
+            "Z": 0,
+            "HealthRatio": 0.49562687,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213189,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 126.07208310490495,
+            "Y": 111.16442162311415,
+            "Z": 0,
+            "HealthRatio": 0.71548367,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213190,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 103.50097116248261,
+            "Y": 76.51269134049213,
+            "Z": 0,
+            "HealthRatio": 0.22408283,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 285213188,
+        "LockedTargetId": 285213188,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 285213184,
+            "Name": "Mite Snippet",
+            "Distance": 11.829260636510831,
+            "Angle": 142.6503818587635,
+            "Score": 90.96265409253576
+          },
+          {
+            "Id": 285213188,
+            "Name": "Banderling",
+            "Distance": 13.612031259858874,
+            "Angle": 131.3131005928447,
+            "Score": 100.6994218842505
+          },
+          {
+            "Id": 285213187,
+            "Name": "Gromnie",
+            "Distance": 19.24491813045268,
+            "Angle": 103.83213936529688,
+            "Score": 94.94361698149694
+          },
+          {
+            "Id": 285213186,
+            "Name": "Rat",
+            "Distance": 20.420836114054875,
+            "Angle": 0.928418152466626,
+            "Score": 91.188431071633
+          },
+          {
+            "Id": 285213190,
+            "Name": "Shreth",
+            "Distance": 20.88108635036655,
+            "Angle": 158.9475007722841,
+            "Score": 98.20326921129285
+          },
+          {
+            "Id": 285213185,
+            "Name": "Banderling",
+            "Distance": 20.47407474437117,
+            "Angle": 173.68646881249103,
+            "Score": 89.2903842811552
+          },
+          {
+            "Id": 285213189,
+            "Name": "Shreth",
+            "Distance": 33.679220083485035,
+            "Angle": 63.23960303479786,
+            "Score": 53.35406528000351
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "grind-random-03",
+      "rules": [
+        "T7",
+        "T9"
+      ],
+      "note": "Randomized shared-domain grind scene; disagreements isolate the scoring-formula gap (C# multi-term vs JS 100-d).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 285213440,
+          "ActiveTargetId": 285213440,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 285213440,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 110.97162800425654,
+            "Y": 129.292439236753,
+            "Z": 0,
+            "HealthRatio": 0.3415538,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213441,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 103.50069197694143,
+            "Y": 82.73858660236647,
+            "Z": 0,
+            "HealthRatio": 0.2119673,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213442,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 100.24137053700993,
+            "Y": 130.04250318684834,
+            "Z": 0,
+            "HealthRatio": 0.7844717,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213443,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 118.30188672417742,
+            "Y": 76.57242351639037,
+            "Z": 0,
+            "HealthRatio": 0.7689432,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213444,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 114.64057402538377,
+            "Y": 77.44352017655598,
+            "Z": 0,
+            "HealthRatio": 0.72196364,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213445,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 98.56541171142968,
+            "Y": 100.97951279739297,
+            "Z": 0,
+            "HealthRatio": 0.42855695,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213446,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 79.82492951026592,
+            "Y": 113.18483401579002,
+            "Z": 0,
+            "HealthRatio": 0.63524044,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 285213445,
+        "LockedTargetId": 285213445,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 285213445,
+            "Name": "Gromnie",
+            "Distance": 5.6015073818146845,
+            "Angle": 27.25722107442894,
+            "Score": 125.854847731669
+          },
+          {
+            "Id": 285213441,
+            "Name": "Banderling",
+            "Distance": 15.235664259749564,
+            "Angle": 150.5073799148702,
+            "Score": 110.56878515667192
+          },
+          {
+            "Id": 285213446,
+            "Name": "Shreth",
+            "Distance": 23.599818336124873,
+            "Angle": 43.266256155104486,
+            "Score": 78.63466065023042
+          },
+          {
+            "Id": 285213444,
+            "Name": "Gromnie",
+            "Distance": 26.302356233492773,
+            "Angle": 134.87046730465744,
+            "Score": 63.80430159248132
+          },
+          {
+            "Id": 285213443,
+            "Name": "Rat",
+            "Distance": 29.577100592936088,
+            "Angle": 131.05971113362335,
+            "Score": 55.11754422241645
+          },
+          {
+            "Id": 285213442,
+            "Name": "Banderling",
+            "Distance": 34.30570283872575,
+            "Angle": 7.101910285233475,
+            "Score": 51.77045921840891
+          },
+          {
+            "Id": 285213440,
+            "Name": "Drudge Skulker",
+            "Distance": 36.50391972693443,
+            "Angle": 24.213475428621056,
+            "Score": 68.56927710383302
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "grind-random-04",
+      "rules": [
+        "T7",
+        "T9"
+      ],
+      "note": "Randomized shared-domain grind scene; disagreements isolate the scoring-formula gap (C# multi-term vs JS 100-d).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 285213696,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 98.53184330881767,
+            "Y": 115.22434251433593,
+            "Z": 0,
+            "HealthRatio": 0.7725133,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213697,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 86.9408064006882,
+            "Y": 117.05032227839513,
+            "Z": 0,
+            "HealthRatio": 0.41681254,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213698,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 102.74905748252148,
+            "Y": 94.10794743161146,
+            "Z": 0,
+            "HealthRatio": 0.4039946,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213699,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 83.84953560625691,
+            "Y": 82.30737880174662,
+            "Z": 0,
+            "HealthRatio": 0.7111552,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213700,
+            "Name": "Mite Snippet",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 89.42341510813101,
+            "Y": 98.68116251244057,
+            "Z": 0,
+            "HealthRatio": 0.9465405,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213701,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 109.69893070466154,
+            "Y": 126.6573060429374,
+            "Z": 0,
+            "HealthRatio": 0.50211924,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213702,
+            "Name": "Reedshark",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 66.76978551603881,
+            "Y": 70.4544612241045,
+            "Z": 0,
+            "HealthRatio": 0.7159746,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 285213698,
+        "LockedTargetId": 285213698,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 285213700,
+            "Name": "Mite Snippet",
+            "Distance": 7.102119490549682,
+            "Angle": 67.82010809882553,
+            "Score": 94.70095349104942
+          },
+          {
+            "Id": 285213698,
+            "Name": "Rat",
+            "Distance": 7.0092538706986245,
+            "Angle": 105.66048071983289,
+            "Score": 119.91173604974429
+          },
+          {
+            "Id": 285213699,
+            "Name": "Drudge Skulker",
+            "Distance": 18.30632842113377,
+            "Angle": 138.41501087807816,
+            "Score": 80.13986152303657
+          },
+          {
+            "Id": 285213696,
+            "Name": "Drudge Skulker",
+            "Distance": 19.39034748654647,
+            "Angle": 7.502667683876426,
+            "Score": 82.17682663667495
+          },
+          {
+            "Id": 285213697,
+            "Name": "Rat",
+            "Distance": 22.916916387116835,
+            "Angle": 23.28505727615442,
+            "Score": 92.03192597761429
+          },
+          {
+            "Id": 285213701,
+            "Name": "Gromnie",
+            "Distance": 33.5787301168665,
+            "Angle": 24.07703346762669,
+            "Score": 66.39896463859384
+          },
+          {
+            "Id": 285213702,
+            "Name": "Reedshark",
+            "Distance": 38.81984016104245,
+            "Angle": 131.15160394979253,
+            "Score": 39.275388012216006
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "grind-random-05",
+      "rules": [
+        "T7",
+        "T9"
+      ],
+      "note": "Randomized shared-domain grind scene; disagreements isolate the scoring-formula gap (C# multi-term vs JS 100-d).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 285213954,
+          "ActiveTargetId": 285213954,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 285213952,
+            "Name": "Mosswart",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 69.91941066421009,
+            "Y": 113.93085669126111,
+            "Z": 0,
+            "HealthRatio": 0.5312452,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213953,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 129.55510949991685,
+            "Y": 95.85195838767682,
+            "Z": 0,
+            "HealthRatio": 0.42024177,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213954,
+            "Name": "Mite Snippet",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 126.0410140215116,
+            "Y": 85.25266585421136,
+            "Z": 0,
+            "HealthRatio": 0.32634503,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285213955,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 94.32149049298364,
+            "Y": 111.64653317476207,
+            "Z": 0,
+            "HealthRatio": 0.6328691,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 285213954,
+        "LockedTargetId": 285213954,
+        "Switched": false,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 285213955,
+            "Name": "Drudge Skulker",
+            "Distance": 15.736308161510408,
+            "Angle": 6.1230888991258325,
+            "Score": 96.54375585084536
+          },
+          {
+            "Id": 285213952,
+            "Name": "Mosswart",
+            "Distance": 31.649846157360482,
+            "Angle": 55.49080344638355,
+            "Score": 67.0552266704024
+          },
+          {
+            "Id": 285213954,
+            "Name": "Mite Snippet",
+            "Distance": 31.90560632054775,
+            "Angle": 109.68494256478034,
+            "Score": 73.77792811398531
+          },
+          {
+            "Id": 285213953,
+            "Name": "Drudge Skulker",
+            "Distance": 33.55543607033621,
+            "Angle": 90.25278131023643,
+            "Score": 66.86299579677787
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "grind-random-06",
+      "rules": [
+        "T7",
+        "T9"
+      ],
+      "note": "Randomized shared-domain grind scene; disagreements isolate the scoring-formula gap (C# multi-term vs JS 100-d).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 285214208,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 76.76282957359602,
+            "Y": 112.02060771867713,
+            "Z": 0,
+            "HealthRatio": 0.83611256,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214209,
+            "Name": "Mosswart",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 107.49649917331091,
+            "Y": 71.52770271903194,
+            "Z": 0,
+            "HealthRatio": 0.91500795,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214210,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 101.10308834731615,
+            "Y": 98.74596480254137,
+            "Z": 0,
+            "HealthRatio": 0.55048674,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214211,
+            "Name": "Mite Snippet",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 82.9262068099518,
+            "Y": 129.21787730858486,
+            "Z": 0,
+            "HealthRatio": 0.47607052,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214212,
+            "Name": "Mosswart",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 100.63910058144234,
+            "Y": 82.41061680306478,
+            "Z": 0,
+            "HealthRatio": 0.87274945,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 285214210,
+        "LockedTargetId": 285214210,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 285214210,
+            "Name": "Rat",
+            "Distance": 5.794983466526565,
+            "Angle": 61.71536651519837,
+            "Score": 117.45706442137205
+          },
+          {
+            "Id": 285214212,
+            "Name": "Mosswart",
+            "Distance": 14.359407713340632,
+            "Angle": 161.15128416621653,
+            "Score": 78.69086306184484
+          },
+          {
+            "Id": 285214208,
+            "Name": "Banderling",
+            "Distance": 25.034548082403184,
+            "Angle": 50.21265732600011,
+            "Score": 65.3356838194417
+          },
+          {
+            "Id": 285214209,
+            "Name": "Mosswart",
+            "Distance": 27.038173522818298,
+            "Angle": 154.83698611838602,
+            "Score": 51.571200726237265
+          },
+          {
+            "Id": 285214211,
+            "Name": "Mite Snippet",
+            "Distance": 35.698059348712995,
+            "Angle": 21.48345888661379,
+            "Score": 63.606829645772045
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "grind-random-07",
+      "rules": [
+        "T7",
+        "T9"
+      ],
+      "note": "Randomized shared-domain grind scene; disagreements isolate the scoring-formula gap (C# multi-term vs JS 100-d).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 285214466,
+          "ActiveTargetId": 285214466,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 285214464,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 88.56773304549186,
+            "Y": 81.72817543431883,
+            "Z": 0,
+            "HealthRatio": 0.2258491,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214465,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 124.66517809701412,
+            "Y": 84.43880358510245,
+            "Z": 0,
+            "HealthRatio": 0.20694861,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214466,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 96.91066687038504,
+            "Y": 62.896268970292795,
+            "Z": 0,
+            "HealthRatio": 0.4183166,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214467,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 88.56496296472278,
+            "Y": 65.65752984624753,
+            "Z": 0,
+            "HealthRatio": 0.4510854,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214468,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 104.2513055248728,
+            "Y": 109.90180864487876,
+            "Z": 0,
+            "HealthRatio": 0.7970635,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 285214464,
+        "LockedTargetId": 285214464,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 285214468,
+            "Name": "Banderling",
+            "Distance": 16.166147545521294,
+            "Angle": 30.69090509353714,
+            "Score": 86.10947815141189
+          },
+          {
+            "Id": 285214464,
+            "Name": "Shreth",
+            "Distance": 16.09110215356918,
+            "Angle": 152.4910764920018,
+            "Score": 108.05361387569152
+          },
+          {
+            "Id": 285214465,
+            "Name": "Drudge Skulker",
+            "Distance": 30.908796448217938,
+            "Angle": 111.9651317000227,
+            "Score": 81.61469160111747
+          },
+          {
+            "Id": 285214467,
+            "Name": "Rat",
+            "Distance": 31.240122771001353,
+            "Angle": 166.23168308578045,
+            "Score": 65.73039152021016
+          },
+          {
+            "Id": 285214466,
+            "Name": "Drudge Skulker",
+            "Distance": 33.116254652907905,
+            "Angle": 178.42421955355638,
+            "Score": 62.939203916974485
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "grind-random-08",
+      "rules": [
+        "T7",
+        "T9"
+      ],
+      "note": "Randomized shared-domain grind scene; disagreements isolate the scoring-formula gap (C# multi-term vs JS 100-d).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 285214720,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 119.7675872326209,
+            "Y": 104.11014654428904,
+            "Z": 0,
+            "HealthRatio": 0.90479684,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214721,
+            "Name": "Reedshark",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 128.62712407281657,
+            "Y": 96.07137168333914,
+            "Z": 0,
+            "HealthRatio": 0.8450707,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214722,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 104.78846636950483,
+            "Y": 97.36099507329038,
+            "Z": 0,
+            "HealthRatio": 0.91848093,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214723,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 107.67024849426389,
+            "Y": 93.46007859627198,
+            "Z": 0,
+            "HealthRatio": 0.81026345,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214724,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 119.90065592182435,
+            "Y": 121.74551961324511,
+            "Z": 0,
+            "HealthRatio": 0.9080593,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214725,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 85.56736876223286,
+            "Y": 90.7509132071493,
+            "Z": 0,
+            "HealthRatio": 0.33217013,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214726,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 100.30450098649747,
+            "Y": 89.90967248381344,
+            "Z": 0,
+            "HealthRatio": 0.22498515,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 285214726,
+        "LockedTargetId": 285214726,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 285214726,
+            "Name": "Banderling",
+            "Distance": 7.457936577710144,
+            "Angle": 144.74822419916666,
+            "Score": 125.79330120936558
+          },
+          {
+            "Id": 285214722,
+            "Name": "Drudge Skulker",
+            "Distance": 8.893224877255284,
+            "Angle": 81.19701653774686,
+            "Score": 91.77855824665352
+          },
+          {
+            "Id": 285214723,
+            "Name": "Gromnie",
+            "Distance": 11.943445928836205,
+            "Angle": 102.27841916600171,
+            "Score": 89.91780099851174
+          },
+          {
+            "Id": 285214725,
+            "Name": "Rat",
+            "Distance": 11.678728813621163,
+            "Angle": 116.70885303835797,
+            "Score": 113.55021076284368
+          },
+          {
+            "Id": 285214720,
+            "Name": "Banderling",
+            "Distance": 25.11319732392053,
+            "Angle": 71.15896446218666,
+            "Score": 60.580487610685324
+          },
+          {
+            "Id": 285214721,
+            "Name": "Reedshark",
+            "Distance": 32.6272021353371,
+            "Angle": 89.87466594664133,
+            "Score": 47.49902274634351
+          },
+          {
+            "Id": 285214724,
+            "Name": "Shreth",
+            "Distance": 35.12937707459904,
+            "Angle": 42.87185441836335,
+            "Score": 41.95651121128499
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "grind-random-09",
+      "rules": [
+        "T7",
+        "T9"
+      ],
+      "note": "Randomized shared-domain grind scene; disagreements isolate the scoring-formula gap (C# multi-term vs JS 100-d).",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": []
+        },
+        "Lock": {
+          "LockedTargetId": 285214980,
+          "ActiveTargetId": 285214980,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 285214976,
+            "Name": "Banderling",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 94.01331375328554,
+            "Y": 102.09000661179432,
+            "Z": 0,
+            "HealthRatio": 0.88707554,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214977,
+            "Name": "Mosswart",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 90.6827643628951,
+            "Y": 103.23058245709085,
+            "Z": 0,
+            "HealthRatio": 0.53444475,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214978,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 102.98272508729647,
+            "Y": 75.22053290135774,
+            "Z": 0,
+            "HealthRatio": 0.34856635,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214979,
+            "Name": "Mite Snippet",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 82.6753443615621,
+            "Y": 74.8509760519463,
+            "Z": 0,
+            "HealthRatio": 0.28735602,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 285214980,
+            "Name": "Mosswart",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 102.95509171916795,
+            "Y": 76.17217495835106,
+            "Z": 0,
+            "HealthRatio": 0.25234213,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 285214980,
+        "LockedTargetId": 285214980,
+        "Switched": false,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 285214976,
+            "Name": "Banderling",
+            "Distance": 6.4058647171647705,
+            "Angle": 18.06739832184627,
+            "Score": 101.8307490442755
+          },
+          {
+            "Id": 285214977,
+            "Name": "Mosswart",
+            "Distance": 8.975205707353823,
+            "Angle": 36.33007068016104,
+            "Score": 113.3090138575176
+          },
+          {
+            "Id": 285214980,
+            "Name": "Mosswart",
+            "Distance": 21.012280854400732,
+            "Angle": 160.6704400296651,
+            "Score": 96.43219599828859
+          },
+          {
+            "Id": 285214978,
+            "Name": "Gromnie",
+            "Distance": 21.921329853551757,
+            "Angle": 161.42560960791337,
+            "Score": 89.76093320418087
+          },
+          {
+            "Id": 285214979,
+            "Name": "Mite Snippet",
+            "Distance": 24.996552999130483,
+            "Angle": 147.7875778953487,
+            "Score": 87.42867205654896
+          }
+        ],
+        "Excluded": []
+      }
+    },
+    {
+      "name": "mixed-random-00",
+      "rules": [
+        "T2",
+        "T7",
+        "T8"
+      ],
+      "note": "Mixed scene: players \u002B dead mob \u002B priority rule, shared domain.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": [
+            {
+              "Name": "gromnie",
+              "Priority": 4
+            }
+          ]
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 301989888,
+            "Name": "Reedshark",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 66.6081128401299,
+            "Y": 118.45945785370694,
+            "Z": 0,
+            "HealthRatio": 0.20121744,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301989889,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 90.80942596302704,
+            "Y": 114.55512881487573,
+            "Z": 0,
+            "HealthRatio": 0.5684251,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 1342179072,
+            "Name": "PlayerKilledSteve",
+            "ObjectClass": 24,
+            "IsPlayer": true,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 99,
+            "Y": 99,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990032,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 97,
+            "Y": 92,
+            "Z": 0,
+            "HealthRatio": 0,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 301989889,
+        "LockedTargetId": 301989889,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 301989889,
+            "Name": "Rat",
+            "Distance": 19.26745608973894,
+            "Angle": 15.628323674028934,
+            "Score": 92.17559167025003
+          },
+          {
+            "Id": 301989888,
+            "Name": "Reedshark",
+            "Distance": 36.9906782568381,
+            "Angle": 52.615180170449946,
+            "Score": 73.03470578375226
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 1342179072,
+            "Rule": "not-monster-class"
+          },
+          {
+            "Id": 301990032,
+            "Rule": "dead-not-corpse"
+          }
+        ]
+      }
+    },
+    {
+      "name": "mixed-random-01",
+      "rules": [
+        "T2",
+        "T7",
+        "T8"
+      ],
+      "note": "Mixed scene: players \u002B dead mob \u002B priority rule, shared domain.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": [
+            {
+              "Name": "gromnie",
+              "Priority": 4
+            }
+          ]
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 301990144,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 90.51005825317083,
+            "Y": 97.47397398418356,
+            "Z": 0,
+            "HealthRatio": 0.4205876,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990145,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 98.24388256500833,
+            "Y": 100.8398689671729,
+            "Z": 0,
+            "HealthRatio": 0.5080189,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 1342179073,
+            "Name": "PlayerKilledSteve",
+            "ObjectClass": 24,
+            "IsPlayer": true,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 99,
+            "Y": 99,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990033,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 97,
+            "Y": 92,
+            "Z": 0,
+            "HealthRatio": 0,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 301990145,
+        "LockedTargetId": 301990145,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 301990145,
+            "Name": "Gromnie",
+            "Distance": 5.334729663719441,
+            "Angle": 24.873601600934514,
+            "Score": 137.54772837271076
+          },
+          {
+            "Id": 301990144,
+            "Name": "Shreth",
+            "Distance": 5.6843697706631495,
+            "Angle": 74.97129291061839,
+            "Score": 123.43680866643119
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 1342179073,
+            "Rule": "not-monster-class"
+          },
+          {
+            "Id": 301990033,
+            "Rule": "dead-not-corpse"
+          }
+        ]
+      }
+    },
+    {
+      "name": "mixed-random-02",
+      "rules": [
+        "T2",
+        "T7",
+        "T8"
+      ],
+      "note": "Mixed scene: players \u002B dead mob \u002B priority rule, shared domain.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": [
+            {
+              "Name": "gromnie",
+              "Priority": 4
+            }
+          ]
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 301990400,
+            "Name": "Mosswart",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 116.98113720212412,
+            "Y": 81.78485544213532,
+            "Z": 0,
+            "HealthRatio": 0.49351215,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990401,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 81.19807052188372,
+            "Y": 91.12531127160896,
+            "Z": 0,
+            "HealthRatio": 0.70404834,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 1342179074,
+            "Name": "PlayerKilledSteve",
+            "ObjectClass": 24,
+            "IsPlayer": true,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 99,
+            "Y": 99,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990034,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 97,
+            "Y": 92,
+            "Z": 0,
+            "HealthRatio": 0,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 301990401,
+        "LockedTargetId": 301990401,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 301990401,
+            "Name": "Drudge Skulker",
+            "Distance": 15.583956701486665,
+            "Angle": 108.22815756696659,
+            "Score": 87.61699439902887
+          },
+          {
+            "Id": 301990400,
+            "Name": "Mosswart",
+            "Distance": 25.34321315649137,
+            "Angle": 124.11843382013888,
+            "Score": 77.74249746017956
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 1342179074,
+            "Rule": "not-monster-class"
+          },
+          {
+            "Id": 301990034,
+            "Rule": "dead-not-corpse"
+          }
+        ]
+      }
+    },
+    {
+      "name": "mixed-random-03",
+      "rules": [
+        "T2",
+        "T7",
+        "T8"
+      ],
+      "note": "Mixed scene: players \u002B dead mob \u002B priority rule, shared domain.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": [
+            {
+              "Name": "gromnie",
+              "Priority": 4
+            }
+          ]
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 301990656,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 132.04428061717505,
+            "Y": 90.27417984141609,
+            "Z": 0,
+            "HealthRatio": 0.972643,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990657,
+            "Name": "Mosswart",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 108.93376582533556,
+            "Y": 113.85544135952307,
+            "Z": 0,
+            "HealthRatio": 0.39260852,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 1342179075,
+            "Name": "PlayerKilledSteve",
+            "ObjectClass": 24,
+            "IsPlayer": true,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 99,
+            "Y": 99,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990035,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 97,
+            "Y": 92,
+            "Z": 0,
+            "HealthRatio": 0,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 301990657,
+        "LockedTargetId": 301990657,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 301990657,
+            "Name": "Mosswart",
+            "Distance": 22.047654854158612,
+            "Angle": 35.9180654380089,
+            "Score": 94.27881604335163
+          },
+          {
+            "Id": 301990656,
+            "Name": "Shreth",
+            "Distance": 36.49623517156346,
+            "Angle": 99.02630862734574,
+            "Score": 32.87391717802198
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 1342179075,
+            "Rule": "not-monster-class"
+          },
+          {
+            "Id": 301990035,
+            "Rule": "dead-not-corpse"
+          }
+        ]
+      }
+    },
+    {
+      "name": "mixed-random-04",
+      "rules": [
+        "T2",
+        "T7",
+        "T8"
+      ],
+      "note": "Mixed scene: players \u002B dead mob \u002B priority rule, shared domain.",
+      "input": {
+        "NowMs": 1000000,
+        "PlayerId": 251658241,
+        "Player": {
+          "HasPose": true,
+          "ObjCellId": 2847146005,
+          "X": 96,
+          "Y": 96,
+          "Z": 0,
+          "QW": 1,
+          "QZ": 0
+        },
+        "Config": {
+          "MonsterRange": 50,
+          "MonsterDisengageRange": 0,
+          "MonsterRules": [
+            {
+              "Name": "gromnie",
+              "Priority": 4
+            }
+          ]
+        },
+        "Lock": {
+          "LockedTargetId": 0,
+          "ActiveTargetId": 0,
+          "TargetLostScanAtMs": -1
+        },
+        "Entities": [
+          {
+            "Id": 301990912,
+            "Name": "Mite Snippet",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 73.3287630903549,
+            "Y": 122.02775846175764,
+            "Z": 0,
+            "HealthRatio": 0.9752105,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990913,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 125.7386329155241,
+            "Y": 118.98799198759684,
+            "Z": 0,
+            "HealthRatio": 0.5151692,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990914,
+            "Name": "Gromnie",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 101.50171779675338,
+            "Y": 96.76501099292416,
+            "Z": 0,
+            "HealthRatio": 0.23208135,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990915,
+            "Name": "Drudge Skulker",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 101.04201692272997,
+            "Y": 104.40481250374684,
+            "Z": 0,
+            "HealthRatio": 0.98638123,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990916,
+            "Name": "Shreth",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 106.10486300699247,
+            "Y": 91.83284636188392,
+            "Z": 0,
+            "HealthRatio": 0.5895652,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 1342179076,
+            "Name": "PlayerKilledSteve",
+            "ObjectClass": 24,
+            "IsPlayer": true,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 99,
+            "Y": 99,
+            "Z": 0,
+            "HealthRatio": 1,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          },
+          {
+            "Id": 301990036,
+            "Name": "Rat",
+            "ObjectClass": 5,
+            "IsPlayer": false,
+            "ItemType": 16,
+            "HasPosition": true,
+            "ObjCellId": 2847146005,
+            "X": 97,
+            "Y": 92,
+            "Z": 0,
+            "HealthRatio": 0,
+            "Attackable": true,
+            "AttackableUnknown": false,
+            "HostHasIsAttackable": true,
+            "LosBlocked": false,
+            "Blacklisted": false,
+            "UserNeverAttack": false,
+            "KilledMsAgo": -1
+          }
+        ]
+      },
+      "expected": {
+        "SelectedTargetId": 301990914,
+        "LockedTargetId": 301990914,
+        "Switched": true,
+        "DropReason": null,
+        "TargetLostScanAtMs": -1,
+        "Scanned": [
+          {
+            "Id": 301990914,
+            "Name": "Gromnie",
+            "Distance": 5.554650352128556,
+            "Angle": 82.0838104943203,
+            "Score": 147.72641991839407
+          },
+          {
+            "Id": 301990915,
+            "Name": "Drudge Skulker",
+            "Distance": 9.801163597868543,
+            "Angle": 30.95939253967226,
+            "Score": 89.35864491513415
+          },
+          {
+            "Id": 301990916,
+            "Name": "Shreth",
+            "Distance": 10.930390012884745,
+            "Angle": 112.41080570612606,
+            "Score": 102.41591433803083
+          },
+          {
+            "Id": 301990912,
+            "Name": "Mite Snippet",
+            "Distance": 34.517085531036614,
+            "Angle": 41.05719065342902,
+            "Score": 39.92434950949717
+          },
+          {
+            "Id": 301990913,
+            "Name": "Rat",
+            "Distance": 37.58768499530204,
+            "Angle": 52.29594214460625,
+            "Score": 56.160839726180996
+          }
+        ],
+        "Excluded": [
+          {
+            "Id": 1342179076,
+            "Rule": "not-monster-class"
+          },
+          {
+            "Id": 301990036,
+            "Rule": "dead-not-corpse"
+          }
+        ]
+      }
+    }
+  ]
+}
