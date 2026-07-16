@@ -22,6 +22,10 @@
   <ItemGroup>
     <!-- tools/GeomExtract is its own project (the ONLY place with a DAT-parsing dep). -->
     <Compile Remove="tools\**\*.cs" />
+    <!-- tests/ is its own console project (assert-runner); keep it out of the app build. -->
+    <Compile Remove="tests\**" />
+    <Content Remove="tests\**" />
+    <None Remove="tests\**" />
     <None Include="data\portals.tsv" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

@@ -3,7 +3,7 @@
 // DAT-parsing dependency.
 //
 //   GeomExtract --ac <dats> --scenery <dist scenery dir> --out <geomdir>
-//               --tiled <minX,maxX,minY,maxY hex>
+//               --tiled <minX,maxX,minY,maxY hex> [--no-seal-buildings]
 //
 // For every landblock in the region (PLUS a 1-lb border, matching the border
 // NavBake.BakeRegionTiled gathers for seam context):
@@ -49,6 +49,31 @@
 //     with no physics polys) fall back to the Setup's CylSpheres/Spheres
 //     collision volumes, emitted as closed 8-sided prisms. That mirrors retail,
 //     where such objects collide via the setup's cylsphere list, not part BSPs.
+//
+// Building seal (DEFAULT ON; pass --no-seal-buildings to reopen doorways):
+//   Retail collides buildings as CBuildingObj PHYSICS (walls block, doorways are
+//   genuinely open — they lead into the building's 0x0100xxxx interior EnvCells,
+//   which the OUTDOOR bake does not contain). The walkable terrain/floor polys
+//   under a building however DO get baked and connect to the outside through
+//   those open doorways, so Detour routes THROUGH houses whose interiors don't
+//   exist in the navmesh (batch-1 finding; e.g. Holtburg 0x01000827 has openings
+//   at ~48° and ~197°). Sealing is a bake-time ROUTING decision, not a physics
+//   change: each building entry is followed by a {"src":"seal",...} entry holding
+//   a vertical wall skirt along the building's footprint boundary, tall enough
+//   (zmin-1 .. zmin+4, i.e. >= agentHeight 2.0 above any plausible perimeter
+//   terrain) that Recast rasterizes an unwalkable column there — outdoor routes
+//   go AROUND the building. Re-extract without the flag to reopen doorways once
+//   indoor navigation exists.
+//   Footprint: the building's placed physics tris projected to XY and rasterized
+//   on a 0.25 m grid (cell covered iff any tri overlaps it, 2D SAT); the skirt
+//   follows covered/uncovered cell boundaries, so concave footprints (L-courts)
+//   stay open and no wall strays more than one cell diagonal (~0.36 m) from real
+//   building geometry. Vertical quads are unwalkable to Recast regardless of
+//   winding (slope filter), and a span merged under a wall keeps the wall's
+//   unwalkable top — unlike a "solid cap" alternative, whose up-facing top would
+//   itself become a walkable roof island within agentMaxClimb reach of terrain
+//   in the worst case. Statics/scenery are never sealed (only Buildings[] are
+//   CBuildingObj with enterable interiors).
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -70,9 +95,14 @@ string ac = GetArg("--ac") ?? "/home/wbterminal/ac_base_dats";
 string? sceneryDir = GetArg("--scenery");
 string? outDir = GetArg("--out");
 string? tiled = GetArg("--tiled");
+// Building-seal is DEFAULT ON (routing must go around houses, not through open
+// doorways — see header). Pass --no-seal-buildings to restore terrain-through
+// footprints (e.g. for future indoor-entry bakes). --seal-buildings still accepted
+// as an explicit no-op for back-compat with existing scripts.
+bool sealBuildings = !args.Any(a => string.Equals(a, "--no-seal-buildings", StringComparison.OrdinalIgnoreCase));
 if (outDir == null || tiled == null)
 {
-    Console.Error.WriteLine("usage: GeomExtract --ac <dats> --scenery <dir> --out <geomdir> --tiled minX,maxX,minY,maxY (hex)");
+    Console.Error.WriteLine("usage: GeomExtract --ac <dats> --scenery <dir> --out <geomdir> --tiled minX,maxX,minY,maxY (hex) [--no-seal-buildings]");
     return 1;
 }
 var p = tiled.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -83,7 +113,7 @@ Directory.CreateDirectory(outDir);
 using var cellDb = new CellDatabase(Path.Combine(ac, "client_cell_1.dat"), DatAccessType.Read);
 using var portalDb = new PortalDatabase(Path.Combine(ac, "client_portal.dat"), DatAccessType.Read);
 
-Console.WriteLine($"GeomExtract — dats={ac} scenery={sceneryDir ?? "(none)"} out={outDir}");
+Console.WriteLine($"GeomExtract — dats={ac} scenery={sceneryDir ?? "(none)"} out={outDir}{(sealBuildings ? " [seal-buildings]" : "")}");
 Console.WriteLine($"region lbX 0x{x0:X2}..0x{x1:X2} lbY 0x{y0:X2}..0x{y1:X2} (+1 lb border for NavBake seam context)");
 
 // ── model-local triangle cache (unscaled; scale applied at placement) ─────────
@@ -167,6 +197,96 @@ void EmitPrism(List<Vector3> outv, Vector3 c, float r, float h, Vector3 origin, 
     }
 }
 
+// ── --seal-buildings: footprint wall skirt (see header block for rationale) ──
+const float SealGrid = 0.25f;   // footprint raster resolution (m); bake cellSize is 0.5
+const float SealBelow = 1.0f;   // skirt extends below building zmin (bury into terrain)
+const float SealAbove = 4.0f;   // ... and above (>= agentHeight 2.0 + terrain-slope slack)
+
+// 2D separating-axis triangle-vs-cell test (XY projection). Degenerate
+// projections (vertical walls -> segments) still resolve correctly: SAT with
+// the two distinct edge normals is exactly the segment-vs-box test.
+static bool TriBoxOverlap2D(Vector3 a, Vector3 b, Vector3 c, float x0, float y0, float x1, float y1)
+{
+    float tx0 = Math.Min(a.X, Math.Min(b.X, c.X)), tx1 = Math.Max(a.X, Math.Max(b.X, c.X));
+    float ty0 = Math.Min(a.Y, Math.Min(b.Y, c.Y)), ty1 = Math.Max(a.Y, Math.Max(b.Y, c.Y));
+    if (tx1 < x0 || tx0 > x1 || ty1 < y0 || ty0 > y1) return false;   // box axes
+    Span<(float ax, float ay)> axes = stackalloc[]
+    {
+        (a.Y - b.Y, b.X - a.X), (b.Y - c.Y, c.X - b.X), (c.Y - a.Y, a.X - c.X),
+    };
+    foreach (var (ax, ay) in axes)                                    // triangle edge normals
+    {
+        float pa = ax * a.X + ay * a.Y, pb = ax * b.X + ay * b.Y, pc = ax * c.X + ay * c.Y;
+        float tmin = Math.Min(pa, Math.Min(pb, pc)), tmax = Math.Max(pa, Math.Max(pb, pc));
+        float b00 = ax * x0 + ay * y0, b01 = ax * x0 + ay * y1, b10 = ax * x1 + ay * y0, b11 = ax * x1 + ay * y1;
+        if (tmax < Math.Min(Math.Min(b00, b01), Math.Min(b10, b11)) ||
+            tmin > Math.Max(Math.Max(b00, b01), Math.Max(b10, b11))) return false;
+    }
+    return true;
+}
+
+// Vertical wall skirt along the rasterized-footprint boundary of one placed
+// building. Returns a flat vertex list (2 tris per merged boundary run).
+List<Vector3> SealSkirt(List<Vector3> verts, out int segments)
+{
+    segments = 0;
+    var outv = new List<Vector3>();
+    float minx = float.MaxValue, maxx = float.MinValue, miny = float.MaxValue, maxy = float.MinValue, minz = float.MaxValue;
+    foreach (var v in verts)
+    {
+        minx = Math.Min(minx, v.X); maxx = Math.Max(maxx, v.X);
+        miny = Math.Min(miny, v.Y); maxy = Math.Max(maxy, v.Y);
+        minz = Math.Min(minz, v.Z);
+    }
+    if (minx > maxx) return outv;
+    // grid padded by one empty ring so the footprint boundary is always interior
+    int nx = (int)Math.Ceiling((maxx - minx) / SealGrid) + 3;
+    int ny = (int)Math.Ceiling((maxy - miny) / SealGrid) + 3;
+    float ox = minx - SealGrid, oy = miny - SealGrid;
+    var cov = new bool[nx, ny];
+    for (int t = 0; t + 2 < verts.Count; t += 3)
+    {
+        Vector3 a = verts[t], b = verts[t + 1], c = verts[t + 2];
+        float tx0 = Math.Min(a.X, Math.Min(b.X, c.X)), tx1 = Math.Max(a.X, Math.Max(b.X, c.X));
+        float ty0 = Math.Min(a.Y, Math.Min(b.Y, c.Y)), ty1 = Math.Max(a.Y, Math.Max(b.Y, c.Y));
+        int i0 = Math.Max(0, (int)((tx0 - ox) / SealGrid)), i1 = Math.Min(nx - 1, (int)((tx1 - ox) / SealGrid));
+        int j0 = Math.Max(0, (int)((ty0 - oy) / SealGrid)), j1 = Math.Min(ny - 1, (int)((ty1 - oy) / SealGrid));
+        for (int i = i0; i <= i1; i++)
+            for (int j = j0; j <= j1; j++)
+                if (!cov[i, j] && TriBoxOverlap2D(a, b, c,
+                        ox + i * SealGrid, oy + j * SealGrid, ox + (i + 1) * SealGrid, oy + (j + 1) * SealGrid))
+                    cov[i, j] = true;
+    }
+    float zb = minz - SealBelow, zt = minz + SealAbove;
+    int runs = 0;
+    void Wall(float x0, float y0, float x1, float y1)
+    {
+        outv.Add(new Vector3(x0, y0, zb)); outv.Add(new Vector3(x1, y1, zb)); outv.Add(new Vector3(x1, y1, zt));
+        outv.Add(new Vector3(x0, y0, zb)); outv.Add(new Vector3(x1, y1, zt)); outv.Add(new Vector3(x0, y0, zt));
+        runs++;
+    }
+    // covered/uncovered cell boundaries, merged into maximal runs. A wall blocks
+    // identically from both sides, so runs may merge across side flips.
+    for (int i = 1; i < nx; i++)        // wall planes at x = ox + i*grid
+        for (int j = 0; j < ny;)
+        {
+            if (cov[i - 1, j] == cov[i, j]) { j++; continue; }
+            int j0 = j;
+            while (j < ny && cov[i - 1, j] != cov[i, j]) j++;
+            Wall(ox + i * SealGrid, oy + j0 * SealGrid, ox + i * SealGrid, oy + j * SealGrid);
+        }
+    for (int j = 1; j < ny; j++)        // wall planes at y = oy + j*grid
+        for (int i = 0; i < nx;)
+        {
+            if (cov[i, j - 1] == cov[i, j]) { i++; continue; }
+            int i0 = i;
+            while (i < nx && cov[i, j - 1] != cov[i, j]) i++;
+            Wall(ox + i0 * SealGrid, oy + j * SealGrid, ox + i * SealGrid, oy + j * SealGrid);
+        }
+    segments = runs;
+    return outv;
+}
+
 // Resolve one placed model to landblock-local triangles (flat vertex list).
 List<Vector3> PlaceModel(uint did, Vector3 origin, Quaternion q, float scale)
 {
@@ -233,8 +353,8 @@ List<Vector3> PlaceModel(uint did, Vector3 origin, Quaternion q, float scale)
 
 // ── per-landblock extraction ─────────────────────────────────────────────────
 var json = new JsonSerializerOptions(); // default: shortest round-trip floats
-int lbCount = 0, totalObjects = 0, totalBuildings = 0, totalScenery = 0;
-long totalTris = 0;
+int lbCount = 0, totalObjects = 0, totalBuildings = 0, totalScenery = 0, totalSeals = 0;
+long totalTris = 0, totalSealTris = 0;
 
 void WriteEntry(StreamWriter w, string src, uint did, List<Vector3> verts, ref long triAccum)
 {
@@ -278,6 +398,15 @@ for (int x = Math.Max(0, x0 - 1); x <= Math.Min(255, x1 + 1); x++)
                 var verts = PlaceModel(bld.ModelId, bld.Frame.Origin, bld.Frame.Orientation, 1.0f);
                 WriteEntry(w, "building", bld.ModelId, verts, ref nTri);
                 nBld++;
+                // Nav-seal skirt rides directly after its building line (GeomCheck
+                // SEAL pairs them by adjacency; duplicate ModelIds per LB exist).
+                if (sealBuildings && verts.Count > 0)
+                {
+                    var skirt = SealSkirt(verts, out int segs);
+                    WriteEntry(w, "seal", bld.ModelId, skirt, ref nTri);
+                    totalSeals++; totalSealTris += skirt.Count / 3;
+                    Console.WriteLine($"  seal 0x{lb:X4}/0x{bld.ModelId:X8}: {skirt.Count / 3} wall tris in {segs} boundary runs");
+                }
             }
         }
 
@@ -319,5 +448,7 @@ for (int x = Math.Max(0, x0 - 1); x <= Math.Min(255, x1 + 1); x++)
 
 Console.WriteLine($"DONE: {lbCount} landblocks -> {outDir}");
 Console.WriteLine($"totals: statics={totalObjects} buildings={totalBuildings} scenery={totalScenery} tris={totalTris}");
+if (sealBuildings)
+    Console.WriteLine($"seal-buildings: {totalSeals} buildings sealed, {totalSealTris} wall tris (routing-only; re-extract without --seal-buildings to reopen doorways)");
 Console.WriteLine($"gfxobjs without physics polys (non-collidable, skipped): {gfxNoPhysics}; model DID lookup misses: {modelMisses}");
 return 0;

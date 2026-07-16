@@ -10,6 +10,18 @@
 // CRITICAL invariant carried over (:188,:237,:600): construct a NEW DtNavMeshQuery
 // after ANY tile add/remove.
 //
+// Tile budget (env, read once at construction; laptop follow-up: promote to CLI flags):
+//   RYNTHNAV_MAX_TILES       — DtNavMeshParams.maxTiles ceiling (default 1024, min 2).
+//   RYNTHNAV_TILE_HIGH_WATER — LRU eviction high-water mark (default maxTiles-64,
+//                              clamped to [1, maxTiles-1]). After each corridor load,
+//                              least-recently-used tiles OUTSIDE the current request's
+//                              corridor bounding box are evicted until the count is at
+//                              or below this mark (mirrors upstream RynthNavPlugin's
+//                              evict-far/keep-radius intent). Current-corridor tiles are
+//                              never evicted; if they alone exceed the mark, the count
+//                              stays above it (graceful, same straight-leg fallback as a
+//                              missing tile once the hard ceiling bites).
+//
 // Composition: PortalRoute.Plan gives coarse RouteSteps in /loc degrees; between
 // consecutive walk points we run the Detour corridor query for fine waypoints and
 // convert every waypoint world -> (lb, x, y, z) legs. Segments with no tile
@@ -47,28 +59,48 @@ public sealed class RouteOutcome
 public sealed class DetourRouter
 {
     public const int VertsPerPoly = 6;          // RynthNavPlugin.cs:31 / NavBake.cs:23
-    private const int MaxTiles = 256;           // RynthNavPlugin.cs:34 — raise if served region exceeds 256 tiles
+    private const int DefaultMaxTiles = 1024;   // RynthNavPlugin.cs:34 had 256; env RYNTHNAV_MAX_TILES overrides
     private const int MaxCorridorTiles = 220;   // RynthNavPlugin.cs:35
     private const double MaxStrideM = 40.0;     // executor progress-watchdog contract
     private const double TerminalGapM = 15.0;   // string-pull endpoint farther than this from target => straight tail
 
     private readonly string _navDir;
+    private readonly int _maxTiles;             // RYNTHNAV_MAX_TILES (see header)
+    private readonly int _highWater;            // RYNTHNAV_TILE_HIGH_WATER (see header)
     private readonly List<PortalLink> _portals = new();
     private readonly object _gate = new();      // Kestrel is concurrent; navmesh state is not
 
     // Navmesh state — mutate only under _gate.
+    private sealed class TileEntry { public long Ref; public long LastUsed; }
     private DtNavMesh? _navMesh;
     private DtNavMeshQuery? _query;
-    private readonly HashSet<uint> _loadedTiles = new();
+    private readonly Dictionary<uint, TileEntry> _loadedTiles = new();
+    private long _useSeq;                                    // monotonic LRU clock
+    private int _corMinX, _corMaxX = -1, _corMinY, _corMaxY = -1; // current request's corridor bbox (lb coords, incl. +1 margin)
 
     public int PortalCount => _portals.Count;
     public int LoadedTileCount { get { lock (_gate) return _loadedTiles.Count; } }
+    public int MaxTilesConfigured => _maxTiles;
+    public int TileHighWater => _highWater;
+
+    /// <summary>Loaded tile lbs ordered least-recently-used first (diagnostic/test hook).</summary>
+    public List<uint> LoadedTilesLruFirst()
+    {
+        lock (_gate) return _loadedTiles.OrderBy(kv => kv.Value.LastUsed).Select(kv => kv.Key).ToList();
+    }
 
     public DetourRouter(string navDir, string portalsTsv)
     {
         _navDir = navDir;
+        _maxTiles = Math.Max(2, ReadEnvInt("RYNTHNAV_MAX_TILES", DefaultMaxTiles));
+        _highWater = Math.Clamp(ReadEnvInt("RYNTHNAV_TILE_HIGH_WATER", _maxTiles - 64), 1, _maxTiles - 1);
         LoadPortals(portalsTsv);
     }
+
+    /// <summary>Positive-integer env override; unset/garbage/non-positive => fallback.</summary>
+    private static int ReadEnvInt(string name, int fallback)
+        => int.TryParse(Environment.GetEnvironmentVariable(name), NumberStyles.Integer, CultureInfo.InvariantCulture, out int v) && v > 0
+            ? v : fallback;
 
     public int AvailableTileCount()
     {
@@ -125,7 +157,7 @@ public sealed class DetourRouter
     {
         if (_navMesh != null) return;
         var nav = new DtNavMesh();
-        var p = new DtNavMeshParams { orig = new RcVec3f(0, 0, 0), tileWidth = 192f, tileHeight = 192f, maxTiles = MaxTiles, maxPolys = 1 << 16 };
+        var p = new DtNavMeshParams { orig = new RcVec3f(0, 0, 0), tileWidth = 192f, tileHeight = 192f, maxTiles = _maxTiles, maxPolys = 1 << 16 };
         nav.Init(ref p, VertsPerPoly);
         _navMesh = nav;
         _query = new DtNavMeshQuery(nav);
@@ -133,30 +165,63 @@ public sealed class DetourRouter
 
     private bool EnsureTile(uint lb)
     {
-        if (_loadedTiles.Contains(lb)) return true;
-        if (_loadedTiles.Count >= MaxTiles - 1) return false;
+        if (_loadedTiles.TryGetValue(lb, out var have)) { have.LastUsed = ++_useSeq; return true; }
         string path = Path.Combine(_navDir, $"nav_{lb:X4}.tile");
         if (!File.Exists(path)) return false;
+        // Hard ceiling: make room by evicting the LRU tile outside the current corridor.
+        // If every loaded tile is corridor-protected, degrade exactly like a missing
+        // tile (caller falls back to straight legs) instead of thrashing the corridor.
+        if (_loadedTiles.Count >= _maxTiles - 1 && !TryEvictLruOutsideCorridor()) return false;
         try
         {
             DtMeshData md;
             using (var fr = File.OpenRead(path)) using (var br = new BinaryReader(fr)) md = new DtMeshDataReader().Read(br, VertsPerPoly);
             EnsureNavMesh();
-            _navMesh!.AddTile(md, 0, 0, out _);
-            _loadedTiles.Add(lb);
+            if (!_navMesh!.AddTile(md, 0, 0, out long tileRef).Succeeded()) return false;
+            _loadedTiles[lb] = new TileEntry { Ref = tileRef, LastUsed = ++_useSeq };
             return true;
         }
         catch { return false; }
     }
 
-    /// <summary>Load every tile in the bounding box between two world points (+1 lb margin), then rebuild the query.</summary>
+    /// <summary>lb inside the current request's corridor bbox (eviction-protected)?</summary>
+    private bool InCorridor(uint lb)
+    {
+        int x = (int)((lb >> 8) & 0xFF), y = (int)(lb & 0xFF);
+        return x >= _corMinX && x <= _corMaxX && y >= _corMinY && y <= _corMaxY;
+    }
+
+    /// <summary>Evict the least-recently-used tile outside the current corridor bbox.
+    /// Callers run only inside LoadCorridor, whose trailing query rebuild covers the removal.</summary>
+    private bool TryEvictLruOutsideCorridor()
+    {
+        uint victim = 0;
+        TileEntry? oldest = null;
+        foreach (var kv in _loadedTiles)
+        {
+            if (InCorridor(kv.Key)) continue;
+            if (oldest == null || kv.Value.LastUsed < oldest.LastUsed) { victim = kv.Key; oldest = kv.Value; }
+        }
+        if (oldest == null) return false;
+        _navMesh!.RemoveTile(oldest.Ref);
+        _loadedTiles.Remove(victim);
+        return true;
+    }
+
+    /// <summary>Load every tile in the bounding box between two world points (+1 lb margin),
+    /// LRU-evict past the high-water mark, then rebuild the query.</summary>
     private void LoadCorridor(WorldPt a, WorldPt b)
     {
         EnsureNavMesh();
-        int aX = (int)(a.Wx / 192.0), aY = (int)(a.Wy / 192.0);
-        int bX = (int)(b.Wx / 192.0), bY = (int)(b.Wy / 192.0);
+        // Clamp to the [0,255] landblock grid at the double level BEFORE the int
+        // cast: an out-of-map goal (e.g. a 1e12-metre deg coord) otherwise
+        // overflows the cast and blows minX..maxX out to billions, spinning this
+        // loop for tens of minutes while /health stays green (batch-2 finding).
+        int aX = (int)Math.Clamp(a.Wx / 192.0, 0, 255), aY = (int)Math.Clamp(a.Wy / 192.0, 0, 255);
+        int bX = (int)Math.Clamp(b.Wx / 192.0, 0, 255), bY = (int)Math.Clamp(b.Wy / 192.0, 0, 255);
         int minX = Math.Min(aX, bX) - 1, maxX = Math.Max(aX, bX) + 1;
         int minY = Math.Min(aY, bY) - 1, maxY = Math.Max(aY, bY) + 1;
+        _corMinX = minX; _corMaxX = maxX; _corMinY = minY; _corMaxY = maxY; // eviction protection
         int count = 0;
         for (int x = minX; x <= maxX && count < MaxCorridorTiles; x++)
             for (int y = minY; y <= maxY && count < MaxCorridorTiles; y++)
@@ -164,6 +229,8 @@ public sealed class DetourRouter
                 if (x < 0 || x > 255 || y < 0 || y > 255) continue;
                 if (EnsureTile((uint)((x << 8) | y))) count++;
             }
+        // High-water LRU sweep: shed tiles from previous corridors, never the current one.
+        while (_loadedTiles.Count > _highWater && TryEvictLruOutsideCorridor()) { }
         // CRITICAL: new query after any tile add/remove (RynthNavPlugin.cs:188,:237,:600).
         _query = new DtNavMeshQuery(_navMesh!);
     }

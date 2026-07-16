@@ -24,7 +24,33 @@ const SNAP_STALE_MS = 8000; // snapshot older than this = the tick died
 const RELOGIN_BACKOFF_MS = 20_000; // ACE session reap window
 const BOOT_ATTEMPTS = 4;
 
+// ── OPT-IN sidecar health watch (env RYNTH_SIDECAR_URL; default unset=off) ──
+// When set (e.g. http://127.0.0.1:8767), the fleet loop ALSO polls
+// <url>/health each cycle and logs LOUDLY on down/up transitions (plus a
+// periodic reminder while down). Deliberately observe-only: the supervisor
+// NEVER spawns the sidecar — process lifecycle belongs to
+// scripts/rynthnav-sidecar-boot.sh (cron @reboot; see the sidecar README's
+// Lifecycle section). Keeping the concerns separate means a supervisor
+// crash/restart can never double-start the sidecar, and a sidecar restart
+// never recycles healthy bot pages.
+const SIDECAR_HEALTH_TIMEOUT_MS = 3000;
+const SIDECAR_DOWN_REMIND_CYCLES = 6; // re-log while down every ~30s (6x5s cycles)
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function sidecarHealth(url) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), SIDECAR_HEALTH_TIMEOUT_MS);
+  try {
+    const r = await fetch(`${url}/health`, { signal: ctl.signal });
+    const j = await r.json();
+    return { up: !!j && j.ok === true, detail: JSON.stringify(j) };
+  } catch (e) {
+    return { up: false, detail: String((e && e.message) || e) };
+  } finally {
+    clearTimeout(t);
+  }
+}
 
 function bootUrl(cfg) {
   const q = new URLSearchParams({
@@ -107,6 +133,11 @@ async function health(page) {
 async function runFleet(configs, opts = {}) {
   const log = opts.log || ((m) => console.log(`[sup] ${new Date().toISOString()} ${m}`));
   const runMs = opts.runMs || 0; // 0 = forever
+  // Opt-in sidecar watch: read at runFleet time (not module load) so callers
+  // and tests can set the env/opt right before invoking.
+  const sidecarUrl = String(opts.sidecarUrl || process.env.RYNTH_SIDECAR_URL || "").replace(/\/+$/, "");
+  const sidecar = { up: null, downCycles: 0 }; // up:null = never checked yet
+  if (sidecarUrl) log(`sidecar watch ON: ${sidecarUrl}/health (observe-only; boot script owns lifecycle)`);
   const browser = await chromium.launch({ headless: true, args: ["--no-sandbox", "--disable-gpu"] });
   const bots = configs.map((cfg) => ({ cfg, page: null, rebuilds: 0 }));
 
@@ -116,6 +147,20 @@ async function runFleet(configs, opts = {}) {
   const stats = {};
   while (runMs === 0 || Date.now() - started < runMs) {
     await sleep(HEALTH_INTERVAL_MS);
+    if (sidecarUrl) {
+      const s = await sidecarHealth(sidecarUrl);
+      if (s.up) {
+        if (sidecar.up !== true) log(`sidecar ${sidecarUrl}: HEALTHY ${s.detail}${sidecar.up === false ? " — RECOVERED" : ""}`);
+        sidecar.downCycles = 0;
+      } else {
+        // Loud on the transition, then a reminder every ~30s while down.
+        if (sidecar.up !== false || sidecar.downCycles % SIDECAR_DOWN_REMIND_CYCLES === 0) {
+          log(`sidecar ${sidecarUrl}: *** DOWN *** (${s.detail}) — global routes will fail; restart via scripts/rynthnav-sidecar-boot.sh (supervisor never auto-spawns it)`);
+        }
+        sidecar.downCycles = sidecar.up === false ? sidecar.downCycles + 1 : 1;
+      }
+      sidecar.up = s.up;
+    }
     for (const b of bots) {
       if (!b.page) { b.page = await bootBot(browser, b.cfg, log); continue; }
       const h = await health(b.page);
@@ -136,7 +181,7 @@ async function runFleet(configs, opts = {}) {
   return { browser, bots, summary };
 }
 
-module.exports = { runFleet, bootBot, installBot, health };
+module.exports = { runFleet, bootBot, installBot, health, sidecarHealth };
 
 if (require.main === module) {
   const configs = JSON.parse(process.argv[2] || "[]");

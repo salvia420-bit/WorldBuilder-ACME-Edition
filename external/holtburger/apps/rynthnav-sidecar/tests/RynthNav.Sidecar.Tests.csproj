@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RynthNav.Sidecar.Tests</RootNamespace>
+    <AssemblyName>RynthNav.Sidecar.Tests</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Plain assert-runner (no xunit dep — must build offline on the buildbox). -->
+    <ProjectReference Include="..\RynthNav.Sidecar.csproj" />
+  </ItemGroup>
+
+</Project>
