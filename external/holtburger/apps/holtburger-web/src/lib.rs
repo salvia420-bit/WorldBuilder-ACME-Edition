@@ -28682,6 +28682,17 @@ pub struct SessionHandle {
     /// after 12 s mirroring the JS `_castBusyUntilMs` cap. RynthCoreHost
     /// parity: `GetCastBusyState` / `CanCastNow`.
     rynth_cast: std::rc::Rc<std::cell::RefCell<(bool, Option<web_time::Instant>)>>,
+    /// rynth Phase 2: per-object identify-apply stamps (wall-clock epoch
+    /// ms, the JS `Date.now()` domain), written by the recv loop at the
+    /// SUCCESS appraisal-snapshot site only (a refused identify stamps
+    /// nothing). Backs `hasAppraisalData` + `getLastIdTime` (RynthCoreHost
+    /// parity) — the loot loop's "is my ID data fresh?" gate.
+    rynth_id_times: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, f64>>>,
+    /// rynth Phase 2: GUID of the most recent ViewContents container
+    /// (chest/corpse/etc. — the vendor path is separate). `0` until the
+    /// first container opens. RynthCoreHost parity: `GetGroundContainerId`
+    /// (the loot loop hard-returns without it, report 03 Tier 4).
+    rynth_ground_container: std::rc::Rc<std::cell::RefCell<u32>>,
     /// PR-SS 2026-05-23: timestamp of the most-recent
     /// `SessionEvent::Message` from the WS transport — the freshest
     /// server packet of any kind. JS polls `sessionLastRecvAgeMs()`
@@ -30532,6 +30543,32 @@ impl SessionHandle {
             Some(since) if since.elapsed().as_secs_f32() > 12.0 => 0,
             _ => 1,
         }
+    }
+
+    /// True when a SUCCESSFUL identify (appraisal) has been applied for
+    /// this object this session. A refused identify does not count.
+    /// RynthCoreHost parity: `HasAppraisalData`.
+    #[wasm_bindgen(js_name = hasAppraisalData)]
+    pub fn has_appraisal_data(&self, guid: u32) -> bool {
+        self.rynth_id_times.borrow().contains_key(&guid)
+    }
+
+    /// Wall-clock epoch ms (the JS `Date.now()` domain) of the last
+    /// successful identify-apply for this object; `0` = never identified
+    /// this session. Compare against `Date.now()` for staleness — the
+    /// loot loop's re-ID gate. RynthCoreHost parity: `GetLastIdTime`.
+    #[wasm_bindgen(js_name = getLastIdTime)]
+    pub fn get_last_id_time(&self, guid: u32) -> f64 {
+        self.rynth_id_times.borrow().get(&guid).copied().unwrap_or(0.0)
+    }
+
+    /// GUID of the most recently opened ground container (ViewContents —
+    /// chests, corpses, salvage bags; vendors excluded). `0` until the
+    /// first open. Pair with `get_container_contents(guid)` for the item
+    /// list. RynthCoreHost parity: `GetGroundContainerId`.
+    #[wasm_bindgen(js_name = groundContainerId)]
+    pub fn ground_container_id(&self) -> u32 {
+        *self.rynth_ground_container.borrow()
     }
 
     /// PR-JJ 2026-05-23: the local player's active enchantments — full
@@ -35074,6 +35111,10 @@ pub async fn start_session(
         std::rc::Rc::new(std::cell::RefCell::new((0, None)));
     let rynth_cast: std::rc::Rc<std::cell::RefCell<(bool, Option<web_time::Instant>)>> =
         std::rc::Rc::new(std::cell::RefCell::new((false, None)));
+    let rynth_id_times: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, f64>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    let rynth_ground_container: std::rc::Rc<std::cell::RefCell<u32>> =
+        std::rc::Rc::new(std::cell::RefCell::new(0));
     // PR-SS 2026-05-23: timestamp of last server packet. Recv loop
     // writes on every SessionEvent::Message; JS-side link-status
     // indicator polls `sessionLastRecvAgeMs()` to tint the icon.
@@ -35152,6 +35193,8 @@ pub async fn start_session(
         let local_player_pursuit_status_inner = local_player_pursuit_status.clone();
         let rynth_use_done_seq_inner = rynth_use_done_seq.clone();
         let rynth_busy_inner = rynth_busy.clone();
+        let rynth_id_times_inner = rynth_id_times.clone();
+        let rynth_ground_container_inner = rynth_ground_container.clone();
         let last_recv_instant_inner = last_recv_instant.clone();
         let last_ping_rtt_ms_inner = last_ping_rtt_ms.clone();
         let collision_scene_inner = collision_scene.clone();
@@ -35209,6 +35252,8 @@ pub async fn start_session(
                 local_player_pursuit_status_inner,
                 rynth_use_done_seq_inner,
                 rynth_busy_inner,
+                rynth_id_times_inner,
+                rynth_ground_container_inner,
                 last_recv_instant_inner,
                 last_ping_rtt_ms_inner,
                 collision_scene_inner,
@@ -35321,6 +35366,8 @@ pub async fn start_session(
         rynth_use_done_seq,
         rynth_busy,
         rynth_cast,
+        rynth_id_times,
+        rynth_ground_container,
         last_recv_instant,
         last_ping_rtt_ms,
         last_client_prediction,
@@ -37298,6 +37345,9 @@ async fn recv_loop(
     // rynth Phase 2: UseDone seq + shadow busy (see SessionHandle fields).
     rynth_use_done_seq: std::rc::Rc<std::cell::RefCell<u32>>,
     rynth_busy: std::rc::Rc<std::cell::RefCell<(u32, Option<web_time::Instant>)>>,
+    // rynth Phase 2: identify stamps + ground container (see SessionHandle).
+    rynth_id_times: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, f64>>>,
+    rynth_ground_container: std::rc::Rc<std::cell::RefCell<u32>>,
     last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>>,
     last_ping_rtt_ms: std::rc::Rc<std::cell::RefCell<Option<u32>>>,
     collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
@@ -38572,6 +38622,15 @@ async fn recv_loop(
                                     latest_appraisals
                                         .borrow_mut()
                                         .insert(u32::from(entity_guid), appraisal_json);
+                                    // rynth Phase 2: stamp the identify-apply
+                                    // time (epoch ms) — SUCCESS site only.
+                                    rynth_id_times.borrow_mut().insert(
+                                        u32::from(entity_guid),
+                                        web_time::SystemTime::now()
+                                            .duration_since(web_time::UNIX_EPOCH)
+                                            .map(|d| d.as_millis() as f64)
+                                            .unwrap_or(0.0),
+                                    );
                                     // ACPlugin PR-2 (2026-05-27): emit
                                     // kind=32 ObjectAppraised. The
                                     // existing kind=3 META_REFRESH
@@ -42819,6 +42878,10 @@ async fn recv_loop(
                                     latest_container_contents
                                         .borrow_mut()
                                         .insert(container_guid_u32, item_guids);
+                                    // rynth Phase 2: last-opened ground
+                                    // container (GetGroundContainerId).
+                                    *rynth_ground_container.borrow_mut() =
+                                        container_guid_u32;
                                     queued_events.borrow_mut().push(ClientEvent {
                                         kind: CLIENT_EVENT_KIND_CONTAINER_OPENED,
                                         string_payload: Some(container_name),

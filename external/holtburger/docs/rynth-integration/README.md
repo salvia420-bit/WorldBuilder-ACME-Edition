@@ -50,8 +50,14 @@ compile spike; everything below is fork-independent.
   defeats it. `rynth_boot_helper.cjs` wraps boot in reload-retry; all rynth smokes use
   it. Also: teleporting to dense Holtburg under dev-wasm + headless crashed the tab —
   keep smoke tests at spawn or use release wasm for town-scale tests.
-- [ ] `groundContainerId`, `objectWielderInfo`/`ownershipInfo` composites (14 #11/#15),
-  appraisal-time stamps `hasAppraisalData`/`getLastIdTime` (14 #7).
+- [x] **2026-07-16 — loot-loop reads landed** (14 #7/#15): `hasAppraisalData(guid)` +
+  `getLastIdTime(guid)` (identify-apply stamps, epoch-ms `Date.now()` domain, SUCCESS
+  site only — refused identifies don't count) and `groundContainerId()` (last
+  ViewContents container; vendors excluded; pair with `get_container_contents`).
+  Ownership/wielder composites (14 #11) are deliberately NOT dedicated getters —
+  compose from `objectInstanceIdProperty(g, 2=Container / 3=Wielder)` +
+  `objectIntProperty(g, 10=CurrentWieldedLocation)` in the WebHost shim.
+  **The report-14 S-effort read backlog is now fully landed.**
 - [x] **2026-07-16 — `moveToPosition(landblockId, x, y, z, run)`** — the nav keystone
   (report 09) landed. Even cheaper than scouted: `MovementStruct::MoveToPosition`
   (retail type 7) and its `perform_movement` dispatch already existed
