@@ -21,9 +21,12 @@
 //   B5  incantation tier-cap: cap the target at the highest tier OBSERVED
 //       landing for the family (skill-capped incantations don't recast
 //       forever chasing their nominal tier).
-// Omitted for now (documented, not forgotten): B7 item enchants (chat
-// confirmation), B10-B12 batch semantics (B15/B16 vital policy lives in
-// vitals.js).
+//   B10 hard-reject cooldown: a family that can't land is parked 120s and
+//       the batch respects it. B11 auto batch-rebuff: any buff below
+//       threshold recasts ALL buffs in one pass (aligned timers). B12 force
+//       rebuff ignores live timers (recast everything to a common start).
+// Omitted (documented): B7 item enchants (chat confirmation). B15/B16 vital
+// policy lives in vitals.js.
 
 // Lazy-loaded family tier ladder (id -> [category, tier], self-beneficial
 // buffs, baked from the spell DAT). Shared across all buff-loop instances.
@@ -86,6 +89,11 @@ export class RynthBuffLoop {
     this.parkedUntil = new Map(); // spellId -> ts
     this.lastCastAt = 0;
     this.allActiveSince = 0;
+    // B10-B12 batch rebuff state.
+    this.batchRebuff = opts.batchRebuff !== false; // on by default
+    this._forceRebuffing = false; // B11 — recast everything this pass
+    this._forceRebuffCast = new Set(); // B12 — families recast this cycle
+    this._rejectParkedUntil = new Map(); // family -> ts (B10, 120s)
     this._running = false;
   }
 
@@ -240,9 +248,14 @@ export class RynthBuffLoop {
     return reg;
   }
 
-  _isActive(spellId) {
-    // B3: active while remaining > threshold. Family-keyed when the
-    // family is known (a landed cast teaches it); spell-id fallback.
+  _familyForSpell(spellId) {
+    if (this.spellFamily.has(spellId)) return this.spellFamily.get(spellId);
+    const meta = this._spellMeta(spellId);
+    return meta ? meta.category : undefined;
+  }
+
+  // B3 real-timer test (ignores the force-rebuff view).
+  _isActiveReal(spellId) {
     const family = this.spellFamily.get(spellId);
     if (family !== undefined) {
       const entry = this.families.get(family);
@@ -254,6 +267,23 @@ export class RynthBuffLoop {
       }
     }
     return false;
+  }
+
+  _isActive(spellId) {
+    // B12: during a force-rebuff pass, a buff counts "active" ONLY if its
+    // family was already recast THIS cycle — live timers are ignored so the
+    // whole set recasts to a common start (aligned timers).
+    if (this._forceRebuffing) {
+      const fam = this._familyForSpell(spellId);
+      return fam !== undefined && this._forceRebuffCast.has(fam);
+    }
+    return this._isActiveReal(spellId);
+  }
+
+  // B11 — any desired buff below threshold (real timers) means the set has
+  // drifted; recast everything so the timers realign.
+  _anyBelowThreshold() {
+    return this.desired.some((id) => !this._isActiveReal(id));
   }
 
   get status() {
@@ -308,8 +338,12 @@ export class RynthBuffLoop {
       const age = now - this.pending.issuedAt;
       if (age < SELF_BUFF_CONFIRM_MS) return;
       this._refresh();
-      if (this._isActive(this.pending.spellId)) {
+      if (this._isActiveReal(this.pending.spellId)) {
         this.noShows.delete(this.pending.spellId);
+        // B12 — mark the family recast this cycle so the force-rebuff pass
+        // stops re-selecting it.
+        const fam = this._familyForSpell(this.pending.spellId);
+        if (fam !== undefined) this._forceRebuffCast.add(fam);
         this.log(`confirmed ${this.pending.spellId}`);
         this.pending = null;
       } else if (age > SELF_BUFF_GIVE_UP_MS) {
@@ -319,6 +353,13 @@ export class RynthBuffLoop {
         this.log(`no-show ${this.pending.spellId} (${n}/${SILENT_NO_SHOW_THRESHOLD})`);
         if (n >= SILENT_NO_SHOW_THRESHOLD) {
           this.parkedUntil.set(this.pending.spellId, now + this.noShowCooldownMs);
+          // B10/B12 — also park the FAMILY and mark it "done this cycle" so
+          // a can't-land buff doesn't respin the whole batch forever.
+          const fam = this._familyForSpell(this.pending.spellId);
+          if (fam !== undefined) {
+            this._rejectParkedUntil.set(fam, now + 120_000);
+            this._forceRebuffCast.add(fam);
+          }
           this.log(`parked ${this.pending.spellId}`);
         }
         this.pending = null;
@@ -344,16 +385,35 @@ export class RynthBuffLoop {
     if (h.GetCastBusyState() !== 0) return;
     if (h.GetBusyState() !== 0) return;
 
+    // B11 — start a force-rebuff pass when any buff drops below threshold, so
+    // the whole set recasts to a common start (aligned timers) instead of a
+    // staggered one-buff-every-few-minutes drip.
+    if (this.batchRebuff && !this._forceRebuffing && this._anyBelowThreshold()) {
+      this._forceRebuffing = true;
+      this._forceRebuffCast = new Set();
+      this.allActiveSince = 0;
+      this.log("batch rebuff: recasting all buffs to align timers");
+    }
+
     // Next needed buff.
     for (const spellId of this.desired) {
-      const parked = this.parkedUntil.get(spellId);
-      if (parked && now < parked) continue;
-      if (parked) this.parkedUntil.delete(spellId);
+      const spellParked = this.parkedUntil.get(spellId);
+      if (spellParked && now < spellParked) continue;
+      if (spellParked) this.parkedUntil.delete(spellId);
+      // B10 — respect family-level reject parks during the batch.
+      const fam = this._familyForSpell(spellId);
+      if (fam !== undefined && (this._rejectParkedUntil.get(fam) ?? 0) > now) continue;
       if (this._isActive(spellId)) continue;
       h.CastSpell(0, spellId); // untargeted = self
       this.lastCastAt = now;
       this.pending = { spellId, issuedAt: now };
       return;
+    }
+    // Nothing left to cast this pass.
+    if (this._forceRebuffing) {
+      // B11 complete — every family got its one recast; back to timer mode.
+      this._forceRebuffing = false;
+      this.log("batch rebuff complete");
     }
     if (!this.allActiveSince) {
       this.allActiveSince = now;
