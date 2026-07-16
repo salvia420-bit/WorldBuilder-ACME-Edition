@@ -35,8 +35,15 @@
 //       partQ = objQ * placementQ_i
 //       partO = objO + objQ * (placementO_i * objScale)
 //       vertex = partO + partQ * (v * (DefaultScale_i * objScale))
-//     using PlacementFrames[Placement.Default(0)] (fallback: first entry;
-//     no entries: identity frames). ParentIndex is an animation concern only.
+//     using PlacementFrames[0x65 Placement.Resting] — retail statics, buildings
+//     and scenery are ALL placed via CPhysicsObj::InitObjectEnd ->
+//     CPartArray::SetPlacementFrame(0x65) (acclient.c:317303; buildings reach it
+//     through CBuildingObj::makeBuilding -> InitObjectEnd, acclient.c:719153),
+//     and CPartArray::SetPlacementFrame's fallback (acclient.c:326818) is key 0
+//     specifically, then identity — NEVER an arbitrary entry. 26 of 110 setups
+//     in the Holtburg region have 0x65 differing from 0 by up to 0.56 m (part
+//     displacement), so preferring 0 here shifted real obstacle footprints.
+//     ParentIndex is an animation concern only.
 //   - Setups whose parts yield ZERO physics triangles (typical scenery: trees,
 //     rocks — e.g. 0x02000246 has one CylSphere r=0.85 h=3.334 and part GfxObjs
 //     with no physics polys) fall back to the Setup's CylSpheres/Spheres
@@ -182,12 +189,14 @@ List<Vector3> PlaceModel(uint did, Vector3 origin, Quaternion q, float scale)
             var setup = GetSetup(did);
             if (setup == null) return outv;
             int n = setup.Parts.Count;
-            // Placement.Default (key 0) preferred; else first; else identity frames.
+            // Retail placement pick: 0x65 (Placement.Resting, what InitObjectEnd
+            // applies to every static/building/scenery object) -> key 0 -> identity.
             List<Frame>? frames = null;
-            if (setup.PlacementFrames.Count > 0)
+            foreach (var kv in setup.PlacementFrames)
             {
-                var af = setup.PlacementFrames.TryGetValue(0, out var def) ? def : setup.PlacementFrames.Values.First();
-                frames = af.Frames;
+                int key = Convert.ToInt32(kv.Key);
+                if (key == 0x65) { frames = kv.Value.Frames; break; }
+                if (key == 0 && frames == null) frames = kv.Value.Frames;
             }
             for (int i = 0; i < n; i++)
             {
