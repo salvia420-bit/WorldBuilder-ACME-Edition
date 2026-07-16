@@ -1,0 +1,599 @@
+// RynthIndoorRouter — dungeon cell-graph A* (report 09 §1b's "pure layer").
+//
+// Dungeon walls are NOT in the sidecar's Detour tiles (upstream bake gap,
+// report 09 §1b/§(b)), so indoor routing is the web client's job. This module
+// is a straight port of the PURE algorithm layer of RynthSuite's
+// DungeonPathfinder.cs — A* FindPath (DungeonPathfinder.cs:275), IsDropEdge
+// (:61), the 2-core patrol prune GetMainRouteNodes (:451) and the Euler
+// closed-walk patrol builder BuildPatrolRoute (:530) — WITHOUT the DAT reader:
+// on web the EnvCell portal-record graph already exists in the wasm client
+// (report 09 §1b), so BuildGraph (:115) is replaced by buildGraphFromWasm()
+// below, fed by fetchEnvCellsInLandblock (lib.rs:17415) + the EnvCellPlacement
+// getters (lib.rs:15939-15977).
+//
+// ADJACENCY = portal records, not visible-cell lists (DungeonPathfinder.cs:3-10):
+// visible-cell adjacency creates diagonal edges that cut through walls; portal
+// records are real doorways. The wasm builder already widens portal ids to full
+// 32-bit objCellIds (lib.rs:15970-15977) but does NOT filter sentinels
+// (lib.rs:17604-17607: "JS can ignore zero / sentinel values") — we filter to
+// the EnvCell low-word range [0x0100, 0xFFFD] like DungeonPathfinder.cs:163.
+//
+// GRAPH CONTRACT (caller-provided, synthetic or wasm-built):
+//   { cellId -> { pos: {x, y, z}, neighbors: [cellId, ...] } }
+//   plain object (string keys OK) or Map. pos is WORLD-frame AC metres, Z-up
+//   (wx = lbX*192 + localX — the same frame router.js's worldXY uses), because
+//   EnvCellPlacement.cellOriginX/Y are already world-frame (lib.rs:17593-17597).
+//   Neighbors may reference missing cells; they are skipped during search.
+//
+// OUTPUT CONTRACT (consumed by rynth/router.js):
+//   findPath(graph, from, to)  -> [cellId, ...] or null (unreachable)
+//   toLegs(graph, path)        -> [{lb, x, y, z}, ...] where lb is the FULL
+//   EnvCell objCellId (indoor cells ARE the objCellId) and x/y/z are
+//   landblock-local — exactly what RynthRouter.follow() / MoveToPosition eat.
+//
+// KNOWN LIMITATION (carried from Nav deep-dive J3, cited in report 09 §1b):
+// IsDropEdge prunes ALL drop/jump edges — AC needs a jump primitive to take a
+// drop and the executor has none — so drop-gated dungeon areas are unreachable
+// by design. If the only route to the goal crosses a drop, findPath is null.
+//
+// SIMPLIFICATIONS vs DungeonPathfinder.cs (deliberate, documented):
+//   - No NavRouteParser/waypoint emission (:353-431): we return cell paths;
+//     toLegs stamps cell CENTERS per the task contract. The C# 30%/50%
+//     doorway-midpoint pre-approach (:377-399) and SimplifyRoute (:404) are
+//     dropped — MoveToManager owns local steering (report 09 §(b) tier 1).
+//     If live tests snag on offset doorways, pass {midpoints:true} to toLegs.
+//   - No graph cache (:75-92) — buildGraphFromWasm is explicit; callers cache.
+//   - No NearestSafeCell hazard evacuation (:230) — that's RynthAi combat
+//     behavior, not routing. findPath still honors a hazards set (:308
+//     semantics: goal allowed even if hazardous).
+
+// Drop classification (DungeonPathfinder.cs:47-73). The C# converts /loc
+// degrees to raw units (×240, :66-67) so NS/EW share Z's scale; our graph pos
+// is already raw world metres, so the thresholds apply directly.
+const DROP_ANGLE_DEG = 45.0; // :53 — ramps 10-25°, floor-shaft drops 60-90°
+const FLAT_DZ_M = 0.5; //       :64 — |dZ| below this is trivially flat
+const SHAFT_HORIZ_M = 1.0; //   :70 — near-zero horizontal = vertical shaft
+
+// Patrol prune safety valves (DungeonPathfinder.cs:437-438): if the 2-core
+// collapses a small/linear dungeon, fall back to the full reachable set.
+const PATROL_MIN_KEEP_NODES = 8;
+const PATROL_MIN_KEEP_FRACTION = 0.2;
+
+/** True if id's low word is a real EnvCell index (DungeonPathfinder.cs:163). */
+export function isEnvCellId(id) {
+  const lo = (id >>> 0) & 0xffff;
+  return lo >= 0x0100 && lo <= 0xfffd;
+}
+
+// Normalize a caller graph (Map or plain object, string or number keys) into
+// Map<u32, node>. Dungeon graphs are tens-to-hundreds of cells; O(n) per call.
+function asMap(graph) {
+  const m = new Map();
+  if (!graph) return m;
+  const entries = graph instanceof Map ? graph.entries() : Object.entries(graph);
+  for (const [k, v] of entries) {
+    if (!v || !v.pos) continue;
+    m.set(Number(k) >>> 0, v);
+  }
+  return m;
+}
+
+/**
+ * Drop-edge classification (port of DungeonPathfinder.cs:61-73). A slope has
+ * significant horizontal movement per unit Z (angle well under 45°); a drop is
+ * near-vertical (centres almost stacked). Drops need a jump the executor
+ * doesn't have (J3), so both A* and the patrol walk skip these edges.
+ */
+export function isDropEdge(a, b) {
+  const dZ = Math.abs(b.pos.z - a.pos.z);
+  if (dZ < FLAT_DZ_M) return false;
+  const dHoriz = Math.hypot(b.pos.x - a.pos.x, b.pos.y - a.pos.y);
+  if (dHoriz < SHAFT_HORIZ_M) return true;
+  return Math.atan2(dZ, dHoriz) * (180 / Math.PI) > DROP_ANGLE_DEG;
+}
+
+/**
+ * Nearest cell to a WORLD-frame (x, y[, z]) position (DungeonPathfinder.cs:196-221).
+ * Cells within 8m in Z (same floor band) are preferred when z is given; falls
+ * back to 2D-nearest for single-level dungeons / unknown z. Returns 0 if empty.
+ */
+export function nearestCell(graph, x, y, z = NaN) {
+  const nodes = asMap(graph);
+  const Z_BAND = 8;
+  const useZ = !Number.isNaN(z);
+  let best2d = 0;
+  let best2dDist = Infinity;
+  let bestZ = 0;
+  let bestZDist = Infinity;
+  for (const [id, node] of nodes) {
+    const dx = node.pos.x - x;
+    const dy = node.pos.y - y;
+    const d = dx * dx + dy * dy;
+    if (d < best2dDist) {
+      best2dDist = d;
+      best2d = id;
+    }
+    if (useZ && Math.abs(node.pos.z - z) <= Z_BAND && d < bestZDist) {
+      bestZDist = d;
+      bestZ = id;
+    }
+  }
+  return useZ && bestZ !== 0 ? bestZ : best2d;
+}
+
+// Minimal binary min-heap keyed on f-score (replaces C# PriorityQueue, :288).
+class MinHeap {
+  constructor() {
+    this.a = [];
+  }
+  push(id, f) {
+    const a = this.a;
+    a.push({ id, f });
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (a[p].f <= a[i].f) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop() {
+    const a = this.a;
+    const top = a[0];
+    const last = a.pop();
+    if (a.length) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1;
+        const r = l + 1;
+        let s = i;
+        if (l < a.length && a[l].f < a[s].f) s = l;
+        if (r < a.length && a[r].f < a[s].f) s = r;
+        if (s === i) break;
+        [a[s], a[i]] = [a[i], a[s]];
+        i = s;
+      }
+    }
+    return top ? top.id : 0;
+  }
+  get size() {
+    return this.a.length;
+  }
+}
+
+function dist2d(a, b) {
+  return Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y);
+}
+
+/**
+ * A* over portal adjacency (port of DungeonPathfinder.cs:275-339). Skips drop
+ * edges and cells in opts.hazards (a Set of cellIds); the GOAL is allowed even
+ * if hazardous — the caller asked to go there (:307-308). Heuristic = 2D
+ * euclidean cell-centre distance (:326-330), admissible since edge cost is the
+ * same metric.
+ *
+ * DIVERGENCE from the C#: returns null when unreachable / endpoints missing
+ * (task contract) instead of the empty list (:281,:323). Same-cell trivially
+ * returns [from] (:282-283).
+ */
+export function findPath(graph, fromCell, toCell, opts = {}) {
+  const nodes = asMap(graph);
+  const from = Number(fromCell) >>> 0;
+  const to = Number(toCell) >>> 0;
+  const hazards = opts.hazards || null;
+  if (!nodes.has(from) || !nodes.has(to)) return null;
+  if (from === to) return [from];
+
+  const goalNode = nodes.get(to);
+  const gScore = new Map([[from, 0]]);
+  const cameFrom = new Map();
+  const open = new MinHeap();
+  const closed = new Set();
+  open.push(from, dist2d(nodes.get(from), goalNode));
+
+  while (open.size > 0) {
+    const current = open.pop();
+    if (closed.has(current)) continue; // lazy-delete duplicate (C# :296)
+    closed.add(current);
+    if (current === to) {
+      const path = [current];
+      let cur = current;
+      while (cameFrom.has(cur)) {
+        cur = cameFrom.get(cur);
+        path.push(cur);
+      }
+      path.reverse();
+      return path;
+    }
+    const curNode = nodes.get(current);
+    const gCur = gScore.get(current);
+    for (const nbRaw of curNode.neighbors || []) {
+      const nbId = Number(nbRaw) >>> 0;
+      if (closed.has(nbId)) continue;
+      const nbNode = nodes.get(nbId);
+      if (!nbNode) continue;
+      if (isDropEdge(curNode, nbNode)) continue;
+      if (nbId !== to && hazards && hazards.has(nbId)) continue;
+      const tentG = gCur + dist2d(curNode, nbNode);
+      if (tentG < (gScore.has(nbId) ? gScore.get(nbId) : Infinity)) {
+        cameFrom.set(nbId, current);
+        gScore.set(nbId, tentG);
+        open.push(nbId, tentG + dist2d(nbNode, goalNode));
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Convert a cell path (or patrol walk) into router.js legs. lb is the FULL
+ * EnvCell objCellId (indoor cells ARE the objCellId — router.js worldXY only
+ * uses the top two bytes for the landblock frame); x/y are converted from the
+ * graph's world frame to landblock-local (wx − lbX·192), z passes through.
+ * Positions are cell centres per the task contract.
+ *
+ * opts.midpoints (default false): additionally emit the doorway-midpoint leg
+ * between consecutive cells (stamped with the DESTINATION cell id) — the C#'s
+ * anti-corner-cut waypoint trick (DungeonPathfinder.cs:12-17, :377-399),
+ * available if live tests show MoveToManager clipping offset doorways.
+ */
+export function toLegs(graph, path, opts = {}) {
+  const nodes = asMap(graph);
+  if (!path || !path.length) return [];
+  const legs = [];
+  const local = (id, wx, wy, wz) => ({
+    lb: id >>> 0,
+    x: wx - ((id >>> 24) & 0xff) * 192,
+    y: wy - ((id >>> 16) & 0xff) * 192,
+    z: wz,
+  });
+  for (let i = 0; i < path.length; i++) {
+    const id = Number(path[i]) >>> 0;
+    const node = nodes.get(id);
+    if (!node) continue;
+    if (opts.midpoints && i > 0) {
+      const prev = nodes.get(Number(path[i - 1]) >>> 0);
+      if (prev) {
+        legs.push(
+          local(
+            id,
+            (prev.pos.x + node.pos.x) / 2,
+            (prev.pos.y + node.pos.y) / 2,
+            (prev.pos.z + node.pos.z) / 2
+          )
+        );
+      }
+    }
+    legs.push(local(id, node.pos.x, node.pos.y, node.pos.z));
+  }
+  return legs;
+}
+
+/**
+ * 2-core patrol prune (port of DungeonPathfinder.cs:451-517). BFS the
+ * drop-free, hazard-free reachable set from startCell, then repeatedly peel
+ * degree-≤1 nodes (the start cell is always kept) until stable — dead-end
+ * spurs of any depth vanish, leaving cycles + through-corridors ("the main
+ * route"). Falls back to the full reachable set when pruning collapses the
+ * graph (< 8 nodes or < 20% of reachable, :512-514). Returns Set<cellId>.
+ */
+export function getMainRouteNodes(graph, startCell, hazards = null) {
+  const nodes = asMap(graph);
+  const start = Number(startCell) >>> 0;
+  const reachable = new Set();
+  if (nodes.has(start)) {
+    reachable.add(start);
+    const queue = [start];
+    while (queue.length) {
+      const cur = queue.shift();
+      const node = nodes.get(cur);
+      if (!node) continue;
+      for (const nbRaw of node.neighbors || []) {
+        const nb = Number(nbRaw) >>> 0;
+        if (reachable.has(nb) || !nodes.has(nb)) continue;
+        if (isDropEdge(node, nodes.get(nb))) continue;
+        if (hazards && hazards.has(nb)) continue;
+        reachable.add(nb);
+        queue.push(nb);
+      }
+    }
+  }
+
+  const originalCount = reachable.size;
+  const pruned = new Set(reachable);
+  for (;;) {
+    const toRemove = [];
+    for (const id of pruned) {
+      if (id === start) continue; // always keep spawn cell (:492)
+      const node = nodes.get(id);
+      if (!node) continue;
+      let deg = 0;
+      for (const nbRaw of node.neighbors || []) {
+        const nb = Number(nbRaw) >>> 0;
+        if (pruned.has(nb) && nodes.has(nb) && !isDropEdge(node, nodes.get(nb))) {
+          deg++;
+          if (deg > 1) break;
+        }
+      }
+      if (deg <= 1) toRemove.push(id);
+    }
+    if (!toRemove.length) break;
+    for (const id of toRemove) pruned.delete(id);
+  }
+
+  if (pruned.size < PATROL_MIN_KEEP_NODES || pruned.size < originalCount * PATROL_MIN_KEEP_FRACTION)
+    return reachable;
+  return pruned;
+}
+
+// Canonical undirected-edge key (C# packs two u32s into a ulong, :619-620 —
+// JS numbers can't, so a string key does the same job).
+function edgeKey(a, b) {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+// Shortest hop-path src→dst over adj (inclusive), or null (C# BfsPath :645-665).
+function bfsPath(adj, src, dst) {
+  if (src === dst) return [src];
+  const prev = new Map();
+  const seen = new Set([src]);
+  const q = [src];
+  while (q.length) {
+    const c = q.shift();
+    for (const nb of adj.get(c) || []) {
+      if (seen.has(nb)) continue;
+      seen.add(nb);
+      prev.set(nb, c);
+      if (nb === dst) {
+        const path = [dst];
+        let cur = dst;
+        while (cur !== src) {
+          cur = prev.get(cur);
+          path.push(cur);
+        }
+        return path.reverse();
+      }
+      q.push(nb);
+    }
+  }
+  return null;
+}
+
+// Shortest hop-path from src to the nearest cell with an unused edge, or null
+// (C# BfsToUnusedEdge :668-689).
+function bfsToUnusedEdge(adj, src, remaining) {
+  const hasUnused = (cell) => {
+    for (const nb of adj.get(cell) || []) if (remaining.has(edgeKey(cell, nb))) return true;
+    return false;
+  };
+  const prev = new Map();
+  const seen = new Set([src]);
+  const q = [src];
+  while (q.length) {
+    const c = q.shift();
+    if (c !== src && hasUnused(c)) {
+      const path = [c];
+      let cur = c;
+      while (cur !== src) {
+        cur = prev.get(cur);
+        path.push(cur);
+      }
+      return path.reverse();
+    }
+    for (const nb of adj.get(c) || []) {
+      if (seen.has(nb)) continue;
+      seen.add(nb);
+      prev.set(nb, c);
+      q.push(nb);
+    }
+  }
+  return null;
+}
+
+/**
+ * Euler-style closed patrol walk (port of DungeonPathfinder.cs:530-616).
+ * Route-inspection (Chinese-postman-style) greedy edge cover over the 2-core:
+ * every corridor once, loop-closing edges TAKEN (a cycle is walked forward,
+ * not backtracked); only dead-ends/bridges re-tread via shortest reconnecting
+ * hops; closed back to the start so a Circular patrol returns home.
+ *
+ * DIVERGENCE from the C#: returns the cell WALK ([cellId,...], first === last
+ * when the loop closes) instead of a waypoint NavRouteParser (:554) — feed it
+ * to toLegs() and RynthRouter.follow(). Empty array = nothing walkable (:560-564).
+ */
+export function buildPatrolRoute(graph, startCell, hazards = null) {
+  const nodes = asMap(graph);
+  const start = Number(startCell) >>> 0;
+  const mainRoute = getMainRouteNodes(graph, start, hazards);
+
+  // Undirected walkable subgraph over mainRoute (portal-adjacent, non-drop);
+  // mainRoute is already hazard-filtered (:537-552).
+  const adj = new Map();
+  const edges = new Set();
+  for (const c of mainRoute) {
+    const cn = nodes.get(c);
+    if (!cn) continue;
+    for (const nbRaw of cn.neighbors || []) {
+      const nb = Number(nbRaw) >>> 0;
+      if (!mainRoute.has(nb)) continue;
+      const nbn = nodes.get(nb);
+      if (!nbn || isDropEdge(cn, nbn)) continue;
+      if (!adj.has(c)) adj.set(c, []);
+      adj.get(c).push(nb);
+      edges.add(edgeKey(c, nb));
+    }
+  }
+
+  // Euler start: the player's cell if it borders a corridor, else the nearest
+  // cell that does (:557-559 / NearestCellWithEdges :624-642).
+  let walkStart = 0;
+  if ((adj.get(start) || []).length > 0) walkStart = start;
+  else {
+    const from = nodes.get(start);
+    let bestD = Infinity;
+    for (const [id, list] of adj) {
+      if (!list.length) continue;
+      const n = nodes.get(id);
+      if (!n) continue;
+      if (!from) {
+        walkStart = id;
+        break;
+      }
+      const d = (n.pos.x - from.pos.x) ** 2 + (n.pos.y - from.pos.y) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        walkStart = id;
+      }
+    }
+  }
+  if (walkStart === 0 || edges.size === 0) return [];
+
+  // Greedy edge-covering closed walk (:567-597). Guard bound: each edge is
+  // consumed once, each exhausted vertex triggers ≤1 reconnection (:571-572).
+  const walk = [walkStart];
+  const remaining = new Set(edges);
+  let cur = walkStart;
+  let guard = edges.size * 4 + mainRoute.size + 16;
+  while (remaining.size > 0 && guard-- > 0) {
+    let next = 0;
+    let found = false;
+    for (const nb of adj.get(cur) || []) {
+      if (remaining.has(edgeKey(cur, nb))) {
+        next = nb;
+        found = true;
+        break;
+      }
+    }
+    if (found) {
+      remaining.delete(edgeKey(cur, next));
+      walk.push(next);
+      cur = next;
+    } else {
+      const path = bfsToUnusedEdge(adj, cur, remaining);
+      if (!path) break; // remaining edges unreachable (disconnected) — stop
+      for (let i = 1; i < path.length; i++) walk.push(path[i]);
+      cur = path[path.length - 1];
+    }
+  }
+
+  // Close the loop back to the start (:600-605).
+  if (cur !== walkStart) {
+    const back = bfsPath(adj, cur, walkStart);
+    if (back) for (let i = 1; i < back.length; i++) walk.push(back[i]);
+  }
+  return walk;
+}
+
+/**
+ * Build the cell graph from the live wasm session. FULLY guarded — returns
+ * null (never throws) off-wasm, pre-spawn, outdoors, or when the exports are
+ * missing, so callers can `(await buildGraphFromWasm(h)) || fallback`.
+ *
+ * Data sources (all verified in src/lib.rs):
+ *   - sessionHandle.getCurrentCellId()      lib.rs:30830 (0 pre-spawn)
+ *   - sessionHandle.isCurrentCellIndoor()   lib.rs:31479 (advisory only)
+ *   - fetchEnvCellsInLandblock(lbId)        lib.rs:17415 — the WHOLE dungeon's
+ *     EnvCellPlacements; getRenderSet(depth) (lib.rs:30845) canNOT enumerate a
+ *     dungeon: depth≠1 falls back to the canonical depth-1 snapshot
+ *     (lib.rs:30886-30891), so `depth` here is a JS-side BFS radius instead.
+ *   - EnvCellPlacement.cellId / cellOriginX/Y/Z  lib.rs:15939-15948 —
+ *     WORLD-frame x/y (lb origin pre-added, lib.rs:17593-17597), raw z.
+ *   - EnvCellPlacement.takePortalCellIds()  lib.rs:15974 — full 32-bit ids,
+ *     sentinels NOT filtered (lib.rs:17604-17607); ONE-SHOT move semantics —
+ *     this builder consumes them, so don't recycle the placements for rendering.
+ *
+ * fetchEnvCellsInLandblock is a module-level wasm export, not a SessionHandle
+ * method; in-page it's threaded onto window.liveScene3d.wasmExports
+ * (index.html:4418). Pass it explicitly via opts.fetchEnvCells in headless/
+ * nullRender contexts where scene3d never boots.
+ *
+ * depth: 0/undefined = whole landblock; N>0 = BFS radius (portal hops) from
+ * the current cell, over drop edges too (radius bounds SIZE, not walkability).
+ */
+export async function buildGraphFromWasm(sessionHandle, depth = 0, opts = {}) {
+  if (!sessionHandle || typeof sessionHandle.getCurrentCellId !== "function") return null;
+  let cur = 0;
+  try {
+    cur = sessionHandle.getCurrentCellId() >>> 0;
+  } catch (_) {
+    return null;
+  }
+  if (!isEnvCellId(cur)) return null; // pre-spawn (0) or outdoors (>= 0xFFFE low word)
+
+  let fetchEnvCells = opts.fetchEnvCells;
+  if (typeof fetchEnvCells !== "function") {
+    const scene = typeof globalThis !== "undefined" ? globalThis.liveScene3d : null;
+    fetchEnvCells = scene && scene.wasmExports ? scene.wasmExports.fetchEnvCellsInLandblock : null;
+  }
+  if (typeof fetchEnvCells !== "function") return null;
+
+  let placements;
+  try {
+    placements = await fetchEnvCells(cur & 0xffff0000);
+  } catch (_) {
+    return null;
+  }
+  if (!placements || typeof placements.length !== "number" || placements.length === 0) return null;
+
+  const graph = new Map();
+  for (const p of placements) {
+    try {
+      const id = p.cellId >>> 0;
+      if (!isEnvCellId(id)) continue;
+      const pos = { x: p.cellOriginX, y: p.cellOriginY, z: p.cellOriginZ };
+      if (typeof pos.x !== "number" || typeof pos.y !== "number" || typeof pos.z !== "number")
+        continue;
+      const raw = typeof p.takePortalCellIds === "function" ? p.takePortalCellIds() : [];
+      const neighbors = [];
+      for (const nbRaw of raw || []) {
+        const nb = nbRaw >>> 0;
+        if (nb !== id && isEnvCellId(nb)) neighbors.push(nb); // sentinel/self filter (cs:163)
+      }
+      graph.set(id, { pos, neighbors });
+    } catch (_) {
+      // malformed placement — skip, like the C# per-cell catch (cs:182)
+    } finally {
+      if (typeof p.free === "function") {
+        try {
+          p.free();
+        } catch (_) {
+          /* already freed */
+        }
+      }
+    }
+  }
+  if (graph.size === 0) return null;
+
+  if (depth > 0 && graph.has(cur)) {
+    // JS-side BFS radius from the current cell (see docblock: the wasm
+    // getRenderSet can't do depth>1). Drop edges still count for RADIUS.
+    const keep = new Set([cur]);
+    let frontier = [cur];
+    for (let d = 0; d < depth && frontier.length; d++) {
+      const next = [];
+      for (const id of frontier) {
+        for (const nb of graph.get(id).neighbors) {
+          if (!keep.has(nb) && graph.has(nb)) {
+            keep.add(nb);
+            next.push(nb);
+          }
+        }
+      }
+      frontier = next;
+    }
+    for (const id of [...graph.keys()]) if (!keep.has(id)) graph.delete(id);
+  }
+  return graph;
+}
+
+export default {
+  isEnvCellId,
+  isDropEdge,
+  nearestCell,
+  findPath,
+  toLegs,
+  getMainRouteNodes,
+  buildPatrolRoute,
+  buildGraphFromWasm,
+};

@@ -8,9 +8,29 @@
 //   GET  /health -> {ok, tiles, portals}
 //   POST /route {from:{lb,x,y,z}, to:{lb,x,y,z}|{ns,ew}}
 //     -> {ok:true, legs:[{lb,x,y,z,portal,label}], estUnits, portalsUsed,
-//         coverage} | {ok:false, error} (still HTTP 200)
+//         coverage} | {ok:false, error} (planning failure is still HTTP 200;
+//         from==to yields ok:true + one zero-distance arrival leg). Malformed
+//         or out-of-world requests are HTTP 400, an oversized body 413, a
+//         non-POST 405 — this client treats any non-200 as {ok:false} (route()).
 // Legs are already in router.js's frame (full 32-bit objCellId, landblock-
 // local AC Z-up metres) — they feed router.follow() untouched.
+//
+// goto() lifecycle hardening:
+// - ONE goto at a time: a second goto() while one is active returns
+//   {ok:false, error:"goto already active"} immediately (no follow()
+//   clobber). The latch clears on completion AND on every error/throw
+//   path (try/finally) — it can never stick.
+// - The pose is null before the host's first tick and for a few ticks
+//   mid-teleport (incl. replans right after a portal): goto() waits up to
+//   poseTimeoutMs for a pose instead of failing outright.
+// - The walk poll carries a stall deadline (stallMs, must exceed the
+//   router's per-leg timeout): if the router's observable status stops
+//   changing (host stopped ticking / tab killed), goto() cancels the
+//   route and returns instead of leaking the poll loop forever. An
+//   external cancel()/re-follow (state leaves WALK/PORTAL without a
+//   DONE/FAILED) aborts the goto too — no replan on a cancelled route.
+// - legsWalked sums router.status.walked (legs actually completed) across
+//   re-follows; portal-skipped stale legs don't inflate it.
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8767";
 
@@ -20,6 +40,12 @@ export class GlobalRouter {
     this.host = host;
     this.endpoint = endpoint.replace(/\/+$/, "");
     this.log = log || ((m) => console.log(`[gnav] ${m}`));
+    this._active = false; // the one-goto-at-a-time busy latch
+  }
+
+  /** True while a goto() is planning/walking — a second goto() is refused. */
+  get busy() {
+    return this._active;
   }
 
   /** GET /health -> {ok, tiles, portals} (throws on network failure). */
@@ -58,18 +84,44 @@ export class GlobalRouter {
     }
   }
 
+  /** Wait up to timeoutMs for the host to produce a pose (null during boot
+   *  and for a few ticks mid-teleport). Returns the pose or null. */
+  async _awaitPose(timeoutMs, pollMs) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const pose = this.host.TryGetPlayerPose();
+      if (pose) return pose;
+      if (Date.now() >= deadline) return null;
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+  }
+
   /**
    * Plan from the CURRENT pose to `to`, walk it via `router` (RynthRouter,
    * already ticked off the host heartbeat), and on a FAILED leg re-query
    * from the current pose (a fresh route, not a resume) up to `retries`
    * times. Resolves {ok, state, legsWalked, replans}; never throws on
    * route failure — returns {ok:false, error, ...} instead.
+   *
+   * One goto at a time (see header): a concurrent call gets
+   * {ok:false, error:"goto already active"}. stallMs must exceed the
+   * router's per-leg timeout (default 45s vs the router's 30s).
    */
-  async goto(router, to, { retries = 2, pollMs = 500 } = {}) {
+  async goto(router, to, opts = {}) {
+    if (this._active) return { ok: false, error: "goto already active", legsWalked: 0, replans: 0 };
+    this._active = true;
+    try {
+      return await this._goto(router, to, opts);
+    } finally {
+      this._active = false; // clears on completion AND every error/throw path
+    }
+  }
+
+  async _goto(router, to, { retries = 2, pollMs = 500, poseTimeoutMs = 15_000, stallMs = 45_000 } = {}) {
     let replans = 0;
     let legsWalked = 0;
     for (let attempt = 0; ; attempt++) {
-      const pose = this.host.TryGetPlayerPose();
+      const pose = await this._awaitPose(poseTimeoutMs, pollMs);
       if (!pose) return { ok: false, error: "no player pose", legsWalked, replans };
       const res = await this.route(pose, to);
       if (!res || res.ok !== true || !Array.isArray(res.legs) || !res.legs.length) {
@@ -80,8 +132,39 @@ export class GlobalRouter {
           `portals=${res.portalsUsed}, coverage=${res.coverage}`
       );
       router.follow(res.legs);
-      while (!router.done) await new Promise((r) => setTimeout(r, pollMs));
-      legsWalked += router.status.leg;
+      // Walk poll with a stall deadline + external-cancel detection.
+      let lastSig = "";
+      let lastChangeAt = Date.now();
+      for (;;) {
+        const st = router.status;
+        if (st.state === "DONE" || st.state === "FAILED") break;
+        if (st.state !== "WALK" && st.state !== "PORTAL") {
+          // cancel()ed or re-follow()ed out from under us — abort, no replan.
+          return {
+            ok: false,
+            state: st.state,
+            error: "route cancelled",
+            legsWalked: legsWalked + (st.walked ?? 0),
+            replans,
+          };
+        }
+        const sig = `${st.state}:${st.leg}:${st.walked}`;
+        if (sig !== lastSig) {
+          lastSig = sig;
+          lastChangeAt = Date.now();
+        } else if (Date.now() - lastChangeAt > stallMs) {
+          router.cancel();
+          return {
+            ok: false,
+            state: "STALLED",
+            error: "walk stalled (host stopped ticking?)",
+            legsWalked: legsWalked + (router.status.walked ?? 0),
+            replans,
+          };
+        }
+        await new Promise((r) => setTimeout(r, pollMs));
+      }
+      legsWalked += router.status.walked ?? router.status.leg;
       if (router.status.state === "DONE") return { ok: true, state: "DONE", legsWalked, replans };
       if (attempt >= retries) {
         return { ok: false, state: "FAILED", error: "retries exhausted", legsWalked, replans };

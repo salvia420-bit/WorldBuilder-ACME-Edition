@@ -10,9 +10,22 @@
 //   `<Sender> tells you, "<body>"`
 // (src/lib.rs ClientEvent kind=2 doc). We match that, extract the body,
 // and dispatch a command if it starts with `prefix`.
+//
+// Hardening:
+// - Replies are rate-limited per sender (REPLY_MAX_PER_WINDOW per
+//   REPLY_WINDOW_MS); excess replies are logged and dropped, so a
+//   command-spamming sender can't use the bot as a chat amplifier.
+// - "goto" args must be finite /loc degrees within the map (|deg| <=
+//   MAX_LOC_DEG) — "goto 1e309 -0" gets the usage reply, not a route.
+// - A "goto" while one is already routing gets a clean
+//   "route failed: goto already active" reply (bot.js's goto latch);
+//   the in-flight goto is unaffected.
 
 const CHAT_KIND = 2;
 const TELL_RE = /^(.+?) tells you, "(.*)"$/;
+const REPLY_WINDOW_MS = 5000; // per-sender reply rate limit window
+const REPLY_MAX_PER_WINDOW = 5;
+const MAX_LOC_DEG = 102; // the map spans ~±101.95 /loc degrees
 
 export class RynthControlChannel {
   /**
@@ -31,6 +44,7 @@ export class RynthControlChannel {
     this.log = opts.log || ((m) => console.log(`[ctl] ${m}`));
     this.commands = [];
     this.paused = false;
+    this._replyLog = new Map(); // sender -> recent reply timestamps (anti-spam)
     host.onEvent((e) => this._onEvent(e));
   }
 
@@ -49,6 +63,17 @@ export class RynthControlChannel {
   }
 
   _reply(sender, text) {
+    // Anti-spam: cap replies per sender per window; excess replies are
+    // logged and DROPPED (not queued) — see header.
+    const now = Date.now();
+    const recent = (this._replyLog.get(sender) || []).filter((t) => now - t < REPLY_WINDOW_MS);
+    if (recent.length >= REPLY_MAX_PER_WINDOW) {
+      this._replyLog.set(sender, recent);
+      this.log(`reply to ${sender} throttled: ${text}`);
+      return;
+    }
+    recent.push(now);
+    this._replyLog.set(sender, recent);
     // A tell back to the sender. InvokeChatParser drives the retail
     // slash-command lane (WriteToChat is display-only), so a /t reply
     // actually leaves the client.
@@ -85,8 +110,8 @@ export class RynthControlChannel {
         // sidecar when bot.js wired an onGoto (config.nav).
         const ns = parseFloat(args[0]);
         const ew = parseFloat(args[1]);
-        if (!Number.isFinite(ns) || !Number.isFinite(ew)) {
-          this._reply(sender, "usage: goto <ns> <ew> (/loc degrees)");
+        if (!Number.isFinite(ns) || !Number.isFinite(ew) || Math.abs(ns) > MAX_LOC_DEG || Math.abs(ew) > MAX_LOC_DEG) {
+          this._reply(sender, `usage: goto <ns> <ew> (/loc degrees, |deg| <= ${MAX_LOC_DEG})`);
           break;
         }
         if (!this.onGoto) {

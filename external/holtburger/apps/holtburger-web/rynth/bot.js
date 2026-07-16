@@ -18,7 +18,10 @@
 //   // bot.host, bot.kernel, bot.channel, bot.status(); bot.stop()
 
 export async function createGrindBot(sessionHandle, config = {}) {
-  const base = "/apps/holtburger-web/rynth";
+  // Sibling-module base derived from THIS module's URL: identical to the
+  // old hardcoded "/apps/holtburger-web/rynth" when served from the page,
+  // and additionally resolves under file:// (node fixture tests).
+  const base = new URL(".", import.meta.url).href.replace(/\/$/, "");
   const [wh, cl, bl, ll, vt, kn, cc, rt] = await Promise.all([
     import(`${base}/webhost.js`),
     import(`${base}/combat_loop.js`),
@@ -48,10 +51,18 @@ export async function createGrindBot(sessionHandle, config = {}) {
 
   const kernel = new kn.RynthBotKernel(host, { combat, buff, loot, vitals });
 
+  // Router is on-demand travel, NOT a kernel priority — the caller drives a
+  // route explicitly (pausing the grind while travelling is the caller's
+  // choice). Ticked off the same host heartbeat. config.router passes
+  // RynthRouter timing overrides through (tests / live tuning).
+  const router = new rt.RynthRouter(host, config.router || {});
+  host.onTick(() => router.tick());
+
   // Global nav (report 09 sidecar): config.nav = { endpoint } wires a
   // GlobalRouter so bot.goto(to) plans a cross-world route via the RynthNav
-  // sidecar and walks it. Unlike travel(), goto() restarts the kernel when
-  // the walk completes (or fails).
+  // sidecar and walks it. Unlike travel(), goto() restores the kernel's
+  // PRIOR run state when the walk completes (or fails) — a goto issued
+  // while the kernel was deliberately stopped must not restart the grind.
   let globalRouter = null;
   if (config.nav) {
     const gr = await import(`${base}/global_router.js`);
@@ -59,11 +70,20 @@ export async function createGrindBot(sessionHandle, config = {}) {
   }
   const doGoto = async (to, opts) => {
     if (!globalRouter) return { ok: false, error: "nav not configured (config.nav)" };
+    // Refuse BEFORE touching the kernel: a rejected second goto must not
+    // stop/restart the kernel out from under the goto that owns it.
+    if (globalRouter.busy) return { ok: false, error: "goto already active" };
+    // Last command wins over a raw travel() in progress.
+    const rs = router.status.state;
+    if (rs === "WALK" || rs === "PORTAL") {
+      router.cancel();
+    }
+    const wasRunning = kernel._running === true; // kernel's is-running signal
     kernel.stop();
     try {
       return await globalRouter.goto(router, to, opts);
     } finally {
-      kernel.start();
+      if (wasRunning) kernel.start();
     }
   };
 
@@ -74,12 +94,6 @@ export async function createGrindBot(sessionHandle, config = {}) {
           ...(config.control || {}),
           ...(globalRouter ? { onGoto: (to) => doGoto(to) } : {}),
         });
-
-  // Router is on-demand travel, NOT a kernel priority — the caller drives a
-  // route explicitly (pausing the grind while travelling is the caller's
-  // choice). Ticked off the same host heartbeat.
-  const router = new rt.RynthRouter(host);
-  host.onTick(() => router.tick());
 
   host.start(config.hz ?? 10);
   kernel.start();
@@ -94,15 +108,22 @@ export async function createGrindBot(sessionHandle, config = {}) {
     vitals,
     router,
     globalRouter,
-    /** Travel a raw route ([{lb,x,y,z}]) — pauses the grind; caller resumes. */
+    /** Travel a raw route ([{lb,x,y,z}]) — pauses the grind; caller resumes.
+     *  Returns {ok}; refused while a goto() owns the router (a raw follow
+     *  would clobber the goto's walk loop). A later goto() cancels a raw
+     *  travel in progress (last command wins). */
     travel: (route) => {
+      if (globalRouter && globalRouter.busy) return { ok: false, error: "goto active" };
       kernel.stop();
       router.follow(route);
+      return { ok: true };
     },
     /**
      * Sidecar-planned travel to {lb,x,y,z} or {ns,ew} (/loc degrees) —
-     * pauses the grind, plans+walks+replans, restarts the kernel on
-     * completion. Resolves {ok, state, legsWalked, replans}.
+     * pauses the grind, plans+walks+replans, restores the kernel's prior
+     * run state on completion. One goto at a time ({ok:false,
+     * error:"goto already active"} while one runs). Resolves
+     * {ok, state, legsWalked, replans}.
      */
     goto: (to, opts) => doGoto(to, opts),
     status: () => ({ ...kernel.status, router: router.status }),
