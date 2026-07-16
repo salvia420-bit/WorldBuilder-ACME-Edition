@@ -18,6 +18,12 @@ let browser;
     window.__rh = host;
   });
   await sleep(1000);
+  // Heal the character's server-side physics first: the saved position
+  // carries a corrupted Z (94.005 vs ground 94) that wedges the motion
+  // pipeline every login (stance swaps + swings never complete). An
+  // explicit teleport resets physics and rewrites clean coords.
+  await page.evaluate(() => window.__rh.WriteToChat("@teleloc 0xA9B40019 84.0 15.0 94.05"));
+  await sleep(6000);
   const before = await page.evaluate(() => window.__rh.NearbyGuids());
   console.log(`before: ${before.length} nearby`);
 
@@ -40,27 +46,55 @@ let browser;
   const meta = await page.evaluate((g) => ({ name: window.__rh.TryGetObjectName(g), wcid: window.__rh.TryGetObjectWcid(g) }), drudge);
   console.log(`drudge: ${drudge} ${JSON.stringify(meta)}`);
 
-  await page.evaluate(() => window.__rh.ChangeCombatMode(2));
-  let cm = 0;
-  for (let i = 0; i < 10; i++) { await sleep(500); cm = await page.evaluate(() => window.__rh.GetCurrentCombatMode()); if (cm === 2) break; }
-  console.log(`combatMode: ${cm}`);
+  // ACE silently reverts Melee if a bow/wand is wielded (Player_Combat.cs
+  // _Inner Melee case) — use the suggested-mode toggle (equipment-derived,
+  // always accepted) and fight in whatever mode results.
+  await page.evaluate(() => window.__sessionHandle.toggleCombatMode());
+  let cm = 1;
+  for (let i = 0; i < 16; i++) { await sleep(500); cm = await page.evaluate(() => window.__rh.GetCurrentCombatMode()); if (cm > 1) break; }
+  console.log(`combatMode after toggle: ${cm}`);
 
   await page.evaluate((g) => window.__rh.StickToObject(g), drudge);
+  await sleep(4000); // let the stick close the 5m gap before the first swing
   let killed = false, lastHealth = -1, swings = 0;
   const t0 = Date.now();
-  while (Date.now() - t0 < 60_000) {
-    await page.evaluate((g) => window.__rh.MeleeAttack(g, 2, 0.6), drudge).catch(() => null);
-    swings++;
-    await sleep(2500);
-    const s = await page.evaluate((g) => ({ pos: window.__rh.TryGetObjectPosition(g), hf: window.__rh.TryGetTargetHealthFraction(g) }), drudge).catch(() => null);
+  let lastSwingAt = 0;
+  while (Date.now() - t0 < 90_000) {
+    // Report-11 pacing: one attack in flight at a time; re-issue only
+    // after a patience window (melee completion has no UseDone).
+    if (Date.now() - lastSwingAt > 9_000) {
+      await page.evaluate(async (arg) => {
+        const [g, mode] = arg;
+        const s = window.__sessionHandle;
+        if (mode === 2) return window.__rh.MeleeAttack(g, 2, 0.6);
+        if (mode === 4 && s.missileAttack) return s.missileAttack(g, 2, 0.6);
+        if (mode === 8) {
+          const known = s.playerKnownSpells ? Array.from(s.playerKnownSpells() || []).map(Number) : [];
+          // Prefer a level-1 war bolt (27 Flame, 28 Frost, 58 Acid, 64 Shock,
+          // 75 Lightning, 86 Force, 92 Whirling Blade); else first known.
+          const war = [27, 28, 58, 64, 75, 86, 92].find((id) => known.includes(id));
+          if (!window.__warPicked) { window.__warPicked = true; console.log(`known spells: ${known.slice(0, 20).join(",")} -> war=${war}`); }
+          if (war) return window.__rh.CastSpell(g, war);
+          if (known.length) return window.__rh.CastSpell(g, known[0]);
+        }
+        return window.__rh.MeleeAttack(g, 2, 0.6);
+      }, [drudge, cm]).catch(() => null);
+      swings++;
+      lastSwingAt = Date.now();
+    }
+    await page.evaluate((g) => window.__rh.QueryHealth(g), drudge).catch(() => null);
+    await sleep(1500);
+    const s = await page.evaluate((g) => { const h = window.__rh; const p = h.TryGetObjectPosition(g); const me = h.TryGetPlayerPose(); const d = p && me ? Math.hypot(p.x - me.x, p.y - me.y).toFixed(2) : null; return { pos: p, hf: h.TryGetTargetHealthFraction(g), dist: d }; }, drudge).catch(() => null);
     if (!s) { console.log("eval failed mid-fight"); break; }
     if (s.hf >= 0) lastHealth = s.hf;
-    console.log(`swing ${swings}: hf=${s.hf} pos=${s.pos ? "yes" : "GONE"}`);
+    console.log(`t+${((Date.now()-t0)/1000).toFixed(0)}s swings=${swings}: hf=${s.hf} dist=${s.dist} pos=${s.pos ? "yes" : "GONE"}`);
     if (!s.pos || s.hf === 0) { killed = true; break; }
   }
   await page.evaluate(() => { const h = window.__rh; h.StopStick(); h.ChangeCombatMode(1); h.WriteToChat("@smite all"); h.stop(); }).catch(() => null);
+  const chat = await page.evaluate(() => Array.from(document.querySelectorAll('#chat-log li')).slice(-15).map((li) => li.textContent.trim())).catch(() => []);
+  console.log('CHAT TAIL:\n  ' + chat.join('\n  '));
   console.log(`RESULT: swings=${swings} lastHealth=${lastHealth} killed=${killed}`);
-  const pass = cm === 2 && (killed || (lastHealth >= 0 && lastHealth < 1));
+  const pass = cm > 1 && (killed || (lastHealth >= 0 && lastHealth < 1));
   console.log(`COMBAT SMOKE: ${pass ? "PASS" : "FAIL/PARTIAL"}`);
   await browser.close();
   process.exit(pass ? 0 : 1);

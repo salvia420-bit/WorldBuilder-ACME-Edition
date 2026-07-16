@@ -101,7 +101,27 @@ no event queues yet (poll-only).
 over `world.entities` (spawn-gate independent, `WorldPosition::distance_to` range
 filter), wired into the snapshot with entityMap fallback.
 
-### Combat walking skeleton — BLOCKED on headless boot flake (2026-07-16)
+### Combat walking skeleton — PASS (2026-07-16, later): **first seam-driven kill**
+`rynth_combat_smoke.cjs`, repeatable 2/2: boot headless → `@create 7` (Drudge
+Skulker) → acquire via `nearbyEntityGuids` through the seam → suggested-mode
+toggle → Magic(8) completes → Flame Bolt I (spell 27, picked from
+`playerKnownSpells`) → **"Drudge Skulker is reduced to cinders!"** hf 1→0, kill
+confirmed via QueryHealth-fed `objectHealthFraction`. Load-bearing findings:
+- **Release wasm cured the boot flake completely** (dev-wasm memory tax was the
+  cause; boots now first-try). ALWAYS release-build before headless campaigns.
+- **ACE silently reverts Melee mode if a bow/wand is wielded**
+  (`Player_Combat.cs` `_Inner` Melee case: `missileWeapon != null || caster !=
+  null` → `SetCombatMode(NonCombat); return;` — no error to the client, and
+  `LastCombatMode` still reads Melee in the logs). Bots MUST use the
+  equipment-derived suggested-mode toggle (`toggleCombatMode`) or unequip
+  first. This is report 11's stance-rules contract, live-confirmed.
+- `objectHealthFraction` is fed by `QueryHealth` responses — poll it (RynthCore
+  `QueryHealth` semantics); never-queried targets read −1.
+- StickToObject held 0.93 m melee range headless the whole fight; the drudge's
+  own attacks ("You evaded" ×15) prove full bidirectional combat.
+- Melee-mode kill path still untested (needs an unwielded char) — queued.
+
+### (resolved) Combat walking skeleton — BLOCKED on headless boot flake (2026-07-16)
 `rynth_combat_smoke.cjs` (spawn Drudge Skulker wcid 7 via `@create 7`, acquire via
 seam, StickToObject + MeleeAttack cadence, `@smite all` cleanup) is written but boot
 became unstable after ~6 rapid login cycles: mixed `Target crashed` (renderer) and
