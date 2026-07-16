@@ -175,9 +175,26 @@ then recognized-active across a fresh login (maintain path). Two traps fixed en 
   `receivedAt + duration − startTime` with self-stamped wall-clock receipt). Naive
   serverTime diffs mark every buff expired.
 
-### Phase 3 remaining / Phase 4 — loot, nav router, parity
-See synthesis §3. Loot loop next (groundContainerId + appraisal stamps + typed
-properties are all landed); then the RynthNav router sidecar (09).
+### Phase 3 — loot loop: PASS (2026-07-16)
+`rynth/loot_loop.js` — report 03 Tier-4 flow: find corpse (wcid 21) →
+MoveToPosition into reach → UseObject → groundContainerId/getContainerContents →
+Value(19) rule → moveItem(item, player, 0) (MoveItemExternal parity, 0x0019) →
+confirm via playerInventory. Live smoke (`rynth_loot_smoke.cjs`): combat loop
+killed a drudge, loot loop opened the corpse (3 items) and confirmed a pickup,
+inventory 16→17. Full kill-to-loot pipeline autonomous. Trap: wasm Vec<u32>
+arrives as Uint32Array — Array.from before mutating (typed-array .map has no
+.shift).
+
+### Next arcs — the BotKernel, nav router, parity
+1. **BotKernel (report 12's concept, JS edition):** one orchestrator running
+   combat+buff+loot with action priority and a shared cast serializer (today the
+   loops assume solo ownership of the gates — they need an arbiter to run
+   together). This is the "grind bot" milestone.
+2. RynthNav router sidecar (09) for long-range routing over moveToPosition legs.
+3. Contract completions: T8 priorities, P3/P12, B4/B5/B7/B10-12, B15/B16 vital
+   policy, event queues (push plane), melee-mode kill path, fellowship DTO (07).
+4. D1 fork spike (.NET-wasm compile of an island-excised brain slice) — decides
+   whether the C# brain lands in-page or the JS reimplementation continues.
 
 ## Traps (from the reports, verified)
 - Gate bot boot on `__bootState` reaching `in-world` (`__bootStateHistory` in

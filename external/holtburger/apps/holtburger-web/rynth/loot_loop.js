@@ -1,0 +1,174 @@
+// RynthLootLoop — Phase-3 corpse looting on the RynthWebHost seam.
+//
+// Report 03 Tier-4 flow over the landed reads: find corpse → walk into
+// reach → UseObject (opens; server replies ViewContents which stamps
+// groundContainerId + container contents) → enumerate → value-rule →
+// moveItem(item, player, 0) (RynthCoreHost MoveItemExternal, wire 0x0019)
+// → confirm via playerInventory. Paced on the busy gate; every action
+// fire-and-forget with poll-shaped confirmation.
+
+const CORPSE_WCID = 21;
+const LOOTED_TTL_MS = 5 * 60_000;
+const OPEN_TIMEOUT_MS = 6000;
+const PICKUP_TIMEOUT_MS = 6000;
+const REACH_M = 4.0;
+
+export class RynthLootLoop {
+  constructor(host, opts = {}) {
+    this.host = host;
+    this.minValue = opts.minValue ?? 0; // loot rule: Value(19) >= minValue
+    this.log = opts.log || ((m) => console.log(`[loot] ${m}`));
+    this.state = "SCAN"; // SCAN | APPROACH | OPEN | LOOT | CONFIRM
+    this.corpse = 0;
+    this.looted = new Map(); // corpse guid -> ts
+    this.items = [];
+    this.pendingItem = 0;
+    this.stateSince = 0;
+    this.lootedCount = 0;
+    this.emptyCorpses = 0;
+    this._running = false;
+  }
+
+  startOn(host) {
+    this._running = true;
+    host.onTick(() => {
+      if (this._running) {
+        try {
+          this.tick();
+        } catch (e) {
+          this.log(`tick threw: ${e.message}`);
+        }
+      }
+    });
+  }
+  stop() {
+    this._running = false;
+  }
+
+  _setState(s) {
+    this.state = s;
+    this.stateSince = Date.now();
+  }
+
+  _findCorpse() {
+    const h = this.host;
+    const me = h.TryGetPlayerPose();
+    if (!me) return null;
+    const now = Date.now();
+    let best = null;
+    for (const g of h.NearbyGuids()) {
+      const t = this.looted.get(g);
+      if (t && now - t < LOOTED_TTL_MS) continue;
+      if (h.TryGetObjectWcid(g) !== CORPSE_WCID) continue;
+      const pos = h.TryGetObjectPosition(g);
+      if (!pos || pos.objCellId >>> 16 !== me.objCellId >>> 16) continue;
+      const d = Math.hypot(pos.x - me.x, pos.y - me.y);
+      if (d > 30) continue;
+      if (!best || d < best.d) best = { guid: g, d, pos };
+    }
+    return best;
+  }
+
+  _inventoryGuids() {
+    const s = this.host.s;
+    if (!s.playerInventory) return new Set();
+    const out = new Set();
+    for (const it of s.playerInventory() || []) {
+      out.add(Number(it.guid ?? it.itemGuid ?? 0));
+    }
+    return out;
+  }
+
+  tick() {
+    const h = this.host;
+    if (!h.IsPlayerReady()) return;
+    const now = Date.now();
+    const age = now - this.stateSince;
+
+    switch (this.state) {
+      case "SCAN": {
+        const c = this._findCorpse();
+        if (!c) return;
+        this.corpse = c.guid;
+        this.log(`corpse ${c.guid.toString(16)} d=${c.d.toFixed(1)}`);
+        if (c.d > REACH_M) {
+          h.MoveToPosition(c.pos.objCellId, c.pos.x, c.pos.y, c.pos.z, true);
+          this._setState("APPROACH");
+        } else {
+          h.UseObject(this.corpse);
+          this._setState("OPEN");
+        }
+        return;
+      }
+      case "APPROACH": {
+        const me = h.TryGetPlayerPose();
+        const pos = h.TryGetObjectPosition(this.corpse);
+        if (!pos || !me) {
+          this._setState("SCAN");
+          return;
+        }
+        const d = Math.hypot(pos.x - me.x, pos.y - me.y);
+        if (d <= REACH_M) {
+          h.StopCompletely();
+          h.UseObject(this.corpse);
+          this._setState("OPEN");
+        } else if (age > 15_000) {
+          this.log("approach timeout");
+          this.looted.set(this.corpse, now); // park it
+          this._setState("SCAN");
+        }
+        return;
+      }
+      case "OPEN": {
+        if (h.GetGroundContainerId() === this.corpse) {
+          this.items = Array.from(h.GetContainerContents(this.corpse) || []).map(Number);
+          this.log(`opened: ${this.items.length} items`);
+          if (!this.items.length) {
+            this.emptyCorpses++;
+            this.looted.set(this.corpse, now);
+            this._setState("SCAN");
+          } else {
+            this._setState("LOOT");
+          }
+        } else if (age > OPEN_TIMEOUT_MS) {
+          this.log("open timeout — retrying use");
+          h.UseObject(this.corpse);
+          this._setState("OPEN"); // re-arm timer
+        }
+        return;
+      }
+      case "LOOT": {
+        if (h.GetBusyState() !== 0) return;
+        const me = h.GetPlayerId();
+        while (this.items.length) {
+          const item = this.items.shift();
+          const value = h.TryGetObjectIntProperty(item, 19) ?? 0; // Value
+          if (value < this.minValue) continue;
+          h.s.moveItem(item, me, 0); // MoveItemExternal parity (0x0019)
+          this.pendingItem = item;
+          this._setState("CONFIRM");
+          return;
+        }
+        this.looted.set(this.corpse, now);
+        this.log(`corpse done (${this.lootedCount} looted total)`);
+        this._setState("SCAN");
+        return;
+      }
+      case "CONFIRM": {
+        if (this._inventoryGuids().has(this.pendingItem)) {
+          this.lootedCount++;
+          this.log(`picked up ${this.pendingItem.toString(16)} (${this.lootedCount})`);
+          this.pendingItem = 0;
+          this._setState("LOOT");
+        } else if (age > PICKUP_TIMEOUT_MS) {
+          this.log(`pickup timeout ${this.pendingItem.toString(16)} — skipping`);
+          this.pendingItem = 0;
+          this._setState("LOOT");
+        }
+        return;
+      }
+    }
+  }
+}
+
+export default RynthLootLoop;
