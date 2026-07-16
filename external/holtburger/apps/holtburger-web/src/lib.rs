@@ -28663,6 +28663,25 @@ pub struct SessionHandle {
     /// (the getter is read-clear for states ≥ 2, so the JS rAF
     /// monitor can't miss a one-tick completion).
     local_player_pursuit_status: std::rc::Rc<std::cell::RefCell<u32>>,
+    /// rynth-integration Phase 2 (2026-07-16): monotonic count of inbound
+    /// `GameEvent::UseDone` (0x01C7) — the server's "action finished
+    /// (completed or refused)" signal. RynthCoreHost parity:
+    /// `GetUseDoneSeq` (the combat cast-pacing gate, report 11 P-rules).
+    /// Incremented by the recv loop on EVERY UseDone regardless of error.
+    rynth_use_done_seq: std::rc::Rc<std::cell::RefCell<u32>>,
+    /// rynth Phase 2: shadow busy counter — (count, last-change stamp).
+    /// Incremented handle-side when a busy-bearing action is sent
+    /// (useObject / castTargetedSpell / castUntargetedSpell), decremented
+    /// by the recv loop on UseDone (floor 0). The getter self-heals a
+    /// stuck count after 15 s (degrade-open, report 11 contract 0.1).
+    /// RynthCoreHost parity: `GetBusyState` / `ForceResetBusyCount`.
+    rynth_busy: std::rc::Rc<std::cell::RefCell<(u32, Option<web_time::Instant>)>>,
+    /// rynth Phase 2: local cast-window shadow — (active, since). Stamped
+    /// by [`SessionHandle::note_local_cast_window`] (the same signal the
+    /// JS cast chain already feeds the movement crate); auto-expires
+    /// after 12 s mirroring the JS `_castBusyUntilMs` cap. RynthCoreHost
+    /// parity: `GetCastBusyState` / `CanCastNow`.
+    rynth_cast: std::rc::Rc<std::cell::RefCell<(bool, Option<web_time::Instant>)>>,
     /// PR-SS 2026-05-23: timestamp of the most-recent
     /// `SessionEvent::Message` from the WS transport — the freshest
     /// server packet of any kind. JS polls `sessionLastRecvAgeMs()`
@@ -30453,6 +30472,66 @@ impl SessionHandle {
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("moveToPosition: cmd channel closed ({e})"))
             })
+    }
+
+    /// rynth Phase 2 — internal: stamp one busy-bearing action send
+    /// (useObject / cast*Spell call this before enqueueing).
+    fn rynth_note_busy_action(&self) {
+        let mut busy = self.rynth_busy.borrow_mut();
+        busy.0 = busy.0.saturating_add(1);
+        busy.1 = Some(web_time::Instant::now());
+    }
+
+    /// Monotonic count of inbound server `UseDone` (GameEvent 0x01C7)
+    /// events — the server sends one whenever it FINISHES an action
+    /// (cast/use), completed or refused. Record at cast time and watch
+    /// for change to pace on real completion instead of a blind
+    /// interval. RynthCoreHost parity: `GetUseDoneSeq`.
+    #[wasm_bindgen(js_name = getUseDoneSeq)]
+    pub fn get_use_done_seq(&self) -> u32 {
+        *self.rynth_use_done_seq.borrow()
+    }
+
+    /// Shadow busy count: busy-bearing actions sent (useObject /
+    /// castTargetedSpell / castUntargetedSpell) minus UseDone
+    /// confirmations, floor 0. Self-heals: a nonzero count with no
+    /// change for 15 s reads as 0 (a lost confirmation must not wedge
+    /// the bot — degrade-open per the combat contract). RynthCoreHost
+    /// parity: `GetBusyState`.
+    #[wasm_bindgen(js_name = getBusyState)]
+    pub fn get_busy_state(&self) -> u32 {
+        let busy = self.rynth_busy.borrow();
+        if busy.0 == 0 {
+            return 0;
+        }
+        match busy.1 {
+            Some(touched) if touched.elapsed().as_secs_f32() > 15.0 => 0,
+            _ => busy.0,
+        }
+    }
+
+    /// Zero the shadow busy count (RynthCoreHost `ForceResetBusyCount`
+    /// parity — the bot's error-recovery escape hatch).
+    #[wasm_bindgen(js_name = forceResetBusyCount)]
+    pub fn force_reset_busy_count(&self) {
+        *self.rynth_busy.borrow_mut() = (0, Some(web_time::Instant::now()));
+    }
+
+    /// The cast gate: 1 = a local cast window is open (the JS cast
+    /// chain's `noteLocalCastWindow(true)` signal), 0 = clear to cast.
+    /// Auto-expires after 12 s (the JS `_castBusyUntilMs` cap) so an
+    /// unclosed window can't wedge the bot. RynthCoreHost parity:
+    /// `GetCastBusyState` / `CanCastNow`.
+    #[wasm_bindgen(js_name = getCastBusyState)]
+    pub fn get_cast_busy_state(&self) -> u32 {
+        let cast = self.rynth_cast.borrow();
+        if !cast.0 {
+            return 0;
+        }
+        match cast.1 {
+            Some(since) if since.elapsed().as_secs_f32() > 12.0 => 0,
+            _ => 1,
+        }
     }
 
     /// PR-JJ 2026-05-23: the local player's active enchantments — full
@@ -32269,6 +32348,7 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = useObject)]
     pub fn use_object(&self, guid: u32) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
+        self.rynth_note_busy_action();
         self.cmd_tx
             .unbounded_send(SessionCommand::UseObject { guid })
             .map_err(|e: TrySendError<_>| {
@@ -32507,6 +32587,9 @@ impl SessionHandle {
     /// ADDITIVE export — no manifest bump.
     #[wasm_bindgen(js_name = noteLocalCastWindow)]
     pub fn note_local_cast_window(&self, active: bool) -> Result<(), JsValue> {
+        // rynth Phase 2: shadow the cast window for getCastBusyState —
+        // the same signal, poll-shaped.
+        *self.rynth_cast.borrow_mut() = (active, Some(web_time::Instant::now()));
         use futures::channel::mpsc::TrySendError;
         self.cmd_tx
             .unbounded_send(SessionCommand::NoteLocalCastWindow { active })
@@ -32978,6 +33061,7 @@ impl SessionHandle {
         spell_id: u32,
     ) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
+        self.rynth_note_busy_action();
         self.cmd_tx
             .unbounded_send(SessionCommand::CastTargetedSpell {
                 target_guid,
@@ -32996,6 +33080,7 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = castUntargetedSpell)]
     pub fn cast_untargeted_spell(&self, spell_id: u32) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
+        self.rynth_note_busy_action();
         self.cmd_tx
             .unbounded_send(SessionCommand::CastUntargetedSpell { spell_id })
             .map_err(|e: TrySendError<_>| {
@@ -34981,6 +35066,14 @@ pub async fn start_session(
     // completion states) under `?wasmPursuit=on`.
     let local_player_pursuit_status: std::rc::Rc<std::cell::RefCell<u32>> =
         std::rc::Rc::new(std::cell::RefCell::new(0));
+    // rynth Phase 2 (2026-07-16): busy-trio shared cells (see the
+    // SessionHandle field docs).
+    let rynth_use_done_seq: std::rc::Rc<std::cell::RefCell<u32>> =
+        std::rc::Rc::new(std::cell::RefCell::new(0));
+    let rynth_busy: std::rc::Rc<std::cell::RefCell<(u32, Option<web_time::Instant>)>> =
+        std::rc::Rc::new(std::cell::RefCell::new((0, None)));
+    let rynth_cast: std::rc::Rc<std::cell::RefCell<(bool, Option<web_time::Instant>)>> =
+        std::rc::Rc::new(std::cell::RefCell::new((false, None)));
     // PR-SS 2026-05-23: timestamp of last server packet. Recv loop
     // writes on every SessionEvent::Message; JS-side link-status
     // indicator polls `sessionLastRecvAgeMs()` to tint the icon.
@@ -35057,6 +35150,8 @@ pub async fn start_session(
         let local_player_can_jump_inner = local_player_can_jump.clone();
         let local_player_jump_charge_level_inner = local_player_jump_charge_level.clone();
         let local_player_pursuit_status_inner = local_player_pursuit_status.clone();
+        let rynth_use_done_seq_inner = rynth_use_done_seq.clone();
+        let rynth_busy_inner = rynth_busy.clone();
         let last_recv_instant_inner = last_recv_instant.clone();
         let last_ping_rtt_ms_inner = last_ping_rtt_ms.clone();
         let collision_scene_inner = collision_scene.clone();
@@ -35112,6 +35207,8 @@ pub async fn start_session(
                 local_player_can_jump_inner,
                 local_player_jump_charge_level_inner,
                 local_player_pursuit_status_inner,
+                rynth_use_done_seq_inner,
+                rynth_busy_inner,
                 last_recv_instant_inner,
                 last_ping_rtt_ms_inner,
                 collision_scene_inner,
@@ -35221,6 +35318,9 @@ pub async fn start_session(
         local_player_can_jump,
         local_player_jump_charge_level,
         local_player_pursuit_status,
+        rynth_use_done_seq,
+        rynth_busy,
+        rynth_cast,
         last_recv_instant,
         last_ping_rtt_ms,
         last_client_prediction,
@@ -37195,6 +37295,9 @@ async fn recv_loop(
     local_player_jump_charge_level: std::rc::Rc<std::cell::RefCell<f32>>,
     // A14-I2 (W3+ S10): pursuit-status shadow (see SessionHandle field).
     local_player_pursuit_status: std::rc::Rc<std::cell::RefCell<u32>>,
+    // rynth Phase 2: UseDone seq + shadow busy (see SessionHandle fields).
+    rynth_use_done_seq: std::rc::Rc<std::cell::RefCell<u32>>,
+    rynth_busy: std::rc::Rc<std::cell::RefCell<(u32, Option<web_time::Instant>)>>,
     last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>>,
     last_ping_rtt_ms: std::rc::Rc<std::cell::RefCell<Option<u32>>>,
     collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
@@ -42733,6 +42836,17 @@ async fn recv_loop(
                                     // routes to kind=13 UseFailed
                                     // instead.
                                     use holtburger_protocol::errors::WeenieError;
+                                    // rynth Phase 2: UseDone fires on
+                                    // EVERY action finish — completed or
+                                    // refused (RynthCoreHost GetUseDoneSeq
+                                    // contract). Count both; also retire
+                                    // one shadow-busy slot (floor 0).
+                                    *rynth_use_done_seq.borrow_mut() += 1;
+                                    {
+                                        let mut busy = rynth_busy.borrow_mut();
+                                        busy.0 = busy.0.saturating_sub(1);
+                                        busy.1 = Some(web_time::Instant::now());
+                                    }
                                     if data.error == WeenieError::None {
                                         queued_events.borrow_mut().push(ClientEvent {
                                             kind: CLIENT_EVENT_KIND_USE_DONE,

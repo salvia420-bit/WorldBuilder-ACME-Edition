@@ -36,9 +36,20 @@ compile spike; everything below is fork-independent.
   `PropertyInt::CombatMode` pushes (holtburger-world `state/types.rs:209`, F11-6
   absent-at-login = NonCombat rule); the getter is a straight promotion.
 - [x] **2026-07-16 — `isPlayerReady()`** (14 #4): WorldState exists + player GUID landed.
-- [ ] Busy trio: `getBusyState` / `getUseDoneSeq` / `getCastBusyState` — design work,
-  synthesize counters from UseDone (0x1C7)/cast-done wire events in the recv loop
-  (14 #5, risk R1). Degrade-open per report 11 contract 0.1.
+- [x] **2026-07-16 — Busy trio landed + live-verified** (14 #5, risk R1):
+  `getUseDoneSeq()` (recv loop counts every `GameEvent::UseDone` 0x1C7, completed OR
+  refused), `getBusyState()` (shadow counter: +1 on useObject/cast* send, −1 on
+  UseDone, floor 0, 15 s self-heal = degrade-open per report 11 contract 0.1),
+  `forceResetBusyCount()`, `getCastBusyState()` (poll-shaped shadow of the JS cast
+  chain's `noteLocalCastWindow` signal, 12 s auto-expiry). Live smoke
+  (`rynth_trio_smoke.cjs`): cast gate 0→1→0 PASS; refused-cast round-trip
+  (castUntargetedSpell(1) → ACE ValidateSpell → SendUseDoneEvent) busy 0→1→0 with
+  seq 0→1 PASS.
+- **Harness lesson (report 06 confirmed live):** `?autoLogin=1` is single-shot — the
+  Account-In-Use kick dance (first connect kicks the stale char ~7 s, second succeeds)
+  defeats it. `rynth_boot_helper.cjs` wraps boot in reload-retry; all rynth smokes use
+  it. Also: teleporting to dense Holtburg under dev-wasm + headless crashed the tab —
+  keep smoke tests at spawn or use release wasm for town-scale tests.
 - [ ] `groundContainerId`, `objectWielderInfo`/`ownershipInfo` composites (14 #11/#15),
   appraisal-time stamps `hasAppraisalData`/`getLastIdTime` (14 #7).
 - [x] **2026-07-16 — `moveToPosition(landblockId, x, y, z, run)`** — the nav keystone
