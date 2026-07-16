@@ -210,8 +210,12 @@ RynthCoreHost seam.
 1. RynthNav router sidecar (09) for long-range routing over moveToPosition legs.
 2. Contract completions: T8 priorities, P3/P12, B4/B5/B7/B10-12, B15/B16 vital
    policy, event queues (push plane), melee-mode kill path, fellowship DTO (07).
-3. D1 fork spike (.NET-wasm compile of an island-excised brain slice) — decides
-   whether the C# brain lands in-page or the JS reimplementation continues.
+3. ~~D1 fork spike~~ **RESOLVED 2026-07-16 (netwasm-spike/): .NET-wasm
+   compiles AND executes** a RynthAi-shaped scoring slice via [JSExport],
+   ~4.1MB runtime, exact contract values in Node. Path A′ (C# brain in-page)
+   is viable — see netwasm-spike/README.md. Recommendation: JS brain ships
+   now (working today); pursue A′ incrementally for the ~13k pure-tier C#
+   lines behind the same RynthWebHost seam, largest-value-first.
 4. Multi-account harness (06) — one page per bot, supervisor process.
 
 ## Traps (from the reports, verified)
