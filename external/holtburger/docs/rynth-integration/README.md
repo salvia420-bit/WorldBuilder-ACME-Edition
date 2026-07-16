@@ -86,6 +86,19 @@ Already shipped in the web runtime — RynthCoreHost members these cover:
 - `setAutoRun` — RynthCoreHost `SetAutoRun` parity, already a wasm export.
 - `pursuitStatus()` poll — the MoveTo completion signal the tick snapshot needs.
 
+### The seam artifact — RynthWebHost (landed 2026-07-16, live-verified)
+`apps/holtburger-web/rynth/webhost.js` — the RynthCoreHost contract reimplemented
+in-page: frozen per-tick snapshot (one await-free block appended per worker-heartbeat
+tick — reports 04/05's design), `has()` capability plane probed from the live
+SessionHandle (stale pkg degrades instead of throwing), per-decision object reads
+passing through, actions fire-and-forget. ~45 RynthCoreHost-named members resolved.
+Live smoke (`rynth_webhost_smoke.cjs`): 10 Hz snapshot ticking, all reads correct,
+MoveToPosition driven purely through the seam → walked 7.97 m, pursuit latch 2. PASS.
+Added `objectPosition(guid)` wasm getter (combat range math) en route.
+Known gaps: `RequestId` capability unresolved (no assess/identify method probed yet);
+`nearby` comes from JS entityMap (empty at spawn under nullRender — needs the wasm
+entity enumerator or spawn-gate-independent source); no event queues yet (poll-only).
+
 ### Phase 0 — spikes (synthesis §3)
 - [ ] S0.1 walking skeleton: in-page snapshot composer + toy host, headless
   `?nullRender=1&netDrainHz=20` login → attack → react.

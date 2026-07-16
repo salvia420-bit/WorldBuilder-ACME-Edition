@@ -30571,6 +30571,24 @@ impl SessionHandle {
         *self.rynth_ground_container.borrow()
     }
 
+    /// Tracked world position of any object as `[landblock_id, x, y, z]`
+    /// (AC-native landblock-local coords, Z-up — the same frame as
+    /// `getLocalPlayerPose`). Empty array when the GUID is unknown.
+    /// The combat/loot range-math read. RynthCoreHost parity:
+    /// `TryGetObjectPosition`.
+    #[wasm_bindgen(js_name = objectPosition)]
+    pub fn object_position(&self, guid: u32) -> Vec<f64> {
+        self.with_entity(guid, |e| {
+            Some(vec![
+                f64::from(e.position.landblock_id.0),
+                f64::from(e.position.coords.x),
+                f64::from(e.position.coords.y),
+                f64::from(e.position.coords.z),
+            ])
+        })
+        .unwrap_or_default()
+    }
+
     /// PR-JJ 2026-05-23: the local player's active enchantments — full
     /// snapshot refreshed by the recv loop on every
     /// `WorldEvent::PlayerEnchantmentsUpdated`. Empty pre-spawn /
