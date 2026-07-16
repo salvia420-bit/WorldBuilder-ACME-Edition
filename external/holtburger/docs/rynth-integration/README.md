@@ -142,9 +142,24 @@ attempt counts as booted only when `__sessionHandle` attaches (90 s), browser-sc
 - [ ] S0.3 .NET-wasm compile spike of an island-excised brain slice (D1 fork resolver).
 - [ ] S0.4 Web-Worker heartbeat tick under a backgrounded tab.
 
-### Phase 2+ — combat loop, buff/loot/nav, parity
-See synthesis §3. The combat behavioral contract (report 11) is the spec; lift the
-tuned constants verbatim.
+### Phase 2 — combat loop: FIRST AUTONOMOUS BRAIN RUNNING (2026-07-16)
+`rynth/combat_loop.js` — report 11's contract subset on the WebHost tick, constants
+lifted verbatim: T9 lock+stickiness(25), T10 scan-grace(1500ms), T2 filter order
+(player → recently-killed(30s TTL) → ItemType Creature → **ObjectIsAttackable** →
+dead → distance), P2/P5/E4 cast serializer (mark-on-issue vs UseDoneSeq + 2500ms
+self-clear), equipment-derived mode, mode-adaptive attacks (war bolt / melee /
+missile). Live smoke (`rynth_loop_smoke.cjs`): spawn 2 drudges → **2 autonomous
+kills in <10s**, lock→kill→re-acquire→kill, zero external driving. PASS.
+- New wasm getter `objectDescFlags(guid)` (ObjectDescriptionFlag bits) backs the
+  seam's `ObjectIsAttackable`/`ObjectIsPlayer` — added after the loop live-locked
+  onto **Alcott the vendor** (NPCs are ItemType Creature; report 11 T2's
+  `!ObjectIsAttackable` class is load-bearing, now proven).
+- Remaining Phase-2 items: T8 monster-rule priorities, P3 face-settle for magic at
+  range, P12 kill prediction, vital/mana policy (B15/B16), missile ammo handling,
+  melee-mode kill path (needs unwielded char).
+
+### Phase 3+ — buff/loot/nav, parity
+See synthesis §3.
 
 ## Traps (from the reports, verified)
 - Gate bot boot on `__bootState` reaching `in-world` (`__bootStateHistory` in

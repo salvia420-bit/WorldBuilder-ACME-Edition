@@ -30607,6 +30607,16 @@ impl SessionHandle {
         out
     }
 
+    /// Raw `ObjectDescriptionFlag` bitfield from the object's spawn
+    /// description (0x08 = PLAYER, 0x10 = ATTACKABLE, 0x20 = PLAYER_KILLER
+    /// — holtburger-common properties/object.rs). `0` when the GUID is
+    /// unknown. Backs the seam's `ObjectIsAttackable` (report 11 T2: the
+    /// filter class that keeps bots from flame-bolting town vendors).
+    #[wasm_bindgen(js_name = objectDescFlags)]
+    pub fn object_desc_flags(&self, guid: u32) -> u32 {
+        self.with_entity(guid, |e| Some(e.flags.bits())).unwrap_or(0)
+    }
+
     /// Tracked world position of any object as `[landblock_id, x, y, z]`
     /// (AC-native landblock-local coords, Z-up — the same frame as
     /// `getLocalPlayerPose`). Empty array when the GUID is unknown.

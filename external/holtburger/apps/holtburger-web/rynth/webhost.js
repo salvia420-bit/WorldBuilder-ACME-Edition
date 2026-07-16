@@ -70,7 +70,11 @@ const CAPABILITY_CANDIDATES = {
   NoteLocalCastWindow: ["noteLocalCastWindow"],
   RequestId: ["assessEntity", "identifyObject", "requestId"],
   NearbyEntityGuids: ["nearbyEntityGuids"],
+  GetObjectDescFlags: ["objectDescFlags"],
 };
+
+const ODF_PLAYER = 0x08;
+const ODF_ATTACKABLE = 0x10;
 
 export class RynthWebHost {
   constructor(sessionHandle, opts = {}) {
@@ -298,6 +302,17 @@ export class RynthWebHost {
     const wielder = this._live("GetObjectInstanceIdProperty", guid, 3) ?? 0;
     const location = this._live("GetObjectIntProperty", guid, 10) ?? 0;
     return { container, wielder, location };
+  }
+  /// Report 11 T2 filter class: attackable per the spawn description
+  /// flags (0x10). false when unknown — fail closed, never engage an
+  /// unverifiable target. RynthCoreHost parity: `ObjectIsAttackable`.
+  ObjectIsAttackable(guid) {
+    const flags = this._live("GetObjectDescFlags", guid) ?? 0;
+    return (flags & ODF_ATTACKABLE) !== 0;
+  }
+  ObjectIsPlayer(guid) {
+    const flags = this._live("GetObjectDescFlags", guid) ?? 0;
+    return (flags & ODF_PLAYER) !== 0;
   }
   HasAppraisalData(guid) {
     return this._live("HasAppraisalData", guid) ?? false;
