@@ -63,7 +63,7 @@ Bot code: `apps/holtburger-web/rynth/` (9 modules). Entry point:
 
 ## Open work (feasibility proven; remaining is depth)
 
-1. Missile ammo-out fallback (mode auto-reverts to Melee server-side; a bot-side pre-check is a nicety).
+(none load-bearing — the combat + buff contracts are complete)
 2. VTank meta-scripting (ExpressionEngine) — deferred by report 03; gate on real need.
 3. RynthNav global router **sidecar** (offline navmesh bake + Detour + portal Dijkstra) —
    report 09's XL endgame; the `router.js` local half consumes its output.

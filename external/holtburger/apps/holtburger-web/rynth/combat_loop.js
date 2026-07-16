@@ -332,10 +332,28 @@ export class RynthCombatLoop {
     }
 
     // ENGAGE: equipment-derived combat mode (the live-confirmed trap) +
-    // stick for melee-range hold.
+    // stick for melee-range hold. Missile ammo is handled by the toggle
+    // itself — the equipment-derived suggested mode (get_suggested_combat_
+    // mode + is_missing_missile_ammo, ACE Player_Combat) never returns
+    // Missile without ammo, and ACE reverts a doomed mode to NonCombat, so
+    // the loop self-corrects rather than getting stuck in a no-ammo missile
+    // stance. The guard below bounds a mode that WON'T establish at all.
     this.mode = h.GetCurrentCombatMode();
     if (this.mode <= 1) {
       if (now - this.modeRequestedAt > 3000) {
+        // If repeated toggles never leave NonCombat, the character can't
+        // enter combat (no usable weapon/caster, or a persistent refusal) —
+        // park the target so acquisition moves on instead of looping.
+        this._modeAttempts = (this._modeAttempts || 0) + 1;
+        if (this._modeAttempts > 5) {
+          this.log(`cannot enter combat vs ${target.toString(16)} — parking`);
+          this.recentlyKilled.set(target, now); // reuse the skip-TTL map
+          this.locked = 0;
+          this.lockedScore = -1;
+          this._modeAttempts = 0;
+          this.state = "ACQUIRE";
+          return;
+        }
         const s = h.s;
         if (s.toggleCombatMode) s.toggleCombatMode();
         this.modeRequestedAt = now;
@@ -343,6 +361,7 @@ export class RynthCombatLoop {
       }
       return; // wait for the mode to complete before attacking
     }
+    this._modeAttempts = 0; // established — reset the guard
     if (this.state !== "ATTACK") {
       h.StickToObject(target);
       this.state = "ATTACK";
