@@ -70,6 +70,7 @@ These are the extension points that exist TODAY, no v1 edits needed:
 
 ## 2. Findings (bugs / risks — cited, NOT fixed here)
 
+**F1 — FIXED 2026-07-16** (try/catch at the bot.js call site, warn + grind on).
 **F1 (MED, real): AI wiring failure can abort the whole bot construction.**
 `createGrindBot` does `await wireAiDirector(bot, config.ai, base)` with no
 try/catch (bot.js:167), and `wireAiDirector` awaits dynamic imports of the
@@ -79,6 +80,9 @@ ai modules (bot.js:210, 216-220). A broken/stale deploy of any ai module
 survives the AI being broken" invariant does not hold. One-line fix at the
 call site: `try { await wireAiDirector(...) } catch (e) { console.warn(...) }`.
 
+**F2 — FIXED 2026-07-16** (catalog text says full objCellId with a pos-line
+example; executor refuses `lb <= 0xFFFF` with an actionable error; x/y
+bounded to [0,192) in the validator).
 **F2 (MED, real): `goto_lb` misroutes on the natural "landblock" reading.**
 The catalog tells the LLM `lb` is a "landblock hex string or number"
 (actions.js:18) and the validator accepts 1-8 hex digits (actions.js:56-58).
@@ -151,6 +155,15 @@ pre-flight (director.js:145-146) so a throwing chat can't dodge the budget;
 (director.js:104-115, 230-240).
 
 ## 3. Prioritized next slice
+
+**Status 2026-07-16: items 1-3 are DONE** — F1/F2 fixed as noted above; the
+extension layers (safety guardPlan, enrichObservation, knowledge `lookup`,
+dungeon `dungeon_suggest`, providers→ui datalist) are composed by
+`ai/extensions.js` and wired default-on in `wireAiDirector`
+(`config.ai.extensions === false` reverts to plain v1). The browser knowledge
+corpus is baked from the acpedia wikidump by
+`ai/tools/bake_knowledge_acpedia.py` → `knowledge.acpedia.json` (gitignored;
+sample corpus is the fallback). Remaining below: #4, #5(spell ids), #7 partial.
 
 1. **Guard `wireAiDirector`** (F1) — one try/catch in bot.js:167; the only
    invariant hole found. Tiny, do first.

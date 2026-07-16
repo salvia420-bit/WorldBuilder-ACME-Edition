@@ -14,7 +14,10 @@
 export const QUERY_MAX_CHARS = 200;
 const SUMMARY_MAX_CHARS = 240;
 
-// Ranking tiers: title substring > alias > body, ties broken by title.
+// Ranking tiers: exact title > title substring > alias > body, ties broken
+// by title (the exact tier keeps "Olthoi Soldier" above "An Olthoi Soldier
+// Nest" on a 24k-article corpus).
+const SCORE_EXACT = 4;
 const SCORE_TITLE = 3;
 const SCORE_ALIAS = 2;
 const SCORE_BODY = 1;
@@ -84,7 +87,8 @@ export class FileKnowledgeProvider {
       if (!q || !Number.isFinite(n) || n < 1) return [];
       const hits = [];
       for (const e of await this._load()) {
-        const score = e.title.toLowerCase().includes(q) ? SCORE_TITLE
+        const score = e.title.toLowerCase() === q ? SCORE_EXACT
+          : e.title.toLowerCase().includes(q) ? SCORE_TITLE
           : e.aliases.some((a) => a.toLowerCase().includes(q)) ? SCORE_ALIAS
           : e.text.toLowerCase().includes(q) ? SCORE_BODY
           : 0;

@@ -34,7 +34,8 @@ const CSS_STATUS = "margin-top:4px;white-space:pre-wrap;word-break:break-word;";
 const CSS_JOURNAL =
   "margin-top:2px;white-space:pre-wrap;word-break:break-word;opacity:0.8;";
 
-// SPEC §ui: "datalist of a few OpenRouter ids".
+// SPEC §ui: "datalist of a few OpenRouter ids". Fallback when the caller
+// doesn't pass a providers.js-derived list (additive `models` option below).
 const MODEL_SUGGESTIONS = [
   "anthropic/claude-haiku-4.5",
   "anthropic/claude-sonnet-4.6",
@@ -44,8 +45,14 @@ const MODEL_SUGGESTIONS = [
 
 let mountSeq = 0; // unique datalist id per mount (panel is remountable)
 
-/** Mount the panel. -> { el, destroy() } */
-export function mountAiPanel(director, { client } = {}) {
+/** Mount the panel. -> { el, destroy() }
+ * `models` (optional, additive): datalist suggestions — e.g.
+ * providers.js modelsFor(DEFAULT_PROVIDER) ids; invalid/empty -> the
+ * hardcoded fallback. */
+export function mountAiPanel(director, { client, models } = {}) {
+  const modelIds = Array.isArray(models) && models.some((m) => typeof m === "string" && m)
+    ? models.filter((m) => typeof m === "string" && m)
+    : MODEL_SUGGESTIONS;
   const make = (tag, css, text) => {
     const el = document.createElement(tag);
     if (css) try { el.style.cssText = css; } catch { /* styleless stub doc */ }
@@ -100,7 +107,7 @@ export function mountAiPanel(director, { client } = {}) {
   });
   const datalist = make("datalist");
   datalist.id = listId;
-  for (const m of MODEL_SUGGESTIONS) {
+  for (const m of modelIds) {
     const opt = make("option");
     opt.value = m;
     datalist.appendChild(opt);

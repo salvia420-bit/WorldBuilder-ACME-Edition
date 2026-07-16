@@ -164,7 +164,15 @@ export async function createGrindBot(sessionHandle, config = {}) {
 
   // AI director (rynth/ai/SPEC.md §Wiring) — opt-in by key presence or an
   // explicit config.ai object; config.ai === false skips even the key probe.
-  if (config.ai !== false) await wireAiDirector(bot, config.ai, base);
+  // Guarded: a broken/stale ai module must never abort bot construction —
+  // the bot grinds fine without the director (SPEC invariant).
+  if (config.ai !== false) {
+    try {
+      await wireAiDirector(bot, config.ai, base);
+    } catch (e) {
+      console.warn("[rynth] AI wiring failed, grinding without director:", e);
+    }
+  }
 
   return bot;
 }
@@ -226,18 +234,46 @@ async function wireAiDirector(bot, aiConfig, base) {
     title: "holtburger-rynth",
   });
   const journal = new jn.AiJournal();
+
+  // Extension layers (knowledge lookup, dungeon_suggest, safety guardPlan,
+  // observation enrichment) compose through the director's injectable deps —
+  // ai/extensions.js. Failure here degrades to the plain v1 director;
+  // config.ai.extensions === false skips the import entirely.
+  let ext = null;
+  if (aiCfg?.extensions !== false) {
+    try {
+      const xm = await import(`${base}/ai/extensions.js`);
+      ext = xm.composeAiExtensions(bot, { base, journal, config: aiCfg });
+    } catch (e) {
+      console.warn("[rynth] AI extensions unavailable, using v1 director:", e);
+    }
+  }
+
   const director = new dr.RynthAiDirector(bot, {
     client,
     journal,
     intervalMinutes: aiCfg?.intervalMinutes, // undefined -> director defaults
     dryRun: aiCfg?.dryRun,
+    maxCallsPerHour: aiCfg?.maxCallsPerHour, // undefined -> director defaults
+    ...(ext
+      ? ext.directorDeps // observe/validate/execute/systemPrompt
+      : typeof aiCfg?.systemPrompt === "string" && aiCfg.systemPrompt
+        ? { systemPrompt: aiCfg.systemPrompt }
+        : {}),
   });
-  bot.ai = { director, client, journal };
+  bot.ai = { director, client, journal, ...(ext ? { extensions: ext } : {}) };
 
   if (typeof window !== "undefined") {
     let panel = null; // mount-once: the handle promise is cached; ui.js is imported only here
     const openPanel = () =>
-      (panel ??= import(`${base}/ai/ui.js`).then((ui) => ui.mountAiPanel(director, { client: aiKeyOps(lc.LlmClient) })));
+      (panel ??= Promise.all([
+        import(`${base}/ai/ui.js`),
+        import(`${base}/ai/providers.js`).catch(() => null), // catalog optional — panel works without it
+      ]).then(([ui, pv]) =>
+        ui.mountAiPanel(director, {
+          client: aiKeyOps(lc.LlmClient),
+          models: pv ? pv.modelsFor(pv.DEFAULT_PROVIDER).map((m) => m.id) : undefined,
+        })));
     window.rynthAI = {
       setKey: (key) => lc.LlmClient.saveKey(key),
       clearKey: () => lc.LlmClient.clearKey(),

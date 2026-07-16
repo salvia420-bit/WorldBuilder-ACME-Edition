@@ -121,8 +121,22 @@ Spend counters: `window.rynthAI.status().spend`
   model: "mock", apiKey: "test-key" }` against
   `node rynth/ai/mock_llm_server.cjs` (used by `rynth_ai_smoke.cjs`).
 
-## Roadmap (NOT in v1)
+## Extensions (wired by default since 2026-07-16)
 
-Deliberately out of scope for now: acpedia/quest lookup tools, a dungeon-nav
-helper program, multi-bot coordination, long-term goal ladders. v1 is plain
-chat completions + the strict JSON reply contract above.
+The v2 layers compose through `ai/extensions.js` and are ON by default
+(`config.ai = { extensions: false }` reverts to the plain v1 director):
+
+- **`lookup` action** — acpedia/quest knowledge search. The browser corpus is
+  fetched from `ai/tools/knowledge.acpedia.json` (baked from the acpedia
+  wikidump; gitignored) with `knowledge.sample.json` as the fallback. Override
+  with `config.ai.knowledge = { url | entries | provider }`, or `false` to
+  disable.
+- **`dungeon_suggest` action** — advisory indoor-route suggestions over the
+  live wasm dungeon graph; never moves the bot.
+- **Safety governor** — `guardPlan`/`sanitizeAction` screen every plan before
+  execution (control chars, disguised `@`/`/` commands, numeric clamps, max 5
+  actions/check-in).
+- **Observation enrichment** — kill-rate trend, burden/free-slots, nearby
+  portals, and a suggested-focus line appended to each observation.
+
+Still out of scope: multi-bot coordination, long-term goal ladders.

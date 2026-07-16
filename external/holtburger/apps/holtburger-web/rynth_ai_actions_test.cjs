@@ -133,8 +133,12 @@ function makeBot(overrides = {}) {
     const to = bot.calls[1] && bot.calls[1][1];
     check("exec goto_lb hex lb -> number", r.ok === true && to && to.lb === 0xa9b40015
       && to.x === 50 && to.y === 60 && to.z === 0, JSON.stringify(to));
-    r = await executeAction(bot, { type: "goto_lb", lb: 0x1234, x: 0, y: 0, z: 0 });
-    check("exec goto_lb numeric lb passes through", r.ok === true && bot.calls[2][1].lb === 0x1234);
+    r = await executeAction(bot, { type: "goto_lb", lb: 0x12340010, x: 0, y: 0, z: 0 });
+    check("exec goto_lb numeric lb passes through", r.ok === true && bot.calls[2][1].lb === 0x12340010);
+    r = await executeAction(bot, { type: "goto_lb", lb: "A9B4", x: 0, y: 0, z: 0 });
+    check("exec goto_lb refuses bare landblock word", r.ok === false
+      && /objCellId/.test(r.error) && !bot.calls.some((c) => c[0] === "goto" && c[1].lb === 0xa9b4),
+      JSON.stringify(r));
 
     r = await executeAction(bot, { type: "stop_goto" });
     check("exec stop_goto", r.ok === true && bot.calls[3][0] === "cancel", JSON.stringify(r));

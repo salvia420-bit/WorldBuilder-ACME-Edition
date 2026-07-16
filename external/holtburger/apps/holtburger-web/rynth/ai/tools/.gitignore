@@ -1,0 +1,3 @@
+# Baked from the acpedia wikidump (bake_knowledge_acpedia.py) — regenerable,
+# ~MBs; knowledge.sample.json is the committed fresh-clone fallback.
+knowledge.acpedia.json

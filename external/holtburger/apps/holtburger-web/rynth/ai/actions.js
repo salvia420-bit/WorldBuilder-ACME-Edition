@@ -15,7 +15,12 @@ export const ACTIONS = {
     desc: "travel to /loc coordinates (pauses grind, resumes on arrival)",
   },
   goto_lb: {
-    params: { lb: "landblock hex string or number", x: "number", y: "number", z: "number" },
+    params: {
+      lb: "full u32 objCellId (hex string or number) as printed on the observation's pos line, e.g. 0xA9B40015 — NOT the bare 4-digit landblock word",
+      x: "number, landblock-local, 0 <= x < 192",
+      y: "number, landblock-local, 0 <= y < 192",
+      z: "number",
+    },
     desc: "travel to an exact landblock-local position",
   },
   stop_goto: { params: {}, desc: "cancel any travel/goto in progress" },
@@ -69,9 +74,13 @@ export function validateAction(a) {
           return { ok: false, error: `${k} must be a finite number, |deg| <= ${MAX_LOC_DEG}` };
       return { ok: true };
     case "goto_lb":
-      if (!isLandblock(a.lb)) return { ok: false, error: "lb must be a landblock hex string or non-negative integer" };
+      if (!isLandblock(a.lb)) return { ok: false, error: "lb must be a full u32 objCellId as hex string or non-negative integer" };
       for (const k of ["x", "y", "z"])
         if (!isFiniteNum(a[k])) return { ok: false, error: `${k} must be a finite number` };
+      // Sidecar rejects landblock-local coords outside [0,192) — catch it
+      // here so the LLM gets a bounds message instead of a routing failure.
+      for (const k of ["x", "y"])
+        if (a[k] < 0 || a[k] >= 192) return { ok: false, error: `${k} must be landblock-local, 0 <= ${k} < 192` };
       return { ok: true };
     case "set_priorities": {
       const r = a.rules;
@@ -122,10 +131,15 @@ export async function executeAction(bot, a, { log } = {}) {
       case "goto":
       case "goto_lb": {
         if (typeof bot?.goto !== "function") return fail("unavailable");
-        const to =
-          a.type === "goto"
-            ? { ns: a.ns, ew: a.ew }
-            : { lb: typeof a.lb === "string" ? parseInt(a.lb.trim(), 16) : a.lb, x: a.x, y: a.y, z: a.z };
+        // The nav sidecar needs the FULL u32 objCellId — the high word places
+        // the point. A bare landblock word (e.g. 0xA9B4) would route to the
+        // map-corner landblock 0x0000; refuse it with an actionable error.
+        const lbNum = a.type === "goto_lb" ? (typeof a.lb === "string" ? parseInt(a.lb.trim(), 16) : a.lb) : 0;
+        if (a.type === "goto_lb" && lbNum <= 0xffff)
+          return fail(
+            `lb 0x${lbNum.toString(16).toUpperCase()} looks like a bare landblock word — send the full u32 objCellId from the pos line (e.g. 0xA9B40015)`,
+          );
+        const to = a.type === "goto" ? { ns: a.ns, ew: a.ew } : { lb: lbNum, x: a.x, y: a.y, z: a.z };
         // bot.goto resolves {ok, state, legsWalked, replans} or {ok:false,
         // error} (bot.js:141-148); refusals like "goto already active"
         // surface as the error here.

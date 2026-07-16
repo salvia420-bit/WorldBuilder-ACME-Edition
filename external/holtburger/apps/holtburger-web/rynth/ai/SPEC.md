@@ -86,7 +86,9 @@ export async function executeAction(bot, a, { log } = {})  // -> { type, ok, res
 export async function executePlan(bot, actions, { maxActions = 5, log } = {}) // sequential, stops after maxActions, never throws
 ```
 v1 action types (exact strings): `goto {ns, ew}` (numbers, |deg| <= 102;
-via `bot.goto({ns,ew})`), `goto_lb {lb, x, y, z}` (lb hex string or number),
+via `bot.goto({ns,ew})`), `goto_lb {lb, x, y, z}` (lb = full u32 objCellId as
+hex string or number — the executor refuses `lb <= 0xFFFF` (a bare landblock
+word would route to the map corner); x/y landblock-local in [0,192)),
 `stop_goto` (router.cancel via bot surface), `set_priorities {rules}`
 (object name->int 1..99, replaces `bot.combat.priorities`),
 `set_loot_min_value {value}` (int >= 0 -> `bot.loot.minValue`), `pause`
@@ -138,7 +140,9 @@ under node. Never throws on quota/corrupt-JSON — degrade to memory.
 
 ### ui.js
 ```js
-export function mountAiPanel(director, { client } = {}) // -> { el, destroy() }
+export function mountAiPanel(director, { client, models } = {}) // -> { el, destroy() }
+// `models` (additive, optional): datalist suggestion ids — bot.js passes the
+// providers.js catalog; absent/invalid -> the hardcoded fallback list.
 ```
 Plain DOM, no framework. Small fixed-position panel (bottom-right, dark,
 consistent with the app's overlay look): masked API-key input + Save/Clear
@@ -163,6 +167,18 @@ textContent/value/remove).
   `window.rynthAI.setKey` is installed (so a user can bootstrap from console)
   — implement that tiny bootstrap inline in bot.js without importing the ai
   modules until a key exists (zero cost when unused).
+- **Extensions (post-v1, 2026-07-16):** `ai/extensions.js
+  composeAiExtensions(bot, { base, journal, config })` composes the v2
+  layers through the director's injectable deps and is wired by default in
+  bot.js (`config.ai.extensions === false` skips; wiring failure degrades to
+  the v1 director): safety `guardPlan` in front of `executePlan`,
+  `enrichObservation` around `buildObservation`, `lookup` (knowledge) +
+  `dungeon_suggest` (dungeon-nav) actions appended to the system prompt as an
+  EXTRA ACTIONS catalog. Extra `config.ai` passthrough: `systemPrompt`,
+  `maxCallsPerHour`, `knowledge: false | { provider|entries|url }`,
+  `dungeonNav: false`. The browser knowledge corpus defaults to
+  `ai/tools/knowledge.acpedia.json` (baked, gitignored) with
+  `knowledge.sample.json` as the fresh-clone fallback.
 - `control_channel.js`: add `ai` command — `!bot ai status|on|off|now`
   (status -> one-line summary reply; on/off -> start/stop; now -> checkNow
   fire-and-forget). Register alongside the existing commands; follow the

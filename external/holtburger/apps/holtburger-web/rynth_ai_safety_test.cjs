@@ -171,7 +171,7 @@ const FW_SLASH = ch(0xff0f); // ／ FULLWIDTH SOLIDUS (NFKC -> /)
   {
     // Passes every safety screen, fails the frozen v1 validator (bad lb hex).
     const r = sanitizeAction({ type: "goto_lb", lb: "zzzz", x: 1, y: 1, z: 1 });
-    check("gate: v1 validateAction still applies to sanitized clone", r.ok === false && /landblock/.test(r.error), JSON.stringify(r));
+    check("gate: v1 validateAction still applies to sanitized clone", r.ok === false && /objCellId/.test(r.error), JSON.stringify(r));
   }
   {
     const rules = Object.freeze({ Drudge: 150.6 });
