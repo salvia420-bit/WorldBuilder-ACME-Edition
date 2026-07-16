@@ -1,0 +1,151 @@
+// RynthSupervisor — the multi-account bot fleet manager (report 06 §b).
+//
+// One Chrome page per account; each page boots holtburger-web headless,
+// installs the RynthWebHost + BotKernel, and grinds. The supervisor owns
+// process lifecycle the loops don't: login retry (the Account-In-Use kick
+// dance), disconnect detection, and auto-relogin. serve.py needs zero
+// changes (stateless — report 06 §b); the ceiling is browser-side tab
+// throttling + ACE's per-account session model, not the HTTP server.
+//
+// Usage:
+//   node rynth_supervisor.cjs '[{"account":"a","password":"a","buffs":[2,24]}]'
+//
+// Bot page contract (installed via evaluate): window.__rh (RynthWebHost),
+// window.__kn (BotKernel). Health = __rh.snap freshness + __sessionHandle
+// liveness; a stalled snapshot or a dropped session triggers a rebuild.
+
+const { chromium } = require("playwright");
+
+const BASE_URL =
+  process.env.RYNTH_URL ||
+  "http://127.0.0.1:8765/apps/holtburger-web/index.html";
+const HEALTH_INTERVAL_MS = 5000;
+const SNAP_STALE_MS = 8000; // snapshot older than this = the tick died
+const RELOGIN_BACKOFF_MS = 20_000; // ACE session reap window
+const BOOT_ATTEMPTS = 4;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function bootUrl(cfg) {
+  const q = new URLSearchParams({
+    nosw: "1",
+    nullRender: "1",
+    netDrainHz: "30",
+    autoLogin: "1",
+    account: cfg.account,
+    password: cfg.password,
+    autoSpawn: "first",
+  });
+  return `${BASE_URL}?${q}&v=${Date.now()}`;
+}
+
+async function bootBot(browser, cfg, log) {
+  for (let a = 1; a <= BOOT_ATTEMPTS; a++) {
+    let page = null;
+    try {
+      page = await browser.newPage();
+      await page.goto(bootUrl(cfg), { waitUntil: "domcontentloaded", timeout: 60_000 });
+      let ok = false;
+      for (let i = 0; i < 60; i++) {
+        const st = await page.evaluate(() => window.__bootState || "");
+        if (st === "in-world" || st === "ready") { ok = true; break; }
+        if (st === "error") break;
+        await sleep(2000);
+      }
+      if (ok) {
+        await page.waitForFunction(() => !!window.__sessionHandle, { timeout: 90_000 });
+        await installBot(page, cfg);
+        log(`${cfg.account}: booted + bot installed`);
+        return page;
+      }
+      log(`${cfg.account}: boot attempt ${a} failed`);
+    } catch (e) {
+      log(`${cfg.account}: boot attempt ${a} threw ${String(e.message).slice(0, 80)}`);
+    }
+    if (page) await page.close().catch(() => null);
+    await sleep(RELOGIN_BACKOFF_MS); // let ACE reap the stale session
+  }
+  return null;
+}
+
+async function installBot(page, cfg) {
+  await page.evaluate(async (buffIds) => {
+    const wh = await import("/apps/holtburger-web/rynth/webhost.js");
+    const cl = await import("/apps/holtburger-web/rynth/combat_loop.js");
+    const bl = await import("/apps/holtburger-web/rynth/buff_loop.js");
+    const ll = await import("/apps/holtburger-web/rynth/loot_loop.js");
+    const kn = await import("/apps/holtburger-web/rynth/kernel.js");
+    const host = new wh.RynthWebHost(window.__sessionHandle);
+    host.nearbyRangeM = 60;
+    const known = Array.from(window.__sessionHandle.playerKnownSpells() || []).map(Number);
+    const buffs = (buffIds || []).filter((id) => known.includes(id));
+    window.__rh = host;
+    window.__kn = new kn.RynthBotKernel(host, {
+      combat: new cl.RynthCombatLoop(host),
+      buff: buffs.length ? new bl.RynthBuffLoop(host, buffs) : null,
+      loot: new ll.RynthLootLoop(host),
+    });
+    host.start(10);
+    window.__kn.start();
+  }, cfg.buffs || []);
+}
+
+async function health(page) {
+  try {
+    return await page.evaluate(() => {
+      const h = window.__rh;
+      const alive = !!window.__sessionHandle && !!h && !!h.snap;
+      const snapAge = h && h.snap ? Date.now() - h.snap.tMs : Infinity;
+      const st = window.__kn ? window.__kn.status : null;
+      return { alive, snapAge, status: st, boot: window.__bootState };
+    });
+  } catch (e) {
+    return { alive: false, snapAge: Infinity, error: e.message };
+  }
+}
+
+async function runFleet(configs, opts = {}) {
+  const log = opts.log || ((m) => console.log(`[sup] ${new Date().toISOString()} ${m}`));
+  const runMs = opts.runMs || 0; // 0 = forever
+  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox", "--disable-gpu"] });
+  const bots = configs.map((cfg) => ({ cfg, page: null, rebuilds: 0 }));
+
+  for (const b of bots) b.page = await bootBot(browser, b.cfg, log);
+
+  const started = Date.now();
+  const stats = {};
+  while (runMs === 0 || Date.now() - started < runMs) {
+    await sleep(HEALTH_INTERVAL_MS);
+    for (const b of bots) {
+      if (!b.page) { b.page = await bootBot(browser, b.cfg, log); continue; }
+      const h = await health(b.page);
+      stats[b.cfg.account] = h.status;
+      const dead = !h.alive || h.snapAge > SNAP_STALE_MS || h.boot === "error";
+      if (dead) {
+        log(`${b.cfg.account}: UNHEALTHY (snapAge=${h.snapAge} boot=${h.boot}) — rebuilding`);
+        await b.page.close().catch(() => null);
+        b.rebuilds++;
+        b.page = await bootBot(browser, b.cfg, log);
+      } else if (opts.verbose) {
+        log(`${b.cfg.account}: ${JSON.stringify(h.status)}`);
+      }
+    }
+  }
+  const summary = bots.map((b) => ({ account: b.cfg.account, rebuilds: b.rebuilds, status: stats[b.cfg.account] }));
+  if (!opts.keepOpen) await browser.close();
+  return { browser, bots, summary };
+}
+
+module.exports = { runFleet, bootBot, installBot, health };
+
+if (require.main === module) {
+  const configs = JSON.parse(process.argv[2] || "[]");
+  if (!configs.length) {
+    console.error('usage: node rynth_supervisor.cjs \'[{"account":"a","password":"a","buffs":[2,24]}]\'');
+    process.exit(2);
+  }
+  runFleet(configs, { verbose: true }).catch((e) => {
+    console.error("fleet error:", e);
+    process.exit(1);
+  });
+}

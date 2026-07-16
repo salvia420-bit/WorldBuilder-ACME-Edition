@@ -216,7 +216,24 @@ RynthCoreHost seam.
    is viable — see netwasm-spike/README.md. Recommendation: JS brain ships
    now (working today); pursue A′ incrementally for the ~13k pure-tier C#
    lines behind the same RynthWebHost seam, largest-value-first.
-4. Multi-account harness (06) — one page per bot, supervisor process.
+4. ~~Multi-account harness (06)~~ **LANDED 2026-07-16** — `rynth/supervisor.cjs`:
+   one Chrome page per account, each running the RynthWebHost+BotKernel grind
+   bot; the supervisor owns login-retry (Account-In-Use kick dance),
+   health monitoring (snapshot-freshness + session liveness), and auto-relogin.
+   Live smoke (`rynth_supervisor_smoke.cjs`): boot → forced stall → detected
+   (snapAge>8s) → rebuilt → recovered into Buffing. serve.py needs zero
+   changes. N accounts is `runFleet([...configs])`; verified with 1 (only
+   tailnet1 has a spell-capable char provisioned).
+
+### Milestone (2026-07-16): the synthesis is substantially delivered
+An autonomous multi-account grind-bot fleet runs on holtburger-web entirely
+through the reimplemented RynthCoreHost seam. Phases 1–3 of the roadmap are
+green (login → world model → combat → buff → loot → parity-subset), the D1
+language fork is resolved (both JS-now and .NET-wasm-A′ proven), and the
+supervisor gives the fleet its lifecycle. Remaining work is depth, not
+feasibility: contract completions (T8/P12/B4-B12/B15-B16), the RynthNav
+router sidecar for long-range routing, the push-event plane, and the
+incremental .NET-wasm lift of the pure-tier C#.
 
 ## Traps (from the reports, verified)
 - Gate bot boot on `__bootState` reaching `in-world` (`__bootStateHistory` in
