@@ -99,7 +99,40 @@ export class RynthWebHost {
     this.snap = null; // frozen per-tick snapshot
     this._tickSeq = 0;
     this._onTick = [];
+    this._onEvent = []; // report 04 push plane
     this._worker = null;
+    // Install the push-event tap: the page's pumpNetFrame forwards each
+    // drained ClientEvent here (default-off hook in index.html). Events
+    // are the PUSH complement to the poll snapshot — chat, kill notices,
+    // use-done — that a pure poller would miss or need to reconstruct.
+    if (typeof window !== "undefined" && !opts.noEventTap) {
+      const prev = window.__rynthOnEvent;
+      window.__rynthOnEvent = (evt) => {
+        if (prev) { try { prev(evt); } catch (_) {} }
+        this._dispatchEvent(evt);
+      };
+    }
+  }
+
+  // ── push-event plane (report 04) ────────────────────────────────────
+  onEvent(fn) {
+    this._onEvent.push(fn);
+  }
+  _dispatchEvent(evt) {
+    // Normalize the wasm ClientEvent into a plain object once.
+    const e = {
+      kind: evt.kind,
+      text: evt.stringPayload ?? null,
+      u32: evt.u32Payload ?? 0,
+      u32b: evt.u32Payload2 ?? 0,
+    };
+    for (const fn of this._onEvent) {
+      try {
+        fn(e, this);
+      } catch (err) {
+        (console.warn || console.log)("[RynthWebHost] onEvent threw:", err);
+      }
+    }
   }
 
   // ── capability probes (the RynthCoreHost Has* plane) ───────────────

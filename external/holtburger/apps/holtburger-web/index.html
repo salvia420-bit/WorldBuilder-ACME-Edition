@@ -7012,6 +7012,12 @@
             const events = handle.poll_events();
             for (const evt of events) {
               try { window.__diag?.wire?.onEvent?.(evt); } catch (_) {}
+              // rynth-integration (2026-07-16): default-off push-event tap.
+              // The client already drains poll_events destructively here;
+              // a bot brain (RynthWebHost) can't re-drain without stealing,
+              // so forward each event to an optional hook it installs. No
+              // behavior change when unset. (report 04's push plane.)
+              try { window.__rynthOnEvent?.(evt); } catch (_) {}
               if (evt.kind === 1) {
                 // PlayerSpawned — u32Payload = spawned player GUID.
                 spawnedPlayerGuid = evt.u32Payload >>> 0;
