@@ -185,16 +185,28 @@ inventory 16→17. Full kill-to-loot pipeline autonomous. Trap: wasm Vec<u32>
 arrives as Uint32Array — Array.from before mutating (typed-array .map has no
 .shift).
 
-### Next arcs — the BotKernel, nav router, parity
-1. **BotKernel (report 12's concept, JS edition):** one orchestrator running
-   combat+buff+loot with action priority and a shared cast serializer (today the
-   loops assume solo ownership of the gates — they need an arbiter to run
-   together). This is the "grind bot" milestone.
-2. RynthNav router sidecar (09) for long-range routing over moveToPosition legs.
-3. Contract completions: T8 priorities, P3/P12, B4/B5/B7/B10-12, B15/B16 vital
+### THE GRIND BOT — BotKernel PASS (2026-07-16)
+`rynth/kernel.js` — report 12's BotKernel concept, JS edition: one kernel tick
+runs ONE loop's tick (gates never contended — B14's BotAction pin,
+kernel-shaped), priority ladder Combat > Loot > Buff > Idle with
+mid-transaction ownership pinning and combat preemption. Live smoke
+(`rynth_kernel_smoke.cjs`): spawn 2 drudges → 2 autonomous kills →
+Combat→Loot transition → both corpses worked (one approach timeout parked
+correctly, recovered on the second) → **3 items looted** → Idle with buffs
+2/2 active. ~25 s, fully unattended. This is the synthesis Phase-2/3 core
+delivered: an autonomous grind bot on holtburger-web through the
+RynthCoreHost seam.
+- Known rough edge: corpse APPROACH can time out when MoveToPosition is
+  issued right after combat stick-release; the park-and-retry path recovers,
+  but the first corpse can be skipped. Investigate stick→moveTo handoff.
+
+### Next arcs — nav router, contract completions, the D1 fork
+1. RynthNav router sidecar (09) for long-range routing over moveToPosition legs.
+2. Contract completions: T8 priorities, P3/P12, B4/B5/B7/B10-12, B15/B16 vital
    policy, event queues (push plane), melee-mode kill path, fellowship DTO (07).
-4. D1 fork spike (.NET-wasm compile of an island-excised brain slice) — decides
+3. D1 fork spike (.NET-wasm compile of an island-excised brain slice) — decides
    whether the C# brain lands in-page or the JS reimplementation continues.
+4. Multi-account harness (06) — one page per bot, supervisor process.
 
 ## Traps (from the reports, verified)
 - Gate bot boot on `__bootState` reaching `in-world` (`__bootStateHistory` in
