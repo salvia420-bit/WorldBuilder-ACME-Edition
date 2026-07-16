@@ -158,8 +158,26 @@ kills in <10s**, lock→kill→re-acquire→kill, zero external driving. PASS.
   range, P12 kill prediction, vital/mana policy (B15/B16), missile ammo handling,
   melee-mode kill path (needs unwielded char).
 
-### Phase 3+ — buff/loot/nav, parity
-See synthesis §3.
+### Phase 3 — buff loop: PASS (2026-07-16)
+`rynth/buff_loop.js` — report 11 B-rules subset, constants verbatim: B1 login
+stabilization (registry count stable on two 1 s reads / 20 s cap), B2 family-keyed
+expiry truth, B3 rebuff threshold 300 s, B6 permanent sentinel, B8 registry-re-read
+confirmation (600 ms / 2500 ms give-up), B9 silent-no-show valve (2 → 30 min park),
+B13 30 s periodic re-sync, B14 400 ms pacing + cast/busy gates. Omitted (documented):
+B4/B5 tier ladders, B7 item enchants, B10-B12 batch semantics, B15/B16 vital policy.
+Live smoke (`rynth_buff_smoke.cjs`): Strength Self I + Armor Self I cast, confirmed,
+then recognized-active across a fresh login (maintain path). Two traps fixed en route:
+- **Casting requires Magic combat mode for UNTARGETED casts too** (ACE
+  `Player_Magic.cs:279` mismatch gate) — the loop equipment-derived-toggles before
+  casting (B14's `BotAction="Buffing"` stance pin is this rule's native shadow).
+- **Enchantment start_time/duration are Derethian-epoch seconds** — remaining time
+  must use the buffs-hud "bug A1" formula (ACE `Enchantment.cs:100-104`:
+  `receivedAt + duration − startTime` with self-stamped wall-clock receipt). Naive
+  serverTime diffs mark every buff expired.
+
+### Phase 3 remaining / Phase 4 — loot, nav router, parity
+See synthesis §3. Loot loop next (groundContainerId + appraisal stamps + typed
+properties are all landed); then the RynthNav router sidecar (09).
 
 ## Traps (from the reports, verified)
 - Gate bot boot on `__bootState` reaching `in-world` (`__bootStateHistory` in
