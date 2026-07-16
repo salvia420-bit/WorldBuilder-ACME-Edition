@@ -3,10 +3,8 @@ const { bootInWorld, sleep } = require("./rynth_boot_helper.cjs");
 const URL = "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&nullRender=1&netDrainHz=30&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first";
 (async () => {
   const browser = await chromium.launch({ headless: true, args: ["--no-sandbox", "--disable-gpu"] });
-  const page = await browser.newPage();
-  const st = await bootInWorld(page, URL);
-  if (!st) { console.log("FAIL boot after retries"); await browser.close(); process.exit(1); }
-  await page.waitForFunction(() => !!window.__sessionHandle, { timeout: 30_000 });
+  const page = await bootInWorld(browser, URL);
+  if (!page) { console.log("FAIL boot after retries"); await browser.close(); process.exit(1); }
   await sleep(3000);
 
   const castCheck = await page.evaluate(() => {

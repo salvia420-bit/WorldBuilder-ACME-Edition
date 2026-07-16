@@ -69,6 +69,7 @@ const CAPABILITY_CANDIDATES = {
   GetPursuitStatus: ["pursuitStatus"],
   NoteLocalCastWindow: ["noteLocalCastWindow"],
   RequestId: ["assessEntity", "identifyObject", "requestId"],
+  NearbyEntityGuids: ["nearbyEntityGuids"],
 };
 
 export class RynthWebHost {
@@ -179,6 +180,18 @@ export class RynthWebHost {
   }
 
   _nearbyGuids() {
+    // Wasm world-state enumerator first (spawn-gate independent, sees
+    // everything the protocol delivered); JS entityMap as fallback for
+    // stale pkg/ builds.
+    const f = this._m.NearbyEntityGuids;
+    if (f) {
+      try {
+        const v = f(this.nearbyRangeM ?? 0);
+        if (v && typeof v.length === "number") return Array.from(v);
+      } catch (_) {
+        /* fall through */
+      }
+    }
     const out = [];
     const em = this.entityMap;
     const self = this.snap ? this.snap.playerGuid : 0;

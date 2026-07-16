@@ -30571,6 +30571,42 @@ impl SessionHandle {
         *self.rynth_ground_container.borrow()
     }
 
+    /// Enumerate tracked entity GUIDs from the wasm world state —
+    /// spawn-gate independent (the JS `entityMap` only holds renderable
+    /// spawns; this sees everything the protocol delivered, including
+    /// creatures the render layer dropped). `max_range_m > 0` filters by
+    /// 3D distance from the local player (canonical
+    /// `WorldPosition::distance_to`, cross-landblock global frame);
+    /// `<= 0` returns all. Self is excluded. The bot's entity-acquisition
+    /// read — RynthCoreHost has no direct analog (retail bots walked the
+    /// client object table); this is the web equivalent.
+    #[wasm_bindgen(js_name = nearbyEntityGuids)]
+    pub fn nearby_entity_guids(&self, max_range_m: f32) -> Vec<u32> {
+        let world = match self.world.try_borrow() {
+            Ok(w) => w,
+            Err(_) => return Vec::new(),
+        };
+        let Some(w) = world.as_ref() else {
+            return Vec::new();
+        };
+        let self_guid = w.player.guid;
+        let self_pos = w.entities.get(self_guid).map(|e| &e.position);
+        let mut out = Vec::new();
+        for (guid, entity) in w.entities.entities.iter() {
+            if *guid == self_guid {
+                continue;
+            }
+            if max_range_m > 0.0 {
+                match self_pos.as_ref() {
+                    Some(p) if p.distance_to(&entity.position) <= max_range_m => {}
+                    _ => continue,
+                }
+            }
+            out.push(guid.0);
+        }
+        out
+    }
+
     /// Tracked world position of any object as `[landblock_id, x, y, z]`
     /// (AC-native landblock-local coords, Z-up — the same frame as
     /// `getLocalPlayerPose`). Empty array when the GUID is unknown.

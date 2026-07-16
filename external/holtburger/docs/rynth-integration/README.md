@@ -96,8 +96,24 @@ Live smoke (`rynth_webhost_smoke.cjs`): 10 Hz snapshot ticking, all reads correc
 MoveToPosition driven purely through the seam → walked 7.97 m, pursuit latch 2. PASS.
 Added `objectPosition(guid)` wasm getter (combat range math) en route.
 Known gaps: `RequestId` capability unresolved (no assess/identify method probed yet);
-`nearby` comes from JS entityMap (empty at spawn under nullRender — needs the wasm
-entity enumerator or spawn-gate-independent source); no event queues yet (poll-only).
+no event queues yet (poll-only).
+2026-07-16 later: `nearby` gap CLOSED — `nearbyEntityGuids(maxRange)` wasm enumerator
+over `world.entities` (spawn-gate independent, `WorldPosition::distance_to` range
+filter), wired into the snapshot with entityMap fallback.
+
+### Combat walking skeleton — BLOCKED on headless boot flake (2026-07-16)
+`rynth_combat_smoke.cjs` (spawn Drudge Skulker wcid 7 via `@create 7`, acquire via
+seam, StickToObject + MeleeAttack cadence, `@smite all` cleanup) is written but boot
+became unstable after ~6 rapid login cycles: mixed `Target crashed` (renderer) and
+`__sessionHandle` attach >30–90 s. VERIFIED server-side: ACE login succeeds
+(char enters world); it's the page that stalls/crashes. NOT /dev/shm (1%), NOT
+system OOM (3.6 G free), NOT load (1.0), NO stray chromium after cleanup. Prime
+suspects for next session: (a) the 18 MB dev wasm ×2 instances (main + bake worker)
+per boot with nosw = full refetch — build `--release` (4.5 MB) before headless runs;
+(b) rapid relogin churn interacting with the ACE reap window — pace boots ≥90 s
+apart; (c) run one browser, one boot, keep the session alive across test phases
+instead of boot-per-smoke. Boot helper hardened en route: fresh page per attempt,
+attempt counts as booted only when `__sessionHandle` attaches (90 s), browser-scoped.
 
 ### Phase 0 — spikes (synthesis §3)
 - [ ] S0.1 walking skeleton: in-page snapshot composer + toy host, headless
