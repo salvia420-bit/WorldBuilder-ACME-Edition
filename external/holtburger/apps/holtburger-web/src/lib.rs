@@ -30383,6 +30383,35 @@ impl SessionHandle {
         })
     }
 
+    /// The player's current combat mode as the retail value set —
+    /// 1 = NonCombat, 2 = Melee, 4 = Missile, 8 = Magic. Fed by
+    /// `PropertyInt::CombatMode` pushes (ACE only sends on CHANGE, so
+    /// absent-at-login reads as NonCombat — `WorldState::
+    /// player_combat_mode`'s F11-6 rule). Returns 1 pre-session, the
+    /// same fallback RynthCoreHost documents for `GetCurrentCombatMode`.
+    #[wasm_bindgen(js_name = combatMode)]
+    pub fn combat_mode(&self) -> u32 {
+        match self.world.try_borrow() {
+            Ok(world) => world
+                .as_ref()
+                .map(|w| w.player_combat_mode() as u32)
+                .unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+
+    /// True once the local player is spawned and addressable: WorldState
+    /// exists (built at PlayerCreate/SelectCharacter) and the player GUID
+    /// has landed. The synchronous analog of gating on the `kind=7
+    /// EnteredWorld` drain. RynthCoreHost parity: `IsPlayerReady`.
+    #[wasm_bindgen(js_name = isPlayerReady)]
+    pub fn is_player_ready(&self) -> bool {
+        match self.world.try_borrow() {
+            Ok(world) => world.as_ref().map(|w| w.player.guid.0 != 0).unwrap_or(false),
+            Err(_) => false,
+        }
+    }
+
     /// PR-JJ 2026-05-23: the local player's active enchantments — full
     /// snapshot refreshed by the recv loop on every
     /// `WorldEvent::PlayerEnchantmentsUpdated`. Empty pre-spawn /

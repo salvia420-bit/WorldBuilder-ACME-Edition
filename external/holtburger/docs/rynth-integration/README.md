@@ -31,16 +31,34 @@ compile spike; everything below is fork-independent.
   scripting host ops). This clears report 14 backlog items #1, #2, #6-partial, #8,
   #9-cached, #10 and unblocks the object-property crisis (report 02’s 4%-covered
   category).
-- [ ] `combatMode()` — needs a decision: promote `motion_stance` vs track
-  `ChangeCombatMode` acks (14 #3).
-- [ ] `isPlayerReady()` (14 #4).
+- [x] **2026-07-16 — `combatMode()`** (retail 1/2/4/8 values): decision resolved better
+  than 14 #3 anticipated — `WorldState::player_combat_mode()` already tracks
+  `PropertyInt::CombatMode` pushes (holtburger-world `state/types.rs:209`, F11-6
+  absent-at-login = NonCombat rule); the getter is a straight promotion.
+- [x] **2026-07-16 — `isPlayerReady()`** (14 #4): WorldState exists + player GUID landed.
 - [ ] Busy trio: `getBusyState` / `getUseDoneSeq` / `getCastBusyState` — design work,
   synthesize counters from UseDone (0x1C7)/cast-done wire events in the recv loop
   (14 #5, risk R1). Degrade-open per report 11 contract 0.1.
 - [ ] `groundContainerId`, `objectWielderInfo`/`ownershipInfo` composites (14 #11/#15),
   appraisal-time stamps `hasAppraisalData`/`getLastIdTime` (14 #7).
-- [ ] `moveToPosition(ns,ew,z,run)` SessionCommand — the nav keystone (report 09;
-  `MoveToManager::move_to_position` exists at `holtburger-core/src/client/movement/move_to.rs:530`).
+- [ ] `moveToPosition` SessionCommand — the nav keystone (report 09). Threading map
+  (scouted 2026-07-16): add a variant to `PlayerDriveIntent` (`movement_types.rs:184`)
+  → `QueuedDriveCommand` → `PendingPursuitCommand` (`movement/system.rs:1694`) →
+  call `MoveToManager::move_to_position` (`movement/move_to.rs:530`, `pub(crate)`,
+  takes `Origin` + `MovementParameters`); then `SessionCommand` variant + recv arm
+  (copy the `PursueObject` arm at lib.rs ~46737) + wasm method. NOTE:
+  `PlayerDriveIntent::ArriveAtPose` is a pose-SNAP (portal arrival), NOT steering —
+  do not use it for walk-to.
+
+### Movement-family coverage discovered 2026-07-16 (better than the reports implied)
+Already shipped in the web runtime — RynthCoreHost members these cover:
+- `PursueObject` cmd (retail MoveToObject 0x6 w/ cylinder stop) — approach loops.
+- `StickToObject`/`StopStick` (retail StickyManager) — the whole of client melee
+  approach+hold; report 11's combat loop should prefer this over manual pursuit.
+- `PursuitTurnToObject` / `PursuitTurnToHeading` (rate-limited retail turns) —
+  `TurnToHeading` parity. `CancelPursuit` — `StopCompletely` building block.
+- `setAutoRun` — RynthCoreHost `SetAutoRun` parity, already a wasm export.
+- `pursuitStatus()` poll — the MoveTo completion signal the tick snapshot needs.
 
 ### Phase 0 — spikes (synthesis §3)
 - [ ] S0.1 walking skeleton: in-page snapshot composer + toy host, headless
