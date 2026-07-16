@@ -51,9 +51,13 @@ compile spike; everything below is fork-independent.
   polls via `pursuitStatus()` (2=arrived, 3=failed). NOT yet live-smoke-tested.
   NOTE kept: `PlayerDriveIntent::ArriveAtPose` is a pose-SNAP (portal arrival), NOT
   steering — do not use it for walk-to.
-- [ ] **Live smoke test of the Phase-1 surface** against local ACE
-  (§ace-live): headless `?nullRender=1` boot, read every new getter, drive
-  `moveToPosition` across a landblock, verify pursuitStatus transitions 1→2.
+- [x] **2026-07-16 — Live smoke test PASS** (`apps/holtburger-web/rynth_phase1_smoke.cjs`,
+  run with `NODE_PATH=<playwright dir> node rynth_phase1_smoke.cjs` against local
+  ACE + serve.py + wsbridge): headless `?nullRender=1&autoLogin=1` boot as tailnet1
+  → every getter returned live truth (playerGuid 0x5000021E, serverTime ticking,
+  combatMode 1, objectName(self)="+Tester2", physicsState nonzero) → `moveToPosition`
+  (+12 m north, run) physically moved the character 11.95 m, pursuitStatus latched
+  arrived(2). GETTERS: PASS · MOVETO: PASS.
 
 ### Movement-family coverage discovered 2026-07-16 (better than the reports implied)
 Already shipped in the web runtime — RynthCoreHost members these cover:
