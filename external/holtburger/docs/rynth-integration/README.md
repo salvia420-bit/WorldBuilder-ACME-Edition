@@ -247,7 +247,16 @@ should size heal thresholds/spells to the character.
   a stubbed non-improving 50% HP heal parks "hp" at cast 6 and `step()` then
   yields; the base B15/B16 matrix + live heal still pass unchanged.
 
-### Next arcs — nav router, contract completions, the D1 fork
+### RynthNav local router — LANDED 2026-07-16 (report 09 in-page half)
+`rynth/router.js` — the local leg executor: follow a route ([{lb,x,y,z}]) as
+`moveToPosition` legs, arrival detection (distance + pursuitStatus latch),
+per-leg progress watchdog + timeout, and portal recognition (landblock change
+→ settle → advance). Wired into `bot.js` as `bot.travel(route)` (pauses the
+grind, walks the route). Live smoke (`rynth_router_smoke.cjs`): a 4-leg square
+route walked to completion, all 4 arrivals fired. The global navmesh router
+(offline bake + Detour + portal Dijkstra) remains the deferred sidecar (09).
+
+### Next arcs — contract completions, the D1 fork, the sidecar
 1. RynthNav router sidecar (09) for long-range routing over moveToPosition legs.
 2. Contract completions: T8 priorities, P3/P12, B4/B5/B7/B10-12, B15/B16 vital
    policy, event queues (push plane), melee-mode kill path, fellowship DTO (07).

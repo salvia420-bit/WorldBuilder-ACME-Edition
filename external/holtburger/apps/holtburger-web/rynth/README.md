@@ -33,6 +33,7 @@ bot.stop();
 | `vitals.js` | B15 emergency HP override + B16 in-combat/idle heal/mana/stam thresholds. | report 11 B15/B16 |
 | `loot_loop.js` | Corpse scan → approach (MoveToPosition + progress watchdog) → open → Value-rule → moveItem → confirm. | report 03 Tier-4 |
 | `kernel.js` | **BotKernel** — one loop-tick per kernel-tick (gates never contended), priority Vitals > Combat > Loot > Buff, ownership pinning + combat preemption. | report 12 |
+| `router.js` | Local leg executor — walk a route ([{lb,x,y,z}]) as `moveToPosition` legs with arrival detection + portal (landblock-change) recognition. The in-page half of report 09's nav; the global navmesh router is the deferred sidecar. |
 | `control_channel.js` | Remote control over in-game tells (`!bot status\|pause\|resume\|come`), parsed off the push-event plane, replies via `InvokeChatParser`. | report 04 push plane |
 | `bot.js` | `createGrindBot()` — wires all of the above on a SessionHandle. | — |
 

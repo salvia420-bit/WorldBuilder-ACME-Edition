@@ -18,7 +18,7 @@
 
 export async function createGrindBot(sessionHandle, config = {}) {
   const base = "/apps/holtburger-web/rynth";
-  const [wh, cl, bl, ll, vt, kn, cc] = await Promise.all([
+  const [wh, cl, bl, ll, vt, kn, cc, rt] = await Promise.all([
     import(`${base}/webhost.js`),
     import(`${base}/combat_loop.js`),
     import(`${base}/buff_loop.js`),
@@ -26,6 +26,7 @@ export async function createGrindBot(sessionHandle, config = {}) {
     import(`${base}/vitals.js`),
     import(`${base}/kernel.js`),
     import(`${base}/control_channel.js`),
+    import(`${base}/router.js`),
   ]);
 
   const host = new wh.RynthWebHost(sessionHandle, config.hostOpts || {});
@@ -49,6 +50,12 @@ export async function createGrindBot(sessionHandle, config = {}) {
       ? null
       : new cc.RynthControlChannel(host, kernel, config.control || {});
 
+  // Router is on-demand travel, NOT a kernel priority — the caller drives a
+  // route explicitly (pausing the grind while travelling is the caller's
+  // choice). Ticked off the same host heartbeat.
+  const router = new rt.RynthRouter(host);
+  host.onTick(() => router.tick());
+
   host.start(config.hz ?? 10);
   kernel.start();
 
@@ -60,10 +67,17 @@ export async function createGrindBot(sessionHandle, config = {}) {
     buff,
     loot,
     vitals,
-    status: () => kernel.status,
+    router,
+    /** Travel a route ([{lb,x,y,z}]) — pauses the grind, walks it, resumes. */
+    travel: (route) => {
+      kernel.stop();
+      router.follow(route);
+    },
+    status: () => ({ ...kernel.status, router: router.status }),
     capabilities: () => host.capabilities,
     stop: () => {
       kernel.stop();
+      router.cancel();
       host.stop();
     },
   };
