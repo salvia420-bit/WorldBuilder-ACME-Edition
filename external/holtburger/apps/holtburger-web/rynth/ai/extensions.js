@@ -20,6 +20,8 @@ import { KnowledgeBase, FileKnowledgeProvider, registerKnowledge } from "./tools
 import { DungeonNavAdvisor, registerDungeonNav } from "./tools/dungeon_nav.js";
 import { WbtOracle, registerWbt } from "./tools/wbt.js";
 import { registerEconomy } from "./tools/economy.js";
+import { registerAdvancement } from "./tools/advancement.js";
+import { registerWorld } from "./tools/world.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./director.js";
 
 // = executePlan's own default (actions.js:197) + SPEC "Cost & safety" cap;
@@ -162,6 +164,23 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     economy = registerEconomy(extActions);
   }
 
+  // Advancement hands (tools/advancement.js): raise_attribute / raise_vital /
+  // raise_skill / train_skill over the RynthWebHost advancement plane. Default-
+  // on; a host without those capabilities degrades to ok:false. cfg.advancement:
+  // false -> off.
+  let advancement = null;
+  if (cfg.advancement !== false) {
+    advancement = registerAdvancement(extActions);
+  }
+
+  // World hands (tools/world.js): use_object — general interact with any nearby
+  // world object (portals, NPCs, doors). Pairs with the 'nearby' perception
+  // line (observe_ext.js). Default-on. cfg.world: false -> off.
+  let world = null;
+  if (cfg.world !== false) {
+    world = registerWorld(extActions);
+  }
+
   const extFor = (a) =>
     a && typeof a === "object" && typeof a.type === "string"
       ? extActions[a.type] ?? null
@@ -247,6 +266,8 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     dungeonNav,
     wbt,
     economy,
+    advancement,
+    world,
     state,
   };
 }

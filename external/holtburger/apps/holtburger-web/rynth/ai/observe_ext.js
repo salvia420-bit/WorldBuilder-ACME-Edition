@@ -15,7 +15,13 @@
 // - buildObservation is stateless; the kill trend keeps its short history
 //   in the CALLER-OWNED `opts.state` object. No state -> trend is "n/a".
 
+import { ADVANCEMENT_MAPS } from "./tools/advancement.js";
+
 const NA = "n/a";
+const { SKILLS, TRAINED_COST } = ADVANCEMENT_MAPS;
+const ID2SKILL = Object.fromEntries(Object.entries(SKILLS).map(([n, i]) => [i, n]));
+// Buff-relevant magic schools worth flagging as trainable when untrained.
+const WISH_MAGIC = [32, 31, 16, 34]; // item_enchantment, creature_enchantment, mana_conversion, war_magic
 // PropertyInt 1 = ItemType, read the same way combat_loop.js:175 reads it;
 // Portal bit per Chorizite.Common/Enums/ItemType.cs:41.
 const ITEM_TYPE_PORTAL = 0x00010000;
@@ -51,13 +57,18 @@ function enrich(bot, base, { now = Date.now(), maxChars = 6000, state = null, tr
   const trend = killTrend(bot, d, state, now, trendWindowMs);
   const burden = probeBurden(bot);
   const portals = nearbyPortals(bot);
+  const advancement = probeAdvancement(bot);
+  const nearby = probeNearbyObjects(bot);
   const focus = suggestFocus(d, trend);
-  const ext = { trend, burden, portals, focus };
+  const ext = { trend, burden, portals, focus, advancement, nearby };
 
   // Importance order: dropping from the END under maxChars sheds portals
-  // first and the focus line last.
+  // first and the focus/nearby/advancement lines last (perception + focus
+  // are the most decision-critical, so they survive truncation).
   const lines = [
     `focus: ${focus}`,
+    nearbyLine(nearby),
+    advancementLine(advancement),
     trendLine(trend),
     burdenLine(burden),
     portalLine(portals),
@@ -131,6 +142,120 @@ function probeBurden(bot) {
 function burdenLine(b) {
   const v = (x) => (x == null ? NA : x);
   return `burden: ${v(b?.burden)} | free_slots: ${v(b?.freeSlots)}`;
+}
+
+// ── advancement (unspent XP, skill credits, raisable/ trainable) ────────
+// Surfaces the raw advancement state so the LLM can DECIDE to spend XP /
+// train skills. Deliberately NOT prescriptive (no "raise endurance now"
+// instruction) — the data (low HP + unspent XP) is there; the reasoning is
+// the playtester's. Reads the RynthWebHost advancement plane; null when the
+// host predates it or the stats plane hasn't hydrated.
+function probeAdvancement(bot) {
+  const h = bot.host;
+  if (!h || typeof h.TryGetPlayerStats !== "function") return null;
+  const st = h.TryGetPlayerStats();
+  if (!st) return null;
+  const credits = typeof h.TryGetSkillCredits === "function" ? fin(h.TryGetSkillCredits()) : null;
+  const trained = [];
+  for (const [id, sk] of Object.entries(st.skills || {})) {
+    if (sk && sk.training >= 2) trained.push({ name: ID2SKILL[id] || `skill${id}`, cur: sk.current, nextCost: sk.nextCost, spec: sk.training === 3 });
+  }
+  const trainable = [];
+  for (const id of WISH_MAGIC) {
+    const sk = st.skills?.[id];
+    if (!sk || sk.training < 2) trainable.push({ name: ID2SKILL[id], cost: TRAINED_COST[id] });
+  }
+  return {
+    level: st.level,
+    unspentXp: st.unspentXp,
+    skillCredits: credits,
+    end: st.attributes?.[2]?.current ?? null,
+    self: st.attributes?.[6]?.current ?? null,
+    hp: st.vitals?.[1] ?? null,
+    mana: st.vitals?.[5] ?? null,
+    trained,
+    trainable,
+  };
+}
+
+function advancementLine(a) {
+  if (!a) return `advancement: ${NA}`;
+  const parts = [`L${a.level}`, `unspentXP=${a.unspentXp}`, `skillCredits=${a.skillCredits ?? NA}`];
+  if (a.end != null) parts.push(`End=${a.end}${a.hp ? `(HP ${a.hp.current}/${a.hp.max})` : ""}`);
+  if (a.self != null) parts.push(`Self=${a.self}${a.mana ? `(Mana ${a.mana.current}/${a.mana.max})` : ""}`);
+  if (a.trained?.length) parts.push(`raisable: ${a.trained.map((s) => `${s.name}${s.spec ? "*" : ""} ${s.cur}${s.nextCost ? `(+${s.nextCost}xp)` : ""}`).join(", ")}`);
+  if (a.trainable?.length && (a.skillCredits == null || a.skillCredits > 0))
+    parts.push(`can-train(cost credits): ${a.trainable.map((s) => `${s.name}(${s.cost}cr)`).join(", ")}`);
+  return `advancement: ${parts.join(" · ")}`;
+}
+
+// ── nearby objects (general perception — "look around the room") ────────
+// Surfaces ALL named nearby objects/NPCs (not just attackable threats): the
+// portal you can enter, the NPCs you can talk to, doors, chests, signs. This
+// is the playtester's general sight; use_object (tools/world.js) is the hand.
+// Deliberately not filtered to a task — the LLM reads names/types and decides.
+const NEARBY_TOP_N = 16;
+// ObjectDescriptionFlag bits (ObjectDescriptionFlag.generated.cs) — the client
+// receives these, so a shopkeeper/healer/portal/lifestone/door/corpse is
+// distinguishable at a glance without any world-DB lookup.
+const ODF = {
+  PLAYER: 0x8, ATTACKABLE: 0x10, BOOK: 0x100, VENDOR: 0x200, DOOR: 0x1000,
+  CORPSE: 0x2000, LIFESTONE: 0x4000, FOOD: 0x8000, HEALER: 0x10000,
+  PORTAL: 0x40000, BINDSTONE: 0x8000000, INSCRIBABLE: 0x2,
+};
+// Decode the flags into one salient category the LLM can act on. null flags =
+// not yet streamed -> "?" (do NOT mislabel as monster: the old ObjectIsAttackable
+// fail-open tagged every un-streamed sign/door as [creature]).
+function classifyDesc(flags) {
+  if (flags == null) return "?";
+  // Specific object bits win over the generic ATTACKABLE bit — many world
+  // objects (tutorial signs, food, some items) carry ATTACKABLE too, but are
+  // better described by what they actually are.
+  if (flags & ODF.PLAYER) return "player";
+  if (flags & ODF.VENDOR) return "vendor";
+  if (flags & ODF.HEALER) return "healer";
+  if (flags & ODF.PORTAL) return "portal";
+  if (flags & (ODF.LIFESTONE | ODF.BINDSTONE)) return "lifestone";
+  if (flags & ODF.CORPSE) return "corpse";
+  if (flags & ODF.DOOR) return "door";
+  if (flags & ODF.FOOD) return "food";
+  if (flags & ODF.BOOK) return "sign"; // readable plaque/book (INSCRIBABLE alone is unreliable — armor is inscribable)
+  if (flags & ODF.ATTACKABLE) return "monster";
+  return "npc"; // named, non-attackable, none of the above -> a person to talk to
+}
+function objGlobal(cell, x, y) {
+  return { gx: ((cell >>> 24) & 0xff) * 192 + x, gy: ((cell >>> 16) & 0xff) * 192 + y };
+}
+function probeNearbyObjects(bot) {
+  const h = bot.host;
+  if (!h || typeof h.NearbyGuids !== "function" || typeof h.TryGetObjectName !== "function") return null;
+  const me = typeof h.TryGetPlayerPose === "function" ? h.TryGetPlayerPose() : null;
+  const meG = me ? objGlobal(me.objCellId >>> 0, me.x, me.y) : null;
+  const out = [];
+  let guids = [];
+  try { guids = h.NearbyGuids() || []; } catch { return null; }
+  for (const g of guids) {
+    let name = null;
+    try { name = h.TryGetObjectName(g); } catch {}
+    if (!name) continue; // skip unnamed clutter
+    let flags = null;
+    try { flags = typeof h.TryGetObjectDescFlags === "function" ? h.TryGetObjectDescFlags(g) : null; } catch {}
+    const type = classifyDesc(flags);
+    let dist = null;
+    try {
+      const p = h.TryGetObjectPosition(g);
+      if (p && meG) { const o = objGlobal(p.objCellId >>> 0, p.x, p.y); dist = Math.hypot(o.gx - meG.gx, o.gy - meG.gy, (p.z || 0) - (me.z || 0)); }
+    } catch {}
+    out.push({ guid: g >>> 0, name, type, dist });
+  }
+  out.sort((a, b) => (a.dist ?? 1e9) - (b.dist ?? 1e9));
+  return out.slice(0, NEARBY_TOP_N);
+}
+function nearbyLine(objs) {
+  if (!objs) return `nearby: ${NA}`;
+  if (!objs.length) return "nearby: nothing named in range";
+  // guid included so use_object can disambiguate same-named objects (two Doors).
+  return `nearby: ${objs.map((o) => `${o.name} [${o.type}] 0x${o.guid.toString(16)}${o.dist != null ? ` d=${o.dist.toFixed(0)}m` : ""}`).join("; ")}`;
 }
 
 // ── nearby portals ─────────────────────────────────────────────────────

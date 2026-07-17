@@ -83,6 +83,11 @@ const CAPABILITY_CANDIDATES = {
   WieldFromPack: ["wieldFromPack"],
   UnwieldToPack: ["unwieldToPack"],
   DropItem: ["dropItem"],
+  // advancement plane (2026-07-17): spend XP on attrs/vitals/skills + train.
+  RaiseAttribute: ["raiseAttribute"],
+  RaiseVital: ["raiseVital"],
+  RaiseSkill: ["raiseSkill"],
+  TrainSkill: ["trainSkill"],
 };
 
 const ODF_PLAYER = 0x08;
@@ -379,6 +384,14 @@ export class RynthWebHost {
     const flags = this._live("GetObjectDescFlags", guid) ?? 0;
     return (flags & ODF_PLAYER) !== 0;
   }
+  /// Raw ObjectDescriptionFlags (u32) for typed perception (vendor/healer/
+  /// portal/lifestone/door/corpse/… bits — ObjectDescriptionFlag.generated.cs).
+  /// null when not yet streamed (distinguish from a real 0). (observe_ext.js
+  /// probeNearbyObjects decodes these into a category.)
+  TryGetObjectDescFlags(guid) {
+    const flags = this._live("GetObjectDescFlags", guid);
+    return typeof flags === "number" ? flags >>> 0 : null;
+  }
   /// FellowshipTracker replacement (report 07): the whole 272-line
   /// memory-reader collapses to this adapter over the protocol-fed
   /// snapshot. null when not in a fellowship.
@@ -629,6 +642,64 @@ export class RynthWebHost {
   }
   DropItem(itemGuid) {
     return this._act("DropItem", itemGuid);
+  }
+
+  // ── advancement plane (2026-07-17) ──────────────────────────────────
+  /// Normalized character-advancement snapshot from SessionHandle.playerStats()
+  /// (PlayerStatsSnapshot: flat stride arrays). null until the stats plane
+  /// hydrates. unspentXp reassembles the levelInfo lo/hi u32 pair into a
+  /// Number (XP stays well under MAX_SAFE_INTEGER). (advancement.js/observe_ext
+  /// read this exact shape.)
+  TryGetPlayerStats() {
+    let ps = null;
+    try {
+      ps = this.s.playerStats();
+    } catch (_) {}
+    if (!ps) return null;
+    const attributes = {};
+    const skills = {};
+    const vitals = {};
+    let level = 0;
+    let unspentXp = 0;
+    try {
+      const a = ps.attributes || [];
+      for (let i = 0; i + 3 < a.length; i += 4) attributes[a[i]] = { current: a[i + 1], base: a[i + 2], ranks: a[i + 3] };
+    } catch (_) {}
+    try {
+      const s = ps.skills || [];
+      for (let i = 0; i + 5 < s.length; i += 6) skills[s[i]] = { current: s[i + 1], base: s[i + 2], ranks: s[i + 3], training: s[i + 4], nextCost: s[i + 5] };
+    } catch (_) {}
+    try {
+      const v = ps.vitals || [];
+      for (let i = 0; i + 3 < v.length; i += 4) vitals[v[i]] = { current: v[i + 1], base: v[i + 2], max: v[i + 3] };
+    } catch (_) {}
+    try {
+      const li = ps.levelInfo || [];
+      level = li[0] >>> 0;
+      unspentXp = (li[3] >>> 0) + (li[4] >>> 0) * 4294967296;
+    } catch (_) {}
+    return { level, unspentXp, attributes, skills, vitals };
+  }
+  /// Available (unspent) skill credits — SessionHandle.playerSkillCredits.
+  /// null when the getter is absent/unready. (advancement.js train_skill.)
+  TryGetSkillCredits() {
+    try {
+      const c = this.s.playerSkillCredits;
+      if (typeof c === "number" && Number.isFinite(c)) return c;
+    } catch (_) {}
+    return null;
+  }
+  RaiseAttribute(attributeId, xpSpent) {
+    return this._act("RaiseAttribute", attributeId >>> 0, xpSpent >>> 0);
+  }
+  RaiseVital(vitalId, xpSpent) {
+    return this._act("RaiseVital", vitalId >>> 0, xpSpent >>> 0);
+  }
+  RaiseSkill(skillId, xpSpent) {
+    return this._act("RaiseSkill", skillId >>> 0, xpSpent >>> 0);
+  }
+  TrainSkill(skillId, credits) {
+    return this._act("TrainSkill", skillId >>> 0, credits >>> 0);
   }
 }
 

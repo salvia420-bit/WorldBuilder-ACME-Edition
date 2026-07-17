@@ -34,6 +34,14 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "COST DISCIPLINE",
   "You are called every few minutes; be decisive. If the bot is doing fine,",
   'prefer {"actions":[{"type":"none"}]} over churn.',
+  "",
+  "MEMORY",
+  "You are stateless between check-ins: your only memory is the journal tail",
+  "in the observation and the `note` you leave. Use `note` to record durable",
+  "facts and lessons — your current goal and plan, what you tried, what did",
+  "NOT work and why (e.g. \"Samuel is an NPC not a vendor\", \"the exit is a",
+  "portal, not a door\") — so you do not re-derive them or repeat failed",
+  "approaches. Read your prior notes before deciding.",
 ].join("\n");
 
 export class RynthAiDirector {
@@ -133,7 +141,11 @@ export class RynthAiDirector {
     let obsText;
     try {
       let tail = "";
-      try { tail = this.journal?.renderTail() ?? ""; } catch { tail = ""; }
+      // Wider memory window (24 entries ≈ 8 check-ins, was 10 ≈ ~3): a stateless
+      // director under token limits must not re-derive the same lessons ("X is
+      // not a vendor", "exit is a portal not a door") every check-in. Its own
+      // `note`s persist in this tail — the working memory it curates.
+      try { tail = this.journal?.renderTail(24, 2800) ?? ""; } catch { tail = ""; }
       // opts.spend is the "AI spend counters if given" hook of SPEC §observe.
       const obs = this.observe(this.bot, { journalTail: tail, now, spend: this._spend() });
       obsText = typeof obs?.text === "string" ? obs.text : String(obs ?? "");
