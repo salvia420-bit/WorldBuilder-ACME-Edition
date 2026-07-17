@@ -155,6 +155,12 @@ function startMockSidecar() {
     check("file_ticket journaled", journal.entries[0].text.includes("ticket filed (tick-1)"));
     const hostless = await ticketDef.apply({}, { type: "file_ticket", title: "t", body: "b" }, { journal });
     check("file_ticket survives hostless bot", hostless.ok === true && seen.tickets[1].position === null);
+    // dedupe: same normalized title -> rejected, tracker untouched
+    const before = seen.tickets.length;
+    const dup = await ticketDef.apply(makeBot(), { type: "file_ticket", title: "NPC Sells NOTHING!", body: "again" }, { journal });
+    check("file_ticket dedupes by title", dup.ok === false && /already filed/.test(dup.error) && seen.tickets.length === before, dup.error);
+    const fresh = await ticketDef.apply(makeBot(), { type: "file_ticket", title: "Different bug entirely", body: "b" }, { journal });
+    check("file_ticket new title still files", fresh.ok === true && seen.tickets.length === before + 1);
   }
 
   // --- registerWbt guard --------------------------------------------------

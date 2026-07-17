@@ -214,9 +214,15 @@ export function fileTicketAction(oracle) {
       return { ok: true };
     },
   };
+  // Dedupe by normalized title for this session — a bug the model keeps
+  // rediscovering (its journal forgot the filing) must not spam the tracker.
+  const filed = new Set();
+  const sig = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   def.apply = makeApply(def, async (bot, a, ctx, fail) => {
     const o = ctx.oracle ?? oracle;
     if (!o || typeof o.fileTicket !== "function") return fail("unavailable");
+    if (filed.has(sig(a.title)))
+      return fail(`already filed this session: "${clip(a.title.trim(), 80)}" — no need to re-file, it is in the tracker`);
     let position = null;
     try {
       const p = bot?.host?.TryGetPlayerPose?.();
@@ -238,6 +244,7 @@ export function fileTicketAction(oracle) {
       journalNote(ctx, `file_ticket: FAILED ${r.error}`);
       return fail(r.error);
     }
+    filed.add(sig(a.title));
     journalNote(ctx, `ticket filed (${r.id}): ${clip(a.title.trim(), 120)}`);
     return { type: def.type, ok: true, result: { id: r.id } };
   });

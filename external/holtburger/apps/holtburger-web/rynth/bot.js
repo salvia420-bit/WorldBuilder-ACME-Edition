@@ -231,6 +231,7 @@ async function wireAiDirector(bot, aiConfig, base) {
     baseUrl: aiCfg?.baseUrl, // undefined -> client defaults (OpenRouter)
     model: aiCfg?.model,
     maxTokens: aiCfg?.maxTokens, // reasoning-tier models need > the 1024 default
+    reasoning: aiCfg?.reasoning, // e.g. { effort: "low" } — OpenRouter unified reasoning
     referer: "https://holtburger.local",
     title: "holtburger-rynth",
   });

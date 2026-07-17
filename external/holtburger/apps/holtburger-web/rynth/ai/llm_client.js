@@ -2,11 +2,12 @@
 // rynth AI director. INTERFACE FROZEN — see rynth/ai/SPEC.md §llm_client.
 //
 // One POST to {baseUrl}/chat/completions per chat(); exactly 1 retry on
-// 429/5xx/network (timeout and auth are NOT retried — a hung provider at
-// 60s timeoutMs would double the stall, and a bad key never fixes itself).
+// 429/5xx/network/length (timeout and auth are NOT retried — a hung provider
+// at 60s timeoutMs would double the stall, and a bad key never fixes itself;
+// "length" = reasoning ate max_tokens -> retried once at double budget).
 // Every failure throws Error with .kind in
-// {"auth","rate","server","network","timeout","bad-response"} so the
-// director can branch without string-matching messages.
+// {"auth","rate","server","network","timeout","bad-response","length"} so
+// the director can branch without string-matching messages.
 
 export const DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
 // gpt-oss-120b since 2026-07-16: best decision quality per dollar in the
@@ -79,7 +80,7 @@ function kindError(kind, message, extra) {
 const clip = (s, n = 200) => (typeof s === "string" && s.length > n ? s.slice(0, n) + "…" : s);
 
 export class LlmClient {
-  constructor({ apiKey, baseUrl, model, referer, title, timeoutMs = 60_000, maxTokens = 1024, log } = {}) {
+  constructor({ apiKey, baseUrl, model, referer, title, timeoutMs = 60_000, maxTokens = 1024, reasoning, log } = {}) {
     this.apiKey = apiKey ?? null;
     this.baseUrl = String(baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.model = model ?? DEFAULT_MODEL;
@@ -91,6 +92,11 @@ export class LlmClient {
     // max_tokens and return EMPTY content at the old fixed 1024 — raise via
     // config.ai.maxTokens (bot.js passthrough) for those models.
     this.maxTokens = maxTokens;
+    // OpenRouter unified reasoning config (additive, 2026-07-17), e.g.
+    // { effort: "low" }. gpt-oss allocates ~50% of max_tokens to hidden
+    // reasoning at the default medium effort — "low" both cuts cost and
+    // shrinks the empty-completion window. null -> field omitted.
+    this.reasoning = reasoning && typeof reasoning === "object" ? reasoning : null;
     this.log = log ?? null;
     // spend: calls/tokens count COMPLETED chats (a failed 429 attempt costs
     // nothing); errors counts chat() invocations that ultimately threw.
@@ -125,19 +131,29 @@ export class LlmClient {
     if (this.apiKey) headers["Authorization"] = `Bearer ${this.apiKey}`;
     if (this.referer) headers["HTTP-Referer"] = this.referer;
     if (this.title) headers["X-Title"] = this.title;
-    const body = JSON.stringify({ model: useModel, messages, max_tokens: maxTokens, temperature });
-
+    let tokens = maxTokens;
     let lastErr = null;
     for (let attempt = 0; attempt <= 1; attempt++) { // <= 1: exactly 1 retry (SPEC)
-      if (attempt > 0) {
+      if (attempt > 0 && lastErr.kind !== "length") {
         const backoffMs = Math.min(10_000, 500 * 2 ** (attempt - 1));
         this.log?.(`[llm] ${lastErr.kind} — retrying in ${backoffMs}ms`);
         await new Promise((r) => setTimeout(r, backoffMs));
       }
+      const body = JSON.stringify({
+        model: useModel, messages, max_tokens: tokens, temperature,
+        ...(this.reasoning ? { reasoning: this.reasoning } : {}),
+      });
       try {
         return await this._attempt(url, headers, body, useModel, t0);
       } catch (e) {
         lastErr = e;
+        // "length": reasoning consumed the whole completion budget — the
+        // deterministic fix is a bigger budget, not a backoff (2026-07-17).
+        if (e.kind === "length") {
+          tokens = Math.min(tokens * 2, 32_000);
+          this.log?.(`[llm] empty completion (reasoning ate max_tokens) — retrying at max_tokens=${tokens}`);
+          continue;
+        }
         if (e.kind !== "rate" && e.kind !== "server" && e.kind !== "network") break;
       }
     }
@@ -176,6 +192,14 @@ export class LlmClient {
       throw kindError("bad-response", `unparseable body: ${clip(raw)}`);
     }
     const text = data?.choices?.[0]?.message?.content;
+    const finish = data?.choices?.[0]?.finish_reason ?? null;
+    // Reasoning models (gpt-oss) share max_tokens between hidden reasoning
+    // and content; when reasoning eats it all, content comes back empty/null
+    // with finish_reason "length". Distinct kind so chat() can retry with a
+    // doubled budget instead of treating it as a malformed provider reply.
+    if ((text == null || (typeof text === "string" && !text.trim())) && finish === "length") {
+      throw kindError("length", "empty completion: reasoning consumed max_tokens (finish_reason=length)");
+    }
     if (typeof text !== "string") {
       throw kindError("bad-response", `no choices[0].message.content: ${clip(raw)}`);
     }

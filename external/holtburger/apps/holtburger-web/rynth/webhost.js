@@ -56,6 +56,7 @@ const CAPABILITY_CANDIDATES = {
   CastSpell: ["castTargetedSpell"],
   CastUntargetedSpell: ["castUntargetedSpell"],
   UseObject: ["useObject"],
+  GiveObject: ["giveObject"],
   QueryHealth: ["queryHealth"],
   MoveToPosition: ["moveToPosition"],
   PursueObject: ["pursueEntity"],
@@ -566,6 +567,11 @@ export class RynthWebHost {
   }
   UseObject(guid) {
     return this._act("UseObject", guid);
+  }
+  /// Give a player-owned item to an NPC/player (quest turn-ins). Server
+  /// validates; success/failure arrives as InventoryUpdate / WeenieError.
+  GiveObject(targetGuid, itemGuid, amount = 1) {
+    return this._act("GiveObject", targetGuid, itemGuid, amount);
   }
   QueryHealth(guid) {
     return this._act("QueryHealth", guid);

@@ -42,7 +42,7 @@ const hex = (g) => `0x${(g >>> 0).toString(16).toUpperCase()}`;
 
 // Resolve an item reference ({guid} wins, else case-insensitive name
 // substring) against a row list. -> { row } | { error }
-function resolveItem(rows, ref) {
+export function resolveItem(rows, ref) {
   const g = parseGuid(ref.guid ?? ref.item);
   if (g) {
     const row = rows.find((r) => (r.guid ?? r.itemGuid) === g);

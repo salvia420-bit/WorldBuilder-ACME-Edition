@@ -33,7 +33,10 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "",
   "COST DISCIPLINE",
   "You are called every few minutes; be decisive. If the bot is doing fine,",
-  'prefer {"actions":[{"type":"none"}]} over churn.',
+  'prefer {"actions":[{"type":"none"}]} over churn. But `none` is for "doing',
+  'fine", never for "stuck": when your goal is blocked, always take an',
+  "exploratory action instead — read a sign, talk to an NPC, use an object",
+  "you have not tried — a wasted check-in learns nothing.",
   "",
   "MEMORY",
   "You are stateless between check-ins: your only memory is the journal tail",
@@ -42,6 +45,16 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "NOT work and why (e.g. \"Samuel is an NPC not a vendor\", \"the exit is a",
   "portal, not a door\") — so you do not re-derive them or repeat failed",
   "approaches. Read your prior notes before deciding.",
+  "",
+  "GROUND TRUTH",
+  "An ok action result means the request was SENT, not that it worked.",
+  "Verify outcomes against your NEXT observation before recording success:",
+  "did the pos line change? did inventory/XP/vitals change? Never write a",
+  "note claiming you moved, exited, or completed something you have not",
+  "verified — record it as attempted/unverified instead. The observation",
+  "lines (pos, vitals, nearby, advancement) are authoritative; when a note",
+  "of yours contradicts them, the observation wins. When a nearby/inventory",
+  "line shows a guid, pass the guid in your action args, not the name.",
 ].join("\n");
 
 export class RynthAiDirector {

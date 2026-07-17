@@ -242,20 +242,34 @@ function probeNearbyObjects(bot) {
     try { flags = typeof h.TryGetObjectDescFlags === "function" ? h.TryGetObjectDescFlags(g) : null; } catch {}
     const type = classifyDesc(flags);
     let dist = null;
+    let brg = null;
     try {
       const p = h.TryGetObjectPosition(g);
-      if (p && meG) { const o = objGlobal(p.objCellId >>> 0, p.x, p.y); dist = Math.hypot(o.gx - meG.gx, o.gy - meG.gy, (p.z || 0) - (me.z || 0)); }
+      if (p && meG) {
+        const o = objGlobal(p.objCellId >>> 0, p.x, p.y);
+        dist = Math.hypot(o.gx - meG.gx, o.gy - meG.gy, (p.z || 0) - (me.z || 0));
+        brg = compassOctant(o.gx - meG.gx, o.gy - meG.gy);
+      }
     } catch {}
-    out.push({ guid: g >>> 0, name, type, dist });
+    out.push({ guid: g >>> 0, name, type, dist, brg });
   }
   out.sort((a, b) => (a.dist ?? 1e9) - (b.dist ?? 1e9));
   return out.slice(0, NEARBY_TOP_N);
 }
+// Compass octant from a world-frame delta (+x east, +y north) — gives the
+// model a bearing to pair with the distance, so "walk toward" is decidable.
+function compassOctant(dx, dy) {
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) return null;
+  const oct = ["E", "NE", "N", "NW", "W", "SW", "S", "SE"];
+  const deg = (Math.atan2(dy, dx) * 180) / Math.PI; // 0=E, 90=N
+  return oct[((Math.round(deg / 45) % 8) + 8) % 8];
+}
+
 function nearbyLine(objs) {
   if (!objs) return `nearby: ${NA}`;
   if (!objs.length) return "nearby: nothing named in range";
   // guid included so use_object can disambiguate same-named objects (two Doors).
-  return `nearby: ${objs.map((o) => `${o.name} [${o.type}] 0x${o.guid.toString(16)}${o.dist != null ? ` d=${o.dist.toFixed(0)}m` : ""}`).join("; ")}`;
+  return `nearby: ${objs.map((o) => `${o.name} [${o.type}] 0x${o.guid.toString(16)}${o.dist != null ? ` d=${o.dist.toFixed(0)}m` : ""}${o.brg ? ` ${o.brg}` : ""}`).join("; ")}`;
 }
 
 // ── nearby portals ─────────────────────────────────────────────────────

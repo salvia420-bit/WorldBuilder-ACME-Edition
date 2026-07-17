@@ -22,6 +22,11 @@ const NEARBY = {
   0x5003: "Training Chest",
   0x5004: "Sedor's Apprentice",
 };
+const INVENTORY = [
+  { guid: 0x6001, name: "Exit Token", value: 0, stackSize: 1, equipMask: 0, wcid: 100 },
+  { guid: 0x6002, name: "Bread", value: 1, stackSize: 4, equipMask: 0, wcid: 259 },
+  { guid: 0x6003, name: "Breadfruit", value: 1, stackSize: 1, equipMask: 0, wcid: 260 },
+];
 function makeHost() {
   const calls = [];
   return {
@@ -29,6 +34,9 @@ function makeHost() {
     NearbyGuids: () => Object.keys(NEARBY).map((k) => Number(k)),
     TryGetObjectName: (g) => NEARBY[g] ?? null,
     UseObject: (g) => { calls.push(["use", g]); return true; },
+    GiveObject: (t, i, q) => { calls.push(["give", t, i, q]); return true; },
+    PursueObject: (g, r, _h, run) => { calls.push(["pursue", g, r, run]); return true; },
+    TryGetPlayerInventory: () => INVENTORY,
   };
 }
 
@@ -39,7 +47,8 @@ function makeHost() {
 
   const defs = worldActions();
   const byType = Object.fromEntries(defs.map((d) => [d.type, d]));
-  check("one def (use_object)", Object.keys(byType).length === 1 && byType.use_object);
+  check("three defs (use_object, give_item, goto_object)",
+    Object.keys(byType).length === 3 && byType.use_object && byType.give_item && byType.goto_object);
 
   // use by exact name -> portal
   {
@@ -75,16 +84,71 @@ function makeHost() {
     const r = await byType.use_object.apply({ host: {} }, { type: "use_object", object: "portal" }, { journal: makeJournal() });
     check("use_object hostless -> ok:false", !r.ok && /unavailable/.test(r.error), r.error);
   }
+  // give_item: token to NPC by name + guid target
+  {
+    const journal = makeJournal(); const host = makeHost(); const bot = { host };
+    const r = await byType.give_item.apply(bot, { type: "give_item", item: "exit token", target: "0x5004" }, { journal });
+    check("give_item name item + guid target", r.ok && host.calls.some((c) => c[0] === "give" && c[1] === 0x5004 && c[2] === 0x6001 && c[3] === 1), JSON.stringify(r));
+    check("give_item journaled", journal.entries.some((e) => /give_item Exit Token/.test(e.text)));
+  }
+  // give_item: qty passes through
+  {
+    const host = makeHost(); const bot = { host };
+    const r = await byType.give_item.apply(bot, { type: "give_item", item: "0x6002", target: "Sedor's Apprentice", qty: 4 }, { journal: makeJournal() });
+    check("give_item guid item + qty", r.ok && host.calls.some((c) => c[0] === "give" && c[1] === 0x5004 && c[2] === 0x6002 && c[3] === 4), JSON.stringify(r));
+  }
+  // give_item: ambiguous inventory item fails
+  {
+    const r = await byType.give_item.apply({ host: makeHost() }, { type: "give_item", item: "brea", target: "0x5004" }, { journal: makeJournal() });
+    check("give_item ambiguous item fails", !r.ok && /ambiguous/i.test(r.error), r.error);
+  }
+  // give_item: unknown target fails
+  {
+    const r = await byType.give_item.apply({ host: makeHost() }, { type: "give_item", item: "exit token", target: "dragon" }, { journal: makeJournal() });
+    check("give_item no target fails", !r.ok && /no nearby object/.test(r.error), r.error);
+  }
+  // give_item: bad qty rejected by validate
+  {
+    const v = byType.give_item.validate({ type: "give_item", item: "exit token", target: "0x5004", qty: 0 });
+    check("give_item qty=0 rejected", v.ok === false && /qty/.test(v.error), v.error);
+  }
+  // give_item: hostless degrade
+  {
+    const r = await byType.give_item.apply({ host: {} }, { type: "give_item", item: "exit token", target: "0x5004" }, { journal: makeJournal() });
+    check("give_item hostless -> ok:false", !r.ok && /unavailable/.test(r.error), r.error);
+  }
+  // goto_object: walk without using
+  {
+    const journal = makeJournal(); const host = makeHost(); const bot = { host };
+    const r = await byType.goto_object.apply(bot, { type: "goto_object", object: "0x5001" }, { journal });
+    check("goto_object by guid pursues", r.ok && host.calls.some((c) => c[0] === "pursue" && c[1] === 0x5001), JSON.stringify(r));
+    check("goto_object never uses", !host.calls.some((c) => c[0] === "use"));
+    check("goto_object journaled", journal.entries.some((e) => /goto_object Exit to Holtburg/.test(e.text)));
+  }
+  // goto_object: track seam fires
+  {
+    const tracked = [];
+    const r = await byType.goto_object.apply({ host: makeHost() }, { type: "goto_object", object: "chest" }, { journal: makeJournal(), track: (g, n) => tracked.push([g, n]) });
+    check("goto_object tracks", r.ok && tracked.length === 1 && tracked[0][0] === 0x5003 && /Chest/.test(tracked[0][1]), JSON.stringify(tracked));
+  }
+  // goto_object: hostless degrade
+  {
+    const r = await byType.goto_object.apply({ host: {} }, { type: "goto_object", object: "chest" }, { journal: makeJournal() });
+    check("goto_object hostless -> ok:false", !r.ok && /unavailable/.test(r.error), r.error);
+  }
   // extensions wiring
   {
     const ext = composeAiExtensions({ host: makeHost() }, { journal: makeJournal(), config: { knowledge: false, dungeonNav: false, wbt: false, economy: false, advancement: false } });
     check("default-on: use_object registered", !!ext.extActions.use_object);
+    check("default-on: give_item registered", !!ext.extActions.give_item);
     check("prompt advertises use_object", ext.directorDeps.systemPrompt.includes("use_object"));
+    check("prompt advertises give_item", ext.directorDeps.systemPrompt.includes("give_item"));
     check("validate routes use_object", ext.directorDeps.validate({ type: "use_object", object: "portal" }).ok === true);
+    check("validate routes give_item", ext.directorDeps.validate({ type: "give_item", item: "token", target: "npc" }).ok === true);
   }
   {
     const ext = composeAiExtensions({ host: makeHost() }, { journal: makeJournal(), config: { world: false, knowledge: false, dungeonNav: false, wbt: false, economy: false, advancement: false } });
-    check("world:false -> not registered", !ext.extActions.use_object);
+    check("world:false -> not registered", !ext.extActions.use_object && !ext.extActions.give_item);
   }
 
   console.log(`\n${pass} pass, ${fail} fail`);

@@ -90,6 +90,16 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
         case "500-then-ok":
           if (state.modeHits === 1) { res.writeHead(500); return res.end("upstream boom"); }
           return ok();
+        case "length-then-ok": // reasoning model: content empty, budget exhausted
+          if (state.modeHits === 1) {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({
+              model: "srv-model",
+              choices: [{ index: 0, message: { role: "assistant", content: null }, finish_reason: "length" }],
+              usage: { prompt_tokens: 100, completion_tokens: 1024 },
+            }));
+          }
+          return ok();
         case "401": res.writeHead(401); return res.end('{"error":{"message":"bad key"}}');
         case "not-json":
           res.writeHead(200, { "Content-Type": "text/html" });
@@ -153,6 +163,26 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     setMode("500-then-ok");
     const r = await client.chat([{ role: "user", content: "x" }]);
     check("500 retried once then ok", state.modeHits === 2 && r.text === FENCED, `hits=${state.modeHits}`);
+  }
+
+  // ---- retry: empty completion (finish_reason length) -> doubled budget ----
+  {
+    setMode("length-then-ok");
+    const r = await client.chat([{ role: "user", content: "x" }], { maxTokens: 1024 });
+    const q = lastReq();
+    check("length retried once then ok", state.modeHits === 2 && r.text === FENCED, `hits=${state.modeHits}`);
+    check("length retry doubles max_tokens", q.body.max_tokens === 2048, JSON.stringify(q.body.max_tokens));
+  }
+
+  // ---- reasoning config passthrough ----
+  {
+    const rc = new LlmClient({ apiKey: "k", baseUrl: base, model: "m", timeoutMs: 5000, reasoning: { effort: "low" }, log: () => {} });
+    setMode("ok");
+    await rc.chat([{ role: "user", content: "x" }]);
+    check("reasoning in body", eq(lastReq().body.reasoning, { effort: "low" }), JSON.stringify(lastReq().body.reasoning));
+    setMode("ok");
+    await client.chat([{ role: "user", content: "x" }]);
+    check("no reasoning by default", lastReq().body.reasoning === undefined);
   }
 
   // ---- hard 401 -> kind "auth", NO retry ----

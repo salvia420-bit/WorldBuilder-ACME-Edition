@@ -11,7 +11,7 @@
 //
 // Survival invariant: every apply degrades to { ok:false, error }.
 
-import { parseGuid } from "./economy.js";
+import { parseGuid, resolveItem } from "./economy.js";
 
 const JOURNAL_CLIP = 800;
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + "…" : s);
@@ -88,14 +88,87 @@ export function useObjectAction() {
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
     if (!h.UseObject(res.guid)) return fail("use request failed to send");
+    ctx.track?.(res.guid, res.name);
     journalNote(ctx, `use_object ${res.name} (${hex(res.guid)}) — walking over to interact; confirm result on next check-in`);
     return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid) } };
   });
   return def;
 }
 
+/** "goto_object" — walk to a nearby object WITHOUT using it (approach/scout). */
+export function gotoObjectAction() {
+  const def = {
+    type: "goto_object",
+    params: { object: "name (substring) or guid of a nearby object from your 'nearby' perception line — prefer the guid" },
+    desc: "walk over to a nearby object or NPC without interacting: get within reach, scout what is around it, and bring new objects into your perception range. Use this to explore toward the farthest interesting thing you can see.",
+    validate(a) {
+      const b = baseValidate("goto_object")(a);
+      if (!b.ok) return b;
+      if ((typeof a.object !== "string" || !a.object.trim()) && !parseGuid(a.object))
+        return { ok: false, error: "object must be a name or guid" };
+      return { ok: true };
+    },
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const h = bot?.host;
+    if (typeof h?.PursueObject !== "function" || typeof h?.NearbyGuids !== "function") return fail("unavailable");
+    const res = resolveNearby(h, a.object);
+    if (res.error) return fail(res.error);
+    if (!h.PursueObject(res.guid, 1.0, 0, true)) return fail("pursue request failed to send");
+    ctx.track?.(res.guid, res.name);
+    journalNote(ctx, `goto_object ${res.name} (${hex(res.guid)}) — walking over; check the pos line next check-in to confirm arrival`);
+    return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid) } };
+  });
+  return def;
+}
+
+/** "give_item" — hand an inventory item to a nearby NPC/player (quest turn-ins). */
+export function giveItemAction() {
+  const def = {
+    type: "give_item",
+    params: {
+      item: "name (substring) or guid of an item in YOUR inventory",
+      target: "name (substring) or guid of a nearby NPC/player from your 'nearby' perception line — prefer the guid",
+      qty: "optional int >= 1 (default 1)",
+    },
+    desc: "give one of your inventory items to a nearby NPC or player: quest turn-ins, handing a token or quest item to an NPC. Fire-and-forget — the server validates; confirm via chat/inventory on your next check-in.",
+    validate(a) {
+      const b = baseValidate("give_item")(a);
+      if (!b.ok) return b;
+      if ((typeof a.item !== "string" || !a.item.trim()) && !parseGuid(a.item))
+        return { ok: false, error: "item must be a name or guid" };
+      if ((typeof a.target !== "string" || !a.target.trim()) && !parseGuid(a.target))
+        return { ok: false, error: "target must be a name or guid" };
+      if (a.qty != null && (!Number.isInteger(a.qty) || a.qty < 1))
+        return { ok: false, error: "qty must be an int >= 1" };
+      return { ok: true };
+    },
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const h = bot?.host;
+    if (typeof h?.GiveObject !== "function" || typeof h?.NearbyGuids !== "function" ||
+        typeof h?.TryGetPlayerInventory !== "function") return fail("unavailable");
+    const tgt = resolveNearby(h, a.target);
+    if (tgt.error) return fail(tgt.error);
+    const rows = h.TryGetPlayerInventory();
+    if (!rows || !rows.length) return fail("inventory not streamed yet — try again next check-in");
+    const it = resolveItem(rows, { item: a.item });
+    if (it.error) return fail(it.error);
+    const itemGuid = (it.row.guid ?? it.row.itemGuid) >>> 0;
+    const qty = a.qty ?? 1;
+    if (!h.GiveObject(tgt.guid, itemGuid, qty)) return fail("give request failed to send");
+    ctx.track?.(tgt.guid, tgt.name);
+    journalNote(
+      ctx,
+      `give_item ${it.row.name}${qty > 1 ? ` x${qty}` : ""} -> ${tgt.name} (${hex(tgt.guid)}) — server validates; confirm via chat/inventory next check-in`
+    );
+    return { type: def.type, ok: true, result: { item: it.row.name, guid: hex(itemGuid), target: tgt.name, targetGuid: hex(tgt.guid), qty } };
+  });
+  return def;
+}
+
 export function worldActions() {
-  return [useObjectAction()];
+  return [useObjectAction(), giveItemAction(), gotoObjectAction()];
 }
 
 /** Integrator seam, registerEconomy-shaped. */
