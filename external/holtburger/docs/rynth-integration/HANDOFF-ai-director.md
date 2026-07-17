@@ -26,6 +26,36 @@
 >   cleanly outdoors.
 > Remaining from §4: real-LLM live soak (needs a real key) and the netBrain
 > buff/loot shadow soak — both unchanged below.
+>
+> **EXECUTED 2026-07-16 (night session) — both remaining soaks ran live:**
+> - **Real-LLM director soak** (`rynth_ai_livesoak.cjs`, new; user-provided
+>   day key, OPENROUTER_KEY env): llama-3.1-8b 2/2 plans $0.0001;
+>   gpt-oss-120b 2/2 plans $0.0002 — sharpest reasoning, incl. a deliberate
+>   pause-for-mana-regen; gpt-5-nano 0/4 at the old 1024-token cap (hidden
+>   reasoning tokens exhaust max_tokens → EMPTY content), 3/4 after the new
+>   `config.ai.maxTokens` passthrough at 4096 ($0.0026). All parsed replies
+>   honored the reply contract; zero invalid actions; journal continuity
+>   observed (nano recalled its own prior priority value). Total ≈ $0.003.
+>   FINDING: a failing director leaves the bot in its last-commanded state —
+>   gpt-oss paused the kernel, nano's failed check-ins never resumed it;
+>   consider an idle-guard (auto-resume when director disabled with kernel
+>   paused-by-AI).
+> - **netBrain buff/loot shadow soak** (25 min, 8/8 PASS): 32 kills, combat
+>   133/133 agree, loot 113/113 agree, buff 39/42, 5.9 ms/call, 0 errors, 0
+>   flip-backs. The soak now dumps divergence evidence (`d.samples`) and the
+>   mob keeper re-anchors via @teleloc before spawning (fixes the observed
+>   permanent-Idle wedge: combat walks the char off-anchor and @create then
+>   fails placement server-side forever).
+>   BUFF DIVERGENCES (the 3, now diagnosed): (1) js=cast:2 vs cs=login-ready
+>   — C# still in login stabilization when JS starts buffing (timing gap);
+>   (2)x2 js=cast:6 (Heal Self I, school 2 power 1) vs cs=cast-buff:1708
+>   (Wedding Bliss, ALSO school 2 power 1) — the C# family/tier resolution
+>   appears to collide on (school,power) and picks the wrong family member.
+>   Fix the C# ladder before buff adoption ever ships; shadow-only today.
+>   OPEN PROBE: looted=0 across 113 agreed loot decisions over 32 kills —
+>   Drudge Skulker HAS DeathTreasureType 453 + 6 createList rows; both
+>   brains agree to skip, so it's a shared filter/corpse-open question, not
+>   parity.
 
 Continuation of `HANDOFF-followups.md`. This session finished the netBrain
 (.NET-wasm) work and built a new layer on top of the rynth grind bot: an **LLM

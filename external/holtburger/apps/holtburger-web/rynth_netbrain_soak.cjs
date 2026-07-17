@@ -129,6 +129,17 @@ function check(name, ok, detail) {
       `${snap?.steady?.toFixed(2)} ms/call, truncated=${snap?.truncated}, flipBacks=${flipBacks}/${lockChanges}`
     );
 
+    // Divergence evidence: shadowTick records each disagreement with both
+    // sides' values + the exact input (netbrain.js d.samples) — dump it, the
+    // counts alone are undiagnosable after the page closes.
+    const samples = await page
+      .evaluate(() => (window.__diag.netbrain.samples || []).map((s) => ({
+        kind: s.kind, at: s.at, jsVal: s.jsVal, csVal: s.csVal,
+        input: JSON.stringify(s.input).slice(0, 600),
+      })))
+      .catch(() => []);
+    for (const s of samples) console.log(`DIVERGE ${s.kind} js=${s.jsVal} cs=${s.csVal}\n  input: ${s.input}`);
+
     await page.evaluate(() => window.__bot?.stop()).catch(() => null);
     await sleep(1000);
   } catch (e) {
