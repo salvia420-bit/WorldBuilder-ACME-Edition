@@ -71,6 +71,17 @@ function check(name, ok, detail) {
         // never engages and starves the spawner into a 30-min Idle soak.
         const alive = await page.evaluate(() => window.__bot.combat._scanTargets().length).catch(() => 0);
         if (alive < 2 && spawns < 60) {
+          // Re-anchor before spawning: combat walks the character off the
+          // start spot, and @create places relative to the CURRENT pose —
+          // from some fight-end poses ACE fails placement every time
+          // (AddWorldObjectInternal "couldn't spawn"), which starves the
+          // soak into a permanent Idle wedge (observed 2026-07-16, ~min 4).
+          // The kernel is Idle whenever we're this starved, so the teleport
+          // never interrupts a live fight.
+          if (alive === 0) {
+            await page.evaluate(() => window.__bot.host.WriteToChat("@teleloc 0xA9B40019 84.0 15.0 94.05")).catch(() => {});
+            await sleep(2000);
+          }
           await page.evaluate(() => window.__bot.host.WriteToChat("@create 7")).catch(() => {});
           spawns++;
         }
