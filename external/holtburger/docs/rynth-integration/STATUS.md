@@ -63,6 +63,54 @@ Bot code: `apps/holtburger-web/rynth/` (9 modules). Entry point:
   geometry, Detour query, portal Dijkstra over 817 GoArrow edges).
 - **Vitals give-up valve** — resolves the weak-heal/huge-HP livelock.
 - **Regression suite** — `rynth_test_all.cjs`.
+- **WorldBuilder oracle + playtest tickets + persona** (2026-07-17) —
+  `apps/wbt-sidecar` (Node, :8768; owns a long-lived `WorldBuilder.Terminal
+  --stdin`, read-only allowlist over the 216-command REPL, `POST /ticket`
+  playtest-ticket store) + `rynth/ai/tools/wbt.js` (`wbt_query` /
+  `wbt_catalog` / `file_ticket` director actions, results journaled back to
+  the LLM) wired default-on through `extensions.js` (`config.ai.wbt`;
+  degrades to ok:false when the sidecar is down). New `config.ai.persona =
+  {name, background, goals}` prepends the playtester's WHO-YOU-ARE block to
+  the system prompt. Gates: `rynth_ai_wbt_test.cjs` 46/46 +
+  `apps/wbt-sidecar/wbt_sidecar_test.cjs` 28/28 (mock WBT, incl.
+  timeout→respawn) + live `rynth_ai_wbt_smoke.cjs` **9/9** (persona + wbt
+  actions in the live prompt; in-page wbt_query → sidecar → real WBT over
+  CORS; ticket persisted with the character's position). Lifecycle:
+  `scripts/wbt-sidecar-boot.sh` (cron @reboot, rynthnav pattern);
+  `WBT_PROJECT` env loads a .wbproj at boot for project-scoped reads.
+- **Playtester-readiness session** (2026-07-17, evening) — four deliveries:
+  (1) **Parity reconciliation**: code re-read of the netwasm-spike findings
+  vs current loops ruled nearly everything already FIXED (T9/T10/T12/T4/
+  kill-TTL; B11/B4/B8/B9/B16/B15 + kernel starvation); the two real
+  survivors were both loot — the **appraisal gate** (unappraised items were
+  shifted out and skipped forever when `minValue>0`; fixed in loot_loop.js
+  with a held-head + one RequestId + 2.5 s window; `rynth_loot_gate_test`
+  10/10) and the loot-everything default (ruled by-design now that trash
+  can be vendored; documented in-code). T8 max-vs-first-match stays an
+  open ruling (only bites overlapping priority rules).
+  (2) **Two-speed fix**: `?bot=1` boots the grind bot on the live client
+  session at first in-world (index.html EnteredWorld handler; `?botAi=off`
+  skips the director) — the client-side wire that previously existed only
+  in Node harnesses. Bar-panel stub text replaced. Live gate:
+  `rynth_bot_boot_smoke.cjs` 9/9.
+  (3) **Economy hands**: RynthWebHost economy plane (inventory/coins/
+  burden%/free-slots/vendor-state reads + buy/sell/wield/unwield actions
+  over the existing wasm exports — no Rust changes needed) + seven
+  director actions in `ai/tools/economy.js`, default-on via extensions.
+  `rynth_ai_economy_test.cjs` 33/33; burden/free-slots live-probed (the
+  entity int-store does NOT answer for the local player — stats-plane
+  getters `playerBurden`/`playerItemsCapacity` are the working source;
+  every InventoryItem.containerId is 0 in the current wasm snapshot, so
+  free-slots is an aggregate estimate).
+  (4) **Sidecar write-hardening** (full code audit of all 62 allowlisted
+  WBT commands): 7 commands accepted attacker-chosen output paths
+  (arbitrary-file-overwrite) — output-path args (`out`/`outputPath`/…) are
+  now refused on EVERY /command; input-path args (`datPath`/`otherDat`/…)
+  must resolve under `WBT_DAT_ROOTS` (default `~/ac_base_dats`);
+  `compute-vanilla-baseline`, `dump-lb-expectations`, `difficulty-gradient`
+  dropped from the allowlist (unsafe by construction). `WBT_UNSAFE_ARGS=1`
+  is the operator-only escape. Sidecar suite now 34/34; refusals verified
+  against the live sidecar.
 
 ## Open work (feasibility proven; remaining is depth)
 

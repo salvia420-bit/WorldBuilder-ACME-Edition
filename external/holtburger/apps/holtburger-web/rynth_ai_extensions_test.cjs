@@ -62,9 +62,11 @@ const CORPUS = [
 
   // --- config gates ------------------------------------------------------
   {
-    const ext = composeAiExtensions(makeBot(), { journal: makeJournal(), config: { knowledge: false, dungeonNav: false } });
+    const ext = composeAiExtensions(makeBot(), { journal: makeJournal(), config: { knowledge: false, dungeonNav: false, wbt: false, economy: false } });
     check("knowledge:false skips lookup", !ext.extActions.lookup && ext.knowledge == null);
     check("dungeonNav:false skips dungeon_suggest", !ext.extActions.dungeon_suggest && ext.dungeonNav == null);
+    check("wbt:false skips wbt actions", !ext.extActions.wbt_query && ext.wbt == null);
+    check("economy:false skips economy actions", !ext.extActions.inventory && ext.economy == null);
     check("no ext actions -> no EXTRA ACTIONS section", !ext.directorDeps.systemPrompt.includes("EXTRA ACTIONS"));
   }
   {

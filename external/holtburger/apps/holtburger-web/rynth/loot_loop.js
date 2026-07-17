@@ -12,11 +12,22 @@ const LOOTED_TTL_MS = 5 * 60_000;
 const OPEN_TIMEOUT_MS = 6000;
 const PICKUP_TIMEOUT_MS = 6000;
 const REACH_M = 4.0;
+// LootScoring finding #1 (netwasm-spike, fixed 2026-07-17): how long an
+// unappraised item may hold the loot head while its Value(19) streams in
+// after a RequestId. Mirrors the C# assess window discipline
+// (CorpseOpenController.cs:915-997) without wedging on a never-answering id.
+const APPRAISE_TIMEOUT_MS = 2500;
 
 export class RynthLootLoop {
   constructor(host, opts = {}) {
     this.host = host;
-    this.minValue = opts.minValue ?? 0; // loot rule: Value(19) >= minValue
+    // Value(19) >= minValue. Default 0 = loot everything — a deliberate
+    // polarity divergence from C#'s empty-profile-loots-nothing (LootScoring
+    // finding #2, ruled by-design 2026-07-17): the playtester bot can sell
+    // trash at vendors, and the director can raise the floor at any time via
+    // set_loot_min_value.
+    this.minValue = opts.minValue ?? 0;
+    this._assessAt = new Map(); // item guid -> first-hold ts (appraisal gate)
     this.log = opts.log || ((m) => console.log(`[loot] ${m}`));
     this.state = "SCAN"; // SCAN | APPROACH | OPEN | LOOT | CONFIRM
     this.corpse = 0;
@@ -48,6 +59,7 @@ export class RynthLootLoop {
   _setState(s) {
     this.state = s;
     this.stateSince = Date.now();
+    if (s === "SCAN") this._assessAt.clear(); // per-corpse holds never leak across corpses
   }
 
   // ── netBrain (D1 path A′) — .NET-wasm LootScoring shadow ────────────────
@@ -204,8 +216,25 @@ export class RynthLootLoop {
         if (h.GetBusyState() !== 0) return;
         const me = h.GetPlayerId();
         while (this.items.length) {
-          const item = this.items.shift();
+          const item = this.items[0];
           const raw = h.TryGetObjectIntProperty(item, 19); // Value
+          // Appraisal gate (LootScoring finding #1): with a value floor set,
+          // an item whose Value hasn't streamed yet is HELD at the head —
+          // request an appraisal once and give it APPRAISE_TIMEOUT_MS —
+          // instead of being shifted out and skipped forever. On timeout it
+          // falls through and is judged on value 0 (the old behavior).
+          if (this.minValue > 0 && raw == null && h.HasAppraisalData?.(item) !== true) {
+            const heldSince = this._assessAt.get(item);
+            if (heldSince === undefined) {
+              this._assessAt.set(item, now);
+              h.RequestId?.(item);
+              return; // stay in LOOT; next tick re-checks
+            }
+            if (now - heldSince < APPRAISE_TIMEOUT_MS) return;
+            this.log(`appraisal timeout on ${item.toString(16)} — judging unappraised`);
+          }
+          this.items.shift();
+          this._assessAt.delete(item);
           const value = raw ?? 0;
           if (this._nb) this._nbShadowItem(item, raw, value >= this.minValue);
           if (value < this.minValue) continue;
@@ -214,6 +243,7 @@ export class RynthLootLoop {
           this._setState("CONFIRM");
           return;
         }
+        this._assessAt.clear();
         this.looted.set(this.corpse, now);
         this.log(`corpse done (${this.lootedCount} looted total)`);
         this._setState("SCAN");

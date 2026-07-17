@@ -1555,7 +1555,9 @@
           id: "rynthsuite",
           name: "RynthSuite",
           icon: "⚒",
-          panelBody: "RynthSuite — combat & navigation (stub)",
+          panelBody:
+            "RynthSuite grind bot — boot with ?bot=1 (add ?aiPanel=1 for the AI director UI). " +
+            "Console: window.__bot.kernel.status / window.rynthAI.status(). In-game: !bot help.",
         },
         {
           // Task C v2 (2026-07-02, user request): the spellbook lives in
@@ -7092,6 +7094,30 @@
                 if (window.__bootState !== "in-world") {
                   setBootState("in-world", `guid=0x${playerGuid}`);
                 }
+                // rynth auto-boot (2026-07-17): ?bot=1 starts the grind bot
+                // on the live session at first in-world — the client-side
+                // wire the whole rynth stack was missing (previously only
+                // Node/Playwright harnesses ever called createGrindBot).
+                // Default OFF: it takes over the character. ?botAi=off
+                // skips the AI-director key probe; otherwise a saved
+                // OpenRouter key (window.rynthAI.setKey) activates the
+                // director as usual. Idempotent (kind=7 refires on death
+                // respawn) and try/caught: a broken bot module must never
+                // take down the client.
+                try {
+                  const botParams = new URLSearchParams(location.search);
+                  if (botParams.get("bot") === "1" && !window.__bot && !window.__botBooting) {
+                    window.__botBooting = true;
+                    import(new URL("rynth/bot.js", location.href).href)
+                      .then(async (m) => {
+                        const cfg = botParams.get("botAi") === "off" ? { ai: false } : {};
+                        window.__bot = await m.createGrindBot(window.__sessionHandle ?? handle, cfg);
+                        console.log("[rynth] grind bot auto-booted via ?bot=1");
+                      })
+                      .catch((e) => console.warn("[rynth] ?bot=1 auto-boot failed:", e))
+                      .finally(() => { window.__botBooting = false; });
+                  }
+                } catch (_) { /* flag parse failure = no bot, client unaffected */ }
                 // Spawn-kick (2026-06-30): the ring populate
                 // (ensure*AroundLandblock) is otherwise driven ONLY by the first
                 // inbound kind=0 position update in handlePositionUpdate. That

@@ -75,6 +75,14 @@ const CAPABILITY_CANDIDATES = {
   FellowshipCreate: ["fellowshipCreate"],
   FellowshipQuit: ["fellowshipQuit"],
   FellowshipRecruit: ["fellowshipRecruit"],
+  // economy plane (2026-07-17): inventory awareness + vendor trade + equip.
+  GetPlayerInventory: ["playerInventory"],
+  GetVendorState: ["getVendorState"],
+  BuyFromVendor: ["buyFromVendor"],
+  SellToVendor: ["sellToVendor"],
+  WieldFromPack: ["wieldFromPack"],
+  UnwieldToPack: ["unwieldToPack"],
+  DropItem: ["dropItem"],
 };
 
 const ODF_PLAYER = 0x08;
@@ -412,6 +420,115 @@ export class RynthWebHost {
     return this._live("GetContainerContents", guid) ?? [];
   }
 
+  // ── inventory / economy reads (2026-07-17) ──────────────────────────
+  /// Plain-object projection of SessionHandle.playerInventory()
+  /// (Array<InventoryItem>, src/lib.rs) — wasm-bindgen rows copied field-
+  /// by-field so callers never hold wasm handles. [] pre-spawn / on error.
+  TryGetPlayerInventory() {
+    const raw = this._live("GetPlayerInventory");
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    for (const it of raw) {
+      try {
+        out.push({
+          guid: (it.guid ?? 0) >>> 0,
+          name: it.name ?? "",
+          wcid: (it.wcid ?? 0) >>> 0,
+          value: Number(it.value ?? 0),
+          stackSize: Number(it.stackSize ?? 1),
+          equipMask: (it.equipMask ?? 0) >>> 0,
+          validLocations: (it.validLocations ?? 0) >>> 0,
+          itemType: (it.itemType ?? 0) >>> 0,
+          containerId: (it.containerId ?? 0) >>> 0,
+          itemsCapacity: Number(it.itemsCapacity ?? 0),
+          requiresBackpackSlot: !!it.requiresBackpackSlot,
+        });
+      } catch (_) {
+        /* one bad row must not drop the snapshot */
+      }
+    }
+    return out;
+  }
+  /// Items currently worn/wielded (non-zero equip mask).
+  TryGetEquipment() {
+    return this.TryGetPlayerInventory().filter((i) => i.equipMask !== 0);
+  }
+  /// Pyreals: PropertyInt.CoinValue (20) on the player is authoritative;
+  /// falls back to summing coin-stack values (wcid 273) from the inventory.
+  TryGetCoins() {
+    const me = this.GetPlayerId();
+    const prop = me ? this._live("GetObjectIntProperty", me, 20) : undefined;
+    if (typeof prop === "number" && Number.isFinite(prop)) return prop;
+    let sum = 0;
+    for (const i of this.TryGetPlayerInventory()) if (i.wcid === 273) sum += i.value;
+    return sum;
+  }
+  /// Burden as an integer PERCENT of capacity. Source is the stats-plane
+  /// getter SessionHandle.playerBurden (encumbrance/capacity, 0..N float;
+  /// live-probed 2026-07-17: the local player's entity int-store does NOT
+  /// answer EncumbranceVal(5), so a property read can never work here).
+  /// A 0.0 reading counts only once the inventory has streamed (pre-
+  /// hydration playerBurden is 0.0 too). null when unknown.
+  /// (observe_ext.js probes this exact name — BURDEN_GETTERS.)
+  TryGetBurden() {
+    try {
+      const b = this.s.playerBurden;
+      if (typeof b === "number" && Number.isFinite(b) && (b > 0 || this.TryGetPlayerInventory().length))
+        return Math.round(b * 100);
+    } catch (_) {}
+    const me = this.GetPlayerId();
+    const v = me ? this._live("GetObjectIntProperty", me, 5) : undefined;
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  }
+  /// Free item slots, AGGREGATE across main pack + side packs: capacity
+  /// (SessionHandle.playerItemsCapacity, live 102, + unequipped packs'
+  /// itemsCapacity) minus unequipped backpack-slot items. Per-container
+  /// math is impossible today — every InventoryItem.containerId is 0 in
+  /// the current wasm snapshot (live-probed 2026-07-17). null until the
+  /// inventory streams. (observe_ext.js probes this exact name —
+  /// FREE_SLOT_GETTERS.)
+  TryGetFreeSlots() {
+    const inv = this.TryGetPlayerInventory();
+    if (!inv.length) return null;
+    let cap = 0;
+    try {
+      const c = this.s.playerItemsCapacity;
+      if (typeof c === "number" && Number.isFinite(c) && c > 0) cap = c;
+    } catch (_) {}
+    if (!cap) cap = 102;
+    for (const i of inv) if (i.itemsCapacity > 0 && i.equipMask === 0) cap += i.itemsCapacity;
+    const used = inv.filter((i) => i.equipMask === 0 && i.requiresBackpackSlot).length;
+    return Math.max(0, cap - used);
+  }
+  /// Vendor stock snapshot (plain objects) — populated after the vendor's
+  /// profile lands (UseObject on the vendor triggers it). null until then.
+  TryGetVendorState(vendorGuid) {
+    const v = this._live("GetVendorState", vendorGuid);
+    if (!v) return null;
+    const items = [];
+    try {
+      for (const it of v.items || []) {
+        items.push({
+          itemGuid: (it.itemGuid ?? 0) >>> 0,
+          name: it.name ?? "",
+          wcid: (it.wcid ?? 0) >>> 0,
+          value: Number(it.value ?? 0),
+          stackSize: Number(it.stackSize ?? 1),
+          itemType: (it.itemType ?? 0) >>> 0,
+        });
+      }
+    } catch (_) {
+      /* partial profile degrades to fewer rows */
+    }
+    return {
+      vendorGuid: (v.vendorGuid ?? vendorGuid) >>> 0,
+      vendorName: v.vendorName ?? "",
+      buyMultiplier: Number(v.buyMultiplier ?? 1),
+      sellMultiplier: Number(v.sellMultiplier ?? 1),
+      items,
+    };
+  }
+
   // ── actions (fire-and-forget through SessionHandle) ────────────────
   _act(cap, ...args) {
     const f = this._m[cap];
@@ -472,6 +589,46 @@ export class RynthWebHost {
   }
   NoteLocalCastWindow(active) {
     return this._act("NoteLocalCastWindow", !!active);
+  }
+
+  // ── economy actions (2026-07-17) ────────────────────────────────────
+  /// items: [{itemGuid, amount}] — typed-array marshal for the wasm ABI
+  /// (buyFromVendor(vendor_guid, Uint32Array, Int32Array), src/lib.rs).
+  BuyFromVendor(vendorGuid, items) {
+    const rows = Array.isArray(items) ? items : [];
+    if (!rows.length) return false;
+    return this._act(
+      "BuyFromVendor",
+      vendorGuid,
+      Uint32Array.from(rows.map((r) => r.itemGuid >>> 0)),
+      Int32Array.from(rows.map((r) => Math.max(1, r.amount | 0)))
+    );
+  }
+  SellToVendor(vendorGuid, items) {
+    const rows = Array.isArray(items) ? items : [];
+    if (!rows.length) return false;
+    return this._act(
+      "SellToVendor",
+      vendorGuid,
+      Uint32Array.from(rows.map((r) => r.itemGuid >>> 0)),
+      Int32Array.from(rows.map((r) => Math.max(1, r.amount | 0)))
+    );
+  }
+  /// equipMask defaults to the item's validLocations (wear it where it fits).
+  WieldItem(itemGuid, equipMask) {
+    let mask = equipMask >>> 0;
+    if (!mask) {
+      const row = this.TryGetPlayerInventory().find((i) => i.guid === (itemGuid >>> 0));
+      mask = row ? row.validLocations : 0;
+    }
+    if (!mask) return false;
+    return this._act("WieldFromPack", itemGuid, mask);
+  }
+  UnwieldItem(itemGuid) {
+    return this._act("UnwieldToPack", itemGuid);
+  }
+  DropItem(itemGuid) {
+    return this._act("DropItem", itemGuid);
   }
 }
 

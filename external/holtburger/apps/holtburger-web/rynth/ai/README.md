@@ -138,5 +138,48 @@ The v2 layers compose through `ai/extensions.js` and are ON by default
   actions/check-in).
 - **Observation enrichment** — kill-rate trend, burden/free-slots, nearby
   portals, and a suggested-focus line appended to each observation.
+- **Economy hands** (2026-07-17) — `inventory` / `open_vendor` / `buy_items`
+  / `sell_items` / `equip_item` / `unequip_item` / `use_item` actions over
+  the RynthWebHost economy plane (webhost.js: `TryGetPlayerInventory`,
+  `TryGetCoins`, `TryGetBurden` (percent, via the wasm `playerBurden`
+  stats getter), `TryGetFreeSlots`, `TryGetVendorState`, `BuyFromVendor`,
+  `SellToVendor`, `WieldItem`, `UnwieldItem`). The playtester can read its
+  own gear/pyreals/burden, open a nearby vendor by name, gear up within its
+  budget, and sell loot. `buy_items` refuses plans that exceed the
+  character's pyreals. Config: `config.ai.economy = false` to disable.
+- **WorldBuilder oracle** (2026-07-17) — `wbt_query` / `wbt_catalog` /
+  `file_ticket` actions over the **wbt-sidecar** (`apps/wbt-sidecar`, :8768),
+  which fronts the full WorldBuilder.Terminal JSON REPL behind a read-only
+  allowlist **with argument screening** (output-path args refused; DAT-path
+  args pinned under `WBT_DAT_ROOTS` — see the sidecar README's write-audit
+  section). The director can look up weenies, spells, `describe-landblock`
+  an area before walking into it, run validators — and **file playtest
+  tickets** (`POST /ticket` → one JSON per ticket + `tickets.jsonl`,
+  auto-stamped with the character's position). Boot the sidecar with
+  `scripts/wbt-sidecar-boot.sh`; without it the actions degrade to
+  `ok:false` results the model can read. Config:
+  `config.ai.wbt = { endpoint | oracle } | false`.
+
+## Persona (the playtester's ego, 2026-07-17)
+
+`config.ai.persona = { name, background, goals }` (all optional strings)
+prepends a `WHO YOU ARE` block to the system prompt: identity, self-awareness
+duties (track vitals/buffs/gear/danger, scout before entering unfamiliar
+ground, figure things out yourself) and the standing instruction to
+`file_ticket` when the game misbehaves. Absent → the plain director voice.
+
+```js
+const bot = await createGrindBot(window.__sessionHandle, {
+  ai: {
+    apiKey: "sk-or-...",
+    persona: {
+      name: "Brakis",
+      background: "A fresh arrival in Holtburg with 10,000 pyreals to spend on gear.",
+      goals: "Gear up, run the starter quests, hunt at the edge of what you can survive; report anything broken.",
+    },
+    wbt: { endpoint: "http://127.0.0.1:8768" },  // default; false to disable
+  },
+});
+```
 
 Still out of scope: multi-bot coordination, long-term goal ladders.

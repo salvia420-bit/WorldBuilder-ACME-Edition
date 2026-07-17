@@ -18,6 +18,8 @@ import { sanitizeAction, guardPlan } from "./safety.js";
 import { enrichObservation } from "./observe_ext.js";
 import { KnowledgeBase, FileKnowledgeProvider, registerKnowledge } from "./tools/knowledge.js";
 import { DungeonNavAdvisor, registerDungeonNav } from "./tools/dungeon_nav.js";
+import { WbtOracle, registerWbt } from "./tools/wbt.js";
+import { registerEconomy } from "./tools/economy.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./director.js";
 
 // = executePlan's own default (actions.js:197) + SPEC "Cost & safety" cap;
@@ -137,6 +139,29 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     registerDungeonNav(extActions, dungeonNav);
   }
 
+  // WorldBuilder.Terminal oracle (tools/wbt.js): wbt_query / wbt_catalog /
+  // file_ticket over the wbt-sidecar. Default-on like the other extensions —
+  // a down sidecar degrades to ok:false action results, never a throw.
+  // cfg.wbt: false -> off; { oracle } duck type | { endpoint } sidecar URL.
+  let wbt = null;
+  if (cfg.wbt !== false) {
+    const w = cfg.wbt && typeof cfg.wbt === "object" ? cfg.wbt : {};
+    wbt =
+      w.oracle && typeof w.oracle.query === "function"
+        ? w.oracle
+        : new WbtOracle({ endpoint: w.endpoint, fetchFn: w.fetchFn });
+    registerWbt(extActions, wbt);
+  }
+
+  // Economy hands (tools/economy.js): inventory / open_vendor / buy_items /
+  // sell_items / equip_item / unequip_item / use_item over the RynthWebHost
+  // economy plane. Default-on; a host without those capabilities degrades to
+  // ok:false action results. cfg.economy: false -> off.
+  let economy = null;
+  if (cfg.economy !== false) {
+    economy = registerEconomy(extActions);
+  }
+
   const extFor = (a) =>
     a && typeof a === "object" && typeof a.type === "string"
       ? extActions[a.type] ?? null
@@ -211,13 +236,47 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
 
   const basePrompt = typeof cfg.systemPrompt === "string" && cfg.systemPrompt ? cfg.systemPrompt : DEFAULT_SYSTEM_PROMPT;
   const extCatalog = renderExtCatalog(extActions);
-  const systemPrompt = extCatalog ? `${basePrompt}\n\nEXTRA ACTIONS\n${extCatalog}` : basePrompt;
+  const persona = renderPersonaPreamble(cfg.persona);
+  const withPersona = persona ? `${persona}\n\n${basePrompt}` : basePrompt;
+  const systemPrompt = extCatalog ? `${withPersona}\n\nEXTRA ACTIONS\n${extCatalog}` : withPersona;
 
   return {
     directorDeps: { observe, validate, execute, systemPrompt },
     extActions,
     knowledge,
     dungeonNav,
+    wbt,
+    economy,
     state,
   };
+}
+
+/**
+ * Persona preamble: the playtester's sense of self, prepended to the system
+ * prompt. cfg.persona: { name?, background?, goals? } — all optional strings;
+ * absent/false/non-object -> "" (plain v1 director voice). This is the "ego"
+ * seam: identity + self-awareness live in the prompt; the technical
+ * capabilities (observation, wbt_query, lookup, goto, file_ticket) are what
+ * let the character actually act on them.
+ */
+export function renderPersonaPreamble(p) {
+  if (!p || typeof p !== "object") return "";
+  const s = (v, n) => (typeof v === "string" && v.trim() ? v.trim().slice(0, n) : "");
+  const name = s(p.name, 100);
+  const background = s(p.background, 1000);
+  const goals = s(p.goals, 1000);
+  if (!name && !background && !goals) return "";
+  const lines = ["WHO YOU ARE"];
+  if (name) lines.push(`You are ${name}, a character living in the world of Dereth.`);
+  if (background) lines.push(`Background: ${background}`);
+  if (goals) lines.push(`Your goals: ${goals}`);
+  lines.push(
+    "You have a persistent sense of self. Track your own state — vitals, buffs,",
+    "gear, money, where you are and whether you can survive what's ahead — and",
+    "before entering unfamiliar or dangerous ground, find out what lives there.",
+    "Prefer figuring things out yourself (look it up, go and see, try it) over",
+    "waiting to be told. When the game itself misbehaves — bugs, blockers,",
+    "things that feel wrong — report it with file_ticket."
+  );
+  return lines.join("\n");
 }
