@@ -77,13 +77,18 @@ function kindError(kind, message, extra) {
 const clip = (s, n = 200) => (typeof s === "string" && s.length > n ? s.slice(0, n) + "…" : s);
 
 export class LlmClient {
-  constructor({ apiKey, baseUrl, model, referer, title, timeoutMs = 60_000, log } = {}) {
+  constructor({ apiKey, baseUrl, model, referer, title, timeoutMs = 60_000, maxTokens = 1024, log } = {}) {
     this.apiKey = apiKey ?? null;
     this.baseUrl = String(baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.model = model ?? DEFAULT_MODEL;
     this.referer = referer ?? null; // OpenRouter HTTP-Referer attribution header
     this.title = title ?? null;     // OpenRouter X-Title attribution header
     this.timeoutMs = timeoutMs;
+    // Instance-default completion cap (additive, 2026-07-16): reasoning-tier
+    // models (gpt-5-nano etc.) burn hidden reasoning tokens against
+    // max_tokens and return EMPTY content at the old fixed 1024 — raise via
+    // config.ai.maxTokens (bot.js passthrough) for those models.
+    this.maxTokens = maxTokens;
     this.log = log ?? null;
     // spend: calls/tokens count COMPLETED chats (a failed 429 attempt costs
     // nothing); errors counts chat() invocations that ultimately threw.
@@ -110,7 +115,7 @@ export class LlmClient {
   }
 
   /** -> { text, json, usage:{prompt,completion}, model, ms }; throws Error with .kind */
-  async chat(messages, { model, maxTokens = 1024, temperature = 0.4 } = {}) {
+  async chat(messages, { model, maxTokens = this.maxTokens, temperature = 0.4 } = {}) {
     const t0 = Date.now();
     const useModel = model ?? this.model;
     const url = `${this.baseUrl}/chat/completions`;

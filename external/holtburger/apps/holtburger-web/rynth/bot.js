@@ -230,6 +230,7 @@ async function wireAiDirector(bot, aiConfig, base) {
     apiKey,
     baseUrl: aiCfg?.baseUrl, // undefined -> client defaults (OpenRouter)
     model: aiCfg?.model,
+    maxTokens: aiCfg?.maxTokens, // reasoning-tier models need > the 1024 default
     referer: "https://holtburger.local",
     title: "holtburger-rynth",
   });

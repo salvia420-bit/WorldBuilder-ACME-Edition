@@ -47,7 +47,11 @@ export const DEFAULT_MODEL = "anthropic/claude-haiku-4.5";
 export const KEY_STORAGE = "holtburger_ai_key_v1";   // localStorage key
 export function extractJson(text) // -> object|null; tolerant of ```json fences, prose around the object, trailing commas NOT required to parse
 export class LlmClient {
-  constructor({ apiKey, baseUrl, model, referer, title, timeoutMs = 60000, log } = {})
+  constructor({ apiKey, baseUrl, model, referer, title, timeoutMs = 60000, maxTokens = 1024, log } = {})
+  // maxTokens (additive 2026-07-16): instance default for chat()'s cap —
+  // reasoning-tier models (gpt-5-nano etc.) return EMPTY content at 1024
+  // because hidden reasoning tokens count against max_tokens; raise via
+  // config.ai.maxTokens (bot.js passthrough).
   static loadKey() / static saveKey(key) / static clearKey()   // localStorage, safe under node (no-throw, null)
   async chat(messages, { model, maxTokens = 1024, temperature = 0.4 } = {})
   // -> { text, json, usage: {prompt, completion}, model, ms }
