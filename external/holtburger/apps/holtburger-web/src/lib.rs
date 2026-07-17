@@ -22257,6 +22257,15 @@ enum SessionCommand {
     BreakAllegiance {
         target_guid: u32,
     },
+    /// Confirmation: answer a server confirmation dialog
+    /// (`CharacterConfirmationRequest`, GameEvent 0x0274 — allegiance
+    /// swears, fellowship invites, crafting confirms). Maps to
+    /// `GameAction::ConfirmationResponse` (sub-opcode 0x0275).
+    ConfirmationResponse {
+        confirmation_type: u32,
+        context: u32,
+        accepted: bool,
+    },
     /// Social: add `friend_name` (string16) to the player's friends
     /// list. Maps to `GameAction::AddFriend` (sub-opcode 0x0018). Retail
     /// + ACE wire format is by-name; ACE resolves the name server-side
@@ -28236,12 +28245,30 @@ fn build_sanctuary_js(pos: &holtburger_common::position::WorldPosition) -> Sanct
 /// snapshot. Single-threaded wasm32 makes `Rc` + `RefCell` sound;
 /// borrow conflicts are impossible because reads from JS are
 /// synchronous and the recv loop yields between mutations.
+/// Guild-moot (2026-07-16): one server confirmation dialog
+/// (`CharacterConfirmationRequest`, GameEvent 0x0274) awaiting an answer —
+/// allegiance swears, fellowship invites, crafting confirms. Serialized to
+/// JS as a plain object by [`SessionHandle::pending_confirmations`]
+/// (serde, NOT wasm_bindgen — no class wrapper needed).
+#[derive(serde::Serialize, Clone)]
+pub struct PendingConfirmation {
+    #[serde(rename = "confirmType")]
+    pub confirm_type: u32,
+    pub context: u32,
+    pub text: String,
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct SessionHandle {
     cmd_tx: futures::channel::mpsc::UnboundedSender<SessionCommand>,
     queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>>,
     character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>>,
+    /// Guild-moot (2026-07-16): confirmation dialogs pushed by the recv
+    /// loop on GameEvent 0x0274; JS drains via
+    /// [`SessionHandle::pending_confirmations`] and answers via
+    /// [`SessionHandle::send_confirmation_response`].
+    pending_confirmations: std::rc::Rc<std::cell::RefCell<Vec<PendingConfirmation>>>,
     /// HUD rec #83 (2026-06-16): most recent server info from
     /// `GameMessage::ServerName`. `None` until the post-login handshake
     /// arrives; refreshed if ACE re-sends (rare).
@@ -33695,6 +33722,47 @@ impl SessionHandle {
             })
     }
 
+    /// Guild-moot (2026-07-16): drain server confirmation dialogs
+    /// (`CharacterConfirmationRequest`, GameEvent 0x0274) received since
+    /// the last call -> `[{confirmType, context, text}]`. Allegiance
+    /// swears arrive here on the PATRON's session
+    /// (`ConfirmationType::SwearAllegiance` = 1); answer with
+    /// [`SessionHandle::send_confirmation_response`]. An unanswered
+    /// dialog times out server-side as a decline.
+    #[wasm_bindgen(js_name = pendingConfirmations)]
+    pub fn pending_confirmations(&self) -> JsValue {
+        let drained: Vec<PendingConfirmation> =
+            self.pending_confirmations.borrow_mut().drain(..).collect();
+        serde_wasm_bindgen::to_value(&drained).unwrap_or(JsValue::NULL)
+    }
+
+    /// Guild-moot (2026-07-16): answer a server confirmation dialog —
+    /// `confirm_type` + `context` verbatim from
+    /// [`SessionHandle::pending_confirmations`], `accepted` = the
+    /// answer. Sends `GameAction::ConfirmationResponse` (sub-opcode
+    /// 0x0275). Unknown `confirm_type` values are dropped with a warn
+    /// (the wire enum is 0..=7, holtburger-common ConfirmationType).
+    #[wasm_bindgen(js_name = sendConfirmationResponse)]
+    pub fn send_confirmation_response(
+        &self,
+        confirm_type: u32,
+        context: u32,
+        accepted: bool,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::ConfirmationResponse {
+                confirmation_type: confirm_type,
+                context,
+                accepted,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "sendConfirmationResponse: cmd channel closed ({e})"
+                ))
+            })
+    }
+
     /// Social — add `friend_name` to the player's friends list. Sends
     /// `GameAction::AddFriend` (sub-opcode 0x0018). Wire format is
     /// by-name (string16); ACE resolves the name server-side.
@@ -34903,6 +34971,10 @@ pub async fn start_session(
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Guild-moot (2026-07-16): server confirmation dialogs awaiting an
+    // answer, stashed for JS polling via `pendingConfirmations()`.
+    let pending_confirmations: std::rc::Rc<std::cell::RefCell<Vec<PendingConfirmation>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     // HUD rec #83 (2026-06-16): server info from GameMessage::ServerName.
     let latest_server_info: std::rc::Rc<std::cell::RefCell<Option<ServerInfoJs>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -35211,6 +35283,8 @@ pub async fn start_session(
     {
         let queued_events = queued_events.clone();
         let character_list = character_list.clone();
+        // Guild-moot (2026-07-16) — clone for recv_loop param.
+        let pending_confirmations_inner = pending_confirmations.clone();
         // HUD rec #83 (2026-06-16) — clone for recv_loop param.
         let latest_server_info_inner = latest_server_info.clone();
         // HUD rec #56 (2026-06-16) — clone for recv_loop param.
@@ -35323,6 +35397,7 @@ pub async fn start_session(
                 collision_scene_inner,
                 terrain_heights_shadow_inner,
                 turbine_chat_state_inner,
+                pending_confirmations_inner,
                 world_state,
             )
             .await;
@@ -35386,6 +35461,7 @@ pub async fn start_session(
         cmd_tx,
         queued_events,
         character_list,
+        pending_confirmations,
         latest_server_info,
         latest_sanctuary,
         latest_localization,
@@ -37421,6 +37497,9 @@ async fn recv_loop(
     turbine_chat_state: std::rc::Rc<
         std::cell::RefCell<holtburger_core::client::types::TurbineChatState>,
     >,
+    // Guild-moot (2026-07-16): confirmation dialogs (GameEvent 0x0274)
+    // stashed for the SessionHandle's pendingConfirmations() poll.
+    pending_confirmations: std::rc::Rc<std::cell::RefCell<Vec<PendingConfirmation>>>,
     // Option C (live use-predicates): the SAME WorldState this loop mutates,
     // shared by Rc clone with the SessionHandle. Named `world` so the ~50
     // in-loop access sites keep their identifier; only the access form changes
@@ -42378,6 +42457,23 @@ async fn recv_loop(
                                         f32_payload: None,
                                     });
                                 }
+                                // Guild-moot (2026-07-16): stash confirmation
+                                // dialogs (allegiance swears etc.) for the
+                                // pendingConfirmations() poll. Deliberately
+                                // NOT a chat line — keeps transcripts clean.
+                                holtburger_protocol::messages::GameEvent::CharacterConfirmationRequest(
+                                    data,
+                                ) => {
+                                    console_log_str(&format!(
+                                        "[confirm/request] type={} ctx={} {}",
+                                        data.confirmation_type as u32, data.context, data.text
+                                    ));
+                                    pending_confirmations.borrow_mut().push(PendingConfirmation {
+                                        confirm_type: data.confirmation_type as u32,
+                                        context: data.context,
+                                        text: data.text.clone(),
+                                    });
+                                }
                                 holtburger_protocol::messages::GameEvent::ChannelBroadcast(
                                     data,
                                 ) => {
@@ -45793,6 +45889,48 @@ async fn recv_loop(
                         console_log_str(&format!(
                             "[allegiance/swear] target=0x{target_guid:08X}",
                         ));
+                    }
+                    Some(SessionCommand::ConfirmationResponse {
+                        confirmation_type,
+                        context,
+                        accepted,
+                    }) => {
+                        use holtburger_common::ConfirmationType;
+                        use holtburger_protocol::messages::{
+                            ConfirmationResponseActionData, GameAction,
+                        };
+                        match ConfirmationType::from_repr(confirmation_type) {
+                            None => log::warn!(
+                                "recv_loop: ConfirmationResponse: unknown confirmation_type {confirmation_type}"
+                            ),
+                            Some(ctype) => {
+                                let action = GameAction::ConfirmationResponse(Box::new(
+                                    ConfirmationResponseActionData {
+                                        confirmation_type: ctype,
+                                        context,
+                                        accepted,
+                                    },
+                                ));
+                                if let Err(e) = session.send_action(action).await {
+                                    log::warn!(
+                                        "recv_loop: send_action(ConfirmationResponse): {e}"
+                                    );
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                        string_payload: Some(format!(
+                                            "confirmation_response: {e}"
+                                        )),
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                    return;
+                                }
+                                console_log_str(&format!(
+                                    "[confirm/respond] type={confirmation_type} ctx={context} accepted={accepted}"
+                                ));
+                            }
+                        }
                     }
                     Some(SessionCommand::BreakAllegiance { target_guid }) => {
                         use holtburger_common::Guid;
