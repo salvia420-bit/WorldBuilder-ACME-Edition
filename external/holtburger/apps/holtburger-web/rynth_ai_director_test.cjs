@@ -206,6 +206,56 @@ const resp = (json) => ({ text: JSON.stringify(json), json, usage: { prompt: 10,
     check("disable: calls counted", d.status.calls === 3);
   }
 
+  // ---- Idle-guard: an AI-paused kernel is resumed when the director
+  // self-disables (2026-07-16 live-soak finding: gpt-oss paused for mana,
+  // the next model's failing check-ins left the bot parked forever).
+  {
+    const journal = makeJournal();
+    let running = true, startCalls = 0;
+    const bot = { kernel: { start() { running = true; startCalls++; }, stop() { running = false; }, get running() { return running; } } };
+    const client = makeClient([
+      resp({ analysis: "regen mana", actions: [{ type: "pause" }], next_check_minutes: 5 }),
+      new Error("boom"),
+    ]);
+    const exec = makeExec((a) => {
+      if (a.type === "pause") { bot.kernel.stop(); return { type: "pause", ok: true, result: "paused" }; }
+      return { type: a.type, ok: true };
+    });
+    const d = new RynthAiDirector(bot, {
+      client, journal, observe: mockObserve, execute: exec, validate: mockValidate,
+      maxErrorsBeforeDisable: 2, intervalMinutes: 5,
+    });
+    d.start();
+    await d.checkNow(); // plan 1: pause executes, guard armed
+    check("idleguard: AI pause stops the kernel", running === false);
+    await d.checkNow(); // error 1 -> still enabled, kernel stays paused
+    check("idleguard: kernel stays paused below the disable threshold", running === false && d.status.enabled === true);
+    await d.checkNow(); // error 2 -> self-disable -> guard resumes
+    check("idleguard: self-disable resumes the AI-paused kernel",
+      running === true && startCalls === 1 && d.status.enabled === false);
+    check("idleguard: resume journaled",
+      journal.kinds("note").some((e) => /idle-guard/.test(e.text)), JSON.stringify(journal.kinds("note")));
+  }
+  {
+    // A dryRun pause executes nothing, so it must NOT arm the guard; and an
+    // AI resume disarms it.
+    const journal = makeJournal();
+    let startCalls = 0;
+    const bot = { kernel: { start() { startCalls++; }, stop() {}, get running() { return false; } } };
+    const client = makeClient([
+      resp({ analysis: "dry pause", actions: [{ type: "pause" }], next_check_minutes: 5 }),
+      new Error("boom"),
+    ]);
+    const d = new RynthAiDirector(bot, {
+      client, journal, observe: mockObserve, execute: makeExec(), validate: mockValidate,
+      maxErrorsBeforeDisable: 1, intervalMinutes: 5, dryRun: true,
+    });
+    d.start();
+    await d.checkNow(); // dryRun pause — synthesized result, nothing executed
+    await d.checkNow(); // error -> immediate disable
+    check("idleguard: dryRun pause does not arm the guard", startCalls === 0 && d.status.enabled === false);
+  }
+
   // ---- Budget: rolling 60-min window vs maxCallsPerHour.
   {
     const journal = makeJournal();

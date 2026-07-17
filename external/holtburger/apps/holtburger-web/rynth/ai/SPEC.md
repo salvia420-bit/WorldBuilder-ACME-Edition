@@ -43,7 +43,7 @@ smoke uses the live stack and is run on the LAPTOP, not the buildbox.
 ### llm_client.js
 ```js
 export const DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
-export const DEFAULT_MODEL = "anthropic/claude-haiku-4.5";
+export const DEFAULT_MODEL = "openai/gpt-oss-120b"; // baseline since 2026-07-16 live soak
 export const KEY_STORAGE = "holtburger_ai_key_v1";   // localStorage key
 export function extractJson(text) // -> object|null; tolerant of ```json fences, prose around the object, trailing commas NOT required to parse
 export class LlmClient {
@@ -128,6 +128,10 @@ to call when calls-in-last-60min >= maxCallsPerHour (journal a "budget" entry,
 reschedule); disable entirely (stop()) after maxErrorsBeforeDisable
 CONSECUTIVE errors. LLM unreachable/invalid JSON -> journal error, no actions,
 next check at intervalMinutes. NEVER touches admin chat; NEVER blocks the bot.
+Idle-guard (additive 2026-07-16): if the director self-disables while the
+kernel is stopped BY AN EXECUTED AI pause (dryRun never arms it; an AI resume
+disarms it), the guard restarts the kernel and journals a note — a dead
+director must not leave the bot parked. A user stop() never triggers it.
 
 ### journal.js
 ```js

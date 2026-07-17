@@ -23,7 +23,7 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
   // ---- frozen constants (SPEC §llm_client) ----
   check("DEFAULT_BASE_URL", DEFAULT_BASE_URL === "https://openrouter.ai/api/v1", DEFAULT_BASE_URL);
-  check("DEFAULT_MODEL", DEFAULT_MODEL === "anthropic/claude-haiku-4.5", DEFAULT_MODEL);
+  check("DEFAULT_MODEL", DEFAULT_MODEL === "openai/gpt-oss-120b", DEFAULT_MODEL);
   check("KEY_STORAGE", KEY_STORAGE === "holtburger_ai_key_v1", KEY_STORAGE);
 
   // ---- extractJson matrix ----

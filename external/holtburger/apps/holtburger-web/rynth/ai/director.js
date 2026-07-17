@@ -70,6 +70,7 @@ export class RynthAiDirector {
     this._callTimes = [];   // chat-attempt stamps for the rolling 60-min budget
     this._consecutiveErrors = 0;
     this._lastSummary = null;
+    this._aiPausedKernel = false; // set by an executed pause action; idle-guard input
   }
 
   /** Idempotent: enables the loop and schedules the first check-in at
@@ -201,6 +202,10 @@ export class RynthAiDirector {
         const m = Number(r.result?.minutes ?? r.result);
         if (Number.isFinite(m)) nextMin = this._clampMinutes(m);
       }
+      // Track whether the KERNEL's stopped state is the AI's doing (dryRun
+      // executes nothing, so it must not arm the guard).
+      if (r?.type === "pause" && r.ok && r.dryRun !== true) this._aiPausedKernel = true;
+      else if (r?.type === "resume" && r.ok && r.dryRun !== true) this._aiPausedKernel = false;
     }
     this._consecutiveErrors = 0;
     this._schedule(nextMin);
@@ -218,10 +223,28 @@ export class RynthAiDirector {
     if (this._consecutiveErrors >= this.maxErrorsBeforeDisable) {
       this.stop();
       this._journal("error", `disabled after ${this._consecutiveErrors} consecutive errors`);
+      this._idleGuard();
     } else {
       this._schedule(this.intervalMinutes);
     }
     return { plan: null, results: [], error: msg };
+  }
+
+  // Idle-guard (additive 2026-07-16, live-soak finding): a director that
+  // PAUSED the kernel and then died must not leave the bot parked forever —
+  // "bot survives the AI" includes surviving an AI that stopped it. Fires
+  // only on the self-disable path (a user stop() is user intent) and only
+  // for an AI-issued pause that is still in effect.
+  _idleGuard() {
+    if (!this._aiPausedKernel) return;
+    try {
+      const k = this.bot?.kernel;
+      if (k && typeof k.start === "function" && !k.running) {
+        k.start();
+        this._aiPausedKernel = false;
+        this._journal("note", "idle-guard: director self-disabled while the kernel was AI-paused — resumed the grind");
+      }
+    } catch { /* the guard must never take the bot down */ }
   }
 
   // setTimeout chain, NOT setInterval (SPEC: tab throttling clamps background

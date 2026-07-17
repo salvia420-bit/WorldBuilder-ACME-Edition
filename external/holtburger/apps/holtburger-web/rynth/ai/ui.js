@@ -37,6 +37,8 @@ const CSS_JOURNAL =
 // SPEC §ui: "datalist of a few OpenRouter ids". Fallback when the caller
 // doesn't pass a providers.js-derived list (additive `models` option below).
 const MODEL_SUGGESTIONS = [
+  "openai/gpt-oss-120b",
+  "meta-llama/llama-3.1-8b-instruct",
   "anthropic/claude-haiku-4.5",
   "anthropic/claude-sonnet-4.6",
   "openai/gpt-4o-mini",

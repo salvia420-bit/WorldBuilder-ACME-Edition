@@ -36,7 +36,7 @@ const bot = await createGrindBot(window.__sessionHandle, {
   ai: {
     apiKey: "sk-or-...",       // wins over the saved localStorage key
     baseUrl: "https://openrouter.ai/api/v1",  // default; any OpenAI-compatible provider
-    model: "anthropic/claude-haiku-4.5",      // default
+    model: "openai/gpt-oss-120b",             // default (live-soak baseline)
     intervalMinutes: 5,        // check-in cadence (clamped 1..30 at runtime)
     dryRun: false,             // true = plan + journal but execute nothing
     autoStart: true,           // anything but false -> director.start()

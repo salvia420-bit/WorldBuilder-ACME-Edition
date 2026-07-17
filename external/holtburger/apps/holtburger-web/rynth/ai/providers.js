@@ -11,8 +11,8 @@
 // list-price hints (USD per 1M tokens) for UI cost display only — never
 // billing truth. Providers reprice without notice; check docsUrl.
 
-// Default model must stay in sync with llm_client.js:12 DEFAULT_MODEL
-// ("anthropic/claude-haiku-4.5") — asserted in rynth_ai_providers_test.cjs.
+// Default model must stay in sync with llm_client.js DEFAULT_MODEL
+// ("openai/gpt-oss-120b") — asserted in rynth_ai_providers_test.cjs.
 export const DEFAULT_PROVIDER = "openrouter";
 
 export const PROVIDERS = deepFreeze({
@@ -25,6 +25,8 @@ export const PROVIDERS = deepFreeze({
     docsUrl: "https://openrouter.ai/docs",
     models: [
       // Superset of the ui.js datalist; keep the SPEC default first.
+      { id: "openai/gpt-oss-120b", inUsdPerMtok: 0.037, outUsdPerMtok: 0.17 },
+      { id: "meta-llama/llama-3.1-8b-instruct", inUsdPerMtok: 0.05, outUsdPerMtok: 0.08 },
       { id: "anthropic/claude-haiku-4.5", inUsdPerMtok: 1.0, outUsdPerMtok: 5.0 },
       { id: "anthropic/claude-sonnet-4.6", inUsdPerMtok: 3.0, outUsdPerMtok: 15.0 },
       { id: "openai/gpt-4o-mini", inUsdPerMtok: 0.15, outUsdPerMtok: 0.6 },

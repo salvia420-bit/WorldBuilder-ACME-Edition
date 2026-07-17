@@ -9,7 +9,9 @@
 // director can branch without string-matching messages.
 
 export const DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
-export const DEFAULT_MODEL = "anthropic/claude-haiku-4.5";
+// gpt-oss-120b since 2026-07-16: best decision quality per dollar in the
+// live 3-model soak (rynth_ai_livesoak.cjs) — the baseline director model.
+export const DEFAULT_MODEL = "openai/gpt-oss-120b";
 export const KEY_STORAGE = "holtburger_ai_key_v1";
 
 /**
