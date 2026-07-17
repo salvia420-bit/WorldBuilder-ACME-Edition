@@ -48,7 +48,15 @@ const baseValidate = (type) => (a) => {
 // Resolve a nearby object by guid (wins) or case-insensitive name substring.
 // -> { guid, name } | { error }
 function resolveNearby(h, ref) {
-  const g = parseGuid(ref);
+  let g = parseGuid(ref);
+  if (!g && typeof ref === "string") {
+    // Models habitually write "Door 0x7860202d" (name + guid in one string);
+    // a pure substring match on that fails while the guid sits in plain
+    // sight. Extract an embedded 0x guid and prefer it. (Recurring live
+    // failure, 3 soaks running.)
+    const m = ref.match(/0x[0-9a-fA-F]{3,8}\b/);
+    if (m) g = parseGuid(m[0]);
+  }
   if (g) {
     const name = (typeof h.TryGetObjectName === "function" ? h.TryGetObjectName(g) : null) || "?";
     return { guid: g, name };
@@ -66,6 +74,27 @@ function resolveNearby(h, ref) {
   if (exact.length === 1) return exact[0];
   if (hits.length === 1) return hits[0];
   return { error: `ambiguous "${ref}": ${hits.slice(0, 5).map((x) => `${x.name} ${hex(x.guid)}`).join(", ")}` };
+}
+
+/**
+ * Walk into use range before acting. The retail contract is that the CLIENT
+ * closes the distance before the server's range check — ACE answers a far
+ * Use with UseDone(OutOfRange) and fires no emote. Observed live (2026-07-17):
+ * Jonathan (academyguardexitholtburg) used repeatedly across three soaks with
+ * a bare UseObject send; his quest registry stayed empty — every Use was
+ * silently out of range. pursuitStatus low 16: 0 idle / 1 active / 2 arrived /
+ * 3 failed (read-clear on >=2). Degrades to "just send" when the mover is
+ * unavailable — the server error now reaches the observation either way.
+ */
+async function approach(h, guid, ms = 8000) {
+  if (typeof h.PursueObject !== "function" || typeof h.GetPursuitStatus !== "function") return;
+  if (!h.PursueObject(guid, 1.0, 0, true)) return;
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    await new Promise((r) => setTimeout(r, 250));
+    const st = (h.GetPursuitStatus() ?? 0) & 0xffff;
+    if (st !== 1) return; // 2 arrived / 3 failed / 0 idle (already close)
+  }
 }
 
 /** "use_object" — interact with a nearby world object (portal, NPC, door, sign…). */
@@ -87,9 +116,10 @@ export function useObjectAction() {
     if (typeof h?.UseObject !== "function" || typeof h?.NearbyGuids !== "function") return fail("unavailable");
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
+    await approach(h, res.guid);
     if (!h.UseObject(res.guid)) return fail("use request failed to send");
     ctx.track?.(res.guid, res.name);
-    journalNote(ctx, `use_object ${res.name} (${hex(res.guid)}) — walking over to interact; confirm result on next check-in`);
+    journalNote(ctx, `use_object ${res.name} (${hex(res.guid)}) — walked over and used; confirm result on next check-in`);
     return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid) } };
   });
   return def;
@@ -156,6 +186,7 @@ export function giveItemAction() {
     if (it.error) return fail(it.error);
     const itemGuid = (it.row.guid ?? it.row.itemGuid) >>> 0;
     const qty = a.qty ?? 1;
+    await approach(h, tgt.guid);
     if (!h.GiveObject(tgt.guid, itemGuid, qty)) return fail("give request failed to send");
     ctx.track?.(tgt.guid, tgt.name);
     journalNote(

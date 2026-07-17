@@ -150,6 +150,42 @@ function makeHost() {
     const ext = composeAiExtensions({ host: makeHost() }, { journal: makeJournal(), config: { world: false, knowledge: false, dungeonNav: false, wbt: false, economy: false, advancement: false } });
     check("world:false -> not registered", !ext.extActions.use_object && !ext.extActions.give_item);
   }
+  // pursue-then-use: with a pursuit-status host, use_object walks into range
+  // first (ACE answers a far Use with UseDone(OutOfRange) and no emote).
+  {
+    const host = makeHost();
+    const calls = host.calls;
+    let polls = 0;
+    host.GetPursuitStatus = () => { calls.push(["status"]); return ++polls >= 2 ? 2 : 1; }; // active, then arrived
+    const r = await byType.use_object.apply({ host }, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    const pi = calls.findIndex((c) => c[0] === "pursue");
+    const ui = calls.findIndex((c) => c[0] === "use");
+    check("use_object pursues before using", r.ok && pi !== -1 && ui !== -1 && pi < ui, JSON.stringify(calls));
+    check("use_object waits for arrival", polls >= 2, `polls=${polls}`);
+  }
+  // pursue-then-use: pursuit failure still sends the Use (server error now
+  // reaches the observation via the kind-13 heard line).
+  {
+    const host = makeHost();
+    host.GetPursuitStatus = () => 3; // failed
+    const r = await byType.use_object.apply({ host }, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    check("use_object sends despite pursue failure", r.ok && host.calls.some((c) => c[0] === "use"));
+  }
+  // embedded guid in a name string resolves (the "Door 0x7860202d" habit)
+  {
+    const host = makeHost();
+    const r = await byType.use_object.apply({ host }, { type: "use_object", object: "Door 0x5003" }, { journal: makeJournal() });
+    check("embedded guid in ref resolves", r.ok && host.calls.some((c) => c[0] === "use" && c[1] === 0x5003), JSON.stringify(r));
+  }
+  // give_item pursues the target too (token hand-back has the same range gate).
+  {
+    const host = makeHost();
+    host.GetPursuitStatus = () => 2;
+    const r = await byType.give_item.apply({ host }, { type: "give_item", item: "token", target: "Blacksmith" }, { journal: makeJournal() });
+    const pi = host.calls.findIndex((c) => c[0] === "pursue");
+    const gi = host.calls.findIndex((c) => c[0] === "give");
+    check("give_item pursues before giving", r.ok && pi !== -1 && gi !== -1 && pi < gi, JSON.stringify(host.calls));
+  }
 
   console.log(`\n${pass} pass, ${fail} fail`);
   process.exit(fail ? 1 : 0);

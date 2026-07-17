@@ -164,6 +164,113 @@ const CORPUS = [
     }
   }
 
+  // --- tried counts, area-stall line, if-guards (2026-07-17) ---------------
+  {
+    // World-capable host: fixed pose, mutable inventory, event plane.
+    const makeWorldBot = () => {
+      const listeners = [];
+      const inv = [{ guid: 0x6001, name: "Bread" }];
+      const bot = {
+        inv,
+        emit: (e) => listeners.forEach((fn) => fn(e)),
+        kernel: { status: { running: true, kills: 0 } },
+        host: {
+          onEvent: (fn) => listeners.push(fn),
+          NearbyGuids: () => [0x5001, 0x5002],
+          TryGetObjectName: (g) => ({ 0x5001: "Jonathan", 0x5002: "Door" }[g] ?? null),
+          UseObject: () => true,
+          GiveObject: () => true,
+          TryGetPlayerInventory: () => inv,
+          TryGetPlayerPose: () => ({ objCellId: 0x860201ad, x: 10, y: 10, z: 0 }),
+        },
+      };
+      return bot;
+    };
+    const mkExt = (bot, cfgExtra) => composeAiExtensions(bot, {
+      journal: makeJournal(),
+      config: { knowledge: false, dungeonNav: false, wbt: false, economy: false, advancement: false, guardWaitMs: 20, ...cfgExtra },
+    });
+
+    // tried: repeat counts
+    {
+      const bot = makeWorldBot();
+      const ext = mkExt(bot);
+      await ext.directorDeps.execute(bot, [{ type: "use_object", object: "Door" }, { type: "use_object", object: "Door" }]);
+      const obs = ext.directorDeps.observe(bot, {}).text;
+      check("tried: shows repeat count", /Door 0x5002 \(x2\)/.test(obs), (obs.match(/tried:.*/) || [])[0]);
+    }
+
+    // area-stall line fires after enough tries with no landblock change
+    {
+      const bot = makeWorldBot();
+      const ext = mkExt(bot, { stallMinutes: 0 });
+      ext.directorDeps.observe(bot, {}); // baseline: records the area
+      await ext.directorDeps.execute(bot, [
+        { type: "use_object", object: "Door" }, { type: "use_object", object: "Jonathan" },
+        { type: "use_object", object: "Door" }, { type: "use_object", object: "Jonathan" },
+      ]);
+      const obs = ext.directorDeps.observe(bot, {}).text;
+      check("STALLED line fires", /STALLED: .*NO area change/.test(obs), (obs.match(/STALLED.*/) || [])[0]);
+    }
+    // stall: off by config
+    {
+      const bot = makeWorldBot();
+      const ext = mkExt(bot, { stallMinutes: 0, stall: false });
+      ext.directorDeps.observe(bot, {});
+      await ext.directorDeps.execute(bot, [
+        { type: "use_object", object: "Door" }, { type: "use_object", object: "Jonathan" },
+        { type: "use_object", object: "Door" }, { type: "use_object", object: "Jonathan" },
+      ]);
+      check("stall:false suppresses", !/STALLED/.test(ext.directorDeps.observe(bot, {}).text));
+    }
+
+    // if-guard: inventory_gained unmet -> skipped
+    {
+      const bot = makeWorldBot();
+      const ext = mkExt(bot);
+      const rs = await ext.directorDeps.execute(bot, [
+        { type: "use_object", object: "Jonathan" },
+        { type: "give_item", item: "Bread", target: "Jonathan", if: "inventory_gained" },
+      ]);
+      check("guard unmet skips action", rs.length === 2 && rs[0].ok === true && rs[1].ok === false && /unmet/.test(rs[1].error), JSON.stringify(rs));
+    }
+    // if-guard: inventory_gained met -> runs
+    {
+      const bot = makeWorldBot();
+      const ext = mkExt(bot);
+      const origUse = bot.host.UseObject;
+      bot.host.UseObject = (g) => { bot.inv.push({ guid: 0x6002, name: "Academy Exit Token" }); return origUse(g); };
+      const rs = await ext.directorDeps.execute(bot, [
+        { type: "use_object", object: "Jonathan" },
+        { type: "give_item", item: "Token", target: "Jonathan", if: "inventory_gained" },
+      ]);
+      check("guard met runs action", rs.length === 2 && rs[1].ok === true, JSON.stringify(rs));
+    }
+    // if-guard: heard:<text> against speech from the prior action
+    {
+      const bot = makeWorldBot();
+      const ext = mkExt(bot);
+      bot.host.UseObject = () => { bot.emit({ kind: 2, text: 'Jonathan tells you, "give this token back"', u32: 0, u32b: 2 }); return true; };
+      const rs = await ext.directorDeps.execute(bot, [
+        { type: "use_object", object: "Jonathan" },
+        { type: "use_object", object: "Door", if: "heard:token back" },
+      ]);
+      check("heard guard met", rs.length === 2 && rs[1].ok === true, JSON.stringify(rs));
+    }
+    // if-guard: unknown guard -> explicit error
+    {
+      const bot = makeWorldBot();
+      const ext = mkExt(bot);
+      const rs = await ext.directorDeps.execute(bot, [{ type: "use_object", object: "Door", if: "lucky" }]);
+      check("unknown guard errors with valid list", rs[0].ok === false && /valid: inventory_gained/.test(rs[0].error), JSON.stringify(rs));
+    }
+    // prompt advertises guards
+    {
+      const ext = mkExt(makeWorldBot());
+      check("prompt documents if-guards", /"if": "inventory_gained"/.test(ext.directorDeps.systemPrompt));
+    }
+  }
+
   console.log(`${pass} pass, ${fail} fail`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error("FATAL", e); process.exit(1); });

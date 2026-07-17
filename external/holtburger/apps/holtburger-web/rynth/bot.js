@@ -255,6 +255,8 @@ async function wireAiDirector(bot, aiConfig, base) {
     client,
     journal,
     intervalMinutes: aiCfg?.intervalMinutes, // undefined -> director defaults
+    minIntervalMinutes: aiCfg?.minIntervalMinutes,
+    maxIntervalMinutes: aiCfg?.maxIntervalMinutes, // caps LLM-supplied next_check_minutes
     dryRun: aiCfg?.dryRun,
     maxCallsPerHour: aiCfg?.maxCallsPerHour, // undefined -> director defaults
     ...(ext

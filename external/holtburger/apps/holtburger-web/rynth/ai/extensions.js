@@ -296,8 +296,11 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   // checkable, not vibes.
   const track = (guid, name) => {
     const used = (state._usedObjects ??= new Map());
-    used.set(guid >>> 0, String(name ?? "?"));
+    const g = guid >>> 0;
+    const prev = used.get(g);
+    used.set(g, { name: String(name ?? "?"), n: (prev?.n ?? 0) + 1 });
     if (used.size > 40) used.delete(used.keys().next().value);
+    state._triedTotal = (state._triedTotal ?? 0) + 1;
   };
   // Deltas since the last check-in — harness-verified ground truth of what
   // actually CHANGED, so expectation-vs-outcome is checkable ("bought but
@@ -340,11 +343,95 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     const lines = [];
     const used = state._usedObjects;
     if (used?.size) {
-      const items = [...used.entries()].slice(-12).map(([g, n]) => `${n} 0x${g.toString(16).toUpperCase()}`);
+      const items = [...used.entries()].slice(-12).map(
+        ([g, r]) => `${r.name} 0x${g.toString(16).toUpperCase()}${r.n > 1 ? ` (x${r.n})` : ""}`
+      );
       lines.push(`tried: ${items.join("; ")}`);
     }
     if (state._visitedCells?.size) lines.push(`explored: ${state._visitedCells.size} cells this session`);
     return lines.join("\n");
+  };
+
+  // ── area-stall detection (2026-07-17) ──────────────────────────────────
+  // The loop detector catches REPEATS; it is blind to novelty-dithering —
+  // touring a fresh sign/door each check-in forever (observed live: 30+ min
+  // in the academy, a different object every cycle, zero area progress).
+  // Track the landblock; when it hasn't changed for cfg.stallMinutes
+  // (default 10) and several objects have been tried since, say so with the
+  // same authority as the loop WARNING. cfg.stall: false -> off.
+  const STALL_MIN = Number.isFinite(cfg.stallMinutes) ? cfg.stallMinutes : 10;
+  const STALL_TRIES = 4;
+  const stallLine = (b) => {
+    if (cfg.stall === false) return "";
+    const cur = poseOf(b);
+    if (!cur) return "";
+    const lb = cur.cell >>> 16;
+    const now = Date.now();
+    if (state._stallLb !== lb) {
+      state._stallLb = lb;
+      state._stallSinceT = now;
+      state._stallTriedBase = state._triedTotal ?? 0;
+      return "";
+    }
+    const mins = (now - (state._stallSinceT ?? now)) / 60_000;
+    const tried = (state._triedTotal ?? 0) - (state._stallTriedBase ?? 0);
+    if (mins < STALL_MIN || tried < STALL_TRIES) return "";
+    return (
+      `STALLED: ${Math.round(mins)} min in the same area, ${tried} object uses with NO area change — ` +
+      `what you keep trying is NOT working. Change approach CLASS: an NPC you have not used, ` +
+      `give_item, a knowledge lookup with NEW terms, or walk to the farthest visible object.`
+    );
+  };
+
+  // ── heard chat (2026-07-17) ────────────────────────────────────────────
+  // NPC speech, tells, popups and server feedback ride the webhost push-event
+  // plane (ClientEvent kind 2, ChatReceived) — which nothing in the AI layer
+  // subscribed to, so the bot could talk to NPCs but never hear the answers.
+  // Ring-buffered here at compose time, surfaced as a "heard since last
+  // check-in:" section. Categories are the lib.rs CHAT_CATEGORY_* ids in
+  // u32Payload2; combat/magic spam stays out. Default-on. cfg.chat: false ->
+  // off; { categories: [..], maxLines } to tune.
+  const chatCfg = cfg.chat && typeof cfg.chat === "object" ? cfg.chat : {};
+  const CHAT_KEEP = new Set(
+    Array.isArray(chatCfg.categories) && chatCfg.categories.length
+      ? chatCfg.categories.map((n) => n >>> 0)
+      : [1, 2, 4, 6, 9, 10] // local speech, tell, emote, death, transient, popup
+  );
+  const CHAT_RING_MAX = 60;
+  const CHAT_MAX_LINES = Number.isFinite(chatCfg.maxLines) ? chatCfg.maxLines : 12;
+  if (cfg.chat !== false && typeof _bot?.host?.onEvent === "function") {
+    _bot.host.onEvent((e) => {
+      if (!e || !e.text) return;
+      // kind 13 = UseFailed: the server's answer to a bad Use/give (OutOfRange,
+      // Locked, …). This is the outcome channel "use_object:ok" can't see —
+      // without it a failed Use is indistinguishable from a silent success.
+      let line;
+      if (e.kind === 13) line = `use FAILED: ${e.text}`;
+      else if (e.kind === 2 && CHAT_KEEP.has((e.u32b ?? 0) >>> 0)) line = e.text;
+      else return;
+      const ring = (state._heardChat ??= []);
+      ring.push({ t: Date.now(), text: String(line).slice(0, 200) });
+      if (ring.length > CHAT_RING_MAX) ring.splice(0, ring.length - CHAT_RING_MAX);
+    });
+  }
+  const heardLines = () => {
+    const ring = state._heardChat;
+    if (!ring?.length) return "";
+    const fresh = ring.splice(0); // drain: each line is heard exactly once
+    if (!fresh.length) return "";
+    // Collapse consecutive repeats (NPC greeting spam) into "line (xN)".
+    const rows = [];
+    for (const r of fresh) {
+      const last = rows[rows.length - 1];
+      if (last && last.text === r.text) last.n++;
+      else rows.push({ text: r.text, n: 1 });
+    }
+    const shown = rows.slice(-CHAT_MAX_LINES);
+    const omitted = rows.length - shown.length;
+    return (
+      `heard since last check-in:${omitted > 0 ? ` (+${omitted} earlier omitted)` : ""}\n` +
+      shown.map((r) => `  ${r.text}${r.n > 1 ? ` (x${r.n})` : ""}`).join("\n")
+    );
   };
 
   // NB: buildObservation/enrichObservation return { text, data } — the
@@ -356,9 +443,13 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     const parts = [];
     const warn = loopWarning(b);
     if (warn) parts.push(warn);
+    const stall = stallLine(b);
+    if (stall) parts.push(stall);
     if (memory) parts.push(renderScratchpadSection(state));
     const dl = deltasLine(b);
     if (dl) parts.push(dl);
+    const hl = heardLines();
+    if (hl) parts.push(hl);
     const cov = coverageLines(b);
     if (cov) parts.push(cov);
     parts.push(baseText);
@@ -420,7 +511,57 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
       // (over-cap actions come back in `rejected` as "plan truncated: over
       // maxActions=N" — guardPlan reports them per-action, so the result line
       // the model reads next check-in already carries the truncation.)
+      // Guarded chains (2026-07-17): an action may carry `if` — evaluated
+      // HERE, mid-plan, against what the preceding actions actually changed
+      // (polled ~3s: server outcomes are async). This packs contingent
+      // sequences into ONE check-in ("use the NPC; give_item if the token
+      // arrived") instead of burning a whole LLM round-trip per rung.
+      const guardSnap = () => {
+        const s = { pose: poseOf(b), heardLen: (state._heardChat ?? []).length, inv: null };
+        try { s.inv = b?.host?.TryGetPlayerInventory?.()?.length ?? null; } catch {}
+        return s;
+      };
+      const guardMet = (cond, snap) => {
+        if (cond === "inventory_gained") {
+          try {
+            const inv = b?.host?.TryGetPlayerInventory?.()?.length ?? null;
+            return typeof inv === "number" && typeof snap.inv === "number" && inv > snap.inv;
+          } catch { return false; }
+        }
+        if (cond === "moved") {
+          const cur = poseOf(b);
+          if (!cur || !snap.pose) return false;
+          return cur.cell !== snap.pose.cell ||
+            Math.hypot(cur.x - snap.pose.x, cur.y - snap.pose.y, cur.z - snap.pose.z) > 3;
+        }
+        if (cond.startsWith("heard:")) {
+          const needle = cond.slice(6).trim().toLowerCase();
+          if (!needle) return false;
+          return (state._heardChat ?? []).slice(snap.heardLen).some((r) => r.text.toLowerCase().includes(needle));
+        }
+        return null; // unknown guard
+      };
+      const waitGuard = async (cond, snap) => {
+        const t0 = Date.now();
+        for (;;) {
+          const met = guardMet(cond, snap);
+          if (met === null) return { met: false, error: `unknown if-guard "${cond}" — valid: inventory_gained, moved, heard:<text>` };
+          if (met) return { met: true };
+          if (Date.now() - t0 >= (Number.isFinite(cfg.guardWaitMs) ? cfg.guardWaitMs : 3000)) return { met: false };
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      };
+      let prevSnap = guardSnap();
       for (const a of kept) {
+        const cond = typeof a?.if === "string" ? a.if.trim() : "";
+        if (cond) {
+          const g = await waitGuard(cond, prevSnap);
+          if (!g.met) {
+            results.push({ type: a.type, ok: false, error: g.error ?? `skipped: if "${cond}" unmet after prior actions` });
+            continue;
+          }
+        }
+        prevSnap = guardSnap();
         recordAct(b, a); // pose BEFORE the action runs — loop detector baseline
         const def = extFor(a);
         if (def) results.push(await def.apply(b, a, { journal, log: opts.log, track }));
@@ -439,7 +580,9 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   const extCatalog = renderExtCatalog(extActions);
   const persona = renderPersonaPreamble(cfg.persona);
   const withPersona = persona ? `${persona}\n\n${basePrompt}` : basePrompt;
-  const withCatalog = extCatalog ? `${withPersona}\n\nEXTRA ACTIONS\n${extCatalog}` : withPersona;
+  const GUARDS_NOTE =
+    'Any action may add "if": "inventory_gained" | "moved" | "heard:<text>" — checked mid-plan against what the PREVIOUS actions actually changed, so contingent chains fit in ONE plan (e.g. use an NPC, then give_item with "if":"inventory_gained"). Unmet guard = that action is skipped and the result line says so.';
+  const withCatalog = extCatalog ? `${withPersona}\n\nEXTRA ACTIONS\n${extCatalog}\n\n${GUARDS_NOTE}` : withPersona;
   const withMemory = memory ? `${withCatalog}\n\n${MEMORY_DISCIPLINE}` : withCatalog;
   const systemPrompt = wbt ? `${withMemory}\n\n${PLAYTESTER_DISCIPLINE}` : withMemory;
 
