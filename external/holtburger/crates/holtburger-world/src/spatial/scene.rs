@@ -1850,10 +1850,38 @@ impl SpatialScene {
                 None => pos.landblock_id.0,
             };
         }
-        // Indoor: scan cached AABBs in this landblock for containment.
-        // EnvCells stack vertically so this is a 3D point-in-AABB test,
-        // not an XY one — the Z component is what disambiguates floors.
         let global = pos.global_coords();
+        // cur_cell continuity (2026-07-18, soak-10 §4 seam fix). Retail
+        // carries `CPhysicsObj::cur_cell` as CONTINUOUS state, updated only
+        // through the transit walk (`insert_into_cell` acclient.c:311632 /
+        // `find_cell_list`'s `point_in_cell` re-seat :313300/:347935) — it
+        // never re-derives "which cell am I in" from scratch. The pose's
+        // carried cell id IS our cur_cell (stamped by the transition
+        // marshalling each slice), so:
+        //   1. Trust it while the point is still inside it (precise
+        //      membership BSP, AABB fallback) — a point ON a shared portal
+        //      plane stays with the cell it was in, exactly like retail.
+        //   2. Else prefer the carried cell's PORTAL NEIGHBOURS — a mover
+        //      can only have left through a portal (the transit handoff).
+        //   3. Only then the global AABB scan (teleports / stale ids).
+        // Without this, seam points resolved by HashMap-iteration order over
+        // OVERLAPPING loose AABBs (45°-rotated cells overlap heavily near
+        // portals) — live-observed as nondeterministic 0x16E↔0x16A flapping
+        // at the Holtburg grocer seam (81,33), wedging the faithful driver
+        // against the wrong cell's BSP in every direction.
+        let carried = pos.landblock_id.0;
+        if self.cell_contains_point(carried, global) {
+            return carried;
+        }
+        for &nb in self.cell_portal_neighbours(carried) {
+            if (nb & 0xFFFF) >= 0x100 && self.cell_contains_point(nb, global) {
+                return nb;
+            }
+        }
+        // Indoor fallback: scan cached AABBs in this landblock for
+        // containment. EnvCells stack vertically so this is a 3D
+        // point-in-AABB test, not an XY one — the Z component is what
+        // disambiguates floors.
         let lb_high = pos.landblock_id.0 & 0xFFFF_0000;
         for (&cell_id, aabb) in self.cell_aabbs.iter() {
             if (cell_id & 0xFFFF_0000) != lb_high {
@@ -1873,6 +1901,30 @@ impl SpatialScene {
             }
         }
         pos.landblock_id.0
+    }
+
+    /// cur_cell continuity helper (2026-07-18): does `global` lie inside
+    /// `cell_id`? Precise membership BSP when resident
+    /// (`CCellStruct::point_in_cell`, acclient.c:355496 — the same walk the
+    /// faithful driver's `point_in_cell` re-seat uses), loose AABB as the
+    /// pre-membership fallback. `false` for non-resident cells (including
+    /// the widened `lb|0xFFFF` outside marker) so callers fall through to
+    /// their next candidate.
+    fn cell_contains_point(&self, cell_id: u32, global: Vector3) -> bool {
+        if let Some(m) = self.cell_membership.get(&cell_id) {
+            return m.tree.point_inside_cell(&m.world_to_local(global));
+        }
+        match self.cell_aabbs.get(&cell_id) {
+            Some(a) if !a.is_empty() => {
+                global.x >= a.min.x
+                    && global.x <= a.max.x
+                    && global.y >= a.min.y
+                    && global.y <= a.max.y
+                    && global.z >= a.min.z
+                    && global.z <= a.max.z
+            }
+            _ => false,
+        }
     }
 
     /// Terrain→EnvCell entry (2026-06-02): when the player's predicted

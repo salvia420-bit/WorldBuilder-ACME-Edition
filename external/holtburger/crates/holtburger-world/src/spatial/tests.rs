@@ -4201,3 +4201,125 @@ mod clear_landblocks_collision_equivalence {
         assert_eq!(scene.cell_aabb_count(), before);
     }
 }
+
+/// cur_cell continuity (2026-07-18, soak-10 §4 seam fix): `current_cell`
+/// must trust the pose's CARRIED interior cell while the point is inside
+/// its membership (retail `CPhysicsObj::cur_cell` semantics — updated only
+/// through transit, acclient.c:311632/:347935), hand off to a PORTAL
+/// NEIGHBOUR once the point is bodily across the shared plane, and never
+/// resolve a seam point by AABB-scan iteration order.
+#[cfg(test)]
+mod cur_cell_continuity {
+    use super::super::scene::{CellMembership, SpatialScene};
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Aabb, Guid, Quaternion, Vector3};
+    use holtburger_common::math::Plane;
+    use holtburger_dat::physics::{BspLeaf, BspNode, InternalNode};
+
+    const LB: u32 = 0x1234_0000;
+    const CELL_A: u32 = LB | 0x0101;
+    const CELL_B: u32 = LB | 0x0102;
+    // Landblock origin: 0x12 * 192 = 3456, 0x34 * 192 = 9984.
+    const OX: f32 = 3456.0;
+    const OY: f32 = 9984.0;
+
+    /// Half-space membership: inside ⇔ local `plane·p + d >= -eps`.
+    fn half_space(normal: Vector3, d: f32) -> BspNode {
+        BspNode::Internal(InternalNode {
+            tag: [0u8; 4],
+            plane: Plane { normal, d },
+            pos: Some(Box::new(BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: None,
+                poly_ids: vec![],
+            }))),
+            neg: None,
+            sphere: None,
+            poly_ids: vec![],
+        })
+    }
+
+    /// Two cells split by the world plane x = OX+10 (A: x<=10 local,
+    /// B: x>=10 local), portal-linked, with deliberately OVERLAPPING
+    /// loose AABBs spanning both sides of the seam.
+    fn seam_scene() -> SpatialScene {
+        let mut scene = SpatialScene::new();
+        let origin = Vector3::new(OX, OY, 0.0);
+        // A occupies local x in [0,10]: inside ⇔ -x + 10 >= 0.
+        scene.insert_cell_membership(
+            CELL_A,
+            CellMembership {
+                tree: half_space(Vector3::new(-1.0, 0.0, 0.0), 10.0),
+                origin,
+                orientation: Quaternion::identity(),
+            },
+        );
+        // B occupies local x in [10,20]: inside ⇔ x - 10 >= 0.
+        scene.insert_cell_membership(
+            CELL_B,
+            CellMembership {
+                tree: half_space(Vector3::new(1.0, 0.0, 0.0), -10.0),
+                origin,
+                orientation: Quaternion::identity(),
+            },
+        );
+        // Loose overlapping AABBs (both span the seam band x∈[8,12]).
+        scene.insert_cell_aabb(
+            CELL_A,
+            Aabb::new(Vector3::new(OX, OY, -1.0), Vector3::new(OX + 12.0, OY + 20.0, 3.0)),
+        );
+        scene.insert_cell_aabb(
+            CELL_B,
+            Aabb::new(Vector3::new(OX + 8.0, OY, -1.0), Vector3::new(OX + 20.0, OY + 20.0, 3.0)),
+        );
+        scene.insert_cell_portal(CELL_A, CELL_B);
+        scene.insert_cell_portal(CELL_B, CELL_A);
+        scene
+    }
+
+    fn pose(carried: u32, local_x: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(carried),
+            coords: Vector3::new(local_x, 5.0, 1.0),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    #[test]
+    fn seam_point_stays_with_carried_cell() {
+        let scene = seam_scene();
+        // Exactly ON the shared plane (local x = 10): both memberships
+        // accept within epsilon — the carried cell must win, whichever
+        // side the pose arrived from.
+        assert_eq!(scene.current_cell(&pose(CELL_A, 10.0)), CELL_A);
+        assert_eq!(scene.current_cell(&pose(CELL_B, 10.0)), CELL_B);
+    }
+
+    #[test]
+    fn interior_point_keeps_carried_cell_despite_overlapping_aabbs() {
+        let scene = seam_scene();
+        // x=9 is inside A's membership and BOTH AABBs — continuity must
+        // return A without consulting scan order.
+        assert_eq!(scene.current_cell(&pose(CELL_A, 9.0)), CELL_A);
+    }
+
+    #[test]
+    fn crossing_hands_off_to_portal_neighbour() {
+        let scene = seam_scene();
+        // Bodily across the seam (x=11): the carried cell no longer
+        // contains the point; the portal neighbour does → transit handoff.
+        assert_eq!(scene.current_cell(&pose(CELL_A, 11.0)), CELL_B);
+        assert_eq!(scene.current_cell(&pose(CELL_B, 9.0)), CELL_A);
+    }
+
+    #[test]
+    fn stale_carried_cell_falls_back_to_scan() {
+        let scene = seam_scene();
+        // Carried id with no residency at all (e.g. post-teleport stale
+        // interior id in the same LB): membership/neighbour tests fail,
+        // the AABB scan resolves. x=15 is only inside B's AABB+membership.
+        let stale = LB | 0x01FF;
+        assert_eq!(scene.current_cell(&pose(stale, 15.0)), CELL_B);
+    }
+}

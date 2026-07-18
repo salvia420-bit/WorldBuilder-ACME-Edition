@@ -108,20 +108,35 @@ statics).
   as solid". Environment 840 struct 4 (the 0x16E vestibule): physics polys =
   {0..3}, portal polys = {4,5} — DISJOINT (struct 0 likewise: 0..30 vs
   31..34). Doorways are genuine holes in the physics data; the DAT is clean.
-- **PRIME SUSPECT — cur_cell continuity**: retail carries `CPhysicsObj::
-  cur_cell` as CONTINUOUS state, updated only through the transit walk
-  (`remove_from_cell`/`insert_into_cell`, find_cell_list re-seat); it never
-  globally re-derives "which cell am I in" from the pose. Our dispatch
-  re-derives per slice (`begin_cell = scene.current_cell(&input.begin)`,
-  faithful_bridge.rs:959) — ambiguous exactly ON portal planes where both
-  membership BSPs meet (observed live: current_cell flaps 0x16E↔0x16A at
-  (81,33)). A wrong begin_cell makes every sweep start outside/embedded in
-  the wrong cell's BSP → all-directions refusal, and the ground resolve
-  flaps too (the observed g true→false decay). Fix shape: thread the
-  transition outcome's settled `curr.objcell_id` back into player state as
-  the authoritative cur_cell and use it (not re-derivation) as begin_cell
-  next slice; graph-safe (no shared portal-graph mutation). Cross-ref decomp
-  `CPhysicsObj::set_cell`/`insert_into_cell` + `SPHEREPATH::check_cell`.
+- **LANDED (this session, follow-up commit) — cur_cell continuity**: retail
+  carries `CPhysicsObj::cur_cell` as CONTINUOUS state, updated only through
+  the transit walk (`insert_into_cell` acclient.c:311632, `find_cell_list`'s
+  `point_in_cell` re-seat :313300/:347935); it never globally re-derives
+  "which cell am I in" from the pose. Our `SpatialScene::current_cell`
+  resolved indoor poses by HashMap-iteration order over OVERLAPPING loose
+  AABBs — nondeterministic exactly near portal planes (live: 0x16E↔0x16A
+  flapping at (81,33)). Now: (1) trust the pose's CARRIED cell while the
+  point is inside its membership BSP (AABB fallback); (2) else prefer the
+  carried cell's PORTAL NEIGHBOURS (transit handoff); (3) only then the
+  legacy scan. Since the faithful marshalling's indoor→indoor arm routes
+  through `current_cell`, both the begin-cell resolution AND the settled-
+  pose stamping inherit continuity. Graph-safe (read-only over the shared
+  portal graph). 4 new unit tests (`spatial::tests::cur_cell_continuity`);
+  world suite 555/555. **Live-verified: the cell id is now STABLE at the
+  grocer seam (no flap).**
+- **STILL REFUSING (next session's target)**: with a stable correct cell and
+  full residency, `find_valid_position` STILL fails every direction from
+  (81,33,94.1) in the 0x16E vestibule (0.00 m ×4, grounding decays
+  true→false while turning). Cell-local coords of the spot are ≈(−2.1,−4.2)
+  in a tiny 45°-rotated vestibule (env 840 struct 4: 4 physics polys, 2
+  portal polys) — walls sit within capsule reach in several directions, so
+  the suspect is the faithful sweep's behavior against narrow vestibule
+  geometry (start-in-contact handling / slide vs wholesale `found=0` refusal
+  — retail transitional_insert ADJUSTS an embedded start, acclient.c:312961+)
+  and/or the ground resolve failing in the same band (the g-decay tell).
+  In-room movement in 0x16A works; mid-room legs verified. Next step: the
+  native env-840 harness (below) — println-debug `find_valid_position` at
+  this exact pose offline, no browser loop.
 - Approach recommendation: native Rust integration test loading REAL env-840
   cells from client_cell_1.dat (fixture pattern: HOLTBURGER_PORTAL_DAT-gated
   tests in holtburger-dat/src/physics.rs:1769) reproducing the (81,33) seam
