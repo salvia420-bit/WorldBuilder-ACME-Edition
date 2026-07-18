@@ -312,6 +312,17 @@ async function wireAiDirector(bot, aiConfig, base) {
       panel: () => openPanel(),
     };
     if (wantPanel) openPanel();
+    // ?thoughtOverlay=1 (2026-07-18) — stream-facing teleprompter: reveals
+    // each new journal `plan` entry at a reading pace budgeted to finish
+    // before the next check-in (thought_overlay.js). Same failure contract
+    // as the panel: broken overlay never takes down the client.
+    try {
+      if (new URLSearchParams(location.search).get("thoughtOverlay") === "1") {
+        import(`${base}/ai/thought_overlay.js`)
+          .then((m) => m.mountThoughtOverlay(journal, { intervalMinutes: director.intervalMinutes }))
+          .catch((e) => console.warn("[rynthAI] thoughtOverlay mount failed:", e));
+      }
+    } catch { /* flag parse failure = no overlay */ }
   }
 
   if (aiCfg?.autoStart !== false) director.start();
