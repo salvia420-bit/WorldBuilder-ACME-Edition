@@ -137,9 +137,16 @@ async function indoorLegsTo(bot, guid) {
   if (pc === tc) return null; // same room: straight pursuit is proven
   const graph = await indoorGraphFor(bot, pc >>> 16);
   if (!graph) return null;
+  // Cell ids come from pose/entity snapshots whose LOW WORD can freeze while
+  // x/y keep streaming (live-observed: pos cell read 0x01AD across 60m of
+  // v5.9 wandering). Positions are the live truth — derive both endpoint
+  // cells from them (nearestCell is z-banded); the ids are only a fallback
+  // for a degenerate graph.
   const has = (id) => (graph instanceof Map ? graph.has(id) : id in graph);
-  const from = has(pc) ? pc : nearestCell(graph, worldX(pc, pose.x), worldY(pc, pose.y), pose.z);
-  const to = has(tc) ? tc : nearestCell(graph, worldX(tc, tp.x), worldY(tc, tp.y), tp.z);
+  const from =
+    nearestCell(graph, worldX(pc, pose.x), worldY(pc, pose.y), pose.z) || (has(pc) ? pc : 0);
+  const to =
+    nearestCell(graph, worldX(tc, tp.x), worldY(tc, tp.y), tp.z) || (has(tc) ? tc : 0);
   if (!from || !to || from === to) return null;
   const path = findPath(graph, from, to);
   if (!path || path.length < 2) return null;

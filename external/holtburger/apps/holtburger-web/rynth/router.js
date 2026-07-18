@@ -201,9 +201,15 @@ export class RynthRouter {
       this._advance();
       return;
     }
-    // pursuitStatus arrival latch (2) is a secondary completion signal.
-    const ps = h.GetPursuitStatus ? h.GetPursuitStatus() : { last: 0 };
-    if (ps.last === 2 && d <= this.arriveM * 2) {
+    // Fresh mover completion (2, read-clear — nonzero exactly on the tick it
+    // completed) is a secondary arrival signal. NOT `ps.last`: the host latch
+    // is never reset by a new movement command, so after any first arrival it
+    // reads 2 forever — in a small dungeon whose legs sit within arriveM*2 of
+    // the player, that phantom-advanced every leg with ZERO movement (v6.0
+    // live: routed(4) to a next-room NPC with an unchanged pose, then the
+    // straight-line pursue wedged on the wall exactly as before routing).
+    const ps = h.GetPursuitStatus ? h.GetPursuitStatus() : { now: 0 };
+    if (ps.now === 2 && d <= this.arriveM * 2) {
       this._advance();
       return;
     }
