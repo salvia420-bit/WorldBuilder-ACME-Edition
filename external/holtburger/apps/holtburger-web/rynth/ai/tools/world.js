@@ -293,20 +293,38 @@ async function routeToward(bot, guid) {
  * 3 failed (read-clear on >=2). Degrades to "just send" when the mover is
  * unavailable — the server error now reaches the observation either way.
  */
-async function approach(bot, guid, ms = 12000) {
+export async function approach(bot, guid, ms = 12000) {
   const h = bot?.host;
   // Cross-room targets first walk door-waypoint legs (routeToward above);
-  // straight pursuit below then only has to cover the final same-room hop.
+  // the mover below then only has to cover the final same-room hop.
   const routeTag = await routeToward(bot, guid);
   const tag = (walk) => (routeTag ? `${routeTag}+${walk}` : walk);
-  if (typeof h?.PursueObject !== "function") return tag("no-mover");
-  if (!h.PursueObject(guid, 1.0, 0, true)) return tag("no-mover");
+  // Mover choice (2026-07-18, live-diagnosed in the Holtburg tavern):
+  // PursueObject/pursueEntity only reliably TURNS the local player, it never
+  // translates it (url-flags.md wasmPursuit DEFUNCT note, 2026-07-06 combat
+  // rewrite) — every soak "walk:no-walk" was this. StickToObject only steps
+  // inside an active manual-drive slice, so it too is a no-op from standstill
+  // (verified live: sticky latched, pose frozen, 1 s timeout never ticked).
+  // The mover that actually translates is MoveToPosition — the router's
+  // proven walk primitive — aimed at the target's tracked position.
+  let mover = null;
+  const pos = (() => {
+    try { return h?.TryGetObjectPosition?.(guid) ?? null; } catch { return null; }
+  })();
+  if (pos && typeof h?.MoveToPosition === "function") {
+    h.MoveToPosition(pos.objCellId, pos.x, pos.y, pos.z, true);
+    mover = "moveTo";
+  } else if (typeof h?.PursueObject === "function" && h.PursueObject(guid, 1.0, 0, true)) {
+    mover = "pursue"; // last resort: at least turns to face the target
+  }
+  if (!mover) return tag("no-mover");
+  const cancelMove = () => { try { h.StopCompletely?.(); } catch {} };
   // Do NOT poll GetPursuitStatus here: its arrived/failed latch is READ-CLEAR
   // and the bot kernel's tick loop consumes it first, so this seam always saw
   // idle and fired the Use mid-walk from across the room (observed live twice:
   // Jonathan "used" from 25m+, no emote, walk:idle on every action). The
   // player's own pose can't be stolen — walk until the bot stops moving, then
-  // act. "no-walk" = never moved (already adjacent, or pursue rejected):
+  // act. "no-walk" = never moved (already adjacent, or mover rejected):
   // proceed either way; the server verdict lands in the heard section.
   const pose = () => {
     try { const p = h.TryGetPlayerPose?.(); return p ? { x: p.x, y: p.y, cell: p.objCellId >>> 0 } : null; }
@@ -326,6 +344,7 @@ async function approach(bot, guid, ms = 12000) {
     if (Date.now() - lastMoveT > 1600)
       return tag(Date.now() - t0 <= 2200 ? "no-walk" : "settled");
   }
+  cancelMove(); // still mid-walk at deadline — don't fight the next action
   return tag("timeout");
 }
 

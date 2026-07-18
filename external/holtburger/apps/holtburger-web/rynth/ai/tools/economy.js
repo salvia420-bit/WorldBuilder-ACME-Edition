@@ -22,6 +22,13 @@ const VENDOR_PROFILE_POLL_MS = 250;
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + "…" : s);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Walk-into-range helper shared with use_object (safe ESM cycle: world.js
+// imports parseGuid/resolveItem from here; both sides only call at action
+// time). Vendors answer ApproachVendor ONLY in conversational range — a far
+// Use gets UseDone(success) and NO profile (live-proven vs Barkeeper
+// Wilomine 2026-07-18: outside tavern = nothing, same room = 13 items).
+import { approach } from "./world.js";
+
 function journalNote(ctx, text) {
   try {
     ctx.journal?.add?.("note", clip(String(text), JOURNAL_CLIP));
@@ -131,7 +138,7 @@ export function openVendorAction(state) {
   const def = {
     type: "open_vendor",
     params: { vendor: "vendor NPC name (substring) or guid — must be nearby" },
-    desc: "approach-open a vendor and read its stock and prices (journaled); required before buy_items/sell_items",
+    desc: "walk to a vendor NPC, open it, and read its stock and prices (journaled); required before buy_items/sell_items. Town vendors stand INSIDE their shop buildings — you must be in the vendor's own room (enter through the shop door first)",
     validate(a) {
       const b = baseValidate("open_vendor")(a);
       if (!b.ok) return b;
@@ -158,7 +165,11 @@ export function openVendorAction(state) {
       if (!hits.length) return fail(`no nearby entity matching "${a.vendor}"`);
       guid = hits[0].guid;
     }
-    h.UseObject(guid); // walks over + requests the vendor profile
+    // Close the distance first — the profile only arrives in range (see the
+    // approach import note above). Degrades to "no-mover" on the mock host.
+    let walk = "n/a";
+    try { walk = await approach(bot, guid); } catch {}
+    h.UseObject(guid); // requests the vendor profile
     let vs = null;
     const t0 = Date.now();
     while (Date.now() - t0 < VENDOR_PROFILE_TIMEOUT_MS) {
@@ -166,7 +177,12 @@ export function openVendorAction(state) {
       if (vs && vs.items.length) break;
       await sleep(VENDOR_PROFILE_POLL_MS);
     }
-    if (!vs) return fail(`vendor profile did not arrive from ${hex(guid)} — is it a vendor, and close enough?`);
+    if (!vs)
+      return fail(
+        `vendor profile did not arrive from ${hex(guid)} (walk:${walk}) — vendors only answer in ` +
+          `conversational range, and town vendors stand INSIDE their shop buildings: get into the ` +
+          `vendor's own room first (open the shop door with use_object, goto_object the vendor), then retry`
+      );
     state.vendorGuid = vs.vendorGuid;
     state.vendorName = vs.vendorName;
     const price = (v) => Math.ceil(v * vs.buyMultiplier);
