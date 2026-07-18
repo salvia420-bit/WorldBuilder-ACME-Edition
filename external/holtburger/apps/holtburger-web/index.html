@@ -5216,6 +5216,13 @@
       window.__bootStateHistory = [];
       function setBootState(state, message) {
         const detail = { state, message: message ?? "", ts: Date.now() };
+        // conn-fix (2026-07-18): 'ready' and 'in-world' share this one
+        // scalar and can arrive in EITHER order (under ?nullRender the
+        // scene is ready before the spawn confirm). Latch scene-ready
+        // separately so the autoLogin ready-watchdog doesn't declare a
+        // healthy in-world session 'error' just because 'in-world'
+        // overwrote an earlier 'ready' (live-reproduced 2026-07-18).
+        if (state === "ready") window.__sceneReadyEverFired = true;
         window.__bootState = state;
         window.__bootStateAt = detail.ts;
         window.__bootStateHistory.push(detail);
@@ -5226,6 +5233,19 @@
       }
       // Expose so agents can call from /eval without redefining.
       window.__setBootState = setBootState;
+
+      // conn-fix (2026-07-18): free the wasm session on page teardown so
+      // the WS closes with a proper handshake and the bridge/ACE see a
+      // deliberate close instead of a half-open flow. (The browser
+      // usually closes the WS on unload anyway; this makes it
+      // deterministic and also covers bfcache freezes.)
+      window.addEventListener("pagehide", () => {
+        try {
+          const h = window.__sessionHandle;
+          if (h && typeof h.free === "function") h.free();
+        } catch (_) {}
+        window.__sessionHandle = null;
+      });
 
       // URL params + localStorage pre-fill. account is persisted to
       // localStorage on successful login below; password is never
@@ -5334,6 +5354,13 @@
         // boot can pre-fill the form even without URL params.
         try { localStorage.setItem(LOGIN_LAST_ACCOUNT_KEY, account); } catch {}
 
+        // conn-fix (2026-07-18): remember which connect "epoch" this
+        // attempt belongs to. fireSubmit bumps the epoch when it
+        // supersedes in-flight attempts; a superseded attempt must
+        // FREE its late-resolved handle (closing the WS + bridge UDP
+        // flow) instead of installing it — "latest handle wins" used
+        // to leak the loser's connection forever.
+        const myConnectEpoch = (window.__connectEpoch = window.__connectEpoch ?? 0);
         try {
           // `?netWorker=1` → socket + Session run in a dedicated worker
           // (survives a frozen main thread); default → direct main-thread
@@ -5341,6 +5368,12 @@
           const handle = netWorkerEnabled()
             ? await startNetWorkerSession(bridgeUrl, serverHost, serverPort, account, password)
             : await start_session(bridgeUrl, serverHost, serverPort, account, password);
+          if ((window.__connectEpoch ?? 0) !== myConnectEpoch) {
+            // Superseded while pending (fireSubmit retry fired a fresh
+            // attempt). Free so the wasm side drops the transport.
+            try { if (typeof handle.free === "function") handle.free(); } catch (_) {}
+            return;
+          }
           activeHandle = handle;
           // Phase 4 step 3 capture-script debug hook (alongside
           // `window.entityMap` / `window.liveScene`). Lets the
@@ -7147,13 +7180,32 @@
                 // take down the client.
                 try {
                   const botParams = new URLSearchParams(location.search);
-                  if (botParams.get("bot") === "1" && !window.__bot && !window.__botBooting) {
+                  // conn-fix (2026-07-18): rebind on session takeover.
+                  // The old guard (`!window.__bot`) made auto-boot
+                  // one-shot: after a reconnect replaced
+                  // __sessionHandle, kind=7 refired but the bot stayed
+                  // strapped to the DEAD handle forever. Now: same
+                  // handle → idempotent no-op (death respawn); changed
+                  // handle → stop the old bot and boot a fresh one on
+                  // the live session.
+                  const botTargetHandle = window.__sessionHandle ?? handle;
+                  const botNeedsBoot =
+                    botParams.get("bot") === "1" &&
+                    !window.__botBooting &&
+                    (!window.__bot || window.__botHandle !== botTargetHandle);
+                  if (botNeedsBoot) {
                     window.__botBooting = true;
+                    const prevBot = window.__bot;
+                    window.__bot = null;
                     import(new URL("rynth/bot.js", location.href).href)
                       .then(async (m) => {
+                        try { if (prevBot && typeof prevBot.stop === "function") prevBot.stop(); } catch (_) {}
                         const cfg = botParams.get("botAi") === "off" ? { ai: false } : {};
-                        window.__bot = await m.createGrindBot(window.__sessionHandle ?? handle, cfg);
-                        console.log("[rynth] grind bot auto-booted via ?bot=1");
+                        window.__bot = await m.createGrindBot(botTargetHandle, cfg);
+                        window.__botHandle = botTargetHandle;
+                        console.log(prevBot
+                          ? "[rynth] grind bot re-booted onto new session via ?bot=1 (takeover rebind)"
+                          : "[rynth] grind bot auto-booted via ?bot=1");
                       })
                       .catch((e) => console.warn("[rynth] ?bot=1 auto-boot failed:", e))
                       .finally(() => { window.__botBooting = false; });
@@ -9659,6 +9711,21 @@
         const fireSubmit = () => {
           // The submit handler bails when activeHandle is set; clear
           // it first so a fresh fire actually runs.
+          // conn-fix (2026-07-18): FREE the wasm SessionHandle before
+          // dropping the JS refs. Nulling alone leaves the wasm
+          // recv_loop + WebSocket + bridge UDP flow alive forever
+          // (wasm-bindgen destructors don't run on GC) — every retry
+          // then stacks another zombie connection that retransmits at
+          // 1 Hz into ACE ("Session for Id 0 has IP …" flood).
+          try {
+            const oldHandle = window.__sessionHandle;
+            if (oldHandle && typeof oldHandle.free === "function") oldHandle.free();
+            if (activeHandle && activeHandle !== oldHandle && typeof activeHandle.free === "function") activeHandle.free();
+          } catch (_) {}
+          // Supersede any still-pending start_session: its late-resolved
+          // handle is freed instead of installed (epoch check in the
+          // submit handler).
+          window.__connectEpoch = (window.__connectEpoch ?? 0) + 1;
           activeHandle = null;
           window.__sessionHandle = null;
           window.__lastCharacterError = null;
@@ -9940,7 +10007,14 @@
               const readyTimeoutMs = opts.readyTimeoutMs ?? 90000;
               const readyDeadline = Date.now() + readyTimeoutMs;
               while (Date.now() < readyDeadline) {
-                if (window.__bootState === "ready") {
+                // conn-fix (2026-07-18): also accept the sticky
+                // __sceneReadyEverFired latch — under ?nullRender (and
+                // fast boots generally) 'ready' fires BEFORE 'in-world'
+                // and gets overwritten in __bootState, so polling the
+                // scalar alone falsely latched 'error' on healthy
+                // sessions 90s later (which then provoked relogin
+                // loops that leaked connections).
+                if (window.__bootState === "ready" || window.__sceneReadyEverFired) {
                   return; // FULL SUCCESS
                 }
                 if (window.__bootState === "error") {

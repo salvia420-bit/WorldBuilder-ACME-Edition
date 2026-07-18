@@ -13,9 +13,91 @@ use crate::handshake::{ClientHello, ServerHello, HANDSHAKE_VERSION};
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::net::{lookup_host, TcpListener, TcpStream, UdpSocket};
 use tokio_tungstenite::tungstenite::Message;
+
+// conn-fix (2026-07-18): liveness limits. A WS connection whose ACE
+// peer has gone silent (session booted by a duplicate login, server
+// restart) used to live forever: ACE removes booted sessions from its
+// map and silently DROPS their packets, so neither side ever errors,
+// and the zombie flow retransmits into ACE at 1 Hz indefinitely
+// ("Session for Id 0 has IP … but packet has IP …" log flood).
+// The bridge is the only party that can reap these.
+/// Tear down when the client has sent to ACE but nothing has come
+/// back for this long (ACE's own session timeout is 60 s).
+const ACE_SILENCE_TIMEOUT: Duration = Duration::from_secs(90);
+/// Tear down when the browser has sent no WS frames at all for this
+/// long (covers pages parked on the login form holding a socket).
+const WS_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+/// Bound on a single ws_sink.send — a stalled browser reader
+/// otherwise blocks the udp→ws pump forever (kernel then drops
+/// ACE→client datagrams with no signal).
+const WS_SEND_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Shared per-connection liveness clock (millis since the connection's
+/// own epoch; 0 = never happened).
+struct LinkState {
+    epoch: Instant,
+    /// Last datagram accepted from ACE; seeded to "now" on the FIRST
+    /// ws→udp send so a never-answered flow also trips the reaper.
+    last_udp_in_ms: AtomicU64,
+    /// Last WS frame (any kind) received from the browser.
+    last_ws_in_ms: AtomicU64,
+}
+
+impl LinkState {
+    fn new() -> Self {
+        let s = Self {
+            epoch: Instant::now(),
+            last_udp_in_ms: AtomicU64::new(0),
+            last_ws_in_ms: AtomicU64::new(0),
+        };
+        s.last_ws_in_ms.store(1, Ordering::Relaxed);
+        s
+    }
+    fn now_ms(&self) -> u64 {
+        self.epoch.elapsed().as_millis().max(1) as u64
+    }
+    fn stamp(&self, cell: &AtomicU64) {
+        cell.store(self.now_ms(), Ordering::Relaxed);
+    }
+    fn seed_if_zero(&self, cell: &AtomicU64) {
+        let _ = cell.compare_exchange(0, self.now_ms(), Ordering::Relaxed, Ordering::Relaxed);
+    }
+    fn age(&self, cell: &AtomicU64) -> Option<Duration> {
+        let v = cell.load(Ordering::Relaxed);
+        if v == 0 {
+            return None;
+        }
+        Some(Duration::from_millis(self.now_ms().saturating_sub(v)))
+    }
+}
+
+/// Watchdog arm: polls the liveness clocks and errors out (tearing
+/// down the connection and its UDP socket) when a limit trips.
+async fn liveness_watchdog(state: Arc<LinkState>, peer: SocketAddr) -> Result<()> {
+    let mut tick = tokio::time::interval(Duration::from_secs(10));
+    loop {
+        tick.tick().await;
+        if let Some(age) = state.age(&state.last_udp_in_ms) {
+            if age > ACE_SILENCE_TIMEOUT {
+                return Err(anyhow!(
+                    "[{peer}] reaping: nothing from ACE for {age:?} (session presumed dead server-side)"
+                ));
+            }
+        }
+        if let Some(age) = state.age(&state.last_ws_in_ms) {
+            if age > WS_IDLE_TIMEOUT {
+                return Err(anyhow!(
+                    "[{peer}] reaping: no WS frames from client for {age:?}"
+                ));
+            }
+        }
+    }
+}
 
 /// Resolved per-connection routing target announced by the client
 /// in its handshake.
@@ -109,9 +191,17 @@ async fn handle_connection(cfg: Arc<Config>, tcp: TcpStream, peer: SocketAddr) -
     log::info!("[{peer}] udp socket bound to {local:?}");
     let udp = Arc::new(udp);
     let target = Arc::new(target);
+    let link = Arc::new(LinkState::new());
 
-    let to_udp = forward_ws_to_udp(Arc::clone(&target), Arc::clone(&udp), ws_stream, peer);
-    let to_ws = forward_udp_to_ws(Arc::clone(&target), udp, ws_sink, peer);
+    let to_udp = forward_ws_to_udp(
+        Arc::clone(&target),
+        Arc::clone(&udp),
+        ws_stream,
+        peer,
+        Arc::clone(&link),
+    );
+    let to_ws = forward_udp_to_ws(Arc::clone(&target), udp, ws_sink, peer, Arc::clone(&link));
+    let watchdog = liveness_watchdog(Arc::clone(&link), peer);
 
     tokio::select! {
         res = to_udp => {
@@ -120,6 +210,10 @@ async fn handle_connection(cfg: Arc<Config>, tcp: TcpStream, peer: SocketAddr) -
         }
         res = to_ws => {
             log::debug!("[{peer}] udp→ws half exited: {res:?}");
+            res
+        }
+        res = watchdog => {
+            log::debug!("[{peer}] liveness watchdog exited: {res:?}");
             res
         }
     }
@@ -214,12 +308,14 @@ async fn forward_ws_to_udp<S>(
     udp: Arc<UdpSocket>,
     mut ws_stream: S,
     peer: SocketAddr,
+    link: Arc<LinkState>,
 ) -> Result<()>
 where
     S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
     while let Some(msg) = ws_stream.next().await {
         let msg = msg.with_context(|| format!("[{peer}] ws read"))?;
+        link.stamp(&link.last_ws_in_ms);
         match msg {
             Message::Binary(bytes) => {
                 let (port, payload) = frame::decode_frame(&bytes)
@@ -233,6 +329,9 @@ where
                     ));
                 }
                 let dst = SocketAddr::new(target.ip, port);
+                // Seed the ACE-silence clock on the first outbound send
+                // so a flow ACE never answers still trips the reaper.
+                link.seed_if_zero(&link.last_udp_in_ms);
                 let sent = udp
                     .send_to(payload, dst)
                     .await
@@ -265,6 +364,7 @@ async fn forward_udp_to_ws<S>(
     udp: Arc<UdpSocket>,
     mut ws_sink: S,
     peer: SocketAddr,
+    link: Arc<LinkState>,
 ) -> Result<()>
 where
     S: SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
@@ -294,12 +394,18 @@ where
             continue;
         }
 
+        // Datagram accepted from ACE — the flow is alive.
+        link.stamp(&link.last_udp_in_ms);
+
         let payload = &buf[..len];
         let frame = frame::encode_frame(src.port(), payload)
             .with_context(|| format!("[{peer}] encode ws frame from {src}"))?;
-        ws_sink
-            .send(Message::Binary(frame.into()))
+        // conn-fix (2026-07-18): bound the send. A stalled browser
+        // reader used to park this pump on a full TCP window forever,
+        // silently dropping ACE→client datagrams in the kernel.
+        tokio::time::timeout(WS_SEND_TIMEOUT, ws_sink.send(Message::Binary(frame.into())))
             .await
+            .map_err(|_| anyhow!("[{peer}] ws send stalled for {WS_SEND_TIMEOUT:?} — client reader wedged"))?
             .with_context(|| format!("[{peer}] ws send"))?;
         log::trace!("[{peer}] udp→ws {len} bytes ← {src}");
     }

@@ -1,6 +1,6 @@
 use super::types::{
     CachedPacket, MAX_CACHED_PACKETS, MAX_RETRANSMIT_SEQUENCE_IDS, MAX_RETRANSMIT_SEQUENCE_WINDOW,
-    REQUEST_RETRANSMIT_INTERVAL, Session,
+    REQUEST_RETRANSMIT_INTERVAL, RETRANSMIT_GIVE_UP_REQUESTS, Session,
 };
 use crate::optional_header::OptionalHeaderCursor;
 use anyhow::{Result, anyhow};
@@ -189,6 +189,17 @@ impl Session {
             true,
         )?;
         self.last_request_retransmit_time = Some(Instant::now());
+        // conn-fix (2026-07-18): count consecutive requests; reset in
+        // finalize_ordered_server_packet on any ordering progress. A
+        // session the server no longer answers must terminate instead
+        // of re-requesting at 1 Hz forever.
+        self.retransmit_requests_since_progress += 1;
+        if self.retransmit_requests_since_progress > RETRANSMIT_GIVE_UP_REQUESTS {
+            return Err(anyhow!(
+                "retransmit give-up: {} consecutive requests with no ordering progress — server presumed to have dropped this session",
+                self.retransmit_requests_since_progress
+            ));
+        }
         Ok(())
     }
 

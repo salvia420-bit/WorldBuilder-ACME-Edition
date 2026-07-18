@@ -35464,9 +35464,28 @@ pub async fn start_session(
         });
     }
 
-    let CharListReady { account_name } = charlist_rx
-        .await
-        .map_err(|_| JsValue::from_str("recv loop exited before CharacterList arrived"))?;
+    // conn-fix (2026-07-18): handshake deadline. This await used to be
+    // unbounded ("if ACE never responds the Promise stays pending") —
+    // but a pending-forever start_session leaks a live recv_loop + open
+    // WebSocket + bridge UDP flow that retransmits into ACE at 1 Hz
+    // indefinitely (the "Session for Id 0" flood). On timeout we return
+    // Err; `cmd_tx` drops with this scope, the recv loop sees its cmd
+    // channel close and exits, and the transport Drop closes the WS.
+    let CharListReady { account_name } = match futures::future::select(
+        charlist_rx,
+        Box::pin(gloo_timers::future::TimeoutFuture::new(30_000)),
+    )
+    .await
+    {
+        futures::future::Either::Left((r, _)) => r.map_err(|_| {
+            JsValue::from_str("recv loop exited before CharacterList arrived")
+        })?,
+        futures::future::Either::Right((_, _)) => {
+            return Err(JsValue::from_str(
+                "start_session: no CharacterList within 30s (handshake timeout) — session torn down",
+            ));
+        }
+    };
 
     Ok(SessionHandle {
         cmd_tx,
@@ -37889,6 +37908,14 @@ async fn recv_loop(
     // dedicated keepalive Web Worker poking `ForceKeepalive`, not by this
     // arm — this arm is the active-play / EnteringWorld-load backstop.)
     let mut keepalive_interval = gloo_timers::future::IntervalStream::new(5_000);
+
+    // conn-fix (2026-07-18): dead-session detection baseline. A session
+    // whose ACE peer went silent (booted by a duplicate login, server
+    // restart, bridge flow orphaned) previously lived forever: the WS
+    // stays open so recv_message never errors, and the session keeps
+    // retransmitting at 1 Hz into a server that drops every packet at
+    // DEBUG. The keepalive arm below now reaps it.
+    let loop_started_at = web_time::Instant::now();
 
     loop {
         tokio::select! {
@@ -43992,6 +44019,30 @@ async fn recv_loop(
             // loop must keep running so the JS side can observe the
             // eventual disconnect through `recv_message`.
             _ = keepalive_interval.next() => {
+                // conn-fix (2026-07-18): dead-session detector. If ACE has
+                // sent nothing for 90s (or never sent anything within 60s
+                // of loop start), the session is gone server-side — ACE's
+                // own timeout is 60s, and a booted duplicate-login session
+                // is removed from its session map entirely (packets from
+                // us are silently dropped). Terminate so the transport
+                // Drop closes the WS + bridge UDP flow instead of
+                // retransmitting into the void forever.
+                let inbound_dead = match *last_recv_instant.borrow() {
+                    Some(t) => t.elapsed() > std::time::Duration::from_secs(90),
+                    None => loop_started_at.elapsed() > std::time::Duration::from_secs(60),
+                };
+                if inbound_dead {
+                    let msg = "no inbound traffic (90s stale / 60s never) — server-side session presumed dead".to_string();
+                    log::warn!("recv_loop terminating: {msg}");
+                    queued_events.borrow_mut().push(ClientEvent {
+                        kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                        string_payload: Some(msg),
+                        u32_payload: None,
+                        u32_payload_2: None,
+                        f32_payload: None,
+                    });
+                    return;
+                }
                 // keepaliveFix (2026-07-07): also cover EnteringWorld so a
                 // long portal/dungeon load (state == EnteringWorld until
                 // PlayerCreate) doesn't suppress keepalives. Safe: a

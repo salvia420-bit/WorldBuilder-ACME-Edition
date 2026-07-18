@@ -18,6 +18,11 @@ pub(crate) const MAX_CACHED_PACKETS: usize = 512;
 pub(crate) const MAX_RETRANSMIT_SEQUENCE_IDS: usize = 115;
 pub(crate) const MAX_RETRANSMIT_SEQUENCE_WINDOW: u32 = 256;
 pub(crate) const REQUEST_RETRANSMIT_INTERVAL: Duration = Duration::from_secs(1);
+// conn-fix (2026-07-18): give-up ceiling for consecutive retransmit
+// requests with zero ordering progress (~3 min at the 1 Hz cadence).
+// A healthy server answers a retransmit request within a round-trip;
+// a server that ignores 180 in a row has dropped this session.
+pub(crate) const RETRANSMIT_GIVE_UP_REQUESTS: u32 = 180;
 pub(crate) const DEFAULT_LOGIN_PROTOCOL_VERSION: &str = "1802";
 
 // `Transport` is cfg-split between native (Send + Sync, async-trait Send
@@ -186,6 +191,12 @@ pub struct Session {
     pub(crate) pending_server_packets: BTreeMap<u32, ReceivedPacket>,
     pub(crate) pending_control_packets: Vec<PendingControlPacket>,
     pub(crate) last_request_retransmit_time: Option<Instant>,
+    // conn-fix (2026-07-18): consecutive retransmit requests issued
+    // without any ordering progress. Reset whenever an ordered packet
+    // finalizes; when it exceeds RETRANSMIT_GIVE_UP_REQUESTS the
+    // session errors out instead of re-requesting at 1 Hz forever
+    // (booted/zombie sessions used to flood ACE indefinitely).
+    pub(crate) retransmit_requests_since_progress: u32,
     pub(crate) cached_packets: BTreeMap<u32, CachedPacket>,
     pub capture: Option<CaptureWriter>,
     pub game_action_sequence: u32,

@@ -232,6 +232,9 @@ impl Session {
         if self.should_order_server_packet(&packet.header) {
             self.last_server_seq = packet.header.sequence;
             self.has_server_seq = true;
+            // conn-fix (2026-07-18): ordering progressed — reset the
+            // retransmit give-up counter (see send_request_retransmit).
+            self.retransmit_requests_since_progress = 0;
         }
 
         if packet.header.sequence > 0 && packet.header.flags != packet_flags::ACK_SEQUENCE {
