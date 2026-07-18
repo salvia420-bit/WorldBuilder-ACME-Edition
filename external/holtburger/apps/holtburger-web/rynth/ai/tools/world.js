@@ -87,25 +87,32 @@ function resolveNearby(h, ref) {
  * unavailable — the server error now reaches the observation either way.
  */
 async function approach(h, guid, ms = 12000) {
-  if (typeof h.PursueObject !== "function" || typeof h.GetPursuitStatus !== "function") return "no-mover";
+  if (typeof h.PursueObject !== "function") return "no-mover";
   if (!h.PursueObject(guid, 1.0, 0, true)) return "no-mover";
-  // The pursuit registers on the NEXT sim tick — status reads 0 (idle) for a
-  // moment after the send. Treating that early 0 as "already close" fired the
-  // Use mid-walk from 33m out (observed live: Jonathan used from spawn-side,
-  // ACE saw out-of-range, no emote). Grace-wait for the pursuit to go active
-  // before trusting idle as completion.
+  // Do NOT poll GetPursuitStatus here: its arrived/failed latch is READ-CLEAR
+  // and the bot kernel's tick loop consumes it first, so this seam always saw
+  // idle and fired the Use mid-walk from across the room (observed live twice:
+  // Jonathan "used" from 25m+, no emote, walk:idle on every action). The
+  // player's own pose can't be stolen — walk until the bot stops moving, then
+  // act. "no-walk" = never moved (already adjacent, or pursue rejected):
+  // proceed either way; the server verdict lands in the heard section.
+  const pose = () => {
+    try { const p = h.TryGetPlayerPose?.(); return p ? { x: p.x, y: p.y, cell: p.objCellId >>> 0 } : null; }
+    catch { return null; }
+  };
+  let last = pose();
+  if (!last) { await new Promise((r) => setTimeout(r, 1200)); return "blind"; }
   const t0 = Date.now();
-  let active = false;
+  let lastMoveT = t0;
   while (Date.now() - t0 < ms) {
-    await new Promise((r) => setTimeout(r, 250));
-    const st = (h.GetPursuitStatus() ?? 0) & 0xffff;
-    if (st === 2) return "arrived";
-    if (st === 3) return "failed";
-    if (st === 1) { active = true; continue; }
-    // st === 0: before activation it may just not have started yet; after
-    // activation an idle read means the arrived/failed latch was consumed
-    // elsewhere or pursuit ended — treat as done.
-    if (active || Date.now() - t0 > 1500) return "idle";
+    await new Promise((r) => setTimeout(r, 400));
+    const cur = pose();
+    if (!cur) return "blind";
+    const moved = cur.cell !== last.cell || Math.hypot(cur.x - last.x, cur.y - last.y) > 0.5;
+    if (moved) lastMoveT = Date.now();
+    last = cur;
+    if (Date.now() - lastMoveT > 1600)
+      return Date.now() - t0 <= 2200 ? "no-walk" : "settled";
   }
   return "timeout";
 }

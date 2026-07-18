@@ -150,26 +150,33 @@ function makeHost() {
     const ext = composeAiExtensions({ host: makeHost() }, { journal: makeJournal(), config: { world: false, knowledge: false, dungeonNav: false, wbt: false, economy: false, advancement: false } });
     check("world:false -> not registered", !ext.extActions.use_object && !ext.extActions.give_item);
   }
-  // pursue-then-use: with a pursuit-status host, use_object walks into range
-  // first (ACE answers a far Use with UseDone(OutOfRange) and no emote).
+  // pursue-then-use: use_object walks into range first (ACE answers a far Use
+  // with UseDone(OutOfRange) and no emote). Arrival = the player's own pose
+  // settling — pursuitStatus is read-clear and the kernel steals the latch.
   {
     const host = makeHost();
     const calls = host.calls;
-    let polls = 0;
-    host.GetPursuitStatus = () => { calls.push(["status"]); return ++polls >= 2 ? 2 : 1; }; // active, then arrived
+    let x = 0;
+    host.TryGetPlayerPose = () => ({ objCellId: 0x860201ad, x: (x = Math.min(x + 5, 20)), y: 0, z: 0 }); // walks, then stands still at 20
     const r = await byType.use_object.apply({ host }, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
     const pi = calls.findIndex((c) => c[0] === "pursue");
     const ui = calls.findIndex((c) => c[0] === "use");
     check("use_object pursues before using", r.ok && pi !== -1 && ui !== -1 && pi < ui, JSON.stringify(calls));
-    check("use_object waits for arrival", polls >= 2, `polls=${polls}`);
+    check("use_object reports settled walk", r.result?.walk === "settled", JSON.stringify(r));
   }
-  // pursue-then-use: pursuit failure still sends the Use (server error now
-  // reaches the observation via the kind-13 heard line).
+  // pursue-then-use: a bot that never moves (already adjacent or pursue
+  // rejected) still sends the Use, tagged no-walk.
   {
     const host = makeHost();
-    host.GetPursuitStatus = () => 3; // failed
+    host.TryGetPlayerPose = () => ({ objCellId: 0x860201ad, x: 1, y: 1, z: 0 });
     const r = await byType.use_object.apply({ host }, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
-    check("use_object sends despite pursue failure", r.ok && host.calls.some((c) => c[0] === "use"));
+    check("use_object sends despite no walk", r.ok && host.calls.some((c) => c[0] === "use") && r.result?.walk === "no-walk", JSON.stringify(r));
+  }
+  // pursue-then-use: pose unavailable degrades to a blind grace wait + Use.
+  {
+    const host = makeHost();
+    const r = await byType.use_object.apply({ host }, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    check("use_object blind host still uses", r.ok && host.calls.some((c) => c[0] === "use") && r.result?.walk === "blind", JSON.stringify(r));
   }
   // embedded guid in a name string resolves (the "Door 0x7860202d" habit)
   {
