@@ -310,6 +310,15 @@ pub struct TransitionOutcome {
     /// acclient.c:322538-322590). `None` on the approximate pipeline and
     /// when the transition ended with no known plane.
     pub contact_plane: Option<(Plane, u32)>,
+    /// Retail stationary-fall counter READ-BACK — the post-transition
+    /// `collisions->frames_stationary_fall` retail copies back onto the mover
+    /// (`CPhysicsObj::report_collision_end`, acclient.c:321862-321918): the
+    /// caller persists 1/2 (retail `transient_state` 0x10/0x20), zeroes the
+    /// object velocity once the counter exceeds 1, and resets the store on
+    /// 0 / 3 (3 ⇔ `validate_transition`'s resting-floor synthesis fired this
+    /// frame, acclient.c:312283-312311 — the mover grounded in place). The
+    /// approximate pipeline echoes the input seed (no progression there).
+    pub frames_stationary_fall: u8,
 }
 
 /// Retail `CTransition::calc_num_steps` non-viewer arm
@@ -880,6 +889,10 @@ pub fn find_transitional_position(
         // driver only (`faithful_bridge`). `None` keeps the caller's
         // stored plane untouched.
         contact_plane: None,
+        // No `validate_transition` here ⇒ no progression: echo the seed so a
+        // caller storing the read-back keeps its value unchanged (the same
+        // echo retail's no-validate frames produce).
+        frames_stationary_fall: collision.frames_stationary_fall,
     }
 }
 

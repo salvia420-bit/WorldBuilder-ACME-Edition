@@ -1189,6 +1189,16 @@ pub fn faithful_find_transitional_position(
     }
     t.init_sphere(2, &spheres, 1.0);
     t.init_path(Some(begin_cell), Some(&begin_pos), &end_pos);
+    // Retail stationary-fall carry SEED — `CPhysicsObj::transition` seeds the
+    // fresh CTransition's counter from the persistent `transient_state` bits
+    // 0x10/0x20/0x40 (acclient.c:320104-320115). Without this cross-frame
+    // carry the counter re-enters 0 every frame, `validate_transition`'s
+    // resting-floor synthesis (fires at 2, acclient.c:312283-312311) can never
+    // be reached, and a falling mover whose every slice ends COLLIDED-with-
+    // contact-cleared (the grocer-seam riser wedge: collide → find_walkable
+    // adjust → Placement re-insert intersects the step solid → full clear +
+    // restore, acclient.c:312897-312941) stays frozen airborne forever.
+    t.collision_info.frames_stationary_fall = input.frames_stationary_fall;
 
     let world = SceneWorld::new(scene);
     // The player is gravity-affected (GRAVITY_PS). VERIFY(1070): thread the
@@ -1370,7 +1380,175 @@ pub fn faithful_find_transitional_position(
         cell_changed,
         state,
         contact_plane,
+        // Retail read-back: the post-transition counter the caller persists /
+        // acts on (`CPhysicsObj::report_collision_end`, acclient.c:321862-321918).
+        frames_stationary_fall: t.collision_info.frames_stationary_fall,
     }
+}
+
+// ─── Arrival placement (retail SetPosition path) ─────────────────────────────
+
+/// Result of the retail placement search on an authoritative arrival — the
+/// de-embedded pose plus the settled contact state the caller writes back.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlacementOutcome {
+    /// The adjusted (de-embedded / step-down-settled) feet pose, landblock-local
+    /// coords with the low-word cell re-derived from geometry.
+    pub pose: WorldPosition,
+    /// `true` ⇔ the transition ended on a walkable contact plane
+    /// (`contact_plane.N.z >= FloorZ`), the retail `SetPositionInternal`
+    /// on-walkable derivation (acclient.c:322586-322604).
+    pub grounded: bool,
+    /// The settled contact plane (+ its cell id) for the caller's
+    /// `last_contact_plane` carry — retail `CPhysicsObj::contact_plane`.
+    pub contact_plane: Option<(holtburger_common::Plane, u32)>,
+}
+
+/// Retail placement transition on an authoritative arrival — the missing wiring
+/// for `CPhysicsObj::SetPosition`'s placement path (`find_placement_position`,
+/// `acclient.c:313341` → `find_placement_pos`, `acclient.c:313015`).
+///
+/// When a teleport / force-blip lands the capsule EMBEDDED in an env-cell wall,
+/// the swept-step transitional driver refuses every subsequent move (each
+/// substep collides → `validate_transition` BRANCH-A resets `check_pos`→`curr`,
+/// no contact plane ever establishes). Retail avoids this by running a PLACEMENT
+/// transition on arrival: `find_placement_pos`'s radial search (radius up to
+/// 4.0/2.0, angular sweep) ADJUSTS an embedded start to the nearest valid pose,
+/// then `step_down` (walkable-allowance `Z_FOR_LANDING`) settles ground contact.
+///
+/// Construction mirrors [`faithful_find_transitional_position`]: begin cell via
+/// `scene.current_cell`, the indoor BSP-residency guard (`None` ⇒ the cell is
+/// not resident yet — the caller keeps the latch and retries), the vertical
+/// two-sphere capsule, and the `retail_ground` object setup (`step_down = true`).
+/// The insert type is the PLACEMENT variant: `init_path(cell, None, &pos)` seeds
+/// `curr` from the end pose and stamps `insert_type = Placement`
+/// (`SPHEREPATH::init_path`, `acclient.c:314043`), exactly the retail
+/// `init_path(transit, cell, 0, pos)` call (`acclient.c:319175`);
+/// `find_placement_position` then manages the InitialPlacement→Placement
+/// transitions internally. `placement_allows_sliding` defaults `true` from
+/// `CTransition::new()` (retail clears it only when the SetPosition flags forbid
+/// sliding — a teleport allows it, `acclient.c:319178`).
+///
+/// Returns `None` when the begin cell's BSP is not resident (retry later) OR the
+/// placement search finds no valid pose (`found == 0`); otherwise the settled
+/// pose + grounded + contact plane, marshalled the same way the transitional fn
+/// does.
+pub fn faithful_find_placement_position(
+    env: &dyn TransitionEnv,
+    pose: &WorldPosition,
+    object: &super::transition::ObjectInfo,
+    gates: &super::transition::TransitionGates,
+) -> Option<PlacementOutcome> {
+    let scene = env.scene();
+    let begin_cell = scene.current_cell(pose);
+
+    // INDOOR residency guard (the transitional fn's no-BSP guard): a begin cell
+    // with no resident physics BSP has nothing to place against — return None so
+    // the caller keeps the latch and retries once the cell streams in.
+    if scene.cell_physics_bsp(begin_cell).is_none() {
+        return None;
+    }
+
+    // WORLD-space frame; begin == end == the arrival pose (a placement, not a
+    // sweep). Identity player rotation → vertical two-sphere capsule.
+    let mut frame = Frame::identity();
+    frame.origin = pose.global_coords();
+    let pos = Position {
+        objcell_id: begin_cell,
+        frame,
+    };
+
+    let radius = object.radius;
+    let height = object.height;
+    let spheres = [
+        Sphere {
+            center: Vector3::new(0.0, 0.0, radius),
+            radius,
+        },
+        Sphere {
+            center: Vector3::new(0.0, 0.0, (height - radius).max(radius)),
+            radius,
+        },
+    ];
+
+    let mut t = CTransition::new();
+    t.object_info.scale = 1.0;
+    // A freshly-teleported mover enters placement with contact state CLEARED —
+    // retail `get_object_info` (acclient.c:319074) seeds CONTACT/ON_WALKABLE
+    // from `transient_state`, which a teleport zeroes, so the placement
+    // transition starts contact-less and the initial insert + step_down settle
+    // re-establish ground. Keep EDGE_SLIDE (from `AllowsEdgeSlide`).
+    t.object_info.state =
+        object.state & !(object_info_state::CONTACT | object_info_state::ON_WALKABLE);
+    t.object_info.step_up_height = object.step_up_height;
+    t.object_info.step_down_height = object.step_down_height;
+    t.object_info.ethereal = object.ethereal;
+    // The climb seams read `faithful_stepup`; placement runs the same step_down
+    // chain the transitional fn does, so keep it ON.
+    t.faithful_stepup = true;
+    t.retail_ground = gates.retail_ground;
+    if gates.retail_ground {
+        // OBJECTINFO::init (acclient.c:314131): `step_down = !(state & Missile)` —
+        // always true for the player; arms `find_placement_position`'s step_down
+        // settle (driver_validate.rs:285-326).
+        t.object_info.step_down = true;
+    }
+    t.init_sphere(2, &spheres, 1.0);
+    // init_path with a NULL begin_pos ⇒ seed `curr` from `end` and stamp
+    // `insert_type = Placement` (driver_init.rs:212-218); `find_valid_position`
+    // then dispatches to `find_placement_position` (driver_validate.rs:233).
+    t.init_path(Some(begin_cell), None, &pos);
+
+    let world = SceneWorld::new(scene);
+    let mover = FaithfulMover { has_gravity: true };
+    let found = t.find_valid_position(&world, &mover);
+    if found == 0 {
+        return None;
+    }
+
+    // ── Marshal CTransition → PlacementOutcome ── (same single-landblock indoor
+    // rebucket as the transitional fn: the settled world origin round-trips
+    // through begin's landblock origin; re-derive the low-word cell from
+    // geometry so a placement that crossed an EnvCell seam reports the new cell).
+    let curr = t.sphere_path.curr_pos;
+    let (lb_x, lb_y) = pose.landblock_coords();
+    let lb_origin_x = lb_x as f32 * METERS_PER_LANDBLOCK;
+    let lb_origin_y = lb_y as f32 * METERS_PER_LANDBLOCK;
+    let mut out_pose = WorldPosition {
+        landblock_id: pose.landblock_id,
+        coords: Vector3::new(
+            curr.frame.origin.x - lb_origin_x,
+            curr.frame.origin.y - lb_origin_y,
+            curr.frame.origin.z,
+        ),
+        rotation: pose.rotation,
+    };
+    // Indoor→indoor cell re-derivation (mirrors the transitional fn's
+    // `find_cell_list` flip, faithful_bridge.rs:1263) so the low word tracks the
+    // cell the adjusted pose actually landed in.
+    if gates.local_envcell_entry && out_pose.is_indoors() {
+        out_pose.landblock_id = holtburger_common::Guid(scene.current_cell(&out_pose));
+    }
+
+    // grounded / contact plane ← retail `SetPositionInternal` (acclient.c:322586-
+    // 322604): CONTACT ⇔ the transition ended contact-valid; ON_WALKABLE ⇔
+    // `N.z >= FloorZ`. No walkable-latch fallback here — retail placement reads
+    // the contact plane only.
+    const RETAIL_FLOOR_Z: f32 = 0.664_174_1; // PhysicsGlobals::floor_z
+    let contact_plane = t
+        .collision_info
+        .contact_plane
+        .map(|plane| (plane, t.collision_info.contact_plane_cell_id));
+    let grounded = t
+        .collision_info
+        .contact_plane
+        .is_some_and(|plane| plane.normal.z >= RETAIL_FLOOR_Z);
+
+    Some(PlacementOutcome {
+        pose: out_pose,
+        grounded,
+        contact_plane,
+    })
 }
 
 // ─── Phase B drift harness ───────────────────────────────────────────────────

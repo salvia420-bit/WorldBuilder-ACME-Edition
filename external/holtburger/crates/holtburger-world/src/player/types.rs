@@ -1592,6 +1592,32 @@ pub struct PlayerState {
     /// `TransitionOutcome::contact_plane`; `None` until the first
     /// grounded transition (mirrors retail's invalid plane at spawn).
     pub last_contact_plane: Option<(holtburger_common::Plane, u32)>,
+
+    /// Retail stationary-fall carry — the persistent
+    /// `transient_state` 0x10/0x20 counter (`STATIONARY_FALL` bits) retail
+    /// threads between physics frames: seeded into each transition
+    /// (`CPhysicsObj::transition`, acclient.c:320104-320115), advanced by
+    /// `validate_transition` on a falling frame that failed to move
+    /// (acclient.c:312279-312312), and copied back post-transition
+    /// (`CPhysicsObj::report_collision_end`, acclient.c:321862-321918 —
+    /// which also zeroes the velocity at >1 and clears the bits at 0/3).
+    /// At 2 the NEXT failed frame synthesizes a flat resting floor under the
+    /// mover (acclient.c:312283-312311) — retail's guarantee that a fall
+    /// wedged by geometry (every slice COLLIDED, contact cleared, pose
+    /// restored) grounds in place after ~3 frames instead of hovering
+    /// frozen forever. Values 0/1/2 (3 never persists).
+    pub frames_stationary_fall: u8,
+
+    /// Arrival-placement latch — set when an authoritative position lands on the
+    /// local player via a hard positional discontinuity (teleport `Reset` /
+    /// force-blip resync), consumed by the movement tick's arrival-placement
+    /// pass. Retail runs a PLACEMENT transition on every `CPhysicsObj::SetPosition`
+    /// (`find_placement_position`, acclient.c:313341) so an arrival that lands the
+    /// capsule embedded in an env-cell wall is de-embedded before movement; our
+    /// client applies server positions verbatim, so this latch schedules the same
+    /// placement on the next tick. `false` once consumed (or when the cell BSP is
+    /// not yet resident, it stays set for a later retry).
+    pub pending_arrival_placement: bool,
 }
 
 impl Default for PlayerState {
@@ -1663,6 +1689,12 @@ impl PlayerState {
             step_down_height: None,
             // USE_RETAIL_GROUND: no contact plane tracked at spawn.
             last_contact_plane: None,
+            // No stationary-fall history at spawn (retail transient_state
+            // starts clear).
+            frames_stationary_fall: 0,
+            // No arrival pending at spawn (the initial login position runs the
+            // normal enter-world path, not a discontinuity resync).
+            pending_arrival_placement: false,
         }
     }
 

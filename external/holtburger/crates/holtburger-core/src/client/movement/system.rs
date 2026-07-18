@@ -3063,6 +3063,13 @@ impl MovementSystem {
         world: &mut WorldState,
         session: &mut dyn ActionSink,
     ) -> Result<Vec<WorldEvent>> {
+        // Arrival placement — at the TICK top, not only the manual-drive
+        // slice: the unified tick spine (`tick_spine.rs`) deliberately skips
+        // the handle's local-pose pre-integration (`note_unified_tick`), so a
+        // hook placed only in `advance_local_pose_for_manual_drive_slice`
+        // never runs on the spine path. `MovementSystem::tick` is the one
+        // entry BOTH paths share. Idempotent (the latch self-clears).
+        self.consume_pending_arrival_placement(world);
         self.reconcile_server_controlled_projection(world, now);
 
         // A2-P3 (2026-06-12, W3+ S9) — consume the deferred sticky
@@ -4001,6 +4008,13 @@ impl MovementSystem {
     /// arc, floor-Z snap, rotation prediction) advanced by exactly one
     /// quantum.
     fn advance_local_pose_for_manual_drive_slice(&self, world: &mut WorldState, dt: Duration) {
+        // Arrival placement — BEFORE the first transition slice. A teleport /
+        // force-blip resync can land the capsule embedded in an env-cell wall;
+        // retail de-embeds it with a PLACEMENT transition on arrival
+        // (`find_placement_position`, acclient.c:313341). Runs once per pending
+        // arrival (self-clears), so the movement below sweeps from the corrected
+        // pose.
+        self.consume_pending_arrival_placement(world);
         // A6-T1 (W3+ S7) — under the unified-transition gate the slice
         // routes through the retail substep pipeline; the legacy chain
         // below runs UNTOUCHED when the gate is off (zero code motion).
@@ -5786,6 +5800,89 @@ impl MovementSystem {
         (object, gates)
     }
 
+    /// Consume the arrival-placement latch (set by `set_player_position_with_sync`
+    /// on a teleport `Reset` / force-blip resync). Runs the retail placement
+    /// transition (`faithful_find_placement_position`, the port of
+    /// `CPhysicsObj::SetPosition`'s `find_placement_position`, acclient.c:313341)
+    /// so an arrival that landed the capsule embedded in an env-cell wall is
+    /// de-embedded BEFORE the next movement slice sweeps and refuses every step.
+    ///
+    /// Gated on `faithful_transition_enabled()` (the faithful driver is the only
+    /// path the placement port applies to) and INDOOR only — outdoor arrivals use
+    /// the existing terrain machinery, so the blast radius stays indoor. When the
+    /// begin cell's physics BSP is not yet resident the latch is LEFT SET (the
+    /// cell-residency watchdog fetches it; we retry next tick).
+    pub(crate) fn consume_pending_arrival_placement(&self, world: &mut WorldState) {
+        if !world.player.pending_arrival_placement {
+            return;
+        }
+        // The placement port only applies to the faithful driver path.
+        if !self.faithful_transition_enabled() {
+            world.player.pending_arrival_placement = false;
+            return;
+        }
+        let Some(pose) = world.local_player_runtime_pose() else {
+            // No runtime pose yet — keep the latch and retry next tick.
+            return;
+        };
+        // Outdoor arrivals keep the existing terrain grounding — indoor only.
+        if !pose.is_indoors() {
+            world.player.pending_arrival_placement = false;
+            return;
+        }
+        let begin_cell = world.scene.current_cell(&pose);
+        if world.scene.cell_physics_bsp(begin_cell).is_none() {
+            // Cell BSP not resident yet — leave the latch set for a later retry.
+            return;
+        }
+
+        let (object, mut gates) = Self::transition_profile(world);
+        gates.outdoor_static_grounding = self.outdoor_static_grounding_enabled();
+        gates.retail_ground = self.retail_ground_enabled();
+
+        match holtburger_world::spatial::faithful_bridge::faithful_find_placement_position(
+            &*world, &pose, &object, &gates,
+        ) {
+            Some(outcome) => {
+                let before = pose.global_coords();
+                let after = outcome.pose.global_coords();
+                let dist = ((after.x - before.x).powi(2)
+                    + (after.y - before.y).powi(2)
+                    + (after.z - before.z).powi(2))
+                .sqrt();
+                // Apply the adjusted pose via the runtime-body path WITHOUT
+                // emitting a network/authoritative event (same write-back the
+                // transition tail uses).
+                let _ = world.set_local_player_runtime_pose(outcome.pose);
+                if gates.retail_ground {
+                    world.player.last_contact_plane = outcome.contact_plane;
+                }
+                if outcome.grounded {
+                    world.player.land();
+                } else {
+                    world.player.begin_fall();
+                }
+                world.player.pending_arrival_placement = false;
+                log::info!(
+                    "[arrival-placement] adjusted pose by {:.2}m cell 0x{:08X} grounded={}",
+                    dist,
+                    outcome.pose.landblock_id.0,
+                    outcome.grounded,
+                );
+            }
+            None => {
+                // Residency present but the placement search found no valid pose
+                // — keep the pose as-is and clear the latch (no retry loop).
+                world.player.pending_arrival_placement = false;
+                log::warn!(
+                    "[arrival-placement] placement search failed cell 0x{:08X} (pose kept)",
+                    begin_cell,
+                );
+            }
+        }
+    }
+
+
     /// A6-T1/T2 — ONE manual-drive slice through the retail transition
     /// pipeline. The SHARED driver for both consumers (which is what
     /// makes the T1↔T2 equivalence structural):
@@ -6081,7 +6178,15 @@ impl MovementSystem {
             force_grounded: false,
             gates,
             last_known_wall_normal: world.player.last_known_wall_normal,
-            frames_stationary_fall: 0,
+            // Retail stationary-fall carry — seed the transition from the
+            // persistent counter (retail `CPhysicsObj::transition` seeds from
+            // `transient_state` 0x10/0x20, acclient.c:320104-320115); the
+            // read-back below persists the result. Without the carry the
+            // resting-floor synthesis (validate_transition,
+            // acclient.c:312283-312311) can never fire and a geometry-wedged
+            // fall (grocer-seam riser: every slice COLLIDED, contact cleared,
+            // pose restored) hovers frozen forever with input ignored.
+            frames_stationary_fall: world.player.frames_stationary_fall,
             // USE_RETAIL_GROUND: seed the transition with the mover's stored
             // contact plane (retail `get_object_info` → `init_contact_plane`).
             last_contact_plane: world.player.last_contact_plane,
@@ -6108,6 +6213,34 @@ impl MovementSystem {
         if gates.retail_ground {
             world.player.last_contact_plane = outcome.contact_plane;
         }
+        // Retail stationary-fall read-back (`CPhysicsObj::report_collision_end`,
+        // acclient.c:321862-321918): once the counter exceeds 1 retail zeroes
+        // `m_velocityVector` (the wedged fall stops accumulating speed); the
+        // persistent store keeps 1/2 (`transient_state` 0x10/0x20) and clears
+        // on 0 and on 3 (3 ⇔ the resting-floor synthesis grounded the mover
+        // this frame — `outcome.grounded`/`contact_plane` already carry the
+        // synthesized plane through the normal landing tail below).
+        //
+        // Kill only on the frame the counter ADVANCED: retail kills on every
+        // `>1` frame, but retail integrates gravity into the SAME frame's move
+        // (`UpdatePhysicsInternal` velocity-then-position, acclient.c:317701-
+        // 317786), so a killed fall always moves — and validates — on its next
+        // frame. Our airborne lane integrates position from the PREVIOUS
+        // slice's velocity, so the slice after a kill is a zero-offset one:
+        // `calc_num_steps == 0` skips `validate_transition` (driver_validate.rs
+        // :373-387) and the outcome ECHOES the stored counter. Re-killing on
+        // that echo would zero the just-integrated gravity velocity forever —
+        // the exact frozen-airborne loop this carry exists to break.
+        let fsf_advanced =
+            outcome.frames_stationary_fall != world.player.frames_stationary_fall;
+        if outcome.frames_stationary_fall > 1 && fsf_advanced {
+            world.player.current_planar_velocity = Vector3::zero();
+            world.player.vertical_velocity = 0.0;
+        }
+        world.player.frames_stationary_fall = match outcome.frames_stationary_fall {
+            1 | 2 => outcome.frames_stationary_fall,
+            _ => 0,
+        };
         if was_airborne && outcome.grounded {
             // Retail grounded-frame friction on the RESIDUAL physics
             // velocity: `calc_friction` is gated on ON_WALKABLE_TS

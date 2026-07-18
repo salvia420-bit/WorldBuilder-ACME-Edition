@@ -855,6 +855,25 @@ impl WorldState {
             return events;
         };
 
+        // Arrival-placement latch: a hard positional discontinuity (teleport
+        // `Reset` / force-blip resync) can land the capsule embedded in an
+        // env-cell wall. Retail runs a PLACEMENT transition on arrival
+        // (`CPhysicsObj::SetPosition` → `find_placement_position`,
+        // acclient.c:313341) that de-embeds the pose; schedule the same on the
+        // next movement tick. `Snapshot` (routine ~20 Hz echoes) is smooth — no
+        // discontinuity, no placement.
+        if matches!(
+            sync,
+            AuthoritativeBodySync::Reset | AuthoritativeBodySync::ForceBlip
+        ) {
+            self.player.pending_arrival_placement = true;
+            // Retail clears the transient contact/fall state on a hard
+            // SetPosition — the stationary-fall bits (transient_state
+            // 0x10/0x20) belong to the OLD location's stuck fall, not the
+            // arrival's.
+            self.player.frames_stationary_fall = 0;
+        }
+
         if let Some(body_id) = self.runtime_body_id_for_guid(guid) {
             Self::emit_runtime_body_changed(&mut events, body_id);
         }

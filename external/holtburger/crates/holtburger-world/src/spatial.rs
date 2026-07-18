@@ -56,3 +56,9 @@ pub(crate) use physics::project_pose_by_velocity_with_collision;
 
 #[cfg(test)]
 mod tests;
+
+/// Offline repro + diagnosis of the Holtburg grocer EnvCell-seam
+/// movement-refusal bug (Environment 840, cells 0xA9B4016A..0xA9B4016E),
+/// driven from the real portal/cell DATs. DAT-gated; skips when absent.
+#[cfg(test)]
+mod env840_seam_tests;

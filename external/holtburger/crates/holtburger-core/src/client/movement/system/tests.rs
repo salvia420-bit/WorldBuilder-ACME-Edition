@@ -4801,6 +4801,392 @@ fn notify_animation_done_respects_queue_flag() {
     }
 }
 
+/// Arrival-placement latch: a teleport `Reset` / force-blip resync sets the
+/// latch on `set_player_position_with_sync`, a routine `Snapshot` echo does NOT,
+/// and the movement tick's `consume_pending_arrival_placement` clears it. Uses
+/// an OUTDOOR pose so the assertion is independent of the faithful-transition
+/// const default: outdoor arrivals keep the existing terrain grounding (the
+/// blast radius is indoor-only), so the latch is consumed without running the
+/// placement search whether `USE_FAITHFUL_TRANSITION` is on or off.
+#[test]
+fn arrival_placement_latch_set_on_teleport_and_consumed_on_tick() {
+    use holtburger_world::spatial::AuthoritativeBodySync;
+
+    let system = MovementSystem::new();
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0123);
+    // Low word 0x0000 ⇒ outdoor (`is_indoors()` is false).
+    let pos = WorldPosition {
+        landblock_id: Guid(0x1234_0000),
+        coords: Vector3::new(10.0, 20.0, 0.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, guid, pos);
+
+    assert!(
+        !world.player.pending_arrival_placement,
+        "latch must start clear"
+    );
+
+    // A routine Snapshot echo is smooth — no discontinuity, no latch.
+    let _ = world.set_player_position_with_sync(pos, AuthoritativeBodySync::Snapshot);
+    assert!(
+        !world.player.pending_arrival_placement,
+        "Snapshot echo must not latch arrival placement"
+    );
+
+    // A teleport (Reset) is a hard discontinuity — latch it.
+    let _ = world.set_player_position_with_sync(pos, AuthoritativeBodySync::Reset);
+    assert!(
+        world.player.pending_arrival_placement,
+        "teleport Reset must set the arrival-placement latch"
+    );
+
+    // The movement tick consumes/clears it.
+    system.consume_pending_arrival_placement(&mut world);
+    assert!(
+        !world.player.pending_arrival_placement,
+        "the tick must consume the arrival-placement latch"
+    );
+
+    // A force-blip resync is the second discontinuity path — also latches, also
+    // consumed.
+    let _ = world.set_player_position_with_sync(pos, AuthoritativeBodySync::ForceBlip);
+    assert!(
+        world.player.pending_arrival_placement,
+        "force-blip resync must set the latch"
+    );
+    system.consume_pending_arrival_placement(&mut world);
+    assert!(
+        !world.player.pending_arrival_placement,
+        "the tick must consume the force-blip latch"
+    );
+}
+
+/// Build the 5-cell Holtburg grocer scene (Environment 840, cells
+/// 0xA9B4016A..0xA9B4016E) from the real portal/cell DATs into `world.scene`,
+/// mirroring `spatial/env840_seam_tests.rs::build_scene`. Returns `false` (with
+/// a printed SKIP) if the base DATs are unavailable. DAT-gated.
+#[cfg(test)]
+fn build_env840_scene_into(world: &mut WorldState) -> bool {
+    use holtburger_common::Aabb;
+    use holtburger_dat::DatDatabase;
+    use holtburger_dat::file_type::env_cell::EnvCell;
+    use holtburger_dat::file_type::environment::Environment;
+    use holtburger_dat::physics::resolve_cell_physics_polygons;
+    use holtburger_world::spatial::{CellMembership, CellPhysicsBsp};
+    use std::io::Cursor;
+
+    const LB_X: f32 = 0xA9 as u32 as f32;
+    const LB_Y: f32 = 0xB4 as u32 as f32;
+    const ENV_840: u32 = 0x0D00_0348;
+
+    let portal_path = std::env::var("HOLTBURGER_PORTAL_DAT")
+        .unwrap_or_else(|_| "/home/wbterminal/ac_base_dats/client_portal.dat".to_string());
+    let cell_path = std::env::var("HOLTBURGER_CELL_DAT")
+        .unwrap_or_else(|_| "/home/wbterminal/ac_base_dats/client_cell_1.dat".to_string());
+    let Ok(portal_dat) = DatDatabase::new(portal_path) else {
+        return false;
+    };
+    let Ok(cell_dat) = DatDatabase::new(cell_path) else {
+        return false;
+    };
+    let Ok(env_bytes) = portal_dat.get_file(ENV_840) else {
+        return false;
+    };
+    let Ok(environment) = Environment::unpack(&mut Cursor::new(&env_bytes)) else {
+        return false;
+    };
+
+    for cell_low in 0x016A..=0x016E {
+        let cell_id: u32 = 0xA9B4_0000 | cell_low;
+        let Ok(bytes) = cell_dat.get_file(cell_id) else {
+            return false;
+        };
+        let Ok(envcell) = EnvCell::unpack(&mut Cursor::new(&bytes)) else {
+            return false;
+        };
+        let cell_struct = environment
+            .cells
+            .get(&(envcell.cell_structure as u32))
+            .expect("cell_structure present in Environment 840");
+        let cell_origin = Vector3::new(
+            envcell.position.origin.x + LB_X * 192.0,
+            envcell.position.origin.y + LB_Y * 192.0,
+            envcell.position.origin.z,
+        );
+        let cell_orientation = envcell.position.orientation;
+        let resolved = resolve_cell_physics_polygons(&cell_struct.physics_polygons, |vid| {
+            cell_struct
+                .vertex_array
+                .vertices
+                .get(&vid)
+                .map(|sw| Vector3::new(sw.origin.x, sw.origin.y, sw.origin.z))
+        });
+        if let Some(tree) = cell_struct.physics_bsp.clone() {
+            world.scene.insert_cell_physics_bsp(
+                cell_id,
+                CellPhysicsBsp {
+                    tree,
+                    polys: resolved,
+                    origin: cell_origin,
+                    orientation: cell_orientation,
+                    scale: 1.0,
+                },
+            );
+        }
+        if let Some(tree) = cell_struct.cell_bsp.clone() {
+            world.scene.insert_cell_membership(
+                cell_id,
+                CellMembership {
+                    tree,
+                    origin: cell_origin,
+                    orientation: cell_orientation,
+                },
+            );
+        }
+        let mut min = Vector3::new(f32::MAX, f32::MAX, f32::MAX);
+        let mut max = Vector3::new(f32::MIN, f32::MIN, f32::MIN);
+        for sw in cell_struct.vertex_array.vertices.values() {
+            let v = Vector3::new(sw.origin.x, sw.origin.y, sw.origin.z);
+            let w = cell_orientation.rotate_vector(v) + cell_origin;
+            min.x = min.x.min(w.x);
+            min.y = min.y.min(w.y);
+            min.z = min.z.min(w.z);
+            max.x = max.x.max(w.x);
+            max.y = max.y.max(w.y);
+            max.z = max.z.max(w.z);
+        }
+        let pad = 0.1;
+        world.scene.insert_cell_aabb(
+            cell_id,
+            Aabb::new(
+                Vector3::new(min.x - pad, min.y - pad, min.z - pad),
+                Vector3::new(max.x + pad, max.y + pad, max.z + pad),
+            ),
+        );
+        for p in &envcell.portals {
+            let other = 0xA9B4_0000 | p.other_cell_id as u32;
+            if p.other_cell_id != 0 && other != cell_id {
+                world.scene.insert_cell_portal(cell_id, other);
+            }
+        }
+        for &vc in &envcell.visible_cells {
+            let other = 0xA9B4_0000 | vc as u32;
+            if vc != 0 && other != cell_id {
+                world.scene.insert_cell_portal(cell_id, other);
+            }
+        }
+    }
+    true
+}
+
+/// End-to-end HEALTHY arm of the live RUN A/B through the REAL system
+/// integrator (`advance_local_pose_for_manual_drive` → the retail quantum loop
+/// → the faithful transition + gravity + retail-leash chain) against the
+/// real-DAT grocer scene — NO re-implemented physics. Mirrors the live
+/// sequence: the raw arrival lands the capsule embedded near the 0xA9B4016E
+/// vestibule wall at lb-local (81,33,94.355); the arrival-placement latch
+/// de-embeds on the first slice; the player then RUNS north (+y, held forward)
+/// at ~4 m/s across the doorway step into 0xA9B4016A.
+///
+/// `?retailLeash` is armed (live default-ON, `apps/holtburger-web/src/lib.rs`
+/// `parse_retail_leash_flag`). Asserts the run crosses and stays grounded (no
+/// frozen airborne run). The wedge state itself — forward BLOCKED at the step,
+/// pinned airborne over the riser — is reproduced end-to-end by
+/// [`env840_riser_wedge_real_integrator_recovers`] below.
+#[test]
+fn env840_run_seam_wedge_real_integrator() {
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0840);
+    world.player.guid = guid;
+    if !build_env840_scene_into(&mut world) {
+        eprintln!("SKIP env840_run_seam_wedge_real_integrator: base dats unavailable");
+        return;
+    }
+    // Live default: retail-leash lattice armed.
+    world.scene.set_local_retail_leash(true);
+    // Run 4 m/s, walk 1.4, turn 1.5 rad/s (run_rate_scalar 1.0).
+    let _caps = seed_self_movement_capabilities_override(&mut world, 1.0, 1.4, 4.0, 1.5);
+
+    // Raw arrival pose: vestibule 0xA9B4016E, lb-local (81,33,94.355), facing
+    // north (+y; identity rotation → heading π/2 → run velocity (0,+v,0)).
+    let start = WorldPosition {
+        landblock_id: Guid(0xA9B4_016E),
+        coords: Vector3::new(81.0, 33.0, 94.355),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(&mut world, guid, start);
+    let _ = world.set_player_position(start);
+    // The arrival discontinuity latch (what a teleport/force-blip sets live).
+    world.player.pending_arrival_placement = true;
+
+    let mut movement = MovementSystem::new();
+    movement.last_move_was_autonomous = true;
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+
+    let dt = Duration::from_millis(33);
+    let mut grounded_slices = 0;
+    let mut reached_016a = false;
+    let mut frozen_airborne_run = 0;
+    let mut prev = start.coords;
+
+    eprintln!("\n  slice  cell        y        z        air  |Δxy|");
+    for step in 0..90 {
+        movement.advance_local_pose_for_manual_drive(&mut world, dt);
+        let pose = world
+            .local_player_runtime_pose()
+            .expect("runtime pose seeded");
+        let cell = world.scene.current_cell(&pose);
+        let dxy = ((pose.coords.x - prev.x).powi(2) + (pose.coords.y - prev.y).powi(2)).sqrt();
+        prev = pose.coords;
+        let airborne = world.player.is_airborne;
+        if cell == 0xA9B4_016A {
+            reached_016a = true;
+        }
+        if reached_016a && !airborne {
+            grounded_slices += 1;
+        }
+        if reached_016a && airborne && dxy < 0.01 {
+            frozen_airborne_run += 1;
+        } else {
+            frozen_airborne_run = 0;
+        }
+        if step < 14 || step % 10 == 0 {
+            eprintln!(
+                "  {step:>4}  {cell:#010x}  {:.3}  {:.4}  {}   {:.4}",
+                pose.coords.y, pose.coords.z, airborne as u8, dxy,
+            );
+        }
+        if frozen_airborne_run >= 20 {
+            eprintln!("  >>> WEDGE: {frozen_airborne_run} consecutive frozen airborne slices");
+            break;
+        }
+    }
+    let final_pose = world.local_player_runtime_pose().unwrap();
+    eprintln!(
+        "  FINAL cell={:#x} y={:.3} z={:.4} airborne={} grounded_slices={grounded_slices} reached_016a={reached_016a}",
+        world.scene.current_cell(&final_pose), final_pose.coords.y, final_pose.coords.z,
+        world.player.is_airborne,
+    );
+
+    assert!(reached_016a, "run never entered room 0xA9B4016A");
+    assert!(
+        frozen_airborne_run < 20,
+        "RUN WEDGE reproduced: {frozen_airborne_run} consecutive frozen airborne slices"
+    );
+    assert!(
+        grounded_slices >= 3,
+        "mover did not settle grounded in the room (grounded_slices={grounded_slices})"
+    );
+}
+
+/// End-to-end reproduction of the RUN-speed grocer-seam wedge (ticket uhf1nw)
+/// through the REAL system integrator, and of its retail recovery.
+///
+/// The wedge state (live-proven; driver-level forensics in
+/// `holtburger-world/src/spatial/env840_seam_tests.rs::
+/// env840_riser_wedge_stationary_fall_regrounds`): the run crossed the doorway
+/// step, went airborne off the step edge, and — forward blocked (door) — ended
+/// pinned over the step riser ~1.3 cm above the 0xA9B4016A floor: airborne,
+/// planar velocity dead, no contact plane. Every descending slice then repeats
+/// collide → `find_walkable` floor-adjust → Placement re-insert intersects the
+/// riser solid → full contact clear + pose restore (`transitional_insert`
+/// collide block, acclient.c:312897-312941) — grounded stuck false, input
+/// ignored (the soak bots' door-transit freeze).
+///
+/// Retail escapes via the persistent stationary-fall carry: seed
+/// `CPhysicsObj::transition` acclient.c:320104-320115, progression
+/// `validate_transition` acclient.c:312279-312312, resting-floor synthesis at
+/// 2 (acclient.c:312283-312311), velocity-kill + store read-back
+/// `report_collision_end` acclient.c:321862-321918. This test drives the real
+/// `MovementSystem` slice loop (which now threads that carry through
+/// `world.player.frames_stationary_fall`): PRE-FIX the mover hovers airborne
+/// forever with forward held and ignored; POST-FIX it re-grounds in place
+/// within ~10 slices and the held forward input takes effect again (the run
+/// resumes north into the room).
+#[test]
+fn env840_riser_wedge_real_integrator_recovers() {
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0841);
+    world.player.guid = guid;
+    if !build_env840_scene_into(&mut world) {
+        eprintln!("SKIP env840_riser_wedge_real_integrator_recovers: base dats unavailable");
+        return;
+    }
+    world.scene.set_local_retail_leash(true);
+    let _caps = seed_self_movement_capabilities_override(&mut world, 1.0, 1.4, 4.0, 1.5);
+
+    // The pinned wedge pose: over the riser (vestibule side of the step,
+    // cell 0xA9B4016E), 1.35 cm above the room floor, facing north.
+    let start = WorldPosition {
+        landblock_id: Guid(0xA9B4_016E),
+        coords: Vector3::new(81.0, 33.45, 94.0135),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(&mut world, guid, start);
+    let _ = world.set_player_position(start);
+    // Wedge state: airborne, velocity dead, contact + carry cleared.
+    world.player.is_airborne = true;
+    world.player.vertical_velocity = 0.0;
+    world.player.current_planar_velocity = Vector3::zero();
+    world.player.last_contact_plane = None;
+    world.player.frames_stationary_fall = 0;
+
+    let mut movement = MovementSystem::new();
+    movement.last_move_was_autonomous = true;
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+
+    let dt = Duration::from_millis(33);
+    let mut first_grounded_slice: Option<usize> = None;
+    eprintln!("\n  slice  y        z        air  fsf");
+    for step in 0..60 {
+        movement.advance_local_pose_for_manual_drive(&mut world, dt);
+        let pose = world
+            .local_player_runtime_pose()
+            .expect("runtime pose seeded");
+        if !world.player.is_airborne {
+            first_grounded_slice.get_or_insert(step);
+        }
+        if step < 12 || step % 10 == 0 {
+            eprintln!(
+                "  {step:>4}  {:.3}  {:.4}  {}   {}",
+                pose.coords.y,
+                pose.coords.z,
+                world.player.is_airborne as u8,
+                world.player.frames_stationary_fall,
+            );
+        }
+    }
+    let final_pose = world.local_player_runtime_pose().unwrap();
+    eprintln!(
+        "  FINAL y={:.3} z={:.4} airborne={} first_grounded_slice={first_grounded_slice:?}",
+        final_pose.coords.y, final_pose.coords.z, world.player.is_airborne,
+    );
+
+    assert!(
+        first_grounded_slice.is_some_and(|s| s <= 12),
+        "RUN WEDGE reproduced: the real integrator never re-grounded the pinned \
+         airborne mover (first_grounded_slice={first_grounded_slice:?})"
+    );
+    assert!(
+        !world.player.is_airborne,
+        "mover fell back airborne after the stationary-fall re-ground"
+    );
+    // Input restored: the held forward resumes north once grounded.
+    assert!(
+        final_pose.coords.y > start.coords.y + 1.0,
+        "held forward stayed ignored after re-ground: y={:.3}",
+        final_pose.coords.y,
+    );
+}
+
 /// Ungated path: one notify pops exactly ONE 1-anim head node and fires
 /// `MotionDone` with the caller's success value (positional counting —
 /// `acclient.c:329885-329894`); the second node waits for its own notify.
