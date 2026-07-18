@@ -1251,6 +1251,16 @@ pub fn faithful_find_transitional_position(
             scene.exited_envcell_to_outdoor(&pose, input.object.radius)
         {
             pose.landblock_id = holtburger_common::Guid(outdoor_cell);
+        } else {
+            // Indoor→indoor cell transit (2026-07-18): the settled pose above
+            // is pinned to `input.begin`'s cell, and neither the outdoor
+            // rebucket (outdoor-only) nor the entry/exit flips touch a walk
+            // BETWEEN EnvCells of the same dungeon — so the pose's low word
+            // froze at the login cell while x/y streamed (live: 0x01AD across
+            // 60m of soak wandering). Re-derive from geometry like retail's
+            // per-transition `find_cell_list`; `current_cell` falls back to
+            // the unchanged id when no loaded AABB contains the point.
+            pose.landblock_id = holtburger_common::Guid(scene.current_cell(&pose));
         }
     }
 
@@ -2667,6 +2677,55 @@ mod drift {
             "z near approx floor: faithful {} vs approx {}",
             f.pose.coords.z,
             a.pose.coords.z
+        );
+    }
+
+    // ── indoor→indoor cell transit (2026-07-18) ──
+    // A walk whose settled feet land inside a DIFFERENT EnvCell's AABB must
+    // re-derive the pose's low word. Before the marshal-time `current_cell`
+    // re-derive, the outcome pose stayed pinned to `input.begin`'s cell for
+    // every indoor→indoor move — the v6.2 soak read cell 0x01AD across 60m
+    // of dungeon wandering while x/y streamed.
+    #[test]
+    fn indoor_walk_rederives_envcell_low_word() {
+        const NEXT_ID: u32 = 0x1234_0101;
+        let o = cell_origin();
+        let mut polys = HashMap::new();
+        polys.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
+        // One continuous floor, split between two ADJOINING cell AABBs at
+        // x = o.x + 0.5 (no overlap ⇒ the containment scan is deterministic;
+        // the faithful slice settles ~0.65m in, past this boundary).
+        scene.insert_cell_aabb(
+            CELL_ID,
+            Aabb::new(
+                v(o.x - HE, o.y - HE, FLOOR_WZ - LEDGE_DROP - 0.5),
+                v(o.x + 0.5, o.y + HE, FLOOR_WZ + 10.0),
+            ),
+        );
+        scene.insert_cell_aabb(
+            NEXT_ID,
+            Aabb::new(
+                v(o.x + 0.5, o.y - HE, FLOOR_WZ - LEDGE_DROP - 0.5),
+                v(o.x + HE, o.y + HE, FLOOR_WZ + 10.0),
+            ),
+        );
+        for t in floor_tris_world(o.x - HE, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ) {
+            scene.insert_cell_triangle(CELL_ID, t);
+        }
+        let env = DriftEnv { scene };
+        let begin = pose_at(FCX, FCY, FLOOR_WZ);
+        let end = pose_at(FCX + 1.3, FCY, FLOOR_WZ - SINK);
+        let input = input_for(begin, end);
+        let f = faithful_find_transitional_position(&env, &input, true, true);
+        assert!(f.pose.coords.x > begin.coords.x, "walk advanced");
+        assert!(f.pose.is_indoors(), "still indoors");
+        assert_eq!(
+            f.pose.landblock_id,
+            Guid(NEXT_ID),
+            "low word must re-derive to the entered cell (was pinned to begin: {:?})",
+            f.pose.landblock_id
         );
     }
 
