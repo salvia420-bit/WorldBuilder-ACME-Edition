@@ -86,15 +86,28 @@ function resolveNearby(h, ref) {
  * 3 failed (read-clear on >=2). Degrades to "just send" when the mover is
  * unavailable — the server error now reaches the observation either way.
  */
-async function approach(h, guid, ms = 8000) {
-  if (typeof h.PursueObject !== "function" || typeof h.GetPursuitStatus !== "function") return;
-  if (!h.PursueObject(guid, 1.0, 0, true)) return;
+async function approach(h, guid, ms = 12000) {
+  if (typeof h.PursueObject !== "function" || typeof h.GetPursuitStatus !== "function") return "no-mover";
+  if (!h.PursueObject(guid, 1.0, 0, true)) return "no-mover";
+  // The pursuit registers on the NEXT sim tick — status reads 0 (idle) for a
+  // moment after the send. Treating that early 0 as "already close" fired the
+  // Use mid-walk from 33m out (observed live: Jonathan used from spawn-side,
+  // ACE saw out-of-range, no emote). Grace-wait for the pursuit to go active
+  // before trusting idle as completion.
   const t0 = Date.now();
+  let active = false;
   while (Date.now() - t0 < ms) {
     await new Promise((r) => setTimeout(r, 250));
     const st = (h.GetPursuitStatus() ?? 0) & 0xffff;
-    if (st !== 1) return; // 2 arrived / 3 failed / 0 idle (already close)
+    if (st === 2) return "arrived";
+    if (st === 3) return "failed";
+    if (st === 1) { active = true; continue; }
+    // st === 0: before activation it may just not have started yet; after
+    // activation an idle read means the arrived/failed latch was consumed
+    // elsewhere or pursuit ended — treat as done.
+    if (active || Date.now() - t0 > 1500) return "idle";
   }
+  return "timeout";
 }
 
 /** "use_object" — interact with a nearby world object (portal, NPC, door, sign…). */
@@ -116,11 +129,11 @@ export function useObjectAction() {
     if (typeof h?.UseObject !== "function" || typeof h?.NearbyGuids !== "function") return fail("unavailable");
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
-    await approach(h, res.guid);
+    const walk = await approach(h, res.guid);
     if (!h.UseObject(res.guid)) return fail("use request failed to send");
     ctx.track?.(res.guid, res.name);
-    journalNote(ctx, `use_object ${res.name} (${hex(res.guid)}) — walked over and used; confirm result on next check-in`);
-    return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid) } };
+    journalNote(ctx, `use_object ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}, used; confirm result on next check-in`);
+    return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid), walk: walk ?? undefined } };
   });
   return def;
 }
@@ -186,14 +199,14 @@ export function giveItemAction() {
     if (it.error) return fail(it.error);
     const itemGuid = (it.row.guid ?? it.row.itemGuid) >>> 0;
     const qty = a.qty ?? 1;
-    await approach(h, tgt.guid);
+    const walk = await approach(h, tgt.guid);
     if (!h.GiveObject(tgt.guid, itemGuid, qty)) return fail("give request failed to send");
     ctx.track?.(tgt.guid, tgt.name);
     journalNote(
       ctx,
       `give_item ${it.row.name}${qty > 1 ? ` x${qty}` : ""} -> ${tgt.name} (${hex(tgt.guid)}) — server validates; confirm via chat/inventory next check-in`
     );
-    return { type: def.type, ok: true, result: { item: it.row.name, guid: hex(itemGuid), target: tgt.name, targetGuid: hex(tgt.guid), qty } };
+    return { type: def.type, ok: true, result: { item: it.row.name, guid: hex(itemGuid), target: tgt.name, targetGuid: hex(tgt.guid), qty, walk: walk ?? undefined } };
   });
   return def;
 }
