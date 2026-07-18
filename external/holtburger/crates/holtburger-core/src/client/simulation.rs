@@ -265,7 +265,37 @@ impl ClientSimulationSystem {
             let mut next_pose = outcome.pose;
             let current_heading = pose.rotation.to_heading();
             let desired_heading = control.desired_heading.unwrap_or(current_heading);
-            next_pose.rotation = Quaternion::from_heading(desired_heading);
+            // Kinematic turn realization (2026-07-18, soak-9 §3 fix): rotate
+            // at the authored turn omega instead of snapping. The MoveTo
+            // driver's TurnToHeading arrival is an OVERSHOOT test
+            // (`heading_greater`, acclient.c:344715/:345739 — retail snaps
+            // only after the body PASSES the node, :345746), so an instant
+            // snap onto the node NEVER arrives for TurnRight turns (equality
+            // fails the strict compare) and the driver turned forever — the
+            // soak's indoor "walk:no-walk" wedge. Turn-node slices
+            // (zero-delta control) take the FULL omega·dt step, crossing the
+            // node like the retail turn animation; walking slices clamp at
+            // the bearing (retail's aux-turn stops inside its ±20° band —
+            // no arrival test depends on overshoot there). `None` omega
+            // (server-projection reconcile) keeps the instant snap.
+            let realized_heading = match control.turn_omega_rad_s {
+                Some(omega) if omega > 0.0 && desired_heading != current_heading => {
+                    use std::f32::consts::{PI, TAU};
+                    let mut diff = (desired_heading - current_heading).rem_euclid(TAU);
+                    if diff > PI {
+                        diff -= TAU;
+                    }
+                    let step = omega * slice_dt.as_secs_f32();
+                    let translating = control.desired_world_delta.length_squared() > 1e-12;
+                    if translating && diff.abs() <= step {
+                        desired_heading
+                    } else {
+                        current_heading + step.copysign(diff)
+                    }
+                }
+                _ => desired_heading,
+            };
+            next_pose.rotation = Quaternion::from_heading(realized_heading);
             let dt_secs = slice_dt.as_secs_f32().max(1e-6);
             let solved = SolvedBodyKinematics {
                 body_id,

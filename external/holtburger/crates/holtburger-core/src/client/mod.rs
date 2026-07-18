@@ -1065,6 +1065,23 @@ mod tests {
         client
             .world
             .seed_local_player_entity(guid, "Player", player_pose);
+        client.world.set_self_movement_capabilities_override(
+            holtburger_world::state::self_movement::SelfMovementCapabilities {
+                kinematics: holtburger_world::state::self_movement::SelfMovementKinematics {
+                    source:
+                        holtburger_world::state::motion_resolution::PlayerMotionTableSource::DirectProperty {
+                            motion_table_id: 0x0900_0020,
+                        },
+                    motion_table_id: 0x0900_0020,
+                    stance: 0x8000_003D,
+                    base_walk_forward_velocity: Vector3::new(1.0, 0.0, 0.0),
+                    base_run_forward_velocity: Vector3::new(2.0, 0.0, 0.0),
+                    base_turn_left_omega: Vector3::new(0.0, 0.0, -1.5),
+                    base_turn_right_omega: Vector3::new(0.0, 0.0, 1.5),
+                },
+                run_rate_scalar: 1.0,
+            },
+        );
 
         client.movement.enqueue_drive_intent(
             movement_types::PlayerDriveIntent::Autonomous(movement_types::AutonomousDriveIntent {
@@ -1106,7 +1123,13 @@ mod tests {
             local_drive.body_id,
             holtburger_world::SpatialBodyId::LocalPlayer(guid)
         );
-        assert_eq!(local_drive.desired_world_delta, Vector3::new(3.0, 4.0, 0.0));
+        // Scaled by the authored run speed (2.0 × run_rate 1.0) × dt —
+        // the autonomous seam's per-slice pre-scaling.
+        assert_eq!(
+            local_drive.desired_world_delta,
+            Vector3::new(3.0, 4.0, 0.0)
+                * (2.0 * Duration::from_millis(PHYSICS_TICK_MS).as_secs_f32())
+        );
         assert_eq!(local_drive.desired_heading, Some(1.5));
         assert_eq!(
             local_drive.gait,

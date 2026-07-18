@@ -405,6 +405,16 @@ pub struct LocalDriveControl {
     pub body_id: SpatialBodyId,
     pub desired_world_delta: Vector3,
     pub desired_heading: Option<f32>,
+    /// Kinematic turn realization rate toward `desired_heading`, rad/s
+    /// (the authored MotionTable turn omega). `None` = apply the heading
+    /// instantly (the server-projection reconcile arm keeps this shape).
+    /// `Some` = the consumer rotates at this rate per slice; while the
+    /// heading target is a MoveTo TurnToHeading node the step is NOT
+    /// clamped at the target — retail's turn-arrival test is an
+    /// overshoot test (`heading_greater`, acclient.c:344715/:345739) and
+    /// the driver snaps to the node only after the body passes it
+    /// (:345746), so an exact clamp would never arrive.
+    pub turn_omega_rad_s: Option<f32>,
     pub target_hint: Option<WorldPosition>,
     pub gait: LocalDriveGait,
     pub force_grounded: bool,

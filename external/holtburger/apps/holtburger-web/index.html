@@ -3570,6 +3570,47 @@
           cellContainersPopulateInFlight.delete(lbId);
         }
       }
+      // Cell-residency watchdog (2026-07-18, soak-9 door/freeze fix).
+      // Every EnvCell load trigger above rides a SERVER position update
+      // (world_stream/legacy `handlePositionUpdate`), but the indoor
+      // movement pipeline refuses to predict motion until the cell
+      // physics lands (`transition.rs` pre-bake gate) — so a player who
+      // ARRIVES in an interior cell of a not-yet-fetched landblock
+      // (teleport, bot relaunch spawn, LB re-entry after LRU eviction)
+      // freezes, sends no further position updates, and the fetch never
+      // retriggers: a load-trigger deadlock. Retail keys cell residency
+      // off the player's POSE during transit (`LScape::update_block` →
+      // synchronous `CEnvCell` load, acclient.c), not off network
+      // events — this watchdog is that pose-driven trigger. It fires
+      // ONLY when the local pose sits in an interior cell (suffix >=
+      // 0x100) whose landblock has no cell containers yet, so the
+      // ordinary outdoor-entry path keeps sole ownership of cold-LB
+      // fetches (no re-introduction of the s13 double-decode).
+      setInterval(() => {
+        try {
+          const h = window.__sessionHandle;
+          if (!h?.getLocalPlayerPose) return;
+          const p = h.getLocalPlayerPose();
+          if (!p) return;
+          let cellId = 0;
+          try {
+            cellId = p.landblockId >>> 0;
+          } finally {
+            p.free?.();
+          }
+          if ((cellId & 0xffff) < 0x100) return; // outdoors — normal path owns it
+          const lbId = (cellId & 0xffff0000) >>> 0;
+          if (
+            cellContainersPopulatedLbs.has(lbId)
+            || cellContainersPopulateInFlight.has(lbId)
+          ) return;
+          console.log(
+            `[cell-watchdog] indoor cell 0x${cellId.toString(16)} in unfetched LB 0x${lbId.toString(16)} — triggering EnvCell fetch`
+          );
+          ensureCellContainersForLandblock(lbId);
+          window.liveScene3d?.loadEnvCellsForLandblock?.(lbId);
+        } catch (_) {}
+      }, 500);
       async function ensureBuildingAabbsAroundLandblock(centreLb) {
         // Same 3x3 ring as `ensureTerrainAroundLandblock`: the player
         // needs collision in the cells surrounding the spawn / current

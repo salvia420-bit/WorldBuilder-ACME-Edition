@@ -2,7 +2,7 @@ use super::common::{
     AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, HUGE_QUANTUM, MAX_QUANTUM, MAX_VELOCITY, MIN_QUANTUM,
     PHYSICS_ENTRY_EPSILON, PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_GROUND_FRICTION_RETAIL,
     PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC,
-    RETAIL_MAX_QUANTUM, build_autonomous_position, build_jump,
+    RETAIL_MAX_QUANTUM, RUN_TURN_FACTOR, build_autonomous_position, build_jump,
     build_motion_state_raw_motion_state, build_move_to_state, build_raw_state_raw_motion_state,
     calc_friction,
     has_autonomous_position_sync_target, local_omega_for_state, local_velocity_for_state,
@@ -3839,6 +3839,8 @@ impl MovementSystem {
                 body_id,
                 desired_world_delta,
                 desired_heading,
+                // Projection reconcile keeps the instant-heading shape.
+                turn_omega_rad_s: None,
                 target_hint: Some(projection.target_pose),
                 gait: if projection.speed_mps > 1.0 {
                     LocalDriveGait::Run
@@ -3854,10 +3856,34 @@ impl MovementSystem {
             ActiveDriveIntent::Manual(_) => return None,
         };
 
+        // The steer arms (`drive_local_moveto`) store a UNIT direction —
+        // "realized speed is the lane's policy" (spec §7 Q4). This seam is
+        // that policy: scale by the authored MotionTable gait speed × dt
+        // (the same speed source the manual lane's
+        // `interpreted_velocity_for_state` realizes for RunForward /
+        // WalkForward), honoring this function's contract that
+        // `desired_world_delta` is pre-scaled per-slice (handle.rs tick
+        // doc). Unresolvable capabilities freeze the drive exactly like
+        // the manual slice's early-return (`advance_local_pose_for_
+        // manual_drive_slice`).
+        let capabilities = world.resolve_self_movement_capabilities().ok()?;
+        let speed_mps = match intent.gait {
+            crate::client::movement_types::Gait::Run => capabilities.resolved_manual_run_speed(),
+            crate::client::movement_types::Gait::Walk => capabilities.base_walk_forward_speed(),
+        };
+        let turn_omega = {
+            let base = capabilities.base_turn_right_speed_rad_per_sec();
+            match intent.gait {
+                crate::client::movement_types::Gait::Run => base * RUN_TURN_FACTOR,
+                crate::client::movement_types::Gait::Walk => base,
+            }
+        };
+
         Some(LocalDriveControl {
             body_id,
-            desired_world_delta: intent.desired_world_delta,
+            desired_world_delta: intent.desired_world_delta * (speed_mps * dt.as_secs_f32()),
             desired_heading: intent.desired_heading,
+            turn_omega_rad_s: Some(turn_omega),
             target_hint: intent.target_hint,
             gait: match intent.gait {
                 crate::client::movement_types::Gait::Walk => LocalDriveGait::Walk,

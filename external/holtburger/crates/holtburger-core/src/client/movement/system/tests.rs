@@ -177,6 +177,7 @@ async fn enqueue_drive_intent_exposes_autonomous_drive_for_current_tick_only() {
             ..Default::default()
         },
     );
+    seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 2.0, 1.5);
 
     let mut movement = MovementSystem::new();
     let mut session = Session::new_test();
@@ -211,7 +212,12 @@ async fn enqueue_drive_intent_exposes_autonomous_drive_for_current_tick_only() {
         .expect("autonomous drive should be exposed to simulation");
 
     assert_eq!(drive.body_id, SpatialBodyId::LocalPlayer(world.player.guid));
-    assert_eq!(drive.desired_world_delta, Vector3::new(1.0, 2.0, 3.0));
+    // Scaled by the authored run speed (2.0 × run_rate 1.0) × dt.
+    let scale = 2.0 * Duration::from_millis(33).as_secs_f32();
+    assert_eq!(
+        drive.desired_world_delta,
+        Vector3::new(1.0, 2.0, 3.0) * scale
+    );
     assert_eq!(drive.desired_heading, Some(0.75));
     assert_eq!(
         drive.target_hint,
@@ -1290,6 +1296,7 @@ async fn transient_motion_reasserts_autonomous_locomotion_on_next_tick() {
 
     world.player.guid = guid;
     seed_local_player(&mut world, guid, position);
+    seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 2.0, 1.5);
 
     let mut movement = MovementSystem::new();
     let mut session = Session::new_test();
@@ -1324,12 +1331,18 @@ async fn transient_motion_reasserts_autonomous_locomotion_on_next_tick() {
         .await
         .expect("transient motion should replace the locomotion pulse for this tick");
 
+    // The autonomous arm scales the steer's unit direction by the
+    // authored gait speed × dt (run 2.0 m/s × run_rate 1.0 here) and
+    // carries the turn omega (1.5 rad/s × RUN_TURN_FACTOR for Run).
+    let dt = Duration::from_millis(33);
     assert_eq!(
-        movement.current_local_drive_control(&world, Duration::from_millis(33)),
+        movement.current_local_drive_control(&world, dt),
         Some(LocalDriveControl {
             body_id: SpatialBodyId::LocalPlayer(guid),
-            desired_world_delta: autonomous_intent.desired_world_delta,
+            desired_world_delta: autonomous_intent.desired_world_delta
+                * (2.0 * dt.as_secs_f32()),
             desired_heading: autonomous_intent.desired_heading,
+            turn_omega_rad_s: Some(1.5 * 1.5),
             target_hint: autonomous_intent.target_hint,
             gait: holtburger_world::spatial::LocalDriveGait::Run,
             force_grounded: true,
@@ -1438,6 +1451,7 @@ async fn server_controlled_projection_becomes_current_local_drive_control() {
             body_id: SpatialBodyId::LocalPlayer(guid),
             desired_world_delta: Vector3::new(2.0, 0.0, 0.0),
             desired_heading: Some(current_pose.heading_to(&target_pose)),
+            turn_omega_rad_s: None,
             target_hint: Some(target_pose),
             gait: holtburger_world::spatial::LocalDriveGait::Run,
             force_grounded: true,
@@ -5188,6 +5202,7 @@ async fn moveto_driver_walks_then_arrives_with_single_stop_edge() {
     };
     world.player.guid = guid;
     seed_local_player(&mut world, guid, position);
+    seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 2.0, 1.5);
     world
         .entities
         .insert(Entity::new(target_guid, "Drudge".to_string(), target_pos));
@@ -5212,10 +5227,14 @@ async fn moveto_driver_walks_then_arrives_with_single_stop_edge() {
         .current_local_drive_control(&world, Duration::from_millis(16))
         .expect("walk steering must ride the autonomous drive lane");
     assert_eq!(drive.body_id, SpatialBodyId::LocalPlayer(guid));
+    // Forward toward the target, scaled by the authored gait speed × dt
+    // (this directive walks: base walk 1.0 m/s) — the seam's per-slice
+    // pre-scaling.
+    let expected_x = 1.0 * Duration::from_millis(16).as_secs_f32();
     assert!(
-        (drive.desired_world_delta.x - 1.0).abs() < 1e-3
-            && drive.desired_world_delta.y.abs() < 1e-3,
-        "unit-forward toward the target: {:?}",
+        (drive.desired_world_delta.x - expected_x).abs() < 1e-4
+            && drive.desired_world_delta.y.abs() < 1e-4,
+        "speed-scaled forward toward the target: {:?}",
         drive.desired_world_delta
     );
     assert!(!drive.force_grounded);
