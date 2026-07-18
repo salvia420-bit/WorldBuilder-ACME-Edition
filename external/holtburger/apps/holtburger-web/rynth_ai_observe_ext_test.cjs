@@ -233,6 +233,58 @@ function check(name, ok, detail) {
       === JSON.stringify(ex.enrichObservation(bot, base, { now: NOW, state: {} })));
   }
 
+  // ── nearby classification: takeable items are [item], never [monster] ──
+  // ACE defaults every WorldObject's ODF to Attackable, so ground armor
+  // arrives ATTACKABLE (the v6.2 academy "Leather Cap [monster]" trap).
+  {
+    const base = makeBase();
+    const ODF_ATTACKABLE = 0x10;
+    const ents = {
+      0x80004001: { name: "Leather Cap", itemType: 0x2, flags: ODF_ATTACKABLE, x: 62, y: 100, z: 12 }, // Armor
+      0x80004002: { name: "Sparring Golem", itemType: 0x10, flags: ODF_ATTACKABLE, x: 64, y: 100, z: 12 }, // Creature
+      0x80004003: { name: "Jonathan", itemType: 0x10, flags: 0, x: 66, y: 100, z: 12 }, // non-attackable creature
+      0x80004004: { name: "Old Key", itemType: 0x4000, flags: 0, x: 68, y: 100, z: 12 }, // non-attackable item
+      0x80004005: { name: "Mystery", itemType: undefined, flags: ODF_ATTACKABLE, x: 70, y: 100, z: 12 }, // no itemType -> legacy
+    };
+    const host = makeHost({
+      NearbyGuids: () => Object.keys(ents).map(Number),
+      TryGetObjectIntProperty: (g, k) => (k === 1 ? ents[g]?.itemType : undefined),
+      TryGetObjectDescFlags: (g) => ents[g]?.flags ?? null,
+      TryGetObjectPosition: (g) => (ents[g] ? { objCellId: 0xa9b40015, x: ents[g].x, y: ents[g].y, z: ents[g].z } : null),
+      TryGetObjectName: (g) => ents[g]?.name ?? null,
+    });
+    const r = ex.enrichObservation({ host }, base, { now: NOW });
+    const byName = Object.fromEntries((r.data.ext.nearby || []).map((o) => [o.name, o.type]));
+    check("classify: attackable armor -> item", byName["Leather Cap"] === "item", JSON.stringify(byName));
+    check("classify: attackable creature -> monster", byName["Sparring Golem"] === "monster", JSON.stringify(byName));
+    check("classify: non-attackable creature -> npc", byName["Jonathan"] === "npc", JSON.stringify(byName));
+    check("classify: non-attackable item -> item", byName["Old Key"] === "item", JSON.stringify(byName));
+    check("classify: no itemType + attackable -> monster (legacy)", byName["Mystery"] === "monster", JSON.stringify(byName));
+    check("classify: rendered [item] tag", r.text.includes("Leather Cap [item]"), r.text);
+  }
+
+  // ── inventory line: always-on carried-item grounding ───────────────────
+  {
+    const base = makeBase();
+    const inv = [
+      { guid: 0x60000001, name: "Academy Exit Token", stackSize: 1, value: 0, equipMask: 0, wcid: 29335 },
+      { guid: 0x60000002, name: "Pyreal", stackSize: 500, value: 500, equipMask: 0, wcid: 273 },
+      { guid: 0x60000003, name: "Leather Boots", stackSize: 1, value: 20, equipMask: 0x800, wcid: 115 },
+    ];
+    const r = ex.enrichObservation({ host: makeHost({ TryGetPlayerInventory: () => inv }) }, base, { now: NOW });
+    check("inventory: line rendered with count", r.text.includes("inventory(3): "), r.text);
+    check("inventory: zero-value item present (the v6.2 token trap)", r.text.includes("Academy Exit Token"), r.text);
+    check("inventory: stacks + worn split", r.text.includes("Pyreal x500") && r.text.includes("| worn: Leather Boots"), r.text);
+    check("inventory: data.ext present", r.data.ext.inventory && r.data.ext.inventory.count === 3);
+    // Big pack: capped with explicit +N more, never silent.
+    const big = Array.from({ length: 40 }, (_, i) => ({ guid: 0x61000000 + i, name: `Trinket ${i}`, stackSize: 1, value: i, equipMask: 0, wcid: 1000 + i }));
+    const r2 = ex.enrichObservation({ host: makeHost({ TryGetPlayerInventory: () => big }) }, base, { now: NOW, maxChars: 12000 });
+    check("inventory: big pack capped with +N more", r2.text.includes("(+16 more)"), r2.text.slice(r2.text.indexOf("inventory(")));
+    // No inventory surface -> n/a, never throws.
+    const r3 = ex.enrichObservation({ host: makeHost() }, base, { now: NOW });
+    check("inventory: no surface -> n/a", r3.text.includes("inventory: n/a"), r3.text);
+  }
+
   // defaults path (no opts) must not throw
   {
     let ok = true;

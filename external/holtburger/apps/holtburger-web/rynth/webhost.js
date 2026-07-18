@@ -57,6 +57,7 @@ const CAPABILITY_CANDIDATES = {
   CastUntargetedSpell: ["castUntargetedSpell"],
   UseObject: ["useObject"],
   GiveObject: ["giveObject"],
+  TakeObject: ["putItemInContainer"],
   QueryHealth: ["queryHealth"],
   MoveToPosition: ["moveToPosition"],
   PursueObject: ["pursueEntity"],
@@ -69,7 +70,11 @@ const CAPABILITY_CANDIDATES = {
   InvokeChatParser: ["sendChat"],
   GetPursuitStatus: ["pursuitStatus"],
   NoteLocalCastWindow: ["noteLocalCastWindow"],
-  RequestId: ["assessEntity", "identifyObject", "requestId"],
+  // requestAppraisal is the REAL wasm method (IdentifyObject 0x00C8); the
+  // legacy candidates never existed in the d.ts, so RequestId silently
+  // no-opped — loot_loop's appraisal gate degraded to judge-on-timeout
+  // (2026-07-18 verb audit, gap B2).
+  RequestId: ["requestAppraisal", "assessEntity", "identifyObject", "requestId"],
   NearbyEntityGuids: ["nearbyEntityGuids"],
   GetObjectDescFlags: ["objectDescFlags"],
   GetFellowship: ["playerFellowship"],
@@ -572,6 +577,14 @@ export class RynthWebHost {
   /// validates; success/failure arrives as InventoryUpdate / WeenieError.
   GiveObject(targetGuid, itemGuid, amount = 1) {
     return this._act("GiveObject", targetGuid, itemGuid, amount);
+  }
+  /// Pick up a ground item into the player's main pack — retail's
+  /// PutItemInContainer (GameAction 0x0019). NOT UseItem: ACE's Use on plain
+  /// ground clothing/armor has no ActOnUse and does nothing (the v6.3
+  /// armor-quest wall). Server validates range/burden; the result arrives as
+  /// an inventory update.
+  TakeObject(itemGuid) {
+    return this._act("TakeObject", itemGuid, this.GetPlayerId(), 0);
   }
   QueryHealth(guid) {
     return this._act("QueryHealth", guid);

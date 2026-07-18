@@ -257,12 +257,15 @@ const CORPUS = [
       ]);
       check("heard guard met", rs.length === 2 && rs[1].ok === true, JSON.stringify(rs));
     }
-    // if-guard: unknown guard -> explicit error
+    // if-guard: unknown guard -> FAIL-OPEN (action runs; journal warns).
+    // v6.2: "pause if kernel_running" was skipped for a full check-in round
+    // with 8 golems on a 5-HP character — invented guards decorate actions
+    // the model fundamentally wants.
     {
       const bot = makeWorldBot();
       const ext = mkExt(bot);
       const rs = await ext.directorDeps.execute(bot, [{ type: "use_object", object: "Door", if: "lucky" }]);
-      check("unknown guard errors with valid list", rs[0].ok === false && /valid: inventory_gained/.test(rs[0].error), JSON.stringify(rs));
+      check("unknown guard fails open (action runs)", rs.length === 1 && rs[0].ok === true, JSON.stringify(rs));
     }
     // prompt advertises guards
     {

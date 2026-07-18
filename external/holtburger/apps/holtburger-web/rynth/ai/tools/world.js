@@ -137,16 +137,18 @@ async function indoorLegsTo(bot, guid) {
   if (pc === tc) return null; // same room: straight pursuit is proven
   const graph = await indoorGraphFor(bot, pc >>> 16);
   if (!graph) return null;
-  // Cell ids come from pose/entity snapshots whose LOW WORD can freeze while
-  // x/y keep streaming (live-observed: pos cell read 0x01AD across 60m of
-  // v5.9 wandering). Positions are the live truth — derive both endpoint
-  // cells from them (nearestCell is z-banded); the ids are only a fallback
-  // for a degenerate graph.
+  // Endpoint cells: the snapshot ids are now the PRIMARY source — the wasm
+  // pose-cell freeze that forced position-derived cells (v5.9: 0x01AD across
+  // 60m) was root-fixed 2026-07-18 (faithful_bridge indoor→indoor re-derive),
+  // and NPC entity cells were always server-truth. nearestCell is the
+  // FALLBACK only: its nearest-cell-CENTRE heuristic picks the wrong room
+  // near shared walls — v6.3.1 live: route-failed(0/N) on every leg computed
+  // from the NE rooms while the pose cell was correct the whole time.
   const has = (id) => (graph instanceof Map ? graph.has(id) : id in graph);
   const from =
-    nearestCell(graph, worldX(pc, pose.x), worldY(pc, pose.y), pose.z) || (has(pc) ? pc : 0);
+    (has(pc) ? pc : 0) || nearestCell(graph, worldX(pc, pose.x), worldY(pc, pose.y), pose.z);
   const to =
-    nearestCell(graph, worldX(tc, tp.x), worldY(tc, tp.y), tp.z) || (has(tc) ? tc : 0);
+    (has(tc) ? tc : 0) || nearestCell(graph, worldX(tc, tp.x), worldY(tc, tp.y), tp.z);
   if (!from || !to || from === to) return null;
   const path = findPath(graph, from, to);
   if (!path || path.length < 2) return null;
@@ -258,7 +260,7 @@ export function useObjectAction() {
   const def = {
     type: "use_object",
     params: { object: "name (substring) or guid of a nearby object from your 'nearby' perception line" },
-    desc: "walk up to and use/interact with a nearby world object: enter a portal, talk to or open an NPC, open a door or chest, pull a lever, read a sign. This is how you move between areas and start interactions.",
+    desc: "walk up to and use/interact with a nearby world object: enter a portal, talk to or open an NPC, open a door or chest, pull a lever, read a sign. To pick up a ground [item], use take_item instead — 'using' a plain ground item does nothing. Portals teleport you on use; DOORS only swing open — using a door never moves you through it: after opening, goto_object or use_object your actual target in the room beyond to walk through the doorway. This is how you move between areas and start interactions.",
     validate(a) {
       const b = baseValidate("use_object")(a);
       if (!b.ok) return b;
@@ -276,6 +278,34 @@ export function useObjectAction() {
     if (!h.UseObject(res.guid)) return fail("use request failed to send");
     ctx.track?.(res.guid, res.name);
     journalNote(ctx, `use_object ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}, used; confirm result on next check-in`);
+    return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid), walk: walk ?? undefined } };
+  });
+  return def;
+}
+
+/** "take_item" — pick a ground [item] up into the pack (PutItemInContainer). */
+export function takeItemAction() {
+  const def = {
+    type: "take_item",
+    params: { object: "name (substring) or guid of a ground [item] from your 'nearby' perception line" },
+    desc: "walk up to a ground [item] (armor, weapon, key, quest item) and pick it up into your inventory. This is the ONLY way to take loose world items — use_object does not pick things up. Server validates range/burden; confirm via your inventory line next check-in.",
+    validate(a) {
+      const b = baseValidate("take_item")(a);
+      if (!b.ok) return b;
+      if ((typeof a.object !== "string" || !a.object.trim()) && !parseGuid(a.object))
+        return { ok: false, error: "object must be a name or guid" };
+      return { ok: true };
+    },
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const h = bot?.host;
+    if (typeof h?.TakeObject !== "function" || typeof h?.NearbyGuids !== "function") return fail("unavailable");
+    const res = resolveNearby(h, a.object);
+    if (res.error) return fail(res.error);
+    const walk = await approach(bot, res.guid);
+    if (!h.TakeObject(res.guid)) return fail("pickup request failed to send");
+    ctx.track?.(res.guid, res.name);
+    journalNote(ctx, `take_item ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}, pickup sent; confirm via inventory next check-in`);
     return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid), walk: walk ?? undefined } };
   });
   return def;
@@ -359,7 +389,7 @@ export function giveItemAction() {
 }
 
 export function worldActions() {
-  return [useObjectAction(), giveItemAction(), gotoObjectAction()];
+  return [useObjectAction(), takeItemAction(), giveItemAction(), gotoObjectAction()];
 }
 
 /** Integrator seam, registerEconomy-shaped. */

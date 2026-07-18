@@ -139,6 +139,20 @@ export async function executeAction(bot, a, { log } = {}) {
           return fail(
             `lb 0x${lbNum.toString(16).toUpperCase()} looks like a bare landblock word — send the full u32 objCellId from the pos line (e.g. 0xA9B40015)`,
           );
+        // The nav sidecar only knows outdoor terrain — indoor (EnvCell) routes
+        // 400 (v6.2 spam). Refuse with the indoor alternative instead of
+        // letting the sidecar error bubble up as an opaque routing failure.
+        if (a.type === "goto_lb" && ((lbNum >>> 0) & 0xffff) >= 0x100)
+          return fail(
+            `0x${lbNum.toString(16).toUpperCase()} is an indoor dungeon cell — outdoor goto cannot route into dungeons; use goto_object/use_object on something in your nearby list instead`,
+          );
+        try {
+          const p = bot?.host?.TryGetPlayerPose?.();
+          if (p && ((p.objCellId >>> 0) & 0xffff) >= 0x100)
+            return fail(
+              "you are indoors (dungeon cell) — outdoor goto cannot route from here; use goto_object/use_object on nearby objects to move room-to-room, and exit via a door or portal first",
+            );
+        } catch {}
         const to = a.type === "goto" ? { ns: a.ns, ew: a.ew } : { lb: lbNum, x: a.x, y: a.y, z: a.z };
         // bot.goto resolves {ok, state, legsWalked, replans} or {ok:false,
         // error} (bot.js:141-148); refusals like "goto already active"

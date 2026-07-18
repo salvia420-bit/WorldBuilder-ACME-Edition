@@ -1,0 +1,32 @@
+[
+  {
+    "title": "Academy Exit Token",
+    "aliases": ["exit token", "skip training"],
+    "text": "Value 0 gem. CHECK YOUR INVENTORY FIRST — new characters often already carry one from creation. If not, using (speaking to) Jonathan in the Training Academy hands you one. To exit early, GIVE the token to Jonathan: he teleports you to Holtburg (cell 0xA9B40019), grants a starter kit and 11,000 XP, and stamps the ExitAcademy quest. Beware: you cannot return to the academy. [Grounded 2026-07-18: ACE world DB + Jonathan 29317/29324/29325/29326 emote tables.]"
+  },
+  {
+    "title": "Academy Token",
+    "aliases": ["training token", "sparring golem token"],
+    "text": "Different from the Academy Exit Token. Dropped by Sparring Golems in the Training Area rooms deeper in the academy (cells 0x023A-0x0299 of landblock 0x8602). Give it to the Training Master to complete training the normal way. [Grounded 2026-07-18: ACE world DB landblock instances.]"
+  },
+  {
+    "title": "Jonathan (Training Academy)",
+    "aliases": ["academy Jonathan", "academy exit guard"],
+    "text": "The academy exit guard NPC (weenie academyguardexitholtburg), found in the armor room one door north of the entrance hub (cell 0x01B0 of the academy landblock). Using him gives you an Academy Exit Token if you lack one; GIVING him the token exits the academy: teleport to Holtburg, starter kit, +11,000 XP, ExitAcademy quest stamp. NOT the level-180 Jonathan of Eldrytch Web Stronghold that wiki lookups return. [Grounded 2026-07-18: ACE world DB + emote tables.]"
+  },
+  {
+    "title": "Training Academy armor pickups (Leather Cap, Gauntlets, Leggings)",
+    "aliases": ["Leather Cap", "Leather Gauntlets", "Leather Leggings", "Samuel armor task"],
+    "text": "Samuel's collection task items are REAL armor lying on the floor as ground items, NOT monsters (older nearby-lists mislabeled them [monster]). Leather Gauntlets: Jonathan's room, cell 0x01B0. Leather Cap + Leather Leggings: the orders-sign room, cell 0x01B6, respawned every ~10s by an item generator. use_object on them picks them up into your inventory. [Grounded 2026-07-18: ACE world DB landblock 0x8602 instances 13239/13240/13241, itemType Armor.]"
+  },
+  {
+    "title": "Training Area door (Training Academy)",
+    "aliases": ["Training Area", "academy practice door"],
+    "text": "The 'Training Area' object at the entrance hub (cell 0x01B2) is a plain DOOR (weenie 29329), not a portal: using it only swings it open and never moves you. To proceed, goto_object or use_object a target BEYOND it — the Training Master and the first Sparring Golems are at cell 0x023A, with more golem rooms at 0x026C-0x0299. [Grounded 2026-07-18: ACE world DB.]"
+  },
+  {
+    "title": "Exit to Holtburg (Training Academy portal)",
+    "aliases": ["academy exit portal", "Holtburg exit"],
+    "text": "A portal named 'Exit to Holtburg' (weenie 29338) sits deep in the academy at cell 0x0169, past the Olthoi tunnel section with a Life Stone nearby (cell 0x0134) — the normal exit after completing training. The FAST exit is giving your Academy Exit Token to Jonathan near the entrance. Other in-academy portals: Central Courtyard (cell 0x0273), Outer Courtyard (cell 0x0331). [Grounded 2026-07-18: ACE world DB landblock 0x8602.]"
+  }
+]

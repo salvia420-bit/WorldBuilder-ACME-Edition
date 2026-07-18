@@ -34,6 +34,7 @@ function makeHost() {
     NearbyGuids: () => Object.keys(NEARBY).map((k) => Number(k)),
     TryGetObjectName: (g) => NEARBY[g] ?? null,
     UseObject: (g) => { calls.push(["use", g]); return true; },
+    TakeObject: (g) => { calls.push(["take", g]); return true; },
     GiveObject: (t, i, q) => { calls.push(["give", t, i, q]); return true; },
     PursueObject: (g, r, _h, run) => { calls.push(["pursue", g, r, run]); return true; },
     TryGetPlayerInventory: () => INVENTORY,
@@ -47,8 +48,8 @@ function makeHost() {
 
   const defs = worldActions();
   const byType = Object.fromEntries(defs.map((d) => [d.type, d]));
-  check("three defs (use_object, give_item, goto_object)",
-    Object.keys(byType).length === 3 && byType.use_object && byType.give_item && byType.goto_object);
+  check("four defs (use_object, take_item, give_item, goto_object)",
+    Object.keys(byType).length === 4 && byType.use_object && byType.take_item && byType.give_item && byType.goto_object);
 
   // use by exact name -> portal
   {
@@ -83,6 +84,21 @@ function makeHost() {
   {
     const r = await byType.use_object.apply({ host: {} }, { type: "use_object", object: "portal" }, { journal: makeJournal() });
     check("use_object hostless -> ok:false", !r.ok && /unavailable/.test(r.error), r.error);
+  }
+  // take_item: pickup by name -> TakeObject, not UseObject
+  {
+    const journal = makeJournal(); const host = makeHost(); const bot = { host };
+    const r = await byType.take_item.apply(bot, { type: "take_item", object: "Training Chest" }, { journal });
+    check("take_item sends TakeObject", r.ok && host.calls.some((c) => c[0] === "take" && c[1] === 0x5003), JSON.stringify(r));
+    check("take_item never UseObject", !host.calls.some((c) => c[0] === "use"));
+    check("take_item journaled", journal.entries.some((e) => /take_item Training Chest/.test(e.text)));
+  }
+  // take_item: unknown object fails; hostless degrades
+  {
+    const r = await byType.take_item.apply({ host: makeHost() }, { type: "take_item", object: "dragon" }, { journal: makeJournal() });
+    check("take_item no match fails", !r.ok && /no nearby object/.test(r.error), r.error);
+    const r2 = await byType.take_item.apply({ host: {} }, { type: "take_item", object: "chest" }, { journal: makeJournal() });
+    check("take_item hostless -> ok:false", !r2.ok && /unavailable/.test(r2.error), r2.error);
   }
   // give_item: token to NPC by name + guid target
   {
@@ -267,6 +283,19 @@ function makeHost() {
     const bot = makeRouterBot(host);
     const r = await byType.give_item.apply(bot, { type: "give_item", item: "token", target: "Blacksmith" }, { journal: makeJournal() });
     check("give_item routes cross-room", r.ok && bot.router.followed?.length === 2 && String(r.result?.walk).startsWith("routed(2)+"), JSON.stringify(r.result));
+  }
+  // pose cell WINS over nearest-centre (v6.3.1 route-failed(0/N) regression):
+  // the body stands in cell A hard against the B-shared wall — nearer B's
+  // CENTRE than A's. nearestCell-first resolved from=B(=to) -> no route ->
+  // out-of-range Use. Id-first must route the 2 legs from A.
+  {
+    const host = makeIndoorHost();
+    host.TryGetPlayerPose = () => ({ objCellId: 0x860201a0, x: 59, y: 50, z: 0 });
+    const bot = makeRouterBot(host);
+    const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    check("pose cell beats nearest-centre for the from-cell",
+      r.ok && bot.router.followed?.length === 2 && String(r.result?.walk).startsWith("routed(2)+"),
+      JSON.stringify(r.result));
   }
   // no router on the bot: unchanged straight-pursuit behavior.
   {

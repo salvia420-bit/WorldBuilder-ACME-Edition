@@ -69,8 +69,16 @@ const PLAYTESTER_DISCIPLINE = [
  * contract).
  */
 export class FetchKnowledgeProvider {
-  constructor({ url, urls } = {}) {
+  constructor({ url, urls, overlayUrls } = {}) {
     this.urls = (Array.isArray(urls) ? urls : [url]).filter((u) => typeof u === "string" && u);
+    // Grounded overlay corpora (knowledge.grounded.json): world-DB-verified
+    // entries that MERGE over the wiki bake and WIN on a same-title collision
+    // — acpedia text is retail-era prose and sometimes names the wrong NPC
+    // entirely (its "Jonathan" is the level-180 Eldrytch Web one, not the
+    // academy exit guard). Overlay fetch failures degrade to base-only.
+    this.overlayUrls = (Array.isArray(overlayUrls) ? overlayUrls : []).filter(
+      (u) => typeof u === "string" && u,
+    );
     this._delegate = null;
     this._loading = null;
   }
@@ -79,18 +87,36 @@ export class FetchKnowledgeProvider {
     if (this._delegate) return this._delegate;
     if (!this._loading) {
       this._loading = (async () => {
-        for (const u of this.urls) {
+        const fetchJson = async (u) => {
           try {
             const res = await fetch(u);
-            if (!res || !res.ok) continue;
+            if (!res || !res.ok) return null;
             const entries = await res.json();
-            if (Array.isArray(entries) && entries.length) {
-              this._delegate = new FileKnowledgeProvider({ entries });
-              return this._delegate;
-            }
-          } catch { /* try the next URL */ }
+            return Array.isArray(entries) && entries.length ? entries : null;
+          } catch {
+            return null;
+          }
+        };
+        let base = null;
+        for (const u of this.urls) {
+          base = await fetchJson(u);
+          if (base) break;
         }
-        this._delegate = new FileKnowledgeProvider({ entries: [] });
+        let entries = base ?? [];
+        for (const u of this.overlayUrls) {
+          const overlay = await fetchJson(u);
+          if (!overlay) continue;
+          const overlayTitles = new Set(
+            overlay.map((e) => (typeof e?.title === "string" ? e.title.trim().toLowerCase() : "")),
+          );
+          entries = [
+            ...overlay,
+            ...entries.filter(
+              (e) => !overlayTitles.has(typeof e?.title === "string" ? e.title.trim().toLowerCase() : ""),
+            ),
+          ];
+        }
+        this._delegate = new FileKnowledgeProvider({ entries });
         return this._delegate;
       })();
     }
@@ -161,6 +187,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
             // Real corpus first (built from the acpedia wikidump, gitignored
             // like other baked data), sample as the fresh-clone fallback.
             urls: [`${base}/ai/tools/knowledge.acpedia.json`, `${base}/ai/tools/knowledge.sample.json`],
+            overlayUrls: [`${base}/ai/tools/knowledge.grounded.json`],
           })
         : null;
     knowledge = new KnowledgeBase({ provider });
@@ -545,7 +572,11 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
         const t0 = Date.now();
         for (;;) {
           const met = guardMet(cond, snap);
-          if (met === null) return { met: false, error: `unknown if-guard "${cond}" — valid: inventory_gained, moved, heard:<text>` };
+          // Unknown guard -> FAIL-OPEN: run the action, warn in the result.
+          // An invented guard ("kernel_running", v6.2) almost always decorates
+          // an action the model fundamentally wants; skipping it cost a whole
+          // check-in round with 8 golems on a 5-HP character.
+          if (met === null) return { met: true, warn: `ran despite unknown if-guard "${cond}" — valid: inventory_gained, moved, heard:<text>` };
           if (met) return { met: true };
           if (Date.now() - t0 >= (Number.isFinite(cfg.guardWaitMs) ? cfg.guardWaitMs : 3000)) return { met: false };
           await new Promise((r) => setTimeout(r, 250));
@@ -554,12 +585,15 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
       let prevSnap = guardSnap();
       for (const a of kept) {
         const cond = typeof a?.if === "string" ? a.if.trim() : "";
+        let guardWarn = null;
         if (cond) {
           const g = await waitGuard(cond, prevSnap);
           if (!g.met) {
-            results.push({ type: a.type, ok: false, error: g.error ?? `skipped: if "${cond}" unmet after prior actions` });
+            results.push({ type: a.type, ok: false, error: `skipped: if "${cond}" unmet after prior actions` });
             continue;
           }
+          guardWarn = g.warn ?? null;
+          if (guardWarn) journalNote(`if-guard: ${guardWarn}`);
         }
         prevSnap = guardSnap();
         recordAct(b, a); // pose BEFORE the action runs — loop detector baseline
@@ -581,7 +615,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   const persona = renderPersonaPreamble(cfg.persona);
   const withPersona = persona ? `${persona}\n\n${basePrompt}` : basePrompt;
   const GUARDS_NOTE =
-    'Any action may add "if": "inventory_gained" | "moved" | "heard:<text>" — checked mid-plan against what the PREVIOUS actions actually changed, so contingent chains fit in ONE plan (e.g. use an NPC, then give_item with "if":"inventory_gained"). Unmet guard = that action is skipped and the result line says so.';
+    'Any action may add "if": "inventory_gained" | "moved" | "heard:<text>" — checked mid-plan against what the PREVIOUS actions actually changed, so contingent chains fit in ONE plan (e.g. use an NPC, then give_item with "if":"inventory_gained"). Unmet guard = that action is skipped and the result line says so. Any OTHER guard name is not evaluated: the action runs unconditionally and a journal warning notes the invalid guard.';
   const withCatalog = extCatalog ? `${withPersona}\n\nEXTRA ACTIONS\n${extCatalog}\n\n${GUARDS_NOTE}` : withPersona;
   const withMemory = memory ? `${withCatalog}\n\n${MEMORY_DISCIPLINE}` : withCatalog;
   const systemPrompt = wbt ? `${withMemory}\n\n${PLAYTESTER_DISCIPLINE}` : withMemory;

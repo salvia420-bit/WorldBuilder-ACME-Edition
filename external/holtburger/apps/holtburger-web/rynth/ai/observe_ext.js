@@ -59,15 +59,20 @@ function enrich(bot, base, { now = Date.now(), maxChars = 6000, state = null, tr
   const portals = nearbyPortals(bot);
   const advancement = probeAdvancement(bot);
   const nearby = probeNearbyObjects(bot);
+  const inventory = probeInventory(bot);
   const focus = suggestFocus(d, trend);
-  const ext = { trend, burden, portals, focus, advancement, nearby };
+  const ext = { trend, burden, portals, focus, advancement, nearby, inventory };
 
   // Importance order: dropping from the END under maxChars sheds portals
-  // first and the focus/nearby/advancement lines last (perception + focus
-  // are the most decision-critical, so they survive truncation).
+  // first and the focus/nearby/inventory lines last (perception + what you
+  // are carrying are the most decision-critical, so they survive truncation).
+  // inventory is ALWAYS in the context: v6.2 spent 24 min asserting "no token
+  // in inventory" while carrying the Academy Exit Token — beliefs about
+  // carried items must be grounded without needing an explicit action.
   const lines = [
     `focus: ${focus}`,
     nearbyLine(nearby),
+    inventoryLine(inventory),
     advancementLine(advancement),
     trendLine(trend),
     burdenLine(burden),
@@ -189,6 +194,34 @@ function advancementLine(a) {
   return `advancement: ${parts.join(" · ")}`;
 }
 
+// ── inventory (always-on carried-item grounding) ───────────────────────
+// Compact full inventory in EVERY check-in. Names only (give_item/equip_item
+// resolve by name substring); worn items are split out; big packs cap at
+// INVENTORY_LINE_MAX with an explicit "+N more" (no silent truncation).
+const INVENTORY_LINE_MAX = 24;
+function probeInventory(bot) {
+  const h = bot?.host;
+  if (!h || typeof h.TryGetPlayerInventory !== "function") return null;
+  let inv = null;
+  try { inv = h.TryGetPlayerInventory(); } catch { return null; }
+  if (!Array.isArray(inv) || !inv.length) return null;
+  const fmt = (i) => `${i.name}${i.stackSize > 1 ? ` x${i.stackSize}` : ""}`;
+  return {
+    count: inv.length,
+    worn: inv.filter((i) => i.equipMask !== 0).map(fmt),
+    pack: inv.filter((i) => i.equipMask === 0).map(fmt),
+  };
+}
+function inventoryLine(inv) {
+  if (!inv) return `inventory: ${NA}`;
+  const shown = inv.pack.slice(0, INVENTORY_LINE_MAX);
+  const more = inv.pack.length - shown.length;
+  return (
+    `inventory(${inv.count}): ${shown.join("; ") || "empty"}${more > 0 ? ` (+${more} more)` : ""}` +
+    ` | worn: ${inv.worn.join("; ") || "nothing"}`
+  );
+}
+
 // ── nearby objects (general perception — "look around the room") ────────
 // Surfaces ALL named nearby objects/NPCs (not just attackable threats): the
 // portal you can enter, the NPCs you can talk to, doors, chests, signs. This
@@ -206,7 +239,13 @@ const ODF = {
 // Decode the flags into one salient category the LLM can act on. null flags =
 // not yet streamed -> "?" (do NOT mislabel as monster: the old ObjectIsAttackable
 // fail-open tagged every un-streamed sign/door as [creature]).
-function classifyDesc(flags) {
+// itemType (PropertyInt 1, hydrated at spawn from PublicWeenieDesc) is the
+// ground truth for creature-vs-takeable-item: ACE defaults EVERY WorldObject's
+// ODF to Attackable (WorldObject.cs SetEphemeralValues), so ground armor
+// arrives with the ATTACKABLE bit and used to read as [monster] (the v6.2
+// academy "Leather Cap monster" trap).
+const ITEM_TYPE_CREATURE = 0x10;
+function classifyDesc(flags, itemType = null) {
   if (flags == null) return "?";
   // Specific object bits win over the generic ATTACKABLE bit — many world
   // objects (tutorial signs, food, some items) carry ATTACKABLE too, but are
@@ -220,6 +259,8 @@ function classifyDesc(flags) {
   if (flags & ODF.DOOR) return "door";
   if (flags & ODF.FOOD) return "food";
   if (flags & ODF.BOOK) return "sign"; // readable plaque/book (INSCRIBABLE alone is unreliable — armor is inscribable)
+  if (itemType != null && itemType !== 0 && !(itemType & ITEM_TYPE_CREATURE))
+    return "item"; // takeable world item (armor/weapon/key/…): use_object picks it up
   if (flags & ODF.ATTACKABLE) return "monster";
   return "npc"; // named, non-attackable, none of the above -> a person to talk to
 }
@@ -240,7 +281,9 @@ function probeNearbyObjects(bot) {
     if (!name) continue; // skip unnamed clutter
     let flags = null;
     try { flags = typeof h.TryGetObjectDescFlags === "function" ? h.TryGetObjectDescFlags(g) : null; } catch {}
-    const type = classifyDesc(flags);
+    let itemType = null; // PropertyInt 1, spawn-hydrated (entity.rs apply_description)
+    try { itemType = typeof h.TryGetObjectIntProperty === "function" ? fin(h.TryGetObjectIntProperty(g, 1)) : null; } catch {}
+    const type = classifyDesc(flags, itemType);
     let dist = null;
     let brg = null;
     try {
