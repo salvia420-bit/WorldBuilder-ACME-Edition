@@ -23,6 +23,7 @@ import {
 const JOURNAL_CLIP = 800;
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + "…" : s);
 const hex = (g) => `0x${(g >>> 0).toString(16).toUpperCase()}`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function journalNote(ctx, text) {
   try {
@@ -158,12 +159,76 @@ async function indoorLegsTo(bot, guid) {
   return legs.length ? legs : null;
 }
 
+/** One router.follow pass over `legs`. -> { tag, walked, retryable } */
+async function followLegs(router, legs) {
+  router.follow(legs);
+  const deadline = Date.now() + Math.min(90_000, 8_000 + legs.length * 15_000);
+  while (Date.now() < deadline && !router.done && router.state !== "IDLE") {
+    await sleep(300);
+  }
+  const st = router.status || {};
+  const walked = Number.isFinite(st.walked) ? st.walked : 0;
+  if (router.state === "IDLE")
+    return { tag: `route-cancelled(${st.walked ?? "?"}/${legs.length})`, walked, retryable: false };
+  if (!router.done) {
+    try {
+      router.cancel();
+    } catch {}
+    return { tag: `route-timeout(${st.walked ?? "?"}/${legs.length})`, walked, retryable: true };
+  }
+  return st.state === "DONE"
+    ? { tag: `routed(${legs.length})`, walked: legs.length, retryable: false }
+    : { tag: `route-failed(${st.walked ?? "?"}/${legs.length})`, walked, retryable: true };
+}
+
+// ── closed-door mid-route retry (handoff-6 §3.3 / handoff-5 §3.3) ───────────
+// A door standing CLOSED on a route leg stalls the follow against its leaf —
+// the leg times out / fails with the doorway metres away. ACE doors flip
+// PhysicsState.Ethereal (0x4) when OPEN (Door.Open — passable) and clear it
+// when closed, so "closed door" is detectable client-side. On a retryable
+// follow outcome, open the nearest closed door within reach and re-follow the
+// REMAINING legs once. One retry only; a still-blocked route surfaces the
+// original tag shape for the journal.
+const ODF_DOOR = 0x1000; // ObjectDescriptionFlag.Door (observe_ext.js ODF map)
+const PHYS_ETHEREAL = 0x4; // PhysicsState.Ethereal — set while a door stands open
+const DOOR_RETRY_RANGE_M = 10;
+
+function nearestClosedDoor(bot) {
+  const h = bot?.host;
+  if (typeof h?.NearbyGuids !== "function" || typeof h?.TryGetObjectDescFlags !== "function") return null;
+  const pose = h.TryGetPlayerPose?.();
+  if (!pose) return null;
+  const px = worldX(pose.objCellId >>> 0, pose.x);
+  const py = worldY(pose.objCellId >>> 0, pose.y);
+  let best = null;
+  for (const g of h.NearbyGuids() ?? []) {
+    try {
+      const flags = h.TryGetObjectDescFlags(g);
+      if (flags == null || !(flags & ODF_DOOR)) continue;
+      const st = h.TryGetObjectState?.(g) ?? 0;
+      if (st & PHYS_ETHEREAL) continue; // already open — using it would CLOSE it
+      const p = h.TryGetObjectPosition?.(g);
+      if (!p) continue;
+      const d = Math.hypot(
+        worldX(p.objCellId >>> 0, p.x) - px,
+        worldY(p.objCellId >>> 0, p.y) - py,
+        (p.z || 0) - (pose.z || 0)
+      );
+      if (d <= DOOR_RETRY_RANGE_M && (!best || d < best.d))
+        best = { guid: g >>> 0, name: h.TryGetObjectName?.(g) || "Door", d };
+    } catch {}
+  }
+  return best;
+}
+
 /**
  * Walk `legs` via bot.router (the proven leg executor: per-leg watchdog,
  * re-issue, seam/portal handling), kernel paused like bot.goto() does so the
  * grind loops can't fight the walk. Resolves to a walk-tag fragment:
- * routed(N) | route-failed(w/N) | route-timeout(w/N) | null (router absent or
- * owned by a goto — caller falls through to straight pursuit).
+ * routed(N) | route-failed(w/N) | route-timeout(w/N) — optionally with a
+ * `+door(Name)+<retag>` middle when the closed-door retry engaged — or null
+ * (router absent or owned by a goto; caller falls through to straight
+ * pursuit).
  */
 async function walkRoute(bot, legs) {
   const router = bot?.router;
@@ -175,20 +240,19 @@ async function walkRoute(bot, legs) {
     if (wasRunning) kernel.stop();
   } catch {}
   try {
-    router.follow(legs);
-    const deadline = Date.now() + Math.min(90_000, 8_000 + legs.length * 15_000);
-    while (Date.now() < deadline && !router.done && router.state !== "IDLE") {
-      await new Promise((r) => setTimeout(r, 300));
+    const first = await followLegs(router, legs);
+    if (!first.retryable) return first.tag;
+    const door = nearestClosedDoor(bot);
+    if (!door || typeof bot?.host?.UseObject !== "function") return first.tag;
+    try {
+      bot.host.UseObject(door.guid);
+    } catch {
+      return first.tag;
     }
-    if (router.state === "IDLE") return `route-cancelled(${(router.status || {}).walked ?? "?"}/${legs.length})`;
-    const st = router.status || {};
-    if (!router.done) {
-      try {
-        router.cancel();
-      } catch {}
-      return `route-timeout(${st.walked ?? "?"}/${legs.length})`;
-    }
-    return st.state === "DONE" ? `routed(${legs.length})` : `route-failed(${st.walked ?? "?"}/${legs.length})`;
+    await sleep(1500); // door swing + physics flip before re-walking
+    const rest = legs.slice(Math.min(Math.max(first.walked, 0), legs.length - 1));
+    const second = await followLegs(router, rest);
+    return `${first.tag}+door(${door.name})+${second.tag}`;
   } catch {
     return "route-error";
   } finally {
@@ -283,12 +347,15 @@ export function useObjectAction() {
   return def;
 }
 
-/** "take_item" — pick a ground [item] up into the pack (PutItemInContainer). */
-export function takeItemAction() {
+/** "take_item" — pick a ground [item] OR an opened-container item into the
+ * pack (PutItemInContainer both ways). `state.lastContainer` (set by
+ * open_container) extends resolution to container contents — verb-audit gap 3:
+ * the primitives existed but the LLM had no way to loot a SPECIFIC item. */
+export function takeItemAction(state = {}) {
   const def = {
     type: "take_item",
-    params: { object: "name (substring) or guid of a ground [item] from your 'nearby' perception line" },
-    desc: "walk up to a ground [item] (armor, weapon, key, quest item) and pick it up into your inventory. This is the ONLY way to take loose world items — use_object does not pick things up. Server validates range/burden; confirm via your inventory line next check-in.",
+    params: { object: "name (substring) or guid of a ground [item] from 'nearby', or an item listed by open_container" },
+    desc: "walk up to a ground [item] (armor, weapon, key, quest item) and pick it up into your inventory — or take a specific item OUT of the container you last opened with open_container. This is the ONLY way to take loose world items — use_object does not pick things up. Server validates range/burden; confirm via your inventory line next check-in.",
     validate(a) {
       const b = baseValidate("take_item")(a);
       if (!b.ok) return b;
@@ -300,13 +367,258 @@ export function takeItemAction() {
   def.apply = makeApply(def, async (bot, a, ctx, fail) => {
     const h = bot?.host;
     if (typeof h?.TakeObject !== "function" || typeof h?.NearbyGuids !== "function") return fail("unavailable");
+    let res = resolveNearby(h, a.object);
+    let fromContainer = null;
+    if (res.error && Array.isArray(state.lastContainer?.contents) && state.lastContainer.contents.length) {
+      const it = resolveItem(state.lastContainer.contents, { item: a.object });
+      if (!it.error) {
+        res = { guid: it.row.guid >>> 0, name: it.row.name };
+        fromContainer = state.lastContainer.name;
+      }
+    }
+    if (res.error) return fail(res.error);
+    // Container loot happens at the already-opened container — no walk needed;
+    // ground pickups still close the distance first.
+    const walk = fromContainer ? "container" : await approach(bot, res.guid);
+    if (!h.TakeObject(res.guid)) return fail("pickup request failed to send");
+    ctx.track?.(res.guid, res.name);
+    journalNote(
+      ctx,
+      `take_item ${res.name} (${hex(res.guid)})${fromContainer ? ` from ${fromContainer}` : ""} — walk:${walk ?? "n/a"}, pickup sent; confirm via inventory next check-in`
+    );
+    return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid), walk: walk ?? undefined, ...(fromContainer ? { from: fromContainer } : {}) } };
+  });
+  return def;
+}
+
+/** "open_container" — open a chest/corpse and read its contents (gap 3). */
+export function openContainerAction(state = {}) {
+  const CONTENTS_TIMEOUT_MS = 5000;
+  const CONTENTS_POLL_MS = 250;
+  const def = {
+    type: "open_container",
+    params: { object: "name (substring) or guid of a nearby chest/corpse/container" },
+    desc: "walk up to and open a container (chest, corpse) and read what is inside (journaled). Then take a specific item out with take_item, passing the guid from the listing.",
+    validate(a) {
+      const b = baseValidate("open_container")(a);
+      if (!b.ok) return b;
+      if ((typeof a.object !== "string" || !a.object.trim()) && !parseGuid(a.object))
+        return { ok: false, error: "object must be a name or guid" };
+      return { ok: true };
+    },
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const h = bot?.host;
+    if (typeof h?.UseObject !== "function" || typeof h?.GetContainerContents !== "function" ||
+        typeof h?.NearbyGuids !== "function") return fail("unavailable");
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
     const walk = await approach(bot, res.guid);
-    if (!h.TakeObject(res.guid)) return fail("pickup request failed to send");
+    if (!h.UseObject(res.guid)) return fail("open request failed to send");
+    let guids = [];
+    const t0 = Date.now();
+    while (Date.now() - t0 < CONTENTS_TIMEOUT_MS) {
+      try { guids = h.GetContainerContents(res.guid) || []; } catch { guids = []; }
+      if (guids.length) break;
+      await sleep(CONTENTS_POLL_MS);
+    }
+    const contents = [];
+    for (const g of guids) {
+      let name = null;
+      try { name = h.TryGetObjectName(g); } catch {}
+      contents.push({ guid: g >>> 0, name: name || "?" });
+    }
+    state.lastContainer = { guid: res.guid, name: res.name, contents, at: Date.now() };
     ctx.track?.(res.guid, res.name);
-    journalNote(ctx, `take_item ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}, pickup sent; confirm via inventory next check-in`);
-    return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid), walk: walk ?? undefined } };
+    journalNote(
+      ctx,
+      contents.length
+        ? `open_container ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}; contents(${contents.length}): ${contents.map((c) => `${c.name} ${hex(c.guid)}`).join("; ")}`
+        : `open_container ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}; no contents streamed (empty, out of range, or not a container)`
+    );
+    return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid), items: contents.length, walk: walk ?? undefined } };
+  });
+  return def;
+}
+
+// Compact, defensive renderer over the EX-05 AppraisalSnapshot JSON
+// (build_appraisal_snapshot, src/lib.rs: properties.{strings,ints} keyed by
+// enum NAME, plus armorProfile/weaponProfile/creatureProfile/spellBook).
+// Unknown/partial shapes degrade to fewer sections, never a throw.
+function renderAppraisal(label, ap, fresh) {
+  const parts = [];
+  try {
+    if (ap.identifySuccess === false) parts.push("identify REFUSED (insufficient skill?) — sections may be stale/partial");
+    const strs = ap.properties?.strings ?? {};
+    for (const k of ["Use", "ShortDesc", "LongDesc", "Inscription"]) {
+      if (typeof strs[k] === "string" && strs[k].trim()) parts.push(`${k}: ${strs[k].trim()}`);
+    }
+    const ints = ap.properties?.ints ?? {};
+    const iv = [];
+    for (const k of ["Value", "ArmorLevel", "EncumbranceVal", "ItemDifficulty", "WieldDiff", "ItemCurMana", "ItemMaxMana"]) {
+      if (Number.isFinite(ints[k])) iv.push(`${k}=${ints[k]}`);
+    }
+    if (iv.length) parts.push(iv.join(" "));
+    const compact = (o) => { try { return JSON.stringify(o); } catch { return null; } };
+    for (const [key, lbl] of [["armorProfile", "armor"], ["weaponProfile", "weapon"], ["creatureProfile", "creature"]]) {
+      const j = ap[key] != null ? compact(ap[key]) : null;
+      if (j && j !== "null") parts.push(`${lbl}: ${j}`);
+    }
+    if (Array.isArray(ap.spellBook) && ap.spellBook.length)
+      parts.push(`spellIds: ${ap.spellBook.slice(0, 10).join(",")}${ap.spellBook.length > 10 ? "…" : ""}`);
+  } catch {}
+  return clip(`appraise ${label}${fresh ? "" : " (CACHED — no fresh identify arrived)"}: ${parts.join(" | ") || "(no detail sections)"}`, JOURNAL_CLIP);
+}
+
+/** "appraise" — identify/assess a nearby object or inventory item (gap 1:
+ * the read side went live with the requestAppraisal webhost fix; this is the
+ * missing LLM verb over it). */
+export function appraiseAction() {
+  const APPRAISE_TIMEOUT_MS = 5000;
+  const APPRAISE_POLL_MS = 250;
+  const def = {
+    type: "appraise",
+    params: { object: "name (substring) or guid of a nearby object/creature, OR an item in your inventory" },
+    desc: "examine/assess an object, creature, NPC or inventory item: description, value, armor level, weapon damage, wield requirements, spells. Result is journaled for your next check-in. Works at sight range — no walk needed.",
+    validate(a) {
+      const b = baseValidate("appraise")(a);
+      if (!b.ok) return b;
+      if ((typeof a.object !== "string" || !a.object.trim()) && !parseGuid(a.object))
+        return { ok: false, error: "object must be a name or guid" };
+      return { ok: true };
+    },
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const h = bot?.host;
+    if (typeof h?.RequestId !== "function" || typeof h?.TryGetObjectAppraisal !== "function") return fail("unavailable");
+    // Nearby world object first; fall back to the player's own inventory
+    // (pack items appraise through the same IdentifyObject round-trip).
+    let res = resolveNearby(h, a.object);
+    if (res.error && typeof h.TryGetPlayerInventory === "function") {
+      const it = resolveItem(h.TryGetPlayerInventory() ?? [], { item: a.object });
+      if (!it.error) res = { guid: (it.row.guid ?? it.row.itemGuid) >>> 0, name: it.row.name };
+    }
+    if (res.error) return fail(res.error);
+    const before = typeof h.GetLastIdTime === "function" ? h.GetLastIdTime(res.guid) : 0;
+    if (!h.RequestId(res.guid)) return fail("appraise request failed to send");
+    // Wait for a FRESH identify: GetLastIdTime advances on each successful
+    // round-trip; first-ever data also satisfies via HasAppraisalData.
+    let fresh = false;
+    const t0 = Date.now();
+    while (Date.now() - t0 < APPRAISE_TIMEOUT_MS) {
+      try {
+        const t = typeof h.GetLastIdTime === "function" ? h.GetLastIdTime(res.guid) : 0;
+        if ((before && t > before) || (!before && h.HasAppraisalData?.(res.guid))) { fresh = true; break; }
+      } catch {}
+      await sleep(APPRAISE_POLL_MS);
+    }
+    const ap = h.TryGetObjectAppraisal(res.guid);
+    if (!ap) return fail(`no appraisal data for ${res.name} (${hex(res.guid)}) — the server may have refused or the object despawned`);
+    ctx.track?.(res.guid, res.name);
+    journalNote(ctx, renderAppraisal(`${res.name} (${hex(res.guid)})`, ap, fresh));
+    return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid), fresh } };
+  });
+  return def;
+}
+
+/** "use_item_on" — UseWithTarget 0x0035: keys, lockpicks, kits, tools (gap 2). */
+export function useItemOnAction() {
+  const def = {
+    type: "use_item_on",
+    params: {
+      item: "name (substring) or guid of an item in YOUR inventory (key, lockpick, healing kit, tool)",
+      target: "name (substring) or guid of a nearby object from your 'nearby' perception line",
+    },
+    desc: "use an inventory item ON a world object or person: unlock a locked door or chest with its key or a lockpick, use a healing kit on someone, apply a crafting tool. Walks into range first; the server verdict arrives in 'heard' next check-in.",
+    validate(a) {
+      const b = baseValidate("use_item_on")(a);
+      if (!b.ok) return b;
+      if ((typeof a.item !== "string" || !a.item.trim()) && !parseGuid(a.item))
+        return { ok: false, error: "item must be a name or guid" };
+      if ((typeof a.target !== "string" || !a.target.trim()) && !parseGuid(a.target))
+        return { ok: false, error: "target must be a name or guid" };
+      return { ok: true };
+    },
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const h = bot?.host;
+    if (typeof h?.UseItemOnTarget !== "function" || typeof h?.NearbyGuids !== "function" ||
+        typeof h?.TryGetPlayerInventory !== "function") return fail("unavailable");
+    const tgt = resolveNearby(h, a.target);
+    if (tgt.error) return fail(tgt.error);
+    const rows = h.TryGetPlayerInventory();
+    if (!rows || !rows.length) return fail("inventory not streamed yet — try again next check-in");
+    const it = resolveItem(rows, { item: a.item });
+    if (it.error) return fail(it.error);
+    const itemGuid = (it.row.guid ?? it.row.itemGuid) >>> 0;
+    const walk = await approach(bot, tgt.guid);
+    if (!h.UseItemOnTarget(itemGuid, tgt.guid)) return fail("use-with-target request failed to send");
+    ctx.track?.(tgt.guid, tgt.name);
+    journalNote(ctx, `use_item_on ${it.row.name} -> ${tgt.name} (${hex(tgt.guid)}) — walk:${walk ?? "n/a"}, sent; server verdict in 'heard' next check-in`);
+    return { type: def.type, ok: true, result: { item: it.row.name, guid: hex(itemGuid), target: tgt.name, targetGuid: hex(tgt.guid), walk: walk ?? undefined } };
+  });
+  return def;
+}
+
+/** "drop_item" — put a pack item on the ground (gap 4: wrapped, zero callers). */
+export function dropItemAction() {
+  const def = {
+    type: "drop_item",
+    params: { item: "pack item name (substring) or guid (see your inventory line)" },
+    desc: "drop a pack item onto the ground at your feet — it becomes a world [item] anyone can take. Confirm via your inventory line next check-in.",
+    validate(a) {
+      const b = baseValidate("drop_item")(a);
+      if (!b.ok) return b;
+      if ((typeof a.item !== "string" || !a.item.trim()) && !parseGuid(a.item))
+        return { ok: false, error: "item must be a name or guid" };
+      return { ok: true };
+    },
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const h = bot?.host;
+    if (typeof h?.DropItem !== "function" || typeof h?.TryGetPlayerInventory !== "function") return fail("unavailable");
+    const rows = (h.TryGetPlayerInventory() ?? []).filter((i) => i.equipMask === 0);
+    if (!rows.length) return fail("inventory not streamed yet — try again next check-in");
+    const it = resolveItem(rows, { item: a.item });
+    if (it.error) return fail(it.error);
+    const itemGuid = (it.row.guid ?? it.row.itemGuid) >>> 0;
+    if (!h.DropItem(itemGuid)) return fail("drop request failed to send");
+    journalNote(ctx, `drop_item ${it.row.name} (${hex(itemGuid)}) — dropped at your feet; confirm via inventory next check-in`);
+    return { type: def.type, ok: true, result: { item: it.row.name, guid: hex(itemGuid) } };
+  });
+  return def;
+}
+
+/** "confirm" — answer a pending server confirmation dialog (gap 5: an
+ * unanswered dialog times out server-side as a decline). */
+export function confirmAction() {
+  const def = {
+    type: "confirm",
+    params: {
+      accept: "boolean — true to accept, false to decline",
+      which: "optional substring of the dialog text to pick one when several are pending (default: the first)",
+    },
+    desc: "answer a pending server confirmation dialog (see the 'confirmation pending' observation line). Unanswered dialogs auto-decline after a server timeout.",
+    validate(a) {
+      const b = baseValidate("confirm")(a);
+      if (!b.ok) return b;
+      if (typeof a.accept !== "boolean") return { ok: false, error: "accept must be a boolean" };
+      if (a.which != null && typeof a.which !== "string") return { ok: false, error: "which must be a string" };
+      return { ok: true };
+    },
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const h = bot?.host;
+    if (typeof h?.SendConfirmationResponse !== "function" || typeof h?.TryGetPendingConfirmations !== "function")
+      return fail("unavailable");
+    const list = h.TryGetPendingConfirmations();
+    if (!list.length) return fail("no confirmation dialog is pending");
+    const want = typeof a.which === "string" ? a.which.trim().toLowerCase() : "";
+    const pick = want ? list.find((c) => c.text.toLowerCase().includes(want)) : list[0];
+    if (!pick) return fail(`no pending dialog matching "${a.which}" — pending: ${list.map((c) => `"${clip(c.text, 80)}"`).join("; ")}`);
+    if (!h.SendConfirmationResponse(pick.confirmType, pick.context, a.accept)) return fail("confirmation response failed to send");
+    journalNote(ctx, `confirm ${a.accept ? "ACCEPT" : "DECLINE"}: "${clip(pick.text, 200)}"`);
+    return { type: def.type, ok: true, result: { accepted: a.accept, text: clip(pick.text, 200) } };
   });
   return def;
 }
@@ -389,7 +701,20 @@ export function giveItemAction() {
 }
 
 export function worldActions() {
-  return [useObjectAction(), takeItemAction(), giveItemAction(), gotoObjectAction()];
+  // Shared per-bot state: open_container's contents listing extends
+  // take_item's resolution (economyActions has the same shape).
+  const state = {}; // { lastContainer: { guid, name, contents:[{guid,name}], at } }
+  return [
+    useObjectAction(),
+    takeItemAction(state),
+    giveItemAction(),
+    gotoObjectAction(),
+    openContainerAction(state),
+    appraiseAction(),
+    useItemOnAction(),
+    dropItemAction(),
+    confirmAction(),
+  ];
 }
 
 /** Integrator seam, registerEconomy-shaped. */

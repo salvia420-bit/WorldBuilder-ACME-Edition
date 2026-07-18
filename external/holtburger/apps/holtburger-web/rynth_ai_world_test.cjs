@@ -48,8 +48,10 @@ function makeHost() {
 
   const defs = worldActions();
   const byType = Object.fromEntries(defs.map((d) => [d.type, d]));
-  check("four defs (use_object, take_item, give_item, goto_object)",
-    Object.keys(byType).length === 4 && byType.use_object && byType.take_item && byType.give_item && byType.goto_object);
+  check("nine defs (use/take/give/goto + open_container/appraise/use_item_on/drop_item/confirm)",
+    Object.keys(byType).length === 9 && byType.use_object && byType.take_item && byType.give_item &&
+    byType.goto_object && byType.open_container && byType.appraise && byType.use_item_on &&
+    byType.drop_item && byType.confirm);
 
   // use by exact name -> portal
   {
@@ -310,6 +312,147 @@ function makeHost() {
     bot.globalRouter = { busy: true };
     const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
     check("goto-active yields to straight pursuit", r.ok && bot.router.followed === null && !String(r.result?.walk).includes("routed"), JSON.stringify(r.result));
+  }
+
+  // ── new verbs (2026-07-18 verb-audit gaps) ────────────────────────────
+  // open_container -> contents journaled + take_item resolves FROM them.
+  // Shared state rides worldActions() — build one fresh def set per case.
+  {
+    const w = worldActions();
+    const wb = Object.fromEntries(w.map((d) => [d.type, d]));
+    const journal = makeJournal();
+    const host = makeHost();
+    host.GetContainerContents = (g) => (g === 0x5003 ? [0x7001, 0x7002] : []);
+    const names = { ...NEARBY, 0x7001: "Acid Key", 0x7002: "Tattered Note" };
+    host.TryGetObjectName = (g) => names[g] ?? null;
+    const bot = { host };
+    const r = await wb.open_container.apply(bot, { type: "open_container", object: "Training Chest" }, { journal });
+    check("open_container uses + reads contents", r.ok && r.result.items === 2 && host.calls.some((c) => c[0] === "use" && c[1] === 0x5003), JSON.stringify(r));
+    check("open_container journals contents", journal.entries.some((e) => /Acid Key 0x7001/.test(e.text) && /Tattered Note/.test(e.text)), JSON.stringify(journal.entries));
+    // now take a SPECIFIC contained item by name — not in NearbyGuids.
+    const r2 = await wb.take_item.apply(bot, { type: "take_item", object: "acid key" }, { journal });
+    check("take_item resolves container contents", r2.ok && host.calls.some((c) => c[0] === "take" && c[1] === 0x7001), JSON.stringify(r2));
+    check("take_item reports container origin", r2.result?.from === "Training Chest", JSON.stringify(r2.result));
+    // and by guid too
+    const r3 = await wb.take_item.apply(bot, { type: "take_item", object: "0x7002" }, { journal });
+    check("take_item container guid resolves", r3.ok && host.calls.some((c) => c[0] === "take" && c[1] === 0x7002), JSON.stringify(r3));
+  }
+  // open_container: empty/non-container degrades to ok with a journaled note.
+  {
+    const w = worldActions();
+    const wb = Object.fromEntries(w.map((d) => [d.type, d]));
+    const journal = makeJournal();
+    const host = makeHost();
+    host.GetContainerContents = () => [];
+    const t0 = Date.now();
+    const r = await wb.open_container.apply({ host }, { type: "open_container", object: "Training Chest" }, { journal });
+    check("open_container empty still ok", r.ok && r.result.items === 0, JSON.stringify(r));
+    check("open_container empty journals the miss", journal.entries.some((e) => /no contents streamed/.test(e.text)));
+    check("open_container empty polls out (~5s)", Date.now() - t0 >= 4500);
+  }
+  // appraise: fresh identify -> journaled summary from the snapshot JSON.
+  {
+    const journal = makeJournal();
+    const host = makeHost();
+    host.RequestId = (g) => { host.calls.push(["id", g]); return true; };
+    host.HasAppraisalData = () => true;
+    host.GetLastIdTime = () => 0;
+    host.TryGetObjectAppraisal = (g) =>
+      g === 0x5003 ? { identifySuccess: true, properties: { strings: { LongDesc: "A sturdy training chest." }, ints: { Value: 25 } } } : null;
+    const r = await byType.appraise.apply({ host }, { type: "appraise", object: "Training Chest" }, { journal });
+    check("appraise sends RequestId + ok", r.ok && r.result.fresh === true && host.calls.some((c) => c[0] === "id" && c[1] === 0x5003), JSON.stringify(r));
+    check("appraise journals the summary", journal.entries.some((e) => /LongDesc: A sturdy training chest\./.test(e.text) && /Value=25/.test(e.text)), JSON.stringify(journal.entries));
+  }
+  // appraise: inventory-item fallback (not in nearby).
+  {
+    const host = makeHost();
+    host.RequestId = (g) => { host.calls.push(["id", g]); return true; };
+    host.HasAppraisalData = () => true;
+    host.TryGetObjectAppraisal = () => ({ properties: { ints: { Value: 1 } } });
+    const r = await byType.appraise.apply({ host }, { type: "appraise", object: "exit token" }, { journal: makeJournal() });
+    check("appraise falls back to inventory items", r.ok && host.calls.some((c) => c[0] === "id" && c[1] === 0x6001), JSON.stringify(r));
+  }
+  // appraise: no data arriving -> ok:false with guidance.
+  {
+    const host = makeHost();
+    host.RequestId = () => true;
+    host.HasAppraisalData = () => false;
+    host.TryGetObjectAppraisal = () => null;
+    const r = await byType.appraise.apply({ host }, { type: "appraise", object: "Training Chest" }, { journal: makeJournal() });
+    check("appraise no-data fails informatively", !r.ok && /no appraisal data/.test(r.error), JSON.stringify(r));
+  }
+  // use_item_on: inventory item onto a nearby target (key -> chest).
+  {
+    const journal = makeJournal();
+    const host = makeHost();
+    host.UseItemOnTarget = (i, t) => { host.calls.push(["useOn", i, t]); return true; };
+    const r = await byType.use_item_on.apply({ host }, { type: "use_item_on", item: "exit token", target: "Training Chest" }, { journal });
+    check("use_item_on sends UseWithTarget", r.ok && host.calls.some((c) => c[0] === "useOn" && c[1] === 0x6001 && c[2] === 0x5003), JSON.stringify(r));
+    check("use_item_on journaled", journal.entries.some((e) => /use_item_on Exit Token -> Training Chest/.test(e.text)));
+    const r2 = await byType.use_item_on.apply({ host: {} }, { type: "use_item_on", item: "x", target: "y" }, { journal: makeJournal() });
+    check("use_item_on hostless -> ok:false", !r2.ok && /unavailable/.test(r2.error));
+  }
+  // drop_item: pack item -> DropItem.
+  {
+    const journal = makeJournal();
+    const host = makeHost();
+    host.DropItem = (g) => { host.calls.push(["drop", g]); return true; };
+    const r = await byType.drop_item.apply({ host }, { type: "drop_item", item: "brea" }, { journal });
+    check("drop_item ambiguous ref fails", !r.ok && /ambiguous/i.test(r.error), JSON.stringify(r));
+    const r2 = await byType.drop_item.apply({ host }, { type: "drop_item", item: "0x6001" }, { journal });
+    check("drop_item sends DropItem", r2.ok && host.calls.some((c) => c[0] === "drop" && c[1] === 0x6001), JSON.stringify(r2));
+    check("drop_item journaled", journal.entries.some((e) => /drop_item Exit Token/.test(e.text)));
+  }
+  // confirm: answers the pending dialog verbatim; fails clean when none.
+  {
+    const journal = makeJournal();
+    const host = makeHost();
+    host.TryGetPendingConfirmations = () => [{ confirmType: 1, context: 42, text: "Aria would like you to swear allegiance." }];
+    host.SendConfirmationResponse = (t, c, ac) => { host.calls.push(["confirm", t, c, ac]); return true; };
+    const r = await byType.confirm.apply({ host }, { type: "confirm", accept: true }, { journal });
+    check("confirm answers type/context verbatim", r.ok && host.calls.some((c) => c[0] === "confirm" && c[1] === 1 && c[2] === 42 && c[3] === true), JSON.stringify(r));
+    check("confirm journaled", journal.entries.some((e) => /confirm ACCEPT/.test(e.text)));
+    host.TryGetPendingConfirmations = () => [];
+    const r2 = await byType.confirm.apply({ host }, { type: "confirm", accept: false }, { journal: makeJournal() });
+    check("confirm none-pending fails", !r2.ok && /no confirmation dialog/.test(r2.error), JSON.stringify(r2));
+    const v = byType.confirm.validate({ type: "confirm", accept: "yes" });
+    check("confirm validates accept boolean", v.ok === false && /boolean/.test(v.error));
+  }
+  // ── closed-door mid-route retry (handoff-6 §3.3) ──────────────────────
+  // First follow FAILS; a closed (non-ethereal) door sits by the player;
+  // walkRoute must open it and re-follow the remaining legs once.
+  {
+    const host = makeIndoorHost();
+    host.TryGetObjectDescFlags = (g) => (g === 0x5004 ? 0x1000 : 0); // 0x5004 is a Door
+    host.TryGetObjectState = () => 0; // NOT ethereal -> closed
+    const doorPos = { objCellId: 0x860201a0, x: 52, y: 50, z: 0 };
+    const basePos = host.TryGetObjectPosition;
+    host.TryGetObjectPosition = (g) => (g === 0x5004 ? doorPos : basePos(g));
+    let follows = 0;
+    const bot = makeRouterBot(host);
+    const origFollow = bot.router.follow.bind(bot.router);
+    bot.router.follow = function (legs) {
+      follows++;
+      this.followed = legs;
+      this.state = follows === 1 ? "FAILED" : "DONE";
+      this.walked = follows === 1 ? 0 : legs.length;
+    };
+    const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    check("door-retry re-follows after opening", r.ok && follows === 2, JSON.stringify({ follows, walk: r.result?.walk }));
+    check("door-retry opened the closed door", host.calls.some((c) => c[0] === "use" && c[1] === 0x5004), JSON.stringify(host.calls));
+    check("door-retry walk tag carries the splice", /route-failed\(0\/2\)\+door\(Sedor's Apprentice\)\+routed\(2\)/.test(String(r.result?.walk)), JSON.stringify(r.result));
+  }
+  // door-retry does NOT touch an OPEN (ethereal) door.
+  {
+    const host = makeIndoorHost();
+    host.TryGetObjectDescFlags = (g) => (g === 0x5004 ? 0x1000 : 0);
+    host.TryGetObjectState = () => 0x4; // ethereal -> already open
+    const basePos = host.TryGetObjectPosition;
+    host.TryGetObjectPosition = (g) => (g === 0x5004 ? { objCellId: 0x860201a0, x: 52, y: 50, z: 0 } : basePos(g));
+    const bot = makeRouterBot(host, { routerState: "FAILED" });
+    const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    check("open door not re-used on failed route", r.ok && !host.calls.some((c) => c[0] === "use" && c[1] === 0x5004), JSON.stringify(host.calls));
+    check("open-door case keeps plain failed tag", String(r.result?.walk).startsWith("route-failed(0/2)+"), JSON.stringify(r.result));
   }
 
   console.log(`\n${pass} pass, ${fail} fail`);

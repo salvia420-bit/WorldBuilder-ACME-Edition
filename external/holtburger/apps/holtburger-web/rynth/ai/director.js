@@ -255,6 +255,23 @@ export class RynthAiDirector {
     return { plan: null, results: [], error: msg };
   }
 
+  /** Event-driven early check-in (additive 2026-07-18, handoff-6 §3.4): pull
+   * the next scheduled check-in forward to ~now because something significant
+   * just happened (teleport, self-death, tell, server popup). Debounced so
+   * event bursts can't melt the budget: no-op while disabled, while a
+   * check-in is in flight, within minGapSeconds of the last one, or when the
+   * next check-in is already imminent. The hourly maxCallsPerHour budget
+   * still applies on top. Returns true when the reschedule happened. */
+  requestEarlyCheck(reason, { delaySeconds = 8, minGapSeconds = 45 } = {}) {
+    if (!this.enabled || this._running || this._inflight) return false;
+    const now = Date.now();
+    if (this._lastCheckAt && now - this._lastCheckAt < minGapSeconds * 1000) return false;
+    if (this._nextCheckAt != null && this._nextCheckAt - now <= delaySeconds * 1000) return false;
+    this._journal("note", `early check-in in ${delaySeconds}s: ${String(reason).slice(0, 120)}`);
+    this._schedule(delaySeconds / 60);
+    return true;
+  }
+
   // Idle-guard (additive 2026-07-16, live-soak finding): a director that
   // PAUSED the kernel and then died must not leave the bot parked forever —
   // "bot survives the AI" includes surviving an AI that stopped it. Fires

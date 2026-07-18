@@ -76,7 +76,7 @@ function makeHost({ coins = 900, vendorAnswers = true, inventory = INV } = {}) {
 
   const defs = economyActions();
   const byType = Object.fromEntries(defs.map((d) => [d.type, d]));
-  check("seven defs", Object.keys(byType).length === 7);
+  check("nine defs", Object.keys(byType).length === 9 && byType.split_stack && byType.merge_stacks);
 
   // --- inventory ----------------------------------------------------------
   {
@@ -154,6 +154,32 @@ function makeHost({ coins = 900, vendorAnswers = true, inventory = INV } = {}) {
     check("unequip_item ok (worn only)", un.ok === true && bot.host.calls.some((c) => c[0] === "unwield" && c[1] === 0x1003));
     const use = await byType.use_item.apply(bot, { type: "use_item", item: "apple" }, { journal });
     check("use_item ok", use.ok === true && bot.host.calls.some((c) => c[0] === "use" && c[1] === 0x1004));
+  }
+
+  // --- split_stack / merge_stacks (2026-07-18 verb-audit gap 5) ----------
+  {
+    const journal = makeJournal();
+    const host = makeHost();
+    host.GetPlayerId = () => 0x5001;
+    host.SplitStack = (s, c, q) => { host.calls.push(["split", s, c, q]); return true; };
+    host.MergeStacks = (s, d, q) => { host.calls.push(["merge", s, d, q]); return true; };
+    const bot = { host };
+    const r = await byType.split_stack.apply(bot, { type: "split_stack", item: "apple", qty: 2 }, { journal });
+    check("split_stack sends split into own pack", r.ok && host.calls.some((c) => c[0] === "split" && c[1] === 0x1004 && c[2] === 0x5001 && c[3] === 2), JSON.stringify(r));
+    const over = await byType.split_stack.apply(bot, { type: "split_stack", item: "apple", qty: 5 }, { journal });
+    check("split_stack rejects qty >= stack", over.ok === false && /stack size/.test(over.error), JSON.stringify(over));
+    const solo = await byType.split_stack.apply(bot, { type: "split_stack", item: "dagger", qty: 1 }, { journal });
+    check("split_stack refuses non-stacks", solo.ok === false, JSON.stringify(solo));
+    // merge: two apple stacks
+    const inv2 = [...INV, { guid: 0x1006, name: "Apple", wcid: 103, value: 2, stackSize: 3, equipMask: 0, validLocations: 0, itemType: 0x80, containerId: 0x5001, itemsCapacity: 0, requiresBackpackSlot: true }];
+    const host2 = makeHost({ inventory: inv2 });
+    host2.MergeStacks = (s, d, q) => { host2.calls.push(["merge", s, d, q]); return true; };
+    const m = await byType.merge_stacks.apply({ host: host2 }, { type: "merge_stacks", from: "0x1006", to: "0x1004" }, { journal });
+    check("merge_stacks whole-stack default", m.ok && host2.calls.some((c) => c[0] === "merge" && c[1] === 0x1006 && c[2] === 0x1004 && c[3] === 3), JSON.stringify(m));
+    const mm = await byType.merge_stacks.apply({ host: host2 }, { type: "merge_stacks", from: "0x1006", to: "0x1001" }, { journal });
+    check("merge_stacks rejects different wcids", mm.ok === false && /different item types/.test(mm.error), JSON.stringify(mm));
+    const hostless = await byType.merge_stacks.apply({ host: {} }, { type: "merge_stacks", from: "a", to: "b" }, { journal });
+    check("merge_stacks hostless -> ok:false", hostless.ok === false && /unavailable/.test(hostless.error));
   }
 
   // --- extensions wiring --------------------------------------------------

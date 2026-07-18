@@ -267,6 +267,28 @@ async function wireAiDirector(bot, aiConfig, base) {
   });
   bot.ai = { director, client, journal, ...(ext ? { extensions: ext } : {}) };
 
+  // Event-driven early check-ins (handoff-6 §3.4): significant push events
+  // pull the next check-in forward instead of waiting out the minute cadence.
+  // The director's own debounce + hourly budget bound the cost; a burst of
+  // events collapses into one early check. config.ai.earlyCheckins === false
+  // turns the wiring off.
+  if (aiCfg?.earlyCheckins !== false && typeof bot.host?.onEvent === "function") {
+    const KIND_CHAT = 2, KIND_DEATH = 29, KIND_PORTAL_SPACE = 33;
+    const CAT_TELL = 2, CAT_POPUP = 10;
+    bot.host.onEvent((e) => {
+      try {
+        let reason = null;
+        if (e.kind === KIND_PORTAL_SPACE) reason = "entered portal space (teleporting)";
+        // kind 29 fires for EVERY death broadcast; u32 = victim guid — only
+        // the local player's own death warrants an early check.
+        else if (e.kind === KIND_DEATH && (e.u32 >>> 0) === (bot.host.GetPlayerId() >>> 0)) reason = "you died";
+        else if (e.kind === KIND_CHAT && (e.u32b >>> 0) === CAT_TELL && e.text) reason = "received a tell";
+        else if (e.kind === KIND_CHAT && (e.u32b >>> 0) === CAT_POPUP && e.text) reason = "server popup message";
+        if (reason) director.requestEarlyCheck(reason);
+      } catch { /* an event-tap error must never reach the pump */ }
+    });
+  }
+
   if (typeof window !== "undefined") {
     let panel = null; // mount-once: the handle promise is cached; ui.js is imported only here
     const openPanel = () =>

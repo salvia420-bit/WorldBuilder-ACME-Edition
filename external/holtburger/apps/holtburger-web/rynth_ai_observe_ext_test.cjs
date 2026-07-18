@@ -292,6 +292,26 @@ function check(name, ok, detail) {
     check("default opts do not throw", ok);
   }
 
+  // ── pending confirmation dialogs (2026-07-18 verb-audit gap 5) ────────
+  {
+    const bot = { host: makeHost({ TryGetPendingConfirmations: () => [{ confirmType: 1, context: 7, text: "Swear allegiance to Aria?" }] }) };
+    const r = ex.enrichObservation(bot, makeBase(), { now: NOW, state: {} });
+    check("confirmation line renders when pending",
+      /confirmation PENDING/.test(r.text) && /Swear allegiance to Aria\?/.test(r.text), r.text.split("\n").find((l) => /confirmation/.test(l)));
+    check("confirmation line leads the appended sections",
+      r.text.indexOf("confirmation PENDING") < r.text.indexOf("focus:"), r.text.slice(0, 200));
+  }
+  {
+    const bot = { host: makeHost({ TryGetPendingConfirmations: () => [] }) };
+    const r = ex.enrichObservation(bot, makeBase(), { now: NOW, state: {} });
+    check("no confirmation line when none pending", !/confirmation PENDING/.test(r.text));
+  }
+  {
+    const bot = { host: makeHost({ TryGetPendingConfirmations: () => { throw new Error("boom"); } }) };
+    const r = ex.enrichObservation(bot, makeBase(), { now: NOW, state: {} });
+    check("throwing confirmations probe degrades silently", typeof r.text === "string" && !/confirmation PENDING/.test(r.text));
+  }
+
   console.log(`${pass} pass, ${fail} fail`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

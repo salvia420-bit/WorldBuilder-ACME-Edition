@@ -2275,6 +2275,145 @@ fn advance_local_pose_for_manual_drive_indoor_clamps_to_cell_aabb() {
     );
 }
 
+/// Indoor→indoor cell transit reaches the wire (2026-07-18, handoff-6
+/// §1.1/§3.2). A manual-drive walk that crosses from one EnvCell's AABB into
+/// an adjoining one must (a) re-derive the runtime pose's low word — here via
+/// the approximate pipeline's `step_cell_transit_flips` indoor else-arm (the
+/// faithful bridge falls back to that pipeline when the begin cell has no
+/// physics BSP, the pre-bake window) — and (b) ship the re-derived cell in
+/// the outbound AutonomousPosition heartbeat (`build_autonomous_position`
+/// samples `local_player_runtime_pose` at send time — no cached begin cell).
+/// Portal edges CELL↔NEXT let the interior-doorway relax lift the cell-AABB
+/// containment net at the seam, as a baked dungeon's portal graph would.
+/// Boundary sits 0.5 m in — well inside the settled distance (the physics
+/// slice settles ~0.65 m per 1.3 m request; here 10×100 ms at 4.5 m/s).
+#[tokio::test]
+async fn indoor_manual_drive_heartbeats_rederived_envcell() {
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0891);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+
+    let cell_landblock = Guid(0x8602_0100);
+    let cell_id = u32::from(cell_landblock);
+    let next_cell_id = cell_id + 1; // 0x8602_0101 — adjoining EnvCell
+
+    // Identity rotation → heading 90° (North) → forward drives +Y.
+    let start_pose = WorldPosition {
+        landblock_id: cell_landblock,
+        coords: Vector3::new(50.0, 50.0, 1.5),
+        rotation: Quaternion::identity(),
+    };
+    let global = start_pose.global_coords();
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+
+    // Two ADJOINING cell AABBs sharing the seam plane at global.y + 0.5, one
+    // continuous floor at z = 1.0 split at the seam (triangles keyed per
+    // owning cell — the pipeline looks them up by `current_cell`).
+    let seam_y = global.y + 0.5;
+    world.scene.insert_cell_aabb(
+        cell_id,
+        holtburger_common::Aabb {
+            min: holtburger_common::Vector3::new(global.x - 2.0, global.y - 2.0, 1.0),
+            max: holtburger_common::Vector3::new(global.x + 2.0, seam_y, 4.0),
+        },
+    );
+    world.scene.insert_cell_aabb(
+        next_cell_id,
+        holtburger_common::Aabb {
+            min: holtburger_common::Vector3::new(global.x - 2.0, seam_y, 1.0),
+            max: holtburger_common::Vector3::new(global.x + 2.0, global.y + 8.0, 4.0),
+        },
+    );
+    let floor_quad = |ylo: f32, yhi: f32| {
+        let v = |x: f32, y: f32, z: f32| holtburger_common::Vector3::new(x, y, z);
+        [
+            holtburger_common::Triangle::new(
+                v(global.x - 2.0, ylo, 1.0),
+                v(global.x + 2.0, ylo, 1.0),
+                v(global.x + 2.0, yhi, 1.0),
+            ),
+            holtburger_common::Triangle::new(
+                v(global.x - 2.0, ylo, 1.0),
+                v(global.x + 2.0, yhi, 1.0),
+                v(global.x - 2.0, yhi, 1.0),
+            ),
+        ]
+    };
+    for t in floor_quad(global.y - 2.0, seam_y) {
+        world.scene.insert_cell_triangle(cell_id, t);
+    }
+    for t in floor_quad(seam_y, global.y + 8.0) {
+        world.scene.insert_cell_triangle(next_cell_id, t);
+    }
+    world.scene.insert_cell_portal(cell_id, next_cell_id);
+    world.scene.insert_cell_portal(next_cell_id, cell_id);
+
+    let mut movement = MovementSystem::new();
+    // Direct drive install = post-first-edge state (see the clamp test above).
+    movement.last_move_was_autonomous = true;
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+
+    let dt = Duration::from_millis(100);
+    for _ in 0..10 {
+        movement.advance_local_pose_for_manual_drive(&mut world, dt);
+    }
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    assert!(after.is_indoors(), "walk stayed indoors");
+    assert!(
+        after.global_coords().y > seam_y,
+        "walk crossed the cell seam (y = {:.3}, seam = {:.3})",
+        after.global_coords().y,
+        seam_y
+    );
+    assert_eq!(
+        after.landblock_id,
+        Guid(next_cell_id),
+        "runtime pose low word must re-derive to the entered cell"
+    );
+
+    // The heartbeat ships the re-derived cell: first poll arms the window,
+    // the past-window poll sends; the recorded sent pose is the pulse's
+    // `position` verbatim (`note_autonomous_position_sent`).
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    let sent = movement
+        .maybe_send_autonomous_position_heartbeat(
+            now,
+            &world,
+            &mut session,
+            MovementPacketMetadata::default(),
+        )
+        .await
+        .expect("heartbeat arm");
+    assert!(!sent, "first poll arms the settle window");
+    let sent = movement
+        .maybe_send_autonomous_position_heartbeat(
+            now + AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL + Duration::from_millis(1),
+            &world,
+            &mut session,
+            MovementPacketMetadata::default(),
+        )
+        .await
+        .expect("heartbeat send");
+    assert!(sent, "past-window poll sends");
+    assert_eq!(
+        movement
+            .last_sent_autonomous_pose
+            .expect("sent pose recorded")
+            .landblock_id,
+        Guid(next_cell_id),
+        "AutonomousPosition pulse must carry the re-derived (settled) cell"
+    );
+}
+
 /// 2026-05-10 academy rubberband — floor-Z snap kicks the player up
 /// to `aabb.min.z + 0.005` when the integrator's Z would otherwise
 /// fall below the cell floor (e.g. because the persisted spawn pose

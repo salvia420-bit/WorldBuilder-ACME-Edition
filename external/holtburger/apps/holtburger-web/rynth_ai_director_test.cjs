@@ -396,6 +396,30 @@ const resp = (json) => ({ text: JSON.stringify(json), json, usage: { prompt: 10,
     check("timer: stop cancels pending check", client2.chatCalls.length === 0);
   }
 
+  // ---- requestEarlyCheck (event-driven early check-ins, handoff-6 §3.4).
+  {
+    const journal = makeJournal();
+    const d = new RynthAiDirector({}, { client: makeClient([]), journal, observe: mockObserve, execute: makeExec(), validate: mockValidate, intervalMinutes: 5 });
+    check("early: disabled -> refused", d.requestEarlyCheck("x") === false);
+    d.start();
+    const before = d.status.nextCheckAt;
+    const ok = d.requestEarlyCheck("received a tell");
+    check("early: pulls the schedule forward", ok === true && d.status.nextCheckAt < before && d.status.nextCheckAt - Date.now() < 10_000,
+      `next in ${d.status.nextCheckAt - Date.now()}ms`);
+    check("early: journaled with the reason", journal.kinds("note").some((n) => /early check-in/.test(n.text) && /received a tell/.test(n.text)),
+      JSON.stringify(journal.entries));
+    check("early: imminent check not re-pulled", d.requestEarlyCheck("second event") === false);
+    d.stop();
+  }
+  {
+    // within minGapSeconds of the LAST check -> refused (burst debounce).
+    const d = new RynthAiDirector({}, { client: makeClient([resp({ analysis: "", actions: [], next_check_minutes: 5 })]), journal: makeJournal(), observe: mockObserve, execute: makeExec(), validate: mockValidate });
+    d.start();
+    await d.checkNow();
+    check("early: min-gap after a fresh check refused", d.requestEarlyCheck("x") === false);
+    d.stop();
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

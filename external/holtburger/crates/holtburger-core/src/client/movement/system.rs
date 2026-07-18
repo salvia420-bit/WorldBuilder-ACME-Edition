@@ -5699,6 +5699,21 @@ impl MovementSystem {
             pose
         };
 
+        // Indoor→indoor cell parity (2026-07-18, handoff-6 §3.2): this legacy
+        // chain still pins an indoor pose's EnvCell low word (only the
+        // entry/exit flips above re-derive it) — but NO re-derive guard is
+        // added here because the whole chain is unreachable:
+        // `unified_transition_enabled()` is `USE_UNIFIED_TRANSITION ||
+        // runtime` (OR-only carrier, const `true`), so every slice returns
+        // through `advance_manual_slice_via_transition` at the top of this
+        // function (same finding as the fell-through-failsafe re-home,
+        // `finish_manual_slice_via_transition`). Both LIVE transition paths
+        // re-derive: the faithful marshal (faithful_bridge.rs
+        // `scene.current_cell` else-arm) and the approximate pipeline's
+        // `step_cell_transit_flips` indoor else-arm (transition.rs — the
+        // bridge's indoor pre-bake fallback). If this chain is ever
+        // resurrected (const rollback), port the same re-derive before this
+        // write-back.
         let _ = world.set_local_player_runtime_pose(pose);
     }
 

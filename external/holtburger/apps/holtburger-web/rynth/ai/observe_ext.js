@@ -60,8 +60,9 @@ function enrich(bot, base, { now = Date.now(), maxChars = 6000, state = null, tr
   const advancement = probeAdvancement(bot);
   const nearby = probeNearbyObjects(bot);
   const inventory = probeInventory(bot);
+  const confirmations = probeConfirmations(bot);
   const focus = suggestFocus(d, trend);
-  const ext = { trend, burden, portals, focus, advancement, nearby, inventory };
+  const ext = { trend, burden, portals, focus, advancement, nearby, inventory, confirmations };
 
   // Importance order: dropping from the END under maxChars sheds portals
   // first and the focus/nearby/inventory lines last (perception + what you
@@ -69,7 +70,10 @@ function enrich(bot, base, { now = Date.now(), maxChars = 6000, state = null, tr
   // inventory is ALWAYS in the context: v6.2 spent 24 min asserting "no token
   // in inventory" while carrying the Academy Exit Token — beliefs about
   // carried items must be grounded without needing an explicit action.
+  // A pending server confirm dialog leads: it is rare, time-boxed (auto-
+  // declines server-side), and the `confirm` verb is blind without it.
   const lines = [
+    ...(confirmations ? [confirmLine(confirmations)] : []),
     `focus: ${focus}`,
     nearbyLine(nearby),
     inventoryLine(inventory),
@@ -351,6 +355,27 @@ function portalLine(portals) {
   if (!portals) return `portals: ${NA}`;
   if (!portals.length) return "portals: none";
   return `portals: ${portals.map((p) => `${p.name} d=${p.dist.toFixed(1)}m`).join("; ")}`;
+}
+
+// ── pending server confirmation dialogs (2026-07-18, verb-audit gap 5) ──
+// Rare + time-boxed (unanswered dialogs auto-decline server-side), so the
+// line only renders when something is actually pending; the `confirm`
+// action (tools/world.js) is the hand over it.
+function probeConfirmations(bot) {
+  const h = bot.host;
+  if (!h || typeof h.TryGetPendingConfirmations !== "function") return null;
+  try {
+    const list = h.TryGetPendingConfirmations();
+    return Array.isArray(list) && list.length ? list : null;
+  } catch {
+    return null;
+  }
+}
+
+function confirmLine(list) {
+  return `confirmation PENDING (answer with confirm {accept: true|false} before it auto-declines): ${list
+    .map((c) => `"${String(c.text).slice(0, 120)}"`)
+    .join("; ")}`;
 }
 
 // ── suggested focus ────────────────────────────────────────────────────

@@ -331,6 +331,72 @@ export function useItemAction() {
   return def;
 }
 
+/** "split_stack" / "merge_stacks" — stack surgery over the webhost wrappers
+ * (2026-07-18 verb-audit gap 5: the wasm primitives existed, unwrapped). */
+export function splitStackAction() {
+  const def = {
+    type: "split_stack",
+    params: { item: "stacked pack item name or guid", qty: "int >= 1 — how many to split off into a new stack" },
+    desc: "split a pack stack into two (e.g. to give or sell part of it); qty must be less than the stack size",
+    validate(a) {
+      const b = baseValidate("split_stack")(a);
+      if (!b.ok) return b;
+      if ((typeof a.item !== "string" || !a.item.trim()) && !parseGuid(a.item)) return { ok: false, error: "item must be a name or guid" };
+      if (!Number.isInteger(a.qty) || a.qty < 1) return { ok: false, error: "qty must be an int >= 1" };
+      return { ok: true };
+    },
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const h = bot?.host;
+    if (typeof h?.SplitStack !== "function" || typeof h?.TryGetPlayerInventory !== "function") return fail("unavailable");
+    const rows = (h.TryGetPlayerInventory() ?? []).filter((i) => i.equipMask === 0 && i.stackSize > 1);
+    if (!rows.length) return fail("no splittable stacks in your pack");
+    const res = resolveItem(rows, { item: a.item });
+    if (res.error) return fail(res.error);
+    if (a.qty >= res.row.stackSize) return fail(`qty must be < the stack size (${res.row.stackSize})`);
+    if (!h.SplitStack(res.row.guid, h.GetPlayerId(), a.qty)) return fail("split request failed to send");
+    journalNote(ctx, `split_stack ${res.row.name}: ${a.qty} off a stack of ${res.row.stackSize} — confirm via inventory next check-in`);
+    return { type: def.type, ok: true, result: { item: res.row.name, qty: a.qty } };
+  });
+  return def;
+}
+
+export function mergeStacksAction() {
+  const def = {
+    type: "merge_stacks",
+    params: {
+      from: "source stack name or guid (prefer guids — same-named stacks are ambiguous by name)",
+      to: "destination stack guid (or name) of the SAME item type",
+      qty: "optional int >= 1 — amount to move (default: the whole source stack)",
+    },
+    desc: "merge one pack stack onto another of the same item type",
+    validate(a) {
+      const b = baseValidate("merge_stacks")(a);
+      if (!b.ok) return b;
+      for (const k of ["from", "to"])
+        if ((typeof a[k] !== "string" || !a[k].trim()) && !parseGuid(a[k])) return { ok: false, error: `${k} must be a name or guid` };
+      if (a.qty != null && (!Number.isInteger(a.qty) || a.qty < 1)) return { ok: false, error: "qty must be an int >= 1" };
+      return { ok: true };
+    },
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const h = bot?.host;
+    if (typeof h?.MergeStacks !== "function" || typeof h?.TryGetPlayerInventory !== "function") return fail("unavailable");
+    const rows = (h.TryGetPlayerInventory() ?? []).filter((i) => i.equipMask === 0);
+    if (!rows.length) return fail("inventory not streamed yet");
+    const from = resolveItem(rows, { item: a.from });
+    if (from.error) return fail(`from: ${from.error}`);
+    const to = resolveItem(rows.filter((r) => r.guid !== from.row.guid), { item: a.to });
+    if (to.error) return fail(`to: ${to.error}`);
+    if (from.row.wcid !== to.row.wcid) return fail(`cannot merge ${from.row.name} onto ${to.row.name} — different item types`);
+    const qty = a.qty ?? from.row.stackSize;
+    if (!h.MergeStacks(from.row.guid, to.row.guid, qty)) return fail("merge request failed to send");
+    journalNote(ctx, `merge_stacks ${from.row.name} x${qty} -> ${hex(to.row.guid)} — confirm via inventory next check-in`);
+    return { type: def.type, ok: true, result: { item: from.row.name, qty } };
+  });
+  return def;
+}
+
 /** All economy defs sharing one vendor-session state. */
 export function economyActions() {
   const state = {}; // { vendorGuid, vendorName, lastInventoryAt }
@@ -342,6 +408,8 @@ export function economyActions() {
     equipItemAction(),
     unequipItemAction(),
     useItemAction(),
+    splitStackAction(),
+    mergeStacksAction(),
   ];
 }
 

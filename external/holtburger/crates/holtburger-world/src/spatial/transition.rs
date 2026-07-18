@@ -409,6 +409,22 @@ fn step_cell_transit_flips(
     } else if let Some(outdoor) = env.scene().exited_envcell_to_outdoor(pose, radius) {
         pose.landblock_id = Guid(outdoor);
         return true;
+    } else {
+        // Indoor→indoor cell transit (2026-07-18): parity with the faithful
+        // marshal's re-derive (faithful_bridge.rs, the `local_envcell_entry`
+        // else-arm). Neither the outdoor rebucket (outdoor-only) nor the
+        // entry/exit flips above touch a walk BETWEEN EnvCells of the same
+        // dungeon, so this pipeline — still live as the faithful bridge's
+        // indoor pre-bake fallback (no cell physics BSP yet) — kept the
+        // pose's low word pinned to the begin cell. Re-derive from geometry
+        // like retail's per-step `find_cell_list`; `current_cell` falls back
+        // to the unchanged id when no loaded AABB contains the point
+        // (identity — same fallback the faithful marshal relies on).
+        let derived = env.scene().current_cell(pose);
+        if derived != pose.landblock_id.0 {
+            pose.landblock_id = Guid(derived);
+            return true;
+        }
     }
     false
 }

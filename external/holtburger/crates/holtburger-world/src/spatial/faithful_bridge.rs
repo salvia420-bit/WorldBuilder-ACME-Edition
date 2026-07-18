@@ -2729,6 +2729,66 @@ mod drift {
         );
     }
 
+    // ── indoor→indoor cell transit, pre-bake fallback (2026-07-18) ──
+    // Same walk as above but WITHOUT a cell physics BSP: the bridge falls back
+    // to the approximate pipeline (`find_transitional_position`, the indoor
+    // pre-bake guard at the top of `faithful_find_transitional_position`), so
+    // the re-derive must ALSO live in that pipeline's per-step
+    // `step_cell_transit_flips` (its indoor else-arm — the legacy-slice parity
+    // guard, handoff-6 §3.2). Portal edges CELL↔NEXT are seeded so the
+    // interior-doorway relax lifts the cell-AABB containment net at the seam
+    // (the doorway straddle), exactly as a baked dungeon's portal graph would.
+    #[test]
+    fn indoor_walk_prebake_fallback_rederives_envcell_low_word() {
+        const NEXT_ID: u32 = 0x1234_0101;
+        let o = cell_origin();
+        let mut scene = SpatialScene::new();
+        // NO insert_cell_physics_bsp — forces the approximate-pipeline fallback.
+        scene.insert_cell_aabb(
+            CELL_ID,
+            Aabb::new(
+                v(o.x - HE, o.y - HE, FLOOR_WZ - LEDGE_DROP - 0.5),
+                v(o.x + 0.5, o.y + HE, FLOOR_WZ + 10.0),
+            ),
+        );
+        scene.insert_cell_aabb(
+            NEXT_ID,
+            Aabb::new(
+                v(o.x + 0.5, o.y - HE, FLOOR_WZ - LEDGE_DROP - 0.5),
+                v(o.x + HE, o.y + HE, FLOOR_WZ + 10.0),
+            ),
+        );
+        // Floor triangles keyed per owning cell (the approximate pipeline looks
+        // them up by `current_cell`).
+        for t in floor_tris_world(o.x - HE, o.x + 0.5, o.y - HE, o.y + HE, FLOOR_WZ) {
+            scene.insert_cell_triangle(CELL_ID, t);
+        }
+        for t in floor_tris_world(o.x + 0.5, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ) {
+            scene.insert_cell_triangle(NEXT_ID, t);
+        }
+        scene.insert_cell_portal(CELL_ID, NEXT_ID);
+        scene.insert_cell_portal(NEXT_ID, CELL_ID);
+        let env = DriftEnv { scene };
+        let begin = pose_at(FCX, FCY, FLOOR_WZ);
+        let end = pose_at(FCX + 1.3, FCY, FLOOR_WZ - SINK);
+        let input = input_for(begin, end);
+        let f = faithful_find_transitional_position(&env, &input, true, true);
+        assert!(f.pose.coords.x > begin.coords.x, "walk advanced");
+        assert!(
+            f.pose.coords.x > FCX + 0.5,
+            "walk crossed the cell seam (x = {})",
+            f.pose.coords.x
+        );
+        assert!(f.pose.is_indoors(), "still indoors");
+        assert!(f.cell_changed, "transit reported as a cell change");
+        assert_eq!(
+            f.pose.landblock_id,
+            Guid(NEXT_ID),
+            "pre-bake fallback must re-derive the low word too (pinned: {:?})",
+            f.pose.landblock_id
+        );
+    }
+
     // ── (a') USE_RETAIL_GROUND wiring (2026-07-02) ──
     // Same flat walk with the retail ground gates on: the entry latch
     // (CONTACT|ON_WALKABLE), OBJECTINFO step_down and the contact-plane seed

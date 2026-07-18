@@ -75,6 +75,24 @@ const CAPABILITY_CANDIDATES = {
   // no-opped — loot_loop's appraisal gate degraded to judge-on-timeout
   // (2026-07-18 verb audit, gap B2).
   RequestId: ["requestAppraisal", "assessEntity", "identifyObject", "requestId"],
+  // appraisal READ side (EX-05): JSON AppraisalSnapshot after a successful
+  // requestAppraisal (2026-07-18 verb audit, gap 1 — the LLM appraise verb).
+  GetObjectAppraisal: ["getObjectAppraisal"],
+  // UseWithTarget 0x0035 — keys on doors/chests, lockpicks, healing kits,
+  // tinkering tools (verb audit gap 2).
+  UseWithTarget: ["useWithTarget"],
+  // container loot: move an item into a container (retail PutItemInContainer
+  // marshal; the semantic pickup path TakeObject already rides). Kept
+  // separate so container→pack loot of a SPECIFIC item is expressible
+  // (verb audit gap 3).
+  MoveItem: ["moveItem"],
+  // stack surgery (verb audit gap 5).
+  SplitStackToContainer: ["splitStackToContainer"],
+  MergeStacks: ["mergeStacks"],
+  // server confirm dialogs (verb audit gap 5) — an unanswered dialog times
+  // out server-side as a decline.
+  GetPendingConfirmations: ["pendingConfirmations"],
+  SendConfirmationResponse: ["sendConfirmationResponse"],
   NearbyEntityGuids: ["nearbyEntityGuids"],
   GetObjectDescFlags: ["objectDescFlags"],
   GetFellowship: ["playerFellowship"],
@@ -436,7 +454,42 @@ export class RynthWebHost {
     return this._live("GetLastIdTime", guid) ?? 0;
   }
   GetContainerContents(guid) {
-    return this._live("GetContainerContents", guid) ?? [];
+    const v = this._live("GetContainerContents", guid);
+    // Wasm returns a Uint32Array of contained-item guids; normalize to a
+    // plain number[] so callers never hold a typed-array view.
+    return v && typeof v.length === "number" ? Array.from(v, (g) => g >>> 0) : [];
+  }
+  /// Parsed AppraisalSnapshot (EX-05 JSON) for an appraised object, or null
+  /// pre-appraisal / on parse error. Refreshed wasm-side on every
+  /// EntityIdentified, so a repeat RequestId yields fresh data here.
+  TryGetObjectAppraisal(guid) {
+    const raw = this._live("GetObjectAppraisal", guid);
+    if (typeof raw !== "string" || !raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+  /// Pending server confirmation dialogs -> [{confirmType, context, text}]
+  /// (plain objects, [] when none). An unanswered dialog declines on a
+  /// server-side timeout — see SendConfirmationResponse.
+  TryGetPendingConfirmations() {
+    const raw = this._live("GetPendingConfirmations");
+    if (!raw) return [];
+    const out = [];
+    try {
+      for (const c of raw) {
+        out.push({
+          confirmType: Number(c.confirmType ?? c.confirm_type ?? 0),
+          context: Number(c.context ?? 0),
+          text: String(c.text ?? ""),
+        });
+      }
+    } catch (_) {
+      /* partial rows degrade to fewer dialogs */
+    }
+    return out;
   }
 
   // ── inventory / economy reads (2026-07-17) ──────────────────────────
@@ -661,6 +714,31 @@ export class RynthWebHost {
   }
   DropItem(itemGuid) {
     return this._act("DropItem", itemGuid);
+  }
+  /// UseWithTarget 0x0035 — apply an inventory item TO a world object:
+  /// key on a locked door/chest, lockpick, healing kit, tinkering tool.
+  /// Server validates; the verdict lands as UseDone / a kind-13 UseFailed.
+  UseItemOnTarget(itemGuid, targetGuid) {
+    return this._act("UseWithTarget", itemGuid >>> 0, targetGuid >>> 0);
+  }
+  /// Move a specific item into a container (chest→pack loot, pack→side-pack).
+  /// placement 0 = first free slot.
+  MoveItemToContainer(itemGuid, containerGuid, placement = 0) {
+    return this._act("MoveItem", itemGuid >>> 0, containerGuid >>> 0, placement | 0);
+  }
+  /// Split `amount` off a stack into a container (the player's own pack by
+  /// default via the caller passing GetPlayerId()).
+  SplitStack(stackGuid, containerGuid, amount, placement = 0) {
+    return this._act("SplitStackToContainer", stackGuid >>> 0, containerGuid >>> 0, placement | 0, Math.max(1, amount | 0));
+  }
+  /// Merge `amount` from stack src onto stack dst (same wcid).
+  MergeStacks(srcGuid, dstGuid, amount) {
+    return this._act("MergeStacks", srcGuid >>> 0, dstGuid >>> 0, Math.max(1, amount | 0));
+  }
+  /// Answer a pending server confirm dialog — confirmType/context verbatim
+  /// from TryGetPendingConfirmations.
+  SendConfirmationResponse(confirmType, context, accepted) {
+    return this._act("SendConfirmationResponse", confirmType | 0, context | 0, !!accepted);
   }
 
   // ── advancement plane (2026-07-17) ──────────────────────────────────

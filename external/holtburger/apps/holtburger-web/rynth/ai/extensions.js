@@ -232,10 +232,11 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     advancement = registerAdvancement(extActions);
   }
 
-  // World hands (tools/world.js): use_object / give_item / goto_object —
-  // general interact with / hand items to / walk to any nearby world object
-  // (portals, NPCs, doors). Pairs with the 'nearby' perception line
-  // (observe_ext.js). Default-on. cfg.world: false -> off.
+  // World hands (tools/world.js): use_object / take_item / give_item /
+  // goto_object / open_container / appraise / use_item_on / drop_item /
+  // confirm — general interact with / take / hand / examine any nearby world
+  // object (portals, NPCs, doors, chests). Pairs with the 'nearby' perception
+  // line (observe_ext.js). Default-on. cfg.world: false -> off.
   let world = null;
   if (cfg.world !== false) {
     world = registerWorld(extActions);
