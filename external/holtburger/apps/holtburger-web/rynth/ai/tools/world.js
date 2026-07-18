@@ -12,6 +12,13 @@
 // Survival invariant: every apply degrades to { ok:false, error }.
 
 import { parseGuid, resolveItem } from "./economy.js";
+import {
+  isEnvCellId,
+  nearestCell,
+  findPath,
+  toLegs,
+  buildGraphFromWasm,
+} from "../../indoor_router.js";
 
 const JOURNAL_CLIP = 800;
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + "…" : s);
@@ -76,6 +83,123 @@ function resolveNearby(h, ref) {
   return { error: `ambiguous "${ref}": ${hits.slice(0, 5).map((x) => `${x.name} ${hex(x.guid)}`).join(", ")}` };
 }
 
+// ── indoor door-waypoint legs (handoff-4 §0.4) ──────────────────────────────
+// Straight-line pursuit wedges on walls whenever the target stands in another
+// dungeon cell (live repro: Jonathan in 0x01B0, unreachable from the hub —
+// walk:no-walk at 25m, quest registry empty). The fix is the deferred
+// "indoor-router leg wiring": when both endpoints are EnvCells of the SAME
+// landblock but DIFFERENT cells, A* the EnvCell portal graph
+// (rynth/indoor_router.js) and walk door-waypoint legs via bot.router BEFORE
+// the local PursueObject approach. Everything degrades to the old straight
+// pursuit: off-graph, outdoors, cross-landblock, no router, goto active, or
+// any error -> null/skip, never a throw into the action.
+
+const worldX = (cell, x) => ((cell >>> 24) & 0xff) * 192 + x;
+const worldY = (cell, y) => ((cell >>> 16) & 0xff) * 192 + y;
+
+// Per-landblock graph cache — dungeon geometry is static, one wasm build per
+// dungeon visit. bot.indoorGraph (the dungeon_nav.js advisory field) wins so
+// tests / integrators can inject a synthetic graph.
+let _graphCache = null; // { lb, graph }
+
+async function indoorGraphFor(bot, lb) {
+  const injected = bot?.indoorGraph;
+  if (injected) return injected;
+  if (_graphCache && _graphCache.lb === lb) return _graphCache.graph;
+  const handle = bot?.host?.s;
+  if (!handle) return null;
+  let g = null;
+  try {
+    g = await buildGraphFromWasm(handle, 0, {});
+  } catch {
+    g = null;
+  }
+  if (g) _graphCache = { lb, graph: g };
+  return g;
+}
+
+/**
+ * Door-waypoint legs to `guid`, or null when indoor routing does not apply
+ * (outdoors, same cell, cross-landblock, unknown position, no graph, no path).
+ * Legs are router.js-shaped {lb,x,y,z}: doorway midpoints (the C# anti-corner-
+ * cut waypoints — cell centres alone let MoveToManager clip offset door
+ * frames) + cell centres, ending at the target's own position in its cell.
+ */
+async function indoorLegsTo(bot, guid) {
+  const h = bot?.host;
+  const pose = h?.TryGetPlayerPose?.();
+  const tp = h?.TryGetObjectPosition?.(guid);
+  if (!pose || !tp) return null;
+  const pc = pose.objCellId >>> 0;
+  const tc = tp.objCellId >>> 0;
+  if (!isEnvCellId(pc) || !isEnvCellId(tc)) return null; // an endpoint is outdoors
+  if (pc >>> 16 !== tc >>> 16) return null; // cross-landblock: not this seam's job
+  if (pc === tc) return null; // same room: straight pursuit is proven
+  const graph = await indoorGraphFor(bot, pc >>> 16);
+  if (!graph) return null;
+  const has = (id) => (graph instanceof Map ? graph.has(id) : id in graph);
+  const from = has(pc) ? pc : nearestCell(graph, worldX(pc, pose.x), worldY(pc, pose.y), pose.z);
+  const to = has(tc) ? tc : nearestCell(graph, worldX(tc, tp.x), worldY(tc, tp.y), tp.z);
+  if (!from || !to || from === to) return null;
+  const path = findPath(graph, from, to);
+  if (!path || path.length < 2) return null;
+  const legs = toLegs(graph, path, { midpoints: true }).slice(1); // drop own cell centre
+  legs.pop(); // target cell centre -> replaced by the object's actual position
+  legs.push({ lb: tc, x: tp.x, y: tp.y, z: tp.z });
+  return legs.length ? legs : null;
+}
+
+/**
+ * Walk `legs` via bot.router (the proven leg executor: per-leg watchdog,
+ * re-issue, seam/portal handling), kernel paused like bot.goto() does so the
+ * grind loops can't fight the walk. Resolves to a walk-tag fragment:
+ * routed(N) | route-failed(w/N) | route-timeout(w/N) | null (router absent or
+ * owned by a goto — caller falls through to straight pursuit).
+ */
+async function walkRoute(bot, legs) {
+  const router = bot?.router;
+  if (!router || typeof router.follow !== "function") return null;
+  if (bot?.globalRouter?.busy) return null; // a goto owns the router
+  const kernel = bot?.kernel;
+  const wasRunning = kernel?.running === true;
+  try {
+    if (wasRunning) kernel.stop();
+  } catch {}
+  try {
+    router.follow(legs);
+    const deadline = Date.now() + Math.min(90_000, 8_000 + legs.length * 15_000);
+    while (Date.now() < deadline && !router.done && router.state !== "IDLE") {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    if (router.state === "IDLE") return `route-cancelled(${(router.status || {}).walked ?? "?"}/${legs.length})`;
+    const st = router.status || {};
+    if (!router.done) {
+      try {
+        router.cancel();
+      } catch {}
+      return `route-timeout(${st.walked ?? "?"}/${legs.length})`;
+    }
+    return st.state === "DONE" ? `routed(${legs.length})` : `route-failed(${st.walked ?? "?"}/${legs.length})`;
+  } catch {
+    return "route-error";
+  } finally {
+    try {
+      if (wasRunning) kernel.start();
+    } catch {}
+  }
+}
+
+/** Cross-room leg walk when applicable; null tag when routing didn't engage. */
+async function routeToward(bot, guid) {
+  try {
+    const legs = await indoorLegsTo(bot, guid);
+    if (!legs) return null;
+    return await walkRoute(bot, legs);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Walk into use range before acting. The retail contract is that the CLIENT
  * closes the distance before the server's range check — ACE answers a far
@@ -86,9 +210,14 @@ function resolveNearby(h, ref) {
  * 3 failed (read-clear on >=2). Degrades to "just send" when the mover is
  * unavailable — the server error now reaches the observation either way.
  */
-async function approach(h, guid, ms = 12000) {
-  if (typeof h.PursueObject !== "function") return "no-mover";
-  if (!h.PursueObject(guid, 1.0, 0, true)) return "no-mover";
+async function approach(bot, guid, ms = 12000) {
+  const h = bot?.host;
+  // Cross-room targets first walk door-waypoint legs (routeToward above);
+  // straight pursuit below then only has to cover the final same-room hop.
+  const routeTag = await routeToward(bot, guid);
+  const tag = (walk) => (routeTag ? `${routeTag}+${walk}` : walk);
+  if (typeof h?.PursueObject !== "function") return tag("no-mover");
+  if (!h.PursueObject(guid, 1.0, 0, true)) return tag("no-mover");
   // Do NOT poll GetPursuitStatus here: its arrived/failed latch is READ-CLEAR
   // and the bot kernel's tick loop consumes it first, so this seam always saw
   // idle and fired the Use mid-walk from across the room (observed live twice:
@@ -101,20 +230,20 @@ async function approach(h, guid, ms = 12000) {
     catch { return null; }
   };
   let last = pose();
-  if (!last) { await new Promise((r) => setTimeout(r, 1200)); return "blind"; }
+  if (!last) { await new Promise((r) => setTimeout(r, 1200)); return tag("blind"); }
   const t0 = Date.now();
   let lastMoveT = t0;
   while (Date.now() - t0 < ms) {
     await new Promise((r) => setTimeout(r, 400));
     const cur = pose();
-    if (!cur) return "blind";
+    if (!cur) return tag("blind");
     const moved = cur.cell !== last.cell || Math.hypot(cur.x - last.x, cur.y - last.y) > 0.5;
     if (moved) lastMoveT = Date.now();
     last = cur;
     if (Date.now() - lastMoveT > 1600)
-      return Date.now() - t0 <= 2200 ? "no-walk" : "settled";
+      return tag(Date.now() - t0 <= 2200 ? "no-walk" : "settled");
   }
-  return "timeout";
+  return tag("timeout");
 }
 
 /** "use_object" — interact with a nearby world object (portal, NPC, door, sign…). */
@@ -136,7 +265,7 @@ export function useObjectAction() {
     if (typeof h?.UseObject !== "function" || typeof h?.NearbyGuids !== "function") return fail("unavailable");
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
-    const walk = await approach(h, res.guid);
+    const walk = await approach(bot, res.guid);
     if (!h.UseObject(res.guid)) return fail("use request failed to send");
     ctx.track?.(res.guid, res.name);
     journalNote(ctx, `use_object ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}, used; confirm result on next check-in`);
@@ -164,10 +293,14 @@ export function gotoObjectAction() {
     if (typeof h?.PursueObject !== "function" || typeof h?.NearbyGuids !== "function") return fail("unavailable");
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
+    // Cross-room targets walk door-waypoint legs first (same seam as
+    // use_object's approach); the trailing PursueObject keeps goto_object's
+    // fire-and-forget local semantics for the last few metres.
+    const routeTag = await routeToward(bot, res.guid);
     if (!h.PursueObject(res.guid, 1.0, 0, true)) return fail("pursue request failed to send");
     ctx.track?.(res.guid, res.name);
-    journalNote(ctx, `goto_object ${res.name} (${hex(res.guid)}) — walking over; check the pos line next check-in to confirm arrival`);
-    return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid) } };
+    journalNote(ctx, `goto_object ${res.name} (${hex(res.guid)})${routeTag ? ` — indoor route ${routeTag}` : ""} — walking over; check the pos line next check-in to confirm arrival`);
+    return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid), ...(routeTag ? { walk: routeTag } : {}) } };
   });
   return def;
 }
@@ -206,7 +339,7 @@ export function giveItemAction() {
     if (it.error) return fail(it.error);
     const itemGuid = (it.row.guid ?? it.row.itemGuid) >>> 0;
     const qty = a.qty ?? 1;
-    const walk = await approach(h, tgt.guid);
+    const walk = await approach(bot, tgt.guid);
     if (!h.GiveObject(tgt.guid, itemGuid, qty)) return fail("give request failed to send");
     ctx.track?.(tgt.guid, tgt.name);
     journalNote(

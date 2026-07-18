@@ -194,6 +194,95 @@ function makeHost() {
     check("give_item pursues before giving", r.ok && pi !== -1 && gi !== -1 && pi < gi, JSON.stringify(host.calls));
   }
 
+  // ── indoor door-waypoint routing (handoff-4 §0.4 wiring) ──────────────
+  // Two-cell dungeon: player in 0x860201A0, target object in 0x860201B0.
+  // World-frame graph pos per indoor_router contract (lb 0x86,0x02 origin =
+  // 25728, 384). bot.indoorGraph injection wins over the wasm builder.
+  const LBX = 0x86 * 192, LBY = 0x02 * 192;
+  const twoCellGraph = new Map([
+    [0x860201a0, { pos: { x: LBX + 50, y: LBY + 50, z: 0 }, neighbors: [0x860201b0] }],
+    [0x860201b0, { pos: { x: LBX + 60, y: LBY + 50, z: 0 }, neighbors: [0x860201a0] }],
+  ]);
+  function makeRouterBot(host, { routerState = "DONE" } = {}) {
+    const router = {
+      state: "IDLE",
+      followed: null,
+      walked: 0,
+      follow(legs) { this.followed = legs; this.state = routerState; this.walked = routerState === "DONE" ? legs.length : 0; },
+      cancel() { this.state = "IDLE"; },
+      get done() { return this.state === "DONE" || this.state === "FAILED"; },
+      get status() { return { state: this.state, leg: 0, legs: this.followed?.length ?? 0, walked: this.walked }; },
+    };
+    const kernel = { running: true, stops: 0, starts: 0, stop() { this.stops++; this.running = false; }, start() { this.starts++; this.running = true; } };
+    return { host, router, kernel, indoorGraph: twoCellGraph };
+  }
+  function makeIndoorHost() {
+    const host = makeHost();
+    host.TryGetPlayerPose = () => ({ objCellId: 0x860201a0, x: 50, y: 50, z: 0 });
+    host.TryGetObjectPosition = (g) => (g === 0x5001 ? { objCellId: 0x860201b0, x: 60, y: 50, z: 0 } : null);
+    return host;
+  }
+  // cross-room use_object: router walks door-waypoint legs, then pursues+uses.
+  {
+    const host = makeIndoorHost();
+    const bot = makeRouterBot(host);
+    const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    const legs = bot.router.followed;
+    check("cross-room use routes legs", r.ok && Array.isArray(legs) && legs.length === 2, JSON.stringify(legs));
+    check("route ends at the object's own position",
+      legs && legs[legs.length - 1].lb === 0x860201b0 && legs[legs.length - 1].x === 60 && legs[legs.length - 1].y === 50,
+      JSON.stringify(legs));
+    check("first leg is the doorway midpoint", legs && legs[0].x === 55 && legs[0].y === 50, JSON.stringify(legs));
+    check("walk tag carries routed()", String(r.result?.walk).startsWith("routed(2)+"), JSON.stringify(r.result));
+    check("kernel paused and restored", bot.kernel.stops === 1 && bot.kernel.starts === 1 && bot.kernel.running === true);
+    check("still pursues then uses", host.calls.findIndex((c) => c[0] === "pursue") < host.calls.findIndex((c) => c[0] === "use"), JSON.stringify(host.calls));
+  }
+  // same-cell target: routing must NOT engage (straight pursuit is proven).
+  {
+    const host = makeIndoorHost();
+    host.TryGetObjectPosition = () => ({ objCellId: 0x860201a0, x: 52, y: 50, z: 0 });
+    const bot = makeRouterBot(host);
+    const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    check("same-cell use skips routing", r.ok && bot.router.followed === null && !String(r.result?.walk).includes("routed"), JSON.stringify(r.result));
+  }
+  // router FAILED (wall wedge etc): tagged route-failed, Use still sent.
+  {
+    const host = makeIndoorHost();
+    const bot = makeRouterBot(host, { routerState: "FAILED" });
+    const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    check("failed route degrades to use", r.ok && host.calls.some((c) => c[0] === "use") && String(r.result?.walk).startsWith("route-failed("), JSON.stringify(r.result));
+    check("failed route still restores kernel", bot.kernel.running === true);
+  }
+  // goto_object cross-room: same seam, result carries the route tag.
+  {
+    const host = makeIndoorHost();
+    const bot = makeRouterBot(host);
+    const r = await byType.goto_object.apply(bot, { type: "goto_object", object: "0x5001" }, { journal: makeJournal() });
+    check("goto_object routes cross-room", r.ok && bot.router.followed?.length === 2 && r.result?.walk === "routed(2)", JSON.stringify(r.result));
+  }
+  // give_item cross-room: approach routes before the give.
+  {
+    const host = makeIndoorHost();
+    host.TryGetObjectPosition = (g) => (g === 0x5002 ? { objCellId: 0x860201b0, x: 60, y: 50, z: 0 } : null);
+    const bot = makeRouterBot(host);
+    const r = await byType.give_item.apply(bot, { type: "give_item", item: "token", target: "Blacksmith" }, { journal: makeJournal() });
+    check("give_item routes cross-room", r.ok && bot.router.followed?.length === 2 && String(r.result?.walk).startsWith("routed(2)+"), JSON.stringify(r.result));
+  }
+  // no router on the bot: unchanged straight-pursuit behavior.
+  {
+    const host = makeIndoorHost();
+    const r = await byType.use_object.apply({ host, indoorGraph: twoCellGraph }, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    check("no router degrades to straight pursuit", r.ok && host.calls.some((c) => c[0] === "pursue") && !String(r.result?.walk).includes("routed"), JSON.stringify(r.result));
+  }
+  // goto owns the router: routing yields, straight pursuit fires.
+  {
+    const host = makeIndoorHost();
+    const bot = makeRouterBot(host);
+    bot.globalRouter = { busy: true };
+    const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    check("goto-active yields to straight pursuit", r.ok && bot.router.followed === null && !String(r.result?.walk).includes("routed"), JSON.stringify(r.result));
+  }
+
   console.log(`\n${pass} pass, ${fail} fail`);
   process.exit(fail ? 1 : 0);
 })();
