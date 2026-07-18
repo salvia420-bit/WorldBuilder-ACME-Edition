@@ -17,10 +17,12 @@ const SUMMARY_MAX_CHARS = 240;
 // Ranking tiers: exact title > title substring > alias > body, ties broken
 // by title (the exact tier keeps "Olthoi Soldier" above "An Olthoi Soldier
 // Nest" on a 24k-article corpus).
-const SCORE_EXACT = 4;
-const SCORE_TITLE = 3;
-const SCORE_ALIAS = 2;
-const SCORE_BODY = 1;
+const SCORE_EXACT = 6;
+const SCORE_TITLE = 5;
+const SCORE_TITLE_WORDS = 4; // every query word in the title, any order/gaps
+const SCORE_ALIAS = 3;
+const SCORE_BODY = 2;
+const SCORE_BODY_WORDS = 1; // every query word somewhere in title+text
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + "…" : s); // llm_client.js:77 shape
 
@@ -85,12 +87,21 @@ export class FileKnowledgeProvider {
       const q = String(query ?? "").trim().toLowerCase();
       const n = Math.floor(Number(limit));
       if (!q || !Number.isFinite(n) || n < 1) return [];
+      // Word-AND fallback (2026-07-17): phrase-substring alone can never match
+      // "Academy Token" against "Academy Exit Token" — observed live blocking
+      // the exit-token lookup. Words shorter than 3 chars are noise (of, a).
+      const words = q.split(/\s+/).filter((w) => w.length >= 3);
+      const hasAllWords = (s) => words.length > 1 && words.every((w) => s.includes(w));
       const hits = [];
       for (const e of await this._load()) {
-        const score = e.title.toLowerCase() === q ? SCORE_EXACT
-          : e.title.toLowerCase().includes(q) ? SCORE_TITLE
+        const title = e.title.toLowerCase();
+        const text = e.text.toLowerCase();
+        const score = title === q ? SCORE_EXACT
+          : title.includes(q) ? SCORE_TITLE
+          : hasAllWords(title) ? SCORE_TITLE_WORDS
           : e.aliases.some((a) => a.toLowerCase().includes(q)) ? SCORE_ALIAS
-          : e.text.toLowerCase().includes(q) ? SCORE_BODY
+          : text.includes(q) ? SCORE_BODY
+          : hasAllWords(title + " " + text) ? SCORE_BODY_WORDS
           : 0;
         if (score) hits.push({ e, score });
       }

@@ -227,6 +227,24 @@ const SAMPLE = path.join(__dirname, "rynth", "ai", "tools", "knowledge.sample.js
       "lookup" in merged && !("lookup" in actionsMod.ACTIONS));
   }
 
+  // ---- word-AND fallback tiers (2026-07-17) -------------------------------
+  {
+    const p = new FileKnowledgeProvider({ entries: [
+      { title: "Academy Exit Token", text: "Speak to Jonathan to receive this gem." },
+      { title: "Academy Token", text: "Give to Training Master" },
+      { title: "Cow", text: "Found near the academy. Drops a token of appreciation." },
+    ]});
+    const r1 = await p.search("Academy Token", 3);
+    check("word-AND: exact still wins", r1[0].title === "Academy Token", JSON.stringify(r1));
+    check("word-AND: gapped title second", r1[1] && r1[1].title === "Academy Exit Token" && r1[1].score === 4, JSON.stringify(r1));
+    check("word-AND: body tier last", r1[2] && r1[2].title === "Cow" && r1[2].score === 1, JSON.stringify(r1));
+    const r2 = await p.search("token", 3);
+    check("word-AND: single word does NOT trigger word tiers",
+      r2.length === 3 && r2.every((r) => r.score !== 4 && r.score !== 1), JSON.stringify(r2));
+    const r3 = await p.search("exit token", 2);
+    check("word-AND: phrase-in-title unaffected", r3[0] && r3[0].title === "Academy Exit Token" && r3[0].score === 5, JSON.stringify(r3));
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {
