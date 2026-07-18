@@ -144,7 +144,7 @@ export async function executeAction(bot, a, { log } = {}) {
         // letting the sidecar error bubble up as an opaque routing failure.
         if (a.type === "goto_lb" && ((lbNum >>> 0) & 0xffff) >= 0x100)
           return fail(
-            `0x${lbNum.toString(16).toUpperCase()} is an indoor dungeon cell — outdoor goto cannot route into dungeons; use goto_object/use_object on something in your nearby list instead`,
+            `0x${lbNum.toString(16).toUpperCase()} is an indoor dungeon cell — outdoor goto cannot route into dungeons; use goto_object/use_object on something in your nearby list instead (note: an OBJECT guid from 'nearby', e.g. 0x7860205D, is NOT a cell/landblock id — never derive goto_lb targets from object guids)`,
           );
         try {
           const p = bot?.host?.TryGetPlayerPose?.();

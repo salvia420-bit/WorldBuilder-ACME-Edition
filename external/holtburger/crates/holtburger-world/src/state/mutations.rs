@@ -586,6 +586,9 @@ impl WorldState {
             .0
             .entry(PropertyString::Name)
             .or_insert_with(|| data.name.clone());
+        // Stash the private dump for upsert_entity_from_create's re-seed
+        // (lvl=0 soak bug 2026-07-18 — see the field doc in types.rs).
+        self.player_description_properties = Some(properties.clone());
 
         let bootstrap_position = data
             .pos

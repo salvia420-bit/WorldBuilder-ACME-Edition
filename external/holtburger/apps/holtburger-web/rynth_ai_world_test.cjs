@@ -286,6 +286,37 @@ function makeHost() {
     const r = await byType.give_item.apply(bot, { type: "give_item", item: "token", target: "Blacksmith" }, { journal: makeJournal() });
     check("give_item routes cross-room", r.ok && bot.router.followed?.length === 2 && String(r.result?.walk).startsWith("routed(2)+"), JSON.stringify(r.result));
   }
+  // cross-LANDBLOCK target (soak-7 §4.3): indoorLegsTo used to bail on the
+  // seam; with the stitched graph (injected here) the route walks through.
+  // Player in lb 0x8602, target in lb 0x8702 one block east — seam portal
+  // records reference full 32-bit ids, world-frame x continues across.
+  {
+    const LBX2 = 0x87 * 192;
+    const crossLbGraph = new Map([
+      [0x860201a0, { pos: { x: LBX + 180, y: LBY + 50, z: 0 }, neighbors: [0x860201b0] }],
+      [0x860201b0, { pos: { x: LBX + 190, y: LBY + 50, z: 0 }, neighbors: [0x860201a0, 0x87020100] }],
+      [0x87020100, { pos: { x: LBX2 + 10, y: LBY + 50, z: 0 }, neighbors: [0x860201b0] }],
+    ]);
+    const host = makeIndoorHost();
+    host.TryGetPlayerPose = () => ({ objCellId: 0x860201a0, x: 180, y: 50, z: 0 });
+    host.TryGetObjectPosition = (g) => (g === 0x5001 ? { objCellId: 0x87020100, x: 12, y: 50, z: 0 } : null);
+    const bot = makeRouterBot(host);
+    bot.indoorGraph = crossLbGraph;
+    const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    const legs = bot.router.followed;
+    check("cross-LB use routes stitched legs", r.ok && Array.isArray(legs) && legs.length === 4, JSON.stringify(legs));
+    check(
+      "cross-LB route ends at target pos in its OWN landblock frame",
+      legs && legs[legs.length - 1].lb === 0x87020100 && legs[legs.length - 1].x === 12 && legs[legs.length - 1].y === 50,
+      JSON.stringify(legs)
+    );
+    check(
+      "cross-LB legs carry per-cell landblock-local coords",
+      legs && legs.every((l) => l.x >= 0 && l.x < 192 && l.y >= 0 && l.y < 192),
+      JSON.stringify(legs)
+    );
+    check("cross-LB walk tag routed", String(r.result?.walk).startsWith("routed(4)+"), JSON.stringify(r.result));
+  }
   // pose cell WINS over nearest-centre (v6.3.1 route-failed(0/N) regression):
   // the body stands in cell A hard against the B-shared wall — nearer B's
   // CENTRE than A's. nearestCell-first resolved from=B(=to) -> no route ->

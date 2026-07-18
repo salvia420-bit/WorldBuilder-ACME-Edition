@@ -232,6 +232,7 @@ async function wireAiDirector(bot, aiConfig, base) {
     model: aiCfg?.model,
     maxTokens: aiCfg?.maxTokens, // reasoning-tier models need > the 1024 default
     reasoning: aiCfg?.reasoning, // e.g. { effort: "low" } — OpenRouter unified reasoning
+    provider: aiCfg?.provider, // e.g. { order: ["novita"], allow_fallbacks: false } — OpenRouter provider pin
     referer: "https://holtburger.local",
     title: "holtburger-rynth",
   });

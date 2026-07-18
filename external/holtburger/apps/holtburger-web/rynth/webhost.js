@@ -531,8 +531,15 @@ export class RynthWebHost {
     const me = this.GetPlayerId();
     const prop = me ? this._live("GetObjectIntProperty", me, 20) : undefined;
     if (typeof prop === "number" && Number.isFinite(prop)) return prop;
+    // CoinValue(20) is absent after a relog: ACE computes it lazily and a
+    // fresh character's value is never persisted (live soak v6.5.1: DB had
+    // NO type-20 row while the pack held a 10000-pyreal stack). Item Value
+    // ALSO doesn't ride the login CreateObject stream (it arrives only via
+    // SetStackSize/appraisal), so fall back to stackSize — a pyreal is
+    // unit-value, stack Value == stack size (shard DB confirms 10000/10000).
     let sum = 0;
-    for (const i of this.TryGetPlayerInventory()) if (i.wcid === 273) sum += i.value;
+    for (const i of this.TryGetPlayerInventory())
+      if (i.wcid === 273) sum += i.value || i.stackSize || 0;
     return sum;
   }
   /// Burden as an integer PERCENT of capacity. Source is the stats-plane

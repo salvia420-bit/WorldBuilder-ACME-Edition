@@ -66,6 +66,14 @@ pub struct WorldState {
     pub fellowship: Option<FellowshipState>,
     pub trade: Option<TradeState>,
     pub open_containers: std::collections::HashSet<Guid>,
+    /// Last PlayerDescription private property dump (lvl=0 soak bug,
+    /// 2026-07-18). ACE sends the local player's Level/XP/etc. exactly once
+    /// per login; any path that rebuilds the player entity from a public
+    /// baseline (ObjectCreate after an entity remove — the merge in
+    /// `upsert_entity_from_create` has nothing to merge from) would lose
+    /// them until relog. Kept here so the upsert can always re-seed.
+    pub(crate) player_description_properties:
+        Option<holtburger_common::properties::WorldObjectProperties>,
     /// Per-landblock terrain heightmap cache (9×9 vertex grid per
     /// landblock, 24 m vertex spacing, value in metres). Keyed by
     /// landblock id (the high 16 bits of `cell_id`, e.g. `0xA9B40000`
@@ -345,8 +353,23 @@ impl WorldState {
 
     pub fn get_level_info(&self) -> stats::CharacterLevelInfo {
         let table = &self.xp_table;
-        let level = self.player_level();
+        let mut level = self.player_level();
         let total_xp = self.player_total_experience();
+        // Level property lost (a wipe path missed by the upsert re-seed) or
+        // not yet streamed: derive it from total XP — the highest level whose
+        // cumulative requirement is met (index = level, value = cumulative
+        // XP; level 1 costs 0). Real characters are never level 0, so the
+        // fallback only ever fires on a broken/absent property.
+        if level == 0 && !table.character_level_xp_list.is_empty() {
+            for (idx, &required) in table.character_level_xp_list.iter().enumerate().skip(1) {
+                if total_xp >= required {
+                    level = idx as u32;
+                } else {
+                    break;
+                }
+            }
+            level = level.max(1);
+        }
         let unspent_xp = self.player_available_experience();
 
         let level_idx = level as usize;
@@ -461,6 +484,7 @@ impl WorldState {
             fellowship: None,
             trade: None,
             open_containers: std::collections::HashSet::new(),
+            player_description_properties: None,
             terrain_heights: std::collections::HashMap::new(),
             terrain_water: std::collections::HashMap::new(),
             setup_radii: std::collections::HashMap::new(),

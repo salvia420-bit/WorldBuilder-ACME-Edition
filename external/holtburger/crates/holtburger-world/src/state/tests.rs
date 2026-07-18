@@ -3071,6 +3071,111 @@ fn test_self_object_create_bootstraps_player_position() {
     assert!(!events.is_empty());
 }
 
+#[test]
+fn test_self_object_create_preserves_player_description_properties() {
+    // PlayerDescription-only properties (Level, TotalExperience, …) must
+    // survive a re-sent self ObjectCreate: ACE re-creates the player on
+    // portal/visibility transitions and the create carries no private dump.
+    // Live soak v6.4 (2026-07-18): level_info.level read 0 from the first
+    // in-dungeon re-create until relog while unspent XP kept updating.
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x50000043);
+
+    let mut properties = WorldObjectProperties::default();
+    properties.ints.insert(PropertyInt::Level, 1);
+    properties
+        .int64s
+        .insert(PropertyInt64::TotalExperience, 13);
+    let player_description = GameMessage::GameEvent(Box::new(GameEventMessage {
+        target: player_guid,
+        sequence: 1,
+        event: GameEvent::PlayerDescription(Box::new(PlayerDescriptionEventData {
+            guid: player_guid,
+            sequence: 1,
+            name: "Player".to_string(),
+            wee_type: 1,
+            pos: Some(WorldPosition::default()),
+            properties,
+            positions: std::collections::BTreeMap::new(),
+            attributes: std::collections::BTreeMap::new(),
+            skills: std::collections::BTreeMap::new(),
+            enchantments: Vec::new(),
+            spells: std::collections::BTreeMap::new(),
+            has_health: true,
+            options1: CharacterOptions1::empty(),
+            options2: CharacterOptions2::empty(),
+            shortcuts: Vec::new(),
+            hotbar_spells: Vec::new(),
+            desired_comps: Vec::new(),
+            spellbook_filters: 0,
+            gameplay_options: Vec::new(),
+            inventory: Vec::new(),
+            equipped_objects: Vec::new(),
+        })),
+    }));
+    let _ = state.handle_message(&player_description);
+    assert_eq!(state.get_level_info().level, 1);
+
+    let mut data = ObjectDescriptionData::with_guid(player_guid);
+    data.public_weenie_desc.name = Some("Player".to_string());
+    let msg = GameMessage::ObjectCreate(Box::new(data));
+    let _ = state.handle_message(&msg);
+
+    assert_eq!(
+        state.player_int_property(PropertyInt::Level),
+        Some(1),
+        "self ObjectCreate must not wipe PlayerDescription-only properties"
+    );
+    assert_eq!(state.get_level_info().level, 1);
+    assert_eq!(state.get_level_info().current_xp, 13);
+
+    // Second wipe path (live soak v6.5, 2026-07-18): the player ENTITY can be
+    // gone entirely (explicit-delete sweep) when the re-create arrives — the
+    // existing-entity merge has nothing to merge from. The stashed
+    // PlayerDescription dump must re-seed the private properties.
+    state.entities.remove(player_guid);
+    let mut data2 = ObjectDescriptionData::with_guid(player_guid);
+    data2.public_weenie_desc.name = Some("Player".to_string());
+    let _ = state.handle_message(&GameMessage::ObjectCreate(Box::new(data2)));
+    assert_eq!(
+        state.player_int_property(PropertyInt::Level),
+        Some(1),
+        "re-create after entity removal must re-seed from the stashed PlayerDescription"
+    );
+    assert_eq!(state.get_level_info().current_xp, 13);
+}
+
+#[test]
+fn test_get_level_info_derives_level_from_xp_when_property_absent() {
+    // Belt-and-braces for any wipe path the upsert re-seed misses: a level-0
+    // read with a real XP table derives the level from TotalExperience
+    // (index = level, value = cumulative XP; level 1 costs 0).
+    let mut state = WorldState::synthetic();
+    state.xp_table = Arc::new(holtburger_dat::file_type::XpTable {
+        character_level_xp_list: vec![0, 0, 1000, 3000],
+        ..Default::default()
+    });
+    let player_guid = Guid(0x50000044);
+    state.seed_local_player_entity(player_guid, "Player", WorldPosition::default());
+    state
+        .entities
+        .get_mut(player_guid)
+        .unwrap()
+        .properties
+        .int64s
+        .insert(PropertyInt64::TotalExperience, 1500);
+    // No PropertyInt::Level anywhere.
+    assert_eq!(state.get_level_info().level, 2, "1500 xp meets level 2 (1000), not 3 (3000)");
+    state
+        .entities
+        .get_mut(player_guid)
+        .unwrap()
+        .properties
+        .int64s
+        .insert(PropertyInt64::TotalExperience, 13);
+    assert_eq!(state.get_level_info().level, 1, "sub-level-2 xp still reads level 1, never 0");
+}
+
 fn spawn_invalid_motion_data(
     style: MotionStance,
     forward_command: InterpretedMotionCommand,

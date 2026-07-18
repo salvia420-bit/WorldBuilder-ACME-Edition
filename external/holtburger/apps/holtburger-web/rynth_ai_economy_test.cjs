@@ -154,6 +154,40 @@ function makeHost({ coins = 900, vendorAnswers = true, inventory = INV } = {}) {
     check("unequip_item ok (worn only)", un.ok === true && bot.host.calls.some((c) => c[0] === "unwield" && c[1] === 0x1003));
     const use = await byType.use_item.apply(bot, { type: "use_item", item: "apple" }, { journal });
     check("use_item ok", use.ok === true && bot.host.calls.some((c) => c[0] === "use" && c[1] === 0x1004));
+    check("use_item surviving item reported still-in-inventory", use.result?.consumed === false);
+  }
+
+  // --- use_item Useable.No guard (473 silent-consume gems in the world DB) --
+  {
+    const journal = makeJournal();
+    const host = makeHost();
+    host.TryGetObjectIntProperty = (g, t) => (t === 16 && g === 0x1004 ? 1 : undefined); // apple: Useable.No
+    const r = await byType.use_item.apply({ host }, { type: "use_item", item: "apple" }, { journal });
+    check("use_item refuses Useable.No items", r.ok === false && /DESTROY/.test(r.error), JSON.stringify(r));
+    check("use_item Useable.No never hits the wire", !host.calls.some((c) => c[0] === "use"));
+    host.TryGetObjectIntProperty = (g, t) => (t === 16 ? 8 : undefined); // Contained — normal consumable
+    const ok = await byType.use_item.apply({ host }, { type: "use_item", item: "apple" }, { journal });
+    check("use_item allows useable items", ok.ok === true);
+  }
+
+  // --- use_item consumption verdict (soak v6.4: token eaten, memory stale) --
+  {
+    const journal = makeJournal();
+    const host = makeHost();
+    const before = host.TryGetPlayerInventory();
+    host.UseObject = (g) => {
+      host.calls.push(["use", g]);
+      // server consumes the item: subsequent inventory reads lack it
+      host.TryGetPlayerInventory = () => before.filter((i) => i.guid !== g);
+      return true;
+    };
+    const r = await byType.use_item.apply({ host }, { type: "use_item", item: "apple" }, { journal });
+    check("use_item consumed verdict in result", r.ok === true && r.result?.consumed === true, JSON.stringify(r));
+    check(
+      "use_item consumed verdict journaled",
+      journal.entries.some((e) => /CONSUMED/.test(e.text) && /Apple/i.test(e.text)),
+      JSON.stringify(journal.entries)
+    );
   }
 
   // --- split_stack / merge_stacks (2026-07-18 verb-audit gap 5) ----------

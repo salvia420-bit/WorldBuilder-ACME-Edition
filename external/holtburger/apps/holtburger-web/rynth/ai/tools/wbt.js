@@ -251,21 +251,26 @@ export function fileTicketAction(oracle) {
   return def;
 }
 
-/** All three defs bound to one oracle. */
-export function wbtActions(oracle) {
-  return [wbtQueryAction(oracle), wbtCatalogAction(oracle), fileTicketAction(oracle)];
+/** All three defs bound to one oracle. opts.query: false -> ticket filing
+ * only (no wbt_query/wbt_catalog) — the no-hints soak mode where the
+ * playtester must learn the world in-world but still reports bugs. */
+export function wbtActions(oracle, { query = true } = {}) {
+  return query
+    ? [wbtQueryAction(oracle), wbtCatalogAction(oracle), fileTicketAction(oracle)]
+    : [fileTicketAction(oracle)];
 }
 
 /**
  * Integrator seam, registerKnowledge-shaped (knowledge.js:215): mutates a
  * PASSED-IN copy of the ACTIONS map, adding wbt_query / wbt_catalog /
- * file_ticket bound to the oracle. Integrator-time wiring — bad input throws
- * loudly here instead of silently no-opping in the LLM path.
+ * file_ticket bound to the oracle (or file_ticket alone when opts.query is
+ * false). Integrator-time wiring — bad input throws loudly here instead of
+ * silently no-opping in the LLM path.
  */
-export function registerWbt(actionsMap, oracle) {
+export function registerWbt(actionsMap, oracle, opts = {}) {
   if (!actionsMap || typeof actionsMap !== "object" || Array.isArray(actionsMap))
     throw new TypeError("registerWbt: actionsMap must be a mutable object (e.g. { ...ACTIONS })");
-  const defs = wbtActions(oracle);
+  const defs = wbtActions(oracle, opts);
   for (const def of defs) actionsMap[def.type] = def;
   return defs;
 }

@@ -17,7 +17,7 @@ import {
   nearestCell,
   findPath,
   toLegs,
-  buildGraphFromWasm,
+  buildStitchedGraphFromWasm,
 } from "../../indoor_router.js";
 
 const JOURNAL_CLIP = 800;
@@ -98,33 +98,44 @@ function resolveNearby(h, ref) {
 const worldX = (cell, x) => ((cell >>> 24) & 0xff) * 192 + x;
 const worldY = (cell, y) => ((cell >>> 16) & 0xff) * 192 + y;
 
-// Per-landblock graph cache — dungeon geometry is static, one wasm build per
-// dungeon visit. bot.indoorGraph (the dungeon_nav.js advisory field) wins so
-// tests / integrators can inject a synthetic graph.
-let _graphCache = null; // { lb, graph }
+// Per-landblock-set graph cache — dungeon geometry is static, one wasm build
+// per landblock combination visited. bot.indoorGraph (the dungeon_nav.js
+// advisory field) wins so tests / integrators can inject a synthetic graph.
+let _graphCache = null; // { key, graph }
 
-async function indoorGraphFor(bot, lb) {
+async function indoorGraphFor(bot, lbWords) {
   const injected = bot?.indoorGraph;
   if (injected) return injected;
-  if (_graphCache && _graphCache.lb === lb) return _graphCache.graph;
+  const key = [...new Set(lbWords.map((l) => (l >>> 0) & 0xffff0000))]
+    .sort((a, b) => a - b)
+    .map((l) => l.toString(16))
+    .join("+");
+  if (_graphCache && _graphCache.key === key) return _graphCache.graph;
   const handle = bot?.host?.s;
   if (!handle) return null;
   let g = null;
   try {
-    g = await buildGraphFromWasm(handle, 0, {});
+    // Stitched builder even for one landblock — same code path, and the
+    // expand option pulls in seam-adjacent blocks the endpoints reference.
+    g = await buildStitchedGraphFromWasm(lbWords, {});
   } catch {
     g = null;
   }
-  if (g) _graphCache = { lb, graph: g };
+  if (g) _graphCache = { key, graph: g };
   return g;
 }
 
 /**
  * Door-waypoint legs to `guid`, or null when indoor routing does not apply
- * (outdoors, same cell, cross-landblock, unknown position, no graph, no path).
- * Legs are router.js-shaped {lb,x,y,z}: doorway midpoints (the C# anti-corner-
+ * (outdoors, same cell, unknown position, no graph, no path). Legs are
+ * router.js-shaped {lb,x,y,z}: doorway midpoints (the C# anti-corner-
  * cut waypoints — cell centres alone let MoveToManager clip offset door
  * frames) + cell centres, ending at the target's own position in its cell.
+ *
+ * Cross-landblock endpoints (2026-07-18, soak-7 §4.3): both blocks' EnvCell
+ * graphs are stitched into one — portal ids are full 32-bit, so the seam
+ * doorway connects once both sides load. Unconnected blocks (no seam portal
+ * record) still find no path and degrade to null like before.
  */
 async function indoorLegsTo(bot, guid) {
   const h = bot?.host;
@@ -134,9 +145,8 @@ async function indoorLegsTo(bot, guid) {
   const pc = pose.objCellId >>> 0;
   const tc = tp.objCellId >>> 0;
   if (!isEnvCellId(pc) || !isEnvCellId(tc)) return null; // an endpoint is outdoors
-  if (pc >>> 16 !== tc >>> 16) return null; // cross-landblock: not this seam's job
   if (pc === tc) return null; // same room: straight pursuit is proven
-  const graph = await indoorGraphFor(bot, pc >>> 16);
+  const graph = await indoorGraphFor(bot, [pc, tc]);
   if (!graph) return null;
   // Endpoint cells: the snapshot ids are now the PRIMARY source — the wasm
   // pose-cell freeze that forced position-derived cells (v5.9: 0x01AD across

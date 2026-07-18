@@ -355,6 +355,100 @@ async function t(name, fn) {
     assert.equal(g0.size, 4); // depth 0 = whole landblock
   });
 
+  // ── buildStitchedGraphFromWasm: cross-LB stitching (2026-07-18) ──────────
+  // Second landblock one block east; seam portal records reference full
+  // 32-bit ids across the boundary (lib.rs:15970-15977), so the merged graph
+  // routes through the seam with no synthetic edges.
+  const LB2 = 0x02a90000;
+  const id2 = (lo) => (LB2 | lo) >>> 0;
+  function mockPlacementAt(cellId, wx, wy, z, nbIds, freed) {
+    let taken = false;
+    return {
+      cellId,
+      cellOriginX: wx,
+      cellOriginY: wy,
+      cellOriginZ: z,
+      takePortalCellIds() {
+        if (taken) return new Uint32Array(0);
+        taken = true;
+        return Uint32Array.from(nbIds);
+      },
+      free() {
+        freed.push(cellId >>> 0);
+      },
+    };
+  }
+  const twoLbFetch = (freed, calls) => async (lbId) => {
+    calls.push(lbId >>> 0);
+    if ((lbId >>> 0) === LB)
+      return [
+        mockPlacementAt(id(0x100), X0 + 180, Y0 + 50, 0, [id(0x101)], freed),
+        mockPlacementAt(id(0x101), X0 + 190, Y0 + 50, 0, [id(0x100), id2(0x100)], freed),
+      ];
+    if ((lbId >>> 0) === LB2)
+      return [
+        mockPlacementAt(id2(0x100), X0 + 202, Y0 + 50, 0, [id(0x101), id2(0x101)], freed),
+        mockPlacementAt(id2(0x101), X0 + 212, Y0 + 50, 0, [id2(0x100)], freed),
+      ];
+    return [];
+  };
+
+  await t("stitched graph merges two landblocks and routes across the seam", async () => {
+    const freed = [];
+    const calls = [];
+    const g = await M.buildStitchedGraphFromWasm([id(0x100), id2(0x101)], {
+      fetchEnvCells: twoLbFetch(freed, calls),
+    });
+    assert.ok(g instanceof Map);
+    assert.equal(g.size, 4);
+    assert.deepEqual(
+      M.findPath(g, id(0x100), id2(0x101)),
+      [id(0x100), id(0x101), id2(0x100), id2(0x101)]
+    );
+    assert.equal(freed.length, 4); // wasm placements freed on every path
+  });
+
+  await t("stitched graph expand chases seam references from ONE seed lb", async () => {
+    const freed = [];
+    const calls = [];
+    // Seed with only the player's landblock; the 0x101 -> LB2 portal record
+    // must pull LB2 in via expansion.
+    const g = await M.buildStitchedGraphFromWasm([id(0x100)], {
+      fetchEnvCells: twoLbFetch(freed, calls),
+    });
+    assert.deepEqual(calls.sort(), [LB, LB2].sort());
+    assert.equal(g.size, 4);
+    assert.ok(M.findPath(g, id(0x100), id2(0x101)));
+  });
+
+  await t("stitched graph expand:false stays single-lb; maxLandblocks caps", async () => {
+    const g1 = await M.buildStitchedGraphFromWasm([id(0x100)], {
+      fetchEnvCells: twoLbFetch([], []),
+      expand: false,
+    });
+    assert.equal(g1.size, 2); // LB only; seam neighbor dangles (skipped by A*)
+    const calls = [];
+    const g2 = await M.buildStitchedGraphFromWasm([id(0x100)], {
+      fetchEnvCells: twoLbFetch([], calls),
+      maxLandblocks: 1,
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(g2.size, 2);
+  });
+
+  await t("stitched graph degrades to null (no lbs, no fetch, fetch throws)", async () => {
+    assert.equal(await M.buildStitchedGraphFromWasm([], { fetchEnvCells: async () => [] }), null);
+    assert.equal(await M.buildStitchedGraphFromWasm([id(0x100)]), null); // no fetchEnvCells anywhere
+    assert.equal(
+      await M.buildStitchedGraphFromWasm([id(0x100)], {
+        fetchEnvCells: async () => {
+          throw new Error("wasm trap");
+        },
+      }),
+      null
+    );
+  });
+
   console.log(`\nindoorsim: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

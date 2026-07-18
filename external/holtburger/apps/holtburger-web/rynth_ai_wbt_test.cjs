@@ -191,6 +191,31 @@ function startMockSidecar() {
     check("compose: down sidecar degrades to ok:false", dr.length === 1 && dr[0].ok === false && /unreachable/.test(dr[0].error));
   }
 
+  // --- no-hints mode (query: false -> tickets only) -----------------------
+  {
+    const defs = wbtActions(oracle, { query: false });
+    check("no-hints: only file_ticket registered", defs.length === 1 && defs[0].type === "file_ticket");
+    const map = {};
+    registerWbt(map, oracle, { query: false });
+    check("no-hints: map lacks oracle verbs", !map.wbt_query && !map.wbt_catalog && !!map.file_ticket);
+    const ext = composeAiExtensions(makeBot(), {
+      journal: makeJournal(),
+      config: { knowledge: false, dungeonNav: false, wbt: { oracle, query: false } },
+    });
+    check(
+      "no-hints: compose drops wbt_query/wbt_catalog, keeps file_ticket",
+      !ext.extActions.wbt_query && !ext.extActions.wbt_catalog && !!ext.extActions.file_ticket
+    );
+    const sp = ext.directorDeps.systemPrompt;
+    check("no-hints: catalog omits oracle verbs", !sp.includes("wbt_query") && !sp.includes("wbt_catalog"));
+    check("no-hints: PLAYTESTER DISCIPLINE still present", sp.includes("PLAYTESTER DISCIPLINE"));
+    const dflt = composeAiExtensions(makeBot(), {
+      journal: makeJournal(),
+      config: { knowledge: false, dungeonNav: false, wbt: { oracle } },
+    });
+    check("no-hints: default stays all-on", !!dflt.extActions.wbt_query && !!dflt.extActions.wbt_catalog);
+  }
+
   // --- persona ------------------------------------------------------------
   {
     check("persona: absent -> empty", renderPersonaPreamble(undefined) === "" && renderPersonaPreamble(false) === "" && renderPersonaPreamble({}) === "");

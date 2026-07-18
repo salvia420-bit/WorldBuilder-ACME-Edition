@@ -80,7 +80,7 @@ function kindError(kind, message, extra) {
 const clip = (s, n = 200) => (typeof s === "string" && s.length > n ? s.slice(0, n) + "…" : s);
 
 export class LlmClient {
-  constructor({ apiKey, baseUrl, model, referer, title, timeoutMs = 60_000, maxTokens = 1024, reasoning, log } = {}) {
+  constructor({ apiKey, baseUrl, model, referer, title, timeoutMs = 60_000, maxTokens = 1024, reasoning, provider, log } = {}) {
     this.apiKey = apiKey ?? null;
     this.baseUrl = String(baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.model = model ?? DEFAULT_MODEL;
@@ -97,6 +97,11 @@ export class LlmClient {
     // reasoning at the default medium effort — "low" both cuts cost and
     // shrinks the empty-completion window. null -> field omitted.
     this.reasoning = reasoning && typeof reasoning === "object" ? reasoning : null;
+    // OpenRouter provider-routing config (additive, 2026-07-18), e.g.
+    // { order: ["novita"], allow_fallbacks: false } to pin a sale-priced
+    // provider. Passed through verbatim; null -> field omitted (OpenRouter
+    // default routing). Non-OpenRouter backends ignore unknown body fields.
+    this.provider = provider && typeof provider === "object" ? provider : null;
     this.log = log ?? null;
     // spend: calls/tokens count COMPLETED chats (a failed 429 attempt costs
     // nothing); errors counts chat() invocations that ultimately threw.
@@ -142,6 +147,7 @@ export class LlmClient {
       const body = JSON.stringify({
         model: useModel, messages, max_tokens: tokens, temperature,
         ...(this.reasoning ? { reasoning: this.reasoning } : {}),
+        ...(this.provider ? { provider: this.provider } : {}),
       });
       try {
         return await this._attempt(url, headers, body, useModel, t0);

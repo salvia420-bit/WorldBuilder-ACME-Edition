@@ -387,10 +387,34 @@ impl WorldState {
 
     pub(crate) fn upsert_entity_from_create(
         &mut self,
-        entity: Entity,
+        mut entity: Entity,
         events: &mut Vec<WorldEvent>,
     ) -> EntityUpsertKind {
         let guid = entity.guid;
+        // ACE re-sends the local player's own ObjectCreate (portal and
+        // visibility transitions), and the create carries only the public
+        // weenie baseline — replacing the entity wholesale dropped every
+        // PlayerDescription-only property (live soak v6.4: Level read 0
+        // from the first in-dungeon re-create until relog, while the later
+        // XP int64 updates repopulated TotalExperience around it). Keep the
+        // private dump underneath; the fresh create still wins on every
+        // property it actually carries.
+        // Base = the live entity's properties when it still exists, else the
+        // stashed PlayerDescription dump (the entity may have been removed —
+        // explicit delete + recreate — leaving nothing to merge from; observed
+        // live in soak v6.5 where Level flipped 1 -> 0 minutes into the run
+        // despite the existing-entity merge below).
+        if guid != Guid::NULL && guid == self.player.guid {
+            let base = self
+                .entities
+                .get(guid)
+                .map(|existing| existing.properties.clone())
+                .or_else(|| self.player_description_properties.clone());
+            if let Some(mut merged) = base {
+                merged.merge(std::mem::take(&mut entity.properties));
+                entity.properties = merged;
+            }
+        }
         let preserve_container_preview = entity
             .container_id()
             .is_some_and(|container| self.open_containers.contains(&container))

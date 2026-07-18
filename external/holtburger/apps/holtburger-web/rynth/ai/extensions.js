@@ -203,7 +203,9 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   // WorldBuilder.Terminal oracle (tools/wbt.js): wbt_query / wbt_catalog /
   // file_ticket over the wbt-sidecar. Default-on like the other extensions —
   // a down sidecar degrades to ok:false action results, never a throw.
-  // cfg.wbt: false -> off; { oracle } duck type | { endpoint } sidecar URL.
+  // cfg.wbt: false -> off; { oracle } duck type | { endpoint } sidecar URL;
+  // { query: false } -> file_ticket ONLY (no-hints soak mode: the oracle
+  // lookup verbs vanish but the playtester keeps its bug reporting).
   let wbt = null;
   if (cfg.wbt !== false) {
     const w = cfg.wbt && typeof cfg.wbt === "object" ? cfg.wbt : {};
@@ -211,7 +213,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
       w.oracle && typeof w.oracle.query === "function"
         ? w.oracle
         : new WbtOracle({ endpoint: w.endpoint, fetchFn: w.fetchFn });
-    registerWbt(extActions, wbt);
+    registerWbt(extActions, wbt, { query: w.query !== false });
   }
 
   // Economy hands (tools/economy.js): inventory / open_vendor / buy_items /
@@ -407,7 +409,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     return (
       `STALLED: ${Math.round(mins)} min in the same area, ${tried} object uses with NO area change — ` +
       `what you keep trying is NOT working. Change approach CLASS: an NPC you have not used, ` +
-      `give_item, a knowledge lookup with NEW terms, or walk to the farthest visible object.`
+      `give_item, ${knowledge ? "a knowledge lookup with NEW terms, " : ""}or walk to the farthest visible object.`
     );
   };
 
@@ -423,7 +425,12 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   const CHAT_KEEP = new Set(
     Array.isArray(chatCfg.categories) && chatCfg.categories.length
       ? chatCfg.categories.map((n) => n >>> 0)
-      : [1, 2, 4, 6, 9, 10] // local speech, tell, emote, death, transient, popup
+      : [0, 1, 2, 4, 6, 9, 10] // system, local speech, tell, emote, death, transient, popup
+    // 0 = system (2026-07-18): server verdicts ride System chat — e.g. ACE's
+    // 'Portal destination for portal ID N not yet implemented!' answered every
+    // use of the destination-less Central Courtyard portal, and the filter
+    // dropped it; the bot filed a ticket for a 'silent' failure the server
+    // had been explaining all along.
   );
   const CHAT_RING_MAX = 60;
   const CHAT_MAX_LINES = Number.isFinite(chatCfg.maxLines) ? chatCfg.maxLines : 12;

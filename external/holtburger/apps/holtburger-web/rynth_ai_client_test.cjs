@@ -185,6 +185,18 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     check("no reasoning by default", lastReq().body.reasoning === undefined);
   }
 
+  // ---- provider routing passthrough (OpenRouter provider pin) ----
+  {
+    const pin = { order: ["streamlake", "novita", "baidu"], allow_fallbacks: false };
+    const pc = new LlmClient({ apiKey: "k", baseUrl: base, model: "m", timeoutMs: 5000, provider: pin, log: () => {} });
+    setMode("ok");
+    await pc.chat([{ role: "user", content: "x" }]);
+    check("provider in body", eq(lastReq().body.provider, pin), JSON.stringify(lastReq().body.provider));
+    setMode("ok");
+    await client.chat([{ role: "user", content: "x" }]);
+    check("no provider by default", lastReq().body.provider === undefined);
+  }
+
   // ---- hard 401 -> kind "auth", NO retry ----
   {
     setMode("401");

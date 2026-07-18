@@ -511,32 +511,26 @@ export function buildPatrolRoute(graph, startCell, hazards = null) {
  * depth: 0/undefined = whole landblock; N>0 = BFS radius (portal hops) from
  * the current cell, over drop edges too (radius bounds SIZE, not walkability).
  */
-export async function buildGraphFromWasm(sessionHandle, depth = 0, opts = {}) {
-  if (!sessionHandle || typeof sessionHandle.getCurrentCellId !== "function") return null;
-  let cur = 0;
-  try {
-    cur = sessionHandle.getCurrentCellId() >>> 0;
-  } catch (_) {
-    return null;
-  }
-  if (!isEnvCellId(cur)) return null; // pre-spawn (0) or outdoors (>= 0xFFFE low word)
+// Shared resolver: explicit opts.fetchEnvCells wins; in-page fall back to the
+// scene3d-threaded wasm export (index.html:4418). null when neither exists.
+function resolveFetchEnvCells(opts = {}) {
+  if (typeof opts.fetchEnvCells === "function") return opts.fetchEnvCells;
+  const scene = typeof globalThis !== "undefined" ? globalThis.liveScene3d : null;
+  return scene && scene.wasmExports ? scene.wasmExports.fetchEnvCellsInLandblock : null;
+}
 
-  let fetchEnvCells = opts.fetchEnvCells;
-  if (typeof fetchEnvCells !== "function") {
-    const scene = typeof globalThis !== "undefined" ? globalThis.liveScene3d : null;
-    fetchEnvCells = scene && scene.wasmExports ? scene.wasmExports.fetchEnvCellsInLandblock : null;
-  }
-  if (typeof fetchEnvCells !== "function") return null;
-
+// Fetch one landblock's EnvCellPlacements and merge them into `graph`
+// (the per-placement parse extracted verbatim from buildGraphFromWasm).
+// Resolves true when the landblock contributed any cells; never throws.
+async function collectLandblockIntoGraph(fetchEnvCells, lbWord, graph) {
   let placements;
   try {
-    placements = await fetchEnvCells(cur & 0xffff0000);
+    placements = await fetchEnvCells((lbWord >>> 0) & 0xffff0000);
   } catch (_) {
-    return null;
+    return false;
   }
-  if (!placements || typeof placements.length !== "number" || placements.length === 0) return null;
-
-  const graph = new Map();
+  if (!placements || typeof placements.length !== "number" || placements.length === 0) return false;
+  let added = false;
   for (const p of placements) {
     try {
       const id = p.cellId >>> 0;
@@ -551,6 +545,7 @@ export async function buildGraphFromWasm(sessionHandle, depth = 0, opts = {}) {
         if (nb !== id && isEnvCellId(nb)) neighbors.push(nb); // sentinel/self filter (cs:163)
       }
       graph.set(id, { pos, neighbors });
+      added = true;
     } catch (_) {
       // malformed placement — skip, like the C# per-cell catch (cs:182)
     } finally {
@@ -563,6 +558,76 @@ export async function buildGraphFromWasm(sessionHandle, depth = 0, opts = {}) {
       }
     }
   }
+  return added;
+}
+
+// Cross-LB stitching bound (2026-07-18): dungeon complexes are small (2-4
+// landblocks); the cap only exists so a pathological portal-record web can't
+// fan a single route request out into dozens of DAT fetches.
+const STITCH_MAX_LANDBLOCKS = 8;
+
+/**
+ * Stitched multi-landblock graph (2026-07-18, cross-LB dungeon routing —
+ * playtester soak 7 §4.3: the academy courtyard's chest sits across a
+ * landblock seam and indoorLegsTo used to bail). Fetches EnvCellPlacements
+ * for every landblock in `lbIds` and merges them into ONE graph. Portal ids
+ * are full 32-bit objCellIds (lib.rs:15970-15977), so seam doorways connect
+ * naturally once both sides are loaded — no synthetic edges needed.
+ *
+ * opts.expand (default true): chase boundary references — any neighbor id
+ * pointing into a landblock not yet fetched pulls that landblock in too, so
+ * a complex spanning 3+ blocks stitches without the caller enumerating the
+ * middle. Bounded by opts.maxLandblocks (default 8). opts.fetchEnvCells as
+ * in buildGraphFromWasm. Returns Map | null; never throws.
+ */
+export async function buildStitchedGraphFromWasm(lbIds, opts = {}) {
+  const want = [
+    ...new Set(
+      (Array.isArray(lbIds) ? lbIds : [lbIds])
+        .map((id) => (Number(id) >>> 0) & 0xffff0000)
+        .filter((lb) => lb !== 0)
+    ),
+  ];
+  if (!want.length) return null;
+  const fetchEnvCells = resolveFetchEnvCells(opts);
+  if (typeof fetchEnvCells !== "function") return null;
+  const maxLbs = Number.isFinite(opts.maxLandblocks) ? opts.maxLandblocks : STITCH_MAX_LANDBLOCKS;
+  const expand = opts.expand !== false;
+
+  const graph = new Map();
+  const fetched = new Set();
+  const queue = [...want];
+  while (queue.length && fetched.size < maxLbs) {
+    const lb = queue.shift();
+    if (fetched.has(lb)) continue;
+    fetched.add(lb);
+    await collectLandblockIntoGraph(fetchEnvCells, lb, graph);
+    if (!expand) continue;
+    for (const node of graph.values()) {
+      for (const nbRaw of node.neighbors) {
+        const nbLb = (nbRaw >>> 0) & 0xffff0000;
+        if (nbLb && !fetched.has(nbLb) && !queue.includes(nbLb)) queue.push(nbLb);
+      }
+    }
+  }
+  return graph.size ? graph : null;
+}
+
+export async function buildGraphFromWasm(sessionHandle, depth = 0, opts = {}) {
+  if (!sessionHandle || typeof sessionHandle.getCurrentCellId !== "function") return null;
+  let cur = 0;
+  try {
+    cur = sessionHandle.getCurrentCellId() >>> 0;
+  } catch (_) {
+    return null;
+  }
+  if (!isEnvCellId(cur)) return null; // pre-spawn (0) or outdoors (>= 0xFFFE low word)
+
+  const fetchEnvCells = resolveFetchEnvCells(opts);
+  if (typeof fetchEnvCells !== "function") return null;
+
+  const graph = new Map();
+  await collectLandblockIntoGraph(fetchEnvCells, cur & 0xffff0000, graph);
   if (graph.size === 0) return null;
 
   if (depth > 0 && graph.has(cur)) {
@@ -596,4 +661,5 @@ export default {
   getMainRouteNodes,
   buildPatrolRoute,
   buildGraphFromWasm,
+  buildStitchedGraphFromWasm,
 };

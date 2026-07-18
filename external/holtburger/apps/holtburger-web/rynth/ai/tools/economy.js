@@ -324,9 +324,44 @@ export function useItemAction() {
     const inv = h.TryGetPlayerInventory?.() ?? [];
     const res = resolveItem(inv, { item: a.item });
     if (res.error) return fail(res.error);
+    // Retail-parity guard (2026-07-18): the retail client never sends Use
+    // for an item whose Useable flag is No (0x01) — and ACE's Gem.ActOnUse
+    // skips that check AND consumes the item afterward (Gem.cs:183-184;
+    // 473 no-effect Gem-class weenies in this world DB, the Academy Exit
+    // Token included — soaks v6.4 and v6.5 both destroyed theirs this way).
+    // Mirror the retail client and refuse before the wire.
+    try {
+      const useable = h.TryGetObjectIntProperty?.(res.row.guid, 16); // PropertyInt.ItemUseable
+      if (useable === 1)
+        return fail(
+          `${res.row.name} is not a useable item — using it does nothing and the server may DESTROY it. Keep it; if it belongs to a quest, give_item it to the relevant NPC instead.`
+        );
+    } catch {}
     if (!h.UseObject(res.row.guid)) return fail("use request failed to send");
-    journalNote(ctx, `using ${res.row.name} (${hex(res.row.guid)})`);
-    return { type: def.type, ok: true, result: { item: res.row.name } };
+    // Consumption verdict (soak v6.4, 2026-07-18): the bot use_item'd its
+    // Academy Exit Token "to see what it does", the server consumed it, and
+    // the model then trusted a stale "token in inventory" memory for 20+
+    // minutes. Poll briefly and say OUT LOUD whether the item survived —
+    // the journal line is the model's only explicit destruction signal.
+    let consumed = false;
+    try {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 2500) {
+        await new Promise((r) => setTimeout(r, 500));
+        const rows = h.TryGetPlayerInventory?.() ?? [];
+        if (!rows.some((i) => ((i.guid ?? i.itemGuid) >>> 0) === (res.row.guid >>> 0))) {
+          consumed = true;
+          break;
+        }
+      }
+    } catch {}
+    journalNote(
+      ctx,
+      consumed
+        ? `use_item ${res.row.name} (${hex(res.row.guid)}) — item CONSUMED: it is GONE from your inventory. Update your scratchpad if it mentions this item.`
+        : `using ${res.row.name} (${hex(res.row.guid)}) — still in inventory after use`
+    );
+    return { type: def.type, ok: true, result: { item: res.row.name, consumed } };
   });
   return def;
 }
