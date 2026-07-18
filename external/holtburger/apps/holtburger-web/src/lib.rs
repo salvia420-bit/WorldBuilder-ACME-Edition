@@ -30616,11 +30616,22 @@ impl SessionHandle {
         let Some(w) = world.as_ref() else {
             return Vec::new();
         };
+        use holtburger_common::properties::WorldObjectExt;
         let self_guid = w.player.guid;
         let self_pos = w.entities.get(self_guid).map(|e| &e.position);
         let mut out = Vec::new();
         for (guid, entity) in w.entities.entities.iter() {
             if *guid == self_guid {
+                continue;
+            }
+            // Roots only: worn/contained child objects (a training dummy's
+            // leather cap, pack contents) and physics-attached children are
+            // tracked entities but not free world objects — they can't be
+            // walked to or used, yet they surfaced here as phantom targets
+            // (2026-07-18: the AI playtester chased the academy dummies'
+            // worn armor for 20+ min; the real floor pickups sat two rooms
+            // over under the same display names).
+            if !entity.is_root() || entity.physics_parent_id.is_some() {
                 continue;
             }
             if max_range_m > 0.0 {
