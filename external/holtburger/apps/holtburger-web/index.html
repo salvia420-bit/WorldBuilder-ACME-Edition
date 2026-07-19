@@ -7231,6 +7231,11 @@
                         // ride a URL — a reload falls back to OpenRouter
                         // default routing for the chosen model.
                         if (cfg.ai !== false) {
+                          // ?botPersona=explorer etc. — base-prompt persona
+                          // (rynth/ai/director.js); URL-carried so reconnect
+                          // reboots keep it.
+                          const bp = botParams.get("botPersona");
+                          if (bp) cfg.ai = { ...(cfg.ai || {}), persona: bp };
                           const bm = botParams.get("botModel");
                           const bi = parseFloat(botParams.get("botInterval"));
                           if (bm) cfg.ai = { ...(cfg.ai || {}), model: bm, maxTokens: 4096, reasoning: { effort: "low" }, timeoutMs: 120000 };

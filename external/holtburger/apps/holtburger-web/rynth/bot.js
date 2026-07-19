@@ -356,7 +356,20 @@ const aiKeyOps = (LlmClient) => ({
 });
 
 async function wireAiDirector(bot, aiConfig, base) {
-  const aiCfg = aiConfig && typeof aiConfig === "object" ? aiConfig : null;
+  let aiCfg = aiConfig && typeof aiConfig === "object" ? aiConfig : null;
+  // Persona -> base prompt (URL ?botPersona=..., survives reconnect reboots).
+  // Explicit systemPrompt always wins; unknown personas fall through to the
+  // default prompt rather than failing the wire-up.
+  if (aiCfg && !aiCfg.systemPrompt && aiCfg.persona === "explorer") {
+    try {
+      const drm = await import(`${base}/ai/director.js`);
+      if (typeof drm.EXPLORER_SYSTEM_PROMPT === "string") {
+        aiCfg = { ...aiCfg, systemPrompt: drm.EXPLORER_SYSTEM_PROMPT };
+      }
+    } catch (_) {
+      /* persona is best-effort — default prompt on any load failure */
+    }
+  }
   let storedKey = null;
   try {
     storedKey = globalThis.localStorage?.getItem(AI_KEY_STORAGE) ?? null;
