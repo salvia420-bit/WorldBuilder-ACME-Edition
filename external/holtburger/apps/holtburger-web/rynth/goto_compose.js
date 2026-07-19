@@ -46,6 +46,23 @@ import {
 // World-frame metres from a full objCellId + landblock-local x/y (router.js:50).
 const worldX = (cell, x) => ((cell >>> 24) & 0xff) * 192 + x;
 const worldY = (cell, y) => ((cell >>> 16) & 0xff) * 192 + y;
+
+// Re-bucket a leg to the landblock whose base actually contains its world
+// point (the sidecar WorldToLeg convention). Dungeon EnvCell frames can put a
+// cell at NEGATIVE lb-local coords (live: Town Network 0x00070143 pose
+// x 73.4, y -62.8) — same world point, but negative locals feed
+// MoveToPosition's internal cell re-derivation garbage. Identity for legs
+// whose locals are already in [0,192).
+function normalizeLegWorldFrame(leg) {
+  const wx = worldX(leg.lb >>> 0, leg.x);
+  const wy = worldY(leg.lb >>> 0, leg.y);
+  const lbX = Math.max(0, Math.min(255, Math.floor(wx / 192)));
+  const lbY = Math.max(0, Math.min(255, Math.floor(wy / 192)));
+  const lx = wx - lbX * 192;
+  const ly = wy - lbY * 192;
+  const cell = 1 + Math.min(7, Math.max(0, Math.floor(lx / 24))) * 8 + Math.min(7, Math.max(0, Math.floor(ly / 24)));
+  return { ...leg, lb: (((lbX << 24) | (lbY << 16) | cell) >>> 0), x: lx, y: ly };
+}
 // World metres -> /loc degrees (sidecar DegToWorld inverse; rynth_sidecar_smoke.cjs:13).
 const degFromWorld = (w) => (w / 24 - 1019.5) / 10;
 
@@ -318,8 +335,14 @@ async function attemptPortalTransit(ctx, blockedLeg, tune) {
   if ((targetCell >>> 0) !== (fromCell >>> 0)) {
     const path = findPath(graph, fromCell, targetCell >>> 0);
     if (!path) return stage("portal cell unreachable"); // drop-gated / disconnected
-    const legs = toLegs(graph, path, { midpoints: true });
-    const w = await walk(legs, { label: "portal-approach" });
+    // World-frame normalize + generous per-leg deadline: the Town Network has a
+    // known perf pathology (sim can crawl ~0.3 m/s there), so short indoor
+    // cell-hop legs still need a long watchdog.
+    const legs = toLegs(graph, path, { midpoints: true })
+      .map((l) => ({ ...normalizeLegWorldFrame(l), timeoutMs: tune.indoorLegTimeoutMs }));
+    // Stall guard must outlive the long per-leg watchdog (one slow leg keeps
+    // the router status signature constant for its whole duration).
+    const w = await walk(legs, { label: "portal-approach", stallMs: tune.indoorLegTimeoutMs + 15_000 });
     if (!w.ok) return stage(`indoor walk ${(w.state || "failed").toLowerCase()}`);
     pose = (await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs)) || pose;
   }
@@ -456,6 +479,9 @@ export async function composeGoto(deps, to, opts = {}) {
     teleportPollMs: Math.min(pollMs, 500),
     portalJumpM: opts.portalJumpM ?? router?.seamJumpM ?? PORTAL_JUMP_M,
     maxTransits: opts.portalTransits ?? 3,
+    // Town Network perf pathology: the sim can crawl there, so indoor transit
+    // legs get a long per-leg watchdog (router honors leg.timeoutMs).
+    indoorLegTimeoutMs: opts.indoorLegTimeoutMs ?? 90_000,
   };
 
   const startCell = currentCell(host);

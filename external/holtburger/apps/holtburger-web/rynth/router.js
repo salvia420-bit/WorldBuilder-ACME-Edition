@@ -127,7 +127,9 @@ export class RynthRouter {
     this.lastD = Infinity;
     // Stitch legs (contract v2: straight-line fallback through unbaked/carved
     // space) get the short deadline — a physical obstacle there never clears.
-    this.legDeadlineMs = l.stitch ? Math.min(this.legTimeoutMs, this.stitchTimeoutMs) : this.legTimeoutMs;
+    this.legDeadlineMs = Number.isFinite(l.timeoutMs)
+      ? l.timeoutMs // per-leg override (goto_compose indoor transit legs)
+      : l.stitch ? Math.min(this.legTimeoutMs, this.stitchTimeoutMs) : this.legTimeoutMs;
     this.portalArrivedAt = 0; // portal-leg contact window anchor (set on first arrival)
     this.host.MoveToPosition(l.lb, l.x, l.y, l.z, true);
     this.log(`leg ${this.leg + 1}/${this.route.length} -> lb=0x${(l.lb >>> 0).toString(16)} (${l.x.toFixed(0)},${l.y.toFixed(0)})`);
