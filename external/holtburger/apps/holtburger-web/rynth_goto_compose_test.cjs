@@ -251,6 +251,116 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     check("walkLegs: no progress past stallMs -> STALLED (cancelled)", rStall.ok === false && rStall.state === "STALLED", JSON.stringify(rStall));
   }
 
+  // ── task #14: in-EnvCell portal transit ────────────────────────────────────
+  // Models the live acceptance run: an OUTDOOR goto walks through the Town
+  // Network portal, gets parked in an EnvCell, and the sidecar fails fast on a
+  // straight stitch leg into the dungeon interior toward the Holtburg exit
+  // portal. Recovery walks the cell graph to the portal, USE()s it, waits for
+  // the hop, and re-plans from the far side.
+  const ITEM_TYPE_PORTAL = 0x00010000;
+  const LP = 0x00070000, NA = LP | 0x143, NB = LP | 0x120, NC = LP | 0x121; // spawn / portal / mid cell
+  const PORTAL_GUID = 0x7000abcd;
+  // Live blocked-leg (bucketed into an outdoor-format lb by WorldToLeg): its
+  // world point is the portal's true position (0x0006*192+152.04 == 0x0007*192-39.95).
+  const BLOCKED = { lb: 0x00060017, x: 53.904, y: 152.04, z: -0.063 };
+  const twx = ((BLOCKED.lb >>> 24) & 0xff) * 192 + BLOCKED.x; // 53.904
+  const twy = ((BLOCKED.lb >>> 16) & 0xff) * 192 + BLOCKED.y; // 1304.04
+  const flatGraph = () => new Map([
+    [NA, { pos: { x: 60, y: 1330, z: 0 }, neighbors: [NB], exits: [] }],
+    [NB, { pos: { x: twx, y: twy, z: -0.063 }, neighbors: [NA], exits: [] }],
+  ]);
+  // Portal cell NB sits at the portal point (so nearestCell picks it, in z-band)
+  // but is reachable only by a vertical SHAFT DROP off the mid cell NC — A*
+  // prunes that edge, so the portal cell is unreachable.
+  const dropGraph = () => new Map([
+    [NA, { pos: { x: 60, y: 1330, z: 10 }, neighbors: [NC], exits: [] }],
+    [NC, { pos: { x: twx, y: twy, z: 10 }, neighbors: [NA, NB], exits: [] }],
+    [NB, { pos: { x: twx, y: twy, z: 0 }, neighbors: [NC], exits: [] }], // 10m below NC (dHoriz<1 => drop)
+  ]);
+
+  function portalWorld(knobs = {}) {
+    const state = {
+      cell: 0xaab40001, // start OUTDOORS
+      pose: { objCellId: 0xaab40001, x: 20, y: 20, z: 0 },
+      used: [], outdoorCalls: 0,
+    };
+    const host = {
+      s: { getCurrentCellId: () => state.cell >>> 0 },
+      TryGetPlayerPose: () => state.pose,
+      NearbyGuids: () => (knobs.noPortal ? [] : [PORTAL_GUID]),
+      TryGetObjectIntProperty: (g, st) => (g === PORTAL_GUID && st === 1 ? ITEM_TYPE_PORTAL : 0),
+      TryGetObjectDescFlags: () => 0,
+      TryGetObjectPosition: (g) => (g === PORTAL_GUID ? { objCellId: NB, x: twx, y: twy - 7 * 192, z: -0.063 } : null),
+      TryGetObjectName: (g) => (g === PORTAL_GUID ? "Portal to Holtburg" : null),
+      UseObject: (g) => {
+        state.used.push(g >>> 0);
+        if (knobs.useRejects) return false;
+        if (!knobs.noTeleport) setTimeout(() => { state.pose = { objCellId: 0x8fa00001, x: 50, y: 50, z: 0 }; state.cell = 0x8fa00001; }, 4);
+        return true;
+      },
+    };
+    // Fake indoor walk: "arrives" at the last leg's cell.
+    const walk = async (legs) => {
+      const last = legs[legs.length - 1];
+      state.pose = { objCellId: last.lb >>> 0, x: last.x, y: last.y, z: last.z };
+      return { ok: true, state: "DONE", legsWalked: legs.length };
+    };
+    const outdoorGoto = async () => {
+      state.outdoorCalls++;
+      if (state.outdoorCalls === 1) {
+        if (!knobs.stayOutdoor) { state.cell = NA >>> 0; state.pose = { objCellId: NA >>> 0, x: 60, y: 1330 - 7 * 192, z: 0 }; }
+        return { ok: false, state: "FAILED", error: "blocked stitch leg", blockedLeg: { ...BLOCKED }, legsWalked: 11, coverage: "mixed" };
+      }
+      return { ok: true, state: "DONE", legsWalked: 3, coverage: "detour" };
+    };
+    const buildGraph = (knobs.dropGated ? dropGraph : flatGraph);
+    const deps = {
+      host, router: null, outdoorGoto, walk,
+      buildGraph: async (lb) => (((lb >>> 0) & 0xffff0000) === LP ? buildGraph() : null),
+    };
+    return { state, deps };
+  }
+  const POPTS = { poseTimeoutMs: 60, pollMs: 2, stallMs: 200, portalTeleportMs: 200, portalRangeM: 10 };
+
+  {
+    const pw = portalWorld();
+    const r = await composeGoto(pw.deps, { ns: 42.1, ew: 33.6 }, POPTS);
+    check("portal: transit recovers + re-plans to success", r.ok === true, JSON.stringify(r));
+    check("portal: outdoor planner called twice (fail -> transit -> re-plan)", pw.state.outdoorCalls === 2, `calls=${pw.state.outdoorCalls}`);
+    check("portal: the portal entity was USE()d", pw.state.used.length === 1 && pw.state.used[0] === (PORTAL_GUID >>> 0), JSON.stringify(pw.state.used));
+  }
+  {
+    const pw = portalWorld({ noPortal: true });
+    const r = await composeGoto(pw.deps, { ns: 42.1, ew: 33.6 }, POPTS);
+    check("portal: no portal entity in reach -> honest error, no re-plan",
+      r.ok === false && r.error === "portal transit failed: portal entity not found" && pw.state.outdoorCalls === 1, JSON.stringify(r));
+  }
+  {
+    const pw = portalWorld({ noTeleport: true });
+    const r = await composeGoto(pw.deps, { ns: 42.1, ew: 33.6 }, POPTS);
+    check("portal: use() but no teleport -> honest error after timeout",
+      r.ok === false && r.error === "portal transit failed: no teleport" && pw.state.used.length === 1, JSON.stringify(r));
+  }
+  {
+    const pw = portalWorld({ useRejects: true });
+    const r = await composeGoto(pw.deps, { ns: 42.1, ew: 33.6 }, POPTS);
+    check("portal: use() rejected -> honest error", r.ok === false && r.error === "portal transit failed: use rejected", JSON.stringify(r));
+  }
+  {
+    const pw = portalWorld({ dropGated: true });
+    const r = await composeGoto(pw.deps, { ns: 42.1, ew: 33.6 }, POPTS);
+    check("portal: portal cell only reachable via a DROP -> honest unreachable",
+      r.ok === false && r.error === "portal transit failed: portal cell unreachable" && pw.state.used.length === 0, JSON.stringify(r));
+  }
+  {
+    // Blocked stitch but the walker is NOT in an EnvCell: transit must NOT engage;
+    // the raw outdoor failure propagates (outdoor-only stitch fail is unchanged).
+    const pw = portalWorld({ stayOutdoor: true });
+    const r = await composeGoto(pw.deps, { ns: 42.1, ew: 33.6 }, POPTS);
+    check("portal: not in an EnvCell -> no transit, raw blocked-stitch failure",
+      r.ok === false && r.error === "blocked stitch leg" && !!r.blockedLeg && pw.state.used.length === 0 && pw.state.outdoorCalls === 1, JSON.stringify(r));
+  }
+
   console.log(`\ngoto_compose: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {
