@@ -125,6 +125,7 @@ internal static class NavBake
     {
         var verts = new List<float>(); var faces = new List<int>();
         if (!AppendLandblock(sampler, geo, lb, verts, faces)) return -1;
+        if (faces.Count < 3) return 0; // all-water/empty landblock: no walkable mesh (see BakeRegionTiled)
 
         var geom = new RcSampleInputGeomProvider(verts.ToArray(), faces.ToArray());
         geom.CalculateNormals();
@@ -158,6 +159,13 @@ internal static class NavBake
                 if (AppendLandblock(sampler, geo, (uint)((x << 8) | y), verts, faces)) gathered++;
             }
         if (gathered == 0) return;
+        // A region can gather landblocks yet still yield ZERO triangles: the W1.3
+        // water rule carves out fully-flooded cells, so an all-ocean shard (no land
+        // cells, no statics/scenery collision) leaves an empty mesh. DotRecast's
+        // RcSampleInputGeomProvider/RcChunkyTriMeshs.Subdivide throws
+        // IndexOutOfRange on an empty triangle set, so short-circuit here: no
+        // walkable geometry means no tiles (correct for open ocean), not a crash.
+        if (faces.Count < 3) return;
 
         var geom = new RcSampleInputGeomProvider(verts.ToArray(), faces.ToArray());
         geom.CalculateNormals();
