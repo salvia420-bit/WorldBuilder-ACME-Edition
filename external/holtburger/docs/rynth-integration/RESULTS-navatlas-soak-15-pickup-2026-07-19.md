@@ -112,12 +112,51 @@ wall" probe at y=96 actually skirted the wall's south edge — the placement
 math in GeomExtract is correct; WBT placement origins + model y-band
 offsets and the extracted tri bboxes agree.)
 
-Secondary observation (separate, lower priority): under the kiosk flags the
-rynth router's "30s" leg timeouts and full 3-attempt replan cycles elapse in
-<100ms wall clock, and walk legs complete as large-dt leaps. Timeouts appear
-to run on the host tick clock, not wall time — worth a look at whether
-watchdogs should use wall clock, but it only compresses the failure, it
-doesn't cause it.
+~~Secondary observation: leg timeouts elapse in <100ms / movement leaps~~ —
+**RETRACTED** (same day). Timestamped console capture proved the router walks
+in real time (~4 m/s, legs seconds apart, watchdogs genuinely 30s wall
+clock). The "instant" appearance was a measurement artifact: on the busy
+kiosk, CDP `Runtime.evaluate` **responses** starve for tens of seconds while
+the page works, so a driver that anchors t0 on the issue-call's response sees
+the whole walk "already finished". Console events stream fine — timestamp
+those, not evaluate round-trips.
+
+## Incident (2026-07-19): overnight OpenRouter drain
+
+User-reported credit burn all night. Root cause: the index.html conn-fix
+auto-reboot (session takeover) builds a fresh bot from URL params on every
+reconnect — auto-starting a NEW AI director (`botModel=z-ai/glm-5.2,
+botInterval=1` → up to 70 calls/h) even though the operator had stopped the
+old one; `rynthAI.stop()` did not survive reconnects. ACE log shows the
+04:24 reconnect; the director then ran ~11h against Vendbot locked in the
+academy (the journal's "Academy Exit Token" escape attempts). Mitigated
+immediately (`&botAi=off` on the kiosk URL — bot without director, immune to
+reconnect reboots) and fixed properly by the localStorage
+`rynthAiOperatorStop` latch (`rynth/ai/operator_stop.js`): stop() latches,
+start() clears, the auto-boot path forces `cfg.ai=false` while latched.
+
+## Fixes LANDED same day (all on origin/master, live-deployed)
+
+Team: Fable lead + 2 Opus implementers (worktrees). All verified, merged:
+1. **Seal rule** (`d8975656`): seal skirts only for buildings with
+   `BuildingInfo.Portals` (interior links). Arwic 3×3: 21 sealed, 16
+   skipped; compound connectivity RESTORED on-mesh; 0x01002D22 (the real
+   gatehouse) keeps its legitimate seal.
+2. **Sidecar contract v2** (`6a296c4c`): per-leg `"stitch":true`, top-level
+   `stitchedLegs`/`partial`; TerminalGapM 15m silent swallow → 4m threshold
+   with flagged closing stitch; any stitch forces ≥"mixed". Sidecar tests
+   37/37 (two old tests were asserting the swallow-bug and got corrected).
+3. **Client fail-fast** (`b025bc39`): stitch legs get a 10s watchdog;
+   blocked stitch skips deterministic replans, error "blocked stitch leg" +
+   blockedLeg coords for the W3 journal. navsim 31/31.
+4. **Operator-stop latch** (`c1a826e8`): see incident above. 24/24 files.
+5. **Corridor re-bake + live deploy**: Arwic 3×3 re-extracted/re-baked with
+   the fixed toolchain, live tiles swapped (backup:
+   `rynthnav-data.tile-backup-pre-sealfix-20260719/`), sidecar rebuilt on
+   contract v2 and restarted. Live probes: compound entry AND wall crossing
+   both `coverage:"detour", partial:false, stitchedLegs:0`, goals reached.
+   Full-map re-bake on buildbox still pending (other towns may have sealed
+   compounds until then — but they now FLAG as stitches instead of lying).
 
 ## Still blocked / next (fix list, in dependency order)
 
