@@ -909,6 +909,24 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
       }
     });
 
+    // B7 — followRoute refuses reverse replay of a PORTAL route (task #17); a
+    // plain outdoor route reverses fine (not refused). Uses the real v16 fixture.
+    await t("B7", "followRoute: reverse replay of a portal route is refused, plain route allowed", async () => {
+      const st = world({ speed: 8 });
+      const bot = await mkBot(st);
+      try {
+        const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "rynth", "testdata", "v16_arwic_holtburg_route.json"), "utf8"));
+        const rev = await bot.followRoute(fixture.route.legs, { reverse: true });
+        assert.equal(rev.ok, false);
+        assert.equal(rev.error, "route crosses one-way portals — reverse replay unsupported");
+        const plain = [legAtWorld(st.wx + 20, st.wy), legAtWorld(st.wx + 40, st.wy)];
+        const fwd = await bot.followRoute(plain, { reverse: true });
+        assert.notEqual(fwd.error, "route crosses one-way portals — reverse replay unsupported");
+      } finally {
+        bot.stop();
+      }
+    });
+
     const tell = (bot, sender, body) => bot.host._dispatchEvent({ kind: 2, stringPayload: `${sender} tells you, "${body}"` });
 
     await t("C1", "bug2 regression: control goto routes and reports arrival", async () => {

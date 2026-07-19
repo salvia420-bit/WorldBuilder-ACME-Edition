@@ -85,13 +85,16 @@ export async function createGrindBot(sessionHandle, config = {}) {
   // sidecar and walks it. Unlike travel(), goto() restores the kernel's
   // PRIOR run state when the walk completes (or fails) — a goto issued
   // while the kernel was deliberately stopped must not restart the grind.
+  // goto_compose provides both the goto composition (needs nav) and the
+  // portal-aware followRoute replay (task #17, independent of nav), so it loads
+  // unconditionally.
+  const gcMod = await import(`${base}/goto_compose.js`);
   let globalRouter = null;
   let composeGoto = null; // outdoor<->indoor goto composition (goto_compose.js)
   if (config.nav) {
     const gr = await import(`${base}/global_router.js`);
     globalRouter = new gr.GlobalRouter(host, { endpoint: config.nav.endpoint });
-    const gc = await import(`${base}/goto_compose.js`);
-    composeGoto = gc.composeGoto;
+    composeGoto = gcMod.composeGoto;
   }
   // Concurrency guard for doGoto that also covers INDOOR-only compositions:
   // globalRouter.busy is only set while an OUTDOOR (sidecar) phase runs, so an
@@ -208,30 +211,48 @@ export async function createGrindBot(sessionHandle, config = {}) {
   // goto's kernel semantics (pause + prior-state restore) and a completion
   // promise. Last command wins: a goto() cancels this walk (poll sees IDLE).
   let followBusy = false;
-  const doFollowRoute = async (legs, { label = "route", pollMs = 500, timeoutMs = 15 * 60_000 } = {}) => {
+  const doFollowRoute = async (legs, { label = "route", pollMs = 500, timeoutMs = 15 * 60_000, reverse = false, fmt } = {}) => {
     if (globalRouter && globalRouter.busy) return { ok: false, error: "goto active" };
     if (followBusy) return { ok: false, error: "route already active" };
     if (!Array.isArray(legs) || !legs.length) return { ok: false, error: "empty route" };
+    // Contract v2 (task #17): derive portal/indoor flags (legacy routes replay
+    // without re-recording), re-bucket indoor legs to the walkable frame + stamp
+    // their long watchdog. A plain outdoor route gains no flags -> untouched.
+    const preparedLegs = gcMod.prepareReplayLegs(legs, { fmt });
+    const hasPortals = gcMod.routeHasPortals(preparedLegs);
+    // One-way portals can't be walked backwards.
+    if (reverse && hasPortals)
+      return { ok: false, error: "route crosses one-way portals — reverse replay unsupported" };
     followBusy = true;
     const wasRunning = kernel.running === true;
     kernel.stop();
     bot.mission = { kind: "route", label, startedAt: Date.now(), interrupts: 0 };
-    try { bot._onTravelStart?.({ kind: "route", label, legs }); } catch { /* hook must not break travel */ }
+    try { bot._onTravelStart?.({ kind: "route", label, legs: preparedLegs }); } catch { /* hook must not break travel */ }
     let result = { ok: false, state: "UNKNOWN" };
     try {
-      router.follow(legs);
-      const t0 = Date.now();
-      for (;;) {
-        await new Promise((r) => setTimeout(r, pollMs));
-        const st = router.status;
-        if (st.state === "DONE") { result = { ok: true, state: "DONE", legsWalked: st.legs }; break; }
-        if (st.state === "FAILED") {
-          result = { ok: false, state: "FAILED", leg: st.leg };
-          void probeFailedLeg(legs, st.leg); // async fact-finding; never awaited into the walk
-          break;
+      if (hasPortals) {
+        // Portal route: goto_compose owns the router walk (native hop + resume,
+        // touch assist on a blocked portal, one indoor-wedge re-path).
+        result = await gcMod.replayRoute(
+          { host, router, fetchEnvCells: config.nav?.fetchEnvCells, log: config.router?.log },
+          preparedLegs,
+          { pollMs, timeoutMs },
+        );
+      } else {
+        router.follow(preparedLegs);
+        const t0 = Date.now();
+        for (;;) {
+          await new Promise((r) => setTimeout(r, pollMs));
+          const st = router.status;
+          if (st.state === "DONE") { result = { ok: true, state: "DONE", legsWalked: st.legs }; break; }
+          if (st.state === "FAILED") {
+            result = { ok: false, state: "FAILED", leg: st.leg };
+            void probeFailedLeg(preparedLegs, st.leg); // async fact-finding; never awaited into the walk
+            break;
+          }
+          if (st.state === "IDLE") { result = { ok: false, state: "CANCELLED" }; break; }
+          if (Date.now() - t0 > timeoutMs) { router.cancel(); result = { ok: false, state: "TIMEOUT" }; break; }
         }
-        if (st.state === "IDLE") { result = { ok: false, state: "CANCELLED" }; break; }
-        if (Date.now() - t0 > timeoutMs) { router.cancel(); result = { ok: false, state: "TIMEOUT" }; break; }
       }
     } finally {
       followBusy = false;

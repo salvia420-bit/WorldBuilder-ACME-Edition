@@ -9,6 +9,7 @@
 // Run: node rynth_goto_compose_test.cjs   (exits 1 on any FAIL)
 "use strict";
 const path = require("node:path");
+const fs = require("node:fs");
 const { pathToFileURL } = require("node:url");
 
 let pass = 0, fail = 0;
@@ -454,6 +455,86 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     check("re-entrancy: budget exhaustion fails honestly with the stranded location",
       r.ok === false && /budget exhausted/.test(r.error) && r.error.includes("0x860201AD"), JSON.stringify(r));
     check("re-entrancy: no re-plan attempted past the budget (outdoor called once)", pw.state.outdoorCalls === 1, `calls=${pw.state.outdoorCalls}`);
+  }
+
+  // ── task #17: portal-aware route REPLAY (contract v2) ──────────────────────
+  const { deriveRouteFlags, prepareReplayLegs, routeHasPortals, replayRoute } = mod;
+  const worldXf = (lb, x) => ((lb >>> 24) & 0xff) * 192 + x;
+  const worldYf = (lb, y) => ((lb >>> 16) & 0xff) * 192 + y;
+  {
+    const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "rynth", "testdata", "v16_arwic_holtburg_route.json"), "utf8"));
+    const legs = fixture.route.legs;
+    check("fixture: no fmt (legacy) with 19 legs", fixture.route.fmt === undefined && legs.length === 19, `fmt=${fixture.route.fmt} n=${legs.length}`);
+
+    const flagged = deriveRouteFlags(legs); // legacy -> derive
+    const portalIdx = flagged.map((l, i) => (l.portal ? i : -1)).filter((i) => i >= 0);
+    const indoorIdx = flagged.map((l, i) => (l.indoor ? i : -1)).filter((i) => i >= 0);
+    check("derive: portal flags on the DEPARTURE legs 4 and 16", portalIdx.join(",") === "4,16", JSON.stringify(portalIdx));
+    check("derive: indoor flags on legs 5..16 (the 12 Town Network legs)", indoorIdx.join(",") === "5,6,7,8,9,10,11,12,13,14,15,16", JSON.stringify(indoorIdx));
+    check("derive: legacy arrival-portal flags (fixture legs 5,17) are cleared", !flagged[5].portal && !flagged[17].portal, JSON.stringify([flagged[5].portal, flagged[17].portal]));
+    check("derive: does not mutate the input", legs[4].portal === undefined && legs[16].portal === undefined);
+    // fmt:2 trusts recorder flags (no re-derivation).
+    const trusted = deriveRouteFlags([{ lb: 0x10101, x: 0, y: 0, portal: true }, { lb: 0x10102, x: 1, y: 0 }], 2);
+    check("derive: fmt:2 trusts recorder flags (short hop stays portal)", trusted[0].portal === true);
+
+    const prepared = prepareReplayLegs(legs);
+    check("prepare: portal legs preserved (4,16)", prepared[4].portal === true && prepared[16].portal === true);
+    check("prepare: indoor legs get a long per-leg timeoutMs", prepared[5].timeoutMs >= 200000 && prepared[16].timeoutMs >= 200000, JSON.stringify(prepared[5].timeoutMs));
+    check("prepare: indoor normalize PRESERVES the world point (native neg-local -> walkable frame)",
+      Math.abs(worldXf(prepared[5].lb, prepared[5].x) - worldXf(legs[5].lb, legs[5].x)) < 1e-6 &&
+      Math.abs(worldYf(prepared[5].lb, prepared[5].y) - worldYf(legs[5].lb, legs[5].y)) < 1e-6,
+      JSON.stringify({ was: [worldXf(legs[5].lb, legs[5].x), worldYf(legs[5].lb, legs[5].y)], now: [worldXf(prepared[5].lb, prepared[5].x), worldYf(prepared[5].lb, prepared[5].y)] }));
+    check("prepare: outdoor legs (0-4,17,18) untouched (no timeoutMs)", prepared[0].timeoutMs === undefined && prepared[18].timeoutMs === undefined);
+    check("routeHasPortals: fixture is a portal route", routeHasPortals(prepared) === true);
+    check("routeHasPortals: a plain outdoor route is not", routeHasPortals(prepareReplayLegs([{ lb: 0x10101, x: 0, y: 0 }, { lb: 0x10101, x: 30, y: 0 }])) === false);
+  }
+
+  // replayRoute: portal-hold FAILS (no walk-in hop) -> touch assist -> resume the
+  // remaining legs from the far side. Scripted fake router + fake host.
+  {
+    const PGUID = 0x9911abcd, ITEM_TYPE_PORTAL = 0x00010000;
+    const PLB = 0x05050001, FARLB = 0x40400001;
+    const state = { pose: { objCellId: PLB, x: 40, y: 40, z: 0 }, used: [] };
+    const host = {
+      TryGetPlayerPose: () => state.pose,
+      NearbyGuids: () => [PGUID],
+      TryGetObjectIntProperty: (g, st) => (g === PGUID && st === 1 ? ITEM_TYPE_PORTAL : 0),
+      TryGetObjectDescFlags: () => 0,
+      TryGetObjectPosition: (g) => (g === PGUID ? { objCellId: PLB, x: 40, y: 40, z: 0 } : null),
+      TryGetObjectName: () => "Portal",
+      UseObject: (g) => { state.used.push(g >>> 0); setTimeout(() => { state.pose = { objCellId: FARLB, x: 10, y: 10, z: 0 }; }, 4); return true; },
+    };
+    const follows = [];
+    const script = [
+      [{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1, portalBlocked: true }],
+      [{ state: "DONE", leg: 0, legs: 1, walked: 1 }],
+    ];
+    let q = [];
+    const router = {
+      seamJumpM: 30,
+      follow(fl) { follows.push(fl); q = (script.shift() || []).slice(); },
+      cancel() {},
+      get status() { return q.length ? q.shift() : { state: "DONE", leg: 0, legs: 0, walked: 0 }; },
+    };
+    const legs = [
+      { lb: PLB, x: 0, y: 0, z: 0 },
+      { lb: PLB, x: 40, y: 40, z: 0, portal: true },
+      { lb: FARLB, x: 10, y: 10, z: 0 },
+    ];
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, portalTeleportMs: 300, portalRangeM: 10 });
+    check("replay: blocked portal -> touch assist -> DONE", r.ok === true && r.state === "DONE", JSON.stringify(r));
+    check("replay: the portal we stood on was USE()d once", state.used.length === 1 && state.used[0] === (PGUID >>> 0), JSON.stringify(state.used));
+    check("replay: resumed with the FAR-SIDE remaining leg only", follows.length === 2 && follows[1].length === 1 && follows[1][0].lb === FARLB, JSON.stringify(follows.map((f) => f.length)));
+  }
+
+  // replayRoute: blocked portal with NO portal entity in reach -> honest failure.
+  {
+    const host = { TryGetPlayerPose: () => ({ objCellId: 0x05050001, x: 40, y: 40, z: 0 }), NearbyGuids: () => [], UseObject: () => true };
+    let q = [];
+    const script = [[{ state: "FAILED", leg: 0, walked: 0, portalBlocked: true }]];
+    const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, [{ lb: 0x05050001, x: 40, y: 40, portal: true }], { pollMs: 2, portalTeleportMs: 60 });
+    check("replay: blocked portal, no entity in reach -> honest portal-touch failure", r.ok === false && /portal touch failed/.test(r.error), JSON.stringify(r));
   }
 
   console.log(`\ngoto_compose: ${pass} passed, ${fail} failed`);

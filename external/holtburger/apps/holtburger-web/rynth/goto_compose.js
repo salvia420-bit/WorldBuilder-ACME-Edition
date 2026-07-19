@@ -72,6 +72,11 @@ const cellHex = (id) => "0x" + (id >>> 0).toString(16).toUpperCase();
 const ITEM_TYPE_PORTAL = 0x00010000;
 const ODF_PORTAL = 0x40000;
 const PORTAL_JUMP_M = 30; // world-frame pose jump that confirms a teleport (router.js SEAM_JUMP_M)
+// Shared replay contract v2 (agreed with the recorder side): a portal leg is one
+// FROM WHICH the next waypoint is >= this far in the world frame (a hop); an
+// indoor leg's waypoint cell isEnvCellId. Legacy routes (no fmt) derive both.
+const HOP_DISCONTINUITY_M = 500;
+const REPLAY_INDOOR_LEG_TIMEOUT_MS = 240_000;
 
 // Map | plain-object graph -> Map<u32,node> (indoor_router.js:70-79 asMap; not exported there).
 function toMap(graph) {
@@ -743,4 +748,187 @@ export async function composeGoto(deps, to, opts = {}) {
   };
 }
 
-export default { composeGoto, walkLegs };
+// ── replay contract v2 (task #17) ───────────────────────────────────────────
+
+// World-frame 2D distance between two legs (each {lb,x,y}).
+function legDist2D(a, b) {
+  return Math.hypot(
+    worldX(a.lb >>> 0, a.x) - worldX(b.lb >>> 0, b.x),
+    worldY(a.lb >>> 0, a.y) - worldY(b.lb >>> 0, b.y)
+  );
+}
+
+// Portal-transit tuning shared by composeGoto's transit and the replayer.
+function buildTune(opts = {}, router = null) {
+  const pollMs = opts.pollMs ?? 500;
+  return {
+    poseTimeoutMs: opts.poseTimeoutMs ?? 15_000,
+    posePollMs: Math.min(pollMs, 250),
+    portalRangeM: opts.portalRangeM ?? 10,
+    portalTeleportMs: opts.portalTeleportMs ?? 12_000,
+    teleportPollMs: Math.min(pollMs, 500),
+    portalJumpM: opts.portalJumpM ?? router?.seamJumpM ?? PORTAL_JUMP_M,
+    maxTransits: opts.portalTransits ?? 3,
+    indoorLegTimeoutMs: opts.indoorLegTimeoutMs ?? REPLAY_INDOOR_LEG_TIMEOUT_MS,
+    portalDesperateRangeM: opts.portalDesperateRangeM ?? 25,
+  };
+}
+
+/**
+ * Derive contract-v2 flags on a recorded route (task #17). fmt===2 routes carry
+ * flags from the recorder and are trusted; a LEGACY route (no fmt) is scanned:
+ *   - portal: set on leg[i] when dist(leg[i], leg[i+1]) >= 500m world-frame
+ *     (the departure leg of a hop) — recomputed, so a legacy route's stale
+ *     arrival-portal flags are corrected.
+ *   - indoor: waypoint cell isEnvCellId.
+ * Returns a NEW leg array; input is not mutated.
+ */
+export function deriveRouteFlags(legs, fmt) {
+  if (!Array.isArray(legs)) return [];
+  const legacy = fmt !== 2;
+  return legs.map((l, i) => {
+    const out = { ...l };
+    const lb = (l.lb >>> 0);
+    const indoor = legacy ? isEnvCellId(lb) : l.indoor === true;
+    let portal = l.portal === true;
+    if (legacy) {
+      const nxt = legs[i + 1];
+      portal = !!nxt && legDist2D(l, nxt) >= HOP_DISCONTINUITY_M;
+    }
+    if (portal) out.portal = true; else delete out.portal;
+    if (indoor) out.indoor = true; else delete out.indoor;
+    return out;
+  });
+}
+
+/**
+ * Flag + prepare a recorded route for the replay walker: derive v2 flags, then
+ * for INDOOR legs re-bucket to the canonical outdoor-format frame
+ * (normalizeLegWorldFrame — the recorded native EnvCell frames carry negative
+ * locals) and stamp the long indoor watchdog. Outdoor/portal-departure legs are
+ * left as recorded. Returns a NEW leg array.
+ */
+export function prepareReplayLegs(legs, opts = {}) {
+  const timeoutMs = opts.indoorLegTimeoutMs ?? REPLAY_INDOOR_LEG_TIMEOUT_MS;
+  return deriveRouteFlags(legs, opts.fmt).map((l) =>
+    l.indoor ? { ...normalizeLegWorldFrame(l), timeoutMs, indoor: true, ...(l.portal ? { portal: true } : {}) } : l
+  );
+}
+
+/** True when a (prepared) route contains any portal-departure leg. */
+export function routeHasPortals(legs) {
+  return Array.isArray(legs) && legs.some((l) => l.portal === true);
+}
+
+// One graph re-path to `target`'s cell from the current (wedged) indoor pose,
+// walked via the doorway pre-approach. Bounded ONCE by the caller.
+async function repathIndoor(ctx, tune, target) {
+  const { host, buildGraph, walk } = ctx;
+  const cell = currentCell(host);
+  if (!isEnvCellId(cell)) return { ok: false, error: "indoor re-path: not indoors" };
+  const graph = await safeBuild(buildGraph, (cell & 0xffff0000) >>> 0);
+  const nodes = toMap(graph);
+  if (nodes.size === 0) return { ok: false, error: "indoor re-path: graph unavailable" };
+  const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
+  if (!pose) return { ok: false, error: "indoor re-path: no player pose" };
+  const fromCell = resolveCell(nodes, cell, pose.objCellId >>> 0, pose.x, pose.y, pose.z);
+  const toCell = resolveCell(nodes, target.lb >>> 0, target.lb >>> 0, target.x, target.y, target.z);
+  if (!fromCell || !toCell) return { ok: false, error: "indoor re-path: cell not in graph" };
+  if ((fromCell >>> 0) === (toCell >>> 0)) return { ok: true }; // already in the target cell
+  const path = findPath(graph, fromCell, toCell >>> 0);
+  if (!path) return { ok: false, error: "indoor re-path: unreachable" };
+  const rlegs = toLegs(graph, path, { doorwayApproach: true }).map((l) => ({
+    ...normalizeLegWorldFrame(l),
+    timeoutMs: tune.indoorLegTimeoutMs,
+  }));
+  const w = await walk(rlegs, { label: "wedge-repath", stallMs: tune.indoorLegTimeoutMs + 15_000 });
+  if (!w.ok) return { ok: false, error: `indoor re-path ${(w.state || "failed").toLowerCase()}` };
+  return { ok: true };
+}
+
+/**
+ * Portal-aware route replay (task #17). Feeds the router ONE contiguous flagged
+ * leg list and lets it own the walk: the router's native portal-hold recognizes
+ * a walk-in hop and _resumeAfterPortal picks up on the far side, so most portal
+ * legs need no help here. We only intervene on a terminal FAILED:
+ *   - portalBlocked (arrived at a portal but no hop in the contact window): the
+ *     compose touch assist USEs the portal we're standing on, then we resume the
+ *     REMAINING legs from the far side (bounded by tune.maxTransits).
+ *   - an indoor-leg wedge: one graph re-path to that waypoint, then resume.
+ * Deps: { host, router, buildGraph?, walk?, fetchEnvCells?, log? }. Resolves
+ * { ok, state, legsWalked, ... }; never throws. (Segmenting is implicit — the
+ * router owns the contiguous list; explicit segment lists would duplicate its
+ * _resumeAfterPortal nearest-leg logic.)
+ */
+export async function replayRoute(deps, legs, opts = {}) {
+  const { host, router } = deps;
+  const log = deps.log || (() => {});
+  const pollMs = opts.pollMs ?? 500;
+  const timeoutMs = opts.timeoutMs ?? 15 * 60_000;
+  const buildGraph =
+    deps.buildGraph ||
+    ((lb) => buildStitchedGraphFromWasm([lb], deps.fetchEnvCells ? { fetchEnvCells: deps.fetchEnvCells } : {}));
+  const walk = deps.walk || ((wl, wopts = {}) => walkLegs(router, wl, { pollMs, stallMs: 45_000, log, ...wopts }));
+  const ctx = { host, router, buildGraph, walk, log };
+  const tune = buildTune(opts, router);
+
+  let base = 0; // index of the current sub-follow's first leg within `legs`
+  let walkedTotal = 0;
+  let touches = 0;
+  let wedges = 0;
+  const t0 = Date.now();
+  router.follow(legs.slice(base));
+  for (;;) {
+    await new Promise((r) => setTimeout(r, pollMs));
+    const st = router.status;
+    if (st.state === "DONE") return { ok: true, state: "DONE", legsWalked: walkedTotal + (st.walked ?? st.legs) };
+    if (st.state === "IDLE") return { ok: false, state: "CANCELLED", legsWalked: walkedTotal + (st.walked ?? 0) };
+    if (Date.now() - t0 > timeoutMs) {
+      router.cancel();
+      return { ok: false, state: "TIMEOUT", legsWalked: walkedTotal + (router.status.walked ?? 0) };
+    }
+    if (st.state !== "FAILED") continue; // WALK/PORTAL: the router owns the hop + resume
+
+    const failIdx = base + st.leg;
+    walkedTotal += st.walked ?? 0;
+    const failed = legs[failIdx];
+
+    // Portal leg whose walk-in hop didn't fire -> touch assist, then resume the
+    // remaining legs from the far side.
+    if (st.portalBlocked && touches < tune.maxTransits) {
+      touches += 1;
+      log(`replay: portal leg ${failIdx} blocked — touch assist`);
+      const tr = await attemptOutdoorPortalTouch(ctx, tune);
+      if (!tr.ok) {
+        return { ok: false, state: "FAILED", error: `portal touch failed: ${tr.error || (tr.noPortal ? "portal entity not found" : "unknown")}`, leg: failIdx, legsWalked: walkedTotal };
+      }
+      base = failIdx + 1;
+      if (base >= legs.length) return { ok: true, state: "DONE", legsWalked: walkedTotal };
+      router.follow(legs.slice(base));
+      continue;
+    }
+
+    // Indoor-leg wedge -> one graph re-path to the wedged waypoint, then resume.
+    if (!st.portalBlocked && failed && failed.indoor === true && wedges < 1) {
+      wedges += 1;
+      log(`replay: indoor wedge at leg ${failIdx} — one re-path`);
+      const rr = await repathIndoor(ctx, tune, failed);
+      if (!rr.ok) return { ok: false, state: "FAILED", error: rr.error, leg: failIdx, legsWalked: walkedTotal };
+      base = failIdx + 1;
+      if (base >= legs.length) return { ok: true, state: "DONE", legsWalked: walkedTotal };
+      router.follow(legs.slice(base));
+      continue;
+    }
+
+    return {
+      ok: false,
+      state: "FAILED",
+      leg: failIdx,
+      legsWalked: walkedTotal,
+      ...(st.portalBlocked ? { portalBlocked: true } : {}),
+      ...(st.stitchBlocked ? { stitchBlocked: true } : {}),
+    };
+  }
+}
+
+export default { composeGoto, walkLegs, deriveRouteFlags, prepareReplayLegs, routeHasPortals, replayRoute };
