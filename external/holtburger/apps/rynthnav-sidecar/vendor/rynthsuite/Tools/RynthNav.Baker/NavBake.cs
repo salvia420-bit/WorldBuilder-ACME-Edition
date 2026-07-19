@@ -27,6 +27,14 @@ internal static class NavBake
     private const float TiledCellSize = 0.5f;
     private const int TiledTileSize = 384;                 // 384 * 0.5 = 192
 
+    /// <summary>W1.3 water rule: count of fully-flooded terrain cells skipped this bake
+    /// (diagnostic; reset per bake by the CLI).</summary>
+    public static long WaterCellsSkipped;
+
+    /// <summary>W1.3 water rule on/off (CLI --no-water disables it, for A/B verification).
+    /// Default ON — fully-flooded cells are carved out to match retail physics.</summary>
+    public static bool WaterRuleEnabled = true;
+
     private static RcVec3f AcToRec(double ewX, double nsY, double upZ) => new((float)ewX, (float)upZ, (float)nsY);
     private static (double ew, double ns, double up) RecToAc(RcVec3f v) => (v.X, v.Z, v.Y);
 
@@ -46,6 +54,18 @@ internal static class NavBake
         for (int cy = 0; cy < 8; cy++)
             for (int cx = 0; cx < 8; cx++)
             {
+                // LOCAL ADDITION (W1.3 water rule): a cell whose FOUR corner vertices are
+                // all water terrain is EntirelyWater and unwalkable — emit NO terrain
+                // triangle (a hole) so Recast produces no walkable poly there, matching
+                // the retail client's physics blocker. This is exactly ACE
+                // LandblockStruct.CalcCellWater: cellFullyFlooded iff every corner has
+                // SurfChar[terrainType]==1, which is true only for terrain types 16..20
+                // (WaterRunning, WaterStandingFresh, WaterShallow{,Still}Sea, WaterDeepSea;
+                // FauxWaterRunning=22 is NOT water). Partially-water cells (a ford/beach
+                // edge with >=1 land corner) stay walkable, same as retail. Without this,
+                // the underwater terrain floor bakes as walkable and routes cut across
+                // lakes/rivers/ocean.
+                if (WaterRuleEnabled && IsCellEntirelyWater(land, cx, cy)) { WaterCellsSkipped++; continue; }
                 int sw = vidx[cx, cy], se = vidx[cx + 1, cy], nw = vidx[cx, cy + 1], ne = vidx[cx + 1, cy + 1];
                 if (TerrainSampler.SwToNeCut(lb, cx, cy)) { Tri(sw, se, ne); Tri(sw, ne, nw); }
                 else { Tri(sw, se, nw); Tri(se, ne, nw); }
@@ -86,6 +106,19 @@ internal static class NavBake
     }
 
     private static bool Fin(float a, float b, float c) => float.IsFinite(a) && float.IsFinite(b) && float.IsFinite(c);
+
+    // ── W1.3 water rule (retail parity: ACE LandblockStruct.SurfChar / CalcCellWater) ──
+    // SurfChar[t]==1 (water) exactly for terrain types 16..20; everything else (incl.
+    // FauxWaterRunning=22, a purely visual water surface) is dry land for physics.
+    private static bool IsWaterTerrainType(int t) => t >= 16 && t <= 20;
+
+    /// <summary>True iff cell (cx,cy)'s four corner vertices are ALL water terrain
+    /// (retail "EntirelyWater" / fully-flooded cell = unwalkable).</summary>
+    private static bool IsCellEntirelyWater(LandblockData land, int cx, int cy)
+        => IsWaterTerrainType(TerrainSampler.GetTerrainType(land, cx,     cy))
+        && IsWaterTerrainType(TerrainSampler.GetTerrainType(land, cx + 1, cy))
+        && IsWaterTerrainType(TerrainSampler.GetTerrainType(land, cx,     cy + 1))
+        && IsWaterTerrainType(TerrainSampler.GetTerrainType(land, cx + 1, cy + 1));
 
     // ── Solo bake (one self-contained tile) ─────────────────────────────────────
     public static int BakeLandblock(TerrainSampler sampler, RynthCore2.Raycast.GeometryLoader? geo, uint lb, string outDir, bool writeObj, float agentRadius)

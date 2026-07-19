@@ -73,8 +73,11 @@ if (cmd == "bake")
     RynthCore2.Raycast.GeometryLoader? geo = geomDir != null && shim.InitializeGeomDir(geomDir) ? shim : null;
     Console.WriteLine($"obstacles: {shim.StatusMessage}");
 
+    NavBake.WaterCellsSkipped = 0;
+    NavBake.WaterRuleEnabled = !args.Any(a => string.Equals(a, "--no-water", StringComparison.OrdinalIgnoreCase));
+    if (!NavBake.WaterRuleEnabled) Console.WriteLine("WARNING: --no-water — fully-flooded cells baked as walkable (A/B/diagnostic only)");
     NavBake.BakeRegionTiled(sampler, geo, x0, x1, y0, y1, outDir, radius, out int tiles, out int empty);
-    Console.WriteLine($"tiled bake DONE: {tiles} tiles written, {empty} empty.");
+    Console.WriteLine($"tiled bake DONE: {tiles} tiles written, {empty} empty. water cells skipped (fully-flooded, unwalkable): {NavBake.WaterCellsSkipped}");
     if (geo != null)
         Console.WriteLine($"obstacle triangles fed: {geo.TrianglesServed} across {geo.LandblocksServed} landblocks");
     if (x1 > x0) Console.WriteLine("connectivity X: " + NavBake.ValidateConnectivity(outDir, (uint)((x0 << 8) | y0), (uint)(((x0 + 1) << 8) | y0)));
