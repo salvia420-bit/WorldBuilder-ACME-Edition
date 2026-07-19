@@ -49,6 +49,12 @@ const worldY = (cell, y) => ((cell >>> 16) & 0xff) * 192 + y;
 // World metres -> /loc degrees (sidecar DegToWorld inverse; rynth_sidecar_smoke.cjs:13).
 const degFromWorld = (w) => (w / 24 - 1019.5) / 10;
 
+// Portal-entity classification (observe_ext.js:27,248): ItemType.Portal on
+// PropertyInt 1, or the Portal ObjectDescriptionFlag — either marks a portal.
+const ITEM_TYPE_PORTAL = 0x00010000;
+const ODF_PORTAL = 0x40000;
+const PORTAL_JUMP_M = 30; // world-frame pose jump that confirms a teleport (router.js SEAM_JUMP_M)
+
 // Map | plain-object graph -> Map<u32,node> (indoor_router.js:70-79 asMap; not exported there).
 function toMap(graph) {
   const m = new Map();
@@ -205,6 +211,161 @@ async function safeBuild(buildGraph, lbWord) {
   }
 }
 
+// Nearest PORTAL entity to `target` among those within `playerMaxM` of the
+// player (observe_ext.js nearbyPortals pattern: ItemType.Portal on PropertyInt
+// 1, or the Portal descFlag). Disambiguates a cluster (a town network has many
+// portals) by picking the one closest to the intended target world point.
+// Returns { guid, name, dPlayer, dTarget } | null. Never throws.
+function findNearbyPortal(host, playerWx, playerWy, targetWx, targetWy, playerMaxM) {
+  if (!host || typeof host.NearbyGuids !== "function") return null;
+  let guids;
+  try {
+    guids = host.NearbyGuids() || [];
+  } catch (_) {
+    return null;
+  }
+  let best = null;
+  for (const g of guids) {
+    let portalish = false;
+    try {
+      const it = host.TryGetObjectIntProperty ? host.TryGetObjectIntProperty(g, 1) : null;
+      if (typeof it === "number" && (it & ITEM_TYPE_PORTAL)) portalish = true;
+    } catch (_) {
+      /* skip */
+    }
+    if (!portalish) {
+      try {
+        const f = host.TryGetObjectDescFlags ? host.TryGetObjectDescFlags(g) : null;
+        if (typeof f === "number" && (f & ODF_PORTAL)) portalish = true;
+      } catch (_) {
+        /* skip */
+      }
+    }
+    if (!portalish) continue;
+    let p = null;
+    try {
+      p = host.TryGetObjectPosition ? host.TryGetObjectPosition(g) : null;
+    } catch (_) {
+      p = null;
+    }
+    if (!p) continue;
+    const pwx = worldX(p.objCellId >>> 0, p.x);
+    const pwy = worldY(p.objCellId >>> 0, p.y);
+    if (Math.hypot(pwx - playerWx, pwy - playerWy) > playerMaxM) continue;
+    const dTarget = Math.hypot(pwx - targetWx, pwy - targetWy);
+    if (!best || dTarget < best.dTarget) {
+      let name = "portal";
+      try {
+        name = (host.TryGetObjectName && host.TryGetObjectName(g)) || "portal";
+      } catch (_) {
+        /* keep default */
+      }
+      best = { guid: g >>> 0, name, dTarget };
+    }
+  }
+  return best;
+}
+
+// Poll the pose until it jumps >= jumpM in the world frame (a teleport) or the
+// timeout expires. Returns the far-side pose or null. Never throws.
+async function awaitTeleport(host, fromWx, fromWy, timeoutMs, pollMs, jumpM) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let p = null;
+    try {
+      p = host.TryGetPlayerPose();
+    } catch (_) {
+      p = null;
+    }
+    if (p) {
+      const wx = worldX(p.objCellId >>> 0, p.x);
+      const wy = worldY(p.objCellId >>> 0, p.y);
+      if (Math.hypot(wx - fromWx, wy - fromWy) >= jumpM) return p;
+    }
+    if (Date.now() >= deadline) return null;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+}
+
+/**
+ * In-EnvCell portal transit (task #14). The outdoor planner fails fast on a
+ * straight stitch leg it can't thread through a dungeon interior (the Town
+ * Network -> Holtburg exit-portal case): when we are parked in an EnvCell and
+ * that blocked leg points at a portal, walk the indoor cell graph to the
+ * portal's cell, USE the portal entity (arriving within 3m does not reliably
+ * fire the hop), and wait for the teleport. Then the caller re-plans the outer
+ * route from the far side. Honest {ok:false,error:"portal transit failed:<stage>"}
+ * at every stage — never hangs, never throws.
+ */
+async function attemptPortalTransit(ctx, blockedLeg, tune) {
+  const { host, walk, buildGraph } = ctx;
+  const stage = (s) => ({ ok: false, error: `portal transit failed: ${s}` });
+  if (!blockedLeg) return stage("no blocked leg");
+  const cell = currentCell(host);
+  if (!isEnvCellId(cell)) return stage("not indoors");
+  const twx = worldX(blockedLeg.lb >>> 0, blockedLeg.x);
+  const twy = worldY(blockedLeg.lb >>> 0, blockedLeg.y);
+  const graph = await safeBuild(buildGraph, cell & 0xffff0000);
+  const nodes = toMap(graph);
+  if (nodes.size === 0) return stage("indoor graph unavailable");
+  let pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
+  if (!pose) return stage("no player pose");
+  const fromCell = resolveCell(nodes, cell, pose.objCellId >>> 0, pose.x, pose.y, pose.z);
+  if (!fromCell) return stage("indoor graph unavailable");
+  const targetCell = nearestCell(nodes, twx, twy, blockedLeg.z);
+  if (!targetCell) return stage("portal cell not found");
+  // Walk the interior to the portal's cell (unless already in it).
+  if ((targetCell >>> 0) !== (fromCell >>> 0)) {
+    const path = findPath(graph, fromCell, targetCell >>> 0);
+    if (!path) return stage("portal cell unreachable"); // drop-gated / disconnected
+    const legs = toLegs(graph, path, { midpoints: true });
+    const w = await walk(legs, { label: "portal-approach" });
+    if (!w.ok) return stage(`indoor walk ${(w.state || "failed").toLowerCase()}`);
+    pose = (await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs)) || pose;
+  }
+  // Portal-touch assist: locate the portal entity in reach and USE it.
+  const pwx = worldX(pose.objCellId >>> 0, pose.x);
+  const pwy = worldY(pose.objCellId >>> 0, pose.y);
+  const portal = findNearbyPortal(host, pwx, pwy, twx, twy, tune.portalRangeM);
+  if (!portal) return stage("portal entity not found");
+  if (typeof host.UseObject !== "function") return stage("use unavailable");
+  let sent = false;
+  try {
+    sent = !!host.UseObject(portal.guid);
+  } catch (_) {
+    sent = false;
+  }
+  if (!sent) return stage("use rejected");
+  const jumped = await awaitTeleport(host, pwx, pwy, tune.portalTeleportMs, tune.teleportPollMs, tune.portalJumpM);
+  if (!jumped) return stage("no teleport");
+  return { ok: true, portal: portal.name, exitCell: targetCell >>> 0 };
+}
+
+/**
+ * Run the OUTDOOR planner, transparently recovering an in-EnvCell portal leg it
+ * fails fast on: on a blocked-leg failure while parked in an EnvCell, run the
+ * portal transit, then re-plan from the far side (bounded by tune.maxTransits).
+ * On a plain success it returns the outdoor result UNCHANGED (pure-outdoor stays
+ * identical); a transit that fails returns the outdoor result with the honest
+ * portal-transit error.
+ */
+async function outdoorWithAssist(ctx, to, opts, tune, phases) {
+  let transits = 0;
+  for (;;) {
+    const out = await ctx.outdoorGoto(to, opts);
+    if (out && out.ok === true) return out;
+    if (!out || !out.blockedLeg || transits >= tune.maxTransits || !isEnvCellId(currentCell(ctx.host))) {
+      return out;
+    }
+    const tr = await attemptPortalTransit(ctx, out.blockedLeg, tune);
+    if (phases) phases.push({ phase: "portal-transit", ok: tr.ok, ...(tr.ok ? { portal: tr.portal } : { error: tr.error }) });
+    if (ctx.log) ctx.log(tr.ok ? `portal transit via ${tr.portal} — re-planning from the far side` : tr.error);
+    if (!tr.ok) return { ...out, ok: false, error: tr.error, portalTransit: false };
+    transits += 1;
+    // teleported — loop and re-plan the outdoor route from the new pose.
+  }
+}
+
 // Honest terminal failure, composed-shape.
 const fail = (error, extra = {}) => ({
   ok: false,
@@ -242,12 +403,29 @@ export async function composeGoto(deps, to, opts = {}) {
     ((lb) => buildStitchedGraphFromWasm([lb], deps.fetchEnvCells ? { fetchEnvCells: deps.fetchEnvCells } : {}));
   const walk = deps.walk || ((legs, wopts = {}) => walkLegs(router, legs, { pollMs, stallMs, log, ...wopts }));
 
+  // Portal-transit assist context/tuning (task #14): the OUTDOOR planner fails
+  // fast on a straight stitch leg into a dungeon interior; when we are parked in
+  // an EnvCell we recover by walking the cell graph to the portal, USE-ing it,
+  // and re-planning from the far side. `outdoorWithAssist` is transparent on a
+  // plain outdoor success (pure-outdoor stays identical).
+  const ctx = { host, router, outdoorGoto, walk, buildGraph, log };
+  const tune = {
+    poseTimeoutMs,
+    posePollMs,
+    portalRangeM: opts.portalRangeM ?? 10,
+    portalTeleportMs: opts.portalTeleportMs ?? 12_000,
+    teleportPollMs: Math.min(pollMs, 500),
+    portalJumpM: opts.portalJumpM ?? router?.seamJumpM ?? PORTAL_JUMP_M,
+    maxTransits: opts.portalTransits ?? 3,
+  };
+
   const startCell = currentCell(host);
   const startIndoor = isEnvCellId(startCell);
   const goalIndoor = !!(to && typeof to === "object" && "lb" in to && isEnvCellId((to.lb >>> 0)));
 
-  // ── Case 0 — pure outdoor: IDENTICAL to the pre-composition path. ──────────
-  if (!startIndoor && !goalIndoor) return outdoorGoto(to, opts);
+  // ── Case 0 — pure outdoor: IDENTICAL to the pre-composition path on success
+  //    (outdoorWithAssist only diverges to recover an in-EnvCell portal leg). ─
+  if (!startIndoor && !goalIndoor) return outdoorWithAssist(ctx, to, opts, tune, null);
 
   const phases = [];
   let legsWalked = 0;
@@ -308,9 +486,10 @@ export async function composeGoto(deps, to, opts = {}) {
     // We are outdoors now — fall through to Phase B/C.
   }
 
-  // ── Phase B — outdoors, goal outdoors: hand the rest to the sidecar planner. ─
+  // ── Phase B — outdoors, goal outdoors: hand the rest to the sidecar planner
+  //    (with in-EnvCell portal-transit recovery). ─────────────────────────────
   if (!goalIndoor) {
-    const w = await outdoorGoto(to, opts);
+    const w = await outdoorWithAssist(ctx, to, opts, tune, phases);
     phases.push({ phase: "outdoor", ok: w.ok, state: w.state, legsWalked: w.legsWalked ?? 0 });
     return {
       ok: w.ok === true,
@@ -333,7 +512,7 @@ export async function composeGoto(deps, to, opts = {}) {
   const goalLb = (to.lb >>> 0) & 0xffff0000;
   const gwx = worldX(to.lb >>> 0, to.x);
   const gwy = worldY(to.lb >>> 0, to.y);
-  const approach = await outdoorGoto({ ns: degFromWorld(gwy), ew: degFromWorld(gwx) }, opts);
+  const approach = await outdoorWithAssist(ctx, { ns: degFromWorld(gwy), ew: degFromWorld(gwx) }, opts, tune, phases);
   phases.push({ phase: "approach", ok: approach.ok, state: approach.state, legsWalked: approach.legsWalked ?? 0 });
   legsWalked += approach.legsWalked ?? 0;
   if (approach.ok !== true) {
