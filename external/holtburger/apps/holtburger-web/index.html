@@ -7230,6 +7230,8 @@
                         // minutes; caps scale with it). Provider pins can't
                         // ride a URL — a reload falls back to OpenRouter
                         // default routing for the chosen model.
+                        // ?botKernel=off — no grind loops (explorer/pure-travel).
+                        if (botParams.get("botKernel") === "off") cfg.kernel = false;
                         if (cfg.ai !== false) {
                           // ?botPersona=explorer etc. — base-prompt persona
                           // (rynth/ai/director.js); URL-carried so reconnect

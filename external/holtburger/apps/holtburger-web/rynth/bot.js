@@ -284,7 +284,10 @@ export async function createGrindBot(sessionHandle, config = {}) {
         });
 
   host.start(config.hz ?? 10);
-  kernel.start();
+  // config.kernel === false: no grind loops at all (combat/loot/buff/vitals
+  // stay idle — explorer persona / pure-travel sessions). goto/followRoute
+  // key their kernel restore off wasRunning, so it STAYS off across routes.
+  if (config.kernel !== false) kernel.start();
 
   const bot = {
     host,

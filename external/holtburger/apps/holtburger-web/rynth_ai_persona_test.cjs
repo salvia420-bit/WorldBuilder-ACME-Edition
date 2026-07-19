@@ -24,7 +24,11 @@ for (const section of ["ACTIONS", "REPLY CONTRACT", "MEMORY", "GROUND TRUTH", "_
 }
 check("explorer prompt has MISSION framing", explorerBlock.includes("Discovery is the score"));
 check("explorer prompt demotes combat/shopping", explorerBlock.includes("NOT goals"));
+check("explorer prompt forbids healing/vitals", explorerBlock.includes("NEVER heal"));
+check("explorer prompt has no survival section", !explorerBlock.includes("SURVIVAL FLOOR"));
 check("explorer reply contract identical", explorerBlock.includes('"next_check_minutes": <1..30>'));
+check("bot.js kernel off-switch", /config\.kernel !== false\) kernel\.start\(\)/.test(bot));
+check("index.html reads ?botKernel", /botParams\.get\("botKernel"\)/.test(html));
 
 check("bot.js persona -> EXPLORER_SYSTEM_PROMPT branch",
   /persona === "explorer"/.test(bot) && /EXPLORER_SYSTEM_PROMPT/.test(bot));
