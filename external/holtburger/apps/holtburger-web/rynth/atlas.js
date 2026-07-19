@@ -10,17 +10,29 @@
 // helpers by the caller (bot.js reads host.s.playerRunRate()); the atlas
 // never reaches for it. This keeps the whole module node-testable.
 //
-// ── ETA model (SPEC §3-W2.3, no calibration constant) ──────────────────────
-// Ground speed = runRate × RUN_SPEED_MS, where RUN_SPEED_MS = 4.0 m/s is the
-// wasm movement integrator's own cap at run_rate 1 (stateGroundSpeed /
-// RUN_SPEED=4.0; the skill/burden plateau ==800 -> 4.5 is already baked into
-// playerRunRate()). So NO magic constant is introduced here: the number is
-// the client's, injected. estMs = groundUnits / speed × 1000 + portal dwell
-// (4 s each) + vendor dwell (10 s each waypoint labelled a vendor). W2
-// deliverable #3 verifies this anim-rate→m/s chain deterministically in the
-// offline sim; the measured RUN_SPEED_MS is pinned here once confirmed.
+// ── ETA model (SPEC §3-W2.3, calibrated — no magic constant) ───────────────
+// Ground run speed (m/s) = runRate × RUN_SPEED_MS. RUN_SPEED_MS is NOT invented
+// here: it is the client's own RunForward MotionTable anim speed, RUN_ANIM_SPEED
+// = 4.0, verified from source this session (W2 deliverable #3):
+//   • apps/holtburger-web/src/lib.rs:35765  const RUN_ANIM_SPEED: f32 = 4.0;
+//     (== crates/holtburger-core/.../motion_interp.rs:189).
+//   • state_ground_speed_inner (lib.rs:6902) — the wasm `stateGroundSpeed`
+//     export JS already uses for foot-planting: RunForward magnitude = 4.0 ×
+//     forward_speed, then clamp to `run_rate × 4.0`. For a straight run
+//     forward_speed carries run_rate, so ground speed = run_rate × 4.0.
+//   • run_rate itself = run_rate_from_skill_and_burden (context.rs:130-153):
+//     (load_mod·(skill/(skill+200)·11)+4)/4, range [1.0 (base) .. 4.5 (skill
+//     ==800 plateau, 18.0/4)] → 4.0 .. 18.0 m/s. Injected here via
+//     playerRunRate() (NOT re-scaled: the getter already returns run_rate).
+//   • The "4.5" in core movement tests (system/tests.rs:1863) is a SEEDED
+//     base_run_forward_velocity override to isolate the integrator, not the
+//     canonical anim constant — do not confuse it for RUN_ANIM_SPEED.
+// The env840 offline harness (appendix B §4) uses RUN_SPEED=4.0 = this value at
+// run_rate 1; the W2.6 Rust route-validator re-measures displacement per frame
+// and asserts ≈ run_rate × 4.0, closing the loop empirically.
+// estMs = groundUnits / (runRate×4.0) × 1000 + 4 s/portal + 10 s/vendor-waypoint.
 
-export const RUN_SPEED_MS = 4.0; // wasm integrator cap at run_rate 1 (appendix B §4)
+export const RUN_SPEED_MS = 4.0; // RUN_ANIM_SPEED (retail RunForward anim speed); see derivation above
 const PORTAL_DWELL_MS = 4000; // router PORTAL_SETTLE_MS
 const VENDOR_DWELL_MS = 10000; // ~vendor open+read
 const OVERRUN_FACTOR = 2.0; // actual > this × est counts as an overrun strike
