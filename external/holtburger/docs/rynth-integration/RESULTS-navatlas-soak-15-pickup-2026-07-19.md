@@ -48,26 +48,45 @@ it is not the pose bug** (zero NULL cells in every failing run).
 coverage=mixed plan. Console: leg 1 → C6A9 (84,104) arrives; leg 2 →
 (84,82) times out without progress; replan from the same pose reproduces the
 same plan. The plan heads EAST from Arwic center because it routes through
-the **Arwic Town Network portal hub**; the approach threads the farm belt.
+the **Arwic Town Network portal hub**; the approach crosses the town's
+fortification wall line.
 
-Evidence (WB.Terminal, RetailSmoke project):
-- Terrain along x=84, y=82..104 is flat (height 42) — no cliff.
-- The farm is a regular ~24m-pitch grid of crop-plot objects
-  (`0x01002D21`/`0x01002D23` GfxObjs + Setup `0x02000322` posts); render
-  `scratchpad/c6a9.png` shows the lattice. Leg 2's line (local x=84) passes
-  directly through grid objects at world (38100,32532) and (38100,32556);
-  the leg target (38100,32530) is essentially inside one.
-- `0x01002D23`'s physics vertices span ±6.8–7.2m — each plot is a **~14m
-  solid collider**, leaving ~10m gaps in the lattice. The movement sim
-  (correctly, per DAT collision) refuses the straight line; the nav tiles
-  mark the field walkable, so the planner never routes around, and replans
-  are deterministic → retries exhausted.
+**The blocker is literally Arwic's stone city wall.** Identification
+(follow-up research pass, same day — supersedes the first-draft "crop plot"
+guess): the blocking models `0x01002D21`/`0x01002D23` belong to the
+`0x01002D20–2F` family, a modular wall kit near-unique to Arwic:
 
-**Conclusion: W1 bake gap — landblock-static crop-plot objects (and likely
-their whole object class) are not carved into the obstacle tiles at C6A9
-(and presumably other farm towns).** The client has no portal-avoidance
-route option (`POST /route` body is bare `{from,to}`), so every Holtburg
-goto from Arwic re-enters the blocked portal-hub approach.
+- `2D20/2D21` — 24m-wide wall segments, 7.2m tall, 46 physics polys.
+- `2D22` — 24m-wide, **30.9m tall** (wall-with-tower piece), 189 polys.
+- `2D23` — 24m-wide segment, 10.2m tall.
+- `2D24/2D25` — 24m segments with the opposite y-band offset (other face).
+- `2D26` — small post (2×0.3×2.7m).
+- `2D27–2D2F` — **zero physics polys**: the `HasDIDDegrade` distance-LOD
+  doubles of the above. Do not carve these.
+- Raw byte-scan of client_cell_1.dat: ~36 total placements world-wide,
+  concentrated at C6A9 — this is an Arwic-specific structure, matching
+  acpedia's Arwic entry (town at 33.6N 56.8E: rebuilt after the Shadow
+  Spire destruction as "a fortified city surrounded by sturdy, stone
+  walls"). The soak-14 "Arwic wall" name was literal.
+- No Setup wraps them (`asset-used-by` in portal.dat: 0 referrers) — they
+  are placed as **bare GfxObjs directly in the landblock**, and ontology
+  buckets them as Structure/maxDimension 24.
+
+Evidence for the bake gap (WB.Terminal, RetailSmoke project):
+- Terrain along x=84, y=82..104 is flat (height 42) — no cliff; the wall
+  segments at world (38100,32532) and (38100,32556) sit at 90° yaw, so
+  their 24m spans butt end-to-end into a continuous N-S wall exactly on
+  leg 2's line; the leg target (38100,32530) is essentially inside one.
+- `dist/scenery/0xC6A9.scenery.jsonl` has **6 rows, all Scene-generated
+  0x02 Setups** (scale/source_cell fields) — none of the landblock's ~97
+  static objects are present. **Landblock statics never reach the obstacle
+  bake at all**; the movement sim (correctly, per DAT physics) collides
+  with what the planner cannot see, so replans are deterministic → retries
+  exhausted.
+
+The client has no portal-avoidance route option (`POST /route` body is bare
+`{from,to}`), so every Holtburg goto from Arwic re-enters the blocked
+portal-hub approach.
 
 Secondary observation (separate, lower priority): under the kiosk flags the
 rynth router's "30s" leg timeouts and full 3-attempt replan cycles elapse in
@@ -78,9 +97,12 @@ doesn't cause it.
 
 ## Still blocked / next
 
-1. **Carve the C6A9 (and same-class) crop-plot objects into the nav bake**
-   (agent-A territory; the sweep/fullmap verify machinery from W1/W3 is the
-   place to add a regression probe), OR teach the sidecar a portal-avoid /
+1. **Feed landblock-static objects (with physics polys, e.g. the Arwic wall
+   kit 0x01002D20–26; skip the physics-free LOD tail 2D27–2F) into the nav
+   bake** — the gap is class-wide, not Arwic-specific: dist scenery shards
+   carry only Scene-generated Setups, never LB statics. (Agent-A territory;
+   the sweep/fullmap verify machinery from W1/W3 is the place to add a
+   regression probe.) OR teach the sidecar a portal-avoid /
    replan-with-blacklist option so a failed leg poisons its tile.
 2. Re-run Phase-2 acceptance (Arwic→Holtburg goto → arrival → auto-record →
    follow_route) — everything else already passes.
