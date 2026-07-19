@@ -303,6 +303,12 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     [NC, { pos: { x: twx, y: twy, z: 10 }, neighbors: [NA, NB], exits: [] }],
     [NB, { pos: { x: twx, y: twy, z: 0 }, neighbors: [NC], exits: [] }], // 10m below NC (dHoriz<1 => drop)
   ]);
+  // task #16: the WRONG-portal landing — a different dungeon (the academy, live
+  // v15: 0x860201AD, ~44km away). One EnvCell with an outdoor exit portal.
+  const LA = 0x86020000, EA = LA | 0x1ad;
+  const academyGraph = () => new Map([
+    [EA, { pos: { x: 0x86 * 192 + 10, y: 0x02 * 192 + 10, z: 0 }, neighbors: [], exits: [LA | 0x0005] }],
+  ]);
 
   function portalWorld(knobs = {}) {
     const state = {
@@ -321,13 +327,18 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
       UseObject: (g) => {
         state.used.push(g >>> 0);
         if (knobs.useRejects) return false;
-        if (!knobs.noTeleport) setTimeout(() => { state.pose = { objCellId: 0x8fa00001, x: 50, y: 50, z: 0 }; state.cell = 0x8fa00001; }, 4);
+        // Teleport target: outdoors by default; knobs.hopToIndoor flings us into
+        // a WRONG dungeon (task #16 re-entrancy — must be >500m for the walk-in
+        // hop threshold and detected by awaitTeleport).
+        const dest = (knobs.hopToIndoor || 0x8fa00001) >>> 0;
+        if (!knobs.noTeleport) setTimeout(() => { state.pose = { objCellId: dest, x: 10, y: 10, z: 0 }; state.cell = dest; }, 4);
         return true;
       },
     };
     // Fake indoor walk: fails the first `knobs.walkFails` calls (pose stays put
-    // on the wedge), then "arrives" at the last leg's cell. Records labels so a
-    // test can assert the re-walk retry ran exactly once.
+    // on the wedge), then "arrives" at the last leg's cell (updating BOTH pose
+    // and current-cell so an exit walk transitions us to outdoors). Records
+    // labels so a test can assert the re-walk / re-exit sequences.
     state.walkCalls = 0;
     state.walkLabels = [];
     const walk = async (legs, o = {}) => {
@@ -336,6 +347,7 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
       if (state.walkCalls <= (knobs.walkFails || 0)) return { ok: false, state: "FAILED", legsWalked: 0 };
       const last = legs[legs.length - 1];
       state.pose = { objCellId: last.lb >>> 0, x: last.x, y: last.y, z: last.z };
+      state.cell = last.lb >>> 0; // arriving updates the current cell
       return { ok: true, state: "DONE", legsWalked: legs.length };
     };
     const outdoorGoto = async () => {
@@ -346,10 +358,17 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
       }
       return { ok: true, state: "DONE", legsWalked: 3, coverage: "detour" };
     };
-    const buildGraph = (knobs.dropGated ? dropGraph : flatGraph);
+    const graphFn = knobs.dropGated ? dropGraph : flatGraph;
     const deps = {
       host, router: null, outdoorGoto, walk,
-      buildGraph: async (lb) => (((lb >>> 0) & 0xffff0000) === LP ? buildGraph() : null),
+      buildGraph: async (lb) => {
+        // Unsigned lb-word compare: the academy lb (0x86020000) exceeds 2^31, so
+        // a signed `& 0xffff0000` would mis-match; >>> 0 keeps both sides u32.
+        const w = ((lb >>> 0) & 0xffff0000) >>> 0;
+        if (w === ((LP & 0xffff0000) >>> 0)) return graphFn();
+        if (w === ((LA & 0xffff0000) >>> 0)) return academyGraph();
+        return null;
+      },
     };
     return { state, deps };
   }
@@ -412,6 +431,29 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     check("rewalk: both wedge -> honest indoor-walk failure", r.ok === false && /indoor walk/.test(r.error), JSON.stringify(r));
     check("rewalk: retry runs once and only once (exactly 2 walk calls)",
       pw.state.walkCalls === 2 && pw.state.walkLabels.join(",") === "portal-approach,portal-approach-retry", JSON.stringify(pw.state.walkLabels));
+  }
+
+  // ── task #16: re-entrancy — a hop that lands in a WRONG dungeon re-composes ─
+  {
+    // The portal transit clips a hallway portal and flings us into the academy
+    // (a different-lb EnvCell). Instead of 400ing the sidecar with an indoor
+    // `from`, we exit the academy, then the outdoor planner re-plans from there.
+    const pw = portalWorld({ hopToIndoor: EA });
+    const r = await composeGoto(pw.deps, { ns: 42.1, ew: 33.6 }, POPTS);
+    check("re-entrancy: wrong-dungeon hop becomes a detour -> success", r.ok === true, JSON.stringify(r));
+    check("re-entrancy: sequence = portal-approach, RE-EXIT, then a 2nd sidecar plan",
+      pw.state.walkLabels.join(",") === "portal-approach,re-exit" && pw.state.outdoorCalls === 2, JSON.stringify({ walks: pw.state.walkLabels, out: pw.state.outdoorCalls }));
+    check("re-entrancy: the wrong portal was USE()d exactly once", pw.state.used.length === 1, JSON.stringify(pw.state.used));
+  }
+  {
+    // Budget: re-dispatches count against maxTransits. With portalTransits=1 the
+    // single transit consumes the budget; the next indoor landing can't re-exit
+    // and we fail honestly WITH the current location.
+    const pw = portalWorld({ hopToIndoor: EA });
+    const r = await composeGoto(pw.deps, { ns: 42.1, ew: 33.6 }, { ...POPTS, portalTransits: 1 });
+    check("re-entrancy: budget exhaustion fails honestly with the stranded location",
+      r.ok === false && /budget exhausted/.test(r.error) && r.error.includes("0x860201AD"), JSON.stringify(r));
+    check("re-entrancy: no re-plan attempted past the budget (outdoor called once)", pw.state.outdoorCalls === 1, `calls=${pw.state.outdoorCalls}`);
   }
 
   console.log(`\ngoto_compose: ${pass} passed, ${fail} failed`);

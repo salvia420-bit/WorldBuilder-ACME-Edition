@@ -65,6 +65,7 @@ function normalizeLegWorldFrame(leg) {
 }
 // World metres -> /loc degrees (sidecar DegToWorld inverse; rynth_sidecar_smoke.cjs:13).
 const degFromWorld = (w) => (w / 24 - 1019.5) / 10;
+const cellHex = (id) => "0x" + (id >>> 0).toString(16).toUpperCase();
 
 // Portal-entity classification (observe_ext.js:27,248): ItemType.Portal on
 // PropertyInt 1, or the Portal ObjectDescriptionFlag — either marks a portal.
@@ -452,6 +453,33 @@ async function attemptOutdoorPortalTouch(ctx, tune) {
 }
 
 /**
+ * Walk OUT of whatever building/dungeon the pose is currently in (task #16
+ * re-entrancy): a hop — the intended exit, a WRONG hallway portal, whatever —
+ * can leave us parked in an EnvCell, and the sidecar HTTP-400s an indoor `from`.
+ * findExitPath -> walk the exit legs (frame-normalized, long indoor watchdog).
+ * Returns {ok:true, alreadyOutdoors} when the pose is already outdoors; honest
+ * {ok:false, error} otherwise. Never throws.
+ */
+async function exitToOutdoors(ctx, tune, phases) {
+  const { host, walk, buildGraph } = ctx;
+  const cell = currentCell(host);
+  if (!isEnvCellId(cell)) return { ok: true, alreadyOutdoors: true };
+  const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
+  if (!pose) return { ok: false, error: "no player pose" };
+  const graph = await safeBuild(buildGraph, cell & 0xffff0000);
+  const nodes = toMap(graph);
+  if (nodes.size === 0) return { ok: false, error: "indoor graph unavailable" };
+  const fromCell = resolveCell(nodes, cell, pose.objCellId >>> 0, pose.x, pose.y, pose.z);
+  if (!fromCell) return { ok: false, error: "indoor graph unavailable" };
+  const exit = buildExitLegs(graph, nodes, fromCell, pose);
+  if (!exit) return { ok: false, error: "no reachable exit" };
+  const legs = exit.legs.map((l) => ({ ...normalizeLegWorldFrame(l), timeoutMs: tune.indoorLegTimeoutMs }));
+  const w = await walk(legs, { label: "re-exit", stallMs: tune.indoorLegTimeoutMs + 15_000 });
+  if (phases) phases.push({ phase: "re-exit", ok: w.ok, state: w.state, legsWalked: w.legsWalked ?? 0 });
+  return { ok: w.ok, state: w.state, error: w.ok ? undefined : (w.error || "exit walk failed") };
+}
+
+/**
  * Run the OUTDOOR planner, transparently recovering an in-EnvCell portal leg it
  * fails fast on: on a blocked-leg failure while parked in an EnvCell, run the
  * portal transit, then re-plan from the far side (bounded by tune.maxTransits).
@@ -460,9 +488,28 @@ async function attemptOutdoorPortalTouch(ctx, tune) {
  * keeps the raw failure. On a plain success it returns the outdoor result
  * UNCHANGED (pure-outdoor stays identical); a transit that fails returns the
  * outdoor result with the honest portal-transit error.
+ *
+ * RE-ENTRANCY (task #16): a hop can land us in an EnvCell — the intended exit,
+ * or a WRONG hallway portal that flung us into another dungeon (live v15: the
+ * Town Network clipped a non-target portal into the academy interior 44km away).
+ * After a hop, before the NEXT sidecar call, re-compose from wherever we are: if
+ * we're in an EnvCell, exit to outdoors first (the sidecar 400s an indoor
+ * `from`), so a wrong-portal hop becomes an expensive DETOUR, not a terminal
+ * failure. Each re-exit counts against tune.maxTransits so a portal ping-pong
+ * can't loop forever; on exhaustion we fail honestly with the current location.
+ * The FIRST sidecar call is never re-entrancy-checked — the caller only enters
+ * here from outdoors (case 0, or Phase A already walked us out), so the
+ * pure-outdoor / normal-transit paths stay byte-identical.
  */
 async function outdoorWithAssist(ctx, to, opts, tune, phases) {
   let transits = 0;
+  const budgetFail = (why) => ({
+    ok: false,
+    state: "FAILED",
+    error: `portal transit failed: ${why} at ${cellHex(currentCell(ctx.host))}`,
+    composed: true,
+    ...(phases ? { phases } : {}),
+  });
   for (;;) {
     const out = await ctx.outdoorGoto(to, opts);
     if (out && out.ok === true) return out;
@@ -483,7 +530,19 @@ async function outdoorWithAssist(ctx, to, opts, tune, phases) {
     if (ctx.log) ctx.log(tr.ok ? `portal transit via ${tr.portal} — re-planning from the far side` : tr.error);
     if (!tr.ok) return { ...out, ok: false, error: tr.error, portalTransit: false };
     transits += 1;
-    // teleported — loop and re-plan the outdoor route from the new pose.
+    // Post-hop re-entrancy: the hop may have landed us indoors (the intended
+    // exit, or a WRONG portal into another dungeon). Walk out before the next
+    // sidecar call. Bounded by the transit budget (a ping-pong can't loop).
+    while (isEnvCellId(currentCell(ctx.host))) {
+      if (transits >= tune.maxTransits) return budgetFail("transit budget exhausted, stranded indoors");
+      const ex = await exitToOutdoors(ctx, tune, phases);
+      transits += 1;
+      if (ctx.log) ctx.log(ex.ok ? "re-exit to outdoors — re-composing" : `re-exit failed: ${ex.error}`);
+      // A failed exit that is STILL indoors is terminal (re-planning an indoor
+      // `from` just 400s); an exit that hopped us back outdoors falls through.
+      if (!ex.ok && isEnvCellId(currentCell(ctx.host))) return budgetFail(`re-exit ${ex.error}`);
+    }
+    // outdoors now — loop and re-plan the outdoor route from the new pose.
   }
 }
 
