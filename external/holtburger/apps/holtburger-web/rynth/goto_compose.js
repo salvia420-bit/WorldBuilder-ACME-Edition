@@ -327,6 +327,14 @@ async function attemptPortalTransit(ctx, blockedLeg, tune) {
   if (nodes.size === 0) return stage("indoor graph unavailable");
   let pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
   if (!pose) return stage("no player pose");
+  // Transit origin: a portal-jump-sized displacement from here at ANY later
+  // stage means the hop already happened (live v11: the walk's final leg
+  // walked INTO the exit portal and teleported to Holtburg — then the touch
+  // step searched the DESTINATION for a portal and mislabeled success).
+  const owx = worldX(pose.objCellId >>> 0, pose.x);
+  const owy = worldY(pose.objCellId >>> 0, pose.y);
+  const alreadyHopped = (p) =>
+    Math.hypot(worldX(p.objCellId >>> 0, p.x) - owx, worldY(p.objCellId >>> 0, p.y) - owy) >= tune.portalJumpM;
   const fromCell = resolveCell(nodes, cell, pose.objCellId >>> 0, pose.x, pose.y, pose.z);
   if (!fromCell) return stage("indoor graph unavailable");
   const targetCell = nearestCell(nodes, twx, twy, blockedLeg.z);
@@ -350,6 +358,7 @@ async function attemptPortalTransit(ctx, blockedLeg, tune) {
       // entity is findable in extended range, USE it and give the approach a
       // long teleport window before conceding.
       const p2 = (await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs)) || pose;
+      if (alreadyHopped(p2)) return { ok: true, portal: "(walk-in hop)", exitCell: targetCell >>> 0 };
       const p2wx = worldX(p2.objCellId >>> 0, p2.x);
       const p2wy = worldY(p2.objCellId >>> 0, p2.y);
       const desperate = findNearbyPortal(host, p2wx, p2wy, twx, twy, tune.portalDesperateRangeM);
@@ -365,6 +374,10 @@ async function attemptPortalTransit(ctx, blockedLeg, tune) {
     }
     pose = (await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs)) || pose;
   }
+  // Walk-in hop: the final approach leg can walk INTO the portal and teleport
+  // without any touch — success, no entity search needed (v11: this is how the
+  // first full Arwic->Holtburg run actually completed).
+  if (alreadyHopped(pose)) return { ok: true, portal: "(walk-in hop)", exitCell: targetCell >>> 0 };
   // Portal-touch assist: locate the portal entity in reach and USE it.
   const pwx = worldX(pose.objCellId >>> 0, pose.x);
   const pwy = worldY(pose.objCellId >>> 0, pose.y);
