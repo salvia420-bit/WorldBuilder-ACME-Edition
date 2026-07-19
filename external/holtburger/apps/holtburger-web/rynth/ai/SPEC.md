@@ -216,3 +216,57 @@ textContent/value/remove).
   the page at :8765 will fetch it cross-origin.
 - A8: run the whole `rynth_ai_*` set + `rynth_netbrain_test.cjs` +
   `rynth_combatparity_test.cjs` after wiring; all green.
+
+## Addendum — NavAtlas / soak-15 additions (2026-07-18, SPEC-navatlas §3-W3; ADDITIVE to the frozen v1 surface)
+
+### director.js (additive constructor opts + one opt on checkNow)
+- `holdWhile?: () => string|null` — travel-hold: when a SCHEDULED fire sees a
+  truthy reason, the check-in is skipped (no LLM call, no budget burn) and
+  re-polled at `holdPollMinutes` (default 0.5). Journals ONE `budget` entry
+  per hold streak. `maxHoldMinutes` (default 20) is a safety cap: past it the
+  check proceeds despite the hold. Early checks (`requestEarlyCheck`) and
+  `checkNow({force:true})` bypass the hold — route events carry decisions.
+- `requestEarlyCheck` refused only for timer-imminence still arms the bypass
+  (the imminent fire serves the event through the hold).
+
+### bot.js (additive)
+- `bot.followRoute(legs, {label, pollMs, timeoutMs})` — walk pre-planned
+  atlas legs with goto's kernel pause/prior-state-restore semantics; resolves
+  `{ok, state, legsWalked?}`. One at a time; refused while a goto runs; a
+  goto cancels it (last command wins → state CANCELLED).
+- `bot.mission` / `bot.lastMission` — first-class travel state
+  `{kind:"goto"|"route", label, startedAt, interrupts}` (+ endedAt/result on
+  lastMission). Set/cleared by doGoto/followRoute; interrupts bumped by the
+  early-check event wiring.
+- `bot._onTravelStart` / `bot._onTravelDone` — single-slot hooks the
+  extension layer uses for route auto-record; failures are swallowed.
+- Route events: goto/followRoute completion fires
+  `requestEarlyCheck("route arrived|FAILED: <label>[, coverage X]",
+  {minGapSeconds:10})`.
+- config.ai additions: `travelHold:false` off (default on when wired),
+  `holdPollMinutes`, `maxHoldMinutes`, `metrics:false` off (default on),
+  `routes:false|{atlas}` and `routeRecord:false` (extensions.js).
+
+### tools/routes.js (new; registerWorld-shaped)
+- Actions `follow_route {name}`, `list_routes {}`, `name_route {route,name}`
+  over the W2 atlas (rynth/atlas.js, lazy-imported; missing atlas degrades
+  every action to ok:false). Shared page instance exposed as
+  `window.__atlas` for atlas_mirror.cjs.
+- `renderMissionLine(bot)` — the `mission:` observation line (live: leg/ETA/
+  coverage/elapsed/interrupts from router.status + globalRouter.lastPlan +
+  playerRunRate×4.0 m/s; last-completion echo for 10 min). Wired into the
+  extensions observe() stack.
+- Auto-record (extensions.js): successful novel gotos are recorded via
+  rynth/route_recorder.js and saved under an auto-name; `name_route`
+  promotes keepers. follow_route walks are reuse, not re-saved.
+
+### tools/metrics.js (new)
+- `createAiMetrics(bot, {journal})` — hourly journal line (kind `note`):
+  walked metres (teleports excluded), unique landblocks, routes
+  recorded/reused, kills/deaths, LLM calls + token deltas. Counters live on
+  `bot._metrics` for other modules to bump. Wired by bot.js after director
+  construction; `config.ai.metrics === false` off.
+
+### Suites
+- `rynth_ai_routes_test.cjs` (routes tool + mission line + metrics);
+  travel-hold cases appended to `rynth_ai_director_test.cjs`.

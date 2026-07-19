@@ -23,6 +23,7 @@ import { registerEconomy } from "./tools/economy.js";
 import { registerAdvancement } from "./tools/advancement.js";
 import { registerWorld } from "./tools/world.js";
 import { registerMemory, renderScratchpadSection } from "./tools/memory.js";
+import { registerRoutes, renderMissionLine, liveRunRate } from "./tools/routes.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./director.js";
 
 // = executePlan's own default (actions.js:197) + SPEC "Cost & safety" cap;
@@ -242,6 +243,20 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   let world = null;
   if (cfg.world !== false) {
     world = registerWorld(extActions);
+  }
+
+  // Route-level travel (tools/routes.js, SPEC-navatlas §3-W3.1): follow_route
+  // / list_routes / name_route over the W2 route atlas. Default-on; a missing
+  // atlas module degrades every action to ok:false. cfg.routes: false -> off;
+  // { atlas } injects a duck-typed atlas (tests).
+  let routes = null;
+  if (cfg.routes !== false) {
+    try {
+      routes = registerRoutes(extActions, {
+        base,
+        atlas: cfg.routes && typeof cfg.routes === "object" ? cfg.routes.atlas ?? null : null,
+      });
+    } catch { routes = null; }
   }
 
   const extFor = (a) =>
@@ -480,6 +495,10 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     if (warn) parts.push(warn);
     const stall = stallLine(b);
     if (stall) parts.push(stall);
+    // Mission line (SPEC-navatlas §3-W3.3): live/last travel state is
+    // harness ground truth, reported every check-in like pos/nav.
+    const ml = renderMissionLine(b);
+    if (ml) parts.push(ml);
     if (memory) parts.push(renderScratchpadSection(state));
     const dl = deltasLine(b);
     if (dl) parts.push(dl);
@@ -526,6 +545,61 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
       journal?.add?.("note", text);
     } catch { /* journal loss must not stop the plan */ }
   };
+
+  // ── route auto-record (SPEC-navatlas §3-W3.1) ──────────────────────────
+  // Successful novel gotos are ALWAYS recorded under an auto-name; the
+  // director promotes keepers via name_route. Recorder + atlas are the W2
+  // modules (rynth/route_recorder.js, rynth/atlas.js), lazy-imported —
+  // absence degrades to no recording, never a throw. follow_route walks are
+  // reuse, not new experience: recorded for cleanup but not re-saved.
+  // cfg.routeRecord: false -> off.
+  if (cfg.routeRecord !== false && _bot && typeof base === "string" && base) {
+    let recorderP = null;
+    const loadRecorder = () => (recorderP ??= import(`${base}/route_recorder.js`).catch(() => null));
+    let rec = null;
+    let lastSampleT = 0;
+    try {
+      _bot.host?.onTick?.(() => {
+        if (!rec) return;
+        const now = Date.now();
+        if (now - lastSampleT < 500) return;
+        lastSampleT = now;
+        try {
+          const p = _bot.host.TryGetPlayerPose?.();
+          if (p) rec.sample(p);
+        } catch { /* sampling must never reach the pump */ }
+      });
+    } catch { /* no tick plane -> no recording */ }
+    _bot._onTravelStart = (ev) => {
+      void (async () => {
+        try {
+          const m = await loadRecorder();
+          if (!m?.RouteRecorder) return;
+          const from = _bot.host?.TryGetPlayerPose?.() ?? null;
+          const r = new m.RouteRecorder({ log });
+          r.start({ from, name: ev?.label, runRate: liveRunRate(_bot), source: "walk" });
+          rec = r;
+        } catch { rec = null; }
+      })();
+    };
+    _bot._onTravelDone = (ev) => {
+      const r = rec;
+      rec = null;
+      void (async () => {
+        try {
+          if (!r) return;
+          const to = _bot.host?.TryGetPlayerPose?.() ?? null;
+          const route = r.finish({ ok: ev?.result?.ok === true, to });
+          if (!route || ev?.kind !== "goto" || ev?.result?.ok !== true) return;
+          const at = await (routes?.getAtlas?.() ?? null);
+          if (!at) return;
+          const saved = at.saveRoute(route);
+          if (_bot._metrics) _bot._metrics.routesRecorded++;
+          journalNote(`route recorded: "${saved?.name ?? route.name ?? "?"}" (${route.legs?.length ?? "?"} legs) — use name_route to keep it under a durable name`);
+        } catch { /* recording must never break travel */ }
+      })();
+    };
+  }
 
   // guardPlan in front of execution (safety.js header recipe), then route:
   // ext actions to their never-throws apply, v1 actions to the frozen
@@ -642,6 +716,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     economy,
     advancement,
     world,
+    routes,
     memory,
     state,
   };

@@ -420,6 +420,69 @@ const resp = (json) => ({ text: JSON.stringify(json), json, usage: { prompt: 10,
     d.stop();
   }
 
+  // ---- travel-hold (SPEC-navatlas §3-W3.2): scheduled fires skip the LLM
+  // while holdWhile() is truthy; early checks and force bypass; cap releases.
+  {
+    const journal = makeJournal();
+    const client = makeClient([resp({ analysis: "held-suite", actions: [], next_check_minutes: 5 })]);
+    let holding = true;
+    const d = new RynthAiDirector({}, {
+      client, journal, observe: mockObserve, execute: makeExec(), validate: mockValidate,
+      intervalMinutes: 5, holdWhile: () => (holding ? "travelling: test-route" : null),
+      holdPollMinutes: 0.002, maxHoldMinutes: 60,
+    });
+    d.enabled = true; // schedule via checkNow paths below, no timer race
+    const r1 = await d.checkNow();
+    check("hold: scheduled check skipped while holding", r1.skipped === "hold" && client.chatCalls.length === 0);
+    const r2 = await d.checkNow();
+    check("hold: still held on the next poll", r2.skipped === "hold" && client.chatCalls.length === 0);
+    check("hold: journaled ONCE per hold streak",
+      journal.kinds("budget").filter((n) => /check-ins held/.test(n.text)).length === 1,
+      JSON.stringify(journal.entries));
+    const rf = await d.checkNow({ force: true });
+    check("hold: force bypasses the hold", rf.plan != null && client.chatCalls.length === 1);
+    holding = true;
+    const r3 = await d.checkNow();
+    check("hold: re-arms after a real check (new streak)", r3.skipped === "hold");
+    check("hold: second streak journaled separately",
+      journal.kinds("budget").filter((n) => /check-ins held/.test(n.text)).length === 2);
+    holding = false;
+    const r4 = await d.checkNow();
+    check("hold: released when holdWhile goes falsy", r4.plan != null && client.chatCalls.length === 2);
+    d.stop();
+  }
+  {
+    // Early check bypasses the hold: the route-completion event must reach
+    // the model even though holdWhile is still momentarily truthy.
+    const client = makeClient([resp({ analysis: "early-through-hold", actions: [], next_check_minutes: 5 })]);
+    const d = new RynthAiDirector({}, {
+      client, journal: makeJournal(), observe: mockObserve, execute: makeExec(), validate: mockValidate,
+      intervalMinutes: 5, holdWhile: () => "travelling: test-route", holdPollMinutes: 0.002,
+    });
+    d.start();
+    const ok = d.requestEarlyCheck("route arrived: test-route", { delaySeconds: 0.05 });
+    check("hold: early check accepted", ok === true);
+    await sleep(400);
+    check("hold: early check went through the hold", client.chatCalls.length === 1);
+    d.stop();
+  }
+  {
+    // Safety cap: a stuck route must not silence the director forever.
+    const client = makeClient([resp({ analysis: "cap", actions: [], next_check_minutes: 5 })]);
+    const d = new RynthAiDirector({}, {
+      client, journal: makeJournal(), observe: mockObserve, execute: makeExec(), validate: mockValidate,
+      intervalMinutes: 5, holdWhile: () => "travelling: stuck-route",
+      holdPollMinutes: 5, maxHoldMinutes: 0.003, // cap ~180ms; poll far out so only the manual calls fire
+    });
+    d.enabled = true;
+    const r1 = await d.checkNow();
+    check("hold-cap: first fire held", r1.skipped === "hold");
+    await sleep(300);
+    const r2 = await d.checkNow();
+    check("hold-cap: past the cap the check proceeds", r2.plan != null && client.chatCalls.length === 1);
+    d.stop();
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

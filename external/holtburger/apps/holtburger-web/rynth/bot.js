@@ -90,6 +90,14 @@ export async function createGrindBot(sessionHandle, config = {}) {
     const gr = await import(`${base}/global_router.js`);
     globalRouter = new gr.GlobalRouter(host, { endpoint: config.nav.endpoint });
   }
+  // Short human label for a travel target — mission line + journal reasons.
+  const gotoLabel = (to) =>
+    to && typeof to === "object"
+      ? "ns" in to
+        ? `${Math.abs(to.ns).toFixed(1)}${to.ns >= 0 ? "N" : "S"} ${Math.abs(to.ew).toFixed(1)}${to.ew >= 0 ? "E" : "W"}`
+        : `0x${((to.lb ?? 0) >>> 0).toString(16).toUpperCase()}`
+      : "?";
+
   const doGoto = async (to, opts) => {
     if (!globalRouter) return { ok: false, error: "nav not configured (config.nav)" };
     // Refuse BEFORE touching the kernel: a rejected second goto must not
@@ -102,11 +110,85 @@ export async function createGrindBot(sessionHandle, config = {}) {
     }
     const wasRunning = kernel.running === true; // kernel's is-running signal
     kernel.stop();
+    // Mission = first-class harness travel state (SPEC-navatlas §3-W3.3):
+    // the observation reports it; the AI never has to model-memory "am I
+    // walking somewhere". interrupts is bumped by the early-check wiring.
+    const label = gotoLabel(to);
+    bot.mission = { kind: "goto", label, to, startedAt: Date.now(), interrupts: 0 };
+    try { bot._onTravelStart?.({ kind: "goto", label, to }); } catch { /* hook must not break travel */ }
+    let r = null;
     try {
-      return await globalRouter.goto(router, to, opts);
+      r = await globalRouter.goto(router, to, opts);
+      return r;
     } finally {
       if (wasRunning) kernel.start();
+      const m = bot.mission;
+      bot.mission = null;
+      if (m) bot.lastMission = { ...m, endedAt: Date.now(), result: r ? { ok: r.ok === true, state: r.state ?? null, coverage: r.coverage ?? null } : null };
+      try { bot._onTravelDone?.({ kind: "goto", label, to, result: r, mission: m }); } catch { /* hook must not break travel */ }
+      // Loud fallback (SPEC-navatlas §3-W1.2): pure "straight" coverage =
+      // the route walked blind through unbaked terrain — the wall-grind
+      // class. "mixed" is normal on portal routes (transit hops count as
+      // tiny straight segments) and needs no warning.
+      try {
+        if (r?.coverage === "straight")
+          bot.ai?.journal?.add?.(
+            "note",
+            `route to ${label} was STRAIGHT-LINE (unbaked region) — obstacles were not routed around; treat wall-grinds/stalls here as expected, prefer known routes or other destinations`,
+          );
+      } catch { /* note loss must not break travel */ }
+      // Route events are the check-in triggers (SPEC-navatlas §3-W3.2); the
+      // director's debounce/budget still bound the cost.
+      try {
+        const cov = r?.coverage ? `, coverage ${r.coverage}` : "";
+        bot.ai?.director?.requestEarlyCheck(
+          r?.ok ? `route arrived: ${label}${cov}` : `route FAILED: ${label} (${r?.state ?? r?.error ?? "?"}${cov})`,
+          { minGapSeconds: 10 },
+        );
+      } catch { /* event wiring must not break travel */ }
     }
+  };
+
+  // Atlas-route travel (SPEC-navatlas §3-W3.1): walk pre-planned legs with
+  // goto's kernel semantics (pause + prior-state restore) and a completion
+  // promise. Last command wins: a goto() cancels this walk (poll sees IDLE).
+  let followBusy = false;
+  const doFollowRoute = async (legs, { label = "route", pollMs = 500, timeoutMs = 15 * 60_000 } = {}) => {
+    if (globalRouter && globalRouter.busy) return { ok: false, error: "goto active" };
+    if (followBusy) return { ok: false, error: "route already active" };
+    if (!Array.isArray(legs) || !legs.length) return { ok: false, error: "empty route" };
+    followBusy = true;
+    const wasRunning = kernel.running === true;
+    kernel.stop();
+    bot.mission = { kind: "route", label, startedAt: Date.now(), interrupts: 0 };
+    try { bot._onTravelStart?.({ kind: "route", label, legs }); } catch { /* hook must not break travel */ }
+    let result = { ok: false, state: "UNKNOWN" };
+    try {
+      router.follow(legs);
+      const t0 = Date.now();
+      for (;;) {
+        await new Promise((r) => setTimeout(r, pollMs));
+        const st = router.status;
+        if (st.state === "DONE") { result = { ok: true, state: "DONE", legsWalked: st.legs }; break; }
+        if (st.state === "FAILED") { result = { ok: false, state: "FAILED", leg: st.leg }; break; }
+        if (st.state === "IDLE") { result = { ok: false, state: "CANCELLED" }; break; }
+        if (Date.now() - t0 > timeoutMs) { router.cancel(); result = { ok: false, state: "TIMEOUT" }; break; }
+      }
+    } finally {
+      followBusy = false;
+      if (wasRunning) kernel.start();
+      const m = bot.mission;
+      bot.mission = null;
+      if (m) bot.lastMission = { ...m, endedAt: Date.now(), result: { ok: result.ok, state: result.state, coverage: null } };
+      try { bot._onTravelDone?.({ kind: "route", label, result, mission: m }); } catch { /* hook must not break travel */ }
+      try {
+        bot.ai?.director?.requestEarlyCheck(
+          result.ok ? `route arrived: "${label}"` : `route FAILED: "${label}" (${result.state})`,
+          { minGapSeconds: 10 },
+        );
+      } catch { /* event wiring must not break travel */ }
+    }
+    return result;
   };
 
   const channel =
@@ -153,6 +235,11 @@ export async function createGrindBot(sessionHandle, config = {}) {
      * {ok, state, legsWalked, replans}.
      */
     goto: (to, opts) => doGoto(to, opts),
+    /** Walk pre-planned atlas legs with goto's kernel semantics; resolves
+     *  {ok, state, legsWalked?}. One at a time; refused while a goto runs. */
+    followRoute: (legs, opts) => doFollowRoute(legs, opts),
+    mission: null,      // live travel state (SPEC-navatlas §3-W3.3); null when idle
+    lastMission: null,  // most recent completed mission {..., endedAt, result}
     status: () => ({ ...kernel.status, router: router.status }),
     capabilities: () => host.capabilities,
     stop: () => {
@@ -261,6 +348,25 @@ async function wireAiDirector(bot, aiConfig, base) {
     maxIntervalMinutes: aiCfg?.maxIntervalMinutes, // caps LLM-supplied next_check_minutes
     dryRun: aiCfg?.dryRun,
     maxCallsPerHour: aiCfg?.maxCallsPerHour, // undefined -> director defaults
+    // Travel-hold (SPEC-navatlas §3-W3.2): scheduled check-ins are skipped
+    // while a mission (goto/followRoute) is in flight — the route-completion
+    // early check above carries the decision instead. config.ai.travelHold
+    // === false turns it off; holdPollMinutes/maxHoldMinutes pass through.
+    ...(aiCfg?.travelHold !== false
+      ? {
+          holdWhile: () => {
+            try {
+              return bot.mission
+                ? `travelling: ${bot.mission.label}`
+                : bot.globalRouter?.busy === true
+                  ? "travelling"
+                  : null;
+            } catch { return null; }
+          },
+          ...(Number.isFinite(aiCfg?.holdPollMinutes) ? { holdPollMinutes: aiCfg.holdPollMinutes } : {}),
+          ...(Number.isFinite(aiCfg?.maxHoldMinutes) ? { maxHoldMinutes: aiCfg.maxHoldMinutes } : {}),
+        }
+      : {}),
     ...(ext
       ? ext.directorDeps // observe/validate/execute/systemPrompt
       : typeof aiCfg?.systemPrompt === "string" && aiCfg.systemPrompt
@@ -268,6 +374,18 @@ async function wireAiDirector(bot, aiConfig, base) {
         : {}),
   });
   bot.ai = { director, client, journal, ...(ext ? { extensions: ext } : {}) };
+
+  // Hourly metrics line (SPEC-navatlas §3-W3.5): distance / landblocks /
+  // routes / kills / deaths / LLM spend into the journal. config.ai.metrics
+  // === false turns it off; failure degrades to no metrics, never a throw.
+  if (aiCfg?.metrics !== false) {
+    try {
+      const mm = await import(`${base}/ai/tools/metrics.js`);
+      bot.ai.metrics = mm.createAiMetrics(bot, { journal });
+    } catch (e) {
+      console.warn("[rynth] AI metrics unavailable:", e);
+    }
+  }
 
   // Event-driven early check-ins (handoff-6 §3.4): significant push events
   // pull the next check-in forward instead of waiting out the minute cadence.
@@ -286,7 +404,12 @@ async function wireAiDirector(bot, aiConfig, base) {
         else if (e.kind === KIND_DEATH && (e.u32 >>> 0) === (bot.host.GetPlayerId() >>> 0)) reason = "you died";
         else if (e.kind === KIND_CHAT && (e.u32b >>> 0) === CAT_TELL && e.text) reason = "received a tell";
         else if (e.kind === KIND_CHAT && (e.u32b >>> 0) === CAT_POPUP && e.text) reason = "server popup message";
-        if (reason) director.requestEarlyCheck(reason);
+        if (reason) {
+          // A significant event during a mission is an interrupt — the
+          // mission observation line reports the count (§3-W3.3).
+          if (bot.mission) bot.mission.interrupts = (bot.mission.interrupts ?? 0) + 1;
+          director.requestEarlyCheck(reason);
+        }
       } catch { /* an event-tap error must never reach the pump */ }
     });
   }

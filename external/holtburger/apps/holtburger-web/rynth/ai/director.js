@@ -32,7 +32,11 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "strategy. Your actions are for what the kernel CANNOT do: WHERE to hunt",
   "(goto / exit_building / portals), WHAT to hunt (set_priorities), gearing",
   "up (vendors, quest rewards), spending XP and credits, and escalating out",
-  "of dead ends.",
+  "of dead ends. The harness also WALKS AND RECORDS ROUTES for you: while a",
+  "route is in flight your check-ins pause and you are checked in the moment",
+  "it arrives or fails (the mission: line is that state). Prefer follow_route",
+  "for destinations you already have routes to (list_routes); use goto for",
+  "novel ones — successful novel walks are auto-recorded for reuse.",
   "",
   "URGENCY & FOLLOW-THROUGH",
   "Pick ONE primary goal and drive it to DONE across consecutive check-ins",
@@ -87,6 +91,13 @@ export class RynthAiDirector {
     intervalMinutes = 5, minIntervalMinutes = 1, maxIntervalMinutes = 30,
     maxCallsPerHour = 12, maxErrorsBeforeDisable = 5,
     systemPrompt = DEFAULT_SYSTEM_PROMPT, dryRun = false, log,
+    // Travel-hold (additive 2026-07-18, SPEC-navatlas §3-W3.2): while
+    // holdWhile() returns a truthy reason the scheduled check-in is skipped
+    // (no LLM call) and re-polled at holdPollMinutes — mid-route there is
+    // nothing to decide. Released by the route-completion early check (which
+    // bypasses the hold), by holdWhile going falsy, or by the maxHoldMinutes
+    // safety cap (a stuck route must not silence the director forever).
+    holdWhile = null, holdPollMinutes = 0.5, maxHoldMinutes = 20,
   } = {}) {
     this.bot = bot;
     this.client = client;
@@ -113,6 +124,11 @@ export class RynthAiDirector {
     this._consecutiveErrors = 0;
     this._lastSummary = null;
     this._aiPausedKernel = false; // set by an executed pause action; idle-guard input
+    this.holdWhile = typeof holdWhile === "function" ? holdWhile : null;
+    this.holdPollMinutes = holdPollMinutes;
+    this.maxHoldMinutes = maxHoldMinutes;
+    this._holdSince = null;     // start of the current hold streak (journal once)
+    this._earlyPending = null;  // reason of a granted early check — bypasses the hold
   }
 
   /** Idempotent: enables the loop and schedules the first check-in at
@@ -149,17 +165,40 @@ export class RynthAiDirector {
    * result object (documented choice per SPEC §director). Never rejects —
    * every failure resolves to { plan: null, results: [], error? } so the
    * timer chain and manual triggers can't take the bot down. */
-  async checkNow() {
+  async checkNow(opts = {}) {
     if (this._inflight) return this._inflight;
-    this._inflight = this._checkOnce()
+    this._inflight = this._checkOnce(opts)
       .catch((e) => this._fail("internal", e)) // belt-and-braces; steps below catch their own
       .finally(() => { this._inflight = null; this._running = false; });
     return this._inflight;
   }
 
-  async _checkOnce() {
+  async _checkOnce(opts = {}) {
     this._running = true;
     const now = Date.now();
+
+    // Travel-hold gate (SPEC-navatlas §3-W3.2): a plain scheduled fire while
+    // the harness is mid-route burns a call to say "still walking" — skip it.
+    // An early check (requestEarlyCheck granted a reschedule: route done,
+    // death, tell) and an explicit force both bypass the hold; the safety cap
+    // bounds a stuck holdWhile.
+    if (this.holdWhile && !opts.force && !this._earlyPending) {
+      let reason = null;
+      try { reason = this.holdWhile(); } catch { reason = null; }
+      if (reason) {
+        if (this._holdSince == null) {
+          this._holdSince = now;
+          this._journal("budget", `check-ins held: ${String(reason).slice(0, 120)} — resumes on route event (cap ${this.maxHoldMinutes}m)`);
+        }
+        if (now - this._holdSince < this.maxHoldMinutes * MIN_MS) {
+          this._schedule(this.holdPollMinutes);
+          return { plan: null, results: [], skipped: "hold" };
+        }
+        // Held past the cap: fall through and check anyway.
+      }
+    }
+    this._holdSince = null;
+    this._earlyPending = null;
 
     // Rolling 60-min budget window (SPEC §director Budget): refuse, journal,
     // reschedule — no LLM call, not an error.
@@ -298,8 +337,14 @@ export class RynthAiDirector {
     if (!this.enabled || this._running || this._inflight) return false;
     const now = Date.now();
     if (this._lastCheckAt && now - this._lastCheckAt < minGapSeconds * 1000) return false;
-    if (this._nextCheckAt != null && this._nextCheckAt - now <= delaySeconds * 1000) return false;
+    if (this._nextCheckAt != null && this._nextCheckAt - now <= delaySeconds * 1000) {
+      // The already-imminent fire serves this event — let it through the
+      // travel-hold (a hold-poll timer would otherwise swallow the reason).
+      this._earlyPending = String(reason).slice(0, 120);
+      return false;
+    }
     this._journal("note", `early check-in in ${delaySeconds}s: ${String(reason).slice(0, 120)}`);
+    this._earlyPending = String(reason).slice(0, 120); // bypasses the travel-hold: this fire carries a decision
     this._schedule(delaySeconds / 60);
     return true;
   }
