@@ -343,7 +343,26 @@ async function attemptPortalTransit(ctx, blockedLeg, tune) {
     // Stall guard must outlive the long per-leg watchdog (one slow leg keeps
     // the router status signature constant for its whole duration).
     const w = await walk(legs, { label: "portal-approach", stallMs: tune.indoorLegTimeoutMs + 15_000 });
-    if (!w.ok) return stage(`indoor walk ${(w.state || "failed").toLowerCase()}`);
+    if (!w.ok) {
+      // Desperate touch: live v9/v10 wedged on the SAME 5m doorway leg while
+      // 11m from the exit portal. UseObject has its own retail auto-approach
+      // that threads doorway geometry MoveToPosition wedges on — if the portal
+      // entity is findable in extended range, USE it and give the approach a
+      // long teleport window before conceding.
+      const p2 = (await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs)) || pose;
+      const p2wx = worldX(p2.objCellId >>> 0, p2.x);
+      const p2wy = worldY(p2.objCellId >>> 0, p2.y);
+      const desperate = findNearbyPortal(host, p2wx, p2wy, twx, twy, tune.portalDesperateRangeM);
+      if (desperate && typeof host.UseObject === "function") {
+        let sent2 = false;
+        try { sent2 = !!host.UseObject(desperate.guid); } catch (_) { sent2 = false; }
+        if (sent2) {
+          const j2 = await awaitTeleport(host, p2wx, p2wy, Math.max(tune.portalTeleportMs, 60_000), tune.teleportPollMs, tune.portalJumpM);
+          if (j2) return { ok: true, portal: desperate.name, exitCell: targetCell >>> 0 };
+        }
+      }
+      return stage(`indoor walk ${(w.state || "failed").toLowerCase()}`);
+    }
     pose = (await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs)) || pose;
   }
   // Portal-touch assist: locate the portal entity in reach and USE it.
@@ -486,6 +505,8 @@ export async function composeGoto(deps, to, opts = {}) {
     // legs get a long per-leg watchdog (router honors leg.timeoutMs).
     // Live v9: network leg speeds fluctuate 0.1-1 m/s; a 5m hall leg blew 90s.
     indoorLegTimeoutMs: opts.indoorLegTimeoutMs ?? 240_000,
+    // Desperate-touch discovery radius after a wedged indoor walk.
+    portalDesperateRangeM: opts.portalDesperateRangeM ?? 25,
   };
 
   const startCell = currentCell(host);
