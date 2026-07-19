@@ -184,5 +184,50 @@ var s2 = Sorted(new uint[] { 0xA9B4, 0xA9B5, 0xAAB4, 0xAAB5 }); // route within 
     Check(Math.Abs(twx - goal.Wx) < 0.5 && Math.Abs(twy - goal.Wy) < 0.5, "T9f stitched tail reaches the requested goal", $"tail=({twx:F1},{twy:F1}) goal=({goal.Wx:F1},{goal.Wy:F1})");
 }
 
+double DistTo(Leg l, double cx, double cy) { var (wx, wy) = LegWorld(l); return Math.Sqrt((wx - cx) * (wx - cx) + (wy - cy) * (wy - cy)); }
+
+// ── T10 (contract v2, avoid): a circle on the direct corridor forces a detour ─
+// Straight east route A7B3 -> A9B3 runs through the centre of A8B3. Dropping an
+// avoid circle there must push the Detour path AROUND it — still on-mesh, still
+// reaching the goal — while the un-avoided route runs straight through.
+{
+    var r = MakeRouter(null, null);
+    var from = In(0xA7, 0xB3, 96, 96);
+    var to = In(0xA9, 0xB3, 96, 96);
+    double cx = 0xA8 * 192.0 + 96, cy = 0xB3 * 192.0 + 96; // centre of A8B3, squarely on the direct line
+    var plain = r.Route(from, to);
+    Check(plain.Ok && plain.Coverage == "detour", "T10a un-avoided route ok/detour", $"cov={plain.Coverage} err={plain.Error}");
+    Check(plain.AvoidApplied == 0, "T10b un-avoided route avoidApplied==0", $"avoidApplied={plain.AvoidApplied}");
+    Check(plain.Legs.Min(l => DistTo(l, cx, cy)) < 12.0, "T10c un-avoided route passes through the avoid spot", $"minDist={plain.Legs.Min(l => DistTo(l, cx, cy)):F1}m");
+
+    var avoid = new List<AvoidCircle> { new AvoidCircle(cx, cy, 10.0) };
+    var res = r.Route(from, to, avoid);
+    Check(res.Ok, "T10d avoided route ok", res.Error);
+    Check(res.AvoidApplied == 1, "T10e avoidApplied==1", $"avoidApplied={res.AvoidApplied}");
+    Check(res.Coverage == "detour", "T10f avoided route stays on-mesh (detour)", $"cov={res.Coverage}");
+    double avMin = res.Legs.Min(l => DistTo(l, cx, cy));
+    Check(avMin > 10.0, "T10g every avoided leg is outside the avoid circle", $"minDist={avMin:F1}m r=10");
+    var (twx, twy) = LegWorld(res.Legs[^1]);
+    Check(Math.Abs(twx - to.Wx) < 0.5 && Math.Abs(twy - to.Wy) < 0.5, "T10h avoided route still reaches the goal", $"tail=({twx:F1},{twy:F1}) goal=({to.Wx:F1},{to.Wy:F1})");
+}
+
+// ── T11 (contract v2, avoid): no on-mesh alternative => stitch anyway, complete ─
+// A huge avoid circle rejects the whole corridor. The route must NOT be dropped —
+// it closes the gap with a flagged straight stitch and still reaches the goal
+// (do-not-over-engineer clause: a stitch that must cross an avoid circle is emitted).
+{
+    var r = MakeRouter(null, null);
+    var from = In(0xA7, 0xB3, 96, 96);
+    var to = In(0xA9, 0xB3, 96, 96);
+    double cx = 0xA8 * 192.0 + 96, cy = 0xB3 * 192.0 + 96;
+    var avoid = new List<AvoidCircle> { new AvoidCircle(cx, cy, 600.0) }; // swallows the fixture
+    var res = r.Route(from, to, avoid);
+    Check(res.Ok, "T11a no-alternative route still ok (route stays complete)", res.Error);
+    Check(res.AvoidApplied == 1, "T11b avoidApplied==1", $"avoidApplied={res.AvoidApplied}");
+    Check(res.StitchedLegs > 0 && res.Legs[^1].Stitch, "T11c gap closed with a flagged stitch", $"stitchedLegs={res.StitchedLegs}");
+    var (twx, twy) = LegWorld(res.Legs[^1]);
+    Check(Math.Abs(twx - to.Wx) < 0.5 && Math.Abs(twy - to.Wy) < 0.5, "T11d reaches the goal despite crossing the avoid circle", $"tail=({twx:F1},{twy:F1}) goal=({to.Wx:F1},{to.Wy:F1})");
+}
+
 Console.WriteLine($"\n{pass} passed, {fail} failed");
 return fail == 0 ? 0 : 1;

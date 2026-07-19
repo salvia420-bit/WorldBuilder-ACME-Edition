@@ -6,12 +6,15 @@
 //
 // Contract (both sides must match EXACTLY — see rynthnav-sidecar):
 //   GET  /health -> {ok, tiles, portals}
-//   POST /route {from:{lb,x,y,z}, to:{lb,x,y,z}|{ns,ew}}
-//     -> {ok:true, legs:[{lb,x,y,z,portal,label}], estUnits, portalsUsed,
-//         coverage} | {ok:false, error} (planning failure is still HTTP 200;
-//         from==to yields ok:true + one zero-distance arrival leg). Malformed
-//         or out-of-world requests are HTTP 400, an oversized body 413, a
-//         non-POST 405 — this client treats any non-200 as {ok:false} (route()).
+//   POST /route {from:{lb,x,y,z}, to:{lb,x,y,z}|{ns,ew}, avoid?:[{x,y,r}]}
+//     -> {ok:true, legs:[{lb,x,y,z,portal,stitch,label}], estUnits, portalsUsed,
+//         coverage, stitchedLegs, partial, avoidApplied} | {ok:false, error}
+//         (planning failure is still HTTP 200; from==to yields ok:true + one
+//         zero-distance arrival leg). Malformed or out-of-world requests are
+//         HTTP 400, an oversized body 413, a non-POST 405 — this client treats
+//         any non-200 as {ok:false} (route()). `avoid` is world-frame circles
+//         the sidecar routes around; omitted/empty => byte-identical to v1.
+//         goto() uses it to replan around a blocked stitch leg (avoidRetries).
 // Legs are already in router.js's frame (full 32-bit objCellId, landblock-
 // local AC Z-up metres) — they feed router.follow() untouched.
 //
@@ -33,6 +36,24 @@
 //   re-follows; portal-skipped stale legs don't inflate it.
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8767";
+
+// World-frame (metres) from a full objCellId + landblock-local x,y — mirror of
+// router.js's worldXY (avoid circles are placed at a blocked leg's world pose).
+function worldXY(objCellId, x, y) {
+  return [((objCellId >>> 24) & 0xff) * 192 + x, ((objCellId >>> 16) & 0xff) * 192 + y];
+}
+
+// Two plans are "identical" (=> a v1 sidecar ignored our "avoid") when they have
+// the same leg count and each leg's lb + x/y agree within epsilon. Used to abort
+// avoid-replanning against a sidecar that can't route around the blockage.
+function plansIdentical(a, b, eps = 0.5) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if ((a[i].lb >>> 0) !== (b[i].lb >>> 0)) return false;
+    if (Math.abs(a[i].x - b[i].x) > eps || Math.abs(a[i].y - b[i].y) > eps) return false;
+  }
+  return true;
+}
 
 export class GlobalRouter {
   /** @param host RynthWebHost (pose source); opts { endpoint, log } */
@@ -56,14 +77,18 @@ export class GlobalRouter {
 
   /**
    * POST /route per the contract. fromPose = host.TryGetPlayerPose() shape
-   * ({objCellId,x,y,z}); to = {lb,x,y,z} or {ns,ew} (/loc degrees).
+   * ({objCellId,x,y,z}); to = {lb,x,y,z} or {ns,ew} (/loc degrees). Optional
+   * `avoid` = [{x,y,r}] world-frame circles the sidecar routes around (contract
+   * v2). When `avoid` is empty/absent the body carries NO "avoid" key, so the
+   * request is byte-identical to the pre-avoid contract.
    * Never throws — network/HTTP failures come back as {ok:false, error}.
    */
-  async route(fromPose, to) {
+  async route(fromPose, to, avoid = null) {
     const body = {
       from: { lb: fromPose.objCellId >>> 0, x: fromPose.x, y: fromPose.y, z: fromPose.z },
       to,
     };
+    if (Array.isArray(avoid) && avoid.length) body.avoid = avoid;
     let r;
     try {
       r = await fetch(`${this.endpoint}/route`, {
@@ -117,9 +142,19 @@ export class GlobalRouter {
     }
   }
 
-  async _goto(router, to, { retries = 2, pollMs = 500, poseTimeoutMs = 15_000, stallMs = 45_000 } = {}) {
+  async _goto(router, to, { retries = 2, pollMs = 500, poseTimeoutMs = 15_000, stallMs = 45_000, avoidRetries = 1, avoidRadiusM = 6 } = {}) {
     let replans = 0;
     let legsWalked = 0;
+    // Avoid-list replanning (task #12): when a stitch leg is physically blocked,
+    // push a world-frame circle at the blockage and re-query so the sidecar's
+    // Detour routes AROUND it (instead of the terminal fail-fast). Accumulated
+    // across the goto and carried out as `avoidTried`. Empty while nothing blocks,
+    // so the FIRST plan request is byte-identical to the pre-avoid contract.
+    const avoid = [];
+    let avoidUsed = 0;
+    // Set right after we push an avoid circle: holds the just-failed plan so the
+    // next iteration can detect a v1 sidecar that ignored "avoid" (identical plan).
+    let pendingAvoid = null;
     // Route quality of the plan currently being walked, surfaced into every
     // resolution of goto() so the decision layer (W3 journal/mission line)
     // learns WITHOUT a wiki lookup that a fallback is straight-line-through-
@@ -133,9 +168,26 @@ export class GlobalRouter {
     for (let attempt = 0; ; attempt++) {
       const pose = await this._awaitPose(poseTimeoutMs, pollMs);
       if (!pose) return { ok: false, error: "no player pose", legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial };
-      const res = await this.route(pose, to);
+      const res = await this.route(pose, to, avoid);
       if (!res || res.ok !== true || !Array.isArray(res.legs) || !res.legs.length) {
         return { ok: false, error: (res && res.error) || "empty route", legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial };
+      }
+      // v1-ignore guard: if we just added an avoid circle but the fresh plan is
+      // identical to the one that failed, the sidecar didn't honor "avoid" —
+      // replanning is futile, so surface the blocked error (as the fail-fast did).
+      if (pendingAvoid) {
+        if (plansIdentical(res.legs, pendingAvoid.legs)) {
+          this.log("avoid ignored by sidecar (plan unchanged) — returning blocked error");
+          return {
+            ok: false,
+            state: "FAILED",
+            error: "blocked stitch leg",
+            blockedLeg: pendingAvoid.blockedLeg,
+            avoidTried: avoid.slice(),
+            legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial,
+          };
+        }
+        pendingAvoid = null; // sidecar honored avoid — walk the detour plan
       }
       coverage = res.coverage ?? null;
       estUnits = Number.isFinite(res.estUnits) ? res.estUnits : null;
@@ -192,19 +244,34 @@ export class GlobalRouter {
         await new Promise((r) => setTimeout(r, pollMs));
       }
       legsWalked += router.status.walked ?? router.status.leg;
-      if (router.status.state === "DONE") return { ok: true, state: "DONE", legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial };
-      // A FAILED stitch leg is a physical obstacle inside a straight-line
-      // fallback segment — the plan is deterministic, so replanning from the
-      // same pose reproduces the same stitch. Fail loudly instead (the W3
-      // journal turns this into a blocked-fact; the sweep probe maps it).
+      if (router.status.state === "DONE") return { ok: true, state: "DONE", legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial, avoidTried: avoid.slice() };
+      // A FAILED stitch leg is a physical obstacle inside a straight-line fallback
+      // segment. A plain replan from the same pose reproduces the same stitch
+      // (deterministic plan), so instead push an AVOID circle at the blocked
+      // world position and re-query — the sidecar's Detour then routes around it
+      // (task #12). Bounded by avoidRetries; a v1 sidecar that ignores "avoid" is
+      // caught by the plansIdentical guard above and falls through to the error.
       if (router.status.stitchBlocked) {
         const bl = router.route ? router.route[router.status.leg] : null;
-        this.log(`stitch leg ${router.status.leg + 1} blocked — not replanning (deterministic plan)`);
+        const blockedLeg = bl ? { index: router.status.leg, lb: bl.lb, x: bl.x, y: bl.y, z: bl.z } : null;
+        if (bl && avoidUsed < avoidRetries) {
+          const [bwx, bwy] = worldXY(bl.lb >>> 0, bl.x, bl.y);
+          avoid.push({ x: bwx, y: bwy, r: avoidRadiusM });
+          avoidUsed += 1;
+          pendingAvoid = { legs: router.route.slice(), blockedLeg };
+          this.log(
+            `stitch leg ${router.status.leg + 1} blocked — replanning AROUND it ` +
+              `(avoid ${avoidUsed}/${avoidRetries}, r=${avoidRadiusM}m @ ${bwx.toFixed(0)},${bwy.toFixed(0)})`
+          );
+          continue; // re-query with the avoid list; the top-of-loop guard vets the result
+        }
+        this.log(`stitch leg ${router.status.leg + 1} blocked — not replanning (avoid retries exhausted)`);
         return {
           ok: false,
           state: "FAILED",
           error: "blocked stitch leg",
-          blockedLeg: bl ? { index: router.status.leg, lb: bl.lb, x: bl.x, y: bl.y, z: bl.z } : null,
+          blockedLeg,
+          avoidTried: avoid.slice(),
           legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial,
         };
       }
