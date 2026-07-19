@@ -149,6 +149,29 @@ export async function createGrindBot(sessionHandle, config = {}) {
     }
   };
 
+  // Blocked-fact probe (SPEC-navatlas §3-W2.5): when a route leg FAILs, a
+  // sphere-sweep along the failed leg turns a mystery 30 s wall-grind into a
+  // journal fact the director can act on. Lazy; absence/error degrades to no
+  // note. (global_router owns the pre-walk probes on straight coverage.)
+  const probeFailedLeg = async (legs, legIdx) => {
+    try {
+      const sp = await import(`${base}/sweep_probe.js`);
+      const pose = host.TryGetPlayerPose?.();
+      const leg = Array.isArray(legs) ? legs[legIdx] : null;
+      if (!sp?.probeFromSession || !sp?.probeSegment || !pose || !leg) return;
+      const probe = sp.probeFromSession(host.s);
+      const from = { lb: pose.objCellId >>> 0, x: pose.x, y: pose.y, z: pose.z };
+      const r = sp.probeSegment(probe, from, leg);
+      if (r?.blocked)
+        bot.ai?.journal?.add?.(
+          "note",
+          `route blocked ~${Math.round(r.atMeters)}m ahead by ${r.hitKind}` +
+            (r.hitPoint ? ` at (${r.hitPoint.x.toFixed(0)},${r.hitPoint.y.toFixed(0)})` : "") +
+            " — do not retry the same line; sidestep or pick another route",
+        );
+    } catch { /* probing must never break the failure path */ }
+  };
+
   // Atlas-route travel (SPEC-navatlas §3-W3.1): walk pre-planned legs with
   // goto's kernel semantics (pause + prior-state restore) and a completion
   // promise. Last command wins: a goto() cancels this walk (poll sees IDLE).
@@ -170,7 +193,11 @@ export async function createGrindBot(sessionHandle, config = {}) {
         await new Promise((r) => setTimeout(r, pollMs));
         const st = router.status;
         if (st.state === "DONE") { result = { ok: true, state: "DONE", legsWalked: st.legs }; break; }
-        if (st.state === "FAILED") { result = { ok: false, state: "FAILED", leg: st.leg }; break; }
+        if (st.state === "FAILED") {
+          result = { ok: false, state: "FAILED", leg: st.leg };
+          void probeFailedLeg(legs, st.leg); // async fact-finding; never awaited into the walk
+          break;
+        }
         if (st.state === "IDLE") { result = { ok: false, state: "CANCELLED" }; break; }
         if (Date.now() - t0 > timeoutMs) { router.cancel(); result = { ok: false, state: "TIMEOUT" }; break; }
       }

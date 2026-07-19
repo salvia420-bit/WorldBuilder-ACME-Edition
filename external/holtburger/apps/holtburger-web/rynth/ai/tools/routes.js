@@ -35,10 +35,13 @@ export function getAtlas(base, injected = null) {
   return _atlasCache.get(base);
 }
 
-/** Live run-rate scalar from the wasm surface; 1.0 when unavailable. */
+/** Live run-rate scalar from the wasm surface; 1.0 when unavailable.
+ *  The served pkg exposes snake_case `player_run_rate` (live-verified
+ *  2026-07-18); newer d.ts lists camelCase — accept either. */
 export function liveRunRate(bot) {
   try {
-    const r = bot?.host?.s?.playerRunRate?.();
+    const s = bot?.host?.s;
+    const r = s?.playerRunRate?.() ?? s?.player_run_rate?.();
     return Number.isFinite(r) && r > 0 ? r : 1;
   } catch {
     return 1;
