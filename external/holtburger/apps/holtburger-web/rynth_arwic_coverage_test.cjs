@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// requires: live rynthnav sidecar (POST /route at RYNTHNAV_URL, default :8767) — this is a
+// live-infra regression, not a plain-node unit test; rynth_test_all_node.cjs skip-lists it.
 // FROZEN REGRESSION (soak-14 Arwic-wall): the exact /route request whose
 // blind straight-line fallback walked the bot into Arwic's wall. Before the
 // W1 full-corridor bake it returns coverage:"straight" (57 legs, 4 portals);
