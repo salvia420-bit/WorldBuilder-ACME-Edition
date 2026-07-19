@@ -335,10 +335,11 @@ async function wireAiDirector(bot, aiConfig, base) {
     return;
   }
 
-  const [lc, jn, dr] = await Promise.all([
+  const [lc, jn, dr, os] = await Promise.all([
     import(`${base}/ai/llm_client.js`),
     import(`${base}/ai/journal.js`),
     import(`${base}/ai/director.js`),
+    import(`${base}/ai/operator_stop.js`),
   ]);
   const client = new lc.LlmClient({
     apiKey,
@@ -455,8 +456,11 @@ async function wireAiDirector(bot, aiConfig, base) {
     window.rynthAI = {
       setKey: (key) => lc.LlmClient.saveKey(key),
       clearKey: () => lc.LlmClient.clearKey(),
-      start: () => director.start(),
-      stop: () => director.stop(),
+      // start/stop carry a DURABLE operator intent (operator_stop.js): stop()
+      // latches so the ?bot=1 reconnect reboot won't silently re-arm the
+      // director; start() releases it. See operator_stop.js header.
+      start: () => { os.clearOperatorStop(); return director.start(); },
+      stop: () => { os.latchOperatorStop(); return director.stop(); },
       checkNow: () => director.checkNow(),
       status: () => director.status,
       journal,
