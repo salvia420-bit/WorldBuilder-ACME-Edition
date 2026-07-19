@@ -401,6 +401,34 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
       assert.ok(h.stops >= 1);
     });
 
+    await rtest("R12", "stitch leg fails at the SHORT deadline with stitchBlocked", () => {
+      const h = unitHost();
+      const r = new RT.RynthRouter(h, { log: quiet });
+      h.pose = P(0x0101, 0, 0);
+      r.follow([L(0x0101, 50, 0, { stitch: true })]);
+      r.tick();
+      simT += 10_001; // past STITCH_TIMEOUT_MS, well under LEG_TIMEOUT_MS
+      r.tick();
+      assert.equal(r.status.state, "FAILED");
+      assert.equal(r.status.stitchBlocked, true);
+      assert.equal(h.stops, 1);
+    });
+
+    await rtest("R12b", "non-stitch leg is untouched by the short deadline (still 30s)", () => {
+      const h = unitHost();
+      const r = new RT.RynthRouter(h, { log: quiet });
+      h.pose = P(0x0101, 0, 0);
+      r.follow([L(0x0101, 50, 0)]);
+      r.tick();
+      simT += 10_001;
+      r.tick();
+      assert.equal(r.status.state, "WALK", "10s does not fail a normal leg");
+      simT += 20_001; // now past LEG_TIMEOUT_MS
+      r.tick();
+      assert.equal(r.status.state, "FAILED");
+      assert.equal(r.status.stitchBlocked, false);
+    });
+
     // ════ G* — GlobalRouter.goto (fake sidecar, ticking world) ════
     const GOPTS = { retries: 2, pollMs: 5, poseTimeoutMs: 400, stallMs: 600 };
 
@@ -568,6 +596,35 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
         assert.equal(r.error, "route cancelled");
         assert.equal(routeCalls, 1, "no replan on a cancelled route");
         assert.equal(gr.busy, false);
+      } finally {
+        st.stopDrive();
+      }
+    });
+
+    await t("G7", "blocked stitch leg fails fast with NO replan (deterministic plan)", async () => {
+      const st = world();
+      // Tiny stitch deadline so the blocked stitch leg fails in ms; normal
+      // legs keep FAST's 250ms watchdog.
+      const router = new RT.RynthRouter(st.host, { ...FAST, stitchTimeoutMs: 60 });
+      const gr = new GR.GlobalRouter(st.host, { log: quiet });
+      routeCalls = 0;
+      st.blocked = true; // world never moves: the stitch leg cannot complete
+      sidecar = async () => ({
+        ...legsPayload([{ ...legAtWorld(st.wx + 60, st.wy), stitch: true }]),
+        coverage: "mixed",
+        stitchedLegs: 1,
+        partial: true,
+      });
+      st.drive(router);
+      try {
+        const r = await gr.goto(router, { ns: 1, ew: 1 }, GOPTS);
+        assert.equal(r.ok, false, JSON.stringify(r));
+        assert.equal(r.error, "blocked stitch leg");
+        assert.equal(r.replans, 0, "no replan on a deterministic stitched plan");
+        assert.equal(routeCalls, 1, "sidecar consulted exactly once");
+        assert.ok(r.blockedLeg && Number.isFinite(r.blockedLeg.x), "blockedLeg carried");
+        assert.equal(r.stitchedLegs, 1);
+        assert.equal(r.partial, true);
       } finally {
         st.stopDrive();
       }

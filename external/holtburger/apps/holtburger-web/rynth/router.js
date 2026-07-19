@@ -28,15 +28,20 @@
 // — but the per-leg watchdog keeps running so a dead pose source fails the
 // route instead of stalling it forever. tick() is reentrancy-guarded.
 //
-// status = { state, leg, legs, walked } — `walked` counts legs actually
-// completed (arrivals + consumed portal legs); portal-skipped stale legs
-// don't count.
+// status = { state, leg, legs, walked, stitchBlocked } — `walked` counts legs
+// actually completed (arrivals + consumed portal legs); portal-skipped stale
+// legs don't count. `stitchBlocked` is true when FAILED came from a {stitch}
+// leg's (shorter) watchdog — the plan stitched a straight line through
+// something physical; replanning from the same pose is futile.
 //
 // This is what makes moveToPosition useful for travel: the combat/loot loops
 // move a few metres; a route moves across the world.
 
 const ARRIVE_M = 3.0; // within this of a leg target = arrived
 const LEG_TIMEOUT_MS = 30_000; // per-leg watchdog
+const STITCH_TIMEOUT_MS = 10_000; // watchdog for stitch legs (sidecar contract v2:
+// legs flagged {stitch:true} are straight-line fallback through unbaked/carved
+// space — a physical obstacle there never resolves, so fail it fast)
 const REISSUE_MS = 3000; // re-issue moveTo if not closing
 const PORTAL_SETTLE_MS = 4000; // after a real portal hop, let streaming catch up
 const SEAM_JUMP_M = 30; // world-frame jump vs last known pose >= this = teleport
@@ -56,11 +61,14 @@ export class RynthRouter {
     this.reissueMs = opts.reissueMs ?? REISSUE_MS;
     this.settleMs = opts.settleMs ?? PORTAL_SETTLE_MS;
     this.seamJumpM = opts.seamJumpM ?? SEAM_JUMP_M;
+    this.stitchTimeoutMs = opts.stitchTimeoutMs ?? STITCH_TIMEOUT_MS;
     this.route = [];
     this.leg = 0;
     this.walked = 0; // legs actually completed (arrival or consumed portal)
     this.state = "IDLE"; // IDLE | WALK | PORTAL | DONE | FAILED
     this.legStartAt = 0;
+    this.legDeadlineMs = this.legTimeoutMs; // per-leg (stitch legs get the shorter deadline)
+    this.failedLegStitch = false; // FAILED on a stitch leg = physically blocked stitched segment
     this.lastD = Infinity;
     this.lastReissueAt = 0;
     this.lastLb = 0;
@@ -76,6 +84,7 @@ export class RynthRouter {
     this.route = route.slice();
     this.leg = 0;
     this.walked = 0;
+    this.failedLegStitch = false;
     this.state = this.route.length ? "WALK" : "DONE";
     this._beginLeg();
     return this;
@@ -110,6 +119,9 @@ export class RynthRouter {
     this.legStartAt = Date.now();
     this.lastReissueAt = Date.now();
     this.lastD = Infinity;
+    // Stitch legs (contract v2: straight-line fallback through unbaked/carved
+    // space) get the short deadline — a physical obstacle there never clears.
+    this.legDeadlineMs = l.stitch ? Math.min(this.legTimeoutMs, this.stitchTimeoutMs) : this.legTimeoutMs;
     this.host.MoveToPosition(l.lb, l.x, l.y, l.z, true);
     this.log(`leg ${this.leg + 1}/${this.route.length} -> lb=0x${(l.lb >>> 0).toString(16)} (${l.x.toFixed(0)},${l.y.toFixed(0)})`);
   }
@@ -154,7 +166,7 @@ export class RynthRouter {
     if (!pose) {
       // Null-pose ticks neither advance nor fake a portal, but the leg
       // watchdog still runs — a dead pose source must fail, not stall.
-      if (now - this.legStartAt > this.legTimeoutMs) {
+      if (now - this.legStartAt > this.legDeadlineMs) {
         this.log(`leg ${this.leg + 1} timed out (no pose)`);
         this.state = "FAILED";
         h.StopCompletely();
@@ -221,8 +233,11 @@ export class RynthRouter {
     }
     this.lastD = Math.min(this.lastD, d);
 
-    if (now - this.legStartAt > this.legTimeoutMs) {
-      this.log(`leg ${this.leg + 1} timed out`);
+    if (now - this.legStartAt > this.legDeadlineMs) {
+      this.log(l.stitch
+        ? `stitch leg ${this.leg + 1} blocked (obstacle in stitched segment) — failing fast`
+        : `leg ${this.leg + 1} timed out`);
+      this.failedLegStitch = !!l.stitch;
       this.state = "FAILED";
       h.StopCompletely();
     }
@@ -288,7 +303,13 @@ export class RynthRouter {
   }
 
   get status() {
-    return { state: this.state, leg: this.leg, legs: this.route.length, walked: this.walked };
+    return {
+      state: this.state,
+      leg: this.leg,
+      legs: this.route.length,
+      walked: this.walked,
+      stitchBlocked: this.failedLegStitch,
+    };
   }
 }
 

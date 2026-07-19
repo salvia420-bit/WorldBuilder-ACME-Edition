@@ -127,20 +127,25 @@ export class GlobalRouter {
     // `coverage: "straight"` = blind fallback (the soak-14 Arwic-wall class);
     // "mixed" = some walk segments unbaked; "detour" = fully obstacle-aware.
     let coverage = null, estUnits = null, portalsUsed = null;
+    // Contract v2 (sidecar): per-leg {stitch:true} + top-level stitchedLegs/
+    // partial. Absent on a v1 sidecar -> null, all new behavior inert.
+    let stitchedLegs = null, partial = null;
     for (let attempt = 0; ; attempt++) {
       const pose = await this._awaitPose(poseTimeoutMs, pollMs);
-      if (!pose) return { ok: false, error: "no player pose", legsWalked, replans, coverage, estUnits, portalsUsed };
+      if (!pose) return { ok: false, error: "no player pose", legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial };
       const res = await this.route(pose, to);
       if (!res || res.ok !== true || !Array.isArray(res.legs) || !res.legs.length) {
-        return { ok: false, error: (res && res.error) || "empty route", legsWalked, replans, coverage, estUnits, portalsUsed };
+        return { ok: false, error: (res && res.error) || "empty route", legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial };
       }
       coverage = res.coverage ?? null;
       estUnits = Number.isFinite(res.estUnits) ? res.estUnits : null;
       portalsUsed = Number.isFinite(res.portalsUsed) ? res.portalsUsed : null;
+      stitchedLegs = Number.isFinite(res.stitchedLegs) ? res.stitchedLegs : null;
+      partial = typeof res.partial === "boolean" ? res.partial : null;
       // First-class plan state for the W3 mission line (bot.globalRouter.lastPlan);
       // refreshed on the initial plan AND every replan. Read defensively downstream.
       this.lastPlan = {
-        estUnits, coverage, portalsUsed,
+        estUnits, coverage, portalsUsed, stitchedLegs, partial,
         legCount: res.legs.length,
         plannedAt: Date.now(),
         replan: replans,
@@ -166,7 +171,7 @@ export class GlobalRouter {
             error: "route cancelled",
             legsWalked: legsWalked + (st.walked ?? 0),
             replans,
-            coverage, estUnits, portalsUsed,
+            coverage, estUnits, portalsUsed, stitchedLegs, partial,
           };
         }
         const sig = `${st.state}:${st.leg}:${st.walked}`;
@@ -181,15 +186,30 @@ export class GlobalRouter {
             error: "walk stalled (host stopped ticking?)",
             legsWalked: legsWalked + (router.status.walked ?? 0),
             replans,
-            coverage, estUnits, portalsUsed,
+            coverage, estUnits, portalsUsed, stitchedLegs, partial,
           };
         }
         await new Promise((r) => setTimeout(r, pollMs));
       }
       legsWalked += router.status.walked ?? router.status.leg;
-      if (router.status.state === "DONE") return { ok: true, state: "DONE", legsWalked, replans, coverage, estUnits, portalsUsed };
+      if (router.status.state === "DONE") return { ok: true, state: "DONE", legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial };
+      // A FAILED stitch leg is a physical obstacle inside a straight-line
+      // fallback segment — the plan is deterministic, so replanning from the
+      // same pose reproduces the same stitch. Fail loudly instead (the W3
+      // journal turns this into a blocked-fact; the sweep probe maps it).
+      if (router.status.stitchBlocked) {
+        const bl = router.route ? router.route[router.status.leg] : null;
+        this.log(`stitch leg ${router.status.leg + 1} blocked — not replanning (deterministic plan)`);
+        return {
+          ok: false,
+          state: "FAILED",
+          error: "blocked stitch leg",
+          blockedLeg: bl ? { index: router.status.leg, lb: bl.lb, x: bl.x, y: bl.y, z: bl.z } : null,
+          legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial,
+        };
+      }
       if (attempt >= retries) {
-        return { ok: false, state: "FAILED", error: "retries exhausted", legsWalked, replans, coverage, estUnits, portalsUsed };
+        return { ok: false, state: "FAILED", error: "retries exhausted", legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial };
       }
       replans += 1;
       this.log(`leg failed — replanning from current pose (${replans}/${retries})`);
