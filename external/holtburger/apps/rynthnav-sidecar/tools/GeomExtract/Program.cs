@@ -74,6 +74,14 @@
 //   itself become a walkable roof island within agentMaxClimb reach of terrain
 //   in the worst case. Statics/scenery are never sealed (only Buildings[] are
 //   CBuildingObj with enterable interiors).
+//   Portal gate (2026-07-19): a seal only closes doorways that lead into
+//   interior EnvCells, so it is emitted ONLY when the BuildingInfo has at least
+//   one BuildingPortal (bld.Portals.Count > 0 — each portal's OtherCellId links
+//   an interior 0x0100xxxx cell). Buildings with no portals are not enterable
+//   shells: city-wall / gatehouse pieces (e.g. Arwic GfxObj family
+//   0x01002D20-26) stored as lbi.Buildings entries but with open pass-throughs.
+//   Sealing those walled the town compound into a disconnected navmesh island,
+//   so their seal is skipped (logged one line each; counted in totals).
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -353,7 +361,7 @@ List<Vector3> PlaceModel(uint did, Vector3 origin, Quaternion q, float scale)
 
 // ── per-landblock extraction ─────────────────────────────────────────────────
 var json = new JsonSerializerOptions(); // default: shortest round-trip floats
-int lbCount = 0, totalObjects = 0, totalBuildings = 0, totalScenery = 0, totalSeals = 0;
+int lbCount = 0, totalObjects = 0, totalBuildings = 0, totalScenery = 0, totalSeals = 0, totalSealsSkipped = 0;
 long totalTris = 0, totalSealTris = 0;
 
 void WriteEntry(StreamWriter w, string src, uint did, List<Vector3> verts, ref long triAccum)
@@ -400,12 +408,27 @@ for (int x = Math.Max(0, x0 - 1); x <= Math.Min(255, x1 + 1); x++)
                 nBld++;
                 // Nav-seal skirt rides directly after its building line (GeomCheck
                 // SEAL pairs them by adjacency; duplicate ModelIds per LB exist).
+                // A seal exists ONLY to close doorways that lead into interior
+                // EnvCells (interiors are off-mesh). BuildingInfo.Portals lists those
+                // interior links (each BuildingPortal.OtherCellId -> a 0x0100xxxx
+                // interior cell); a building with no portals (city-wall segments,
+                // pass-through gatehouse arches — e.g. Arwic 0x01002D20-26) has NO
+                // doorway to close, so sealing it would wall off a genuinely open
+                // gap and disconnect the outdoor navmesh. Seal iff Portals.Count > 0.
                 if (sealBuildings && verts.Count > 0)
                 {
-                    var skirt = SealSkirt(verts, out int segs);
-                    WriteEntry(w, "seal", bld.ModelId, skirt, ref nTri);
-                    totalSeals++; totalSealTris += skirt.Count / 3;
-                    Console.WriteLine($"  seal 0x{lb:X4}/0x{bld.ModelId:X8}: {skirt.Count / 3} wall tris in {segs} boundary runs");
+                    if (bld.Portals.Count > 0)
+                    {
+                        var skirt = SealSkirt(verts, out int segs);
+                        WriteEntry(w, "seal", bld.ModelId, skirt, ref nTri);
+                        totalSeals++; totalSealTris += skirt.Count / 3;
+                        Console.WriteLine($"  seal 0x{lb:X4}/0x{bld.ModelId:X8}: {skirt.Count / 3} wall tris in {segs} boundary runs");
+                    }
+                    else
+                    {
+                        totalSealsSkipped++;
+                        Console.WriteLine($"  seal-skip 0x{lb:X4}/0x{bld.ModelId:X8}: no interior portals — seal skipped");
+                    }
                 }
             }
         }
@@ -449,6 +472,6 @@ for (int x = Math.Max(0, x0 - 1); x <= Math.Min(255, x1 + 1); x++)
 Console.WriteLine($"DONE: {lbCount} landblocks -> {outDir}");
 Console.WriteLine($"totals: statics={totalObjects} buildings={totalBuildings} scenery={totalScenery} tris={totalTris}");
 if (sealBuildings)
-    Console.WriteLine($"seal-buildings: {totalSeals} buildings sealed, {totalSealTris} wall tris (routing-only; re-extract without --seal-buildings to reopen doorways)");
+    Console.WriteLine($"seal-buildings: {totalSeals} buildings sealed, {totalSealsSkipped} skipped (no interior portals), {totalSealTris} wall tris (routing-only; re-extract without --seal-buildings to reopen doorways)");
 Console.WriteLine($"gfxobjs without physics polys (non-collidable, skipped): {gfxNoPhysics}; model DID lookup misses: {modelMisses}");
 return 0;
