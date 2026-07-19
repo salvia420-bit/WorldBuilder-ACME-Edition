@@ -7201,6 +7201,20 @@
                       .then(async (m) => {
                         try { if (prevBot && typeof prevBot.stop === "function") prevBot.stop(); } catch (_) {}
                         const cfg = botParams.get("botAi") === "off" ? { ai: false } : {};
+                        // operator ai-stop latch (task #11, 2026-07-19): a
+                        // reconnect reboot must NOT resurrect a director the
+                        // operator stopped via rynthAI.stop(). The latch (set in
+                        // rynth/ai/operator_stop.js, persisted in localStorage so
+                        // it survives reloads/reconnects/browser restarts) forces
+                        // cfg.ai=false here, on top of ?botAi=off. Absent latch =
+                        // default behavior unchanged. Its own try/catch: a broken
+                        // latch module must never block the boot.
+                        try {
+                          const os = await import(new URL("rynth/ai/operator_stop.js", location.href).href);
+                          if (os.applyOperatorStopToCfg(cfg)) {
+                            console.log("[bot] AI director suppressed: operator stop latch");
+                          }
+                        } catch (_) { /* latch unavailable = fall through to params */ }
                         // nav sidecar (2026-07-18): default-on. Without
                         // config.nav the bot has NO coordinate travel
                         // (goto/goto_lb return "nav not configured") and a
