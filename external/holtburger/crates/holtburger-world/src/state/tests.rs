@@ -1458,6 +1458,205 @@ fn workstream_g_post_teleport_set_player_position_updates_runtime_pose_when_body
     let _ = AuthoritativeBodySync::Snapshot; // silence unused-import lint without changing public API
 }
 
+/// NavAtlas outdoor-login `objCellId == 0` regression (2026-07-19,
+/// live-repro on ACE: a character whose SAVED position is OUTDOORS logs
+/// in and `getLocalPlayerPose().landblockId` — the value the rynth
+/// webhost exposes as `objCellId` — is stuck at 0 forever while x/y/z
+/// sync from the server; movement, teleports and the rynth pose all
+/// break because a never-placed object cannot be re-placed).
+///
+/// Mechanism: the login seed can leave the local player's runtime
+/// (working) body pose with a NULL landblock (a pos-less seed —
+/// `data.pos.unwrap_or_default()` / the ObjectCreate `None` branch on
+/// the wasm side). `set_local_player_runtime_pose` arms
+/// `SimulatingMotionState`, so every routine `Snapshot` echo hits the
+/// `preserve_local_runtime_pose` gate and never overwrites `body.pose`.
+/// For an INDOOR/teleport arrival the `Reset`/`ForceBlip` snap escapes
+/// the gate and stamps the cell; for a saved-OUTDOOR position the
+/// routine `Snapshot` echoes stay preserved AND outdoor local
+/// re-derivation (`rebucket_outdoor_landblock` / `normalize_outdoor_cell`)
+/// is a no-op on a NULL landblock — so the cell can never recover.
+///
+/// **Fix** (`scene.rs` `reconcile_authoritative_body_with_remote`): a
+/// NULL working landblock is never a legitimate pose to preserve, so the
+/// preserve gate now also requires `body.pose.landblock_id != Guid::NULL`.
+/// A NULL working cell falls through to the authoritative snap
+/// (`body.pose = pose`) which adopts the server's outdoor cell. Sibling
+/// `workstream_g_*` above proves a VALID working cell is still preserved
+/// (the academy-rubberband path is untouched).
+#[test]
+fn navatlas_null_working_landblock_heals_to_outdoor_cell_on_snapshot_echo() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_00C1);
+
+    // Simulate a pos-less login seed: the runtime body's working pose is
+    // stamped with a NULL landblock (Guid(0)) while carrying the real
+    // landblock-local coords (0..192) the server will echo.
+    let null_seed = WorldPosition {
+        landblock_id: Guid::NULL,
+        coords: Vector3::new(46.805, 4.219, 42.005),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state.seed_local_player_entity(player_guid, "Player", null_seed);
+    // Arms SimulatingMotionState (the mode the preserve gate keys off of)
+    // with a NULL-landblock working pose — the exact bug state.
+    let _ = state.set_local_player_runtime_pose(null_seed);
+    {
+        let body = state
+            .scene
+            .body(SpatialBodyId::LocalPlayer(player_guid))
+            .expect("body registered post seed");
+        assert_eq!(
+            body.pose.landblock_id,
+            Guid::NULL,
+            "precondition: working pose seeded with a NULL landblock"
+        );
+        assert_eq!(
+            body.sampling.mode,
+            SpatialSampleMode::SimulatingMotionState,
+            "precondition: SimulatingMotionState armed (preserve gate active)"
+        );
+    }
+
+    // The server's authoritative OUTDOOR position arrives as a routine
+    // `Snapshot` echo (low word 0x0009 < 0x100 ⇒ outdoor cell).
+    let outdoor_pos = WorldPosition {
+        landblock_id: Guid(0xC6A9_0009),
+        coords: Vector3::new(46.805, 4.219, 42.005),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let _ = state.set_player_position(outdoor_pos);
+
+    // FIX: the NULL working cell must NOT be preserved — it snaps to the
+    // server's outdoor cell so `objCellId` (getLocalPlayerPose().landblockId)
+    // reads non-zero.
+    let body = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("body still registered after snapshot echo");
+    assert_ne!(
+        body.pose.landblock_id,
+        Guid::NULL,
+        "regression: NULL working cell must heal (objCellId != 0)"
+    );
+    assert_eq!(
+        body.pose.landblock_id,
+        Guid(0xC6A9_0009),
+        "working cell should adopt the server's outdoor landblock"
+    );
+    // The read path getLocalPlayerPose() maps to must reflect the healed cell.
+    assert_eq!(
+        state
+            .local_player_runtime_pose()
+            .expect("runtime pose available")
+            .landblock_id,
+        Guid(0xC6A9_0009),
+        "local_player_runtime_pose (→ objCellId) reads the healed outdoor cell"
+    );
+}
+
+/// Companion to the NavAtlas fix: a VALID (non-NULL) working landblock
+/// under `SimulatingMotionState` is STILL preserved on a routine
+/// `Snapshot` echo (the academy-rubberband defense the fix must not
+/// weaken). This pins the fix to the NULL-only condition so a normal
+/// outdoor player's predicted pose is never snapped backward by a laggy
+/// echo.
+#[test]
+fn navatlas_fix_leaves_valid_working_landblock_preserved() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_00C2);
+    // Valid outdoor working pose (cell 0xC6A90009).
+    let working = WorldPosition {
+        landblock_id: Guid(0xC6A9_0009),
+        coords: Vector3::new(46.805, 4.219, 42.005),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state.seed_local_player_entity(player_guid, "Player", working);
+    let _ = state.set_local_player_runtime_pose(working);
+
+    // A laggy routine Snapshot echo a few metres behind — must be
+    // preserved (prediction wins), not snapped.
+    let laggy_echo = WorldPosition {
+        landblock_id: Guid(0xC6A9_0009),
+        coords: Vector3::new(44.0, 2.0, 42.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let _ = state.set_player_position(laggy_echo);
+    let body = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("body registered");
+    assert_eq!(
+        body.pose, working,
+        "valid working pose must stay preserved under SimulatingMotionState (academy-rubberband intact)"
+    );
+    assert_eq!(
+        body.authoritative_pose,
+        Some(laggy_echo),
+        "authoritative_pose still tracks the echo"
+    );
+}
+
+/// NavAtlas fix — authoritative-ONLY path coverage (the `routinePosGuard`
+/// gap). Live-confirmed `[movement] routinePosGuard ON`: routine self
+/// UpdatePosition echoes route through `set_player_position_authoritative_only`
+/// (`sync = None`) which updates `entity.position` but does NOT reconcile the
+/// runtime body — so the `scene.rs` `preserve_local_runtime_pose` NULL guard
+/// never runs for those. The `update_player_position_core` heal must recover
+/// the working cell on this path too, otherwise a session whose only post-seed
+/// traffic is routine echoes stays at `objCellId == 0` forever.
+#[test]
+fn navatlas_null_working_landblock_heals_on_authoritative_only_echo() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_00C3);
+
+    let null_seed = WorldPosition {
+        landblock_id: Guid::NULL,
+        coords: Vector3::new(12.8, -26.7, 0.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state.seed_local_player_entity(player_guid, "Player", null_seed);
+    let _ = state.set_local_player_runtime_pose(null_seed);
+    assert_eq!(
+        state
+            .scene
+            .body(SpatialBodyId::LocalPlayer(player_guid))
+            .expect("body registered")
+            .pose
+            .landblock_id,
+        Guid::NULL,
+        "precondition: NULL working landblock"
+    );
+
+    // Routine self-echo via the authoritative-ONLY path (no reconcile) —
+    // the indoor academy cell the ENTITY already holds.
+    let authoritative_echo = WorldPosition {
+        landblock_id: Guid(0x8602_01AD),
+        coords: Vector3::new(12.8, -26.7, 0.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let _ = state.set_player_position_authoritative_only(authoritative_echo);
+
+    assert_eq!(
+        state
+            .scene
+            .body(SpatialBodyId::LocalPlayer(player_guid))
+            .expect("body still registered")
+            .pose
+            .landblock_id,
+        Guid(0x8602_01AD),
+        "authoritative-only echo must heal the NULL working cell (routinePosGuard path)"
+    );
+    assert_eq!(
+        state
+            .local_player_runtime_pose()
+            .expect("runtime pose")
+            .landblock_id,
+        Guid(0x8602_01AD),
+        "objCellId reads the healed cell after an authoritative-only echo"
+    );
+}
+
 /// Teleport-destination landing regression (2026-07-02, live-repro on ACE
 /// `@telepoi`): the canonical `handlers/player.rs` message pair must land
 /// the runtime body at the destination even though `PlayerTeleport`

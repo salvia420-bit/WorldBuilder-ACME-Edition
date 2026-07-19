@@ -799,6 +799,42 @@ impl WorldState {
             return None;
         }
         self.scene.update_entity(guid, old_lb, pos);
+
+        // Cell-continuity heal (NavAtlas login `objCellId == 0`, 2026-07-19):
+        // the login message race can leave the local player's runtime (working)
+        // body pose with a NULL landblock even though the ENTITY carries the
+        // real cell — the ObjectCreate seed populates `entity.position` and the
+        // body pose (0x860201AD live-confirmed), but a later write can zero the
+        // body's `landblock_id` while keeping the landblock-local coords, and the
+        // `preserve_local_runtime_pose` gate then freezes that NULL cell. With
+        // `routinePosGuard` ON every routine self-echo routes to the
+        // authoritative-ONLY path (`sync = None`) which never reconciles the body,
+        // so `getLocalPlayerPose().landblockId` (→ rynth `objCellId`) stays 0
+        // forever and movement/teleports break (a never-placed object cannot be
+        // re-placed). Whenever we apply a server pose with a valid cell and the
+        // working body pose is still NULL, adopt authority onto the body so the
+        // cell recovers — on BOTH the reconcile and authoritative-only paths.
+        // Fires ONLY while the working landblock is NULL (the bug window); a valid
+        // working cell is left untouched, so prediction / academy-rubberband paths
+        // are unaffected. Companion to the `preserve_local_runtime_pose` NULL guard
+        // in `scene.rs` (which covers the reconcile paths, e.g. VectorUpdate).
+        if pos.landblock_id != Guid::NULL {
+            if let Some(body_id) = self.runtime_body_id_for_guid(guid) {
+                let working_cell_null = self
+                    .scene
+                    .body(body_id)
+                    .is_some_and(|body| body.pose.landblock_id == Guid::NULL);
+                if working_cell_null {
+                    let mode = self
+                        .scene
+                        .body(body_id)
+                        .map(|body| body.sampling.mode)
+                        .unwrap_or(SpatialSampleMode::AuthoritativeOnly);
+                    self.scene.apply_runtime_body_pose(body_id, pos, mode);
+                }
+            }
+        }
+
         let (velocity, omega) = self
             .entities
             .get(guid)

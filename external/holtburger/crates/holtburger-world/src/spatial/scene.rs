@@ -2913,8 +2913,29 @@ impl SpatialScene {
             .take()
             .unwrap_or_else(|| SpatialBody::new(body_id, pose, now));
 
+        // Cell-continuity guard (NavAtlas outdoor-login objCellId=0 fix,
+        // 2026-07-19): the preserve gate keeps the smoothly-predicted x/y/z
+        // during active simulation, but the working pose's `landblock_id` is
+        // the discrete cell id (retail carries this as `CPhysicsObj::cur_cell`,
+        // continuously maintained by `insert_into_cell` / `find_cell_list` and
+        // NEVER frozen — acclient.c:311632/:313300). If the working pose was
+        // seeded/left with a NULL landblock (a pos-less login seed —
+        // `data.pos.unwrap_or_default()` at lib.rs:27504 / the ObjectCreate
+        // `None` branch), preserving it strands `objCellId` at 0 forever:
+        // every routine `Snapshot` echo is gated away here, and the outdoor
+        // local re-derivation (`rebucket_outdoor_landblock` /
+        // `normalize_outdoor_cell`) is a no-op on a NULL landblock
+        // (position.rs:132/:90). An INDOOR/teleport arrival escapes because it
+        // routes through `Reset`/`ForceBlip` (the non-preserve snap below) — the
+        // exact asymmetry the outdoor-login bug shows. A NULL working landblock
+        // is never a legitimate pose to preserve, so fall through to the
+        // authoritative snap (`body.pose = pose`) which adopts the server cell.
+        // This only changes behaviour when the working landblock is NULL (the
+        // bug condition); normal play always has a valid cell, so the
+        // academy-rubberband preserve path is untouched.
         let preserve_local_runtime_pose = matches!(body_id, SpatialBodyId::LocalPlayer(_))
             && matches!(sync, AuthoritativeBodySync::Snapshot)
+            && body.pose.landblock_id != Guid::NULL
             && matches!(
                 body.sampling.mode,
                 SpatialSampleMode::SimulatingMotionState | SpatialSampleMode::SimulatingVelocity
