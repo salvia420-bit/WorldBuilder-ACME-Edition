@@ -415,7 +415,10 @@ async function outdoorWithAssist(ctx, to, opts, tune, phases) {
     }
     let tr;
     if (isEnvCellId(currentCell(ctx.host))) {
-      tr = await attemptPortalTransit(ctx, out.blockedLeg, tune);
+      // Aim the transit at the next PORTAL leg of the failed plan when the
+      // blockage is a mid-dungeon waypoint (nextPortalLeg falls back to the
+      // blocked leg for older global_router results).
+      tr = await attemptPortalTransit(ctx, out.nextPortalLeg || out.blockedLeg, tune);
     } else {
       tr = await attemptOutdoorPortalTouch(ctx, tune);
       if (!tr.ok && tr.noPortal) return out; // genuine obstacle, no portal near

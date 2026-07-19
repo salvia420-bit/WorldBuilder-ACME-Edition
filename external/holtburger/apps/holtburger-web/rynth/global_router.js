@@ -254,6 +254,13 @@ export class GlobalRouter {
       if (router.status.stitchBlocked) {
         const bl = router.route ? router.route[router.status.leg] : null;
         const blockedLeg = bl ? { index: router.status.leg, lb: bl.lb, x: bl.x, y: bl.y, z: bl.z } : null;
+        // First portal leg at/after the blockage: the right transit TARGET when
+        // the blocked leg is a mid-dungeon waypoint (live: Town Network hallway
+        // waypoint blocked -> the assist must aim at the exit portal 2 legs on,
+        // not at the hallway point, or it finds no portal entity there).
+        const npIdx = router.route ? router.route.findIndex((l, i) => i >= router.status.leg && l && l.portal) : -1;
+        const np = npIdx >= 0 ? router.route[npIdx] : null;
+        const nextPortalLeg = np ? { index: npIdx, lb: np.lb, x: np.x, y: np.y, z: np.z, label: np.label || "" } : null;
         // No avoid-replan while parked in an EnvCell: the sidecar has no indoor
         // mesh and 400s an EnvCell `from` — replanning would mask the blocked
         // error (goto_compose's portal-transit assist triggers on it) with a
@@ -277,6 +284,7 @@ export class GlobalRouter {
           state: "FAILED",
           error: "blocked stitch leg",
           blockedLeg,
+          nextPortalLeg,
           avoidTried: avoid.slice(),
           legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial,
         };
@@ -286,12 +294,14 @@ export class GlobalRouter {
       // blocked leg so goto_compose's portal-touch assist USEs the portal.
       if (router.status.portalBlocked) {
         const pbl = router.route ? router.route[router.status.leg] : null;
+        const pblLeg = pbl ? { index: router.status.leg, lb: pbl.lb, x: pbl.x, y: pbl.y, z: pbl.z } : null;
         this.log(`portal leg ${router.status.leg + 1} blocked (no hop) — not replanning; touch assist takes over`);
         return {
           ok: false,
           state: "FAILED",
           error: "blocked portal leg",
-          blockedLeg: pbl ? { index: router.status.leg, lb: pbl.lb, x: pbl.x, y: pbl.y, z: pbl.z } : null,
+          blockedLeg: pblLeg,
+          nextPortalLeg: pblLeg, // the blocked leg IS the portal
           avoidTried: avoid.slice(),
           legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial,
         };
