@@ -429,6 +429,22 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
       assert.equal(r.status.stitchBlocked, false);
     });
 
+    await rtest("R13", "portal leg holds at arrival (no advance), fails portalBlocked", () => {
+      const h = unitHost();
+      const r = new RT.RynthRouter(h, { log: quiet });
+      h.pose = P(0x0101, 0, 0);
+      r.follow([L(0x0101, 5, 0, { portal: true }), L(0x0101, 100, 0)]);
+      h.pose = P(0x0101, 4, 0); // within arriveM of the portal target, no hop
+      r.tick();
+      assert.equal(r.status.leg, 0, "no advance on mere proximity");
+      assert.equal(r.status.state, "WALK");
+      simT += 6_001; // past PORTAL_CONTACT_MS
+      r.tick();
+      assert.equal(r.status.state, "FAILED");
+      assert.equal(r.status.portalBlocked, true);
+      assert.equal(r.status.stitchBlocked, false);
+    });
+
     // ════ G* — GlobalRouter.goto (fake sidecar, ticking world) ════
     const GOPTS = { retries: 2, pollMs: 5, poseTimeoutMs: 400, stallMs: 600 };
 
@@ -727,6 +743,28 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
         assert.equal(r.error, "blocked stitch leg");
         assert.equal(routeCalls, 1, "no avoid replan from an EnvCell");
         assert.ok(r.blockedLeg, "blockedLeg carried for the transit assist");
+      } finally {
+        st.stopDrive();
+      }
+    });
+
+    await t("G13", "blocked portal leg: no replan, blockedLeg surfaced for touch assist", async () => {
+      const st = world();
+      const router = new RT.RynthRouter(st.host, { ...FAST, portalContactMs: 60 });
+      const gr = new GR.GlobalRouter(st.host, { log: quiet });
+      routeCalls = 0;
+      sidecar = async () => legsPayload([
+        { ...legAtWorld(st.wx + 30, st.wy), portal: true, label: "TN" },
+        legAtWorld(st.wx + 60, st.wy),
+      ]);
+      st.drive(router);
+      try {
+        const r = await gr.goto(router, { ns: 1, ew: 1 }, GOPTS);
+        assert.equal(r.ok, false, JSON.stringify(r));
+        assert.equal(r.error, "blocked portal leg");
+        assert.equal(r.replans, 0);
+        assert.equal(routeCalls, 1, "no replan on a deterministic no-hop portal");
+        assert.ok(r.blockedLeg && r.blockedLeg.index === 0, "portal leg surfaced");
       } finally {
         st.stopDrive();
       }

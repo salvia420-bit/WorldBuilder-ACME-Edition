@@ -39,6 +39,8 @@
 
 const ARRIVE_M = 3.0; // within this of a leg target = arrived
 const LEG_TIMEOUT_MS = 30_000; // per-leg watchdog
+const PORTAL_CONTACT_MS = 6_000; // arrived at a portal leg but no hop within this
+// window -> FAILED portalBlocked (the compose touch assist USEs the portal)
 const STITCH_TIMEOUT_MS = 15_000; // watchdog for stitch legs (sidecar contract v2:
 // sized so a full ~40m stitch stride (~10s at 4 m/s) has headroom, while a
 // truly blocked stitch still fails 2x faster than a normal leg.
@@ -64,6 +66,7 @@ export class RynthRouter {
     this.settleMs = opts.settleMs ?? PORTAL_SETTLE_MS;
     this.seamJumpM = opts.seamJumpM ?? SEAM_JUMP_M;
     this.stitchTimeoutMs = opts.stitchTimeoutMs ?? STITCH_TIMEOUT_MS;
+    this.portalContactMs = opts.portalContactMs ?? PORTAL_CONTACT_MS;
     this.route = [];
     this.leg = 0;
     this.walked = 0; // legs actually completed (arrival or consumed portal)
@@ -87,6 +90,7 @@ export class RynthRouter {
     this.leg = 0;
     this.walked = 0;
     this.failedLegStitch = false;
+    this.failedLegPortal = false;
     this.state = this.route.length ? "WALK" : "DONE";
     this._beginLeg();
     return this;
@@ -124,6 +128,7 @@ export class RynthRouter {
     // Stitch legs (contract v2: straight-line fallback through unbaked/carved
     // space) get the short deadline — a physical obstacle there never clears.
     this.legDeadlineMs = l.stitch ? Math.min(this.legTimeoutMs, this.stitchTimeoutMs) : this.legTimeoutMs;
+    this.portalArrivedAt = 0; // portal-leg contact window anchor (set on first arrival)
     this.host.MoveToPosition(l.lb, l.x, l.y, l.z, true);
     this.log(`leg ${this.leg + 1}/${this.route.length} -> lb=0x${(l.lb >>> 0).toString(16)} (${l.x.toFixed(0)},${l.y.toFixed(0)})`);
   }
@@ -212,6 +217,27 @@ export class RynthRouter {
     const [lwx, lwy] = worldXY(l.lb, l.x, l.y);
     const d = Math.hypot(wx - lwx, wy - lwy);
     if (d <= this.arriveM) {
+      if (l.portal) {
+        // A portal leg's completion condition is the HOP (teleport detection
+        // above), not proximity: advancing on 3m arrival let the next leg
+        // (often a far-side pseudo-coord) drag the walker AWAY from the portal
+        // (live: Arwic TN, walked to 2m then marched 20m southwest into the
+        // yard fence). Hold the leg, keep nudging INTO the portal point, and
+        // after portalContactMs without a hop fail as portalBlocked — the
+        // goto_compose portal-touch assist then USEs the portal we are
+        // standing on.
+        if (!this.portalArrivedAt) this.portalArrivedAt = now;
+        if (now - this.portalArrivedAt > this.portalContactMs) {
+          this.log(`portal leg ${this.leg + 1} arrived but no hop in ${this.portalContactMs}ms — failing for the touch assist`);
+          this.failedLegPortal = true;
+          this.state = "FAILED";
+          h.StopCompletely();
+        } else if (now - this.lastReissueAt > this.reissueMs) {
+          h.MoveToPosition(l.lb, l.x, l.y, l.z, true);
+          this.lastReissueAt = now;
+        }
+        return;
+      }
       this._advance();
       return;
     }
@@ -223,7 +249,7 @@ export class RynthRouter {
     // live: routed(4) to a next-room NPC with an unchanged pose, then the
     // straight-line pursue wedged on the wall exactly as before routing).
     const ps = h.GetPursuitStatus ? h.GetPursuitStatus() : { now: 0 };
-    if (ps.now === 2 && d <= this.arriveM * 2) {
+    if (ps.now === 2 && d <= this.arriveM * 2 && !l.portal) {
       this._advance();
       return;
     }
@@ -311,6 +337,7 @@ export class RynthRouter {
       legs: this.route.length,
       walked: this.walked,
       stitchBlocked: this.failedLegStitch,
+      portalBlocked: !!this.failedLegPortal,
     };
   }
 }

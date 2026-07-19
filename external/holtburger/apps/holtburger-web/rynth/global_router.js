@@ -281,6 +281,21 @@ export class GlobalRouter {
           legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial,
         };
       }
+      // Portal leg arrived but the hop never fired (router portalContactMs):
+      // deterministic — replanning walks back to the same portal. Surface the
+      // blocked leg so goto_compose's portal-touch assist USEs the portal.
+      if (router.status.portalBlocked) {
+        const pbl = router.route ? router.route[router.status.leg] : null;
+        this.log(`portal leg ${router.status.leg + 1} blocked (no hop) — not replanning; touch assist takes over`);
+        return {
+          ok: false,
+          state: "FAILED",
+          error: "blocked portal leg",
+          blockedLeg: pbl ? { index: router.status.leg, lb: pbl.lb, x: pbl.x, y: pbl.y, z: pbl.z } : null,
+          avoidTried: avoid.slice(),
+          legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial,
+        };
+      }
       if (attempt >= retries) {
         return { ok: false, state: "FAILED", error: "retries exhausted", legsWalked, replans, coverage, estUnits, portalsUsed, stitchedLegs, partial };
       }
