@@ -240,9 +240,33 @@ if (cmd == "bake")
                toEl.TryGetProperty("noPortals", out var np2) && np2.ValueKind == JsonValueKind.True;
     }
 
-    static string? ParseRouteRequest(JsonElement root, out WorldPt start, out WorldPt goal)
+    // Optional "avoid":[{x,y,r}] — world-frame metres (lbX*192+local, same frame the router uses
+    // internally), r > 0. Absent field => empty list => today's behavior exactly. A malformed
+    // entry is a 400 (like any bad request field), never a silent drop.
+    static string? ParseAvoid(JsonElement root, out List<AvoidCircle> avoid)
     {
-        start = default; goal = default;
+        avoid = new List<AvoidCircle>();
+        if (!root.TryGetProperty("avoid", out var arr)) return null;
+        if (arr.ValueKind != JsonValueKind.Array) return "'avoid' must be an array of {x,y,r}";
+        int i = 0;
+        foreach (var el in arr.EnumerateArray())
+        {
+            string who = $"avoid[{i}]";
+            if (el.ValueKind != JsonValueKind.Object) return $"'{who}' must be an object {{x,y,r}}";
+            string? e;
+            if ((e = FiniteNumber(el, who, "x", out double x)) != null) return e;
+            if ((e = FiniteNumber(el, who, "y", out double y)) != null) return e;
+            if ((e = FiniteNumber(el, who, "r", out double r)) != null) return e;
+            if (r <= 0) return $"'{who}.r' must be positive";
+            avoid.Add(new AvoidCircle(x, y, r));
+            i++;
+        }
+        return null;
+    }
+
+    static string? ParseRouteRequest(JsonElement root, out WorldPt start, out WorldPt goal, out List<AvoidCircle> avoid)
+    {
+        start = default; goal = default; avoid = new List<AvoidCircle>();
         if (root.ValueKind != JsonValueKind.Object) return "request root must be a JSON object";
         if (!root.TryGetProperty("from", out var from)) return "missing 'from'";
         if (from.ValueKind != JsonValueKind.Object) return "'from' must be an object {lb,x,y,z}";
@@ -253,16 +277,19 @@ if (cmd == "bake")
         bool hasLb = to.TryGetProperty("lb", out _);
         bool hasDeg = to.TryGetProperty("ns", out _) || to.TryGetProperty("ew", out _);
         if (hasLb && hasDeg) return "ambiguous 'to': send either {lb,x,y[,z]} or {ns,ew}, not both";
-        if (hasLb) return LbPoint(to, "to", start.Z, out goal);
-        if (!hasDeg) return "'to' needs either {lb,x,y[,z]} or {ns,ew}";
-        // {"ns":<deg>,"ew":<deg>} — /loc degrees; z resolved by the navmesh query.
-        if ((e = FiniteNumber(to, "to", "ns", out double nsDeg)) != null) return e;
-        if ((e = FiniteNumber(to, "to", "ew", out double ewDeg)) != null) return e;
-        goal = new WorldPt(DetourRouter.DegToWorld(ewDeg), DetourRouter.DegToWorld(nsDeg), start.Z);
-        if (goal.Wx < -WorldMargin || goal.Wx > WorldMax + WorldMargin ||
-            goal.Wy < -WorldMargin || goal.Wy > WorldMax + WorldMargin)
-            return "'to' ns/ew outside world bounds (/loc range is about -102.0 .. 102.8 deg)";
-        return null;
+        if (hasLb) { if ((e = LbPoint(to, "to", start.Z, out goal)) != null) return e; }
+        else if (!hasDeg) return "'to' needs either {lb,x,y[,z]} or {ns,ew}";
+        else
+        {
+            // {"ns":<deg>,"ew":<deg>} — /loc degrees; z resolved by the navmesh query.
+            if ((e = FiniteNumber(to, "to", "ns", out double nsDeg)) != null) return e;
+            if ((e = FiniteNumber(to, "to", "ew", out double ewDeg)) != null) return e;
+            goal = new WorldPt(DetourRouter.DegToWorld(ewDeg), DetourRouter.DegToWorld(nsDeg), start.Z);
+            if (goal.Wx < -WorldMargin || goal.Wx > WorldMax + WorldMargin ||
+                goal.Wy < -WorldMargin || goal.Wy > WorldMax + WorldMargin)
+                return "'to' ns/ew outside world bounds (/loc range is about -102.0 .. 102.8 deg)";
+        }
+        return ParseAvoid(root, out avoid);
     }
 
     app.MapPost("/route", async (HttpContext ctx) =>
@@ -284,9 +311,10 @@ if (cmd == "bake")
         catch (JsonException) { await WriteJson(ctx, 400, new { ok = false, error = "malformed JSON" }); return; }
 
         WorldPt start, goal;
+        List<AvoidCircle> avoid;
         string? bad;
         bool noPortals = false;
-        try { using (doc) { bad = ParseRouteRequest(doc.RootElement, out start, out goal); noPortals = ReadNoPortals(doc.RootElement); } }
+        try { using (doc) { bad = ParseRouteRequest(doc.RootElement, out start, out goal, out avoid); noPortals = ReadNoPortals(doc.RootElement); } }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException)
         {
             // Belt-and-braces: ParseRouteRequest is TryGet-based and shouldn't throw.
@@ -316,12 +344,13 @@ if (cmd == "bake")
                 coverage = "straight",
                 stitchedLegs = 0,
                 partial = false,
+                avoidApplied = 0,
             });
             return;
         }
 
         RouteOutcome outcome;
-        try { outcome = router.Route(start, goal, noPortals); }
+        try { outcome = router.Route(start, goal, avoid, noPortals); }
         catch (Exception ex)
         {
             Console.WriteLine($"[route] planner exception: {ex}");
@@ -336,7 +365,7 @@ if (cmd == "bake")
             return;
         }
 
-        Console.WriteLine($"[route] ok: {outcome.Legs.Count} legs ({outcome.StitchedLegs} stitch), est={outcome.EstUnits:F0}u, portals={outcome.PortalsUsed}, coverage={outcome.Coverage}, partial={outcome.Partial}");
+        Console.WriteLine($"[route] ok: {outcome.Legs.Count} legs ({outcome.StitchedLegs} stitch), est={outcome.EstUnits:F0}u, portals={outcome.PortalsUsed}, coverage={outcome.Coverage}, partial={outcome.Partial}, avoidApplied={outcome.AvoidApplied}");
         await WriteJson(ctx, 200, new
         {
             ok = true,
@@ -346,6 +375,7 @@ if (cmd == "bake")
             coverage = outcome.Coverage,
             stitchedLegs = outcome.StitchedLegs,
             partial = outcome.Partial,
+            avoidApplied = outcome.AvoidApplied,
         });
     });
 

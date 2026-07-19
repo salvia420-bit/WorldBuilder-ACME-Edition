@@ -15,10 +15,11 @@ same static-artifact pattern as the dist shards.
 ```
 GET  /health -> {"ok":true,"tiles":25,"portals":817}
 POST /route  {"from":{"lb":<u32 objCellId>,"x":f,"y":f,"z":f},
-              "to":{"lb":u32,"x":f,"y":f,"z":f} | {"ns":<deg>,"ew":<deg>}}
+              "to":{"lb":u32,"x":f,"y":f,"z":f} | {"ns":<deg>,"ew":<deg>},
+              "avoid":[{"x":<world-m>,"y":<world-m>,"r":<m>}]?}   (avoid optional)
   -> {"ok":true,"legs":[{"lb":u32,"x":f,"y":f,"z":f,"portal":bool,"stitch":bool,"label":s}],
       "estUnits":f,"portalsUsed":n,"coverage":"detour"|"straight"|"mixed",
-      "stitchedLegs":n,"partial":bool}
+      "stitchedLegs":n,"partial":bool,"avoidApplied":n}
   -> {"ok":false,"error":"..."}   (planning failure is still HTTP 200)
 ```
 
@@ -36,6 +37,18 @@ through a carved obstacle, e.g. Arwic's city wall):
   `coverage:"detour"`:** a Detour plan that gains a terminal stitch becomes
   `coverage:"mixed"` (any stitch present => at least "mixed"), and the stitched tail
   now reaches the requested goal instead of silently stopping ≤15 m short.
+- **`avoid`** (request, optional) — a list of world-frame circles `{x,y,r}` (metres, the
+  `lbX*192+local` frame the router uses internally; `r > 0`) the Detour FindPath must
+  route AROUND. Implemented as a custom `IDtQueryFilter` layered over the default filter
+  that rejects any poly with a vertex or centroid inside a circle; start/goal snapping
+  (`FindNearestPoly`) keeps the default filter, so a pose next to the blockage still
+  resolves onto the mesh. When no avoiding on-mesh path exists the segment still closes
+  with a flagged straight stitch (route stays complete — a stitch may cross a circle).
+  A malformed entry is a `400`; an absent field is today's behavior exactly. The client
+  (`rynth/global_router.js`) uses this to replan around a blocked stitch leg instead of
+  failing fast — it drops a circle at the blockage and re-queries (`avoidRetries`, default 1).
+- **`avoidApplied`** (response) — count of `avoid` circles actually fed to the query
+  (`0` when none supplied). A v1 client that ignores it is unaffected.
 
 Error taxonomy (batch-2 input hardening — all carry CORS headers, all JSON):
 - **200 `{ok:false}`** — planning failures (unroutable, out-of-coverage) AND `from==to`

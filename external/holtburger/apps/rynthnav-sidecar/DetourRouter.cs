@@ -38,6 +38,64 @@ namespace RynthNav.Sidecar;
 /// <summary>A world-frame point: wx = world EW metres, wy = world NS metres, Z = AC up.</summary>
 public readonly record struct WorldPt(double Wx, double Wy, double Z);
 
+/// <summary>A world-frame avoidance circle (contract v2, /route "avoid"): (Wx,Wy) centre in
+/// world metres — same lbX*192+local frame DetourRouter uses internally — R radius in metres.
+/// A poly touched by any of these is rejected from the Detour FindPath (see AvoidCircleFilter),
+/// so a replan steers AROUND a physically blocked stitch instead of re-emitting it.</summary>
+public readonly record struct AvoidCircle(double Wx, double Wy, double R);
+
+/// <summary>An <see cref="IDtQueryFilter"/> that layers over an inner filter and ALSO rejects any
+/// poly with a vertex OR its centroid inside one of the world-frame avoid circles. Recast tile
+/// verts are Y-up packed as (wx, z_up, wy), so a vertex's world XY is (verts[3i], verts[3i+2]).
+/// Used for FindPath only — start/goal snapping (FindNearestPoly) keeps the default filter so a
+/// pose sitting next to the blockage still resolves onto the mesh.</summary>
+internal sealed class AvoidCircleFilter : IDtQueryFilter
+{
+    private readonly IDtQueryFilter _inner;
+    private readonly (double x, double y, double r2)[] _circles;
+
+    public AvoidCircleFilter(IDtQueryFilter inner, IReadOnlyList<AvoidCircle> circles)
+    {
+        _inner = inner;
+        _circles = new (double, double, double)[circles.Count];
+        for (int i = 0; i < circles.Count; i++)
+            _circles[i] = (circles[i].Wx, circles[i].Wy, circles[i].R * circles[i].R);
+    }
+
+    public bool PassFilter(long refs, DtMeshTile tile, DtPoly poly)
+    {
+        if (!_inner.PassFilter(refs, tile, poly)) return false;
+        var verts = tile.data.verts;
+        int n = poly.vertCount;
+        double cx = 0, cy = 0;
+        for (int i = 0; i < n; i++)
+        {
+            int vi = poly.verts[i] * 3;
+            double vx = verts[vi], vy = verts[vi + 2];
+            cx += vx; cy += vy;
+            foreach (var (ax, ay, r2) in _circles)
+            {
+                double dx = vx - ax, dy = vy - ay;
+                if (dx * dx + dy * dy <= r2) return false;   // a vertex is inside an avoid circle
+            }
+        }
+        if (n > 0)
+        {
+            cx /= n; cy /= n;
+            foreach (var (ax, ay, r2) in _circles)
+            {
+                double dx = cx - ax, dy = cy - ay;
+                if (dx * dx + dy * dy <= r2) return false;    // the centroid is inside an avoid circle
+            }
+        }
+        return true;
+    }
+
+    public float GetCost(RcVec3f pa, RcVec3f pb, long prevRef, DtMeshTile prevTile, DtPoly prevPoly,
+        long curRef, DtMeshTile curTile, DtPoly curPoly, long nextRef, DtMeshTile nextTile, DtPoly nextPoly)
+        => _inner.GetCost(pa, pb, prevRef, prevTile, prevPoly, curRef, curTile, curPoly, nextRef, nextTile, nextPoly);
+}
+
 public sealed class Leg
 {
     public uint Lb;          // full 32-bit objCellId with correct outdoor cell in low 16 bits
@@ -63,6 +121,8 @@ public sealed class RouteOutcome
                                        // reach its goal (terminal short-fall OR full out-of-
                                        // coverage fallback). A clean end-to-end on-mesh route
                                        // has Partial==false.
+    public int AvoidApplied;           // contract v2: count of "avoid" circles actually fed to the
+                                       // FindPath filter for this route (0 when none supplied).
 }
 
 public sealed class DetourRouter
@@ -251,11 +311,15 @@ public sealed class DetourRouter
     // ── route composition ────────────────────────────────────────────────────────
     private static readonly List<PortalLink> _noPortalList = new();
 
-    public RouteOutcome Route(WorldPt start, WorldPt goal, bool noPortals = false)
+    // `avoid` (contract v2, optional): world-frame circles the Detour FindPath must route around.
+    // Null/empty => byte-identical to the pre-avoid behavior (default filter only, AvoidApplied 0).
+    // `noPortals`: skip the portal Dijkstra (overland-only planning; diagnostic escape hatch).
+    public RouteOutcome Route(WorldPt start, WorldPt goal, IReadOnlyList<AvoidCircle>? avoid = null, bool noPortals = false)
     {
         lock (_gate)
         {
             var res = new RouteOutcome();
+            res.AvoidApplied = avoid?.Count ?? 0;
             double sNs = WorldToDeg(start.Wy), sEw = WorldToDeg(start.Wx);
             double gNs = WorldToDeg(goal.Wy), gEw = WorldToDeg(goal.Wx);
 
@@ -275,7 +339,7 @@ public sealed class DetourRouter
                     ? goal
                     : new WorldPt(DegToWorld(stp.Ew), DegToWorld(stp.Ns), cur.Z);
 
-                cur = AppendSegment(cur, target, res.Legs, stp.UsePortal, stp.Label, ref anyDetour, ref anyStraight, ref anyPartial);
+                cur = AppendSegment(cur, target, res.Legs, stp.UsePortal, stp.Label, ref anyDetour, ref anyStraight, ref anyPartial, avoid);
 
                 if (stp.UsePortal)
                 {
@@ -307,10 +371,15 @@ public sealed class DetourRouter
 
     /// <summary>Fine-path one walk segment. Returns the actual segment end point.</summary>
     private WorldPt AppendSegment(WorldPt from, WorldPt to, List<Leg> legs, bool portalArrival, string label,
-        ref bool anyDetour, ref bool anyStraight, ref bool anyPartial)
+        ref bool anyDetour, ref bool anyStraight, ref bool anyPartial, IReadOnlyList<AvoidCircle>? avoid)
     {
         LoadCorridor(from, to);
         var filter = new DtQueryDefaultFilter();
+        // FindNearestPoly (start/goal snap) always uses the default filter — a pose next to the
+        // blockage must still resolve onto the mesh. FindPath uses the avoid-layered filter so the
+        // corridor routes AROUND the circles; when no avoiding path exists, the straight-stitch
+        // fallback below still fires (route stays complete, tail flagged Stitch).
+        IDtQueryFilter pathFilter = (avoid != null && avoid.Count > 0) ? new AvoidCircleFilter(filter, avoid) : filter;
         long sRef = 0, gRef = 0;
         RcVec3f sPt = default, gPt = default;
         if (_query != null)
@@ -333,7 +402,7 @@ public sealed class DetourRouter
         if (sRef != 0 && gRef != 0)
         {
             Span<long> path = new long[512];
-            _query!.FindPath(sRef, gRef, sPt, gPt, filter, path, out int pc, 512);
+            _query!.FindPath(sRef, gRef, sPt, gPt, pathFilter, path, out int pc, 512);
             Span<DtStraightPath> sp = new DtStraightPath[512];
             int spc = 0;
             if (pc > 0) _query.FindStraightPath(sPt, gPt, path[..pc], pc, sp, out spc, 512, 0);

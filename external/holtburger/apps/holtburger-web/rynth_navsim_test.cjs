@@ -601,7 +601,7 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
       }
     });
 
-    await t("G7", "blocked stitch leg fails fast with NO replan (deterministic plan)", async () => {
+    await t("G9", "blocked stitch: sidecar IGNORES avoid -> fail with avoidTried (v1 guard)", async () => {
       const st = world();
       // Tiny stitch deadline so the blocked stitch leg fails in ms; normal
       // legs keep FAST's 250ms watchdog.
@@ -609,22 +609,94 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
       const gr = new GR.GlobalRouter(st.host, { log: quiet });
       routeCalls = 0;
       st.blocked = true; // world never moves: the stitch leg cannot complete
+      // A v1 (or avoid-blind) sidecar: same stitched plan whether or not "avoid" is sent.
       sidecar = async () => ({
         ...legsPayload([{ ...legAtWorld(st.wx + 60, st.wy), stitch: true }]),
         coverage: "mixed",
         stitchedLegs: 1,
         partial: true,
+        avoidApplied: 0,
       });
       st.drive(router);
       try {
         const r = await gr.goto(router, { ns: 1, ew: 1 }, GOPTS);
         assert.equal(r.ok, false, JSON.stringify(r));
         assert.equal(r.error, "blocked stitch leg");
-        assert.equal(r.replans, 0, "no replan on a deterministic stitched plan");
-        assert.equal(routeCalls, 1, "sidecar consulted exactly once");
+        assert.equal(r.replans, 0, "avoid-replan is not a normal replan");
+        assert.equal(routeCalls, 2, "one avoid-replan attempt, then the identical-plan guard fires");
         assert.ok(r.blockedLeg && Number.isFinite(r.blockedLeg.x), "blockedLeg carried");
+        assert.equal(r.avoidTried.length, 1, "the tried avoid circle is carried out");
+        assert.ok(Number.isFinite(r.avoidTried[0].x) && r.avoidTried[0].r === 6, "avoid circle at blocked world pos, default r=6");
         assert.equal(r.stitchedLegs, 1);
         assert.equal(r.partial, true);
+      } finally {
+        st.stopDrive();
+      }
+    });
+
+    await t("G10", "blocked stitch: sidecar HONORS avoid -> detours around and completes", async () => {
+      const st = world();
+      const router = new RT.RynthRouter(st.host, { ...FAST, stitchTimeoutMs: 60 });
+      const gr = new GR.GlobalRouter(st.host, { log: quiet });
+      routeCalls = 0;
+      st.blocked = true; // block the initial stitch leg
+      let avoidSeen = null;
+      sidecar = async (body) => {
+        const hasAvoid = Array.isArray(body.avoid) && body.avoid.length > 0;
+        if (!hasAvoid) {
+          // initial plan: a single blocked stitch leg
+          return {
+            ...legsPayload([{ ...legAtWorld(st.wx + 60, st.wy), stitch: true }]),
+            coverage: "mixed", stitchedLegs: 1, partial: true, avoidApplied: 0,
+          };
+        }
+        // avoid honored: a DIFFERENT, fully on-mesh plan the world can walk
+        avoidSeen = body.avoid;
+        return {
+          ...legsPayload([legAtWorld(st.wx + 30, st.wy)]),
+          coverage: "detour", stitchedLegs: 0, partial: false, avoidApplied: body.avoid.length,
+        };
+      };
+      st.drive(router);
+      try {
+        const p = gr.goto(router, { ns: 1, ew: 1 }, GOPTS);
+        await until(() => routeCalls === 2); // avoid-replan issued
+        st.blocked = false; // let the detour plan walk to completion
+        const r = await p;
+        assert.equal(r.ok, true, JSON.stringify(r));
+        assert.equal(routeCalls, 2, "initial + one avoid-replan");
+        assert.equal(r.avoidTried.length, 1, "the avoid circle used is carried out");
+        assert.ok(avoidSeen && avoidSeen.length === 1 && Number.isFinite(avoidSeen[0].x) && avoidSeen[0].r === 6, "sidecar received the avoid circle");
+        assert.equal(r.coverage, "detour", "walked the on-mesh detour, not a stitch");
+        assert.ok(r.legsWalked >= 1);
+      } finally {
+        st.stopDrive();
+      }
+    });
+
+    await t("G11", "avoidRetries:0 restores the exact fail-fast (no avoid attempt)", async () => {
+      const st = world();
+      const router = new RT.RynthRouter(st.host, { ...FAST, stitchTimeoutMs: 60 });
+      const gr = new GR.GlobalRouter(st.host, { log: quiet });
+      routeCalls = 0;
+      st.blocked = true;
+      let sawAvoid = false;
+      sidecar = async (body) => {
+        if (Array.isArray(body.avoid) && body.avoid.length) sawAvoid = true;
+        return {
+          ...legsPayload([{ ...legAtWorld(st.wx + 60, st.wy), stitch: true }]),
+          coverage: "mixed", stitchedLegs: 1, partial: true, avoidApplied: 0,
+        };
+      };
+      st.drive(router);
+      try {
+        const r = await gr.goto(router, { ns: 1, ew: 1 }, { ...GOPTS, avoidRetries: 0 });
+        assert.equal(r.ok, false, JSON.stringify(r));
+        assert.equal(r.error, "blocked stitch leg");
+        assert.equal(r.replans, 0);
+        assert.equal(routeCalls, 1, "sidecar consulted exactly once — no avoid replan");
+        assert.equal(sawAvoid, false, "no avoid ever sent");
+        assert.equal(r.avoidTried.length, 0, "avoidTried empty");
       } finally {
         st.stopDrive();
       }

@@ -6,7 +6,7 @@
 // and CORS headers (the in-page GlobalRouter fetches cross-origin).
 // No ACE account is used; safe to run any time the sidecar is up.
 
-const EP = "http://127.0.0.1:8767";
+const EP = process.env.RYNTH_SIDECAR_EP || "http://127.0.0.1:8767";
 
 // Contract frame math (RynthNavPlugin.cs:128-130,295-296,585-586,707).
 const worldXY = (lb, x, y) => [((lb >>> 24) & 0xff) * 192 + x, ((lb >>> 16) & 0xff) * 192 + y];
@@ -101,6 +101,42 @@ const check = (name, cond, detail = "") => {
     prevD = d;
   }
   check("legs progress monotonically (<=5m regressions)", mono, `final dist=${prevD.toFixed(1)}m`);
+
+  // ── contract v2: avoid-list replanning ───────────────────────────────────
+  // Re-run the same route with an avoid circle sitting on the direct corridor
+  // (midpoint of the plain route). The sidecar must echo avoidApplied and steer
+  // the plan farther from that point, while still reaching the goal.
+  const plainMinToMid = (legList, mx, my) =>
+    Math.min(...legList.map((l) => { const [wx, wy] = worldXY(l.lb >>> 0, l.x, l.y); return Math.hypot(wx - mx, wy - my); }));
+  const [mx, my] = [(fwx + gwx) / 2, (fwy + gwy) / 2]; // world-frame midpoint of the route
+  const plainMid = plainMinToMid(legs, mx, my);
+  let ar, ares;
+  try {
+    ar = await fetch(`${EP}/route`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ from, to, avoid: [{ x: mx, y: my, r: 10 }] }),
+    });
+    ares = await ar.json();
+  } catch (e) {
+    console.log(`FAIL: /route (avoid) unreachable/unparseable (${e.message})`);
+    process.exit(1);
+  }
+  console.log(`avoid: ok=${ares.ok}, legs=${(ares.legs || []).length}, coverage=${ares.coverage}, avoidApplied=${ares.avoidApplied}`);
+  check("avoid route ok:true", ares.ok === true, ares.ok !== true ? `error=${ares.error}` : "");
+  check("avoidApplied is a number", typeof ares.avoidApplied === "number", `got ${typeof ares.avoidApplied}`);
+  check("avoidApplied===1 (circle used)", ares.avoidApplied === 1, `avoidApplied=${ares.avoidApplied}`);
+  const alegs = Array.isArray(ares.legs) ? ares.legs : [];
+  check("avoid route has legs", alegs.length > 0, `legs=${alegs.length}`);
+  const avoidMid = plainMinToMid(alegs, mx, my);
+  check("avoid route steers wider of the avoid point than the plain route", avoidMid >= plainMid - 0.5, `avoidMin=${avoidMid.toFixed(1)}m plainMin=${plainMid.toFixed(1)}m`);
+  if (alegs.length) {
+    const [twx, twy] = worldXY(alegs[alegs.length - 1].lb >>> 0, alegs[alegs.length - 1].x, alegs[alegs.length - 1].y);
+    check("avoid route still reaches the goal", Math.hypot(twx - gwx, twy - gwy) < 5, `final dist=${Math.hypot(twx - gwx, twy - gwy).toFixed(1)}m`);
+  }
+  // No-avoid request stays byte-identical to the pre-avoid contract: a plain
+  // route must still echo avoidApplied:0 (additive field, never breaks v1 shape).
+  check("plain route echoes avoidApplied:0", res.avoidApplied === 0, `avoidApplied=${res.avoidApplied}`);
 
   const pass = fails === 0;
   console.log(`SIDECAR: ${pass ? "PASS" : `FAIL (${fails} checks)`}`);
