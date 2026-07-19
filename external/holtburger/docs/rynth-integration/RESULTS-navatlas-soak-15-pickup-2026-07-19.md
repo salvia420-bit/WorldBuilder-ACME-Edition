@@ -72,21 +72,45 @@ guess): the blocking models `0x01002D21`/`0x01002D23` belong to the
   are placed as **bare GfxObjs directly in the landblock**, and ontology
   buckets them as Structure/maxDimension 24.
 
-Evidence for the bake gap (WB.Terminal, RetailSmoke project):
-- Terrain along x=84, y=82..104 is flat (height 42) — no cliff; the wall
-  segments at world (38100,32532) and (38100,32556) sit at 90° yaw, so
-  their 24m spans butt end-to-end into a continuous N-S wall exactly on
-  leg 2's line; the leg target (38100,32530) is essentially inside one.
-- `dist/scenery/0xC6A9.scenery.jsonl` has **6 rows, all Scene-generated
-  0x02 Setups** (scale/source_cell fields) — none of the landblock's ~97
-  static objects are present. **Landblock statics never reach the obstacle
-  bake at all**; the movement sim (correctly, per DAT physics) collides
-  with what the planner cannot see, so replans are deterministic → retries
-  exhausted.
+**Mechanism (second research pass, same day — SUPERSEDES the paragraph
+above's "statics never reach the bake" claim, which was wrong):** the wall
+pieces sit in `LandBlockInfo.Buildings` (not `.Objects`), GeomExtract
+extracts them (as `building` + `seal` entries, from **physics** polys —
+correct per the render-vs-physics rule), and the bake **does carve them**:
+a fresh local 3×3 extract+bake around C6A9
+(`GeomExtract --tiled C5,C7,A8,AA` → `Sidecar bake --geom`) reproduces the
+LIVE tiles' routing behavior exactly. The real defect chain, proven by
+`/route` probes against both the live :8767 tiles and the fresh local bake:
+
+1. **The wall ring seals Arwic's compound into a disconnected mesh
+   island.** GeomExtract's seal-skirt pass (`sealBuildings`, default on —
+   built to close building *doorways*, which lead to interior EnvCells the
+   outdoor bake doesn't contain) seals **every** `lbi.Buildings` entry —
+   including the wall/gatehouse pieces. A city *gate* is a pass-through
+   archway, not a doorway; sealing it (2D22's seal skirt alone is 88 tris
+   — a complex footprint with openings, i.e. the gatehouse) leaves the
+   compound with no on-mesh entrance.
+2. **Partial Detour paths are returned as `ok:true`.** Probe
+   (84,90)→(84,108) across the E-W wall band (y≈96–102): single leg ending
+   at (84,95.5) — the wall's edge, 12.5m short of the goal — yet
+   `ok:true, coverage:"detour"`, estUnits = the full requested distance.
+   Same on live and fresh tiles.
+3. **The out-of-coverage straight-line fallback stitches THROUGH carved
+   obstacles.** Probe outside→inside the compound: 11 legs correctly
+   detour around the ring to (54,16) just outside the south wall, then the
+   final `"walk"` leg goes straight through the wall to the goal
+   (`coverage:"mixed"`). This is exactly how the acceptance plan produced
+   adjacent waypoints (84,104) → (84,82) on opposite sides of the north
+   wall: the sim (correctly, per DAT physics) collides with what the
+   planner stitched through, replans are deterministic → retries
+   exhausted.
 
 The client has no portal-avoidance route option (`POST /route` body is bare
 `{from,to}`), so every Holtburg goto from Arwic re-enters the blocked
-portal-hub approach.
+portal-hub approach. (Also verified en route: my first "route crosses the
+wall" probe at y=96 actually skirted the wall's south edge — the placement
+math in GeomExtract is correct; WBT placement origins + model y-band
+offsets and the extracted tri bboxes agree.)
 
 Secondary observation (separate, lower priority): under the kiosk flags the
 rynth router's "30s" leg timeouts and full 3-attempt replan cycles elapse in
@@ -95,18 +119,59 @@ to run on the host tick clock, not wall time — worth a look at whether
 watchdogs should use wall clock, but it only compresses the failure, it
 doesn't cause it.
 
-## Still blocked / next
+## Still blocked / next (fix list, in dependency order)
 
-1. **Feed landblock-static objects (with physics polys, e.g. the Arwic wall
-   kit 0x01002D20–26; skip the physics-free LOD tail 2D27–2F) into the nav
-   bake** — the gap is class-wide, not Arwic-specific: dist scenery shards
-   carry only Scene-generated Setups, never LB statics. (Agent-A territory;
-   the sweep/fullmap verify machinery from W1/W3 is the place to add a
-   regression probe.) OR teach the sidecar a portal-avoid /
-   replan-with-blacklist option so a failed leg poisons its tile.
-2. Re-run Phase-2 acceptance (Arwic→Holtburg goto → arrival → auto-record →
-   follow_route) — everything else already passes.
-3. LLM soak window — blocked behind the same route.
+1. **Seal rule fix (GeomExtract):** don't seal non-enterable pass-throughs.
+   Principled rule: a building's seal skirt should close only doorways that
+   lead to interior EnvCells (BuildInfo portal records); a gatehouse archway
+   with no interior link must stay open. Regression probe: on-mesh route
+   into the Arwic compound (e.g. (84,108)→(50,50)) must succeed with
+   `coverage:"detour"` and no straight-line stitches.
+2. **Partial-path honesty (DetourRouter):** a DT partial result must not
+   come back `ok:true` with silently-truncated legs — either fail with the
+   reachable frontier in the payload, or mark the gap leg explicitly.
+3. **Fallback stitch honesty (route assembly):** straight-line
+   out-of-coverage segments must be flagged per-leg (the flat `label`
+   field is available), so router.js can sweep-probe/fail fast instead of
+   grinding MoveToPosition into a wall; better still, refuse to stitch
+   straight through carved (known-obstacle) regions.
+4. **Re-bake** the corridor (locally, minutes) after 1–3, then the full
+   map on buildbox at leisure; then re-run Phase-2 acceptance
+   (Arwic→Holtburg goto → arrival → auto-record → follow_route) —
+   everything else already passes. LLM soak window rides behind it.
+
+## Interiors — can we navigate buildings and dungeons? (assessment)
+
+Asked 2026-07-19. Short answer: **the sim yes, the planner partially — the
+pieces exist but goto cannot cross an outdoor↔indoor boundary today.**
+
+- **Movement/physics (holtburger-world): full indoor support.** EnvCell
+  entry/exit flips the runtime pose indoors (`walked_in_envcell_*` tests),
+  collision is the cell's physics polys/BSP (separate from render — the
+  same render-vs-physics split that applies to GfxObjs), and live proof:
+  agent C's LLM sessions walked the academy interior with `routed(N)`
+  walks; MoveToPosition takes full 32-bit EnvCell objCellIds.
+- **Outdoor bake contains no interiors by design** (report 09 §1b);
+  building doorways are seal-skirted precisely because their interiors are
+  off-mesh. Indoor navmesh bake (DungeonLOS → layered tiles) was never
+  built, even upstream in RynthSuite (Phase-3 pending).
+- **Indoor routing exists as `rynth/indoor_router.js`:** a pure port of
+  RynthSuite DungeonPathfinder's A* over the EnvCell **portal-record**
+  graph (real doorways, not visible-cell adjacency), built live from wasm
+  (`buildGraphFromWasm` ← `fetchEnvCellsInLandblock`; the client already
+  BFSes this exact graph for rendering). Emits router.js-shaped legs.
+  Known limitation: all drop/jump edges pruned (no jump primitive), so
+  drop-gated dungeon areas are unreachable by design.
+- **But it is wired only as an ADVISOR** (`ai/tools/dungeon_nav.js` —
+  `dungeon_suggest` returns legs as advice; the director may follow up).
+  `bot.goto`/GlobalRouter never consult it: the sidecar plans outdoor
+  tiles + portal Dijkstra only. There is no composed
+  outdoor→door→indoor→goal (or dungeon-interior goto) route today.
+- **Integration path** (post fix-list): teach `doGoto` to detect
+  indoor-from/indoor-to (`isCurrentCellIndoor`), plan the indoor segment
+  with `indoor_router`, and splice at the doorway; the seal-rule fix (#1)
+  is a prerequisite so outdoor legs can END at a real doorway instead of
+  being sealed away from it.
 
 ## Environment at close
 
