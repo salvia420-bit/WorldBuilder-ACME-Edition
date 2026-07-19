@@ -23,6 +23,14 @@ const SCORE_TITLE_WORDS = 4; // every query word in the title, any order/gaps
 const SCORE_ALIAS = 3;
 const SCORE_BODY = 2;
 const SCORE_BODY_WORDS = 1; // every query word somewhere in title+text
+// Partial-match fallback (2026-07-18): fractional scores below the AND
+// tiers. Live soak-14: the director writes search-engine queries ("Arwic
+// town archmage vendor wand shop location") — with AND-only ranking no
+// article carries all 7 words and a 24k corpus returns "no matches" while
+// literally holding "Arwic". Require at least 2 matched words (or all of a
+// 1-2 word query hits the AND tiers anyway); title hits outrank text hits
+// via the fraction weighting.
+const PARTIAL_MIN_WORDS = 2;
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + "…" : s); // llm_client.js:77 shape
 
@@ -96,13 +104,22 @@ export class FileKnowledgeProvider {
       for (const e of await this._load()) {
         const title = e.title.toLowerCase();
         const text = e.text.toLowerCase();
-        const score = title === q ? SCORE_EXACT
+        let score = title === q ? SCORE_EXACT
           : title.includes(q) ? SCORE_TITLE
           : hasAllWords(title) ? SCORE_TITLE_WORDS
           : e.aliases.some((a) => a.toLowerCase().includes(q)) ? SCORE_ALIAS
           : text.includes(q) ? SCORE_BODY
           : hasAllWords(title + " " + text) ? SCORE_BODY_WORDS
           : 0;
+        if (!score && words.length > PARTIAL_MIN_WORDS) {
+          const titleHits = words.filter((w) => title.includes(w)).length;
+          const bodyHits = words.filter((w) => text.includes(w)).length;
+          const best = Math.max(titleHits, bodyHits ? bodyHits * 0.5 : 0);
+          if (titleHits >= PARTIAL_MIN_WORDS || bodyHits >= PARTIAL_MIN_WORDS) {
+            // Fractional (0, 1): always below SCORE_BODY_WORDS.
+            score = Math.min(0.99, best / (words.length + 1));
+          }
+        }
         if (score) hits.push({ e, score });
       }
       // Deterministic: score desc, then title asc (case-insensitive, plain
@@ -180,7 +197,7 @@ export function knowledgeAction(kb) {
   const def = {
     type: "lookup",
     params: { query: `string <= ${QUERY_MAX_CHARS} chars — quest/creature/place to look up` },
-    desc: "look up acpedia/quest knowledge; rows are journaled for your next check-in",
+    desc: "look up acpedia/quest knowledge; rows are journaled for your next check-in. SHORT queries rank best (2-3 words: a name or place, not a sentence) — POI articles are titled like '33.1N, 56.9E - Archmage House', so 'Arwic archmage' beats 'where can I buy a wand in Arwic'",
     validate(a) {
       if (!a || typeof a !== "object" || Array.isArray(a)) return { ok: false, error: "action must be an object" };
       if (a.type !== "lookup") return { ok: false, error: `unknown action type: ${JSON.stringify(a.type)}` };

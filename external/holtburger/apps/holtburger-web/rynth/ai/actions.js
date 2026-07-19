@@ -116,7 +116,7 @@ export function validateAction(a) {
 }
 
 /** Apply one action to the live bot. NEVER throws. -> { type, ok, result?|error? } */
-export async function executeAction(bot, a, { log } = {}) {
+export async function executeAction(bot, a, { log, journal } = {}) {
   const type = a && typeof a === "object" ? a.type : undefined;
   const fail = (error) => {
     try {
@@ -158,7 +158,23 @@ export async function executeAction(bot, a, { log } = {}) {
         // error} (bot.js:141-148); refusals like "goto already active"
         // surface as the error here.
         const r = await bot.goto(to);
-        return r && r.ok ? { type, ok: true, result: r } : fail((r && r.error) || "goto failed");
+        if (r && r.ok) {
+          // Arrival note (soak-14): the result line's bare "goto:ok" left
+          // the model re-issuing the same goto every check-in, never
+          // registering that it ARRIVED. State the end position explicitly.
+          try {
+            const end = bot?.host?.TryGetPlayerPose?.();
+            const at = end
+              ? `0x${(end.objCellId >>> 0).toString(16).toUpperCase()} (${end.x.toFixed(0)},${end.y.toFixed(0)})`
+              : "unknown";
+            journal?.add?.(
+              "note",
+              `goto ARRIVED after ${r.legsWalked ?? "?"} leg(s) — you are now at ${at}; do NOT re-issue this goto, act on the destination`,
+            );
+          } catch { /* note loss must not fail the action */ }
+          return { type, ok: true, result: r };
+        }
+        return fail((r && r.error) || "goto failed");
       }
       case "stop_goto":
         // router.cancel() aborts a raw travel AND an in-flight goto — the
@@ -208,11 +224,11 @@ export async function executeAction(bot, a, { log } = {}) {
 }
 
 /** Sequential, capped, never-throws plan execution. -> results[] */
-export async function executePlan(bot, actions, { maxActions = 5, log } = {}) {
+export async function executePlan(bot, actions, { maxActions = 5, log, journal } = {}) {
   const results = [];
   try {
     const list = Array.isArray(actions) ? actions : [];
-    for (const a of list.slice(0, maxActions)) results.push(await executeAction(bot, a, { log }));
+    for (const a of list.slice(0, maxActions)) results.push(await executeAction(bot, a, { log, journal }));
     if (list.length > maxActions) {
       try {
         log && log(`[ai] plan truncated: ${list.length - maxActions} action(s) past maxActions=${maxActions} skipped`);

@@ -5,6 +5,8 @@
 // subsystem can never break a check-in). Text is hard-capped at maxChars,
 // dropping threat lines first.
 
+import { TOWNS } from "./tools/towns.js";
+
 const NA = "n/a";
 const THREAT_TOP_N = 8; // SPEC §observe: top-8 nearby attackable threats
 const CORPSE_WCID = 21; // loot_loop.js:10 (private const there)
@@ -220,11 +222,31 @@ export function buildObservation(bot, { journalTail = "", maxChars = 6000, now =
   // the model never retried. State it every check-in so beliefs can't drift.
   {
     const indoors = position ? ((position.objCellId >>> 0) & 0xffff) >= 0x100 : false;
+    const hasNav = safe(() => !!bot.globalRouter);
     head.push(
-      bot?.globalRouter
+      hasNav
         ? `nav: goto/goto_lb ONLINE (outdoor router)${indoors ? " — you are INDOORS: use exit_building first, goto only works outdoors" : ""}`
         : `nav: OFFLINE (no sidecar) — goto/goto_lb unavailable; move with goto_object${indoors ? " or exit_building" : ""}`
     );
+    // Sense of place (soak-14): raw loc degrees left the model guessing
+    // "town center" coordinates from priors. Name the nearest known town
+    // and the offset to it — public map data (tools/towns.js).
+    if (position && Number.isFinite(position.ns) && Number.isFinite(position.ew)) {
+      let best = null;
+      for (const t of TOWNS) {
+        const d = Math.hypot(position.ns - t.ns, position.ew - t.ew);
+        if (!best || d < best.d) best = { t, d };
+      }
+      if (best) {
+        const dns = position.ns - best.t.ns, dew = position.ew - best.t.ew;
+        const dir = `${Math.abs(dns) >= 0.05 ? (dns > 0 ? "N" : "S") : ""}${Math.abs(dew) >= 0.05 ? (dew > 0 ? "E" : "W") : ""}` || "at";
+        head.push(
+          best.d < 0.15
+            ? `area: AT ${best.t.name} town center`
+            : `area: nearest town ${best.t.name}, ${best.d.toFixed(1)}° ${dir} of its center (${fmtDeg(best.t.ns, "N", "S")} ${fmtDeg(best.t.ew, "E", "W")})`
+        );
+      }
+    }
   }
   head.push(vitals ? `vitals: hp=${fmtPct(vitals.hp)} stam=${fmtPct(vitals.stam)} mana=${fmtPct(vitals.mana)}` : `vitals: ${NA}`);
   head.push(

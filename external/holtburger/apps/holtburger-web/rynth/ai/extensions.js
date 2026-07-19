@@ -612,7 +612,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
         recordAct(b, a); // pose BEFORE the action runs — loop detector baseline
         const def = extFor(a);
         if (def) results.push(await def.apply(b, a, { journal, log: opts.log, track }));
-        else results.push(...(await executePlan(b, [a], { log: opts.log })));
+        else results.push(...(await executePlan(b, [a], { log: opts.log, journal })));
       }
       return results;
     } catch (e) {
