@@ -246,3 +246,19 @@ portal hops are one-way; portal-aware forward replay is filed as follow-up.
 The follow_route mechanism itself was live-proven twice today on recorded
 routes. Full-map re-bake (38,690 tiles, seal-fixed toolchain) is live on
 :8767 with all probes green.
+
+## Addendum: portal-aware route reuse (task 17) — LANDED + LIVE-PROVEN
+
+Same day, two-implementer parallel build on a shared format-v2 contract:
+recorder side (fmt:2, portal-departure + indoor flags, 4m indoor densify, 3m
+de-noise, atlas/mirror round-trip, .nav export still byte-identical on the 3
+real VTank fixtures) and replay side (flag derivation for legacy routes,
+portal-aware followRoute via the router's native portal-hold + touch assist,
+one bounded indoor re-path, reverse-replay of portal routes refused with a
+clear error). The real v16-recorded route is committed as
+rynth/testdata/v16_arwic_holtburg_route.json and drives the tests.
+
+Live closing proof: forward followRoute of that route from Arwic —
+`{ok:true, state:"DONE", legsWalked:17}`, char at 0xA9B40019 (42.08N,
+33.60E), ~2.7 min, both portal hops replayed. The travel economy can now
+record a cross-map portal route once and replay it without the sidecar.
