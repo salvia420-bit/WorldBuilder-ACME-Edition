@@ -224,3 +224,25 @@ rig_move* / rig_accept*.cjs) — they re-create in minutes from this doc if
 wiped; playwright-core at ~/.npm/_npx/e41f203b7505f1fb works fine over
 :9223 (Runtime.evaluate did NOT starve this session; paused-eval fallback
 unused).
+
+## FINAL (late 2026-07-19): Phase-2 acceptance ACHIEVED (one carve-out)
+
+Acceptance v16, full stack: **`__bot.goto({ns:42.1,ew:33.6})` from Arwic
+resolved `ok:true, state:"DONE"` with the char at 0xA9B40019 (42.09N,
+33.60E) — Arwic→Holtburg via the Town Network, ~3.5 min** — walk to the
+exact portal → hold-and-nudge hop → in-network indoor A* with doorway
+pre-approach (240s perf-tolerant legs) → walk-in exit hop → outdoor replan →
+arrival. Auto-record fired (19-leg route in the atlas, journal note,
+metrics), zero NULL-cell pose reads in every one of the day's 16 runs.
+Sixteen live iterations root-caused, in order: sealed compound (seal rule),
+portal coordinate error (tsv precision), proximity-advance past portal legs
+(portal-hold), negative EnvCell locals (frame normalization), network perf
+crawl (leg budgets), the offset doorway wedge (C# pre-approach port),
+walk-in-hop mislabel + threshold, wrong-portal hops (re-entrant
+composition), and the recorder living in the AI layer (config, not code).
+
+Carve-out: reversed followRoute of the recorded route fails by design —
+portal hops are one-way; portal-aware forward replay is filed as follow-up.
+The follow_route mechanism itself was live-proven twice today on recorded
+routes. Full-map re-bake (38,690 tiles, seal-fixed toolchain) is live on
+:8767 with all probes green.
