@@ -296,8 +296,16 @@ public sealed class DetourRouter
         RcVec3f sPt = default, gPt = default;
         if (_query != null)
         {
-            // Recast frame is Y-up: (wx, z_up, wy). Half-extents per RynthNavPlugin.cs:605,:612.
-            _query.FindNearestPoly(new RcVec3f((float)from.Wx, (float)from.Z, (float)from.Wy), new RcVec3f(8, 64, 8), filter, out sRef, out sPt, out _);
+            // Recast frame is Y-up: (wx, z_up, wy). Half-extents per RynthNavPlugin.cs:605,:612,
+            // with the START vertical widened 64 -> 256 (matching the target): the caller's z is
+            // ADVISORY (a live pose is exact, but a portal-arrival coord, a stale/coarse pose, or
+            // a director-supplied approximate z can sit tens of metres off terrain — e.g. AC
+            // outdoor terrain routinely swings 100+ m over a few landblocks). A z that misses the
+            // 64 m window made the whole segment fall to a blind straight-line even with good tiles
+            // loaded — the exact soak-14 failure mode this bake is meant to kill. Outdoors there is
+            // a single terrain surface, so a generous vertical snap is unambiguous; indoor multi-
+            // level routing is the cell-graph router's job, not this one's.
+            _query.FindNearestPoly(new RcVec3f((float)from.Wx, (float)from.Z, (float)from.Wy), new RcVec3f(8, 256, 8), filter, out sRef, out sPt, out _);
             _query.FindNearestPoly(new RcVec3f((float)to.Wx, (float)to.Z, (float)to.Wy), new RcVec3f(12, 256, 12), filter, out gRef, out gPt, out _);
         }
 

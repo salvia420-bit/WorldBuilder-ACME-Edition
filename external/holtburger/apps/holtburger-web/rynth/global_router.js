@@ -120,16 +120,36 @@ export class GlobalRouter {
   async _goto(router, to, { retries = 2, pollMs = 500, poseTimeoutMs = 15_000, stallMs = 45_000 } = {}) {
     let replans = 0;
     let legsWalked = 0;
+    // Route quality of the plan currently being walked, surfaced into every
+    // resolution of goto() so the decision layer (W3 journal/mission line)
+    // learns WITHOUT a wiki lookup that a fallback is straight-line-through-
+    // unbaked-terrain. Null until the first successful plan (no-pose path).
+    // `coverage: "straight"` = blind fallback (the soak-14 Arwic-wall class);
+    // "mixed" = some walk segments unbaked; "detour" = fully obstacle-aware.
+    let coverage = null, estUnits = null, portalsUsed = null;
     for (let attempt = 0; ; attempt++) {
       const pose = await this._awaitPose(poseTimeoutMs, pollMs);
-      if (!pose) return { ok: false, error: "no player pose", legsWalked, replans };
+      if (!pose) return { ok: false, error: "no player pose", legsWalked, replans, coverage, estUnits, portalsUsed };
       const res = await this.route(pose, to);
       if (!res || res.ok !== true || !Array.isArray(res.legs) || !res.legs.length) {
-        return { ok: false, error: (res && res.error) || "empty route", legsWalked, replans };
+        return { ok: false, error: (res && res.error) || "empty route", legsWalked, replans, coverage, estUnits, portalsUsed };
       }
+      coverage = res.coverage ?? null;
+      estUnits = Number.isFinite(res.estUnits) ? res.estUnits : null;
+      portalsUsed = Number.isFinite(res.portalsUsed) ? res.portalsUsed : null;
+      // First-class plan state for the W3 mission line (bot.globalRouter.lastPlan);
+      // refreshed on the initial plan AND every replan. Read defensively downstream.
+      this.lastPlan = {
+        estUnits, coverage, portalsUsed,
+        legCount: res.legs.length,
+        plannedAt: Date.now(),
+        replan: replans,
+      };
+      const straight = coverage === "straight";
       this.log(
         `route: ${res.legs.length} legs, ~${Math.round(res.estUnits)}u, ` +
-          `portals=${res.portalsUsed}, coverage=${res.coverage}`
+          `portals=${res.portalsUsed}, coverage=${res.coverage}` +
+          (straight ? " — STRAIGHT-LINE (unbaked region), expect obstacles" : "")
       );
       router.follow(res.legs);
       // Walk poll with a stall deadline + external-cancel detection.
@@ -146,6 +166,7 @@ export class GlobalRouter {
             error: "route cancelled",
             legsWalked: legsWalked + (st.walked ?? 0),
             replans,
+            coverage, estUnits, portalsUsed,
           };
         }
         const sig = `${st.state}:${st.leg}:${st.walked}`;
@@ -160,14 +181,15 @@ export class GlobalRouter {
             error: "walk stalled (host stopped ticking?)",
             legsWalked: legsWalked + (router.status.walked ?? 0),
             replans,
+            coverage, estUnits, portalsUsed,
           };
         }
         await new Promise((r) => setTimeout(r, pollMs));
       }
       legsWalked += router.status.walked ?? router.status.leg;
-      if (router.status.state === "DONE") return { ok: true, state: "DONE", legsWalked, replans };
+      if (router.status.state === "DONE") return { ok: true, state: "DONE", legsWalked, replans, coverage, estUnits, portalsUsed };
       if (attempt >= retries) {
-        return { ok: false, state: "FAILED", error: "retries exhausted", legsWalked, replans };
+        return { ok: false, state: "FAILED", error: "retries exhausted", legsWalked, replans, coverage, estUnits, portalsUsed };
       }
       replans += 1;
       this.log(`leg failed — replanning from current pose (${replans}/${retries})`);
