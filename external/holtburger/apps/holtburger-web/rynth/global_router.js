@@ -254,7 +254,13 @@ export class GlobalRouter {
       if (router.status.stitchBlocked) {
         const bl = router.route ? router.route[router.status.leg] : null;
         const blockedLeg = bl ? { index: router.status.leg, lb: bl.lb, x: bl.x, y: bl.y, z: bl.z } : null;
-        if (bl && avoidUsed < avoidRetries) {
+        // No avoid-replan while parked in an EnvCell: the sidecar has no indoor
+        // mesh and 400s an EnvCell `from` — replanning would mask the blocked
+        // error (goto_compose's portal-transit assist triggers on it) with a
+        // raw "HTTP 400". Surface the honest blocked error instead.
+        const curPose = this.host.TryGetPlayerPose();
+        const indoorNow = !!curPose && ((curPose.objCellId & 0xffff) >= 0x100);
+        if (!indoorNow && bl && avoidUsed < avoidRetries) {
           const [bwx, bwy] = worldXY(bl.lb >>> 0, bl.x, bl.y);
           avoid.push({ x: bwx, y: bwy, r: avoidRadiusM });
           avoidUsed += 1;

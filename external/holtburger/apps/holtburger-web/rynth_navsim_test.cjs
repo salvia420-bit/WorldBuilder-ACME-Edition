@@ -702,6 +702,36 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
       }
     });
 
+    await t("G12", "indoor stitch-block skips avoid-replan (no HTTP-400 masking)", async () => {
+      const st = world();
+      const router = new RT.RynthRouter(st.host, { ...FAST, stitchTimeoutMs: 60 });
+      // Pose reads as an EnvCell (low word 0x143): the sidecar would 400 an
+      // indoor `from`, so goto must surface the blocked error for the
+      // goto_compose portal-transit assist instead of avoid-replanning.
+      const realPose = st.host.TryGetPlayerPose;
+      st.host.TryGetPlayerPose = () => {
+        const p = realPose();
+        return p && { ...p, objCellId: ((p.objCellId & 0xffff0000) | 0x143) >>> 0 };
+      };
+      const gr = new GR.GlobalRouter(st.host, { log: quiet });
+      routeCalls = 0;
+      st.blocked = true;
+      sidecar = async () => ({
+        ...legsPayload([{ ...legAtWorld(st.wx + 60, st.wy), stitch: true }]),
+        coverage: "mixed", stitchedLegs: 1, partial: true, avoidApplied: 0,
+      });
+      st.drive(router);
+      try {
+        const r = await gr.goto(router, { ns: 1, ew: 1 }, GOPTS);
+        assert.equal(r.ok, false, JSON.stringify(r));
+        assert.equal(r.error, "blocked stitch leg");
+        assert.equal(routeCalls, 1, "no avoid replan from an EnvCell");
+        assert.ok(r.blockedLeg, "blockedLeg carried for the transit assist");
+      } finally {
+        st.stopDrive();
+      }
+    });
+
     // ════ B*/C* — createGrindBot integration (real webhost heartbeat) ════
     const BOTCFG = {
       hz: 60,
