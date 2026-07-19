@@ -22,8 +22,11 @@
 //     forward_speed carries run_rate, so ground speed = run_rate × 4.0.
 //   • run_rate itself = run_rate_from_skill_and_burden (context.rs:130-153):
 //     (load_mod·(skill/(skill+200)·11)+4)/4, range [1.0 (base) .. 4.5 (skill
-//     ==800 plateau, 18.0/4)] → 4.0 .. 18.0 m/s. Injected here via
-//     playerRunRate() (NOT re-scaled: the getter already returns run_rate).
+//     ==800 plateau, 18.0/4)] → 4.0 .. 18.0 m/s. Injected here (NOT re-scaled:
+//     the getter already returns run_rate). The wiring reads it from the live
+//     session handle — the SERVED pkg exposes it snake_case as
+//     `player_run_rate()` (the d.ts `playerRunRate` is a newer/unbuilt pkg), so
+//     wiring should try both spellings. This module never reaches for it.
 //   • The "4.5" in core movement tests (system/tests.rs:1863) is a SEEDED
 //     base_run_forward_velocity override to isolate the integrator, not the
 //     canonical anim constant — do not confuse it for RUN_ANIM_SPEED.
