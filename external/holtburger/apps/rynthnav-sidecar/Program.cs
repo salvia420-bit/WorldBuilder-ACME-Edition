@@ -228,6 +228,18 @@ if (cmd == "bake")
         return null;
     }
 
+    // Route modifier: {"to":{...,"noPortals":true}} or top-level "noPortals"
+    // plans overland-only (skip portal Dijkstra). Interim escape hatch while
+    // dungeon-interior portal transit (indoor legs to a portal object) is
+    // unimplemented — a portal chain strands the walker inside the network.
+    static bool ReadNoPortals(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return false;
+        if (root.TryGetProperty("noPortals", out var np1) && np1.ValueKind == JsonValueKind.True) return true;
+        return root.TryGetProperty("to", out var toEl) && toEl.ValueKind == JsonValueKind.Object &&
+               toEl.TryGetProperty("noPortals", out var np2) && np2.ValueKind == JsonValueKind.True;
+    }
+
     static string? ParseRouteRequest(JsonElement root, out WorldPt start, out WorldPt goal)
     {
         start = default; goal = default;
@@ -273,7 +285,8 @@ if (cmd == "bake")
 
         WorldPt start, goal;
         string? bad;
-        try { using (doc) bad = ParseRouteRequest(doc.RootElement, out start, out goal); }
+        bool noPortals = false;
+        try { using (doc) { bad = ParseRouteRequest(doc.RootElement, out start, out goal); noPortals = ReadNoPortals(doc.RootElement); } }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException)
         {
             // Belt-and-braces: ParseRouteRequest is TryGet-based and shouldn't throw.
@@ -308,7 +321,7 @@ if (cmd == "bake")
         }
 
         RouteOutcome outcome;
-        try { outcome = router.Route(start, goal); }
+        try { outcome = router.Route(start, goal, noPortals); }
         catch (Exception ex)
         {
             Console.WriteLine($"[route] planner exception: {ex}");

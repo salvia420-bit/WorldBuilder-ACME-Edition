@@ -249,7 +249,9 @@ public sealed class DetourRouter
     }
 
     // ── route composition ────────────────────────────────────────────────────────
-    public RouteOutcome Route(WorldPt start, WorldPt goal)
+    private static readonly List<PortalLink> _noPortalList = new();
+
+    public RouteOutcome Route(WorldPt start, WorldPt goal, bool noPortals = false)
     {
         lock (_gate)
         {
@@ -257,7 +259,7 @@ public sealed class DetourRouter
             double sNs = WorldToDeg(start.Wy), sEw = WorldToDeg(start.Wx);
             double gNs = WorldToDeg(goal.Wy), gEw = WorldToDeg(goal.Wx);
 
-            var steps = PortalRoute.Plan(_portals, null, sNs, sEw, gNs, gEw, out double est, out int used);
+            var steps = PortalRoute.Plan(noPortals ? _noPortalList : _portals, null, sNs, sEw, gNs, gEw, out double est, out int used);
             if (steps.Count == 0) { res.Error = "portal planner returned no steps"; return res; }
             res.EstUnits = est;
             res.PortalsUsed = used;
