@@ -89,7 +89,11 @@ var s2 = Sorted(new uint[] { 0xA9B4, 0xA9B5, 0xAAB4, 0xAAB5 }); // route within 
     lru = r.LoadedTilesLruFirst();
     Check(lru.Count == 8 && Sorted(lru.Take(4)).SequenceEqual(s2) && Sorted(lru.Skip(4)).SequenceEqual(s1),
         "T2d re-touch flips LRU order", Hex(lru));
-    Check(res2.Ok && res2.Coverage == "detour", "T2e corner-2 route ok/detour", $"cov={res2.Coverage} err={res2.Error}");
+    // AAB5 is the fixture's water-heavy NE corner: its within-lb route legitimately mixes
+    // real Detour legs with water-gap stitches (contract-v2 flags them; pre-fix the <=15 m
+    // tail-swallow hid the short-fall as pure "detour"). The LRU invariant only needs the
+    // corridor query to have RUN — i.e. coverage != "straight" (some Detour poly was used).
+    Check(res2.Ok && res2.Coverage != "straight", "T2e corner-2 route ok, Detour ran (detour|mixed)", $"cov={res2.Coverage} err={res2.Error}");
 }
 
 // ── T3: add -> evict -> re-add round-trip; query rebuilt after eviction ──────
@@ -99,7 +103,9 @@ var s2 = Sorted(new uint[] { 0xA9B4, 0xA9B5, 0xAAB4, 0xAAB5 }); // route within 
     Check(res1.Ok && res1.Coverage == "detour" && Sorted(r.LoadedTilesLruFirst()).SequenceEqual(s1),
         "T3a corner-1 loaded", $"cov={res1.Coverage} tiles={Hex(r.LoadedTilesLruFirst())}");
     var res2 = RouteWithin(r, 0xAA, 0xB5);
-    Check(res2.Ok && res2.Coverage == "detour", "T3b corner-2 routes ok/detour post-eviction (fresh query works)", $"ok={res2.Ok} cov={res2.Coverage} err={res2.Error}");
+    // Post-eviction the FRESH query must still find Detour polys for corner-2 (water-heavy
+    // AAB5 => "mixed", not pure "detour"; see T2e). "straight" would mean a broken query.
+    Check(res2.Ok && res2.Coverage != "straight", "T3b corner-2 routes ok post-eviction, Detour ran (fresh query works)", $"ok={res2.Ok} cov={res2.Coverage} err={res2.Error}");
     Check(Sorted(r.LoadedTilesLruFirst()).SequenceEqual(s2),
         "T3c corner-1 fully evicted, corner-2 corridor fully retained", Hex(r.LoadedTilesLruFirst()));
     var res3 = RouteWithin(r, 0xA7, 0xB2); // re-add the evicted tiles
@@ -130,6 +136,52 @@ var s2 = Sorted(new uint[] { 0xA9B4, 0xA9B5, 0xAAB4, 0xAAB5 }); // route within 
 {
     var f = typeof(DetourRouter).GetField("MaxCorridorTiles", BindingFlags.NonPublic | BindingFlags.Static);
     Check(f != null && (int)f!.GetRawConstantValue()! == 220, "T6 MaxCorridorTiles still 220", $"got {f?.GetRawConstantValue()}");
+}
+
+// Leg (lb,x,y) -> world metres, to compare a leg endpoint against a requested WorldPt.
+(double wx, double wy) LegWorld(Leg l) => (((l.Lb >> 24) & 0xFF) * 192.0 + l.X, ((l.Lb >> 16) & 0xFF) * 192.0 + l.Y);
+
+// ── T7 (contract v2, check a): off-mesh / out-of-region goal ─────────────────
+// A goal well outside the baked fixture bbox has no tile: no Detour path, so the
+// whole segment is an out-of-coverage stitch. Tail must be flagged and reach the goal.
+{
+    var r = MakeRouter(null, null);
+    var goal = In(0xC0, 0xB3, 96, 96);              // far east of A7..AA x B2..B5
+    var res = r.Route(In(0xA7, 0xB2, 24, 24), goal);
+    Check(res.Ok && res.Legs.Count > 0, "T7a out-of-region route returns legs", $"ok={res.Ok} err={res.Error}");
+    Check(res.Legs.Count > 0 && res.Legs[^1].Stitch, "T7b tail leg is stitch:true", res.Legs.Count > 0 ? $"stitch={res.Legs[^1].Stitch}" : "no legs");
+    Check(res.Partial, "T7c route is partial:true", $"partial={res.Partial}");
+    Check(res.StitchedLegs == res.Legs.Count(l => l.Stitch) && res.StitchedLegs > 0, "T7d stitchedLegs counts flagged legs", $"stitchedLegs={res.StitchedLegs} counted={res.Legs.Count(l => l.Stitch)}");
+    var (twx, twy) = LegWorld(res.Legs[^1]);
+    Check(Math.Abs(twx - goal.Wx) < 0.5 && Math.Abs(twy - goal.Wy) < 0.5, "T7e final leg is AT the requested goal", $"tail=({twx:F1},{twy:F1}) goal=({goal.Wx:F1},{goal.Wy:F1})");
+}
+
+// ── T8 (contract v2, check b): a clean on-mesh route has no stitches ─────────
+{
+    var r = MakeRouter(null, null);
+    var res = RouteWithin(r, 0xA8, 0xB3);           // fully on-mesh interior landblock
+    Check(res.Ok && res.Coverage == "detour", "T8a on-mesh route ok/detour", $"cov={res.Coverage} err={res.Error}");
+    Check(res.StitchedLegs == 0, "T8b stitchedLegs==0", $"stitchedLegs={res.StitchedLegs}");
+    Check(!res.Partial, "T8c partial==false", $"partial={res.Partial}");
+    Check(res.Legs.All(l => !l.Stitch), "T8d no leg flagged stitch", Hex(res.Legs.Where(l => l.Stitch).Select(l => l.Lb)));
+}
+
+// ── T9 (contract v2, check c): terminal stitch flips detour -> mixed ─────────
+// On-mesh start; goal ~8 m past the fixture's west edge. FindNearestPoly snaps the
+// goal onto the edge poly (within its 12 m half-extent) so Detour DOES run, but the
+// string-pull lands short of the requested point -> a flagged terminal stitch closes
+// the gap. Coverage must become "mixed" (was silently "detour" before the fix).
+{
+    var r = MakeRouter(null, null);
+    var goal = In(0xA6, 0xB3, 184, 96);
+    var res = r.Route(In(0xA7, 0xB3, 96, 96), goal);
+    Check(res.Ok, "T9a edge-overshoot route ok", res.Error);
+    Check(res.Coverage == "mixed", "T9b terminal stitch flips coverage detour->mixed", $"cov={res.Coverage}");
+    Check(res.StitchedLegs >= 1 && res.Partial, "T9c stitched tail present and partial:true", $"stitchedLegs={res.StitchedLegs} partial={res.Partial}");
+    Check(res.Legs.Count > 0 && res.Legs[^1].Stitch, "T9d final (gap-closing) leg is stitch:true", res.Legs.Count > 0 ? $"stitch={res.Legs[^1].Stitch}" : "no legs");
+    Check(res.Legs.Any(l => !l.Stitch), "T9e real Detour legs precede the stitch tail", "");
+    var (twx, twy) = LegWorld(res.Legs[^1]);
+    Check(Math.Abs(twx - goal.Wx) < 0.5 && Math.Abs(twy - goal.Wy) < 0.5, "T9f stitched tail reaches the requested goal", $"tail=({twx:F1},{twy:F1}) goal=({goal.Wx:F1},{goal.Wy:F1})");
 }
 
 Console.WriteLine($"\n{pass} passed, {fail} failed");

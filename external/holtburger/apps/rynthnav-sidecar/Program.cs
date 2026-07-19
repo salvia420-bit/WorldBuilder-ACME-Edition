@@ -297,10 +297,12 @@ if (cmd == "bake")
             await WriteJson(ctx, 200, new
             {
                 ok = true,
-                legs = new[] { new { lb = arrive.Lb, x = arrive.X, y = arrive.Y, z = arrive.Z, portal = false, label = "" } },
+                legs = new[] { new { lb = arrive.Lb, x = arrive.X, y = arrive.Y, z = arrive.Z, portal = false, stitch = false, label = "" } },
                 estUnits = 0.0,
                 portalsUsed = 0,
                 coverage = "straight",
+                stitchedLegs = 0,
+                partial = false,
             });
             return;
         }
@@ -321,14 +323,16 @@ if (cmd == "bake")
             return;
         }
 
-        Console.WriteLine($"[route] ok: {outcome.Legs.Count} legs, est={outcome.EstUnits:F0}u, portals={outcome.PortalsUsed}, coverage={outcome.Coverage}");
+        Console.WriteLine($"[route] ok: {outcome.Legs.Count} legs ({outcome.StitchedLegs} stitch), est={outcome.EstUnits:F0}u, portals={outcome.PortalsUsed}, coverage={outcome.Coverage}, partial={outcome.Partial}");
         await WriteJson(ctx, 200, new
         {
             ok = true,
-            legs = outcome.Legs.Select(l => new { lb = l.Lb, x = l.X, y = l.Y, z = l.Z, portal = l.Portal, label = l.Label }),
+            legs = outcome.Legs.Select(l => new { lb = l.Lb, x = l.X, y = l.Y, z = l.Z, portal = l.Portal, stitch = l.Stitch, label = l.Label }),
             estUnits = outcome.EstUnits,
             portalsUsed = outcome.PortalsUsed,
             coverage = outcome.Coverage,
+            stitchedLegs = outcome.StitchedLegs,
+            partial = outcome.Partial,
         });
     });
 
