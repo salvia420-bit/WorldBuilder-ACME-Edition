@@ -256,7 +256,15 @@ export function guardPlan(actions, opts = {}) {
     let s;
     try { s = sanitize(a); } catch (e) { s = { ok: false, error: String((e && e.message) || e) }; }
     if (!s || s.ok !== true) { rejected.push({ action: a, error: (s && s.error) || "rejected" }); continue; }
-    if (kept.length >= cap) { rejected.push({ action: a, error: `plan truncated: over maxActions=${cap}` }); continue; }
+    // update_scratchpad is exempt from the cap (2026-07-18): it is the
+    // model's only durable memory write, and live soak-13 lost a memory
+    // update to truncation exactly when the model had the most to record
+    // (a 6-action plan). One extra no-side-effect action is cheaper than a
+    // forgotten lesson repeating for hours.
+    if (kept.length >= cap && a?.type !== "update_scratchpad") {
+      rejected.push({ action: a, error: `plan truncated: over maxActions=${cap}` });
+      continue;
+    }
     const sanitized = s.action ?? a;
     kept.push(sanitized);
     if (s.note) notes.push({ action: sanitized, note: s.note });

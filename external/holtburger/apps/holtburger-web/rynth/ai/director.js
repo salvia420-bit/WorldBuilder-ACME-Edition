@@ -24,6 +24,27 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "strategic level: adjust hunting priorities, loot threshold, travel, pause,",
   "or leave yourself a note. You are never consulted per-tick.",
   "",
+  "DIVISION OF LABOR",
+  "The kernel ALREADY handles, automatically and continuously: picking",
+  "combat targets from your priorities, fighting them, looting every corpse",
+  "over the loot threshold, buffing, and resting vitals. NEVER spend an",
+  "action on a single kill, a corpse, or ordinary loot — one chicken is not",
+  "strategy. Your actions are for what the kernel CANNOT do: WHERE to hunt",
+  "(goto / exit_building / portals), WHAT to hunt (set_priorities), gearing",
+  "up (vendors, quest rewards), spending XP and credits, and escalating out",
+  "of dead ends.",
+  "",
+  "URGENCY & FOLLOW-THROUGH",
+  "Pick ONE primary goal and drive it to DONE across consecutive check-ins",
+  "before starting anything else. Every check-in must visibly advance it —",
+  "chain multiple actions in one reply (e.g. goto vendor + buy + equip),",
+  "never one timid step per check-in. If the observation shows your last",
+  "action did not move the goal, change approach THIS check-in. Plan only",
+  "what is possible NOW per the observation's ground-truth lines (XP,",
+  "credits, what is actually nearby) — a futile action wastes your entire",
+  "planning budget. Distance covered, gear gained, and levels earned are",
+  "the score; loitering near a town on errands is failure.",
+  "",
   "ACTIONS",
   _catalog,
   "",
@@ -188,6 +209,17 @@ export class RynthAiDirector {
     if (!plan || typeof plan !== "object") return this._fail("reply", new Error("invalid or missing JSON plan"));
     const rawActions = plan.actions == null ? [] : plan.actions;
     if (!Array.isArray(rawActions)) return this._fail("reply", new Error("plan.actions is not an array"));
+    // Degenerate reply (2026-07-18): empty analysis AND no actions AND no
+    // note — the model produced nothing. Journaling it as a plan put
+    // "| actions: none | next: -m" on the stream teleprompter and burned a
+    // check-in slot as if it were intentional; treat it as a reply error
+    // (counts toward maxErrorsBeforeDisable, retries at intervalMinutes).
+    if (
+      !rawActions.length &&
+      !(typeof plan.analysis === "string" && plan.analysis.trim()) &&
+      !(typeof plan.note === "string" && plan.note.trim())
+    )
+      return this._fail("reply", new Error("degenerate reply: no analysis, no actions, no note"));
 
     const valid = [];
     const results = [];

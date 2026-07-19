@@ -569,6 +569,11 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
           return cur.cell !== snap.pose.cell ||
             Math.hypot(cur.x - snap.pose.x, cur.y - snap.pose.y, cur.z - snap.pose.z) > 3;
         }
+        // Bare "heard" (2026-07-18): the model writes it naturally ("run
+        // this if the server said anything") and it previously fell through
+        // to unknown-guard fail-open with a warning; met = ANY chat line
+        // arrived since the snapshot.
+        if (cond === "heard") return (state._heardChat ?? []).length > snap.heardLen;
         if (cond.startsWith("heard:")) {
           const needle = cond.slice(6).trim().toLowerCase();
           if (!needle) return false;
@@ -584,7 +589,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
           // An invented guard ("kernel_running", v6.2) almost always decorates
           // an action the model fundamentally wants; skipping it cost a whole
           // check-in round with 8 golems on a 5-HP character.
-          if (met === null) return { met: true, warn: `ran despite unknown if-guard "${cond}" — valid: inventory_gained, moved, heard:<text>` };
+          if (met === null) return { met: true, warn: `ran despite unknown if-guard "${cond}" — valid: inventory_gained, moved, heard, heard:<text>` };
           if (met) return { met: true };
           if (Date.now() - t0 >= (Number.isFinite(cfg.guardWaitMs) ? cfg.guardWaitMs : 3000)) return { met: false };
           await new Promise((r) => setTimeout(r, 250));

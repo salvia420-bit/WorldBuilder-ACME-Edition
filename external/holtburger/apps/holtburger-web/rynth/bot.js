@@ -229,6 +229,7 @@ async function wireAiDirector(bot, aiConfig, base) {
   const client = new lc.LlmClient({
     apiKey,
     baseUrl: aiCfg?.baseUrl, // undefined -> client defaults (OpenRouter)
+    timeoutMs: aiCfg?.timeoutMs, // undefined -> client default (60s); slow fp8 providers need 120s
     model: aiCfg?.model,
     maxTokens: aiCfg?.maxTokens, // reasoning-tier models need > the 1024 default
     reasoning: aiCfg?.reasoning, // e.g. { effort: "low" } — OpenRouter unified reasoning

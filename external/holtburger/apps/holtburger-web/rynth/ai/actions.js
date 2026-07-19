@@ -150,7 +150,7 @@ export async function executeAction(bot, a, { log } = {}) {
           const p = bot?.host?.TryGetPlayerPose?.();
           if (p && ((p.objCellId >>> 0) & 0xffff) >= 0x100)
             return fail(
-              "you are indoors (dungeon cell) — outdoor goto cannot route from here; use goto_object/use_object on nearby objects to move room-to-room, and exit via a door or portal first",
+              "you are indoors (dungeon cell) — outdoor goto cannot route from here; use exit_building to walk outside first, then goto",
             );
         } catch {}
         const to = a.type === "goto" ? { ns: a.ns, ew: a.ew } : { lb: lbNum, x: a.x, y: a.y, z: a.z };

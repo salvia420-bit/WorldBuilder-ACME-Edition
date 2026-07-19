@@ -32,6 +32,7 @@ import {
   isDropEdge,
   nearestCell,
   findPath,
+  findExitPath,
   toLegs,
   buildPatrolRoute,
   buildGraphFromWasm,
@@ -293,6 +294,79 @@ export class DungeonNavAdvisor {
       return no("internal", `dungeon-nav error: ${safe(() => e.message) || e}`);
     }
   }
+
+  /**
+   * EXECUTABLE exit route (exit_building action): path from the player's
+   * cell to the nearest cell holding an outdoor exit portal, plus a final
+   * leg at the outdoor LandCell's center — the "just outside the door"
+   * target that carries the walk THROUGH the portal plane. Same resolve
+   * contract as suggestRoute; never rejects.
+   */
+  async exitRoute(bot) {
+    try {
+      const pose = getPose(bot);
+      if (!pose) return no("no-pose", "no player pose — cannot anchor an exit route");
+      if (!isEnvCellId(pose.cell))
+        return no("outdoors", `already outdoors (cell ${hex(pose.cell)}) — exit_building n/a; use goto`);
+      const graph = await this._graphAsync(bot);
+      const nodes = asNodeMap(graph);
+      if (!nodes.size) return no("no-graph", "indoor graph unavailable (no live wasm session)");
+      const cur = this._currentCell(nodes, pose);
+      if (!cur) return no("no-graph", "no graph cell near the player");
+      const exit = findExitPath(graph, cur.id);
+      if (!exit)
+        return no("unreachable", "no outdoor exit reachable from here (no exit portals in the walkable graph)");
+      const legs = toLegs(graph, exit.path, { midpoints: true });
+      const exitNode = nodes.get(exit.exitCell);
+      let outdoorId, ox, oy;
+      if (exit.outdoorId != null) {
+        // Direct outdoor LandCell id: walk to its center. Retail cell index
+        // decode (LandDefs::gid_to_lcoord, acclient.c:209521): idx-1 = cx*8+cy,
+        // 24-unit cells.
+        outdoorId = exit.outdoorId >>> 0;
+        const idx = (outdoorId & 0xffff) - 1;
+        ox = ((idx >> 3) & 7) * 24 + 12;
+        oy = (idx & 7) * 24 + 12;
+      } else {
+        // Retail outside-sentinel exit (other_cell_id == -1): no target cell
+        // in the DAT — derive one from geometry. Project ~9 units past the
+        // exit cell's center along the approach direction (previous path
+        // cell -> exit cell; player -> exit when the player is already in
+        // the exit cell), then bin the projected point into its outdoor
+        // LandCell (world/192 -> landblock byte, %192/24 -> cell, idx =
+        // cx*8+cy+1 — gid_to_lcoord inverted).
+        const prevId = exit.path.length > 1 ? exit.path[exit.path.length - 2] : null;
+        const from = prevId != null ? nodes.get(prevId)?.pos : null;
+        const base = exitNode.pos;
+        let dx = base.x - (from ? from.x : pose.x);
+        let dy = base.y - (from ? from.y : pose.y);
+        const len = Math.hypot(dx, dy);
+        if (len > 0.01) { dx /= len; dy /= len; } else { dx = 0; dy = 1; }
+        const wx = base.x + dx * 9;
+        const wy = base.y + dy * 9;
+        const lbx = Math.floor(wx / 192), lby = Math.floor(wy / 192);
+        const cx = Math.floor((wx - lbx * 192) / 24), cy = Math.floor((wy - lby * 192) / 24);
+        outdoorId = (((lbx & 0xff) << 24) | ((lby & 0xff) << 16) | (cx * 8 + cy + 1)) >>> 0;
+        ox = wx - lbx * 192;
+        oy = wy - lby * 192;
+      }
+      legs.push({
+        lb: outdoorId,
+        x: ox,
+        y: oy,
+        z: exitNode?.pos.z ?? pose.z,
+      });
+      return {
+        ok: true,
+        legs,
+        exitCell: exit.exitCell,
+        outdoorId,
+        reason: `${exit.path.length} cell(s) to exit ${hex(exit.exitCell)}, then outdoors at ${hex(outdoorId)}`,
+      };
+    } catch (e) {
+      return no("internal", `exit-route error: ${safe(() => e.message) || e}`);
+    }
+  }
 }
 
 const no = (error, reason) => ({ ok: false, error, reason });
@@ -476,10 +550,59 @@ export function dungeonSuggestAction(advisor) {
  * Integrator-time wiring, so bad input throws loudly here instead of
  * silently no-opping in the LLM path.
  */
+/**
+ * "exit_building" — the EXECUTABLE counterpart of dungeon_suggest (2026-07-18):
+ * live soak-13 showed an indoors bot has NO working movement primitive —
+ * goto/goto_lb refuse indoor cells by design, and goto_object's straight-line
+ * walk fails through walls — so a bot that wandered into a shop stranded
+ * there for 35+ minutes. This action walks the indoor cell graph to the
+ * nearest outdoor exit portal via bot.travel(legs) (the integrator execution
+ * path the dungeon_nav docblock reserves). Grind pauses during the walk; the
+ * model resumes (or goto's) on the next check-in.
+ */
+export function exitBuildingAction(advisor) {
+  const def = {
+    type: "exit_building",
+    params: {},
+    desc: "walk OUT of the building/dungeon you are inside (paths the indoor cell graph to the nearest outdoor exit and walks it; pauses grind — resume or goto next check-in). Indoors only; this is the ONLY reliable way outside — goto does not work indoors",
+    validate(a) {
+      if (!a || typeof a !== "object" || Array.isArray(a)) return { ok: false, error: "action must be an object" };
+      if (a.type !== "exit_building") return { ok: false, error: `unknown action type: ${JSON.stringify(a.type)}` };
+      return { ok: true };
+    },
+    async apply(bot, a, ctx = {}) {
+      const fail = (error) => {
+        try { ctx.log && ctx.log(`[ai] action exit_building: ${error}`); } catch {}
+        return { type: "exit_building", ok: false, error: String(error) };
+      };
+      try {
+        const v = def.validate(a);
+        if (!v.ok) return fail(v.error);
+        const adv = ctx.advisor ?? advisor;
+        if (!adv || typeof adv.exitRoute !== "function") return fail("unavailable");
+        if (typeof bot?.travel !== "function") return fail("unavailable (bot.travel)");
+        const route = await adv.exitRoute(bot);
+        if (!route.ok) return fail(`${route.error}: ${route.reason}`);
+        const t = bot.travel(route.legs);
+        if (!t || t.ok !== true) return fail((t && t.error) || "travel refused");
+        try {
+          ctx.journal?.add?.("note", `exit_building: walking ${route.reason} — grind paused; confirm pos next check-in, then resume or goto`);
+        } catch {}
+        return { type: "exit_building", ok: true, result: { legs: route.legs.length, outdoor: `0x${route.outdoorId.toString(16).toUpperCase()}` } };
+      } catch (e) {
+        return fail((e && e.message) || e);
+      }
+    },
+  };
+  return def;
+}
+
 export function registerDungeonNav(actionsMap, advisor) {
   if (!actionsMap || typeof actionsMap !== "object" || Array.isArray(actionsMap))
     throw new TypeError("registerDungeonNav: actionsMap must be a mutable object (e.g. { ...ACTIONS })");
   const def = dungeonSuggestAction(advisor);
   actionsMap[def.type] = def;
+  const exitDef = exitBuildingAction(advisor);
+  actionsMap[exitDef.type] = exitDef;
   return def;
 }

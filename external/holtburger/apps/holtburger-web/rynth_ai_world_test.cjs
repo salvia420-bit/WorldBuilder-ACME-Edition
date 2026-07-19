@@ -368,7 +368,9 @@ function makeHost() {
     const r3 = await wb.take_item.apply(bot, { type: "take_item", object: "0x7002" }, { journal });
     check("take_item container guid resolves", r3.ok && host.calls.some((c) => c[0] === "take" && c[1] === 0x7002), JSON.stringify(r3));
   }
-  // open_container: empty/non-container degrades to ok with a journaled note.
+  // open_container: unacked open (no ViewContents at all) degrades to ok
+  // with the not-acknowledged note; an ACKED open with zero items reports
+  // a confirmed-empty container (2026-07-18 disambiguation).
   {
     const w = worldActions();
     const wb = Object.fromEntries(w.map((d) => [d.type, d]));
@@ -378,8 +380,19 @@ function makeHost() {
     const t0 = Date.now();
     const r = await wb.open_container.apply({ host }, { type: "open_container", object: "Training Chest" }, { journal });
     check("open_container empty still ok", r.ok && r.result.items === 0, JSON.stringify(r));
-    check("open_container empty journals the miss", journal.entries.some((e) => /no contents streamed/.test(e.text)));
+    check("open_container unacked journals the miss", journal.entries.some((e) => /open NOT acknowledged/.test(e.text)));
     check("open_container empty polls out (~5s)", Date.now() - t0 >= 4500);
+  }
+  {
+    const w = worldActions();
+    const wb = Object.fromEntries(w.map((d) => [d.type, d]));
+    const journal = makeJournal();
+    const host = makeHost();
+    host.GetContainerContents = () => [];
+    host.GetGroundContainerId = () => 0x5003; // ViewContents acked the open (Training Chest)
+    const r = await wb.open_container.apply({ host }, { type: "open_container", object: "Training Chest" }, { journal });
+    check("open_container acked-empty still ok", r.ok && r.result.items === 0, JSON.stringify(r));
+    check("open_container acked-empty journals EMPTY", journal.entries.some((e) => /container is EMPTY/.test(e.text)));
   }
   // appraise: fresh identify -> journaled summary from the snapshot JSON.
   {

@@ -278,6 +278,50 @@ export function toLegs(graph, path, opts = {}) {
  * route"). Falls back to the full reachable set when pruning collapses the
  * graph (< 8 nodes or < 20% of reachable, :512-514). Returns Set<cellId>.
  */
+/**
+ * BFS from `fromCell` to the NEAREST graph cell that has an outdoor exit
+ * portal (`node.exits`, collected from the raw EnvCell portal ids that the
+ * neighbor filter above drops). Drop edges are excluded like findPath — an
+ * exit you can only fall into is not an exit you can walk to.
+ *
+ * Returns { path:[cellIds...], exitCell, outdoorId } or null (no exits
+ * known / unreachable / fromCell not in graph). `outdoorId` is the full u32
+ * outdoor objCellId beyond the exit portal — its LandCell center is a
+ * walkable "just outside the door" target (retail cell index decode:
+ * LandDefs::gid_to_lcoord, acclient.c:209521 — idx-1 = cx*8 + cy).
+ */
+export function findExitPath(graph, fromCell) {
+  const nodes = asMap(graph);
+  const from = Number(fromCell) >>> 0;
+  if (!nodes.has(from)) return null;
+  const prev = new Map([[from, 0]]);
+  let frontier = [from];
+  while (frontier.length) {
+    const next = [];
+    for (const id of frontier) {
+      const node = nodes.get(id);
+      if (!node) continue;
+      if (Array.isArray(node.exits) && node.exits.length) {
+        const path = [id];
+        for (let p = prev.get(id); p; p = prev.get(p)) path.push(p);
+        path.reverse();
+        // outdoorId is null for the retail outside-sentinel (0xFFFF low
+        // word) — the caller derives the outdoor target from geometry.
+        const direct = node.exits.find((e) => ((e & 0xffff) > 0 && (e & 0xffff) < 0x100));
+        return { path, exitCell: id, outdoorId: direct != null ? direct >>> 0 : null };
+      }
+      for (const nb of node.neighbors) {
+        if (prev.has(nb) || !nodes.has(nb)) continue;
+        if (isDropEdge(node, nodes.get(nb))) continue;
+        prev.set(nb, id);
+        next.push(nb);
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}
+
 export function getMainRouteNodes(graph, startCell, hazards = null) {
   const nodes = asMap(graph);
   const start = Number(startCell) >>> 0;
@@ -535,16 +579,57 @@ async function collectLandblockIntoGraph(fetchEnvCells, lbWord, graph) {
     try {
       const id = p.cellId >>> 0;
       if (!isEnvCellId(id)) continue;
-      const pos = { x: p.cellOriginX, y: p.cellOriginY, z: p.cellOriginZ };
+      let pos = { x: p.cellOriginX, y: p.cellOriginY, z: p.cellOriginZ };
       if (typeof pos.x !== "number" || typeof pos.y !== "number" || typeof pos.z !== "number")
         continue;
+      // Per-cell anchor (soak-13): BUILDING interiors put every EnvCell on
+      // the shared building frame — identical origins for all cells — which
+      // collapsed path legs to a single point and wedged exit walks into
+      // walls. The cell's own geometry is distinct, so refine the anchor to
+      // the mesh bbox center (cell-local), rotated by the cell orientation
+      // and offset by the origin. z stays at bbox MIN (floor level) — a
+      // walk target, not a look target. takeMesh is a one-shot move on OUR
+      // private placement fetch; the renderer's own fetches are unaffected.
+      try {
+        const mesh = typeof p.takeMesh === "function" ? p.takeMesh() : null;
+        if (mesh) {
+          try {
+            const bb = mesh.bbox;
+            if (bb && bb.length === 6) {
+              const lx = (bb[0] + bb[3]) / 2, ly = (bb[1] + bb[4]) / 2, lz = bb[2];
+              let qw = p.cellOrientationQw, qx = p.cellOrientationQx, qy = p.cellOrientationQy, qz = p.cellOrientationQz;
+              if (![qw, qx, qy, qz].every(Number.isFinite) || (qw === 0 && qx === 0 && qy === 0 && qz === 0)) {
+                qw = 1; qx = qy = qz = 0;
+              }
+              // v' = q v q* (standard quaternion rotation, expanded)
+              const tx = 2 * (qy * lz - qz * ly), ty = 2 * (qz * lx - qx * lz), tz = 2 * (qx * ly - qy * lx);
+              const rx = lx + qw * tx + (qy * tz - qz * ty);
+              const ry = ly + qw * ty + (qz * tx - qx * tz);
+              const rz = lz + qw * tz + (qx * ty - qy * tx);
+              pos = { x: pos.x + rx, y: pos.y + ry, z: pos.z + rz };
+            }
+          } finally {
+            try { mesh.free?.(); } catch (_) { /* moved */ }
+          }
+        }
+      } catch (_) { /* mesh unavailable — frame origin anchor stands */ }
       const raw = typeof p.takePortalCellIds === "function" ? p.takePortalCellIds() : [];
       const neighbors = [];
+      const exits = [];
       for (const nbRaw of raw || []) {
         const nb = nbRaw >>> 0;
         if (nb !== id && isEnvCellId(nb)) neighbors.push(nb); // sentinel/self filter (cs:163)
+        // Building/dungeon EXIT marker — findExitPath routes to these.
+        // Retail encodes "portal leads outside" as other_cell_id == -1
+        // (0xFFFF low word; acclient.c:348490 sets check_outside on it);
+        // a direct outdoor LandCell id (low word 0x0001..0x00FF) also
+        // counts. Neither is a graph node.
+        else if (nb !== id) {
+          const lo = nb & 0xffff;
+          if ((lo > 0 && lo < 0x100) || lo >= 0xfffe) exits.push(nb);
+        }
       }
-      graph.set(id, { pos, neighbors });
+      graph.set(id, { pos, neighbors, exits });
       added = true;
     } catch (_) {
       // malformed placement — skip, like the C# per-cell catch (cs:182)
@@ -657,6 +742,7 @@ export default {
   isDropEdge,
   nearestCell,
   findPath,
+  findExitPath,
   toLegs,
   getMainRouteNodes,
   buildPatrolRoute,

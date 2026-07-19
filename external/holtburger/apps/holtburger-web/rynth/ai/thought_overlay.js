@@ -20,8 +20,12 @@ const BUDGET_FRACTION = 0.8; // finish within 80% of the check-in gap
 const POLL_MS = 1000; // journal poll cadence
 const TICK_MS = 100; // reveal cadence
 
+// Top-center band: the bottom lower-third (the first home, bottom:110px)
+// is the combat-hud's designed band (bottom:116, x 240..1040) — they
+// collided the moment the bot entered combat. Top-center between the
+// vitals and radar HUDs is the one region no HUD claims.
 const CSS_ROOT =
-  "position:fixed;left:18%;right:18%;bottom:110px;z-index:9990;" +
+  "position:fixed;left:22%;right:22%;top:56px;z-index:9990;" +
   "box-sizing:border-box;padding:8px 14px;pointer-events:none;" +
   "background:rgba(0,0,0,0.62);border:1px solid var(--hb-border-brass,#8a7544);" +
   "border-radius:3px;color:var(--hb-text-cream,#f0d8a0);" +
@@ -40,6 +44,10 @@ export function mountThoughtOverlay(journal, { doc = globalThis.document, interv
   if (!doc || !journal || typeof journal.tail !== "function") return { unmount() {} };
 
   const root = doc.createElement("div");
+  // The id joins index.html's agent-mode :not() exclusion list — without
+  // it the agent-mode kill rule display:none !important wins over the
+  // (non-important) style toggles below and the overlay never shows.
+  root.id = "hb-thought-overlay";
   root.setAttribute("style", CSS_ROOT);
   const head = doc.createElement("div");
   head.setAttribute("style", CSS_HEAD);
@@ -61,7 +69,10 @@ export function mountThoughtOverlay(journal, { doc = globalThis.document, interv
       // Newest plan entry we have not shown yet (tail is oldest→newest).
       for (let i = entries.length - 1; i >= 0; i--) {
         const e = entries[i];
-        if (e.kind === "plan" && e.t > lastT && e.text && e.text.trim()) {
+        // Skip empty-analysis plans ("| actions: none | next: -m") — an
+        // LLM cycle that produced no thought reads as a glitch on stream;
+        // keep the previous (dimmed) thought up instead.
+        if (e.kind === "plan" && e.t > lastT && e.text && e.text.trim() && !e.text.trim().startsWith("|")) {
           lastT = e.t;
           text = e.text.trim();
           shown = 0;

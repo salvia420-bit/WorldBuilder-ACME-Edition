@@ -215,6 +215,17 @@ export function buildObservation(bot, { journalTail = "", maxChars = 6000, now =
       ? `pos: 0x${position.objCellId.toString(16).padStart(8, "0")} xyz=(${position.x.toFixed(1)},${position.y.toFixed(1)},${position.z.toFixed(1)}) loc=${fmtDeg(position.ns, "N", "S")} ${fmtDeg(position.ew, "E", "W")}`
       : `pos: ${NA}`
   );
+  // Nav availability is GROUND TRUTH (like the pos line): live soak-13
+  // showed a stale scratchpad belief ("goto fails") outliving a nav fix —
+  // the model never retried. State it every check-in so beliefs can't drift.
+  {
+    const indoors = position ? ((position.objCellId >>> 0) & 0xffff) >= 0x100 : false;
+    head.push(
+      bot?.globalRouter
+        ? `nav: goto/goto_lb ONLINE (outdoor router)${indoors ? " — you are INDOORS: use exit_building first, goto only works outdoors" : ""}`
+        : `nav: OFFLINE (no sidecar) — goto/goto_lb unavailable; move with goto_object${indoors ? " or exit_building" : ""}`
+    );
+  }
   head.push(vitals ? `vitals: hp=${fmtPct(vitals.hp)} stam=${fmtPct(vitals.stam)} mana=${fmtPct(vitals.mana)}` : `vitals: ${NA}`);
   head.push(
     buffs

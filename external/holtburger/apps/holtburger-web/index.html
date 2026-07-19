@@ -456,7 +456,7 @@
          (incl. the 1070 desktop shortcut) could ever see the spell
          panel it just clicked open. Panels only exist after an explicit
          icon click, so headless perf agents are unaffected. */
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud):not(#hb-target-bar):not(#hb-combat-hud):not(#hb-sneak-hud):not(#hb-dye-preview-tooltip):not(.hb-panel):not(#hb-spell-strip) { display: none !important; }
+      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud):not(#hb-target-bar):not(#hb-combat-hud):not(#hb-sneak-hud):not(#hb-dye-preview-tooltip):not(.hb-panel):not(#hb-spell-strip):not(#hb-thought-overlay) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
@@ -7201,6 +7201,34 @@
                       .then(async (m) => {
                         try { if (prevBot && typeof prevBot.stop === "function") prevBot.stop(); } catch (_) {}
                         const cfg = botParams.get("botAi") === "off" ? { ai: false } : {};
+                        // nav sidecar (2026-07-18): default-on. Without
+                        // config.nav the bot has NO coordinate travel
+                        // (goto/goto_lb return "nav not configured") and a
+                        // soak strands in its spawn town — the sidecar is a
+                        // standing laptop service (:8767), and an unreachable
+                        // endpoint only fails individual goto calls, never
+                        // the boot. ?nav=off opts out; ?navEndpoint= overrides.
+                        if (botParams.get("nav") !== "off") {
+                          cfg.nav = { endpoint: botParams.get("navEndpoint") || "http://127.0.0.1:8767" };
+                        }
+                        // Stream-rig bot tuning survives reloads via URL:
+                        // ?botModel= (director LLM), ?botInterval= (check-in
+                        // minutes; caps scale with it). Provider pins can't
+                        // ride a URL — a reload falls back to OpenRouter
+                        // default routing for the chosen model.
+                        if (cfg.ai !== false) {
+                          const bm = botParams.get("botModel");
+                          const bi = parseFloat(botParams.get("botInterval"));
+                          if (bm) cfg.ai = { ...(cfg.ai || {}), model: bm, maxTokens: 4096, reasoning: { effort: "low" }, timeoutMs: 120000 };
+                          if (Number.isFinite(bi) && bi > 0) {
+                            cfg.ai = {
+                              ...(cfg.ai || {}),
+                              intervalMinutes: bi, minIntervalMinutes: bi,
+                              maxIntervalMinutes: bi * 2,
+                              maxCallsPerHour: Math.min(70, Math.ceil(70 / bi)),
+                            };
+                          }
+                        }
                         window.__bot = await m.createGrindBot(botTargetHandle, cfg);
                         window.__botHandle = botTargetHandle;
                         console.log(prevBot
@@ -7211,6 +7239,24 @@
                       .finally(() => { window.__botBooting = false; });
                   }
                 } catch (_) { /* flag parse failure = no bot, client unaffected */ }
+                // ?streamHud=1 (2026-07-18) — stream-rig dressing: open the
+                // inventory pane and shift the buffs HUD below the vitals
+                // frame (its default top:40 sits inside vitals' 0..70 box).
+                // Idempotent across kind=7 refires; never touches the panel
+                // once a viewer (or the bot's own UI actions) navigated it.
+                try {
+                  if (new URLSearchParams(location.search).get("streamHud") === "1") {
+                    if (!document.getElementById("stream-hud-style")) {
+                      const shs = document.createElement("style");
+                      shs.id = "stream-hud-style";
+                      shs.textContent = "#hb-buffs-hud { top: 84px !important; left: 8px !important; }";
+                      document.head.appendChild(shs);
+                    }
+                    if (window.__mainPanel && !window.__mainPanel.isOpen()) {
+                      window.__mainPanel.showView("inventory");
+                    }
+                  }
+                } catch (_) { /* stream dressing must never break spawn */ }
                 // Spawn-kick (2026-06-30): the ring populate
                 // (ensure*AroundLandblock) is otherwise driven ONLY by the first
                 // inbound kind=0 position update in handlePositionUpdate. That

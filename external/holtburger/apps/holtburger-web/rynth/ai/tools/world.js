@@ -427,7 +427,7 @@ export function openContainerAction(state = {}) {
   const def = {
     type: "open_container",
     params: { object: "name (substring) or guid of a nearby chest/corpse/container" },
-    desc: "walk up to and open a container (chest, corpse) and read what is inside (journaled). Then take a specific item out with take_item, passing the guid from the listing.",
+    desc: "walk up to and open a container and read what is inside (journaled); take a specific item out with take_item. For CHESTS and unusual containers — corpses of your kills are looted AUTOMATICALLY by the grind kernel, do not spend actions on them.",
     validate(a) {
       const b = baseValidate("open_container")(a);
       if (!b.ok) return b;
@@ -444,9 +444,17 @@ export function openContainerAction(state = {}) {
     if (res.error) return fail(res.error);
     const walk = await approach(bot, res.guid);
     if (!h.UseObject(res.guid)) return fail("open request failed to send");
+    // Open-acknowledgment (2026-07-18): ViewContents with ZERO items is a
+    // real server reply (a genuinely empty chest), but it left guids empty
+    // and read as "no contents streamed" — indistinguishable from the open
+    // never being acked (out of range / locked / not a container). The
+    // ground-container id flips to this guid on ANY ViewContents for it, so
+    // track it as the ack and report empty-vs-silent distinctly.
     let guids = [];
+    let opened = false;
     const t0 = Date.now();
     while (Date.now() - t0 < CONTENTS_TIMEOUT_MS) {
+      try { opened = opened || (h.GetGroundContainerId?.() >>> 0) === (res.guid >>> 0); } catch {}
       try { guids = h.GetContainerContents(res.guid) || []; } catch { guids = []; }
       if (guids.length) break;
       await sleep(CONTENTS_POLL_MS);
@@ -463,7 +471,9 @@ export function openContainerAction(state = {}) {
       ctx,
       contents.length
         ? `open_container ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}; contents(${contents.length}): ${contents.map((c) => `${c.name} ${hex(c.guid)}`).join("; ")}`
-        : `open_container ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}; no contents streamed (empty, out of range, or not a container)`
+        : opened
+          ? `open_container ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}; opened: container is EMPTY (server confirmed) — do not reopen, move on`
+          : `open_container ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}; open NOT acknowledged (out of range, locked, or not a container)`
     );
     return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid), items: contents.length, walk: walk ?? undefined } };
   });
