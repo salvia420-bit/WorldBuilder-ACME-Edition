@@ -484,7 +484,8 @@ export async function composeGoto(deps, to, opts = {}) {
     maxTransits: opts.portalTransits ?? 3,
     // Town Network perf pathology: the sim can crawl there, so indoor transit
     // legs get a long per-leg watchdog (router honors leg.timeoutMs).
-    indoorLegTimeoutMs: opts.indoorLegTimeoutMs ?? 90_000,
+    // Live v9: network leg speeds fluctuate 0.1-1 m/s; a 5m hall leg blew 90s.
+    indoorLegTimeoutMs: opts.indoorLegTimeoutMs ?? 240_000,
   };
 
   const startCell = currentCell(host);
