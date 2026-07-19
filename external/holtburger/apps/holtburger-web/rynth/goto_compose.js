@@ -333,8 +333,14 @@ async function attemptPortalTransit(ctx, blockedLeg, tune) {
   // step searched the DESTINATION for a portal and mislabeled success).
   const owx = worldX(pose.objCellId >>> 0, pose.x);
   const owy = worldY(pose.objCellId >>> 0, pose.y);
+  // Threshold must exceed any legitimate INDOOR WALK displacement — the
+  // transit's own hallway path is ~40m, and 30m (portalJumpM) false-fired
+  // mid-corridor (v14: "walk-in hop" declared while still in the network ->
+  // outdoor re-plan from an EnvCell -> HTTP 400). Real hops here are
+  // cross-map (49km); 500m cleanly separates the classes.
+  const TRANSIT_HOP_M = 500;
   const alreadyHopped = (p) =>
-    Math.hypot(worldX(p.objCellId >>> 0, p.x) - owx, worldY(p.objCellId >>> 0, p.y) - owy) >= tune.portalJumpM;
+    Math.hypot(worldX(p.objCellId >>> 0, p.x) - owx, worldY(p.objCellId >>> 0, p.y) - owy) >= TRANSIT_HOP_M;
   const fromCell = resolveCell(nodes, cell, pose.objCellId >>> 0, pose.x, pose.y, pose.z);
   if (!fromCell) return stage("indoor graph unavailable");
   const targetCell = nearestCell(nodes, twx, twy, blockedLeg.z);
