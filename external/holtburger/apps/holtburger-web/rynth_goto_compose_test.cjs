@@ -71,7 +71,33 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
 (async () => {
   const mod = await import(pathToFileURL(path.join(__dirname, "rynth", "goto_compose.js")).href);
   const { composeGoto, walkLegs } = mod;
+  const ir = await import(pathToFileURL(path.join(__dirname, "rynth", "indoor_router.js")).href);
   check("exports composeGoto + walkLegs", typeof composeGoto === "function" && typeof walkLegs === "function");
+
+  // ── task #15: two-stage doorway-approach waypoints (toLegs {doorwayApproach}) ─
+  // Path A->B->C with B OFFSET from the A-C line (an offset doorframe). Expect
+  // per-transition 30% pre-approach + 50% doorway-midpoint, then the last cell
+  // centre — NOT the {midpoints} shape. lb 0x0000 base so world == local.
+  {
+    const A = 0x100, B = 0x101, C = 0x102; // EnvCell low words, landblock 0x0000
+    const g = new Map([
+      [A, { pos: { x: 0, y: 0, z: 0 }, neighbors: [B] }],
+      [B, { pos: { x: 10, y: 4, z: 0 }, neighbors: [A, C] }], // offset off the 0..20 x-axis
+      [C, { pos: { x: 20, y: 0, z: 0 }, neighbors: [B] }],
+    ]);
+    const legs = ir.toLegs(g, [A, B, C], { doorwayApproach: true });
+    const near = (leg, x, y) => Math.abs(leg.x - x) < 1e-6 && Math.abs(leg.y - y) < 1e-6;
+    check("doorway: 30% + 50% per transition + final centre = 5 legs", legs.length === 5, `${legs.length}`);
+    check("doorway: A->B 30% pre-approach (3,1.2) stamped dest B", near(legs[0], 3, 1.2) && legs[0].lb === B, JSON.stringify(legs[0]));
+    check("doorway: A->B 50% midpoint (5,2)", near(legs[1], 5, 2), JSON.stringify(legs[1]));
+    check("doorway: B->C 30% (13,2.8) + 50% (15,2)", near(legs[2], 13, 2.8) && near(legs[3], 15, 2), JSON.stringify([legs[2], legs[3]]));
+    check("doorway: final leg = C centre (20,0)", near(legs[4], 20, 0) && legs[4].lb === C, JSON.stringify(legs[4]));
+    // Contrast: {midpoints} emits midpoint+centre PER cell (A centre, mid, B, mid, C) — different shape.
+    const mp = ir.toLegs(g, [A, B, C], { midpoints: true });
+    check("doorway: distinct from {midpoints} (no bare cell centres mid-run)", mp.length !== legs.length || !near(mp[0], 3, 1.2), `${mp.length} vs ${legs.length}`);
+    // Single-cell path degrades to just that cell's centre.
+    check("doorway: single-cell path -> one centre leg", ir.toLegs(g, [A], { doorwayApproach: true }).length === 1);
+  }
 
   const OPTS = { poseTimeoutMs: 60, pollMs: 2, stallMs: 500 };
 
@@ -299,8 +325,15 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
         return true;
       },
     };
-    // Fake indoor walk: "arrives" at the last leg's cell.
-    const walk = async (legs) => {
+    // Fake indoor walk: fails the first `knobs.walkFails` calls (pose stays put
+    // on the wedge), then "arrives" at the last leg's cell. Records labels so a
+    // test can assert the re-walk retry ran exactly once.
+    state.walkCalls = 0;
+    state.walkLabels = [];
+    const walk = async (legs, o = {}) => {
+      state.walkCalls++;
+      state.walkLabels.push(o.label);
+      if (state.walkCalls <= (knobs.walkFails || 0)) return { ok: false, state: "FAILED", legsWalked: 0 };
       const last = legs[legs.length - 1];
       state.pose = { objCellId: last.lb >>> 0, x: last.x, y: last.y, z: last.z };
       return { ok: true, state: "DONE", legsWalked: legs.length };
@@ -359,6 +392,26 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     const r = await composeGoto(pw.deps, { ns: 42.1, ew: 33.6 }, POPTS);
     check("portal: not in an EnvCell -> no transit, raw blocked-stitch failure",
       r.ok === false && r.error === "blocked stitch leg" && !!r.blockedLeg && pw.state.used.length === 0 && pw.state.outdoorCalls === 1, JSON.stringify(r));
+  }
+
+  // ── task #15: one re-walk retry of the remaining indoor path on a wedge ─────
+  {
+    // First indoor walk wedges; the single re-walk threads it -> success.
+    const pw = portalWorld({ walkFails: 1 });
+    const r = await composeGoto(pw.deps, { ns: 42.1, ew: 33.6 }, POPTS);
+    check("rewalk: first walk wedges, retry threads it -> transit ok", r.ok === true, JSON.stringify(r));
+    check("rewalk: retry ran exactly once (approach then approach-retry)",
+      pw.state.walkCalls === 2 && pw.state.walkLabels.join(",") === "portal-approach,portal-approach-retry", JSON.stringify(pw.state.walkLabels));
+    check("rewalk: portal USE()d after the retry threaded the doorway", pw.state.used.length === 1, JSON.stringify(pw.state.used));
+  }
+  {
+    // Both walks wedge and no portal in desperate range: retry runs ONCE and only
+    // once (exactly two walk calls — no infinite re-walk), then honest failure.
+    const pw = portalWorld({ walkFails: 99 });
+    const r = await composeGoto(pw.deps, { ns: 42.1, ew: 33.6 }, POPTS);
+    check("rewalk: both wedge -> honest indoor-walk failure", r.ok === false && /indoor walk/.test(r.error), JSON.stringify(r));
+    check("rewalk: retry runs once and only once (exactly 2 walk calls)",
+      pw.state.walkCalls === 2 && pw.state.walkLabels.join(",") === "portal-approach,portal-approach-retry", JSON.stringify(pw.state.walkLabels));
   }
 
   console.log(`\ngoto_compose: ${pass} passed, ${fail} failed`);

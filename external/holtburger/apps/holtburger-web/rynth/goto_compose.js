@@ -343,14 +343,32 @@ async function attemptPortalTransit(ctx, blockedLeg, tune) {
   if ((targetCell >>> 0) !== (fromCell >>> 0)) {
     const path = findPath(graph, fromCell, targetCell >>> 0);
     if (!path) return stage("portal cell unreachable"); // drop-gated / disconnected
-    // World-frame normalize + generous per-leg deadline: the Town Network has a
-    // known perf pathology (sim can crawl ~0.3 m/s there), so short indoor
-    // cell-hop legs still need a long watchdog.
-    const legs = toLegs(graph, path, { midpoints: true })
-      .map((l) => ({ ...normalizeLegWorldFrame(l), timeoutMs: tune.indoorLegTimeoutMs }));
-    // Stall guard must outlive the long per-leg watchdog (one slow leg keeps
-    // the router status signature constant for its whole duration).
-    const w = await walk(legs, { label: "portal-approach", stallMs: tune.indoorLegTimeoutMs + 15_000 });
+    // Two-stage doorway pre-approach (DungeonPathfinder.cs:377-399, ported into
+    // toLegs {doorwayApproach}) so the walker lines up on the offset doorframe
+    // instead of cutting the corner into it — the live Town-Network wedge that
+    // {midpoints:true} never threaded. World-frame normalize + a generous
+    // per-leg deadline (the network sim can crawl ~0.3 m/s, live v9: a 5m hall
+    // leg blew 90s), stall guard outliving the per-leg watchdog.
+    const buildLegs = (p) =>
+      toLegs(graph, p, { doorwayApproach: true })
+        .map((l) => ({ ...normalizeLegWorldFrame(l), timeoutMs: tune.indoorLegTimeoutMs }));
+    const walkStallMs = tune.indoorLegTimeoutMs + 15_000;
+    let w = await walk(buildLegs(path), { label: "portal-approach", stallMs: walkStallMs });
+    if (!w.ok) {
+      // ONE re-walk retry of the REMAINING path from the wedge pose: a fresh
+      // MoveToPosition sometimes threads the offset doorway that the first pass
+      // ground on (live v11: success is nondeterministic). Re-derive the current
+      // cell and re-findPath so a partial first walk shortens the retry.
+      const pr = (await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs)) || pose;
+      if (alreadyHopped(pr)) return { ok: true, portal: "(walk-in hop)", exitCell: targetCell >>> 0 };
+      const reFrom = resolveCell(nodes, currentCell(host), pr.objCellId >>> 0, pr.x, pr.y, pr.z);
+      if (reFrom && (reFrom >>> 0) !== (targetCell >>> 0)) {
+        const rePath = findPath(graph, reFrom >>> 0, targetCell >>> 0);
+        if (rePath && rePath.length >= 2) {
+          w = await walk(buildLegs(rePath), { label: "portal-approach-retry", stallMs: walkStallMs });
+        }
+      }
+    }
     if (!w.ok) {
       // Desperate touch: live v9/v10 wedged on the SAME 5m doorway leg while
       // 11m from the exit portal. UseObject has its own retail auto-approach

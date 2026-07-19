@@ -237,6 +237,19 @@ export function findPath(graph, fromCell, toCell, opts = {}) {
  * between consecutive cells (stamped with the DESTINATION cell id) — the C#'s
  * anti-corner-cut waypoint trick (DungeonPathfinder.cs:12-17, :377-399),
  * available if live tests show MoveToManager clipping offset doorways.
+ *
+ * opts.doorwayApproach (default false): the FULL two-stage pre-approach from
+ * DungeonPathfinder.cs:377-399 (AddPortalWaypoints), which `midpoints` only
+ * half-implemented. For each A->B cell transition emit a 30% PRE-APPROACH
+ * waypoint (lines the walker up on the doorway axis before it crosses) followed
+ * by the 50% DOORWAY-MIDPOINT (the through point), ending at the last cell
+ * centre. This stops MoveToPosition cutting the corner into an offset doorframe
+ * — the live Town-Network wedge that `midpoints:true` did not clear. Waypoints
+ * are stamped with the DESTINATION cell id; their WORLD position is exact (a 30%
+ * point physically near cell A is fine — callers may re-bucket the lb, e.g.
+ * normalizeLegWorldFrame). SimplifyRoute (C#:404) is intentionally NOT ported:
+ * the router's arrival/reissue tolerates redundant collinear legs, and dropping
+ * it guarantees the alignment waypoints survive at every real doorway.
  */
 export function toLegs(graph, path, opts = {}) {
   const nodes = asMap(graph);
@@ -248,6 +261,24 @@ export function toLegs(graph, path, opts = {}) {
     y: wy - ((id >>> 16) & 0xff) * 192,
     z: wz,
   });
+  if (opts.doorwayApproach) {
+    for (let i = 0; i + 1 < path.length; i++) {
+      const a = nodes.get(Number(path[i]) >>> 0);
+      const b = nodes.get(Number(path[i + 1]) >>> 0);
+      if (!a || !b) continue;
+      const id = Number(path[i + 1]) >>> 0; // stamp with the DESTINATION cell (C#)
+      const dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y, dz = b.pos.z - a.pos.z;
+      // 30% pre-approach, then 50% doorway midpoint (AddPortalWaypoints).
+      legs.push(local(id, a.pos.x + dx * 0.3, a.pos.y + dy * 0.3, a.pos.z + dz * 0.3));
+      legs.push(local(id, a.pos.x + dx * 0.5, a.pos.y + dy * 0.5, a.pos.z + dz * 0.5));
+    }
+    // Final leg = the last cell centre (callers append the exact goal when they
+    // have one; the portal-transit path walks INTO the portal cell itself).
+    const lastId = Number(path[path.length - 1]) >>> 0;
+    const lastNode = nodes.get(lastId);
+    if (lastNode) legs.push(local(lastId, lastNode.pos.x, lastNode.pos.y, lastNode.pos.z));
+    return legs;
+  }
   for (let i = 0; i < path.length; i++) {
     const id = Number(path[i]) >>> 0;
     const node = nodes.get(id);
