@@ -407,7 +407,7 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
       h.pose = P(0x0101, 0, 0);
       r.follow([L(0x0101, 50, 0, { stitch: true })]);
       r.tick();
-      simT += 10_001; // past STITCH_TIMEOUT_MS, well under LEG_TIMEOUT_MS
+      simT += 15_001; // past STITCH_TIMEOUT_MS, well under LEG_TIMEOUT_MS
       r.tick();
       assert.equal(r.status.state, "FAILED");
       assert.equal(r.status.stitchBlocked, true);
@@ -422,7 +422,7 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
       r.tick();
       simT += 10_001;
       r.tick();
-      assert.equal(r.status.state, "WALK", "10s does not fail a normal leg");
+      assert.equal(r.status.state, "WALK", "15s does not fail a normal leg");
       simT += 20_001; // now past LEG_TIMEOUT_MS
       r.tick();
       assert.equal(r.status.state, "FAILED");

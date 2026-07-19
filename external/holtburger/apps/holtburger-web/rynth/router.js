@@ -39,7 +39,9 @@
 
 const ARRIVE_M = 3.0; // within this of a leg target = arrived
 const LEG_TIMEOUT_MS = 30_000; // per-leg watchdog
-const STITCH_TIMEOUT_MS = 10_000; // watchdog for stitch legs (sidecar contract v2:
+const STITCH_TIMEOUT_MS = 15_000; // watchdog for stitch legs (sidecar contract v2:
+// sized so a full ~40m stitch stride (~10s at 4 m/s) has headroom, while a
+// truly blocked stitch still fails 2x faster than a normal leg.
 // legs flagged {stitch:true} are straight-line fallback through unbaked/carved
 // space — a physical obstacle there never resolves, so fail it fast)
 const REISSUE_MS = 3000; // re-issue moveTo if not closing
