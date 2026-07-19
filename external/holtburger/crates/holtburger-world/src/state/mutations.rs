@@ -212,7 +212,47 @@ impl WorldState {
     pub fn runtime_pose_for_guid(&self, guid: Guid) -> Option<WorldPosition> {
         let body_id = self.runtime_body_id_for_guid(guid)?;
         if let Some(body) = self.scene.body(body_id) {
-            return Some(body.pose);
+            let mut pose = body.pose;
+            // Cell-continuity guard (NavAtlas objCellId=0 — RIG root cause,
+            // 2026-07-19): the per-frame solve write-back can leave the local
+            // player's WORKING body pose with a NULL landblock while keeping
+            // valid landblock-local coords. `project_pose_by_offset`
+            // (physics.rs) re-derives the landblock from
+            // `authoritative_pose.global_coords()`, but once the landblock is
+            // 0 the global collapses to just the local coords (e.g. 72.8,18.6),
+            // so it re-derives 0 EVERY frame — a self-perpetuating feedback
+            // null that keeps the local coords. An IDLE solo player never
+            // receives the inbound echo that would reconcile-heal it, so
+            // `getLocalPlayerPose().landblockId` (→ rynth objCellId) reads 0
+            // permanently and MoveToPosition grinds against the wrong
+            // landblock. A NULL working cell is never legitimate: surface the
+            // correct cell from the server-authoritative pose (which stays
+            // correct — physics diag shows server == predicted == real global),
+            // falling back to the authoritative entity position. This read is
+            // the single chokepoint both `getLocalPlayerPose` AND the movement
+            // solve input (`current_local_solve_body_input` →
+            // `local_player_runtime_pose`) go through, so the solve then
+            // re-derives a valid landblock from the corrected global and writes
+            // it back, self-healing `body.pose` within a frame. Keeps the
+            // working local coords — they are valid for the authoritative cell.
+            // Fires ONLY while the working landblock is NULL (the bug state);
+            // a valid cell is returned untouched.
+            if pose.landblock_id == Guid::NULL {
+                let heal_landblock = body
+                    .authoritative_pose
+                    .map(|auth| auth.landblock_id)
+                    .filter(|lb| *lb != Guid::NULL)
+                    .or_else(|| {
+                        self.entities
+                            .get(guid)
+                            .map(|entity| entity.position.landblock_id)
+                            .filter(|lb| *lb != Guid::NULL)
+                    });
+                if let Some(landblock_id) = heal_landblock {
+                    pose.landblock_id = landblock_id;
+                }
+            }
+            return Some(pose);
         }
 
         self.entities.get(guid).map(|entity| entity.position)

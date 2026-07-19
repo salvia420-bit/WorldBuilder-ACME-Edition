@@ -1657,6 +1657,73 @@ fn navatlas_null_working_landblock_heals_on_authoritative_only_echo() {
     );
 }
 
+/// NavAtlas RIG root-cause fix — the READ chokepoint heals a per-frame
+/// NULL working landblock without any inbound message. Live evidence:
+/// an idle solo outdoor player's `body.pose` is nulled every frame by the
+/// `project_pose_by_offset` feedback loop (global collapses to local once
+/// landblock==0), and NO inbound echo arrives to trigger the reconcile /
+/// update_player_position_core heals — so `getLocalPlayerPose().objCellId`
+/// stays 0 permanently. `runtime_pose_for_guid` (which BOTH getLocalPlayerPose
+/// and the movement solve input go through) now surfaces the correct cell
+/// from the server-authoritative pose whenever the working landblock is NULL.
+#[test]
+fn navatlas_read_path_heals_null_working_cell_from_authoritative_pose() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_00C4);
+    // Outdoor Arwic spawn — the seed sets entity + body + authoritative pose
+    // to the correct cell 0xC6A90019.
+    let correct = WorldPosition {
+        landblock_id: Guid(0xC6A9_0019),
+        coords: Vector3::new(72.8, 18.6, 43.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state.seed_local_player_entity(player_guid, "Player", correct);
+    let _ = state.set_local_player_runtime_pose(correct);
+
+    // Simulate the per-frame feedback nuller: body.pose's landblock is zeroed
+    // while the valid landblock-local coords are kept (authoritative_pose is
+    // NOT touched — it still holds the correct server cell).
+    let nulled = WorldPosition {
+        landblock_id: Guid::NULL,
+        coords: Vector3::new(72.8, 18.6, 43.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    assert!(state.scene.apply_runtime_body_pose(
+        SpatialBodyId::LocalPlayer(player_guid),
+        nulled,
+        SpatialSampleMode::SimulatingMotionState,
+    ));
+    // Precondition: the raw body pose is NULL...
+    assert_eq!(
+        state
+            .scene
+            .body(SpatialBodyId::LocalPlayer(player_guid))
+            .expect("body")
+            .pose
+            .landblock_id,
+        Guid::NULL,
+    );
+
+    // ...but the READ chokepoint surfaces the authoritative cell — no inbound
+    // message needed. This is what getLocalPlayerPose() and the movement solve
+    // input both read.
+    let read = state
+        .local_player_runtime_pose()
+        .expect("runtime pose available");
+    assert_ne!(
+        read.landblock_id,
+        Guid::NULL,
+        "read-path must never surface a NULL working cell (objCellId != 0)"
+    );
+    assert_eq!(
+        read.landblock_id,
+        Guid(0xC6A9_0019),
+        "read-path surfaces the server-authoritative outdoor cell"
+    );
+    // Local coords are preserved (valid for the authoritative cell).
+    assert_eq!(read.coords, Vector3::new(72.8, 18.6, 43.0));
+}
+
 /// Teleport-destination landing regression (2026-07-02, live-repro on ACE
 /// `@telepoi`): the canonical `handlers/player.rs` message pair must land
 /// the runtime body at the destination even though `PlayerTeleport`
