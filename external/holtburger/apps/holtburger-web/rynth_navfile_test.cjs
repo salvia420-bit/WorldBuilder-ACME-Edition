@@ -149,6 +149,29 @@ const FIXTURES = path.join(__dirname, "rynth", "testdata");
       assert.equal(navs.myroute.points[0].type, 0);
     });
 
+    await t("F12", "fmt-2 flags (fmt, indoor) have no .nav representation — export byte-identical", () => {
+      const c = (((0xa9 << 24) | (0xb4 << 16) | 0x21) >>> 0) >>> 0;
+      // Same geometry + portal/label; the v2 copy adds route.fmt and per-leg indoor.
+      const base = {
+        legs: [
+          { lb: c, x: 30, y: 40, z: 94 },
+          { lb: c, x: 60, y: 40, z: 94, portal: true, label: "portal Town Network" },
+          { lb: c, x: 60, y: 70, z: 94 },
+        ],
+      };
+      const v2 = {
+        fmt: 2,
+        legs: [
+          { lb: c, x: 30, y: 40, z: 94, indoor: true },
+          { lb: c, x: 60, y: 40, z: 94, portal: true, label: "portal Town Network", indoor: true },
+          { lb: c, x: 60, y: 70, z: 94 },
+        ],
+      };
+      const a = NF.writeNav(NF.routeToNav(base));
+      const b = NF.writeNav(NF.routeToNav(v2));
+      assert.equal(b, a, "fmt/indoor dropped -> identical .nav bytes");
+    });
+
     await t("F11", "embedded .af NAV: token section -> points", () => {
       const af = [
         "NAV: patrol circular ~~ {",

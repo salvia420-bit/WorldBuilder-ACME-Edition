@@ -277,6 +277,10 @@ export function navToRoute(parsed, { name } = {}) {
 // Export: atlas route -> parsed nav (feed to writeNav). Portal legs -> a
 // PortalNPC waypoint (name from label); vendor-labelled legs -> OpenVendor;
 // everything else -> a plain Point. RouteType defaults Linear.
+// Recorded-format v2 route/leg flags (`fmt`, per-leg `indoor`) have NO .nav
+// representation and are intentionally DROPPED here: this reads only lb/x/y/z +
+// portal/label, so a v2 route exports byte-identically to the same route without
+// those flags (the VTank .nav byte-stable acceptance is unaffected).
 export function routeToNav(route, { routeType = NavRouteType.Linear } = {}) {
   const points = (route.legs || []).map((l) => {
     const { ew, ns, navZ } = legToNavPoint(l.lb, l.x, l.y, l.z);

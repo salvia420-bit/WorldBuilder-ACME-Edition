@@ -68,6 +68,31 @@ try {
     const leftovers = fs.readdirSync(dir).filter((f) => f.includes(".tmp."));
     assert.equal(leftovers.length, 0, "temp files cleaned up");
   });
+
+  t("M8", "contract v2 fmt + portal/indoor flags survive the disk round-trip", () => {
+    const v2dump = JSON.stringify({
+      key: "rynth.atlas.v1",
+      version: 1,
+      routes: [
+        {
+          id: "r_v2",
+          name: "arwic->holtburg",
+          fmt: 2,
+          legs: [
+            { lb: 1, x: 0, y: 0, portal: true, label: "portal" },
+            { lb: 459075, x: 70, y: -60, indoor: true },
+          ],
+        },
+      ],
+    });
+    M.writeAtlasJson(v2dump, { dir, account: "v2acct" });
+    const back = M.readAtlasJson({ dir, account: "v2acct" });
+    const r = JSON.parse(back).routes[0];
+    assert.equal(r.fmt, 2, "fmt preserved");
+    assert.equal(r.legs[0].portal, true, "departure portal preserved");
+    assert.equal(r.legs[0].label, "portal");
+    assert.equal(r.legs[1].indoor, true, "indoor flag preserved");
+  });
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });
 }
