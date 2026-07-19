@@ -342,22 +342,61 @@ async function attemptPortalTransit(ctx, blockedLeg, tune) {
 }
 
 /**
+ * Outdoor portal-touch assist: the hop-by-contact at an outdoor portal leg is
+ * not reliable (live: 2-in-3) — arrival can stop just outside the trigger
+ * radius. When a blocked-leg failure lands while OUTDOORS with a portal entity
+ * within reach of the pose, USE it and await the teleport. Returns
+ * {ok:true,portal} on a hop; {ok:false, noPortal:true} when there is simply no
+ * portal in reach (caller keeps the raw failure); honest error otherwise.
+ */
+async function attemptOutdoorPortalTouch(ctx, tune) {
+  const { host } = ctx;
+  const stage = (s) => ({ ok: false, error: `portal touch failed: ${s}` });
+  const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
+  if (!pose) return stage("no player pose");
+  const pwx = worldX(pose.objCellId >>> 0, pose.x);
+  const pwy = worldY(pose.objCellId >>> 0, pose.y);
+  // Target = the pose itself: nearest portal to where the walk stopped.
+  const portal = findNearbyPortal(host, pwx, pwy, pwx, pwy, tune.portalRangeM);
+  if (!portal) return { ok: false, noPortal: true };
+  if (typeof host.UseObject !== "function") return stage("use unavailable");
+  let sent = false;
+  try {
+    sent = !!host.UseObject(portal.guid);
+  } catch (_) {
+    sent = false;
+  }
+  if (!sent) return stage("use rejected");
+  const jumped = await awaitTeleport(host, pwx, pwy, tune.portalTeleportMs, tune.teleportPollMs, tune.portalJumpM);
+  if (!jumped) return stage("no teleport");
+  return { ok: true, portal: portal.name };
+}
+
+/**
  * Run the OUTDOOR planner, transparently recovering an in-EnvCell portal leg it
  * fails fast on: on a blocked-leg failure while parked in an EnvCell, run the
  * portal transit, then re-plan from the far side (bounded by tune.maxTransits).
- * On a plain success it returns the outdoor result UNCHANGED (pure-outdoor stays
- * identical); a transit that fails returns the outdoor result with the honest
- * portal-transit error.
+ * While OUTDOORS, a blocked-leg failure with a portal entity in reach gets the
+ * portal-touch assist (the flaky hop-by-contact case) — no portal in reach
+ * keeps the raw failure. On a plain success it returns the outdoor result
+ * UNCHANGED (pure-outdoor stays identical); a transit that fails returns the
+ * outdoor result with the honest portal-transit error.
  */
 async function outdoorWithAssist(ctx, to, opts, tune, phases) {
   let transits = 0;
   for (;;) {
     const out = await ctx.outdoorGoto(to, opts);
     if (out && out.ok === true) return out;
-    if (!out || !out.blockedLeg || transits >= tune.maxTransits || !isEnvCellId(currentCell(ctx.host))) {
+    if (!out || !out.blockedLeg || transits >= tune.maxTransits) {
       return out;
     }
-    const tr = await attemptPortalTransit(ctx, out.blockedLeg, tune);
+    let tr;
+    if (isEnvCellId(currentCell(ctx.host))) {
+      tr = await attemptPortalTransit(ctx, out.blockedLeg, tune);
+    } else {
+      tr = await attemptOutdoorPortalTouch(ctx, tune);
+      if (!tr.ok && tr.noPortal) return out; // genuine obstacle, no portal near
+    }
     if (phases) phases.push({ phase: "portal-transit", ok: tr.ok, ...(tr.ok ? { portal: tr.portal } : { error: tr.error }) });
     if (ctx.log) ctx.log(tr.ok ? `portal transit via ${tr.portal} — re-planning from the far side` : tr.error);
     if (!tr.ok) return { ...out, ok: false, error: tr.error, portalTransit: false };
