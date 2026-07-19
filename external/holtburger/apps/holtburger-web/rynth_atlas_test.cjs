@@ -279,6 +279,131 @@ const wxy = (lb, x, y) => [((lb >>> 24) & 0xff) * 192 + x, ((lb >>> 16) & 0xff) 
       const eta = a.estimateMs(saved.id, { runRate: 1 });
       assert.ok(Math.abs(eta - 50000) < 200, `200u/4 = 50s, got ${eta}`);
     });
+
+    // ════ contract v2 (fmt:2, portal-on-departure, indoor, densify, de-noise) ════
+    // Indoor pose: objCellId low word (cell) >= 0x0100 = an EnvCell interior.
+    const PI = (lbWord, x, y, z = 0) => ({ objCellId: ((lbWord << 16) | 0x0143) >>> 0, x, y, z });
+
+    await t("V1", "finish stamps fmt:2; portal on the DEPARTURE leg; indoor tagged", () => {
+      const r = mkRec();
+      r.start({ from: P(0xa0b0, 0, 0), runRate: 1 });
+      r.sample(P(0xa0b0, 10, 0));
+      r.sample(P(0xa0b0, 20, 0)); // last outdoor crumb before the hop
+      r.sample(PI(0x0007, 70, -60)); // >500m jump into the Town Network EnvCell (indoor)
+      r.sample(PI(0x0007, 82, -58));
+      r.sample(PI(0x0007, 95, -55));
+      const route = r.finish({ ok: true, to: PI(0x0007, 95, -55) });
+      assert.equal(route.fmt, 2, "fmt:2 stamped");
+      const pIdx = route.legs.findIndex((l) => l.portal);
+      assert.ok(pIdx >= 0, "a portal leg exists");
+      assert.equal((route.legs[pIdx].lb >>> 16), 0xa0b0, "portal flag on the OUTDOOR departure leg");
+      assert.ok(!route.legs[pIdx + 1].portal, "the arrival (far-side) leg is NOT flagged");
+      const [awx, awy] = wxy(route.legs[pIdx].lb, route.legs[pIdx].x, route.legs[pIdx].y);
+      const [bwx, bwy] = wxy(route.legs[pIdx + 1].lb, route.legs[pIdx + 1].x, route.legs[pIdx + 1].y);
+      assert.ok(Math.hypot(bwx - awx, bwy - awy) >= 500, "portal leg departs a >=500m hop");
+      assert.equal(route.portalsUsed, 1, "one hop");
+      assert.ok(route.legs.some((l) => l.indoor), "indoor legs tagged");
+      assert.ok(route.legs[pIdx + 1].indoor === true && ((route.legs[pIdx + 1].lb & 0xffff) >= 0x0100), "the EnvCell leg carries indoor:true");
+      assert.ok(!route.legs[0].indoor, "the outdoor start leg has no indoor flag");
+      // estUnits excludes the giant hop (departure-convention: skip leg[i-1].portal segment)
+      assert.ok(route.estUnits < 200, `hop excluded from ground, got ${route.estUnits}u`);
+    });
+
+    await t("V2", "indoor sampling is densified vs outdoor (denser crumbs)", () => {
+      const out = mkRec();
+      out.start({ from: P(0xa0b0, 0, 0) });
+      for (let x = 2; x <= 32; x += 2) out.sample(P(0xa0b0, x, 0));
+      const outCrumbs = out.status.breadcrumbs;
+      const ind = mkRec();
+      ind.start({ from: PI(0x0007, 0, 0) });
+      for (let x = 2; x <= 32; x += 2) ind.sample(PI(0x0007, x, 0));
+      const indCrumbs = ind.status.breadcrumbs;
+      assert.ok(indCrumbs > outCrumbs, `indoor denser: ${indCrumbs} indoor > ${outCrumbs} outdoor crumbs over the same 32m`);
+    });
+
+    await t("V3", "de-noise drops sub-3m seam oscillation, keeps a real >=3m corner", () => {
+      // Jitter across a landblock seam: each pose flips the lb word but moves < 3m
+      // world-frame -> would be kept by the cell-change rule, but de-noise drops it.
+      const jit = mkRec();
+      jit.start({ from: P(0x0101, 191, 0) }); // world (383,192)
+      jit.sample(P(0x0201, 1, 0)); // world (385,192): lb changed, jump 2m -> DROP
+      jit.sample(P(0x0201, 1, 0)); // repeat -> DROP
+      jit.sample(P(0x0201, 40, 0)); // world (424,192): real 41m move -> KEEP
+      const jitRoute = jit.finish({ ok: true, to: P(0x0201, 40, 0) });
+      assert.equal(jitRoute.legs.length, 2, `oscillation de-noised -> 2 legs, got ${jitRoute.legs.length}`);
+      // A genuine >=3m seam corner IS kept (de-noise never smooths real geometry).
+      const real = mkRec();
+      real.start({ from: P(0x0101, 191, 0) }); // world (383,192)
+      real.sample(P(0x0201, 30, 0)); // world (414,192): 31m seam crossing -> KEEP
+      real.sample(P(0x0201, 30, 40)); // turn -> KEEP the corner
+      const realRoute = real.finish({ ok: true, to: P(0x0201, 30, 40) });
+      assert.ok(realRoute.legs.some((l) => (l.lb >>> 16) === 0x0201), "real seam crossing kept");
+      assert.ok(realRoute.legs.length >= 3, `real corner kept, got ${realRoute.legs.length} legs`);
+    });
+
+    await t("V4", "atlas saveRoute + export/import preserves fmt:2 and per-leg flags", () => {
+      const c = P(0xa0b0, 0, 0).objCellId;
+      const ci = (0x0007 << 16 | 0x0143) >>> 0;
+      const route = {
+        fmt: 2,
+        from: { lb: c, x: 0, y: 0, z: 0 },
+        to: { lb: ci, x: 95, y: -55, z: 0 },
+        legs: [
+          { lb: c, x: 0, y: 0, z: 0 },
+          { lb: c, x: 20, y: 0, z: 0, portal: true, label: "portal" },
+          { lb: ci, x: 70, y: -60, z: 0, indoor: true },
+          { lb: ci, x: 95, y: -55, z: 0, indoor: true },
+        ],
+        estUnits: 20,
+        runRateAtRecord: 1,
+      };
+      const a = mkAtlas();
+      const saved = a.saveRoute(route);
+      assert.equal(saved.fmt, 2, "fmt survives saveRoute");
+      assert.equal(saved.legs[1].portal, true, "departure portal survives");
+      assert.equal(saved.legs[2].indoor, true, "indoor flag survives");
+      assert.equal(saved.portalsUsed, 1, "portalsUsed from flags");
+      const a2 = mkAtlas();
+      a2.importAll(a.exportAll());
+      const got = a2.getRoute(saved.id);
+      assert.equal(got.fmt, 2, "fmt survives export/import");
+      assert.equal(got.legs[1].portal, true);
+      assert.equal(got.legs[2].indoor, true);
+      // ETA counts the pre-hop ground (0->20) but NOT the 500m+ hop.
+      const eta = a2.estimateMs(got.id, { runRate: 1 });
+      assert.ok(eta >= 5000 && eta < 20000, `pre-hop 20u ground + 4s portal dwell, got ${eta}`);
+    });
+
+    await t("V5", "legacy (fmt-less) route is not migrated and estimates as before", () => {
+      const a = mkAtlas();
+      const saved = a.saveRoute(sample()); // sample() has no fmt, no portal
+      assert.equal(saved.fmt, undefined, "legacy route NOT migrated to fmt:2");
+      // legacy arrival-convention portal still swallows ground on both sides (== E2)
+      const cc = P(0, 0, 0).objCellId;
+      const legacy = {
+        legs: [
+          { lb: cc, x: 0, y: 0 },
+          { lb: cc, x: 40, y: 0, portal: true, label: "portal" },
+          { lb: cc, x: 40, y: 0, label: "vendor Fredere" },
+        ],
+      };
+      const e = estimateRouteMs(legacy, { runRate: 1 });
+      assert.ok(Math.abs(e - 14000) < 50, `legacy estimate unchanged (14s), got ${e}`);
+    });
+
+    await t("V6", "real v16 fixture (legacy arrival-portals) stores + excludes the 49km hops", () => {
+      const fx = JSON.parse(fs.readFileSync(path.join(__dirname, "rynth", "testdata", "v16_arwic_holtburg_route.json"), "utf8"));
+      const route = fx.route;
+      assert.equal(route.fmt, undefined, "fixture is a legacy (fmt-less) route");
+      const a = mkAtlas();
+      const saved = a.saveRoute(route);
+      assert.equal(saved.fmt, undefined, "not migrated on save");
+      assert.equal(saved.legs.length, 19, "all 19 legs stored verbatim");
+      // Two ~48km hops must NOT be counted as ground (legacy arrival portals on
+      // legs 5 & 17 swallow them) — ETA stays in the minutes, not centuries.
+      const eta = a.estimateMs(saved.id, { runRate: 1 });
+      assert.ok(eta > 0 && eta < 5 * 60_000, `hops excluded -> sane ETA, got ${eta}ms`);
+    });
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

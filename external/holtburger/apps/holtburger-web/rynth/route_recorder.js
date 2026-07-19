@@ -23,6 +23,13 @@
 // finish({ok:false}) returns null — a route that did not complete is not
 // experience and is never stored. A route with < minLegs kept crumbs is
 // likewise dropped (nothing worth reusing).
+//
+// Format contract v2 (agreed with the replay side): finish() stamps `fmt: 2`
+// and, per leg, `portal: true` on the DEPARTURE leg of a >= hopM (500 m) hop
+// and `indoor: true` for any EnvCell waypoint (cell low word >= 0x0100). Indoor
+// sampling is densified (indoorSpacingM, 4 m vs 8 m outdoor) and a de-noise pass
+// drops sub-denoiseM (3 m) cell-boundary jitter so a wedge-meander does not become
+// a leg. Legacy (fmt-less) routes stay valid and are never migrated.
 
 // World-frame (metres) from a full objCellId + landblock-local x,y (mirror of
 // router.js worldXY / observe.js global frame).
@@ -30,16 +37,35 @@ function worldXY(objCellId, x, y) {
   return [((objCellId >>> 24) & 0xff) * 192 + x, ((objCellId >>> 16) & 0xff) * 192 + y];
 }
 
-const SPACING_M = 8; // keep a crumb every >= this many world-frame metres
+const SPACING_M = 8; // keep a crumb every >= this many world-frame metres (OUTDOOR cadence)
+const INDOOR_SPACING_M = 4; // denser cadence while indoors (2x outdoor): EnvCell interiors
+// are off-mesh and replayed tightly, and the v16 fixture's 10-20 m indoor leg
+// spacing proved marginal — 4 m sampling keeps simplified indoor legs well under
+// the ~8 m replay budget. (contract v2 §densify)
 const SEAM_JUMP_M = 30; // world-frame jump >= this = teleport/portal (router.js parity)
+const DENOISE_M = 3; // drop a would-be crumb within this of the previous RECORDED crumb —
+// kills sub-metre cell-boundary jitter / wedge-meander oscillation without smoothing
+// real geometry (a legitimate spacing keep is always >= INDOOR_SPACING_M > this).
+const HOP_M = 500; // consecutive legs >= this apart (world-frame) => a teleport/portal hop;
+// the DEPARTURE leg is flagged portal:true (contract v2 §format).
 const MIN_LEGS = 2; // a route worth storing has at least this many legs
 const RDP_EPS_M = 2.0; // RDP tolerance (below router ARRIVE_M=3 so legs stay arrivable)
+const FMT_VERSION = 2; // recorded-route format version (portal-on-departure + indoor flags)
+
+// Indoor = the pose sits in an EnvCell: objCellId low word (cell) >= 0x0100
+// (outdoor cells are 0x0001..0x0040). (contract v2 §indoor)
+function isIndoorCell(objCellId) {
+  return ((objCellId >>> 0) & 0xffff) >= 0x0100;
+}
 
 export class RouteRecorder {
   constructor(opts = {}) {
     this.log = opts.log || ((m) => console.log(`[recorder] ${m}`));
     this.spacingM = opts.spacingM ?? SPACING_M;
+    this.indoorSpacingM = opts.indoorSpacingM ?? INDOOR_SPACING_M;
     this.seamJumpM = opts.seamJumpM ?? SEAM_JUMP_M;
+    this.denoiseM = opts.denoiseM ?? DENOISE_M;
+    this.hopM = opts.hopM ?? HOP_M;
     this.minLegs = opts.minLegs ?? MIN_LEGS;
     this.rdpEps = opts.rdpEps ?? RDP_EPS_M;
     this._reset();
@@ -112,8 +138,16 @@ export class RouteRecorder {
       this.log(`portal crumb (jump ${jump.toFixed(0)}m)`);
       return;
     }
+    // Indoor (EnvCell) interiors are densified — a denser crumb cadence keeps
+    // the tight, off-mesh indoor legs faithful for replay (contract v2 §densify).
+    const spacing = isIndoorCell(pose.objCellId) ? this.indoorSpacingM : this.spacingM;
     const lbChanged = (pose.objCellId >>> 16) !== this._lastLb;
-    if (jump >= this.spacingM || lbChanged) {
+    if (jump >= spacing || lbChanged) {
+      // De-noise: a crumb within denoiseM of the last RECORDED crumb is
+      // cell-boundary jitter / wedge-meander oscillation, not real geometry — a
+      // genuine spacing keep is always >= spacing (> denoiseM), so only sub-
+      // denoiseM cell-change crumbs are dropped here (contract v2 §de-noise).
+      if (jump < this.denoiseM) return;
       this._push(pose, false, null);
     }
   }
@@ -168,9 +202,14 @@ export class RouteRecorder {
       this.log(`discarded (only ${legs.length} legs, < ${this.minLegs})`);
       return null;
     }
+    // contract v2: re-express the internal (arrival-flagged) portal crumbs as
+    // DEPARTURE-flagged legs + tag indoor legs; portalsUsed becomes the hop count.
+    this.portalsUsed = this._applyV2Flags(legs);
+    // Ground units skip the hop: under the departure convention the hop is the
+    // segment leg[i-1]->leg[i] where leg[i-1] is portal-flagged.
     let estUnits = 0;
     for (let i = 1; i < legs.length; i++) {
-      if (legs[i].portal) continue; // portal hop crosses no ground
+      if (legs[i - 1].portal) continue; // portal hop crosses no ground
       const [awx, awy] = worldXY(legs[i - 1].lb, legs[i - 1].x, legs[i - 1].y);
       const [bwx, bwy] = worldXY(legs[i].lb, legs[i].x, legs[i].y);
       estUnits += Math.hypot(bwx - awx, bwy - awy);
@@ -178,6 +217,7 @@ export class RouteRecorder {
     const first = legs[0];
     const lastLeg = legs[legs.length - 1];
     const route = {
+      fmt: FMT_VERSION,
       from: { lb: first.lb, x: first.x, y: first.y, z: first.z },
       to: { lb: lastLeg.lb, x: lastLeg.x, y: lastLeg.y, z: lastLeg.z },
       legs,
@@ -228,6 +268,37 @@ export class RouteRecorder {
       legs.push(toLeg(pts[idx]));
     }
     return legs;
+  }
+
+  /** contract v2 flag pass over the simplified legs (mutates in place):
+   *   - portal:true moves to the DEPARTURE leg — leg[i] where the hop
+   *     leg[i]->leg[i+1] is >= hopM in world-frame — carrying the label the
+   *     arrival crumb held (the recorder detects hops internally as seam jumps;
+   *     the >= hopM rule is the authoritative on-disk flag the replay side reads).
+   *   - indoor:true on any leg whose cell is an EnvCell (low word >= 0x0100).
+   * Returns the hop (departure-portal) count. */
+  _applyV2Flags(legs) {
+    // Lift the internal arrival-crumb portal labels off the legs first.
+    const arrivalLabel = new Array(legs.length).fill(null);
+    for (let i = 0; i < legs.length; i++) {
+      if (legs[i].portal) {
+        arrivalLabel[i] = legs[i].label || "portal";
+        delete legs[i].portal;
+        delete legs[i].label;
+      }
+    }
+    let portals = 0;
+    for (let i = 0; i + 1 < legs.length; i++) {
+      const [awx, awy] = worldXY(legs[i].lb, legs[i].x, legs[i].y);
+      const [bwx, bwy] = worldXY(legs[i + 1].lb, legs[i + 1].x, legs[i + 1].y);
+      if (Math.hypot(bwx - awx, bwy - awy) >= this.hopM) {
+        legs[i].portal = true;
+        legs[i].label = arrivalLabel[i + 1] || legs[i].label || "portal";
+        portals++;
+      }
+    }
+    for (const l of legs) if (isIndoorCell(l.lb)) l.indoor = true;
+    return portals;
   }
 }
 

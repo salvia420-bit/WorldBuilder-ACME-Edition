@@ -58,22 +58,28 @@ function locDeg(lb, x, y) {
  *  milliseconds. A route with no legs is 0. */
 export function estimateRouteMs(route, { runRate = 1, portalMs = PORTAL_DWELL_MS, vendorMs = VENDOR_DWELL_MS } = {}) {
   const legs = (route && route.legs) || [];
+  // Portal-flag convention differs by recorded-format version: fmt>=2 flags the
+  // DEPARTURE leg of a hop (leg[i-1]), legacy/imported routes flag the arrival
+  // leg (leg[i]). A hop segment crosses no ground either way — pick the skip
+  // predicate by fmt so both estimate correctly.
+  const fmt2 = ((route && route.fmt) || 0) >= 2;
   const speed = Math.max(0.1, runRate * RUN_SPEED_MS); // guard div-by-zero
   let ground = 0;
   let portals = 0;
   let vendors = 0;
   for (let i = 0; i < legs.length; i++) {
     const l = legs[i];
-    if (l.portal) {
-      portals += 1;
-      continue; // a hop crosses no ground
-    }
-    if (i > 0 && !legs[i - 1].portal) {
-      const [awx, awy] = worldXY(legs[i - 1].lb, legs[i - 1].x, legs[i - 1].y);
-      const [bwx, bwy] = worldXY(l.lb, l.x, l.y);
-      ground += Math.hypot(bwx - awx, bwy - awy);
-    }
+    if (l.portal) portals += 1;
     if (l.label && /vendor|shop|merchant/i.test(l.label)) vendors += 1;
+    if (i === 0) continue;
+    // fmt>=2: the hop is the segment leaving a departure-flagged leg (legs[i-1]).
+    // legacy: the arrival-flagged portal leg swallows the ground on BOTH sides
+    // (preserves the pre-v2 estimate exactly).
+    const hop = fmt2 ? !!legs[i - 1].portal : (!!legs[i - 1].portal || !!l.portal);
+    if (hop) continue; // a hop crosses no ground
+    const [awx, awy] = worldXY(legs[i - 1].lb, legs[i - 1].x, legs[i - 1].y);
+    const [bwx, bwy] = worldXY(l.lb, l.x, l.y);
+    ground += Math.hypot(bwx - awx, bwy - awy);
   }
   return Math.round((ground / speed) * 1000 + portals * portalMs + vendors * vendorMs);
 }
@@ -268,9 +274,11 @@ export class Atlas {
 
   // ── internals ──────────────────────────────────────────────────────────────
   _pathUnits(r) {
+    const fmt2 = (r.fmt || 0) >= 2;
     let u = 0;
     for (let i = 1; i < r.legs.length; i++) {
-      if (r.legs[i].portal) continue;
+      const hop = fmt2 ? !!r.legs[i - 1].portal : (!!r.legs[i - 1].portal || !!r.legs[i].portal);
+      if (hop) continue;
       const [awx, awy] = worldXY(r.legs[i - 1].lb, r.legs[i - 1].x, r.legs[i - 1].y);
       const [bwx, bwy] = worldXY(r.legs[i].lb, r.legs[i].x, r.legs[i].y);
       u += Math.hypot(bwx - awx, bwy - awy);
