@@ -238,6 +238,58 @@ function makeBot({ followResult = { ok: true, state: "DONE", legsWalked: 2 }, ru
     m.stop();
   }
 
+  // ---- auto-record composition (extensions.js × REAL route_recorder + atlas)
+  {
+    const { composeAiExtensions } = await import(modUrl("rynth/ai/extensions.js"));
+    const rynthBase = pathToFileURL(path.join(__dirname, "rynth")).href;
+    let pose = { objCellId: 0xa9b40019, x: 10, y: 10, z: 50 };
+    const ticks = [];
+    const bot = {
+      host: {
+        TryGetPlayerPose: () => pose,
+        onTick: (fn) => ticks.push(fn),
+        onEvent: () => {},
+        s: { player_run_rate: () => 2 },
+      },
+      _metrics: { routesRecorded: 0, routesReused: 0 },
+      mission: null,
+      lastMission: null,
+      router: { status: { state: "IDLE", leg: 0, legs: 0, walked: 0 } },
+    };
+    const journal = makeJournal();
+    const ext = composeAiExtensions(bot, {
+      base: rynthBase, journal,
+      config: { knowledge: false, dungeonNav: false, wbt: false, economy: false, advancement: false, world: false, memory: false, chat: false },
+    });
+    check("autorec: travel hooks installed", typeof bot._onTravelStart === "function" && typeof bot._onTravelDone === "function");
+    bot._onTravelStart({ kind: "goto", label: "41.6N 33.6E", to: { ns: 41.6, ew: 33.6 } });
+    await new Promise((r) => setTimeout(r, 150)); // lazy recorder import settles
+    // walk 3 breadcrumbs 10m apart; recorder samples via the tick tap (500ms throttle)
+    for (const x of [20, 30, 40]) {
+      pose = { objCellId: 0xa9b40019, x, y: 10, z: 50 };
+      ticks.forEach((f) => f());
+      await new Promise((r) => setTimeout(r, 550));
+      ticks.forEach((f) => f());
+    }
+    bot._onTravelDone({ kind: "goto", label: "41.6N 33.6E", result: { ok: true, state: "DONE" }, mission: null });
+    await new Promise((r) => setTimeout(r, 250)); // async finish/save settles
+    const at = await ext.routes.getAtlas();
+    const routes = at ? at.listRoutes() : [];
+    check("autorec: successful goto saved to the atlas", routes.length === 1 && Array.isArray(routes[0].legs) && routes[0].legs.length >= 2,
+      JSON.stringify(routes.map((r) => ({ n: r.name, legs: r.legs?.length }))));
+    check("autorec: metrics counter bumped", bot._metrics.routesRecorded === 1);
+    check("autorec: journaled with name_route hint", journal.kinds("note").some((n) => /route recorded/.test(n.text) && /name_route/.test(n.text)),
+      JSON.stringify(journal.entries.slice(-3)));
+    // A FAILED goto must not be saved (routes-are-experience discipline).
+    bot._onTravelStart({ kind: "goto", label: "bad", to: { ns: 41, ew: 33 } });
+    await new Promise((r) => setTimeout(r, 150));
+    pose = { objCellId: 0xa9b40019, x: 60, y: 10, z: 50 };
+    ticks.forEach((f) => f());
+    bot._onTravelDone({ kind: "goto", label: "bad", result: { ok: false, state: "FAILED" }, mission: null });
+    await new Promise((r) => setTimeout(r, 250));
+    check("autorec: failed goto NOT saved", at.listRoutes().length === 1);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {
