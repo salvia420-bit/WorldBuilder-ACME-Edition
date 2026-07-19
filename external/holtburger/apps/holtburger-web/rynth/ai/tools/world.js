@@ -16,6 +16,7 @@ import {
   isEnvCellId,
   nearestCell,
   findPath,
+  findExitPath,
   toLegs,
   buildStitchedGraphFromWasm,
 } from "../../indoor_router.js";
@@ -144,7 +145,16 @@ async function indoorLegsTo(bot, guid) {
   if (!pose || !tp) return null;
   const pc = pose.objCellId >>> 0;
   const tc = tp.objCellId >>> 0;
-  if (!isEnvCellId(pc) || !isEnvCellId(tc)) return null; // an endpoint is outdoors
+  // Boundary crossings (soak-14): a straight pursuit walks into the shop
+  // wall. When exactly one endpoint is indoors, route via the building's
+  // exit portal — the same graph machinery as exit_building, walked in the
+  // appropriate direction (enter: door-outside point -> exit cell -> ... ->
+  // target; leave: own cell -> ... -> exit cell -> door-outside point ->
+  // target). Live driver: "open_vendor" on Arwic's Scrivener of War Magic —
+  // town vendors stand INSIDE their shops.
+  if (!isEnvCellId(pc) && isEnvCellId(tc)) return enterLegsTo(bot, tc, tp);
+  if (isEnvCellId(pc) && !isEnvCellId(tc)) return leaveLegsTo(bot, pc, pose, tp);
+  if (!isEnvCellId(pc) || !isEnvCellId(tc)) return null; // both outdoors: straight pursuit
   if (pc === tc) return null; // same room: straight pursuit is proven
   const graph = await indoorGraphFor(bot, [pc, tc]);
   if (!graph) return null;
@@ -270,6 +280,75 @@ async function walkRoute(bot, legs) {
       if (wasRunning) kernel.start();
     } catch {}
   }
+}
+
+/** asMap-lite for the two boundary helpers (graphs here are always Maps). */
+const nodeOf = (graph, id) => (graph instanceof Map ? graph.get(id) : graph[id]);
+
+/**
+ * "Just outside the door" waypoint for an exit-bearing cell: project ~9
+ * units past the exit cell's anchor along the inside->door direction, then
+ * bin the point into its outdoor LandCell (gid_to_lcoord inverse — same
+ * math as dungeon_nav.exitRoute). insideRef = an inside reference position
+ * (previous path cell's anchor, or the target when the path is one cell).
+ */
+function doorOutsidePoint(exitNode, insideRef) {
+  let dx = exitNode.pos.x - insideRef.x;
+  let dy = exitNode.pos.y - insideRef.y;
+  const len = Math.hypot(dx, dy);
+  if (len > 0.01) { dx /= len; dy /= len; } else { dx = 0; dy = 1; }
+  const wx = exitNode.pos.x + dx * 9;
+  const wy = exitNode.pos.y + dy * 9;
+  const lbx = Math.floor(wx / 192), lby = Math.floor(wy / 192);
+  const cx = Math.floor((wx - lbx * 192) / 24), cy = Math.floor((wy - lby * 192) / 24);
+  return {
+    lb: (((lbx & 0xff) << 24) | ((lby & 0xff) << 16) | (cx * 8 + cy + 1)) >>> 0,
+    x: wx - lbx * 192,
+    y: wy - lby * 192,
+    z: exitNode.pos.z,
+  };
+}
+
+/** OUTDOOR player -> INDOOR target: door-outside point, exit cell, interior path, target. */
+async function enterLegsTo(bot, tc, tp) {
+  const graph = await indoorGraphFor(bot, [tc]);
+  if (!graph) return null;
+  const has = (id) => (graph instanceof Map ? graph.has(id) : id in graph);
+  const to = (has(tc) ? tc : 0) || nearestCell(graph, worldX(tc, tp.x), worldY(tc, tp.y), tp.z);
+  if (!to) return null;
+  const exit = findExitPath(graph, to); // path is [to .. exitCell]
+  if (!exit) return null;
+  const walkOrder = exit.path.slice().reverse(); // exitCell .. to
+  const exitNode = nodeOf(graph, exit.exitCell);
+  if (!exitNode) return null;
+  const insideRef = walkOrder.length > 1 ? nodeOf(graph, walkOrder[1])?.pos : { x: worldX(tc, tp.x), y: worldY(tc, tp.y) };
+  if (!insideRef) return null;
+  const legs = [doorOutsidePoint(exitNode, insideRef), ...toLegs(graph, walkOrder, { midpoints: true })];
+  legs.pop(); // target cell centre -> the object's actual position
+  legs.push({ lb: tc, x: tp.x, y: tp.y, z: tp.z });
+  return legs;
+}
+
+/** INDOOR player -> OUTDOOR target: interior path to exit cell, door-outside point, target. */
+async function leaveLegsTo(bot, pc, pose, tp) {
+  const graph = await indoorGraphFor(bot, [pc]);
+  if (!graph) return null;
+  const has = (id) => (graph instanceof Map ? graph.has(id) : id in graph);
+  const from = (has(pc) ? pc : 0) || nearestCell(graph, worldX(pc, pose.x), worldY(pc, pose.y), pose.z);
+  if (!from) return null;
+  const exit = findExitPath(graph, from); // path is [from .. exitCell]
+  if (!exit) return null;
+  const exitNode = nodeOf(graph, exit.exitCell);
+  if (!exitNode) return null;
+  const insideRef =
+    exit.path.length > 1
+      ? nodeOf(graph, exit.path[exit.path.length - 2])?.pos
+      : { x: worldX(pc, pose.x), y: worldY(pc, pose.y) };
+  if (!insideRef) return null;
+  const legs = toLegs(graph, exit.path, { midpoints: true }).slice(1); // drop own cell centre
+  legs.push(doorOutsidePoint(exitNode, insideRef));
+  legs.push({ lb: tp.objCellId >>> 0, x: tp.x, y: tp.y, z: tp.z });
+  return legs;
 }
 
 /** Cross-room leg walk when applicable; null tag when routing didn't engage. */

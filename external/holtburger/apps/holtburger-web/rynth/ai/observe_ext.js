@@ -77,7 +77,7 @@ function enrich(bot, base, { now = Date.now(), maxChars = 6000, state = null, tr
     `focus: ${focus}`,
     nearbyLine(nearby),
     inventoryLine(inventory),
-    advancementLine(advancement),
+    advancementLine(advancement, d.uptimeMs),
     trendLine(trend),
     burdenLine(burden),
     portalLine(portals),
@@ -187,8 +187,15 @@ function probeAdvancement(bot) {
   };
 }
 
-function advancementLine(a) {
+function advancementLine(a, uptimeMs) {
   if (!a) return `advancement: ${NA}`;
+  // Hydration caveat (soak-14): a check-in ~30s after a reload read the
+  // stats plane before CharacterDescription fully landed ("L1, 0 credits")
+  // and the model spent XP off the bogus numbers. Early in a session the
+  // line carries an explicit do-not-trust marker instead of silently
+  // presenting defaults as truth.
+  if (Number.isFinite(uptimeMs) && uptimeMs < 90_000 && (a.level == null || a.level <= 1))
+    return `advancement: STILL STREAMING (fresh session, stats not hydrated) — do NOT spend XP or credits this check-in`;
   const parts = [`L${a.level}`, `unspentXP=${a.unspentXp}`, `skillCredits=${a.skillCredits ?? NA}`];
   if (a.end != null) parts.push(`End=${a.end}${a.hp ? `(HP ${a.hp.current}/${a.hp.max})` : ""}`);
   if (a.self != null) parts.push(`Self=${a.self}${a.mana ? `(Mana ${a.mana.current}/${a.mana.max})` : ""}`);
