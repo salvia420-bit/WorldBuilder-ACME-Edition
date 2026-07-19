@@ -16,10 +16,26 @@ same static-artifact pattern as the dist shards.
 GET  /health -> {"ok":true,"tiles":25,"portals":817}
 POST /route  {"from":{"lb":<u32 objCellId>,"x":f,"y":f,"z":f},
               "to":{"lb":u32,"x":f,"y":f,"z":f} | {"ns":<deg>,"ew":<deg>}}
-  -> {"ok":true,"legs":[{"lb":u32,"x":f,"y":f,"z":f,"portal":bool,"label":s}],
-      "estUnits":f,"portalsUsed":n,"coverage":"detour"|"straight"|"mixed"}
+  -> {"ok":true,"legs":[{"lb":u32,"x":f,"y":f,"z":f,"portal":bool,"stitch":bool,"label":s}],
+      "estUnits":f,"portalsUsed":n,"coverage":"detour"|"straight"|"mixed",
+      "stitchedLegs":n,"partial":bool}
   -> {"ok":false,"error":"..."}   (planning failure is still HTTP 200)
 ```
+
+**Contract v2 (additive, backward-compatible).** As of v2 the sidecar flags legs the
+Detour mesh could not validate so the client can treat them differently (the in-page
+`rynth/global_router.js` consumes these fields — a straight `stitch` leg may cut
+through a carved obstacle, e.g. Arwic's city wall):
+- **`legs[].stitch`** — `true` for a straight-line stitch leg (out-of-coverage or
+  gap-closing fallback), `false` for a validated Detour leg. Older fields unchanged.
+- **`stitchedLegs`** — count of legs with `stitch:true`.
+- **`partial`** — `true` when at least one walk segment was not fully covered by the
+  Detour mesh and had to be closed with a straight stitch to reach its goal (a Detour
+  path that ended short of the goal, or a wholly out-of-coverage segment). A clean
+  end-to-end on-mesh route is `partial:false`. **A short-fall no longer masquerades as
+  `coverage:"detour"`:** a Detour plan that gains a terminal stitch becomes
+  `coverage:"mixed"` (any stitch present => at least "mixed"), and the stitched tail
+  now reaches the requested goal instead of silently stopping ≤15 m short.
 
 Error taxonomy (batch-2 input hardening — all carry CORS headers, all JSON):
 - **200 `{ok:false}`** — planning failures (unroutable, out-of-coverage) AND `from==to`

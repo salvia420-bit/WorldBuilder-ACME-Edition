@@ -58,8 +58,21 @@ const check = (name, cond, detail = "") => {
   const legs = Array.isArray(res.legs) ? res.legs : [];
   check("legs.length>0", legs.length > 0, `legs=${legs.length}`);
   console.log(
-    `plan: ${legs.length} legs, estUnits=${res.estUnits}, portalsUsed=${res.portalsUsed}, coverage=${res.coverage}`
+    `plan: ${legs.length} legs, estUnits=${res.estUnits}, portalsUsed=${res.portalsUsed}, coverage=${res.coverage}, stitchedLegs=${res.stitchedLegs}, partial=${res.partial}`
   );
+
+  // ── contract v2: per-leg stitch flag + top-level stitchedLegs/partial ────
+  check("every leg has boolean stitch", legs.every((l) => typeof l.stitch === "boolean"));
+  const stitched = legs.filter((l) => l.stitch === true).length;
+  check("top-level stitchedLegs is a number", typeof res.stitchedLegs === "number", `got ${typeof res.stitchedLegs}`);
+  check("stitchedLegs matches per-leg count", res.stitchedLegs === stitched, `top=${res.stitchedLegs} legs=${stitched}`);
+  check("top-level partial is a boolean", typeof res.partial === "boolean", `got ${typeof res.partial}`);
+  // Coverage/stitch consistency: any stitch => at least "mixed"; a clean "detour" is stitch-free.
+  if (res.coverage === "detour") {
+    check("coverage detour => 0 stitches, not partial", stitched === 0 && res.partial === false, `stitches=${stitched} partial=${res.partial}`);
+  } else {
+    check("non-detour coverage => stitchedLegs>0 || partial", stitched > 0 || res.partial === true, `cov=${res.coverage} stitches=${stitched} partial=${res.partial}`);
+  }
 
   // Per-leg sanity: finite fields, landblock-local x,y in [0,192).
   let sane = true;

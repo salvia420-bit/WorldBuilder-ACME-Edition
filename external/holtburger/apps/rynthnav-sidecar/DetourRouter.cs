@@ -43,6 +43,8 @@ public sealed class Leg
     public uint Lb;          // full 32-bit objCellId with correct outdoor cell in low 16 bits
     public float X, Y, Z;    // landblock-local AC Z-up metres (0..192)
     public bool Portal;
+    public bool Stitch;      // contract v2: true = straight-line stitch (EmitStraightSeamSplit),
+                             // NOT a validated Detour leg — may cut through carved obstacles.
     public string Label = "";
 }
 
@@ -54,6 +56,13 @@ public sealed class RouteOutcome
     public double EstUnits;
     public int PortalsUsed;
     public string Coverage = "detour"; // "detour" | "straight" | "mixed"
+    // contract v2:
+    public int StitchedLegs;           // count of legs with Stitch==true
+    public bool Partial;               // at least one walk segment was not fully covered by the
+                                       // Detour mesh and was closed with a straight stitch to
+                                       // reach its goal (terminal short-fall OR full out-of-
+                                       // coverage fallback). A clean end-to-end on-mesh route
+                                       // has Partial==false.
 }
 
 public sealed class DetourRouter
@@ -62,7 +71,11 @@ public sealed class DetourRouter
     private const int DefaultMaxTiles = 1024;   // RynthNavPlugin.cs:34 had 256; env RYNTHNAV_MAX_TILES overrides
     private const int MaxCorridorTiles = 220;   // RynthNavPlugin.cs:35
     private const double MaxStrideM = 40.0;     // executor progress-watchdog contract
-    private const double TerminalGapM = 15.0;   // string-pull endpoint farther than this from target => straight tail
+    // contract v2: string-pull endpoint farther than this from the segment goal => close the
+    // remainder with a FLAGGED straight stitch (was 15.0 and silently accepted the short
+    // endpoint below that; the defect-1 wall-crossing gap was 12.5 m). ~4 m sits just above the
+    // client's 3 m arrival radius, so a sub-4 m gap is within arrival tolerance and left as-is.
+    private const double TerminalStitchGapM = 4.0;
 
     private readonly string _navDir;
     private readonly int _maxTiles;             // RYNTHNAV_MAX_TILES (see header)
@@ -249,7 +262,7 @@ public sealed class DetourRouter
             res.EstUnits = est;
             res.PortalsUsed = used;
 
-            bool anyDetour = false, anyStraight = false;
+            bool anyDetour = false, anyStraight = false, anyPartial = false;
             var cur = start;
             for (int i = 0; i < steps.Count; i++)
             {
@@ -260,7 +273,7 @@ public sealed class DetourRouter
                     ? goal
                     : new WorldPt(DegToWorld(stp.Ew), DegToWorld(stp.Ns), cur.Z);
 
-                cur = AppendSegment(cur, target, res.Legs, stp.UsePortal, stp.Label, ref anyDetour, ref anyStraight);
+                cur = AppendSegment(cur, target, res.Legs, stp.UsePortal, stp.Label, ref anyDetour, ref anyStraight, ref anyPartial);
 
                 if (stp.UsePortal)
                 {
@@ -271,7 +284,11 @@ public sealed class DetourRouter
                 }
             }
             if (res.Legs.Count == 0) { res.Error = "plan produced no legs (start == goal?)"; return res; }
+            // Any stitch present => at least "mixed"; the terminal-gap fix flips a would-be
+            // "detour" plan to "mixed" the moment it gains a terminal stitch (anyStraight set).
             res.Coverage = anyDetour && anyStraight ? "mixed" : anyDetour ? "detour" : "straight";
+            res.StitchedLegs = res.Legs.Count(l => l.Stitch);
+            res.Partial = anyPartial;
             res.Ok = true;
             return res;
         }
@@ -288,7 +305,7 @@ public sealed class DetourRouter
 
     /// <summary>Fine-path one walk segment. Returns the actual segment end point.</summary>
     private WorldPt AppendSegment(WorldPt from, WorldPt to, List<Leg> legs, bool portalArrival, string label,
-        ref bool anyDetour, ref bool anyStraight)
+        ref bool anyDetour, ref bool anyStraight, ref bool anyPartial)
     {
         LoadCorridor(from, to);
         var filter = new DtQueryDefaultFilter();
@@ -328,11 +345,17 @@ public sealed class DetourRouter
                     EmitStride(legs, prev, wp);
                     prev = wp;
                 }
-                // Partial corridor (target tile missing / FindPath partial): straight tail.
-                if (Dist2D(prev, to) > TerminalGapM)
+                // Partial corridor (target tile missing / FindPath partial / carved-obstacle
+                // island edge): the string-pulled endpoint sits short of the segment goal.
+                // Contract v2: close the remainder with a FLAGGED straight stitch whenever the
+                // gap exceeds the arrival radius, instead of silently returning the short
+                // endpoint as ok Detour coverage (defect 1). A sub-4 m gap is within the
+                // client's arrival tolerance and is accepted as-is.
+                if (Dist2D(prev, to) > TerminalStitchGapM)
                 {
                     EmitStraightSeamSplit(legs, prev, to);
                     anyStraight = true;
+                    anyPartial = true;   // a Detour segment ended short and was closed by a stitch
                     prev = to;
                 }
                 end = prev;
@@ -340,6 +363,7 @@ public sealed class DetourRouter
             else
             {
                 anyStraight = true;
+                anyPartial = true;       // no usable Detour path: whole segment is an out-of-coverage stitch
                 EmitStraightSeamSplit(legs, from, to);
                 end = to;
             }
@@ -347,6 +371,7 @@ public sealed class DetourRouter
         else
         {
             anyStraight = true;
+            anyPartial = true;           // start/goal off-mesh: whole segment is an out-of-coverage stitch
             EmitStraightSeamSplit(legs, from, to);
             end = to;
         }
@@ -382,11 +407,14 @@ public sealed class DetourRouter
             legs.Add(WorldToLeg(Lerp(a, b, (double)i / n)));
     }
 
-    /// <summary>Straight-fallback legs: split at landblock seams, then enforce the ~40 m stride.</summary>
+    /// <summary>Straight-fallback legs: split at landblock seams, then enforce the ~40 m stride.
+    /// Every leg produced here is flagged <see cref="Leg.Stitch"/> (contract v2) — a straight
+    /// stitch, not a validated Detour leg.</summary>
     private static void EmitStraightSeamSplit(List<Leg> legs, WorldPt a, WorldPt b)
     {
         double d = Dist2D(a, b);
         if (d < 0.01) return;
+        int start = legs.Count;
         var ts = new List<double>();
         CollectSeamTs(a.Wx, b.Wx, ts);
         CollectSeamTs(a.Wy, b.Wy, ts);
@@ -402,6 +430,7 @@ public sealed class DetourRouter
             cur = pt;
             prevT = t;
         }
+        for (int i = start; i < legs.Count; i++) legs[i].Stitch = true;
     }
 
     /// <summary>t values in (0,1) where the coordinate crosses a 192 m landblock seam.</summary>
