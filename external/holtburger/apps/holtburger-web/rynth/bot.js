@@ -86,10 +86,18 @@ export async function createGrindBot(sessionHandle, config = {}) {
   // PRIOR run state when the walk completes (or fails) — a goto issued
   // while the kernel was deliberately stopped must not restart the grind.
   let globalRouter = null;
+  let composeGoto = null; // outdoor<->indoor goto composition (goto_compose.js)
   if (config.nav) {
     const gr = await import(`${base}/global_router.js`);
     globalRouter = new gr.GlobalRouter(host, { endpoint: config.nav.endpoint });
+    const gc = await import(`${base}/goto_compose.js`);
+    composeGoto = gc.composeGoto;
   }
+  // Concurrency guard for doGoto that also covers INDOOR-only compositions:
+  // globalRouter.busy is only set while an OUTDOOR (sidecar) phase runs, so an
+  // indoor exit/enter walk would otherwise leave the latch clear. Set for the
+  // whole doGoto duration; a second goto is refused while it is up.
+  let composeActive = false;
   // Short human label for a travel target — mission line + journal reasons.
   const gotoLabel = (to) =>
     to && typeof to === "object"
@@ -98,11 +106,20 @@ export async function createGrindBot(sessionHandle, config = {}) {
         : `0x${((to.lb ?? 0) >>> 0).toString(16).toUpperCase()}`
       : "?";
 
+  // doGoto composes outdoor (sidecar) and indoor (EnvCell A*) routing via
+  // goto_compose.js: it walks OUT of a building first when the bot starts
+  // indoors, walks IN to an EnvCell goal after the outdoor approach, and does a
+  // pure indoor A* for a same-landblock indoor->indoor hop. Neither end indoors
+  // => the outdoor path is IDENTICAL to before. DROP LIMITATION (carried from
+  // indoor_router.js:34-37): indoor A*/exit routing prunes every drop/jump edge
+  // (no jump primitive), so a goal or exit reachable only by a drop fails
+  // honestly ({ok:false, error:"indoor graph unavailable"|"...unreachable"}).
   const doGoto = async (to, opts) => {
     if (!globalRouter) return { ok: false, error: "nav not configured (config.nav)" };
     // Refuse BEFORE touching the kernel: a rejected second goto must not
-    // stop/restart the kernel out from under the goto that owns it.
-    if (globalRouter.busy) return { ok: false, error: "goto already active" };
+    // stop/restart the kernel out from under the goto that owns it. composeActive
+    // covers indoor-only phases where globalRouter.busy is momentarily clear.
+    if (globalRouter.busy || composeActive) return { ok: false, error: "goto already active" };
     // Last command wins over a raw travel() in progress.
     const rs = router.status.state;
     if (rs === "WALK" || rs === "PORTAL") {
@@ -117,10 +134,25 @@ export async function createGrindBot(sessionHandle, config = {}) {
     bot.mission = { kind: "goto", label, to, startedAt: Date.now(), interrupts: 0 };
     try { bot._onTravelStart?.({ kind: "goto", label, to }); } catch { /* hook must not break travel */ }
     let r = null;
+    composeActive = true;
     try {
-      r = await globalRouter.goto(router, to, opts);
+      r = await composeGoto(
+        {
+          host,
+          router,
+          outdoorGoto: (t, o) => globalRouter.goto(router, t, o),
+          // In-page the EnvCell graph builder resolves fetchEnvCellsInLandblock
+          // off window.liveScene3d (indoor_router.js); a headless/nullRender bot
+          // supplies it via config.nav.fetchEnvCells instead.
+          ...(config.nav.fetchEnvCells ? { fetchEnvCells: config.nav.fetchEnvCells } : {}),
+          log: (m) => (config.nav.log || (() => {}))(`[gnav-compose] ${m}`),
+        },
+        to,
+        opts,
+      );
       return r;
     } finally {
+      composeActive = false;
       if (wasRunning) kernel.start();
       const m = bot.mission;
       bot.mission = null;

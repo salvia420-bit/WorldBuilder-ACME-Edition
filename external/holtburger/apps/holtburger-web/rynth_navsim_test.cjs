@@ -729,6 +729,46 @@ if (typeof URL.createObjectURL !== "function") URL.createObjectURL = () => "blob
       }
     });
 
+    // B6 — indoor composition end-to-end through bot.goto: a same-landblock
+    // indoor->indoor hop drives the REAL RynthRouter over an injected EnvCell
+    // graph (config.nav.fetchEnvCells), no sidecar call. Dungeon lb 0x01a9;
+    // cells along y=32458 so the world sim walks A(202)->B(212)->C(222).
+    await t("B6", "bot.goto indoor same-landblock: exit-free indoor A* walked via real router", async () => {
+      const LBI = 0x01a90000, AX = LBI | 0x100, BX = LBI | 0x101, CX = LBI | 0x102;
+      const cells = [
+        [AX, 202, 32458, 0, [BX]],
+        [BX, 212, 32458, 0, [AX, CX]],
+        [CX, 222, 32458, 0, [BX]],
+      ];
+      const placements = cells.map(([id, x, y, z, nb]) => ({
+        cellId: id, cellOriginX: x, cellOriginY: y, cellOriginZ: z,
+        takePortalCellIds: () => nb.slice(), free() {},
+      }));
+      let fetched = 0;
+      const st = world({ wx: 202, wy: 32458, speed: 8 }); // start at AX's world point
+      const sess = session(st);
+      sess.getCurrentCellId = () => AX >>> 0;            // wasm indoor-cell probe
+      sess.isCurrentCellIndoor = () => true;
+      const bot = await BOT.createGrindBot(sess, {
+        ...BOTCFG,
+        nav: { endpoint: "http://127.0.0.1:8767", fetchEnvCells: async (lb) => { fetched++; return ((lb >>> 0) & 0xffff0000) === LBI ? placements : null; } },
+      });
+      try {
+        let routeCallsBefore = routeCalls;
+        sidecar = async () => legsPayload([]); // must NOT be consulted indoors
+        const r = await bot.goto({ lb: CX >>> 0, x: 30, y: 10, z: 0 }, BGOPTS);
+        assert.equal(r.ok, true, JSON.stringify(r));
+        assert.equal(r.composed, true, "went through composition");
+        assert.equal(r.coverage, "indoor", "pure indoor coverage");
+        assert.equal(routeCalls, routeCallsBefore, "sidecar never queried for an indoor same-lb hop");
+        assert.ok(fetched >= 1, "EnvCell graph was built from the injected fetch");
+        assert.ok(Math.hypot(st.wx - 222, st.wy - 32458) < 4, `arrived at the goal cell (${st.wx.toFixed(0)},${st.wy.toFixed(0)})`);
+        assert.equal(bot.kernel._running, true, "kernel restored after the indoor goto");
+      } finally {
+        bot.stop();
+      }
+    });
+
     const tell = (bot, sender, body) => bot.host._dispatchEvent({ kind: 2, stringPayload: `${sender} tells you, "${body}"` });
 
     await t("C1", "bug2 regression: control goto routes and reports arrival", async () => {
