@@ -792,6 +792,13 @@ export class ExplorePressureController {
     const neighbors = (curNode?.neighbors || []).map((n) => Number(n) >>> 0).filter((id) => nodes.has(id));
     if (!neighbors.length) return;
     const target = neighbors.find((id) => !visited.has(id)) ?? neighbors[0]; // all seen -> revisit nearest neighbor
+    // Mark the TARGET visited at attempt time, not on arrival — a hop that
+    // never lands (blocked stair, refused MoveToPosition) otherwise re-picks
+    // the same cell every tick forever (live 2026-07-20: four consecutive
+    // sweeps to 0xa9b4015f). Failed hops now advance through the neighbor
+    // list; the ?? revisit arm plus the hop-cap stand-down bound the worst
+    // case when every neighbor is unreachable.
+    visited.add(target);
     let legs = null;
     try { legs = this.ir.toLegs(graph, [cur, target]); } catch { legs = null; }
     const leg = Array.isArray(legs) ? legs[legs.length - 1] : null;
