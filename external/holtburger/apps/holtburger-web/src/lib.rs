@@ -164,22 +164,32 @@ fn parse_faithful_transition_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "faithfulTransition=on")
 }
 
-/// FU-3 (2026-07-20): parse `?faithfulEntityCollision=on` (or
-/// `&faithfulEntityCollision=on`). Same exact-`=on` opt-in shape as
-/// `parse_faithful_transition_flag` (default OFF; only the literal `=on`
-/// enables — avoids the flag-default footgun). When on (and
-/// `?faithfulTransition` is also on) the live faithful slice clamps the
-/// realized lateral residual against collidable dynamic entities
-/// (doors/monsters/players), which the faithful driver otherwise never blocks;
-/// ethereal/IGNORE_COLLISIONS entities are exempt. Native carrier:
-/// `USE_FAITHFUL_ENTITY_COLLISION` (movement/system.rs). Needs a wasm rebuild;
-/// NO manifest bump (no new JS-visible export).
+/// FU-3 (2026-07-20): parse `?faithfulEntityCollision=off` (or
+/// `&faithfulEntityCollision=off`). PROMOTED DEFAULT-ON later the same day
+/// (was exact-`=on` opt-in): promotion bar met via the offline A/B suite
+/// (system/tests.rs `mod faithful_entity_collision`: flag-off walks through a
+/// closed door pinning the parity gap; flag-on stops at the cylinder; ethereal
+/// door passes), hours of live stream soak with the arm on and zero observed
+/// regressions, plus a live functional block measured at the Holtburg grocer
+/// door 0x7A9B401F (closed/collidable 0x10008: run-forward stopped ~0.95 m
+/// short of the door plane with lateral cylinder slide; opening set ETHEREAL
+/// 0x1000C on the wire). Off-escape shape mirrors
+/// `parse_faithful_outdoor_flag`: returns `true` UNLESS the literal `=off` is
+/// present. When on (and `?faithfulTransition` is also on) the live faithful
+/// slice clamps the realized lateral residual against collidable dynamic
+/// entities (doors/monsters/players), which the faithful driver otherwise
+/// never blocks; ethereal/IGNORE_COLLISIONS entities are exempt (NB: academy
+/// training doors carry IGNORE_COLLISIONS even closed — intentionally
+/// passable, never blocked). Native carrier stays `false`
+/// (`USE_FAITHFUL_ENTITY_COLLISION`, movement/system.rs) so this parser is the
+/// single default authority and `=off` genuinely disables. Needs a wasm
+/// rebuild; NO manifest bump (no new JS-visible export).
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_faithful_entity_collision_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed
+    !trimmed
         .split('&')
-        .any(|kv| kv == "faithfulEntityCollision=on")
+        .any(|kv| kv == "faithfulEntityCollision=off")
 }
 
 /// Phase 3 Phase D (2026-06-28): parse `?faithfulOutdoor=off` (or
@@ -6275,7 +6285,7 @@ fn walk_setup_parts_with_geom<S: holtburger_dat::ResourceSource + ?Sized>(
 /// `num_pts < 3`, silently skip vertices that don't resolve (rare
 /// dat corruption). Triangles are returned in part-local-post-part-
 /// frame coords; caller applies the placement transform.
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 /// Per-part static physics BSP carried out of [`walk_setup_parts_with_geom_and_bsp`].
 /// `tree`/`polys` live in the part's GfxObj-LOCAL space; `offset`/`rot` are the
 /// part's frame within the SetupModel (already nested-composed by the walker).
@@ -6292,7 +6302,7 @@ struct StaticPartBsp {
 /// (when present), so 0x02 SetupModel statics get per-part precise collision
 /// under `USE_STATIC_BSP` — matching the 0x01 single-GfxObj path. Returns one
 /// `(Aabb, Option<StaticPartBsp>)` per part, index-parallel to `setup.parts`.
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn walk_setup_parts_with_geom_and_bsp<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     setup_id: u32,
@@ -27282,9 +27292,10 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_faithful_transition_flag(""));
     }
 
-    /// FU-3: `?faithfulEntityCollision=on` parse shape (exact `=on` opt-in).
+    /// FU-3 (promoted DEFAULT-ON 2026-07-20): `?faithfulEntityCollision=off`
+    /// off-escape shape — true unless the literal `=off` is present.
     #[test]
-    fn faithful_entity_collision_flag_parses_only_exact_on_value() {
+    fn faithful_entity_collision_flag_default_on_with_off_escape() {
         use super::parse_faithful_entity_collision_flag;
         assert!(parse_faithful_entity_collision_flag(
             "?faithfulEntityCollision=on"
@@ -27295,8 +27306,12 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_faithful_entity_collision_flag(
             "?faithfulEntityCollision=off"
         ));
-        assert!(!parse_faithful_entity_collision_flag("?faithfulTransition=on"));
-        assert!(!parse_faithful_entity_collision_flag(""));
+        assert!(!parse_faithful_entity_collision_flag(
+            "?faithfulTransition=on&faithfulEntityCollision=off"
+        ));
+        // DEFAULT-ON: absent flag reads enabled.
+        assert!(parse_faithful_entity_collision_flag("?faithfulTransition=on"));
+        assert!(parse_faithful_entity_collision_flag(""));
     }
 
     /// Phase 3 Phase D: `?faithfulOutdoor=off` DEFAULT-ON off-escape shape.
@@ -55640,6 +55655,87 @@ mod tests_p11_dead_pose_bake {
         // The fragment's Dead is a real 30 fps collapse clip — must stay one.
         let frag = frag.as_ref().unwrap();
         assert!(frag.num_frames > 1, "fragment Dead lost its collapse clip");
+    }
+}
+
+// Stab-BSP (2026-07-20): native regression coverage for the Stab→Setup→GfxObj
+// per-part static-physics recursion (`walk_setup_parts_with_geom_and_bsp` +
+// `StaticPartBsp`, landed 2026-06-28 / 46a1e697 + ba7ed2a8, fed into
+// `CELL_STATIC_BSP_PENDING` by the 0x02 SetupModel arm of the indoor stab
+// walk — see the `match (stab.stab_id >> 24) as u8 { 0x02 => ... }` block).
+// This landed live in the wasm build but had zero test coverage: both the
+// struct and the walker were `#[cfg(target_arch = "wasm32")]`-only, so
+// native `cargo test` could never exercise them, which let stale docs
+// (route_validate.rs, the rynth HANDOFF notes) keep re-describing the
+// recursion as "deferred". Widened both to
+// `#[cfg(any(target_arch = "wasm32", test))]` (matching the sibling
+// `walk_setup_parts_with_geom`) so this module can run natively against the
+// real base DATs.
+//
+// Grocer venue (0xA9B4016A) Setup stabs, keyed by their single-GfxObj part's
+// physics-poly count (found via WB.Terminal `chorizite-parse-dat-record`):
+//   0x02000121 -> part 0x010006c1, 6 physics polys  -> BSP must be Some
+//   0x020001bc -> part 0x01000621, 0 physics polys  -> BSP must be None
+//   0x0200010a -> part 0x01000695, 0 physics polys  -> BSP must be None
+// The zero-poly cases pin the must-not-substitute rule: a part with a
+// `physics_bsp` tree but an EMPTY `physics_polygons` map must not stage a
+// bogus/empty BSP (mirrors the `!gfx.physics_polygons.is_empty()` guard in
+// both `walk_setup_parts_with_geom_and_bsp` and the 0x01 GfxObj-inline arm
+// at the call site). Skips (passes) when the base DATs aren't on the box.
+#[cfg(test)]
+mod tests_stab_bsp_recursion {
+    use super::*;
+
+    fn portal_db() -> Option<holtburger_dat::DatDatabase> {
+        let home = std::env::var("HOME").ok()?;
+        let p = std::path::PathBuf::from(home).join("ac_base_dats/client_portal.dat");
+        if !p.exists() {
+            eprintln!("[stab-bsp] SKIP — {} missing", p.display());
+            return None;
+        }
+        holtburger_dat::DatDatabase::new(&p).ok()
+    }
+
+    #[test]
+    fn grocer_stab_with_physics_polys_yields_part_bsp() {
+        let Some(db) = portal_db() else { return };
+        let parts = walk_setup_parts_with_geom_and_bsp(&db, 0x0200_0121)
+            .expect("0x02000121 must walk (grocer Setup stab with a physics-bearing part)");
+        assert_eq!(parts.len(), 1, "expected exactly 1 part for 0x02000121");
+        let (_aabb, bsp) = &parts[0];
+        let bsp = bsp
+            .as_ref()
+            .expect("part 0 (0x010006c1) has 6 physics polys — BSP must be Some");
+        assert!(
+            !bsp.polys.is_empty(),
+            "part 0 BSP resolved but its polys map is empty"
+        );
+    }
+
+    #[test]
+    fn grocer_stab_with_no_physics_polys_leaves_part_bsp_none() {
+        let Some(db) = portal_db() else { return };
+        let parts = walk_setup_parts_with_geom_and_bsp(&db, 0x0200_01bc)
+            .expect("0x020001bc must walk (grocer Setup stab, zero-poly part)");
+        assert_eq!(parts.len(), 1, "expected exactly 1 part for 0x020001bc");
+        let (_aabb, bsp) = &parts[0];
+        assert!(
+            bsp.is_none(),
+            "part 0 (0x01000621) has 0 physics polys — BSP must stay None, not substitute"
+        );
+    }
+
+    #[test]
+    fn second_grocer_stab_with_no_physics_polys_leaves_part_bsp_none() {
+        let Some(db) = portal_db() else { return };
+        let parts = walk_setup_parts_with_geom_and_bsp(&db, 0x0200_010a)
+            .expect("0x0200010a must walk (grocer Setup stab, zero-poly part)");
+        assert_eq!(parts.len(), 1, "expected exactly 1 part for 0x0200010a");
+        let (_aabb, bsp) = &parts[0];
+        assert!(
+            bsp.is_none(),
+            "part 0 (0x01000695) has 0 physics polys — BSP must stay None, not substitute"
+        );
     }
 }
 
