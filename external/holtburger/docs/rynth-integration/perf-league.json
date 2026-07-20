@@ -1,22 +1,122 @@
 {
-  "generatedAt": "2026-07-20T03:06:29.184Z",
+  "generatedAt": "2026-07-20T04:35:56.908Z",
   "source": "agg.jsonl",
-  "samples": 182,
-  "dropped": 1,
+  "samples": 559,
+  "dropped": 0,
   "ranked": [
     {
-      "lb": "0xa9b4",
-      "samples": 11,
-      "dwellSec": 100.7,
-      "decodeVol": 93,
-      "decodeRate": 8,
-      "decodeMs": 41754,
+      "lb": "0x7d64",
+      "samples": 24,
+      "dwellSec": 235.8,
+      "decodeVol": 1454,
+      "decodeRate": 63,
+      "decodeMs": 271173,
       "maxQueueMs": null,
-      "wasmMB_max": 121.4,
+      "wasmMB_max": 636.3,
       "wasmMB_grow": 0,
-      "p95_med": 616.7,
-      "draw_med": 3282,
-      "baked_max": 95,
+      "p95_med": 216.7,
+      "draw_med": 1829,
+      "baked_max": 31,
+      "waypoint": {
+        "lb": 2103705613,
+        "x": 31.899999618530273,
+        "y": 104.5999984741211,
+        "z": 11.904999732971191
+      }
+    },
+    {
+      "lb": "0xa0a4",
+      "samples": 27,
+      "dwellSec": 260.4,
+      "decodeVol": 1039,
+      "decodeRate": 33,
+      "decodeMs": 273774,
+      "maxQueueMs": null,
+      "wasmMB_max": 636.3,
+      "wasmMB_grow": 0,
+      "p95_med": 383.4,
+      "draw_med": 4337,
+      "baked_max": 25,
+      "waypoint": {
+        "lb": 2695102517,
+        "x": 145.16015625,
+        "y": 100.611328125,
+        "z": 50
+      }
+    },
+    {
+      "lb": "0xa2a3",
+      "samples": 19,
+      "dwellSec": 187.7,
+      "decodeVol": 1022,
+      "decodeRate": 55,
+      "decodeMs": 208657,
+      "maxQueueMs": null,
+      "wasmMB_max": 636.3,
+      "wasmMB_grow": 0,
+      "p95_med": 266.6,
+      "draw_med": 127,
+      "baked_max": 28,
+      "waypoint": {
+        "lb": 2728591392,
+        "x": 86.83203125,
+        "y": 185.302734375,
+        "z": 96.49853515625
+      }
+    },
+    {
+      "lb": "0xcd92",
+      "samples": 26,
+      "dwellSec": 244.3,
+      "decodeVol": 449,
+      "decodeRate": 17,
+      "decodeMs": 208822,
+      "maxQueueMs": null,
+      "wasmMB_max": 636.3,
+      "wasmMB_grow": 0,
+      "p95_med": 533.3,
+      "draw_med": 2226,
+      "baked_max": 20,
+      "waypoint": {
+        "lb": 3448897544,
+        "x": 9.86328125,
+        "y": 184.087890625,
+        "z": 25.33450698852539
+      }
+    },
+    {
+      "lb": "0xe63e",
+      "samples": 27,
+      "dwellSec": 242,
+      "decodeVol": 148,
+      "decodeRate": 5,
+      "decodeMs": 132898,
+      "maxQueueMs": 132,
+      "wasmMB_max": 196.8,
+      "wasmMB_grow": 0,
+      "p95_med": 1149.9,
+      "draw_med": 433,
+      "baked_max": 130,
+      "waypoint": {
+        "lb": 3862822946,
+        "x": 96.95999908447266,
+        "y": 37.72200012207031,
+        "z": 74.5469970703125
+      }
+    },
+    {
+      "lb": "0xa9b4",
+      "samples": 15,
+      "dwellSec": 135.9,
+      "decodeVol": 138,
+      "decodeRate": 10,
+      "decodeMs": 57501,
+      "maxQueueMs": 132,
+      "wasmMB_max": 1058.4,
+      "wasmMB_grow": 937,
+      "p95_med": 583.3,
+      "draw_med": 3235,
+      "baked_max": 351,
       "waypoint": {
         "lb": 2847146009,
         "x": 84,
@@ -25,23 +125,143 @@
       }
     },
     {
-      "lb": "0x8a02",
-      "samples": 48,
-      "dwellSec": 454.8,
-      "decodeVol": 58,
-      "decodeRate": 1,
-      "decodeMs": 14688,
+      "lb": "0xbb9f",
+      "samples": 47,
+      "dwellSec": 448.5,
+      "decodeVol": 104,
+      "decodeRate": 2,
+      "decodeMs": 328111,
+      "maxQueueMs": 132,
+      "wasmMB_max": 1286.7,
+      "wasmMB_grow": 650.4,
+      "p95_med": 1550,
+      "draw_med": 2429,
+      "baked_max": 542,
+      "waypoint": {
+        "lb": 3147759663,
+        "x": 143.41015625,
+        "y": 147.740234375,
+        "z": 59.0648078918457
+      }
+    },
+    {
+      "lb": "0xa1a4",
+      "samples": 2,
+      "dwellSec": 18.6,
+      "decodeVol": 87,
+      "decodeRate": 47,
+      "decodeMs": 19277,
       "maxQueueMs": null,
       "wasmMB_max": 636.3,
-      "wasmMB_grow": 514.9,
-      "p95_med": 116.8,
-      "draw_med": 1024,
+      "wasmMB_grow": 0,
+      "p95_med": 449.9,
+      "draw_med": 2183,
+      "baked_max": 25,
+      "waypoint": {
+        "lb": 2711879721,
+        "x": 139.333984375,
+        "y": 0.994140625,
+        "z": 59.834495544433594
+      }
+    },
+    {
+      "lb": "0xc892",
+      "samples": 27,
+      "dwellSec": 220.8,
+      "decodeVol": 86,
+      "decodeRate": 3,
+      "decodeMs": 152797,
+      "maxQueueMs": null,
+      "wasmMB_max": 636.3,
+      "wasmMB_grow": 0,
+      "p95_med": 1849.9,
+      "draw_med": 782,
+      "baked_max": 418,
+      "waypoint": {
+        "lb": 3365011459,
+        "x": 2.76171875,
+        "y": 67.783203125,
+        "z": 5.897396087646484
+      }
+    },
+    {
+      "lb": "0x8a02",
+      "samples": 72,
+      "dwellSec": 666.6,
+      "decodeVol": 83,
+      "decodeRate": 1,
+      "decodeMs": 20674,
+      "maxQueueMs": 132,
+      "wasmMB_max": 1058.4,
+      "wasmMB_grow": 937,
+      "p95_med": 266.6,
+      "draw_med": 1257,
       "baked_max": 416,
       "waypoint": {
         "lb": 2315387410,
         "x": 58.63909912109375,
         "y": -89.92310333251953,
         "z": 6.010000228881836
+      }
+    },
+    {
+      "lb": "0x016c",
+      "samples": 55,
+      "dwellSec": 502.2,
+      "decodeVol": 57,
+      "decodeRate": 1,
+      "decodeMs": 40814,
+      "maxQueueMs": 132,
+      "wasmMB_max": 1058.4,
+      "wasmMB_grow": 422.1,
+      "p95_med": 1133.4,
+      "draw_med": 139,
+      "baked_max": 407,
+      "waypoint": {
+        "lb": 23855546,
+        "x": 51.26365661621094,
+        "y": -19.021484375,
+        "z": 0
+      }
+    },
+    {
+      "lb": "0x545a",
+      "samples": 19,
+      "dwellSec": 177.3,
+      "decodeVol": 57,
+      "decodeRate": 1,
+      "decodeMs": 11321,
+      "maxQueueMs": null,
+      "wasmMB_max": 636.3,
+      "wasmMB_grow": -439.5,
+      "p95_med": 150.1,
+      "draw_med": 110,
+      "baked_max": 15,
+      "waypoint": {
+        "lb": 1415184700,
+        "x": 10,
+        "y": -50,
+        "z": 6.010000228881836
+      }
+    },
+    {
+      "lb": "0x0007",
+      "samples": 44,
+      "dwellSec": 378.7,
+      "decodeVol": 56,
+      "decodeRate": 1,
+      "decodeMs": 122512,
+      "maxQueueMs": 132,
+      "wasmMB_max": 1286.7,
+      "wasmMB_grow": 650.4,
+      "p95_med": 199.9,
+      "draw_med": 280,
+      "baked_max": 356,
+      "waypoint": {
+        "lb": 459073,
+        "x": 73.99002075195312,
+        "y": -37.758544921875,
+        "z": 0
       }
     },
     {
@@ -65,6 +285,66 @@
       }
     },
     {
+      "lb": "0xc29f",
+      "samples": 21,
+      "dwellSec": 207.3,
+      "decodeVol": 54,
+      "decodeRate": 2,
+      "decodeMs": 139619,
+      "maxQueueMs": 132,
+      "wasmMB_max": 1058.4,
+      "wasmMB_grow": 0,
+      "p95_med": 1883.3,
+      "draw_med": 5408,
+      "baked_max": 318,
+      "waypoint": {
+        "lb": 3265200190,
+        "x": 168.91796875,
+        "y": 140.8359375,
+        "z": 7.999999523162842
+      }
+    },
+    {
+      "lb": "0xce94",
+      "samples": 7,
+      "dwellSec": 63.6,
+      "decodeVol": 47,
+      "decodeRate": 4,
+      "decodeMs": 58373,
+      "maxQueueMs": null,
+      "wasmMB_max": 636.3,
+      "wasmMB_grow": 0,
+      "p95_med": 566.7,
+      "draw_med": 3584,
+      "baked_max": 174,
+      "waypoint": {
+        "lb": 3465805877,
+        "x": 150.46484375,
+        "y": 112.1015625,
+        "z": 17.461252212524414
+      }
+    },
+    {
+      "lb": "0xa9b2",
+      "samples": 26,
+      "dwellSec": 218.5,
+      "decodeVol": 41,
+      "decodeRate": 1,
+      "decodeMs": 55041,
+      "maxQueueMs": null,
+      "wasmMB_max": 636.3,
+      "wasmMB_grow": 0,
+      "p95_med": 1566.6,
+      "draw_med": 2794,
+      "baked_max": 490,
+      "waypoint": {
+        "lb": 2847014915,
+        "x": 5.203125,
+        "y": 70.4453125,
+        "z": 63.604820251464844
+      }
+    },
+    {
       "lb": "0xa8b0",
       "samples": 7,
       "dwellSec": 51.8,
@@ -85,43 +365,23 @@
       }
     },
     {
-      "lb": "0xa9b2",
-      "samples": 17,
-      "dwellSec": 143.6,
-      "decodeVol": 32,
-      "decodeRate": 1,
-      "decodeMs": 40680,
+      "lb": "0xcd93",
+      "samples": 2,
+      "dwellSec": 19.5,
+      "decodeVol": 35,
+      "decodeRate": 18,
+      "decodeMs": 16617,
       "maxQueueMs": null,
       "wasmMB_max": 636.3,
       "wasmMB_grow": 0,
-      "p95_med": 1533.3,
-      "draw_med": 2717,
-      "baked_max": 490,
+      "p95_med": 583.3,
+      "draw_med": 2407,
+      "baked_max": 18,
       "waypoint": {
-        "lb": 2847014915,
-        "x": 5.203125,
-        "y": 70.4453125,
-        "z": 63.604820251464844
-      }
-    },
-    {
-      "lb": "0x016c",
-      "samples": 31,
-      "dwellSec": 273.2,
-      "decodeVol": 32,
-      "decodeRate": 1,
-      "decodeMs": 38044,
-      "maxQueueMs": null,
-      "wasmMB_max": 636.3,
-      "wasmMB_grow": 0,
-      "p95_med": 1216.6,
-      "draw_med": 127,
-      "baked_max": 407,
-      "waypoint": {
-        "lb": 23855546,
-        "x": 51.26365661621094,
-        "y": -19.021484375,
-        "z": 0
+        "lb": 3448963118,
+        "x": 137.15625,
+        "y": 123.638671875,
+        "z": 31.42972755432129
       }
     },
     {
@@ -165,6 +425,46 @@
       }
     },
     {
+      "lb": "0xc3a1",
+      "samples": 2,
+      "dwellSec": 19.3,
+      "decodeVol": 17,
+      "decodeRate": 9,
+      "decodeMs": 8112,
+      "maxQueueMs": 132,
+      "wasmMB_max": 1058.4,
+      "wasmMB_grow": 0,
+      "p95_med": 616.6,
+      "draw_med": 354,
+      "baked_max": 243,
+      "waypoint": {
+        "lb": 3282108464,
+        "x": 136.26171875,
+        "y": 183.833984375,
+        "z": 17.31957244873047
+      }
+    },
+    {
+      "lb": "0xc5a8",
+      "samples": 2,
+      "dwellSec": 19.9,
+      "decodeVol": 15,
+      "decodeRate": 14,
+      "decodeMs": 7779,
+      "maxQueueMs": 132,
+      "wasmMB_max": 1058.4,
+      "wasmMB_grow": 422.1,
+      "p95_med": 1949.9,
+      "draw_med": 290,
+      "baked_max": 411,
+      "waypoint": {
+        "lb": 3316121656,
+        "x": 152.015625,
+        "y": 174.78515625,
+        "z": 42
+      }
+    },
+    {
       "lb": "0xa9b1",
       "samples": 3,
       "dwellSec": 24.9,
@@ -185,6 +485,66 @@
       }
     },
     {
+      "lb": "0xc88f",
+      "samples": 2,
+      "dwellSec": 16.5,
+      "decodeVol": 10,
+      "decodeRate": 5,
+      "decodeMs": 15039,
+      "maxQueueMs": null,
+      "wasmMB_max": 636.3,
+      "wasmMB_grow": 0,
+      "p95_med": 1716.6,
+      "draw_med": 1758,
+      "baked_max": 468,
+      "waypoint": {
+        "lb": 3364814907,
+        "x": 172.6953125,
+        "y": 66.396484375,
+        "z": 3.0999999046325684
+      }
+    },
+    {
+      "lb": "0xc891",
+      "samples": 2,
+      "dwellSec": 17.2,
+      "decodeVol": 10,
+      "decodeRate": 5,
+      "decodeMs": 14386,
+      "maxQueueMs": null,
+      "wasmMB_max": 636.3,
+      "wasmMB_grow": 0,
+      "p95_med": 1483.2,
+      "draw_med": 1204,
+      "baked_max": 436,
+      "waypoint": {
+        "lb": 3364945939,
+        "x": 61.3046875,
+        "y": 60.97265625,
+        "z": 4
+      }
+    },
+    {
+      "lb": "0xc98e",
+      "samples": 2,
+      "dwellSec": 17,
+      "decodeVol": 10,
+      "decodeRate": 6,
+      "decodeMs": 14086,
+      "maxQueueMs": null,
+      "wasmMB_max": 636.3,
+      "wasmMB_grow": 0,
+      "p95_med": 1633.3,
+      "draw_med": 3107,
+      "baked_max": 525,
+      "waypoint": {
+        "lb": 3381526545,
+        "x": 49.98765563964844,
+        "y": 22.852481842041016,
+        "z": 4
+      }
+    },
+    {
       "lb": "0xe921",
       "samples": 2,
       "dwellSec": 19.3,
@@ -202,6 +562,26 @@
         "x": 179.3125,
         "y": 64.0107421875,
         "z": 18.66573715209961
+      }
+    },
+    {
+      "lb": "0xc98c",
+      "samples": 2,
+      "dwellSec": 17.3,
+      "decodeVol": 5,
+      "decodeRate": 3,
+      "decodeMs": 17737,
+      "maxQueueMs": null,
+      "wasmMB_max": 636.3,
+      "wasmMB_grow": 0,
+      "p95_med": 1599.8,
+      "draw_med": 5366,
+      "baked_max": 539,
+      "waypoint": {
+        "lb": 3381395496,
+        "x": 113.6640625,
+        "y": 190.259765625,
+        "z": 22.009998321533203
       }
     },
     {

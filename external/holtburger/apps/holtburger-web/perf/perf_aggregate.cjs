@@ -23,7 +23,10 @@ function parseSamples(text) {
     if (!ln) continue;
     var obj;
     try { obj = JSON.parse(ln); } catch (e) { dropped++; continue; }
-    if (!obj || !obj.dt || obj.dt.p95 == null) { dropped++; continue; }
+    // Keep a sample if it carries EITHER a frame-time OR bake data. Decode-stall
+    // windows freeze rAF (frames=0 → no dt) — those are the WORST decode windows
+    // and must not be dropped now that the axis is decode/residency, not p95.
+    if (!obj || (!(obj.dt && obj.dt.p95 != null) && !obj.bake)) { dropped++; continue; }
     samples.push(obj);
   }
   return { samples: samples, dropped: dropped };
