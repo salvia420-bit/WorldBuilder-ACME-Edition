@@ -3412,6 +3412,52 @@ fn test_self_object_create_preserves_player_description_properties() {
 }
 
 #[test]
+fn test_self_object_create_does_not_wipe_player_inventory() {
+    // Hardening (2026-07-20): a self ObjectCreate (guid == player guid) routes
+    // through inventory::handle_message's ObjectCreate arm, which calls
+    // sync_player_ownership_for_entity unconditionally. The player entity has
+    // no container_id/wielder_id, so held/wielded both compute false and the
+    // recursive removal would strip the player guid + its whole contained
+    // subtree (carried items + coins) from player.inventory. ACE self-heals on
+    // relog (item re-stream) but a mid-session self-recreate WITHOUT item
+    // resend (cloak/decloak) would leave inventory empty forever. The guid ==
+    // player.guid guard prevents that.
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x50000045);
+    let item_guid = Guid(0x60000045);
+
+    state.player.guid = player_guid;
+    state.entities.insert(Entity::new(
+        player_guid,
+        "Player".to_string(),
+        WorldPosition::default(),
+    ));
+
+    // A pyreal-like item held by the player: container_id == player guid and
+    // present in the client-side inventory set.
+    let mut item = Entity::new(item_guid, "Pyreal".to_string(), WorldPosition::default());
+    item.set_container_id(Some(player_guid));
+    item.position.landblock_id = Guid::NULL;
+    state.entities.insert(item);
+    state.player.add_to_inventory(item_guid);
+    assert!(
+        state.player.inventory.contains(&item_guid),
+        "precondition: item starts in player inventory"
+    );
+
+    // Act: feed a self ObjectCreate through the real routing fall-through
+    // (player self-create arm returns false → inventory arm runs).
+    let mut data = ObjectDescriptionData::with_guid(player_guid);
+    data.public_weenie_desc.name = Some("Player".to_string());
+    let _ = state.handle_message(&GameMessage::ObjectCreate(Box::new(data)));
+
+    assert!(
+        state.player.inventory.contains(&item_guid),
+        "self ObjectCreate must not wipe the player's own inventory"
+    );
+}
+
+#[test]
 fn test_get_level_info_derives_level_from_xp_when_property_absent() {
     // Belt-and-braces for any wipe path the upsert re-seed misses: a level-0
     // read with a real XP table derives the level from TotalExperience

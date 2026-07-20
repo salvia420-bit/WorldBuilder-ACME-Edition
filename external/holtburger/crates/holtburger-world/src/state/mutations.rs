@@ -566,6 +566,17 @@ impl WorldState {
     }
 
     pub(crate) fn sync_player_ownership_for_entity(&mut self, guid: Guid) {
+        // Invariant: the player is never an item in its own inventory, so it
+        // must never be reconciled through the ownership path. A self
+        // ObjectCreate (guid == player guid) lands here with container_id and
+        // wielder_id both unset → held/wielded compute false → the recursive
+        // pass below would remove the player guid AND its whole contained
+        // subtree (every carried item + coins) from `player.inventory`,
+        // wiping the client-side inventory set. Guard it at the top.
+        if guid == self.player.guid {
+            return;
+        }
+
         let Some((container_id, wielder_id, equip_mask)) = self.entities.get(guid).map(|entity| {
             (
                 entity.container_id(),
