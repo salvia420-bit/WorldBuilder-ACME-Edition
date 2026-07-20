@@ -237,6 +237,17 @@ impl MovementSystemHandle {
         self.inner.set_faithful_transition(on);
     }
 
+    /// FU-3 (2026-07-20): install the `?faithfulEntityCollision=on` runtime
+    /// carrier (default-OFF). When on (and `?faithfulTransition` is also on),
+    /// the live faithful slice clamps the realized lateral residual against
+    /// collidable dynamic entities (doors/monsters/players) — the faithful
+    /// driver otherwise never blocks against them. Ethereal/IGNORE_COLLISIONS
+    /// entities are exempt (`Entity::is_collidable`). Forwards to
+    /// `MovementSystem::set_faithful_entity_collision`.
+    pub fn set_faithful_entity_collision(&mut self, on: bool) {
+        self.inner.set_faithful_entity_collision(on);
+    }
+
     /// Phase 3 Phase D (2026-06-28): install the `?faithfulOutdoor=off` runtime
     /// carrier (default-ON outdoor-faithful; `=off` rolls the OUTDOOR terrain
     /// path back to the heightfield). Read only when `?faithfulTransition` is

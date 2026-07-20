@@ -436,9 +436,16 @@ impl CObjCell for SceneObjCell {
                 return env;
             }
         }
-        // Object/static collisions (Phase C). Entities are not tested in-cell
-        // here (the cell adapter has no `TransitionEnv`/scene handle — matching
-        // the indoor path; `entity_colliders_near` runs in the live pipeline).
+        // Object/static collisions (Phase C). Dynamic ENTITIES are not tested
+        // in-cell here: the cell adapter has no `TransitionEnv`/scene handle, so
+        // the faithful driver collides only cell env-BSP + baked cell statics.
+        // Dynamic-entity collision for the live faithful path is marshalled ONE
+        // level up, in `finish_manual_slice_via_transition` (movement/system.rs)
+        // under `USE_FAITHFUL_ENTITY_COLLISION` (default-OFF, FU-3 2026-07-20):
+        // it clamps the realized lateral residual via `entity_colliders_near` +
+        // `clamp_delta_against_entities` after this driver resolves geometry.
+        // (The legacy `open_door_exclusion_aabbs`/exclusion-AABB path is a
+        // separate, legacy-only mechanism and does not run here.)
         self.find_obj_collisions(transition)
     }
 

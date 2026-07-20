@@ -666,6 +666,41 @@ const USE_FAITHFUL_OUTDOOR: bool = true;
 /// base of a walkable up-slope (the climb-on vs stop-at-base A/B rollback).
 const USE_FAITHFUL_STEPUP: bool = true;
 
+/// FU-3 (2026-07-20) — dynamic-object (entity) collision arm for the LIVE
+/// faithful `CTransition` driver. The faithful branch of
+/// [`holtburger_world::spatial::transition::find_transitional_position_dispatch`]
+/// collides ONLY the cell env-BSP + baked cell statics; dynamic entities
+/// (doors, monsters, players) NEVER block the local player there — a parity
+/// gap versus retail, where `CObjCell::find_obj_collisions` sweeps resident
+/// dynamic objects too. When on, the live faithful slice
+/// ([`Self::finish_manual_slice_via_transition`]) clamps the REALIZED lateral
+/// residual against collidable entity cylinders
+/// ([`holtburger_world::spatial::clamp_delta_against_entities`]) AFTER the
+/// dispatch resolves terrain/env/static geometry + grounding.
+///
+/// Ethereal exemption is free: the gather honors
+/// [`holtburger_world::entity::Entity::is_collidable`] (false for
+/// `ETHEREAL | IGNORE_COLLISIONS`, retail acclient.c ~316196-316299), so an
+/// OPEN (ethereal) door is exempt and a CLOSED (collidable) door blocks. The
+/// `IGNORE_CREATURES` object-state gate is honored too (mirrors
+/// `GeometryCaches::gather`).
+///
+/// ONE feature, TWO carriers (mirrors [`USE_UNIFIED_TRANSITION`]): this const
+/// (native default) + a runtime carrier
+/// ([`MovementSystem::faithful_entity_collision_runtime`]). Effective
+/// predicate: [`MovementSystem::faithful_entity_collision_enabled`]. The clamp
+/// is read ONLY when [`Self::faithful_transition_enabled`] is also on (it fills
+/// the faithful driver's gap; the non-faithful pipeline already clamps entities
+/// per-step inside `insert_check_offset`).
+///
+/// `false` (DEFAULT): the live faithful path is unchanged — entities do not
+/// block (the pinned parity gap). `true`: entities block laterally.
+///
+/// The clamp touches the XY residual ONLY: the vertical grounding /
+/// contact-plane / `frames_stationary_fall` state derived from the transition
+/// `outcome` is left untouched, so a blocked entity cannot corrupt grounding.
+const USE_FAITHFUL_ENTITY_COLLISION: bool = false;
+
 /// (2026-06-30) — extend the faithful driver's persistent `ON_WALKABLE`
 /// grounded-latch to OUTDOOR poses standing on a resident static/building
 /// surface (e.g. a building ROOF), so jumping onto a roof STAYS instead of
@@ -1442,6 +1477,10 @@ pub(crate) struct MovementSystem {
     /// [`USE_FAITHFUL_TRANSITION`] const by
     /// [`Self::faithful_transition_enabled`]. Default `false`.
     faithful_transition_runtime: bool,
+    /// FU-3 (2026-07-20) — runtime carrier of the faithful-driver
+    /// entity-collision arm. OR'd with the [`USE_FAITHFUL_ENTITY_COLLISION`]
+    /// const by [`Self::faithful_entity_collision_enabled`]. Default `false`.
+    faithful_entity_collision_runtime: bool,
     /// Phase 3 Phase D (2026-06-28) — runtime carrier of the
     /// `?faithfulOutdoor=off` URL flag. `None` = use the
     /// [`USE_FAITHFUL_OUTDOOR`] const default (ON); `Some(false)` forces the
@@ -1801,6 +1840,7 @@ impl MovementSystem {
             movement_managers: HashMap::new(),
             unified_transition_runtime: false,
             faithful_transition_runtime: false,
+            faithful_entity_collision_runtime: false,
             faithful_outdoor_runtime: None,
             faithful_stepup_runtime: None,
             outdoor_static_grounding_runtime: None,
@@ -1841,6 +1881,13 @@ impl MovementSystem {
     /// `parse_faithful_transition_flag`); this is the runtime entry it targets.
     pub(crate) fn set_faithful_transition(&mut self, on: bool) {
         self.faithful_transition_runtime = on;
+    }
+
+    /// FU-3 (2026-07-20) — install the faithful-driver entity-collision runtime
+    /// carrier (see [`USE_FAITHFUL_ENTITY_COLLISION`]). Default-off; test A/B
+    /// and any future URL-flag plumbing target this entry.
+    pub(crate) fn set_faithful_entity_collision(&mut self, on: bool) {
+        self.faithful_entity_collision_runtime = on;
     }
 
     /// Phase 3 Phase D (2026-06-28) — install the `?faithfulOutdoor=off` runtime
@@ -2664,6 +2711,14 @@ impl MovementSystem {
     /// [`Self::finish_manual_slice_via_transition`]) via the dispatcher.
     pub(crate) fn faithful_transition_enabled(&self) -> bool {
         USE_FAITHFUL_TRANSITION || self.faithful_transition_runtime
+    }
+
+    /// FU-3 — the effective faithful-driver entity-collision predicate, read at
+    /// the live faithful slice ([`Self::finish_manual_slice_via_transition`]).
+    /// Meaningful ONLY when [`Self::faithful_transition_enabled`] is also on (it
+    /// fills the faithful driver's dynamic-entity gap).
+    pub(crate) fn faithful_entity_collision_enabled(&self) -> bool {
+        USE_FAITHFUL_ENTITY_COLLISION || self.faithful_entity_collision_runtime
     }
 
     /// Phase 3 Phase D — the effective OUTDOOR-faithful predicate. Read ONLY
@@ -6199,6 +6254,58 @@ impl MovementSystem {
             self.faithful_stepup_enabled(),
         );
         let mut pose = outcome.pose;
+        // FU-3 (2026-07-20) — dynamic-entity collision arm for the LIVE faithful
+        // driver (USE_FAITHFUL_ENTITY_COLLISION, default-off). The faithful
+        // branch of `find_transitional_position_dispatch` collides only cell
+        // env-BSP + baked cell statics; dynamic entities (doors, monsters,
+        // players) never block here. When on, clamp the REALIZED lateral
+        // residual against collidable entity cylinders, mirroring where the
+        // non-faithful chain applies `clamp_delta_against_entities` per-step
+        // inside `insert_check_offset` (transition.rs). CRITICAL: XY-only — the
+        // grounding/contact-plane/frames_stationary_fall state derived from
+        // `outcome` below reads `outcome`, never `pose`, so a blocked entity
+        // cannot corrupt grounding. `Entity::is_collidable` already exempts
+        // ETHEREAL|IGNORE_COLLISIONS (an open door passes for free); the
+        // IGNORE_CREATURES object-state gate is honored like GeometryCaches.
+        if self.faithful_transition_enabled()
+            && self.faithful_entity_collision_enabled()
+            && object.state
+                & holtburger_world::spatial::transition::object_info_state::IGNORE_CREATURES
+                == 0
+        {
+            use holtburger_world::spatial::transition::TransitionEnv as _;
+            // Same prefilter shape as `GeometryCaches::gather` (transition.rs):
+            // realized/requested travel + radius + 2m slack.
+            let prefilter = leash_delta.length() + object.radius + 2.0;
+            let colliders = world.entity_colliders_near(
+                &input.begin,
+                prefilter,
+                object.self_guid,
+                gates.skip_parented_entities,
+            );
+            if !colliders.is_empty() {
+                let begin_g = input.begin.global_coords();
+                let realized_g = pose.global_coords();
+                // Lateral residual the transition actually realized (global XY;
+                // z carried at 0 — entity collision is lateral only).
+                let lateral = Vector3::new(
+                    realized_g.x - begin_g.x,
+                    realized_g.y - begin_g.y,
+                    0.0,
+                );
+                let clamped = holtburger_world::spatial::clamp_delta_against_entities(
+                    &colliders,
+                    &input.begin,
+                    lateral,
+                    object.radius,
+                );
+                // Apply only the CORRECTION. Landblocks are axis-aligned, so a
+                // global-XY delta equals a local-XY delta — safe to add to the
+                // realized pose's local coords without a rebucket. Z untouched.
+                pose.coords.x += clamped.x - lateral.x;
+                pose.coords.y += clamped.y - lateral.y;
+            }
+        }
         // InitLastKnownContactPlane equivalent — a step with no wall
         // leaves the prior tracked plane intact.
         if let Some(n) = outcome.wall_normal {

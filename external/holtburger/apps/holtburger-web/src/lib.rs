@@ -164,6 +164,24 @@ fn parse_faithful_transition_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "faithfulTransition=on")
 }
 
+/// FU-3 (2026-07-20): parse `?faithfulEntityCollision=on` (or
+/// `&faithfulEntityCollision=on`). Same exact-`=on` opt-in shape as
+/// `parse_faithful_transition_flag` (default OFF; only the literal `=on`
+/// enables — avoids the flag-default footgun). When on (and
+/// `?faithfulTransition` is also on) the live faithful slice clamps the
+/// realized lateral residual against collidable dynamic entities
+/// (doors/monsters/players), which the faithful driver otherwise never blocks;
+/// ethereal/IGNORE_COLLISIONS entities are exempt. Native carrier:
+/// `USE_FAITHFUL_ENTITY_COLLISION` (movement/system.rs). Needs a wasm rebuild;
+/// NO manifest bump (no new JS-visible export).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_faithful_entity_collision_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed
+        .split('&')
+        .any(|kv| kv == "faithfulEntityCollision=on")
+}
+
 /// Phase 3 Phase D (2026-06-28): parse `?faithfulOutdoor=off` (or
 /// `&faithfulOutdoor=off`). DEFAULT-ON, off-escape shape (mirrors
 /// `parse_unified_tick_flag`): returns `true` UNLESS `faithfulOutdoor=off` is
@@ -27252,6 +27270,23 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_faithful_transition_flag(""));
     }
 
+    /// FU-3: `?faithfulEntityCollision=on` parse shape (exact `=on` opt-in).
+    #[test]
+    fn faithful_entity_collision_flag_parses_only_exact_on_value() {
+        use super::parse_faithful_entity_collision_flag;
+        assert!(parse_faithful_entity_collision_flag(
+            "?faithfulEntityCollision=on"
+        ));
+        assert!(parse_faithful_entity_collision_flag(
+            "?faithfulTransition=on&faithfulEntityCollision=on"
+        ));
+        assert!(!parse_faithful_entity_collision_flag(
+            "?faithfulEntityCollision=off"
+        ));
+        assert!(!parse_faithful_entity_collision_flag("?faithfulTransition=on"));
+        assert!(!parse_faithful_entity_collision_flag(""));
+    }
+
     /// Phase 3 Phase D: `?faithfulOutdoor=off` DEFAULT-ON off-escape shape.
     #[test]
     fn faithful_outdoor_flag_defaults_on_off_escape() {
@@ -37568,6 +37603,14 @@ async fn recv_loop(
     // the approximate flat-triangle pipeline, byte-identical; see
     // `parse_faithful_transition_flag`.
     movement.set_faithful_transition(parse_faithful_transition_flag(&js_location_search()));
+    // FU-3 (2026-07-20): `?faithfulEntityCollision=on` — clamp the live faithful
+    // slice's realized lateral residual against collidable dynamic entities
+    // (doors/monsters/players) the faithful driver otherwise never blocks.
+    // Default OFF (the pinned parity gap); ethereal/IGNORE_COLLISIONS entities
+    // are exempt. Read only when `?faithfulTransition` is also on; see
+    // `parse_faithful_entity_collision_flag`.
+    movement
+        .set_faithful_entity_collision(parse_faithful_entity_collision_flag(&js_location_search()));
     // Phase 3 Phase D (2026-06-28): `?faithfulOutdoor=off` — roll the faithful
     // driver's OUTDOOR terrain path back to the approximate heightfield (default
     // ON). Read only when `?faithfulTransition` is also on; see

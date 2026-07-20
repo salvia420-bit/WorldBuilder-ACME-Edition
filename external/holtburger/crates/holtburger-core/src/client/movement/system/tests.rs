@@ -8156,3 +8156,148 @@ async fn cmd_interp_hold_run_edge_installs_gait() {
     };
     assert_eq!(gait, Gait::Run, "Shift release restores the run gait");
 }
+
+// ── FU-3 (2026-07-20) — dynamic-entity collision arm for the LIVE faithful
+// driver (USE_FAITHFUL_ENTITY_COLLISION, default-OFF). ─────────────────────
+//
+// Drives the LIVE faithful slice (`finish_manual_slice_via_transition`, the
+// same entry the manual-drive tick funnels into) over a synthetic FLAT outdoor
+// landblock where the faithful `CTransition` outdoor driver runs (terrain
+// resident → no delegation to the entity-aware approximate pipeline) and
+// permits the full forward walk. The only thing that can stop the mover short
+// is the FU-3 clamp. A collidable door-like cylinder sits 1.2 m ahead in the
+// path; the mover requests a 2 m eastward step.
+//
+// A/B is driven by the runtime setter (`set_faithful_entity_collision`) inside
+// ONE test binary: flag OFF pins today's parity gap (the faithful driver never
+// blocks dynamic entities → the mover passes THROUGH the closed door), flag ON
+// stops it at the cylinder. A THIRD arm sets the entity ETHEREAL: even with the
+// flag ON it passes through, because `Entity::is_collidable()` exempts
+// ETHEREAL|IGNORE_COLLISIONS (an OPEN door is exempt for free — matching retail
+// `set_ethereal`).
+mod faithful_entity_collision {
+    use super::*;
+    use holtburger_common::properties::PhysicsState;
+
+    // Outdoor landblock (0x02,0x02): global origin (384, 384); cell 0x0001 keeps
+    // `is_indoors()` false. Flat terrain at z = 50 across the whole 9x9 grid.
+    const LB_ID: u32 = 0x0202_0001;
+    const LB_KEY: u32 = 0x0202_0000;
+    const FLAT_Z: f32 = 50.0;
+    const PLAYER_GX: f32 = 480.0; // origin 384 + local 96 (GY is the same: 480)
+
+    fn begin_pose() -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(LB_ID),
+            coords: Vector3::new(96.0, 96.0, FLAT_Z),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    /// Run one live faithful manual slice with a door-like cylinder 1.2 m east of
+    /// the player, requesting a 2 m eastward step. Returns the realized global-x
+    /// advance (final global x − begin global x).
+    fn run_slice(entity_collision_on: bool, ethereal: bool) -> f32 {
+        let mut world = WorldState::synthetic();
+        let guid = Guid(0x5000_0777);
+        world.player.guid = guid;
+
+        // Flat terrain, seeded on BOTH the WorldState floor sampler and the scene
+        // (the latter drives faithful-outdoor residency + terrain triangles).
+        world.populate_terrain_heights(LB_KEY, [FLAT_Z; 81]);
+        world.scene.populate_terrain_heights(LB_KEY, [FLAT_Z; 81]);
+
+        let pose = begin_pose();
+        world.seed_local_player_entity(guid, "Player", pose);
+        let _ = world.set_local_player_runtime_pose(pose);
+        world.player.land(); // grounded, not airborne
+
+        let capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 2.0, 1.0);
+
+        // Door-like obstacle: default entity (radius = PLAYER_CAPSULE_RADIUS 0.4,
+        // no gfx) at global (481.2, 480). Combined radius 0.8 → contact when the
+        // player centre reaches x = 481.2 − 0.8 = 480.4 (≈ 0.4 m of travel).
+        let mut door = Entity::new(
+            Guid(0x6000_0001),
+            "Door".to_string(),
+            WorldPosition {
+                landblock_id: Guid(LB_ID),
+                coords: Vector3::new(97.2, 96.0, FLAT_Z), // global (481.2, 480)
+                rotation: Quaternion::identity(),
+            },
+        );
+        if ethereal {
+            door.physics_state = PhysicsState::ETHEREAL;
+        }
+        world.entities.insert(door);
+
+        let mut movement = MovementSystem::new();
+        movement.set_faithful_entity_collision(entity_collision_on);
+        // Sanity: the live faithful driver itself is on by default (const), which
+        // is the whole point — its outdoor arm never blocks dynamic entities.
+        assert!(
+            movement.faithful_transition_enabled(),
+            "faithful transition must be live for this parity test"
+        );
+
+        movement.finish_manual_slice_via_transition(
+            &mut world,
+            pose,
+            Vector3::new(2.0, 0.0, 0.0), // 2 m eastward request
+            0.0,
+            MotionState::builder().run().forward().build(),
+            &capabilities,
+            0.1,
+        );
+
+        let out = world
+            .local_player_runtime_pose()
+            .expect("runtime pose written back");
+        out.global_coords().x - PLAYER_GX
+    }
+
+    /// Baseline: with the flag OFF the faithful driver permits the full forward
+    /// walk and does NOT block the closed door — the mover passes THROUGH it.
+    /// This PINS today's parity gap (retail would collide the door here).
+    #[test]
+    fn flag_off_passes_through_closed_door_parity_gap() {
+        let advance = run_slice(false, false);
+        assert!(
+            advance > 1.5,
+            "parity gap: faithful driver should pass through the door with the \
+             flag off (advanced {advance:.3} m of the 2 m request)"
+        );
+    }
+
+    /// Flag ON: the closed (collidable) door blocks the mover at the cylinder —
+    /// contact is at ~0.4 m of travel (2 m − combined-radius 0.8 m from a 1.2 m
+    /// gap), so the realized advance is a small fraction of the request.
+    #[test]
+    fn flag_on_stops_at_closed_door() {
+        let advance = run_slice(true, false);
+        assert!(
+            (0.2..0.6).contains(&advance),
+            "flag on: mover should stop at the door cylinder (~0.4 m), got \
+             {advance:.3} m"
+        );
+        // And strictly less than the pass-through baseline.
+        let baseline = run_slice(false, false);
+        assert!(
+            advance < baseline - 0.5,
+            "flag on ({advance:.3} m) must stop well short of the flag-off \
+             pass-through ({baseline:.3} m)"
+        );
+    }
+
+    /// Flag ON but the door is ETHEREAL (an OPEN door): `Entity::is_collidable`
+    /// exempts it, so the mover passes through exactly as with the flag off.
+    #[test]
+    fn flag_on_ethereal_door_passes_through() {
+        let advance = run_slice(true, true);
+        assert!(
+            advance > 1.5,
+            "ethereal (open) door is exempt: mover should pass through even with \
+             the flag on (advanced {advance:.3} m)"
+        );
+    }
+}
