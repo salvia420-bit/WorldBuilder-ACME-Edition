@@ -154,25 +154,26 @@ const flush = () => new Promise((r) => setImmediate(r));
     check("tick: still suppressed a moment later", host._moves.length === 1);
   }
 
-  // ---- <=3 consecutive random hops, then stand down until a check-in ---
+  // ---- <=6 consecutive random hops, then stand down until a check-in ---
+  // (cap tuned 3->6 on 2026-07-20 — stream felt statue-y at 3)
   {
     t = 3_000_000;
     const host = mkHost(outdoorPose);
     const bot = mkBot();
     const c = new ExplorePressureController(host, mkRouter("IDLE"), IR, { isOperatorStopLatched: () => false }, { now: clock });
     c.bot = bot;
-    for (let i = 0; i < 3; i++) { t += 26_000; c.tick(); await flush(); }
-    check("stand-down: 3 consecutive hops fired", host._moves.length === 3);
+    for (let i = 0; i < 6; i++) { t += 26_000; c.tick(); await flush(); }
+    check("stand-down: 6 consecutive hops fired", host._moves.length === 6);
     t += 26_000;
     c.tick();
     await flush();
-    check("stand-down: 4th hop suppressed without director input", host._moves.length === 3);
+    check("stand-down: 7th hop suppressed without director input", host._moves.length === 6);
     // A fresh director check-in (director._lastCheckAt changes) releases it.
     bot.ai.director._lastCheckAt = Date.now();
     t += 26_000;
     c.tick();
     await flush();
-    check("stand-down: released by the next director check-in", host._moves.length === 4);
+    check("stand-down: released by the next director check-in", host._moves.length === 7);
   }
 
   // ---- priority 1: re-issue the last unreached director goto -----------

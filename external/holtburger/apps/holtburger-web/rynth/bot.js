@@ -701,8 +701,8 @@ export class ExplorePressureController {
     if (rs !== "IDLE" && rs !== "DONE" && rs !== "FAILED") return false; // an active route owns movement
     if (director._running === true || director._inflight != null) return false; // check-in in flight
     if (this._standDown) return false;
-    if (now - this._lastMoveAt < 25_000) return false;
-    if (now - this._lastStepAt < 25_000) return false; // also satisfies the <=1-step/20s cap
+    if (now - this._lastMoveAt < 12_000) return false; // tuned 25s->12s 2026-07-20 (stream felt statue-y)
+    if (now - this._lastStepAt < 15_000) return false; // tuned 25s->15s; still >= the 1-step/15s spirit of the cap
     return true;
   }
 
@@ -734,7 +734,7 @@ export class ExplorePressureController {
 
   _bumpHop() {
     this._consecutiveHops++;
-    if (this._consecutiveHops >= 3) this._standDown = true;
+    if (this._consecutiveHops >= 6) this._standDown = true; // tuned 3->6 hops 2026-07-20
   }
 
   async _step(now) {
@@ -750,7 +750,7 @@ export class ExplorePressureController {
     // period (the 25s-since-last-step gate above already enforces "once").
     const lm = this.bot.lastMission;
     if (lm && lm.kind === "goto" && lm.to != null && lm.result?.ok !== true && typeof this.bot.goto === "function") {
-      this._journalNote(`[pressure] idle 25s — re-issuing last unreached goto (${lm.label ?? "?"})`);
+      this._journalNote(`[pressure] idle — re-issuing last unreached goto (${lm.label ?? "?"})`);
       void this.bot.goto(lm.to).catch(() => {});
       return; // director input, not a random/sweep hop — _consecutiveHops untouched
     }
@@ -799,7 +799,7 @@ export class ExplorePressureController {
     if (this._routeClaimed()) return; // final abort check right before moving
     this.host.MoveToPosition(leg.lb, leg.x, leg.y, leg.z, true);
     this._bumpHop();
-    this._journalNote(`[pressure] idle 25s — indoor sweep to 0x${target.toString(16).padStart(8, "0")}${visited.has(target) ? " (revisit)" : ""}`);
+    this._journalNote(`[pressure] idle — indoor sweep to 0x${target.toString(16).padStart(8, "0")}${visited.has(target) ? " (revisit)" : ""}`);
   }
 
   _outdoorHop(pose) {
@@ -831,7 +831,7 @@ export class ExplorePressureController {
     if (this._routeClaimed()) return; // final abort check right before moving
     this.host.MoveToPosition(lb, lx, ly, pose.z, true);
     this._bumpHop();
-    this._journalNote(`[pressure] idle 25s — ${label}`);
+    this._journalNote(`[pressure] idle — ${label}`);
   }
 
   // Small LOCAL reimplementation of world.js's closed-door check
