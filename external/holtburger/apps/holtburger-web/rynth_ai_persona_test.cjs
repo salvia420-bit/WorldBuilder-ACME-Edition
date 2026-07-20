@@ -22,7 +22,10 @@ const explorerBlock = director.split("EXPLORER_SYSTEM_PROMPT")[1] || "";
 for (const section of ["ACTIONS", "REPLY CONTRACT", "MEMORY", "GROUND TRUTH", "_catalog"]) {
   check(`explorer prompt carries ${section}`, explorerBlock.includes(section));
 }
-check("explorer prompt has MISSION framing", explorerBlock.includes("Discovery is the score"));
+// 2026-07-20 operator re-aim: the explorer mission is building interiors +
+// verticality (commit e5fbc81a), not open-world discovery.
+check("explorer prompt has MISSION framing", explorerBlock.includes("MISSION — BUILDINGS, INSIDE AND UP"));
+check("explorer prompt scores interiors/verticality", explorerBlock.includes("every staircase climbed"));
 check("explorer prompt demotes combat/shopping", explorerBlock.includes("NOT goals"));
 check("explorer prompt forbids healing/vitals", explorerBlock.includes("NEVER heal"));
 check("explorer prompt has no survival section", !explorerBlock.includes("SURVIVAL FLOOR"));

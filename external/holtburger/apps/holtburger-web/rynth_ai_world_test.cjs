@@ -221,12 +221,27 @@ function makeHost() {
     [0x860201a0, { pos: { x: LBX + 50, y: LBY + 50, z: 0 }, neighbors: [0x860201b0] }],
     [0x860201b0, { pos: { x: LBX + 60, y: LBY + 50, z: 0 }, neighbors: [0x860201a0] }],
   ]);
+  // A successful (DONE) mock follow() must actually relocate the mock pose to
+  // the route's last leg — same as a real router walk — or the post-approach
+  // walk-gate (world.js walkFailedTooFar, added alongside goto_object's honest
+  // ok semantics) correctly sees the player still stranded at the start and
+  // blocks the interaction. host.__setPose lets follow() (or a per-test
+  // override of it) drive that relocation; makeIndoorHost's pose is mutable
+  // via a closure var instead of a fixed literal so it takes effect.
   function makeRouterBot(host, { routerState = "DONE" } = {}) {
     const router = {
       state: "IDLE",
       followed: null,
       walked: 0,
-      follow(legs) { this.followed = legs; this.state = routerState; this.walked = routerState === "DONE" ? legs.length : 0; },
+      follow(legs) {
+        this.followed = legs;
+        this.state = routerState;
+        this.walked = routerState === "DONE" ? legs.length : 0;
+        if (routerState === "DONE" && legs.length && typeof host.__setPose === "function") {
+          const last = legs[legs.length - 1];
+          host.__setPose({ objCellId: last.lb, x: last.x, y: last.y, z: last.z });
+        }
+      },
       cancel() { this.state = "IDLE"; },
       get done() { return this.state === "DONE" || this.state === "FAILED"; },
       get status() { return { state: this.state, leg: 0, legs: this.followed?.length ?? 0, walked: this.walked }; },
@@ -236,7 +251,9 @@ function makeHost() {
   }
   function makeIndoorHost() {
     const host = makeHost();
-    host.TryGetPlayerPose = () => ({ objCellId: 0x860201a0, x: 50, y: 50, z: 0 });
+    let pose = { objCellId: 0x860201a0, x: 50, y: 50, z: 0 };
+    host.TryGetPlayerPose = () => pose;
+    host.__setPose = (p) => { pose = p; };
     host.TryGetObjectPosition = (g) => (g === 0x5001 ? { objCellId: 0x860201b0, x: 60, y: 50, z: 0 } : null);
     return host;
   }
@@ -263,20 +280,47 @@ function makeHost() {
     const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
     check("same-cell use skips routing", r.ok && bot.router.followed === null && !String(r.result?.walk).includes("routed"), JSON.stringify(r.result));
   }
-  // router FAILED (wall wedge etc): tagged route-failed, Use still sent.
+  // router FAILED (wall wedge etc): route-failed tag, and the mock never
+  // actually moved the pose (FAILED never triggers host.__setPose) — the
+  // player is genuinely still 10m out. The walk-gate (world.js
+  // walkFailedTooFar, added alongside goto_object's honest ok semantics)
+  // must now refuse to fire rather than blindly Using from across the room.
   {
     const host = makeIndoorHost();
     const bot = makeRouterBot(host, { routerState: "FAILED" });
     const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
-    check("failed route degrades to use", r.ok && host.calls.some((c) => c[0] === "use") && String(r.result?.walk).startsWith("route-failed("), JSON.stringify(r.result));
+    check("failed route (still far) refuses to fire",
+      !r.ok && !host.calls.some((c) => c[0] === "use") && /route-failed\(/.test(r.error) && /not fired/.test(r.error),
+      JSON.stringify(r));
     check("failed route still restores kernel", bot.kernel.running === true);
   }
-  // goto_object cross-room: same seam, result carries the route tag.
+  // goto_object cross-room: same seam, result carries the route tag PLUS the
+  // final-hop mover's own tag (approach() always appends one) — here the
+  // mock's DONE follow relocates the pose to the route's last leg (the
+  // target's own position), so the final hop is a genuine "already there".
   {
     const host = makeIndoorHost();
     const bot = makeRouterBot(host);
     const r = await byType.goto_object.apply(bot, { type: "goto_object", object: "0x5001" }, { journal: makeJournal() });
-    check("goto_object routes cross-room", r.ok && bot.router.followed?.length === 2 && r.result?.walk === "routed(2)", JSON.stringify(r.result));
+    check("goto_object routes cross-room",
+      r.ok && bot.router.followed?.length === 2 && String(r.result?.walk).startsWith("routed(2)+") && r.result?.distanceM === 0,
+      JSON.stringify(r.result));
+  }
+  // goto_object: no router means no indoor routing AND this mock never
+  // simulates PursueObject's live translation — the target stays genuinely
+  // 10m off. goto_object has no separate send to gate (unlike use_object
+  // etc.) so it must report its OWN honest ok:false, with the walk tag and
+  // measured distance surfaced in result for the director to see.
+  {
+    const host = makeIndoorHost();
+    const journal = makeJournal();
+    const r = await byType.goto_object.apply({ host, indoorGraph: twoCellGraph }, { type: "goto_object", object: "0x5001" }, { journal });
+    check("goto_object ok:false on failed walk",
+      r.ok === false && r.result?.walk === "no-walk" && r.result?.distanceM === 10,
+      JSON.stringify(r));
+    check("goto_object failed-walk journal is truthful",
+      journal.entries.some((e) => /walk failed \(no-walk\)/.test(e.text) && /10m away/.test(e.text)),
+      JSON.stringify(journal.entries));
   }
   // give_item cross-room: approach routes before the give.
   {
@@ -298,7 +342,12 @@ function makeHost() {
       [0x87020100, { pos: { x: LBX2 + 10, y: LBY + 50, z: 0 }, neighbors: [0x860201b0] }],
     ]);
     const host = makeIndoorHost();
-    host.TryGetPlayerPose = () => ({ objCellId: 0x860201a0, x: 180, y: 50, z: 0 });
+    // Static-pose override REPLACES makeIndoorHost's mutable getter, so it
+    // needs its own __setPose to keep receiving the mock router's DONE
+    // relocation (otherwise the walk-gate sees a frozen 190m-short pose).
+    let pose2 = { objCellId: 0x860201a0, x: 180, y: 50, z: 0 };
+    host.TryGetPlayerPose = () => pose2;
+    host.__setPose = (p) => { pose2 = p; };
     host.TryGetObjectPosition = (g) => (g === 0x5001 ? { objCellId: 0x87020100, x: 12, y: 50, z: 0 } : null);
     const bot = makeRouterBot(host);
     bot.indoorGraph = crossLbGraph;
@@ -330,19 +379,27 @@ function makeHost() {
       r.ok && bot.router.followed?.length === 2 && String(r.result?.walk).startsWith("routed(2)+"),
       JSON.stringify(r.result));
   }
-  // no router on the bot: unchanged straight-pursuit behavior.
+  // no router on the bot: falls back to straight PursueObject dispatch (no
+  // indoor routing engaged) — but this mock never simulates PursueObject's
+  // live translation either, so the player is genuinely still 10m out and
+  // the walk-gate correctly refuses to fire (was: fired blind regardless).
   {
     const host = makeIndoorHost();
     const r = await byType.use_object.apply({ host, indoorGraph: twoCellGraph }, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
-    check("no router degrades to straight pursuit", r.ok && host.calls.some((c) => c[0] === "pursue") && !String(r.result?.walk).includes("routed"), JSON.stringify(r.result));
+    check("no router: straight pursuit dispatched, not routed",
+      host.calls.some((c) => c[0] === "pursue") && !/routed\(/.test(String(r.error)), JSON.stringify(r));
+    check("no router: still-far walk refuses to fire", !r.ok && /not fired/.test(r.error), JSON.stringify(r));
   }
-  // goto owns the router: routing yields, straight pursuit fires.
+  // goto owns the router: routing yields, straight pursuit fires — same
+  // still-far refusal as the no-router case above (routeToward bails before
+  // ever touching the router, so bot.router.followed stays null).
   {
     const host = makeIndoorHost();
     const bot = makeRouterBot(host);
     bot.globalRouter = { busy: true };
     const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
-    check("goto-active yields to straight pursuit", r.ok && bot.router.followed === null && !String(r.result?.walk).includes("routed"), JSON.stringify(r.result));
+    check("goto-active: routing yields (router untouched)", bot.router.followed === null, JSON.stringify(r));
+    check("goto-active: still-far walk refuses to fire", !r.ok && /not fired/.test(r.error) && !/routed\(/.test(r.error), JSON.stringify(r));
   }
 
   // ── new verbs (2026-07-18 verb-audit gaps) ────────────────────────────
@@ -480,6 +537,13 @@ function makeHost() {
       this.followed = legs;
       this.state = follows === 1 ? "FAILED" : "DONE";
       this.walked = follows === 1 ? 0 : legs.length;
+      // Custom override bypasses makeRouterBot's generic DONE-relocation —
+      // reproduce it here so the eventual successful retry actually lands
+      // the mock pose on the target (see makeRouterBot comment above).
+      if (this.state === "DONE" && legs.length) {
+        const last = legs[legs.length - 1];
+        host.__setPose({ objCellId: last.lb, x: last.x, y: last.y, z: last.z });
+      }
     };
     const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
     check("door-retry re-follows after opening", r.ok && follows === 2, JSON.stringify({ follows, walk: r.result?.walk }));
@@ -495,8 +559,11 @@ function makeHost() {
     host.TryGetObjectPosition = (g) => (g === 0x5004 ? { objCellId: 0x860201a0, x: 52, y: 50, z: 0 } : basePos(g));
     const bot = makeRouterBot(host, { routerState: "FAILED" });
     const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
-    check("open door not re-used on failed route", r.ok && !host.calls.some((c) => c[0] === "use" && c[1] === 0x5004), JSON.stringify(host.calls));
-    check("open-door case keeps plain failed tag", String(r.result?.walk).startsWith("route-failed(0/2)+"), JSON.stringify(r.result));
+    // Always-FAILED mock never relocates the pose — genuinely still 10m out,
+    // so this now refuses to fire (door untouched either way: it's open).
+    check("open door not re-used on failed route",
+      !r.ok && !host.calls.some((c) => c[0] === "use" && c[1] === 0x5004), JSON.stringify({ r, calls: host.calls }));
+    check("open-door case keeps plain failed tag", /route-failed\(0\/2\)\+/.test(String(r.error)), JSON.stringify(r));
   }
 
   console.log(`\n${pass} pass, ${fail} fail`);

@@ -510,6 +510,20 @@ export function dungeonSuggestAction(advisor) {
         const adv = ctx.advisor ?? advisor;
         if (!adv || typeof adv.describeSurroundings !== "function" || typeof adv.suggestRoute !== "function")
           return fail("unavailable");
+        // Prime the sync cache BEFORE describeSurroundings: its contract is
+        // deliberately sync/cache-only (header, :21-24), but the only paths
+        // that can actually BUILD a fresh graph (_graphAsync/suggestRoute,
+        // :166-187) previously ran only when `a.to != null` — so a bare scan
+        // of a building never entered on this check-in reported "indoor
+        // graph unavailable" even though the async builder would have
+        // succeeded. refreshGraph() is the advisor's own documented seam for
+        // this (:195-203, "call once per check-in"); cache keys by landblock
+        // (:189-193) so repeated calls in the same building are cache hits.
+        // Best-effort: a failed build must still degrade to the current
+        // "unavailable" message, never fail the action.
+        if (typeof adv.refreshGraph === "function") {
+          try { await adv.refreshGraph(bot); } catch {}
+        }
         let surroundings;
         try {
           surroundings = String(adv.describeSurroundings(bot));

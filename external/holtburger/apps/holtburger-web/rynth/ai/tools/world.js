@@ -20,6 +20,7 @@ import {
   toLegs,
   buildStitchedGraphFromWasm,
 } from "../../indoor_router.js";
+import { RUN_SPEED_MS } from "../../atlas.js";
 
 const JOURNAL_CLIP = 800;
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + "…" : s);
@@ -182,7 +183,18 @@ async function indoorLegsTo(bot, guid) {
 /** One router.follow pass over `legs`. -> { tag, walked, retryable } */
 async function followLegs(router, legs) {
   router.follow(legs);
-  const deadline = Date.now() + Math.min(90_000, 8_000 + legs.length * 15_000);
+  // The outer poll deadline must strictly EXCEED the router's own per-leg
+  // watchdog (rynth/router.js legTimeoutMs, default 30_000) or a short route
+  // gets cut off here before the router itself concludes DONE/FAILED — live
+  // 2026-07-20: a 1-leg retry's old budget (8_000 + 1*15_000 = 23_000ms) was
+  // SHORTER than the router's 30_000ms leg watchdog, and produced exactly
+  // that: route-failed(3/4)+door(Door)+route-timeout(0/1) with the router
+  // still mid-leg when this loop gave up. Read the router's actual
+  // legTimeoutMs (test mocks/live tuning may override it) with a +5s margin
+  // per leg for the router's own reissue/settle overhead beyond the raw
+  // watchdog.
+  const perLeg = Number.isFinite(router.legTimeoutMs) ? router.legTimeoutMs : 30_000;
+  const deadline = Date.now() + Math.min(120_000, 12_000 + legs.length * (perLeg + 5_000));
   while (Date.now() < deadline && !router.done && router.state !== "IDLE") {
     await sleep(300);
   }
@@ -378,14 +390,23 @@ export async function approach(bot, guid, ms = 12000) {
   // the mover below then only has to cover the final same-room hop.
   const routeTag = await routeToward(bot, guid);
   const tag = (walk) => (routeTag ? `${routeTag}+${walk}` : walk);
-  // Mover choice (2026-07-18, live-diagnosed in the Holtburg tavern):
-  // PursueObject/pursueEntity only reliably TURNS the local player, it never
+  // Mover choice — UPDATED 2026-07-20 (live-verified, straight-line pursuit
+  // walked into a building wall): PursueObject DOES translate the player now
+  // (measured 9.7m/6s ≈ walk speed, straight-line, no obstacle avoidance) —
+  // the prior 2026-07-18 note below calling it turn-only predates the soak-10
+  // pursuit fixes and was stale. MoveToPosition remains the PREFERRED mover
+  // regardless: it is the router's own proven walk primitive (stuck-detection
+  // here reuses the exact same pose-polling contract walkRoute's watchdog
+  // relies on), and it targets a fixed point rather than re-chasing a moving
+  // guid every tick. PursueObject is kept as the fallback for hosts that
+  // don't expose MoveToPosition.
+  // (2026-07-18, live-diagnosed in the Holtburg tavern — STALE, see above):
+  // "PursueObject/pursueEntity only reliably TURNS the local player, it never
   // translates it (url-flags.md wasmPursuit DEFUNCT note, 2026-07-06 combat
-  // rewrite) — every soak "walk:no-walk" was this. StickToObject only steps
+  // rewrite) — every soak walk:no-walk was this." StickToObject only steps
   // inside an active manual-drive slice, so it too is a no-op from standstill
-  // (verified live: sticky latched, pose frozen, 1 s timeout never ticked).
-  // The mover that actually translates is MoveToPosition — the router's
-  // proven walk primitive — aimed at the target's tracked position.
+  // (verified live: sticky latched, pose frozen, 1 s timeout never ticked;
+  // this part still holds — StickToObject was never re-verified).
   let mover = null;
   const pos = (() => {
     try { return h?.TryGetObjectPosition?.(guid) ?? null; } catch { return null; }
@@ -420,11 +441,68 @@ export async function approach(bot, guid, ms = 12000) {
     const moved = cur.cell !== last.cell || Math.hypot(cur.x - last.x, cur.y - last.y) > 0.5;
     if (moved) lastMoveT = Date.now();
     last = cur;
-    if (Date.now() - lastMoveT > 1600)
-      return tag(Date.now() - t0 <= 2200 ? "no-walk" : "settled");
+    // Widened 2026-07-20 from 1600/2200ms (was too eager: a mover that needs
+    // a beat to start moving — e.g. the client's own turn-before-walk facing
+    // adjustment — read as "no-walk" before it ever got going). Chose
+    // widening the window over retrying the mover dispatch: a reissue adds
+    // the SAME ~1.4s of extra wait for a stuck case (its own reissued-window
+    // still needs to elapse before concluding no-walk) with more code and a
+    // second live command to reason about, for no proven benefit — nothing
+    // here indicates the first send is being dropped versus simply slow to
+    // take effect.
+    if (Date.now() - lastMoveT > 3000)
+      return tag(Date.now() - t0 <= 4000 ? "no-walk" : "settled");
   }
   cancelMove(); // still mid-walk at deadline — don't fight the next action
   return tag("timeout");
+}
+
+/** The final "+"-joined segment of an approach() walk tag — the LAST hop's
+ * own mover verdict (no-mover|blind|no-walk|settled|timeout), independent of
+ * any routeTag/door-retry prefix ("routed(2)+door(Name)+route-failed(0/1)+
+ * no-walk" -> "no-walk"). */
+function finalWalkTag(walk) {
+  if (typeof walk !== "string" || !walk) return walk;
+  const i = walk.lastIndexOf("+");
+  return i < 0 ? walk : walk.slice(i + 1);
+}
+
+/** World-frame distance (metres) from the player to `guid`'s tracked
+ * position, or null when either position is unavailable. */
+function distanceToObject(h, guid) {
+  try {
+    const p = h?.TryGetObjectPosition?.(guid);
+    const pose = h?.TryGetPlayerPose?.();
+    if (!p || !pose) return null;
+    return Math.hypot(
+      worldX(p.objCellId >>> 0, p.x) - worldX(pose.objCellId >>> 0, pose.x),
+      worldY(p.objCellId >>> 0, p.y) - worldY(pose.objCellId >>> 0, pose.y),
+      (p.z || 0) - (pose.z || 0)
+    );
+  } catch {
+    return null;
+  }
+}
+
+const WALK_FAIL_RANGE_M = 5;
+
+/** Should an interaction after approach() actually fire? "no-walk" and
+ * "timeout" are ambiguous BY THEMSELVES: no-walk covers both "already
+ * adjacent" (fine, fire) and "mover rejected / never left" (not fine); a
+ * timeout can still have closed most of the distance. Recompute the real
+ * remaining distance and let THAT decide rather than trusting the tag text
+ * alone — "settled" and "blind" always proceed (settled = we walked and
+ * stopped, presumably in range; blind = no pose telemetry to doubt it with,
+ * same as before this change). Returns { blocked, distanceM }; distanceM is
+ * null when it couldn't be computed (blocked is then always false — we
+ * cannot prove a failure we cannot measure).
+ */
+function walkFailedTooFar(h, guid, walk) {
+  const tag = finalWalkTag(walk);
+  if (tag !== "no-walk" && tag !== "timeout") return { blocked: false, distanceM: null };
+  const d = distanceToObject(h, guid);
+  if (d == null || d <= WALK_FAIL_RANGE_M) return { blocked: false, distanceM: d };
+  return { blocked: true, distanceM: d };
 }
 
 /** "use_object" — interact with a nearby world object (portal, NPC, door, sign…). */
@@ -447,6 +525,9 @@ export function useObjectAction() {
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
     const walk = await approach(bot, res.guid);
+    const wf = walkFailedTooFar(h, res.guid, walk);
+    if (wf.blocked)
+      return fail(`walk failed (${walk}), target ${wf.distanceM.toFixed(0)}m away — not fired`);
     if (!h.UseObject(res.guid)) return fail("use request failed to send");
     ctx.track?.(res.guid, res.name);
     journalNote(ctx, `use_object ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}, used; confirm result on next check-in`);
@@ -488,6 +569,11 @@ export function takeItemAction(state = {}) {
     // Container loot happens at the already-opened container — no walk needed;
     // ground pickups still close the distance first.
     const walk = fromContainer ? "container" : await approach(bot, res.guid);
+    if (!fromContainer) {
+      const wf = walkFailedTooFar(h, res.guid, walk);
+      if (wf.blocked)
+        return fail(`walk failed (${walk}), target ${wf.distanceM.toFixed(0)}m away — not fired`);
+    }
     if (!h.TakeObject(res.guid)) return fail("pickup request failed to send");
     ctx.track?.(res.guid, res.name);
     journalNote(
@@ -522,6 +608,9 @@ export function openContainerAction(state = {}) {
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
     const walk = await approach(bot, res.guid);
+    const wf = walkFailedTooFar(h, res.guid, walk);
+    if (wf.blocked)
+      return fail(`walk failed (${walk}), target ${wf.distanceM.toFixed(0)}m away — not fired`);
     if (!h.UseObject(res.guid)) return fail("open request failed to send");
     // Open-acknowledgment (2026-07-18): ViewContents with ZERO items is a
     // real server reply (a genuinely empty chest), but it left guids empty
@@ -670,6 +759,9 @@ export function useItemOnAction() {
     if (it.error) return fail(it.error);
     const itemGuid = (it.row.guid ?? it.row.itemGuid) >>> 0;
     const walk = await approach(bot, tgt.guid);
+    const wf = walkFailedTooFar(h, tgt.guid, walk);
+    if (wf.blocked)
+      return fail(`walk failed (${walk}), target ${wf.distanceM.toFixed(0)}m away — not fired`);
     if (!h.UseItemOnTarget(itemGuid, tgt.guid)) return fail("use-with-target request failed to send");
     ctx.track?.(tgt.guid, tgt.name);
     journalNote(ctx, `use_item_on ${it.row.name} -> ${tgt.name} (${hex(tgt.guid)}) — walk:${walk ?? "n/a"}, sent; server verdict in 'heard' next check-in`);
@@ -746,7 +838,7 @@ export function gotoObjectAction() {
   const def = {
     type: "goto_object",
     params: { object: "name (substring) or guid of a nearby object from your 'nearby' perception line — prefer the guid" },
-    desc: "walk over to a nearby object or NPC without interacting: get within reach, scout what is around it, and bring new objects into your perception range. Use this to explore toward the farthest interesting thing you can see.",
+    desc: "walk over to a nearby object or NPC without interacting: get within reach, scout what is around it, and bring new objects into your perception range. Use this to explore toward the farthest interesting thing you can see. Reports ok:false with the failed walk tag when the target is still out of reach afterward (blocked path, dead-end route) — do not assume arrival just because the action ran; check ok/result.walk.",
     validate(a) {
       const b = baseValidate("goto_object")(a);
       if (!b.ok) return b;
@@ -757,17 +849,51 @@ export function gotoObjectAction() {
   };
   def.apply = makeApply(def, async (bot, a, ctx, fail) => {
     const h = bot?.host;
-    if (typeof h?.PursueObject !== "function" || typeof h?.NearbyGuids !== "function") return fail("unavailable");
+    if (typeof h?.NearbyGuids !== "function") return fail("unavailable");
     const res = resolveNearby(h, a.object);
     if (res.error) return fail(res.error);
-    // Cross-room targets walk door-waypoint legs first (same seam as
-    // use_object's approach); the trailing PursueObject keeps goto_object's
-    // fire-and-forget local semantics for the last few metres.
-    const routeTag = await routeToward(bot, res.guid);
-    if (!h.PursueObject(res.guid, 1.0, 0, true)) return fail("pursue request failed to send");
+    // approach() already composes the indoor door-waypoint leg walk
+    // (routeToward, same seam as use_object) with the final same-room/
+    // outdoor hop via MoveToPosition (preferred — translates, see the
+    // approach() header for the 2026-07-20 live finding on PursueObject) —
+    // no separate bare PursueObject call is needed or fired here; a redundant
+    // second command after approach() already closed the distance would add
+    // nothing. Budget the final hop by distance: a long straight outdoor leg
+    // needs headroom beyond the interaction tools' fixed 12s default, a close
+    // one shouldn't wait needlessly. RUN_SPEED_MS is the verified base ground
+    // speed (rynth/atlas.js); *1500 gives ~1.5x buffer over pure travel time
+    // for imperfect straight-line pathing.
+    let ms = 12000;
+    const d0 = distanceToObject(h, res.guid);
+    if (d0 != null) ms = Math.min(30000, Math.max(6000, (d0 / RUN_SPEED_MS) * 1500));
+    const walk = await approach(bot, res.guid, ms);
+    // "no-walk"/"timeout" are ambiguous on their own (see walkFailedTooFar) —
+    // goto_object has no separate action to gate, so it applies the same
+    // distance recheck directly to its own ok verdict: close enough now =
+    // success regardless of what the tag text says (a routed(N)+no-walk is
+    // the COMMON success shape — indoor legs walked us right up to the
+    // target, the final hop found nothing left to do), too far = a real
+    // failure the director must see.
+    const d = distanceToObject(h, res.guid);
+    const finalTag = finalWalkTag(walk);
+    const ok = d != null ? d <= WALK_FAIL_RANGE_M : finalTag === "settled" || finalTag === "blind";
     ctx.track?.(res.guid, res.name);
-    journalNote(ctx, `goto_object ${res.name} (${hex(res.guid)})${routeTag ? ` — indoor route ${routeTag}` : ""} — walking over; check the pos line next check-in to confirm arrival`);
-    return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid), ...(routeTag ? { walk: routeTag } : {}) } };
+    journalNote(
+      ctx,
+      ok
+        ? `goto_object ${res.name} (${hex(res.guid)}) — arrived (walk:${walk ?? "n/a"}); check the pos line next check-in to confirm`
+        : `goto_object ${res.name} (${hex(res.guid)}) — walk failed (${walk ?? "n/a"})${d != null ? `, still ${d.toFixed(0)}m away` : ""}`
+    );
+    return {
+      type: def.type,
+      ok,
+      result: {
+        object: res.name,
+        guid: hex(res.guid),
+        walk: walk ?? undefined,
+        ...(d != null ? { distanceM: Math.round(d) } : {}),
+      },
+    };
   });
   return def;
 }
@@ -807,6 +933,9 @@ export function giveItemAction() {
     const itemGuid = (it.row.guid ?? it.row.itemGuid) >>> 0;
     const qty = a.qty ?? 1;
     const walk = await approach(bot, tgt.guid);
+    const wf = walkFailedTooFar(h, tgt.guid, walk);
+    if (wf.blocked)
+      return fail(`walk failed (${walk}), target ${wf.distanceM.toFixed(0)}m away — not fired`);
     if (!h.GiveObject(tgt.guid, itemGuid, qty)) return fail("give request failed to send");
     ctx.track?.(tgt.guid, tgt.name);
     journalNote(

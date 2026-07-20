@@ -7239,6 +7239,13 @@
                         // default routing for the chosen model.
                         // ?botKernel=off — no grind loops (explorer/pure-travel).
                         if (botParams.get("botKernel") === "off") cfg.kernel = false;
+                        // ?explorePressure=1 (task #15) — ambient idle-motion
+                        // ticks between AI-director check-ins (rynth/bot.js
+                        // ExplorePressureController); only fires with an
+                        // enabled director, so read outside the cfg.ai guard
+                        // like botKernel above (harmless without a director).
+                        // Exact-match opt-in; default OFF.
+                        if (botParams.get("explorePressure") === "1") cfg.explorePressure = true;
                         if (cfg.ai !== false) {
                           // ?botPersona=explorer etc. — base-prompt persona
                           // (rynth/ai/director.js); URL-carried so reconnect

@@ -245,6 +245,51 @@ const lastLb = (r) => r.legs[r.legs.length - 1].lb >>> 0;
     check("apply: journal thrower swallowed", rBadJournal.ok === true);
   }
 
+  // ---- task #15: bare dungeon_suggest (no `to`) primes an async graph
+  // source before describeSurroundings, instead of only priming when a
+  // route was also requested. Regression for the graph-priming bug:
+  // describeSurroundings is sync/cache-only, and only suggestRoute's
+  // _graphAsync path used to build the graph — so a bare scan of a building
+  // entered for the first time this check-in reported "indoor graph
+  // unavailable" even though the async builder would have succeeded.
+  {
+    let sourceCalls = 0;
+    const advSrc = new DungeonNavAdvisor({ graphSource: async () => { sourceCalls++; return mkGraph(); } });
+    const def = advSrc && dungeonSuggestAction(advSrc);
+    const botNoGraph = mkBot(poseA());
+    const r0 = await def.apply(botNoGraph, { type: "dungeon_suggest" }, {});
+    check("apply: bare call (no to) primes the async graph source",
+      sourceCalls >= 1 && r0.result.surroundings.includes("cells=6"), JSON.stringify(r0.result));
+    check("apply: bare call still has no suggestion field", r0.result.suggestion === undefined);
+
+    // Live wasm seam: same fixture as the "graph sources" block above.
+    const g = mkGraph();
+    const placements = [...g].map(([id, n]) => ({
+      cellId: id, cellOriginX: n.pos.x, cellOriginY: n.pos.y, cellOriginZ: n.pos.z,
+      takePortalCellIds: () => n.neighbors.slice(), free() {},
+    }));
+    const fetched = [];
+    const advWasm = new DungeonNavAdvisor({ fetchEnvCells: async (lb) => { fetched.push(lb >>> 0); return placements; } });
+    const wasmDef = dungeonSuggestAction(advWasm);
+    const wasmBot = { host: { TryGetPlayerPose: () => poseA(), s: { getCurrentCellId: () => A } } };
+    const rw = await wasmDef.apply(wasmBot, { type: "dungeon_suggest" }, {});
+    check("apply: bare call builds the graph from a live wasm session",
+      fetched.length === 1 && rw.result.surroundings.includes("cells=6"), JSON.stringify(rw.result));
+    // Cache hit on a second bare call in the same building — no rebuild.
+    await wasmDef.apply(wasmBot, { type: "dungeon_suggest" }, {});
+    check("apply: second bare call in the same landblock is a cache hit (no rebuild)",
+      fetched.length === 1, JSON.stringify(fetched));
+
+    // A hostile/failing advisor.refreshGraph must still degrade to the
+    // current describeSurroundings message, never fail the action.
+    const advBadRefresh = new DungeonNavAdvisor();
+    advBadRefresh.refreshGraph = async () => { throw new Error("build boom"); };
+    const badDef = dungeonSuggestAction(advBadRefresh);
+    const rBad = await badDef.apply(mkBot(poseA()), { type: "dungeon_suggest" }, {});
+    check("apply: refreshGraph rejecting -> degrades to current unavailable message, ok:true",
+      rBad.ok === true && rBad.result.surroundings.includes("unavailable"), JSON.stringify(rBad));
+  }
+
   // ---- registerDungeonNav
   {
     const adv = new DungeonNavAdvisor({ graph: mkGraph() });

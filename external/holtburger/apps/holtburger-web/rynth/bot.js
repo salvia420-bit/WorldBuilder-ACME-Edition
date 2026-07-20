@@ -80,6 +80,26 @@ export async function createGrindBot(sessionHandle, config = {}) {
   const router = new rt.RynthRouter(host, config.router || {});
   host.onTick(() => router.tick());
 
+  // Explore pressure (task #15, ?explorePressure=1 — index.html bot-param
+  // block; exact-match opt-in, default OFF): today the bot is 100% statue
+  // between AI-director check-ins — the kernel has no locomotion of its own
+  // and router.tick() only advances an ALREADY-loaded route. This adds a
+  // cheap (~5s cadence) idle-pressure tick that nudges the bot with ambient
+  // motion while the director isn't actively driving it. Lazy: the flag off
+  // (the default) imports nothing extra and costs one falsy `if` per boot —
+  // see ExplorePressureController below for the full activation contract.
+  let explorePressure = null;
+  if (config.explorePressure === true) {
+    const [irMod, opsMod] = await Promise.all([
+      import(`${base}/indoor_router.js`),
+      import(`${base}/ai/operator_stop.js`),
+    ]);
+    explorePressure = new ExplorePressureController(host, router, irMod, opsMod, {
+      log: typeof config.explorePressureLog === "function" ? config.explorePressureLog : undefined,
+    });
+    host.onTick(() => explorePressure.tick());
+  }
+
   // Global nav (report 09 sidecar): config.nav = { endpoint } wires a
   // GlobalRouter so bot.goto(to) plans a cross-world route via the RynthNav
   // sidecar and walks it. Unlike travel(), goto() restores the kernel's
@@ -331,6 +351,14 @@ export async function createGrindBot(sessionHandle, config = {}) {
       host.stop();
     },
   };
+  // Bind the controller to the real bot object now that it exists — its
+  // tick() only fires asynchronously off the host heartbeat, well after this
+  // synchronous constructor body finishes (same "capture now, use later"
+  // pattern doGoto/doFollowRoute already rely on for `bot.mission` above).
+  if (explorePressure) {
+    explorePressure.bot = bot;
+    bot.explorePressure = explorePressure; // introspection/testing seam
+  }
 
   // AI director (rynth/ai/SPEC.md §Wiring) — opt-in by key presence or an
   // explicit config.ai object; config.ai === false skips even the key probe.
@@ -550,6 +578,287 @@ async function wireAiDirector(bot, aiConfig, base) {
   }
 
   if (aiCfg?.autoStart !== false) director.start();
+}
+
+// World-frame metres from a full objCellId + landblock-local x/y. Every file
+// that needs this (router.js, indoor_router.js, dungeon_nav.js, goto_compose.js)
+// keeps its own 2-line copy rather than importing it, to stay decoupled from
+// each other's module graph — same convention here (dungeon_nav.js:86-89).
+function worldX(cellId, x) { return ((cellId >>> 24) & 0xff) * 192 + x; }
+function worldY(cellId, y) { return ((cellId >>> 16) & 0xff) * 192 + y; }
+
+// ── Explore pressure (task #15, 2026-07-20) ─────────────────────────────
+// ?explorePressure=1 (index.html bot-param block; exact-match "=1" opt-in,
+// default OFF). Fixes: the bot has NO locomotion outside an explicit
+// director tool call — the kernel loops (combat/loot/buff/vitals) only act
+// on what's already nearby, and router.tick() only advances a route someone
+// already started. Between check-ins (minutes apart) the bot is a statue.
+//
+// This adds an idle-pressure tick, self-throttled to ~5s off the host's
+// heartbeat, that steps the bot with cheap ambient motion ONLY when nothing
+// else has a legitimate claim on movement — see _gatesOpen() for the full
+// AND of conditions. Priority per step: (1) re-issue the director's last
+// unreached goto (bot.mission/lastMission already carry this — doGoto sets
+// bot.mission on start and bot.lastMission on completion/failure above, so
+// no extra tracking hook is needed here); (2) else a short local sweep hop
+// — indoors via the indoor cell graph (rynth/indoor_router.js), outdoors via
+// a nearby unvisited door or a random-bearing 15-25m hop. One compact
+// journal note per step so the director's next observation sees the ambient
+// motion. Hard caps: >=25s idle (since the last pose change AND since the
+// last pressure step, which also satisfies the <=1-step/20s cap) and <=3
+// consecutive random/sweep hops before standing down until the next
+// director check-in lands.
+//
+// Survival invariant (matches the rest of rynth/): every entry point
+// degrades to a no-op on any error — a broken pressure step must never touch
+// grind/router/director state it doesn't own.
+export class ExplorePressureController {
+  constructor(host, router, irMod, opsMod, opts = {}) {
+    this.host = host;
+    this.router = router;
+    this.ir = irMod || {}; // indoor_router.js: isEnvCellId/nearestCell/toLegs/buildGraphFromWasm
+    this._isOperatorStopLatched = typeof opsMod?.isOperatorStopLatched === "function"
+      ? opsMod.isOperatorStopLatched
+      : () => false;
+    this.now = typeof opts.now === "function" ? opts.now : () => Date.now();
+    this.log = typeof opts.log === "function" ? opts.log : () => {};
+    this.bot = null; // set by createGrindBot once the bot object exists
+
+    this._lastGateAt = 0;           // 5s coarse-cadence throttle for the tick body
+    this._lastPoseKey = null;
+    this._lastMoveAt = this.now();
+    this._lastStepAt = 0;
+    this._consecutiveHops = 0;      // random/sweep hops since the last director check-in
+    this._standDown = false;        // 3-hop cap tripped; cleared on the next check-in
+    this._lastCheckSeen = null;
+    this._stepBusy = false;         // step() reentrancy guard (it awaits)
+    this._visitedCells = new Map(); // landblock -> Set(cellId) — indoor sweep memory
+    this._visitedDoors = new Set(); // outdoor door guids already swept toward
+    this._graphCache = null;        // { lb, graph } — indoor graph memo (buildGraphFromWasm)
+  }
+
+  // host.onTick driver (~10Hz by default); self-throttles to ~5s and never
+  // awaits directly — the step runs fire-and-forget so a slow graph build
+  // can't stall the host tick loop the way a blocking tick would.
+  tick() {
+    try {
+      const now = this.now();
+      this._trackMovement(now);
+      this._trackCheckIn();
+      if (now - this._lastGateAt < 5000) return;
+      this._lastGateAt = now;
+      if (this._stepBusy || !this._gatesOpen(now)) return;
+      this._stepBusy = true;
+      void this._step(now)
+        .catch((e) => this.log(`[explore-pressure] step error: ${(e && e.message) || e}`))
+        .finally(() => { this._stepBusy = false; });
+    } catch (e) {
+      this.log(`[explore-pressure] tick error: ${(e && e.message) || e}`);
+    }
+  }
+
+  _pose() {
+    try { return this.host?.TryGetPlayerPose?.() ?? null; } catch { return null; }
+  }
+
+  _trackMovement(now) {
+    const p = this._pose();
+    if (!p || typeof p.objCellId !== "number") return;
+    const key = `${p.objCellId >>> 0}|${p.x.toFixed(1)}|${p.y.toFixed(1)}|${p.z.toFixed(1)}`;
+    if (this._lastPoseKey == null) { this._lastPoseKey = key; return; }
+    if (key !== this._lastPoseKey) {
+      this._lastPoseKey = key;
+      this._lastMoveAt = now;
+    }
+  }
+
+  // A fresh director check-in landing releases the random-hop stand-down.
+  // director._lastCheckAt is a plain timestamp field (director.js), read
+  // defensively — it is not part of the frozen director interface.
+  _trackCheckIn() {
+    try {
+      const lastCheck = this.bot?.ai?.director?._lastCheckAt ?? null;
+      if (lastCheck != null && lastCheck !== this._lastCheckSeen) {
+        this._lastCheckSeen = lastCheck;
+        this._consecutiveHops = 0;
+        this._standDown = false;
+      }
+    } catch { /* defensive read only; never blocks the tick */ }
+  }
+
+  // All activation conditions (task #15 spec), ANDed; re-checked every ~5s
+  // AND again right before any actual MoveToPosition/goto call so a step
+  // aborts instantly if something else claims movement mid-step.
+  _gatesOpen(now) {
+    if (!this.bot) return false;
+    const director = this.bot.ai?.director;
+    if (!director || director.enabled !== true) return false; // manual bot: never fires
+    try {
+      if (this._isOperatorStopLatched()) return false;
+    } catch { /* treat a broken latch read as "not latched" — matches operator_stop.js's own fail-open */ }
+    if (this.bot.globalRouter?.busy) return false;
+    const rs = this.router?.status?.state;
+    if (rs !== "IDLE" && rs !== "DONE" && rs !== "FAILED") return false; // an active route owns movement
+    if (director._running === true || director._inflight != null) return false; // check-in in flight
+    if (this._standDown) return false;
+    if (now - this._lastMoveAt < 25_000) return false;
+    if (now - this._lastStepAt < 25_000) return false; // also satisfies the <=1-step/20s cap
+    return true;
+  }
+
+  // Narrower than _gatesOpen(): only the "something else now owns movement"
+  // signals — used for the abort-mid-step re-checks inside _indoorHop /
+  // _outdoorHop (after an await, right before the actual MoveToPosition).
+  // Deliberately excludes the idle-since-last-move/-step cooldowns: THIS
+  // step already claimed that window (_step stamps _lastStepAt up front),
+  // so re-running the full gate here would always self-block on its own
+  // fresh timestamp. True while claimed/blocked (fail-safe: an unreadable
+  // bot/director counts as claimed).
+  _routeClaimed() {
+    if (!this.bot) return true;
+    const director = this.bot.ai?.director;
+    if (!director || director.enabled !== true) return true;
+    try {
+      if (this._isOperatorStopLatched()) return true;
+    } catch { /* matches _gatesOpen's fail-open read; not a claim by itself */ }
+    if (this.bot.globalRouter?.busy) return true;
+    const rs = this.router?.status?.state;
+    if (rs !== "IDLE" && rs !== "DONE" && rs !== "FAILED") return true;
+    if (director._running === true || director._inflight != null) return true;
+    return false;
+  }
+
+  _journalNote(text) {
+    try { this.bot?.ai?.journal?.add?.("note", text); } catch { /* journal loss is not fatal */ }
+  }
+
+  _bumpHop() {
+    this._consecutiveHops++;
+    if (this._consecutiveHops >= 3) this._standDown = true;
+  }
+
+  async _step(now) {
+    if (!this._gatesOpen(now)) return; // tick() already checked; defensive re-check
+    this._lastStepAt = now;
+
+    // Priority 1: the last director-initiated goto is known and unreached.
+    // bot.mission/bot.lastMission already carry exactly this (doGoto sets
+    // bot.mission on start, bot.lastMission = {..., result} on completion or
+    // failure) — reusing that state avoids adding a second tracking hook
+    // that would fight route_recorder's own bot._onTravelStart/_onTravelDone
+    // wiring (rynth/ai/extensions.js). Re-issued via bot.goto, once per idle
+    // period (the 25s-since-last-step gate above already enforces "once").
+    const lm = this.bot.lastMission;
+    if (lm && lm.kind === "goto" && lm.to != null && lm.result?.ok !== true && typeof this.bot.goto === "function") {
+      this._journalNote(`[pressure] idle 25s — re-issuing last unreached goto (${lm.label ?? "?"})`);
+      void this.bot.goto(lm.to).catch(() => {});
+      return; // director input, not a random/sweep hop — _consecutiveHops untouched
+    }
+
+    const pose = this._pose();
+    if (!pose || typeof pose.objCellId !== "number") return;
+    if (typeof this.ir.isEnvCellId === "function" && this.ir.isEnvCellId(pose.objCellId >>> 0)) {
+      await this._indoorHop(pose);
+    } else {
+      this._outdoorHop(pose);
+    }
+  }
+
+  async _indoorHop(pose) {
+    if (typeof this.ir.buildGraphFromWasm !== "function" || typeof this.ir.toLegs !== "function") return;
+    const cellId = pose.objCellId >>> 0;
+    const lb = (cellId >>> 16) >>> 0;
+    let graph = this._graphCache && this._graphCache.lb === lb ? this._graphCache.graph : null;
+    if (!graph) {
+      const handle = this.host?.s;
+      if (!handle) return; // no live wasm session (e.g. headless test double) — nothing safe to build from
+      try {
+        graph = await this.ir.buildGraphFromWasm(handle, 0, {});
+      } catch { graph = null; }
+      // The build awaited — re-validate before acting on it (a director
+      // action or route may have started while we were waiting).
+      if (this._routeClaimed()) return;
+      if (!graph) return;
+      this._graphCache = { lb, graph };
+    }
+    const nodes = graph instanceof Map ? graph : new Map(Object.entries(graph).map(([k, v]) => [Number(k) >>> 0, v]));
+    if (!nodes.size) return;
+    const wx = worldX(cellId, pose.x), wy = worldY(cellId, pose.y);
+    const cur = (nodes.has(cellId) ? cellId : (this.ir.nearestCell?.(nodes, wx, wy, pose.z) ?? cellId)) >>> 0;
+    const visited = this._visitedCells.get(lb) ?? new Set();
+    this._visitedCells.set(lb, visited);
+    visited.add(cur);
+    const curNode = nodes.get(cur);
+    const neighbors = (curNode?.neighbors || []).map((n) => Number(n) >>> 0).filter((id) => nodes.has(id));
+    if (!neighbors.length) return;
+    const target = neighbors.find((id) => !visited.has(id)) ?? neighbors[0]; // all seen -> revisit nearest neighbor
+    let legs = null;
+    try { legs = this.ir.toLegs(graph, [cur, target]); } catch { legs = null; }
+    const leg = Array.isArray(legs) ? legs[legs.length - 1] : null;
+    if (!leg) return;
+    if (this._routeClaimed()) return; // final abort check right before moving
+    this.host.MoveToPosition(leg.lb, leg.x, leg.y, leg.z, true);
+    this._bumpHop();
+    this._journalNote(`[pressure] idle 25s — indoor sweep to 0x${target.toString(16).padStart(8, "0")}${visited.has(target) ? " (revisit)" : ""}`);
+  }
+
+  _outdoorHop(pose) {
+    const cellId = pose.objCellId >>> 0;
+    const wx = worldX(cellId, pose.x), wy = worldY(cellId, pose.y);
+    const door = this._nearestUnvisitedDoor(wx, wy);
+    let tx, ty, label;
+    if (door) {
+      tx = door.wx; ty = door.wy;
+      label = `door "${door.name}" (0x${door.guid.toString(16)})`;
+      this._visitedDoors.add(door.guid);
+      if (this._visitedDoors.size > 200) this._visitedDoors.clear(); // long-session hygiene, not a correctness need
+    } else {
+      const bearing = Math.random() * Math.PI * 2;
+      const dist = 15 + Math.random() * 10; // 15-25m
+      tx = wx + Math.sin(bearing) * dist;
+      ty = wy + Math.cos(bearing) * dist;
+      label = `random hop ~${dist.toFixed(0)}m`;
+    }
+    const lbX = Math.max(0, Math.min(255, Math.floor(tx / 192)));
+    const lbY = Math.max(0, Math.min(255, Math.floor(ty / 192)));
+    const lx = tx - lbX * 192, ly = ty - lbY * 192;
+    // Retail outdoor LandCell index (LandDefs::gid_to_lcoord) — the same
+    // formula dungeon_nav.js's exitRoute() and goto_compose.js's
+    // normalizeLegWorldFrame() each independently derive; reimplemented here
+    // too rather than imported, per this wave's no-cross-file-coupling note.
+    const cellIdx = 1 + Math.min(7, Math.floor(lx / 24)) * 8 + Math.min(7, Math.floor(ly / 24));
+    const lb = (((lbX << 24) | (lbY << 16) | cellIdx) >>> 0);
+    if (this._routeClaimed()) return; // final abort check right before moving
+    this.host.MoveToPosition(lb, lx, ly, pose.z, true);
+    this._bumpHop();
+    this._journalNote(`[pressure] idle 25s — ${label}`);
+  }
+
+  // Small LOCAL reimplementation of world.js's closed-door check
+  // (rynth/ai/tools/world.js:216-242 nearestClosedDoor) — deliberately not
+  // imported (world.js is owned by another wave this pass; also this needs a
+  // different query — any not-yet-swept door, no open/closed filter, since
+  // this is just an ambient walk-toward target, not a door-open action).
+  _nearestUnvisitedDoor(wx, wy) {
+    const h = this.host;
+    if (typeof h?.NearbyGuids !== "function" || typeof h?.TryGetObjectDescFlags !== "function") return null;
+    const ODF_DOOR = 0x1000; // ObjectDescriptionFlag.Door (observe_ext.js ODF map)
+    let best = null;
+    for (const g of h.NearbyGuids() ?? []) {
+      try {
+        const guid = g >>> 0;
+        if (this._visitedDoors.has(guid)) continue;
+        const flags = h.TryGetObjectDescFlags(g);
+        if (flags == null || !(flags & ODF_DOOR)) continue;
+        const p = h.TryGetObjectPosition?.(g);
+        if (!p) continue;
+        const pwx = worldX(p.objCellId >>> 0, p.x), pwy = worldY(p.objCellId >>> 0, p.y);
+        const d = Math.hypot(pwx - wx, pwy - wy);
+        if (!best || d < best.d) best = { guid, name: h.TryGetObjectName?.(guid) || "Door", wx: pwx, wy: pwy, d };
+      } catch { /* one bad object must not break the sweep */ }
+    }
+    return best;
+  }
 }
 
 export default createGrindBot;
