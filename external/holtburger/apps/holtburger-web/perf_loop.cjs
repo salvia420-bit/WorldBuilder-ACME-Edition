@@ -140,6 +140,24 @@ function cmdRank(args) {
   console.log("[rank] loop-state topOffender -> " + top.lb);
 }
 
+// ── tour: auto-build a replayable perf-tour from samples (fork #1, pure) ─────
+function cmdTour(args) {
+  const inF = args.in || die("tour needs --in <samples.jsonl>");
+  const { samples } = A.parseSamples(fs.readFileSync(inF, "utf8"));
+  const ranked = A.rankByLandblock(samples, { minSamples: parseInt(args.minSamples || "2", 10) });
+  const name = args.name || "perf-tour-v1";
+  const tour = A.buildTour(ranked, { top: parseInt(args.top || "3", 10), control: parseInt(args.control || "1", 10), name });
+  if (!tour.waypoints.length) die("no waypoints — samples predate pose emission, or no pose captured. Soak more.");
+  const out = args.out || path.join(HERE, "rynth", "testdata", name + ".json");
+  writeJson(out, tour);
+  const state = loadState();
+  state.baselineRoute = path.relative(HERE, out);
+  saveState(state);
+  console.log("[tour] " + tour.waypoints.length + " waypoints (offenders " + tour.offenders.join(",") + " + control " + tour.control.join(",") + ")" + (tour.dropped.length ? " · dropped " + tour.dropped.join(",") + " (no pose)" : ""));
+  tour.waypoints.forEach((w, i) => console.log("  " + (i + 1) + ". " + w.forLb + " p95 " + w.p95 + "ms @ 0x" + (w.lb >>> 0).toString(16) + " (" + w.x.toFixed(0) + "," + w.y.toFixed(0) + ")"));
+  console.log("[tour] -> " + path.relative(HERE, out) + " · loop-state baselineRoute set");
+}
+
 // ── measure: replay a tour N times on the current build (MEASURE) ────────────
 async function cmdMeasure(args) {
   const routeF = args.route || die("measure needs --route <route.json>");
@@ -153,9 +171,13 @@ async function cmdMeasure(args) {
 
   const rf = readJson(routeF, null) || die("cannot read route " + routeF);
   const route = rf.route || rf; // accept {name,route} or a bare route
-  const legs = route.legs || die("route has no legs");
+  // Two route kinds: a recorded leg route (followRoute) or an auto-built perf
+  // tour of waypoints (goto-chain, fork #1).
+  const isWaypoints = route.kind === "waypoints" || (Array.isArray(route.waypoints) && !route.legs);
+  const legs = isWaypoints ? null : (route.legs || die("route has no legs"));
+  const waypoints = isWaypoints ? route.waypoints : null;
   const fmt = route.schemaVersion || 2;
-  const from = route.from || legs[0];
+  const from = route.from || (legs && legs[0]) || (waypoints && waypoints[0]);
   const startCmd = "@teleloc 0x" + (from.lb >>> 0).toString(16) + " " + from.x + " " + from.y + " " + from.z;
 
   const wf = render === "wireframe" ? "&wireframe=1" : "";
@@ -176,12 +198,25 @@ async function cmdMeasure(args) {
       await sleep(12000);
       const t0 = tap.samples.length; // ignore warmup samples
       // Time via console markers, NOT the evaluate round-trip (starves on busy renderer).
-      await page.evaluate(({ legs, fmt }) => {
+      await page.evaluate(({ legs, waypoints, fmt }) => {
         console.log("[perftour] start");
-        return window.__bot.followRoute(legs, { label: "perf-tour", fmt })
-          .then((res) => console.log("[perftour] done " + JSON.stringify({ ok: res && res.ok, legs: res && res.legsWalked })))
-          .catch((e) => console.log("[perftour] done " + JSON.stringify({ ok: false, err: String(e && e.message) })));
-      }, { legs, fmt });
+        var done = (r) => console.log("[perftour] done " + JSON.stringify(r));
+        if (waypoints) {
+          // Goto-chain (fork #1): walk each offender waypoint in order.
+          (async () => {
+            var ok = 0;
+            for (var i = 0; i < waypoints.length; i++) {
+              var w = waypoints[i];
+              try { var r = await window.__bot.goto({ lb: w.lb, x: w.x, y: w.y, z: w.z }); if (r && r.ok !== false) ok++; } catch (e) {}
+            }
+            return ok;
+          })().then((ok) => done({ ok: ok > 0, wps: ok + "/" + waypoints.length })).catch((e) => done({ ok: false, err: String(e && e.message) }));
+        } else {
+          window.__bot.followRoute(legs, { label: "perf-tour", fmt })
+            .then((res) => done({ ok: res && res.ok, legs: res && res.legsWalked }))
+            .catch((e) => done({ ok: false, err: String(e && e.message) }));
+        }
+      }, { legs, waypoints, fmt });
       // Wait for the done marker (up to the route timeout).
       const deadline = Date.now() + 16 * 60_000;
       while (Date.now() < deadline && !tap.markers.some((m) => m.txt.startsWith("done"))) await sleep(1000);
@@ -248,11 +283,12 @@ function cmdStatus() {
   try {
     if (cmd === "soak") await cmdSoak(args);
     else if (cmd === "rank") cmdRank(args);
+    else if (cmd === "tour") cmdTour(args);
     else if (cmd === "measure") await cmdMeasure(args);
     else if (cmd === "gate") cmdGate(args);
     else if (cmd === "status") cmdStatus();
     else {
-      console.log("usage: perf_loop.cjs <soak|rank|measure|gate|status> [opts]  (see header)");
+      console.log("usage: perf_loop.cjs <soak|rank|tour|measure|gate|status> [opts]  (see header)");
       if (cmd) process.exitCode = 1;
     }
   } catch (e) { die((e && e.stack) || String(e)); }

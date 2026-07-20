@@ -54,9 +54,13 @@ function rankByLandblock(samples, opts) {
   var bins = {};
   for (var i = 0; i < samples.length; i++) {
     var s = samples[i], lb = s.lb || "unknown";
-    var b = bins[lb] || (bins[lb] = { lb: lb, p95s: [], worsts: [], draws: [], tris: [], heaps: [], bakeds: [], n: 0, dwellSec: 0 });
+    var b = bins[lb] || (bins[lb] = { lb: lb, p95s: [], worsts: [], draws: [], tris: [], heaps: [], bakeds: [], n: 0, dwellSec: 0, worstP95: -1, waypoint: null });
     b.n++;
-    if (s.dt) { b.p95s.push(s.dt.p95); if (s.dt.worst != null) b.worsts.push(s.dt.worst); }
+    if (s.dt) {
+      b.p95s.push(s.dt.p95); if (s.dt.worst != null) b.worsts.push(s.dt.worst);
+      // Representative waypoint = the pose at this bin's worst frame (fork #1).
+      if (s.pos && s.dt.p95 > b.worstP95) { b.worstP95 = s.dt.p95; b.waypoint = s.pos; }
+    }
     if (s.draw != null) b.draws.push(s.draw);
     if (s.tri != null) b.tris.push(s.tri);
     if (s.heapMB != null) b.heaps.push(s.heapMB);
@@ -78,6 +82,7 @@ function rankByLandblock(samples, opts) {
       tri_med: round(median(b.tris), 0),
       heap_med: round(median(b.heaps), 1),
       baked_max: b.bakeds.length ? Math.max.apply(null, b.bakeds) : null,
+      waypoint: b.waypoint, // { lb: objCellId, x, y, z } — a bot.goto target
     };
   }).filter(function (r) { return r.samples >= minSamples; });
 
@@ -126,6 +131,36 @@ function sliceTourLbs(ranked, opts) {
     .filter(function (lb) { return offenders.indexOf(lb) < 0; })
     .slice(0, control);
   return { offenders: offenders, control: healthy };
+}
+
+/** Fork #1 — auto-build a replayable perf tour from ranked data, NO live
+ *  recording pass. Each waypoint is the representative pose (worst frame) of a
+ *  top offender + a healthy control, in offender-first order. `measure` drives
+ *  bot.goto() through these waypoints and times the chain. Landblocks without a
+ *  captured pose (sampler saw them before pos emission, or TryGetPlayerPose was
+ *  null) are skipped with a note in `dropped`. */
+function buildTour(ranked, opts) {
+  opts = opts || {};
+  var pick = sliceTourLbs(ranked, opts);
+  var byLb = {};
+  ranked.forEach(function (r) { byLb[r.lb] = r; });
+  var order = pick.offenders.concat(pick.control);
+  var waypoints = [], dropped = [];
+  order.forEach(function (lb) {
+    var r = byLb[lb];
+    if (r && r.waypoint && r.waypoint.lb != null) waypoints.push({ lb: r.waypoint.lb, x: r.waypoint.x, y: r.waypoint.y, z: r.waypoint.z, forLb: lb, p95: r.p95_med });
+    else dropped.push(lb);
+  });
+  return {
+    name: opts.name || "perf-tour",
+    schemaVersion: 2,
+    source: "perf-tour-auto",
+    kind: "waypoints",       // measure uses goto-chain mode, not followRoute
+    offenders: pick.offenders,
+    control: pick.control,
+    waypoints: waypoints,
+    dropped: dropped,
+  };
 }
 
 // ── acceptance gate (MEASURE step) ──────────────────────────────────────────
@@ -180,6 +215,6 @@ function gate(baseline, candidate, opts) {
 }
 
 module.exports = {
-  parseSamples, rankByLandblock, renderLeagueMarkdown, sliceTourLbs, gate,
+  parseSamples, rankByLandblock, renderLeagueMarkdown, sliceTourLbs, buildTour, gate,
   _internal: { quantile, median, sortedNums, round },
 };

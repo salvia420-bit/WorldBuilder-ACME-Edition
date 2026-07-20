@@ -61,22 +61,29 @@ function SAMPLER_FN(opts) {
   }
   requestAnimationFrame(tick);
 
-  function readLb() {
+  function readPose() {
+    // Returns { lb: "0xWORD", pos: { lb: objCellId, x, y, z } } — pos is a full
+    // route-leg / bot.goto target, so rank can pick a representative waypoint.
     try {
-      var pose = window.__bot && window.__bot.host && window.__bot.host.TryGetPlayerPose
+      var p = window.__bot && window.__bot.host && window.__bot.host.TryGetPlayerPose
         ? window.__bot.host.TryGetPlayerPose() : null;
-      if (!pose) return null;
-      var cell = pose.objCellId >>> 0;
-      return "0x" + ((cell >>> 16) >>> 0).toString(16).padStart(4, "0");
-    } catch (e) { return null; }
+      if (!p) return { lb: null, pos: null };
+      var cell = p.objCellId >>> 0;
+      return {
+        lb: "0x" + ((cell >>> 16) >>> 0).toString(16).padStart(4, "0"),
+        pos: { lb: cell, x: p.x, y: p.y, z: p.z },
+      };
+    } catch (e) { return { lb: null, pos: null }; }
   }
 
   function emit() {
     if (!running) return;
     var n = frames, ft = dts.slice(0).sort(function (a, b) { return a - b; });
+    var rp = readPose();
     var sample = {
       t: Math.round(typeof performance !== "undefined" ? performance.now() : 0),
-      lb: readLb(),
+      lb: rp.lb,
+      pos: rp.pos,
       frames: n,
       fps: ft.length ? Math.round((1000 / (ft.reduce(function (a, b) { return a + b; }, 0) / ft.length)) * 10) / 10 : null,
       dt: ft.length ? { p50: pct(ft, 50), p95: pct(ft, 95), p99: pct(ft, 99), worst: ft[ft.length - 1] } : null,

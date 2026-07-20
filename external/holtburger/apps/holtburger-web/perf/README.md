@@ -34,28 +34,33 @@ committed — it's the shareable ranked doc.
 # 0. (once) build release wasm; ls -la pkg/*.wasm  → ~4.5MB, not ~18MB (dev = 4× tax)
 PW=/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules   # Playwright on NODE_PATH
 
-# 1. SOAK — tap the running explorer into a samples JSONL (DISCOVERY, prompt-driven)
-NODE_PATH=$PW node perf_loop.cjs soak --minutes 120 --out perf/samples-$(date +%s).jsonl
+# 1. SOAK — launch the HEADLESS explorer + sampler (DISCOVERY, prompt-driven).
+#    soak_launch.cjs pre-seeds the OpenRouter key and enforces the coverage floor.
+NODE_PATH=$PW node perf/soak_launch.cjs --out perf/samples-$(date +%s).jsonl --account phase4demo
+#    (perf_loop.cjs soak also exists to tap an already-running page via --url.)
 
 # 2. RANK — jsonl → committed league + loop-state topOffender (pure, no browser)
 node perf_loop.cjs rank --in perf/samples-*.jsonl
 node perf_loop.cjs status         # ← THIS session reads NEXT here
 
-# 3. FIX — implement the top offender, Rust-first, in a worktree (this session's job)
+# 3. TOUR — auto-build a replayable perf tour from the worst bins (fork #1, pure)
+node perf_loop.cjs tour --in perf/samples-*.jsonl --top 3 --control 1 --name perf-tour-v1
 
-# 4. MEASURE — replay the tour on OLD then NEW build (fresh profile per run, release wasm)
-#    seed tour = the v16 Arwic→Town-Network→Holtburg route (covers the worst known offender)
-NODE_PATH=$PW node perf_loop.cjs measure --route rynth/testdata/v16_arwic_holtburg_route.json \
+# 4. FIX — implement the top offender, Rust-first, in a worktree (this session's job)
+
+# 5. MEASURE — replay the tour on OLD then NEW build (fresh profile per run, release wasm).
+#    Use the auto-built tour, or the v16 Arwic→Town-Network→Holtburg leg route.
+NODE_PATH=$PW node perf_loop.cjs measure --route rynth/testdata/perf-tour-v1.json \
     --runs 3 --render wireframe --out perf/arm-base.json    # on OLD build
 #   ... swap in the fix, rebuild release wasm ...
-NODE_PATH=$PW node perf_loop.cjs measure --route rynth/testdata/v16_arwic_holtburg_route.json \
+NODE_PATH=$PW node perf_loop.cjs measure --route rynth/testdata/perf-tour-v1.json \
     --runs 3 --render wireframe --out perf/arm-cand.json    # on NEW build
 
-# 5. GATE — ACCEPT / REGRESSION / INCONCLUSIVE; appends to the tried ledger (pure)
+# 6. GATE — ACCEPT / REGRESSION / INCONCLUSIVE; appends to the tried ledger (pure)
 node perf_loop.cjs gate --base perf/arm-base.json --cand perf/arm-cand.json
 #   ACCEPT → keep the fix, promote arm-cand to the new baseline. else → revert.
 
-# 6. loop.
+# 7. loop.
 ```
 
 ## `loop-state.json` — the cross-session bridge
@@ -106,15 +111,31 @@ worst run beats baseline's best). Overlapping noise → `INCONCLUSIVE`; a slowdo
 `REGRESSION` (exit 2). `p95` is reported alongside so a shading-only regression
 can't hide behind a route-time win.
 
-## Not yet built (the two design forks to settle with the human)
+## Fork #1 — auto-sliced perf tour (BUILT)
 
-- **Auto-slice a `perf-tour-vN` from the soak trace.** Today the tour is the hand-
-  recorded v16 route. To auto-promote worst bins into a replayable tour you need a
-  walkable leg source (the 10s pose-LB samples locate offenders but aren't legs).
-  Options: run `RouteRecorder` during the soak and slice by LB, or drive a
-  `bot.goto()` chain through the ranked centroids once and `name_route` it. Both
-  need one live pass.
-- **Coverage floor** (prompt insurance): persist a seen-LB set; if
-  new-coverage/hour drops below a floor, inject a scripted `goto` to the nearest
-  unsampled LB instead of trusting the director. Decouples loop progress from
-  prompt quality.
+The sampler emits full pose (`pos: {lb,x,y,z}`) per sample; `rank` keeps the pose
+of each landblock's **worst frame** as a representative waypoint; `tour` assembles
+the top offenders + a healthy control into a `perf-tour-vN.json` (`kind:
+"waypoints"`) — no live recording pass needed. `measure` detects a waypoint tour
+and drives `window.__bot.goto()` through the waypoints (instead of `followRoute`),
+timing the goto-chain. Build one from a soak:
+
+```
+node perf_loop.cjs tour --in perf/samples-*.jsonl --top 3 --control 1 --name perf-tour-v1
+#   -> rynth/testdata/perf-tour-v1.json ; loop-state baselineRoute set
+```
+
+Landblocks sampled before pose emission (or where `TryGetPlayerPose` was null)
+have no waypoint and are dropped with a note — soak longer to fill them in.
+
+## Fork #2 — coverage floor / prompt insurance (BUILT, in `soak_launch.cjs`)
+
+The prompt's only job is coverage; a wedged or weak director must not stall the
+loop. `soak_launch.cjs` tracks a seen-LB set and, when **no new landblock appears
+within `COVERAGE_FLOOR_MS` (4 min)** — or the explorer is fully wedged (no move +
+no LLM call ×3) — issues `@telepoi <next POI>` (Developer command; the soak
+account is accessLevel 4) to jailbreak to fresh content. The rotation leads with
+the two known offenders (Town Network, Marketplace) then cycles diverse towns, so
+discovery keeps hitting hard content regardless of what the director chooses. Loop
+PROGRESS is thereby decoupled from prompt QUALITY. Health lines show `seen=` and
+`coverAge=`; jailbreaks log `JAILBREAK #n -> @telepoi <poi> (<why>)`.

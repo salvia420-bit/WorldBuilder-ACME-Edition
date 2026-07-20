@@ -47,6 +47,31 @@ function eq(name, a, b) { ok(name + " (got " + JSON.stringify(a) + ")", JSON.str
   eq("control = healthiest non-offender", t.control, ["0xE"]);
 })();
 
+// ── rank captures a representative waypoint (worst frame's pose) ──
+(function () {
+  const samples = [];
+  for (let i = 0; i < 4; i++) samples.push({ lb: "0xBAD0", pos: { lb: 0xBAD00009, x: 10 + i, y: 20, z: 30 }, dt: { p50: 50, p95: 60 + i, worst: 90 }, frames: 60 });
+  // the worst frame (p95=70) is at x=110 — that pose should win
+  samples.push({ lb: "0xBAD0", pos: { lb: 0xBAD00009, x: 110, y: 22, z: 33 }, dt: { p50: 55, p95: 70, worst: 95 }, frames: 60 });
+  const ranked = A.rankByLandblock(samples, { minSamples: 2 });
+  eq("waypoint = worst-frame pose", ranked[0].waypoint.x, 110);
+})();
+
+// ── buildTour: offender-first waypoints, drops pose-less LBs ──
+(function () {
+  const samples = [];
+  for (let i = 0; i < 4; i++) samples.push({ lb: "0xBAD0", pos: { lb: 0xBAD00009, x: 5, y: 5, z: 5 }, dt: { p50: 70, p95: 80, worst: 120 }, frames: 60 });
+  for (let i = 0; i < 4; i++) samples.push({ lb: "0x600D", pos: { lb: 0x600D0009, x: 9, y: 9, z: 9 }, dt: { p50: 12, p95: 14, worst: 20 }, frames: 60 });
+  // pose-less offender: appears in ranking but has no waypoint -> dropped
+  for (let i = 0; i < 4; i++) samples.push({ lb: "0xNOPO", dt: { p50: 60, p95: 75, worst: 100 }, frames: 60 });
+  const ranked = A.rankByLandblock(samples, { minSamples: 2 });
+  const tour = A.buildTour(ranked, { top: 2, control: 1, name: "perf-tour-v1" });
+  ok("tour kind waypoints", tour.kind === "waypoints");
+  ok("first waypoint is worst offender 0xBAD0", tour.waypoints[0].forLb === "0xBAD0");
+  ok("pose-less LB dropped", tour.dropped.indexOf("0xNOPO") >= 0);
+  ok("control healthy LB included", tour.waypoints.some((w) => w.forLb === "0x600D"));
+})();
+
 // ── gate: real improvement with non-overlap ACCEPTs ──
 (function () {
   const base = [{ routeMs: 200000, p95: 80 }, { routeMs: 202000, p95: 82 }, { routeMs: 201000, p95: 81 }];

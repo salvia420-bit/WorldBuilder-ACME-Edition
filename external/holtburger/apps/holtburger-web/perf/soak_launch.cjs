@@ -22,6 +22,24 @@ const KEY_FILE = "/mnt/wbterminal2/stream/.keys/openrouter-key";
 const KEY_STORAGE = "holtburger_ai_key_v1";
 const BASE = "http://127.0.0.1:8765/apps/holtburger-web/index.html";
 
+// Fork #2 — coverage floor (prompt insurance). The explorer's coverage is the
+// ONLY thing the LLM prompt controls; a wedged/weak director must not stall the
+// whole loop. When new-landblock coverage dries up (or the director stops moving
+// AND stops thinking), jailbreak to fresh content with @telepoi — a Developer
+// command the soak account (accessLevel 4) can issue. This decouples loop
+// PROGRESS from prompt QUALITY: a bad prompt just means the floor does more work.
+// Rotation = geographically/content-diverse POIs (world DB points_of_interest),
+// leading with the two historically perf-hostile targets so discovery keeps
+// hammering the known offenders even if the director never chooses them.
+const POI_ROTATION = [
+  "Town Network", "Marketplace",              // known offenders (handoff)
+  "Arwic", "Holtburg", "Cragstone", "Rithwic", "Eastham", "Glenden Wood",
+  "Yaraq", "Shoushi", "Nanto", "Zaikhal", "Qalabar", "Hebian-to", "Mayoi",
+  "Sawato", "Uziz", "Xarabydun", "Ayan Baqur", "Samsur", "Lin", "Baishi",
+  "Sanamar", "Timaru", "Fort Tethana", "Linvak Tukal", "Neydisa", "Fiun",
+];
+const COVERAGE_FLOOR_MS = 4 * 60000; // no new landblock in this window => jailbreak
+
 function arg(name, def) {
   const i = process.argv.indexOf("--" + name);
   return i >= 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith("--") ? process.argv[i + 1] : def;
@@ -88,10 +106,20 @@ function log(m) { console.log(new Date().toISOString() + " [soak] " + m); }
   await page.evaluate(SAMPLER_FN, { emitMs });
   log("sampler installed (emit " + emitMs + "ms) -> " + path.relative(HERE, outF));
 
-  // Health loop: verify the director is actually driving (calls climbing) and
-  // the explorer is actually roaming (landblock changing). If calls stall AND
-  // the LB is frozen, the discovery has stopped producing signal — warn loudly.
-  let lastCalls = -1, lastLb = null, stalls = 0;
+  // Health loop: verify the director is driving (calls climbing) and the
+  // explorer is roaming (landblock changing). Enforce the coverage floor: if no
+  // NEW landblock appears within COVERAGE_FLOOR_MS — or the explorer is fully
+  // wedged (no move + no call) — jailbreak to the next POI.
+  let lastCalls = -1, lastLb = null, stalls = 0, poiIdx = 0, jailbreaks = 0;
+  const seen = new Set();
+  let lastNewCoverage = Date.now();
+  async function jailbreak(why) {
+    const poi = POI_ROTATION[poiIdx % POI_ROTATION.length]; poiIdx++;
+    try { await page.evaluate((c) => window.__bot.host.WriteToChat(c), "@telepoi " + poi); jailbreaks++;
+      log("JAILBREAK #" + jailbreaks + " -> @telepoi " + poi + " (" + why + ")"); }
+    catch (e) { log("jailbreak failed: " + (e && e.message)); }
+    lastNewCoverage = Date.now(); stalls = 0; // give the new area time before re-firing
+  }
   const deadline = Date.now() + minutes * 60000;
   while (Date.now() < deadline) {
     await sleep(60000);
@@ -102,13 +130,17 @@ function log(m) { console.log(new Date().toISOString() + " [soak] " + m); }
       try { baked = window.liveScene3d && window.liveScene3d.terrainBakedLbs ? window.liveScene3d.terrainBakedLbs.size : null; } catch (e) {}
       return { calls, lb, baked };
     }).catch(() => ({ calls: -2, lb: null, baked: null }));
+    if (h.lb && !seen.has(h.lb)) { seen.add(h.lb); lastNewCoverage = Date.now(); }
     const moving = h.lb !== lastLb, thinking = h.calls > lastCalls;
     if (!moving && !thinking) stalls++; else stalls = 0;
     lastCalls = h.calls; lastLb = h.lb;
     const am = availMB();
-    log("calls=" + h.calls + " lb=" + h.lb + " baked=" + h.baked + " samples=" + sampleCount + " availMB=" + am + (stalls ? " STALL×" + stalls : ""));
-    if (stalls >= 5) log("ALERT: explorer stalled (no move + no LLM call ×" + stalls + ") — director may be wedged");
+    const coverAgeS = Math.round((Date.now() - lastNewCoverage) / 1000);
+    log("calls=" + h.calls + " lb=" + h.lb + " baked=" + h.baked + " seen=" + seen.size + " samples=" + sampleCount + " availMB=" + am + (stalls ? " STALL×" + stalls : "") + " coverAge=" + coverAgeS + "s");
     if (am >= 0 && am < 300) log("ALERT: memory low availMB=" + am);
+    // Coverage floor: fire on wedge (fast) or on coverage drought (slower).
+    if (stalls >= 3) await jailbreak("wedged ×" + stalls);
+    else if (Date.now() - lastNewCoverage > COVERAGE_FLOOR_MS) await jailbreak("no new LB " + coverAgeS + "s");
   }
   log("minutes elapsed — stopping");
   try { await page.evaluate(() => window.__perfSampler && window.__perfSampler.stop()); } catch (e) {}
