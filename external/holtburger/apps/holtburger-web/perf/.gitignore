@@ -1,0 +1,7 @@
+loop-state.json
+samples-*.jsonl
+arm-*.json
+*.arm.json
+soak-*.log
+soak.pid
+soak.current
