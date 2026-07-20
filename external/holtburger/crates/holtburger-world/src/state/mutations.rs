@@ -998,12 +998,11 @@ impl WorldState {
             sync,
             AuthoritativeBodySync::Reset | AuthoritativeBodySync::ForceBlip
         ) {
-            self.player.pending_arrival_placement = true;
-            // Retail clears the transient contact/fall state on a hard
-            // SetPosition — the stationary-fall bits (transient_state
-            // 0x10/0x20) belong to the OLD location's stuck fall, not the
-            // arrival's.
-            self.player.frames_stationary_fall = 0;
+            // Shared with the teleport-arrival path (soak-11 Layer-1): sets
+            // `pending_arrival_placement` and clears the transient
+            // stationary-fall carry (the 0x10/0x20 bits belong to the OLD
+            // location's stuck fall, not the arrival's).
+            self.player.latch_arrival_placement();
         }
 
         if let Some(body_id) = self.runtime_body_id_for_guid(guid) {

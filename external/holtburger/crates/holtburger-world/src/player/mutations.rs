@@ -377,6 +377,41 @@ impl PlayerState {
         self.teleport_sequence = teleport_sequence;
     }
 
+    /// Soak-11 Layer-1 (2026-07-20): arm the teleport-arrival latch when a
+    /// `PlayerTeleport` (0xF748) lands. Because that handler pre-mirrors the
+    /// destination `teleport_sequence`, the follow-up self `UpdatePosition`
+    /// sees an EQUAL stamp (`is_newer_u16 == false`) and would apply the
+    /// arrival hard-snap as an authoritative-only / `Snapshot` write that never
+    /// latches [`Self::pending_arrival_placement`]. Arming here lets the next
+    /// self `UpdatePosition` upgrade its apply to `Reset` so retail's arrival
+    /// PLACEMENT runs. See [`Self::teleport_arrival_pending`].
+    pub fn arm_teleport_arrival(&mut self) {
+        self.teleport_arrival_pending = true;
+    }
+
+    /// Consume the teleport-arrival latch (consume-once). Returns whether it
+    /// was armed and clears it unconditionally, so the armed window is at most
+    /// one self `UpdatePosition` decision.
+    pub fn take_teleport_arrival(&mut self) -> bool {
+        core::mem::take(&mut self.teleport_arrival_pending)
+    }
+
+    /// Schedule retail's arrival PLACEMENT (`CPhysicsObj::SetPosition` →
+    /// `find_placement_position`, acclient.c:313341) for the next movement tick
+    /// and clear the transient stationary-fall carry — the shared "hard
+    /// positional discontinuity landed" latch. Set inline by
+    /// `WorldState::set_player_position_with_sync` on the Reset|ForceBlip
+    /// (sequence-advance) arrivals; called explicitly by the teleport-arrival
+    /// path where the pre-mirrored `teleport_sequence` lands via a same-stamp
+    /// `Snapshot` de-suspend that does not self-latch (soak-11 Layer-1).
+    pub fn latch_arrival_placement(&mut self) {
+        self.pending_arrival_placement = true;
+        // Retail clears the transient contact/fall state on a hard SetPosition —
+        // the stationary-fall bits belong to the OLD location's stuck fall, not
+        // the arrival's.
+        self.frames_stationary_fall = 0;
+    }
+
     pub fn hydrate_from_player_description(
         &mut self,
         data: &PlayerDescriptionEventData,

@@ -1458,6 +1458,160 @@ fn workstream_g_post_teleport_set_player_position_updates_runtime_pose_when_body
     let _ = AuthoritativeBodySync::Snapshot; // silence unused-import lint without changing public API
 }
 
+/// Soak-11 Layer-1 (2026-07-20): `latch_arrival_placement` sets the placement
+/// latch and clears the transient stationary-fall carry — the shared "hard
+/// positional discontinuity landed" latch used by both the Reset|ForceBlip
+/// sequence-advance arrivals (inline in `set_player_position_with_sync`) and
+/// the teleport-arrival path.
+#[test]
+fn soak11_latch_arrival_placement_sets_flag_and_clears_fall_carry() {
+    let mut player = crate::player::types::PlayerState::new();
+    player.pending_arrival_placement = false;
+    player.frames_stationary_fall = 2;
+    player.latch_arrival_placement();
+    assert!(
+        player.pending_arrival_placement,
+        "latch_arrival_placement schedules the placement pass"
+    );
+    assert_eq!(
+        player.frames_stationary_fall, 0,
+        "a hard arrival clears the old location's stationary-fall carry"
+    );
+}
+
+/// Soak-11 Layer-1: the teleport-arrival latch is consume-once — armed by the
+/// PlayerTeleport handler, cleared by the FIRST `take_teleport_arrival` (the
+/// next self `UpdatePosition` decision), and stays clear afterward.
+#[test]
+fn soak11_arm_take_teleport_arrival_is_consume_once() {
+    let mut player = crate::player::types::PlayerState::new();
+    assert!(!player.teleport_arrival_pending, "unarmed at construction");
+    assert!(!player.take_teleport_arrival(), "take on unarmed returns false");
+
+    player.arm_teleport_arrival();
+    assert!(player.teleport_arrival_pending, "armed flag set");
+    assert!(player.take_teleport_arrival(), "first take consumes the latch");
+    assert!(
+        !player.teleport_arrival_pending,
+        "flag cleared after consume (armed window is one UpdatePosition)"
+    );
+    assert!(
+        !player.take_teleport_arrival(),
+        "second take returns false (consume-once)"
+    );
+}
+
+/// Soak-11 Layer-1 END-TO-END: drive the live @teleloc wire pair through the
+/// CANONICAL `handlers/player.rs` path (the one `wireStatePacks` default-ON
+/// runs) and assert the arrival-placement latch actually sets — which it did
+/// NOT pre-fix (the pre-mirrored `teleport_sequence` lands via the
+/// `body_suspended` Snapshot de-suspend, which never self-latches). Also
+/// asserts (a) a ROUTINE self UpdatePosition (no teleport) does NOT latch, and
+/// (b) the destination body-snap / mode trajectory is UNCHANGED (the fix is
+/// additive — `post_teleport_..._snaps_suspended_body` contract preserved).
+#[test]
+fn soak11_canonical_teleport_arrival_latches_placement_routine_does_not() {
+    // Mirrors the live verify: the Holtburg grocer vestibule (Environment 840).
+    let player_guid = Guid(0x5000_00A9);
+    let source_pos = WorldPosition {
+        landblock_id: Guid(0x8602_01AD),
+        coords: Vector3::new(12.32, -28.48, 0.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let dest_pos = WorldPosition {
+        landblock_id: Guid(0xA9B4_016E),
+        coords: Vector3::new(4.243, -2.121, 0.35),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let update_position = |guid: Guid, pose: WorldPosition, teleport_sequence: u16| {
+        GameMessage::UpdatePosition(Box::new(UpdatePositionData {
+            guid,
+            pos: PositionPack {
+                pos: pose,
+                instance_sequence: 1,
+                position_sequence: 1,
+                teleport_sequence,
+                force_position_sequence: 0,
+                ..PositionPack::default()
+            },
+        }))
+    };
+
+    // ---- Teleport arrival (PlayerTeleport → destination UpdatePosition) ----
+    let mut state = WorldState::synthetic();
+    state.seed_local_player_entity(player_guid, "Player", source_pos);
+    // Integrator ran once pre-teleport (arms SimulatingMotionState).
+    let _ = state.set_local_player_runtime_pose(source_pos);
+    state.player.pending_arrival_placement = false;
+
+    // PlayerTeleport pre-mirrors teleport_sequence, suspends the body, AND arms
+    // the arrival latch (soak-11).
+    let _ = state.handle_message(&GameMessage::PlayerTeleport(Box::new(PlayerTeleportData {
+        teleport_sequence: 7,
+    })));
+    assert!(state.player.teleport_arrival_pending, "PlayerTeleport arms the latch");
+    assert_eq!(
+        state
+            .scene
+            .body(SpatialBodyId::LocalPlayer(player_guid))
+            .expect("body registered")
+            .sampling
+            .mode,
+        SpatialSampleMode::Suspended,
+    );
+
+    // Destination UpdatePosition carries the SAME (pre-mirrored) teleport_sequence.
+    let _ = state.handle_message(&update_position(player_guid, dest_pos, 7));
+    assert!(
+        state.player.pending_arrival_placement,
+        "canonical teleport arrival must latch pending_arrival_placement (FAILS pre-fix)"
+    );
+    assert!(
+        !state.player.teleport_arrival_pending,
+        "arrival latch consumed (consume-once) by the destination UpdatePosition"
+    );
+    // Additive-fix invariant: the body still snaps to the destination and lands
+    // in AuthoritativeOnly (Snapshot de-suspend), exactly as pre-fix.
+    let body = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("body registered");
+    assert_eq!(
+        body.pose, dest_pos,
+        "destination UpdatePosition still snaps the Suspended body (mode/pose trajectory unchanged)"
+    );
+    assert_eq!(
+        body.sampling.mode,
+        SpatialSampleMode::AuthoritativeOnly,
+        "Snapshot de-suspend still lands in AuthoritativeOnly (fix is additive)"
+    );
+
+    // ---- Routine self UpdatePosition (NO PlayerTeleport) ----
+    let mut state = WorldState::synthetic();
+    state.seed_local_player_entity(player_guid, "Player", source_pos);
+    let _ = state.set_local_player_runtime_pose(source_pos);
+    state.player.pending_arrival_placement = false;
+    // Same teleport_sequence as the stored one, no arm → routine echo, no latch.
+    let _ = state.handle_message(&update_position(player_guid, dest_pos, 0));
+    assert!(
+        !state.player.pending_arrival_placement,
+        "a routine (non-teleport) UpdatePosition must NOT latch placement"
+    );
+
+    // ---- Login InitialHydration suspend must NOT latch (only PlayerTeleport arms) ----
+    let mut state = WorldState::synthetic();
+    state.seed_local_player_entity(player_guid, "Player", source_pos);
+    let _ = state.set_local_player_runtime_pose(source_pos);
+    state.player.pending_arrival_placement = false;
+    let _ = state.suspend_runtime_bodies(RuntimeBodyResetCause::InitialHydration);
+    // Body is Suspended but the teleport latch was never armed.
+    let _ = state.handle_message(&update_position(player_guid, dest_pos, 0));
+    assert!(
+        !state.player.pending_arrival_placement,
+        "a login InitialHydration suspend (no PlayerTeleport) must NOT latch placement"
+    );
+}
+
 /// NavAtlas outdoor-login `objCellId == 0` regression (2026-07-19,
 /// live-repro on ACE: a character whose SAVED position is OUTDOORS logs
 /// in and `getLocalPlayerPose().landblockId` — the value the rynth

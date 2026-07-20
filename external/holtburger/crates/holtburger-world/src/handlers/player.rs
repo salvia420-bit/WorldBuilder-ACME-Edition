@@ -71,6 +71,21 @@ pub(crate) fn handle_message(
                         old_force_position_sequence,
                     );
                     let snap = teleport_advance || force_advance;
+                    // Soak-11 Layer-1 (2026-07-20): consume the teleport-arrival
+                    // latch (armed by the `PlayerTeleport` arm below). Because
+                    // that arm pre-mirrors `teleport_sequence`, the destination
+                    // `UpdatePosition` reads EQUAL (`snap == false`) and lands via
+                    // the `body_suspended` branch below on `Snapshot` — which hard-
+                    // snaps the body but NEVER latches `pending_arrival_placement`,
+                    // so retail's arrival PLACEMENT (`find_placement_position`,
+                    // acclient.c:313341) is skipped and an env-cell-wall landing
+                    // stays embedded. Consume-once here (clears whether or not it
+                    // fires); when set it upgrades the suspended-arrival apply to
+                    // `Reset` so the placement latches. Only a `PlayerTeleport`
+                    // arms it — a login `InitialHydration` suspend does NOT, so the
+                    // enter-world path is unaffected (constraint: initial login is
+                    // the normal enter-world path, not a discontinuity resync).
+                    let teleport_arrival_pending = state.player.take_teleport_arrival();
                     // Teleport-destination landing (2026-07-02): the
                     // `PlayerTeleport` arm below pre-advances
                     // `teleport_sequence` AND parks the runtime body
@@ -143,6 +158,23 @@ pub(crate) fn handle_message(
                         // default-on flip had bypassed it.
                         state.set_player_position_authoritative_only(data.pos.pos)
                     });
+                    // Soak-11 Layer-1 (2026-07-20): latch the retail arrival
+                    // PLACEMENT on a genuine teleport arrival. A `PlayerTeleport`
+                    // pre-mirrors `teleport_sequence`, so the destination lands via
+                    // the `body_suspended` Snapshot de-suspend above (`snap ==
+                    // false`) — a hard positional discontinuity that
+                    // `set_player_position_with_sync(Snapshot)` does NOT self-latch
+                    // (only Reset|ForceBlip do). Retail runs `find_placement_position`
+                    // on EVERY teleport arrival (acclient.c:313341) to de-embed an
+                    // env-cell-wall landing; latch it here so the movement tick's
+                    // `consume_pending_arrival_placement` runs. Additive: the body
+                    // sync/mode trajectory is unchanged; Reset|ForceBlip arrivals
+                    // already latch (this is idempotent for them). Only a
+                    // `PlayerTeleport` arms the flag — a login `InitialHydration`
+                    // suspend does not — so the enter-world path is untouched.
+                    if teleport_arrival_pending {
+                        state.player.latch_arrival_placement();
+                    }
                 }
                 return true;
             }
@@ -206,6 +238,14 @@ pub(crate) fn handle_message(
         }
         GameMessage::PlayerTeleport(data) => {
             state.player.set_teleport_sequence(data.teleport_sequence);
+            // Soak-11 Layer-1 (2026-07-20): arm the teleport-arrival latch. The
+            // `set_teleport_sequence` above pre-mirrors the destination stamp, so
+            // the follow-up self `UpdatePosition` reads it EQUAL and lands via the
+            // `body_suspended` Snapshot branch (above) without latching
+            // `pending_arrival_placement`. Arming lets that branch upgrade to
+            // `Reset` so retail's arrival PLACEMENT runs. Consume-once via
+            // `take_teleport_arrival`.
+            state.player.arm_teleport_arrival();
             events
                 .extend(state.suspend_runtime_bodies(RuntimeBodyResetCause::TeleportOrWorldReset));
             events.push(WorldEvent::TeleportStarted {

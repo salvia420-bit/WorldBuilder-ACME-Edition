@@ -39616,8 +39616,23 @@ async fn recv_loop(
                                 let _ = w.suspend_runtime_bodies(
                                     holtburger_world::RuntimeBodyResetCause::TeleportOrWorldReset,
                                 );
+                                // Soak-11 Layer-1 (2026-07-20): arm the
+                                // teleport-arrival latch. `set_teleport_sequence`
+                                // above pre-mirrors the destination stamp, so the
+                                // follow-up self `UpdatePosition` reads its
+                                // `teleport_sequence` EQUAL (`is_newer_u16 ==
+                                // false`) and lands via the Snapshot de-suspend,
+                                // which does NOT self-latch
+                                // `pending_arrival_placement` → retail's arrival
+                                // PLACEMENT (`find_placement_position`,
+                                // acclient.c:313341) is skipped and an embedded
+                                // arrival stays stuck at the env-cell seam. Arming
+                                // here lets the next self `UpdatePosition` latch the
+                                // placement (consume-once via
+                                // `take_teleport_arrival`).
+                                w.player.arm_teleport_arrival();
                                 console_log_str(&format!(
-                                    "[workstream-G] PlayerTeleport: advanced teleport_sequence → {} + suspended runtime bodies; runtime pose will snap on next UpdatePosition",
+                                    "[workstream-G] PlayerTeleport: advanced teleport_sequence → {} + suspended runtime bodies + armed arrival-placement latch; runtime pose will snap on next UpdatePosition",
                                     data.teleport_sequence,
                                 ));
                             }
@@ -40142,19 +40157,44 @@ async fn recv_loop(
                                                 data.pos.force_position_sequence,
                                                 w.player.force_position_sequence,
                                             );
-                                        if routine_pos_guard_on && !force_or_teleport_advanced {
+                                        // Soak-11 Layer-1 (2026-07-20): consume the
+                                        // teleport-arrival latch (consume-once). Armed
+                                        // by the OFF-path PlayerTeleport handler above;
+                                        // the take clears it whether or not it fires.
+                                        // NOTE: the live client runs the canonical
+                                        // `handlers/player.rs` path (wireStatePacks
+                                        // default-ON); this legacy OFF-path arm is the
+                                        // `?wireStatePacks=off` twin — same latch shape.
+                                        let teleport_arrival_pending =
+                                            w.player.take_teleport_arrival();
+                                        if teleport_arrival_pending {
+                                            // Teleport destination arrival (pre-mirrored
+                                            // stamp → not `force_or_teleport_advanced`):
+                                            // de-suspend the body via the Snapshot
+                                            // reconcile (mode ∉ Simulating* ⇒ no
+                                            // preserve gate, body snaps to destination),
+                                            // then latch the retail arrival PLACEMENT
+                                            // (`find_placement_position`) so the movement
+                                            // tick de-embeds an env-cell-wall landing.
+                                            // Additive: the body sync/mode trajectory
+                                            // matches the canonical `body_suspended` arm.
+                                            let _ = w.set_player_position_with_sync(
+                                                pose,
+                                                holtburger_world::AuthoritativeBodySync::Snapshot,
+                                            );
+                                            w.player.latch_arrival_placement();
+                                        } else if routine_pos_guard_on
+                                            && !force_or_teleport_advanced
+                                        {
                                             // Movement bughunt 2026-06-19
-                                            // ("stall → pull-back"): a ROUTINE
-                                            // self UpdatePosition is the laggy
-                                            // ~20 Hz echo of our OWN movement;
-                                            // when backlog-delayed it lands
-                                            // tens of metres behind and the
-                                            // preserve path eases the avatar
-                                            // backward (force-position interp).
-                                            // Keep client prediction; update
-                                            // authoritative bookkeeping only.
-                                            // Only a FORCED correction (below)
-                                            // snaps the body.
+                                            // ("stall → pull-back"): a ROUTINE self
+                                            // UpdatePosition is the laggy ~20 Hz echo of
+                                            // our OWN movement; when backlog-delayed it
+                                            // lands tens of metres behind and the
+                                            // preserve path eases the avatar backward
+                                            // (force-position interp). Keep client
+                                            // prediction; update authoritative
+                                            // bookkeeping only.
                                             let _ =
                                                 w.set_player_position_authoritative_only(pose);
                                         } else {

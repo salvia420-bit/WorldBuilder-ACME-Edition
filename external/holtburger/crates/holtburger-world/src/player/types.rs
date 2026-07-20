@@ -1618,6 +1618,33 @@ pub struct PlayerState {
     /// placement on the next tick. `false` once consumed (or when the cell BSP is
     /// not yet resident, it stays set for a later retry).
     pub pending_arrival_placement: bool,
+
+    /// Teleport-arrival latch (soak-11 Layer-1, 2026-07-20). The
+    /// `PlayerTeleport` (0xF748) handler pre-mirrors the destination's
+    /// `teleport_sequence` onto [`Self::teleport_sequence`] (so outbound
+    /// MoveToState / AutonomousPosition packets carry a current stamp). The
+    /// follow-up self `UpdatePosition` for the destination therefore compares
+    /// its `teleport_sequence` EQUAL to the mirrored value — `is_newer_u16`
+    /// reads `false`, the B1/D3-SNAP discriminant never selects
+    /// `AuthoritativeBodySync::Reset`, and the arrival hard-snap runs as an
+    /// authoritative-only / `Snapshot` apply that NEVER latches
+    /// [`Self::pending_arrival_placement`]. Result: retail's arrival PLACEMENT
+    /// (`CPhysicsObj::SetPosition` → `find_placement_position`,
+    /// acclient.c:313341) is skipped and a teleport that lands the capsule in
+    /// an env-cell wall stays embedded (walk realizes 0m at the seam).
+    ///
+    /// The handler arms this flag ([`Self::arm_teleport_arrival`]); the next
+    /// self `UpdatePosition` decision consumes it
+    /// ([`Self::take_teleport_arrival`]) to force `Reset`, which latches the
+    /// placement. Expiry is consume-once: the flag is cleared unconditionally
+    /// by the very next self `UpdatePosition` decision, so the armed window is
+    /// at most one `UpdatePosition`. ACE suspends position broadcasts across
+    /// the teleport and F2-3 defers `LoginComplete` until the destination
+    /// `UpdatePosition` has been applied, so that destination pose is reliably
+    /// the next self `UpdatePosition` — the latch lands on the true arrival. A
+    /// lost destination packet cannot strand a stale flag: the first
+    /// subsequent self `UpdatePosition` still clears it.
+    pub teleport_arrival_pending: bool,
 }
 
 impl Default for PlayerState {
@@ -1695,6 +1722,8 @@ impl PlayerState {
             // No arrival pending at spawn (the initial login position runs the
             // normal enter-world path, not a discontinuity resync).
             pending_arrival_placement: false,
+            // No teleport in flight at spawn.
+            teleport_arrival_pending: false,
         }
     }
 
