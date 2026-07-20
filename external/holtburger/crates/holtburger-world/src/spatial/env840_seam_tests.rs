@@ -370,16 +370,16 @@ fn xy_dist(a: &WorldPosition, b: &WorldPosition) -> f32 {
 /// grounded, and that a transitional slice then MOVES from the adjusted pose
 /// (movement restored — the whole point of the fix).
 ///
-/// FU-11 (2026-07-20): the API's INDOOR input contract is now CELL-LOCAL (the
-/// live server frame — see `faithful_find_placement_position`'s FRAME CONTRACT).
-/// This test formerly fed the landblock-local WORLD point (81,33,94.35) directly;
-/// that was a test-only fiction (the placement latch only ever fires on a
-/// server-authored teleport/force-blip, whose indoor coords are cell-local).
-/// It now DERIVES the cell-local input from that same landblock-local target via
-/// the cell frame (`world_to_local` — the exact inverse of the lift the fix
-/// applies), so it still pins the (81,33,94.35) grocer geometry while exercising
-/// the real cell-local API. See the sibling
-/// `env840_arrival_placement_deembeds_cell_local` for the raw live coords.
+/// Task-#13 audit (2026-07-20, INVERTS FU-11): the API's input contract is
+/// LANDBLOCK-frame for indoor poses too — ACE authors indoor `Position` coords
+/// in one shared per-landblock/dungeon frame (Position.SetLandblock/SetLandCell
+/// bail `if (Indoors)`; `EnvCell.point_in_cell` global→local converts before
+/// the bounds test; live A/B 2026-07-20: real landblock-frame telelocs failed
+/// the FU-11 cell-local lift, only hand-typed cell-sized input engaged). This
+/// test feeds the landblock-local pose (81,33,94.35) DIRECTLY — the same shape
+/// a real server-authored arrival carries. See
+/// `env840_arrival_placement_synthetic_cell_local_fails` for the out-of-contract
+/// hand-typed input.
 #[test]
 fn env840_arrival_placement_deembeds() {
     let Some(scene) = build_scene() else {
@@ -390,22 +390,10 @@ fn env840_arrival_placement_deembeds() {
     let object = player_object();
     let g = gates();
 
-    // The landblock-local WORLD target this test pins (grocer vestibule, ~0.37 m
-    // inside the y=−2.15 wall). Lift to WORLD, then fold through the cell frame to
-    // the cell-local coords the API now consumes.
+    // The landblock-local arrival this test pins (grocer vestibule, ~0.37 m
+    // inside the y=−2.15 wall) — fed verbatim, per the landblock-frame contract.
     let target_lb_local = pose(81.0, 33.0, 94.35);
-    let world = target_lb_local.global_coords();
-    let cell_local_v = env
-        .scene
-        .cell_physics_bsp(REPRO_CELL)
-        .expect("vestibule physics BSP resident")
-        .world_to_local(world);
-    let repro = pose(cell_local_v.x, cell_local_v.y, cell_local_v.z);
-    eprintln!(
-        "  lb-local target ({:.3},{:.3},{:.3}) → cell-local input ({:.3},{:.3},{:.3})",
-        target_lb_local.coords.x, target_lb_local.coords.y, target_lb_local.coords.z,
-        repro.coords.x, repro.coords.y, repro.coords.z,
-    );
+    let repro = target_lb_local;
 
     let outcome = faithful_find_placement_position(&env, &repro, &object, &g)
         .expect("placement search must find a valid de-embedded pose");
@@ -467,26 +455,21 @@ fn env840_arrival_placement_deembeds() {
     );
 }
 
-/// FU-11 live-frame regression (ticket: the `[arrival-placement] placement
-/// search failed` grocer warn). The EXACT live teleport-arrival pose —
-/// `@teleloc 0xA9B4016E 4.243 -2.121 0.35`, i.e. cell 0xA9B4016E with the
-/// server-authored CELL-LOCAL coords `(4.243, -2.121, 0.35)` (z ≈ 0.35 above the
-/// vestibule floor, NOT the ~94 m landblock-local z). PRE-FIX,
-/// `faithful_find_placement_position` fed these straight through
-/// `global_coords()` (treating them as landblock-local), which starts the radial
-/// search ~90 m below the floor and ~tens of m off in XY → `found == 0` → `None`
-/// → the failed warn + failed counter, pose kept embedded. POST-FIX the cell
-/// frame lifts the cell-local coords into WORLD, the search de-embeds, and the
-/// output is normalized back to landblock-local so a transitional slice moves.
-///
-/// Same qualitative asserts as `env840_arrival_placement_deembeds`, plus a check
-/// that the de-embedded output lands in the (81,33,~94) landblock-local
-/// neighbourhood (proving the frame lift, not a coincidental in-place settle).
+/// Task-#13 audit (2026-07-20, INVERTS FU-11): hand-typed CELL-sized teleloc
+/// input is OUT OF CONTRACT. `@teleloc 0xA9B4016E 4.243 -2.121 0.35` (the input
+/// FU-11 was calibrated on) is NOT a server frame — ACE passes operator numbers
+/// through verbatim (AdminCommands.cs:951), so those coords reach the client as
+/// a landblock-frame point ~90 m below / tens of metres off the vestibule.
+/// Under the landblock-frame contract the ≤4 m radial placement search finds no
+/// geometry there and must return `None` (live symptom: the
+/// `[arrival-placement] placement search failed … (pose kept)` warn). This
+/// negative test pins that: cell-sized input fails placement instead of being
+/// silently reinterpreted through the cell frame.
 #[test]
-fn env840_arrival_placement_deembeds_cell_local() {
+fn env840_arrival_placement_synthetic_cell_local_fails() {
     let Some(scene) = build_scene() else {
         eprintln!(
-            "SKIP env840_arrival_placement_deembeds_cell_local: portal/cell dats unavailable"
+            "SKIP env840_arrival_placement_synthetic_cell_local_fails: portal/cell dats unavailable"
         );
         return;
     };
@@ -494,75 +477,38 @@ fn env840_arrival_placement_deembeds_cell_local() {
     let object = player_object();
     let g = gates();
 
-    // The RAW live cell-local arrival pose (server frame). No manual conversion —
-    // this is precisely what `getLocalPlayerPose` reported live.
+    // The hand-typed cell-sized input, fed as-is (landblock-frame per contract).
     let repro = pose(4.243, -2.121, 0.35);
 
-    let outcome = faithful_find_placement_position(&env, &repro, &object, &g)
-        .expect("placement search must de-embed the live cell-local arrival pose");
-
-    eprintln!(
-        "  live cell-local ({:.3},{:.3},{:.3}) → lb-local ({:.3},{:.3},{:.3})  grounded={} cell={:#x} adjusted_by={:.3}m",
-        repro.coords.x, repro.coords.y, repro.coords.z,
-        outcome.pose.coords.x, outcome.pose.coords.y, outcome.pose.coords.z,
-        outcome.grounded, outcome.pose.landblock_id.0, outcome.adjusted_by,
-    );
-
-    // The de-embedded output is LANDBLOCK-local (normalized) in the grocer
-    // vestibule neighbourhood (~81,33 on x/y; ~94 on z), NOT the cell-local input.
+    let outcome = faithful_find_placement_position(&env, &repro, &object, &g);
     assert!(
-        (outcome.pose.coords.x - 81.0).abs() < 6.0
-            && (outcome.pose.coords.y - 33.0).abs() < 6.0
-            && (outcome.pose.coords.z - 94.0).abs() < 2.0,
-        "de-embedded output not in the landblock-local grocer neighbourhood: \
-         ({:.3},{:.3},{:.3}) (expected ≈ 81,33,94 — the cell frame was not applied)",
-        outcome.pose.coords.x, outcome.pose.coords.y, outcome.pose.coords.z,
+        outcome.is_none(),
+        "cell-sized out-of-contract input must fail the placement search \
+         (found a pose at {:?} — is the cell-local lift back?)",
+        outcome.map(|o| o.pose.coords),
     );
+}
 
-    // Cell-local de-embed check (same band logic as the sibling test).
-    let bsp = env
-        .scene
-        .cell_physics_bsp(REPRO_CELL)
-        .expect("vestibule physics BSP resident");
-    let local = bsp.world_to_local(outcome.pose.global_coords());
-    let radius = object.radius;
-    let clear_of_walls = (local.y - (-2.15)).abs() >= radius - 0.02
-        && (local.y - (-0.25)).abs() >= radius - 0.02;
-    let in_free_band = (-1.75..=-0.65).contains(&local.y);
-    eprintln!(
-        "  cell-local=({:.3},{:.3},{:.3}) in_free_band={in_free_band} clear_of_walls={clear_of_walls}",
-        local.x, local.y, local.z,
-    );
-    assert!(
-        in_free_band || clear_of_walls,
-        "adjusted pose still embedded: cell-local y={:.3} (walls at -2.15 / -0.25, radius {radius})",
-        local.y,
-    );
-
-    assert!(
-        outcome.grounded,
-        "placement must settle grounded (floor z=0 contact plane)"
-    );
-
-    // Movement restored: a 0.5 m transitional slice must move in ≥ 2 cardinals.
-    let adjusted = outcome.pose;
-    let mut moved_dirs = 0;
-    for (name, dx, dy) in DIRS {
-        let mut end = adjusted;
-        end.coords.x += dx * 0.5;
-        end.coords.y += dy * 0.5;
-        let (fd, out) = faithful_delta(&env, &input_for(adjusted, end));
-        let did = fd > 0.05;
-        moved_dirs += did as i32;
-        eprintln!(
-            "  from-adjusted dir={name} |Δ|={fd:.4} grounded={} [{}]",
-            out.grounded,
-            if did { "moved" } else { "refused" },
-        );
-    }
-    assert!(
-        moved_dirs >= 2,
-        "movement not restored from the de-embedded pose ({moved_dirs}/4 dirs moved)"
+/// Task-#12 fix 2 (2026-07-20): the ARRIVAL begin-cell resolver must keep the
+/// server-claimed cell when the capsule still reaches it, and must never let a
+/// topological portal neighbour steal the label (live 2026-07-20: login at
+/// (81,33,94.35) labeled 0xA9B4016E ran placement against neighbour
+/// 0xA9B4016A — wrong room — and found nothing). The pose sits ~0.37 m inside
+/// the vestibule wall (embedded), so the bare point test can miss, but the
+/// 0.4 m capsule still reaches 0x016E's hull.
+#[test]
+fn env840_arrival_begin_cell_keeps_claimed_vestibule() {
+    let Some(scene) = build_scene() else {
+        eprintln!("SKIP env840_arrival_begin_cell_keeps_claimed_vestibule: dats unavailable");
+        return;
+    };
+    let repro = pose(81.0, 33.0, 94.35);
+    let resolved = scene.current_cell_for_arrival(&repro);
+    eprintln!("  arrival resolver: claimed 0x{REPRO_CELL:08X} → resolved 0x{resolved:08X}");
+    assert_eq!(
+        resolved, REPRO_CELL,
+        "arrival resolver must keep the claimed vestibule (capsule reaches its hull), \
+         not hand the label to a neighbour"
     );
 }
 
@@ -584,15 +530,9 @@ fn env840_seam_cross_into_room() {
 
     // Seed grounded contact via the arrival-placement path (the system runs
     // placement on arrival, then movement carries `last_contact_plane` forward).
-    // FU-11: placement's indoor input is CELL-LOCAL — fold the landblock-local
-    // control point through the cell frame before feeding it.
-    let control_lb_local = pose(81.44, 33.86, 94.1);
-    let control_cl = env
-        .scene
-        .cell_physics_bsp(REPRO_CELL)
-        .expect("vestibule physics BSP resident")
-        .world_to_local(control_lb_local.global_coords());
-    let control = pose(control_cl.x, control_cl.y, control_cl.z);
+    // Task-#13 audit (2026-07-20): placement's input is LANDBLOCK-frame for
+    // indoor poses too — feed the control point directly.
+    let control = pose(81.44, 33.86, 94.1);
     let seed = faithful_find_placement_position(&env, &control, &object, &g)
         .expect("control pose placement must succeed");
     eprintln!(

@@ -1173,6 +1173,39 @@ pub fn faithful_find_transitional_position(
                 live_contact = true;
             } else if near {
                 t.init_last_known_contact_plane(cell_id, plane, false);
+                // BUGFIX (2026-07-20, academy-wedge investigation): the ported
+                // `CTransition::init_last_known_contact_plane` (acclient.c:315612)
+                // carries a documented retail copy/paste quirk — it stamps the
+                // CURRENT plane's `contact_plane_cell_id`, never
+                // `last_known_contact_plane_cell_id` (driver_init.rs:102-114,
+                // ported verbatim on purpose). That's harmless in retail: the
+                // real `check_contact` (velocity·N > EPSILON) almost never
+                // selects this branch for a walking player (ground locomotion
+                // is animation-driven, near-zero physics velocity), so
+                // `init_contact_plane` (which sets BOTH ids) is retail's
+                // near-universal grounded entry. Our `moving_away` PROXY above
+                // is coarser — `plane.normal.z > 0.0 && !descending` is true for
+                // ANY ordinary horizontal walk on flat-ish ground, independent
+                // of the actual movement direction — so this bridge takes this
+                // branch on nearly EVERY grounded step, leaving
+                // `last_known_contact_plane_cell_id` at its type-default `0`
+                // for the whole slice. `validate_transition`'s BRANCH-A
+                // (driver_validate.rs:83-98, acclient.c:312223-312254) then
+                // copies THAT stale `0` into `contact_plane_cell_id` the moment
+                // a swept step fails to converge within its retry budget (the
+                // vault-soffit-overhang academy-wedge repro,
+                // academy_wedge_tests.rs) — and `contact_plane_cell_id != 0` is
+                // the gate `adjust_offset` (driver_geometry.rs:113-114) uses to
+                // push a penetrating sphere back out of the contact plane. A
+                // zero cell id silently disables that push-out, so the mover
+                // stays wedged exactly where it first grazed the obstruction —
+                // confirmed via `faithful_diag_step`
+                // (academy_wedge_diag_overhang_freeze): `contact_plane`/
+                // `last_known` both read cell_id `0` at the frozen slice, vs.
+                // the correct `0x860201b4` on every prior slice. Fix AT THIS
+                // CALL SITE (not the decomp-faithful `init_last_known_contact_
+                // plane` body) — stamp the id the ported method's quirk drops.
+                t.collision_info.last_known_contact_plane_cell_id = cell_id;
             }
         }
         if grounded_entry {
@@ -1466,44 +1499,32 @@ pub fn faithful_find_placement_position(
     // WORLD-space frame; begin == end == the arrival pose (a placement, not a
     // sweep). Identity player rotation → vertical two-sphere capsule.
     //
-    // FRAME CONTRACT (FU-11, 2026-07-20). The INDOOR arrival pose is CELL-LOCAL:
-    // the live server (ACE) writes an indoor `Position`'s coords RELATIVE to the
-    // EnvCell's own placement frame (cell-local), and the wire → `WorldPosition`
-    // unpack stores them verbatim (`traits.rs`, no cell→landblock conversion). A
-    // teleport / force-blip is the ONLY thing that latches this placement
-    // (`consume_pending_arrival_placement`, system.rs → `latch_arrival_placement`
-    // on `Reset`/`ForceBlip`/`PlayerTeleport`), and that arrival pose is exactly
-    // the server-authored cell-local frame — distinct from a WALK-IN (which
-    // enters via the transitional `local_envcell_entry` seam already carrying
-    // landblock-local coords, and does NOT latch placement).
+    // FRAME CONTRACT (task-#13 audit, 2026-07-20 — INVERTS FU-11). An indoor
+    // server pose is LANDBLOCK/DUNGEON-frame, NOT cell-local: ACE never
+    // renormalizes indoor coords (`Position.SetLandblock`/`SetLandCell` bail
+    // `if (Indoors)`, ACE Position.cs:123/191) and derives cell membership by
+    // testing the SHARED point against every EnvCell (`AdjustCell.GetCell`;
+    // `EnvCell.point_in_cell` converts global→cell-local BEFORE the bounds
+    // test, EnvCell.cs:418-421 — byte-for-byte the retail idiom,
+    // `CEnvCell::point_in_cell` acclient.c 0x0052C300). Real content rows span
+    // 200–550 units within one dungeon id (ace_world weenie_properties_position).
+    // Live A/B on the stream rig (2026-07-20): real landblock-frame arrivals
+    // (`@teleloc 0x7203021F 50.0095 -56.5908 0.005` — a genuine DB
+    // portal-destination row — and `@teleloc 0xA9B4016E 81 33 94.35`) both
+    // FAILED the FU-11 cell-local lift (`[arrival-placement] placement search
+    // failed`, pose kept); only the hand-typed cell-sized input
+    // `4.243 -2.121 0.35` engaged. FU-11 was calibrated on that synthetic
+    // input: `@teleloc` passes operator numbers through verbatim
+    // (AdminCommands.cs:951, no frame interpretation), so the lift only ever
+    // round-tripped its own assumption.
     //
-    // The scene's cell physics BSP carries that SAME placement frame: `origin` in
-    // WORLD space (`landblock origin + EnvCell.position.origin`) and `orientation`
-    // the cell quaternion (lib.rs `fetchEnvCellsInLandblock` / the env840 harness
-    // `build_scene`). Lift the cell-local coords into WORLD through it —
-    //     world = cell_origin + cell_orientation · cell_local
-    // — the exact inverse of the `CellPhysicsBsp::world_to_local` the collision
-    // resolver applies. `global_coords()` (landblock origin + coords, z
-    // passthrough) is WRONG for a cell-local pose: it starts the search ~90 m
-    // below the floor (z 0.35 vs floor ~94) and tens of metres off in XY — the
-    // pre-FU-11 `[arrival-placement] placement search failed` live warn (found==0,
-    // no geometry inside the ≤4 m radial sweep). The OUTPUT marshalling below
-    // re-derives LANDBLOCK-local coords (world − landblock origin), NORMALIZING
-    // the arrival into the one frame every downstream consumer already assumes
-    // (walk transitional `global_coords`, JS `rustPoseWorldFromPose`, cell-AABB
-    // `current_cell`).
-    //
-    // Outdoor arrivals never reach here (the caller returns early for outdoor, and
-    // an outdoor cell has no env BSP so the residency guard above already returned
-    // None); the `global_coords` fallback is retained defensively.
-    let arrival_world = if pose.is_indoors() {
-        match scene.cell_physics_bsp(begin_cell) {
-            Some(bsp) => bsp.origin + bsp.orientation.rotate_vector(pose.coords),
-            None => pose.global_coords(),
-        }
-    } else {
-        pose.global_coords()
-    };
+    // `global_coords()` (landblock origin + coords, z passthrough) is therefore
+    // the correct WORLD lift for EVERY server-authored pose, indoor and outdoor
+    // — the same frame the walk-in `local_envcell_entry` seam and every
+    // downstream consumer already use. The OUTPUT marshalling below re-derives
+    // LANDBLOCK-local coords (world − landblock origin), which is now a pure
+    // round-trip for the XY the server sent.
+    let arrival_world = pose.global_coords();
     let mut frame = Frame::identity();
     frame.origin = arrival_world;
     let pos = Position {
@@ -1597,9 +1618,8 @@ pub fn faithful_find_placement_position(
         .contact_plane
         .is_some_and(|plane| plane.normal.z >= RETAIL_FLOOR_Z);
 
-    // FU-11: the TRUE de-embed magnitude, measured in a single WORLD frame
-    // (arrival_world → settled curr.frame.origin), not across the cell-local→
-    // landblock-local frame change the output pose encodes.
+    // The TRUE de-embed magnitude, measured in a single WORLD frame
+    // (arrival_world → settled curr.frame.origin).
     let adjusted_by = (curr.frame.origin - arrival_world).length();
 
     Some(PlacementOutcome {
@@ -1608,6 +1628,164 @@ pub fn faithful_find_placement_position(
         contact_plane,
         adjusted_by,
     })
+}
+
+// ─── cfg(test) diagnostic accessor (academy-wedge investigation, 2026-07-20) ──
+//
+// Mirrors `faithful_find_transitional_position`'s CTransition construction
+// (indoor-only: no outdoor rebucket / cell-transit-flip marshalling, which the
+// academy dungeon repro never exercises) but returns the RAW post-`find_valid_
+// position` driver internals instead of a marshalled `TransitionOutcome` — the
+// polygon-level detail (contact/last-known plane, collision/sliding normal,
+// walkable/step_up/neg_poly_hit latches) `TransitionOutcome` does not surface.
+// `pub(crate)` + `cfg(test)`-gated per the investigation brief: unavoidable for
+// `academy_wedge_tests.rs` to inspect the resolver's response to the vault-
+// soffit overhang without duplicating the whole bridge as a copy-paste test.
+#[cfg(test)]
+#[derive(Debug)]
+#[allow(dead_code)] // full diagnostic surface; not every field is read by every caller
+pub(crate) struct FaithfulDiagStep {
+    pub found: i32,
+    pub begin_cell: u32,
+    pub state_in: u32,
+    pub state_out: u32,
+    pub contact_plane: Option<(holtburger_common::Plane, u32)>,
+    pub last_known_contact_plane: Option<(holtburger_common::Plane, u32)>,
+    pub collision_normal: Option<Vector3>,
+    pub sliding_normal: Option<Vector3>,
+    pub walkable: bool,
+    pub walkable_poly_normal: Option<Vector3>,
+    pub step_up: bool,
+    pub neg_poly_hit: bool,
+    pub begin_origin: Vector3,
+    pub curr_origin: Vector3,
+    pub realized: f32,
+    pub curr_pos_cell: u32,
+    pub check_pos_cell: u32,
+    pub curr_cell: Option<u32>,
+    pub check_cell: Option<u32>,
+}
+
+#[cfg(test)]
+pub(crate) fn faithful_diag_step(
+    env: &dyn TransitionEnv,
+    input: &TransitionInput,
+    faithful_stepup: bool,
+) -> FaithfulDiagStep {
+    let scene = env.scene();
+    let begin_cell = scene.current_cell(&input.begin);
+    let end_cell = scene.current_cell(&input.end);
+
+    let mut begin_frame = Frame::identity();
+    begin_frame.origin = input.begin.global_coords();
+    let begin_pos = Position {
+        objcell_id: begin_cell,
+        frame: begin_frame,
+    };
+    let mut end_frame = Frame::identity();
+    end_frame.origin = input.end.global_coords();
+    let end_pos = Position {
+        objcell_id: end_cell,
+        frame: end_frame,
+    };
+
+    let radius = input.object.radius;
+    let height = input.object.height;
+    let spheres = [
+        Sphere {
+            center: Vector3::new(0.0, 0.0, radius),
+            radius,
+        },
+        Sphere {
+            center: Vector3::new(0.0, 0.0, (height - radius).max(radius)),
+            radius,
+        },
+    ];
+
+    let mut t = CTransition::new();
+    t.object_info.scale = 1.0;
+    t.object_info.state = input.object.state;
+    t.object_info.step_up_height = input.object.step_up_height;
+    t.object_info.step_down_height = input.object.step_down_height;
+    t.object_info.ethereal = input.object.ethereal;
+    t.faithful_stepup = faithful_stepup;
+    t.retail_ground = input.gates.retail_ground;
+    if input.gates.retail_ground {
+        t.begin_on_walkable = faithful_terrain_normal(scene, &input.begin)
+            .is_some_and(|n| n.z >= 0.664_174_1);
+    }
+    let grounded_entry = !input.airborne || input.force_grounded;
+    let on_outdoor_static = input.gates.outdoor_static_grounding
+        && !input.begin.is_indoors()
+        && !scene.cell_static_physics_bsp(begin_cell).is_empty();
+    if t.faithful_stepup && grounded_entry && (input.begin.is_indoors() || on_outdoor_static) {
+        t.object_info.state |= object_info_state::ON_WALKABLE;
+    }
+    if input.gates.retail_ground {
+        t.object_info.step_down = true;
+        let mut live_contact = false;
+        if let Some((plane, cell_id)) = input.last_contact_plane {
+            let feet = input.begin.global_coords();
+            let low_center = Vector3::new(feet.x, feet.y, feet.z + radius);
+            let bottom_dist = plane.normal.dot(&low_center) + plane.d - radius;
+            let near = bottom_dist.abs() <= input.object.step_down_height.max(radius);
+            let moving_away = !input.descending && plane.normal.z > 0.0;
+            if near && !moving_away {
+                t.object_info.state |= object_info_state::CONTACT;
+                t.init_contact_plane(cell_id, plane, false);
+                live_contact = true;
+            } else if near {
+                t.init_last_known_contact_plane(cell_id, plane, false);
+                // Mirrors the BUGFIX applied to `faithful_find_transitional_
+                // position` above — see that call site's comment for the full
+                // citation.
+                t.collision_info.last_known_contact_plane_cell_id = cell_id;
+            }
+        }
+        if grounded_entry {
+            t.object_info.state |= object_info_state::CONTACT | object_info_state::ON_WALKABLE;
+        } else if !live_contact {
+            t.object_info.state &= !object_info_state::CONTACT;
+        }
+    }
+    let state_in = t.object_info.state;
+    t.init_sphere(2, &spheres, 1.0);
+    t.init_path(Some(begin_cell), Some(&begin_pos), &end_pos);
+    t.collision_info.frames_stationary_fall = input.frames_stationary_fall;
+
+    let world = SceneWorld::new(scene);
+    let mover = FaithfulMover { has_gravity: true };
+    let found = t.find_valid_position(&world, &mover);
+
+    let begin_origin = begin_pos.frame.origin;
+    let curr_origin = t.sphere_path.curr_pos.frame.origin;
+    FaithfulDiagStep {
+        found,
+        begin_cell,
+        state_in,
+        state_out: t.object_info.state,
+        contact_plane: t
+            .collision_info
+            .contact_plane
+            .map(|p| (p, t.collision_info.contact_plane_cell_id)),
+        last_known_contact_plane: t
+            .collision_info
+            .last_known_contact_plane
+            .map(|p| (p, t.collision_info.last_known_contact_plane_cell_id)),
+        collision_normal: t.collision_info.collision_normal,
+        sliding_normal: t.collision_info.sliding_normal,
+        walkable: t.sphere_path.walkable.is_some(),
+        walkable_poly_normal: t.sphere_path.walkable.as_ref().map(|p| p.plane.normal),
+        step_up: t.sphere_path.step_up,
+        neg_poly_hit: t.sphere_path.neg_poly_hit,
+        begin_origin,
+        curr_origin,
+        realized: (curr_origin - begin_origin).length(),
+        curr_pos_cell: t.sphere_path.curr_pos.objcell_id,
+        check_pos_cell: t.sphere_path.check_pos.objcell_id,
+        curr_cell: t.sphere_path.curr_cell,
+        check_cell: t.sphere_path.check_cell,
+    }
 }
 
 // ─── Phase B drift harness ───────────────────────────────────────────────────
@@ -1630,8 +1808,8 @@ pub fn faithful_find_placement_position(
 #[cfg(test)]
 mod drift {
     use super::{
-        classify_cell_water, faithful_find_transitional_position, FaithfulMover, SceneWorld,
-        WaterType,
+        classify_cell_water, faithful_diag_step, faithful_find_transitional_position,
+        FaithfulMover, SceneWorld, WaterType,
     };
     use crate::spatial::entity_collision::EntityCollider;
     use crate::spatial::scene::{CellPhysicsBsp, SpatialScene};
@@ -2849,6 +3027,48 @@ mod drift {
             normal: v(0.0, 0.0, 1.0),
             d: 0.0,
         };
+    }
+
+    /// Regression (academy-wedge investigation, 2026-07-20): a carried floor
+    /// plane classified "moving_away" by the bridge's proxy (`plane.normal.z
+    /// > 0.0 && !descending` — true for ANY ordinary horizontal walk on flat
+    /// ground, not just genuine ascents) routes through `init_last_known_
+    /// contact_plane`. That ported method carries a documented decomp quirk
+    /// (acclient.c:315612, driver_init.rs:102-114) that never assigns
+    /// `last_known_contact_plane_cell_id`; without the call-site fix (the
+    /// `t.collision_info.last_known_contact_plane_cell_id = cell_id;` line
+    /// right after each `init_last_known_contact_plane` call in this file),
+    /// that field stays at its type-default `0` for the whole slice. It only
+    /// matters once `validate_transition`'s BRANCH-A (driver_validate.rs:83-98)
+    /// repins `contact_plane` from it after an unresolved collision — at which
+    /// point a `0` cell id silently disables `adjust_offset`'s penetration
+    /// push-out (driver_geometry.rs:113-114) and corrupts the next frame's
+    /// carried contact plane. Pin the ROOT cause here (no collision needed):
+    /// the marshalling must stamp the real cell id, not `0`.
+    #[test]
+    fn moving_away_carry_stamps_last_known_contact_plane_cell_id() {
+        let env = flat_floor_env();
+        let begin = pose_at(FCX, FCY, FLOOR_WZ);
+        let end = pose_at(FCX + 0.5, FCY, FLOOR_WZ);
+        let mut input = input_for(begin, end);
+        input.descending = false; // "moving_away" requires !descending
+        input.gates.retail_ground = true;
+        let floor_plane = Plane {
+            normal: v(0.0, 0.0, 1.0),
+            d: -FLOOR_WZ,
+        };
+        input.last_contact_plane = Some((floor_plane, CELL_ID));
+
+        let diag = faithful_diag_step(&env, &input, true);
+
+        let (_, id) = diag
+            .last_known_contact_plane
+            .expect("carried plane must seed last_known_contact_plane");
+        assert_eq!(
+            id, CELL_ID,
+            "last_known_contact_plane_cell_id must propagate the carried cell id, \
+             not default to 0 (the init_last_known_contact_plane quirk without the fix)"
+        );
     }
 
     /// faithful never OVERSHOOTS the requested begin→end displacement (the

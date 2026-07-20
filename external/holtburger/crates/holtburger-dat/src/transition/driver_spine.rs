@@ -39,6 +39,7 @@ use std::cell::Cell;
 
 use super::objcell::CellWorld;
 use super::sphere_slide::{self, SlideSphere};
+use super::trace::trace;
 use super::types::{
     object_info_state, CTransition, CollisionInfo, InsertType, LandDefs, SpherePath, Z_FOR_LANDING,
 };
@@ -137,8 +138,18 @@ impl CTransition {
             // its live cell handle through `world`, then insert. The decomp holds
             // a raw `CObjCell*`; we re-resolve each iteration (check_cell may move).
             let cell = self.sphere_path.check_cell.and_then(|id| world.get_visible(id));
+            let trace_check_pos_in = self.sphere_path.check_pos.frame.origin;
             v5 = self.insert_into_cell(cell.as_deref(), num_insertion_attempts);
             ts = v5;
+            trace(|| {
+                format!(
+                    "  transitional_insert depth={} attempt(i)={i} num_attempts={num_insertion_attempts} \
+                     insert_into_cell->{v5} check_pos {:?}->{:?}",
+                    DriverCtx::depth(),
+                    trace_check_pos_in,
+                    self.sphere_path.check_pos.frame.origin,
+                )
+            });
 
             // acclient.c:312870 — switch ( v5 ).
             match v5 {
@@ -181,6 +192,16 @@ impl CTransition {
 
             // acclient.c:312894-312896 — LABEL_11.
             if v5 == 1 {
+                trace(|| {
+                    format!(
+                        "    [depth={}] v5==1: collide={} neg_poly_hit={} step_down={} step_up={}",
+                        DriverCtx::depth(),
+                        self.sphere_path.collide,
+                        self.sphere_path.neg_poly_hit,
+                        self.sphere_path.step_down,
+                        self.sphere_path.step_up,
+                    )
+                });
                 // ── collide block (acclient.c:312897-312941). Always returns. ──
                 if self.sphere_path.collide {
                     let v15 = self.collision_info.contact_plane.is_some();
@@ -230,6 +251,7 @@ impl CTransition {
                 {
                     let v7 = self.sphere_path.neg_step_up == 0;
                     self.sphere_path.neg_poly_hit = false;
+                    trace(|| format!("    [depth={}] neg_poly_hit branch: neg_step_up==0 -> {v7}", DriverCtx::depth()));
                     if v7 {
                         // CSphere::slide_sphere with the ALREADY-GLOBAL negated
                         // normal (no rotation) — acclient.c:312948-312953.
@@ -259,6 +281,7 @@ impl CTransition {
                 } else {
                     // acclient.c:312961-312962.
                     if self.collision_info.contact_plane.is_some() {
+                        trace(|| format!("    [depth={}] general branch: contact_plane already valid -> return 1", DriverCtx::depth()));
                         return 1;
                     }
                     // state gate — acclient.c:312963-312965.
@@ -268,6 +291,17 @@ impl CTransition {
                         || self.sphere_path.check_cell.is_none()
                         || !self.object_info.step_down
                     {
+                        trace(|| {
+                            format!(
+                                "    [depth={}] general branch: step-down gate closed \
+                                 (CONTACT={} step_down_flag={} check_cell={:?} obj.step_down={}) -> return 1",
+                                DriverCtx::depth(),
+                                v8 & object_info_state::CONTACT != 0,
+                                self.sphere_path.step_down,
+                                self.sphere_path.check_cell,
+                                self.object_info.step_down,
+                            )
+                        });
                         return 1;
                     }
                     // walkable-aware step-down params — acclient.c:312966-312972.
@@ -292,11 +326,14 @@ impl CTransition {
                     let v11 = z_val;
                     if v10 + v10 >= step_down_ht {
                         let v13 = step_down_ht;
-                        if self.step_down(world, step_down_ht, z_val) != 0 {
+                        let sd = self.step_down(world, step_down_ht, z_val);
+                        trace(|| format!("    [depth={}] general branch: step_down(ht={step_down_ht:.4}, z={z_val:.4}) -> {sd}", DriverCtx::depth()));
+                        if sd != 0 {
                             self.sphere_path.walkable = None; // LABEL_52
                             return 1;
                         }
                         let v14 = self.edge_slide(world, &mut ts, v13, v11);
+                        trace(|| format!("    [depth={}] general branch: edge_slide -> handled={v14} ts={ts}", DriverCtx::depth()));
                         if v14 != 0 {
                             return ts; // LABEL_36
                         }
@@ -326,6 +363,13 @@ impl CTransition {
 
             // acclient.c:313000-313005 — LABEL_38 (common tail).
             i += 1;
+            trace(|| {
+                format!(
+                    "    [depth={}] LABEL_38 tail: i->{i} (of {num_insertion_attempts}) v5={v5} {}",
+                    DriverCtx::depth(),
+                    if i >= num_insertion_attempts { "-> return v5 (attempts exhausted)" } else { "-> retry" }
+                )
+            });
             if i >= num_insertion_attempts {
                 return v5;
             }
@@ -357,6 +401,13 @@ impl CTransition {
         }
 
         // acclient.c:312662-312663.
+        trace(|| {
+            format!(
+                "  step_down(ht={step_down_ht:.4}, z_val={z_val:.4}) ENTER step_up_flag={} \
+                 check_pos={:?}",
+                self.sphere_path.step_up, self.sphere_path.check_pos.frame.origin,
+            )
+        });
         let v8 = self.transitional_insert(world, 5);
         self.sphere_path.step_down = false;
 
@@ -372,6 +423,12 @@ impl CTransition {
             && ((self.object_info.state & object_info_state::EDGE_SLIDE) == 0
                 || self.sphere_path.step_up
                 || self.check_walkable(world, z_val) != 0);
+        trace(|| {
+            format!(
+                "  step_down: transitional_insert(5)->{v8} contact_plane={:?} accept={accept}",
+                self.collision_info.contact_plane.map(|p| p.normal),
+            )
+        });
 
         if accept {
             // acclient.c:312671-312675 — Placement re-pin (attempts 1).
@@ -427,18 +484,27 @@ impl CTransition {
         self.sphere_path.backup_cell = self.sphere_path.check_cell;
         self.sphere_path.backup_check_pos = self.sphere_path.check_pos; // objcell_id + frame
 
+        trace(|| {
+            format!(
+                "  step_up_impl ENTER normal={collision_normal:?} step_down_ht={step_down_ht:.4} \
+                 walkable_z={walkable_z:.4} check_pos={:?}",
+                self.sphere_path.check_pos.frame.origin,
+            )
+        });
         // acclient.c:312818-312820 — the actual settle.
         let v3 = self.step_down(world, step_down_ht, walkable_z);
         self.sphere_path.step_up = false;
         self.sphere_path.walkable = None;
 
         // acclient.c:312821-312829.
-        if v3 != 0 {
+        let result = if v3 != 0 {
             1
         } else {
             self.sphere_path.restore_check_pos();
             0
-        }
+        };
+        trace(|| format!("  step_up_impl EXIT step_down->{v3} result={result}"));
+        result
     }
 
     // ───────────────────────────────────────────────────────────────────────

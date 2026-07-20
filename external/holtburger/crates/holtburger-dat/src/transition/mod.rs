@@ -15,6 +15,7 @@
 // remaining submodules is authored by a sibling fan-out agent; the driver
 // builds the crate once after all of them land.
 pub mod types;
+pub mod trace;
 pub mod sphere_basics;
 pub mod sphere_slide;
 pub mod sphere_collide_point;

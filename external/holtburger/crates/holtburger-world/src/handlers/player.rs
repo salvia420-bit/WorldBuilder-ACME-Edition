@@ -19,6 +19,23 @@ pub(crate) fn handle_message(
             {
                 if let Some(pos) = data.pos {
                     state.sync_player_position(pos);
+                    // Task-#12 (2026-07-20): retail runs the arrival PLACEMENT
+                    // on LOGIN too, not just teleports — the local player's
+                    // self-CreateObject calls `CPhysicsObj::enter_world`
+                    // (acclient.c:145981) → `SetPosition` with flags 0x11
+                    // (PLACEMENT|SLIDE), and `CheckPositionInternal` always
+                    // passes a NULL begin_pos into `init_path`
+                    // (acclient.c:319175) ⇒ PLACEMENT insert ⇒
+                    // `find_placement_position`. ACE ports this 1:1
+                    // (PhysicsObj.cs:2408-2439 enter_world, :304 InitPath
+                    // null). So an embedded SAVED pose de-embeds at login in
+                    // retail; without this latch our login kept it embedded
+                    // (the suspected task-#12 movement pin). The consumer
+                    // (`consume_pending_arrival_placement`) is residency-
+                    // guarded (retries until the cell streams in), indoor-
+                    // scoped, and keeps the pose on a search miss — safe for
+                    // outdoor logins and slow streams.
+                    state.player.latch_arrival_placement();
                 }
 
                 if let Some(current_style) = EntityMotionSnapshot::from_object_description(data)
@@ -82,9 +99,10 @@ pub(crate) fn handle_message(
                     // stays embedded. Consume-once here (clears whether or not it
                     // fires); when set it upgrades the suspended-arrival apply to
                     // `Reset` so the placement latches. Only a `PlayerTeleport`
-                    // arms it — a login `InitialHydration` suspend does NOT, so the
-                    // enter-world path is unaffected (constraint: initial login is
-                    // the normal enter-world path, not a discontinuity resync).
+                    // arms THIS flag — login placement is latched directly in the
+                    // self-`ObjectCreate` arm instead (task-#12, 2026-07-20:
+                    // retail's enter_world runs `find_placement_position` on
+                    // login exactly as on teleport, acclient.c:145981/:319175).
                     let teleport_arrival_pending = state.player.take_teleport_arrival();
                     // Teleport-destination landing (2026-07-02): the
                     // `PlayerTeleport` arm below pre-advances
@@ -169,9 +187,9 @@ pub(crate) fn handle_message(
                     // env-cell-wall landing; latch it here so the movement tick's
                     // `consume_pending_arrival_placement` runs. Additive: the body
                     // sync/mode trajectory is unchanged; Reset|ForceBlip arrivals
-                    // already latch (this is idempotent for them). Only a
-                    // `PlayerTeleport` arms the flag — a login `InitialHydration`
-                    // suspend does not — so the enter-world path is untouched.
+                    // already latch (this is idempotent for them). Login arrivals
+                    // latch separately in the self-`ObjectCreate` arm (task-#12,
+                    // 2026-07-20) — retail places on login exactly as on teleport.
                     if teleport_arrival_pending {
                         state.player.latch_arrival_placement();
                     }

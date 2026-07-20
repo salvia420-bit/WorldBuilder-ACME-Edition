@@ -23,11 +23,18 @@
 //! With no arg it validates a built-in INDOOR fixture route through the
 //! Holtburg grocer EnvCells (Environment 840) — exact, terrain-free.
 //!
-//! Indoor furniture (`cell_static_physics_bsp`, scene.rs:504-508) has no live
-//! wasm populate path; `populate_cell_furniture` is the offline hook the SPEC
-//! calls for. It is wired and called; full Setup->GfxObj physics recursion for
-//! each static is the remaining step (flagged below) — room geometry + terrain
-//! + seams are validated today.
+//! [CORRECTION 2026-07-20: the live wasm client DOES have a Stab->Setup->GfxObj
+//! furniture physics recursion — `walk_setup_parts_with_geom_and_bsp` +
+//! `StaticPartBsp` in apps/holtburger-web/src/lib.rs, feeding
+//! CELL_STATIC_BSP_PENDING from the indoor stab walk's 0x02 SetupModel arm,
+//! landed 2026-06-28 (46a1e697/ba7ed2a8). The text below describes only THIS
+//! offline harness's stub, which never got the equivalent recursion — it is
+//! an offline-coverage gap, not a live-client gap.]
+//! Indoor furniture (`cell_static_physics_bsp`, scene.rs:504-508) has no
+//! populate path IN THIS OFFLINE HARNESS; `populate_cell_furniture` is the
+//! offline hook the SPEC calls for. It is wired and called; full Setup->GfxObj
+//! physics recursion for each static in THIS STUB is the remaining step
+//! (flagged below) — room geometry + terrain + seams are validated today.
 
 use std::io::Cursor;
 
@@ -386,12 +393,17 @@ fn build_grocer_scene(portal: &DatDatabase, cell_dat: &DatDatabase) -> Option<Sp
     Some(scene)
 }
 
-/// Offline furniture-collision hook (SPEC W2.6 — the live wasm gap). Iterates
-/// the EnvCell's static objects (tables/chairs/props) and would insert each
+/// Offline furniture-collision hook (SPEC W2.6 — an offline-harness-only
+/// gap; the live wasm client already has this recursion, see the
+/// [CORRECTION 2026-07-20] note on the module doc above). Iterates the
+/// EnvCell's static objects (tables/chairs/props) and would insert each
 /// resolved static physics BSP via `scene.insert_cell_static_physics_bsp`.
-/// TODO(furniture): full Stab->Setup->GfxObj physics_polygons recursion +
-/// per-part world transform. Wired + counted today; the recursion is the next
-/// step (kept out of this landing so the build/correctness stay tight). Room
+/// TODO(furniture): port the live wasm client's Stab->Setup->GfxObj
+/// physics_polygons recursion (`walk_setup_parts_with_geom_and_bsp` +
+/// `StaticPartBsp` in apps/holtburger-web/src/lib.rs, landed 2026-06-28,
+/// 46a1e697/ba7ed2a8) into this offline harness + per-part world transform.
+/// Wired + counted today; the recursion is the next step for THIS STUB
+/// (kept out of this landing so the build/correctness stay tight). Room
 /// geometry, terrain, and seams ARE validated now.
 fn populate_cell_furniture(_scene: &mut SpatialScene, cell_id: u32, envcell: &EnvCell) {
     let n = envcell.static_objects.len();

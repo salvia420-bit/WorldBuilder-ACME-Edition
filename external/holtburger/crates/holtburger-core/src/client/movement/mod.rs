@@ -14,6 +14,7 @@ mod params;
 mod raw_state;
 #[cfg(test)]
 mod retail_behavior_tests;
+mod stall_recovery;
 mod system;
 
 pub use handle::MovementSystemHandle;

@@ -3,6 +3,7 @@ use super::{
     ContactState, InterpStep, InterpolationCommand, RuntimeSpatialBodyView, SolvedBodyKinematics,
     SpatialBody,
     SpatialBodyId, SpatialPhysics, SpatialSampleMode, SpatialSamplingConfig, StaticAabbEntry,
+    physics::PLAYER_CAPSULE_RADIUS,
     physics::sample_mode_for_projection_state,
 };
 use crate::entity::EntityMotionSnapshot;
@@ -1870,11 +1871,32 @@ impl SpatialScene {
         // at the Holtburg grocer seam (81,33), wedging the faithful driver
         // against the wrong cell's BSP in every direction.
         let carried = pos.landblock_id.0;
+        // Wedge fix (task #12, 2026-07-20): step 1/2 are RADIUS-aware, like
+        // retail's candidate gathering (`CCellStruct::sphere_intersects_cell`,
+        // acclient.c:355503 — sphere gating in `find_transit_cells`, ACE
+        // EnvCell.cs:311). A capsule straddling a hairline seam gap keeps its
+        // carried cell instead of falling through to the loose-AABB scan (the
+        // live 0x16E↔0x16A grocer mislabel / academy-seam wedge class). The
+        // final label among neighbours still prefers the bare-point owner
+        // (retail's winner pick is point_in_cell, ObjCellList.cs:365-384) —
+        // the sphere test only rescues the no-owner gap case.
         if self.cell_contains_point(carried, global) {
             return carried;
         }
         for &nb in self.cell_portal_neighbours(carried) {
             if (nb & 0xFFFF) >= 0x100 && self.cell_contains_point(nb, global) {
+                return nb;
+            }
+        }
+        // No bare-point owner — the gap rescue. Carried first (sticky, like
+        // retail's curr_cell continuity), then portal neighbours.
+        if self.cell_contains_sphere(carried, global, PLAYER_CAPSULE_RADIUS) {
+            return carried;
+        }
+        for &nb in self.cell_portal_neighbours(carried) {
+            if (nb & 0xFFFF) >= 0x100
+                && self.cell_contains_sphere(nb, global, PLAYER_CAPSULE_RADIUS)
+            {
                 return nb;
             }
         }
@@ -1925,6 +1947,95 @@ impl SpatialScene {
             }
             _ => false,
         }
+    }
+
+    /// Radius-aware membership (wedge fix, task #12 2026-07-20): does the
+    /// capsule of `radius` around `global` REACH `cell_id`? Retail's candidate
+    /// gathering is exactly this sphere test
+    /// (`CCellStruct::sphere_intersects_cell`, acclient.c:355503; ACE
+    /// EnvCell.cs:311 `sphere_intersects_cell`); only the winner pick among
+    /// candidates is bare-point. Used by `current_cell` as the NO-OWNER gap
+    /// rescue: a point in a hairline seam gap (no cell's hull claims it)
+    /// resolves to the nearest cell the capsule still touches instead of
+    /// falling through to the loose-AABB landblock scan or a wrong-cell
+    /// label. AABB fallback is radius-expanded for pre-membership cells.
+    fn cell_contains_sphere(&self, cell_id: u32, global: Vector3, radius: f32) -> bool {
+        if let Some(m) = self.cell_membership.get(&cell_id) {
+            let local = m.world_to_local(global);
+            return m.tree.sphere_intersects_cell(&local, radius)
+                != holtburger_dat::physics::CellBound::Outside;
+        }
+        match self.cell_aabbs.get(&cell_id) {
+            Some(a) if !a.is_empty() => {
+                global.x >= a.min.x - radius
+                    && global.x <= a.max.x + radius
+                    && global.y >= a.min.y - radius
+                    && global.y <= a.max.y + radius
+                    && global.z >= a.min.z - radius
+                    && global.z <= a.max.z + radius
+            }
+            _ => false,
+        }
+    }
+
+    /// Arrival/placement begin-cell resolver (task #12 fix 2, 2026-07-20).
+    /// For a FRESH server-authored pose (login / teleport arrival) the pose's
+    /// carried cell id is a server claim, not transit continuity — so the
+    /// topological portal-neighbour walk `current_cell` does (step 2) is
+    /// WRONG here: a neighbour's loose AABB can steal a point whose true
+    /// owner is elsewhere in the landblock (live 2026-07-20: login at the
+    /// grocer (81,33,94.35) labeled 0xA9B4016E ran placement against
+    /// neighbour 0xA9B4016A and found nothing). Retail's arrival resolution
+    /// (`CPhysicsObj::AdjustPosition` → `CEnvCell::find_visible_child_cell`,
+    /// acclient.c:319117/:349698) never widens past the given cell's own
+    /// visibility: given cell first (bare point, then capsule rescue), then
+    /// the landblock scan for the true owner — precise membership hulls
+    /// FIRST, loose AABBs only after — and finally the carried id unchanged
+    /// (the caller's residency guard / search-miss fallback handles it).
+    pub fn current_cell_for_arrival(&self, pos: &WorldPosition) -> u32 {
+        if pos.landblock_id == Guid::NULL {
+            return 0;
+        }
+        if !pos.is_indoors() {
+            return self.current_cell(pos);
+        }
+        let global = pos.global_coords();
+        let carried = pos.landblock_id.0;
+        if self.cell_contains_point(carried, global)
+            || self.cell_contains_sphere(carried, global, PLAYER_CAPSULE_RADIUS)
+        {
+            return carried;
+        }
+        let lb_high = carried & 0xFFFF_0000;
+        // Precise membership hulls first — the true geometric owner.
+        for (&cell_id, m) in self.cell_membership.iter() {
+            if (cell_id & 0xFFFF_0000) != lb_high || (cell_id & 0xFFFF) < 0x100 {
+                continue;
+            }
+            if m.tree.point_inside_cell(&m.world_to_local(global)) {
+                return cell_id;
+            }
+        }
+        // Loose AABBs only for cells without a resident membership hull.
+        for (&cell_id, aabb) in self.cell_aabbs.iter() {
+            if (cell_id & 0xFFFF_0000) != lb_high
+                || (cell_id & 0xFFFF) < 0x100
+                || self.cell_membership.contains_key(&cell_id)
+                || aabb.is_empty()
+            {
+                continue;
+            }
+            if global.x >= aabb.min.x
+                && global.x <= aabb.max.x
+                && global.y >= aabb.min.y
+                && global.y <= aabb.max.y
+                && global.z >= aabb.min.z
+                && global.z <= aabb.max.z
+            {
+                return cell_id;
+            }
+        }
+        carried
     }
 
     /// Terrain→EnvCell entry (2026-06-02): when the player's predicted

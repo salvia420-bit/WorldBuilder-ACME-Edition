@@ -18,6 +18,7 @@ use super::motion_table_manager::{MotionTableEvent, MotionTableManager};
 use super::move_to::{MoveToSteer, MoveToView, USE_MOVETO_DRIVER, WE_ACTION_CANCELLED};
 use super::movement_manager::{MovementManager, MovementStruct, USE_UNPACK_MOVEMENT_SEMANTICS};
 use super::params::MovementParameters;
+use super::stall_recovery::MoveToStallRecovery;
 use crate::client::movement_types::{
     AutonomousDriveIntent, ForwardLocomotion, MotionState, MotionStyle, MovementPacketMetadata,
     PlayerDriveIntent, SidestepLocomotion, Turn,
@@ -1637,6 +1638,17 @@ pub(crate) struct MovementSystem {
     /// a MoveTo — it runs until `CleanUpAndCallWeenie`,
     /// acclient.c:345171). Cleared on every pursuit end path.
     local_pursuit_engaged: bool,
+    /// (2026-07-20) — the LOCAL MoveTo driver's stall-recovery state
+    /// machine (see `stall_recovery.rs`). BOT-ONLY, not a retail port:
+    /// when the autonomous Walk steer realizes near-zero displacement for
+    /// several consecutive ticks (the indoor "wedge" — retail-faithful
+    /// `slide_sphere` Blocked on an exactly-orthogonal input), this
+    /// perturbs the steered heading off-bearing so the mover can shear off
+    /// the blocking plane, mirroring how a live player escapes by
+    /// jittering input. Manual WASD input never reaches this — only
+    /// [`Self::drive_local_moveto`]'s `Walk` arm calls
+    /// [`MoveToStallRecovery::poll`].
+    moveto_stall: MoveToStallRecovery,
     /// A14-I3 (2026-06-12, `?retailRunKeys=on`) — the retail
     /// `CommandInterpreter::auto_run` state (acclient.h:35349; ctor
     /// zero-init acclient.c:717753). While set, the effective manual
@@ -1817,6 +1829,23 @@ fn server_motion_intent(state: MotionState, motion_style: MotionStyle) -> Server
     }
 }
 
+/// The exact inverse of [`holtburger_common::Vector3::heading_to`] — given
+/// an AC heading in radians (0 = West, 90 = North, 180 = East, 270 = South,
+/// matching that method's own doc comment), returns the planar (z=0) unit
+/// vector that would produce it. Used ONLY by
+/// [`MovementSystem::drive_local_moveto`]'s stall-recovery arm to turn a
+/// perturbed heading back into a steering direction — recovers `direction`
+/// from `heading` the same way `Vector3::zero().heading_to(&planar)`
+/// recovers `heading` from `direction`, so
+/// `direction_for_heading_rad(v.heading_to(&target)) ≈ target.normalize()`
+/// round-trips (pinned by the unit test below).
+fn direction_for_heading_rad(heading_rad: f32) -> Vector3 {
+    let heading_deg = heading_rad.to_degrees();
+    let math_deg = (450.0 - heading_deg).rem_euclid(360.0);
+    let math_rad = math_deg.to_radians();
+    Vector3::new(-math_rad.sin(), math_rad.cos(), 0.0)
+}
+
 impl MovementSystem {
     pub(crate) fn new() -> Self {
         Self {
@@ -1865,6 +1894,7 @@ impl MovementSystem {
             last_manual_drive: None,
             pending_pursuit_commands: Vec::new(),
             local_pursuit_engaged: false,
+            moveto_stall: MoveToStallRecovery::default(),
             auto_run: false,
         }
     }
@@ -3625,6 +3655,7 @@ impl MovementSystem {
     /// the stop-edge request.
     fn finish_pursuit_with_manual_restore(&mut self, stop_completely: bool) -> bool {
         self.local_pursuit_engaged = false;
+        self.moveto_stall = MoveToStallRecovery::default();
         if let Some(state) = self.last_manual_drive
             && !(state.is_locomotion_idle() && state.turning.is_none())
         {
@@ -3675,10 +3706,12 @@ impl MovementSystem {
         let manual_cancel = std::mem::take(&mut self.manual_moveto_cancel_pending);
         let Some(manager) = self.movement_managers.get_mut(&guid) else {
             self.local_pursuit_engaged = false;
+            self.moveto_stall = MoveToStallRecovery::default();
             return false;
         };
         if !manager.is_moveto_active() {
             self.local_pursuit_engaged = false;
+            self.moveto_stall = MoveToStallRecovery::default();
             return false;
         }
         let on_contact = !world.player.is_airborne;
@@ -3695,6 +3728,7 @@ impl MovementSystem {
         if manual_cancel || manual_active {
             let _ = manager.cancel_moveto_with_effects(WE_ACTION_CANCELLED, on_contact, &mut effects);
             self.local_pursuit_engaged = false;
+            self.moveto_stall = MoveToStallRecovery::default();
             return false;
         }
 
@@ -3757,8 +3791,21 @@ impl MovementSystem {
                 let to_target = target.global_coords() - self_pos.global_coords();
                 let planar = Vector3::new(to_target.x, to_target.y, 0.0);
                 if planar.length_squared() > 1e-6 {
-                    let direction = planar.normalize();
-                    let heading = Vector3::zero().heading_to(&planar);
+                    // (2026-07-20) Driver-level stall recovery (BOT-ONLY,
+                    // see stall_recovery.rs) — perturb the direct bearing
+                    // off-axis when the steer has realized near-zero
+                    // displacement for several ticks running, so
+                    // slide_sphere sees a non-orthogonal input component
+                    // and can shear the mover off a blocking plane instead
+                    // of wedging forever. `0.0` = ordinary direct steering
+                    // (the overwhelmingly common case).
+                    let recovery_offset = self.moveto_stall.poll(self_pos, target, now);
+                    let mut heading = Vector3::zero().heading_to(&planar);
+                    let mut direction = planar.normalize();
+                    if recovery_offset != 0.0 {
+                        heading = normalize_heading(heading + recovery_offset);
+                        direction = direction_for_heading_rad(heading);
+                    }
                     // Unit-forward toward the target (spec M4.2);
                     // negated when moving away — the away walk faces
                     // away from the target (the 180° desired-heading
@@ -5885,7 +5932,12 @@ impl MovementSystem {
             world.player.pending_arrival_placement = false;
             return;
         }
-        let begin_cell = world.scene.current_cell(&pose);
+        // Task-#12 fix 2 (2026-07-20): an arrival pose's cell id is a server
+        // claim, not transit continuity — resolve via the arrival resolver
+        // (given cell first, then the landblock's true geometric owner; no
+        // topological-neighbour walk that can mislabel, retail
+        // `CPhysicsObj::AdjustPosition` → `find_visible_child_cell`).
+        let begin_cell = world.scene.current_cell_for_arrival(&pose);
         if world.scene.cell_physics_bsp(begin_cell).is_none() {
             // Cell BSP not resident yet — leave the latch set for a later retry.
             return;

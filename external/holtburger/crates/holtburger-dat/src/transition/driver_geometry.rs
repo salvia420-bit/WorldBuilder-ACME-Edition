@@ -15,6 +15,7 @@
 //! op is the plain projection `new_offset -= K·(K·new_offset)` (ACE `AdjustOffset`
 //! confirms; A05 reconciliation note).
 
+use super::trace::trace;
 use super::types::{normalize_check_small, CTransition, LandDefs, Position, EPSILON};
 use holtburger_common::{Plane, Vector3};
 
@@ -68,6 +69,14 @@ impl CTransition {
                 self.collision_info.sliding_normal = None; // sliding_normal_valid = 0
             }
         }
+        trace(|| {
+            format!(
+                "adjust_offset ENTER offset={offset:?} sliding_normal={:?} sliding_opposes={sliding_opposes} \
+                 contact_plane={:?}",
+                self.collision_info.sliding_normal,
+                self.collision_info.contact_plane.map(|p| p.normal),
+            )
+        });
 
         if let Some(cp) = self.collision_info.contact_plane {
             let n = cp.normal;
@@ -89,10 +98,17 @@ impl CTransition {
                 );
                 if normalize_check_small(&mut coffset) {
                     new_offset = Vector3::zero();
+                    trace(|| "adjust_offset: edge-slide branch, degenerate cross -> offset zeroed".to_string());
                 } else {
                     let v9 =
                         coffset.z * new_offset.z + coffset.y * new_offset.y + coffset.x * new_offset.x;
                     new_offset = Vector3::new(coffset.x * v9, coffset.y * v9, coffset.z * v9);
+                    trace(|| {
+                        format!(
+                            "adjust_offset: edge-slide branch coffset(N x sliding_normal)={coffset:?} \
+                             v9(coffset.offset)={v9:.6} -> new_offset={new_offset:?}"
+                        )
+                    });
                 }
             } else if offseta <= 0.0 {
                 // 311941-311950: project onto the plane — new_offset -= offseta·N.
@@ -103,9 +119,11 @@ impl CTransition {
                     new_offset.y - offseta * n.y,
                     new_offset.z - offseta * n.z,
                 );
+                trace(|| format!("adjust_offset: project-onto-plane branch offseta={offseta:.6} -> new_offset={new_offset:?}"));
             } else {
                 // 311951-311954: offset leaving the plane → snap onto it.
                 snap_to_plane(&cp, &mut new_offset);
+                trace(|| format!("adjust_offset: leaving-plane snap branch offseta={offseta:.6} -> new_offset={new_offset:?}"));
             }
 
             // 311955-311979: push check_pos out of a penetrated, non-water,
@@ -147,6 +165,7 @@ impl CTransition {
             );
         }
 
+        trace(|| format!("adjust_offset EXIT -> {new_offset:?}"));
         new_offset // 311995-312001: result = new_offset
     }
 

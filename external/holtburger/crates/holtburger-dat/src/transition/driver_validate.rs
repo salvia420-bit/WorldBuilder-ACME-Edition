@@ -23,6 +23,7 @@
 
 use super::frame_transform::Frame;
 use super::objcell::CellWorld;
+use super::trace::trace;
 use super::types::{
     object_info_state, CTransition, InsertType, TransitionState, EPSILON, Z_FOR_LANDING,
 };
@@ -77,6 +78,16 @@ impl CTransition {
             false // A1 false → right side not evaluated → redoa stays true
         };
 
+        trace(|| {
+            format!(
+                "validate_transition ENTER ts={ts:?} take_branch_a={take_branch_a} \
+                 curr_pos={:?} check_pos={:?} collision_normal={:?} sliding_normal={:?}",
+                self.sphere_path.curr_pos.frame.origin,
+                self.sphere_path.check_pos.frame.origin,
+                self.collision_info.collision_normal,
+                self.collision_info.sliding_normal,
+            )
+        });
         if take_branch_a {
             // ── BRANCH A: ts != Ok (acclient.c:312223-312254) ──
             if (ts as i32) > 1 && (ts as i32) <= 4 {
@@ -110,6 +121,13 @@ impl CTransition {
 
                 self.build_cell_array(world, None); // CTransition::build_cell_array(this, 0)
                 v3 = TransitionState::Ok; // v3 = 1
+                trace(|| {
+                    format!(
+                        "validate_transition BRANCH-A: REVERT check_pos to curr_pos={:?} \
+                         (realized this step = 0) -> promoted Ok",
+                        curr_pos.frame.origin,
+                    )
+                });
             }
         } else {
             // ── BRANCH B: ts == Ok (or position changed) (acclient.c:312256-312268) ──
@@ -230,6 +248,7 @@ impl CTransition {
         world: &dyn CellWorld,
         phys: &dyn MovingObjectPhysics,
     ) -> i32 {
+        trace(|| format!("find_valid_position ENTER insert_type={:?}", self.sphere_path.insert_type));
         if self.sphere_path.insert_type != InsertType::Transition {
             self.find_placement_position(world, phys) // SEAM(B3): A04
         } else {
@@ -342,6 +361,7 @@ impl CTransition {
         world: &dyn CellWorld,
         phys: &dyn MovingObjectPhysics,
     ) -> i32 {
+        trace(|| format!("find_transitional_position ENTER begin_cell={:?}", self.sphere_path.begin_cell));
         // begin_cell == null → fail outright (313203).
         if self.sphere_path.begin_cell.is_none() {
             return 0;
@@ -370,6 +390,7 @@ impl CTransition {
         self.sphere_path.cell_array_valid = false;
         self.sphere_path.cache_global_sphere(None);
 
+        trace(|| format!("find_transitional_position: offset={offset:?} offset_per_step={offset_per_step:?} num_steps={num_steps}"));
         if num_steps == 0 {
             // No motion (313223-313237).
             if self.object_info.state & object_info_state::FREE_ROTATE == 0 {

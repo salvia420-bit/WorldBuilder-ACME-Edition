@@ -62,3 +62,10 @@ mod tests;
 /// driven from the real portal/cell DATs. DAT-gated; skips when absent.
 #[cfg(test)]
 mod env840_seam_tests;
+
+/// Offline repro attempt for the LIVE-confirmed Holtburg Academy dungeon
+/// movement wedge (Environment 0x126, seam between EnvCells 0x860201B1 and
+/// 0x860201B4), driven from the real portal/cell DATs. DAT-gated; skips when
+/// absent. Reports the outcome via `eprintln!`; does not assert the bug.
+#[cfg(test)]
+mod academy_wedge_tests;

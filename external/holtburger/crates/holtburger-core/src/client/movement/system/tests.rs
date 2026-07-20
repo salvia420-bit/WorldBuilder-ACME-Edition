@@ -5696,6 +5696,144 @@ async fn moveto_driver_walks_then_arrives_with_single_stop_edge() {
     );
 }
 
+/// (2026-07-20) — `direction_for_heading_rad` is the stall-recovery arm's
+/// inverse of `Vector3::heading_to`: pins the round trip
+/// `direction_for_heading_rad(v.heading_to(&target)) ≈ target.normalize()`
+/// across the four AC cardinal headings (0=West, 90=North, 180=East,
+/// 270=South, per that method's own doc comment) plus an off-axis case,
+/// which is exactly the recovery math (`heading + ±45°` → a real steering
+/// direction) that lets `slide_sphere` see a non-orthogonal input.
+#[test]
+fn direction_for_heading_rad_inverts_vector3_heading_to() {
+    let cases: [(f32, Vector3); 5] = [
+        (0.0, Vector3::new(-1.0, 0.0, 0.0)),  // West
+        (90.0, Vector3::new(0.0, 1.0, 0.0)),  // North
+        (180.0, Vector3::new(1.0, 0.0, 0.0)), // East
+        (270.0, Vector3::new(0.0, -1.0, 0.0)), // South
+        (225.0, Vector3::new(0.70711, -0.70711, 0.0)), // direct(180) + 45°
+    ];
+    for (heading_deg, expected_dir) in cases {
+        let heading_rad = heading_deg.to_radians();
+        let got = direction_for_heading_rad(heading_rad);
+        assert!(
+            (got.x - expected_dir.x).abs() < 1e-3 && (got.y - expected_dir.y).abs() < 1e-3,
+            "heading {heading_deg}°: expected {expected_dir:?}, got {got:?}"
+        );
+        // Round trip: heading_to(direction_for_heading_rad(h)) ≈ h.
+        let back = Vector3::zero().heading_to(&got).to_degrees().rem_euclid(360.0);
+        assert!(
+            (back - heading_deg).abs() < 1e-2 || (back - heading_deg).abs() > 359.99,
+            "round trip failed for {heading_deg}°: got back {back}°"
+        );
+    }
+}
+
+/// (2026-07-20) — driver-level stall recovery: a MoveTo `Walk` steer whose
+/// target NEVER advances (the indoor "wedge" — see `stall_recovery.rs`;
+/// this harness has no physics, so pinning the player's runtime pose across
+/// ticks stands in for a wall that blocks every transitional slice at
+/// 0.000 m) must NOT drive the same pure axis-locked heading forever.
+/// Exercised end-to-end through the REAL `drive_local_moveto` production
+/// path (not the isolated `stall_recovery` unit tests) — this is the
+/// black-box style the rest of this suite uses, so no internal
+/// `stall_recovery.rs` constants are referenced here.
+#[tokio::test]
+async fn moveto_driver_stall_recovery_perturbs_then_alternates_then_gives_up() {
+    use holtburger_world::WorldEvent;
+
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0321);
+    let target_guid = Guid(0x8000_0099);
+    // Facing EAST (heading 180) directly at a target 10 m east — the
+    // direct bearing is exactly 180°, matching the position's own
+    // rotation (no entry turn node needed, walk steering starts frame 1).
+    let position = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::from_heading(180.0_f32.to_radians()),
+    };
+    let target_pos = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(60.0, 50.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    world.player.guid = guid;
+    seed_local_player(&mut world, guid, position);
+    seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 2.0, 1.5);
+    world
+        .entities
+        .insert(Entity::new(target_guid, "Drudge".to_string(), target_pos));
+
+    let mut movement = MovementSystem::new();
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+        data: Box::new(moveto_object_event_for(guid, target_guid, target_pos)),
+        target_exists: true,
+        object_radius: 0.5,
+        object_height: 1.8,
+    }]);
+    assert!(movement.moveto_is_active(guid));
+
+    let now = Instant::now();
+    // NEVER move the player's pose between ticks — the walk steer is
+    // active every frame but realizes 0.000 m (the wedge).
+    let mut headings_deg: Vec<f32> = Vec::new();
+    for _ in 0..50 {
+        let stop = movement.drive_local_moveto(now, &mut world);
+        assert!(
+            !stop,
+            "steering stays active — no stop edge while the directive is live"
+        );
+        let drive = movement
+            .current_local_drive_control(&world, Duration::from_millis(16))
+            .expect("walk/recovery steering must ride the autonomous drive lane");
+        let heading = drive
+            .desired_heading
+            .expect("a Walk steer always carries a desired heading")
+            .to_degrees()
+            .rem_euclid(360.0);
+        headings_deg.push(heading);
+    }
+
+    let close = |a: f32, b: f32| (a - b).abs() < 0.5 || (a - b).abs() > 359.5;
+
+    // First tick: no displacement history yet — direct bearing (180°, due
+    // east), unperturbed.
+    assert!(
+        close(headings_deg[0], 180.0),
+        "first tick must be direct: {:?}",
+        headings_deg[0]
+    );
+
+    // Every emitted heading must be one of exactly the three values the
+    // state machine can produce (direct, direct+45°, direct-45°) — no
+    // runaway drift while permanently wedged.
+    for &h in &headings_deg {
+        assert!(
+            close(h, 180.0) || close(h, 225.0) || close(h, 135.0),
+            "unexpected heading {h} — recovery must only ever offset by ±45°: {headings_deg:?}"
+        );
+    }
+
+    // Repeated stalls must engage recovery and alternate BOTH sides across
+    // the run (attempt 1 = +45°, attempt 2 = -45°, ...).
+    let saw_plus = headings_deg.iter().any(|&h| close(h, 225.0));
+    let saw_minus = headings_deg.iter().any(|&h| close(h, 135.0));
+    assert!(
+        saw_plus && saw_minus,
+        "repeated stalls must alternate BOTH recovery sides across the run: {headings_deg:?}"
+    );
+
+    // 50 ticks permanently wedged is enough to exhaust the recovery-attempt
+    // cap and give up — the TAIL of the run reverts to (and stays at) the
+    // direct bearing, leaving the leg to the existing higher-level (JS
+    // router) watchdog instead of perturbing forever.
+    let tail = &headings_deg[headings_deg.len() - 10..];
+    assert!(
+        tail.iter().all(|&h| close(h, 180.0)),
+        "after recovery is exhausted the driver must settle back on the direct bearing: {tail:?}"
+    );
+}
+
 /// Spec test 9 (M4.5) — a held non-idle MANUAL drive cancels the
 /// active MoveTo with 0x36 (retail apply_raw_movement →
 /// cancel_moveto(0x36)); the manual lane keeps the wire (no stop

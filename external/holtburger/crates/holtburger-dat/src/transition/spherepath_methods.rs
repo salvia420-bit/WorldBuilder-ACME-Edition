@@ -45,6 +45,7 @@
 use super::polygon_edge::find_crossed_edge;
 use super::polygon_walkable::check_small_walkable;
 use super::sphere_slide::{slide_sphere, SlideSphere};
+use super::trace::trace;
 use super::types::{CollisionInfo, LandDefs, ObjectInfo, Position, SpherePath};
 use crate::physics::ResolvedPolygon;
 use holtburger_common::{Sphere, Vector3};
@@ -285,7 +286,15 @@ impl SpherePath {
         let block_offset =
             LandDefs::get_block_offset(self.curr_pos.objcell_id, self.check_pos.objcell_id); // acclient.c:311721
 
-        match slide_sphere(center, normal, curr_center, contact_normal, block_offset) {
+        let outcome = slide_sphere(center, normal, curr_center, contact_normal, block_offset);
+        trace(|| {
+            format!(
+                "    step_up_slide: center={center:?} normal(step_up_normal)={normal:?} \
+                 curr_center={curr_center:?} N(contact/last_known)={contact_normal:?} \
+                 block_offset={block_offset:?} -> {outcome:?}"
+            )
+        });
+        match outcome {
             // Case 1 (zero collision normal): split the gap; NO
             // set_collision_normal. acclient.c:358921-358934 → 3.
             SlideSphere::Adjusted { offset } => {

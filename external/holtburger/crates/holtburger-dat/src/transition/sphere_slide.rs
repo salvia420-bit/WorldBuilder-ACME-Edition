@@ -49,6 +49,7 @@
 //! ACE's `Sphere.SlideSphere` returns `OK` on that tail. Per the Phase-1
 //! "decomp wins" ruling this port returns `Collided`.
 
+use super::trace::trace;
 use super::types::{normalize_check_small, EPSILON};
 use holtburger_common::Vector3;
 
@@ -120,6 +121,12 @@ pub fn slide_sphere(
     // N × collisionNormal; `cross` here matches the decomp's component order.
     let direction = collision_normal.cross(&n);
     let dir_len_sq = direction.length_squared(); // acclient.c:358957 (patha)
+    trace(|| {
+        format!(
+            "      slide_sphere leaf: collision_normal={collision_normal:?} N={n:?} \
+             g_delta={g_delta:?} direction(edge)={direction:?} dir_len_sq={dir_len_sq:.6}"
+        )
+    });
 
     if dir_len_sq >= EPSILON {
         // Project gDelta onto the edge: P = direction·(direction·gDelta)/|dir|².
@@ -127,10 +134,18 @@ pub fn slide_sphere(
         let along = direction.dot(&g_delta); // v19
         let inv = 1.0 / dir_len_sq; // v20
         let p = direction * (along * inv);
+        trace(|| {
+            format!(
+                "      slide_sphere leaf: along(dir.gDelta)={along:.6} p(projected)={p:?} \
+                 |p|^2={:.6} (eps={EPSILON})",
+                p.length_squared(),
+            )
+        });
 
         // ── Case 2: the projected slide collapses → blocked. ──
         // acclient.c:358974 — if |P|² < ε return 2.
         if p.length_squared() < EPSILON {
+            trace(|| "      slide_sphere leaf: case 2 -> Collided (edge slide collapsed)".to_string());
             return SlideSphere::Collided {
                 recomputed_normal: None,
             };

@@ -55,6 +55,7 @@
 //!   called here by the decomp's exact arg order.
 
 use super::sphere_slide::{self, SlideSphere};
+use super::trace::trace;
 use super::types::{CTransition, CollisionInfo, LandDefs, SpherePath, TransitionState};
 use holtburger_common::Vector3;
 
@@ -188,7 +189,9 @@ pub fn step_sphere_up(
     // PHASE3: `CTransition::step_up` re-sweeps the sphere up `gnormal` against
     // the cell array. The types-agent stub returns `0` ("did not step up"), so
     // this falls through to the slide fallback. acclient.c:361086-361087.
-    if transition.step_up(&gnormal) != 0 {
+    let stepped_up = transition.step_up(&gnormal);
+    trace(|| format!("  step_sphere_up: gnormal={gnormal:?} transition.step_up()->{stepped_up}"));
+    if stepped_up != 0 {
         return TransitionState::Ok as i32;
     }
 
@@ -198,9 +201,11 @@ pub fn step_sphere_up(
     // struct fields. `step_up_slide` returns the raw decomp `i32` slide code
     // (the resolver layer's convention, matching `find_collisions` /
     // `step_sphere_down`), forwarded verbatim.
-    transition
+    let r = transition
         .sphere_path
-        .step_up_slide(&transition.object_info, &mut transition.collision_info)
+        .step_up_slide(&transition.object_info, &mut transition.collision_info);
+    trace(|| format!("  step_sphere_up: step_up_slide fallback -> {r}"));
+    r
 }
 
 #[cfg(test)]

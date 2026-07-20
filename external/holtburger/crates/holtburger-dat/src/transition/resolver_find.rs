@@ -51,6 +51,7 @@
 use super::bspnode_poly::sphere_intersects_poly;
 use super::bspnode_solid::sphere_intersects_solid;
 use super::bspnode_walkable::{FindWalkable, find_walkable};
+use super::trace::trace;
 use super::types::*;
 use crate::physics::{BspNode, ResolvedPolygon};
 use holtburger_common::{Sphere, Vector3};
@@ -218,6 +219,12 @@ pub fn find_collisions(
                 let first = sphere_intersects_poly(root, &v5, movement, polys);
                 if let Some((pid, _cpt)) = first {
                     let n = poly_normal(pid, polys); // hit_poly->plane.N (local)
+                    trace(|| {
+                        format!(
+                            "  find_collisions CONTACT branch: sphere0 hit poly {pid} local_normal={n:?} \
+                             movement={movement:?} -> step_sphere_up"
+                        )
+                    });
                     return super::resolver_slide::step_sphere_up(transition, &n);
                 }
                 // acclient.c:361419 — scale reused as the 2nd-sphere poly out-param (init 0).
