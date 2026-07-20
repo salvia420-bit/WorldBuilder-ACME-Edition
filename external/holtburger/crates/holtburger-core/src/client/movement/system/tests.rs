@@ -4048,21 +4048,37 @@ fn substep_calc_num_steps_math() {
 /// ONE grounded 100 ms run tick, and returns `(start_pose, after_pose,
 /// airborne)`.
 ///
-/// Geometry. The identity rotation reads as heading 90° (North) via
-/// `Quaternion::to_heading`, so the forward run drives world +Y, per
-/// `planar_velocity_for_heading(π/2, v) = (-cos 90·v, sin 90·v, 0) = (0, v, 0)`:
+/// Geometry (REBUILT 2026-07-20 for the unified transition path — a7cfb75e
+/// flipped `USE_UNIFIED_TRANSITION` default-ON, so `advance_local_pose_for_
+/// manual_drive` now routes through `advance_manual_slice_via_transition` →
+/// the retail substep loop in `transition.rs`, which climbs via
+/// `step_up_decision` and needs a REAL wall normal + a walkable top. The old
+/// AABB-inset + floating-triangle trick surfaced no wall normal, so the unified
+/// loop climbed Z but refused the lateral, wedging Δy at 0). The identity
+/// rotation reads as heading 90° (North) via `Quaternion::to_heading`, so the
+/// forward run drives world +Y, per `planar_velocity_for_heading(π/2, v) =
+/// (-cos 90·v, sin 90·v, 0) = (0, v, 0)`:
 ///   - Player local `(50, 50, 2.0)` in cell `0x86020100` (indoor: low word
 ///     `0x0100`). `global = (0x86*192+50, 0x02*192+50, 2.0)`.
-///   - Cell AABB `max.y = global.y + radius` so the inset max.y lands exactly
-///     on the player's Y: any +Y move clamps to zero (full block ⇒ `blocked`).
-///   - Riser triangle: a flat horizontal floor at `z = feet + rise` whose XY
-///     footprint covers only `[global.y + 0.2, global.y + 2.0]` (strictly +Y of
-///     the start), so it is the floor at the intended destination but NOT under
-///     the start — the start keeps its retained Z.
+///   - A generous containment AABB (never Y-clamps the ~0.43 m forward move) so
+///     `current_cell` resolves to the keyed cell and the triangles are found.
+///   - A VERTICAL CURB FACE at `y = global.y + 0.3` — real wall triangles
+///     (normal ≈ (0,-1,0)) that laterally block the +Y run AND surface the wall
+///     normal the unified loop needs. Spans a tall Z range so the swept-capsule
+///     mid-Z probe (`clamp_delta_against_cell_walls`) reliably contacts it.
+///   - A horizontal WALKABLE TOP at `z = feet + rise` behind the face
+///     (`y ∈ [global.y + 0.3, global.y + 2.3]`), the curb top the intended
+///     overshoot lands on: within step-up height it is `dest_floor_z` and the
+///     step-up takes the full lateral; above it the climb is refused and the
+///     head-on slide removes all forward travel (stuck at the face).
 fn run_grounded_step_up_tick(guid: Guid, rise: f32) -> (WorldPosition, WorldPosition, bool) {
     let mut world = WorldState::synthetic();
     world.player.guid = guid;
-    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    // Run speed 3.0 m/s → 0.30 m over the 100 ms tick, which is < the 0.4 m
+    // capsule radius, so `calc_num_steps` yields ONE substep: the whole move is
+    // a single blocked-then-climb, avoiding a partial first substep that would
+    // stall short of the curb top.
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 3.0, 1.5);
 
     // Indoor cell (low word 0x0100 ⇒ `is_indoors()`); `current_cell` falls
     // back to `landblock_id.0` when 3D-AABB containment misses, so keying the
@@ -4081,42 +4097,61 @@ fn run_grounded_step_up_tick(guid: Guid, rise: f32) -> (WorldPosition, WorldPosi
     seed_local_player(&mut world, guid, start_pose);
     let _ = world.set_player_position(start_pose);
 
-    let radius = holtburger_world::spatial::PLAYER_CAPSULE_RADIUS; // 0.4
-    // AABB whose inset max.y (= max.y - radius) lands on the player's Y, so a
-    // forward +Y run is clamped to zero. min.z well below feet (so the
-    // lower-bound safety snap never fires); max.z tall (no ceiling clamp).
+    let _radius = holtburger_world::spatial::PLAYER_CAPSULE_RADIUS; // 0.4
+    // Generous containment box: current_cell resolves to `cell_id` (so the
+    // triangles below are found) and the interior clamp never touches the small
+    // forward move — the lateral block comes entirely from the vertical curb
+    // face, which (unlike the legacy AABB-inset trick) surfaces a real wall
+    // normal. min.z well below feet; max.z tall (no ceiling clamp).
     let cell_aabb = holtburger_common::Aabb {
-        min: holtburger_common::Vector3::new(global.x - 5.0, global.y - 5.0, 0.0),
-        max: holtburger_common::Vector3::new(global.x + 5.0, global.y + radius, 10.0),
+        min: holtburger_common::Vector3::new(global.x - 10.0, global.y - 10.0, 0.0),
+        max: holtburger_common::Vector3::new(global.x + 10.0, global.y + 10.0, 10.0),
     };
     world.scene.insert_cell_aabb(cell_id, cell_aabb);
 
-    // Near-flat riser: a horizontal floor (normal ≈ (0,0,1), so the wall clamp
-    // skips it and the floor probe accepts it) at z = feet + rise, covering
-    // only the +Y destination strip. Two triangles make a rectangle spanning
-    // global.y ∈ [global.y + 0.2, global.y + 2.0], global.x ∈ [global.x - 2,
-    // global.x + 2] — the intended dest (global.x, ~global.y + 0.43) lands
-    // inside, the start (global.x, global.y) does not.
     let riser_z = feet_z + rise;
-    let y_near = global.y + 0.2;
-    let y_far = global.y + 2.0;
     let x_lo = global.x - 2.0;
     let x_hi = global.x + 2.0;
-    let v00 = holtburger_common::Vector3::new(x_lo, y_near, riser_z);
-    let v10 = holtburger_common::Vector3::new(x_hi, y_near, riser_z);
-    let v11 = holtburger_common::Vector3::new(x_hi, y_far, riser_z);
-    let v01 = holtburger_common::Vector3::new(x_lo, y_far, riser_z);
+    // Curb face plane at y_face: the +Y run hits it and is blocked. Placed just
+    // ahead of the player (within one substep's reach) so the single-step
+    // intended (~0.30 m) overshoots onto the top strip while the swept capsule
+    // still contacts the tall face.
+    let y_face = global.y + 0.15;
+    // Vertical wall quad, normal ≈ (0,-1,0) toward the player. A tall Z span
+    // ([feet-1, feet+3]) guarantees the swept-capsule mid-Z probe contacts it
+    // regardless of the object height; the walkable top is a SEPARATE
+    // horizontal triangle (below), so the wall stays a pure clamp+normal source.
+    let wall_lo_z = feet_z - 1.0;
+    let wall_hi_z = feet_z + 3.0;
+    let f00 = holtburger_common::Vector3::new(x_lo, y_face, wall_lo_z);
+    let f10 = holtburger_common::Vector3::new(x_hi, y_face, wall_lo_z);
+    let f11 = holtburger_common::Vector3::new(x_hi, y_face, wall_hi_z);
+    let f01 = holtburger_common::Vector3::new(x_lo, y_face, wall_hi_z);
     world
         .scene
-        .insert_cell_triangle(cell_id, holtburger_common::Triangle::new(v00, v10, v11));
+        .insert_cell_triangle(cell_id, holtburger_common::Triangle::new(f00, f10, f11));
     world
         .scene
-        .insert_cell_triangle(cell_id, holtburger_common::Triangle::new(v00, v11, v01));
+        .insert_cell_triangle(cell_id, holtburger_common::Triangle::new(f00, f11, f01));
 
-    // Steady-state forward velocity so the requested lateral move is a healthy
-    // ~0.43 m (not the ~0.08 m of a cold-start ramp tick) — the blocked gap is
-    // then unambiguously a wall, not slide jitter. Forward run ⇒ +Y.
-    world.player.current_planar_velocity = holtburger_common::Vector3::new(0.0, 4.5, 0.0);
+    // Horizontal walkable top at z = feet + rise behind the face — the curb top
+    // the intended overshoot lands on. Normal ≈ (0,0,1) so the wall clamp skips
+    // it and the floor/step-up probe accepts it. Spans y ∈ [y_face, y_face + 2].
+    let y_far = y_face + 2.0;
+    let t00 = holtburger_common::Vector3::new(x_lo, y_face, riser_z);
+    let t10 = holtburger_common::Vector3::new(x_hi, y_face, riser_z);
+    let t11 = holtburger_common::Vector3::new(x_hi, y_far, riser_z);
+    let t01 = holtburger_common::Vector3::new(x_lo, y_far, riser_z);
+    world
+        .scene
+        .insert_cell_triangle(cell_id, holtburger_common::Triangle::new(t00, t10, t11));
+    world
+        .scene
+        .insert_cell_triangle(cell_id, holtburger_common::Triangle::new(t00, t11, t01));
+
+    // Steady-state forward velocity (~0.30 m over the tick, one substep) so the
+    // blocked gap is unambiguously a wall, not slide jitter. Forward run ⇒ +Y.
+    world.player.current_planar_velocity = holtburger_common::Vector3::new(0.0, 3.0, 0.0);
     assert!(
         !world.player.is_airborne,
         "freshly seeded player must be grounded for the step-up path"
@@ -4172,14 +4207,15 @@ fn step_up_within_step_height_climbs_riser_through_integrator() {
         after.coords.z
     );
 
-    // Lateral: the player took the FULL intended +Y move, not the zero-lateral
-    // blocked clamp. Steady-state run ⇒ ~0.43 m of +Y travel; require a clear,
-    // unambiguous slice (well above the slide-jitter floor) so this can't pass
-    // on a stopped-dead block.
+    // Lateral: the player took the FULL intended +Y move (the unified step-up
+    // sets x,y to the intended destination), not the zero-lateral blocked clamp.
+    // Steady-state run ⇒ ~0.30 m of +Y travel; require a clear, unambiguous
+    // slice (well above the slide-jitter floor) so this can't pass on a
+    // stopped-dead block.
     let lateral_moved = after.coords.y - start.coords.y; // forward run is +Y
     assert!(
         lateral_moved > 0.2,
-        "climb must take the full intended lateral move (~0.43 m +Y), not the \
+        "climb must take the full intended lateral move (~0.30 m +Y), not the \
          zero-lateral blocked clamp; Δy = {lateral_moved:.4}"
     );
 
@@ -4192,11 +4228,11 @@ fn step_up_within_step_height_climbs_riser_through_integrator() {
 }
 
 /// Gap 3 (WIRED step-UP) — a riser TALLER than `PLAYER_STEP_UP_HEIGHT` (0.6 m)
-/// is a real wall: the step-up is refused, and with the lateral block coming
-/// from the AABB (which surfaces no wall normal) the refused move stops dead.
-/// The player neither climbs (Z stays at the feet) nor advances laterally (the
-/// blocked clamp is zero), mirroring retail's `Transition.StepUp` cap at
-/// `ObjectInfo.StepUpHeight`.
+/// is a real wall: the step-up is refused, and the head-on refused-step slide
+/// against the curb face (a -Y wall normal, a pure +Y approach → zero tangent)
+/// removes all forward travel. The player neither climbs (Z stays at the feet)
+/// nor advances laterally (the slide is zero), mirroring retail's
+/// `Transition.StepUp` cap at `ObjectInfo.StepUpHeight`.
 #[test]
 fn step_up_beyond_step_height_stays_blocked_through_integrator() {
     let rise = 0.9_f32; // > PLAYER_STEP_UP_HEIGHT (0.6) ⇒ refused
@@ -4223,12 +4259,13 @@ fn step_up_beyond_step_height_stays_blocked_through_integrator() {
         after.coords.z
     );
 
-    // Lateral stayed blocked: the AABB clamp zeroed the +Y move and, with no
-    // wall normal, the refused step-up stopped dead (no tangent recovery).
+    // Lateral stayed blocked: the curb face zeroed the +Y move and the head-on
+    // refused-step slide (a -Y wall normal, a pure +Y approach → zero tangent)
+    // stopped it dead — no tangent recovery.
     let lateral_moved = (after.coords.y - start.coords.y).abs();
     assert!(
         lateral_moved < 0.05,
-        "a refused step-up against the AABB block must stop dead laterally; \
+        "a refused step-up against the curb face must stop dead laterally; \
          |Δy| = {lateral_moved:.4}"
     );
 }
@@ -4244,13 +4281,16 @@ fn step_up_beyond_step_height_stays_blocked_through_integrator() {
 
 #[test]
 fn test_precipice_slide_reentry_flag_is_default_off() {
-    // The shipped solver must be byte-identical: the backup-pose
-    // save/clear machinery is fully gated behind this const, which must
-    // remain false until the restore consumer lands and is validated.
+    // Origin flip: a7cfb75e (2026-06-16) enabled the full unified pipeline,
+    // turning this const default-ON after the restore consumer landed and was
+    // live-validated. The backup-pose save/clear machinery now ships active;
+    // the runtime `?precipiceSlideReentry=off` URL flag is the escape hatch if
+    // it ever needs to be disabled in the field.
     assert!(
-        !USE_PRECIPICE_SLIDE_REENTRY,
-        "USE_PRECIPICE_SLIDE_REENTRY must ship default-OFF (byte-identical \
-         solver); flip it on only with the restore consumer wired"
+        USE_PRECIPICE_SLIDE_REENTRY,
+        "USE_PRECIPICE_SLIDE_REENTRY ships default-ON since a7cfb75e (restore \
+         consumer wired + validated); the ?precipiceSlideReentry=off flag is \
+         the runtime escape"
     );
 }
 
@@ -4563,7 +4603,9 @@ fn test_movement_manager_registry_create_apply_prune() {
     let mut movement = MovementSystem::new();
     assert!(movement.movement_manager_for(remote_guid).is_none());
 
-    // Default-off gate: the public wrapper must be a NO-OP.
+    // Gated public wrapper: behaviour tracks USE_UNPACK_MOVEMENT_SEMANTICS
+    // (flipped default-ON in a7cfb75e). Flag-off it is a compile-time no-op;
+    // flag-on it forwards to the ungated body and allocates the registry entry.
     movement.apply_movement_world_events(&[WorldEvent::EntityMovementEvent {
         guid: remote_guid,
         data: Box::new(event_for(remote_guid)),
@@ -4571,10 +4613,20 @@ fn test_movement_manager_registry_create_apply_prune() {
         object_radius: 0.0,
         object_height: 0.0,
     }]);
-    assert!(
-        movement.movement_manager_for(remote_guid).is_none(),
-        "USE_UNPACK_MOVEMENT_SEMANTICS is default-off — registry must not allocate"
-    );
+    if USE_UNPACK_MOVEMENT_SEMANTICS {
+        assert!(
+            movement.movement_manager_for(remote_guid).is_some(),
+            "USE_UNPACK_MOVEMENT_SEMANTICS default-on — gated wrapper allocates"
+        );
+        // Reset for the ungated-lane assertions below so they start clean.
+        movement.apply_movement_world_events_ungated(&[WorldEvent::EntityDespawned(remote_guid)]);
+        assert!(movement.movement_manager_for(remote_guid).is_none());
+    } else {
+        assert!(
+            movement.movement_manager_for(remote_guid).is_none(),
+            "USE_UNPACK_MOVEMENT_SEMANTICS default-off — registry must not allocate"
+        );
+    }
 
     // Gate-free: remote lane creates + applies.
     movement.apply_movement_world_events_ungated(&[WorldEvent::EntityMovementEvent {
@@ -4733,15 +4785,15 @@ fn unified_transition_spine_manual_collision_matrix() {
             .y
     };
 
-    // Pin the P2b hole: flag-off, the spine walks straight through the
-    // wall (y well past the 51.0 face).
-    let off_y = run(false);
-    assert!(
-        off_y > 51.0 + 0.5,
-        "P2b pin: flag-off spine should pass through the wall, y = {off_y}"
-    );
-    // Fixed: flag-on stops at (or just before) the wall face minus the
-    // capsule radius (51.0 - 0.4 = 50.6).
+    // The former P2b-hole pin (`run(false)` walks through the wall) is dead:
+    // a7cfb75e flipped USE_UNIFIED_TRANSITION default-ON, and the effective
+    // predicate is `USE_UNIFIED_TRANSITION || unified_transition_runtime`
+    // (system.rs), so `set_unified_transition(false)` can no longer produce the
+    // legacy no-collision path — both arms now stop at the wall. Only the
+    // flag-on assertions remain meaningful.
+    //
+    // Flag-on stops at (or just before) the wall face minus the capsule radius
+    // (51.0 - 0.4 = 50.6).
     let on_y = run(true);
     assert!(
         on_y <= 50.6 + 1e-3,
@@ -5820,6 +5872,14 @@ fn held_manual_drive_survives_pursuit_end() {
 
     let held = MotionState::builder().run().forward().build();
     ingest_intent(&mut movement, PlayerDriveIntent::ManualHeld(held), now);
+    // Tick boundary: post-a7cfb75e (USE_MOVETO_DRIVER on) a non-idle ManualHeld
+    // latches `manual_moveto_cancel_pending`. In production the held-W edge lands
+    // on an earlier tick, so a driver frame consumes that pending flag
+    // (system.rs std::mem::take) before the click's pursuit installs — engaging
+    // the stash path. No manager exists yet, so this frame only takes the pending
+    // and returns. Without it the test would exercise the (separately covered)
+    // same-tick-manual-wins path instead.
+    let _ = movement.drive_local_moveto(now, &mut world);
     ingest_intent(&mut movement, pursue_intent(target_guid), now);
 
     let stop = movement.apply_pending_pursuit_commands_ungated(&mut world);
@@ -5927,6 +5987,10 @@ fn stop_command_cancels_pursuit_without_restore() {
         PlayerDriveIntent::ManualHeld(MotionState::builder().run().forward().build()),
         now,
     );
+    // Tick boundary (see held_manual_drive_survives_pursuit_end): consume the
+    // moveto-cancel-pending latch before the pursuit installs so the stash path
+    // engages, matching the production held-W-then-click flow.
+    let _ = movement.drive_local_moveto(now, &mut world);
     ingest_intent(&mut movement, pursue_intent(target_guid), now);
     assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
     assert!(!movement.drive_local_moveto(now, &mut world), "walking");
@@ -5977,6 +6041,10 @@ fn cancel_pursuit_restores_held_manual_drive() {
 
     let held = MotionState::builder().run().forward().build();
     ingest_intent(&mut movement, PlayerDriveIntent::ManualHeld(held), now);
+    // Tick boundary (see held_manual_drive_survives_pursuit_end): consume the
+    // moveto-cancel-pending latch before the pursuit installs so the stash path
+    // engages, matching the production held-W-then-click flow.
+    let _ = movement.drive_local_moveto(now, &mut world);
     ingest_intent(&mut movement, pursue_intent(target_guid), now);
     assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
     assert!(!movement.drive_local_moveto(now, &mut world), "walking");
@@ -6009,6 +6077,10 @@ fn pursuit_active_suppresses_manual_double_drive_and_idle_does_not_stomp() {
         PlayerDriveIntent::ManualHeld(MotionState::builder().run().forward().build()),
         now,
     );
+    // Tick boundary (see held_manual_drive_survives_pursuit_end): consume the
+    // moveto-cancel-pending latch before the pursuit installs so the stash path
+    // engages, matching the production held-W-then-click flow.
+    let _ = movement.drive_local_moveto(now, &mut world);
     ingest_intent(&mut movement, pursue_intent(target_guid), now);
     assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
     assert!(!movement.drive_local_moveto(now, &mut world));
@@ -6180,19 +6252,42 @@ fn notify_animation_done_for_routes_local_gated_and_registry() {
             .moveto_motions_pending(),
         "registry spines drained by the per-entity feed"
     );
-    let _ = movement.motion_table_manager_mut().drain_events();
-    movement.notify_animation_done_ungated(true);
-    assert!(
-        movement
-            .motion_table_manager_mut()
-            .drain_events()
-            .iter()
-            .any(|event| matches!(
+    let post_gated = movement.motion_table_manager_mut().drain_events();
+    if USE_MOTION_TABLE_QUEUE {
+        // Flag-on (a7cfb75e): the gated local route forwards to the ungated
+        // body (system.rs notify_animation_done → _ungated), so the system
+        // node is popped by the gated call itself.
+        assert!(
+            post_gated.iter().any(|event| matches!(
                 event,
                 MotionTableEvent::MotionDone { motion: ACTION_X, success: true }
             )),
-        "system-level node survived the GATED local route (popped only by the ungated seam)"
-    );
+            "flag-on: the gated local route drained the system node"
+        );
+        // The ungated re-drain is then a no-op on the emptied queue
+        // (acclient.c:329884 head-null guard).
+        movement.notify_animation_done_ungated(true);
+        assert!(
+            movement.motion_table_manager_mut().drain_events().is_empty(),
+            "flag-on: ungated re-drain is a no-op on the emptied queue"
+        );
+    } else {
+        // Flag-off: the gated local route is a compile-time no-op; the
+        // system node survives and only the ungated seam pops it.
+        let _ = post_gated;
+        movement.notify_animation_done_ungated(true);
+        assert!(
+            movement
+                .motion_table_manager_mut()
+                .drain_events()
+                .iter()
+                .any(|event| matches!(
+                    event,
+                    MotionTableEvent::MotionDone { motion: ACTION_X, success: true }
+                )),
+            "system-level node survived the GATED local route (popped only by the ungated seam)"
+        );
+    }
 
     // Post-despawn: the manager is pruned; a late notify is a map-miss
     // no-op (spec §7 OQ-4 fallback: eviction-after-despawn is safe by
@@ -6258,20 +6353,42 @@ fn handle_exit_world_for_drains_registry_and_respects_gate() {
             .moveto_motions_pending(),
         "registry spines drained by the exit-world drain"
     );
-    let _ = movement.motion_table_manager_mut().drain_events();
-    movement.handle_exit_world_local_ungated();
-    assert!(
-        movement
-            .motion_table_manager_mut()
-            .drain_events()
-            .iter()
-            .any(|event| matches!(
+    let post_gated = movement.motion_table_manager_mut().drain_events();
+    if USE_MOTION_TABLE_QUEUE {
+        // Flag-on (a7cfb75e): the gated exit-world route drains the system
+        // node itself (is_local && USE_MOTION_TABLE_QUEUE → the ungated
+        // local drain, success=0, retail acclient.c:329940-329947).
+        assert!(
+            post_gated.iter().any(|event| matches!(
                 event,
                 MotionTableEvent::MotionDone { motion: ACTION_X, success: false }
             )),
-        "system-level node survived the GATED local route and drains success=0 \
-         only through the ungated seam (retail success=0, acclient.c:329940-329947)"
-    );
+            "flag-on: the gated exit-world route drained the system node (success=0)"
+        );
+        // The ungated re-drain is then a no-op on the emptied queue.
+        movement.handle_exit_world_local_ungated();
+        assert!(
+            movement.motion_table_manager_mut().drain_events().is_empty(),
+            "flag-on: ungated re-drain is a no-op on the emptied queue"
+        );
+    } else {
+        // Flag-off: the gated local route is a compile-time no-op; the
+        // system node survives and only the ungated seam drains it.
+        let _ = post_gated;
+        movement.handle_exit_world_local_ungated();
+        assert!(
+            movement
+                .motion_table_manager_mut()
+                .drain_events()
+                .iter()
+                .any(|event| matches!(
+                    event,
+                    MotionTableEvent::MotionDone { motion: ACTION_X, success: false }
+                )),
+            "system-level node survived the GATED local route and drains success=0 \
+             only through the ungated seam (retail success=0, acclient.c:329940-329947)"
+        );
+    }
 
     // A second drain on the now-empty queues is a no-op (the
     // acclient.c:329884 head-null guard) — the duplicate-trigger /
