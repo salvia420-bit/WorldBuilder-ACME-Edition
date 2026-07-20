@@ -44,6 +44,19 @@ pub(crate) fn handle_message(
             state.sync_player_ownership_for_entity(guid);
             let _ = state.reconcile_entity_retention(guid);
 
+            // Varek coins=0 follow-up (2026-07-20): the player's OWN
+            // ObjectCreate is the point its identity/entity becomes known in
+            // the world. Re-file every entity that already points at the
+            // player so any item whose create was processed before the player
+            // guid was established (held/wielded computed false → dropped from
+            // player.inventory → never re-reconciled) is recovered here. The
+            // c6040ae0 self-guid guard above already made the self-create a
+            // no-op for the player's own ownership; this reconcile is additive
+            // (only ADDS owned items, never wipes) and NULL-guid-safe.
+            if guid == state.player.guid {
+                state.reconcile_player_owned_entities();
+            }
+
             if matches!(upsert_kind, EntityUpsertKind::Inserted) {
                 return true;
             }

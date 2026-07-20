@@ -3458,6 +3458,75 @@ fn test_self_object_create_does_not_wipe_player_inventory() {
 }
 
 #[test]
+fn test_self_object_create_reconciles_items_created_before_player_guid() {
+    // Varek coins=0 root-cause reproduction (2026-07-20), through the real
+    // routing/inventory handler path.
+    //
+    // `sync_player_ownership_for_entity` files an item into `player.inventory`
+    // ONLY at the instant its ObjectCreate is processed, computing ownership
+    // from `container_id == player.guid`. If that create is handled while the
+    // player guid is still unset (NULL), held computes false, the item is
+    // silently dropped, and nothing re-reconciles it — the item exists in the
+    // world model forever but `player.inventory` (and coins) never sees it.
+    // This mirrors the observed Varek pyreal miss: the coin was received and
+    // parsed (container == player) yet absent from `playerInventory()`.
+    //
+    // Fix: the player's OWN ObjectCreate (identity now known) runs a bounded
+    // one-shot reconcile over every entity already pointing at the player.
+    //
+    // Pre-fix: the self-create is a no-op for other entities → the coin stays
+    // unfiled → this test fails. Post-fix: the reconcile re-files it.
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000013F);
+    let coin_guid = Guid(0x8000069A); // Varek's pyreal guid (early in the stream)
+    let sword_guid = Guid(0x80000696); // a wielded item, also created early
+
+    // --- Identity NOT yet established: player guid is still NULL. ---
+    state.player.guid = Guid::NULL;
+
+    // The coin's ObjectCreate arrives with container == the (future) player
+    // guid, routed through the real inventory handler.
+    let mut coin = ObjectDescriptionData::with_guid(coin_guid);
+    coin.public_weenie_desc.name = Some("Pyreal".to_string());
+    coin.public_weenie_desc.container_id = Some(player_guid);
+    let _ = state.handle_message(&GameMessage::ObjectCreate(Box::new(coin)));
+
+    // A wielded item created in the same pre-identity window.
+    let mut sword = ObjectDescriptionData::with_guid(sword_guid);
+    sword.public_weenie_desc.name = Some("Sword".to_string());
+    sword.public_weenie_desc.wielder_id = Some(player_guid);
+    let _ = state.handle_message(&GameMessage::ObjectCreate(Box::new(sword)));
+
+    // The miss: neither was filed, because the player guid was unset when the
+    // creates were processed.
+    assert!(
+        !state.player.inventory.contains(&coin_guid),
+        "precondition: coin created before player guid is unfiled"
+    );
+    assert!(
+        !state.player.inventory.contains(&sword_guid),
+        "precondition: wielded item created before player guid is unfiled"
+    );
+
+    // --- The player's identity becomes known and its own ObjectCreate lands
+    //     (ACE's SendSelf: PlayerCreate sets the guid, then CreateObject(self)). ---
+    state.player.guid = player_guid;
+    let mut player = ObjectDescriptionData::with_guid(player_guid);
+    player.public_weenie_desc.name = Some("Varek".to_string());
+    let _ = state.handle_message(&GameMessage::ObjectCreate(Box::new(player)));
+
+    // The reconcile re-files everything the player already owns.
+    assert!(
+        state.player.inventory.contains(&coin_guid),
+        "self ObjectCreate must reconcile an item created before the player guid was known"
+    );
+    assert!(
+        state.player.inventory.contains(&sword_guid),
+        "self ObjectCreate must reconcile a wielded item created before the player guid was known"
+    );
+}
+
+#[test]
 fn test_get_level_info_derives_level_from_xp_when_property_absent() {
     // Belt-and-braces for any wipe path the upsert re-seed misses: a level-0
     // read with a real XP table derives the level from TotalExperience

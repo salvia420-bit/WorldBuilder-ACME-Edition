@@ -601,6 +601,51 @@ impl WorldState {
         }
     }
 
+    /// One-shot re-file of every entity the player already owns.
+    ///
+    /// Varek coins=0 follow-up (2026-07-20). `sync_player_ownership_for_entity`
+    /// files an item into `player.inventory` at the instant its `ObjectCreate`
+    /// is processed, from `container_id == player.guid` / `wielder_id ==
+    /// player.guid`. If that create is ever handled BEFORE the player's guid is
+    /// established (NULL at the time), both comparisons are false, the item is
+    /// silently dropped, and — because the ownership sync only runs off the
+    /// create itself — NOTHING re-reconciles it afterwards. The live wasm
+    /// pipeline sets `player.guid` eagerly at SelectCharacter so this ordering
+    /// doesn't bite it today, but the world crate carries no such guarantee and
+    /// a wiped/mis-ordered set otherwise stays wiped until relog.
+    ///
+    /// This runs when the player's OWN entity becomes known in the world (its
+    /// self-`ObjectCreate` — see `handlers/inventory.rs`), re-syncing ownership
+    /// for every entity whose container or wielder already points at the player.
+    /// Bounded (single pass over the entity map), NULL-guid-safe (no-op until
+    /// the guid lands), and idempotent (re-syncing an already-filed item is a
+    /// no-op). It never touches the player guid itself — the c6040ae0 self-guid
+    /// guard in `sync_player_ownership_for_entity` short-circuits that — so it
+    /// only ever ADDS legitimately-owned items, never wipes.
+    pub(crate) fn reconcile_player_owned_entities(&mut self) {
+        let player_guid = self.player.guid;
+        if player_guid == Guid::NULL {
+            return;
+        }
+
+        let owned: Vec<Guid> = self
+            .entities
+            .entities
+            .iter()
+            .filter_map(|(guid, entity)| {
+                let guid = *guid;
+                (guid != player_guid
+                    && (entity.container_id() == Some(player_guid)
+                        || entity.wielder_id() == Some(player_guid)))
+                .then_some(guid)
+            })
+            .collect();
+
+        for guid in owned {
+            self.sync_player_ownership_for_entity(guid);
+        }
+    }
+
     pub(crate) fn emit_level_info(&self, events: &mut Vec<WorldEvent>) {
         events.push(WorldEvent::LevelInfoUpdated(self.get_level_info()));
     }
