@@ -34,6 +34,10 @@ real VTank routes in `rynth/testdata/`), `44a48155` sweep_probe, `da65f233`
 Rust route-validator (empirically measured 3.984 m/s ≈ run_rate×4.0). 50
 node tests green. Carry-forward: indoor-furniture BSP population needs the
 Stab→Setup→GfxObj recursion (hook wired, recursion deferred).
+[CORRECTION 2026-07-20: the live wasm recursion landed 2026-06-28
+(46a1e697/ba7ed2a8); the "deferred" note above referred only to the offline
+`route_validate.rs` stub's `populate_cell_furniture` hook. Remaining gap =
+offline-harness coverage, not the live client.]
 
 **W3 — director economy (Fable):** `e7574ff3` travel-hold + follow_route/
 list_routes/name_route + mission line + auto-record + hourly metrics + prompt;

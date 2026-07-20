@@ -53,6 +53,15 @@ INVESTIGATE:
    means FURNITURE MAY BE MISSING from collision indoors → bot clips through
    tables/counters it should navigate around. Find the wired-but-deferred hook
    and finish it.)
+   [CORRECTION 2026-07-20: the live wasm recursion landed 2026-06-28
+   (46a1e697/ba7ed2a8) — `walk_setup_parts_with_geom_and_bsp` +
+   `StaticPartBsp` in apps/holtburger-web/src/lib.rs, feeding
+   CELL_STATIC_BSP_PENDING from the 0x02 SetupModel arm of the stab ingest at
+   lines 17978-18060 above. The "deferred" note this item quotes referred
+   only to the offline `route_validate.rs` stub's `populate_cell_furniture`
+   hook, not the live client. Remaining gap = offline-harness coverage (now
+   partially closed by native unit tests in
+   `apps/holtburger-web/src/lib.rs::tests_stab_bsp_recursion`).]
 2. **Toggleable stabs**: retail instantiates every stab as a shadow
    CPhysicsObj (ACE `EnvCell.StaticObjects: List<PhysicsObj>`, EnvCell.cs:26)
    — so a stab that is a DOOR can go ETHEREAL. Our bake is immutable: a
@@ -214,6 +223,11 @@ Pieces + state:
 2. Task #12 dungeon-login pin (raw-input vs MoveToPosition asymmetry).
 3. Track A furniture recursion (Stab→Setup→GfxObj) — biggest interior-collision
    hole; then the dungeon-door toggleable-stab design.
+   [CORRECTION 2026-07-20: this recursion is already live in the wasm client
+   (landed 2026-06-28, 46a1e697/ba7ed2a8; see the §1 INVESTIGATE item 1
+   correction above). Remaining work here is offline-harness parity
+   (route_validate.rs) and the coverage/toggleable-stab questions in §1,
+   not the recursion itself.]
 4. Entity-arm eye-test → default-ON.
 5. Track D outdoor building polys-vs-AABB unification.
 6. Multi-floor stair verification (Track E3) with the explorer persona live.

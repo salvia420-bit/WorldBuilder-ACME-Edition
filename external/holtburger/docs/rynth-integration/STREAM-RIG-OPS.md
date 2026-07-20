@@ -40,6 +40,15 @@ nosw=1&bakeWorker=0&targetFps=20&netDrainHz=30&renderScale=1&wireframe=1
 - `thoughtOverlay=1` = stream teleprompter for journal `plan` entries;
   `streamHud=1` = inventory pane + buffs-HUD reposition. Both exact-match `1`.
 - Full reference: `apps/holtburger-web/docs/url-flags.md` §1.
+- **⚠ 2026-07-20: the LIVE page has drifted from `launch.sh`** (operator-
+  directed, via `location.href`): `botModel=microsoft/phi-4`,
+  `botInterval=0.5`, `botKernel=off` REMOVED (kernel on),
+  `explorePressure=1` added earlier. A `launch.sh` relaunch REVERTS all of
+  this — sync `launch.sh` if the phi-4/kernel-on config should be durable.
+  Cadence math: effective check-in ≈ (model asks max = 2×interval) + 15-20s
+  call latency ≈ 78s at 0.5; the 70-calls/hr cap floors sustained cadence at
+  ~51s no matter how low the interval. The GLM fast-provider pin is
+  z-ai/*-only; the 1280-token cap applies to all models.
 
 ## Six hard-won traps (soak-11 §2 — all live-diagnosed)
 
@@ -85,3 +94,37 @@ nosw=1&bakeWorker=0&targetFps=20&netDrainHz=30&renderScale=1&wireframe=1
   reconnect skips kind=7 → no auto-boot. Reliable path after a relaunch: CDP
   `import rynth/bot.js` → `createGrindBot(window.__sessionHandle, {})`.
 - Force a director check-in: `window.rynthAI.checkNow()`.
+
+## Driving the rig from a Claude session (added 2026-07-20)
+
+- **CDP attach without ws libs**: `chrome-devtools start --browserUrl
+  http://127.0.0.1:9223` (the chrome-devtools-mcp CLI daemon in
+  `~/.local/bin`), then `chrome-devtools evaluate_script "() => …"` /
+  `list_console_messages` / `take_screenshot`. ⚠ The daemon TIMES OUT on
+  evals that run >~5s and can wedge (restart: `chrome-devtools stop && start
+  --browserUrl …`). For long in-page work use fire-and-forget: start an async
+  loop that writes to a `window.__x` global, return immediately, poll the
+  global from a later eval.
+- **Reload/boot loop**: every reload corpse-collides (~60s ACE reap) —
+  expect `__bootState==='error'` once, reload again, then in-world. Two
+  reloads is normal, not a failure.
+- **YouTube URL rolls**: page reloads are harmless (ffmpeg keeps the push),
+  but if ffmpeg itself stalls/restarts long enough YouTube ends the broadcast
+  and the resumed push gets a NEW watch URL — check YT Studio, don't trust an
+  old link. Bounce the push cleanly: `kill <ffmpeg-pid>` (go_live.sh wrapper
+  auto-restarts in 5s).
+- **Window stacking check**: `DISPLAY=:0 xprop -root _NET_CLIENT_LIST_STACKING`
+  — last id = topmost; the game window (0x32…) must be above the slate.
+- **Bot memory wipe** (fresh-context test):
+  `d=window.__bot.ai.director; d.journal.entries.length=0;
+  localStorage.removeItem(d.journal.storageKey); d._lastSummary=''`.
+- **Un-stick tool**: `window.__sessionHandle.sendChat('@telepoi <town>')` /
+  `@teleloc <cell> <x> <y> <z>` (landblock-frame — confirmed 2026-07-20).
+  Since the same date the MoveTo driver also self-recovers from wall wedges
+  (±45° stall recovery, holtburger-core stall_recovery.rs); a bot standing
+  still for >30s against geometry is a NEW bug, not the old wedge.
+- **Live-state probes**: pose `window.__sessionHandle.getLocalPlayerPose()`
+  (`.free()` it); route `window.__bot.router.status`; director
+  `window.__bot.ai.director` (`client.model`, `_callTimes`, `journal`);
+  placement diag `window.__hbWasm.arrivalPlacementDiag()` (lo16 engaged /
+  hi16 failed).
