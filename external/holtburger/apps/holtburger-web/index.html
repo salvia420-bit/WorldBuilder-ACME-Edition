@@ -7254,7 +7254,21 @@
                           if (bp) cfg.ai = { ...(cfg.ai || {}), persona: bp };
                           const bm = botParams.get("botModel");
                           const bi = parseFloat(botParams.get("botInterval"));
-                          if (bm) cfg.ai = { ...(cfg.ai || {}), model: bm, maxTokens: 4096, reasoning: { effort: "low" }, timeoutMs: 120000 };
+                          // 2026-07-20 latency fix: 4096-token budgets let GLM
+                          // ramble ~2,400 completion tokens ≈ 50-80s per
+                          // check-in at ~30-50tps — the director looked dead
+                          // between calls. 1280 matches the documented
+                          // discipline (soak-8 measured GLM at 400-800 tokens)
+                          // and the llm_client retries once at double budget on
+                          // a "length" cutoff. For z-ai/* also pin the
+                          // soak-8-proven fast fp8 providers (streamlake
+                          // 1.08s/52tps first), never falling through to
+                          // 4x-price fp4 quants.
+                          if (bm) cfg.ai = {
+                            ...(cfg.ai || {}), model: bm, maxTokens: 1280,
+                            reasoning: { effort: "low" }, timeoutMs: 120000,
+                            ...(bm.startsWith("z-ai/") ? { provider: { order: ["streamlake", "novita", "baidu"], allow_fallbacks: false } } : {}),
+                          };
                           if (Number.isFinite(bi) && bi > 0) {
                             cfg.ai = {
                               ...(cfg.ai || {}),
