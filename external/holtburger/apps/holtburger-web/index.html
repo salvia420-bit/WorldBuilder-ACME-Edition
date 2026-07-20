@@ -2131,6 +2131,13 @@
           ...(typeof __hbWasmNs?.castArbitrationDiag === "function"
             ? { castArbitrationDiag: () => __hbWasmNs.castArbitrationDiag() >>> 0 }
             : {}),
+          // Soak-11 §5.1 observability rider (2026-07-20; rides v6, no
+          // manifest bump): arrival-placement latch tally, packed
+          // lo16=engaged / hi16=failed. Companion to the warn console line.
+          // typeof-guarded so a stale pkg/ yields `undefined` (F18-2).
+          ...(typeof __hbWasmNs?.arrivalPlacementDiag === "function"
+            ? { arrivalPlacementDiag: () => __hbWasmNs.arrivalPlacementDiag() >>> 0 }
+            : {}),
           // Bug-A round-2 diags (2026-07-03) — same contract as above:
           // diagnostics-only riders for capture harnesses.
           ...(typeof __hbWasmNs?.localPoseSnapDiag === "function"

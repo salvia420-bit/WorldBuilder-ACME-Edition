@@ -5918,7 +5918,15 @@ impl MovementSystem {
                     world.player.begin_fall();
                 }
                 world.player.pending_arrival_placement = false;
-                log::info!(
+                crate::arrival_placement_diag::note_engaged();
+                // NOTE: warn! is deliberate here (not info!) — the wasm console
+                // logger caps at Warn (apps/holtburger-web/src/lib.rs
+                // ConsoleWarnLogger), so an info! line is invisible in the
+                // browser. This success line fires at most once per teleport
+                // arrival (not per-frame → not spammy) and is the soak-11 §5.1
+                // observability item: it makes the arrival-placement latch
+                // live-verifiable.
+                log::warn!(
                     "[arrival-placement] adjusted pose by {:.2}m cell 0x{:08X} grounded={}",
                     dist,
                     outcome.pose.landblock_id.0,
@@ -5929,6 +5937,7 @@ impl MovementSystem {
                 // Residency present but the placement search found no valid pose
                 // — keep the pose as-is and clear the latch (no retry loop).
                 world.player.pending_arrival_placement = false;
+                crate::arrival_placement_diag::note_failed();
                 log::warn!(
                     "[arrival-placement] placement search failed cell 0x{:08X} (pose kept)",
                     begin_cell,

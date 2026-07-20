@@ -1025,6 +1025,18 @@ pub fn leash_echo_diag() -> String {
     holtburger_world::leash_echo_diag::read_packed()
 }
 
+/// Soak-11 §5.1 observability — monotonic tallies for the Layer-1
+/// arrival-placement latch (see `holtburger_core::arrival_placement_diag`).
+/// Packed `lo16 = engaged` (de-embed applied), `hi16 = failed` (no pose
+/// found, arrival pose kept). Process-global monotonic counters read on
+/// demand — no per-tick store needed, unlike the snapshot-style diags above.
+/// Companion to the `[arrival-placement] adjusted pose …` warn line; lets a
+/// soak assert "N embedded teleports → N engagements" without console scrape.
+#[wasm_bindgen(js_name = arrivalPlacementDiag)]
+pub fn arrival_placement_diag() -> u32 {
+    holtburger_core::arrival_placement_diag::read_packed()
+}
+
 /// AC's stateless 32-bit packet header checksum, exposed for callers
 /// that want to verify the protocol crate's deterministic output from
 /// JS. Smoke-tests passing a `&[u8]` from JS into wasm and a `u32`
