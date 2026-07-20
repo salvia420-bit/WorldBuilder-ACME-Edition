@@ -5899,12 +5899,14 @@ impl MovementSystem {
             &*world, &pose, &object, &gates,
         ) {
             Some(outcome) => {
-                let before = pose.global_coords();
-                let after = outcome.pose.global_coords();
-                let dist = ((after.x - before.x).powi(2)
-                    + (after.y - before.y).powi(2)
-                    + (after.z - before.z).powi(2))
-                .sqrt();
+                // FU-11: the placement function reports the TRUE de-embed
+                // magnitude (`adjusted_by`, measured arrival-world → settled-world
+                // inside the bridge). Do NOT recompute it from
+                // `pose.global_coords()` vs `outcome.pose.global_coords()`: the
+                // arrival `pose` is CELL-local (server-authored indoor frame) while
+                // `outcome.pose` is landblock-local (normalized), so that diff would
+                // report the ~120 m frame correction, not the ~0.9 m de-embed.
+                let dist = outcome.adjusted_by;
                 // Apply the adjusted pose via the runtime-body path WITHOUT
                 // emitting a network/authoritative event (same write-back the
                 // transition tail uses).

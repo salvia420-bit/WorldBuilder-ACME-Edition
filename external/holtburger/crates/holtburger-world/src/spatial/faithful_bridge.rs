@@ -1409,6 +1409,13 @@ pub struct PlacementOutcome {
     /// The settled contact plane (+ its cell id) for the caller's
     /// `last_contact_plane` carry — retail `CPhysicsObj::contact_plane`.
     pub contact_plane: Option<(holtburger_common::Plane, u32)>,
+    /// WORLD-space distance the placement search moved the mover, measured
+    /// arrival-world → settled-world (FU-11). This is the TRUE de-embed magnitude
+    /// (~0.9 m at the grocer vestibule); the caller logs it. Deriving it from
+    /// `pose.global_coords()` vs `outcome.pose.global_coords()` would instead
+    /// report the ~120 m cell-local→landblock-local FRAME correction, since the
+    /// arrival pose is cell-local while the output pose is landblock-local.
+    pub adjusted_by: f32,
 }
 
 /// Retail placement transition on an authoritative arrival — the missing wiring
@@ -1458,8 +1465,47 @@ pub fn faithful_find_placement_position(
 
     // WORLD-space frame; begin == end == the arrival pose (a placement, not a
     // sweep). Identity player rotation → vertical two-sphere capsule.
+    //
+    // FRAME CONTRACT (FU-11, 2026-07-20). The INDOOR arrival pose is CELL-LOCAL:
+    // the live server (ACE) writes an indoor `Position`'s coords RELATIVE to the
+    // EnvCell's own placement frame (cell-local), and the wire → `WorldPosition`
+    // unpack stores them verbatim (`traits.rs`, no cell→landblock conversion). A
+    // teleport / force-blip is the ONLY thing that latches this placement
+    // (`consume_pending_arrival_placement`, system.rs → `latch_arrival_placement`
+    // on `Reset`/`ForceBlip`/`PlayerTeleport`), and that arrival pose is exactly
+    // the server-authored cell-local frame — distinct from a WALK-IN (which
+    // enters via the transitional `local_envcell_entry` seam already carrying
+    // landblock-local coords, and does NOT latch placement).
+    //
+    // The scene's cell physics BSP carries that SAME placement frame: `origin` in
+    // WORLD space (`landblock origin + EnvCell.position.origin`) and `orientation`
+    // the cell quaternion (lib.rs `fetchEnvCellsInLandblock` / the env840 harness
+    // `build_scene`). Lift the cell-local coords into WORLD through it —
+    //     world = cell_origin + cell_orientation · cell_local
+    // — the exact inverse of the `CellPhysicsBsp::world_to_local` the collision
+    // resolver applies. `global_coords()` (landblock origin + coords, z
+    // passthrough) is WRONG for a cell-local pose: it starts the search ~90 m
+    // below the floor (z 0.35 vs floor ~94) and tens of metres off in XY — the
+    // pre-FU-11 `[arrival-placement] placement search failed` live warn (found==0,
+    // no geometry inside the ≤4 m radial sweep). The OUTPUT marshalling below
+    // re-derives LANDBLOCK-local coords (world − landblock origin), NORMALIZING
+    // the arrival into the one frame every downstream consumer already assumes
+    // (walk transitional `global_coords`, JS `rustPoseWorldFromPose`, cell-AABB
+    // `current_cell`).
+    //
+    // Outdoor arrivals never reach here (the caller returns early for outdoor, and
+    // an outdoor cell has no env BSP so the residency guard above already returned
+    // None); the `global_coords` fallback is retained defensively.
+    let arrival_world = if pose.is_indoors() {
+        match scene.cell_physics_bsp(begin_cell) {
+            Some(bsp) => bsp.origin + bsp.orientation.rotate_vector(pose.coords),
+            None => pose.global_coords(),
+        }
+    } else {
+        pose.global_coords()
+    };
     let mut frame = Frame::identity();
-    frame.origin = pose.global_coords();
+    frame.origin = arrival_world;
     let pos = Position {
         objcell_id: begin_cell,
         frame,
@@ -1551,10 +1597,16 @@ pub fn faithful_find_placement_position(
         .contact_plane
         .is_some_and(|plane| plane.normal.z >= RETAIL_FLOOR_Z);
 
+    // FU-11: the TRUE de-embed magnitude, measured in a single WORLD frame
+    // (arrival_world → settled curr.frame.origin), not across the cell-local→
+    // landblock-local frame change the output pose encodes.
+    let adjusted_by = (curr.frame.origin - arrival_world).length();
+
     Some(PlacementOutcome {
         pose: out_pose,
         grounded,
         contact_plane,
+        adjusted_by,
     })
 }
 
