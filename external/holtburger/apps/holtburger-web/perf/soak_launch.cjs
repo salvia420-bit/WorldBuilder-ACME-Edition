@@ -110,7 +110,7 @@ function log(m) { console.log(new Date().toISOString() + " [soak] " + m); }
   // explorer is roaming (landblock changing). Enforce the coverage floor: if no
   // NEW landblock appears within COVERAGE_FLOOR_MS — or the explorer is fully
   // wedged (no move + no call) — jailbreak to the next POI.
-  let lastCalls = -1, lastLb = null, stalls = 0, poiIdx = 0, jailbreaks = 0;
+  let lastCalls = -1, lastLb = null, stalls = 0, poiIdx = 0, jailbreaks = 0, deadTicks = 0;
   const seen = new Set();
   let lastNewCoverage = Date.now();
   async function jailbreak(why) {
@@ -130,6 +130,11 @@ function log(m) { console.log(new Date().toISOString() + " [soak] " + m); }
       try { baked = window.liveScene3d && window.liveScene3d.terrainBakedLbs ? window.liveScene3d.terrainBakedLbs.size : null; } catch (e) {}
       return { calls, lb, baked };
     }).catch(() => ({ calls: -2, lb: null, baked: null }));
+    // Dead-page detection: calls=-2 is the eval-catch fallback (page crashed /
+    // disconnected). Spinning forever is useless — exit so the harness notifies
+    // for a restart. calls=-1 (no rynthAI yet) is fine early; only -2 counts.
+    if (h.calls === -2) { deadTicks++; } else { deadTicks = 0; }
+    if (deadTicks >= 3) { log("FATAL: page dead (calls=-2 ×" + deadTicks + ") — exiting for restart"); stream.end(); try { await browser.close(); } catch (e) {} process.exit(3); }
     if (h.lb && !seen.has(h.lb)) { seen.add(h.lb); lastNewCoverage = Date.now(); }
     const moving = h.lb !== lastLb, thinking = h.calls > lastCalls;
     if (!moving && !thinking) stalls++; else stalls = 0;

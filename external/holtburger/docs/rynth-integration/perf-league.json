@@ -1,0 +1,229 @@
+{
+  "generatedAt": "2026-07-20T01:41:41.344Z",
+  "source": "agg.jsonl",
+  "samples": 156,
+  "dropped": 20,
+  "ranked": [
+    {
+      "lb": "0xc8a6",
+      "samples": 31,
+      "dwellSec": 314.3,
+      "p95_med": 1683.3,
+      "p95_worst": 1899.9,
+      "draw_med": 426,
+      "tri_med": 5996,
+      "heap_med": 157,
+      "baked_max": 122,
+      "waypoint": {
+        "lb": 3366322226,
+        "x": 158.17578125,
+        "y": 29.34375,
+        "z": 47.62675857543945
+      }
+    },
+    {
+      "lb": "0xc4a7",
+      "samples": 2,
+      "dwellSec": 18.8,
+      "p95_med": 1316.6,
+      "p95_worst": 1316.6,
+      "draw_med": 324,
+      "tri_med": 16919,
+      "heap_med": 157,
+      "baked_max": 145,
+      "waypoint": {
+        "lb": 3299278912,
+        "x": 168.49609375,
+        "y": 171.2109375,
+        "z": 58
+      }
+    },
+    {
+      "lb": "0xa5b4",
+      "samples": 24,
+      "dwellSec": 240.6,
+      "p95_med": 1266.7,
+      "p95_worst": 1433.3,
+      "draw_med": 973,
+      "tri_med": 11847,
+      "heap_med": 949,
+      "baked_max": 433,
+      "waypoint": {
+        "lb": 2780037169,
+        "x": 164.22265625,
+        "y": 7.51953125,
+        "z": 50.197593688964844
+      }
+    },
+    {
+      "lb": "0xa5b3",
+      "samples": 4,
+      "dwellSec": 38.9,
+      "p95_med": 1183.3,
+      "p95_worst": 1333.3,
+      "draw_med": 461,
+      "tri_med": 8039,
+      "heap_med": 949,
+      "baked_max": 444,
+      "waypoint": {
+        "lb": 2779971616,
+        "x": 93.83203125,
+        "y": 180.15625,
+        "z": 70.74869537353516
+      }
+    },
+    {
+      "lb": "0xba9f",
+      "samples": 2,
+      "dwellSec": 19.5,
+      "p95_med": 1133.3,
+      "p95_worst": 1199.9,
+      "draw_med": 578,
+      "tri_med": 12852,
+      "heap_med": 949,
+      "baked_max": 272,
+      "waypoint": {
+        "lb": 3130982454,
+        "x": 161.0078125,
+        "y": 128.626953125,
+        "z": 54
+      }
+    },
+    {
+      "lb": "0xa6b4",
+      "samples": 6,
+      "dwellSec": 59.4,
+      "p95_med": 900,
+      "p95_worst": 1350,
+      "draw_med": 501,
+      "tri_med": 7862,
+      "heap_med": 949,
+      "baked_max": 428,
+      "waypoint": {
+        "lb": 2796814337,
+        "x": 8.841796875,
+        "y": 12.7265625,
+        "z": 43.5869140625
+      }
+    },
+    {
+      "lb": "0xb89d",
+      "samples": 2,
+      "dwellSec": 17.9,
+      "p95_med": 783.4,
+      "p95_worst": 833.4,
+      "draw_med": 863,
+      "tri_med": 9176,
+      "heap_med": 949,
+      "baked_max": 288,
+      "waypoint": {
+        "lb": 3097296943,
+        "x": 122.70703125,
+        "y": 160.21484375,
+        "z": 49.97190475463867
+      }
+    },
+    {
+      "lb": "0xc9a5",
+      "samples": 10,
+      "dwellSec": 98.7,
+      "p95_med": 783.3,
+      "p95_worst": 1516.6,
+      "draw_med": 312,
+      "tri_med": 3692,
+      "heap_med": 157,
+      "baked_max": 88,
+      "waypoint": {
+        "lb": 3383033864,
+        "x": 1.8046875,
+        "y": 171.8359375,
+        "z": 46.150390625
+      }
+    },
+    {
+      "lb": "0xa7b4",
+      "samples": 2,
+      "dwellSec": 19.7,
+      "p95_med": 600,
+      "p95_worst": 616.6,
+      "draw_med": 346,
+      "tri_med": 4400,
+      "heap_med": 949,
+      "baked_max": 373,
+      "waypoint": {
+        "lb": 2813591561,
+        "x": 46.41796875,
+        "y": 18.03125,
+        "z": 31.868350982666016
+      }
+    },
+    {
+      "lb": "0xa9b4",
+      "samples": 4,
+      "dwellSec": 33.7,
+      "p95_med": 549.9,
+      "p95_worst": 866.6,
+      "draw_med": 2258,
+      "tri_med": 25434,
+      "heap_med": 949,
+      "baked_max": 340,
+      "waypoint": {
+        "lb": 2847145985,
+        "x": 14.80859375,
+        "y": 1.18359375,
+        "z": 89.7039794921875
+      }
+    },
+    {
+      "lb": "0xbfa3",
+      "samples": 2,
+      "dwellSec": 19.4,
+      "p95_med": 400,
+      "p95_worst": 450,
+      "draw_med": 370,
+      "tri_med": 4720,
+      "heap_med": 157,
+      "baked_max": 222,
+      "waypoint": {
+        "lb": 3215130678,
+        "x": 153.5078125,
+        "y": 137.240234375,
+        "z": 9.436576843261719
+      }
+    },
+    {
+      "lb": "0x016c",
+      "samples": 29,
+      "dwellSec": 269.5,
+      "p95_med": 283.3,
+      "p95_worst": 1016.7,
+      "draw_med": 115,
+      "tri_med": 501,
+      "heap_med": 157,
+      "baked_max": 137,
+      "waypoint": {
+        "lb": 23855545,
+        "x": 44.96327209472656,
+        "y": -51.173828125,
+        "z": 0
+      }
+    },
+    {
+      "lb": "0x0007",
+      "samples": 23,
+      "dwellSec": 196.5,
+      "p95_med": 216.7,
+      "p95_worst": 1883.2,
+      "draw_med": 1354,
+      "tri_med": 10610,
+      "heap_med": 157,
+      "baked_max": 128,
+      "waypoint": {
+        "lb": 459075,
+        "x": 70,
+        "y": -60,
+        "z": 0.009999999776482582
+      }
+    }
+  ]
+}

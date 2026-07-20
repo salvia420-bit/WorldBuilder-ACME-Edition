@@ -30,7 +30,8 @@ const { SAMPLER_FN } = require("./perf/perf_sampler.cjs");
 
 const HERE = __dirname;
 const STATE_FILE = path.join(HERE, "perf", "loop-state.json");
-const DEFAULT_LEAGUE = path.join(HERE, "docs", "rynth-integration", "perf-league.md");
+// The rynth-integration docs live at external/holtburger/docs (two up from HERE).
+const DEFAULT_LEAGUE = path.join(HERE, "..", "..", "docs", "rynth-integration", "perf-league.md");
 // Base measurement URL: NO nullRender (we need real frames), nosw, autoLogin.
 const BASE_URL = "http://127.0.0.1:8765/apps/holtburger-web/index.html";
 const ACCOUNT = "tailnet1";
