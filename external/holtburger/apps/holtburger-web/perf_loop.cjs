@@ -130,9 +130,9 @@ function cmdRank(args) {
 
   const state = loadState();
   const top = ranked[0];
-  state.topOffender = { lb: top.lb, p95_med: top.p95_med, p95_worst: top.p95_worst, draw_med: top.draw_med, tri_med: top.tri_med, dwellSec: top.dwellSec, samples: top.samples };
+  state.topOffender = { lb: top.lb, decodeVol: top.decodeVol, decodeMs: top.decodeMs, maxQueueMs: top.maxQueueMs, wasmMB_grow: top.wasmMB_grow, p95_med: top.p95_med, dwellSec: top.dwellSec, samples: top.samples };
   state.league = path.relative(HERE, leagueMd);
-  state.next = "Profile landblock " + top.lb + " (p95 " + top.p95_med + "ms, " + top.draw_med + " draws/f, " + top.tri_med + " tris/f); implement a Rust-first fix in a worktree; then `measure` old vs new on the tour and `gate`.";
+  state.next = "Top decode/residency offender " + top.lb + " (decodeVol " + top.decodeVol + ", queue " + top.maxQueueMs + "ms, wasmΔ " + top.wasmMB_grow + "MB). Attribute cost via __diag.bakeWorkerStats/datDecode + the portal-settle/battery probes — NOT draws/p95. Fix Rust-first in a worktree, measure OLD vs NEW with the probes, gate.";
   saveState(state);
 
   console.log(md);
@@ -155,7 +155,7 @@ function cmdTour(args) {
   state.baselineRoute = path.relative(HERE, out);
   saveState(state);
   console.log("[tour] " + tour.waypoints.length + " waypoints (offenders " + tour.offenders.join(",") + " + control " + tour.control.join(",") + ")" + (tour.dropped.length ? " · dropped " + tour.dropped.join(",") + " (no pose)" : ""));
-  tour.waypoints.forEach((w, i) => console.log("  " + (i + 1) + ". " + w.forLb + " p95 " + w.p95 + "ms @ 0x" + (w.lb >>> 0).toString(16) + " (" + w.x.toFixed(0) + "," + w.y.toFixed(0) + ")"));
+  tour.waypoints.forEach((w, i) => console.log("  " + (i + 1) + ". " + w.forLb + " decodeVol " + w.decodeVol + " @ 0x" + (w.lb >>> 0).toString(16) + " (" + w.x.toFixed(0) + "," + w.y.toFixed(0) + ")"));
   console.log("[tour] -> " + path.relative(HERE, out) + " · loop-state baselineRoute set");
 }
 
@@ -270,7 +270,7 @@ function cmdStatus() {
   console.log("=== perf loop state (" + (s.updatedAt || "never") + ") ===");
   console.log("league:        " + (s.league || "—"));
   console.log("baselineRoute: " + (s.baselineRoute || "—"));
-  if (s.topOffender) console.log("TOP OFFENDER:  " + s.topOffender.lb + "  p95 " + s.topOffender.p95_med + "ms · " + s.topOffender.draw_med + " draws/f · " + s.topOffender.tri_med + " tris/f · dwell " + s.topOffender.dwellSec + "s");
+  if (s.topOffender) console.log("TOP OFFENDER:  " + s.topOffender.lb + "  decodeVol " + s.topOffender.decodeVol + " · queue " + s.topOffender.maxQueueMs + "ms · wasmΔ " + s.topOffender.wasmMB_grow + "MB · dwell " + s.topOffender.dwellSec + "s");
   if (s.lastVerdict) console.log("last verdict:  " + s.lastVerdict.result.verdict + " (" + s.lastVerdict.cand + ", " + s.lastVerdict.result.improvePct + "%)");
   console.log("tried ledger:  " + ((s.tried && s.tried.length) || 0) + " candidate(s)");
   if (s.next) console.log("\nNEXT: " + s.next);

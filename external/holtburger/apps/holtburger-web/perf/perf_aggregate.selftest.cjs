@@ -47,6 +47,20 @@ function eq(name, a, b) { ok(name + " (got " + JSON.stringify(a) + ")", JSON.str
   eq("control = healthiest non-offender", t.control, ["0xE"]);
 })();
 
+// ── rank on the DECODE/RESIDENCY axis (not p95/draws) ──
+(function () {
+  const s = [];
+  // heavy-decode LB: big bake volume + queue starvation, but LOW p95
+  for (let i = 0; i < 4; i++) s.push({ lb: "0xDEC0", pos: { lb: 0xDEC00009, x: 5, y: 5, z: 5 }, frames: 60, dt: { p50: 12, p95: 14, worst: 20 }, bake: { dPosted: 40, dDecodeMs: 300, maxQueueMs: 900 }, wasmMB: { main: 200 + i * 20 } });
+  // high-p95 but near-zero decode (cold-load frame hitch, NOT the lever)
+  for (let i = 0; i < 4; i++) s.push({ lb: "0xF75E", pos: { lb: 0xF75E0009, x: 9, y: 9, z: 9 }, frames: 60, dt: { p50: 900, p95: 1600, worst: 1900 }, bake: { dPosted: 1, dDecodeMs: 5, maxQueueMs: 10 }, wasmMB: { main: 150 } });
+  const ranked = A.rankByLandblock(s, { minSamples: 2 });
+  eq("decode-heavy LB ranks first (not the high-p95 one)", ranked[0].lb, "0xDEC0");
+  ok("decodeVol summed", ranked[0].decodeVol === 160);
+  ok("wasm growth tracked", ranked[0].wasmMB_grow === 60);
+  ok("starvation captured", ranked[0].maxQueueMs === 900);
+})();
+
 // ── rank captures a representative waypoint (worst frame's pose) ──
 (function () {
   const samples = [];

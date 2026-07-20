@@ -30,8 +30,10 @@ function SAMPLER_FN(opts) {
   var dts = [];            // frame times (ms) since last emit
   var lastFrame = 0;       // performance.now() of previous rAF
   var frames = 0;          // frames since last emit
-  var prevCalls = null;    // renderer.info cumulative baseline
+  var prevCalls = null;    // renderer.info cumulative baseline (context only)
   var prevTris = null;
+  var prevPosted = null;   // bake-queue cumulative baselines (ranking axis)
+  var prevDecodeMs = null;
   var infoArmed = false;   // set autoReset=false exactly once
   var running = true;
 
@@ -76,7 +78,45 @@ function SAMPLER_FN(opts) {
     } catch (e) { return { lb: null, pos: null }; }
   }
 
-  function emit() {
+  // Re-aimed 2026-07-19: the lever is CPU decode/bake/RESIDENCY, not draws/fps
+  // (docs/rynth-integration/perf-loop-reaim-2026-07-19.md). The ranking fields
+  // are `bake` (decode volume + queue starvation, per-window deltas) and
+  // `wasmMB` (main+worker linear-memory — the RSS-growth axis; JS heap stays
+  // flat so performance.memory is the WRONG memory). frame-time/draw kept as
+  // context only — NOT the ranking axis.
+  function readBakeDelta() {
+    try {
+      var bs = window.__diag && window.__diag.bakeWorkerStats ? window.__diag.bakeWorkerStats() : null;
+      if (!bs) return null;
+      var posted = bs.queue ? (bs.queue.posted || 0) : 0;
+      var decodeMs = 0;
+      if (bs.byType) for (var t in bs.byType) decodeMs += bs.byType[t].totalMs || 0;
+      var maxQ = 0;
+      if (bs.queue && bs.queue.byLane) bs.queue.byLane.forEach(function (l) { if (l.maxQueueMs > maxQ) maxQ = l.maxQueueMs; });
+      var out = {
+        posted: posted, queuedNow: bs.queue ? bs.queue.queuedNow : null, maxQueueMs: maxQ,
+        dPosted: prevPosted == null ? null : posted - prevPosted,       // bakes this window = decode volume
+        dDecodeMs: prevDecodeMs == null ? null : decodeMs - prevDecodeMs, // main-thread decode ms this window
+      };
+      prevPosted = posted; prevDecodeMs = decodeMs;
+      return out;
+    } catch (e) { return null; }
+  }
+  function readWasmMB() {
+    // __diag.datDecode() is async → {main:{wasmMemoryBytes}, worker:{...}}.
+    try {
+      if (!window.__diag || typeof window.__diag.datDecode !== "function") return Promise.resolve(null);
+      return Promise.race([
+        window.__diag.datDecode().then(function (r) {
+          var mb = function (b) { return typeof b === "number" && isFinite(b) ? Math.round(b / 104857.6) / 10 : null; };
+          return { main: mb(r && r.main && r.main.wasmMemoryBytes), worker: mb(r && r.worker && r.worker.wasmMemoryBytes) };
+        }),
+        new Promise(function (res) { setTimeout(function () { res(null); }, 1500); }),
+      ]).catch(function () { return null; });
+    } catch (e) { return Promise.resolve(null); }
+  }
+
+  async function emit() {
     if (!running) return;
     var n = frames, ft = dts.slice(0).sort(function (a, b) { return a - b; });
     var rp = readPose();
@@ -85,9 +125,11 @@ function SAMPLER_FN(opts) {
       lb: rp.lb,
       pos: rp.pos,
       frames: n,
+      bake: readBakeDelta(),               // RANKING AXIS: decode volume + starvation
+      wasmMB: await readWasmMB(),           // RANKING AXIS: residency growth (main+worker)
       fps: ft.length ? Math.round((1000 / (ft.reduce(function (a, b) { return a + b; }, 0) / ft.length)) * 10) / 10 : null,
       dt: ft.length ? { p50: pct(ft, 50), p95: pct(ft, 95), p99: pct(ft, 99), worst: ft[ft.length - 1] } : null,
-      draw: null, tri: null, heapMB: null, baked: null,
+      draw: null, tri: null, baked: null,   // CONTEXT ONLY — not ranked (draws ruled out)
     };
 
     var r = renderer();
@@ -99,13 +141,11 @@ function SAMPLER_FN(opts) {
       }
       prevCalls = c; prevTris = tri;
     }
-    try { if (performance.memory) sample.heapMB = Math.round(performance.memory.usedJSHeapSize / 1e5) / 10; } catch (e) {}
     try {
       var s = window.liveScene3d;
       if (s && s.terrainBakedLbs && typeof s.terrainBakedLbs.size === "number") sample.baked = s.terrainBakedLbs.size;
     } catch (e) {}
 
-    // Round frame-time fields for a compact, diff-friendly line.
     if (sample.dt) for (var k in sample.dt) if (sample.dt[k] != null) sample.dt[k] = Math.round(sample.dt[k] * 10) / 10;
 
     console.log("[perfsample] " + JSON.stringify(sample));
