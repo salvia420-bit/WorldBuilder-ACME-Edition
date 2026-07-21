@@ -90,12 +90,14 @@ export async function createGrindBot(sessionHandle, config = {}) {
   // see ExplorePressureController below for the full activation contract.
   let explorePressure = null;
   if (config.explorePressure === true) {
-    const [irMod, opsMod] = await Promise.all([
+    const [irMod, opsMod, townsMod] = await Promise.all([
       import(`${base}/indoor_router.js`),
       import(`${base}/ai/operator_stop.js`),
+      import(`${base}/ai/tools/towns.js`),
     ]);
     explorePressure = new ExplorePressureController(host, router, irMod, opsMod, {
       log: typeof config.explorePressureLog === "function" ? config.explorePressureLog : undefined,
+      towns: townsMod.TOWNS,
     });
     host.onTick(() => explorePressure.tick());
   }
@@ -654,7 +656,15 @@ async function wireAiDirector(bot, aiConfig, base) {
 function worldX(cellId, x) { return ((cellId >>> 24) & 0xff) * 192 + x; }
 function worldY(cellId, y) { return ((cellId >>> 16) & 0xff) * 192 + y; }
 
-// ── Explore pressure (task #15, 2026-07-20) ─────────────────────────────
+// Step 5 (hard-loop last resort) hop length — long enough to make real
+// progress toward the nearest unvisited town's bearing, short of anything
+// that could be mistaken for a teleport: this is ALWAYS one on-foot
+// MoveToPosition call, never an @telepoi/portal shortcut (operator directive
+// 2026-07-21: teleporting out of a loop defeats autonomous on-foot nav).
+const TOWN_HOP_DIST_M = 45;
+
+// ── Explore pressure (task #15, 2026-07-20; re-engineered as a frontier-
+// directed escalation ladder 2026-07-21, DESIGN-surveyor-frontier) ────────
 // ?explorePressure=1 (index.html bot-param block; exact-match "=1" opt-in,
 // default OFF). Fixes: the bot has NO locomotion outside an explicit
 // director tool call — the kernel loops (combat/loot/buff/vitals) only act
@@ -664,17 +674,50 @@ function worldY(cellId, y) { return ((cellId >>> 16) & 0xff) * 192 + y; }
 // This adds an idle-pressure tick, self-throttled to ~5s off the host's
 // heartbeat, that steps the bot with cheap ambient motion ONLY when nothing
 // else has a legitimate claim on movement — see _gatesOpen() for the full
-// AND of conditions. Priority per step: (1) re-issue the director's last
-// unreached goto (bot.mission/lastMission already carry this — doGoto sets
-// bot.mission on start and bot.lastMission on completion/failure above, so
-// no extra tracking hook is needed here); (2) else a short local sweep hop
-// — indoors via the indoor cell graph (rynth/indoor_router.js), outdoors via
-// a nearby unvisited door or a random-bearing 15-25m hop. One compact
-// journal note per step so the director's next observation sees the ambient
-// motion. Hard caps: >=25s idle (since the last pose change AND since the
-// last pressure step, which also satisfies the <=1-step/20s cap) and <=3
+// AND of conditions. One compact journal note per step so the director's
+// next observation sees the ambient motion. Hard caps: >=12s idle (since the
+// last pose change) AND >=15s since the last pressure step, and <=6
 // consecutive random/sweep hops before standing down until the next
 // director check-in lands.
+//
+// Step priority (the escalation ladder, DESIGN-surveyor-frontier-2026-07-21
+// WS-C + its VALIDATION COROLLARY):
+//   1. Re-issue the director's last unreached goto (unchanged — bot.mission/
+//      lastMission already carry this; doGoto sets them, no extra hook).
+//   2. LOCAL FRONTIER HOP: step toward the nearest unvisited tile from the
+//      shared `bot.ai.extensions.exploreMemory` — indoor via the cell graph
+//      (nearestCell/toLegs toward the frontier tile), outdoor via a direct
+//      MoveToPosition at the frontier's world coords (converted through the
+//      same LandCell-index formula the old random-hop code used).
+//   3. ESCALATE OUT when the local frontier is exhausted (no frontier inside
+//      this landblock AND variation()>=5, OR loopVerdict().severity>=2 while
+//      indoors): walk to the building exit via
+//      `bot.ai.extensions.dungeonNav.exitRoute(bot)` + `bot.travel(legs)`
+//      (the same code path the `exit_building` action uses), falling back to
+//      a local `indoor_router.findExitPath` + direct MoveToPosition when
+//      dungeonNav/bot.travel are unavailable.
+//   4. LANDBLOCK HOP: when the frontier tile itself sits in a different
+//      landblock (whole current lb saturated), the same outdoor frontier-hop
+//      code carries the bot there directly — it is the same MoveToPosition-
+//      toward-frontier action as step 2, just labeled differently in the
+//      journal.
+//   5. HARD-LOOP LAST RESORT (loopVerdict().severity===3 outdoors, no local
+//      frontier left): a DIRECTED, ON-FOOT long walk toward the bearing of
+//      the nearest unvisited town (`exploreMemory.townFrontier(TOWNS, pose)`
+//      for direction only — NEVER a teleport/`@telepoi`; the operator has
+//      explicitly ruled that out as it defeats autonomous on-foot
+//      navigation). If wedged against geometry with nothing reachable, this
+//      just keeps re-issuing the same directed MoveTo; the existing hop-cap
+//      stand-down and the next director check-in are what actually un-stick
+//      it.
+//
+// Every rung is best-effort and independently guarded: a missing/broken
+// `exploreMemory` (extensions off, or WS-A not yet landed) makes every
+// `_frontierSafe`/`_loopVerdictSafe`/`_variationSafe` helper return an inert
+// default, which collapses the whole ladder back to the ORIGINAL pre-frontier
+// behavior (revisit-nearest-neighbor indoors, nearest-unvisited-door-or-
+// random-hop outdoors) via `_legacyIndoorSweep`/`_legacyOutdoorHop` — kept
+// verbatim for exactly this fallback.
 //
 // Survival invariant (matches the rest of rynth/): every entry point
 // degrades to a no-op on any error — a broken pressure step must never touch
@@ -683,12 +726,13 @@ export class ExplorePressureController {
   constructor(host, router, irMod, opsMod, opts = {}) {
     this.host = host;
     this.router = router;
-    this.ir = irMod || {}; // indoor_router.js: isEnvCellId/nearestCell/toLegs/buildGraphFromWasm
+    this.ir = irMod || {}; // indoor_router.js: isEnvCellId/nearestCell/toLegs/buildGraphFromWasm/findExitPath
     this._isOperatorStopLatched = typeof opsMod?.isOperatorStopLatched === "function"
       ? opsMod.isOperatorStopLatched
       : () => false;
     this.now = typeof opts.now === "function" ? opts.now : () => Date.now();
     this.log = typeof opts.log === "function" ? opts.log : () => {};
+    this._towns = Array.isArray(opts.towns) ? opts.towns : []; // tools/towns.js TOWNS, for step 5's bearing only
     this.bot = null; // set by createGrindBot once the bot object exists
 
     this._lastGateAt = 0;           // 5s coarse-cadence throttle for the tick body
@@ -699,6 +743,9 @@ export class ExplorePressureController {
     this._standDown = false;        // 3-hop cap tripped; cleared on the next check-in
     this._lastCheckSeen = null;
     this._stepBusy = false;         // step() reentrancy guard (it awaits)
+    // Legacy revisit-memory — kept ONLY as the fallback used by
+    // _legacyIndoorSweep/_legacyOutdoorHop when exploreMemory is absent or
+    // broken (extensions off, or ExploreMemory not yet wired) — see WS-C.
     this._visitedCells = new Map(); // landblock -> Set(cellId) — indoor sweep memory
     this._visitedDoors = new Set(); // outdoor door guids already swept toward
     this._graphCache = null;        // { lb, graph } — indoor graph memo (buildGraphFromWasm)
@@ -814,7 +861,7 @@ export class ExplorePressureController {
     // failure) — reusing that state avoids adding a second tracking hook
     // that would fight route_recorder's own bot._onTravelStart/_onTravelDone
     // wiring (rynth/ai/extensions.js). Re-issued via bot.goto, once per idle
-    // period (the 25s-since-last-step gate above already enforces "once").
+    // period (the 15s-since-last-step gate above already enforces "once").
     const lm = this.bot.lastMission;
     if (lm && lm.kind === "goto" && lm.to != null && lm.result?.ok !== true && typeof this.bot.goto === "function") {
       this._journalNote(`[pressure] idle — re-issuing last unreached goto (${lm.label ?? "?"})`);
@@ -824,14 +871,65 @@ export class ExplorePressureController {
 
     const pose = this._pose();
     if (!pose || typeof pose.objCellId !== "number") return;
+
+    // Feed the shared coverage core on the SAME pressure-tick cadence the
+    // director check-in also observes on — ExploreMemory owns the de-dupe
+    // (DESIGN-surveyor-frontier corollary: "dual-driver double-count"), so a
+    // plain best-effort call here is safe and keeps coverage/frontier fresh
+    // between check-ins rather than only at check-in time.
+    const em = this._exploreMemory();
+    if (em) {
+      try { em.observe(pose); } catch { /* ExploreMemory owns its own robustness */ }
+    }
+
     if (typeof this.ir.isEnvCellId === "function" && this.ir.isEnvCellId(pose.objCellId >>> 0)) {
-      await this._indoorHop(pose);
+      await this._indoorHop(pose, em);
     } else {
-      this._outdoorHop(pose);
+      this._outdoorHop(pose, em);
     }
   }
 
-  async _indoorHop(pose) {
+  // Lazy/defensive reach into the shared coverage core — SAME pattern as
+  // this.bot.ai?.director elsewhere in this file. Missing/broken -> null,
+  // which collapses every ladder rung below back to the legacy fallback.
+  _exploreMemory() {
+    try {
+      const em = this.bot?.ai?.extensions?.exploreMemory;
+      if (em && typeof em.frontier === "function") return em;
+    } catch { /* defensive read only */ }
+    return null;
+  }
+
+  _frontierSafe(em) {
+    if (!em) return null;
+    try { return em.frontier() ?? null; } catch { return null; }
+  }
+
+  _loopVerdictSafe(em) {
+    if (!em || typeof em.loopVerdict !== "function") return null;
+    try { return em.loopVerdict() ?? null; } catch { return null; }
+  }
+
+  _variationSafe(em) {
+    if (!em || typeof em.variation !== "function") return 0;
+    try { const v = em.variation(); return typeof v === "number" ? v : 0; } catch { return 0; }
+  }
+
+  // Retail outdoor LandCell index (LandDefs::gid_to_lcoord) from a WORLD-
+  // frame point — the same formula dungeon_nav.js's exitRoute() and
+  // goto_compose.js's normalizeLegWorldFrame() each independently derive;
+  // shared here by every hop kind (frontier/landblock/town/legacy) rather
+  // than re-inlined per call site.
+  _worldToLandCell(tx, ty, z) {
+    const lbX = Math.max(0, Math.min(255, Math.floor(tx / 192)));
+    const lbY = Math.max(0, Math.min(255, Math.floor(ty / 192)));
+    const lx = tx - lbX * 192, ly = ty - lbY * 192;
+    const cellIdx = 1 + Math.min(7, Math.floor(lx / 24)) * 8 + Math.min(7, Math.floor(ly / 24));
+    const lb = (((lbX << 24) | (lbY << 16) | cellIdx) >>> 0);
+    return { lb, x: lx, y: ly, z };
+  }
+
+  async _indoorHop(pose, em) {
     if (typeof this.ir.buildGraphFromWasm !== "function" || typeof this.ir.toLegs !== "function") return;
     const cellId = pose.objCellId >>> 0;
     const lb = (cellId >>> 16) >>> 0;
@@ -852,6 +950,104 @@ export class ExplorePressureController {
     if (!nodes.size) return;
     const wx = worldX(cellId, pose.x), wy = worldY(cellId, pose.y);
     const cur = (nodes.has(cellId) ? cellId : (this.ir.nearestCell?.(nodes, wx, wy, pose.z) ?? cellId)) >>> 0;
+
+    // Step 3 gate: escalate OUT when the local frontier is exhausted
+    // (nothing unvisited left inside THIS landblock and variation()>=5) OR
+    // the loop verdict is already severity>=2 while indoors — escalating
+    // takes priority over a same-building frontier hop once either fires,
+    // since bouncing around one building is exactly the pattern severity>=2
+    // detects.
+    const frontier = this._frontierSafe(em);
+    const verdict = this._loopVerdictSafe(em);
+    const variation = this._variationSafe(em);
+    const localFrontier = frontier && typeof frontier.worldX === "number" && typeof frontier.worldY === "number"
+      && (frontier.lb == null || (frontier.lb >>> 0) === lb);
+    const escalateCondition = (!localFrontier && variation >= 5) || (verdict && verdict.severity >= 2);
+
+    if (escalateCondition) {
+      const escalated = await this._escalateOut(cur, graph);
+      if (this._routeClaimed()) return; // exitRoute() awaits — re-validate before any further rung
+      if (escalated) return;
+      // dungeonNav + the local findExitPath fallback both came up empty —
+      // degrade down the remaining rungs below rather than give up.
+    }
+
+    if (localFrontier && this._frontierHopIndoor(pose, graph, nodes, cur, frontier)) return;
+
+    // Step 1 (legacy revisit-neighbor sweep): the extensions-off / broken-
+    // ExploreMemory fallback, and the final rung when a frontier exists but
+    // sits outside this landblock and escalation couldn't act on it yet.
+    this._legacyIndoorSweep(graph, nodes, cur, lb);
+  }
+
+  // Step 3: exit_building's own code path, invoked as harness code — mirrors
+  // the `exit_building` director action exactly (dungeonNav.exitRoute +
+  // bot.travel, NOT bot.goto). Falls back to a local findExitPath + direct
+  // MoveToPosition toward the exit cell when dungeonNav/bot.travel aren't
+  // available (extensions off, or the advisor declined). Returns true if a
+  // move was actually issued.
+  async _escalateOut(cur, graph) {
+    try {
+      const dn = this.bot?.ai?.extensions?.dungeonNav;
+      if (dn && typeof dn.exitRoute === "function" && typeof this.bot.travel === "function") {
+        const route = await dn.exitRoute(this.bot);
+        if (this._routeClaimed()) return true; // claimed mid-await — treat as handled this tick
+        if (route && route.ok && Array.isArray(route.legs) && route.legs.length) {
+          const res = this.bot.travel(route.legs);
+          if (!res || res.ok !== false) {
+            this._bumpHop();
+            this._journalNote(`[pressure] idle — ESCALATE: exiting the building (dungeonNav, ${route.legs.length} leg(s))`);
+            return true;
+          }
+        }
+      }
+    } catch { /* fall through to the local fallback below */ }
+
+    try {
+      if (typeof this.ir.findExitPath === "function" && typeof this.ir.toLegs === "function") {
+        const exit = this.ir.findExitPath(graph, cur, {});
+        if (exit && Array.isArray(exit.path) && exit.path.length) {
+          let legs = null;
+          try { legs = this.ir.toLegs(graph, exit.path); } catch { legs = null; }
+          const leg = Array.isArray(legs) ? legs[legs.length - 1] : null;
+          if (leg) {
+            if (this._routeClaimed()) return true;
+            this.host.MoveToPosition(leg.lb, leg.x, leg.y, leg.z, true);
+            this._bumpHop();
+            this._journalNote(`[pressure] idle — ESCALATE: heading to building exit 0x${(exit.exitCell >>> 0).toString(16).padStart(8, "0")}`);
+            return true;
+          }
+        }
+      }
+    } catch { /* both escalation paths exhausted — caller degrades further */ }
+    return false;
+  }
+
+  // Step 2 (indoor half): step toward the graph cell nearest the frontier's
+  // world coordinates. Returns true if a move was issued.
+  _frontierHopIndoor(pose, graph, nodes, cur, frontier) {
+    try {
+      const targetRaw = this.ir.nearestCell?.(nodes, frontier.worldX, frontier.worldY, pose.z);
+      if (targetRaw == null) return false;
+      const target = targetRaw >>> 0;
+      if (!nodes.has(target)) return false;
+      let legs = null;
+      try { legs = this.ir.toLegs(graph, [cur, target]); } catch { legs = null; }
+      const leg = Array.isArray(legs) ? legs[legs.length - 1] : null;
+      if (!leg) return false;
+      if (this._routeClaimed()) return true; // claimed -> handled (no further rung this tick)
+      this.host.MoveToPosition(leg.lb, leg.x, leg.y, leg.z, true);
+      this._bumpHop();
+      this._journalNote(`[pressure] idle — frontier hop to 0x${target.toString(16).padStart(8, "0")} (~${Math.round(frontier.dist ?? 0)}m, ${Math.round(frontier.bearingDeg ?? 0)}°)`);
+      return true;
+    } catch { return false; }
+  }
+
+  // Legacy indoor sweep (task #15 original behavior, UNCHANGED): revisit-
+  // nearest-neighbor. Used when ExploreMemory is absent/broken, or as the
+  // last rung when a frontier exists outside this landblock but escalation
+  // couldn't act on it.
+  _legacyIndoorSweep(graph, nodes, cur, lb) {
     const visited = this._visitedCells.get(lb) ?? new Set();
     this._visitedCells.set(lb, visited);
     visited.add(cur);
@@ -876,9 +1072,79 @@ export class ExplorePressureController {
     this._journalNote(`[pressure] idle — indoor sweep to 0x${target.toString(16).padStart(8, "0")}${visited.has(target) ? " (revisit)" : ""}`);
   }
 
-  _outdoorHop(pose) {
+  _outdoorHop(pose, em) {
     const cellId = pose.objCellId >>> 0;
     const wx = worldX(cellId, pose.x), wy = worldY(cellId, pose.y);
+    const lb = cellId >>> 16;
+
+    // Steps 2 & 4 share one code path outdoors: MoveToPosition straight at
+    // the frontier's world coordinates. Whether that lands inside this
+    // landblock (step 2, "frontier hop") or a different one (step 4,
+    // "landblock hop") only changes the journal label — both are "walk
+    // toward the nearest unvisited tile."
+    const frontier = this._frontierSafe(em);
+    if (frontier && typeof frontier.worldX === "number" && typeof frontier.worldY === "number") {
+      if (this._frontierHopOutdoor(pose, wx, wy, lb, frontier)) return;
+    }
+
+    // Step 5: hard-loop last resort. NEVER a teleport — a directed, on-foot
+    // long hop toward the bearing of the nearest unvisited town. Only fires
+    // at severity 3 (wedged) with no local frontier to chase; if this keeps
+    // firing because we're genuinely wedged against geometry, the hop-cap
+    // stand-down and the next director check-in are what actually break it.
+    const verdict = this._loopVerdictSafe(em);
+    if (verdict && verdict.severity >= 3) {
+      if (this._townDirectedHop(pose, wx, wy, em)) return;
+    }
+
+    this._legacyOutdoorHop(pose, wx, wy);
+  }
+
+  // Steps 2/4 (outdoor half): direct MoveToPosition at the frontier's world
+  // coordinates, converted through the shared LandCell formula. Returns true
+  // if a move was issued.
+  _frontierHopOutdoor(pose, wx, wy, lb, frontier) {
+    const target = this._worldToLandCell(frontier.worldX, frontier.worldY, pose.z);
+    if (this._routeClaimed()) return true; // claimed -> handled (no further rung this tick)
+    this.host.MoveToPosition(target.lb, target.x, target.y, target.z, true);
+    this._bumpHop();
+    const crossesLb = (target.lb >>> 16) !== (lb >>> 0);
+    const label = crossesLb ? "landblock hop" : "frontier hop";
+    const dist = typeof frontier.dist === "number" ? frontier.dist : Math.hypot(frontier.worldX - wx, frontier.worldY - wy);
+    this._journalNote(`[pressure] idle — ${label} toward 0x${target.lb.toString(16).padStart(8, "0")} (~${Math.round(dist)}m, ${Math.round(frontier.bearingDeg ?? 0)}°)`);
+    return true;
+  }
+
+  // Step 5: ON-FOOT ONLY. Computes a bearing from the current position to
+  // the nearest unvisited town (exploreMemory.townFrontier — used strictly
+  // for direction, never as a teleport target) and issues one long walking
+  // hop along that bearing. Town world coords are the inverse of the
+  // ns/ew<-worldXY conversion ExploreMemory itself carries (DESIGN-surveyor-
+  // frontier corollary's locDegrees): ns=(wy/24-1019.5)/10, ew=(wx/24-1019.5)/10.
+  // Returns true if a move was issued.
+  _townDirectedHop(pose, wx, wy, em) {
+    if (!em || typeof em.townFrontier !== "function") return false;
+    let town = null;
+    try { town = em.townFrontier(this._towns, pose); } catch { town = null; }
+    if (!town || typeof town.ns !== "number" || typeof town.ew !== "number") return false;
+    const townWx = (town.ew * 10 + 1019.5) * 24;
+    const townWy = (town.ns * 10 + 1019.5) * 24;
+    const dx = townWx - wx, dy = townWy - wy;
+    const dist = Math.hypot(dx, dy);
+    if (!(dist > 1)) return false; // already at/on the town — nothing directional to walk
+    const ux = dx / dist, uy = dy / dist;
+    const target = this._worldToLandCell(wx + ux * TOWN_HOP_DIST_M, wy + uy * TOWN_HOP_DIST_M, pose.z);
+    if (this._routeClaimed()) return true; // claimed -> handled (no further rung this tick)
+    this.host.MoveToPosition(target.lb, target.x, target.y, target.z, true);
+    this._bumpHop();
+    this._journalNote(`[pressure] idle — ESCALATE: hard loop (severity 3), no local frontier — long walk toward ${town.name} (~${TOWN_HOP_DIST_M}m on foot, ON FOOT ONLY)`);
+    return true;
+  }
+
+  // Legacy outdoor hop (task #15 original behavior, UNCHANGED): nearest
+  // unvisited door, else a random 15-25m bearing hop. Used when ExploreMemory
+  // is absent/broken or offers no frontier and the loop isn't yet severe.
+  _legacyOutdoorHop(pose, wx, wy) {
     const door = this._nearestUnvisitedDoor(wx, wy);
     let tx, ty, label;
     if (door) {
@@ -893,17 +1159,9 @@ export class ExplorePressureController {
       ty = wy + Math.cos(bearing) * dist;
       label = `random hop ~${dist.toFixed(0)}m`;
     }
-    const lbX = Math.max(0, Math.min(255, Math.floor(tx / 192)));
-    const lbY = Math.max(0, Math.min(255, Math.floor(ty / 192)));
-    const lx = tx - lbX * 192, ly = ty - lbY * 192;
-    // Retail outdoor LandCell index (LandDefs::gid_to_lcoord) — the same
-    // formula dungeon_nav.js's exitRoute() and goto_compose.js's
-    // normalizeLegWorldFrame() each independently derive; reimplemented here
-    // too rather than imported, per this wave's no-cross-file-coupling note.
-    const cellIdx = 1 + Math.min(7, Math.floor(lx / 24)) * 8 + Math.min(7, Math.floor(ly / 24));
-    const lb = (((lbX << 24) | (lbY << 16) | cellIdx) >>> 0);
+    const target = this._worldToLandCell(tx, ty, pose.z);
     if (this._routeClaimed()) return; // final abort check right before moving
-    this.host.MoveToPosition(lb, lx, ly, pose.z, true);
+    this.host.MoveToPosition(target.lb, target.x, target.y, target.z, true);
     this._bumpHop();
     this._journalNote(`[pressure] idle — ${label}`);
   }

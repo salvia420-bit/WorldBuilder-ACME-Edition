@@ -84,6 +84,17 @@ export function isEnvCellId(id) {
   return lo >= 0x0100 && lo <= 0xfffd;
 }
 
+// objCellId 0 is the "no valid cell" sentinel — the local player pose reads
+// this during a streaming/respawn gap (e.g. right after a death-teleport into
+// a dungeon, before the destination EnvCell is re-established; live-observed
+// 2026-07-21 in the Holtburg training academy). It is NOT outdoors: the binary
+// EnvCell-or-outdoor split silently mislabels it. Callers that classify
+// indoor/outdoor must treat this as UNKNOWN, not as an outdoor LandCell.
+/** True if id encodes no resolved cell (respawn/streaming gap). */
+export function isUnresolvedCellId(id) {
+  return (id >>> 0) === 0;
+}
+
 // Normalize a caller graph (Map or plain object, string or number keys) into
 // Map<u32, node>. Dungeon graphs are tens-to-hundreds of cells; O(n) per call.
 function asMap(graph) {

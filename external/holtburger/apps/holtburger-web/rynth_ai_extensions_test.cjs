@@ -200,28 +200,22 @@ const CORPUS = [
       check("tried: shows repeat count", /Door 0x5002 \(x2\)/.test(obs), (obs.match(/tried:.*/) || [])[0]);
     }
 
-    // area-stall line fires after enough tries with no landblock change
+    // LOCATION block (DESIGN-surveyor-frontier-2026-07-21 WS-B) replaces the
+    // old loopWarning/coverageLines/stallLine trio — this is a wiring smoke
+    // test; thorough LOCATION/CORRECTION/frontier coverage lives in
+    // rynth_ai_observe_location_test.cjs and rynth_explore_memory_test.cjs.
     {
       const bot = makeWorldBot();
-      const ext = mkExt(bot, { stallMinutes: 0 });
-      ext.directorDeps.observe(bot, {}); // baseline: records the area
-      await ext.directorDeps.execute(bot, [
-        { type: "use_object", object: "Door" }, { type: "use_object", object: "Jonathan" },
-        { type: "use_object", object: "Door" }, { type: "use_object", object: "Jonathan" },
-      ]);
+      const ext = mkExt(bot);
+      await ext.directorDeps.execute(bot, [{ type: "use_object", object: "Door" }, { type: "use_object", object: "Door" }]);
       const obs = ext.directorDeps.observe(bot, {}).text;
-      check("STALLED line fires", /STALLED: .*NO area change/.test(obs), (obs.match(/STALLED.*/) || [])[0]);
-    }
-    // stall: off by config
-    {
-      const bot = makeWorldBot();
-      const ext = mkExt(bot, { stallMinutes: 0, stall: false });
-      ext.directorDeps.observe(bot, {});
-      await ext.directorDeps.execute(bot, [
-        { type: "use_object", object: "Door" }, { type: "use_object", object: "Jonathan" },
-        { type: "use_object", object: "Door" }, { type: "use_object", object: "Jonathan" },
-      ]);
-      check("stall:false suppresses", !/STALLED/.test(ext.directorDeps.observe(bot, {}).text));
+      check("LOCATION block present", /^LOCATION \(harness ground truth — trust this over your own memory\):/m.test(obs),
+        obs.slice(0, 200));
+      check("Here line present", /  Here: /.test(obs), (obs.match(/  Here:.*/) || [])[0]);
+      check("already tried here folded into LOCATION", /already tried here: Door 0x5002 \(x2\)/.test(obs),
+        (obs.match(/already tried here:.*/) || [])[0]);
+      check("old STALLED wording is gone", !/STALLED:/.test(obs));
+      check("exploreMemory landed on the composition", typeof ext.exploreMemory?.observe === "function");
     }
 
     // if-guard: inventory_gained unmet -> skipped

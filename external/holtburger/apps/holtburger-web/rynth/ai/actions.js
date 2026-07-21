@@ -148,6 +148,10 @@ export async function executeAction(bot, a, { log, journal } = {}) {
           );
         try {
           const p = bot?.host?.TryGetPlayerPose?.();
+          if (p && (p.objCellId >>> 0) === 0)
+            return fail(
+              "position unresolved (cell 0 — respawn/streaming gap; NOT outdoors). Do not route yet; wait a check-in for the cell to resolve, then act on your nearby list.",
+            );
           if (p && ((p.objCellId >>> 0) & 0xffff) >= 0x100)
             return fail(
               "you are indoors (dungeon cell) — outdoor goto cannot route from here; use exit_building to walk outside first, then goto",

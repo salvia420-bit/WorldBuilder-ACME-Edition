@@ -306,6 +306,8 @@ export class DungeonNavAdvisor {
     try {
       const pose = getPose(bot);
       if (!pose) return no("no-pose", "no player pose — cannot anchor an exit route");
+      if ((pose.cell >>> 0) === 0)
+        return no("cell-unresolved", "position unresolved (respawn/streaming gap — cell 0); not outdoors. Hold and re-read next check-in before routing.");
       if (!isEnvCellId(pose.cell))
         return no("outdoors", `already outdoors (cell ${hex(pose.cell)}) — exit_building n/a; use goto`);
       const graph = await this._graphAsync(bot);

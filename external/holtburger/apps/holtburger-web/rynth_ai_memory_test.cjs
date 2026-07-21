@@ -70,7 +70,11 @@ const CFG_OFF = { knowledge: false, dungeonNav: false, wbt: false, economy: fals
     await ext.directorDeps.execute(bot, [{ type: "update_scratchpad", text: "goals: primary=find Jonathan" }], {});
     obs = ext.directorDeps.observe(bot, {}).text;
     check("scratchpad update visible next observe", /primary=find Jonathan/.test(obs));
-    check("explored line present", /explored: \d+ cells/.test(obs));
+    // "explored: N cells" was folded into the LOCATION block's Covered: line
+    // (DESIGN-surveyor-frontier-2026-07-21 WS-B) — rynth_ai_observe_location_test.cjs
+    // covers this format in full; here just confirm it's present.
+    check("Covered line present (supersedes the old explored: line)",
+      /  Covered: \d+ tiles \/ \d+ landblocks this session; \d+ tiles in this landblock\./.test(obs));
   }
   // ---- compose: memory:false -> off ----
   {
@@ -87,7 +91,11 @@ const CFG_OFF = { knowledge: false, dungeonNav: false, wbt: false, economy: fals
     await ext.directorDeps.execute(bot, [{ type: "use_object", object: "0x5001" }], {});
     await ext.directorDeps.execute(bot, [{ type: "goto_object", object: "chest" }], {});
     const obs = ext.directorDeps.observe(bot, {}).text;
-    check("tried line lists used objects", /tried: .*Exit to Holtburg 0x5001.*Training Chest 0x5003/.test(obs), obs.split("\n").find((l) => l.startsWith("tried:")));
+    // "tried: ..." was folded into the LOCATION block's "already tried here:"
+    // line (DESIGN-surveyor-frontier-2026-07-21 WS-B).
+    check("already tried here line lists used objects",
+      /already tried here: .*Exit to Holtburg 0x5001.*Training Chest 0x5003/.test(obs),
+      obs.split("\n").find((l) => l.trim().startsWith("already tried here:")));
   }
 
   // ---- compose: truncation journals a visible note ----

@@ -25,6 +25,7 @@ import { registerWorld } from "./tools/world.js";
 import { registerMemory, renderScratchpadSection } from "./tools/memory.js";
 import { registerRoutes, renderMissionLine, liveRunRate } from "./tools/routes.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./director.js";
+import { ExploreMemory, compassOf } from "./explore_memory.js";
 
 // = executePlan's own default (actions.js:197) + SPEC "Cost & safety" cap;
 // guardPlan enforces it over ext + v1 actions combined. cfg.maxActions
@@ -43,8 +44,8 @@ const MEMORY_DISCIPLINE = [
   "moved into the scratchpad is forgotten after ~8 check-ins. When you learn",
   "something durable or your goals change, update the scratchpad THAT turn",
   "(it costs one action). Only write VERIFIED facts there — the observation",
-  "lines and the tried:/explored: lines are ground truth; your scratchpad is",
-  "not, so never let it contradict them.",
+  "lines and the LOCATION block (Here/Was/Covered/Frontier) are ground truth;",
+  "your scratchpad is not, so never let it contradict them.",
 ].join("\n");
 
 // Appended when the ticket surface (tools/wbt.js) is on: the QA mandate —
@@ -57,8 +58,9 @@ const PLAYTESTER_DISCIPLINE = [
   "that ignores its own instructions — persistent mismatches are BUGS. File",
   "them with file_ticket: what you did (object guid), what you expected,",
   "what happened. Also keep coverage as a standing tertiary goal: prefer",
-  "objects and areas you have NOT tried (see tried:/explored:) — breadth of",
-  "interaction is how a playtester earns their keep.",
+  "objects and areas you have NOT tried (see the LOCATION block's Here/",
+  "already tried here/Frontier lines) — breadth of interaction is how a",
+  "playtester earns their keep.",
 ].join("\n");
 
 /**
@@ -276,62 +278,28 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     memory = registerMemory(extActions, state);
   }
 
-  // ── loop detection (2026-07-17) ────────────────────────────────────────
-  // Movement-intent actions (use_object/goto/goto_lb) that repeat with no
-  // position change get an authoritative WARNING prepended to the next
-  // observation. Ground-truth injection beats prompt persuasion: the live
-  // soak showed the model journaling "exited the academy" while standing
-  // still, then trusting that false note on later check-ins.
-  const LOOP_TYPES = new Set(["use_object", "goto", "goto_lb"]);
-  const LOOP_WINDOW_MS = 45 * 60_000;
-  const LOOP_MAX_ACTS = 24;
-  const LOOP_MOVED_M = 3;
+  // ── ExploreMemory (DESIGN-surveyor-frontier-2026-07-21, WS-A/WS-B) ────────
+  // Single shared coverage/frontier/loop core — replaces the old scattered
+  // loopWarning/coverageLines/stallLine trio (see locationBlock() below).
+  // Landed at bot.ai.extensions.exploreMemory so bot.js's ExplorePressure-
+  // Controller (WS-C) and director.js (WS-D) can reach the SAME instance.
+  const exploreMemory = new ExploreMemory();
+
   const poseOf = (b) => {
     try {
       const p = b?.host?.TryGetPlayerPose?.();
       return p ? { cell: p.objCellId >>> 0, x: p.x, y: p.y, z: p.z } : null;
     } catch { return null; }
   };
-  const fpOf = (a) => {
+  // ExploreMemory.observe() is frozen to the RAW {objCellId,x,y,z} shape
+  // (VALIDATION COROLLARY) — poseOf() above renames to {cell,...} for the
+  // rest of this module's math, so this is a separate accessor over the same
+  // host seam rather than a transform of poseOf's output.
+  const rawPoseOf = (b) => {
     try {
-      const { type, ...rest } = a;
-      return `${type} ${JSON.stringify(rest, Object.keys(rest).sort())}`;
-    } catch { return String(a?.type); }
-  };
-  const recordAct = (b, a) => {
-    if (!LOOP_TYPES.has(a?.type)) return;
-    const acts = (state._recentActs ??= []);
-    acts.push({ fp: fpOf(a), t: Date.now(), pose: poseOf(b) });
-    if (acts.length > LOOP_MAX_ACTS) acts.splice(0, acts.length - LOOP_MAX_ACTS);
-  };
-  const loopWarning = (b) => {
-    const now = Date.now();
-    const acts = (state._recentActs ?? []).filter((r) => now - r.t < LOOP_WINDOW_MS);
-    state._recentActs = acts;
-    if (!acts.length) return "";
-    const cur = poseOf(b);
-    if (!cur) return "";
-    const byFp = new Map();
-    for (const r of acts) {
-      if (!byFp.has(r.fp)) byFp.set(r.fp, []);
-      byFp.get(r.fp).push(r);
-    }
-    const lines = [];
-    for (const [fp, rs] of byFp) {
-      if (rs.length < 2) continue;
-      // vs the LAST attempt's pose: use_object walks you to the target, so a
-      // first-attempt baseline would count that approach walk as progress.
-      const last = rs[rs.length - 1].pose;
-      if (!last) continue;
-      const moved =
-        last.cell !== cur.cell ||
-        Math.hypot(cur.x - last.x, cur.y - last.y, cur.z - last.z) > LOOP_MOVED_M;
-      if (!moved)
-        lines.push(
-          `WARNING: ${fp} attempted ${rs.length}x with NO position change — it is NOT working. Do not repeat it; pick a different object or approach.`
-        );
-    }
-    return lines.slice(0, 3).join("\n");
+      const p = b?.host?.TryGetPlayerPose?.();
+      return p ? { objCellId: p.objCellId >>> 0, x: p.x, y: p.y, z: p.z } : null;
+    } catch { return null; }
   };
 
   // Coverage + tried-object memory (2026-07-17): harness-tracked ground truth
@@ -382,50 +350,84 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     return out.length ? `since last check-in: ${out.join("; ")}` : "";
   };
 
-  const coverageLines = (b) => {
-    const cur = poseOf(b);
-    if (cur) (state._visitedCells ??= new Set()).add(cur.cell);
-    const lines = [];
+  // ── LOCATION block (DESIGN-surveyor-frontier-2026-07-21 WS-B) ────────────
+  // ONE authoritative, deterministic block sourced from exploreMemory,
+  // replacing loopWarning + coverageLines + stallLine. Injected FIRST
+  // (highest authority) in the observe assembly below. Root cause this
+  // fixes: four independent, incomplete visit-trackers, none of which owned
+  // a frontier or forced an escape — the live 2026-07-21 soak wedged in the
+  // Renald shop (landblock 0xA9B4), re-poking the same NPCs/chest, while the
+  // director fixated on a town on the opposite corner of the map.
+  // rawPose is passed in (not re-derived) so this uses the EXACT same pose
+  // exploreMemory.observe() was just fed this check-in — objCellId===0 is a
+  // death/respawn streaming gap (academy respawn reports cell 0 for a beat),
+  // not a real location. exploreMemory.observe() already no-ops on it (last
+  // known-good tile stays current), but the LOCATION block must not silently
+  // keep reporting that stale tile as "here" — and must never point Frontier/
+  // CORRECTION at coordinates derived from a garbage pose.
+  const locationBlock = (b, rawPose) => {
+    if (!rawPose || (rawPose.objCellId >>> 0) === 0) {
+      return [
+        "LOCATION (harness ground truth — trust this over your own memory):",
+        "  Here: position unknown (respawn/streaming gap) — hold and re-read next check-in.",
+      ].join("\n");
+    }
+    const cur = exploreMemory.current;
+    if (!cur) return "";
+    const verdict = exploreMemory.loopVerdict();
+    const cov = exploreMemory.coverage();
+    const fr = exploreMemory.frontier();
+
+    const lines = ["LOCATION (harness ground truth — trust this over your own memory):"];
+
+    // Truthful sense of place from the three-way cell taxonomy (outdoor /
+    // building interior / parked dungeon-apartment). A far "nearest town" is
+    // NOT named — that mislabel is what seeded the "Qalaba'r" fixation.
+    const place = exploreMemory.classifyPlace(cur.cell, cur.worldX, cur.worldY);
+    const cellHex = `0x${cur.cell.toString(16).toUpperCase().padStart(8, "0")}`;
+    const lbHex = `0x${place.lb.toString(16).toUpperCase()}`;
+    let here;
+    if (place.kind === "building") here = `inside a building in ${place.town} (cell ${cellHex})`;
+    else if (place.kind === "dungeon") here = `inside a dungeon/apartment (env cell ${cellHex}, landblock ${lbHex}) — this is portal-only, NOT reachable overland; there is no surface town here`;
+    else here = place.town ? `outdoors in ${place.town} (landblock ${lbHex})` : `outdoors in open country (landblock ${lbHex})`;
+    lines.push(
+      `  Here: ${here} (tile ${cur.tx},${cur.ty}, floor ${cur.zb}). Been here ${cur.visits}×.`
+    );
+
     const used = state._usedObjects;
     if (used?.size) {
       const items = [...used.entries()].slice(-12).map(
         ([g, r]) => `${r.name} 0x${g.toString(16).toUpperCase()}${r.n > 1 ? ` (x${r.n})` : ""}`
       );
-      lines.push(`tried: ${items.join("; ")}`);
+      lines.push(`  already tried here: ${items.join("; ")}`);
     }
-    if (state._visitedCells?.size) lines.push(`explored: ${state._visitedCells.size} cells this session`);
-    return lines.join("\n");
-  };
 
-  // ── area-stall detection (2026-07-17) ──────────────────────────────────
-  // The loop detector catches REPEATS; it is blind to novelty-dithering —
-  // touring a fresh sign/door each check-in forever (observed live: 30+ min
-  // in the academy, a different object every cycle, zero area progress).
-  // Track the landblock; when it hasn't changed for cfg.stallMinutes
-  // (default 10) and several objects have been tried since, say so with the
-  // same authority as the loop WARNING. cfg.stall: false -> off.
-  const STALL_MIN = Number.isFinite(cfg.stallMinutes) ? cfg.stallMinutes : 10;
-  const STALL_TRIES = 4;
-  const stallLine = (b) => {
-    if (cfg.stall === false) return "";
-    const cur = poseOf(b);
-    if (!cur) return "";
-    const lb = cur.cell >>> 16;
-    const now = Date.now();
-    if (state._stallLb !== lb) {
-      state._stallLb = lb;
-      state._stallSinceT = now;
-      state._stallTriedBase = state._triedTotal ?? 0;
-      return "";
+    const prev = exploreMemory.previous;
+    if (prev) {
+      const bouncing = verdict.looping && /bouncing/.test(verdict.reason);
+      lines.push(
+        `  Was: cell 0x${prev.cell.toString(16).toUpperCase().padStart(8, "0")}${
+          bouncing ? " (you keep bouncing between these two — THIS IS A LOOP)" : ""
+        }`
+      );
     }
-    const mins = (now - (state._stallSinceT ?? now)) / 60_000;
-    const tried = (state._triedTotal ?? 0) - (state._stallTriedBase ?? 0);
-    if (mins < STALL_MIN || tried < STALL_TRIES) return "";
-    return (
-      `STALLED: ${Math.round(mins)} min in the same area, ${tried} object uses with NO area change — ` +
-      `what you keep trying is NOT working. Change approach CLASS: an NPC you have not used, ` +
-      `give_item, ${knowledge ? "a knowledge lookup with NEW terms, " : ""}or walk to the farthest visible object.`
+
+    lines.push(
+      `  Covered: ${cov.tiles} tiles / ${cov.landblocks} landblocks this session; ${cov.thisLbTiles} tiles in this landblock.`
     );
+
+    if (fr) {
+      lines.push(
+        `  Frontier: nearest UNVISITED ground is ~${Math.round(fr.dist)}m ${compassOf(fr.bearingDeg)} (landblock 0x${fr.lb
+          .toString(16)
+          .toUpperCase()
+          .padStart(4, "0")}).`
+      );
+    }
+
+    if (verdict.looping) lines.push(`  CORRECTION: ${verdict.correction}`);
+
+    return lines.join("\n");
   };
 
   // ── heard chat (2026-07-17) ────────────────────────────────────────────
@@ -490,11 +492,17 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   const observe = (b, o) => {
     const obs = enrichObservation(b, buildObservation(b, o), { ...o, state });
     const baseText = typeof obs?.text === "string" ? obs.text : String(obs ?? "");
+    // Feed the shared coverage/frontier/loop core BEFORE building the block —
+    // exploreMemory.observe() is idempotent-ish (dual-driver de-dupe guard),
+    // so a director check-in landing close to a pressure tick's observe()
+    // doesn't double-count a tile visit. rawPose is captured once and reused
+    // by locationBlock() so both see the SAME pose this check-in.
+    const rawPose = rawPoseOf(b);
+    exploreMemory.observe(rawPose);
     const parts = [];
-    const warn = loopWarning(b);
-    if (warn) parts.push(warn);
-    const stall = stallLine(b);
-    if (stall) parts.push(stall);
+    // LOCATION is injected FIRST — highest authority (design doc WS-B).
+    const loc = locationBlock(b, rawPose);
+    if (loc) parts.push(loc);
     // Mission line (SPEC-navatlas §3-W3.3): live/last travel state is
     // harness ground truth, reported every check-in like pos/nav.
     const ml = renderMissionLine(b);
@@ -504,8 +512,6 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     if (dl) parts.push(dl);
     const hl = heardLines();
     if (hl) parts.push(hl);
-    const cov = coverageLines(b);
-    if (cov) parts.push(cov);
     parts.push(baseText);
     const text = parts.join("\n");
     return obs && typeof obs === "object" ? { ...obs, text } : { text, data: null };
@@ -683,7 +689,6 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
           if (guardWarn) journalNote(`if-guard: ${guardWarn}`);
         }
         prevSnap = guardSnap();
-        recordAct(b, a); // pose BEFORE the action runs — loop detector baseline
         const def = extFor(a);
         if (def) results.push(await def.apply(b, a, { journal, log: opts.log, track }));
         else results.push(...(await executePlan(b, [a], { log: opts.log, journal })));
@@ -719,6 +724,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     routes,
     memory,
     state,
+    exploreMemory,
   };
 }
 
