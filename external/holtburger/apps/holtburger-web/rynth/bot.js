@@ -1024,7 +1024,8 @@ export class ExplorePressureController {
   async _indoorHop(pose, em) {
     if (typeof this.ir.buildGraphFromWasm !== "function" || typeof this.ir.toLegs !== "function") return;
     const cellId = pose.objCellId >>> 0;
-    // WP-9 nav shield: a z≈0 EnvCell pose is un-solved (streaming/respawn gap) —
+    // WP-9 nav shield: an EnvCell pose strictly BELOW the floor plane is
+    // un-solved (z AT the plane is a correct faithful settle — see nav_guard.js) —
     // don't path FROM it; hold this tick and let the next tick re-solve. Gated
     // on this.ir.guardLeg so it no-ops for a test double / older indoor_router
     // (degrades to today's behavior). One journal line per hold episode.

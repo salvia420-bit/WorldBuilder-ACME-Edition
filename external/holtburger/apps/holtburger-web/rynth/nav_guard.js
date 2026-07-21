@@ -5,15 +5,21 @@
 // issue a leg that cannot be legal, so a mis-solved pose parks instead of
 // walking through un-loaded geometry or driving into a landblock seam.
 //
-//   1. SUB-FLOOR-Z / un-solved pose (C6): an EnvCell pose whose z sits at or
-//      below the cell floor plane (default 0) + EPSILON is treated as NOT yet
-//      solved — the local player pose reads z≈0 during a streaming/respawn gap
-//      (the objCellId-0 sentinel is the id-side of that same gap,
-//      indoor_router.js isUnresolvedCellId; z≈0 is the pose-side). Pathing
-//      FROM or TO such a pose stamps a leg through geometry that is not loaded
-//      yet, so the guard PARKS ("NAV: pose un-solved (z=0), holding") and the
-//      caller no-ops this tick. OUTDOOR poses are EXEMPT — z≈0 is a legitimate
-//      outdoor ground height, so the rule is EnvCell-only.
+//   1. SUB-FLOOR-Z / un-solved pose (C6): an EnvCell pose whose z sits
+//      strictly BELOW the cell floor plane (default 0) − EPSILON is treated as
+//      NOT yet solved. z EQUAL to the plane is a SOLVED pose: retail's
+//      CTransition settle is geometrically exact (CPolygon::check_walkable →
+//      CPhysicsObj::SetPositionInternal commit no additive epsilon — decomp-
+//      verified 2026-07-21), so the faithful placement port legitimately rests
+//      the player at exactly floor z (live: academy cells 0x860201Bx, z=0.000,
+//      server accepts every transition). ACE's persisted 0.005 is authored
+//      data headroom, NOT a physics invariant — an earlier revision parked on
+//      z≤plane+ε and froze frontier exploration on every correct settle. The
+//      streaming/respawn gap is caught by the objCellId-0 sentinel
+//      (indoor_router.js isUnresolvedCellId); a true stuck-below-floor wedge
+//      shows as realized-distance≈0 under drive, which the stall watchdogs
+//      own — z-at-plane is not evidence of either. OUTDOOR poses are EXEMPT
+//      as before.
 //
 //   2. INDOOR->INDOOR CROSS-LANDBLOCK leg (C7): a single MoveToPosition cannot
 //      safely step across a dungeon landblock seam — the wasm nav/physics is
@@ -35,10 +41,10 @@
 
 import { isEnvCellId, landblockOf } from "./nav_frame.js";
 
-// EnvCell floor-plane reference + slack. The default plane 0 catches the z≈0
-// streaming-gap sentinel; a caller that knows the true floor of this cell
-// passes opts.floorPlaneZ. EPSILON is the "z==0 vs solved-just-above-floor"
-// boundary the task fixes at 0.0002 (z=0 parks, z=0.005 proceeds).
+// EnvCell floor-plane reference + slack. A caller that knows the true floor
+// of this cell passes opts.floorPlaneZ. EPSILON is numerical tolerance BELOW
+// the plane before a pose counts as sub-floor (z=plane and z=plane−0.0001
+// proceed; z=plane−0.001 parks).
 export const FLOOR_PLANE_Z = 0;
 export const FLOOR_EPSILON = 0.0002;
 
@@ -48,7 +54,7 @@ export const NAV_UNSOLVED = "unsolved";
 export const NAV_CROSS_LB = "cross_lb";
 
 // Compact one-line operator messages (the caller prefixes its own context).
-export const MSG_UNSOLVED = "NAV: pose un-solved (z=0), holding";
+export const MSG_UNSOLVED = "NAV: pose un-solved (sub-floor z), holding";
 export const MSG_CROSS_LB = "NAV: no legal path this landblock";
 
 // Accept a pose ({objCellId}), a router leg ({lb}), or a bare {cellId}. A
@@ -61,18 +67,20 @@ function cellOf(o) {
 }
 
 /**
- * True if an INDOOR pose/leg sits at or below the EnvCell floor plane and is
- * therefore un-solved (don't path from OR to it). Outdoor and unresolved
- * (id 0) cells return false — the sub-floor rule is EnvCell-only; z≈0 outdoors
- * is a real ground height, and the id-0 gap is caught by the caller's own
- * isEnvCellId gate before it ever reaches leg issuance. A non-finite z is
- * treated as un-solved (there is no solved pose without a z).
+ * True if an INDOOR pose/leg sits strictly BELOW the EnvCell floor plane
+ * (beyond EPSILON tolerance) and is therefore un-solved (don't path from OR
+ * to it). z at the plane is a solved pose — the faithful settle is exact (see
+ * header). Outdoor and unresolved (id 0) cells return false — the sub-floor
+ * rule is EnvCell-only; z≈0 outdoors is a real ground height, and the id-0
+ * gap is caught by the caller's own isEnvCellId gate before it ever reaches
+ * leg issuance. A non-finite z is treated as un-solved (there is no solved
+ * pose without a z).
  */
 export function isSubFloorZ(cellId, z, floorPlaneZ = FLOOR_PLANE_Z) {
   if (!isEnvCellId(cellId >>> 0)) return false;
   if (typeof z !== "number" || !Number.isFinite(z)) return true;
   const plane = Number.isFinite(floorPlaneZ) ? floorPlaneZ : FLOOR_PLANE_Z;
-  return z <= plane + FLOOR_EPSILON;
+  return z < plane - FLOOR_EPSILON;
 }
 
 /**
