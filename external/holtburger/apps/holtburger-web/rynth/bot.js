@@ -134,9 +134,13 @@ export async function createGrindBot(sessionHandle, config = {}) {
   // indoors, walks IN to an EnvCell goal after the outdoor approach, and does a
   // pure indoor A* for a same-landblock indoor->indoor hop. Neither end indoors
   // => the outdoor path is IDENTICAL to before. DROP LIMITATION (carried from
-  // indoor_router.js:34-37): indoor A*/exit routing prunes every drop/jump edge
-  // (no jump primitive), so a goal or exit reachable only by a drop fails
-  // honestly ({ok:false, error:"indoor graph unavailable"|"...unreachable"}).
+  // indoor_router.js:34-37): indoor A*/exit ROUTE PLANNING still prunes every
+  // drop/jump edge (no jump-feasibility test in the graph search — that's
+  // Phase 3 of DESIGN-jump-primitive-2026-07-21.md), so a goal or exit
+  // reachable only by a drop still fails honestly ({ok:false, error:"indoor
+  // graph unavailable"|"...unreachable"}). This is planning-time only now —
+  // doFollowRoute below DOES execute corpus-recorded `jmp` legs (Phase 1,
+  // goto_compose.js attemptJumpLeg) when replaying an imported .nav route.
   const doGoto = async (to, opts) => {
     if (!globalRouter) return { ok: false, error: "nav not configured (config.nav)" };
     // Refuse BEFORE touching the kernel: a rejected second goto must not
@@ -240,6 +244,12 @@ export async function createGrindBot(sessionHandle, config = {}) {
     // their long watchdog. A plain outdoor route gains no flags -> untouched.
     const preparedLegs = gcMod.prepareReplayLegs(legs, { fmt });
     const hasPortals = gcMod.routeHasPortals(preparedLegs);
+    // jmp legs (2026-07-21, DESIGN-jump-primitive Phase 1): a jump-only route
+    // (no portal legs at all — e.g. a pure vr-bridge-jump-style gap-crossing
+    // fixture) still needs replayRoute's recovery branches to fire
+    // attemptJumpLeg; routeHasPortals alone would miss it (jmp legs are
+    // plain waypoints, never flagged .portal — nav_import.js).
+    const hasJumps = typeof gcMod.routeHasJumps === "function" ? gcMod.routeHasJumps(preparedLegs) : false;
     // One-way portals can't be walked backwards.
     if (reverse && hasPortals)
       return { ok: false, error: "route crosses one-way portals — reverse replay unsupported" };
@@ -250,9 +260,10 @@ export async function createGrindBot(sessionHandle, config = {}) {
     try { bot._onTravelStart?.({ kind: "route", label, legs: preparedLegs }); } catch { /* hook must not break travel */ }
     let result = { ok: false, state: "UNKNOWN" };
     try {
-      if (hasPortals) {
-        // Portal route: goto_compose owns the router walk (native hop + resume,
-        // touch assist on a blocked portal, one indoor-wedge re-path).
+      if (hasPortals || hasJumps) {
+        // Portal and/or jump route: goto_compose owns the router walk (native
+        // portal hop + resume, touch assist on a blocked portal, one indoor-
+        // wedge re-path, jmp-leg firing on a jump-adjacent stall).
         result = await gcMod.replayRoute(
           { host, router, fetchEnvCells: config.nav?.fetchEnvCells, log: config.router?.log },
           preparedLegs,

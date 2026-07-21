@@ -180,7 +180,7 @@ const FIXTURES = path.join(__dirname, "rynth", "testdata");
       const af = [
         "NAV: patrol circular ~~ {",
         "pnt 33.6 42.08 0.39",
-        "pau 5",
+        "pau 33.7 42.1 0.4 5000",
         "rcl 33.6 42.08 0.39 {Lifestone Recall}",
         "~~ }",
       ].join("\n");
@@ -189,8 +189,55 @@ const FIXTURES = path.join(__dirname, "rynth", "testdata");
       assert.equal(navs.patrol.routeType, 1); // circular
       const types = navs.patrol.points.map((p) => p.type);
       assert.deepEqual(types, [0, 3, 2], "pnt/pau/rcl mapped");
-      assert.equal(navs.patrol.points[1].pauseMs, 5000, "pause seconds->ms");
+      // FORMAT (metaf NPause.ImportFromMetAF): "pau myx myy myz
+      // PauseInMilliseconds" — a real, captured position + ms duration
+      // (2026-07-21 sentinel-cleanup: the old parser hardcoded ew:0,ns:0,z:0
+      // and misread the x-coordinate as pauseMs*1000, corrupting every real
+      // corpus pau line with real coordinates into a fake teleport).
+      assert.equal(navs.patrol.points[1].ew, 33.7, "pause x preserved");
+      assert.equal(navs.patrol.points[1].ns, 42.1, "pause y preserved");
+      assert.equal(navs.patrol.points[1].z, 0.4, "pause z preserved");
+      assert.equal(navs.patrol.points[1].pauseMs, 5000, "pause ms read directly (not seconds*1000)");
       assert.equal(navs.patrol.points[2].spellId, 1635, "lifestone recall id");
+    });
+
+    await t("F16", "embedded .af NAV: pau with a genuine VTank no-position sentinel (0 0 -1000) round-trips as-is", () => {
+      const af = ["NAV: p2 once ~~ {", "pau 0 0 -1000 1000", "~~ }"].join("\n");
+      const navs = NF.parseAfNavs(af);
+      assert.equal(navs.p2.points[0].ew, 0);
+      assert.equal(navs.p2.points[0].ns, 0);
+      assert.equal(navs.p2.points[0].z, -1000);
+      assert.equal(navs.p2.points[0].pauseMs, 1000);
+    });
+
+    // ── navPointToLeg map-edge clamp (2026-07-21 sentinel-cleanup gap 4) ────
+    // aerbax-south-gate.nav point 475's real recorded EW=-101.958914493521
+    // converts to wx=-2.14 — a real waypoint essentially AT the map's west
+    // edge, not off it. The un-clamped formula wrapped a negative landblock
+    // index via JS's int32 `&0xff` to landblock byte 255 (the FAR side of
+    // the map), producing a ~49,000m false "teleport" leg — the corpus's
+    // map-edge-wraparound failure cluster.
+    await t("F13", "navPointToLeg clamps a just-negative world X to landblock 0 instead of wrapping to landblock 255", () => {
+      const leg = NF.navPointToLeg(-101.958914493521, 51.1827315648397, 0.0000208333134651184);
+      const lbX = (leg.lb >>> 24) & 0xff;
+      assert.equal(lbX, 0, `expected landblock byte 0 (map edge), got ${lbX} (wx≈-2.14 should clamp, not wrap)`);
+      assert.ok(leg.x >= 0 && leg.x < 24, `expected a small in-range local x, got ${leg.x}`);
+    });
+
+    await t("F14", "navPointToLeg clamps a just-over-the-edge world coordinate to landblock 255, not wrapped to 0", () => {
+      // EW just past the formula's positive edge (wx a hair >= MAP_SIZE_M).
+      const overEdgeEw = (NF.MAP_SIZE_M / 24 - 1019.5) / 10 + 0.001;
+      const leg = NF.navPointToLeg(overEdgeEw, 0, 0);
+      const lbX = (leg.lb >>> 24) & 0xff;
+      assert.equal(lbX, 255, `expected landblock byte 255 (map edge), got ${lbX}`);
+    });
+
+    await t("F15", "navPointToLeg is unchanged for an ordinary in-range coordinate (no clamp side effect)", () => {
+      const leg = NF.navPointToLeg(-101.386705207825, -34.0266930898031, -0.149979162216187);
+      const worldX = ((leg.lb >>> 24) & 0xff) * 192 + leg.x;
+      const worldY = ((leg.lb >>> 16) & 0xff) * 192 + leg.y;
+      assert.ok(Math.abs(worldX - 135.19) < 0.01, `expected worldX≈135.19, got ${worldX}`);
+      assert.ok(Math.abs(worldY - 16301.59) < 0.01, `expected worldY≈16301.59, got ${worldY}`);
     });
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

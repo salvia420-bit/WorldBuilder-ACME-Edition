@@ -32,9 +32,15 @@
 //   landblock-local — exactly what RynthRouter.follow() / MoveToPosition eat.
 //
 // KNOWN LIMITATION (carried from Nav deep-dive J3, cited in report 09 §1b):
-// IsDropEdge prunes ALL drop/jump edges — AC needs a jump primitive to take a
-// drop and the executor has none — so drop-gated dungeon areas are unreachable
-// by design. If the only route to the goal crosses a drop, findPath is null.
+// IsDropEdge prunes ALL drop/jump edges from the GRAPH SEARCH — this module
+// has no jump-feasibility test (edge-walk + simulate, per
+// DESIGN-jump-primitive-2026-07-21.md Phase 3) — so drop-gated dungeon areas
+// are unreachable BY PLANNING, and findPath returns null when the only route
+// to the goal crosses a drop. As of Phase 1 of that design doc, the executor
+// itself is no longer jump-blind (goto_compose.js's replayRoute fires
+// corpus-recorded `jmp` legs via attemptJumpLeg) — this limitation is now
+// specifically about A*/findExitPath never GENERATING a jump edge, not about
+// jump execution being entirely absent from the stack.
 //
 // SIMPLIFICATIONS vs DungeonPathfinder.cs (deliberate, documented):
 //   - No NavRouteParser/waypoint emission (:353-431): we return cell paths;

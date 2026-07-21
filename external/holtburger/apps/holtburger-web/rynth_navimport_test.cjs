@@ -212,7 +212,7 @@ function navText(points, { routeType = 4 } = {}) {
       "pnt 33.6 42.08 0.39",
       "chk 33.7 42.1 0.39",
       "jmp 33.8 42.2 0.39 90 {True} 300",
-      "pau 5",
+      "pau 33.9 42.3 0.39 5000",
       "rcl 33.6 42.08 0.39 {Lifestone Recall}",
       "~~ }",
     ].join("\n");
@@ -252,6 +252,63 @@ function navText(points, { routeType = 4 } = {}) {
     const text = fs.readFileSync(path.join(FIXTURES, "MatronHive.nav"), "utf8");
     const { route } = NI.importNavText(text, { name: "mh-indoor-check" });
     assert.ok(!route.legs.some((l) => l.indoor), "no leg carries indoor:true (VTank .nav coordinates are outdoor-projected only)");
+  });
+
+  // ── sentinel-coordinate cleanup (2026-07-21, gap 4) ───────────────────────
+  // VTank/metaf write EW=0,NS=0 (often navZ=-1000 too) for pau/cht records
+  // with no captured position — navPointToLeg converts that to world
+  // (24468,24468), which previously read as a giant teleport to/from every
+  // real neighbouring waypoint (the corpus's #1 batch-oracle failure
+  // cluster). Real corpus example: mudzereli's VRTreeJump500Rat.nav opens
+  // with three `cht` slash-command records at the literal sentinel before
+  // any real waypoint.
+  await t("SENT1", "a mid-route cht sentinel (EW=0,NS=0) is repositioned to the PREVIOUS real waypoint, not left as a fake teleport", () => {
+    const points = [
+      { type: 0, ew: 43.2455592155457, ns: -42.467987537384, z: 0.500021044413249, trailer: [] }, // pnt (real)
+      { type: 4, ew: 0, ns: 0, z: 0, trailer: ["/ub usep licorice rat"] }, // cht sentinel
+      { type: 0, ew: 43.1955601056417, ns: -42.4545191764832, z: 0.551338068644206, trailer: [] }, // pnt (real, close to leg0)
+    ];
+    const text = navText(points);
+    const { route, warnings } = NI.importNavText(text, { name: "sent1" });
+    assert.equal(route.legs.length, 3);
+    const worldX = (lb, x) => ((lb >>> 24) & 0xff) * 192 + x;
+    const worldY = (lb, y) => ((lb >>> 16) & 0xff) * 192 + y;
+    const [l0, l1, l2] = route.legs;
+    assert.ok(l1.noPosition, "sentinel leg marked noPosition");
+    assert.equal(worldX(l1.lb, l1.x), worldX(l0.lb, l0.x), "sentinel leg carries the previous leg's world X");
+    assert.equal(worldY(l1.lb, l1.y), worldY(l0.lb, l0.y), "sentinel leg carries the previous leg's world Y");
+    assert.equal(l1.meta.navType, "cht", "meta (chat text/type) untouched by the reposition");
+    assert.equal(l1.meta.text, "/ub usep licorice rat");
+    assert.ok(!l1.portal, "no longer spuriously portal-flagged (real distance is now 0/small)");
+    assert.ok(!l0.portal && !l2.portal, "neighbours not spuriously portal-flagged either");
+    assert.ok(warnings.some((w) => /leg 1/.test(w) && /no captured position/.test(w)), `expected a sentinel-reposition warning: ${JSON.stringify(warnings)}`);
+  });
+
+  await t("SENT2", "a LEADING run of pau/cht sentinels (no earlier real leg) is repositioned from the NEXT real waypoint", () => {
+    const points = [
+      { type: 4, ew: 0, ns: 0, z: 0, trailer: ["/vt opt set navclosestoprange 0"] }, // cht sentinel, leg 0
+      { type: 4, ew: 0, ns: 0, z: 0, trailer: ["/vt opt set idlepeacemode false"] }, // cht sentinel, leg 1
+      { type: 0, ew: 34.8, ns: 14.2, z: 1.0, trailer: [] }, // pnt (real), leg 2
+    ];
+    const text = navText(points);
+    const { route } = NI.importNavText(text, { name: "sent2" });
+    const worldX = (lb, x) => ((lb >>> 24) & 0xff) * 192 + x;
+    const worldY = (lb, y) => ((lb >>> 16) & 0xff) * 192 + y;
+    const [l0, l1, l2] = route.legs;
+    assert.ok(l0.noPosition && l1.noPosition, "both leading sentinels marked noPosition");
+    assert.equal(worldX(l0.lb, l0.x), worldX(l2.lb, l2.x), "leg0 backfilled from the next real leg");
+    assert.equal(worldY(l1.lb, l1.y), worldY(l2.lb, l2.y), "leg1 backfilled from the next real leg");
+  });
+
+  await t("SENT3", "a real pau record (non-sentinel coords) is left untouched — no noPosition, no reposition", () => {
+    const points = [
+      { type: 0, ew: 20, ns: 20, z: 1, trailer: [] },
+      { type: 3, ew: 20.05, ns: 20.02, z: 1, trailer: ["2000"] }, // pau with a REAL captured position
+      { type: 0, ew: 20.1, ns: 20, z: 1, trailer: [] },
+    ];
+    const text = navText(points);
+    const { route } = NI.importNavText(text, { name: "sent3" });
+    assert.ok(!route.legs[1].noPosition, "a genuinely-positioned pau is never touched by the sentinel cleanup");
   });
 
   console.log(`\nnav_import: ${pass} passed, ${fail} failed`);

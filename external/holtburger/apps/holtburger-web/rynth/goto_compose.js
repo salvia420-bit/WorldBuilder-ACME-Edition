@@ -25,9 +25,31 @@
 //      HONEST {ok:false, error:"indoor graph unavailable"} — never a guess.
 //
 // DROP-EDGE LIMITATION (carried from indoor_router.js:34-37): indoor A* and
-// findExitPath PRUNE every drop/jump edge — the executor has no jump primitive
-// — so a goal (or an exit) reachable only by taking a drop is UNREACHABLE by
-// design and composeGoto fails honestly rather than walking off a ledge.
+// findExitPath still PRUNE every drop/jump edge for ROUTE PLANNING — no
+// jump-feasibility test exists in the graph search (that's Phase 3 of
+// docs/rynth-integration/DESIGN-jump-primitive-2026-07-21.md) — so a goal (or
+// an exit) reachable only by taking a drop is still UNREACHABLE by design and
+// composeGoto fails honestly rather than walking off a ledge. This is now
+// ONLY a planning-time limitation, not an execution one: the REPLAY path
+// (replayRoute below) DOES have a jump primitive (attemptJumpLeg) for
+// corpus-recorded `jmp` legs (nav_import.js meta.navType==='jmp') — see the
+// "jmp legs" section near replayRoute.
+
+// ── jmp legs (2026-07-21, DESIGN-jump-primitive Phase 1) ───────────────────
+// A corpus-imported jmp leg (nav_import.js meta.navType==='jmp', carrying
+// headingDeg/holdShift/delayMs) is NOT a walkable waypoint — the router's
+// ordinary MoveToPosition walk toward it (or toward a sentinel-fixed cht/pau
+// leg immediately before it, which nav_import.js's fixupSentinelLegs
+// collapses onto the SAME coordinate) times out against whatever gap/ledge
+// the jump was recorded to cross. attemptJumpLeg below fires the EXISTING
+// wasm jump pipeline (SessionHandle.jump/setMovementInput/canJumpNow — no
+// new physics code, see the design doc §2a) instead of retrying the walk:
+// face headingDeg, hold forward (walk if holdShift, run if not — retail's
+// launch velocity is read from whatever motion is active AT THE MOMENT
+// jump() fires, so a standstill call is a near-vertical hop, not a gap
+// clearance), release the jump, then a bounded settle before resuming. See
+// findUpcomingJumpLeg's call site in replayRoute for how a FAILED walk leg
+// gets recognized as jump-adjacent.
 //
 // Every branch degrades to {ok:false, error, ...} — nothing here throws into
 // the kernel (doGoto's caller). Result shape matches global_router.goto's
@@ -638,6 +660,153 @@ async function attemptRecallCast(ctx, leg, tune) {
 }
 
 /**
+ * Fire the jump primitive for a corpus `jmp` leg (nav_import.js
+ * meta.navType==='jmp', {headingDeg, holdShift, delayMs}) — DESIGN-jump-
+ * primitive-2026-07-21.md Phase 1. No new physics: this is JS glue over the
+ * already-complete, parity-tested wasm pipeline (design doc §2a) — turn,
+ * build launch velocity, fire, settle.
+ *
+ * Field mapping (design doc Risk #2 flags this as UNDETERMINED from the
+ * corpus alone — this is Phase 1's own documented, calibratable choice, not
+ * a retail-verified fact):
+ *   - headingDeg -> TurnToHeading (VTank compass convention == this engine's
+ *     bearing convention already established in combat_loop.js's _faceGate:
+ *     yaw 0 = +Y north, pi/2 = +X east, bearing to (dx,dy) = atan2(dx,dy) —
+ *     so headingRad = headingDeg * pi/180 directly, no axis flip).
+ *   - holdShift -> gait: retail Shift-held while moving is WALK, not RUN (the
+ *     codebase's own "Always Run" convention — MoveToPosition/setMovementInput
+ *     both default run=true elsewhere); so holdShift===true -> run:false.
+ *   - delayMs -> BOTH the pre-jump forward-hold/charge duration (clamped) AND
+ *     the jump()'s power/extent (delayMs/1000, retail's charge curve is a
+ *     ~1.0s hold-to-full-power ramp per the design doc §1a) AND a floor on
+ *     the post-landing settle wait. src/lib.rs's SessionCommand::Jump arm
+ *     reads `local_player_runtime_kinematics()` for the launch velocity's
+ *     x/y (design doc §1c/2a) — a jump fired from a standstill is a near-
+ *     vertical hop, so the forward-hold window before firing is load-bearing
+ *     for horizontal distance, not cosmetic.
+ *
+ * Sequence: turn (rate-limited TurnToHeading, polled) -> gate on
+ * CanJumpNow() -> hold forward (walk/run per holdShift) to build velocity ->
+ * gate again -> Jump(power) -> brief hold past the fire (avoid a same-tick
+ * stop racing the velocity read) -> release input -> poll for re-grounding
+ * (CanJumpNow() flipping true again, §1d on_ground) bounded, then a
+ * conservative settle pause (UB's documented resume-on-land flakiness, design
+ * doc §5 — a bare state-flip is not trusted alone; the corpus's own
+ * jmp->pau(1000ms)->chk idiom independently confirms human authors treat this
+ * as a real, necessary wait).
+ *
+ * Returns {ok:true, power, headingRad, runFlag} or a typed
+ * {ok:false, error, reason:"jump-unavailable"} (mirrors attemptRecallCast's
+ * typed-failure pattern) — never throws.
+ */
+async function attemptJumpLeg(ctx, leg, tune) {
+  const { host } = ctx;
+  const meta = leg && leg.meta;
+  const unavailable = (why) => ({ ok: false, error: `jump-unavailable: ${why}`, reason: "jump-unavailable" });
+  if (!meta || meta.navType !== "jmp") return unavailable("leg carries no jump meta");
+  if (!host || typeof host.Jump !== "function" || typeof host.SetMovementInput !== "function") {
+    return unavailable("SessionHandle jump/setMovementInput not present (stale pkg/ build)");
+  }
+
+  const headingDeg = Number(meta.headingDeg) || 0;
+  const headingRad = (((headingDeg % 360) + 360) % 360) * (Math.PI / 180);
+  const runFlag = !meta.holdShift; // holdShift(True) -> Shift-held -> WALK (run:false)
+  const delayMs = Math.max(0, Number(meta.delayMs) || 0);
+  const approachMs = Math.min(tune.jumpApproachMaxMs, Math.max(tune.jumpApproachMinMs, delayMs));
+  const power = Math.min(1, Math.max(tune.jumpPowerMin, delayMs / 1000));
+
+  const canJumpNow = () => {
+    try {
+      return typeof host.CanJumpNow === "function" ? !!host.CanJumpNow() : true;
+    } catch (_) {
+      return true;
+    }
+  };
+
+  // 1. Face the recorded heading. TurnToHeading is rate-limited (webhost.js /
+  //    the .d.ts docblock), so poll + reissue rather than a single call.
+  const turnDeadline = Date.now() + tune.jumpTurnTimeoutMs;
+  for (;;) {
+    const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
+    if (!pose || pose.heading == null) break; // no facing telemetry -> best-effort, never hang here
+    let err = headingRad - pose.heading;
+    while (err > Math.PI) err -= 2 * Math.PI;
+    while (err < -Math.PI) err += 2 * Math.PI;
+    if (Math.abs(err) <= tune.jumpHeadingToleranceRad) break;
+    if (typeof host.TurnToHeading === "function") host.TurnToHeading(headingRad);
+    if (Date.now() >= turnDeadline) break; // don't block the jump on a stuck turn
+    await new Promise((r) => setTimeout(r, tune.posePollMs));
+  }
+
+  // 2. Gate, build launch velocity, fire.
+  if (!canJumpNow()) return unavailable("canJumpNow() false (airborne or motion state blocks it)");
+  let moving = false;
+  try {
+    host.SetMovementInput(1, 0, 0, runFlag);
+    moving = true;
+  } catch (_) {
+    moving = false;
+  }
+  if (approachMs > 0) await new Promise((r) => setTimeout(r, approachMs));
+  if (!canJumpNow()) {
+    if (moving) { try { host.SetMovementInput(0, 0, 0, false); } catch (_) { /* best-effort stop */ } }
+    return unavailable("canJumpNow() false after the approach hold (airborne or motion state blocks it)");
+  }
+  let fired = false;
+  try {
+    host.Jump(power);
+    fired = true;
+  } catch (_) {
+    fired = false;
+  }
+  if (moving) {
+    // Hold the input a beat past the fire — the wasm recv loop reads
+    // current velocity when it PROCESSES the Jump command, not synchronously
+    // on this call, so releasing input in the same tick risks a zeroed read.
+    await new Promise((r) => setTimeout(r, tune.posePollMs));
+    try { host.SetMovementInput(0, 0, 0, false); } catch (_) { /* best-effort stop */ }
+  }
+  if (!fired) return unavailable("Jump() call threw");
+
+  // 3. Landing/settle: poll for re-grounding (bounded), then a conservative
+  //    pause regardless (§5 — resume-on-land is documented-flaky; a bare
+  //    state-flip is not trusted alone).
+  const airborneDeadline = Date.now() + tune.jumpAirborneTimeoutMs;
+  while (Date.now() < airborneDeadline) {
+    await new Promise((r) => setTimeout(r, tune.jumpLandingPollMs));
+    if (canJumpNow()) break;
+  }
+  const settleMs = Math.min(delayMs, tune.jumpApproachMaxMs) + tune.jumpLandingSettlePadMs;
+  await new Promise((r) => setTimeout(r, settleMs));
+
+  return { ok: true, power, headingRad, runFlag };
+}
+
+// Scan forward from a FAILED walk leg for the nearest upcoming `jmp` leg
+// within a bounded window. nav_import.js's fixupSentinelLegs collapses any
+// cht/pau sentinel legs immediately BEFORE a jmp record onto that record's
+// OWN coordinate (see nav_import.js header) — so the walk that actually times
+// out approaching a jump gap can fail several legs before the real
+// `jmp`-tagged one, not on the jmp leg itself. Live-verified against the
+// vr-bridge-jump corpus fixture's OWN compiled leg list (routes-json): the
+// first of its 14 jump attempts is preceded by chk/cht(x2)/cht-sentinel/chk/
+// pau BEFORE the jmp record — a 5-leg gap from the failing walk leg (index 1)
+// to the jmp leg (index 6); every later attempt's own gap is only 3
+// (chk->cht->pau->jmp). The window is generous but still small, bounded, and
+// forward-only, so a genuine unrelated wall failure elsewhere in a route
+// (zero jmp legs nearby) never misfires this path (zero behavior change for
+// jmp-less routes).
+const JUMP_LEG_SEARCH_WINDOW = 12;
+function findUpcomingJumpLeg(legs, fromIdx) {
+  const end = Math.min(legs.length, fromIdx + JUMP_LEG_SEARCH_WINDOW);
+  for (let i = fromIdx; i < end; i++) {
+    const m = legs[i] && legs[i].meta;
+    if (m && m.navType === "jmp") return i;
+  }
+  return -1;
+}
+
+/**
  * Walk OUT of whatever building/dungeon the pose is currently in (task #16
  * re-entrancy): a hop — the intended exit, a WRONG hallway portal, whatever —
  * can leave us parked in an EnvCell, and the sidecar HTTP-400s an indoor `from`.
@@ -950,6 +1119,19 @@ function buildTune(opts = {}, router = null) {
     // report #3: the one-shot repath found a real path, walked 2 of 3 legs,
     // then stalled on the 3rd and gave up entirely). See repathIndoor below.
     wedgeAttempts: opts.wedgeAttempts ?? 3,
+    // Jump-leg tuning (2026-07-21, DESIGN-jump-primitive Phase 1). See
+    // attemptJumpLeg's docblock for the field-mapping rationale.
+    jumpHeadingToleranceRad: opts.jumpHeadingToleranceRad ?? 0.12, // ~6.9 deg
+    jumpTurnTimeoutMs: opts.jumpTurnTimeoutMs ?? 6_000,
+    jumpApproachMinMs: opts.jumpApproachMinMs ?? 200,
+    jumpApproachMaxMs: opts.jumpApproachMaxMs ?? 1_500,
+    jumpPowerMin: opts.jumpPowerMin ?? 0.05,
+    jumpAirborneTimeoutMs: opts.jumpAirborneTimeoutMs ?? 6_000,
+    jumpLandingPollMs: opts.jumpLandingPollMs ?? 200,
+    jumpLandingSettlePadMs: opts.jumpLandingSettlePadMs ?? 3_000,
+    // Bound on jump attempts per replayRoute() call — generous vs. the
+    // corpus's own max (14 attempts at one gap in vr-bridge-jump).
+    maxJumpAttempts: opts.jumpAttempts ?? 20,
   };
 }
 
@@ -970,6 +1152,90 @@ export function prepareReplayLegs(legs, opts = {}) {
 /** True when a (prepared) route contains any portal-departure leg. */
 export function routeHasPortals(legs) {
   return Array.isArray(legs) && legs.some((l) => l.portal === true);
+}
+
+/** True when a (prepared) route contains any jmp leg (nav_import.js
+ *  meta.navType==='jmp') — bot.js's doFollowRoute uses this alongside
+ *  routeHasPortals to decide whether a route needs replayRoute's recovery
+ *  branches (jmp legs are plain waypoints, never flagged .portal). */
+export function routeHasJumps(legs) {
+  return Array.isArray(legs) && legs.some((l) => l.meta && l.meta.navType === "jmp");
+}
+
+// ── closed-door detection for recovery walks (gap 3, HANDOFF-metanav-
+// 2026-07-20 "Door-state in navigation") ────────────────────────────────────
+// The MAIN goto/route path (rynth/ai/tools/world.js walkRoute) already opens
+// a nearby closed door on a retryable follow outcome (handoff-6 §3.3): ACE
+// doors flip PhysicsState.Ethereal (0x4) when OPEN and clear it when closed,
+// so "closed door" is client-detectable via TryGetObjectDescFlags' Door bit
+// + TryGetObjectState. repathIndoor's bounded-retry recovery walk (below) had
+// NO such check — a closed door sitting on the recovery path just stalled the
+// walk like any other wedge, and the doorway edge it stalled on got excluded
+// (findPath would then detour AROUND a door that only needed opening, or
+// exhaust the graph and give up if there was no detour — the frozen-tomb
+// corpus route's leg-47 timeout). Same ODF/PhysicsState bits and technique as
+// ai/tools/world.js's nearestClosedDoor, ported here (goto_compose sits below
+// ai/, so this is a local port, not an import) and threaded into the retry
+// ladder BEFORE edge exclusion.
+const ODF_DOOR = 0x1000; // ObjectDescriptionFlag.Door (observe_ext.js ODF map)
+const PHYS_ETHEREAL = 0x4; // PhysicsState.Ethereal — set while a door stands open
+const DOOR_RETRY_RANGE_M = 10;
+const DOOR_SWING_SETTLE_MS = 1500; // door swing + physics flip before re-walking
+
+// Nearest CLOSED door within DOOR_RETRY_RANGE_M of `pose`. Returns
+// {guid,name,d} | null. Never throws.
+function nearestClosedDoor(host, pose) {
+  if (!host || typeof host.NearbyGuids !== "function" || typeof host.TryGetObjectDescFlags !== "function") return null;
+  if (!pose) return null;
+  const px = worldX(pose.objCellId >>> 0, pose.x);
+  const py = worldY(pose.objCellId >>> 0, pose.y);
+  let guids;
+  try {
+    guids = host.NearbyGuids() || [];
+  } catch (_) {
+    return null;
+  }
+  let best = null;
+  for (const g of guids) {
+    try {
+      const flags = host.TryGetObjectDescFlags(g);
+      if (flags == null || !(flags & ODF_DOOR)) continue;
+      const st = host.TryGetObjectState ? host.TryGetObjectState(g) : 0;
+      if (st & PHYS_ETHEREAL) continue; // already open — using it would CLOSE it
+      const p = host.TryGetObjectPosition ? host.TryGetObjectPosition(g) : null;
+      if (!p) continue;
+      const dx = worldX(p.objCellId >>> 0, p.x) - px;
+      const dy = worldY(p.objCellId >>> 0, p.y) - py;
+      const dz = (p.z || 0) - (pose.z || 0);
+      const d = Math.hypot(dx, dy, dz);
+      if (d <= DOOR_RETRY_RANGE_M && (!best || d < best.d)) {
+        let name = "Door";
+        try {
+          name = (host.TryGetObjectName && host.TryGetObjectName(g)) || "Door";
+        } catch (_) {
+          /* keep default */
+        }
+        best = { guid: g >>> 0, name, d };
+      }
+    } catch (_) {
+      /* skip a hostile/partial record */
+    }
+  }
+  return best;
+}
+
+// Open the nearest closed door within reach (if any) and wait out the swing.
+// Returns {opened:true,name} | {opened:false}. Never throws.
+async function attemptDoorOpen(host, pose) {
+  const door = nearestClosedDoor(host, pose);
+  if (!door || typeof host.UseObject !== "function") return { opened: false };
+  try {
+    if (!host.UseObject(door.guid)) return { opened: false };
+  } catch (_) {
+    return { opened: false };
+  }
+  await new Promise((r) => setTimeout(r, DOOR_SWING_SETTLE_MS));
+  return { opened: true, name: door.name };
 }
 
 // doorwayApproach emits exactly 2 legs (30% pre-approach, 50% doorway
@@ -1013,7 +1279,7 @@ function stalledEdgeFromWalk(path, legsWalked) {
 // attempts — that's the "graph doesn't connect" case, not a "walk stalled"
 // case, and no further exclusion will change the answer.
 async function repathIndoor(ctx, tune, target) {
-  const { host, buildGraph, walk } = ctx;
+  const { host, buildGraph, walk, log } = ctx;
   const maxAttempts = Math.max(1, tune.wedgeAttempts ?? 3);
   const excludeEdges = new Set();
   let lastError = "indoor re-path: not indoors";
@@ -1046,6 +1312,18 @@ async function repathIndoor(ctx, tune, target) {
     const w = await walk(rlegs, { label, stallMs: tune.indoorLegTimeoutMs + 15_000 });
     if (w.ok) return { ok: true };
     lastError = `indoor re-path ${(w.state || "failed").toLowerCase()}`;
+    // Closed-door check BEFORE edge exclusion: a door standing shut on this
+    // path stalls the walk exactly like a jammed doorway, but excluding the
+    // edge would make findPath detour around (or, with no detour available,
+    // give up on) a route that only needed the door opened. Re-resolve the
+    // pose fresh — the stalled walk may have moved us right up to the door.
+    const doorPose = (await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs)) || null;
+    const dr = await attemptDoorOpen(host, doorPose);
+    if (dr.opened) {
+      lastError = `indoor re-path door(${dr.name}) opened — retrying`;
+      if (log) log(`repathIndoor: opened closed door ${dr.name} — retrying attempt ${attempt}`);
+      continue; // same excludeEdges (no edge blamed), consumes one attempt slot
+    }
     const stalled = stalledEdgeFromWalk(path, w.legsWalked ?? 0);
     if (stalled) excludeEdges.add(stalled);
   }
@@ -1082,6 +1360,7 @@ export async function replayRoute(deps, legs, opts = {}) {
   let walkedTotal = 0;
   let touches = 0;
   let wedges = 0;
+  let jumps = 0;
   const t0 = Date.now();
   router.follow(legs.slice(base));
   for (;;) {
@@ -1099,6 +1378,29 @@ export async function replayRoute(deps, legs, opts = {}) {
     walkedTotal += st.walked ?? 0;
     const failed = legs[failIdx];
     const failedMeta = failed && failed.meta;
+
+    // Stalled walk approaching (or immediately preceding, per
+    // fixupSentinelLegs' coordinate collapse) a `jmp` leg -> fire the jump
+    // primitive instead of retrying the walk, then resume past it. Checked
+    // before the portalBlocked/indoor-wedge branches: a jmp leg is never a
+    // portal leg, and this is a distinct recovery class from both.
+    if (!st.portalBlocked && jumps < tune.maxJumpAttempts) {
+      const jumpIdx = findUpcomingJumpLeg(legs, failIdx);
+      if (jumpIdx >= 0) {
+        jumps += 1;
+        const jumpLeg = legs[jumpIdx];
+        log(`replay: jump leg ${jumpIdx} (heading ${jumpLeg.meta.headingDeg}deg, holdShift=${!!jumpLeg.meta.holdShift}) — firing`);
+        const jr = await attemptJumpLeg(ctx, jumpLeg, tune);
+        if (!jr.ok) {
+          return { ok: false, state: "FAILED", error: jr.error, reason: jr.reason, leg: jumpIdx, legsWalked: walkedTotal };
+        }
+        log(`replay: jump leg ${jumpIdx} fired (power=${jr.power.toFixed(2)})`);
+        base = jumpIdx + 1;
+        if (base >= legs.length) return { ok: true, state: "DONE", legsWalked: walkedTotal };
+        router.follow(legs.slice(base));
+        continue;
+      }
+    }
 
     // Portal leg whose walk-in hop didn't fire -> resume it, then the
     // remaining legs from the far side.
@@ -1172,4 +1474,4 @@ export async function replayRoute(deps, legs, opts = {}) {
   }
 }
 
-export default { composeGoto, walkLegs, deriveRouteFlags, prepareReplayLegs, routeHasPortals, replayRoute };
+export default { composeGoto, walkLegs, deriveRouteFlags, prepareReplayLegs, routeHasPortals, routeHasJumps, replayRoute };

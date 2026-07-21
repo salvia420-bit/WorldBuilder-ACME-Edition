@@ -62,6 +62,18 @@ const CAPABILITY_CANDIDATES = {
   MoveToPosition: ["moveToPosition"],
   PursueObject: ["pursueEntity"],
   TurnToHeading: ["turnToHeading"],
+  // Jump primitive (2026-07-21, DESIGN-jump-primitive Phase 1): the wasm
+  // pipeline (SessionHandle.jump/setMovementInput/canJumpNow,
+  // holtburger_web.d.ts) already exists and is parity-tested — these three
+  // are the FIRST rynth-layer wrappers over it, added for goto_compose.js's
+  // jmp-leg executor (attemptJumpLeg). SetMovementInput doubles as the
+  // "build horizontal velocity before jumping" primitive: src/lib.rs's
+  // SessionCommand::Jump arm reads `local_player_runtime_kinematics()` for
+  // the launch velocity's x/y, so a standstill jump() call is a near-
+  // vertical hop — the caller must be moving (forward-held) when it fires.
+  Jump: ["jump"],
+  SetMovementInput: ["setMovementInput"],
+  CanJumpNow: ["canJumpNow"],
   StickToObject: ["stickToEntity"],
   StopStick: ["stopStick"],
   StopCompletely: ["cancelPursuit"],
@@ -657,6 +669,27 @@ export class RynthWebHost {
   }
   TurnToHeading(headingRad) {
     return this._act("TurnToHeading", headingRad);
+  }
+  /** Fire the jump wire packet (`power` in [0,1]) — fire-and-forget like every
+   *  other `_act` action; returns false (not thrown) on a missing capability
+   *  or a wasm-side throw. Caller should gate on CanJumpNow() first. */
+  Jump(power) {
+    return this._act("Jump", power);
+  }
+  /** Raw WASD-style axes — see the CAPABILITY_CANDIDATES note above: used by
+   *  the jump executor to build the launch-time horizontal velocity retail's
+   *  jump physics reads (a standstill jump() is a near-vertical hop). */
+  SetMovementInput(forward, strafe, turn, run) {
+    return this._act("SetMovementInput", forward, strafe, turn, !!run);
+  }
+  /** Live (not snapshot) gate: true only when jump() would actually fire —
+   *  false while airborne (no double-jumps) or in a substate that forbids it.
+   *  Fails OPEN (true) when the capability is absent (stale pkg/) so a
+   *  missing export never silently blocks the jump executor; the wasm-side
+   *  gate in Jump() itself is still authoritative either way. */
+  CanJumpNow() {
+    const v = this._live("CanJumpNow");
+    return typeof v === "boolean" ? v : true;
   }
   StickToObject(guid) {
     return this._act("StickToObject", guid);

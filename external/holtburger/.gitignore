@@ -1,5 +1,6 @@
-# Rust
-target/
+# Rust. No trailing slash: `target` is a symlink to scratch on this
+# host (like `dist` below), which `target/` would not match.
+target
 
 # Node deps. The root `node_modules/` rule is defeated here by the
 # external/* + !external/holtburger/ re-include in the top-level

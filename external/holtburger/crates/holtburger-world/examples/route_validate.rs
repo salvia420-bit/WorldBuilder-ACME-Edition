@@ -432,6 +432,67 @@ const WEDGE_LIMIT: u32 = 20; // consecutive frozen airborne slices = stalled
 /// bounded fix: never attempt a leg this data clearly cannot mean).
 const IMPLAUSIBLE_LEG_DISTANCE_M: f32 = 500.0;
 
+// ── door-state modeling (gap 3, HANDOFF-metanav-2026-07-20 "Door-state in
+// navigation" / Track D residual "stage_bsp_02 door-blind fine-BSP staging")
+// ─────────────────────────────────────────────────────────────────────────
+//
+// The DAT data has NO open/closed state for anything — PhysicsState.Ethereal
+// (the bit a door flips when open) is a live server-broadcast property, never
+// baked into GfxObj/SetupModel/Stab records (verified: `resolve_stab_placement_frame`
+// pulls exactly ONE static frame per part; there is no alternate "open" frame
+// to switch to). Worse, the DAT can't even tell us WHICH placements are doors
+// specifically — a door is modeled the same way as any other multi-part
+// SetupModel (0x02-class model_id: `resolve_placement_physics_bsps`'s `0x02`
+// arm, shared verbatim by EnvCell furniture, outdoor loose statics, and
+// outdoor buildings), same as a table or a shelf assembly. This is the SAME
+// ambiguity the live wasm client already hit and already has a precedent
+// mitigation for: `stage_bsp_02`'s doc (lib.rs ~14837-14842) stages a
+// building's fine per-part BSP only under an opt-in flag specifically
+// BECAUSE "a multi-part SetupModel may include a swinging DOOR LEAF as a part
+// and a static BSP can't open" — i.e. the live client's own answer to "is
+// this a door" is "can't tell, so don't collide it by default."
+//
+// This harness mirrors that exact policy rather than inventing a new one:
+// `DoorPolicy::AssumeOpen` skips BSP insertion for every 0x02-class
+// (multi-part SetupModel) placement — furniture, statics, AND buildings,
+// since a dungeon door is exactly as untaggable as a building door here.
+// This is coarser than a per-door toggle (legitimate solid multi-part
+// furniture goes uncollidable too) but is the CONSERVATIVE, evidence-based
+// choice the task allows when true identification isn't derivable offline —
+// and it can only ever REMOVE collision, never add it, so it cannot turn a
+// real wedge into a false pass for any leg that wasn't already stalling
+// against a 0x02 placement.
+//
+// Applied as a bounded RETRY, never the default: `run_one_route` first
+// validates under `Blind` (today's behavior, byte-for-byte — every currently
+// VALIDATED route stays VALIDATED, unchanged). Only a `Wall`/`Timeout`
+// failure (a genuine blocking-geometry shape, unlike `NoGround`/`Wedge`/
+// `ImplausibleLeg` which aren't about a solid obstruction) gets ONE retry
+// under `AssumeOpen`, and the retry's verdict is used only if it is no worse
+// than the Blind verdict (validates, or fails at a strictly later leg) —
+// flagged explicitly in the report (`door_candidates_skipped`,
+// `door_policy` fields + a "doors assumed open" verdict suffix) per the
+// task's "conservative pass-through, clearly labeled" guidance, never
+// silently folded into a plain VALIDATED.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DoorPolicy {
+    /// Today's behavior: every placement's BSP is staged regardless of
+    /// model_id shape — every door (indoor or outdoor) is permanently CLOSED.
+    Blind,
+    /// Skip BSP insertion for 0x02-class (multi-part SetupModel) placements —
+    /// every potential door leaf (and any ordinary multi-part furniture
+    /// sharing the same untaggable model shape) is treated as passable.
+    AssumeOpen,
+}
+
+/// Is `model_id` a multi-part SetupModel (the ONLY DAT-derivable signal a
+/// placement might be door-bearing — see the `DoorPolicy` doc above)?
+/// Mirrors the live client's `(model_id >> 24) as u8 == 0x02` test
+/// (lib.rs ~14843) and `resolve_placement_physics_bsps`'s own `0x02` arm.
+fn is_door_candidate_model(model_id: u32) -> bool {
+    (model_id >> 24) as u8 == 0x02
+}
+
 /// Why a leg failed to validate — batch-report failure kind (SPEC W2.6 item 4).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum FailureKind {
@@ -599,6 +660,12 @@ fn walk_leg(env: &RouteEnv, start: WorldPosition, target_world: Vector3, max_sli
     } else {
         Some(FailureKind::Timeout) // made progress but the budget ran out
     };
+    if std::env::var("RV_DEBUG_STALL").is_ok() && kind.is_some() {
+        let lb_top16 = cur.landblock_id.0 & 0xFFFF_0000;
+        let seed = WorldPosition { landblock_id: Guid(lb_top16 | 0x0100), coords: cur.coords, rotation: cur.rotation };
+        let resolved_cell = env.scene.current_cell(&seed);
+        eprintln!("  [RV_DEBUG_STALL] stalled cell={resolved_cell:#010x} pos_local=({:.2},{:.2},{:.2})", cur.coords.x, cur.coords.y, cur.coords.z);
+    }
     (arrived, cur, speeds, kind)
 }
 
@@ -1013,10 +1080,16 @@ fn populate_cell_furniture(
     lb_x: f32,
     lb_y: f32,
     model_cache: &mut ModelBspCache,
-) -> (usize, usize) {
+    door_policy: DoorPolicy,
+) -> (usize, usize, usize) {
     let mut parts_with_bsp = 0usize;
     let mut poly_count = 0usize;
+    let mut doors_skipped = 0usize;
     for stab in &envcell.static_objects {
+        if door_policy == DoorPolicy::AssumeOpen && is_door_candidate_model(stab.stab_id) {
+            doors_skipped += 1;
+            continue;
+        }
         let world_origin = Vector3::new(stab.position.origin.x + lb_x, stab.position.origin.y + lb_y, stab.position.origin.z);
         let world_orientation = stab.position.orientation;
         for bsp in resolve_placement_physics_bsps_cached(model_cache, portal, stab.stab_id, world_origin, world_orientation) {
@@ -1027,9 +1100,9 @@ fn populate_cell_furniture(
     }
     let n = envcell.static_objects.len();
     if n > 0 {
-        eprintln!("  cell {cell_id:#010x}: {n} static object(s) -> {parts_with_bsp} furniture BSP part(s), {poly_count} poly(s)");
+        eprintln!("  cell {cell_id:#010x}: {n} static object(s) -> {parts_with_bsp} furniture BSP part(s), {poly_count} poly(s){}", if doors_skipped > 0 { format!(", {doors_skipped} door-candidate(s) skipped (AssumeOpen)") } else { String::new() });
     }
-    (parts_with_bsp, poly_count)
+    (parts_with_bsp, poly_count, doors_skipped)
 }
 
 /// Outdoor twin of `populate_cell_furniture` (SPEC W2.6 item 2/3 generic
@@ -1073,10 +1146,16 @@ fn populate_landblock_statics(
     lb_y: f32,
     label: &str,
     model_cache: &mut ModelBspCache,
-) -> (usize, usize) {
+    door_policy: DoorPolicy,
+) -> (usize, usize, usize) {
     let mut parts_with_bsp = 0usize;
     let mut poly_count = 0usize;
+    let mut doors_skipped = 0usize;
     for &(model_id, local_origin, orientation) in placements {
+        if door_policy == DoorPolicy::AssumeOpen && is_door_candidate_model(model_id) {
+            doors_skipped += 1;
+            continue;
+        }
         let world_origin = Vector3::new(local_origin.x + lb_x, local_origin.y + lb_y, local_origin.z);
         for bsp in resolve_placement_physics_bsps_cached(model_cache, portal, model_id, world_origin, orientation) {
             poly_count += bsp.polys.len();
@@ -1085,9 +1164,9 @@ fn populate_landblock_statics(
         }
     }
     if !placements.is_empty() {
-        eprintln!("  lb {landblock_high:#010x}: {} {label}(s) -> {parts_with_bsp} BSP part(s), {poly_count} poly(s)", placements.len());
+        eprintln!("  lb {landblock_high:#010x}: {} {label}(s) -> {parts_with_bsp} BSP part(s), {poly_count} poly(s){}", placements.len(), if doors_skipped > 0 { format!(", {doors_skipped} door-candidate(s) skipped (AssumeOpen)") } else { String::new() });
     }
-    (parts_with_bsp, poly_count)
+    (parts_with_bsp, poly_count, doors_skipped)
 }
 
 /// Populate ONE landblock's terrain height grid (real DAT `CellLandblock` @
@@ -1129,7 +1208,7 @@ fn populate_landblock_terrain(scene: &mut SpatialScene, cell_dat: &DatDatabase, 
 /// loads) rather than the old grocer-only builder's all-or-nothing `?` chain,
 /// which is correct for a single hand-picked fixture but wrong for an
 /// arbitrary corpus landblock that may have hundreds of cells.
-fn build_scene_for_landblocks(portal: &DatDatabase, cell_dat: &DatDatabase, lbs: &BTreeSet<u32>) -> SpatialScene {
+fn build_scene_for_landblocks(portal: &DatDatabase, cell_dat: &DatDatabase, lbs: &BTreeSet<u32>, door_policy: DoorPolicy) -> (SpatialScene, usize) {
     let mut scene = SpatialScene::new();
     // Per-build memo of parsed Environment records, keyed by env DID — many
     // EnvCells (a dungeon's many rooms) usually share one Environment record;
@@ -1145,6 +1224,7 @@ fn build_scene_for_landblocks(portal: &DatDatabase, cell_dat: &DatDatabase, lbs:
     let mut total_furniture_parts = 0usize;
     let mut total_static_parts = 0usize;
     let mut total_building_parts = 0usize;
+    let mut total_doors_skipped = 0usize;
 
     for &lb in lbs {
         let lb_x = ((lb >> 24) & 0xFF) as f32 * 192.0;
@@ -1226,20 +1306,23 @@ fn build_scene_for_landblocks(portal: &DatDatabase, cell_dat: &DatDatabase, lbs:
                     scene.insert_cell_portal(cell_id, other);
                 }
             }
-            let (parts, _polys) = populate_cell_furniture(&mut scene, cell_id, &envcell, portal, lb_x, lb_y, &mut model_cache);
+            let (parts, _polys, doors_skipped) = populate_cell_furniture(&mut scene, cell_id, &envcell, portal, lb_x, lb_y, &mut model_cache, door_policy);
             total_furniture_parts += parts;
+            total_doors_skipped += doors_skipped;
             total_cells += 1;
         }
 
         let static_placements: Vec<(u32, Vector3, Quaternion)> =
             info.objects.iter().map(|s| (s.id, s.frame.origin, s.frame.orientation)).collect();
-        let (static_parts, _) = populate_landblock_statics(&mut scene, lb, &static_placements, portal, lb_x, lb_y, "outdoor static", &mut model_cache);
+        let (static_parts, _, doors_skipped) = populate_landblock_statics(&mut scene, lb, &static_placements, portal, lb_x, lb_y, "outdoor static", &mut model_cache, door_policy);
         total_static_parts += static_parts;
+        total_doors_skipped += doors_skipped;
 
         let building_placements: Vec<(u32, Vector3, Quaternion)> =
             info.buildings.iter().map(|b| (b.model_id, b.frame.origin, b.frame.orientation)).collect();
-        let (building_parts, _) = populate_landblock_statics(&mut scene, lb, &building_placements, portal, lb_x, lb_y, "building", &mut model_cache);
+        let (building_parts, _, doors_skipped) = populate_landblock_statics(&mut scene, lb, &building_placements, portal, lb_x, lb_y, "building", &mut model_cache, door_policy);
         total_building_parts += building_parts;
+        total_doors_skipped += doors_skipped;
 
         // Distribute this landblock's raw (landblock-keyed) static/building
         // BSPs into the per-outdoor-cell overlap index the faithful outdoor
@@ -1251,10 +1334,10 @@ fn build_scene_for_landblocks(portal: &DatDatabase, cell_dat: &DatDatabase, lbs:
         }
     }
     eprintln!(
-        "  scene: {} landblock(s), {total_cells} EnvCell(s), {total_furniture_parts} furniture BSP part(s), {total_static_parts} outdoor-static BSP part(s), {total_building_parts} building BSP part(s)",
+        "  scene: {} landblock(s), {total_cells} EnvCell(s), {total_furniture_parts} furniture BSP part(s), {total_static_parts} outdoor-static BSP part(s), {total_building_parts} building BSP part(s) [door_policy={door_policy:?}, {total_doors_skipped} door-candidate(s) skipped]",
         lbs.len()
     );
-    scene
+    (scene, total_doors_skipped)
 }
 
 // ── hb-route-v1 JSON loader ─────────────────────────────────────────────────
@@ -1327,6 +1410,14 @@ fn load_route_file(path: &Path) -> Result<(RouteFile, Vec<Leg>), String> {
     Ok((route, legs))
 }
 
+/// A batch directory can carry non-route JSON siblings (e.g. the importer's
+/// own `_summary.json`, which has no `schema` field and used to surface as a
+/// spurious `_summary ERROR: JSON parse error: missing field 'schema'` row —
+/// harmless but noisy, and not what a batch run is meant to report on). A
+/// leading `_` is this corpus's own convention for "not a route file" (see
+/// `nav_batch_import.cjs`'s `_summary.json` output) — skip it at the glob
+/// rather than loading it and letting `load_route_file`'s schema check turn
+/// it into a fake per-route ERROR entry.
 fn collect_json_files(path: &Path) -> Vec<PathBuf> {
     if path.is_dir() {
         let mut files: Vec<PathBuf> = std::fs::read_dir(path)
@@ -1334,6 +1425,7 @@ fn collect_json_files(path: &Path) -> Vec<PathBuf> {
                 rd.filter_map(|e| e.ok())
                     .map(|e| e.path())
                     .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
+                    .filter(|p| !p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('_')))
                     .collect()
             })
             .unwrap_or_default();
@@ -1358,6 +1450,26 @@ struct RouteReport {
     measured_speed_median: Option<f32>,
     failure: Option<LegFailureDetail>,
     error: Option<String>,
+    /// True when the Blind pass failed on a Wall/Timeout (a blocking-geometry
+    /// shape) and the `AssumeOpen` door-state retry ran at all.
+    door_retry_attempted: bool,
+    /// Count of 0x02-class (multi-part SetupModel) placements — the only
+    /// DAT-derivable "might be a door" signal, see `DoorPolicy` doc — skipped
+    /// across the route's whole landblock set when the retry ran. Present
+    /// (possibly 0) whenever `door_retry_attempted`; 0 when no retry ran.
+    /// A retry that ran with `door_candidates_skipped == 0` (or > 0 but
+    /// `door_retry_helped == false`) is real negative evidence: the blocking
+    /// geometry at the stall was NOT a Stab/static/building placement this
+    /// harness can identify at all — see `RV_DEBUG_STALL=1` to find exactly
+    /// which resident EnvCell it was (frozen-tomb: 0x77E701E1, zero static
+    /// objects — a structural room-wall/portal blocker, not a Stab door,
+    /// most likely the Deewain-lore class of SERVER-authored geometry no
+    /// DAT-side simulation can ever see).
+    door_candidates_skipped: usize,
+    /// True when the retry's verdict is strictly no worse than Blind's
+    /// (validates, or fails at a later leg) and was therefore adopted as the
+    /// reported verdict.
+    door_retry_helped: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -1377,6 +1489,26 @@ fn median_speed(speeds: &[f32]) -> Option<f32> {
     let mut s = speeds.to_vec();
     s.sort_by(|a, b| a.partial_cmp(b).unwrap());
     Some(s[s.len() / 2])
+}
+
+/// Pure decision for the door-state retry (gap 3, see `run_one_route`'s
+/// door-retry section): should the `AssumeOpen` retry's verdict replace the
+/// `Blind` pass's verdict for reporting, and did it actually HELP? "No
+/// worse" = `retry` validates, or fails at a leg index >= `blind`'s failing
+/// leg — `AssumeOpen` only ever REMOVES collision relative to `Blind`, so it
+/// can never make genuine progress worse; a retry that somehow fails
+/// EARLIER than `Blind` would indicate a harness inconsistency, not a
+/// legitimate result, and is rejected outright (kept `Blind`, not adopted).
+/// Returns `(adopt_retry, helped)` — `helped` is only ever true when
+/// `adopt_retry` is.
+fn door_retry_verdict(blind: &Result<(), (usize, FailureKind)>, retry: &Result<(), (usize, FailureKind)>) -> (bool, bool) {
+    let blind_fail_leg = match blind { Err((n, _)) => *n, Ok(()) => usize::MAX };
+    let retry_fail_leg = match retry { Err((n, _)) => *n, Ok(()) => usize::MAX };
+    if retry_fail_leg >= blind_fail_leg {
+        (true, retry_fail_leg > blind_fail_leg || retry.is_ok())
+    } else {
+        (false, false)
+    }
 }
 
 /// Run ONE route file end-to-end: load, discover its touched landblocks
@@ -1402,6 +1534,9 @@ fn run_one_route(portal: &DatDatabase, cell_dat: &DatDatabase, path: &Path) -> R
                 measured_speed_median: None,
                 failure: None,
                 error: Some(e),
+                door_retry_attempted: false,
+                door_candidates_skipped: 0,
+                door_retry_helped: false,
             };
         }
         Ok(v) => v,
@@ -1424,16 +1559,63 @@ fn run_one_route(portal: &DatDatabase, cell_dat: &DatDatabase, path: &Path) -> R
             measured_speed_median: None,
             failure: None,
             error: None,
+            door_retry_attempted: false,
+            door_candidates_skipped: 0,
+            door_retry_helped: false,
         };
     }
 
-    let scene = build_scene_for_landblocks(portal, cell_dat, &lbs);
+    let (scene, _) = build_scene_for_landblocks(portal, cell_dat, &lbs, DoorPolicy::Blind);
     let env = RouteEnv { scene };
-    let verdict = validate_route(&env, &legs);
+    let mut verdict = validate_route(&env, &legs);
+    let mut door_retry_attempted = false;
+    let mut door_candidates_skipped = 0usize;
+    let mut door_retry_helped = false;
+
+    // Door-state retry (gap 3): a Wall/Timeout is the ONLY failure shape a
+    // blocking door leaf could produce (NoGround/Wedge/ImplausibleLeg are not
+    // about a solid obstruction — see `DoorPolicy` doc). Re-simulate the
+    // WHOLE route once with door-candidate placements skipped; keep the retry
+    // only if it does no worse (validates, or fails at a strictly later leg)
+    // than the Blind pass — AssumeOpen can only remove collision, so a worse
+    // outcome would mean a harness bug, not a legitimate result. Report the
+    // skip count and outcome EVEN WHEN IT DIDN'T HELP: a retry that ran with
+    // zero (or unhelpful) door-candidate placements is real negative evidence
+    // that the blocking geometry wasn't a Stab/static/building this harness
+    // can identify at all (see the field doc — that's the frozen-tomb case).
+    let is_blocking_shape = matches!(verdict.result, Err((_, FailureKind::Wall)) | Err((_, FailureKind::Timeout)));
+    if is_blocking_shape {
+        door_retry_attempted = true;
+        let (open_scene, skipped) = build_scene_for_landblocks(portal, cell_dat, &lbs, DoorPolicy::AssumeOpen);
+        door_candidates_skipped = skipped;
+        if skipped > 0 {
+            let open_env = RouteEnv { scene: open_scene };
+            let retry = validate_route(&open_env, &legs);
+            eprintln!(
+                "  door-retry: AssumeOpen ({skipped} door-candidate(s) skipped) -> {}",
+                match retry.result { Ok(()) => "VALIDATED".to_string(), Err((n, _)) => format!("still FAILED-AT-LEG {n}") }
+            );
+            let (adopt, helped) = door_retry_verdict(&verdict.result, &retry.result);
+            if adopt {
+                door_retry_helped = helped;
+                verdict = retry;
+            }
+        } else {
+            eprintln!("  door-retry: 0 door-candidate placements in this route's scene — no DAT-derivable door object to bypass");
+        }
+    }
+
     let wall_time_ms = started.elapsed().as_millis();
+    let door_suffix = if door_retry_helped {
+        format!(", doors assumed open — {door_candidates_skipped} door-candidate(s) bypassed")
+    } else if door_retry_attempted {
+        format!(", door-retry attempted ({door_candidates_skipped} candidate(s)) — did not resolve, blocker not a DAT-derivable door object")
+    } else {
+        String::new()
+    };
     let (verdict_str, failure) = match verdict.result {
-        Ok(()) => (format!("VALIDATED ({} legs)", legs.len()), None),
-        Err((n, kind)) => (format!("FAILED-AT-LEG {n} ({})", kind.as_str()), verdict.failure_detail.clone()),
+        Ok(()) => (format!("VALIDATED ({} legs{door_suffix})", legs.len()), None),
+        Err((n, kind)) => (format!("FAILED-AT-LEG {n} ({}{door_suffix})", kind.as_str()), verdict.failure_detail.clone()),
     };
     eprintln!("  -> {verdict_str}");
     RouteReport {
@@ -1447,6 +1629,9 @@ fn run_one_route(portal: &DatDatabase, cell_dat: &DatDatabase, path: &Path) -> R
         measured_speed_median: median_speed(&verdict.speeds),
         failure,
         error: None,
+        door_retry_attempted,
+        door_candidates_skipped,
+        door_retry_helped,
     }
     // `env` (and its scene) drops here — the next route's `build_scene_for_landblocks`
     // starts from a fresh empty `SpatialScene`, never accumulating landblocks
@@ -1601,7 +1786,7 @@ fn main() {
             // this is a regression check on the generic path itself, not a
             // separate hand-rolled one).
             let lbs = BTreeSet::from([GROCER_LB << 16]);
-            let scene = build_scene_for_landblocks(&portal, &cell_dat, &lbs);
+            let (scene, _) = build_scene_for_landblocks(&portal, &cell_dat, &lbs, DoorPolicy::Blind);
             let env = RouteEnv { scene };
             run_builtin_fixture(&env);
         }
@@ -1619,5 +1804,120 @@ fn main() {
             let reports: Vec<RouteReport> = files.iter().map(|f| run_one_route(&portal, &cell_dat, f)).collect();
             write_batch_report(&reports);
         }
+    }
+}
+
+// ── door-state modeling unit tests (gap 3, HANDOFF-metanav-2026-07-20) ─────
+#[cfg(test)]
+mod door_state_tests {
+    use super::*;
+    use holtburger_dat::file_type::env_cell::Stab;
+    use holtburger_dat::graphics::Frame;
+
+    #[test]
+    fn is_door_candidate_model_matches_the_02_multipart_setup_class_only() {
+        // Plain GfxObj (0x01) — never a door candidate under this heuristic.
+        assert!(!is_door_candidate_model(0x0100_1234));
+        assert!(!is_door_candidate_model(0x01FF_FFFF));
+        // Multi-part SetupModel (0x02) — the ONLY DAT-derivable "might be a
+        // door" signal (mirrors the live client's `stage_bsp_02` gate).
+        assert!(is_door_candidate_model(0x0200_0001));
+        assert!(is_door_candidate_model(0x02AB_CDEF));
+        // Other DAT filetypes (terrain, environments, …) are never candidates.
+        assert!(!is_door_candidate_model(0x0000_0001));
+        assert!(!is_door_candidate_model(0x0D00_0347));
+        assert!(!is_door_candidate_model(0xFFFF_FFFF & !(0x02u32 << 24) | 0x0300_0000));
+    }
+
+    #[test]
+    fn door_retry_verdict_adopts_a_validated_retry_as_helped() {
+        let blind: Result<(), (usize, FailureKind)> = Err((47, FailureKind::Timeout));
+        let retry: Result<(), (usize, FailureKind)> = Ok(());
+        assert_eq!(door_retry_verdict(&blind, &retry), (true, true));
+    }
+
+    #[test]
+    fn door_retry_verdict_adopts_a_later_leg_failure_as_helped() {
+        // Retry still fails, but strictly further into the route than Blind
+        // did — real progress, counts as helped (e.g. one door bypassed, a
+        // different unrelated blocker further on).
+        let blind: Result<(), (usize, FailureKind)> = Err((10, FailureKind::Wall));
+        let retry: Result<(), (usize, FailureKind)> = Err((15, FailureKind::Timeout));
+        assert_eq!(door_retry_verdict(&blind, &retry), (true, true));
+    }
+
+    #[test]
+    fn door_retry_verdict_adopts_but_does_not_flag_helped_on_a_same_leg_failure() {
+        // The frozen-tomb shape: AssumeOpen skipped placements, but none of
+        // them were near the stall, so the retry fails at the EXACT same leg
+        // (no worse, but not an improvement either) — adopted (harmless,
+        // equivalent verdict) but NOT reported as "helped".
+        let blind: Result<(), (usize, FailureKind)> = Err((47, FailureKind::Timeout));
+        let retry: Result<(), (usize, FailureKind)> = Err((47, FailureKind::Timeout));
+        assert_eq!(door_retry_verdict(&blind, &retry), (true, false));
+    }
+
+    #[test]
+    fn door_retry_verdict_rejects_a_worse_retry() {
+        // AssumeOpen can only REMOVE collision relative to Blind, so it
+        // should never be able to fail EARLIER — if it somehow does, that is
+        // a harness inconsistency, not a legitimate result: reject the
+        // retry outright and keep Blind's verdict.
+        let blind: Result<(), (usize, FailureKind)> = Err((10, FailureKind::Wall));
+        let retry: Result<(), (usize, FailureKind)> = Err((3, FailureKind::Wall));
+        assert_eq!(door_retry_verdict(&blind, &retry), (false, false));
+    }
+
+    #[test]
+    fn populate_cell_furniture_assume_open_skips_0x02_stabs_but_keeps_0x01() {
+        let Ok(portal) = DatDatabase::new(PORTAL_DAT) else {
+            eprintln!("SKIP populate_cell_furniture_assume_open_skips_0x02_stabs_but_keeps_0x01: base dats unavailable");
+            return;
+        };
+        // Synthetic EnvCell: one plain GfxObj Stab (0x01-class, a real
+        // furniture model — resolvable, so it exercises the actual BSP
+        // insertion path) and one fabricated 0x02-class Stab id that need
+        // not even resolve (AssumeOpen must skip it BEFORE any DAT fetch).
+        let mut scene = SpatialScene::new();
+        let mut model_cache: ModelBspCache = HashMap::new();
+        let envcell = EnvCell {
+            id: 0x0170_0100,
+            flags: 0,
+            cell_id: 0x0170_0100,
+            surfaces: vec![],
+            environment_id: 0,
+            cell_structure: 0,
+            position: Frame { origin: Vector3::zero(), orientation: Quaternion::identity() },
+            portals: vec![],
+            visible_cells: vec![],
+            static_objects: vec![
+                Stab { stab_id: 0x0100_0002, position: Frame { origin: Vector3::zero(), orientation: Quaternion::identity() } },
+                Stab { stab_id: 0x0299_9999, position: Frame { origin: Vector3::zero(), orientation: Quaternion::identity() } },
+            ],
+            restriction_obj: None,
+        };
+        let (_parts_blind, _polys_blind, skipped_blind) =
+            populate_cell_furniture(&mut scene, 0x0170_0100, &envcell, &portal, 0.0, 0.0, &mut model_cache, DoorPolicy::Blind);
+        assert_eq!(skipped_blind, 0, "Blind must never skip a placement regardless of model_id shape");
+
+        let mut scene2 = SpatialScene::new();
+        let mut model_cache2: ModelBspCache = HashMap::new();
+        let (_parts_open, _polys_open, skipped_open) =
+            populate_cell_furniture(&mut scene2, 0x0170_0100, &envcell, &portal, 0.0, 0.0, &mut model_cache2, DoorPolicy::AssumeOpen);
+        assert_eq!(skipped_open, 1, "AssumeOpen must skip exactly the one 0x02-class stab");
+    }
+
+    #[test]
+    fn collect_json_files_skips_underscore_prefixed_siblings() {
+        let dir = std::env::temp_dir().join(format!("rv_door_state_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(dir.join("_summary.json"), b"{}").unwrap();
+        std::fs::write(dir.join("real-route.json"), b"{}").unwrap();
+        std::fs::write(dir.join("also-real.json"), b"{}").unwrap();
+        let files = collect_json_files(&dir);
+        let names: Vec<String> = files.iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect();
+        assert!(!names.iter().any(|n| n.starts_with('_')), "must never include an underscore-prefixed file: {names:?}");
+        assert_eq!(names.len(), 2, "must include exactly the two real route files: {names:?}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

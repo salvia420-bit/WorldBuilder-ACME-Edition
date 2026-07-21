@@ -63,6 +63,74 @@ const PORTAL_TYPES = new Set([NavPointType.PortalLegacy, NavPointType.Recall, Na
 
 const NAV_ROUTE_TYPE_NAME = { 1: "circular", 2: "linear", 3: "follow", 4: "once" };
 
+// ── sentinel-coordinate cleanup (2026-07-21, gap 4 — importer sentinel
+// cleanup) ───────────────────────────────────────────────────────────────
+// VTank/metaf write a literal EW=0,NS=0 (often with navZ=-1000 too) for
+// "action" nav records that carry NO real captured position — a pure
+// slash-command (`cht`) or an in-place pause (`pau`) authored without a
+// waypoint. navPointToLeg converts EW=0,NS=0 to world (24468,24468) (the
+// map's raw-degree origin), which reads as a giant teleport to/from every
+// real neighbouring waypoint — the corpus's #1 batch-oracle failure cluster
+// (16/21 failures at 2026-07-20 handoff, all traced to this + the map-edge
+// wraparound nav_file.js fix). These record types are position-OPTIONAL by
+// construction (the action, not the coordinate, is what matters), so a
+// verbatim exact-zero raw EW/NS is treated as "no position" and repositioned
+// to the nearest REAL neighbouring leg (previous preferred, next as a
+// fallback for a leading sentinel with no earlier anchor) rather than left
+// at the sentinel's degenerate world coordinate. meta is untouched (chat
+// text / pause duration survive); `leg.noPosition = true` marks the
+// substitution so a consumer can tell a carried-forward coordinate from a
+// real one.
+const NO_POSITION_TYPES = new Set([NavPointType.Pause, NavPointType.Chat]);
+
+function isNoPositionSentinel(p) {
+  return p && NO_POSITION_TYPES.has(p.type) && (p.ew || 0) === 0 && (p.ns || 0) === 0;
+}
+
+// Repositions any sentinel-flagged leg in place (mutates the `legs` array's
+// entries, not the array itself) by carrying forward the nearest real
+// neighbour's {lb,x,y,z} — forward pass from the previous real leg, then a
+// backward pass for any still-unresolved LEADING sentinel run (no earlier
+// real leg exists yet). A route that is ENTIRELY sentinels (no real leg at
+// all — never seen in the corpus) is left as-is; there is nothing to carry
+// from. Returns warnings for each substitution.
+function fixupSentinelLegs(legs, points) {
+  const warnings = [];
+  let prevReal = null;
+  for (let i = 0; i < legs.length; i++) {
+    if (isNoPositionSentinel(points[i])) {
+      if (prevReal) {
+        legs[i].lb = prevReal.lb;
+        legs[i].x = prevReal.x;
+        legs[i].y = prevReal.y;
+        legs[i].z = prevReal.z;
+        legs[i].noPosition = true;
+      }
+      // else: no real leg seen yet — resolved by the backward pass below.
+    } else {
+      prevReal = legs[i];
+    }
+  }
+  let nextReal = null;
+  for (let i = legs.length - 1; i >= 0; i--) {
+    if (isNoPositionSentinel(points[i])) {
+      if (!legs[i].noPosition && nextReal) {
+        legs[i].lb = nextReal.lb;
+        legs[i].x = nextReal.x;
+        legs[i].y = nextReal.y;
+        legs[i].z = nextReal.z;
+        legs[i].noPosition = true;
+      }
+    } else {
+      nextReal = legs[i];
+    }
+  }
+  for (let i = 0; i < legs.length; i++) {
+    if (legs[i].noPosition) warnings.push(`leg ${i}: ${tokenFor(points[i].type)} record carries no captured position (VTank/metaf EW=0,NS=0 sentinel) — repositioned to the nearest real waypoint so it doesn't read as a teleport`);
+  }
+  return warnings;
+}
+
 function tokenFor(type) {
   return NavPointTypeToken[type] || `unknown(${type})`;
 }
@@ -165,6 +233,12 @@ export function parsedNavToLegs(parsed) {
     if (warning) warnings.push(warning);
     rawLegs.push(leg);
   }
+  // Sentinel-coordinate cleanup BEFORE flag derivation: a pau/cht record's
+  // no-position (EW=0,NS=0) sentinel must be repositioned first, or the
+  // legacy >=500m geometric portal heuristic below would misread the
+  // resulting (24468,24468) discontinuity as a real teleport (see
+  // NO_POSITION_TYPES header note).
+  warnings.push(...fixupSentinelLegs(rawLegs, points));
   // Ground-truth portal flags are already set on rawLegs (PORTAL_TYPES). Run
   // the SAME legacy derivation goto_compose.js's replay side uses (distance +
   // isEnvCellId) and UNION the two signals — a record the file didn't mark as

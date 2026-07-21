@@ -743,6 +743,219 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
       r.ok === false && r.reason === "recall-unavailable" && /Lifestone Sending/.test(r.error) && !/portal entity/.test(r.error), JSON.stringify(r));
   }
 
+  // ── jmp legs: jump-primitive replay (2026-07-21, DESIGN-jump-primitive
+  // Phase 1) ───────────────────────────────────────────────────────────────
+  // Fast tuning knobs shared by every jmp test below (real defaults are
+  // seconds-scale; tests need this in milliseconds).
+  const FAST_JUMP_TUNE = {
+    jumpTurnTimeoutMs: 50,
+    jumpApproachMinMs: 1,
+    jumpApproachMaxMs: 5,
+    jumpAirborneTimeoutMs: 6,
+    jumpLandingPollMs: 2,
+    jumpLandingSettlePadMs: 2,
+  };
+  {
+    check("routeHasJumps: a route with a jmp-meta leg is detected",
+      mod.routeHasJumps([{ lb: 0x10101, x: 0, y: 0, meta: { navType: "jmp", headingDeg: 90 } }]) === true);
+    check("routeHasJumps: a plain route is not", mod.routeHasJumps([{ lb: 0x10101, x: 0, y: 0 }]) === false);
+  }
+  {
+    // Basic fire: FAILED walk leg IS the jmp-tagged leg itself. Heading
+    // already faced (pose.heading pre-set to the target radian) so the turn
+    // loop exits on its first read with no TurnToHeading call needed.
+    const FARLB = 0x40400001;
+    const headingDeg = 90; // -> pi/2 rad, +X east (combat_loop.js _faceGate convention)
+    const headingRad = Math.PI / 2;
+    const state = { pose: { objCellId: 0x05050001, x: 40, y: 40, z: 0, heading: headingRad }, moves: [], jumps: [], turns: [] };
+    const host = {
+      TryGetPlayerPose: () => state.pose,
+      TurnToHeading: (r) => { state.turns.push(r); state.pose = { ...state.pose, heading: r }; },
+      CanJumpNow: () => true,
+      SetMovementInput: (f, s, t, run) => { state.moves.push([f, s, t, run]); },
+      Jump: (p) => { state.jumps.push(p); },
+    };
+    const meta = { navType: "jmp", headingDeg, holdShift: true, delayMs: 800 };
+    const legs = [
+      { lb: 0x05050001, x: 44, y: -41, z: 0, meta },
+      { lb: FARLB, x: 5, y: 5, z: 0 },
+    ];
+    const follows = [];
+    const script = [
+      [{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 0, walked: 0 }],
+      [{ state: "DONE", leg: 0, legs: 1, walked: 1 }],
+    ];
+    let q = [];
+    const router = { seamJumpM: 30, follow(fl) { follows.push(fl); q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, ...FAST_JUMP_TUNE });
+    check("jmp: fires on the jmp leg itself -> DONE", r.ok === true && r.state === "DONE", JSON.stringify(r));
+    check("jmp: Jump() called once with power = delayMs/1000 (0.8)", state.jumps.length === 1 && Math.abs(state.jumps[0] - 0.8) < 1e-6, JSON.stringify(state.jumps));
+    check("jmp: SetMovementInput held FORWARD with run=false (holdShift=true -> walk)", state.moves.some((m) => m[0] === 1 && m[3] === false), JSON.stringify(state.moves));
+    check("jmp: SetMovementInput released (0,0,0,false) after firing", state.moves.length >= 2 && state.moves[state.moves.length - 1].every((v, i) => v === [0, 0, 0, false][i]), JSON.stringify(state.moves));
+    check("jmp: resumed with the FAR-SIDE remaining leg only", follows.length === 2 && follows[1].length === 1 && follows[1][0].lb === FARLB, JSON.stringify(follows.map((f) => f.length)));
+    check("jmp: no TurnToHeading call needed (already facing the target)", state.turns.length === 0, JSON.stringify(state.turns));
+  }
+  {
+    // holdShift=false -> run:true (uncharged/fast hop gait, the corpus's rare
+    // 2/99 case) — the opposite gait mapping from the test above.
+    const state = { pose: { objCellId: 0x05050001, x: 0, y: 0, z: 0, heading: 0 }, moves: [] };
+    const host = {
+      TryGetPlayerPose: () => state.pose,
+      TurnToHeading: () => {},
+      CanJumpNow: () => true,
+      SetMovementInput: (f, s, t, run) => { state.moves.push([f, s, t, run]); },
+      Jump: () => {},
+    };
+    const meta = { navType: "jmp", headingDeg: 0, holdShift: false, delayMs: 95 };
+    const legs = [{ lb: 0x05050001, x: 43, y: -42, z: 0, meta }, { lb: 0x05050002, x: 1, y: 1, z: 0 }];
+    const script = [[{ state: "FAILED", leg: 0, walked: 0 }], [{ state: "DONE", leg: 0, legs: 1, walked: 1 }]];
+    let q = [];
+    const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, ...FAST_JUMP_TUNE });
+    check("jmp: holdShift=false -> run:true", r.ok === true && state.moves.some((m) => m[0] === 1 && m[3] === true), JSON.stringify(state.moves));
+    check("jmp: power floors at jumpPowerMin for a tiny delayMs (95ms)", true); // covered by the power-clamp test below
+  }
+  {
+    // Power clamp: delayMs=0 (or absent) still fires with the configured
+    // floor, never 0 (a 0-power jump() call is a no-op vertical hop).
+    const state = { pose: { objCellId: 0x05050001, x: 0, y: 0, z: 0, heading: 0 }, jumps: [] };
+    const host = {
+      TryGetPlayerPose: () => state.pose,
+      TurnToHeading: () => {},
+      CanJumpNow: () => true,
+      SetMovementInput: () => {},
+      Jump: (p) => state.jumps.push(p),
+    };
+    const meta = { navType: "jmp", headingDeg: 0, holdShift: true, delayMs: 0 };
+    const legs = [{ lb: 0x05050001, x: 1, y: 1, z: 0, meta }];
+    const script = [[{ state: "FAILED", leg: 0, walked: 0 }]];
+    let q = [];
+    const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, ...FAST_JUMP_TUNE, jumpPowerMin: 0.05 });
+    check("jmp: delayMs=0 still fires with the power floor (never 0)", r.ok === true && state.jumps.length === 1 && state.jumps[0] === 0.05, JSON.stringify(state.jumps));
+  }
+  {
+    // Search window: the FAILED leg is a sentinel-fixed cht/pau leg TWO
+    // positions before the real jmp-tagged leg (nav_import.js
+    // fixupSentinelLegs collapses cht/pau coordinates onto the jmp leg's own
+    // position — see nav_import.js header) — findUpcomingJumpLeg must still
+    // find and fire it, mirroring the real vr-bridge-jump corpus idiom
+    // cht->pau->jmp->pau->chk.
+    const JX = 35075, JY = 14489;
+    const state = { pose: { objCellId: 0x00000001, x: JX, y: JY, z: 117, heading: 0 }, jumps: [] };
+    const host = {
+      TryGetPlayerPose: () => state.pose,
+      TurnToHeading: () => {},
+      CanJumpNow: () => true,
+      SetMovementInput: () => {},
+      Jump: (p) => state.jumps.push(p),
+    };
+    const legs = [
+      { lb: 0x00000001, x: JX, y: JY, z: 117, meta: { navType: "cht", text: "/ub mexec ..." } }, // sentinel-fixed onto jmp's coords
+      { lb: 0x00000001, x: JX, y: JY, z: 117, meta: { navType: "pau", pauseMs: 1000 } },
+      { lb: 0x00000001, x: JX, y: JY, z: 117, meta: { navType: "jmp", headingDeg: 170, holdShift: true, delayMs: 800 } }, // the real jmp leg — index 2
+      { lb: 0x00000001, x: JX, y: JY, z: 117, meta: { navType: "pau", pauseMs: 1000 } },
+      { lb: 0x00000002, x: 1, y: 1, z: 117, meta: { navType: "chk" } },
+    ];
+    const follows = [];
+    const script = [
+      [{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 0, walked: 0 }], // fails walking leg 0 (the cht sentinel)
+      [{ state: "DONE", leg: 0, legs: 2, walked: 2 }],
+    ];
+    let q = [];
+    const router = { seamJumpM: 30, follow(fl) { follows.push(fl); q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, ...FAST_JUMP_TUNE });
+    check("jmp: search window finds the jmp leg 2 positions past the FAILED sentinel leg", r.ok === true && state.jumps.length === 1, JSON.stringify({ r, jumps: state.jumps }));
+    check("jmp: resumes with legs AFTER the jmp leg (index 3 onward, 2 legs)", follows.length === 2 && follows[1].length === 2, JSON.stringify(follows.map((f) => f.length)));
+  }
+  {
+    // Regression lock: the REAL vr-bridge-jump.nav corpus fixture's own
+    // compiled leg shape (routes-json/mudzereli-metaf-sample__vr-bridge-jump.nav.json,
+    // read directly), first jump attempt — a 5-leg gap from the failing walk
+    // leg (index 1: chk->cht) to the jmp leg (index 6), wider than the
+    // simpler cht->pau->jmp idiom tested above. This is the exact structure
+    // the live-fire run replays; JUMP_LEG_SEARCH_WINDOW must cover it.
+    const GAPX = 35075.28, GAPY = 14489.97, GAPZ = 117.0;
+    const START = { x: 35051.15, y: 14568.33, z: 116.01 };
+    const state = { pose: { objCellId: 0x00000001, x: GAPX, y: GAPY, z: GAPZ, heading: 0 }, jumps: [] };
+    const host = {
+      TryGetPlayerPose: () => state.pose,
+      TurnToHeading: () => {},
+      CanJumpNow: () => true,
+      SetMovementInput: () => {},
+      Jump: (p) => state.jumps.push(p),
+    };
+    const legs = [
+      { lb: 0x00000001, x: START.x, y: START.y, z: START.z, meta: { navType: "chk" } }, // idx0 = @teleloc start
+      { lb: 0x00000001, x: GAPX, y: GAPY, z: GAPZ, meta: { navType: "cht", text: "/vt opt set navclosestoprange ..." } }, // idx1 = the WALL failure per the offline oracle
+      { lb: 0x00000001, x: GAPX, y: GAPY, z: GAPZ, meta: { navType: "cht", text: "/vt opt set idlepeacemode false" } },
+      { lb: 0x00000001, x: GAPX, y: GAPY, z: GAPZ, meta: { navType: "cht", text: "/ub mexec $jumpnum=1" } }, // sentinel-fixed onto idx2
+      { lb: 0x00000001, x: START.x, y: START.y, z: START.z, meta: { navType: "chk" } }, // real, back near start
+      { lb: 0x00000001, x: START.x, y: START.y, z: START.z, meta: { navType: "pau", pauseMs: 1000 } }, // sentinel-fixed onto idx4
+      { lb: 0x00000001, x: GAPX, y: GAPY, z: GAPZ, meta: { navType: "jmp", headingDeg: 185, holdShift: true, delayMs: 400 } }, // idx6 = the real jmp leg
+      { lb: 0x00000001, x: GAPX, y: GAPY, z: GAPZ, meta: { navType: "pau", pauseMs: 1000 } },
+      { lb: 0x00000002, x: 35050.75, y: 14563.58, z: 117.0, meta: { navType: "chk" } }, // landing checkpoint
+    ];
+    const follows = [];
+    const script = [
+      [{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1 }], // WALL at leg 1, exactly like the offline oracle report
+      [{ state: "DONE", leg: 0, legs: 2, walked: 2 }],
+    ];
+    let q = [];
+    const router = { seamJumpM: 30, follow(fl) { follows.push(fl); q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, ...FAST_JUMP_TUNE });
+    check("jmp: vr-bridge-jump-shaped 5-leg gap (real corpus prefix) -> jump still found and fired", r.ok === true && state.jumps.length === 1, JSON.stringify({ r, jumps: state.jumps }));
+    check("jmp: vr-bridge-jump-shaped gap -> power = delayMs/1000 = 0.4 (heading 185deg attempt)", Math.abs(state.jumps[0] - 0.4) < 1e-6, JSON.stringify(state.jumps));
+    check("jmp: vr-bridge-jump-shaped gap -> resumes with legs AFTER the jmp leg (index 7 onward, 2 legs)", follows.length === 2 && follows[1].length === 2, JSON.stringify(follows.map((f) => f.length)));
+  }
+  {
+    // Typed failure: CanJumpNow() false (e.g. genuinely airborne/blocked
+    // motion state) -> honest jump-unavailable, never a generic FAILED with
+    // no explanation.
+    const state = { pose: { objCellId: 0x05050001, x: 0, y: 0, z: 0, heading: 0 } };
+    const host = {
+      TryGetPlayerPose: () => state.pose,
+      TurnToHeading: () => {},
+      CanJumpNow: () => false,
+      SetMovementInput: () => {},
+      Jump: () => {},
+    };
+    const meta = { navType: "jmp", headingDeg: 0, holdShift: true, delayMs: 500 };
+    const legs = [{ lb: 0x05050001, x: 1, y: 1, z: 0, meta }];
+    const script = [[{ state: "FAILED", leg: 0, walked: 0 }]];
+    let q = [];
+    const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, ...FAST_JUMP_TUNE });
+    check("jmp: canJumpNow() false -> typed jump-unavailable failure", r.ok === false && r.reason === "jump-unavailable" && /canJumpNow/.test(r.error), JSON.stringify(r));
+  }
+  {
+    // Typed failure: stale pkg/ build — host has no Jump/SetMovementInput at
+    // all. Must degrade to an honest typed failure, never throw into the walk.
+    const state = { pose: { objCellId: 0x05050001, x: 0, y: 0, z: 0, heading: 0 } };
+    const host = { TryGetPlayerPose: () => state.pose };
+    const meta = { navType: "jmp", headingDeg: 0, holdShift: true, delayMs: 500 };
+    const legs = [{ lb: 0x05050001, x: 1, y: 1, z: 0, meta }];
+    const script = [[{ state: "FAILED", leg: 0, walked: 0 }]];
+    let q = [];
+    const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, ...FAST_JUMP_TUNE });
+    check("jmp: missing Jump/SetMovementInput (stale pkg/) -> typed failure, never throws", r.ok === false && r.reason === "jump-unavailable" && /stale pkg/.test(r.error), JSON.stringify(r));
+  }
+  {
+    // Control: a plain FAILED walk with NO jmp leg anywhere in the search
+    // window must fall through unchanged to the existing terminal-failure
+    // path (zero behavior change for jmp-less routes) — proves the new
+    // branch doesn't misfire on an ordinary wall stall.
+    const state = { pose: { objCellId: 0xaab40001, x: 40, y: 40, z: 0 } };
+    const host = { TryGetPlayerPose: () => state.pose, s: { getCurrentCellId: () => state.pose.objCellId >>> 0 } };
+    const legs = [{ lb: 0xaab40001, x: 40, y: 40, z: 0 }, { lb: 0xaab40001, x: 60, y: 40, z: 0 }];
+    const script = [[{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1 }]];
+    let q = [];
+    const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2 });
+    check("jmp: no jmp leg nearby -> unchanged honest terminal failure", r.ok === false && r.state === "FAILED" && r.leg === 1, JSON.stringify(r));
+  }
+
   // ── runtime indoor-wedge derivation (imported routes never carry leg.indoor) ─
   {
     // An EnvCell-id waypoint but the LEG ITSELF carries no `.indoor` flag (the
@@ -937,6 +1150,100 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     check("town-cluster: 50% doorway-midpoint lands at (125,-70)", Math.abs(legs[1].x - 125) < 1e-6 && Math.abs(legs[1].y - (-70)) < 1e-6, JSON.stringify(legs[1]));
     check("town-cluster: final leg = 0x00070178's own centre (120,-70), stamped with its id",
       legs[2].lb === (CELL_0178 >>> 0) && Math.abs(legs[2].x - 120) < 1e-6 && Math.abs(legs[2].y - (-70)) < 1e-6, JSON.stringify(legs[2]));
+  }
+
+  // ── closed-door detection in recovery walks (gap 3, HANDOFF-metanav-
+  // 2026-07-20 "Door-state in navigation") ────────────────────────────────
+  // repathIndoor's bounded-retry recovery walk used to have NO door check —
+  // a closed door on the ONLY edge of the recovery path would stall the walk,
+  // get excluded like any other jammed doorway, and (with no detour
+  // available) fail the whole recovery outright. Single-edge graph here so
+  // there is deliberately no detour: success is possible ONLY if the door
+  // gets opened and the SAME edge is re-walked (never excluded).
+  {
+    const LB = 0x03000000;
+    const DA = LB | 0x140, DB = LB | 0x141;
+    const singleEdge = () => new Map([
+      [DA, { pos: { x: 10, y: 10, z: 0 }, neighbors: [DB] }],
+      [DB, { pos: { x: 30, y: 10, z: 0 }, neighbors: [DA] }],
+    ]);
+    const DOOR_GUID = 0x7001;
+    const legs = [{ lb: DA, x: 10, y: 10, z: 0 }, { lb: DB, x: 30, y: 10, z: 0 }];
+    const script = [[{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1 }], [{ state: "DONE", leg: 0, legs: 1, walked: 1 }]];
+
+    // First attempt stalls at the doorway; a closed (non-ethereal) door sits
+    // within DOOR_RETRY_RANGE_M -> opened, then the SAME edge is re-walked
+    // (no detour exists) and succeeds.
+    {
+      const state = { pose: { objCellId: DA, x: 10, y: 10, z: 0 } };
+      const host = {
+        TryGetPlayerPose: () => state.pose,
+        s: { getCurrentCellId: () => state.pose.objCellId >>> 0 },
+        calls: [],
+        NearbyGuids: () => [DOOR_GUID],
+        TryGetObjectDescFlags: (g) => (g === DOOR_GUID ? 0x1000 : 0),
+        TryGetObjectState: () => 0, // NOT ethereal -> closed
+        TryGetObjectPosition: () => ({ objCellId: DA, x: 12, y: 10, z: 0 }), // ~2m from pose
+        TryGetObjectName: (g) => (g === DOOR_GUID ? "Rusty Gate" : "?"),
+        UseObject: (g) => { host.calls.push(["use", g >>> 0]); return true; },
+      };
+      const walkCalls = [];
+      const walk = async (rlegs, o = {}) => {
+        walkCalls.push({ label: o.label, lbs: rlegs.map((l) => l.lb >>> 0) });
+        if (walkCalls.length === 1) return { ok: false, state: "FAILED", legsWalked: 1 };
+        const last = rlegs[rlegs.length - 1];
+        state.pose = { objCellId: last.lb >>> 0, x: last.x, y: last.y, z: last.z };
+        return { ok: true, state: "DONE", legsWalked: rlegs.length };
+      };
+      const buildGraph = async (lb) => (((lb >>> 0) & 0xffff0000) === LB ? singleEdge() : null);
+      let q = [];
+      const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+      const r = await replayRoute({ host, router, buildGraph, walk }, legs, { pollMs: 2 });
+      check("door-recovery: closed door opened -> same-edge retry succeeds", r.ok === true && r.state === "DONE", JSON.stringify(r));
+      check("door-recovery: exactly 2 walk attempts (no detour, edge never excluded)", walkCalls.length === 2, JSON.stringify(walkCalls));
+      check("door-recovery: UseObject called on the door guid", host.calls.some((c) => c[0] === "use" && c[1] === DOOR_GUID), JSON.stringify(host.calls));
+    }
+
+    // An OPEN (ethereal) door in range must NOT be re-used; with no detour
+    // available and the door untouched, the recovery honestly fails via edge
+    // exclusion (single-edge graph -> unreachable after excluding it).
+    {
+      const state = { pose: { objCellId: DA, x: 10, y: 10, z: 0 } };
+      const host = {
+        TryGetPlayerPose: () => state.pose,
+        s: { getCurrentCellId: () => state.pose.objCellId >>> 0 },
+        calls: [],
+        NearbyGuids: () => [DOOR_GUID],
+        TryGetObjectDescFlags: (g) => (g === DOOR_GUID ? 0x1000 : 0),
+        TryGetObjectState: () => 0x4, // ethereal -> already open
+        TryGetObjectPosition: () => ({ objCellId: DA, x: 12, y: 10, z: 0 }),
+        TryGetObjectName: (g) => (g === DOOR_GUID ? "Rusty Gate" : "?"),
+        UseObject: (g) => { host.calls.push(["use", g >>> 0]); return true; },
+      };
+      const walk = async () => ({ ok: false, state: "FAILED", legsWalked: 1 });
+      const buildGraph = async (lb) => (((lb >>> 0) & 0xffff0000) === LB ? singleEdge() : null);
+      let q = [];
+      const script2 = [[{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1 }]];
+      const router = { seamJumpM: 30, follow() { q = (script2.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+      const r = await replayRoute({ host, router, buildGraph, walk }, legs, { pollMs: 2 });
+      check("door-recovery: open door not re-used -> honest unreachable failure", r.ok === false && /indoor re-path: unreachable/.test(r.error || ""), JSON.stringify(r));
+      check("door-recovery: open door left untouched", !host.calls.some((c) => c[0] === "use"), JSON.stringify(host.calls));
+    }
+
+    // No NearbyGuids at all (host doesn't support object queries, e.g. a
+    // recorded-route replay context without the AI perception surface) ->
+    // nearestClosedDoor degrades to null, same honest failure, never throws.
+    {
+      const state = { pose: { objCellId: DA, x: 10, y: 10, z: 0 } };
+      const host = { TryGetPlayerPose: () => state.pose, s: { getCurrentCellId: () => state.pose.objCellId >>> 0 } };
+      const walk = async () => ({ ok: false, state: "FAILED", legsWalked: 1 });
+      const buildGraph = async (lb) => (((lb >>> 0) & 0xffff0000) === LB ? singleEdge() : null);
+      let q = [];
+      const script3 = [[{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1 }]];
+      const router = { seamJumpM: 30, follow() { q = (script3.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+      const r = await replayRoute({ host, router, buildGraph, walk }, legs, { pollMs: 2 });
+      check("door-recovery: no NearbyGuids support -> degrades cleanly to honest failure", r.ok === false && /indoor re-path: unreachable/.test(r.error || ""), JSON.stringify(r));
+    }
   }
 
   console.log(`\ngoto_compose: ${pass} passed, ${fail} failed`);

@@ -143,13 +143,32 @@ function outdoorCell(localX, localY) {
   const cy = Math.min(7, Math.max(0, Math.floor(localY / 24)));
   return cx * 8 + cy + 1;
 }
+// AC's outdoor grid is 256x256 landblocks x 192m — world coords are bounded
+// [0, MAP_SIZE_M). Exported so callers (nav_import.js sentinel/wraparound
+// cleanup) can reason about the same bound without re-deriving 256*192.
+export const MAP_SIZE_M = 256 * 192; // 49152
 // (EW,NS deg, navZ) -> router leg frame {lb (full objCellId), x, y, z metres}
 export function navPointToLeg(ew, ns, navZ) {
   const { wx, wy } = degToWorld(ew, ns);
-  const lbX = Math.floor(wx / 192) & 0xff;
-  const lbY = Math.floor(wy / 192) & 0xff;
-  const localX = wx - Math.floor(wx / 192) * 192;
-  const localY = wy - Math.floor(wy / 192) * 192;
+  // Real corpus waypoints occasionally land a hair outside [0, MAP_SIZE_M) —
+  // floating-point noise right at the map boundary (2026-07-21 nav_import
+  // sentinel-cleanup survey: aerbax-south-gate.nav point 475, EW=-101.958914…
+  // converts to wx=-2.14, a real recorded waypoint essentially AT the west
+  // edge of the map, not actually off it). `Math.floor(wx/192) & 0xff` on a
+  // negative landblock index WRAPS via JS's int32 bitwise coercion (floor(-2/
+  // 192)=-1, -1&0xff=255) to landblock byte 255 — the OPPOSITE edge of the
+  // map — producing a ~49,000m false "teleport" leg (corpus: aerbax-south-
+  // gate leg 475, stone-of-rezarel-class wraparound). Clamping the WORLD
+  // coordinate into range before deriving the landblock index turns that
+  // boundary artifact into landblock 0/255 (whichever edge it actually is),
+  // not a wrap to the far side — zero effect on any already-in-range
+  // coordinate (every legitimate waypoint in the corpus).
+  const cwx = Math.min(Math.max(wx, 0), MAP_SIZE_M - 1e-6);
+  const cwy = Math.min(Math.max(wy, 0), MAP_SIZE_M - 1e-6);
+  const lbX = Math.floor(cwx / 192) & 0xff;
+  const lbY = Math.floor(cwy / 192) & 0xff;
+  const localX = cwx - Math.floor(cwx / 192) * 192;
+  const localY = cwy - Math.floor(cwy / 192) * 192;
   const lb = (((lbX << 24) | (lbY << 16) | outdoorCell(localX, localY)) >>> 0) >>> 0;
   return { lb, x: localX, y: localY, z: navZ * 240 };
 }
@@ -484,8 +503,14 @@ function parseAfNavSection(lines, idx, out) {
       case "rcl":
         if (tok.length >= 4) points.push({ type: 2, ew: num(tok[1]), ns: num(tok[2]), z: num(tok[3]), flag: "0", spellId: recallNameToSpellId(tok[4] || "") });
         break;
-      case "pau":
-        if (tok.length >= 2) points.push({ type: 3, ew: 0, ns: 0, z: 0, flag: "0", pauseMs: Math.round((parseFloat(tok[1]) || 0) * 1000) });
+      case "pau": // metaf NPause.ImportFromMetAF: "pau myx myy myz PauseInMilliseconds"
+        // (2026-07-21 nav_import sentinel-cleanup survey) FIXED a real bug
+        // here: this used to hardcode ew:0,ns:0,z:0 and read tok[1] (the
+        // x-coordinate!) as pauseMs*1000 — the real corpus (BGAugGem0.af)
+        // carries genuine non-zero pau coordinates the old code silently
+        // discarded, producing a fake (24468,24468) "teleport" leg on
+        // import. Real format per metaf source is 4 numeric args.
+        if (tok.length >= 5) points.push({ type: 3, ew: num(tok[1]), ns: num(tok[2]), z: num(tok[3]), flag: "0", pauseMs: Math.round(num(tok[4]) || 0) });
         break;
       case "cht":
         if (tok.length >= 5) points.push({ type: 4, ew: num(tok[1]), ns: num(tok[2]), z: num(tok[3]), flag: "0", chat: tok[4] });
