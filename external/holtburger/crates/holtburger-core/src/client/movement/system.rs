@@ -5976,7 +5976,23 @@ impl MovementSystem {
         match holtburger_world::spatial::faithful_bridge::faithful_find_placement_position(
             &*world, &pose, &object, &gates,
         ) {
-            Some(outcome) => {
+            Some(mut outcome) => {
+                // B1 (2026-07-21, the live arrival wedge): adopt the lateral
+                // de-embed and ANY upward lift, but discard a downward-only settle.
+                // A placement that settled the capsule BELOW the arrival floor
+                // leaves the very next movement slice with no ground beneath it —
+                // it sweeps, refuses every step, and the bot wedges in place. Clamp
+                // the adopted z up to the arrival z so the settle can only lift,
+                // never sink.
+                //
+                // Frame-safety: unlike XY (arrival `pose` is landblock/dungeon
+                // frame, `outcome.pose` is landblock-normalized — see FU-11 below),
+                // z is a PURE passthrough on BOTH sides — `pose.global_coords()` is
+                // z-passthrough on the bridge input and the output marshals
+                // `curr.frame.origin.z` verbatim (faithful_bridge.rs:1521,1591-1599),
+                // so `pose.coords.z` and `outcome.pose.coords.z` are the same world-z
+                // frame and this `max` is a well-defined vertical comparison.
+                outcome.pose.coords.z = outcome.pose.coords.z.max(pose.coords.z);
                 // FU-11: the placement function reports the TRUE de-embed
                 // magnitude (`adjusted_by`, measured arrival-world → settled-world
                 // inside the bridge). Do NOT recompute it from
@@ -6067,7 +6083,19 @@ impl MovementSystem {
                 Some(body) => body.pose.landblock_id == Guid::NULL,
                 None => true,
             },
-            None => false,
+            // §D2 (cosmetic/inert, 2026-07-21): for the local-player watchdog
+            // this arm is UNREACHABLE — past the `Guid::NULL` early return the
+            // guid is non-null, and `runtime_body_id_for_guid`
+            // (`authoritative_body_id_for_guid`) derives the id straight from the
+            // guid without consulting scene residency, so it always returns
+            // `Some(LocalPlayer(guid))`. A RETIRED body
+            // (`reconcile_authoritative_body_with_remote`) therefore surfaces via
+            // the INNER `scene.body() => None` arm, not here. `true` (over the
+            // prior `false`) simply keeps this arm CONSISTENT with that
+            // missing-body arm; even were it reachable, the timeout + healed-pose
+            // fallback (`local_player_runtime_pose`) still gate any force-adopt.
+            // NOT the arrival-wedge fix.
+            None => true,
         };
 
         if !cell_is_null {

@@ -88,6 +88,34 @@ impl WorldState {
         };
 
         if pose.landblock_id == Guid::NULL {
+            // WP-2 (no-retire-on-transient-NULL): a NULL-landblock pose is
+            // normally a world-exit and retires the runtime body. But a
+            // transient NULL for the LOCAL player — a null `posA` that precedes
+            // the real arrival `posB` — must NOT drop the rig: retiring here
+            // strands `getLocalPlayerPose().objCellId` at 0, and a never-placed
+            // object cannot be re-placed. While the local player holds a
+            // last-known-good cell (an arrival is pending, not a genuine
+            // world-exit), HOLD the body Suspended at that cell instead of
+            // retiring; the liveness watchdog recreates it via a `Reset` if
+            // `posB` never lands. Remote entities and a local player that never
+            // established a cell still retire — their NULL genuinely means
+            // "left the scene" / "never entered".
+            let hold_pose = (guid == self.player.guid
+                && self.player.last_valid_landblock.is_some())
+            .then(|| {
+                self.scene.body(body_id).and_then(|body| {
+                    body.authoritative_pose
+                        .filter(|held| held.landblock_id != Guid::NULL)
+                        .or(Some(body.pose))
+                        .filter(|held| held.landblock_id != Guid::NULL)
+                })
+            })
+            .flatten();
+            if let Some(hold_pose) = hold_pose {
+                self.scene
+                    .apply_runtime_body_pose(body_id, hold_pose, SpatialSampleMode::Suspended);
+                return;
+            }
             self.scene.retire_authoritative_body(body_id);
             return;
         }
@@ -247,6 +275,18 @@ impl WorldState {
                             .get(guid)
                             .map(|entity| entity.position.landblock_id)
                             .filter(|lb| *lb != Guid::NULL)
+                    })
+                    // WP-2 (last-known-good cell): the FINAL fallback — when
+                    // BOTH the working authoritative pose AND the entity
+                    // position are NULL (a null `posA` the arrival `posB` never
+                    // reconciled), heal the LOCAL player to its last-known
+                    // non-null cell so the source cell is reported, not 0.
+                    // Scoped to the local player — `last_valid_landblock` is the
+                    // local player's cell and must never leak onto a remote guid.
+                    .or_else(|| {
+                        (guid == self.player.guid)
+                            .then_some(self.player.last_valid_landblock)
+                            .flatten()
                     });
                 if let Some(landblock_id) = heal_landblock {
                     pose.landblock_id = landblock_id;
@@ -255,7 +295,18 @@ impl WorldState {
             return Some(pose);
         }
 
-        self.entities.get(guid).map(|entity| entity.position)
+        // Body-absent arm: fall back to the authoritative entity position.
+        // WP-2 (last-known-good cell): if the body was retired and only a
+        // NULL-landblock entity pose remains, heal the LOCAL player to its
+        // last-known cell so the source cell is still reported (not 0).
+        let mut pose = self.entities.get(guid).map(|entity| entity.position)?;
+        if pose.landblock_id == Guid::NULL
+            && guid == self.player.guid
+            && let Some(landblock_id) = self.player.last_valid_landblock
+        {
+            pose.landblock_id = landblock_id;
+        }
+        Some(pose)
     }
 
     pub fn runtime_kinematics_for_guid(
@@ -915,6 +966,13 @@ impl WorldState {
         // are unaffected. Companion to the `preserve_local_runtime_pose` NULL guard
         // in `scene.rs` (which covers the reconcile paths, e.g. VectorUpdate).
         if pos.landblock_id != Guid::NULL {
+            // WP-2 (last-known-good cell): remember the most recent non-null
+            // landblock the local player was placed at so a later transient
+            // NULL-landblock pose (a null `posA` the arrival `posB` never
+            // reconciles) can heal to the source cell rather than reporting
+            // `objCellId` 0. Purely additive — a valid apply only records the
+            // cell; nothing gates on it here.
+            self.player.last_valid_landblock = Some(pos.landblock_id);
             if let Some(body_id) = self.runtime_body_id_for_guid(guid) {
                 let working_cell_null = self
                     .scene

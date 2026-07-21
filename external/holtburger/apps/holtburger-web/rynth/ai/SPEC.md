@@ -270,3 +270,17 @@ textContent/value/remove).
 ### Suites
 - `rynth_ai_routes_test.cjs` (routes tool + mission line + metrics);
   travel-hold cases appended to `rynth_ai_director_test.cjs`.
+
+## Addendum — director busy/last-check accessors (2026-07-21, Surveyor omnibus WP-5; ADDITIVE)
+
+### director.js (two public read accessors)
+- `isBusy(): boolean` — true while a check-in is in flight (the serialized
+  `_running`/`_inflight` guard). The public form of "a check-in owns the loop
+  right now".
+- `get lastCheckAt(): number|null` — ms-epoch start of the most recent
+  check-in (same value as `status.lastCheckAt`), or null before the first.
+
+bot.js's `ExplorePressureController` reads the director's busy/last-check state
+ONLY through these accessors (never the private `_running`/`_inflight`/
+`_lastCheckAt`), so the two files can no longer drift silently. Accessor cases
+appended to `rynth_ai_director_test.cjs`.

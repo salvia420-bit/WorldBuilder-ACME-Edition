@@ -37,6 +37,8 @@ import {
   buildPatrolRoute,
   buildGraphFromWasm,
 } from "../../indoor_router.js";
+// World-frame + outdoor-LandCell math: the ONE copy (C3 Stage-0 dedup).
+import { worldX, worldY, worldToOutdoorCell } from "../../nav_frame.js";
 
 export const TO_MAX_CHARS = 24; // hex cell id <= 10 chars; hints <= 10
 const EXITS_MAX = 8;
@@ -83,10 +85,6 @@ function asNodeMap(graph) {
   return m;
 }
 
-// World-frame metres from a full objCellId + landblock-local x/y
-// (router.js:45-47 worldXY) — the frame the graph's pos already uses.
-const worldX = (cell, x) => ((cell >>> 24) & 0xff) * 192 + x;
-const worldY = (cell, y) => ((cell >>> 16) & 0xff) * 192 + y;
 
 function getPose(bot) {
   return safe(() => {
@@ -346,11 +344,14 @@ export class DungeonNavAdvisor {
         if (len > 0.01) { dx /= len; dy /= len; } else { dx = 0; dy = 1; }
         const wx = base.x + dx * 9;
         const wy = base.y + dy * 9;
-        const lbx = Math.floor(wx / 192), lby = Math.floor(wy / 192);
-        const cx = Math.floor((wx - lbx * 192) / 24), cy = Math.floor((wy - lby * 192) / 24);
-        outdoorId = (((lbx & 0xff) << 24) | ((lby & 0xff) << 16) | (cx * 8 + cy + 1)) >>> 0;
-        ox = wx - lbx * 192;
-        oy = wy - lby * 192;
+        // Bin the projected world point into its outdoor LandCell via the ONE
+        // copy (nav_frame.js). Identical to the old inline math for every in-
+        // range projection; the shared version additionally clamps so an out-
+        // of-range point cannot wrap into a garbage landblock.
+        const cell = worldToOutdoorCell(wx, wy);
+        outdoorId = cell.lb;
+        ox = cell.x;
+        oy = cell.y;
       }
       legs.push({
         lb: outdoorId,

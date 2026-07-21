@@ -119,6 +119,25 @@ const resp = (json) => ({ text: JSON.stringify(json), json, usage: { prompt: 10,
     check("happy: stop clears schedule", d.status.enabled === false && d.status.nextCheckAt === null);
   }
 
+  // ---- Public busy/lastCheck accessors (WP-5): isBusy() reflects the
+  // serialized in-flight guard; lastCheckAt mirrors status.lastCheckAt. These
+  // are the stable surface bot.js's ExplorePressureController reads instead of
+  // reaching into _running/_inflight/_lastCheckAt.
+  {
+    const client = makeClient([async () => { await sleep(60); return resp({ analysis: "slow", actions: [], next_check_minutes: 5 }); }]);
+    const d = new RynthAiDirector({}, { client, journal: makeJournal(), observe: mockObserve, execute: makeExec(), validate: mockValidate });
+    check("accessor: isBusy() is a method", typeof d.isBusy === "function");
+    check("accessor: idle before the first check-in", d.isBusy() === false && d.lastCheckAt === null);
+    const p = d.checkNow();
+    await sleep(10);
+    check("accessor: isBusy() true while a check-in is in flight", d.isBusy() === true);
+    check("accessor: isBusy() agrees with status.running", d.isBusy() === d.status.running);
+    await p;
+    check("accessor: isBusy() false once the check resolves", d.isBusy() === false);
+    check("accessor: lastCheckAt set after the check, mirrors status.lastCheckAt",
+      typeof d.lastCheckAt === "number" && d.lastCheckAt === d.status.lastCheckAt && Date.now() - d.lastCheckAt < 5000);
+  }
+
   // ---- Clamping of LLM next_check_minutes to [min, max]; custom systemPrompt.
   {
     const journal = makeJournal();

@@ -38,6 +38,13 @@ const SEV2_VARIATION = 5;
 const SEV3_VARIATION = 8;
 const OSC_WINDOW = 6; // last N accepted observations checked for A<->B bounce
 
+// Frozen-pose (movement-dead) watchdog thresholds — mirror bot.js's
+// ExplorePressureController._checkMovementDead (raw pose unchanged for minutes
+// despite move attempts is a CLIENT freeze, not a routing problem). Overridable
+// via constructor opts.frozenMinutes for deterministic tests.
+const DEFAULT_FROZEN_MIN = 3; // minutes — raw pose unchanged this long ⇒ frozen
+const FROZEN_MIN_OBSERVES = 2; // ≥2 accepted observes confirming the freeze (anti-flicker)
+
 const DEFAULT_FRONTIER_MAX_RADIUS = 120; // tiles (~1440m) — a "sane radius"
 
 // town catchment radius (degrees) used by townFrontier()'s "has a visited tile"
@@ -71,48 +78,16 @@ const CORRECTIONS = {
   3: "You are WEDGED — no real progress for a while and nothing new reachable nearby. Leave this landblock immediately and head toward the Frontier; if none is reachable, escalate to a distant unvisited town.",
 };
 
-// ── inline world-frame helpers (house convention: duplicated, not imported) ──
-export function worldX(objCellId, x) {
-  return ((objCellId >>> 24) & 0xff) * 192 + x;
-}
-export function worldY(objCellId, y) {
-  return ((objCellId >>> 16) & 0xff) * 192 + y;
-}
-export function landblockOf(objCellId) {
-  return (objCellId >>> 16) & 0xffff;
-}
-export function isIndoorCell(objCellId) {
-  const low = objCellId & 0xffff;
-  return low >= 0x0100 && low <= 0xfffd;
-}
-// /loc degrees — verbatim per observe.js:30-34 / VALIDATION COROLLARY. NS from
-// world-Y, EW from world-X. Do not "simplify"; goto {ns,ew} feeds the sidecar's
-// inverse DegToWorld.
-export function locDegrees(objCellId, x, y) {
-  const wx = worldX(objCellId, x);
-  const wy = worldY(objCellId, y);
-  return { ns: (wy / 24 - 1019.5) / 10, ew: (wx / 24 - 1019.5) / 10 };
-}
-function worldToDeg(wx, wy) {
-  return { ns: (wy / 24 - 1019.5) / 10, ew: (wx / 24 - 1019.5) / 10 };
-}
-
-// Outdoor LandCell index (LandDefs::gid_to_lcoord) — same formula bot.js:896-904
-// (_outdoorHop), dungeon_nav.js's exitRoute() and goto_compose.js's
-// normalizeLegWorldFrame() each independently derive; reimplemented here too so
-// frontier() output can be converted to a movable target without a cross-file
-// import. `lb` here is the FULL outdoor objCellId (landblock + cellIdx), the
-// shape host.MoveToPosition / bot.goto need — NOT the 16-bit landblock number
-// used elsewhere in this file for tile bookkeeping.
-export function worldToOutdoorCell(wx, wy, z = 0) {
-  const lbX = Math.max(0, Math.min(255, Math.floor(wx / 192)));
-  const lbY = Math.max(0, Math.min(255, Math.floor(wy / 192)));
-  const lx = wx - lbX * 192;
-  const ly = wy - lbY * 192;
-  const cellIdx = 1 + Math.min(7, Math.floor(lx / 24)) * 8 + Math.min(7, Math.floor(ly / 24));
-  const lb = (((lbX << 24) | (lbY << 16) | cellIdx) >>> 0);
-  return { lb, x: lx, y: ly, z };
-}
+// ── world-frame helpers: the ONE copy now lives in nav_frame.js (C3 Stage-0
+// dedup). Re-exported here unchanged so this module's frozen public API is
+// preserved — extensions.js/bot.js/director.js still import worldX/worldY/…
+// from explore_memory.js. worldToDeg (already-world-frame -> /loc degrees) is
+// imported for internal use only; it was never part of the public surface.
+import {
+  worldX, worldY, landblockOf, isIndoorCell,
+  locDegrees, worldToDeg, worldToOutdoorCell,
+} from "../nav_frame.js";
+export { worldX, worldY, landblockOf, isIndoorCell, locDegrees, worldToOutdoorCell };
 
 function tileKeyOf(tx, ty, zb) {
   return `${tx}:${ty}:${zb}`;
@@ -193,6 +168,8 @@ export class ExploreMemory {
       (Number.isFinite(opts.stallMinutes) ? opts.stallMinutes : DEFAULT_STALL_MIN) * 60_000;
     this.frontierMaxRadius =
       Number.isFinite(opts.frontierMaxRadius) ? opts.frontierMaxRadius : DEFAULT_FRONTIER_MAX_RADIUS;
+    this.frozenMs =
+      (Number.isFinite(opts.frozenMinutes) ? opts.frozenMinutes : DEFAULT_FROZEN_MIN) * 60_000;
 
     this.tiles = new Map(); // tileKey -> {visits,firstT,lastT,cell,lb,tx,ty,zb,worldX,worldY,z}
     this.landblocks = new Set(); // 16-bit landblock numbers seen this session
@@ -209,6 +186,29 @@ export class ExploreMemory {
     // frontier candidate landing in one of these must never be offered as a
     // walkable outdoor target (it's an ocean-parked slot, not real terrain).
     this._dungeonLandblocks = new Set();
+
+    // Per-observe-cycle memo (C5-5) for the two derived queries whose cost or
+    // consistency the reports flag: frontier() (an O(r) ring search) and the
+    // loopVerdict() that internally re-calls it. Both are queried 3-4× per
+    // check-in/step (extensions.locationBlock: loopVerdict()+frontier(); bot.js
+    // ladder: _frontierSafe()+_loopVerdictSafe()). Caching each on _observeSeq —
+    // bumped by every ACCEPTED observe() — means every caller within one cycle
+    // sees the SAME object: one ring search instead of 3-4, and no intra-cycle
+    // inconsistency where loopVerdict's internal frontier disagreed with a
+    // caller's direct frontier(). The cache is transparent — callers keep the
+    // frozen frontier(opts)/loopVerdict() signatures unchanged.
+    this._observeSeq = 0;
+    this._frontierCache = null; // { seq, maxRadius, result }
+    this._verdictCache = null; // { seq, result }
+
+    // Frozen-pose (movement-dead) watchdog state — the RAW pose fingerprint of
+    // the last accepted observe, the time it last actually changed, and how
+    // many accepted observes have since landed on the unchanged pose. Fed in
+    // observe(); read by _isFrozen() so loopVerdict() can escalate a stuck
+    // client to severity 3 (FM-9).
+    this._lastPoseKey = null;
+    this._lastPoseMoveT = null;
+    this._observesSincePoseChange = 0;
   }
 
   /** Record the current tile from a raw pose; bumps visits; updates was/is. */
@@ -241,6 +241,21 @@ export class ExploreMemory {
     }
     this._lastObserveKey = key;
     this._lastObserveT = now;
+
+    // Accepted (non-deduped) observation: bump the cycle sequence so the
+    // per-cycle frontier()/loopVerdict() memo invalidates, and fold this raw
+    // pose into the frozen-pose watchdog. Placed AFTER the dedupe guard so a
+    // dual-driver double-poll (same tile within DEDUPE_WINDOW_MS) neither
+    // invalidates the cache nor counts as a fresh frozen-pose sample.
+    this._observeSeq += 1;
+    const poseKey = `${cell}|${pose.x.toFixed(1)}|${pose.y.toFixed(1)}|${z.toFixed(1)}`;
+    if (this._lastPoseKey == null || poseKey !== this._lastPoseKey) {
+      this._lastPoseKey = poseKey;
+      this._lastPoseMoveT = now;
+      this._observesSincePoseChange = 0;
+    } else {
+      this._observesSincePoseChange += 1;
+    }
 
     let tile = this.tiles.get(key);
     if (!tile) {
@@ -330,11 +345,24 @@ export class ExploreMemory {
     return true;
   }
 
-  /** Nearest UNVISITED tile (same z-band as `here`) by expanding ring search. */
+  /**
+   * Nearest UNVISITED tile (same z-band as `here`) by expanding ring search.
+   * Memoized per observe-cycle (keyed on _observeSeq + maxRadius) so the 3-4
+   * callers in one check-in/step share a single ring search — see the
+   * _frontierCache note in the constructor.
+   */
   frontier(opts = {}) {
+    const maxR = Number.isFinite(opts.maxRadius) ? opts.maxRadius : this.frontierMaxRadius;
+    const c = this._frontierCache;
+    if (c && c.seq === this._observeSeq && c.maxRadius === maxR) return c.result;
+    const result = this._computeFrontier(maxR);
+    this._frontierCache = { seq: this._observeSeq, maxRadius: maxR, result };
+    return result;
+  }
+
+  _computeFrontier(maxR) {
     const cur = this.current;
     if (!cur) return null;
-    const maxR = Number.isFinite(opts.maxRadius) ? opts.maxRadius : this.frontierMaxRadius;
     const curTx = Math.floor(cur.worldX / TILE_M);
     const curTy = Math.floor(cur.worldY / TILE_M);
     const zb = cur.zb;
@@ -372,8 +400,31 @@ export class ExploreMemory {
     return { worldX: best.worldX, worldY: best.worldY, dist: best.dist, bearingDeg, lb: landblockOf(lb) };
   }
 
-  /** {looping, severity:0..3, reason, correction}. */
+  /**
+   * {looping, severity:0..3, reason, correction}. Memoized per observe-cycle
+   * (keyed on _observeSeq) so a check-in/step that queries it AND queries
+   * frontier() separately shares one computation — the internal frontier() call
+   * below and any direct caller's frontier() then return the same cached object.
+   */
   loopVerdict() {
+    const c = this._verdictCache;
+    if (c && c.seq === this._observeSeq) return c.result;
+    const result = this._computeVerdict();
+    this._verdictCache = { seq: this._observeSeq, result };
+    return result;
+  }
+
+  // Raw-pose freeze test (movement-dead watchdog, FM-9): the pose has not
+  // changed for longer than frozenMs AND at least FROZEN_MIN_OBSERVES accepted
+  // observes have confirmed it — so a single stale/late reading can never trip
+  // it (anti-trigger-happiness guard).
+  _isFrozen() {
+    return this._lastPoseMoveT != null
+      && this.now() - this._lastPoseMoveT > this.frozenMs
+      && this._observesSincePoseChange >= FROZEN_MIN_OBSERVES;
+  }
+
+  _computeVerdict() {
     const cur = this.current;
     if (!cur) return { looping: false, severity: 0, reason: "", correction: "" };
     const v = this.variation();
@@ -381,8 +432,23 @@ export class ExploreMemory {
     const sinceLbChangeMs = this._lbChangeT != null ? this.now() - this._lbChangeT : 0;
     const fr = this.frontier();
     const frontierLocal = !!fr && fr.lb === cur.lb;
+    const stalled = sinceLbChangeMs > this.stallMs;
+    const frozenPose = this._isFrozen();
 
-    const sev3 = v >= SEV3_VARIATION || (sinceLbChangeMs > this.stallMs && frontierLocal);
+    // Severity 3 (WEDGED — strongest CORRECTION + the sev3 exit ladder) fires on
+    // ANY of:
+    //   • a deep single-tile revisit (>= SEV3_VARIATION), OR
+    //   • stalled in this landblock past stallMs AND the only reachable frontier
+    //     is inside this same landblock (classic wedge), OR
+    //   • stalled past stallMs AND there is NO reachable frontier anywhere
+    //     (fr === null) — the previously-missing arm (C5-6): a bot with nothing
+    //     unvisited in range would otherwise never escalate, OR
+    //   • the raw pose is frozen (movement-dead, FM-9) — a client-side freeze
+    //     the exit ladder must react to, not a mild loop.
+    const sev3 = v >= SEV3_VARIATION
+      || (stalled && frontierLocal)
+      || (stalled && fr === null)
+      || frozenPose;
     const sev2 = v >= SEV2_VARIATION || osc;
     const sev1 = v >= SEV1_VARIATION;
 
@@ -390,10 +456,15 @@ export class ExploreMemory {
     let reason = "";
     if (sev3) {
       severity = 3;
-      reason =
-        v >= SEV3_VARIATION
-          ? `revisited this tile ${v}×`
-          : `wedged ${Math.round(sinceLbChangeMs / 60_000)} min in this landblock with no reachable frontier outside it`;
+      if (v >= SEV3_VARIATION) {
+        reason = `revisited this tile ${v}×`;
+      } else if (frozenPose) {
+        reason = `pose frozen ~${Math.round((this.now() - this._lastPoseMoveT) / 60_000)} min — movement appears dead`;
+      } else if (fr === null) {
+        reason = `stalled ${Math.round(sinceLbChangeMs / 60_000)} min with no reachable unvisited tile anywhere`;
+      } else {
+        reason = `wedged ${Math.round(sinceLbChangeMs / 60_000)} min in this landblock with no reachable frontier outside it`;
+      }
     } else if (sev2) {
       severity = 2;
       reason = osc ? "bouncing between the same two tiles" : `revisited this tile ${v}×`;

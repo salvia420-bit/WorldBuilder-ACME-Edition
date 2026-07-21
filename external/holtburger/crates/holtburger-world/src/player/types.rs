@@ -1645,6 +1645,27 @@ pub struct PlayerState {
     /// lost destination packet cannot strand a stale flag: the first
     /// subsequent self `UpdatePosition` still clears it.
     pub teleport_arrival_pending: bool,
+
+    /// WP-2 (last-known-good cell, 2026-07-21). The most recent NON-NULL
+    /// landblock the local player was authoritatively placed at — stamped on
+    /// every non-null apply in [`WorldState::update_player_position_core`]
+    /// (`state/mutations.rs`). Consumed as the FINAL heal fallback in
+    /// `runtime_pose_for_guid` (after the working authoritative pose and the
+    /// entity position) so a transient NULL-landblock pose — a null `posA`
+    /// that arrives before the real arrival `posB` and is never reconciled —
+    /// reports the source cell instead of collapsing
+    /// `getLocalPlayerPose().objCellId` to 0.
+    ///
+    /// It also gates the retire-suppression in
+    /// `reconcile_authoritative_body_with_remote`: while a last-known cell is
+    /// held the local body is held Suspended at that cell rather than retired
+    /// on a NULL pose. A genuine world-exit tears the player down (guid →
+    /// NULL) rather than nulling a live position, so the retire stays valid
+    /// for remote entities and for a local player that never established a
+    /// cell.
+    ///
+    /// Default: `None` (no cell established before the first position apply).
+    pub last_valid_landblock: Option<Guid>,
 }
 
 impl Default for PlayerState {
@@ -1724,6 +1745,8 @@ impl PlayerState {
             pending_arrival_placement: false,
             // No teleport in flight at spawn.
             teleport_arrival_pending: false,
+            // WP-2: no last-known-good cell before the first position apply.
+            last_valid_landblock: None,
         }
     }
 

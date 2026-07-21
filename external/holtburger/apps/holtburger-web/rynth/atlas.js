@@ -43,9 +43,11 @@ const SUSPECT_STRIKES = 2; // this many overrun strikes -> suspect
 const STORAGE_KEY = "rynth.atlas.v1";
 const SCHEMA_VERSION = 1;
 
-function worldXY(objCellId, x, y) {
-  return [((objCellId >>> 24) & 0xff) * 192 + x, ((objCellId >>> 16) & 0xff) * 192 + y];
-}
+// World-frame (metres) from a full objCellId + landblock-local x,y — the ONE
+// copy now lives in nav_frame.js. This is the atlas's only import: nav_frame is
+// a pure math leaf (no host/session handle, not under rynth/ai/**), so the
+// module stays node-testable and free of the router/host module graph.
+import { worldXY } from "./nav_frame.js";
 
 // /loc degrees from a full objCellId + landblock-local x,y (observe.js frame),
 // for compact human-readable summaries only.

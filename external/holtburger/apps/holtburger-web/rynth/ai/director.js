@@ -294,6 +294,22 @@ export class RynthAiDirector {
     };
   }
 
+  /** Public busy predicate (SPEC §director, ADDITIVE): true while a check-in
+   * is in flight — the serialized _running/_inflight guard, exposed so
+   * external pressure gates (bot.js ExplorePressureController) read the
+   * director's busy state through a stable accessor instead of reaching into
+   * private fields. */
+  isBusy() {
+    return this._running === true || this._inflight != null;
+  }
+
+  /** Public timestamp (ms epoch) of the most recent check-in START, or null
+   * before the first check-in. Same value as status.lastCheckAt; exposed as a
+   * direct accessor so the pressure gates need not read private _lastCheckAt. */
+  get lastCheckAt() {
+    return this._lastCheckAt;
+  }
+
   /** One check-in (interval body + manual trigger). Serialized: while a
    * check-in is in flight, concurrent calls share it and resolve to the SAME
    * result object (documented choice per SPEC §director). Never rejects —
@@ -348,11 +364,14 @@ export class RynthAiDirector {
     let obsText;
     try {
       let tail = "";
-      // Wider memory window (24 entries ≈ 8 check-ins, was 10 ≈ ~3): a stateless
-      // director under token limits must not re-derive the same lessons ("X is
-      // not a vendor", "exit is a portal not a door") every check-in. Its own
-      // `note`s persist in this tail — the working memory it curates.
-      try { tail = this.journal?.renderTail(24, 2800) ?? ""; } catch { tail = ""; }
+      // Recency memory tail (C4-3): the director's own plan/result lines are
+      // self-echo — re-reading a wall of them reinforces whatever fixation
+      // produced them (the 2026-07-21 Qalaba'r loop). Collapse that echo to the
+      // single most-recent plan+result and keep every note/error (the curated,
+      // durable tier the model actually needs) — see _renderMemoryTail. The
+      // scratchpad (memory tool) is now the long-horizon store, so this tail is
+      // recency only: a tight 8-entry / 700-char window, was 24 / 2800.
+      try { tail = this._renderMemoryTail(8, 700); } catch { tail = ""; }
       // opts.spend is the "AI spend counters if given" hook of SPEC §observe.
       const obs = this.observe(this.bot, { journalTail: tail, now, spend: this._spend() });
       obsText = typeof obs?.text === "string" ? obs.text : String(obs ?? "");
@@ -521,6 +540,62 @@ export class RynthAiDirector {
     const n = Number(v);
     if (!Number.isFinite(n)) return this.intervalMinutes;
     return Math.min(this.maxIntervalMinutes, Math.max(this.minIntervalMinutes, n));
+  }
+
+  // Render the recency memory tail (C4-3). journal.js is frozen — renderTail
+  // has no kind filter — so the self-echo collapse lives here over its
+  // structured tail() accessor. Steps:
+  //  1. Pull the last 24 entries — the OLD anti-amnesia window — so a note up
+  //     to 24 entries back is still a candidate (no note-retention regression).
+  //  2. Collapse the plan/result self-echo to the single NEWEST of each kind
+  //     (the model's last decision + its outcome); the wall of older echoes
+  //     that reinforced the 2026-07-21 Qalaba'r fixation is dropped.
+  //  3. Keep EVERY note/error/budget entry — the curated, durable signal.
+  //  4. Bound to the n newest surviving lines then maxChars, formatting +
+  //     newest-first fit EXACTLY as journal.renderTail so the prompt is unchanged.
+  // Degrades to "" on any journal error (never throws into the check-in).
+  _renderMemoryTail(n, maxChars) {
+    if (!(maxChars > 0)) return "";
+    // The structured tail() accessor is what lets us filter by kind (the echo
+    // collapse below). A journal that only exposes the frozen renderTail()
+    // surface degrades to it (no collapse, but never an empty tail where one
+    // exists); a journal missing both degrades to "".
+    let entries;
+    try { entries = this.journal?.tail?.(24) ?? null; } catch { entries = null; }
+    if (!Array.isArray(entries)) {
+      try { return this.journal?.renderTail?.(n, maxChars) ?? ""; } catch { return ""; }
+    }
+    const ECHO = new Set(["plan", "result"]);
+    const seenEcho = new Set();
+    const kept = [];
+    for (let i = entries.length - 1; i >= 0; i--) { // newest-first
+      const e = entries[i];
+      if (!e || typeof e !== "object") continue;
+      if (ECHO.has(e.kind)) {
+        if (seenEcho.has(e.kind)) continue; // an older echo of a kept kind — collapse it away
+        seenEcho.add(e.kind);
+      }
+      kept.push(e);
+      if (Number.isFinite(n) && n > 0 && kept.length >= n) break; // bound kept lines
+    }
+    kept.reverse(); // back to chronological
+    const lines = kept.map((e) => {
+      const d = new Date(e.t);
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      return `${hh}:${mm} ${e.kind}: ${String(e.text ?? "").replace(/\s+/g, " ").trim()}`;
+    });
+    // Fit newest-first, emit chronological — oldest dropped first (journal.renderTail parity).
+    const out = [];
+    let used = 0;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const cost = lines[i].length + (out.length ? 1 : 0);
+      if (used + cost > maxChars) break;
+      out.unshift(lines[i]);
+      used += cost;
+    }
+    if (!out.length && lines.length) return lines[lines.length - 1].slice(0, maxChars);
+    return out.join("\n");
   }
 
   _journal(kind, text) {

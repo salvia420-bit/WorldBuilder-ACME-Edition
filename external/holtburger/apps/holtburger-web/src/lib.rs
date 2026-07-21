@@ -37388,40 +37388,78 @@ fn flatten_remote_pose_rows(
     (guids, landblocks, poses, sticky_flags)
 }
 
+/// B3-WI3 (2026-07-21) — pure decision for the next local-player pose
+/// shadow given the prior shadow (`prev`) and the freshly-computed
+/// candidate (`fresh`); `cell_of` yields a carrier's AC landblock id.
+///
+/// A fresh pose whose cell is absent (`None`) or NULL (`cell == 0`) must
+/// NOT clobber a good prior cell: a NULL cell is never a legitimate world
+/// position, so the JS camera would read it as "unknown cell" and regress
+/// `landblockId` to 0. Retain the prior WHOLE pose for the ≤few ticks
+/// until a real pose returns. Once a fresh non-NULL pose arrives it is
+/// adopted unconditionally. When there is no good prior to fall back on,
+/// the (bad) `fresh` value passes through unchanged rather than being
+/// invented into something else.
+///
+/// Gated `cfg(any(target_arch = "wasm32", test))` — mirroring the sibling
+/// `flatten_remote_pose_rows` — so the retention contract is pinned by a
+/// native unit test without pulling in the wasm-only `LocalPlayerPose`
+/// type, yet the fn is never compiled (and never warns) on non-test
+/// native builds.
+#[cfg(any(target_arch = "wasm32", test))]
+fn next_local_pose_shadow<T: Copy>(
+    prev: Option<T>,
+    fresh: Option<T>,
+    cell_of: impl Fn(&T) -> u32,
+) -> Option<T> {
+    match fresh {
+        // Fresh pose carries a real (non-NULL) cell → adopt it.
+        Some(f) if cell_of(&f) != 0 => Some(f),
+        // Fresh is absent or NULL-cell: keep a prior good cell if we hold
+        // one, otherwise let the (bad) fresh value pass through unchanged.
+        _ => match prev {
+            Some(p) if cell_of(&p) != 0 => Some(p),
+            _ => fresh,
+        },
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 fn publish_local_player_pose(
     world: &holtburger_world::WorldState,
     pose_cell: &std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
 ) {
-    let pose = match world.local_player_runtime_pose() {
-        Some(p) => p,
-        None => {
-            *pose_cell.borrow_mut() = None;
-            return;
+    // B3-WI3 (2026-07-21): compute the fresh candidate. `None` when the
+    // WorldState has no runtime pose yet (pre-spawn / mid-transition).
+    let fresh = world.local_player_runtime_pose().map(|pose| {
+        let q = &pose.rotation;
+        // Standard Z-up yaw extraction — identical formula to
+        // `quaternionToYaw` (`apps/holtburger-web/index.html:2757-2762`) and
+        // `frame_to_placement` (`lib.rs:~692-708`). `yaw = 0` → facing +Y,
+        // `yaw = π/2` → facing +X. Differs from
+        // `holtburger_common::Quaternion::to_heading`, which applies AC's
+        // legacy 450°-offset client-compass convention — that one is wrong
+        // for the camera path.
+        let siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+        let cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+        let heading = siny_cosp.atan2(cosy_cosp);
+        LocalPlayerPose {
+            x: pose.coords.x,
+            y: pose.coords.y,
+            z: pose.coords.z,
+            heading,
+            landblock_id: u32::from(pose.landblock_id),
+            // Track B2: grounded == not airborne. Lets the JS render path
+            // skip the per-frame `getTerrainVisualZ` clamp mid-jump so the
+            // integrator's ballistic z arc reaches the rig.
+            on_ground: !world.player.is_airborne,
         }
-    };
-    let q = &pose.rotation;
-    // Standard Z-up yaw extraction — identical formula to
-    // `quaternionToYaw` (`apps/holtburger-web/index.html:2757-2762`) and
-    // `frame_to_placement` (`lib.rs:~692-708`). `yaw = 0` → facing +Y,
-    // `yaw = π/2` → facing +X. Differs from
-    // `holtburger_common::Quaternion::to_heading`, which applies AC's
-    // legacy 450°-offset client-compass convention — that one is wrong
-    // for the camera path.
-    let siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
-    let cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
-    let heading = siny_cosp.atan2(cosy_cosp);
-    *pose_cell.borrow_mut() = Some(LocalPlayerPose {
-        x: pose.coords.x,
-        y: pose.coords.y,
-        z: pose.coords.z,
-        heading,
-        landblock_id: u32::from(pose.landblock_id),
-        // Track B2: grounded == not airborne. Lets the JS render path
-        // skip the per-frame `getTerrainVisualZ` clamp mid-jump so the
-        // integrator's ballistic z arc reaches the rig.
-        on_ground: !world.player.is_airborne,
     });
+    // B3-WI3: never let a NULL/absent fresh pose clobber a good prior cell.
+    // Read the shadow into a local (Copy) FIRST so the shared borrow is
+    // released before the write — no RefCell double-borrow.
+    let prev = *pose_cell.borrow();
+    *pose_cell.borrow_mut() = next_local_pose_shadow(prev, fresh, |p| p.landblock_id);
 
     // Movement trace (snapback investigation): record integrator pose vs raw
     // server (authoritative) pose vs integrator velocity, per tick, at source.
@@ -37452,6 +37490,84 @@ fn publish_local_player_pose(
                 });
             }
         }
+    }
+}
+
+/// B3-WI3 (2026-07-21) — native unit test pinning the raw-pose shadow
+/// retention rule extracted into [`next_local_pose_shadow`]. Uses a bare
+/// `u32` cell id as the carrier (the helper's decision depends solely on
+/// the landblock cell), so the contract is verified without the wasm-only
+/// [`LocalPlayerPose`] type.
+#[cfg(test)]
+mod tests_b3_pose_shadow_retention {
+    use super::next_local_pose_shadow;
+
+    // Carrier stand-in for `LocalPlayerPose`: `cell_of` is identity on a
+    // landblock id. `0` == NULL cell (never a legitimate world position).
+    fn cell(c: &u32) -> u32 {
+        *c
+    }
+
+    #[test]
+    fn keeps_prior_good_cell_when_fresh_absent() {
+        // (prev=Some(nonnull), fresh=None) → keep prev.
+        assert_eq!(
+            next_local_pose_shadow(Some(0x1234_5678u32), None, cell),
+            Some(0x1234_5678u32),
+        );
+    }
+
+    #[test]
+    fn keeps_prior_good_cell_when_fresh_is_null_cell() {
+        // (prev=Some(nonnull), fresh=Some(NULL=0)) → keep prev.
+        assert_eq!(
+            next_local_pose_shadow(Some(0x1234_5678u32), Some(0u32), cell),
+            Some(0x1234_5678u32),
+        );
+    }
+
+    #[test]
+    fn adopts_fresh_non_null_over_good_prior() {
+        // (fresh=nonnull) → adopt, regardless of a good prior.
+        assert_eq!(
+            next_local_pose_shadow(Some(0x1111_1111u32), Some(0x2222_2222u32), cell),
+            Some(0x2222_2222u32),
+        );
+    }
+
+    #[test]
+    fn adopts_fresh_non_null_over_null_prior() {
+        // (prev=Some(NULL), fresh=nonnull) → adopt fresh.
+        assert_eq!(
+            next_local_pose_shadow(Some(0u32), Some(0x2222_2222u32), cell),
+            Some(0x2222_2222u32),
+        );
+    }
+
+    #[test]
+    fn adopts_fresh_when_no_prior() {
+        // (prev=None, fresh=nonnull) → adopt.
+        assert_eq!(
+            next_local_pose_shadow(None, Some(0x2222_2222u32), cell),
+            Some(0x2222_2222u32),
+        );
+    }
+
+    #[test]
+    fn both_absent_stays_none() {
+        // No prior, no fresh → nothing to retain.
+        assert_eq!(next_local_pose_shadow::<u32>(None, None, cell), None);
+    }
+
+    #[test]
+    fn null_fresh_with_no_good_prior_propagates_fresh() {
+        // No good prior cell to retain → the (bad) fresh value passes
+        // through unchanged rather than being invented into something else.
+        assert_eq!(next_local_pose_shadow(None, Some(0u32), cell), Some(0u32));
+        assert_eq!(
+            next_local_pose_shadow(Some(0u32), Some(0u32), cell),
+            Some(0u32),
+        );
     }
 }
 
@@ -40249,6 +40365,19 @@ async fn recv_loop(
                                             "[step 3.6] AutonomousPosition heartbeat armed",
                                         );
                                     }
+                                    // B3-WI4 (2026-07-21): publish the pose
+                                    // shadow at the UpdatePosition tail so the
+                                    // JS cell reflects the just-applied
+                                    // authoritative pose the SAME tick it
+                                    // arrives (death/portal reconcile) instead
+                                    // of waiting for the next TickMovement
+                                    // publish. Uses the live `&mut w`
+                                    // (reborrowed shared) and the distinct
+                                    // `local_player_pose` cell — no RefCell
+                                    // double-borrow. The retention rule inside
+                                    // keeps a good prior cell if the runtime
+                                    // pose is transiently NULL/absent here.
+                                    publish_local_player_pose(w, &local_player_pose);
                                 }
                             }
                             entity_updates.borrow_mut().push(EntityUpdate {

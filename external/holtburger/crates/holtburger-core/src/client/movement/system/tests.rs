@@ -8737,4 +8737,321 @@ mod stale_null_cell_watchdog {
             "the stuck-since timer must clear once the cell reads non-null again"
         );
     }
+
+    /// §D2 pin (2026-07-21): the watchdog's null-cell predicate must also
+    /// arm on a MISSING body — the actual shape a NULL-landblock reconcile
+    /// produces (`reconcile_authoritative_body_with_remote` RETIRES the
+    /// body, it doesn't merely null its cell). This exercises the INNER
+    /// `scene.body(body_id) => None => true` arm (the guid→body-id mapping
+    /// still resolves — `authoritative_body_id_for_guid` derives the id
+    /// from the guid, not from body residency — but the body is gone).
+    /// Passes PRE-EDIT: it pins the pre-existing missing-body behavior that
+    /// the cosmetic outer-arm flip (`None => true`) makes consistent, NOT
+    /// the arrival-wedge z-clamp.
+    #[tokio::test]
+    async fn arms_on_missing_body_via_inner_arm() {
+        let guid = Guid(0x5000_00D3);
+        let pos = WorldPosition {
+            landblock_id: Guid(0x8602_01AD),
+            coords: Vector3::new(12.32, -28.48, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        let mut world = WorldState::synthetic();
+        world.player.guid = guid;
+        world.seed_local_player_entity(guid, "Player", pos);
+        // Retire the runtime body outright, leaving the guid→body-id mapping
+        // intact — the exact state the doc comment names as "body missing".
+        assert!(
+            world
+                .scene
+                .remove_body(SpatialBodyId::LocalPlayer(guid))
+                .is_some(),
+            "test setup: seed should have registered a body to remove"
+        );
+        // Precondition: the id still resolves, the body is gone.
+        assert!(
+            world.runtime_body_id_for_guid(guid).is_some(),
+            "guid→body-id mapping must survive body retirement"
+        );
+        assert!(
+            world
+                .scene
+                .body(SpatialBodyId::LocalPlayer(guid))
+                .is_none(),
+            "precondition: body must be missing (inner-arm None case)"
+        );
+
+        let mut movement = MovementSystem::new();
+        let mut session = Session::new_test();
+        let start = Instant::now();
+        movement
+            .tick(start, &mut world, &mut session)
+            .await
+            .expect("tick should survive a missing local body (no throw into the loop)");
+
+        assert_eq!(
+            movement.cell_null_since,
+            Some(start),
+            "a MISSING body must arm the stale-null watchdog via the inner arm"
+        );
+        // Fresh-null (not yet past the timeout) ⇒ no force-adopt/latch yet.
+        assert!(
+            !world.player.pending_arrival_placement,
+            "no force-adopt before the stale timeout elapses"
+        );
+    }
+}
+
+/// B1 (2026-07-21) — the arrival z-clamp in `consume_pending_arrival_placement`.
+/// A teleport arrival's placement transition (`faithful_find_placement_position`)
+/// de-embeds the capsule laterally and re-grounds it; the clamp adopts that
+/// lateral de-embed and any UPWARD lift but discards a downward-only settle, so
+/// the very next movement slice always has ground beneath the capsule (the live
+/// wedge). These build a minimal synthetic flat floor — NO DATs — so they run on
+/// every box, and directly compare the RAW bridge z against the ADOPTED z to
+/// prove the clamp is load-bearing (not merely invariant-preserving).
+mod arrival_placement_z_clamp {
+    use super::*;
+    use holtburger_common::Aabb;
+    use holtburger_dat::physics::{BspLeaf, BspNode, ResolvedPolygon};
+    use holtburger_world::spatial::CellPhysicsBsp;
+    use std::collections::HashMap;
+
+    // Indoor cell (low word != 0 ⇒ `is_indoors()`), landblock high bytes
+    // X=0x12=18, Y=0x34=52 (used by `global_coords()` to lift lb-local → world).
+    const CELL_ID: u32 = 0x1234_0100;
+    const CELL_X_LOCAL: f32 = 10.0;
+    const CELL_Y_LOCAL: f32 = 10.0;
+    // World floor plane the synthetic cell grounds against.
+    const FLOOR_WZ: f32 = 0.0;
+    const HE: f32 = 8.0;
+
+    /// A single upward-facing floor square at world (`cx`,`cy`,`wz`), the same
+    /// CCW winding as the world-crate `floor_poly_local` (produces +Z normal).
+    fn floor_poly(cx: f32, cy: f32, wz: f32) -> ResolvedPolygon {
+        let vertices = vec![
+            Vector3::new(cx - HE, cy - HE, wz),
+            Vector3::new(cx + HE, cy - HE, wz),
+            Vector3::new(cx + HE, cy + HE, wz),
+            Vector3::new(cx - HE, cy + HE, wz),
+        ];
+        let plane = ResolvedPolygon::make_plane(&vertices).expect("non-degenerate floor");
+        ResolvedPolygon {
+            num_points: vertices.len(),
+            vertices,
+            plane,
+        }
+    }
+
+    /// Seed CELL_ID with a single non-solid BSP leaf carrying one world-space
+    /// floor poly (`sphere: None` ⇒ the swept walk always descends and tests
+    /// the poly), plus the cell AABB so `current_cell*` resolves the indoor
+    /// pose. Identity cell frame ⇒ local polys ARE world coords.
+    fn seed_flat_floor(world: &mut WorldState, wx: f32, wy: f32) {
+        let mut polys = HashMap::new();
+        polys.insert(1u16, floor_poly(wx, wy, FLOOR_WZ));
+        let tree = BspNode::Leaf(BspLeaf {
+            index: 0,
+            solid: 0,
+            sphere: None,
+            poly_ids: vec![1],
+        });
+        world.scene.insert_cell_physics_bsp(
+            CELL_ID,
+            CellPhysicsBsp {
+                tree,
+                polys,
+                origin: Vector3::new(0.0, 0.0, 0.0),
+                orientation: Quaternion::identity(),
+                scale: 1.0,
+            },
+        );
+        world.scene.insert_cell_aabb(
+            CELL_ID,
+            Aabb::new(
+                Vector3::new(wx - HE - 1.0, wy - HE - 1.0, FLOOR_WZ - 5.0),
+                Vector3::new(wx + HE + 1.0, wy + HE + 1.0, FLOOR_WZ + 10.0),
+            ),
+        );
+    }
+
+    /// Build a world with the local player latched for arrival placement at a
+    /// given arrival z (lb-local == world z; landblocks tile only in X/Y).
+    fn world_at_arrival_z(z: f32) -> (MovementSystem, WorldState, WorldPosition) {
+        let guid = Guid(0x5000_0B10);
+        let mut world = WorldState::synthetic();
+        world.player.guid = guid;
+        let arrival = WorldPosition {
+            landblock_id: Guid(CELL_ID),
+            coords: Vector3::new(CELL_X_LOCAL, CELL_Y_LOCAL, z),
+            rotation: Quaternion::identity(),
+        };
+        seed_local_player(&mut world, guid, arrival);
+        // Floor at the arrival's WORLD X/Y (global_coords lifts lb-local by
+        // 18*192 / 52*192).
+        let world_xy = arrival.global_coords();
+        seed_flat_floor(&mut world, world_xy.x, world_xy.y);
+        world.player.pending_arrival_placement = true;
+        (MovementSystem::new(), world, arrival)
+    }
+
+    /// The RAW (un-clamped) bridge outcome, built with the exact object/gates
+    /// profile the consumer uses — so the comparison is against what
+    /// `consume_pending_arrival_placement` would have adopted before the clamp.
+    fn raw_placement_z(system: &MovementSystem, world: &WorldState, pose: &WorldPosition) -> f32 {
+        let (object, mut gates) = MovementSystem::transition_profile(world);
+        gates.outdoor_static_grounding = system.outdoor_static_grounding_enabled();
+        gates.retail_ground = system.retail_ground_enabled();
+        let raw = holtburger_world::spatial::faithful_bridge::faithful_find_placement_position(
+            world, pose, &object, &gates,
+        )
+        .expect("synthetic flat floor is valid placement geometry");
+        raw.pose.coords.z
+    }
+
+    /// The RAW (un-clamped) placement pose, same object/gates profile the
+    /// consumer uses — for a component-wise before/after of the clamp.
+    fn raw_placement_pose(
+        system: &MovementSystem,
+        world: &WorldState,
+        pose: &WorldPosition,
+    ) -> Option<WorldPosition> {
+        let (object, mut gates) = MovementSystem::transition_profile(world);
+        gates.outdoor_static_grounding = system.outdoor_static_grounding_enabled();
+        gates.retail_ground = system.retail_ground_enabled();
+        holtburger_world::spatial::faithful_bridge::faithful_find_placement_position(
+            world, pose, &object, &gates,
+        )
+        .map(|o| o.pose)
+    }
+
+    /// Arrival hovering 0.005 above the floor: the placement transition settles
+    /// it DOWN to the floor (raw z < arrival z), which the clamp must reject —
+    /// the adopted z stays at/above the arrival z so the next slice has ground.
+    #[test]
+    fn downward_settle_is_clamped_up_to_arrival_z() {
+        let arrival_z = FLOOR_WZ + 0.005;
+        let (system, mut world, pose) = world_at_arrival_z(arrival_z);
+
+        let raw_z = raw_placement_z(&system, &world, &pose);
+        eprintln!("  arrival_z={arrival_z:.4}  raw_bridge_z={raw_z:.4}");
+        // Preconditions: the scenario actually exercises a DOWNWARD settle
+        // (otherwise the clamp would be a no-op and the test vacuous).
+        assert!(
+            raw_z < arrival_z,
+            "geometry precondition: bridge must settle BELOW the arrival z \
+             (raw_z={raw_z:.4} >= arrival_z={arrival_z:.4}) for the clamp to matter"
+        );
+
+        system.consume_pending_arrival_placement(&mut world);
+        assert!(
+            !world.player.pending_arrival_placement,
+            "the latch must be consumed"
+        );
+        let adopted_z = world
+            .local_player_runtime_pose()
+            .expect("runtime pose present")
+            .coords
+            .z;
+        eprintln!("  adopted_z={adopted_z:.4}");
+        assert!(
+            adopted_z >= arrival_z - 1e-4,
+            "clamp: adopted z ({adopted_z:.4}) must not sink below arrival z ({arrival_z:.4})"
+        );
+        assert!(
+            adopted_z > raw_z + 1e-4,
+            "clamp must have LIFTED the adopted z above the raw downward settle \
+             (adopted={adopted_z:.4}, raw={raw_z:.4})"
+        );
+    }
+
+    /// DAT-gated real-geometry twin of the wedge, on the Holtburg grocer scene
+    /// (Environment 840). A real portal-destination-shaped arrival in the
+    /// vestibule (cell 0xA9B4016E, lb-local (81,33,94.355)) is settled DOWNWARD
+    /// by the placement transition (live-probed z 94.355 → ~94.0). The clamp
+    /// must (a) keep the server arrival z — NOT the downward settle — so the
+    /// next slice has ground (the wedge fix), and (b) leave the LATERAL
+    /// de-embed the transition applied untouched (the clamp is z-only). This is
+    /// the real-geometry guard the synthetic flat floor can't provide (a
+    /// below-floor synthetic arrival returns None — no upward de-embed exists in
+    /// the port; placement only grounds down or keeps). Skips (passes) without
+    /// base DATs.
+    #[test]
+    fn env840_real_arrival_clamps_z_and_keeps_lateral_deembed() {
+        let guid = Guid(0x5000_0B41);
+        let mut world = WorldState::synthetic();
+        world.player.guid = guid;
+        if !super::build_env840_scene_into(&mut world) {
+            eprintln!(
+                "SKIP env840_real_arrival_clamps_z_and_keeps_lateral_deembed: base dats unavailable"
+            );
+            return;
+        }
+        let arrival = WorldPosition {
+            landblock_id: Guid(0xA9B4_016E),
+            coords: Vector3::new(81.0, 33.0, 94.355),
+            rotation: Quaternion::identity(),
+        };
+        seed_local_player(&mut world, guid, arrival);
+        let system = MovementSystem::new();
+        let raw = raw_placement_pose(&system, &world, &arrival)
+            .expect("real grocer vestibule arrival yields a valid placement");
+        // Compare in the shared WORLD frame (global_coords): the output pose may
+        // re-bucket its low-word cell, but the landblock high bytes — hence the
+        // XY origin — are shared across the dungeon, and z is a passthrough.
+        let raw_g = raw.global_coords();
+        let arr_g = arrival.global_coords();
+
+        world.player.pending_arrival_placement = true;
+        system.consume_pending_arrival_placement(&mut world);
+        assert!(
+            !world.player.pending_arrival_placement,
+            "the latch must be consumed"
+        );
+        let adopted_g = world
+            .local_player_runtime_pose()
+            .expect("runtime pose present")
+            .global_coords();
+        eprintln!(
+            "  arrival_g=({:.3},{:.3},{:.3})  raw_g=({:.3},{:.3},{:.3})  adopted_g=({:.3},{:.3},{:.3})",
+            arr_g.x, arr_g.y, arr_g.z, raw_g.x, raw_g.y, raw_g.z, adopted_g.x, adopted_g.y, adopted_g.z,
+        );
+        // Precondition: this really is a DOWNWARD settle (server z above the
+        // grounded z) — otherwise the clamp would be a no-op here.
+        assert!(
+            raw_g.z < arr_g.z - 1e-3,
+            "geometry precondition: real placement must settle z DOWN \
+             (raw {:.3} not < arrival {:.3})",
+            raw_g.z,
+            arr_g.z
+        );
+        // (a) z clamped up to the server arrival z, NOT the downward settle.
+        let expected_z = raw_g.z.max(arr_g.z);
+        assert!(
+            (adopted_g.z - expected_z).abs() < 1e-2,
+            "clamp: adopted z {:.3} must equal max(raw {:.3}, arrival {:.3}) = {:.3}",
+            adopted_g.z,
+            raw_g.z,
+            arr_g.z,
+            expected_z
+        );
+        assert!(
+            adopted_g.z > raw_g.z + 1e-3,
+            "clamp must keep the server z above the downward settle \
+             (adopted {:.3} vs raw {:.3})",
+            adopted_g.z,
+            raw_g.z
+        );
+        // (b) the clamp is surgical — z only. Whatever lateral (XY) de-embed the
+        // transition produced is adopted verbatim (never pinned back to arrival).
+        assert!(
+            (adopted_g.x - raw_g.x).abs() < 1e-2 && (adopted_g.y - raw_g.y).abs() < 1e-2,
+            "clamp must preserve the lateral de-embed: adopted XY ({:.3},{:.3}) \
+             must match raw XY ({:.3},{:.3})",
+            adopted_g.x,
+            adopted_g.y,
+            raw_g.x,
+            raw_g.y
+        );
+    }
 }

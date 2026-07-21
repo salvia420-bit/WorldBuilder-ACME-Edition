@@ -50,10 +50,9 @@ const REISSUE_MS = 3000; // re-issue moveTo if not closing
 const PORTAL_SETTLE_MS = 4000; // after a real portal hop, let streaming catch up
 const SEAM_JUMP_M = 30; // world-frame jump vs last known pose >= this = teleport
 
-// World-frame (metres) from a full objCellId + landblock-local x,y.
-function worldXY(objCellId, x, y) {
-  return [((objCellId >>> 24) & 0xff) * 192 + x, ((objCellId >>> 16) & 0xff) * 192 + y];
-}
+// World-frame (metres) from a full objCellId + landblock-local x,y — the ONE
+// copy now lives in nav_frame.js (C3 Stage-0 dedup).
+import { worldXY } from "./nav_frame.js";
 
 export class RynthRouter {
   constructor(host, opts = {}) {

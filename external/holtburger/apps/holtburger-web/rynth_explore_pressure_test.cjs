@@ -47,14 +47,24 @@ function mkRouter(state = "IDLE") {
 }
 function mkBot({
   enabled = true, running = false, inflight = null, busy = false, lastMission = null,
-  extensions = undefined, travel = undefined,
+  extensions = undefined, travel = undefined, followRoute = undefined,
 } = {}) {
   const notes = [];
   const gotoCalls = [];
   const travelCalls = [];
+  const followRouteCalls = [];
+  // Director double mirrors director.js's PUBLIC surface (WP-5): bot.js now
+  // reads busy/last-check through isBusy()/lastCheckAt, so the mock exposes
+  // those, derived from the same private fields the tests still poke
+  // (_running/_inflight/_lastCheckAt) — behavior of every assertion unchanged.
+  const director = {
+    enabled, _running: running, _inflight: inflight, _lastCheckAt: null,
+    isBusy() { return this._running === true || this._inflight != null; },
+    get lastCheckAt() { return this._lastCheckAt; },
+  };
   const bot = {
     ai: {
-      director: { enabled, _running: running, _inflight: inflight, _lastCheckAt: null },
+      director,
       journal: { add: (kind, text) => notes.push({ kind, text: String(text) }) },
       extensions,
     },
@@ -71,7 +81,17 @@ function mkBot({
     _notes: notes,
     _gotoCalls: gotoCalls,
     _travelCalls: travelCalls,
+    _followRouteCalls: followRouteCalls,
   };
+  // WP-10: opt-in recovery-capable executor spy (bot.followRoute -> doFollowRoute
+  // -> replayRoute recovery). Only present when a test asks for it, so every
+  // OTHER test keeps exercising the raw bot.travel fallback unchanged.
+  if (followRoute !== undefined) {
+    bot.followRoute = (legs, opts) => {
+      followRouteCalls.push(legs);
+      return Promise.resolve(typeof followRoute === "function" ? followRoute(legs, opts) : { ok: true, state: "DONE" });
+    };
+  }
   return bot;
 }
 // Minimal ExploreMemory double (frozen-contract shape, DESIGN-surveyor-
@@ -715,10 +735,12 @@ const flush = () => new Promise((r) => setImmediate(r));
 
   // ---- change #1: BFS pathing — a 4-cell corridor where the frontier's
   // nearest cell is NOT adjacent to `cur` must walk the REAL multi-leg path
-  // (via bot.travel, the same executor _escalateOut already uses), not a
-  // single straight-line MoveToPosition through the intervening cells. This
-  // is the exact root-cause scenario: the OLD code's toLegs(graph,[cur,
-  // target]) never checked adjacency at all. ----
+  // (via the executor, the same mechanism _escalateOut uses), not a single
+  // straight-line MoveToPosition through the intervening cells. This is the
+  // exact root-cause scenario: the OLD code's toLegs(graph,[cur,target]) never
+  // checked adjacency at all. This mock bot has NO followRoute, so it exercises
+  // the bot.travel fallback; WP-10 also folds in doorway pre-approach, so the
+  // 4-cell path expands to 7 waypoint legs (2 per transition + 1 final). ----
   {
     t = 19_000_000;
     const LB = 0x01ad0000;
@@ -750,13 +772,28 @@ const flush = () => new Promise((r) => setImmediate(r));
     check("BFS pathing: multi-leg travel issued via bot.travel, not a single MoveToPosition",
       bot._travelCalls.length === 1 && host._moves.length === 0,
       JSON.stringify({ travel: bot._travelCalls, moves: host._moves }));
-    check("BFS pathing: the full 4-cell corridor is walked (ends at D)",
-      bot._travelCalls[0]?.length === 4 && bot._travelCalls[0][3]?.lb === D);
+    check("BFS pathing: doorway pre-approach expands the 4-cell path to 7 waypoint legs ending at D",
+      bot._travelCalls[0]?.length === 7 && (bot._travelCalls[0][6]?.lb >>> 0) === D,
+      JSON.stringify(bot._travelCalls[0]));
+    // The first leg is the 30% A->B line-up point (world x = 0 + 24*0.3 = 7.2)
+    // stamped with the DESTINATION cell B — proof the doorway waypoints are
+    // present, not just the raw cell centres. Reconstruct world x from the lb.
+    {
+      const l0 = bot._travelCalls[0]?.[0];
+      const worldX0 = l0 ? l0.x + ((l0.lb >>> 24) & 0xff) * 192 : NaN;
+      check("BFS pathing: first leg is the 30% pre-approach point stamped with destination B",
+        (l0?.lb >>> 0) === B && Math.abs(worldX0 - 7.2) < 0.01, `lb=${l0?.lb?.toString(16)}, worldX=${worldX0}`);
+    }
     check("BFS pathing: journal mentions the multi-leg route", bot._notes[0].text.includes("leg route"));
   }
 
-  // ---- change #1 (no-path case): unreachable target falls back to the
-  // ORIGINAL straight-line single MoveToPosition — no regression, no crash. ----
+  // ---- WP-10 (no-path case): a non-adjacent target the planner CANNOT reach
+  // now issues ZERO MoveToPosition — the old straight-line-through-walls hop is
+  // gone. The frontier hop degrades to "no reachable frontier here" (returns
+  // false), and with an isolated `cur` (no graph neighbors) the legacy sweep
+  // no-ops too, so escalation / the next tick take over. NEVER a wall-crossing
+  // hop. (findPath IS available here, so the findPath-less legacy fallback that
+  // keeps older-router doubles moving is correctly bypassed.) ----
   {
     t = 19_500_000;
     const LB = 0x01ae0000;
@@ -781,9 +818,62 @@ const flush = () => new Promise((r) => setImmediate(r));
     c._lastMoveAt = t - 30_000;
     c._lastStepAt = t - 30_000;
     await c._step(t);
-    check("BFS pathing (no path): falls back to the legacy straight-line MoveToPosition",
-      bot._travelCalls.length === 0 && host._moves.length === 1 && host._moves[0].lb === ISOLATED,
-      JSON.stringify(host._moves));
+    check("WP-10 no-path: a planner-unreachable target issues ZERO MoveToPosition (no straight-line)",
+      host._moves.length === 0 && bot._travelCalls.length === 0 && bot._followRouteCalls.length === 0,
+      JSON.stringify({ moves: host._moves, travel: bot._travelCalls, follow: bot._followRouteCalls }));
+  }
+
+  // ---- WP-10: recovery-capable executor + doorway pre-approach. A REACHABLE
+  // non-adjacent frontier routes the real multi-cell path through
+  // bot.followRoute (doFollowRoute -> replayRoute's indoor recovery), NOT the
+  // raw bot.travel and NOT a single MoveToPosition. The legs handed to the
+  // executor carry the doorway pre-approach waypoints (30%/50% line-up points
+  // per transition). This is the WP-10 headline: "multi-hop legs carry
+  // pre-approach waypoints" and a non-adjacent target issues ZERO
+  // MoveToPosition. ----
+  {
+    t = 19_700_000;
+    const LB = 0x01d00000;
+    const A = LB | 0x100, B = LB | 0x101, C = LB | 0x102; // corridor A-B-C, frontier at C (2 hops from A)
+    const graph = new Map([
+      [A, { pos: { x: 0, y: 0, z: 0 }, neighbors: [B] }],
+      [B, { pos: { x: 24, y: 0, z: 0 }, neighbors: [A, C] }],
+      [C, { pos: { x: 48, y: 0, z: 0 }, neighbors: [B] }],
+    ]);
+    const pose = { objCellId: A, x: 8, y: 2, z: 0 };
+    const host = mkHost(pose);
+    const em = mkExploreMemory({ frontier: () => ({ worldX: 48, worldY: 0, dist: 48, bearingDeg: 90, lb: LB >>> 16 }) });
+    const bot = mkBot({ extensions: { exploreMemory: em }, followRoute: true }); // recovery executor available
+    const ir = {
+      isEnvCellId: IR.isEnvCellId,
+      nearestCell: () => C, // frontier resolves to the non-adjacent corridor end
+      buildGraphFromWasm: async () => graph,
+      findPath: irReal.findPath,
+      toLegs: irReal.toLegs,
+    };
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), ir, { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    c._lastMoveAt = t - 30_000;
+    c._lastStepAt = t - 30_000;
+    await c._step(t);
+    check("WP-10 recovery: routes via bot.followRoute (recovery executor), not raw bot.travel",
+      bot._followRouteCalls.length === 1 && bot._travelCalls.length === 0,
+      JSON.stringify({ follow: bot._followRouteCalls.length, travel: bot._travelCalls.length }));
+    check("WP-10 recovery: issues ZERO MoveToPosition for a multi-hop indoor route", host._moves.length === 0);
+    const legs = bot._followRouteCalls[0] || [];
+    // A-B-C = 2 transitions -> 2 waypoints each (30%/50%) + 1 final centre = 5 legs.
+    check("WP-10 doorway pre-approach: multi-hop legs carry pre-approach waypoints (5 legs for 3 cells)",
+      legs.length === 5, JSON.stringify(legs));
+    // First leg = the 30% A->B line-up point (world x = 0 + 24*0.3 = 7.2),
+    // stamped with the DESTINATION cell B, reconstructed from the lb offset.
+    const firstWorldX = legs[0] ? legs[0].x + ((legs[0].lb >>> 24) & 0xff) * 192 : NaN;
+    check("WP-10 doorway pre-approach: first leg is the 30% line-up point stamped with destination B",
+      (legs[0]?.lb >>> 0) === B && Math.abs(firstWorldX - 7.2) < 0.01,
+      `lb=${legs[0]?.lb?.toString(16)}, worldX=${firstWorldX}`);
+    check("WP-10 doorway pre-approach: final leg lands on the frontier cell C",
+      (legs[legs.length - 1]?.lb >>> 0) === C);
+    check("WP-10 recovery: journal names the multi-leg route", bot._notes[0].text.includes("leg route"));
+    check("WP-10 recovery: never touches InvokeChatParser", host._chatCalls.length === 0);
   }
 
   // ---- change #2: seen-portal ledger — a portal seen at tick 1 is still a

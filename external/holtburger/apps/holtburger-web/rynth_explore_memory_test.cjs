@@ -574,6 +574,135 @@ function check(name, ok, detail) {
     }
   }
 
+  // ── per-cycle memoization of frontier()/loopVerdict() (C5-5) ─────────────
+  // Within ONE observe cycle every frontier()/loopVerdict() caller must get the
+  // SAME result (one ring search, no intra-cycle inconsistency); an accepted
+  // observe() must invalidate the cache so the next cycle recomputes.
+  {
+    const clock = makeClock();
+    const em = new ExploreMemory({ now: clock.now });
+    em.observe(poseAt(0.5 * TILE_M, 0.5 * TILE_M, 0));
+
+    const f1 = em.frontier();
+    const f2 = em.frontier();
+    check("frontier memoized within a cycle (identical object, one ring search)", f1 !== null && f1 === f2,
+      JSON.stringify({ f1, f2 }));
+
+    // loopVerdict()'s internal frontier() shares the same cache -> the direct
+    // frontier() and the verdict see one consistent frontier this cycle.
+    em.loopVerdict();
+    const f3 = em.frontier();
+    check("frontier still identical after loopVerdict() in the same cycle", f3 === f1);
+
+    const v1 = em.loopVerdict();
+    const v2 = em.loopVerdict();
+    check("loopVerdict memoized within a cycle (identical object)", v1 === v2);
+
+    // A new accepted observe() bumps the cycle -> both memos invalidate and the
+    // NEXT query is a fresh object (recomputed), never the stale cached one.
+    clock.advance(DEDUPE_WINDOW_MS + 10);
+    em.observe(poseAt(30, 6, 0)); // move to a new tile
+    const f4 = em.frontier();
+    check("frontier recomputed after observe (cache invalidated across cycles)", f4 !== f1);
+    const v3 = em.loopVerdict();
+    check("loopVerdict recomputed after observe (cache invalidated across cycles)", v3 !== v1);
+
+    // A de-duped observe() (same tile within the window) is NOT a new cycle and
+    // must NOT invalidate the cache.
+    const f5 = em.frontier();
+    clock.advance(100); // within DEDUPE_WINDOW_MS
+    em.observe(poseAt(30, 6, 0)); // de-duped double-poll
+    const f6 = em.frontier();
+    check("de-duped observe does not invalidate the per-cycle memo", f6 === f5);
+  }
+
+  // ── stale-cache guard: a tile visited BETWEEN two frontier() calls must be
+  // reflected (the mutate-between-calls test the package calls for) ──────────
+  {
+    const clock = makeClock();
+    const em = new ExploreMemory({ now: clock.now });
+    em.observe(poseAt(0.5 * TILE_M, 0.5 * TILE_M, 0)); // center; all 8 neighbors unvisited
+    const fr1 = em.frontier();
+    check("mutate-guard: initial frontier found", !!fr1, JSON.stringify(fr1));
+
+    // Walk onto fr1's exact tile (it is now visited), then back to center.
+    clock.advance(DEDUPE_WINDOW_MS + 10);
+    em.observe(poseAt(fr1.worldX, fr1.worldY, 0));
+    clock.advance(DEDUPE_WINDOW_MS + 10);
+    em.observe(poseAt(0.5 * TILE_M, 0.5 * TILE_M, 0));
+    const fr2 = em.frontier();
+    check("mutate-guard: a tile visited between calls is no longer the frontier (no stale cache)",
+      !(Math.abs(fr2.worldX - fr1.worldX) < 1e-6 && Math.abs(fr2.worldY - fr1.worldY) < 1e-6),
+      JSON.stringify({ fr1, fr2 }));
+  }
+
+  // ── new severity-3 arm: stalled with NO reachable frontier anywhere ───────
+  {
+    // frontierMaxRadius:0 -> frontier() is always null; stallMinutes:0 -> any
+    // elapsed time is "stalled". Together this is the "nothing unvisited in
+    // range + stuck" wedge that previously never reached severity 3 (C5-6).
+    const clock = makeClock();
+    const em = new ExploreMemory({ now: clock.now, stallMinutes: 0, frontierMaxRadius: 0 });
+    em.observe(poseAt(6, 6, 0));
+    clock.advance(1); // > stallMs(0)
+    check("frontier is null with maxRadius 0 (precondition)", em.frontier() === null);
+    const v = em.loopVerdict();
+    check("severity 3 when stalled with no reachable frontier anywhere", v.severity === 3, JSON.stringify(v));
+    check("no-frontier wedge reason names the missing frontier", /no reachable|anywhere/.test(v.reason), v.reason);
+
+    // GUARD: no reachable frontier ALONE (not yet stalled) must NOT force sev3.
+    const clock2 = makeClock();
+    const em2 = new ExploreMemory({ now: clock2.now, stallMinutes: 100, frontierMaxRadius: 0 });
+    em2.observe(poseAt(6, 6, 0));
+    clock2.advance(1000); // nowhere near the 100-min stall
+    check("no-frontier alone (not stalled) does NOT force severity 3", em2.loopVerdict().severity !== 3,
+      JSON.stringify(em2.loopVerdict()));
+  }
+
+  // ── new severity-3 arm: frozen pose (movement-dead watchdog, FM-9) ────────
+  {
+    // frozenMinutes:0 -> any elapsed time since the pose last changed qualifies,
+    // but FROZEN_MIN_OBSERVES still requires >=2 accepted confirmations.
+    const clock = makeClock();
+    const em = new ExploreMemory({ now: clock.now, frozenMinutes: 0 });
+    em.observe(poseAt(6, 6, 0));                       // pose change; obsSince=0
+    clock.advance(DEDUPE_WINDOW_MS + 10);
+    em.observe(poseAt(6, 6, 0));                       // same raw pose; obsSince=1
+    clock.advance(DEDUPE_WINDOW_MS + 10);
+    em.observe(poseAt(6, 6, 0));                       // same raw pose; obsSince=2 -> frozen
+    const v = em.loopVerdict();
+    check("frozen pose escalates to severity 3", v.severity === 3, JSON.stringify(v));
+    check("frozen reason names the dead movement", /frozen|movement/.test(v.reason), v.reason);
+    check("frozen sev3 carries the strongest correction", v.correction.length > 0);
+
+    // GUARD 1: a single confirmation is not enough (needs >= FROZEN_MIN_OBSERVES).
+    const c1 = makeClock();
+    const emOne = new ExploreMemory({ now: c1.now, frozenMinutes: 0 });
+    emOne.observe(poseAt(6, 6, 0));
+    c1.advance(5000);
+    check("one frozen observe does not trip sev3 (needs >=2 confirmations)", emOne.loopVerdict().severity !== 3,
+      JSON.stringify(emOne.loopVerdict()));
+
+    // GUARD 2: a genuinely MOVING pose is never frozen, even with frozenMinutes:0.
+    const c2 = makeClock();
+    const emMove = new ExploreMemory({ now: c2.now, frozenMinutes: 0 });
+    emMove.observe(poseAt(6, 6, 0));
+    c2.advance(DEDUPE_WINDOW_MS + 10);
+    emMove.observe(poseAt(30, 6, 0)); // moved -> obsSince resets
+    c2.advance(DEDUPE_WINDOW_MS + 10);
+    emMove.observe(poseAt(60, 6, 0)); // moved again
+    check("a moving pose is never frozen (no false sev3)", emMove.loopVerdict().severity !== 3,
+      JSON.stringify(emMove.loopVerdict()));
+
+    // GUARD 3: the DEFAULT frozen window (3 min) is not tripped by a few
+    // seconds of same-tile polling — protects the existing severity-1/2 ladder.
+    const c3 = makeClock();
+    const emDefault = new ExploreMemory({ now: c3.now }); // default frozenMinutes=3
+    for (let i = 0; i < 4; i++) { emDefault.observe(poseAt(6, 6, 0)); c3.advance(DEDUPE_WINDOW_MS + 10); }
+    check("default 3-min frozen window not tripped by ~6s of polling (variation ladder intact)",
+      emDefault.loopVerdict().severity === 1, JSON.stringify(emDefault.loopVerdict()));
+  }
+
   console.log(`${pass} pass, ${fail} fail`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

@@ -37,11 +37,10 @@
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8767";
 
-// World-frame (metres) from a full objCellId + landblock-local x,y — mirror of
-// router.js's worldXY (avoid circles are placed at a blocked leg's world pose).
-function worldXY(objCellId, x, y) {
-  return [((objCellId >>> 24) & 0xff) * 192 + x, ((objCellId >>> 16) & 0xff) * 192 + y];
-}
+// World-frame (metres) from a full objCellId + landblock-local x,y — the ONE
+// copy now lives in nav_frame.js (avoid circles are placed at a blocked leg's
+// world pose). C3 Stage-0 dedup.
+import { worldXY } from "./nav_frame.js";
 
 // Two plans are "identical" (=> a v1 sidecar ignored our "avoid") when they have
 // the same leg count and each leg's lb + x/y agree within epsilon. Used to abort

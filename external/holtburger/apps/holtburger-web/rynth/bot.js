@@ -19,6 +19,12 @@
 //   });
 //   // bot.host, bot.kernel, bot.channel, bot.status(); bot.stop()
 
+// World-frame + outdoor-LandCell math — the ONE copy (C3 Stage-0 dedup). A
+// static relative import resolves against this module's own URL, so it works
+// both from the served page and under file:// (node fixture tests) — the same
+// property the runtime `base` gives the dynamic sibling imports below.
+import { worldX, worldY, worldToOutdoorCell } from "./nav_frame.js";
+
 export async function createGrindBot(sessionHandle, config = {}) {
   // Sibling-module base derived from THIS module's URL: identical to the
   // old hardcoded "/apps/holtburger-web/rynth" when served from the page,
@@ -45,10 +51,27 @@ export async function createGrindBot(sessionHandle, config = {}) {
   );
   const buffIds = (config.buffs || []).filter((id) => known.has(id));
 
+  // Persona survival wiring (WP-4, C5-2 + C5-3 / FM-2 + FM-3): an explorer
+  // bot boots with combat hunting OFF and looting OFF so it never picks a
+  // fight it can't win nor diverts to a corpse while surveying — the director
+  // re-arms either at runtime (hunt_start / set_loot_min_value). The grind
+  // persona (the default) keeps both on. Persona arrives as config.ai.persona
+  // (index.html ?botPersona=explorer, URL-carried across reconnect reboots).
+  const isExplorer =
+    !!config.ai && typeof config.ai === "object" && config.ai.persona === "explorer";
+
   const combat = new cl.RynthCombatLoop(host, { priorities: config.priorities || {} });
+  if (isExplorer) combat.enabled = false; // hunting OFF at boot (combat_loop _scanTargets gate); hunt_start re-arms
   const buff = buffIds.length ? new bl.RynthBuffLoop(host, buffIds) : null;
   if (buff) bl.loadSpellLadders(); // B4/B5 — preload the family tier table
-  const loot = config.loot === false ? null : new ll.RynthLootLoop(host, config.loot || {});
+  // Explicit config.loot.enabled always wins; otherwise explorer -> false,
+  // grind -> true. loot_loop's own `enabled` flag makes tick() a no-op (zero
+  // MoveToPosition) when off; config.loot === false drops the loop entirely.
+  const lootOpts = config.loot || {};
+  const loot =
+    config.loot === false
+      ? null
+      : new ll.RynthLootLoop(host, { ...lootOpts, enabled: lootOpts.enabled ?? !isExplorer });
   const vitals = config.vitals === false ? null : new vt.RynthVitals(host, { thresholds: config.vitals || {} });
 
   const kernel = new kn.RynthBotKernel(host, { combat, buff, loot, vitals });
@@ -90,12 +113,19 @@ export async function createGrindBot(sessionHandle, config = {}) {
   // see ExplorePressureController below for the full activation contract.
   let explorePressure = null;
   if (config.explorePressure === true) {
-    const [irMod, opsMod, townsMod] = await Promise.all([
+    const [irMod, opsMod, townsMod, guardMod] = await Promise.all([
       import(`${base}/indoor_router.js`),
       import(`${base}/ai/operator_stop.js`),
       import(`${base}/ai/tools/towns.js`),
+      import(`${base}/nav_guard.js`),
     ]);
-    explorePressure = new ExplorePressureController(host, router, irMod, opsMod, {
+    // WP-9 nav shield: fold the pure guard (guardLeg/legalIndoorReroute) into
+    // the indoor-router namespace the controller reads as `this.ir`, so leg
+    // issuance can gate on this.ir.guardLeg. indoor_router.js itself stays
+    // import-free (its tmpdir-copy sim test copies only that one file), so the
+    // merge happens here rather than as a re-export inside indoor_router.
+    const ir = { ...irMod, guardLeg: guardMod.guardLeg, legalIndoorReroute: guardMod.legalIndoorReroute };
+    explorePressure = new ExplorePressureController(host, router, ir, opsMod, {
       log: typeof config.explorePressureLog === "function" ? config.explorePressureLog : undefined,
       towns: townsMod.TOWNS,
     });
@@ -649,12 +679,8 @@ async function wireAiDirector(bot, aiConfig, base) {
   if (aiCfg?.autoStart !== false) director.start();
 }
 
-// World-frame metres from a full objCellId + landblock-local x/y. Every file
-// that needs this (router.js, indoor_router.js, dungeon_nav.js, goto_compose.js)
-// keeps its own 2-line copy rather than importing it, to stay decoupled from
-// each other's module graph — same convention here (dungeon_nav.js:86-89).
-function worldX(cellId, x) { return ((cellId >>> 24) & 0xff) * 192 + x; }
-function worldY(cellId, y) { return ((cellId >>> 16) & 0xff) * 192 + y; }
+// worldX / worldY are imported from nav_frame.js at the top of this module
+// (C3 Stage-0 dedup) — the ONE copy of the world-frame math.
 
 // Step 5 (hard-loop last resort) hop length — long enough to make real
 // progress toward the nearest unvisited town's bearing, short of anything
@@ -857,11 +883,11 @@ export class ExplorePressureController {
   }
 
   // A fresh director check-in landing releases the random-hop stand-down.
-  // director._lastCheckAt is a plain timestamp field (director.js), read
-  // defensively — it is not part of the frozen director interface.
+  // director.lastCheckAt is a public accessor (director.js, SPEC §director),
+  // still read defensively via optional chaining.
   _trackCheckIn() {
     try {
-      const lastCheck = this.bot?.ai?.director?._lastCheckAt ?? null;
+      const lastCheck = this.bot?.ai?.director?.lastCheckAt ?? null;
       if (lastCheck != null && lastCheck !== this._lastCheckSeen) {
         this._lastCheckSeen = lastCheck;
         this._consecutiveHops = 0;
@@ -883,7 +909,7 @@ export class ExplorePressureController {
     if (this.bot.globalRouter?.busy) return false;
     const rs = this.router?.status?.state;
     if (rs !== "IDLE" && rs !== "DONE" && rs !== "FAILED") return false; // an active route owns movement
-    if (director._running === true || director._inflight != null) return false; // check-in in flight
+    if (director.isBusy()) return false; // check-in in flight (director's public busy accessor)
     if (this._standDown) return false;
     if (now - this._lastMoveAt < 12_000) return false; // tuned 25s->12s 2026-07-20 (stream felt statue-y)
     if (now - this._lastStepAt < 15_000) return false; // tuned 25s->15s; still >= the 1-step/15s spirit of the cap
@@ -908,7 +934,7 @@ export class ExplorePressureController {
     if (this.bot.globalRouter?.busy) return true;
     const rs = this.router?.status?.state;
     if (rs !== "IDLE" && rs !== "DONE" && rs !== "FAILED") return true;
-    if (director._running === true || director._inflight != null) return true;
+    if (director.isBusy()) return true; // check-in in flight (director's public busy accessor)
     return false;
   }
 
@@ -992,17 +1018,27 @@ export class ExplorePressureController {
   // shared here by every hop kind (frontier/landblock/town/legacy) rather
   // than re-inlined per call site.
   _worldToLandCell(tx, ty, z) {
-    const lbX = Math.max(0, Math.min(255, Math.floor(tx / 192)));
-    const lbY = Math.max(0, Math.min(255, Math.floor(ty / 192)));
-    const lx = tx - lbX * 192, ly = ty - lbY * 192;
-    const cellIdx = 1 + Math.min(7, Math.floor(lx / 24)) * 8 + Math.min(7, Math.floor(ly / 24));
-    const lb = (((lbX << 24) | (lbY << 16) | cellIdx) >>> 0);
-    return { lb, x: lx, y: ly, z };
+    return worldToOutdoorCell(tx, ty, z); // the ONE copy (nav_frame.js)
   }
 
   async _indoorHop(pose, em) {
     if (typeof this.ir.buildGraphFromWasm !== "function" || typeof this.ir.toLegs !== "function") return;
     const cellId = pose.objCellId >>> 0;
+    // WP-9 nav shield: a z≈0 EnvCell pose is un-solved (streaming/respawn gap) —
+    // don't path FROM it; hold this tick and let the next tick re-solve. Gated
+    // on this.ir.guardLeg so it no-ops for a test double / older indoor_router
+    // (degrades to today's behavior). One journal line per hold episode.
+    if (typeof this.ir.guardLeg === "function") {
+      const v = this.ir.guardLeg({ cellId, z: pose.z }, { cellId, z: pose.z });
+      if (v && v.ok === false && v.reason === "unsolved") {
+        if (this._navHoldMsg !== v.message) {
+          this._navHoldMsg = v.message;
+          this._journalNote(`[pressure] ${v.message}`);
+        }
+        return;
+      }
+      this._navHoldMsg = null; // solved this tick — let the next hold re-log
+    }
     const lb = (cellId >>> 16) >>> 0;
     let graph = this._graphCache && this._graphCache.lb === lb ? this._graphCache.graph : null;
     if (!graph) {
@@ -1127,19 +1163,43 @@ export class ExplorePressureController {
     if (fromCell === toCell) return false; // nothing to route — caller decides
     let path = null;
     try { path = this.ir.findPath(graph, fromCell, toCell, {}); } catch { path = null; }
-    if (!Array.isArray(path) || path.length < 2) return false; // unreachable
+    if (!Array.isArray(path) || path.length < 2) return false; // unreachable — caller degrades (no straight-line)
+    // Doorway pre-approach (WP-10, C1 P2): route through toLegs' doorwayApproach
+    // — for each cell transition it emits a 30% line-up waypoint + a 50%
+    // through-point before the destination centre (DungeonPathfinder.
+    // AddPortalWaypoints), so the walker lines up on the doorway axis instead
+    // of cutting the corner into an offset doorframe (the live academy /
+    // Town-Network wedge). Even a single portal-adjacent hop now yields >=3
+    // legs, so EVERY real indoor route walks the multi-leg executor below
+    // rather than a lone corner-cutting MoveToPosition.
     let legs = null;
-    try { legs = this.ir.toLegs(graph, path); } catch { legs = null; }
+    try { legs = this.ir.toLegs(graph, path, { doorwayApproach: true }); } catch { legs = null; }
     if (!Array.isArray(legs) || !legs.length) return false;
     if (this._routeClaimed()) return true; // claimed mid-plan -> handled, no further rung
-    if (path.length > 2 && typeof this.bot?.travel === "function") {
-      // Multi-hop: walk every leg via the router (same mechanism
-      // _escalateOut uses for dungeonNav.exitRoute), not just the last one.
-      const res = this.bot.travel(legs);
-      if (res && res.ok === false) return false; // refused (goto active elsewhere) — caller falls back
-      this._bumpHop();
-      this._journalNote(note(legs.length, true));
-      return true;
+    if (legs.length > 1) {
+      // Recovery-capable executor (WP-10, D5+D1): bot.followRoute
+      // (doFollowRoute) reuses replayRoute's indoor recovery — touch-assist on
+      // a jammed doorway + one bounded indoor-wedge re-path + probeFailedLeg
+      // blocked-fact journaling — none of which the raw bot.travel (a bare
+      // router.follow) does. Fired fire-and-forget (the ~15s pressure cadence
+      // can't await a long walk loop — the same `void this.bot.goto(...)`
+      // pattern _step uses for the re-issued goto); the next tick sees the
+      // router busy and holds. Falls back to bot.travel only when followRoute
+      // is absent (older bot / a test double).
+      if (typeof this.bot?.followRoute === "function") {
+        void this.bot.followRoute(legs).catch(() => {});
+        this._bumpHop();
+        this._journalNote(note(legs.length, true));
+        return true;
+      }
+      if (typeof this.bot?.travel === "function") {
+        const res = this.bot.travel(legs);
+        if (res && res.ok === false) return false; // refused (goto active elsewhere) — caller degrades
+        this._bumpHop();
+        this._journalNote(note(legs.length, true));
+        return true;
+      }
+      return false; // no executor available — caller degrades
     }
     const leg = legs[legs.length - 1];
     if (!leg) return false;
@@ -1305,12 +1365,20 @@ export class ExplorePressureController {
       if (!nodes.has(target)) return false;
       const label = (hops, multi) =>
         `[pressure] idle — frontier hop to 0x${target.toString(16).padStart(8, "0")} (~${Math.round(frontier.dist ?? 0)}m, ${Math.round(frontier.bearingDeg ?? 0)}°)${multi ? ` via ${hops}-leg route` : ""}`;
-      // Real cell-graph path first (root cause fix): cur and the frontier's
-      // nearest cell are NOT assumed portal-adjacent — see _walkGraphPath's
-      // header for the full story. findPath unavailable or no path exists ->
-      // the exact PRE-EXISTING single straight-line hop, unchanged (task
-      // directive: "if BFS finds no path, keep current fallback behavior").
+      // Real cell-graph path ONLY (WP-10, C1 P1 — kill the non-adjacency
+      // straight-line hop): cur and the frontier's nearest cell are NOT
+      // portal-adjacent in general, so the old toLegs(graph,[cur,target])
+      // fallback stamped a single MoveToPosition straight THROUGH the
+      // intervening walls/doorframes whenever findPath came up empty — the
+      // 92-identical-hop academy wedge. When the planner IS present and finds
+      // no path, degrade to "no reachable frontier here" (return false) and let
+      // _indoorHop fall through to the legacy neighbor sweep / the next tick's
+      // escalation, never a wall-crossing hop.
       if (this._walkGraphPath(graph, cur, target, label)) return true;
+      if (typeof this.ir.findPath === "function") return false; // planner present + no path -> degrade
+      // findPath-less ir (an older indoor_router / a test double that can't
+      // plan): keep the pre-existing single direct hop so navigation still
+      // degrades to today's behavior rather than freezing.
       let legs = null;
       try { legs = this.ir.toLegs(graph, [cur, target]); } catch { legs = null; }
       const leg = Array.isArray(legs) ? legs[legs.length - 1] : null;
@@ -1348,7 +1416,17 @@ export class ExplorePressureController {
     visited.add(target);
     const label = (hops, multi) =>
       `[pressure] idle — indoor sweep to 0x${target.toString(16).padStart(8, "0")}${visited.has(target) ? " (revisit)" : ""}${multi ? ` via ${hops}-leg route` : ""}`;
+    // Direct graph neighbor -> _walkGraphPath returns a real 2-cell route with
+    // doorway pre-approach. WP-10 (C1 P1): no straight-line fallback when the
+    // planner is present but can't plan it (stale/pruned edge, unreachable) —
+    // this rung no-ops rather than firing a MoveToPosition straight through a
+    // wall; the target is already marked visited so the next tick advances to
+    // the next neighbor, and the hop-cap/escalation ladder bounds the rest.
     if (this._walkGraphPath(graph, cur, target, label)) return;
+    if (typeof this.ir.findPath === "function") return; // planner present + no path -> no-op (degrade)
+    // findPath-less ir (older indoor_router / test double): keep the
+    // pre-existing single direct hop so the sweep still degrades to today's
+    // behavior rather than freezing.
     let legs = null;
     try { legs = this.ir.toLegs(graph, [cur, target]); } catch { legs = null; }
     const leg = Array.isArray(legs) ? legs[legs.length - 1] : null;

@@ -5893,3 +5893,211 @@ fn water_depth_at_mirrors_ace_depth_classes() {
     // Fully-dry neighbour cell (x in [24,48)) → 0.0.
     assert_eq!(state.water_depth_at(30.0, 5.0), 0.0);
 }
+
+// ---------------------------------------------------------------------------
+// WP-2 (last-known-good cell + no-retire-on-transient-NULL). Combines
+// B3-WI1 + B4-item1 (§D3): a transient NULL-landblock pose for the LOCAL
+// player — a null `posA` that arrives before the real arrival `posB` and is
+// never reconciled — must NOT retire the runtime body (dropping the rig and
+// stranding `objCellId` at 0). Instead the body is HELD Suspended at the
+// last-known-good cell, `runtime_pose_for_guid` reports that source cell, and
+// the liveness watchdog can recreate it via a `Reset` when `posB` finally
+// lands. A genuine world-exit (a REMOTE entity leaving the scene) still
+// retires.
+// ---------------------------------------------------------------------------
+
+/// Primary WP-2 scenario: null `posA` (retire-suppressed) + `posB` never
+/// arrives. The body is never removed between `posA`/`posB`,
+/// `local_player_runtime_pose()` returns the SOURCE cell (never `None`/0), and
+/// a follow-up watchdog `Reset` re-establishes the pose.
+#[test]
+fn wp2_null_posa_holds_body_at_source_cell_until_posb() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_02A0);
+    let source_cell = Guid(0x8602_01AD);
+    let source_pos = WorldPosition {
+        landblock_id: source_cell,
+        coords: Vector3::new(12.8, -26.7, 0.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+
+    // Establish the local player at a valid source cell: seed the entity,
+    // register the runtime body, then apply a non-null authoritative pose
+    // (which stamps `last_valid_landblock`).
+    state.seed_local_player_entity(player_guid, "Player", source_pos);
+    let _ = state.set_local_player_runtime_pose(source_pos);
+    let _ = state.set_player_position(source_pos);
+
+    assert_eq!(
+        state.player.last_valid_landblock,
+        Some(source_cell),
+        "precondition: a non-null apply stamps the last-known-good cell"
+    );
+    assert!(
+        state
+            .scene
+            .body(SpatialBodyId::LocalPlayer(player_guid))
+            .is_some(),
+        "precondition: runtime body registered at the source cell"
+    );
+
+    // posA: a transient NULL-landblock pose (the null the arrival never
+    // reconciles). Pre-fix this retires the body; WP-2 holds it Suspended.
+    let null_pos = WorldPosition {
+        landblock_id: Guid::NULL,
+        coords: source_pos.coords,
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let _ = state.set_player_position(null_pos);
+
+    let body = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("WP-2: the body must NOT be retired on a transient null posA");
+    assert_eq!(
+        body.pose.landblock_id, source_cell,
+        "the held body keeps the last-known-good source cell"
+    );
+    assert_eq!(
+        body.sampling.mode,
+        SpatialSampleMode::Suspended,
+        "the held body is Suspended (not driven, not removed)"
+    );
+
+    // The read chokepoint reports the source cell — never None, never 0.
+    let runtime = state
+        .local_player_runtime_pose()
+        .expect("WP-2: runtime pose must be Some (body held, not retired)");
+    assert_eq!(
+        runtime.landblock_id, source_cell,
+        "local_player_runtime_pose (→ objCellId) reports the source cell, not 0"
+    );
+    assert_ne!(runtime.landblock_id, Guid::NULL);
+    assert_eq!(
+        state.player.last_valid_landblock,
+        Some(source_cell),
+        "the last-known-good cell is retained across the transient null"
+    );
+
+    // Watchdog recovery: a `Reset` (the liveness watchdog's re-placement)
+    // re-establishes the pose at the source cell.
+    let _ =
+        state.set_player_position_with_sync(source_pos, crate::AuthoritativeBodySync::Reset);
+    let body = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("body present after the watchdog Reset");
+    assert_eq!(
+        body.pose.landblock_id, source_cell,
+        "watchdog Reset re-establishes the source cell"
+    );
+    assert_eq!(
+        state
+            .local_player_runtime_pose()
+            .expect("runtime pose after Reset")
+            .landblock_id,
+        source_cell,
+    );
+}
+
+/// WP-2 body-ABSENT arm: if the runtime body was retired and only a
+/// NULL-landblock entity pose remains, `runtime_pose_for_guid` heals the LOCAL
+/// player to its last-known cell (never reporting 0).
+#[test]
+fn wp2_body_absent_arm_heals_null_entity_pose_to_last_valid_cell() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_02A1);
+    let source_cell = Guid(0x8602_01AD);
+    let source_pos = WorldPosition {
+        landblock_id: source_cell,
+        coords: Vector3::new(3.0, 4.0, 5.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+
+    state.seed_local_player_entity(player_guid, "Player", source_pos);
+    // Non-null apply stamps `last_valid_landblock`.
+    let _ = state.set_player_position(source_pos);
+    assert_eq!(state.player.last_valid_landblock, Some(source_cell));
+
+    // Drop the runtime body entirely — the body-absent arm is now the only
+    // path — and null the authoritative entity pose.
+    let _ = state
+        .scene
+        .retire_authoritative_body(SpatialBodyId::LocalPlayer(player_guid));
+    if let Some(entity) = state.player_entity_mut() {
+        entity.position.landblock_id = Guid::NULL;
+    }
+    assert!(
+        state
+            .scene
+            .body(SpatialBodyId::LocalPlayer(player_guid))
+            .is_none(),
+        "precondition: body retired (body-absent arm exercised)"
+    );
+
+    let runtime = state
+        .local_player_runtime_pose()
+        .expect("body-absent arm still returns the entity pose");
+    assert_eq!(
+        runtime.landblock_id, source_cell,
+        "body-absent NULL entity pose heals to the last-known-good cell, not 0"
+    );
+}
+
+/// WP-2 regression guard: the retire-suppression is scoped to the LOCAL
+/// player. A REMOTE entity's NULL-landblock pose is a genuine leave-the-scene
+/// and MUST still retire its body — even while the local player holds a
+/// stamped `last_valid_landblock`.
+#[test]
+fn wp2_remote_entity_null_landblock_still_retires() {
+    let mut state = WorldState::synthetic();
+    // A DIFFERENT guid is the local player, so the remote null must not be
+    // mistaken for a local transient.
+    state.player.guid = Guid(0x5000_02A2);
+    state.player.last_valid_landblock = Some(Guid(0x8602_01AD));
+
+    let remote_guid = Guid(0x7000_02A2);
+    let pose = WorldPosition {
+        landblock_id: Guid(0x1234_0000),
+        coords: Vector3::new(1.0, 2.0, 3.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state
+        .entities
+        .insert(Entity::new(remote_guid, "Remote".to_string(), pose));
+    state.scene.reconcile_authoritative_body(
+        SpatialBodyId::Entity(remote_guid),
+        pose,
+        Vector3::zero(),
+        Vector3::zero(),
+        crate::AuthoritativeBodySync::Snapshot,
+        Instant::now(),
+    );
+    assert!(
+        state
+            .scene
+            .body(SpatialBodyId::Entity(remote_guid))
+            .is_some(),
+        "precondition: remote body registered"
+    );
+
+    let null_pose = WorldPosition {
+        landblock_id: Guid::NULL,
+        coords: pose.coords,
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state.reconcile_authoritative_body(
+        remote_guid,
+        null_pose,
+        Vector3::zero(),
+        Vector3::zero(),
+        crate::AuthoritativeBodySync::Snapshot,
+    );
+    assert!(
+        state
+            .scene
+            .body(SpatialBodyId::Entity(remote_guid))
+            .is_none(),
+        "a remote entity's NULL-landblock pose must still retire (world-exit)"
+    );
+}

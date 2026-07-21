@@ -16,6 +16,7 @@ import { buildObservation } from "./observe.js";
 import { validateAction, executePlan } from "./actions.js";
 import { sanitizeAction, guardPlan } from "./safety.js";
 import { enrichObservation } from "./observe_ext.js";
+import { assembleObservation } from "./observe_assemble.js";
 import { KnowledgeBase, FileKnowledgeProvider, registerKnowledge } from "./tools/knowledge.js";
 import { DungeonNavAdvisor, registerDungeonNav } from "./tools/dungeon_nav.js";
 import { WbtOracle, registerWbt } from "./tools/wbt.js";
@@ -31,6 +32,65 @@ import { ExploreMemory, compassOf, worldX, worldY } from "./explore_memory.js";
 // guardPlan enforces it over ext + v1 actions combined. cfg.maxActions
 // overrides (2026-07-17).
 const MAX_ACTIONS_PER_CHECK = 5;
+
+// ── observation assembly budget (C4-1, observe_assemble.js) ────────────────
+// The check-in observation is composed from several subsystems. OUTPUT order is
+// the injection order below (LOCATION first — highest authority); these tiers
+// govern only what gets SHED when the block would exceed budget, sheddest-first
+// being STEADY (unchanged reference the agent has already seen). The base
+// observation is self-capped (observe.js maxChars); this ceiling bounds the
+// prepended sections that were previously uncapped on top of it.
+const OBS_SECTION_TIERS = {
+  location: "DECISION", // harness ground truth — drives the next move
+  mission: "DECISION", // live/last travel state — ground truth
+  base: "DECISION", // the core observation (vitals/threats/nav/…)
+  heard: "ANOMALY", // newly heard speech / server verdicts
+  deltas: "CHANGE", // routine since-last-check-in deltas
+  scratchpad: "STEADY", // self-authored persistent notes (not ground truth)
+};
+// ~12k chars: comfortably fits a maxed real observation (self-capped base +
+// full scratchpad + full heard buffer) yet caps pathological runaway. Operators
+// tightening to a small-context soak set cfg.observeTokens (e.g. 2048).
+const DEFAULT_OBSERVE_TOKENS = 3000;
+// Cumulative per-subsystem token caps on the growable prepends; non-biting in
+// normal operation, they bound any single subsystem from hogging the budget.
+const DEFAULT_OBSERVE_QUOTAS = { scratchpad: 450, heard: 650, deltas: 350 };
+
+// ── active-goal gating (C4-2 / C4-3) ───────────────────────────────────────
+// The steady-state lines (vitals/buffs/loot_min/priorities from observe.js;
+// advancement/kill_trend/burden/portals from observe_ext.js) and the economy /
+// advancement verb GROUPS are telemetry + hands for the combat/econ/
+// advancement goals only. A pure explorer that surveys and never fights, buys,
+// or trains reads none of them — they are dead prompt weight AND a documented
+// self-reinforcement hazard (the 2026-07-21 Qalaba'r soak). Gated on the ACTIVE
+// GOAL SET, never on the persona NAME: a future 'improve-equipment' goal re-
+// enables exactly the lines/verbs it needs simply by being in the set (see
+// activeGoalsFor), with no edit to any gate below.
+const STEADY_STATE_GOALS = ["combat", "loot", "econ", "advancement", "survival"];
+const ECON_GOALS = ["econ", "loot"];
+const ADVANCEMENT_GOALS = ["advancement"];
+// observe_ext.js is frozen for this package, so its four steady-state lines are
+// stripped here at the composed-text seam (below) instead of at their source.
+// Anchored to the line start so a stray occurrence mid-line can never match.
+const STEADY_STATE_EXT_LINE_RE = /^(?:advancement|kill_trend|burden|portals):/;
+
+const goalActive = (goals, wants) => wants.some((g) => goals.has(g));
+
+// The ONE place a persona maps to a default goal set (the gates never see the
+// name). An explicit cfg.goals string array always wins, so a config/persona
+// can declare its own goals with no code change here.
+function activeGoalsFor(cfg) {
+  if (Array.isArray(cfg?.goals)) {
+    const g = cfg.goals.filter((x) => typeof x === "string" && x);
+    if (g.length) return new Set(g);
+  }
+  // Surveyor/explorer: movement + discovery only. hunt_start/hunt_stop remain
+  // available (they are a world-verb toggle, not a telemetry-hungry goal), so
+  // 'combat' is deliberately absent. Every other persona — incl. the default
+  // grind — pursues the full set.
+  if (cfg?.persona === "explorer") return new Set(["explore"]);
+  return new Set(["explore", ...STEADY_STATE_GOALS]);
+}
 
 // Appended to the system prompt when the scratchpad (tools/memory.js) is on:
 // the two-tier memory protocol every long-horizon agent harness converged on.
@@ -138,9 +198,14 @@ export class FetchKnowledgeProvider {
 
 // Same rendering as renderActionCatalog (actions.js:41-50), over the
 // extension defs — appended to the system prompt so the LLM learns the extra
-// action types.
-function renderExtCatalog(extActions) {
+// action types. `hidden` is an optional Set of type names to omit (goal-gated
+// verb groups, C4-3): a verb the current goal set has no use for is never
+// advertised, so it costs no prompt tokens and is not a distractor. Omitting a
+// verb from the catalog does NOT disable it — validate/execute still accept it
+// — this only trims what the prompt teaches.
+function renderExtCatalog(extActions, hidden = null) {
   return Object.values(extActions)
+    .filter((def) => !(hidden && hidden.has(def.type)))
     .map((def) => {
       const p = Object.entries(def.params ?? {})
         .map(([k, d]) => `${k}: ${d}`)
@@ -213,6 +278,17 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   const cfg = config && typeof config === "object" ? config : {};
   const extActions = {};
 
+  // Active-goal gating (C4-2 / C4-3): computed once here, applied to the
+  // observation lines (showSteadyState below) and the verb catalog (hiddenVerbs
+  // at prompt-assembly time). Default persona -> full goal set -> nothing gated.
+  const activeGoals = activeGoalsFor(cfg);
+  const showSteadyState = goalActive(activeGoals, STEADY_STATE_GOALS);
+  // Verb type names each register* helper adds, captured by set-difference so no
+  // verb name is hardcoded here (fully general — a helper gaining/losing a verb
+  // needs no change). Populated during registration below.
+  let economyVerbs = [];
+  let advancementVerbs = [];
+
   let knowledge = null;
   if (cfg.knowledge !== false) {
     const k = cfg.knowledge && typeof cfg.knowledge === "object" ? cfg.knowledge : {};
@@ -260,7 +336,9 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   // ok:false action results. cfg.economy: false -> off.
   let economy = null;
   if (cfg.economy !== false) {
+    const before = new Set(Object.keys(extActions));
     economy = registerEconomy(extActions);
+    economyVerbs = Object.keys(extActions).filter((k) => !before.has(k));
   }
 
   // Advancement hands (tools/advancement.js): raise_attribute / raise_vital /
@@ -269,7 +347,9 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   // false -> off.
   let advancement = null;
   if (cfg.advancement !== false) {
+    const before = new Set(Object.keys(extActions));
     advancement = registerAdvancement(extActions);
+    advancementVerbs = Object.keys(extActions).filter((k) => !before.has(k));
   }
 
   // World hands (tools/world.js): use_object / take_item / give_item /
@@ -304,6 +384,14 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   // trend history for observe_ext lives here, caller-owned per contract
   // (observe_ext.js:15-16).
   const state = {};
+
+  // Observation-assembly budget (C4-1). cfg.observeTokens: total token ceiling
+  // (default DEFAULT_OBSERVE_TOKENS); cfg.observeQuotas: per-subsystem token
+  // caps (default DEFAULT_OBSERVE_QUOTAS). Both degrade to the built-in default.
+  const observeTokens =
+    Number.isFinite(cfg.observeTokens) && cfg.observeTokens > 0 ? cfg.observeTokens : DEFAULT_OBSERVE_TOKENS;
+  const observeQuotas =
+    cfg.observeQuotas && typeof cfg.observeQuotas === "object" ? cfg.observeQuotas : DEFAULT_OBSERVE_QUOTAS;
 
   // Persistent scratchpad (tools/memory.js): model-editable memory carried
   // into every observation — the durability tier the rolling journal tail
@@ -675,8 +763,15 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   // director reads obs.text (director.js:164). Preserve the shape; only the
   // text gains our prepended sections.
   const observe = (b, o) => {
-    const obs = enrichObservation(b, buildObservation(b, o), { ...o, state });
-    const baseText = typeof obs?.text === "string" ? obs.text : String(obs ?? "");
+    // showSteadyState suppresses observe.js's own combat/econ lines at source;
+    // observe_ext.js is frozen for this package, so its four steady-state lines
+    // (advancement/kill_trend/burden/portals) are stripped from the composed
+    // text below when the goal set has no use for them.
+    const obs = enrichObservation(b, buildObservation(b, { ...o, showSteadyState }), { ...o, state });
+    let baseText = typeof obs?.text === "string" ? obs.text : String(obs ?? "");
+    if (!showSteadyState && baseText) {
+      baseText = baseText.split("\n").filter((ln) => !STEADY_STATE_EXT_LINE_RE.test(ln)).join("\n");
+    }
     // Feed the shared coverage/frontier/loop core BEFORE building the block —
     // exploreMemory.observe() is idempotent-ish (dual-driver de-dupe guard),
     // so a director check-in landing close to a pressure tick's observe()
@@ -693,21 +788,33 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     // world isn't sampled twice for one check-in.
     const curSnapshot = snapshot(b);
     resolvePendingInteractions(curSnapshot);
+    // Build SALIENCE-TAGGED sections in injection order. `parts` shadows them
+    // as strings so the raw `parts.join("\n")` (today's behaviour) survives as
+    // the degrade-to-today fallback if assembly ever throws — the survival
+    // invariant: a broken assembler must never break a check-in.
+    const sections = [];
     const parts = [];
+    const push = (subsystem, text) => {
+      if (typeof text !== "string" || !text) return;
+      sections.push({ subsystem, tier: OBS_SECTION_TIERS[subsystem] || "STEADY", text });
+      parts.push(text);
+    };
     // LOCATION is injected FIRST — highest authority (design doc WS-B).
-    const loc = locationBlock(b, rawPose);
-    if (loc) parts.push(loc);
+    push("location", locationBlock(b, rawPose));
     // Mission line (SPEC-navatlas §3-W3.3): live/last travel state is
     // harness ground truth, reported every check-in like pos/nav.
-    const ml = renderMissionLine(b);
-    if (ml) parts.push(ml);
-    if (memory) parts.push(renderScratchpadSection(state));
-    const dl = deltasLine(b, curSnapshot);
-    if (dl) parts.push(dl);
-    const hl = heardLines();
-    if (hl) parts.push(hl);
-    parts.push(baseText);
-    const text = parts.join("\n");
+    push("mission", renderMissionLine(b));
+    if (memory) push("scratchpad", renderScratchpadSection(state));
+    push("deltas", deltasLine(b, curSnapshot));
+    push("heard", heardLines());
+    push("base", baseText);
+    let text;
+    try {
+      const r = assembleObservation(sections, { totalTokens: observeTokens, quotas: observeQuotas });
+      text = r && typeof r.text === "string" ? r.text : parts.join("\n");
+    } catch {
+      text = parts.join("\n"); // degrade-to-today: never break a check-in
+    }
     return obs && typeof obs === "object" ? { ...obs, text } : { text, data: null };
   };
 
@@ -897,7 +1004,15 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   };
 
   const basePrompt = typeof cfg.systemPrompt === "string" && cfg.systemPrompt ? cfg.systemPrompt : DEFAULT_SYSTEM_PROMPT;
-  const extCatalog = renderExtCatalog(extActions);
+  // Goal-gated verb groups (C4-3): drop the economy verbs when no econ/loot
+  // goal is active and the advancement verbs when no advancement goal is —
+  // keyed on the goal set, so a future gear-focused goal restores exactly the
+  // group it needs. World / knowledge / nav / memory / route verbs (and the
+  // hunt toggle) are never gated: an explorer uses them.
+  const hiddenVerbs = new Set();
+  if (!goalActive(activeGoals, ECON_GOALS)) for (const v of economyVerbs) hiddenVerbs.add(v);
+  if (!goalActive(activeGoals, ADVANCEMENT_GOALS)) for (const v of advancementVerbs) hiddenVerbs.add(v);
+  const extCatalog = renderExtCatalog(extActions, hiddenVerbs.size ? hiddenVerbs : null);
   const persona = renderPersonaPreamble(cfg.persona);
   const withPersona = persona ? `${persona}\n\n${basePrompt}` : basePrompt;
   const GUARDS_NOTE =

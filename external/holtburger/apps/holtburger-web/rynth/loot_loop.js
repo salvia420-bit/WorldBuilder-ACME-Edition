@@ -27,6 +27,13 @@ export class RynthLootLoop {
     // trash at vendors, and the director can raise the floor at any time via
     // set_loot_min_value.
     this.minValue = opts.minValue ?? 0;
+    // Director-togglable looting (WP-4, C5-3 / FM-3): default ON (grind
+    // persona unchanged) but boot-OFF for the explorer persona (bot.js), which
+    // must not divert to a corpse — issue no MoveToPosition — while surveying.
+    // set_loot_min_value / an explicit config.loot.enabled re-arm it. Mirrors
+    // combat_loop's `enabled` hunt toggle. `!== false` so any truthy/absent
+    // opts.enabled keeps the ON default.
+    this.enabled = opts.enabled !== false;
     this._assessAt = new Map(); // item guid -> first-hold ts (appraisal gate)
     this.log = opts.log || ((m) => console.log(`[loot] ${m}`));
     this.state = "SCAN"; // SCAN | APPROACH | OPEN | LOOT | CONFIRM
@@ -108,6 +115,7 @@ export class RynthLootLoop {
   }
 
   _findCorpse() {
+    if (!this.enabled) return null; // looting OFF — kernel _corpseAvailable() stays false, never routes to Loot
     const h = this.host;
     const me = h.TryGetPlayerPose();
     if (!me) return null;
@@ -137,6 +145,7 @@ export class RynthLootLoop {
   }
 
   tick() {
+    if (!this.enabled) return; // looting OFF (director/persona toggle) — no scan, no MoveToPosition
     const h = this.host;
     if (!h.IsPlayerReady()) return;
     const now = Date.now();

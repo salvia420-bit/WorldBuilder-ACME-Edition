@@ -62,8 +62,14 @@ const fmtPct = (v) => (v == null ? "?" : `${Math.round(v)}%`);
 // (webhost.js:314-316); null here = unknown.
 const fmtHp = (frac) => (frac == null ? "hp=?" : `hp=${Math.round(frac * 100)}%`);
 
-/** -> { text, data } — token-lean prompt block + the structured source. */
-export function buildObservation(bot, { journalTail = "", maxChars = 6000, now = Date.now(), diag = null, spend = null } = {}) {
+/** -> { text, data } — token-lean prompt block + the structured source.
+ *
+ * showSteadyState (default true) gates the combat/econ steady-state TEXT lines
+ * (vitals, buffs, loot_min/priorities) that a non-combat goal set never reads
+ * — see extensions.js activeGoalsFor / C4-2. The structured `data` is left
+ * whole regardless (observe_ext.js and others read data.vitals/kernel), so
+ * this only trims the rendered prompt, never the source of truth. */
+export function buildObservation(bot, { journalTail = "", maxChars = 6000, now = Date.now(), diag = null, spend = null, showSteadyState = true } = {}) {
   const b = bot || {};
   journalTail = journalTail == null ? "" : String(journalTail);
 
@@ -248,12 +254,16 @@ export function buildObservation(bot, { journalTail = "", maxChars = 6000, now =
       }
     }
   }
-  head.push(vitals ? `vitals: hp=${fmtPct(vitals.hp)} stam=${fmtPct(vitals.stam)} mana=${fmtPct(vitals.mana)}` : `vitals: ${NA}`);
-  head.push(
-    buffs
-      ? `buffs: active=${nn(buffs.active)}/${nn(buffs.desired)} parked=${buffs.parked} pending=${buffs.pending} ready=${buffs.ready ? "y" : "n"}`
-      : `buffs: ${NA}`
-  );
+  // Steady-state combat/econ telemetry (C4-2): rendered only when an active
+  // goal reads it. Data is still populated above regardless.
+  if (showSteadyState) {
+    head.push(vitals ? `vitals: hp=${fmtPct(vitals.hp)} stam=${fmtPct(vitals.stam)} mana=${fmtPct(vitals.mana)}` : `vitals: ${NA}`);
+    head.push(
+      buffs
+        ? `buffs: active=${nn(buffs.active)}/${nn(buffs.desired)} parked=${buffs.parked} pending=${buffs.pending} ready=${buffs.ready ? "y" : "n"}`
+        : `buffs: ${NA}`
+    );
+  }
   head.push(
     lockedGuid == null
       ? `lock: ${NA}`
@@ -276,15 +286,16 @@ export function buildObservation(bot, { journalTail = "", maxChars = 6000, now =
         : NA
     } | goto: ${gotoActive == null ? NA : gotoActive ? "active" : "idle"}`
   );
-  tail.push(
-    `loot_min: ${loot ? nn(loot.minValue) : NA} | priorities: ${
-      priorities
-        ? Object.keys(priorities).length
-          ? Object.entries(priorities).map(([k, v]) => `${k}:${v}`).join(",")
-          : "none"
-        : NA
-    }`
-  );
+  if (showSteadyState)
+    tail.push(
+      `loot_min: ${loot ? nn(loot.minValue) : NA} | priorities: ${
+        priorities
+          ? Object.keys(priorities).length
+            ? Object.entries(priorities).map(([k, v]) => `${k}:${v}`).join(",")
+            : "none"
+          : NA
+      }`
+    );
   tail.push(`netbrain: ${netbrain == null ? NA : netbrain}`);
   if (spendData)
     tail.push(
