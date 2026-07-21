@@ -32,23 +32,29 @@ boot-loop churn this runbook fights).
 nosw=1&bakeWorker=0&targetFps=20&netDrainHz=30&renderScale=1&wireframe=1
 &rain=off&snow=off&lightning=off&autoLogin=1&account=vendortest
 &password=vendortest&autoSpawn=first&kickDance=1&agent=1
-&thoughtOverlay=1&bot=1&streamHud=1&botModel=z-ai/glm-5.2&botInterval=1
+&thoughtOverlay=1&bot=1&streamHud=1&botModel=minimax/minimax-m3
+&botInterval=0.5&botPersona=explorer&faithfulEntityCollision=on
+&explorePressure=1
 ```
 
-- `botModel=z-ai/glm-5.2` pins the director LLM (operator's GLM choice);
-  absent → `DEFAULT_MODEL=openai/gpt-oss-120b` (rynth/ai/llm_client.js:15).
+- `botModel=minimax/minimax-m3` pins the director LLM (2026-07-21 trial:
+  within 6 min of a clean journal+scratchpad it routed to and used the
+  Training Area door and grew coverage — where phi-4 spent a full 30-min soak
+  in the start apartment; launch.sh synced same day). Absent →
+  `DEFAULT_MODEL=openai/gpt-oss-120b` (rynth/ai/llm_client.js:15). History:
+  z-ai/glm-5.2 → microsoft/phi-4 (2026-07-20, via live location.href) →
+  minimax-m3. Setting botModel forces maxTokens:4096 + reasoning effort low
+  (url-flags.md §botModel).
 - `thoughtOverlay=1` = stream teleprompter for journal `plan` entries;
   `streamHud=1` = inventory pane + buffs-HUD reposition. Both exact-match `1`.
 - Full reference: `apps/holtburger-web/docs/url-flags.md` §1.
-- **⚠ 2026-07-20: the LIVE page has drifted from `launch.sh`** (operator-
-  directed, via `location.href`): `botModel=microsoft/phi-4`,
-  `botInterval=0.5`, `botKernel=off` REMOVED (kernel on),
-  `explorePressure=1` added earlier. A `launch.sh` relaunch REVERTS all of
-  this — sync `launch.sh` if the phi-4/kernel-on config should be durable.
-  Cadence math: effective check-in ≈ (model asks max = 2×interval) + 15-20s
+- launch.sh and the live page are IN SYNC as of 2026-07-21 (the 2026-07-20
+  drift is resolved). If you retune via `location.href` on the live page,
+  re-sync launch.sh or a relaunch reverts it.
+- Cadence math: effective check-in ≈ (model asks max = 2×interval) + 15-20s
   call latency ≈ 78s at 0.5; the 70-calls/hr cap floors sustained cadence at
   ~51s no matter how low the interval. The GLM fast-provider pin is
-  z-ai/*-only; the 1280-token cap applies to all models.
+  z-ai/*-only.
 
 ## Six hard-won traps (soak-11 §2 — all live-diagnosed)
 
@@ -115,9 +121,12 @@ nosw=1&bakeWorker=0&targetFps=20&netDrainHz=30&renderScale=1&wireframe=1
   auto-restarts in 5s).
 - **Window stacking check**: `DISPLAY=:0 xprop -root _NET_CLIENT_LIST_STACKING`
   — last id = topmost; the game window (0x32…) must be above the slate.
-- **Bot memory wipe** (fresh-context test):
+- **Bot memory wipe** (fresh-context / clean model test — no reload needed):
   `d=window.__bot.ai.director; d.journal.entries.length=0;
-  localStorage.removeItem(d.journal.storageKey); d._lastSummary=''`.
+  localStorage.removeItem(d.journal.storageKey); d._lastSummary='';
+  localStorage.removeItem('holtburger_ai_journal_v1');
+  localStorage.removeItem('holtburger_ai_scratchpad_v1')`.
+  KEEP `holtburger_ai_key_v1` (OpenRouter key) + `rynth.atlas.v1` (nav atlas).
 - **Un-stick tool**: `window.__sessionHandle.sendChat('@telepoi <town>')` /
   `@teleloc <cell> <x> <y> <z>` (landblock-frame — confirmed 2026-07-20).
   Since the same date the MoveTo driver also self-recovers from wall wedges
