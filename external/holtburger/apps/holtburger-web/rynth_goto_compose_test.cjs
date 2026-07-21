@@ -65,7 +65,6 @@ function recorders() {
   const buildGraph = (map) => async (lb) => { built.push(lb >>> 0); return map[(lb >>> 0) & 0xffff0000] || null; };
   return { walks, outdoors, built, okWalk, failWalk, okOutdoor, failOutdoor, buildGraph };
 }
-const graphs = { [LBX]: null, [LBY]: null }; // filled per test
 const lastLeg = (legs) => legs[legs.length - 1];
 const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) & 0xffff) < 0x100;
 
@@ -98,6 +97,31 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     check("doorway: distinct from {midpoints} (no bare cell centres mid-run)", mp.length !== legs.length || !near(mp[0], 3, 1.2), `${mp.length} vs ${legs.length}`);
     // Single-cell path degrades to just that cell's centre.
     check("doorway: single-cell path -> one centre leg", ir.toLegs(g, [A], { doorwayApproach: true }).length === 1);
+  }
+
+  // ── findPath opts.excludeEdges (2026-07-20, indoor-wedge bounded retry) ────
+  // A diamond: A->B->D (cheap/direct) and A->C->D (longer detour). Plain
+  // findPath must prefer the cheap route; excluding its first edge must force
+  // the detour; excluding an edge with NO alternate route must return null
+  // (never silently ignored), same contract as walkableOverrides' inverse.
+  {
+    const A = 0x200, B = 0x201, C = 0x202, D = 0x203;
+    const g = new Map([
+      [A, { pos: { x: 0, y: 0, z: 0 }, neighbors: [B, C] }],
+      [B, { pos: { x: 10, y: -1, z: 0 }, neighbors: [A, D] }],
+      [C, { pos: { x: 10, y: 5, z: 0 }, neighbors: [A, D] }],
+      [D, { pos: { x: 20, y: 0, z: 0 }, neighbors: [B, C] }],
+    ]);
+    check("excludeEdges: absent -> prefers the cheap A-B-D route", JSON.stringify(ir.findPath(g, A, D)) === JSON.stringify([A, B, D]));
+    check(
+      "excludeEdges: excluding A-B forces the A-C-D detour",
+      JSON.stringify(ir.findPath(g, A, D, { excludeEdges: new Set([ir.edgeKey(A, B)]) })) === JSON.stringify([A, C, D]),
+    );
+    check(
+      "excludeEdges: excluding the ONLY route (both direct edges) -> unreachable (null)",
+      ir.findPath(g, A, D, { excludeEdges: new Set([ir.edgeKey(A, B), ir.edgeKey(A, C)]) }) === null,
+    );
+    check("excludeEdges: edgeKey is undirected (B,A) === (A,B)", ir.edgeKey(B, A) === ir.edgeKey(A, B));
   }
 
   const OPTS = { poseTimeoutMs: 60, pollMs: 2, stallMs: 500 };
@@ -477,6 +501,30 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     const trusted = deriveRouteFlags([{ lb: 0x10101, x: 0, y: 0, portal: true }, { lb: 0x10102, x: 1, y: 0 }], 2);
     check("derive: fmt:2 trusts recorder flags (short hop stays portal)", trusted[0].portal === true);
 
+    // Ground-truth nav-import navType survives LEGACY re-derivation even when
+    // a short hop wouldn't trip the 500m geometric heuristic (the MatronHive
+    // "portal hub" pattern: several ptl options recorded within metres of each
+    // other) — a route replayed via bot.followRoute(route.legs, opts) WITHOUT
+    // opts.fmt threaded through must not silently lose a real portal leg.
+    const hubLegs = [
+      { lb: 0x10101, x: 0, y: 0, z: 0, portal: true, meta: { navType: "ptl", objName: "Portal A" } },
+      { lb: 0x10101, x: 3, y: 0, z: 0, portal: true, meta: { navType: "ptl", objName: "Portal B" } }, // <500m from neighbours either side
+      { lb: 0x10101, x: 6, y: 0, z: 0 },
+    ];
+    const hubFlagged = deriveRouteFlags(hubLegs); // legacy (no fmt)
+    check("derive: ground-truth ptl/rcl/prt navType survives legacy re-derivation on a close hub (no 500m jump)",
+      hubFlagged[0].portal === true && hubFlagged[1].portal === true, JSON.stringify(hubFlagged.map((l) => l.portal)));
+    // Contrast: the SAME close spacing with a recorded (non-nav-import) stale
+    // .portal marker and NO meta is still cleared — recorded routes never
+    // carry meta.navType, so this preserves the exact existing arrival-flag-
+    // clearing contract asserted above (fixture legs 5,17).
+    const staleLegs = [
+      { lb: 0x10101, x: 0, y: 0, z: 0, portal: true },
+      { lb: 0x10101, x: 3, y: 0, z: 0 },
+    ];
+    check("derive: a stale recorded .portal marker (no meta) on a close hop is still cleared, unaffected by the ground-truth fix",
+      deriveRouteFlags(staleLegs)[0].portal === undefined);
+
     const prepared = prepareReplayLegs(legs);
     check("prepare: portal legs preserved (4,16)", prepared[4].portal === true && prepared[16].portal === true);
     check("prepare: indoor legs get a long per-leg timeoutMs", prepared[5].timeoutMs >= 200000 && prepared[16].timeoutMs >= 200000, JSON.stringify(prepared[5].timeoutMs));
@@ -535,6 +583,360 @@ const isOutdoorLeg = (leg) => ((leg.lb >>> 0) & 0xffff) > 0 && ((leg.lb >>> 0) &
     const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
     const r = await replayRoute({ host, router }, [{ lb: 0x05050001, x: 40, y: 40, portal: true }], { pollMs: 2, portalTeleportMs: 60 });
     check("replay: blocked portal, no entity in reach -> honest portal-touch failure", r.ok === false && /portal touch failed/.test(r.error), JSON.stringify(r));
+  }
+
+  // ── nav-import ptl meta: NAME-based portal targeting (MatronHive leg-8 finding) ──
+  // The recorded LEG coordinate is only the VTank approach point (can be far
+  // from the real object); meta.objName/meta.objPos carry the object's real
+  // ground truth. These tests exercise attemptMetaPortalTouch indirectly via
+  // replayRoute's portalBlocked branch.
+  {
+    // NAME match succeeds even though the entity carries NEITHER the
+    // ItemType.Portal property NOR the portal ObjectDescriptionFlag (proving
+    // the name search is independent of the old flag-based heuristic, which
+    // would find nothing here).
+    const PGUID = 0xaa11, OBJ_LB = 0x05050001, OBJ_X = 10, OBJ_Y = 40, FARLB = 0x40400001;
+    const state = { pose: { objCellId: OBJ_LB, x: 10, y: 10, z: 0 }, used: [] };
+    const host = {
+      TryGetPlayerPose: () => state.pose,
+      NearbyGuids: () => [PGUID], // unconditional — proves player-proximity to the OBJECT isn't required for the name path
+      TryGetObjectIntProperty: () => 0, // NOT ItemType.Portal
+      TryGetObjectDescFlags: () => 0, // NOT the portal ODF
+      TryGetObjectPosition: (g) => (g === PGUID ? { objCellId: OBJ_LB, x: OBJ_X, y: OBJ_Y, z: 0 } : null),
+      TryGetObjectName: (g) => (g === PGUID ? "Portal to Town Network" : null),
+      UseObject: (g) => { state.used.push(g >>> 0); setTimeout(() => { state.pose = { objCellId: FARLB, x: 5, y: 5, z: 0 }; }, 4); return true; },
+    };
+    const meta = { navType: "ptl", objName: "Portal to Town Network", objectClass: 14, isTie: true, objPos: { lb: OBJ_LB, x: OBJ_X, y: OBJ_Y, z: 0 } };
+    const legs = [
+      { lb: OBJ_LB, x: 0, y: 0, z: 0 },
+      { lb: OBJ_LB, x: 10, y: 10, z: 0, portal: true, meta },
+      { lb: FARLB, x: 5, y: 5, z: 0 },
+    ];
+    const follows = [];
+    const script = [
+      [{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1, portalBlocked: true }],
+      [{ state: "DONE", leg: 0, legs: 1, walked: 1 }],
+    ];
+    let q = [];
+    const router = { seamJumpM: 30, follow(fl) { follows.push(fl); q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, portalTeleportMs: 300 });
+    check("meta-touch: NAME match finds the entity with no portal item-type/descflag", r.ok === true && r.state === "DONE", JSON.stringify(r));
+    check("meta-touch: the name-matched entity was USE()d", state.used.length === 1 && state.used[0] === (PGUID >>> 0), JSON.stringify(state.used));
+    check("meta-touch: resumed with the FAR-SIDE remaining leg only", follows.length === 2 && follows[1].length === 1 && follows[1][0].lb === FARLB, JSON.stringify(follows.map((f) => f.length)));
+  }
+  {
+    // NAME doesn't match anything nearby -> falls back to the nearest
+    // PORTAL-flagged entity to the OBJECT's coordinates (not the leg anchor).
+    const PGUID = 0xbb22, ITEM_TYPE_PORTAL = 0x00010000, OBJ_LB = 0x05050001, OBJ_X = 10, OBJ_Y = 40, FARLB = 0x40400001;
+    const state = { pose: { objCellId: OBJ_LB, x: 8, y: 38, z: 0 }, used: [] }; // near the object, not the leg anchor
+    const host = {
+      TryGetPlayerPose: () => state.pose,
+      NearbyGuids: () => [PGUID],
+      TryGetObjectIntProperty: (g, st) => (g === PGUID && st === 1 ? ITEM_TYPE_PORTAL : 0),
+      TryGetObjectDescFlags: () => 0,
+      TryGetObjectPosition: (g) => (g === PGUID ? { objCellId: OBJ_LB, x: OBJ_X, y: OBJ_Y, z: 0 } : null),
+      TryGetObjectName: (g) => (g === PGUID ? "Unnamed Portal Device" : null), // does NOT match objName
+      UseObject: (g) => { state.used.push(g >>> 0); setTimeout(() => { state.pose = { objCellId: FARLB, x: 5, y: 5, z: 0 }; }, 4); return true; },
+    };
+    const meta = { navType: "ptl", objName: "Portal to Town Network", objectClass: 14, isTie: true, objPos: { lb: OBJ_LB, x: OBJ_X, y: OBJ_Y, z: 0 } };
+    const legs = [
+      { lb: OBJ_LB, x: 100, y: 100, z: 0, portal: true, meta }, // leg anchor is FAR from the object
+      { lb: FARLB, x: 5, y: 5, z: 0 },
+    ];
+    const script = [
+      [{ state: "FAILED", leg: 0, walked: 0, portalBlocked: true }],
+      [{ state: "DONE", leg: 0, legs: 1, walked: 1 }],
+    ];
+    let q = [];
+    const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, portalTeleportMs: 300 });
+    check("meta-touch: name miss falls back to nearest portal-flagged entity near objPos", r.ok === true && state.used[0] === (PGUID >>> 0), JSON.stringify({ r, used: state.used }));
+  }
+  {
+    // Nothing in range at the approach point -> walk toward the object's real
+    // position, then retry the search from there.
+    const PGUID = 0xcc33, OBJ_LB = 0x05050001, OBJ_X = 10, OBJ_Y = 40, FARLB = 0x40400001;
+    const worldXt = (cell, x) => ((cell >>> 24) & 0xff) * 192 + x;
+    const worldYt = (cell, y) => ((cell >>> 16) & 0xff) * 192 + y;
+    const owx = worldXt(OBJ_LB, OBJ_X), owy = worldYt(OBJ_LB, OBJ_Y);
+    const state = { pose: { objCellId: OBJ_LB, x: 0, y: 0, z: 0 }, used: [], walkCalls: [] }; // far from the object
+    const host = {
+      TryGetPlayerPose: () => state.pose,
+      // Perception-scoped: the entity only "streams in" once the player is
+      // within 25m of its real position — realistic NearbyGuids behavior.
+      NearbyGuids: () => {
+        const pwx = worldXt(state.pose.objCellId >>> 0, state.pose.x), pwy = worldYt(state.pose.objCellId >>> 0, state.pose.y);
+        return Math.hypot(pwx - owx, pwy - owy) <= 25 ? [PGUID] : [];
+      },
+      TryGetObjectIntProperty: () => 0,
+      TryGetObjectDescFlags: () => 0,
+      TryGetObjectPosition: (g) => (g === PGUID ? { objCellId: OBJ_LB, x: OBJ_X, y: OBJ_Y, z: 0 } : null),
+      TryGetObjectName: (g) => (g === PGUID ? "Portal to Town Network" : null),
+      UseObject: (g) => { state.used.push(g >>> 0); setTimeout(() => { state.pose = { objCellId: FARLB, x: 5, y: 5, z: 0 }; }, 4); return true; },
+    };
+    const walk = async (legs, o = {}) => {
+      state.walkCalls.push(o.label);
+      const last = legs[legs.length - 1];
+      state.pose = { objCellId: last.lb >>> 0, x: last.x, y: last.y, z: last.z };
+      return { ok: true, state: "DONE", legsWalked: legs.length };
+    };
+    const meta = { navType: "ptl", objName: "Portal to Town Network", objectClass: 14, isTie: true, objPos: { lb: OBJ_LB, x: OBJ_X, y: OBJ_Y, z: 0 } };
+    const legs = [
+      { lb: OBJ_LB, x: 0, y: 0, z: 0, portal: true, meta },
+      { lb: FARLB, x: 5, y: 5, z: 0 },
+    ];
+    const script = [
+      [{ state: "FAILED", leg: 0, walked: 0, portalBlocked: true }],
+      [{ state: "DONE", leg: 0, legs: 1, walked: 1 }],
+    ];
+    let q = [];
+    const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router, walk }, legs, { pollMs: 2, portalTeleportMs: 300 });
+    check("meta-touch: nothing in range -> walk toward objPos -> retry finds it", r.ok === true && state.used.length === 1, JSON.stringify({ r, used: state.used }));
+    check("meta-touch: walked via the portal-object-approach leg", state.walkCalls.includes("portal-object-approach"), JSON.stringify(state.walkCalls));
+  }
+
+  // ── rcl legs: recall-cast replay (task: recall dependency) ─────────────────
+  {
+    // Known + castable spell -> cast -> teleport -> resume from the far side.
+    const FARLB = 0x40400001;
+    const state = { pose: { objCellId: 0x05050001, x: 40, y: 40, z: 0 } };
+    const host = {
+      s: { playerKnownSpells: () => [1636] },
+      TryGetPlayerPose: () => state.pose,
+      GetCastBusyState: () => 0,
+      CastSpell: () => { setTimeout(() => { state.pose = { objCellId: FARLB, x: 5, y: 5, z: 0 }; }, 4); return true; },
+    };
+    const meta = { navType: "rcl", spellId: 1636, spellName: "Lifestone Sending" };
+    const legs = [
+      { lb: 0x05050001, x: 40, y: 40, z: 0, portal: true, meta },
+      { lb: FARLB, x: 5, y: 5, z: 0 },
+    ];
+    const follows = [];
+    const script = [
+      [{ state: "FAILED", leg: 0, walked: 0, portalBlocked: true }],
+      [{ state: "DONE", leg: 0, legs: 1, walked: 1 }],
+    ];
+    let q = [];
+    const router = { seamJumpM: 30, follow(fl) { follows.push(fl); q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2, portalTeleportMs: 300, recallTeleportMs: 300 });
+    check("recall: known+castable spell -> cast -> teleport -> DONE", r.ok === true && r.state === "DONE", JSON.stringify(r));
+    check("recall: resumed with the far-side remaining leg", follows.length === 2 && follows[1].length === 1 && follows[1][0].lb === FARLB, JSON.stringify(follows.map((f) => f.length)));
+  }
+  {
+    // Spell NOT known -> honest, correctly-labelled failure (never a
+    // misleading "portal entity not found" — there was never an entity to find).
+    const state = { pose: { objCellId: 0x05050001, x: 40, y: 40, z: 0 } };
+    const host = {
+      s: { playerKnownSpells: () => [999] }, // does not include 1636
+      TryGetPlayerPose: () => state.pose,
+      GetCastBusyState: () => 0,
+      CastSpell: () => true,
+    };
+    const meta = { navType: "rcl", spellId: 1636, spellName: "Lifestone Sending" };
+    const legs = [{ lb: 0x05050001, x: 40, y: 40, z: 0, portal: true, meta }];
+    let q = [];
+    const script = [[{ state: "FAILED", leg: 0, walked: 0, portalBlocked: true }]];
+    const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2 });
+    check("recall: spell not known -> honest recall-unavailable failure (NOT a portal-entity message)",
+      r.ok === false && r.reason === "recall-unavailable" && /Lifestone Sending/.test(r.error) && !/portal entity/.test(r.error), JSON.stringify(r));
+  }
+
+  // ── runtime indoor-wedge derivation (imported routes never carry leg.indoor) ─
+  {
+    // An EnvCell-id waypoint but the LEG ITSELF carries no `.indoor` flag (the
+    // nav-import shape — VTank coordinates are always outdoor-projected, see
+    // nav_import.js IND1). replayRoute must still recognize the wedge from the
+    // LIVE pose's cell (isEnvCellId) and run the one-shot indoor re-path.
+    const EA = 0x08080143, EB = 0x08080144; // EnvCell ids (low word in [0x100,0xfffd])
+    const graph = new Map([
+      [EA, { pos: { x: 10, y: 10, z: 0 }, neighbors: [EB] }],
+      [EB, { pos: { x: 20, y: 10, z: 0 }, neighbors: [EA] }],
+    ]);
+    const state = { pose: { objCellId: EA, x: 10, y: 10, z: 0 } };
+    const host = { TryGetPlayerPose: () => state.pose, s: { getCurrentCellId: () => state.pose.objCellId >>> 0 } };
+    const walkCalls = [];
+    const walk = async (legs, o = {}) => {
+      walkCalls.push(o.label);
+      const last = legs[legs.length - 1];
+      state.pose = { objCellId: last.lb >>> 0, x: last.x, y: last.y, z: last.z };
+      return { ok: true, state: "DONE", legsWalked: legs.length };
+    };
+    const buildGraph = async (lb) => (((lb >>> 0) & 0xffff0000) === ((EA & 0xffff0000) >>> 0) ? graph : null);
+    const legs = [
+      { lb: EA, x: 10, y: 10, z: 0 },
+      { lb: EB, x: 20, y: 10, z: 0 }, // NO .indoor flag — imported-route style
+    ];
+    const script = [[{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1 }]]; // NOT portalBlocked
+    let q = [];
+    const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router, buildGraph, walk }, legs, { pollMs: 2 });
+    check("indoor-wedge runtime derive: re-paths despite failed.indoor being undefined (live pose IS an EnvCell)", r.ok === true && r.state === "DONE", JSON.stringify(r));
+    check("indoor-wedge runtime derive: repathIndoor's walk ran (wedge-repath label)", walkCalls.includes("wedge-repath"), JSON.stringify(walkCalls));
+  }
+  {
+    // Control: neither the leg NOR the live pose is indoors -> the wedge
+    // branch must NOT engage (falls through to the honest terminal failure) —
+    // proves the runtime check doesn't fire spuriously outdoors.
+    const state = { pose: { objCellId: 0xaab40001, x: 40, y: 40, z: 0 } };
+    const host = { TryGetPlayerPose: () => state.pose, s: { getCurrentCellId: () => state.pose.objCellId >>> 0 } };
+    const legs = [{ lb: 0xaab40001, x: 40, y: 40, z: 0 }, { lb: 0xaab40001, x: 60, y: 40, z: 0 }];
+    const script = [[{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1 }]];
+    let q = [];
+    const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+    const r = await replayRoute({ host, router }, legs, { pollMs: 2 });
+    check("indoor-wedge control: outdoors + no flag -> honest terminal FAILED, no re-path attempted", r.ok === false && r.state === "FAILED" && r.leg === 1, JSON.stringify(r));
+  }
+
+  // ── indoor-wedge BOUNDED RETRY (2026-07-20, live MatronHive report #3) ─────
+  // repathIndoor used to be one-shot: find A*, walk it, give up entirely on
+  // any stall. Now it retries up to tune.wedgeAttempts, excluding whatever
+  // doorway edge the walk actually stalled inside so the next attempt's A*
+  // can't just re-offer the same jam, and it always finishes at the EXACT
+  // requested target (not just the nearest cell's bbox-derived centre).
+  {
+    // Diamond graph: EA -(cheap)-> EB -> ED, or EA -(detour)-> EC -> ED.
+    // Landblock 0x0000 base so world == local (graph `pos` is WORLD-frame per
+    // the module contract; avoids an unrelated landblock-offset shift here).
+    const LB = 0x00000000;
+    const EA = LB | 0x143, EB = LB | 0x144, EC = LB | 0x145, ED = LB | 0x146;
+    const diamond = () => new Map([
+      [EA, { pos: { x: 10, y: 10, z: 0 }, neighbors: [EB, EC] }],
+      [EB, { pos: { x: 20, y: 9, z: 0 }, neighbors: [EA, ED] }], // cheap route
+      [EC, { pos: { x: 20, y: 15, z: 0 }, neighbors: [EA, ED] }], // detour
+      [ED, { pos: { x: 30, y: 10, z: 0 }, neighbors: [EB, EC] }],
+    ]);
+
+    // Attempt 1 wedges on the FIRST edge (EA-EB); attempt 2 must exclude it,
+    // route via EC instead, and succeed.
+    {
+      const state = { pose: { objCellId: EA, x: 10, y: 10, z: 0 } };
+      const host = { TryGetPlayerPose: () => state.pose, s: { getCurrentCellId: () => state.pose.objCellId >>> 0 } };
+      const walkCalls = [];
+      const walk = async (legs, o = {}) => {
+        // normalizeLegWorldFrame re-buckets EVERY leg's .lb into an
+        // outdoor-style cell index (existing, pre-fix behavior — even the
+        // real EnvCell id toLegs stamped gets overwritten), so identify which
+        // route was actually walked by WORLD-frame position, not raw lb.
+        walkCalls.push({ label: o.label, worldYs: legs.map((l) => worldYf(l.lb, l.y)) });
+        if (walkCalls.length === 1) {
+          // Stalls after the doorway-approach's FIRST leg (30% into EA->EB) —
+          // legsWalked=1 maps back to edge index 0 (EA-EB).
+          return { ok: false, state: "FAILED", legsWalked: 1 };
+        }
+        const last = legs[legs.length - 1];
+        state.pose = { objCellId: last.lb >>> 0, x: last.x, y: last.y, z: last.z };
+        return { ok: true, state: "DONE", legsWalked: legs.length };
+      };
+      const buildGraph = async (lb) => (((lb >>> 0) & 0xffff0000) === LB ? diamond() : null);
+      const legs = [{ lb: EA, x: 10, y: 10, z: 0 }, { lb: ED, x: 30, y: 10, z: 0 }];
+      const script = [[{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1 }], [{ state: "DONE", leg: 0, legs: 1, walked: 1 }]];
+      let q = [];
+      const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+      const r = await replayRoute({ host, router, buildGraph, walk }, legs, { pollMs: 2 });
+      check("wedge-retry: recovers via edge exclusion on attempt 2", r.ok === true && r.state === "DONE", JSON.stringify(r));
+      check("wedge-retry: exactly 2 walk attempts, labelled wedge-repath then wedge-repath-retry2",
+        walkCalls.length === 2 && walkCalls[0].label === "wedge-repath" && walkCalls[1].label === "wedge-repath-retry2",
+        JSON.stringify(walkCalls.map((w) => w.label)));
+      // EB sits at y=9 (below both EA/ED's y=10); EC sits at y=15 (above).
+      // The EA-EB-ED route's world Y never exceeds 10; only the EC detour
+      // reaches above ~11 (its 30/50% doorway waypoints sit at y=11.5/12.5).
+      check("wedge-retry: attempt 2 routed via the EC detour, never re-offering the excluded EA-EB edge",
+        Math.max(...walkCalls[1].worldYs) > 11, JSON.stringify(walkCalls[1].worldYs));
+    }
+
+    // Both routes wedge (EA-EB then EA-EC) -> attempt 3's findPath has nothing
+    // left to offer (both direct edges excluded) -> stop EARLY, no 3rd walk.
+    {
+      const state = { pose: { objCellId: EA, x: 10, y: 10, z: 0 } };
+      const host = { TryGetPlayerPose: () => state.pose, s: { getCurrentCellId: () => state.pose.objCellId >>> 0 } };
+      const walkCalls = [];
+      const walk = async (legs) => {
+        walkCalls.push(legs.map((l) => l.lb >>> 0));
+        return { ok: false, state: "FAILED", legsWalked: 1 }; // always stalls on the first doorway leg
+      };
+      const buildGraph = async (lb) => (((lb >>> 0) & 0xffff0000) === LB ? diamond() : null);
+      const legs = [{ lb: EA, x: 10, y: 10, z: 0 }, { lb: ED, x: 30, y: 10, z: 0 }];
+      const script = [[{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1 }]];
+      let q = [];
+      const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+      const r = await replayRoute({ host, router, buildGraph, walk }, legs, { pollMs: 2 });
+      check("wedge-retry: both routes exhausted -> honest failure", r.ok === false && r.state === "FAILED", JSON.stringify(r));
+      check("wedge-retry: stops after exactly 2 walks (3rd attempt's A* had nothing left, no wasted walk)",
+        walkCalls.length === 2, `${walkCalls.length} walk calls`);
+    }
+
+    // Fix: the recovery ends at the EXACT requested target, not the nearest
+    // cell's bbox-derived centre (live MatronHive: a raw centre can sit
+    // inside static-object clutter). Target world point is near ED but offset
+    // from ED's own (30,10) centre by 6m — nearestCell still resolves to ED
+    // (only candidate), but the FINAL walked leg must preserve the target's
+    // own world point, not collapse to ED's centre.
+    {
+      const state = { pose: { objCellId: EA, x: 10, y: 10, z: 0 } };
+      const host = { TryGetPlayerPose: () => state.pose, s: { getCurrentCellId: () => state.pose.objCellId >>> 0 } };
+      let finalLeg = null;
+      const walk = async (legs) => {
+        finalLeg = legs[legs.length - 1];
+        const last = legs[legs.length - 1];
+        state.pose = { objCellId: last.lb >>> 0, x: last.x, y: last.y, z: last.z };
+        return { ok: true, state: "DONE", legsWalked: legs.length };
+      };
+      const buildGraph = async (lb) => (((lb >>> 0) & 0xffff0000) === LB ? diamond() : null);
+      // Target: an outdoor-projected id in the SAME landblock family, world
+      // point (36,10) — 6m past ED's own centre (30,10) — mirrors nav_import's
+      // outdoor-projection-only leg coordinate for an indoor waypoint.
+      const targetLb = (LB | 0x0005) >>> 0;
+      const legs = [{ lb: EA, x: 10, y: 10, z: 0 }, { lb: targetLb, x: 36, y: 10, z: 0 }];
+      const script = [[{ state: "WALK", leg: 0, walked: 0 }, { state: "FAILED", leg: 1, walked: 1 }], [{ state: "DONE", leg: 0, legs: 1, walked: 1 }]];
+      let q = [];
+      const router = { seamJumpM: 30, follow() { q = (script.shift() || []).slice(); }, cancel() {}, get status() { return q.length ? q.shift() : { state: "DONE" }; } };
+      const r = await replayRoute({ host, router, buildGraph, walk }, legs, { pollMs: 2 });
+      check("wedge-retry: recovery succeeds", r.ok === true && r.state === "DONE", JSON.stringify(r));
+      check("wedge-retry: final leg preserves the EXACT target world point (not ED's bbox centre)",
+        finalLeg && Math.abs(worldXf(finalLeg.lb, finalLeg.x) - worldXf(targetLb, 36)) < 1e-6 && Math.abs(worldYf(finalLeg.lb, finalLeg.y) - worldYf(targetLb, 10)) < 1e-6,
+        JSON.stringify({ finalLeg, wantWorld: [worldXf(targetLb, 36), worldYf(targetLb, 10)] }));
+    }
+  }
+
+  // ── fixture: real 0x0007 Town-Network EnvCell cluster (live MatronHive
+  // report #3 stall site — 0x0007017D/0x0007017C/0x00070178, WorldBuilder.
+  // Terminal chorizite-parse-dat-record dump against client_cell_1.dat, real
+  // portal records + cell origins). Confirms: (a) 0x0007017D is DIRECTLY,
+  // mutually portal-connected to BOTH 0x0007017C and 0x00070178 (no
+  // wall-cutting synthetic adjacency); (b) the edge is FLAT (dz=0, well under
+  // the drop-angle threshold) — the stall is not a misclassified drop edge;
+  // (c) pins the exact doorway-approach waypoint coordinates our code
+  // generates for this real geometry, tying the unit test to the live
+  // incident site.
+  {
+    const CELL_017D = 0x0007017d, CELL_017C = 0x0007017c, CELL_0178 = 0x00070178;
+    // DAT dump gives position.origin in LANDBLOCK-LOCAL frame (blockX=0,
+    // blockY=7 for this whole cluster — (cell>>>16)&0xff==7); the graph
+    // CONTRACT requires WORLD-frame pos (buildGraphFromWasm's own
+    // cellOriginX/Y are pre-shifted the same way, indoor_router.js:17593-97),
+    // so add the landblock's own 7*192=1344 world offset to Y here (X needs
+    // no shift, blockX=0). z=0 for all three -> same floor, flat building.
+    const worldYshift = 7 * 192;
+    const townCluster = new Map([
+      [CELL_017D, { pos: { x: 130, y: -70 + worldYshift, z: 0 }, neighbors: [CELL_017C, CELL_0178] }],
+      [CELL_017C, { pos: { x: 130, y: -60 + worldYshift, z: 0 }, neighbors: [CELL_017D] }],
+      [CELL_0178, { pos: { x: 120, y: -70 + worldYshift, z: 0 }, neighbors: [CELL_017D] }],
+    ]);
+    check("town-cluster: 0x0007017D<->0x0007017C is flat (not a drop edge)", ir.isDropEdge(townCluster.get(CELL_017D), townCluster.get(CELL_017C)) === false);
+    check("town-cluster: 0x0007017D<->0x00070178 is flat (not a drop edge)", ir.isDropEdge(townCluster.get(CELL_017D), townCluster.get(CELL_0178)) === false);
+    const path = ir.findPath(townCluster, CELL_017D, CELL_0178);
+    check("town-cluster: 017D->0178 is a single direct portal edge (real doorway, matches the DAT's mutual portal record)",
+      JSON.stringify(path) === JSON.stringify([CELL_017D, CELL_0178]), JSON.stringify(path));
+    const legs = ir.toLegs(townCluster, path, { doorwayApproach: true });
+    // 30% pre-approach + 50% doorway-midpoint along the (130,-70)->(120,-70)
+    // vector, then the (120,-70) cell centre -- the exact waypoints a live
+    // wedge-repath would generate walking THIS real doorway.
+    check("town-cluster: 30% pre-approach lands at (127,-70)", Math.abs(legs[0].x - 127) < 1e-6 && Math.abs(legs[0].y - (-70)) < 1e-6, JSON.stringify(legs[0]));
+    check("town-cluster: 50% doorway-midpoint lands at (125,-70)", Math.abs(legs[1].x - 125) < 1e-6 && Math.abs(legs[1].y - (-70)) < 1e-6, JSON.stringify(legs[1]));
+    check("town-cluster: final leg = 0x00070178's own centre (120,-70), stamped with its id",
+      legs[2].lb === (CELL_0178 >>> 0) && Math.abs(legs[2].x - 120) < 1e-6 && Math.abs(legs[2].y - (-70)) < 1e-6, JSON.stringify(legs[2]));
   }
 
   console.log(`\ngoto_compose: ${pass} passed, ${fail} failed`);

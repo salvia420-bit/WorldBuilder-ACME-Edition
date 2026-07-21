@@ -54,6 +54,19 @@ const DROP_ANGLE_DEG = 45.0; // :53 — ramps 10-25°, floor-shaft drops 60-90°
 const FLAT_DZ_M = 0.5; //       :64 — |dZ| below this is trivially flat
 const SHAFT_HORIZ_M = 1.0; //   :70 — near-zero horizontal = vertical shaft
 
+// Retail walkable-slope cosine threshold (holtburger-dat/src/transition/
+// types.rs FLOOR_Z, decomp-verified against acclient.c's step_up/step_down
+// floor gate — NOT the looser Z_FOR_LANDING=0.0871557 CONTACT/landing test).
+// A triangle counts as "floor" when its world-frame up-normal component
+// (N·up) is >= this, i.e. slope <= ~48.36°.
+const FLOOR_Z = 0.66417414618662751;
+
+// Cell-center anchors are bbox-derived (soak-13 anchor fix below), not exact
+// portal-doorway positions, so allow this much slack when checking whether a
+// cell's scanned floor span reaches the neighbour's cell-center Z. Same order
+// of magnitude as SHAFT_HORIZ_M — both are "anchor imprecision" fudge factors.
+const FLOOR_SPAN_TOL_M = 1.0;
+
 // Patrol prune safety valves (DungeonPathfinder.cs:437-438): if the 2-core
 // collapses a small/linear dungeon, fall back to the full reachable set.
 const PATROL_MIN_KEEP_NODES = 8;
@@ -78,18 +91,61 @@ function asMap(graph) {
   return m;
 }
 
+// True if `node` carries a usable floor-span hint (set by
+// collectLandblockIntoGraph from the cell's own Environment mesh — see
+// scanWalkableFloorSpan below). Absent on synthetic graphs / callers that
+// don't build via buildGraphFromWasm; isDropEdge degrades to the pure
+// cell-center geometric test in that case (unchanged behavior).
+function hasFloorSpan(node) {
+  return typeof node.floorZMin === "number" && typeof node.floorZMax === "number";
+}
+
+// Does a walkable floor/ramp/stair surface span the full vertical gap
+// between two cell centers? Checked EITHER alone (the common case: one cell
+// — e.g. a stairwell/shaft hub — physically contains the whole run) OR as a
+// touching union of both cells' spans (a run that splits across the portal).
+// FLOOR_SPAN_TOL_M absorbs the bbox-anchor's imprecision vs the real doorway.
+function spansWalkableFloor(a, b) {
+  const lo = Math.min(a.pos.z, b.pos.z);
+  const hi = Math.max(a.pos.z, b.pos.z);
+  const okAlone = (n) =>
+    hasFloorSpan(n) && n.floorZMin <= lo + FLOOR_SPAN_TOL_M && n.floorZMax >= hi - FLOOR_SPAN_TOL_M;
+  if (okAlone(a) || okAlone(b)) return true;
+  if (!hasFloorSpan(a) || !hasFloorSpan(b)) return false;
+  const touching = a.floorZMin <= b.floorZMax + FLOOR_SPAN_TOL_M && b.floorZMin <= a.floorZMax + FLOOR_SPAN_TOL_M;
+  if (!touching) return false;
+  const uLo = Math.min(a.floorZMin, b.floorZMin);
+  const uHi = Math.max(a.floorZMax, b.floorZMax);
+  return uLo <= lo + FLOOR_SPAN_TOL_M && uHi >= hi - FLOOR_SPAN_TOL_M;
+}
+
 /**
  * Drop-edge classification (port of DungeonPathfinder.cs:61-73). A slope has
  * significant horizontal movement per unit Z (angle well under 45°); a drop is
  * near-vertical (centres almost stacked). Drops need a jump the executor
  * doesn't have (J3), so both A* and the patrol walk skip these edges.
+ *
+ * REFINEMENT (2026-07-20, apartment z-stack false positive — see
+ * docs/rynth-integration/HANDOFF-wedge-closeout-phi4-rig-2026-07-20.md
+ * Track E3/F Venue 2): cell-CENTER geometry alone can't tell a spiral
+ * staircase shaft from an open drop shaft — bbox-anchor centers legitimately
+ * sit near-stacked (dHoriz~0) for BOTH, since a tight stairwell's footprint
+ * is small. When the pure geometric test says "drop", consult the per-cell
+ * floor-span hint (set from the SAME Environment mesh already fetched for
+ * the bbox anchor, scanWalkableFloorSpan below): if a continuous
+ * walkable-slope floor (retail FLOOR_Z threshold) spans the full vertical
+ * gap, override to walkable. Nodes without the hint (synthetic graphs,
+ * pre-refinement callers) fall through unchanged.
  */
 export function isDropEdge(a, b) {
   const dZ = Math.abs(b.pos.z - a.pos.z);
   if (dZ < FLAT_DZ_M) return false;
   const dHoriz = Math.hypot(b.pos.x - a.pos.x, b.pos.y - a.pos.y);
-  if (dHoriz < SHAFT_HORIZ_M) return true;
-  return Math.atan2(dZ, dHoriz) * (180 / Math.PI) > DROP_ANGLE_DEG;
+  const geometricDrop =
+    dHoriz < SHAFT_HORIZ_M ? true : Math.atan2(dZ, dHoriz) * (180 / Math.PI) > DROP_ANGLE_DEG;
+  if (!geometricDrop) return false;
+  if (spansWalkableFloor(a, b)) return false;
+  return true;
 }
 
 /**
@@ -166,12 +222,39 @@ function dist2d(a, b) {
   return Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y);
 }
 
+// Escape hatch (2026-07-20, HANDOFF-wedge-closeout Track E3/F): corpus-
+// derived ground truth ("we walked this edge on stream, it is NOT a drop")
+// can override isDropEdge/spansWalkableFloor outright, for venues where the
+// JS-side floor-span hint is unavailable or still gets the classification
+// wrong. `overrides` is a Set of canonical `edgeKey(aId,bId)` strings — same
+// undirected-pair encoding buildPatrolRoute already uses. Checked BEFORE the
+// geometric/floor-span test so an override always wins.
+function edgeIsDrop(overrides, aId, bId, aNode, bNode) {
+  if (overrides && overrides.has(edgeKey(aId, bId))) return false;
+  return isDropEdge(aNode, bNode);
+}
+
 /**
  * A* over portal adjacency (port of DungeonPathfinder.cs:275-339). Skips drop
  * edges and cells in opts.hazards (a Set of cellIds); the GOAL is allowed even
  * if hazardous — the caller asked to go there (:307-308). Heuristic = 2D
  * euclidean cell-centre distance (:326-330), admissible since edge cost is the
  * same metric.
+ *
+ * opts.walkableOverrides (Set<string>, default none): canonical
+ * `edgeKey(cellA,cellB)` pairs to force-treat as walkable regardless of
+ * isDropEdge's verdict — the ground-truth escape hatch (see edgeIsDrop
+ * above), for edges the JS-side classifier still gets wrong.
+ *
+ * opts.excludeEdges (Set<string>, default none): the INVERSE escape hatch —
+ * canonical `edgeKey(cellA,cellB)` pairs to force-treat as IMPASSABLE
+ * regardless of geometry, checked BEFORE walkableOverrides/isDropEdge (an
+ * exclusion always wins over an override). For goto_compose.js's bounded
+ * indoor-wedge retry (2026-07-20): when a recovery walk stalls partway across
+ * a specific portal doorway, the next A* attempt excludes that exact edge so
+ * it can't just re-offer the same jammed transition — this is a RUNTIME,
+ * per-attempt exclusion (not a corpus-derived permanent classification like
+ * walkableOverrides), so it lives in opts rather than the graph itself.
  *
  * DIVERGENCE from the C#: returns null when unreachable / endpoints missing
  * (task contract) instead of the empty list (:281,:323). Same-cell trivially
@@ -182,6 +265,8 @@ export function findPath(graph, fromCell, toCell, opts = {}) {
   const from = Number(fromCell) >>> 0;
   const to = Number(toCell) >>> 0;
   const hazards = opts.hazards || null;
+  const overrides = opts.walkableOverrides || null;
+  const excluded = opts.excludeEdges || null;
   if (!nodes.has(from) || !nodes.has(to)) return null;
   if (from === to) return [from];
 
@@ -213,7 +298,8 @@ export function findPath(graph, fromCell, toCell, opts = {}) {
       if (closed.has(nbId)) continue;
       const nbNode = nodes.get(nbId);
       if (!nbNode) continue;
-      if (isDropEdge(curNode, nbNode)) continue;
+      if (excluded && excluded.has(edgeKey(current, nbId))) continue;
+      if (edgeIsDrop(overrides, current, nbId, curNode, nbNode)) continue;
       if (nbId !== to && hazards && hazards.has(nbId)) continue;
       const tentG = gCur + dist2d(curNode, nbNode);
       if (tentG < (gScore.has(nbId) ? gScore.get(nbId) : Infinity)) {
@@ -320,10 +406,13 @@ export function toLegs(graph, path, opts = {}) {
  * outdoor objCellId beyond the exit portal — its LandCell center is a
  * walkable "just outside the door" target (retail cell index decode:
  * LandDefs::gid_to_lcoord, acclient.c:209521 — idx-1 = cx*8 + cy).
+ *
+ * opts.walkableOverrides — same escape hatch as findPath (edgeIsDrop above).
  */
-export function findExitPath(graph, fromCell) {
+export function findExitPath(graph, fromCell, opts = {}) {
   const nodes = asMap(graph);
   const from = Number(fromCell) >>> 0;
+  const overrides = opts.walkableOverrides || null;
   if (!nodes.has(from)) return null;
   const prev = new Map([[from, 0]]);
   let frontier = [from];
@@ -343,7 +432,7 @@ export function findExitPath(graph, fromCell) {
       }
       for (const nb of node.neighbors) {
         if (prev.has(nb) || !nodes.has(nb)) continue;
-        if (isDropEdge(node, nodes.get(nb))) continue;
+        if (edgeIsDrop(overrides, id, nb, node, nodes.get(nb))) continue;
         prev.set(nb, id);
         next.push(nb);
       }
@@ -353,9 +442,12 @@ export function findExitPath(graph, fromCell) {
   return null;
 }
 
-export function getMainRouteNodes(graph, startCell, hazards = null) {
+// opts.walkableOverrides — same escape hatch as findPath (edgeIsDrop above),
+// honored by both the reachability BFS and the degree-pruning pass below.
+export function getMainRouteNodes(graph, startCell, hazards = null, opts = {}) {
   const nodes = asMap(graph);
   const start = Number(startCell) >>> 0;
+  const overrides = opts.walkableOverrides || null;
   const reachable = new Set();
   if (nodes.has(start)) {
     reachable.add(start);
@@ -367,7 +459,7 @@ export function getMainRouteNodes(graph, startCell, hazards = null) {
       for (const nbRaw of node.neighbors || []) {
         const nb = Number(nbRaw) >>> 0;
         if (reachable.has(nb) || !nodes.has(nb)) continue;
-        if (isDropEdge(node, nodes.get(nb))) continue;
+        if (edgeIsDrop(overrides, cur, nb, node, nodes.get(nb))) continue;
         if (hazards && hazards.has(nb)) continue;
         reachable.add(nb);
         queue.push(nb);
@@ -386,7 +478,7 @@ export function getMainRouteNodes(graph, startCell, hazards = null) {
       let deg = 0;
       for (const nbRaw of node.neighbors || []) {
         const nb = Number(nbRaw) >>> 0;
-        if (pruned.has(nb) && nodes.has(nb) && !isDropEdge(node, nodes.get(nb))) {
+        if (pruned.has(nb) && nodes.has(nb) && !edgeIsDrop(overrides, id, nb, node, nodes.get(nb))) {
           deg++;
           if (deg > 1) break;
         }
@@ -403,8 +495,10 @@ export function getMainRouteNodes(graph, startCell, hazards = null) {
 }
 
 // Canonical undirected-edge key (C# packs two u32s into a ulong, :619-620 —
-// JS numbers can't, so a string key does the same job).
-function edgeKey(a, b) {
+// JS numbers can't, so a string key does the same job). Exported so callers
+// (goto_compose.js's bounded indoor-wedge retry) can build the SAME keys for
+// opts.excludeEdges without duplicating the pairing convention.
+export function edgeKey(a, b) {
   return a < b ? `${a}:${b}` : `${b}:${a}`;
 }
 
@@ -476,11 +570,16 @@ function bfsToUnusedEdge(adj, src, remaining) {
  * DIVERGENCE from the C#: returns the cell WALK ([cellId,...], first === last
  * when the loop closes) instead of a waypoint NavRouteParser (:554) — feed it
  * to toLegs() and RynthRouter.follow(). Empty array = nothing walkable (:560-564).
+ *
+ * opts.walkableOverrides — same escape hatch as findPath (edgeIsDrop above),
+ * honored by both the mainRoute BFS/prune (via getMainRouteNodes) and the
+ * edge-cover walk built here.
  */
-export function buildPatrolRoute(graph, startCell, hazards = null) {
+export function buildPatrolRoute(graph, startCell, hazards = null, opts = {}) {
   const nodes = asMap(graph);
   const start = Number(startCell) >>> 0;
-  const mainRoute = getMainRouteNodes(graph, start, hazards);
+  const overrides = opts.walkableOverrides || null;
+  const mainRoute = getMainRouteNodes(graph, start, hazards, opts);
 
   // Undirected walkable subgraph over mainRoute (portal-adjacent, non-drop);
   // mainRoute is already hazard-filtered (:537-552).
@@ -493,7 +592,7 @@ export function buildPatrolRoute(graph, startCell, hazards = null) {
       const nb = Number(nbRaw) >>> 0;
       if (!mainRoute.has(nb)) continue;
       const nbn = nodes.get(nb);
-      if (!nbn || isDropEdge(cn, nbn)) continue;
+      if (!nbn || edgeIsDrop(overrides, c, nb, cn, nbn)) continue;
       if (!adj.has(c)) adj.set(c, []);
       adj.get(c).push(nb);
       edges.add(edgeKey(c, nb));
@@ -594,6 +693,65 @@ function resolveFetchEnvCells(opts = {}) {
   return scene && scene.wasmExports ? scene.wasmExports.fetchEnvCellsInLandblock : null;
 }
 
+// v' = q v q* (standard quaternion rotation, expanded) — shared by the
+// bbox-anchor fix and the floor-span scan below; both need to carry a
+// cell-local point/vector into the cell's world orientation.
+function rotateByQuat(x, y, z, qw, qx, qy, qz) {
+  const tx = 2 * (qy * z - qz * y), ty = 2 * (qz * x - qx * z), tz = 2 * (qx * y - qy * x);
+  return [
+    x + qw * tx + (qy * tz - qz * ty),
+    y + qw * ty + (qz * tx - qx * tz),
+    z + qw * tz + (qx * ty - qy * tx),
+  ];
+}
+
+// Normalize a placement's orientation quaternion; identity when missing/junk
+// (mirrors the anchor-fix's existing NaN/all-zero guard).
+function normalizedOrientation(p) {
+  let qw = p.cellOrientationQw, qx = p.cellOrientationQx, qy = p.cellOrientationQy, qz = p.cellOrientationQz;
+  if (![qw, qx, qy, qz].every(Number.isFinite) || (qw === 0 && qx === 0 && qy === 0 && qz === 0)) {
+    qw = 1; qx = qy = qz = 0;
+  }
+  return [qw, qx, qy, qz];
+}
+
+// Scan a cell's own Environment mesh (already fetched for the bbox anchor —
+// this is additive, no extra wasm call) for walkable-slope triangles and
+// return the WORLD-frame Z range they cover, or null if none (a pure-wall
+// shaft/void — see isDropEdge's 2026-07-20 refinement doc comment).
+// positions/normals are flat non-indexed triangle lists, 3 verts * 3 floats,
+// SAME per-vertex ordering (apps/holtburger-web/src/lib.rs pack_model_mesh)
+// and in CELL-LOCAL coordinates — normals need the same world rotation as
+// positions before the retail FLOOR_Z up-dot test means anything.
+function scanWalkableFloorSpan(mesh, originZ, qw, qx, qy, qz) {
+  const positions = mesh.positions, normals = mesh.normals;
+  if (!positions || !normals || positions.length !== normals.length || positions.length < 9) return null;
+  const triCount = (positions.length / 9) | 0;
+  let zMin = Infinity, zMax = -Infinity;
+  for (let t = 0; t < triCount; t++) {
+    const o = t * 9;
+    let nx = 0, ny = 0, nz = 0;
+    for (let v = 0; v < 3; v++) {
+      nx += normals[o + v * 3];
+      ny += normals[o + v * 3 + 1];
+      nz += normals[o + v * 3 + 2];
+    }
+    const len = Math.hypot(nx, ny, nz) || 1;
+    const [, , wnz] = rotateByQuat(nx / len, ny / len, nz / len, qw, qx, qy, qz);
+    if (wnz < FLOOR_Z) continue; // wall/ceiling/steep-slope triangle
+    for (let v = 0; v < 3; v++) {
+      const [, , wz] = rotateByQuat(
+        positions[o + v * 3], positions[o + v * 3 + 1], positions[o + v * 3 + 2],
+        qw, qx, qy, qz
+      );
+      const worldZ = originZ + wz;
+      if (worldZ < zMin) zMin = worldZ;
+      if (worldZ > zMax) zMax = worldZ;
+    }
+  }
+  return zMin <= zMax ? { zMin, zMax } : null;
+}
+
 // Fetch one landblock's EnvCellPlacements and merge them into `graph`
 // (the per-placement parse extracted verbatim from buildGraphFromWasm).
 // Resolves true when the landblock contributed any cells; never throws.
@@ -613,6 +771,7 @@ async function collectLandblockIntoGraph(fetchEnvCells, lbWord, graph) {
       let pos = { x: p.cellOriginX, y: p.cellOriginY, z: p.cellOriginZ };
       if (typeof pos.x !== "number" || typeof pos.y !== "number" || typeof pos.z !== "number")
         continue;
+      let floorZMin, floorZMax;
       // Per-cell anchor (soak-13): BUILDING interiors put every EnvCell on
       // the shared building frame — identical origins for all cells — which
       // collapsed path legs to a single point and wedged exit walks into
@@ -625,19 +784,22 @@ async function collectLandblockIntoGraph(fetchEnvCells, lbWord, graph) {
         const mesh = typeof p.takeMesh === "function" ? p.takeMesh() : null;
         if (mesh) {
           try {
+            const [qw, qx, qy, qz] = normalizedOrientation(p);
             const bb = mesh.bbox;
             if (bb && bb.length === 6) {
               const lx = (bb[0] + bb[3]) / 2, ly = (bb[1] + bb[4]) / 2, lz = bb[2];
-              let qw = p.cellOrientationQw, qx = p.cellOrientationQx, qy = p.cellOrientationQy, qz = p.cellOrientationQz;
-              if (![qw, qx, qy, qz].every(Number.isFinite) || (qw === 0 && qx === 0 && qy === 0 && qz === 0)) {
-                qw = 1; qx = qy = qz = 0;
-              }
-              // v' = q v q* (standard quaternion rotation, expanded)
-              const tx = 2 * (qy * lz - qz * ly), ty = 2 * (qz * lx - qx * lz), tz = 2 * (qx * ly - qy * lx);
-              const rx = lx + qw * tx + (qy * tz - qz * ty);
-              const ry = ly + qw * ty + (qz * tx - qx * tz);
-              const rz = lz + qw * tz + (qx * ty - qy * tx);
+              const [rx, ry, rz] = rotateByQuat(lx, ly, lz, qw, qx, qy, qz);
               pos = { x: pos.x + rx, y: pos.y + ry, z: pos.z + rz };
+            }
+            // isDropEdge refinement (2026-07-20, HANDOFF-wedge-closeout Track
+            // E3/F): same mesh, same rotation — additionally record the
+            // WORLD-frame Z span of this cell's own walkable-slope floor, so
+            // a stair/ramp shaft whose bbox-anchor centers still land near-
+            // stacked (SHAFT_HORIZ_M) isn't pruned as an un-jumpable drop.
+            const span = scanWalkableFloorSpan(mesh, p.cellOriginZ, qw, qx, qy, qz);
+            if (span) {
+              floorZMin = span.zMin;
+              floorZMax = span.zMax;
             }
           } finally {
             try { mesh.free?.(); } catch (_) { /* moved */ }
@@ -660,7 +822,12 @@ async function collectLandblockIntoGraph(fetchEnvCells, lbWord, graph) {
           if ((lo > 0 && lo < 0x100) || lo >= 0xfffe) exits.push(nb);
         }
       }
-      graph.set(id, { pos, neighbors, exits });
+      const node = { pos, neighbors, exits };
+      if (typeof floorZMin === "number") {
+        node.floorZMin = floorZMin;
+        node.floorZMax = floorZMax;
+      }
+      graph.set(id, node);
       added = true;
     } catch (_) {
       // malformed placement — skip, like the C# per-cell catch (cs:182)
@@ -771,6 +938,7 @@ export async function buildGraphFromWasm(sessionHandle, depth = 0, opts = {}) {
 export default {
   isEnvCellId,
   isDropEdge,
+  edgeKey,
   nearestCell,
   findPath,
   findExitPath,

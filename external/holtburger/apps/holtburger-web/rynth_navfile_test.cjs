@@ -128,10 +128,14 @@ const FIXTURES = path.join(__dirname, "rynth", "testdata");
     });
 
     await t("F9", "unknown waypoint type stops cleanly (no desync)", () => {
-      const text = ["uTank2 NAV 1.2", "2", "2", "0", "1", "1", "0.5", "0", "9", "1", "1", "0.5", "0"].join("\r\n") + "\r\n";
+      // 42 is not a real NTypeID (metaf Core/Enums.cs: 0..9, plus VTank's own
+      // 99 "Other") — type 9 (Jump) is now a KNOWN, parsed type (2026-07-20
+      // nav_import corpus survey found real VTank .nav files using it), so the
+      // "unknown type" placeholder moved to a value that stays unknown.
+      const text = ["uTank2 NAV 1.2", "2", "2", "0", "1", "1", "0.5", "0", "42", "1", "1", "0.5", "0"].join("\r\n") + "\r\n";
       const parsed = NF.parseNav(text);
-      assert.equal(parsed.points.length, 1, "stopped before the type-9 point");
-      assert.match(parsed.warning, /unknown waypoint type 9/);
+      assert.equal(parsed.points.length, 1, "stopped before the type-42 point");
+      assert.match(parsed.warning, /unknown waypoint type 42/);
     });
 
     await t("F10", "embedded .af NAVDATA verbatim block -> parsed nav", () => {

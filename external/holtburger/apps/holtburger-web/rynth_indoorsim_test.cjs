@@ -138,6 +138,98 @@ async function t(name, fn) {
     assert.equal(M.isDropEdge(n(0, 0, 0), n(4, 0, 8)), true); // symmetric: up-drop
   });
 
+  // ── isDropEdge floor-span refinement (2026-07-20, HANDOFF-wedge-closeout
+  // Track E3/F) ───────────────────────────────────────────────────────────
+  // Real geometry captured live (chrome-devtools headless probe against the
+  // booted holtburger-web client, fetchEnvCellsInLandblock + takeMesh(), see
+  // docs/rynth-integration/HANDOFF-wedge-closeout-phi4-rig-2026-07-20.md
+  // Track E3/F Venue 1 + Venue 2):
+  //
+  //   Venue 2 (apartment z-stack, lb 0x7200): cell 0x72000100 origin
+  //   (world x=21928,y=-40,z=0), bbox [1.9667,-1.9667,4.6194, 5,1.9667,6],
+  //   6 tris, 2 of them FLOOR (flat, world Z=6 exactly — floorZMin=
+  //   floorZMax=6). Cell 0x720002C4 (the hub/shaft above it) origin
+  //   (21928,-40,6), bbox [-5,-5,0, 5,5,6], 4 tris, ALL walls (floorTriCount
+  //   0 — a pure vertical shaft, no floor of its own). Post the existing
+  //   bbox-anchor fix (collectLandblockIntoGraph ~:760-775), the ACTUAL
+  //   node-center geometry for this pair is dHoriz=3.48 dZ=1.38 (NOT the
+  //   dZ=6/dHoriz=0 the handoff worried about pre-verification) — the plain
+  //   angle test (21.6° < 45°) already calls it walkable, no floor-span
+  //   rescue needed. Encoded below as a regression pin.
+  //
+  //   Venue 1 (Holtburg building, lb-frame): cells 0xA9B40104 (ground,
+  //   bbox [-4.5,-10.5,0, 3.5,-0.5,3], 2/24 floor tris, floorZ 66),
+  //   0xA9B4010C (landing, bbox [1.9,-7,3, 3.5,-0.5,3.5], 0/8 floor tris —
+  //   also a pure-wall connector), 0xA9B40101 (upper, bbox
+  //   [-3.5,-10.5,3.5, 3.5,-0.5,9.5], 18/43 floor tris, floorZ 69.5); shared
+  //   building origin (32532.09,34691.54,66), quat (0.70711,0,0,-0.70711)
+  //   (pure yaw — preserves world Z exactly, sanity-checked against the
+  //   dumped floorZ values). Computed node centers: 0104=(32526.59,
+  //   34692.04,66), 010C=(32528.34,34688.84,69), 0101=(32526.59,34691.54,
+  //   69.5). Both real sequential edges (0104-010C: dHoriz=3.65 dZ=3
+  //   angle=39.4°; 010C-0101: dHoriz=3.22 dZ=0.5 angle=8.8°) already clear
+  //   the plain angle test too.
+  //
+  // Neither flagged venue's REAL portal-connected edges currently hit the
+  // SHAFT_HORIZ_M branch post-bbox-fix — this suite pins that (regression:
+  // "already walkable pre-refinement") AND exercises the floor-span
+  // override's actual branch two ways: (a) a same-cell-pair-derived probe
+  // forcing SHAFT_HORIZ_M with 0x72000100's REAL floor span (a spiral-stair
+  // footprint elsewhere in the world could realistically anchor this close
+  // horizontally — the classifier must handle it), and (b) 0104/0101's own
+  // real floor spans plugged into a HYPOTHETICAL direct edge (skipping
+  // 010C) to prove the override does NOT overreach when the floors don't
+  // actually touch (66-66 vs 69.5-69.5, a real 3.5m unaccounted gap).
+  await t("floor-span refinement: real Venue 2 edge already walkable pre-refinement", () => {
+    const apt = { pos: { x: 21931.483, y: -40, z: 4.6194 }, floorZMin: 6, floorZMax: 6 };
+    const hub = { pos: { x: 21928, y: -40, z: 6 }, floorZMin: undefined, floorZMax: undefined };
+    assert.equal(M.isDropEdge(apt, hub), false); // 21.6 deg, plain angle test alone
+  });
+
+  await t("floor-span refinement: real Venue 1 sequential edges already walkable", () => {
+    const c0104 = { pos: { x: 32526.59, y: 34692.04, z: 66 }, floorZMin: 66, floorZMax: 66 };
+    const c010c = { pos: { x: 32528.34, y: 34688.84, z: 69 } }; // no floor of its own
+    const c0101 = { pos: { x: 32526.59, y: 34691.54, z: 69.5 }, floorZMin: 69.5, floorZMax: 69.5 };
+    assert.equal(M.isDropEdge(c0104, c010c), false); // 39.4 deg
+    assert.equal(M.isDropEdge(c010c, c0101), false); // 8.8 deg
+  });
+
+  await t("floor-span refinement: SHAFT_HORIZ_M rescued when a real floor span bridges it", () => {
+    // Same 0x72000100 floor data (flat at world Z=6), but positioned dHoriz
+    // < 1m from its shaft neighbor (the branch these two venues' REAL edges
+    // don't currently trigger, per the regression pin above) — the stacked-
+    // shaft trap the anchor fix alone can't resolve for a tight footprint.
+    const stairLanding = { pos: { x: 100, y: 100, z: 0 }, floorZMin: 0, floorZMax: 6.2 };
+    const shaftAbove = { pos: { x: 100.3, y: 100, z: 6 } }; // dHoriz=0.3, dZ=6
+    assert.equal(M.isDropEdge(stairLanding, shaftAbove), false); // floor span covers [0,6]
+  });
+
+  await t("floor-span refinement: no override when floors don't actually bridge (real gap)", () => {
+    // 0104 and 0101's REAL floor spans plugged into a hypothetical DIRECT
+    // edge (no 010C hop): dHoriz=0.5 triggers SHAFT_HORIZ_M, but 66-66 and
+    // 69.5-69.5 leave a real 3.5m gap neither cell's floor covers — must
+    // stay a drop (the override must not overreach).
+    const c0104 = { pos: { x: 32526.59, y: 34692.04, z: 66 }, floorZMin: 66, floorZMax: 66 };
+    const c0101 = { pos: { x: 32526.59, y: 34691.54, z: 69.5 }, floorZMin: 69.5, floorZMax: 69.5 };
+    assert.equal(M.isDropEdge(c0104, c0101), true); // dHoriz=0.5, gap unbridged
+  });
+
+  await t("floor-span refinement: true drop (no floor data anywhere) unaffected", () => {
+    // 0x720002C4's real geometry: a pure-wall shaft, no floor triangles at
+    // all. A neighbor one tier further up with the same shape (also no
+    // floor) over a near-zero-dHoriz gap must remain a drop.
+    const hub6 = { pos: { x: 21928, y: -40, z: 6 } };
+    const hub12 = { pos: { x: 21928, y: -40, z: 12 } }; // dHoriz=0, dZ=6
+    assert.equal(M.isDropEdge(hub6, hub12), true);
+  });
+
+  await t("floor-span refinement: nodes without the hint degrade to pure geometry (back-compat)", () => {
+    // Plain {pos} fixtures (no floorZMin/Max at all, e.g. every pre-existing
+    // synthetic graph in this file) must classify identically to before.
+    const n = (x, y, z) => ({ pos: { x, y, z } });
+    assert.equal(M.isDropEdge(n(0, 0, 0), n(0.5, 0, -3)), true); // shaft, no hint -> still a drop
+  });
+
   // ── findPath ────────────────────────────────────────────────────────────
   await t("straight corridor", () => {
     const p = M.findPath(corridor, id(0x100), id(0x103));
@@ -167,6 +259,71 @@ async function t(name, fn) {
 
   await t("drop-only route returns null (J3 limitation)", () => {
     assert.equal(M.findPath(dropg, id(0x110), id(0x113)), null);
+  });
+
+  // ── walkableOverrides escape hatch (2026-07-20, HANDOFF-wedge-closeout
+  // Track E3/F deliverable #2): corpus-derived ground truth (e.g. confirmed
+  // live on stream) can force a specific edge walkable regardless of what
+  // isDropEdge says — the last-resort hatch for venues the classifier still
+  // gets wrong. Canonical key = the same undirected `${min}:${max}` pairing
+  // buildPatrolRoute's internal edgeKey uses (documented in findPath's opts).
+  const ek = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+
+  await t("findPath: walkableOverrides forces the direct drop edge open", () => {
+    const direct = M.findPath(dropg, id(0x110), id(0x111), {
+      walkableOverrides: new Set([ek(id(0x110), id(0x111))]),
+    });
+    assert.deepEqual(direct, [id(0x110), id(0x111)]);
+  });
+
+  await t("findPath: walkableOverrides is per-edge, not global (other drops still pruned)", () => {
+    // Overriding 0x110-0x111 does NOT also open 0x111-0x113 (a separate
+    // shaft edge) — X stays unreachable.
+    const p = M.findPath(dropg, id(0x110), id(0x113), {
+      walkableOverrides: new Set([ek(id(0x110), id(0x111))]),
+    });
+    assert.equal(p, null);
+    // Overriding BOTH edges on the only path opens it end to end.
+    const p2 = M.findPath(dropg, id(0x110), id(0x113), {
+      walkableOverrides: new Set([ek(id(0x110), id(0x111)), ek(id(0x111), id(0x113))]),
+    });
+    assert.deepEqual(p2, [id(0x110), id(0x111), id(0x113)]);
+  });
+
+  await t("findPath: bogus/empty walkableOverrides is inert (behaves like no override)", () => {
+    const p = M.findPath(dropg, id(0x110), id(0x111), { walkableOverrides: new Set() });
+    assert.deepEqual(p, [id(0x110), id(0x112), id(0x111)]); // unchanged detour
+  });
+
+  await t("getMainRouteNodes: walkableOverrides pulls the drop-gated cell into reachability", () => {
+    const withoutOverride = M.getMainRouteNodes(dropg, id(0x110));
+    assert.equal(withoutOverride.has(id(0x113)), false); // baseline: behind a drop
+    const withOverride = M.getMainRouteNodes(dropg, id(0x110), null, {
+      walkableOverrides: new Set([ek(id(0x111), id(0x113))]),
+    });
+    assert.equal(withOverride.has(id(0x113)), true);
+  });
+
+  await t("buildPatrolRoute: walkableOverrides adds the freed edge to the patrol walk", () => {
+    const walk = M.buildPatrolRoute(dropg, id(0x110), null, {
+      walkableOverrides: new Set([ek(id(0x111), id(0x113))]),
+    });
+    assert.ok(walk.includes(id(0x113)), JSON.stringify(walk));
+    assert.equal(walk[0], id(0x110));
+    assert.equal(walk[walk.length - 1], id(0x110)); // still closes back home
+  });
+
+  await t("findExitPath: walkableOverrides lets an exit hide behind a drop", () => {
+    const withExit = mk({
+      0x120: [0, 0, 0, [0x121]],
+      0x121: [4, 0, -8, [0x120]], // drop below A; 0x121 has the only exit
+    });
+    withExit[id(0x121)].exits = [(LB | 0x0005) >>> 0]; // direct outdoor LandCell
+    assert.equal(M.findExitPath(withExit, id(0x120)), null); // exit unreachable, drop-gated
+    const rescued = M.findExitPath(withExit, id(0x120), {
+      walkableOverrides: new Set([ek(id(0x120), id(0x121))]),
+    });
+    assert.ok(rescued && rescued.exitCell === id(0x121), JSON.stringify(rescued));
   });
 
   await t("unreachable / missing endpoints return null", () => {
@@ -338,6 +495,171 @@ async function t(name, fn) {
     assert.deepEqual(freed.sort(), [0x100, 0x101, 0x102]); // wasm objects freed
     // and the built graph routes end-to-end:
     assert.deepEqual(M.findPath(g, id(0x100), id(0x102)), [id(0x100), id(0x101), id(0x102)]);
+  });
+
+  // ── floor-span wiring: takeMesh() -> collectLandblockIntoGraph -> node
+  // .floorZMin/floorZMax -> isDropEdge override, end to end through
+  // buildGraphFromWasm. Mesh fixtures reproduce the REAL aggregate geometry
+  // dumped for 0x72000100 (2 floor tris flat at local z=6, of 6 total) and
+  // 0x720002C4 (4 wall tris, 0 floor) — same bbox/triCount/floorTriCount/
+  // floorZMin/Max cited in the floor-span refinement block above; only the
+  // individual vertex/normal arrays are synthesized (the live probe reported
+  // aggregates, not raw arrays) to reproduce those exact aggregates.
+  function flatFloorTri(z, x0, y0, x1, y1) {
+    // One up-facing (normal (0,0,1)) triangle of a horizontal quad at local z.
+    return { positions: [x0, y0, z, x1, y0, z, x1, y1, z], normals: [0, 0, 1, 0, 0, 1, 0, 0, 1] };
+  }
+  function wallTri(nx, ny, x, y0, y1, z0, z1) {
+    // One vertical-normal triangle — never counts as floor (FLOOR_Z gate).
+    return { positions: [x, y0, z0, x, y1, z0, x, y0, z1], normals: [nx, ny, 0, nx, ny, 0, nx, ny, 0] };
+  }
+  function mkMesh(bboxArr, tris) {
+    const positions = [], normals = [];
+    for (const tr of tris) {
+      positions.push(...tr.positions);
+      normals.push(...tr.normals);
+    }
+    return {
+      bbox: Float32Array.from(bboxArr),
+      positions: Float32Array.from(positions),
+      normals: Float32Array.from(normals),
+      free() {},
+    };
+  }
+  // Real dump: 0x72000100 bbox [1.9667,-1.9667,4.6194, 5,1.9667,6], 6 tris
+  // (2 floor @ world Z=6, 4 wall), origin (world) x=21928 y=-40 z=0.
+  const APT_BBOX = [1.9667, -1.9667, 4.6194, 5, 1.9667, 6];
+  const aptMesh = () =>
+    mkMesh(APT_BBOX, [
+      flatFloorTri(6, 2, -1.9667, 5, 1.9667),
+      flatFloorTri(6, 2, -1.9667, 5, 1.9667),
+      wallTri(1, 0, 5, -1.9667, 1.9667, 4.6194, 6),
+      wallTri(-1, 0, 1.9667, -1.9667, 1.9667, 4.6194, 6),
+      wallTri(0, 1, 3, -1.9667, 1.9667, 4.6194, 6),
+      wallTri(0, -1, 3, -1.9667, 1.9667, 4.6194, 6),
+    ]);
+  // Real dump: 0x720002C4 bbox [-5,-5,0, 5,5,6], 4 tris, ALL wall (0 floor).
+  const HUB_BBOX = [-5, -5, 0, 5, 5, 6];
+  const hubMesh = () =>
+    mkMesh(HUB_BBOX, [
+      wallTri(1, 0, 5, -5, 5, 0, 6),
+      wallTri(-1, 0, -5, -5, 5, 0, 6),
+      wallTri(0, 1, 0, -5, 5, 0, 6),
+      wallTri(0, -1, 0, -5, 5, 0, 6),
+    ]);
+
+  await t("buildGraphFromWasm wires floorZMin/floorZMax from the real Venue 2 mesh shapes", async () => {
+    const freed = [];
+    const APT = id(0x100), HUB = id(0x2c4);
+    const handle = { getCurrentCellId: () => APT };
+    const g = await M.buildGraphFromWasm(handle, 0, {
+      fetchEnvCells: async () => [
+        {
+          cellId: APT, cellOriginX: X0 + 40, cellOriginY: Y0 - 40, cellOriginZ: 0,
+          cellOrientationQw: 1, cellOrientationQx: 0, cellOrientationQy: 0, cellOrientationQz: 0,
+          takeMesh: () => aptMesh(),
+          takePortalCellIds: () => Uint32Array.from([HUB]),
+          free: () => freed.push("apt"),
+        },
+        {
+          cellId: HUB, cellOriginX: X0 + 40, cellOriginY: Y0 - 40, cellOriginZ: 6,
+          cellOrientationQw: 1, cellOrientationQx: 0, cellOrientationQy: 0, cellOrientationQz: 0,
+          takeMesh: () => hubMesh(),
+          takePortalCellIds: () => Uint32Array.from([APT]),
+          free: () => freed.push("hub"),
+        },
+      ],
+    });
+    const aptNode = g.get(APT), hubNode = g.get(HUB);
+    assert.equal(aptNode.floorZMin, 6); // matches the real dump exactly
+    assert.equal(aptNode.floorZMax, 6);
+    assert.equal(hubNode.floorZMin, undefined); // no floor tris -> no hint
+    assert.equal(hubNode.floorZMax, undefined);
+    assert.deepEqual(freed.sort(), ["apt", "hub"]);
+    // And the wiring is live in isDropEdge/findPath (not just stored data):
+    const p = M.findPath(g, APT, HUB);
+    assert.ok(p && p.length === 2, JSON.stringify(p));
+  });
+
+  await t("buildGraphFromWasm floor-span rescues a forced SHAFT_HORIZ_M edge end-to-end", async () => {
+    // A stacked stair-shaft cell: same real 0x72000100 footprint (bbox
+    // dimensions), but modeled with flat treads at BOTH its own bbox-min Z
+    // (4.6194, matching the real dump) AND the neighbor's Z (6) — a graduated
+    // stair floor is exactly a series of flat horizontal treads, so this is
+    // a realistic (if synthesized, since the live probe gave aggregates not
+    // raw vertices) stand-in for "the real mesh had more tread tris than the
+    // 0x100 probe's 2, spanning the full rise." Origin chosen so the bbox
+    // anchor lands dHoriz < 1m from the shaft above it — the SHAFT_HORIZ_M
+    // branch these two flagged venues' REAL edges don't happen to trigger
+    // post-bbox-fix (see the regression pin above), but a tighter real
+    // stairwell footprint elsewhere plausibly would.
+    const stairMesh = () =>
+      mkMesh(APT_BBOX, [
+        flatFloorTri(4.6194, 2, -1.9667, 5, 1.9667),
+        flatFloorTri(6, 2, -1.9667, 5, 1.9667),
+        wallTri(1, 0, 5, -1.9667, 1.9667, 4.6194, 6),
+        wallTri(-1, 0, 1.9667, -1.9667, 1.9667, 4.6194, 6),
+      ]);
+    const LO = id(0x300), HI = id(0x301);
+    const handle = { getCurrentCellId: () => LO };
+    const g = await M.buildGraphFromWasm(handle, 0, {
+      fetchEnvCells: async () => [
+        {
+          cellId: LO, cellOriginX: X0, cellOriginY: Y0, cellOriginZ: 0,
+          cellOrientationQw: 1, cellOrientationQx: 0, cellOrientationQy: 0, cellOrientationQz: 0,
+          takeMesh: () => stairMesh(),
+          takePortalCellIds: () => Uint32Array.from([HI]),
+          free() {},
+        },
+        {
+          // origin chosen so the anchor (bbox center = origin, symmetric hub
+          // shape) lands dHoriz < 1m from LO's anchor (~x0+3.48).
+          cellId: HI, cellOriginX: X0 + 3.7, cellOriginY: Y0, cellOriginZ: 6,
+          cellOrientationQw: 1, cellOrientationQx: 0, cellOrientationQy: 0, cellOrientationQz: 0,
+          takeMesh: () => hubMesh(),
+          takePortalCellIds: () => Uint32Array.from([LO]),
+          free() {},
+        },
+      ],
+    });
+    const loNode = g.get(LO), hiNode = g.get(HI);
+    const dHoriz = Math.hypot(loNode.pos.x - hiNode.pos.x, loNode.pos.y - hiNode.pos.y);
+    assert.ok(dHoriz < 1.0, `fixture must land in the SHAFT_HORIZ_M branch (dHoriz=${dHoriz})`);
+    assert.ok(Math.abs(loNode.floorZMin - 4.6194) < 1e-3, loNode.floorZMin); // treads span the full rise (Float32 round-trip)
+    assert.equal(loNode.floorZMax, 6);
+    assert.equal(M.isDropEdge(loNode, hiNode), false); // rescued: floor bridges the gap
+    assert.deepEqual(M.findPath(g, LO, HI), [LO, HI]); // and A* takes the direct edge
+  });
+
+  await t("buildGraphFromWasm floor-span leaves a genuine SHAFT_HORIZ_M drop pruned", async () => {
+    // Same forced-close-anchor setup, but LO's real (non-stair) mesh — floor
+    // flat at z=6 only, matching the actual 0x72000100 dump — does NOT reach
+    // down to LO's own cell-center (4.6194), so the gap stays unbridged.
+    const LO = id(0x310), HI = id(0x311);
+    const handle = { getCurrentCellId: () => LO };
+    const g = await M.buildGraphFromWasm(handle, 0, {
+      fetchEnvCells: async () => [
+        {
+          cellId: LO, cellOriginX: X0, cellOriginY: Y0, cellOriginZ: 0,
+          cellOrientationQw: 1, cellOrientationQx: 0, cellOrientationQy: 0, cellOrientationQz: 0,
+          takeMesh: () => aptMesh(), // real dump: floor flat at z=6 only
+          takePortalCellIds: () => Uint32Array.from([HI]),
+          free() {},
+        },
+        {
+          cellId: HI, cellOriginX: X0 + 3.7, cellOriginY: Y0, cellOriginZ: 6,
+          cellOrientationQw: 1, cellOrientationQx: 0, cellOrientationQy: 0, cellOrientationQz: 0,
+          takeMesh: () => hubMesh(),
+          takePortalCellIds: () => Uint32Array.from([LO]),
+          free() {},
+        },
+      ],
+    });
+    const loNode = g.get(LO), hiNode = g.get(HI);
+    const dHoriz = Math.hypot(loNode.pos.x - hiNode.pos.x, loNode.pos.y - hiNode.pos.y);
+    assert.ok(dHoriz < 1.0, `fixture must land in the SHAFT_HORIZ_M branch (dHoriz=${dHoriz})`);
+    assert.equal(M.isDropEdge(loNode, hiNode), true); // NOT rescued: floor doesn't reach LO's own level
+    assert.equal(M.findPath(g, LO, HI), null); // J3: no jump primitive, drop-only route is unreachable
   });
 
   await t("buildGraphFromWasm depth bounds the graph (JS-side BFS radius)", async () => {

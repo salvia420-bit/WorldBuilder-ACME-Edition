@@ -41,7 +41,14 @@ import {
   findExitPath,
   toLegs,
   buildStitchedGraphFromWasm,
+  edgeKey,
 } from "./indoor_router.js";
+// deriveRouteFlags moved out to route_flags.js (2026-07-20) so nav_import.js
+// (VTank/.nav import) can share the SAME v2 flag semantics without pulling in
+// this whole outdoor<->indoor composition module. Re-exported below unchanged
+// so existing importers of goto_compose.js see no API difference.
+import { deriveRouteFlags } from "./route_flags.js";
+export { deriveRouteFlags }; // re-exported: named-export surface unchanged for existing importers
 
 // World-frame metres from a full objCellId + landblock-local x/y (router.js:50).
 const worldX = (cell, x) => ((cell >>> 24) & 0xff) * 192 + x;
@@ -72,10 +79,6 @@ const cellHex = (id) => "0x" + (id >>> 0).toString(16).toUpperCase();
 const ITEM_TYPE_PORTAL = 0x00010000;
 const ODF_PORTAL = 0x40000;
 const PORTAL_JUMP_M = 30; // world-frame pose jump that confirms a teleport (router.js SEAM_JUMP_M)
-// Shared replay contract v2 (agreed with the recorder side): a portal leg is one
-// FROM WHICH the next waypoint is >= this far in the world frame (a hop); an
-// indoor leg's waypoint cell isEnvCellId. Legacy routes (no fmt) derive both.
-const HOP_DISCONTINUITY_M = 500;
 const REPLAY_INDOOR_LEG_TIMEOUT_MS = 240_000;
 
 // Map | plain-object graph -> Map<u32,node> (indoor_router.js:70-79 asMap; not exported there).
@@ -289,6 +292,53 @@ function findNearbyPortal(host, playerWx, playerWy, targetWx, targetWy, playerMa
   return best;
 }
 
+// Name-based entity lookup — the SAME NearbyGuids()+TryGetObjectName
+// technique ai/tools/world.js's use_object resolver (resolveNearby) uses to
+// let the LLM "use" any nearby object by name, reused here at the router
+// layer (goto_compose sits below ai/, so this is a local port, not an
+// import) for nav-imported ptl/tlk legs that carry the object's real name
+// (nav_import.js meta.objName). Case-insensitive substring match, nearest
+// exact match to `targetWx,targetWy` wins on ambiguity. Returns
+// { guid, name, dTarget } | null. Never throws.
+function findEntityByName(host, name, targetWx, targetWy, maxRangeM) {
+  const want = typeof name === "string" ? name.trim().toLowerCase() : "";
+  if (!want || !host || typeof host.NearbyGuids !== "function") return null;
+  let guids;
+  try {
+    guids = host.NearbyGuids() || [];
+  } catch (_) {
+    return null;
+  }
+  let best = null;
+  for (const g of guids) {
+    let nm = null;
+    try {
+      nm = host.TryGetObjectName ? host.TryGetObjectName(g) : null;
+    } catch (_) {
+      nm = null;
+    }
+    if (!nm) continue;
+    const lower = nm.toLowerCase();
+    if (lower !== want && !lower.includes(want) && !want.includes(lower)) continue;
+    let p = null;
+    try {
+      p = host.TryGetObjectPosition ? host.TryGetObjectPosition(g) : null;
+    } catch (_) {
+      p = null;
+    }
+    if (!p) continue;
+    const pwx = worldX(p.objCellId >>> 0, p.x);
+    const pwy = worldY(p.objCellId >>> 0, p.y);
+    const dTarget = Math.hypot(pwx - targetWx, pwy - targetWy);
+    if (dTarget > maxRangeM) continue;
+    const exact = lower === want ? 0 : 1;
+    if (!best || exact < best.exact || (exact === best.exact && dTarget < best.dTarget)) {
+      best = { guid: g >>> 0, name: nm, dTarget, exact };
+    }
+  }
+  return best;
+}
+
 // Poll the pose until it jumps >= jumpM in the world frame (a teleport) or the
 // timeout expires. Returns the far-side pose or null. Never throws.
 async function awaitTeleport(host, fromWx, fromWy, timeoutMs, pollMs, jumpM) {
@@ -455,6 +505,136 @@ async function attemptOutdoorPortalTouch(ctx, tune) {
   const jumped = await awaitTeleport(host, pwx, pwy, tune.portalTeleportMs, tune.teleportPollMs, tune.portalJumpM);
   if (!jumped) return stage("no teleport");
   return { ok: true, portal: portal.name };
+}
+
+/**
+ * Meta-aware portal-touch assist (task: nav-imported ptl legs, live
+ * MatronHive leg-8 finding). An imported route's ptl leg carries ground-truth
+ * object data (nav_import.js meta.objName / meta.objPos) — this is strictly
+ * better evidence than attemptOutdoorPortalTouch's plain nearest-any-portal
+ * heuristic, which searches around the LEG's own coordinate (the VTank
+ * approach point, which can be tens of metres from the real object — see
+ * nav_import.js header). Search order:
+ *   (a) NAME match (findEntityByName — the same NearbyGuids+TryGetObjectName
+ *       technique ai/tools/world.js's use_object resolver uses) within reach
+ *       of the OBJECT's real position.
+ *   (b) fall back to the nearest PORTAL-flagged entity to the object's real
+ *       position (findNearbyPortal, target = objPos not the leg anchor).
+ *   (c) if nothing is in range yet, walk one leg toward the object's real
+ *       position and retry the search once from there.
+ * Returns {ok:true, portal} | {ok:false, error} (always a complete "portal
+ * touch failed: ..." message — never relies on the caller to fill one in).
+ * Never throws.
+ */
+async function attemptMetaPortalTouch(ctx, leg, tune) {
+  const { host, walk } = ctx;
+  const stage = (s) => ({ ok: false, error: `portal touch failed: ${s}` });
+  const meta = leg && leg.meta;
+  const objPos = meta && meta.objPos;
+  if (!objPos) return stage("no object ground truth on this leg");
+  const objName = meta.objName || "";
+  const twx = worldX(objPos.lb >>> 0, objPos.x);
+  const twy = worldY(objPos.lb >>> 0, objPos.y);
+
+  const searchAndUse = async () => {
+    const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
+    if (!pose) return stage("no player pose");
+    const pwx = worldX(pose.objCellId >>> 0, pose.x);
+    const pwy = worldY(pose.objCellId >>> 0, pose.y);
+    const byName = objName ? findEntityByName(host, objName, twx, twy, tune.portalDesperateRangeM ?? tune.portalRangeM) : null;
+    const found = byName || findNearbyPortal(host, pwx, pwy, twx, twy, tune.portalRangeM);
+    if (!found) return null; // not found YET — caller may retry after walking closer
+    if (typeof host.UseObject !== "function") return stage("use unavailable");
+    let sent = false;
+    try {
+      sent = !!host.UseObject(found.guid);
+    } catch (_) {
+      sent = false;
+    }
+    if (!sent) return stage("use rejected");
+    const jumped = await awaitTeleport(host, pwx, pwy, tune.portalTeleportMs, tune.teleportPollMs, tune.portalJumpM);
+    if (!jumped) return stage("no teleport");
+    return { ok: true, portal: found.name };
+  };
+
+  let res = await searchAndUse();
+  if (res) return res;
+
+  if (typeof walk === "function") {
+    const w = await walk([{ lb: objPos.lb >>> 0, x: objPos.x, y: objPos.y, z: objPos.z }], {
+      label: "portal-object-approach",
+      stallMs: tune.indoorLegTimeoutMs,
+    });
+    if (w && w.ok) {
+      res = await searchAndUse();
+      if (res) return res;
+    }
+  }
+  return stage(`portal entity not found${objName ? ` (looked for "${objName}")` : ""}`);
+}
+
+/**
+ * Recall-cast handling (rcl legs — nav_import.js meta.spellId/spellName). A
+ * recall is a SELF-CAST spell with NO physical entity to touch — unlike a
+ * portal leg, there is nothing for a touch-assist to find (the live
+ * MatronHive report's misleading "portal entity not found" on a recall-
+ * anchored hub is exactly this: the search was always going to fail). The
+ * only path to the far side is the character actually knowing and
+ * successfully casting the spell. Casts untargeted/self (mirrors
+ * buff_loop.js/vitals.js's CastSpell(0, spellId) convention), waits out any
+ * already-open cast gesture first, then awaits the resulting teleport like a
+ * portal hop. Returns {ok:true, portal:spellName} on a confirmed hop, or a
+ * LOUD, correctly-labelled {ok:false, error, reason:"recall-unavailable"}
+ * naming the spell on any failure — never a portal-entity-shaped message.
+ * Never throws.
+ */
+const RECALL_TELEPORT_MS = 20_000; // server-side cast + fade animation before the hop
+async function attemptRecallCast(ctx, leg, tune) {
+  const { host } = ctx;
+  const meta = leg && leg.meta;
+  const spellId = (meta && meta.spellId) >>> 0;
+  const spellName = (meta && meta.spellName) || (spellId ? `spell ${spellId}` : "an unknown recall spell");
+  const unavailable = (why) => ({
+    ok: false,
+    error: `recall-unavailable: ${spellName} ${why}`,
+    reason: "recall-unavailable",
+  });
+  if (!spellId) return unavailable("has no recorded spell id");
+  let known = [];
+  try {
+    const s = host && host.s;
+    known = s && typeof s.playerKnownSpells === "function" ? Array.from(s.playerKnownSpells() || []).map(Number) : [];
+  } catch (_) {
+    known = [];
+  }
+  if (!known.includes(spellId)) return unavailable("is not in the character's spellbook");
+  if (typeof host.CastSpell !== "function") return unavailable("cast API unavailable");
+  const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
+  if (!pose) return unavailable("could not confirm a player pose to detect the teleport");
+  const pwx = worldX(pose.objCellId >>> 0, pose.x);
+  const pwy = worldY(pose.objCellId >>> 0, pose.y);
+  // Let an already-open cast gesture clear before issuing a new one (same
+  // gate combat_loop.js/buff_loop.js respect).
+  try {
+    if (typeof host.GetCastBusyState === "function") {
+      const deadline = Date.now() + 3000;
+      while (host.GetCastBusyState() !== 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, tune.posePollMs));
+      }
+    }
+  } catch (_) {
+    /* gate read is best-effort */
+  }
+  let sent = false;
+  try {
+    sent = !!host.CastSpell(0, spellId);
+  } catch (_) {
+    sent = false;
+  }
+  if (!sent) return unavailable("cast was refused");
+  const jumped = await awaitTeleport(host, pwx, pwy, tune.recallTeleportMs, tune.teleportPollMs, tune.portalJumpM);
+  if (!jumped) return unavailable("cast did not produce a teleport in time");
+  return { ok: true, portal: spellName };
 }
 
 /**
@@ -749,14 +929,8 @@ export async function composeGoto(deps, to, opts = {}) {
 }
 
 // ── replay contract v2 (task #17) ───────────────────────────────────────────
-
-// World-frame 2D distance between two legs (each {lb,x,y}).
-function legDist2D(a, b) {
-  return Math.hypot(
-    worldX(a.lb >>> 0, a.x) - worldX(b.lb >>> 0, b.x),
-    worldY(a.lb >>> 0, a.y) - worldY(b.lb >>> 0, b.y)
-  );
-}
+// deriveRouteFlags itself now lives in route_flags.js (imported above) —
+// shared with nav_import.js. Only the replay-side consumers stay here.
 
 // Portal-transit tuning shared by composeGoto's transit and the replayer.
 function buildTune(opts = {}, router = null) {
@@ -771,34 +945,12 @@ function buildTune(opts = {}, router = null) {
     maxTransits: opts.portalTransits ?? 3,
     indoorLegTimeoutMs: opts.indoorLegTimeoutMs ?? REPLAY_INDOOR_LEG_TIMEOUT_MS,
     portalDesperateRangeM: opts.portalDesperateRangeM ?? 25,
+    recallTeleportMs: opts.recallTeleportMs ?? RECALL_TELEPORT_MS,
+    // Bounded indoor-wedge repath retry ladder (2026-07-20, live MatronHive
+    // report #3: the one-shot repath found a real path, walked 2 of 3 legs,
+    // then stalled on the 3rd and gave up entirely). See repathIndoor below.
+    wedgeAttempts: opts.wedgeAttempts ?? 3,
   };
-}
-
-/**
- * Derive contract-v2 flags on a recorded route (task #17). fmt===2 routes carry
- * flags from the recorder and are trusted; a LEGACY route (no fmt) is scanned:
- *   - portal: set on leg[i] when dist(leg[i], leg[i+1]) >= 500m world-frame
- *     (the departure leg of a hop) — recomputed, so a legacy route's stale
- *     arrival-portal flags are corrected.
- *   - indoor: waypoint cell isEnvCellId.
- * Returns a NEW leg array; input is not mutated.
- */
-export function deriveRouteFlags(legs, fmt) {
-  if (!Array.isArray(legs)) return [];
-  const legacy = fmt !== 2;
-  return legs.map((l, i) => {
-    const out = { ...l };
-    const lb = (l.lb >>> 0);
-    const indoor = legacy ? isEnvCellId(lb) : l.indoor === true;
-    let portal = l.portal === true;
-    if (legacy) {
-      const nxt = legs[i + 1];
-      portal = !!nxt && legDist2D(l, nxt) >= HOP_DISCONTINUITY_M;
-    }
-    if (portal) out.portal = true; else delete out.portal;
-    if (indoor) out.indoor = true; else delete out.indoor;
-    return out;
-  });
 }
 
 /**
@@ -820,30 +972,84 @@ export function routeHasPortals(legs) {
   return Array.isArray(legs) && legs.some((l) => l.portal === true);
 }
 
-// One graph re-path to `target`'s cell from the current (wedged) indoor pose,
-// walked via the doorway pre-approach. Bounded ONCE by the caller.
+// doorwayApproach emits exactly 2 legs (30% pre-approach, 50% doorway
+// midpoint) per path EDGE, then one trailing "last cell centre" leg
+// (indoor_router.js toLegs {doorwayApproach} docblock). Map a walk's
+// legsWalked count back to the specific edge it stalled ON, so the next
+// findPath attempt can exclude exactly that doorway rather than guessing.
+// Returns null when the stall was on the trailing centre/goal leg (not a
+// mid-path edge — nothing to exclude there; see repathIndoor below).
+const DOORWAY_LEGS_PER_EDGE = 2;
+function stalledEdgeFromWalk(path, legsWalked) {
+  const approachLegCount = DOORWAY_LEGS_PER_EDGE * (path.length - 1);
+  if (!(legsWalked >= 0) || legsWalked >= approachLegCount) return null;
+  const edgeIdx = Math.floor(legsWalked / DOORWAY_LEGS_PER_EDGE);
+  if (edgeIdx < 0 || edgeIdx >= path.length - 1) return null;
+  return edgeKey(path[edgeIdx] >>> 0, path[edgeIdx + 1] >>> 0);
+}
+
+// Graph re-path to `target`'s cell from the current (wedged) indoor pose,
+// walked via the doorway pre-approach. BOUNDED-RETRY (up to
+// tune.wedgeAttempts, default 3) instead of one shot (2026-07-20, live
+// MatronHive report #3): the prior one-shot version found a real 3-leg path,
+// walked 2 legs, stalled on the 3rd, and gave up outright with no way to
+// distinguish "the graph genuinely doesn't connect" from "this walk attempt
+// hit a fixable transient" (an offset doorway jamb, a momentarily-blocked
+// path). Each retry:
+//   - re-resolves the CURRENT cell/pose (a partial walk may have moved us),
+//   - excludes any doorway edge a PRIOR attempt's walk stalled inside (via
+//     findPath's opts.excludeEdges — the char may have made real progress
+//     toward the goal even though the overall walk failed, so re-planning
+//     from where we actually are, around the jammed edge, is strictly better
+//     than repeating the identical walk),
+//   - ends with the EXACT requested target coordinate (goalLeg-style, like
+//     composeGoto's case2/case3), not just the nearest cell's bbox-derived
+//     centre — a raw centre can sit inside static-object clutter (live: the
+//     Town Network room at the far side of the stall is densely furnished;
+//     walking to its geometric bbox centre rather than the actual requested
+//     point is an avoidable source of exactly this kind of wedge).
+// If excludeEdges makes the goal genuinely unreachable (findPath returns
+// null), we stop retrying immediately rather than burn the remaining
+// attempts — that's the "graph doesn't connect" case, not a "walk stalled"
+// case, and no further exclusion will change the answer.
 async function repathIndoor(ctx, tune, target) {
   const { host, buildGraph, walk } = ctx;
-  const cell = currentCell(host);
-  if (!isEnvCellId(cell)) return { ok: false, error: "indoor re-path: not indoors" };
-  const graph = await safeBuild(buildGraph, (cell & 0xffff0000) >>> 0);
-  const nodes = toMap(graph);
-  if (nodes.size === 0) return { ok: false, error: "indoor re-path: graph unavailable" };
-  const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
-  if (!pose) return { ok: false, error: "indoor re-path: no player pose" };
-  const fromCell = resolveCell(nodes, cell, pose.objCellId >>> 0, pose.x, pose.y, pose.z);
-  const toCell = resolveCell(nodes, target.lb >>> 0, target.lb >>> 0, target.x, target.y, target.z);
-  if (!fromCell || !toCell) return { ok: false, error: "indoor re-path: cell not in graph" };
-  if ((fromCell >>> 0) === (toCell >>> 0)) return { ok: true }; // already in the target cell
-  const path = findPath(graph, fromCell, toCell >>> 0);
-  if (!path) return { ok: false, error: "indoor re-path: unreachable" };
-  const rlegs = toLegs(graph, path, { doorwayApproach: true }).map((l) => ({
-    ...normalizeLegWorldFrame(l),
-    timeoutMs: tune.indoorLegTimeoutMs,
-  }));
-  const w = await walk(rlegs, { label: "wedge-repath", stallMs: tune.indoorLegTimeoutMs + 15_000 });
-  if (!w.ok) return { ok: false, error: `indoor re-path ${(w.state || "failed").toLowerCase()}` };
-  return { ok: true };
+  const maxAttempts = Math.max(1, tune.wedgeAttempts ?? 3);
+  const excludeEdges = new Set();
+  let lastError = "indoor re-path: not indoors";
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const cell = currentCell(host);
+    if (!isEnvCellId(cell)) return { ok: false, error: lastError };
+    const graph = await safeBuild(buildGraph, (cell & 0xffff0000) >>> 0);
+    const nodes = toMap(graph);
+    if (nodes.size === 0) return { ok: false, error: "indoor re-path: graph unavailable" };
+    const pose = await awaitPose(host, tune.poseTimeoutMs, tune.posePollMs);
+    if (!pose) return { ok: false, error: "indoor re-path: no player pose" };
+    const fromCell = resolveCell(nodes, cell, pose.objCellId >>> 0, pose.x, pose.y, pose.z);
+    const toCell = resolveCell(nodes, target.lb >>> 0, target.lb >>> 0, target.x, target.y, target.z);
+    if (!fromCell || !toCell) return { ok: false, error: "indoor re-path: cell not in graph" };
+    if ((fromCell >>> 0) === (toCell >>> 0)) return { ok: true }; // already in the target cell
+    const path = findPath(graph, fromCell, toCell >>> 0, { excludeEdges });
+    if (!path) {
+      // Unreachable even after excluding every edge a prior attempt wedged
+      // on: a genuine disconnect, not a fixable stall. Stop early.
+      return { ok: false, error: excludeEdges.size ? "indoor re-path: unreachable (all recovery edges exhausted)" : "indoor re-path: unreachable" };
+    }
+    const rlegs = toLegs(graph, path, { doorwayApproach: true }).map((l) => ({
+      ...normalizeLegWorldFrame(l),
+      timeoutMs: tune.indoorLegTimeoutMs,
+    }));
+    // Nail the EXACT requested target instead of stopping at the last cell's
+    // bbox-derived centre (see header note above).
+    rlegs.push(normalizeLegWorldFrame({ lb: toCell >>> 0, x: target.x, y: target.y, z: target.z }));
+    const label = attempt === 1 ? "wedge-repath" : `wedge-repath-retry${attempt}`;
+    const w = await walk(rlegs, { label, stallMs: tune.indoorLegTimeoutMs + 15_000 });
+    if (w.ok) return { ok: true };
+    lastError = `indoor re-path ${(w.state || "failed").toLowerCase()}`;
+    const stalled = stalledEdgeFromWalk(path, w.legsWalked ?? 0);
+    if (stalled) excludeEdges.add(stalled);
+  }
+  return { ok: false, error: lastError };
 }
 
 /**
@@ -892,15 +1098,44 @@ export async function replayRoute(deps, legs, opts = {}) {
     const failIdx = base + st.leg;
     walkedTotal += st.walked ?? 0;
     const failed = legs[failIdx];
+    const failedMeta = failed && failed.meta;
 
-    // Portal leg whose walk-in hop didn't fire -> touch assist, then resume the
+    // Portal leg whose walk-in hop didn't fire -> resume it, then the
     // remaining legs from the far side.
     if (st.portalBlocked && touches < tune.maxTransits) {
       touches += 1;
+      // rcl (recall spell): there is no physical entity to touch at all —
+      // cast the recorded spell instead of searching for one (the live
+      // MatronHive report's "portal entity not found" on a recall-anchored
+      // hub was always going to fail the entity search; see nav_import.js).
+      if (failedMeta && failedMeta.navType === "rcl") {
+        log(`replay: recall leg ${failIdx} — casting ${failedMeta.spellName || failedMeta.spellId}`);
+        const tr = await attemptRecallCast(ctx, failed, tune);
+        if (!tr.ok) {
+          return { ok: false, state: "FAILED", error: tr.error, reason: tr.reason, leg: failIdx, legsWalked: walkedTotal };
+        }
+        base = failIdx + 1;
+        if (base >= legs.length) return { ok: true, state: "DONE", legsWalked: walkedTotal };
+        router.follow(legs.slice(base));
+        continue;
+      }
       log(`replay: portal leg ${failIdx} blocked — touch assist`);
-      const tr = await attemptOutdoorPortalTouch(ctx, tune);
+      // A ptl leg with nav_import.js ground-truth (meta.objPos) gets the
+      // name/position-aware assist; everything else (recorded atlas routes,
+      // which never carry leg.meta) keeps the original nearest-any-portal
+      // heuristic — zero behavior change for flag-less routes.
+      const tr =
+        failedMeta && failedMeta.objPos
+          ? await attemptMetaPortalTouch(ctx, failed, tune)
+          : await attemptOutdoorPortalTouch(ctx, tune);
       if (!tr.ok) {
-        return { ok: false, state: "FAILED", error: `portal touch failed: ${tr.error || (tr.noPortal ? "portal entity not found" : "unknown")}`, leg: failIdx, legsWalked: walkedTotal };
+        return {
+          ok: false,
+          state: "FAILED",
+          error: tr.error || `portal touch failed: ${tr.noPortal ? "portal entity not found" : "unknown"}`,
+          leg: failIdx,
+          legsWalked: walkedTotal,
+        };
       }
       base = failIdx + 1;
       if (base >= legs.length) return { ok: true, state: "DONE", legsWalked: walkedTotal };
@@ -908,8 +1143,14 @@ export async function replayRoute(deps, legs, opts = {}) {
       continue;
     }
 
-    // Indoor-leg wedge -> one graph re-path to the wedged waypoint, then resume.
-    if (!st.portalBlocked && failed && failed.indoor === true && wedges < 1) {
+    // Indoor-leg wedge -> one graph re-path to the wedged waypoint, then
+    // resume. Runtime indoor check: nav-imported routes never carry
+    // leg.indoor (VTank coordinates are outdoor-projected only — nav_import.js
+    // IND1) even when a portal hop has actually landed the character inside a
+    // dungeon, so trust the LIVE pose's cell (isEnvCellId) as well as the
+    // recorded flag when deciding this is an indoor wedge worth a re-path.
+    const wedgeIsIndoor = (failed && failed.indoor === true) || isEnvCellId(currentCell(host));
+    if (!st.portalBlocked && failed && wedgeIsIndoor && wedges < 1) {
       wedges += 1;
       log(`replay: indoor wedge at leg ${failIdx} — one re-path`);
       const rr = await repathIndoor(ctx, tune, failed);

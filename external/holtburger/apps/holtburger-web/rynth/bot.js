@@ -281,6 +281,14 @@ export async function createGrindBot(sessionHandle, config = {}) {
       bot.mission = null;
       if (m) bot.lastMission = { ...m, endedAt: Date.now(), result: { ok: result.ok, state: result.state, coverage: null } };
       try { bot._onTravelDone?.({ kind: "route", label, result, mission: m }); } catch { /* hook must not break travel */ }
+      // A recall-unavailable leg (goto_compose.js attemptRecallCast) is a
+      // real, actionable prerequisite gap (the character doesn't know/can't
+      // cast the route's recall spell) — surface it as a named journal fact
+      // rather than a generic route-FAILED state, same spirit as
+      // probeFailedLeg's blocked-fact note on the plain-route path above.
+      if (!result.ok && result.reason === "recall-unavailable") {
+        try { bot.ai?.journal?.add?.("note", `route "${label}" blocked at leg ${result.leg ?? "?"}: ${result.error}`); } catch { /* journal optional */ }
+      }
       try {
         bot.ai?.director?.requestEarlyCheck(
           result.ok ? `route arrived: "${label}"` : `route FAILED: "${label}" (${result.state})`,
@@ -370,6 +378,54 @@ export async function createGrindBot(sessionHandle, config = {}) {
     } catch (e) {
       console.warn("[rynth] AI wiring failed, grinding without director:", e);
     }
+  }
+
+  // Console-pasteable VTank/.nav import (nav_import.js wiring, 2026-07-20):
+  //   await window.rynthImportNav(pastedText, "my-route-name")
+  // Mirrors ai/tools/routes.js's getAtlas() — reuses window.__atlas if the AI
+  // routes actions already created one (so follow_route/list_routes see the
+  // SAME saved route immediately), otherwise lazily creates+caches it there
+  // itself. A broken/missing nav_import.js must never break bot construction,
+  // so this is wired best-effort after `bot` exists, same as the AI director.
+  if (typeof window !== "undefined") {
+    window.rynthImportNav = async (text, name) => {
+      try {
+        const [ni, atlasMod] = await Promise.all([import(`${base}/nav_import.js`), import(`${base}/atlas.js`)]);
+        let atlas = window.__atlas;
+        if (!atlas) {
+          const Atlas = typeof atlasMod.Atlas === "function" ? atlasMod.Atlas : atlasMod.default;
+          atlas = new Atlas({});
+          window.__atlas = atlas;
+        }
+        const isPlainNav = /^\s*uTank2 NAV 1\.2/i.test(String(text).split(/\r\n|\r|\n/, 1)[0] || "");
+        if (isPlainNav) {
+          const { route, warnings } = ni.importNavText(text, { name, atlas, fileName: name });
+          if (!route) {
+            console.warn(`[rynthImportNav] no route produced: ${warnings.join("; ")}`);
+            return { route: null, warnings };
+          }
+          console.log(`[rynthImportNav] saved '${route.name}' (${route.legs.length} legs, ${route.portalsUsed} portal hop(s))${warnings.length ? ` — ${warnings.length} warning(s), see .warnings` : ""}`);
+          return { route, warnings };
+        }
+        // Not a plain .nav header: treat as an embedded .af (NAVDATA:/NAV: sections).
+        const { routes, warnings } = ni.importAfText(text, { atlas, namePrefix: name, fileName: name });
+        if (!routes.length) {
+          console.warn(`[rynthImportNav] no NAV sections found: ${warnings.join("; ")}`);
+          return { route: null, routes: [], warnings };
+        }
+        for (const r of routes) {
+          if (r.route) console.log(`[rynthImportNav] saved '${r.route.name}' (${r.route.legs.length} legs, ${r.route.portalsUsed} portal hop(s))${r.warnings.length ? ` — ${r.warnings.length} warning(s)` : ""}`);
+        }
+        // Single-section .af: hand back {route,warnings} directly like the
+        // plain-.nav path so `await window.rynthImportNav(...)` is uniform for
+        // the common case; multi-section .af additionally exposes `routes`.
+        const only = routes.length === 1 ? routes[0] : null;
+        return { route: only ? only.route : null, warnings: only ? only.warnings : warnings, routes };
+      } catch (e) {
+        console.warn(`[rynthImportNav] import failed: ${e.message}`);
+        return { route: null, warnings: [String(e.message || e)] };
+      }
+    };
   }
 
   return bot;

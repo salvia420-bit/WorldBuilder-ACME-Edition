@@ -30,3 +30,7 @@ web-time = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "macros"] }
 tempfile.workspace = true
+# route_validate example (batch corpus validator, 2026-07-20): JSON route
+# interchange loader (hb-route-v1). Already a workspace dep (holtburger-dat,
+# holtburger-web etc. all use it) — wired here, not newly introduced.
+serde_json = { workspace = true }

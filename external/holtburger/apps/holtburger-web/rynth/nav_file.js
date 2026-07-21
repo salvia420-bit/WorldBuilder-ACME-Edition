@@ -20,16 +20,95 @@
 // RynthAiCommands.cs:2598-2603 + observe.js: globalX=(EW*10+1019.5)*24,
 // globalY=(NS*10+1019.5)*24, worldZ=navZ*240. Outdoor cell (lib.rs:14463):
 // landblock_high | (cellX*8 + cellY + 1), cell=floor(local/24) clamp[0,7].
+//
+// ── Extended types (2026-07-20, nav_import corpus survey) ───────────────────
+// PortalLegacy(1)/Checkpoint(8)/Jump(9) were previously "unknown" here (parse
+// would abort past them, mid-route). Canonical field layouts cross-checked
+// against the metaf project source (Navigation/NavNodes/{NPortal,NCheckpoint,
+// NJump}.cs — the upstream NTypeID enum): PortalLegacy trailer=1 (guid, VTank
+// deprecated in favor of PortalNPC/"ptl"), Checkpoint trailer=0 (same shape as
+// Point — a script waypoint, not a coordinate-bearing node), Jump trailer=3
+// (headingDeg, holdShift "True"/"False", delayMs). Real VTank corpus files
+// (met-corpus/mudzereli-metaf-sample/{vr-bridge-jump,VRTreeJump500Rat}.nav) use
+// both 8 and 9 — this is not theoretical.
 
 export const NavRouteType = { Circular: 1, Linear: 2, Follow: 3, Once: 4 };
-export const NavPointType = { Point: 0, Recall: 2, Pause: 3, Chat: 4, OpenVendor: 5, PortalNPC: 6, Npc: 7 };
+export const NavPointType = {
+  Point: 0,
+  PortalLegacy: 1, // deprecated in VTank ("prt" in .af token form); one coord + a guid
+  Recall: 2,
+  Pause: 3,
+  Chat: 4,
+  OpenVendor: 5,
+  PortalNPC: 6,
+  Npc: 7,
+  Checkpoint: 8, // script waypoint, no trailer (metaf "chk")
+  Jump: 9, // scripted forward-jump maneuver, not a teleport (metaf "jmp")
+};
+
+// NavPointType -> metaf's M_NTypeID token name (Core/Enums.cs), the canonical
+// short name used in .af NAV: sections and good for compact route/leg
+// annotations (nav_import.js meta.navType). Single source of truth so nothing
+// downstream re-derives its own copy of this mapping.
+export const NavPointTypeToken = {
+  0: "pnt",
+  1: "prt",
+  2: "rcl",
+  3: "pau",
+  4: "cht",
+  5: "vnd",
+  6: "ptl",
+  7: "tlk",
+  8: "chk",
+  9: "jmp",
+};
+
+// Recall spellID -> canonical display name (metaf Navigation/NavNodes/
+// NRecall.cs `_recallSpells`, ~26 known values, 2026-07-20 nav_import corpus
+// survey). nav_import.js's Recall('rcl') case uses this to stamp
+// meta.spellName so an imported route's recall dependency is human-readable
+// (import-time warning + replay-time cast-target naming) instead of a bare
+// numeric id. Deliberately separate from recallNameToSpellId's (name->id)
+// map below: that one is the .af NAVDATA text-token importer (a handful of
+// common aliases), this one is the FULL retail table keyed the other way.
+export const RECALL_SPELL_NAMES = {
+  48: "Primary Portal Recall",
+  2647: "Secondary Portal Recall",
+  1635: "Lifestone Recall",
+  1636: "Lifestone Sending",
+  2645: "Portal Recall",
+  2931: "Recall Aphus Lassel",
+  2023: "Recall the Sanctuary",
+  2943: "Recall to the Singularity Caul",
+  3865: "Glenden Wood Recall",
+  2041: "Aerlinthe Recall",
+  2813: "Mount Lethe Recall",
+  2941: "Ulgrim's Recall",
+  4084: "Bur Recall",
+  4198: "Paradox-touched Olthoi Infested Area Recall",
+  4128: "Call of the Mhoire Forge",
+  4213: "Colosseum Recall",
+  5175: "Facility Hub Recall",
+  5330: "Gear Knight Invasion Area Camp Recall",
+  5541: "Lost City of Neftet Recall",
+  4214: "Return to the Keep",
+  6150: "Rynthid Recall",
+  6321: "Viridian Rise Recall",
+  6322: "Viridian Rise Great Tree Recall",
+  6325: "Celestial Hand Stronghold Recall",
+  6327: "Radiant Blood Stronghold Recall",
+  6326: "Eldrytch Web Stronghold Recall",
+};
+
 const HEADER = "uTank2 NAV 1.2";
 
 // Single source of truth: trailer lines AFTER the 5-line prologue, per type.
 // Reader, writer, and any external counter share THIS table so they can't
-// drift (the pre-2026-06-15 bug). Point(0)/unknown = 0.
+// drift (the pre-2026-06-15 bug). Point(0)/Checkpoint(8)/unknown = 0.
 export function trailerLineCount(type) {
   switch (type) {
+    case NavPointType.PortalLegacy:
+      return 1;
     case NavPointType.Recall:
     case NavPointType.Pause:
     case NavPointType.Chat:
@@ -39,13 +118,17 @@ export function trailerLineCount(type) {
     case NavPointType.PortalNPC:
     case NavPointType.Npc:
       return 6;
+    case NavPointType.Checkpoint:
+      return 0; // same shape as Point — explicit for documentation
+    case NavPointType.Jump:
+      return 3;
     default:
       return 0;
   }
 }
 
 export function isKnownType(t) {
-  return t === 0 || t === 2 || t === 3 || t === 4 || t === 5 || t === 6 || t === 7;
+  return t === 0 || t === 1 || t === 2 || t === 3 || t === 4 || t === 5 || t === 6 || t === 7 || t === 8 || t === 9;
 }
 
 // ── coordinate helpers ──────────────────────────────────────────────────────
@@ -89,7 +172,18 @@ export function parseNav(text) {
   const trailingEol = /\r\n$|\r$|\n$/.test(text);
   const lines = text.split(/\r\n|\r|\n/);
   if (trailingEol && lines[lines.length - 1] === "") lines.pop(); // drop split artifact
-  const out = { header: lines[0] || "", routeType: 0, pointCount: 0, points: [], eol, trailingEol, warning: null };
+  const out = {
+    header: lines[0] || "",
+    routeType: 0,
+    routeTypeLine: null,
+    pointCount: 0,
+    pointCountLine: null,
+    points: [],
+    eol,
+    trailingEol,
+    warning: null,
+    tail: [],
+  };
   if (lines.length < 3 || !(lines[0] || "").toLowerCase().includes(HEADER.toLowerCase())) {
     out.warning = "not a uTank2 NAV 1.2 file";
     return out;
@@ -124,6 +218,9 @@ export function parseNav(text) {
       p.z = parseFloat(take());
       p.flag = take(); // skipped flag/colour line (preserved raw)
       switch (typeRaw) {
+        case NavPointType.PortalLegacy:
+          p.guid = parseInt(take(), 10) >>> 0;
+          break;
         case NavPointType.Recall:
           p.spellId = parseInt(take(), 10);
           break;
@@ -146,8 +243,13 @@ export function parseNav(text) {
           p.exitNS = parseFloat(take());
           p.exitZ = parseFloat(take());
           break;
+        case NavPointType.Jump:
+          p.headingDeg = parseFloat(take());
+          p.holdShift = parseTie(take());
+          p.delayMs = parseFloat(take());
+          break;
         default:
-          break; // Point(0): no trailer
+          break; // Point(0)/Checkpoint(8): no trailer
       }
       out.points.push(p);
     } catch (e) {
@@ -189,6 +291,9 @@ export function writeNav(parsed) {
     lines.push(fmt(p.z));
     lines.push(p.flag != null ? String(p.flag) : "0");
     switch (p.type) {
+      case NavPointType.PortalLegacy:
+        lines.push(String((p.guid ?? 0) >>> 0));
+        break;
       case NavPointType.Recall:
         lines.push(String(p.spellId ?? 0));
         break;
@@ -211,8 +316,13 @@ export function writeNav(parsed) {
         lines.push(fmt(p.exitNS ?? 0));
         lines.push(fmt(p.exitZ ?? 0));
         break;
-      default:
+      case NavPointType.Jump:
+        lines.push(fmt(p.headingDeg ?? 0));
+        lines.push(p.holdShift ? "True" : "False");
+        lines.push(fmt(p.delayMs ?? 0));
         break;
+      default:
+        break; // Point(0)/Checkpoint(8): no trailer
     }
   }
   if (parsed.tail && parsed.tail.length) for (const l of parsed.tail) lines.push(l);
@@ -235,6 +345,10 @@ export function navToRoute(parsed, { name } = {}) {
   for (const p of parsed.points) {
     const leg = navPointToLeg(p.ew || 0, p.ns || 0, p.z || 0);
     switch (p.type) {
+      case NavPointType.PortalLegacy:
+        leg.portal = true;
+        leg.label = `portal:${(p.guid ?? 0) >>> 0}`;
+        break;
       case NavPointType.Recall:
         leg.portal = true;
         leg.label = `recall:${p.spellId ?? 0}`;
@@ -255,8 +369,11 @@ export function navToRoute(parsed, { name } = {}) {
       case NavPointType.Pause:
         leg.label = `pause:${p.pauseMs ?? 0}`;
         break;
+      case NavPointType.Jump:
+        leg.label = `jump:${p.headingDeg ?? 0}`;
+        break;
       default:
-        break; // Point
+        break; // Point / Checkpoint
     }
     legs.push(leg);
   }
@@ -382,8 +499,27 @@ function parseAfNavSection(lines, idx, out) {
       case "tlk":
         if (tok.length >= 5) points.push({ type: 6, ew: num(tok[1]), ns: num(tok[2]), z: num(tok[3]), flag: "0", name: tok.length >= 6 ? tok[5] : "NPC", objectClass: 37, isTie: false, exitEW: 0, exitNS: 0, exitZ: 0 });
         break;
+      case "chk": // metaf NCheckpoint.ImportFromMetAF: "chk x y z"
+        if (tok.length >= 4) points.push({ type: 8, ew: num(tok[1]), ns: num(tok[2]), z: num(tok[3]), flag: "0" });
+        break;
+      case "jmp": // metaf NJump.ImportFromMetAF: "jmp x y z headingDeg {holdShift} delayMs"
+        if (tok.length >= 7)
+          points.push({
+            type: 9,
+            ew: num(tok[1]),
+            ns: num(tok[2]),
+            z: num(tok[3]),
+            flag: "0",
+            headingDeg: num(tok[4]),
+            holdShift: tok[5] === "True",
+            delayMs: num(tok[6]),
+          });
+        break;
+      case "prt": // metaf NPortal.ImportFromMetAF (deprecated): "prt x y z guid"
+        if (tok.length >= 5) points.push({ type: 1, ew: num(tok[1]), ns: num(tok[2]), z: num(tok[3]), flag: "0", guid: parseInt(tok[4], 10) || 0 });
+        break;
       default:
-        break; // flw/chk/jmp: no standard nav point
+        break; // flw: pseudo-node, no xyz (whole-nav "follow player" — not a waypoint)
     }
   }
   if (navName) out[navName] = { header: HEADER, routeType, points, eol: "\r\n", trailingEol: true };
@@ -442,4 +578,4 @@ function recallNameToSpellId(name) {
   return map[String(name).toLowerCase()] || 0;
 }
 
-export default { parseNav, writeNav, navToRoute, routeToNav, parseAfNavs, trailerLineCount, NavRouteType, NavPointType };
+export default { parseNav, writeNav, navToRoute, routeToNav, parseAfNavs, trailerLineCount, NavRouteType, NavPointType, NavPointTypeToken, RECALL_SPELL_NAMES };
