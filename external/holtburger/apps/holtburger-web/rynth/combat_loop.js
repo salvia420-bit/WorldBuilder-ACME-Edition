@@ -72,6 +72,15 @@ export class RynthCombatLoop {
     this.lastSwingAt = 0;
     this.warSpell = null;
     this._running = false;
+    // Director-togglable hunting (2026-07-21 scope addition): the combat
+    // kernel auto-engages any attackable object whenever it's on; the AI
+    // director now owns that as a toggle (hunt_start/hunt_stop,
+    // tools/world.js) so it can hunt when it chooses and stand down while
+    // surveying/traveling/dying. Defaults to CURRENT behavior (true) — the
+    // boot-time on/off switch (?botKernel=off / config.kernel===false, the
+    // WHOLE kernel) is unchanged; this is a narrower runtime knob on just
+    // the combat loop's own target scan.
+    this.enabled = true;
   }
 
   startOn(host) {
@@ -162,6 +171,7 @@ export class RynthCombatLoop {
 
   // ── target selection (T2 filter subset + natural scoring + T8 hook) ──
   _scanTargets() {
+    if (!this.enabled) return []; // hunting OFF (director toggle) — never acquire a target
     const h = this.host;
     const me = h.TryGetPlayerPose();
     if (!me) return [];

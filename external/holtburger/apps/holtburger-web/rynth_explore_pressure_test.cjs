@@ -21,6 +21,7 @@ function check(name, ok, detail) {
 function mkHost(pose, { hasSession = true, nearby = [], descFlags = {}, objPos = {}, objName = {} } = {}) {
   const moves = [];
   const chatCalls = [];
+  const useCalls = [];
   return {
     _pose: pose,
     s: hasSession ? {} : null,
@@ -35,7 +36,10 @@ function mkHost(pose, { hasSession = true, nearby = [], descFlags = {}, objPos =
     TryGetObjectDescFlags: (g) => (g in descFlags ? descFlags[g] : 0),
     TryGetObjectPosition: (g) => objPos[g] ?? null,
     TryGetObjectName: (g) => objName[g] ?? null,
+    // _escalatePortal's UseObject (1C, training-academy portal rung).
+    UseObject(g) { useCalls.push(g); return true; },
     _moves: moves,
+    _useCalls: useCalls,
   };
 }
 function mkRouter(state = "IDLE") {
@@ -208,22 +212,27 @@ const flush = () => new Promise((r) => setImmediate(r));
   }
 
   // ---- <=6 consecutive random hops, then stand down until a check-in ---
-  // (cap tuned 3->6 on 2026-07-20 — stream felt statue-y at 3)
+  // (cap tuned 3->6 on 2026-07-20 — stream felt statue-y at 3). Uses 20s
+  // gaps, not the usual 26s (still clears both idle gates comfortably): 8
+  // iterations at 26s would cross 208s of elapsed mock-pose-frozen time,
+  // which is ALSO enough to trip the new movement-dead watchdog (scope item
+  // 3, 3-minute threshold) — an orthogonal mechanism this block isn't
+  // testing. 20s keeps the whole scenario under that threshold.
   {
     t = 3_000_000;
     const host = mkHost(outdoorPose);
     const bot = mkBot();
     const c = new ExplorePressureController(host, mkRouter("IDLE"), IR, { isOperatorStopLatched: () => false }, { now: clock });
     c.bot = bot;
-    for (let i = 0; i < 6; i++) { t += 26_000; c.tick(); await flush(); }
+    for (let i = 0; i < 6; i++) { t += 20_000; c.tick(); await flush(); }
     check("stand-down: 6 consecutive hops fired", host._moves.length === 6);
-    t += 26_000;
+    t += 20_000;
     c.tick();
     await flush();
     check("stand-down: 7th hop suppressed without director input", host._moves.length === 6);
     // A fresh director check-in (director._lastCheckAt changes) releases it.
     bot.ai.director._lastCheckAt = Date.now();
-    t += 26_000;
+    t += 20_000;
     c.tick();
     await flush();
     check("stand-down: released by the next director check-in", host._moves.length === 7);
@@ -549,6 +558,378 @@ const flush = () => new Promise((r) => setImmediate(r));
     c.tick();
     await flush();
     check("no exploreMemory on extensions: falls back to legacy random/door hop", host._moves.length === 1 && bot._notes[0].text.includes("random hop"));
+  }
+
+  // ═══ 1C: deterministic portal rung (training-academy wedge fix, 2026-07-21) ═══
+  // Every case: escalation is exhausted (no dungeonNav, no ir.findExitPath) so
+  // _escalateOut() always returns false — exactly the "correct failure in a
+  // portal-only dungeon" the researcher documented — and severity>=2 alone
+  // (no local frontier needed) triggers the escalateCondition gate, matching
+  // the existing "step 3" tests' pattern above.
+  const ACADEMY_LB = 0x08600000;
+  const ACADEMY_A = ACADEMY_LB | 0x150;
+  function mkAcademyGraph() {
+    return new Map([[ACADEMY_A, { pos: { x: 0, y: 0, z: 0 }, neighbors: [] }]]);
+  }
+  function mkAcademyIr(graph) {
+    return { isEnvCellId: IR.isEnvCellId, nearestCell: () => null, buildGraphFromWasm: async () => graph, toLegs: () => [] };
+  }
+  const wedgedEm = () => mkExploreMemory({
+    frontier: () => null,
+    loopVerdict: () => ({ looping: true, severity: 2, reason: "wedged", correction: "leave" }),
+  });
+
+  // ---- 1C(a): escalation exhausted + a far portal -> MoveToPosition toward it ----
+  {
+    t = 15_000_000;
+    const pose = { objCellId: ACADEMY_A, x: 0, y: 0, z: 0 };
+    const PORTAL = 0x7001;
+    const host = mkHost(pose, {
+      nearby: [PORTAL],
+      descFlags: { [PORTAL]: 0x40000 }, // ODF_PORTAL
+      objPos: { [PORTAL]: { objCellId: ACADEMY_A, x: 40, y: 0, z: 0 } }, // 40m away
+      objName: { [PORTAL]: "Exit to Holtburg" },
+    });
+    const bot = mkBot({ extensions: { exploreMemory: wedgedEm() } }); // no dungeonNav
+    const graph = mkAcademyGraph();
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), mkAcademyIr(graph), { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    c._lastMoveAt = t - 30_000;
+    c._lastStepAt = t - 30_000;
+    await c._step(t);
+    check("1C(a): MoveToPosition issued toward the far portal", host._moves.length === 1, JSON.stringify(host._moves));
+    check("1C(a): does not UseObject while still >5m away", host._useCalls.length === 0);
+    check("1C(a): journal: ESCALATE + walking to portal + name",
+      bot._notes[0].text.includes("ESCALATE") && bot._notes[0].text.includes("walking to portal") && bot._notes[0].text.includes("Exit to Holtburg"),
+      bot._notes[0]?.text);
+    check("1C(a): _pendingEscapeGuid tracks the portal", c._pendingEscapeGuid === PORTAL);
+    check("1C(a): never touches InvokeChatParser", host._chatCalls.length === 0);
+  }
+
+  // ---- 1C(b): a portal within 5m -> UseObject, not a walk ----
+  {
+    t = 15_500_000;
+    const pose = { objCellId: ACADEMY_A, x: 0, y: 0, z: 0 };
+    const PORTAL = 0x7002;
+    const host = mkHost(pose, {
+      nearby: [PORTAL],
+      descFlags: { [PORTAL]: 0x40000 },
+      objPos: { [PORTAL]: { objCellId: ACADEMY_A, x: 3, y: 0, z: 0 } }, // 3m away
+      objName: { [PORTAL]: "Exit to Holtburg" },
+    });
+    const bot = mkBot({ extensions: { exploreMemory: wedgedEm() } });
+    const graph = mkAcademyGraph();
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), mkAcademyIr(graph), { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    c._lastMoveAt = t - 30_000;
+    c._lastStepAt = t - 30_000;
+    await c._step(t);
+    check("1C(b): UseObject called on the near portal", host._useCalls.length === 1 && host._useCalls[0] === PORTAL);
+    check("1C(b): no MoveToPosition (already in range)", host._moves.length === 0);
+    check("1C(b): _pendingEscapeGuid set", c._pendingEscapeGuid === PORTAL);
+    check("1C(b): journal says ESCALATE + using portal", bot._notes[0].text.includes("ESCALATE") && bot._notes[0].text.includes("using portal"));
+    check("1C(b): never touches InvokeChatParser", host._chatCalls.length === 0);
+  }
+
+  // ---- 1C(c): pose unchanged next cycle -> the pending portal is blacklisted, next candidate tried ----
+  {
+    t = 16_000_000;
+    const pose = { objCellId: ACADEMY_A, x: 0, y: 0, z: 0 };
+    const NEAR = 0x7003, FAR = 0x7004; // NEAR picked first; FAR is the next-nearest fallback
+    const host = mkHost(pose, {
+      nearby: [NEAR, FAR],
+      descFlags: { [NEAR]: 0x40000, [FAR]: 0x40000 },
+      objPos: {
+        [NEAR]: { objCellId: ACADEMY_A, x: 40, y: 0, z: 0 },  // 40m
+        [FAR]: { objCellId: ACADEMY_A, x: 60, y: 0, z: 0 },   // 60m
+      },
+      objName: { [NEAR]: "Central Courtyard", [FAR]: "Outer Courtyard" },
+    });
+    const bot = mkBot({ extensions: { exploreMemory: wedgedEm() } });
+    const graph = mkAcademyGraph();
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), mkAcademyIr(graph), { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+
+    // Cycle 1: picks NEAR (nearest), walks toward it.
+    c._lastMoveAt = t - 30_000;
+    c._lastStepAt = t - 30_000;
+    await c._step(t);
+    check("1C(c) cycle 1: walks toward the nearest portal (Central Courtyard)",
+      host._moves.length === 1 && bot._notes[0].text.includes("Central Courtyard"));
+    check("1C(c) cycle 1: pending tracks NEAR", c._pendingEscapeGuid === NEAR);
+
+    // Cycle 2: the pose never moved (mock pose is static) and >20s has
+    // elapsed since _lastMoveAt (left untouched — _step() alone never
+    // touches it; only tick()'s _trackMovement does) -> NEAR reads as a
+    // dead end (this world DB's real decorative dead-end portals, per the
+    // researcher's citations) and the next-nearest candidate (FAR) is tried
+    // in the SAME cycle.
+    t += 30_000; // now - _lastMoveAt = 60s > 20s
+    c._lastStepAt = t - 30_000;
+    await c._step(t);
+    check("1C(c) cycle 2: NEAR is blacklisted as a dead end", c._deadEscapeGuids.has(NEAR));
+    check("1C(c) cycle 2: journal names NEAR as dead", bot._notes[1].text.includes("Central Courtyard") && bot._notes[1].text.includes("dead"));
+    check("1C(c) cycle 2: falls through to the next-nearest candidate (Outer Courtyard) THIS cycle",
+      host._moves.length === 2 && bot._notes[2].text.includes("Outer Courtyard"));
+    check("1C(c) cycle 2: pending now tracks FAR", c._pendingEscapeGuid === FAR);
+    check("1C(c): never touches InvokeChatParser", host._chatCalls.length === 0);
+  }
+
+  // ---- 1C(d): no portals nearby -> falls through to the legacy indoor sweep, unchanged ----
+  {
+    t = 17_000_000;
+    const LB = 0x01ac0000;
+    const A = LB | 0x150, B = LB | 0x151;
+    const graph = new Map([
+      [A, { pos: { x: 100, y: 200, z: 0 }, neighbors: [B] }],
+      [B, { pos: { x: 110, y: 200, z: 0 }, neighbors: [A] }],
+    ]);
+    const pose = { objCellId: A, x: 0, y: 0, z: 0 };
+    const host = mkHost(pose, { nearby: [] }); // no portals at all
+    const bot = mkBot({ extensions: { exploreMemory: wedgedEm() } });
+    const ir = {
+      isEnvCellId: IR.isEnvCellId,
+      nearestCell: () => null,
+      buildGraphFromWasm: async () => graph,
+      toLegs: (g, path) => path.map((id) => {
+        const n = g.get(id);
+        return { lb: id, x: n.pos.x - ((id >>> 24) & 0xff) * 192, y: n.pos.y - ((id >>> 16) & 0xff) * 192, z: n.pos.z };
+      }),
+    };
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), ir, { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    c._lastMoveAt = t - 30_000;
+    c._lastStepAt = t - 30_000;
+    await c._step(t);
+    check("1C(d): no portals -> legacy indoor sweep still fires, unchanged", host._moves.length === 1 && host._moves[0].lb === B);
+    check("1C(d): journal says \"indoor sweep\", not ESCALATE/portal", bot._notes[0].text.includes("indoor sweep") && !bot._notes[0].text.includes("ESCALATE"));
+    check("1C(d): no UseObject either", host._useCalls.length === 0);
+    check("1C(d): never touches InvokeChatParser", host._chatCalls.length === 0);
+  }
+
+  // ═══ 2026-07-21 wedge-fix pass: real indoor pathing, seen-portal ledger, no-effect memory ═══
+  // The real indoor_router.js findPath/toLegs — used for genuine BFS/A*
+  // exercises below (rather than a hand-rolled test double), the same module
+  // bot.js imports live.
+  const irReal = await import(pathToFileURL(path.join(__dirname, "rynth", "indoor_router.js")).href);
+
+  // ---- change #1: BFS pathing — a 4-cell corridor where the frontier's
+  // nearest cell is NOT adjacent to `cur` must walk the REAL multi-leg path
+  // (via bot.travel, the same executor _escalateOut already uses), not a
+  // single straight-line MoveToPosition through the intervening cells. This
+  // is the exact root-cause scenario: the OLD code's toLegs(graph,[cur,
+  // target]) never checked adjacency at all. ----
+  {
+    t = 19_000_000;
+    const LB = 0x01ad0000;
+    const A = LB | 0x100, B = LB | 0x101, C = LB | 0x102, D = LB | 0x103; // corridor A-B-C-D
+    const graph = new Map([
+      [A, { pos: { x: 0, y: 0, z: 0 }, neighbors: [B] }],
+      [B, { pos: { x: 24, y: 0, z: 0 }, neighbors: [A, C] }],
+      [C, { pos: { x: 48, y: 0, z: 0 }, neighbors: [B, D] }],
+      [D, { pos: { x: 72, y: 0, z: 0 }, neighbors: [C] }],
+    ]);
+    const pose = { objCellId: A, x: 8, y: 2, z: 0 };
+    const host = mkHost(pose);
+    // The frontier's nearest cell resolves straight to D — 3 hops from A,
+    // NOT portal-adjacent — exactly the bug scenario.
+    const em = mkExploreMemory({ frontier: () => ({ worldX: 72, worldY: 0, dist: 72, bearingDeg: 90, lb: LB >>> 16 }) });
+    const bot = mkBot({ extensions: { exploreMemory: em } });
+    const ir = {
+      isEnvCellId: IR.isEnvCellId,
+      nearestCell: () => D,
+      buildGraphFromWasm: async () => graph,
+      findPath: irReal.findPath,
+      toLegs: irReal.toLegs,
+    };
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), ir, { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    c._lastMoveAt = t - 30_000;
+    c._lastStepAt = t - 30_000;
+    await c._step(t);
+    check("BFS pathing: multi-leg travel issued via bot.travel, not a single MoveToPosition",
+      bot._travelCalls.length === 1 && host._moves.length === 0,
+      JSON.stringify({ travel: bot._travelCalls, moves: host._moves }));
+    check("BFS pathing: the full 4-cell corridor is walked (ends at D)",
+      bot._travelCalls[0]?.length === 4 && bot._travelCalls[0][3]?.lb === D);
+    check("BFS pathing: journal mentions the multi-leg route", bot._notes[0].text.includes("leg route"));
+  }
+
+  // ---- change #1 (no-path case): unreachable target falls back to the
+  // ORIGINAL straight-line single MoveToPosition — no regression, no crash. ----
+  {
+    t = 19_500_000;
+    const LB = 0x01ae0000;
+    const A = LB | 0x100, ISOLATED = LB | 0x1ff; // no edge between them at all
+    const graph = new Map([
+      [A, { pos: { x: 0, y: 0, z: 0 }, neighbors: [] }],
+      [ISOLATED, { pos: { x: 500, y: 500, z: 0 }, neighbors: [] }],
+    ]);
+    const pose = { objCellId: A, x: 0, y: 0, z: 0 };
+    const host = mkHost(pose);
+    const em = mkExploreMemory({ frontier: () => ({ worldX: 500, worldY: 500, dist: 707, bearingDeg: 45, lb: LB >>> 16 }) });
+    const bot = mkBot({ extensions: { exploreMemory: em } });
+    const ir = {
+      isEnvCellId: IR.isEnvCellId,
+      nearestCell: () => ISOLATED,
+      buildGraphFromWasm: async () => graph,
+      findPath: irReal.findPath,
+      toLegs: irReal.toLegs,
+    };
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), ir, { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    c._lastMoveAt = t - 30_000;
+    c._lastStepAt = t - 30_000;
+    await c._step(t);
+    check("BFS pathing (no path): falls back to the legacy straight-line MoveToPosition",
+      bot._travelCalls.length === 0 && host._moves.length === 1 && host._moves[0].lb === ISOLATED,
+      JSON.stringify(host._moves));
+  }
+
+  // ---- change #2: seen-portal ledger — a portal seen at tick 1 is still a
+  // walkable candidate at tick N even after it drops OUT of NearbyGuids
+  // entirely (the live researcher's exact observation: "present earlier in
+  // the session, absent later, zero candidates forever"); a blacklisted guid
+  // stays excluded even though the ledger still remembers it. ----
+  {
+    t = 20_000_000;
+    const LB = 0x01af0000;
+    const A = LB | 0x100, B = LB | 0x101; // A = here, B = the portal's own cell
+    const graph = new Map([
+      [A, { pos: { x: 0, y: 0, z: 0 }, neighbors: [B] }],
+      [B, { pos: { x: 40, y: 0, z: 0 }, neighbors: [A] }],
+    ]);
+    const PORTAL = 0x9001;
+    const pose = { objCellId: A, x: 0, y: 0, z: 0 };
+    const host = mkHost(pose, {
+      nearby: [PORTAL],
+      descFlags: { [PORTAL]: 0x40000 }, // ODF_PORTAL
+      objPos: { [PORTAL]: { objCellId: B, x: 40, y: 0, z: 0 } }, // 40m away, in cell B
+      objName: { [PORTAL]: "Central Courtyard" },
+    });
+    const bot = mkBot({ extensions: { exploreMemory: wedgedEm() } }); // severity 2, no dungeonNav
+    const ir = {
+      isEnvCellId: IR.isEnvCellId,
+      nearestCell: () => null,
+      buildGraphFromWasm: async () => graph,
+      findPath: irReal.findPath,
+      toLegs: irReal.toLegs,
+    };
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), ir, { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    c._lastMoveAt = t - 30_000;
+    c._lastStepAt = t - 30_000;
+    await c._step(t);
+    check("ledger tick1: the nearby portal is remembered", c._seenPortals.has(PORTAL));
+    check("ledger tick1: walks toward it (MoveToPosition or bot.travel)",
+      bot._travelCalls.length + host._moves.length === 1);
+
+    // Isolate the ledger behavior from the separate stall/blacklist
+    // mechanism (already covered by 1C(c) above): clear the pending-escape
+    // latch and pretend the walk landed, THEN drop the portal out of
+    // NearbyGuids entirely (rooms away).
+    c._pendingEscapeGuid = null;
+    c._lastMoveAt = t;
+    host.NearbyGuids = () => [];
+    t += 30_000;
+    c._lastStepAt = t - 30_000;
+    await c._step(t);
+    check("ledger tick2: still walks toward the REMEMBERED portal though NearbyGuids is now empty",
+      bot._travelCalls.length + host._moves.length === 2,
+      JSON.stringify({ travel: bot._travelCalls, moves: host._moves }));
+
+    // Blacklist it explicitly (not via the stall path) and confirm the
+    // ledger's own candidate scan excludes it — checked directly (no
+    // ESCALATE-toward-it note, _pendingEscapeGuid never set to it) rather
+    // than "no move at all", since this graph's A has a real neighbor B and
+    // the ladder legitimately falls through to the (unrelated) legacy indoor
+    // sweep once portal escalation comes up with nothing.
+    c._deadEscapeGuids.add(PORTAL);
+    c._pendingEscapeGuid = null;
+    c._lastMoveAt = t;
+    t += 30_000;
+    c._lastStepAt = t - 30_000;
+    const notesBefore = bot._notes.length;
+    await c._step(t);
+    check("ledger: a blacklisted remembered portal is excluded from candidates",
+      c._pendingEscapeGuid !== PORTAL && !bot._notes.slice(notesBefore).some((n) => n.text.includes("Central Courtyard")),
+      JSON.stringify(bot._notes.slice(notesBefore)));
+  }
+
+  // ---- change #3: no-effect memory — _escalatePortal skips a guid the
+  // shared interaction-outcome memory (bot.ai.extensions.interactions) has
+  // proven ineffective 2+ times, same treatment as _deadEscapeGuids but a
+  // DISTINCT set. ----
+  {
+    t = 21_000_000;
+    const pose = { objCellId: ACADEMY_A, x: 0, y: 0, z: 0 };
+    const PORTAL = 0x7005;
+    const host = mkHost(pose, {
+      nearby: [PORTAL],
+      descFlags: { [PORTAL]: 0x40000 },
+      objPos: { [PORTAL]: { objCellId: ACADEMY_A, x: 40, y: 0, z: 0 } },
+      objName: { [PORTAL]: "Outer Courtyard" },
+    });
+    const noEffectByGuid = { [PORTAL]: 2 };
+    const bot = mkBot({ extensions: { exploreMemory: wedgedEm(), interactions: { noEffectOf: (g) => noEffectByGuid[g] ?? 0 } } });
+    const graph = mkAcademyGraph();
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), mkAcademyIr(graph), { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    c._lastMoveAt = t - 30_000;
+    c._lastStepAt = t - 30_000;
+    await c._step(t);
+    check("no-effect: a portal with noEffect>=2 is skipped (no move, no use)",
+      host._moves.length === 0 && host._useCalls.length === 0);
+    check("no-effect: falls back to the legacy indoor sweep like any other exhausted candidate set",
+      c._deadEscapeGuids.has(PORTAL) === false); // NOT the dead-escape set — a distinct mechanism
+  }
+
+  // ═══ 3: movement-dead watchdog — a frozen pose is a client issue, not a routing one ═══
+  {
+    t = 18_000_000;
+    const host = mkHost(outdoorPose); // pose NEVER changes in this block until the recovery case
+    const bot = mkBot();
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), IR, { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    c._lastMoveAt = t;
+
+    // 4 hop-producing ticks (legacy random hop, no exploreMemory wired),
+    // spaced 26s apart so each one clears the idle gates — same cadence the
+    // pre-existing stand-down test above uses. None of them is a REAL pose
+    // change (the mock host pose is static), so hopsSincePoseChange counts
+    // all 4 while _lastMoveAt never advances.
+    for (let i = 0; i < 4; i++) { t += 26_000; c.tick(); await flush(); }
+    check("movement-dead: 4 hops fired", host._moves.length === 4);
+    check("movement-dead: hopsSincePoseChange counts all 4", c._hopsSincePoseChange === 4);
+    check("movement-dead: not latched yet (elapsed time still short)", c._movementDead === false);
+
+    // Jump the clock past the 3-minute stall threshold with no further real
+    // movement in between.
+    t += 3 * 60_000 + 1_000;
+    c.tick();
+    await flush();
+    check("movement-dead: latches once hops>=4 AND stalled >3min", c._movementDead === true);
+    check("movement-dead: forces _standDown", c._standDown === true);
+    check("movement-dead: journals MOVEMENT DEAD", bot._notes.some((n) => n.text.includes("MOVEMENT DEAD")));
+    const movesAtLatch = host._moves.length;
+
+    // No further MoveToPosition while latched — not even across a fresh
+    // director check-in, which would otherwise release the ORDINARY
+    // hop-cap stand-down.
+    bot.ai.director._lastCheckAt = Date.now();
+    t += 26_000;
+    c.tick();
+    await flush();
+    check("movement-dead: no further MoveToPosition while latched", host._moves.length === movesAtLatch);
+
+    // Recovery: a REAL pose change (picked up by tick()'s own
+    // _trackMovement) clears the latch naturally — no reload required.
+    host._pose = { ...outdoorPose, x: outdoorPose.x + 5 };
+    t += 26_000;
+    c.tick();
+    await flush();
+    check("movement-dead: a real pose change clears the latch", c._movementDead === false);
+    check("movement-dead: hopsSincePoseChange resets on real movement", c._hopsSincePoseChange === 0);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

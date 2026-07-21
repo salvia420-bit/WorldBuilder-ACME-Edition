@@ -128,6 +128,44 @@ pub(crate) fn handle_message(
                         .is_some_and(|view| {
                             view.sample_mode == crate::spatial::SpatialSampleMode::Suspended
                         });
+                    // Same-epoch reconcile backstop (2026-07-21, live death-respawn
+                    // paralysis): ACE's teleport destination arrives as TWO
+                    // UpdatePosition packets sharing one teleport-sequence epoch —
+                    // posA (pre-settle, can carry an unresolvable/NULL cell) lands
+                    // via the `body_suspended` Snapshot branch above. Deviation from
+                    // the researcher's sketch found by reading
+                    // `reconcile_authoritative_body_with_remote`
+                    // (state/mutations.rs:90-93): a NULL-landblock pose doesn't just
+                    // hard-snap the body to a null cell — it RETIRES (removes) the
+                    // runtime body outright. That same reconcile call also flips
+                    // `sampling.mode` bookkeeping away from `Suspended` (there's no
+                    // body left to hold a mode), so posB — same epoch, valid
+                    // destination — no longer sees `body_suspended` (the view falls
+                    // back to the entity, mode `AuthoritativeOnly`) and falls into
+                    // the routine authoritative-only bookkeeping arm below, which
+                    // never calls `reconcile_authoritative_body` and so never
+                    // recreates the body. The runtime body then stays MISSING (or,
+                    // on a lighter variant of the race, present with a null working
+                    // cell) forever — raw pose objCellId == 0, movement dead —
+                    // because nothing else routes a same-epoch echo through the
+                    // hard-reconcile path that would recreate/heal it. Check the RAW
+                    // body state here (not `runtime_pose_for_guid`'s healed read —
+                    // that lazily surfaces a non-null cell to callers but never
+                    // writes it back to `body.pose`/recreates the body while idle)
+                    // and force any accepted self update through Snapshot whenever
+                    // the body is missing OR carries a null working cell, so posB's
+                    // valid pose can recreate/heal it (Snapshot's
+                    // `reconcile_authoritative_body_with_remote` seeds a fresh
+                    // `SpatialBody` at the given pose when none exists). Narrow: only
+                    // fires when the body is ALREADY in one of these broken states,
+                    // so it never touches the routine/leash arms below for a healthy
+                    // player.
+                    let body_cell_null = state
+                        .runtime_body_id_for_guid(state.player.guid)
+                        .is_some_and(|body_id| match state.scene.body(body_id) {
+                            Some(body) => body.pose.landblock_id == holtburger_common::Guid::NULL,
+                            None => true,
+                        });
                     events.extend(if snap {
                         // Forced reposition: hard-snap the runtime body.
                         // FU4: teleport keeps Reset (constrain + zero-vel
@@ -143,7 +181,7 @@ pub(crate) fn handle_message(
                                 AuthoritativeBodySync::ForceBlip
                             },
                         )
-                    } else if body_suspended {
+                    } else if body_suspended || body_cell_null {
                         state.set_player_position_with_sync(
                             data.pos.pos,
                             AuthoritativeBodySync::Snapshot,

@@ -663,6 +663,16 @@ function worldY(cellId, y) { return ((cellId >>> 16) & 0xff) * 192 + y; }
 // 2026-07-21: teleporting out of a loop defeats autonomous on-foot nav).
 const TOWN_HOP_DIST_M = 45;
 
+// Seen-portal ledger cap (change #2, 2026-07-21 training-academy wedge fix
+// part 2): _escalatePortal's old NearbyGuids-only scan produces ZERO
+// candidates the instant the one known portal drops out of range (live-
+// observed: present earlier in the session, absent later) — a dungeon-sized
+// number of portals easily fits in memory for a whole session, so remember
+// every one ever seen rather than only "right now". LRU-capped (Map
+// insertion order) for long-session hygiene, same convention as
+// state._usedObjects (extensions.js) / _visitedDoors above.
+const SEEN_PORTALS_MAX = 64;
+
 // ── Explore pressure (task #15, 2026-07-20; re-engineered as a frontier-
 // directed escalation ladder 2026-07-21, DESIGN-surveyor-frontier) ────────
 // ?explorePressure=1 (index.html bot-param block; exact-match "=1" opt-in,
@@ -749,6 +759,34 @@ export class ExplorePressureController {
     this._visitedCells = new Map(); // landblock -> Set(cellId) — indoor sweep memory
     this._visitedDoors = new Set(); // outdoor door guids already swept toward
     this._graphCache = null;        // { lb, graph } — indoor graph memo (buildGraphFromWasm)
+
+    // Deterministic portal rung (2026-07-21, training-academy wedge fix):
+    // _escalateOut only knows baked CellPortal architecture (dungeonNav /
+    // indoor_router findExitPath) and correctly fails forever in a
+    // portal-only dungeon (no CellPortal exists at all — the exit is a
+    // portal WorldObject). _escalatePortal walks/uses the nearest
+    // ODF_PORTAL-flagged object instead; guids that produce no pose change
+    // within ~20s are blacklisted so a decorative dead-end portal (this
+    // world DB has two: "Central Courtyard"/"Outer Courtyard") is not
+    // retried forever.
+    this._deadEscapeGuids = new Set(); // portal guids proven dead this session
+    this._pendingEscapeGuid = null;    // guid we most recently walked to/used, awaiting pose movement
+
+    // Seen-portal ledger (change #2, 2026-07-21 wedge fix part 2): guid ->
+    // { name, wx, wy, z, cell, lastSeenT }, refreshed opportunistically from
+    // NearbyGuids each _escalatePortal call so a portal that later drops out
+    // of range (rooms away) is still a known, walkable candidate instead of
+    // vanishing into "zero candidates forever". See _escalatePortal/
+    // _rememberPortal below.
+    this._seenPortals = new Map();
+
+    // Movement-dead watchdog (2026-07-21 scope item 3): counts hop attempts
+    // (_bumpHop) since the pose last actually changed (_trackMovement). A
+    // client-side pose freeze despite repeated escalation attempts is NOT a
+    // routing problem — no rung here can fix it — so this stands the
+    // pressure controller down rather than hammering MoveToPosition forever.
+    this._hopsSincePoseChange = 0;
+    this._movementDead = false;
   }
 
   // host.onTick driver (~10Hz by default); self-throttles to ~5s and never
@@ -759,6 +797,7 @@ export class ExplorePressureController {
       const now = this.now();
       this._trackMovement(now);
       this._trackCheckIn();
+      this._checkMovementDead(now);
       if (now - this._lastGateAt < 5000) return;
       this._lastGateAt = now;
       if (this._stepBusy || !this._gatesOpen(now)) return;
@@ -783,6 +822,37 @@ export class ExplorePressureController {
     if (key !== this._lastPoseKey) {
       this._lastPoseKey = key;
       this._lastMoveAt = now;
+      // Real movement — natural recovery for both watchdogs. No reload
+      // needed: a pose change is definitive proof the client is not frozen.
+      this._hopsSincePoseChange = 0;
+      this._movementDead = false;
+    }
+  }
+
+  // Movement-dead watchdog (scope item 3): fires when hops keep being
+  // attempted (_bumpHop) but the pose has not actually changed in a long
+  // while — a client-side freeze, not a routing decision (no rung here,
+  // including the new portal one, can walk a frozen client anywhere).
+  // Unconditional every tick (not gated behind _gatesOpen) so it still
+  // catches a freeze even while something else nominally owns movement.
+  // Latched (not re-logged every tick) until _trackMovement's real pose
+  // change clears it.
+  _checkMovementDead(now) {
+    if (this._movementDead) {
+      // Already latched — keep _standDown enforced every tick (a fresh
+      // director check-in's _trackCheckIn() releases the ORDINARY hop-cap
+      // stand-down; this re-asserts ours on top so a still-frozen pose
+      // can't slip a MoveToPosition through on the very next check-in).
+      // _trackMovement's real pose change is the only thing that clears it.
+      this._standDown = true;
+      return;
+    }
+    if (this._hopsSincePoseChange >= 4 && now - this._lastMoveAt > 3 * 60_000) {
+      this._movementDead = true;
+      this._standDown = true;
+      this._journalNote(
+        `[pressure] MOVEMENT DEAD (pose frozen ~${Math.round((now - this._lastMoveAt) / 60_000)}min despite ${this._hopsSincePoseChange} move attempts) — standing down until it recovers`
+      );
     }
   }
 
@@ -849,6 +919,7 @@ export class ExplorePressureController {
   _bumpHop() {
     this._consecutiveHops++;
     if (this._consecutiveHops >= 6) this._standDown = true; // tuned 3->6 hops 2026-07-20
+    this._hopsSincePoseChange++; // movement-dead watchdog (scope item 3) — reset only by a REAL pose change
   }
 
   async _step(now) {
@@ -969,7 +1040,11 @@ export class ExplorePressureController {
       if (this._routeClaimed()) return; // exitRoute() awaits — re-validate before any further rung
       if (escalated) return;
       // dungeonNav + the local findExitPath fallback both came up empty —
-      // degrade down the remaining rungs below rather than give up.
+      // both only know baked CellPortal architecture, so this is the
+      // EXPECTED (correct) failure in a portal-only dungeon (no CellPortal
+      // exists at all — training-academy wedge root cause). Try walking to/
+      // using an actual portal WorldObject before degrading further.
+      if (this._escalatePortal(pose, graph, cur)) return;
     }
 
     if (localFrontier && this._frontierHopIndoor(pose, graph, nodes, cur, frontier)) return;
@@ -1023,6 +1098,203 @@ export class ExplorePressureController {
     return false;
   }
 
+  // Real graph-planned indoor walk (2026-07-21, training-academy wedge fix
+  // part 1 — root cause confirmed by reading every 2-node toLegs call site:
+  // cur and the target cell were NEVER actually checked for portal adjacency
+  // before this fix — toLegs just stamps whatever ids it's handed as
+  // consecutive legs, so a naive toLegs(graph, [cur, target]) with a
+  // non-adjacent target silently produced a SINGLE straight-line
+  // MoveToPosition through whatever wall/doorframe happened to sit between
+  // the two rooms; 92 identical "frontier hop" attempts in the 30-min watch
+  // were exactly this). BFS/A* the REAL path via indoor_router.js's
+  // findPath (portal-adjacency + drop-edge aware — already used correctly by
+  // rynth/ai/tools/world.js's approach()/indoorLegsTo, the source of the
+  // occasional "walk:routed(4)" successes the researcher noted) and, when it
+  // crosses more than one hop, walk it leg-by-leg via bot.travel(legs) — the
+  // SAME multi-leg executor _escalateOut already uses for
+  // dungeonNav.exitRoute (router.follow under the hood). A genuine
+  // single-hop path (2 cells, already portal-adjacent) still issues one
+  // MoveToPosition, identical to the pre-existing behavior for an adjacent
+  // pair — no regression there.
+  //
+  // Returns true if this tick is "handled" (a move was issued, OR something
+  // else already claimed movement mid-plan) — false ONLY when no real path
+  // could be planned (unreachable, or findPath/toLegs unavailable e.g. a test
+  // double), so the caller degrades to its own PRE-EXISTING fallback (task
+  // directive: "if BFS finds no path, keep current fallback behavior").
+  _walkGraphPath(graph, fromCell, toCell, note) {
+    if (typeof this.ir.findPath !== "function" || typeof this.ir.toLegs !== "function") return false;
+    if (fromCell === toCell) return false; // nothing to route — caller decides
+    let path = null;
+    try { path = this.ir.findPath(graph, fromCell, toCell, {}); } catch { path = null; }
+    if (!Array.isArray(path) || path.length < 2) return false; // unreachable
+    let legs = null;
+    try { legs = this.ir.toLegs(graph, path); } catch { legs = null; }
+    if (!Array.isArray(legs) || !legs.length) return false;
+    if (this._routeClaimed()) return true; // claimed mid-plan -> handled, no further rung
+    if (path.length > 2 && typeof this.bot?.travel === "function") {
+      // Multi-hop: walk every leg via the router (same mechanism
+      // _escalateOut uses for dungeonNav.exitRoute), not just the last one.
+      const res = this.bot.travel(legs);
+      if (res && res.ok === false) return false; // refused (goto active elsewhere) — caller falls back
+      this._bumpHop();
+      this._journalNote(note(legs.length, true));
+      return true;
+    }
+    const leg = legs[legs.length - 1];
+    if (!leg) return false;
+    this.host.MoveToPosition(leg.lb, leg.x, leg.y, leg.z, true);
+    this._bumpHop();
+    this._journalNote(note(legs.length, false));
+    return true;
+  }
+
+  // Deterministic portal rung (2026-07-21, training-academy wedge fix):
+  // _escalateOut only ever knows baked CellPortal architecture (dungeonNav /
+  // findExitPath) and correctly comes up empty in a portal-only dungeon —
+  // there is no CellPortal there at all, the exit is a portal WorldObject
+  // (ODF_PORTAL, 0x40000 — observe_ext.js:248/goto_compose.js:102). This
+  // walks to, then uses, the nearest live one instead. Not every portal in a
+  // dungeon leads anywhere (this world DB has decorative dead ends), so a
+  // guid that produced no pose movement in ~20s is blacklisted and the
+  // next-nearest candidate is tried. No InvokeChatParser/teleport, no
+  // give-item flow (the director owns that) — a plain walk/use, same as
+  // every other rung in this ladder. Returns true if it claimed this
+  // tick (walked toward, used, or is still waiting on, a portal).
+  //
+  // graph/cur (2026-07-21, part 2 — seen-portal ledger): passed in from
+  // _indoorHop's already-built/cached graph so a remembered candidate can be
+  // routed via the SAME real cell-graph pathing as change #1, instead of the
+  // old world-frame-only worldToLandCell walk (which only ever worked by
+  // coincidence when the portal happened to be reachable in a straight
+  // line). Degrades to that old direct walk when the candidate's cell isn't
+  // in the (possibly absent/synthetic) graph.
+  _escalatePortal(pose, graph, cur) {
+    const h = this.host;
+    if (typeof h?.NearbyGuids !== "function" || typeof h?.TryGetObjectDescFlags !== "function"
+        || typeof h?.TryGetObjectPosition !== "function" || typeof h?.UseObject !== "function") {
+      return false;
+    }
+    const ODF_PORTAL = 0x40000; // ObjectDescriptionFlag.Portal
+    const cellId = pose.objCellId >>> 0;
+    const wx = worldX(cellId, pose.x), wy = worldY(cellId, pose.y);
+
+    // A prior cycle's escalation that still hasn't moved the pose after
+    // ~20s (reusing _trackMovement's own _lastMoveAt telemetry) is a dead
+    // end — blacklist it and fall through to pick the next-nearest
+    // candidate THIS call rather than idling another cycle on a corpse.
+    if (this._pendingEscapeGuid != null) {
+      const stalled = this.now() - this._lastMoveAt > 20_000;
+      if (stalled) {
+        const deadGuid = this._pendingEscapeGuid;
+        const deadName = h.TryGetObjectName?.(deadGuid) || "?";
+        this._deadEscapeGuids.add(deadGuid);
+        this._pendingEscapeGuid = null;
+        this._journalNote(`[pressure] portal "${deadName}" appears dead — blacklisting, trying next`);
+      } else {
+        // Still inside the grace window — claim the tick (nothing new to
+        // do while we wait to see if it lands) rather than falling through
+        // to the legacy sweep underneath us.
+        return true;
+      }
+    }
+
+    // Opportunistic ledger refresh (change #2): merge every CURRENTLY nearby
+    // ODF_PORTAL object into _seenPortals. Root cause this fixes: the old
+    // scan only ever looked at THIS tick's NearbyGuids, so a portal that
+    // later sat rooms away (live-observed: present earlier in the session,
+    // absent later) produced zero candidates forever, even though its
+    // position had already been read once and was still perfectly walkable.
+    let guids = [];
+    try { guids = h.NearbyGuids() || []; } catch { guids = []; }
+    const nowT = this.now();
+    for (const g of guids) {
+      try {
+        const guid = g >>> 0;
+        const flags = h.TryGetObjectDescFlags(guid);
+        if (flags == null || !(flags & ODF_PORTAL)) continue;
+        const p = h.TryGetObjectPosition(guid);
+        if (!p) continue; // skip objects with no position — nothing to remember/walk toward
+        const pwx = worldX(p.objCellId >>> 0, p.x), pwy = worldY(p.objCellId >>> 0, p.y);
+        this._rememberPortal(guid, h.TryGetObjectName?.(guid) || "portal", pwx, pwy, p.z, p.objCellId >>> 0, nowT);
+      } catch { /* one bad object must not break the scan */ }
+    }
+
+    // Candidates = the WHOLE ledger (currently-nearby ones were just merged
+    // into it above, so this alone already unions "nearby now" + "remembered
+    // from earlier") — nearest first, excluding blacklisted guids AND guids
+    // proven generally ineffective (change #3's noEffect memory; kept a
+    // DISTINCT set from _deadEscapeGuids — "dead escape" specifically means
+    // "no movement during an escape attempt", noEffect is content-agnostic
+    // and covers ANY use_object, including the director's own).
+    let best = null;
+    for (const [guid, rec] of this._seenPortals) {
+      if (this._deadEscapeGuids.has(guid)) continue;
+      if (this._noEffectOf(guid) >= 2) continue;
+      const d = Math.hypot(rec.wx - wx, rec.wy - wy);
+      if (!best || d < best.d) best = { guid, name: rec.name, wx: rec.wx, wy: rec.wy, cell: rec.cell, d };
+    }
+    if (!best) return false; // no known portal (nearby or remembered) — caller degrades further
+
+    if (!this._routeClaimed()) {
+      if (best.d > 5) {
+        const label = (hops, multi) =>
+          `[pressure] idle — ESCALATE: walking to portal "${best.name}" (~${Math.round(best.d)}m)${multi ? ` via ${hops}-leg route` : ""}`;
+        // Real cell-graph path when the candidate's cell is known and in the
+        // (already-built/cached) graph — change #1's mechanism, reused here
+        // rather than the old world-frame-only straight walk. Degrades to
+        // that straight walk when the graph doesn't cover it (different
+        // landblock, graph unavailable, or no path).
+        let moved = false;
+        if (graph && best.cell != null) moved = this._walkGraphPath(graph, cur, best.cell >>> 0, label);
+        if (!moved) {
+          const target = this._worldToLandCell(best.wx, best.wy, pose.z);
+          this.host.MoveToPosition(target.lb, target.x, target.y, target.z, true);
+          this._bumpHop();
+          this._journalNote(label(1, false));
+        }
+        this._pendingEscapeGuid = best.guid;
+      } else {
+        this.host.UseObject(best.guid);
+        this._pendingEscapeGuid = best.guid;
+        this._bumpHop();
+        this._journalNote(`[pressure] idle — ESCALATE: using portal "${best.name}"`);
+        // Interaction-outcome memory (change #3): record so a decorative
+        // dead-end portal that never blacklists via the pose-stall check
+        // above (e.g. it DOES move the pose a little, just not anywhere
+        // useful) still eventually reads as "no observable change" if
+        // nothing else about the world moves either.
+        try { this.bot?.ai?.extensions?.interactions?.record?.(this.bot, best.guid, best.name); } catch { /* record loss is not fatal */ }
+      }
+    }
+    return true; // claimed -> handled (no further rung this tick), even if claimed mid-scan
+  }
+
+  // Ledger upsert (change #2): LRU via Map insertion order — re-seeing a
+  // guid bumps it to the back before the cap check, same convention as
+  // extensions.js's state._usedObjects / this._visitedDoors above.
+  _rememberPortal(guid, name, wx, wy, z, cell, lastSeenT) {
+    const g = guid >>> 0;
+    this._seenPortals.delete(g);
+    this._seenPortals.set(g, { name, wx, wy, z, cell, lastSeenT });
+    if (this._seenPortals.size > SEEN_PORTALS_MAX) {
+      this._seenPortals.delete(this._seenPortals.keys().next().value);
+    }
+  }
+
+  // Lazy/defensive reach into the shared interaction-outcome memory (change
+  // #3) — same pattern as _exploreMemory()/dungeonNav elsewhere in this
+  // file. Owned by extensions.js (rynth/ai/extensions.js), not here: it must
+  // see BOTH UseObject call sites (this controller's own _escalatePortal
+  // AND the director's use_object action, tools/world.js), and extensions.js
+  // is the one module both already reach through this same
+  // bot.ai.extensions.* seam (exploreMemory, dungeonNav). Missing/broken ->
+  // 0, which never blocks a candidate (fail-open, matches the rest of the
+  // ladder's survival invariant).
+  _noEffectOf(guid) {
+    try { return this.bot?.ai?.extensions?.interactions?.noEffectOf?.(guid >>> 0) ?? 0; } catch { return 0; }
+  }
+
   // Step 2 (indoor half): step toward the graph cell nearest the frontier's
   // world coordinates. Returns true if a move was issued.
   _frontierHopIndoor(pose, graph, nodes, cur, frontier) {
@@ -1031,6 +1303,14 @@ export class ExplorePressureController {
       if (targetRaw == null) return false;
       const target = targetRaw >>> 0;
       if (!nodes.has(target)) return false;
+      const label = (hops, multi) =>
+        `[pressure] idle — frontier hop to 0x${target.toString(16).padStart(8, "0")} (~${Math.round(frontier.dist ?? 0)}m, ${Math.round(frontier.bearingDeg ?? 0)}°)${multi ? ` via ${hops}-leg route` : ""}`;
+      // Real cell-graph path first (root cause fix): cur and the frontier's
+      // nearest cell are NOT assumed portal-adjacent — see _walkGraphPath's
+      // header for the full story. findPath unavailable or no path exists ->
+      // the exact PRE-EXISTING single straight-line hop, unchanged (task
+      // directive: "if BFS finds no path, keep current fallback behavior").
+      if (this._walkGraphPath(graph, cur, target, label)) return true;
       let legs = null;
       try { legs = this.ir.toLegs(graph, [cur, target]); } catch { legs = null; }
       const leg = Array.isArray(legs) ? legs[legs.length - 1] : null;
@@ -1038,15 +1318,19 @@ export class ExplorePressureController {
       if (this._routeClaimed()) return true; // claimed -> handled (no further rung this tick)
       this.host.MoveToPosition(leg.lb, leg.x, leg.y, leg.z, true);
       this._bumpHop();
-      this._journalNote(`[pressure] idle — frontier hop to 0x${target.toString(16).padStart(8, "0")} (~${Math.round(frontier.dist ?? 0)}m, ${Math.round(frontier.bearingDeg ?? 0)}°)`);
+      this._journalNote(label(1, false));
       return true;
     } catch { return false; }
   }
 
-  // Legacy indoor sweep (task #15 original behavior, UNCHANGED): revisit-
-  // nearest-neighbor. Used when ExploreMemory is absent/broken, or as the
-  // last rung when a frontier exists outside this landblock but escalation
-  // couldn't act on it.
+  // Legacy indoor sweep (task #15 original behavior): revisit-nearest-
+  // neighbor. Used when ExploreMemory is absent/broken, or as the last rung
+  // when a frontier exists outside this landblock but escalation couldn't
+  // act on it. `target` is always a direct graph neighbor of `cur` by
+  // construction, so this was never actually exposed to the non-adjacency
+  // bug (BFS trivially returns the same single hop) — routed through
+  // _walkGraphPath anyway for uniformity with the other rungs (task
+  // directive) and as defense-in-depth against a stale/pruned neighbor edge.
   _legacyIndoorSweep(graph, nodes, cur, lb) {
     const visited = this._visitedCells.get(lb) ?? new Set();
     this._visitedCells.set(lb, visited);
@@ -1062,6 +1346,9 @@ export class ExplorePressureController {
     // list; the ?? revisit arm plus the hop-cap stand-down bound the worst
     // case when every neighbor is unreachable.
     visited.add(target);
+    const label = (hops, multi) =>
+      `[pressure] idle — indoor sweep to 0x${target.toString(16).padStart(8, "0")}${visited.has(target) ? " (revisit)" : ""}${multi ? ` via ${hops}-leg route` : ""}`;
+    if (this._walkGraphPath(graph, cur, target, label)) return;
     let legs = null;
     try { legs = this.ir.toLegs(graph, [cur, target]); } catch { legs = null; }
     const leg = Array.isArray(legs) ? legs[legs.length - 1] : null;
@@ -1069,7 +1356,7 @@ export class ExplorePressureController {
     if (this._routeClaimed()) return; // final abort check right before moving
     this.host.MoveToPosition(leg.lb, leg.x, leg.y, leg.z, true);
     this._bumpHop();
-    this._journalNote(`[pressure] idle — indoor sweep to 0x${target.toString(16).padStart(8, "0")}${visited.has(target) ? " (revisit)" : ""}`);
+    this._journalNote(label(1, false));
   }
 
   _outdoorHop(pose, em) {

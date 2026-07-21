@@ -203,6 +203,12 @@ export class ExploreMemory {
     this._history = []; // ring of {key,t} — every ACCEPTED (non-deduped) observe()
     this._lb = null;
     this._lbChangeT = null;
+    // Parked-lb frontier exclusion (2026-07-21 scope item 2): every 16-bit
+    // landblock this session has ever been classified as a portal-only
+    // dungeon/apartment (classifyPlace kind==='dungeon') — a ring-search
+    // frontier candidate landing in one of these must never be offered as a
+    // walkable outdoor target (it's an ocean-parked slot, not real terrain).
+    this._dungeonLandblocks = new Set();
   }
 
   /** Record the current tile from a raw pose; bumps visits; updates was/is. */
@@ -248,6 +254,12 @@ export class ExploreMemory {
     tile.worldX = wx;
     tile.worldY = wy;
     tile.z = z;
+    // Classify at observe time (2026-07-21 scope item 2) so frontier() can
+    // restrict a portal-only dungeon's ring search to its own landblock, and
+    // outdoors can exclude every landblock ever seen parked as one.
+    const place = this.classifyPlace(cell, wx, wy);
+    tile.kind = place.kind;
+    if (place.kind === "dungeon") this._dungeonLandblocks.add(lb);
 
     this.landblocks.add(lb);
     if (this._lb !== lb) {
@@ -280,6 +292,7 @@ export class ExploreMemory {
       tx: t.tx,
       ty: t.ty,
       zb: t.zb,
+      kind: t.kind,
     };
   }
 
@@ -326,6 +339,15 @@ export class ExploreMemory {
     const curTy = Math.floor(cur.worldY / TILE_M);
     const zb = cur.zb;
 
+    // Parked-lb frontier exclusion (2026-07-21 scope item 2). A portal-only
+    // dungeon (cur.kind==='dungeon') is parked in its OWN landblock — there
+    // is no walkable route out of it, so the ring search must never wander
+    // outside that one landblock. Outdoors, a candidate landing inside any
+    // landblock ever classified as a parked dungeon/apartment (ocean-parked,
+    // portal-only) must never be offered as a walkable frontier — it isn't
+    // reachable on foot, only by portal.
+    const restrictToLb = cur.kind === "dungeon" ? cur.lb : null;
+
     let best = null;
     for (let r = 1; r <= maxR; r++) {
       for (const [dx, dy] of ringOffsets(r)) {
@@ -335,6 +357,10 @@ export class ExploreMemory {
         if (this.tiles.has(key)) continue;
         const wx = (tx + 0.5) * TILE_M;
         const wy = (ty + 0.5) * TILE_M;
+        const { lb: candLbRaw } = worldToOutdoorCell(wx, wy, cur.z);
+        const candLb = landblockOf(candLbRaw);
+        if (restrictToLb != null && candLb !== restrictToLb) continue;
+        if (restrictToLb == null && this._dungeonLandblocks.has(candLb)) continue;
         const dist = Math.hypot(wx - cur.worldX, wy - cur.worldY);
         if (!best || dist < best.dist) best = { worldX: wx, worldY: wy, dist };
       }

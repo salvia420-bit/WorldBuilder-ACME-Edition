@@ -253,6 +253,114 @@ function check(name, ok, detail) {
     POSE = { objCellId: CELL, x: 60, y: 100, z: 12 }; // restore fixture
   }
 
+  // ── Hunting status line (2026-07-21 scope item 4c) ────────────────────────
+  {
+    const bot = makeBot();
+    // makeBot()'s kernel has no .combat by default -> no Hunting line at all.
+    const oNone = mkExt(bot).directorDeps.observe(bot, { now: 1000 });
+    check("no Hunting line when kernel.combat is absent", !/  Hunting: /.test(oNone.text));
+
+    bot.kernel.combat = { enabled: true };
+    const oOn = mkExt(bot).directorDeps.observe(bot, { now: 1000 });
+    check("Hunting: ON rendered when combat.enabled is true", /  Hunting: ON \(combat kernel engages attackables/.test(oOn.text), (oOn.text.match(/  Hunting:.*/) || [])[0]);
+
+    bot.kernel.combat.enabled = false;
+    const oOff = mkExt(bot).directorDeps.observe(bot, { now: 1000 });
+    check("Hunting: OFF rendered when combat.enabled is false", /  Hunting: OFF \(combat kernel standing down/.test(oOff.text), (oOff.text.match(/  Hunting:.*/) || [])[0]);
+  }
+
+  // ── MOVEMENT-dead status line (2026-07-21 scope item 3) ───────────────────
+  {
+    const bot = makeBot();
+    const oNormal = mkExt(bot).directorDeps.observe(bot, { now: 1000 });
+    check("no MOVEMENT line when explorePressure is absent", !/  MOVEMENT: /.test(oNormal.text));
+
+    bot.explorePressure = { _movementDead: false };
+    const oFalse = mkExt(bot).directorDeps.observe(bot, { now: 1000 });
+    check("no MOVEMENT line when _movementDead is false", !/  MOVEMENT: /.test(oFalse.text));
+
+    bot.explorePressure._movementDead = true;
+    const oTrue = mkExt(bot).directorDeps.observe(bot, { now: 1000 });
+    check("MOVEMENT line renders when _movementDead is true",
+      /  MOVEMENT: appears frozen — a client-side issue, not a routing decision; standing down until it recovers\./.test(oTrue.text),
+      (oTrue.text.match(/  MOVEMENT:.*/) || [])[0]);
+  }
+
+  // ── Exit hint line (2026-07-21 scope item 1B) ─────────────────────────────
+  // classifyPlace is monkey-patched to force kind:'dungeon' (same technique
+  // used elsewhere in this file to override ext.exploreMemory.now) rather
+  // than constructing real ocean-parked coordinates — isolates the Exit-hint
+  // rendering logic from the classification pipeline (already covered by
+  // rynth_explore_memory_test.cjs).
+  {
+    const PORTAL = 0x9001;
+    const bot = makeBot();
+    bot.host.TryGetObjectDescFlags = (g) => (g === PORTAL ? 0x40000 : 0); // ODF_PORTAL on the portal only
+    bot.host.TryGetObjectPosition = (g) =>
+      g === PORTAL ? { objCellId: POSE.objCellId, x: POSE.x + 8, y: POSE.y, z: POSE.z } : null;
+    bot.host.NearbyGuids = () => [0x5001, PORTAL]; // 0x5001="Jonathan" per makeBot(), non-portal/no-flags/no-position
+    const ext = mkExt(bot);
+    ext.exploreMemory.classifyPlace = () => ({ kind: "dungeon", town: null, lb: 0x8602 });
+    const o = ext.directorDeps.observe(bot, { now: 1000 });
+    check("Exit hint line present for a dungeon tile with a nearby portal",
+      /  Exit hint: no walkable ground-level exit from here/.test(o.text), (o.text.match(/  Exit hint:.*/) || [])[0]);
+    check("Exit hint names the nearest portal + rounded distance",
+      /nearest portal\/NPC is "portal" \(~8m\)/.test(o.text), (o.text.match(/  Exit hint:.*/) || [])[0]);
+    check("Exit hint tells the AI to use_object it", /use_object it\./.test(o.text));
+    check("Exit hint carries the decorative-dead-end caution", /not every portal here leads anywhere/.test(o.text));
+
+    // No portal/NPC in range at all -> no Exit hint line (still safe/absent).
+    const bot2 = makeBot();
+    bot2.host.NearbyGuids = () => [];
+    const ext2 = mkExt(bot2);
+    ext2.exploreMemory.classifyPlace = () => ({ kind: "dungeon", town: null, lb: 0x8602 });
+    const o2 = ext2.directorDeps.observe(bot2, { now: 1000 });
+    check("no Exit hint line when nothing nearby qualifies", !/  Exit hint: /.test(o2.text));
+  }
+
+  // ── no-effect: interaction-outcome memory (change #3, 2026-07-21) ─────────
+  // Two uses of the same object with NOTHING observable changing in between
+  // -> the LOCATION block surfaces a "no-effect" line by the 2nd resolution;
+  // a DIFFERENT object whose use DOES coincide with a real change is never
+  // marked (resets/never-marks contract). Uses go through execute() (the
+  // real ctx.interactions plumbing, tools/world.js's use_object), resolution
+  // happens inside observe()'s deltasLine, matching the live wiring exactly.
+  {
+    const bot = makeBot(); // NearbyGuids: [0x5001 "Jonathan", 0x5002 "Door"]
+    const ext = mkExt(bot);
+
+    await ext.directorDeps.execute(bot, [{ type: "use_object", object: "Door" }]);
+    let o = ext.directorDeps.observe(bot, { now: 1000 }); // pose unchanged since the use -> resolves noEffect=1
+    check("no-effect: not yet flagged after a single unchanged use", !/no-effect:/.test(o.text), (o.text.match(/no-effect:.*/) || [])[0]);
+
+    await ext.directorDeps.execute(bot, [{ type: "use_object", object: "Door" }]);
+    o = ext.directorDeps.observe(bot, { now: 2000 }); // still unchanged -> resolves noEffect=2
+    check("no-effect: line appears once noEffect reaches 2",
+      /no-effect: you have used "Door" 2× with no observable change — try something else\./.test(o.text),
+      (o.text.match(/no-effect:.*/) || [])[0]);
+
+    // A third use (skip decision is the pressure rung's job, tested in
+    // rynth_explore_pressure_test.cjs) — count keeps climbing while nothing
+    // changes.
+    await ext.directorDeps.execute(bot, [{ type: "use_object", object: "Door" }]);
+    o = ext.directorDeps.observe(bot, { now: 2500 });
+    check("no-effect: count keeps incrementing on further unchanged uses",
+      /no-effect: you have used "Door" 3×/.test(o.text), (o.text.match(/no-effect:.*/) || [])[0]);
+
+    // A DIFFERENT object ("Jonathan") whose use coincides with a real pose
+    // change is never marked, even once — resets/never-marks contract.
+    await ext.directorDeps.execute(bot, [{ type: "use_object", object: "Jonathan" }]);
+    POSE = { objCellId: CELL, x: 90, y: 130, z: 12 }; // simulate the interaction moving the player
+    o = ext.directorDeps.observe(bot, { now: 3000 });
+    check("no-effect: an interaction that DID change something is never marked",
+      !/no-effect: you have used "Jonathan"/.test(o.text), (o.text.match(/no-effect:.*/g) || []).join(" | "));
+    // "Door" keeps climbing independently (unaffected by Jonathan's use).
+    check("no-effect: an unrelated object's own count is untouched by a different object's change",
+      /no-effect: you have used "Door" 3×/.test(o.text));
+
+    POSE = { objCellId: CELL, x: 60, y: 100, z: 12 }; // restore fixture
+  }
+
   console.log(`${pass} pass, ${fail} fail`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

@@ -48,10 +48,10 @@ function makeHost() {
 
   const defs = worldActions();
   const byType = Object.fromEntries(defs.map((d) => [d.type, d]));
-  check("nine defs (use/take/give/goto + open_container/appraise/use_item_on/drop_item/confirm)",
-    Object.keys(byType).length === 9 && byType.use_object && byType.take_item && byType.give_item &&
+  check("eleven defs (use/take/give/goto + open_container/appraise/use_item_on/drop_item/confirm + hunt_start/hunt_stop)",
+    Object.keys(byType).length === 11 && byType.use_object && byType.take_item && byType.give_item &&
     byType.goto_object && byType.open_container && byType.appraise && byType.use_item_on &&
-    byType.drop_item && byType.confirm);
+    byType.drop_item && byType.confirm && byType.hunt_start && byType.hunt_stop);
 
   // use by exact name -> portal
   {
@@ -59,6 +59,26 @@ function makeHost() {
     const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal });
     check("use_object exact name (portal)", r.ok && host.calls.some((c) => c[0] === "use" && c[1] === 0x5001), JSON.stringify(r));
     check("use_object journaled", journal.entries.some((e) => /use_object Exit to Holtburg/.test(e.text)));
+  }
+  // interaction-outcome memory (2026-07-21, general no-effect tracking):
+  // use_object records via ctx.interactions.record when the ctx carries it
+  // (extensions.js's execute() wiring) — see rynth_ai_observe_location_test
+  // for the end-to-end noEffect/LOCATION-line behavior this feeds.
+  {
+    const host = makeHost(); const bot = { host };
+    const recorded = [];
+    const r = await byType.use_object.apply(
+      bot,
+      { type: "use_object", object: "Exit to Holtburg" },
+      { journal: makeJournal(), interactions: { record: (b, guid, name) => recorded.push([b, guid, name]) } },
+    );
+    check("use_object records via ctx.interactions.record", r.ok && recorded.length === 1 && recorded[0][0] === bot && recorded[0][1] === 0x5001 && recorded[0][2] === "Exit to Holtburg", JSON.stringify(recorded));
+  }
+  // ctx.interactions absent (older/plain caller) must not throw.
+  {
+    const host = makeHost(); const bot = { host };
+    const r = await byType.use_object.apply(bot, { type: "use_object", object: "Exit to Holtburg" }, { journal: makeJournal() });
+    check("use_object works fine with no ctx.interactions", r.ok === true, JSON.stringify(r));
   }
   // use by guid
   {
@@ -564,6 +584,31 @@ function makeHost() {
     check("open door not re-used on failed route",
       !r.ok && !host.calls.some((c) => c[0] === "use" && c[1] === 0x5004), JSON.stringify({ r, calls: host.calls }));
     check("open-door case keeps plain failed tag", /route-failed\(0\/2\)\+/.test(String(r.error)), JSON.stringify(r));
+  }
+
+  // ── hunt_start/hunt_stop: director toggle over bot.kernel.combat.enabled ──
+  // (2026-07-21 scope addition — see combat_loop.js's `enabled` field).
+  {
+    const combat = { enabled: true };
+    const bot = { kernel: { combat } };
+    const journal = makeJournal();
+    const r = await byType.hunt_stop.apply(bot, { type: "hunt_stop" }, { journal });
+    check("hunt_stop: ok:true", r.ok === true, JSON.stringify(r));
+    check("hunt_stop: disables combat.enabled", combat.enabled === false);
+    check("hunt_stop: result string names the kernel standing down", /combat kernel standing down/.test(r.result));
+    check("hunt_stop: journaled", journal.entries.some((e) => /hunt_stop/.test(e.text)));
+
+    const r2 = await byType.hunt_start.apply(bot, { type: "hunt_start" }, { journal: makeJournal() });
+    check("hunt_start: ok:true", r2.ok === true, JSON.stringify(r2));
+    check("hunt_start: re-enables combat.enabled", combat.enabled === true);
+    check("hunt_start: result string names the kernel engaging targets", /kernel will engage targets/.test(r2.result));
+  }
+  // kernel/combat handle absent -> graceful ok:false, never a throw.
+  {
+    const r1 = await byType.hunt_start.apply({}, { type: "hunt_start" }, { journal: makeJournal() });
+    check("hunt_start: no kernel -> ok:false 'kernel not available'", r1.ok === false && /kernel not available/.test(r1.error), JSON.stringify(r1));
+    const r2 = await byType.hunt_stop.apply({ kernel: {} }, { type: "hunt_stop" }, { journal: makeJournal() });
+    check("hunt_stop: kernel present but no combat -> ok:false 'kernel not available'", r2.ok === false && /kernel not available/.test(r2.error), JSON.stringify(r2));
   }
 
   console.log(`\n${pass} pass, ${fail} fail`);

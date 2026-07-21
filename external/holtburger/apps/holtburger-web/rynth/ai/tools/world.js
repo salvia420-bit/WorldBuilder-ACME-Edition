@@ -530,6 +530,12 @@ export function useObjectAction() {
       return fail(`walk failed (${walk}), target ${wf.distanceM.toFixed(0)}m away — not fired`);
     if (!h.UseObject(res.guid)) return fail("use request failed to send");
     ctx.track?.(res.guid, res.name);
+    // Interaction-outcome memory (general no-effect tracking, 2026-07-21):
+    // snapshots pose/coins/inv/kills NOW; extensions.js resolves it against
+    // the NEXT check-in's snapshot, so a use that changes nothing observable
+    // twice in a row surfaces a "no-effect" line in the LOCATION block —
+    // content-agnostic, no object names/wcids/cells hardcoded anywhere here.
+    ctx.interactions?.record?.(bot, res.guid, res.name);
     journalNote(ctx, `use_object ${res.name} (${hex(res.guid)}) — walk:${walk ?? "n/a"}, used; confirm result on next check-in`);
     return { type: def.type, ok: true, result: { object: res.name, guid: hex(res.guid), walk: walk ?? undefined } };
   });
@@ -833,6 +839,48 @@ export function confirmAction() {
   return def;
 }
 
+/** "hunt_start" / "hunt_stop" — director toggle over the combat kernel
+ * (2026-07-21 scope addition). RynthCombatLoop (combat_loop.js) otherwise
+ * auto-engages every attackable object it scans; these actions let the AI
+ * director own that decision (hunt deliberately, or stand down while
+ * surveying/traveling/dying) via a plain `enabled` flag on the loop
+ * (bot.kernel.combat) — no give-item/teleport/chat-parser involved, and the
+ * boot-time ?botKernel=off / config.kernel===false switch (the WHOLE kernel)
+ * is untouched. Defensive per spec: a missing kernel/combat handle degrades
+ * to an ok:false "kernel not available" result, never a throw. */
+export function huntStartAction() {
+  const def = {
+    type: "hunt_start",
+    params: {},
+    desc: "enable the combat kernel: from now on it auto-engages any attackable creature it scans, with no further action from you, until you hunt_stop. Use when you deliberately choose to hunt.",
+    validate: baseValidate("hunt_start"),
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const combat = bot?.kernel?.combat;
+    if (!combat) return fail("kernel not available");
+    combat.enabled = true;
+    journalNote(ctx, "hunt_start — combat kernel enabled, will auto-engage attackables");
+    return { type: def.type, ok: true, result: "hunting enabled — the kernel will engage targets" };
+  });
+  return def;
+}
+export function huntStopAction() {
+  const def = {
+    type: "hunt_stop",
+    params: {},
+    desc: "disable the combat kernel: it stops acquiring new targets (an in-progress engagement winds down over its normal scan grace, not an abrupt cutoff). Use while surveying, traveling, or anywhere you keep dying — you do not have to out-fight anything.",
+    validate: baseValidate("hunt_stop"),
+  };
+  def.apply = makeApply(def, async (bot, a, ctx, fail) => {
+    const combat = bot?.kernel?.combat;
+    if (!combat) return fail("kernel not available");
+    combat.enabled = false;
+    journalNote(ctx, "hunt_stop — combat kernel standing down");
+    return { type: def.type, ok: true, result: "hunting disabled — combat kernel standing down" };
+  });
+  return def;
+}
+
 /** "goto_object" — walk to a nearby object WITHOUT using it (approach/scout). */
 export function gotoObjectAction() {
   const def = {
@@ -961,6 +1009,8 @@ export function worldActions() {
     useItemOnAction(),
     dropItemAction(),
     confirmAction(),
+    huntStartAction(),
+    huntStopAction(),
   ];
 }
 

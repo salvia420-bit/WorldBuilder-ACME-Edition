@@ -8556,3 +8556,185 @@ mod faithful_entity_collision {
         );
     }
 }
+
+// Belt-and-braces stale-null-cell watchdog (2026-07-21, live death-respawn
+// paralysis follow-up). `handlers/player.rs`'s `body_cell_null` backstop
+// (holtburger-world) heals the runtime body on the very next accepted self
+// `UpdatePosition`; `MovementSystem::reconcile_stale_null_cell` is the
+// tick-level safety net for a session where that follow-up echo never
+// arrives (or is delayed past `CELL_NULL_STALE_TIMEOUT`). These drive the
+// watchdog directly through `MovementSystem::tick` (the real entry point
+// both the legacy handle path and the unified tick spine share) rather than
+// re-deriving the null-cell condition, so they pin the actual wired
+// behavior.
+mod stale_null_cell_watchdog {
+    use super::*;
+    use holtburger_world::SpatialSampleMode;
+
+    /// Seeds a local player at `pos` and then nulls the RAW runtime body's
+    /// working cell while leaving `authoritative_pose` (and the entity's
+    /// position) at the valid seeded pose — the exact split the live bug
+    /// produces (see `runtime_pose_for_guid`'s doc comment,
+    /// holtburger-world/src/state/mutations.rs:212-259): the read
+    /// chokepoint can already surface `pos` via the fallback chain even
+    /// though the raw body pose reads NULL.
+    fn seed_player_with_null_working_cell(guid: Guid, pos: WorldPosition) -> WorldState {
+        let mut world = WorldState::synthetic();
+        world.seed_local_player_entity(guid, "Player", pos);
+        let nulled = WorldPosition {
+            landblock_id: Guid::NULL,
+            ..pos
+        };
+        assert!(
+            world.scene.apply_runtime_body_pose(
+                SpatialBodyId::LocalPlayer(guid),
+                nulled,
+                SpatialSampleMode::AuthoritativeOnly,
+            ),
+            "test setup: body should already be registered by seed_local_player_entity"
+        );
+        world
+    }
+
+    /// Past `CELL_NULL_STALE_TIMEOUT` with no healing tick in between, the
+    /// watchdog must force-adopt the healed (fallback-chain) pose via
+    /// `Reset` and latch `pending_arrival_placement` so the normal
+    /// placement pipeline re-runs.
+    #[tokio::test]
+    async fn stuck_past_timeout_force_adopts_and_latches_arrival_placement() {
+        let guid = Guid(0x5000_00D1);
+        let pos = WorldPosition {
+            landblock_id: Guid(0x8602_01AD),
+            coords: Vector3::new(12.32, -28.48, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        let mut world = seed_player_with_null_working_cell(guid, pos);
+        world.player.pending_arrival_placement = false;
+
+        let mut movement = MovementSystem::new();
+        let mut session = Session::new_test();
+        let start = Instant::now();
+
+        // First tick: observes the NULL cell and arms the timer, but has
+        // not yet crossed the timeout — must NOT force-adopt.
+        movement
+            .tick(start, &mut world, &mut session)
+            .await
+            .expect("tick should succeed while the cell is freshly null");
+        assert_eq!(
+            movement.cell_null_since,
+            Some(start),
+            "watchdog should arm the stuck-since timer on the first null observation"
+        );
+        assert_eq!(
+            world
+                .scene
+                .body(SpatialBodyId::LocalPlayer(guid))
+                .expect("body registered")
+                .pose
+                .landblock_id,
+            Guid::NULL,
+            "precondition: still null before the timeout elapses"
+        );
+        assert!(
+            !world.player.pending_arrival_placement,
+            "precondition: no placement latch before the timeout elapses"
+        );
+
+        // Second tick, past CELL_NULL_STALE_TIMEOUT with no healing in
+        // between: the watchdog must force-adopt the healed pose and latch
+        // pending_arrival_placement.
+        movement
+            .tick(
+                start + CELL_NULL_STALE_TIMEOUT + Duration::from_millis(1),
+                &mut world,
+                &mut session,
+            )
+            .await
+            .expect("tick should succeed past the stale-null timeout");
+
+        let body = world
+            .scene
+            .body(SpatialBodyId::LocalPlayer(guid))
+            .expect("body registered (recreated/healed by the force-adopt)");
+        assert_ne!(
+            body.pose.landblock_id,
+            Guid::NULL,
+            "regression: the watchdog must heal the raw working cell past the timeout"
+        );
+        assert_eq!(
+            body.pose.landblock_id,
+            pos.landblock_id,
+            "healed cell should match the fallback-chain pose (authoritative_pose)"
+        );
+        assert!(
+            world.player.pending_arrival_placement,
+            "force-adopt must go through Reset, latching the arrival-placement pass"
+        );
+        assert_eq!(
+            movement.cell_null_since, None,
+            "the stuck-since timer should clear once the watchdog has healed the cell"
+        );
+    }
+
+    /// If the cell heals (e.g. via the `body_cell_null` backstop in
+    /// `handlers/player.rs`, or any other write) BEFORE the timeout
+    /// elapses, the watchdog must not force-adopt anything and must clear
+    /// its stuck-since timer.
+    #[tokio::test]
+    async fn healed_before_timeout_does_not_force_adopt() {
+        let guid = Guid(0x5000_00D2);
+        let pos = WorldPosition {
+            landblock_id: Guid(0x8602_01AD),
+            coords: Vector3::new(12.32, -28.48, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        let mut world = seed_player_with_null_working_cell(guid, pos);
+        world.player.pending_arrival_placement = false;
+
+        let mut movement = MovementSystem::new();
+        let mut session = Session::new_test();
+        let start = Instant::now();
+
+        movement
+            .tick(start, &mut world, &mut session)
+            .await
+            .expect("first tick observes the null cell");
+        assert_eq!(movement.cell_null_since, Some(start));
+
+        // Something else heals the body before the watchdog's timeout
+        // elapses (simulating the posB same-epoch backstop landing).
+        let healed_pose = WorldPosition {
+            landblock_id: Guid(0xC98D_0021),
+            coords: Vector3::new(84.0, 7.1, 94.0),
+            rotation: Quaternion::identity(),
+        };
+        assert!(world.scene.apply_runtime_body_pose(
+            SpatialBodyId::LocalPlayer(guid),
+            healed_pose,
+            SpatialSampleMode::AuthoritativeOnly,
+        ));
+
+        movement
+            .tick(start + Duration::from_millis(500), &mut world, &mut session)
+            .await
+            .expect("tick well inside the timeout window");
+
+        let body = world
+            .scene
+            .body(SpatialBodyId::LocalPlayer(guid))
+            .expect("body registered");
+        assert_eq!(
+            body.pose, healed_pose,
+            "the externally-healed pose must be left untouched by the watchdog"
+        );
+        assert!(
+            !world.player.pending_arrival_placement,
+            "a healed-before-timeout cell must not trigger a force-adopt/placement latch"
+        );
+        assert_eq!(
+            movement.cell_null_since, None,
+            "the stuck-since timer must clear once the cell reads non-null again"
+        );
+    }
+}

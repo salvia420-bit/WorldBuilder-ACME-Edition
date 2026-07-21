@@ -25,7 +25,7 @@ import { registerWorld } from "./tools/world.js";
 import { registerMemory, renderScratchpadSection } from "./tools/memory.js";
 import { registerRoutes, renderMissionLine, liveRunRate } from "./tools/routes.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./director.js";
-import { ExploreMemory, compassOf } from "./explore_memory.js";
+import { ExploreMemory, compassOf, worldX, worldY } from "./explore_memory.js";
 
 // = executePlan's own default (actions.js:197) + SPEC "Cost & safety" cap;
 // guardPlan enforces it over ext + v1 actions combined. cfg.maxActions
@@ -172,6 +172,41 @@ function renderExtCatalog(extActions) {
  * Never throws for config-shaped input; the registration helpers still throw
  * on programmer error (frozen maps), which bot.js's wiring guard absorbs.
  */
+// Portal-only dungeon Exit hint (2026-07-21, academy-wedge fix; locationBlock
+// below). ODF_PORTAL matches goto_compose.js:102/observe_ext.js:248's own
+// constant. A small LOCAL scan over NearbyGuids, deliberately NOT imported
+// from bot.js's _nearestUnvisitedDoor (house convention: same query SHAPE
+// duplicated per file, not shared — that fn also wants a different flag/
+// exclusion-set than this one). "NPC-ish" here means named + not attackable
+// + not a portal — enough to surface an exit guard like "Jonathan" without
+// pulling in observe_ext.js's full classifyDesc.
+const ODF_PORTAL_HINT = 0x40000;
+const ODF_ATTACKABLE_HINT = 0x10;
+function nearestExitHint(b, curWx, curWy) {
+  const h = b?.host;
+  if (typeof h?.NearbyGuids !== "function" || typeof h?.TryGetObjectPosition !== "function") return null;
+  let guids = [];
+  try { guids = h.NearbyGuids() || []; } catch { return null; }
+  let best = null;
+  for (const g of guids) {
+    try {
+      const guid = g >>> 0;
+      const p = h.TryGetObjectPosition(guid);
+      if (!p) continue;
+      const flags = h.TryGetObjectDescFlags?.(guid);
+      const isPortal = flags != null && (flags & ODF_PORTAL_HINT) !== 0;
+      const name = h.TryGetObjectName?.(guid);
+      const attackable = flags != null && (flags & ODF_ATTACKABLE_HINT) !== 0;
+      const isNpcish = !isPortal && !!name && flags != null && !attackable;
+      if (!isPortal && !isNpcish) continue;
+      const pwx = worldX(p.objCellId >>> 0, p.x), pwy = worldY(p.objCellId >>> 0, p.y);
+      const d = Math.hypot(pwx - curWx, pwy - curWy);
+      if (!best || d < best.d) best = { guid, name: name || (isPortal ? "portal" : "NPC"), d };
+    } catch { /* one bad object must not break the scan */ }
+  }
+  return best;
+}
+
 // (the bot arg is reserved for future per-bot composition — every wrapper
 // receives the live bot at call time, matching the director's deps contract)
 export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
@@ -329,8 +364,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     try { s.kills = b?.kernel?.status?.kills ?? null; } catch { s.kills = null; }
     return s;
   };
-  const deltasLine = (b) => {
-    const cur = snapshot(b);
+  const deltasLine = (b, cur) => {
     const prev = state._lastSnapshot;
     state._lastSnapshot = cur;
     if (!prev) return "";
@@ -350,6 +384,88 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     return out.length ? `since last check-in: ${out.join("; ")}` : "";
   };
 
+  // ── interaction-outcome memory (general no-effect tracking, 2026-07-21) ──
+  // Content-agnostic companion to `track` above: a use_object that produces
+  // no observable world change by the NEXT check-in is memoized so (a) the
+  // pressure rung's ambient auto-use (bot.js ExplorePressureController.
+  // _escalatePortal) can stop hammering it — the SAME treatment its own
+  // _deadEscapeGuids blacklist gets, kept a DISTINCT set since "dead-escape"
+  // specifically means "no movement during an escape attempt" while this is
+  // general-purpose (covers any use_object, not just escape walks) — and (b)
+  // the LOCATION block below (locationBlock) tells the director outright,
+  // rather than it rediscovering the same dead end every few minutes by
+  // trial and error.
+  //
+  // Owned HERE, not the ExplorePressureController: it must see BOTH
+  // UseObject call sites — the director's own use_object action
+  // (tools/world.js, via ctx.interactions.record in execute() below) AND the
+  // pressure rung's ambient use (bot.js, via bot.ai.extensions.interactions)
+  // — and this module is the ONE place both already reach through the same
+  // cross-reach seam exploreMemory/dungeonNav use (bot.ai.extensions.*); a
+  // controller-local Map would only ever observe one of the two callers.
+  // Capped like state._usedObjects for long-session hygiene (LRU: re-
+  // recording a guid bumps it to the back before the cap check).
+  const INTERACTION_MEMORY_MAX = 64;
+  const interactionMemory = new Map(); // guid -> { name, noEffect, pending }
+
+  // Record a use attempt. Resolution is DEFERRED to the next snapshot
+  // (resolvePendingInteractions below), not evaluated here — the
+  // interaction's own effects (a quest flag, a popup, a teleport) may take a
+  // beat to land server-side, which is exactly why this isn't checked
+  // immediately after firing.
+  const recordInteractionUse = (b, guid, name) => {
+    try {
+      const g = guid >>> 0;
+      const prev = interactionMemory.get(g);
+      interactionMemory.delete(g); // bump LRU order even on repeat use
+      interactionMemory.set(g, {
+        name: String(name ?? prev?.name ?? "?"),
+        noEffect: prev?.noEffect ?? 0,
+        pending: snapshot(b),
+      });
+      if (interactionMemory.size > INTERACTION_MEMORY_MAX) {
+        interactionMemory.delete(interactionMemory.keys().next().value);
+      }
+    } catch { /* memory loss is not fatal */ }
+  };
+
+  // "Did anything observable change?" over the SAME dimensions deltasLine
+  // already tracks (pose, coins, inventory count, kills) — unknown/missing
+  // data never falsely marks "no effect" (fail-open: assume changed).
+  const noEffectSnapshotChanged = (a, z) => {
+    if (!a || !z) return true;
+    const ap = worldXY(a.pose), zp = worldXY(z.pose);
+    if (!ap !== !zp) return true; // one side unresolved -> can't prove "unchanged"
+    if ((a.pose?.cell ?? null) !== (z.pose?.cell ?? null)) return true;
+    if (ap && zp && Math.hypot(zp.x - ap.x, zp.y - ap.y) > 1) return true;
+    for (const k of ["coins", "inv", "kills"]) {
+      if (typeof a[k] === "number" && typeof z[k] === "number" && a[k] !== z[k]) return true;
+    }
+    return false;
+  };
+
+  // Resolve every still-pending interaction against the FRESH snapshot the
+  // observe() cycle just took (the same `cur` deltasLine computes) — once
+  // per check-in, the "next evaluation" an interaction fired before.
+  // Unchanged -> noEffect++; ANY change -> reset to 0 (proof it did
+  // *something*, even if not what was wanted) — a use that changes the cell
+  // never marks, matching the spec's "resets/never marks" contract.
+  const resolvePendingInteractions = (cur) => {
+    for (const entry of interactionMemory.values()) {
+      if (!entry.pending) continue;
+      entry.noEffect = noEffectSnapshotChanged(entry.pending, cur) ? 0 : entry.noEffect + 1;
+      entry.pending = null;
+    }
+  };
+
+  const noEffectOf = (guid) => interactionMemory.get(guid >>> 0)?.noEffect ?? 0;
+
+  // Public surface: tools/world.js's use_object gets this via ctx.interactions
+  // (execute() below); bot.js's ExplorePressureController reaches it via
+  // bot.ai.extensions.interactions (returned object below) — same seam as
+  // exploreMemory/dungeonNav.
+  const interactions = { record: recordInteractionUse, noEffectOf, entries: () => interactionMemory };
+
   // ── LOCATION block (DESIGN-surveyor-frontier-2026-07-21 WS-B) ────────────
   // ONE authoritative, deterministic block sourced from exploreMemory,
   // replacing loopWarning + coverageLines + stallLine. Injected FIRST
@@ -366,10 +482,60 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
   // keep reporting that stale tile as "here" — and must never point Frontier/
   // CORRECTION at coordinates derived from a garbage pose.
   const locationBlock = (b, rawPose) => {
+    // Status lines independent of position validity (2026-07-21 scope items
+    // 3/4c) — computed up front so both the normal path and the "position
+    // unknown" early-return below carry them; a client-side freeze or the
+    // current hunting mode is ground truth regardless of whether the pose
+    // just streamed.
+    const statusLines = [];
+    // MOVEMENT-DEAD watchdog (item 3): bot.js's ExplorePressureController
+    // sets this when hops keep firing with a frozen pose — a client-side
+    // issue, NOT a routing decision, so the AI must not "fix" it with more
+    // goto/exit_building attempts. Same lazy optional-chain style as the
+    // dungeonNav/exploreMemory reaches elsewhere in this file.
+    try {
+      if (b?.explorePressure?._movementDead === true) {
+        statusLines.push(
+          "  MOVEMENT: appears frozen — a client-side issue, not a routing decision; standing down until it recovers."
+        );
+      }
+    } catch { /* defensive read only */ }
+    // Hunting toggle status (item 4c): bot.kernel.combat.enabled is the
+    // director's hunt_start/hunt_stop knob (tools/world.js) — surface the
+    // current mode so the AI knows which one it's in before deciding.
+    try {
+      const combat = b?.kernel?.combat;
+      if (combat) {
+        statusLines.push(
+          combat.enabled === false
+            ? "  Hunting: OFF (combat kernel standing down — hunt_start to resume)"
+            : "  Hunting: ON (combat kernel engages attackables — hunt_stop to stand down)"
+        );
+      }
+    } catch { /* defensive read only */ }
+    // No-effect interactions (change #3, general no-effect tracking):
+    // objects used 2+ times with zero observable change since — named at
+    // RENDER time via TryGetObjectName (never the recorded name), so a
+    // renamed/reused guid always shows its CURRENT name. Independent of
+    // position validity, same as the two status lines above.
+    try {
+      for (const [guid, entry] of interactionMemory) {
+        if (entry.noEffect < 2) continue;
+        const name =
+          (typeof b?.host?.TryGetObjectName === "function" ? b.host.TryGetObjectName(guid) : null) ||
+          entry.name ||
+          "?";
+        statusLines.push(
+          `  no-effect: you have used "${name}" ${entry.noEffect}× with no observable change — try something else.`
+        );
+      }
+    } catch { /* defensive read only */ }
+
     if (!rawPose || (rawPose.objCellId >>> 0) === 0) {
       return [
         "LOCATION (harness ground truth — trust this over your own memory):",
         "  Here: position unknown (respawn/streaming gap) — hold and re-read next check-in.",
+        ...statusLines,
       ].join("\n");
     }
     const cur = exploreMemory.current;
@@ -393,6 +559,23 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     lines.push(
       `  Here: ${here} (tile ${cur.tx},${cur.ty}, floor ${cur.zb}). Been here ${cur.visits}×.`
     );
+
+    // Portal-only dungeon Exit hint (2026-07-21, academy-wedge root cause):
+    // dungeonNav/indoor_router's exit_building only knows baked CellPortal
+    // architecture and correctly fails forever in a portal-only dungeon
+    // (no walkable ground-level exit exists) — point straight at the
+    // nearest portal/exit-NPC instead so the director has a concrete
+    // use_object target rather than looping exit_building.
+    if (place.kind === "dungeon") {
+      const hint = nearestExitHint(b, cur.worldX, cur.worldY);
+      if (hint) {
+        lines.push(
+          `  Exit hint: no walkable ground-level exit from here — nearest portal/NPC is "${hint.name}" (~${Math.round(
+            hint.d
+          )}m); use_object it. Caution: not every portal here leads anywhere (some are decorative) — if one produces no position/landblock change next check-in, try a different one instead of repeating it.`
+        );
+      }
+    }
 
     const used = state._usedObjects;
     if (used?.size) {
@@ -426,6 +609,8 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     }
 
     if (verdict.looping) lines.push(`  CORRECTION: ${verdict.correction}`);
+
+    lines.push(...statusLines);
 
     return lines.join("\n");
   };
@@ -499,6 +684,15 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     // by locationBlock() so both see the SAME pose this check-in.
     const rawPose = rawPoseOf(b);
     exploreMemory.observe(rawPose);
+    // Resolve any pending interaction-outcome snapshots (change #3) BEFORE
+    // building the LOCATION block below — locationBlock renders the
+    // no-effect status line off `interactionMemory`'s CURRENT noEffect
+    // counts, so this must land first or the line lags one whole observe()
+    // cycle behind the resolution that actually produced it. The same `cur`
+    // snapshot is threaded into deltasLine (its own prev/cur diff) so the
+    // world isn't sampled twice for one check-in.
+    const curSnapshot = snapshot(b);
+    resolvePendingInteractions(curSnapshot);
     const parts = [];
     // LOCATION is injected FIRST — highest authority (design doc WS-B).
     const loc = locationBlock(b, rawPose);
@@ -508,7 +702,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     const ml = renderMissionLine(b);
     if (ml) parts.push(ml);
     if (memory) parts.push(renderScratchpadSection(state));
-    const dl = deltasLine(b);
+    const dl = deltasLine(b, curSnapshot);
     if (dl) parts.push(dl);
     const hl = heardLines();
     if (hl) parts.push(hl);
@@ -690,7 +884,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
         }
         prevSnap = guardSnap();
         const def = extFor(a);
-        if (def) results.push(await def.apply(b, a, { journal, log: opts.log, track }));
+        if (def) results.push(await def.apply(b, a, { journal, log: opts.log, track, interactions }));
         else results.push(...(await executePlan(b, [a], { log: opts.log, journal })));
       }
       return results;
@@ -725,6 +919,7 @@ export function composeAiExtensions(_bot, { base, journal, log, config } = {}) {
     memory,
     state,
     exploreMemory,
+    interactions,
   };
 }
 

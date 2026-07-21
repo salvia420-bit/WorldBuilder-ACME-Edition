@@ -35,7 +35,7 @@ use holtburger_world::spatial::{
     InterpStep, LocalDriveControl, LocalDriveGait, LocalStickyStep, PLAYER_CAPSULE_HEIGHT,
     PLAYER_CAPSULE_RADIUS, USE_STICKY_MANAGER,
 };
-use holtburger_world::{SpatialBodyId, WorldEvent, WorldState};
+use holtburger_world::{AuthoritativeBodySync, SpatialBodyId, WorldEvent, WorldState};
 use std::collections::HashMap;
 use std::time::Duration;
 use web_time::Instant;
@@ -386,6 +386,19 @@ const AUTONOMOUS_POSE_HEADING_EPSILON_RAD: f32 = 0.0035;
 /// band / drag the avatar forever. 8 s comfortably outlasts a normal
 /// approach-to-cast while still bounding a stuck projection.
 const SERVER_PROJECTION_MAX_AGE: Duration = Duration::from_secs(8);
+
+/// Belt-and-braces stale-null-cell watchdog (2026-07-21, live death-respawn
+/// paralysis follow-up). `handlers/player.rs`'s `body_cell_null` backstop
+/// heals the runtime body the moment the NEXT accepted self `UpdatePosition`
+/// arrives, but this tick-level watchdog is the safety net for a session
+/// where that follow-up echo is delayed or dropped: the local player's
+/// PRE-heal runtime body cell (raw `body.pose.landblock_id`, or the body
+/// missing outright — see `reconcile_stale_null_cell`) is allowed to sit at
+/// `Guid::NULL` for this long before we force-adopt a healed pose. 3s
+/// comfortably outlasts one full accepted-echo round trip (routine self
+/// position updates land at ~20 Hz even under backlog) while still
+/// resolving well inside a player's patience for "stuck" movement.
+const CELL_NULL_STALE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Track B1 — landblock-divergence tolerance for abandoning a
 /// server-controlled projection. When the player's landblock no longer
@@ -1431,6 +1444,13 @@ pub(crate) struct MovementSystem {
     /// terminating packet would otherwise drive the player toward the
     /// target forever. `None` whenever no projection is installed.
     server_controlled_projection_installed_at: Option<Instant>,
+    /// Belt-and-braces stale-null-cell watchdog (2026-07-21) — wall-clock
+    /// (tick-`now`) timestamp of the first tick this session observed the
+    /// local player's raw runtime body cell as `Guid::NULL` (or the body
+    /// missing outright) with no intervening healthy tick. Cleared the
+    /// instant the cell reads non-null again. See
+    /// [`Self::reconcile_stale_null_cell`].
+    cell_null_since: Option<Instant>,
     next_autonomous_position_heartbeat_at: Option<Instant>,
     /// Physics deep-dive 2026-06-01 (gap 4) — the pose + contact byte of
     /// the last AutonomousPosition packet we actually sent, used by the
@@ -1860,6 +1880,7 @@ impl MovementSystem {
             suppress_frontend_autonomous_once: false,
             server_controlled_projection: None,
             server_controlled_projection_installed_at: None,
+            cell_null_since: None,
             next_autonomous_position_heartbeat_at: None,
             last_sent_autonomous_pose: None,
             last_sent_autonomous_contact: None,
@@ -3155,6 +3176,11 @@ impl MovementSystem {
         // never runs on the spine path. `MovementSystem::tick` is the one
         // entry BOTH paths share. Idempotent (the latch self-clears).
         self.consume_pending_arrival_placement(world);
+        // Belt-and-braces watchdog (2026-07-21) — runs every tick, same
+        // spine both paths share (see the comment above). Idempotent aside
+        // from the timestamp/timer bookkeeping; a no-op once the cell reads
+        // healthy.
+        self.reconcile_stale_null_cell(world, now);
         self.reconcile_server_controlled_projection(world, now);
 
         // A2-P3 (2026-06-12, W3+ S9) — consume the deferred sticky
@@ -6000,6 +6026,79 @@ impl MovementSystem {
         }
     }
 
+    /// Belt-and-braces stale-null-cell watchdog (2026-07-21, live death-
+    /// respawn paralysis follow-up). `handlers/player.rs`'s `body_cell_null`
+    /// backstop (holtburger-world) heals the runtime body the moment the
+    /// NEXT accepted self `UpdatePosition` arrives — this is the tick-level
+    /// safety net for the case where that follow-up echo never comes (or is
+    /// delayed). Checks the RAW (pre-heal) runtime body cell every tick:
+    /// `Guid::NULL`, or the body missing outright (the actual mechanism a
+    /// NULL-landblock reconcile produces — see
+    /// `reconcile_authoritative_body_with_remote`,
+    /// holtburger-world/src/state/mutations.rs:90-93 — it RETIRES the body,
+    /// it doesn't merely null its cell). Deliberately does NOT read through
+    /// `local_player_runtime_pose`'s own healed view for the STUCK check —
+    /// that read chokepoint (state/mutations.rs ~212-259) already surfaces a
+    /// non-null cell to callers without ever writing it back to `body.pose`
+    /// or recreating a missing body, which is exactly the silent-forever
+    /// state this watchdog exists to close out.
+    ///
+    /// Once the raw cell has read NULL/missing for more than
+    /// [`CELL_NULL_STALE_TIMEOUT`] with no intervening healthy tick, force-
+    /// adopt the healed pose from that SAME read-chokepoint fallback chain
+    /// (`body.authoritative_pose`, else the entity's authoritative
+    /// position — the two sources `runtime_pose_for_guid` already falls
+    /// back through) via `AuthoritativeBodySync::Reset`. `Reset` both hard-
+    /// snaps (recreating the body if it was retired — `reconcile_
+    /// authoritative_body_with_remote` seeds a fresh `SpatialBody` at the
+    /// given pose when none exists) and latches `pending_arrival_placement`
+    /// (`set_player_position_with_sync`'s Reset/ForceBlip arm), so the
+    /// normal placement pipeline re-runs on the very next tick via
+    /// [`Self::consume_pending_arrival_placement`] above.
+    fn reconcile_stale_null_cell(&mut self, world: &mut WorldState, now: Instant) {
+        let guid = world.player.guid;
+        if guid == Guid::NULL {
+            self.cell_null_since = None;
+            return;
+        }
+
+        let cell_is_null = match world.runtime_body_id_for_guid(guid) {
+            Some(body_id) => match world.scene.body(body_id) {
+                Some(body) => body.pose.landblock_id == Guid::NULL,
+                None => true,
+            },
+            None => false,
+        };
+
+        if !cell_is_null {
+            self.cell_null_since = None;
+            return;
+        }
+
+        let stuck_since = *self.cell_null_since.get_or_insert(now);
+        if now.saturating_duration_since(stuck_since) < CELL_NULL_STALE_TIMEOUT {
+            return;
+        }
+
+        // Past the timeout: only force-adopt when a healed (non-null) cell
+        // is actually available via the fallback chain — otherwise there is
+        // nothing yet to adopt and we keep waiting (timer stays armed at
+        // `stuck_since`, so this does not reset the clock on every tick).
+        let Some(healed_pose) = world.local_player_runtime_pose() else {
+            return;
+        };
+        if healed_pose.landblock_id == Guid::NULL {
+            return;
+        }
+
+        log::warn!(
+            "[stale-null-cell] runtime body cell NULL/missing for >{:?}; force-adopting healed cell 0x{:08X}",
+            CELL_NULL_STALE_TIMEOUT,
+            healed_pose.landblock_id.0,
+        );
+        let _ = world.set_player_position_with_sync(healed_pose, AuthoritativeBodySync::Reset);
+        self.cell_null_since = None;
+    }
 
     /// A6-T1/T2 — ONE manual-drive slice through the retail transition
     /// pipeline. The SHARED driver for both consumers (which is what

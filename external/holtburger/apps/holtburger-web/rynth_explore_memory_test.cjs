@@ -477,6 +477,103 @@ function check(name, ok, detail) {
       em2.previous.tileKey === beforeCurrent.tileKey, JSON.stringify({ previous: em2.previous, expected: beforeCurrent }));
   }
 
+  // ── parked-lb frontier exclusion (2026-07-21 scope item 2) ───────────────
+  // tile.kind is tagged at observe() time (classifyPlace), _dungeonLandblocks
+  // accumulates every landblock ever seen as a parked dungeon/apartment, and
+  // frontier() (a) restricts a dungeon tile's own ring search to its own
+  // landblock and (b) never offers an outdoor candidate that lands inside a
+  // landblock previously tagged dungeon — the training-academy wedge's
+  // "frontier told the bot to walk into the ocean parking slot" root cause.
+  {
+    // (1) tile.kind tagged at observe() time.
+    {
+      const clock = makeClock();
+      const em = new ExploreMemory({ now: clock.now });
+      em.observe(poseCell(0xa9b40015, 60, 100, 0)); // outdoor LandCell, Holtburg
+      check("tile.kind tagged 'outdoor'", em.current.kind === "outdoor", JSON.stringify(em.current));
+      clock.advance(DEDUPE_WINDOW_MS + 10);
+      em.observe(poseCell(0xa9b40129, 10, 10, 0)); // EnvCell in Holtburg's own landblock
+      check("tile.kind tagged 'building'", em.current.kind === "building", JSON.stringify(em.current));
+      clock.advance(DEDUPE_WINDOW_MS + 10);
+      em.observe(poseCell(0x8602026e, 10, 10, 0)); // parked EnvCell, far from every town
+      check("tile.kind tagged 'dungeon'", em.current.kind === "dungeon", JSON.stringify(em.current));
+      check("_dungeonLandblocks records the landblock the dungeon tile was seen in",
+        em._dungeonLandblocks.has(em.current.lb), JSON.stringify([...em._dungeonLandblocks]));
+    }
+
+    // (2) frontier() from a dungeon tile never returns a cross-landblock
+    // candidate, even when the equally-near candidate on the OTHER side
+    // (still inside the landblock) is enumerated later in the ring scan.
+    {
+      const clock = makeClock();
+      const em = new ExploreMemory({ now: clock.now });
+      const DUNGEON_CELL = 0x8602026e; // lbX=134 (0x86), lbY=2 (0x02) -> landblock 0x8602
+      const baseWx = 134 * 192 + 10; // home local x=10
+      const baseWy = 2 * 192 + 10;   // home local y=10 — 12m from the lb's y=384 floor
+      let t = clock.now();
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          if (dx === 0 && (dy === -1 || dy === 1)) continue; // leave south (crosses out) + north (stays in) unvisited
+          clock.set((t += DEDUPE_WINDOW_MS + 10));
+          const wx = baseWx + dx * TILE_M, wy = baseWy + dy * TILE_M;
+          em.observe({ objCellId: DUNGEON_CELL, x: wx - 134 * 192, y: wy - 2 * 192, z: 0 });
+        }
+      }
+      clock.set((t += DEDUPE_WINDOW_MS + 10));
+      em.observe({ objCellId: DUNGEON_CELL, x: 10, y: 10, z: 0 }); // land back on the home tile
+
+      check("home tile classified 'dungeon'", em.current.kind === "dungeon", JSON.stringify(em.current));
+      const fr = em.frontier();
+      check("frontier found despite the nearer-enumerated south candidate being excluded", !!fr, JSON.stringify(fr));
+      check("dungeon frontier never crosses out of its own landblock",
+        fr && fr.lb === em.current.lb, JSON.stringify({ fr, curLb: em.current.lb }));
+      check("dungeon frontier picks the north candidate (the one still inside the landblock), not south",
+        fr && fr.worldY > baseWy, JSON.stringify(fr));
+    }
+
+    // (3) outdoors: a landblock previously seen as a parked dungeon is
+    // excluded from the frontier ring search, even when it is the nearest
+    // candidate and adjacent to the current (non-dungeon) landblock.
+    {
+      const clock = makeClock();
+      const em = new ExploreMemory({ now: clock.now });
+      // First, tag landblock (134,1) = 0x8601 as a parked dungeon via an
+      // indoor, far-from-every-town observation (same lbX as the classifyPlace
+      // fixture above; lbY=1 is even further south than the already-confirmed-
+      // far lbY=2 fixture, so it is at least as far from every real town).
+      em.observe({ objCellId: (134 << 24) | (1 << 16) | 0x0200, x: 10, y: 10, z: 0 });
+      check("setup: landblock 0x8601 tagged dungeon", em._dungeonLandblocks.has(0x8601), JSON.stringify([...em._dungeonLandblocks]));
+      clock.advance(DEDUPE_WINDOW_MS + 10);
+
+      // Now stand OUTDOORS in the ADJACENT landblock 0x8602, near enough to
+      // the shared y=384 boundary that the south neighbor tile (12m away)
+      // falls inside 0x8601 — the tagged-dungeon landblock — while the north
+      // neighbor (equally near) stays inside 0x8602.
+      const HOME_CELL = (134 << 24) | (2 << 16) | 0x0010; // low16<0x100 -> outdoor LandCell
+      const baseWx = 134 * 192 + 10;
+      const baseWy = 2 * 192 + 4; // 388 — only 4m clear of the 384 boundary
+      let t = clock.now();
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          if (dx === 0 && (dy === -1 || dy === 1)) continue; // leave south (0x8601) + north (0x8602) unvisited
+          clock.set((t += DEDUPE_WINDOW_MS + 10));
+          const wx = baseWx + dx * TILE_M, wy = baseWy + dy * TILE_M;
+          em.observe({ objCellId: HOME_CELL, x: wx - 134 * 192, y: wy - 2 * 192, z: 0 });
+        }
+      }
+      clock.set((t += DEDUPE_WINDOW_MS + 10));
+      em.observe({ objCellId: HOME_CELL, x: 10, y: 4, z: 0 });
+
+      check("home tile classified 'outdoor' (not itself a dungeon tile)", em.current.kind === "outdoor", JSON.stringify(em.current));
+      const fr = em.frontier();
+      check("frontier found despite the nearer south candidate landing in a tagged-dungeon landblock", !!fr, JSON.stringify(fr));
+      check("frontier never lands inside the previously-tagged-dungeon landblock 0x8601",
+        fr && fr.lb !== 0x8601, JSON.stringify(fr));
+      check("frontier picks the north candidate (still inside 0x8602), not the excluded south one",
+        fr && fr.worldY > baseWy, JSON.stringify(fr));
+    }
+  }
+
   console.log(`${pass} pass, ${fail} fail`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

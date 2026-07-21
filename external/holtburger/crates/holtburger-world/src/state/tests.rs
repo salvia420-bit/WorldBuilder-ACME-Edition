@@ -1988,6 +1988,123 @@ fn post_teleport_update_position_with_equal_teleport_sequence_snaps_suspended_bo
     );
 }
 
+/// Death-respawn cell-0 movement paralysis regression (2026-07-21, live on
+/// the stream bot). ACE's teleport (death included) sends TWO UpdatePosition
+/// packets sharing one teleport-sequence epoch: posA (pre-settle, can carry
+/// an unresolvable/NULL cell) then posB (the real destination). posA lands
+/// via the `body_suspended` Snapshot branch; `reconcile_authoritative_body_
+/// with_remote` (state/mutations.rs:90-93) RETIRES (removes) the runtime
+/// body outright whenever the reconciled pose carries a NULL landblock —
+/// this is the actual mechanism (a deviation from the initial "hard-snaps to
+/// a null cell" hypothesis, confirmed by reading the reconcile path). Either
+/// way the body's `sampling.mode` bookkeeping no longer reads `Suspended`
+/// afterward (see
+/// `post_teleport_update_position_with_equal_teleport_sequence_snaps_suspended_body`
+/// for the non-null sibling), so posB — same epoch, valid destination, later
+/// `position_sequence` — no longer observes `body_suspended` (the view falls
+/// back to the entity) and falls into the routine authoritative-only
+/// bookkeeping arm, which never calls `reconcile_authoritative_body` and so
+/// never recreates the body. The runtime body then stays MISSING forever
+/// (`objCellId == 0`, movement dead). Fix: the `body_cell_null` backstop in
+/// `handlers/player.rs` routes ANY accepted same-epoch self update through
+/// the hard-reconcile Snapshot path whenever the body is missing OR carries
+/// a NULL working cell, so posB recreates/heals it.
+#[test]
+fn post_teleport_posa_null_cell_then_posb_valid_cell_heals_via_body_cell_null_backstop() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0009);
+    let source_pos = WorldPosition {
+        landblock_id: Guid(0xC3A8_003A),
+        coords: Vector3::new(186.15, 44.49, 62.19),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state.seed_local_player_entity(player_guid, "Player", source_pos);
+    // Integrator ran at least once pre-death — arms SimulatingMotionState,
+    // the real pre-teleport mode.
+    let _ = state.set_local_player_runtime_pose(source_pos);
+
+    // 1. PlayerTeleport (death respawn): pre-advances teleport_sequence +
+    //    suspends the body at its (source) authoritative pose.
+    let _ = state.handle_message(&GameMessage::PlayerTeleport(Box::new(PlayerTeleportData {
+        teleport_sequence: 9,
+    })));
+    let body = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("body registered");
+    assert_eq!(body.sampling.mode, SpatialSampleMode::Suspended);
+
+    // 2. posA: SAME teleport_sequence, a NULL/unresolvable working cell
+    //    (the pre-settle packet). Lands via `body_suspended` -> Snapshot;
+    //    the reconcile retires the body outright because the pose carries a
+    //    NULL landblock (state/mutations.rs:90-93).
+    let pos_a = WorldPosition {
+        landblock_id: Guid::NULL,
+        coords: Vector3::new(0.0, 0.0, 0.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let _ = state.handle_message(&GameMessage::UpdatePosition(Box::new(UpdatePositionData {
+        guid: player_guid,
+        pos: PositionPack {
+            pos: pos_a,
+            instance_sequence: 1,
+            position_sequence: 1,
+            teleport_sequence: 9,
+            force_position_sequence: 0,
+            ..PositionPack::default()
+        },
+    })));
+    assert!(
+        state
+            .scene
+            .body(SpatialBodyId::LocalPlayer(player_guid))
+            .is_none(),
+        "precondition: posA's NULL-landblock reconcile retires the runtime body outright"
+    );
+
+    // 3. posB: SAME teleport_sequence, a later position_sequence, and the
+    //    REAL destination cell. Pre-fix this falls into the routine
+    //    authoritative-only bookkeeping arm (body_suspended reads false via
+    //    the entity fallback view, and snap is false) and never calls
+    //    `reconcile_authoritative_body` -> the body would stay missing
+    //    forever. The `body_cell_null` backstop must route it through
+    //    Snapshot instead, recreating the body at posB.
+    let pos_b = WorldPosition {
+        landblock_id: Guid(0xC98D_0021),
+        coords: Vector3::new(84.0, 7.1, 94.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let _ = state.handle_message(&GameMessage::UpdatePosition(Box::new(UpdatePositionData {
+        guid: player_guid,
+        pos: PositionPack {
+            pos: pos_b,
+            instance_sequence: 1,
+            position_sequence: 2,
+            teleport_sequence: 9,
+            force_position_sequence: 0,
+            ..PositionPack::default()
+        },
+    })));
+    let body = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("body registered");
+    assert_eq!(
+        body.pose, pos_b,
+        "posB must heal the body to the real destination (regression: body_cell_null backstop)"
+    );
+    assert_ne!(
+        body.pose.landblock_id,
+        Guid::NULL,
+        "raw working cell must no longer be NULL after posB (objCellId != 0)"
+    );
+    assert_eq!(
+        state.local_player_runtime_pose(),
+        Some(pos_b),
+        "local_player_runtime_pose (getLocalPlayerPose source) must report posB"
+    );
+}
+
 #[test]
 fn test_spell_name_resolution() {
     use crate::spell::{SpellCatalog, SpellInfo};
