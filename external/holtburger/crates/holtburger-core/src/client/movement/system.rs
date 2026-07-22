@@ -254,6 +254,38 @@ const USE_WALKABLE_REINSERT_PROBE: bool = true;
 /// 1070-parked: cliff-face jump eye-test.
 const USE_LANDING_WALKABLE: bool = true;
 
+/// Slide-latch escape (2026-07-21, live-diagnosed on the stream rig).
+///
+/// The airborne velocity freeze (the `is_airborne` arm of the velocity
+/// smoothing above: `current_planar_velocity` verbatim, no friction, WASD
+/// `target_velocity` discarded — trajectory-lock for a ballistic jump arc) is
+/// correct *while airborne for a real jump*. But if the mover is left airborne
+/// with `vertical_velocity ≈ 0` hovering a few cm ABOVE the terrain plane (a
+/// router seam-jump / teleport that flags airborne without a downward vz), the
+/// outdoor touchdown gate `pose.coords.z <= terrain_z` never fires — with vz≈0
+/// the ballistic z never carries the feet the last cm down INTO the plane — so
+/// `is_airborne` latches true forever. The frozen horizontal velocity then
+/// produces a constant-speed slide that no amount of WASD can cancel; only a
+/// `SetMovementInput(0,0,0)` hard-zero clears it. Confirmed live: ~9 yd/s
+/// uncommanded slide, z pinned at -0.9, `cancelPursuit` a no-op, ~9 landblocks
+/// off Yaraq before a manual stomp.
+///
+/// `true` (default): a settling mover (airborne, `vertical_velocity <= 0`)
+/// touches down when within [`LAND_SETTLE_EPS`] ABOVE a walkable terrain plane,
+/// not only strictly at/below it — snapping z to the plane and clearing
+/// `is_airborne` so friction + input resume. A real jump apex sits >>EPS over
+/// ground and the ascent is gated out by `vz <= 0`, so a live arc is never
+/// short-circuited.
+///
+/// `false`: byte-identical — touchdown requires `pose.coords.z <= terrain_z`.
+const USE_SETTLE_LAND: bool = true;
+
+/// Settle-land tolerance (metres) ABOVE the terrain plane at which an airborne,
+/// non-rising mover is grounded (see [`USE_SETTLE_LAND`]). 8 cm: comfortably
+/// larger than the frame-to-frame ballistic z step at locomotion speeds, far
+/// smaller than any jump-apex clearance.
+const LAND_SETTLE_EPS: f32 = 0.08;
+
 /// Physics deep-dive 2026-06-01 (gap 3 follow-up) — gate for the
 /// edge_slide tangent-slide in the lateral-clamp + step-up path of
 /// [`MovementSystem::advance_local_pose_for_manual_drive_slice`].
@@ -5286,7 +5318,20 @@ impl MovementSystem {
                     // canonical floor — when ballistic integration
                     // takes us below it with downward velocity, that's
                     // the touchdown.
-                    if world.player.vertical_velocity <= 0.0 && pose.coords.z <= z {
+                    //
+                    // Settle-land (USE_SETTLE_LAND): also touch down when a
+                    // non-rising mover is hovering within LAND_SETTLE_EPS
+                    // ABOVE the plane — otherwise a vz≈0 airborne latch never
+                    // reaches `z <= terrain_z` and slides forever (the
+                    // walkable else-arm below snaps z DOWN to the plane and
+                    // clears is_airborne). Gate off ⇒ ceiling == `z`,
+                    // byte-identical.
+                    let settle_ceiling = if USE_SETTLE_LAND {
+                        z + LAND_SETTLE_EPS
+                    } else {
+                        z
+                    };
+                    if world.player.vertical_velocity <= 0.0 && pose.coords.z <= settle_ceiling {
                         // A7-R3: landing allowance — refuse near-vertical
                         // perches (N.z < LANDING_Z), keep falling and slide
                         // the slice's lateral along the face tangent.
