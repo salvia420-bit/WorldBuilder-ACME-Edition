@@ -703,6 +703,56 @@ function check(name, ok, detail) {
       emDefault.loopVerdict().severity === 1, JSON.stringify(emDefault.loopVerdict()));
   }
 
+  // ── frontierChain (movement-utilization fix, 2026-07-23): distance-budgeted
+  // chained waypoints for the pressure controller's frontier cruise ─────────
+  {
+    // No observations at all -> null (mirrors frontier()).
+    const c0 = makeClock();
+    const em0 = new ExploreMemory({ now: c0.now });
+    check("frontierChain: null before any observation", em0.frontierChain({ budgetM: 100 }) === null);
+
+    // A single visited tile in open ground: the chain spends ~the budget on
+    // multiple waypoints, all unvisited, chain legs bounded by maxLegM, and
+    // consecutive waypoints kept apart by the simulated 3x3 marking.
+    const c1 = makeClock();
+    const em1 = new ExploreMemory({ now: c1.now });
+    em1.observe(poseAt(600, 600, 0));
+    const budgetM = 120;
+    const chain = em1.frontierChain({ budgetM, maxLegM: 60 });
+    check("frontierChain: returns waypoints + totalM", !!chain && Array.isArray(chain.waypoints) && chain.waypoints.length >= 2,
+      JSON.stringify(chain));
+    check("frontierChain: totalM meets the distance budget", chain.totalM >= budgetM, `totalM=${chain?.totalM}`);
+    check("frontierChain: totalM = sum of leg lengths",
+      Math.abs(chain.totalM - chain.waypoints.reduce((s, w) => s + w.legM, 0)) < 1e-9);
+    check("frontierChain: first waypoint IS the frontier() tile",
+      (() => { const f = em1.frontier(); return f && chain.waypoints[0].worldX === f.worldX && chain.waypoints[0].worldY === f.worldY; })());
+    check("frontierChain: every chain leg (after the first) within maxLegM",
+      chain.waypoints.slice(1).every((w) => w.legM <= 60), JSON.stringify(chain.waypoints));
+    check("frontierChain: no waypoint lands on a VISITED tile",
+      chain.waypoints.every((w) => {
+        const key = `${Math.floor(w.worldX / TILE_M)}:${Math.floor(w.worldY / TILE_M)}:0`;
+        return !em1.tiles.has(key);
+      }));
+    check("frontierChain: consecutive waypoints >= ~2 tiles apart (3x3 sim marking)",
+      chain.waypoints.slice(1).every((w) => w.legM >= TILE_M), JSON.stringify(chain.waypoints.map((w) => w.legM)));
+
+    // maxWaypoints bounds the chain regardless of budget.
+    const short = em1.frontierChain({ budgetM: 10_000, maxWaypoints: 3, maxLegM: 60 });
+    check("frontierChain: maxWaypoints bounds the chain", short.waypoints.length === 3, JSON.stringify(short));
+
+    // Chain never enters a landblock previously classified as a parked
+    // dungeon (same exclusion frontier() applies). Force one adjacent lb into
+    // the exclusion set and verify no waypoint lands in it.
+    const c2 = makeClock();
+    const em2 = new ExploreMemory({ now: c2.now });
+    em2.observe(poseAt(190, 96, 0)); // 2 m from the lb 0x0000/0x0100 border
+    em2._dungeonLandblocks.add(0x0100); // lbX=1,lbY=0 -> world x in [192,384)
+    const chain2 = em2.frontierChain({ budgetM: 200, maxLegM: 60 });
+    check("frontierChain: excluded (parked-dungeon) landblock never entered",
+      !!chain2 && chain2.waypoints.every((w) => landblockOf(worldToOutdoorCell(w.worldX, w.worldY, 0).lb) !== 0x0100),
+      JSON.stringify(chain2 && chain2.waypoints));
+  }
+
   console.log(`${pass} pass, ${fail} fail`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

@@ -1022,6 +1022,187 @@ const flush = () => new Promise((r) => setImmediate(r));
     check("movement-dead: hopsSincePoseChange resets on real movement", c._hopsSincePoseChange === 0);
   }
 
+  // ═══ Frontier cruise (movement-utilization fix, 2026-07-23): the idle drive
+  // is DISTANCE-SIZED (director-gap × ground speed), walked as ONE raw
+  // bot.travel route, and yields to the director (last command wins). ═══
+
+  // ---- cruise: budget = clamp(gap) × speed, capped; multi-leg travel issued ----
+  {
+    t = 22_000_000;
+    const host = mkHost(outdoorPose);
+    host.s.playerRunRate = () => 1.25; // ground speed = 1.25 × 4.0 = 5 m/s
+    const wx = worldXOf(outdoorPose.objCellId, outdoorPose.x), wy = worldYOf(outdoorPose.objCellId, outdoorPose.y);
+    const curLb = outdoorPose.objCellId >>> 16;
+    let chainArgs = null;
+    const em = mkExploreMemory({ frontier: () => ({ worldX: wx + 30, worldY: wy, dist: 30, bearingDeg: 90, lb: curLb }) });
+    em.frontierChain = (opts) => {
+      chainArgs = opts;
+      return {
+        waypoints: [
+          { worldX: wx + 30, worldY: wy, legM: 30 },
+          { worldX: wx + 60, worldY: wy, legM: 30 },
+          { worldX: wx + 90, worldY: wy, legM: 30 },
+        ],
+        totalM: 90,
+      };
+    };
+    const bot = mkBot({ extensions: { exploreMemory: em } });
+    // Director publishes the live cadence surface the sizing reads: next fire
+    // 60 s out, spacing floor 3600/70 ≈ 51.4 s since a 10 s-old check — the
+    // LATER of the two (60 s) is the gap.
+    bot.ai.director.intervalMinutes = 0.5;
+    bot.ai.director.maxCallsPerHour = 70;
+    Object.defineProperty(bot.ai.director, "status", {
+      get() { return { nextCheckAt: t + 60_000, lastCheckAt: t - 10_000 }; },
+      configurable: true,
+    });
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), IR, { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    t += 26_000;
+    c.tick();
+    await flush();
+    check("cruise: bot.travel called once with the chained legs (no single MoveToPosition)",
+      bot._travelCalls.length === 1 && host._moves.length === 0,
+      JSON.stringify({ travel: bot._travelCalls.length, moves: host._moves.length }));
+    check("cruise: 3 waypoints (each <= 60m) -> 3 legs, last at the chain end",
+      bot._travelCalls[0]?.length === 3 &&
+      bot._travelCalls[0][2].lb === expectedLandCell(wx + 90, wy, outdoorPose.z).lb,
+      JSON.stringify(bot._travelCalls[0]));
+    // budget = min(CRUISE_MAX_M=220, 60 s × 5 m/s = 300) = 220
+    check("cruise: frontierChain budget = clamp(gap)×speed capped at 220 m",
+      chainArgs && Math.abs(chainArgs.budgetM - 220) < 1e-9, JSON.stringify(chainArgs));
+    check("cruise: journal names the cruise, its size and the sizing inputs",
+      bot._notes[0].text.includes("frontier cruise") && bot._notes[0].text.includes("~90m") &&
+      bot._notes[0].text.includes("60s director gap") && bot._notes[0].text.includes("5.0 m/s"),
+      bot._notes[0]?.text);
+    check("cruise: marks the cruise window (active until ~gap from now)",
+      c._cruiseActive === true && c._cruiseUntil === t + 60_000, `until=${c._cruiseUntil}, t=${t}`);
+    check("cruise: counts one hop toward the stand-down cap", c._consecutiveHops === 1);
+
+    // ---- chaining: once the route LANDS (DONE) inside the window, the gates
+    // relax so the next drive starts in seconds, not 12-15 s ----
+    c.router = mkRouter("DONE");
+    c._lastMoveAt = t - 4_000; // 3 s < 4 s < 12 s
+    c._lastStepAt = t - 6_000; // 5 s < 6 s < 15 s
+    check("cruise chain: relaxed gates open while the window is live (route DONE)", c._gatesOpen(t) === true);
+    // Window expired -> back to the tuned gates.
+    c._cruiseUntil = t - 1;
+    c._cruiseActive = true;
+    check("cruise chain: expired window falls back to the tuned 12s/15s gates", c._gatesOpen(t) === false);
+    // FAILED drive -> _trackCruise drops the window (no wall-grind at chain cadence).
+    c._cruiseActive = true;
+    c._cruiseUntil = t + 60_000;
+    c.router = mkRouter("FAILED");
+    c.tick();
+    check("cruise: a FAILED drive clears the cruise window", c._cruiseActive === false);
+  }
+
+  // ---- cruise sizing: no readable cadence -> minimum-gap budget; slow bot ----
+  {
+    t = 23_000_000;
+    const host = mkHost(outdoorPose); // no playerRunRate -> 4.0 m/s fallback
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), IR, { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = mkBot(); // director double: no status/intervalMinutes at all
+    check("cruise sizing: unreadable cadence degrades to the 20 s clamp", c._directorGapMs(t) === 20_000);
+    check("cruise sizing: missing playerRunRate degrades to 4.0 m/s", c._walkSpeedMps() === 4.0);
+    const hostSlow = mkHost(outdoorPose);
+    hostSlow.s.playerRunRate = () => 0.1; // 0.4 m/s raw -> floored at 1 m/s
+    const c2 = new ExplorePressureController(hostSlow, mkRouter("IDLE"), IR, { isOperatorStopLatched: () => false }, { now: clock });
+    c2.bot = mkBot();
+    check("cruise sizing: tiny run rate floors at 1 m/s", c2._walkSpeedMps() === 1);
+  }
+
+  // ---- cruise: a far first frontier is SUBDIVIDED into watchdog-safe legs ----
+  {
+    t = 24_000_000;
+    const host = mkHost(outdoorPose);
+    const wx = worldXOf(outdoorPose.objCellId, outdoorPose.x), wy = worldYOf(outdoorPose.objCellId, outdoorPose.y);
+    const curLb = outdoorPose.objCellId >>> 16;
+    const em = mkExploreMemory({ frontier: () => ({ worldX: wx + 150, worldY: wy, dist: 150, bearingDeg: 90, lb: curLb }) });
+    em.frontierChain = () => ({
+      waypoints: [
+        { worldX: wx + 150, worldY: wy, legM: 150 }, // far first frontier: 150 m > 60 m cap
+        { worldX: wx + 174, worldY: wy, legM: 24 },
+      ],
+      totalM: 174,
+    });
+    const bot = mkBot({ extensions: { exploreMemory: em } });
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), IR, { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    t += 26_000;
+    c.tick();
+    await flush();
+    const legs = bot._travelCalls[0] || [];
+    check("cruise subdivision: 150 m first segment splits into 3 legs (+1 tail) = 4",
+      legs.length === 4, JSON.stringify(legs));
+    check("cruise subdivision: intermediate legs sit on the segment (50 m spacing)",
+      legs.length === 4 && legs[0].lb === expectedLandCell(wx + 50, wy, outdoorPose.z).lb &&
+      legs[1].lb === expectedLandCell(wx + 100, wy, outdoorPose.z).lb,
+      JSON.stringify(legs.slice(0, 2)));
+  }
+
+  // ---- cruise degrades: 1-waypoint chain / refused travel -> single hop ----
+  {
+    t = 25_000_000;
+    const host = mkHost(outdoorPose);
+    const wx = worldXOf(outdoorPose.objCellId, outdoorPose.x), wy = worldYOf(outdoorPose.objCellId, outdoorPose.y);
+    const curLb = outdoorPose.objCellId >>> 16;
+    const frontier = { worldX: wx + 10, worldY: wy, dist: 10, bearingDeg: 90, lb: curLb };
+    const em = mkExploreMemory({ frontier: () => frontier });
+    em.frontierChain = () => ({ waypoints: [{ worldX: wx + 10, worldY: wy, legM: 10 }], totalM: 10 });
+    const bot = mkBot({ extensions: { exploreMemory: em } });
+    const c = new ExplorePressureController(host, mkRouter("IDLE"), IR, { isOperatorStopLatched: () => false }, { now: clock });
+    c.bot = bot;
+    t += 26_000;
+    c.tick();
+    await flush();
+    check("cruise degrade: a 1-waypoint chain falls back to the plain frontier hop",
+      bot._travelCalls.length === 0 && host._moves.length === 1 && bot._notes[0].text.includes("frontier hop"),
+      JSON.stringify({ notes: bot._notes.map((n) => n.text) }));
+
+    // travel refused (another mover raced us) -> single hop fallback, window NOT armed
+    const host2 = mkHost(outdoorPose);
+    const em2 = mkExploreMemory({ frontier: () => frontier });
+    em2.frontierChain = () => ({
+      waypoints: [{ worldX: wx + 30, worldY: wy, legM: 30 }, { worldX: wx + 60, worldY: wy, legM: 30 }],
+      totalM: 60,
+    });
+    const bot2 = mkBot({ extensions: { exploreMemory: em2 }, travel: () => ({ ok: false, error: "goto active" }) });
+    const c2 = new ExplorePressureController(host2, mkRouter("IDLE"), IR, { isOperatorStopLatched: () => false }, { now: clock });
+    c2.bot = bot2;
+    t += 26_000;
+    c2.tick();
+    await flush();
+    check("cruise degrade: refused bot.travel falls back to the single hop, cruise window unarmed",
+      host2._moves.length === 1 && c2._cruiseActive === false && bot2._notes.some((n) => n.text.includes("frontier hop")),
+      JSON.stringify({ moves: host2._moves, notes: bot2._notes.map((n) => n.text) }));
+  }
+
+  // ---- yield: the cruise walk is CANCELLED the moment a director check-in
+  // goes in-flight (last command wins — the plan must never contend with our
+  // idle drive) ----
+  {
+    t = 26_000_000;
+    const host = mkHost(outdoorPose);
+    let cancels = 0;
+    const router = { status: { state: "WALK" }, cancel: () => { cancels++; router.status.state = "IDLE"; } };
+    const bot = mkBot({ running: true }); // director busy (check-in in flight)
+    const c = new ExplorePressureController(host, router, IR, { isOperatorStopLatched: () => false }, { now: clock, log: () => {} });
+    c.bot = bot;
+    c._cruiseActive = true;
+    c._cruiseUntil = t + 60_000;
+    c.tick();
+    check("yield: router.cancel() fired while the director is busy", cancels === 1);
+    check("yield: cruise window cleared", c._cruiseActive === false);
+    // A goto/compose walk is NEVER ours to cancel: same busy director, active
+    // router, but no cruise flag -> untouched.
+    const router2 = { status: { state: "WALK" }, cancel: () => { cancels++; } };
+    const c2 = new ExplorePressureController(host, router2, IR, { isOperatorStopLatched: () => false }, { now: clock });
+    c2.bot = mkBot({ running: true });
+    c2.tick();
+    check("yield: a non-cruise walk is never cancelled", cancels === 1);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

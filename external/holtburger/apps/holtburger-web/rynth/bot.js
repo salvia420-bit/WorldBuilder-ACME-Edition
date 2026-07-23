@@ -332,7 +332,23 @@ export async function createGrindBot(sessionHandle, config = {}) {
     // 05 C1 fix: composeActive is added here (globalRouter.busy alone goes
     // false mid-composeGoto indoor phase) — see bot.movementClaimed below,
     // which both this guard and the explore-pressure gates now consult.
-    if (bot.movementClaimed()) return { ok: false, error: "goto active" };
+    if (bot.movementClaimed()) {
+      // Last-command-wins over a pressure CRUISE (movement-utilization fix,
+      // 2026-07-23): when the ONLY claim is the router walking the explore-
+      // pressure controller's own idle drive (a raw travel it marked via
+      // cruising()), cancel it and proceed — the exact treatment doGoto/
+      // doEgress already give a raw travel() WALK. Any other claim
+      // (goto/compose/followRoute in flight, a loot approach, or a raw
+      // travel that is NOT a cruise) still refuses, unchanged.
+      const rs = router.status.state;
+      const cruiseOnly =
+        explorePressure?.cruising?.() === true &&
+        !(globalRouter && globalRouter.busy) && !composeActive && !followBusy &&
+        (rs === "WALK" || rs === "PORTAL") &&
+        !(loot && loot.state === "APPROACH");
+      if (!cruiseOnly) return { ok: false, error: "goto active" };
+      router.cancel();
+    }
     if (!Array.isArray(legs) || !legs.length) return { ok: false, error: "empty route" };
     // Contract v2 (task #17): derive portal/indoor flags (legacy routes replay
     // without re-recording), re-bucket indoor legs to the walkable frame + stamp
@@ -836,6 +852,34 @@ const TOWN_HOP_DIST_M = 45;
 // state._usedObjects (extensions.js) / _visitedDoors above.
 const SEEN_PORTALS_MAX = 64;
 
+// ── Frontier cruise (2026-07-23, movement-utilization fix) ─────────────────
+// Live measurement (stream soak): the bot MOVES ~14% of a rolling minute —
+// a pressure "frontier hop" is a single ~10 m MoveToPosition that finishes in
+// ~2-3 s, then the 12 s idle + 15 s step gates hold everything until the next
+// hop, and the director itself only lands every ~51-116 s (maxCallsPerHour
+// spacing floor 3600/70 ≈ 51 s live). Operator direction: size the idle
+// movement objective by DISTANCE = (time until the next director check-in) ×
+// (walk speed), so one continuous walk bridges the whole director gap
+// instead of finishing early and idling. The cruise is a bot.travel() route
+// through em.frontierChain() waypoints — raw travel() is deliberately the
+// LOWEST-priority mover (doGoto/doEgress cancel a raw WALK: "last command
+// wins"), so a director plan takes the character back instantly.
+const CRUISE_MAX_M = 220;          // sanity cap — never send the bot ~800 m into the void on one idle drive
+const CRUISE_MIN_M = 25;           // below this a chained route buys nothing over the plain single hop
+const CRUISE_MAX_LEG_M = 60;       // per-leg cap: keeps every leg well inside router.js's 30 s leg watchdog
+const CRUISE_GAP_MIN_MS = 20_000;  // clamp for a mis-read/imminent next-check gap
+const CRUISE_GAP_MAX_MS = 150_000; // clamp for a distant next-check (cap × speed also bounded by CRUISE_MAX_M)
+// Ground speed = run_rate × 4.0 m/s (atlas.js RUN_SPEED_MS — the client's own
+// RunForward anim speed; wasm stateGroundSpeed clamps to run_rate × 4.0).
+const CRUISE_SPEED_FALLBACK_MPS = 4.0;
+const CRUISE_SPEED_MAX_MPS = 18.0; // retail run-rate plateau (atlas.js derivation)
+// Relaxed re-step gates while a cruise window is open (a cruise that lands
+// early, or a fresh check-in that claimed no movement, chains the next drive
+// in seconds instead of standing through the tuned 12 s/15 s idle gates).
+const CRUISE_CHAIN_IDLE_MS = 3_000;
+const CRUISE_CHAIN_STEP_MS = 5_000;
+const POST_CHECKIN_FAST_MS = 20_000;
+
 // ── Explore pressure (task #15, 2026-07-20; re-engineered as a frontier-
 // directed escalation ladder 2026-07-21, DESIGN-surveyor-frontier) ────────
 // ?explorePressure=1 (index.html bot-param block; exact-match "=1" opt-in,
@@ -950,6 +994,16 @@ export class ExplorePressureController {
     // pressure controller down rather than hammering MoveToPosition forever.
     this._hopsSincePoseChange = 0;
     this._movementDead = false;
+
+    // Frontier-cruise state (2026-07-23 movement-utilization fix; constants
+    // above): _cruiseActive marks "the current raw-travel router walk is OUR
+    // idle drive" — it yields to the director (tick()'s _yieldToDirector +
+    // bot.js doFollowRoute's last-command-wins cancel) and relaxes the
+    // re-step gates while its window (_cruiseUntil) is open so back-to-back
+    // drives chain instead of idling 12-15 s between them.
+    this._cruiseActive = false;
+    this._cruiseUntil = 0;
+    this._postCheckinFastUntil = 0;
   }
 
   // host.onTick driver (~10Hz by default); self-throttles to ~5s and never
@@ -959,7 +1013,15 @@ export class ExplorePressureController {
     try {
       const now = this.now();
       this._trackMovement(now);
+      // _yieldToDirector BEFORE _trackCheckIn: a fresh check-in both stamps
+      // lastCheckAt (which _trackCheckIn uses to clear the cruise window)
+      // AND holds isBusy() for its whole observe->LLM->execute span — the
+      // yield must see _cruiseActive still set on the first tick of that
+      // span, or the cruise walk would keep walking under the director's
+      // plan instead of being cancelled.
+      this._yieldToDirector();
       this._trackCheckIn();
+      this._trackCruise(now);
       this._checkMovementDead(now);
       if (now - this._lastGateAt < 5000) return;
       this._lastGateAt = now;
@@ -1029,8 +1091,54 @@ export class ExplorePressureController {
         this._lastCheckSeen = lastCheck;
         this._consecutiveHops = 0;
         this._standDown = false;
+        // Fresh director input supersedes any cruise window: the plan (not
+        // our idle drive) owns what happens next. Also open the short
+        // post-check-in fast-start window — if the plan claims no movement
+        // (instant actions / "none"), the next cruise starts within seconds
+        // instead of standing through the full 12 s/15 s gates. Every OTHER
+        // gate (movementClaimed, director.isBusy, stand-down, operator stop)
+        // still applies inside the window.
+        this._cruiseActive = false;
+        this._postCheckinFastUntil = this.now() + POST_CHECKIN_FAST_MS;
       }
     } catch { /* defensive read only; never blocks the tick */ }
+  }
+
+  // Cruise-window bookkeeping (movement-utilization fix). FAILED = the drive
+  // hit something physical — drop the window so the retry waits out the
+  // NORMAL tuned gates rather than grinding the wall at chain cadence.
+  // IDLE = cancelled (a goto/egress/stop took the router) — no longer ours.
+  _trackCruise(now) {
+    if (!this._cruiseActive) return;
+    const rs = this.router?.status?.state;
+    if (rs === "FAILED" || rs === "IDLE") { this._cruiseActive = false; return; }
+    if (now >= this._cruiseUntil && rs !== "WALK" && rs !== "PORTAL") this._cruiseActive = false;
+  }
+
+  /** Public: true while the router walk in flight is this controller's own
+   *  idle cruise (raw bot.travel legs). bot.js's doFollowRoute consults this
+   *  for last-command-wins: a director route may cancel a cruise walk the
+   *  same way doGoto/doEgress already cancel a raw travel(). */
+  cruising() {
+    return this._cruiseActive === true;
+  }
+
+  // The instant a director check-in goes in-flight, hand the character back:
+  // cancel our own cruise walk so the observation/plan executes from a
+  // settling bot, never contends with an idle drive we started. Only OUR
+  // walk is touched — a goto/followRoute/composeGoto walk is never ours
+  // (_cruiseActive is only set on a successfully-issued raw travel).
+  _yieldToDirector() {
+    if (!this._cruiseActive) return;
+    let busy = false;
+    try { busy = this.bot?.ai?.director?.isBusy?.() === true; } catch { busy = false; }
+    if (!busy) return;
+    const rs = this.router?.status?.state;
+    if (rs === "WALK" || rs === "PORTAL") {
+      try { this.router.cancel(); } catch { /* cancel is best-effort; the director's own movers also cancel raw walks */ }
+      this.log("[explore-pressure] cruise yielded to director check-in");
+    }
+    this._cruiseActive = false;
   }
 
   // All activation conditions (task #15 spec), ANDed; re-checked every ~5s
@@ -1056,9 +1164,28 @@ export class ExplorePressureController {
     if (this.bot.movementClaimed?.()) return false;
     if (director.isBusy()) return false; // check-in in flight (director's public busy accessor)
     if (this._standDown) return false;
-    if (now - this._lastMoveAt < 12_000) return false; // tuned 25s->12s 2026-07-20 (stream felt statue-y)
-    if (now - this._lastStepAt < 15_000) return false; // tuned 25s->15s; still >= the 1-step/15s spirit of the cap
+    // Movement-utilization fix: inside an open cruise-chain window (a sized
+    // drive just landed with director-gap time left) or the short post-
+    // check-in fast-start, re-step within seconds — a bot that just finished
+    // covering ground on purpose shouldn't stand out the full tuned gates
+    // before continuing. Everything ABOVE (claims, busy director, stand-down,
+    // operator stop) still gates the relaxed path identically.
+    const relaxed = this._gatesRelaxed(now);
+    if (now - this._lastMoveAt < (relaxed ? CRUISE_CHAIN_IDLE_MS : 12_000)) return false; // tuned 25s->12s 2026-07-20 (stream felt statue-y)
+    if (now - this._lastStepAt < (relaxed ? CRUISE_CHAIN_STEP_MS : 15_000)) return false; // tuned 25s->15s; still >= the 1-step/15s spirit of the cap
     return true;
+  }
+
+  // Relaxed-gate predicate (cruise chaining): true right after a director
+  // check-in lands (fast-start window) or while a cruise window is open AND
+  // its route has actually LANDED (state DONE — never FAILED, which
+  // _trackCruise clears, so a wall-grind retries at the normal cadence).
+  _gatesRelaxed(now) {
+    if (now < this._postCheckinFastUntil) return true;
+    if (this._cruiseActive && now < this._cruiseUntil) {
+      return this.router?.status?.state === "DONE";
+    }
+    return false;
   }
 
   // Narrower than _gatesOpen(): only the "something else now owns movement"
@@ -1597,6 +1724,14 @@ export class ExplorePressureController {
     // toward the nearest unvisited tile."
     const frontier = this._frontierSafe(em);
     if (frontier && typeof frontier.worldX === "number" && typeof frontier.worldY === "number") {
+      // Movement-utilization fix: prefer a DISTANCE-SIZED cruise (a multi-leg
+      // bot.travel route through chained frontier tiles, sized to cover the
+      // remaining director gap at the live ground speed) over the single
+      // ~10 m hop — the hop finished in seconds and left the bot standing
+      // for the rest of the gap (live-measured ~14% moving). Falls through
+      // to the unchanged single hop whenever the cruise can't run (older
+      // exploreMemory, no travel executor, refused route, tiny budget).
+      if (this._frontierCruise(pose, wx, wy, em, frontier)) return;
       if (this._frontierHopOutdoor(pose, wx, wy, lb, frontier)) return;
     }
 
@@ -1611,6 +1746,102 @@ export class ExplorePressureController {
     }
 
     this._legacyOutdoorHop(pose, wx, wy);
+  }
+
+  // ── Frontier cruise (movement-utilization fix, 2026-07-23) ───────────────
+  // Remaining ms until the next director check-in can actually land. Uses the
+  // director's public status (nextCheckAt/lastCheckAt) and takes the LATER of
+  // the scheduled fire and the maxCallsPerHour spacing floor (09 C3:
+  // _schedule may aim sooner than the floor allows; the floor skip then
+  // re-schedules — the real gap is the floor). Defensive: any unreadable
+  // field degrades to intervalMinutes, then to the clamp minimum.
+  _directorGapMs(now) {
+    try {
+      const d = this.bot?.ai?.director;
+      if (!d) return CRUISE_GAP_MIN_MS;
+      let remain = null;
+      let st = null;
+      try { st = d.status ?? null; } catch { st = null; }
+      const next = Number(st?.nextCheckAt);
+      if (Number.isFinite(next)) remain = next - now;
+      const mcph = Number(d.maxCallsPerHour);
+      const last = Number(st?.lastCheckAt);
+      if (mcph > 0 && Number.isFinite(last)) {
+        const floorRemain = last + 3_600_000 / mcph - now;
+        if (remain == null || floorRemain > remain) remain = floorRemain;
+      }
+      if (remain == null || !Number.isFinite(remain)) {
+        const im = Number(d.intervalMinutes);
+        remain = Number.isFinite(im) && im > 0 ? im * 60_000 : CRUISE_GAP_MIN_MS;
+      }
+      return Math.max(0, remain);
+    } catch { return CRUISE_GAP_MIN_MS; }
+  }
+
+  // Live ground speed (m/s) = run_rate × 4.0 — atlas.js's RUN_SPEED_MS
+  // derivation (wasm stateGroundSpeed clamps anim speed to run_rate × 4.0);
+  // run_rate from the session's playerRunRate getter, same read as
+  // ai/tools/routes.js liveRunRate. Falls back to the un-buffed base.
+  _walkSpeedMps() {
+    try {
+      const s = this.host?.s;
+      const r = s?.playerRunRate?.() ?? s?.player_run_rate?.();
+      if (Number.isFinite(r) && r > 0) {
+        return Math.min(CRUISE_SPEED_MAX_MPS, Math.max(1, r * 4.0));
+      }
+    } catch { /* fall through to the base speed */ }
+    return CRUISE_SPEED_FALLBACK_MPS;
+  }
+
+  // The sized idle drive: distance budget = clamp(director-gap) × speed
+  // (capped at CRUISE_MAX_M), spent on em.frontierChain()'s chained
+  // unvisited-tile waypoints and walked as ONE raw bot.travel route — the
+  // designated last-command-wins loser (doGoto/doEgress cancel a raw WALK;
+  // doFollowRoute + tick()'s _yieldToDirector cancel it for a director route/
+  // check-in), so this can never fight a real plan. Long segments (a far
+  // first frontier) are subdivided so every router leg stays well inside the
+  // 30 s leg watchdog. Returns true when a cruise was issued (or movement
+  // was claimed mid-plan); false lets the caller fall through to the
+  // pre-existing single frontier hop.
+  _frontierCruise(pose, wx, wy, em, frontier) {
+    if (!em || typeof em.frontierChain !== "function") return false;
+    if (typeof this.bot?.travel !== "function") return false;
+    const now = this.now();
+    const gapMs = Math.min(CRUISE_GAP_MAX_MS, Math.max(CRUISE_GAP_MIN_MS, this._directorGapMs(now)));
+    const speed = this._walkSpeedMps();
+    const budgetM = Math.min(CRUISE_MAX_M, (gapMs / 1000) * speed);
+    if (budgetM < CRUISE_MIN_M) return false;
+    let chain = null;
+    try { chain = em.frontierChain({ budgetM, maxLegM: CRUISE_MAX_LEG_M }); } catch { chain = null; }
+    const wps = chain && Array.isArray(chain.waypoints) ? chain.waypoints : null;
+    // A 1-waypoint "chain" is just the plain frontier hop — let the
+    // pre-existing single-hop rung own that case unchanged.
+    if (!wps || wps.length < 2) return false;
+    const legs = [];
+    let px = wx, py = wy;
+    for (const w of wps) {
+      if (typeof w?.worldX !== "number" || typeof w?.worldY !== "number") return false;
+      const d = Math.hypot(w.worldX - px, w.worldY - py);
+      const nSub = Math.max(1, Math.ceil(d / CRUISE_MAX_LEG_M));
+      for (let i = 1; i <= nSub; i++) {
+        const fx = px + ((w.worldX - px) * i) / nSub;
+        const fy = py + ((w.worldY - py) * i) / nSub;
+        legs.push(this._worldToLandCell(fx, fy, pose.z));
+      }
+      px = w.worldX;
+      py = w.worldY;
+    }
+    if (legs.length < 2) return false;
+    if (this._routeClaimed()) return true; // claimed mid-plan -> handled, no further rung
+    const res = this.bot.travel(legs);
+    if (!res || res.ok !== true) return false; // refused (mover already active) — caller degrades
+    this._cruiseActive = true;
+    this._cruiseUntil = now + gapMs;
+    this._bumpHop();
+    this._journalNote(
+      `[pressure] idle — frontier cruise ~${Math.round(chain.totalM)}m / ${legs.length} legs toward ${Math.round(frontier.bearingDeg ?? 0)}° (sized for ~${Math.round(gapMs / 1000)}s director gap @ ${speed.toFixed(1)} m/s)`
+    );
+    return true;
   }
 
   // Steps 2/4 (outdoor half): direct MoveToPosition at the frontier's world

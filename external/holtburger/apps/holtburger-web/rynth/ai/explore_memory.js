@@ -438,6 +438,80 @@ export class ExploreMemory {
   }
 
   /**
+   * ADDITIVE (2026-07-23, movement-utilization / "cruise" work — NOT part of
+   * the frozen WS-A surface above, same additive tier as reset()/townNameAt/
+   * classifyPlace): a DISTANCE-BUDGETED chain of unvisited-tile waypoints for
+   * the pressure controller's frontier cruise. Starts at the exact tile
+   * frontier() would return (same ring search, same dungeon-landblock
+   * exclusions), then greedily extends: from each waypoint, the nearest tile
+   * unvisited both for real (this.tiles) and in this chain's own simulated
+   * overlay, within maxLegM of the previous waypoint — so the chain always
+   * walks REACHABLE-looking nearby frontier rather than projecting a long
+   * blind bearing, and it naturally stops (re-aims next call) when the local
+   * frontier is exhausted. Each chosen waypoint marks its own tile plus the
+   * 8 neighbors as simulated-visited, which keeps consecutive waypoints
+   * >= ~2 tiles (~24 m) apart.
+   *
+   * opts: { budgetM (total chain length target, default 120),
+   *         maxWaypoints (default 24), maxLegM (chain-leg cap, default 60) }.
+   * Returns { waypoints: [{worldX,worldY,legM}], totalM } — the FIRST
+   * waypoint's legM is the distance from the current tile (it may exceed
+   * maxLegM when the nearest frontier itself is far; callers subdivide) —
+   * or null when there is no frontier at all (frontier() itself null).
+   */
+  frontierChain(opts = {}) {
+    const budgetM = Number.isFinite(opts.budgetM) ? Math.max(0, opts.budgetM) : 120;
+    const maxWaypoints = Number.isFinite(opts.maxWaypoints) ? Math.max(1, opts.maxWaypoints) : 24;
+    const maxLegM = Number.isFinite(opts.maxLegM) ? Math.max(TILE_M, opts.maxLegM) : 60;
+    const cur = this.current;
+    if (!cur) return null;
+    const first = this.frontier(); // shared cache + ALL exclusion rules (dungeon parking etc.)
+    if (!first) return null;
+    const zb = cur.zb;
+    const restrictToLb = cur.kind === "dungeon" ? cur.lb : null;
+    const localR = Math.max(1, Math.min(20, Math.ceil(maxLegM / TILE_M)));
+    const sim = new Set();
+    const waypoints = [];
+    let totalM = 0;
+    let px = cur.worldX;
+    let py = cur.worldY;
+    let next = { worldX: first.worldX, worldY: first.worldY };
+    while (next && waypoints.length < maxWaypoints) {
+      const legM = Math.hypot(next.worldX - px, next.worldY - py);
+      waypoints.push({ worldX: next.worldX, worldY: next.worldY, legM });
+      totalM += legM;
+      px = next.worldX;
+      py = next.worldY;
+      const wtx = Math.floor(px / TILE_M);
+      const wty = Math.floor(py / TILE_M);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) sim.add(tileKeyOf(wtx + dx, wty + dy, zb));
+      }
+      if (totalM >= budgetM) break;
+      next = null;
+      for (let r = 1; r <= localR && !next; r++) {
+        let best = null;
+        for (const [dx, dy] of ringOffsets(r)) {
+          const tx = wtx + dx;
+          const ty = wty + dy;
+          const key = tileKeyOf(tx, ty, zb);
+          if (this.tiles.has(key) || sim.has(key)) continue;
+          const wxc = (tx + 0.5) * TILE_M;
+          const wyc = (ty + 0.5) * TILE_M;
+          const candLb = landblockOf(worldToOutdoorCell(wxc, wyc, cur.z).lb);
+          if (restrictToLb != null && candLb !== restrictToLb) continue;
+          if (restrictToLb == null && this._dungeonLandblocks.has(candLb)) continue;
+          const d = Math.hypot(wxc - px, wyc - py);
+          if (d > maxLegM) continue;
+          if (!best || d < best.d) best = { worldX: wxc, worldY: wyc, d };
+        }
+        if (best) next = { worldX: best.worldX, worldY: best.worldY };
+      }
+    }
+    return waypoints.length ? { waypoints, totalM } : null;
+  }
+
+  /**
    * {looping, severity:0..3, reason, correction}. Memoized per observe-cycle
    * (keyed on _observeSeq) so a check-in/step that queries it AND queries
    * frontier() separately shares one computation — the internal frontier() call
